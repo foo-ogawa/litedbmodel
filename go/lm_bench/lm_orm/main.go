@@ -39,7 +39,8 @@ import (
 )
 
 // ── the ONE exec seam. All DB access rides these methods, so the prepared-statement cache and the
-//    per-op statement counter each live in exactly one place. ────────────────────────────────────────
+//
+//	per-op statement counter each live in exactly one place. ────────────────────────────────────────
 type cell struct {
 	db    *sql.DB
 	stmts map[string]*sql.Stmt // per-SQL prepared-statement cache (reused across iterations)
@@ -166,68 +167,199 @@ func batchRows(it int, stable bool) (emails, names []string) {
 	return
 }
 
-// ── read helpers: ONE batched child query per level, grouped in memory (N+1-free). ──────────────────
-func (c *cell) nestedPostsFor(users [][]any) {
-	ids := pluck(users, 0)
-	if len(ids) == 0 {
-		return
+// ── nested materialization (fair vs the native cell) ─────────────────────────────────────────────────
+// The native ORM assembles a nested TYPED object graph: each parent record with its child list nested
+// under the relation key (the runtime group_children builds it; the generated de-box holds it). The SDK
+// mirrors that — decode every selected column into a plain typed struct and ATTACH the grouped children
+// into their parent BY MOVE (assign the grouped slice into parent.<children>, no per-parent element
+// copy). The fully-assembled []parent is sunk into benchSink so it is not optimized away.
+//
+// The payload fields (email/name/title/body) are decoded-then-held (the same decode the native pays) but
+// never read downstream — only the key columns drive the grouping.
+type sdkUser struct {
+	id    int64
+	email any
+	name  any
+	posts []sdkPost
+}
+type sdkPost struct {
+	id       int64
+	title    any
+	authorID int64
+	comments []sdkComment
+}
+type sdkComment struct {
+	id     int64
+	body   any
+	postID int64
+}
+type sdkTenantUser struct {
+	tenantID int64
+	userID   int64
+	name     any
+	posts    []sdkTenantPost
+}
+type sdkTenantPost struct {
+	tenantID int64
+	postID   int64
+	userID   int64
+	title    any
+	comments []sdkTenantComment
+}
+type sdkTenantComment struct {
+	tenantID  int64
+	commentID int64
+	postID    int64
+	body      any
+}
+
+// key2 is the composite (tenant_id,*) grouping key — group on the FULL tuple (no scalar-collapse).
+type key2 struct{ a, b int64 }
+
+// benchSink holds the last materialized graph so the compiler cannot elide the assembly work (the Go
+// analogue of the rust cell's black_box(&roots) / a package-level escape).
+var benchSink any
+
+func decodeUsers(rows [][]any) []sdkUser {
+	out := make([]sdkUser, len(rows))
+	for i, r := range rows {
+		out[i] = sdkUser{id: asInt(r[0]), email: r[1], name: r[2]}
+	}
+	return out
+}
+func decodePosts(rows [][]any) []sdkPost {
+	out := make([]sdkPost, len(rows))
+	for i, r := range rows {
+		out[i] = sdkPost{id: asInt(r[0]), title: r[1], authorID: asInt(r[2])}
+	}
+	return out
+}
+func decodeComments(rows [][]any) []sdkComment {
+	out := make([]sdkComment, len(rows))
+	for i, r := range rows {
+		out[i] = sdkComment{id: asInt(r[0]), body: r[1], postID: asInt(r[2])}
+	}
+	return out
+}
+
+// materializeUsersPosts: ONE batched child posts read, decoded into typed structs and MOVED into their
+// parent user by author_id (2 queries; the parent read already happened in the op arm).
+func (c *cell) materializeUsersPosts(userRows [][]any) []sdkUser {
+	users := decodeUsers(userRows)
+	if len(users) == 0 {
+		return users
+	}
+	ids := make([]int64, len(users))
+	for i, u := range users {
+		ids[i] = u.id
 	}
 	sqlText := fmt.Sprintf(
 		"SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN (%s) ORDER BY id ASC",
 		placeholders(len(ids)))
-	posts := c.query(sqlText, intArgs(ids)...)
-	groupBy(posts, 2) // author_id at col2
+	posts := decodePosts(c.query(sqlText, intArgs(ids)...))
+	byAuthor := make(map[int64][]sdkPost, len(posts))
+	for _, p := range posts {
+		byAuthor[p.authorID] = append(byAuthor[p.authorID], p)
+	}
+	for i := range users {
+		users[i].posts = byAuthor[users[i].id] // MOVE the grouped slice into the parent
+	}
+	return users
 }
 
-func (c *cell) nestedPostsCollectIDs(users [][]any) []int64 {
-	ids := pluck(users, 0)
-	if len(ids) == 0 {
-		return nil
+// materializeUsersPostsComments: 3-level chain — batched posts then batched comments, assembled into the
+// full nested typed graph (comments MOVED into posts by post_id, posts MOVED into users by author_id).
+func (c *cell) materializeUsersPostsComments(userRows [][]any) []sdkUser {
+	users := decodeUsers(userRows)
+	if len(users) == 0 {
+		return users
 	}
-	sqlText := fmt.Sprintf(
+	uids := make([]int64, len(users))
+	for i, u := range users {
+		uids[i] = u.id
+	}
+	psql := fmt.Sprintf(
 		"SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN (%s) ORDER BY id ASC",
-		placeholders(len(ids)))
-	posts := c.query(sqlText, intArgs(ids)...)
-	groupBy(posts, 2)
-	return pluck(posts, 0)
-}
-
-func (c *cell) batchedComments(postIDs []int64) {
-	if len(postIDs) == 0 {
-		return
+		placeholders(len(uids)))
+	posts := decodePosts(c.query(psql, intArgs(uids)...))
+	if len(posts) > 0 {
+		pids := make([]int64, len(posts))
+		for i, p := range posts {
+			pids[i] = p.id
+		}
+		csql := fmt.Sprintf(
+			"SELECT id, body, post_id FROM benchmark_comments WHERE post_id IN (%s) ORDER BY id ASC",
+			placeholders(len(pids)))
+		comments := decodeComments(c.query(csql, intArgs(pids)...))
+		byPost := make(map[int64][]sdkComment, len(comments))
+		for _, cm := range comments {
+			byPost[cm.postID] = append(byPost[cm.postID], cm)
+		}
+		for i := range posts {
+			posts[i].comments = byPost[posts[i].id]
+		}
 	}
-	sqlText := fmt.Sprintf(
-		"SELECT id, body, post_id FROM benchmark_comments WHERE post_id IN (%s) ORDER BY id ASC",
-		placeholders(len(postIDs)))
-	comments := c.query(sqlText, intArgs(postIDs)...)
-	groupBy(comments, 2) // post_id at col2
+	byAuthor := make(map[int64][]sdkPost, len(posts))
+	for _, p := range posts {
+		byAuthor[p.authorID] = append(byAuthor[p.authorID], p)
+	}
+	for i := range users {
+		users[i].posts = byAuthor[users[i].id]
+	}
+	return users
 }
 
-// compositeRelations: tenant_users(tenant=1) → batched tenant_posts by (tenant_id,user_id) → batched
-// tenant_comments by (tenant_id,post_id). 3 queries.
-func (c *cell) compositeRelations() {
-	tusers := c.query(
+// materializeComposite: tenant_users(tenant=1) → batched tenant_posts by (tenant_id,user_id) → batched
+// tenant_comments by (tenant_id,post_id). 3 queries; assembled into the nested typed graph keyed on the
+// FULL composite (tenant_id,*) tuple.
+func (c *cell) materializeComposite() []sdkTenantUser {
+	trows := c.query(
 		"SELECT tenant_id, user_id, name FROM benchmark_tenant_users WHERE tenant_id = ? ORDER BY user_id ASC", 1)
+	tusers := make([]sdkTenantUser, len(trows))
+	for i, r := range trows {
+		tusers[i] = sdkTenantUser{tenantID: asInt(r[0]), userID: asInt(r[1]), name: r[2]}
+	}
 	if len(tusers) == 0 {
-		return
+		return tusers
 	}
 	pbody := tupleIn(len(tusers), 2)
 	psql := "SELECT tenant_id, post_id, user_id, title FROM benchmark_tenant_posts WHERE (tenant_id, user_id) IN " + pbody
 	pparams := make([]any, 0, len(tusers)*2)
-	for _, r := range tusers {
-		pparams = append(pparams, asInt(r[0]), asInt(r[1])) // tenant_id, user_id
+	for _, u := range tusers {
+		pparams = append(pparams, u.tenantID, u.userID)
 	}
-	tposts := c.query(psql, pparams...)
-	if len(tposts) == 0 {
-		return
+	prows := c.query(psql, pparams...)
+	tposts := make([]sdkTenantPost, len(prows))
+	for i, r := range prows {
+		tposts[i] = sdkTenantPost{tenantID: asInt(r[0]), postID: asInt(r[1]), userID: asInt(r[2]), title: r[3]}
 	}
-	cbody := tupleIn(len(tposts), 2)
-	csql := "SELECT tenant_id, comment_id, post_id, body FROM benchmark_tenant_comments WHERE (tenant_id, post_id) IN " + cbody
-	cparams := make([]any, 0, len(tposts)*2)
-	for _, r := range tposts {
-		cparams = append(cparams, asInt(r[0]), asInt(r[1])) // tenant_id, post_id
+	if len(tposts) > 0 {
+		cbody := tupleIn(len(tposts), 2)
+		csql := "SELECT tenant_id, comment_id, post_id, body FROM benchmark_tenant_comments WHERE (tenant_id, post_id) IN " + cbody
+		cparams := make([]any, 0, len(tposts)*2)
+		for _, p := range tposts {
+			cparams = append(cparams, p.tenantID, p.postID)
+		}
+		crows := c.query(csql, cparams...)
+		byPost := make(map[key2][]sdkTenantComment, len(crows))
+		for _, r := range crows {
+			cm := sdkTenantComment{tenantID: asInt(r[0]), commentID: asInt(r[1]), postID: asInt(r[2]), body: r[3]}
+			k := key2{cm.tenantID, cm.postID}
+			byPost[k] = append(byPost[k], cm)
+		}
+		for i := range tposts {
+			tposts[i].comments = byPost[key2{tposts[i].tenantID, tposts[i].postID}]
+		}
 	}
-	c.query(csql, cparams...)
+	byUser := make(map[key2][]sdkTenantPost, len(tposts))
+	for _, p := range tposts {
+		k := key2{p.tenantID, p.userID}
+		byUser[k] = append(byUser[k], p)
+	}
+	for i := range tusers {
+		tusers[i].posts = byUser[key2{tusers[i].tenantID, tusers[i].userID}]
+	}
+	return tusers
 }
 
 // updateMany: ONE statement (CASE id … END WHERE id IN (…)) — single-statement, N+1-avoided.
@@ -249,7 +381,8 @@ func (c *cell) updateMany() {
 }
 
 // ── the 19 ops (native-cell order). Fixed inputs mirror the go native cell; mutating ops vary their
-//    UNIQUE column by it. Reads: LIMIT/ORDER shapes match the ops SSoT (== the native generated SQL). ──
+//
+//	UNIQUE column by it. Reads: LIMIT/ORDER shapes match the ops SSoT (== the native generated SQL). ──
 func (c *cell) op(name string, it int) {
 	switch name {
 	case "findAll":
@@ -263,19 +396,18 @@ func (c *cell) op(name string, it int) {
 		c.query("SELECT id, email, name FROM benchmark_users WHERE email = ? LIMIT 1", "user500@example.com")
 	case "nestedFindAll":
 		users := c.query("SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100")
-		c.nestedPostsFor(users)
+		benchSink = c.materializeUsersPosts(users)
 	case "nestedFindFirst":
 		users := c.query("SELECT id, email, name FROM benchmark_users WHERE name LIKE ? LIMIT 1", "User%")
-		c.nestedPostsFor(users)
+		benchSink = c.materializeUsersPosts(users)
 	case "nestedFindUnique":
 		users := c.query("SELECT id, email, name FROM benchmark_users WHERE email = ? LIMIT 1", "user1@example.com")
-		c.nestedPostsFor(users)
+		benchSink = c.materializeUsersPosts(users)
 	case "nestedRelations":
 		users := c.query("SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100")
-		postIDs := c.nestedPostsCollectIDs(users)
-		c.batchedComments(postIDs)
+		benchSink = c.materializeUsersPostsComments(users)
 	case "compositeRelations":
-		c.compositeRelations()
+		benchSink = c.materializeComposite()
 	case "create":
 		c.exec("INSERT INTO benchmark_users (email, name) VALUES (?, ?)", fmt.Sprintf("new%d@bench.com", it), "New")
 	case "update":
@@ -349,30 +481,12 @@ func tupleIn(rows, cols int) string {
 	return "(VALUES " + strings.TrimSuffix(strings.Repeat(one+",", rows), ",") + ")"
 }
 
-func pluck(rows [][]any, col int) []int64 {
-	out := make([]int64, len(rows))
-	for i, r := range rows {
-		out[i] = asInt(r[col])
-	}
-	return out
-}
-
 func intArgs(ids []int64) []any {
 	out := make([]any, len(ids))
 	for i, v := range ids {
 		out[i] = v
 	}
 	return out
-}
-
-// groupBy stitches child rows by their parent-key column (in-memory, mirrors the runtime distribute).
-func groupBy(rows [][]any, keyCol int) {
-	m := make(map[int64][]int, len(rows))
-	for idx, r := range rows {
-		k := asInt(r[keyCol])
-		m[k] = append(m[k], idx)
-	}
-	_ = m
 }
 
 var ops = []string{

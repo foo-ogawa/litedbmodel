@@ -101,65 +101,154 @@ def _tuple_in(rows: int, cols: int) -> str:
     return "(VALUES " + ",".join([one] * rows) + ")"
 
 
-def _group_by(rows: List[tuple], key_col: int) -> None:
-    m: dict = {}
-    for idx, r in enumerate(rows):
-        m.setdefault(r[key_col], []).append(idx)
+# ── nested materialization (fair vs the native cell) ───────────────────────────────────────────────
+# The native ORM assembles a nested TYPED object graph: each parent record with its child list nested
+# under the relation key (the runtime group_children builds it; the generated de-box holds it). The SDK
+# mirrors that — decode every selected column into a plain typed record (a __slots__ class) and ATTACH the
+# grouped children into their parent BY MOVE (drain the group map into ``parent.children``, no per-parent
+# copy). The fully-assembled list-of-parents is held in ``_SINK`` so it isn't dropped before timing ends.
+#
+# The payload fields (email/name/title/body) are decoded-then-held (the same decode the native pays) but
+# never read downstream — only the key columns drive the grouping.
+class User:
+    __slots__ = ("id", "email", "name", "posts")
+
+    def __init__(self, id: Any, email: Any, name: Any) -> None:
+        self.id = id
+        self.email = email
+        self.name = name
+        self.posts: list = []
 
 
-# ── read helpers: ONE batched child query per level, grouped in memory (N+1-free). ─────────────────
-def _nested_posts_for(db: Db, users: List[tuple]) -> None:
-    ids = [r[0] for r in users]
-    if not ids:
-        return
+class Post:
+    __slots__ = ("id", "title", "author_id", "comments")
+
+    def __init__(self, id: Any, title: Any, author_id: Any) -> None:
+        self.id = id
+        self.title = title
+        self.author_id = author_id
+        self.comments: list = []
+
+
+class Comment:
+    __slots__ = ("id", "body", "post_id")
+
+    def __init__(self, id: Any, body: Any, post_id: Any) -> None:
+        self.id = id
+        self.body = body
+        self.post_id = post_id
+
+
+class TenantUser:
+    __slots__ = ("tenant_id", "user_id", "name", "posts")
+
+    def __init__(self, tenant_id: Any, user_id: Any, name: Any) -> None:
+        self.tenant_id = tenant_id
+        self.user_id = user_id
+        self.name = name
+        self.posts: list = []
+
+
+class TenantPost:
+    __slots__ = ("tenant_id", "post_id", "user_id", "title", "comments")
+
+    def __init__(self, tenant_id: Any, post_id: Any, user_id: Any, title: Any) -> None:
+        self.tenant_id = tenant_id
+        self.post_id = post_id
+        self.user_id = user_id
+        self.title = title
+        self.comments: list = []
+
+
+class TenantComment:
+    __slots__ = ("tenant_id", "comment_id", "post_id", "body")
+
+    def __init__(self, tenant_id: Any, comment_id: Any, post_id: Any, body: Any) -> None:
+        self.tenant_id = tenant_id
+        self.comment_id = comment_id
+        self.post_id = post_id
+        self.body = body
+
+
+# Holds the last materialized graph so it isn't dropped before the timed op ends (the python analogue of
+# the rust cell's black_box(&roots)).
+_SINK: list = [None]
+
+
+def _materialize_users_posts(db: Db, user_rows: List[tuple]) -> List[User]:
+    users = [User(r[0], r[1], r[2]) for r in user_rows]
+    if not users:
+        return users
+    ids = [u.id for u in users]
     sql = ("SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN (%s) ORDER BY id ASC"
            % _placeholders(len(ids)))
-    posts = db.query(sql, tuple(ids))
-    _group_by(posts, 2)
+    posts = [Post(r[0], r[1], r[2]) for r in db.query(sql, tuple(ids))]
+    by_author: dict = {}
+    for p in posts:
+        by_author.setdefault(p.author_id, []).append(p)
+    for u in users:
+        u.posts = by_author.pop(u.id, [])  # MOVE the grouped list into the parent
+    return users
 
 
-def _nested_posts_collect_ids(db: Db, users: List[tuple]) -> List[Any]:
-    ids = [r[0] for r in users]
-    if not ids:
-        return []
-    sql = ("SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN (%s) ORDER BY id ASC"
-           % _placeholders(len(ids)))
-    posts = db.query(sql, tuple(ids))
-    _group_by(posts, 2)
-    return [r[0] for r in posts]
+def _materialize_users_posts_comments(db: Db, user_rows: List[tuple]) -> List[User]:
+    users = [User(r[0], r[1], r[2]) for r in user_rows]
+    if not users:
+        return users
+    uids = [u.id for u in users]
+    psql = ("SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN (%s) ORDER BY id ASC"
+            % _placeholders(len(uids)))
+    posts = [Post(r[0], r[1], r[2]) for r in db.query(psql, tuple(uids))]
+    if posts:
+        pids = [p.id for p in posts]
+        csql = ("SELECT id, body, post_id FROM benchmark_comments WHERE post_id IN (%s) ORDER BY id ASC"
+                % _placeholders(len(pids)))
+        comments = [Comment(r[0], r[1], r[2]) for r in db.query(csql, tuple(pids))]
+        by_post: dict = {}
+        for c in comments:
+            by_post.setdefault(c.post_id, []).append(c)
+        for p in posts:
+            p.comments = by_post.pop(p.id, [])
+    by_author: dict = {}
+    for p in posts:
+        by_author.setdefault(p.author_id, []).append(p)
+    for u in users:
+        u.posts = by_author.pop(u.id, [])
+    return users
 
 
-def _batched_comments(db: Db, post_ids: List[Any]) -> None:
-    if not post_ids:
-        return
-    sql = ("SELECT id, body, post_id FROM benchmark_comments WHERE post_id IN (%s) ORDER BY id ASC"
-           % _placeholders(len(post_ids)))
-    comments = db.query(sql, tuple(post_ids))
-    _group_by(comments, 2)
-
-
-def _composite_relations(db: Db) -> None:
-    tusers = db.query(
+def _materialize_composite(db: Db) -> List[TenantUser]:
+    tusers = [TenantUser(r[0], r[1], r[2]) for r in db.query(
         "SELECT tenant_id, user_id, name FROM benchmark_tenant_users WHERE tenant_id = ? ORDER BY user_id ASC",
-        (1,))
+        (1,))]
     if not tusers:
-        return
+        return tusers
     pbody = _tuple_in(len(tusers), 2)
     psql = ("SELECT tenant_id, post_id, user_id, title FROM benchmark_tenant_posts "
             "WHERE (tenant_id, user_id) IN " + pbody)
     pparams: list = []
-    for r in tusers:
-        pparams += [r[0], r[1]]
-    tposts = db.query(psql, tuple(pparams))
-    if not tposts:
-        return
-    cbody = _tuple_in(len(tposts), 2)
-    csql = ("SELECT tenant_id, comment_id, post_id, body FROM benchmark_tenant_comments "
-            "WHERE (tenant_id, post_id) IN " + cbody)
-    cparams: list = []
-    for r in tposts:
-        cparams += [r[0], r[1]]
-    db.query(csql, tuple(cparams))
+    for u in tusers:
+        pparams += [u.tenant_id, u.user_id]
+    tposts = [TenantPost(r[0], r[1], r[2], r[3]) for r in db.query(psql, tuple(pparams))]
+    if tposts:
+        cbody = _tuple_in(len(tposts), 2)
+        csql = ("SELECT tenant_id, comment_id, post_id, body FROM benchmark_tenant_comments "
+                "WHERE (tenant_id, post_id) IN " + cbody)
+        cparams: list = []
+        for p in tposts:
+            cparams += [p.tenant_id, p.post_id]
+        tcomments = [TenantComment(r[0], r[1], r[2], r[3]) for r in db.query(csql, tuple(cparams))]
+        by_post: dict = {}
+        for c in tcomments:
+            by_post.setdefault((c.tenant_id, c.post_id), []).append(c)
+        for p in tposts:
+            p.comments = by_post.pop((p.tenant_id, p.post_id), [])
+    by_user: dict = {}
+    for p in tposts:
+        by_user.setdefault((p.tenant_id, p.user_id), []).append(p)
+    for u in tusers:
+        u.posts = by_user.pop((u.tenant_id, u.user_id), [])
+    return tusers
 
 
 def _update_many(db: Db) -> None:
@@ -195,16 +284,16 @@ def run_op(db: Db, op: str, it: int) -> None:
     elif op == "findUnique":
         db.query("SELECT id, email, name FROM benchmark_users WHERE email = ? LIMIT 1", ("user1@example.com",))
     elif op == "nestedFindAll":
-        _nested_posts_for(db, db.query("SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100"))
+        _SINK[0] = _materialize_users_posts(db, db.query("SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100"))
     elif op == "nestedFindFirst":
-        _nested_posts_for(db, db.query("SELECT id, email, name FROM benchmark_users WHERE name LIKE ? LIMIT 1", ("User%",)))
+        _SINK[0] = _materialize_users_posts(db, db.query("SELECT id, email, name FROM benchmark_users WHERE name LIKE ? LIMIT 1", ("User%",)))
     elif op == "nestedFindUnique":
-        _nested_posts_for(db, db.query("SELECT id, email, name FROM benchmark_users WHERE email = ? LIMIT 1", ("user1@example.com",)))
+        _SINK[0] = _materialize_users_posts(db, db.query("SELECT id, email, name FROM benchmark_users WHERE email = ? LIMIT 1", ("user1@example.com",)))
     elif op == "nestedRelations":
         users = db.query("SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100")
-        _batched_comments(db, _nested_posts_collect_ids(db, users))
+        _SINK[0] = _materialize_users_posts_comments(db, users)
     elif op == "compositeRelations":
-        _composite_relations(db)
+        _SINK[0] = _materialize_composite(db)
     elif op == "create":
         db.exec("INSERT INTO benchmark_users (email, name) VALUES (?, ?)", (f"new{it}@bench.com", "New"))
     elif op == "update":

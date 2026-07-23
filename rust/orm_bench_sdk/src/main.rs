@@ -14,6 +14,7 @@
 //! Usage: `orm_bench_sdk <dialect> <spec> [reps=300] [warmup=30]`  (spec = sqlite file path, or — with
 //! `--features livedb` — `pg:<libpq-conn>` / `mysql:<url>`); or `orm_bench_sdk safety <dialect> <spec>`.
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use std::time::Instant;
@@ -424,31 +425,40 @@ fn run_op(op: &str, it: u64, db: &mut dyn Db) {
             );
             db.query(&sql, &[P::S("user500@example.com".into())]);
         }
-        // ── nested reads: primary + ONE batched child (2 queries), grouped in memory. ──────────────
+        // ── nested reads: primary + ONE batched child (2 queries), assembled into the SAME nested
+        //    typed object graph the native cell returns (users each holding their Vec<Post>). ───────
         "nestedFindAll" => {
             let users = db.query("SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100", &[]);
-            nested_posts_for(db, users);
+            let roots = materialize_users_posts(db, users);
+            std::hint::black_box(&roots);
         }
         "nestedFindFirst" => {
             let mut ph = Ph::new(dialect);
             let sql = format!("SELECT id, email, name FROM benchmark_users WHERE name LIKE {} LIMIT 1", ph.next());
             let users = db.query(&sql, &[P::S("User%".into())]);
-            nested_posts_for(db, users);
+            let roots = materialize_users_posts(db, users);
+            std::hint::black_box(&roots);
         }
         "nestedFindUnique" => {
             let mut ph = Ph::new(dialect);
             let sql = format!("SELECT id, email, name FROM benchmark_users WHERE email = {} LIMIT 1", ph.next());
             let users = db.query(&sql, &[P::S("user1@example.com".into())]);
-            nested_posts_for(db, users);
+            let roots = materialize_users_posts(db, users);
+            std::hint::black_box(&roots);
         }
-        // ── 3-level chain: users → posts → comments (3 queries). ──────────────────────────────────
+        // ── 3-level chain: users → posts → comments (3 queries), fully assembled (each user holds its
+        //    Vec<Post>, each Post its Vec<Comment>). ──────────────────────────────────────────────────
         "nestedRelations" => {
             let users = db.query("SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100", &[]);
-            let post_ids = nested_posts_collect_ids(db, &users);
-            batched_comments(db, &post_ids);
+            let roots = materialize_users_posts_comments(db, users);
+            std::hint::black_box(&roots);
         }
-        // ── composite 3-level: tenant_users → tenant_posts → tenant_comments (3 queries). ─────────
-        "compositeRelations" => composite_relations(db),
+        // ── composite 3-level: tenant_users → tenant_posts → tenant_comments (3 queries), assembled by
+        //    the composite (tenant_id,*) key into the nested typed graph. ─────────────────────────────
+        "compositeRelations" => {
+            let roots = materialize_composite(db);
+            std::hint::black_box(&roots);
+        }
         "create" => {
             let mut ph = Ph::new(dialect);
             let sql = format!(
@@ -555,61 +565,207 @@ fn run_op(op: &str, it: u64, db: &mut dyn Db) {
     }
 }
 
-// ── read helpers (one batched child query per level) ──────────────────────────────────────────────────
-/// Given parent user rows (col0 = id), run ONE batched child posts read and group in memory.
-fn nested_posts_for(db: &mut dyn Db, users: Vec<Vec<Cell>>) {
-    let ids: Vec<i64> = users.iter().map(|r| cell_i64(&r[0])).collect();
+// ── nested materialization (fair vs the native cell) ──────────────────────────────────────────────────
+// The native ORM assembles a nested TYPED object graph: each parent record shallow-copied with its child
+// list nested under the relation key (the runtime `group_children` builds it; the generated de-box holds
+// it). The SDK mirrors that here — decode every selected column into a plain typed struct and ATTACH the
+// grouped children into their parent BY MOVE (drain the group map into `parent.children`, no per-parent
+// clone). The fully-assembled `Vec<Parent-with-children>` is what the op arm holds via `black_box(&roots)`.
+//
+// The struct payload fields (email/name/title/body) are decoded-then-held (the same de-box the native
+// pays) but never read downstream — only the key columns drive the grouping — so `dead_code` is expected.
+#[allow(dead_code)]
+struct SdkUser {
+    id: i64,
+    email: Option<String>,
+    name: Option<String>,
+    posts: Vec<SdkPost>,
+}
+#[allow(dead_code)]
+struct SdkPost {
+    id: i64,
+    title: Option<String>,
+    author_id: Option<i64>,
+    comments: Vec<SdkComment>,
+}
+#[allow(dead_code)]
+struct SdkComment {
+    id: i64,
+    body: Option<String>,
+    post_id: Option<i64>,
+}
+#[allow(dead_code)]
+struct SdkTenantUser {
+    tenant_id: i64,
+    user_id: i64,
+    name: Option<String>,
+    posts: Vec<SdkTenantPost>,
+}
+#[allow(dead_code)]
+struct SdkTenantPost {
+    tenant_id: i64,
+    post_id: i64,
+    user_id: i64,
+    title: Option<String>,
+    comments: Vec<SdkTenantComment>,
+}
+#[allow(dead_code)]
+struct SdkTenantComment {
+    tenant_id: i64,
+    comment_id: i64,
+    post_id: i64,
+    body: Option<String>,
+}
+
+// De-box a single result Cell into a typed struct field (moving the payload out — no clone).
+fn take_i64(c: Cell) -> i64 {
+    match c {
+        Cell::I(n) => n,
+        _ => 0,
+    }
+}
+fn take_opt_i64(c: Cell) -> Option<i64> {
+    match c {
+        Cell::I(n) => Some(n),
+        _ => None,
+    }
+}
+fn take_string(c: Cell) -> Option<String> {
+    match c {
+        Cell::S(s) => Some(s),
+        _ => None,
+    }
+}
+
+fn decode_users(rows: Vec<Vec<Cell>>) -> Vec<SdkUser> {
+    rows.into_iter()
+        .map(|r| {
+            let mut it = r.into_iter();
+            SdkUser {
+                id: take_i64(it.next().unwrap()),
+                email: take_string(it.next().unwrap()),
+                name: take_string(it.next().unwrap()),
+                posts: Vec::new(),
+            }
+        })
+        .collect()
+}
+fn decode_posts(rows: Vec<Vec<Cell>>) -> Vec<SdkPost> {
+    rows.into_iter()
+        .map(|r| {
+            let mut it = r.into_iter();
+            SdkPost {
+                id: take_i64(it.next().unwrap()),
+                title: take_string(it.next().unwrap()),
+                author_id: take_opt_i64(it.next().unwrap()),
+                comments: Vec::new(),
+            }
+        })
+        .collect()
+}
+fn decode_comments(rows: Vec<Vec<Cell>>) -> Vec<SdkComment> {
+    rows.into_iter()
+        .map(|r| {
+            let mut it = r.into_iter();
+            SdkComment {
+                id: take_i64(it.next().unwrap()),
+                body: take_string(it.next().unwrap()),
+                post_id: take_opt_i64(it.next().unwrap()),
+            }
+        })
+        .collect()
+}
+
+/// Read the batched child posts for `users`, decode them into typed `SdkPost` structs, and attach each
+/// group into its parent user BY MOVE (2 queries total; the parent read already happened in the op arm).
+fn materialize_users_posts(db: &mut dyn Db, users: Vec<Vec<Cell>>) -> Vec<SdkUser> {
+    let mut users = decode_users(users);
+    let ids: Vec<i64> = users.iter().map(|u| u.id).collect();
     if ids.is_empty() {
-        return;
+        return users;
     }
     let mut ph = Ph::new(db.dialect());
     let sql = format!(
         "SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN ({}) ORDER BY id ASC",
         ph.list(ids.len())
     );
-    let posts = db.query(&sql, &ids.iter().map(|i| P::I(*i)).collect::<Vec<_>>());
-    group_by(&posts, 2); // author_id at col2
+    let posts = decode_posts(db.query(&sql, &ids.iter().map(|i| P::I(*i)).collect::<Vec<_>>()));
+    // group posts by author_id, then MOVE each group into its parent user.
+    let mut by_author: HashMap<i64, Vec<SdkPost>> = HashMap::new();
+    for p in posts {
+        by_author.entry(p.author_id.unwrap_or(0)).or_default().push(p);
+    }
+    for u in &mut users {
+        u.posts = by_author.remove(&u.id).unwrap_or_default();
+    }
+    users
 }
-/// nestedRelations middle level: batched posts, returning the collected post ids for the comments level.
-fn nested_posts_collect_ids(db: &mut dyn Db, users: &[Vec<Cell>]) -> Vec<i64> {
-    let ids: Vec<i64> = users.iter().map(|r| cell_i64(&r[0])).collect();
-    if ids.is_empty() {
-        return vec![];
+
+/// 3-level chain: read batched posts then batched comments, assemble the full nested typed graph
+/// (comments MOVED into posts by post_id, posts MOVED into users by author_id). 3 queries total.
+fn materialize_users_posts_comments(db: &mut dyn Db, users: Vec<Vec<Cell>>) -> Vec<SdkUser> {
+    let mut users = decode_users(users);
+    let uids: Vec<i64> = users.iter().map(|u| u.id).collect();
+    if uids.is_empty() {
+        return users;
     }
     let mut ph = Ph::new(db.dialect());
-    let sql = format!(
+    let psql = format!(
         "SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN ({}) ORDER BY id ASC",
-        ph.list(ids.len())
+        ph.list(uids.len())
     );
-    let posts = db.query(&sql, &ids.iter().map(|i| P::I(*i)).collect::<Vec<_>>());
-    group_by(&posts, 2);
-    posts.iter().map(|r| cell_i64(&r[0])).collect()
-}
-/// nestedRelations leaf level: ONE batched comments read by post_id IN (…).
-fn batched_comments(db: &mut dyn Db, post_ids: &[i64]) {
-    if post_ids.is_empty() {
-        return;
+    let mut posts = decode_posts(db.query(&psql, &uids.iter().map(|i| P::I(*i)).collect::<Vec<_>>()));
+    let pids: Vec<i64> = posts.iter().map(|p| p.id).collect();
+    if !pids.is_empty() {
+        let mut ph = Ph::new(db.dialect());
+        let csql = format!(
+            "SELECT id, body, post_id FROM benchmark_comments WHERE post_id IN ({}) ORDER BY id ASC",
+            ph.list(pids.len())
+        );
+        let comments =
+            decode_comments(db.query(&csql, &pids.iter().map(|i| P::I(*i)).collect::<Vec<_>>()));
+        let mut by_post: HashMap<i64, Vec<SdkComment>> = HashMap::new();
+        for c in comments {
+            by_post.entry(c.post_id.unwrap_or(0)).or_default().push(c);
+        }
+        for p in &mut posts {
+            p.comments = by_post.remove(&p.id).unwrap_or_default();
+        }
     }
-    let mut ph = Ph::new(db.dialect());
-    let sql = format!(
-        "SELECT id, body, post_id FROM benchmark_comments WHERE post_id IN ({}) ORDER BY id ASC",
-        ph.list(post_ids.len())
-    );
-    let comments = db.query(&sql, &post_ids.iter().map(|i| P::I(*i)).collect::<Vec<_>>());
-    group_by(&comments, 2); // post_id at col2
+    let mut by_author: HashMap<i64, Vec<SdkPost>> = HashMap::new();
+    for p in posts {
+        by_author.entry(p.author_id.unwrap_or(0)).or_default().push(p);
+    }
+    for u in &mut users {
+        u.posts = by_author.remove(&u.id).unwrap_or_default();
+    }
+    users
 }
 
 /// compositeRelations: tenant_users(tenant=1) → batched tenant_posts by (tenant_id,user_id) → batched
-/// tenant_comments by (tenant_id,post_id). 3 queries.
-fn composite_relations(db: &mut dyn Db) {
+/// tenant_comments by (tenant_id,post_id). 3 queries; assembled into the nested typed graph keyed on the
+/// FULL composite (tenant_id,*) tuple (comments MOVED into posts, posts MOVED into users).
+fn materialize_composite(db: &mut dyn Db) -> Vec<SdkTenantUser> {
     let mut ph = Ph::new(db.dialect());
     let sql = format!(
         "SELECT tenant_id, user_id, name FROM benchmark_tenant_users WHERE tenant_id = {} ORDER BY user_id ASC",
         ph.next()
     );
-    let tusers = db.query(&sql, &[P::I(1)]);
+    let mut tusers: Vec<SdkTenantUser> = db
+        .query(&sql, &[P::I(1)])
+        .into_iter()
+        .map(|r| {
+            let mut it = r.into_iter();
+            SdkTenantUser {
+                tenant_id: take_i64(it.next().unwrap()),
+                user_id: take_i64(it.next().unwrap()),
+                name: take_string(it.next().unwrap()),
+                posts: Vec::new(),
+            }
+        })
+        .collect();
     if tusers.is_empty() {
-        return;
+        return tusers;
     }
     // batched posts by (tenant_id, user_id)
     let mut ph = Ph::new(db.dialect());
@@ -618,36 +774,65 @@ fn composite_relations(db: &mut dyn Db) {
         "SELECT tenant_id, post_id, user_id, title FROM benchmark_tenant_posts WHERE (tenant_id, user_id) IN {body}"
     );
     let mut pparams = Vec::new();
-    for r in &tusers {
-        pparams.push(P::I(cell_i64(&r[0]))); // tenant_id
-        pparams.push(P::I(cell_i64(&r[1]))); // user_id
+    for u in &tusers {
+        pparams.push(P::I(u.tenant_id));
+        pparams.push(P::I(u.user_id));
     }
-    let tposts = db.query(&psql, &pparams);
-    if tposts.is_empty() {
-        return;
+    let mut tposts: Vec<SdkTenantPost> = db
+        .query(&psql, &pparams)
+        .into_iter()
+        .map(|r| {
+            let mut it = r.into_iter();
+            SdkTenantPost {
+                tenant_id: take_i64(it.next().unwrap()),
+                post_id: take_i64(it.next().unwrap()),
+                user_id: take_i64(it.next().unwrap()),
+                title: take_string(it.next().unwrap()),
+                comments: Vec::new(),
+            }
+        })
+        .collect();
+    if !tposts.is_empty() {
+        // batched comments by (tenant_id, post_id)
+        let mut ph = Ph::new(db.dialect());
+        let body = ph.tuple_in(tposts.len(), 2);
+        let csql = format!(
+            "SELECT tenant_id, comment_id, post_id, body FROM benchmark_tenant_comments WHERE (tenant_id, post_id) IN {body}"
+        );
+        let mut cparams = Vec::new();
+        for p in &tposts {
+            cparams.push(P::I(p.tenant_id));
+            cparams.push(P::I(p.post_id));
+        }
+        let tcomments: Vec<SdkTenantComment> = db
+            .query(&csql, &cparams)
+            .into_iter()
+            .map(|r| {
+                let mut it = r.into_iter();
+                SdkTenantComment {
+                    tenant_id: take_i64(it.next().unwrap()),
+                    comment_id: take_i64(it.next().unwrap()),
+                    post_id: take_i64(it.next().unwrap()),
+                    body: take_string(it.next().unwrap()),
+                }
+            })
+            .collect();
+        let mut by_post: HashMap<(i64, i64), Vec<SdkTenantComment>> = HashMap::new();
+        for c in tcomments {
+            by_post.entry((c.tenant_id, c.post_id)).or_default().push(c);
+        }
+        for p in &mut tposts {
+            p.comments = by_post.remove(&(p.tenant_id, p.post_id)).unwrap_or_default();
+        }
     }
-    // batched comments by (tenant_id, post_id)
-    let mut ph = Ph::new(db.dialect());
-    let body = ph.tuple_in(tposts.len(), 2);
-    let csql = format!(
-        "SELECT tenant_id, comment_id, post_id, body FROM benchmark_tenant_comments WHERE (tenant_id, post_id) IN {body}"
-    );
-    let mut cparams = Vec::new();
-    for r in &tposts {
-        cparams.push(P::I(cell_i64(&r[0]))); // tenant_id
-        cparams.push(P::I(cell_i64(&r[1]))); // post_id
+    let mut by_user: HashMap<(i64, i64), Vec<SdkTenantPost>> = HashMap::new();
+    for p in tposts {
+        by_user.entry((p.tenant_id, p.user_id)).or_default().push(p);
     }
-    db.query(&csql, &cparams);
-}
-
-/// Group child rows by the parent-key column (in-memory stitch work, mirrors the runtime distribute).
-fn group_by(rows: &[Vec<Cell>], key_col: usize) {
-    use std::collections::HashMap;
-    let mut map: HashMap<i64, Vec<usize>> = HashMap::new();
-    for (idx, r) in rows.iter().enumerate() {
-        map.entry(cell_i64(&r[key_col])).or_default().push(idx);
+    for u in &mut tusers {
+        u.posts = by_user.remove(&(u.tenant_id, u.user_id)).unwrap_or_default();
     }
-    std::hint::black_box(&map);
+    tusers
 }
 
 // ── write helpers ─────────────────────────────────────────────────────────────────────────────────────

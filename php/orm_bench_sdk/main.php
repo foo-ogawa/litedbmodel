@@ -155,79 +155,170 @@ function tupleIn(int $rows, int $cols): string
     return '(VALUES ' . implode(',', array_fill(0, $rows, $one)) . ')';
 }
 
-/** @param list<array<int,mixed>> $rows @return list<int> */
-function pluck(array $rows, int $col): array
+// ── nested materialization (fair vs the native cell) ─────────────────────────────────────────────────
+// The native ORM assembles a nested TYPED object graph: each parent record with its child list nested
+// under the relation key (the runtime group_children builds it; the generated de-box holds it). The SDK
+// mirrors that — decode every selected column into a plain typed object and ATTACH the grouped children
+// into their parent BY MOVE (assign the grouped array into $parent->children; PHP objects are by-handle,
+// so no child is cloned). The fully-assembled list-of-parents is held in $GLOBALS['benchSink'] so the
+// interpreter keeps it. Payload fields (email/name/title/body) are decoded-then-held (the same decode the
+// native pays) but never read downstream — only the key columns drive the grouping.
+final class SdkUser
 {
-    return array_map(static fn (array $r): int => (int) $r[$col], $rows);
+    /** @var list<SdkPost> */
+    public array $posts = [];
+
+    public function __construct(public int $id, public mixed $email, public mixed $name)
+    {
+    }
+}
+final class SdkPost
+{
+    /** @var list<SdkComment> */
+    public array $comments = [];
+
+    public function __construct(public int $id, public mixed $title, public int $authorId)
+    {
+    }
+}
+final class SdkComment
+{
+    public function __construct(public int $id, public mixed $body, public int $postId)
+    {
+    }
+}
+final class SdkTenantUser
+{
+    /** @var list<SdkTenantPost> */
+    public array $posts = [];
+
+    public function __construct(public int $tenantId, public int $userId, public mixed $name)
+    {
+    }
+}
+final class SdkTenantPost
+{
+    /** @var list<SdkTenantComment> */
+    public array $comments = [];
+
+    public function __construct(public int $tenantId, public int $postId, public int $userId, public mixed $title)
+    {
+    }
+}
+final class SdkTenantComment
+{
+    public function __construct(public int $tenantId, public int $commentId, public int $postId, public mixed $body)
+    {
+    }
 }
 
-/** in-memory stitch by the parent-key column (mirrors the runtime distribute). @param list<array<int,mixed>> $rows */
-function groupBy(array $rows, int $keyCol): void
+/** @param list<array<int,mixed>> $userRows @return list<SdkUser> */
+function materializeUsersPosts(Db $db, array $userRows): array
 {
-    $m = [];
-    foreach ($rows as $idx => $r) {
-        $m[$r[$keyCol]][] = $idx;
+    $users = [];
+    foreach ($userRows as $r) {
+        $users[] = new SdkUser((int) $r[0], $r[1], $r[2]);
     }
-    unset($m);
-}
-
-/** @param list<array<int,mixed>> $users */
-function nestedPostsFor(Db $db, array $users): void
-{
-    $ids = pluck($users, 0);
-    if ($ids === []) {
-        return;
+    if ($users === []) {
+        return $users;
     }
+    $ids = array_map(static fn (SdkUser $u): int => $u->id, $users);
     $sql = 'SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN (' . placeholders(count($ids)) . ') ORDER BY id ASC';
-    groupBy($db->query($sql, $ids), 2);
-}
-
-/** @param list<array<int,mixed>> $users @return list<int> */
-function nestedPostsCollectIds(Db $db, array $users): array
-{
-    $ids = pluck($users, 0);
-    if ($ids === []) {
-        return [];
+    $byAuthor = [];
+    foreach ($db->query($sql, $ids) as $r) {
+        $p = new SdkPost((int) $r[0], $r[1], (int) $r[2]);
+        $byAuthor[$p->authorId][] = $p;
     }
-    $sql = 'SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN (' . placeholders(count($ids)) . ') ORDER BY id ASC';
-    $posts = $db->query($sql, $ids);
-    groupBy($posts, 2);
-    return pluck($posts, 0);
-}
-
-/** @param list<int> $postIds */
-function batchedComments(Db $db, array $postIds): void
-{
-    if ($postIds === []) {
-        return;
+    foreach ($users as $u) {
+        $u->posts = $byAuthor[$u->id] ?? []; // MOVE the grouped array into the parent
     }
-    $sql = 'SELECT id, body, post_id FROM benchmark_comments WHERE post_id IN (' . placeholders(count($postIds)) . ') ORDER BY id ASC';
-    groupBy($db->query($sql, $postIds), 2);
+    return $users;
 }
 
-function compositeRelations(Db $db): void
+/** @param list<array<int,mixed>> $userRows @return list<SdkUser> */
+function materializeUsersPostsComments(Db $db, array $userRows): array
 {
-    $tusers = $db->query('SELECT tenant_id, user_id, name FROM benchmark_tenant_users WHERE tenant_id = ? ORDER BY user_id ASC', [1]);
+    $users = [];
+    foreach ($userRows as $r) {
+        $users[] = new SdkUser((int) $r[0], $r[1], $r[2]);
+    }
+    if ($users === []) {
+        return $users;
+    }
+    $uids = array_map(static fn (SdkUser $u): int => $u->id, $users);
+    $psql = 'SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN (' . placeholders(count($uids)) . ') ORDER BY id ASC';
+    /** @var list<SdkPost> $posts */
+    $posts = [];
+    foreach ($db->query($psql, $uids) as $r) {
+        $posts[] = new SdkPost((int) $r[0], $r[1], (int) $r[2]);
+    }
+    if ($posts !== []) {
+        $pids = array_map(static fn (SdkPost $p): int => $p->id, $posts);
+        $csql = 'SELECT id, body, post_id FROM benchmark_comments WHERE post_id IN (' . placeholders(count($pids)) . ') ORDER BY id ASC';
+        $byPost = [];
+        foreach ($db->query($csql, $pids) as $r) {
+            $c = new SdkComment((int) $r[0], $r[1], (int) $r[2]);
+            $byPost[$c->postId][] = $c;
+        }
+        foreach ($posts as $p) {
+            $p->comments = $byPost[$p->id] ?? [];
+        }
+    }
+    $byAuthor = [];
+    foreach ($posts as $p) {
+        $byAuthor[$p->authorId][] = $p;
+    }
+    foreach ($users as $u) {
+        $u->posts = $byAuthor[$u->id] ?? [];
+    }
+    return $users;
+}
+
+/** @return list<SdkTenantUser> */
+function materializeComposite(Db $db): array
+{
+    $tusers = [];
+    foreach ($db->query('SELECT tenant_id, user_id, name FROM benchmark_tenant_users WHERE tenant_id = ? ORDER BY user_id ASC', [1]) as $r) {
+        $tusers[] = new SdkTenantUser((int) $r[0], (int) $r[1], $r[2]);
+    }
     if ($tusers === []) {
-        return;
+        return $tusers;
     }
     $psql = 'SELECT tenant_id, post_id, user_id, title FROM benchmark_tenant_posts WHERE (tenant_id, user_id) IN ' . tupleIn(count($tusers), 2);
     $pparams = [];
-    foreach ($tusers as $r) {
-        $pparams[] = (int) $r[0];
-        $pparams[] = (int) $r[1];
+    foreach ($tusers as $u) {
+        $pparams[] = $u->tenantId;
+        $pparams[] = $u->userId;
     }
-    $tposts = $db->query($psql, $pparams);
-    if ($tposts === []) {
-        return;
+    /** @var list<SdkTenantPost> $tposts */
+    $tposts = [];
+    foreach ($db->query($psql, $pparams) as $r) {
+        $tposts[] = new SdkTenantPost((int) $r[0], (int) $r[1], (int) $r[2], $r[3]);
     }
-    $csql = 'SELECT tenant_id, comment_id, post_id, body FROM benchmark_tenant_comments WHERE (tenant_id, post_id) IN ' . tupleIn(count($tposts), 2);
-    $cparams = [];
-    foreach ($tposts as $r) {
-        $cparams[] = (int) $r[0];
-        $cparams[] = (int) $r[1];
+    if ($tposts !== []) {
+        $cparams = [];
+        foreach ($tposts as $p) {
+            $cparams[] = $p->tenantId;
+            $cparams[] = $p->postId;
+        }
+        $csql = 'SELECT tenant_id, comment_id, post_id, body FROM benchmark_tenant_comments WHERE (tenant_id, post_id) IN ' . tupleIn(count($tposts), 2);
+        $byPost = [];
+        foreach ($db->query($csql, $cparams) as $r) {
+            $c = new SdkTenantComment((int) $r[0], (int) $r[1], (int) $r[2], $r[3]);
+            $byPost[$c->tenantId . ':' . $c->postId][] = $c; // composite (tenant_id,post_id) key
+        }
+        foreach ($tposts as $p) {
+            $p->comments = $byPost[$p->tenantId . ':' . $p->postId] ?? [];
+        }
     }
-    $db->query($csql, $cparams);
+    $byUser = [];
+    foreach ($tposts as $p) {
+        $byUser[$p->tenantId . ':' . $p->userId][] = $p; // composite (tenant_id,user_id) key
+    }
+    foreach ($tusers as $u) {
+        $u->posts = $byUser[$u->tenantId . ':' . $u->userId] ?? [];
+    }
+    return $tusers;
 }
 
 function updateMany(Db $db): void
@@ -280,20 +371,20 @@ function runOp(Db $db, string $op, int $it): void
             $db->query('SELECT id, email, name FROM benchmark_users WHERE email = ? LIMIT 1', ['user1@example.com']);
             break;
         case 'nestedFindAll':
-            nestedPostsFor($db, $db->query('SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100'));
+            $GLOBALS['benchSink'] = materializeUsersPosts($db, $db->query('SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100'));
             break;
         case 'nestedFindFirst':
-            nestedPostsFor($db, $db->query('SELECT id, email, name FROM benchmark_users WHERE name LIKE ? LIMIT 1', ['User%']));
+            $GLOBALS['benchSink'] = materializeUsersPosts($db, $db->query('SELECT id, email, name FROM benchmark_users WHERE name LIKE ? LIMIT 1', ['User%']));
             break;
         case 'nestedFindUnique':
-            nestedPostsFor($db, $db->query('SELECT id, email, name FROM benchmark_users WHERE email = ? LIMIT 1', ['user1@example.com']));
+            $GLOBALS['benchSink'] = materializeUsersPosts($db, $db->query('SELECT id, email, name FROM benchmark_users WHERE email = ? LIMIT 1', ['user1@example.com']));
             break;
         case 'nestedRelations':
             $users = $db->query('SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100');
-            batchedComments($db, nestedPostsCollectIds($db, $users));
+            $GLOBALS['benchSink'] = materializeUsersPostsComments($db, $users);
             break;
         case 'compositeRelations':
-            compositeRelations($db);
+            $GLOBALS['benchSink'] = materializeComposite($db);
             break;
         case 'create':
             $db->exec('INSERT INTO benchmark_users (email, name) VALUES (?, ?)', ["new{$it}@bench.com", 'New']);
