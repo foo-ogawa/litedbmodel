@@ -730,7 +730,7 @@ mod tests {
     struct StubDriver;
     struct StubStmt;
     impl PreparedStatement for StubStmt {
-        fn all(&mut self, _p: &[Value]) -> Result<Vec<Value>, SqlFailure> {
+        fn all(&mut self, _p: &[Value]) -> Result<Vec<crate::wire::WireValue>, SqlFailure> {
             Ok(Vec::new())
         }
         fn run(&mut self, _p: &[Value]) -> Result<RunInfo, SqlFailure> {

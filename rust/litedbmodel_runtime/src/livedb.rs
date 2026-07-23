@@ -47,6 +47,7 @@ use crate::connection_routing::{ConfigDialect, ResolvedConnectionConfig};
 use crate::driver::{Driver, PreparedStatement, RunInfo};
 use crate::errors::SqlFailure;
 use crate::exec_context::{SessionConnection, TxConnection};
+use crate::wire::{WireRow, WireValue};
 
 fn driver_failure(msg: impl Into<String>) -> SqlFailure {
     SqlFailure {
@@ -286,7 +287,7 @@ struct PgSession<'a> {
 }
 
 impl SessionConnection for PgSession<'_> {
-    fn execute(&mut self, sql: &str, params: &[Value]) -> Result<Vec<Value>, SqlFailure> {
+    fn execute(&mut self, sql: &str, params: &[Value]) -> Result<Vec<WireValue>, SqlFailure> {
         let owned: Vec<PgParam> = params.iter().map(to_pg_param).collect::<Result<_, _>>()?;
         let refs: Vec<&(dyn ToSql + Sync)> =
             owned.iter().map(|p| p as &(dyn ToSql + Sync)).collect();
@@ -295,7 +296,7 @@ impl SessionConnection for PgSession<'_> {
             let rows = pg_query_cached(conn, sql, refs.as_slice())
                 .await
                 .map_err(|e| pg_err(&format!("postgres session query [{sql}]"), &e))?;
-            pg_rows_to_values(&rows)
+            pg_rows_to_wire(&rows)
         })
     }
     fn run(&mut self, sql: &str, params: &[Value]) -> Result<RunInfo, SqlFailure> {
@@ -352,7 +353,7 @@ struct PgTx<'a> {
 }
 
 impl TxConnection for PgTx<'_> {
-    fn execute(&mut self, sql: &str, params: &[Value]) -> Result<Vec<Value>, SqlFailure> {
+    fn execute(&mut self, sql: &str, params: &[Value]) -> Result<Vec<WireValue>, SqlFailure> {
         let owned: Vec<PgParam> = params.iter().map(to_pg_param).collect::<Result<_, _>>()?;
         let refs: Vec<&(dyn ToSql + Sync)> =
             owned.iter().map(|p| p as &(dyn ToSql + Sync)).collect();
@@ -361,7 +362,7 @@ impl TxConnection for PgTx<'_> {
             let rows = pg_query_cached(conn, sql, refs.as_slice())
                 .await
                 .map_err(|e| pg_err(&format!("postgres tx query [{sql}]"), &e))?;
-            pg_rows_to_values(&rows)
+            pg_rows_to_wire(&rows)
         })
     }
 
@@ -600,63 +601,65 @@ fn to_pg_param(v: &Value) -> Result<PgParam, SqlFailure> {
     }
 }
 
-/// Read one Postgres column into a bc [`Value`], matching the SQLite conformance row encoding.
-fn pg_cell_to_value(row: &tokio_postgres::Row, idx: usize) -> Result<Value, SqlFailure> {
+/// Decode one Postgres column DIRECTLY into the BC-owned [`WireValue`] (one-pass row assembly — no bc
+/// [`Value`] detour), matching the SQLite conformance row encoding. Numbers ride as raw decimal text
+/// ([`WireValue::int`]/[`WireValue::float`]); dates/uuid canonicalize to their text form; NULL → [`WireValue::Null`].
+fn pg_cell_to_wire(row: &tokio_postgres::Row, idx: usize) -> Result<WireValue, SqlFailure> {
     let col = &row.columns()[idx];
     let ty = col.type_();
     let v = match *ty {
         PgType::INT2 => row
             .try_get::<_, Option<i16>>(idx)
-            .map(|o| o.map(|i| Value::Int(i as i64))),
+            .map(|o| o.map(|i| WireValue::int(i as i64))),
         PgType::INT4 => row
             .try_get::<_, Option<i32>>(idx)
-            .map(|o| o.map(|i| Value::Int(i as i64))),
+            .map(|o| o.map(|i| WireValue::int(i as i64))),
         PgType::INT8 => row
             .try_get::<_, Option<i64>>(idx)
-            .map(|o| o.map(Value::Int)),
+            .map(|o| o.map(WireValue::int)),
         PgType::FLOAT4 => row
             .try_get::<_, Option<f32>>(idx)
-            .map(|o| o.map(|f| Value::Float(f as f64))),
+            .map(|o| o.map(|f| WireValue::float(f as f64))),
         PgType::FLOAT8 => row
             .try_get::<_, Option<f64>>(idx)
-            .map(|o| o.map(Value::Float)),
+            .map(|o| o.map(WireValue::float)),
         PgType::BOOL => row
             .try_get::<_, Option<bool>>(idx)
-            .map(|o| o.map(Value::Bool)),
+            .map(|o| o.map(WireValue::Bool)),
         // A `uuid` column: tokio-postgres has no String FromSql for uuid, so read the raw 16 bytes
         // and format the canonical text — matching the SQLite/MySQL uuid-as-text row encoding.
         PgType::UUID => row
             .try_get::<_, Option<PgUuidText>>(idx)
-            .map(|o| o.map(|u| Value::Str(u.0))),
+            .map(|o| o.map(|u| WireValue::Str(u.0))),
         // TIMESTAMP/DATE columns: tokio-postgres has no `String` FromSql for a temporal type, so read
         // the native chrono value and canonicalize to the SAME `YYYY-MM-DD HH:MM:SS` text the seed +
         // the SQLite/MySQL read use (the bind path above parses this exact form). date→canonical string
         // is the v2 read contract (a TIMESTAMP column round-trips as its text, never a driver-native type).
         PgType::TIMESTAMP => row
             .try_get::<_, Option<chrono::NaiveDateTime>>(idx)
-            .map(|o| o.map(|d| Value::Str(d.format("%Y-%m-%d %H:%M:%S").to_string()))),
+            .map(|o| o.map(|d| WireValue::Str(d.format("%Y-%m-%d %H:%M:%S").to_string()))),
         PgType::TIMESTAMPTZ => row
             .try_get::<_, Option<chrono::DateTime<chrono::Utc>>>(idx)
-            .map(|o| o.map(|d| Value::Str(d.naive_utc().format("%Y-%m-%d %H:%M:%S").to_string()))),
+            .map(|o| o.map(|d| WireValue::Str(d.naive_utc().format("%Y-%m-%d %H:%M:%S").to_string()))),
         PgType::DATE => row
             .try_get::<_, Option<chrono::NaiveDate>>(idx)
-            .map(|o| o.map(|d| Value::Str(d.format("%Y-%m-%d").to_string()))),
+            .map(|o| o.map(|d| WireValue::Str(d.format("%Y-%m-%d").to_string()))),
         _ => row
             .try_get::<_, Option<String>>(idx)
-            .map(|o| o.map(Value::Str)),
+            .map(|o| o.map(WireValue::Str)),
     }
     .map_err(|e| driver_failure(format!("postgres read col {}: {e}", col.name())))?;
-    Ok(v.unwrap_or(Value::Null))
+    Ok(v.unwrap_or(WireValue::Null))
 }
 
-fn pg_rows_to_values(rows: &[tokio_postgres::Row]) -> Result<Vec<Value>, SqlFailure> {
+fn pg_rows_to_wire(rows: &[tokio_postgres::Row]) -> Result<Vec<WireValue>, SqlFailure> {
     let mut out = Vec::with_capacity(rows.len());
     for row in rows {
-        let mut obj: Vec<(String, Value)> = Vec::with_capacity(row.columns().len());
+        let mut entries: Vec<(String, WireValue)> = Vec::with_capacity(row.columns().len());
         for (i, col) in row.columns().iter().enumerate() {
-            obj.push((col.name().to_string(), pg_cell_to_value(row, i)?));
+            entries.push((col.name().to_string(), pg_cell_to_wire(row, i)?));
         }
-        out.push(Value::Obj(obj));
+        out.push(WireValue::Row(WireRow { entries }));
     }
     Ok(out)
 }
@@ -708,7 +711,7 @@ async fn pg_execute_cached(
 }
 
 impl PreparedStatement for PgPrepared<'_> {
-    fn all(&mut self, params: &[Value]) -> Result<Vec<Value>, SqlFailure> {
+    fn all(&mut self, params: &[Value]) -> Result<Vec<WireValue>, SqlFailure> {
         // Pooled read: check out a connection per call (parallel-safe). In-tx statements NEVER reach
         // here — the seam resolves the tx-owned `PgTx` connection for those. So there is no pinned
         // writer slot to consult (the driver-global slot was removed §3).
@@ -726,7 +729,7 @@ impl PreparedStatement for PgPrepared<'_> {
             let rows = pg_query_cached(&client, sql.as_str(), refs.as_slice())
                 .await
                 .map_err(|e| driver_failure(format!("postgres query [{sql}]: {e}")))?;
-            pg_rows_to_values(&rows)
+            pg_rows_to_wire(&rows)
         })
     }
 
@@ -903,64 +906,67 @@ fn bind_my<'q>(
     Ok(q)
 }
 
-fn my_cell_to_value(row: &MySqlRow, idx: usize) -> Result<Value, SqlFailure> {
+/// Decode one MySQL column DIRECTLY into the BC-owned [`WireValue`] (one-pass row assembly — no bc
+/// [`Value`] detour). Numbers ride as raw decimal text ([`WireValue::int`]/[`WireValue::float`]); a
+/// boolean is read as INTEGER 0/1 (v2 contract); dates canonicalize to text; NULL → [`WireValue::Null`].
+fn my_cell_to_wire(row: &MySqlRow, idx: usize) -> Result<WireValue, SqlFailure> {
     let col = row.column(idx);
     let raw = row
         .try_get_raw(idx)
         .map_err(|e| driver_failure(format!("mysql read col {}: {e}", col.name())))?;
     if raw.is_null() {
-        return Ok(Value::Null);
+        return Ok(WireValue::Null);
     }
     let type_name = col.type_info().name().to_ascii_uppercase();
-    // Integer families → Int; float/decimal → Float; everything else → string. An UNSIGNED integer
+    // Integer families → Num; float/decimal → Num; everything else → string. An UNSIGNED integer
     // column (e.g. the `ROW_NUMBER() OVER (...) AS _rn` window column MySQL types as BIGINT UNSIGNED
     // in a limited-hasMany relation batch) decodes as u64 in sqlx, so read it as u64 then narrow to
     // the bc i64 int (the corpus values are well within the i64 range).
     let v = if type_name.contains("INT") {
         if type_name.contains("UNSIGNED") {
-            row.try_get::<u64, _>(idx).map(|u| Value::Int(u as i64))
+            row.try_get::<u64, _>(idx).map(|u| WireValue::int(u as i64))
         } else {
-            row.try_get::<i64, _>(idx).map(Value::Int)
+            row.try_get::<i64, _>(idx).map(WireValue::int)
         }
     } else if type_name.contains("FLOAT")
         || type_name.contains("DOUBLE")
         || type_name.contains("DECIMAL")
     {
-        row.try_get::<f64, _>(idx).map(Value::Float)
+        row.try_get::<f64, _>(idx).map(WireValue::float)
     } else if type_name.contains("BOOL") {
         // MySQL `TINYINT(1)` surfaces to sqlx as `BOOLEAN`; the v2 read types a boolean column as an
-        // INTEGER 0/1 (the resolver maps it to int, matching the sqlite path), so decode bool → Int.
+        // INTEGER 0/1 (the resolver maps it to int, matching the sqlite path), so decode bool → int.
         row.try_get::<bool, _>(idx)
-            .map(|b| Value::Int(if b { 1 } else { 0 }))
+            .map(|b| WireValue::int(if b { 1 } else { 0 }))
     } else if type_name.contains("TIMESTAMP") {
         // sqlx maps MySQL TIMESTAMP (tz-aware) to `DateTime<Utc>` (NOT NaiveDateTime). Canonicalize to
         // the SAME `YYYY-MM-DD HH:MM:SS` text the seed + the SQLite/PG read use (date→canonical string is
         // the v2 read contract; conformance uses TEXT so this arm is inert there).
         row.try_get::<chrono::DateTime<chrono::Utc>, _>(idx)
-            .map(|d| Value::Str(d.naive_utc().format("%Y-%m-%d %H:%M:%S").to_string()))
+            .map(|d| WireValue::Str(d.naive_utc().format("%Y-%m-%d %H:%M:%S").to_string()))
     } else if type_name.contains("DATETIME") {
         // MySQL DATETIME (no tz) maps to `NaiveDateTime`.
         row.try_get::<chrono::NaiveDateTime, _>(idx)
-            .map(|d| Value::Str(d.format("%Y-%m-%d %H:%M:%S").to_string()))
+            .map(|d| WireValue::Str(d.format("%Y-%m-%d %H:%M:%S").to_string()))
     } else if type_name == "DATE" {
         row.try_get::<chrono::NaiveDate, _>(idx)
-            .map(|d| Value::Str(d.format("%Y-%m-%d").to_string()))
+            .map(|d| WireValue::Str(d.format("%Y-%m-%d").to_string()))
     } else {
         // Fall back to string for text/blob; try i64 first for count(*) style BIGINT aliases.
-        row.try_get::<String, _>(idx).map(Value::Str)
+        row.try_get::<String, _>(idx).map(WireValue::Str)
     }
     .map_err(|e| driver_failure(format!("mysql decode col {}: {e}", col.name())))?;
     Ok(v)
 }
 
-fn my_rows_to_values(rows: &[MySqlRow]) -> Result<Vec<Value>, SqlFailure> {
+fn my_rows_to_wire(rows: &[MySqlRow]) -> Result<Vec<WireValue>, SqlFailure> {
     let mut out = Vec::with_capacity(rows.len());
     for row in rows {
-        let mut obj: Vec<(String, Value)> = Vec::with_capacity(row.columns().len());
+        let mut entries: Vec<(String, WireValue)> = Vec::with_capacity(row.columns().len());
         for (i, col) in row.columns().iter().enumerate() {
-            obj.push((col.name().to_string(), my_cell_to_value(row, i)?));
+            entries.push((col.name().to_string(), my_cell_to_wire(row, i)?));
         }
-        out.push(Value::Obj(obj));
+        out.push(WireValue::Row(WireRow { entries }));
     }
     Ok(out)
 }
@@ -1263,7 +1269,7 @@ async fn my_all_on_conn(
     conn: &mut sqlx::MySqlConnection,
     sql: &str,
     params: &[Value],
-) -> Result<Vec<Value>, SqlFailure> {
+) -> Result<Vec<WireValue>, SqlFailure> {
     // MySQL RETURNING emulation (the ONE reselect path — [`build_mysql_reselect`] is the driver SSoT):
     // execute the write, then re-select the written row(s) by their REAL key on THIS connection (so a
     // re-select inside a tx sees the not-yet-committed write). Covers INSERT (auto-inc range / client
@@ -1299,7 +1305,7 @@ async fn my_all_on_conn(
             .fetch_all(&mut *conn)
             .await
             .map_err(|e| driver_failure(format!("mysql re-select [{}]: {e}", rs.select_sql)))?;
-        return my_rows_to_values(&rows);
+        return my_rows_to_wire(&rows);
     }
 
     // DELETE … RETURNING: MySQL has no native RETURNING and the pre-image is gone once the delete runs,
@@ -1317,7 +1323,7 @@ async fn my_all_on_conn(
         .fetch_all(&mut *conn)
         .await
         .map_err(|e| driver_failure(format!("mysql query [{sql}]: {e}")))?;
-    my_rows_to_values(&rows)
+    my_rows_to_wire(&rows)
 }
 
 /// Is `sql` a tx-control / SET statement MySQL rejects in the prepared-statement protocol (error
@@ -1368,7 +1374,7 @@ async fn my_run_on_conn(
 }
 
 impl PreparedStatement for MyPrepared<'_> {
-    fn all(&mut self, params: &[Value]) -> Result<Vec<Value>, SqlFailure> {
+    fn all(&mut self, params: &[Value]) -> Result<Vec<WireValue>, SqlFailure> {
         // Pooled read: acquire a connection per call (parallel-safe). In-tx statements never reach
         // here — the seam resolves the tx-owned `MyTx` connection for those.
         let sql = self.sql.clone();
@@ -1516,7 +1522,7 @@ struct MySession<'a> {
 }
 
 impl SessionConnection for MySession<'_> {
-    fn execute(&mut self, sql: &str, params: &[Value]) -> Result<Vec<Value>, SqlFailure> {
+    fn execute(&mut self, sql: &str, params: &[Value]) -> Result<Vec<WireValue>, SqlFailure> {
         let conn = self.conn.as_mut().expect("mysql session conn present");
         self.rt
             .block_on(async move { my_all_on_conn(conn, sql, params).await })
@@ -1556,7 +1562,7 @@ struct MyTx<'a> {
 }
 
 impl TxConnection for MyTx<'_> {
-    fn execute(&mut self, sql: &str, params: &[Value]) -> Result<Vec<Value>, SqlFailure> {
+    fn execute(&mut self, sql: &str, params: &[Value]) -> Result<Vec<WireValue>, SqlFailure> {
         let conn = &mut self.conn;
         self.rt
             .block_on(async move { my_all_on_conn(conn, sql, params).await })

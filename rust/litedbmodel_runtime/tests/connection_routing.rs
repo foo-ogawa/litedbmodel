@@ -26,7 +26,8 @@ use litedbmodel_runtime::{
     build_routing_config, for_routing, seam_execute, seam_run, transaction_on, ConfigDialect,
     ConnectionConfig, ConnectionRegistry, ConnectionSetup, Driver, ManualClock, MysqlDriver,
     PostgresDriver, PreparedStatement, ReaderWriterPools, RoutingConfig, SessionConnection,
-    StatementIntent, StickyOptions, TransactionOptions, TxConnection, TxDialect, WriterStickyClock,
+    StatementIntent, StickyOptions, TransactionOptions, TxConnection, TxDialect, WireValue,
+    WriterStickyClock,
 };
 
 fn enabled() -> bool {
@@ -177,28 +178,31 @@ fn log() -> Arc<Mutex<Vec<String>>> {
 fn snapshot(l: &Arc<Mutex<Vec<String>>>) -> Vec<String> {
     l.lock().unwrap().clone()
 }
-fn n_of(v: &Value, key: &str) -> i64 {
+// Read cells off a wire row (the read result is now `WireValue` — the driver materializes it directly).
+// A numeric cell rides as `Num` raw decimal text (`i.to_string()`), so parse it back to i64.
+fn n_of(v: &WireValue, key: &str) -> i64 {
     match v {
-        Value::Obj(p) => p
+        WireValue::Row(r) => r
+            .entries
             .iter()
             .find(|(k, _)| k == key)
             .map(|(_, val)| match val {
-                Value::Int(i) => *i,
-                Value::Float(f) => *f as i64,
-                Value::Str(s) => s.parse().unwrap_or(-1),
+                WireValue::Num(s) => s.parse::<f64>().map(|f| f as i64).unwrap_or(-1),
+                WireValue::Str(s) => s.parse().unwrap_or(-1),
                 _ => -1,
             })
             .unwrap_or(-1),
         _ => -1,
     }
 }
-fn str_of(v: &Value, key: &str) -> Option<String> {
+fn str_of(v: &WireValue, key: &str) -> Option<String> {
     match v {
-        Value::Obj(p) => p
+        WireValue::Row(r) => r
+            .entries
             .iter()
             .find(|(k, _)| k == key)
             .and_then(|(_, val)| match val {
-                Value::Str(s) => Some(s.clone()),
+                WireValue::Str(s) => Some(s.clone()),
                 _ => None,
             }),
         _ => None,
@@ -535,7 +539,9 @@ fn c2_unknown_name_loud() {
             db: Some("ghost".into()),
         },
     )
-    .unwrap_err();
+    // `.err()` extracts the error WITHOUT needing the Ok `Vec<WireValue>` to be Debug (it is not).
+    .err()
+    .expect("a missing connection name must be a loud error");
     assert!(
         e.message
             .contains("no connection registered under name 'ghost'"),
@@ -644,7 +650,9 @@ fn c3_query_timeout_pg() {
     // postgres abbreviates the Display to `db error (SQLSTATE 57014)`; SQLSTATE 57014 IS query_canceled
     // (the code a fired statement_timeout raises — the stable signal, matching the retryable-classifier
     // convention of keying on the code not fragile text).
-    let e = seam_execute(&ctx, "SELECT pg_sleep(2)", &[], &StatementIntent::read()).unwrap_err();
+    let e = seam_execute(&ctx, "SELECT pg_sleep(2)", &[], &StatementIntent::read())
+        .err()
+        .expect("statement_timeout must cancel the query");
     let m = e.message.to_lowercase();
     assert!(
         m.contains("statement timeout") || m.contains("canceling statement") || m.contains("57014"),
@@ -727,7 +735,9 @@ fn c3_query_timeout_mysql() {
         information_schema.COLLATIONS b, \
         information_schema.COLLATIONS c \
         WHERE SHA2(CONCAT(a.ID, b.ID, c.ID, RAND()), 256) > ''";
-    let e = seam_execute(&ctx, heavy, &[], &StatementIntent::read()).unwrap_err();
+    let e = seam_execute(&ctx, heavy, &[], &StatementIntent::read())
+        .err()
+        .expect("statement_timeout must cancel the query");
     let m = e.message.to_lowercase();
     assert!(
         m.contains("max_execution_time")

@@ -31,6 +31,7 @@ use crate::connection_routing::{
 };
 use crate::errors::{map_sqlite_error, SqlFailure};
 use crate::exec_context::{SessionConnection, TxConnection};
+use crate::wire::{WireRow, WireValue};
 
 /// The summary of a non-returning write: affected-row count + last insert rowid.
 #[derive(Debug, Clone, Copy)]
@@ -39,9 +40,12 @@ pub struct RunInfo {
     pub last_insert_rowid: i64,
 }
 
-/// A prepared statement: `all` returns the row list (SELECT/RETURNING); `run` a write summary.
+/// A prepared statement: `all` returns the row list (SELECT/RETURNING) as raw [`WireValue`] rows;
+/// `run` a write summary. The read result is materialized DIRECTLY into the BC-owned wire model — one
+/// pass, no bc [`Value`] detour — so the leaf transport ([`crate::leaves::execute_sql`]) returns the
+/// driver's rows verbatim (no second per-cell conversion). Params stay bc [`Value`] (the bind values).
 pub trait PreparedStatement {
-    fn all(&mut self, params: &[Value]) -> Result<Vec<Value>, SqlFailure>;
+    fn all(&mut self, params: &[Value]) -> Result<Vec<WireValue>, SqlFailure>;
     fn run(&mut self, params: &[Value]) -> Result<RunInfo, SqlFailure>;
 }
 
@@ -172,7 +176,7 @@ pub struct ForwardingTx<'a> {
 }
 
 impl TxConnection for ForwardingTx<'_> {
-    fn execute(&mut self, sql: &str, params: &[Value]) -> Result<Vec<Value>, SqlFailure> {
+    fn execute(&mut self, sql: &str, params: &[Value]) -> Result<Vec<WireValue>, SqlFailure> {
         self.driver.prepare(sql).all(params)
     }
     fn run(&mut self, sql: &str, params: &[Value]) -> Result<RunInfo, SqlFailure> {
@@ -203,7 +207,7 @@ struct SessionOverTx<'a> {
 }
 
 impl SessionConnection for SessionOverTx<'_> {
-    fn execute(&mut self, sql: &str, params: &[Value]) -> Result<Vec<Value>, SqlFailure> {
+    fn execute(&mut self, sql: &str, params: &[Value]) -> Result<Vec<WireValue>, SqlFailure> {
         self.tx
             .as_mut()
             .expect("session tx present")
@@ -338,7 +342,7 @@ struct ConfiguredPrepared<'a> {
 }
 
 impl PreparedStatement for ConfiguredPrepared<'_> {
-    fn all(&mut self, params: &[Value]) -> Result<Vec<Value>, SqlFailure> {
+    fn all(&mut self, params: &[Value]) -> Result<Vec<WireValue>, SqlFailure> {
         let mut conn = self
             .driver
             .inner
@@ -382,7 +386,7 @@ struct ConfiguredTx<'a> {
 }
 
 impl TxConnection for ConfiguredTx<'_> {
-    fn execute(&mut self, sql: &str, params: &[Value]) -> Result<Vec<Value>, SqlFailure> {
+    fn execute(&mut self, sql: &str, params: &[Value]) -> Result<Vec<WireValue>, SqlFailure> {
         self.inner
             .as_mut()
             .expect("configured tx present")
@@ -459,14 +463,17 @@ fn to_sql_value(v: &Value) -> Result<SqlValue, SqlFailure> {
     }
 }
 
-/// Convert a fetched SQLite cell to a bc [`Value`] (row assembly).
-fn from_sql_ref(r: ValueRef<'_>) -> Value {
+/// Decode a fetched SQLite cell DIRECTLY into the BC-owned [`WireValue`] (one-pass row assembly — no
+/// bc [`Value`] detour). The canonicalization is byte-identical to the retired `value_to_wire ∘
+/// from_sql_ref`: an `INTEGER`/`REAL` rides as raw decimal text ([`WireValue::int`]/[`WireValue::float`]
+/// = `i.to_string()` / `f.to_string()`), `TEXT`/`BLOB` as [`WireValue::Str`], `NULL` as [`WireValue::Null`].
+fn from_sql_ref(r: ValueRef<'_>) -> WireValue {
     match r {
-        ValueRef::Null => Value::Null,
-        ValueRef::Integer(i) => Value::Int(i),
-        ValueRef::Real(f) => Value::Float(f),
-        ValueRef::Text(bytes) => Value::Str(String::from_utf8_lossy(bytes).into_owned()),
-        ValueRef::Blob(bytes) => Value::Str(String::from_utf8_lossy(bytes).into_owned()),
+        ValueRef::Null => WireValue::Null,
+        ValueRef::Integer(i) => WireValue::int(i),
+        ValueRef::Real(f) => WireValue::float(f),
+        ValueRef::Text(bytes) => WireValue::Str(String::from_utf8_lossy(bytes).into_owned()),
+        ValueRef::Blob(bytes) => WireValue::Str(String::from_utf8_lossy(bytes).into_owned()),
     }
 }
 
@@ -539,7 +546,7 @@ impl SqlitePrepared<'_> {
 }
 
 impl PreparedStatement for SqlitePrepared<'_> {
-    fn all(&mut self, params: &[Value]) -> Result<Vec<Value>, SqlFailure> {
+    fn all(&mut self, params: &[Value]) -> Result<Vec<WireValue>, SqlFailure> {
         let bound = self.bind(params)?;
         let mut stmt = self
             .conn
@@ -551,16 +558,18 @@ impl PreparedStatement for SqlitePrepared<'_> {
         let mut rows = stmt
             .query(param_refs.as_slice())
             .map_err(|e| map_sqlite_error(&e))?;
-        let mut out: Vec<Value> = Vec::new();
+        let mut out: Vec<WireValue> = Vec::new();
         loop {
             match rows.next() {
                 Ok(Some(row)) => {
-                    let mut obj: Vec<(String, Value)> = Vec::with_capacity(col_names.len());
+                    // Materialize the row DIRECTLY as a `WireValue::Row` (one pass): decode each cell to
+                    // wire on read — no intermediate `Value::Obj` that a second per-cell pass re-converts.
+                    let mut entries: Vec<(String, WireValue)> = Vec::with_capacity(col_names.len());
                     for (i, name) in col_names.iter().enumerate() {
                         let cell = row.get_ref(i).map_err(|e| map_sqlite_error(&e))?;
-                        obj.push((name.clone(), from_sql_ref(cell)));
+                        entries.push((name.clone(), from_sql_ref(cell)));
                     }
-                    out.push(Value::Obj(obj));
+                    out.push(WireValue::Row(WireRow { entries }));
                 }
                 Ok(None) => break,
                 Err(e) => return Err(map_sqlite_error(&e)),

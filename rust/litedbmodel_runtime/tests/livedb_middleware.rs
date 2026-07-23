@@ -28,8 +28,23 @@ use behavior_contracts::Value;
 use litedbmodel_runtime::{
     create_middleware, for_driver, logger, raw_execute, raw_query, seam_execute, seam_run,
     transaction, use_middleware, with_middleware_scope, PostgresDriver, SeamResult, SqlFailure,
-    SqlHookFn, SqlNext, StatementIntent, TransactionOptions, TxDialect,
+    SqlHookFn, SqlNext, StatementIntent, TransactionOptions, TxDialect, WireValue,
 };
+
+/// Does any scalar cell (recursively) in these wire rows carry `needle`? The read result is now
+/// `WireValue` (which derives no Debug), so assertions inspect the wire structurally.
+fn wire_has(rows: &[WireValue], needle: &str) -> bool {
+    fn walk(v: &WireValue, needle: &str) -> bool {
+        match v {
+            WireValue::Str(s) | WireValue::Num(s) => s.contains(needle),
+            WireValue::Bool(b) => b.to_string().contains(needle),
+            WireValue::Null => false,
+            WireValue::Row(r) => r.entries.iter().any(|(_, c)| walk(c, needle)),
+            WireValue::List(l) => l.items.iter().any(|c| walk(c, needle)),
+        }
+    }
+    rows.iter().any(|v| walk(v, needle))
+}
 
 // The rust-namespaced live table PREFIX is `scp_mw_rust_*` (must not collide with the go/py/php ports
 // on the shared PG). Each test appends a unique suffix so the 4 tests in THIS suite never race on one
@@ -116,7 +131,7 @@ fn d1_live_middleware_intercepts_every_seam_statement() {
             &StatementIntent::read(),
         )
         .unwrap();
-        assert!(format!("{rows:?}").contains('a'));
+        assert!(wire_has(&rows, "a"));
     });
     let observed = seen.lock().unwrap().clone();
     assert!(
@@ -234,7 +249,7 @@ fn d3_live_raw_execute_query_through_seam_and_logger() {
             &[Value::Int(3)],
         )
         .unwrap();
-        assert!(format!("{rows:?}").contains('c'));
+        assert!(wire_has(&rows, "c"));
     });
     assert_eq!(
         seen.lock().unwrap().len(),

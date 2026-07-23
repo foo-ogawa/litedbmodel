@@ -60,6 +60,7 @@ use behavior_contracts::Value;
 use crate::driver::RunInfo;
 use crate::errors::SqlFailure;
 use crate::exec_context::{self, Dyn, ExecutionContext, SeamResult, StatementIntent};
+use crate::wire::WireValue;
 
 // ── The SQL-level middleware (design §4 level 1) ───────────────────────────────
 
@@ -691,9 +692,9 @@ pub fn logger() -> MiddlewareHandle<LoggerState> {
 /// The raw-statement result: a row list (for a row-returning statement) plus the affected-rows count
 /// (mirrors v1 `ExecuteResult { rows, rowCount }`). A non-row statement resolves `rows: []`. Mirrors
 /// the TS `RawResult`.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct RawResult {
-    pub rows: Vec<Value>,
+    pub rows: Vec<WireValue>,
     pub row_count: Option<i64>,
 }
 
@@ -772,11 +773,11 @@ pub fn raw_query(
     ctx: &ExecutionContext,
     sql: &str,
     params: &[Value],
-) -> Result<Vec<Value>, SqlFailure> {
+) -> Result<Vec<WireValue>, SqlFailure> {
     let sql_owned = sql.to_string();
     let params_owned = params.to_vec();
     let args: Vec<Dyn> = vec![Dyn::new(sql_owned.clone()), Dyn::new(params_owned.clone())];
-    run_method::<Vec<Value>>(
+    run_method::<Vec<WireValue>>(
         MethodKind::Query,
         Dyn::unit(),
         |_a| raw_execute(ctx, &sql_owned, &params_owned, false).map(|r| r.rows),
@@ -797,12 +798,29 @@ mod tests {
     use super::*;
     use crate::driver::SqliteDriver;
     use crate::exec_context::{execute as seam_execute, for_driver, run as seam_run};
+    use crate::wire::{WireRow, WireValue};
     use std::sync::atomic::{AtomicI64, Ordering};
     use std::sync::{Arc, Mutex as StdMutex};
 
     fn fresh_db() -> SqliteDriver {
         SqliteDriver::in_memory(&["CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)".to_string()])
             .unwrap()
+    }
+
+    /// Does any scalar cell (recursively) in these wire rows carry `needle` as a substring? The read
+    /// result is now `WireValue` (which derives no Debug), so assertions inspect the wire structurally
+    /// instead of matching a `{:?}` string.
+    fn wire_has(rows: &[WireValue], needle: &str) -> bool {
+        fn walk(v: &WireValue, needle: &str) -> bool {
+            match v {
+                WireValue::Str(s) | WireValue::Num(s) => s.contains(needle),
+                WireValue::Bool(b) => b.to_string().contains(needle),
+                WireValue::Null => false,
+                WireValue::Row(r) => r.entries.iter().any(|(_, c)| walk(c, needle)),
+                WireValue::List(l) => l.items.iter().any(|c| walk(c, needle)),
+            }
+        }
+        rows.iter().any(|v| walk(v, needle))
     }
 
     /// An observing SQL hook that pushes each seen SQL onto a shared log, then delegates to `next`.
@@ -897,7 +915,7 @@ mod tests {
         )
         .unwrap();
         // The middleware rewrote the bound value before it hit the driver.
-        assert!(format!("{rows:?}").contains("rewritten"), "rows={rows:?}");
+        assert!(wire_has(&rows, "rewritten"), "rows must contain the rewritten value");
     }
 
     #[test]
@@ -908,10 +926,12 @@ mod tests {
             let mw = create_middleware::<(), _, fn() -> ()>(
                 Some(SqlHookFn(|_sql: &str, _p: &[Value], _next: &SqlNext| {
                     // Do NOT call next — short-circuit with a synthetic row (the DB is never touched).
-                    Ok(SeamResult::Rows(vec![Value::Obj(vec![
-                        ("id".into(), Value::Int(99)),
-                        ("name".into(), Value::Str("synthetic".into())),
-                    ])]))
+                    Ok(SeamResult::Rows(vec![WireValue::Row(WireRow {
+                        entries: vec![
+                            ("id".into(), WireValue::int(99)),
+                            ("name".into(), WireValue::Str("synthetic".into())),
+                        ],
+                    })]))
                 })),
                 None,
             );
@@ -919,7 +939,7 @@ mod tests {
             seam_execute(&ctx, "SELECT * FROM t", &[], &StatementIntent::read()).unwrap()
         });
         assert_eq!(rows.len(), 1);
-        assert!(format!("{rows:?}").contains("synthetic"));
+        assert!(wire_has(&rows, "synthetic"));
         // Nothing was ever inserted; a real query returns empty — proves the DB was bypassed.
         let real = seam_execute(
             &for_driver(&db),
@@ -928,7 +948,7 @@ mod tests {
             &StatementIntent::read(),
         )
         .unwrap();
-        assert!(format!("{real:?}").contains("Int(0)"), "real={real:?}");
+        assert!(wire_has(&real, "0"), "the real count must be 0 (DB bypassed)");
     }
 
     #[test]
@@ -1446,7 +1466,7 @@ mod tests {
             .unwrap();
             assert_eq!(ins.row_count, Some(1));
             let read = raw_execute(&ctx, "SELECT name FROM t", &[], false).unwrap();
-            assert!(format!("{:?}", read.rows).contains("raw"));
+            assert!(wire_has(&read.rows, "raw"));
         });
         assert_eq!(
             *seen.lock().unwrap(),
@@ -1464,13 +1484,13 @@ mod tests {
         let events = Arc::new(StdMutex::new(Vec::<String>::new()));
         let (eq, ex) = (events.clone(), events.clone());
         struct QH(Arc<StdMutex<Vec<String>>>);
-        impl MethodHook<Vec<Value>> for QH {
+        impl MethodHook<Vec<WireValue>> for QH {
             fn wrap(
                 &self,
                 _m: &Dyn,
-                next: &MethodNext<Vec<Value>>,
+                next: &MethodNext<Vec<WireValue>>,
                 args: &[Dyn],
-            ) -> Result<Vec<Value>, SqlFailure> {
+            ) -> Result<Vec<WireValue>, SqlFailure> {
                 self.0.lock().unwrap().push("query".into());
                 next(args)
             }
@@ -1484,7 +1504,7 @@ mod tests {
                 &StatementIntent::write(),
             )
             .unwrap();
-            register_method_hook::<Vec<Value>, _>(MethodKind::Query, QH(eq));
+            register_method_hook::<Vec<WireValue>, _>(MethodKind::Query, QH(eq));
             let exmw = create_middleware::<(), _, fn() -> ()>(
                 Some(SqlHookFn(move |s: &str, p: &[Value], next: &SqlNext| {
                     ex.lock().unwrap().push(format!("execute:{s}"));
@@ -1494,7 +1514,7 @@ mod tests {
             );
             use_middleware(&exmw);
             let rows = raw_query(&ctx, "SELECT name FROM t", &[]).unwrap();
-            assert!(format!("{rows:?}").contains('q'));
+            assert!(wire_has(&rows, "q"));
         });
         // The `query` method hook fired FIRST (two-level flow), then the SQL flowed through the execute hook.
         assert_eq!(

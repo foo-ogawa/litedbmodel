@@ -53,6 +53,7 @@ use behavior_contracts::Value;
 use crate::connection_routing::{resolve_pool, RoutingConfig};
 use crate::driver::{Driver, RunInfo};
 use crate::errors::SqlFailure;
+use crate::wire::WireValue;
 
 // ── Statement intent & the driver contact (§5) ────────────────────────────────
 
@@ -92,8 +93,9 @@ impl StatementIntent {
 /// per call); inside a tx it is the tx-owned [`TxConnection`] handle. The seam is the ONLY caller;
 /// the runtime SQL path never touches a `driver.prepare(...)` directly.
 pub trait Connection {
-    /// Run a SELECT / RETURNING statement; return the raw rows.
-    fn execute(&self, sql: &str, params: &[Value]) -> Result<Vec<Value>, SqlFailure>;
+    /// Run a SELECT / RETURNING statement; return the raw [`WireValue`] rows (materialized directly, no
+    /// bc [`Value`] detour). Params stay bc [`Value`] (the bind values).
+    fn execute(&self, sql: &str, params: &[Value]) -> Result<Vec<WireValue>, SqlFailure>;
     /// Run a non-returning write / DDL / tx-control statement; return the affected summary.
     fn run(&self, sql: &str, params: &[Value]) -> Result<RunInfo, SqlFailure>;
 }
@@ -113,7 +115,7 @@ impl<'a> DriverConnection<'a> {
 }
 
 impl Connection for DriverConnection<'_> {
-    fn execute(&self, sql: &str, params: &[Value]) -> Result<Vec<Value>, SqlFailure> {
+    fn execute(&self, sql: &str, params: &[Value]) -> Result<Vec<WireValue>, SqlFailure> {
         self.driver.prepare(sql).all(params)
     }
     fn run(&self, sql: &str, params: &[Value]) -> Result<RunInfo, SqlFailure> {
@@ -140,8 +142,8 @@ impl Connection for DriverConnection<'_> {
 /// Concurrent transactions each hold a DISTINCT handle over a DISTINCT pooled connection, so their
 /// writes never cross-talk — the isolation the removed driver-global `writer` slot violated.
 pub trait TxConnection {
-    /// Run a SELECT / RETURNING statement on the tx's owned connection.
-    fn execute(&mut self, sql: &str, params: &[Value]) -> Result<Vec<Value>, SqlFailure>;
+    /// Run a SELECT / RETURNING statement on the tx's owned connection; return the raw [`WireValue`] rows.
+    fn execute(&mut self, sql: &str, params: &[Value]) -> Result<Vec<WireValue>, SqlFailure>;
     /// Run a non-returning write / DDL / tx-control statement on the tx's owned connection. The
     /// seam-issued BEGIN/COMMIT/ROLLBACK/SET resolve HERE (via [`TxConnectionRef`]), so they run on
     /// the SAME owned connection and are middleware-visible.
@@ -172,8 +174,8 @@ pub trait TxConnection {
 /// statement errored — possibly aborted by a fired statement timeout; SKIP the reset and DROP the
 /// connection, exactly as the TS `configuredPool.release(conn, destroy)` does).
 pub trait SessionConnection {
-    /// Run a SELECT / RETURNING statement on this session-configured owned connection.
-    fn execute(&mut self, sql: &str, params: &[Value]) -> Result<Vec<Value>, SqlFailure>;
+    /// Run a SELECT / RETURNING statement on this session-configured owned connection; raw [`WireValue`] rows.
+    fn execute(&mut self, sql: &str, params: &[Value]) -> Result<Vec<WireValue>, SqlFailure>;
     /// Run a non-returning write / DDL statement on this session-configured owned connection.
     fn run(&mut self, sql: &str, params: &[Value]) -> Result<RunInfo, SqlFailure>;
     /// Run the RESET statements (unless `poison`) and release the connection (dropped if `poison`).
@@ -214,7 +216,7 @@ impl<'s, 't> TxConnectionRef<'s, 't> {
 }
 
 impl Connection for TxConnectionRef<'_, '_> {
-    fn execute(&self, sql: &str, params: &[Value]) -> Result<Vec<Value>, SqlFailure> {
+    fn execute(&self, sql: &str, params: &[Value]) -> Result<Vec<WireValue>, SqlFailure> {
         match self.slot.borrow_mut().as_mut() {
             Some(tx) => tx.execute(sql, params),
             None => Err(Self::missing()),
@@ -247,7 +249,7 @@ pub trait Middleware<T>: Send + Sync {
 /// point). Kept homogeneous per result type (`read`/`write`) so the fold is monomorphic and cheap.
 #[derive(Default)]
 pub struct MiddlewareChain {
-    read: Vec<Box<dyn Middleware<Vec<Value>>>>,
+    read: Vec<Box<dyn Middleware<Vec<WireValue>>>>,
     write: Vec<Box<dyn Middleware<RunInfo>>>,
 }
 
@@ -267,8 +269,8 @@ impl MiddlewareChain {
         &self,
         sql: &str,
         params: &[Value],
-        next: &SeamNext<Vec<Value>>,
-    ) -> Result<Vec<Value>, SqlFailure> {
+        next: &SeamNext<Vec<WireValue>>,
+    ) -> Result<Vec<WireValue>, SqlFailure> {
         wrap_chain(&self.read, sql, params, next)
     }
 
@@ -551,8 +553,8 @@ impl<'a, 't> ExecutionContext<'a, 't> {
 /// analogue of the TS generic-`T`-erased-to-`unknown` hook — so ONE registration serves both. The
 /// seam boxes its terminal into a `SeamResult`, folds the ambient hooks over it, then unboxes.
 pub enum SeamResult {
-    /// A read result (rows) — [`execute`] terminal.
-    Rows(Vec<Value>),
+    /// A read result (raw [`WireValue`] rows) — [`execute`] terminal.
+    Rows(Vec<WireValue>),
     /// A write result (affected summary) — [`run`] terminal.
     Run(RunInfo),
 }
@@ -587,7 +589,7 @@ pub fn execute(
     sql: &str,
     params: &[Value],
     intent: &StatementIntent,
-) -> Result<Vec<Value>, SqlFailure> {
+) -> Result<Vec<WireValue>, SqlFailure> {
     let conn = ctx.connection_for(intent)?;
     // The seam terminal: the ctx's own (Phase A/B/C) chain wrapping the connection execute.
     let terminal = move |s: &str, p: &[Value]| -> Result<SeamResult, SqlFailure> {
@@ -999,6 +1001,7 @@ pub fn transaction_decided_on<'a, R>(
 mod tests {
     use super::*;
     use crate::driver::{forwarding_tx, PreparedStatement, RunInfo as DrvRunInfo};
+    use crate::wire::WireRow;
     use std::cell::RefCell;
     use std::rc::Rc;
 
@@ -1016,15 +1019,14 @@ mod tests {
     }
 
     impl PreparedStatement for RecStmt {
-        fn all(&mut self, _p: &[Value]) -> Result<Vec<Value>, SqlFailure> {
+        fn all(&mut self, _p: &[Value]) -> Result<Vec<WireValue>, SqlFailure> {
             self.log.borrow_mut().push(self.sql.clone());
             if self.fail_on.as_deref() == Some(self.sql.as_str()) {
                 return Err(fail("boom"));
             }
-            Ok(vec![Value::Obj(vec![(
-                "sql".into(),
-                Value::Str(self.sql.clone()),
-            )])])
+            Ok(vec![WireValue::Row(WireRow {
+                entries: vec![("sql".into(), WireValue::Str(self.sql.clone()))],
+            })])
         }
         fn run(&mut self, _p: &[Value]) -> Result<DrvRunInfo, SqlFailure> {
             self.log.borrow_mut().push(self.sql.clone());
@@ -1104,24 +1106,24 @@ mod tests {
         let chain = MiddlewareChain::new();
         assert!(chain.is_empty());
         let r = chain
-            .wrap_read("SELECT 1", &[], &|_s, _p| Ok(vec![Value::Int(42)]))
+            .wrap_read("SELECT 1", &[], &|_s, _p| Ok(vec![WireValue::int(42)]))
             .unwrap();
-        assert!(matches!(r.as_slice(), [Value::Int(42)]));
+        assert!(matches!(r.as_slice(), [WireValue::Num(n)] if n == "42"));
     }
 
     #[test]
     fn middleware_wraps_and_delegates() {
         // A middleware that appends a marker row around `next` — proves the fold + delegation.
         struct Mw;
-        impl Middleware<Vec<Value>> for Mw {
+        impl Middleware<Vec<WireValue>> for Mw {
             fn wrap(
                 &self,
                 sql: &str,
                 params: &[Value],
-                next: &SeamNext<Vec<Value>>,
-            ) -> Result<Vec<Value>, SqlFailure> {
+                next: &SeamNext<Vec<WireValue>>,
+            ) -> Result<Vec<WireValue>, SqlFailure> {
                 let mut rows = next(sql, params)?;
-                rows.push(Value::Str("mw".into()));
+                rows.push(WireValue::Str("mw".into()));
                 Ok(rows)
             }
         }
@@ -1129,10 +1131,10 @@ mod tests {
         chain.read.push(Box::new(Mw));
         assert!(!chain.is_empty());
         let r = chain
-            .wrap_read("SELECT 1", &[], &|_s, _p| Ok(vec![Value::Int(1)]))
+            .wrap_read("SELECT 1", &[], &|_s, _p| Ok(vec![WireValue::int(1)]))
             .unwrap();
         assert!(
-            matches!(r.as_slice(), [Value::Int(1), Value::Str(s)] if s == "mw"),
+            matches!(r.as_slice(), [WireValue::Num(n), WireValue::Str(s)] if n == "1" && s == "mw"),
             "middleware should append its marker row after next()"
         );
     }
@@ -1430,7 +1432,7 @@ mod tests {
         should_fail: bool,
     }
     impl PreparedStatement for FlakyStmt {
-        fn all(&mut self, _p: &[Value]) -> Result<Vec<Value>, SqlFailure> {
+        fn all(&mut self, _p: &[Value]) -> Result<Vec<WireValue>, SqlFailure> {
             self.log.borrow_mut().push(self.sql.clone());
             Ok(Vec::new())
         }

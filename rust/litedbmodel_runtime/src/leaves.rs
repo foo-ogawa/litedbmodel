@@ -9,13 +9,15 @@
 //! consumes (no duplicated dedupe/grouping). `execute_sql` funnels through the central execute/run
 //! seam ([`crate::exec_context`]) — the ONLY driver contact.
 //!
-//! ## Wire-passthrough (#164) — the leaves speak `WireValue`, the core speaks `Value`
+//! ## Wire-passthrough (#164) — the leaves speak `WireValue` end-to-end
 //!
 //! Under #164 the covered runner holds intermediate node results as RAW wire (`Vec<WireValue>`) and
-//! NEVER de-boxes them; only the terminal node de-boxes to its concrete outType. So these leaves
-//! take/return the BC-owned [`WireValue`] (crate::wire) and convert `WireValue`↔[`Value`] at the
-//! boundary to reach the Value-based grouping core — the codec is the ONLY place the two value models
-//! meet (the grouping stays single-sourced; the wire types add a boundary codec, not a second core).
+//! NEVER de-boxes them; only the terminal node de-boxes to its concrete outType. The READ RESULT is
+//! materialized DIRECTLY as [`WireValue`] by the driver ([`crate::driver`] / [`crate::livedb`]) — one
+//! pass, no bc [`Value`] detour — so `execute_sql` returns those rows verbatim and the grouping core
+//! ([`crate::grouping`]) keys on `WireValue` too. The ONLY place a `WireValue` becomes a bc [`Value`]
+//! is the handful of SQL bind PARAMS (`wire_to_value`), because the driver's param binder takes
+//! [`Value`]; no read datum ever round-trips through `Value`.
 //!
 //! ## Ambient driver — the leaves are free functions, the driver is scoped
 //!
@@ -110,7 +112,7 @@ struct TxPrepared<'a, 'd> {
 }
 
 impl crate::driver::PreparedStatement for TxPrepared<'_, '_> {
-    fn all(&mut self, params: &[Value]) -> Result<Vec<Value>, crate::errors::SqlFailure> {
+    fn all(&mut self, params: &[Value]) -> Result<Vec<WireValue>, crate::errors::SqlFailure> {
         self.driver.tx.borrow_mut().execute(&self.sql, params)
     }
     fn run(&mut self, params: &[Value]) -> Result<crate::driver::RunInfo, crate::errors::SqlFailure> {
@@ -169,9 +171,9 @@ pub fn with_ambient_transaction<R>(
 
 // ── WireValue ↔ Value boundary codec (the ONLY place the two value models meet) ───────────────────
 
-/// A BC-owned [`WireValue`] → bc [`Value`] (the input to the SQL param binder + the grouping core).
-/// A `Num` rides as raw text: an integral literal → [`Value::Int`] (the driver's INTEGER model, so a
-/// key round-trips to the SAME identity the grouping core keys on), else [`Value::Float`].
+/// A BC-owned [`WireValue`] → bc [`Value`] for the SQL bind PARAMS ONLY (the driver's param binder
+/// takes [`Value`]). A `Num` rides as raw text: an integral literal → [`Value::Int`] (the driver's
+/// INTEGER model), else [`Value::Float`]. Read RESULTS never use this — they stay `WireValue`.
 fn wire_to_value(w: &WireValue) -> Value {
     match w {
         WireValue::Str(s) => Value::Str(s.clone()),
@@ -188,20 +190,6 @@ fn wire_to_value(w: &WireValue) -> Value {
         WireValue::Null => Value::Null,
         WireValue::Row(r) => Value::Obj(r.entries.iter().map(|(k, v)| (k.clone(), wire_to_value(v))).collect()),
         WireValue::List(l) => Value::Arr(l.items.iter().map(wire_to_value).collect()),
-    }
-}
-
-/// A bc [`Value`] → BC-owned [`WireValue`] (the leaf output the covered runner de-boxes). Numbers
-/// ride as raw text (the de-box parses + range-checks — overflow is BC's to detect).
-fn value_to_wire(v: Value) -> WireValue {
-    match v {
-        Value::Null => WireValue::Null,
-        Value::Bool(b) => WireValue::Bool(b),
-        Value::Int(i) => WireValue::Num(i.to_string()),
-        Value::Float(f) => WireValue::Num(f.to_string()),
-        Value::Str(s) => WireValue::Str(s),
-        Value::Arr(a) => WireValue::List(WireList { items: a.into_iter().map(value_to_wire).collect() }),
-        Value::Obj(o) => WireValue::Row(WireRow { entries: o.into_iter().map(|(k, v)| (k, value_to_wire(v))).collect() }),
     }
 }
 
@@ -250,9 +238,12 @@ pub fn execute_sql(
             })],
         }))
     } else {
+        // The driver materialized the rows DIRECTLY as `WireValue` (one pass) — return them verbatim
+        // as the leaf's `List` output. NO second per-cell pass (the retired `value_to_wire` map): the
+        // read path never boxes into bc's `Value`.
         let rows = exec_context::execute(&ctx, &rendered, &value_params, &StatementIntent::read())
             .map_err(sql_failure_to_behavior_error)?;
-        Ok(WireValue::List(WireList { items: rows.into_iter().map(value_to_wire).collect() }))
+        Ok(WireValue::List(WireList { items: rows }))
     }
 }
 
@@ -358,19 +349,21 @@ mod tests {
     //    (NO rows persist). Proves the tx boundary the covered runner relies on is genuinely atomic. ──
     #[test]
     fn tx_commits_on_ok_and_rolls_back_on_err() {
-        use crate::driver::{PreparedStatement, SqliteDriver};
+        use crate::driver::SqliteDriver;
         let d = SqliteDriver::in_memory(&["CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)".to_string()]).unwrap();
         let ins = |id: i64, v: &str| -> Result<(), BehaviorError> {
             execute_sql(false, &[WireValue::int(id), WireValue::Str(v.to_string())], false, "INSERT INTO t (id, v) VALUES (?, ?)", true).map(|_| ())
         };
         let row_count = |d: &SqliteDriver| -> i64 {
             let rows = d.prepare("SELECT COUNT(*) AS c FROM t").all(&[]).unwrap();
+            // The driver materializes rows DIRECTLY as `WireValue::Row`; the COUNT cell is a `Num` (raw
+            // decimal text). Match the wire shape (WireValue derives no Debug — assert structurally).
             match &rows[0] {
-                Value::Obj(pairs) => match pairs.iter().find(|(k, _)| k == "c").map(|(_, v)| v) {
-                    Some(Value::Int(n)) => *n,
-                    other => panic!("unexpected count cell: {other:?}"),
+                WireValue::Row(r) => match r.entries.iter().find(|(k, _)| k == "c").map(|(_, v)| v) {
+                    Some(WireValue::Num(n)) => n.parse().expect("count cell is an integer"),
+                    _ => panic!("unexpected count cell"),
                 },
-                other => panic!("unexpected count row: {other:?}"),
+                _ => panic!("unexpected count row"),
             }
         };
 
