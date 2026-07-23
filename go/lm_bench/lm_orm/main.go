@@ -432,7 +432,7 @@ func main() {
 				warmup = n
 			}
 		}
-		fmt.Println("\ncell,op,iter,us")
+		fmt.Println("\ncell,dialect,op,iter,us")
 		for _, name := range ops {
 			for it := 0; it < warmup; it++ {
 				c.op(name, it+1)
@@ -441,7 +441,7 @@ func main() {
 				g := it + warmup + 1
 				t := time.Now()
 				c.op(name, g)
-				fmt.Printf("sdk,%s,%d,%d\n", name, it, time.Since(t).Microseconds())
+				fmt.Printf("sdk,sqlite,%s,%d,%d\n", name, it, time.Since(t).Microseconds())
 			}
 		}
 	}

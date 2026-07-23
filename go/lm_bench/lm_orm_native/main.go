@@ -243,20 +243,35 @@ func main() {
 
 	if doBench {
 		reps := 200
+		warmup := 30
 		if len(os.Args) > 2 {
 			if n, e := strconv.Atoi(os.Args[2]); e == nil {
 				reps = n
 			}
 		}
-		fmt.Println("\ncell,op,iter,us")
+		if len(os.Args) > 3 {
+			if n, e := strconv.Atoi(os.Args[3]); e == nil {
+				warmup = n
+			}
+		}
+		// sqlite in-memory is the only target this cell opens (see openSeeded); emit it as the dialect
+		// column so the collector aggregates the go CSV in the same 5-column shape as every other cell.
+		fmt.Println("\ncell,dialect,op,iter,us")
 		for _, name := range ops {
-			for it := 0; it < reps; it++ {
-				t := time.Now()
+			for it := 0; it < warmup; it++ {
 				if _, err := op(db, name, it+1); err != nil {
+					fmt.Fprintf(os.Stderr, "warmup %s: %v\n", name, err)
+					os.Exit(1)
+				}
+			}
+			for it := 0; it < reps; it++ {
+				g := it + warmup + 1
+				t := time.Now()
+				if _, err := op(db, name, g); err != nil {
 					fmt.Fprintf(os.Stderr, "bench %s: %v\n", name, err)
 					os.Exit(1)
 				}
-				fmt.Printf("native,%s,%d,%d\n", name, it, time.Since(t).Microseconds())
+				fmt.Printf("native,sqlite,%s,%d,%d\n", name, it, time.Since(t).Microseconds())
 			}
 		}
 	}
