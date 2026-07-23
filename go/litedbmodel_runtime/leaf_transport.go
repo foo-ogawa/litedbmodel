@@ -110,71 +110,130 @@ func WithAmbientTransaction(db TxDB, body func() error) error {
 
 // PluckKeys extracts the deduped, non-null key array from `rows` over the ordered key-column TUPLE
 // `col` — the batch key set the relation child fetch binds (`WHERE fk IN (SELECT value FROM
-// json_each(?))` single-key, or the `$[i]` per-ordinal EXISTS form for a composite tuple). Delegates
-// dedupe to the shared grouping CORE ([DedupeKeyTuples]) — the SAME SSoT the runtime relation path
-// consumes (no duplicated dedupe); this transport only bridges wire ↔ Value at the edge. A single-key
-// `col` emits a FLAT scalar key array; a composite `col` emits an array-of-tuples (each a wire list) —
-// the SAME shape the child SQL's json_each param expects. Go twin of the rust `pluck_keys` leaf.
+// json_each(?))` single-key, or the `$[i]` per-ordinal EXISTS form for a composite tuple). Dedupe runs
+// on the WIRE rows DIRECTLY via the shared grouping CORE ([dedupeKeyTuplesG] over [wireOps]) — the SAME
+// algorithm the runtime relation path consumes ([bcOps]); there is NO wire↔Value round-trip on the hot
+// read path. A single-key `col` emits a FLAT scalar key array (the deduped cell itself); a composite
+// `col` emits an array-of-tuples (each a wire list) — the SAME shape the child SQL's json_each param
+// expects. Go twin of the rust `pluck_keys` leaf.
 func PluckKeys(col []string, rows []wire.WireValue) (wire.WireValue, error) {
-	valueRows := make([]bc.Value, len(rows))
-	for i, r := range rows {
-		valueRows[i] = wireToValue(r)
-	}
-	tuples := DedupeKeyTuples(valueRows, col)
+	tuples := dedupeKeyTuplesG(wireOps, rows, col) // dedupe DIRECTLY on wire rows — no wire↔Value round-trip
 	keys := make([]wire.WireValue, len(tuples))
 	for i, t := range tuples {
 		if len(col) == 1 {
-			keys[i] = valueToWire(t[0]) // single key → flat scalar (json_each scalar `value`)
+			keys[i] = t[0] // single key → the flat scalar wire cell itself (json_each scalar `value`)
 			continue
 		}
-		items := make([]wire.WireValue, len(t)) // composite → an array-of-tuples element
-		for j, v := range t {
-			items[j] = valueToWire(v)
-		}
-		keys[i] = wire.WireListOf(items)
+		keys[i] = wire.WireListOf(t) // composite → the tuple's wire cells as an array-of-tuples element
 	}
 	return wire.WireListOf(keys), nil
 }
 
 // GroupChildren distributes the flat `children` onto `parents` by matching the child `fk` tuple to the
 // parent `pk` tuple, nesting the result under `into`: single==true (belongsTo/hasOne) nests the one
-// matching child (or nil); otherwise (hasMany) nests the child list ([] when none). Grouping is the
-// shared CORE ([GroupByKey]/[AttachToParent]) — the SAME SSoT the runtime relation path uses (no
-// duplicated grouping); `pk`/`fk` are the ordered key-column TUPLES, so a composite relation nests by
-// the WHOLE tuple identity (no scalar-collapse cartesian). Each parent is shallow-copied before the
-// own-key set (matching the TS `{...par, [into]: …}` spread — the input is not mutated). Go twin of the
+// matching child (or nil); otherwise (hasMany) nests the child list ([] when none). Grouping runs on
+// the WIRE rows DIRECTLY via the shared grouping CORE ([groupByKeyG]/[attachG] over [wireOps]) — the
+// SAME algorithm the runtime relation path uses ([bcOps]); NO wire↔Value round-trip. `pk`/`fk` are the
+// ordered key-column TUPLES, so a composite relation nests by the WHOLE tuple identity (no
+// scalar-collapse cartesian). The parent-key columns are resolved ONCE (all parents share column
+// order). Each parent is shallow-copied before the own-key set (matching the TS `{...par, [into]: …}`
+// spread — the input is not mutated; nested children are referenced, not deep-cloned). Go twin of the
 // rust `group_children` leaf.
 func GroupChildren(children []wire.WireValue, fk []string, into string, parents []wire.WireValue, pk []string, single bool) (wire.WireValue, error) {
-	valueChildren := make([]bc.Value, len(children))
-	for i, c := range children {
-		valueChildren[i] = wireToValue(c)
-	}
-	byKey := GroupByKey(valueChildren, fk)
+	byKey := groupByKeyG(wireOps, children, fk)       // group DIRECTLY on wire children — no wire↔Value round-trip
+	pkIdx := resolveKeyIndicesG(wireOps, parents, pk) // parent key columns resolved ONCE (all parents share order)
 	out := make([]wire.WireValue, len(parents))
 	for i, p := range parents {
-		obj, ok := wireToValue(p).(*bc.Obj)
-		if !ok {
+		if !wireIsRecord(p) {
 			// Records are objects by contract (SQL rows); a non-object passes through untouched.
 			out[i] = p
 			continue
 		}
-		nested := AttachToParent(obj, pk, byKey, single)
-		out[i] = valueToWire(withOwnKey(obj, into, nested))
+		nested := attachG(wireOps, p, pk, pkIdx, byKey, single)
+		out[i] = withOwnKeyWire(p, into, nested)
 	}
 	return wire.WireListOf(out), nil
 }
 
-// withOwnKey returns a shallow copy of obj with key set to v (insertion order preserved; an existing
-// key keeps its position, value overwritten). Mirrors the TS `{...par, [into]: v}` spread — the leaf
-// output is a new record, the input parent is not mutated.
-func withOwnKey(obj *bc.Obj, key string, v bc.Value) *bc.Obj {
-	clone := bc.NewObj()
-	for _, k := range obj.Keys {
-		val, _ := obj.Get(k)
-		clone.Set(k, val)
+// withOwnKeyWire returns a shallow copy of the wire row with key set to v (insertion order preserved;
+// an existing key keeps its position, value overwritten). Mirrors the TS `{...par, [into]: v}` spread —
+// the leaf output is a new record, the input parent is not mutated. The field copy is shallow (a
+// WireValue is slice-header sized); no nested cell is deep-cloned.
+func withOwnKeyWire(row wire.WireValue, key string, v wire.WireValue) wire.WireValue {
+	src := row.Entries
+	fields := make([]wire.WireField, len(src), len(src)+1)
+	copy(fields, src)
+	for i := range fields {
+		if fields[i].Key == key {
+			fields[i].Val = v // existing key keeps its position, value overwritten
+			return wire.WireRowOf(fields)
+		}
 	}
-	clone.Set(key, v)
-	return clone
+	return wire.WireRowOf(append(fields, wire.WireField{Key: key, Val: v}))
+}
+
+// ── The wire.WireValue instantiation of the shared grouping CORE (grouping.go) ──────────────────────
+//
+// The native leaf path groups over `wire.WireValue` rows DIRECTLY (the type the generated module
+// speaks) — the twin of the runtime path's `bcOps`. The SAME generic algorithm ([recordOps]) runs; only
+// the row/cell accessors differ, so there is ONE dedupe/group/attach implementation (SSoT).
+
+// wireProbeNull mirrors the BC-OWNED wire package's probe Kind for "present as the producer's null
+// variant" (the wire package keeps its probe-kind consts unexported; 3 = null is the stable contract).
+const wireProbeNull uint8 = 3
+
+// wireOps is the [recordOps] over wire rows: a record is a `wire.WireValue` of kind Row (its ordered
+// (key,value) entries exported as `.Entries`), a cell is a `wire.WireValue`.
+var wireOps = recordOps[wire.WireValue]{
+	isRecord:  wireIsRecord,
+	numCols:   func(v wire.WireValue) int { return len(v.Entries) },
+	colNameAt: func(v wire.WireValue, i int) string { return v.Entries[i].Key },
+	cellAt:    func(v wire.WireValue, i int) wire.WireValue { return v.Entries[i].Val },
+	field:     wireField,
+	isNull:    func(cell wire.WireValue) bool { return cell.AsNumber().Kind == wireProbeNull },
+	keyFrag:   wireKeyFrag,
+	makeList:  func(children []wire.WireValue) wire.WireValue { return wire.WireListOf(children) },
+	nul:       wire.WireNull(),
+}
+
+// wireIsRecord reports whether w is a wire Row (the only classifier that returns "got" for a row).
+func wireIsRecord(w wire.WireValue) bool { return w.AsRow().Kind == wireProbeGot }
+
+// wireField is the linear by-name cell lookup (the row-shape-differs fallback): ok=false if the column
+// is ABSENT (a PRESENT null cell is returned and dropped later by isNull).
+func wireField(w wire.WireValue, name string) (wire.WireValue, bool) {
+	for i := range w.Entries {
+		if w.Entries[i].Key == name {
+			return w.Entries[i].Val, true
+		}
+	}
+	return wire.WireValue{}, false
+}
+
+// wireKeyFrag renders a scalar wire cell to its key-identity fragment (matches JS `String(v)`), the
+// wire twin of [stringifyKey]. A number's raw text is NORMALIZED exactly as the bc path renders it
+// (integer text / whole-float → integer, else shortest round-trip), so a wire-path key and a bc-path
+// key are byte-identical. A Row/List is never a scalar key (totality fallback only).
+func wireKeyFrag(cell wire.WireValue) string {
+	if p := cell.AsNumber(); p.Kind == wireProbeGot {
+		if i, err := strconv.ParseInt(p.Got, 10, 64); err == nil {
+			return strconv.FormatInt(i, 10)
+		}
+		if f, err := strconv.ParseFloat(p.Got, 64); err == nil {
+			return encodeFloat(f)
+		}
+		return p.Got
+	}
+	if p := cell.AsString(); p.Kind == wireProbeGot {
+		return p.Got
+	}
+	if p := cell.AsBool(); p.Kind == wireProbeGot {
+		if p.Got {
+			return "true"
+		}
+		return "false"
+	}
+	return ""
 }
 
 // leafParam converts ONE wire param to a driver-bindable arg. A wire LIST (the plucked batch keys)
