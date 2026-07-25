@@ -45,7 +45,7 @@ import {
   resolvePgArrayCast,
   inferPgArrayType,
   mysqlPkHint,
-  stripMysqlPkHint,
+  mysqlConnectionPool,
   entityWrites,
   MiddlewareChain,
   type SqlBundle,
@@ -1041,10 +1041,10 @@ describe('WS6 integration — MySQL: SCP-compiled SQL executes + parity with v1 
 //
 // createMany / updateMany / deleteMany / bare UPDATE·DELETE / UUID-PK + composite-PK INSERT
 // RETURNING — the SAME batch/write bundles the corpus ships, executed live on PG + MySQL through the
-// TS runtime's tx path (`renderTxStatement`). MySQL has no native RETURNING, so an INSERT…RETURNING
-// is emulated PK-aware (strip → INSERT → re-select by the REAL PK via the `/*scp:pk=…*/` hint), and a
-// non-INSERT RETURNING returns [] — the SAME contract the four non-TS runtimes implement. Dedicated
-// `wc_*` tables keep this isolated from the seed above.
+// TS runtime's tx path (`renderTxStatement`). MySQL has no native RETURNING, so EVERY write that
+// declares one — INSERT, upsert, UPDATE, DELETE — is run stripped and its written rows recovered by
+// the SELECT the connection adapter derives, which is why both dialects return the written rows here.
+// Dedicated `wc_*` tables keep this isolated from the seed above.
 
 const WC_POSTS = 'scp_wc_posts';
 const WC_DOCS = 'scp_wc_docs';
@@ -1061,6 +1061,23 @@ function renameOp(dialect: MakeSQLDialect): TxOp {
 }
 function removeOp(dialect: MakeSQLDialect): TxOp {
   return compileWriteNode({ component: 'Delete', ports: { table: WC_POSTS, where: idEqWhere() } } as never, dialect);
+}
+// The RETURNING twins (#130). MySQL parses no RETURNING, so an UPDATE is recovered by re-running the
+// write's OWN WHERE after it (the row carries the new value) and a DELETE by that same WHERE BEFORE
+// it (afterwards there is nothing left to describe) — both keyed off the `pk` hint for row order.
+function renameReturningOp(dialect: MakeSQLDialect): TxOp {
+  const op = compileWriteNode(
+    { component: 'Update', ports: { table: WC_POSTS, 'set.title': { ref: ['title'] }, where: idEqWhere(), returning: 'id, title', pk: 'id' } } as never,
+    dialect,
+  );
+  return dialect === 'mysql' ? mysqlPkHint(op) : op;
+}
+function removeReturningOp(dialect: MakeSQLDialect): TxOp {
+  const op = compileWriteNode(
+    { component: 'Delete', ports: { table: WC_POSTS, where: idEqWhere(), returning: 'id, title', pk: 'id' } } as never,
+    dialect,
+  );
+  return dialect === 'mysql' ? mysqlPkHint(op) : op;
 }
 // `pk` is client-supplied (UUID / composite — no AUTO_INCREMENT), so on MySQL the RETURNING
 // emulation in `execTxLive` needs the strip-before-execute `/*scp:pk=…*/` hint to re-select by the
@@ -1111,13 +1128,31 @@ function pgClient(pool: Pool): LiveClient {
   };
 }
 
+/**
+ * The MySQL leg goes through the PRODUCTION connection adapter (`mysqlConnectionPool` over this one
+ * connection), NOT a raw `conn.query`, so the RETURNING recovery under test is the one that ships —
+ * re-deriving it here would make this suite green against a broken `buildMysqlReselect`. Only the
+ * pool shim is local: `getConnection` hands back the test's own connection, and release/destroy are
+ * no-ops because the test owns its lifetime.
+ */
 function myClient(conn: mysql.Connection): LiveClient {
+  const pool = mysqlConnectionPool({
+    getConnection: async () => ({
+      query: (sql: string, values?: unknown[]) => conn.query(sql, values) as Promise<[unknown, unknown]>,
+      release: () => {},
+      destroy: () => {},
+    }),
+  });
   return {
     async query(sql, params) {
-      const [r] = await conn.query(sql, params);
-      if (Array.isArray(r)) return { rows: r as Row[], affected: (r as Row[]).length, insertId: 0 };
-      const h = r as mysql.ResultSetHeader;
-      return { rows: [], affected: h.affectedRows ?? 0, insertId: h.insertId ?? 0 };
+      // A RETURNING write rides `execute` (where the recovery lives); a bare write rides `run` — the
+      // same split `executeSQLAsync` makes from its `returning` port.
+      const ac = await pool.acquire();
+      if (/^\s*select\b/i.test(sql) || /\breturning\b/i.test(sql)) {
+        return { rows: (await ac.execute(sql, params)) as Row[], affected: 0, insertId: 0 };
+      }
+      const info = await ac.run(sql, params);
+      return { rows: [], affected: info.changes, insertId: Number(info.lastInsertRowid ?? 0) };
     },
     begin: async () => void (await conn.beginTransaction()),
     commit: async () => void (await conn.commit()),
@@ -1125,19 +1160,12 @@ function myClient(conn: mysql.Connection): LiveClient {
   };
 }
 
-/** Parse the ` /*scp:pk=cols;ai=col*​/` hint (mirrors the 4 runtime emulations). */
-function parsePkHint(sql: string): { cols: string[]; autoInc: string } | null {
-  const m = /\/\*scp:pk=([^;*]*);ai=([^*]*)\*\//i.exec(sql);
-  if (!m) return null;
-  return { cols: m[1].split(',').map((c) => c.trim()).filter(Boolean), autoInc: m[2].trim() };
-}
-
 /**
  * Execute a tx/batch bundle live through the TS runtime's render + a per-dialect client, with the
  * PK-aware MySQL RETURNING emulation. Returns the collected body RETURNING rows (batch "all created
  * rows" / single entity). This is the TS twin of the 4 runtimes' execute_transaction_bundle.
  */
-async function execTxLive(bundle: SqlBundle, input: Record<string, unknown>, client: LiveClient, isMysql: boolean): Promise<Row[][]> {
+async function execTxLive(bundle: SqlBundle, input: Record<string, unknown>, client: LiveClient): Promise<Row[][]> {
   const plan = bundle.transaction!;
   const scope: Record<string, unknown> = { ...input };
   const returned: Row[][] = [];
@@ -1145,33 +1173,11 @@ async function execTxLive(bundle: SqlBundle, input: Record<string, unknown>, cli
   try {
     for (const stmt of plan.statements) {
       const r = renderTxStatement(stmt.op, scope as never, bundle.dialect);
-      const params = r.params.map(toPlain);
+      // Dialect-BLIND: MySQL's missing RETURNING is the connection adapter's business (`myClient`),
+      // exactly as it is in production, so this loop is the same code for both dialects.
       const hasReturn = /^\s*select\b/i.test(r.sql) || /\breturning\b/i.test(r.sql);
-      let rows: Row[] = [];
-      if (isMysql && /\breturning\b/i.test(r.sql)) {
-        // MySQL RETURNING emulation (PK-aware): strip RETURNING (+ hint), run, re-select by real PK.
-        const retMatch = /\s+RETURNING\s+(.+?)\s*$/is.exec(r.sql)!;
-        const cols = stripMysqlPkHint(retMatch[1]).trim();
-        const writeSql = stripMysqlPkHint(r.sql.slice(0, retMatch.index));
-        const pk = parsePkHint(r.sql);
-        const isInsert = /^\s*INSERT\b/i.test(writeSql);
-        const res = await client.query(writeSql, params);
-        if (!isInsert) {
-          rows = []; // non-INSERT RETURNING: no rows (v1 parity)
-        } else if (pk === null) {
-          rows = (await client.query(`SELECT ${cols} FROM ${insertTable(writeSql)} WHERE id = ?`, [res.insertId])).rows;
-        } else if (pk.autoInc && pk.cols.length === 1 && pk.cols[0] === pk.autoInc) {
-          rows = (await client.query(`SELECT ${cols} FROM ${insertTable(writeSql)} WHERE ${pk.autoInc} >= ? AND ${pk.autoInc} < ?`, [res.insertId, res.insertId + Math.max(1, res.affected)])).rows;
-        } else {
-          const insCols = insertCols(writeSql);
-          const where = pk.cols.map((c) => `${c} = ?`).join(' AND ');
-          const vals = pk.cols.map((c) => params[insCols.indexOf(c)]);
-          rows = (await client.query(`SELECT ${cols} FROM ${insertTable(writeSql)} WHERE ${where}`, vals)).rows;
-        }
-      } else {
-        const res = await client.query(r.sql, params);
-        rows = hasReturn ? res.rows : [];
-      }
+      const res = await client.query(r.sql, r.params.map(toPlain));
+      const rows = hasReturn ? res.rows : [];
       if (stmt.role === 'body' && rows.length > 0) returned.push(rows);
       if (stmt.id === plan.entityFrom && rows.length > 0) scope.__entity = rows[0];
       if (stmt.binds !== undefined && rows.length > 0) scope[stmt.binds] = rows[0];
@@ -1182,14 +1188,6 @@ async function execTxLive(bundle: SqlBundle, input: Record<string, unknown>, cli
     throw e;
   }
   return returned;
-}
-
-function insertTable(sql: string): string {
-  return /INSERT\s+(?:IGNORE\s+)?INTO\s+([A-Za-z_][A-Za-z0-9_]*)/i.exec(sql)![1];
-}
-function insertCols(sql: string): string[] {
-  const m = /INSERT\s+(?:IGNORE\s+)?INTO\s+[A-Za-z_][A-Za-z0-9_]*\s*\(([^)]*)\)/i.exec(sql);
-  return m ? m[1].split(',').map((c) => c.trim()) : [];
 }
 
 describe('WS#47 write-path completeness — batch + bare + PK RETURNING execute live (TS leg, PG + MySQL)', () => {
@@ -1220,25 +1218,25 @@ describe('WS#47 write-path completeness — batch + bare + PK RETURNING execute 
 
     // ── PG ──
     await setupPg();
-    const cmPg = await execTxLive(compileCreateManyBundle('CM', cmOpts, 'postgres'), {}, pgClient(pgPool!), false);
+    const cmPg = await execTxLive(compileCreateManyBundle('CM', cmOpts, 'postgres'), {}, pgClient(pgPool!));
     expect(cmPg.flat().map((r) => r.title).sort()).toEqual(['B1', 'B2', 'B3']);
     const umPg = compileUpdateManyBundle('UM', { tableName: WC_POSTS, keyColumns: ['id'], updateColumns: ['title'], records: [{ id: 1, title: 'B1x' }, { id: 3, title: 'B3x' }], rawRecords: [{ id: 1, title: 'B1x' }, { id: 3, title: 'B3x' }] }, 'postgres');
-    await execTxLive(umPg, {}, pgClient(pgPool!), false);
+    await execTxLive(umPg, {}, pgClient(pgPool!));
     const afterUmPg = await pgQuery(pgPool!, `SELECT id, title FROM ${WC_POSTS} ORDER BY id`, []);
     expect(afterUmPg.map((r) => r.title)).toEqual(['B1x', 'B2', 'B3x']);
-    await execTxLive(compileDeleteManyBundle('DM', { tableName: WC_POSTS, keyColumns: ['id'], keys: [{ id: 1 }, { id: 3 }] }, 'postgres'), {}, pgClient(pgPool!), false);
+    await execTxLive(compileDeleteManyBundle('DM', { tableName: WC_POSTS, keyColumns: ['id'], keys: [{ id: 1 }, { id: 3 }] }, 'postgres'), {}, pgClient(pgPool!));
     const afterDmPg = await pgQuery(pgPool!, `SELECT id FROM ${WC_POSTS} ORDER BY id`, []);
     expect(afterDmPg.map((r) => Number(r.id))).toEqual([2]);
 
     // ── MySQL ──
     await setupMy();
-    const cmMy = await execTxLive(compileCreateManyBundle('CM', cmOpts, 'mysql'), {}, myClient(myConn!), true);
+    const cmMy = await execTxLive(compileCreateManyBundle('CM', cmOpts, 'mysql'), {}, myClient(myConn!));
     expect(cmMy.flat().map((r) => r.title).sort()).toEqual(['B1', 'B2', 'B3']); // multi-row RETURNING range re-select
     const umMy = compileUpdateManyBundle('UM', { tableName: WC_POSTS, keyColumns: ['id'], updateColumns: ['title'], records: [{ id: 1, title: 'B1x' }, { id: 3, title: 'B3x' }] }, 'mysql');
-    await execTxLive(umMy, {}, myClient(myConn!), true);
+    await execTxLive(umMy, {}, myClient(myConn!));
     const afterUmMy = await myQuery(myConn!, `SELECT id, title FROM ${WC_POSTS} ORDER BY id`, []);
     expect(afterUmMy.map((r) => r.title)).toEqual(['B1x', 'B2', 'B3x']);
-    await execTxLive(compileDeleteManyBundle('DM', { tableName: WC_POSTS, keyColumns: ['id'], keys: [{ id: 1 }, { id: 3 }] }, 'mysql'), {}, myClient(myConn!), true);
+    await execTxLive(compileDeleteManyBundle('DM', { tableName: WC_POSTS, keyColumns: ['id'], keys: [{ id: 1 }, { id: 3 }] }, 'mysql'), {}, myClient(myConn!));
     const afterDmMy = await myQuery(myConn!, `SELECT id FROM ${WC_POSTS} ORDER BY id`, []);
     expect(afterDmMy.map((r) => Number(r.id))).toEqual([2]);
   });
@@ -1249,17 +1247,46 @@ describe('WS#47 write-path completeness — batch + bare + PK RETURNING execute 
 
     await setupPg();
     await pgPool!.query(`INSERT INTO ${WC_POSTS} (id, author_id, title) VALUES (1,7,'One'),(2,7,'Two')`);
-    await execTxLive(compileWriteBundle('Rename', renameOp('postgres'), upd, 'update', 'postgres'), { id: 2, title: 'Two-x' }, pgClient(pgPool!), false);
+    await execTxLive(compileWriteBundle('Rename', renameOp('postgres'), upd, 'update', 'postgres'), { id: 2, title: 'Two-x' }, pgClient(pgPool!));
     expect((await pgQuery(pgPool!, `SELECT title FROM ${WC_POSTS} WHERE id=2`, []))[0].title).toBe('Two-x');
-    await execTxLive(compileWriteBundle('Remove', removeOp('postgres'), rem, 'remove', 'postgres'), { id: 1 }, pgClient(pgPool!), false);
+    await execTxLive(compileWriteBundle('Remove', removeOp('postgres'), rem, 'remove', 'postgres'), { id: 1 }, pgClient(pgPool!));
     expect((await pgQuery(pgPool!, `SELECT id FROM ${WC_POSTS} ORDER BY id`, [])).map((r) => Number(r.id))).toEqual([2]);
 
     await setupMy();
     await myConn!.query(`INSERT INTO ${WC_POSTS} (id, author_id, title) VALUES (1,7,'One'),(2,7,'Two')`);
-    await execTxLive(compileWriteBundle('Rename', renameOp('mysql'), upd, 'update', 'mysql'), { id: 2, title: 'Two-x' }, myClient(myConn!), true);
+    await execTxLive(compileWriteBundle('Rename', renameOp('mysql'), upd, 'update', 'mysql'), { id: 2, title: 'Two-x' }, myClient(myConn!));
     expect((await myQuery(myConn!, `SELECT title FROM ${WC_POSTS} WHERE id=2`, []))[0].title).toBe('Two-x');
-    await execTxLive(compileWriteBundle('Remove', removeOp('mysql'), rem, 'remove', 'mysql'), { id: 1 }, myClient(myConn!), true);
+    await execTxLive(compileWriteBundle('Remove', removeOp('mysql'), rem, 'remove', 'mysql'), { id: 1 }, myClient(myConn!));
     expect((await myQuery(myConn!, `SELECT id FROM ${WC_POSTS} ORDER BY id`, [])).map((r) => Number(r.id))).toEqual([2]);
+  });
+
+  it('#130 UPDATE + DELETE … RETURNING return the WRITTEN rows, identically on PG and MySQL', async () => {
+    const upd: EntityWritesDefinition = { update: { effects: {} } };
+    const rem: EntityWritesDefinition = { remove: { effects: {} } };
+    const seed = `INSERT INTO ${WC_POSTS} (id, author_id, title) VALUES (1,7,'One'),(2,7,'Two')`;
+    const norm = (rows: Row[][]): unknown[] => rows.flat().map((r) => ({ id: Number(r.id), title: String(r.title) }));
+
+    // An UPDATE describes its rows AFTER the write — the new title, not the pre-image.
+    await setupPg();
+    await pgPool!.query(seed);
+    const updPg = await execTxLive(compileWriteBundle('Rename', renameReturningOp('postgres'), upd, 'update', 'postgres'), { id: 2, title: 'Two-x' }, pgClient(pgPool!));
+    await setupMy();
+    await myConn!.query(seed);
+    const updMy = await execTxLive(compileWriteBundle('Rename', renameReturningOp('mysql'), upd, 'update', 'mysql'), { id: 2, title: 'Two-x' }, myClient(myConn!));
+    expect(norm(updPg)).toEqual([{ id: 2, title: 'Two-x' }]);
+    expect(norm(updMy)).toEqual(norm(updPg)); // §10 all-dialect parity — NOT [] on MySQL any more
+
+    // A DELETE describes the rows it removed — the pre-image, captured before the write.
+    await setupPg();
+    await pgPool!.query(seed);
+    const remPg = await execTxLive(compileWriteBundle('Remove', removeReturningOp('postgres'), rem, 'remove', 'postgres'), { id: 1 }, pgClient(pgPool!));
+    expect((await pgQuery(pgPool!, `SELECT id FROM ${WC_POSTS} ORDER BY id`, [])).map((r) => Number(r.id))).toEqual([2]);
+    await setupMy();
+    await myConn!.query(seed);
+    const remMy = await execTxLive(compileWriteBundle('Remove', removeReturningOp('mysql'), rem, 'remove', 'mysql'), { id: 1 }, myClient(myConn!));
+    expect((await myQuery(myConn!, `SELECT id FROM ${WC_POSTS} ORDER BY id`, [])).map((r) => Number(r.id))).toEqual([2]);
+    expect(norm(remPg)).toEqual([{ id: 1, title: 'One' }]);
+    expect(norm(remMy)).toEqual(norm(remPg)); // the delete still happened AND its rows came back
   });
 
   it('UUID-PK + composite-PK INSERT RETURNING: MySQL emul re-selects by the REAL PK (#4)', async () => {
@@ -1267,19 +1294,19 @@ describe('WS#47 write-path completeness — batch + bare + PK RETURNING execute 
 
     // ── UUID PK ──
     await setupPg();
-    const docPg = await execTxLive(compileWriteBundle('CreateDoc', createDocOp('postgres'), cr, 'create', 'postgres'), { doc_id: WC_UUID, title: 'Doc' }, pgClient(pgPool!), false);
+    const docPg = await execTxLive(compileWriteBundle('CreateDoc', createDocOp('postgres'), cr, 'create', 'postgres'), { doc_id: WC_UUID, title: 'Doc' }, pgClient(pgPool!));
     expect(String(docPg[0][0].doc_id)).toBe(WC_UUID);
     await setupMy();
-    const docMy = await execTxLive(compileWriteBundle('CreateDoc', createDocOp('mysql'), cr, 'create', 'mysql'), { doc_id: WC_UUID, title: 'Doc' }, myClient(myConn!), true);
+    const docMy = await execTxLive(compileWriteBundle('CreateDoc', createDocOp('mysql'), cr, 'create', 'mysql'), { doc_id: WC_UUID, title: 'Doc' }, myClient(myConn!));
     expect(String(docMy[0][0].doc_id)).toBe(WC_UUID); // re-selected by doc_id, NOT id
     expect(docMy[0][0].title).toBe('Doc');
 
     // ── Composite PK ──
     await setupPg();
-    const linePg = await execTxLive(compileWriteBundle('CreateLine', createLineOp('postgres'), cr, 'create', 'postgres'), { order_id: 10, line_no: 2, sku: 'SKU-2' }, pgClient(pgPool!), false);
+    const linePg = await execTxLive(compileWriteBundle('CreateLine', createLineOp('postgres'), cr, 'create', 'postgres'), { order_id: 10, line_no: 2, sku: 'SKU-2' }, pgClient(pgPool!));
     expect(linePg[0][0]).toMatchObject({ order_id: 10, line_no: 2, sku: 'SKU-2' });
     await setupMy();
-    const lineMy = await execTxLive(compileWriteBundle('CreateLine', createLineOp('mysql'), cr, 'create', 'mysql'), { order_id: 10, line_no: 2, sku: 'SKU-2' }, myClient(myConn!), true);
+    const lineMy = await execTxLive(compileWriteBundle('CreateLine', createLineOp('mysql'), cr, 'create', 'mysql'), { order_id: 10, line_no: 2, sku: 'SKU-2' }, myClient(myConn!));
     expect(lineMy[0][0]).toMatchObject({ order_id: 10, line_no: 2, sku: 'SKU-2' }); // re-selected by (order_id, line_no)
 
     // cleanup

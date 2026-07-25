@@ -45,8 +45,6 @@ import {
   type AsyncExecutionContext,
   type PooledAsyncContext,
   type SqliteDriver,
-  executeAsync as seamExecuteAsync,
-  runAsync as seamRunAsync,
   contextForDriver,
   withTransactionAsync,
   withTransactionSync,
@@ -607,37 +605,6 @@ export function pkPort(ports: Record<string, unknown>): { columns: readonly stri
   if (columns.length === 0) return undefined;
   const ai = stringPort(ports, 'autoInc');
   return { columns, autoInc: ai ?? null };
-}
-
-/** The strip-before-execute PK-hint comment marker the MySQL RETURNING emulation reads. */
-const MYSQL_PK_HINT_RE = /\s*\/\*scp:pk=[^*]*\*\//;
-
-/**
- * Serialize a {@link TxOp.pk} descriptor into a strip-before-execute SQL comment appended to an
- * INSERT…RETURNING op, so the MySQL driver emulation can re-select by the REAL primary key. The
- * comment is STRIPPED (with the RETURNING clause) before the write executes, so the executed SQL
- * stays byte-clean; it is emitted ONLY into the mysql-dialect bundle (PG/SQLite keep native
- * RETURNING and never see it). Format: ` /*scp:pk=col1,col2;ai=<autoIncCol|>[;conflict=<cols>]* /`.
- *
- * `conflict` (the upsert conflict-target column list) is added when the write is an upsert — the mysql
- * driver re-selects the upserted row(s) by that key (MySQL does not report the conflicted-row id, so
- * the AUTO_INCREMENT range is wrong when a row is UPDATED). Its source is `op.writeMeta.onConflict`
- * (single writes carry it); an ad-hoc TxOp built without writeMeta (the batch createMany/upsertMany
- * path) passes the columns via `onConflict`.
- */
-export function mysqlPkHint(op: TxOp, onConflict?: string): TxOp {
-  if (op.pk === undefined) return op;
-  if (!/\breturning\b/i.test(op.sql)) return op;
-  if (MYSQL_PK_HINT_RE.test(op.sql)) return op; // idempotent: never append a second hint
-  const conflict = onConflict ?? op.writeMeta?.onConflict;
-  const conflictPart = conflict !== undefined && conflict.length > 0 ? `;conflict=${conflict}` : '';
-  const hint = ` /*scp:pk=${op.pk.columns.join(',')};ai=${op.pk.autoInc ?? ''}${conflictPart}*/`;
-  return { ...op, sql: op.sql + hint };
-}
-
-/** Strip a trailing MySQL PK-hint comment from a rendered SQL (defensive; runtimes strip too). */
-export function stripMysqlPkHint(sql: string): string {
-  return sql.replace(MYSQL_PK_HINT_RE, '');
 }
 
 /**
@@ -1229,32 +1196,14 @@ export function renderTxStatement(op: TxOp, scope: Scope, dialect: MakeSQLDialec
 // write-tx path the concurrent-tx isolation test exercises.
 // ============================================================================
 
-/** Parse the `scp:pk=cols;ai=col` block-comment hint the MySQL RETURNING emulation reads. */
-function parsePkHint(sql: string): { cols: string[]; autoInc: string } | null {
-  const m = /\/\*scp:pk=([^;*]*);ai=([^*]*)\*\//i.exec(sql);
-  if (!m) return null;
-  return { cols: m[1].split(',').map((c) => c.trim()).filter(Boolean), autoInc: m[2].trim() };
-}
-
-/** The INSERT/UPDATE/DELETE target table (for the MySQL re-select). */
-function insertTable(sql: string): string {
-  const m = /\b(?:INSERT\s+INTO|UPDATE|DELETE\s+FROM)\s+([A-Za-z0-9_."`]+)/i.exec(sql);
-  if (m === null) throw new Error(`scp write(mysql): cannot parse target table from '${sql.slice(0, 60)}…'`);
-  return m[1];
-}
-
-/** The INSERT column list (for re-selecting a client-supplied composite PK). */
-function insertCols(sql: string): string[] {
-  const m = /\bINSERT\s+INTO\s+[A-Za-z0-9_."`]+\s*\(([^)]*)\)/i.exec(sql);
-  if (m === null) return [];
-  return m[1].split(',').map((c) => c.trim());
-}
-
 /**
- * Run ONE rendered tx statement through the async seam. On PG the RETURNING clause is native. On
- * MySQL (no native RETURNING) the emulation strips RETURNING, runs the write, and re-selects the
- * written row(s) by the REAL PK (auto-inc range, client PK, or composite) — mirroring the sync
- * driver + the 4 native runtimes. Returns `{ rows, changes }`.
+ * Run ONE rendered tx statement through the async seam — the SAME op-independent `executeSQL`
+ * transport leaf every read/write rides. Returns `{ rows, changes }`.
+ *
+ * MySQL's missing RETURNING is NOT handled here: it is a property of the CONNECTION, and the mysql
+ * connection adapter ({@link import('./pool-executor').mysqlConnectionPool}) owns it — so the mode-2
+ * plan executor and a generated (codegen) write reach the identical write→re-select through one
+ * seam, and cannot disagree about the rows a write returns.
  */
 async function execStatementAsync(
   ctx: AsyncExecutionContext,
@@ -1263,45 +1212,10 @@ async function execStatementAsync(
   dialect: MakeSQLDialect,
 ): Promise<{ rows: Record<string, unknown>[]; changes: number }> {
   // Eval value-specs + assemble to RAW `?` SQL + coerced params (the SSoT `evalAssemble`, shared with
-  // the sync path). For MySQL the placeholder form IS `?` (renderPlaceholders is identity), so the
-  // emulation below reads the same text; the general path lets the leaf render `?`→`$N`.
+  // the sync path). The leaf renders `?`→`$N` per dialect after the final SQL is assembled.
   const { sql, params } = evalAssemble(op, scope);
 
-  if (dialect === 'mysql' && /\breturning\b/i.test(sql)) {
-    // MySQL has no native RETURNING: emulate write→re-select (an inherent multi-statement shape, NOT
-    // the renderStatement direct path). The base write + each re-select ride the async seam directly
-    // because they are a coordinated pair keyed by the write's insertId — not a single leaf call.
-    const retMatch = /\s+RETURNING\s+(.+?)\s*$/is.exec(sql)!;
-    const cols = stripMysqlPkHint(retMatch[1]).trim();
-    const writeSql = stripMysqlPkHint(sql.slice(0, retMatch.index));
-    const pk = parsePkHint(sql);
-    const isInsert = /^\s*INSERT\b/i.test(writeSql);
-    const info = await seamRunAsync(ctx, writeSql, params);
-    if (!isInsert) return { rows: [], changes: info.changes };
-    const insertId = Number(info.lastInsertRowid);
-    let rows: Record<string, unknown>[];
-    if (pk === null) {
-      // Legacy auto-increment-`id` path (no PK hint). MySQL's insertId is the FIRST auto-inc id of
-      // the batch; a multi-row `createMany` inserts `changes` consecutive ids [insertId, insertId +
-      // changes). Re-select the whole range (mirrors the `pk.autoInc` branch below) so createMany
-      // returns ALL affected PKs, not just the first row's. A single-row insert (changes = 1)
-      // reduces to `id >= insertId AND id < insertId + 1`, i.e. the original single-row select.
-      const count = Math.max(1, info.changes);
-      rows = await seamExecuteAsync(ctx, `SELECT ${cols} FROM ${insertTable(writeSql)} WHERE id >= ? AND id < ?`, [insertId, insertId + count], { write: true });
-    } else if (pk.autoInc && pk.cols.length === 1 && pk.cols[0] === pk.autoInc) {
-      rows = await seamExecuteAsync(ctx, `SELECT ${cols} FROM ${insertTable(writeSql)} WHERE ${pk.autoInc} >= ? AND ${pk.autoInc} < ?`, [insertId, insertId + Math.max(1, info.changes)], { write: true });
-    } else {
-      const insCols = insertCols(writeSql);
-      const where = pk.cols.map((c) => `${c} = ?`).join(' AND ');
-      const vals = pk.cols.map((c) => params[insCols.indexOf(c)]);
-      rows = await seamExecuteAsync(ctx, `SELECT ${cols} FROM ${insertTable(writeSql)} WHERE ${where}`, vals, { write: true });
-    }
-    return { rows, changes: rows.length };
-  }
-
-  // GENERAL async statement: rides the SAME op-independent `executeSQL` transport leaf (async branch)
-  // as every read/write — placeholder render + param encode + async seam inside the leaf. A
-  // SELECT/RETURNING reads rows; a bare write returns the `[{changes,…}]` summary.
+  // A SELECT/RETURNING reads rows; a bare write returns the `[{changes,…}]` summary.
   const hasReturn = /\bselect\b/i.test(sql.slice(0, 8)) || /\breturning\b/i.test(sql);
   const out = await executeSQLAsync({ sql, params, write: true, returning: hasReturn, bigint: false }, { execAsync: ctx, dialect } satisfies AsyncLeafContext);
   return hasReturn ? { rows: out, changes: out.length } : { rows: [], changes: Number(out[0]?.changes ?? 0) };

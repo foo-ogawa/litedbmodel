@@ -20,6 +20,8 @@
 import type { SqlExecutor } from './handler';
 import type { AsyncConnection, AsyncConnectionPool, Rows, RunInfo } from '../exec-context';
 import type { ResolvedConnectionConfig, PoolFactory, PoolCloser } from '../connection-routing';
+// MySQL parses no RETURNING — the write→re-select derivation lives in ONE place for all five runtimes.
+import { buildMysqlReselect, bindReselect } from './mysql-returning';
 
 // ── TS read-path driver de-box config (issue #59) ─────────────────────────────
 // The read-path materializer (`materializeCell`) coerces each driver cell to the JS form its SQL
@@ -182,12 +184,35 @@ export interface MysqlPoolConnLike {
   destroy(): void;
 }
 
-/** Adapt a mysql2 pooled connection to the {@link AsyncConnection} seam (one owned connection). */
+/**
+ * Adapt a mysql2 pooled connection to the {@link AsyncConnection} seam (one owned connection).
+ *
+ * `execute` also carries the **MySQL RETURNING emulation** ({@link buildMysqlReselect}): MySQL parses
+ * no `RETURNING`, so a write that declares one is run stripped and its written rows recovered by a
+ * SELECT on THIS connection (before the write for a DELETE, after it otherwise). Placing it on the
+ * connection — the mysql analogue of the rust/go/py/php driver wrappers — is what makes the mode-2
+ * plan executor and a generated (codegen) write return the SAME rows: both reach the DB here.
+ */
 function mysqlConnection(conn: MysqlPoolConnLike): AsyncConnection {
+  const rowsOf = (raw: unknown): Rows => (Array.isArray(raw) ? raw : []) as Rows;
   return {
     async execute(sql, params) {
-      const [rows] = await conn.query(sql, params as unknown[]);
-      return (Array.isArray(rows) ? rows : []) as Rows;
+      const reselect = buildMysqlReselect(sql);
+      if (reselect === null) return rowsOf((await conn.query(sql, params as unknown[]))[0]);
+      const bound = params as unknown[];
+      if (reselect.before) {
+        // DELETE…RETURNING: the pre-image IS the written row set — capture it, THEN delete.
+        const [pre] = await conn.query(reselect.selectSql, bindReselect(reselect.binds, bound, 0, 0));
+        await conn.query(reselect.writeSql, bound);
+        return rowsOf(pre);
+      }
+      const [res] = await conn.query(reselect.writeSql, bound);
+      const h = res as { affectedRows?: number; insertId?: number };
+      const [rows] = await conn.query(
+        reselect.selectSql,
+        bindReselect(reselect.binds, bound, Number(h?.insertId ?? 0), Number(h?.affectedRows ?? 0)),
+      );
+      return rowsOf(rows);
     },
     async run(sql, params) {
       const [res] = await conn.query(sql, params as unknown[]);

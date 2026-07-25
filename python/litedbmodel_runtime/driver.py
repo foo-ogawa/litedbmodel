@@ -328,14 +328,20 @@ class _ConnectionPool:
 
 # `$1`, `$2`, … (Postgres render output).
 _DOLLAR_RE = re.compile(r"\$\d+")
-# `INSERT INTO <table> (...) ... RETURNING <cols>` — MySQL RETURNING emulation parse.
-_RETURNING_RE = re.compile(r"\s+RETURNING\s+(.+?)\s*$", re.IGNORECASE | re.DOTALL)
-_INSERT_TABLE_RE = re.compile(r"^\s*INSERT\s+(?:IGNORE\s+)?INTO\s+([A-Za-z_][A-Za-z0-9_]*)", re.IGNORECASE)
+# The write's target table — the identifier after INSERT INTO / UPDATE / DELETE FROM.
+_WRITE_TABLE_RE = re.compile(r"\b(?:INSERT\s+(?:IGNORE\s+)?INTO|UPDATE|DELETE\s+FROM)\s+([A-Za-z0-9_.\"`]+)", re.IGNORECASE)
 # The INSERT column list `INSERT [IGNORE] INTO <t> (c1, c2, …)` — for extracting client-PK values.
-_INSERT_COLS_RE = re.compile(r"^\s*INSERT\s+(?:IGNORE\s+)?INTO\s+[A-Za-z_][A-Za-z0-9_]*\s*\(([^)]*)\)", re.IGNORECASE)
-# The strip-before-execute PK hint the mysql bundle appends to an INSERT…RETURNING (tx.ts mysqlPkHint):
-#   ` /*scp:pk=col1,col2;ai=<autoIncCol|>*/`
-_PK_HINT_RE = re.compile(r"\s*/\*scp:pk=([^;*]*);ai=([^*]*)\*/", re.IGNORECASE)
+_INSERT_COLS_RE = re.compile(r"\bINSERT\s+(?:IGNORE\s+)?INTO\s+[A-Za-z0-9_.\"`]+\s*\(([^)]*)\)", re.IGNORECASE)
+# The JOIN key column of an updateMany (`ON <alias>.<col> = JSON_UNQUOTE(…)`).
+_BATCH_JOIN_KEY_RE = re.compile(r"\sON\s+[A-Za-z0-9_]*\.?([A-Za-z0-9_]+)\s*=", re.IGNORECASE)
+# The strip-before-execute PK hint the mysql bundle appends to a write…RETURNING (tx.ts mysqlPkHint):
+#   ` /*scp:pk=col1,col2;ai=<autoIncCol|>[;conflict=cols]*/`
+# STRIP and PARSE are separate patterns, as in the four sibling ports: the strip form must swallow the
+# whole comment (`conflict=` included), while `ai=` must stop at the `;` so the conflict list cannot
+# leak into the AUTO_INCREMENT column name.
+_PK_HINT_RE = re.compile(r"\s*/\*scp:pk=[^*]*\*/", re.IGNORECASE)
+_PK_HINT_PARSE_RE = re.compile(r"/\*scp:pk=([^;*]*);ai=([^;*]*)", re.IGNORECASE)
+_CONFLICT_HINT_RE = re.compile(r";conflict=([^*]*)\*/", re.IGNORECASE)
 
 
 def _dollar_to_pyformat(sql: str) -> str:
@@ -351,49 +357,132 @@ def _qmark_to_pyformat(sql: str) -> str:
     return sql.replace("%", "%%").replace("?", "%s")
 
 
-def _parse_pk_hint(returning_cols: str):
-    """Parse the ` /*scp:pk=col1,col2;ai=<col|>*/` PK hint out of the RETURNING-cols text.
+def _parse_pk_hint(hint_region: str):
+    """Parse the ` /*scp:pk=col1,col2;ai=<col|>[;conflict=cols]*/` PK hint.
 
-    Returns ``(pk_columns, auto_inc_or_None)``. Absent hint → ``([], None)`` (legacy path).
+    Returns ``(pk_columns, auto_inc_or_empty)``. Absent hint → ``([], "")`` (legacy path).
     """
-    hm = _PK_HINT_RE.search(returning_cols)
+    hm = _PK_HINT_PARSE_RE.search(hint_region)
     if hm is None:
-        return [], None
-    cols = [c.strip() for c in hm.group(1).split(",") if c.strip()]
-    ai = hm.group(2).strip()
-    return cols, (ai or None)
+        return [], ""
+    return [c.strip() for c in hm.group(1).split(",") if c.strip()], hm.group(2).strip()
 
 
-def _returning_reselect_where(insert_sql, pk_cols, auto_inc, params, last_id, affected):
-    """Build the MySQL RETURNING re-select WHERE (SQL body with `?` + its params).
+def _parse_conflict_hint(hint_region: str):
+    """The hint's ``;conflict=<cols>`` field (the upsert conflict target). Empty ⇒ not an upsert."""
+    hm = _CONFLICT_HINT_RE.search(hint_region)
+    if hm is None:
+        return []
+    return [c.strip() for c in hm.group(1).split(",") if c.strip()]
 
-    - AUTO_INCREMENT single-column PK: a range on the identity column covering the ``affected`` rows
-      just inserted (v1 `WHERE id >= ? AND id < ?` semantics, generalized to the real column name).
-    - Client-supplied PK (UUID / composite, ``auto_inc`` is None): the PK value(s) are among the
-      bound INSERT params — extract them by matching each PK column to its position in the INSERT
-      column list, and key the re-select `WHERE pk1 = ? AND …` on those inserted values.
-    - No hint (legacy): fall back to `id = ?` bound to LAST_INSERT_ID (the pre-fix auto-`id` path).
+
+def _build_mysql_reselect(sql: str):
+    """Derive the MySQL RETURNING recovery for ``sql``, or ``None`` when it declares no RETURNING.
+
+    MySQL parses no RETURNING. A write that declares one is run STRIPPED and its written rows are
+    recovered by a SELECT on the SAME connection, keyed on whatever identifies them:
+
+      * create / createMany → the AUTO_INCREMENT range ``[LAST_INSERT_ID, +affected)``, or the
+        client-supplied PK values pulled from the INSERT params by column position;
+      * upsert / upsertMany → the CONFLICT key (MySQL does not report which row ON DUPLICATE KEY
+        UPDATE touched, so the AUTO_INCREMENT range is wrong once a row was updated);
+      * updateMany → the batch JOIN key, re-bound from the SAME JSON payload;
+      * update → the write's OWN WHERE predicate (after the write — the rows carry their new values);
+      * delete → the write's OWN WHERE predicate, selected BEFORE the write (afterwards there is
+        nothing left to describe; that pre-image IS the set of rows the DELETE removes).
+
+    Returns ``(write_sql, select_sql, binds, before)`` where each bind is ``("lastId"|"highId"|
+    "json"|"param", index)``. Mirrors src/scp/makesql/mysql-returning.ts, rust ``build_mysql_reselect``,
+    go ``buildMysqlReselect`` and php ``buildMysqlReselect`` — one derivation, five runtimes.
+
+    Fail-closed: a RETURNING write whose key cannot be identified raises rather than silently
+    returning no rows.
     """
-    if not pk_cols:
-        return "id = ?", [last_id]
-    if auto_inc is not None and pk_cols == [auto_inc]:
-        return f"{auto_inc} >= ? AND {auto_inc} < ?", [last_id, last_id + affected]
-    # Client-supplied PK: pull each PK column's inserted value from the bound INSERT params by its
-    # column position (single-row client-PK insert; the corpus UUID / composite cases are single-row).
-    cm = _INSERT_COLS_RE.match(insert_sql)
-    if cm is None:
-        raise ValueError(f"scp mysql driver: cannot locate INSERT column list for PK re-select: {insert_sql!r}")
-    insert_cols = [c.strip() for c in cm.group(1).split(",")]
-    conds = []
-    vals = []
-    for pk in pk_cols:
-        try:
-            idx = insert_cols.index(pk)
-        except ValueError:
-            raise ValueError(f"scp mysql driver: PK column '{pk}' not in INSERT columns {insert_cols}")
-        conds.append(f"{pk} = ?")
-        vals.append(params[idx])
-    return " AND ".join(conds), vals
+    lower = sql.lower()
+    ret_pos = lower.rfind(" returning ")
+    if ret_pos < 0:
+        return None
+    hint_region = sql[ret_pos:]
+    cols = _PK_HINT_RE.sub("", sql[ret_pos + len(" returning "):]).strip()
+    pk_cols, auto_inc = _parse_pk_hint(hint_region)
+    conflict = _parse_conflict_hint(hint_region)
+    write_sql = _PK_HINT_RE.sub("", sql[:ret_pos]).strip()
+    wl = write_sql.lower()
+
+    tm = _WRITE_TABLE_RE.search(write_sql)
+    if tm is None:
+        raise ValueError(f"scp write(mysql): cannot parse the target table of {write_sql!r}")
+    table = tm.group(1)
+    order_by = f" ORDER BY {', '.join(pk_cols)}" if pk_cols else ""
+    is_batch = "json_table(" in wl
+    cm = _INSERT_COLS_RE.search(write_sql)
+    insert_cols = [c.strip() for c in cm.group(1).split(",")] if cm is not None else []
+
+    def json_select(key: str) -> str:
+        return (
+            f"SELECT {cols} FROM {table} WHERE {key} IN "
+            f"(SELECT JSON_UNQUOTE(jt.{key}) FROM JSON_TABLE(?, '$[*]' COLUMNS({key} JSON PATH '$.{key}')) jt)"
+            f"{order_by}"
+        )
+
+    # upsert / upsertMany — by the CONFLICT key.
+    if wl.startswith("insert") and "on duplicate key update" in wl:
+        if not conflict:
+            raise ValueError(f"scp write(mysql): an upsert…RETURNING needs its conflict key in the pk hint ({write_sql!r})")
+        key = conflict[0]
+        if is_batch:
+            return write_sql, json_select(key), [("json", 0)], False
+        if key not in insert_cols:
+            raise ValueError(f"scp write(mysql): conflict key {key!r} is not among the INSERT columns of {write_sql!r}")
+        return write_sql, f"SELECT {cols} FROM {table} WHERE {key} = ?{order_by}", [("param", insert_cols.index(key))], False
+
+    # create / createMany — by the AUTO_INCREMENT range, or by the client-supplied PK values.
+    if wl.startswith("insert"):
+        if auto_inc and pk_cols == [auto_inc]:
+            return write_sql, f"SELECT {cols} FROM {table} WHERE {auto_inc} >= ? AND {auto_inc} < ?{order_by}", [("lastId", 0), ("highId", 0)], False
+        if not pk_cols:
+            # No hint at all (the legacy auto-`id` corpus): the id range still identifies the rows.
+            return write_sql, f"SELECT {cols} FROM {table} WHERE id >= ? AND id < ?", [("lastId", 0), ("highId", 0)], False
+        conds, binds = [], []
+        for pk in pk_cols:
+            if pk not in insert_cols:
+                raise ValueError(f"scp write(mysql): PK column {pk!r} is not among the INSERT columns of {write_sql!r}")
+            conds.append(f"{pk} = ?")
+            binds.append(("param", insert_cols.index(pk)))
+        return write_sql, f"SELECT {cols} FROM {table} WHERE {' AND '.join(conds)}{order_by}", binds, False
+
+    # updateMany — by the batch JOIN key, re-selected from the SAME JSON payload the write bound.
+    if wl.startswith("update") and is_batch:
+        km = _BATCH_JOIN_KEY_RE.search(write_sql)
+        if km is None:
+            raise ValueError(f"scp write(mysql): cannot parse the batch JOIN key of {write_sql!r}")
+        return write_sql, json_select(km.group(1)), [("json", 0)], False
+
+    # update / delete — by the write's OWN WHERE predicate. Index off `wl` (the STRIPPED write's
+    # lowercase), not the original sql: `write_sql` is hint-removed and trimmed, so only `wl`'s
+    # offsets line up with the slices below.
+    where_pos = wl.rfind(" where ")
+    if where_pos < 0:
+        raise ValueError(f"scp write(mysql): a write…RETURNING needs a WHERE to recover its rows ({write_sql!r})")
+    where_sql = write_sql[where_pos + len(" where "):].strip()
+    leading = write_sql[:where_pos].count("?")
+    binds = [("param", leading + i) for i in range(where_sql.count("?"))]
+    return write_sql, f"SELECT {cols} FROM {table} WHERE {where_sql}{order_by}", binds, wl.startswith("delete")
+
+
+def _bind_reselect(binds, params, last_id, affected):
+    """Bind the recovering SELECT's ``?``s against the write's params + the write's own result."""
+    out = []
+    for kind, index in binds:
+        if kind == "lastId":
+            out.append(last_id)
+        elif kind == "highId":
+            out.append(last_id + max(1, affected))
+        elif kind == "json":
+            out.append(params[0] if params else None)
+        else:
+            out.append(params[index] if index < len(params) else None)
+    return out
 
 
 # ── Per-connection execution primitives (shared by the pooled read/write path + the owned tx) ──
@@ -433,42 +522,36 @@ def _fetch_all(cur) -> List[Dict[str, Any]]:
 def _conn_all(conn: Any, sql: str, params: Sequence[Any], xform, emulate_returning: bool) -> List[Dict[str, Any]]:
     """Run a SELECT/RETURNING statement on ``conn`` (with MySQL RETURNING emulation when configured).
 
-    MySQL has no RETURNING: strip it, run the INSERT, re-select the inserted rows by the REAL primary
-    key. The strip-before-execute PK hint (tx.ts mysqlPkHint) carries the PK columns + the
-    AUTO_INCREMENT column so the re-select keys off the actual PK — an AUTO_INCREMENT range for an int
-    identity, or the client-supplied PK values (UUID / composite) pulled from the bound INSERT params —
-    NOT a hardcoded ``WHERE id = ?`` (which breaks for UUID / composite PKs).
+    MySQL parses no RETURNING, so a write that declares one runs STRIPPED and its written rows are
+    recovered by the SELECT :func:`_build_mysql_reselect` derives — the id range, the conflict key,
+    the batch JSON key or the write's own WHERE, keyed off the strip-before-execute PK hint. The
+    recovery runs on THIS connection, so inside a transaction it sees the uncommitted rows; a
+    DELETE's pre-image SELECT runs BEFORE the write, since afterwards there is nothing left to
+    describe. This is the ONE python reselect path, mirroring the four sibling runtimes.
     """
     if emulate_returning:
-        m = _RETURNING_RE.search(sql)
-        if m is not None:
-            returning_cols = _PK_HINT_RE.sub("", m.group(1)).strip()
-            pk_cols, auto_inc = _parse_pk_hint(m.group(1))
-            write_sql = _PK_HINT_RE.sub("", sql[: m.start()])
-            table_m = _INSERT_TABLE_RE.match(write_sql)
-            if table_m is None:
-                # A non-INSERT RETURNING (UPDATE/DELETE … RETURNING): MySQL has no native RETURNING and
-                # the pre-image is gone, so v1 (`mysql.ts`) strips RETURNING, runs the write, and
-                # returns NO rows. Byte-faithful: execute the stripped write, [].
+        rs = _build_mysql_reselect(sql)
+        if rs is not None:
+            write_sql, select_sql, binds, before = rs
+            if before:
+                rows = _conn_select(conn, xform(select_sql), _bind_reselect(binds, list(params), 0, 0))
                 cur = conn.cursor()
                 cur.execute(xform(write_sql), tuple(params))
                 cur.close()
-                return []
-            # INSERT … RETURNING: run the INSERT, re-select the inserted rows by the REAL PK.
-            table = table_m.group(1)
+                return rows
             cur = conn.cursor()
             cur.execute(xform(write_sql), tuple(params))
-            last_id = cur.lastrowid
+            last_id = cur.lastrowid or 0
             affected = cur.rowcount if cur.rowcount is not None and cur.rowcount >= 0 else 1
             cur.close()
-            where_sql, where_params = _returning_reselect_where(write_sql, pk_cols, auto_inc, list(params), last_id, affected)
-            sel = conn.cursor()
-            sel.execute(xform(f"SELECT {returning_cols} FROM {table} WHERE {where_sql}"), tuple(where_params))
-            rows = _fetch_all(sel)
-            sel.close()
-            return rows
+            return _conn_select(conn, xform(select_sql), _bind_reselect(binds, list(params), last_id, affected))
+    return _conn_select(conn, xform(sql), list(params))
+
+
+def _conn_select(conn: Any, sql: str, params: Sequence[Any]) -> List[Dict[str, Any]]:
+    """Run one already-transformed row-returning statement on ``conn`` and materialize its rows."""
     cur = conn.cursor()
-    cur.execute(xform(sql), tuple(params))
+    cur.execute(sql, tuple(params))
     rows = _fetch_all(cur)
     cur.close()
     return rows

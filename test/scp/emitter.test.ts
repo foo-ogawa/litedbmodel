@@ -250,8 +250,14 @@ describe('emitter — WRITES', () => {
     expect(source).toMatch(/interface WriteSummary \{\n {2}changes: Int;\n {2}lastInsertRowid: Int;\n\}/);
   });
 
-  it('a RETURNING write on MySQL is a loud reject (no native RETURNING outside the tx runtime)', () => {
-    expect(() => emit('mysql', { createUser: EMIT_ENDPOINTS.createUser })).toThrow(/MySQL has no native RETURNING/);
+  it('a RETURNING write emits for MySQL too — the connection adapter recovers the rows (#130)', () => {
+    // MySQL parses no RETURNING, but the recovery is a property of the CONNECTION
+    // (`pool-executor.mysqlConnection`), which the leaf transport reaches like every other statement
+    // — so the emitted SQL declares RETURNING on mysql exactly as it does on the other dialects, and
+    // the adapter strips it and re-selects. Emitting the mysql module must therefore NOT throw.
+    const { source } = emit('mysql', { createUser: EMIT_ENDPOINTS.createUser });
+    expect(bodyOf(source, 'createUser')[0]).toContain('INSERT INTO e2e_users (name) VALUES (?) RETURNING id, name');
+    expect(bodyOf(source, 'createUser')[0]).toContain('true, true'); // write=true, returning=true
   });
 
   it('batch writes bind ONE record-array JSON param on mysql/sqlite', () => {

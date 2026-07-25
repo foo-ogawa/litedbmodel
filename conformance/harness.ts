@@ -342,6 +342,27 @@ const ENDPOINTS: EndpointSet = {
   },
   removePost: { kind: 'delete', model: ConfPost, where: [{ column: 'id', op: 'eq', param: 'id' }] },
   /**
+   * #130 — the WRITTEN-ROW guard. `renamePost` / `removePost` above declare no RETURNING, so the
+   * corpus could not tell whether a write DESCRIBES its rows; MySQL, which parses no RETURNING,
+   * used to answer `[]` for both. These twins declare one, so each runtime must recover the written
+   * rows — the UPDATE by re-running its own WHERE after the write, the DELETE by that WHERE BEFORE
+   * it — and the §10 cross-check makes the three dialects agree rather than each pinning its own
+   * golden.
+   */
+  renamePostReturning: {
+    kind: 'update',
+    model: ConfPost,
+    set: [{ column: 'title', param: 'title' }],
+    where: [{ column: 'id', op: 'eq', param: 'id' }],
+    returning: ['id', 'title'],
+  },
+  removePostReturning: {
+    kind: 'delete',
+    model: ConfPost,
+    where: [{ column: 'id', op: 'eq', param: 'id' }],
+    returning: ['id', 'title'],
+  },
+  /**
    * #137 — the READ-DECODE guard: a TIMESTAMP and a boolean-valued column are PROJECTED (not merely
    * bound in a WHERE), so the date → canonical-string and bool → Int decode runs in every runtime,
    * on every dialect, and is asserted dialect-invariant at capture.
@@ -919,6 +940,11 @@ const EXEC_CASES: readonly ExecCase[] = [
     dbState: [TAGS_STATE],
   },
   { id: 'removeTags: batch DELETE by key set persists', entry: 'removeTags', input: { ids: [100, 101] }, writes: true, dbState: [TAGS_STATE] },
+  // #130 — a write that DECLARES a RETURNING hands back the rows it wrote, on every dialect. The
+  // UPDATE's row carries its NEW title (it is described after the write); the DELETE's is the
+  // pre-image (described before it), and `dbState` proves the delete still happened.
+  { id: 'renamePostReturning: UPDATE … RETURNING returns the written row', entry: 'renamePostReturning', input: { title: 'a1-returned', id: 10 }, writes: true, dbState: [POSTS_STATE] },
+  { id: 'removePostReturning: DELETE … RETURNING returns the removed row', entry: 'removePostReturning', input: { id: 11 }, writes: true, dbState: [POSTS_STATE] },
   // #137 — the read decode: a TIMESTAMP column comes back as the canonical string and a
   // boolean-valued column as an Int, IDENTICALLY on SQLite / live PostgreSQL / live MySQL. The
   // §10 cross-check below is what makes it a decoder assertion rather than three separate goldens.

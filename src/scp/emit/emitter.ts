@@ -457,7 +457,6 @@ class EmitContext {
     const table = tableNameOf(model);
     const params: ParamDecl[] = [];
     const returning = endpoint.returning;
-    this.assertReturningSupported(name, returning);
     const ports: Record<string, unknown> = { table };
     if (returning !== undefined) ports.returning = returning.join(', ');
 
@@ -496,20 +495,6 @@ class EmitContext {
         `return ${out};`,
       ],
     };
-  }
-
-  /**
-   * MySQL has no native RETURNING. Its emulation (re-select by the real PK) lives in the transaction
-   * runtime (`renderTxStatement` / `stripMysqlPkHint`), not in the op-independent leaf transport, so a
-   * generated module would send SQL MySQL rejects — a loud reject beats a broken statement.
-   */
-  private assertReturningSupported(name: string, returning: readonly string[] | undefined): void {
-    if (returning !== undefined && this.spec.dialect === 'mysql') {
-      throw new Error(
-        `emit: endpoint '${name}': MySQL has no native RETURNING, and the RETURNING emulation lives in the ` +
-          `transaction runtime, not in the leaf transport. Declare the endpoint without 'returning' for mysql.`,
-      );
-    }
   }
 
   /** Declare the `<family>.<column>` ports for a VALUES / SET list, binding each to a method parameter. */

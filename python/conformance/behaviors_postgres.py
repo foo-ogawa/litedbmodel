@@ -4,17 +4,17 @@
 # native dict literal and handed to the EXISTING runtime core (run_behavior) —
 # no execution logic is generated. Handlers are ALWAYS injected at the boundary
 # (IR + {effects,config,hooks}); they are never generated.
-# irFingerprint: fnv1a64:4936047e71703a98
+# irFingerprint: fnv1a64:096f3ad5dbdfdaa7
 from behavior_contracts import SPEC_VERSIONS, ProvenanceError, load_compiled_ir, run_behavior
 
 # Spec versions baked at generation time (fail-closed constant comparison at load).
 EXPECTED_SPEC_VERSIONS = {"behavior": 5, "expression": 2, "plan": 1}
 
 # FNV-1a 64 fingerprint of the source portable IR (canonical_json discipline, #208).
-IR_FINGERPRINT = "fnv1a64:4936047e71703a98"
+IR_FINGERPRINT = "fnv1a64:096f3ad5dbdfdaa7"
 
 # Component names exposed by bind(), in IR declaration order.
-COMPONENT_NAMES = ("posts", "postsTop", "page", "postsByIds", "feed", "usersWithPosts", "postsWithAuthor", "usersWithCappedPosts", "usersWithUncappedPosts", "usersWithTopPosts", "createPost", "renamePost", "removePost", "typedRows", "createTags", "removeTags")
+COMPONENT_NAMES = ("posts", "postsTop", "page", "postsByIds", "feed", "usersWithPosts", "postsWithAuthor", "usersWithCappedPosts", "usersWithUncappedPosts", "usersWithTopPosts", "createPost", "renamePost", "removePost", "renamePostReturning", "removePostReturning", "typedRows", "createTags", "removeTags")
 
 # The portable component-graph IR *document*, embedded as a native dict literal (no JSON parse at
 # runtime). It carries no provenance token — the load-time load_compiled_ir() below verifies the baked
@@ -2512,6 +2512,199 @@ IR_DOC = {
           "id": "n0",
           "outType": {
             "arr": {
+              "name": "RenamePostReturningRow",
+              "obj": {
+                "id": {
+                  "opt": "float"
+                },
+                "title": {
+                  "opt": "string"
+                }
+              }
+            }
+          },
+          "portSchemas": {
+            "bigint": {
+              "required": True,
+              "type": "bool"
+            },
+            "params": {
+              "elemType": "value",
+              "required": True,
+              "type": "array"
+            },
+            "returning": {
+              "required": True,
+              "type": "bool"
+            },
+            "sql": {
+              "required": True,
+              "type": "string"
+            },
+            "write": {
+              "required": True,
+              "type": "bool"
+            }
+          },
+          "ports": {
+            "bigint": False,
+            "params": {
+              "arr": [
+                {
+                  "ref": [
+                    "title"
+                  ]
+                },
+                {
+                  "ref": [
+                    "id"
+                  ]
+                }
+              ]
+            },
+            "returning": True,
+            "sql": "UPDATE conf_posts SET title = ? WHERE id = ? RETURNING id, title",
+            "write": True
+          }
+        }
+      ],
+      "inputPorts": {
+        "id": {
+          "required": True,
+          "type": "int"
+        },
+        "title": {
+          "required": True,
+          "type": "string"
+        }
+      },
+      "name": "renamePostReturning",
+      "output": {
+        "ref": [
+          "n0"
+        ]
+      },
+      "plan": {
+        "concurrency": 16,
+        "groups": [
+          [
+            0
+          ]
+        ]
+      },
+      "outputType": {
+        "arr": {
+          "obj": {
+            "id": {
+              "opt": "float"
+            },
+            "title": {
+              "opt": "string"
+            }
+          },
+          "name": "RenamePostReturningRow"
+        }
+      }
+    },
+    {
+      "body": [
+        {
+          "component": "executeSQL",
+          "id": "n0",
+          "outType": {
+            "arr": {
+              "name": "RemovePostReturningRow",
+              "obj": {
+                "id": {
+                  "opt": "float"
+                },
+                "title": {
+                  "opt": "string"
+                }
+              }
+            }
+          },
+          "portSchemas": {
+            "bigint": {
+              "required": True,
+              "type": "bool"
+            },
+            "params": {
+              "elemType": "value",
+              "required": True,
+              "type": "array"
+            },
+            "returning": {
+              "required": True,
+              "type": "bool"
+            },
+            "sql": {
+              "required": True,
+              "type": "string"
+            },
+            "write": {
+              "required": True,
+              "type": "bool"
+            }
+          },
+          "ports": {
+            "bigint": False,
+            "params": {
+              "arr": [
+                {
+                  "ref": [
+                    "id"
+                  ]
+                }
+              ]
+            },
+            "returning": True,
+            "sql": "DELETE FROM conf_posts WHERE id = ? RETURNING id, title",
+            "write": True
+          }
+        }
+      ],
+      "inputPorts": {
+        "id": {
+          "required": True,
+          "type": "int"
+        }
+      },
+      "name": "removePostReturning",
+      "output": {
+        "ref": [
+          "n0"
+        ]
+      },
+      "plan": {
+        "concurrency": 16,
+        "groups": [
+          [
+            0
+          ]
+        ]
+      },
+      "outputType": {
+        "arr": {
+          "obj": {
+            "id": {
+              "opt": "float"
+            },
+            "title": {
+              "opt": "string"
+            }
+          },
+          "name": "RemovePostReturningRow"
+        }
+      }
+    },
+    {
+      "body": [
+        {
+          "component": "executeSQL",
+          "id": "n0",
+          "outType": {
+            "arr": {
               "name": "TypedRowsRow",
               "obj": {
                 "flag": {
@@ -2884,6 +3077,14 @@ class Conformance:
     @staticmethod
     def remove_post(id, handlers):
         return run_behavior(IR, handlers, {"id": id}, "removePost")
+
+    @staticmethod
+    def rename_post_returning(title, id, handlers):
+        return run_behavior(IR, handlers, {"title": title, "id": id}, "renamePostReturning")
+
+    @staticmethod
+    def remove_post_returning(id, handlers):
+        return run_behavior(IR, handlers, {"id": id}, "removePostReturning")
 
     @staticmethod
     def typed_rows(handlers):

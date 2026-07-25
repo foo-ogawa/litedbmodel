@@ -998,6 +998,9 @@ struct MysqlReselect {
     select_sql: String,
     /// How to bind `select_sql`'s `?` from `(params, last_insert_id, rows_affected)`.
     binds: Vec<ReselectBind>,
+    /// Run the SELECT BEFORE the write instead of after. Only a DELETE needs this: its rows are gone
+    /// once it has run, so the pre-image IS the written row set (the rows the DELETE removes).
+    before: bool,
 }
 
 /// The target table of a write — the identifier after `INSERT INTO` / `UPDATE` / `DELETE FROM`.
@@ -1107,6 +1110,7 @@ fn build_mysql_reselect(sql: &str) -> Option<MysqlReselect> {
             write_sql,
             select_sql,
             binds,
+            before: false,
         });
     }
 
@@ -1122,6 +1126,7 @@ fn build_mysql_reselect(sql: &str) -> Option<MysqlReselect> {
                 write_sql,
                 select_sql,
                 binds: vec![ReselectBind::LastId, ReselectBind::HighId],
+                before: false,
             });
         }
         let insert_cols = parse_insert_cols(&write_sql);
@@ -1138,6 +1143,7 @@ fn build_mysql_reselect(sql: &str) -> Option<MysqlReselect> {
                 write_sql,
                 select_sql: format!("SELECT {cols} FROM {table} WHERE id = ?{order_by}"),
                 binds: vec![ReselectBind::LastId],
+                before: false,
             });
         }
         let select_sql = format!(
@@ -1148,6 +1154,7 @@ fn build_mysql_reselect(sql: &str) -> Option<MysqlReselect> {
             write_sql,
             select_sql,
             binds,
+            before: false,
         });
     }
 
@@ -1162,41 +1169,33 @@ fn build_mysql_reselect(sql: &str) -> Option<MysqlReselect> {
             write_sql,
             select_sql,
             binds: vec![ReselectBind::JsonParam],
+            before: false,
         });
     }
 
-    // update — recover by the write's OWN WHERE predicate (its key is unchanged by the SET, so the same
-    // predicate matches the same rows after the write, now carrying the new values).
-    if wl.starts_with("update") {
+    // update / delete — recover by the write's OWN WHERE predicate, bound from the write's own params.
+    // The UPDATE re-selects AFTER the write (the same predicate matches the same rows, now carrying
+    // their new values); the DELETE re-selects BEFORE it, since afterwards there is nothing left to
+    // describe — that pre-image IS the set of rows the DELETE removes.
+    if wl.starts_with("update") || wl.starts_with("delete") {
         let wpos = wl.find(" where ")?;
         let where_sql = write_sql[wpos + " where ".len()..].trim().to_string();
-        let before = write_sql[..wpos].matches('?').count();
+        let leading = write_sql[..wpos].matches('?').count();
         let n_where = where_sql.matches('?').count();
         let binds = (0..n_where)
-            .map(|i| ReselectBind::Param(before + i))
+            .map(|i| ReselectBind::Param(leading + i))
             .collect();
         let select_sql = format!("SELECT {cols} FROM {table} WHERE {where_sql}{order_by}");
+        let is_delete = wl.starts_with("delete");
         return Some(MysqlReselect {
             write_sql,
             select_sql,
             binds,
+            before: is_delete,
         });
     }
 
-    // DELETE … RETURNING: the pre-image is gone once the write runs — handled by the caller.
     None
-}
-
-/// If `sql` is a `DELETE … RETURNING`, return the DELETE with the RETURNING clause + hint stripped
-/// (MySQL has no native RETURNING and, unlike UPDATE/upsert, the pre-image cannot be re-selected after
-/// the delete; no corpus op declares delete+returning — kept byte-faithful to v1 `mysql.ts`).
-fn strip_delete_returning(sql: &str) -> Option<String> {
-    let lower = sql.to_ascii_lowercase();
-    let ret_pos = lower.rfind(" returning ")?;
-    if !lower.trim_start().starts_with("delete") {
-        return None;
-    }
-    Some(strip_pk_hint(&sql[..ret_pos]).trim().to_string())
 }
 
 /// Strip a ` /*scp:pk=…*/` hint comment from a fragment.
@@ -1278,6 +1277,32 @@ async fn my_all_on_conn(
     // real key. Both the native-codegen path and the mode-2 interpreter path run RETURNING writes through
     // here, so both return the SAME rows.
     if let Some(rs) = build_mysql_reselect(sql) {
+        // A DELETE's rows are gone once it runs, so its recovering SELECT goes FIRST (still on this
+        // connection, inside the same transaction as the delete it describes). Every other write
+        // re-selects AFTER, keyed on what the write itself produced (insert id range / conflict key).
+        if rs.before {
+            let mut sel_params: Vec<Value> = Vec::with_capacity(rs.binds.len());
+            for b in &rs.binds {
+                sel_params.push(match b {
+                    ReselectBind::JsonParam => params.first().cloned().unwrap_or(Value::Null),
+                    ReselectBind::Param(i) => params.get(*i).cloned().unwrap_or(Value::Null),
+                    // An insert-id bind cannot occur on a pre-image select (no write has run yet).
+                    ReselectBind::LastId | ReselectBind::HighId => Value::Null,
+                });
+            }
+            let rows = bind_my(sqlx::query(&rs.select_sql), &sel_params)?
+                .fetch_all(&mut *conn)
+                .await
+                .map_err(|e| {
+                    driver_failure(format!("mysql pre-select [{}]: {e}", rs.select_sql))
+                })?;
+            let out = my_rows_to_wire(&rows)?;
+            bind_my(sqlx::query(&rs.write_sql), params)?
+                .execute(&mut *conn)
+                .await
+                .map_err(|e| driver_failure(format!("mysql write [{}]: {e}", rs.write_sql)))?;
+            return Ok(out);
+        }
         let exec_res = bind_my(sqlx::query(&rs.write_sql), params)?
             .execute(&mut *conn)
             .await
@@ -1296,7 +1321,9 @@ async fn my_all_on_conn(
             };
             sel_params.push(match b {
                 ReselectBind::LastId => Value::Int(last_id),
-                ReselectBind::HighId => Value::Int(last_id + affected),
+                // `max(1, affected)`, as in the four sibling ports: the range is EXCLUSIVE, so a
+                // driver that reports 0 affected rows must still cover the row the INSERT wrote.
+                ReselectBind::HighId => Value::Int(last_id + affected.max(1)),
                 ReselectBind::JsonParam => param_at(0)?,
                 ReselectBind::Param(i) => param_at(*i)?,
             });
@@ -1306,16 +1333,6 @@ async fn my_all_on_conn(
             .await
             .map_err(|e| driver_failure(format!("mysql re-select [{}]: {e}", rs.select_sql)))?;
         return my_rows_to_wire(&rows);
-    }
-
-    // DELETE … RETURNING: MySQL has no native RETURNING and the pre-image is gone once the delete runs,
-    // so the stripped write runs and no rows are returned (no corpus op declares delete+returning).
-    if let Some(write_sql) = strip_delete_returning(sql) {
-        let q = bind_my(sqlx::query(&write_sql), params)?;
-        q.execute(&mut *conn)
-            .await
-            .map_err(|e| driver_failure(format!("mysql write [{write_sql}]: {e}")))?;
-        return Ok(Vec::new());
     }
 
     let q = bind_my(sqlx::query(sql), params)?;

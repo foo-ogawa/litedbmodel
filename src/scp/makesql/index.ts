@@ -86,8 +86,6 @@ export {
   deriveTransactionPlan,
   deriveBatchPlan,
   literalize,
-  mysqlPkHint,
-  stripMysqlPkHint,
   executeTransaction,
   executeTransactionAsync,
   countingDriver,
@@ -96,6 +94,11 @@ export {
   pgTypeSpecimen,
   IN_SENTINEL,
 } from './tx';
+
+// MySQL has no RETURNING: the pk-hint format + the write→re-select derivation the mysql connection
+// adapter (and the 4 native driver ports) share. ONE home for "MySQL cannot RETURN rows".
+export { mysqlPkHint, stripMysqlPkHint, buildMysqlReselect, bindReselect } from './mysql-returning';
+export type { MysqlReselect, ReselectBind } from './mysql-returning';
 export type {
   TxExpr,
   TxOp,

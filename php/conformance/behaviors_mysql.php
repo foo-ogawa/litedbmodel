@@ -7,7 +7,7 @@
 // (Behavior::runBehavior) — no execution logic is generated. Handlers are ALWAYS
 // injected at the boundary (IR + {effects,config,hooks} — concept.md §4.4); they
 // are never generated.
-// irFingerprint: fnv1a64:287c4cf2499743ef
+// irFingerprint: fnv1a64:8c43d1c9c907efb8
 
 declare(strict_types=1);
 
@@ -15,10 +15,10 @@ declare(strict_types=1);
 $expectedSpecVersions = ['behavior' => 5, 'expression' => 2, 'plan' => 1];
 
 // FNV-1a 64 fingerprint of the source portable IR (canonical-json discipline, #208).
-$irFingerprint = 'fnv1a64:287c4cf2499743ef';
+$irFingerprint = 'fnv1a64:8c43d1c9c907efb8';
 
 // Component names exposed by bind(), in IR declaration order.
-$componentNames = ['posts', 'postsTop', 'page', 'postsByIds', 'feed', 'usersWithPosts', 'postsWithAuthor', 'usersWithCappedPosts', 'usersWithUncappedPosts', 'usersWithTopPosts', 'createPost', 'renamePost', 'removePost', 'typedRows', 'createTags', 'removeTags'];
+$componentNames = ['posts', 'postsTop', 'page', 'postsByIds', 'feed', 'usersWithPosts', 'postsWithAuthor', 'usersWithCappedPosts', 'usersWithUncappedPosts', 'usersWithTopPosts', 'createPost', 'renamePost', 'removePost', 'renamePostReturning', 'removePostReturning', 'typedRows', 'createTags', 'removeTags'];
 
 // The portable component-graph IR *document*, embedded as a native literal (no JSON parse at require).
 // It carries no provenance token — the require-time CompiledIr::load() below verifies the baked
@@ -2516,6 +2516,199 @@ $irDoc = (object) [
                     "id" => "n0",
                     "outType" => (object) [
                         "arr" => (object) [
+                            "name" => "RenamePostReturningRow",
+                            "obj" => (object) [
+                                "id" => (object) [
+                                    "opt" => "float",
+                                ],
+                                "title" => (object) [
+                                    "opt" => "string",
+                                ],
+                            ],
+                        ],
+                    ],
+                    "portSchemas" => (object) [
+                        "bigint" => (object) [
+                            "required" => true,
+                            "type" => "bool",
+                        ],
+                        "params" => (object) [
+                            "elemType" => "value",
+                            "required" => true,
+                            "type" => "array",
+                        ],
+                        "returning" => (object) [
+                            "required" => true,
+                            "type" => "bool",
+                        ],
+                        "sql" => (object) [
+                            "required" => true,
+                            "type" => "string",
+                        ],
+                        "write" => (object) [
+                            "required" => true,
+                            "type" => "bool",
+                        ],
+                    ],
+                    "ports" => (object) [
+                        "bigint" => false,
+                        "params" => (object) [
+                            "arr" => [
+                                (object) [
+                                    "ref" => [
+                                        "title",
+                                    ],
+                                ],
+                                (object) [
+                                    "ref" => [
+                                        "id",
+                                    ],
+                                ],
+                            ],
+                        ],
+                        "returning" => true,
+                        "sql" => "UPDATE conf_posts SET title = ? WHERE id = ? RETURNING id, title",
+                        "write" => true,
+                    ],
+                ],
+            ],
+            "inputPorts" => (object) [
+                "id" => (object) [
+                    "required" => true,
+                    "type" => "int",
+                ],
+                "title" => (object) [
+                    "required" => true,
+                    "type" => "string",
+                ],
+            ],
+            "name" => "renamePostReturning",
+            "output" => (object) [
+                "ref" => [
+                    "n0",
+                ],
+            ],
+            "plan" => (object) [
+                "concurrency" => 16,
+                "groups" => [
+                    [
+                        0,
+                    ],
+                ],
+            ],
+            "outputType" => (object) [
+                "arr" => (object) [
+                    "obj" => (object) [
+                        "id" => (object) [
+                            "opt" => "float",
+                        ],
+                        "title" => (object) [
+                            "opt" => "string",
+                        ],
+                    ],
+                    "name" => "RenamePostReturningRow",
+                ],
+            ],
+        ],
+        (object) [
+            "body" => [
+                (object) [
+                    "component" => "executeSQL",
+                    "id" => "n0",
+                    "outType" => (object) [
+                        "arr" => (object) [
+                            "name" => "RemovePostReturningRow",
+                            "obj" => (object) [
+                                "id" => (object) [
+                                    "opt" => "float",
+                                ],
+                                "title" => (object) [
+                                    "opt" => "string",
+                                ],
+                            ],
+                        ],
+                    ],
+                    "portSchemas" => (object) [
+                        "bigint" => (object) [
+                            "required" => true,
+                            "type" => "bool",
+                        ],
+                        "params" => (object) [
+                            "elemType" => "value",
+                            "required" => true,
+                            "type" => "array",
+                        ],
+                        "returning" => (object) [
+                            "required" => true,
+                            "type" => "bool",
+                        ],
+                        "sql" => (object) [
+                            "required" => true,
+                            "type" => "string",
+                        ],
+                        "write" => (object) [
+                            "required" => true,
+                            "type" => "bool",
+                        ],
+                    ],
+                    "ports" => (object) [
+                        "bigint" => false,
+                        "params" => (object) [
+                            "arr" => [
+                                (object) [
+                                    "ref" => [
+                                        "id",
+                                    ],
+                                ],
+                            ],
+                        ],
+                        "returning" => true,
+                        "sql" => "DELETE FROM conf_posts WHERE id = ? RETURNING id, title",
+                        "write" => true,
+                    ],
+                ],
+            ],
+            "inputPorts" => (object) [
+                "id" => (object) [
+                    "required" => true,
+                    "type" => "int",
+                ],
+            ],
+            "name" => "removePostReturning",
+            "output" => (object) [
+                "ref" => [
+                    "n0",
+                ],
+            ],
+            "plan" => (object) [
+                "concurrency" => 16,
+                "groups" => [
+                    [
+                        0,
+                    ],
+                ],
+            ],
+            "outputType" => (object) [
+                "arr" => (object) [
+                    "obj" => (object) [
+                        "id" => (object) [
+                            "opt" => "float",
+                        ],
+                        "title" => (object) [
+                            "opt" => "string",
+                        ],
+                    ],
+                    "name" => "RemovePostReturningRow",
+                ],
+            ],
+        ],
+        (object) [
+            "body" => [
+                (object) [
+                    "component" => "executeSQL",
+                    "id" => "n0",
+                    "outType" => (object) [
+                        "arr" => (object) [
                             "name" => "TypedRowsRow",
                             "obj" => (object) [
                                 "flag" => (object) [
@@ -2858,6 +3051,14 @@ if (!\class_exists('Conformance', false)) {
 
         public static function removePost($id, array $handlers): mixed {
             return \LiteDbModel\Runtime\BehaviorContracts\Behavior::runBehavior(self::$ir, $handlers, ['id' => $id], 'removePost');
+        }
+
+        public static function renamePostReturning($title, $id, array $handlers): mixed {
+            return \LiteDbModel\Runtime\BehaviorContracts\Behavior::runBehavior(self::$ir, $handlers, ['title' => $title, 'id' => $id], 'renamePostReturning');
+        }
+
+        public static function removePostReturning($id, array $handlers): mixed {
+            return \LiteDbModel\Runtime\BehaviorContracts\Behavior::runBehavior(self::$ir, $handlers, ['id' => $id], 'removePostReturning');
         }
 
         public static function typedRows(array $handlers): mixed {

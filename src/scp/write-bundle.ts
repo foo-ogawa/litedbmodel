@@ -27,7 +27,6 @@ import type { ColumnTypeResolver } from './coltype';
 import {
   deriveTransactionPlan,
   deriveBatchPlan,
-  mysqlPkHint,
   executeTransaction,
   type BaseWrite,
   type TxOp,
@@ -40,6 +39,7 @@ import {
   compileDeleteMany,
   type InsertManyBuildOptions,
 } from './makesql/compile-crud';
+import { mysqlPkHint } from './makesql/mysql-returning';
 import { assembleMakeSQL, type MakeSQL } from './makesql/makesql';
 import { annotateWriteBundleOutType } from './makesql/writeouttype';
 import type { UpdateManyBuildOptions } from '../drivers/types';
