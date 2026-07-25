@@ -157,6 +157,18 @@ pub struct TransactionOptions {
     /// and its result is returned, but NO change is committed. A body error still ROLLBACKs +
     /// re-raises as usual. Default false.
     pub rollback_only: bool,
+    /// Override the GLOBAL writer-after-transaction setting FOR THIS TRANSACTION (mirror the TS
+    /// `TransactionOptions.useWriterAfterTransaction`; v1 parity — `DBModel.transaction` :3103).
+    ///
+    /// `false` means this transaction's COMMIT does NOT arm writer-stickiness: the reads that follow
+    /// go straight back to the reader pool instead of being pinned to the writer for
+    /// `writer_sticky_duration`. Use it for a transaction whose writes nobody reads back.
+    ///
+    /// `true` (the default) ⇒ the GLOBAL setting decides, exactly as before: the arming call lands on
+    /// the ctx's [`crate::connection_routing::WriterStickyClock`], which is itself disabled when the
+    /// deployment configured `use_writer_after_transaction: false`. So a per-tx `true` cannot switch
+    /// stickiness ON against a global `false` (mirror v1 `_shouldUseWriterSticky` :487).
+    pub use_writer_after_transaction: bool,
 }
 
 impl Default for TransactionOptions {
@@ -171,6 +183,7 @@ impl Default for TransactionOptions {
             retry_limit: 3,
             retry_duration_ms: 200,
             rollback_only: false,
+            use_writer_after_transaction: true,
         }
     }
 }

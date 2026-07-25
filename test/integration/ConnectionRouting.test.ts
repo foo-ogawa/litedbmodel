@@ -191,6 +191,25 @@ describe('C1 — reader/writer pool separation', () => {
     await executeAsync(ctx, `SELECT 1`, [], { write: false });
     expect(log.at(-1)).toBe('reader');
 
+    // #134 — PER-TRANSACTION opt-out on the SAME globally-sticky ctx: `useWriterAfterTransaction:false`
+    // means THIS commit does not arm the clock, so the immediately-following read still goes to the
+    // READER. The very next tx, with the option omitted, DOES arm it — so the suppression is per-tx,
+    // not a sticky teardown, and the two assertions cannot both pass by accident.
+    await transaction(ctx, async () => {
+      await runGuardedAsync(ctx, `INSERT INTO ${TBL} (id, val) VALUES ($1,$2) ON CONFLICT (id) DO NOTHING`, [4, 'd'], 'INSERT');
+    }, { useWriterAfterTransaction: false }, 'postgres');
+    clock += 100;
+    await executeAsync(ctx, `SELECT 1`, [], { write: false });
+    expect(log.at(-1)).toBe('reader');
+
+    await transaction(ctx, async () => {
+      await runGuardedAsync(ctx, `INSERT INTO ${TBL} (id, val) VALUES ($1,$2) ON CONFLICT (id) DO NOTHING`, [5, 'e'], 'INSERT');
+    }, {}, 'postgres');
+    clock += 100;
+    await executeAsync(ctx, `SELECT 1`, [], { write: false });
+    expect(log.at(-1)).toBe('writer');
+    clock += 6000; // let the window elapse again before the mutation leg
+
     // MUTATION (RED proof) — PRODUCTION PATH: disable writer-sticky (`useWriterAfterTransaction:false`,
     // the faithful "sticky deleted" mutation) and re-run the SAME commit-then-read through the SAME
     // `transaction`/`executeAsync` seam. The in-window read now lands on the READER (no read-your-

@@ -57,8 +57,15 @@ describe('#81 isolation level → SQL mapping', () => {
 // ── option defaults (v1 parity) ───────────────────────────────────────────────
 
 describe('#81 TransactionOptions defaults (v1 parity)', () => {
-  it('applies retryOnError=true, retryLimit=3, retryDuration=200, rollbackOnly=false', () => {
-    expect(resolveTxOptions()).toEqual({ isolation: undefined, retryOnError: true, retryLimit: 3, retryDuration: 200, rollbackOnly: false });
+  it('applies retryOnError=true, retryLimit=3, retryDuration=200, rollbackOnly=false, useWriterAfterTransaction=true', () => {
+    expect(resolveTxOptions()).toEqual({
+      isolation: undefined,
+      retryOnError: true,
+      retryLimit: 3,
+      retryDuration: 200,
+      rollbackOnly: false,
+      useWriterAfterTransaction: true,
+    });
   });
   it('honors explicit overrides', () => {
     expect(resolveTxOptions({ retryLimit: 5, retryDuration: 50, rollbackOnly: true, isolation: 'serializable' })).toEqual({
@@ -67,7 +74,14 @@ describe('#81 TransactionOptions defaults (v1 parity)', () => {
       retryLimit: 5,
       retryDuration: 50,
       rollbackOnly: true,
+      useWriterAfterTransaction: true,
     });
+  });
+  // #134 — the per-tx writer-after-tx override. Unset ⇒ true (defer to the GLOBAL sticky clock);
+  // `false` ⇒ this tx's commit does not arm stickiness (v1 `DBModel.transaction` :3103/:3126).
+  it('carries a per-transaction useWriterAfterTransaction override', () => {
+    expect(resolveTxOptions({ useWriterAfterTransaction: false }).useWriterAfterTransaction).toBe(false);
+    expect(resolveTxOptions({ useWriterAfterTransaction: true }).useWriterAfterTransaction).toBe(true);
   });
 });
 

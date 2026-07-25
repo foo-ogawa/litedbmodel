@@ -214,6 +214,24 @@ final class ConnectionRoutingLiveTest extends TestCase
         execute($ctx, 'SELECT 1', [], new StatementIntent(write: false));
         $this->assertSame('reader', end($log));
 
+        // #134 — PER-TRANSACTION opt-out on the SAME globally-sticky ctx: this commit does NOT arm the
+        // clock, so the immediately-following read still goes to the READER. The very next tx, with the
+        // option left at its default, DOES arm it — proving the suppression is per-tx, not a teardown.
+        routedTransaction($ctx, function () use ($ctx) {
+            runGuarded($ctx, 'INSERT INTO ' . self::TBL . ' (id, val) VALUES ($1,$2) ON CONFLICT (id) DO NOTHING', [4, 'd'], 'INSERT');
+        }, new \LiteDbModel\Runtime\TransactionOptions(retryOnError: false, useWriterAfterTransaction: false), 'postgres');
+        $clock += 100;
+        execute($ctx, 'SELECT 1', [], new StatementIntent(write: false));
+        $this->assertSame('reader', end($log), 'per-tx useWriterAfterTransaction=false ⇒ sticky NOT armed');
+
+        routedTransaction($ctx, function () use ($ctx) {
+            runGuarded($ctx, 'INSERT INTO ' . self::TBL . ' (id, val) VALUES ($1,$2) ON CONFLICT (id) DO NOTHING', [5, 'e'], 'INSERT');
+        }, new \LiteDbModel\Runtime\TransactionOptions(retryOnError: false), 'postgres');
+        $clock += 100;
+        execute($ctx, 'SELECT 1', [], new StatementIntent(write: false));
+        $this->assertSame('writer', end($log), 'the default still arms stickiness on the SAME ctx');
+        $clock += 6000; // let the window elapse again
+
         // MUTATION (RED proof) — disable writer-sticky and re-run the SAME commit-then-read: the in-window
         // read now lands on the READER (read-your-writes lost).
         $mlog = [];

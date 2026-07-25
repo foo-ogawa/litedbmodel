@@ -542,7 +542,7 @@ func Rollback() TxDecision { return TxDecision{Rollback: true} }
 // shared-slot model would violate. This mirrors the TS withTransactionAsync (#75) / rust
 // with_transaction_decided (#76). See [WithTransactionDecidedIsolated] for the seam-visible tx-control.
 func WithTransactionDecided[R any](ctx *ExecutionContext, db TxDB, body func(txCtx *ExecutionContext) (R, TxDecision, error)) (R, error) {
-	return WithTransactionDecidedIsolated(ctx, db, IsolationNone, "", body)
+	return WithTransactionDecidedIsolated(ctx, db, IsolationNone, "", true, body)
 }
 
 // WithTransactionDecidedIsolated is the isolation-aware form of [WithTransactionDecided] (Phase B /
@@ -569,7 +569,11 @@ func WithTransactionDecided[R any](ctx *ExecutionContext, db TxDB, body func(txC
 //
 // tx-control is issued through [Run] (NOT the guarded write seam) so it is EXEMPT from the write=tx
 // guard — BEGIN/COMMIT/ROLLBACK/SET are the runtime's own envelope, not user writes.
-func WithTransactionDecidedIsolated[R any](ctx *ExecutionContext, db TxDB, isolation IsolationLevel, dialectName string, body func(txCtx *ExecutionContext) (R, TxDecision, error)) (R, error) {
+//
+// useWriterAfterTransaction is the per-transaction writer-sticky switch resolved by
+// [TransactionDecided] from [TransactionOptions.UseWriterAfterTransaction] and passed down HERE,
+// where the arming actually happens: false ⇒ a successful COMMIT does not arm the sticky clock.
+func WithTransactionDecidedIsolated[R any](ctx *ExecutionContext, db TxDB, isolation IsolationLevel, dialectName string, useWriterAfterTransaction bool, body func(txCtx *ExecutionContext) (R, TxDecision, error)) (R, error) {
 	var zero R
 	// Resolve the isolation-aware BEGIN SQL first (fail-closed: SQLite + a level is a hard error) BEFORE
 	// acquiring a connection — an unsupported isolation must not check out a conn it can't honor. For
@@ -639,8 +643,9 @@ func WithTransactionDecidedIsolated[R any](ctx *ExecutionContext, db TxDB, isola
 	}
 	// Phase C (#89): a SUCCESSFUL commit ARMS the writer-sticky clock (read-your-writes) — subsequent
 	// reads within writerStickyDuration route to the WRITER. No-op when the ctx carries no routing /
-	// no sticky clock (the Phase A/B path) or when sticky is disabled (.Mark checks .enabled).
-	if ctx.routing != nil && ctx.routing.Sticky != nil {
+	// no sticky clock (the Phase A/B path) or when sticky is disabled (.Mark checks .enabled), and
+	// skipped entirely when this tx opted out per-transaction (#134).
+	if useWriterAfterTransaction && ctx.routing != nil && ctx.routing.Sticky != nil {
 		ctx.routing.Sticky.Mark()
 	}
 	return result, nil
@@ -758,7 +763,7 @@ func TransactionDecided[R any](ctx *ExecutionContext, db TxDB, dialectName strin
 	for {
 		attempt++
 		// ONE attempt on a FRESH owned *sql.Conn (a retry after a connection error thus RECONNECTS).
-		result, err := WithTransactionDecidedIsolated(ctx, db, options.Isolation, dialectName, func(txCtx *ExecutionContext) (R, TxDecision, error) {
+		result, err := WithTransactionDecidedIsolated(ctx, db, options.Isolation, dialectName, options.useWriterAfterTx(), func(txCtx *ExecutionContext) (R, TxDecision, error) {
 			r, decision, bErr := body(txCtx)
 			if bErr != nil {
 				return zero, Commit(), bErr

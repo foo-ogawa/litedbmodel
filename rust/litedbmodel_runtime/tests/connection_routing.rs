@@ -329,6 +329,60 @@ fn c1_writer_sticky() {
     seam_execute(&ctx, "SELECT 1", &[], &StatementIntent::read()).unwrap();
     assert_eq!(snapshot(&l).last().unwrap(), "reader");
 
+    // #134 — PER-TRANSACTION opt-out on the SAME globally-sticky ctx: `use_writer_after_transaction:
+    // false` ⇒ this commit does NOT arm the clock, so the immediately-following read still goes to the
+    // READER. The very next tx, with the option left at its default, DOES arm it — proving the
+    // suppression is per-tx and not a sticky teardown.
+    let optout = TransactionOptions {
+        use_writer_after_transaction: false,
+        ..TransactionOptions::default()
+    };
+    let insert = format!(
+        "INSERT INTO {} (id, val) VALUES ($1,$2) ON CONFLICT (id) DO NOTHING",
+        pg_tbl()
+    );
+    transaction_on(&ctx, None, TxDialect::Postgres, &optout, |tx| {
+        seam_run(
+            tx,
+            &insert,
+            &[Value::Int(4), Value::Str("d".into())],
+            &StatementIntent::write(),
+        )?;
+        Ok(())
+    })
+    .unwrap();
+    clock.advance(100);
+    seam_execute(&ctx, "SELECT 1", &[], &StatementIntent::read()).unwrap();
+    assert_eq!(
+        snapshot(&l).last().unwrap(),
+        "reader",
+        "per-tx use_writer_after_transaction=false ⇒ the commit does NOT arm writer-stickiness"
+    );
+    transaction_on(
+        &ctx,
+        None,
+        TxDialect::Postgres,
+        &TransactionOptions::default(),
+        |tx| {
+            seam_run(
+                tx,
+                &insert,
+                &[Value::Int(5), Value::Str("e".into())],
+                &StatementIntent::write(),
+            )?;
+            Ok(())
+        },
+    )
+    .unwrap();
+    clock.advance(100);
+    seam_execute(&ctx, "SELECT 1", &[], &StatementIntent::read()).unwrap();
+    assert_eq!(
+        snapshot(&l).last().unwrap(),
+        "writer",
+        "the default (unset) option still arms stickiness on the SAME ctx"
+    );
+    clock.advance(6000); // let the window elapse again before the mutation leg
+
     // MUTATION (RED proof) — disable writer-sticky (the faithful "sticky deleted" mutation) and re-run
     // the SAME commit-then-read. The in-window read now lands on the READER (no read-your-writes).
     let ml = log();

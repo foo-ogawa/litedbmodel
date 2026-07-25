@@ -176,6 +176,19 @@ final class TransactionOptions
          * re-raises as usual. Default false.
          */
         public readonly bool $rollbackOnly = false,
+        /**
+         * Override the GLOBAL writer-after-transaction setting FOR THIS TRANSACTION (mirror the TS
+         * `TransactionOptions.useWriterAfterTransaction`; v1 parity — `DBModel.transaction` :3103).
+         *
+         * `false` ⇒ this transaction's COMMIT does NOT arm writer-stickiness, so the reads that follow
+         * go straight back to the reader pool instead of being pinned to the writer for
+         * `writerStickyDuration`. Use it for a transaction whose writes nobody reads back.
+         *
+         * `true` (default) ⇒ the GLOBAL setting decides, exactly as before: the arming call lands on
+         * the {@see WriterStickyClock}, itself disabled when the deployment configured sticky off — so
+         * a per-tx `true` cannot force stickiness ON against a global `false` (v1 `_shouldUseWriterSticky`).
+         */
+        public readonly bool $useWriterAfterTransaction = true,
     ) {
     }
 }

@@ -694,7 +694,7 @@ pub fn with_transaction_decided<'a, R>(
     ctx: &ExecutionContext<'a, '_>,
     body: impl FnOnce(&ExecutionContext) -> Result<TxDecision<R>, SqlFailure>,
 ) -> Result<R, SqlFailure> {
-    with_transaction_decided_isolated(ctx, &[], &[], body)
+    with_transaction_decided_isolated(ctx, &[], &[], true, body)
 }
 
 /// The isolation-aware form of [`with_transaction_decided`] (Phase B / #82): `before_begin` /
@@ -708,9 +708,17 @@ pub fn with_transaction_decided_isolated<'a, R>(
     ctx: &ExecutionContext<'a, '_>,
     before_begin: &[String],
     after_begin: &[String],
+    use_writer_after_transaction: bool,
     body: impl FnOnce(&ExecutionContext) -> Result<TxDecision<R>, SqlFailure>,
 ) -> Result<R, SqlFailure> {
-    with_transaction_decided_isolated_on(ctx, None, before_begin, after_begin, body)
+    with_transaction_decided_isolated_on(
+        ctx,
+        None,
+        before_begin,
+        after_begin,
+        use_writer_after_transaction,
+        body,
+    )
 }
 
 /// The named-connection form of [`with_transaction_decided_isolated`] (Phase C / #88): the tx's owned
@@ -720,12 +728,15 @@ pub fn with_transaction_decided_isolated<'a, R>(
 /// statement in the body — the Phase A per-execution ownership is unbroken). WITHOUT a routing config
 /// (base ctx) `connection` must be `None` and this is byte-identical to
 /// [`with_transaction_decided_isolated`]. On a successful (non-rollback) COMMIT it `.mark()`s the
-/// writer-sticky clock (read-your-writes).
+/// writer-sticky clock (read-your-writes) — unless `use_writer_after_transaction` is false, the
+/// per-transaction opt-out ([`crate::tx_options::TransactionOptions::use_writer_after_transaction`],
+/// resolved by [`transaction_decided_on`] and passed down here, where the arming actually happens).
 pub fn with_transaction_decided_isolated_on<'a, R>(
     ctx: &ExecutionContext<'a, '_>,
     connection: Option<&str>,
     before_begin: &[String],
     after_begin: &[String],
+    use_writer_after_transaction: bool,
     body: impl FnOnce(&ExecutionContext) -> Result<TxDecision<R>, SqlFailure>,
 ) -> Result<R, SqlFailure> {
     // Acquire the tx's OWNED connection from the WRITER pool of the named connection (Phase C) — or the
@@ -773,8 +784,12 @@ pub fn with_transaction_decided_isolated_on<'a, R>(
             Ok(_) => {
                 release_tx(&slot, false);
                 // WRITER-STICKY (Phase C / #88 read-your-writes): a committed write marks the sticky
-                // clock so subsequent reads within the window route to the writer. No-op w/o routing.
-                ctx.mark_sticky();
+                // clock so subsequent reads within the window route to the writer. No-op w/o routing,
+                // and skipped entirely when this tx opted out per-transaction (#134). The GLOBAL
+                // setting still wins the other way: `mark()` is a no-op on a disabled clock.
+                if use_writer_after_transaction {
+                    ctx.mark_sticky();
+                }
                 Ok(r)
             }
             Err(e) => {
@@ -962,6 +977,7 @@ pub fn transaction_decided_on<'a, R>(
             connection,
             &before_begin,
             &after_begin,
+            options.use_writer_after_transaction,
             |tx_ctx| {
                 let decided = body(tx_ctx)?;
                 // rollback_only (dry-run): a SUCCESSFUL commit becomes a ROLLBACK, still returning the

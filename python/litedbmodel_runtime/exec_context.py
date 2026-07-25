@@ -515,6 +515,7 @@ def with_transaction_decided(
     body: Callable[["ExecutionContext"], TxDecision],
     before: Sequence[str] = (),
     after: Sequence[str] = (),
+    use_writer_after_transaction: bool = True,
 ) -> Any:
     """Run ``body`` inside a transaction with **per-execution connection ownership** (§3, the
     concurrent-tx fix). This is the general form: ``body`` decides COMMIT vs ROLLBACK (see
@@ -594,8 +595,11 @@ def with_transaction_decided(
             destroy = False
             # WRITER-STICKY (Phase C-1, read-your-writes): a committed tx marks the sticky clock so
             # subsequent reads within `writer_sticky_duration` route to the writer pool (v1
-            # `_lastTransactionTime`). A no-op on the single-driver path (no routing).
-            ctx.mark_sticky()
+            # `_lastTransactionTime`). A no-op on the single-driver path (no routing), and skipped
+            # entirely when this tx opted out per-transaction (#134). The GLOBAL setting still wins the
+            # other way: `mark()` is a no-op on a clock the deployment disabled.
+            if use_writer_after_transaction:
+                ctx.mark_sticky()
             return decision.value
         finally:
             # The SINGLE release point — runs on every path (success, BEGIN error, body error, raising
@@ -742,7 +746,9 @@ def transaction(
             return rollback(value) if opts.rollback_only else commit(value)
 
         try:
-            return with_transaction_decided(tx_ctx, body, before, after)
+            return with_transaction_decided(
+                tx_ctx, body, before, after, opts.use_writer_after_transaction
+            )
         except (WriteOutsideTransactionError, WriteInReadOnlyContextError):
             # A guard rejection is a programming error, never retryable — re-raise immediately.
             raise

@@ -220,7 +220,7 @@ def test_d1_red_tx_control_bypassing_seam_is_not_observed(raw_pool):
     ctx = context_for_driver(driver)
     seen = []
 
-    def bypass_with_transaction_decided(ctx, body, before=(), after=()):
+    def bypass_with_transaction_decided(ctx, body, before=(), after=(), use_writer_after_transaction=True):
         # The OLD divergent path: tx-control issued on the OWNED tx handle DIRECTLY (bypassing the seam).
         tx = ctx.begin_tx()
         tx_ctx = ctx.with_connection(ec._TxConnectionAdapter(tx), True)

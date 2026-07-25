@@ -608,8 +608,11 @@ export async function withTransactionAsync<R>(
     if (attemptResult.ok) {
       // WRITER-STICKY (§3-2, read-your-writes): a committed tx marks the sticky clock so subsequent
       // reads within `writerStickyDuration` route to the writer pool (v1 `_lastTransactionTime`). A
-      // rollbackOnly (dry-run) tx committed NOTHING ⇒ it does NOT arm stickiness.
-      if (!resolved.rollbackOnly) ctx.stickyClock.mark();
+      // rollbackOnly (dry-run) tx committed NOTHING ⇒ it does NOT arm stickiness, and a tx that opted
+      // OUT per-transaction (`useWriterAfterTransaction: false`) does not arm it either — mirror v1
+      // `DBModel.transaction` :3126. The GLOBAL setting still has the last word: `mark()` is a no-op
+      // on a clock the deployment disabled, so a per-tx `true` cannot force stickiness on (v1 :487).
+      if (!resolved.rollbackOnly && resolved.useWriterAfterTransaction) ctx.stickyClock.mark();
       return attemptResult.value;
     }
 
