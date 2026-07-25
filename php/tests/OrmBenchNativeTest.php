@@ -64,7 +64,7 @@ final class OrmBenchNativeTest extends TestCase
 
     public function testFindOpsReturnExpectedRows(): void
     {
-        $this->assertCount(5, $this->op('findAll')); // 5 seeded users
+        $this->assertCount(100, $this->op('findAll')); // the op's LIMIT 100 over the seed SSoT
         $unique = $this->op('findUnique');
         $this->assertCount(1, $unique);
         $this->assertSame('user1@example.com', $unique[0]->email);
@@ -78,7 +78,7 @@ final class OrmBenchNativeTest extends TestCase
         foreach ($users as $u) {
             $byId[$u->id] = $u;
         }
-        $this->assertSame(['P1', 'P2'], array_map(static fn ($p) => $p->title, $byId[1]->posts)); // N+1-free batch-load
+        $this->assertSame(['Post 1', 'Post 2'], array_map(static fn ($p) => $p->title, $byId[1]->posts)); // N+1-free batch-load
 
         $deep = $this->op('nestedRelations');
         $u1 = $this->firstWhere($deep, static fn ($u) => $u->id === 1);
@@ -89,8 +89,8 @@ final class OrmBenchNativeTest extends TestCase
     {
         $tenants = $this->op('compositeRelations');
         $tu1 = $this->firstWhere($tenants, static fn ($t) => $t->user_id === 1);
-        $this->assertSame([10], array_map(static fn ($p) => $p->post_id, $tu1->posts));
-        $this->assertSame([100, 101], array_map(static fn ($c) => $c->comment_id, $tu1->posts[0]->comments));
+        $this->assertSame([1, 2], array_map(static fn ($p) => $p->post_id, $tu1->posts));
+        $this->assertSame([1, 2], array_map(static fn ($c) => $c->comment_id, $tu1->posts[0]->comments));
     }
 
     // ── single writes (executeSQL write path: summary for INSERT, RETURNING rows for upsert) ────────

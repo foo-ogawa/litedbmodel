@@ -55,7 +55,7 @@ def test_every_op_executes(harness):
 
 def test_find_ops_return_expected_rows(harness):
     driver, fns = harness
-    assert len(run_op(fns, driver, "findAll", 0)) == 5  # 5 seeded users
+    assert len(run_op(fns, driver, "findAll", 0)) == 100  # the op's LIMIT 100 over the seed SSoT
     unique = run_op(fns, driver, "findUnique", 0)
     assert len(unique) == 1 and unique[0]["email"] == "user1@example.com"
     assert len(run_op(fns, driver, "findFirst", 0)) == 1
@@ -65,7 +65,7 @@ def test_nested_relations_hydrate_children(harness):
     driver, fns = harness
     users = run_op(fns, driver, "nestedFindAll", 0)
     by_id = {u["id"]: u for u in users}
-    assert [p["title"] for p in by_id[1]["posts"]] == ["P1", "P2"]  # N+1-free batch-load
+    assert [p["title"] for p in by_id[1]["posts"]] == ["Post 1", "Post 2"]  # N+1-free batch-load
     deep = run_op(fns, driver, "nestedRelations", 0)
     u1 = next(u for u in deep if u["id"] == 1)
     assert [c["id"] for c in u1["posts"][0]["comments"]] == [1, 2]  # 3-level chain
@@ -75,8 +75,8 @@ def test_composite_relations_group_by_full_tuple(harness):
     driver, fns = harness
     tenants = run_op(fns, driver, "compositeRelations", 0)
     tu1 = next(t for t in tenants if t["user_id"] == 1)
-    assert [p["post_id"] for p in tu1["posts"]] == [10]
-    assert [c["comment_id"] for c in tu1["posts"][0]["comments"]] == [100, 101]
+    assert [p["post_id"] for p in tu1["posts"]] == [1, 2]
+    assert [c["comment_id"] for c in tu1["posts"][0]["comments"]] == [1, 2]
 
 
 # ── single writes (executeSQL write path: summary for INSERT, RETURNING rows for upsert) ────────────
