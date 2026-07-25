@@ -32,7 +32,7 @@
  * bind, composite `$.entity`) are LOUD rejects — never a silently mis-ordered plan.
  */
 
-import { evaluateExpression, type Scope, type Value } from 'behavior-contracts';
+import { evaluateExpression, type Scope, type Value } from 'behavior-contracts/runtime';
 import { assembleMakeSQL } from './makesql';
 import { sqliteInsertJson, mysqlInsertJson, sqliteUpdateManyJson, mysqlUpdateManyJson } from './json-batch';
 import { postgresSqlBuilder } from '../../drivers/PostgresSqlBuilder';
@@ -51,7 +51,7 @@ import {
   withTransactionAsync,
   withTransactionSync,
 } from '../exec-context';
-import { executeSQL, type LeafContext, type AsyncLeafContext } from '../leaves';
+import { executeSQL, executeSQLAsync, type LeafContext, type AsyncLeafContext } from '../leaves';
 import { type TransactionOptions, checkWriteAllowed } from '../tx-options';
 import { isConnectionError } from '../../connection-errors';
 import { DBConditions, type ConditionObject } from '../../DBConditions';
@@ -1120,7 +1120,7 @@ function execStatement(
   // ⇒ the row-returning seam), a bare write runs (the `[{changes,…}]` summary).
   const { sql, params } = evalAssemble(op, scope);
   const hasReturn = /\bselect\b/i.test(sql.slice(0, 8)) || /\breturning\b/i.test(sql);
-  const out = executeSQL.fn({ sql, params, write: true, returning: hasReturn, bigint: false }, { exec: ctx, dialect } satisfies LeafContext) as Record<string, unknown>[];
+  const out = executeSQL({ sql, params, write: true, returning: hasReturn, bigint: false }, { exec: ctx, dialect } satisfies LeafContext);
   return hasReturn ? { rows: out, changes: out.length } : { rows: [], changes: Number(out[0]?.changes ?? 0) };
 }
 
@@ -1303,7 +1303,7 @@ async function execStatementAsync(
   // as every read/write — placeholder render + param encode + async seam inside the leaf. A
   // SELECT/RETURNING reads rows; a bare write returns the `[{changes,…}]` summary.
   const hasReturn = /\bselect\b/i.test(sql.slice(0, 8)) || /\breturning\b/i.test(sql);
-  const out = (await (executeSQL.fn({ sql, params, write: true, returning: hasReturn, bigint: false }, { execAsync: ctx, dialect } satisfies AsyncLeafContext) as unknown as Promise<Array<Record<string, unknown>>>));
+  const out = await executeSQLAsync({ sql, params, write: true, returning: hasReturn, bigint: false }, { execAsync: ctx, dialect } satisfies AsyncLeafContext);
   return hasReturn ? { rows: out, changes: out.length } : { rows: [], changes: Number(out[0]?.changes ?? 0) };
 }
 

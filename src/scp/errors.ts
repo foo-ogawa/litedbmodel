@@ -12,7 +12,7 @@
  * carrying the original code + message for diagnosis.
  */
 
-import type { PolicyKind } from 'behavior-contracts';
+import type { PolicyKind } from 'behavior-contracts/runtime';
 
 /** The SCP failure kinds litedbmodel maps SQL driver errors to (spec §11 item 5). */
 export type SqlFailureKind =

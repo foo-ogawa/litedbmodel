@@ -14,6 +14,11 @@
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
     "moduleResolution": "node",
+    // behavior-contracts ships its runtime tier on the `./runtime` EXPORTS subpath. The v1 build emits
+    // CommonJS (`module: CommonJS`), whose classic resolver does not read `exports`, so the subpath is
+    // mapped here for TYPES only — Node (require(esm)) and esbuild both resolve it from the exports map
+    // at build/run time. Types-only shim, no runtime effect.
+    "paths": { "behavior-contracts/runtime": ["./node_modules/behavior-contracts/dist/runtime.d.ts"] },
     "noImplicitAny": true,
     "noImplicitReturns": true,
     "noUnusedLocals": true,

@@ -30,7 +30,7 @@
  * components). The bundle stays pure JSON (multi-language ready).
  */
 
-import type { CatalogEntry } from 'behavior-contracts';
+import type { CatalogEntry } from 'behavior-contracts/runtime';
 
 /** The single catalog leaf name. Everything SQL is a `makeSQL`. */
 export const MAKESQL = 'makeSQL' as const;

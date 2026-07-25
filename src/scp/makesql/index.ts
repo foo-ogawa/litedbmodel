@@ -110,15 +110,6 @@ export type {
   WriteExecOptions,
 } from './tx';
 
-// makeSQL lowering used by the op-independent leaf authoring (#141): `compileSelectNode` (Select/Count
-// → sql+params, consumed by decorator-adapter `emitRead`). The catalog read-bundle surface
-// (`compileReadGraph`/`renderReadPrimary`/`compileAuthoredBehavior` + the static-bundle EXEC engine) is
-// DELETED (#143) — reads run the op-independent leaf graph via `executeBehavior`/`bindBehaviors`.
-export {
-  compileSelectNode,
-} from './static-bundle';
-export type { StaticStatement, ValueSpec, SqlExecutorAsync } from './static-bundle';
-
 // Pooled async executor factories (PG / MySQL) that turn the plan's concurrency into real parallel
 // read-relation DB I/O behind the async seam (#40).
 export { configurePgDeboxTypeParsers, mysqlDeboxPoolOptions, pgConnectionPool, mysqlConnectionPool, pgPoolFactory, mysqlPoolFactory } from './pool-executor';

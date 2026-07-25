@@ -1,11 +1,11 @@
 /**
- * litedbmodel v2 SCP — pooled async `SqlExecutorAsync` factories for PG / MySQL (#40).
+ * litedbmodel v2 SCP — pooled async `SqlExecutor` factories for PG / MySQL (#40).
  *
  * The read-graph async execution model (`executeReadGraphAsync`) dispatches independent sibling
  * relations in bounded parallel via bc `runBehaviorAsync`. For that concurrency to become REAL
  * parallel DB I/O the driver seam must be an async CONNECTION POOL — each concurrent `exec` call
  * checks out a DISTINCT pooled connection. These factories adapt a `pg.Pool` / `mysql2` pool to the
- * {@link SqlExecutorAsync} seam.
+ * {@link SqlExecutor} seam.
  *
  * The read graph already renders the dialect placeholder form (`$N` for postgres, `?` for
  * MySQL/SQLite, via `renderPlaceholders`) and flattens params 1:1, so each executor is a THIN
@@ -17,7 +17,7 @@
  * force either into a consumer that only uses the sync better-sqlite3 conformance path.
  */
 
-import type { SqlExecutorAsync } from './static-bundle';
+import type { SqlExecutor } from './handler';
 import type { AsyncConnection, AsyncConnectionPool, Rows, RunInfo } from '../exec-context';
 import type { ResolvedConnectionConfig, PoolFactory, PoolCloser } from '../connection-routing';
 

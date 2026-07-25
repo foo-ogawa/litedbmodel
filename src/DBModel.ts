@@ -19,19 +19,16 @@ import { isConnectionError } from './connection-errors';
 // Import LazyRelation module (static import for Vitest compatibility)
 import { LazyRelationContext, type RelationType, type RelationConfig } from './LazyRelation';
 
-// Phase F-2 (#105): the SCP runtime bridge — re-points DBModel's methods onto the SCP compile + the
-// Phase A-E runtime (real tx / reader-writer routing / multi-DB / middleware / hard-limits). Wired for
-// the live pg/mysql dialects; sqlite + an uninitialized handler keep the v1 in-proc path (fallback).
+// Phase F-2 (#105): the SCP runtime bridge — puts DBModel's pooled execution on the Phase A-E runtime
+// (real tx / reader-writer routing / multi-DB / middleware). Wired for the live pg/mysql dialects;
+// sqlite + an uninitialized handler keep the v1 in-proc path. Every statement — a v1-built SELECT as
+// much as a compiled write bundle — reaches the DB through this ONE ctx seam.
 import {
   buildContextFromConfig,
-  conditionsToWhere,
-  executeReadAsync,
-  executeCountAsync,
   executeWriteAsync,
   compileCreateBundle,
   renderRawSql,
   type RuntimeContext,
-  type ReadAuthoringSpec,
   type DeriveColumnsOptions,
   type ModelClassLike as ModelLike,
 } from './scp/dbmodel-runtime';
@@ -41,7 +38,7 @@ import {
   runAsync as scpRunAsync,
   type AsyncExecutionContext,
 } from './scp/exec-context';
-import type { Scope } from 'behavior-contracts';
+import type { Scope } from 'behavior-contracts/runtime';
 
 // Transaction context stored in AsyncLocalStorage
 interface TransactionContext {
@@ -905,55 +902,11 @@ export abstract class DBModel {
     conditions: ConditionObject,
     options: SelectOptions = {}
   ): Promise<InstanceType<T>[]> {
-    // Phase F-2 (#105): route the common read through the SCP bundle path (compileReadBundle →
-    // executeBundleAsync on the routed reader ctx + middleware). Only the "plain" read is SCP-eligible
-    // (no custom CTE / join / tableName / append / forUpdate, not a QUERY view-model) — those complex
-    // shapes keep the v1 imperative path (byte-identical, unchanged). The SCP read returns RAW rows;
-    // `_createInstance` applies the model's own v1 `typeCastFromDB` (v1 read-contract parity).
-    const rt = this._getScpRuntime();
-    if (rt !== null && this._scpUsable() && this._isScpEligibleRead(options)) {
-      const rows = await this._scpSelectRaw(conditions, options, rt);
-      return this._instancesFromRows<T>(rows);
-    }
+    // A `find` shape is only known PER REQUEST (`{where:{age:{gt:x}}}`), so it is built imperatively —
+    // compile-free — by the v1 builder. It still reaches the DB through the SCP ctx seam: `query` →
+    // `execute` → `_scpRawExecute`, so routing, middleware and an ambient transaction pin all apply.
     const { sql, params } = this._buildSelectSQL(conditions, options);
     return this.query(sql, params);
-  }
-
-  /**
-   * Is a read SCP-eligible? Only the plain SELECT shape (conditions + order/group/limit/offset/select)
-   * lowers cleanly onto the F1 `findAuthoring`; a custom CTE / join / explicit tableName / append /
-   * FOR UPDATE / a QUERY view-model keeps the v1 imperative path (byte-identical, unchanged).
-   * @internal
-   */
-  protected static _isScpEligibleRead(options: SelectOptions): boolean {
-    if (this.isQueryBased()) return false;
-    // A `*` projection needs a concrete column list to type the SCP read; a raw model (no `@column`)
-    // can't supply one, so it keeps the v1 path. An explicit column list is always SCP-eligible.
-    const selectCols = options.select ?? this.SELECT_COLUMN;
-    if (selectCols === '*' && !this._hasDeclaredColumns()) return false;
-    return (
-      options.cte === undefined &&
-      options.join === undefined &&
-      options.joinParams === undefined &&
-      options.tableName === undefined &&
-      options.append === undefined &&
-      options.forUpdate !== true
-    );
-  }
-
-  /**
-   * Execute the SCP bundle read (find/findOne/findById), returning RAW driver rows. Applies FIND_FILTER
-   * (v1 parity: the model's default filter is AND-ed into the conditions). @internal
-   */
-  protected static async _scpSelectRaw<T extends typeof DBModel>(
-    this: T,
-    conditions: ConditionObject,
-    options: SelectOptions,
-    rt: RuntimeContext,
-  ): Promise<Record<string, unknown>[]> {
-    const bridge = conditionsToWhere(this._mergeFindFilter(conditions), this._getSqlCastFormatter());
-    const spec = this._readSpecFrom(options);
-    return executeReadAsync(this as unknown as ModelLike, 'find', spec, bridge, rt, this._scpColumnTypes());
   }
 
   /** Merge FIND_FILTER (the model's default filter) into a condition object (v1 `_buildSelectSQL` parity). */
@@ -961,39 +914,6 @@ export abstract class DBModel {
     if (!this.FIND_FILTER) return conditions;
     const filter = condsToRecord(this.FIND_FILTER) as ConditionObject;
     return { ...conditions, ...filter };
-  }
-
-  /** Build the SCP {@link ReadAuthoringSpec} from v1 {@link SelectOptions} (select/order/group/limit/offset). */
-  protected static _readSpecFrom(options: SelectOptions): ReadAuthoringSpec {
-    const selectCols = options.select ?? this.SELECT_COLUMN;
-    // A `*` projection is expanded to the model's declared `@column` DB column names — the SCP typed
-    // read needs a CONCRETE column list to type the row struct (a wildcard can't be typed). When the
-    // model declares no columns (a raw model), `*` stays as-is (that read then falls to the v1 path
-    // via _isScpEligibleRead's projection check, since an untyped `*` read cannot be SCP-typed).
-    const select = selectCols === '*'
-      ? this._modelColumnNames()
-      : String(selectCols).split(',').map((s) => s.trim());
-    const spec: ReadAuthoringSpec = { select };
-    const order = options.order ?? orderToString(this.DEFAULT_ORDER);
-    if (order) (spec as { order?: string }).order = typeof order === 'string' ? order : orderToString(order);
-    const group = options.group ?? this.getGroupByClause();
-    if (group) (spec as { group?: string }).group = group;
-    if (options.limit !== undefined) (spec as { limit?: number }).limit = options.limit;
-    if (options.offset !== undefined) (spec as { offset?: number }).offset = options.offset;
-    return spec;
-  }
-
-  /** The model's declared `@column` DB column names (for expanding a `*` projection). @internal */
-  protected static _modelColumnNames(): string[] {
-    const meta = getColumnMeta(this);
-    if (meta === undefined) return [];
-    return Array.from(meta.values()).map((m) => m.columnName);
-  }
-
-  /** Does the model declare any `@column` (⇒ a `*` read can be SCP-typed)? @internal */
-  protected static _hasDeclaredColumns(): boolean {
-    const meta = getColumnMeta(this);
-    return meta !== undefined && meta.size > 0;
   }
 
   /** Build model instances from raw rows, wiring the deferred relation context (v1 `query` parity). @internal */
@@ -1085,14 +1005,6 @@ export abstract class DBModel {
     conditions: ConditionObject,
     options: { tableName?: string } = {}
   ): Promise<number> {
-    // Phase F-2 (#105): the plain COUNT routes through the SCP bundle path (L.Count → executeBundleAsync
-    // on the routed reader). A QUERY view-model / explicit tableName keeps the v1 imperative path.
-    const rt = this._getScpRuntime();
-    if (rt !== null && this._scpUsable() && !this.isQueryBased() && options.tableName === undefined) {
-      const bridge = conditionsToWhere(this._mergeFindFilter(conditions), this._getSqlCastFormatter());
-      const rows = await executeCountAsync(this as unknown as ModelLike, bridge, rt, this._scpColumnTypes());
-      return parseInt(String(rows[0]?.count ?? 0), 10);
-    }
     const params: unknown[] = [];
     const isQueryBased = this.isQueryBased();
     const cteAlias = this.getCTEAlias();

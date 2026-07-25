@@ -16,7 +16,7 @@
  * THROWS via {@link parseProjectionColumn} + the coltype SSoT; never a boxed/untyped output.
  */
 
-import type { PortableType } from 'behavior-contracts';
+import type { PortableType } from 'behavior-contracts/runtime';
 import { sqlTypeToMaterializeClass, keyArrayElemScalar, arrayElementType, sqlTypeIsNotNull, type MaterializeClass, type ColumnTypeResolver } from '../coltype';
 import { IN_SENTINEL } from './tx';
 

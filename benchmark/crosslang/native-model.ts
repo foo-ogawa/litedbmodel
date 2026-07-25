@@ -34,7 +34,11 @@
 // the class with `--behavior`. Numbers are declared with bc's branded `Int` / `Float` (a bare `number`
 // is rejected as ambiguous); nullability follows the column declarations in `orm-domain.ts`.
 // ════════════════════════════════════════════════════════════════════════════
-import { behavior, leaf, type Int, type Float, type WireValue } from 'behavior-contracts';
+import { behavior, type Int, type Float, type WireValue } from 'behavior-contracts';
+// The op-agnostic leaf transports are declared ONCE, in the library (`src/scp/leaf-transport.ts`) —
+// the SSoT `@leaf static` catalog every authored / emitted litedbmodel model imports. The bench does
+// not re-declare them: a second declaration would be a second catalog.
+import { Db } from '../../src/scp/leaf-transport.js';
 
 // ── row types: the de-box targets (each is exactly one op's terminal declaration) ────────────────────
 /** `benchmark_users` projection — `id` is `INTEGER NOT NULL`, the rest nullable. */
@@ -62,20 +66,6 @@ interface TenantUserWithPosts { tenant_id: Float | null; user_id: Float | null; 
 // at the leaf-param boundary, so the bench harness passes native rows.
 interface NewUser { email: string; name: string }
 interface UserPatch { id: Int; name: string }
-
-/**
- * The three OP-AGNOSTIC leaf transports. Port names and semantics are the litedbmodel runtime's
- * (`src/scp/leaves.ts` executeSQL / pluck / group); the bodies are never executed — bc derives each
- * leaf's catalog entry from the signature alone.
- */
-export class Db {
-  /** The SOLE SQL transport. `write` selects run vs execute; `returning` keeps a RETURNING write on the row path. */
-  @leaf static executeSQL(sql: string, params: WireValue[], write: boolean, returning: boolean, bigint: boolean): WireValue[] { return []; }
-  /** Relation key extraction: the deduped key set over the ordered key-column tuple `col`. */
-  @leaf static pluck(rows: WireValue[], col: string[]): WireValue[] { return []; }
-  /** Relation shaping: nest `children` under each parent's `into`, matching `child[fk]` to `parent[pk]`. */
-  @leaf static group(parents: WireValue[], children: WireValue[], pk: string[], fk: string[], into: string, single: boolean): WireValue[] { return []; }
-}
 
 export class BenchSqlite {
   @behavior static findAll(): UserRow[] {

@@ -1,29 +1,24 @@
 /**
- * litedbmodel v2 SCP — public surface (WS1, #21).
+ * litedbmodel v2 SCP — public surface.
  *
- * The SQL-backend consumer layer over behavior-contracts (spec §1).
+ * The SQL-backend consumer layer over behavior-contracts (spec §1). litedbmodel supplies exactly four
+ * things and nothing else:
  *
- * ## CANONICAL bc integration (epic #43 / design #45): the `makeSQL` catalog leaf.
+ *  1. **The leaf transport declaration** — `Db` (`@leaf static executeSQL / pluck / group`), the ONE
+ *     `@leaf` catalog every authored / emitted model imports (`./leaf-transport`). `bc generate --from`
+ *     reads it; there is no second declaration anywhere in the repo.
+ *  2. **The leaf transport implementation** — `leafHandlers` / `leafHandlersAsync` (`./leaves`), the
+ *     handler map a bc-generated TS module's `bind(handlers)` / `bindAsync(handlers)` consumes. This is
+ *     the whole TS runtime seam: `bind(leafHandlers({ exec, dialect }))`.
+ *  3. **The tuned SQL** — the `./makesql` subtree (dialect SELECT / INSERT / UPDATE / DELETE / relation
+ *     / batch builders, byte-true to the v1 builders) and the write bundles + gate-first transaction
+ *     plans built on it.
+ *  4. **The language runtime** — the execution context (connection routing, middleware, transactions),
+ *     the relation grouping core, the column-type de-box SoT, and the typed-object read surface.
  *
- * The LOCKED minimal model is ONE behavior-contracts catalog component
- * **`makeSQL(sql, params, skip?)`** (like graphddb's `GetItem`/`Query`) + its handler
- * (bind params → execute SQL) + the compile that emits tuned dialect SQL text (reusing
- * the original tuned builders — byte-for-byte). A query is a COMPOSITION of `makeSQL`
- * components; a subquery is a NESTED `makeSQL` in a param slot. `= ANY`, `CROSS JOIN
- * LATERAL`, `UNNEST`, cast, batch shapes are all TEXT inside `sql` — never modeled.
- * bc supplies composition / value-eval / envelope / plan. The whole `./makesql`
- * subtree (re-exported below) is the recommended integration surface.
- *
- * ## Superseded (legacy) reduced path.
- *
- * The earlier abstract path (`ir.ts` FragmentTree + `WHERE_SLOT`, `relation.ts`
- * `RelationOp`, `compile-sqlite.ts` reduced SELECT/INSERT/UPDATE forms, `render.ts`,
- * `dialect.ts` strategy table) reduced the tuned SQL to a closed expression/relation-op
- * vocabulary and regressed the byte-parity the library is built on (see
- * `docs/proposal/v2-sql-parity-checklist.md`). It is SUPERSEDED by `./makesql`: SQL
- * structure now lives as text inside `makeSQL`, not as IR "kinds". The legacy modules
- * remain exported (below) only for the historical WS test-suite; new code must use
- * `./makesql`.
+ * WIRING IS AUTOMATIC. A behavior is declared in TypeScript, bc compiles it, and the only per-language
+ * hand-wiring is the harness calling the generated module's method with the handler map above. There is
+ * no runtime IR, no programmatic compile, and no runtime behavior dispatch in this package.
  */
 
 // ── CANONICAL: the LOCKED `makeSQL` bc integration (epic #43 / design #45). ──────────
@@ -58,7 +53,6 @@ export {
   compileCompositeKeyUnlimited,
   compileCompositeKeyStaticUnlimited,
   compileCompositeKeyLimited,
-  compileSelectNode,
   configurePgDeboxTypeParsers,
   mysqlDeboxPoolOptions,
   pgConnectionPool,
@@ -73,11 +67,8 @@ export type {
   Dialect as MakeSQLDialect,
   SqlExecutor,
   SqlExecutorSync,
-  SqlExecutorAsync,
   SelectDesc as MakeSQLSelectDesc,
   RelationCompileBase,
-  StaticStatement,
-  ValueSpec,
   PgPoolLike,
   MysqlPoolLike,
   PgTypesLike,
@@ -85,84 +76,19 @@ export type {
   Mysql2ModuleLike,
 } from './makesql';
 
-// The op-independent runtime leaves (#141): the SOLE execution surface — `executeSQL` transport +
-// `pluck`/`group` relation util leaves (defined once via bc `defineLeaf`/`behaviorComponents`). The
-// retired 8-leaf catalog (`Select`/`Insert`/…) + `catalogComponents` are GONE.
-export { executeSQL, pluck, group, LEAVES, leafComponents, LEAF_TRANSPORT_SYMBOLS, spliceWhere, assembleDynamicWhere, prepareSql } from './leaves';
-export type { LeafContext, DynamicWhereFrag } from './leaves';
+// The op-INDEPENDENT leaf transport. `Db` is the `@leaf static` DECLARATION every authored / emitted
+// model imports (the single catalog `bc generate --from` reads); `leafHandlers`/`leafHandlersAsync` are
+// its executable bodies, injected into a generated module's `bind`/`bindAsync`.
+export { Db } from './leaf-transport';
+export { executeSQL, executeSQLAsync, pluck, group, leafHandlers, leafHandlersAsync, LEAF_TRANSPORT_SYMBOLS, prepareSql } from './leaves';
+export type { LeafContext, AsyncLeafContext } from './leaves';
 
-// CQRS effect derivation (spec §2.4 — graph-derived from the op-independent leaves' `write` intent).
-export { deriveContractEffect } from './authoring';
-export type { ContractEffect } from './authoring';
 
 // Dialect strategy table (WS6, #26 — the SSoT for PG/MySQL/SQLite SQL divergences + `?`→`$N`).
 export { dialectFor, toDollarPlaceholders, SQLITE, POSTGRES, MYSQL } from './dialect';
 export type { Dialect, DialectName } from './dialect';
 
-// Portability guard (closed Expression IR set only)
-export {
-  assertExprPortable,
-  assertComponentPortable,
-  assertComponentGraphPortable,
-} from './guard';
-export type { ExprNode } from './guard';
 
-// Authoring Parse (spec §2.4 / §7 / §9) — SemanticBehavior declaration + eager public-API
-// path → one internal Component-graph IR.
-export {
-  components,
-  publishBehaviors,
-  compileEager,
-} from './authoring';
-export type {
-  ComponentFns,
-  BehaviorMethodSpec,
-  BehaviorModelContract,
-  FindGuard,
-  PublishBehaviorsOptions,
-  ModelColumns,
-  TypedModelClass,
-  EagerBehavior,
-  Component,
-  ComponentGraphIR,
-  MapNode,
-  ComponentRefNode,
-} from './authoring';
-
-// SQL WHERE authoring helpers (closed-set encodings the bridge decodes).
-export {
-  whereEq,
-  whereNe,
-  whereLt,
-  whereLe,
-  whereGt,
-  whereGe,
-  whereIsNull,
-  whereIn,
-  inColumn,
-  // Additive where-primitives (V0 R2/R3): live-reachable, v1-sourced SQL.
-  whereBetween,
-  whereLike,
-  whereILike,
-  whereCast,
-  whereDynamic,
-  whereImmediate,
-  whereTupleIn,
-  whereInSubquery,
-  whereExists,
-  // Phase E-1 (#97): typed subquery / parentRef authoring sugar (TS-only ergonomics; lowers to
-  // whereInSubquery / whereExists — no new IR).
-  col,
-  parentRef,
-  inSubquery,
-  notInSubquery,
-  exists,
-  notExists,
-  // QUERY view-model authoring (#98): lowers a declared QUERY onto the Select cte/cteParams ports.
-  queryView,
-} from './authoring-sql';
-export type { ColumnRef, ParentRefValue, SubqueryCondition, KeyPair, CompositeKeyPairs } from './authoring-sql';
-export type { QuerySource, QueryViewOptions } from './authoring-sql';
 
 // Error Mapping (spec §11 item 5): driver error → SCP Failure + Policy Kind.
 export { mapSqliteError, SqlFailure, LimitExceededError } from './errors';
@@ -177,22 +103,15 @@ export type { SqlFailureKind, LimitExceededContext } from './errors';
 export { setLimitConfig, getLimitConfig, resetLimitConfig, resolveFindHardLimit, resolveHasManyHardLimit } from './limit-config';
 export type { LimitConfig } from './limit-config';
 
-// FIND_FILTER fail-closed authoring guard (#47 Finding B / plan R8): a model declaring an
-// implicit per-model scope predicate cannot be SCP-compiled without folding it into the
-// authored WHERE (fail-closed; the SCP compile has no model context to auto-apply it).
-export { assertFindFilterFolded, findFilterKeys, FindFilterLeakError } from './find-filter-guard';
-export type { FindFilterSource } from './find-filter-guard';
 
 // Column type system (spec §4.1; #58): SQL type → bc outType scalar, and the schema/DDL SoT
 // resolver that types a SELECT projection for typed (de-boxed) codegen. Fail-closed throughout.
 export { sqlTypeToBcScalar, sqlTypeToMaterializeClass, materializeCell, materializeClassOrUndefined, parseSchemaColumnTypes, schemaColumnTypeResolver, materializeResolverFromColumnMap, failClosedMaterializeResolverFromColumnMap, columnTypeResolverFromColumnMap } from './coltype';
 export type { BcScalar, MaterializeClass, ColumnTypeResolver, MaterializeResolver } from './coltype';
 
-// Thin TS runtime (spec §3 / §10 / §11): the op-independent leaf graph (`executeSQL`/`pluck`/`group`)
-// runs via bc `bindBehaviors` — `executeBehavior`/`read` are the SOLE ts-runtime read seam (#141). The
-// catalog read-bundle surface (`compileBundle`/`compileReadGraph`) is retired (#143).
-export { executeBehavior, read } from './runtime';
-export type { SqliteDb, ExecuteOptions, SqlBundle, ReadRuntimeOptions } from './runtime';
+// The write bundle surface: a compiled write + its derived, gate-first transaction plan (pure JSON,
+// executed identically by all five language runtimes).
+export type { SqliteDb, ExecuteOptions, SqlBundle } from './write-bundle';
 
 // ── Phase A (#75): the ExecutionContext + central execute/run seam + per-execution connection
 // ownership. The CONTRACT-DEFINING artifact the native ports (#76-79) follow. All runtime SQL
@@ -321,10 +240,6 @@ export {
 } from './tx-options';
 export type { IsolationLevel, TransactionOptions, ResolvedTxOptions } from './tx-options';
 
-// The ASYNC PG / MySQL production read execution model (#40): the op-independent leaf graph run via
-// bc `bindBehaviors().runAsync` over the `executeSQL` leaf's async seam (per-execution ownership).
-export { executeBehaviorAsync } from './runtime';
-export type { AsyncExecuteOptions } from './runtime';
 
 // Write-time relations (WS5, #25 — spec §6): entityWrites/edgeWrites declaration vocabulary,
 // the gate-first transaction-plan derivation, and the 1-tx real-SQLite runtime.
@@ -368,17 +283,17 @@ export type {
 } from './makesql';
 
 // The Command bundle + 1-tx execution surface (WS5 — the write path of §2.3 / §6).
-export { compileWriteBundle, executeCommand, executeTransactionBundle } from './runtime';
+export { compileWriteBundle, executeTransactionBundle } from './write-bundle';
 
 // Composite (multi-write) Command surface (WS8a, #28 — spec §6 nested write / §14 tx-DAG derivation):
 // several named base writes with data dependencies → ONE topologically-ordered gate-first tx plan.
-export { compileCompositeWriteBundle, executeCompositeCommand } from './runtime';
-export type { CompositeWriteEntry } from './runtime';
+export { compileCompositeWriteBundle } from './write-bundle';
+export type { CompositeWriteEntry } from './write-bundle';
 
 // Batch writes (createMany / updateMany / deleteMany): ONE logical op → N grouped statements lowered
 // to a gate-free tx plan (executed by the SAME multi-statement tx loop in all 5 runtimes). The
 // batch SQL is byte-copied from the v1 builders (compileInsertMany/compileUpdateMany/compileDeleteMany).
-export { compileCreateManyBundle, compileUpdateManyBundle, compileDeleteManyBundle } from './runtime';
+export { compileCreateManyBundle, compileUpdateManyBundle, compileDeleteManyBundle } from './write-bundle';
 export { compileDeleteMany, compileInsertMany } from './makesql';
 // dbCast: the column-type cast marker the makeSQL compilers thread into WHERE/SET (spec §4.1).
 // Re-exported so a bundle consumer builds the SAME DBCast instance the inlined compilers recognise
@@ -421,65 +336,18 @@ export {
   tableNameOf,
   COLUMN_FAMILY_SQL_TYPE,
   DEFAULT_UNCAST_SQL_TYPE,
-  findAuthoring,
-  countAuthoring,
-  compileReadContract,
-  emitRead,
-  emitWrite,
-  emitBatchWrite,
-  createAuthoring,
-  updateAuthoring,
-  deleteAuthoring,
-  relationReadAuthoring,
-  relationKeyTypeResolver,
-  compileCommandBundle,
   compileCreateBundle,
   compileUpdateBundle,
   compileDeleteBundle,
   modelColumnResolver,
+  relationKeyTypeResolver,
   deriveRelationDecls,
   relationDeclOf,
   compileRelationOps,
 } from './decorator-adapter';
-export type {
-  ModelClassLike,
-  DeriveColumnsOptions,
-  ReadAuthoringSpec,
-  InsertAuthoringSpec,
-} from './decorator-adapter';
+export type { ModelClassLike, DeriveColumnsOptions, ModelColumns, KeyTypeResolver } from './decorator-adapter';
 
-// Re-export bc's shared authoring vocabulary so authors import the whole surface from
-// litedbmodel (leaf vocabulary is the Catalog; expressions/structured control are bc's —
-// C2). There is NO litedbmodel-local authoring opcode beyond the Catalog.
-export {
-  SemanticBehavior,
-  behavior,
-  when,
-  concat,
-  add,
-  sub,
-  mul,
-  div,
-  mod,
-  neg,
-  eq,
-  ne,
-  lt,
-  le,
-  gt,
-  ge,
-  and,
-  or,
-  not,
-  coalesce,
-  len,
-  opt,
-} from 'behavior-contracts';
-export type { In, Recorded, BehaviorClass } from 'behavior-contracts';
-
-// Re-export bc's native-codegen surface (#141 native step6/7): litedbmodel's generation script authors
-// the ops on the SCP surface (`emitRead`/`emitWrite`/relation `pluck`/`group`) and delegates ALL module
-// generation to bc `generateModule` (no litedbmodel-local generator — C4). The op-independent leaf
-// transport is declared via `leafTransport` (executeSQL→execute_sql / pluck→pluck_keys / group→group_children).
-export { generateModule, GeneratorFailure } from 'behavior-contracts';
-export type { GenerateOptions, GeneratedModule, LeafTransportOptions } from 'behavior-contracts';
+// The bc AUTHORING markers, re-exported so a consumer declares its endpoints from one import. The
+// bodies are ordinary TypeScript; `bc generate --from <file> --behavior <Class>` reads the source.
+export { behavior, leaf, opt, refsConnection, AuthoringFailure } from 'behavior-contracts';
+export type { Int, Float, WireValue, AuthoringFailureCode } from 'behavior-contracts';

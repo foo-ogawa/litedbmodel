@@ -36,9 +36,9 @@
  * fields, so the empty-obj element type is exact (not an assumed default).
  */
 
-import type { PortableType, PortableScalarType } from 'behavior-contracts';
+import type { PortableType, PortableScalarType } from 'behavior-contracts/runtime';
 import { sqlTypeToBcScalar, type BcScalar, type ColumnTypeResolver } from '../coltype';
-import type { SqlBundle } from '../runtime';
+import type { SqlBundle } from '../write-bundle';
 import type { TransactionPlan, TxStatement } from './tx';
 
 /** Identity narrow (BcScalar is exactly bc's PortableScalarType); DATE→string happens in coltype. */

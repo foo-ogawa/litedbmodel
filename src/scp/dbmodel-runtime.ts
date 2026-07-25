@@ -1,37 +1,27 @@
 /**
  * litedbmodel v2 SCP — the DBModel ActiveRecord ↔ SCP RUNTIME bridge (Phase F-2, epic #74, issue #105).
  *
- * F1 (`decorator-adapter.ts`) built the standalone decorator→SCP authoring adapter; THIS module (F2)
- * is the runtime glue that re-points `DBModel`'s public methods (`find`/`create`/`transaction`/…) off
- * the imperative SQL-string path onto that adapter → the SCP compile → the Phase A-E runtime
- * (`exec-context.ts` / `connection-routing.ts` / `middleware.ts` / `tx-options.ts` / `limit-config.ts`).
- *
- * It owns three concerns:
+ * The runtime glue that puts `DBModel`'s pooled execution on the Phase A-E substrate
+ * (`exec-context.ts` / `connection-routing.ts` / `middleware.ts` / `tx-options.ts`). It owns two
+ * concerns:
  *
  *  1. **Connection wiring** ({@link buildContextFromConfig}) — a v1 `DBConfig` (+ `writerConfig` /
  *     writer-sticky options) → a {@link PooledAsyncContext} over REAL pg / mysql2 pools (via
- *     `pgPoolFactory` / `mysqlPoolFactory` + `buildRoutingConfig`), plus the reader executor
- *     (`pgPoolExecutor` / `mysqlPoolExecutor`) and a `close()`. This is the C3
- *     `setConfig → ConnectionRegistry → pool` path.
+ *     `pgPoolFactory` / `mysqlPoolFactory` + `buildRoutingConfig`) and a `close()`. This is the C3
+ *     `setConfig → ConnectionRegistry → pool` path. Every statement DBModel issues — a v1-built SELECT
+ *     as much as a compiled write bundle — goes through this ONE ctx, so routing, middleware and an
+ *     ambient transaction pin apply uniformly.
  *
- *  2. **v1-conditions → SCP where bridge** ({@link conditionsToWhere}) — a v1 `ConditionObject` (what
- *     `condsToRecord` produces) is compiled by the ORIGINAL `DBConditions.compile()` to its byte-true
- *     `(whereSql, params)`, then carried onto the SCP where port as ONE {@link whereRawPredicate}
- *     member (values ride as SCP input, not baked literals). One member covers EVERY v1 condition
- *     shape (eq / IN / custom-op / OR / subquery / EXISTS / cast / null / boolean) — the text is v1's,
- *     so the emitted WHERE is byte-identical by construction.
+ *  2. **Write execution** ({@link executeWriteAsync}) — run a compiled write bundle's transaction plan
+ *     on the writer through the SCP tx runtime (write=tx guard).
  *
- *  3. **Read / write execution** ({@link executeReadAsync} / {@link executeCountAsync} /
- *     {@link executeWriteAsync}) — compile the model's bundle and run it through `executeBundleAsync`
- *     (reads, routed reader ctx) / `executeTransactionAsync` (writes, writer, write=tx guard). Both go
- *     through the ctx seam, so Phase D middleware + Phase C routing + an ambient Phase B transaction all
- *     apply. Phase E hard-limits stay enforced at the `DBModel` method layer (v1 parity), unchanged.
+ * There is NO runtime read-compile here. A read whose SHAPE is fixed is declared on the `@behavior` /
+ * `@leaf` authoring surface and lowered by `bc generate`; a read whose shape is only known per request
+ * (`find({where:{age:{gt:x}}})`) runs the v1 imperative builder — compile-free — and reaches the DB
+ * through the SAME ctx seam via `DBModel.execute`.
  *
  * The public API + README code are UNCHANGED: `DBModel`'s method signatures / return shapes are
- * identical; this module is an INTERNAL execution substrate. Reads return RAW driver rows (no SCP
- * de-box result mangling — DBModel's own `_createInstance` → `typeCastFromDB` casts them, v1 parity);
- * the model's `static columns` (from `deriveModelColumns` via the decorator `baseSqlType`, #105 option
- * B) type the read graph so the SCP typed-read gate is satisfied and BIGINT/DATE arrive coercible.
+ * identical; this module is an INTERNAL execution substrate.
  */
 
 import 'reflect-metadata';
@@ -47,32 +37,19 @@ import {
   pgPoolFactory,
   mysqlPoolFactory,
 } from './makesql/pool-executor';
-import { executeBehaviorAsync, type SqlBundle } from './runtime';
+import type { SqlBundle } from './write-bundle';
 import { executeTransactionAsync, type TransactionResult } from './makesql/tx';
 import type { TransactionOptions } from './tx-options';
 import {
-  findAuthoring,
-  countAuthoring,
-  createAuthoring,
-  updateAuthoring,
-  deleteAuthoring,
-  compileReadContract,
-  compileCommandBundle,
   compileCreateBundle,
   compileUpdateBundle,
   compileDeleteBundle,
-  type ReadAuthoringSpec,
-  type InsertAuthoringSpec,
   type ModelClassLike,
   type DeriveColumnsOptions,
 } from './decorator-adapter';
-import { entityWrites } from './writes';
-import { whereRawPredicate } from './authoring-sql';
 import { renderPlaceholders } from './makesql/handler';
-import type { Recorded, Scope, Value } from 'behavior-contracts';
+import type { Scope } from 'behavior-contracts/runtime';
 import type { DialectName } from './dialect';
-import { DBConditions, type ConditionObject } from '../DBConditions';
-import type { SqlCastFormatter } from '../DBValues';
 
 // ── 1. Connection wiring (setConfig → PooledAsyncContext over real pools) ────────────────────────
 
@@ -193,83 +170,7 @@ export function buildContextFromConfig(config: RuntimeDbConfig, options: Runtime
   return runtime;
 }
 
-// ── 2. v1-conditions → SCP where bridge (one raw-predicate member, byte-true) ────────────────────
-
-/** The where-fragment builder + the runtime input Scope keyed by the refs it emits. */
-export interface WhereBridge {
-  /** The `($) => readonly unknown[]` where-fragment list the eager `find`/`count` authoring consumes. */
-  readonly where: ($: Recorded) => readonly unknown[];
-  /** The runtime input Scope carrying the bound values under the ref keys the where fragments read. */
-  readonly input: Record<string, Value>;
-  /** True when the condition object produced no WHERE (an unconditional read). */
-  readonly empty: boolean;
-}
-
-/**
- * Bridge a v1 {@link ConditionObject} into the SCP where-fragment builder + input Scope. The ENTIRE
- * condition object is compiled ONCE by the ORIGINAL `DBConditions.compile()` — the SAME builder the v1
- * imperative path uses — to its byte-true `(whereSql, params)` (with `?` placeholders). That whole
- * predicate is carried onto the SCP where port as ONE {@link whereRawPredicate} member; the bound
- * values ride in the returned `input` Scope under stable slot names (`p0`, `p1`, …) referenced by the
- * fragment's value-specs, so they flow as normal SCP input (never baked literals) and the makesql
- * render defers them 1:1 with the placeholders. Covers EVERY v1 condition shape with no per-shape
- * re-authoring — the text is v1's, so parity is by construction. A `formatter` (driver SQL-cast) is
- * threaded so `dbCast`/UUID casts render per-dialect exactly as v1.
- */
-export function conditionsToWhere(conditions: ConditionObject, formatter?: SqlCastFormatter): WhereBridge {
-  const params: unknown[] = [];
-  const sql = new DBConditions(conditions).compile(params, formatter);
-  if (sql === '') {
-    return { where: () => [], input: {}, empty: true };
-  }
-  const input: Record<string, Value> = {};
-  const slots = params.map((p, i) => {
-    const key = `p${i}`;
-    input[key] = p as Value;
-    return key;
-  });
-  return {
-    where: ($: Recorded) => [
-      whereRawPredicate($, { sql, params: slots.map((k) => ($ as unknown as Record<string, Recorded>)[k]) }),
-    ],
-    input,
-    empty: false,
-  };
-}
-
-// ── 3. Read / write execution (bundle → executeBundleAsync / executeTransactionAsync) ────────────
-
-/** Compile + run a read (find/findOne/findById) as a routed reader through the SCP runtime. */
-export async function executeReadAsync(
-  model: ModelClassLike,
-  method: string,
-  spec: ReadAuthoringSpec,
-  bridge: WhereBridge,
-  ctx: RuntimeContext,
-  columnsOptions?: DeriveColumnsOptions,
-): Promise<Record<string, unknown>[]> {
-  const table = tableOf(model);
-  const fullSpec: ReadAuthoringSpec = { ...spec, where: bridge.empty ? undefined : bridge.where };
-  // #141 async read: author the op-independent leaf graph (contract) and run it via the async leaf
-  // path (`bindBehaviors().runAsync` over the `PooledAsyncContext`), superseding the retired
-  // ReadGraph/`executeReadGraphAsync` bundle path.
-  const contract = compileReadContract(model, method, findAuthoring(table, fullSpec, ctx.dialect), ctx.dialect, columnsOptions);
-  const out = await executeBehaviorAsync(contract, bridge.input as Scope, { execAsync: ctx.ctx, entry: method, dialect: ctx.dialect });
-  return out as unknown as Record<string, unknown>[];
-}
-
-/** Compile + run a count as a routed reader. Returns the raw `[{ count }]` rows. */
-export async function executeCountAsync(
-  model: ModelClassLike,
-  bridge: WhereBridge,
-  ctx: RuntimeContext,
-  columnsOptions?: DeriveColumnsOptions,
-): Promise<Record<string, unknown>[]> {
-  const table = tableOf(model);
-  const contract = compileReadContract(model, 'count', countAuthoring(table, bridge.empty ? undefined : bridge.where, ctx.dialect), ctx.dialect, columnsOptions);
-  const out = await executeBehaviorAsync(contract, bridge.input as Scope, { execAsync: ctx.ctx, entry: 'count', dialect: ctx.dialect });
-  return out as unknown as Record<string, unknown>[];
-}
+// ── 2. Write execution (bundle → executeTransactionAsync) ───────────────────────────────────────
 
 /** Run a write bundle's transaction plan on the writer through the SCP tx runtime (write=tx guard). */
 export function executeWriteAsync(
@@ -284,11 +185,6 @@ export function executeWriteAsync(
   return executeTransactionAsync(ctx.ctx, bundle.transaction, input, ctx.dialect, options);
 }
 
-/** The effective table name for a decorated model (v1 `@model` rule). */
-function tableOf(model: ModelClassLike): string {
-  return model.TABLE_NAME ?? model.name.toLowerCase();
-}
-
 /**
  * Render a v1-built raw SQL string (with `?` placeholders) to the ctx dialect's placeholder form for
  * the escape-hatch seam path: `postgres` renumbers `?`→`$N` (string-literal-aware, via the SAME
@@ -300,9 +196,6 @@ export function renderRawSql(sql: string, dialect: DialectName): string {
   return renderPlaceholders(sql, dialect === 'postgres' ? 'postgres' : dialect === 'mysql' ? 'mysql' : 'sqlite');
 }
 
-// Re-export the authoring builders so DBModel imports one module.
-export {
-  findAuthoring, countAuthoring, createAuthoring, updateAuthoring, deleteAuthoring,
-  compileCommandBundle, compileCreateBundle, compileUpdateBundle, compileDeleteBundle, entityWrites,
-};
-export type { ReadAuthoringSpec, InsertAuthoringSpec, ModelClassLike, DeriveColumnsOptions };
+// Re-export the write-bundle compilers so DBModel imports one module.
+export { compileCreateBundle, compileUpdateBundle, compileDeleteBundle };
+export type { ModelClassLike, DeriveColumnsOptions };
