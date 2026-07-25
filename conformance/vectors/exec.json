@@ -2333,6 +2333,554 @@
       "expectedCap": null
     },
     {
+      "name": "createTagsReturning: batch INSERT … RETURNING returns every created row [sqlite]",
+      "kind": "exec",
+      "dialect": "sqlite",
+      "entry": "createTagsReturning",
+      "input": {
+        "rows": [
+          {
+            "id": 105,
+            "post_id": 11,
+            "label": "p"
+          },
+          {
+            "id": 106,
+            "post_id": 12,
+            "label": "q"
+          }
+        ]
+      },
+      "case": "createTagsReturning: batch INSERT … RETURNING returns every created row",
+      "expectedStatements": [
+        {
+          "sql": "INSERT INTO conf_tags (id, label, post_id) SELECT json_extract(value, '$.id'), json_extract(value, '$.label'), json_extract(value, '$.post_id') FROM json_each(?) RETURNING id, label",
+          "params": [
+            "[{\"id\":105,\"post_id\":11,\"label\":\"p\"},{\"id\":106,\"post_id\":12,\"label\":\"q\"}]"
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "id": 105,
+          "label": "p"
+        },
+        {
+          "id": 106,
+          "label": "q"
+        }
+      ],
+      "expectedDbState": [
+        {
+          "query": "SELECT id, post_id, label FROM conf_tags ORDER BY id",
+          "rows": [
+            {
+              "id": 100,
+              "post_id": 10,
+              "label": "greeting"
+            },
+            {
+              "id": 101,
+              "post_id": 10,
+              "label": "first"
+            },
+            {
+              "id": 102,
+              "post_id": 12,
+              "label": "world"
+            },
+            {
+              "id": 105,
+              "post_id": 11,
+              "label": "p"
+            },
+            {
+              "id": 106,
+              "post_id": 12,
+              "label": "q"
+            }
+          ]
+        }
+      ],
+      "expectedCap": null
+    },
+    {
+      "name": "createTagsReturning: batch INSERT … RETURNING returns every created row [postgres]",
+      "kind": "exec",
+      "dialect": "postgres",
+      "entry": "createTagsReturning",
+      "input": {
+        "rows_id": [
+          105,
+          106
+        ],
+        "rows_post_id": [
+          11,
+          12
+        ],
+        "rows_label": [
+          "p",
+          "q"
+        ]
+      },
+      "case": "createTagsReturning: batch INSERT … RETURNING returns every created row",
+      "expectedStatements": [
+        {
+          "sql": "INSERT INTO conf_tags (id, label, post_id) SELECT v.id, v.label, v.post_id FROM UNNEST($1::int[], $2::text[], $3::int[]) AS v(id, label, post_id) RETURNING id, label",
+          "params": [
+            [
+              105,
+              106
+            ],
+            [
+              "p",
+              "q"
+            ],
+            [
+              11,
+              12
+            ]
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "id": 105,
+          "label": "p"
+        },
+        {
+          "id": 106,
+          "label": "q"
+        }
+      ],
+      "expectedDbState": [
+        {
+          "query": "SELECT id, post_id, label FROM conf_tags ORDER BY id",
+          "rows": [
+            {
+              "id": 100,
+              "post_id": 10,
+              "label": "greeting"
+            },
+            {
+              "id": 101,
+              "post_id": 10,
+              "label": "first"
+            },
+            {
+              "id": 102,
+              "post_id": 12,
+              "label": "world"
+            },
+            {
+              "id": 105,
+              "post_id": 11,
+              "label": "p"
+            },
+            {
+              "id": 106,
+              "post_id": 12,
+              "label": "q"
+            }
+          ]
+        }
+      ],
+      "expectedCap": null
+    },
+    {
+      "name": "createTagsReturning: batch INSERT … RETURNING returns every created row [mysql]",
+      "kind": "exec",
+      "dialect": "mysql",
+      "entry": "createTagsReturning",
+      "input": {
+        "rows": [
+          {
+            "id": 105,
+            "post_id": 11,
+            "label": "p"
+          },
+          {
+            "id": 106,
+            "post_id": 12,
+            "label": "q"
+          }
+        ]
+      },
+      "case": "createTagsReturning: batch INSERT … RETURNING returns every created row",
+      "expectedStatements": [
+        {
+          "sql": "INSERT INTO conf_tags (id, label, post_id) SELECT JSON_UNQUOTE(jt.id), JSON_UNQUOTE(jt.label), JSON_UNQUOTE(jt.post_id) FROM JSON_TABLE(?, '$[*]' COLUMNS(id JSON PATH '$.id', label JSON PATH '$.label', post_id JSON PATH '$.post_id')) jt RETURNING id, label /*scp:pk=id;ai=*/",
+          "params": [
+            "[{\"id\":105,\"post_id\":11,\"label\":\"p\"},{\"id\":106,\"post_id\":12,\"label\":\"q\"}]"
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "id": 105,
+          "label": "p"
+        },
+        {
+          "id": 106,
+          "label": "q"
+        }
+      ],
+      "expectedDbState": [
+        {
+          "query": "SELECT id, post_id, label FROM conf_tags ORDER BY id",
+          "rows": [
+            {
+              "id": 100,
+              "post_id": 10,
+              "label": "greeting"
+            },
+            {
+              "id": 101,
+              "post_id": 10,
+              "label": "first"
+            },
+            {
+              "id": 102,
+              "post_id": 12,
+              "label": "world"
+            },
+            {
+              "id": 105,
+              "post_id": 11,
+              "label": "p"
+            },
+            {
+              "id": 106,
+              "post_id": 12,
+              "label": "q"
+            }
+          ]
+        }
+      ],
+      "expectedCap": null
+    },
+    {
+      "name": "relabelTagsReturning: batch UPDATE … RETURNING returns every updated row [sqlite]",
+      "kind": "exec",
+      "dialect": "sqlite",
+      "entry": "relabelTagsReturning",
+      "input": {
+        "rows": [
+          {
+            "id": 100,
+            "label": "re-100"
+          },
+          {
+            "id": 102,
+            "label": "re-102"
+          }
+        ]
+      },
+      "case": "relabelTagsReturning: batch UPDATE … RETURNING returns every updated row",
+      "expectedStatements": [
+        {
+          "sql": "UPDATE conf_tags SET label = (SELECT json_extract(je.value, '$.label') FROM json_each(?) je WHERE json_extract(je.value, '$.id') = conf_tags.id LIMIT 1) WHERE id IN (SELECT json_extract(value, '$.id') FROM json_each(?)) RETURNING id, label",
+          "params": [
+            "[{\"id\":100,\"label\":\"re-100\"},{\"id\":102,\"label\":\"re-102\"}]",
+            "[{\"id\":100,\"label\":\"re-100\"},{\"id\":102,\"label\":\"re-102\"}]"
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "id": 100,
+          "label": "re-100"
+        },
+        {
+          "id": 102,
+          "label": "re-102"
+        }
+      ],
+      "expectedDbState": [
+        {
+          "query": "SELECT id, post_id, label FROM conf_tags ORDER BY id",
+          "rows": [
+            {
+              "id": 100,
+              "post_id": 10,
+              "label": "re-100"
+            },
+            {
+              "id": 101,
+              "post_id": 10,
+              "label": "first"
+            },
+            {
+              "id": 102,
+              "post_id": 12,
+              "label": "re-102"
+            }
+          ]
+        }
+      ],
+      "expectedCap": null
+    },
+    {
+      "name": "relabelTagsReturning: batch UPDATE … RETURNING returns every updated row [postgres]",
+      "kind": "exec",
+      "dialect": "postgres",
+      "entry": "relabelTagsReturning",
+      "input": {
+        "rows_id": [
+          100,
+          102
+        ],
+        "rows_label": [
+          "re-100",
+          "re-102"
+        ]
+      },
+      "case": "relabelTagsReturning: batch UPDATE … RETURNING returns every updated row",
+      "expectedStatements": [
+        {
+          "sql": "UPDATE conf_tags AS t SET label = v.label FROM UNNEST($1::int[], $2::text[]) AS v(id, label) WHERE t.id = v.id RETURNING t.id, t.label",
+          "params": [
+            [
+              100,
+              102
+            ],
+            [
+              "re-100",
+              "re-102"
+            ]
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "id": 100,
+          "label": "re-100"
+        },
+        {
+          "id": 102,
+          "label": "re-102"
+        }
+      ],
+      "expectedDbState": [
+        {
+          "query": "SELECT id, post_id, label FROM conf_tags ORDER BY id",
+          "rows": [
+            {
+              "id": 100,
+              "post_id": 10,
+              "label": "re-100"
+            },
+            {
+              "id": 101,
+              "post_id": 10,
+              "label": "first"
+            },
+            {
+              "id": 102,
+              "post_id": 12,
+              "label": "re-102"
+            }
+          ]
+        }
+      ],
+      "expectedCap": null
+    },
+    {
+      "name": "relabelTagsReturning: batch UPDATE … RETURNING returns every updated row [mysql]",
+      "kind": "exec",
+      "dialect": "mysql",
+      "entry": "relabelTagsReturning",
+      "input": {
+        "rows": [
+          {
+            "id": 100,
+            "label": "re-100"
+          },
+          {
+            "id": 102,
+            "label": "re-102"
+          }
+        ]
+      },
+      "case": "relabelTagsReturning: batch UPDATE … RETURNING returns every updated row",
+      "expectedStatements": [
+        {
+          "sql": "UPDATE conf_tags AS u JOIN JSON_TABLE(?, '$[*]' COLUMNS(id JSON PATH '$.id', label JSON PATH '$.label')) AS v ON u.id = JSON_UNQUOTE(v.id) SET u.label = JSON_UNQUOTE(v.label) RETURNING id, label /*scp:pk=id;ai=*/",
+          "params": [
+            "[{\"id\":100,\"label\":\"re-100\"},{\"id\":102,\"label\":\"re-102\"}]"
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "id": 100,
+          "label": "re-100"
+        },
+        {
+          "id": 102,
+          "label": "re-102"
+        }
+      ],
+      "expectedDbState": [
+        {
+          "query": "SELECT id, post_id, label FROM conf_tags ORDER BY id",
+          "rows": [
+            {
+              "id": 100,
+              "post_id": 10,
+              "label": "re-100"
+            },
+            {
+              "id": 101,
+              "post_id": 10,
+              "label": "first"
+            },
+            {
+              "id": 102,
+              "post_id": 12,
+              "label": "re-102"
+            }
+          ]
+        }
+      ],
+      "expectedCap": null
+    },
+    {
+      "name": "removeTagsReturning: batch DELETE … RETURNING returns every removed row [sqlite]",
+      "kind": "exec",
+      "dialect": "sqlite",
+      "entry": "removeTagsReturning",
+      "input": {
+        "ids": [
+          100,
+          101
+        ]
+      },
+      "case": "removeTagsReturning: batch DELETE … RETURNING returns every removed row",
+      "expectedStatements": [
+        {
+          "sql": "DELETE FROM conf_tags WHERE id IN (SELECT value FROM json_each(?)) RETURNING id, label",
+          "params": [
+            "[100,101]"
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "id": 100,
+          "label": "greeting"
+        },
+        {
+          "id": 101,
+          "label": "first"
+        }
+      ],
+      "expectedDbState": [
+        {
+          "query": "SELECT id, post_id, label FROM conf_tags ORDER BY id",
+          "rows": [
+            {
+              "id": 102,
+              "post_id": 12,
+              "label": "world"
+            }
+          ]
+        }
+      ],
+      "expectedCap": null
+    },
+    {
+      "name": "removeTagsReturning: batch DELETE … RETURNING returns every removed row [postgres]",
+      "kind": "exec",
+      "dialect": "postgres",
+      "entry": "removeTagsReturning",
+      "input": {
+        "ids": [
+          100,
+          101
+        ]
+      },
+      "case": "removeTagsReturning: batch DELETE … RETURNING returns every removed row",
+      "expectedStatements": [
+        {
+          "sql": "DELETE FROM conf_tags WHERE id = ANY($1) RETURNING id, label",
+          "params": [
+            [
+              100,
+              101
+            ]
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "id": 100,
+          "label": "greeting"
+        },
+        {
+          "id": 101,
+          "label": "first"
+        }
+      ],
+      "expectedDbState": [
+        {
+          "query": "SELECT id, post_id, label FROM conf_tags ORDER BY id",
+          "rows": [
+            {
+              "id": 102,
+              "post_id": 12,
+              "label": "world"
+            }
+          ]
+        }
+      ],
+      "expectedCap": null
+    },
+    {
+      "name": "removeTagsReturning: batch DELETE … RETURNING returns every removed row [mysql]",
+      "kind": "exec",
+      "dialect": "mysql",
+      "entry": "removeTagsReturning",
+      "input": {
+        "ids": [
+          100,
+          101
+        ]
+      },
+      "case": "removeTagsReturning: batch DELETE … RETURNING returns every removed row",
+      "expectedStatements": [
+        {
+          "sql": "DELETE FROM conf_tags WHERE id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) RETURNING id, label /*scp:pk=id;ai=*/",
+          "params": [
+            "[100,101]"
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "id": 100,
+          "label": "greeting"
+        },
+        {
+          "id": 101,
+          "label": "first"
+        }
+      ],
+      "expectedDbState": [
+        {
+          "query": "SELECT id, post_id, label FROM conf_tags ORDER BY id",
+          "rows": [
+            {
+              "id": 102,
+              "post_id": 12,
+              "label": "world"
+            }
+          ]
+        }
+      ],
+      "expectedCap": null
+    },
+    {
       "name": "createPostReturning: INSERT … RETURNING returns the written row (client-supplied PK) [sqlite]",
       "kind": "exec",
       "dialect": "sqlite",
@@ -2658,7 +3206,7 @@
       "case": "renamePostReturning: UPDATE … RETURNING returns the written row",
       "expectedStatements": [
         {
-          "sql": "UPDATE conf_posts SET title = ? WHERE id = ? RETURNING id, title",
+          "sql": "UPDATE conf_posts SET title = ? WHERE id = ? RETURNING id, title /*scp:pk=id;ai=*/",
           "params": [
             "a1-returned",
             10
@@ -2804,7 +3352,7 @@
       "case": "removePostReturning: DELETE … RETURNING returns the removed row",
       "expectedStatements": [
         {
-          "sql": "DELETE FROM conf_posts WHERE id = ? RETURNING id, title",
+          "sql": "DELETE FROM conf_posts WHERE id = ? RETURNING id, title /*scp:pk=id;ai=*/",
           "params": [
             11
           ]
@@ -2827,6 +3375,312 @@
               "status": "live",
               "created_at": "2026-02-01"
             },
+            {
+              "id": 12,
+              "author_id": 2,
+              "title": "b1",
+              "status": "live",
+              "created_at": "2026-01-15"
+            }
+          ]
+        }
+      ],
+      "expectedCap": null
+    },
+    {
+      "name": "restatusPostsReturning: multi-row UPDATE … RETURNING returns every written row, in key order [sqlite]",
+      "kind": "exec",
+      "dialect": "sqlite",
+      "entry": "restatusPostsReturning",
+      "input": {
+        "status": "archived",
+        "authorId": 1
+      },
+      "case": "restatusPostsReturning: multi-row UPDATE … RETURNING returns every written row, in key order",
+      "expectedStatements": [
+        {
+          "sql": "UPDATE conf_posts SET status = ? WHERE author_id = ? RETURNING id, status",
+          "params": [
+            "archived",
+            1
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "id": 10,
+          "status": "archived"
+        },
+        {
+          "id": 11,
+          "status": "archived"
+        }
+      ],
+      "expectedDbState": [
+        {
+          "query": "SELECT id, author_id, title, status, created_at FROM conf_posts ORDER BY id",
+          "rows": [
+            {
+              "id": 10,
+              "author_id": 1,
+              "title": "a1",
+              "status": "archived",
+              "created_at": "2026-02-01"
+            },
+            {
+              "id": 11,
+              "author_id": 1,
+              "title": "a2",
+              "status": "archived",
+              "created_at": "2026-03-01"
+            },
+            {
+              "id": 12,
+              "author_id": 2,
+              "title": "b1",
+              "status": "live",
+              "created_at": "2026-01-15"
+            }
+          ]
+        }
+      ],
+      "expectedCap": null
+    },
+    {
+      "name": "restatusPostsReturning: multi-row UPDATE … RETURNING returns every written row, in key order [postgres]",
+      "kind": "exec",
+      "dialect": "postgres",
+      "entry": "restatusPostsReturning",
+      "input": {
+        "status": "archived",
+        "authorId": 1
+      },
+      "case": "restatusPostsReturning: multi-row UPDATE … RETURNING returns every written row, in key order",
+      "expectedStatements": [
+        {
+          "sql": "UPDATE conf_posts SET status = $1 WHERE author_id = $2 RETURNING id, status",
+          "params": [
+            "archived",
+            1
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "id": 10,
+          "status": "archived"
+        },
+        {
+          "id": 11,
+          "status": "archived"
+        }
+      ],
+      "expectedDbState": [
+        {
+          "query": "SELECT id, author_id, title, status, created_at FROM conf_posts ORDER BY id",
+          "rows": [
+            {
+              "id": 10,
+              "author_id": 1,
+              "title": "a1",
+              "status": "archived",
+              "created_at": "2026-02-01"
+            },
+            {
+              "id": 11,
+              "author_id": 1,
+              "title": "a2",
+              "status": "archived",
+              "created_at": "2026-03-01"
+            },
+            {
+              "id": 12,
+              "author_id": 2,
+              "title": "b1",
+              "status": "live",
+              "created_at": "2026-01-15"
+            }
+          ]
+        }
+      ],
+      "expectedCap": null
+    },
+    {
+      "name": "restatusPostsReturning: multi-row UPDATE … RETURNING returns every written row, in key order [mysql]",
+      "kind": "exec",
+      "dialect": "mysql",
+      "entry": "restatusPostsReturning",
+      "input": {
+        "status": "archived",
+        "authorId": 1
+      },
+      "case": "restatusPostsReturning: multi-row UPDATE … RETURNING returns every written row, in key order",
+      "expectedStatements": [
+        {
+          "sql": "UPDATE conf_posts SET status = ? WHERE author_id = ? RETURNING id, status /*scp:pk=id;ai=*/",
+          "params": [
+            "archived",
+            1
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "id": 10,
+          "status": "archived"
+        },
+        {
+          "id": 11,
+          "status": "archived"
+        }
+      ],
+      "expectedDbState": [
+        {
+          "query": "SELECT id, author_id, title, status, created_at FROM conf_posts ORDER BY id",
+          "rows": [
+            {
+              "id": 10,
+              "author_id": 1,
+              "title": "a1",
+              "status": "archived",
+              "created_at": "2026-02-01"
+            },
+            {
+              "id": 11,
+              "author_id": 1,
+              "title": "a2",
+              "status": "archived",
+              "created_at": "2026-03-01"
+            },
+            {
+              "id": 12,
+              "author_id": 2,
+              "title": "b1",
+              "status": "live",
+              "created_at": "2026-01-15"
+            }
+          ]
+        }
+      ],
+      "expectedCap": null
+    },
+    {
+      "name": "removePostsByAuthorReturning: multi-row DELETE … RETURNING returns every removed row, in key order [sqlite]",
+      "kind": "exec",
+      "dialect": "sqlite",
+      "entry": "removePostsByAuthorReturning",
+      "input": {
+        "authorId": 1
+      },
+      "case": "removePostsByAuthorReturning: multi-row DELETE … RETURNING returns every removed row, in key order",
+      "expectedStatements": [
+        {
+          "sql": "DELETE FROM conf_posts WHERE author_id = ? RETURNING id, title",
+          "params": [
+            1
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "id": 10,
+          "title": "a1"
+        },
+        {
+          "id": 11,
+          "title": "a2"
+        }
+      ],
+      "expectedDbState": [
+        {
+          "query": "SELECT id, author_id, title, status, created_at FROM conf_posts ORDER BY id",
+          "rows": [
+            {
+              "id": 12,
+              "author_id": 2,
+              "title": "b1",
+              "status": "live",
+              "created_at": "2026-01-15"
+            }
+          ]
+        }
+      ],
+      "expectedCap": null
+    },
+    {
+      "name": "removePostsByAuthorReturning: multi-row DELETE … RETURNING returns every removed row, in key order [postgres]",
+      "kind": "exec",
+      "dialect": "postgres",
+      "entry": "removePostsByAuthorReturning",
+      "input": {
+        "authorId": 1
+      },
+      "case": "removePostsByAuthorReturning: multi-row DELETE … RETURNING returns every removed row, in key order",
+      "expectedStatements": [
+        {
+          "sql": "DELETE FROM conf_posts WHERE author_id = $1 RETURNING id, title",
+          "params": [
+            1
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "id": 10,
+          "title": "a1"
+        },
+        {
+          "id": 11,
+          "title": "a2"
+        }
+      ],
+      "expectedDbState": [
+        {
+          "query": "SELECT id, author_id, title, status, created_at FROM conf_posts ORDER BY id",
+          "rows": [
+            {
+              "id": 12,
+              "author_id": 2,
+              "title": "b1",
+              "status": "live",
+              "created_at": "2026-01-15"
+            }
+          ]
+        }
+      ],
+      "expectedCap": null
+    },
+    {
+      "name": "removePostsByAuthorReturning: multi-row DELETE … RETURNING returns every removed row, in key order [mysql]",
+      "kind": "exec",
+      "dialect": "mysql",
+      "entry": "removePostsByAuthorReturning",
+      "input": {
+        "authorId": 1
+      },
+      "case": "removePostsByAuthorReturning: multi-row DELETE … RETURNING returns every removed row, in key order",
+      "expectedStatements": [
+        {
+          "sql": "DELETE FROM conf_posts WHERE author_id = ? RETURNING id, title /*scp:pk=id;ai=*/",
+          "params": [
+            1
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "id": 10,
+          "title": "a1"
+        },
+        {
+          "id": 11,
+          "title": "a2"
+        }
+      ],
+      "expectedDbState": [
+        {
+          "query": "SELECT id, author_id, title, status, created_at FROM conf_posts ORDER BY id",
+          "rows": [
             {
               "id": 12,
               "author_id": 2,

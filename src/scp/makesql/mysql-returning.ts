@@ -155,6 +155,10 @@ export function buildMysqlReselect(sql: string): MysqlReselect | null {
   const isBatch = lower.includes('json_table(');
   const done = (selectSql: string, binds: readonly ReselectBind[], before = false): MysqlReselect =>
     ({ writeSql, selectSql, binds, before });
+  /** Recover a BATCH write's rows by reading its key set back out of the SAME JSON payload it bound. */
+  const jsonSelect = (key: string): string =>
+    `SELECT ${cols} FROM ${table} WHERE ${key} IN ` +
+    `(SELECT JSON_UNQUOTE(jt.${key}) FROM JSON_TABLE(?, '$[*]' COLUMNS(${key} JSON PATH '$.${key}')) jt)${orderBy}`;
 
   // upsert / upsertMany — by the CONFLICT key. MySQL does not report which row an ON DUPLICATE KEY
   // UPDATE touched, so the AUTO_INCREMENT range is wrong as soon as a row was updated, not inserted.
@@ -163,12 +167,7 @@ export function buildMysqlReselect(sql: string): MysqlReselect | null {
     if (key === undefined) {
       throw new Error(`scp write(mysql): an upsert…RETURNING needs its conflict key in the pk hint ('${writeSql.slice(0, 60)}…')`);
     }
-    if (isBatch) {
-      return done(
-        `SELECT ${cols} FROM ${table} WHERE ${key} IN (SELECT JSON_UNQUOTE(jt.${key}) FROM JSON_TABLE(?, '$[*]' COLUMNS(${key} JSON PATH '$.${key}')) jt)${orderBy}`,
-        [{ kind: 'json' }],
-      );
-    }
+    if (isBatch) return done(jsonSelect(key), [{ kind: 'json' }]);
     const index = insertCols(writeSql).indexOf(key);
     if (index < 0) throw new Error(`scp write(mysql): conflict key '${key}' is not among the INSERT columns of '${writeSql.slice(0, 60)}…'`);
     return done(`SELECT ${cols} FROM ${table} WHERE ${key} = ?${orderBy}`, [{ kind: 'param', index }]);
@@ -189,6 +188,18 @@ export function buildMysqlReselect(sql: string): MysqlReselect | null {
           `('${writeSql.slice(0, 60)}…'). The producer must pass the model's declared primary key.`,
       );
     }
+    if (isBatch) {
+      // createMany with a CLIENT-supplied key: the statement binds ONE JSON payload, not one param per
+      // key, so the keys are read back out of that SAME payload — as the upsertMany arm does. (An
+      // AUTO_INCREMENT batch never reaches here; its N consecutive ids are the range above.)
+      if (pk.length !== 1) {
+        throw new Error(
+          `scp write(mysql): a batch INSERT…RETURNING on the COMPOSITE key (${pk.join(', ')}) cannot be ` +
+            `recovered from its JSON payload ('${writeSql.slice(0, 60)}…').`,
+        );
+      }
+      return done(jsonSelect(pk[0]), [{ kind: 'json' }]);
+    }
     const cols4 = insertCols(writeSql);
     const binds: ReselectBind[] = [];
     const conds: string[] = [];
@@ -205,10 +216,7 @@ export function buildMysqlReselect(sql: string): MysqlReselect | null {
   if (lower.startsWith('update') && isBatch) {
     const key = updateBatchKey(writeSql);
     if (key === null) throw new Error(`scp write(mysql): cannot parse the batch JOIN key of '${writeSql.slice(0, 60)}…'`);
-    return done(
-      `SELECT ${cols} FROM ${table} WHERE ${key} IN (SELECT JSON_UNQUOTE(jt.${key}) FROM JSON_TABLE(?, '$[*]' COLUMNS(${key} JSON PATH '$.${key}')) jt)${orderBy}`,
-      [{ kind: 'json' }],
-    );
+    return done(jsonSelect(key), [{ kind: 'json' }]);
   }
 
   // update / delete — by the write's OWN WHERE predicate, bound from the write's own params. The

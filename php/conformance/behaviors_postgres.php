@@ -7,7 +7,7 @@
 // (Behavior::runBehavior) — no execution logic is generated. Handlers are ALWAYS
 // injected at the boundary (IR + {effects,config,hooks} — concept.md §4.4); they
 // are never generated.
-// irFingerprint: fnv1a64:82fabfaf5e5b3621
+// irFingerprint: fnv1a64:309babf73a7d2c7a
 
 declare(strict_types=1);
 
@@ -15,10 +15,10 @@ declare(strict_types=1);
 $expectedSpecVersions = ['behavior' => 5, 'expression' => 2, 'plan' => 1];
 
 // FNV-1a 64 fingerprint of the source portable IR (canonical-json discipline, #208).
-$irFingerprint = 'fnv1a64:82fabfaf5e5b3621';
+$irFingerprint = 'fnv1a64:309babf73a7d2c7a';
 
 // Component names exposed by bind(), in IR declaration order.
-$componentNames = ['posts', 'postsTop', 'page', 'postsByIds', 'feed', 'usersWithPosts', 'postsWithAuthor', 'usersWithCappedPosts', 'usersWithUncappedPosts', 'usersWithTopPosts', 'createPost', 'renamePost', 'removePost', 'createPostReturning', 'renamePostReturning', 'removePostReturning', 'typedRows', 'createTags', 'removeTags'];
+$componentNames = ['posts', 'postsTop', 'page', 'postsByIds', 'feed', 'usersWithPosts', 'postsWithAuthor', 'usersWithCappedPosts', 'usersWithUncappedPosts', 'usersWithTopPosts', 'createPost', 'renamePost', 'removePost', 'createPostReturning', 'renamePostReturning', 'removePostReturning', 'restatusPostsReturning', 'removePostsByAuthorReturning', 'typedRows', 'createTags', 'removeTags', 'createTagsReturning', 'relabelTagsReturning', 'removeTagsReturning'];
 
 // The portable component-graph IR *document*, embedded as a native literal (no JSON parse at require).
 // It carries no provenance token — the require-time CompiledIr::load() below verifies the baked
@@ -2837,6 +2837,199 @@ $irDoc = (object) [
                     "id" => "n0",
                     "outType" => (object) [
                         "arr" => (object) [
+                            "name" => "RestatusPostsReturningRow",
+                            "obj" => (object) [
+                                "id" => (object) [
+                                    "opt" => "float",
+                                ],
+                                "status" => (object) [
+                                    "opt" => "string",
+                                ],
+                            ],
+                        ],
+                    ],
+                    "portSchemas" => (object) [
+                        "bigint" => (object) [
+                            "required" => true,
+                            "type" => "bool",
+                        ],
+                        "params" => (object) [
+                            "elemType" => "value",
+                            "required" => true,
+                            "type" => "array",
+                        ],
+                        "returning" => (object) [
+                            "required" => true,
+                            "type" => "bool",
+                        ],
+                        "sql" => (object) [
+                            "required" => true,
+                            "type" => "string",
+                        ],
+                        "write" => (object) [
+                            "required" => true,
+                            "type" => "bool",
+                        ],
+                    ],
+                    "ports" => (object) [
+                        "bigint" => false,
+                        "params" => (object) [
+                            "arr" => [
+                                (object) [
+                                    "ref" => [
+                                        "status",
+                                    ],
+                                ],
+                                (object) [
+                                    "ref" => [
+                                        "authorId",
+                                    ],
+                                ],
+                            ],
+                        ],
+                        "returning" => true,
+                        "sql" => "UPDATE conf_posts SET status = ? WHERE author_id = ? RETURNING id, status",
+                        "write" => true,
+                    ],
+                ],
+            ],
+            "inputPorts" => (object) [
+                "authorId" => (object) [
+                    "required" => true,
+                    "type" => "int",
+                ],
+                "status" => (object) [
+                    "required" => true,
+                    "type" => "string",
+                ],
+            ],
+            "name" => "restatusPostsReturning",
+            "output" => (object) [
+                "ref" => [
+                    "n0",
+                ],
+            ],
+            "plan" => (object) [
+                "concurrency" => 16,
+                "groups" => [
+                    [
+                        0,
+                    ],
+                ],
+            ],
+            "outputType" => (object) [
+                "arr" => (object) [
+                    "obj" => (object) [
+                        "id" => (object) [
+                            "opt" => "float",
+                        ],
+                        "status" => (object) [
+                            "opt" => "string",
+                        ],
+                    ],
+                    "name" => "RestatusPostsReturningRow",
+                ],
+            ],
+        ],
+        (object) [
+            "body" => [
+                (object) [
+                    "component" => "executeSQL",
+                    "id" => "n0",
+                    "outType" => (object) [
+                        "arr" => (object) [
+                            "name" => "RemovePostsByAuthorReturningRow",
+                            "obj" => (object) [
+                                "id" => (object) [
+                                    "opt" => "float",
+                                ],
+                                "title" => (object) [
+                                    "opt" => "string",
+                                ],
+                            ],
+                        ],
+                    ],
+                    "portSchemas" => (object) [
+                        "bigint" => (object) [
+                            "required" => true,
+                            "type" => "bool",
+                        ],
+                        "params" => (object) [
+                            "elemType" => "value",
+                            "required" => true,
+                            "type" => "array",
+                        ],
+                        "returning" => (object) [
+                            "required" => true,
+                            "type" => "bool",
+                        ],
+                        "sql" => (object) [
+                            "required" => true,
+                            "type" => "string",
+                        ],
+                        "write" => (object) [
+                            "required" => true,
+                            "type" => "bool",
+                        ],
+                    ],
+                    "ports" => (object) [
+                        "bigint" => false,
+                        "params" => (object) [
+                            "arr" => [
+                                (object) [
+                                    "ref" => [
+                                        "authorId",
+                                    ],
+                                ],
+                            ],
+                        ],
+                        "returning" => true,
+                        "sql" => "DELETE FROM conf_posts WHERE author_id = ? RETURNING id, title",
+                        "write" => true,
+                    ],
+                ],
+            ],
+            "inputPorts" => (object) [
+                "authorId" => (object) [
+                    "required" => true,
+                    "type" => "int",
+                ],
+            ],
+            "name" => "removePostsByAuthorReturning",
+            "output" => (object) [
+                "ref" => [
+                    "n0",
+                ],
+            ],
+            "plan" => (object) [
+                "concurrency" => 16,
+                "groups" => [
+                    [
+                        0,
+                    ],
+                ],
+            ],
+            "outputType" => (object) [
+                "arr" => (object) [
+                    "obj" => (object) [
+                        "id" => (object) [
+                            "opt" => "float",
+                        ],
+                        "title" => (object) [
+                            "opt" => "string",
+                        ],
+                    ],
+                    "name" => "RemovePostsByAuthorReturningRow",
+                ],
+            ],
+        ],
+        (object) [
+            "body" => [
+                (object) [
+                    "component" => "executeSQL",
+                    "id" => "n0",
+                    "outType" => (object) [
+                        "arr" => (object) [
                             "name" => "TypedRowsRow",
                             "obj" => (object) [
                                 "flag" => (object) [
@@ -3113,6 +3306,315 @@ $irDoc = (object) [
                 ],
             ],
         ],
+        (object) [
+            "body" => [
+                (object) [
+                    "component" => "executeSQL",
+                    "id" => "n0",
+                    "outType" => (object) [
+                        "arr" => (object) [
+                            "name" => "CreateTagsReturningRow",
+                            "obj" => (object) [
+                                "id" => (object) [
+                                    "opt" => "float",
+                                ],
+                                "label" => (object) [
+                                    "opt" => "string",
+                                ],
+                            ],
+                        ],
+                    ],
+                    "portSchemas" => (object) [
+                        "bigint" => (object) [
+                            "required" => true,
+                            "type" => "bool",
+                        ],
+                        "params" => (object) [
+                            "elemType" => "value",
+                            "required" => true,
+                            "type" => "array",
+                        ],
+                        "returning" => (object) [
+                            "required" => true,
+                            "type" => "bool",
+                        ],
+                        "sql" => (object) [
+                            "required" => true,
+                            "type" => "string",
+                        ],
+                        "write" => (object) [
+                            "required" => true,
+                            "type" => "bool",
+                        ],
+                    ],
+                    "ports" => (object) [
+                        "bigint" => false,
+                        "params" => (object) [
+                            "arr" => [
+                                (object) [
+                                    "ref" => [
+                                        "rows_id",
+                                    ],
+                                ],
+                                (object) [
+                                    "ref" => [
+                                        "rows_label",
+                                    ],
+                                ],
+                                (object) [
+                                    "ref" => [
+                                        "rows_post_id",
+                                    ],
+                                ],
+                            ],
+                        ],
+                        "returning" => true,
+                        "sql" => "INSERT INTO conf_tags (id, label, post_id) SELECT v.id, v.label, v.post_id FROM UNNEST(?::int[], ?::text[], ?::int[]) AS v(id, label, post_id) RETURNING id, label",
+                        "write" => true,
+                    ],
+                ],
+            ],
+            "inputPorts" => (object) [
+                "rows_id" => (object) [
+                    "elemType" => "int",
+                    "required" => true,
+                    "type" => "array",
+                ],
+                "rows_label" => (object) [
+                    "elemType" => "string",
+                    "required" => true,
+                    "type" => "array",
+                ],
+                "rows_post_id" => (object) [
+                    "elemType" => "int",
+                    "required" => true,
+                    "type" => "array",
+                ],
+            ],
+            "name" => "createTagsReturning",
+            "output" => (object) [
+                "ref" => [
+                    "n0",
+                ],
+            ],
+            "plan" => (object) [
+                "concurrency" => 16,
+                "groups" => [
+                    [
+                        0,
+                    ],
+                ],
+            ],
+            "outputType" => (object) [
+                "arr" => (object) [
+                    "obj" => (object) [
+                        "id" => (object) [
+                            "opt" => "float",
+                        ],
+                        "label" => (object) [
+                            "opt" => "string",
+                        ],
+                    ],
+                    "name" => "CreateTagsReturningRow",
+                ],
+            ],
+        ],
+        (object) [
+            "body" => [
+                (object) [
+                    "component" => "executeSQL",
+                    "id" => "n0",
+                    "outType" => (object) [
+                        "arr" => (object) [
+                            "name" => "RelabelTagsReturningRow",
+                            "obj" => (object) [
+                                "id" => (object) [
+                                    "opt" => "float",
+                                ],
+                                "label" => (object) [
+                                    "opt" => "string",
+                                ],
+                            ],
+                        ],
+                    ],
+                    "portSchemas" => (object) [
+                        "bigint" => (object) [
+                            "required" => true,
+                            "type" => "bool",
+                        ],
+                        "params" => (object) [
+                            "elemType" => "value",
+                            "required" => true,
+                            "type" => "array",
+                        ],
+                        "returning" => (object) [
+                            "required" => true,
+                            "type" => "bool",
+                        ],
+                        "sql" => (object) [
+                            "required" => true,
+                            "type" => "string",
+                        ],
+                        "write" => (object) [
+                            "required" => true,
+                            "type" => "bool",
+                        ],
+                    ],
+                    "ports" => (object) [
+                        "bigint" => false,
+                        "params" => (object) [
+                            "arr" => [
+                                (object) [
+                                    "ref" => [
+                                        "rows_id",
+                                    ],
+                                ],
+                                (object) [
+                                    "ref" => [
+                                        "rows_label",
+                                    ],
+                                ],
+                            ],
+                        ],
+                        "returning" => true,
+                        "sql" => "UPDATE conf_tags AS t SET label = v.label FROM UNNEST(?::int[], ?::text[]) AS v(id, label) WHERE t.id = v.id RETURNING t.id, t.label",
+                        "write" => true,
+                    ],
+                ],
+            ],
+            "inputPorts" => (object) [
+                "rows_id" => (object) [
+                    "elemType" => "int",
+                    "required" => true,
+                    "type" => "array",
+                ],
+                "rows_label" => (object) [
+                    "elemType" => "string",
+                    "required" => true,
+                    "type" => "array",
+                ],
+            ],
+            "name" => "relabelTagsReturning",
+            "output" => (object) [
+                "ref" => [
+                    "n0",
+                ],
+            ],
+            "plan" => (object) [
+                "concurrency" => 16,
+                "groups" => [
+                    [
+                        0,
+                    ],
+                ],
+            ],
+            "outputType" => (object) [
+                "arr" => (object) [
+                    "obj" => (object) [
+                        "id" => (object) [
+                            "opt" => "float",
+                        ],
+                        "label" => (object) [
+                            "opt" => "string",
+                        ],
+                    ],
+                    "name" => "RelabelTagsReturningRow",
+                ],
+            ],
+        ],
+        (object) [
+            "body" => [
+                (object) [
+                    "component" => "executeSQL",
+                    "id" => "n0",
+                    "outType" => (object) [
+                        "arr" => (object) [
+                            "name" => "RemoveTagsReturningRow",
+                            "obj" => (object) [
+                                "id" => (object) [
+                                    "opt" => "float",
+                                ],
+                                "label" => (object) [
+                                    "opt" => "string",
+                                ],
+                            ],
+                        ],
+                    ],
+                    "portSchemas" => (object) [
+                        "bigint" => (object) [
+                            "required" => true,
+                            "type" => "bool",
+                        ],
+                        "params" => (object) [
+                            "elemType" => "value",
+                            "required" => true,
+                            "type" => "array",
+                        ],
+                        "returning" => (object) [
+                            "required" => true,
+                            "type" => "bool",
+                        ],
+                        "sql" => (object) [
+                            "required" => true,
+                            "type" => "string",
+                        ],
+                        "write" => (object) [
+                            "required" => true,
+                            "type" => "bool",
+                        ],
+                    ],
+                    "ports" => (object) [
+                        "bigint" => false,
+                        "params" => (object) [
+                            "arr" => [
+                                (object) [
+                                    "ref" => [
+                                        "ids",
+                                    ],
+                                ],
+                            ],
+                        ],
+                        "returning" => true,
+                        "sql" => "DELETE FROM conf_tags WHERE id = ANY(?) RETURNING id, label",
+                        "write" => true,
+                    ],
+                ],
+            ],
+            "inputPorts" => (object) [
+                "ids" => (object) [
+                    "elemType" => "int",
+                    "required" => true,
+                    "type" => "array",
+                ],
+            ],
+            "name" => "removeTagsReturning",
+            "output" => (object) [
+                "ref" => [
+                    "n0",
+                ],
+            ],
+            "plan" => (object) [
+                "concurrency" => 16,
+                "groups" => [
+                    [
+                        0,
+                    ],
+                ],
+            ],
+            "outputType" => (object) [
+                "arr" => (object) [
+                    "obj" => (object) [
+                        "id" => (object) [
+                            "opt" => "float",
+                        ],
+                        "label" => (object) [
+                            "opt" => "string",
+                        ],
+                    ],
+                    "name" => "RemoveTagsReturningRow",
+                ],
+            ],
+        ],
     ],
 ];
 
@@ -3206,6 +3708,14 @@ if (!\class_exists('Conformance', false)) {
             return \LiteDbModel\Runtime\BehaviorContracts\Behavior::runBehavior(self::$ir, $handlers, ['id' => $id], 'removePostReturning');
         }
 
+        public static function restatusPostsReturning($status, $authorId, array $handlers): mixed {
+            return \LiteDbModel\Runtime\BehaviorContracts\Behavior::runBehavior(self::$ir, $handlers, ['status' => $status, 'authorId' => $authorId], 'restatusPostsReturning');
+        }
+
+        public static function removePostsByAuthorReturning($authorId, array $handlers): mixed {
+            return \LiteDbModel\Runtime\BehaviorContracts\Behavior::runBehavior(self::$ir, $handlers, ['authorId' => $authorId], 'removePostsByAuthorReturning');
+        }
+
         public static function typedRows(array $handlers): mixed {
             return \LiteDbModel\Runtime\BehaviorContracts\Behavior::runBehavior(self::$ir, $handlers, [], 'typedRows');
         }
@@ -3216,6 +3726,18 @@ if (!\class_exists('Conformance', false)) {
 
         public static function removeTags($ids, array $handlers): mixed {
             return \LiteDbModel\Runtime\BehaviorContracts\Behavior::runBehavior(self::$ir, $handlers, ['ids' => $ids], 'removeTags');
+        }
+
+        public static function createTagsReturning($rows_id, $rows_post_id, $rows_label, array $handlers): mixed {
+            return \LiteDbModel\Runtime\BehaviorContracts\Behavior::runBehavior(self::$ir, $handlers, ['rows_id' => $rows_id, 'rows_post_id' => $rows_post_id, 'rows_label' => $rows_label], 'createTagsReturning');
+        }
+
+        public static function relabelTagsReturning($rows_id, $rows_label, array $handlers): mixed {
+            return \LiteDbModel\Runtime\BehaviorContracts\Behavior::runBehavior(self::$ir, $handlers, ['rows_id' => $rows_id, 'rows_label' => $rows_label], 'relabelTagsReturning');
+        }
+
+        public static function removeTagsReturning($ids, array $handlers): mixed {
+            return \LiteDbModel\Runtime\BehaviorContracts\Behavior::runBehavior(self::$ir, $handlers, ['ids' => $ids], 'removeTagsReturning');
         }
     }
 }

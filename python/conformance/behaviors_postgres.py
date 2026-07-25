@@ -4,17 +4,17 @@
 # native dict literal and handed to the EXISTING runtime core (run_behavior) —
 # no execution logic is generated. Handlers are ALWAYS injected at the boundary
 # (IR + {effects,config,hooks}); they are never generated.
-# irFingerprint: fnv1a64:82fabfaf5e5b3621
+# irFingerprint: fnv1a64:309babf73a7d2c7a
 from behavior_contracts import SPEC_VERSIONS, ProvenanceError, load_compiled_ir, run_behavior
 
 # Spec versions baked at generation time (fail-closed constant comparison at load).
 EXPECTED_SPEC_VERSIONS = {"behavior": 5, "expression": 2, "plan": 1}
 
 # FNV-1a 64 fingerprint of the source portable IR (canonical_json discipline, #208).
-IR_FINGERPRINT = "fnv1a64:82fabfaf5e5b3621"
+IR_FINGERPRINT = "fnv1a64:309babf73a7d2c7a"
 
 # Component names exposed by bind(), in IR declaration order.
-COMPONENT_NAMES = ("posts", "postsTop", "page", "postsByIds", "feed", "usersWithPosts", "postsWithAuthor", "usersWithCappedPosts", "usersWithUncappedPosts", "usersWithTopPosts", "createPost", "renamePost", "removePost", "createPostReturning", "renamePostReturning", "removePostReturning", "typedRows", "createTags", "removeTags")
+COMPONENT_NAMES = ("posts", "postsTop", "page", "postsByIds", "feed", "usersWithPosts", "postsWithAuthor", "usersWithCappedPosts", "usersWithUncappedPosts", "usersWithTopPosts", "createPost", "renamePost", "removePost", "createPostReturning", "renamePostReturning", "removePostReturning", "restatusPostsReturning", "removePostsByAuthorReturning", "typedRows", "createTags", "removeTags", "createTagsReturning", "relabelTagsReturning", "removeTagsReturning")
 
 # The portable component-graph IR *document*, embedded as a native dict literal (no JSON parse at
 # runtime). It carries no provenance token — the load-time load_compiled_ir() below verifies the baked
@@ -2833,6 +2833,199 @@ IR_DOC = {
           "id": "n0",
           "outType": {
             "arr": {
+              "name": "RestatusPostsReturningRow",
+              "obj": {
+                "id": {
+                  "opt": "float"
+                },
+                "status": {
+                  "opt": "string"
+                }
+              }
+            }
+          },
+          "portSchemas": {
+            "bigint": {
+              "required": True,
+              "type": "bool"
+            },
+            "params": {
+              "elemType": "value",
+              "required": True,
+              "type": "array"
+            },
+            "returning": {
+              "required": True,
+              "type": "bool"
+            },
+            "sql": {
+              "required": True,
+              "type": "string"
+            },
+            "write": {
+              "required": True,
+              "type": "bool"
+            }
+          },
+          "ports": {
+            "bigint": False,
+            "params": {
+              "arr": [
+                {
+                  "ref": [
+                    "status"
+                  ]
+                },
+                {
+                  "ref": [
+                    "authorId"
+                  ]
+                }
+              ]
+            },
+            "returning": True,
+            "sql": "UPDATE conf_posts SET status = ? WHERE author_id = ? RETURNING id, status",
+            "write": True
+          }
+        }
+      ],
+      "inputPorts": {
+        "authorId": {
+          "required": True,
+          "type": "int"
+        },
+        "status": {
+          "required": True,
+          "type": "string"
+        }
+      },
+      "name": "restatusPostsReturning",
+      "output": {
+        "ref": [
+          "n0"
+        ]
+      },
+      "plan": {
+        "concurrency": 16,
+        "groups": [
+          [
+            0
+          ]
+        ]
+      },
+      "outputType": {
+        "arr": {
+          "obj": {
+            "id": {
+              "opt": "float"
+            },
+            "status": {
+              "opt": "string"
+            }
+          },
+          "name": "RestatusPostsReturningRow"
+        }
+      }
+    },
+    {
+      "body": [
+        {
+          "component": "executeSQL",
+          "id": "n0",
+          "outType": {
+            "arr": {
+              "name": "RemovePostsByAuthorReturningRow",
+              "obj": {
+                "id": {
+                  "opt": "float"
+                },
+                "title": {
+                  "opt": "string"
+                }
+              }
+            }
+          },
+          "portSchemas": {
+            "bigint": {
+              "required": True,
+              "type": "bool"
+            },
+            "params": {
+              "elemType": "value",
+              "required": True,
+              "type": "array"
+            },
+            "returning": {
+              "required": True,
+              "type": "bool"
+            },
+            "sql": {
+              "required": True,
+              "type": "string"
+            },
+            "write": {
+              "required": True,
+              "type": "bool"
+            }
+          },
+          "ports": {
+            "bigint": False,
+            "params": {
+              "arr": [
+                {
+                  "ref": [
+                    "authorId"
+                  ]
+                }
+              ]
+            },
+            "returning": True,
+            "sql": "DELETE FROM conf_posts WHERE author_id = ? RETURNING id, title",
+            "write": True
+          }
+        }
+      ],
+      "inputPorts": {
+        "authorId": {
+          "required": True,
+          "type": "int"
+        }
+      },
+      "name": "removePostsByAuthorReturning",
+      "output": {
+        "ref": [
+          "n0"
+        ]
+      },
+      "plan": {
+        "concurrency": 16,
+        "groups": [
+          [
+            0
+          ]
+        ]
+      },
+      "outputType": {
+        "arr": {
+          "obj": {
+            "id": {
+              "opt": "float"
+            },
+            "title": {
+              "opt": "string"
+            }
+          },
+          "name": "RemovePostsByAuthorReturningRow"
+        }
+      }
+    },
+    {
+      "body": [
+        {
+          "component": "executeSQL",
+          "id": "n0",
+          "outType": {
+            "arr": {
               "name": "TypedRowsRow",
               "obj": {
                 "flag": {
@@ -3108,6 +3301,315 @@ IR_DOC = {
           "name": "WriteSummary"
         }
       }
+    },
+    {
+      "body": [
+        {
+          "component": "executeSQL",
+          "id": "n0",
+          "outType": {
+            "arr": {
+              "name": "CreateTagsReturningRow",
+              "obj": {
+                "id": {
+                  "opt": "float"
+                },
+                "label": {
+                  "opt": "string"
+                }
+              }
+            }
+          },
+          "portSchemas": {
+            "bigint": {
+              "required": True,
+              "type": "bool"
+            },
+            "params": {
+              "elemType": "value",
+              "required": True,
+              "type": "array"
+            },
+            "returning": {
+              "required": True,
+              "type": "bool"
+            },
+            "sql": {
+              "required": True,
+              "type": "string"
+            },
+            "write": {
+              "required": True,
+              "type": "bool"
+            }
+          },
+          "ports": {
+            "bigint": False,
+            "params": {
+              "arr": [
+                {
+                  "ref": [
+                    "rows_id"
+                  ]
+                },
+                {
+                  "ref": [
+                    "rows_label"
+                  ]
+                },
+                {
+                  "ref": [
+                    "rows_post_id"
+                  ]
+                }
+              ]
+            },
+            "returning": True,
+            "sql": "INSERT INTO conf_tags (id, label, post_id) SELECT v.id, v.label, v.post_id FROM UNNEST(?::int[], ?::text[], ?::int[]) AS v(id, label, post_id) RETURNING id, label",
+            "write": True
+          }
+        }
+      ],
+      "inputPorts": {
+        "rows_id": {
+          "elemType": "int",
+          "required": True,
+          "type": "array"
+        },
+        "rows_label": {
+          "elemType": "string",
+          "required": True,
+          "type": "array"
+        },
+        "rows_post_id": {
+          "elemType": "int",
+          "required": True,
+          "type": "array"
+        }
+      },
+      "name": "createTagsReturning",
+      "output": {
+        "ref": [
+          "n0"
+        ]
+      },
+      "plan": {
+        "concurrency": 16,
+        "groups": [
+          [
+            0
+          ]
+        ]
+      },
+      "outputType": {
+        "arr": {
+          "obj": {
+            "id": {
+              "opt": "float"
+            },
+            "label": {
+              "opt": "string"
+            }
+          },
+          "name": "CreateTagsReturningRow"
+        }
+      }
+    },
+    {
+      "body": [
+        {
+          "component": "executeSQL",
+          "id": "n0",
+          "outType": {
+            "arr": {
+              "name": "RelabelTagsReturningRow",
+              "obj": {
+                "id": {
+                  "opt": "float"
+                },
+                "label": {
+                  "opt": "string"
+                }
+              }
+            }
+          },
+          "portSchemas": {
+            "bigint": {
+              "required": True,
+              "type": "bool"
+            },
+            "params": {
+              "elemType": "value",
+              "required": True,
+              "type": "array"
+            },
+            "returning": {
+              "required": True,
+              "type": "bool"
+            },
+            "sql": {
+              "required": True,
+              "type": "string"
+            },
+            "write": {
+              "required": True,
+              "type": "bool"
+            }
+          },
+          "ports": {
+            "bigint": False,
+            "params": {
+              "arr": [
+                {
+                  "ref": [
+                    "rows_id"
+                  ]
+                },
+                {
+                  "ref": [
+                    "rows_label"
+                  ]
+                }
+              ]
+            },
+            "returning": True,
+            "sql": "UPDATE conf_tags AS t SET label = v.label FROM UNNEST(?::int[], ?::text[]) AS v(id, label) WHERE t.id = v.id RETURNING t.id, t.label",
+            "write": True
+          }
+        }
+      ],
+      "inputPorts": {
+        "rows_id": {
+          "elemType": "int",
+          "required": True,
+          "type": "array"
+        },
+        "rows_label": {
+          "elemType": "string",
+          "required": True,
+          "type": "array"
+        }
+      },
+      "name": "relabelTagsReturning",
+      "output": {
+        "ref": [
+          "n0"
+        ]
+      },
+      "plan": {
+        "concurrency": 16,
+        "groups": [
+          [
+            0
+          ]
+        ]
+      },
+      "outputType": {
+        "arr": {
+          "obj": {
+            "id": {
+              "opt": "float"
+            },
+            "label": {
+              "opt": "string"
+            }
+          },
+          "name": "RelabelTagsReturningRow"
+        }
+      }
+    },
+    {
+      "body": [
+        {
+          "component": "executeSQL",
+          "id": "n0",
+          "outType": {
+            "arr": {
+              "name": "RemoveTagsReturningRow",
+              "obj": {
+                "id": {
+                  "opt": "float"
+                },
+                "label": {
+                  "opt": "string"
+                }
+              }
+            }
+          },
+          "portSchemas": {
+            "bigint": {
+              "required": True,
+              "type": "bool"
+            },
+            "params": {
+              "elemType": "value",
+              "required": True,
+              "type": "array"
+            },
+            "returning": {
+              "required": True,
+              "type": "bool"
+            },
+            "sql": {
+              "required": True,
+              "type": "string"
+            },
+            "write": {
+              "required": True,
+              "type": "bool"
+            }
+          },
+          "ports": {
+            "bigint": False,
+            "params": {
+              "arr": [
+                {
+                  "ref": [
+                    "ids"
+                  ]
+                }
+              ]
+            },
+            "returning": True,
+            "sql": "DELETE FROM conf_tags WHERE id = ANY(?) RETURNING id, label",
+            "write": True
+          }
+        }
+      ],
+      "inputPorts": {
+        "ids": {
+          "elemType": "int",
+          "required": True,
+          "type": "array"
+        }
+      },
+      "name": "removeTagsReturning",
+      "output": {
+        "ref": [
+          "n0"
+        ]
+      },
+      "plan": {
+        "concurrency": 16,
+        "groups": [
+          [
+            0
+          ]
+        ]
+      },
+      "outputType": {
+        "arr": {
+          "obj": {
+            "id": {
+              "opt": "float"
+            },
+            "label": {
+              "opt": "string"
+            }
+          },
+          "name": "RemoveTagsReturningRow"
+        }
+      }
     }
   ]
 }
@@ -3219,6 +3721,14 @@ class Conformance:
         return run_behavior(IR, handlers, {"id": id}, "removePostReturning")
 
     @staticmethod
+    def restatus_posts_returning(status, authorId, handlers):
+        return run_behavior(IR, handlers, {"status": status, "authorId": authorId}, "restatusPostsReturning")
+
+    @staticmethod
+    def remove_posts_by_author_returning(authorId, handlers):
+        return run_behavior(IR, handlers, {"authorId": authorId}, "removePostsByAuthorReturning")
+
+    @staticmethod
     def typed_rows(handlers):
         return run_behavior(IR, handlers, {}, "typedRows")
 
@@ -3229,3 +3739,15 @@ class Conformance:
     @staticmethod
     def remove_tags(ids, handlers):
         return run_behavior(IR, handlers, {"ids": ids}, "removeTags")
+
+    @staticmethod
+    def create_tags_returning(rows_id, rows_post_id, rows_label, handlers):
+        return run_behavior(IR, handlers, {"rows_id": rows_id, "rows_post_id": rows_post_id, "rows_label": rows_label}, "createTagsReturning")
+
+    @staticmethod
+    def relabel_tags_returning(rows_id, rows_label, handlers):
+        return run_behavior(IR, handlers, {"rows_id": rows_id, "rows_label": rows_label}, "relabelTagsReturning")
+
+    @staticmethod
+    def remove_tags_returning(ids, handlers):
+        return run_behavior(IR, handlers, {"ids": ids}, "removeTagsReturning")

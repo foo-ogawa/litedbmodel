@@ -231,6 +231,8 @@ export interface CreateManyEndpoint {
   readonly param: string;
   readonly onConflict?: readonly string[];
   readonly onConflictAction?: 'update' | 'ignore';
+  /** RETURNING projection (the emitted method's row type). Every written row comes back. */
+  readonly returning?: readonly string[];
 }
 
 /** A statically declared batch UPDATE (`updateMany`) — see {@link CreateManyEndpoint} for the bind shape. */
@@ -242,6 +244,8 @@ export interface UpdateManyEndpoint {
   /** The columns each record sets. */
   readonly columns: readonly string[];
   readonly param: string;
+  /** RETURNING projection (the emitted method's row type). Every written row comes back. */
+  readonly returning?: readonly string[];
 }
 
 /** A statically declared batch DELETE (`deleteMany`) — a key-set DELETE bound as ONE key array. */
@@ -251,6 +255,8 @@ export interface DeleteManyEndpoint {
   /** The key column whose value set is deleted. */
   readonly keyColumn: string;
   readonly param: string;
+  /** RETURNING projection (the emitted method's row type). Every written row comes back. */
+  readonly returning?: readonly string[];
 }
 
 /** Every declared endpoint kind. */

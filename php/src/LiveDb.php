@@ -234,6 +234,14 @@ final class MysqlReturning
             if (count($pkCols) === 0) {
                 throw new \RuntimeException("scp write(mysql): an INSERT…RETURNING carries no pk hint, so its written rows cannot be identified ('{$writeSql}'). The producer must pass the model's declared primary key.");
             }
+            if ($isBatch) {
+                // createMany with a CLIENT-supplied key: the statement binds ONE JSON payload, not one
+                // param per key, so the keys are read back out of that SAME payload (as upsertMany does).
+                if (count($pkCols) !== 1) {
+                    throw new \RuntimeException("scp write(mysql): a batch INSERT…RETURNING on the COMPOSITE key (" . implode(', ', $pkCols) . ") cannot be recovered from its JSON payload ('{$writeSql}')");
+                }
+                return new MysqlReselect($writeSql, $jsonSelect($pkCols[0]), [new ReselectBind('json')]);
+            }
             $conds = [];
             $binds = [];
             foreach ($pkCols as $pk) {

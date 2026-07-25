@@ -445,6 +445,15 @@ def _build_mysql_reselect(sql: str):
                 f"scp write(mysql): an INSERT…RETURNING carries no pk hint, so its written rows cannot be "
                 f"identified ({write_sql!r}). The producer must pass the model's declared primary key."
             )
+        if is_batch:
+            # createMany with a CLIENT-supplied key: the statement binds ONE JSON payload, not one
+            # param per key, so the keys are read back out of that SAME payload (as upsertMany does).
+            if len(pk_cols) != 1:
+                raise ValueError(
+                    f"scp write(mysql): a batch INSERT…RETURNING on the COMPOSITE key "
+                    f"({', '.join(pk_cols)}) cannot be recovered from its JSON payload ({write_sql!r})"
+                )
+            return write_sql, json_select(pk_cols[0]), [("json", 0)], False
         conds, binds = [], []
         for pk in pk_cols:
             if pk not in insert_cols:

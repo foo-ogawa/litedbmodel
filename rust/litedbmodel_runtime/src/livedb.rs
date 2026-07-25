@@ -1147,6 +1147,22 @@ fn build_mysql_reselect(sql: &str) -> Result<Option<MysqlReselect>, SqlFailure> 
                 "scp write(mysql): an INSERT…RETURNING carries no pk hint, so its written rows cannot be identified ('{write_sql}'). The producer must pass the model's declared primary key"
             )));
         }
+        if is_batch {
+            // createMany with a CLIENT-supplied key: the statement binds ONE JSON payload, not one
+            // param per key, so the keys are read back out of that SAME payload (as upsertMany does).
+            if pk_cols.len() != 1 {
+                return Err(driver_failure(format!(
+                    "scp write(mysql): a batch INSERT…RETURNING on the COMPOSITE key ({}) cannot be recovered from its JSON payload ('{write_sql}')",
+                    pk_cols.join(", ")
+                )));
+            }
+            return Ok(Some(MysqlReselect {
+                select_sql: json_select(&pk_cols[0]),
+                write_sql,
+                binds: vec![ReselectBind::JsonParam],
+                before: false,
+            }));
+        }
         let mut conds: Vec<String> = Vec::new();
         let mut binds: Vec<ReselectBind> = Vec::new();
         for pk in &pk_cols {

@@ -35,6 +35,7 @@
 import { evaluateExpression, type Scope, type Value } from 'behavior-contracts/runtime';
 import { assembleMakeSQL } from './makesql';
 import { sqliteInsertJson, mysqlInsertJson, sqliteUpdateManyJson, mysqlUpdateManyJson } from './json-batch';
+import { inListPredicate } from './json-array';
 import { postgresSqlBuilder } from '../../drivers/PostgresSqlBuilder';
 import { sqlTypeToBcScalar, sqlTypeToMaterializeClass, type ColumnTypeResolver } from '../coltype';
 import { renderPlaceholders, type Dialect as MakeSQLDialect } from './handler';
@@ -439,9 +440,17 @@ function v1EqualityWhereText(columns: readonly string[]): string {
  * params). `columns[i]` is the table column the i-th emitted param binds — parallel to `params` — so
  * the native-codegen chain types each WHERE-bound `?` from its column (see {@link TxOp.writeMeta}).
  */
-function lowerWhereMember(node: unknown, at: string): { sql: string; params: TxExpr[]; columns: string[] } {
+function lowerWhereMember(node: unknown, at: string, dialect: MakeSQLDialect): { sql: string; params: TxExpr[]; columns: string[] } {
   const op = opKey(node);
   if (op === undefined) throw new Error(`compileWriteNode: ${at}: a where member must be a single-operator Expression node`);
+  if (op === 'in') {
+    // Key-set membership — the SAME static single-param predicate the read IN-list uses
+    // ({@link inListPredicate}: PG `= ANY(?)`, MySQL/SQLite a JSON subquery), so a `deleteMany`'s
+    // statement comes from THIS compiler rather than being assembled by its caller.
+    const [col, val] = binOperands(node, op, at);
+    const column = columnOf(col, at);
+    return { sql: v1ConditionText({ [inListPredicate(dialect, column)]: PROBE }), params: [val], columns: [column] };
+  }
   if (op === 'eq') {
     const [col, val] = binOperands(node, op, at);
     const column = columnOf(col, at);
@@ -457,7 +466,7 @@ function lowerWhereMember(node: unknown, at: string): { sql: string; params: TxE
   throw new Error(`compileWriteNode: ${at}: unsupported where operator '${op}' (write path supports eq/ne/lt/le/gt/ge)`);
 }
 
-function lowerWherePort(ports: Record<string, unknown>, at: string): { sql: string; params: TxExpr[]; columns: string[] } {
+function lowerWherePort(ports: Record<string, unknown>, at: string, dialect: MakeSQLDialect): { sql: string; params: TxExpr[]; columns: string[] } {
   const v = ports.where;
   if (v === undefined) return { sql: '', params: [], columns: [] };
   if (typeof v !== 'object' || v === null || !('arr' in v) || !Array.isArray((v as { arr: unknown }).arr)) {
@@ -468,7 +477,7 @@ function lowerWherePort(ports: Record<string, unknown>, at: string): { sql: stri
   const params: TxExpr[] = [];
   const columns: string[] = [];
   members.forEach((m, i) => {
-    const f = lowerWhereMember(m, `${at}.where[${i}]`);
+    const f = lowerWhereMember(m, `${at}.where[${i}]`, dialect);
     parts.push(f.sql);
     params.push(...f.params);
     columns.push(...f.columns);
@@ -711,23 +720,29 @@ function compileWriteNodeSql(node: WriteNodeLike, dialect: MakeSQLDialect, resol
       // the `executeSQL` `where` port (the emitWrite op-builder path — lowered post-compile from recorded
       // IR, appended by `lowerRecordedWhere`). When deferred, `ports.where` is absent ⇒ emit the base
       // `UPDATE … SET …` and the post-compile pass appends the WHERE (the op builder guarantees a WHERE).
-      const where = lowerWherePort(ports, 'Update');
+      const where = lowerWherePort(ports, 'Update', dialect);
       // v1 `DBModel._update` emits `<c> = ?::<sqlCast>` PER COLUMN on Postgres (skipping timestamp/date).
       const setClauses = setCols.map((c) => `${c} = ${castPlaceholder(dialect, sqlCastMap, c)}`).join(', ');
       const whereTail = where.sql === '' ? '' : ` WHERE ${where.sql}`;
       const sql = `UPDATE ${table} SET ${setClauses}${whereTail}${returningTail(ports)}`;
       // The `?`s bind the SET columns (in setCols order) then the WHERE columns (`where.columns`).
+      // `pk` rides along (the SAME pkPort SSoT the INSERT paths use) so a dialect without native
+      // RETURNING orders its recovered rows by the real key — without it a multi-row UPDATE…RETURNING
+      // comes back in the re-select's own order, which need not match PG's.
       const writeMeta = { table, bindColumns: [...setCols, ...where.columns], returning: returningColumns(ports) };
-      return { sql, params: [...setCols.map((c) => set[c]), ...where.params], writeMeta };
+      const pk = pkPort(ports);
+      return { sql, params: [...setCols.map((c) => set[c]), ...where.params], ...(pk !== undefined ? { pk } : {}), writeMeta };
     }
     case 'Delete': {
       // As Update: WHERE inline (tx-DAG, recorded where) or deferred to the `executeSQL` `where` port
       // (emitWrite path, appended post-compile). Absent `ports.where` ⇒ base `DELETE FROM t`.
-      const where = lowerWherePort(ports, 'Delete');
+      const where = lowerWherePort(ports, 'Delete', dialect);
       const sql = `DELETE FROM ${table}${where.sql === '' ? '' : ` WHERE ${where.sql}`}${returningTail(ports)}`;
-      // The `?`s bind the WHERE columns; a DELETE has no SET/VALUES params.
+      // The `?`s bind the WHERE columns; a DELETE has no SET/VALUES params. `pk` rides along so the
+      // pre-image re-select is ordered by the real key (as Update above).
       const writeMeta = { table, bindColumns: where.columns, returning: returningColumns(ports) };
-      return { sql, params: where.params, writeMeta };
+      const pk = pkPort(ports);
+      return { sql, params: where.params, ...(pk !== undefined ? { pk } : {}), writeMeta };
     }
     default:
       throw new Error(`compileWriteNode: catalog component '${component}' has no write compile (SQL writes: Insert/Update/Delete)`);

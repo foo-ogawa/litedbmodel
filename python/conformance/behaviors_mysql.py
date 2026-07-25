@@ -4,17 +4,17 @@
 # native dict literal and handed to the EXISTING runtime core (run_behavior) —
 # no execution logic is generated. Handlers are ALWAYS injected at the boundary
 # (IR + {effects,config,hooks}); they are never generated.
-# irFingerprint: fnv1a64:09a126052991bccb
+# irFingerprint: fnv1a64:ec2bc26caed47a37
 from behavior_contracts import SPEC_VERSIONS, ProvenanceError, load_compiled_ir, run_behavior
 
 # Spec versions baked at generation time (fail-closed constant comparison at load).
 EXPECTED_SPEC_VERSIONS = {"behavior": 5, "expression": 2, "plan": 1}
 
 # FNV-1a 64 fingerprint of the source portable IR (canonical_json discipline, #208).
-IR_FINGERPRINT = "fnv1a64:09a126052991bccb"
+IR_FINGERPRINT = "fnv1a64:ec2bc26caed47a37"
 
 # Component names exposed by bind(), in IR declaration order.
-COMPONENT_NAMES = ("posts", "postsTop", "page", "postsByIds", "feed", "usersWithPosts", "postsWithAuthor", "usersWithCappedPosts", "usersWithUncappedPosts", "usersWithTopPosts", "createPost", "renamePost", "removePost", "createPostReturning", "renamePostReturning", "removePostReturning", "typedRows", "createTags", "removeTags")
+COMPONENT_NAMES = ("posts", "postsTop", "page", "postsByIds", "feed", "usersWithPosts", "postsWithAuthor", "usersWithCappedPosts", "usersWithUncappedPosts", "usersWithTopPosts", "createPost", "renamePost", "removePost", "createPostReturning", "renamePostReturning", "removePostReturning", "restatusPostsReturning", "removePostsByAuthorReturning", "typedRows", "createTags", "removeTags", "createTagsReturning", "relabelTagsReturning", "removeTagsReturning")
 
 # The portable component-graph IR *document*, embedded as a native dict literal (no JSON parse at
 # runtime). It carries no provenance token — the load-time load_compiled_ir() below verifies the baked
@@ -2691,7 +2691,7 @@ IR_DOC = {
               ]
             },
             "returning": True,
-            "sql": "UPDATE conf_posts SET title = ? WHERE id = ? RETURNING id, title",
+            "sql": "UPDATE conf_posts SET title = ? WHERE id = ? RETURNING id, title /*scp:pk=id;ai=*/",
             "write": True
           }
         }
@@ -2787,7 +2787,7 @@ IR_DOC = {
               ]
             },
             "returning": True,
-            "sql": "DELETE FROM conf_posts WHERE id = ? RETURNING id, title",
+            "sql": "DELETE FROM conf_posts WHERE id = ? RETURNING id, title /*scp:pk=id;ai=*/",
             "write": True
           }
         }
@@ -2823,6 +2823,199 @@ IR_DOC = {
             }
           },
           "name": "RemovePostReturningRow"
+        }
+      }
+    },
+    {
+      "body": [
+        {
+          "component": "executeSQL",
+          "id": "n0",
+          "outType": {
+            "arr": {
+              "name": "RestatusPostsReturningRow",
+              "obj": {
+                "id": {
+                  "opt": "float"
+                },
+                "status": {
+                  "opt": "string"
+                }
+              }
+            }
+          },
+          "portSchemas": {
+            "bigint": {
+              "required": True,
+              "type": "bool"
+            },
+            "params": {
+              "elemType": "value",
+              "required": True,
+              "type": "array"
+            },
+            "returning": {
+              "required": True,
+              "type": "bool"
+            },
+            "sql": {
+              "required": True,
+              "type": "string"
+            },
+            "write": {
+              "required": True,
+              "type": "bool"
+            }
+          },
+          "ports": {
+            "bigint": False,
+            "params": {
+              "arr": [
+                {
+                  "ref": [
+                    "status"
+                  ]
+                },
+                {
+                  "ref": [
+                    "authorId"
+                  ]
+                }
+              ]
+            },
+            "returning": True,
+            "sql": "UPDATE conf_posts SET status = ? WHERE author_id = ? RETURNING id, status /*scp:pk=id;ai=*/",
+            "write": True
+          }
+        }
+      ],
+      "inputPorts": {
+        "authorId": {
+          "required": True,
+          "type": "int"
+        },
+        "status": {
+          "required": True,
+          "type": "string"
+        }
+      },
+      "name": "restatusPostsReturning",
+      "output": {
+        "ref": [
+          "n0"
+        ]
+      },
+      "plan": {
+        "concurrency": 16,
+        "groups": [
+          [
+            0
+          ]
+        ]
+      },
+      "outputType": {
+        "arr": {
+          "obj": {
+            "id": {
+              "opt": "float"
+            },
+            "status": {
+              "opt": "string"
+            }
+          },
+          "name": "RestatusPostsReturningRow"
+        }
+      }
+    },
+    {
+      "body": [
+        {
+          "component": "executeSQL",
+          "id": "n0",
+          "outType": {
+            "arr": {
+              "name": "RemovePostsByAuthorReturningRow",
+              "obj": {
+                "id": {
+                  "opt": "float"
+                },
+                "title": {
+                  "opt": "string"
+                }
+              }
+            }
+          },
+          "portSchemas": {
+            "bigint": {
+              "required": True,
+              "type": "bool"
+            },
+            "params": {
+              "elemType": "value",
+              "required": True,
+              "type": "array"
+            },
+            "returning": {
+              "required": True,
+              "type": "bool"
+            },
+            "sql": {
+              "required": True,
+              "type": "string"
+            },
+            "write": {
+              "required": True,
+              "type": "bool"
+            }
+          },
+          "ports": {
+            "bigint": False,
+            "params": {
+              "arr": [
+                {
+                  "ref": [
+                    "authorId"
+                  ]
+                }
+              ]
+            },
+            "returning": True,
+            "sql": "DELETE FROM conf_posts WHERE author_id = ? RETURNING id, title /*scp:pk=id;ai=*/",
+            "write": True
+          }
+        }
+      ],
+      "inputPorts": {
+        "authorId": {
+          "required": True,
+          "type": "int"
+        }
+      },
+      "name": "removePostsByAuthorReturning",
+      "output": {
+        "ref": [
+          "n0"
+        ]
+      },
+      "plan": {
+        "concurrency": 16,
+        "groups": [
+          [
+            0
+          ]
+        ]
+      },
+      "outputType": {
+        "arr": {
+          "obj": {
+            "id": {
+              "opt": "float"
+            },
+            "title": {
+              "opt": "string"
+            }
+          },
+          "name": "RemovePostsByAuthorReturningRow"
         }
       }
     },
@@ -3095,6 +3288,298 @@ IR_DOC = {
           "name": "WriteSummary"
         }
       }
+    },
+    {
+      "body": [
+        {
+          "component": "executeSQL",
+          "id": "n0",
+          "outType": {
+            "arr": {
+              "name": "CreateTagsReturningRow",
+              "obj": {
+                "id": {
+                  "opt": "float"
+                },
+                "label": {
+                  "opt": "string"
+                }
+              }
+            }
+          },
+          "portSchemas": {
+            "bigint": {
+              "required": True,
+              "type": "bool"
+            },
+            "params": {
+              "elemType": "value",
+              "required": True,
+              "type": "array"
+            },
+            "returning": {
+              "required": True,
+              "type": "bool"
+            },
+            "sql": {
+              "required": True,
+              "type": "string"
+            },
+            "write": {
+              "required": True,
+              "type": "bool"
+            }
+          },
+          "ports": {
+            "bigint": False,
+            "params": {
+              "arr": [
+                {
+                  "ref": [
+                    "rows"
+                  ]
+                }
+              ]
+            },
+            "returning": True,
+            "sql": "INSERT INTO conf_tags (id, label, post_id) SELECT JSON_UNQUOTE(jt.id), JSON_UNQUOTE(jt.label), JSON_UNQUOTE(jt.post_id) FROM JSON_TABLE(?, '$[*]' COLUMNS(id JSON PATH '$.id', label JSON PATH '$.label', post_id JSON PATH '$.post_id')) jt RETURNING id, label /*scp:pk=id;ai=*/",
+            "write": True
+          }
+        }
+      ],
+      "inputPorts": {
+        "rows": {
+          "elemType": {
+            "name": "CreateTagsReturningRecord",
+            "obj": {
+              "id": "int",
+              "label": "string",
+              "post_id": "int"
+            }
+          },
+          "required": True,
+          "type": "array"
+        }
+      },
+      "name": "createTagsReturning",
+      "output": {
+        "ref": [
+          "n0"
+        ]
+      },
+      "plan": {
+        "concurrency": 16,
+        "groups": [
+          [
+            0
+          ]
+        ]
+      },
+      "outputType": {
+        "arr": {
+          "obj": {
+            "id": {
+              "opt": "float"
+            },
+            "label": {
+              "opt": "string"
+            }
+          },
+          "name": "CreateTagsReturningRow"
+        }
+      }
+    },
+    {
+      "body": [
+        {
+          "component": "executeSQL",
+          "id": "n0",
+          "outType": {
+            "arr": {
+              "name": "RelabelTagsReturningRow",
+              "obj": {
+                "id": {
+                  "opt": "float"
+                },
+                "label": {
+                  "opt": "string"
+                }
+              }
+            }
+          },
+          "portSchemas": {
+            "bigint": {
+              "required": True,
+              "type": "bool"
+            },
+            "params": {
+              "elemType": "value",
+              "required": True,
+              "type": "array"
+            },
+            "returning": {
+              "required": True,
+              "type": "bool"
+            },
+            "sql": {
+              "required": True,
+              "type": "string"
+            },
+            "write": {
+              "required": True,
+              "type": "bool"
+            }
+          },
+          "ports": {
+            "bigint": False,
+            "params": {
+              "arr": [
+                {
+                  "ref": [
+                    "rows"
+                  ]
+                }
+              ]
+            },
+            "returning": True,
+            "sql": "UPDATE conf_tags AS u JOIN JSON_TABLE(?, '$[*]' COLUMNS(id JSON PATH '$.id', label JSON PATH '$.label')) AS v ON u.id = JSON_UNQUOTE(v.id) SET u.label = JSON_UNQUOTE(v.label) RETURNING id, label /*scp:pk=id;ai=*/",
+            "write": True
+          }
+        }
+      ],
+      "inputPorts": {
+        "rows": {
+          "elemType": {
+            "name": "RelabelTagsReturningRecord",
+            "obj": {
+              "id": "int",
+              "label": "string"
+            }
+          },
+          "required": True,
+          "type": "array"
+        }
+      },
+      "name": "relabelTagsReturning",
+      "output": {
+        "ref": [
+          "n0"
+        ]
+      },
+      "plan": {
+        "concurrency": 16,
+        "groups": [
+          [
+            0
+          ]
+        ]
+      },
+      "outputType": {
+        "arr": {
+          "obj": {
+            "id": {
+              "opt": "float"
+            },
+            "label": {
+              "opt": "string"
+            }
+          },
+          "name": "RelabelTagsReturningRow"
+        }
+      }
+    },
+    {
+      "body": [
+        {
+          "component": "executeSQL",
+          "id": "n0",
+          "outType": {
+            "arr": {
+              "name": "RemoveTagsReturningRow",
+              "obj": {
+                "id": {
+                  "opt": "float"
+                },
+                "label": {
+                  "opt": "string"
+                }
+              }
+            }
+          },
+          "portSchemas": {
+            "bigint": {
+              "required": True,
+              "type": "bool"
+            },
+            "params": {
+              "elemType": "value",
+              "required": True,
+              "type": "array"
+            },
+            "returning": {
+              "required": True,
+              "type": "bool"
+            },
+            "sql": {
+              "required": True,
+              "type": "string"
+            },
+            "write": {
+              "required": True,
+              "type": "bool"
+            }
+          },
+          "ports": {
+            "bigint": False,
+            "params": {
+              "arr": [
+                {
+                  "ref": [
+                    "ids"
+                  ]
+                }
+              ]
+            },
+            "returning": True,
+            "sql": "DELETE FROM conf_tags WHERE id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) RETURNING id, label /*scp:pk=id;ai=*/",
+            "write": True
+          }
+        }
+      ],
+      "inputPorts": {
+        "ids": {
+          "elemType": "int",
+          "required": True,
+          "type": "array"
+        }
+      },
+      "name": "removeTagsReturning",
+      "output": {
+        "ref": [
+          "n0"
+        ]
+      },
+      "plan": {
+        "concurrency": 16,
+        "groups": [
+          [
+            0
+          ]
+        ]
+      },
+      "outputType": {
+        "arr": {
+          "obj": {
+            "id": {
+              "opt": "float"
+            },
+            "label": {
+              "opt": "string"
+            }
+          },
+          "name": "RemoveTagsReturningRow"
+        }
+      }
     }
   ]
 }
@@ -3206,6 +3691,14 @@ class Conformance:
         return run_behavior(IR, handlers, {"id": id}, "removePostReturning")
 
     @staticmethod
+    def restatus_posts_returning(status, authorId, handlers):
+        return run_behavior(IR, handlers, {"status": status, "authorId": authorId}, "restatusPostsReturning")
+
+    @staticmethod
+    def remove_posts_by_author_returning(authorId, handlers):
+        return run_behavior(IR, handlers, {"authorId": authorId}, "removePostsByAuthorReturning")
+
+    @staticmethod
     def typed_rows(handlers):
         return run_behavior(IR, handlers, {}, "typedRows")
 
@@ -3216,3 +3709,15 @@ class Conformance:
     @staticmethod
     def remove_tags(ids, handlers):
         return run_behavior(IR, handlers, {"ids": ids}, "removeTags")
+
+    @staticmethod
+    def create_tags_returning(rows, handlers):
+        return run_behavior(IR, handlers, {"rows": rows}, "createTagsReturning")
+
+    @staticmethod
+    def relabel_tags_returning(rows, handlers):
+        return run_behavior(IR, handlers, {"rows": rows}, "relabelTagsReturning")
+
+    @staticmethod
+    def remove_tags_returning(ids, handlers):
+        return run_behavior(IR, handlers, {"ids": ids}, "removeTagsReturning")

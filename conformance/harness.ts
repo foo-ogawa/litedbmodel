@@ -206,7 +206,8 @@ class ConfTag {
   declare static id: Column<number, ConfTag>;
   declare static post_id: Column<number, ConfTag>;
 
-  @column() id?: number;
+  // `id INT PRIMARY KEY` — CLIENT-supplied, as `conf_posts` (#130).
+  @column({ primaryKey: true }) id?: number;
   @column() post_id?: number;
   @column() label?: string;
 }
@@ -383,6 +384,24 @@ const ENDPOINTS: EndpointSet = {
     returning: ['id', 'title'],
   },
   /**
+   * #166 — the MULTI-ROW arm. A single-row RETURNING cannot tell whether the dialects agree on row
+   * ORDER; these match two seed rows each. PostgreSQL returns them in its own write order and MySQL
+   * re-selects them, so the two only line up because the recovery is ordered by the declared key.
+   */
+  restatusPostsReturning: {
+    kind: 'update',
+    model: ConfPost,
+    set: [{ column: 'status', param: 'status' }],
+    where: [{ column: 'author_id', op: 'eq', param: 'authorId' }],
+    returning: ['id', 'status'],
+  },
+  removePostsByAuthorReturning: {
+    kind: 'delete',
+    model: ConfPost,
+    where: [{ column: 'author_id', op: 'eq', param: 'authorId' }],
+    returning: ['id', 'title'],
+  },
+  /**
    * #137 — the READ-DECODE guard: a TIMESTAMP and a boolean-valued column are PROJECTED (not merely
    * bound in a WHERE), so the date → canonical-string and bool → Int decode runs in every runtime,
    * on every dialect, and is asserted dialect-invariant at capture.
@@ -390,6 +409,16 @@ const ENDPOINTS: EndpointSet = {
   typedRows: { kind: 'read', model: ConfTyped, select: ['id', 'ts', 'flag', 'label'], order: 'id ASC' },
   createTags: { kind: 'createMany', model: ConfTag, columns: ['id', 'post_id', 'label'], param: 'rows' },
   removeTags: { kind: 'deleteMany', model: ConfTag, keyColumn: 'id', param: 'ids' },
+  /**
+   * #167 — the BATCH RETURNING arm, one per batch kind. A batch write is where MySQL's missing
+   * RETURNING is hardest: `createMany` spans N consecutive ids, `updateMany` must re-bind the SAME
+   * JSON payload to find its rows again, and `deleteMany` has to be described before it runs. The
+   * derivation covered all three from the start; until now nothing could DECLARE them, so none was
+   * gated. The non-RETURNING twins above stay byte-unchanged.
+   */
+  createTagsReturning: { kind: 'createMany', model: ConfTag, columns: ['id', 'post_id', 'label'], param: 'rows', returning: ['id', 'label'] },
+  relabelTagsReturning: { kind: 'updateMany', model: ConfTag, keyColumns: ['id'], columns: ['label'], param: 'rows', returning: ['id', 'label'] },
+  removeTagsReturning: { kind: 'deleteMany', model: ConfTag, keyColumn: 'id', param: 'ids', returning: ['id', 'label'] },
 };
 
 /**
@@ -960,12 +989,38 @@ const EXEC_CASES: readonly ExecCase[] = [
     dbState: [TAGS_STATE],
   },
   { id: 'removeTags: batch DELETE by key set persists', entry: 'removeTags', input: { ids: [100, 101] }, writes: true, dbState: [TAGS_STATE] },
+  // #167 — each batch kind hands back every row it wrote, identically on all three dialects.
+  {
+    id: 'createTagsReturning: batch INSERT … RETURNING returns every created row',
+    entry: 'createTagsReturning',
+    input: (d) =>
+      d === 'postgres'
+        ? { rows_id: [105, 106], rows_post_id: [11, 12], rows_label: ['p', 'q'] }
+        : { rows: [{ id: 105, post_id: 11, label: 'p' }, { id: 106, post_id: 12, label: 'q' }] },
+    writes: true,
+    dbState: [TAGS_STATE],
+  },
+  {
+    id: 'relabelTagsReturning: batch UPDATE … RETURNING returns every updated row',
+    entry: 'relabelTagsReturning',
+    input: (d) =>
+      d === 'postgres'
+        ? { rows_id: [100, 102], rows_label: ['re-100', 're-102'] }
+        : { rows: [{ id: 100, label: 're-100' }, { id: 102, label: 're-102' }] },
+    writes: true,
+    dbState: [TAGS_STATE],
+  },
+  { id: 'removeTagsReturning: batch DELETE … RETURNING returns every removed row', entry: 'removeTagsReturning', input: { ids: [100, 101] }, writes: true, dbState: [TAGS_STATE] },
   // #130 — a write that DECLARES a RETURNING hands back the rows it wrote, on every dialect. The
   // UPDATE's row carries its NEW title (it is described after the write); the DELETE's is the
   // pre-image (described before it), and `dbState` proves the delete still happened.
   { id: 'createPostReturning: INSERT … RETURNING returns the written row (client-supplied PK)', entry: 'createPostReturning', input: { id: 14, authorId: 2, title: 'c2', status: 'live', createdAt: '2026-05-01' }, writes: true, dbState: [POSTS_STATE] },
   { id: 'renamePostReturning: UPDATE … RETURNING returns the written row', entry: 'renamePostReturning', input: { title: 'a1-returned', id: 10 }, writes: true, dbState: [POSTS_STATE] },
   { id: 'removePostReturning: DELETE … RETURNING returns the removed row', entry: 'removePostReturning', input: { id: 11 }, writes: true, dbState: [POSTS_STATE] },
+  // #166 — MULTI-ROW: author 1 owns posts 10 and 11. The §10 cross-check compares the three dialects
+  // row-for-row IN ORDER, so it is the ordering assertion a single-row vector cannot make.
+  { id: 'restatusPostsReturning: multi-row UPDATE … RETURNING returns every written row, in key order', entry: 'restatusPostsReturning', input: { status: 'archived', authorId: 1 }, writes: true, dbState: [POSTS_STATE] },
+  { id: 'removePostsByAuthorReturning: multi-row DELETE … RETURNING returns every removed row, in key order', entry: 'removePostsByAuthorReturning', input: { authorId: 1 }, writes: true, dbState: [POSTS_STATE] },
   // #137 — the read decode: a TIMESTAMP column comes back as the canonical string and a
   // boolean-valued column as an Int, IDENTICALLY on SQLite / live PostgreSQL / live MySQL. The
   // §10 cross-check below is what makes it a decoder assertion rather than three separate goldens.

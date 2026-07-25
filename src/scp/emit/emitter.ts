@@ -458,16 +458,7 @@ class EmitContext {
     const params: ParamDecl[] = [];
     const returning = endpoint.returning;
     const ports: Record<string, unknown> = { table };
-    if (returning !== undefined) {
-      ports.returning = returning.join(', ');
-      // The model's PK travels with a RETURNING write so a dialect with no native RETURNING can
-      // recover the rows it wrote by the REAL key — the auto-increment range, or the values the
-      // write itself bound (UUID / client-supplied / composite). It is the model's DECLARATION
-      // (`@column({ primaryKey, autoIncrement })`), never a guess about the statement's shape.
-      const pkey = getPrimaryKey(model);
-      ports.pk = pkey.columns.join(',');
-      if (pkey.autoInc !== null) ports.autoInc = pkey.autoInc;
-    }
+    this.returningPorts(model, returning, ports);
 
     let component: 'Insert' | 'Update' | 'Delete';
     if (endpoint.kind === 'create') {
@@ -487,13 +478,7 @@ class EmitContext {
     }
 
     const op = compileWriteNode({ component, ports } as Parameters<typeof compileWriteNode>[0], this.spec.dialect, this.resolver(model));
-    const rowType =
-      returning === undefined
-        ? this.writeSummaryType()
-        : this.declareInterface(
-            `${cap1(name)}Row`,
-            objOf(deriveReadRow(table, returning, this.resolver(model), `endpoint '${name}' RETURNING`).outType, name),
-          );
+    const rowType = this.writeRowType(name, model, returning);
     const out = freshNames(params.map((p) => p.name))('rows');
     return {
       name,
@@ -559,6 +544,7 @@ class EmitContext {
     const pg = this.spec.dialect === 'postgres';
     const params: ParamDecl[] = [];
     const ports: Record<string, unknown> = { table: tableNameOf(model), batch: 'true' };
+    this.returningPorts(model, endpoint.returning, ports);
 
     // The bind SHAPE is the builder's own: PG's `UNNEST(?::t[], …)` binds ONE ARRAY PER COLUMN, so each
     // column gets its own array parameter; MySQL/SQLite expand ONE record-array JSON param server-side.
@@ -584,45 +570,69 @@ class EmitContext {
 
     const component = endpoint.kind === 'createMany' ? 'Insert' : 'Update';
     const op = compileWriteNode({ component, ports } as Parameters<typeof compileWriteNode>[0], this.spec.dialect, this.resolver(model));
-    const summary = this.writeSummaryType();
+    const rowType = this.writeRowType(name, model, endpoint.returning);
     const slots = op.params.map((p) => (isBatchRowsMarker(p) ? endpoint.param : renderSlot(p)));
     const out = freshNames(params.map((p) => p.name))('rows');
     return {
       name,
       params,
-      returnType: `${summary}[]`,
+      returnType: `${rowType}[]`,
       lines: [
-        `const ${out}: ${summary}[] = Db.executeSQL(${quote(op.sql)}, [${slots.join(', ')}], true, false, false) as ${summary}[];`,
+        `const ${out}: ${rowType}[] = Db.executeSQL(${quote(op.sql)}, [${slots.join(', ')}], true, ${endpoint.returning !== undefined}, false) as ${rowType}[];`,
         `return ${out};`,
       ],
     };
   }
 
   /**
-   * `deleteMany` — a key-set DELETE. Its WHERE is the SAME static single-param membership predicate a
-   * read IN-list uses ({@link inListPredicate}), spliced through the Delete node's `where` port as the
-   * raw fragment `compileWriteNode` accepts, so the statement text still comes from one compiler.
+   * `deleteMany` — a key-set DELETE. Its WHERE is the `in` member of the write compiler's own WHERE
+   * vocabulary, which lowers to the SAME static single-param membership predicate a read IN-list uses
+   * (`json-array.inListPredicate`) — so the statement text, the RETURNING tail and the mysql pk hint
+   * all come from `compileWriteNode`, not from here.
    */
   private deleteMany(name: string, endpoint: DeleteManyEndpoint): Method {
     const model = endpoint.model;
     assertIdentifier(endpoint.param, `parameter '${endpoint.param}'`);
     const params: ParamDecl[] = [{ name: endpoint.param, type: `${this.bindTypeOf(model, endpoint.keyColumn)}[]` }];
-    const where = compileWhere(
-      { [inListPredicate(this.spec.dialect, endpoint.keyColumn)]: new ParamRef(endpoint.param) as unknown as ConditionValue },
-      this.spec.dialect,
-    );
-    const sql = `DELETE FROM ${tableNameOf(model)} WHERE ${where.sql}`;
-    const summary = this.writeSummaryType();
+    const ports: Record<string, unknown> = {
+      table: tableNameOf(model),
+      where: { arr: [{ in: [{ ref: [endpoint.keyColumn] }, new ParamRef(endpoint.param)] }] },
+    };
+    this.returningPorts(model, endpoint.returning, ports);
+    const op = compileWriteNode({ component: 'Delete', ports } as Parameters<typeof compileWriteNode>[0], this.spec.dialect, this.resolver(model));
+    const rowType = this.writeRowType(name, model, endpoint.returning);
     const out = freshNames(params.map((p) => p.name))('rows');
     return {
       name,
       params,
-      returnType: `${summary}[]`,
+      returnType: `${rowType}[]`,
       lines: [
-        `const ${out}: ${summary}[] = Db.executeSQL(${quote(sql)}, [${where.params.map(renderSlot).join(', ')}], true, false, false) as ${summary}[];`,
+        `const ${out}: ${rowType}[] = Db.executeSQL(${quote(op.sql)}, [${op.params.map(renderSlot).join(', ')}], true, ${endpoint.returning !== undefined}, false) as ${rowType}[];`,
         `return ${out};`,
       ],
     };
+  }
+
+  /**
+   * Declare the `returning` + `pk` ports a RETURNING write needs. The key is the model's DECLARATION
+   * (`@column({ primaryKey, autoIncrement })`) — a dialect with no native RETURNING recovers the
+   * written rows from it. ONE place, shared by the single-row and batch write paths.
+   */
+  private returningPorts(model: ModelClassLike, returning: readonly string[] | undefined, ports: Record<string, unknown>): void {
+    if (returning === undefined) return;
+    ports.returning = returning.join(', ');
+    const pkey = getPrimaryKey(model);
+    ports.pk = pkey.columns.join(',');
+    if (pkey.autoInc !== null) ports.autoInc = pkey.autoInc;
+  }
+
+  /** A write's row type: the uniform transport summary, or the declared RETURNING projection. */
+  private writeRowType(name: string, model: ModelClassLike, returning: readonly string[] | undefined): string {
+    if (returning === undefined) return this.writeSummaryType();
+    return this.declareInterface(
+      `${cap1(name)}Row`,
+      objOf(deriveReadRow(tableNameOf(model), returning, this.resolver(model), `endpoint '${name}' RETURNING`).outType, name),
+    );
   }
 
   /** The record type a MySQL/SQLite batch write's JSON param carries (one field per bound column). */

@@ -295,6 +295,13 @@ func buildMysqlReselect(sql string) (*mysqlReselect, error) {
 		orderBy = " ORDER BY " + strings.Join(pkCols, ", ")
 	}
 	isBatch := strings.Contains(wl, "json_table(")
+	// Recover a BATCH write's rows by reading its key set back out of the SAME JSON payload it bound.
+	jsonSelect := func(key string) string {
+		return fmt.Sprintf(
+			"SELECT %s FROM %s WHERE %s IN (SELECT JSON_UNQUOTE(jt.%s) FROM JSON_TABLE(?, '$[*]' COLUMNS(%s JSON PATH '$.%s')) jt)%s",
+			cols, table, key, key, key, key, orderBy,
+		)
+	}
 	insertCols := []string{}
 	if cm := insertColsRe.FindStringSubmatch(writeSQL); cm != nil {
 		insertCols = splitTrim(cm[1])
@@ -308,10 +315,7 @@ func buildMysqlReselect(sql string) (*mysqlReselect, error) {
 		}
 		key := conflict[0]
 		if isBatch {
-			return &mysqlReselect{writeSQL: writeSQL, selectSQL: fmt.Sprintf(
-				"SELECT %s FROM %s WHERE %s IN (SELECT JSON_UNQUOTE(jt.%s) FROM JSON_TABLE(?, '$[*]' COLUMNS(%s JSON PATH '$.%s')) jt)%s",
-				cols, table, key, key, key, key, orderBy,
-			), binds: []reselectBind{{kind: "json"}}}, nil
+			return &mysqlReselect{writeSQL: writeSQL, selectSQL: jsonSelect(key), binds: []reselectBind{{kind: "json"}}}, nil
 		}
 		idx := columnIndex(insertCols, key)
 		if idx < 0 {
@@ -331,6 +335,14 @@ func buildMysqlReselect(sql string) (*mysqlReselect, error) {
 		}
 		if len(pkCols) == 0 {
 			return nil, fmt.Errorf("scp write(mysql): an INSERT…RETURNING carries no pk hint, so its written rows cannot be identified (%q). The producer must pass the model's declared primary key", writeSQL)
+		}
+		if isBatch {
+			// createMany with a CLIENT-supplied key: the statement binds ONE JSON payload, not one
+			// param per key, so the keys are read back out of that SAME payload (as upsertMany does).
+			if len(pkCols) != 1 {
+				return nil, fmt.Errorf("scp write(mysql): a batch INSERT…RETURNING on the COMPOSITE key (%s) cannot be recovered from its JSON payload (%q)", strings.Join(pkCols, ", "), writeSQL)
+			}
+			return &mysqlReselect{writeSQL: writeSQL, selectSQL: jsonSelect(pkCols[0]), binds: []reselectBind{{kind: "json"}}}, nil
 		}
 		conds := []string{}
 		binds := []reselectBind{}
@@ -354,10 +366,7 @@ func buildMysqlReselect(sql string) (*mysqlReselect, error) {
 			return nil, fmt.Errorf("scp write(mysql): cannot parse the batch JOIN key of %q", writeSQL)
 		}
 		key := km[1]
-		return &mysqlReselect{writeSQL: writeSQL, selectSQL: fmt.Sprintf(
-			"SELECT %s FROM %s WHERE %s IN (SELECT JSON_UNQUOTE(jt.%s) FROM JSON_TABLE(?, '$[*]' COLUMNS(%s JSON PATH '$.%s')) jt)%s",
-			cols, table, key, key, key, key, orderBy,
-		), binds: []reselectBind{{kind: "json"}}}, nil
+		return &mysqlReselect{writeSQL: writeSQL, selectSQL: jsonSelect(key), binds: []reselectBind{{kind: "json"}}}, nil
 	}
 
 	// update / delete — by the write's OWN WHERE predicate, bound from the write's own params. The
