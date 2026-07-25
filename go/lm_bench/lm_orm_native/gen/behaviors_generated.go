@@ -4,7 +4,7 @@
 // sequential runner below. There is NO generic Bind/dispatch/plan scaffolding AND NO bc-runtime import —
 // a fully-covered module is FULLY NATIVE (zero bc-runtime reference; only the std-lib it uses).
 
-package behaviors
+package benchsqlite
 
 import (
 	"strconv"

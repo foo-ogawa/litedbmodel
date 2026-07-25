@@ -3392,3 +3392,83 @@ def bind(handlers):
         return _call
 
     return {name: _make(name) for name in COMPONENT_NAMES}
+
+
+class BenchSqlite:
+    """#192: namespaced 1:1 positional entries (thin wrappers over run_behavior)."""
+
+    @staticmethod
+    def find_all(handlers):
+        return run_behavior(IR, handlers, {}, "findAll")
+
+    @staticmethod
+    def filter_paginate_sort(published, handlers):
+        return run_behavior(IR, handlers, {"published": published}, "filterPaginateSort")
+
+    @staticmethod
+    def find_first(name, handlers):
+        return run_behavior(IR, handlers, {"name": name}, "findFirst")
+
+    @staticmethod
+    def find_unique(email, handlers):
+        return run_behavior(IR, handlers, {"email": email}, "findUnique")
+
+    @staticmethod
+    def nested_find_all(handlers):
+        return run_behavior(IR, handlers, {}, "nestedFindAll")
+
+    @staticmethod
+    def nested_find_first(name, handlers):
+        return run_behavior(IR, handlers, {"name": name}, "nestedFindFirst")
+
+    @staticmethod
+    def nested_find_unique(email, handlers):
+        return run_behavior(IR, handlers, {"email": email}, "nestedFindUnique")
+
+    @staticmethod
+    def nested_relations(handlers):
+        return run_behavior(IR, handlers, {}, "nestedRelations")
+
+    @staticmethod
+    def composite_relations(handlers):
+        return run_behavior(IR, handlers, {}, "compositeRelations")
+
+    @staticmethod
+    def create(email, name, handlers):
+        return run_behavior(IR, handlers, {"email": email, "name": name}, "create")
+
+    @staticmethod
+    def update(id, name, handlers):
+        return run_behavior(IR, handlers, {"id": id, "name": name}, "update")
+
+    @staticmethod
+    def upsert(email, name, handlers):
+        return run_behavior(IR, handlers, {"email": email, "name": name}, "upsert")
+
+    @staticmethod
+    def create_many(rows, handlers):
+        return run_behavior(IR, handlers, {"rows": rows}, "createMany")
+
+    @staticmethod
+    def upsert_many(rows, handlers):
+        return run_behavior(IR, handlers, {"rows": rows}, "upsertMany")
+
+    @staticmethod
+    def update_many(rows, handlers):
+        return run_behavior(IR, handlers, {"rows": rows}, "updateMany")
+
+    @staticmethod
+    def nested_create(email, name, title, handlers):
+        return run_behavior(IR, handlers, {"email": email, "name": name, "title": title}, "nestedCreate")
+
+    @staticmethod
+    def nested_upsert(email, name, title, handlers):
+        return run_behavior(IR, handlers, {"email": email, "name": name, "title": title}, "nestedUpsert")
+
+    @staticmethod
+    def nested_update(id, name, title, handlers):
+        return run_behavior(IR, handlers, {"id": id, "name": name, "title": title}, "nestedUpdate")
+
+    @staticmethod
+    def delete(email, name, handlers):
+        return run_behavior(IR, handlers, {"email": email, "name": name}, "delete")

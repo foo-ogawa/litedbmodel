@@ -3379,6 +3379,91 @@ try {
     throw new \RuntimeException("behavior-contracts generated module: IR fingerprint mismatch (baked={$irFingerprint}) — the generated code was modified or corrupted (fail-closed)", 0, $e);
 }
 
+// #192: namespaced 1:1 positional entries (thin wrappers over runBehavior). Guarded so a re-require
+// is idempotent; the compiled-IR handle is held on a static (a class cannot close over the local $ir).
+if (!\class_exists('BenchSqlite', false)) {
+    final class BenchSqlite {
+        public static \LiteDbModel\Runtime\BehaviorContracts\CompiledIr $ir;
+
+        public static function findAll(array $handlers): mixed {
+            return \LiteDbModel\Runtime\BehaviorContracts\Behavior::runBehavior(self::$ir, $handlers, [], 'findAll');
+        }
+
+        public static function filterPaginateSort($published, array $handlers): mixed {
+            return \LiteDbModel\Runtime\BehaviorContracts\Behavior::runBehavior(self::$ir, $handlers, ['published' => $published], 'filterPaginateSort');
+        }
+
+        public static function findFirst($name, array $handlers): mixed {
+            return \LiteDbModel\Runtime\BehaviorContracts\Behavior::runBehavior(self::$ir, $handlers, ['name' => $name], 'findFirst');
+        }
+
+        public static function findUnique($email, array $handlers): mixed {
+            return \LiteDbModel\Runtime\BehaviorContracts\Behavior::runBehavior(self::$ir, $handlers, ['email' => $email], 'findUnique');
+        }
+
+        public static function nestedFindAll(array $handlers): mixed {
+            return \LiteDbModel\Runtime\BehaviorContracts\Behavior::runBehavior(self::$ir, $handlers, [], 'nestedFindAll');
+        }
+
+        public static function nestedFindFirst($name, array $handlers): mixed {
+            return \LiteDbModel\Runtime\BehaviorContracts\Behavior::runBehavior(self::$ir, $handlers, ['name' => $name], 'nestedFindFirst');
+        }
+
+        public static function nestedFindUnique($email, array $handlers): mixed {
+            return \LiteDbModel\Runtime\BehaviorContracts\Behavior::runBehavior(self::$ir, $handlers, ['email' => $email], 'nestedFindUnique');
+        }
+
+        public static function nestedRelations(array $handlers): mixed {
+            return \LiteDbModel\Runtime\BehaviorContracts\Behavior::runBehavior(self::$ir, $handlers, [], 'nestedRelations');
+        }
+
+        public static function compositeRelations(array $handlers): mixed {
+            return \LiteDbModel\Runtime\BehaviorContracts\Behavior::runBehavior(self::$ir, $handlers, [], 'compositeRelations');
+        }
+
+        public static function create($email, $name, array $handlers): mixed {
+            return \LiteDbModel\Runtime\BehaviorContracts\Behavior::runBehavior(self::$ir, $handlers, ['email' => $email, 'name' => $name], 'create');
+        }
+
+        public static function update($id, $name, array $handlers): mixed {
+            return \LiteDbModel\Runtime\BehaviorContracts\Behavior::runBehavior(self::$ir, $handlers, ['id' => $id, 'name' => $name], 'update');
+        }
+
+        public static function upsert($email, $name, array $handlers): mixed {
+            return \LiteDbModel\Runtime\BehaviorContracts\Behavior::runBehavior(self::$ir, $handlers, ['email' => $email, 'name' => $name], 'upsert');
+        }
+
+        public static function createMany($rows, array $handlers): mixed {
+            return \LiteDbModel\Runtime\BehaviorContracts\Behavior::runBehavior(self::$ir, $handlers, ['rows' => $rows], 'createMany');
+        }
+
+        public static function upsertMany($rows, array $handlers): mixed {
+            return \LiteDbModel\Runtime\BehaviorContracts\Behavior::runBehavior(self::$ir, $handlers, ['rows' => $rows], 'upsertMany');
+        }
+
+        public static function updateMany($rows, array $handlers): mixed {
+            return \LiteDbModel\Runtime\BehaviorContracts\Behavior::runBehavior(self::$ir, $handlers, ['rows' => $rows], 'updateMany');
+        }
+
+        public static function nestedCreate($email, $name, $title, array $handlers): mixed {
+            return \LiteDbModel\Runtime\BehaviorContracts\Behavior::runBehavior(self::$ir, $handlers, ['email' => $email, 'name' => $name, 'title' => $title], 'nestedCreate');
+        }
+
+        public static function nestedUpsert($email, $name, $title, array $handlers): mixed {
+            return \LiteDbModel\Runtime\BehaviorContracts\Behavior::runBehavior(self::$ir, $handlers, ['email' => $email, 'name' => $name, 'title' => $title], 'nestedUpsert');
+        }
+
+        public static function nestedUpdate($id, $name, $title, array $handlers): mixed {
+            return \LiteDbModel\Runtime\BehaviorContracts\Behavior::runBehavior(self::$ir, $handlers, ['id' => $id, 'name' => $name, 'title' => $title], 'nestedUpdate');
+        }
+
+        public static function delete($email, $name, array $handlers): mixed {
+            return \LiteDbModel\Runtime\BehaviorContracts\Behavior::runBehavior(self::$ir, $handlers, ['email' => $email, 'name' => $name], 'delete');
+        }
+    }
+}
+BenchSqlite::$ir = $ir;
+
 // bind — inject handlers (boundary injection; catalog name → implementation) and
 // get one executor closure per component. Each call delegates to the runtime
 // core's Behavior::runBehavior over the embedded IR (dynamic-path equivalent — §7.3).
