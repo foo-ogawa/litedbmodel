@@ -1,22 +1,24 @@
 /**
- * Live-DB corpus (re)generation entry, run under vitest's ESM resolver (WS7g, #36).
+ * Live-DB leg (re)generation entry, run under vitest's ESM resolver (#36 WS7g; #144).
  *
- *   npx vitest run conformance/gen-livedb.test.ts   # writes conformance/vectors-livedb/livedb.json
+ *   npm run conformance:gen:livedb                          # write the language modules + corpus
+ *   LIVEDB_GEN_MODE=check npm run conformance:gen:livedb    # drift-gate them (no write)
  *
- * Like gen-vectors.test.ts, this is the SSoT generator wrapped so vitest resolves the ESM-only
- * behavior-contracts from source. It writes the pg+mysql live-DB bundles and asserts (inside
- * writeLivedbCorpus → crossCheckAgainstFrozen) that the captured expectedResult/expectedDbState
- * equal the already-frozen SQLite exec/tx reference — so the live-DB corpus is provably the same
- * reference the SQLite conformance locks.
+ * Like gen-vectors.test.ts this is the SSoT generator wrapped so vitest resolves the ESM-only
+ * behavior-contracts from source. It lowers the harness declaration for `postgres` + `mysql`, runs
+ * `bc generate` for the python / php / go legs, and projects the frozen exec suite onto the live
+ * dialects — no fixture is re-declared and no query is re-executed here.
  */
 import { describe, it, expect } from 'vitest';
 import { writeLivedbCorpus } from './gen-livedb';
 
-describe('live-DB conformance corpus generation (WS7g)', () => {
-  it('writes the pg+mysql live-DB corpus from the TS reference (cross-checked vs frozen)', () => {
-    const file = writeLivedbCorpus();
+const MODE = process.env.LIVEDB_GEN_MODE === 'check' ? 'check' : 'generate';
+
+describe('live-DB cross-language leg', () => {
+  it(`${MODE}s the language modules + the live-DB corpus`, () => {
+    const file = writeLivedbCorpus(MODE);
     expect(file).toContain('livedb.json');
     // eslint-disable-next-line no-console
-    console.log(`wrote live-DB corpus: ${file}`);
-  });
+    console.log(`${MODE}: live-DB corpus ${file}`);
+  }, 300_000);
 });

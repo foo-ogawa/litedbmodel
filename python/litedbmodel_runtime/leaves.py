@@ -30,7 +30,8 @@ code calls the leaf with no driver arg — the python ir-exec path injects it).
 from __future__ import annotations
 
 import json
-from typing import Any, Callable, Dict, List, Mapping, Sequence, Union
+import re
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
 from .driver import Driver
 from .errors import SqlFailure
@@ -44,7 +45,7 @@ from .exec_context import (
 from .exec_context import execute as seam_execute
 from .exec_context import run as seam_run
 from .grouping import attach_to_parent, dedupe_key_tuples, group_by_key
-from .static_bundle import render_placeholders
+from .static_bundle import render_placeholders, resolve_pg_array_cast
 
 __all__ = ["make_handlers"]
 
@@ -52,6 +53,47 @@ __all__ = ["make_handlers"]
 # ``{"error": message}`` on a fail-closed transport failure (``run_behavior`` propagates it).
 Outcome = Mapping[str, Any]
 Handler = Callable[[Mapping[str, Any], Mapping[str, Any]], Outcome]
+
+
+# ── the DYNAMIC (SKIP) WHERE: assembled by the transport, at execution time ────────────────────
+#
+# Port of ``src/scp/leaves.ts`` ``spliceWhere``/``assembleDynamicWhere`` (the TS reference). A SKIP
+# predicate's presence is per-CALL, so the FINAL statement can only be determined here — which is
+# also why the placeholder render runs AFTER this. A statement with no optional predicate carries no
+# plan and never reaches this code.
+
+#: The SQL keywords that may follow a WHERE clause — the clause splices in BEFORE the first of them,
+#: at exactly the position a bounded WHERE occupies.
+_WHERE_TAIL_RE = re.compile(r"\s+(GROUP BY|ORDER BY|LIMIT|OFFSET|FOR UPDATE|RETURNING)\b", re.IGNORECASE)
+
+
+def _splice_where(base_sql: str, where_sql: str) -> str:
+    """Splice a ``` WHERE …``` clause (leading space included, or ``''``) before the first tail keyword."""
+    if where_sql == "":
+        return base_sql
+    tail = _WHERE_TAIL_RE.search(base_sql)
+    if tail is None:
+        return base_sql + where_sql
+    return base_sql[: tail.start()] + where_sql + base_sql[tail.start() :]
+
+
+def _effective_statement(ports: Mapping[str, Any]) -> Tuple[str, List[Any]]:
+    """The ``(sql, params)`` a statement actually executes: the dynamic plan assembled when one is
+    present, the ports verbatim otherwise.
+
+    bc has ALREADY evaluated each fragment's params and its SKIP guard against the input, so a dropped
+    fragment arrives as ``None``. The survivors join with ``WHERE``/``AND`` and their params bind
+    BEFORE the base params (the WHERE ``?``s precede the tail's)."""
+    plan: Optional[Mapping[str, Any]] = ports.get("whereDynamic")
+    params: List[Any] = list(ports["params"])
+    if plan is None:
+        return ports["sql"], params
+    where_sql = ""
+    where_params: List[Any] = []
+    for frag in (f for f in (plan.get("frags") or []) if f is not None):
+        where_sql += (" WHERE " if where_sql == "" else " AND ") + frag["sql"]
+        where_params.extend(frag["params"])
+    return _splice_where(ports["sql"], where_sql), where_params + params
 
 
 def _bind_params(params: Sequence[Any], dialect: str) -> List[Any]:
@@ -79,8 +121,17 @@ def make_handlers(driver_or_ctx: Union[Driver, ExecutionContext], dialect: str) 
         # the generated runner. Outside a tx, `current_context()` is None ⇒ the bound driver ctx (the
         # documented `current_context` contract — a raw-driver callee still resolves the pinned tx conn).
         active = current_context() or ctx
-        sql = render_placeholders(ports["sql"], dialect)
-        params = _bind_params(ports["params"], dialect)
+        # The DYNAMIC (SKIP) WHERE is assembled FIRST: the final statement shape is only known here,
+        # so the placeholder render must follow it (CLAUDE.md §2).
+        effective_sql, effective_params = _effective_statement(ports)
+        if dialect == "postgres":
+            # The DEFERRED `?::<T>[]` element type (#46) is resolved from the REAL bound key set —
+            # the same render-layer step, and the same SSoT, the imperative relation path uses.
+            for p in effective_params:
+                if isinstance(p, list):
+                    effective_sql = resolve_pg_array_cast(effective_sql, p)
+        sql = render_placeholders(effective_sql, dialect)
+        params = _bind_params(effective_params, dialect)
         try:
             if ports.get("write") and not ports.get("returning"):
                 info = seam_run(active, sql, params, WRITE_INTENT)

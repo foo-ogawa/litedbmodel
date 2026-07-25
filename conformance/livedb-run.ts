@@ -1,22 +1,34 @@
 /**
- * litedbmodel SCP LIVE-DB orchestrator (WS7g, #36) — the coordinated cross-language live-DB pass.
+ * litedbmodel SCP LIVE-DB orchestrator (#36 WS7g; leaf/emitter cutover #144) — the coordinated
+ * cross-language live-DB pass.
  *
- * Runs the WS7g live-DB corpus (`conformance/vectors-livedb/livedb.json` — the exec/tx bundles
- * compiled for `postgres` + `mysql`) through EACH language runtime's live-DB leg (Python / PHP /
- * Go / Rust) against ONE shared dockerized Postgres + MySQL stack, sequentially, and asserts every
- * runtime reproduces the frozen SQLite reference on BOTH live dialects (the §10 promise). Each
- * language leg isolates its tables in its OWN namespace (Postgres schema / MySQL database
- * scp_py / scp_php / scp_go / scp_rust) so the shared stack has no cross-contamination.
+ * Runs the live-DB corpus (`conformance/vectors-livedb/livedb.json`) through EACH language leg
+ * against ONE shared dockerized Postgres + MySQL stack, sequentially, and asserts every runtime
+ * reproduces what the TS leg captured on the SAME servers (the §10 promise). A leg executes the
+ * module bc GENERATED for its language from the SAME declaration — nothing is replayed from a
+ * serialized bundle, because a leaf-executed module needs a live in-process handle.
+ *
+ * ## The legs
+ *
+ *   - `py`  — `python/conformance/livedb_runner.py`   (bc `--lang python`)
+ *   - `php` — `php/conformance/livedb_runner.php`     (bc `--lang php`)
+ *
+ * There is no go / rust leg: BOTH typed-native emitters fail closed on the SKIP endpoint's
+ * `whereDynamic` port ("component 'feed': node 'n0' port 'whereDynamic' is not statically
+ * resolvable"), so no module can be generated for them from this declaration. `conformance/
+ * gen-livedb.ts` carries the verbatim repro; adding the leg back is one `LANG_TARGETS` entry plus a
+ * call table once bc covers the port. The TS leg over these same vectors is
+ * `test/scp/conformance-vectors.test.ts` (in the main suite, live PG + MySQL).
  *
  * Prerequisite: the docker stack is UP with host-published ports (docker-compose.livedb.yml) and
- * the live-DB corpus is generated (`npm run conformance:gen:livedb`). Typical driver:
+ * the corpus + language modules are generated. Typical driver:
  *
  *   npm run docker:livedb:up          # postgres+mysql on host ports 5433/3307
- *   npm run conformance:gen:livedb    # (re)write conformance/vectors-livedb/livedb.json
- *   npx tsx conformance/livedb-run.ts # run all 4 language legs
+ *   npm run conformance:gen:livedb    # regenerate the language modules + the corpus
+ *   npm run conformance:livedb        # run every language leg
  *   npm run docker:livedb:down
  *
- * Each language leg emits a machine-readable JSON summary as its LAST stdout line:
+ * Each leg emits a machine-readable JSON summary as its LAST stdout line:
  *   {"lang":"<x>-livedb","suites":{"livedb-pg":{pass,fail},"livedb-mysql":{pass,fail}},...}
  * and exits 0 (all pass) / 1 (any fail) / 2 (corpus mismatch) / 3 (DB unreachable — LOUD, never
  * a silent skip). This orchestrator fails if ANY leg is not all-pass, or any leg is unrunnable.
@@ -69,10 +81,8 @@ interface LangLeg {
 }
 
 const LEGS: LangLeg[] = [
-  { lang: 'py', cmd: process.env.LIVEDB_PY || 'python3', args: [join(REPO, 'python', 'litedbmodel_runtime', 'livedb_runner.py')] },
+  { lang: 'py', cmd: process.env.LIVEDB_PY || 'python3', args: [join(REPO, 'python', 'conformance', 'livedb_runner.py')] },
   { lang: 'php', cmd: 'php', args: [join(REPO, 'php', 'conformance', 'livedb_runner.php')] },
-  { lang: 'go', cmd: 'go', args: ['run', './livedb_runner'], cwd: join(REPO, 'go') },
-  { lang: 'rust', cmd: 'cargo', args: ['run', '--quiet', '-p', 'livedb_runner'], cwd: join(REPO, 'rust') },
 ];
 
 // The env each leg inherits (host-published docker ports; matches docker-compose.livedb.yml).
@@ -134,7 +144,7 @@ function main(): void {
     console.error('conformance(livedb): FAIL — a language leg did not pass all live-DB vectors');
     process.exit(1);
   }
-  console.log('conformance(livedb): PASS (all 4 language runtimes green on live PG + MySQL)');
+  console.log(`conformance(livedb): PASS (${LEGS.length} language runtime(s) green on live PG + MySQL)`);
 }
 
 main();

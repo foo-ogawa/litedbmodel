@@ -12,10 +12,12 @@
 /**
  * Fingerprint.php — 可搬 IR ドキュメントの決定的 fingerprint（PHP port, bc#13 SP2）。
  *
- * TS 参照実装 `ts/src/generator/fingerprint.ts` の完全一致 port。生成モジュール
- * （共通 Generator の php emitter 出力）が require 時に埋め込みリテラルから
- * fingerprint を再計算し、生成時に焼き込まれた定数と比較するために使う
- * （skew は LOUD reject — graphddb #208 の prepared-artifact 規律）。
+ * TS 参照実装 `ts/src/generator/fingerprint.ts` の完全一致 port。これは出自ゲートを**通さない** raw 実装
+ * （**内部 seam**）で、呼ぶのは境界 loader {@see CompiledIr::load}（生成モジュールが require 時に埋め込み
+ * リテラルから再計算し、焼き込み定数と比較する — skew は LOUD reject）と package 内部だけ。consumer 向けの
+ * 公開面は出自ゲート付きの {@see CompiledIr::fingerprintComponentGraph}（compile 済み handle を要求する）。
+ *
+ * @internal
  *
  * クロス言語一致の規律（TS / Python / Rust / Go と完全一致）:
  *   1. JSON ドキュメント（stdClass / list array / スカラ — json_decode(.., false) 形）を

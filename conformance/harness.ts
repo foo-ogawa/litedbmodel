@@ -85,6 +85,7 @@ import {
   type DeriveColumnsOptions,
   type DialectName,
   type EmittedEndpoint,
+  type EmitSpec,
   type EndpointSet,
   type ModelClassLike,
   type SqlBundle,
@@ -292,7 +293,7 @@ const ENDPOINTS: EndpointSet = {
  * The schema + seed, IDENTICAL for all three dialects (portable DDL). One schema is itself part of
  * the evidence that a divergent result is the dialect SQL diverging, never the fixture.
  */
-const SCHEMA: readonly string[] = [
+export const SCHEMA: readonly string[] = [
   'DROP TABLE IF EXISTS conf_tags',
   'DROP TABLE IF EXISTS conf_posts',
   'DROP TABLE IF EXISTS conf_users',
@@ -316,6 +317,25 @@ const SCHEMA: readonly string[] = [
 
 /** Where the emitted + generated modules land (gitignored; inside the repo so imports resolve). */
 const GEN_DIR = join(HERE, '.generated');
+
+/**
+ * The ONE lowering input of this corpus: the fixtures above, as the emitter's {@link EmitSpec} for
+ * one dialect. {@link build} lowers with it for the TS leg, and `gen-livedb.ts` lowers with the SAME
+ * spec to generate the python / php / go modules the other language runners execute — so every leg
+ * runs the SAME declaration, never a re-declared copy.
+ */
+export function emitSpecFor(dialect: DialectName): EmitSpec {
+  return {
+    behavior: BEHAVIOR,
+    dialect,
+    // The emitted module imports the library's ONE leaf catalog; the specifier must resolve from
+    // the emitted file's own location (bc type-checks the source it reads).
+    leafImport: join(ROOT, 'src/scp/leaf-transport.js'),
+    endpoints: ENDPOINTS,
+    models: conformanceModels,
+    columnOptions: COLUMN_OPTIONS,
+  };
+}
 
 /** The typed facade a generated `typescript-native` module binds (methods keyed by endpoint name). */
 type SyncFacade = Record<string, (input?: Record<string, unknown>) => unknown>;
@@ -374,16 +394,7 @@ async function build(dialect: DialectName, config?: LimitConfigSpec): Promise<Bu
   if (config !== undefined) setLimitConfig(config);
   let emitted;
   try {
-    emitted = emitBehaviorModule({
-      behavior: BEHAVIOR,
-      dialect,
-      // The emitted module imports the library's ONE leaf catalog; the specifier must resolve from
-      // the emitted file's own location (bc type-checks the source it reads).
-      leafImport: join(ROOT, 'src/scp/leaf-transport.js'),
-      endpoints: ENDPOINTS,
-      models: conformanceModels,
-      columnOptions: COLUMN_OPTIONS,
-    });
+    emitted = emitBehaviorModule(emitSpecFor(dialect));
   } finally {
     resetLimitConfig();
   }

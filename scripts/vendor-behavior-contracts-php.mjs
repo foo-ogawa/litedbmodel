@@ -72,6 +72,11 @@ const VENDORED_FILES = [
   'SpecVersions.php',
   'FingerprintFailure.php',
   'Fingerprint.php',
+  // The fingerprint-gated ADOPT a bc `--lang php` generated module performs at require time
+  // (`CompiledIr::load($irDoc, $irFingerprint)` → the in-process provenance handle `Behavior::
+  // runBehavior` consumes). Raises ProvenanceError on a modified/corrupted literal (fail-closed).
+  'ProvenanceError.php',
+  'CompiledIr.php',
 ];
 
 const SRC_NAMESPACE = 'BehaviorContracts';
