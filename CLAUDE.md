@@ -59,6 +59,32 @@ ORMユーザ  : ライブラリのデコレータでモデル＋宣言エンド�
 - リーフ（言語別ネイティブ実装）は**言語ごとに1度だけ**手書き。これは sanctioned。
 - 「go に pq を、php に pgsql を」と言語ごとに配線を書き足すのは**直交分解の破壊＝不正**。
 
+### 3.1 生成物の呼び方（bc typed-native）— 迷ったら bc の docs と完動サンプルを読め
+
+**bc の生成エントリは authored メソッドの 1:1 写像。宣言クラスが名前空間、authored 引数がその順の位置引数。
+transport / wire の配線は `--leaf-transport-import` / `--shared-types-import` で generate 時に焼き込まれ、
+呼び出し側にランタイム注入は無い。ハーネスは「シグネチャで直呼びするだけ」。**
+
+```go
+rows, err := userrepo.FindByEmail("a@b.c")   // go
+```
+```rust
+let rows = findByEmail("a@b.c".to_string())?; // rust
+```
+
+一次ソース: `behavior-contracts/README.md` §「3. Call the generated entry point」。
+**完動サンプル `behavior-contracts/examples/using-a-bc-library/`**（1モデルを TS 直実行 + go/rust の
+`bc generate` 実行で同じ行を出す）。go/rust の呼び方に迷ったら**まずこれを読む**。
+
+- **typed-native に「名前引きエントリ（`bind` 相当）」を要求するな。** ランタイム辞書 lookup を生成物に
+  持ち込むことになり、「codegen 出力は静的に端まで追える直呼びのみ」に反する。`bind(handlers)` を出すのは
+  literal エミッタ（`typescript` / `python` / `php`）だけで、それは interpreter レグの実行モデルだから。
+  go / rust に literal エミッタは無い（登録エミッタ7種）。
+- **conformance / bench の runner は「ハーネス」。生成メソッドをシグネチャ直呼びする `switch` は §3 が
+  認めている形**（`go/lm_bench/lm_orm_native/main.go` の `op()` が既にその形）。
+  これを「per-endpoint の手書き＝不正コード」と誤判定して bc に機能要求を投げた事故がある
+  （2026-07-26・#163／bc#223 は取り下げ）。**docs を読まずに「bc に機能が無い」と結論するな。**
+
 ## 4. 静的 / 動的の切り分け
 
 - **静的な宣言エンドポイント → codegen**
