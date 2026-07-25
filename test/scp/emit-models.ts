@@ -52,10 +52,13 @@ export class TenantUser {
   @column() user_id?: number;
   @column() name?: string;
 
-  @hasMany(() => [
-    [TenantUser.tenant_id, TenantPost.tenant_id],
-    [TenantUser.user_id, TenantPost.user_id],
-  ])
+  @hasMany(
+    () => [
+      [TenantUser.tenant_id, TenantPost.tenant_id],
+      [TenantUser.user_id, TenantPost.user_id],
+    ],
+    { order: () => TenantPost.title.asc() },
+  )
   declare posts: Promise<TenantPost[]>;
 }
 
@@ -147,7 +150,7 @@ export const EMIT_ENDPOINTS: EndpointSet = {
   tenantUsersWithPosts: {
     kind: 'read',
     model: TenantUser,
-    order: 'user_id ASC',
+    order: 'tenant_id ASC, user_id ASC',
     with: ['posts'],
   },
   createUser: {

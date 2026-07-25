@@ -14,12 +14,11 @@ import { EMIT_COLUMN_OPTIONS, EMIT_ENDPOINTS, emitModels, Post, TenantUser, User
 const LEAF = '../../src/scp/leaf-transport.js';
 
 /**
- * The endpoints a dialect can express. Two declarations are deliberately NOT emittable everywhere and
- * are loud rejects rather than silently-wrong SQL (both are asserted below): a COMPOSITE-key relation
- * on PostgreSQL (its batch form binds one array param per key column) and a RETURNING write on MySQL.
+ * The endpoints a dialect can express. ONE declaration is deliberately NOT emittable everywhere and is
+ * a loud reject rather than silently-wrong SQL (asserted below): a RETURNING write on MySQL.
  */
 function endpointsFor(dialect: 'sqlite' | 'postgres' | 'mysql'): EndpointSet {
-  const drop = dialect === 'postgres' ? ['tenantUsersWithPosts'] : dialect === 'mysql' ? ['createUser'] : [];
+  const drop = dialect === 'mysql' ? ['createUser'] : [];
   return Object.fromEntries(Object.entries(EMIT_ENDPOINTS).filter(([k]) => !drop.includes(k)));
 }
 
@@ -221,10 +220,18 @@ describe('emitter — RELATIONS (one query per level, N+1-free)', () => {
     expect(body[2]).toContain("EXISTS (SELECT 1 FROM json_each(?) je WHERE json_extract(je.value, '$[0]') = e2e_tenant_posts.tenant_id");
   });
 
-  it('a composite-key relation on POSTGRES is a loud reject, not a mis-bound statement', () => {
-    expect(() => emit('postgres', { tenantUsersWithPosts: EMIT_ENDPOINTS.tenantUsersWithPosts })).toThrow(
-      /COMPOSITE-key relation .* on PostgreSQL binds one array param PER key column/,
+  it('a composite-key relation on POSTGRES binds the SAME single key-tuple param (#159)', () => {
+    const body = bodyOf(emit('postgres').source, 'tenantUsersWithPosts');
+    // The key set is the ONE array `pluck` yields — the same call the mysql/sqlite form emits.
+    expect(body[1]).toContain('Db.pluck(rows, ["tenant_id", "user_id"])');
+    // …expanded server-side into typed key rows, so the statement binds exactly ONE param.
+    expect(body[2]).toContain(
+      'JOIN (SELECT (_t->>0)::int AS key0, (_t->>1)::int AS key1 FROM json_array_elements(?::json) AS _t) AS _keys ' +
+        'ON e2e_tenant_posts.tenant_id = _keys.key0 AND e2e_tenant_posts.user_id = _keys.key1',
     );
+    expect(body[2]).toContain('Db.executeSQL(');
+    expect(body[2]).toContain(', [postsKeys], false, false, false)');
+    expect(body[2].match(/\?/g)).toHaveLength(1); // ONE placeholder ⇒ ONE bound param
   });
 });
 

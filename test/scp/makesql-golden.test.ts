@@ -1161,34 +1161,38 @@ describe('C. Relations — makeSQL byte-matches LazyRelation (all shapes, all di
   }
 });
 
-describe('C. Composite STATIC relation form (#47 item 1) — PG byte-matches v1 unnest-JOIN', () => {
+describe('C. Composite STATIC relation form (#47 item 1) — ONE key-tuple param on every dialect', () => {
   // The STATIC composite op (compileCompositeKeyStaticUnlimited) is length-INDEPENDENT so the op.sql
-  // is fixed. On PG it is byte-identical to v1's composite unnest-JOIN: the golden below drives the
-  // REAL v1 `compileCompositeKeyUnlimited` (proven above to match LazyRelation) and the static form,
-  // with both deferred casts resolved from the same int keys, reproduces it. MySQL/SQLite deviate to
-  // the single-JSON tuple form (the owner-approved deviation the single-key IN-list uses).
-  it('[postgres] static unnest byte-matches the v1 composite unnest-JOIN', () => {
-    const v1 = render(
-      compileCompositeKeyUnlimited({
-        dialect: 'postgres',
-        tableName: 'comments',
-        select: 'tenant_id, post_id',
-        targetKeys: ['tenant_id', 'post_id'],
-        tuples: [[100, 1]],
-      }),
-      'postgres',
-    ).sql;
-    const staticNode = compileCompositeKeyStaticUnlimited({
+  // is fixed. It binds the key set as the ONE array-of-tuples param `pluck` yields on EVERY dialect
+  // (#159): MySQL/SQLite expand it with JSON_TABLE / json_each, PG with json_array_elements + the
+  // declared per-column casts. That is a RESULT-parity deviation from v1's value-expanding text on
+  // every dialect — v1's own bytes stay pinned by `compileCompositeKeyUnlimited` above, and the
+  // deviating forms are proven live (ScpDialect / EmitterEndToEnd integration).
+  it('[postgres] the static composite JOIN binds ONE JSON key-tuple param, cast per declared column', () => {
+    const node = compileCompositeKeyStaticUnlimited({
       dialect: 'postgres',
       tableName: 'comments',
       select: 'tenant_id, post_id',
       targetKeys: ['tenant_id', 'post_id'],
-      deferPgArrayCast: true,
+      pgKeyTypes: ['int', 'bigint'],
     });
-    let sql = assembleMakeSQL(staticNode).sql;
-    sql = resolvePgArrayCast(sql, [100]); // first column keys (int → int[])
-    sql = resolvePgArrayCast(sql, [1]); // second column keys (int → int[])
-    expect(renderPlaceholders(sql, 'postgres')).toBe(v1);
+    expect(renderPlaceholders(assembleMakeSQL(node).sql, 'postgres')).toBe(
+      'SELECT tenant_id, post_id FROM comments JOIN (SELECT (_t->>0)::int AS key0, (_t->>1)::bigint AS key1 ' +
+        'FROM json_array_elements($1::json) AS _t) AS _keys ' +
+        'ON comments.tenant_id = _keys.key0 AND comments.post_id = _keys.key1',
+    );
+    expect(node.params).toEqual([[[null]]]); // ONE param — the key TUPLE set
+  });
+
+  it('[postgres] a composite batch without the declared key types is a LOUD compile error', () => {
+    expect(() =>
+      compileCompositeKeyStaticUnlimited({
+        dialect: 'postgres',
+        tableName: 'comments',
+        select: 'tenant_id, post_id',
+        targetKeys: ['tenant_id', 'post_id'],
+      }),
+    ).toThrow(/composite key column 'comments.tenant_id' has no declared type/);
   });
 
   // NEGATIVE (golden-from-originals): perturb the v1 composite builder (drop a key column) → the
@@ -1210,23 +1214,22 @@ describe('C. Composite STATIC relation form (#47 item 1) — PG byte-matches v1 
 // C. Composite STATIC per-parent-LIMIT relation form (#47 LAST completeness gap).
 //
 // The STATIC composite-limited op (compileCompositeKeyStaticLimited) is length-INDEPENDENT so the
-// op.sql is fixed (one array param per key column on PG; ONE JSON array-of-tuples param on
-// MySQL/SQLite). The GOLDEN is the REAL v1 composite-limited builder (compileCompositeKeyLimited,
-// proven above to byte-match LazyRelation's batchLoadWithLateralComposite /
-// batchLoadWithRowNumberComposite on every dialect):
-//   - PG: the static LATERAL form (deferred casts resolved from the same int keys) is
-//     BYTE-IDENTICAL to v1 — the composite LATERAL is already structurally length-independent.
-//   - MySQL/SQLite: the static form keeps v1's EXACT ROW_NUMBER window + `_rn <= limit` filter, and
-//     deviates ONLY in the CTE membership WHERE — the owner-sanctioned static JSON-tuple predicate
-//     (compositeJsonMembership) replacing v1's value-dependent `(k1,k2) IN ((?,?),…)`. Same
-//     RESULT-parity deviation the composite UNLIMITED form and the single-key IN-list already use;
-//     proven live below. The v1 tuple-IN byte-form stays proven by compileCompositeKeyLimited.
+// op.sql is fixed — ONE JSON array-of-tuples param on every dialect. Both dialect families keep v1's
+// per-parent WINDOW verbatim and deviate only in how the key set enters (#159), the owner-sanctioned
+// RESULT-parity deviation the composite UNLIMITED form and the single-key IN-list already use:
+//   - PG: v1's `CROSS JOIN LATERAL` window over key rows expanded from the ONE JSON tuple param
+//     instead of `unnest(?::t1[], ?::t2[])`.
+//   - MySQL/SQLite: v1's EXACT ROW_NUMBER window + `_rn <= limit` filter, with the static JSON-tuple
+//     membership predicate (compositeJsonMembership) in place of `(k1,k2) IN ((?,?),…)`.
+// v1's own bytes stay pinned by compileCompositeKeyLimited (proven above to byte-match LazyRelation's
+// batchLoadWithLateralComposite / batchLoadWithRowNumberComposite); the deviating forms are proven
+// live (ScpDialect / EmitterEndToEnd integration).
 // ===========================================================================
 describe('C. Composite STATIC per-parent-LIMIT relation form (#47 last gap)', () => {
   const keys = ['tenant_id', 'doc_id'];
   const sel = 'tenant_id, doc_id, rev';
 
-  it('[postgres] static composite-LIMITED byte-matches the v1 composite LATERAL', () => {
+  it("[postgres] static composite-LIMITED keeps v1's LATERAL window over the ONE JSON key-tuple param", () => {
     // v1 (proven == LazyRelation.batchLoadWithLateralComposite) with concrete int keys.
     const v1 = render(
       compileCompositeKeyLimited({
@@ -1235,14 +1238,20 @@ describe('C. Composite STATIC per-parent-LIMIT relation form (#47 last gap)', ()
       }),
       'postgres',
     ).sql;
-    // static (deferred casts) resolved from the SAME per-column int keys → int[], int[].
-    let sql = assembleMakeSQL(compileCompositeKeyStaticLimited({
+    const node = compileCompositeKeyStaticLimited({
       dialect: 'postgres', tableName: 'revs', select: sel,
-      targetKeys: keys, limit: 2, order: 'rev ASC', deferPgArrayCast: true,
-    })).sql;
-    sql = resolvePgArrayCast(sql, [1, 1]); // column 0 keys (int → int[])
-    sql = resolvePgArrayCast(sql, [10, 11]); // column 1 keys (int → int[])
-    expect(renderPlaceholders(sql, 'postgres')).toBe(v1);
+      targetKeys: keys, limit: 2, order: 'rev ASC', pgKeyTypes: ['int', 'int'],
+    });
+    const sql = renderPlaceholders(assembleMakeSQL(node).sql, 'postgres');
+    // The WINDOW is v1's, verbatim — same LATERAL, same inner SELECT, same per-parent cap.
+    const window = v1.slice(v1.indexOf('CROSS JOIN LATERAL'));
+    expect(sql).toContain(window);
+    // Only the key SOURCE differs: the ONE JSON tuple param, expanded to typed key rows.
+    expect(sql).toContain(
+      'FROM (SELECT (_t->>0)::int AS key0, (_t->>1)::int AS key1 FROM json_array_elements($1::json) AS _t) AS _keys',
+    );
+    expect(v1).toContain('FROM unnest($1::int[], $2::int[]) AS _keys(key0, key1)'); // v1's key source
+    expect(node.params).toEqual([[[null]]]); // ONE param — the key TUPLE set (the cap is inlined)
   });
 
   for (const dialect of ['mysql', 'sqlite'] as const) {

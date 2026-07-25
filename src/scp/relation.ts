@@ -44,8 +44,10 @@ import {
   compileSingleKeyLimited,
   compileCompositeKeyStaticUnlimited,
   compileCompositeKeyStaticLimited,
+  inferPgElementType,
   resolvePgArrayCast,
 } from './makesql/compile-relation';
+import { pgTypeSpecimen } from './makesql/tx';
 
 /** A read relation cardinality (v1 parity). `belongsTo`/`hasOne` are single; `hasMany` many. */
 export type RelationKind = 'belongsTo' | 'hasMany' | 'hasOne';
@@ -131,14 +133,6 @@ export interface RelationOp {
   /** The target SQL dialect the batch SELECT text is compiled for. */
   readonly dialect: Dialect;
   /**
-   * COMPOSITE-key param-shape DESCRIPTOR resolved from {@link dialect} at THIS generation stage:
-   * `'per_column'` (Postgres `UNNEST($1::T[], …)` — one array param per key column) vs `'single_json'`
-   * (MySQL/SQLite `JSON_TABLE(?)` — one array-of-tuples JSON param). The runtime `bind_keys` binds a
-   * composite key set by THIS descriptor, never by re-inspecting the dialect (invariant #3 — the executor
-   * is dialect-blind; the SAME axis the batch-write `__batchArray`/`__batchRows` marker carries).
-   */
-  readonly keyShape: 'per_column' | 'single_json';
-  /**
    * CROSS-DB relations (V0 R1): the connection NAME the batch executes against (the target model's
    * DB). Present ONLY when it differs from the parent's connection (a same-DB relation omits it).
    * A per-language runtime routes the statement to the pooled driver of this name; the SQL text and
@@ -146,10 +140,11 @@ export interface RelationOp {
    */
   readonly connection?: string;
   /**
-   * The batched child SELECT as STATIC makeSQL text. Single-key: ONE `?` binds the deduped
-   * parent-key set (PG `= ANY(?::t[])` / MySQL·SQLite single-JSON). Composite: PG binds ONE array
-   * param PER key column (`unnest(?::t1[], ?::t2[])`); MySQL·SQLite bind ONE JSON array-of-tuples
-   * param. Value-length-independent either way, so `sql` is fixed.
+   * The batched child SELECT as STATIC makeSQL text. ONE `?` binds the deduped parent-key set on
+   * every dialect and arity: single-key as the scalar set (PG `= ANY(?::t[])` / MySQL·SQLite
+   * single-JSON), composite as the ONE array-of-tuples JSON param every dialect expands server-side
+   * (PG `json_array_elements`, MySQL `JSON_TABLE`, SQLite `json_each`). Value-length-independent, so
+   * `sql` is fixed — and the key set is exactly the ONE array the `pluck` leaf yields.
    */
   readonly sql: string;
   /**
@@ -212,10 +207,7 @@ export function compileRelationOp(decl: RelationDecl, resolveColumnType?: Column
   }
   const dialect: Dialect = decl.dialect ?? 'sqlite';
   const composite = isCompositeDecl(decl);
-  const sql = compiledBatchSql(decl, dialect);
-  // The composite key-bind param-shape DESCRIPTOR — the dialect decision made ONCE here (the SAME layer
-  // that baked `sql`); the runtime binds a composite key set by this, dialect-blind (invariant #3/#5).
-  const keyShape: 'per_column' | 'single_json' = dialect === 'postgres' ? 'per_column' : 'single_json';
+  const sql = compiledBatchSql(decl, dialect, resolveColumnType);
   // CROSS-DB (V0 R1): carry the target connection tag ONLY when set (a same-DB relation stays
   // untagged, so existing bundles are byte-unchanged — the field is additive/optional).
   const conn = decl.connection !== undefined ? { connection: decl.connection } : {};
@@ -264,7 +256,6 @@ export function compileRelationOp(decl: RelationDecl, resolveColumnType?: Column
       parentKeys: [...(decl.parentKeys as readonly string[])],
       targetKeys: [...(decl.targetKeys as readonly string[])],
       dialect,
-      keyShape,
       ...conn,
       sql,
       ...target,
@@ -277,7 +268,6 @@ export function compileRelationOp(decl: RelationDecl, resolveColumnType?: Column
     parentKey: decl.parentKey,
     targetKey: decl.targetKey,
     dialect,
-    keyShape,
     ...conn,
     sql,
     ...target,
@@ -311,24 +301,45 @@ function isCompositeDecl(decl: RelationDecl): boolean {
 }
 
 /**
+ * The PG element type of each COMPOSITE key column, from the CHILD column's DECLARED type — the same
+ * schema-derived derivation the composite `tupleIn` predicate uses (`pgTypeSpecimen` →
+ * `inferPgElementType`), so the two composite PG forms cast identically. The child column is the one
+ * the key row is compared against, so its declared type is the type the key must carry.
+ *
+ * A composite PG batch cannot be compiled without them (the key rows come out of JSON as `text` and
+ * `int = text` fails at plan time), so a missing resolver is a LOUD compile error, never a silent
+ * `text` fallback.
+ */
+function pgKeyTypesOf(decl: RelationDecl, targetKeys: readonly string[], resolveColumnType?: ColumnTypeResolver): readonly string[] {
+  if (resolveColumnType === undefined) {
+    throw new Error(
+      `relation '${decl.name}': a COMPOSITE-key relation on postgres needs the target model's column types ` +
+        `(keys ${targetKeys.join(', ')} on '${decl.targetTable}') — pass a ColumnTypeResolver to compileRelationOp`,
+    );
+  }
+  return targetKeys.map((k) => inferPgElementType([pgTypeSpecimen(resolveColumnType(decl.targetTable, k))]));
+}
+
+/**
  * Compile the STATIC batch SELECT text: the makeSQL relation builder emits complete tuned SQL
  * whose deduped-key array is ONE param. We compile against a single placeholder key array so
  * the text is fixed; the runtime re-binds the real deduped keys against the SAME text (the
  * single-JSON / `= ANY` forms are length-independent, so the text is stable).
  */
-function compiledBatchSql(decl: RelationDecl, dialect: Dialect): string {
-  // A COMPOSITE decl compiles to the STATIC composite form (PG: one array param per key column;
-  // MySQL/SQLite: one JSON array-of-tuples param) — length-independent, so the text is fixed. A
-  // per-parent `limit` selects the STATIC composite-LIMITED builder (PG LATERAL / MySQL·SQLite
-  // ROW_NUMBER window over the SAME static key-set predicate — #47 last completeness gap).
+function compiledBatchSql(decl: RelationDecl, dialect: Dialect, resolveColumnType?: ColumnTypeResolver): string {
+  // A COMPOSITE decl compiles to the STATIC composite form — ONE JSON array-of-tuples param on every
+  // dialect, length-independent, so the text is fixed. A per-parent `limit` selects the STATIC
+  // composite-LIMITED builder (PG LATERAL / MySQL·SQLite ROW_NUMBER window over the SAME static
+  // key-set predicate — #47 last completeness gap).
   if (decl.parentKeys !== undefined) {
+    const targetKeys = [...(decl.targetKeys as readonly string[])];
     const compositeBase = {
       dialect,
       tableName: decl.targetTable,
       select: decl.select.join(', '),
       order: decl.order,
-      targetKeys: [...(decl.targetKeys as readonly string[])],
-      deferPgArrayCast: true,
+      targetKeys,
+      ...(dialect === 'postgres' ? { pgKeyTypes: pgKeyTypesOf(decl, targetKeys, resolveColumnType) } : {}),
     };
     const node =
       decl.limit !== undefined
@@ -424,21 +435,16 @@ export function relationGuard(op: RelationOp): RelationGuard | null {
 }
 
 /**
- * Bind the deduped keys to the batch op's params per dialect + arity. Single-key: PG binds the
- * scalar array verbatim (`= ANY(?::t[])`); MySQL/SQLite bind the JSON-encoded array. Composite: PG
- * binds ONE array param PER key column (transposed tuples → `unnest(?::t1[], ?::t2[])`);
- * MySQL/SQLite bind ONE JSON array-of-tuples string. Returns the positional param list.
+ * Bind the deduped keys to the batch op's params — ONE param, every dialect and arity. A COMPOSITE
+ * key set is the JSON array-of-tuples every dialect expands server-side (PG `json_array_elements`,
+ * MySQL `JSON_TABLE`, SQLite `json_each`), so the key binding is dialect-INDEPENDENT: no key-tuple
+ * transpose anywhere. A SINGLE-key set is the scalar array — bound raw on PG (`= ANY(?::t[])` takes a
+ * native array) and JSON-encoded on MySQL/SQLite.
  */
 function bindKeys(op: RelationOp, tuples: readonly unknown[][]): unknown[] {
-  const composite = op.parentKeys !== undefined;
-  if (op.dialect === 'postgres') {
-    if (!composite) return [tuples.map((t) => t[0])]; // ONE scalar array param
-    // Transpose tuples → per-column arrays: `[[1,a],[2,b]] → [[1,2],[a,b]]` — one array param each.
-    return parentKeyCols(op).map((_, col) => tuples.map((t) => t[col]));
-  }
-  // MySQL/SQLite: single-key → JSON scalar array; composite → JSON array-of-tuples. ONE param.
-  const payload = composite ? tuples.map((t) => [...t]) : tuples.map((t) => t[0]);
-  return [JSON.stringify(payload)];
+  if (op.parentKeys !== undefined) return [JSON.stringify(tuples.map((t) => [...t]))];
+  const keys = tuples.map((t) => t[0]);
+  return [op.dialect === 'postgres' ? keys : JSON.stringify(keys)];
 }
 
 /**
@@ -460,14 +466,14 @@ export function runRelationOp(
   const pCols = parentKeyCols(op);
   const keys = dedupeKeyTuples(parents, pCols);
   const batch: RelationBatch = new Map();
-  // Resolve the deferred PG array cast(s) (#46) from the REAL keys BEFORE the `?`→`$N` render. A
-  // single-key op has ONE cast; a composite PG op has ONE cast PER key column — resolve each from
-  // its own column's key values, left-to-right (resolvePgArrayCast resolves the first token each
-  // call). MySQL/SQLite carry no cast token.
-  let cast = op.sql;
-  if (op.dialect === 'postgres') {
-    for (let col = 0; col < pCols.length; col++) cast = resolvePgArrayCast(cast, keys.map((t) => t[col]));
-  }
+  // Resolve the deferred PG array cast (#46) from the REAL keys BEFORE the `?`→`$N` render: the
+  // SINGLE-key `= ANY(?::<T>[])` is the only cast whose element type is value-derived. A composite
+  // batch carries no token (its key rows are cast from the DECLARED column types at compile) and
+  // MySQL/SQLite carry none at all.
+  const cast =
+    op.dialect === 'postgres' && op.parentKeys === undefined
+      ? resolvePgArrayCast(op.sql, keys.map((t) => t[0]))
+      : op.sql;
   const sql = renderPlaceholders(cast, op.dialect);
   if (keys.length === 0) return { sql, keys, batch };
   const tCols = targetKeyCols(op);

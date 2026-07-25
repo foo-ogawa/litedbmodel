@@ -63,7 +63,7 @@ import { compileWriteNode, pgTypeSpecimen } from '../makesql/tx';
 import { deriveReadRow } from '../makesql/outtype';
 import { sqlTypeToBcScalar, type BcScalar, type ColumnTypeResolver } from '../coltype';
 import { inferPgArrayType } from '../makesql/compile-relation';
-import { compileRelationOp, parentKeyCols, relationGuard, targetKeyCols, type RelationDecl, type RelationOp } from '../relation';
+import { compileRelationOp, parentKeyCols, relationGuard, targetKeyCols, type RelationDecl } from '../relation';
 import { resolveFindHardLimit } from '../limit-config';
 import {
   deriveModelColumns,
@@ -405,7 +405,6 @@ class EmitContext {
     for (const sel of selections) {
       const { decl, targetModel } = this.relationDecl(model, sel.name, at);
       const op = compileRelationOp(decl, this.resolver(targetModel));
-      assertBindableRelation(op, this.spec.dialect, at);
       const keysVar = fresh(`${sel.name}Keys`);
       lines.push(`const ${keysVar}: WireValue[] = Db.pluck(${acc}, ${jsonArray(parentKeyCols(op))});`);
       const childVar = fresh(sel.name);
@@ -868,22 +867,6 @@ function cteOf(view: NonNullable<ReadEndpoint['view']>): SelectDesc['cte'] {
   const alias = view.alias ?? 'derived';
   const q = view.query;
   return typeof q === 'string' ? { name: alias, sql: q, params: [] } : { name: alias, sql: q.sql, params: [...q.params] };
-}
-
-/**
- * A relation op is emittable when its key set binds as the ONE array `pluck` produces. PostgreSQL's
- * COMPOSITE batch form binds ONE ARRAY PER KEY COLUMN (`unnest(?::t1[], ?::t2[])`), which no
- * composition of the three leaves can produce from `pluck`'s tuple list — a loud reject beats a
- * silently mis-bound statement.
- */
-function assertBindableRelation(op: RelationOp, dialect: DialectName, at: string): void {
-  if (dialect !== 'postgres' || op.parentKeys === undefined) return;
-  throw new Error(
-    `emit: ${at}: a COMPOSITE-key relation ('${op.name}', keys ${op.parentKeys.join(', ')}) on PostgreSQL ` +
-      `binds one array param PER key column (unnest(?::t1[], ?::t2[]) — makesql/compile-relation.ts), but ` +
-      `\`pluck\` yields ONE array of key TUPLES and the three-leaf catalog has no transpose. Use the ` +
-      `mysql/sqlite single-JSON tuple form, or extend the transport before declaring this relation for postgres.`,
-  );
 }
 
 /** The row `obj` of a `{arr:{obj:…}}` read row type. */

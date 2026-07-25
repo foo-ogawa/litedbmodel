@@ -314,23 +314,26 @@ function renderRelationSql(op: RelationOp, keys: unknown[]): string {
 
 /**
  * Render + bind a COMPOSITE relation op for a set of parent key tuples (#47 item 1) — the SAME work
- * the composite `runRelationOp` does: resolve ONE deferred PG cast per key column, `?`→`$N`, then
- * bind ONE array param PER column (PG, transposed) / ONE JSON array-of-tuples param (MySQL). Returns
- * `{ sql, params }` for direct pool execution.
+ * the composite `runRelationOp` does: `?`→`$N`, then bind the ONE JSON array-of-tuples param every
+ * dialect's composite batch expands server-side (#159). Returns `{ sql, params }` for direct pool
+ * execution. The composite key set carries no deferred PG cast: its key rows are cast from the
+ * DECLARED column types at compile.
  */
-function renderCompositeRelation(
-  op: RelationOp,
-  cols: readonly string[],
-  tuples: readonly unknown[][],
-): { sql: string; params: unknown[] } {
-  let cast = op.sql;
-  if (op.dialect === 'postgres') {
-    for (let col = 0; col < cols.length; col++) cast = resolvePgArrayCast(cast, tuples.map((t) => t[col]));
-    return { sql: renderPlaceholders(cast, op.dialect), params: cols.map((_, col) => tuples.map((t) => t[col])) };
-  }
-  const sql = renderPlaceholders(op.sql, op.dialect);
-  return { sql, params: [JSON.stringify(tuples.map((t) => [...t]))] };
+function renderCompositeRelation(op: RelationOp, tuples: readonly unknown[][]): { sql: string; params: unknown[] } {
+  return { sql: renderPlaceholders(op.sql, op.dialect), params: [JSON.stringify(tuples.map((t) => [...t]))] };
 }
+
+/** The composite fixtures' declared column types — what a model's `static columns` supplies. */
+const COMPOSITE_COLUMNS: Record<string, Record<string, string>> = {
+  [T_USERS2]: { tenant_id: 'INTEGER', uid: 'INTEGER', name: 'TEXT' },
+  [T_DOCS2]: { tenant_id: 'INTEGER', doc_id: 'INTEGER', owner_id: 'INTEGER', title: 'TEXT' },
+  [T_REVS]: { tenant_id: 'INTEGER', doc_id: 'INTEGER', rev: 'TEXT' },
+};
+const compositeColumnType = (table: string, column: string): string => {
+  const t = COMPOSITE_COLUMNS[table]?.[column];
+  if (t === undefined) throw new Error(`no declared column ${table}.${column}`);
+  return t;
+};
 
 // ── Test lifecycle: connect, add the derive column, clean state ────────────────
 
@@ -684,17 +687,19 @@ describe('WS6 integration — Postgres: SCP-compiled SQL executes + parity with 
     expect(scpChildren.length).toBe(keys.length);
   });
 
-  // #47 item 1 — COMPOSITE-key relation batch binds + executes live on PG (unnest per-column arrays),
-  // and the (tenant_id, …) tuple correctly disambiguates the two tenants sharing uid/doc_id.
-  it('composite belongsTo (tenant_id, owner_id) → users2: `unnest(?::int[], ?::int[])` binds live on PG', async () => {
+  // #47 item 1 / #159 — COMPOSITE-key relation batch binds + executes live on PG (ONE JSON tuple param
+  // expanded to typed key rows), and the (tenant_id, …) tuple correctly disambiguates the two tenants
+  // sharing uid/doc_id.
+  it('composite belongsTo (tenant_id, owner_id) → users2: the single JSON key-tuple param binds live on PG', async () => {
     const op: RelationOp = compileRelationOp({
       name: 'owner', kind: 'belongsTo', targetTable: T_USERS2, select: ['tenant_id', 'uid', 'name'],
       parentKeys: ['tenant_id', 'owner_id'], targetKeys: ['tenant_id', 'uid'], dialect: 'postgres',
-    });
+    }, compositeColumnType);
     const docs = await pgQuery(pgPool!, `SELECT tenant_id, doc_id, owner_id FROM ${T_DOCS2} ORDER BY tenant_id, doc_id`, []);
     const tuples = docs.map((d) => [Number(d.tenant_id), Number(d.owner_id)]);
-    const { sql, params } = renderCompositeRelation(op, ['tenant_id', 'owner_id'], tuples);
-    expect(sql).toContain('unnest($1::int[], $2::int[])');
+    const { sql, params } = renderCompositeRelation(op, tuples);
+    expect(sql).toContain('JOIN (SELECT (_t->>0)::int AS key0, (_t->>1)::int AS key1 FROM json_array_elements($1::json) AS _t) AS _keys');
+    expect(params).toHaveLength(1); // the WHOLE key set is ONE param, whatever its length
     const children = await pgQuery(pgPool!, sql, params);
     // (2,100) must resolve to Bob (tenant 2), NOT Ada (tenant 1) — the composite key disambiguates.
     const bob = children.find((c) => Number(c.tenant_id) === 2 && Number(c.uid) === 100);
@@ -707,9 +712,9 @@ describe('WS6 integration — Postgres: SCP-compiled SQL executes + parity with 
     const op: RelationOp = compileRelationOp({
       name: 'revisions', kind: 'hasMany', targetTable: T_REVS, select: ['tenant_id', 'doc_id', 'rev'],
       parentKeys: ['tenant_id', 'doc_id'], targetKeys: ['tenant_id', 'doc_id'], order: 'rev ASC', dialect: 'postgres',
-    });
+    }, compositeColumnType);
     const tuples = [[1, 10], [2, 10]]; // same doc_id 10 across two tenants
-    const { sql, params } = renderCompositeRelation(op, ['tenant_id', 'doc_id'], tuples);
+    const { sql, params } = renderCompositeRelation(op, tuples);
     const rows = await pgQuery(pgPool!, sql, params);
     const t1 = rows.filter((r) => Number(r.tenant_id) === 1).map((r) => String(r.rev)).sort();
     const t2 = rows.filter((r) => Number(r.tenant_id) === 2).map((r) => String(r.rev)).sort();
@@ -721,11 +726,12 @@ describe('WS6 integration — Postgres: SCP-compiled SQL executes + parity with 
     const op: RelationOp = compileRelationOp({
       name: 'latestRev', kind: 'hasMany', targetTable: T_REVS, select: ['tenant_id', 'doc_id', 'rev'],
       parentKeys: ['tenant_id', 'doc_id'], targetKeys: ['tenant_id', 'doc_id'], order: 'rev DESC', limit: 1, dialect: 'postgres',
-    });
+    }, compositeColumnType);
     const tuples = [[1, 10], [1, 11], [2, 10]];
-    const { sql, params } = renderCompositeRelation(op, ['tenant_id', 'doc_id'], tuples);
-    // STATIC composite-LIMITED = v1 LATERAL over per-column unnest (length-independent, deferred cast).
-    expect(sql).toContain('unnest($1::int[], $2::int[])');
+    const { sql, params } = renderCompositeRelation(op, tuples);
+    // STATIC composite-LIMITED = the v1 LATERAL window over the ONE JSON key-tuple param's key rows.
+    expect(sql).toContain('FROM (SELECT (_t->>0)::int AS key0, (_t->>1)::int AS key1 FROM json_array_elements($1::json) AS _t) AS _keys');
+    expect(params).toHaveLength(1);
     expect(sql).toContain('CROSS JOIN LATERAL');
     expect(sql).toContain('ORDER BY rev DESC LIMIT 1');
     const rows = await pgQuery(pgPool!, sql, params);
@@ -908,10 +914,10 @@ describe('WS6 integration — MySQL: SCP-compiled SQL executes + parity with v1 
     const op: RelationOp = compileRelationOp({
       name: 'owner', kind: 'belongsTo', targetTable: T_USERS2, select: ['tenant_id', 'uid', 'name'],
       parentKeys: ['tenant_id', 'owner_id'], targetKeys: ['tenant_id', 'uid'], dialect: 'mysql',
-    });
+    }, compositeColumnType);
     expect(op.sql).toContain('JSON_TABLE');
     const tuples = [[1, 100], [2, 100]]; // same uid 100 across two tenants
-    const { sql, params } = renderCompositeRelation(op, ['tenant_id', 'owner_id'], tuples);
+    const { sql, params } = renderCompositeRelation(op, tuples);
     const children = await myQuery(myConn!, sql, params);
     const bob = children.find((c) => Number(c.tenant_id) === 2 && Number(c.uid) === 100);
     const ada = children.find((c) => Number(c.tenant_id) === 1 && Number(c.uid) === 100);
@@ -924,8 +930,8 @@ describe('WS6 integration — MySQL: SCP-compiled SQL executes + parity with v1 
     const op: RelationOp = compileRelationOp({
       name: 'revisions', kind: 'hasMany', targetTable: T_REVS, select: ['tenant_id', 'doc_id', 'rev'],
       parentKeys: ['tenant_id', 'doc_id'], targetKeys: ['tenant_id', 'doc_id'], order: 'rev ASC', dialect: 'mysql',
-    });
-    const { sql, params } = renderCompositeRelation(op, ['tenant_id', 'doc_id'], [[1, 10], [2, 10]]);
+    }, compositeColumnType);
+    const { sql, params } = renderCompositeRelation(op, [[1, 10], [2, 10]]);
     const rows = await myQuery(myConn!, sql, params);
     const t1 = rows.filter((r) => Number(r.tenant_id) === 1).map((r) => String(r.rev)).sort();
     const t2 = rows.filter((r) => Number(r.tenant_id) === 2).map((r) => String(r.rev)).sort();
@@ -937,8 +943,8 @@ describe('WS6 integration — MySQL: SCP-compiled SQL executes + parity with v1 
     const op: RelationOp = compileRelationOp({
       name: 'latestRev', kind: 'hasMany', targetTable: T_REVS, select: ['tenant_id', 'doc_id', 'rev'],
       parentKeys: ['tenant_id', 'doc_id'], targetKeys: ['tenant_id', 'doc_id'], order: 'rev DESC', limit: 1, dialect: 'mysql',
-    });
-    const { sql, params } = renderCompositeRelation(op, ['tenant_id', 'doc_id'], [[1, 10], [1, 11], [2, 10]]);
+    }, compositeColumnType);
+    const { sql, params } = renderCompositeRelation(op, [[1, 10], [1, 11], [2, 10]]);
     // STATIC composite-LIMITED = v1 ROW_NUMBER window + static JSON key-set predicate (no tuple-IN).
     expect(sql).toContain('ROW_NUMBER() OVER (PARTITION BY tenant_id, doc_id ORDER BY rev DESC)');
     expect(sql).toContain('JSON_TABLE');
