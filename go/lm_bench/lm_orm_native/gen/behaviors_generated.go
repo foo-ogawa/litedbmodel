@@ -28,9 +28,10 @@ var ExpectedSpecVersions = map[string]int64{"behavior": 5, "expression": 2, "pla
 // carries NO bc-runtime reference at all — failures use the LOCAL *BehaviorError (same codes, byte-equal to
 // run_behavior). Exec is INLINE sequential (no plan driver) so a relation child reads the parent's REAL
 // struct result via direct field access and the child-present decision is made from the real parent value —
-// relationSingle / connection converge with run_behavior (fixes #323/#74). The exposed API is the
-// STRUCT-returning RunNativeRawStruct_<comp>; the consumer supplies the leaf transport symbols (default
-// same-package Leaf_<comp>, or a leafTransport import). This module is FULLY NATIVE: a naive grep for
+// relationSingle / connection converge with run_behavior (fixes #323/#74). The exposed API is the 1:1
+// STRUCT-returning entry <Method>(<positional params>) (the In_<comp> box removed); the consumer supplies
+// the leaf transport symbols (default same-package Leaf_<comp>, or a leafTransport import). This module is
+// FULLY NATIVE: a naive grep for
 // boxing primitives OR for the bc-runtime package finds nothing, by design (bc#90/runtime-free).
 
 // Local concrete failure type (runtime-free) — a covered runner returns *BehaviorError (satisfies
@@ -111,151 +112,93 @@ func deOverflow(model, field, expected, actualWire, raw string) *BehaviorError {
 }
 
 // Typed struct declarations (outType-derived; hash-dedup — shared type plan).
-type T0 struct {
-	Id    float64 // "id"
+type UserRow struct {
 	Email *string // "email"
+	Id    float64 // "id"
 	Name  *string // "name"
 }
 
-type T1 struct {
-
-}
-
-type T2 struct {
-	Id         float64  // "id"
-	Title      *string  // "title"
-	Content    *string  // "content"
-	Published  *float64 // "published"
+type PostFullRow struct {
 	Author_id  *float64 // "author_id"
+	Content    *string  // "content"
 	Created_at *string  // "created_at"
+	Id         float64  // "id"
+	Published  *float64 // "published"
+	Title      *string  // "title"
 }
 
-type T3 struct {
+type UserWithPosts struct {
+	Email *string   // "email"
+	Id    float64   // "id"
+	Name  *string   // "name"
+	Posts []PostRow // "posts"
+}
+
+type PostRow struct {
+	Author_id *float64 // "author_id"
+	Id        float64  // "id"
+	Title     *string  // "title"
+}
+
+type UserWithPostsAndComments struct {
+	Email *string            // "email"
+	Id    float64            // "id"
+	Name  *string            // "name"
+	Posts []PostWithComments // "posts"
+}
+
+type PostWithComments struct {
+	Author_id *float64     // "author_id"
+	Comments  []CommentRow // "comments"
+	Id        float64      // "id"
+	Title     *string      // "title"
+}
+
+type CommentRow struct {
+	Body    *string  // "body"
+	Id      *float64 // "id"
+	Post_id *float64 // "post_id"
+}
+
+type TenantUserWithPosts struct {
+	Name      *string                  // "name"
+	Posts     []TenantPostWithComments // "posts"
+	Tenant_id *float64                 // "tenant_id"
+	User_id   *float64                 // "user_id"
+}
+
+type TenantPostWithComments struct {
+	Comments  []TenantCommentRow // "comments"
+	Post_id   *float64           // "post_id"
+	Tenant_id *float64           // "tenant_id"
+	Title     *string            // "title"
+	User_id   *float64           // "user_id"
+}
+
+type TenantCommentRow struct {
+	Body       *string  // "body"
+	Comment_id *float64 // "comment_id"
+	Post_id    *float64 // "post_id"
+	Tenant_id  *float64 // "tenant_id"
+}
+
+type WriteSummary struct {
+	Changes         int64 // "changes"
+	LastInsertRowid int64 // "lastInsertRowid"
+}
+
+type IdRow struct {
 	Id float64 // "id"
 }
 
-type T4 struct {
+type NewUser struct {
 	Email string // "email"
 	Name  string // "name"
 }
 
-type T5 struct {
+type UserPatch struct {
 	Id   int64  // "id"
 	Name string // "name"
-}
-
-// Per-component CONCRETE input structs (fields = inputPorts; the consumer builds them natively —
-// no generic *Obj crosses the covered read boundary).
-// In_findAll — the CONCRETE input for 'findAll' (no input ports).
-type In_findAll struct{}
-
-// In_filterPaginateSort — the CONCRETE input for 'filterPaginateSort' (fields = inputPorts; typed, consumer-built —
-// NO generic *Obj, NO per-field boxing crosses the covered read boundary).
-type In_filterPaginateSort struct {
-	Published int64 // "published"
-}
-
-// In_findFirst — the CONCRETE input for 'findFirst' (fields = inputPorts; typed, consumer-built —
-// NO generic *Obj, NO per-field boxing crosses the covered read boundary).
-type In_findFirst struct {
-	Name string // "name"
-}
-
-// In_findUnique — the CONCRETE input for 'findUnique' (fields = inputPorts; typed, consumer-built —
-// NO generic *Obj, NO per-field boxing crosses the covered read boundary).
-type In_findUnique struct {
-	Email string // "email"
-}
-
-// In_nestedFindAll — the CONCRETE input for 'nestedFindAll' (no input ports).
-type In_nestedFindAll struct{}
-
-// In_nestedFindFirst — the CONCRETE input for 'nestedFindFirst' (fields = inputPorts; typed, consumer-built —
-// NO generic *Obj, NO per-field boxing crosses the covered read boundary).
-type In_nestedFindFirst struct {
-	Name string // "name"
-}
-
-// In_nestedFindUnique — the CONCRETE input for 'nestedFindUnique' (fields = inputPorts; typed, consumer-built —
-// NO generic *Obj, NO per-field boxing crosses the covered read boundary).
-type In_nestedFindUnique struct {
-	Email string // "email"
-}
-
-// In_nestedRelations — the CONCRETE input for 'nestedRelations' (no input ports).
-type In_nestedRelations struct{}
-
-// In_compositeRelations — the CONCRETE input for 'compositeRelations' (no input ports).
-type In_compositeRelations struct{}
-
-// In_create — the CONCRETE input for 'create' (fields = inputPorts; typed, consumer-built —
-// NO generic *Obj, NO per-field boxing crosses the covered read boundary).
-type In_create struct {
-	Email string // "email"
-	Name  string // "name"
-}
-
-// In_update — the CONCRETE input for 'update' (fields = inputPorts; typed, consumer-built —
-// NO generic *Obj, NO per-field boxing crosses the covered read boundary).
-type In_update struct {
-	Id   int64  // "id"
-	Name string // "name"
-}
-
-// In_upsert — the CONCRETE input for 'upsert' (fields = inputPorts; typed, consumer-built —
-// NO generic *Obj, NO per-field boxing crosses the covered read boundary).
-type In_upsert struct {
-	Email string // "email"
-	Name  string // "name"
-}
-
-// In_createMany — the CONCRETE input for 'createMany' (fields = inputPorts; typed, consumer-built —
-// NO generic *Obj, NO per-field boxing crosses the covered read boundary).
-type In_createMany struct {
-	Rows []T4 // "rows"
-}
-
-// In_upsertMany — the CONCRETE input for 'upsertMany' (fields = inputPorts; typed, consumer-built —
-// NO generic *Obj, NO per-field boxing crosses the covered read boundary).
-type In_upsertMany struct {
-	Rows []T4 // "rows"
-}
-
-// In_updateMany — the CONCRETE input for 'updateMany' (fields = inputPorts; typed, consumer-built —
-// NO generic *Obj, NO per-field boxing crosses the covered read boundary).
-type In_updateMany struct {
-	Rows []T5 // "rows"
-}
-
-// In_nestedCreate — the CONCRETE input for 'nestedCreate' (fields = inputPorts; typed, consumer-built —
-// NO generic *Obj, NO per-field boxing crosses the covered read boundary).
-type In_nestedCreate struct {
-	Email string // "email"
-	Name  string // "name"
-	Title string // "title"
-}
-
-// In_nestedUpsert — the CONCRETE input for 'nestedUpsert' (fields = inputPorts; typed, consumer-built —
-// NO generic *Obj, NO per-field boxing crosses the covered read boundary).
-type In_nestedUpsert struct {
-	Email string // "email"
-	Name  string // "name"
-	Title string // "title"
-}
-
-// In_nestedUpdate — the CONCRETE input for 'nestedUpdate' (fields = inputPorts; typed, consumer-built —
-// NO generic *Obj, NO per-field boxing crosses the covered read boundary).
-type In_nestedUpdate struct {
-	Id    int64  // "id"
-	Name  string // "name"
-	Title string // "title"
-}
-
-// In_delete — the CONCRETE input for 'delete' (fields = inputPorts; typed, consumer-built —
-// NO generic *Obj, NO per-field boxing crosses the covered read boundary).
-type In_delete struct {
-	Email string // "email"
-	Name  string // "name"
 }
 
 // Probe kind consts (the inline de-box compares against these).
@@ -267,507 +210,8 @@ const (
 	probeNull   uint8 = 3 // present as the producer's null variant (opt → None; required → mismatch)
 )
 
-// Native ports structs (one per componentRef node; typed per the static port type).
-// PortsNR_findAll_n0 — NATIVE ports for node 'n0' (executeSQL). Typed fields per the
-// static port type; built by direct field assignment (no map alloc, no per-port boxing). The consumer
-// reads the typed fields DIRECTLY (no PortReader / boxed-Value accessor) — the covered read is native.
-type PortsNR_findAll_n0 struct {
-	Bigint bool // "bigint"
-	Params []wire.WireValue // "params"
-	Returning bool // "returning"
-	Sql string // "sql"
-	Write bool // "write"
-}
-
-// PortsNR_filterPaginateSort_n0 — NATIVE ports for node 'n0' (executeSQL). Typed fields per the
-// static port type; built by direct field assignment (no map alloc, no per-port boxing). The consumer
-// reads the typed fields DIRECTLY (no PortReader / boxed-Value accessor) — the covered read is native.
-type PortsNR_filterPaginateSort_n0 struct {
-	Bigint bool // "bigint"
-	Params []wire.WireValue // "params"
-	Returning bool // "returning"
-	Sql string // "sql"
-	Write bool // "write"
-}
-
-// PortsNR_findFirst_n0 — NATIVE ports for node 'n0' (executeSQL). Typed fields per the
-// static port type; built by direct field assignment (no map alloc, no per-port boxing). The consumer
-// reads the typed fields DIRECTLY (no PortReader / boxed-Value accessor) — the covered read is native.
-type PortsNR_findFirst_n0 struct {
-	Bigint bool // "bigint"
-	Params []wire.WireValue // "params"
-	Returning bool // "returning"
-	Sql string // "sql"
-	Write bool // "write"
-}
-
-// PortsNR_findUnique_n0 — NATIVE ports for node 'n0' (executeSQL). Typed fields per the
-// static port type; built by direct field assignment (no map alloc, no per-port boxing). The consumer
-// reads the typed fields DIRECTLY (no PortReader / boxed-Value accessor) — the covered read is native.
-type PortsNR_findUnique_n0 struct {
-	Bigint bool // "bigint"
-	Params []wire.WireValue // "params"
-	Returning bool // "returning"
-	Sql string // "sql"
-	Write bool // "write"
-}
-
-// PortsNR_nestedFindAll_n0 — NATIVE ports for node 'n0' (executeSQL). Typed fields per the
-// static port type; built by direct field assignment (no map alloc, no per-port boxing). The consumer
-// reads the typed fields DIRECTLY (no PortReader / boxed-Value accessor) — the covered read is native.
-type PortsNR_nestedFindAll_n0 struct {
-	Bigint bool // "bigint"
-	Params []wire.WireValue // "params"
-	Returning bool // "returning"
-	Sql string // "sql"
-	Write bool // "write"
-}
-
-// PortsNR_nestedFindAll_n1 — NATIVE ports for node 'n1' (pluck). Typed fields per the
-// static port type; built by direct field assignment (no map alloc, no per-port boxing). The consumer
-// reads the typed fields DIRECTLY (no PortReader / boxed-Value accessor) — the covered read is native.
-type PortsNR_nestedFindAll_n1 struct {
-	Col []string // "col"
-	Rows []wire.WireValue // "rows"
-}
-
-// PortsNR_nestedFindAll_n2 — NATIVE ports for node 'n2' (executeSQL). Typed fields per the
-// static port type; built by direct field assignment (no map alloc, no per-port boxing). The consumer
-// reads the typed fields DIRECTLY (no PortReader / boxed-Value accessor) — the covered read is native.
-type PortsNR_nestedFindAll_n2 struct {
-	Bigint bool // "bigint"
-	Params []wire.WireValue // "params"
-	Returning bool // "returning"
-	Sql string // "sql"
-	Write bool // "write"
-}
-
-// PortsNR_nestedFindAll_n3 — NATIVE ports for node 'n3' (group). Typed fields per the
-// static port type; built by direct field assignment (no map alloc, no per-port boxing). The consumer
-// reads the typed fields DIRECTLY (no PortReader / boxed-Value accessor) — the covered read is native.
-type PortsNR_nestedFindAll_n3 struct {
-	Children []wire.WireValue // "children"
-	Fk []string // "fk"
-	Into string // "into"
-	Parents []wire.WireValue // "parents"
-	Pk []string // "pk"
-	Single bool // "single"
-}
-
-// PortsNR_nestedFindFirst_n0 — NATIVE ports for node 'n0' (executeSQL). Typed fields per the
-// static port type; built by direct field assignment (no map alloc, no per-port boxing). The consumer
-// reads the typed fields DIRECTLY (no PortReader / boxed-Value accessor) — the covered read is native.
-type PortsNR_nestedFindFirst_n0 struct {
-	Bigint bool // "bigint"
-	Params []wire.WireValue // "params"
-	Returning bool // "returning"
-	Sql string // "sql"
-	Write bool // "write"
-}
-
-// PortsNR_nestedFindFirst_n1 — NATIVE ports for node 'n1' (pluck). Typed fields per the
-// static port type; built by direct field assignment (no map alloc, no per-port boxing). The consumer
-// reads the typed fields DIRECTLY (no PortReader / boxed-Value accessor) — the covered read is native.
-type PortsNR_nestedFindFirst_n1 struct {
-	Col []string // "col"
-	Rows []wire.WireValue // "rows"
-}
-
-// PortsNR_nestedFindFirst_n2 — NATIVE ports for node 'n2' (executeSQL). Typed fields per the
-// static port type; built by direct field assignment (no map alloc, no per-port boxing). The consumer
-// reads the typed fields DIRECTLY (no PortReader / boxed-Value accessor) — the covered read is native.
-type PortsNR_nestedFindFirst_n2 struct {
-	Bigint bool // "bigint"
-	Params []wire.WireValue // "params"
-	Returning bool // "returning"
-	Sql string // "sql"
-	Write bool // "write"
-}
-
-// PortsNR_nestedFindFirst_n3 — NATIVE ports for node 'n3' (group). Typed fields per the
-// static port type; built by direct field assignment (no map alloc, no per-port boxing). The consumer
-// reads the typed fields DIRECTLY (no PortReader / boxed-Value accessor) — the covered read is native.
-type PortsNR_nestedFindFirst_n3 struct {
-	Children []wire.WireValue // "children"
-	Fk []string // "fk"
-	Into string // "into"
-	Parents []wire.WireValue // "parents"
-	Pk []string // "pk"
-	Single bool // "single"
-}
-
-// PortsNR_nestedFindUnique_n0 — NATIVE ports for node 'n0' (executeSQL). Typed fields per the
-// static port type; built by direct field assignment (no map alloc, no per-port boxing). The consumer
-// reads the typed fields DIRECTLY (no PortReader / boxed-Value accessor) — the covered read is native.
-type PortsNR_nestedFindUnique_n0 struct {
-	Bigint bool // "bigint"
-	Params []wire.WireValue // "params"
-	Returning bool // "returning"
-	Sql string // "sql"
-	Write bool // "write"
-}
-
-// PortsNR_nestedFindUnique_n1 — NATIVE ports for node 'n1' (pluck). Typed fields per the
-// static port type; built by direct field assignment (no map alloc, no per-port boxing). The consumer
-// reads the typed fields DIRECTLY (no PortReader / boxed-Value accessor) — the covered read is native.
-type PortsNR_nestedFindUnique_n1 struct {
-	Col []string // "col"
-	Rows []wire.WireValue // "rows"
-}
-
-// PortsNR_nestedFindUnique_n2 — NATIVE ports for node 'n2' (executeSQL). Typed fields per the
-// static port type; built by direct field assignment (no map alloc, no per-port boxing). The consumer
-// reads the typed fields DIRECTLY (no PortReader / boxed-Value accessor) — the covered read is native.
-type PortsNR_nestedFindUnique_n2 struct {
-	Bigint bool // "bigint"
-	Params []wire.WireValue // "params"
-	Returning bool // "returning"
-	Sql string // "sql"
-	Write bool // "write"
-}
-
-// PortsNR_nestedFindUnique_n3 — NATIVE ports for node 'n3' (group). Typed fields per the
-// static port type; built by direct field assignment (no map alloc, no per-port boxing). The consumer
-// reads the typed fields DIRECTLY (no PortReader / boxed-Value accessor) — the covered read is native.
-type PortsNR_nestedFindUnique_n3 struct {
-	Children []wire.WireValue // "children"
-	Fk []string // "fk"
-	Into string // "into"
-	Parents []wire.WireValue // "parents"
-	Pk []string // "pk"
-	Single bool // "single"
-}
-
-// PortsNR_nestedRelations_n0 — NATIVE ports for node 'n0' (executeSQL). Typed fields per the
-// static port type; built by direct field assignment (no map alloc, no per-port boxing). The consumer
-// reads the typed fields DIRECTLY (no PortReader / boxed-Value accessor) — the covered read is native.
-type PortsNR_nestedRelations_n0 struct {
-	Bigint bool // "bigint"
-	Params []wire.WireValue // "params"
-	Returning bool // "returning"
-	Sql string // "sql"
-	Write bool // "write"
-}
-
-// PortsNR_nestedRelations_n1 — NATIVE ports for node 'n1' (pluck). Typed fields per the
-// static port type; built by direct field assignment (no map alloc, no per-port boxing). The consumer
-// reads the typed fields DIRECTLY (no PortReader / boxed-Value accessor) — the covered read is native.
-type PortsNR_nestedRelations_n1 struct {
-	Col []string // "col"
-	Rows []wire.WireValue // "rows"
-}
-
-// PortsNR_nestedRelations_n2 — NATIVE ports for node 'n2' (executeSQL). Typed fields per the
-// static port type; built by direct field assignment (no map alloc, no per-port boxing). The consumer
-// reads the typed fields DIRECTLY (no PortReader / boxed-Value accessor) — the covered read is native.
-type PortsNR_nestedRelations_n2 struct {
-	Bigint bool // "bigint"
-	Params []wire.WireValue // "params"
-	Returning bool // "returning"
-	Sql string // "sql"
-	Write bool // "write"
-}
-
-// PortsNR_nestedRelations_n3 — NATIVE ports for node 'n3' (pluck). Typed fields per the
-// static port type; built by direct field assignment (no map alloc, no per-port boxing). The consumer
-// reads the typed fields DIRECTLY (no PortReader / boxed-Value accessor) — the covered read is native.
-type PortsNR_nestedRelations_n3 struct {
-	Col []string // "col"
-	Rows []wire.WireValue // "rows"
-}
-
-// PortsNR_nestedRelations_n4 — NATIVE ports for node 'n4' (executeSQL). Typed fields per the
-// static port type; built by direct field assignment (no map alloc, no per-port boxing). The consumer
-// reads the typed fields DIRECTLY (no PortReader / boxed-Value accessor) — the covered read is native.
-type PortsNR_nestedRelations_n4 struct {
-	Bigint bool // "bigint"
-	Params []wire.WireValue // "params"
-	Returning bool // "returning"
-	Sql string // "sql"
-	Write bool // "write"
-}
-
-// PortsNR_nestedRelations_n5 — NATIVE ports for node 'n5' (group). Typed fields per the
-// static port type; built by direct field assignment (no map alloc, no per-port boxing). The consumer
-// reads the typed fields DIRECTLY (no PortReader / boxed-Value accessor) — the covered read is native.
-type PortsNR_nestedRelations_n5 struct {
-	Children []wire.WireValue // "children"
-	Fk []string // "fk"
-	Into string // "into"
-	Parents []wire.WireValue // "parents"
-	Pk []string // "pk"
-	Single bool // "single"
-}
-
-// PortsNR_nestedRelations_n6 — NATIVE ports for node 'n6' (group). Typed fields per the
-// static port type; built by direct field assignment (no map alloc, no per-port boxing). The consumer
-// reads the typed fields DIRECTLY (no PortReader / boxed-Value accessor) — the covered read is native.
-type PortsNR_nestedRelations_n6 struct {
-	Children []wire.WireValue // "children"
-	Fk []string // "fk"
-	Into string // "into"
-	Parents []wire.WireValue // "parents"
-	Pk []string // "pk"
-	Single bool // "single"
-}
-
-// PortsNR_compositeRelations_n0 — NATIVE ports for node 'n0' (executeSQL). Typed fields per the
-// static port type; built by direct field assignment (no map alloc, no per-port boxing). The consumer
-// reads the typed fields DIRECTLY (no PortReader / boxed-Value accessor) — the covered read is native.
-type PortsNR_compositeRelations_n0 struct {
-	Bigint bool // "bigint"
-	Params []wire.WireValue // "params"
-	Returning bool // "returning"
-	Sql string // "sql"
-	Write bool // "write"
-}
-
-// PortsNR_compositeRelations_n1 — NATIVE ports for node 'n1' (pluck). Typed fields per the
-// static port type; built by direct field assignment (no map alloc, no per-port boxing). The consumer
-// reads the typed fields DIRECTLY (no PortReader / boxed-Value accessor) — the covered read is native.
-type PortsNR_compositeRelations_n1 struct {
-	Col []string // "col"
-	Rows []wire.WireValue // "rows"
-}
-
-// PortsNR_compositeRelations_n2 — NATIVE ports for node 'n2' (executeSQL). Typed fields per the
-// static port type; built by direct field assignment (no map alloc, no per-port boxing). The consumer
-// reads the typed fields DIRECTLY (no PortReader / boxed-Value accessor) — the covered read is native.
-type PortsNR_compositeRelations_n2 struct {
-	Bigint bool // "bigint"
-	Params []wire.WireValue // "params"
-	Returning bool // "returning"
-	Sql string // "sql"
-	Write bool // "write"
-}
-
-// PortsNR_compositeRelations_n3 — NATIVE ports for node 'n3' (pluck). Typed fields per the
-// static port type; built by direct field assignment (no map alloc, no per-port boxing). The consumer
-// reads the typed fields DIRECTLY (no PortReader / boxed-Value accessor) — the covered read is native.
-type PortsNR_compositeRelations_n3 struct {
-	Col []string // "col"
-	Rows []wire.WireValue // "rows"
-}
-
-// PortsNR_compositeRelations_n4 — NATIVE ports for node 'n4' (executeSQL). Typed fields per the
-// static port type; built by direct field assignment (no map alloc, no per-port boxing). The consumer
-// reads the typed fields DIRECTLY (no PortReader / boxed-Value accessor) — the covered read is native.
-type PortsNR_compositeRelations_n4 struct {
-	Bigint bool // "bigint"
-	Params []wire.WireValue // "params"
-	Returning bool // "returning"
-	Sql string // "sql"
-	Write bool // "write"
-}
-
-// PortsNR_compositeRelations_n5 — NATIVE ports for node 'n5' (group). Typed fields per the
-// static port type; built by direct field assignment (no map alloc, no per-port boxing). The consumer
-// reads the typed fields DIRECTLY (no PortReader / boxed-Value accessor) — the covered read is native.
-type PortsNR_compositeRelations_n5 struct {
-	Children []wire.WireValue // "children"
-	Fk []string // "fk"
-	Into string // "into"
-	Parents []wire.WireValue // "parents"
-	Pk []string // "pk"
-	Single bool // "single"
-}
-
-// PortsNR_compositeRelations_n6 — NATIVE ports for node 'n6' (group). Typed fields per the
-// static port type; built by direct field assignment (no map alloc, no per-port boxing). The consumer
-// reads the typed fields DIRECTLY (no PortReader / boxed-Value accessor) — the covered read is native.
-type PortsNR_compositeRelations_n6 struct {
-	Children []wire.WireValue // "children"
-	Fk []string // "fk"
-	Into string // "into"
-	Parents []wire.WireValue // "parents"
-	Pk []string // "pk"
-	Single bool // "single"
-}
-
-// PortsNR_create_n0 — NATIVE ports for node 'n0' (executeSQL). Typed fields per the
-// static port type; built by direct field assignment (no map alloc, no per-port boxing). The consumer
-// reads the typed fields DIRECTLY (no PortReader / boxed-Value accessor) — the covered read is native.
-type PortsNR_create_n0 struct {
-	Bigint bool // "bigint"
-	Params []wire.WireValue // "params"
-	Returning bool // "returning"
-	Sql string // "sql"
-	Write bool // "write"
-}
-
-// PortsNR_update_n0 — NATIVE ports for node 'n0' (executeSQL). Typed fields per the
-// static port type; built by direct field assignment (no map alloc, no per-port boxing). The consumer
-// reads the typed fields DIRECTLY (no PortReader / boxed-Value accessor) — the covered read is native.
-type PortsNR_update_n0 struct {
-	Bigint bool // "bigint"
-	Params []wire.WireValue // "params"
-	Returning bool // "returning"
-	Sql string // "sql"
-	Write bool // "write"
-}
-
-// PortsNR_upsert_n0 — NATIVE ports for node 'n0' (executeSQL). Typed fields per the
-// static port type; built by direct field assignment (no map alloc, no per-port boxing). The consumer
-// reads the typed fields DIRECTLY (no PortReader / boxed-Value accessor) — the covered read is native.
-type PortsNR_upsert_n0 struct {
-	Bigint bool // "bigint"
-	Params []wire.WireValue // "params"
-	Returning bool // "returning"
-	Sql string // "sql"
-	Write bool // "write"
-}
-
-// PortsNR_createMany_n0 — NATIVE ports for node 'n0' (executeSQL). Typed fields per the
-// static port type; built by direct field assignment (no map alloc, no per-port boxing). The consumer
-// reads the typed fields DIRECTLY (no PortReader / boxed-Value accessor) — the covered read is native.
-type PortsNR_createMany_n0 struct {
-	Bigint bool // "bigint"
-	Params []wire.WireValue // "params"
-	Returning bool // "returning"
-	Sql string // "sql"
-	Write bool // "write"
-}
-
-// PortsNR_upsertMany_n0 — NATIVE ports for node 'n0' (executeSQL). Typed fields per the
-// static port type; built by direct field assignment (no map alloc, no per-port boxing). The consumer
-// reads the typed fields DIRECTLY (no PortReader / boxed-Value accessor) — the covered read is native.
-type PortsNR_upsertMany_n0 struct {
-	Bigint bool // "bigint"
-	Params []wire.WireValue // "params"
-	Returning bool // "returning"
-	Sql string // "sql"
-	Write bool // "write"
-}
-
-// PortsNR_updateMany_n0 — NATIVE ports for node 'n0' (executeSQL). Typed fields per the
-// static port type; built by direct field assignment (no map alloc, no per-port boxing). The consumer
-// reads the typed fields DIRECTLY (no PortReader / boxed-Value accessor) — the covered read is native.
-type PortsNR_updateMany_n0 struct {
-	Bigint bool // "bigint"
-	Params []wire.WireValue // "params"
-	Returning bool // "returning"
-	Sql string // "sql"
-	Write bool // "write"
-}
-
-// PortsNR_nestedCreate_n0 — NATIVE ports for node 'n0' (executeSQL). Typed fields per the
-// static port type; built by direct field assignment (no map alloc, no per-port boxing). The consumer
-// reads the typed fields DIRECTLY (no PortReader / boxed-Value accessor) — the covered read is native.
-type PortsNR_nestedCreate_n0 struct {
-	Bigint bool // "bigint"
-	Params []wire.WireValue // "params"
-	Returning bool // "returning"
-	Sql string // "sql"
-	Write bool // "write"
-}
-
-// PortsNR_nestedCreate_n1 — NATIVE ports for node 'n1' (executeSQL). Typed fields per the
-// static port type; built by direct field assignment (no map alloc, no per-port boxing). The consumer
-// reads the typed fields DIRECTLY (no PortReader / boxed-Value accessor) — the covered read is native.
-type PortsNR_nestedCreate_n1 struct {
-	Bigint bool // "bigint"
-	Params []wire.WireValue // "params"
-	Returning bool // "returning"
-	Sql string // "sql"
-	Write bool // "write"
-}
-
-// PortsNR_nestedCreate_n1_batch — NATIVE batched ports for map 'n1': Items is a native slice of the concrete
-// per-element ports structs (PortsNR_nestedCreate_n1). The consumer reads Items[i].<Field> DIRECTLY — no boxed
-// []Value, no PortReader accessor, no key-value object (bc#90 / runtime-free).
-type PortsNR_nestedCreate_n1_batch struct {
-	Items []PortsNR_nestedCreate_n1
-}
-
-// PortsNR_nestedUpsert_n0 — NATIVE ports for node 'n0' (executeSQL). Typed fields per the
-// static port type; built by direct field assignment (no map alloc, no per-port boxing). The consumer
-// reads the typed fields DIRECTLY (no PortReader / boxed-Value accessor) — the covered read is native.
-type PortsNR_nestedUpsert_n0 struct {
-	Bigint bool // "bigint"
-	Params []wire.WireValue // "params"
-	Returning bool // "returning"
-	Sql string // "sql"
-	Write bool // "write"
-}
-
-// PortsNR_nestedUpsert_n1 — NATIVE ports for node 'n1' (executeSQL). Typed fields per the
-// static port type; built by direct field assignment (no map alloc, no per-port boxing). The consumer
-// reads the typed fields DIRECTLY (no PortReader / boxed-Value accessor) — the covered read is native.
-type PortsNR_nestedUpsert_n1 struct {
-	Bigint bool // "bigint"
-	Params []wire.WireValue // "params"
-	Returning bool // "returning"
-	Sql string // "sql"
-	Write bool // "write"
-}
-
-// PortsNR_nestedUpsert_n1_batch — NATIVE batched ports for map 'n1': Items is a native slice of the concrete
-// per-element ports structs (PortsNR_nestedUpsert_n1). The consumer reads Items[i].<Field> DIRECTLY — no boxed
-// []Value, no PortReader accessor, no key-value object (bc#90 / runtime-free).
-type PortsNR_nestedUpsert_n1_batch struct {
-	Items []PortsNR_nestedUpsert_n1
-}
-
-// PortsNR_nestedUpdate_n0 — NATIVE ports for node 'n0' (executeSQL). Typed fields per the
-// static port type; built by direct field assignment (no map alloc, no per-port boxing). The consumer
-// reads the typed fields DIRECTLY (no PortReader / boxed-Value accessor) — the covered read is native.
-type PortsNR_nestedUpdate_n0 struct {
-	Bigint bool // "bigint"
-	Params []wire.WireValue // "params"
-	Returning bool // "returning"
-	Sql string // "sql"
-	Write bool // "write"
-}
-
-// PortsNR_nestedUpdate_n1 — NATIVE ports for node 'n1' (executeSQL). Typed fields per the
-// static port type; built by direct field assignment (no map alloc, no per-port boxing). The consumer
-// reads the typed fields DIRECTLY (no PortReader / boxed-Value accessor) — the covered read is native.
-type PortsNR_nestedUpdate_n1 struct {
-	Bigint bool // "bigint"
-	Params []wire.WireValue // "params"
-	Returning bool // "returning"
-	Sql string // "sql"
-	Write bool // "write"
-}
-
-// PortsNR_nestedUpdate_n1_batch — NATIVE batched ports for map 'n1': Items is a native slice of the concrete
-// per-element ports structs (PortsNR_nestedUpdate_n1). The consumer reads Items[i].<Field> DIRECTLY — no boxed
-// []Value, no PortReader accessor, no key-value object (bc#90 / runtime-free).
-type PortsNR_nestedUpdate_n1_batch struct {
-	Items []PortsNR_nestedUpdate_n1
-}
-
-// PortsNR_delete_n0 — NATIVE ports for node 'n0' (executeSQL). Typed fields per the
-// static port type; built by direct field assignment (no map alloc, no per-port boxing). The consumer
-// reads the typed fields DIRECTLY (no PortReader / boxed-Value accessor) — the covered read is native.
-type PortsNR_delete_n0 struct {
-	Bigint bool // "bigint"
-	Params []wire.WireValue // "params"
-	Returning bool // "returning"
-	Sql string // "sql"
-	Write bool // "write"
-}
-
-// PortsNR_delete_n1 — NATIVE ports for node 'n1' (executeSQL). Typed fields per the
-// static port type; built by direct field assignment (no map alloc, no per-port boxing). The consumer
-// reads the typed fields DIRECTLY (no PortReader / boxed-Value accessor) — the covered read is native.
-type PortsNR_delete_n1 struct {
-	Bigint bool // "bigint"
-	Params []wire.WireValue // "params"
-	Returning bool // "returning"
-	Sql string // "sql"
-	Write bool // "write"
-}
-
-// PortsNR_delete_n1_batch — NATIVE batched ports for map 'n1': Items is a native slice of the concrete
-// per-element ports structs (PortsNR_delete_n1). The consumer reads Items[i].<Field> DIRECTLY — no boxed
-// []Value, no PortReader accessor, no key-value object (bc#90 / runtime-free).
-type PortsNR_delete_n1_batch struct {
-	Items []PortsNR_delete_n1
-}
-
 // Combined read runners (STRUCT-returning — the fully de-plumbed path).
-// RunNativeRawStruct_findAll — the STRUCT-RETURNING combined read (bc#77/#87): the fully
+// FindAll — the STRUCT-RETURNING combined read (bc#77/#87): the fully
 // de-plumbed path. Ports are a native struct (direct field assignment); the handler
 // result is materialized straight into the node's outType struct. Node results are typed
 // struct locals; a relation child reads the parent's REAL struct result via direct field
@@ -779,77 +223,76 @@ type PortsNR_delete_n1_batch struct {
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func RunNativeRawStruct_findAll(in In_findAll) ([]T0, error) {
-	_ = in
-	var t_n0 []T0
+func FindAll() ([]UserRow, error) {
+	var t_n0 []UserRow
 	produced_n0 := false
 	_ = t_n0
 	_ = produced_n0
 	// ── op 'n0' (executeSQL) ──
-	ports_n0 := PortsNR_findAll_n0{Bigint: false, Params: []wire.WireValue{}, Returning: false, Sql: "SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100", Write: false}
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ports_n0.Bigint, ports_n0.Params, ports_n0.Returning, ports_n0.Sql, ports_n0.Write)
+	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100")}, wire.WireField{Key: "write", Val: wire.WireBool(false)}})
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
 	}
 	p0 := wire_n0.AsList()
 	if p0.Kind == probeGot {
-		list0 := make([]T0, 0, p0.Got.Len())
+		list0 := make([]UserRow, 0, p0.Got.Len())
 		for i0 := 0; i0 < p0.Got.Len(); i0++ {
-			var el0 T0
+			var el0 UserRow
 			p1 := p0.Got.ElemRow(i0)
 			if p1.Kind == probeGot {
-				var rec1 T0
-				p2 := p1.Got.ProbeNumber("id")
+				var rec1 UserRow
+				p2 := p1.Got.ProbeString("email")
 				if p2.Kind == probeGot {
-					n2, nErr2 := strconv.ParseFloat(p2.Got, 64)
-					if nErr2 != nil {
-						return nil, deOverflow("T0", "id", "float", p2.ActualWireType, p2.Got)
-					}
-					rec1.Id = n2
+					sv2 := p2.Got
+					rec1.Email = &sv2
 				} else if p2.Kind == probeWrong {
-					return nil, deTypeMismatch("T0", "id", "float", p2.ActualWireType, p2.Raw)
-				} else if p2.Kind == probeNull {
-					return nil, deTypeMismatch("T0", "id", "float", p2.ActualWireType, p2.Raw)
-				} else {
-					return nil, deMissingField("T0", "id", "float")
+					return nil, deTypeMismatch("UserRow", "email", "opt(string)", p2.ActualWireType, p2.Raw)
 				}
-				p3 := p1.Got.ProbeString("email")
+				p3 := p1.Got.ProbeNumber("id")
 				if p3.Kind == probeGot {
-					sv3 := p3.Got
-					rec1.Email = &sv3
+					n3, nErr3 := strconv.ParseFloat(p3.Got, 64)
+					if nErr3 != nil {
+						return nil, deOverflow("UserRow", "id", "float", p3.ActualWireType, p3.Got)
+					}
+					rec1.Id = n3
 				} else if p3.Kind == probeWrong {
-					return nil, deTypeMismatch("T0", "email", "opt(string)", p3.ActualWireType, p3.Raw)
+					return nil, deTypeMismatch("UserRow", "id", "float", p3.ActualWireType, p3.Raw)
+				} else if p3.Kind == probeNull {
+					return nil, deTypeMismatch("UserRow", "id", "float", p3.ActualWireType, p3.Raw)
+				} else {
+					return nil, deMissingField("UserRow", "id", "float")
 				}
 				p4 := p1.Got.ProbeString("name")
 				if p4.Kind == probeGot {
 					sv4 := p4.Got
 					rec1.Name = &sv4
 				} else if p4.Kind == probeWrong {
-					return nil, deTypeMismatch("T0", "name", "opt(string)", p4.ActualWireType, p4.Raw)
+					return nil, deTypeMismatch("UserRow", "name", "opt(string)", p4.ActualWireType, p4.Raw)
 				}
 				el0 = rec1
 			} else if p1.Kind == probeWrong {
-				return nil, deTypeMismatch("n0", "n0", "obj{id:float,email:opt(string),name:opt(string)}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{email:opt(string),id:float,name:opt(string)}", p1.ActualWireType, p1.Raw)
 			} else if p1.Kind == probeNull {
-				return nil, deTypeMismatch("n0", "n0", "obj{id:float,email:opt(string),name:opt(string)}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{email:opt(string),id:float,name:opt(string)}", p1.ActualWireType, p1.Raw)
 			} else {
-				return nil, deMissingField("n0", "n0", "obj{id:float,email:opt(string),name:opt(string)}")
+				return nil, deMissingField("n0", "n0", "obj{email:opt(string),id:float,name:opt(string)}")
 			}
 			list0 = append(list0, el0)
 		}
 		t_n0 = list0
 	} else if p0.Kind == probeWrong {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:float,email:opt(string),name:opt(string)})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{email:opt(string),id:float,name:opt(string)})", p0.ActualWireType, p0.Raw)
 	} else if p0.Kind == probeNull {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:float,email:opt(string),name:opt(string)})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{email:opt(string),id:float,name:opt(string)})", p0.ActualWireType, p0.Raw)
 	} else {
-		return nil, deMissingField("n0", "n0", "arr(obj{id:float,email:opt(string),name:opt(string)})")
+		return nil, deMissingField("n0", "n0", "arr(obj{email:opt(string),id:float,name:opt(string)})")
 	}
 	produced_n0 = true
 	return t_n0, nil
 }
 
-// RunNativeRawStruct_filterPaginateSort — the STRUCT-RETURNING combined read (bc#77/#87): the fully
+// FilterPaginateSort — the STRUCT-RETURNING combined read (bc#77/#87): the fully
 // de-plumbed path. Ports are a native struct (direct field assignment); the handler
 // result is materialized straight into the node's outType struct. Node results are typed
 // struct locals; a relation child reads the parent's REAL struct result via direct field
@@ -861,104 +304,103 @@ func RunNativeRawStruct_findAll(in In_findAll) ([]T0, error) {
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func RunNativeRawStruct_filterPaginateSort(in In_filterPaginateSort) ([]T2, error) {
-	_ = in
-	var t_n0 []T2
+func FilterPaginateSort(published int64) ([]PostFullRow, error) {
+	var t_n0 []PostFullRow
 	produced_n0 := false
 	_ = t_n0
 	_ = produced_n0
 	// ── op 'n0' (executeSQL) ──
-	ports_n0 := PortsNR_filterPaginateSort_n0{Bigint: false, Params: []wire.WireValue{wire.WireInt(in.Published)}, Returning: false, Sql: "SELECT id, title, content, published, author_id, created_at FROM benchmark_posts WHERE published = ? ORDER BY created_at DESC LIMIT 20 OFFSET 10", Write: false}
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ports_n0.Bigint, ports_n0.Params, ports_n0.Returning, ports_n0.Sql, ports_n0.Write)
+	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireInt(published)})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, title, content, published, author_id, created_at FROM benchmark_posts WHERE published = ? ORDER BY created_at DESC LIMIT 20 OFFSET 10")}, wire.WireField{Key: "write", Val: wire.WireBool(false)}})
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
 	}
 	p0 := wire_n0.AsList()
 	if p0.Kind == probeGot {
-		list0 := make([]T2, 0, p0.Got.Len())
+		list0 := make([]PostFullRow, 0, p0.Got.Len())
 		for i0 := 0; i0 < p0.Got.Len(); i0++ {
-			var el0 T2
+			var el0 PostFullRow
 			p1 := p0.Got.ElemRow(i0)
 			if p1.Kind == probeGot {
-				var rec1 T2
-				p2 := p1.Got.ProbeNumber("id")
+				var rec1 PostFullRow
+				p2 := p1.Got.ProbeNumber("author_id")
 				if p2.Kind == probeGot {
 					n2, nErr2 := strconv.ParseFloat(p2.Got, 64)
 					if nErr2 != nil {
-						return nil, deOverflow("T2", "id", "float", p2.ActualWireType, p2.Got)
+						return nil, deOverflow("PostFullRow", "author_id", "opt(float)", p2.ActualWireType, p2.Got)
 					}
-					rec1.Id = n2
+					rec1.Author_id = &n2
 				} else if p2.Kind == probeWrong {
-					return nil, deTypeMismatch("T2", "id", "float", p2.ActualWireType, p2.Raw)
-				} else if p2.Kind == probeNull {
-					return nil, deTypeMismatch("T2", "id", "float", p2.ActualWireType, p2.Raw)
-				} else {
-					return nil, deMissingField("T2", "id", "float")
+					return nil, deTypeMismatch("PostFullRow", "author_id", "opt(float)", p2.ActualWireType, p2.Raw)
 				}
-				p3 := p1.Got.ProbeString("title")
+				p3 := p1.Got.ProbeString("content")
 				if p3.Kind == probeGot {
 					sv3 := p3.Got
-					rec1.Title = &sv3
+					rec1.Content = &sv3
 				} else if p3.Kind == probeWrong {
-					return nil, deTypeMismatch("T2", "title", "opt(string)", p3.ActualWireType, p3.Raw)
+					return nil, deTypeMismatch("PostFullRow", "content", "opt(string)", p3.ActualWireType, p3.Raw)
 				}
-				p4 := p1.Got.ProbeString("content")
+				p4 := p1.Got.ProbeString("created_at")
 				if p4.Kind == probeGot {
 					sv4 := p4.Got
-					rec1.Content = &sv4
+					rec1.Created_at = &sv4
 				} else if p4.Kind == probeWrong {
-					return nil, deTypeMismatch("T2", "content", "opt(string)", p4.ActualWireType, p4.Raw)
+					return nil, deTypeMismatch("PostFullRow", "created_at", "opt(string)", p4.ActualWireType, p4.Raw)
 				}
-				p5 := p1.Got.ProbeNumber("published")
+				p5 := p1.Got.ProbeNumber("id")
 				if p5.Kind == probeGot {
 					n5, nErr5 := strconv.ParseFloat(p5.Got, 64)
 					if nErr5 != nil {
-						return nil, deOverflow("T2", "published", "opt(float)", p5.ActualWireType, p5.Got)
+						return nil, deOverflow("PostFullRow", "id", "float", p5.ActualWireType, p5.Got)
 					}
-					rec1.Published = &n5
+					rec1.Id = n5
 				} else if p5.Kind == probeWrong {
-					return nil, deTypeMismatch("T2", "published", "opt(float)", p5.ActualWireType, p5.Raw)
+					return nil, deTypeMismatch("PostFullRow", "id", "float", p5.ActualWireType, p5.Raw)
+				} else if p5.Kind == probeNull {
+					return nil, deTypeMismatch("PostFullRow", "id", "float", p5.ActualWireType, p5.Raw)
+				} else {
+					return nil, deMissingField("PostFullRow", "id", "float")
 				}
-				p6 := p1.Got.ProbeNumber("author_id")
+				p6 := p1.Got.ProbeNumber("published")
 				if p6.Kind == probeGot {
 					n6, nErr6 := strconv.ParseFloat(p6.Got, 64)
 					if nErr6 != nil {
-						return nil, deOverflow("T2", "author_id", "opt(float)", p6.ActualWireType, p6.Got)
+						return nil, deOverflow("PostFullRow", "published", "opt(float)", p6.ActualWireType, p6.Got)
 					}
-					rec1.Author_id = &n6
+					rec1.Published = &n6
 				} else if p6.Kind == probeWrong {
-					return nil, deTypeMismatch("T2", "author_id", "opt(float)", p6.ActualWireType, p6.Raw)
+					return nil, deTypeMismatch("PostFullRow", "published", "opt(float)", p6.ActualWireType, p6.Raw)
 				}
-				p7 := p1.Got.ProbeString("created_at")
+				p7 := p1.Got.ProbeString("title")
 				if p7.Kind == probeGot {
 					sv7 := p7.Got
-					rec1.Created_at = &sv7
+					rec1.Title = &sv7
 				} else if p7.Kind == probeWrong {
-					return nil, deTypeMismatch("T2", "created_at", "opt(string)", p7.ActualWireType, p7.Raw)
+					return nil, deTypeMismatch("PostFullRow", "title", "opt(string)", p7.ActualWireType, p7.Raw)
 				}
 				el0 = rec1
 			} else if p1.Kind == probeWrong {
-				return nil, deTypeMismatch("n0", "n0", "obj{id:float,title:opt(string),content:opt(string),published:opt(float),author_id:opt(float),created_at:opt(string)}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{author_id:opt(float),content:opt(string),created_at:opt(string),id:float,published:opt(float),title:opt(string)}", p1.ActualWireType, p1.Raw)
 			} else if p1.Kind == probeNull {
-				return nil, deTypeMismatch("n0", "n0", "obj{id:float,title:opt(string),content:opt(string),published:opt(float),author_id:opt(float),created_at:opt(string)}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{author_id:opt(float),content:opt(string),created_at:opt(string),id:float,published:opt(float),title:opt(string)}", p1.ActualWireType, p1.Raw)
 			} else {
-				return nil, deMissingField("n0", "n0", "obj{id:float,title:opt(string),content:opt(string),published:opt(float),author_id:opt(float),created_at:opt(string)}")
+				return nil, deMissingField("n0", "n0", "obj{author_id:opt(float),content:opt(string),created_at:opt(string),id:float,published:opt(float),title:opt(string)}")
 			}
 			list0 = append(list0, el0)
 		}
 		t_n0 = list0
 	} else if p0.Kind == probeWrong {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:float,title:opt(string),content:opt(string),published:opt(float),author_id:opt(float),created_at:opt(string)})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{author_id:opt(float),content:opt(string),created_at:opt(string),id:float,published:opt(float),title:opt(string)})", p0.ActualWireType, p0.Raw)
 	} else if p0.Kind == probeNull {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:float,title:opt(string),content:opt(string),published:opt(float),author_id:opt(float),created_at:opt(string)})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{author_id:opt(float),content:opt(string),created_at:opt(string),id:float,published:opt(float),title:opt(string)})", p0.ActualWireType, p0.Raw)
 	} else {
-		return nil, deMissingField("n0", "n0", "arr(obj{id:float,title:opt(string),content:opt(string),published:opt(float),author_id:opt(float),created_at:opt(string)})")
+		return nil, deMissingField("n0", "n0", "arr(obj{author_id:opt(float),content:opt(string),created_at:opt(string),id:float,published:opt(float),title:opt(string)})")
 	}
 	produced_n0 = true
 	return t_n0, nil
 }
 
-// RunNativeRawStruct_findFirst — the STRUCT-RETURNING combined read (bc#77/#87): the fully
+// FindFirst — the STRUCT-RETURNING combined read (bc#77/#87): the fully
 // de-plumbed path. Ports are a native struct (direct field assignment); the handler
 // result is materialized straight into the node's outType struct. Node results are typed
 // struct locals; a relation child reads the parent's REAL struct result via direct field
@@ -970,77 +412,76 @@ func RunNativeRawStruct_filterPaginateSort(in In_filterPaginateSort) ([]T2, erro
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func RunNativeRawStruct_findFirst(in In_findFirst) ([]T0, error) {
-	_ = in
-	var t_n0 []T0
+func FindFirst(name string) ([]UserRow, error) {
+	var t_n0 []UserRow
 	produced_n0 := false
 	_ = t_n0
 	_ = produced_n0
 	// ── op 'n0' (executeSQL) ──
-	ports_n0 := PortsNR_findFirst_n0{Bigint: false, Params: []wire.WireValue{wire.WireStr(in.Name)}, Returning: false, Sql: "SELECT id, email, name FROM benchmark_users WHERE name LIKE ? LIMIT 1", Write: false}
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ports_n0.Bigint, ports_n0.Params, ports_n0.Returning, ports_n0.Sql, ports_n0.Write)
+	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireStr(name)})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, email, name FROM benchmark_users WHERE name LIKE ? LIMIT 1")}, wire.WireField{Key: "write", Val: wire.WireBool(false)}})
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
 	}
 	p0 := wire_n0.AsList()
 	if p0.Kind == probeGot {
-		list0 := make([]T0, 0, p0.Got.Len())
+		list0 := make([]UserRow, 0, p0.Got.Len())
 		for i0 := 0; i0 < p0.Got.Len(); i0++ {
-			var el0 T0
+			var el0 UserRow
 			p1 := p0.Got.ElemRow(i0)
 			if p1.Kind == probeGot {
-				var rec1 T0
-				p2 := p1.Got.ProbeNumber("id")
+				var rec1 UserRow
+				p2 := p1.Got.ProbeString("email")
 				if p2.Kind == probeGot {
-					n2, nErr2 := strconv.ParseFloat(p2.Got, 64)
-					if nErr2 != nil {
-						return nil, deOverflow("T0", "id", "float", p2.ActualWireType, p2.Got)
-					}
-					rec1.Id = n2
+					sv2 := p2.Got
+					rec1.Email = &sv2
 				} else if p2.Kind == probeWrong {
-					return nil, deTypeMismatch("T0", "id", "float", p2.ActualWireType, p2.Raw)
-				} else if p2.Kind == probeNull {
-					return nil, deTypeMismatch("T0", "id", "float", p2.ActualWireType, p2.Raw)
-				} else {
-					return nil, deMissingField("T0", "id", "float")
+					return nil, deTypeMismatch("UserRow", "email", "opt(string)", p2.ActualWireType, p2.Raw)
 				}
-				p3 := p1.Got.ProbeString("email")
+				p3 := p1.Got.ProbeNumber("id")
 				if p3.Kind == probeGot {
-					sv3 := p3.Got
-					rec1.Email = &sv3
+					n3, nErr3 := strconv.ParseFloat(p3.Got, 64)
+					if nErr3 != nil {
+						return nil, deOverflow("UserRow", "id", "float", p3.ActualWireType, p3.Got)
+					}
+					rec1.Id = n3
 				} else if p3.Kind == probeWrong {
-					return nil, deTypeMismatch("T0", "email", "opt(string)", p3.ActualWireType, p3.Raw)
+					return nil, deTypeMismatch("UserRow", "id", "float", p3.ActualWireType, p3.Raw)
+				} else if p3.Kind == probeNull {
+					return nil, deTypeMismatch("UserRow", "id", "float", p3.ActualWireType, p3.Raw)
+				} else {
+					return nil, deMissingField("UserRow", "id", "float")
 				}
 				p4 := p1.Got.ProbeString("name")
 				if p4.Kind == probeGot {
 					sv4 := p4.Got
 					rec1.Name = &sv4
 				} else if p4.Kind == probeWrong {
-					return nil, deTypeMismatch("T0", "name", "opt(string)", p4.ActualWireType, p4.Raw)
+					return nil, deTypeMismatch("UserRow", "name", "opt(string)", p4.ActualWireType, p4.Raw)
 				}
 				el0 = rec1
 			} else if p1.Kind == probeWrong {
-				return nil, deTypeMismatch("n0", "n0", "obj{id:float,email:opt(string),name:opt(string)}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{email:opt(string),id:float,name:opt(string)}", p1.ActualWireType, p1.Raw)
 			} else if p1.Kind == probeNull {
-				return nil, deTypeMismatch("n0", "n0", "obj{id:float,email:opt(string),name:opt(string)}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{email:opt(string),id:float,name:opt(string)}", p1.ActualWireType, p1.Raw)
 			} else {
-				return nil, deMissingField("n0", "n0", "obj{id:float,email:opt(string),name:opt(string)}")
+				return nil, deMissingField("n0", "n0", "obj{email:opt(string),id:float,name:opt(string)}")
 			}
 			list0 = append(list0, el0)
 		}
 		t_n0 = list0
 	} else if p0.Kind == probeWrong {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:float,email:opt(string),name:opt(string)})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{email:opt(string),id:float,name:opt(string)})", p0.ActualWireType, p0.Raw)
 	} else if p0.Kind == probeNull {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:float,email:opt(string),name:opt(string)})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{email:opt(string),id:float,name:opt(string)})", p0.ActualWireType, p0.Raw)
 	} else {
-		return nil, deMissingField("n0", "n0", "arr(obj{id:float,email:opt(string),name:opt(string)})")
+		return nil, deMissingField("n0", "n0", "arr(obj{email:opt(string),id:float,name:opt(string)})")
 	}
 	produced_n0 = true
 	return t_n0, nil
 }
 
-// RunNativeRawStruct_findUnique — the STRUCT-RETURNING combined read (bc#77/#87): the fully
+// FindUnique — the STRUCT-RETURNING combined read (bc#77/#87): the fully
 // de-plumbed path. Ports are a native struct (direct field assignment); the handler
 // result is materialized straight into the node's outType struct. Node results are typed
 // struct locals; a relation child reads the parent's REAL struct result via direct field
@@ -1052,77 +493,76 @@ func RunNativeRawStruct_findFirst(in In_findFirst) ([]T0, error) {
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func RunNativeRawStruct_findUnique(in In_findUnique) ([]T0, error) {
-	_ = in
-	var t_n0 []T0
+func FindUnique(email string) ([]UserRow, error) {
+	var t_n0 []UserRow
 	produced_n0 := false
 	_ = t_n0
 	_ = produced_n0
 	// ── op 'n0' (executeSQL) ──
-	ports_n0 := PortsNR_findUnique_n0{Bigint: false, Params: []wire.WireValue{wire.WireStr(in.Email)}, Returning: false, Sql: "SELECT id, email, name FROM benchmark_users WHERE email = ? LIMIT 1", Write: false}
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ports_n0.Bigint, ports_n0.Params, ports_n0.Returning, ports_n0.Sql, ports_n0.Write)
+	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireStr(email)})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, email, name FROM benchmark_users WHERE email = ? LIMIT 1")}, wire.WireField{Key: "write", Val: wire.WireBool(false)}})
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
 	}
 	p0 := wire_n0.AsList()
 	if p0.Kind == probeGot {
-		list0 := make([]T0, 0, p0.Got.Len())
+		list0 := make([]UserRow, 0, p0.Got.Len())
 		for i0 := 0; i0 < p0.Got.Len(); i0++ {
-			var el0 T0
+			var el0 UserRow
 			p1 := p0.Got.ElemRow(i0)
 			if p1.Kind == probeGot {
-				var rec1 T0
-				p2 := p1.Got.ProbeNumber("id")
+				var rec1 UserRow
+				p2 := p1.Got.ProbeString("email")
 				if p2.Kind == probeGot {
-					n2, nErr2 := strconv.ParseFloat(p2.Got, 64)
-					if nErr2 != nil {
-						return nil, deOverflow("T0", "id", "float", p2.ActualWireType, p2.Got)
-					}
-					rec1.Id = n2
+					sv2 := p2.Got
+					rec1.Email = &sv2
 				} else if p2.Kind == probeWrong {
-					return nil, deTypeMismatch("T0", "id", "float", p2.ActualWireType, p2.Raw)
-				} else if p2.Kind == probeNull {
-					return nil, deTypeMismatch("T0", "id", "float", p2.ActualWireType, p2.Raw)
-				} else {
-					return nil, deMissingField("T0", "id", "float")
+					return nil, deTypeMismatch("UserRow", "email", "opt(string)", p2.ActualWireType, p2.Raw)
 				}
-				p3 := p1.Got.ProbeString("email")
+				p3 := p1.Got.ProbeNumber("id")
 				if p3.Kind == probeGot {
-					sv3 := p3.Got
-					rec1.Email = &sv3
+					n3, nErr3 := strconv.ParseFloat(p3.Got, 64)
+					if nErr3 != nil {
+						return nil, deOverflow("UserRow", "id", "float", p3.ActualWireType, p3.Got)
+					}
+					rec1.Id = n3
 				} else if p3.Kind == probeWrong {
-					return nil, deTypeMismatch("T0", "email", "opt(string)", p3.ActualWireType, p3.Raw)
+					return nil, deTypeMismatch("UserRow", "id", "float", p3.ActualWireType, p3.Raw)
+				} else if p3.Kind == probeNull {
+					return nil, deTypeMismatch("UserRow", "id", "float", p3.ActualWireType, p3.Raw)
+				} else {
+					return nil, deMissingField("UserRow", "id", "float")
 				}
 				p4 := p1.Got.ProbeString("name")
 				if p4.Kind == probeGot {
 					sv4 := p4.Got
 					rec1.Name = &sv4
 				} else if p4.Kind == probeWrong {
-					return nil, deTypeMismatch("T0", "name", "opt(string)", p4.ActualWireType, p4.Raw)
+					return nil, deTypeMismatch("UserRow", "name", "opt(string)", p4.ActualWireType, p4.Raw)
 				}
 				el0 = rec1
 			} else if p1.Kind == probeWrong {
-				return nil, deTypeMismatch("n0", "n0", "obj{id:float,email:opt(string),name:opt(string)}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{email:opt(string),id:float,name:opt(string)}", p1.ActualWireType, p1.Raw)
 			} else if p1.Kind == probeNull {
-				return nil, deTypeMismatch("n0", "n0", "obj{id:float,email:opt(string),name:opt(string)}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{email:opt(string),id:float,name:opt(string)}", p1.ActualWireType, p1.Raw)
 			} else {
-				return nil, deMissingField("n0", "n0", "obj{id:float,email:opt(string),name:opt(string)}")
+				return nil, deMissingField("n0", "n0", "obj{email:opt(string),id:float,name:opt(string)}")
 			}
 			list0 = append(list0, el0)
 		}
 		t_n0 = list0
 	} else if p0.Kind == probeWrong {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:float,email:opt(string),name:opt(string)})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{email:opt(string),id:float,name:opt(string)})", p0.ActualWireType, p0.Raw)
 	} else if p0.Kind == probeNull {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:float,email:opt(string),name:opt(string)})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{email:opt(string),id:float,name:opt(string)})", p0.ActualWireType, p0.Raw)
 	} else {
-		return nil, deMissingField("n0", "n0", "arr(obj{id:float,email:opt(string),name:opt(string)})")
+		return nil, deMissingField("n0", "n0", "arr(obj{email:opt(string),id:float,name:opt(string)})")
 	}
 	produced_n0 = true
 	return t_n0, nil
 }
 
-// RunNativeRawStruct_nestedFindAll — the STRUCT-RETURNING combined read (bc#77/#87): the fully
+// NestedFindAll — the STRUCT-RETURNING combined read (bc#77/#87): the fully
 // de-plumbed path. Ports are a native struct (direct field assignment); the handler
 // result is materialized straight into the node's outType struct. Node results are typed
 // struct locals; a relation child reads the parent's REAL struct result via direct field
@@ -1134,13 +574,12 @@ func RunNativeRawStruct_findUnique(in In_findUnique) ([]T0, error) {
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func RunNativeRawStruct_nestedFindAll(in In_nestedFindAll) ([]T1, error) {
-	_ = in
+func NestedFindAll() ([]UserWithPosts, error) {
 	var t_n0 []wire.WireValue
 	produced_n0 := false
 	_ = t_n0
 	_ = produced_n0
-	var t_n1 wire.WireValue
+	var t_n1 []wire.WireValue
 	produced_n1 := false
 	_ = t_n1
 	_ = produced_n1
@@ -1148,13 +587,13 @@ func RunNativeRawStruct_nestedFindAll(in In_nestedFindAll) ([]T1, error) {
 	produced_n2 := false
 	_ = t_n2
 	_ = produced_n2
-	var t_n3 []T1
+	var t_n3 []UserWithPosts
 	produced_n3 := false
 	_ = t_n3
 	_ = produced_n3
 	// ── op 'n0' (executeSQL) ──
-	ports_n0 := PortsNR_nestedFindAll_n0{Bigint: false, Params: []wire.WireValue{}, Returning: false, Sql: "SELECT id, email, name FROM benchmark_users LIMIT 100", Write: false}
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ports_n0.Bigint, ports_n0.Params, ports_n0.Returning, ports_n0.Sql, ports_n0.Write)
+	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, email, name FROM benchmark_users LIMIT 100")}, wire.WireField{Key: "write", Val: wire.WireBool(false)}})
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
 	}
@@ -1171,18 +610,27 @@ func RunNativeRawStruct_nestedFindAll(in In_nestedFindAll) ([]T1, error) {
 	produced_n0 = true
 	// ── op 'n1' (pluck, parent:n0) ──
 	if produced_n0 {
-		ports_n1 := PortsNR_nestedFindAll_n1{Col: []string{"id"}, Rows: t_n0}
-		wire_n1, wire_n1Err := litedbmodel_runtime.PluckKeys(ports_n1.Col, ports_n1.Rows)
+		payload_n1 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "col", Val: func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range []string{"id"} { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()}, wire.WireField{Key: "rows", Val: wire.WireListOf(t_n0)}})
+		wire_n1, wire_n1Err := litedbmodel_runtime.PluckKeys(payload_n1)
 		if wire_n1Err != nil {
 			return nil, opFailed("n1", "fail", wire_n1Err)
 		}
-		t_n1 = wire_n1
+		p1 := wire_n1.AsList()
+		if p1.Kind == probeGot {
+			t_n1 = wire_n1.Items
+		} else if p1.Kind == probeWrong {
+			return nil, deTypeMismatch("n1", "n1", "arr(value)", p1.ActualWireType, p1.Raw)
+		} else if p1.Kind == probeNull {
+			return nil, deTypeMismatch("n1", "n1", "arr(value)", p1.ActualWireType, p1.Raw)
+		} else {
+			return nil, deMissingField("n1", "n1", "arr(value)")
+		}
 		produced_n1 = true
 	}
 	// ── op 'n2' (executeSQL, parent:n1) ──
 	if produced_n1 {
-		ports_n2 := PortsNR_nestedFindAll_n2{Bigint: false, Params: []wire.WireValue{t_n1}, Returning: false, Sql: "SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN (SELECT value FROM json_each(?)) ORDER BY id ASC", Write: false}
-		wire_n2, wire_n2Err := litedbmodel_runtime.ExecuteSQL(ports_n2.Bigint, ports_n2.Params, ports_n2.Returning, ports_n2.Sql, ports_n2.Write)
+		payload_n2 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireListOf(t_n1)})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN (SELECT value FROM json_each(?)) ORDER BY id ASC")}, wire.WireField{Key: "write", Val: wire.WireBool(false)}})
+		wire_n2, wire_n2Err := litedbmodel_runtime.ExecuteSQL(payload_n2)
 		if wire_n2Err != nil {
 			return nil, opFailed("n2", "fail", wire_n2Err)
 		}
@@ -1200,43 +648,128 @@ func RunNativeRawStruct_nestedFindAll(in In_nestedFindAll) ([]T1, error) {
 	}
 	// ── op 'n3' (group, parent:n0) ──
 	if produced_n0 {
-		ports_n3 := PortsNR_nestedFindAll_n3{Children: t_n2, Fk: []string{"author_id"}, Into: "posts", Parents: t_n0, Pk: []string{"id"}, Single: false}
-		wire_n3, wire_n3Err := litedbmodel_runtime.GroupChildren(ports_n3.Children, ports_n3.Fk, ports_n3.Into, ports_n3.Parents, ports_n3.Pk, ports_n3.Single)
+		payload_n3 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "children", Val: wire.WireListOf(t_n2)}, wire.WireField{Key: "fk", Val: func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range []string{"author_id"} { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()}, wire.WireField{Key: "into", Val: wire.WireStr("posts")}, wire.WireField{Key: "parents", Val: wire.WireListOf(t_n0)}, wire.WireField{Key: "pk", Val: func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range []string{"id"} { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()}, wire.WireField{Key: "single", Val: wire.WireBool(false)}})
+		wire_n3, wire_n3Err := litedbmodel_runtime.GroupChildren(payload_n3)
 		if wire_n3Err != nil {
 			return nil, opFailed("n3", "fail", wire_n3Err)
 		}
 		p3 := wire_n3.AsList()
 		if p3.Kind == probeGot {
-			list3 := make([]T1, 0, p3.Got.Len())
+			list3 := make([]UserWithPosts, 0, p3.Got.Len())
 			for i3 := 0; i3 < p3.Got.Len(); i3++ {
-				var el3 T1
+				var el3 UserWithPosts
 				p4 := p3.Got.ElemRow(i3)
 				if p4.Kind == probeGot {
-					var rec4 T1
+					var rec4 UserWithPosts
+					p5 := p4.Got.ProbeString("email")
+					if p5.Kind == probeGot {
+						sv5 := p5.Got
+						rec4.Email = &sv5
+					} else if p5.Kind == probeWrong {
+						return nil, deTypeMismatch("UserWithPosts", "email", "opt(string)", p5.ActualWireType, p5.Raw)
+					}
+					p6 := p4.Got.ProbeNumber("id")
+					if p6.Kind == probeGot {
+						n6, nErr6 := strconv.ParseFloat(p6.Got, 64)
+						if nErr6 != nil {
+							return nil, deOverflow("UserWithPosts", "id", "float", p6.ActualWireType, p6.Got)
+						}
+						rec4.Id = n6
+					} else if p6.Kind == probeWrong {
+						return nil, deTypeMismatch("UserWithPosts", "id", "float", p6.ActualWireType, p6.Raw)
+					} else if p6.Kind == probeNull {
+						return nil, deTypeMismatch("UserWithPosts", "id", "float", p6.ActualWireType, p6.Raw)
+					} else {
+						return nil, deMissingField("UserWithPosts", "id", "float")
+					}
+					p7 := p4.Got.ProbeString("name")
+					if p7.Kind == probeGot {
+						sv7 := p7.Got
+						rec4.Name = &sv7
+					} else if p7.Kind == probeWrong {
+						return nil, deTypeMismatch("UserWithPosts", "name", "opt(string)", p7.ActualWireType, p7.Raw)
+					}
+					p8 := p4.Got.ProbeList("posts")
+					if p8.Kind == probeGot {
+						list8 := make([]PostRow, 0, p8.Got.Len())
+						for i8 := 0; i8 < p8.Got.Len(); i8++ {
+							var el8 PostRow
+							p9 := p8.Got.ElemRow(i8)
+							if p9.Kind == probeGot {
+								var rec9 PostRow
+								p10 := p9.Got.ProbeNumber("author_id")
+								if p10.Kind == probeGot {
+									n10, nErr10 := strconv.ParseFloat(p10.Got, 64)
+									if nErr10 != nil {
+										return nil, deOverflow("PostRow", "author_id", "opt(float)", p10.ActualWireType, p10.Got)
+									}
+									rec9.Author_id = &n10
+								} else if p10.Kind == probeWrong {
+									return nil, deTypeMismatch("PostRow", "author_id", "opt(float)", p10.ActualWireType, p10.Raw)
+								}
+								p11 := p9.Got.ProbeNumber("id")
+								if p11.Kind == probeGot {
+									n11, nErr11 := strconv.ParseFloat(p11.Got, 64)
+									if nErr11 != nil {
+										return nil, deOverflow("PostRow", "id", "float", p11.ActualWireType, p11.Got)
+									}
+									rec9.Id = n11
+								} else if p11.Kind == probeWrong {
+									return nil, deTypeMismatch("PostRow", "id", "float", p11.ActualWireType, p11.Raw)
+								} else if p11.Kind == probeNull {
+									return nil, deTypeMismatch("PostRow", "id", "float", p11.ActualWireType, p11.Raw)
+								} else {
+									return nil, deMissingField("PostRow", "id", "float")
+								}
+								p12 := p9.Got.ProbeString("title")
+								if p12.Kind == probeGot {
+									sv12 := p12.Got
+									rec9.Title = &sv12
+								} else if p12.Kind == probeWrong {
+									return nil, deTypeMismatch("PostRow", "title", "opt(string)", p12.ActualWireType, p12.Raw)
+								}
+								el8 = rec9
+							} else if p9.Kind == probeWrong {
+								return nil, deTypeMismatch("UserWithPosts", "posts", "obj{author_id:opt(float),id:float,title:opt(string)}", p9.ActualWireType, p9.Raw)
+							} else if p9.Kind == probeNull {
+								return nil, deTypeMismatch("UserWithPosts", "posts", "obj{author_id:opt(float),id:float,title:opt(string)}", p9.ActualWireType, p9.Raw)
+							} else {
+								return nil, deMissingField("UserWithPosts", "posts", "obj{author_id:opt(float),id:float,title:opt(string)}")
+							}
+							list8 = append(list8, el8)
+						}
+						rec4.Posts = list8
+					} else if p8.Kind == probeWrong {
+						return nil, deTypeMismatch("UserWithPosts", "posts", "arr(obj{author_id:opt(float),id:float,title:opt(string)})", p8.ActualWireType, p8.Raw)
+					} else if p8.Kind == probeNull {
+						return nil, deTypeMismatch("UserWithPosts", "posts", "arr(obj{author_id:opt(float),id:float,title:opt(string)})", p8.ActualWireType, p8.Raw)
+					} else {
+						return nil, deMissingField("UserWithPosts", "posts", "arr(obj{author_id:opt(float),id:float,title:opt(string)})")
+					}
 					el3 = rec4
 				} else if p4.Kind == probeWrong {
-					return nil, deTypeMismatch("n3", "n3", "obj{}", p4.ActualWireType, p4.Raw)
+					return nil, deTypeMismatch("n3", "n3", "obj{email:opt(string),id:float,name:opt(string),posts:arr(obj{author_id:opt(float),id:float,title:opt(string)})}", p4.ActualWireType, p4.Raw)
 				} else if p4.Kind == probeNull {
-					return nil, deTypeMismatch("n3", "n3", "obj{}", p4.ActualWireType, p4.Raw)
+					return nil, deTypeMismatch("n3", "n3", "obj{email:opt(string),id:float,name:opt(string),posts:arr(obj{author_id:opt(float),id:float,title:opt(string)})}", p4.ActualWireType, p4.Raw)
 				} else {
-					return nil, deMissingField("n3", "n3", "obj{}")
+					return nil, deMissingField("n3", "n3", "obj{email:opt(string),id:float,name:opt(string),posts:arr(obj{author_id:opt(float),id:float,title:opt(string)})}")
 				}
 				list3 = append(list3, el3)
 			}
 			t_n3 = list3
 		} else if p3.Kind == probeWrong {
-			return nil, deTypeMismatch("n3", "n3", "arr(obj{})", p3.ActualWireType, p3.Raw)
+			return nil, deTypeMismatch("n3", "n3", "arr(obj{email:opt(string),id:float,name:opt(string),posts:arr(obj{author_id:opt(float),id:float,title:opt(string)})})", p3.ActualWireType, p3.Raw)
 		} else if p3.Kind == probeNull {
-			return nil, deTypeMismatch("n3", "n3", "arr(obj{})", p3.ActualWireType, p3.Raw)
+			return nil, deTypeMismatch("n3", "n3", "arr(obj{email:opt(string),id:float,name:opt(string),posts:arr(obj{author_id:opt(float),id:float,title:opt(string)})})", p3.ActualWireType, p3.Raw)
 		} else {
-			return nil, deMissingField("n3", "n3", "arr(obj{})")
+			return nil, deMissingField("n3", "n3", "arr(obj{email:opt(string),id:float,name:opt(string),posts:arr(obj{author_id:opt(float),id:float,title:opt(string)})})")
 		}
 		produced_n3 = true
 	}
 	return t_n3, nil
 }
 
-// RunNativeRawStruct_nestedFindFirst — the STRUCT-RETURNING combined read (bc#77/#87): the fully
+// NestedFindFirst — the STRUCT-RETURNING combined read (bc#77/#87): the fully
 // de-plumbed path. Ports are a native struct (direct field assignment); the handler
 // result is materialized straight into the node's outType struct. Node results are typed
 // struct locals; a relation child reads the parent's REAL struct result via direct field
@@ -1248,13 +781,12 @@ func RunNativeRawStruct_nestedFindAll(in In_nestedFindAll) ([]T1, error) {
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func RunNativeRawStruct_nestedFindFirst(in In_nestedFindFirst) ([]T1, error) {
-	_ = in
+func NestedFindFirst(name string) ([]UserWithPosts, error) {
 	var t_n0 []wire.WireValue
 	produced_n0 := false
 	_ = t_n0
 	_ = produced_n0
-	var t_n1 wire.WireValue
+	var t_n1 []wire.WireValue
 	produced_n1 := false
 	_ = t_n1
 	_ = produced_n1
@@ -1262,13 +794,13 @@ func RunNativeRawStruct_nestedFindFirst(in In_nestedFindFirst) ([]T1, error) {
 	produced_n2 := false
 	_ = t_n2
 	_ = produced_n2
-	var t_n3 []T1
+	var t_n3 []UserWithPosts
 	produced_n3 := false
 	_ = t_n3
 	_ = produced_n3
 	// ── op 'n0' (executeSQL) ──
-	ports_n0 := PortsNR_nestedFindFirst_n0{Bigint: false, Params: []wire.WireValue{wire.WireStr(in.Name)}, Returning: false, Sql: "SELECT id, email, name FROM benchmark_users WHERE name LIKE ? LIMIT 1", Write: false}
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ports_n0.Bigint, ports_n0.Params, ports_n0.Returning, ports_n0.Sql, ports_n0.Write)
+	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireStr(name)})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, email, name FROM benchmark_users WHERE name LIKE ? LIMIT 1")}, wire.WireField{Key: "write", Val: wire.WireBool(false)}})
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
 	}
@@ -1285,18 +817,27 @@ func RunNativeRawStruct_nestedFindFirst(in In_nestedFindFirst) ([]T1, error) {
 	produced_n0 = true
 	// ── op 'n1' (pluck, parent:n0) ──
 	if produced_n0 {
-		ports_n1 := PortsNR_nestedFindFirst_n1{Col: []string{"id"}, Rows: t_n0}
-		wire_n1, wire_n1Err := litedbmodel_runtime.PluckKeys(ports_n1.Col, ports_n1.Rows)
+		payload_n1 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "col", Val: func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range []string{"id"} { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()}, wire.WireField{Key: "rows", Val: wire.WireListOf(t_n0)}})
+		wire_n1, wire_n1Err := litedbmodel_runtime.PluckKeys(payload_n1)
 		if wire_n1Err != nil {
 			return nil, opFailed("n1", "fail", wire_n1Err)
 		}
-		t_n1 = wire_n1
+		p1 := wire_n1.AsList()
+		if p1.Kind == probeGot {
+			t_n1 = wire_n1.Items
+		} else if p1.Kind == probeWrong {
+			return nil, deTypeMismatch("n1", "n1", "arr(value)", p1.ActualWireType, p1.Raw)
+		} else if p1.Kind == probeNull {
+			return nil, deTypeMismatch("n1", "n1", "arr(value)", p1.ActualWireType, p1.Raw)
+		} else {
+			return nil, deMissingField("n1", "n1", "arr(value)")
+		}
 		produced_n1 = true
 	}
 	// ── op 'n2' (executeSQL, parent:n1) ──
 	if produced_n1 {
-		ports_n2 := PortsNR_nestedFindFirst_n2{Bigint: false, Params: []wire.WireValue{t_n1}, Returning: false, Sql: "SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN (SELECT value FROM json_each(?)) ORDER BY id ASC", Write: false}
-		wire_n2, wire_n2Err := litedbmodel_runtime.ExecuteSQL(ports_n2.Bigint, ports_n2.Params, ports_n2.Returning, ports_n2.Sql, ports_n2.Write)
+		payload_n2 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireListOf(t_n1)})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN (SELECT value FROM json_each(?)) ORDER BY id ASC")}, wire.WireField{Key: "write", Val: wire.WireBool(false)}})
+		wire_n2, wire_n2Err := litedbmodel_runtime.ExecuteSQL(payload_n2)
 		if wire_n2Err != nil {
 			return nil, opFailed("n2", "fail", wire_n2Err)
 		}
@@ -1314,43 +855,128 @@ func RunNativeRawStruct_nestedFindFirst(in In_nestedFindFirst) ([]T1, error) {
 	}
 	// ── op 'n3' (group, parent:n0) ──
 	if produced_n0 {
-		ports_n3 := PortsNR_nestedFindFirst_n3{Children: t_n2, Fk: []string{"author_id"}, Into: "posts", Parents: t_n0, Pk: []string{"id"}, Single: false}
-		wire_n3, wire_n3Err := litedbmodel_runtime.GroupChildren(ports_n3.Children, ports_n3.Fk, ports_n3.Into, ports_n3.Parents, ports_n3.Pk, ports_n3.Single)
+		payload_n3 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "children", Val: wire.WireListOf(t_n2)}, wire.WireField{Key: "fk", Val: func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range []string{"author_id"} { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()}, wire.WireField{Key: "into", Val: wire.WireStr("posts")}, wire.WireField{Key: "parents", Val: wire.WireListOf(t_n0)}, wire.WireField{Key: "pk", Val: func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range []string{"id"} { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()}, wire.WireField{Key: "single", Val: wire.WireBool(false)}})
+		wire_n3, wire_n3Err := litedbmodel_runtime.GroupChildren(payload_n3)
 		if wire_n3Err != nil {
 			return nil, opFailed("n3", "fail", wire_n3Err)
 		}
 		p3 := wire_n3.AsList()
 		if p3.Kind == probeGot {
-			list3 := make([]T1, 0, p3.Got.Len())
+			list3 := make([]UserWithPosts, 0, p3.Got.Len())
 			for i3 := 0; i3 < p3.Got.Len(); i3++ {
-				var el3 T1
+				var el3 UserWithPosts
 				p4 := p3.Got.ElemRow(i3)
 				if p4.Kind == probeGot {
-					var rec4 T1
+					var rec4 UserWithPosts
+					p5 := p4.Got.ProbeString("email")
+					if p5.Kind == probeGot {
+						sv5 := p5.Got
+						rec4.Email = &sv5
+					} else if p5.Kind == probeWrong {
+						return nil, deTypeMismatch("UserWithPosts", "email", "opt(string)", p5.ActualWireType, p5.Raw)
+					}
+					p6 := p4.Got.ProbeNumber("id")
+					if p6.Kind == probeGot {
+						n6, nErr6 := strconv.ParseFloat(p6.Got, 64)
+						if nErr6 != nil {
+							return nil, deOverflow("UserWithPosts", "id", "float", p6.ActualWireType, p6.Got)
+						}
+						rec4.Id = n6
+					} else if p6.Kind == probeWrong {
+						return nil, deTypeMismatch("UserWithPosts", "id", "float", p6.ActualWireType, p6.Raw)
+					} else if p6.Kind == probeNull {
+						return nil, deTypeMismatch("UserWithPosts", "id", "float", p6.ActualWireType, p6.Raw)
+					} else {
+						return nil, deMissingField("UserWithPosts", "id", "float")
+					}
+					p7 := p4.Got.ProbeString("name")
+					if p7.Kind == probeGot {
+						sv7 := p7.Got
+						rec4.Name = &sv7
+					} else if p7.Kind == probeWrong {
+						return nil, deTypeMismatch("UserWithPosts", "name", "opt(string)", p7.ActualWireType, p7.Raw)
+					}
+					p8 := p4.Got.ProbeList("posts")
+					if p8.Kind == probeGot {
+						list8 := make([]PostRow, 0, p8.Got.Len())
+						for i8 := 0; i8 < p8.Got.Len(); i8++ {
+							var el8 PostRow
+							p9 := p8.Got.ElemRow(i8)
+							if p9.Kind == probeGot {
+								var rec9 PostRow
+								p10 := p9.Got.ProbeNumber("author_id")
+								if p10.Kind == probeGot {
+									n10, nErr10 := strconv.ParseFloat(p10.Got, 64)
+									if nErr10 != nil {
+										return nil, deOverflow("PostRow", "author_id", "opt(float)", p10.ActualWireType, p10.Got)
+									}
+									rec9.Author_id = &n10
+								} else if p10.Kind == probeWrong {
+									return nil, deTypeMismatch("PostRow", "author_id", "opt(float)", p10.ActualWireType, p10.Raw)
+								}
+								p11 := p9.Got.ProbeNumber("id")
+								if p11.Kind == probeGot {
+									n11, nErr11 := strconv.ParseFloat(p11.Got, 64)
+									if nErr11 != nil {
+										return nil, deOverflow("PostRow", "id", "float", p11.ActualWireType, p11.Got)
+									}
+									rec9.Id = n11
+								} else if p11.Kind == probeWrong {
+									return nil, deTypeMismatch("PostRow", "id", "float", p11.ActualWireType, p11.Raw)
+								} else if p11.Kind == probeNull {
+									return nil, deTypeMismatch("PostRow", "id", "float", p11.ActualWireType, p11.Raw)
+								} else {
+									return nil, deMissingField("PostRow", "id", "float")
+								}
+								p12 := p9.Got.ProbeString("title")
+								if p12.Kind == probeGot {
+									sv12 := p12.Got
+									rec9.Title = &sv12
+								} else if p12.Kind == probeWrong {
+									return nil, deTypeMismatch("PostRow", "title", "opt(string)", p12.ActualWireType, p12.Raw)
+								}
+								el8 = rec9
+							} else if p9.Kind == probeWrong {
+								return nil, deTypeMismatch("UserWithPosts", "posts", "obj{author_id:opt(float),id:float,title:opt(string)}", p9.ActualWireType, p9.Raw)
+							} else if p9.Kind == probeNull {
+								return nil, deTypeMismatch("UserWithPosts", "posts", "obj{author_id:opt(float),id:float,title:opt(string)}", p9.ActualWireType, p9.Raw)
+							} else {
+								return nil, deMissingField("UserWithPosts", "posts", "obj{author_id:opt(float),id:float,title:opt(string)}")
+							}
+							list8 = append(list8, el8)
+						}
+						rec4.Posts = list8
+					} else if p8.Kind == probeWrong {
+						return nil, deTypeMismatch("UserWithPosts", "posts", "arr(obj{author_id:opt(float),id:float,title:opt(string)})", p8.ActualWireType, p8.Raw)
+					} else if p8.Kind == probeNull {
+						return nil, deTypeMismatch("UserWithPosts", "posts", "arr(obj{author_id:opt(float),id:float,title:opt(string)})", p8.ActualWireType, p8.Raw)
+					} else {
+						return nil, deMissingField("UserWithPosts", "posts", "arr(obj{author_id:opt(float),id:float,title:opt(string)})")
+					}
 					el3 = rec4
 				} else if p4.Kind == probeWrong {
-					return nil, deTypeMismatch("n3", "n3", "obj{}", p4.ActualWireType, p4.Raw)
+					return nil, deTypeMismatch("n3", "n3", "obj{email:opt(string),id:float,name:opt(string),posts:arr(obj{author_id:opt(float),id:float,title:opt(string)})}", p4.ActualWireType, p4.Raw)
 				} else if p4.Kind == probeNull {
-					return nil, deTypeMismatch("n3", "n3", "obj{}", p4.ActualWireType, p4.Raw)
+					return nil, deTypeMismatch("n3", "n3", "obj{email:opt(string),id:float,name:opt(string),posts:arr(obj{author_id:opt(float),id:float,title:opt(string)})}", p4.ActualWireType, p4.Raw)
 				} else {
-					return nil, deMissingField("n3", "n3", "obj{}")
+					return nil, deMissingField("n3", "n3", "obj{email:opt(string),id:float,name:opt(string),posts:arr(obj{author_id:opt(float),id:float,title:opt(string)})}")
 				}
 				list3 = append(list3, el3)
 			}
 			t_n3 = list3
 		} else if p3.Kind == probeWrong {
-			return nil, deTypeMismatch("n3", "n3", "arr(obj{})", p3.ActualWireType, p3.Raw)
+			return nil, deTypeMismatch("n3", "n3", "arr(obj{email:opt(string),id:float,name:opt(string),posts:arr(obj{author_id:opt(float),id:float,title:opt(string)})})", p3.ActualWireType, p3.Raw)
 		} else if p3.Kind == probeNull {
-			return nil, deTypeMismatch("n3", "n3", "arr(obj{})", p3.ActualWireType, p3.Raw)
+			return nil, deTypeMismatch("n3", "n3", "arr(obj{email:opt(string),id:float,name:opt(string),posts:arr(obj{author_id:opt(float),id:float,title:opt(string)})})", p3.ActualWireType, p3.Raw)
 		} else {
-			return nil, deMissingField("n3", "n3", "arr(obj{})")
+			return nil, deMissingField("n3", "n3", "arr(obj{email:opt(string),id:float,name:opt(string),posts:arr(obj{author_id:opt(float),id:float,title:opt(string)})})")
 		}
 		produced_n3 = true
 	}
 	return t_n3, nil
 }
 
-// RunNativeRawStruct_nestedFindUnique — the STRUCT-RETURNING combined read (bc#77/#87): the fully
+// NestedFindUnique — the STRUCT-RETURNING combined read (bc#77/#87): the fully
 // de-plumbed path. Ports are a native struct (direct field assignment); the handler
 // result is materialized straight into the node's outType struct. Node results are typed
 // struct locals; a relation child reads the parent's REAL struct result via direct field
@@ -1362,13 +988,12 @@ func RunNativeRawStruct_nestedFindFirst(in In_nestedFindFirst) ([]T1, error) {
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func RunNativeRawStruct_nestedFindUnique(in In_nestedFindUnique) ([]T1, error) {
-	_ = in
+func NestedFindUnique(email string) ([]UserWithPosts, error) {
 	var t_n0 []wire.WireValue
 	produced_n0 := false
 	_ = t_n0
 	_ = produced_n0
-	var t_n1 wire.WireValue
+	var t_n1 []wire.WireValue
 	produced_n1 := false
 	_ = t_n1
 	_ = produced_n1
@@ -1376,13 +1001,13 @@ func RunNativeRawStruct_nestedFindUnique(in In_nestedFindUnique) ([]T1, error) {
 	produced_n2 := false
 	_ = t_n2
 	_ = produced_n2
-	var t_n3 []T1
+	var t_n3 []UserWithPosts
 	produced_n3 := false
 	_ = t_n3
 	_ = produced_n3
 	// ── op 'n0' (executeSQL) ──
-	ports_n0 := PortsNR_nestedFindUnique_n0{Bigint: false, Params: []wire.WireValue{wire.WireStr(in.Email)}, Returning: false, Sql: "SELECT id, email, name FROM benchmark_users WHERE email = ? LIMIT 1", Write: false}
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ports_n0.Bigint, ports_n0.Params, ports_n0.Returning, ports_n0.Sql, ports_n0.Write)
+	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireStr(email)})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, email, name FROM benchmark_users WHERE email = ? LIMIT 1")}, wire.WireField{Key: "write", Val: wire.WireBool(false)}})
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
 	}
@@ -1399,18 +1024,27 @@ func RunNativeRawStruct_nestedFindUnique(in In_nestedFindUnique) ([]T1, error) {
 	produced_n0 = true
 	// ── op 'n1' (pluck, parent:n0) ──
 	if produced_n0 {
-		ports_n1 := PortsNR_nestedFindUnique_n1{Col: []string{"id"}, Rows: t_n0}
-		wire_n1, wire_n1Err := litedbmodel_runtime.PluckKeys(ports_n1.Col, ports_n1.Rows)
+		payload_n1 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "col", Val: func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range []string{"id"} { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()}, wire.WireField{Key: "rows", Val: wire.WireListOf(t_n0)}})
+		wire_n1, wire_n1Err := litedbmodel_runtime.PluckKeys(payload_n1)
 		if wire_n1Err != nil {
 			return nil, opFailed("n1", "fail", wire_n1Err)
 		}
-		t_n1 = wire_n1
+		p1 := wire_n1.AsList()
+		if p1.Kind == probeGot {
+			t_n1 = wire_n1.Items
+		} else if p1.Kind == probeWrong {
+			return nil, deTypeMismatch("n1", "n1", "arr(value)", p1.ActualWireType, p1.Raw)
+		} else if p1.Kind == probeNull {
+			return nil, deTypeMismatch("n1", "n1", "arr(value)", p1.ActualWireType, p1.Raw)
+		} else {
+			return nil, deMissingField("n1", "n1", "arr(value)")
+		}
 		produced_n1 = true
 	}
 	// ── op 'n2' (executeSQL, parent:n1) ──
 	if produced_n1 {
-		ports_n2 := PortsNR_nestedFindUnique_n2{Bigint: false, Params: []wire.WireValue{t_n1}, Returning: false, Sql: "SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN (SELECT value FROM json_each(?)) ORDER BY id ASC", Write: false}
-		wire_n2, wire_n2Err := litedbmodel_runtime.ExecuteSQL(ports_n2.Bigint, ports_n2.Params, ports_n2.Returning, ports_n2.Sql, ports_n2.Write)
+		payload_n2 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireListOf(t_n1)})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN (SELECT value FROM json_each(?)) ORDER BY id ASC")}, wire.WireField{Key: "write", Val: wire.WireBool(false)}})
+		wire_n2, wire_n2Err := litedbmodel_runtime.ExecuteSQL(payload_n2)
 		if wire_n2Err != nil {
 			return nil, opFailed("n2", "fail", wire_n2Err)
 		}
@@ -1428,43 +1062,128 @@ func RunNativeRawStruct_nestedFindUnique(in In_nestedFindUnique) ([]T1, error) {
 	}
 	// ── op 'n3' (group, parent:n0) ──
 	if produced_n0 {
-		ports_n3 := PortsNR_nestedFindUnique_n3{Children: t_n2, Fk: []string{"author_id"}, Into: "posts", Parents: t_n0, Pk: []string{"id"}, Single: false}
-		wire_n3, wire_n3Err := litedbmodel_runtime.GroupChildren(ports_n3.Children, ports_n3.Fk, ports_n3.Into, ports_n3.Parents, ports_n3.Pk, ports_n3.Single)
+		payload_n3 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "children", Val: wire.WireListOf(t_n2)}, wire.WireField{Key: "fk", Val: func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range []string{"author_id"} { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()}, wire.WireField{Key: "into", Val: wire.WireStr("posts")}, wire.WireField{Key: "parents", Val: wire.WireListOf(t_n0)}, wire.WireField{Key: "pk", Val: func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range []string{"id"} { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()}, wire.WireField{Key: "single", Val: wire.WireBool(false)}})
+		wire_n3, wire_n3Err := litedbmodel_runtime.GroupChildren(payload_n3)
 		if wire_n3Err != nil {
 			return nil, opFailed("n3", "fail", wire_n3Err)
 		}
 		p3 := wire_n3.AsList()
 		if p3.Kind == probeGot {
-			list3 := make([]T1, 0, p3.Got.Len())
+			list3 := make([]UserWithPosts, 0, p3.Got.Len())
 			for i3 := 0; i3 < p3.Got.Len(); i3++ {
-				var el3 T1
+				var el3 UserWithPosts
 				p4 := p3.Got.ElemRow(i3)
 				if p4.Kind == probeGot {
-					var rec4 T1
+					var rec4 UserWithPosts
+					p5 := p4.Got.ProbeString("email")
+					if p5.Kind == probeGot {
+						sv5 := p5.Got
+						rec4.Email = &sv5
+					} else if p5.Kind == probeWrong {
+						return nil, deTypeMismatch("UserWithPosts", "email", "opt(string)", p5.ActualWireType, p5.Raw)
+					}
+					p6 := p4.Got.ProbeNumber("id")
+					if p6.Kind == probeGot {
+						n6, nErr6 := strconv.ParseFloat(p6.Got, 64)
+						if nErr6 != nil {
+							return nil, deOverflow("UserWithPosts", "id", "float", p6.ActualWireType, p6.Got)
+						}
+						rec4.Id = n6
+					} else if p6.Kind == probeWrong {
+						return nil, deTypeMismatch("UserWithPosts", "id", "float", p6.ActualWireType, p6.Raw)
+					} else if p6.Kind == probeNull {
+						return nil, deTypeMismatch("UserWithPosts", "id", "float", p6.ActualWireType, p6.Raw)
+					} else {
+						return nil, deMissingField("UserWithPosts", "id", "float")
+					}
+					p7 := p4.Got.ProbeString("name")
+					if p7.Kind == probeGot {
+						sv7 := p7.Got
+						rec4.Name = &sv7
+					} else if p7.Kind == probeWrong {
+						return nil, deTypeMismatch("UserWithPosts", "name", "opt(string)", p7.ActualWireType, p7.Raw)
+					}
+					p8 := p4.Got.ProbeList("posts")
+					if p8.Kind == probeGot {
+						list8 := make([]PostRow, 0, p8.Got.Len())
+						for i8 := 0; i8 < p8.Got.Len(); i8++ {
+							var el8 PostRow
+							p9 := p8.Got.ElemRow(i8)
+							if p9.Kind == probeGot {
+								var rec9 PostRow
+								p10 := p9.Got.ProbeNumber("author_id")
+								if p10.Kind == probeGot {
+									n10, nErr10 := strconv.ParseFloat(p10.Got, 64)
+									if nErr10 != nil {
+										return nil, deOverflow("PostRow", "author_id", "opt(float)", p10.ActualWireType, p10.Got)
+									}
+									rec9.Author_id = &n10
+								} else if p10.Kind == probeWrong {
+									return nil, deTypeMismatch("PostRow", "author_id", "opt(float)", p10.ActualWireType, p10.Raw)
+								}
+								p11 := p9.Got.ProbeNumber("id")
+								if p11.Kind == probeGot {
+									n11, nErr11 := strconv.ParseFloat(p11.Got, 64)
+									if nErr11 != nil {
+										return nil, deOverflow("PostRow", "id", "float", p11.ActualWireType, p11.Got)
+									}
+									rec9.Id = n11
+								} else if p11.Kind == probeWrong {
+									return nil, deTypeMismatch("PostRow", "id", "float", p11.ActualWireType, p11.Raw)
+								} else if p11.Kind == probeNull {
+									return nil, deTypeMismatch("PostRow", "id", "float", p11.ActualWireType, p11.Raw)
+								} else {
+									return nil, deMissingField("PostRow", "id", "float")
+								}
+								p12 := p9.Got.ProbeString("title")
+								if p12.Kind == probeGot {
+									sv12 := p12.Got
+									rec9.Title = &sv12
+								} else if p12.Kind == probeWrong {
+									return nil, deTypeMismatch("PostRow", "title", "opt(string)", p12.ActualWireType, p12.Raw)
+								}
+								el8 = rec9
+							} else if p9.Kind == probeWrong {
+								return nil, deTypeMismatch("UserWithPosts", "posts", "obj{author_id:opt(float),id:float,title:opt(string)}", p9.ActualWireType, p9.Raw)
+							} else if p9.Kind == probeNull {
+								return nil, deTypeMismatch("UserWithPosts", "posts", "obj{author_id:opt(float),id:float,title:opt(string)}", p9.ActualWireType, p9.Raw)
+							} else {
+								return nil, deMissingField("UserWithPosts", "posts", "obj{author_id:opt(float),id:float,title:opt(string)}")
+							}
+							list8 = append(list8, el8)
+						}
+						rec4.Posts = list8
+					} else if p8.Kind == probeWrong {
+						return nil, deTypeMismatch("UserWithPosts", "posts", "arr(obj{author_id:opt(float),id:float,title:opt(string)})", p8.ActualWireType, p8.Raw)
+					} else if p8.Kind == probeNull {
+						return nil, deTypeMismatch("UserWithPosts", "posts", "arr(obj{author_id:opt(float),id:float,title:opt(string)})", p8.ActualWireType, p8.Raw)
+					} else {
+						return nil, deMissingField("UserWithPosts", "posts", "arr(obj{author_id:opt(float),id:float,title:opt(string)})")
+					}
 					el3 = rec4
 				} else if p4.Kind == probeWrong {
-					return nil, deTypeMismatch("n3", "n3", "obj{}", p4.ActualWireType, p4.Raw)
+					return nil, deTypeMismatch("n3", "n3", "obj{email:opt(string),id:float,name:opt(string),posts:arr(obj{author_id:opt(float),id:float,title:opt(string)})}", p4.ActualWireType, p4.Raw)
 				} else if p4.Kind == probeNull {
-					return nil, deTypeMismatch("n3", "n3", "obj{}", p4.ActualWireType, p4.Raw)
+					return nil, deTypeMismatch("n3", "n3", "obj{email:opt(string),id:float,name:opt(string),posts:arr(obj{author_id:opt(float),id:float,title:opt(string)})}", p4.ActualWireType, p4.Raw)
 				} else {
-					return nil, deMissingField("n3", "n3", "obj{}")
+					return nil, deMissingField("n3", "n3", "obj{email:opt(string),id:float,name:opt(string),posts:arr(obj{author_id:opt(float),id:float,title:opt(string)})}")
 				}
 				list3 = append(list3, el3)
 			}
 			t_n3 = list3
 		} else if p3.Kind == probeWrong {
-			return nil, deTypeMismatch("n3", "n3", "arr(obj{})", p3.ActualWireType, p3.Raw)
+			return nil, deTypeMismatch("n3", "n3", "arr(obj{email:opt(string),id:float,name:opt(string),posts:arr(obj{author_id:opt(float),id:float,title:opt(string)})})", p3.ActualWireType, p3.Raw)
 		} else if p3.Kind == probeNull {
-			return nil, deTypeMismatch("n3", "n3", "arr(obj{})", p3.ActualWireType, p3.Raw)
+			return nil, deTypeMismatch("n3", "n3", "arr(obj{email:opt(string),id:float,name:opt(string),posts:arr(obj{author_id:opt(float),id:float,title:opt(string)})})", p3.ActualWireType, p3.Raw)
 		} else {
-			return nil, deMissingField("n3", "n3", "arr(obj{})")
+			return nil, deMissingField("n3", "n3", "arr(obj{email:opt(string),id:float,name:opt(string),posts:arr(obj{author_id:opt(float),id:float,title:opt(string)})})")
 		}
 		produced_n3 = true
 	}
 	return t_n3, nil
 }
 
-// RunNativeRawStruct_nestedRelations — the STRUCT-RETURNING combined read (bc#77/#87): the fully
+// NestedRelations — the STRUCT-RETURNING combined read (bc#77/#87): the fully
 // de-plumbed path. Ports are a native struct (direct field assignment); the handler
 // result is materialized straight into the node's outType struct. Node results are typed
 // struct locals; a relation child reads the parent's REAL struct result via direct field
@@ -1476,13 +1195,12 @@ func RunNativeRawStruct_nestedFindUnique(in In_nestedFindUnique) ([]T1, error) {
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func RunNativeRawStruct_nestedRelations(in In_nestedRelations) ([]T1, error) {
-	_ = in
+func NestedRelations() ([]UserWithPostsAndComments, error) {
 	var t_n0 []wire.WireValue
 	produced_n0 := false
 	_ = t_n0
 	_ = produced_n0
-	var t_n1 wire.WireValue
+	var t_n1 []wire.WireValue
 	produced_n1 := false
 	_ = t_n1
 	_ = produced_n1
@@ -1490,7 +1208,7 @@ func RunNativeRawStruct_nestedRelations(in In_nestedRelations) ([]T1, error) {
 	produced_n2 := false
 	_ = t_n2
 	_ = produced_n2
-	var t_n3 wire.WireValue
+	var t_n3 []wire.WireValue
 	produced_n3 := false
 	_ = t_n3
 	_ = produced_n3
@@ -1502,13 +1220,13 @@ func RunNativeRawStruct_nestedRelations(in In_nestedRelations) ([]T1, error) {
 	produced_n5 := false
 	_ = t_n5
 	_ = produced_n5
-	var t_n6 []T1
+	var t_n6 []UserWithPostsAndComments
 	produced_n6 := false
 	_ = t_n6
 	_ = produced_n6
 	// ── op 'n0' (executeSQL) ──
-	ports_n0 := PortsNR_nestedRelations_n0{Bigint: false, Params: []wire.WireValue{}, Returning: false, Sql: "SELECT id, email, name FROM benchmark_users LIMIT 100", Write: false}
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ports_n0.Bigint, ports_n0.Params, ports_n0.Returning, ports_n0.Sql, ports_n0.Write)
+	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, email, name FROM benchmark_users LIMIT 100")}, wire.WireField{Key: "write", Val: wire.WireBool(false)}})
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
 	}
@@ -1525,18 +1243,27 @@ func RunNativeRawStruct_nestedRelations(in In_nestedRelations) ([]T1, error) {
 	produced_n0 = true
 	// ── op 'n1' (pluck, parent:n0) ──
 	if produced_n0 {
-		ports_n1 := PortsNR_nestedRelations_n1{Col: []string{"id"}, Rows: t_n0}
-		wire_n1, wire_n1Err := litedbmodel_runtime.PluckKeys(ports_n1.Col, ports_n1.Rows)
+		payload_n1 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "col", Val: func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range []string{"id"} { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()}, wire.WireField{Key: "rows", Val: wire.WireListOf(t_n0)}})
+		wire_n1, wire_n1Err := litedbmodel_runtime.PluckKeys(payload_n1)
 		if wire_n1Err != nil {
 			return nil, opFailed("n1", "fail", wire_n1Err)
 		}
-		t_n1 = wire_n1
+		p1 := wire_n1.AsList()
+		if p1.Kind == probeGot {
+			t_n1 = wire_n1.Items
+		} else if p1.Kind == probeWrong {
+			return nil, deTypeMismatch("n1", "n1", "arr(value)", p1.ActualWireType, p1.Raw)
+		} else if p1.Kind == probeNull {
+			return nil, deTypeMismatch("n1", "n1", "arr(value)", p1.ActualWireType, p1.Raw)
+		} else {
+			return nil, deMissingField("n1", "n1", "arr(value)")
+		}
 		produced_n1 = true
 	}
 	// ── op 'n2' (executeSQL, parent:n1) ──
 	if produced_n1 {
-		ports_n2 := PortsNR_nestedRelations_n2{Bigint: false, Params: []wire.WireValue{t_n1}, Returning: false, Sql: "SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN (SELECT value FROM json_each(?)) ORDER BY id ASC", Write: false}
-		wire_n2, wire_n2Err := litedbmodel_runtime.ExecuteSQL(ports_n2.Bigint, ports_n2.Params, ports_n2.Returning, ports_n2.Sql, ports_n2.Write)
+		payload_n2 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireListOf(t_n1)})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN (SELECT value FROM json_each(?)) ORDER BY id ASC")}, wire.WireField{Key: "write", Val: wire.WireBool(false)}})
+		wire_n2, wire_n2Err := litedbmodel_runtime.ExecuteSQL(payload_n2)
 		if wire_n2Err != nil {
 			return nil, opFailed("n2", "fail", wire_n2Err)
 		}
@@ -1554,18 +1281,27 @@ func RunNativeRawStruct_nestedRelations(in In_nestedRelations) ([]T1, error) {
 	}
 	// ── op 'n3' (pluck, parent:n2) ──
 	if produced_n2 {
-		ports_n3 := PortsNR_nestedRelations_n3{Col: []string{"id"}, Rows: t_n2}
-		wire_n3, wire_n3Err := litedbmodel_runtime.PluckKeys(ports_n3.Col, ports_n3.Rows)
+		payload_n3 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "col", Val: func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range []string{"id"} { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()}, wire.WireField{Key: "rows", Val: wire.WireListOf(t_n2)}})
+		wire_n3, wire_n3Err := litedbmodel_runtime.PluckKeys(payload_n3)
 		if wire_n3Err != nil {
 			return nil, opFailed("n3", "fail", wire_n3Err)
 		}
-		t_n3 = wire_n3
+		p3 := wire_n3.AsList()
+		if p3.Kind == probeGot {
+			t_n3 = wire_n3.Items
+		} else if p3.Kind == probeWrong {
+			return nil, deTypeMismatch("n3", "n3", "arr(value)", p3.ActualWireType, p3.Raw)
+		} else if p3.Kind == probeNull {
+			return nil, deTypeMismatch("n3", "n3", "arr(value)", p3.ActualWireType, p3.Raw)
+		} else {
+			return nil, deMissingField("n3", "n3", "arr(value)")
+		}
 		produced_n3 = true
 	}
 	// ── op 'n4' (executeSQL, parent:n3) ──
 	if produced_n3 {
-		ports_n4 := PortsNR_nestedRelations_n4{Bigint: false, Params: []wire.WireValue{t_n3}, Returning: false, Sql: "SELECT id, body, post_id FROM benchmark_comments WHERE post_id IN (SELECT value FROM json_each(?)) ORDER BY id ASC", Write: false}
-		wire_n4, wire_n4Err := litedbmodel_runtime.ExecuteSQL(ports_n4.Bigint, ports_n4.Params, ports_n4.Returning, ports_n4.Sql, ports_n4.Write)
+		payload_n4 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireListOf(t_n3)})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, body, post_id FROM benchmark_comments WHERE post_id IN (SELECT value FROM json_each(?)) ORDER BY id ASC")}, wire.WireField{Key: "write", Val: wire.WireBool(false)}})
+		wire_n4, wire_n4Err := litedbmodel_runtime.ExecuteSQL(payload_n4)
 		if wire_n4Err != nil {
 			return nil, opFailed("n4", "fail", wire_n4Err)
 		}
@@ -1583,8 +1319,8 @@ func RunNativeRawStruct_nestedRelations(in In_nestedRelations) ([]T1, error) {
 	}
 	// ── op 'n5' (group, parent:n2) ──
 	if produced_n2 {
-		ports_n5 := PortsNR_nestedRelations_n5{Children: t_n4, Fk: []string{"post_id"}, Into: "comments", Parents: t_n2, Pk: []string{"id"}, Single: false}
-		wire_n5, wire_n5Err := litedbmodel_runtime.GroupChildren(ports_n5.Children, ports_n5.Fk, ports_n5.Into, ports_n5.Parents, ports_n5.Pk, ports_n5.Single)
+		payload_n5 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "children", Val: wire.WireListOf(t_n4)}, wire.WireField{Key: "fk", Val: func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range []string{"post_id"} { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()}, wire.WireField{Key: "into", Val: wire.WireStr("comments")}, wire.WireField{Key: "parents", Val: wire.WireListOf(t_n2)}, wire.WireField{Key: "pk", Val: func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range []string{"id"} { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()}, wire.WireField{Key: "single", Val: wire.WireBool(false)}})
+		wire_n5, wire_n5Err := litedbmodel_runtime.GroupChildren(payload_n5)
 		if wire_n5Err != nil {
 			return nil, opFailed("n5", "fail", wire_n5Err)
 		}
@@ -1602,43 +1338,181 @@ func RunNativeRawStruct_nestedRelations(in In_nestedRelations) ([]T1, error) {
 	}
 	// ── op 'n6' (group, parent:n0) ──
 	if produced_n0 {
-		ports_n6 := PortsNR_nestedRelations_n6{Children: t_n5, Fk: []string{"author_id"}, Into: "posts", Parents: t_n0, Pk: []string{"id"}, Single: false}
-		wire_n6, wire_n6Err := litedbmodel_runtime.GroupChildren(ports_n6.Children, ports_n6.Fk, ports_n6.Into, ports_n6.Parents, ports_n6.Pk, ports_n6.Single)
+		payload_n6 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "children", Val: wire.WireListOf(t_n5)}, wire.WireField{Key: "fk", Val: func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range []string{"author_id"} { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()}, wire.WireField{Key: "into", Val: wire.WireStr("posts")}, wire.WireField{Key: "parents", Val: wire.WireListOf(t_n0)}, wire.WireField{Key: "pk", Val: func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range []string{"id"} { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()}, wire.WireField{Key: "single", Val: wire.WireBool(false)}})
+		wire_n6, wire_n6Err := litedbmodel_runtime.GroupChildren(payload_n6)
 		if wire_n6Err != nil {
 			return nil, opFailed("n6", "fail", wire_n6Err)
 		}
 		p6 := wire_n6.AsList()
 		if p6.Kind == probeGot {
-			list6 := make([]T1, 0, p6.Got.Len())
+			list6 := make([]UserWithPostsAndComments, 0, p6.Got.Len())
 			for i6 := 0; i6 < p6.Got.Len(); i6++ {
-				var el6 T1
+				var el6 UserWithPostsAndComments
 				p7 := p6.Got.ElemRow(i6)
 				if p7.Kind == probeGot {
-					var rec7 T1
+					var rec7 UserWithPostsAndComments
+					p8 := p7.Got.ProbeString("email")
+					if p8.Kind == probeGot {
+						sv8 := p8.Got
+						rec7.Email = &sv8
+					} else if p8.Kind == probeWrong {
+						return nil, deTypeMismatch("UserWithPostsAndComments", "email", "opt(string)", p8.ActualWireType, p8.Raw)
+					}
+					p9 := p7.Got.ProbeNumber("id")
+					if p9.Kind == probeGot {
+						n9, nErr9 := strconv.ParseFloat(p9.Got, 64)
+						if nErr9 != nil {
+							return nil, deOverflow("UserWithPostsAndComments", "id", "float", p9.ActualWireType, p9.Got)
+						}
+						rec7.Id = n9
+					} else if p9.Kind == probeWrong {
+						return nil, deTypeMismatch("UserWithPostsAndComments", "id", "float", p9.ActualWireType, p9.Raw)
+					} else if p9.Kind == probeNull {
+						return nil, deTypeMismatch("UserWithPostsAndComments", "id", "float", p9.ActualWireType, p9.Raw)
+					} else {
+						return nil, deMissingField("UserWithPostsAndComments", "id", "float")
+					}
+					p10 := p7.Got.ProbeString("name")
+					if p10.Kind == probeGot {
+						sv10 := p10.Got
+						rec7.Name = &sv10
+					} else if p10.Kind == probeWrong {
+						return nil, deTypeMismatch("UserWithPostsAndComments", "name", "opt(string)", p10.ActualWireType, p10.Raw)
+					}
+					p11 := p7.Got.ProbeList("posts")
+					if p11.Kind == probeGot {
+						list11 := make([]PostWithComments, 0, p11.Got.Len())
+						for i11 := 0; i11 < p11.Got.Len(); i11++ {
+							var el11 PostWithComments
+							p12 := p11.Got.ElemRow(i11)
+							if p12.Kind == probeGot {
+								var rec12 PostWithComments
+								p13 := p12.Got.ProbeNumber("author_id")
+								if p13.Kind == probeGot {
+									n13, nErr13 := strconv.ParseFloat(p13.Got, 64)
+									if nErr13 != nil {
+										return nil, deOverflow("PostWithComments", "author_id", "opt(float)", p13.ActualWireType, p13.Got)
+									}
+									rec12.Author_id = &n13
+								} else if p13.Kind == probeWrong {
+									return nil, deTypeMismatch("PostWithComments", "author_id", "opt(float)", p13.ActualWireType, p13.Raw)
+								}
+								p14 := p12.Got.ProbeList("comments")
+								if p14.Kind == probeGot {
+									list14 := make([]CommentRow, 0, p14.Got.Len())
+									for i14 := 0; i14 < p14.Got.Len(); i14++ {
+										var el14 CommentRow
+										p15 := p14.Got.ElemRow(i14)
+										if p15.Kind == probeGot {
+											var rec15 CommentRow
+											p16 := p15.Got.ProbeString("body")
+											if p16.Kind == probeGot {
+												sv16 := p16.Got
+												rec15.Body = &sv16
+											} else if p16.Kind == probeWrong {
+												return nil, deTypeMismatch("CommentRow", "body", "opt(string)", p16.ActualWireType, p16.Raw)
+											}
+											p17 := p15.Got.ProbeNumber("id")
+											if p17.Kind == probeGot {
+												n17, nErr17 := strconv.ParseFloat(p17.Got, 64)
+												if nErr17 != nil {
+													return nil, deOverflow("CommentRow", "id", "opt(float)", p17.ActualWireType, p17.Got)
+												}
+												rec15.Id = &n17
+											} else if p17.Kind == probeWrong {
+												return nil, deTypeMismatch("CommentRow", "id", "opt(float)", p17.ActualWireType, p17.Raw)
+											}
+											p18 := p15.Got.ProbeNumber("post_id")
+											if p18.Kind == probeGot {
+												n18, nErr18 := strconv.ParseFloat(p18.Got, 64)
+												if nErr18 != nil {
+													return nil, deOverflow("CommentRow", "post_id", "opt(float)", p18.ActualWireType, p18.Got)
+												}
+												rec15.Post_id = &n18
+											} else if p18.Kind == probeWrong {
+												return nil, deTypeMismatch("CommentRow", "post_id", "opt(float)", p18.ActualWireType, p18.Raw)
+											}
+											el14 = rec15
+										} else if p15.Kind == probeWrong {
+											return nil, deTypeMismatch("PostWithComments", "comments", "obj{body:opt(string),id:opt(float),post_id:opt(float)}", p15.ActualWireType, p15.Raw)
+										} else if p15.Kind == probeNull {
+											return nil, deTypeMismatch("PostWithComments", "comments", "obj{body:opt(string),id:opt(float),post_id:opt(float)}", p15.ActualWireType, p15.Raw)
+										} else {
+											return nil, deMissingField("PostWithComments", "comments", "obj{body:opt(string),id:opt(float),post_id:opt(float)}")
+										}
+										list14 = append(list14, el14)
+									}
+									rec12.Comments = list14
+								} else if p14.Kind == probeWrong {
+									return nil, deTypeMismatch("PostWithComments", "comments", "arr(obj{body:opt(string),id:opt(float),post_id:opt(float)})", p14.ActualWireType, p14.Raw)
+								} else if p14.Kind == probeNull {
+									return nil, deTypeMismatch("PostWithComments", "comments", "arr(obj{body:opt(string),id:opt(float),post_id:opt(float)})", p14.ActualWireType, p14.Raw)
+								} else {
+									return nil, deMissingField("PostWithComments", "comments", "arr(obj{body:opt(string),id:opt(float),post_id:opt(float)})")
+								}
+								p19 := p12.Got.ProbeNumber("id")
+								if p19.Kind == probeGot {
+									n19, nErr19 := strconv.ParseFloat(p19.Got, 64)
+									if nErr19 != nil {
+										return nil, deOverflow("PostWithComments", "id", "float", p19.ActualWireType, p19.Got)
+									}
+									rec12.Id = n19
+								} else if p19.Kind == probeWrong {
+									return nil, deTypeMismatch("PostWithComments", "id", "float", p19.ActualWireType, p19.Raw)
+								} else if p19.Kind == probeNull {
+									return nil, deTypeMismatch("PostWithComments", "id", "float", p19.ActualWireType, p19.Raw)
+								} else {
+									return nil, deMissingField("PostWithComments", "id", "float")
+								}
+								p20 := p12.Got.ProbeString("title")
+								if p20.Kind == probeGot {
+									sv20 := p20.Got
+									rec12.Title = &sv20
+								} else if p20.Kind == probeWrong {
+									return nil, deTypeMismatch("PostWithComments", "title", "opt(string)", p20.ActualWireType, p20.Raw)
+								}
+								el11 = rec12
+							} else if p12.Kind == probeWrong {
+								return nil, deTypeMismatch("UserWithPostsAndComments", "posts", "obj{author_id:opt(float),comments:arr(obj{body:opt(string),id:opt(float),post_id:opt(float)}),id:float,title:opt(string)}", p12.ActualWireType, p12.Raw)
+							} else if p12.Kind == probeNull {
+								return nil, deTypeMismatch("UserWithPostsAndComments", "posts", "obj{author_id:opt(float),comments:arr(obj{body:opt(string),id:opt(float),post_id:opt(float)}),id:float,title:opt(string)}", p12.ActualWireType, p12.Raw)
+							} else {
+								return nil, deMissingField("UserWithPostsAndComments", "posts", "obj{author_id:opt(float),comments:arr(obj{body:opt(string),id:opt(float),post_id:opt(float)}),id:float,title:opt(string)}")
+							}
+							list11 = append(list11, el11)
+						}
+						rec7.Posts = list11
+					} else if p11.Kind == probeWrong {
+						return nil, deTypeMismatch("UserWithPostsAndComments", "posts", "arr(obj{author_id:opt(float),comments:arr(obj{body:opt(string),id:opt(float),post_id:opt(float)}),id:float,title:opt(string)})", p11.ActualWireType, p11.Raw)
+					} else if p11.Kind == probeNull {
+						return nil, deTypeMismatch("UserWithPostsAndComments", "posts", "arr(obj{author_id:opt(float),comments:arr(obj{body:opt(string),id:opt(float),post_id:opt(float)}),id:float,title:opt(string)})", p11.ActualWireType, p11.Raw)
+					} else {
+						return nil, deMissingField("UserWithPostsAndComments", "posts", "arr(obj{author_id:opt(float),comments:arr(obj{body:opt(string),id:opt(float),post_id:opt(float)}),id:float,title:opt(string)})")
+					}
 					el6 = rec7
 				} else if p7.Kind == probeWrong {
-					return nil, deTypeMismatch("n6", "n6", "obj{}", p7.ActualWireType, p7.Raw)
+					return nil, deTypeMismatch("n6", "n6", "obj{email:opt(string),id:float,name:opt(string),posts:arr(obj{author_id:opt(float),comments:arr(obj{body:opt(string),id:opt(float),post_id:opt(float)}),id:float,title:opt(string)})}", p7.ActualWireType, p7.Raw)
 				} else if p7.Kind == probeNull {
-					return nil, deTypeMismatch("n6", "n6", "obj{}", p7.ActualWireType, p7.Raw)
+					return nil, deTypeMismatch("n6", "n6", "obj{email:opt(string),id:float,name:opt(string),posts:arr(obj{author_id:opt(float),comments:arr(obj{body:opt(string),id:opt(float),post_id:opt(float)}),id:float,title:opt(string)})}", p7.ActualWireType, p7.Raw)
 				} else {
-					return nil, deMissingField("n6", "n6", "obj{}")
+					return nil, deMissingField("n6", "n6", "obj{email:opt(string),id:float,name:opt(string),posts:arr(obj{author_id:opt(float),comments:arr(obj{body:opt(string),id:opt(float),post_id:opt(float)}),id:float,title:opt(string)})}")
 				}
 				list6 = append(list6, el6)
 			}
 			t_n6 = list6
 		} else if p6.Kind == probeWrong {
-			return nil, deTypeMismatch("n6", "n6", "arr(obj{})", p6.ActualWireType, p6.Raw)
+			return nil, deTypeMismatch("n6", "n6", "arr(obj{email:opt(string),id:float,name:opt(string),posts:arr(obj{author_id:opt(float),comments:arr(obj{body:opt(string),id:opt(float),post_id:opt(float)}),id:float,title:opt(string)})})", p6.ActualWireType, p6.Raw)
 		} else if p6.Kind == probeNull {
-			return nil, deTypeMismatch("n6", "n6", "arr(obj{})", p6.ActualWireType, p6.Raw)
+			return nil, deTypeMismatch("n6", "n6", "arr(obj{email:opt(string),id:float,name:opt(string),posts:arr(obj{author_id:opt(float),comments:arr(obj{body:opt(string),id:opt(float),post_id:opt(float)}),id:float,title:opt(string)})})", p6.ActualWireType, p6.Raw)
 		} else {
-			return nil, deMissingField("n6", "n6", "arr(obj{})")
+			return nil, deMissingField("n6", "n6", "arr(obj{email:opt(string),id:float,name:opt(string),posts:arr(obj{author_id:opt(float),comments:arr(obj{body:opt(string),id:opt(float),post_id:opt(float)}),id:float,title:opt(string)})})")
 		}
 		produced_n6 = true
 	}
 	return t_n6, nil
 }
 
-// RunNativeRawStruct_compositeRelations — the STRUCT-RETURNING combined read (bc#77/#87): the fully
+// CompositeRelations — the STRUCT-RETURNING combined read (bc#77/#87): the fully
 // de-plumbed path. Ports are a native struct (direct field assignment); the handler
 // result is materialized straight into the node's outType struct. Node results are typed
 // struct locals; a relation child reads the parent's REAL struct result via direct field
@@ -1650,13 +1524,12 @@ func RunNativeRawStruct_nestedRelations(in In_nestedRelations) ([]T1, error) {
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func RunNativeRawStruct_compositeRelations(in In_compositeRelations) ([]T1, error) {
-	_ = in
+func CompositeRelations() ([]TenantUserWithPosts, error) {
 	var t_n0 []wire.WireValue
 	produced_n0 := false
 	_ = t_n0
 	_ = produced_n0
-	var t_n1 wire.WireValue
+	var t_n1 []wire.WireValue
 	produced_n1 := false
 	_ = t_n1
 	_ = produced_n1
@@ -1664,7 +1537,7 @@ func RunNativeRawStruct_compositeRelations(in In_compositeRelations) ([]T1, erro
 	produced_n2 := false
 	_ = t_n2
 	_ = produced_n2
-	var t_n3 wire.WireValue
+	var t_n3 []wire.WireValue
 	produced_n3 := false
 	_ = t_n3
 	_ = produced_n3
@@ -1676,13 +1549,13 @@ func RunNativeRawStruct_compositeRelations(in In_compositeRelations) ([]T1, erro
 	produced_n5 := false
 	_ = t_n5
 	_ = produced_n5
-	var t_n6 []T1
+	var t_n6 []TenantUserWithPosts
 	produced_n6 := false
 	_ = t_n6
 	_ = produced_n6
 	// ── op 'n0' (executeSQL) ──
-	ports_n0 := PortsNR_compositeRelations_n0{Bigint: false, Params: []wire.WireValue{}, Returning: false, Sql: "SELECT tenant_id, user_id, name FROM benchmark_tenant_users ORDER BY user_id ASC LIMIT 100", Write: false}
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ports_n0.Bigint, ports_n0.Params, ports_n0.Returning, ports_n0.Sql, ports_n0.Write)
+	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT tenant_id, user_id, name FROM benchmark_tenant_users ORDER BY user_id ASC LIMIT 100")}, wire.WireField{Key: "write", Val: wire.WireBool(false)}})
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
 	}
@@ -1699,18 +1572,27 @@ func RunNativeRawStruct_compositeRelations(in In_compositeRelations) ([]T1, erro
 	produced_n0 = true
 	// ── op 'n1' (pluck, parent:n0) ──
 	if produced_n0 {
-		ports_n1 := PortsNR_compositeRelations_n1{Col: []string{"tenant_id", "user_id"}, Rows: t_n0}
-		wire_n1, wire_n1Err := litedbmodel_runtime.PluckKeys(ports_n1.Col, ports_n1.Rows)
+		payload_n1 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "col", Val: func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range []string{"tenant_id", "user_id"} { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()}, wire.WireField{Key: "rows", Val: wire.WireListOf(t_n0)}})
+		wire_n1, wire_n1Err := litedbmodel_runtime.PluckKeys(payload_n1)
 		if wire_n1Err != nil {
 			return nil, opFailed("n1", "fail", wire_n1Err)
 		}
-		t_n1 = wire_n1
+		p1 := wire_n1.AsList()
+		if p1.Kind == probeGot {
+			t_n1 = wire_n1.Items
+		} else if p1.Kind == probeWrong {
+			return nil, deTypeMismatch("n1", "n1", "arr(value)", p1.ActualWireType, p1.Raw)
+		} else if p1.Kind == probeNull {
+			return nil, deTypeMismatch("n1", "n1", "arr(value)", p1.ActualWireType, p1.Raw)
+		} else {
+			return nil, deMissingField("n1", "n1", "arr(value)")
+		}
 		produced_n1 = true
 	}
 	// ── op 'n2' (executeSQL, parent:n1) ──
 	if produced_n1 {
-		ports_n2 := PortsNR_compositeRelations_n2{Bigint: false, Params: []wire.WireValue{t_n1}, Returning: false, Sql: "SELECT tenant_id, post_id, user_id, title FROM benchmark_tenant_posts WHERE EXISTS (SELECT 1 FROM json_each(?) je WHERE json_extract(je.value, '$[0]') = benchmark_tenant_posts.tenant_id AND json_extract(je.value, '$[1]') = benchmark_tenant_posts.user_id) ORDER BY post_id ASC", Write: false}
-		wire_n2, wire_n2Err := litedbmodel_runtime.ExecuteSQL(ports_n2.Bigint, ports_n2.Params, ports_n2.Returning, ports_n2.Sql, ports_n2.Write)
+		payload_n2 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireListOf(t_n1)})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT tenant_id, post_id, user_id, title FROM benchmark_tenant_posts WHERE EXISTS (SELECT 1 FROM json_each(?) je WHERE json_extract(je.value, '$[0]') = benchmark_tenant_posts.tenant_id AND json_extract(je.value, '$[1]') = benchmark_tenant_posts.user_id) ORDER BY post_id ASC")}, wire.WireField{Key: "write", Val: wire.WireBool(false)}})
+		wire_n2, wire_n2Err := litedbmodel_runtime.ExecuteSQL(payload_n2)
 		if wire_n2Err != nil {
 			return nil, opFailed("n2", "fail", wire_n2Err)
 		}
@@ -1728,18 +1610,27 @@ func RunNativeRawStruct_compositeRelations(in In_compositeRelations) ([]T1, erro
 	}
 	// ── op 'n3' (pluck, parent:n2) ──
 	if produced_n2 {
-		ports_n3 := PortsNR_compositeRelations_n3{Col: []string{"tenant_id", "post_id"}, Rows: t_n2}
-		wire_n3, wire_n3Err := litedbmodel_runtime.PluckKeys(ports_n3.Col, ports_n3.Rows)
+		payload_n3 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "col", Val: func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range []string{"tenant_id", "post_id"} { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()}, wire.WireField{Key: "rows", Val: wire.WireListOf(t_n2)}})
+		wire_n3, wire_n3Err := litedbmodel_runtime.PluckKeys(payload_n3)
 		if wire_n3Err != nil {
 			return nil, opFailed("n3", "fail", wire_n3Err)
 		}
-		t_n3 = wire_n3
+		p3 := wire_n3.AsList()
+		if p3.Kind == probeGot {
+			t_n3 = wire_n3.Items
+		} else if p3.Kind == probeWrong {
+			return nil, deTypeMismatch("n3", "n3", "arr(value)", p3.ActualWireType, p3.Raw)
+		} else if p3.Kind == probeNull {
+			return nil, deTypeMismatch("n3", "n3", "arr(value)", p3.ActualWireType, p3.Raw)
+		} else {
+			return nil, deMissingField("n3", "n3", "arr(value)")
+		}
 		produced_n3 = true
 	}
 	// ── op 'n4' (executeSQL, parent:n3) ──
 	if produced_n3 {
-		ports_n4 := PortsNR_compositeRelations_n4{Bigint: false, Params: []wire.WireValue{t_n3}, Returning: false, Sql: "SELECT tenant_id, comment_id, post_id, body FROM benchmark_tenant_comments WHERE EXISTS (SELECT 1 FROM json_each(?) je WHERE json_extract(je.value, '$[0]') = benchmark_tenant_comments.tenant_id AND json_extract(je.value, '$[1]') = benchmark_tenant_comments.post_id) ORDER BY comment_id ASC", Write: false}
-		wire_n4, wire_n4Err := litedbmodel_runtime.ExecuteSQL(ports_n4.Bigint, ports_n4.Params, ports_n4.Returning, ports_n4.Sql, ports_n4.Write)
+		payload_n4 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireListOf(t_n3)})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT tenant_id, comment_id, post_id, body FROM benchmark_tenant_comments WHERE EXISTS (SELECT 1 FROM json_each(?) je WHERE json_extract(je.value, '$[0]') = benchmark_tenant_comments.tenant_id AND json_extract(je.value, '$[1]') = benchmark_tenant_comments.post_id) ORDER BY comment_id ASC")}, wire.WireField{Key: "write", Val: wire.WireBool(false)}})
+		wire_n4, wire_n4Err := litedbmodel_runtime.ExecuteSQL(payload_n4)
 		if wire_n4Err != nil {
 			return nil, opFailed("n4", "fail", wire_n4Err)
 		}
@@ -1757,8 +1648,8 @@ func RunNativeRawStruct_compositeRelations(in In_compositeRelations) ([]T1, erro
 	}
 	// ── op 'n5' (group, parent:n2) ──
 	if produced_n2 {
-		ports_n5 := PortsNR_compositeRelations_n5{Children: t_n4, Fk: []string{"tenant_id", "post_id"}, Into: "comments", Parents: t_n2, Pk: []string{"tenant_id", "post_id"}, Single: false}
-		wire_n5, wire_n5Err := litedbmodel_runtime.GroupChildren(ports_n5.Children, ports_n5.Fk, ports_n5.Into, ports_n5.Parents, ports_n5.Pk, ports_n5.Single)
+		payload_n5 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "children", Val: wire.WireListOf(t_n4)}, wire.WireField{Key: "fk", Val: func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range []string{"tenant_id", "post_id"} { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()}, wire.WireField{Key: "into", Val: wire.WireStr("comments")}, wire.WireField{Key: "parents", Val: wire.WireListOf(t_n2)}, wire.WireField{Key: "pk", Val: func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range []string{"tenant_id", "post_id"} { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()}, wire.WireField{Key: "single", Val: wire.WireBool(false)}})
+		wire_n5, wire_n5Err := litedbmodel_runtime.GroupChildren(payload_n5)
 		if wire_n5Err != nil {
 			return nil, opFailed("n5", "fail", wire_n5Err)
 		}
@@ -1776,43 +1667,196 @@ func RunNativeRawStruct_compositeRelations(in In_compositeRelations) ([]T1, erro
 	}
 	// ── op 'n6' (group, parent:n0) ──
 	if produced_n0 {
-		ports_n6 := PortsNR_compositeRelations_n6{Children: t_n5, Fk: []string{"tenant_id", "user_id"}, Into: "posts", Parents: t_n0, Pk: []string{"tenant_id", "user_id"}, Single: false}
-		wire_n6, wire_n6Err := litedbmodel_runtime.GroupChildren(ports_n6.Children, ports_n6.Fk, ports_n6.Into, ports_n6.Parents, ports_n6.Pk, ports_n6.Single)
+		payload_n6 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "children", Val: wire.WireListOf(t_n5)}, wire.WireField{Key: "fk", Val: func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range []string{"tenant_id", "user_id"} { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()}, wire.WireField{Key: "into", Val: wire.WireStr("posts")}, wire.WireField{Key: "parents", Val: wire.WireListOf(t_n0)}, wire.WireField{Key: "pk", Val: func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range []string{"tenant_id", "user_id"} { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()}, wire.WireField{Key: "single", Val: wire.WireBool(false)}})
+		wire_n6, wire_n6Err := litedbmodel_runtime.GroupChildren(payload_n6)
 		if wire_n6Err != nil {
 			return nil, opFailed("n6", "fail", wire_n6Err)
 		}
 		p6 := wire_n6.AsList()
 		if p6.Kind == probeGot {
-			list6 := make([]T1, 0, p6.Got.Len())
+			list6 := make([]TenantUserWithPosts, 0, p6.Got.Len())
 			for i6 := 0; i6 < p6.Got.Len(); i6++ {
-				var el6 T1
+				var el6 TenantUserWithPosts
 				p7 := p6.Got.ElemRow(i6)
 				if p7.Kind == probeGot {
-					var rec7 T1
+					var rec7 TenantUserWithPosts
+					p8 := p7.Got.ProbeString("name")
+					if p8.Kind == probeGot {
+						sv8 := p8.Got
+						rec7.Name = &sv8
+					} else if p8.Kind == probeWrong {
+						return nil, deTypeMismatch("TenantUserWithPosts", "name", "opt(string)", p8.ActualWireType, p8.Raw)
+					}
+					p9 := p7.Got.ProbeList("posts")
+					if p9.Kind == probeGot {
+						list9 := make([]TenantPostWithComments, 0, p9.Got.Len())
+						for i9 := 0; i9 < p9.Got.Len(); i9++ {
+							var el9 TenantPostWithComments
+							p10 := p9.Got.ElemRow(i9)
+							if p10.Kind == probeGot {
+								var rec10 TenantPostWithComments
+								p11 := p10.Got.ProbeList("comments")
+								if p11.Kind == probeGot {
+									list11 := make([]TenantCommentRow, 0, p11.Got.Len())
+									for i11 := 0; i11 < p11.Got.Len(); i11++ {
+										var el11 TenantCommentRow
+										p12 := p11.Got.ElemRow(i11)
+										if p12.Kind == probeGot {
+											var rec12 TenantCommentRow
+											p13 := p12.Got.ProbeString("body")
+											if p13.Kind == probeGot {
+												sv13 := p13.Got
+												rec12.Body = &sv13
+											} else if p13.Kind == probeWrong {
+												return nil, deTypeMismatch("TenantCommentRow", "body", "opt(string)", p13.ActualWireType, p13.Raw)
+											}
+											p14 := p12.Got.ProbeNumber("comment_id")
+											if p14.Kind == probeGot {
+												n14, nErr14 := strconv.ParseFloat(p14.Got, 64)
+												if nErr14 != nil {
+													return nil, deOverflow("TenantCommentRow", "comment_id", "opt(float)", p14.ActualWireType, p14.Got)
+												}
+												rec12.Comment_id = &n14
+											} else if p14.Kind == probeWrong {
+												return nil, deTypeMismatch("TenantCommentRow", "comment_id", "opt(float)", p14.ActualWireType, p14.Raw)
+											}
+											p15 := p12.Got.ProbeNumber("post_id")
+											if p15.Kind == probeGot {
+												n15, nErr15 := strconv.ParseFloat(p15.Got, 64)
+												if nErr15 != nil {
+													return nil, deOverflow("TenantCommentRow", "post_id", "opt(float)", p15.ActualWireType, p15.Got)
+												}
+												rec12.Post_id = &n15
+											} else if p15.Kind == probeWrong {
+												return nil, deTypeMismatch("TenantCommentRow", "post_id", "opt(float)", p15.ActualWireType, p15.Raw)
+											}
+											p16 := p12.Got.ProbeNumber("tenant_id")
+											if p16.Kind == probeGot {
+												n16, nErr16 := strconv.ParseFloat(p16.Got, 64)
+												if nErr16 != nil {
+													return nil, deOverflow("TenantCommentRow", "tenant_id", "opt(float)", p16.ActualWireType, p16.Got)
+												}
+												rec12.Tenant_id = &n16
+											} else if p16.Kind == probeWrong {
+												return nil, deTypeMismatch("TenantCommentRow", "tenant_id", "opt(float)", p16.ActualWireType, p16.Raw)
+											}
+											el11 = rec12
+										} else if p12.Kind == probeWrong {
+											return nil, deTypeMismatch("TenantPostWithComments", "comments", "obj{body:opt(string),comment_id:opt(float),post_id:opt(float),tenant_id:opt(float)}", p12.ActualWireType, p12.Raw)
+										} else if p12.Kind == probeNull {
+											return nil, deTypeMismatch("TenantPostWithComments", "comments", "obj{body:opt(string),comment_id:opt(float),post_id:opt(float),tenant_id:opt(float)}", p12.ActualWireType, p12.Raw)
+										} else {
+											return nil, deMissingField("TenantPostWithComments", "comments", "obj{body:opt(string),comment_id:opt(float),post_id:opt(float),tenant_id:opt(float)}")
+										}
+										list11 = append(list11, el11)
+									}
+									rec10.Comments = list11
+								} else if p11.Kind == probeWrong {
+									return nil, deTypeMismatch("TenantPostWithComments", "comments", "arr(obj{body:opt(string),comment_id:opt(float),post_id:opt(float),tenant_id:opt(float)})", p11.ActualWireType, p11.Raw)
+								} else if p11.Kind == probeNull {
+									return nil, deTypeMismatch("TenantPostWithComments", "comments", "arr(obj{body:opt(string),comment_id:opt(float),post_id:opt(float),tenant_id:opt(float)})", p11.ActualWireType, p11.Raw)
+								} else {
+									return nil, deMissingField("TenantPostWithComments", "comments", "arr(obj{body:opt(string),comment_id:opt(float),post_id:opt(float),tenant_id:opt(float)})")
+								}
+								p17 := p10.Got.ProbeNumber("post_id")
+								if p17.Kind == probeGot {
+									n17, nErr17 := strconv.ParseFloat(p17.Got, 64)
+									if nErr17 != nil {
+										return nil, deOverflow("TenantPostWithComments", "post_id", "opt(float)", p17.ActualWireType, p17.Got)
+									}
+									rec10.Post_id = &n17
+								} else if p17.Kind == probeWrong {
+									return nil, deTypeMismatch("TenantPostWithComments", "post_id", "opt(float)", p17.ActualWireType, p17.Raw)
+								}
+								p18 := p10.Got.ProbeNumber("tenant_id")
+								if p18.Kind == probeGot {
+									n18, nErr18 := strconv.ParseFloat(p18.Got, 64)
+									if nErr18 != nil {
+										return nil, deOverflow("TenantPostWithComments", "tenant_id", "opt(float)", p18.ActualWireType, p18.Got)
+									}
+									rec10.Tenant_id = &n18
+								} else if p18.Kind == probeWrong {
+									return nil, deTypeMismatch("TenantPostWithComments", "tenant_id", "opt(float)", p18.ActualWireType, p18.Raw)
+								}
+								p19 := p10.Got.ProbeString("title")
+								if p19.Kind == probeGot {
+									sv19 := p19.Got
+									rec10.Title = &sv19
+								} else if p19.Kind == probeWrong {
+									return nil, deTypeMismatch("TenantPostWithComments", "title", "opt(string)", p19.ActualWireType, p19.Raw)
+								}
+								p20 := p10.Got.ProbeNumber("user_id")
+								if p20.Kind == probeGot {
+									n20, nErr20 := strconv.ParseFloat(p20.Got, 64)
+									if nErr20 != nil {
+										return nil, deOverflow("TenantPostWithComments", "user_id", "opt(float)", p20.ActualWireType, p20.Got)
+									}
+									rec10.User_id = &n20
+								} else if p20.Kind == probeWrong {
+									return nil, deTypeMismatch("TenantPostWithComments", "user_id", "opt(float)", p20.ActualWireType, p20.Raw)
+								}
+								el9 = rec10
+							} else if p10.Kind == probeWrong {
+								return nil, deTypeMismatch("TenantUserWithPosts", "posts", "obj{comments:arr(obj{body:opt(string),comment_id:opt(float),post_id:opt(float),tenant_id:opt(float)}),post_id:opt(float),tenant_id:opt(float),title:opt(string),user_id:opt(float)}", p10.ActualWireType, p10.Raw)
+							} else if p10.Kind == probeNull {
+								return nil, deTypeMismatch("TenantUserWithPosts", "posts", "obj{comments:arr(obj{body:opt(string),comment_id:opt(float),post_id:opt(float),tenant_id:opt(float)}),post_id:opt(float),tenant_id:opt(float),title:opt(string),user_id:opt(float)}", p10.ActualWireType, p10.Raw)
+							} else {
+								return nil, deMissingField("TenantUserWithPosts", "posts", "obj{comments:arr(obj{body:opt(string),comment_id:opt(float),post_id:opt(float),tenant_id:opt(float)}),post_id:opt(float),tenant_id:opt(float),title:opt(string),user_id:opt(float)}")
+							}
+							list9 = append(list9, el9)
+						}
+						rec7.Posts = list9
+					} else if p9.Kind == probeWrong {
+						return nil, deTypeMismatch("TenantUserWithPosts", "posts", "arr(obj{comments:arr(obj{body:opt(string),comment_id:opt(float),post_id:opt(float),tenant_id:opt(float)}),post_id:opt(float),tenant_id:opt(float),title:opt(string),user_id:opt(float)})", p9.ActualWireType, p9.Raw)
+					} else if p9.Kind == probeNull {
+						return nil, deTypeMismatch("TenantUserWithPosts", "posts", "arr(obj{comments:arr(obj{body:opt(string),comment_id:opt(float),post_id:opt(float),tenant_id:opt(float)}),post_id:opt(float),tenant_id:opt(float),title:opt(string),user_id:opt(float)})", p9.ActualWireType, p9.Raw)
+					} else {
+						return nil, deMissingField("TenantUserWithPosts", "posts", "arr(obj{comments:arr(obj{body:opt(string),comment_id:opt(float),post_id:opt(float),tenant_id:opt(float)}),post_id:opt(float),tenant_id:opt(float),title:opt(string),user_id:opt(float)})")
+					}
+					p21 := p7.Got.ProbeNumber("tenant_id")
+					if p21.Kind == probeGot {
+						n21, nErr21 := strconv.ParseFloat(p21.Got, 64)
+						if nErr21 != nil {
+							return nil, deOverflow("TenantUserWithPosts", "tenant_id", "opt(float)", p21.ActualWireType, p21.Got)
+						}
+						rec7.Tenant_id = &n21
+					} else if p21.Kind == probeWrong {
+						return nil, deTypeMismatch("TenantUserWithPosts", "tenant_id", "opt(float)", p21.ActualWireType, p21.Raw)
+					}
+					p22 := p7.Got.ProbeNumber("user_id")
+					if p22.Kind == probeGot {
+						n22, nErr22 := strconv.ParseFloat(p22.Got, 64)
+						if nErr22 != nil {
+							return nil, deOverflow("TenantUserWithPosts", "user_id", "opt(float)", p22.ActualWireType, p22.Got)
+						}
+						rec7.User_id = &n22
+					} else if p22.Kind == probeWrong {
+						return nil, deTypeMismatch("TenantUserWithPosts", "user_id", "opt(float)", p22.ActualWireType, p22.Raw)
+					}
 					el6 = rec7
 				} else if p7.Kind == probeWrong {
-					return nil, deTypeMismatch("n6", "n6", "obj{}", p7.ActualWireType, p7.Raw)
+					return nil, deTypeMismatch("n6", "n6", "obj{name:opt(string),posts:arr(obj{comments:arr(obj{body:opt(string),comment_id:opt(float),post_id:opt(float),tenant_id:opt(float)}),post_id:opt(float),tenant_id:opt(float),title:opt(string),user_id:opt(float)}),tenant_id:opt(float),user_id:opt(float)}", p7.ActualWireType, p7.Raw)
 				} else if p7.Kind == probeNull {
-					return nil, deTypeMismatch("n6", "n6", "obj{}", p7.ActualWireType, p7.Raw)
+					return nil, deTypeMismatch("n6", "n6", "obj{name:opt(string),posts:arr(obj{comments:arr(obj{body:opt(string),comment_id:opt(float),post_id:opt(float),tenant_id:opt(float)}),post_id:opt(float),tenant_id:opt(float),title:opt(string),user_id:opt(float)}),tenant_id:opt(float),user_id:opt(float)}", p7.ActualWireType, p7.Raw)
 				} else {
-					return nil, deMissingField("n6", "n6", "obj{}")
+					return nil, deMissingField("n6", "n6", "obj{name:opt(string),posts:arr(obj{comments:arr(obj{body:opt(string),comment_id:opt(float),post_id:opt(float),tenant_id:opt(float)}),post_id:opt(float),tenant_id:opt(float),title:opt(string),user_id:opt(float)}),tenant_id:opt(float),user_id:opt(float)}")
 				}
 				list6 = append(list6, el6)
 			}
 			t_n6 = list6
 		} else if p6.Kind == probeWrong {
-			return nil, deTypeMismatch("n6", "n6", "arr(obj{})", p6.ActualWireType, p6.Raw)
+			return nil, deTypeMismatch("n6", "n6", "arr(obj{name:opt(string),posts:arr(obj{comments:arr(obj{body:opt(string),comment_id:opt(float),post_id:opt(float),tenant_id:opt(float)}),post_id:opt(float),tenant_id:opt(float),title:opt(string),user_id:opt(float)}),tenant_id:opt(float),user_id:opt(float)})", p6.ActualWireType, p6.Raw)
 		} else if p6.Kind == probeNull {
-			return nil, deTypeMismatch("n6", "n6", "arr(obj{})", p6.ActualWireType, p6.Raw)
+			return nil, deTypeMismatch("n6", "n6", "arr(obj{name:opt(string),posts:arr(obj{comments:arr(obj{body:opt(string),comment_id:opt(float),post_id:opt(float),tenant_id:opt(float)}),post_id:opt(float),tenant_id:opt(float),title:opt(string),user_id:opt(float)}),tenant_id:opt(float),user_id:opt(float)})", p6.ActualWireType, p6.Raw)
 		} else {
-			return nil, deMissingField("n6", "n6", "arr(obj{})")
+			return nil, deMissingField("n6", "n6", "arr(obj{name:opt(string),posts:arr(obj{comments:arr(obj{body:opt(string),comment_id:opt(float),post_id:opt(float),tenant_id:opt(float)}),post_id:opt(float),tenant_id:opt(float),title:opt(string),user_id:opt(float)}),tenant_id:opt(float),user_id:opt(float)})")
 		}
 		produced_n6 = true
 	}
 	return t_n6, nil
 }
 
-// RunNativeRawStruct_create — the STRUCT-RETURNING combined read (bc#77/#87): the fully
+// Create — the STRUCT-RETURNING combined read (bc#77/#87): the fully
 // de-plumbed path. Ports are a native struct (direct field assignment); the handler
 // result is materialized straight into the node's outType struct. Node results are typed
 // struct locals; a relation child reads the parent's REAL struct result via direct field
@@ -1824,49 +1868,76 @@ func RunNativeRawStruct_compositeRelations(in In_compositeRelations) ([]T1, erro
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func RunNativeRawStruct_create(in In_create) ([]T1, error) {
-	_ = in
-	var t_n0 []T1
+func Create(email string, name string) ([]WriteSummary, error) {
+	var t_n0 []WriteSummary
 	produced_n0 := false
 	_ = t_n0
 	_ = produced_n0
 	// ── op 'n0' (executeSQL) ──
-	ports_n0 := PortsNR_create_n0{Bigint: false, Params: []wire.WireValue{wire.WireStr(in.Email), wire.WireStr(in.Name)}, Returning: false, Sql: "INSERT INTO benchmark_users (email, name) VALUES (?, ?)", Write: true}
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ports_n0.Bigint, ports_n0.Params, ports_n0.Returning, ports_n0.Sql, ports_n0.Write)
+	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireStr(email), wire.WireStr(name)})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("INSERT INTO benchmark_users (email, name) VALUES (?, ?)")}, wire.WireField{Key: "write", Val: wire.WireBool(true)}})
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
 	}
 	p0 := wire_n0.AsList()
 	if p0.Kind == probeGot {
-		list0 := make([]T1, 0, p0.Got.Len())
+		list0 := make([]WriteSummary, 0, p0.Got.Len())
 		for i0 := 0; i0 < p0.Got.Len(); i0++ {
-			var el0 T1
+			var el0 WriteSummary
 			p1 := p0.Got.ElemRow(i0)
 			if p1.Kind == probeGot {
-				var rec1 T1
+				var rec1 WriteSummary
+				p2 := p1.Got.ProbeNumber("changes")
+				if p2.Kind == probeGot {
+					n2, nErr2 := strconv.ParseInt(p2.Got, 10, 64)
+					if nErr2 != nil {
+						return nil, deOverflow("WriteSummary", "changes", "int", p2.ActualWireType, p2.Got)
+					}
+					rec1.Changes = n2
+				} else if p2.Kind == probeWrong {
+					return nil, deTypeMismatch("WriteSummary", "changes", "int", p2.ActualWireType, p2.Raw)
+				} else if p2.Kind == probeNull {
+					return nil, deTypeMismatch("WriteSummary", "changes", "int", p2.ActualWireType, p2.Raw)
+				} else {
+					return nil, deMissingField("WriteSummary", "changes", "int")
+				}
+				p3 := p1.Got.ProbeNumber("lastInsertRowid")
+				if p3.Kind == probeGot {
+					n3, nErr3 := strconv.ParseInt(p3.Got, 10, 64)
+					if nErr3 != nil {
+						return nil, deOverflow("WriteSummary", "lastInsertRowid", "int", p3.ActualWireType, p3.Got)
+					}
+					rec1.LastInsertRowid = n3
+				} else if p3.Kind == probeWrong {
+					return nil, deTypeMismatch("WriteSummary", "lastInsertRowid", "int", p3.ActualWireType, p3.Raw)
+				} else if p3.Kind == probeNull {
+					return nil, deTypeMismatch("WriteSummary", "lastInsertRowid", "int", p3.ActualWireType, p3.Raw)
+				} else {
+					return nil, deMissingField("WriteSummary", "lastInsertRowid", "int")
+				}
 				el0 = rec1
 			} else if p1.Kind == probeWrong {
-				return nil, deTypeMismatch("n0", "n0", "obj{}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{changes:int,lastInsertRowid:int}", p1.ActualWireType, p1.Raw)
 			} else if p1.Kind == probeNull {
-				return nil, deTypeMismatch("n0", "n0", "obj{}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{changes:int,lastInsertRowid:int}", p1.ActualWireType, p1.Raw)
 			} else {
-				return nil, deMissingField("n0", "n0", "obj{}")
+				return nil, deMissingField("n0", "n0", "obj{changes:int,lastInsertRowid:int}")
 			}
 			list0 = append(list0, el0)
 		}
 		t_n0 = list0
 	} else if p0.Kind == probeWrong {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{changes:int,lastInsertRowid:int})", p0.ActualWireType, p0.Raw)
 	} else if p0.Kind == probeNull {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{changes:int,lastInsertRowid:int})", p0.ActualWireType, p0.Raw)
 	} else {
-		return nil, deMissingField("n0", "n0", "arr(obj{})")
+		return nil, deMissingField("n0", "n0", "arr(obj{changes:int,lastInsertRowid:int})")
 	}
 	produced_n0 = true
 	return t_n0, nil
 }
 
-// RunNativeRawStruct_update — the STRUCT-RETURNING combined read (bc#77/#87): the fully
+// Update — the STRUCT-RETURNING combined read (bc#77/#87): the fully
 // de-plumbed path. Ports are a native struct (direct field assignment); the handler
 // result is materialized straight into the node's outType struct. Node results are typed
 // struct locals; a relation child reads the parent's REAL struct result via direct field
@@ -1878,49 +1949,76 @@ func RunNativeRawStruct_create(in In_create) ([]T1, error) {
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func RunNativeRawStruct_update(in In_update) ([]T1, error) {
-	_ = in
-	var t_n0 []T1
+func Update(id int64, name string) ([]WriteSummary, error) {
+	var t_n0 []WriteSummary
 	produced_n0 := false
 	_ = t_n0
 	_ = produced_n0
 	// ── op 'n0' (executeSQL) ──
-	ports_n0 := PortsNR_update_n0{Bigint: false, Params: []wire.WireValue{wire.WireStr(in.Name), wire.WireInt(in.Id)}, Returning: false, Sql: "UPDATE benchmark_users SET name = ? WHERE id = ?", Write: true}
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ports_n0.Bigint, ports_n0.Params, ports_n0.Returning, ports_n0.Sql, ports_n0.Write)
+	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireStr(name), wire.WireInt(id)})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("UPDATE benchmark_users SET name = ? WHERE id = ?")}, wire.WireField{Key: "write", Val: wire.WireBool(true)}})
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
 	}
 	p0 := wire_n0.AsList()
 	if p0.Kind == probeGot {
-		list0 := make([]T1, 0, p0.Got.Len())
+		list0 := make([]WriteSummary, 0, p0.Got.Len())
 		for i0 := 0; i0 < p0.Got.Len(); i0++ {
-			var el0 T1
+			var el0 WriteSummary
 			p1 := p0.Got.ElemRow(i0)
 			if p1.Kind == probeGot {
-				var rec1 T1
+				var rec1 WriteSummary
+				p2 := p1.Got.ProbeNumber("changes")
+				if p2.Kind == probeGot {
+					n2, nErr2 := strconv.ParseInt(p2.Got, 10, 64)
+					if nErr2 != nil {
+						return nil, deOverflow("WriteSummary", "changes", "int", p2.ActualWireType, p2.Got)
+					}
+					rec1.Changes = n2
+				} else if p2.Kind == probeWrong {
+					return nil, deTypeMismatch("WriteSummary", "changes", "int", p2.ActualWireType, p2.Raw)
+				} else if p2.Kind == probeNull {
+					return nil, deTypeMismatch("WriteSummary", "changes", "int", p2.ActualWireType, p2.Raw)
+				} else {
+					return nil, deMissingField("WriteSummary", "changes", "int")
+				}
+				p3 := p1.Got.ProbeNumber("lastInsertRowid")
+				if p3.Kind == probeGot {
+					n3, nErr3 := strconv.ParseInt(p3.Got, 10, 64)
+					if nErr3 != nil {
+						return nil, deOverflow("WriteSummary", "lastInsertRowid", "int", p3.ActualWireType, p3.Got)
+					}
+					rec1.LastInsertRowid = n3
+				} else if p3.Kind == probeWrong {
+					return nil, deTypeMismatch("WriteSummary", "lastInsertRowid", "int", p3.ActualWireType, p3.Raw)
+				} else if p3.Kind == probeNull {
+					return nil, deTypeMismatch("WriteSummary", "lastInsertRowid", "int", p3.ActualWireType, p3.Raw)
+				} else {
+					return nil, deMissingField("WriteSummary", "lastInsertRowid", "int")
+				}
 				el0 = rec1
 			} else if p1.Kind == probeWrong {
-				return nil, deTypeMismatch("n0", "n0", "obj{}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{changes:int,lastInsertRowid:int}", p1.ActualWireType, p1.Raw)
 			} else if p1.Kind == probeNull {
-				return nil, deTypeMismatch("n0", "n0", "obj{}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{changes:int,lastInsertRowid:int}", p1.ActualWireType, p1.Raw)
 			} else {
-				return nil, deMissingField("n0", "n0", "obj{}")
+				return nil, deMissingField("n0", "n0", "obj{changes:int,lastInsertRowid:int}")
 			}
 			list0 = append(list0, el0)
 		}
 		t_n0 = list0
 	} else if p0.Kind == probeWrong {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{changes:int,lastInsertRowid:int})", p0.ActualWireType, p0.Raw)
 	} else if p0.Kind == probeNull {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{changes:int,lastInsertRowid:int})", p0.ActualWireType, p0.Raw)
 	} else {
-		return nil, deMissingField("n0", "n0", "arr(obj{})")
+		return nil, deMissingField("n0", "n0", "arr(obj{changes:int,lastInsertRowid:int})")
 	}
 	produced_n0 = true
 	return t_n0, nil
 }
 
-// RunNativeRawStruct_upsert — the STRUCT-RETURNING combined read (bc#77/#87): the fully
+// Upsert — the STRUCT-RETURNING combined read (bc#77/#87): the fully
 // de-plumbed path. Ports are a native struct (direct field assignment); the handler
 // result is materialized straight into the node's outType struct. Node results are typed
 // struct locals; a relation child reads the parent's REAL struct result via direct field
@@ -1932,39 +2030,38 @@ func RunNativeRawStruct_update(in In_update) ([]T1, error) {
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func RunNativeRawStruct_upsert(in In_upsert) ([]T3, error) {
-	_ = in
-	var t_n0 []T3
+func Upsert(email string, name string) ([]IdRow, error) {
+	var t_n0 []IdRow
 	produced_n0 := false
 	_ = t_n0
 	_ = produced_n0
 	// ── op 'n0' (executeSQL) ──
-	ports_n0 := PortsNR_upsert_n0{Bigint: false, Params: []wire.WireValue{wire.WireStr(in.Email), wire.WireStr(in.Name)}, Returning: true, Sql: "INSERT INTO benchmark_users (email, name) VALUES (?, ?) ON CONFLICT (email) DO UPDATE SET email = excluded.email, name = excluded.name RETURNING id", Write: true}
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ports_n0.Bigint, ports_n0.Params, ports_n0.Returning, ports_n0.Sql, ports_n0.Write)
+	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireStr(email), wire.WireStr(name)})}, wire.WireField{Key: "returning", Val: wire.WireBool(true)}, wire.WireField{Key: "sql", Val: wire.WireStr("INSERT INTO benchmark_users (email, name) VALUES (?, ?) ON CONFLICT (email) DO UPDATE SET email = excluded.email, name = excluded.name RETURNING id")}, wire.WireField{Key: "write", Val: wire.WireBool(true)}})
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
 	}
 	p0 := wire_n0.AsList()
 	if p0.Kind == probeGot {
-		list0 := make([]T3, 0, p0.Got.Len())
+		list0 := make([]IdRow, 0, p0.Got.Len())
 		for i0 := 0; i0 < p0.Got.Len(); i0++ {
-			var el0 T3
+			var el0 IdRow
 			p1 := p0.Got.ElemRow(i0)
 			if p1.Kind == probeGot {
-				var rec1 T3
+				var rec1 IdRow
 				p2 := p1.Got.ProbeNumber("id")
 				if p2.Kind == probeGot {
 					n2, nErr2 := strconv.ParseFloat(p2.Got, 64)
 					if nErr2 != nil {
-						return nil, deOverflow("T3", "id", "float", p2.ActualWireType, p2.Got)
+						return nil, deOverflow("IdRow", "id", "float", p2.ActualWireType, p2.Got)
 					}
 					rec1.Id = n2
 				} else if p2.Kind == probeWrong {
-					return nil, deTypeMismatch("T3", "id", "float", p2.ActualWireType, p2.Raw)
+					return nil, deTypeMismatch("IdRow", "id", "float", p2.ActualWireType, p2.Raw)
 				} else if p2.Kind == probeNull {
-					return nil, deTypeMismatch("T3", "id", "float", p2.ActualWireType, p2.Raw)
+					return nil, deTypeMismatch("IdRow", "id", "float", p2.ActualWireType, p2.Raw)
 				} else {
-					return nil, deMissingField("T3", "id", "float")
+					return nil, deMissingField("IdRow", "id", "float")
 				}
 				el0 = rec1
 			} else if p1.Kind == probeWrong {
@@ -1988,7 +2085,7 @@ func RunNativeRawStruct_upsert(in In_upsert) ([]T3, error) {
 	return t_n0, nil
 }
 
-// RunNativeRawStruct_createMany — the STRUCT-RETURNING combined read (bc#77/#87): the fully
+// CreateMany — the STRUCT-RETURNING combined read (bc#77/#87): the fully
 // de-plumbed path. Ports are a native struct (direct field assignment); the handler
 // result is materialized straight into the node's outType struct. Node results are typed
 // struct locals; a relation child reads the parent's REAL struct result via direct field
@@ -2000,49 +2097,76 @@ func RunNativeRawStruct_upsert(in In_upsert) ([]T3, error) {
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func RunNativeRawStruct_createMany(in In_createMany) ([]T1, error) {
-	_ = in
-	var t_n0 []T1
+func CreateMany(rows []NewUser) ([]WriteSummary, error) {
+	var t_n0 []WriteSummary
 	produced_n0 := false
 	_ = t_n0
 	_ = produced_n0
 	// ── op 'n0' (executeSQL) ──
-	ports_n0 := PortsNR_createMany_n0{Bigint: false, Params: []wire.WireValue{func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range in.Rows { it0 = append(it0, wire.WireRowOf([]wire.WireField{{Key: "email", Val: wire.WireStr(e0.Email)}, {Key: "name", Val: wire.WireStr(e0.Name)}})) }; return wire.WireListOf(it0) }()}, Returning: false, Sql: "INSERT INTO benchmark_users (email, name) SELECT json_extract(value, '$.email'), json_extract(value, '$.name') FROM json_each(?)", Write: true}
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ports_n0.Bigint, ports_n0.Params, ports_n0.Returning, ports_n0.Sql, ports_n0.Write)
+	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range rows { it0 = append(it0, wire.WireRowOf([]wire.WireField{{Key: "email", Val: wire.WireStr(e0.Email)}, {Key: "name", Val: wire.WireStr(e0.Name)}})) }; return wire.WireListOf(it0) }()})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("INSERT INTO benchmark_users (email, name) SELECT json_extract(value, '$.email'), json_extract(value, '$.name') FROM json_each(?)")}, wire.WireField{Key: "write", Val: wire.WireBool(true)}})
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
 	}
 	p0 := wire_n0.AsList()
 	if p0.Kind == probeGot {
-		list0 := make([]T1, 0, p0.Got.Len())
+		list0 := make([]WriteSummary, 0, p0.Got.Len())
 		for i0 := 0; i0 < p0.Got.Len(); i0++ {
-			var el0 T1
+			var el0 WriteSummary
 			p1 := p0.Got.ElemRow(i0)
 			if p1.Kind == probeGot {
-				var rec1 T1
+				var rec1 WriteSummary
+				p2 := p1.Got.ProbeNumber("changes")
+				if p2.Kind == probeGot {
+					n2, nErr2 := strconv.ParseInt(p2.Got, 10, 64)
+					if nErr2 != nil {
+						return nil, deOverflow("WriteSummary", "changes", "int", p2.ActualWireType, p2.Got)
+					}
+					rec1.Changes = n2
+				} else if p2.Kind == probeWrong {
+					return nil, deTypeMismatch("WriteSummary", "changes", "int", p2.ActualWireType, p2.Raw)
+				} else if p2.Kind == probeNull {
+					return nil, deTypeMismatch("WriteSummary", "changes", "int", p2.ActualWireType, p2.Raw)
+				} else {
+					return nil, deMissingField("WriteSummary", "changes", "int")
+				}
+				p3 := p1.Got.ProbeNumber("lastInsertRowid")
+				if p3.Kind == probeGot {
+					n3, nErr3 := strconv.ParseInt(p3.Got, 10, 64)
+					if nErr3 != nil {
+						return nil, deOverflow("WriteSummary", "lastInsertRowid", "int", p3.ActualWireType, p3.Got)
+					}
+					rec1.LastInsertRowid = n3
+				} else if p3.Kind == probeWrong {
+					return nil, deTypeMismatch("WriteSummary", "lastInsertRowid", "int", p3.ActualWireType, p3.Raw)
+				} else if p3.Kind == probeNull {
+					return nil, deTypeMismatch("WriteSummary", "lastInsertRowid", "int", p3.ActualWireType, p3.Raw)
+				} else {
+					return nil, deMissingField("WriteSummary", "lastInsertRowid", "int")
+				}
 				el0 = rec1
 			} else if p1.Kind == probeWrong {
-				return nil, deTypeMismatch("n0", "n0", "obj{}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{changes:int,lastInsertRowid:int}", p1.ActualWireType, p1.Raw)
 			} else if p1.Kind == probeNull {
-				return nil, deTypeMismatch("n0", "n0", "obj{}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{changes:int,lastInsertRowid:int}", p1.ActualWireType, p1.Raw)
 			} else {
-				return nil, deMissingField("n0", "n0", "obj{}")
+				return nil, deMissingField("n0", "n0", "obj{changes:int,lastInsertRowid:int}")
 			}
 			list0 = append(list0, el0)
 		}
 		t_n0 = list0
 	} else if p0.Kind == probeWrong {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{changes:int,lastInsertRowid:int})", p0.ActualWireType, p0.Raw)
 	} else if p0.Kind == probeNull {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{changes:int,lastInsertRowid:int})", p0.ActualWireType, p0.Raw)
 	} else {
-		return nil, deMissingField("n0", "n0", "arr(obj{})")
+		return nil, deMissingField("n0", "n0", "arr(obj{changes:int,lastInsertRowid:int})")
 	}
 	produced_n0 = true
 	return t_n0, nil
 }
 
-// RunNativeRawStruct_upsertMany — the STRUCT-RETURNING combined read (bc#77/#87): the fully
+// UpsertMany — the STRUCT-RETURNING combined read (bc#77/#87): the fully
 // de-plumbed path. Ports are a native struct (direct field assignment); the handler
 // result is materialized straight into the node's outType struct. Node results are typed
 // struct locals; a relation child reads the parent's REAL struct result via direct field
@@ -2054,49 +2178,76 @@ func RunNativeRawStruct_createMany(in In_createMany) ([]T1, error) {
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func RunNativeRawStruct_upsertMany(in In_upsertMany) ([]T1, error) {
-	_ = in
-	var t_n0 []T1
+func UpsertMany(rows []NewUser) ([]WriteSummary, error) {
+	var t_n0 []WriteSummary
 	produced_n0 := false
 	_ = t_n0
 	_ = produced_n0
 	// ── op 'n0' (executeSQL) ──
-	ports_n0 := PortsNR_upsertMany_n0{Bigint: false, Params: []wire.WireValue{func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range in.Rows { it0 = append(it0, wire.WireRowOf([]wire.WireField{{Key: "email", Val: wire.WireStr(e0.Email)}, {Key: "name", Val: wire.WireStr(e0.Name)}})) }; return wire.WireListOf(it0) }()}, Returning: false, Sql: "INSERT INTO benchmark_users (email, name) SELECT json_extract(value, '$.email'), json_extract(value, '$.name') FROM json_each(?) WHERE true ON CONFLICT (email) DO UPDATE SET email = excluded.email, name = excluded.name", Write: true}
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ports_n0.Bigint, ports_n0.Params, ports_n0.Returning, ports_n0.Sql, ports_n0.Write)
+	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range rows { it0 = append(it0, wire.WireRowOf([]wire.WireField{{Key: "email", Val: wire.WireStr(e0.Email)}, {Key: "name", Val: wire.WireStr(e0.Name)}})) }; return wire.WireListOf(it0) }()})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("INSERT INTO benchmark_users (email, name) SELECT json_extract(value, '$.email'), json_extract(value, '$.name') FROM json_each(?) WHERE true ON CONFLICT (email) DO UPDATE SET email = excluded.email, name = excluded.name")}, wire.WireField{Key: "write", Val: wire.WireBool(true)}})
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
 	}
 	p0 := wire_n0.AsList()
 	if p0.Kind == probeGot {
-		list0 := make([]T1, 0, p0.Got.Len())
+		list0 := make([]WriteSummary, 0, p0.Got.Len())
 		for i0 := 0; i0 < p0.Got.Len(); i0++ {
-			var el0 T1
+			var el0 WriteSummary
 			p1 := p0.Got.ElemRow(i0)
 			if p1.Kind == probeGot {
-				var rec1 T1
+				var rec1 WriteSummary
+				p2 := p1.Got.ProbeNumber("changes")
+				if p2.Kind == probeGot {
+					n2, nErr2 := strconv.ParseInt(p2.Got, 10, 64)
+					if nErr2 != nil {
+						return nil, deOverflow("WriteSummary", "changes", "int", p2.ActualWireType, p2.Got)
+					}
+					rec1.Changes = n2
+				} else if p2.Kind == probeWrong {
+					return nil, deTypeMismatch("WriteSummary", "changes", "int", p2.ActualWireType, p2.Raw)
+				} else if p2.Kind == probeNull {
+					return nil, deTypeMismatch("WriteSummary", "changes", "int", p2.ActualWireType, p2.Raw)
+				} else {
+					return nil, deMissingField("WriteSummary", "changes", "int")
+				}
+				p3 := p1.Got.ProbeNumber("lastInsertRowid")
+				if p3.Kind == probeGot {
+					n3, nErr3 := strconv.ParseInt(p3.Got, 10, 64)
+					if nErr3 != nil {
+						return nil, deOverflow("WriteSummary", "lastInsertRowid", "int", p3.ActualWireType, p3.Got)
+					}
+					rec1.LastInsertRowid = n3
+				} else if p3.Kind == probeWrong {
+					return nil, deTypeMismatch("WriteSummary", "lastInsertRowid", "int", p3.ActualWireType, p3.Raw)
+				} else if p3.Kind == probeNull {
+					return nil, deTypeMismatch("WriteSummary", "lastInsertRowid", "int", p3.ActualWireType, p3.Raw)
+				} else {
+					return nil, deMissingField("WriteSummary", "lastInsertRowid", "int")
+				}
 				el0 = rec1
 			} else if p1.Kind == probeWrong {
-				return nil, deTypeMismatch("n0", "n0", "obj{}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{changes:int,lastInsertRowid:int}", p1.ActualWireType, p1.Raw)
 			} else if p1.Kind == probeNull {
-				return nil, deTypeMismatch("n0", "n0", "obj{}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{changes:int,lastInsertRowid:int}", p1.ActualWireType, p1.Raw)
 			} else {
-				return nil, deMissingField("n0", "n0", "obj{}")
+				return nil, deMissingField("n0", "n0", "obj{changes:int,lastInsertRowid:int}")
 			}
 			list0 = append(list0, el0)
 		}
 		t_n0 = list0
 	} else if p0.Kind == probeWrong {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{changes:int,lastInsertRowid:int})", p0.ActualWireType, p0.Raw)
 	} else if p0.Kind == probeNull {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{changes:int,lastInsertRowid:int})", p0.ActualWireType, p0.Raw)
 	} else {
-		return nil, deMissingField("n0", "n0", "arr(obj{})")
+		return nil, deMissingField("n0", "n0", "arr(obj{changes:int,lastInsertRowid:int})")
 	}
 	produced_n0 = true
 	return t_n0, nil
 }
 
-// RunNativeRawStruct_updateMany — the STRUCT-RETURNING combined read (bc#77/#87): the fully
+// UpdateMany — the STRUCT-RETURNING combined read (bc#77/#87): the fully
 // de-plumbed path. Ports are a native struct (direct field assignment); the handler
 // result is materialized straight into the node's outType struct. Node results are typed
 // struct locals; a relation child reads the parent's REAL struct result via direct field
@@ -2108,49 +2259,76 @@ func RunNativeRawStruct_upsertMany(in In_upsertMany) ([]T1, error) {
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func RunNativeRawStruct_updateMany(in In_updateMany) ([]T1, error) {
-	_ = in
-	var t_n0 []T1
+func UpdateMany(rows []UserPatch) ([]WriteSummary, error) {
+	var t_n0 []WriteSummary
 	produced_n0 := false
 	_ = t_n0
 	_ = produced_n0
 	// ── op 'n0' (executeSQL) ──
-	ports_n0 := PortsNR_updateMany_n0{Bigint: false, Params: []wire.WireValue{func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range in.Rows { it0 = append(it0, wire.WireRowOf([]wire.WireField{{Key: "id", Val: wire.WireInt(e0.Id)}, {Key: "name", Val: wire.WireStr(e0.Name)}})) }; return wire.WireListOf(it0) }(), func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range in.Rows { it0 = append(it0, wire.WireRowOf([]wire.WireField{{Key: "id", Val: wire.WireInt(e0.Id)}, {Key: "name", Val: wire.WireStr(e0.Name)}})) }; return wire.WireListOf(it0) }()}, Returning: false, Sql: "UPDATE benchmark_users SET name = (SELECT json_extract(je.value, '$.name') FROM json_each(?) je WHERE json_extract(je.value, '$.id') = benchmark_users.id LIMIT 1) WHERE id IN (SELECT json_extract(value, '$.id') FROM json_each(?))", Write: true}
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ports_n0.Bigint, ports_n0.Params, ports_n0.Returning, ports_n0.Sql, ports_n0.Write)
+	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range rows { it0 = append(it0, wire.WireRowOf([]wire.WireField{{Key: "id", Val: wire.WireInt(e0.Id)}, {Key: "name", Val: wire.WireStr(e0.Name)}})) }; return wire.WireListOf(it0) }(), func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range rows { it0 = append(it0, wire.WireRowOf([]wire.WireField{{Key: "id", Val: wire.WireInt(e0.Id)}, {Key: "name", Val: wire.WireStr(e0.Name)}})) }; return wire.WireListOf(it0) }()})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("UPDATE benchmark_users SET name = (SELECT json_extract(je.value, '$.name') FROM json_each(?) je WHERE json_extract(je.value, '$.id') = benchmark_users.id LIMIT 1) WHERE id IN (SELECT json_extract(value, '$.id') FROM json_each(?))")}, wire.WireField{Key: "write", Val: wire.WireBool(true)}})
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
 	}
 	p0 := wire_n0.AsList()
 	if p0.Kind == probeGot {
-		list0 := make([]T1, 0, p0.Got.Len())
+		list0 := make([]WriteSummary, 0, p0.Got.Len())
 		for i0 := 0; i0 < p0.Got.Len(); i0++ {
-			var el0 T1
+			var el0 WriteSummary
 			p1 := p0.Got.ElemRow(i0)
 			if p1.Kind == probeGot {
-				var rec1 T1
+				var rec1 WriteSummary
+				p2 := p1.Got.ProbeNumber("changes")
+				if p2.Kind == probeGot {
+					n2, nErr2 := strconv.ParseInt(p2.Got, 10, 64)
+					if nErr2 != nil {
+						return nil, deOverflow("WriteSummary", "changes", "int", p2.ActualWireType, p2.Got)
+					}
+					rec1.Changes = n2
+				} else if p2.Kind == probeWrong {
+					return nil, deTypeMismatch("WriteSummary", "changes", "int", p2.ActualWireType, p2.Raw)
+				} else if p2.Kind == probeNull {
+					return nil, deTypeMismatch("WriteSummary", "changes", "int", p2.ActualWireType, p2.Raw)
+				} else {
+					return nil, deMissingField("WriteSummary", "changes", "int")
+				}
+				p3 := p1.Got.ProbeNumber("lastInsertRowid")
+				if p3.Kind == probeGot {
+					n3, nErr3 := strconv.ParseInt(p3.Got, 10, 64)
+					if nErr3 != nil {
+						return nil, deOverflow("WriteSummary", "lastInsertRowid", "int", p3.ActualWireType, p3.Got)
+					}
+					rec1.LastInsertRowid = n3
+				} else if p3.Kind == probeWrong {
+					return nil, deTypeMismatch("WriteSummary", "lastInsertRowid", "int", p3.ActualWireType, p3.Raw)
+				} else if p3.Kind == probeNull {
+					return nil, deTypeMismatch("WriteSummary", "lastInsertRowid", "int", p3.ActualWireType, p3.Raw)
+				} else {
+					return nil, deMissingField("WriteSummary", "lastInsertRowid", "int")
+				}
 				el0 = rec1
 			} else if p1.Kind == probeWrong {
-				return nil, deTypeMismatch("n0", "n0", "obj{}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{changes:int,lastInsertRowid:int}", p1.ActualWireType, p1.Raw)
 			} else if p1.Kind == probeNull {
-				return nil, deTypeMismatch("n0", "n0", "obj{}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{changes:int,lastInsertRowid:int}", p1.ActualWireType, p1.Raw)
 			} else {
-				return nil, deMissingField("n0", "n0", "obj{}")
+				return nil, deMissingField("n0", "n0", "obj{changes:int,lastInsertRowid:int}")
 			}
 			list0 = append(list0, el0)
 		}
 		t_n0 = list0
 	} else if p0.Kind == probeWrong {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{changes:int,lastInsertRowid:int})", p0.ActualWireType, p0.Raw)
 	} else if p0.Kind == probeNull {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{changes:int,lastInsertRowid:int})", p0.ActualWireType, p0.Raw)
 	} else {
-		return nil, deMissingField("n0", "n0", "arr(obj{})")
+		return nil, deMissingField("n0", "n0", "arr(obj{changes:int,lastInsertRowid:int})")
 	}
 	produced_n0 = true
 	return t_n0, nil
 }
 
-// RunNativeRawStruct_nestedCreate — the STRUCT-RETURNING combined read (bc#77/#87): the fully
+// NestedCreate — the STRUCT-RETURNING combined read (bc#77/#87): the fully
 // de-plumbed path. Ports are a native struct (direct field assignment); the handler
 // result is materialized straight into the node's outType struct. Node results are typed
 // struct locals; a relation child reads the parent's REAL struct result via direct field
@@ -2162,43 +2340,42 @@ func RunNativeRawStruct_updateMany(in In_updateMany) ([]T1, error) {
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func RunNativeRawStruct_nestedCreate(in In_nestedCreate) ([][]T1, error) {
-	_ = in
-	var t_n0 []T3
+func NestedCreate(email string, name string, title string) ([]wire.WireValue, error) {
+	var t_n0 []IdRow
 	produced_n0 := false
 	_ = t_n0
 	_ = produced_n0
-	var t_n1 [][]T1
+	var t_n1 []wire.WireValue
 	produced_n1 := false
 	_ = t_n1
 	_ = produced_n1
 	// ── op 'n0' (executeSQL) ──
-	ports_n0 := PortsNR_nestedCreate_n0{Bigint: false, Params: []wire.WireValue{wire.WireStr(in.Email), wire.WireStr(in.Name)}, Returning: true, Sql: "INSERT INTO benchmark_users (email, name) VALUES (?, ?) RETURNING id", Write: true}
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ports_n0.Bigint, ports_n0.Params, ports_n0.Returning, ports_n0.Sql, ports_n0.Write)
+	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireStr(email), wire.WireStr(name)})}, wire.WireField{Key: "returning", Val: wire.WireBool(true)}, wire.WireField{Key: "sql", Val: wire.WireStr("INSERT INTO benchmark_users (email, name) VALUES (?, ?) RETURNING id")}, wire.WireField{Key: "write", Val: wire.WireBool(true)}})
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
 	}
 	p0 := wire_n0.AsList()
 	if p0.Kind == probeGot {
-		list0 := make([]T3, 0, p0.Got.Len())
+		list0 := make([]IdRow, 0, p0.Got.Len())
 		for i0 := 0; i0 < p0.Got.Len(); i0++ {
-			var el0 T3
+			var el0 IdRow
 			p1 := p0.Got.ElemRow(i0)
 			if p1.Kind == probeGot {
-				var rec1 T3
+				var rec1 IdRow
 				p2 := p1.Got.ProbeNumber("id")
 				if p2.Kind == probeGot {
 					n2, nErr2 := strconv.ParseFloat(p2.Got, 64)
 					if nErr2 != nil {
-						return nil, deOverflow("T3", "id", "float", p2.ActualWireType, p2.Got)
+						return nil, deOverflow("IdRow", "id", "float", p2.ActualWireType, p2.Got)
 					}
 					rec1.Id = n2
 				} else if p2.Kind == probeWrong {
-					return nil, deTypeMismatch("T3", "id", "float", p2.ActualWireType, p2.Raw)
+					return nil, deTypeMismatch("IdRow", "id", "float", p2.ActualWireType, p2.Raw)
 				} else if p2.Kind == probeNull {
-					return nil, deTypeMismatch("T3", "id", "float", p2.ActualWireType, p2.Raw)
+					return nil, deTypeMismatch("IdRow", "id", "float", p2.ActualWireType, p2.Raw)
 				} else {
-					return nil, deMissingField("T3", "id", "float")
+					return nil, deMissingField("IdRow", "id", "float")
 				}
 				el0 = rec1
 			} else if p1.Kind == probeWrong {
@@ -2222,41 +2399,16 @@ func RunNativeRawStruct_nestedCreate(in In_nestedCreate) ([][]T1, error) {
 	// ── map 'n1' (executeSQL, per-element, into:null, parent:n0) ──
 	if produced_n0 {
 		over_n1 := t_n0
-		t_n1 = make([][]T1, 0, len(over_n1))
+		t_n1 = make([]wire.WireValue, 0, len(over_n1))
 		for mk_n1 := range over_n1 {
 			oel_n1 := over_n1[mk_n1]
-			ep_n1 := PortsNR_nestedCreate_n1{Bigint: false, Params: []wire.WireValue{wire.WireFloat(oel_n1.Id), wire.WireStr(in.Title)}, Returning: false, Sql: "INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)", Write: true}
-			mo_n1, mo_n1Err := litedbmodel_runtime.ExecuteSQL(ep_n1.Bigint, ep_n1.Params, ep_n1.Returning, ep_n1.Sql, ep_n1.Write)
+			ep_n1 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireFloat(oel_n1.Id), wire.WireStr(title)})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)")}, wire.WireField{Key: "write", Val: wire.WireBool(true)}})
+			mo_n1, mo_n1Err := litedbmodel_runtime.ExecuteSQL(ep_n1)
 			if mo_n1Err != nil {
 				return nil, opFailed("n1", "fail", mo_n1Err)
 			}
-			var el_n1 []T1
-			p0 := mo_n1.AsList()
-			if p0.Kind == probeGot {
-				list0 := make([]T1, 0, p0.Got.Len())
-				for i0 := 0; i0 < p0.Got.Len(); i0++ {
-					var el0 T1
-					p1 := p0.Got.ElemRow(i0)
-					if p1.Kind == probeGot {
-						var rec1 T1
-						el0 = rec1
-					} else if p1.Kind == probeWrong {
-						return nil, deTypeMismatch("n1", "n1", "obj{}", p1.ActualWireType, p1.Raw)
-					} else if p1.Kind == probeNull {
-						return nil, deTypeMismatch("n1", "n1", "obj{}", p1.ActualWireType, p1.Raw)
-					} else {
-						return nil, deMissingField("n1", "n1", "obj{}")
-					}
-					list0 = append(list0, el0)
-				}
-				el_n1 = list0
-			} else if p0.Kind == probeWrong {
-				return nil, deTypeMismatch("n1", "n1", "arr(obj{})", p0.ActualWireType, p0.Raw)
-			} else if p0.Kind == probeNull {
-				return nil, deTypeMismatch("n1", "n1", "arr(obj{})", p0.ActualWireType, p0.Raw)
-			} else {
-				return nil, deMissingField("n1", "n1", "arr(obj{})")
-			}
+			var el_n1 wire.WireValue
+			el_n1 = mo_n1
 			t_n1 = append(t_n1, el_n1)
 		}
 		produced_n1 = true
@@ -2264,7 +2416,7 @@ func RunNativeRawStruct_nestedCreate(in In_nestedCreate) ([][]T1, error) {
 	return t_n1, nil
 }
 
-// RunNativeRawStruct_nestedUpsert — the STRUCT-RETURNING combined read (bc#77/#87): the fully
+// NestedUpsert — the STRUCT-RETURNING combined read (bc#77/#87): the fully
 // de-plumbed path. Ports are a native struct (direct field assignment); the handler
 // result is materialized straight into the node's outType struct. Node results are typed
 // struct locals; a relation child reads the parent's REAL struct result via direct field
@@ -2276,43 +2428,42 @@ func RunNativeRawStruct_nestedCreate(in In_nestedCreate) ([][]T1, error) {
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func RunNativeRawStruct_nestedUpsert(in In_nestedUpsert) ([][]T1, error) {
-	_ = in
-	var t_n0 []T3
+func NestedUpsert(email string, name string, title string) ([]wire.WireValue, error) {
+	var t_n0 []IdRow
 	produced_n0 := false
 	_ = t_n0
 	_ = produced_n0
-	var t_n1 [][]T1
+	var t_n1 []wire.WireValue
 	produced_n1 := false
 	_ = t_n1
 	_ = produced_n1
 	// ── op 'n0' (executeSQL) ──
-	ports_n0 := PortsNR_nestedUpsert_n0{Bigint: false, Params: []wire.WireValue{wire.WireStr(in.Email), wire.WireStr(in.Name)}, Returning: true, Sql: "INSERT INTO benchmark_users (email, name) VALUES (?, ?) ON CONFLICT (email) DO UPDATE SET email = excluded.email, name = excluded.name RETURNING id", Write: true}
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ports_n0.Bigint, ports_n0.Params, ports_n0.Returning, ports_n0.Sql, ports_n0.Write)
+	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireStr(email), wire.WireStr(name)})}, wire.WireField{Key: "returning", Val: wire.WireBool(true)}, wire.WireField{Key: "sql", Val: wire.WireStr("INSERT INTO benchmark_users (email, name) VALUES (?, ?) ON CONFLICT (email) DO UPDATE SET email = excluded.email, name = excluded.name RETURNING id")}, wire.WireField{Key: "write", Val: wire.WireBool(true)}})
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
 	}
 	p0 := wire_n0.AsList()
 	if p0.Kind == probeGot {
-		list0 := make([]T3, 0, p0.Got.Len())
+		list0 := make([]IdRow, 0, p0.Got.Len())
 		for i0 := 0; i0 < p0.Got.Len(); i0++ {
-			var el0 T3
+			var el0 IdRow
 			p1 := p0.Got.ElemRow(i0)
 			if p1.Kind == probeGot {
-				var rec1 T3
+				var rec1 IdRow
 				p2 := p1.Got.ProbeNumber("id")
 				if p2.Kind == probeGot {
 					n2, nErr2 := strconv.ParseFloat(p2.Got, 64)
 					if nErr2 != nil {
-						return nil, deOverflow("T3", "id", "float", p2.ActualWireType, p2.Got)
+						return nil, deOverflow("IdRow", "id", "float", p2.ActualWireType, p2.Got)
 					}
 					rec1.Id = n2
 				} else if p2.Kind == probeWrong {
-					return nil, deTypeMismatch("T3", "id", "float", p2.ActualWireType, p2.Raw)
+					return nil, deTypeMismatch("IdRow", "id", "float", p2.ActualWireType, p2.Raw)
 				} else if p2.Kind == probeNull {
-					return nil, deTypeMismatch("T3", "id", "float", p2.ActualWireType, p2.Raw)
+					return nil, deTypeMismatch("IdRow", "id", "float", p2.ActualWireType, p2.Raw)
 				} else {
-					return nil, deMissingField("T3", "id", "float")
+					return nil, deMissingField("IdRow", "id", "float")
 				}
 				el0 = rec1
 			} else if p1.Kind == probeWrong {
@@ -2336,41 +2487,16 @@ func RunNativeRawStruct_nestedUpsert(in In_nestedUpsert) ([][]T1, error) {
 	// ── map 'n1' (executeSQL, per-element, into:null, parent:n0) ──
 	if produced_n0 {
 		over_n1 := t_n0
-		t_n1 = make([][]T1, 0, len(over_n1))
+		t_n1 = make([]wire.WireValue, 0, len(over_n1))
 		for mk_n1 := range over_n1 {
 			oel_n1 := over_n1[mk_n1]
-			ep_n1 := PortsNR_nestedUpsert_n1{Bigint: false, Params: []wire.WireValue{wire.WireFloat(oel_n1.Id), wire.WireStr(in.Title)}, Returning: false, Sql: "INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)", Write: true}
-			mo_n1, mo_n1Err := litedbmodel_runtime.ExecuteSQL(ep_n1.Bigint, ep_n1.Params, ep_n1.Returning, ep_n1.Sql, ep_n1.Write)
+			ep_n1 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireFloat(oel_n1.Id), wire.WireStr(title)})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)")}, wire.WireField{Key: "write", Val: wire.WireBool(true)}})
+			mo_n1, mo_n1Err := litedbmodel_runtime.ExecuteSQL(ep_n1)
 			if mo_n1Err != nil {
 				return nil, opFailed("n1", "fail", mo_n1Err)
 			}
-			var el_n1 []T1
-			p0 := mo_n1.AsList()
-			if p0.Kind == probeGot {
-				list0 := make([]T1, 0, p0.Got.Len())
-				for i0 := 0; i0 < p0.Got.Len(); i0++ {
-					var el0 T1
-					p1 := p0.Got.ElemRow(i0)
-					if p1.Kind == probeGot {
-						var rec1 T1
-						el0 = rec1
-					} else if p1.Kind == probeWrong {
-						return nil, deTypeMismatch("n1", "n1", "obj{}", p1.ActualWireType, p1.Raw)
-					} else if p1.Kind == probeNull {
-						return nil, deTypeMismatch("n1", "n1", "obj{}", p1.ActualWireType, p1.Raw)
-					} else {
-						return nil, deMissingField("n1", "n1", "obj{}")
-					}
-					list0 = append(list0, el0)
-				}
-				el_n1 = list0
-			} else if p0.Kind == probeWrong {
-				return nil, deTypeMismatch("n1", "n1", "arr(obj{})", p0.ActualWireType, p0.Raw)
-			} else if p0.Kind == probeNull {
-				return nil, deTypeMismatch("n1", "n1", "arr(obj{})", p0.ActualWireType, p0.Raw)
-			} else {
-				return nil, deMissingField("n1", "n1", "arr(obj{})")
-			}
+			var el_n1 wire.WireValue
+			el_n1 = mo_n1
 			t_n1 = append(t_n1, el_n1)
 		}
 		produced_n1 = true
@@ -2378,7 +2504,7 @@ func RunNativeRawStruct_nestedUpsert(in In_nestedUpsert) ([][]T1, error) {
 	return t_n1, nil
 }
 
-// RunNativeRawStruct_nestedUpdate — the STRUCT-RETURNING combined read (bc#77/#87): the fully
+// NestedUpdate — the STRUCT-RETURNING combined read (bc#77/#87): the fully
 // de-plumbed path. Ports are a native struct (direct field assignment); the handler
 // result is materialized straight into the node's outType struct. Node results are typed
 // struct locals; a relation child reads the parent's REAL struct result via direct field
@@ -2390,43 +2516,42 @@ func RunNativeRawStruct_nestedUpsert(in In_nestedUpsert) ([][]T1, error) {
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func RunNativeRawStruct_nestedUpdate(in In_nestedUpdate) ([][]T1, error) {
-	_ = in
-	var t_n0 []T3
+func NestedUpdate(id int64, name string, title string) ([]wire.WireValue, error) {
+	var t_n0 []IdRow
 	produced_n0 := false
 	_ = t_n0
 	_ = produced_n0
-	var t_n1 [][]T1
+	var t_n1 []wire.WireValue
 	produced_n1 := false
 	_ = t_n1
 	_ = produced_n1
 	// ── op 'n0' (executeSQL) ──
-	ports_n0 := PortsNR_nestedUpdate_n0{Bigint: false, Params: []wire.WireValue{wire.WireStr(in.Name), wire.WireInt(in.Id)}, Returning: true, Sql: "UPDATE benchmark_users SET name = ? WHERE id = ? RETURNING id", Write: true}
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ports_n0.Bigint, ports_n0.Params, ports_n0.Returning, ports_n0.Sql, ports_n0.Write)
+	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireStr(name), wire.WireInt(id)})}, wire.WireField{Key: "returning", Val: wire.WireBool(true)}, wire.WireField{Key: "sql", Val: wire.WireStr("UPDATE benchmark_users SET name = ? WHERE id = ? RETURNING id")}, wire.WireField{Key: "write", Val: wire.WireBool(true)}})
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
 	}
 	p0 := wire_n0.AsList()
 	if p0.Kind == probeGot {
-		list0 := make([]T3, 0, p0.Got.Len())
+		list0 := make([]IdRow, 0, p0.Got.Len())
 		for i0 := 0; i0 < p0.Got.Len(); i0++ {
-			var el0 T3
+			var el0 IdRow
 			p1 := p0.Got.ElemRow(i0)
 			if p1.Kind == probeGot {
-				var rec1 T3
+				var rec1 IdRow
 				p2 := p1.Got.ProbeNumber("id")
 				if p2.Kind == probeGot {
 					n2, nErr2 := strconv.ParseFloat(p2.Got, 64)
 					if nErr2 != nil {
-						return nil, deOverflow("T3", "id", "float", p2.ActualWireType, p2.Got)
+						return nil, deOverflow("IdRow", "id", "float", p2.ActualWireType, p2.Got)
 					}
 					rec1.Id = n2
 				} else if p2.Kind == probeWrong {
-					return nil, deTypeMismatch("T3", "id", "float", p2.ActualWireType, p2.Raw)
+					return nil, deTypeMismatch("IdRow", "id", "float", p2.ActualWireType, p2.Raw)
 				} else if p2.Kind == probeNull {
-					return nil, deTypeMismatch("T3", "id", "float", p2.ActualWireType, p2.Raw)
+					return nil, deTypeMismatch("IdRow", "id", "float", p2.ActualWireType, p2.Raw)
 				} else {
-					return nil, deMissingField("T3", "id", "float")
+					return nil, deMissingField("IdRow", "id", "float")
 				}
 				el0 = rec1
 			} else if p1.Kind == probeWrong {
@@ -2450,41 +2575,16 @@ func RunNativeRawStruct_nestedUpdate(in In_nestedUpdate) ([][]T1, error) {
 	// ── map 'n1' (executeSQL, per-element, into:null, parent:n0) ──
 	if produced_n0 {
 		over_n1 := t_n0
-		t_n1 = make([][]T1, 0, len(over_n1))
+		t_n1 = make([]wire.WireValue, 0, len(over_n1))
 		for mk_n1 := range over_n1 {
 			oel_n1 := over_n1[mk_n1]
-			ep_n1 := PortsNR_nestedUpdate_n1{Bigint: false, Params: []wire.WireValue{wire.WireStr(in.Title), wire.WireFloat(oel_n1.Id)}, Returning: false, Sql: "UPDATE benchmark_posts SET title = ? WHERE author_id = ?", Write: true}
-			mo_n1, mo_n1Err := litedbmodel_runtime.ExecuteSQL(ep_n1.Bigint, ep_n1.Params, ep_n1.Returning, ep_n1.Sql, ep_n1.Write)
+			ep_n1 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireStr(title), wire.WireFloat(oel_n1.Id)})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("UPDATE benchmark_posts SET title = ? WHERE author_id = ?")}, wire.WireField{Key: "write", Val: wire.WireBool(true)}})
+			mo_n1, mo_n1Err := litedbmodel_runtime.ExecuteSQL(ep_n1)
 			if mo_n1Err != nil {
 				return nil, opFailed("n1", "fail", mo_n1Err)
 			}
-			var el_n1 []T1
-			p0 := mo_n1.AsList()
-			if p0.Kind == probeGot {
-				list0 := make([]T1, 0, p0.Got.Len())
-				for i0 := 0; i0 < p0.Got.Len(); i0++ {
-					var el0 T1
-					p1 := p0.Got.ElemRow(i0)
-					if p1.Kind == probeGot {
-						var rec1 T1
-						el0 = rec1
-					} else if p1.Kind == probeWrong {
-						return nil, deTypeMismatch("n1", "n1", "obj{}", p1.ActualWireType, p1.Raw)
-					} else if p1.Kind == probeNull {
-						return nil, deTypeMismatch("n1", "n1", "obj{}", p1.ActualWireType, p1.Raw)
-					} else {
-						return nil, deMissingField("n1", "n1", "obj{}")
-					}
-					list0 = append(list0, el0)
-				}
-				el_n1 = list0
-			} else if p0.Kind == probeWrong {
-				return nil, deTypeMismatch("n1", "n1", "arr(obj{})", p0.ActualWireType, p0.Raw)
-			} else if p0.Kind == probeNull {
-				return nil, deTypeMismatch("n1", "n1", "arr(obj{})", p0.ActualWireType, p0.Raw)
-			} else {
-				return nil, deMissingField("n1", "n1", "arr(obj{})")
-			}
+			var el_n1 wire.WireValue
+			el_n1 = mo_n1
 			t_n1 = append(t_n1, el_n1)
 		}
 		produced_n1 = true
@@ -2492,7 +2592,7 @@ func RunNativeRawStruct_nestedUpdate(in In_nestedUpdate) ([][]T1, error) {
 	return t_n1, nil
 }
 
-// RunNativeRawStruct_delete — the STRUCT-RETURNING combined read (bc#77/#87): the fully
+// Delete — the STRUCT-RETURNING combined read (bc#77/#87): the fully
 // de-plumbed path. Ports are a native struct (direct field assignment); the handler
 // result is materialized straight into the node's outType struct. Node results are typed
 // struct locals; a relation child reads the parent's REAL struct result via direct field
@@ -2504,43 +2604,42 @@ func RunNativeRawStruct_nestedUpdate(in In_nestedUpdate) ([][]T1, error) {
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func RunNativeRawStruct_delete(in In_delete) ([][]T1, error) {
-	_ = in
-	var t_n0 []T3
+func Delete(email string, name string) ([]wire.WireValue, error) {
+	var t_n0 []IdRow
 	produced_n0 := false
 	_ = t_n0
 	_ = produced_n0
-	var t_n1 [][]T1
+	var t_n1 []wire.WireValue
 	produced_n1 := false
 	_ = t_n1
 	_ = produced_n1
 	// ── op 'n0' (executeSQL) ──
-	ports_n0 := PortsNR_delete_n0{Bigint: false, Params: []wire.WireValue{wire.WireStr(in.Email), wire.WireStr(in.Name)}, Returning: true, Sql: "INSERT INTO benchmark_users (email, name) VALUES (?, ?) RETURNING id", Write: true}
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ports_n0.Bigint, ports_n0.Params, ports_n0.Returning, ports_n0.Sql, ports_n0.Write)
+	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireStr(email), wire.WireStr(name)})}, wire.WireField{Key: "returning", Val: wire.WireBool(true)}, wire.WireField{Key: "sql", Val: wire.WireStr("INSERT INTO benchmark_users (email, name) VALUES (?, ?) RETURNING id")}, wire.WireField{Key: "write", Val: wire.WireBool(true)}})
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
 	}
 	p0 := wire_n0.AsList()
 	if p0.Kind == probeGot {
-		list0 := make([]T3, 0, p0.Got.Len())
+		list0 := make([]IdRow, 0, p0.Got.Len())
 		for i0 := 0; i0 < p0.Got.Len(); i0++ {
-			var el0 T3
+			var el0 IdRow
 			p1 := p0.Got.ElemRow(i0)
 			if p1.Kind == probeGot {
-				var rec1 T3
+				var rec1 IdRow
 				p2 := p1.Got.ProbeNumber("id")
 				if p2.Kind == probeGot {
 					n2, nErr2 := strconv.ParseFloat(p2.Got, 64)
 					if nErr2 != nil {
-						return nil, deOverflow("T3", "id", "float", p2.ActualWireType, p2.Got)
+						return nil, deOverflow("IdRow", "id", "float", p2.ActualWireType, p2.Got)
 					}
 					rec1.Id = n2
 				} else if p2.Kind == probeWrong {
-					return nil, deTypeMismatch("T3", "id", "float", p2.ActualWireType, p2.Raw)
+					return nil, deTypeMismatch("IdRow", "id", "float", p2.ActualWireType, p2.Raw)
 				} else if p2.Kind == probeNull {
-					return nil, deTypeMismatch("T3", "id", "float", p2.ActualWireType, p2.Raw)
+					return nil, deTypeMismatch("IdRow", "id", "float", p2.ActualWireType, p2.Raw)
 				} else {
-					return nil, deMissingField("T3", "id", "float")
+					return nil, deMissingField("IdRow", "id", "float")
 				}
 				el0 = rec1
 			} else if p1.Kind == probeWrong {
@@ -2564,41 +2663,16 @@ func RunNativeRawStruct_delete(in In_delete) ([][]T1, error) {
 	// ── map 'n1' (executeSQL, per-element, into:null, parent:n0) ──
 	if produced_n0 {
 		over_n1 := t_n0
-		t_n1 = make([][]T1, 0, len(over_n1))
+		t_n1 = make([]wire.WireValue, 0, len(over_n1))
 		for mk_n1 := range over_n1 {
 			oel_n1 := over_n1[mk_n1]
-			ep_n1 := PortsNR_delete_n1{Bigint: false, Params: []wire.WireValue{wire.WireFloat(oel_n1.Id)}, Returning: false, Sql: "DELETE FROM benchmark_users WHERE id = ?", Write: true}
-			mo_n1, mo_n1Err := litedbmodel_runtime.ExecuteSQL(ep_n1.Bigint, ep_n1.Params, ep_n1.Returning, ep_n1.Sql, ep_n1.Write)
+			ep_n1 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireFloat(oel_n1.Id)})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("DELETE FROM benchmark_users WHERE id = ?")}, wire.WireField{Key: "write", Val: wire.WireBool(true)}})
+			mo_n1, mo_n1Err := litedbmodel_runtime.ExecuteSQL(ep_n1)
 			if mo_n1Err != nil {
 				return nil, opFailed("n1", "fail", mo_n1Err)
 			}
-			var el_n1 []T1
-			p0 := mo_n1.AsList()
-			if p0.Kind == probeGot {
-				list0 := make([]T1, 0, p0.Got.Len())
-				for i0 := 0; i0 < p0.Got.Len(); i0++ {
-					var el0 T1
-					p1 := p0.Got.ElemRow(i0)
-					if p1.Kind == probeGot {
-						var rec1 T1
-						el0 = rec1
-					} else if p1.Kind == probeWrong {
-						return nil, deTypeMismatch("n1", "n1", "obj{}", p1.ActualWireType, p1.Raw)
-					} else if p1.Kind == probeNull {
-						return nil, deTypeMismatch("n1", "n1", "obj{}", p1.ActualWireType, p1.Raw)
-					} else {
-						return nil, deMissingField("n1", "n1", "obj{}")
-					}
-					list0 = append(list0, el0)
-				}
-				el_n1 = list0
-			} else if p0.Kind == probeWrong {
-				return nil, deTypeMismatch("n1", "n1", "arr(obj{})", p0.ActualWireType, p0.Raw)
-			} else if p0.Kind == probeNull {
-				return nil, deTypeMismatch("n1", "n1", "arr(obj{})", p0.ActualWireType, p0.Raw)
-			} else {
-				return nil, deMissingField("n1", "n1", "arr(obj{})")
-			}
+			var el_n1 wire.WireValue
+			el_n1 = mo_n1
 			t_n1 = append(t_n1, el_n1)
 		}
 		produced_n1 = true
@@ -2606,8 +2680,8 @@ func RunNativeRawStruct_delete(in In_delete) ([][]T1, error) {
 	return t_n1, nil
 }
 
-// ComponentNamesNativeRaw — covered reads exposed on the combined struct-native path (declaration
-// order). Each is driven via RunNativeRawStruct_<comp>(input) -> (T, error): a STRUCT return; the consumer
-// keeps the model native (no Value serialization on the read hot path — the boxing residue bc#77 removes)
-// and supplies the op-agnostic leaf transport symbols the runner calls. See INTEGRATION.md §6.
+// ComponentNamesNativeRaw — covered reads exposed on the combined native path (declaration order).
+// Each is a 1:1 entry <Method>(<positional params>) -> (T, error): a native return; the consumer keeps the
+// model native (no Value serialization on the read hot path — the boxing residue bc#77 removes) and
+// supplies the op-agnostic leaf transport symbols the entry calls. See INTEGRATION.md §6.
 var ComponentNamesNativeRaw = []string{"findAll", "filterPaginateSort", "findFirst", "findUnique", "nestedFindAll", "nestedFindFirst", "nestedFindUnique", "nestedRelations", "compositeRelations", "create", "update", "upsert", "createMany", "upsertMany", "updateMany", "nestedCreate", "nestedUpsert", "nestedUpdate", "delete"}
