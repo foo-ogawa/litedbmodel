@@ -80,8 +80,33 @@ export type {
 // model imports (the single catalog `bc generate --from` reads); `leafHandlers`/`leafHandlersAsync` are
 // its executable bodies, injected into a generated module's `bind`/`bindAsync`.
 export { Db } from './leaf-transport';
-export { executeSQL, executeSQLAsync, pluck, group, leafHandlers, leafHandlersAsync, LEAF_TRANSPORT_SYMBOLS, prepareSql } from './leaves';
-export type { LeafContext, AsyncLeafContext } from './leaves';
+export { executeSQL, executeSQLAsync, pluck, group, leafHandlers, leafHandlersAsync, LEAF_TRANSPORT_SYMBOLS, prepareSql, spliceWhere, assembleDynamicWhere } from './leaves';
+export type { LeafContext, AsyncLeafContext, DynamicWhereFrag, DynamicWherePlan } from './leaves';
+export type {
+  EmitSpec,
+  EmitResult,
+  EmittedEndpoint,
+  ComparisonOp,
+  ComparePredicate,
+  InPredicate,
+  NullPredicate,
+  CorrelationTerm,
+  ExistsPredicate,
+  SubqueryPredicate,
+  Predicate,
+  RelationSelection,
+  QueryView,
+  ReadEndpoint,
+  ValueBinding,
+  CreateEndpoint,
+  UpdateEndpoint,
+  DeleteEndpoint,
+  CreateManyEndpoint,
+  UpdateManyEndpoint,
+  DeleteManyEndpoint,
+  Endpoint,
+  EndpointSet,
+} from './emit';
 
 
 // Dialect strategy table (WS6, #26 — the SSoT for PG/MySQL/SQLite SQL divergences + `?`→`$N`).

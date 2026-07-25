@@ -50,7 +50,7 @@ export class Db {
    * a RETURNING write on the row path; `bigint` runs the read in exact-integer mode. A non-returning
    * write yields the one-row `[{changes, lastInsertRowid}]` summary so the output shape is uniform.
    */
-  @leaf static executeSQL(sql: string, params: WireValue[], write: boolean, returning: boolean, bigint: boolean): WireValue[] { return declarationStub('executeSQL', [sql, params, write, returning, bigint]); }
+  @leaf static executeSQL(sql: string, params: WireValue[], write: boolean, returning: boolean, bigint: boolean, whereDynamic?: WireValue | null): WireValue[] { return declarationStub('executeSQL', [sql, params, write, returning, bigint, whereDynamic]); }
 
   /** Relation key extraction: the deduped, non-null key set over the ordered key-column tuple `col`. */
   @leaf static pluck(rows: WireValue[], col: string[]): WireValue[] { return declarationStub('pluck', [rows, col]); }

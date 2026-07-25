@@ -39,6 +39,7 @@ import {
   type RunInfo,
 } from './exec-context';
 import { renderPlaceholders, type Dialect } from './makesql/handler';
+import { encodeJsonArrayParam } from './makesql/json-array';
 import { resolvePgArrayCast } from './makesql/compile-relation';
 import { dedupeKeyTuples, groupByKey, attachToParent } from './grouping';
 
@@ -72,33 +73,89 @@ interface ExecuteSqlPorts {
   readonly write: boolean;
   readonly returning: boolean;
   readonly bigint: boolean;
+  /** The DYNAMIC WHERE plan (absent on a fully-bounded statement). See {@link assembleDynamicWhere}. */
+  readonly whereDynamic?: DynamicWherePlan | null;
 }
 
-/** Normalize a driver `lastInsertRowid` (number|bigint) to bc's `int` value model (BigInt). */
-function toRowid(v: number | bigint): bigint {
+// ── the DYNAMIC (SKIP) WHERE: assembled by the transport, at execution time ────────────────────
+
+/**
+ * The SQL keywords that may follow a WHERE clause. The WHERE must be spliced BEFORE the first of
+ * them, so a dynamic WHERE lands at exactly the position a bounded one occupies.
+ */
+const WHERE_TAIL_RE = /\s+(GROUP BY|ORDER BY|LIMIT|OFFSET|FOR UPDATE|RETURNING)\b/i;
+
+/** Splice a ` WHERE …` clause (leading space included, or `''`) into `baseSql` before its first tail keyword. */
+export function spliceWhere(baseSql: string, whereSql: string): string {
+  if (whereSql === '') return baseSql;
+  const tail = WHERE_TAIL_RE.exec(baseSql);
+  return tail === null ? baseSql + whereSql : baseSql.slice(0, tail.index) + whereSql + baseSql.slice(tail.index);
+}
+
+/**
+ * ONE evaluated WHERE fragment of a dynamic plan. bc has ALREADY evaluated the fragment's params and
+ * its SKIP guard against the input: a fragment whose guard was false evaluated LAZILY to `null` (bc's
+ * `cond` only evaluates the taken branch, so a dropped fragment's params are never evaluated).
+ */
+export interface DynamicWhereFrag {
+  readonly sql: string;
+  readonly params: readonly unknown[];
+}
+
+/** The evaluated dynamic-WHERE plan: the fragment list, holes (skipped fragments) included. */
+export interface DynamicWherePlan {
+  readonly frags?: readonly (DynamicWhereFrag | null)[];
+}
+
+/**
+ * Assemble the effective statement from a DYNAMIC WHERE plan: drop the absent (`null`) fragments,
+ * join the survivors with ` WHERE ` / ` AND `, splice the clause into the base `sql` before its first
+ * tail keyword ({@link spliceWhere}) — the exact position a bounded WHERE occupies — and bind the
+ * surviving fragments' params BEFORE the base params (the WHERE `?`s precede the tail's).
+ *
+ * A SKIP predicate's presence is per-CALL, so the FINAL statement can only be determined here, at
+ * execution time — which is also why `?`→`$N` is rendered after this ({@link prepareSql}), never at
+ * emit time. A statement with NO optional predicate carries no plan at all: its WHERE is spliced into
+ * the static `sql` at emit time and it never reaches this function.
+ */
+export function assembleDynamicWhere(p: { sql: string; params: unknown[]; whereDynamic: DynamicWherePlan }): { sql: string; params: unknown[] } {
+  const frags = (p.whereDynamic.frags ?? []).filter((f): f is DynamicWhereFrag => f != null);
+  let whereSql = '';
+  const whereParams: unknown[] = [];
+  frags.forEach((f, i) => {
+    whereSql += (i === 0 ? ' WHERE ' : ' AND ') + f.sql;
+    whereParams.push(...f.params);
+  });
+  return { sql: spliceWhere(p.sql, whereSql), params: [...whereParams, ...p.params] };
+}
+
+/**
+ * The effective `{sql, params}` a statement executes: the dynamic plan assembled when one is present,
+ * the ports verbatim otherwise. The ONE place the two shapes converge — both transports consume it.
+ */
+function effectiveStatement(p: ExecuteSqlPorts): { sql: string; params: unknown[]; write: boolean } {
+  if (p.whereDynamic == null) return p;
+  return { ...assembleDynamicWhere({ sql: p.sql, params: p.params, whereDynamic: p.whereDynamic }), write: p.write };
+}
+
+/** Normalize a driver integer (number|bigint) to bc's `int` value model (BigInt). */
+function toBcInt(v: number | bigint): bigint {
   return typeof v === 'bigint' ? v : BigInt(v);
 }
 
 // ── executeSQL — the sole op-independent SQL transport ─────────────────────────
 
 /**
- * Encode a value list for the driver: a bound scalar passes through; an ARRAY element (a relation
- * key set bound as ONE param — `= ANY($1)` / `json_each(?)`) binds as the raw array on PostgreSQL
- * and as a single JSON string on MySQL/SQLite (the `makesql` locked model).
+ * Encode a value list for the driver: a bound scalar passes through; an ARRAY element (a key set or a
+ * batch record list bound as ONE param — `= ANY(?)` / `json_each(?)` / `JSON_TABLE(?)`) binds as the
+ * raw array on PostgreSQL and as a single JSON string on MySQL/SQLite (the `makesql` locked model).
  *
- * bc's value model represents `int` as `BigInt`, so an IN-list / key-set value can arrive as a
- * `BigInt`. PostgreSQL binds the raw array (the driver accepts BigInt); for the MySQL/SQLite JSON
- * form the array must serialize to JSON, where a `BigInt` element is coerced to a JSON number
- * ({@link jsonNumber}) — `JSON.stringify` cannot emit a `BigInt`, and `json_each`/`JSON_TABLE`
- * compare numerically. This is the SOLE transport-level array encode.
+ * The JSON encoding is the SHARED one ({@link encodeJsonArrayParam}) — the same encoder the imperative
+ * `inListJson` path uses, so the generated and imperative paths cannot drift on bigint / boolean
+ * element handling.
  */
 function encodeParams(params: readonly unknown[], dialect: Dialect): unknown[] {
-  return params.map((p) => (Array.isArray(p) ? (dialect === 'postgres' ? p : JSON.stringify(p, jsonNumber)) : p));
-}
-
-/** `JSON.stringify` replacer: coerce a bc `int` (`BigInt`) element to a JSON number for the JSON IN-list form. */
-function jsonNumber(_key: string, value: unknown): unknown {
-  return typeof value === 'bigint' ? Number(value) : value;
+  return params.map((p) => (Array.isArray(p) ? (dialect === 'postgres' ? p : encodeJsonArrayParam(dialect, p)) : p));
 }
 
 /** Prepare a statement for the seam: resolve deferred PG cast(s), render `?`→`$N`, encode params. */
@@ -113,9 +170,16 @@ export function prepareSql(p: { sql: string; params: unknown[]; write: boolean }
   return { sql, bound, intent };
 }
 
-/** The affected-write summary row a non-returning write yields (uniform `items` output shape). */
+/**
+ * The affected-write summary row a non-returning write yields (uniform `items` output shape).
+ *
+ * BOTH fields are integers, so both are normalized to bc's `int` value model (BigInt) — the shape a
+ * declared `{changes: Int, lastInsertRowid: Int}` contract conforms against, and the shape the rust /
+ * go / python / php transports return. Leaving `changes` a JS number made the SAME generated IR
+ * conform in one language and fail `expected int, got float` in another.
+ */
 function writeSummary(info: RunInfo): Array<Record<string, unknown>> {
-  return [{ changes: info.changes, lastInsertRowid: toRowid(info.lastInsertRowid) }];
+  return [{ changes: toBcInt(info.changes), lastInsertRowid: toBcInt(info.lastInsertRowid) }];
 }
 
 /**
@@ -127,7 +191,7 @@ function writeSummary(info: RunInfo): Array<Record<string, unknown>> {
  * natively and ignore it.
  */
 export function executeSQL(p: ExecuteSqlPorts, ctx: LeafContext): Array<Record<string, unknown>> {
-  const prepared = prepareSql(p, ctx.dialect);
+  const prepared = prepareSql(effectiveStatement(p), ctx.dialect);
   if (p.write === true && p.returning !== true) return writeSummary(seamRun(ctx.exec, prepared.sql, prepared.bound, prepared.intent));
   const exec = p.bigint === true ? seamExecuteSafe : seamExecute;
   return exec(ctx.exec, prepared.sql, prepared.bound, prepared.intent) as Array<Record<string, unknown>>;
@@ -135,7 +199,7 @@ export function executeSQL(p: ExecuteSqlPorts, ctx: LeafContext): Array<Record<s
 
 /** The ASYNC (live PG / MySQL) `executeSQL` body — the twin of {@link executeSQL} over the async seam. */
 export async function executeSQLAsync(p: ExecuteSqlPorts, ctx: AsyncLeafContext): Promise<Array<Record<string, unknown>>> {
-  const prepared = prepareSql(p, ctx.dialect);
+  const prepared = prepareSql(effectiveStatement(p), ctx.dialect);
   if (p.write === true && p.returning !== true) return writeSummary(await seamRunAsync(ctx.execAsync, prepared.sql, prepared.bound, prepared.intent));
   return (await seamExecuteAsync(ctx.execAsync, prepared.sql, prepared.bound, prepared.intent)) as Array<Record<string, unknown>>;
 }
@@ -178,6 +242,7 @@ function executeSqlPorts(ports: Record<string, Value>): ExecuteSqlPorts {
     write: ports.write === true,
     returning: ports.returning === true,
     bigint: ports.bigint === true,
+    whereDynamic: (ports.whereDynamic ?? null) as unknown as DynamicWherePlan | null,
   };
 }
 

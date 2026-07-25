@@ -60,18 +60,48 @@ export type JsonArrayDialect = 'mysql' | 'sqlite';
  * MySQL 8 + SQLite in `test/scp/json-array-parity.test.ts`.
  */
 export function inListJson(dialect: JsonArrayDialect, col: string, values: unknown[]): { sql: string; param: string } {
-  if (dialect === 'mysql') {
-    return {
-      sql: `${col} IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt)`,
-      // A BOOLEAN element serializes to `1`/`0` in the MySQL JSON param (NOT JSON `true`/`false`):
-      // `JSON_UNQUOTE(v)` on JSON `true` yields the STRING `'true'`, which MySQL coerces to `0`
-      // against a TINYINT(1) — silently mismatching. `1`/`0` is exactly what v1's `col IN (?)`
-      // bound (the mysql2 driver sends a JS bool as `1`/`0`), so this keeps v1 RESULT parity. SQL
-      // text + PG are untouched; SQLite's `json_each` coerces JSON booleans natively (no change).
-      param: JSON.stringify(values.map((v) => (typeof v === 'boolean' ? (v ? 1 : 0) : v))),
-    };
-  }
-  return { sql: `${col} IN (SELECT value FROM json_each(?))`, param: JSON.stringify(values) };
+  return { sql: inListPredicate(dialect, col), param: encodeJsonArrayParam(dialect, values) };
+}
+
+/**
+ * The STATIC, value-length-INDEPENDENT membership predicate for `col` — the ONE place each dialect's
+ * single-param IN-list TEXT lives, so a caller never re-spells it:
+ *
+ *  - **PostgreSQL**: `col = ANY(?)` with NO element-type cast (#46). A value-inferred cast is wrong for
+ *    every column whose type is not recoverable from the values (`inferPgArrayType([])` = `text[]` →
+ *    `integer = text` on an EMPTY int list; a uuid list is indistinguishable from text) — no-cast lets
+ *    PG infer the array type FROM THE COLUMN, which is correct for int / uuid / bigint / bool /
+ *    timestamp / numeric alike. This is the form a GENERATED module needs: one param, fixed text.
+ *  - **MySQL / SQLite**: the single-JSON `JSON_TABLE` / `json_each` SUBQUERY described above.
+ *
+ * The IMPERATIVE v1 path is untouched: {@link conditionsFor} still hands PostgreSQL the base
+ * `DBConditions`, whose `IN (?, ?, …)` stays byte-identical to v1 (its placeholder count is free to
+ * depend on the values because it is built per request).
+ */
+export function inListPredicate(dialect: Dialect, col: string): string {
+  if (dialect === 'postgres') return `${col} = ANY(?)`;
+  if (dialect === 'mysql') return `${col} IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt)`;
+  return `${col} IN (SELECT value FROM json_each(?))`;
+}
+
+/**
+ * Encode an array as the ONE JSON param the MySQL/SQLite server-side forms expand — the SINGLE array
+ * encoder, shared by {@link inListJson} (the imperative path) and the leaf transport's `encodeParams`
+ * (the generated path), so the two can never diverge:
+ *
+ *  - a bc `int` arrives as a `BigInt`, which `JSON.stringify` cannot emit → coerced to a JSON number
+ *    (`json_each` / `JSON_TABLE` compare numerically);
+ *  - a BOOLEAN element serializes to `1`/`0` on MySQL, NOT JSON `true`/`false`: `JSON_UNQUOTE(v)` on
+ *    JSON `true` yields the STRING `'true'`, which MySQL coerces to `0` against a TINYINT(1) — silently
+ *    mismatching. `1`/`0` is exactly what v1's `col IN (?)` bound (mysql2 sends a JS bool as `1`/`0`).
+ *    SQLite's `json_each` coerces JSON booleans natively, so it keeps them as-is.
+ */
+export function encodeJsonArrayParam(dialect: JsonArrayDialect, values: readonly unknown[]): string {
+  return JSON.stringify(values, (_key, v: unknown) => {
+    if (typeof v === 'bigint') return Number(v);
+    if (dialect === 'mysql' && typeof v === 'boolean') return v ? 1 : 0;
+    return v;
+  });
 }
 
 /**

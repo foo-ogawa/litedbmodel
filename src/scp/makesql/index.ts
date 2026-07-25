@@ -71,7 +71,7 @@ export type { RelationCompileBase } from './compile-relation';
 
 // Single-JSON-param array/batch forms for MySQL 8 + SQLite (epic #43/#45) — the
 // intentional deviation from v1's N-placeholder expansion (server-side JSON expansion).
-export { inListJson, JsonArrayConditions, conditionsFor } from './json-array';
+export { inListJson, inListPredicate, encodeJsonArrayParam, JsonArrayConditions, conditionsFor } from './json-array';
 export {
   mysqlInsertJson,
   sqliteInsertJson,

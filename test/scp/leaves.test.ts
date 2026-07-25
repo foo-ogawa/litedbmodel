@@ -68,6 +68,46 @@ test('write routes through the run seam and returns the affected summary', () =>
   const ctx: LeafContext = { exec: contextForConnection(recordingConn(calls)), dialect: 'sqlite' };
   const out = executeSQL({ sql: 'INSERT INTO users(id,name) VALUES (?,?)', params: [30, 'C'], write: true, returning: false, bigint: false }, ctx);
   expect(calls[0].kind).toBe('run');
-  expect(out[0].changes).toBe(1);
+  expect(out[0].changes).toBe(1n); // the summary is bc `int` on BOTH fields (the declared contract)
   expect(out[0].lastInsertRowid).toBe(42n);
+});
+
+// ── #151 the DYNAMIC (SKIP) WHERE — assembled by the transport at EXECUTION time ────────────────
+//
+// The fragment vocabulary is SQL text + params + SKIP (a skipped fragment is simply omitted — bc's
+// lazy `cond` hands the leaf a `null` in its place). The leaf joins the survivors, splices the clause
+// at the WHERE position, and only THEN renders `?`→`$N` on the final SQL: the statement's shape is not
+// known until the call, so it cannot be rendered at generate time.
+
+test('a SKIP plan assembles only the surviving fragments, at the WHERE position, before the tail', () => {
+  const calls: Call[] = [];
+  const ctx: LeafContext = { exec: contextForConnection(recordingConn(calls)), dialect: 'sqlite' };
+  const base = { sql: 'SELECT id, author_id FROM posts ORDER BY id ASC LIMIT 20', params: [], write: false, returning: false, bigint: false };
+
+  executeSQL({ ...base, whereDynamic: { frags: [{ sql: 'author_id = ?', params: [10] }, null, { sql: 'id >= ?', params: [2] }] } }, ctx);
+  expect(calls[0].sql).toBe('SELECT id, author_id FROM posts WHERE author_id = ? AND id >= ? ORDER BY id ASC LIMIT 20');
+  expect(calls[0].params).toEqual([10, 2]);
+
+  // Every fragment skipped ⇒ no WHERE at all (the base statement is untouched).
+  executeSQL({ ...base, whereDynamic: { frags: [null, null] } }, ctx);
+  expect(calls[1].sql).toBe('SELECT id, author_id FROM posts ORDER BY id ASC LIMIT 20');
+  expect(calls[1].params).toEqual([]);
+
+  // No plan at all ⇒ the bounded statement passes through unchanged.
+  executeSQL(base, ctx);
+  expect(calls[2].sql).toBe('SELECT id, author_id FROM posts ORDER BY id ASC LIMIT 20');
+});
+
+test('`?`→`$N` is rendered AFTER the SKIP assembly, so the numbering follows the FINAL statement', () => {
+  const calls: Call[] = [];
+  const ctx: LeafContext = { exec: contextForConnection(recordingConn(calls)), dialect: 'postgres' };
+  const base = { sql: 'SELECT id, author_id FROM posts ORDER BY id ASC', params: [], write: false, returning: false, bigint: false };
+
+  executeSQL({ ...base, whereDynamic: { frags: [{ sql: 'author_id = ?', params: [10] }, { sql: 'id >= ?', params: [2] }] } }, ctx);
+  expect(calls[0].sql).toBe('SELECT id, author_id FROM posts WHERE author_id = $1 AND id >= $2 ORDER BY id ASC');
+
+  // The SAME plan with the first fragment skipped renumbers — proof the render cannot happen earlier.
+  executeSQL({ ...base, whereDynamic: { frags: [null, { sql: 'id >= ?', params: [2] }] } }, ctx);
+  expect(calls[1].sql).toBe('SELECT id, author_id FROM posts WHERE id >= $1 ORDER BY id ASC');
+  expect(calls[1].params).toEqual([2]);
 });

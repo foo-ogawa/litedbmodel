@@ -61,3 +61,8 @@ python/build/
 .playwright-mcp/
 /*.png
 /go/lm_bench/lm_orm/lm_orm
+
+# emitter end-to-end scratch (the test writes the emitted + generated modules inside the repo so they
+# resolve node_modules, then removes the dir; this catches a crashed run's leftovers)
+/.emit-e2e-*
+/.probe/
