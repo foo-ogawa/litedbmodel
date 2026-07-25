@@ -235,12 +235,19 @@ Types are inferred from TypeScript property types:
 @column({ columnName: 'db_col' }) prop?: string; // Custom column name (object form)
 @column({ primaryKey: true }) id?: number;       // Mark as primary key
 @column({ primaryKey: true, columnName: 'user_id' }) id?: number; // Both options
+@column({ primaryKey: true, autoIncrement: true }) id?: number;   // Server-assigned key
 ```
 
 | Option | Type | Description |
 |--------|------|-------------|
 | `columnName` | `string` | Database column name (defaults to property name) |
 | `primaryKey` | `boolean` | Mark as part of primary key (for `getPkey()`) |
+| `autoIncrement` | `boolean` | The server assigns the value (`AUTO_INCREMENT` / `SERIAL` / `IDENTITY`) — a write does not supply it |
+
+A model that declares no primary key is treated as having an auto-increment `id`. Declare the key
+whenever that is not true: on MySQL, which has no native `RETURNING`, a `returning` write recovers
+the rows it wrote from the declared key — by the auto-increment range for a server-assigned key, and
+by the values the write itself bound for a UUID, a client-supplied, or a composite key.
 
 ### Explicit Types (for arrays/JSON/UUID)
 

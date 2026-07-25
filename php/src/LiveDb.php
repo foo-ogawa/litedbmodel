@@ -232,8 +232,7 @@ final class MysqlReturning
                 return new MysqlReselect($writeSql, "SELECT {$cols} FROM {$table} WHERE {$autoInc} >= ? AND {$autoInc} < ?{$orderBy}", [new ReselectBind('lastId'), new ReselectBind('highId')]);
             }
             if (count($pkCols) === 0) {
-                // No hint at all (the legacy auto-`id` corpus): the id range still identifies the rows.
-                return new MysqlReselect($writeSql, "SELECT {$cols} FROM {$table} WHERE id >= ? AND id < ?", [new ReselectBind('lastId'), new ReselectBind('highId')]);
+                throw new \RuntimeException("scp write(mysql): an INSERT…RETURNING carries no pk hint, so its written rows cannot be identified ('{$writeSql}'). The producer must pass the model's declared primary key.");
             }
             $conds = [];
             $binds = [];

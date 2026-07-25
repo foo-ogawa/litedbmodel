@@ -73,7 +73,7 @@ import {
   type DeriveColumnsOptions,
   type ModelClassLike,
 } from '../decorator-adapter';
-import { getRelationMeta } from '../../decorators';
+import { getPrimaryKey, getRelationMeta } from '../../decorators';
 import type { DialectName } from '../dialect';
 import type {
   ComparePredicate,
@@ -458,7 +458,16 @@ class EmitContext {
     const params: ParamDecl[] = [];
     const returning = endpoint.returning;
     const ports: Record<string, unknown> = { table };
-    if (returning !== undefined) ports.returning = returning.join(', ');
+    if (returning !== undefined) {
+      ports.returning = returning.join(', ');
+      // The model's PK travels with a RETURNING write so a dialect with no native RETURNING can
+      // recover the rows it wrote by the REAL key — the auto-increment range, or the values the
+      // write itself bound (UUID / client-supplied / composite). It is the model's DECLARATION
+      // (`@column({ primaryKey, autoIncrement })`), never a guess about the statement's shape.
+      const pkey = getPrimaryKey(model);
+      ports.pk = pkey.columns.join(',');
+      if (pkey.autoInc !== null) ports.autoInc = pkey.autoInc;
+    }
 
     let component: 'Insert' | 'Update' | 'Delete';
     if (endpoint.kind === 'create') {

@@ -2333,6 +2333,210 @@
       "expectedCap": null
     },
     {
+      "name": "createPostReturning: INSERT … RETURNING returns the written row (client-supplied PK) [sqlite]",
+      "kind": "exec",
+      "dialect": "sqlite",
+      "entry": "createPostReturning",
+      "input": {
+        "id": 14,
+        "authorId": 2,
+        "title": "c2",
+        "status": "live",
+        "createdAt": "2026-05-01"
+      },
+      "case": "createPostReturning: INSERT … RETURNING returns the written row (client-supplied PK)",
+      "expectedStatements": [
+        {
+          "sql": "INSERT INTO conf_posts (author_id, created_at, id, status, title) VALUES (?, ?, ?, ?, ?) RETURNING id, title",
+          "params": [
+            2,
+            "2026-05-01",
+            14,
+            "live",
+            "c2"
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "id": 14,
+          "title": "c2"
+        }
+      ],
+      "expectedDbState": [
+        {
+          "query": "SELECT id, author_id, title, status, created_at FROM conf_posts ORDER BY id",
+          "rows": [
+            {
+              "id": 10,
+              "author_id": 1,
+              "title": "a1",
+              "status": "live",
+              "created_at": "2026-02-01"
+            },
+            {
+              "id": 11,
+              "author_id": 1,
+              "title": "a2",
+              "status": "draft",
+              "created_at": "2026-03-01"
+            },
+            {
+              "id": 12,
+              "author_id": 2,
+              "title": "b1",
+              "status": "live",
+              "created_at": "2026-01-15"
+            },
+            {
+              "id": 14,
+              "author_id": 2,
+              "title": "c2",
+              "status": "live",
+              "created_at": "2026-05-01"
+            }
+          ]
+        }
+      ],
+      "expectedCap": null
+    },
+    {
+      "name": "createPostReturning: INSERT … RETURNING returns the written row (client-supplied PK) [postgres]",
+      "kind": "exec",
+      "dialect": "postgres",
+      "entry": "createPostReturning",
+      "input": {
+        "id": 14,
+        "authorId": 2,
+        "title": "c2",
+        "status": "live",
+        "createdAt": "2026-05-01"
+      },
+      "case": "createPostReturning: INSERT … RETURNING returns the written row (client-supplied PK)",
+      "expectedStatements": [
+        {
+          "sql": "INSERT INTO conf_posts (author_id, created_at, id, status, title) VALUES ($1, $2, $3, $4, $5) RETURNING id, title",
+          "params": [
+            2,
+            "2026-05-01",
+            14,
+            "live",
+            "c2"
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "id": 14,
+          "title": "c2"
+        }
+      ],
+      "expectedDbState": [
+        {
+          "query": "SELECT id, author_id, title, status, created_at FROM conf_posts ORDER BY id",
+          "rows": [
+            {
+              "id": 10,
+              "author_id": 1,
+              "title": "a1",
+              "status": "live",
+              "created_at": "2026-02-01"
+            },
+            {
+              "id": 11,
+              "author_id": 1,
+              "title": "a2",
+              "status": "draft",
+              "created_at": "2026-03-01"
+            },
+            {
+              "id": 12,
+              "author_id": 2,
+              "title": "b1",
+              "status": "live",
+              "created_at": "2026-01-15"
+            },
+            {
+              "id": 14,
+              "author_id": 2,
+              "title": "c2",
+              "status": "live",
+              "created_at": "2026-05-01"
+            }
+          ]
+        }
+      ],
+      "expectedCap": null
+    },
+    {
+      "name": "createPostReturning: INSERT … RETURNING returns the written row (client-supplied PK) [mysql]",
+      "kind": "exec",
+      "dialect": "mysql",
+      "entry": "createPostReturning",
+      "input": {
+        "id": 14,
+        "authorId": 2,
+        "title": "c2",
+        "status": "live",
+        "createdAt": "2026-05-01"
+      },
+      "case": "createPostReturning: INSERT … RETURNING returns the written row (client-supplied PK)",
+      "expectedStatements": [
+        {
+          "sql": "INSERT INTO conf_posts (author_id, created_at, id, status, title) VALUES (?, ?, ?, ?, ?) RETURNING id, title /*scp:pk=id;ai=*/",
+          "params": [
+            2,
+            "2026-05-01",
+            14,
+            "live",
+            "c2"
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "id": 14,
+          "title": "c2"
+        }
+      ],
+      "expectedDbState": [
+        {
+          "query": "SELECT id, author_id, title, status, created_at FROM conf_posts ORDER BY id",
+          "rows": [
+            {
+              "id": 10,
+              "author_id": 1,
+              "title": "a1",
+              "status": "live",
+              "created_at": "2026-02-01"
+            },
+            {
+              "id": 11,
+              "author_id": 1,
+              "title": "a2",
+              "status": "draft",
+              "created_at": "2026-03-01"
+            },
+            {
+              "id": 12,
+              "author_id": 2,
+              "title": "b1",
+              "status": "live",
+              "created_at": "2026-01-15"
+            },
+            {
+              "id": 14,
+              "author_id": 2,
+              "title": "c2",
+              "status": "live",
+              "created_at": "2026-05-01"
+            }
+          ]
+        }
+      ],
+      "expectedCap": null
+    },
+    {
       "name": "renamePostReturning: UPDATE … RETURNING returns the written row [sqlite]",
       "kind": "exec",
       "dialect": "sqlite",

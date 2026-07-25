@@ -68,6 +68,17 @@ export interface ColumnMeta {
   typeCast?: TypeCastFn;
   serialize?: SerializeFn;
   primaryKey?: boolean;
+  /**
+   * The column's value is assigned by the SERVER (`AUTO_INCREMENT` / `SERIAL` / `IDENTITY`), so a
+   * write does not supply it and cannot know it until the statement has run.
+   *
+   * This is a schema fact the model must STATE, not one the library can infer: "absent from the
+   * INSERT column list" also describes a column with a server-side DEFAULT, and the two recover
+   * their written rows differently. On MySQL — which parses no `RETURNING` — an auto-increment PK
+   * is recovered by the id range `[LAST_INSERT_ID, +affected)` while any other PK is recovered by
+   * the values the write itself bound.
+   */
+  autoIncrement?: boolean;
   /** SQL type for automatic casting in conditions (e.g., 'uuid') */
   sqlCast?: string;
   /**
@@ -279,6 +290,7 @@ interface RegisterColumnOptions {
   serialize?: SerializeFn;
   skipAutoInfer?: boolean;
   primaryKey?: boolean;
+  autoIncrement?: boolean;
   /** SQL type for automatic casting in conditions (e.g., 'uuid') */
   sqlCast?: string;
 }
@@ -324,6 +336,7 @@ function registerColumn(
     typeCast: finalTypeCast,
     serialize: finalSerialize,
     primaryKey: options.primaryKey,
+    autoIncrement: options.autoIncrement,
     sqlCast: finalSqlCast,
     ...(baseSqlType !== undefined ? { baseSqlType } : {}),
   });
@@ -337,6 +350,12 @@ export interface ColumnOptions {
   columnName?: string;
   /** Mark this column as part of the primary key */
   primaryKey?: boolean;
+  /**
+   * The SERVER assigns this column's value (`AUTO_INCREMENT` / `SERIAL` / `IDENTITY`) — a write does
+   * not supply it. Declare it on an auto-increment primary key so a `RETURNING` write can recover
+   * the rows it wrote on a dialect that has no native `RETURNING`. See {@link ColumnMeta.autoIncrement}.
+   */
+  autoIncrement?: boolean;
 }
 
 /**
@@ -361,22 +380,25 @@ function createColumnDecorator(
       // Parse options
       let columnName: string;
       let primaryKey: boolean | undefined;
-      
+      let autoIncrement: boolean | undefined;
+
       if (typeof columnNameOrOptions === 'string') {
         columnName = columnNameOrOptions;
       } else if (columnNameOrOptions) {
         columnName = columnNameOrOptions.columnName || propKey;
         primaryKey = columnNameOrOptions.primaryKey;
+        autoIncrement = columnNameOrOptions.autoIncrement;
       } else {
         columnName = propKey;
       }
-      
+
       registerColumn(target, propKey, {
         columnName,
         typeCast,
         serialize,
         skipAutoInfer: shouldSkipAutoInfer,
         primaryKey,
+        autoIncrement,
         sqlCast,
       });
     };
@@ -1254,6 +1276,61 @@ export function getModelColumnNames(modelClass: object): string[] {
   const meta = getColumnMeta(modelClass);
   if (!meta) return [];
   return Array.from(meta.values()).map((m) => m.columnName);
+}
+
+/** A model's primary key, as {@link getPrimaryKey} resolves it. */
+export interface ModelPrimaryKey {
+  /** The PK PROPERTY keys (field names) — what a `Column` static is looked up by. */
+  readonly propKeys: readonly string[];
+  /** The PK COLUMN names, in declaration order — what SQL is written against. */
+  readonly columns: readonly string[];
+  /** The single server-assigned column ({@link ColumnMeta.autoIncrement}), or null. */
+  readonly autoInc: string | null;
+  /** False when nothing was declared and the legacy `id` default applied. */
+  readonly declared: boolean;
+}
+
+/**
+ * Resolve a model's primary key — the ONE derivation, in the layer that owns column metadata.
+ *
+ * Priority: the explicit `PKEY_COLUMNS` static, then `@column({ primaryKey: true })`, then the
+ * legacy default. The legacy default is an AUTO_INCREMENT `id`: that is what a model which declares
+ * nothing has always meant here, and stating it once — where the model's defaults belong — is what
+ * keeps it out of the layers that consume the answer (the MySQL `RETURNING` recovery used to
+ * hard-code `WHERE id >= …` for want of it, which silently returned no rows for every model whose
+ * key was a UUID, a client-supplied int, or a composite).
+ *
+ * `declared: false` marks that default, so a caller that must not guess can reject it.
+ */
+export function getPrimaryKey(modelClass: object): ModelPrimaryKey {
+  const meta = getColumnMeta(modelClass);
+  const autoIncOf = (columns: readonly string[]): string | null => {
+    if (meta === undefined) return null;
+    for (const m of meta.values()) {
+      if (m.autoIncrement === true && columns.includes(m.columnName)) return m.columnName;
+    }
+    return null;
+  };
+
+  const explicit = (modelClass as { PKEY_COLUMNS?: ReadonlyArray<{ columnName: string }> | null }).PKEY_COLUMNS;
+  if (explicit !== undefined && explicit !== null && explicit.length > 0) {
+    const columns = explicit.map((c) => c.columnName);
+    return { propKeys: columns, columns, autoInc: autoIncOf(columns), declared: true };
+  }
+
+  if (meta !== undefined) {
+    const propKeys: string[] = [];
+    const columns: string[] = [];
+    for (const [propKey, m] of meta) {
+      if (m.primaryKey === true) {
+        propKeys.push(propKey);
+        columns.push(m.columnName);
+      }
+    }
+    if (columns.length > 0) return { propKeys, columns, autoInc: autoIncOf(columns), declared: true };
+  }
+
+  return { propKeys: ['id'], columns: ['id'], autoInc: 'id', declared: false };
 }
 
 /**

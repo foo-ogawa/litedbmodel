@@ -40,6 +40,9 @@ import { sqlTypeToBcScalar, sqlTypeToMaterializeClass, type ColumnTypeResolver }
 import { renderPlaceholders, type Dialect as MakeSQLDialect } from './handler';
 import { formatterFor } from './compile';
 import { mapSqliteError } from '../errors';
+// The mysql pk-hint writer. `mysql-returning` imports `TxOp` from here TYPE-only (erased), so this
+// runtime import closes no cycle.
+import { mysqlPkHint } from './mysql-returning';
 import {
   type ExecutionContext,
   type AsyncExecutionContext,
@@ -614,6 +617,16 @@ export function pkPort(ports: Record<string, unknown>): { columns: readonly stri
  * are CANONICAL (alphabetical) sorted — the v2 write-path SSoT (matches `DBModel._insert`).
  */
 export function compileWriteNode(node: WriteNodeLike, dialect: MakeSQLDialect = 'sqlite', resolveColumnType?: ColumnTypeResolver): TxOp {
+  const op = compileWriteNodeSql(node, dialect, resolveColumnType);
+  // MySQL parses no RETURNING: the strip-before-execute pk hint rides the compiled SQL so the mysql
+  // connection adapter can re-select the written rows by the REAL key. It is applied HERE, at the one
+  // write compiler, rather than by each producer — the producers that forgot the ritual are exactly
+  // how a UUID / client-supplied / composite PK came to return no rows at all.
+  return dialect === 'mysql' ? mysqlPkHint(op) : op;
+}
+
+/** {@link compileWriteNode}'s SQL body — the dialect-neutral descriptor → statement compile. */
+function compileWriteNodeSql(node: WriteNodeLike, dialect: MakeSQLDialect, resolveColumnType?: ColumnTypeResolver): TxOp {
   const { component, ports } = node;
   const table = stringPort(ports, 'table');
   if (table === undefined) throw new Error(`compileWriteNode: ${component} node requires a literal 'table' port`);

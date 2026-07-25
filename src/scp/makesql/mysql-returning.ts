@@ -184,8 +184,10 @@ export function buildMysqlReselect(sql: string): MysqlReselect | null {
       ]);
     }
     if (pk.length === 0) {
-      // No hint at all (the legacy auto-`id` corpus): the id range still identifies the inserted rows.
-      return done(`SELECT ${cols} FROM ${table} WHERE id >= ? AND id < ?`, [{ kind: 'lastId' }, { kind: 'highId' }]);
+      throw new Error(
+        `scp write(mysql): an INSERT…RETURNING carries no pk hint, so its written rows cannot be identified ` +
+          `('${writeSql.slice(0, 60)}…'). The producer must pass the model's declared primary key.`,
+      );
     }
     const cols4 = insertCols(writeSql);
     const binds: ReselectBind[] = [];

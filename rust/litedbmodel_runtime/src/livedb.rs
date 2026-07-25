@@ -1061,13 +1061,20 @@ fn parse_conflict_hint(s: &str) -> Vec<String> {
         .collect()
 }
 
-/// Build the MySQL RETURNING re-select for a RETURNING write — the driver/runtime SSoT for the reselect
-/// construction (driven by the baked SQL + the `/*scp:pk=…;conflict=…*/` metadata hint, NOT any consumer
-/// reselect-SQL marker comment). Returns `None` for a plain (no-RETURNING) statement or a
-/// `DELETE … RETURNING` (pre-image gone — the caller strips + runs).
-fn build_mysql_reselect(sql: &str) -> Option<MysqlReselect> {
+/// Derive the MySQL RETURNING recovery for a write, or `Ok(None)` when the statement declares no
+/// RETURNING (the caller runs it unchanged). This is the rust member of the 5-language SSoT —
+/// `src/scp/makesql/mysql-returning.ts`, `go/litedbmodel_runtime/livedb.go`,
+/// `python/litedbmodel_runtime/driver.py` and `php/src/LiveDb.php` derive the identical
+/// write/select/bind triple.
+///
+/// Fail-closed: a RETURNING write whose key cannot be identified is an ERROR, never a silent empty
+/// row set — returning `[]` for a write the caller asked to describe is the defect this exists to
+/// remove.
+fn build_mysql_reselect(sql: &str) -> Result<Option<MysqlReselect>, SqlFailure> {
     let lower = sql.to_ascii_lowercase();
-    let ret_pos = lower.rfind(" returning ")?;
+    let Some(ret_pos) = lower.rfind(" returning ") else {
+        return Ok(None);
+    };
     let hint_region = &sql[ret_pos..];
     // RETURNING columns (hint stripped) + the byte-clean write (RETURNING + hint removed).
     let cols = strip_pk_hint(&sql[ret_pos + " returning ".len()..])
@@ -1075,9 +1082,13 @@ fn build_mysql_reselect(sql: &str) -> Option<MysqlReselect> {
         .to_string();
     let (pk_cols, auto_inc) = parse_pk_hint(hint_region);
     let conflict_cols = parse_conflict_hint(hint_region);
-    let write_sql = sql[..ret_pos].trim().to_string();
+    let write_sql = strip_pk_hint(&sql[..ret_pos]).trim().to_string();
     let wl = write_sql.to_ascii_lowercase();
-    let table = table_of(&write_sql)?;
+    let Some(table) = table_of(&write_sql) else {
+        return Err(driver_failure(format!(
+            "scp write(mysql): cannot parse the target table of '{write_sql}'"
+        )));
+    };
     // Re-select ordered by the DECLARED pk so mysql matches pg/sqlite RETURNING order (§10).
     let order_by = if pk_cols.is_empty() {
         String::new()
@@ -1085,117 +1096,111 @@ fn build_mysql_reselect(sql: &str) -> Option<MysqlReselect> {
         format!(" ORDER BY {}", pk_cols.join(", "))
     };
     let is_batch = wl.contains("json_table(");
+    let insert_cols = parse_insert_cols(&write_sql);
+    let json_select = |key: &str| {
+        format!(
+            "SELECT {cols} FROM {table} WHERE {k} IN (SELECT JSON_UNQUOTE(jt.{k}) FROM JSON_TABLE(?, '$[*]' COLUMNS({k} JSON PATH '$.{k}')) jt){order_by}",
+            k = key
+        )
+    };
 
-    // upsert / upsertMany — recover by the conflict key (MySQL does not report the conflicted-row id;
-    // the AUTO_INCREMENT range is wrong when a row is UPDATED, not inserted).
+    // upsert / upsertMany — recover by the CONFLICT key. MySQL does not report which row an
+    // ON DUPLICATE KEY UPDATE touched, so the AUTO_INCREMENT range is wrong once a row was updated.
     if wl.starts_with("insert") && wl.contains("on duplicate key update") {
-        let conflict = conflict_cols.first()?; // fail-closed: an upsert RETURNING needs its conflict key
-        let select_sql = if is_batch {
-            format!(
-                "SELECT {cols} FROM {table} WHERE {c} IN (SELECT JSON_UNQUOTE(jt.{c}) FROM JSON_TABLE(?, '$[*]' COLUMNS({c} JSON PATH '$.{c}')) jt){order_by}",
-                c = conflict
+        let Some(conflict) = conflict_cols.first() else {
+            return Err(driver_failure(format!(
+                "scp write(mysql): an upsert…RETURNING needs its conflict key in the pk hint ('{write_sql}')"
+            )));
+        };
+        let (select_sql, binds) = if is_batch {
+            (json_select(conflict), vec![ReselectBind::JsonParam])
+        } else {
+            let Some(idx) = insert_cols.iter().position(|c| c == conflict) else {
+                return Err(driver_failure(format!(
+                    "scp write(mysql): conflict key '{conflict}' is not among the INSERT columns of '{write_sql}'"
+                )));
+            };
+            (
+                format!("SELECT {cols} FROM {table} WHERE {conflict} = ?{order_by}"),
+                vec![ReselectBind::Param(idx)],
             )
-        } else {
-            format!("SELECT {cols} FROM {table} WHERE {conflict} = ?{order_by}")
         };
-        let binds = if is_batch {
-            vec![ReselectBind::JsonParam]
-        } else {
-            let idx = parse_insert_cols(&write_sql)
-                .iter()
-                .position(|c| c == conflict)?;
-            vec![ReselectBind::Param(idx)]
-        };
-        return Some(MysqlReselect {
-            write_sql,
-            select_sql,
-            binds,
-            before: false,
-        });
+        return Ok(Some(MysqlReselect { write_sql, select_sql, binds, before: false }));
     }
 
     // create / createMany — recover by the AUTO_INCREMENT range [LAST_INSERT_ID, +affected), or by the
     // client-supplied PK values pulled from the INSERT params by position (UUID / composite / natural key).
     if wl.starts_with("insert") {
         if !auto_inc.is_empty() && pk_cols.len() == 1 && pk_cols[0] == auto_inc {
-            let select_sql = format!(
-                "SELECT {cols} FROM {table} WHERE {ai} >= ? AND {ai} < ?{order_by}",
-                ai = auto_inc
-            );
-            return Some(MysqlReselect {
+            return Ok(Some(MysqlReselect {
                 write_sql,
-                select_sql,
+                select_sql: format!(
+                    "SELECT {cols} FROM {table} WHERE {ai} >= ? AND {ai} < ?{order_by}",
+                    ai = auto_inc
+                ),
                 binds: vec![ReselectBind::LastId, ReselectBind::HighId],
                 before: false,
-            });
+            }));
         }
-        let insert_cols = parse_insert_cols(&write_sql);
+        if pk_cols.is_empty() {
+            return Err(driver_failure(format!(
+                "scp write(mysql): an INSERT…RETURNING carries no pk hint, so its written rows cannot be identified ('{write_sql}'). The producer must pass the model's declared primary key"
+            )));
+        }
         let mut conds: Vec<String> = Vec::new();
         let mut binds: Vec<ReselectBind> = Vec::new();
         for pk in &pk_cols {
-            let idx = insert_cols.iter().position(|c| c == pk)?;
+            let Some(idx) = insert_cols.iter().position(|c| c == pk) else {
+                return Err(driver_failure(format!(
+                    "scp write(mysql): PK column '{pk}' is not among the INSERT columns of '{write_sql}'"
+                )));
+            };
             conds.push(format!("{pk} = ?"));
             binds.push(ReselectBind::Param(idx));
         }
-        if conds.is_empty() {
-            // Legacy `id` fallback (no pk hint at all): recover by LAST_INSERT_ID.
-            return Some(MysqlReselect {
-                write_sql,
-                select_sql: format!("SELECT {cols} FROM {table} WHERE id = ?{order_by}"),
-                binds: vec![ReselectBind::LastId],
-                before: false,
-            });
-        }
-        let select_sql = format!(
-            "SELECT {cols} FROM {table} WHERE {}{order_by}",
-            conds.join(" AND ")
-        );
-        return Some(MysqlReselect {
+        return Ok(Some(MysqlReselect {
             write_sql,
-            select_sql,
+            select_sql: format!("SELECT {cols} FROM {table} WHERE {}{order_by}", conds.join(" AND ")),
             binds,
             before: false,
-        });
+        }));
     }
 
-    // updateMany — recover by the batch key (the JSON JOIN key), re-selected from the SAME JSON payload.
+    // updateMany — recover by the batch JOIN key, re-selected from the SAME JSON payload the write bound.
     if wl.starts_with("update") && is_batch {
-        let key = update_batch_key(&write_sql)?;
-        let select_sql = format!(
-            "SELECT {cols} FROM {table} WHERE {k} IN (SELECT JSON_UNQUOTE(jt.{k}) FROM JSON_TABLE(?, '$[*]' COLUMNS({k} JSON PATH '$.{k}')) jt){order_by}",
-            k = key
-        );
-        return Some(MysqlReselect {
+        let Some(key) = update_batch_key(&write_sql) else {
+            return Err(driver_failure(format!(
+                "scp write(mysql): cannot parse the batch JOIN key of '{write_sql}'"
+            )));
+        };
+        return Ok(Some(MysqlReselect {
             write_sql,
-            select_sql,
+            select_sql: json_select(&key),
             binds: vec![ReselectBind::JsonParam],
             before: false,
-        });
+        }));
     }
 
     // update / delete — recover by the write's OWN WHERE predicate, bound from the write's own params.
-    // The UPDATE re-selects AFTER the write (the same predicate matches the same rows, now carrying
-    // their new values); the DELETE re-selects BEFORE it, since afterwards there is nothing left to
-    // describe — that pre-image IS the set of rows the DELETE removes.
-    if wl.starts_with("update") || wl.starts_with("delete") {
-        let wpos = wl.find(" where ")?;
-        let where_sql = write_sql[wpos + " where ".len()..].trim().to_string();
-        let leading = write_sql[..wpos].matches('?').count();
-        let n_where = where_sql.matches('?').count();
-        let binds = (0..n_where)
-            .map(|i| ReselectBind::Param(leading + i))
-            .collect();
-        let select_sql = format!("SELECT {cols} FROM {table} WHERE {where_sql}{order_by}");
-        let is_delete = wl.starts_with("delete");
-        return Some(MysqlReselect {
-            write_sql,
-            select_sql,
-            binds,
-            before: is_delete,
-        });
-    }
-
-    None
+    // The UPDATE re-selects AFTER the write (the rows carry their new values); the DELETE re-selects
+    // BEFORE it, since afterwards there is nothing left to describe.
+    let Some(wpos) = wl.rfind(" where ") else {
+        return Err(driver_failure(format!(
+            "scp write(mysql): a write…RETURNING needs a WHERE to recover its rows ('{write_sql}')"
+        )));
+    };
+    let where_sql = write_sql[wpos + " where ".len()..].trim().to_string();
+    let leading = write_sql[..wpos].matches('?').count();
+    let binds = (0..where_sql.matches('?').count())
+        .map(|i| ReselectBind::Param(leading + i))
+        .collect();
+    let before = wl.starts_with("delete");
+    Ok(Some(MysqlReselect {
+        select_sql: format!("SELECT {cols} FROM {table} WHERE {where_sql}{order_by}"),
+        write_sql,
+        binds,
+        before,
+    }))
 }
 
 /// Strip a ` /*scp:pk=…*/` hint comment from a fragment.
@@ -1276,7 +1281,7 @@ async fn my_all_on_conn(
     // RETURNING. The strip-before-execute `/*scp:pk=…;conflict=…*/` hint (tx.ts mysqlPkHint) supplies the
     // real key. Both the native-codegen path and the mode-2 interpreter path run RETURNING writes through
     // here, so both return the SAME rows.
-    if let Some(rs) = build_mysql_reselect(sql) {
+    if let Some(rs) = build_mysql_reselect(sql)? {
         // A DELETE's rows are gone once it runs, so its recovering SELECT goes FIRST (still on this
         // connection, inside the same transaction as the delete it describes). Every other write
         // re-selects AFTER, keyed on what the write itself produced (insert id range / conflict key).

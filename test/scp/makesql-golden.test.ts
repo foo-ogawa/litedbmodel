@@ -39,6 +39,7 @@ import {
   compileCompositeKeyStaticLimited,
   resolvePgArrayCast,
   compileWriteNode,
+  buildMysqlReselect,
   renderTxStatement,
   type Dialect,
   type MakeSQL,
@@ -1560,5 +1561,52 @@ describe('H1. single-row tx-write per-column PG cast — byte-matches v1 (all 3 
     expect(a).toContain('::jsonb');
     expect(b).not.toContain('::');
     expect(a).not.toBe(b);
+  });
+
+  // ── #130: the MySQL RETURNING recovery is DERIVED from the declared key, never guessed ─────────
+  //
+  // MySQL parses no RETURNING, so a write that declares one is run stripped and its rows recovered
+  // by a SELECT. WHICH select is a function of the model's declared key — that is the whole point:
+  // the recovery used to hard-code `WHERE id >= LAST_INSERT_ID() …`, which answers nothing at all
+  // for a UUID, a client-supplied int, or a composite key (`LAST_INSERT_ID()` is 0 for such a write)
+  // while the row sits committed in the table.
+  describe('#130 mysql RETURNING recovery', () => {
+    const insert = (ports: Record<string, unknown>): string =>
+      compileWriteNode({ id: 'w', component: 'Insert', ports } as never, 'mysql').sql;
+
+    it('an AUTO_INCREMENT key recovers by the inserted id RANGE', () => {
+      const rs = buildMysqlReselect(insert({ table: 't', 'values.title': { ref: ['title'] }, returning: 'id, title', pk: 'id', autoInc: 'id' }));
+      expect(rs?.selectSql).toBe('SELECT id, title FROM t WHERE id >= ? AND id < ? ORDER BY id');
+      expect(rs?.binds).toEqual([{ kind: 'lastId' }, { kind: 'highId' }]);
+    });
+
+    it('a CLIENT-supplied key recovers by the VALUE the write bound, not an id range', () => {
+      const rs = buildMysqlReselect(insert({ table: 't', 'values.id': { ref: ['id'] }, 'values.title': { ref: ['title'] }, returning: 'id, title', pk: 'id' }));
+      expect(rs?.selectSql).toBe('SELECT id, title FROM t WHERE id = ? ORDER BY id');
+      expect(rs?.binds).toEqual([{ kind: 'param', index: 0 }]); // canonical column order: id, title
+    });
+
+    it('a COMPOSITE key recovers by every key column the write bound', () => {
+      const rs = buildMysqlReselect(insert({ table: 't', 'values.order_id': { ref: ['o'] }, 'values.line_no': { ref: ['l'] }, 'values.sku': { ref: ['s'] }, returning: 'order_id, line_no', pk: 'order_id,line_no' }));
+      expect(rs?.selectSql).toBe('SELECT order_id, line_no FROM t WHERE order_id = ? AND line_no = ? ORDER BY order_id, line_no');
+    });
+
+    it('a DELETE is recovered BEFORE the write — its pre-image IS the written row set', () => {
+      const sql = compileWriteNode({ id: 'w', component: 'Delete', ports: { table: 't', where: { arr: [{ eq: [{ ref: ['id'] }, { ref: ['id'] }] }] }, returning: 'id, title', pk: 'id' } } as never, 'mysql').sql;
+      const rs = buildMysqlReselect(sql);
+      expect(rs?.before).toBe(true);
+    });
+
+    it('an UNIDENTIFIABLE key THROWS — it must never answer [] for a row it wrote', () => {
+      // No pk hint: the producer failed to pass the model's declared key.
+      expect(() => buildMysqlReselect('INSERT INTO t (id, title) VALUES (?, ?) RETURNING id, title')).toThrow(/carries no pk hint/);
+      // An upsert whose conflict target is unknown.
+      expect(() => buildMysqlReselect('INSERT INTO t (id) VALUES (?) ON DUPLICATE KEY UPDATE id = id RETURNING id /*scp:pk=id;ai=*/')).toThrow(/needs its conflict key/);
+    });
+
+    it('a statement with no RETURNING has no recovery (it runs unchanged)', () => {
+      expect(buildMysqlReselect('SELECT id FROM t')).toBeNull();
+      expect(buildMysqlReselect(insert({ table: 't', 'values.title': { ref: ['title'] } }))).toBeNull();
+    });
   });
 });

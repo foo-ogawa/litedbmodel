@@ -88,6 +88,9 @@ function insertOp(dialect: 'postgres' | 'mysql'): TxOp {
         'values.worker': { ref: ['worker'] },
         'values.seq': { ref: ['seq'] },
         returning: 'id, worker, seq',
+        // The table's PK is a CLIENT-supplied `id` (no AUTO_INCREMENT), so a dialect without native
+        // RETURNING recovers the written row by the id the write itself bound. Declared, not guessed.
+        pk: 'id',
       },
     } as never,
     dialect,

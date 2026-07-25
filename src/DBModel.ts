@@ -12,7 +12,7 @@ import { LimitExceededError, WriteOutsideTransactionError, WriteInReadOnlyContex
 import { type Column, type OrderSpec, type CVs, type Conds, type CondsOf, type OrCondOf, type ColumnsOf, createColumn, columnsToNames, pairsToRecord, condsToRecord, orderToString, createOrCond } from './Column';
 import { type SqlFragment, type SqlCondition, type SqlTypedFragment, isAnySqlFragment } from './SqlFragment';
 import { createMiddleware as createMiddlewareFn, type MiddlewareClass, type MiddlewareConfig, type CreatedMiddlewareClass, type ExecuteResult } from './Middleware';
-import { serializeRecord, getColumnMeta, getSqlCastMap, type KeyPair, type CompositeKeyPairs } from './decorators';
+import { serializeRecord, getColumnMeta, getPrimaryKey, getSqlCastMap, type KeyPair, type CompositeKeyPairs } from './decorators';
 import { getTypeCast, getSqlBuilder } from './drivers';
 import { isConnectionError } from './connection-errors';
 
@@ -1183,6 +1183,14 @@ export abstract class DBModel {
           ...(options.onConflictIgnore !== undefined ? { onConflictIgnore: options.onConflictIgnore } : {}),
           ...(onConflictUpdateCols !== undefined ? { onConflictUpdate: onConflictUpdateCols } : {}),
           ...(options.returning !== undefined ? { returning: options.returning } : {}),
+          // The model's PK travels with the write so a dialect without native RETURNING can recover
+          // the rows it wrote by the REAL key — the auto-increment range, or the values the write
+          // itself bound (UUID / client-supplied / composite). Omitting it is what made those
+          // models silently return no rows.
+          pk: (() => {
+            const k = getPrimaryKey(this);
+            return { columns: k.columns, autoInc: k.autoInc };
+          })(),
         },
         rt.dialect,
         this._scpColumnTypes(),
@@ -1616,48 +1624,40 @@ export abstract class DBModel {
   private static _pkeyColumnsCache: WeakMap<object, Column[]> = new WeakMap();
 
   /**
-   * Get primary key columns with fallback to ['id']
-   * Priority: 1. PKEY_COLUMNS getter  2. @column({ primaryKey: true })  3. 'id' default
+   * The primary key as v1 `Column` objects. WHICH columns those are is resolved by the ONE
+   * derivation ({@link getPrimaryKey}, in the layer that owns column metadata); this method only
+   * maps that answer onto the `Column` statics the imperative builders bind against.
    * @internal
    */
   protected static _getPkeyColumnsWithDefault(): Column[] {
-    // 1. Explicit PKEY_COLUMNS takes precedence
+    // 1. Explicit PKEY_COLUMNS takes precedence — already Column objects.
     if (this.PKEY_COLUMNS) {
       return this.PKEY_COLUMNS;
     }
 
-    // 2. Check cache for decorator-detected primary keys
     const cached = DBModel._pkeyColumnsCache.get(this);
     if (cached) {
       return cached;
     }
 
-    // 3. Detect from @column({ primaryKey: true }) decorator
-    const meta = getColumnMeta(this);
-    if (meta) {
-      const pkeyColumns: Column[] = [];
-       
-      const thisClass = this as any;
-      for (const [propKey, colMeta] of meta) {
-        if (colMeta.primaryKey) {
-          // Get the static Column property from the class
-          // Note: Column is a callable function, so typeof is 'function', not 'object'
-          const col = thisClass[propKey];
-          if (col && typeof col === 'function' && 'columnName' in col) {
-            pkeyColumns.push(col as Column);
-          }
+    const pkey = getPrimaryKey(this);
+    let pkeyColumns: Column[] = [];
+    if (pkey.declared) {
+      // The declared PK: take each property's static Column (a callable carrying `columnName`).
+      const thisClass = this as unknown as Record<string, unknown>;
+      for (const propKey of pkey.propKeys) {
+        const col = thisClass[propKey];
+        if (col && typeof col === 'function' && 'columnName' in col) {
+          pkeyColumns.push(col as Column);
         }
       }
-      if (pkeyColumns.length > 0) {
-        DBModel._pkeyColumnsCache.set(this, pkeyColumns);
-        return pkeyColumns;
-      }
     }
-
-    // 4. Default: create a Column for 'id'
-    const defaultPkey = [createColumn('id', this.TABLE_NAME, this.name)];
-    DBModel._pkeyColumnsCache.set(this, defaultPkey);
-    return defaultPkey;
+    if (pkeyColumns.length === 0) {
+      // The legacy default (or a declared PK with no matching Column static): synthesize it.
+      pkeyColumns = pkey.columns.map((c) => createColumn(c, this.TABLE_NAME, this.name));
+    }
+    DBModel._pkeyColumnsCache.set(this, pkeyColumns);
+    return pkeyColumns;
   }
 
   /**

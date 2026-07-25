@@ -4,17 +4,17 @@
 # native dict literal and handed to the EXISTING runtime core (run_behavior) —
 # no execution logic is generated. Handlers are ALWAYS injected at the boundary
 # (IR + {effects,config,hooks}); they are never generated.
-# irFingerprint: fnv1a64:096f3ad5dbdfdaa7
+# irFingerprint: fnv1a64:82fabfaf5e5b3621
 from behavior_contracts import SPEC_VERSIONS, ProvenanceError, load_compiled_ir, run_behavior
 
 # Spec versions baked at generation time (fail-closed constant comparison at load).
 EXPECTED_SPEC_VERSIONS = {"behavior": 5, "expression": 2, "plan": 1}
 
 # FNV-1a 64 fingerprint of the source portable IR (canonical_json discipline, #208).
-IR_FINGERPRINT = "fnv1a64:096f3ad5dbdfdaa7"
+IR_FINGERPRINT = "fnv1a64:82fabfaf5e5b3621"
 
 # Component names exposed by bind(), in IR declaration order.
-COMPONENT_NAMES = ("posts", "postsTop", "page", "postsByIds", "feed", "usersWithPosts", "postsWithAuthor", "usersWithCappedPosts", "usersWithUncappedPosts", "usersWithTopPosts", "createPost", "renamePost", "removePost", "renamePostReturning", "removePostReturning", "typedRows", "createTags", "removeTags")
+COMPONENT_NAMES = ("posts", "postsTop", "page", "postsByIds", "feed", "usersWithPosts", "postsWithAuthor", "usersWithCappedPosts", "usersWithUncappedPosts", "usersWithTopPosts", "createPost", "renamePost", "removePost", "createPostReturning", "renamePostReturning", "removePostReturning", "typedRows", "createTags", "removeTags")
 
 # The portable component-graph IR *document*, embedded as a native dict literal (no JSON parse at
 # runtime). It carries no provenance token — the load-time load_compiled_ir() below verifies the baked
@@ -2512,6 +2512,134 @@ IR_DOC = {
           "id": "n0",
           "outType": {
             "arr": {
+              "name": "CreatePostReturningRow",
+              "obj": {
+                "id": {
+                  "opt": "float"
+                },
+                "title": {
+                  "opt": "string"
+                }
+              }
+            }
+          },
+          "portSchemas": {
+            "bigint": {
+              "required": True,
+              "type": "bool"
+            },
+            "params": {
+              "elemType": "value",
+              "required": True,
+              "type": "array"
+            },
+            "returning": {
+              "required": True,
+              "type": "bool"
+            },
+            "sql": {
+              "required": True,
+              "type": "string"
+            },
+            "write": {
+              "required": True,
+              "type": "bool"
+            }
+          },
+          "ports": {
+            "bigint": False,
+            "params": {
+              "arr": [
+                {
+                  "ref": [
+                    "authorId"
+                  ]
+                },
+                {
+                  "ref": [
+                    "createdAt"
+                  ]
+                },
+                {
+                  "ref": [
+                    "id"
+                  ]
+                },
+                {
+                  "ref": [
+                    "status"
+                  ]
+                },
+                {
+                  "ref": [
+                    "title"
+                  ]
+                }
+              ]
+            },
+            "returning": True,
+            "sql": "INSERT INTO conf_posts (author_id, created_at, id, status, title) VALUES (?, ?, ?, ?, ?) RETURNING id, title",
+            "write": True
+          }
+        }
+      ],
+      "inputPorts": {
+        "authorId": {
+          "required": True,
+          "type": "int"
+        },
+        "createdAt": {
+          "required": True,
+          "type": "string"
+        },
+        "id": {
+          "required": True,
+          "type": "int"
+        },
+        "status": {
+          "required": True,
+          "type": "string"
+        },
+        "title": {
+          "required": True,
+          "type": "string"
+        }
+      },
+      "name": "createPostReturning",
+      "output": {
+        "ref": [
+          "n0"
+        ]
+      },
+      "plan": {
+        "concurrency": 16,
+        "groups": [
+          [
+            0
+          ]
+        ]
+      },
+      "outputType": {
+        "arr": {
+          "obj": {
+            "id": {
+              "opt": "float"
+            },
+            "title": {
+              "opt": "string"
+            }
+          },
+          "name": "CreatePostReturningRow"
+        }
+      }
+    },
+    {
+      "body": [
+        {
+          "component": "executeSQL",
+          "id": "n0",
+          "outType": {
+            "arr": {
               "name": "RenamePostReturningRow",
               "obj": {
                 "id": {
@@ -3077,6 +3205,10 @@ class Conformance:
     @staticmethod
     def remove_post(id, handlers):
         return run_behavior(IR, handlers, {"id": id}, "removePost")
+
+    @staticmethod
+    def create_post_returning(id, authorId, title, status, createdAt, handlers):
+        return run_behavior(IR, handlers, {"id": id, "authorId": authorId, "title": title, "status": status, "createdAt": createdAt}, "createPostReturning")
 
     @staticmethod
     def rename_post_returning(title, id, handlers):

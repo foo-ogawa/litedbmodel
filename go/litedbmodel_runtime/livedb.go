@@ -330,10 +330,7 @@ func buildMysqlReselect(sql string) (*mysqlReselect, error) {
 			), binds: []reselectBind{{kind: "lastId"}, {kind: "highId"}}}, nil
 		}
 		if len(pkCols) == 0 {
-			// No hint at all (the legacy auto-`id` corpus): the id range still identifies the rows.
-			return &mysqlReselect{writeSQL: writeSQL, selectSQL: fmt.Sprintf(
-				"SELECT %s FROM %s WHERE id >= ? AND id < ?", cols, table,
-			), binds: []reselectBind{{kind: "lastId"}, {kind: "highId"}}}, nil
+			return nil, fmt.Errorf("scp write(mysql): an INSERT…RETURNING carries no pk hint, so its written rows cannot be identified (%q). The producer must pass the model's declared primary key", writeSQL)
 		}
 		conds := []string{}
 		binds := []reselectBind{}

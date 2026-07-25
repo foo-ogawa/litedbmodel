@@ -441,8 +441,10 @@ def _build_mysql_reselect(sql: str):
         if auto_inc and pk_cols == [auto_inc]:
             return write_sql, f"SELECT {cols} FROM {table} WHERE {auto_inc} >= ? AND {auto_inc} < ?{order_by}", [("lastId", 0), ("highId", 0)], False
         if not pk_cols:
-            # No hint at all (the legacy auto-`id` corpus): the id range still identifies the rows.
-            return write_sql, f"SELECT {cols} FROM {table} WHERE id >= ? AND id < ?", [("lastId", 0), ("highId", 0)], False
+            raise ValueError(
+                f"scp write(mysql): an INSERT…RETURNING carries no pk hint, so its written rows cannot be "
+                f"identified ({write_sql!r}). The producer must pass the model's declared primary key."
+            )
         conds, binds = [], []
         for pk in pk_cols:
             if pk not in insert_cols:

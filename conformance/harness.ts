@@ -186,7 +186,9 @@ class ConfPost {
   declare static id: Column<number, ConfPost>;
   declare static author_id: Column<number, ConfPost>;
 
-  @column() id?: number;
+  // The schema is `id INT PRIMARY KEY` — CLIENT-supplied, no AUTO_INCREMENT. Declaring it is what
+  // lets a `… RETURNING` write recover its rows by the value it bound (#130).
+  @column({ primaryKey: true }) id?: number;
   @column() author_id?: number;
   @column() title?: string;
   @column() status?: string;
@@ -349,6 +351,24 @@ const ENDPOINTS: EndpointSet = {
    * it — and the §10 cross-check makes the three dialects agree rather than each pinning its own
    * golden.
    */
+  /**
+   * The CLIENT-SUPPLIED PK arm: `conf_posts.id` is a plain `INT PRIMARY KEY`, not AUTO_INCREMENT, so
+   * the written row can only be recovered by the PK VALUE the INSERT itself bound. MySQL used to
+   * answer this with an id range off `LAST_INSERT_ID()` — which is 0 for such a write — and returned
+   * no rows at all while the row was in the table.
+   */
+  createPostReturning: {
+    kind: 'create',
+    model: ConfPost,
+    values: [
+      { column: 'id', param: 'id' },
+      { column: 'author_id', param: 'authorId' },
+      { column: 'title', param: 'title' },
+      { column: 'status', param: 'status' },
+      { column: 'created_at', param: 'createdAt' },
+    ],
+    returning: ['id', 'title'],
+  },
   renamePostReturning: {
     kind: 'update',
     model: ConfPost,
@@ -943,6 +963,7 @@ const EXEC_CASES: readonly ExecCase[] = [
   // #130 — a write that DECLARES a RETURNING hands back the rows it wrote, on every dialect. The
   // UPDATE's row carries its NEW title (it is described after the write); the DELETE's is the
   // pre-image (described before it), and `dbState` proves the delete still happened.
+  { id: 'createPostReturning: INSERT … RETURNING returns the written row (client-supplied PK)', entry: 'createPostReturning', input: { id: 14, authorId: 2, title: 'c2', status: 'live', createdAt: '2026-05-01' }, writes: true, dbState: [POSTS_STATE] },
   { id: 'renamePostReturning: UPDATE … RETURNING returns the written row', entry: 'renamePostReturning', input: { title: 'a1-returned', id: 10 }, writes: true, dbState: [POSTS_STATE] },
   { id: 'removePostReturning: DELETE … RETURNING returns the removed row', entry: 'removePostReturning', input: { id: 11 }, writes: true, dbState: [POSTS_STATE] },
   // #137 — the read decode: a TIMESTAMP column comes back as the canonical string and a

@@ -44,7 +44,6 @@ import {
   renderPlaceholders,
   resolvePgArrayCast,
   inferPgArrayType,
-  mysqlPkHint,
   mysqlConnectionPool,
   entityWrites,
   MiddlewareChain,
@@ -1066,32 +1065,28 @@ function removeOp(dialect: MakeSQLDialect): TxOp {
 // write's OWN WHERE after it (the row carries the new value) and a DELETE by that same WHERE BEFORE
 // it (afterwards there is nothing left to describe) — both keyed off the `pk` hint for row order.
 function renameReturningOp(dialect: MakeSQLDialect): TxOp {
-  const op = compileWriteNode(
+  return compileWriteNode(
     { component: 'Update', ports: { table: WC_POSTS, 'set.title': { ref: ['title'] }, where: idEqWhere(), returning: 'id, title', pk: 'id' } } as never,
     dialect,
   );
-  return dialect === 'mysql' ? mysqlPkHint(op) : op;
 }
 function removeReturningOp(dialect: MakeSQLDialect): TxOp {
-  const op = compileWriteNode(
+  return compileWriteNode(
     { component: 'Delete', ports: { table: WC_POSTS, where: idEqWhere(), returning: 'id, title', pk: 'id' } } as never,
     dialect,
   );
-  return dialect === 'mysql' ? mysqlPkHint(op) : op;
 }
-// `pk` is client-supplied (UUID / composite — no AUTO_INCREMENT), so on MySQL the RETURNING
-// emulation in `execTxLive` needs the strip-before-execute `/*scp:pk=…*/` hint to re-select by the
-// REAL PK (`mysqlPkHint` — the SAME opt-in step `compileCreateManyBundle` applies for its batch
-// INSERTs, `write-bundle.ts`); PG keeps native RETURNING and never reads the hint.
+// `pk` is client-supplied (UUID / composite — no AUTO_INCREMENT), so on MySQL the written row is
+// recovered by the PK VALUES the INSERT itself bound, never by an id range. `compileWriteNode` bakes
+// the hint that carries the key; PG keeps native RETURNING and never reads it.
 function createDocOp(dialect: MakeSQLDialect): TxOp {
-  const op = compileWriteNode(
+  return compileWriteNode(
     { component: 'Insert', ports: { table: WC_DOCS, 'values.doc_id': { ref: ['doc_id'] }, 'values.title': { ref: ['title'] }, returning: 'doc_id, title', pk: 'doc_id' } } as never,
     dialect,
   );
-  return dialect === 'mysql' ? mysqlPkHint(op) : op;
 }
 function createLineOp(dialect: MakeSQLDialect): TxOp {
-  const op = compileWriteNode(
+  return compileWriteNode(
     {
       component: 'Insert',
       ports: {
@@ -1105,7 +1100,6 @@ function createLineOp(dialect: MakeSQLDialect): TxOp {
     } as never,
     dialect,
   );
-  return dialect === 'mysql' ? mysqlPkHint(op) : op;
 }
 
 /** A minimal per-dialect live client seam (parameterized query → rows / affected count). */
