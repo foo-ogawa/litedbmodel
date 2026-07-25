@@ -2333,6 +2333,111 @@
       "expectedCap": null
     },
     {
+      "name": "typedRows: date + bool columns are PROJECTED and decode identically [sqlite]",
+      "kind": "exec",
+      "dialect": "sqlite",
+      "entry": "typedRows",
+      "input": {},
+      "case": "typedRows: date + bool columns are PROJECTED and decode identically",
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, ts, flag, label FROM conf_typed ORDER BY id ASC",
+          "params": []
+        }
+      ],
+      "expectedResult": [
+        {
+          "flag": 1,
+          "id": 1,
+          "label": "alpha",
+          "ts": "2026-01-01 00:00:00"
+        },
+        {
+          "flag": 0,
+          "id": 2,
+          "label": "beta",
+          "ts": "2026-02-01 12:34:56"
+        },
+        {
+          "flag": 1,
+          "id": 3,
+          "label": "gamma",
+          "ts": "2026-03-15 23:59:59"
+        }
+      ],
+      "expectedCap": null
+    },
+    {
+      "name": "typedRows: date + bool columns are PROJECTED and decode identically [postgres]",
+      "kind": "exec",
+      "dialect": "postgres",
+      "entry": "typedRows",
+      "input": {},
+      "case": "typedRows: date + bool columns are PROJECTED and decode identically",
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, ts, flag, label FROM conf_typed ORDER BY id ASC",
+          "params": []
+        }
+      ],
+      "expectedResult": [
+        {
+          "flag": 1,
+          "id": 1,
+          "label": "alpha",
+          "ts": "2026-01-01 00:00:00"
+        },
+        {
+          "flag": 0,
+          "id": 2,
+          "label": "beta",
+          "ts": "2026-02-01 12:34:56"
+        },
+        {
+          "flag": 1,
+          "id": 3,
+          "label": "gamma",
+          "ts": "2026-03-15 23:59:59"
+        }
+      ],
+      "expectedCap": null
+    },
+    {
+      "name": "typedRows: date + bool columns are PROJECTED and decode identically [mysql]",
+      "kind": "exec",
+      "dialect": "mysql",
+      "entry": "typedRows",
+      "input": {},
+      "case": "typedRows: date + bool columns are PROJECTED and decode identically",
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, ts, flag, label FROM conf_typed ORDER BY id ASC",
+          "params": []
+        }
+      ],
+      "expectedResult": [
+        {
+          "flag": 1,
+          "id": 1,
+          "label": "alpha",
+          "ts": "2026-01-01 00:00:00"
+        },
+        {
+          "flag": 0,
+          "id": 2,
+          "label": "beta",
+          "ts": "2026-02-01 12:34:56"
+        },
+        {
+          "flag": 1,
+          "id": 3,
+          "label": "gamma",
+          "ts": "2026-03-15 23:59:59"
+        }
+      ],
+      "expectedCap": null
+    },
+    {
       "name": "guard: findHardLimit null → no cap baked [sqlite]",
       "kind": "exec",
       "dialect": "sqlite",

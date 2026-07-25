@@ -3,6 +3,7 @@
   "corpusVersion": 5,
   "note": "The declared endpoints of conformance/harness.ts, executed by each language runtime's OWN bc-generated module against live PostgreSQL + MySQL. Every expected field is the one the TS leg captured from the same declaration on the same server (conformance/vectors/exec.json) — a language leg is byte-compared against the TS reference, statements and full nested result alike.",
   "schema": [
+    "DROP TABLE IF EXISTS conf_typed",
     "DROP TABLE IF EXISTS conf_tags",
     "DROP TABLE IF EXISTS conf_posts",
     "DROP TABLE IF EXISTS conf_users",
@@ -17,7 +18,11 @@
     "INSERT INTO conf_posts (id, author_id, title, status, created_at) VALUES (12, 2, 'b1', 'live', '2026-01-15')",
     "INSERT INTO conf_tags (id, post_id, label) VALUES (100, 10, 'greeting')",
     "INSERT INTO conf_tags (id, post_id, label) VALUES (101, 10, 'first')",
-    "INSERT INTO conf_tags (id, post_id, label) VALUES (102, 12, 'world')"
+    "INSERT INTO conf_tags (id, post_id, label) VALUES (102, 12, 'world')",
+    "CREATE TABLE conf_typed (id INT PRIMARY KEY, ts TIMESTAMP NOT NULL, flag SMALLINT NOT NULL, label TEXT)",
+    "INSERT INTO conf_typed (id, ts, flag, label) VALUES (1, '2026-01-01 00:00:00', 1, 'alpha')",
+    "INSERT INTO conf_typed (id, ts, flag, label) VALUES (2, '2026-02-01 12:34:56', 0, 'beta')",
+    "INSERT INTO conf_typed (id, ts, flag, label) VALUES (3, '2026-03-15 23:59:59', 1, 'gamma')"
   ],
   "vectors": [
     {
@@ -1433,6 +1438,70 @@
               "label": "world"
             }
           ]
+        }
+      ]
+    },
+    {
+      "name": "typedRows: date + bool columns are PROJECTED and decode identically [postgres]",
+      "dialect": "postgres",
+      "entry": "typedRows",
+      "input": {},
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, ts, flag, label FROM conf_typed ORDER BY id ASC",
+          "params": []
+        }
+      ],
+      "expectedResult": [
+        {
+          "flag": 1,
+          "id": 1,
+          "label": "alpha",
+          "ts": "2026-01-01 00:00:00"
+        },
+        {
+          "flag": 0,
+          "id": 2,
+          "label": "beta",
+          "ts": "2026-02-01 12:34:56"
+        },
+        {
+          "flag": 1,
+          "id": 3,
+          "label": "gamma",
+          "ts": "2026-03-15 23:59:59"
+        }
+      ]
+    },
+    {
+      "name": "typedRows: date + bool columns are PROJECTED and decode identically [mysql]",
+      "dialect": "mysql",
+      "entry": "typedRows",
+      "input": {},
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, ts, flag, label FROM conf_typed ORDER BY id ASC",
+          "params": []
+        }
+      ],
+      "expectedResult": [
+        {
+          "flag": 1,
+          "id": 1,
+          "label": "alpha",
+          "ts": "2026-01-01 00:00:00"
+        },
+        {
+          "flag": 0,
+          "id": 2,
+          "label": "beta",
+          "ts": "2026-02-01 12:34:56"
+        },
+        {
+          "flag": 1,
+          "id": 3,
+          "label": "gamma",
+          "ts": "2026-03-15 23:59:59"
         }
       ]
     }

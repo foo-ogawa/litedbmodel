@@ -7,7 +7,7 @@
 // (Behavior::runBehavior) — no execution logic is generated. Handlers are ALWAYS
 // injected at the boundary (IR + {effects,config,hooks} — concept.md §4.4); they
 // are never generated.
-// irFingerprint: fnv1a64:170efc8e859f0be3
+// irFingerprint: fnv1a64:4936047e71703a98
 
 declare(strict_types=1);
 
@@ -15,10 +15,10 @@ declare(strict_types=1);
 $expectedSpecVersions = ['behavior' => 5, 'expression' => 2, 'plan' => 1];
 
 // FNV-1a 64 fingerprint of the source portable IR (canonical-json discipline, #208).
-$irFingerprint = 'fnv1a64:170efc8e859f0be3';
+$irFingerprint = 'fnv1a64:4936047e71703a98';
 
 // Component names exposed by bind(), in IR declaration order.
-$componentNames = ['posts', 'postsTop', 'page', 'postsByIds', 'feed', 'usersWithPosts', 'postsWithAuthor', 'createPost', 'renamePost', 'removePost', 'createTags', 'removeTags'];
+$componentNames = ['posts', 'postsTop', 'page', 'postsByIds', 'feed', 'usersWithPosts', 'postsWithAuthor', 'usersWithCappedPosts', 'usersWithUncappedPosts', 'usersWithTopPosts', 'createPost', 'renamePost', 'removePost', 'typedRows', 'createTags', 'removeTags'];
 
 // The portable component-graph IR *document*, embedded as a native literal (no JSON parse at require).
 // It carries no provenance token — the require-time CompiledIr::load() below verifies the baked
@@ -1371,6 +1371,853 @@ $irDoc = (object) [
                     "component" => "executeSQL",
                     "id" => "n0",
                     "outType" => (object) [
+                        "arr" => "value",
+                    ],
+                    "portSchemas" => (object) [
+                        "bigint" => (object) [
+                            "required" => true,
+                            "type" => "bool",
+                        ],
+                        "params" => (object) [
+                            "elemType" => "value",
+                            "required" => true,
+                            "type" => "array",
+                        ],
+                        "returning" => (object) [
+                            "required" => true,
+                            "type" => "bool",
+                        ],
+                        "sql" => (object) [
+                            "required" => true,
+                            "type" => "string",
+                        ],
+                        "write" => (object) [
+                            "required" => true,
+                            "type" => "bool",
+                        ],
+                    ],
+                    "ports" => (object) [
+                        "bigint" => false,
+                        "params" => (object) [
+                            "arr" => [],
+                        ],
+                        "returning" => false,
+                        "sql" => "SELECT id, name FROM conf_users ORDER BY id ASC",
+                        "write" => false,
+                    ],
+                    "wirePassthrough" => true,
+                ],
+                (object) [
+                    "component" => "pluck",
+                    "id" => "n1",
+                    "outType" => (object) [
+                        "arr" => "value",
+                    ],
+                    "parent" => "n0",
+                    "portSchemas" => (object) [
+                        "col" => (object) [
+                            "elemType" => "string",
+                            "required" => true,
+                            "type" => "array",
+                        ],
+                        "rows" => (object) [
+                            "elemType" => "value",
+                            "required" => true,
+                            "type" => "array",
+                        ],
+                    ],
+                    "ports" => (object) [
+                        "col" => (object) [
+                            "arr" => [
+                                "id",
+                            ],
+                        ],
+                        "rows" => (object) [
+                            "ref" => [
+                                "n0",
+                            ],
+                        ],
+                    ],
+                    "wirePassthrough" => true,
+                ],
+                (object) [
+                    "component" => "executeSQL",
+                    "id" => "n2",
+                    "outType" => (object) [
+                        "arr" => "value",
+                    ],
+                    "parent" => "n1",
+                    "portSchemas" => (object) [
+                        "bigint" => (object) [
+                            "required" => true,
+                            "type" => "bool",
+                        ],
+                        "guard" => (object) [
+                            "required" => false,
+                            "type" => "value",
+                        ],
+                        "params" => (object) [
+                            "elemType" => "value",
+                            "required" => true,
+                            "type" => "array",
+                        ],
+                        "returning" => (object) [
+                            "required" => true,
+                            "type" => "bool",
+                        ],
+                        "sql" => (object) [
+                            "required" => true,
+                            "type" => "string",
+                        ],
+                        "whereDynamic" => (object) [
+                            "required" => false,
+                            "type" => "value",
+                        ],
+                        "write" => (object) [
+                            "required" => true,
+                            "type" => "bool",
+                        ],
+                    ],
+                    "ports" => (object) [
+                        "bigint" => false,
+                        "guard" => (object) [
+                            "obj" => (object) [
+                                "limit" => 2,
+                                "model" => "conf_posts",
+                                "relation" => "cappedPosts",
+                            ],
+                        ],
+                        "params" => (object) [
+                            "arr" => [
+                                (object) [
+                                    "ref" => [
+                                        "n1",
+                                    ],
+                                ],
+                            ],
+                        ],
+                        "returning" => false,
+                        "sql" => "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE conf_posts.author_id = ANY(?::@@PG_ARRAY_CAST@@) ORDER BY id ASC",
+                        "whereDynamic" => null,
+                        "write" => false,
+                    ],
+                    "wirePassthrough" => true,
+                ],
+                (object) [
+                    "component" => "group",
+                    "id" => "n3",
+                    "outType" => (object) [
+                        "arr" => (object) [
+                            "name" => "UsersWithCappedPostsRow",
+                            "obj" => (object) [
+                                "cappedPosts" => (object) [
+                                    "arr" => (object) [
+                                        "name" => "UsersWithCappedPostsRow_cappedPosts",
+                                        "obj" => (object) [
+                                            "author_id" => (object) [
+                                                "opt" => "float",
+                                            ],
+                                            "created_at" => (object) [
+                                                "opt" => "string",
+                                            ],
+                                            "id" => (object) [
+                                                "opt" => "float",
+                                            ],
+                                            "status" => (object) [
+                                                "opt" => "string",
+                                            ],
+                                            "title" => (object) [
+                                                "opt" => "string",
+                                            ],
+                                        ],
+                                    ],
+                                ],
+                                "id" => (object) [
+                                    "opt" => "float",
+                                ],
+                                "name" => (object) [
+                                    "opt" => "string",
+                                ],
+                            ],
+                        ],
+                    ],
+                    "parent" => "n0",
+                    "portSchemas" => (object) [
+                        "children" => (object) [
+                            "elemType" => "value",
+                            "required" => true,
+                            "type" => "array",
+                        ],
+                        "fk" => (object) [
+                            "elemType" => "string",
+                            "required" => true,
+                            "type" => "array",
+                        ],
+                        "into" => (object) [
+                            "required" => true,
+                            "type" => "string",
+                        ],
+                        "parents" => (object) [
+                            "elemType" => "value",
+                            "required" => true,
+                            "type" => "array",
+                        ],
+                        "pk" => (object) [
+                            "elemType" => "string",
+                            "required" => true,
+                            "type" => "array",
+                        ],
+                        "single" => (object) [
+                            "required" => true,
+                            "type" => "bool",
+                        ],
+                    ],
+                    "ports" => (object) [
+                        "children" => (object) [
+                            "ref" => [
+                                "n2",
+                            ],
+                        ],
+                        "fk" => (object) [
+                            "arr" => [
+                                "author_id",
+                            ],
+                        ],
+                        "into" => "cappedPosts",
+                        "parents" => (object) [
+                            "ref" => [
+                                "n0",
+                            ],
+                        ],
+                        "pk" => (object) [
+                            "arr" => [
+                                "id",
+                            ],
+                        ],
+                        "single" => false,
+                    ],
+                ],
+            ],
+            "inputPorts" => (object) [],
+            "name" => "usersWithCappedPosts",
+            "output" => (object) [
+                "ref" => [
+                    "n3",
+                ],
+            ],
+            "plan" => (object) [
+                "concurrency" => 16,
+                "groups" => [
+                    [
+                        0,
+                    ],
+                    [
+                        1,
+                    ],
+                    [
+                        2,
+                    ],
+                    [
+                        3,
+                    ],
+                ],
+            ],
+            "outputType" => (object) [
+                "arr" => (object) [
+                    "obj" => (object) [
+                        "cappedPosts" => (object) [
+                            "arr" => (object) [
+                                "obj" => (object) [
+                                    "author_id" => (object) [
+                                        "opt" => "float",
+                                    ],
+                                    "created_at" => (object) [
+                                        "opt" => "string",
+                                    ],
+                                    "id" => (object) [
+                                        "opt" => "float",
+                                    ],
+                                    "status" => (object) [
+                                        "opt" => "string",
+                                    ],
+                                    "title" => (object) [
+                                        "opt" => "string",
+                                    ],
+                                ],
+                                "name" => "UsersWithCappedPostsRow_cappedPosts",
+                            ],
+                        ],
+                        "id" => (object) [
+                            "opt" => "float",
+                        ],
+                        "name" => (object) [
+                            "opt" => "string",
+                        ],
+                    ],
+                    "name" => "UsersWithCappedPostsRow",
+                ],
+            ],
+        ],
+        (object) [
+            "body" => [
+                (object) [
+                    "component" => "executeSQL",
+                    "id" => "n0",
+                    "outType" => (object) [
+                        "arr" => "value",
+                    ],
+                    "portSchemas" => (object) [
+                        "bigint" => (object) [
+                            "required" => true,
+                            "type" => "bool",
+                        ],
+                        "params" => (object) [
+                            "elemType" => "value",
+                            "required" => true,
+                            "type" => "array",
+                        ],
+                        "returning" => (object) [
+                            "required" => true,
+                            "type" => "bool",
+                        ],
+                        "sql" => (object) [
+                            "required" => true,
+                            "type" => "string",
+                        ],
+                        "write" => (object) [
+                            "required" => true,
+                            "type" => "bool",
+                        ],
+                    ],
+                    "ports" => (object) [
+                        "bigint" => false,
+                        "params" => (object) [
+                            "arr" => [],
+                        ],
+                        "returning" => false,
+                        "sql" => "SELECT id, name FROM conf_users ORDER BY id ASC",
+                        "write" => false,
+                    ],
+                    "wirePassthrough" => true,
+                ],
+                (object) [
+                    "component" => "pluck",
+                    "id" => "n1",
+                    "outType" => (object) [
+                        "arr" => "value",
+                    ],
+                    "parent" => "n0",
+                    "portSchemas" => (object) [
+                        "col" => (object) [
+                            "elemType" => "string",
+                            "required" => true,
+                            "type" => "array",
+                        ],
+                        "rows" => (object) [
+                            "elemType" => "value",
+                            "required" => true,
+                            "type" => "array",
+                        ],
+                    ],
+                    "ports" => (object) [
+                        "col" => (object) [
+                            "arr" => [
+                                "id",
+                            ],
+                        ],
+                        "rows" => (object) [
+                            "ref" => [
+                                "n0",
+                            ],
+                        ],
+                    ],
+                    "wirePassthrough" => true,
+                ],
+                (object) [
+                    "component" => "executeSQL",
+                    "id" => "n2",
+                    "outType" => (object) [
+                        "arr" => "value",
+                    ],
+                    "parent" => "n1",
+                    "portSchemas" => (object) [
+                        "bigint" => (object) [
+                            "required" => true,
+                            "type" => "bool",
+                        ],
+                        "params" => (object) [
+                            "elemType" => "value",
+                            "required" => true,
+                            "type" => "array",
+                        ],
+                        "returning" => (object) [
+                            "required" => true,
+                            "type" => "bool",
+                        ],
+                        "sql" => (object) [
+                            "required" => true,
+                            "type" => "string",
+                        ],
+                        "write" => (object) [
+                            "required" => true,
+                            "type" => "bool",
+                        ],
+                    ],
+                    "ports" => (object) [
+                        "bigint" => false,
+                        "params" => (object) [
+                            "arr" => [
+                                (object) [
+                                    "ref" => [
+                                        "n1",
+                                    ],
+                                ],
+                            ],
+                        ],
+                        "returning" => false,
+                        "sql" => "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE conf_posts.author_id = ANY(?::@@PG_ARRAY_CAST@@) ORDER BY id ASC",
+                        "write" => false,
+                    ],
+                    "wirePassthrough" => true,
+                ],
+                (object) [
+                    "component" => "group",
+                    "id" => "n3",
+                    "outType" => (object) [
+                        "arr" => (object) [
+                            "name" => "UsersWithUncappedPostsRow",
+                            "obj" => (object) [
+                                "id" => (object) [
+                                    "opt" => "float",
+                                ],
+                                "name" => (object) [
+                                    "opt" => "string",
+                                ],
+                                "uncappedPosts" => (object) [
+                                    "arr" => (object) [
+                                        "name" => "UsersWithUncappedPostsRow_uncappedPosts",
+                                        "obj" => (object) [
+                                            "author_id" => (object) [
+                                                "opt" => "float",
+                                            ],
+                                            "created_at" => (object) [
+                                                "opt" => "string",
+                                            ],
+                                            "id" => (object) [
+                                                "opt" => "float",
+                                            ],
+                                            "status" => (object) [
+                                                "opt" => "string",
+                                            ],
+                                            "title" => (object) [
+                                                "opt" => "string",
+                                            ],
+                                        ],
+                                    ],
+                                ],
+                            ],
+                        ],
+                    ],
+                    "parent" => "n0",
+                    "portSchemas" => (object) [
+                        "children" => (object) [
+                            "elemType" => "value",
+                            "required" => true,
+                            "type" => "array",
+                        ],
+                        "fk" => (object) [
+                            "elemType" => "string",
+                            "required" => true,
+                            "type" => "array",
+                        ],
+                        "into" => (object) [
+                            "required" => true,
+                            "type" => "string",
+                        ],
+                        "parents" => (object) [
+                            "elemType" => "value",
+                            "required" => true,
+                            "type" => "array",
+                        ],
+                        "pk" => (object) [
+                            "elemType" => "string",
+                            "required" => true,
+                            "type" => "array",
+                        ],
+                        "single" => (object) [
+                            "required" => true,
+                            "type" => "bool",
+                        ],
+                    ],
+                    "ports" => (object) [
+                        "children" => (object) [
+                            "ref" => [
+                                "n2",
+                            ],
+                        ],
+                        "fk" => (object) [
+                            "arr" => [
+                                "author_id",
+                            ],
+                        ],
+                        "into" => "uncappedPosts",
+                        "parents" => (object) [
+                            "ref" => [
+                                "n0",
+                            ],
+                        ],
+                        "pk" => (object) [
+                            "arr" => [
+                                "id",
+                            ],
+                        ],
+                        "single" => false,
+                    ],
+                ],
+            ],
+            "inputPorts" => (object) [],
+            "name" => "usersWithUncappedPosts",
+            "output" => (object) [
+                "ref" => [
+                    "n3",
+                ],
+            ],
+            "plan" => (object) [
+                "concurrency" => 16,
+                "groups" => [
+                    [
+                        0,
+                    ],
+                    [
+                        1,
+                    ],
+                    [
+                        2,
+                    ],
+                    [
+                        3,
+                    ],
+                ],
+            ],
+            "outputType" => (object) [
+                "arr" => (object) [
+                    "obj" => (object) [
+                        "id" => (object) [
+                            "opt" => "float",
+                        ],
+                        "name" => (object) [
+                            "opt" => "string",
+                        ],
+                        "uncappedPosts" => (object) [
+                            "arr" => (object) [
+                                "obj" => (object) [
+                                    "author_id" => (object) [
+                                        "opt" => "float",
+                                    ],
+                                    "created_at" => (object) [
+                                        "opt" => "string",
+                                    ],
+                                    "id" => (object) [
+                                        "opt" => "float",
+                                    ],
+                                    "status" => (object) [
+                                        "opt" => "string",
+                                    ],
+                                    "title" => (object) [
+                                        "opt" => "string",
+                                    ],
+                                ],
+                                "name" => "UsersWithUncappedPostsRow_uncappedPosts",
+                            ],
+                        ],
+                    ],
+                    "name" => "UsersWithUncappedPostsRow",
+                ],
+            ],
+        ],
+        (object) [
+            "body" => [
+                (object) [
+                    "component" => "executeSQL",
+                    "id" => "n0",
+                    "outType" => (object) [
+                        "arr" => "value",
+                    ],
+                    "portSchemas" => (object) [
+                        "bigint" => (object) [
+                            "required" => true,
+                            "type" => "bool",
+                        ],
+                        "params" => (object) [
+                            "elemType" => "value",
+                            "required" => true,
+                            "type" => "array",
+                        ],
+                        "returning" => (object) [
+                            "required" => true,
+                            "type" => "bool",
+                        ],
+                        "sql" => (object) [
+                            "required" => true,
+                            "type" => "string",
+                        ],
+                        "write" => (object) [
+                            "required" => true,
+                            "type" => "bool",
+                        ],
+                    ],
+                    "ports" => (object) [
+                        "bigint" => false,
+                        "params" => (object) [
+                            "arr" => [],
+                        ],
+                        "returning" => false,
+                        "sql" => "SELECT id, name FROM conf_users ORDER BY id ASC",
+                        "write" => false,
+                    ],
+                    "wirePassthrough" => true,
+                ],
+                (object) [
+                    "component" => "pluck",
+                    "id" => "n1",
+                    "outType" => (object) [
+                        "arr" => "value",
+                    ],
+                    "parent" => "n0",
+                    "portSchemas" => (object) [
+                        "col" => (object) [
+                            "elemType" => "string",
+                            "required" => true,
+                            "type" => "array",
+                        ],
+                        "rows" => (object) [
+                            "elemType" => "value",
+                            "required" => true,
+                            "type" => "array",
+                        ],
+                    ],
+                    "ports" => (object) [
+                        "col" => (object) [
+                            "arr" => [
+                                "id",
+                            ],
+                        ],
+                        "rows" => (object) [
+                            "ref" => [
+                                "n0",
+                            ],
+                        ],
+                    ],
+                    "wirePassthrough" => true,
+                ],
+                (object) [
+                    "component" => "executeSQL",
+                    "id" => "n2",
+                    "outType" => (object) [
+                        "arr" => "value",
+                    ],
+                    "parent" => "n1",
+                    "portSchemas" => (object) [
+                        "bigint" => (object) [
+                            "required" => true,
+                            "type" => "bool",
+                        ],
+                        "params" => (object) [
+                            "elemType" => "value",
+                            "required" => true,
+                            "type" => "array",
+                        ],
+                        "returning" => (object) [
+                            "required" => true,
+                            "type" => "bool",
+                        ],
+                        "sql" => (object) [
+                            "required" => true,
+                            "type" => "string",
+                        ],
+                        "write" => (object) [
+                            "required" => true,
+                            "type" => "bool",
+                        ],
+                    ],
+                    "ports" => (object) [
+                        "bigint" => false,
+                        "params" => (object) [
+                            "arr" => [
+                                (object) [
+                                    "ref" => [
+                                        "n1",
+                                    ],
+                                ],
+                            ],
+                        ],
+                        "returning" => false,
+                        "sql" => "SELECT conf_posts.* FROM unnest(?::@@PG_ARRAY_CAST@@) AS _keys(key) CROSS JOIN LATERAL (SELECT * FROM conf_posts WHERE conf_posts.author_id = _keys.key ORDER BY id ASC LIMIT 1) conf_posts",
+                        "write" => false,
+                    ],
+                    "wirePassthrough" => true,
+                ],
+                (object) [
+                    "component" => "group",
+                    "id" => "n3",
+                    "outType" => (object) [
+                        "arr" => (object) [
+                            "name" => "UsersWithTopPostsRow",
+                            "obj" => (object) [
+                                "id" => (object) [
+                                    "opt" => "float",
+                                ],
+                                "name" => (object) [
+                                    "opt" => "string",
+                                ],
+                                "topPosts" => (object) [
+                                    "arr" => (object) [
+                                        "name" => "UsersWithTopPostsRow_topPosts",
+                                        "obj" => (object) [
+                                            "author_id" => (object) [
+                                                "opt" => "float",
+                                            ],
+                                            "created_at" => (object) [
+                                                "opt" => "string",
+                                            ],
+                                            "id" => (object) [
+                                                "opt" => "float",
+                                            ],
+                                            "status" => (object) [
+                                                "opt" => "string",
+                                            ],
+                                            "title" => (object) [
+                                                "opt" => "string",
+                                            ],
+                                        ],
+                                    ],
+                                ],
+                            ],
+                        ],
+                    ],
+                    "parent" => "n0",
+                    "portSchemas" => (object) [
+                        "children" => (object) [
+                            "elemType" => "value",
+                            "required" => true,
+                            "type" => "array",
+                        ],
+                        "fk" => (object) [
+                            "elemType" => "string",
+                            "required" => true,
+                            "type" => "array",
+                        ],
+                        "into" => (object) [
+                            "required" => true,
+                            "type" => "string",
+                        ],
+                        "parents" => (object) [
+                            "elemType" => "value",
+                            "required" => true,
+                            "type" => "array",
+                        ],
+                        "pk" => (object) [
+                            "elemType" => "string",
+                            "required" => true,
+                            "type" => "array",
+                        ],
+                        "single" => (object) [
+                            "required" => true,
+                            "type" => "bool",
+                        ],
+                    ],
+                    "ports" => (object) [
+                        "children" => (object) [
+                            "ref" => [
+                                "n2",
+                            ],
+                        ],
+                        "fk" => (object) [
+                            "arr" => [
+                                "author_id",
+                            ],
+                        ],
+                        "into" => "topPosts",
+                        "parents" => (object) [
+                            "ref" => [
+                                "n0",
+                            ],
+                        ],
+                        "pk" => (object) [
+                            "arr" => [
+                                "id",
+                            ],
+                        ],
+                        "single" => false,
+                    ],
+                ],
+            ],
+            "inputPorts" => (object) [],
+            "name" => "usersWithTopPosts",
+            "output" => (object) [
+                "ref" => [
+                    "n3",
+                ],
+            ],
+            "plan" => (object) [
+                "concurrency" => 16,
+                "groups" => [
+                    [
+                        0,
+                    ],
+                    [
+                        1,
+                    ],
+                    [
+                        2,
+                    ],
+                    [
+                        3,
+                    ],
+                ],
+            ],
+            "outputType" => (object) [
+                "arr" => (object) [
+                    "obj" => (object) [
+                        "id" => (object) [
+                            "opt" => "float",
+                        ],
+                        "name" => (object) [
+                            "opt" => "string",
+                        ],
+                        "topPosts" => (object) [
+                            "arr" => (object) [
+                                "obj" => (object) [
+                                    "author_id" => (object) [
+                                        "opt" => "float",
+                                    ],
+                                    "created_at" => (object) [
+                                        "opt" => "string",
+                                    ],
+                                    "id" => (object) [
+                                        "opt" => "float",
+                                    ],
+                                    "status" => (object) [
+                                        "opt" => "string",
+                                    ],
+                                    "title" => (object) [
+                                        "opt" => "string",
+                                    ],
+                                ],
+                                "name" => "UsersWithTopPostsRow_topPosts",
+                            ],
+                        ],
+                    ],
+                    "name" => "UsersWithTopPostsRow",
+                ],
+            ],
+        ],
+        (object) [
+            "body" => [
+                (object) [
+                    "component" => "executeSQL",
+                    "id" => "n0",
+                    "outType" => (object) [
                         "arr" => (object) [
                             "name" => "WriteSummary",
                             "obj" => (object) [
@@ -1669,6 +2516,99 @@ $irDoc = (object) [
                     "id" => "n0",
                     "outType" => (object) [
                         "arr" => (object) [
+                            "name" => "TypedRowsRow",
+                            "obj" => (object) [
+                                "flag" => (object) [
+                                    "opt" => "float",
+                                ],
+                                "id" => (object) [
+                                    "opt" => "float",
+                                ],
+                                "label" => (object) [
+                                    "opt" => "string",
+                                ],
+                                "ts" => (object) [
+                                    "opt" => "string",
+                                ],
+                            ],
+                        ],
+                    ],
+                    "portSchemas" => (object) [
+                        "bigint" => (object) [
+                            "required" => true,
+                            "type" => "bool",
+                        ],
+                        "params" => (object) [
+                            "elemType" => "value",
+                            "required" => true,
+                            "type" => "array",
+                        ],
+                        "returning" => (object) [
+                            "required" => true,
+                            "type" => "bool",
+                        ],
+                        "sql" => (object) [
+                            "required" => true,
+                            "type" => "string",
+                        ],
+                        "write" => (object) [
+                            "required" => true,
+                            "type" => "bool",
+                        ],
+                    ],
+                    "ports" => (object) [
+                        "bigint" => false,
+                        "params" => (object) [
+                            "arr" => [],
+                        ],
+                        "returning" => false,
+                        "sql" => "SELECT id, ts, flag, label FROM conf_typed ORDER BY id ASC",
+                        "write" => false,
+                    ],
+                ],
+            ],
+            "inputPorts" => (object) [],
+            "name" => "typedRows",
+            "output" => (object) [
+                "ref" => [
+                    "n0",
+                ],
+            ],
+            "plan" => (object) [
+                "concurrency" => 16,
+                "groups" => [
+                    [
+                        0,
+                    ],
+                ],
+            ],
+            "outputType" => (object) [
+                "arr" => (object) [
+                    "obj" => (object) [
+                        "flag" => (object) [
+                            "opt" => "float",
+                        ],
+                        "id" => (object) [
+                            "opt" => "float",
+                        ],
+                        "label" => (object) [
+                            "opt" => "string",
+                        ],
+                        "ts" => (object) [
+                            "opt" => "string",
+                        ],
+                    ],
+                    "name" => "TypedRowsRow",
+                ],
+            ],
+        ],
+        (object) [
+            "body" => [
+                (object) [
+                    "component" => "executeSQL",
+                    "id" => "n0",
+                    "outType" => (object) [
+                        "arr" => (object) [
                             "name" => "WriteSummary",
                             "obj" => (object) [
                                 "changes" => "int",
@@ -1874,6 +2814,79 @@ try {
 } catch (\LiteDbModel\Runtime\BehaviorContracts\ProvenanceError $e) {
     throw new \RuntimeException("behavior-contracts generated module: IR fingerprint mismatch (baked={$irFingerprint}) — the generated code was modified or corrupted (fail-closed)", 0, $e);
 }
+
+// #192: namespaced 1:1 positional entries (thin wrappers over runBehavior). Guarded so a re-require
+// is idempotent; the compiled-IR handle is held on a static (a class cannot close over the local $ir).
+if (!\class_exists('Conformance', false)) {
+    final class Conformance {
+        public static \LiteDbModel\Runtime\BehaviorContracts\CompiledIr $ir;
+
+        public static function posts($authorId, array $handlers): mixed {
+            return \LiteDbModel\Runtime\BehaviorContracts\Behavior::runBehavior(self::$ir, $handlers, ['authorId' => $authorId], 'posts');
+        }
+
+        public static function postsTop(array $handlers): mixed {
+            return \LiteDbModel\Runtime\BehaviorContracts\Behavior::runBehavior(self::$ir, $handlers, [], 'postsTop');
+        }
+
+        public static function page($limit, $offset, array $handlers): mixed {
+            return \LiteDbModel\Runtime\BehaviorContracts\Behavior::runBehavior(self::$ir, $handlers, ['limit' => $limit, 'offset' => $offset], 'page');
+        }
+
+        public static function postsByIds($ids, array $handlers): mixed {
+            return \LiteDbModel\Runtime\BehaviorContracts\Behavior::runBehavior(self::$ir, $handlers, ['ids' => $ids], 'postsByIds');
+        }
+
+        public static function feed($authorId, $status, $since, array $handlers): mixed {
+            return \LiteDbModel\Runtime\BehaviorContracts\Behavior::runBehavior(self::$ir, $handlers, ['authorId' => $authorId, 'status' => $status, 'since' => $since], 'feed');
+        }
+
+        public static function usersWithPosts(array $handlers): mixed {
+            return \LiteDbModel\Runtime\BehaviorContracts\Behavior::runBehavior(self::$ir, $handlers, [], 'usersWithPosts');
+        }
+
+        public static function postsWithAuthor(array $handlers): mixed {
+            return \LiteDbModel\Runtime\BehaviorContracts\Behavior::runBehavior(self::$ir, $handlers, [], 'postsWithAuthor');
+        }
+
+        public static function usersWithCappedPosts(array $handlers): mixed {
+            return \LiteDbModel\Runtime\BehaviorContracts\Behavior::runBehavior(self::$ir, $handlers, [], 'usersWithCappedPosts');
+        }
+
+        public static function usersWithUncappedPosts(array $handlers): mixed {
+            return \LiteDbModel\Runtime\BehaviorContracts\Behavior::runBehavior(self::$ir, $handlers, [], 'usersWithUncappedPosts');
+        }
+
+        public static function usersWithTopPosts(array $handlers): mixed {
+            return \LiteDbModel\Runtime\BehaviorContracts\Behavior::runBehavior(self::$ir, $handlers, [], 'usersWithTopPosts');
+        }
+
+        public static function createPost($id, $authorId, $title, $status, $createdAt, array $handlers): mixed {
+            return \LiteDbModel\Runtime\BehaviorContracts\Behavior::runBehavior(self::$ir, $handlers, ['id' => $id, 'authorId' => $authorId, 'title' => $title, 'status' => $status, 'createdAt' => $createdAt], 'createPost');
+        }
+
+        public static function renamePost($title, $id, array $handlers): mixed {
+            return \LiteDbModel\Runtime\BehaviorContracts\Behavior::runBehavior(self::$ir, $handlers, ['title' => $title, 'id' => $id], 'renamePost');
+        }
+
+        public static function removePost($id, array $handlers): mixed {
+            return \LiteDbModel\Runtime\BehaviorContracts\Behavior::runBehavior(self::$ir, $handlers, ['id' => $id], 'removePost');
+        }
+
+        public static function typedRows(array $handlers): mixed {
+            return \LiteDbModel\Runtime\BehaviorContracts\Behavior::runBehavior(self::$ir, $handlers, [], 'typedRows');
+        }
+
+        public static function createTags($rows_id, $rows_post_id, $rows_label, array $handlers): mixed {
+            return \LiteDbModel\Runtime\BehaviorContracts\Behavior::runBehavior(self::$ir, $handlers, ['rows_id' => $rows_id, 'rows_post_id' => $rows_post_id, 'rows_label' => $rows_label], 'createTags');
+        }
+
+        public static function removeTags($ids, array $handlers): mixed {
+            return \LiteDbModel\Runtime\BehaviorContracts\Behavior::runBehavior(self::$ir, $handlers, ['ids' => $ids], 'removeTags');
+        }
+    }
+}
+Conformance::$ir = $ir;
 
 // bind — inject handlers (boundary injection; catalog name → implementation) and
 // get one executor closure per component. Each call delegates to the runtime

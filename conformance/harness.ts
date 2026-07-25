@@ -53,13 +53,14 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { Pool as PgPool } from 'pg';
+import { Pool as PgPool, types as pgTypes } from 'pg';
 import mysql from 'mysql2/promise';
 import type { Column } from '../src/Column';
 import { belongsTo, column, hasMany, model } from '../src/decorators';
 import {
   assertFindHardLimit,
   columnTypeResolverFromColumnMap,
+  configurePgDeboxTypeParsers,
   connectionForDriver,
   compileCompositeWriteBundle,
   compileWriteBundle,
@@ -75,6 +76,7 @@ import {
   leafHandlersAsync,
   LimitExceededError,
   mysqlConnectionPool,
+  mysqlDeboxPoolOptions,
   pgConnectionPool,
   PooledAsyncContext,
   resetLimitConfig,
@@ -207,7 +209,35 @@ class ConfTag {
   @column() label?: string;
 }
 
-const MODEL_REGISTRY: Record<string, unknown> = { ConfUser, ConfPost, ConfTag };
+/**
+ * The READ-DECODE fixture (#137). Every other model projects only INTEGER / TEXT columns, so the
+ * date and boolean arms of the read decode — the ones each runtime resolves through its DRIVER, not
+ * through the SQL — were never executed by a vector. This model exists to PROJECT them:
+ *
+ *   - `ts`   TIMESTAMP → the canonical `'YYYY-MM-DD HH:MM:SS'` STRING (spec §4.1: bc has no date
+ *            scalar, so a date round-trips as text). Reaching that requires the driver knobs the
+ *            library owns — `configurePgDeboxTypeParsers` (pg hands over a JS Date otherwise) and
+ *            `mysqlDeboxPoolOptions.dateStrings` — which is exactly what this vector guards.
+ *   - `flag` a boolean-valued column, decoded as an Int (#137's canonical: `bool→Int`). Its SQL type
+ *            is SMALLINT rather than BOOLEAN because the schema below is ONE portable DDL and a
+ *            BOOLEAN column does NOT decode dialect-invariantly through the leaf: PostgreSQL hands
+ *            over a JS boolean while MySQL (TINYINT(1)) and SQLite hand over 1/0, and only the pg
+ *            side matches a bc `bool` outType (`node 'n0': result[0].flag: expected bool, got float`
+ *            on the other two). The leaf read path takes the driver's value as-is — `materializeCell`
+ *            sits on the imperative path — so there is no dialect-invariant BOOLEAN projection to
+ *            capture today.
+ */
+@model('conf_typed')
+class ConfTyped {
+  declare static id: Column<number, ConfTyped>;
+
+  @column() id?: number;
+  @column() ts?: string;
+  @column() flag?: number;
+  @column() label?: string;
+}
+
+const MODEL_REGISTRY: Record<string, unknown> = { ConfUser, ConfPost, ConfTag, ConfTyped };
 
 /** Model NAME → class, as `relationDeclOf` resolves a relation's target model. */
 const conformanceModels = (name: string): ModelClassLike => MODEL_REGISTRY[name] as ModelClassLike;
@@ -218,7 +248,9 @@ const conformanceModels = (name: string): ModelClassLike => MODEL_REGISTRY[name]
  * columns go through the adapter's documented `columnTypes` escape hatch.
  */
 const COLUMN_OPTIONS: DeriveColumnsOptions = {
-  columnTypes: { name: 'TEXT', title: 'TEXT', status: 'TEXT', created_at: 'TEXT', label: 'TEXT' },
+  // `ts`/`flag` (#137) are pinned for the same reason: the read-decode class is the COLUMN's SQL
+  // type, so TIMESTAMP → the canonical date string and SMALLINT → Int come from here, not a guess.
+  columnTypes: { name: 'TEXT', title: 'TEXT', status: 'TEXT', created_at: 'TEXT', label: 'TEXT', ts: 'TIMESTAMP', flag: 'SMALLINT' },
 };
 
 /** The emitted `@behavior` class name (the `bc generate --behavior` argument). */
@@ -309,6 +341,12 @@ const ENDPOINTS: EndpointSet = {
     where: [{ column: 'id', op: 'eq', param: 'id' }],
   },
   removePost: { kind: 'delete', model: ConfPost, where: [{ column: 'id', op: 'eq', param: 'id' }] },
+  /**
+   * #137 — the READ-DECODE guard: a TIMESTAMP and a boolean-valued column are PROJECTED (not merely
+   * bound in a WHERE), so the date → canonical-string and bool → Int decode runs in every runtime,
+   * on every dialect, and is asserted dialect-invariant at capture.
+   */
+  typedRows: { kind: 'read', model: ConfTyped, select: ['id', 'ts', 'flag', 'label'], order: 'id ASC' },
   createTags: { kind: 'createMany', model: ConfTag, columns: ['id', 'post_id', 'label'], param: 'rows' },
   removeTags: { kind: 'deleteMany', model: ConfTag, keyColumn: 'id', param: 'ids' },
 };
@@ -318,6 +356,7 @@ const ENDPOINTS: EndpointSet = {
  * the evidence that a divergent result is the dialect SQL diverging, never the fixture.
  */
 export const SCHEMA: readonly string[] = [
+  'DROP TABLE IF EXISTS conf_typed',
   'DROP TABLE IF EXISTS conf_tags',
   'DROP TABLE IF EXISTS conf_posts',
   'DROP TABLE IF EXISTS conf_users',
@@ -333,6 +372,12 @@ export const SCHEMA: readonly string[] = [
   "INSERT INTO conf_tags (id, post_id, label) VALUES (100, 10, 'greeting')",
   "INSERT INTO conf_tags (id, post_id, label) VALUES (101, 10, 'first')",
   "INSERT INTO conf_tags (id, post_id, label) VALUES (102, 12, 'world')",
+  // #137 — the read-decode row set. TIMESTAMP + SMALLINT are portable DDL on all three servers, and
+  // `'YYYY-MM-DD HH:MM:SS'` is the literal form all three round-trip unchanged.
+  'CREATE TABLE conf_typed (id INT PRIMARY KEY, ts TIMESTAMP NOT NULL, flag SMALLINT NOT NULL, label TEXT)',
+  "INSERT INTO conf_typed (id, ts, flag, label) VALUES (1, '2026-01-01 00:00:00', 1, 'alpha')",
+  "INSERT INTO conf_typed (id, ts, flag, label) VALUES (2, '2026-02-01 12:34:56', 0, 'beta')",
+  "INSERT INTO conf_typed (id, ts, flag, label) VALUES (3, '2026-03-15 23:59:59', 1, 'gamma')",
 ];
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -627,10 +672,14 @@ async function seamFor(dialect: DialectName, config?: LimitConfigSpec): Promise<
       },
     );
   }
+  // The read-path de-box knobs the LIBRARY owns (#59), applied exactly as a production consumer
+  // applies them: without them `pg` hands over a JS Date and `mysql2` a JS Date for a TIMESTAMP
+  // column, and the `date → 'YYYY-MM-DD HH:MM:SS'` contract of the typedRows projection (#137)
+  // cannot hold. They are part of the artifact under test, not harness convenience.
   const pool =
     dialect === 'postgres'
-      ? pgConnectionPool((pgPool ??= new PgPool(PG_CONFIG)) as never)
-      : mysqlConnectionPool((myPool ??= mysql.createPool({ ...MYSQL_CONFIG, connectionLimit: 4 })) as never);
+      ? pgConnectionPool((pgPool ??= (configurePgDeboxTypeParsers(pgTypes), new PgPool(PG_CONFIG))) as never)
+      : mysqlConnectionPool((myPool ??= mysql.createPool({ ...MYSQL_CONFIG, ...mysqlDeboxPoolOptions, connectionLimit: 4 })) as never);
   const ctx = new PooledAsyncContext(tapAsyncPool(pool, log));
   for (const stmt of SCHEMA) await runAsync(ctx, stmt, []);
   const facade = b.module.bindTypedAsync(leafHandlersAsync({ execAsync: ctx, dialect }));
@@ -870,6 +919,10 @@ const EXEC_CASES: readonly ExecCase[] = [
     dbState: [TAGS_STATE],
   },
   { id: 'removeTags: batch DELETE by key set persists', entry: 'removeTags', input: { ids: [100, 101] }, writes: true, dbState: [TAGS_STATE] },
+  // #137 — the read decode: a TIMESTAMP column comes back as the canonical string and a
+  // boolean-valued column as an Int, IDENTICALLY on SQLite / live PostgreSQL / live MySQL. The
+  // §10 cross-check below is what makes it a decoder assertion rather than three separate goldens.
+  { id: 'typedRows: date + bool columns are PROJECTED and decode identically', entry: 'typedRows', input: {} },
   // The find hard-limit SKIP cases: `null` disables the cap, and an endpoint that declares its own
   // LIMIT is never capped — both must run normally (no throw), on every dialect.
   { id: 'guard: findHardLimit null → no cap baked', entry: 'posts', input: { authorId: 1 }, config: { findHardLimit: null } },

@@ -4,17 +4,17 @@
 # native dict literal and handed to the EXISTING runtime core (run_behavior) —
 # no execution logic is generated. Handlers are ALWAYS injected at the boundary
 # (IR + {effects,config,hooks}); they are never generated.
-# irFingerprint: fnv1a64:20be8ec0912a8b31
+# irFingerprint: fnv1a64:287c4cf2499743ef
 from behavior_contracts import SPEC_VERSIONS, ProvenanceError, load_compiled_ir, run_behavior
 
 # Spec versions baked at generation time (fail-closed constant comparison at load).
 EXPECTED_SPEC_VERSIONS = {"behavior": 5, "expression": 2, "plan": 1}
 
 # FNV-1a 64 fingerprint of the source portable IR (canonical_json discipline, #208).
-IR_FINGERPRINT = "fnv1a64:20be8ec0912a8b31"
+IR_FINGERPRINT = "fnv1a64:287c4cf2499743ef"
 
 # Component names exposed by bind(), in IR declaration order.
-COMPONENT_NAMES = ("posts", "postsTop", "page", "postsByIds", "feed", "usersWithPosts", "postsWithAuthor", "createPost", "renamePost", "removePost", "createTags", "removeTags")
+COMPONENT_NAMES = ("posts", "postsTop", "page", "postsByIds", "feed", "usersWithPosts", "postsWithAuthor", "usersWithCappedPosts", "usersWithUncappedPosts", "usersWithTopPosts", "createPost", "renamePost", "removePost", "typedRows", "createTags", "removeTags")
 
 # The portable component-graph IR *document*, embedded as a native dict literal (no JSON parse at
 # runtime). It carries no provenance token — the load-time load_compiled_ir() below verifies the baked
@@ -1367,6 +1367,853 @@ IR_DOC = {
           "component": "executeSQL",
           "id": "n0",
           "outType": {
+            "arr": "value"
+          },
+          "portSchemas": {
+            "bigint": {
+              "required": True,
+              "type": "bool"
+            },
+            "params": {
+              "elemType": "value",
+              "required": True,
+              "type": "array"
+            },
+            "returning": {
+              "required": True,
+              "type": "bool"
+            },
+            "sql": {
+              "required": True,
+              "type": "string"
+            },
+            "write": {
+              "required": True,
+              "type": "bool"
+            }
+          },
+          "ports": {
+            "bigint": False,
+            "params": {
+              "arr": []
+            },
+            "returning": False,
+            "sql": "SELECT id, name FROM conf_users ORDER BY id ASC",
+            "write": False
+          },
+          "wirePassthrough": True
+        },
+        {
+          "component": "pluck",
+          "id": "n1",
+          "outType": {
+            "arr": "value"
+          },
+          "parent": "n0",
+          "portSchemas": {
+            "col": {
+              "elemType": "string",
+              "required": True,
+              "type": "array"
+            },
+            "rows": {
+              "elemType": "value",
+              "required": True,
+              "type": "array"
+            }
+          },
+          "ports": {
+            "col": {
+              "arr": [
+                "id"
+              ]
+            },
+            "rows": {
+              "ref": [
+                "n0"
+              ]
+            }
+          },
+          "wirePassthrough": True
+        },
+        {
+          "component": "executeSQL",
+          "id": "n2",
+          "outType": {
+            "arr": "value"
+          },
+          "parent": "n1",
+          "portSchemas": {
+            "bigint": {
+              "required": True,
+              "type": "bool"
+            },
+            "guard": {
+              "required": False,
+              "type": "value"
+            },
+            "params": {
+              "elemType": "value",
+              "required": True,
+              "type": "array"
+            },
+            "returning": {
+              "required": True,
+              "type": "bool"
+            },
+            "sql": {
+              "required": True,
+              "type": "string"
+            },
+            "whereDynamic": {
+              "required": False,
+              "type": "value"
+            },
+            "write": {
+              "required": True,
+              "type": "bool"
+            }
+          },
+          "ports": {
+            "bigint": False,
+            "guard": {
+              "obj": {
+                "limit": 2,
+                "model": "conf_posts",
+                "relation": "cappedPosts"
+              }
+            },
+            "params": {
+              "arr": [
+                {
+                  "ref": [
+                    "n1"
+                  ]
+                }
+              ]
+            },
+            "returning": False,
+            "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE author_id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) ORDER BY id ASC",
+            "whereDynamic": None,
+            "write": False
+          },
+          "wirePassthrough": True
+        },
+        {
+          "component": "group",
+          "id": "n3",
+          "outType": {
+            "arr": {
+              "name": "UsersWithCappedPostsRow",
+              "obj": {
+                "cappedPosts": {
+                  "arr": {
+                    "name": "UsersWithCappedPostsRow_cappedPosts",
+                    "obj": {
+                      "author_id": {
+                        "opt": "float"
+                      },
+                      "created_at": {
+                        "opt": "string"
+                      },
+                      "id": {
+                        "opt": "float"
+                      },
+                      "status": {
+                        "opt": "string"
+                      },
+                      "title": {
+                        "opt": "string"
+                      }
+                    }
+                  }
+                },
+                "id": {
+                  "opt": "float"
+                },
+                "name": {
+                  "opt": "string"
+                }
+              }
+            }
+          },
+          "parent": "n0",
+          "portSchemas": {
+            "children": {
+              "elemType": "value",
+              "required": True,
+              "type": "array"
+            },
+            "fk": {
+              "elemType": "string",
+              "required": True,
+              "type": "array"
+            },
+            "into": {
+              "required": True,
+              "type": "string"
+            },
+            "parents": {
+              "elemType": "value",
+              "required": True,
+              "type": "array"
+            },
+            "pk": {
+              "elemType": "string",
+              "required": True,
+              "type": "array"
+            },
+            "single": {
+              "required": True,
+              "type": "bool"
+            }
+          },
+          "ports": {
+            "children": {
+              "ref": [
+                "n2"
+              ]
+            },
+            "fk": {
+              "arr": [
+                "author_id"
+              ]
+            },
+            "into": "cappedPosts",
+            "parents": {
+              "ref": [
+                "n0"
+              ]
+            },
+            "pk": {
+              "arr": [
+                "id"
+              ]
+            },
+            "single": False
+          }
+        }
+      ],
+      "inputPorts": {},
+      "name": "usersWithCappedPosts",
+      "output": {
+        "ref": [
+          "n3"
+        ]
+      },
+      "plan": {
+        "concurrency": 16,
+        "groups": [
+          [
+            0
+          ],
+          [
+            1
+          ],
+          [
+            2
+          ],
+          [
+            3
+          ]
+        ]
+      },
+      "outputType": {
+        "arr": {
+          "obj": {
+            "cappedPosts": {
+              "arr": {
+                "obj": {
+                  "author_id": {
+                    "opt": "float"
+                  },
+                  "created_at": {
+                    "opt": "string"
+                  },
+                  "id": {
+                    "opt": "float"
+                  },
+                  "status": {
+                    "opt": "string"
+                  },
+                  "title": {
+                    "opt": "string"
+                  }
+                },
+                "name": "UsersWithCappedPostsRow_cappedPosts"
+              }
+            },
+            "id": {
+              "opt": "float"
+            },
+            "name": {
+              "opt": "string"
+            }
+          },
+          "name": "UsersWithCappedPostsRow"
+        }
+      }
+    },
+    {
+      "body": [
+        {
+          "component": "executeSQL",
+          "id": "n0",
+          "outType": {
+            "arr": "value"
+          },
+          "portSchemas": {
+            "bigint": {
+              "required": True,
+              "type": "bool"
+            },
+            "params": {
+              "elemType": "value",
+              "required": True,
+              "type": "array"
+            },
+            "returning": {
+              "required": True,
+              "type": "bool"
+            },
+            "sql": {
+              "required": True,
+              "type": "string"
+            },
+            "write": {
+              "required": True,
+              "type": "bool"
+            }
+          },
+          "ports": {
+            "bigint": False,
+            "params": {
+              "arr": []
+            },
+            "returning": False,
+            "sql": "SELECT id, name FROM conf_users ORDER BY id ASC",
+            "write": False
+          },
+          "wirePassthrough": True
+        },
+        {
+          "component": "pluck",
+          "id": "n1",
+          "outType": {
+            "arr": "value"
+          },
+          "parent": "n0",
+          "portSchemas": {
+            "col": {
+              "elemType": "string",
+              "required": True,
+              "type": "array"
+            },
+            "rows": {
+              "elemType": "value",
+              "required": True,
+              "type": "array"
+            }
+          },
+          "ports": {
+            "col": {
+              "arr": [
+                "id"
+              ]
+            },
+            "rows": {
+              "ref": [
+                "n0"
+              ]
+            }
+          },
+          "wirePassthrough": True
+        },
+        {
+          "component": "executeSQL",
+          "id": "n2",
+          "outType": {
+            "arr": "value"
+          },
+          "parent": "n1",
+          "portSchemas": {
+            "bigint": {
+              "required": True,
+              "type": "bool"
+            },
+            "params": {
+              "elemType": "value",
+              "required": True,
+              "type": "array"
+            },
+            "returning": {
+              "required": True,
+              "type": "bool"
+            },
+            "sql": {
+              "required": True,
+              "type": "string"
+            },
+            "write": {
+              "required": True,
+              "type": "bool"
+            }
+          },
+          "ports": {
+            "bigint": False,
+            "params": {
+              "arr": [
+                {
+                  "ref": [
+                    "n1"
+                  ]
+                }
+              ]
+            },
+            "returning": False,
+            "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE author_id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) ORDER BY id ASC",
+            "write": False
+          },
+          "wirePassthrough": True
+        },
+        {
+          "component": "group",
+          "id": "n3",
+          "outType": {
+            "arr": {
+              "name": "UsersWithUncappedPostsRow",
+              "obj": {
+                "id": {
+                  "opt": "float"
+                },
+                "name": {
+                  "opt": "string"
+                },
+                "uncappedPosts": {
+                  "arr": {
+                    "name": "UsersWithUncappedPostsRow_uncappedPosts",
+                    "obj": {
+                      "author_id": {
+                        "opt": "float"
+                      },
+                      "created_at": {
+                        "opt": "string"
+                      },
+                      "id": {
+                        "opt": "float"
+                      },
+                      "status": {
+                        "opt": "string"
+                      },
+                      "title": {
+                        "opt": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "parent": "n0",
+          "portSchemas": {
+            "children": {
+              "elemType": "value",
+              "required": True,
+              "type": "array"
+            },
+            "fk": {
+              "elemType": "string",
+              "required": True,
+              "type": "array"
+            },
+            "into": {
+              "required": True,
+              "type": "string"
+            },
+            "parents": {
+              "elemType": "value",
+              "required": True,
+              "type": "array"
+            },
+            "pk": {
+              "elemType": "string",
+              "required": True,
+              "type": "array"
+            },
+            "single": {
+              "required": True,
+              "type": "bool"
+            }
+          },
+          "ports": {
+            "children": {
+              "ref": [
+                "n2"
+              ]
+            },
+            "fk": {
+              "arr": [
+                "author_id"
+              ]
+            },
+            "into": "uncappedPosts",
+            "parents": {
+              "ref": [
+                "n0"
+              ]
+            },
+            "pk": {
+              "arr": [
+                "id"
+              ]
+            },
+            "single": False
+          }
+        }
+      ],
+      "inputPorts": {},
+      "name": "usersWithUncappedPosts",
+      "output": {
+        "ref": [
+          "n3"
+        ]
+      },
+      "plan": {
+        "concurrency": 16,
+        "groups": [
+          [
+            0
+          ],
+          [
+            1
+          ],
+          [
+            2
+          ],
+          [
+            3
+          ]
+        ]
+      },
+      "outputType": {
+        "arr": {
+          "obj": {
+            "id": {
+              "opt": "float"
+            },
+            "name": {
+              "opt": "string"
+            },
+            "uncappedPosts": {
+              "arr": {
+                "obj": {
+                  "author_id": {
+                    "opt": "float"
+                  },
+                  "created_at": {
+                    "opt": "string"
+                  },
+                  "id": {
+                    "opt": "float"
+                  },
+                  "status": {
+                    "opt": "string"
+                  },
+                  "title": {
+                    "opt": "string"
+                  }
+                },
+                "name": "UsersWithUncappedPostsRow_uncappedPosts"
+              }
+            }
+          },
+          "name": "UsersWithUncappedPostsRow"
+        }
+      }
+    },
+    {
+      "body": [
+        {
+          "component": "executeSQL",
+          "id": "n0",
+          "outType": {
+            "arr": "value"
+          },
+          "portSchemas": {
+            "bigint": {
+              "required": True,
+              "type": "bool"
+            },
+            "params": {
+              "elemType": "value",
+              "required": True,
+              "type": "array"
+            },
+            "returning": {
+              "required": True,
+              "type": "bool"
+            },
+            "sql": {
+              "required": True,
+              "type": "string"
+            },
+            "write": {
+              "required": True,
+              "type": "bool"
+            }
+          },
+          "ports": {
+            "bigint": False,
+            "params": {
+              "arr": []
+            },
+            "returning": False,
+            "sql": "SELECT id, name FROM conf_users ORDER BY id ASC",
+            "write": False
+          },
+          "wirePassthrough": True
+        },
+        {
+          "component": "pluck",
+          "id": "n1",
+          "outType": {
+            "arr": "value"
+          },
+          "parent": "n0",
+          "portSchemas": {
+            "col": {
+              "elemType": "string",
+              "required": True,
+              "type": "array"
+            },
+            "rows": {
+              "elemType": "value",
+              "required": True,
+              "type": "array"
+            }
+          },
+          "ports": {
+            "col": {
+              "arr": [
+                "id"
+              ]
+            },
+            "rows": {
+              "ref": [
+                "n0"
+              ]
+            }
+          },
+          "wirePassthrough": True
+        },
+        {
+          "component": "executeSQL",
+          "id": "n2",
+          "outType": {
+            "arr": "value"
+          },
+          "parent": "n1",
+          "portSchemas": {
+            "bigint": {
+              "required": True,
+              "type": "bool"
+            },
+            "params": {
+              "elemType": "value",
+              "required": True,
+              "type": "array"
+            },
+            "returning": {
+              "required": True,
+              "type": "bool"
+            },
+            "sql": {
+              "required": True,
+              "type": "string"
+            },
+            "write": {
+              "required": True,
+              "type": "bool"
+            }
+          },
+          "ports": {
+            "bigint": False,
+            "params": {
+              "arr": [
+                {
+                  "ref": [
+                    "n1"
+                  ]
+                }
+              ]
+            },
+            "returning": False,
+            "sql": "WITH ranked AS (SELECT *, ROW_NUMBER() OVER (PARTITION BY author_id ORDER BY id ASC) AS _rn FROM conf_posts WHERE author_id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt)) SELECT * FROM ranked WHERE _rn <= 1",
+            "write": False
+          },
+          "wirePassthrough": True
+        },
+        {
+          "component": "group",
+          "id": "n3",
+          "outType": {
+            "arr": {
+              "name": "UsersWithTopPostsRow",
+              "obj": {
+                "id": {
+                  "opt": "float"
+                },
+                "name": {
+                  "opt": "string"
+                },
+                "topPosts": {
+                  "arr": {
+                    "name": "UsersWithTopPostsRow_topPosts",
+                    "obj": {
+                      "author_id": {
+                        "opt": "float"
+                      },
+                      "created_at": {
+                        "opt": "string"
+                      },
+                      "id": {
+                        "opt": "float"
+                      },
+                      "status": {
+                        "opt": "string"
+                      },
+                      "title": {
+                        "opt": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "parent": "n0",
+          "portSchemas": {
+            "children": {
+              "elemType": "value",
+              "required": True,
+              "type": "array"
+            },
+            "fk": {
+              "elemType": "string",
+              "required": True,
+              "type": "array"
+            },
+            "into": {
+              "required": True,
+              "type": "string"
+            },
+            "parents": {
+              "elemType": "value",
+              "required": True,
+              "type": "array"
+            },
+            "pk": {
+              "elemType": "string",
+              "required": True,
+              "type": "array"
+            },
+            "single": {
+              "required": True,
+              "type": "bool"
+            }
+          },
+          "ports": {
+            "children": {
+              "ref": [
+                "n2"
+              ]
+            },
+            "fk": {
+              "arr": [
+                "author_id"
+              ]
+            },
+            "into": "topPosts",
+            "parents": {
+              "ref": [
+                "n0"
+              ]
+            },
+            "pk": {
+              "arr": [
+                "id"
+              ]
+            },
+            "single": False
+          }
+        }
+      ],
+      "inputPorts": {},
+      "name": "usersWithTopPosts",
+      "output": {
+        "ref": [
+          "n3"
+        ]
+      },
+      "plan": {
+        "concurrency": 16,
+        "groups": [
+          [
+            0
+          ],
+          [
+            1
+          ],
+          [
+            2
+          ],
+          [
+            3
+          ]
+        ]
+      },
+      "outputType": {
+        "arr": {
+          "obj": {
+            "id": {
+              "opt": "float"
+            },
+            "name": {
+              "opt": "string"
+            },
+            "topPosts": {
+              "arr": {
+                "obj": {
+                  "author_id": {
+                    "opt": "float"
+                  },
+                  "created_at": {
+                    "opt": "string"
+                  },
+                  "id": {
+                    "opt": "float"
+                  },
+                  "status": {
+                    "opt": "string"
+                  },
+                  "title": {
+                    "opt": "string"
+                  }
+                },
+                "name": "UsersWithTopPostsRow_topPosts"
+              }
+            }
+          },
+          "name": "UsersWithTopPostsRow"
+        }
+      }
+    },
+    {
+      "body": [
+        {
+          "component": "executeSQL",
+          "id": "n0",
+          "outType": {
             "arr": {
               "name": "WriteSummary",
               "obj": {
@@ -1665,6 +2512,99 @@ IR_DOC = {
           "id": "n0",
           "outType": {
             "arr": {
+              "name": "TypedRowsRow",
+              "obj": {
+                "flag": {
+                  "opt": "float"
+                },
+                "id": {
+                  "opt": "float"
+                },
+                "label": {
+                  "opt": "string"
+                },
+                "ts": {
+                  "opt": "string"
+                }
+              }
+            }
+          },
+          "portSchemas": {
+            "bigint": {
+              "required": True,
+              "type": "bool"
+            },
+            "params": {
+              "elemType": "value",
+              "required": True,
+              "type": "array"
+            },
+            "returning": {
+              "required": True,
+              "type": "bool"
+            },
+            "sql": {
+              "required": True,
+              "type": "string"
+            },
+            "write": {
+              "required": True,
+              "type": "bool"
+            }
+          },
+          "ports": {
+            "bigint": False,
+            "params": {
+              "arr": []
+            },
+            "returning": False,
+            "sql": "SELECT id, ts, flag, label FROM conf_typed ORDER BY id ASC",
+            "write": False
+          }
+        }
+      ],
+      "inputPorts": {},
+      "name": "typedRows",
+      "output": {
+        "ref": [
+          "n0"
+        ]
+      },
+      "plan": {
+        "concurrency": 16,
+        "groups": [
+          [
+            0
+          ]
+        ]
+      },
+      "outputType": {
+        "arr": {
+          "obj": {
+            "flag": {
+              "opt": "float"
+            },
+            "id": {
+              "opt": "float"
+            },
+            "label": {
+              "opt": "string"
+            },
+            "ts": {
+              "opt": "string"
+            }
+          },
+          "name": "TypedRowsRow"
+        }
+      }
+    },
+    {
+      "body": [
+        {
+          "component": "executeSQL",
+          "id": "n0",
+          "outType": {
+            "arr": {
               "name": "WriteSummary",
               "obj": {
                 "changes": "int",
@@ -1875,3 +2815,71 @@ def bind(handlers):
         return _call
 
     return {name: _make(name) for name in COMPONENT_NAMES}
+
+
+class Conformance:
+    """#192: namespaced 1:1 positional entries (thin wrappers over run_behavior)."""
+
+    @staticmethod
+    def posts(authorId, handlers):
+        return run_behavior(IR, handlers, {"authorId": authorId}, "posts")
+
+    @staticmethod
+    def posts_top(handlers):
+        return run_behavior(IR, handlers, {}, "postsTop")
+
+    @staticmethod
+    def page(limit, offset, handlers):
+        return run_behavior(IR, handlers, {"limit": limit, "offset": offset}, "page")
+
+    @staticmethod
+    def posts_by_ids(ids, handlers):
+        return run_behavior(IR, handlers, {"ids": ids}, "postsByIds")
+
+    @staticmethod
+    def feed(authorId, status, since, handlers):
+        return run_behavior(IR, handlers, {"authorId": authorId, "status": status, "since": since}, "feed")
+
+    @staticmethod
+    def users_with_posts(handlers):
+        return run_behavior(IR, handlers, {}, "usersWithPosts")
+
+    @staticmethod
+    def posts_with_author(handlers):
+        return run_behavior(IR, handlers, {}, "postsWithAuthor")
+
+    @staticmethod
+    def users_with_capped_posts(handlers):
+        return run_behavior(IR, handlers, {}, "usersWithCappedPosts")
+
+    @staticmethod
+    def users_with_uncapped_posts(handlers):
+        return run_behavior(IR, handlers, {}, "usersWithUncappedPosts")
+
+    @staticmethod
+    def users_with_top_posts(handlers):
+        return run_behavior(IR, handlers, {}, "usersWithTopPosts")
+
+    @staticmethod
+    def create_post(id, authorId, title, status, createdAt, handlers):
+        return run_behavior(IR, handlers, {"id": id, "authorId": authorId, "title": title, "status": status, "createdAt": createdAt}, "createPost")
+
+    @staticmethod
+    def rename_post(title, id, handlers):
+        return run_behavior(IR, handlers, {"title": title, "id": id}, "renamePost")
+
+    @staticmethod
+    def remove_post(id, handlers):
+        return run_behavior(IR, handlers, {"id": id}, "removePost")
+
+    @staticmethod
+    def typed_rows(handlers):
+        return run_behavior(IR, handlers, {}, "typedRows")
+
+    @staticmethod
+    def create_tags(rows, handlers):
+        return run_behavior(IR, handlers, {"rows": rows}, "createTags")
+
+    @staticmethod
+    def remove_tags(ids, handlers):
+        return run_behavior(IR, handlers, {"ids": ids}, "removeTags")
