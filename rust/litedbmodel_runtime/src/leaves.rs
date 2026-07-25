@@ -257,6 +257,47 @@ fn port_list(payload: &mut WireRow, name: &str) -> Result<Vec<WireValue>, Behavi
     }
 }
 
+/// The unboxed `guard` port: the relation runaway cap the emitter baked onto a guarded relation child
+/// fetch, plus the identity the raised error reports (the Rust twin of the litedbmodel `RelationGuard`
+/// record). `model` is optional exactly as [`crate::errors::LimitExceededError::model`] is.
+struct RelationGuard {
+    limit: i64,
+    model: Option<String>,
+    relation: String,
+}
+
+/// Read the OPTIONAL `guard` port. ABSENT (or an explicit null) ⇒ `None` ⇒ the statement is uncapped
+/// and NO check runs. PRESENT but malformed is a LOUD port failure, never a silently dropped guard — a
+/// guard that fails to unbox is a runaway that would otherwise sail through.
+fn port_relation_guard(payload: &mut WireRow) -> Result<Option<RelationGuard>, BehaviorError> {
+    let row = match payload.entries.iter().position(|(k, _)| k == "guard") {
+        None => return Ok(None),
+        Some(i) => match payload.entries.swap_remove(i).1 {
+            WireValue::Null => return Ok(None),
+            WireValue::Row(r) => r,
+            other => return Err(port_mismatch("guard", "row", &other)),
+        },
+    };
+    let field = |name: &str| row.entries.iter().find(|(k, _)| k == name).map(|(_, v)| v);
+    let limit = match field("limit") {
+        Some(WireValue::Num(n)) => n
+            .parse::<i64>()
+            .map_err(|_| BehaviorError::new("LEAF_PORT", format!("scp leaf: port `guard.limit` is not an integer row cap: {n}")))?,
+        Some(other) => return Err(port_mismatch("guard.limit", "number", other)),
+        None => return Err(port_mismatch("guard.limit", "number", &WireValue::Null)),
+    };
+    let relation = match field("relation") {
+        Some(WireValue::Str(s)) => s.clone(),
+        Some(other) => return Err(port_mismatch("guard.relation", "string", other)),
+        None => return Err(port_mismatch("guard.relation", "string", &WireValue::Null)),
+    };
+    let model = match field("model") {
+        Some(WireValue::Str(s)) => Some(s.clone()),
+        _ => None,
+    };
+    Ok(Some(RelationGuard { limit, model, relation }))
+}
+
 /// A `{arr:'string'}` port — the ordered key-column TUPLE (`col` / `pk` / `fk`). Every element must be
 /// a wire string (a key column NAME); anything else is an ABI break, not a data case.
 fn port_strings(payload: &mut WireRow, name: &str) -> Result<Vec<String>, BehaviorError> {
@@ -277,14 +318,17 @@ fn port_strings(payload: &mut WireRow, name: &str) -> Result<Vec<String>, Behavi
 /// non-returning write returns a one-row `[{changes,lastInsertRowid}]` summary so the leaf output
 /// shape is uniform (a `List` of `Row`). `?`→`$N` is rendered here (the transport's placeholder SSoT,
 /// matching the TS `prepareSql`); an array param (a relation key set) rides as [`Value::Arr`], which
-/// the driver encodes per dialect (json_each / native array). Ports ride in the payload as
-/// `{bigint, params, returning, sql, write}`.
+/// the driver encodes per dialect (json_each / native array). The OPTIONAL `guard` port is the
+/// RELATION runaway cap of a guarded relation child fetch: the raw rows are asserted against it here
+/// ([`crate::errors::LimitExceededError::check`]) because past [`group_children`] the graph is already
+/// nested. Ports ride in the payload as `{bigint, guard?, params, returning, sql, write}`.
 pub fn execute_sql(mut payload: WireRow) -> Result<WireValue, BehaviorError> {
     let bigint = port_bool(&mut payload, "bigint")?;
     let params_port = port_list(&mut payload, "params")?;
     let returning = port_bool(&mut payload, "returning")?;
     let sql_port = port_string(&mut payload, "sql")?;
     let write = port_bool(&mut payload, "write")?;
+    let guard = port_relation_guard(&mut payload)?;
     let (params, sql): (&[WireValue], &str) = (&params_port, &sql_port);
     // `bigint` is the better-sqlite3 #59 safe-integers toggle; rust/PG/MySQL return BIGINT natively
     // (i64), so there is no exact-integer read mode to select (see exec_context docs) — the port is
@@ -312,6 +356,22 @@ pub fn execute_sql(mut payload: WireRow) -> Result<WireValue, BehaviorError> {
         // read path never boxes into bc's `Value`.
         let rows = exec_context::execute(&ctx, &rendered, &value_params, &StatementIntent::read())
             .map_err(sql_failure_to_behavior_error)?;
+        // The RELATION runaway guard, on the RAW child rows — the only point they are visible (past
+        // `group_children` the graph is already nested) and the reason the cap rides on this transport.
+        // The comparison + the byte-identical message come from the shared
+        // [`crate::errors::LimitExceededError::check`] SSoT, so this path cannot drift from the TS
+        // reference. It surfaces as a `BehaviorError` because that is the leaf transport's ONE error
+        // channel (the same way a `SqlFailure` does), under its own stable code.
+        if let Some(g) = guard {
+            crate::errors::LimitExceededError::check(
+                g.limit,
+                rows.len() as i64,
+                crate::errors::LIMIT_CONTEXT_RELATION,
+                g.model,
+                Some(g.relation),
+            )
+            .map_err(|e| BehaviorError::new("LIMIT_EXCEEDED", e.message))?;
+        }
         Ok(WireValue::List(WireList { items: rows }))
     }
 }
@@ -527,6 +587,64 @@ mod tests {
             // each parent nests EXACTLY its own one matching post (cartesian would nest both).
             assert_eq!(items(&posts).len(), 1, "composite grouping must not be cartesian");
         }
+    }
+
+    // The RELATION runaway guard (#160), on the RAW child rows of a guarded relation child fetch: over
+    // the cap ⇒ a LOUD failure carrying the byte-identical `LimitExceededError` message and the EXACT
+    // batch count; within the cap ⇒ the rows, unchanged; NO guard port ⇒ never checked (the
+    // byte-unchanged uncapped path). The rust leg of "the same behaviour in all five languages" — the
+    // twin of the go `TestExecuteSQL_RelationGuardOnRawChildRows` and the TS conformance guard vectors,
+    // proven against a real in-memory sqlite rather than by inspection.
+    #[test]
+    fn relation_guard_trips_on_the_raw_child_rows() {
+        use crate::driver::SqliteDriver;
+        let d = SqliteDriver::in_memory(&[
+            "CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)".to_string(),
+            "INSERT INTO t (id, v) VALUES (1,'a'), (2,'b'), (3,'c')".to_string(),
+        ])
+        .unwrap();
+        let read = |guard: Option<WireValue>| -> Result<WireValue, BehaviorError> {
+            let mut ports = vec![
+                ("bigint", WireValue::Bool(false)),
+                ("params", wlist(vec![])),
+                ("returning", WireValue::Bool(false)),
+                ("sql", WireValue::Str("SELECT id, v FROM t ORDER BY id".to_string())),
+                ("write", WireValue::Bool(false)),
+            ];
+            if let Some(g) = guard {
+                ports.push(("guard", g));
+            }
+            with_ambient_driver(&d, || execute_sql(payload(ports.clone())))
+        };
+        let cap = |limit: i64| {
+            wrow(&[
+                ("limit", WireValue::int(limit)),
+                ("model", WireValue::Str("t".to_string())),
+                ("relation", WireValue::Str("things".to_string())),
+            ])
+        };
+
+        // 3 rows > cap 2 ⇒ the transport fails before the rows are handed on.
+        let e = match read(Some(cap(2))) {
+            Err(e) => e,
+            Ok(_) => panic!("a relation batch over its cap must fail"),
+        };
+        assert_eq!(e.code, "LIMIT_EXCEEDED");
+        assert_eq!(
+            e.message,
+            "Query limit exceeded: relation 'things' on t returned 3 records, but limit is 2. \
+             This usually indicates a missing WHERE clause or an N+1 query pattern. Set a higher \
+             limit or use pagination."
+        );
+
+        // 3 rows ≤ cap 3 ⇒ no failure, and the rows come back untouched.
+        match read(Some(cap(3))) {
+            Ok(out) => assert_eq!(items(&out).len(), 3, "a batch within its cap returns its rows"),
+            Err(e) => panic!("a batch within its cap must pass: {}", e.message),
+        }
+
+        // No guard port at all ⇒ never checked (the uncapped statement is byte-unchanged).
+        assert!(read(None).is_ok(), "an uncapped read must not be guarded");
     }
 
     // Port unbox is FAIL-CLOSED: an ABSENT port and a WRONG-VARIANT port both surface a loud

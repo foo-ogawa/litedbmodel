@@ -20,8 +20,10 @@ namespace LiteDbModel\Runtime;
  *     param — a relation key set from `pluck` or a batch record set — rides per dialect: sqlite/mysql
  *     JSON-encode it for `json_each`/`JSON_TABLE`, postgres binds the array as-is), and run it through
  *     the runtime's central {@see execute()} / {@see run()} seam on the bound context — the ONLY driver
- *     contact. A non-returning write returns a one-row `[{changes, lastInsertRowid}]` summary so the
- *     leaf output shape is uniform (a list of rows).
+ *     contact. The OPTIONAL `guard` port is the RELATION runaway cap of a guarded relation child fetch:
+ *     the raw rows are asserted against it HERE ({@see LimitExceededError::check}) because past `group`
+ *     the graph is already nested. A non-returning write returns a one-row
+ *     `[{changes, lastInsertRowid}]` summary so the leaf output shape is uniform (a list of rows).
  *   - `pluck` — rows + the ordered key-column TUPLE → the deduped, non-null batch key set (single-key →
  *     a flat scalar array; composite → an array-of-tuples). Delegates the dedupe to the shared grouping
  *     core ({@see Grouping::dedupeKeyTuples}) — the SAME SSoT the runtime relation path uses.
@@ -88,10 +90,27 @@ final class Leaves
                     // The affected-write summary row (uniform list output shape — TS `writeSummary`).
                     return ['ok' => [(object) ['changes' => $info->changes, 'lastInsertRowid' => $info->lastInsertRowid]]];
                 }
-                return ['ok' => execute($active, $sql, $params, StatementIntent::read())];
+                $rows = execute($active, $sql, $params, StatementIntent::read());
             } catch (SqlFailure $e) {
                 return ['error' => $e->getMessage()];
             }
+            // The RELATION runaway guard, on the RAW child rows — the only point they are visible (past
+            // `group` the graph is already nested) and the reason the cap rides on this transport at
+            // all. The comparison + error assembly are the shared {@see LimitExceededError::check} SSoT,
+            // so this path cannot drift from the runtime relation path ({@see Relation}) or from the TS
+            // reference. It THROWS rather than returning `['error' => …]`: a runaway is a litedbmodel
+            // policy error with typed fields, not a mapped transport failure (the TS leaf throws too).
+            $guard = $ports['guard'] ?? null;
+            if ($guard !== null) {
+                LimitExceededError::check(
+                    (int) $guard->limit,
+                    count($rows),
+                    'relation',
+                    isset($guard->model) ? (string) $guard->model : null,
+                    (string) $guard->relation,
+                );
+            }
+            return ['ok' => $rows];
         };
 
         $pluck = static function (array $ports, array $_ctx): array {

@@ -12,7 +12,9 @@
  */
 
 import { test, expect } from 'vitest';
-import { executeSQL, pluck, group, type LeafContext } from '../../src/scp/leaves';
+import { executeSQL, pluck, group, leafHandlers, type LeafContext } from '../../src/scp/leaves';
+import { LimitExceededError } from '../../src/scp/errors';
+import type { Value } from 'behavior-contracts/runtime';
 import { contextForConnection, type SyncConnection, type Rows, type RunInfo } from '../../src/scp/exec-context';
 
 interface Call { kind: 'execute' | 'executeSafe' | 'run'; sql: string; params: unknown[] }
@@ -110,4 +112,46 @@ test('`?`→`$N` is rendered AFTER the SKIP assembly, so the numbering follows t
   executeSQL({ ...base, whereDynamic: { frags: [null, { sql: 'id >= ?', params: [2] }] } }, ctx);
   expect(calls[1].sql).toBe('SELECT id, author_id FROM posts WHERE id >= $1 ORDER BY id ASC');
   expect(calls[1].params).toEqual([2]);
+});
+
+test('the relation guard trips on the RAW child rows, and an uncapped statement is never checked', () => {
+  const calls: Call[] = [];
+  const ctx: LeafContext = { exec: contextForConnection(recordingConn(calls)), dialect: 'sqlite' };
+  const base = { sql: 'SELECT id, author_id FROM posts', params: [], write: false, returning: false, bigint: false };
+
+  // 3 child rows > cap 2 ⇒ the transport throws with the relation-context fields and the EXACT batch
+  // total (the batch is fetched in full — v1 `_selectForRelation` parity, no `LIMIT cap + 1` here).
+  expect(() => executeSQL({ ...base, guard: { limit: 2, model: 'posts', relation: 'posts' } }, ctx)).toThrow(LimitExceededError);
+  try {
+    executeSQL({ ...base, guard: { limit: 2, model: 'posts', relation: 'posts' } }, ctx);
+  } catch (e) {
+    const err = e as LimitExceededError;
+    expect([err.limit, err.count, err.context, err.model, err.relation]).toEqual([2, 3, 'relation', 'posts', 'posts']);
+  }
+
+  // Within the cap, and with no guard at all, the rows come back untouched.
+  expect(executeSQL({ ...base, guard: { limit: 3, model: 'posts', relation: 'posts' } }, ctx)).toHaveLength(3);
+  expect(executeSQL(base, ctx)).toHaveLength(3);
+});
+
+test('the leaf handler unboxes the guard port fail-closed (bc int is a BigInt; a malformed cap is loud)', () => {
+  const calls: Call[] = [];
+  const handler = leafHandlers({ exec: contextForConnection(recordingConn(calls)), dialect: 'sqlite' }).executeSQL;
+  const ports = (guard: unknown): Record<string, Value> =>
+    ({ sql: 'SELECT id, author_id FROM posts', params: [], write: false, returning: false, bigint: false, guard }) as unknown as Record<string, Value>;
+
+  // The cap arrives in bc's `int` value model — a BigInt on the TS plane — and must still compare and
+  // REPORT as the `number` the error contract declares.
+  try {
+    handler(ports({ limit: 2n, model: 'posts', relation: 'posts' }), { nodeId: 'n0', component: 'executeSQL' });
+    throw new Error('the guard must trip');
+  } catch (e) {
+    const err = e as LimitExceededError;
+    expect(err).toBeInstanceOf(LimitExceededError);
+    expect(typeof err.limit).toBe('number');
+    expect(err.limit).toBe(2);
+  }
+
+  // A guard that cannot be unboxed is LOUD — a dropped cap is a runaway that would sail through.
+  expect(() => handler(ports({ model: 'posts' }), { nodeId: 'n0', component: 'executeSQL' })).toThrow(/guard.*port/i);
 });

@@ -37,8 +37,7 @@ import {
 } from './exec-context';
 import { materializeCell, sqlTypeToMaterializeClass, type MaterializeClass, type ColumnTypeResolver } from './coltype';
 import { parseProjectionColumn } from './makesql/outtype';
-import { resolveHasManyHardLimit } from './limit-config';
-import { LimitExceededError } from './errors';
+import { assertRelationHardLimit, resolveHasManyHardLimit, type RelationGuard } from './limit-config';
 import { dedupeKeyTuples, groupByKey, attachToParent } from './grouping';
 import {
   compileSingleKeyUnlimited,
@@ -171,11 +170,14 @@ export interface RelationOp {
   /**
    * Hard-limit runaway cap (Phase E-2, epic #74; v1 `_selectForRelation` `hasManyHardLimit`): the
    * effective per-batch row cap RESOLVED at compile (per-relation override → global). When the batch
-   * fetches MORE than this TOTAL, {@link runRelationOp} throws {@link import('./errors').LimitExceededError}
-   * (`context: 'relation'`, EXACT count). Baked as a plain number on the JSON artifact so the native
-   * ports (#100-103) run the SAME post-fetch check with no config surface of their own. Absent ⇒ no
-   * check (disabled, or a relation with an intrinsic per-parent `limit` window whose fanout is already
-   * bounded). See {@link import('./limit-config').resolveHasManyHardLimit}.
+   * fetches MORE than this TOTAL, {@link import('./errors').LimitExceededError} is raised
+   * (`context: 'relation'`, EXACT count) — by {@link runRelationOp} on the typed-object / lazy
+   * surface, and by the `executeSQL` leaf on the CODEGEN surface, where the emitter bakes this cap
+   * into the child fetch's `guard` port (the raw child rows are only visible there, before `group`).
+   * BOTH read it through {@link relationGuard} + `assertRelationHardLimit`, so neither the cap nor the
+   * error identity can drift between surfaces or languages. Absent ⇒ no check (disabled, or a relation
+   * with an intrinsic per-parent `limit` window whose fanout is already bounded).
+   * See {@link import('./limit-config').resolveHasManyHardLimit}.
    */
   readonly hardLimit?: number;
 }
@@ -417,6 +419,22 @@ export function targetKeyCols(op: RelationOp): readonly string[] {
 }
 
 /**
+ * The op's RELATION RUNAWAY GUARD, or `null` when it baked none (disabled, or an intrinsic per-parent
+ * `limit` window whose fanout is already bounded). The ONE projection of a compiled op onto the
+ * {@link RelationGuard} record — read by BOTH consumers of the cap: {@link runRelationOp} (the
+ * typed-object / lazy batch) and the emitter, which bakes this record into the generated child fetch's
+ * `guard` port so the leaf enforces the SAME resolved cap. Nothing downstream re-derives it.
+ */
+export function relationGuard(op: RelationOp): RelationGuard | null {
+  if (op.hardLimit === undefined) return null;
+  return {
+    limit: op.hardLimit,
+    ...(op.targetTable !== undefined ? { model: op.targetTable } : {}),
+    relation: op.name,
+  };
+}
+
+/**
  * Bind the deduped keys to the batch op's params — ONE param, every dialect and arity. A COMPOSITE
  * key set is the JSON array-of-tuples every dialect expands server-side (PG `json_array_elements`,
  * MySQL `JSON_TABLE`, SQLite `json_each`), so the key binding is dialect-INDEPENDENT: no key-tuple
@@ -470,14 +488,13 @@ export function runRelationOp(
   // projects), so the relation path — like the primary read — never touches a driver directly.
   const boundParams = bindKeys(op, keys);
   const rawRows = (int64Child ? seamExecuteSafe(ctx, sql, boundParams) : seamExecute(ctx, sql, boundParams)) as Record<string, unknown>[];
-  // Hard-limit runaway guard (Phase E-2, epic #74; v1 `_selectForRelation`): POST-fetch, if the
-  // batch TOTAL exceeds the baked cap, throw with the EXACT count (the batch is fetched in full, no
-  // N+1). Absent `op.hardLimit` ⇒ disabled / intrinsic-limit relation ⇒ no check. The native ports
-  // (#100-103) run the SAME check off the same JSON field. Throws BEFORE grouping/hydration so an
-  // over-cap read never assembles an unbounded result set.
-  if (op.hardLimit !== undefined && rawRows.length > op.hardLimit) {
-    throw new LimitExceededError(op.hardLimit, rawRows.length, 'relation', op.targetTable, op.name);
-  }
+  // Hard-limit runaway guard (Phase E-2, epic #74; v1 `_selectForRelation`): POST-fetch, if the batch
+  // TOTAL exceeds the baked cap, throw with the EXACT count (the batch is fetched in full, no N+1).
+  // The check itself is the SHARED relation primitive (`assertRelationHardLimit`) over the op's own
+  // guard — the SAME two functions the codegen path runs in the `executeSQL` leaf, so the two read
+  // surfaces cannot drift on the cap, the count or the error identity. Runs BEFORE grouping/hydration
+  // so an over-cap read never assembles an unbounded result set.
+  assertRelationHardLimit(rawRows, relationGuard(op));
   const rows = materializeChildRows(rawRows, childCols, int64Child);
   // Group the child rows by their target-key identity — the shared grouping SSoT ({@link groupByKey}),
   // the SAME core the eager `group` leaf uses (no duplicated grouping).

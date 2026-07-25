@@ -94,11 +94,11 @@ export function resolveHasManyHardLimit(perRelation?: number | null, global?: nu
 }
 
 /**
- * The find hard-limit READ-BOUNDARY check — the twin of the relation one (`runRelationOp` throws off
- * the op's baked `hardLimit`, `relation.ts`). The emitter bakes `LIMIT cap + 1` into the capped read's
- * static SQL (a BOUNDED fetch: at most `cap + 1` rows ever leave the DB), and this asserts the result:
- * `cap + 1` rows means the true total EXCEEDS the cap, so it throws {@link LimitExceededError} with
- * `context:'find'` and `count = rows.length` (the fetch size — the total is only known to exceed).
+ * The find hard-limit READ-BOUNDARY check — the twin of {@link assertRelationHardLimit}. The emitter
+ * bakes `LIMIT cap + 1` into the capped read's static SQL (a BOUNDED fetch: at most `cap + 1` rows
+ * ever leave the DB), and this asserts the result: `cap + 1` rows means the true total EXCEEDS the
+ * cap, so it throws {@link LimitExceededError} with `context:'find'` and `count = rows.length` (the
+ * fetch size — the total is only known to exceed).
  *
  * It lives at the boundary because SCP has no throw: a generated module returns rows, and the caller
  * that asked for the capped endpoint enforces the policy. `cap === undefined` ⇒ the endpoint baked no
@@ -107,6 +107,49 @@ export function resolveHasManyHardLimit(perRelation?: number | null, global?: nu
 export function assertFindHardLimit(rows: readonly unknown[], cap: number | undefined, model: string): void {
   if (cap === undefined) return;
   if (rows.length > cap) throw new LimitExceededError(cap, rows.length, 'find', model);
+}
+
+/**
+ * The RELATION runaway guard, resolved at compile onto a {@link import('./relation').RelationOp} and
+ * carried verbatim to whoever fetches that relation's child rows: the effective batch-total `limit`
+ * plus the identity the error reports (`model` = the child TABLE, `relation` = the relation name).
+ *
+ * It is a PLAIN JSON record on purpose. The compiled op is the SSoT, and the same record is what the
+ * emitter bakes into the generated relation child fetch (`leaf-transport.Db.executeSQL`'s `guard`
+ * port), so the codegen path and the typed-object/lazy path enforce ONE resolved cap — there is no
+ * second config surface anywhere downstream, in any language.
+ */
+export interface RelationGuard {
+  /** The effective batch-total row cap (per-relation override → global, resolved at compile). */
+  readonly limit: number;
+  /**
+   * The child (target) TABLE — what {@link LimitExceededError.model} reports in the relation context.
+   * Optional exactly as the error's own field is: an op compiled without a target table reports
+   * `unknown` rather than inventing a name.
+   */
+  readonly model?: string;
+  /** The relation NAME — what {@link LimitExceededError.relation} reports. */
+  readonly relation: string;
+}
+
+/**
+ * The relation hard-limit POST-FETCH check — the ONE `count > cap ⇒ throw` primitive for the relation
+ * context, shared by BOTH v2 read surfaces: the typed-object / lazy batch
+ * ({@link import('./relation').runRelationOp}) and the CODEGEN path, where the `executeSQL` leaf runs
+ * it on the raw child rows of a guarded relation fetch — the only place the raw child rows exist
+ * (past `group` the graph is nested, and SCP itself has no throw).
+ *
+ * Unlike the find twin the batch is fetched IN FULL (v1 `_selectForRelation` parity — no `LIMIT
+ * cap + 1` on a relation batch), so `count` is the EXACT batch total, exactly as
+ * {@link import('./errors').LimitExceededContext} declares and as the rust/go/python/php ports mirror.
+ * `guard == null` ⇒ the relation baked no cap (disabled, or an intrinsic per-parent `limit` window
+ * whose fanout is already bounded) ⇒ no check.
+ */
+export function assertRelationHardLimit(rows: readonly unknown[], guard: RelationGuard | null | undefined): void {
+  if (guard === null || guard === undefined) return;
+  if (rows.length > guard.limit) {
+    throw new LimitExceededError(guard.limit, rows.length, 'relation', guard.model, guard.relation);
+  }
 }
 
 /** Validate + normalize a cap: `null`/`undefined` ⇒ null (disabled); else a non-negative integer. */

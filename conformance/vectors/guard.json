@@ -89,6 +89,200 @@
         "context": "find",
         "model": "posts"
       }
+    },
+    {
+      "name": "guard: the hasMany batch overruns hasManyHardLimit → throw (exact count) [sqlite]",
+      "kind": "expect-error",
+      "dialect": "sqlite",
+      "entry": "usersWithPosts",
+      "input": {},
+      "config": {
+        "hasManyHardLimit": 2
+      },
+      "case": "guard: the hasMany batch overruns hasManyHardLimit → throw (exact count)",
+      "expectedCap": null,
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, name FROM conf_users ORDER BY id ASC",
+          "params": []
+        },
+        {
+          "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE author_id IN (SELECT value FROM json_each(?)) ORDER BY id ASC",
+          "params": [
+            "[1,2,3]"
+          ]
+        }
+      ],
+      "expectedError": {
+        "name": "LimitExceededError",
+        "limit": 2,
+        "count": 3,
+        "context": "relation",
+        "model": "conf_posts",
+        "relation": "posts"
+      }
+    },
+    {
+      "name": "guard: the hasMany batch overruns hasManyHardLimit → throw (exact count) [postgres]",
+      "kind": "expect-error",
+      "dialect": "postgres",
+      "entry": "usersWithPosts",
+      "input": {},
+      "config": {
+        "hasManyHardLimit": 2
+      },
+      "case": "guard: the hasMany batch overruns hasManyHardLimit → throw (exact count)",
+      "expectedCap": null,
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, name FROM conf_users ORDER BY id ASC",
+          "params": []
+        },
+        {
+          "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE conf_posts.author_id = ANY($1::int[]) ORDER BY id ASC",
+          "params": [
+            [
+              1,
+              2,
+              3
+            ]
+          ]
+        }
+      ],
+      "expectedError": {
+        "name": "LimitExceededError",
+        "limit": 2,
+        "count": 3,
+        "context": "relation",
+        "model": "conf_posts",
+        "relation": "posts"
+      }
+    },
+    {
+      "name": "guard: the hasMany batch overruns hasManyHardLimit → throw (exact count) [mysql]",
+      "kind": "expect-error",
+      "dialect": "mysql",
+      "entry": "usersWithPosts",
+      "input": {},
+      "config": {
+        "hasManyHardLimit": 2
+      },
+      "case": "guard: the hasMany batch overruns hasManyHardLimit → throw (exact count)",
+      "expectedCap": null,
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, name FROM conf_users ORDER BY id ASC",
+          "params": []
+        },
+        {
+          "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE author_id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) ORDER BY id ASC",
+          "params": [
+            "[1,2,3]"
+          ]
+        }
+      ],
+      "expectedError": {
+        "name": "LimitExceededError",
+        "limit": 2,
+        "count": 3,
+        "context": "relation",
+        "model": "conf_posts",
+        "relation": "posts"
+      }
+    },
+    {
+      "name": "guard: a per-relation hardLimit override → throw [sqlite]",
+      "kind": "expect-error",
+      "dialect": "sqlite",
+      "entry": "usersWithCappedPosts",
+      "input": {},
+      "config": {},
+      "case": "guard: a per-relation hardLimit override → throw",
+      "expectedCap": null,
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, name FROM conf_users ORDER BY id ASC",
+          "params": []
+        },
+        {
+          "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE author_id IN (SELECT value FROM json_each(?)) ORDER BY id ASC",
+          "params": [
+            "[1,2,3]"
+          ]
+        }
+      ],
+      "expectedError": {
+        "name": "LimitExceededError",
+        "limit": 2,
+        "count": 3,
+        "context": "relation",
+        "model": "conf_posts",
+        "relation": "cappedPosts"
+      }
+    },
+    {
+      "name": "guard: a per-relation hardLimit override → throw [postgres]",
+      "kind": "expect-error",
+      "dialect": "postgres",
+      "entry": "usersWithCappedPosts",
+      "input": {},
+      "config": {},
+      "case": "guard: a per-relation hardLimit override → throw",
+      "expectedCap": null,
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, name FROM conf_users ORDER BY id ASC",
+          "params": []
+        },
+        {
+          "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE conf_posts.author_id = ANY($1::int[]) ORDER BY id ASC",
+          "params": [
+            [
+              1,
+              2,
+              3
+            ]
+          ]
+        }
+      ],
+      "expectedError": {
+        "name": "LimitExceededError",
+        "limit": 2,
+        "count": 3,
+        "context": "relation",
+        "model": "conf_posts",
+        "relation": "cappedPosts"
+      }
+    },
+    {
+      "name": "guard: a per-relation hardLimit override → throw [mysql]",
+      "kind": "expect-error",
+      "dialect": "mysql",
+      "entry": "usersWithCappedPosts",
+      "input": {},
+      "config": {},
+      "case": "guard: a per-relation hardLimit override → throw",
+      "expectedCap": null,
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, name FROM conf_users ORDER BY id ASC",
+          "params": []
+        },
+        {
+          "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE author_id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) ORDER BY id ASC",
+          "params": [
+            "[1,2,3]"
+          ]
+        }
+      ],
+      "expectedError": {
+        "name": "LimitExceededError",
+        "limit": 2,
+        "count": 3,
+        "context": "relation",
+        "model": "conf_posts",
+        "relation": "cappedPosts"
+      }
     }
   ]
 }

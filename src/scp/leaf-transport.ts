@@ -49,8 +49,15 @@ export class Db {
    * `write` selects `run` (INSERT/UPDATE/DELETE) vs `execute` (SELECT / RETURNING); `returning` keeps
    * a RETURNING write on the row path; `bigint` runs the read in exact-integer mode. A non-returning
    * write yields the one-row `[{changes, lastInsertRowid}]` summary so the output shape is uniform.
+   *
+   * `guard` is the RELATION runaway cap (`{limit, model, relation}` — the compiled op's own
+   * {@link import('./limit-config').RelationGuard}) that a guarded relation child fetch carries: the
+   * transport asserts the fetched row count against it and raises `LimitExceededError` when the batch
+   * overruns. It rides HERE because this is where the RAW child rows exist — past `group` the graph is
+   * already nested — and because SCP has no throw, so the enforcement must live in the transport. A
+   * statement with no cap omits the port entirely (every non-relation call is byte-unchanged).
    */
-  @leaf static executeSQL(sql: string, params: WireValue[], write: boolean, returning: boolean, bigint: boolean, whereDynamic?: WireValue | null): WireValue[] { return declarationStub('executeSQL', [sql, params, write, returning, bigint, whereDynamic]); }
+  @leaf static executeSQL(sql: string, params: WireValue[], write: boolean, returning: boolean, bigint: boolean, whereDynamic?: WireValue | null, guard?: WireValue | null): WireValue[] { return declarationStub('executeSQL', [sql, params, write, returning, bigint, whereDynamic, guard]); }
 
   /** Relation key extraction: the deduped, non-null key set over the ordered key-column tuple `col`. */
   @leaf static pluck(rows: WireValue[], col: string[]): WireValue[] { return declarationStub('pluck', [rows, col]); }

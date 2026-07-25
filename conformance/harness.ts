@@ -161,6 +161,21 @@ class ConfUser {
 
   @hasMany(() => [ConfUser.id, ConfPost.author_id], { order: () => ConfPost.id.asc() })
   declare posts: Promise<ConfPost[]>;
+
+  // The three relation hard-limit shapes, declared on the SAME key pair so a guard vector differs from
+  // the plain `posts` in NOTHING but its cap (v1 `@hasMany({hardLimit})` precedence, `decorators.ts`):
+  //   - a per-relation override wins over the global `hasManyHardLimit`;
+  //   - `hardLimit: null` DISABLES the check for this relation even when the global is set;
+  //   - an intrinsic per-parent `limit` window SKIPS the batch-total check (its fanout is bounded).
+
+  @hasMany(() => [ConfUser.id, ConfPost.author_id], { order: () => ConfPost.id.asc(), hardLimit: 2 })
+  declare cappedPosts: Promise<ConfPost[]>;
+
+  @hasMany(() => [ConfUser.id, ConfPost.author_id], { order: () => ConfPost.id.asc(), hardLimit: null })
+  declare uncappedPosts: Promise<ConfPost[]>;
+
+  @hasMany(() => [ConfUser.id, ConfPost.author_id], { order: () => ConfPost.id.asc(), limit: 1 })
+  declare topPosts: Promise<ConfPost[]>;
 }
 
 @model('conf_posts')
@@ -266,6 +281,15 @@ const ENDPOINTS: EndpointSet = {
   },
   /** A belongsTo relation — the single-child nesting shape. */
   postsWithAuthor: { kind: 'read', model: ConfPost, order: 'id ASC', with: ['author'] },
+  // The relation hard-limit guard TARGETS: the same user page over the three capped relation shapes.
+  // The cap is resolved at EMIT (compileRelationOp) and baked onto the child fetch's `guard` port, so
+  // which of these throws is decided entirely by the declaration + the config the vector carries.
+  /** A per-relation `hardLimit: 2` override — throws whatever the global says. */
+  usersWithCappedPosts: { kind: 'read', model: ConfUser, select: ['id', 'name'], order: 'id ASC', with: ['cappedPosts'] },
+  /** A per-relation `hardLimit: null` — the check is DISABLED even under a global cap. */
+  usersWithUncappedPosts: { kind: 'read', model: ConfUser, select: ['id', 'name'], order: 'id ASC', with: ['uncappedPosts'] },
+  /** An intrinsic per-parent `limit` window — the batch-total check is SKIPPED (fanout bounded). */
+  usersWithTopPosts: { kind: 'read', model: ConfUser, select: ['id', 'name'], order: 'id ASC', with: ['topPosts'] },
   createPost: {
     kind: 'create',
     model: ConfPost,
@@ -334,17 +358,20 @@ interface Built {
 }
 
 /**
- * The hard-limit config a vector re-applies before EMITTING. The find cap bakes into the read's
- * `LIMIT cap + 1` at emit time ({@link import('../src/scp/limit-config').resolveFindHardLimit}), so
- * the vector CARRIES it and a runner reproduces the artifact by re-emitting under it.
+ * The hard-limit config a vector re-applies before EMITTING. BOTH caps bake at emit time — the find cap
+ * into the read's `LIMIT cap + 1` ({@link import('../src/scp/limit-config').resolveFindHardLimit}) and
+ * the relation cap into the child fetch's `guard` port
+ * ({@link import('../src/scp/limit-config').resolveHasManyHardLimit}, resolved by `compileRelationOp`)
+ * — so the vector CARRIES them and a runner reproduces the artifact by re-emitting under them.
  */
 export interface LimitConfigSpec {
   readonly findHardLimit?: number | null;
+  readonly hasManyHardLimit?: number | null;
 }
 
-/** The cache key: only what actually changes the EMITTED artifact (the baked find cap). */
+/** The cache key: only what actually changes the EMITTED artifact (the two baked caps). */
 function builtKey(dialect: DialectName, config?: LimitConfigSpec): string {
-  return `${dialect}:${String(config?.findHardLimit ?? null)}`;
+  return `${dialect}:${String(config?.findHardLimit ?? null)}:${String(config?.hasManyHardLimit ?? null)}`;
 }
 
 const builtCache = new Map<string, Promise<Built>>();
@@ -522,13 +549,24 @@ function seedDb(schema: readonly string[]): InstanceType<typeof Database> {
   return db;
 }
 
+/**
+ * ONE call through the pipeline: what the module returned (or THREW) plus every statement the
+ * transport handed the driver during it. The throw is DATA, not control flow, because a guard vector's
+ * evidence is precisely "these statements ran, then it threw this" — a relation cap trips INSIDE the
+ * generated call (the `executeSQL` leaf), so an exception that unwound past the tap would take the
+ * statement log with it. Both vector kinds read this one shape.
+ */
+interface CallOutcome {
+  readonly result: unknown;
+  readonly statements: EncodedStatement[];
+  /** The error the call raised, or `undefined` when it returned normally. */
+  readonly thrown?: unknown;
+}
+
 /** A freshly seeded database for ONE dialect, with the generated module bound to it. */
 interface Seam {
-  /**
-   * Call an emitted endpoint. Returns the module's MARSHALLED (de-boxed) output together with every
-   * statement the transport handed the driver DURING that call, in order.
-   */
-  call(entry: string, input: Record<string, unknown>): Promise<{ result: unknown; statements: EncodedStatement[] }>;
+  /** Call an emitted endpoint. Never throws — see {@link CallOutcome}. */
+  call(entry: string, input: Record<string, unknown>): Promise<CallOutcome>;
   /** Run an assertion query straight through the same execution seam. */
   query(sql: string): Promise<Record<string, unknown>[]>;
   close(): Promise<void>;
@@ -546,8 +584,15 @@ function seamOver(
       // The tap logs the seed/DDL and the assertion queries too, so a call's statements are the
       // slice it appended — never a guess about which log entries belong to it.
       const from = log.length;
-      const result = await invoke(entry, input);
-      return { result, statements: log.slice(from).map((s) => ({ sql: s.sql, params: s.params.map(encodeValue) })) };
+      let result: unknown;
+      let thrown: unknown;
+      try {
+        result = await invoke(entry, input);
+      } catch (e) {
+        thrown = e;
+      }
+      const statements = log.slice(from).map((s) => ({ sql: s.sql, params: s.params.map(encodeValue) }));
+      return { result, statements, ...(thrown !== undefined ? { thrown } : {}) };
     },
     query,
     close,
@@ -672,10 +717,19 @@ export interface ExecVector {
 }
 
 /**
- * An EXPECT-ERROR vector: a read whose baked find cap is exceeded. The emitter bakes `LIMIT cap + 1`
- * and the READ BOUNDARY enforces it post-fetch with
- * {@link import('../src/scp/limit-config').assertFindHardLimit} — SCP has no throw, so the cap lives
- * where the caller consumes the rows.
+ * An EXPECT-ERROR vector: a read whose baked runaway cap is exceeded. The two contexts trip in
+ * DIFFERENT places, and the vector pins which:
+ *
+ *   - `find`     — the emitter bakes `LIMIT cap + 1` and the READ BOUNDARY enforces it post-fetch with
+ *                  {@link import('../src/scp/limit-config').assertFindHardLimit}, because a bounded
+ *                  fetch's overrun is visible in the rows the caller already holds.
+ *   - `relation` — the cap rides ON the generated relation child fetch (`executeSQL`'s `guard` port)
+ *                  and the TRANSPORT raises, because the raw child rows exist nowhere else: at the
+ *                  boundary the graph is already grouped. So the throw comes from INSIDE the generated
+ *                  call, and `expectedStatements` ends at the child fetch that overran — a downstream
+ *                  relation level never runs.
+ *
+ * SCP has no throw either way; what differs is which side of the generated call owns the enforcement.
  */
 export interface ExpectErrorVector {
   readonly name: string;
@@ -685,8 +739,10 @@ export interface ExpectErrorVector {
   readonly input: EncodedValue;
   readonly config: LimitConfigSpec;
   readonly case: string;
-  readonly expectedCap: number;
-  /** Every statement the (capped) read issued — the `LIMIT cap + 1` bounded fetch is visible here. */
+  /** The `findHardLimit` cap the emitter baked (null ⇒ none — a relation-guard vector bakes none). */
+  readonly expectedCap: number | null;
+  /** Every statement the read issued before it raised (the `LIMIT cap + 1` bounded fetch, or the
+   * over-cap relation child fetch — whichever this vector's context is). */
   readonly expectedStatements: readonly EncodedStatement[];
   readonly expectedError: {
     readonly name: 'LimitExceededError';
@@ -694,6 +750,8 @@ export interface ExpectErrorVector {
     readonly count: number;
     readonly context: 'find' | 'relation';
     readonly model?: string;
+    /** The relation NAME — `relation` context only. */
+    readonly relation?: string;
   };
 }
 
@@ -805,6 +863,61 @@ const EXEC_CASES: readonly ExecCase[] = [
   // LIMIT is never capped — both must run normally (no throw), on every dialect.
   { id: 'guard: findHardLimit null → no cap baked', entry: 'posts', input: { authorId: 1 }, config: { findHardLimit: null } },
   { id: 'guard: an explicit endpoint LIMIT governs → no cap baked', entry: 'postsTop', input: {}, config: { findHardLimit: 1 } },
+  // The RELATION hard-limit SKIP cases, both run under a global cap of 1 that the batch WOULD overrun
+  // (3 child rows): they prove the declaration — not the global — decides, and that a relation whose
+  // check is disabled or skipped still MATERIALIZES its children (a swallowed guard would show up as a
+  // missing or empty relation, which the content contract rejects).
+  {
+    id: 'guard: a per-relation hardLimit null disables the check → no throw',
+    entry: 'usersWithUncappedPosts',
+    input: {},
+    config: { hasManyHardLimit: 1 },
+    relationFields: { uncappedPosts: ['id', 'author_id', 'title', 'status', 'created_at'] },
+  },
+  {
+    id: 'guard: an intrinsic per-parent LIMIT window skips the batch check → no throw',
+    entry: 'usersWithTopPosts',
+    input: {},
+    config: { hasManyHardLimit: 1 },
+  },
+];
+
+/**
+ * The GUARD cases: a read that OVERRUNS a resolved runaway cap and must raise
+ * {@link LimitExceededError} with exact fields, on every dialect. One list for both contexts — the
+ * find cap and the relation cap are the same policy differing only in where it is enforced, and the
+ * captured vector records which fired.
+ */
+interface GuardCase {
+  readonly id: string;
+  readonly entry: string;
+  readonly input: Record<string, unknown>;
+  readonly config: LimitConfigSpec;
+}
+
+const GUARD_CASES: readonly GuardCase[] = [
+  {
+    // FIND: the emitter bakes `LIMIT cap + 1`, the read boundary asserts the fetch.
+    id: 'guard: the read overruns findHardLimit → throw',
+    entry: 'posts',
+    input: { authorId: 1 },
+    config: { findHardLimit: 1 },
+  },
+  {
+    // RELATION: the 3 posts overrun the global cap of 2 — and the tags level below never runs, which
+    // the vector's statement list shows.
+    id: 'guard: the hasMany batch overruns hasManyHardLimit → throw (exact count)',
+    entry: 'usersWithPosts',
+    input: {},
+    config: { hasManyHardLimit: 2 },
+  },
+  {
+    // RELATION: no global cap at all — the relation's OWN `hardLimit: 2` is what trips.
+    id: 'guard: a per-relation hardLimit override → throw',
+    entry: 'usersWithCappedPosts',
+    input: {},
+    config: {},
+  },
 ];
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -894,7 +1007,10 @@ async function execVector(c: ExecCase, dialect: DialectName): Promise<ExecVector
   const input = inputOf(c.input, dialect);
   const seam = await seamFor(dialect, c.config);
   try {
-    const { result, statements } = await seam.call(c.entry, input);
+    const { result, statements, thrown } = await seam.call(c.entry, input);
+    // An exec case must RUN. A guard that fired here is the defect the case exists to disprove, so it
+    // surfaces as a capture failure rather than a silently absent vector.
+    if (thrown !== undefined) throw thrown;
     const dbState = c.dbState === undefined
       ? undefined
       : await Promise.all(c.dbState.map(async (query) => ({ query, rows: encodeValue(await seam.query(query)) })));
@@ -946,45 +1062,64 @@ function assertDialectInvariant(c: ExecCase, vectors: readonly ExecVector[]): vo
   }
 }
 
-/** Build the find-cap EXPECT-ERROR vector: the read overruns its baked cap, the boundary throws. */
-async function findGuardVector(dialect: DialectName): Promise<ExpectErrorVector> {
-  const config: LimitConfigSpec = { findHardLimit: 1 };
-  const entry = 'posts';
-  const input = { authorId: 1 };
-  const b = await built(dialect, config);
-  const cap = bakedCap(b, entry);
-  if (cap === undefined) throw new Error(`conformance: no find cap baked into '${entry}' under findHardLimit=1`);
-  const seam = await seamFor(dialect, config);
-  let thrown: unknown;
-  let statements: EncodedStatement[] = [];
+/**
+ * Drive ONE guard case to its throw. This is the single capture path for BOTH runaway contexts,
+ * because the only thing that differs is where the throw comes from and the harness must not assume:
+ * a RELATION cap trips inside the generated call (the `executeSQL` transport, on the raw child rows)
+ * and arrives as {@link CallOutcome.thrown}; a FIND cap is enforced after it, at the read boundary
+ * ({@link assertFindHardLimit}) off the cap the emitter baked into the endpoint. Whichever fires, the
+ * statements the call issued are captured either way.
+ */
+async function runGuard(
+  entry: string,
+  input: Record<string, unknown>,
+  cap: number | undefined,
+  seam: Seam,
+): Promise<{ thrown: unknown; statements: EncodedStatement[] }> {
+  const called = await seam.call(entry, input);
+  if (called.thrown !== undefined) return { thrown: called.thrown, statements: called.statements };
   try {
-    const called = await seam.call(entry, input);
-    statements = called.statements;
     assertFindHardLimit(called.result as unknown[], cap, entry);
   } catch (e) {
-    thrown = e;
+    return { thrown: e, statements: called.statements };
+  }
+  return { thrown: undefined, statements: called.statements };
+}
+
+/** Build ONE guard EXPECT-ERROR vector: the read overruns a baked cap and raises with exact fields. */
+async function guardVector(c: GuardCase, dialect: DialectName): Promise<ExpectErrorVector> {
+  const cap = bakedCap(await built(dialect, c.config), c.entry);
+  const seam = await seamFor(dialect, c.config);
+  let outcome;
+  try {
+    outcome = await runGuard(c.entry, c.input, cap, seam);
   } finally {
     await seam.close();
   }
+  const thrown = outcome.thrown;
   if (!(thrown instanceof LimitExceededError)) {
-    throw new Error(`conformance: the find guard did NOT throw on ${dialect} (got ${thrown === undefined ? 'no throw' : String(thrown)})`);
+    throw new Error(
+      `conformance: guard case '${c.id}' did NOT throw on ${dialect} ` +
+        `(got ${thrown === undefined ? 'no throw' : String(thrown)})`,
+    );
   }
   return {
-    name: `guard: the read overruns findHardLimit → throw [${dialect}]`,
+    name: `${c.id} [${dialect}]`,
     kind: 'expect-error',
     dialect,
-    entry,
-    input: encodeValue(input),
-    config,
-    case: 'guard: the read overruns findHardLimit → throw',
-    expectedCap: cap,
-    expectedStatements: statements,
+    entry: c.entry,
+    input: encodeValue(c.input),
+    config: c.config,
+    case: c.id,
+    expectedCap: cap ?? null,
+    expectedStatements: outcome.statements,
     expectedError: {
       name: 'LimitExceededError',
       limit: thrown.limit,
       count: thrown.count,
       context: thrown.context,
       ...(thrown.model !== undefined ? { model: thrown.model } : {}),
+      ...(thrown.relation !== undefined ? { relation: thrown.relation } : {}),
     },
   };
 }
@@ -1031,9 +1166,12 @@ export async function generateCorpus(): Promise<Suite[]> {
     exec.push(...vectors);
   }
 
-  // ── guard: the baked find cap, enforced at the read boundary ───────────────────────────────
+  // ── guard: the baked runaway caps — the find one at the read boundary, the relation one inside
+  //    the generated call (the `executeSQL` transport, on the raw child rows) ─────────────────────
   const guard: ExpectErrorVector[] = [];
-  for (const dialect of ALL_DIALECTS) guard.push(await findGuardVector(dialect));
+  for (const c of GUARD_CASES) {
+    for (const dialect of ALL_DIALECTS) guard.push(await guardVector(c, dialect));
+  }
 
   // ── tx: write-time relations (gate-first) + the composite tx-DAG ───────────────────────────
   const txAsserts = [
@@ -1097,16 +1235,21 @@ export async function runVector(v: Vector): Promise<VectorResult> {
       const seam = await seamFor(v.dialect, v.config);
       let result: unknown;
       let statements: EncodedStatement[] = [];
+      let thrown: unknown;
       let dbState: { query: string; rows: EncodedValue }[] = [];
       try {
         const called = await seam.call(v.entry, decodeValue(v.input) as Record<string, unknown>);
         result = called.result;
         statements = called.statements;
+        thrown = called.thrown;
         dbState = await Promise.all((v.expectedDbState ?? []).map(async (s) => ({ query: s.query, rows: encodeValue(await seam.query(s.query)) })));
       } finally {
         await seam.close();
       }
       const problems: string[] = [];
+      // An exec vector asserts the call RUNS. A guard that fired here (a cap that should have been
+      // disabled or skipped) is reported as itself, not as a downstream result mismatch.
+      if (thrown !== undefined) problems.push(`unexpected throw: ${thrown instanceof Error ? `${thrown.name}: ${thrown.message}` : String(thrown)}`);
       if (!eq(statements, v.expectedStatements)) problems.push(`statements ${JSON.stringify(statements)} != ${JSON.stringify(v.expectedStatements)}`);
       if (!eq(encodeValue(result), v.expectedResult)) problems.push(`result ${JSON.stringify(encodeValue(result))} != ${JSON.stringify(v.expectedResult)}`);
       if (!eq(dbState, v.expectedDbState ?? [])) problems.push(`db state ${JSON.stringify(dbState)} != ${JSON.stringify(v.expectedDbState)}`);
@@ -1118,25 +1261,28 @@ export async function runVector(v: Vector): Promise<VectorResult> {
     if (v.kind === 'expect-error') {
       const cap = bakedCap(await built(v.dialect, v.config), v.entry);
       const seam = await seamFor(v.dialect, v.config);
-      let thrown: unknown;
-      let statements: EncodedStatement[] = [];
+      let outcome;
       try {
-        const called = await seam.call(v.entry, decodeValue(v.input) as Record<string, unknown>);
-        statements = called.statements;
-        assertFindHardLimit(called.result as unknown[], cap, v.entry);
-      } catch (e) {
-        thrown = e;
+        outcome = await runGuard(v.entry, decodeValue(v.input) as Record<string, unknown>, cap, seam);
       } finally {
         await seam.close();
       }
+      const { thrown, statements } = outcome;
       if (!(thrown instanceof LimitExceededError)) {
         return { ...base, ok: false, detail: `expected LimitExceededError, got ${thrown === undefined ? 'no throw' : thrown instanceof Error ? `${thrown.name}: ${thrown.message}` : String(thrown)}` };
       }
-      const got = { name: thrown.name, limit: thrown.limit, count: thrown.count, context: thrown.context, ...(thrown.model !== undefined ? { model: thrown.model } : {}) };
+      const got = {
+        name: thrown.name,
+        limit: thrown.limit,
+        count: thrown.count,
+        context: thrown.context,
+        ...(thrown.model !== undefined ? { model: thrown.model } : {}),
+        ...(thrown.relation !== undefined ? { relation: thrown.relation } : {}),
+      };
       const problems: string[] = [];
       if (!eq(got, v.expectedError)) problems.push(`error ${JSON.stringify(got)} != ${JSON.stringify(v.expectedError)}`);
       if (!eq(statements, v.expectedStatements)) problems.push(`statements ${JSON.stringify(statements)} != ${JSON.stringify(v.expectedStatements)}`);
-      if (cap !== v.expectedCap) problems.push(`baked find cap ${String(cap)} != ${String(v.expectedCap)}`);
+      if ((cap ?? null) !== v.expectedCap) problems.push(`baked find cap ${String(cap ?? null)} != ${String(v.expectedCap)}`);
       return { ...base, ok: problems.length === 0, detail: problems.length === 0 ? undefined : problems.join('; ') };
     }
     if (v.kind === 'tx') {

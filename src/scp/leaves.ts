@@ -13,7 +13,9 @@
  *     (`write:false`) → rows; write (`write:true`) → a one-row `[{changes,lastInsertRowid}]` summary
  *     (RETURNING writes return their rows via `execute`). It owns the transport-level param shaping a
  *     relation key-set needs — the dialect array encoding + deferred PG cast resolution + `?`→`$N`
- *     render.
+ *     render — and, when the statement is a GUARDED relation child fetch, the runaway check on its raw
+ *     rows ({@link import('./limit-config').assertRelationHardLimit}): the RAW child rows exist only
+ *     here, since `group` already sees a nested graph and SCP itself has no throw.
  *   - {@link pluck} — rows + the ordered key-column tuple → the deduped, non-null key array (the
  *     `= ANY($1)` / `json_each(?)` batch key set).
  *   - {@link group} — parents + a flat child list + `pk`/`fk`/`into` → each parent with its matching
@@ -38,6 +40,7 @@ import {
   type StatementIntent,
   type RunInfo,
 } from './exec-context';
+import { assertRelationHardLimit, type RelationGuard } from './limit-config';
 import { renderPlaceholders, type Dialect } from './makesql/handler';
 import { encodeJsonArrayParam } from './makesql/json-array';
 import { resolvePgArrayCast } from './makesql/compile-relation';
@@ -75,6 +78,11 @@ interface ExecuteSqlPorts {
   readonly bigint: boolean;
   /** The DYNAMIC WHERE plan (absent on a fully-bounded statement). See {@link assembleDynamicWhere}. */
   readonly whereDynamic?: DynamicWherePlan | null;
+  /**
+   * The RELATION runaway cap this statement's rows are asserted against (absent ⇒ uncapped). Carried
+   * verbatim from the compiled relation op — see {@link assertRelationHardLimit}.
+   */
+  readonly guard?: RelationGuard | null;
 }
 
 // ── the DYNAMIC (SKIP) WHERE: assembled by the transport, at execution time ────────────────────
@@ -214,14 +222,18 @@ export function executeSQL(p: ExecuteSqlPorts, ctx: LeafContext): Array<Record<s
   const prepared = prepareSql(effectiveStatement(p), ctx.dialect);
   if (p.write === true && p.returning !== true) return writeSummary(seamRun(ctx.exec, prepared.sql, prepared.bound, prepared.intent));
   const exec = p.bigint === true ? seamExecuteSafe : seamExecute;
-  return exec(ctx.exec, prepared.sql, prepared.bound, prepared.intent) as Array<Record<string, unknown>>;
+  const rows = exec(ctx.exec, prepared.sql, prepared.bound, prepared.intent) as Array<Record<string, unknown>>;
+  assertRelationHardLimit(rows, p.guard);
+  return rows;
 }
 
 /** The ASYNC (live PG / MySQL) `executeSQL` body — the twin of {@link executeSQL} over the async seam. */
 export async function executeSQLAsync(p: ExecuteSqlPorts, ctx: AsyncLeafContext): Promise<Array<Record<string, unknown>>> {
   const prepared = prepareSql(effectiveStatement(p), ctx.dialect);
   if (p.write === true && p.returning !== true) return writeSummary(await seamRunAsync(ctx.execAsync, prepared.sql, prepared.bound, prepared.intent));
-  return (await seamExecuteAsync(ctx.execAsync, prepared.sql, prepared.bound, prepared.intent)) as Array<Record<string, unknown>>;
+  const rows = (await seamExecuteAsync(ctx.execAsync, prepared.sql, prepared.bound, prepared.intent)) as Array<Record<string, unknown>>;
+  assertRelationHardLimit(rows, p.guard);
+  return rows;
 }
 
 // ── pluck — rows + key columns → the deduped key array (the `= ANY($1)` batch key set) ──
@@ -254,6 +266,27 @@ export function group(p: { parents: Array<Record<string, unknown>>; children: Ar
 
 // ── handler maps: the boundary injection a generated module's bind()/bindAsync() consumes ──
 
+/**
+ * Read the OPTIONAL relation `guard` port. Absent (or null) ⇒ the statement is uncapped. The cap
+ * arrives in bc's `int` value model, which on the TS plane is a BigInt, so it is normalized to the
+ * `number` {@link RelationGuard} (and {@link import('./errors').LimitExceededError}) declare — the
+ * SAME numeric type the rust/go/python/php transports hand their own check. A guard that is present
+ * but not a `{limit, relation}` record is a LOUD port failure, never a silently dropped cap: a guard
+ * that fails to unbox is a runaway that would otherwise sail through.
+ */
+function relationGuardPort(port: Value | undefined): RelationGuard | null {
+  if (port === undefined || port === null) return null;
+  const g = port as unknown as { limit?: unknown; model?: unknown; relation?: unknown };
+  const limit = typeof g.limit === 'bigint' ? Number(g.limit) : g.limit;
+  if (typeof limit !== 'number' || !Number.isInteger(limit) || typeof g.relation !== 'string') {
+    throw new Error(
+      `scp leaf executeSQL: the 'guard' port must be a {limit:int, model?:string, relation:string} ` +
+        `relation cap, got ${JSON.stringify(port)}`,
+    );
+  }
+  return { limit, ...(typeof g.model === 'string' ? { model: g.model } : {}), relation: g.relation };
+}
+
 /** Read the declared `executeSQL` ports off the evaluated port record (the generated module's Values). */
 function executeSqlPorts(ports: Record<string, Value>): ExecuteSqlPorts {
   return {
@@ -263,6 +296,7 @@ function executeSqlPorts(ports: Record<string, Value>): ExecuteSqlPorts {
     returning: ports.returning === true,
     bigint: ports.bigint === true,
     whereDynamic: (ports.whereDynamic ?? null) as unknown as DynamicWherePlan | null,
+    guard: relationGuardPort(ports.guard),
   };
 }
 
