@@ -5,7 +5,7 @@
 # no execution logic is generated. Handlers are ALWAYS injected at the boundary
 # (IR + {effects,config,hooks}); they are never generated.
 # irFingerprint: fnv1a64:6bbcff5c38d988b7
-from behavior_contracts import SPEC_VERSIONS, fingerprint_component_graph, run_behavior
+from behavior_contracts import SPEC_VERSIONS, ProvenanceError, load_compiled_ir, run_behavior
 
 # Spec versions baked at generation time (fail-closed constant comparison at load).
 EXPECTED_SPEC_VERSIONS = {"behavior": 5, "expression": 2, "plan": 1}
@@ -16,8 +16,11 @@ IR_FINGERPRINT = "fnv1a64:6bbcff5c38d988b7"
 # Component names exposed by bind(), in IR declaration order.
 COMPONENT_NAMES = ("findAll", "filterPaginateSort", "findFirst", "findUnique", "nestedFindAll", "nestedFindFirst", "nestedFindUnique", "nestedRelations", "compositeRelations", "create", "update", "upsert", "createMany", "upsertMany", "updateMany", "nestedCreate", "nestedUpsert", "nestedUpdate", "delete")
 
-# The portable component-graph IR, embedded as a native dict literal (no JSON parse at runtime).
-IR = {
+# The portable component-graph IR *document*, embedded as a native dict literal (no JSON parse at
+# runtime). It carries no provenance token — the load-time load_compiled_ir() below verifies the baked
+# fingerprint and mints the in-process handle (serialized IR crosses the boundary via the
+# fingerprint-gated loader, ONCE at load — never per call).
+IR_DOC = {
   "irVersion": 3,
   "exprVersion": 2,
   "components": [
@@ -3353,7 +3356,7 @@ IR = {
 }
 
 
-def _check_generated_module() -> None:
+def _load_generated_module():
     # load-time fail-closed checks (#208 prepared-artifact discipline).
     for _k, _want in EXPECTED_SPEC_VERSIONS.items():
         _got = SPEC_VERSIONS.get(_k)
@@ -3363,16 +3366,18 @@ def _check_generated_module() -> None:
                 "(generated=%s, runtime=%s) — regenerate against this runtime (fail-closed)"
                 % (_k, _want, _got)
             )
-    _got_fp = fingerprint_component_graph(IR)
-    if _got_fp != IR_FINGERPRINT:
+    # fingerprint-gated adopt: recompute the canonical fingerprint, verify it against the baked
+    # constant, and mint the in-process provenance handle. A modified/corrupted literal is loud-rejected.
+    try:
+        return load_compiled_ir(IR_DOC, IR_FINGERPRINT)
+    except ProvenanceError as _e:
         raise RuntimeError(
-            "behavior-contracts generated module: IR fingerprint mismatch "
-            "(baked=%s, embedded literal=%s) — the generated code was modified or corrupted (fail-closed)"
-            % (IR_FINGERPRINT, _got_fp)
-        )
+            "behavior-contracts generated module: IR fingerprint mismatch (baked=%s) — "
+            "the generated code was modified or corrupted (fail-closed)" % IR_FINGERPRINT
+        ) from _e
 
 
-_check_generated_module()
+IR = _load_generated_module()
 
 
 def bind(handlers):

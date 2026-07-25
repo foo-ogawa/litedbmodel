@@ -20,8 +20,11 @@ $irFingerprint = 'fnv1a64:6bbcff5c38d988b7';
 // Component names exposed by bind(), in IR declaration order.
 $componentNames = ['findAll', 'filterPaginateSort', 'findFirst', 'findUnique', 'nestedFindAll', 'nestedFindFirst', 'nestedFindUnique', 'nestedRelations', 'compositeRelations', 'create', 'update', 'upsert', 'createMany', 'upsertMany', 'updateMany', 'nestedCreate', 'nestedUpsert', 'nestedUpdate', 'delete'];
 
-// The portable component-graph IR, embedded as a native literal (no JSON parse at require).
-$ir = (object) [
+// The portable component-graph IR *document*, embedded as a native literal (no JSON parse at require).
+// It carries no provenance token — the require-time CompiledIr::load() below verifies the baked
+// fingerprint and mints the in-process handle (serialized IR crosses the boundary via the
+// fingerprint-gated loader, ONCE at require — never per call).
+$irDoc = (object) [
     "irVersion" => 3,
     "exprVersion" => 2,
     "components" => [
@@ -3368,9 +3371,12 @@ foreach ($expectedSpecVersions as $specKey => $specWant) {
         throw new \RuntimeException("behavior-contracts generated module: spec-version skew for '{$specKey}' (generated={$specWant}, runtime={$specGot}) — regenerate against this runtime (fail-closed)");
     }
 }
-$gotFingerprint = \LiteDbModel\Runtime\BehaviorContracts\Fingerprint::componentGraph($ir);
-if ($gotFingerprint !== $irFingerprint) {
-    throw new \RuntimeException("behavior-contracts generated module: IR fingerprint mismatch (baked={$irFingerprint}, embedded literal={$gotFingerprint}) — the generated code was modified or corrupted (fail-closed)");
+// fingerprint-gated adopt: recompute the canonical fingerprint, verify it against the baked constant,
+// and mint the in-process provenance handle. A modified/corrupted literal is loudly rejected.
+try {
+    $ir = \LiteDbModel\Runtime\BehaviorContracts\CompiledIr::load($irDoc, $irFingerprint);
+} catch (\LiteDbModel\Runtime\BehaviorContracts\ProvenanceError $e) {
+    throw new \RuntimeException("behavior-contracts generated module: IR fingerprint mismatch (baked={$irFingerprint}) — the generated code was modified or corrupted (fail-closed)", 0, $e);
 }
 
 // bind — inject handlers (boundary injection; catalog name → implementation) and
