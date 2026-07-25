@@ -53,6 +53,7 @@ interface Blog {
   usersWhoWrote(i: { title: string }): Promise<UserRow[]>;
   postsOfAuthorView(): Promise<ViewRow[]>;
   pagedPosts(i: { limit: number; offset: number }): Promise<ViewRow[]>;
+  lockedPosts(i: { authorId: number }): Promise<ViewRow[]>;
   createUser(i: { name: string }): Promise<UserRow[]>;
   renameUser(i: { name: string; id: number }): Promise<WriteSummary[]>;
   removeUser(i: { id: number }): Promise<WriteSummary[]>;
@@ -209,6 +210,13 @@ describe('#152 end-to-end — decorated model → emitter → bc generate → li
     // The emitted text carries `?` (the `?`→`$N` render is the transport's, after final assembly) and
     // NO literal count — PostgreSQL would have rejected an unrendered `?` outright.
     expect(emittedSource).toContain('SELECT id, title FROM e2e_posts ORDER BY id ASC LIMIT ? OFFSET ?", [limit, offset]');
+  });
+
+  it('#132 — a declared SHARE lock: ` FOR SHARE` is baked in and the locking read runs on live PG', async () => {
+    // The generated method carries the row-lock tail and PostgreSQL EXECUTES it (a parse error would
+    // fail here) — the rows are the ones the unlocked twin returns, the lock being orthogonal.
+    expect(await blog.lockedPosts({ authorId: 1 })).toEqual([{ id: 10, title: 'a1' }, { id: 11, title: 'a2' }]);
+    expect(emittedSource).toContain('SELECT id, title FROM e2e_posts WHERE author_id = ? ORDER BY id ASC FOR SHARE"');
   });
 
   it('writes: INSERT…RETURNING, UPDATE, DELETE and a batch INSERT all execute', async () => {

@@ -135,6 +135,15 @@ export const EMIT_ENDPOINTS: EndpointSet = {
     limit: { param: 'limit' },
     offset: { param: 'offset' },
   },
+  /** #132 — a SHARED row lock: the read appends ` FOR SHARE` (readers coexist, writers block). */
+  lockedPosts: {
+    kind: 'read',
+    model: Post,
+    select: ['id', 'title'],
+    where: [{ column: 'author_id', op: 'eq', param: 'authorId' }],
+    order: 'id ASC',
+    lock: 'share',
+  },
   /** #133 — a COMPOSITE key set bound with a CONSTANT number of params (PG UNNEST). */
   tenantPostsByKeys: {
     kind: 'read',

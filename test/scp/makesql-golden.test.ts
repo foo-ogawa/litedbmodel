@@ -1374,6 +1374,21 @@ describe('D. compileSelect renders V1-SOURCED SQL for the WHERE primitives / SEL
       const got = render(compileSelect({ dialect, tableName: 'posts', select: 'id', conditions: { id: 5 }, forUpdate: true }), dialect);
       expect(got.sql).toBe(v1.sql);
     });
+    it(`[${dialect}] FOR SHARE port — compileSelect byte-matches v1 _buildSelectSQL (#132)`, () => {
+      // The SHARE row lock rides the SAME `lockTail` aggregation point as FOR UPDATE, so the v1
+      // imperative builder and `compileSelect` render one identical tail (there is no second impl).
+      const v1 = v1Select(dialect, 'posts', 'id', { id: 5 }, { forShare: true });
+      const got = render(compileSelect({ dialect, tableName: 'posts', select: 'id', conditions: { id: 5 }, forShare: true }), dialect);
+      expect(v1.sql.endsWith(' FOR SHARE')).toBe(true);
+      expect(got.sql).toBe(v1.sql);
+    });
+    it(`[${dialect}] the two row locks are mutually exclusive (loud reject, no silent precedence)`, () => {
+      // SQL has no "lock the same rows exclusively AND shared" form, so asking for both is a hard
+      // error in BOTH builders — never a silent winner (a caller that asked to SHARE must not lock
+      // exclusively). Same aggregation point ⇒ the same rejection text on both paths.
+      expect(() => compileSelect({ dialect, tableName: 'posts', forUpdate: true, forShare: true })).toThrow(/mutually exclusive/);
+      expect(() => v1Select(dialect, 'posts', 'id', {}, { forUpdate: true, forShare: true })).toThrow(/mutually exclusive/);
+    });
     it(`[${dialect}] append (HAVING) port — compileSelect byte-matches v1 _buildSelectSQL`, () => {
       const v1 = v1Select(dialect, 'posts', 'author_id, COUNT(*) as n', {}, { group: 'author_id', append: 'HAVING COUNT(*) > 1' });
       const got = render(compileSelect({ dialect, tableName: 'posts', select: 'author_id, COUNT(*) as n', group: 'author_id', append: 'HAVING COUNT(*) > 1' }), dialect);
