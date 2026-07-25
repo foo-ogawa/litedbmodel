@@ -22,7 +22,11 @@
  * TEST_MYSQL_HOST=mysql on the internal network), or locally with published ports + env.
  */
 
+import 'reflect-metadata';
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { Pool } from 'pg';
 import mysql from 'mysql2/promise';
 import { DBConditions } from '../../src/DBConditions';
@@ -52,6 +56,8 @@ import {
   type RelationOp,
 } from '../../src/scp';
 import { compileSelect, type SelectDesc, type Dialect as MakeSQLDialect } from '../../src/scp/makesql';
+import { emitBehaviorModule, leafHandlersAsync, PooledAsyncContext, pgConnectionPool, type EndpointSet } from '../../src/scp';
+import { model, column } from '../../src/decorators';
 
 // ── Connection config (env-driven; matches docker-compose.test.yml) ────────────
 
@@ -96,6 +102,63 @@ const POST_GUIDS = [
   '22222222-2222-2222-2222-222222222222',
   '33333333-3333-3333-3333-333333333333',
 ];
+
+const REPO_ROOT = resolve(__dirname, '../..');
+
+// ── #153 / #46 — the DECORATED models + DECLARED IN-list endpoints the emitter lowers ────────────
+//
+// This is the whole ORM-side input: metadata collectors and endpoint declarations, no SQL. vitest
+// (esbuild) has no `emitDecoratorMetadata`, so a bare `@column()` carries no `design:type` and the
+// non-INTEGER columns are pinned through the adapter's documented `columnTypes` escape hatch.
+
+@model(T_POSTS)
+class ScpPost {
+  @column() id?: number;
+  @column() user_id?: number;
+  @column() title?: string;
+  @column() view_count?: number;
+  @column() guid?: string;
+}
+
+@model(T_TYPED)
+class ScpTyped {
+  @column() big?: number;
+  @column() txt?: string;
+  @column() flag?: boolean;
+  @column() ts?: string;
+  @column() amt?: string;
+  @column() label?: string;
+}
+
+const IN_LIST_MODELS: Record<string, never> = { ScpPost, ScpTyped } as unknown as Record<string, never>;
+const IN_LIST_COLUMN_TYPES = {
+  columnTypes: {
+    title: 'VARCHAR(255)', guid: 'UUID',
+    big: 'BIGINT', txt: 'TEXT', flag: 'BOOLEAN', ts: 'TIMESTAMP', amt: 'NUMERIC(10,2)', label: 'TEXT',
+  },
+};
+
+/** One IN-list endpoint per element type — each declares only a column and a parameter name. */
+const IN_LIST_ENDPOINTS: EndpointSet = {
+  byIds: { kind: 'read', model: ScpPost, select: ['id', 'title'], where: [{ kind: 'in', column: 'id', param: 'ids' }], order: 'id ASC' },
+  byGuids: { kind: 'read', model: ScpPost, select: ['id', 'guid'], where: [{ kind: 'in', column: 'guid', param: 'guids' }], order: 'id ASC' },
+  byBig: { kind: 'read', model: ScpTyped, select: ['label'], where: [{ kind: 'in', column: 'big', param: 'keys' }], order: 'label ASC' },
+  byTxt: { kind: 'read', model: ScpTyped, select: ['label'], where: [{ kind: 'in', column: 'txt', param: 'keys' }], order: 'label ASC' },
+  byFlag: { kind: 'read', model: ScpTyped, select: ['label'], where: [{ kind: 'in', column: 'flag', param: 'keys' }], order: 'label ASC' },
+  byTs: { kind: 'read', model: ScpTyped, select: ['label'], where: [{ kind: 'in', column: 'ts', param: 'keys' }], order: 'label ASC' },
+  byAmt: { kind: 'read', model: ScpTyped, select: ['label'], where: [{ kind: 'in', column: 'amt', param: 'keys' }], order: 'label ASC' },
+};
+
+/** The generated module's typed facade for {@link IN_LIST_ENDPOINTS}. */
+interface InListApi {
+  byIds(i: { ids: number[] }): Promise<Row[]>;
+  byGuids(i: { guids: string[] }): Promise<Row[]>;
+  byBig(i: { keys: unknown[] }): Promise<Row[]>;
+  byTxt(i: { keys: unknown[] }): Promise<Row[]>;
+  byFlag(i: { keys: unknown[] }): Promise<Row[]>;
+  byTs(i: { keys: unknown[] }): Promise<Row[]>;
+  byAmt(i: { keys: unknown[] }): Promise<Row[]>;
+}
 
 // ── The authored reads (SelectDesc builders, driven ONLY by the real `compileSelect` compiler) ──
 //
@@ -436,19 +499,99 @@ describe('WS6 integration — Postgres: SCP-compiled SQL executes + parity with 
     for (const r of scpRows) expect(r.user_id).toBe(1);
   });
 
-  // REMOVED FEATURE: the `whereIn`/`inColumn` recorder sugar used to lower a Select-node IN-list to a
-  // PG no-cast `= ANY($1)` predicate (#46 — avoiding the value-inferred `::text[]` cast bug on
-  // int/uuid/typed columns). That authoring surface is gone; `compileSelect`'s `conditions` field now
-  // compiles a plain-array condition through the SAME `conditionsFor` the v1 comparison side already
-  // used, which returns UNCHANGED base `DBConditions` for postgres — i.e. v1's own `IN ($1, $2, …)`,
-  // not `= ANY($1)`. There is no surviving SELECT-WHERE compiler that reproduces the deleted no-cast
-  // `= ANY($1)` shape (only the SEPARATE relation-batch compiler, `compileRelationOp`, still emits
-  // `= ANY`/`UNNEST` — exercised below, unaffected by this removal). The 9 PG-only `it`s that pinned
-  // that exact SQL shape (`ByIds` int IN-list non-empty/empty, `ByGuids` uuid IN-list non-empty/empty,
-  // and the 5 `pgTypeCases` — bigint/text/bool/timestamp/numeric no-cast IN-list) tested ONLY that
-  // removed authoring surface and are deleted. The MySQL/SQLite single-JSON-param IN-list form
-  // (`JsonArrayConditions`, `json-array.ts`) is UNAFFECTED by the recorder removal and stays covered
-  // below (MySQL `ByIds` + `myTypeCases`).
+  // ── #153 / #46 — the PG primary-read no-cast `= ANY($1)` IN-list, restored on the EMITTER ──────
+  //
+  // A declared `in` predicate lowers to the dialect's value-length-INDEPENDENT membership form
+  // (`inListPredicate`): on PostgreSQL `col = ANY(?)` with NO element-type cast. The cast is what
+  // broke: `inferPgArrayType` sees only the values, so an EMPTY int list infers `text[]` (→ `integer
+  // = text`) and a uuid list is indistinguishable from text (→ `uuid = text`). With no cast PG infers
+  // the array type FROM THE COLUMN, which is right for every element type — proven live below on
+  // int / uuid / bigint / text / bool / timestamp / numeric, empty lists included.
+  //
+  // The path under test is the REAL one end-to-end: decorated model → `emitBehaviorModule` →
+  // `bc generate` → `bindTypedAsync(leafHandlersAsync)` → this live Postgres.
+  describe('#46 no-cast `= ANY($1)` IN-list — decorated model → emitter → bc generate → live PG', () => {
+    let inWorkDir: string;
+    let emittedIn: string;
+    let q: InListApi;
+
+    beforeAll(async () => {
+      const emitted = emitBehaviorModule({
+        behavior: 'InLists',
+        dialect: 'postgres',
+        leafImport: resolve(REPO_ROOT, 'src/scp/leaf-transport.js'),
+        endpoints: IN_LIST_ENDPOINTS,
+        models: (n) => IN_LIST_MODELS[n],
+        columnOptions: IN_LIST_COLUMN_TYPES,
+      });
+      emittedIn = emitted.source;
+      inWorkDir = mkdtempSync(join(REPO_ROOT, '.emit-e2e-'));
+      const authored = join(inWorkDir, 'in-lists.ts');
+      writeFileSync(authored, emitted.source, 'utf8');
+      const out = join(inWorkDir, 'in-lists-generated.ts');
+      execFileSync(
+        join(REPO_ROOT, 'node_modules/.bin/bc'),
+        ['generate', '--lang', 'typescript-native', '--from', authored, '--behavior', 'InLists', '--out', out],
+        { cwd: REPO_ROOT, stdio: 'pipe' },
+      );
+      const generated = (await import(out)) as { bindTypedAsync: (h: ReturnType<typeof leafHandlersAsync>) => InListApi };
+      const execAsyncCtx = new PooledAsyncContext(pgConnectionPool(pgPool as never));
+      q = generated.bindTypedAsync(leafHandlersAsync({ execAsync: execAsyncCtx, dialect: 'postgres' }));
+    }, 120_000);
+
+    afterAll(() => {
+      if (inWorkDir !== undefined) rmSync(inWorkDir, { recursive: true, force: true });
+    });
+
+    it('SELECT IN-list on an INT column: no-cast `= ANY(?)` — #46; PG infers int[]; SCP rows == v1', async () => {
+      expect(emittedIn).toContain(`SELECT id, title FROM ${T_POSTS} WHERE id = ANY(?) ORDER BY id ASC`);
+      expect(emittedIn).not.toContain('::text[]');
+      const scpRows = await q.byIds({ ids: [1, 3] });
+      expect(scpRows.map((r) => Number(r.id))).toEqual([1, 3]);
+
+      // v1 RESULT parity: v1's IN-list expanded to `id IN ($1, $2)` (DBConditions). Same rows.
+      const v1Params: unknown[] = [];
+      const v1Where = new DBConditions({ id: [1, 3] }).compile(v1Params);
+      let i = 0;
+      const v1Sql = `SELECT id, title FROM ${T_POSTS} WHERE ${v1Where} ORDER BY id ASC`.replace(/\?/g, () => `$${++i}`);
+      const v1Rows = await pgQuery(pgPool!, v1Sql, v1Params);
+      expect(scpRows).toEqual(v1Rows);
+    });
+
+    it('SELECT IN-list EMPTY int array: `= ANY(?)` with [] → ZERO rows, no error — #46; == v1 `1 = 0`', async () => {
+      // The blocker the cast caused: `inferPgArrayType([])` = `text[]` → `integer = text` at PLAN time.
+      expect(await q.byIds({ ids: [] })).toEqual([]);
+    });
+
+    it('SELECT IN-list on a UUID column (non-empty): `= ANY(?)` → PG infers uuid[]; correct rows — #46', async () => {
+      expect(emittedIn).toContain(`SELECT id, guid FROM ${T_POSTS} WHERE guid = ANY(?) ORDER BY id ASC`);
+      const scpRows = await q.byGuids({ guids: [POST_GUIDS[0], POST_GUIDS[2]] });
+      expect(scpRows.map((r) => Number(r.id))).toEqual([1, 3]);
+      expect(scpRows.map((r) => String(r.guid))).toEqual([POST_GUIDS[0], POST_GUIDS[2]]);
+    });
+
+    it('SELECT IN-list EMPTY uuid array: `= ANY(?)` with [] → ZERO rows, no error — #46', async () => {
+      expect(await q.byGuids({ guids: [] })).toEqual([]);
+    });
+
+    // #46 item 4 — every PG element type binds live through the no-cast `= ANY(?)` IN-list. Each case
+    // selects the stable `label`, so `[A,C]` is the dialect-invariant expected result; the test proves
+    // the ARRAY BINDING of bigint / text / bool / timestamp / numeric through `pg`.
+    const pgTypeCases: { entry: keyof InListApi & string; col: string; keys: unknown[] }[] = [
+      { entry: 'byBig', col: 'big', keys: [TYPED_BIG_TS[0], TYPED_BIG_TS[2]] },
+      { entry: 'byTxt', col: 'txt', keys: ['alpha', 'gamma'] },
+      { entry: 'byFlag', col: 'flag', keys: [true] },
+      { entry: 'byTs', col: 'ts', keys: [TYPED_TS_TS[0], TYPED_TS_TS[2]] },
+      { entry: 'byAmt', col: 'amt', keys: ['10.50', '30.75'] },
+    ];
+    for (const c of pgTypeCases) {
+      it(`SELECT IN-list on a ${c.col} column: no-cast \`= ANY(?)\` binds live — #46 item 4`, async () => {
+        expect(emittedIn).toContain(`SELECT label FROM ${T_TYPED} WHERE ${c.col} = ANY(?) ORDER BY label ASC`);
+        const rows = (await (q[c.entry] as (i: Record<string, unknown>) => Promise<Row[]>)({ keys: c.keys })) as Row[];
+        expect(rows.map((r) => String(r.label))).toEqual(['A', 'C']);
+      });
+    }
+  });
 
   // count() (#47 item 2) — `SELECT COUNT(*) as count FROM t[ WHERE …]` executes live + matches v1.
   it('COUNT(*) all rows: SCP `SELECT COUNT(*) as count` == v1 _count (real PG)', async () => {
