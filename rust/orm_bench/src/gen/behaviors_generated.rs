@@ -1904,11 +1904,11 @@ pub fn nestedCreate(
     email: String,
     name: String,
     title: String,
-) -> Result<Vec<WireValue>, BehaviorError> {
+) -> Result<Vec<Vec<WriteSummary>>, BehaviorError> {
     let cell_n0: RefCell<Vec<IdRow>> = RefCell::new(Default::default());
     let produced_n0 = std::cell::Cell::new(false);
     let _ = &produced_n0;
-    let cell_n1: RefCell<Vec<WireValue>> = RefCell::new(Default::default());
+    let cell_n1: RefCell<Vec<Vec<WriteSummary>>> = RefCell::new(Default::default());
     let produced_n1 = std::cell::Cell::new(false);
     let _ = &produced_n1;
     // ── op 'n0' (executeSQL) ──
@@ -1948,14 +1948,49 @@ pub fn nestedCreate(
     // ── map 'n1' (executeSQL, per-element, into:null, parent:n0) ──
     if produced_n0.get() {
         let over_n1 = cell_n0.borrow().clone();
-        let mut built_n1: Vec<WireValue> = Vec::with_capacity(over_n1.len());
+        let mut built_n1: Vec<Vec<WriteSummary>> = Vec::with_capacity(over_n1.len());
         for oel_n1 in over_n1.iter() {
             let ep_n1 = WireRow { entries: vec![("bigint".to_string(), WireValue::Bool(false)), ("params".to_string(), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::float(oel_n1.id), WireValue::Str(title.clone())]; __v } })), ("returning".to_string(), WireValue::Bool(false)), ("sql".to_string(), WireValue::Str("INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)".to_string())), ("write".to_string(), WireValue::Bool(true))] };
             let er_n1 = match execute_sql(ep_n1) {
                 Ok(r) => r,
                 Err(e) => return Err(op_failed("n1", "fail", e)),
             };
-            let dec_n1 = er_n1.clone();
+            let dec_n1 = match er_n1.as_list() {
+                Probe::Got(l0) => {
+                    let mut acc0 = Vec::with_capacity(l0.len());
+                    for i0 in 0..l0.len() {
+                        acc0.push(match l0.elem_row(i0) {
+                            Probe::Got(sub1) => WriteSummary {
+                                changes: match sub1.probe_number("changes") {
+                                    NumProbe::Got { raw, actual_wire_type } => match raw.parse::<i64>() {
+                                        Ok(n) => n,
+                                        Err(_) => return Err(de_overflow("WriteSummary", "changes", "int", actual_wire_type, raw)),
+                                    },
+                                    NumProbe::Wrong { actual_wire_type, raw_value }
+                                    | NumProbe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("WriteSummary", "changes", "int", actual_wire_type, raw_value)),
+                                    NumProbe::Absent => return Err(de_missing_field("WriteSummary", "changes", "int")),
+                                },
+                                lastInsertRowid: match sub1.probe_number("lastInsertRowid") {
+                                    NumProbe::Got { raw, actual_wire_type } => match raw.parse::<i64>() {
+                                        Ok(n) => n,
+                                        Err(_) => return Err(de_overflow("WriteSummary", "lastInsertRowid", "int", actual_wire_type, raw)),
+                                    },
+                                    NumProbe::Wrong { actual_wire_type, raw_value }
+                                    | NumProbe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("WriteSummary", "lastInsertRowid", "int", actual_wire_type, raw_value)),
+                                    NumProbe::Absent => return Err(de_missing_field("WriteSummary", "lastInsertRowid", "int")),
+                                },
+                            },
+                            Probe::Wrong { actual_wire_type, raw_value }
+                            | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n1", "n1", "obj{changes:int,lastInsertRowid:int}", actual_wire_type, raw_value)),
+                            Probe::Absent => return Err(de_missing_field("n1", "n1", "obj{changes:int,lastInsertRowid:int}")),
+                        });
+                    }
+                    acc0
+                },
+                Probe::Wrong { actual_wire_type, raw_value }
+                | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n1", "n1", "arr(obj{changes:int,lastInsertRowid:int})", actual_wire_type, raw_value)),
+                Probe::Absent => return Err(de_missing_field("n1", "n1", "arr(obj{changes:int,lastInsertRowid:int})")),
+            };
             let _ = &oel_n1;
             built_n1.push(dec_n1);
         }
@@ -1982,11 +2017,11 @@ pub fn nestedUpsert(
     email: String,
     name: String,
     title: String,
-) -> Result<Vec<WireValue>, BehaviorError> {
+) -> Result<Vec<Vec<WriteSummary>>, BehaviorError> {
     let cell_n0: RefCell<Vec<IdRow>> = RefCell::new(Default::default());
     let produced_n0 = std::cell::Cell::new(false);
     let _ = &produced_n0;
-    let cell_n1: RefCell<Vec<WireValue>> = RefCell::new(Default::default());
+    let cell_n1: RefCell<Vec<Vec<WriteSummary>>> = RefCell::new(Default::default());
     let produced_n1 = std::cell::Cell::new(false);
     let _ = &produced_n1;
     // ── op 'n0' (executeSQL) ──
@@ -2026,14 +2061,49 @@ pub fn nestedUpsert(
     // ── map 'n1' (executeSQL, per-element, into:null, parent:n0) ──
     if produced_n0.get() {
         let over_n1 = cell_n0.borrow().clone();
-        let mut built_n1: Vec<WireValue> = Vec::with_capacity(over_n1.len());
+        let mut built_n1: Vec<Vec<WriteSummary>> = Vec::with_capacity(over_n1.len());
         for oel_n1 in over_n1.iter() {
             let ep_n1 = WireRow { entries: vec![("bigint".to_string(), WireValue::Bool(false)), ("params".to_string(), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::float(oel_n1.id), WireValue::Str(title.clone())]; __v } })), ("returning".to_string(), WireValue::Bool(false)), ("sql".to_string(), WireValue::Str("INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)".to_string())), ("write".to_string(), WireValue::Bool(true))] };
             let er_n1 = match execute_sql(ep_n1) {
                 Ok(r) => r,
                 Err(e) => return Err(op_failed("n1", "fail", e)),
             };
-            let dec_n1 = er_n1.clone();
+            let dec_n1 = match er_n1.as_list() {
+                Probe::Got(l0) => {
+                    let mut acc0 = Vec::with_capacity(l0.len());
+                    for i0 in 0..l0.len() {
+                        acc0.push(match l0.elem_row(i0) {
+                            Probe::Got(sub1) => WriteSummary {
+                                changes: match sub1.probe_number("changes") {
+                                    NumProbe::Got { raw, actual_wire_type } => match raw.parse::<i64>() {
+                                        Ok(n) => n,
+                                        Err(_) => return Err(de_overflow("WriteSummary", "changes", "int", actual_wire_type, raw)),
+                                    },
+                                    NumProbe::Wrong { actual_wire_type, raw_value }
+                                    | NumProbe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("WriteSummary", "changes", "int", actual_wire_type, raw_value)),
+                                    NumProbe::Absent => return Err(de_missing_field("WriteSummary", "changes", "int")),
+                                },
+                                lastInsertRowid: match sub1.probe_number("lastInsertRowid") {
+                                    NumProbe::Got { raw, actual_wire_type } => match raw.parse::<i64>() {
+                                        Ok(n) => n,
+                                        Err(_) => return Err(de_overflow("WriteSummary", "lastInsertRowid", "int", actual_wire_type, raw)),
+                                    },
+                                    NumProbe::Wrong { actual_wire_type, raw_value }
+                                    | NumProbe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("WriteSummary", "lastInsertRowid", "int", actual_wire_type, raw_value)),
+                                    NumProbe::Absent => return Err(de_missing_field("WriteSummary", "lastInsertRowid", "int")),
+                                },
+                            },
+                            Probe::Wrong { actual_wire_type, raw_value }
+                            | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n1", "n1", "obj{changes:int,lastInsertRowid:int}", actual_wire_type, raw_value)),
+                            Probe::Absent => return Err(de_missing_field("n1", "n1", "obj{changes:int,lastInsertRowid:int}")),
+                        });
+                    }
+                    acc0
+                },
+                Probe::Wrong { actual_wire_type, raw_value }
+                | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n1", "n1", "arr(obj{changes:int,lastInsertRowid:int})", actual_wire_type, raw_value)),
+                Probe::Absent => return Err(de_missing_field("n1", "n1", "arr(obj{changes:int,lastInsertRowid:int})")),
+            };
             let _ = &oel_n1;
             built_n1.push(dec_n1);
         }
@@ -2060,11 +2130,11 @@ pub fn nestedUpdate(
     id: i64,
     name: String,
     title: String,
-) -> Result<Vec<WireValue>, BehaviorError> {
+) -> Result<Vec<Vec<WriteSummary>>, BehaviorError> {
     let cell_n0: RefCell<Vec<IdRow>> = RefCell::new(Default::default());
     let produced_n0 = std::cell::Cell::new(false);
     let _ = &produced_n0;
-    let cell_n1: RefCell<Vec<WireValue>> = RefCell::new(Default::default());
+    let cell_n1: RefCell<Vec<Vec<WriteSummary>>> = RefCell::new(Default::default());
     let produced_n1 = std::cell::Cell::new(false);
     let _ = &produced_n1;
     // ── op 'n0' (executeSQL) ──
@@ -2104,14 +2174,49 @@ pub fn nestedUpdate(
     // ── map 'n1' (executeSQL, per-element, into:null, parent:n0) ──
     if produced_n0.get() {
         let over_n1 = cell_n0.borrow().clone();
-        let mut built_n1: Vec<WireValue> = Vec::with_capacity(over_n1.len());
+        let mut built_n1: Vec<Vec<WriteSummary>> = Vec::with_capacity(over_n1.len());
         for oel_n1 in over_n1.iter() {
             let ep_n1 = WireRow { entries: vec![("bigint".to_string(), WireValue::Bool(false)), ("params".to_string(), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::Str(title.clone()), WireValue::float(oel_n1.id)]; __v } })), ("returning".to_string(), WireValue::Bool(false)), ("sql".to_string(), WireValue::Str("UPDATE benchmark_posts SET title = ? WHERE author_id = ?".to_string())), ("write".to_string(), WireValue::Bool(true))] };
             let er_n1 = match execute_sql(ep_n1) {
                 Ok(r) => r,
                 Err(e) => return Err(op_failed("n1", "fail", e)),
             };
-            let dec_n1 = er_n1.clone();
+            let dec_n1 = match er_n1.as_list() {
+                Probe::Got(l0) => {
+                    let mut acc0 = Vec::with_capacity(l0.len());
+                    for i0 in 0..l0.len() {
+                        acc0.push(match l0.elem_row(i0) {
+                            Probe::Got(sub1) => WriteSummary {
+                                changes: match sub1.probe_number("changes") {
+                                    NumProbe::Got { raw, actual_wire_type } => match raw.parse::<i64>() {
+                                        Ok(n) => n,
+                                        Err(_) => return Err(de_overflow("WriteSummary", "changes", "int", actual_wire_type, raw)),
+                                    },
+                                    NumProbe::Wrong { actual_wire_type, raw_value }
+                                    | NumProbe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("WriteSummary", "changes", "int", actual_wire_type, raw_value)),
+                                    NumProbe::Absent => return Err(de_missing_field("WriteSummary", "changes", "int")),
+                                },
+                                lastInsertRowid: match sub1.probe_number("lastInsertRowid") {
+                                    NumProbe::Got { raw, actual_wire_type } => match raw.parse::<i64>() {
+                                        Ok(n) => n,
+                                        Err(_) => return Err(de_overflow("WriteSummary", "lastInsertRowid", "int", actual_wire_type, raw)),
+                                    },
+                                    NumProbe::Wrong { actual_wire_type, raw_value }
+                                    | NumProbe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("WriteSummary", "lastInsertRowid", "int", actual_wire_type, raw_value)),
+                                    NumProbe::Absent => return Err(de_missing_field("WriteSummary", "lastInsertRowid", "int")),
+                                },
+                            },
+                            Probe::Wrong { actual_wire_type, raw_value }
+                            | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n1", "n1", "obj{changes:int,lastInsertRowid:int}", actual_wire_type, raw_value)),
+                            Probe::Absent => return Err(de_missing_field("n1", "n1", "obj{changes:int,lastInsertRowid:int}")),
+                        });
+                    }
+                    acc0
+                },
+                Probe::Wrong { actual_wire_type, raw_value }
+                | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n1", "n1", "arr(obj{changes:int,lastInsertRowid:int})", actual_wire_type, raw_value)),
+                Probe::Absent => return Err(de_missing_field("n1", "n1", "arr(obj{changes:int,lastInsertRowid:int})")),
+            };
             let _ = &oel_n1;
             built_n1.push(dec_n1);
         }
@@ -2137,11 +2242,11 @@ pub fn nestedUpdate(
 pub fn delete(
     email: String,
     name: String,
-) -> Result<Vec<WireValue>, BehaviorError> {
+) -> Result<Vec<Vec<WriteSummary>>, BehaviorError> {
     let cell_n0: RefCell<Vec<IdRow>> = RefCell::new(Default::default());
     let produced_n0 = std::cell::Cell::new(false);
     let _ = &produced_n0;
-    let cell_n1: RefCell<Vec<WireValue>> = RefCell::new(Default::default());
+    let cell_n1: RefCell<Vec<Vec<WriteSummary>>> = RefCell::new(Default::default());
     let produced_n1 = std::cell::Cell::new(false);
     let _ = &produced_n1;
     // ── op 'n0' (executeSQL) ──
@@ -2181,14 +2286,49 @@ pub fn delete(
     // ── map 'n1' (executeSQL, per-element, into:null, parent:n0) ──
     if produced_n0.get() {
         let over_n1 = cell_n0.borrow().clone();
-        let mut built_n1: Vec<WireValue> = Vec::with_capacity(over_n1.len());
+        let mut built_n1: Vec<Vec<WriteSummary>> = Vec::with_capacity(over_n1.len());
         for oel_n1 in over_n1.iter() {
             let ep_n1 = WireRow { entries: vec![("bigint".to_string(), WireValue::Bool(false)), ("params".to_string(), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::float(oel_n1.id)]; __v } })), ("returning".to_string(), WireValue::Bool(false)), ("sql".to_string(), WireValue::Str("DELETE FROM benchmark_users WHERE id = ?".to_string())), ("write".to_string(), WireValue::Bool(true))] };
             let er_n1 = match execute_sql(ep_n1) {
                 Ok(r) => r,
                 Err(e) => return Err(op_failed("n1", "fail", e)),
             };
-            let dec_n1 = er_n1.clone();
+            let dec_n1 = match er_n1.as_list() {
+                Probe::Got(l0) => {
+                    let mut acc0 = Vec::with_capacity(l0.len());
+                    for i0 in 0..l0.len() {
+                        acc0.push(match l0.elem_row(i0) {
+                            Probe::Got(sub1) => WriteSummary {
+                                changes: match sub1.probe_number("changes") {
+                                    NumProbe::Got { raw, actual_wire_type } => match raw.parse::<i64>() {
+                                        Ok(n) => n,
+                                        Err(_) => return Err(de_overflow("WriteSummary", "changes", "int", actual_wire_type, raw)),
+                                    },
+                                    NumProbe::Wrong { actual_wire_type, raw_value }
+                                    | NumProbe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("WriteSummary", "changes", "int", actual_wire_type, raw_value)),
+                                    NumProbe::Absent => return Err(de_missing_field("WriteSummary", "changes", "int")),
+                                },
+                                lastInsertRowid: match sub1.probe_number("lastInsertRowid") {
+                                    NumProbe::Got { raw, actual_wire_type } => match raw.parse::<i64>() {
+                                        Ok(n) => n,
+                                        Err(_) => return Err(de_overflow("WriteSummary", "lastInsertRowid", "int", actual_wire_type, raw)),
+                                    },
+                                    NumProbe::Wrong { actual_wire_type, raw_value }
+                                    | NumProbe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("WriteSummary", "lastInsertRowid", "int", actual_wire_type, raw_value)),
+                                    NumProbe::Absent => return Err(de_missing_field("WriteSummary", "lastInsertRowid", "int")),
+                                },
+                            },
+                            Probe::Wrong { actual_wire_type, raw_value }
+                            | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n1", "n1", "obj{changes:int,lastInsertRowid:int}", actual_wire_type, raw_value)),
+                            Probe::Absent => return Err(de_missing_field("n1", "n1", "obj{changes:int,lastInsertRowid:int}")),
+                        });
+                    }
+                    acc0
+                },
+                Probe::Wrong { actual_wire_type, raw_value }
+                | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n1", "n1", "arr(obj{changes:int,lastInsertRowid:int})", actual_wire_type, raw_value)),
+                Probe::Absent => return Err(de_missing_field("n1", "n1", "arr(obj{changes:int,lastInsertRowid:int})")),
+            };
             let _ = &oel_n1;
             built_n1.push(dec_n1);
         }

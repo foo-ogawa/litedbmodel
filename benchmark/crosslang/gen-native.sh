@@ -2,8 +2,8 @@
 # ════════════════════════════════════════════════════════════════════════════
 # ORM-bench NATIVE codegen driver — the REPRODUCIBLE bc-CLI pipeline.
 #
-#   ./gen-native.sh generate [dialect]   # bc generate  → the per-leg native modules
-#   ./gen-native.sh check    [dialect]   # bc check     → drift gate (exit 1 on drift)
+#   ./gen-native.sh generate [dialect]   # bc generate       → the per-leg native modules
+#   ./gen-native.sh check    [dialect]   # tsc + bc check    → drift gate (exit 1 on drift)
 #
 # `dialect` is sqlite (default) | postgres | mysql and selects the authored class. The committed
 # modules are the sqlite ones — that is the dialect the bench cells consume — so `check` with no
@@ -13,9 +13,9 @@
 #
 # There is NO litedbmodel code in the generation OR verification path. `native-model.ts` only DECLARES
 # the ops on bc's TS authoring surface; bc's own `bc generate --from` type-extracts and lowers that
-# source (it is read, never executed), and the drift gate is bc's own `bc check --from` — both over the
-# SAME authored source + the SAME flags (defined once, below). No IR is dumped, staged, or re-read:
-# the authored TS is the single source of truth.
+# source (it is read, never executed), and the drift gate is `tsc --noEmit` over that source plus bc's
+# own `bc check --from` — all over the SAME authored source + the SAME flags (defined once, below). No
+# IR is dumped, staged, or re-read: the authored TS is the single source of truth.
 #
 # The SAME source feeds EVERY leg (language-agnostic). Each leg has its own emitter (`--lang`), --out
 # module, --shared-types-out wire module + import specifiers, and leaf-transport symbol map; the flag
@@ -28,6 +28,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
 SRC="$HERE/native-model.ts"
 BC="$ROOT/node_modules/.bin/bc"
+TSC="$ROOT/node_modules/.bin/tsc"
 
 # The authored class per dialect — the ONE varying parameter across the three generations.
 case "$DIALECT" in
@@ -93,6 +94,12 @@ case "$MODE" in
     "$BC" generate "${FROM[@]}" "${PY_FLAGS[@]}";  echo "bc generate ($DIALECT) → $PY_OUT"
     "$BC" generate "${FROM[@]}" "${PHP_FLAGS[@]}"; echo "bc generate ($DIALECT) → $PHP_OUT" ;;
   check)
+    # The authored source must be ORDINARY TypeScript — that is bc's authoring requirement, and it is
+    # what keeps the de-box points honest: bc reads the ANNOTATION, so a binding whose declared row type
+    # does not typecheck against the leaf's `WireValue[]` is a declaration bc would lower differently
+    # than it reads. `tsc` over the SAME `$SRC` the generators consume is therefore part of the drift
+    # gate, ahead of the output byte-diff — a source that does not typecheck never reaches the emitters.
+    "$TSC" --noEmit --strict --target es2022 --module esnext --moduleResolution bundler "$SRC"
     "$BC" check "${FROM[@]}" "${FLAGS[@]}"
     "$BC" check "${FROM[@]}" "${GO_FLAGS[@]}"
     "$BC" check "${FROM[@]}" "${PY_FLAGS[@]}"

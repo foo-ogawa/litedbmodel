@@ -19,6 +19,15 @@
 // op therefore runs `executeSQL → pluck → executeSQL → … → group` entirely on the wire plane and
 // materializes the whole nested typed graph exactly once, at the end.
 //
+// A de-box point is spelled `const rows: Row[] = Db.<leaf>(…) as Row[]` — the ANNOTATION is the
+// declaration bc reads and the single assertion is what tells TypeScript about the opaque→concrete
+// narrowing, so the file is ordinary `tsc --strict` TypeScript. Dropping the annotation and keeping
+// only the cast makes the declaration and the body's derived type diverge, and bc rejects it. An
+// opaque chain may not END: a component return type carries no wire-passthrough flag, so every op
+// terminates on a concrete type. Inside a `.map`, the binding annotation declares the PER-ELEMENT
+// type — the de-box therefore sits on a binding within the arrow body, and the map node yields the
+// array of it.
+//
 // ── per-dialect classes ──
 // The SQL differs by dialect (batch binds, relation key-set predicates, upsert syntax), so each dialect
 // is one class of the same 19 ops: `BenchSqlite` / `BenchPostgres` / `BenchMysql`. `gen-native.sh` picks
@@ -70,22 +79,22 @@ export class Db {
 
 export class BenchSqlite {
   @behavior static findAll(): UserRow[] {
-    const rows: UserRow[] = Db.executeSQL("SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100", [], false, false, false);
+    const rows: UserRow[] = Db.executeSQL("SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100", [], false, false, false) as UserRow[];
     return rows;
   }
 
   @behavior static filterPaginateSort(published: Int): PostFullRow[] {
-    const rows: PostFullRow[] = Db.executeSQL("SELECT id, title, content, published, author_id, created_at FROM benchmark_posts WHERE published = ? ORDER BY created_at DESC LIMIT 20 OFFSET 10", [published], false, false, false);
+    const rows: PostFullRow[] = Db.executeSQL("SELECT id, title, content, published, author_id, created_at FROM benchmark_posts WHERE published = ? ORDER BY created_at DESC LIMIT 20 OFFSET 10", [published], false, false, false) as PostFullRow[];
     return rows;
   }
 
   @behavior static findFirst(name: string): UserRow[] {
-    const rows: UserRow[] = Db.executeSQL("SELECT id, email, name FROM benchmark_users WHERE name LIKE ? LIMIT 1", [name], false, false, false);
+    const rows: UserRow[] = Db.executeSQL("SELECT id, email, name FROM benchmark_users WHERE name LIKE ? LIMIT 1", [name], false, false, false) as UserRow[];
     return rows;
   }
 
   @behavior static findUnique(email: string): UserRow[] {
-    const rows: UserRow[] = Db.executeSQL("SELECT id, email, name FROM benchmark_users WHERE email = ? LIMIT 1", [email], false, false, false);
+    const rows: UserRow[] = Db.executeSQL("SELECT id, email, name FROM benchmark_users WHERE email = ? LIMIT 1", [email], false, false, false) as UserRow[];
     return rows;
   }
 
@@ -93,7 +102,7 @@ export class BenchSqlite {
     const users: WireValue[] = Db.executeSQL("SELECT id, email, name FROM benchmark_users LIMIT 100", [], false, false, false);
     const userKeys: WireValue[] = Db.pluck(users, ["id"]);
     const posts: WireValue[] = Db.executeSQL("SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN (SELECT value FROM json_each(?)) ORDER BY id ASC", [userKeys], false, false, false);
-    const usersWithPosts: UserWithPosts[] = Db.group(users, posts, ["id"], ["author_id"], "posts", false);
+    const usersWithPosts: UserWithPosts[] = Db.group(users, posts, ["id"], ["author_id"], "posts", false) as UserWithPosts[];
     return usersWithPosts;
   }
 
@@ -101,7 +110,7 @@ export class BenchSqlite {
     const users: WireValue[] = Db.executeSQL("SELECT id, email, name FROM benchmark_users WHERE name LIKE ? LIMIT 1", [name], false, false, false);
     const userKeys: WireValue[] = Db.pluck(users, ["id"]);
     const posts: WireValue[] = Db.executeSQL("SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN (SELECT value FROM json_each(?)) ORDER BY id ASC", [userKeys], false, false, false);
-    const usersWithPosts: UserWithPosts[] = Db.group(users, posts, ["id"], ["author_id"], "posts", false);
+    const usersWithPosts: UserWithPosts[] = Db.group(users, posts, ["id"], ["author_id"], "posts", false) as UserWithPosts[];
     return usersWithPosts;
   }
 
@@ -109,7 +118,7 @@ export class BenchSqlite {
     const users: WireValue[] = Db.executeSQL("SELECT id, email, name FROM benchmark_users WHERE email = ? LIMIT 1", [email], false, false, false);
     const userKeys: WireValue[] = Db.pluck(users, ["id"]);
     const posts: WireValue[] = Db.executeSQL("SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN (SELECT value FROM json_each(?)) ORDER BY id ASC", [userKeys], false, false, false);
-    const usersWithPosts: UserWithPosts[] = Db.group(users, posts, ["id"], ["author_id"], "posts", false);
+    const usersWithPosts: UserWithPosts[] = Db.group(users, posts, ["id"], ["author_id"], "posts", false) as UserWithPosts[];
     return usersWithPosts;
   }
 
@@ -120,7 +129,7 @@ export class BenchSqlite {
     const postKeys: WireValue[] = Db.pluck(posts, ["id"]);
     const comments: WireValue[] = Db.executeSQL("SELECT id, body, post_id FROM benchmark_comments WHERE post_id IN (SELECT value FROM json_each(?)) ORDER BY id ASC", [postKeys], false, false, false);
     const postsWithComments: WireValue[] = Db.group(posts, comments, ["id"], ["post_id"], "comments", false);
-    const usersWithPosts: UserWithPostsAndComments[] = Db.group(users, postsWithComments, ["id"], ["author_id"], "posts", false);
+    const usersWithPosts: UserWithPostsAndComments[] = Db.group(users, postsWithComments, ["id"], ["author_id"], "posts", false) as UserWithPostsAndComments[];
     return usersWithPosts;
   }
 
@@ -131,79 +140,91 @@ export class BenchSqlite {
     const tenantPostKeys: WireValue[] = Db.pluck(tenantPosts, ["tenant_id", "post_id"]);
     const tenantComments: WireValue[] = Db.executeSQL("SELECT tenant_id, comment_id, post_id, body FROM benchmark_tenant_comments WHERE EXISTS (SELECT 1 FROM json_each(?) je WHERE json_extract(je.value, '$[0]') = benchmark_tenant_comments.tenant_id AND json_extract(je.value, '$[1]') = benchmark_tenant_comments.post_id) ORDER BY comment_id ASC", [tenantPostKeys], false, false, false);
     const tenantPostsWithComments: WireValue[] = Db.group(tenantPosts, tenantComments, ["tenant_id", "post_id"], ["tenant_id", "post_id"], "comments", false);
-    const tenantUsersWithPosts: TenantUserWithPosts[] = Db.group(tenantUsers, tenantPostsWithComments, ["tenant_id", "user_id"], ["tenant_id", "user_id"], "posts", false);
+    const tenantUsersWithPosts: TenantUserWithPosts[] = Db.group(tenantUsers, tenantPostsWithComments, ["tenant_id", "user_id"], ["tenant_id", "user_id"], "posts", false) as TenantUserWithPosts[];
     return tenantUsersWithPosts;
   }
 
   @behavior static create(email: string, name: string): WriteSummary[] {
-    const summary: WriteSummary[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) VALUES (?, ?)", [email, name], true, false, false);
+    const summary: WriteSummary[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) VALUES (?, ?)", [email, name], true, false, false) as WriteSummary[];
     return summary;
   }
 
   @behavior static update(id: Int, name: string): WriteSummary[] {
-    const summary: WriteSummary[] = Db.executeSQL("UPDATE benchmark_users SET name = ? WHERE id = ?", [name, id], true, false, false);
+    const summary: WriteSummary[] = Db.executeSQL("UPDATE benchmark_users SET name = ? WHERE id = ?", [name, id], true, false, false) as WriteSummary[];
     return summary;
   }
 
   @behavior static upsert(email: string, name: string): IdRow[] {
-    const returned: IdRow[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) VALUES (?, ?) ON CONFLICT (email) DO UPDATE SET email = excluded.email, name = excluded.name RETURNING id", [email, name], true, true, false);
+    const returned: IdRow[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) VALUES (?, ?) ON CONFLICT (email) DO UPDATE SET email = excluded.email, name = excluded.name RETURNING id", [email, name], true, true, false) as IdRow[];
     return returned;
   }
 
   @behavior static createMany(rows: NewUser[]): WriteSummary[] {
-    const summary: WriteSummary[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) SELECT json_extract(value, '$.email'), json_extract(value, '$.name') FROM json_each(?)", [rows], true, false, false);
+    const summary: WriteSummary[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) SELECT json_extract(value, '$.email'), json_extract(value, '$.name') FROM json_each(?)", [rows], true, false, false) as WriteSummary[];
     return summary;
   }
 
   @behavior static upsertMany(rows: NewUser[]): WriteSummary[] {
-    const summary: WriteSummary[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) SELECT json_extract(value, '$.email'), json_extract(value, '$.name') FROM json_each(?) WHERE true ON CONFLICT (email) DO UPDATE SET email = excluded.email, name = excluded.name", [rows], true, false, false);
+    const summary: WriteSummary[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) SELECT json_extract(value, '$.email'), json_extract(value, '$.name') FROM json_each(?) WHERE true ON CONFLICT (email) DO UPDATE SET email = excluded.email, name = excluded.name", [rows], true, false, false) as WriteSummary[];
     return summary;
   }
 
   @behavior static updateMany(rows: UserPatch[]): WriteSummary[] {
-    const summary: WriteSummary[] = Db.executeSQL("UPDATE benchmark_users SET name = (SELECT json_extract(je.value, '$.name') FROM json_each(?) je WHERE json_extract(je.value, '$.id') = benchmark_users.id LIMIT 1) WHERE id IN (SELECT json_extract(value, '$.id') FROM json_each(?))", [rows, rows], true, false, false);
+    const summary: WriteSummary[] = Db.executeSQL("UPDATE benchmark_users SET name = (SELECT json_extract(je.value, '$.name') FROM json_each(?) je WHERE json_extract(je.value, '$.id') = benchmark_users.id LIMIT 1) WHERE id IN (SELECT json_extract(value, '$.id') FROM json_each(?))", [rows, rows], true, false, false) as WriteSummary[];
     return summary;
   }
 
-  @behavior static nestedCreate(email: string, name: string, title: string): WireValue[][] {
-    const user: IdRow[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) VALUES (?, ?) RETURNING id", [email, name], true, true, false);
-    return user.map((u) => Db.executeSQL("INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)", [u.id, title], true, false, false));
+  @behavior static nestedCreate(email: string, name: string, title: string): WriteSummary[][] {
+    const user: IdRow[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) VALUES (?, ?) RETURNING id", [email, name], true, true, false) as IdRow[];
+    return user.map((u) => {
+      const written: WriteSummary[] = Db.executeSQL("INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)", [u.id, title], true, false, false) as WriteSummary[];
+      return written;
+    });
   }
 
-  @behavior static nestedUpsert(email: string, name: string, title: string): WireValue[][] {
-    const user: IdRow[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) VALUES (?, ?) ON CONFLICT (email) DO UPDATE SET email = excluded.email, name = excluded.name RETURNING id", [email, name], true, true, false);
-    return user.map((u) => Db.executeSQL("INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)", [u.id, title], true, false, false));
+  @behavior static nestedUpsert(email: string, name: string, title: string): WriteSummary[][] {
+    const user: IdRow[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) VALUES (?, ?) ON CONFLICT (email) DO UPDATE SET email = excluded.email, name = excluded.name RETURNING id", [email, name], true, true, false) as IdRow[];
+    return user.map((u) => {
+      const written: WriteSummary[] = Db.executeSQL("INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)", [u.id, title], true, false, false) as WriteSummary[];
+      return written;
+    });
   }
 
-  @behavior static nestedUpdate(id: Int, name: string, title: string): WireValue[][] {
-    const user: IdRow[] = Db.executeSQL("UPDATE benchmark_users SET name = ? WHERE id = ? RETURNING id", [name, id], true, true, false);
-    return user.map((u) => Db.executeSQL("UPDATE benchmark_posts SET title = ? WHERE author_id = ?", [title, u.id], true, false, false));
+  @behavior static nestedUpdate(id: Int, name: string, title: string): WriteSummary[][] {
+    const user: IdRow[] = Db.executeSQL("UPDATE benchmark_users SET name = ? WHERE id = ? RETURNING id", [name, id], true, true, false) as IdRow[];
+    return user.map((u) => {
+      const written: WriteSummary[] = Db.executeSQL("UPDATE benchmark_posts SET title = ? WHERE author_id = ?", [title, u.id], true, false, false) as WriteSummary[];
+      return written;
+    });
   }
 
-  @behavior static delete(email: string, name: string): WireValue[][] {
-    const user: IdRow[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) VALUES (?, ?) RETURNING id", [email, name], true, true, false);
-    return user.map((u) => Db.executeSQL("DELETE FROM benchmark_users WHERE id = ?", [u.id], true, false, false));
+  @behavior static delete(email: string, name: string): WriteSummary[][] {
+    const user: IdRow[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) VALUES (?, ?) RETURNING id", [email, name], true, true, false) as IdRow[];
+    return user.map((u) => {
+      const written: WriteSummary[] = Db.executeSQL("DELETE FROM benchmark_users WHERE id = ?", [u.id], true, false, false) as WriteSummary[];
+      return written;
+    });
   }
 }
 
 export class BenchPostgres {
   @behavior static findAll(): UserRow[] {
-    const rows: UserRow[] = Db.executeSQL("SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100", [], false, false, false);
+    const rows: UserRow[] = Db.executeSQL("SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100", [], false, false, false) as UserRow[];
     return rows;
   }
 
   @behavior static filterPaginateSort(published: Int): PostFullRow[] {
-    const rows: PostFullRow[] = Db.executeSQL("SELECT id, title, content, published, author_id, created_at FROM benchmark_posts WHERE published = ? ORDER BY created_at DESC LIMIT 20 OFFSET 10", [published], false, false, false);
+    const rows: PostFullRow[] = Db.executeSQL("SELECT id, title, content, published, author_id, created_at FROM benchmark_posts WHERE published = ? ORDER BY created_at DESC LIMIT 20 OFFSET 10", [published], false, false, false) as PostFullRow[];
     return rows;
   }
 
   @behavior static findFirst(name: string): UserRow[] {
-    const rows: UserRow[] = Db.executeSQL("SELECT id, email, name FROM benchmark_users WHERE name LIKE ? LIMIT 1", [name], false, false, false);
+    const rows: UserRow[] = Db.executeSQL("SELECT id, email, name FROM benchmark_users WHERE name LIKE ? LIMIT 1", [name], false, false, false) as UserRow[];
     return rows;
   }
 
   @behavior static findUnique(email: string): UserRow[] {
-    const rows: UserRow[] = Db.executeSQL("SELECT id, email, name FROM benchmark_users WHERE email = ? LIMIT 1", [email], false, false, false);
+    const rows: UserRow[] = Db.executeSQL("SELECT id, email, name FROM benchmark_users WHERE email = ? LIMIT 1", [email], false, false, false) as UserRow[];
     return rows;
   }
 
@@ -211,7 +232,7 @@ export class BenchPostgres {
     const users: WireValue[] = Db.executeSQL("SELECT id, email, name FROM benchmark_users LIMIT 100", [], false, false, false);
     const userKeys: WireValue[] = Db.pluck(users, ["id"]);
     const posts: WireValue[] = Db.executeSQL("SELECT id, title, author_id FROM benchmark_posts WHERE benchmark_posts.author_id = ANY(?::@@PG_ARRAY_CAST@@) ORDER BY id ASC", [userKeys], false, false, false);
-    const usersWithPosts: UserWithPosts[] = Db.group(users, posts, ["id"], ["author_id"], "posts", false);
+    const usersWithPosts: UserWithPosts[] = Db.group(users, posts, ["id"], ["author_id"], "posts", false) as UserWithPosts[];
     return usersWithPosts;
   }
 
@@ -219,7 +240,7 @@ export class BenchPostgres {
     const users: WireValue[] = Db.executeSQL("SELECT id, email, name FROM benchmark_users WHERE name LIKE ? LIMIT 1", [name], false, false, false);
     const userKeys: WireValue[] = Db.pluck(users, ["id"]);
     const posts: WireValue[] = Db.executeSQL("SELECT id, title, author_id FROM benchmark_posts WHERE benchmark_posts.author_id = ANY(?::@@PG_ARRAY_CAST@@) ORDER BY id ASC", [userKeys], false, false, false);
-    const usersWithPosts: UserWithPosts[] = Db.group(users, posts, ["id"], ["author_id"], "posts", false);
+    const usersWithPosts: UserWithPosts[] = Db.group(users, posts, ["id"], ["author_id"], "posts", false) as UserWithPosts[];
     return usersWithPosts;
   }
 
@@ -227,7 +248,7 @@ export class BenchPostgres {
     const users: WireValue[] = Db.executeSQL("SELECT id, email, name FROM benchmark_users WHERE email = ? LIMIT 1", [email], false, false, false);
     const userKeys: WireValue[] = Db.pluck(users, ["id"]);
     const posts: WireValue[] = Db.executeSQL("SELECT id, title, author_id FROM benchmark_posts WHERE benchmark_posts.author_id = ANY(?::@@PG_ARRAY_CAST@@) ORDER BY id ASC", [userKeys], false, false, false);
-    const usersWithPosts: UserWithPosts[] = Db.group(users, posts, ["id"], ["author_id"], "posts", false);
+    const usersWithPosts: UserWithPosts[] = Db.group(users, posts, ["id"], ["author_id"], "posts", false) as UserWithPosts[];
     return usersWithPosts;
   }
 
@@ -238,7 +259,7 @@ export class BenchPostgres {
     const postKeys: WireValue[] = Db.pluck(posts, ["id"]);
     const comments: WireValue[] = Db.executeSQL("SELECT id, body, post_id FROM benchmark_comments WHERE benchmark_comments.post_id = ANY(?::@@PG_ARRAY_CAST@@) ORDER BY id ASC", [postKeys], false, false, false);
     const postsWithComments: WireValue[] = Db.group(posts, comments, ["id"], ["post_id"], "comments", false);
-    const usersWithPosts: UserWithPostsAndComments[] = Db.group(users, postsWithComments, ["id"], ["author_id"], "posts", false);
+    const usersWithPosts: UserWithPostsAndComments[] = Db.group(users, postsWithComments, ["id"], ["author_id"], "posts", false) as UserWithPostsAndComments[];
     return usersWithPosts;
   }
 
@@ -249,79 +270,91 @@ export class BenchPostgres {
     const tenantPostKeys: WireValue[] = Db.pluck(tenantPosts, ["tenant_id", "post_id"]);
     const tenantComments: WireValue[] = Db.executeSQL("SELECT tenant_id, comment_id, post_id, body FROM benchmark_tenant_comments JOIN unnest(?::@@PG_ARRAY_CAST@@, ?::@@PG_ARRAY_CAST@@) AS _unnest_benchmark_tenant_comments(_unnest_benchmark_tenant_comments_tenant_id, _unnest_benchmark_tenant_comments_post_id) ON benchmark_tenant_comments.tenant_id = _unnest_benchmark_tenant_comments._unnest_benchmark_tenant_comments_tenant_id AND benchmark_tenant_comments.post_id = _unnest_benchmark_tenant_comments._unnest_benchmark_tenant_comments_post_id ORDER BY comment_id ASC", [tenantPostKeys], false, false, false);
     const tenantPostsWithComments: WireValue[] = Db.group(tenantPosts, tenantComments, ["tenant_id", "post_id"], ["tenant_id", "post_id"], "comments", false);
-    const tenantUsersWithPosts: TenantUserWithPosts[] = Db.group(tenantUsers, tenantPostsWithComments, ["tenant_id", "user_id"], ["tenant_id", "user_id"], "posts", false);
+    const tenantUsersWithPosts: TenantUserWithPosts[] = Db.group(tenantUsers, tenantPostsWithComments, ["tenant_id", "user_id"], ["tenant_id", "user_id"], "posts", false) as TenantUserWithPosts[];
     return tenantUsersWithPosts;
   }
 
   @behavior static create(email: string, name: string): WriteSummary[] {
-    const summary: WriteSummary[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) VALUES (?, ?)", [email, name], true, false, false);
+    const summary: WriteSummary[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) VALUES (?, ?)", [email, name], true, false, false) as WriteSummary[];
     return summary;
   }
 
   @behavior static update(id: Int, name: string): WriteSummary[] {
-    const summary: WriteSummary[] = Db.executeSQL("UPDATE benchmark_users SET name = ? WHERE id = ?", [name, id], true, false, false);
+    const summary: WriteSummary[] = Db.executeSQL("UPDATE benchmark_users SET name = ? WHERE id = ?", [name, id], true, false, false) as WriteSummary[];
     return summary;
   }
 
   @behavior static upsert(email: string, name: string): IdRow[] {
-    const returned: IdRow[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) VALUES (?, ?) ON CONFLICT (email) DO UPDATE SET email = excluded.email, name = excluded.name RETURNING id", [email, name], true, true, false);
+    const returned: IdRow[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) VALUES (?, ?) ON CONFLICT (email) DO UPDATE SET email = excluded.email, name = excluded.name RETURNING id", [email, name], true, true, false) as IdRow[];
     return returned;
   }
 
   @behavior static createMany(rows: NewUser[]): WriteSummary[] {
-    const summary: WriteSummary[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) SELECT v.email, v.name FROM UNNEST(?::text[], ?::text[]) AS v(email, name)", [rows, rows], true, false, false);
+    const summary: WriteSummary[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) SELECT v.email, v.name FROM UNNEST(?::text[], ?::text[]) AS v(email, name)", [rows, rows], true, false, false) as WriteSummary[];
     return summary;
   }
 
   @behavior static upsertMany(rows: NewUser[]): WriteSummary[] {
-    const summary: WriteSummary[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) SELECT v.email, v.name FROM UNNEST(?::text[], ?::text[]) AS v(email, name) ON CONFLICT (email) DO UPDATE SET email = EXCLUDED.email, name = EXCLUDED.name", [rows, rows], true, false, false);
+    const summary: WriteSummary[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) SELECT v.email, v.name FROM UNNEST(?::text[], ?::text[]) AS v(email, name) ON CONFLICT (email) DO UPDATE SET email = EXCLUDED.email, name = EXCLUDED.name", [rows, rows], true, false, false) as WriteSummary[];
     return summary;
   }
 
   @behavior static updateMany(rows: UserPatch[]): WriteSummary[] {
-    const summary: WriteSummary[] = Db.executeSQL("UPDATE benchmark_users AS t SET name = v.name FROM UNNEST(?::int[], ?::text[]) AS v(id, name) WHERE t.id = v.id", [rows, rows], true, false, false);
+    const summary: WriteSummary[] = Db.executeSQL("UPDATE benchmark_users AS t SET name = v.name FROM UNNEST(?::int[], ?::text[]) AS v(id, name) WHERE t.id = v.id", [rows, rows], true, false, false) as WriteSummary[];
     return summary;
   }
 
-  @behavior static nestedCreate(email: string, name: string, title: string): WireValue[][] {
-    const user: IdRow[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) VALUES (?, ?) RETURNING id", [email, name], true, true, false);
-    return user.map((u) => Db.executeSQL("INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)", [u.id, title], true, false, false));
+  @behavior static nestedCreate(email: string, name: string, title: string): WriteSummary[][] {
+    const user: IdRow[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) VALUES (?, ?) RETURNING id", [email, name], true, true, false) as IdRow[];
+    return user.map((u) => {
+      const written: WriteSummary[] = Db.executeSQL("INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)", [u.id, title], true, false, false) as WriteSummary[];
+      return written;
+    });
   }
 
-  @behavior static nestedUpsert(email: string, name: string, title: string): WireValue[][] {
-    const user: IdRow[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) VALUES (?, ?) ON CONFLICT (email) DO UPDATE SET email = excluded.email, name = excluded.name RETURNING id", [email, name], true, true, false);
-    return user.map((u) => Db.executeSQL("INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)", [u.id, title], true, false, false));
+  @behavior static nestedUpsert(email: string, name: string, title: string): WriteSummary[][] {
+    const user: IdRow[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) VALUES (?, ?) ON CONFLICT (email) DO UPDATE SET email = excluded.email, name = excluded.name RETURNING id", [email, name], true, true, false) as IdRow[];
+    return user.map((u) => {
+      const written: WriteSummary[] = Db.executeSQL("INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)", [u.id, title], true, false, false) as WriteSummary[];
+      return written;
+    });
   }
 
-  @behavior static nestedUpdate(id: Int, name: string, title: string): WireValue[][] {
-    const user: IdRow[] = Db.executeSQL("UPDATE benchmark_users SET name = ? WHERE id = ? RETURNING id", [name, id], true, true, false);
-    return user.map((u) => Db.executeSQL("UPDATE benchmark_posts SET title = ? WHERE author_id = ?", [title, u.id], true, false, false));
+  @behavior static nestedUpdate(id: Int, name: string, title: string): WriteSummary[][] {
+    const user: IdRow[] = Db.executeSQL("UPDATE benchmark_users SET name = ? WHERE id = ? RETURNING id", [name, id], true, true, false) as IdRow[];
+    return user.map((u) => {
+      const written: WriteSummary[] = Db.executeSQL("UPDATE benchmark_posts SET title = ? WHERE author_id = ?", [title, u.id], true, false, false) as WriteSummary[];
+      return written;
+    });
   }
 
-  @behavior static delete(email: string, name: string): WireValue[][] {
-    const user: IdRow[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) VALUES (?, ?) RETURNING id", [email, name], true, true, false);
-    return user.map((u) => Db.executeSQL("DELETE FROM benchmark_users WHERE id = ?", [u.id], true, false, false));
+  @behavior static delete(email: string, name: string): WriteSummary[][] {
+    const user: IdRow[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) VALUES (?, ?) RETURNING id", [email, name], true, true, false) as IdRow[];
+    return user.map((u) => {
+      const written: WriteSummary[] = Db.executeSQL("DELETE FROM benchmark_users WHERE id = ?", [u.id], true, false, false) as WriteSummary[];
+      return written;
+    });
   }
 }
 
 export class BenchMysql {
   @behavior static findAll(): UserRow[] {
-    const rows: UserRow[] = Db.executeSQL("SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100", [], false, false, false);
+    const rows: UserRow[] = Db.executeSQL("SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100", [], false, false, false) as UserRow[];
     return rows;
   }
 
   @behavior static filterPaginateSort(published: Int): PostFullRow[] {
-    const rows: PostFullRow[] = Db.executeSQL("SELECT id, title, content, published, author_id, created_at FROM benchmark_posts WHERE published = ? ORDER BY created_at DESC LIMIT 20 OFFSET 10", [published], false, false, false);
+    const rows: PostFullRow[] = Db.executeSQL("SELECT id, title, content, published, author_id, created_at FROM benchmark_posts WHERE published = ? ORDER BY created_at DESC LIMIT 20 OFFSET 10", [published], false, false, false) as PostFullRow[];
     return rows;
   }
 
   @behavior static findFirst(name: string): UserRow[] {
-    const rows: UserRow[] = Db.executeSQL("SELECT id, email, name FROM benchmark_users WHERE name LIKE ? LIMIT 1", [name], false, false, false);
+    const rows: UserRow[] = Db.executeSQL("SELECT id, email, name FROM benchmark_users WHERE name LIKE ? LIMIT 1", [name], false, false, false) as UserRow[];
     return rows;
   }
 
   @behavior static findUnique(email: string): UserRow[] {
-    const rows: UserRow[] = Db.executeSQL("SELECT id, email, name FROM benchmark_users WHERE email = ? LIMIT 1", [email], false, false, false);
+    const rows: UserRow[] = Db.executeSQL("SELECT id, email, name FROM benchmark_users WHERE email = ? LIMIT 1", [email], false, false, false) as UserRow[];
     return rows;
   }
 
@@ -329,7 +362,7 @@ export class BenchMysql {
     const users: WireValue[] = Db.executeSQL("SELECT id, email, name FROM benchmark_users LIMIT 100", [], false, false, false);
     const userKeys: WireValue[] = Db.pluck(users, ["id"]);
     const posts: WireValue[] = Db.executeSQL("SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) ORDER BY id ASC", [userKeys], false, false, false);
-    const usersWithPosts: UserWithPosts[] = Db.group(users, posts, ["id"], ["author_id"], "posts", false);
+    const usersWithPosts: UserWithPosts[] = Db.group(users, posts, ["id"], ["author_id"], "posts", false) as UserWithPosts[];
     return usersWithPosts;
   }
 
@@ -337,7 +370,7 @@ export class BenchMysql {
     const users: WireValue[] = Db.executeSQL("SELECT id, email, name FROM benchmark_users WHERE name LIKE ? LIMIT 1", [name], false, false, false);
     const userKeys: WireValue[] = Db.pluck(users, ["id"]);
     const posts: WireValue[] = Db.executeSQL("SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) ORDER BY id ASC", [userKeys], false, false, false);
-    const usersWithPosts: UserWithPosts[] = Db.group(users, posts, ["id"], ["author_id"], "posts", false);
+    const usersWithPosts: UserWithPosts[] = Db.group(users, posts, ["id"], ["author_id"], "posts", false) as UserWithPosts[];
     return usersWithPosts;
   }
 
@@ -345,7 +378,7 @@ export class BenchMysql {
     const users: WireValue[] = Db.executeSQL("SELECT id, email, name FROM benchmark_users WHERE email = ? LIMIT 1", [email], false, false, false);
     const userKeys: WireValue[] = Db.pluck(users, ["id"]);
     const posts: WireValue[] = Db.executeSQL("SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) ORDER BY id ASC", [userKeys], false, false, false);
-    const usersWithPosts: UserWithPosts[] = Db.group(users, posts, ["id"], ["author_id"], "posts", false);
+    const usersWithPosts: UserWithPosts[] = Db.group(users, posts, ["id"], ["author_id"], "posts", false) as UserWithPosts[];
     return usersWithPosts;
   }
 
@@ -356,7 +389,7 @@ export class BenchMysql {
     const postKeys: WireValue[] = Db.pluck(posts, ["id"]);
     const comments: WireValue[] = Db.executeSQL("SELECT id, body, post_id FROM benchmark_comments WHERE post_id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) ORDER BY id ASC", [postKeys], false, false, false);
     const postsWithComments: WireValue[] = Db.group(posts, comments, ["id"], ["post_id"], "comments", false);
-    const usersWithPosts: UserWithPostsAndComments[] = Db.group(users, postsWithComments, ["id"], ["author_id"], "posts", false);
+    const usersWithPosts: UserWithPostsAndComments[] = Db.group(users, postsWithComments, ["id"], ["author_id"], "posts", false) as UserWithPostsAndComments[];
     return usersWithPosts;
   }
 
@@ -367,57 +400,69 @@ export class BenchMysql {
     const tenantPostKeys: WireValue[] = Db.pluck(tenantPosts, ["tenant_id", "post_id"]);
     const tenantComments: WireValue[] = Db.executeSQL("SELECT tenant_id, comment_id, post_id, body FROM benchmark_tenant_comments WHERE (benchmark_tenant_comments.tenant_id, benchmark_tenant_comments.post_id) IN (SELECT JSON_UNQUOTE(c0), JSON_UNQUOTE(c1) FROM JSON_TABLE(?, '$[*]' COLUMNS(c0 JSON PATH '$[0]', c1 JSON PATH '$[1]')) jt) ORDER BY comment_id ASC", [tenantPostKeys], false, false, false);
     const tenantPostsWithComments: WireValue[] = Db.group(tenantPosts, tenantComments, ["tenant_id", "post_id"], ["tenant_id", "post_id"], "comments", false);
-    const tenantUsersWithPosts: TenantUserWithPosts[] = Db.group(tenantUsers, tenantPostsWithComments, ["tenant_id", "user_id"], ["tenant_id", "user_id"], "posts", false);
+    const tenantUsersWithPosts: TenantUserWithPosts[] = Db.group(tenantUsers, tenantPostsWithComments, ["tenant_id", "user_id"], ["tenant_id", "user_id"], "posts", false) as TenantUserWithPosts[];
     return tenantUsersWithPosts;
   }
 
   @behavior static create(email: string, name: string): WriteSummary[] {
-    const summary: WriteSummary[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) VALUES (?, ?)", [email, name], true, false, false);
+    const summary: WriteSummary[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) VALUES (?, ?)", [email, name], true, false, false) as WriteSummary[];
     return summary;
   }
 
   @behavior static update(id: Int, name: string): WriteSummary[] {
-    const summary: WriteSummary[] = Db.executeSQL("UPDATE benchmark_users SET name = ? WHERE id = ?", [name, id], true, false, false);
+    const summary: WriteSummary[] = Db.executeSQL("UPDATE benchmark_users SET name = ? WHERE id = ?", [name, id], true, false, false) as WriteSummary[];
     return summary;
   }
 
   @behavior static upsert(email: string, name: string): IdRow[] {
-    const returned: IdRow[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) VALUES (?, ?) ON DUPLICATE KEY UPDATE email = VALUES(email), name = VALUES(name) RETURNING id", [email, name], true, true, false);
+    const returned: IdRow[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) VALUES (?, ?) ON DUPLICATE KEY UPDATE email = VALUES(email), name = VALUES(name) RETURNING id", [email, name], true, true, false) as IdRow[];
     return returned;
   }
 
   @behavior static createMany(rows: NewUser[]): WriteSummary[] {
-    const summary: WriteSummary[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) SELECT JSON_UNQUOTE(jt.email), JSON_UNQUOTE(jt.name) FROM JSON_TABLE(?, '$[*]' COLUMNS(email JSON PATH '$.email', name JSON PATH '$.name')) jt", [rows], true, false, false);
+    const summary: WriteSummary[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) SELECT JSON_UNQUOTE(jt.email), JSON_UNQUOTE(jt.name) FROM JSON_TABLE(?, '$[*]' COLUMNS(email JSON PATH '$.email', name JSON PATH '$.name')) jt", [rows], true, false, false) as WriteSummary[];
     return summary;
   }
 
   @behavior static upsertMany(rows: NewUser[]): WriteSummary[] {
-    const summary: WriteSummary[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) SELECT JSON_UNQUOTE(jt.email), JSON_UNQUOTE(jt.name) FROM JSON_TABLE(?, '$[*]' COLUMNS(email JSON PATH '$.email', name JSON PATH '$.name')) jt ON DUPLICATE KEY UPDATE email = VALUES(email), name = VALUES(name)", [rows], true, false, false);
+    const summary: WriteSummary[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) SELECT JSON_UNQUOTE(jt.email), JSON_UNQUOTE(jt.name) FROM JSON_TABLE(?, '$[*]' COLUMNS(email JSON PATH '$.email', name JSON PATH '$.name')) jt ON DUPLICATE KEY UPDATE email = VALUES(email), name = VALUES(name)", [rows], true, false, false) as WriteSummary[];
     return summary;
   }
 
   @behavior static updateMany(rows: UserPatch[]): WriteSummary[] {
-    const summary: WriteSummary[] = Db.executeSQL("UPDATE benchmark_users AS u JOIN JSON_TABLE(?, '$[*]' COLUMNS(id JSON PATH '$.id', name JSON PATH '$.name')) AS v ON u.id = JSON_UNQUOTE(v.id) SET u.name = JSON_UNQUOTE(v.name)", [rows], true, false, false);
+    const summary: WriteSummary[] = Db.executeSQL("UPDATE benchmark_users AS u JOIN JSON_TABLE(?, '$[*]' COLUMNS(id JSON PATH '$.id', name JSON PATH '$.name')) AS v ON u.id = JSON_UNQUOTE(v.id) SET u.name = JSON_UNQUOTE(v.name)", [rows], true, false, false) as WriteSummary[];
     return summary;
   }
 
-  @behavior static nestedCreate(email: string, name: string, title: string): WireValue[][] {
-    const user: IdRow[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) VALUES (?, ?) RETURNING id", [email, name], true, true, false);
-    return user.map((u) => Db.executeSQL("INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)", [u.id, title], true, false, false));
+  @behavior static nestedCreate(email: string, name: string, title: string): WriteSummary[][] {
+    const user: IdRow[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) VALUES (?, ?) RETURNING id", [email, name], true, true, false) as IdRow[];
+    return user.map((u) => {
+      const written: WriteSummary[] = Db.executeSQL("INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)", [u.id, title], true, false, false) as WriteSummary[];
+      return written;
+    });
   }
 
-  @behavior static nestedUpsert(email: string, name: string, title: string): WireValue[][] {
-    const user: IdRow[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) VALUES (?, ?) ON DUPLICATE KEY UPDATE email = VALUES(email), name = VALUES(name) RETURNING id", [email, name], true, true, false);
-    return user.map((u) => Db.executeSQL("INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)", [u.id, title], true, false, false));
+  @behavior static nestedUpsert(email: string, name: string, title: string): WriteSummary[][] {
+    const user: IdRow[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) VALUES (?, ?) ON DUPLICATE KEY UPDATE email = VALUES(email), name = VALUES(name) RETURNING id", [email, name], true, true, false) as IdRow[];
+    return user.map((u) => {
+      const written: WriteSummary[] = Db.executeSQL("INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)", [u.id, title], true, false, false) as WriteSummary[];
+      return written;
+    });
   }
 
-  @behavior static nestedUpdate(id: Int, name: string, title: string): WireValue[][] {
-    const user: IdRow[] = Db.executeSQL("UPDATE benchmark_users SET name = ? WHERE id = ? RETURNING id", [name, id], true, true, false);
-    return user.map((u) => Db.executeSQL("UPDATE benchmark_posts SET title = ? WHERE author_id = ?", [title, u.id], true, false, false));
+  @behavior static nestedUpdate(id: Int, name: string, title: string): WriteSummary[][] {
+    const user: IdRow[] = Db.executeSQL("UPDATE benchmark_users SET name = ? WHERE id = ? RETURNING id", [name, id], true, true, false) as IdRow[];
+    return user.map((u) => {
+      const written: WriteSummary[] = Db.executeSQL("UPDATE benchmark_posts SET title = ? WHERE author_id = ?", [title, u.id], true, false, false) as WriteSummary[];
+      return written;
+    });
   }
 
-  @behavior static delete(email: string, name: string): WireValue[][] {
-    const user: IdRow[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) VALUES (?, ?) RETURNING id", [email, name], true, true, false);
-    return user.map((u) => Db.executeSQL("DELETE FROM benchmark_users WHERE id = ?", [u.id], true, false, false));
+  @behavior static delete(email: string, name: string): WriteSummary[][] {
+    const user: IdRow[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) VALUES (?, ?) RETURNING id", [email, name], true, true, false) as IdRow[];
+    return user.map((u) => {
+      const written: WriteSummary[] = Db.executeSQL("DELETE FROM benchmark_users WHERE id = ?", [u.id], true, false, false) as WriteSummary[];
+      return written;
+    });
   }
 }

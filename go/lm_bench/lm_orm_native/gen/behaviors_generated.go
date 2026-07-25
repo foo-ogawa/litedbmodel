@@ -2340,12 +2340,12 @@ func UpdateMany(rows []UserPatch) ([]WriteSummary, error) {
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func NestedCreate(email string, name string, title string) ([]wire.WireValue, error) {
+func NestedCreate(email string, name string, title string) ([][]WriteSummary, error) {
 	var t_n0 []IdRow
 	produced_n0 := false
 	_ = t_n0
 	_ = produced_n0
-	var t_n1 []wire.WireValue
+	var t_n1 [][]WriteSummary
 	produced_n1 := false
 	_ = t_n1
 	_ = produced_n1
@@ -2399,7 +2399,7 @@ func NestedCreate(email string, name string, title string) ([]wire.WireValue, er
 	// ── map 'n1' (executeSQL, per-element, into:null, parent:n0) ──
 	if produced_n0 {
 		over_n1 := t_n0
-		t_n1 = make([]wire.WireValue, 0, len(over_n1))
+		t_n1 = make([][]WriteSummary, 0, len(over_n1))
 		for mk_n1 := range over_n1 {
 			oel_n1 := over_n1[mk_n1]
 			ep_n1 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireFloat(oel_n1.Id), wire.WireStr(title)})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)")}, wire.WireField{Key: "write", Val: wire.WireBool(true)}})
@@ -2407,8 +2407,61 @@ func NestedCreate(email string, name string, title string) ([]wire.WireValue, er
 			if mo_n1Err != nil {
 				return nil, opFailed("n1", "fail", mo_n1Err)
 			}
-			var el_n1 wire.WireValue
-			el_n1 = mo_n1
+			var el_n1 []WriteSummary
+			p0 := mo_n1.AsList()
+			if p0.Kind == probeGot {
+				list0 := make([]WriteSummary, 0, p0.Got.Len())
+				for i0 := 0; i0 < p0.Got.Len(); i0++ {
+					var el0 WriteSummary
+					p1 := p0.Got.ElemRow(i0)
+					if p1.Kind == probeGot {
+						var rec1 WriteSummary
+						p2 := p1.Got.ProbeNumber("changes")
+						if p2.Kind == probeGot {
+							n2, nErr2 := strconv.ParseInt(p2.Got, 10, 64)
+							if nErr2 != nil {
+								return nil, deOverflow("WriteSummary", "changes", "int", p2.ActualWireType, p2.Got)
+							}
+							rec1.Changes = n2
+						} else if p2.Kind == probeWrong {
+							return nil, deTypeMismatch("WriteSummary", "changes", "int", p2.ActualWireType, p2.Raw)
+						} else if p2.Kind == probeNull {
+							return nil, deTypeMismatch("WriteSummary", "changes", "int", p2.ActualWireType, p2.Raw)
+						} else {
+							return nil, deMissingField("WriteSummary", "changes", "int")
+						}
+						p3 := p1.Got.ProbeNumber("lastInsertRowid")
+						if p3.Kind == probeGot {
+							n3, nErr3 := strconv.ParseInt(p3.Got, 10, 64)
+							if nErr3 != nil {
+								return nil, deOverflow("WriteSummary", "lastInsertRowid", "int", p3.ActualWireType, p3.Got)
+							}
+							rec1.LastInsertRowid = n3
+						} else if p3.Kind == probeWrong {
+							return nil, deTypeMismatch("WriteSummary", "lastInsertRowid", "int", p3.ActualWireType, p3.Raw)
+						} else if p3.Kind == probeNull {
+							return nil, deTypeMismatch("WriteSummary", "lastInsertRowid", "int", p3.ActualWireType, p3.Raw)
+						} else {
+							return nil, deMissingField("WriteSummary", "lastInsertRowid", "int")
+						}
+						el0 = rec1
+					} else if p1.Kind == probeWrong {
+						return nil, deTypeMismatch("n1", "n1", "obj{changes:int,lastInsertRowid:int}", p1.ActualWireType, p1.Raw)
+					} else if p1.Kind == probeNull {
+						return nil, deTypeMismatch("n1", "n1", "obj{changes:int,lastInsertRowid:int}", p1.ActualWireType, p1.Raw)
+					} else {
+						return nil, deMissingField("n1", "n1", "obj{changes:int,lastInsertRowid:int}")
+					}
+					list0 = append(list0, el0)
+				}
+				el_n1 = list0
+			} else if p0.Kind == probeWrong {
+				return nil, deTypeMismatch("n1", "n1", "arr(obj{changes:int,lastInsertRowid:int})", p0.ActualWireType, p0.Raw)
+			} else if p0.Kind == probeNull {
+				return nil, deTypeMismatch("n1", "n1", "arr(obj{changes:int,lastInsertRowid:int})", p0.ActualWireType, p0.Raw)
+			} else {
+				return nil, deMissingField("n1", "n1", "arr(obj{changes:int,lastInsertRowid:int})")
+			}
 			t_n1 = append(t_n1, el_n1)
 		}
 		produced_n1 = true
@@ -2428,12 +2481,12 @@ func NestedCreate(email string, name string, title string) ([]wire.WireValue, er
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func NestedUpsert(email string, name string, title string) ([]wire.WireValue, error) {
+func NestedUpsert(email string, name string, title string) ([][]WriteSummary, error) {
 	var t_n0 []IdRow
 	produced_n0 := false
 	_ = t_n0
 	_ = produced_n0
-	var t_n1 []wire.WireValue
+	var t_n1 [][]WriteSummary
 	produced_n1 := false
 	_ = t_n1
 	_ = produced_n1
@@ -2487,7 +2540,7 @@ func NestedUpsert(email string, name string, title string) ([]wire.WireValue, er
 	// ── map 'n1' (executeSQL, per-element, into:null, parent:n0) ──
 	if produced_n0 {
 		over_n1 := t_n0
-		t_n1 = make([]wire.WireValue, 0, len(over_n1))
+		t_n1 = make([][]WriteSummary, 0, len(over_n1))
 		for mk_n1 := range over_n1 {
 			oel_n1 := over_n1[mk_n1]
 			ep_n1 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireFloat(oel_n1.Id), wire.WireStr(title)})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)")}, wire.WireField{Key: "write", Val: wire.WireBool(true)}})
@@ -2495,8 +2548,61 @@ func NestedUpsert(email string, name string, title string) ([]wire.WireValue, er
 			if mo_n1Err != nil {
 				return nil, opFailed("n1", "fail", mo_n1Err)
 			}
-			var el_n1 wire.WireValue
-			el_n1 = mo_n1
+			var el_n1 []WriteSummary
+			p0 := mo_n1.AsList()
+			if p0.Kind == probeGot {
+				list0 := make([]WriteSummary, 0, p0.Got.Len())
+				for i0 := 0; i0 < p0.Got.Len(); i0++ {
+					var el0 WriteSummary
+					p1 := p0.Got.ElemRow(i0)
+					if p1.Kind == probeGot {
+						var rec1 WriteSummary
+						p2 := p1.Got.ProbeNumber("changes")
+						if p2.Kind == probeGot {
+							n2, nErr2 := strconv.ParseInt(p2.Got, 10, 64)
+							if nErr2 != nil {
+								return nil, deOverflow("WriteSummary", "changes", "int", p2.ActualWireType, p2.Got)
+							}
+							rec1.Changes = n2
+						} else if p2.Kind == probeWrong {
+							return nil, deTypeMismatch("WriteSummary", "changes", "int", p2.ActualWireType, p2.Raw)
+						} else if p2.Kind == probeNull {
+							return nil, deTypeMismatch("WriteSummary", "changes", "int", p2.ActualWireType, p2.Raw)
+						} else {
+							return nil, deMissingField("WriteSummary", "changes", "int")
+						}
+						p3 := p1.Got.ProbeNumber("lastInsertRowid")
+						if p3.Kind == probeGot {
+							n3, nErr3 := strconv.ParseInt(p3.Got, 10, 64)
+							if nErr3 != nil {
+								return nil, deOverflow("WriteSummary", "lastInsertRowid", "int", p3.ActualWireType, p3.Got)
+							}
+							rec1.LastInsertRowid = n3
+						} else if p3.Kind == probeWrong {
+							return nil, deTypeMismatch("WriteSummary", "lastInsertRowid", "int", p3.ActualWireType, p3.Raw)
+						} else if p3.Kind == probeNull {
+							return nil, deTypeMismatch("WriteSummary", "lastInsertRowid", "int", p3.ActualWireType, p3.Raw)
+						} else {
+							return nil, deMissingField("WriteSummary", "lastInsertRowid", "int")
+						}
+						el0 = rec1
+					} else if p1.Kind == probeWrong {
+						return nil, deTypeMismatch("n1", "n1", "obj{changes:int,lastInsertRowid:int}", p1.ActualWireType, p1.Raw)
+					} else if p1.Kind == probeNull {
+						return nil, deTypeMismatch("n1", "n1", "obj{changes:int,lastInsertRowid:int}", p1.ActualWireType, p1.Raw)
+					} else {
+						return nil, deMissingField("n1", "n1", "obj{changes:int,lastInsertRowid:int}")
+					}
+					list0 = append(list0, el0)
+				}
+				el_n1 = list0
+			} else if p0.Kind == probeWrong {
+				return nil, deTypeMismatch("n1", "n1", "arr(obj{changes:int,lastInsertRowid:int})", p0.ActualWireType, p0.Raw)
+			} else if p0.Kind == probeNull {
+				return nil, deTypeMismatch("n1", "n1", "arr(obj{changes:int,lastInsertRowid:int})", p0.ActualWireType, p0.Raw)
+			} else {
+				return nil, deMissingField("n1", "n1", "arr(obj{changes:int,lastInsertRowid:int})")
+			}
 			t_n1 = append(t_n1, el_n1)
 		}
 		produced_n1 = true
@@ -2516,12 +2622,12 @@ func NestedUpsert(email string, name string, title string) ([]wire.WireValue, er
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func NestedUpdate(id int64, name string, title string) ([]wire.WireValue, error) {
+func NestedUpdate(id int64, name string, title string) ([][]WriteSummary, error) {
 	var t_n0 []IdRow
 	produced_n0 := false
 	_ = t_n0
 	_ = produced_n0
-	var t_n1 []wire.WireValue
+	var t_n1 [][]WriteSummary
 	produced_n1 := false
 	_ = t_n1
 	_ = produced_n1
@@ -2575,7 +2681,7 @@ func NestedUpdate(id int64, name string, title string) ([]wire.WireValue, error)
 	// ── map 'n1' (executeSQL, per-element, into:null, parent:n0) ──
 	if produced_n0 {
 		over_n1 := t_n0
-		t_n1 = make([]wire.WireValue, 0, len(over_n1))
+		t_n1 = make([][]WriteSummary, 0, len(over_n1))
 		for mk_n1 := range over_n1 {
 			oel_n1 := over_n1[mk_n1]
 			ep_n1 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireStr(title), wire.WireFloat(oel_n1.Id)})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("UPDATE benchmark_posts SET title = ? WHERE author_id = ?")}, wire.WireField{Key: "write", Val: wire.WireBool(true)}})
@@ -2583,8 +2689,61 @@ func NestedUpdate(id int64, name string, title string) ([]wire.WireValue, error)
 			if mo_n1Err != nil {
 				return nil, opFailed("n1", "fail", mo_n1Err)
 			}
-			var el_n1 wire.WireValue
-			el_n1 = mo_n1
+			var el_n1 []WriteSummary
+			p0 := mo_n1.AsList()
+			if p0.Kind == probeGot {
+				list0 := make([]WriteSummary, 0, p0.Got.Len())
+				for i0 := 0; i0 < p0.Got.Len(); i0++ {
+					var el0 WriteSummary
+					p1 := p0.Got.ElemRow(i0)
+					if p1.Kind == probeGot {
+						var rec1 WriteSummary
+						p2 := p1.Got.ProbeNumber("changes")
+						if p2.Kind == probeGot {
+							n2, nErr2 := strconv.ParseInt(p2.Got, 10, 64)
+							if nErr2 != nil {
+								return nil, deOverflow("WriteSummary", "changes", "int", p2.ActualWireType, p2.Got)
+							}
+							rec1.Changes = n2
+						} else if p2.Kind == probeWrong {
+							return nil, deTypeMismatch("WriteSummary", "changes", "int", p2.ActualWireType, p2.Raw)
+						} else if p2.Kind == probeNull {
+							return nil, deTypeMismatch("WriteSummary", "changes", "int", p2.ActualWireType, p2.Raw)
+						} else {
+							return nil, deMissingField("WriteSummary", "changes", "int")
+						}
+						p3 := p1.Got.ProbeNumber("lastInsertRowid")
+						if p3.Kind == probeGot {
+							n3, nErr3 := strconv.ParseInt(p3.Got, 10, 64)
+							if nErr3 != nil {
+								return nil, deOverflow("WriteSummary", "lastInsertRowid", "int", p3.ActualWireType, p3.Got)
+							}
+							rec1.LastInsertRowid = n3
+						} else if p3.Kind == probeWrong {
+							return nil, deTypeMismatch("WriteSummary", "lastInsertRowid", "int", p3.ActualWireType, p3.Raw)
+						} else if p3.Kind == probeNull {
+							return nil, deTypeMismatch("WriteSummary", "lastInsertRowid", "int", p3.ActualWireType, p3.Raw)
+						} else {
+							return nil, deMissingField("WriteSummary", "lastInsertRowid", "int")
+						}
+						el0 = rec1
+					} else if p1.Kind == probeWrong {
+						return nil, deTypeMismatch("n1", "n1", "obj{changes:int,lastInsertRowid:int}", p1.ActualWireType, p1.Raw)
+					} else if p1.Kind == probeNull {
+						return nil, deTypeMismatch("n1", "n1", "obj{changes:int,lastInsertRowid:int}", p1.ActualWireType, p1.Raw)
+					} else {
+						return nil, deMissingField("n1", "n1", "obj{changes:int,lastInsertRowid:int}")
+					}
+					list0 = append(list0, el0)
+				}
+				el_n1 = list0
+			} else if p0.Kind == probeWrong {
+				return nil, deTypeMismatch("n1", "n1", "arr(obj{changes:int,lastInsertRowid:int})", p0.ActualWireType, p0.Raw)
+			} else if p0.Kind == probeNull {
+				return nil, deTypeMismatch("n1", "n1", "arr(obj{changes:int,lastInsertRowid:int})", p0.ActualWireType, p0.Raw)
+			} else {
+				return nil, deMissingField("n1", "n1", "arr(obj{changes:int,lastInsertRowid:int})")
+			}
 			t_n1 = append(t_n1, el_n1)
 		}
 		produced_n1 = true
@@ -2604,12 +2763,12 @@ func NestedUpdate(id int64, name string, title string) ([]wire.WireValue, error)
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func Delete(email string, name string) ([]wire.WireValue, error) {
+func Delete(email string, name string) ([][]WriteSummary, error) {
 	var t_n0 []IdRow
 	produced_n0 := false
 	_ = t_n0
 	_ = produced_n0
-	var t_n1 []wire.WireValue
+	var t_n1 [][]WriteSummary
 	produced_n1 := false
 	_ = t_n1
 	_ = produced_n1
@@ -2663,7 +2822,7 @@ func Delete(email string, name string) ([]wire.WireValue, error) {
 	// ── map 'n1' (executeSQL, per-element, into:null, parent:n0) ──
 	if produced_n0 {
 		over_n1 := t_n0
-		t_n1 = make([]wire.WireValue, 0, len(over_n1))
+		t_n1 = make([][]WriteSummary, 0, len(over_n1))
 		for mk_n1 := range over_n1 {
 			oel_n1 := over_n1[mk_n1]
 			ep_n1 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireFloat(oel_n1.Id)})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("DELETE FROM benchmark_users WHERE id = ?")}, wire.WireField{Key: "write", Val: wire.WireBool(true)}})
@@ -2671,8 +2830,61 @@ func Delete(email string, name string) ([]wire.WireValue, error) {
 			if mo_n1Err != nil {
 				return nil, opFailed("n1", "fail", mo_n1Err)
 			}
-			var el_n1 wire.WireValue
-			el_n1 = mo_n1
+			var el_n1 []WriteSummary
+			p0 := mo_n1.AsList()
+			if p0.Kind == probeGot {
+				list0 := make([]WriteSummary, 0, p0.Got.Len())
+				for i0 := 0; i0 < p0.Got.Len(); i0++ {
+					var el0 WriteSummary
+					p1 := p0.Got.ElemRow(i0)
+					if p1.Kind == probeGot {
+						var rec1 WriteSummary
+						p2 := p1.Got.ProbeNumber("changes")
+						if p2.Kind == probeGot {
+							n2, nErr2 := strconv.ParseInt(p2.Got, 10, 64)
+							if nErr2 != nil {
+								return nil, deOverflow("WriteSummary", "changes", "int", p2.ActualWireType, p2.Got)
+							}
+							rec1.Changes = n2
+						} else if p2.Kind == probeWrong {
+							return nil, deTypeMismatch("WriteSummary", "changes", "int", p2.ActualWireType, p2.Raw)
+						} else if p2.Kind == probeNull {
+							return nil, deTypeMismatch("WriteSummary", "changes", "int", p2.ActualWireType, p2.Raw)
+						} else {
+							return nil, deMissingField("WriteSummary", "changes", "int")
+						}
+						p3 := p1.Got.ProbeNumber("lastInsertRowid")
+						if p3.Kind == probeGot {
+							n3, nErr3 := strconv.ParseInt(p3.Got, 10, 64)
+							if nErr3 != nil {
+								return nil, deOverflow("WriteSummary", "lastInsertRowid", "int", p3.ActualWireType, p3.Got)
+							}
+							rec1.LastInsertRowid = n3
+						} else if p3.Kind == probeWrong {
+							return nil, deTypeMismatch("WriteSummary", "lastInsertRowid", "int", p3.ActualWireType, p3.Raw)
+						} else if p3.Kind == probeNull {
+							return nil, deTypeMismatch("WriteSummary", "lastInsertRowid", "int", p3.ActualWireType, p3.Raw)
+						} else {
+							return nil, deMissingField("WriteSummary", "lastInsertRowid", "int")
+						}
+						el0 = rec1
+					} else if p1.Kind == probeWrong {
+						return nil, deTypeMismatch("n1", "n1", "obj{changes:int,lastInsertRowid:int}", p1.ActualWireType, p1.Raw)
+					} else if p1.Kind == probeNull {
+						return nil, deTypeMismatch("n1", "n1", "obj{changes:int,lastInsertRowid:int}", p1.ActualWireType, p1.Raw)
+					} else {
+						return nil, deMissingField("n1", "n1", "obj{changes:int,lastInsertRowid:int}")
+					}
+					list0 = append(list0, el0)
+				}
+				el_n1 = list0
+			} else if p0.Kind == probeWrong {
+				return nil, deTypeMismatch("n1", "n1", "arr(obj{changes:int,lastInsertRowid:int})", p0.ActualWireType, p0.Raw)
+			} else if p0.Kind == probeNull {
+				return nil, deTypeMismatch("n1", "n1", "arr(obj{changes:int,lastInsertRowid:int})", p0.ActualWireType, p0.Raw)
+			} else {
+				return nil, deMissingField("n1", "n1", "arr(obj{changes:int,lastInsertRowid:int})")
+			}
 			t_n1 = append(t_n1, el_n1)
 		}
 		produced_n1 = true

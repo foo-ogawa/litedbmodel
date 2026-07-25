@@ -7,7 +7,7 @@
 // (Behavior::runBehavior) — no execution logic is generated. Handlers are ALWAYS
 // injected at the boundary (IR + {effects,config,hooks} — concept.md §4.4); they
 // are never generated.
-// irFingerprint: fnv1a64:0ca22ea43e03600b
+// irFingerprint: fnv1a64:6bbcff5c38d988b7
 
 declare(strict_types=1);
 
@@ -15,7 +15,7 @@ declare(strict_types=1);
 $expectedSpecVersions = ['behavior' => 5, 'expression' => 2, 'plan' => 1];
 
 // FNV-1a 64 fingerprint of the source portable IR (canonical-json discipline, #208).
-$irFingerprint = 'fnv1a64:0ca22ea43e03600b';
+$irFingerprint = 'fnv1a64:6bbcff5c38d988b7';
 
 // Component names exposed by bind(), in IR declaration order.
 $componentNames = ['findAll', 'filterPaginateSort', 'findFirst', 'findUnique', 'nestedFindAll', 'nestedFindFirst', 'nestedFindUnique', 'nestedRelations', 'compositeRelations', 'create', 'update', 'upsert', 'createMany', 'upsertMany', 'updateMany', 'nestedCreate', 'nestedUpsert', 'nestedUpdate', 'delete'];
@@ -2807,8 +2807,15 @@ $ir = (object) [
                             "write" => true,
                         ],
                     ],
-                    "outType" => "value",
-                    "wirePassthrough" => true,
+                    "outType" => (object) [
+                        "arr" => (object) [
+                            "name" => "WriteSummary",
+                            "obj" => (object) [
+                                "changes" => "int",
+                                "lastInsertRowid" => "int",
+                            ],
+                        ],
+                    ],
                 ],
             ],
             "inputPorts" => (object) [
@@ -2843,7 +2850,15 @@ $ir = (object) [
                 ],
             ],
             "outputType" => (object) [
-                "arr" => "value",
+                "arr" => (object) [
+                    "arr" => (object) [
+                        "obj" => (object) [
+                            "changes" => "int",
+                            "lastInsertRowid" => "int",
+                        ],
+                        "name" => "WriteSummary",
+                    ],
+                ],
             ],
         ],
         (object) [
@@ -2959,8 +2974,15 @@ $ir = (object) [
                             "write" => true,
                         ],
                     ],
-                    "outType" => "value",
-                    "wirePassthrough" => true,
+                    "outType" => (object) [
+                        "arr" => (object) [
+                            "name" => "WriteSummary",
+                            "obj" => (object) [
+                                "changes" => "int",
+                                "lastInsertRowid" => "int",
+                            ],
+                        ],
+                    ],
                 ],
             ],
             "inputPorts" => (object) [
@@ -2995,7 +3017,15 @@ $ir = (object) [
                 ],
             ],
             "outputType" => (object) [
-                "arr" => "value",
+                "arr" => (object) [
+                    "arr" => (object) [
+                        "obj" => (object) [
+                            "changes" => "int",
+                            "lastInsertRowid" => "int",
+                        ],
+                        "name" => "WriteSummary",
+                    ],
+                ],
             ],
         ],
         (object) [
@@ -3111,8 +3141,15 @@ $ir = (object) [
                             "write" => true,
                         ],
                     ],
-                    "outType" => "value",
-                    "wirePassthrough" => true,
+                    "outType" => (object) [
+                        "arr" => (object) [
+                            "name" => "WriteSummary",
+                            "obj" => (object) [
+                                "changes" => "int",
+                                "lastInsertRowid" => "int",
+                            ],
+                        ],
+                    ],
                 ],
             ],
             "inputPorts" => (object) [
@@ -3147,7 +3184,15 @@ $ir = (object) [
                 ],
             ],
             "outputType" => (object) [
-                "arr" => "value",
+                "arr" => (object) [
+                    "arr" => (object) [
+                        "obj" => (object) [
+                            "changes" => "int",
+                            "lastInsertRowid" => "int",
+                        ],
+                        "name" => "WriteSummary",
+                    ],
+                ],
             ],
         ],
         (object) [
@@ -3258,8 +3303,15 @@ $ir = (object) [
                             "write" => true,
                         ],
                     ],
-                    "outType" => "value",
-                    "wirePassthrough" => true,
+                    "outType" => (object) [
+                        "arr" => (object) [
+                            "name" => "WriteSummary",
+                            "obj" => (object) [
+                                "changes" => "int",
+                                "lastInsertRowid" => "int",
+                            ],
+                        ],
+                    ],
                 ],
             ],
             "inputPorts" => (object) [
@@ -3290,7 +3342,15 @@ $ir = (object) [
                 ],
             ],
             "outputType" => (object) [
-                "arr" => "value",
+                "arr" => (object) [
+                    "arr" => (object) [
+                        "obj" => (object) [
+                            "changes" => "int",
+                            "lastInsertRowid" => "int",
+                        ],
+                        "name" => "WriteSummary",
+                    ],
+                ],
             ],
         ],
     ],
