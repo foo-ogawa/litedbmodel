@@ -1,104 +1,2366 @@
 {
   "suite": "exec",
-  "corpusVersion": 4,
-  "note": "Read bundles executed against seeded SQLite via the native read-graph walker: SKIP + belongsTo/hasMany relations (batched op).",
+  "corpusVersion": 5,
+  "note": "The declared endpoints executed end-to-end on SQLite + live PostgreSQL + live MySQL. Each vector pins the statements the transport handed the driver AND what came back: reads are asserted dialect-invariant (§10); writes are asserted on their changes count + resulting DB state; relation vectors carry a field-level content contract (#150).",
   "vectors": [
     {
-      "name": "Feed: status present + belongsTo/hasMany relations",
+      "name": "posts: author page [sqlite]",
       "kind": "exec",
       "dialect": "sqlite",
-      "entry": "Feed",
+      "entry": "posts",
       "input": {
-        "author_id": 7,
-        "status": "live",
-        "since": "2026-01-01",
-        "created_at": "created_at"
+        "authorId": 1
       },
-      "schema": [
-        "CREATE TABLE posts (id INTEGER PRIMARY KEY, author_id INTEGER NOT NULL, title TEXT NOT NULL, status TEXT, created_at TEXT NOT NULL)",
-        "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)",
-        "CREATE TABLE tags (id INTEGER PRIMARY KEY, post_id INTEGER NOT NULL, label TEXT)",
-        "INSERT INTO posts VALUES (1, 7, 'Hello', 'live', '2026-02-01')",
-        "INSERT INTO posts VALUES (2, 7, 'World', 'draft', '2026-03-01')",
-        "INSERT INTO posts VALUES (3, 8, 'Other', 'live', '2026-01-15')",
-        "INSERT INTO users VALUES (7, 'Ada')",
-        "INSERT INTO users VALUES (8, 'Alan')",
-        "INSERT INTO tags VALUES (10, 1, 'greeting')",
-        "INSERT INTO tags VALUES (11, 1, 'first')",
-        "INSERT INTO tags VALUES (12, 2, 'world')"
-      ],
-      "expectedResult": {
-        "authors": [
-          [
-            {
-              "id": 7,
-              "name": "Ada"
-            }
+      "case": "posts: author page",
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE author_id = ? ORDER BY id ASC",
+          "params": [
+            1
           ]
-        ],
-        "posts": [
-          {
-            "id": 1,
-            "author_id": 7,
-            "title": "Hello",
-            "status": "live"
-          }
-        ]
-      }
+        }
+      ],
+      "expectedResult": [
+        {
+          "author_id": 1,
+          "created_at": "2026-02-01",
+          "id": 10,
+          "status": "live",
+          "title": "a1"
+        },
+        {
+          "author_id": 1,
+          "created_at": "2026-03-01",
+          "id": 11,
+          "status": "draft",
+          "title": "a2"
+        }
+      ],
+      "expectedCap": null
     },
     {
-      "name": "Feed: status absent (SKIP drop) + relations",
+      "name": "posts: author page [postgres]",
+      "kind": "exec",
+      "dialect": "postgres",
+      "entry": "posts",
+      "input": {
+        "authorId": 1
+      },
+      "case": "posts: author page",
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE author_id = $1 ORDER BY id ASC",
+          "params": [
+            1
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "author_id": 1,
+          "created_at": "2026-02-01",
+          "id": 10,
+          "status": "live",
+          "title": "a1"
+        },
+        {
+          "author_id": 1,
+          "created_at": "2026-03-01",
+          "id": 11,
+          "status": "draft",
+          "title": "a2"
+        }
+      ],
+      "expectedCap": null
+    },
+    {
+      "name": "posts: author page [mysql]",
+      "kind": "exec",
+      "dialect": "mysql",
+      "entry": "posts",
+      "input": {
+        "authorId": 1
+      },
+      "case": "posts: author page",
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE author_id = ? ORDER BY id ASC",
+          "params": [
+            1
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "author_id": 1,
+          "created_at": "2026-02-01",
+          "id": 10,
+          "status": "live",
+          "title": "a1"
+        },
+        {
+          "author_id": 1,
+          "created_at": "2026-03-01",
+          "id": 11,
+          "status": "draft",
+          "title": "a2"
+        }
+      ],
+      "expectedCap": null
+    },
+    {
+      "name": "postsTop: explicit LIMIT 2 [sqlite]",
       "kind": "exec",
       "dialect": "sqlite",
-      "entry": "Feed",
-      "input": {
-        "author_id": 7,
-        "since": "2026-01-01",
-        "created_at": "created_at"
-      },
-      "schema": [
-        "CREATE TABLE posts (id INTEGER PRIMARY KEY, author_id INTEGER NOT NULL, title TEXT NOT NULL, status TEXT, created_at TEXT NOT NULL)",
-        "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)",
-        "CREATE TABLE tags (id INTEGER PRIMARY KEY, post_id INTEGER NOT NULL, label TEXT)",
-        "INSERT INTO posts VALUES (1, 7, 'Hello', 'live', '2026-02-01')",
-        "INSERT INTO posts VALUES (2, 7, 'World', 'draft', '2026-03-01')",
-        "INSERT INTO posts VALUES (3, 8, 'Other', 'live', '2026-01-15')",
-        "INSERT INTO users VALUES (7, 'Ada')",
-        "INSERT INTO users VALUES (8, 'Alan')",
-        "INSERT INTO tags VALUES (10, 1, 'greeting')",
-        "INSERT INTO tags VALUES (11, 1, 'first')",
-        "INSERT INTO tags VALUES (12, 2, 'world')"
+      "entry": "postsTop",
+      "input": {},
+      "case": "postsTop: explicit LIMIT 2",
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts ORDER BY id ASC LIMIT 2",
+          "params": []
+        }
       ],
-      "expectedResult": {
-        "authors": [
-          [
+      "expectedResult": [
+        {
+          "author_id": 1,
+          "created_at": "2026-02-01",
+          "id": 10,
+          "status": "live",
+          "title": "a1"
+        },
+        {
+          "author_id": 1,
+          "created_at": "2026-03-01",
+          "id": 11,
+          "status": "draft",
+          "title": "a2"
+        }
+      ],
+      "expectedCap": null
+    },
+    {
+      "name": "postsTop: explicit LIMIT 2 [postgres]",
+      "kind": "exec",
+      "dialect": "postgres",
+      "entry": "postsTop",
+      "input": {},
+      "case": "postsTop: explicit LIMIT 2",
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts ORDER BY id ASC LIMIT 2",
+          "params": []
+        }
+      ],
+      "expectedResult": [
+        {
+          "author_id": 1,
+          "created_at": "2026-02-01",
+          "id": 10,
+          "status": "live",
+          "title": "a1"
+        },
+        {
+          "author_id": 1,
+          "created_at": "2026-03-01",
+          "id": 11,
+          "status": "draft",
+          "title": "a2"
+        }
+      ],
+      "expectedCap": null
+    },
+    {
+      "name": "postsTop: explicit LIMIT 2 [mysql]",
+      "kind": "exec",
+      "dialect": "mysql",
+      "entry": "postsTop",
+      "input": {},
+      "case": "postsTop: explicit LIMIT 2",
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts ORDER BY id ASC LIMIT 2",
+          "params": []
+        }
+      ],
+      "expectedResult": [
+        {
+          "author_id": 1,
+          "created_at": "2026-02-01",
+          "id": 10,
+          "status": "live",
+          "title": "a1"
+        },
+        {
+          "author_id": 1,
+          "created_at": "2026-03-01",
+          "id": 11,
+          "status": "draft",
+          "title": "a2"
+        }
+      ],
+      "expectedCap": null
+    },
+    {
+      "name": "postsByIds: IN-list (non-empty) [sqlite]",
+      "kind": "exec",
+      "dialect": "sqlite",
+      "entry": "postsByIds",
+      "input": {
+        "ids": [
+          10,
+          12
+        ]
+      },
+      "case": "postsByIds: IN-list (non-empty)",
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, title FROM conf_posts WHERE id IN (SELECT value FROM json_each(?)) ORDER BY id ASC",
+          "params": [
+            "[10,12]"
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "id": 10,
+          "title": "a1"
+        },
+        {
+          "id": 12,
+          "title": "b1"
+        }
+      ],
+      "expectedCap": null
+    },
+    {
+      "name": "postsByIds: IN-list (non-empty) [postgres]",
+      "kind": "exec",
+      "dialect": "postgres",
+      "entry": "postsByIds",
+      "input": {
+        "ids": [
+          10,
+          12
+        ]
+      },
+      "case": "postsByIds: IN-list (non-empty)",
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, title FROM conf_posts WHERE id = ANY($1) ORDER BY id ASC",
+          "params": [
+            [
+              10,
+              12
+            ]
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "id": 10,
+          "title": "a1"
+        },
+        {
+          "id": 12,
+          "title": "b1"
+        }
+      ],
+      "expectedCap": null
+    },
+    {
+      "name": "postsByIds: IN-list (non-empty) [mysql]",
+      "kind": "exec",
+      "dialect": "mysql",
+      "entry": "postsByIds",
+      "input": {
+        "ids": [
+          10,
+          12
+        ]
+      },
+      "case": "postsByIds: IN-list (non-empty)",
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, title FROM conf_posts WHERE id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) ORDER BY id ASC",
+          "params": [
+            "[10,12]"
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "id": 10,
+          "title": "a1"
+        },
+        {
+          "id": 12,
+          "title": "b1"
+        }
+      ],
+      "expectedCap": null
+    },
+    {
+      "name": "postsByIds: IN-list (EMPTY key set is legal) [sqlite]",
+      "kind": "exec",
+      "dialect": "sqlite",
+      "entry": "postsByIds",
+      "input": {
+        "ids": []
+      },
+      "case": "postsByIds: IN-list (EMPTY key set is legal)",
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, title FROM conf_posts WHERE id IN (SELECT value FROM json_each(?)) ORDER BY id ASC",
+          "params": [
+            "[]"
+          ]
+        }
+      ],
+      "expectedResult": [],
+      "expectedCap": null
+    },
+    {
+      "name": "postsByIds: IN-list (EMPTY key set is legal) [postgres]",
+      "kind": "exec",
+      "dialect": "postgres",
+      "entry": "postsByIds",
+      "input": {
+        "ids": []
+      },
+      "case": "postsByIds: IN-list (EMPTY key set is legal)",
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, title FROM conf_posts WHERE id = ANY($1) ORDER BY id ASC",
+          "params": [
+            []
+          ]
+        }
+      ],
+      "expectedResult": [],
+      "expectedCap": null
+    },
+    {
+      "name": "postsByIds: IN-list (EMPTY key set is legal) [mysql]",
+      "kind": "exec",
+      "dialect": "mysql",
+      "entry": "postsByIds",
+      "input": {
+        "ids": []
+      },
+      "case": "postsByIds: IN-list (EMPTY key set is legal)",
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, title FROM conf_posts WHERE id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) ORDER BY id ASC",
+          "params": [
+            "[]"
+          ]
+        }
+      ],
+      "expectedResult": [],
+      "expectedCap": null
+    },
+    {
+      "name": "feed: both optional predicates absent (SKIP drop) [sqlite]",
+      "kind": "exec",
+      "dialect": "sqlite",
+      "entry": "feed",
+      "input": {
+        "authorId": 1
+      },
+      "case": "feed: both optional predicates absent (SKIP drop)",
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, author_id, title, status FROM conf_posts WHERE author_id = ? ORDER BY id ASC",
+          "params": [
+            1
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "author_id": 1,
+          "id": 10,
+          "status": "live",
+          "title": "a1"
+        },
+        {
+          "author_id": 1,
+          "id": 11,
+          "status": "draft",
+          "title": "a2"
+        }
+      ],
+      "expectedCap": null
+    },
+    {
+      "name": "feed: both optional predicates absent (SKIP drop) [postgres]",
+      "kind": "exec",
+      "dialect": "postgres",
+      "entry": "feed",
+      "input": {
+        "authorId": 1
+      },
+      "case": "feed: both optional predicates absent (SKIP drop)",
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, author_id, title, status FROM conf_posts WHERE author_id = $1 ORDER BY id ASC",
+          "params": [
+            1
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "author_id": 1,
+          "id": 10,
+          "status": "live",
+          "title": "a1"
+        },
+        {
+          "author_id": 1,
+          "id": 11,
+          "status": "draft",
+          "title": "a2"
+        }
+      ],
+      "expectedCap": null
+    },
+    {
+      "name": "feed: both optional predicates absent (SKIP drop) [mysql]",
+      "kind": "exec",
+      "dialect": "mysql",
+      "entry": "feed",
+      "input": {
+        "authorId": 1
+      },
+      "case": "feed: both optional predicates absent (SKIP drop)",
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, author_id, title, status FROM conf_posts WHERE author_id = ? ORDER BY id ASC",
+          "params": [
+            1
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "author_id": 1,
+          "id": 10,
+          "status": "live",
+          "title": "a1"
+        },
+        {
+          "author_id": 1,
+          "id": 11,
+          "status": "draft",
+          "title": "a2"
+        }
+      ],
+      "expectedCap": null
+    },
+    {
+      "name": "feed: status present, since absent [sqlite]",
+      "kind": "exec",
+      "dialect": "sqlite",
+      "entry": "feed",
+      "input": {
+        "authorId": 1,
+        "status": "draft"
+      },
+      "case": "feed: status present, since absent",
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, author_id, title, status FROM conf_posts WHERE author_id = ? AND status = ? ORDER BY id ASC",
+          "params": [
+            1,
+            "draft"
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "author_id": 1,
+          "id": 11,
+          "status": "draft",
+          "title": "a2"
+        }
+      ],
+      "expectedCap": null
+    },
+    {
+      "name": "feed: status present, since absent [postgres]",
+      "kind": "exec",
+      "dialect": "postgres",
+      "entry": "feed",
+      "input": {
+        "authorId": 1,
+        "status": "draft"
+      },
+      "case": "feed: status present, since absent",
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, author_id, title, status FROM conf_posts WHERE author_id = $1 AND status = $2 ORDER BY id ASC",
+          "params": [
+            1,
+            "draft"
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "author_id": 1,
+          "id": 11,
+          "status": "draft",
+          "title": "a2"
+        }
+      ],
+      "expectedCap": null
+    },
+    {
+      "name": "feed: status present, since absent [mysql]",
+      "kind": "exec",
+      "dialect": "mysql",
+      "entry": "feed",
+      "input": {
+        "authorId": 1,
+        "status": "draft"
+      },
+      "case": "feed: status present, since absent",
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, author_id, title, status FROM conf_posts WHERE author_id = ? AND status = ? ORDER BY id ASC",
+          "params": [
+            1,
+            "draft"
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "author_id": 1,
+          "id": 11,
+          "status": "draft",
+          "title": "a2"
+        }
+      ],
+      "expectedCap": null
+    },
+    {
+      "name": "feed: since present, status absent [sqlite]",
+      "kind": "exec",
+      "dialect": "sqlite",
+      "entry": "feed",
+      "input": {
+        "authorId": 1,
+        "since": "2026-03-01"
+      },
+      "case": "feed: since present, status absent",
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, author_id, title, status FROM conf_posts WHERE author_id = ? AND created_at >= ? ORDER BY id ASC",
+          "params": [
+            1,
+            "2026-03-01"
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "author_id": 1,
+          "id": 11,
+          "status": "draft",
+          "title": "a2"
+        }
+      ],
+      "expectedCap": null
+    },
+    {
+      "name": "feed: since present, status absent [postgres]",
+      "kind": "exec",
+      "dialect": "postgres",
+      "entry": "feed",
+      "input": {
+        "authorId": 1,
+        "since": "2026-03-01"
+      },
+      "case": "feed: since present, status absent",
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, author_id, title, status FROM conf_posts WHERE author_id = $1 AND created_at >= $2 ORDER BY id ASC",
+          "params": [
+            1,
+            "2026-03-01"
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "author_id": 1,
+          "id": 11,
+          "status": "draft",
+          "title": "a2"
+        }
+      ],
+      "expectedCap": null
+    },
+    {
+      "name": "feed: since present, status absent [mysql]",
+      "kind": "exec",
+      "dialect": "mysql",
+      "entry": "feed",
+      "input": {
+        "authorId": 1,
+        "since": "2026-03-01"
+      },
+      "case": "feed: since present, status absent",
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, author_id, title, status FROM conf_posts WHERE author_id = ? AND created_at >= ? ORDER BY id ASC",
+          "params": [
+            1,
+            "2026-03-01"
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "author_id": 1,
+          "id": 11,
+          "status": "draft",
+          "title": "a2"
+        }
+      ],
+      "expectedCap": null
+    },
+    {
+      "name": "feed: both present [sqlite]",
+      "kind": "exec",
+      "dialect": "sqlite",
+      "entry": "feed",
+      "input": {
+        "authorId": 1,
+        "status": "live",
+        "since": "2026-01-01"
+      },
+      "case": "feed: both present",
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, author_id, title, status FROM conf_posts WHERE author_id = ? AND status = ? AND created_at >= ? ORDER BY id ASC",
+          "params": [
+            1,
+            "live",
+            "2026-01-01"
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "author_id": 1,
+          "id": 10,
+          "status": "live",
+          "title": "a1"
+        }
+      ],
+      "expectedCap": null
+    },
+    {
+      "name": "feed: both present [postgres]",
+      "kind": "exec",
+      "dialect": "postgres",
+      "entry": "feed",
+      "input": {
+        "authorId": 1,
+        "status": "live",
+        "since": "2026-01-01"
+      },
+      "case": "feed: both present",
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, author_id, title, status FROM conf_posts WHERE author_id = $1 AND status = $2 AND created_at >= $3 ORDER BY id ASC",
+          "params": [
+            1,
+            "live",
+            "2026-01-01"
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "author_id": 1,
+          "id": 10,
+          "status": "live",
+          "title": "a1"
+        }
+      ],
+      "expectedCap": null
+    },
+    {
+      "name": "feed: both present [mysql]",
+      "kind": "exec",
+      "dialect": "mysql",
+      "entry": "feed",
+      "input": {
+        "authorId": 1,
+        "status": "live",
+        "since": "2026-01-01"
+      },
+      "case": "feed: both present",
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, author_id, title, status FROM conf_posts WHERE author_id = ? AND status = ? AND created_at >= ? ORDER BY id ASC",
+          "params": [
+            1,
+            "live",
+            "2026-01-01"
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "author_id": 1,
+          "id": 10,
+          "status": "live",
+          "title": "a1"
+        }
+      ],
+      "expectedCap": null
+    },
+    {
+      "name": "usersWithPosts: two relation levels materialize WITH THEIR FIELDS [sqlite]",
+      "kind": "exec",
+      "dialect": "sqlite",
+      "entry": "usersWithPosts",
+      "input": {},
+      "case": "usersWithPosts: two relation levels materialize WITH THEIR FIELDS",
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, name FROM conf_users ORDER BY id ASC",
+          "params": []
+        },
+        {
+          "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE author_id IN (SELECT value FROM json_each(?)) ORDER BY id ASC",
+          "params": [
+            "[1,2,3]"
+          ]
+        },
+        {
+          "sql": "SELECT id, post_id, label FROM conf_tags WHERE post_id IN (SELECT value FROM json_each(?)) ORDER BY id ASC",
+          "params": [
+            "[10,11,12]"
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "id": 1,
+          "name": "Ada",
+          "posts": [
             {
-              "id": 7,
-              "name": "Ada"
-            }
-          ],
-          [
+              "author_id": 1,
+              "created_at": "2026-02-01",
+              "id": 10,
+              "status": "live",
+              "tags": [
+                {
+                  "id": 100,
+                  "label": "greeting",
+                  "post_id": 10
+                },
+                {
+                  "id": 101,
+                  "label": "first",
+                  "post_id": 10
+                }
+              ],
+              "title": "a1"
+            },
             {
-              "id": 7,
-              "name": "Ada"
+              "author_id": 1,
+              "created_at": "2026-03-01",
+              "id": 11,
+              "status": "draft",
+              "tags": [],
+              "title": "a2"
             }
           ]
-        ],
+        },
+        {
+          "id": 2,
+          "name": "Bob",
+          "posts": [
+            {
+              "author_id": 2,
+              "created_at": "2026-01-15",
+              "id": 12,
+              "status": "live",
+              "tags": [
+                {
+                  "id": 102,
+                  "label": "world",
+                  "post_id": 12
+                }
+              ],
+              "title": "b1"
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "name": "Cy",
+          "posts": []
+        }
+      ],
+      "relationFields": {
         "posts": [
-          {
+          "id",
+          "author_id",
+          "title",
+          "status",
+          "created_at",
+          "tags"
+        ],
+        "posts.tags": [
+          "id",
+          "post_id",
+          "label"
+        ]
+      },
+      "expectedCap": null
+    },
+    {
+      "name": "usersWithPosts: two relation levels materialize WITH THEIR FIELDS [postgres]",
+      "kind": "exec",
+      "dialect": "postgres",
+      "entry": "usersWithPosts",
+      "input": {},
+      "case": "usersWithPosts: two relation levels materialize WITH THEIR FIELDS",
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, name FROM conf_users ORDER BY id ASC",
+          "params": []
+        },
+        {
+          "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE conf_posts.author_id = ANY($1::int[]) ORDER BY id ASC",
+          "params": [
+            [
+              1,
+              2,
+              3
+            ]
+          ]
+        },
+        {
+          "sql": "SELECT id, post_id, label FROM conf_tags WHERE conf_tags.post_id = ANY($1::int[]) ORDER BY id ASC",
+          "params": [
+            [
+              10,
+              11,
+              12
+            ]
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "id": 1,
+          "name": "Ada",
+          "posts": [
+            {
+              "author_id": 1,
+              "created_at": "2026-02-01",
+              "id": 10,
+              "status": "live",
+              "tags": [
+                {
+                  "id": 100,
+                  "label": "greeting",
+                  "post_id": 10
+                },
+                {
+                  "id": 101,
+                  "label": "first",
+                  "post_id": 10
+                }
+              ],
+              "title": "a1"
+            },
+            {
+              "author_id": 1,
+              "created_at": "2026-03-01",
+              "id": 11,
+              "status": "draft",
+              "tags": [],
+              "title": "a2"
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "name": "Bob",
+          "posts": [
+            {
+              "author_id": 2,
+              "created_at": "2026-01-15",
+              "id": 12,
+              "status": "live",
+              "tags": [
+                {
+                  "id": 102,
+                  "label": "world",
+                  "post_id": 12
+                }
+              ],
+              "title": "b1"
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "name": "Cy",
+          "posts": []
+        }
+      ],
+      "relationFields": {
+        "posts": [
+          "id",
+          "author_id",
+          "title",
+          "status",
+          "created_at",
+          "tags"
+        ],
+        "posts.tags": [
+          "id",
+          "post_id",
+          "label"
+        ]
+      },
+      "expectedCap": null
+    },
+    {
+      "name": "usersWithPosts: two relation levels materialize WITH THEIR FIELDS [mysql]",
+      "kind": "exec",
+      "dialect": "mysql",
+      "entry": "usersWithPosts",
+      "input": {},
+      "case": "usersWithPosts: two relation levels materialize WITH THEIR FIELDS",
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, name FROM conf_users ORDER BY id ASC",
+          "params": []
+        },
+        {
+          "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE author_id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) ORDER BY id ASC",
+          "params": [
+            "[1,2,3]"
+          ]
+        },
+        {
+          "sql": "SELECT id, post_id, label FROM conf_tags WHERE post_id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) ORDER BY id ASC",
+          "params": [
+            "[10,11,12]"
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "id": 1,
+          "name": "Ada",
+          "posts": [
+            {
+              "author_id": 1,
+              "created_at": "2026-02-01",
+              "id": 10,
+              "status": "live",
+              "tags": [
+                {
+                  "id": 100,
+                  "label": "greeting",
+                  "post_id": 10
+                },
+                {
+                  "id": 101,
+                  "label": "first",
+                  "post_id": 10
+                }
+              ],
+              "title": "a1"
+            },
+            {
+              "author_id": 1,
+              "created_at": "2026-03-01",
+              "id": 11,
+              "status": "draft",
+              "tags": [],
+              "title": "a2"
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "name": "Bob",
+          "posts": [
+            {
+              "author_id": 2,
+              "created_at": "2026-01-15",
+              "id": 12,
+              "status": "live",
+              "tags": [
+                {
+                  "id": 102,
+                  "label": "world",
+                  "post_id": 12
+                }
+              ],
+              "title": "b1"
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "name": "Cy",
+          "posts": []
+        }
+      ],
+      "relationFields": {
+        "posts": [
+          "id",
+          "author_id",
+          "title",
+          "status",
+          "created_at",
+          "tags"
+        ],
+        "posts.tags": [
+          "id",
+          "post_id",
+          "label"
+        ]
+      },
+      "expectedCap": null
+    },
+    {
+      "name": "postsWithAuthor: belongsTo nests ONE child WITH ITS FIELDS [sqlite]",
+      "kind": "exec",
+      "dialect": "sqlite",
+      "entry": "postsWithAuthor",
+      "input": {},
+      "case": "postsWithAuthor: belongsTo nests ONE child WITH ITS FIELDS",
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts ORDER BY id ASC",
+          "params": []
+        },
+        {
+          "sql": "SELECT id, name, post_count FROM conf_users WHERE id IN (SELECT value FROM json_each(?))",
+          "params": [
+            "[1,2]"
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "author": {
             "id": 1,
-            "author_id": 7,
-            "title": "Hello",
-            "status": "live"
+            "name": "Ada",
+            "post_count": 2
+          },
+          "author_id": 1,
+          "created_at": "2026-02-01",
+          "id": 10,
+          "status": "live",
+          "title": "a1"
+        },
+        {
+          "author": {
+            "id": 1,
+            "name": "Ada",
+            "post_count": 2
+          },
+          "author_id": 1,
+          "created_at": "2026-03-01",
+          "id": 11,
+          "status": "draft",
+          "title": "a2"
+        },
+        {
+          "author": {
+            "id": 2,
+            "name": "Bob",
+            "post_count": 1
+          },
+          "author_id": 2,
+          "created_at": "2026-01-15",
+          "id": 12,
+          "status": "live",
+          "title": "b1"
+        }
+      ],
+      "relationFields": {
+        "author": [
+          "id",
+          "name",
+          "post_count"
+        ]
+      },
+      "expectedCap": null
+    },
+    {
+      "name": "postsWithAuthor: belongsTo nests ONE child WITH ITS FIELDS [postgres]",
+      "kind": "exec",
+      "dialect": "postgres",
+      "entry": "postsWithAuthor",
+      "input": {},
+      "case": "postsWithAuthor: belongsTo nests ONE child WITH ITS FIELDS",
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts ORDER BY id ASC",
+          "params": []
+        },
+        {
+          "sql": "SELECT id, name, post_count FROM conf_users WHERE conf_users.id = ANY($1::int[])",
+          "params": [
+            [
+              1,
+              2
+            ]
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "author": {
+            "id": 1,
+            "name": "Ada",
+            "post_count": 2
+          },
+          "author_id": 1,
+          "created_at": "2026-02-01",
+          "id": 10,
+          "status": "live",
+          "title": "a1"
+        },
+        {
+          "author": {
+            "id": 1,
+            "name": "Ada",
+            "post_count": 2
+          },
+          "author_id": 1,
+          "created_at": "2026-03-01",
+          "id": 11,
+          "status": "draft",
+          "title": "a2"
+        },
+        {
+          "author": {
+            "id": 2,
+            "name": "Bob",
+            "post_count": 1
+          },
+          "author_id": 2,
+          "created_at": "2026-01-15",
+          "id": 12,
+          "status": "live",
+          "title": "b1"
+        }
+      ],
+      "relationFields": {
+        "author": [
+          "id",
+          "name",
+          "post_count"
+        ]
+      },
+      "expectedCap": null
+    },
+    {
+      "name": "postsWithAuthor: belongsTo nests ONE child WITH ITS FIELDS [mysql]",
+      "kind": "exec",
+      "dialect": "mysql",
+      "entry": "postsWithAuthor",
+      "input": {},
+      "case": "postsWithAuthor: belongsTo nests ONE child WITH ITS FIELDS",
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts ORDER BY id ASC",
+          "params": []
+        },
+        {
+          "sql": "SELECT id, name, post_count FROM conf_users WHERE id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt)",
+          "params": [
+            "[1,2]"
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "author": {
+            "id": 1,
+            "name": "Ada",
+            "post_count": 2
+          },
+          "author_id": 1,
+          "created_at": "2026-02-01",
+          "id": 10,
+          "status": "live",
+          "title": "a1"
+        },
+        {
+          "author": {
+            "id": 1,
+            "name": "Ada",
+            "post_count": 2
+          },
+          "author_id": 1,
+          "created_at": "2026-03-01",
+          "id": 11,
+          "status": "draft",
+          "title": "a2"
+        },
+        {
+          "author": {
+            "id": 2,
+            "name": "Bob",
+            "post_count": 1
+          },
+          "author_id": 2,
+          "created_at": "2026-01-15",
+          "id": 12,
+          "status": "live",
+          "title": "b1"
+        }
+      ],
+      "relationFields": {
+        "author": [
+          "id",
+          "name",
+          "post_count"
+        ]
+      },
+      "expectedCap": null
+    },
+    {
+      "name": "createPost: INSERT persists [sqlite]",
+      "kind": "exec",
+      "dialect": "sqlite",
+      "entry": "createPost",
+      "input": {
+        "id": 13,
+        "authorId": 1,
+        "title": "c1",
+        "status": "live",
+        "createdAt": "2026-04-01"
+      },
+      "case": "createPost: INSERT persists",
+      "expectedStatements": [
+        {
+          "sql": "INSERT INTO conf_posts (author_id, created_at, id, status, title) VALUES (?, ?, ?, ?, ?)",
+          "params": [
+            1,
+            "2026-04-01",
+            13,
+            "live",
+            "c1"
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "changes": {
+            "$bigint": "1"
+          },
+          "lastInsertRowid": {
+            "$bigint": "4"
+          }
+        }
+      ],
+      "expectedDbState": [
+        {
+          "query": "SELECT id, author_id, title, status, created_at FROM conf_posts ORDER BY id",
+          "rows": [
+            {
+              "id": 10,
+              "author_id": 1,
+              "title": "a1",
+              "status": "live",
+              "created_at": "2026-02-01"
+            },
+            {
+              "id": 11,
+              "author_id": 1,
+              "title": "a2",
+              "status": "draft",
+              "created_at": "2026-03-01"
+            },
+            {
+              "id": 12,
+              "author_id": 2,
+              "title": "b1",
+              "status": "live",
+              "created_at": "2026-01-15"
+            },
+            {
+              "id": 13,
+              "author_id": 1,
+              "title": "c1",
+              "status": "live",
+              "created_at": "2026-04-01"
+            }
+          ]
+        }
+      ],
+      "expectedCap": null
+    },
+    {
+      "name": "createPost: INSERT persists [postgres]",
+      "kind": "exec",
+      "dialect": "postgres",
+      "entry": "createPost",
+      "input": {
+        "id": 13,
+        "authorId": 1,
+        "title": "c1",
+        "status": "live",
+        "createdAt": "2026-04-01"
+      },
+      "case": "createPost: INSERT persists",
+      "expectedStatements": [
+        {
+          "sql": "INSERT INTO conf_posts (author_id, created_at, id, status, title) VALUES ($1, $2, $3, $4, $5)",
+          "params": [
+            1,
+            "2026-04-01",
+            13,
+            "live",
+            "c1"
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "changes": {
+            "$bigint": "1"
+          },
+          "lastInsertRowid": {
+            "$bigint": "0"
+          }
+        }
+      ],
+      "expectedDbState": [
+        {
+          "query": "SELECT id, author_id, title, status, created_at FROM conf_posts ORDER BY id",
+          "rows": [
+            {
+              "id": 10,
+              "author_id": 1,
+              "title": "a1",
+              "status": "live",
+              "created_at": "2026-02-01"
+            },
+            {
+              "id": 11,
+              "author_id": 1,
+              "title": "a2",
+              "status": "draft",
+              "created_at": "2026-03-01"
+            },
+            {
+              "id": 12,
+              "author_id": 2,
+              "title": "b1",
+              "status": "live",
+              "created_at": "2026-01-15"
+            },
+            {
+              "id": 13,
+              "author_id": 1,
+              "title": "c1",
+              "status": "live",
+              "created_at": "2026-04-01"
+            }
+          ]
+        }
+      ],
+      "expectedCap": null
+    },
+    {
+      "name": "createPost: INSERT persists [mysql]",
+      "kind": "exec",
+      "dialect": "mysql",
+      "entry": "createPost",
+      "input": {
+        "id": 13,
+        "authorId": 1,
+        "title": "c1",
+        "status": "live",
+        "createdAt": "2026-04-01"
+      },
+      "case": "createPost: INSERT persists",
+      "expectedStatements": [
+        {
+          "sql": "INSERT INTO conf_posts (author_id, created_at, id, status, title) VALUES (?, ?, ?, ?, ?)",
+          "params": [
+            1,
+            "2026-04-01",
+            13,
+            "live",
+            "c1"
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "changes": {
+            "$bigint": "1"
+          },
+          "lastInsertRowid": {
+            "$bigint": "0"
+          }
+        }
+      ],
+      "expectedDbState": [
+        {
+          "query": "SELECT id, author_id, title, status, created_at FROM conf_posts ORDER BY id",
+          "rows": [
+            {
+              "id": 10,
+              "author_id": 1,
+              "title": "a1",
+              "status": "live",
+              "created_at": "2026-02-01"
+            },
+            {
+              "id": 11,
+              "author_id": 1,
+              "title": "a2",
+              "status": "draft",
+              "created_at": "2026-03-01"
+            },
+            {
+              "id": 12,
+              "author_id": 2,
+              "title": "b1",
+              "status": "live",
+              "created_at": "2026-01-15"
+            },
+            {
+              "id": 13,
+              "author_id": 1,
+              "title": "c1",
+              "status": "live",
+              "created_at": "2026-04-01"
+            }
+          ]
+        }
+      ],
+      "expectedCap": null
+    },
+    {
+      "name": "renamePost: UPDATE persists [sqlite]",
+      "kind": "exec",
+      "dialect": "sqlite",
+      "entry": "renamePost",
+      "input": {
+        "title": "a1-renamed",
+        "id": 10
+      },
+      "case": "renamePost: UPDATE persists",
+      "expectedStatements": [
+        {
+          "sql": "UPDATE conf_posts SET title = ? WHERE id = ?",
+          "params": [
+            "a1-renamed",
+            10
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "changes": {
+            "$bigint": "1"
+          },
+          "lastInsertRowid": {
+            "$bigint": "3"
+          }
+        }
+      ],
+      "expectedDbState": [
+        {
+          "query": "SELECT id, author_id, title, status, created_at FROM conf_posts ORDER BY id",
+          "rows": [
+            {
+              "id": 10,
+              "author_id": 1,
+              "title": "a1-renamed",
+              "status": "live",
+              "created_at": "2026-02-01"
+            },
+            {
+              "id": 11,
+              "author_id": 1,
+              "title": "a2",
+              "status": "draft",
+              "created_at": "2026-03-01"
+            },
+            {
+              "id": 12,
+              "author_id": 2,
+              "title": "b1",
+              "status": "live",
+              "created_at": "2026-01-15"
+            }
+          ]
+        }
+      ],
+      "expectedCap": null
+    },
+    {
+      "name": "renamePost: UPDATE persists [postgres]",
+      "kind": "exec",
+      "dialect": "postgres",
+      "entry": "renamePost",
+      "input": {
+        "title": "a1-renamed",
+        "id": 10
+      },
+      "case": "renamePost: UPDATE persists",
+      "expectedStatements": [
+        {
+          "sql": "UPDATE conf_posts SET title = $1 WHERE id = $2",
+          "params": [
+            "a1-renamed",
+            10
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "changes": {
+            "$bigint": "1"
+          },
+          "lastInsertRowid": {
+            "$bigint": "0"
+          }
+        }
+      ],
+      "expectedDbState": [
+        {
+          "query": "SELECT id, author_id, title, status, created_at FROM conf_posts ORDER BY id",
+          "rows": [
+            {
+              "id": 10,
+              "author_id": 1,
+              "title": "a1-renamed",
+              "status": "live",
+              "created_at": "2026-02-01"
+            },
+            {
+              "id": 11,
+              "author_id": 1,
+              "title": "a2",
+              "status": "draft",
+              "created_at": "2026-03-01"
+            },
+            {
+              "id": 12,
+              "author_id": 2,
+              "title": "b1",
+              "status": "live",
+              "created_at": "2026-01-15"
+            }
+          ]
+        }
+      ],
+      "expectedCap": null
+    },
+    {
+      "name": "renamePost: UPDATE persists [mysql]",
+      "kind": "exec",
+      "dialect": "mysql",
+      "entry": "renamePost",
+      "input": {
+        "title": "a1-renamed",
+        "id": 10
+      },
+      "case": "renamePost: UPDATE persists",
+      "expectedStatements": [
+        {
+          "sql": "UPDATE conf_posts SET title = ? WHERE id = ?",
+          "params": [
+            "a1-renamed",
+            10
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "changes": {
+            "$bigint": "1"
+          },
+          "lastInsertRowid": {
+            "$bigint": "0"
+          }
+        }
+      ],
+      "expectedDbState": [
+        {
+          "query": "SELECT id, author_id, title, status, created_at FROM conf_posts ORDER BY id",
+          "rows": [
+            {
+              "id": 10,
+              "author_id": 1,
+              "title": "a1-renamed",
+              "status": "live",
+              "created_at": "2026-02-01"
+            },
+            {
+              "id": 11,
+              "author_id": 1,
+              "title": "a2",
+              "status": "draft",
+              "created_at": "2026-03-01"
+            },
+            {
+              "id": 12,
+              "author_id": 2,
+              "title": "b1",
+              "status": "live",
+              "created_at": "2026-01-15"
+            }
+          ]
+        }
+      ],
+      "expectedCap": null
+    },
+    {
+      "name": "removePost: DELETE persists [sqlite]",
+      "kind": "exec",
+      "dialect": "sqlite",
+      "entry": "removePost",
+      "input": {
+        "id": 12
+      },
+      "case": "removePost: DELETE persists",
+      "expectedStatements": [
+        {
+          "sql": "DELETE FROM conf_posts WHERE id = ?",
+          "params": [
+            12
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "changes": {
+            "$bigint": "1"
+          },
+          "lastInsertRowid": {
+            "$bigint": "3"
+          }
+        }
+      ],
+      "expectedDbState": [
+        {
+          "query": "SELECT id, author_id, title, status, created_at FROM conf_posts ORDER BY id",
+          "rows": [
+            {
+              "id": 10,
+              "author_id": 1,
+              "title": "a1",
+              "status": "live",
+              "created_at": "2026-02-01"
+            },
+            {
+              "id": 11,
+              "author_id": 1,
+              "title": "a2",
+              "status": "draft",
+              "created_at": "2026-03-01"
+            }
+          ]
+        }
+      ],
+      "expectedCap": null
+    },
+    {
+      "name": "removePost: DELETE persists [postgres]",
+      "kind": "exec",
+      "dialect": "postgres",
+      "entry": "removePost",
+      "input": {
+        "id": 12
+      },
+      "case": "removePost: DELETE persists",
+      "expectedStatements": [
+        {
+          "sql": "DELETE FROM conf_posts WHERE id = $1",
+          "params": [
+            12
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "changes": {
+            "$bigint": "1"
+          },
+          "lastInsertRowid": {
+            "$bigint": "0"
+          }
+        }
+      ],
+      "expectedDbState": [
+        {
+          "query": "SELECT id, author_id, title, status, created_at FROM conf_posts ORDER BY id",
+          "rows": [
+            {
+              "id": 10,
+              "author_id": 1,
+              "title": "a1",
+              "status": "live",
+              "created_at": "2026-02-01"
+            },
+            {
+              "id": 11,
+              "author_id": 1,
+              "title": "a2",
+              "status": "draft",
+              "created_at": "2026-03-01"
+            }
+          ]
+        }
+      ],
+      "expectedCap": null
+    },
+    {
+      "name": "removePost: DELETE persists [mysql]",
+      "kind": "exec",
+      "dialect": "mysql",
+      "entry": "removePost",
+      "input": {
+        "id": 12
+      },
+      "case": "removePost: DELETE persists",
+      "expectedStatements": [
+        {
+          "sql": "DELETE FROM conf_posts WHERE id = ?",
+          "params": [
+            12
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "changes": {
+            "$bigint": "1"
+          },
+          "lastInsertRowid": {
+            "$bigint": "0"
+          }
+        }
+      ],
+      "expectedDbState": [
+        {
+          "query": "SELECT id, author_id, title, status, created_at FROM conf_posts ORDER BY id",
+          "rows": [
+            {
+              "id": 10,
+              "author_id": 1,
+              "title": "a1",
+              "status": "live",
+              "created_at": "2026-02-01"
+            },
+            {
+              "id": 11,
+              "author_id": 1,
+              "title": "a2",
+              "status": "draft",
+              "created_at": "2026-03-01"
+            }
+          ]
+        }
+      ],
+      "expectedCap": null
+    },
+    {
+      "name": "createTags: batch INSERT persists (one statement for N records) [sqlite]",
+      "kind": "exec",
+      "dialect": "sqlite",
+      "entry": "createTags",
+      "input": {
+        "rows": [
+          {
+            "id": 103,
+            "post_id": 11,
+            "label": "x"
           },
           {
-            "id": 2,
-            "author_id": 7,
-            "title": "World",
-            "status": "draft"
+            "id": 104,
+            "post_id": 11,
+            "label": "y"
           }
         ]
-      }
+      },
+      "case": "createTags: batch INSERT persists (one statement for N records)",
+      "expectedStatements": [
+        {
+          "sql": "INSERT INTO conf_tags (id, label, post_id) SELECT json_extract(value, '$.id'), json_extract(value, '$.label'), json_extract(value, '$.post_id') FROM json_each(?)",
+          "params": [
+            "[{\"id\":103,\"post_id\":11,\"label\":\"x\"},{\"id\":104,\"post_id\":11,\"label\":\"y\"}]"
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "changes": {
+            "$bigint": "2"
+          },
+          "lastInsertRowid": {
+            "$bigint": "5"
+          }
+        }
+      ],
+      "expectedDbState": [
+        {
+          "query": "SELECT id, post_id, label FROM conf_tags ORDER BY id",
+          "rows": [
+            {
+              "id": 100,
+              "post_id": 10,
+              "label": "greeting"
+            },
+            {
+              "id": 101,
+              "post_id": 10,
+              "label": "first"
+            },
+            {
+              "id": 102,
+              "post_id": 12,
+              "label": "world"
+            },
+            {
+              "id": 103,
+              "post_id": 11,
+              "label": "x"
+            },
+            {
+              "id": 104,
+              "post_id": 11,
+              "label": "y"
+            }
+          ]
+        }
+      ],
+      "expectedCap": null
+    },
+    {
+      "name": "createTags: batch INSERT persists (one statement for N records) [postgres]",
+      "kind": "exec",
+      "dialect": "postgres",
+      "entry": "createTags",
+      "input": {
+        "rows_id": [
+          103,
+          104
+        ],
+        "rows_post_id": [
+          11,
+          11
+        ],
+        "rows_label": [
+          "x",
+          "y"
+        ]
+      },
+      "case": "createTags: batch INSERT persists (one statement for N records)",
+      "expectedStatements": [
+        {
+          "sql": "INSERT INTO conf_tags (id, label, post_id) SELECT v.id, v.label, v.post_id FROM UNNEST($1::int[], $2::text[], $3::int[]) AS v(id, label, post_id)",
+          "params": [
+            [
+              103,
+              104
+            ],
+            [
+              "x",
+              "y"
+            ],
+            [
+              11,
+              11
+            ]
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "changes": {
+            "$bigint": "2"
+          },
+          "lastInsertRowid": {
+            "$bigint": "0"
+          }
+        }
+      ],
+      "expectedDbState": [
+        {
+          "query": "SELECT id, post_id, label FROM conf_tags ORDER BY id",
+          "rows": [
+            {
+              "id": 100,
+              "post_id": 10,
+              "label": "greeting"
+            },
+            {
+              "id": 101,
+              "post_id": 10,
+              "label": "first"
+            },
+            {
+              "id": 102,
+              "post_id": 12,
+              "label": "world"
+            },
+            {
+              "id": 103,
+              "post_id": 11,
+              "label": "x"
+            },
+            {
+              "id": 104,
+              "post_id": 11,
+              "label": "y"
+            }
+          ]
+        }
+      ],
+      "expectedCap": null
+    },
+    {
+      "name": "createTags: batch INSERT persists (one statement for N records) [mysql]",
+      "kind": "exec",
+      "dialect": "mysql",
+      "entry": "createTags",
+      "input": {
+        "rows": [
+          {
+            "id": 103,
+            "post_id": 11,
+            "label": "x"
+          },
+          {
+            "id": 104,
+            "post_id": 11,
+            "label": "y"
+          }
+        ]
+      },
+      "case": "createTags: batch INSERT persists (one statement for N records)",
+      "expectedStatements": [
+        {
+          "sql": "INSERT INTO conf_tags (id, label, post_id) SELECT JSON_UNQUOTE(jt.id), JSON_UNQUOTE(jt.label), JSON_UNQUOTE(jt.post_id) FROM JSON_TABLE(?, '$[*]' COLUMNS(id JSON PATH '$.id', label JSON PATH '$.label', post_id JSON PATH '$.post_id')) jt",
+          "params": [
+            "[{\"id\":103,\"post_id\":11,\"label\":\"x\"},{\"id\":104,\"post_id\":11,\"label\":\"y\"}]"
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "changes": {
+            "$bigint": "2"
+          },
+          "lastInsertRowid": {
+            "$bigint": "0"
+          }
+        }
+      ],
+      "expectedDbState": [
+        {
+          "query": "SELECT id, post_id, label FROM conf_tags ORDER BY id",
+          "rows": [
+            {
+              "id": 100,
+              "post_id": 10,
+              "label": "greeting"
+            },
+            {
+              "id": 101,
+              "post_id": 10,
+              "label": "first"
+            },
+            {
+              "id": 102,
+              "post_id": 12,
+              "label": "world"
+            },
+            {
+              "id": 103,
+              "post_id": 11,
+              "label": "x"
+            },
+            {
+              "id": 104,
+              "post_id": 11,
+              "label": "y"
+            }
+          ]
+        }
+      ],
+      "expectedCap": null
+    },
+    {
+      "name": "removeTags: batch DELETE by key set persists [sqlite]",
+      "kind": "exec",
+      "dialect": "sqlite",
+      "entry": "removeTags",
+      "input": {
+        "ids": [
+          100,
+          101
+        ]
+      },
+      "case": "removeTags: batch DELETE by key set persists",
+      "expectedStatements": [
+        {
+          "sql": "DELETE FROM conf_tags WHERE id IN (SELECT value FROM json_each(?))",
+          "params": [
+            "[100,101]"
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "changes": {
+            "$bigint": "2"
+          },
+          "lastInsertRowid": {
+            "$bigint": "3"
+          }
+        }
+      ],
+      "expectedDbState": [
+        {
+          "query": "SELECT id, post_id, label FROM conf_tags ORDER BY id",
+          "rows": [
+            {
+              "id": 102,
+              "post_id": 12,
+              "label": "world"
+            }
+          ]
+        }
+      ],
+      "expectedCap": null
+    },
+    {
+      "name": "removeTags: batch DELETE by key set persists [postgres]",
+      "kind": "exec",
+      "dialect": "postgres",
+      "entry": "removeTags",
+      "input": {
+        "ids": [
+          100,
+          101
+        ]
+      },
+      "case": "removeTags: batch DELETE by key set persists",
+      "expectedStatements": [
+        {
+          "sql": "DELETE FROM conf_tags WHERE id = ANY($1)",
+          "params": [
+            [
+              100,
+              101
+            ]
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "changes": {
+            "$bigint": "2"
+          },
+          "lastInsertRowid": {
+            "$bigint": "0"
+          }
+        }
+      ],
+      "expectedDbState": [
+        {
+          "query": "SELECT id, post_id, label FROM conf_tags ORDER BY id",
+          "rows": [
+            {
+              "id": 102,
+              "post_id": 12,
+              "label": "world"
+            }
+          ]
+        }
+      ],
+      "expectedCap": null
+    },
+    {
+      "name": "removeTags: batch DELETE by key set persists [mysql]",
+      "kind": "exec",
+      "dialect": "mysql",
+      "entry": "removeTags",
+      "input": {
+        "ids": [
+          100,
+          101
+        ]
+      },
+      "case": "removeTags: batch DELETE by key set persists",
+      "expectedStatements": [
+        {
+          "sql": "DELETE FROM conf_tags WHERE id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt)",
+          "params": [
+            "[100,101]"
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "changes": {
+            "$bigint": "2"
+          },
+          "lastInsertRowid": {
+            "$bigint": "0"
+          }
+        }
+      ],
+      "expectedDbState": [
+        {
+          "query": "SELECT id, post_id, label FROM conf_tags ORDER BY id",
+          "rows": [
+            {
+              "id": 102,
+              "post_id": 12,
+              "label": "world"
+            }
+          ]
+        }
+      ],
+      "expectedCap": null
+    },
+    {
+      "name": "guard: findHardLimit null → no cap baked [sqlite]",
+      "kind": "exec",
+      "dialect": "sqlite",
+      "entry": "posts",
+      "input": {
+        "authorId": 1
+      },
+      "case": "guard: findHardLimit null → no cap baked",
+      "config": {
+        "findHardLimit": null
+      },
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE author_id = ? ORDER BY id ASC",
+          "params": [
+            1
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "author_id": 1,
+          "created_at": "2026-02-01",
+          "id": 10,
+          "status": "live",
+          "title": "a1"
+        },
+        {
+          "author_id": 1,
+          "created_at": "2026-03-01",
+          "id": 11,
+          "status": "draft",
+          "title": "a2"
+        }
+      ],
+      "expectedCap": null
+    },
+    {
+      "name": "guard: findHardLimit null → no cap baked [postgres]",
+      "kind": "exec",
+      "dialect": "postgres",
+      "entry": "posts",
+      "input": {
+        "authorId": 1
+      },
+      "case": "guard: findHardLimit null → no cap baked",
+      "config": {
+        "findHardLimit": null
+      },
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE author_id = $1 ORDER BY id ASC",
+          "params": [
+            1
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "author_id": 1,
+          "created_at": "2026-02-01",
+          "id": 10,
+          "status": "live",
+          "title": "a1"
+        },
+        {
+          "author_id": 1,
+          "created_at": "2026-03-01",
+          "id": 11,
+          "status": "draft",
+          "title": "a2"
+        }
+      ],
+      "expectedCap": null
+    },
+    {
+      "name": "guard: findHardLimit null → no cap baked [mysql]",
+      "kind": "exec",
+      "dialect": "mysql",
+      "entry": "posts",
+      "input": {
+        "authorId": 1
+      },
+      "case": "guard: findHardLimit null → no cap baked",
+      "config": {
+        "findHardLimit": null
+      },
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE author_id = ? ORDER BY id ASC",
+          "params": [
+            1
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "author_id": 1,
+          "created_at": "2026-02-01",
+          "id": 10,
+          "status": "live",
+          "title": "a1"
+        },
+        {
+          "author_id": 1,
+          "created_at": "2026-03-01",
+          "id": 11,
+          "status": "draft",
+          "title": "a2"
+        }
+      ],
+      "expectedCap": null
+    },
+    {
+      "name": "guard: an explicit endpoint LIMIT governs → no cap baked [sqlite]",
+      "kind": "exec",
+      "dialect": "sqlite",
+      "entry": "postsTop",
+      "input": {},
+      "case": "guard: an explicit endpoint LIMIT governs → no cap baked",
+      "config": {
+        "findHardLimit": 1
+      },
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts ORDER BY id ASC LIMIT 2",
+          "params": []
+        }
+      ],
+      "expectedResult": [
+        {
+          "author_id": 1,
+          "created_at": "2026-02-01",
+          "id": 10,
+          "status": "live",
+          "title": "a1"
+        },
+        {
+          "author_id": 1,
+          "created_at": "2026-03-01",
+          "id": 11,
+          "status": "draft",
+          "title": "a2"
+        }
+      ],
+      "expectedCap": null
+    },
+    {
+      "name": "guard: an explicit endpoint LIMIT governs → no cap baked [postgres]",
+      "kind": "exec",
+      "dialect": "postgres",
+      "entry": "postsTop",
+      "input": {},
+      "case": "guard: an explicit endpoint LIMIT governs → no cap baked",
+      "config": {
+        "findHardLimit": 1
+      },
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts ORDER BY id ASC LIMIT 2",
+          "params": []
+        }
+      ],
+      "expectedResult": [
+        {
+          "author_id": 1,
+          "created_at": "2026-02-01",
+          "id": 10,
+          "status": "live",
+          "title": "a1"
+        },
+        {
+          "author_id": 1,
+          "created_at": "2026-03-01",
+          "id": 11,
+          "status": "draft",
+          "title": "a2"
+        }
+      ],
+      "expectedCap": null
+    },
+    {
+      "name": "guard: an explicit endpoint LIMIT governs → no cap baked [mysql]",
+      "kind": "exec",
+      "dialect": "mysql",
+      "entry": "postsTop",
+      "input": {},
+      "case": "guard: an explicit endpoint LIMIT governs → no cap baked",
+      "config": {
+        "findHardLimit": 1
+      },
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts ORDER BY id ASC LIMIT 2",
+          "params": []
+        }
+      ],
+      "expectedResult": [
+        {
+          "author_id": 1,
+          "created_at": "2026-02-01",
+          "id": 10,
+          "status": "live",
+          "title": "a1"
+        },
+        {
+          "author_id": 1,
+          "created_at": "2026-03-01",
+          "id": 11,
+          "status": "draft",
+          "title": "a2"
+        }
+      ],
+      "expectedCap": null
     }
   ]
 }

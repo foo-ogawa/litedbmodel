@@ -8,6 +8,9 @@ dist/
 .codegen-conf-*/
 .codegen-out-*/
 
+# The conformance harness's emitted + bc-generated modules (rebuilt from the declarations on demand)
+conformance/.generated/
+
 # IDE
 .idea/
 .vscode/

@@ -35,10 +35,10 @@ function serialize(suite: Suite): string {
 }
 
 /** Write every suite to `conformance/vectors/<suite>.json`. Returns the files written. */
-export function writeCorpus(): string[] {
+export async function writeCorpus(): Promise<string[]> {
   if (!existsSync(VECTORS_DIR)) mkdirSync(VECTORS_DIR, { recursive: true });
   const written: string[] = [];
-  for (const suite of generateCorpus()) {
+  for (const suite of await generateCorpus()) {
     const file = join(VECTORS_DIR, `${suite.suite}.json`);
     writeFileSync(file, serialize(suite), 'utf8');
     written.push(file);
@@ -47,9 +47,9 @@ export function writeCorpus(): string[] {
 }
 
 /** Compare the freshly generated corpus to the on-disk files. Returns the drifted suite names. */
-export function checkCorpus(): string[] {
+export async function checkCorpus(): Promise<string[]> {
   const drift: string[] = [];
-  for (const suite of generateCorpus()) {
+  for (const suite of await generateCorpus()) {
     const file = join(VECTORS_DIR, `${suite.suite}.json`);
     if (!existsSync(file)) {
       drift.push(`${suite.suite} (missing on disk)`);

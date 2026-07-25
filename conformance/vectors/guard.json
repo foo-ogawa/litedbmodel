@@ -1,380 +1,94 @@
 {
   "suite": "guard",
-  "corpusVersion": 4,
-  "note": "Hard-limit runaway prevention (Phase E-2, epic #74): expect-error vectors assert LimitExceededError (find N+1 / relation exact-count) with baked caps; exec skip vectors assert null-disable / explicit-limit / intrinsic-LIMIT-window do NOT throw. The cross-language contract #100-103 mirror.",
+  "corpusVersion": 5,
+  "note": "The find hard-limit: the emitter bakes LIMIT cap + 1 (visible in the vector statements) and the read boundary throws LimitExceededError post-fetch (assertFindHardLimit). The null-disable and explicit-LIMIT SKIP paths are exec vectors that must NOT throw.",
   "vectors": [
     {
-      "name": "find: read exceeds findHardLimit → throw (context=find)",
+      "name": "guard: the read overruns findHardLimit → throw [sqlite]",
       "kind": "expect-error",
       "dialect": "sqlite",
-      "entry": "Posts",
+      "entry": "posts",
       "input": {
-        "author_id": 7
+        "authorId": 1
       },
-      "schema": [
-        "CREATE TABLE posts (id INTEGER PRIMARY KEY, author_id INTEGER NOT NULL, title TEXT NOT NULL, status TEXT, created_at TEXT NOT NULL)",
-        "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)",
-        "CREATE TABLE tags (id INTEGER PRIMARY KEY, post_id INTEGER NOT NULL, label TEXT)",
-        "INSERT INTO posts VALUES (1, 7, 'Hello', 'live', '2026-02-01')",
-        "INSERT INTO posts VALUES (2, 7, 'World', 'draft', '2026-03-01')",
-        "INSERT INTO posts VALUES (3, 8, 'Other', 'live', '2026-01-15')",
-        "INSERT INTO users VALUES (7, 'Ada')",
-        "INSERT INTO users VALUES (8, 'Alan')",
-        "INSERT INTO tags VALUES (10, 1, 'greeting')",
-        "INSERT INTO tags VALUES (11, 1, 'first')",
-        "INSERT INTO tags VALUES (12, 2, 'world')"
-      ],
       "config": {
         "findHardLimit": 1
       },
+      "case": "guard: the read overruns findHardLimit → throw",
+      "expectedCap": 1,
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE author_id = ? ORDER BY id ASC LIMIT 2",
+          "params": [
+            1
+          ]
+        }
+      ],
       "expectedError": {
         "name": "LimitExceededError",
         "limit": 1,
         "count": 2,
         "context": "find",
-        "model": "Posts"
+        "model": "posts"
       }
     },
     {
-      "name": "relation: hasMany batch exceeds hasManyHardLimit → throw (exact count)",
+      "name": "guard: the read overruns findHardLimit → throw [postgres]",
       "kind": "expect-error",
-      "dialect": "sqlite",
-      "entry": "Posts",
+      "dialect": "postgres",
+      "entry": "posts",
       "input": {
-        "author_id": 7
+        "authorId": 1
       },
-      "schema": [
-        "CREATE TABLE posts (id INTEGER PRIMARY KEY, author_id INTEGER NOT NULL, title TEXT NOT NULL, status TEXT, created_at TEXT NOT NULL)",
-        "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)",
-        "CREATE TABLE tags (id INTEGER PRIMARY KEY, post_id INTEGER NOT NULL, label TEXT)",
-        "INSERT INTO posts VALUES (1, 7, 'Hello', 'live', '2026-02-01')",
-        "INSERT INTO posts VALUES (2, 7, 'World', 'draft', '2026-03-01')",
-        "INSERT INTO posts VALUES (3, 8, 'Other', 'live', '2026-01-15')",
-        "INSERT INTO users VALUES (7, 'Ada')",
-        "INSERT INTO users VALUES (8, 'Alan')",
-        "INSERT INTO tags VALUES (10, 1, 'greeting')",
-        "INSERT INTO tags VALUES (11, 1, 'first')",
-        "INSERT INTO tags VALUES (12, 2, 'world')"
-      ],
-      "config": {
-        "hasManyHardLimit": 2
-      },
-      "relations": [
-        {
-          "name": "author",
-          "kind": "belongsTo",
-          "targetTable": "users",
-          "select": [
-            "id",
-            "name"
-          ],
-          "parentKey": "author_id",
-          "targetKey": "id"
-        },
-        {
-          "name": "tags",
-          "kind": "hasMany",
-          "targetTable": "tags",
-          "select": [
-            "id",
-            "post_id",
-            "label"
-          ],
-          "parentKey": "id",
-          "targetKey": "post_id",
-          "order": "id ASC"
-        }
-      ],
-      "withRelation": "tags",
-      "expectedError": {
-        "name": "LimitExceededError",
-        "limit": 2,
-        "count": 3,
-        "context": "relation",
-        "model": "tags",
-        "relation": "tags"
-      }
-    },
-    {
-      "name": "relation: per-relation hardLimit override → throw",
-      "kind": "expect-error",
-      "dialect": "sqlite",
-      "entry": "Posts",
-      "input": {
-        "author_id": 7
-      },
-      "schema": [
-        "CREATE TABLE posts (id INTEGER PRIMARY KEY, author_id INTEGER NOT NULL, title TEXT NOT NULL, status TEXT, created_at TEXT NOT NULL)",
-        "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)",
-        "CREATE TABLE tags (id INTEGER PRIMARY KEY, post_id INTEGER NOT NULL, label TEXT)",
-        "INSERT INTO posts VALUES (1, 7, 'Hello', 'live', '2026-02-01')",
-        "INSERT INTO posts VALUES (2, 7, 'World', 'draft', '2026-03-01')",
-        "INSERT INTO posts VALUES (3, 8, 'Other', 'live', '2026-01-15')",
-        "INSERT INTO users VALUES (7, 'Ada')",
-        "INSERT INTO users VALUES (8, 'Alan')",
-        "INSERT INTO tags VALUES (10, 1, 'greeting')",
-        "INSERT INTO tags VALUES (11, 1, 'first')",
-        "INSERT INTO tags VALUES (12, 2, 'world')"
-      ],
-      "config": {},
-      "relations": [
-        {
-          "name": "tags",
-          "kind": "hasMany",
-          "targetTable": "tags",
-          "select": [
-            "id",
-            "post_id",
-            "label"
-          ],
-          "parentKey": "id",
-          "targetKey": "post_id",
-          "order": "id ASC",
-          "hardLimit": 2
-        }
-      ],
-      "withRelation": "tags",
-      "expectedError": {
-        "name": "LimitExceededError",
-        "limit": 2,
-        "count": 3,
-        "context": "relation",
-        "model": "tags",
-        "relation": "tags"
-      }
-    },
-    {
-      "name": "find: findHardLimit null → no throw (disabled)",
-      "kind": "exec",
-      "dialect": "sqlite",
-      "entry": "Posts",
-      "input": {
-        "author_id": 7
-      },
-      "schema": [
-        "CREATE TABLE posts (id INTEGER PRIMARY KEY, author_id INTEGER NOT NULL, title TEXT NOT NULL, status TEXT, created_at TEXT NOT NULL)",
-        "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)",
-        "CREATE TABLE tags (id INTEGER PRIMARY KEY, post_id INTEGER NOT NULL, label TEXT)",
-        "INSERT INTO posts VALUES (1, 7, 'Hello', 'live', '2026-02-01')",
-        "INSERT INTO posts VALUES (2, 7, 'World', 'draft', '2026-03-01')",
-        "INSERT INTO posts VALUES (3, 8, 'Other', 'live', '2026-01-15')",
-        "INSERT INTO users VALUES (7, 'Ada')",
-        "INSERT INTO users VALUES (8, 'Alan')",
-        "INSERT INTO tags VALUES (10, 1, 'greeting')",
-        "INSERT INTO tags VALUES (11, 1, 'first')",
-        "INSERT INTO tags VALUES (12, 2, 'world')"
-      ],
-      "config": {
-        "findHardLimit": null
-      },
-      "relations": [],
-      "expectedResult": [
-        {
-          "id": 1,
-          "author_id": 7,
-          "title": "Hello",
-          "status": "live"
-        },
-        {
-          "id": 2,
-          "author_id": 7,
-          "title": "World",
-          "status": "draft"
-        }
-      ]
-    },
-    {
-      "name": "find: explicit author limit → no throw (skip)",
-      "kind": "exec",
-      "dialect": "sqlite",
-      "entry": "Feed",
-      "input": {
-        "author_id": 7,
-        "status": "live",
-        "since": "2026-01-01",
-        "created_at": "created_at"
-      },
-      "schema": [
-        "CREATE TABLE posts (id INTEGER PRIMARY KEY, author_id INTEGER NOT NULL, title TEXT NOT NULL, status TEXT, created_at TEXT NOT NULL)",
-        "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)",
-        "CREATE TABLE tags (id INTEGER PRIMARY KEY, post_id INTEGER NOT NULL, label TEXT)",
-        "INSERT INTO posts VALUES (1, 7, 'Hello', 'live', '2026-02-01')",
-        "INSERT INTO posts VALUES (2, 7, 'World', 'draft', '2026-03-01')",
-        "INSERT INTO posts VALUES (3, 8, 'Other', 'live', '2026-01-15')",
-        "INSERT INTO users VALUES (7, 'Ada')",
-        "INSERT INTO users VALUES (8, 'Alan')",
-        "INSERT INTO tags VALUES (10, 1, 'greeting')",
-        "INSERT INTO tags VALUES (11, 1, 'first')",
-        "INSERT INTO tags VALUES (12, 2, 'world')"
-      ],
       "config": {
         "findHardLimit": 1
       },
-      "expectedResult": {
-        "authors": [
-          [
-            {
-              "id": 7,
-              "name": "Ada"
-            }
+      "case": "guard: the read overruns findHardLimit → throw",
+      "expectedCap": 1,
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE author_id = $1 ORDER BY id ASC LIMIT 2",
+          "params": [
+            1
           ]
-        ],
-        "posts": [
-          {
-            "id": 1,
-            "author_id": 7,
-            "title": "Hello",
-            "status": "live"
-          }
-        ]
+        }
+      ],
+      "expectedError": {
+        "name": "LimitExceededError",
+        "limit": 1,
+        "count": 2,
+        "context": "find",
+        "model": "posts"
       }
     },
     {
-      "name": "relation: per-relation hardLimit null → no throw (disabled)",
-      "kind": "exec",
-      "dialect": "sqlite",
-      "entry": "Posts",
+      "name": "guard: the read overruns findHardLimit → throw [mysql]",
+      "kind": "expect-error",
+      "dialect": "mysql",
+      "entry": "posts",
       "input": {
-        "author_id": 7
+        "authorId": 1
       },
-      "schema": [
-        "CREATE TABLE posts (id INTEGER PRIMARY KEY, author_id INTEGER NOT NULL, title TEXT NOT NULL, status TEXT, created_at TEXT NOT NULL)",
-        "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)",
-        "CREATE TABLE tags (id INTEGER PRIMARY KEY, post_id INTEGER NOT NULL, label TEXT)",
-        "INSERT INTO posts VALUES (1, 7, 'Hello', 'live', '2026-02-01')",
-        "INSERT INTO posts VALUES (2, 7, 'World', 'draft', '2026-03-01')",
-        "INSERT INTO posts VALUES (3, 8, 'Other', 'live', '2026-01-15')",
-        "INSERT INTO users VALUES (7, 'Ada')",
-        "INSERT INTO users VALUES (8, 'Alan')",
-        "INSERT INTO tags VALUES (10, 1, 'greeting')",
-        "INSERT INTO tags VALUES (11, 1, 'first')",
-        "INSERT INTO tags VALUES (12, 2, 'world')"
-      ],
       "config": {
-        "hasManyHardLimit": 1
+        "findHardLimit": 1
       },
-      "relations": [
+      "case": "guard: the read overruns findHardLimit → throw",
+      "expectedCap": 1,
+      "expectedStatements": [
         {
-          "name": "tags",
-          "kind": "hasMany",
-          "targetTable": "tags",
-          "select": [
-            "id",
-            "post_id",
-            "label"
-          ],
-          "parentKey": "id",
-          "targetKey": "post_id",
-          "order": "id ASC",
-          "hardLimit": null
-        }
-      ],
-      "expectedResult": [
-        {
-          "id": 1,
-          "author_id": 7,
-          "title": "Hello",
-          "status": "live",
-          "tags": [
-            {
-              "id": 10,
-              "post_id": 1,
-              "label": "greeting"
-            },
-            {
-              "id": 11,
-              "post_id": 1,
-              "label": "first"
-            }
-          ]
-        },
-        {
-          "id": 2,
-          "author_id": 7,
-          "title": "World",
-          "status": "draft",
-          "tags": [
-            {
-              "id": 12,
-              "post_id": 2,
-              "label": "world"
-            }
+          "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE author_id = ? ORDER BY id ASC LIMIT 2",
+          "params": [
+            1
           ]
         }
       ],
-      "withRelation": "tags"
-    },
-    {
-      "name": "relation: intrinsic per-parent LIMIT window → no throw (skip batch check)",
-      "kind": "exec",
-      "dialect": "sqlite",
-      "entry": "Posts",
-      "input": {
-        "author_id": 7
-      },
-      "schema": [
-        "CREATE TABLE posts (id INTEGER PRIMARY KEY, author_id INTEGER NOT NULL, title TEXT NOT NULL, status TEXT, created_at TEXT NOT NULL)",
-        "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)",
-        "CREATE TABLE tags (id INTEGER PRIMARY KEY, post_id INTEGER NOT NULL, label TEXT)",
-        "INSERT INTO posts VALUES (1, 7, 'Hello', 'live', '2026-02-01')",
-        "INSERT INTO posts VALUES (2, 7, 'World', 'draft', '2026-03-01')",
-        "INSERT INTO posts VALUES (3, 8, 'Other', 'live', '2026-01-15')",
-        "INSERT INTO users VALUES (7, 'Ada')",
-        "INSERT INTO users VALUES (8, 'Alan')",
-        "INSERT INTO tags VALUES (10, 1, 'greeting')",
-        "INSERT INTO tags VALUES (11, 1, 'first')",
-        "INSERT INTO tags VALUES (12, 2, 'world')"
-      ],
-      "config": {
-        "hasManyHardLimit": 1
-      },
-      "relations": [
-        {
-          "name": "tags",
-          "kind": "hasMany",
-          "targetTable": "tags",
-          "select": [
-            "id",
-            "post_id",
-            "label"
-          ],
-          "parentKey": "id",
-          "targetKey": "post_id",
-          "order": "id ASC",
-          "limit": 1
-        }
-      ],
-      "expectedResult": [
-        {
-          "id": 1,
-          "author_id": 7,
-          "title": "Hello",
-          "status": "live",
-          "tags": [
-            {
-              "id": 10,
-              "post_id": 1,
-              "label": "greeting",
-              "_rn": 1
-            }
-          ]
-        },
-        {
-          "id": 2,
-          "author_id": 7,
-          "title": "World",
-          "status": "draft",
-          "tags": [
-            {
-              "id": 12,
-              "post_id": 2,
-              "label": "world",
-              "_rn": 1
-            }
-          ]
-        }
-      ],
-      "withRelation": "tags"
+      "expectedError": {
+        "name": "LimitExceededError",
+        "limit": 1,
+        "count": 2,
+        "context": "find",
+        "model": "posts"
+      }
     }
   ]
 }

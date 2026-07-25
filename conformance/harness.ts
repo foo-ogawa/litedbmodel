@@ -1,79 +1,111 @@
 /**
- * litedbmodel v2 SCP — conformance harness (WS7a, #30; makeSQL flip, epic #43/#45 Phase B).
+ * litedbmodel v2 SCP — the conformance harness (WS7a, #30; emitter cutover #154).
  *
- * The SINGLE source of the conformance vector corpus and the TS reference runner, on the STATIC
- * makeSQL bundle. It mirrors graphddb's `conformance/` discipline (vectors/*.json + a per-language
- * runner + frozen/additive-refreeze), adapted to the litedbmodel §8 STATIC makeSQL artifact.
+ * The SINGLE source of the conformance vector corpus and the TS reference runner. Every vector is
+ * captured from, and replayed through, the ONE settled pipeline (CLAUDE.md §1):
  *
- * ## What a vector is (spec §8 / §10)
+ * ```
+ * decorated models + DECLARED endpoints (no SQL — the fixtures below)
+ *   → emitBehaviorModule                       the library's lowering (src/scp/emit)
+ *   → tsc --strict over the emitted source     bc's authoring requirement
+ *   → bc generate --lang typescript-native     the real CLI; no litedbmodel code in the path
+ *   → bindTyped(leafHandlers(ctx))             the ONLY hand-wiring: calling the generated method
+ *   → SQLite / live PostgreSQL / live MySQL
+ * ```
  *
- * A vector is the litedbmodel multi-language conformance unit:
- *   - `render` — a compiled READ graph (or write statement) rendered against an input for one
- *     dialect → EXPECTED dialect SQL text + bound params.
- *   - `exec`   — a §8 STATIC {@link SqlBundle} executed end-to-end against seeded SQLite →
- *     EXPECTED Φ output / row list.
- *   - `tx`     — a §8 SqlBundle with a transaction plan run as one tx → EXPECTED result + DB state.
- *   - `dialect`— a dialect primitive (`orderByNulls`) → EXPECTED text.
- * "同一 IR+入力 → 同一 SQL + 同一結果" across languages (§10): a WS7b-e runtime consuming the SAME
- * bundle + input MUST reproduce byte-identical `expectedSql`/`expectedParams` and the identical result.
+ * There is no second generator and no programmatic compile: the corpus is a contract on the
+ * ARTIFACT the other language runtimes run, not on a TS-only build.
  *
- * ## Byte-true to the ORIGINAL builders (hard rule)
+ * ## What a vector is
  *
- * The corpus is NEVER hand-authored. {@link generateCorpus} builds every vector by running the
- * REAL TS SCP reference — the makeSQL compile (which drives the ORIGINAL `DBConditions` /
- * `LazyRelation` / `SqlBuilder` for the tuned text) + the static-bundle runtime against a real
- * in-memory better-sqlite3 — and CAPTURING its output. {@link runVector} re-derives the same
- * reference outputs and asserts equality, so a reference/corpus drift fails loudly.
+ *   - `exec`         — the endpoint executed end-to-end against a real database for its dialect.
+ *                      ONE execution pins BOTH axes: the ORDERED `{sql, params}` the transport
+ *                      handed the driver (the render golden — in the driver-bound form, with the
+ *                      SKIP fragments already assembled, `?`→`$N` already rendered and the array
+ *                      params already encoded), and the FULL materialized result (nested relation
+ *                      children included) plus, for a write, the resulting DB state. A render
+ *                      golden is therefore always a statement a real database answered.
+ *   - `expect-error` — a read whose baked `findHardLimit` cap is exceeded: the read boundary throws
+ *                      {@link LimitExceededError} with the exact fields.
+ *   - `tx`           — a write-time-relations {@link SqlBundle} run as ONE gate-first transaction.
+ *   - `dialect`      — the `orderByNulls` dialect primitive.
+ *
+ * ## Dialect invariance (§10) is enforced at CAPTURE
+ *
+ * A read case is generated for all three dialects from the SAME declaration + input, and
+ * {@link generateCorpus} FAILS LOUDLY if the three results are not identical; a write case is
+ * cross-checked on its `changes` count and its resulting DB state. So "同一宣言+入力 → 同一結果"
+ * is not a claim in a comment, it is a generation-time invariant, re-assertable from the frozen
+ * corpus (see `test/scp/conformance-vectors.test.ts`).
+ *
+ * ## Content, never counts (#150)
+ *
+ * A relation-bearing vector carries a `relationFields` contract, and {@link checkRelationContent}
+ * asserts every nested child's EXACT field set plus that each declared field is actually populated
+ * in at least one child. The #150 defect (relation children returned as empty structs) passed every
+ * row-count check; it cannot pass this one.
  */
 
+import 'reflect-metadata';
 import Database from 'better-sqlite3';
+import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { Pool as PgPool } from 'pg';
+import mysql from 'mysql2/promise';
+import type { Column } from '../src/Column';
+import { belongsTo, column, hasMany, model } from '../src/decorators';
 import {
-  // #143 leaf axis: reads run the op-independent leaf graph (`executeBehavior`/`read`); the WRITE-tx
-  // bundle (`compileWriteBundle`) is the ONLY surviving §8 SqlBundle. The retired read-bundle surface
-  // (`compileBundle`/`compileReadGraph`/`renderReadPrimary`/`executeBundle`/`readBundle`) is gone.
-  emitRead,
-  emitWrite,
-  executeBehavior,
-  read,
-  compileWriteBundle,
+  assertFindHardLimit,
+  columnTypeResolverFromColumnMap,
+  connectionForDriver,
   compileCompositeWriteBundle,
-  executeTransactionBundle,
-  LimitExceededError,
-  setLimitConfig,
-  resetLimitConfig,
-  publishBehaviors,
-  components,
-  SemanticBehavior,
-  entityWrites,
-  whereEq,
-  whereGe,
-  whereIn,
-  inColumn,
-  when,
-  ne,
-  opt,
-  coalesce,
+  compileWriteBundle,
+  compileWriteNode,
+  contextForConnection,
   dialectFor,
-  assembleDynamicWhere,
-  prepareSql,
-  type In,
-  type Recorded,
-  type SqlBundle,
-  type BehaviorModelContract,
-  type DynamicWhereFrag,
+  emitBehaviorModule,
+  entityWrites,
+  executeAsync,
+  execute,
+  executeTransactionBundle,
+  leafHandlers,
+  leafHandlersAsync,
+  LimitExceededError,
+  mysqlConnectionPool,
+  pgConnectionPool,
+  PooledAsyncContext,
+  resetLimitConfig,
+  runAsync,
+  setLimitConfig,
+  type AsyncConnection,
+  type AsyncConnectionPool,
+  type DeriveColumnsOptions,
   type DialectName,
-  type RelationDecl,
+  type EmittedEndpoint,
+  type EndpointSet,
+  type ModelClassLike,
+  type SqlBundle,
+  type SyncConnection,
+  type TxOp,
 } from '../src/scp/index';
-import { evaluateExpression } from 'behavior-contracts';
 
-// ── Corpus versioning (SSoT — bumped on any additive refreeze, PROTOCOL-style) ──
+const HERE = dirname(fileURLToPath(import.meta.url));
+const ROOT = join(HERE, '..');
 
-/** The conformance corpus schema version. A consumer runner fail-closes on a mismatch. Bumped to 4 for
- * the #143 leaf-path schema: reads re-derive from the fixture `entry` + `config` (no serialized
- * `readGraph`/`bundle` artifact); the WRITE tx vector keeps its `bundle`. */
-export const CORPUS_VERSION = 4 as const;
+// ── Corpus versioning (SSoT — bumped on any refreeze, PROTOCOL-style) ─────────
 
-export const ALL_DIALECTS: readonly DialectName[] = ['sqlite', 'postgres', 'mysql'] as const;
+/**
+ * The conformance corpus schema version. A consumer runner fail-closes on a mismatch. Bumped to 5
+ * for the emitter cutover (#154): a vector names a DECLARED ENDPOINT and carries the statements /
+ * results the GENERATED module produced; the recorder-era `readGraph` / read-`bundle` artifacts and
+ * the separate `write-render` kind are gone (a write is an emitted endpoint like any other).
+ */
+export const CORPUS_VERSION = 5 as const;
+
+const ALL_DIALECTS: readonly DialectName[] = ['sqlite', 'postgres', 'mysql'] as const;
 
 // ── Canonical JSON value encoding (bigint-safe) ───────────────────────────────
 
@@ -98,7 +130,7 @@ export function encodeValue(v: unknown): EncodedValue {
 }
 
 /** Decode a canonical value back to a runtime value (bigint tag → bigint). */
-export function decodeValue(v: EncodedValue): unknown {
+function decodeValue(v: EncodedValue): unknown {
   if (v === null || typeof v !== 'object') return v;
   if (Array.isArray(v)) return v.map(decodeValue);
   const keys = Object.keys(v);
@@ -108,116 +140,552 @@ export function decodeValue(v: EncodedValue): unknown {
   return out;
 }
 
-// ── Leaf-path render helper (#143 — the SSoT read-leaf → {sql, params} renderer) ──
+// ══════════════════════════════════════════════════════════════════════════════
+// FIXTURES — the ORM user's whole input: decorated models + declared endpoints.
+// There is no SQL here and no SCP here.
+// ══════════════════════════════════════════════════════════════════════════════
+
+// `@model` installs one static {@link Column} token per `@column` at runtime (decorators.ts:1123).
+// The `declare static` lines below are the TYPE-ONLY view of the tokens a relation key pair names
+// (`() => [ConfUser.id, ConfPost.author_id]`), so the fixtures type-check with no untyped escape.
+// Only the key columns are declared: a token named `name` would shadow the class's own `Function.name`,
+// which `ModelClassLike` reads.
+
+@model('conf_users')
+class ConfUser {
+  declare static id: Column<number, ConfUser>;
+
+  @column() id?: number;
+  @column() name?: string;
+  @column() post_count?: number;
+
+  @hasMany(() => [ConfUser.id, ConfPost.author_id], { order: () => ConfPost.id.asc() })
+  declare posts: Promise<ConfPost[]>;
+}
+
+@model('conf_posts')
+class ConfPost {
+  declare static id: Column<number, ConfPost>;
+  declare static author_id: Column<number, ConfPost>;
+
+  @column() id?: number;
+  @column() author_id?: number;
+  @column() title?: string;
+  @column() status?: string;
+  @column() created_at?: string;
+
+  @hasMany(() => [ConfPost.id, ConfTag.post_id], { order: () => ConfTag.id.asc() })
+  declare tags: Promise<ConfTag[]>;
+
+  @belongsTo(() => [ConfPost.author_id, ConfUser.id])
+  declare author: Promise<ConfUser | null>;
+}
+
+@model('conf_tags')
+class ConfTag {
+  declare static id: Column<number, ConfTag>;
+  declare static post_id: Column<number, ConfTag>;
+
+  @column() id?: number;
+  @column() post_id?: number;
+  @column() label?: string;
+}
+
+const MODEL_REGISTRY: Record<string, unknown> = { ConfUser, ConfPost, ConfTag };
+
+/** Model NAME → class, as `relationDeclOf` resolves a relation's target model. */
+const conformanceModels = (name: string): ModelClassLike => MODEL_REGISTRY[name] as ModelClassLike;
 
 /**
- * Render a published contract's PRIMARY read leaf to `{sql, params}` — the leaf-path replacement for the
- * retired `compileReadGraph`→`renderReadPrimary`. The WHERE + LIMIT are lowered into the read
- * `executeSQL` node's static `sql` at publish (via the SAME `lowerWherePort`/emitRead builders); render
- * `?`→`$N` for the dialect and evaluate each deferred value-spec param against the input (bc
- * `evaluateExpression`), normalizing a bc `int` BigInt back to a JS number at the driver boundary.
- * SHARED by `test/scp/makesql-golden.test.ts` (one renderer, no duplication).
+ * The TEXT columns, pinned. vitest (esbuild) has no `emitDecoratorMetadata`, so a bare `@column()`
+ * carries no `design:type` and takes the documented `DEFAULT_UNCAST_SQL_TYPE` (INTEGER); the text
+ * columns go through the adapter's documented `columnTypes` escape hatch.
  */
-export function renderPrimaryRead(contract: BehaviorModelContract, entry: string, input: Record<string, unknown>, dialect: DialectName): { sql: string; params: unknown[] } {
-  const comp = contract.methods[entry].component;
-  const node = comp.body.find(
-    (n) => !('cond' in n) && !('map' in n) && (n as { component?: string }).component === 'executeSQL' && (n as { ports?: { write?: unknown } }).ports?.write !== true,
-  );
-  if (node === undefined) throw new Error(`harness: no read leaf for '${entry}'`);
-  const ports = (node as { ports: { sql?: unknown; params?: { arr?: unknown[] }; whereDynamic?: unknown } }).ports;
-  const scope = input as Parameters<typeof evaluateExpression>[1];
-  let sql = String(ports.sql);
-  let params = (ports.params?.arr ?? []).map((spec) => normalizeParam(evaluateExpression(spec, scope)));
-  // A SKIP/dynamic WHERE rides the `whereDynamic` plan (not the static sql) — evaluate it per-input and
-  // assemble the surviving fragments through the SAME leaf assembler the runtime uses ({@link assembleDynamicWhere}).
-  if (ports.whereDynamic != null) {
-    const evaluated = evaluateExpression(ports.whereDynamic, scope) as { frags?: (DynamicWhereFrag | null)[] };
-    const asm = assembleDynamicWhere({ sql, params, whereDynamic: evaluated });
-    sql = asm.sql;
-    params = asm.params.map(normalizeParam);
-  }
-  // Render exactly as the `executeSQL` transport does (`?`→`$N`, PG array cast, param encode) — the render
-  // golden IS the driver-bound form a per-language runtime reproduces (SSoT {@link prepareSql}).
-  const prepared = prepareSql({ sql, params, write: false }, dialect as Parameters<typeof prepareSql>[1]);
-  return { sql: prepared.sql, params: prepared.bound };
+const COLUMN_OPTIONS: DeriveColumnsOptions = {
+  columnTypes: { name: 'TEXT', title: 'TEXT', status: 'TEXT', created_at: 'TEXT', label: 'TEXT' },
+};
+
+/** The emitted `@behavior` class name (the `bc generate --behavior` argument). */
+const BEHAVIOR = 'Conformance';
+
+/**
+ * The DECLARED endpoints. Read / SKIP / IN-list / two relation levels / belongsTo / single writes /
+ * batch writes — declared without one character of SQL, and expressible on ALL THREE dialects (no
+ * RETURNING write, which MySQL loud-rejects; no composite-key relation, which PostgreSQL
+ * loud-rejects — both rejections are pinned by `test/scp/emitter.test.ts`).
+ */
+const ENDPOINTS: EndpointSet = {
+  /** A plain author page — the find hard-limit guard TARGET (it declares no limit of its own). */
+  posts: {
+    kind: 'read',
+    model: ConfPost,
+    where: [{ column: 'author_id', op: 'eq', param: 'authorId' }],
+    order: 'id ASC',
+  },
+  /** The SAME page with an EXPLICIT limit — an authored LIMIT governs, so no cap is baked. */
+  postsTop: { kind: 'read', model: ConfPost, order: 'id ASC', limit: 2 },
+  /** #46 — a whole key set bound as ONE param (PG `= ANY(?)`, MySQL/SQLite single-JSON). */
+  postsByIds: {
+    kind: 'read',
+    model: ConfPost,
+    select: ['id', 'title'],
+    where: [{ kind: 'in', column: 'id', param: 'ids' }],
+    order: 'id ASC',
+  },
+  /** SKIP — `authorId` is fixed; `status` and `since` are present-or-absent PER CALL. */
+  feed: {
+    kind: 'read',
+    model: ConfPost,
+    select: ['id', 'author_id', 'title', 'status'],
+    where: [
+      { column: 'author_id', op: 'eq', param: 'authorId' },
+      { column: 'status', op: 'eq', param: 'status', optional: true },
+      { column: 'created_at', op: 'ge', param: 'since', optional: true },
+    ],
+    order: 'id ASC',
+  },
+  /** Two relation levels off ONE parent read: users → posts → tags (3 queries, N+1-free). */
+  usersWithPosts: {
+    kind: 'read',
+    model: ConfUser,
+    select: ['id', 'name'],
+    order: 'id ASC',
+    with: [{ name: 'posts', with: ['tags'] }],
+  },
+  /** A belongsTo relation — the single-child nesting shape. */
+  postsWithAuthor: { kind: 'read', model: ConfPost, order: 'id ASC', with: ['author'] },
+  createPost: {
+    kind: 'create',
+    model: ConfPost,
+    values: [
+      { column: 'id', param: 'id' },
+      { column: 'author_id', param: 'authorId' },
+      { column: 'title', param: 'title' },
+      { column: 'status', param: 'status' },
+      { column: 'created_at', param: 'createdAt' },
+    ],
+  },
+  renamePost: {
+    kind: 'update',
+    model: ConfPost,
+    set: [{ column: 'title', param: 'title' }],
+    where: [{ column: 'id', op: 'eq', param: 'id' }],
+  },
+  removePost: { kind: 'delete', model: ConfPost, where: [{ column: 'id', op: 'eq', param: 'id' }] },
+  createTags: { kind: 'createMany', model: ConfTag, columns: ['id', 'post_id', 'label'], param: 'rows' },
+  removeTags: { kind: 'deleteMany', model: ConfTag, keyColumn: 'id', param: 'ids' },
+};
+
+/**
+ * The schema + seed, IDENTICAL for all three dialects (portable DDL). One schema is itself part of
+ * the evidence that a divergent result is the dialect SQL diverging, never the fixture.
+ */
+const SCHEMA: readonly string[] = [
+  'DROP TABLE IF EXISTS conf_tags',
+  'DROP TABLE IF EXISTS conf_posts',
+  'DROP TABLE IF EXISTS conf_users',
+  'CREATE TABLE conf_users (id INT PRIMARY KEY, name TEXT, post_count INT NOT NULL DEFAULT 0)',
+  'CREATE TABLE conf_posts (id INT PRIMARY KEY, author_id INT NOT NULL, title TEXT NOT NULL, status TEXT, created_at TEXT NOT NULL)',
+  'CREATE TABLE conf_tags (id INT PRIMARY KEY, post_id INT NOT NULL, label TEXT)',
+  "INSERT INTO conf_users (id, name, post_count) VALUES (1, 'Ada', 2)",
+  "INSERT INTO conf_users (id, name, post_count) VALUES (2, 'Bob', 1)",
+  "INSERT INTO conf_users (id, name, post_count) VALUES (3, 'Cy', 0)",
+  "INSERT INTO conf_posts (id, author_id, title, status, created_at) VALUES (10, 1, 'a1', 'live', '2026-02-01')",
+  "INSERT INTO conf_posts (id, author_id, title, status, created_at) VALUES (11, 1, 'a2', 'draft', '2026-03-01')",
+  "INSERT INTO conf_posts (id, author_id, title, status, created_at) VALUES (12, 2, 'b1', 'live', '2026-01-15')",
+  "INSERT INTO conf_tags (id, post_id, label) VALUES (100, 10, 'greeting')",
+  "INSERT INTO conf_tags (id, post_id, label) VALUES (101, 10, 'first')",
+  "INSERT INTO conf_tags (id, post_id, label) VALUES (102, 12, 'world')",
+];
+
+// ══════════════════════════════════════════════════════════════════════════════
+// THE PIPELINE — declarations → emitted source → bc generate → a bound module.
+// ══════════════════════════════════════════════════════════════════════════════
+
+/** Where the emitted + generated modules land (gitignored; inside the repo so imports resolve). */
+const GEN_DIR = join(HERE, '.generated');
+
+/** The typed facade a generated `typescript-native` module binds (methods keyed by endpoint name). */
+type SyncFacade = Record<string, (input?: Record<string, unknown>) => unknown>;
+type AsyncFacade = Record<string, (input?: Record<string, unknown>) => Promise<unknown>>;
+
+interface GeneratedModule {
+  bindTyped(handlers: ReturnType<typeof leafHandlers>): SyncFacade;
+  bindTypedAsync(handlers: ReturnType<typeof leafHandlersAsync>): AsyncFacade;
 }
 
-/** Normalize an evaluated param at the driver boundary: a safe-range bc-int BigInt → JS number, recursing arrays. */
-export function normalizeParam(v: unknown): unknown {
-  if (typeof v === 'bigint') return v >= BigInt(Number.MIN_SAFE_INTEGER) && v <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(v) : v;
-  if (Array.isArray(v)) return v.map(normalizeParam);
-  return v;
+/** One built artifact: the emitted source, the per-endpoint call contracts, the generated module. */
+interface Built {
+  readonly source: string;
+  readonly contracts: readonly EmittedEndpoint[];
+  readonly module: GeneratedModule;
 }
 
-/** The single base-write `executeSQL` leaf's `{sql, params}` template of a WRITE contract method. */
-export function writeLeafOf(contract: BehaviorModelContract, entry: string): { sql: string; params: unknown[] } {
-  const node = contract.methods[entry].component.body.find(
-    (n) => !('cond' in n) && !('map' in n) && (n as { component?: string }).component === 'executeSQL' && (n as { ports?: { write?: unknown } }).ports?.write === true,
-  );
-  if (node === undefined) throw new Error(`harness: no write leaf for '${entry}'`);
-  const ports = (node as { ports: { sql?: unknown; params?: { arr?: unknown[] } } }).ports;
-  return { sql: String(ports.sql), params: (ports.params?.arr ?? []) as unknown[] };
-}
-
-// ── Vector shapes ─────────────────────────────────────────────────────────────
-
-/** The hard-limit config a guard vector re-applies before re-publishing (the cap bakes at publish on the
- * leaf path — `lowerFindGuard` / `compileRelationOp` — so the vector CARRIES it, replacing the retired
- * bundle-baked cap). Absent ⇒ no config (a plain exec vector). */
+/**
+ * The hard-limit config a vector re-applies before EMITTING. The find cap bakes into the read's
+ * `LIMIT cap + 1` at emit time ({@link import('../src/scp/limit-config').resolveFindHardLimit}), so
+ * the vector CARRIES it and a runner reproduces the artifact by re-emitting under it.
+ */
 export interface LimitConfigSpec {
   readonly findHardLimit?: number | null;
-  readonly hasManyHardLimit?: number | null;
 }
 
-/** A render vector: the PRIMARY read leaf's lowered sql rendered against an input for one dialect (#143 —
- * re-derived from the `Blog` fixture's `entry` method; the retired `readGraph` artifact is gone). */
-export interface RenderVector {
-  readonly name: string;
-  readonly kind: 'render';
-  readonly dialect: DialectName;
-  /** The `Blog` read method the vector renders (`Feed`/`ByIds`). */
-  readonly entry: string;
-  /** The bound input scope (canonically encoded). */
-  readonly input: EncodedValue;
-  /** Expected rendered SQL text (byte-true to the makeSQL reference). */
-  readonly expectedSql: string;
-  /** Expected flat params array (canonically encoded). */
-  readonly expectedParams: EncodedValue[];
+/** The cache key: only what actually changes the EMITTED artifact (the baked find cap). */
+function builtKey(dialect: DialectName, config?: LimitConfigSpec): string {
+  return `${dialect}:${String(config?.findHardLimit ?? null)}`;
 }
 
-/** A write-render vector: the base-write `executeSQL` leaf's sql template of a `PostCommands` `entry`. */
-export interface WriteRenderVector {
-  readonly name: string;
-  readonly kind: 'write-render';
-  readonly dialect: DialectName;
-  /** The `PostCommands` write method (`Create`/`Rename`/`Remove`). */
-  readonly entry: string;
-  readonly input: EncodedValue;
-  readonly expectedSql: string;
-  readonly expectedParams: EncodedValue[];
+const builtCache = new Map<string, Promise<Built>>();
+let genDirPrepared = false;
+
+/** Build (or reuse) the generated module for one dialect under one limit config. */
+function built(dialect: DialectName, config?: LimitConfigSpec): Promise<Built> {
+  const key = builtKey(dialect, config);
+  let p = builtCache.get(key);
+  if (p === undefined) {
+    p = build(dialect, config);
+    builtCache.set(key, p);
+  }
+  return p;
 }
 
-/** A read/exec vector: a `Blog` read method executed end-to-end against seeded SQLite via the leaf path
- * (#143 — re-derived from the fixture; the retired `bundle` artifact is gone). */
+async function build(dialect: DialectName, config?: LimitConfigSpec): Promise<Built> {
+  if (!genDirPrepared) {
+    rmSync(GEN_DIR, { recursive: true, force: true });
+    mkdirSync(GEN_DIR, { recursive: true });
+    genDirPrepared = true;
+  }
+
+  // 1. LOWER. The find cap is read from the config SSoT at EMIT time, so it is applied around the
+  //    emit and restored immediately (the config is global — never leak it into another vector).
+  resetLimitConfig();
+  if (config !== undefined) setLimitConfig(config);
+  let emitted;
+  try {
+    emitted = emitBehaviorModule({
+      behavior: BEHAVIOR,
+      dialect,
+      // The emitted module imports the library's ONE leaf catalog; the specifier must resolve from
+      // the emitted file's own location (bc type-checks the source it reads).
+      leafImport: join(ROOT, 'src/scp/leaf-transport.js'),
+      endpoints: ENDPOINTS,
+      models: conformanceModels,
+      columnOptions: COLUMN_OPTIONS,
+    });
+  } finally {
+    resetLimitConfig();
+  }
+
+  // The artifact is content-addressed, so a changed emitter is a NEW module path — never a stale
+  // ESM import-cache hit for a source that changed underneath the same name.
+  const stamp = createHash('sha1').update(emitted.source).digest('hex').slice(0, 12);
+  const authored = join(GEN_DIR, `${dialect}-${stamp}.authored.ts`);
+  const generated = join(GEN_DIR, `${dialect}-${stamp}.generated.ts`);
+  if (!existsSync(generated)) {
+    writeFileSync(authored, emitted.source, 'utf8');
+    // 2. The emitted source must be ORDINARY strict TypeScript — bc's authoring requirement.
+    execFileSync(
+      join(ROOT, 'node_modules/.bin/tsc'),
+      ['--noEmit', '--strict', '--target', 'es2022', '--module', 'esnext', '--moduleResolution', 'bundler',
+       '--experimentalDecorators', authored],
+      { cwd: ROOT, stdio: 'pipe' },
+    );
+    // 3. GENERATE with bc's own CLI — no litedbmodel code in the generation path.
+    execFileSync(
+      join(ROOT, 'node_modules/.bin/bc'),
+      ['generate', '--lang', 'typescript-native', '--from', authored, '--behavior', BEHAVIOR, '--out', generated],
+      { cwd: ROOT, stdio: 'pipe' },
+    );
+  }
+  const module = (await import(generated)) as GeneratedModule;
+  return { source: emitted.source, contracts: emitted.endpoints, module };
+}
+
+/** The `findHardLimit` cap the emitter baked into one endpoint (absent ⇒ no cap). */
+function bakedCap(b: Built, entry: string): number | undefined {
+  const c = b.contracts.find((e) => e.name === entry);
+  if (c === undefined) throw new Error(`conformance: no emitted endpoint '${entry}'`);
+  return c.findHardLimit;
+}
+
+// ── the driver TAP: what the leaf transport actually handed the database ──────────────────────
+
+/** One statement observed at the driver contact point, canonically encoded. */
+export interface EncodedStatement {
+  readonly sql: string;
+  readonly params: readonly EncodedValue[];
+}
+
+/** The mutable statement log a seam's tap writes into. */
+type StatementLog = { sql: string; params: unknown[] }[];
+
+/**
+ * Wrap the ONE sync driver contact point ({@link SyncConnection}) so every statement is logged AND
+ * still executed. What the log holds is therefore the exact driver-bound form of a statement that
+ * REALLY RAN: the dynamic (SKIP) WHERE already assembled, `?`→`$N` already rendered, the array
+ * params already encoded and their PG casts resolved against the real key set. There is no second
+ * renderer anywhere — a render golden is a statement the database answered.
+ */
+function tapSync(conn: SyncConnection, log: StatementLog): SyncConnection {
+  return {
+    execute(sql, params) {
+      log.push({ sql, params: [...params] });
+      return conn.execute(sql, params);
+    },
+    executeSafeIntegers(sql, params) {
+      log.push({ sql, params: [...params] });
+      return conn.executeSafeIntegers(sql, params);
+    },
+    run(sql, params) {
+      log.push({ sql, params: [...params] });
+      return conn.run(sql, params);
+    },
+  };
+}
+
+/** The async twin of {@link tapSync}: tap each pooled connection as it is handed out. */
+function tapAsyncPool(pool: AsyncConnectionPool, log: StatementLog): AsyncConnectionPool {
+  const originals = new WeakMap<AsyncConnection, AsyncConnection>();
+  return {
+    async acquire() {
+      const real = await pool.acquire();
+      const tapped: AsyncConnection = {
+        async execute(sql, params) {
+          log.push({ sql, params: [...params] });
+          return real.execute(sql, params);
+        },
+        async run(sql, params) {
+          log.push({ sql, params: [...params] });
+          return real.run(sql, params);
+        },
+      };
+      originals.set(tapped, real);
+      return tapped;
+    },
+    release(conn, destroy) {
+      return pool.release(originals.get(conn) ?? conn, destroy);
+    },
+  };
+}
+
+// ── the EXEC seam: one live database per dialect ──────────────────────────────────────────────
+
+const PG_CONFIG = {
+  host: process.env.TEST_DB_HOST || 'localhost',
+  port: parseInt(process.env.TEST_DB_PORT || '5433', 10),
+  database: process.env.TEST_DB_NAME || 'testdb',
+  user: process.env.TEST_DB_USER || 'testuser',
+  password: process.env.TEST_DB_PASSWORD || 'testpass',
+};
+const MYSQL_CONFIG = {
+  host: process.env.TEST_MYSQL_HOST || 'localhost',
+  port: parseInt(process.env.TEST_MYSQL_PORT || '3307', 10),
+  database: process.env.TEST_MYSQL_DB || 'testdb',
+  user: process.env.TEST_MYSQL_USER || 'testuser',
+  password: process.env.TEST_MYSQL_PASSWORD || 'testpass',
+};
+
+let pgPool: PgPool | undefined;
+let myPool: mysql.Pool | undefined;
+
+/** Release the live PG / MySQL pools (a runner MUST call this, or the process keeps their sockets). */
+export async function closeLiveConnections(): Promise<void> {
+  if (pgPool !== undefined) {
+    const p = pgPool;
+    pgPool = undefined;
+    await p.end();
+  }
+  if (myPool !== undefined) {
+    const p = myPool;
+    myPool = undefined;
+    await p.end();
+  }
+}
+
+/** Build a fresh in-memory SQLite from a schema/seed statement list. */
+function seedDb(schema: readonly string[]): InstanceType<typeof Database> {
+  const db = new Database(':memory:');
+  db.pragma('foreign_keys = ON');
+  for (const stmt of schema) db.exec(stmt);
+  return db;
+}
+
+/** A freshly seeded database for ONE dialect, with the generated module bound to it. */
+interface Seam {
+  /**
+   * Call an emitted endpoint. Returns the module's MARSHALLED (de-boxed) output together with every
+   * statement the transport handed the driver DURING that call, in order.
+   */
+  call(entry: string, input: Record<string, unknown>): Promise<{ result: unknown; statements: EncodedStatement[] }>;
+  /** Run an assertion query straight through the same execution seam. */
+  query(sql: string): Promise<Record<string, unknown>[]>;
+  close(): Promise<void>;
+}
+
+/** Build the seam over an already-built module + a tapped execution context. */
+function seamOver(
+  log: StatementLog,
+  invoke: (entry: string, input: Record<string, unknown>) => unknown,
+  query: (sql: string) => Promise<Record<string, unknown>[]>,
+  close: () => Promise<void>,
+): Seam {
+  return {
+    async call(entry, input) {
+      // The tap logs the seed/DDL and the assertion queries too, so a call's statements are the
+      // slice it appended — never a guess about which log entries belong to it.
+      const from = log.length;
+      const result = await invoke(entry, input);
+      return { result, statements: log.slice(from).map((s) => ({ sql: s.sql, params: s.params.map(encodeValue) })) };
+    },
+    query,
+    close,
+  };
+}
+
+async function seamFor(dialect: DialectName, config?: LimitConfigSpec): Promise<Seam> {
+  const b = await built(dialect, config);
+  const log: StatementLog = [];
+  if (dialect === 'sqlite') {
+    const db = seedDb(SCHEMA);
+    const ctx = contextForConnection(tapSync(connectionForDriver(db as never), log));
+    const facade = b.module.bindTyped(leafHandlers({ exec: ctx, dialect }));
+    return seamOver(
+      log,
+      (entry, input) => facade[entry](input),
+      (sql) => Promise.resolve(execute(ctx, sql, [])),
+      () => {
+        db.close();
+        return Promise.resolve();
+      },
+    );
+  }
+  const pool =
+    dialect === 'postgres'
+      ? pgConnectionPool((pgPool ??= new PgPool(PG_CONFIG)) as never)
+      : mysqlConnectionPool((myPool ??= mysql.createPool({ ...MYSQL_CONFIG, connectionLimit: 4 })) as never);
+  const ctx = new PooledAsyncContext(tapAsyncPool(pool, log));
+  for (const stmt of SCHEMA) await runAsync(ctx, stmt, []);
+  const facade = b.module.bindTypedAsync(leafHandlersAsync({ execAsync: ctx, dialect }));
+  return seamOver(log, (entry, input) => facade[entry](input), (sql) => executeAsync(ctx, sql, []), () => Promise.resolve());
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CONTENT-LEVEL relation assertions (#150 — a count-only check is not a check).
+// ══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * The relation CONTENT contract of a vector: `relation path → the exact field names every child at
+ * that path must carry`. A path is dot-separated from the root row (`posts.tags` = the tags of each
+ * post of each root user).
+ */
+export type RelationFields = Readonly<Record<string, readonly string[]>>;
+
+/** Collect every child object at `path` (arrays flattened, `null`/absent skipped). */
+function childrenAt(rows: unknown, path: readonly string[]): Record<string, unknown>[] {
+  let level = Array.isArray(rows) ? (rows as Record<string, unknown>[]) : [];
+  for (const seg of path) {
+    const next: Record<string, unknown>[] = [];
+    for (const row of level) {
+      const v = row === null || typeof row !== 'object' ? undefined : row[seg];
+      if (Array.isArray(v)) next.push(...(v as Record<string, unknown>[]).filter((c) => c !== null && typeof c === 'object'));
+      else if (v !== null && typeof v === 'object') next.push(v as Record<string, unknown>);
+    }
+    level = next;
+  }
+  return level;
+}
+
+/**
+ * Assert the CONTENT of a materialized relation graph. Returns the violations (empty ⇒ conformant).
+ *
+ * Three checks, each of which the #150 defect fails:
+ *  1. the path must materialize at least ONE child object (an all-empty graph is not evidence);
+ *  2. every child's field set must be EXACTLY the declared one (an empty struct `{}` fails);
+ *  3. every declared field must be non-null in at least one child (a struct of nulls fails).
+ *
+ * A row-count assertion satisfies none of them, which is the point.
+ */
+export function checkRelationContent(rows: unknown, spec: RelationFields): string[] {
+  const problems: string[] = [];
+  for (const [path, fields] of Object.entries(spec)) {
+    const children = childrenAt(rows, path.split('.'));
+    if (children.length === 0) {
+      problems.push(`relation '${path}': no child object materialized — a row-count assertion would still pass`);
+      continue;
+    }
+    const want = [...fields].sort();
+    children.forEach((child, i) => {
+      const got = Object.keys(child).sort();
+      if (got.join(',') !== want.join(',')) {
+        problems.push(`relation '${path}'[${i}]: fields {${got.join(', ')}} != declared {${want.join(', ')}}`);
+      }
+    });
+    for (const f of want) {
+      if (!children.some((c) => c[f] !== undefined && c[f] !== null)) {
+        problems.push(`relation '${path}': field '${f}' is absent/null in EVERY child (an empty struct)`);
+      }
+    }
+  }
+  return problems;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Vector shapes
+// ══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * An exec vector: the endpoint executed end-to-end against a real database. It carries BOTH axes,
+ * because they are one execution: the statements the transport handed the driver (the render
+ * golden) and what came back (the result / DB state).
+ */
 export interface ExecVector {
   readonly name: string;
   readonly kind: 'exec';
   readonly dialect: DialectName;
-  /** The `Blog` read method (`Feed`/`Posts`). */
   readonly entry: string;
   readonly input: EncodedValue;
-  readonly schema: readonly string[];
-  readonly expectedResult: EncodedValue;
-  /** A hard-limit config the SKIP guard vectors re-apply before publish (null-disable / intrinsic-LIMIT). */
   readonly config?: LimitConfigSpec;
-  /** Model read-relation declarations to attach (the typed-object `read()` surface). */
-  readonly relations?: readonly RelationDecl[];
-  /** When set, run through `read()` with this relation eagerly selected (batch fires); else bare `executeBehavior`. */
-  readonly withRelation?: string;
+  /** The logical case — the SAME id across dialects (§10 cross-check anchor). */
+  readonly case: string;
+  /** Every statement the call issued, in order, in the driver-bound form. */
+  readonly expectedStatements: readonly EncodedStatement[];
+  /** The FULL materialized result (nested relation children included). */
+  readonly expectedResult: EncodedValue;
+  /** The relation CONTENT contract (#150) — asserted, never just counted. */
+  readonly relationFields?: RelationFields;
+  /** DB state after a write, queried through the same execution seam. */
+  readonly expectedDbState?: readonly { readonly query: string; readonly rows: EncodedValue }[];
+  /** The `findHardLimit` cap the emitter baked (null ⇒ none — an explicit/absent cap). */
+  readonly expectedCap: number | null;
 }
 
-/** A write-transaction vector: a §8 SqlBundle with a transaction plan run as one tx (the SOLE surviving
- * SqlBundle — `compileWriteBundle` output, executed via `executeTransactionBundle`). */
+/**
+ * An EXPECT-ERROR vector: a read whose baked find cap is exceeded. The emitter bakes `LIMIT cap + 1`
+ * and the READ BOUNDARY enforces it post-fetch with
+ * {@link import('../src/scp/limit-config').assertFindHardLimit} — SCP has no throw, so the cap lives
+ * where the caller consumes the rows.
+ */
+export interface ExpectErrorVector {
+  readonly name: string;
+  readonly kind: 'expect-error';
+  readonly dialect: DialectName;
+  readonly entry: string;
+  readonly input: EncodedValue;
+  readonly config: LimitConfigSpec;
+  readonly case: string;
+  readonly expectedCap: number;
+  /** Every statement the (capped) read issued — the `LIMIT cap + 1` bounded fetch is visible here. */
+  readonly expectedStatements: readonly EncodedStatement[];
+  readonly expectedError: {
+    readonly name: 'LimitExceededError';
+    readonly limit: number;
+    readonly count: number;
+    readonly context: 'find' | 'relation';
+    readonly model?: string;
+  };
+}
+
+/** A write-transaction vector: a {@link SqlBundle} with a transaction plan run as ONE tx. */
 export interface TxVector {
   readonly name: string;
   readonly kind: 'tx';
@@ -227,36 +695,6 @@ export interface TxVector {
   readonly schema: readonly string[];
   readonly expectedResult: EncodedValue;
   readonly expectedDbState?: readonly { readonly query: string; readonly rows: EncodedValue }[];
-}
-
-/**
- * An EXPECT-ERROR vector (Phase E-2, epic #74): a `Blog` read executed under a hard-limit `config` over
- * seeded OVER-CAP SQLite, asserting the runtime THROWS {@link import('../src/scp').LimitExceededError}
- * with the exact fields. #143: the cap bakes at PUBLISH on the leaf path (`lowerFindGuard` for a find
- * cap; `compileRelationOp` for a relation cap), so the vector CARRIES the `config` a runner re-applies
- * before re-publishing — replacing the retired bundle-baked cap. `withRelation`/`relations` present ⇒
- * run `read()` so the relation batch fires (relation cap); absent ⇒ a bare `executeBehavior` (find cap).
- */
-export interface ExpectErrorVector {
-  readonly name: string;
-  readonly kind: 'expect-error';
-  readonly dialect: DialectName;
-  readonly entry: string;
-  readonly input: EncodedValue;
-  readonly schema: readonly string[];
-  /** The hard-limit config re-applied before publish (bakes the cap). */
-  readonly config: LimitConfigSpec;
-  readonly relations?: readonly RelationDecl[];
-  readonly withRelation?: string;
-  /** The exact {@link LimitExceededError} fields the throw must carry (the contract). */
-  readonly expectedError: {
-    readonly name: 'LimitExceededError';
-    readonly limit: number;
-    readonly count: number;
-    readonly context: 'find' | 'relation';
-    readonly model?: string;
-    readonly relation?: string;
-  };
 }
 
 /** A dialect-primitive vector: the `orderByNulls` NULLS-ordering emulation. */
@@ -269,9 +707,9 @@ export interface DialectVector {
   readonly expected: string;
 }
 
-export type Vector = RenderVector | WriteRenderVector | ExecVector | TxVector | DialectVector | ExpectErrorVector;
+export type Vector = ExecVector | ExpectErrorVector | TxVector | DialectVector;
 
-/** A named suite file of vectors (one JSON per file, graphddb-shaped). */
+/** A named suite file of vectors (one JSON per file). */
 export interface Suite {
   readonly suite: string;
   readonly corpusVersion: number;
@@ -279,218 +717,265 @@ export interface Suite {
   readonly vectors: readonly Vector[];
 }
 
-// ── Authoring fixtures (the reference behaviors the vectors compile from) ──────
+// ══════════════════════════════════════════════════════════════════════════════
+// The CASES — declared once, generated for every dialect.
+// ══════════════════════════════════════════════════════════════════════════════
 
-const L = components();
+/** A per-dialect input (a PG batch write binds one array PER COLUMN; MySQL/SQLite one record array). */
+type InputFor = Record<string, unknown> | ((dialect: DialectName) => Record<string, unknown>);
 
-/** Read behavior: SKIP-optional status fragment + relations (belongsTo author, hasMany tags). */
-class Blog extends SemanticBehavior {
-  // Inline typed-column declaration (issue #59): the reads project from these declared types (matches
-  // READ_SCHEMA). Required for a typed read — registration fails closed on an undeclared column.
-  static columns = {
-    posts: { id: 'INTEGER', author_id: 'INTEGER', title: 'TEXT', status: 'TEXT', created_at: 'TEXT' },
-    users: { id: 'INTEGER', name: 'TEXT' },
-    tags: { id: 'INTEGER', post_id: 'INTEGER', label: 'TEXT' },
-  };
-
-  Feed($: In<{ author_id: number; status?: string; since: string; created_at: string; limit?: number }>) {
-    const posts = emitRead(L, 'Select', {
-      table: 'posts',
-      select: ['id', 'author_id', 'title', 'status'],
-      where: [
-        whereEq($.author_id, $.author_id),
-        when(ne(opt($.status), null), () => whereEq($.status, $.status)),
-        whereGe($.created_at, $.since),
-      ],
-      order: 'id ASC',
-      limit: coalesce(opt($.limit), 20),
-    }, 'sqlite');
-    const authors = posts.map(($p: Recorded) =>
-      emitRead(L, 'Select', { table: 'users', select: ['id', 'name'], where: [whereEq($p.id, $p.author_id)] }, 'sqlite'),
-    );
-    return { posts, authors };
-  }
-
-  ByIds($: In<{ ids: number[] }>) {
-    return emitRead(L, 'Select', { table: 'posts', select: ['id', 'title'], where: [whereIn(inColumn($, 'id'), $.ids)], order: 'id ASC' }, 'sqlite');
-  }
-
-  /**
-   * A bare posts row list with NO author `limit` — the find hard-limit guard TARGET (Phase E-2).
-   * The parent page for the relation-batch guard vectors too (hasMany tags attach onto each post).
-   */
-  Posts($: In<{ author_id: number }>) {
-    return emitRead(L, 'Select', { table: 'posts', select: ['id', 'author_id', 'title', 'status'], where: [whereEq($.author_id, $.author_id)], order: 'id ASC' }, 'sqlite');
-  }
+function inputOf(i: InputFor, dialect: DialectName): Record<string, unknown> {
+  return typeof i === 'function' ? i(dialect) : i;
 }
 
-/** Command: Insert a post with RETURNING (the gate-first write-tx base write, spec §6). */
-class PostCommands extends SemanticBehavior {
-  static columns = { posts: { id: 'INTEGER', author_id: 'INTEGER', title: 'TEXT' } };
-  Create($: In<{ author_id: number; title: string; request_id: string }>) {
-    return emitWrite(L, 'Insert', { table: 'posts', 'values.author_id': $.author_id, 'values.title': $.title, returning: 'id, author_id, title' }, 'sqlite');
-  }
-  Rename($: In<{ id: number; title: string }>) {
-    return emitWrite(L, 'Update', { table: 'posts', 'set.title': $.title, where: [whereEq($.id, $.id)], returning: 'id, title' }, 'sqlite');
-  }
-  Remove($: In<{ id: number }>) {
-    return emitWrite(L, 'Delete', { table: 'posts', where: [whereEq($.id, $.id)], returning: 'id' }, 'sqlite');
-  }
+interface ExecCase {
+  readonly id: string;
+  readonly entry: string;
+  readonly input: InputFor;
+  /** A write case mutates: its result carries per-dialect driver counters, its DB STATE is the invariant. */
+  readonly writes?: boolean;
+  readonly relationFields?: RelationFields;
+  readonly dbState?: readonly string[];
+  readonly config?: LimitConfigSpec;
 }
 
-/** The write-time-relations save contract (spec §2.2 example): gate-first create. */
-const postWrites = entityWrites<PostCommands>((w) => ({
+const POSTS_STATE = 'SELECT id, author_id, title, status, created_at FROM conf_posts ORDER BY id';
+const TAGS_STATE = 'SELECT id, post_id, label FROM conf_tags ORDER BY id';
+
+const EXEC_CASES: readonly ExecCase[] = [
+  { id: 'posts: author page', entry: 'posts', input: { authorId: 1 } },
+  { id: 'postsTop: explicit LIMIT 2', entry: 'postsTop', input: {} },
+  { id: 'postsByIds: IN-list (non-empty)', entry: 'postsByIds', input: { ids: [10, 12] } },
+  { id: 'postsByIds: IN-list (EMPTY key set is legal)', entry: 'postsByIds', input: { ids: [] } },
+  { id: 'feed: both optional predicates absent (SKIP drop)', entry: 'feed', input: { authorId: 1 } },
+  { id: 'feed: status present, since absent', entry: 'feed', input: { authorId: 1, status: 'draft' } },
+  { id: 'feed: since present, status absent', entry: 'feed', input: { authorId: 1, since: '2026-03-01' } },
+  { id: 'feed: both present', entry: 'feed', input: { authorId: 1, status: 'live', since: '2026-01-01' } },
+  {
+    id: 'usersWithPosts: two relation levels materialize WITH THEIR FIELDS',
+    entry: 'usersWithPosts',
+    input: {},
+    relationFields: {
+      posts: ['id', 'author_id', 'title', 'status', 'created_at', 'tags'],
+      'posts.tags': ['id', 'post_id', 'label'],
+    },
+  },
+  {
+    id: 'postsWithAuthor: belongsTo nests ONE child WITH ITS FIELDS',
+    entry: 'postsWithAuthor',
+    input: {},
+    relationFields: { author: ['id', 'name', 'post_count'] },
+  },
+  {
+    id: 'createPost: INSERT persists',
+    entry: 'createPost',
+    input: { id: 13, authorId: 1, title: 'c1', status: 'live', createdAt: '2026-04-01' },
+    writes: true,
+    dbState: [POSTS_STATE],
+  },
+  { id: 'renamePost: UPDATE persists', entry: 'renamePost', input: { title: 'a1-renamed', id: 10 }, writes: true, dbState: [POSTS_STATE] },
+  { id: 'removePost: DELETE persists', entry: 'removePost', input: { id: 12 }, writes: true, dbState: [POSTS_STATE] },
+  {
+    id: 'createTags: batch INSERT persists (one statement for N records)',
+    entry: 'createTags',
+    input: (d) =>
+      d === 'postgres'
+        ? { rows_id: [103, 104], rows_post_id: [11, 11], rows_label: ['x', 'y'] }
+        : { rows: [{ id: 103, post_id: 11, label: 'x' }, { id: 104, post_id: 11, label: 'y' }] },
+    writes: true,
+    dbState: [TAGS_STATE],
+  },
+  { id: 'removeTags: batch DELETE by key set persists', entry: 'removeTags', input: { ids: [100, 101] }, writes: true, dbState: [TAGS_STATE] },
+  // The find hard-limit SKIP cases: `null` disables the cap, and an endpoint that declares its own
+  // LIMIT is never capped — both must run normally (no throw), on every dialect.
+  { id: 'guard: findHardLimit null → no cap baked', entry: 'posts', input: { authorId: 1 }, config: { findHardLimit: null } },
+  { id: 'guard: an explicit endpoint LIMIT governs → no cap baked', entry: 'postsTop', input: {}, config: { findHardLimit: 1 } },
+];
+
+// ══════════════════════════════════════════════════════════════════════════════
+// tx fixtures (write-time relations — the gate-first transaction surface)
+// ══════════════════════════════════════════════════════════════════════════════
+
+const TX_SCHEMA: readonly string[] = [
+  'CREATE TABLE tx_users (id INTEGER PRIMARY KEY, name TEXT, post_count INTEGER NOT NULL DEFAULT 0)',
+  'CREATE TABLE tx_posts (id INTEGER PRIMARY KEY AUTOINCREMENT, author_id INTEGER NOT NULL REFERENCES tx_users(id), title TEXT NOT NULL)',
+  'CREATE TABLE tx_idem (token TEXT PRIMARY KEY)',
+  'CREATE TABLE tx_uniq (name TEXT NOT NULL, s0 INTEGER NOT NULL, f0 TEXT NOT NULL, PRIMARY KEY (name, s0, f0))',
+  'CREATE TABLE tx_outbox (id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT NOT NULL, payload TEXT NOT NULL)',
+  "INSERT INTO tx_users (id, name, post_count) VALUES (7, 'Ada', 2)",
+  "INSERT INTO tx_users (id, name, post_count) VALUES (8, 'Alan', 0)",
+];
+
+const TX_COMPOSITE_SCHEMA: readonly string[] = [
+  'CREATE TABLE tx_users (id INTEGER PRIMARY KEY, name TEXT, post_count INTEGER NOT NULL DEFAULT 0)',
+  'CREATE TABLE tx_posts (id INTEGER PRIMARY KEY AUTOINCREMENT, author_id INTEGER NOT NULL REFERENCES tx_users(id), title TEXT NOT NULL)',
+  'CREATE TABLE tx_comments (id INTEGER PRIMARY KEY AUTOINCREMENT, post_id INTEGER NOT NULL REFERENCES tx_posts(id), body TEXT NOT NULL)',
+  "INSERT INTO tx_users (id, name, post_count) VALUES (7, 'Ada', 0)",
+];
+
+/** The base writes, built by the SSoT write-descriptor → TxOp compiler (`compileWriteNode`). */
+function txCreatePostOp(): TxOp {
+  return compileWriteNode({
+    component: 'Insert',
+    ports: {
+      table: 'tx_posts',
+      'values.author_id': { ref: ['author_id'] },
+      'values.title': { ref: ['title'] },
+      returning: 'id, author_id, title',
+    },
+  } as never);
+}
+
+/** The child write's `post_id` binds the PARENT's RETURNING id directly — no post-compile surgery. */
+function txCreateCommentOp(): TxOp {
+  return compileWriteNode({
+    component: 'Insert',
+    ports: {
+      table: 'tx_comments',
+      'values.post_id': { ref: ['post', 'id'] },
+      'values.body': { ref: ['body'] },
+      returning: 'id, post_id, body',
+    },
+  } as never);
+}
+
+/** The gate-first save contract of the single-write Command (spec §2.2). */
+const txPostWrites = entityWrites((w) => ({
   create: w.lifecycle({
-    requires: [w.exists('users', { id: '$.input.author_id' })],
-    idempotency: w.idempotentBy('idem', 'token', '$.input.request_id'),
-    unique: [
-      w.unique({ name: 'title_per_author', guardTable: 'uniq', scope: ['$.input.author_id'], fields: ['$.input.title'] }),
-    ],
-    derive: [w.increment('users', { id: '$.input.author_id' }, 'post_count', +1)],
-    emits: [w.event('PostCreated', 'outbox', { postId: '$.entity.id', userId: '$.input.author_id' })],
+    requires: [w.exists('tx_users', { id: '$.input.author_id' })],
+    idempotency: w.idempotentBy('tx_idem', 'token', '$.input.request_id'),
+    unique: [w.unique({ name: 'title_per_author', guardTable: 'tx_uniq', scope: ['$.input.author_id'], fields: ['$.input.title'] })],
+    derive: [w.increment('tx_users', { id: '$.input.author_id' }, 'post_count', +1)],
+    emits: [w.event('PostCreated', 'tx_outbox', { postId: '$.entity.id', userId: '$.input.author_id' })],
   }),
 }));
 
-// ── WS8a composite (multi-write) fixtures: a nested write (post → comment) ────────
+/** The composite (nested write) members: parent post → child comment, linked by `$.ref.post.id`. */
+const txCompositeEntries = [
+  {
+    name: 'post',
+    base: txCreatePostOp(),
+    lifecycle: entityWrites((w) => ({
+      create: w.lifecycle({
+        requires: [w.exists('tx_users', { id: '$.input.author_id' })],
+        derive: [w.increment('tx_users', { id: '$.input.author_id' }, 'post_count', +1)],
+      }),
+    })).create!,
+  },
+  { name: 'comment', base: txCreateCommentOp(), lifecycle: entityWrites(() => ({ create: { effects: {} } })).create! },
+] as const;
 
-class BlogComposite extends SemanticBehavior {
-  static columns = {
-    posts: { id: 'INTEGER', author_id: 'INTEGER', title: 'TEXT' },
-    comments: { id: 'INTEGER', post_id: 'INTEGER', body: 'TEXT' },
-  };
-  CreatePost($: In<{ author_id: number; title: string; body: string }>) {
-    return emitWrite(L, 'Insert', { table: 'posts', 'values.author_id': $.author_id, 'values.title': $.title, returning: 'id, author_id, title' }, 'sqlite');
-  }
-  CreateComment($: In<{ body: string }>) {
-    return emitWrite(L, 'Insert', { table: 'comments', 'values.post_id': $.body, 'values.body': $.body, returning: 'id, post_id, body' }, 'sqlite');
-  }
-}
+/** The column-type SoT that types the write's `TransactionResult` for the typed-de-box emitters. */
+const TX_COLUMN_TYPES = columnTypeResolverFromColumnMap(
+  new Map([['tx_posts', new Map([['id', 'INTEGER'], ['author_id', 'INTEGER'], ['title', 'TEXT']])]]),
+);
 
-const postParentWrites = entityWrites<BlogComposite>((w) => ({
-  create: w.lifecycle({
-    requires: [w.exists('users', { id: '$.input.author_id' })],
-    derive: [w.increment('users', { id: '$.input.author_id' }, 'post_count', +1)],
-  }),
-})).create!;
+// ══════════════════════════════════════════════════════════════════════════════
+// Corpus generation — every expected field is CAPTURED from the pipeline.
+// ══════════════════════════════════════════════════════════════════════════════
 
-const commentChildWrites = entityWrites<BlogComposite>((w) => ({ create: w.lifecycle({}) })).create!;
-
-const COMPOSITE_SCHEMA: readonly string[] = [
-  `CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, post_count INTEGER NOT NULL DEFAULT 0)`,
-  `CREATE TABLE posts (id INTEGER PRIMARY KEY AUTOINCREMENT, author_id INTEGER NOT NULL REFERENCES users(id), title TEXT NOT NULL)`,
-  `CREATE TABLE comments (id INTEGER PRIMARY KEY AUTOINCREMENT, post_id INTEGER NOT NULL REFERENCES posts(id), body TEXT NOT NULL)`,
-  `INSERT INTO users (id, name, post_count) VALUES (7, 'Ada', 0)`,
-];
-
-/**
- * Build the composite tx-DAG bundle (post parent → comment child) with the child's post_id
- * rewritten to the real `$.ref.post.id` ref. The derivation + serialization are the genuine
- * reference paths. Columns are canonical (alphabetical) — the v2 write SSoT.
- */
-function compositeBundle(dialect: DialectName): SqlBundle {
-  const contract = publishBehaviors(BlogComposite);
-  const bundle = compileCompositeWriteBundle(
-    contract,
-    [
-      { entry: 'CreatePost', name: 'post', lifecycle: { effects: postParentWrites.effects } },
-      { entry: 'CreateComment', name: 'comment', lifecycle: { effects: commentChildWrites.effects } },
-    ],
-    'create',
-    dialect,
-  );
-  const child = bundle.transaction!.statements.find((s) => s.binds === 'comment')!;
-  (child.op as unknown as { params: unknown[]; sql: string }).params = [{ ref: ['body'] }, { ref: ['post', 'id'] }];
-  (child.op as unknown as { params: unknown[]; sql: string }).sql = 'INSERT INTO comments (body, post_id) VALUES (?, ?) RETURNING id, post_id, body';
-  return bundle;
-}
-
-const READ_SCHEMA: readonly string[] = [
-  `CREATE TABLE posts (id INTEGER PRIMARY KEY, author_id INTEGER NOT NULL, title TEXT NOT NULL, status TEXT, created_at TEXT NOT NULL)`,
-  `CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)`,
-  `CREATE TABLE tags (id INTEGER PRIMARY KEY, post_id INTEGER NOT NULL, label TEXT)`,
-  `INSERT INTO posts VALUES (1, 7, 'Hello', 'live', '2026-02-01')`,
-  `INSERT INTO posts VALUES (2, 7, 'World', 'draft', '2026-03-01')`,
-  `INSERT INTO posts VALUES (3, 8, 'Other', 'live', '2026-01-15')`,
-  `INSERT INTO users VALUES (7, 'Ada')`,
-  `INSERT INTO users VALUES (8, 'Alan')`,
-  `INSERT INTO tags VALUES (10, 1, 'greeting')`,
-  `INSERT INTO tags VALUES (11, 1, 'first')`,
-  `INSERT INTO tags VALUES (12, 2, 'world')`,
-];
-
-const WRITE_SCHEMA: readonly string[] = [
-  `CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, post_count INTEGER NOT NULL DEFAULT 0)`,
-  `CREATE TABLE posts (id INTEGER PRIMARY KEY AUTOINCREMENT, author_id INTEGER NOT NULL REFERENCES users(id), title TEXT NOT NULL, created_at TEXT)`,
-  `CREATE TABLE idem (token TEXT PRIMARY KEY)`,
-  `CREATE TABLE uniq (name TEXT NOT NULL, s0 INTEGER NOT NULL, f0 TEXT NOT NULL, PRIMARY KEY (name, s0, f0))`,
-  `CREATE TABLE outbox (id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT NOT NULL, payload TEXT NOT NULL)`,
-  `INSERT INTO users (id, name, post_count) VALUES (7, 'Ada', 2)`,
-  `INSERT INTO users (id, name, post_count) VALUES (8, 'Alan', 0)`,
-];
-
-// ── Seeded-DB helper ──────────────────────────────────────────────────────────
-
-/** Build a fresh in-memory SQLite from a schema/seed statement list. */
-export function seedDb(schema: readonly string[]): InstanceType<typeof Database> {
-  const db = new Database(':memory:');
-  db.pragma('foreign_keys = ON');
-  for (const stmt of schema) db.exec(stmt);
-  return db;
-}
-
-// ── Vector construction helpers (all outputs captured from the reference) ─────
-
-/**
- * The SSoT leaf read executor for the `Blog` fixture — SHARED by the vector GENERATORS (capture the
- * golden) and {@link runVector} (re-derive + compare), so capture and replay run the IDENTICAL path.
- * Publishes `Blog` under `config` (the find cap bakes at publish via `lowerFindGuard`; the relation cap
- * resolves at read via `compileRelationOp`), executes `entry` over seeded SQLite — `read()` when
- * relations/`withRelation` are supplied (the batch fires + attaches), else bare `executeBehavior` (the Φ
- * output). Resets the config after (test isolation). Returns the raw runtime output (or throws the guard).
- */
-function runBlogRead(spec: { entry: string; input: Record<string, unknown>; schema: readonly string[]; config?: LimitConfigSpec; relations?: readonly RelationDecl[]; withRelation?: string }): unknown {
-  resetLimitConfig();
-  if (spec.config !== undefined) setLimitConfig(spec.config);
-  const db = seedDb(spec.schema);
+/** Run one exec case on one dialect and capture everything the vector asserts. */
+async function execVector(c: ExecCase, dialect: DialectName): Promise<ExecVector> {
+  const input = inputOf(c.input, dialect);
+  const seam = await seamFor(dialect, c.config);
   try {
-    const contract = publishBehaviors(Blog); // the find cap (if any) bakes into the primary read leaf here
-    return spec.relations !== undefined || spec.withRelation !== undefined
-      ? read(contract, spec.input as never, { db, entry: spec.entry, relations: spec.relations ?? [], ...(spec.withRelation !== undefined ? { with: { [spec.withRelation]: true } } : {}) })
-      : executeBehavior(contract, spec.input as never, { db, entry: spec.entry });
+    const { result, statements } = await seam.call(c.entry, input);
+    const dbState = c.dbState === undefined
+      ? undefined
+      : await Promise.all(c.dbState.map(async (query) => ({ query, rows: encodeValue(await seam.query(query)) })));
+    if (c.relationFields !== undefined) {
+      const problems = checkRelationContent(result, c.relationFields);
+      if (problems.length > 0) {
+        throw new Error(`conformance: case '${c.id}' [${dialect}] violates its relation CONTENT contract:\n  ${problems.join('\n  ')}`);
+      }
+    }
+    return {
+      name: `${c.id} [${dialect}]`,
+      kind: 'exec',
+      dialect,
+      entry: c.entry,
+      input: encodeValue(input),
+      case: c.id,
+      ...(c.config !== undefined ? { config: c.config } : {}),
+      expectedStatements: statements,
+      expectedResult: encodeValue(result),
+      ...(c.relationFields !== undefined ? { relationFields: c.relationFields } : {}),
+      ...(dbState !== undefined ? { expectedDbState: dbState } : {}),
+      expectedCap: bakedCap(await built(dialect, c.config), c.entry) ?? null,
+    };
   } finally {
-    db.close();
-    resetLimitConfig();
+    await seam.close();
   }
 }
 
-/** Build a render vector: render the `Blog` `entry` read leaf against an input for a dialect (the WHERE/IN
- *  form is lowered per-dialect at publish; the base is dialect-invariant). */
-function renderVector(name: string, entry: string, input: Record<string, unknown>, dialect: DialectName): RenderVector {
-  const rendered = renderPrimaryRead(publishBehaviors(Blog, { dialect }), entry, input, dialect);
-  return { name, kind: 'render', dialect, entry, input: encodeValue(input), expectedSql: rendered.sql, expectedParams: rendered.params.map(encodeValue) };
+/**
+ * The §10 cross-dialect invariant, enforced at CAPTURE. A read case must produce the IDENTICAL
+ * result on all three dialects; a write case's driver counters are dialect-specific
+ * (`lastInsertRowid`), so its invariant is the `changes` count plus the resulting DB STATE.
+ */
+function assertDialectInvariant(c: ExecCase, vectors: readonly ExecVector[]): void {
+  const compare = (v: ExecVector): string =>
+    JSON.stringify(
+      c.writes === true
+        ? { changes: (v.expectedResult as { changes?: EncodedValue }[])[0]?.changes ?? null, state: v.expectedDbState }
+        : v.expectedResult,
+    );
+  const [head, ...rest] = vectors;
+  for (const v of rest) {
+    if (compare(v) !== compare(head)) {
+      throw new Error(
+        `conformance: case '${c.id}' is NOT dialect-invariant (§10) — ${head.dialect} produced ` +
+          `${compare(head)} but ${v.dialect} produced ${compare(v)}`,
+      );
+    }
+  }
 }
 
-/** Build a write-render vector: the `PostCommands` `entry` base-write leaf's sql template (dialect-invariant
- *  for these RETURNING writes — no per-column cast). */
-function writeRenderVector(name: string, entry: string, input: Record<string, unknown>, dialect: DialectName): WriteRenderVector {
-  const w = writeLeafOf(publishBehaviors(PostCommands), entry);
-  return { name, kind: 'write-render', dialect, entry, input: encodeValue(input), expectedSql: w.sql, expectedParams: w.params.map(encodeValue) };
+/** Build the find-cap EXPECT-ERROR vector: the read overruns its baked cap, the boundary throws. */
+async function findGuardVector(dialect: DialectName): Promise<ExpectErrorVector> {
+  const config: LimitConfigSpec = { findHardLimit: 1 };
+  const entry = 'posts';
+  const input = { authorId: 1 };
+  const b = await built(dialect, config);
+  const cap = bakedCap(b, entry);
+  if (cap === undefined) throw new Error(`conformance: no find cap baked into '${entry}' under findHardLimit=1`);
+  const seam = await seamFor(dialect, config);
+  let thrown: unknown;
+  let statements: EncodedStatement[] = [];
+  try {
+    const called = await seam.call(entry, input);
+    statements = called.statements;
+    assertFindHardLimit(called.result as unknown[], cap, entry);
+  } catch (e) {
+    thrown = e;
+  } finally {
+    await seam.close();
+  }
+  if (!(thrown instanceof LimitExceededError)) {
+    throw new Error(`conformance: the find guard did NOT throw on ${dialect} (got ${thrown === undefined ? 'no throw' : String(thrown)})`);
+  }
+  return {
+    name: `guard: the read overruns findHardLimit → throw [${dialect}]`,
+    kind: 'expect-error',
+    dialect,
+    entry,
+    input: encodeValue(input),
+    config,
+    case: 'guard: the read overruns findHardLimit → throw',
+    expectedCap: cap,
+    expectedStatements: statements,
+    expectedError: {
+      name: 'LimitExceededError',
+      limit: thrown.limit,
+      count: thrown.count,
+      context: thrown.context,
+      ...(thrown.model !== undefined ? { model: thrown.model } : {}),
+    },
+  };
 }
 
-/** Build an exec vector: run the `Blog` `entry` read (Φ output) against a freshly seeded DB via the leaf. */
-function execVector(name: string, entry: string, input: Record<string, unknown>, schema: readonly string[]): ExecVector {
-  const result = runBlogRead({ entry, input, schema });
-  return { name, kind: 'exec', dialect: 'sqlite', entry, input: encodeValue(input), schema, expectedResult: encodeValue(result) };
-}
-
-/** Build a tx vector by running the reference transaction bundle against a seeded DB. */
-function txVector(
-  name: string,
-  bundle: SqlBundle,
-  input: Record<string, unknown>,
-  schema: readonly string[],
-  dbQueries: readonly string[],
-): TxVector {
+/** Build a tx vector by running the reference transaction bundle against a freshly seeded DB. */
+function txVector(name: string, bundle: SqlBundle, input: Record<string, unknown>, schema: readonly string[], dbQueries: readonly string[]): TxVector {
   const db = seedDb(schema);
   const result = executeTransactionBundle(bundle, input as never, { db });
   const dbState = dbQueries.map((query) => ({ query, rows: encodeValue(db.prepare(query).all()) }));
@@ -510,180 +995,70 @@ function txVector(
 /** Build a dialect-primitive vector capturing the reference `orderByNulls` output. */
 function orderByNullsVector(dialect: DialectName, dir: 'ASC' | 'DESC', nulls: 'FIRST' | 'LAST'): DialectVector {
   const expr = 'created_at';
-  const expected = dialectFor(dialect).orderByNulls(expr, dir, nulls);
   return {
     name: `orderByNulls ${dialect} ${dir} NULLS ${nulls}`,
     kind: 'dialect',
     dialect,
     primitive: 'orderByNulls',
     args: { expr, dir, nulls },
-    expected,
+    expected: dialectFor(dialect).orderByNulls(expr, dir, nulls),
   };
 }
-
-// ── Expect-error (hard-limit) vector construction (Phase E-2, epic #74) ────────
-//
-// Each guard vector runs the `Blog` read UNDER a hard-limit `config` (the find cap bakes into the read
-// leaf at publish via `lowerFindGuard`; the relation cap resolves at read via `compileRelationOp`) over
-// seeded OVER-CAP SQLite and CAPTURES the LimitExceededError fields it throws (via the SHARED
-// {@link runBlogRead}). #143: the cap is no longer bundle-baked, so the vector CARRIES the `config` a
-// runner re-applies before re-publishing. If the reference does NOT throw, generation fails loudly.
-
-/** Build a find-cap expect-error vector: a bare read over-cap → throw (context=find). */
-function findGuardVector(name: string, findHardLimit: number, schema: readonly string[], input: Record<string, unknown>): ExpectErrorVector {
-  const config: LimitConfigSpec = { findHardLimit };
-  const err = captureLimitError(() => runBlogRead({ entry: 'Posts', input, schema, config }), name);
-  return {
-    name, kind: 'expect-error', dialect: 'sqlite', entry: 'Posts', input: encodeValue(input), schema, config,
-    expectedError: { name: 'LimitExceededError', limit: err.limit, count: err.count, context: err.context, ...(err.model !== undefined ? { model: err.model } : {}) },
-  };
-}
-
-/** Build a relation-cap expect-error vector: an over-cap hasMany batch → throw (context=relation, exact count). */
-function relationGuardVector(name: string, relations: readonly RelationDecl[], hasManyHardLimit: number | undefined, schema: readonly string[], input: Record<string, unknown>): ExpectErrorVector {
-  const config: LimitConfigSpec = hasManyHardLimit !== undefined ? { hasManyHardLimit } : {};
-  const err = captureLimitError(() => runBlogRead({ entry: 'Posts', input, schema, config, relations, withRelation: 'tags' }), name);
-  return {
-    name, kind: 'expect-error', dialect: 'sqlite', entry: 'Posts', input: encodeValue(input), schema, config, relations, withRelation: 'tags',
-    expectedError: { name: 'LimitExceededError', limit: err.limit, count: err.count, context: err.context, ...(err.model !== undefined ? { model: err.model } : {}), ...(err.relation !== undefined ? { relation: err.relation } : {}) },
-  };
-}
-
-/**
- * Build a SKIP exec vector: run `Posts` UNDER a config that must NOT throw (null-disable /
- * per-relation-disable / intrinsic-LIMIT window) over the SAME over-cap data, capturing the NORMAL
- * result. If the reference throws, generation fails. `withRelation` set ⇒ the typed-object `read()`
- * surface (batch fires but is not capped); else bare `executeBehavior`.
- */
-function guardSkipExec(name: string, config: LimitConfigSpec, relations: readonly RelationDecl[], withRelation: string | undefined, input: Record<string, unknown>): ExecVector {
-  const result = runBlogRead({ entry: 'Posts', input, schema: READ_SCHEMA, config, relations, ...(withRelation !== undefined ? { withRelation } : {}) });
-  return { name, kind: 'exec', dialect: 'sqlite', entry: 'Posts', input: encodeValue(input), schema: READ_SCHEMA, config, relations, expectedResult: encodeValue(result), ...(withRelation !== undefined ? { withRelation } : {}) };
-}
-
-/** Build a SKIP exec vector on `Feed` (author-limit present ⇒ find-guard skipped): run under a find cap
- *  that would over-cap, capture the normal Φ result (no throw). */
-function guardSkipFeedExec(name: string, config: LimitConfigSpec, input: Record<string, unknown>): ExecVector {
-  const result = runBlogRead({ entry: 'Feed', input, schema: READ_SCHEMA, config });
-  return { name, kind: 'exec', dialect: 'sqlite', entry: 'Feed', input: encodeValue(input), schema: READ_SCHEMA, config, expectedResult: encodeValue(result) };
-}
-
-/** Run `fn`, assert it threw a `LimitExceededError`, return its fields (generation fails if it did not). */
-function captureLimitError(fn: () => unknown, name: string): LimitExceededError {
-  try {
-    fn();
-  } catch (e) {
-    if (e instanceof LimitExceededError) return e;
-    throw new Error(`guard vector '${name}': expected LimitExceededError, got ${e instanceof Error ? e.name + ': ' + e.message : String(e)}`);
-  }
-  throw new Error(`guard vector '${name}': the reference did NOT throw (an expect-error vector must error)`);
-}
-
-// ── The corpus (generated from the reference) ─────────────────────────────────
 
 /** Generate the full corpus (list of suites). Every expected field is captured, not authored. */
-export function generateCorpus(): Suite[] {
-  // ── render suite: read primaries + write statements × 3 dialects × edge cases ─
-  const render: (RenderVector | WriteRenderVector)[] = [];
-  for (const d of ALL_DIALECTS) {
-    render.push(renderVector(`Feed: status present + limit`, 'Feed', { author_id: 7, status: 'live', since: '2026-01-01', created_at: 'created_at', limit: 5 }, d));
-    render.push(renderVector(`Feed: status null → SKIP drop, coalesce default limit`, 'Feed', { author_id: 7, status: null, since: '2026-01-01', created_at: 'created_at', limit: null }, d));
-    render.push(renderVector(`ByIds: IN-list single-JSON param`, 'ByIds', { ids: [1, 2, 3] }, d));
-    render.push(writeRenderVector(`Create: INSERT + RETURNING (canonical cols)`, 'Create', { author_id: 7, title: 'Hello', request_id: 'r' }, d));
-    render.push(writeRenderVector(`Rename: UPDATE + WHERE + RETURNING`, 'Rename', { id: 1, title: 'Renamed' }, d));
-    render.push(writeRenderVector(`Remove: DELETE + WHERE + RETURNING`, 'Remove', { id: 1 }, d));
-  }
-
-  // ── exec suite: read Φ-merge (Feed = posts + per-parent authors map) × SQLite seam ────────────
+export async function generateCorpus(): Promise<Suite[]> {
+  // ── exec: the same declaration executed on SQLite + live PostgreSQL + live MySQL ───────────
   const exec: ExecVector[] = [];
-  // The execution seam is in-process SQLite; a PG/MySQL read's Φ output is dialect-invariant (same IR +
-  // input → same result, §10), so only the SQLite run is EXECUTED. `executeBehavior(Feed)` runs the full
-  // leaf graph (posts + the `.map` authors relation) → the Φ output `{posts, authors}`.
-  exec.push(execVector(`Feed: status present + belongsTo/hasMany relations`, 'Feed', { author_id: 7, status: 'live', since: '2026-01-01', created_at: 'created_at' }, READ_SCHEMA));
-  exec.push(execVector(`Feed: status absent (SKIP drop) + relations`, 'Feed', { author_id: 7, since: '2026-01-01', created_at: 'created_at' }, READ_SCHEMA));
-
-  // ── tx suite: write-time relations (gate-first create) + composite × SQLite ───
-  const tx: TxVector[] = [];
-  const cmdContract = publishBehaviors(PostCommands);
-  const dbAsserts = [
-    'SELECT id, author_id, title FROM posts ORDER BY id',
-    'SELECT id, post_count FROM users ORDER BY id',
-    'SELECT type, payload FROM outbox ORDER BY id',
-  ];
-  for (const d of ALL_DIALECTS) {
-    if (d !== 'sqlite') continue;
-    // The WRITE bundle carries the TransactionResult `outputType` typed-codegen annotation (entity /
-    // returnedRows typed via the model's inline `static columns` — the leaf SoT `cmdContract.resolveColumnType`)
-    // so bc's typed-raw de-box emitter materializes a concrete result struct for the WRITE (tx) surface.
-    const bundle = compileWriteBundle(cmdContract, 'Create', postWrites, 'create', d, cmdContract.resolveColumnType);
-    tx.push(txVector(`create: gate-first tx commits (author exists, unique, idempotent)`, bundle, { author_id: 7, title: 'New Post', request_id: 'req-1' }, WRITE_SCHEMA, dbAsserts));
-    tx.push(txVector(`create: gate short-circuits on missing author (ROLLBACK, no body write)`, bundle, { author_id: 999, title: 'Orphan', request_id: 'req-2' }, WRITE_SCHEMA, dbAsserts));
-
-    const compBundle = compositeBundle(d);
-    const compAsserts = [
-      'SELECT id, author_id, title FROM posts ORDER BY id',
-      'SELECT id, post_id, body FROM comments ORDER BY id',
-      'SELECT id, post_count FROM users ORDER BY id',
-    ];
-    tx.push(txVector(`composite: nested write commits parent+child in one tx-DAG (child.post_id = $.ref.post.id)`, compBundle, { author_id: 7, title: 'Nested', body: 'First comment' }, COMPOSITE_SCHEMA, compAsserts));
-    tx.push(txVector(`composite: gate-first across the DAG short-circuits before parent AND child (ROLLBACK)`, compBundle, { author_id: 999, title: 'Ghost', body: 'never' }, COMPOSITE_SCHEMA, compAsserts));
+  for (const c of EXEC_CASES) {
+    const vectors: ExecVector[] = [];
+    for (const dialect of ALL_DIALECTS) vectors.push(await execVector(c, dialect));
+    assertDialectInvariant(c, vectors);
+    exec.push(...vectors);
   }
 
-  // ── dialect suite: orderByNulls ────────────────────────────────────────────
+  // ── guard: the baked find cap, enforced at the read boundary ───────────────────────────────
+  const guard: ExpectErrorVector[] = [];
+  for (const dialect of ALL_DIALECTS) guard.push(await findGuardVector(dialect));
+
+  // ── tx: write-time relations (gate-first) + the composite tx-DAG ───────────────────────────
+  const txAsserts = [
+    'SELECT id, author_id, title FROM tx_posts ORDER BY id',
+    'SELECT id, post_count FROM tx_users ORDER BY id',
+    'SELECT type, payload FROM tx_outbox ORDER BY id',
+  ];
+  const bundle = compileWriteBundle('Create', txCreatePostOp(), txPostWrites, 'create', 'sqlite', TX_COLUMN_TYPES);
+  const compositeBundle = compileCompositeWriteBundle(txCompositeEntries, 'create', 'sqlite');
+  const compositeAsserts = [
+    'SELECT id, author_id, title FROM tx_posts ORDER BY id',
+    'SELECT id, post_id, body FROM tx_comments ORDER BY id',
+    'SELECT id, post_count FROM tx_users ORDER BY id',
+  ];
+  const tx: TxVector[] = [
+    txVector('create: gate-first tx commits (author exists, unique, idempotent)', bundle, { author_id: 7, title: 'New Post', request_id: 'req-1' }, TX_SCHEMA, txAsserts),
+    txVector('create: gate short-circuits on missing author (ROLLBACK, no body write)', bundle, { author_id: 999, title: 'Orphan', request_id: 'req-2' }, TX_SCHEMA, txAsserts),
+    txVector('composite: nested write commits parent+child in one tx-DAG (child.post_id = $.ref.post.id)', compositeBundle, { author_id: 7, title: 'Nested', body: 'First comment' }, TX_COMPOSITE_SCHEMA, compositeAsserts),
+    txVector('composite: gate-first across the DAG short-circuits before parent AND child (ROLLBACK)', compositeBundle, { author_id: 999, title: 'Ghost', body: 'never' }, TX_COMPOSITE_SCHEMA, compositeAsserts),
+  ];
+
+  // ── dialect: orderByNulls ──────────────────────────────────────────────────────────────────
   const dialect: DialectVector[] = [];
   for (const d of ALL_DIALECTS) {
     for (const dir of ['ASC', 'DESC'] as const) {
-      for (const nulls of ['FIRST', 'LAST'] as const) {
-        dialect.push(orderByNullsVector(d, dir, nulls));
-      }
+      for (const nulls of ['FIRST', 'LAST'] as const) dialect.push(orderByNullsVector(d, dir, nulls));
     }
   }
 
-  // ── guard suite: hard-limit runaway prevention (Phase E-2, epic #74; #99 reference) ─────────────
-  // Author 7 has posts (1,2) with tags (10,11 on post 1; 12 on post 2) = 3 tags total. So a
-  // findHardLimit of 1 over-caps the 2-post read, and a hasManyHardLimit of 2 over-caps the 3-tag
-  // batch. `Posts` carries no author `limit` → the find-guard applies. The expect-error vectors
-  // assert the THROW; the skip vectors (null / explicit-limit / intrinsic-LIMIT) are exec vectors
-  // that must NOT throw — the cross-language contract the ports (#100-103) reproduce.
-  const relTagsUnlimited: readonly RelationDecl[] = [
-    { name: 'author', kind: 'belongsTo', targetTable: 'users', select: ['id', 'name'], parentKey: 'author_id', targetKey: 'id' },
-    { name: 'tags', kind: 'hasMany', targetTable: 'tags', select: ['id', 'post_id', 'label'], parentKey: 'id', targetKey: 'post_id', order: 'id ASC' },
-  ];
-  const relTagsWindowed: readonly RelationDecl[] = [
-    { name: 'tags', kind: 'hasMany', targetTable: 'tags', select: ['id', 'post_id', 'label'], parentKey: 'id', targetKey: 'post_id', order: 'id ASC', limit: 1 },
-  ];
-  const relTagsOverride: readonly RelationDecl[] = [
-    { name: 'tags', kind: 'hasMany', targetTable: 'tags', select: ['id', 'post_id', 'label'], parentKey: 'id', targetKey: 'post_id', order: 'id ASC', hardLimit: 2 },
-  ];
-  const relTagsDisabled: readonly RelationDecl[] = [
-    { name: 'tags', kind: 'hasMany', targetTable: 'tags', select: ['id', 'post_id', 'label'], parentKey: 'id', targetKey: 'post_id', order: 'id ASC', hardLimit: null },
-  ];
-  const guard: Vector[] = [
-    // THROW: find cap exceeded (2 posts > cap 1) — reported count is the N+1 fetch (hardLimit+1=2).
-    findGuardVector(`find: read exceeds findHardLimit → throw (context=find)`, 1, READ_SCHEMA, { author_id: 7 }),
-    // THROW: relation batch total exceeded (3 tags > global cap 2) — reported EXACT count 3.
-    relationGuardVector(`relation: hasMany batch exceeds hasManyHardLimit → throw (exact count)`, relTagsUnlimited, 2, READ_SCHEMA, { author_id: 7 }),
-    // THROW: relation per-relation hardLimit override (2) wins over an absent/high global.
-    relationGuardVector(`relation: per-relation hardLimit override → throw`, relTagsOverride, undefined, READ_SCHEMA, { author_id: 7 }),
-    // SKIP (no throw): findHardLimit=null disables the read cap → normal rows.
-    guardSkipExec(`find: findHardLimit null → no throw (disabled)`, { findHardLimit: null }, [], undefined, { author_id: 7 }),
-    // SKIP: an explicit author limit governs (Feed's limit=20 branch), find-guard not applied.
-    guardSkipFeedExec(`find: explicit author limit → no throw (skip)`, { findHardLimit: 1 }, { author_id: 7, status: 'live', since: '2026-01-01', created_at: 'created_at' }),
-    // SKIP: per-relation hardLimit null disables the relation cap even when the global is set.
-    guardSkipExec(`relation: per-relation hardLimit null → no throw (disabled)`, { hasManyHardLimit: 1 }, relTagsDisabled, 'tags', { author_id: 7 }),
-    // SKIP: an intrinsic per-parent LIMIT window relation skips the batch-total check.
-    guardSkipExec(`relation: intrinsic per-parent LIMIT window → no throw (skip batch check)`, { hasManyHardLimit: 1 }, relTagsWindowed, 'tags', { author_id: 7 }),
-  ];
-
   return [
-    { suite: 'render', corpusVersion: CORPUS_VERSION, note: 'READ primaries + WRITE statements × 3 dialects × SKIP/IN edge cases — static makeSQL render golden (byte-true to the original builders).', vectors: render },
-    { suite: 'exec', corpusVersion: CORPUS_VERSION, note: 'Read bundles executed against seeded SQLite via the native read-graph walker: SKIP + belongsTo/hasMany relations (batched op).', vectors: exec },
+    { suite: 'exec', corpusVersion: CORPUS_VERSION, note: 'The declared endpoints executed end-to-end on SQLite + live PostgreSQL + live MySQL. Each vector pins the statements the transport handed the driver AND what came back: reads are asserted dialect-invariant (§10); writes are asserted on their changes count + resulting DB state; relation vectors carry a field-level content contract (#150).', vectors: exec },
+    { suite: 'guard', corpusVersion: CORPUS_VERSION, note: 'The find hard-limit: the emitter bakes LIMIT cap + 1 (visible in the vector statements) and the read boundary throws LimitExceededError post-fetch (assertFindHardLimit). The null-disable and explicit-LIMIT SKIP paths are exec vectors that must NOT throw.', vectors: guard },
     { suite: 'tx', corpusVersion: CORPUS_VERSION, note: 'Write-time-relations gate-first transaction bundles: commit + gate short-circuit + composite tx-DAG.', vectors: tx },
     { suite: 'dialect', corpusVersion: CORPUS_VERSION, note: 'Dialect primitive orderByNulls: PG/SQLite native NULLS, MySQL IS NULL emulation.', vectors: dialect },
-    { suite: 'guard', corpusVersion: CORPUS_VERSION, note: 'Hard-limit runaway prevention (Phase E-2, epic #74): expect-error vectors assert LimitExceededError (find N+1 / relation exact-count) with baked caps; exec skip vectors assert null-disable / explicit-limit / intrinsic-LIMIT-window do NOT throw. The cross-language contract #100-103 mirror.', vectors: guard },
   ];
 }
 
-// ── Runner: re-derive the reference and assert it equals the frozen corpus ────
+// ══════════════════════════════════════════════════════════════════════════════
+// Runner: re-derive the reference and assert it equals the frozen corpus.
+// ══════════════════════════════════════════════════════════════════════════════
 
 export interface VectorResult {
   readonly name: string;
@@ -697,50 +1072,57 @@ function eq(a: unknown, b: unknown): boolean {
 }
 
 /**
- * Re-execute ONE vector against the live TS reference and compare to its frozen expected fields.
- * This is the conformance assertion: the reference (source) must reproduce the corpus. A WS7b-e
- * language runner mirrors this against its own runtime.
+ * Re-execute ONE vector through the live pipeline and compare it to its frozen expected fields.
+ * This is the conformance assertion; a language runner mirrors it against its own runtime.
  */
-export function runVector(v: Vector): VectorResult {
-  const base = { name: v.name, suite: '' };
+export async function runVector(v: Vector): Promise<VectorResult> {
+  const base = { name: v.name, suite: v.kind === 'expect-error' ? 'guard' : v.kind };
   try {
-    if (v.kind === 'render') {
-      // Re-publish `Blog` for the dialect (the WHERE/IN form lowers per-dialect) and render the read leaf.
-      const r = renderPrimaryRead(publishBehaviors(Blog, { dialect: v.dialect }), v.entry, decodeValue(v.input) as Record<string, unknown>, v.dialect);
-      const sqlOk = r.sql === v.expectedSql;
-      const paramsOk = eq(r.params.map(encodeValue), v.expectedParams);
-      if (sqlOk && paramsOk) return { ...base, suite: 'render', ok: true };
-      const parts: string[] = [];
-      if (!sqlOk) parts.push(`sql ${JSON.stringify(r.sql)} != ${JSON.stringify(v.expectedSql)}`);
-      if (!paramsOk) parts.push(`params ${JSON.stringify(r.params.map(encodeValue))} != ${JSON.stringify(v.expectedParams)}`);
-      return { ...base, suite: 'render', ok: false, detail: parts.join('; ') };
-    }
-    if (v.kind === 'write-render') {
-      const w = writeLeafOf(publishBehaviors(PostCommands), v.entry);
-      const sqlOk = w.sql === v.expectedSql;
-      const paramsOk = eq(w.params.map(encodeValue), v.expectedParams);
-      return { ...base, suite: 'render', ok: sqlOk && paramsOk, detail: sqlOk && paramsOk ? undefined : `write-render mismatch: sql ${JSON.stringify(w.sql)} vs ${JSON.stringify(v.expectedSql)}` };
-    }
     if (v.kind === 'exec') {
-      // Re-run through the SHARED leaf executor (the SAME path the generator captured with).
-      const result = encodeValue(runBlogRead({ entry: v.entry, input: decodeValue(v.input) as Record<string, unknown>, schema: v.schema, ...(v.config !== undefined ? { config: v.config } : {}), ...(v.relations !== undefined ? { relations: v.relations } : {}), ...(v.withRelation !== undefined ? { withRelation: v.withRelation } : {}) }));
-      const ok = eq(result, v.expectedResult);
-      return { ...base, suite: v.config !== undefined ? 'guard' : 'exec', ok, detail: ok ? undefined : `result ${JSON.stringify(result)} != ${JSON.stringify(v.expectedResult)}` };
+      const seam = await seamFor(v.dialect, v.config);
+      let result: unknown;
+      let statements: EncodedStatement[] = [];
+      let dbState: { query: string; rows: EncodedValue }[] = [];
+      try {
+        const called = await seam.call(v.entry, decodeValue(v.input) as Record<string, unknown>);
+        result = called.result;
+        statements = called.statements;
+        dbState = await Promise.all((v.expectedDbState ?? []).map(async (s) => ({ query: s.query, rows: encodeValue(await seam.query(s.query)) })));
+      } finally {
+        await seam.close();
+      }
+      const problems: string[] = [];
+      if (!eq(statements, v.expectedStatements)) problems.push(`statements ${JSON.stringify(statements)} != ${JSON.stringify(v.expectedStatements)}`);
+      if (!eq(encodeValue(result), v.expectedResult)) problems.push(`result ${JSON.stringify(encodeValue(result))} != ${JSON.stringify(v.expectedResult)}`);
+      if (!eq(dbState, v.expectedDbState ?? [])) problems.push(`db state ${JSON.stringify(dbState)} != ${JSON.stringify(v.expectedDbState)}`);
+      if (v.relationFields !== undefined) problems.push(...checkRelationContent(result, v.relationFields));
+      const cap = bakedCap(await built(v.dialect, v.config), v.entry) ?? null;
+      if (cap !== v.expectedCap) problems.push(`baked find cap ${String(cap)} != ${String(v.expectedCap)}`);
+      return { ...base, ok: problems.length === 0, detail: problems.length === 0 ? undefined : problems.join('; ') };
     }
     if (v.kind === 'expect-error') {
-      // Re-apply the config + re-publish (the cap bakes at publish / read via the SHARED `runBlogRead`),
-      // run over-cap, and assert the SAME typed LimitExceededError fields. A port mirrors this: apply the
-      // config, run the model read → assert the throw.
+      const cap = bakedCap(await built(v.dialect, v.config), v.entry);
+      const seam = await seamFor(v.dialect, v.config);
       let thrown: unknown;
+      let statements: EncodedStatement[] = [];
       try {
-        runBlogRead({ entry: v.entry, input: decodeValue(v.input) as Record<string, unknown>, schema: v.schema, config: v.config, ...(v.relations !== undefined ? { relations: v.relations } : {}), ...(v.withRelation !== undefined ? { withRelation: v.withRelation } : {}) });
-      } catch (e) { thrown = e; }
-      if (!(thrown instanceof LimitExceededError)) {
-        return { ...base, suite: 'guard', ok: false, detail: `expected LimitExceededError, got ${thrown === undefined ? 'no throw' : thrown instanceof Error ? thrown.name + ': ' + thrown.message : String(thrown)}` };
+        const called = await seam.call(v.entry, decodeValue(v.input) as Record<string, unknown>);
+        statements = called.statements;
+        assertFindHardLimit(called.result as unknown[], cap, v.entry);
+      } catch (e) {
+        thrown = e;
+      } finally {
+        await seam.close();
       }
-      const got = { name: thrown.name, limit: thrown.limit, count: thrown.count, context: thrown.context, ...(thrown.model !== undefined ? { model: thrown.model } : {}), ...(thrown.relation !== undefined ? { relation: thrown.relation } : {}) };
-      const ok = eq(got, v.expectedError);
-      return { ...base, suite: 'guard', ok, detail: ok ? undefined : `error ${JSON.stringify(got)} != ${JSON.stringify(v.expectedError)}` };
+      if (!(thrown instanceof LimitExceededError)) {
+        return { ...base, ok: false, detail: `expected LimitExceededError, got ${thrown === undefined ? 'no throw' : thrown instanceof Error ? `${thrown.name}: ${thrown.message}` : String(thrown)}` };
+      }
+      const got = { name: thrown.name, limit: thrown.limit, count: thrown.count, context: thrown.context, ...(thrown.model !== undefined ? { model: thrown.model } : {}) };
+      const problems: string[] = [];
+      if (!eq(got, v.expectedError)) problems.push(`error ${JSON.stringify(got)} != ${JSON.stringify(v.expectedError)}`);
+      if (!eq(statements, v.expectedStatements)) problems.push(`statements ${JSON.stringify(statements)} != ${JSON.stringify(v.expectedStatements)}`);
+      if (cap !== v.expectedCap) problems.push(`baked find cap ${String(cap)} != ${String(v.expectedCap)}`);
+      return { ...base, ok: problems.length === 0, detail: problems.length === 0 ? undefined : problems.join('; ') };
     }
     if (v.kind === 'tx') {
       const db = seedDb(v.schema);
@@ -748,17 +1130,12 @@ export function runVector(v: Vector): VectorResult {
       const stateOk = (v.expectedDbState ?? []).every((s) => eq(encodeValue(db.prepare(s.query).all()), s.rows));
       db.close();
       const ok = eq(result, v.expectedResult) && stateOk;
-      return { ...base, suite: 'tx', ok, detail: ok ? undefined : `result ${JSON.stringify(result)} != ${JSON.stringify(v.expectedResult)} (or db-state mismatch)` };
+      return { ...base, ok, detail: ok ? undefined : `result ${JSON.stringify(result)} != ${JSON.stringify(v.expectedResult)} (or db-state mismatch)` };
     }
     const got = dialectFor(v.dialect).orderByNulls(v.args.expr, v.args.dir, v.args.nulls);
     const ok = got === v.expected;
-    return { ...base, suite: 'dialect', ok, detail: ok ? undefined : `${JSON.stringify(got)} != ${JSON.stringify(v.expected)}` };
+    return { ...base, ok, detail: ok ? undefined : `${JSON.stringify(got)} != ${JSON.stringify(v.expected)}` };
   } catch (e) {
-    return { ...base, suite: v.kind, ok: false, detail: `threw: ${e instanceof Error ? e.message : String(e)}` };
+    return { ...base, ok: false, detail: `threw: ${e instanceof Error ? e.message : String(e)}` };
   }
-}
-
-/** Run a whole suite and tally pass/fail. */
-export function runSuite(suite: Suite): VectorResult[] {
-  return suite.vectors.map(runVector);
 }
