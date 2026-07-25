@@ -116,6 +116,45 @@ describe('emitter — READ', () => {
   });
 });
 
+describe('emitter — #133 composite tuple-IN (a CONSTANT number of params, whatever the tuple count)', () => {
+  it('postgres binds ONE ARRAY PER KEY COLUMN through UNNEST (v1 bound 2×N params instead)', () => {
+    const r = emit('postgres', { tenantPostsByKeys: EMIT_ENDPOINTS.tenantPostsByKeys });
+    expect(bodyOf(r.source, 'tenantPostsByKeys')[0]).toContain(
+      '(e2e_tenant_posts.tenant_id, e2e_tenant_posts.user_id) IN (SELECT * FROM UNNEST(?::int[], ?::int[]))',
+    );
+    expect(bodyOf(r.source, 'tenantPostsByKeys')[0]).toContain('[keys_tenant_id, keys_user_id]');
+    expect(r.endpoints[0].params).toEqual([
+      { name: 'keys_tenant_id', type: 'Int[]' },
+      { name: 'keys_user_id', type: 'Int[]' },
+    ]);
+  });
+
+  it('mysql/sqlite bind ONE JSON array-of-tuples param (the builders\' own shape)', () => {
+    const my = emit('mysql', { tenantPostsByKeys: EMIT_ENDPOINTS.tenantPostsByKeys });
+    expect(bodyOf(my.source, 'tenantPostsByKeys')[0]).toContain(
+      "(e2e_tenant_posts.tenant_id, e2e_tenant_posts.user_id) IN (SELECT JSON_UNQUOTE(c0), JSON_UNQUOTE(c1) FROM JSON_TABLE(?, '$[*]' COLUMNS(c0 JSON PATH '$[0]', c1 JSON PATH '$[1]')) jt)",
+    );
+    expect(my.endpoints[0].params).toEqual([{ name: 'keys', type: 'Int[][]' }]);
+    const lite = emit('sqlite', { tenantPostsByKeys: EMIT_ENDPOINTS.tenantPostsByKeys });
+    expect(bodyOf(lite.source, 'tenantPostsByKeys')[0]).toContain(
+      "EXISTS (SELECT 1 FROM json_each(?) je WHERE json_extract(je.value, '$[0]') = e2e_tenant_posts.tenant_id AND json_extract(je.value, '$[1]') = e2e_tenant_posts.user_id)",
+    );
+  });
+
+  it('the `?` count is FIXED — it does not grow with the number of tuples', () => {
+    const r = emit('postgres', { tenantPostsByKeys: EMIT_ENDPOINTS.tenantPostsByKeys });
+    expect((bodyOf(r.source, 'tenantPostsByKeys')[0].match(/\?::int\[\]/g) ?? []).length).toBe(2);
+  });
+
+  it('a single-column tupleIn is a loud reject (use `in`)', () => {
+    expect(() =>
+      emit('postgres', {
+        bad: { kind: 'read', model: TenantUser, where: [{ kind: 'tupleIn', columns: ['tenant_id'], param: 'k' }] },
+      }),
+    ).toThrow(/needs at least two key columns/);
+  });
+});
+
 describe('emitter — SKIP / dynamic WHERE (assembled by the leaf at execution time)', () => {
   it('bakes the BOUNDED predicate statically and passes only the optional ones as fragments', () => {
     const body = bodyOf(emit('sqlite').source, 'feed');

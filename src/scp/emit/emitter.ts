@@ -57,10 +57,11 @@ import { DBExists, DBSubquery, DBParentRef, type ColumnRef, type SubqueryConditi
 import type { ConditionObject, ConditionValue } from '../../DBConditions';
 import { compileSelect, type SelectDesc } from '../makesql/compile-select';
 import { compileWhere } from '../makesql/compile';
-import { inListPredicate } from '../makesql/json-array';
-import { compileWriteNode } from '../makesql/tx';
+import { inListPredicate, tupleInPredicate } from '../makesql/json-array';
+import { compileWriteNode, pgTypeSpecimen } from '../makesql/tx';
 import { deriveReadRow } from '../makesql/outtype';
 import { sqlTypeToBcScalar, type BcScalar, type ColumnTypeResolver } from '../coltype';
+import { inferPgArrayType } from '../makesql/compile-relation';
 import { compileRelationOp, parentKeyCols, targetKeyCols, type RelationDecl, type RelationOp } from '../relation';
 import { resolveFindHardLimit } from '../limit-config';
 import {
@@ -88,6 +89,7 @@ import type {
   ReadEndpoint,
   RelationSelection,
   SubqueryPredicate,
+  TupleInPredicate,
   UpdateEndpoint,
   UpdateManyEndpoint,
   ValueBinding,
@@ -619,6 +621,10 @@ class EmitContext {
       }
       return;
     }
+    if (p.kind === 'tupleIn') {
+      params.push(...this.tupleInParams(model, p));
+      return;
+    }
     if (!isParameterised(p)) return; // IS [NOT] NULL binds nothing
     assertIdentifier(p.param, `parameter '${p.param}'`);
     const base = this.bindTypeOf(model, p.column);
@@ -671,12 +677,49 @@ class EmitContext {
         put(inListPredicate(this.spec.dialect, p.column), new ParamRef(p.param) as unknown as ConditionValue);
         continue;
       }
+      if (p.kind === 'tupleIn') {
+        // The predicate carries its own `?`s (one per array param on PG, one JSON param elsewhere), so
+        // it rides `DBConditions`' custom-operator route: the value list fills them positionally.
+        put(
+          tupleInPredicate(this.spec.dialect, tableNameOf(model), p.columns, this.pgElementTypes(model, p.columns)),
+          this.tupleInParams(model, p).map((d) => new ParamRef(d.name)) as unknown as ConditionValue,
+        );
+        continue;
+      }
       const cmp = p as ComparePredicate;
       const ref = new ParamRef(cmp.param) as unknown as ConditionValue;
       if (cmp.op === 'eq') put(cmp.column, ref);
       else put(`${cmp.column} ${SQL_OPS[cmp.op]} ?`, ref);
     }
     return out as ConditionObject;
+  }
+
+  /**
+   * The PG `UNNEST` element type of each key column, derived from the model's DECLARED column type via
+   * the SAME schema specimen the batch writes use (`pgTypeSpecimen` → `inferPgArrayType`) — never from
+   * the values, which are unknown at emit time and empty at call time often enough to matter.
+   */
+  private pgElementTypes(model: ModelClassLike, columns: readonly string[]): readonly string[] | undefined {
+    if (this.spec.dialect !== 'postgres') return undefined;
+    return columns.map((c) => inferPgArrayType([pgTypeSpecimen(this.sqlTypeOf(model, c))]));
+  }
+
+  /**
+   * A composite `tupleIn`'s parameters, in bind order — the ONE derivation both the signature and the
+   * condition value consume. PostgreSQL's `UNNEST(?::T1, ?::T2)` binds ONE ARRAY PER KEY COLUMN;
+   * MySQL / SQLite bind ONE JSON array of tuples.
+   */
+  private tupleInParams(model: ModelClassLike, p: TupleInPredicate): ParamDecl[] {
+    assertIdentifier(p.param, `parameter '${p.param}'`);
+    if (p.columns.length < 2) {
+      throw new Error(`emit: a 'tupleIn' predicate needs at least two key columns (got ${p.columns.length}) — use 'in' for a single column`);
+    }
+    if (this.spec.dialect === 'postgres') {
+      return p.columns.map((c) => ({ name: `${p.param}_${c}`, type: `${this.bindTypeOf(model, c)}[]` }));
+    }
+    const elements = [...new Set(p.columns.map((c) => this.bindTypeOf(model, c)))];
+    const element = elements.length === 1 ? elements[0] : `(${elements.join(' | ')})`;
+    return [{ name: p.param, type: `${element}[][]` }];
   }
 
   /** The subquery / EXISTS correlation terms: a parent-column ref (`parentRef` sugar) or a bound param. */

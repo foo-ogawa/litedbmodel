@@ -31,6 +31,7 @@
 import { DBConditions, type ConditionObject, type ConditionValue } from '../../DBConditions';
 import { DBToken } from '../../DBValues';
 import type { SqlCastFormatter } from '../../DBValues';
+import { PG_ARRAY_CAST_TOKEN } from './compile-relation';
 import type { Dialect } from './handler';
 
 /** Dialects that use the single-JSON-param array forms (everything except PostgreSQL). */
@@ -82,6 +83,43 @@ export function inListPredicate(dialect: Dialect, col: string): string {
   if (dialect === 'postgres') return `${col} = ANY(?)`;
   if (dialect === 'mysql') return `${col} IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt)`;
   return `${col} IN (SELECT value FROM json_each(?))`;
+}
+
+/**
+ * The STATIC composite-key membership predicate — the multi-column sibling of
+ * {@link inListPredicate}, with the SAME property: a FIXED number of `?`, independent of how many key
+ * tuples are bound.
+ *
+ *  - **PostgreSQL**: `(t.k1, t.k2) IN (SELECT * FROM UNNEST(?::<T1>, ?::<T2>))` — ONE array param PER
+ *    key column (the constant-param form; v1's `dbTupleIn` binds 2×N params instead, which is the
+ *    degradation this replaces). `UNNEST` needs its argument types, so `pgElementTypes` supplies one
+ *    per key column, derived from the SCHEMA (the declared column type). Deriving them from the VALUES
+ *    is not an option here: an EMPTY key set infers `text[]` and the statement fails
+ *    `operator does not exist: integer = text` at plan time — the same trap #46 hit on the single-key
+ *    IN-list, which could drop the cast entirely because `= ANY` infers from the column while `UNNEST`
+ *    cannot. Omitting them falls back to the deferred
+ *    {@link import('./compile-relation').PG_ARRAY_CAST_TOKEN} (resolved from the bound values).
+ *  - **MySQL / SQLite**: ONE JSON array-of-tuples param read back by ORDINAL path — MySQL a
+ *    `JSON_TABLE` IN-subquery (so it inherits `(k1,k2) IN ((?,?),…)`'s per-column coercion), SQLite an
+ *    `EXISTS` over `json_each`.
+ *
+ * This is the ONE text for composite membership: the relation batch builders
+ * ({@link import('./compile-relation').compileCompositeKeyStaticUnlimited}) consume the same function.
+ */
+export function tupleInPredicate(dialect: Dialect, table: string, columns: readonly string[], pgElementTypes?: readonly string[]): string {
+  const qualified = columns.map((k) => `${table}.${k}`);
+  if (dialect === 'postgres') {
+    const unnest = columns.map((_, i) => `?::${pgElementTypes?.[i] ?? PG_ARRAY_CAST_TOKEN}`).join(', ');
+    return `(${qualified.join(', ')}) IN (SELECT * FROM UNNEST(${unnest}))`;
+  }
+  if (dialect === 'mysql') {
+    const cols = columns.map((_, i) => `c${i}`);
+    const jtCols = cols.map((c, i) => `${c} JSON PATH '$[${i}]'`).join(', ');
+    const selectCols = cols.map((c) => `JSON_UNQUOTE(${c})`).join(', ');
+    return `(${qualified.join(', ')}) IN (SELECT ${selectCols} FROM JSON_TABLE(?, '$[*]' COLUMNS(${jtCols})) jt)`;
+  }
+  const match = columns.map((k, i) => `json_extract(je.value, '$[${i}]') = ${table}.${k}`).join(' AND ');
+  return `EXISTS (SELECT 1 FROM json_each(?) je WHERE ${match})`;
 }
 
 /**

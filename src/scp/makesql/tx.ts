@@ -535,7 +535,7 @@ function onConflictTail(dialect: MakeSQLDialect, ports: Record<string, unknown>,
  * `numeric`); the bench columns (text/int/bigint) are unambiguous. Unknown SQL types are a hard error
  * (fail-closed) via the §4.1 classifiers.
  */
-function pgTypeSpecimen(sqlType: string): unknown {
+export function pgTypeSpecimen(sqlType: string): unknown {
   const klass = sqlTypeToMaterializeClass(sqlType);
   if (klass === 'int32') return 0;
   if (klass === 'int64') return 0n;

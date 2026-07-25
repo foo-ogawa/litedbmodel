@@ -12,6 +12,7 @@ export type {
   ComparisonOp,
   ComparePredicate,
   InPredicate,
+  TupleInPredicate,
   NullPredicate,
   CorrelationTerm,
   ExistsPredicate,

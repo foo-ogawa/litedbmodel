@@ -25,6 +25,7 @@
  */
 
 import { DBConditions, type ConditionObject } from '../../DBConditions';
+import { tupleInPredicate } from './json-array';
 import type { MakeSQL } from './makesql';
 import { compileSelect } from './compile-select';
 import type { Dialect } from './handler';
@@ -158,25 +159,12 @@ export function compileCompositeKeyStaticUnlimited(
 }
 
 /**
- * The MySQL/SQLite composite-membership predicate over ONE JSON array-of-tuples param (ordinal
- * paths). MySQL: `(k1,k2) IN (SELECT c0, c1 FROM JSON_TABLE(?, '$[*]' COLUMNS(c0 JSON PATH '$[0]',
- * …)))` — an IN-subquery so it inherits the SAME per-column type coercion `(k1,k2) IN ((?,?),…)`
- * would (the single-key rationale). SQLite: `EXISTS (SELECT 1 FROM json_each(?) je WHERE
- * json_extract(je.value,'$[0]') = t.k1 AND …)` — the composite json_each form the batch UPDATE uses.
+ * The MySQL/SQLite composite-membership predicate over ONE JSON array-of-tuples param — the SAME text
+ * a declared composite `tupleIn` WHERE emits, so it lives with the other static membership predicates
+ * ({@link import('./json-array').tupleInPredicate}) and is consumed here, never re-spelled.
  */
 function compositeJsonMembership(dialect: Dialect, tableName: string, targetKeys: string[]): string {
-  if (dialect === 'mysql') {
-    const cols = targetKeys.map((_, i) => `c${i}`);
-    const jtCols = cols.map((c, i) => `${c} JSON PATH '$[${i}]'`).join(', ');
-    const selectCols = cols.map((c) => `JSON_UNQUOTE(${c})`).join(', ');
-    const keyTuple = targetKeys.map((k) => `${tableName}.${k}`).join(', ');
-    return `(${keyTuple}) IN (SELECT ${selectCols} FROM JSON_TABLE(?, '$[*]' COLUMNS(${jtCols})) jt)`;
-  }
-  // SQLite: EXISTS over json_each, matching every key column by ordinal element.
-  const match = targetKeys
-    .map((k, i) => `json_extract(je.value, '$[${i}]') = ${tableName}.${k}`)
-    .join(' AND ');
-  return `EXISTS (SELECT 1 FROM json_each(?) je WHERE ${match})`;
+  return tupleInPredicate(dialect, tableName, targetKeys);
 }
 
 // ============================================================================

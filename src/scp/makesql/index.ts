@@ -93,6 +93,7 @@ export {
   countingDriver,
   renderTxStatement,
   compileWriteNode,
+  pgTypeSpecimen,
   IN_SENTINEL,
 } from './tx';
 export type {

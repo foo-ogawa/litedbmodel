@@ -57,7 +57,10 @@ interface Blog {
   removeUser(i: { id: number }): Promise<WriteSummary[]>;
   createComments(i: { rows_post_id: number[]; rows_body: string[] }): Promise<WriteSummary[]>;
   removeComments(i: { ids: number[] }): Promise<WriteSummary[]>;
+  tenantPostsByKeys(i: { keys_tenant_id: number[]; keys_user_id: number[] }): Promise<TenantPostRow[]>;
 }
+
+interface TenantPostRow { tenant_id: number | null; user_id: number | null; title: string | null }
 
 /** The PostgreSQL-expressible endpoint set (see the emitter test for the two loud rejects). */
 const PG_ENDPOINTS: EndpointSet = Object.fromEntries(
@@ -117,6 +120,10 @@ describe('#152 end-to-end — decorated model → emitter → bc generate → li
     await pool.query("SELECT setval(pg_get_serial_sequence('e2e_comments','id'), 1000)");
     await pool.query("INSERT INTO e2e_posts VALUES (10,1,'a1'),(11,1,'a2'),(12,2,'b1')");
     await pool.query("INSERT INTO e2e_comments VALUES (100,10,'c1'),(101,10,'c2'),(102,12,'c3')");
+    // #133 composite-key fixture: two tenants share the user ids, so a per-column IN would over-match.
+    await pool.query('DROP TABLE IF EXISTS e2e_tenant_posts');
+    await pool.query('CREATE TABLE e2e_tenant_posts (tenant_id INT, user_id INT, title TEXT, PRIMARY KEY (tenant_id, user_id))');
+    await pool.query("INSERT INTO e2e_tenant_posts VALUES (1,100,'t1u100'),(1,101,'t1u101'),(2,100,'t2u100'),(2,101,'t2u101')");
 
     // 4. The ONE piece of hand-wiring: bind the library's leaf transports to the generated module.
     const generated = (await import(out)) as { bindTypedAsync: (h: ReturnType<typeof leafHandlersAsync>) => Blog };
@@ -126,7 +133,7 @@ describe('#152 end-to-end — decorated model → emitter → bc generate → li
 
   afterAll(async () => {
     if (pool !== undefined) {
-      await pool.query('DROP TABLE IF EXISTS e2e_comments; DROP TABLE IF EXISTS e2e_posts; DROP TABLE IF EXISTS e2e_users');
+      await pool.query('DROP TABLE IF EXISTS e2e_tenant_posts; DROP TABLE IF EXISTS e2e_comments; DROP TABLE IF EXISTS e2e_posts; DROP TABLE IF EXISTS e2e_users');
       await pool.end();
     }
     if (workDir !== undefined) rmSync(workDir, { recursive: true, force: true });
@@ -208,6 +215,17 @@ describe('#152 end-to-end — decorated model → emitter → bc generate → li
     expect((await pool.query('SELECT count(*)::int AS n FROM e2e_comments WHERE post_id = 11')).rows[0].n).toBe(0);
 
     expect((await blog.removeUser({ id: created[0].id as number }))[0].changes).toBe(1n);
+  });
+
+  it('#133 — a composite tuple-IN binds ONE ARRAY PER KEY COLUMN and matches by the WHOLE tuple', async () => {
+    // Two tenants share both user ids, so a pair of independent per-column IN-lists would return all
+    // four rows. The UNNEST form zips the arrays into TUPLES, so only the two requested pairs match —
+    // with a CONSTANT two params, whatever the tuple count (v1 bound 2×N).
+    expect(await blog.tenantPostsByKeys({ keys_tenant_id: [1, 2], keys_user_id: [100, 101] })).toEqual([
+      { tenant_id: 1, user_id: 100, title: 't1u100' },
+      { tenant_id: 2, user_id: 101, title: 't2u101' },
+    ]);
+    expect(await blog.tenantPostsByKeys({ keys_tenant_id: [], keys_user_id: [] })).toEqual([]);
   });
 
   it('the find hard-limit guard: `LIMIT cap+1` is baked, the read boundary throws on the overflow', () => {

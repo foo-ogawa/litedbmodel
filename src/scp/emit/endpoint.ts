@@ -51,6 +51,22 @@ export interface InPredicate {
   readonly optional?: boolean;
 }
 
+/**
+ * `(<columns>) IN <param>` — a COMPOSITE key set bound with a CONSTANT number of parameters,
+ * whatever the tuple count. The emitted text is the dialect's static composite membership form
+ * (`tupleInPredicate`): PostgreSQL `(t.k1, t.k2) IN (SELECT * FROM UNNEST(?::T1, ?::T2))`, MySQL /
+ * SQLite ONE JSON array-of-tuples param.
+ *
+ * The bind SHAPE is the dialect's, as the builder defines it: PostgreSQL takes ONE ARRAY PARAMETER
+ * PER KEY COLUMN, named `<param>_<column>`; MySQL / SQLite take the single `<param>` array of tuples.
+ * The emitter reports the parameter list it produced, so a caller never guesses.
+ */
+export interface TupleInPredicate {
+  readonly kind: 'tupleIn';
+  readonly columns: readonly string[];
+  readonly param: string;
+}
+
 /** `<column> IS [NOT] NULL` — no parameter. */
 export interface NullPredicate {
   readonly kind: 'isNull' | 'isNotNull';
@@ -88,7 +104,7 @@ export interface SubqueryPredicate {
 }
 
 /** A declared WHERE member. */
-export type Predicate = ComparePredicate | InPredicate | NullPredicate | ExistsPredicate | SubqueryPredicate;
+export type Predicate = ComparePredicate | InPredicate | TupleInPredicate | NullPredicate | ExistsPredicate | SubqueryPredicate;
 
 // ── relations (eager selection over the model's declared relations) ────────────────────────────
 

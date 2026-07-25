@@ -126,6 +126,14 @@ export const EMIT_ENDPOINTS: EndpointSet = {
     view: { query: { sql: 'SELECT id, title FROM e2e_posts WHERE author_id = ?', params: [1] } },
     order: 'id ASC',
   },
+  /** #133 — a COMPOSITE key set bound with a CONSTANT number of params (PG UNNEST). */
+  tenantPostsByKeys: {
+    kind: 'read',
+    model: TenantPost,
+    select: ['tenant_id', 'user_id', 'title'],
+    where: [{ kind: 'tupleIn', columns: ['tenant_id', 'user_id'], param: 'keys' }],
+    order: 'tenant_id ASC, user_id ASC',
+  },
   /** Composite-key relation graph (two-column key). */
   tenantUsersWithPosts: {
     kind: 'read',
