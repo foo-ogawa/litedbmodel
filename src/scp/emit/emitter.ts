@@ -333,6 +333,7 @@ class EmitContext {
       ...(endpoint.order !== undefined ? { order: endpoint.order } : {}),
       ...(limit !== undefined ? { limit } : {}),
       ...(offset !== undefined ? { offset } : {}),
+      ...(endpoint.lock === 'update' ? { forUpdate: true } : endpoint.lock === 'share' ? { forShare: true } : {}),
     } satisfies SelectDesc);
 
     const bigint = endpoint.bigint === true;

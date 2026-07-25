@@ -174,6 +174,11 @@ function byUserDesc(dialect: MakeSQLDialect, userId: number): SelectDesc {
   return { dialect, tableName: T_POSTS, select: 'id, user_id, title, view_count', conditions: { user_id: userId }, order: 'id ASC' };
 }
 
+/** #132 — the same read under a ROW LOCK (` FOR UPDATE` / ` FOR SHARE`), for the live lock legs. */
+function lockedByUserDesc(dialect: MakeSQLDialect, userId: number, lock: 'forUpdate' | 'forShare'): SelectDesc {
+  return { ...byUserDesc(dialect, userId), [lock]: true };
+}
+
 function byIdsDesc(dialect: MakeSQLDialect, ids: number[]): SelectDesc {
   return { dialect, tableName: T_POSTS, select: 'id, title', conditions: { id: ids }, order: 'id ASC' };
 }
@@ -502,6 +507,21 @@ describe('WS6 integration — Postgres: SCP-compiled SQL executes + parity with 
     for (const r of scpRows) expect(r.user_id).toBe(1);
   });
 
+  it('#132 row locks: ` FOR UPDATE` and ` FOR SHARE` both EXECUTE on real PG; rows unchanged', async () => {
+    // The locking clause is orthogonal to the row RESULT: the same read under either lock returns the
+    // unlocked rows. What is proven LIVE is that PostgreSQL PARSES + EXECUTES both tails (a wrong
+    // keyword — e.g. MySQL 5.x's `LOCK IN SHARE MODE` — errors out here).
+    const plain = await scpSelect(byUserDesc('postgres', 1), execAsync());
+    for (const [lock, tail] of [['forUpdate', 'FOR UPDATE'], ['forShare', 'FOR SHARE']] as const) {
+      const { rows, renderedSql } = await scpSelect(lockedByUserDesc('postgres', 1, lock), execAsync());
+      expect(renderedSql).toBe(
+        `SELECT id, user_id, title, view_count FROM ${T_POSTS} WHERE user_id = $1 ORDER BY id ASC ${tail}`,
+      );
+      expect(rows).toEqual(plain.rows);
+    }
+    expect(plain.rows.length).toBeGreaterThan(0);
+  });
+
   // ── #153 / #46 — the PG primary-read no-cast `= ANY($1)` IN-list, restored on the EMITTER ──────
   //
   // A declared `in` predicate lowers to the dialect's value-length-INDEPENDENT membership form
@@ -805,6 +825,21 @@ describe('WS6 integration — MySQL: SCP-compiled SQL executes + parity with v1 
     const v1Rows = await myQuery(myConn!, v1Sql, v1Params);
     expect(scpRows).toEqual(v1Rows);
     expect(scpRows.length).toBeGreaterThan(0);
+  });
+
+  it('#132 row locks: ` FOR UPDATE` and ` FOR SHARE` both EXECUTE on real MySQL; rows unchanged', async () => {
+    // MySQL 8.0 parses `FOR SHARE` (the 5.x spelling was `LOCK IN SHARE MODE`); the row RESULT is
+    // unchanged by either lock. The tail text is the SAME one PG gets — one aggregation point, no
+    // per-dialect lock branch.
+    const plain = await scpSelect(byUserDesc('mysql', 1), execAsync());
+    for (const [lock, tail] of [['forUpdate', 'FOR UPDATE'], ['forShare', 'FOR SHARE']] as const) {
+      const { rows, renderedSql } = await scpSelect(lockedByUserDesc('mysql', 1, lock), execAsync());
+      expect(renderedSql).toBe(
+        `SELECT id, user_id, title, view_count FROM ${T_POSTS} WHERE user_id = ? ORDER BY id ASC ${tail}`,
+      );
+      expect(rows).toEqual(plain.rows);
+    }
+    expect(plain.rows.length).toBeGreaterThan(0);
   });
 
   it('SELECT IN-list: single-JSON-param form (no cast token — MySQL); SCP rows == v1', async () => {

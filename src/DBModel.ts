@@ -38,6 +38,9 @@ import {
   runAsync as scpRunAsync,
   type AsyncExecutionContext,
 } from './scp/exec-context';
+// The row-lock tail SSoT (` FOR UPDATE` / ` FOR SHARE`) — shared with the SCP `compileSelect`, so the
+// imperative builder and the compiled statement render byte-identical locking clauses.
+import { lockTail } from './scp/makesql/compile-select';
 import type { Scope } from 'behavior-contracts/runtime';
 
 // Transaction context stored in AsyncLocalStorage
@@ -791,9 +794,9 @@ export abstract class DBModel {
       sql += ` OFFSET ${options.offset}`;
     }
 
-    if (options.forUpdate) {
-      sql += ' FOR UPDATE';
-    }
+    // Row lock (` FOR UPDATE` / ` FOR SHARE`) — rendered by the ONE `lockTail` aggregation point the
+    // SCP `compileSelect` also consumes, so the imperative and the compiled text cannot drift.
+    sql += lockTail(options);
 
     if (options.append) {
       sql += ` ${options.append}`;

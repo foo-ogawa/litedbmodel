@@ -118,7 +118,14 @@ export interface SelectOptions {
   group?: string;
   tableName?: string;
   append?: string;
+  /** Lock the selected rows EXCLUSIVELY (` FOR UPDATE`). Mutually exclusive with {@link forShare}. */
   forUpdate?: boolean;
+  /**
+   * Lock the selected rows for SHARE (` FOR SHARE`): concurrent readers may take the same shared
+   * lock, writers block until this transaction ends. The read-side twin of {@link forUpdate} (and
+   * mutually exclusive with it). PostgreSQL / MySQL only — SQLite parses no locking clause.
+   */
+  forShare?: boolean;
   /**
    * JOIN clause to add to the query.
    * Can include parameters using ? placeholders.

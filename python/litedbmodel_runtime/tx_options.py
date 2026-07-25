@@ -149,7 +149,14 @@ class TransactionOptions:
     5 ports mirror, and it defaults retry ON with a 200 ms base.
     """
 
-    __slots__ = ("isolation", "retry_on_error", "retry_limit", "retry_duration", "rollback_only")
+    __slots__ = (
+        "isolation",
+        "retry_on_error",
+        "retry_limit",
+        "retry_duration",
+        "rollback_only",
+        "use_writer_after_transaction",
+    )
 
     def __init__(
         self,
@@ -158,6 +165,7 @@ class TransactionOptions:
         retry_limit: int = 3,
         retry_duration: int = 200,
         rollback_only: bool = False,
+        use_writer_after_transaction: bool = True,
     ) -> None:
         #: Per-transaction isolation level. Issued via :func:`isolation_prelude` on the tx-owned
         #: connection (PG: post-BEGIN SET; MySQL: a preceding SET). ``None`` ⇒ the engine default.
@@ -173,6 +181,15 @@ class TransactionOptions:
         #: runs and its result is returned, but NO change is committed. A body error still ROLLBACKs +
         #: re-raises as usual. Default False.
         self.rollback_only = rollback_only
+        #: Override the GLOBAL writer-after-transaction setting FOR THIS TRANSACTION (mirror the TS
+        #: ``TransactionOptions.useWriterAfterTransaction``; v1 parity — ``DBModel.transaction`` :3103).
+        #: ``False`` ⇒ this transaction's COMMIT does NOT arm writer-stickiness, so the reads that
+        #: follow go straight back to the reader pool instead of being pinned to the writer for
+        #: ``writer_sticky_duration``. ``True`` (default) ⇒ the GLOBAL setting decides, exactly as
+        #: before: the arming call lands on the ctx's ``WriterStickyClock``, itself disabled when the
+        #: deployment configured sticky off — so a per-tx ``True`` cannot force stickiness ON against a
+        #: global ``False`` (mirror v1 ``_shouldUseWriterSticky`` :487).
+        self.use_writer_after_transaction = use_writer_after_transaction
 
 
 # ── Retryable-error classification (per dialect) ──────────────────────────────

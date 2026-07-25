@@ -166,6 +166,25 @@ type TransactionOptions struct {
 	// preview): the body runs and its result is returned, but NO change is committed. A body error
 	// still ROLLBACKs + re-raises as usual. Default false.
 	RollbackOnly bool
+	// UseWriterAfterTransaction overrides the GLOBAL writer-after-transaction setting FOR THIS
+	// TRANSACTION (mirror the TS `TransactionOptions.useWriterAfterTransaction`; v1 parity —
+	// `DBModel.transaction` :3103). A pointer so "unset ⇒ the default" is expressible on a
+	// struct-literal options value, exactly like [StickyOptions.UseWriterAfterTransaction].
+	//
+	// Pointing at false means this transaction's COMMIT does NOT arm writer-stickiness: the reads that
+	// follow go straight back to the reader pool instead of being pinned to the writer for
+	// WriterStickyDuration. Use it for a transaction whose writes nobody reads back.
+	//
+	// nil / true ⇒ the GLOBAL setting decides, exactly as before: the arming call lands on the ctx's
+	// [WriterStickyClock], which is itself disabled when the deployment configured sticky off. So a
+	// per-tx true cannot switch stickiness ON against a global false (mirror v1 `_shouldUseWriterSticky`).
+	UseWriterAfterTransaction *bool
+}
+
+// useWriterAfterTx resolves [TransactionOptions.UseWriterAfterTransaction] (nil ⇒ true) — the ONE
+// place the "unset ⇒ default" rule for this option lives.
+func (o TransactionOptions) useWriterAfterTx() bool {
+	return o.UseWriterAfterTransaction == nil || *o.UseWriterAfterTransaction
 }
 
 // DefaultTransactionOptions returns the Phase B defaults (mirror TS `resolveTxOptions` / rust

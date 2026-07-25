@@ -250,6 +250,29 @@ def test_c1_writer_sticky_after_commit():
         execute(ctx, "SELECT 1", [], StatementIntent(write=False))
         assert log[-1] == "reader"
 
+        # #134 — PER-TRANSACTION opt-out on the SAME globally-sticky ctx: this commit does NOT arm the
+        # clock, so the immediately-following read still goes to the READER. The very next tx, with the
+        # option left at its default, DOES arm it — proving the suppression is per-tx, not a teardown.
+        transaction(
+            ctx,
+            lambda: run_guarded(ctx, "INSERT INTO %s (id, val) VALUES ($1,$2) ON CONFLICT (id) DO NOTHING" % TBL, [4, "d"], "INSERT"),
+            TransactionOptions(use_writer_after_transaction=False),
+            "postgres",
+        )
+        clock["t"] += 100
+        execute(ctx, "SELECT 1", [], StatementIntent(write=False))
+        assert log[-1] == "reader"  # per-tx opt-out ⇒ sticky NOT armed
+        transaction(
+            ctx,
+            lambda: run_guarded(ctx, "INSERT INTO %s (id, val) VALUES ($1,$2) ON CONFLICT (id) DO NOTHING" % TBL, [5, "e"], "INSERT"),
+            TransactionOptions(),
+            "postgres",
+        )
+        clock["t"] += 100
+        execute(ctx, "SELECT 1", [], StatementIntent(write=False))
+        assert log[-1] == "writer"  # the default still arms stickiness on the SAME ctx
+        clock["t"] += 6000  # let the window elapse again
+
         # MUTATION (RED): sticky OFF → the in-window post-commit read lands on the READER.
         mlog = []
         mclock = {"t": 2_000_000}

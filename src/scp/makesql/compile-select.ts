@@ -3,14 +3,15 @@
  * `DBModel._buildSelectSQL` text byte-for-byte (the internal builder `find()` uses):
  *
  *   [WITH <cte> AS (…) ]SELECT <cols> FROM <t>[ <join>][ WHERE <cond>]
- *     [ GROUP BY <group>][ ORDER BY <order>][ LIMIT <n>][ OFFSET <n>][ FOR UPDATE][ <append>]
+ *     [ GROUP BY <group>][ ORDER BY <order>][ LIMIT <n>][ OFFSET <n>][ <row lock>][ <append>]
  *
  * A STATIC LIMIT/OFFSET is an INLINE literal (`LIMIT 10`), NOT a parameter — the original
  * inlines it (`sql += \` LIMIT ${options.limit}\``); reproduced here byte-for-byte. A page
  * whose POSITION is a runtime value binds instead ({@link BoundCount} → `LIMIT ?`), which is
- * the same `{sql, params}` bundle with one more `?`. FOR UPDATE / GROUP BY / raw `append`
- * tail are the original's exact text. HAVING is carried through `append` (v1 core has no
- * dedicated HAVING; the .rs-only HAVING is not the PG anchor).
+ * the same `{sql, params}` bundle with one more `?`. The row-lock tail ({@link lockTail} —
+ * ` FOR UPDATE` / ` FOR SHARE`), GROUP BY and the raw `append` tail are the original's exact
+ * text. HAVING is carried through `append` (v1 core has no dedicated HAVING; the .rs-only
+ * HAVING is not the PG anchor).
  *
  * Param order matches the original exactly: CTE params → JOIN params → WHERE params, then
  * the tail's own bound counts (LIMIT then OFFSET) — the order their `?`s occupy in the text.
@@ -41,8 +42,41 @@ function isBoundCount(c: number | BoundCount): c is BoundCount {
   return typeof c === 'object' && c !== null && 'bind' in c;
 }
 
+/** The row-lock request a SELECT carries: an EXCLUSIVE (`FOR UPDATE`) or a SHARED (`FOR SHARE`) lock. */
+export interface RowLockOptions {
+  /** Lock the selected rows EXCLUSIVELY — no other tx may read-for-update or write them. */
+  forUpdate?: boolean;
+  /** Lock the selected rows for SHARE — concurrent readers may share the lock, writers block. */
+  forShare?: boolean;
+}
+
+/**
+ * The row-lock tail (` FOR UPDATE` / ` FOR SHARE`, or `''`) — the SINGLE aggregation point both the
+ * v1 imperative builder (`DBModel._buildSelectSQL`) and {@link compileSelect} render their locking
+ * clause from, so the two texts cannot drift.
+ *
+ * The two modes are MUTUALLY EXCLUSIVE: SQL has no "lock the same rows both exclusively and shared"
+ * form, so requesting both is a hard error rather than a silent precedence (fail-closed — a caller
+ * that asked for a share lock must never silently get an exclusive one, or vice versa).
+ *
+ * SQLite parses NEITHER clause (they are the PG / MySQL locking clauses; SQLite serializes writers
+ * at the connection level instead), so a locking read is a PG / MySQL feature — the same split the
+ * ` FOR UPDATE` tail has always had, and the reason the SQLite conformance twin omits it.
+ */
+export function lockTail(opts: RowLockOptions): string {
+  if (opts.forUpdate && opts.forShare) {
+    throw new Error(
+      `scp select: 'forUpdate' and 'forShare' are mutually exclusive row locks — a SELECT locks its ` +
+        `rows either EXCLUSIVELY (FOR UPDATE) or SHARED (FOR SHARE), never both. Pick one.`,
+    );
+  }
+  if (opts.forUpdate) return ' FOR UPDATE';
+  if (opts.forShare) return ' FOR SHARE';
+  return '';
+}
+
 /** SELECT descriptor — mirrors the fields `_buildSelectSQL` reads from `SelectOptions`. */
-export interface SelectDesc {
+export interface SelectDesc extends RowLockOptions {
   dialect: Dialect;
   tableName: string;
   /** SELECT column list (an explicit `options.select`). Empty/absent → falls back to {@link selectColumn}. */
@@ -62,7 +96,6 @@ export interface SelectDesc {
   order?: OrderSpec | string;
   limit?: number | BoundCount;
   offset?: number | BoundCount;
-  forUpdate?: boolean;
   append?: string;
 }
 
@@ -102,7 +135,7 @@ export function compileSelect(desc: SelectDesc): MakeSQL {
   };
   if (desc.limit !== undefined) sql += ` LIMIT ${count(desc.limit)}`;
   if (desc.offset !== undefined) sql += ` OFFSET ${count(desc.offset)}`;
-  if (desc.forUpdate) sql += ' FOR UPDATE';
+  sql += lockTail(desc);
   if (desc.append) sql += ` ${desc.append}`;
 
   return { sql, params };

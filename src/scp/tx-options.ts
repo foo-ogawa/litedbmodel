@@ -110,6 +110,23 @@ export interface TransactionOptions {
    * usual. @default false
    */
   readonly rollbackOnly?: boolean;
+  /**
+   * Override the GLOBAL writer-after-transaction setting FOR THIS TRANSACTION (v1 parity —
+   * `TransactionOptions.useWriterAfterTransaction`, honored at `DBModel.transaction` :3103).
+   *
+   * `false` means this transaction's COMMIT does NOT arm writer-stickiness: the reads that follow it
+   * go back to the reader pool immediately instead of being pinned to the writer for
+   * `writerStickyDuration`. Use it for a transaction whose writes nobody needs to read back (a
+   * bookkeeping / audit / fire-and-forget write), so it does not cost every following read its
+   * replica.
+   *
+   * Omitted (or `true`) ⇒ the GLOBAL setting decides, exactly as before: the arming call lands on the
+   * ctx's {@link import('./connection-routing').WriterStickyClock}, which is itself disabled when the
+   * deployment configured `useWriterAfterTransaction: false`. This mirrors v1, where a per-tx `true`
+   * likewise cannot switch stickiness ON against a global `false` (`_shouldUseWriterSticky` :487
+   * re-checks the global). @default true
+   */
+  readonly useWriterAfterTransaction?: boolean;
 }
 
 /** The resolved (defaults-applied) options the tx runtime uses — no `undefined` holes. */
@@ -119,6 +136,7 @@ export interface ResolvedTxOptions {
   readonly retryLimit: number;
   readonly retryDuration: number;
   readonly rollbackOnly: boolean;
+  readonly useWriterAfterTransaction: boolean;
 }
 
 /** Apply the Phase B defaults (v1-parity: retryOnError=true, retryLimit=3, retryDuration=200). */
@@ -129,6 +147,7 @@ export function resolveTxOptions(opts: TransactionOptions = {}): ResolvedTxOptio
     retryLimit: opts.retryLimit ?? 3,
     retryDuration: opts.retryDuration ?? 200,
     rollbackOnly: opts.rollbackOnly ?? false,
+    useWriterAfterTransaction: opts.useWriterAfterTransaction ?? true,
   };
 }
 

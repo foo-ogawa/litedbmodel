@@ -1131,8 +1131,10 @@ function routedTransaction(
     );
 
     $result = transaction($txCtx, $fn, $opts, $dialectName);
-    // C1 writer-sticky: a COMMITTED tx arms the sticky clock (a rollbackOnly dry-run committed nothing).
-    if (!$opts->rollbackOnly) {
+    // C1 writer-sticky: a COMMITTED tx arms the sticky clock (a rollbackOnly dry-run committed nothing),
+    // unless this tx opted out per-transaction (#134 — `useWriterAfterTransaction: false`). The GLOBAL
+    // setting still wins the other way: mark() is a no-op on a clock the deployment disabled.
+    if (!$opts->rollbackOnly && $opts->useWriterAfterTransaction) {
         $ctx->routing()->sticky->mark();
     }
     return $result;

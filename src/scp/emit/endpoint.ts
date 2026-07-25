@@ -157,6 +157,16 @@ export interface ReadEndpoint {
   readonly limit?: PageBound;
   /** A static start offset (inlined), or `{ param }` for a bound one — see {@link PageBound}. */
   readonly offset?: PageBound;
+  /**
+   * Take a ROW LOCK on the selected rows (the SELECT's locking clause): `'update'` ⇒ ` FOR UPDATE`
+   * (exclusive — the read-modify-write pattern), `'share'` ⇒ ` FOR SHARE` (shared — concurrent
+   * readers coexist, writers block). Rendered by the ONE {@link import('../makesql/compile-select').lockTail}
+   * tail the v1 imperative builder also uses, so the declared read and an ad-hoc one lock identically.
+   *
+   * A locking read only has meaning inside a transaction, and only PostgreSQL / MySQL parse the
+   * clause — SQLite has no per-statement row lock (it serializes writers on the connection).
+   */
+  readonly lock?: 'update' | 'share';
   /** Eagerly-selected relations (batched, N+1-free). */
   readonly with?: readonly RelationSelection[];
   /** #98 — read from a derived CTE (a QUERY view-model) instead of the base table. */

@@ -283,6 +283,26 @@ describe('emitter — WRITES', () => {
   });
 });
 
+describe('emitter — #132 row locks (a declared read may take FOR UPDATE / FOR SHARE)', () => {
+  it('`lock: share` bakes the ` FOR SHARE` tail into the emitted statement, on every dialect', () => {
+    for (const dialect of ['postgres', 'sqlite', 'mysql'] as const) {
+      const r = emit(dialect, { lockedPosts: EMIT_ENDPOINTS.lockedPosts });
+      expect(bodyOf(r.source, 'lockedPosts')[0]).toContain(
+        'Db.executeSQL("SELECT id, title FROM e2e_posts WHERE author_id = ? ORDER BY id ASC FOR SHARE", [authorId]',
+      );
+    }
+  });
+
+  it('`lock: update` bakes ` FOR UPDATE` — the SAME tail, and NO lock ⇒ no tail at all', () => {
+    const shared: EndpointSet = { lockedPosts: EMIT_ENDPOINTS.lockedPosts };
+    const exclusive: EndpointSet = { lockedPosts: { ...EMIT_ENDPOINTS.lockedPosts, lock: 'update' } as EndpointSet['lockedPosts'] };
+    const unlocked: EndpointSet = { lockedPosts: { ...EMIT_ENDPOINTS.lockedPosts, lock: undefined } as EndpointSet['lockedPosts'] };
+    expect(bodyOf(emit('postgres', exclusive).source, 'lockedPosts')[0]).toContain('ORDER BY id ASC FOR UPDATE"');
+    expect(bodyOf(emit('postgres', shared).source, 'lockedPosts')[0]).toContain('ORDER BY id ASC FOR SHARE"');
+    expect(bodyOf(emit('postgres', unlocked).source, 'lockedPosts')[0]).toContain('ORDER BY id ASC"');
+  });
+});
+
 describe('emitter — #161 paging (a page position may be an INPUT)', () => {
   /** A page whose position is declared STATIC — the count is a literal, on every dialect. */
   const staticPage: EndpointSet = {

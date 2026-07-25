@@ -392,7 +392,7 @@ def test_red_tx_control_direct_on_conn_is_not_observed():
     ctx = context_for_driver(driver)
     seen = []
 
-    def bypass(ctx, body, before=(), after=()):
+    def bypass(ctx, body, before=(), after=(), use_writer_after_transaction=True):
         tx = ctx.begin_tx()
         tx_ctx = ctx.with_connection(ec._TxConnectionAdapter(tx), True)
 

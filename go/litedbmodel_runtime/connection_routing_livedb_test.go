@@ -213,6 +213,37 @@ func TestPhaseCRoutingWriterStickyLive(t *testing.T) {
 		t.Fatalf("after-window read = %v, want reader", log[len(log)-1])
 	}
 
+	// #134 — PER-TRANSACTION opt-out on the SAME globally-sticky ctx: UseWriterAfterTransaction=false
+	// ⇒ this commit does NOT arm the clock, so the immediately-following read still goes to the READER.
+	// The very next tx, with the option left unset, DOES arm it — proving the suppression is per-tx.
+	optOut := DefaultTransactionOptions()
+	optOut.UseWriterAfterTransaction = boolPtr(false)
+	_, err = Transaction(ctx, db, "postgres", optOut, func(txCtx *ExecutionContext) (int, error) {
+		_, e := RunGuarded(txCtx, fmt.Sprintf("INSERT INTO %s (id, val) VALUES ($1,$2) ON CONFLICT (id) DO NOTHING", tbl), []any{int64(4), "d"}, "INSERT", "M")
+		return 0, e
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock += 100
+	_, _ = Execute(ctx, "SELECT 1", nil, StatementIntent{Write: false})
+	if log[len(log)-1] != "reader" {
+		t.Fatalf("per-tx UseWriterAfterTransaction=false: in-window read = %v, want reader (sticky NOT armed)", log[len(log)-1])
+	}
+	_, err = Transaction(ctx, db, "postgres", DefaultTransactionOptions(), func(txCtx *ExecutionContext) (int, error) {
+		_, e := RunGuarded(txCtx, fmt.Sprintf("INSERT INTO %s (id, val) VALUES ($1,$2) ON CONFLICT (id) DO NOTHING", tbl), []any{int64(5), "e"}, "INSERT", "M")
+		return 0, e
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock += 100
+	_, _ = Execute(ctx, "SELECT 1", nil, StatementIntent{Write: false})
+	if log[len(log)-1] != "writer" {
+		t.Fatalf("unset option: in-window read = %v, want writer (sticky armed on the SAME ctx)", log[len(log)-1])
+	}
+	clock += 6000 // let the window elapse again
+
 	// MUTATION (RED) — PRODUCTION PATH: disable writer-sticky; the SAME commit-then-read now lands the
 	// in-window read on the READER (no read-your-writes).
 	var mlog []string
