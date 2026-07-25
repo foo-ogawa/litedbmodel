@@ -42,3 +42,46 @@ def test_shared_check_core_is_context_parametric():
     e = ei.value
     assert e.context == "relation" and e.count == 7 and e.relation == "posts"
     assert "relation 'posts' on benchmark_posts returned 7 records" in str(e)  # relation reports EXACT count
+
+
+def test_relation_guard_trips_on_the_raw_child_rows():
+    """The RELATION runaway guard (#160) inside the ``executeSQL`` leaf, over a real sqlite.
+
+    The python leg of "the same behaviour in all five languages" — the twin of the rust
+    ``relation_guard_trips_on_the_raw_child_rows``, the go ``TestExecuteSQL_RelationGuardOnRawChildRows``
+    and the TS conformance guard vectors. Over the cap ⇒ the transport RAISES with the relation-context
+    fields and the EXACT batch count, before the rows are handed on; within the cap ⇒ the rows come back;
+    NO ``guard`` port ⇒ never checked (the byte-unchanged uncapped path).
+    """
+    import sqlite3
+
+    from litedbmodel_runtime.driver import SqliteDriver
+    from litedbmodel_runtime.leaves import make_handlers
+
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)")
+    conn.executemany("INSERT INTO t (id, v) VALUES (?, ?)", [(1, "a"), (2, "b"), (3, "c")])
+    execute_sql = make_handlers(SqliteDriver(conn), "sqlite")["executeSQL"]
+    ctx = {"nodeId": "n0", "component": "executeSQL"}
+
+    def read(guard):
+        ports = {"sql": "SELECT id, v FROM t ORDER BY id", "params": [], "write": False,
+                 "returning": False, "bigint": False}
+        if guard is not None:
+            ports["guard"] = guard
+        return execute_sql(ports, ctx)
+
+    cap = lambda limit: {"limit": limit, "model": "t", "relation": "things"}  # noqa: E731
+
+    # 3 rows > cap 2 ⇒ raises before the rows are handed on (an `{"error": …}` outcome would NOT do:
+    # a runaway is a typed litedbmodel policy error, not a mapped transport failure).
+    with pytest.raises(LimitExceededError) as ei:
+        read(cap(2))
+    e = ei.value
+    assert e.limit == 2 and e.count == 3 and e.context == "relation"
+    assert e.model == "t" and e.relation == "things"
+    assert "relation 'things' on t returned 3 records, but limit is 2" in str(e)
+
+    # 3 rows <= cap 3 ⇒ the rows come back untouched; no guard port at all ⇒ never checked.
+    assert len(read(cap(3))["ok"]) == 3
+    assert len(read(None)["ok"]) == 3

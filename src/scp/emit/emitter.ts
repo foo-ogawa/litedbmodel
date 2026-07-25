@@ -24,6 +24,7 @@
  *  | static IN-list membership    | `makesql/json-array.inListPredicate` (PG `= ANY(?)`, #46)        |
  *  | write SQL + param order      | `makesql/tx.compileWriteNode` (INSERT/UPDATE/DELETE + batch)     |
  *  | relation batch SQL + keys    | `relation.compileRelationOp` (+ `parentKeyCols`/`targetKeyCols`) |
+ *  | relation hard-limit guard    | `relation.relationGuard` (the compiled op's resolved cap)         |
  *  | row types                    | `makesql/outtype.deriveReadRow` over the model's `@column` SoT   |
  *  | column SQL types             | `decorator-adapter.deriveModelColumns` / `modelColumnResolver`   |
  *  | relation declarations        | `decorator-adapter.relationDeclOf`                               |
@@ -62,7 +63,7 @@ import { compileWriteNode, pgTypeSpecimen } from '../makesql/tx';
 import { deriveReadRow } from '../makesql/outtype';
 import { sqlTypeToBcScalar, type BcScalar, type ColumnTypeResolver } from '../coltype';
 import { inferPgArrayType } from '../makesql/compile-relation';
-import { compileRelationOp, parentKeyCols, targetKeyCols, type RelationDecl, type RelationOp } from '../relation';
+import { compileRelationOp, parentKeyCols, relationGuard, targetKeyCols, type RelationDecl, type RelationOp } from '../relation';
 import { resolveFindHardLimit } from '../limit-config';
 import {
   deriveModelColumns,
@@ -408,7 +409,14 @@ class EmitContext {
       const keysVar = fresh(`${sel.name}Keys`);
       lines.push(`const ${keysVar}: WireValue[] = Db.pluck(${acc}, ${jsonArray(parentKeyCols(op))});`);
       const childVar = fresh(sel.name);
-      lines.push(`const ${childVar}: WireValue[] = Db.executeSQL(${quote(op.sql)}, [${keysVar}], false, false, ${bigint});`);
+      // The runaway guard the compiled op resolved (`hasManyHardLimit` / the per-relation override):
+      // baked onto the child fetch so the `executeSQL` transport asserts the RAW child row count —
+      // the only point they are visible, since `group` receives an already-nested graph. A relation
+      // batch never carries a dynamic WHERE (its SQL is fully static), so the `whereDynamic` slot is
+      // an honest `null`. Uncapped ⇒ the ports stop at `bigint` and the call is byte-unchanged.
+      const guard = relationGuard(op);
+      const guardPorts = guard !== null ? `, null, ${JSON.stringify(guard)}` : '';
+      lines.push(`const ${childVar}: WireValue[] = Db.executeSQL(${quote(op.sql)}, [${keysVar}], false, false, ${bigint}${guardPorts});`);
       let childRows = childVar;
       let childObj = objOf(
         deriveReadRow(decl.targetTable, decl.select, this.resolver(targetModel), `${at} relation '${sel.name}'`).outType,

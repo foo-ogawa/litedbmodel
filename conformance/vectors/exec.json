@@ -2547,6 +2547,404 @@
         }
       ],
       "expectedCap": null
+    },
+    {
+      "name": "guard: a per-relation hardLimit null disables the check → no throw [sqlite]",
+      "kind": "exec",
+      "dialect": "sqlite",
+      "entry": "usersWithUncappedPosts",
+      "input": {},
+      "case": "guard: a per-relation hardLimit null disables the check → no throw",
+      "config": {
+        "hasManyHardLimit": 1
+      },
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, name FROM conf_users ORDER BY id ASC",
+          "params": []
+        },
+        {
+          "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE author_id IN (SELECT value FROM json_each(?)) ORDER BY id ASC",
+          "params": [
+            "[1,2,3]"
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "id": 1,
+          "name": "Ada",
+          "uncappedPosts": [
+            {
+              "author_id": 1,
+              "created_at": "2026-02-01",
+              "id": 10,
+              "status": "live",
+              "title": "a1"
+            },
+            {
+              "author_id": 1,
+              "created_at": "2026-03-01",
+              "id": 11,
+              "status": "draft",
+              "title": "a2"
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "name": "Bob",
+          "uncappedPosts": [
+            {
+              "author_id": 2,
+              "created_at": "2026-01-15",
+              "id": 12,
+              "status": "live",
+              "title": "b1"
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "name": "Cy",
+          "uncappedPosts": []
+        }
+      ],
+      "relationFields": {
+        "uncappedPosts": [
+          "id",
+          "author_id",
+          "title",
+          "status",
+          "created_at"
+        ]
+      },
+      "expectedCap": null
+    },
+    {
+      "name": "guard: a per-relation hardLimit null disables the check → no throw [postgres]",
+      "kind": "exec",
+      "dialect": "postgres",
+      "entry": "usersWithUncappedPosts",
+      "input": {},
+      "case": "guard: a per-relation hardLimit null disables the check → no throw",
+      "config": {
+        "hasManyHardLimit": 1
+      },
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, name FROM conf_users ORDER BY id ASC",
+          "params": []
+        },
+        {
+          "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE conf_posts.author_id = ANY($1::int[]) ORDER BY id ASC",
+          "params": [
+            [
+              1,
+              2,
+              3
+            ]
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "id": 1,
+          "name": "Ada",
+          "uncappedPosts": [
+            {
+              "author_id": 1,
+              "created_at": "2026-02-01",
+              "id": 10,
+              "status": "live",
+              "title": "a1"
+            },
+            {
+              "author_id": 1,
+              "created_at": "2026-03-01",
+              "id": 11,
+              "status": "draft",
+              "title": "a2"
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "name": "Bob",
+          "uncappedPosts": [
+            {
+              "author_id": 2,
+              "created_at": "2026-01-15",
+              "id": 12,
+              "status": "live",
+              "title": "b1"
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "name": "Cy",
+          "uncappedPosts": []
+        }
+      ],
+      "relationFields": {
+        "uncappedPosts": [
+          "id",
+          "author_id",
+          "title",
+          "status",
+          "created_at"
+        ]
+      },
+      "expectedCap": null
+    },
+    {
+      "name": "guard: a per-relation hardLimit null disables the check → no throw [mysql]",
+      "kind": "exec",
+      "dialect": "mysql",
+      "entry": "usersWithUncappedPosts",
+      "input": {},
+      "case": "guard: a per-relation hardLimit null disables the check → no throw",
+      "config": {
+        "hasManyHardLimit": 1
+      },
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, name FROM conf_users ORDER BY id ASC",
+          "params": []
+        },
+        {
+          "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE author_id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) ORDER BY id ASC",
+          "params": [
+            "[1,2,3]"
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "id": 1,
+          "name": "Ada",
+          "uncappedPosts": [
+            {
+              "author_id": 1,
+              "created_at": "2026-02-01",
+              "id": 10,
+              "status": "live",
+              "title": "a1"
+            },
+            {
+              "author_id": 1,
+              "created_at": "2026-03-01",
+              "id": 11,
+              "status": "draft",
+              "title": "a2"
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "name": "Bob",
+          "uncappedPosts": [
+            {
+              "author_id": 2,
+              "created_at": "2026-01-15",
+              "id": 12,
+              "status": "live",
+              "title": "b1"
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "name": "Cy",
+          "uncappedPosts": []
+        }
+      ],
+      "relationFields": {
+        "uncappedPosts": [
+          "id",
+          "author_id",
+          "title",
+          "status",
+          "created_at"
+        ]
+      },
+      "expectedCap": null
+    },
+    {
+      "name": "guard: an intrinsic per-parent LIMIT window skips the batch check → no throw [sqlite]",
+      "kind": "exec",
+      "dialect": "sqlite",
+      "entry": "usersWithTopPosts",
+      "input": {},
+      "case": "guard: an intrinsic per-parent LIMIT window skips the batch check → no throw",
+      "config": {
+        "hasManyHardLimit": 1
+      },
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, name FROM conf_users ORDER BY id ASC",
+          "params": []
+        },
+        {
+          "sql": "WITH ranked AS (SELECT *, ROW_NUMBER() OVER (PARTITION BY author_id ORDER BY id ASC) AS _rn FROM conf_posts WHERE author_id IN (SELECT value FROM json_each(?))) SELECT * FROM ranked WHERE _rn <= 1",
+          "params": [
+            "[1,2,3]"
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "id": 1,
+          "name": "Ada",
+          "topPosts": [
+            {
+              "author_id": 1,
+              "created_at": "2026-02-01",
+              "id": 10,
+              "status": "live",
+              "title": "a1"
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "name": "Bob",
+          "topPosts": [
+            {
+              "author_id": 2,
+              "created_at": "2026-01-15",
+              "id": 12,
+              "status": "live",
+              "title": "b1"
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "name": "Cy",
+          "topPosts": []
+        }
+      ],
+      "expectedCap": null
+    },
+    {
+      "name": "guard: an intrinsic per-parent LIMIT window skips the batch check → no throw [postgres]",
+      "kind": "exec",
+      "dialect": "postgres",
+      "entry": "usersWithTopPosts",
+      "input": {},
+      "case": "guard: an intrinsic per-parent LIMIT window skips the batch check → no throw",
+      "config": {
+        "hasManyHardLimit": 1
+      },
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, name FROM conf_users ORDER BY id ASC",
+          "params": []
+        },
+        {
+          "sql": "SELECT conf_posts.* FROM unnest($1::int[]) AS _keys(key) CROSS JOIN LATERAL (SELECT * FROM conf_posts WHERE conf_posts.author_id = _keys.key ORDER BY id ASC LIMIT 1) conf_posts",
+          "params": [
+            [
+              1,
+              2,
+              3
+            ]
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "id": 1,
+          "name": "Ada",
+          "topPosts": [
+            {
+              "author_id": 1,
+              "created_at": "2026-02-01",
+              "id": 10,
+              "status": "live",
+              "title": "a1"
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "name": "Bob",
+          "topPosts": [
+            {
+              "author_id": 2,
+              "created_at": "2026-01-15",
+              "id": 12,
+              "status": "live",
+              "title": "b1"
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "name": "Cy",
+          "topPosts": []
+        }
+      ],
+      "expectedCap": null
+    },
+    {
+      "name": "guard: an intrinsic per-parent LIMIT window skips the batch check → no throw [mysql]",
+      "kind": "exec",
+      "dialect": "mysql",
+      "entry": "usersWithTopPosts",
+      "input": {},
+      "case": "guard: an intrinsic per-parent LIMIT window skips the batch check → no throw",
+      "config": {
+        "hasManyHardLimit": 1
+      },
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, name FROM conf_users ORDER BY id ASC",
+          "params": []
+        },
+        {
+          "sql": "WITH ranked AS (SELECT *, ROW_NUMBER() OVER (PARTITION BY author_id ORDER BY id ASC) AS _rn FROM conf_posts WHERE author_id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt)) SELECT * FROM ranked WHERE _rn <= 1",
+          "params": [
+            "[1,2,3]"
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "id": 1,
+          "name": "Ada",
+          "topPosts": [
+            {
+              "author_id": 1,
+              "created_at": "2026-02-01",
+              "id": 10,
+              "status": "live",
+              "title": "a1"
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "name": "Bob",
+          "topPosts": [
+            {
+              "author_id": 2,
+              "created_at": "2026-01-15",
+              "id": 12,
+              "status": "live",
+              "title": "b1"
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "name": "Cy",
+          "topPosts": []
+        }
+      ],
+      "expectedCap": null
     }
   ]
 }

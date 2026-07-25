@@ -12,8 +12,11 @@ typed-native runners call positionally (``rust/litedbmodel_runtime/src/leaves.rs
     param — a relation key set from ``pluck`` or a batch record set — rides per dialect: sqlite/mysql
     JSON-encode it for ``json_each``/``JSON_TABLE``, postgres binds the array as-is), and run it through
     the runtime's central execute/run seam (:func:`exec_context.execute` / :func:`exec_context.run`) on
-    the bound driver — the ONLY driver contact. A non-returning write returns a one-row
-    ``[{changes, lastInsertRowid}]`` summary so the leaf output shape is uniform (a list of rows).
+    the bound driver — the ONLY driver contact. The OPTIONAL ``guard`` port is the RELATION runaway cap
+    of a guarded relation child fetch: the raw rows are asserted against it HERE
+    (:meth:`errors.LimitExceededError.check`) because past ``group`` the graph is already nested. A
+    non-returning write returns a one-row ``[{changes, lastInsertRowid}]`` summary so the leaf output
+    shape is uniform (a list of rows).
   - ``pluck`` — rows + the ordered key-column TUPLE → the deduped, non-null batch key set (single-key →
     a flat scalar array; composite → an array-of-tuples). Delegates the dedupe to the shared grouping
     core (:func:`grouping.dedupe_key_tuples`) — the SAME SSoT the runtime relation path uses.
@@ -33,7 +36,7 @@ import json
 from typing import Any, Callable, Dict, List, Mapping, Sequence, Union
 
 from .driver import Driver
-from .errors import SqlFailure
+from .errors import LimitExceededError, SqlFailure
 from .exec_context import (
     READ_INTENT,
     WRITE_INTENT,
@@ -86,9 +89,21 @@ def make_handlers(driver_or_ctx: Union[Driver, ExecutionContext], dialect: str) 
                 info = seam_run(active, sql, params, WRITE_INTENT)
                 # The affected-write summary row (uniform ``items`` output shape — TS ``writeSummary``).
                 return {"ok": [{"changes": info.changes, "lastInsertRowid": info.last_insert_rowid}]}
-            return {"ok": seam_execute(active, sql, params, READ_INTENT)}
+            rows = seam_execute(active, sql, params, READ_INTENT)
         except SqlFailure as e:
             return {"error": e.message}
+        # The RELATION runaway guard, on the RAW child rows — the only point they are visible (past
+        # ``group`` the graph is already nested) and the reason the cap rides on this transport at all.
+        # The comparison + error assembly are the shared :meth:`LimitExceededError.check` SSoT, so this
+        # path cannot drift from the runtime relation path (relation.py) or from the TS reference. It
+        # RAISES rather than returning ``{"error": …}``: a runaway is a litedbmodel policy error with
+        # typed fields, not a mapped transport failure (the TS leaf throws the same class).
+        guard = ports.get("guard")
+        if guard is not None:
+            LimitExceededError.check(
+                int(guard["limit"]), len(rows), "relation", guard.get("model"), guard["relation"]
+            )
+        return {"ok": rows}
 
     def pluck(ports: Mapping[str, Any], _ctx: Mapping[str, Any]) -> Outcome:
         col: Sequence[str] = ports["col"]

@@ -149,3 +149,69 @@ func TestWithAmbientTransaction_RestoresAmbient(t *testing.T) {
 		t.Fatalf("row count = %s, want 2 (tx write + post-tx write)", got)
 	}
 }
+
+// guardPayload builds a READ executeSQL payload carrying the OPTIONAL relation `guard` port — the
+// runaway cap the emitter bakes onto a guarded relation child fetch (`{limit, model, relation}`).
+func guardPayload(sql string, limit int64, model, relation string) wire.WireRow {
+	return leafPayload(
+		port("bigint", wire.WireBool(false)),
+		port("guard", wire.WireRowOf([]wire.WireField{
+			{Key: "limit", Val: wire.WireInt(limit)},
+			{Key: "model", Val: wire.WireStr(model)},
+			{Key: "relation", Val: wire.WireStr(relation)},
+		})),
+		port("params", wire.WireListOf(nil)),
+		port("returning", wire.WireBool(false)),
+		port("sql", wire.WireStr(sql)),
+		port("write", wire.WireBool(false)),
+	)
+}
+
+// The RELATION runaway guard (#160), on the RAW child rows of a guarded relation child fetch: over the
+// cap ⇒ a *LimitExceededError with the relation-context fields and the EXACT batch count; within the
+// cap ⇒ the rows, unchanged. This is the go leg of "the same behaviour in all five languages" — the
+// twin of the rust `relation_guard_trips_on_the_raw_child_rows` and of the TS conformance guard
+// vectors, proven against a real in-proc sqlite rather than by inspection.
+func TestExecuteSQL_RelationGuardOnRawChildRows(t *testing.T) {
+	db := openBoundT(t)
+	defer db.Close()
+	defer UnbindLeafTransport()
+	for i, v := range []string{"a", "b", "c"} {
+		if _, err := insT(int64(i+1), v); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+	}
+
+	// 3 rows > cap 2 ⇒ the transport raises before the rows are handed on.
+	_, err := ExecuteSQL(guardPayload("SELECT id, v FROM t ORDER BY id", 2, "t", "things"))
+	if err == nil {
+		t.Fatal("a relation batch over its cap must raise")
+	}
+	var lim *LimitExceededError
+	if !errors.As(err, &lim) {
+		t.Fatalf("want *LimitExceededError, got %T (%v)", err, err)
+	}
+	if lim.Context != LimitContextRelation || lim.Limit != 2 || lim.Count != 3 || lim.Model != "t" || lim.Relation != "things" {
+		t.Fatalf("unexpected guard fields: %+v", lim)
+	}
+	want := "Query limit exceeded: relation 'things' on t returned 3 records, but limit is 2. " +
+		"This usually indicates a missing WHERE clause or an N+1 query pattern. " +
+		"Set a higher limit or use pagination."
+	if lim.Error() != want {
+		t.Fatalf("message =\n%q\nwant\n%q", lim.Error(), want)
+	}
+
+	// 3 rows ≤ cap 3 ⇒ no raise, and the rows come back untouched.
+	out, err := ExecuteSQL(guardPayload("SELECT id, v FROM t ORDER BY id", 3, "t", "things"))
+	if err != nil {
+		t.Fatalf("a batch within its cap must pass: %v", err)
+	}
+	if lp := out.AsList(); lp.Kind != wireProbeGot || lp.Got.Len() != 3 {
+		t.Fatalf("want the 3 rows back, got kind=%d len=%d", lp.Kind, lp.Got.Len())
+	}
+
+	// An UNCAPPED statement (no guard port at all) is never checked — the byte-unchanged path.
+	if _, err := ExecuteSQL(sqlPayload(nil, "SELECT id, v FROM t ORDER BY id", false)); err != nil {
+		t.Fatalf("an uncapped read must not be guarded: %v", err)
+	}
+}

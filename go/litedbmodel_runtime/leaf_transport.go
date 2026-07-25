@@ -123,6 +123,45 @@ func portStrings(payload wire.WireRow, name string) ([]string, error) {
 	return out, nil
 }
 
+// relationGuard is the unboxed `guard` port: the relation runaway cap the emitter baked onto a guarded
+// relation child fetch, together with the identity the raised error reports (Go twin of the litedbmodel
+// `RelationGuard` record). Model is optional exactly as LimitExceededError.Model is ("" ⇒ "unknown").
+type relationGuard struct {
+	limit    int
+	model    string
+	relation string
+}
+
+// portRelationGuard reads the OPTIONAL `guard` port. ABSENT (or an explicit null) ⇒ nil ⇒ the statement
+// is uncapped and NO check runs. PRESENT but malformed is a LOUD port error, never a silently dropped
+// guard — a guard that fails to unbox is a runaway that would otherwise sail through.
+func portRelationGuard(payload wire.WireRow) (*relationGuard, error) {
+	p := payload.ProbeRow("guard")
+	if p.Kind == wireProbeAbsent || p.ActualWireType == "NULL" {
+		return nil, nil
+	}
+	if p.Kind != wireProbeGot {
+		return nil, portErr("guard", "row", p.Kind, p.ActualWireType)
+	}
+	n := p.Got.ProbeNumber("limit")
+	if n.Kind != wireProbeGot {
+		return nil, portErr("guard.limit", "number", n.Kind, n.ActualWireType)
+	}
+	limit, err := strconv.Atoi(n.Got)
+	if err != nil {
+		return nil, fmt.Errorf("leaf transport: port %q is not an integer row cap: %q", "guard.limit", n.Got)
+	}
+	rel := p.Got.ProbeString("relation")
+	if rel.Kind != wireProbeGot {
+		return nil, portErr("guard.relation", "string", rel.Kind, rel.ActualWireType)
+	}
+	g := &relationGuard{limit: limit, relation: rel.Got}
+	if model := p.Got.ProbeString("model"); model.Kind == wireProbeGot {
+		g.model = model.Got
+	}
+	return g, nil
+}
+
 // ── Payload materialization (wire → wire; the go wire type's slices are unexported) ─────────────────
 
 // wireItems materializes a payload list port into the []wire.WireValue the leaf bodies consume.
@@ -216,8 +255,10 @@ func wireOfElem(l wire.WireList, i int) (wire.WireValue, error) {
 // ExecuteSQL runs ONE SQL node and returns its rows as a wire list of wire rows (empty list for a
 // non-RETURNING write). Params ride as wire values: a scalar binds directly (toDriverParam); a wire
 // LIST param binds as ONE JSON array string (the `json_each(?)` batch-key contract — SAME rendering as
-// the runtime relation bindKeys). bigint is a render hint the native path does not need here. Ports
-// ride in the payload as {bigint, params, returning, sql, write}.
+// the runtime relation bindKeys). bigint is a render hint the native path does not need here. The
+// OPTIONAL guard port is the RELATION runaway cap of a guarded relation child fetch: the raw rows are
+// asserted against it HERE (the shared checkHardLimit SSoT) because past [GroupChildren] the graph is
+// already nested. Ports ride in the payload as {bigint, guard?, params, returning, sql, write}.
 func ExecuteSQL(payload wire.WireRow) (wire.WireValue, error) {
 	bigint, err := portBool(payload, "bigint")
 	if err != nil {
@@ -236,6 +277,10 @@ func ExecuteSQL(payload wire.WireRow) (wire.WireValue, error) {
 		return wire.WireNull(), err
 	}
 	write, err := portBool(payload, "write")
+	if err != nil {
+		return wire.WireNull(), err
+	}
+	guard, err := portRelationGuard(payload)
 	if err != nil {
 		return wire.WireNull(), err
 	}
@@ -264,6 +309,15 @@ func ExecuteSQL(payload wire.WireRow) (wire.WireValue, error) {
 	rows, err := Execute(leafExecCtx, text, args, ReadIntent())
 	if err != nil {
 		return wire.WireNull(), err
+	}
+	// The RELATION runaway guard, on the RAW child rows — the only point they are visible (past
+	// GroupChildren the graph is already nested) and the reason the cap rides on this transport at all.
+	// The comparison + error assembly are the shared [checkHardLimit] SSoT, so this path cannot drift
+	// from the runtime relation path (relation.go) or from the TS reference.
+	if guard != nil {
+		if err := checkHardLimit(guard.limit, len(rows), LimitContextRelation, guard.model, guard.relation); err != nil {
+			return wire.WireNull(), err
+		}
 	}
 	items := make([]wire.WireValue, len(rows))
 	for i, r := range rows {
