@@ -28,6 +28,8 @@
  * (`undefined` ⇒ no cap) so nothing changes for a caller who never opts in.
  */
 
+import { LimitExceededError } from './errors';
+
 /**
  * Global hard-limit config (spec §E-2; v1 `LimitConfig`). Both caps default to disabled.
  * This is the AUTHORING/config surface — the resolved caps are baked onto the compiled artifacts.
@@ -89,6 +91,22 @@ export function resolveHasManyHardLimit(perRelation?: number | null, global?: nu
   const g = global !== undefined ? global : globalLimitConfig.hasManyHardLimit;
   const raw = perRelation === null ? null : perRelation !== undefined ? perRelation : g;
   return normalizeCap(raw, 'hasManyHardLimit');
+}
+
+/**
+ * The find hard-limit READ-BOUNDARY check — the twin of the relation one (`runRelationOp` throws off
+ * the op's baked `hardLimit`, `relation.ts`). The emitter bakes `LIMIT cap + 1` into the capped read's
+ * static SQL (a BOUNDED fetch: at most `cap + 1` rows ever leave the DB), and this asserts the result:
+ * `cap + 1` rows means the true total EXCEEDS the cap, so it throws {@link LimitExceededError} with
+ * `context:'find'` and `count = rows.length` (the fetch size — the total is only known to exceed).
+ *
+ * It lives at the boundary because SCP has no throw: a generated module returns rows, and the caller
+ * that asked for the capped endpoint enforces the policy. `cap === undefined` ⇒ the endpoint baked no
+ * guard ⇒ no check.
+ */
+export function assertFindHardLimit(rows: readonly unknown[], cap: number | undefined, model: string): void {
+  if (cap === undefined) return;
+  if (rows.length > cap) throw new LimitExceededError(cap, rows.length, 'find', model);
 }
 
 /** Validate + normalize a cap: `null`/`undefined` ⇒ null (disabled); else a non-negative integer. */

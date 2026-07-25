@@ -82,6 +82,11 @@ export type {
 export { Db } from './leaf-transport';
 export { executeSQL, executeSQLAsync, pluck, group, leafHandlers, leafHandlersAsync, LEAF_TRANSPORT_SYMBOLS, prepareSql, spliceWhere, assembleDynamicWhere } from './leaves';
 export type { LeafContext, AsyncLeafContext, DynamicWhereFrag, DynamicWherePlan } from './leaves';
+
+// ── The decorator → SCP LOWERING (CLAUDE.md §1): declared endpoints + `@column`/`@hasMany` metadata
+// → the SCP-restricted TS `bc generate --from` reads. The emitter builds no SQL of its own — it renders
+// what `makesql` / `compileRelationOp` / `deriveReadRow` produce.
+export { emitBehaviorModule } from './emit';
 export type {
   EmitSpec,
   EmitResult,
@@ -125,7 +130,7 @@ export type { SqlFailureKind, LimitExceededContext } from './errors';
 // TS runtime + the native ports throw `LimitExceededError` post-fetch when a read / relation batch
 // exceeds its cap. `null` disables; a per-relation `hardLimit` override wins; a relation with an
 // intrinsic per-parent `limit` window skips the batch-total check.
-export { setLimitConfig, getLimitConfig, resetLimitConfig, resolveFindHardLimit, resolveHasManyHardLimit } from './limit-config';
+export { setLimitConfig, getLimitConfig, resetLimitConfig, resolveFindHardLimit, resolveHasManyHardLimit, assertFindHardLimit } from './limit-config';
 export type { LimitConfig } from './limit-config';
 
 
