@@ -7,7 +7,7 @@
 // (Behavior::runBehavior) — no execution logic is generated. Handlers are ALWAYS
 // injected at the boundary (IR + {effects,config,hooks} — concept.md §4.4); they
 // are never generated.
-// irFingerprint: fnv1a64:5e2ad87fb050e695
+// irFingerprint: fnv1a64:0ca22ea43e03600b
 
 declare(strict_types=1);
 
@@ -15,14 +15,14 @@ declare(strict_types=1);
 $expectedSpecVersions = ['behavior' => 5, 'expression' => 2, 'plan' => 1];
 
 // FNV-1a 64 fingerprint of the source portable IR (canonical-json discipline, #208).
-$irFingerprint = 'fnv1a64:5e2ad87fb050e695';
+$irFingerprint = 'fnv1a64:0ca22ea43e03600b';
 
 // Component names exposed by bind(), in IR declaration order.
 $componentNames = ['findAll', 'filterPaginateSort', 'findFirst', 'findUnique', 'nestedFindAll', 'nestedFindFirst', 'nestedFindUnique', 'nestedRelations', 'compositeRelations', 'create', 'update', 'upsert', 'createMany', 'upsertMany', 'updateMany', 'nestedCreate', 'nestedUpsert', 'nestedUpdate', 'delete'];
 
 // The portable component-graph IR, embedded as a native literal (no JSON parse at require).
 $ir = (object) [
-    "irVersion" => 2,
+    "irVersion" => 3,
     "exprVersion" => 2,
     "components" => [
         (object) [
@@ -32,11 +32,12 @@ $ir = (object) [
                     "id" => "n0",
                     "outType" => (object) [
                         "arr" => (object) [
+                            "name" => "UserRow",
                             "obj" => (object) [
-                                "id" => "float",
                                 "email" => (object) [
                                     "opt" => "string",
                                 ],
+                                "id" => "float",
                                 "name" => (object) [
                                     "opt" => "string",
                                 ],
@@ -52,13 +53,6 @@ $ir = (object) [
                             "elemType" => "value",
                             "required" => true,
                             "type" => "array",
-                        ],
-                        "readColumns" => (object) [
-                            "elemType" => (object) [
-                                "obj" => (object) [],
-                            ],
-                            "required" => false,
-                            "type" => "object",
                         ],
                         "returning" => (object) [
                             "required" => true,
@@ -102,14 +96,15 @@ $ir = (object) [
             "outputType" => (object) [
                 "arr" => (object) [
                     "obj" => (object) [
-                        "id" => "float",
                         "email" => (object) [
                             "opt" => "string",
                         ],
+                        "id" => "float",
                         "name" => (object) [
                             "opt" => "string",
                         ],
                     ],
+                    "name" => "UserRow",
                 ],
             ],
         ],
@@ -120,21 +115,22 @@ $ir = (object) [
                     "id" => "n0",
                     "outType" => (object) [
                         "arr" => (object) [
+                            "name" => "PostFullRow",
                             "obj" => (object) [
-                                "id" => "float",
-                                "title" => (object) [
-                                    "opt" => "string",
+                                "author_id" => (object) [
+                                    "opt" => "float",
                                 ],
                                 "content" => (object) [
                                     "opt" => "string",
                                 ],
+                                "created_at" => (object) [
+                                    "opt" => "string",
+                                ],
+                                "id" => "float",
                                 "published" => (object) [
                                     "opt" => "float",
                                 ],
-                                "author_id" => (object) [
-                                    "opt" => "float",
-                                ],
-                                "created_at" => (object) [
+                                "title" => (object) [
                                     "opt" => "string",
                                 ],
                             ],
@@ -150,13 +146,6 @@ $ir = (object) [
                             "required" => true,
                             "type" => "array",
                         ],
-                        "readColumns" => (object) [
-                            "elemType" => (object) [
-                                "obj" => (object) [],
-                            ],
-                            "required" => false,
-                            "type" => "object",
-                        ],
                         "returning" => (object) [
                             "required" => true,
                             "type" => "bool",
@@ -164,11 +153,6 @@ $ir = (object) [
                         "sql" => (object) [
                             "required" => true,
                             "type" => "string",
-                        ],
-                        "where" => (object) [
-                            "elemType" => "string",
-                            "required" => false,
-                            "type" => "array",
                         ],
                         "write" => (object) [
                             "required" => true,
@@ -215,23 +199,24 @@ $ir = (object) [
             "outputType" => (object) [
                 "arr" => (object) [
                     "obj" => (object) [
-                        "id" => "float",
-                        "title" => (object) [
-                            "opt" => "string",
+                        "author_id" => (object) [
+                            "opt" => "float",
                         ],
                         "content" => (object) [
                             "opt" => "string",
                         ],
-                        "published" => (object) [
-                            "opt" => "float",
-                        ],
-                        "author_id" => (object) [
-                            "opt" => "float",
-                        ],
                         "created_at" => (object) [
                             "opt" => "string",
                         ],
+                        "id" => "float",
+                        "published" => (object) [
+                            "opt" => "float",
+                        ],
+                        "title" => (object) [
+                            "opt" => "string",
+                        ],
                     ],
+                    "name" => "PostFullRow",
                 ],
             ],
         ],
@@ -242,11 +227,12 @@ $ir = (object) [
                     "id" => "n0",
                     "outType" => (object) [
                         "arr" => (object) [
+                            "name" => "UserRow",
                             "obj" => (object) [
-                                "id" => "float",
                                 "email" => (object) [
                                     "opt" => "string",
                                 ],
+                                "id" => "float",
                                 "name" => (object) [
                                     "opt" => "string",
                                 ],
@@ -263,13 +249,6 @@ $ir = (object) [
                             "required" => true,
                             "type" => "array",
                         ],
-                        "readColumns" => (object) [
-                            "elemType" => (object) [
-                                "obj" => (object) [],
-                            ],
-                            "required" => false,
-                            "type" => "object",
-                        ],
                         "returning" => (object) [
                             "required" => true,
                             "type" => "bool",
@@ -277,11 +256,6 @@ $ir = (object) [
                         "sql" => (object) [
                             "required" => true,
                             "type" => "string",
-                        ],
-                        "where" => (object) [
-                            "elemType" => "string",
-                            "required" => false,
-                            "type" => "array",
                         ],
                         "write" => (object) [
                             "required" => true,
@@ -328,14 +302,15 @@ $ir = (object) [
             "outputType" => (object) [
                 "arr" => (object) [
                     "obj" => (object) [
-                        "id" => "float",
                         "email" => (object) [
                             "opt" => "string",
                         ],
+                        "id" => "float",
                         "name" => (object) [
                             "opt" => "string",
                         ],
                     ],
+                    "name" => "UserRow",
                 ],
             ],
         ],
@@ -346,11 +321,12 @@ $ir = (object) [
                     "id" => "n0",
                     "outType" => (object) [
                         "arr" => (object) [
+                            "name" => "UserRow",
                             "obj" => (object) [
-                                "id" => "float",
                                 "email" => (object) [
                                     "opt" => "string",
                                 ],
+                                "id" => "float",
                                 "name" => (object) [
                                     "opt" => "string",
                                 ],
@@ -367,13 +343,6 @@ $ir = (object) [
                             "required" => true,
                             "type" => "array",
                         ],
-                        "readColumns" => (object) [
-                            "elemType" => (object) [
-                                "obj" => (object) [],
-                            ],
-                            "required" => false,
-                            "type" => "object",
-                        ],
                         "returning" => (object) [
                             "required" => true,
                             "type" => "bool",
@@ -381,11 +350,6 @@ $ir = (object) [
                         "sql" => (object) [
                             "required" => true,
                             "type" => "string",
-                        ],
-                        "where" => (object) [
-                            "elemType" => "string",
-                            "required" => false,
-                            "type" => "array",
                         ],
                         "write" => (object) [
                             "required" => true,
@@ -432,14 +396,15 @@ $ir = (object) [
             "outputType" => (object) [
                 "arr" => (object) [
                     "obj" => (object) [
-                        "id" => "float",
                         "email" => (object) [
                             "opt" => "string",
                         ],
+                        "id" => "float",
                         "name" => (object) [
                             "opt" => "string",
                         ],
                     ],
+                    "name" => "UserRow",
                 ],
             ],
         ],
@@ -460,13 +425,6 @@ $ir = (object) [
                             "elemType" => "value",
                             "required" => true,
                             "type" => "array",
-                        ],
-                        "readColumns" => (object) [
-                            "elemType" => (object) [
-                                "obj" => (object) [],
-                            ],
-                            "required" => false,
-                            "type" => "object",
                         ],
                         "returning" => (object) [
                             "required" => true,
@@ -495,7 +453,9 @@ $ir = (object) [
                 (object) [
                     "component" => "pluck",
                     "id" => "n1",
-                    "outType" => "value",
+                    "outType" => (object) [
+                        "arr" => "value",
+                    ],
                     "parent" => "n0",
                     "portSchemas" => (object) [
                         "col" => (object) [
@@ -540,13 +500,6 @@ $ir = (object) [
                             "required" => true,
                             "type" => "array",
                         ],
-                        "readColumns" => (object) [
-                            "elemType" => (object) [
-                                "obj" => (object) [],
-                            ],
-                            "required" => false,
-                            "type" => "object",
-                        ],
                         "returning" => (object) [
                             "required" => true,
                             "type" => "bool",
@@ -582,7 +535,30 @@ $ir = (object) [
                     "id" => "n3",
                     "outType" => (object) [
                         "arr" => (object) [
-                            "obj" => (object) [],
+                            "name" => "UserWithPosts",
+                            "obj" => (object) [
+                                "email" => (object) [
+                                    "opt" => "string",
+                                ],
+                                "id" => "float",
+                                "name" => (object) [
+                                    "opt" => "string",
+                                ],
+                                "posts" => (object) [
+                                    "arr" => (object) [
+                                        "name" => "PostRow",
+                                        "obj" => (object) [
+                                            "author_id" => (object) [
+                                                "opt" => "float",
+                                            ],
+                                            "id" => "float",
+                                            "title" => (object) [
+                                                "opt" => "string",
+                                            ],
+                                        ],
+                                    ],
+                                ],
+                            ],
                         ],
                     ],
                     "parent" => "n0",
@@ -668,7 +644,30 @@ $ir = (object) [
             ],
             "outputType" => (object) [
                 "arr" => (object) [
-                    "obj" => (object) [],
+                    "obj" => (object) [
+                        "email" => (object) [
+                            "opt" => "string",
+                        ],
+                        "id" => "float",
+                        "name" => (object) [
+                            "opt" => "string",
+                        ],
+                        "posts" => (object) [
+                            "arr" => (object) [
+                                "obj" => (object) [
+                                    "author_id" => (object) [
+                                        "opt" => "float",
+                                    ],
+                                    "id" => "float",
+                                    "title" => (object) [
+                                        "opt" => "string",
+                                    ],
+                                ],
+                                "name" => "PostRow",
+                            ],
+                        ],
+                    ],
+                    "name" => "UserWithPosts",
                 ],
             ],
         ],
@@ -690,13 +689,6 @@ $ir = (object) [
                             "required" => true,
                             "type" => "array",
                         ],
-                        "readColumns" => (object) [
-                            "elemType" => (object) [
-                                "obj" => (object) [],
-                            ],
-                            "required" => false,
-                            "type" => "object",
-                        ],
                         "returning" => (object) [
                             "required" => true,
                             "type" => "bool",
@@ -704,11 +696,6 @@ $ir = (object) [
                         "sql" => (object) [
                             "required" => true,
                             "type" => "string",
-                        ],
-                        "where" => (object) [
-                            "elemType" => "string",
-                            "required" => false,
-                            "type" => "array",
                         ],
                         "write" => (object) [
                             "required" => true,
@@ -735,7 +722,9 @@ $ir = (object) [
                 (object) [
                     "component" => "pluck",
                     "id" => "n1",
-                    "outType" => "value",
+                    "outType" => (object) [
+                        "arr" => "value",
+                    ],
                     "parent" => "n0",
                     "portSchemas" => (object) [
                         "col" => (object) [
@@ -780,13 +769,6 @@ $ir = (object) [
                             "required" => true,
                             "type" => "array",
                         ],
-                        "readColumns" => (object) [
-                            "elemType" => (object) [
-                                "obj" => (object) [],
-                            ],
-                            "required" => false,
-                            "type" => "object",
-                        ],
                         "returning" => (object) [
                             "required" => true,
                             "type" => "bool",
@@ -822,7 +804,30 @@ $ir = (object) [
                     "id" => "n3",
                     "outType" => (object) [
                         "arr" => (object) [
-                            "obj" => (object) [],
+                            "name" => "UserWithPosts",
+                            "obj" => (object) [
+                                "email" => (object) [
+                                    "opt" => "string",
+                                ],
+                                "id" => "float",
+                                "name" => (object) [
+                                    "opt" => "string",
+                                ],
+                                "posts" => (object) [
+                                    "arr" => (object) [
+                                        "name" => "PostRow",
+                                        "obj" => (object) [
+                                            "author_id" => (object) [
+                                                "opt" => "float",
+                                            ],
+                                            "id" => "float",
+                                            "title" => (object) [
+                                                "opt" => "string",
+                                            ],
+                                        ],
+                                    ],
+                                ],
+                            ],
                         ],
                     ],
                     "parent" => "n0",
@@ -913,7 +918,30 @@ $ir = (object) [
             ],
             "outputType" => (object) [
                 "arr" => (object) [
-                    "obj" => (object) [],
+                    "obj" => (object) [
+                        "email" => (object) [
+                            "opt" => "string",
+                        ],
+                        "id" => "float",
+                        "name" => (object) [
+                            "opt" => "string",
+                        ],
+                        "posts" => (object) [
+                            "arr" => (object) [
+                                "obj" => (object) [
+                                    "author_id" => (object) [
+                                        "opt" => "float",
+                                    ],
+                                    "id" => "float",
+                                    "title" => (object) [
+                                        "opt" => "string",
+                                    ],
+                                ],
+                                "name" => "PostRow",
+                            ],
+                        ],
+                    ],
+                    "name" => "UserWithPosts",
                 ],
             ],
         ],
@@ -935,13 +963,6 @@ $ir = (object) [
                             "required" => true,
                             "type" => "array",
                         ],
-                        "readColumns" => (object) [
-                            "elemType" => (object) [
-                                "obj" => (object) [],
-                            ],
-                            "required" => false,
-                            "type" => "object",
-                        ],
                         "returning" => (object) [
                             "required" => true,
                             "type" => "bool",
@@ -949,11 +970,6 @@ $ir = (object) [
                         "sql" => (object) [
                             "required" => true,
                             "type" => "string",
-                        ],
-                        "where" => (object) [
-                            "elemType" => "string",
-                            "required" => false,
-                            "type" => "array",
                         ],
                         "write" => (object) [
                             "required" => true,
@@ -980,7 +996,9 @@ $ir = (object) [
                 (object) [
                     "component" => "pluck",
                     "id" => "n1",
-                    "outType" => "value",
+                    "outType" => (object) [
+                        "arr" => "value",
+                    ],
                     "parent" => "n0",
                     "portSchemas" => (object) [
                         "col" => (object) [
@@ -1025,13 +1043,6 @@ $ir = (object) [
                             "required" => true,
                             "type" => "array",
                         ],
-                        "readColumns" => (object) [
-                            "elemType" => (object) [
-                                "obj" => (object) [],
-                            ],
-                            "required" => false,
-                            "type" => "object",
-                        ],
                         "returning" => (object) [
                             "required" => true,
                             "type" => "bool",
@@ -1067,7 +1078,30 @@ $ir = (object) [
                     "id" => "n3",
                     "outType" => (object) [
                         "arr" => (object) [
-                            "obj" => (object) [],
+                            "name" => "UserWithPosts",
+                            "obj" => (object) [
+                                "email" => (object) [
+                                    "opt" => "string",
+                                ],
+                                "id" => "float",
+                                "name" => (object) [
+                                    "opt" => "string",
+                                ],
+                                "posts" => (object) [
+                                    "arr" => (object) [
+                                        "name" => "PostRow",
+                                        "obj" => (object) [
+                                            "author_id" => (object) [
+                                                "opt" => "float",
+                                            ],
+                                            "id" => "float",
+                                            "title" => (object) [
+                                                "opt" => "string",
+                                            ],
+                                        ],
+                                    ],
+                                ],
+                            ],
                         ],
                     ],
                     "parent" => "n0",
@@ -1158,7 +1192,30 @@ $ir = (object) [
             ],
             "outputType" => (object) [
                 "arr" => (object) [
-                    "obj" => (object) [],
+                    "obj" => (object) [
+                        "email" => (object) [
+                            "opt" => "string",
+                        ],
+                        "id" => "float",
+                        "name" => (object) [
+                            "opt" => "string",
+                        ],
+                        "posts" => (object) [
+                            "arr" => (object) [
+                                "obj" => (object) [
+                                    "author_id" => (object) [
+                                        "opt" => "float",
+                                    ],
+                                    "id" => "float",
+                                    "title" => (object) [
+                                        "opt" => "string",
+                                    ],
+                                ],
+                                "name" => "PostRow",
+                            ],
+                        ],
+                    ],
+                    "name" => "UserWithPosts",
                 ],
             ],
         ],
@@ -1179,13 +1236,6 @@ $ir = (object) [
                             "elemType" => "value",
                             "required" => true,
                             "type" => "array",
-                        ],
-                        "readColumns" => (object) [
-                            "elemType" => (object) [
-                                "obj" => (object) [],
-                            ],
-                            "required" => false,
-                            "type" => "object",
                         ],
                         "returning" => (object) [
                             "required" => true,
@@ -1214,7 +1264,9 @@ $ir = (object) [
                 (object) [
                     "component" => "pluck",
                     "id" => "n1",
-                    "outType" => "value",
+                    "outType" => (object) [
+                        "arr" => "value",
+                    ],
                     "parent" => "n0",
                     "portSchemas" => (object) [
                         "col" => (object) [
@@ -1259,13 +1311,6 @@ $ir = (object) [
                             "required" => true,
                             "type" => "array",
                         ],
-                        "readColumns" => (object) [
-                            "elemType" => (object) [
-                                "obj" => (object) [],
-                            ],
-                            "required" => false,
-                            "type" => "object",
-                        ],
                         "returning" => (object) [
                             "required" => true,
                             "type" => "bool",
@@ -1299,7 +1344,9 @@ $ir = (object) [
                 (object) [
                     "component" => "pluck",
                     "id" => "n3",
-                    "outType" => "value",
+                    "outType" => (object) [
+                        "arr" => "value",
+                    ],
                     "parent" => "n2",
                     "portSchemas" => (object) [
                         "col" => (object) [
@@ -1343,13 +1390,6 @@ $ir = (object) [
                             "elemType" => "value",
                             "required" => true,
                             "type" => "array",
-                        ],
-                        "readColumns" => (object) [
-                            "elemType" => (object) [
-                                "obj" => (object) [],
-                            ],
-                            "required" => false,
-                            "type" => "object",
                         ],
                         "returning" => (object) [
                             "required" => true,
@@ -1449,7 +1489,46 @@ $ir = (object) [
                     "id" => "n6",
                     "outType" => (object) [
                         "arr" => (object) [
-                            "obj" => (object) [],
+                            "name" => "UserWithPostsAndComments",
+                            "obj" => (object) [
+                                "email" => (object) [
+                                    "opt" => "string",
+                                ],
+                                "id" => "float",
+                                "name" => (object) [
+                                    "opt" => "string",
+                                ],
+                                "posts" => (object) [
+                                    "arr" => (object) [
+                                        "name" => "PostWithComments",
+                                        "obj" => (object) [
+                                            "author_id" => (object) [
+                                                "opt" => "float",
+                                            ],
+                                            "comments" => (object) [
+                                                "arr" => (object) [
+                                                    "name" => "CommentRow",
+                                                    "obj" => (object) [
+                                                        "body" => (object) [
+                                                            "opt" => "string",
+                                                        ],
+                                                        "id" => (object) [
+                                                            "opt" => "float",
+                                                        ],
+                                                        "post_id" => (object) [
+                                                            "opt" => "float",
+                                                        ],
+                                                    ],
+                                                ],
+                                            ],
+                                            "id" => "float",
+                                            "title" => (object) [
+                                                "opt" => "string",
+                                            ],
+                                        ],
+                                    ],
+                                ],
+                            ],
                         ],
                     ],
                     "parent" => "n0",
@@ -1544,7 +1623,46 @@ $ir = (object) [
             ],
             "outputType" => (object) [
                 "arr" => (object) [
-                    "obj" => (object) [],
+                    "obj" => (object) [
+                        "email" => (object) [
+                            "opt" => "string",
+                        ],
+                        "id" => "float",
+                        "name" => (object) [
+                            "opt" => "string",
+                        ],
+                        "posts" => (object) [
+                            "arr" => (object) [
+                                "obj" => (object) [
+                                    "author_id" => (object) [
+                                        "opt" => "float",
+                                    ],
+                                    "comments" => (object) [
+                                        "arr" => (object) [
+                                            "obj" => (object) [
+                                                "body" => (object) [
+                                                    "opt" => "string",
+                                                ],
+                                                "id" => (object) [
+                                                    "opt" => "float",
+                                                ],
+                                                "post_id" => (object) [
+                                                    "opt" => "float",
+                                                ],
+                                            ],
+                                            "name" => "CommentRow",
+                                        ],
+                                    ],
+                                    "id" => "float",
+                                    "title" => (object) [
+                                        "opt" => "string",
+                                    ],
+                                ],
+                                "name" => "PostWithComments",
+                            ],
+                        ],
+                    ],
+                    "name" => "UserWithPostsAndComments",
                 ],
             ],
         ],
@@ -1565,13 +1683,6 @@ $ir = (object) [
                             "elemType" => "value",
                             "required" => true,
                             "type" => "array",
-                        ],
-                        "readColumns" => (object) [
-                            "elemType" => (object) [
-                                "obj" => (object) [],
-                            ],
-                            "required" => false,
-                            "type" => "object",
                         ],
                         "returning" => (object) [
                             "required" => true,
@@ -1600,7 +1711,9 @@ $ir = (object) [
                 (object) [
                     "component" => "pluck",
                     "id" => "n1",
-                    "outType" => "value",
+                    "outType" => (object) [
+                        "arr" => "value",
+                    ],
                     "parent" => "n0",
                     "portSchemas" => (object) [
                         "col" => (object) [
@@ -1646,13 +1759,6 @@ $ir = (object) [
                             "required" => true,
                             "type" => "array",
                         ],
-                        "readColumns" => (object) [
-                            "elemType" => (object) [
-                                "obj" => (object) [],
-                            ],
-                            "required" => false,
-                            "type" => "object",
-                        ],
                         "returning" => (object) [
                             "required" => true,
                             "type" => "bool",
@@ -1686,7 +1792,9 @@ $ir = (object) [
                 (object) [
                     "component" => "pluck",
                     "id" => "n3",
-                    "outType" => "value",
+                    "outType" => (object) [
+                        "arr" => "value",
+                    ],
                     "parent" => "n2",
                     "portSchemas" => (object) [
                         "col" => (object) [
@@ -1731,13 +1839,6 @@ $ir = (object) [
                             "elemType" => "value",
                             "required" => true,
                             "type" => "array",
-                        ],
-                        "readColumns" => (object) [
-                            "elemType" => (object) [
-                                "obj" => (object) [],
-                            ],
-                            "required" => false,
-                            "type" => "object",
                         ],
                         "returning" => (object) [
                             "required" => true,
@@ -1839,7 +1940,56 @@ $ir = (object) [
                     "id" => "n6",
                     "outType" => (object) [
                         "arr" => (object) [
-                            "obj" => (object) [],
+                            "name" => "TenantUserWithPosts",
+                            "obj" => (object) [
+                                "name" => (object) [
+                                    "opt" => "string",
+                                ],
+                                "posts" => (object) [
+                                    "arr" => (object) [
+                                        "name" => "TenantPostWithComments",
+                                        "obj" => (object) [
+                                            "comments" => (object) [
+                                                "arr" => (object) [
+                                                    "name" => "TenantCommentRow",
+                                                    "obj" => (object) [
+                                                        "body" => (object) [
+                                                            "opt" => "string",
+                                                        ],
+                                                        "comment_id" => (object) [
+                                                            "opt" => "float",
+                                                        ],
+                                                        "post_id" => (object) [
+                                                            "opt" => "float",
+                                                        ],
+                                                        "tenant_id" => (object) [
+                                                            "opt" => "float",
+                                                        ],
+                                                    ],
+                                                ],
+                                            ],
+                                            "post_id" => (object) [
+                                                "opt" => "float",
+                                            ],
+                                            "tenant_id" => (object) [
+                                                "opt" => "float",
+                                            ],
+                                            "title" => (object) [
+                                                "opt" => "string",
+                                            ],
+                                            "user_id" => (object) [
+                                                "opt" => "float",
+                                            ],
+                                        ],
+                                    ],
+                                ],
+                                "tenant_id" => (object) [
+                                    "opt" => "float",
+                                ],
+                                "user_id" => (object) [
+                                    "opt" => "float",
+                                ],
+                            ],
                         ],
                     ],
                     "parent" => "n0",
@@ -1936,7 +2086,56 @@ $ir = (object) [
             ],
             "outputType" => (object) [
                 "arr" => (object) [
-                    "obj" => (object) [],
+                    "obj" => (object) [
+                        "name" => (object) [
+                            "opt" => "string",
+                        ],
+                        "posts" => (object) [
+                            "arr" => (object) [
+                                "obj" => (object) [
+                                    "comments" => (object) [
+                                        "arr" => (object) [
+                                            "obj" => (object) [
+                                                "body" => (object) [
+                                                    "opt" => "string",
+                                                ],
+                                                "comment_id" => (object) [
+                                                    "opt" => "float",
+                                                ],
+                                                "post_id" => (object) [
+                                                    "opt" => "float",
+                                                ],
+                                                "tenant_id" => (object) [
+                                                    "opt" => "float",
+                                                ],
+                                            ],
+                                            "name" => "TenantCommentRow",
+                                        ],
+                                    ],
+                                    "post_id" => (object) [
+                                        "opt" => "float",
+                                    ],
+                                    "tenant_id" => (object) [
+                                        "opt" => "float",
+                                    ],
+                                    "title" => (object) [
+                                        "opt" => "string",
+                                    ],
+                                    "user_id" => (object) [
+                                        "opt" => "float",
+                                    ],
+                                ],
+                                "name" => "TenantPostWithComments",
+                            ],
+                        ],
+                        "tenant_id" => (object) [
+                            "opt" => "float",
+                        ],
+                        "user_id" => (object) [
+                            "opt" => "float",
+                        ],
+                    ],
+                    "name" => "TenantUserWithPosts",
                 ],
             ],
         ],
@@ -1947,7 +2146,11 @@ $ir = (object) [
                     "id" => "n0",
                     "outType" => (object) [
                         "arr" => (object) [
-                            "obj" => (object) [],
+                            "name" => "WriteSummary",
+                            "obj" => (object) [
+                                "changes" => "int",
+                                "lastInsertRowid" => "int",
+                            ],
                         ],
                     ],
                     "portSchemas" => (object) [
@@ -2021,7 +2224,11 @@ $ir = (object) [
             ],
             "outputType" => (object) [
                 "arr" => (object) [
-                    "obj" => (object) [],
+                    "obj" => (object) [
+                        "changes" => "int",
+                        "lastInsertRowid" => "int",
+                    ],
+                    "name" => "WriteSummary",
                 ],
             ],
         ],
@@ -2032,7 +2239,11 @@ $ir = (object) [
                     "id" => "n0",
                     "outType" => (object) [
                         "arr" => (object) [
-                            "obj" => (object) [],
+                            "name" => "WriteSummary",
+                            "obj" => (object) [
+                                "changes" => "int",
+                                "lastInsertRowid" => "int",
+                            ],
                         ],
                     ],
                     "portSchemas" => (object) [
@@ -2052,11 +2263,6 @@ $ir = (object) [
                         "sql" => (object) [
                             "required" => true,
                             "type" => "string",
-                        ],
-                        "where" => (object) [
-                            "elemType" => "string",
-                            "required" => false,
-                            "type" => "array",
                         ],
                         "write" => (object) [
                             "required" => true,
@@ -2111,7 +2317,11 @@ $ir = (object) [
             ],
             "outputType" => (object) [
                 "arr" => (object) [
-                    "obj" => (object) [],
+                    "obj" => (object) [
+                        "changes" => "int",
+                        "lastInsertRowid" => "int",
+                    ],
+                    "name" => "WriteSummary",
                 ],
             ],
         ],
@@ -2122,6 +2332,7 @@ $ir = (object) [
                     "id" => "n0",
                     "outType" => (object) [
                         "arr" => (object) [
+                            "name" => "IdRow",
                             "obj" => (object) [
                                 "id" => "float",
                             ],
@@ -2136,13 +2347,6 @@ $ir = (object) [
                             "elemType" => "value",
                             "required" => true,
                             "type" => "array",
-                        ],
-                        "readColumns" => (object) [
-                            "elemType" => (object) [
-                                "obj" => (object) [],
-                            ],
-                            "required" => false,
-                            "type" => "object",
                         ],
                         "returning" => (object) [
                             "required" => true,
@@ -2208,6 +2412,7 @@ $ir = (object) [
                     "obj" => (object) [
                         "id" => "float",
                     ],
+                    "name" => "IdRow",
                 ],
             ],
         ],
@@ -2218,7 +2423,11 @@ $ir = (object) [
                     "id" => "n0",
                     "outType" => (object) [
                         "arr" => (object) [
-                            "obj" => (object) [],
+                            "name" => "WriteSummary",
+                            "obj" => (object) [
+                                "changes" => "int",
+                                "lastInsertRowid" => "int",
+                            ],
                         ],
                     ],
                     "portSchemas" => (object) [
@@ -2264,6 +2473,7 @@ $ir = (object) [
             "inputPorts" => (object) [
                 "rows" => (object) [
                     "elemType" => (object) [
+                        "name" => "NewUser",
                         "obj" => (object) [
                             "email" => "string",
                             "name" => "string",
@@ -2289,7 +2499,11 @@ $ir = (object) [
             ],
             "outputType" => (object) [
                 "arr" => (object) [
-                    "obj" => (object) [],
+                    "obj" => (object) [
+                        "changes" => "int",
+                        "lastInsertRowid" => "int",
+                    ],
+                    "name" => "WriteSummary",
                 ],
             ],
         ],
@@ -2300,7 +2514,11 @@ $ir = (object) [
                     "id" => "n0",
                     "outType" => (object) [
                         "arr" => (object) [
-                            "obj" => (object) [],
+                            "name" => "WriteSummary",
+                            "obj" => (object) [
+                                "changes" => "int",
+                                "lastInsertRowid" => "int",
+                            ],
                         ],
                     ],
                     "portSchemas" => (object) [
@@ -2346,6 +2564,7 @@ $ir = (object) [
             "inputPorts" => (object) [
                 "rows" => (object) [
                     "elemType" => (object) [
+                        "name" => "NewUser",
                         "obj" => (object) [
                             "email" => "string",
                             "name" => "string",
@@ -2371,7 +2590,11 @@ $ir = (object) [
             ],
             "outputType" => (object) [
                 "arr" => (object) [
-                    "obj" => (object) [],
+                    "obj" => (object) [
+                        "changes" => "int",
+                        "lastInsertRowid" => "int",
+                    ],
+                    "name" => "WriteSummary",
                 ],
             ],
         ],
@@ -2382,7 +2605,11 @@ $ir = (object) [
                     "id" => "n0",
                     "outType" => (object) [
                         "arr" => (object) [
-                            "obj" => (object) [],
+                            "name" => "WriteSummary",
+                            "obj" => (object) [
+                                "changes" => "int",
+                                "lastInsertRowid" => "int",
+                            ],
                         ],
                     ],
                     "portSchemas" => (object) [
@@ -2433,6 +2660,7 @@ $ir = (object) [
             "inputPorts" => (object) [
                 "rows" => (object) [
                     "elemType" => (object) [
+                        "name" => "UserPatch",
                         "obj" => (object) [
                             "id" => "int",
                             "name" => "string",
@@ -2458,7 +2686,11 @@ $ir = (object) [
             ],
             "outputType" => (object) [
                 "arr" => (object) [
-                    "obj" => (object) [],
+                    "obj" => (object) [
+                        "changes" => "int",
+                        "lastInsertRowid" => "int",
+                    ],
+                    "name" => "WriteSummary",
                 ],
             ],
         ],
@@ -2469,6 +2701,7 @@ $ir = (object) [
                     "id" => "n0",
                     "outType" => (object) [
                         "arr" => (object) [
+                            "name" => "IdRow",
                             "obj" => (object) [
                                 "id" => "float",
                             ],
@@ -2483,13 +2716,6 @@ $ir = (object) [
                             "elemType" => "value",
                             "required" => true,
                             "type" => "array",
-                        ],
-                        "readColumns" => (object) [
-                            "elemType" => (object) [
-                                "obj" => (object) [],
-                            ],
-                            "required" => false,
-                            "type" => "object",
                         ],
                         "returning" => (object) [
                             "required" => true,
@@ -2581,11 +2807,8 @@ $ir = (object) [
                             "write" => true,
                         ],
                     ],
-                    "outType" => (object) [
-                        "arr" => (object) [
-                            "obj" => (object) [],
-                        ],
-                    ],
+                    "outType" => "value",
+                    "wirePassthrough" => true,
                 ],
             ],
             "inputPorts" => (object) [
@@ -2620,11 +2843,7 @@ $ir = (object) [
                 ],
             ],
             "outputType" => (object) [
-                "arr" => (object) [
-                    "arr" => (object) [
-                        "obj" => (object) [],
-                    ],
-                ],
+                "arr" => "value",
             ],
         ],
         (object) [
@@ -2634,6 +2853,7 @@ $ir = (object) [
                     "id" => "n0",
                     "outType" => (object) [
                         "arr" => (object) [
+                            "name" => "IdRow",
                             "obj" => (object) [
                                 "id" => "float",
                             ],
@@ -2648,13 +2868,6 @@ $ir = (object) [
                             "elemType" => "value",
                             "required" => true,
                             "type" => "array",
-                        ],
-                        "readColumns" => (object) [
-                            "elemType" => (object) [
-                                "obj" => (object) [],
-                            ],
-                            "required" => false,
-                            "type" => "object",
                         ],
                         "returning" => (object) [
                             "required" => true,
@@ -2746,11 +2959,8 @@ $ir = (object) [
                             "write" => true,
                         ],
                     ],
-                    "outType" => (object) [
-                        "arr" => (object) [
-                            "obj" => (object) [],
-                        ],
-                    ],
+                    "outType" => "value",
+                    "wirePassthrough" => true,
                 ],
             ],
             "inputPorts" => (object) [
@@ -2785,11 +2995,7 @@ $ir = (object) [
                 ],
             ],
             "outputType" => (object) [
-                "arr" => (object) [
-                    "arr" => (object) [
-                        "obj" => (object) [],
-                    ],
-                ],
+                "arr" => "value",
             ],
         ],
         (object) [
@@ -2799,6 +3005,7 @@ $ir = (object) [
                     "id" => "n0",
                     "outType" => (object) [
                         "arr" => (object) [
+                            "name" => "IdRow",
                             "obj" => (object) [
                                 "id" => "float",
                             ],
@@ -2814,13 +3021,6 @@ $ir = (object) [
                             "required" => true,
                             "type" => "array",
                         ],
-                        "readColumns" => (object) [
-                            "elemType" => (object) [
-                                "obj" => (object) [],
-                            ],
-                            "required" => false,
-                            "type" => "object",
-                        ],
                         "returning" => (object) [
                             "required" => true,
                             "type" => "bool",
@@ -2828,11 +3028,6 @@ $ir = (object) [
                         "sql" => (object) [
                             "required" => true,
                             "type" => "string",
-                        ],
-                        "where" => (object) [
-                            "elemType" => "string",
-                            "required" => false,
-                            "type" => "array",
                         ],
                         "write" => (object) [
                             "required" => true,
@@ -2889,11 +3084,6 @@ $ir = (object) [
                                 "required" => true,
                                 "type" => "string",
                             ],
-                            "where" => (object) [
-                                "elemType" => "string",
-                                "required" => false,
-                                "type" => "array",
-                            ],
                             "write" => (object) [
                                 "required" => true,
                                 "type" => "bool",
@@ -2921,11 +3111,8 @@ $ir = (object) [
                             "write" => true,
                         ],
                     ],
-                    "outType" => (object) [
-                        "arr" => (object) [
-                            "obj" => (object) [],
-                        ],
-                    ],
+                    "outType" => "value",
+                    "wirePassthrough" => true,
                 ],
             ],
             "inputPorts" => (object) [
@@ -2960,11 +3147,7 @@ $ir = (object) [
                 ],
             ],
             "outputType" => (object) [
-                "arr" => (object) [
-                    "arr" => (object) [
-                        "obj" => (object) [],
-                    ],
-                ],
+                "arr" => "value",
             ],
         ],
         (object) [
@@ -2974,6 +3157,7 @@ $ir = (object) [
                     "id" => "n0",
                     "outType" => (object) [
                         "arr" => (object) [
+                            "name" => "IdRow",
                             "obj" => (object) [
                                 "id" => "float",
                             ],
@@ -2988,13 +3172,6 @@ $ir = (object) [
                             "elemType" => "value",
                             "required" => true,
                             "type" => "array",
-                        ],
-                        "readColumns" => (object) [
-                            "elemType" => (object) [
-                                "obj" => (object) [],
-                            ],
-                            "required" => false,
-                            "type" => "object",
                         ],
                         "returning" => (object) [
                             "required" => true,
@@ -3059,11 +3236,6 @@ $ir = (object) [
                                 "required" => true,
                                 "type" => "string",
                             ],
-                            "where" => (object) [
-                                "elemType" => "string",
-                                "required" => false,
-                                "type" => "array",
-                            ],
                             "write" => (object) [
                                 "required" => true,
                                 "type" => "bool",
@@ -3086,11 +3258,8 @@ $ir = (object) [
                             "write" => true,
                         ],
                     ],
-                    "outType" => (object) [
-                        "arr" => (object) [
-                            "obj" => (object) [],
-                        ],
-                    ],
+                    "outType" => "value",
+                    "wirePassthrough" => true,
                 ],
             ],
             "inputPorts" => (object) [
@@ -3121,11 +3290,7 @@ $ir = (object) [
                 ],
             ],
             "outputType" => (object) [
-                "arr" => (object) [
-                    "arr" => (object) [
-                        "obj" => (object) [],
-                    ],
-                ],
+                "arr" => "value",
             ],
         ],
     ],

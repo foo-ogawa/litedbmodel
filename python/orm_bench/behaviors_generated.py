@@ -4,21 +4,21 @@
 # native dict literal and handed to the EXISTING runtime core (run_behavior) —
 # no execution logic is generated. Handlers are ALWAYS injected at the boundary
 # (IR + {effects,config,hooks}); they are never generated.
-# irFingerprint: fnv1a64:5e2ad87fb050e695
+# irFingerprint: fnv1a64:0ca22ea43e03600b
 from behavior_contracts import SPEC_VERSIONS, fingerprint_component_graph, run_behavior
 
 # Spec versions baked at generation time (fail-closed constant comparison at load).
 EXPECTED_SPEC_VERSIONS = {"behavior": 5, "expression": 2, "plan": 1}
 
 # FNV-1a 64 fingerprint of the source portable IR (canonical_json discipline, #208).
-IR_FINGERPRINT = "fnv1a64:5e2ad87fb050e695"
+IR_FINGERPRINT = "fnv1a64:0ca22ea43e03600b"
 
 # Component names exposed by bind(), in IR declaration order.
 COMPONENT_NAMES = ("findAll", "filterPaginateSort", "findFirst", "findUnique", "nestedFindAll", "nestedFindFirst", "nestedFindUnique", "nestedRelations", "compositeRelations", "create", "update", "upsert", "createMany", "upsertMany", "updateMany", "nestedCreate", "nestedUpsert", "nestedUpdate", "delete")
 
 # The portable component-graph IR, embedded as a native dict literal (no JSON parse at runtime).
 IR = {
-  "irVersion": 2,
+  "irVersion": 3,
   "exprVersion": 2,
   "components": [
     {
@@ -28,11 +28,12 @@ IR = {
           "id": "n0",
           "outType": {
             "arr": {
+              "name": "UserRow",
               "obj": {
-                "id": "float",
                 "email": {
                   "opt": "string"
                 },
+                "id": "float",
                 "name": {
                   "opt": "string"
                 }
@@ -48,13 +49,6 @@ IR = {
               "elemType": "value",
               "required": True,
               "type": "array"
-            },
-            "readColumns": {
-              "elemType": {
-                "obj": {}
-              },
-              "required": False,
-              "type": "object"
             },
             "returning": {
               "required": True,
@@ -98,14 +92,15 @@ IR = {
       "outputType": {
         "arr": {
           "obj": {
-            "id": "float",
             "email": {
               "opt": "string"
             },
+            "id": "float",
             "name": {
               "opt": "string"
             }
-          }
+          },
+          "name": "UserRow"
         }
       }
     },
@@ -116,21 +111,22 @@ IR = {
           "id": "n0",
           "outType": {
             "arr": {
+              "name": "PostFullRow",
               "obj": {
-                "id": "float",
-                "title": {
-                  "opt": "string"
+                "author_id": {
+                  "opt": "float"
                 },
                 "content": {
                   "opt": "string"
                 },
+                "created_at": {
+                  "opt": "string"
+                },
+                "id": "float",
                 "published": {
                   "opt": "float"
                 },
-                "author_id": {
-                  "opt": "float"
-                },
-                "created_at": {
+                "title": {
                   "opt": "string"
                 }
               }
@@ -146,13 +142,6 @@ IR = {
               "required": True,
               "type": "array"
             },
-            "readColumns": {
-              "elemType": {
-                "obj": {}
-              },
-              "required": False,
-              "type": "object"
-            },
             "returning": {
               "required": True,
               "type": "bool"
@@ -160,11 +149,6 @@ IR = {
             "sql": {
               "required": True,
               "type": "string"
-            },
-            "where": {
-              "elemType": "string",
-              "required": False,
-              "type": "array"
             },
             "write": {
               "required": True,
@@ -211,23 +195,24 @@ IR = {
       "outputType": {
         "arr": {
           "obj": {
-            "id": "float",
-            "title": {
-              "opt": "string"
+            "author_id": {
+              "opt": "float"
             },
             "content": {
               "opt": "string"
             },
+            "created_at": {
+              "opt": "string"
+            },
+            "id": "float",
             "published": {
               "opt": "float"
             },
-            "author_id": {
-              "opt": "float"
-            },
-            "created_at": {
+            "title": {
               "opt": "string"
             }
-          }
+          },
+          "name": "PostFullRow"
         }
       }
     },
@@ -238,11 +223,12 @@ IR = {
           "id": "n0",
           "outType": {
             "arr": {
+              "name": "UserRow",
               "obj": {
-                "id": "float",
                 "email": {
                   "opt": "string"
                 },
+                "id": "float",
                 "name": {
                   "opt": "string"
                 }
@@ -259,13 +245,6 @@ IR = {
               "required": True,
               "type": "array"
             },
-            "readColumns": {
-              "elemType": {
-                "obj": {}
-              },
-              "required": False,
-              "type": "object"
-            },
             "returning": {
               "required": True,
               "type": "bool"
@@ -273,11 +252,6 @@ IR = {
             "sql": {
               "required": True,
               "type": "string"
-            },
-            "where": {
-              "elemType": "string",
-              "required": False,
-              "type": "array"
             },
             "write": {
               "required": True,
@@ -324,14 +298,15 @@ IR = {
       "outputType": {
         "arr": {
           "obj": {
-            "id": "float",
             "email": {
               "opt": "string"
             },
+            "id": "float",
             "name": {
               "opt": "string"
             }
-          }
+          },
+          "name": "UserRow"
         }
       }
     },
@@ -342,11 +317,12 @@ IR = {
           "id": "n0",
           "outType": {
             "arr": {
+              "name": "UserRow",
               "obj": {
-                "id": "float",
                 "email": {
                   "opt": "string"
                 },
+                "id": "float",
                 "name": {
                   "opt": "string"
                 }
@@ -363,13 +339,6 @@ IR = {
               "required": True,
               "type": "array"
             },
-            "readColumns": {
-              "elemType": {
-                "obj": {}
-              },
-              "required": False,
-              "type": "object"
-            },
             "returning": {
               "required": True,
               "type": "bool"
@@ -377,11 +346,6 @@ IR = {
             "sql": {
               "required": True,
               "type": "string"
-            },
-            "where": {
-              "elemType": "string",
-              "required": False,
-              "type": "array"
             },
             "write": {
               "required": True,
@@ -428,14 +392,15 @@ IR = {
       "outputType": {
         "arr": {
           "obj": {
-            "id": "float",
             "email": {
               "opt": "string"
             },
+            "id": "float",
             "name": {
               "opt": "string"
             }
-          }
+          },
+          "name": "UserRow"
         }
       }
     },
@@ -456,13 +421,6 @@ IR = {
               "elemType": "value",
               "required": True,
               "type": "array"
-            },
-            "readColumns": {
-              "elemType": {
-                "obj": {}
-              },
-              "required": False,
-              "type": "object"
             },
             "returning": {
               "required": True,
@@ -491,7 +449,9 @@ IR = {
         {
           "component": "pluck",
           "id": "n1",
-          "outType": "value",
+          "outType": {
+            "arr": "value"
+          },
           "parent": "n0",
           "portSchemas": {
             "col": {
@@ -536,13 +496,6 @@ IR = {
               "required": True,
               "type": "array"
             },
-            "readColumns": {
-              "elemType": {
-                "obj": {}
-              },
-              "required": False,
-              "type": "object"
-            },
             "returning": {
               "required": True,
               "type": "bool"
@@ -578,7 +531,30 @@ IR = {
           "id": "n3",
           "outType": {
             "arr": {
-              "obj": {}
+              "name": "UserWithPosts",
+              "obj": {
+                "email": {
+                  "opt": "string"
+                },
+                "id": "float",
+                "name": {
+                  "opt": "string"
+                },
+                "posts": {
+                  "arr": {
+                    "name": "PostRow",
+                    "obj": {
+                      "author_id": {
+                        "opt": "float"
+                      },
+                      "id": "float",
+                      "title": {
+                        "opt": "string"
+                      }
+                    }
+                  }
+                }
+              }
             }
           },
           "parent": "n0",
@@ -664,7 +640,30 @@ IR = {
       },
       "outputType": {
         "arr": {
-          "obj": {}
+          "obj": {
+            "email": {
+              "opt": "string"
+            },
+            "id": "float",
+            "name": {
+              "opt": "string"
+            },
+            "posts": {
+              "arr": {
+                "obj": {
+                  "author_id": {
+                    "opt": "float"
+                  },
+                  "id": "float",
+                  "title": {
+                    "opt": "string"
+                  }
+                },
+                "name": "PostRow"
+              }
+            }
+          },
+          "name": "UserWithPosts"
         }
       }
     },
@@ -686,13 +685,6 @@ IR = {
               "required": True,
               "type": "array"
             },
-            "readColumns": {
-              "elemType": {
-                "obj": {}
-              },
-              "required": False,
-              "type": "object"
-            },
             "returning": {
               "required": True,
               "type": "bool"
@@ -700,11 +692,6 @@ IR = {
             "sql": {
               "required": True,
               "type": "string"
-            },
-            "where": {
-              "elemType": "string",
-              "required": False,
-              "type": "array"
             },
             "write": {
               "required": True,
@@ -731,7 +718,9 @@ IR = {
         {
           "component": "pluck",
           "id": "n1",
-          "outType": "value",
+          "outType": {
+            "arr": "value"
+          },
           "parent": "n0",
           "portSchemas": {
             "col": {
@@ -776,13 +765,6 @@ IR = {
               "required": True,
               "type": "array"
             },
-            "readColumns": {
-              "elemType": {
-                "obj": {}
-              },
-              "required": False,
-              "type": "object"
-            },
             "returning": {
               "required": True,
               "type": "bool"
@@ -818,7 +800,30 @@ IR = {
           "id": "n3",
           "outType": {
             "arr": {
-              "obj": {}
+              "name": "UserWithPosts",
+              "obj": {
+                "email": {
+                  "opt": "string"
+                },
+                "id": "float",
+                "name": {
+                  "opt": "string"
+                },
+                "posts": {
+                  "arr": {
+                    "name": "PostRow",
+                    "obj": {
+                      "author_id": {
+                        "opt": "float"
+                      },
+                      "id": "float",
+                      "title": {
+                        "opt": "string"
+                      }
+                    }
+                  }
+                }
+              }
             }
           },
           "parent": "n0",
@@ -909,7 +914,30 @@ IR = {
       },
       "outputType": {
         "arr": {
-          "obj": {}
+          "obj": {
+            "email": {
+              "opt": "string"
+            },
+            "id": "float",
+            "name": {
+              "opt": "string"
+            },
+            "posts": {
+              "arr": {
+                "obj": {
+                  "author_id": {
+                    "opt": "float"
+                  },
+                  "id": "float",
+                  "title": {
+                    "opt": "string"
+                  }
+                },
+                "name": "PostRow"
+              }
+            }
+          },
+          "name": "UserWithPosts"
         }
       }
     },
@@ -931,13 +959,6 @@ IR = {
               "required": True,
               "type": "array"
             },
-            "readColumns": {
-              "elemType": {
-                "obj": {}
-              },
-              "required": False,
-              "type": "object"
-            },
             "returning": {
               "required": True,
               "type": "bool"
@@ -945,11 +966,6 @@ IR = {
             "sql": {
               "required": True,
               "type": "string"
-            },
-            "where": {
-              "elemType": "string",
-              "required": False,
-              "type": "array"
             },
             "write": {
               "required": True,
@@ -976,7 +992,9 @@ IR = {
         {
           "component": "pluck",
           "id": "n1",
-          "outType": "value",
+          "outType": {
+            "arr": "value"
+          },
           "parent": "n0",
           "portSchemas": {
             "col": {
@@ -1021,13 +1039,6 @@ IR = {
               "required": True,
               "type": "array"
             },
-            "readColumns": {
-              "elemType": {
-                "obj": {}
-              },
-              "required": False,
-              "type": "object"
-            },
             "returning": {
               "required": True,
               "type": "bool"
@@ -1063,7 +1074,30 @@ IR = {
           "id": "n3",
           "outType": {
             "arr": {
-              "obj": {}
+              "name": "UserWithPosts",
+              "obj": {
+                "email": {
+                  "opt": "string"
+                },
+                "id": "float",
+                "name": {
+                  "opt": "string"
+                },
+                "posts": {
+                  "arr": {
+                    "name": "PostRow",
+                    "obj": {
+                      "author_id": {
+                        "opt": "float"
+                      },
+                      "id": "float",
+                      "title": {
+                        "opt": "string"
+                      }
+                    }
+                  }
+                }
+              }
             }
           },
           "parent": "n0",
@@ -1154,7 +1188,30 @@ IR = {
       },
       "outputType": {
         "arr": {
-          "obj": {}
+          "obj": {
+            "email": {
+              "opt": "string"
+            },
+            "id": "float",
+            "name": {
+              "opt": "string"
+            },
+            "posts": {
+              "arr": {
+                "obj": {
+                  "author_id": {
+                    "opt": "float"
+                  },
+                  "id": "float",
+                  "title": {
+                    "opt": "string"
+                  }
+                },
+                "name": "PostRow"
+              }
+            }
+          },
+          "name": "UserWithPosts"
         }
       }
     },
@@ -1175,13 +1232,6 @@ IR = {
               "elemType": "value",
               "required": True,
               "type": "array"
-            },
-            "readColumns": {
-              "elemType": {
-                "obj": {}
-              },
-              "required": False,
-              "type": "object"
             },
             "returning": {
               "required": True,
@@ -1210,7 +1260,9 @@ IR = {
         {
           "component": "pluck",
           "id": "n1",
-          "outType": "value",
+          "outType": {
+            "arr": "value"
+          },
           "parent": "n0",
           "portSchemas": {
             "col": {
@@ -1255,13 +1307,6 @@ IR = {
               "required": True,
               "type": "array"
             },
-            "readColumns": {
-              "elemType": {
-                "obj": {}
-              },
-              "required": False,
-              "type": "object"
-            },
             "returning": {
               "required": True,
               "type": "bool"
@@ -1295,7 +1340,9 @@ IR = {
         {
           "component": "pluck",
           "id": "n3",
-          "outType": "value",
+          "outType": {
+            "arr": "value"
+          },
           "parent": "n2",
           "portSchemas": {
             "col": {
@@ -1339,13 +1386,6 @@ IR = {
               "elemType": "value",
               "required": True,
               "type": "array"
-            },
-            "readColumns": {
-              "elemType": {
-                "obj": {}
-              },
-              "required": False,
-              "type": "object"
             },
             "returning": {
               "required": True,
@@ -1445,7 +1485,46 @@ IR = {
           "id": "n6",
           "outType": {
             "arr": {
-              "obj": {}
+              "name": "UserWithPostsAndComments",
+              "obj": {
+                "email": {
+                  "opt": "string"
+                },
+                "id": "float",
+                "name": {
+                  "opt": "string"
+                },
+                "posts": {
+                  "arr": {
+                    "name": "PostWithComments",
+                    "obj": {
+                      "author_id": {
+                        "opt": "float"
+                      },
+                      "comments": {
+                        "arr": {
+                          "name": "CommentRow",
+                          "obj": {
+                            "body": {
+                              "opt": "string"
+                            },
+                            "id": {
+                              "opt": "float"
+                            },
+                            "post_id": {
+                              "opt": "float"
+                            }
+                          }
+                        }
+                      },
+                      "id": "float",
+                      "title": {
+                        "opt": "string"
+                      }
+                    }
+                  }
+                }
+              }
             }
           },
           "parent": "n0",
@@ -1540,7 +1619,46 @@ IR = {
       },
       "outputType": {
         "arr": {
-          "obj": {}
+          "obj": {
+            "email": {
+              "opt": "string"
+            },
+            "id": "float",
+            "name": {
+              "opt": "string"
+            },
+            "posts": {
+              "arr": {
+                "obj": {
+                  "author_id": {
+                    "opt": "float"
+                  },
+                  "comments": {
+                    "arr": {
+                      "obj": {
+                        "body": {
+                          "opt": "string"
+                        },
+                        "id": {
+                          "opt": "float"
+                        },
+                        "post_id": {
+                          "opt": "float"
+                        }
+                      },
+                      "name": "CommentRow"
+                    }
+                  },
+                  "id": "float",
+                  "title": {
+                    "opt": "string"
+                  }
+                },
+                "name": "PostWithComments"
+              }
+            }
+          },
+          "name": "UserWithPostsAndComments"
         }
       }
     },
@@ -1561,13 +1679,6 @@ IR = {
               "elemType": "value",
               "required": True,
               "type": "array"
-            },
-            "readColumns": {
-              "elemType": {
-                "obj": {}
-              },
-              "required": False,
-              "type": "object"
             },
             "returning": {
               "required": True,
@@ -1596,7 +1707,9 @@ IR = {
         {
           "component": "pluck",
           "id": "n1",
-          "outType": "value",
+          "outType": {
+            "arr": "value"
+          },
           "parent": "n0",
           "portSchemas": {
             "col": {
@@ -1642,13 +1755,6 @@ IR = {
               "required": True,
               "type": "array"
             },
-            "readColumns": {
-              "elemType": {
-                "obj": {}
-              },
-              "required": False,
-              "type": "object"
-            },
             "returning": {
               "required": True,
               "type": "bool"
@@ -1682,7 +1788,9 @@ IR = {
         {
           "component": "pluck",
           "id": "n3",
-          "outType": "value",
+          "outType": {
+            "arr": "value"
+          },
           "parent": "n2",
           "portSchemas": {
             "col": {
@@ -1727,13 +1835,6 @@ IR = {
               "elemType": "value",
               "required": True,
               "type": "array"
-            },
-            "readColumns": {
-              "elemType": {
-                "obj": {}
-              },
-              "required": False,
-              "type": "object"
             },
             "returning": {
               "required": True,
@@ -1835,7 +1936,56 @@ IR = {
           "id": "n6",
           "outType": {
             "arr": {
-              "obj": {}
+              "name": "TenantUserWithPosts",
+              "obj": {
+                "name": {
+                  "opt": "string"
+                },
+                "posts": {
+                  "arr": {
+                    "name": "TenantPostWithComments",
+                    "obj": {
+                      "comments": {
+                        "arr": {
+                          "name": "TenantCommentRow",
+                          "obj": {
+                            "body": {
+                              "opt": "string"
+                            },
+                            "comment_id": {
+                              "opt": "float"
+                            },
+                            "post_id": {
+                              "opt": "float"
+                            },
+                            "tenant_id": {
+                              "opt": "float"
+                            }
+                          }
+                        }
+                      },
+                      "post_id": {
+                        "opt": "float"
+                      },
+                      "tenant_id": {
+                        "opt": "float"
+                      },
+                      "title": {
+                        "opt": "string"
+                      },
+                      "user_id": {
+                        "opt": "float"
+                      }
+                    }
+                  }
+                },
+                "tenant_id": {
+                  "opt": "float"
+                },
+                "user_id": {
+                  "opt": "float"
+                }
+              }
             }
           },
           "parent": "n0",
@@ -1932,7 +2082,56 @@ IR = {
       },
       "outputType": {
         "arr": {
-          "obj": {}
+          "obj": {
+            "name": {
+              "opt": "string"
+            },
+            "posts": {
+              "arr": {
+                "obj": {
+                  "comments": {
+                    "arr": {
+                      "obj": {
+                        "body": {
+                          "opt": "string"
+                        },
+                        "comment_id": {
+                          "opt": "float"
+                        },
+                        "post_id": {
+                          "opt": "float"
+                        },
+                        "tenant_id": {
+                          "opt": "float"
+                        }
+                      },
+                      "name": "TenantCommentRow"
+                    }
+                  },
+                  "post_id": {
+                    "opt": "float"
+                  },
+                  "tenant_id": {
+                    "opt": "float"
+                  },
+                  "title": {
+                    "opt": "string"
+                  },
+                  "user_id": {
+                    "opt": "float"
+                  }
+                },
+                "name": "TenantPostWithComments"
+              }
+            },
+            "tenant_id": {
+              "opt": "float"
+            },
+            "user_id": {
+              "opt": "float"
+            }
+          },
+          "name": "TenantUserWithPosts"
         }
       }
     },
@@ -1943,7 +2142,11 @@ IR = {
           "id": "n0",
           "outType": {
             "arr": {
-              "obj": {}
+              "name": "WriteSummary",
+              "obj": {
+                "changes": "int",
+                "lastInsertRowid": "int"
+              }
             }
           },
           "portSchemas": {
@@ -2017,7 +2220,11 @@ IR = {
       },
       "outputType": {
         "arr": {
-          "obj": {}
+          "obj": {
+            "changes": "int",
+            "lastInsertRowid": "int"
+          },
+          "name": "WriteSummary"
         }
       }
     },
@@ -2028,7 +2235,11 @@ IR = {
           "id": "n0",
           "outType": {
             "arr": {
-              "obj": {}
+              "name": "WriteSummary",
+              "obj": {
+                "changes": "int",
+                "lastInsertRowid": "int"
+              }
             }
           },
           "portSchemas": {
@@ -2048,11 +2259,6 @@ IR = {
             "sql": {
               "required": True,
               "type": "string"
-            },
-            "where": {
-              "elemType": "string",
-              "required": False,
-              "type": "array"
             },
             "write": {
               "required": True,
@@ -2107,7 +2313,11 @@ IR = {
       },
       "outputType": {
         "arr": {
-          "obj": {}
+          "obj": {
+            "changes": "int",
+            "lastInsertRowid": "int"
+          },
+          "name": "WriteSummary"
         }
       }
     },
@@ -2118,6 +2328,7 @@ IR = {
           "id": "n0",
           "outType": {
             "arr": {
+              "name": "IdRow",
               "obj": {
                 "id": "float"
               }
@@ -2132,13 +2343,6 @@ IR = {
               "elemType": "value",
               "required": True,
               "type": "array"
-            },
-            "readColumns": {
-              "elemType": {
-                "obj": {}
-              },
-              "required": False,
-              "type": "object"
             },
             "returning": {
               "required": True,
@@ -2203,7 +2407,8 @@ IR = {
         "arr": {
           "obj": {
             "id": "float"
-          }
+          },
+          "name": "IdRow"
         }
       }
     },
@@ -2214,7 +2419,11 @@ IR = {
           "id": "n0",
           "outType": {
             "arr": {
-              "obj": {}
+              "name": "WriteSummary",
+              "obj": {
+                "changes": "int",
+                "lastInsertRowid": "int"
+              }
             }
           },
           "portSchemas": {
@@ -2260,6 +2469,7 @@ IR = {
       "inputPorts": {
         "rows": {
           "elemType": {
+            "name": "NewUser",
             "obj": {
               "email": "string",
               "name": "string"
@@ -2285,7 +2495,11 @@ IR = {
       },
       "outputType": {
         "arr": {
-          "obj": {}
+          "obj": {
+            "changes": "int",
+            "lastInsertRowid": "int"
+          },
+          "name": "WriteSummary"
         }
       }
     },
@@ -2296,7 +2510,11 @@ IR = {
           "id": "n0",
           "outType": {
             "arr": {
-              "obj": {}
+              "name": "WriteSummary",
+              "obj": {
+                "changes": "int",
+                "lastInsertRowid": "int"
+              }
             }
           },
           "portSchemas": {
@@ -2342,6 +2560,7 @@ IR = {
       "inputPorts": {
         "rows": {
           "elemType": {
+            "name": "NewUser",
             "obj": {
               "email": "string",
               "name": "string"
@@ -2367,7 +2586,11 @@ IR = {
       },
       "outputType": {
         "arr": {
-          "obj": {}
+          "obj": {
+            "changes": "int",
+            "lastInsertRowid": "int"
+          },
+          "name": "WriteSummary"
         }
       }
     },
@@ -2378,7 +2601,11 @@ IR = {
           "id": "n0",
           "outType": {
             "arr": {
-              "obj": {}
+              "name": "WriteSummary",
+              "obj": {
+                "changes": "int",
+                "lastInsertRowid": "int"
+              }
             }
           },
           "portSchemas": {
@@ -2429,6 +2656,7 @@ IR = {
       "inputPorts": {
         "rows": {
           "elemType": {
+            "name": "UserPatch",
             "obj": {
               "id": "int",
               "name": "string"
@@ -2454,7 +2682,11 @@ IR = {
       },
       "outputType": {
         "arr": {
-          "obj": {}
+          "obj": {
+            "changes": "int",
+            "lastInsertRowid": "int"
+          },
+          "name": "WriteSummary"
         }
       }
     },
@@ -2465,6 +2697,7 @@ IR = {
           "id": "n0",
           "outType": {
             "arr": {
+              "name": "IdRow",
               "obj": {
                 "id": "float"
               }
@@ -2479,13 +2712,6 @@ IR = {
               "elemType": "value",
               "required": True,
               "type": "array"
-            },
-            "readColumns": {
-              "elemType": {
-                "obj": {}
-              },
-              "required": False,
-              "type": "object"
             },
             "returning": {
               "required": True,
@@ -2577,11 +2803,8 @@ IR = {
               "write": True
             }
           },
-          "outType": {
-            "arr": {
-              "obj": {}
-            }
-          }
+          "outType": "value",
+          "wirePassthrough": True
         }
       ],
       "inputPorts": {
@@ -2616,11 +2839,7 @@ IR = {
         ]
       },
       "outputType": {
-        "arr": {
-          "arr": {
-            "obj": {}
-          }
-        }
+        "arr": "value"
       }
     },
     {
@@ -2630,6 +2849,7 @@ IR = {
           "id": "n0",
           "outType": {
             "arr": {
+              "name": "IdRow",
               "obj": {
                 "id": "float"
               }
@@ -2644,13 +2864,6 @@ IR = {
               "elemType": "value",
               "required": True,
               "type": "array"
-            },
-            "readColumns": {
-              "elemType": {
-                "obj": {}
-              },
-              "required": False,
-              "type": "object"
             },
             "returning": {
               "required": True,
@@ -2742,11 +2955,8 @@ IR = {
               "write": True
             }
           },
-          "outType": {
-            "arr": {
-              "obj": {}
-            }
-          }
+          "outType": "value",
+          "wirePassthrough": True
         }
       ],
       "inputPorts": {
@@ -2781,11 +2991,7 @@ IR = {
         ]
       },
       "outputType": {
-        "arr": {
-          "arr": {
-            "obj": {}
-          }
-        }
+        "arr": "value"
       }
     },
     {
@@ -2795,6 +3001,7 @@ IR = {
           "id": "n0",
           "outType": {
             "arr": {
+              "name": "IdRow",
               "obj": {
                 "id": "float"
               }
@@ -2810,13 +3017,6 @@ IR = {
               "required": True,
               "type": "array"
             },
-            "readColumns": {
-              "elemType": {
-                "obj": {}
-              },
-              "required": False,
-              "type": "object"
-            },
             "returning": {
               "required": True,
               "type": "bool"
@@ -2824,11 +3024,6 @@ IR = {
             "sql": {
               "required": True,
               "type": "string"
-            },
-            "where": {
-              "elemType": "string",
-              "required": False,
-              "type": "array"
             },
             "write": {
               "required": True,
@@ -2885,11 +3080,6 @@ IR = {
                 "required": True,
                 "type": "string"
               },
-              "where": {
-                "elemType": "string",
-                "required": False,
-                "type": "array"
-              },
               "write": {
                 "required": True,
                 "type": "bool"
@@ -2917,11 +3107,8 @@ IR = {
               "write": True
             }
           },
-          "outType": {
-            "arr": {
-              "obj": {}
-            }
-          }
+          "outType": "value",
+          "wirePassthrough": True
         }
       ],
       "inputPorts": {
@@ -2956,11 +3143,7 @@ IR = {
         ]
       },
       "outputType": {
-        "arr": {
-          "arr": {
-            "obj": {}
-          }
-        }
+        "arr": "value"
       }
     },
     {
@@ -2970,6 +3153,7 @@ IR = {
           "id": "n0",
           "outType": {
             "arr": {
+              "name": "IdRow",
               "obj": {
                 "id": "float"
               }
@@ -2984,13 +3168,6 @@ IR = {
               "elemType": "value",
               "required": True,
               "type": "array"
-            },
-            "readColumns": {
-              "elemType": {
-                "obj": {}
-              },
-              "required": False,
-              "type": "object"
             },
             "returning": {
               "required": True,
@@ -3055,11 +3232,6 @@ IR = {
                 "required": True,
                 "type": "string"
               },
-              "where": {
-                "elemType": "string",
-                "required": False,
-                "type": "array"
-              },
               "write": {
                 "required": True,
                 "type": "bool"
@@ -3082,11 +3254,8 @@ IR = {
               "write": True
             }
           },
-          "outType": {
-            "arr": {
-              "obj": {}
-            }
-          }
+          "outType": "value",
+          "wirePassthrough": True
         }
       ],
       "inputPorts": {
@@ -3117,11 +3286,7 @@ IR = {
         ]
       },
       "outputType": {
-        "arr": {
-          "arr": {
-            "obj": {}
-          }
-        }
+        "arr": "value"
       }
     }
   ]
