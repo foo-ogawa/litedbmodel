@@ -45,18 +45,18 @@ def dedupe_keys(parents: Sequence[Mapping[str, Any]], key_cols: Sequence[str]) -
 def _bind_keys(op: Mapping[str, Any], tuples: Sequence[Sequence[Any]]) -> List[Any]:
     """Bind the deduped keys to the op's params per dialect + arity (mirrors TS ``bindKeys``).
 
-    Single-key: PG → ONE scalar list param; MySQL/SQLite → ONE JSON scalar-array string. Composite:
-    PG → ONE list param PER key column (transposed tuples → ``unnest(?::t1[], ?::t2[])``);
-    MySQL/SQLite → ONE JSON array-of-tuples string. Returns the positional param list.
+    Composite: ONE JSON array-of-tuples string on EVERY dialect (#159) — PostgreSQL expands it
+    server-side with json_array_elements, so the key set crosses as one param whatever its length
+    and whatever its arity. Single-key: PG → ONE scalar array param; MySQL/SQLite → ONE JSON
+    scalar-array string.
     """
-    composite = op.get("parentKeys") is not None
+    if op.get("parentKeys") is not None:
+        payload = [list(t) for t in tuples]
+        return [json.dumps(payload, separators=(",", ":"), ensure_ascii=False)]
+    keys = [t[0] for t in tuples]
     if op["dialect"] == "postgres":
-        if not composite:
-            return [[t[0] for t in tuples]]  # ONE scalar array param
-        n = len(_parent_key_cols(op))
-        return [[t[col] for t in tuples] for col in range(n)]  # one array param per column
-    payload = [list(t) for t in tuples] if composite else [t[0] for t in tuples]
-    return [json.dumps(payload, separators=(",", ":"), ensure_ascii=False)]
+        return [keys]
+    return [json.dumps(keys, separators=(",", ":"), ensure_ascii=False)]
 
 
 def run_relation_op(

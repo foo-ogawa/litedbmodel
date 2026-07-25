@@ -99,15 +99,30 @@ def _effective_statement(ports: Mapping[str, Any]) -> Tuple[str, List[Any]]:
     return _splice_where(ports["sql"], where_sql), where_params + params
 
 
+def _is_tuple_set(param: Sequence[Any]) -> bool:
+    """A COMPOSITE relation key set: a bound array whose elements are the key TUPLES. Every other array
+    param is a list of SCALAR cells, because no column class de-boxes to a nested list."""
+    return len(param) > 0 and isinstance(param[0], list)
+
+
 def _bind_params(params: Sequence[Any], dialect: str) -> List[Any]:
-    """Bind a leaf's resolved param list for the driver per dialect (mirror of the rust driver's
-    ``WireValue`` → param encoding + ``relation.py`` ``_bind_keys``). An array param (a relation key set
-    from ``pluck`` or a batch record set) is server-side-expanded: sqlite/mysql JSON-encode it as ONE
-    scalar string (``json_each``/``JSON_TABLE``); postgres binds the array as-is (native ``= ANY($1)`` /
-    ``unnest``). A scalar param binds unchanged."""
-    if dialect == "postgres":
-        return list(params)
-    return [json.dumps(p, separators=(",", ":"), ensure_ascii=False) if isinstance(p, list) else p for p in params]
+    """Bind a leaf's resolved param list for the driver per dialect (the SAME rule as TS
+    ``leaves.encodeParams``, mirrored by the rust / go leaf transports).
+
+    A COMPOSITE key set binds as ONE JSON array-of-tuples string on EVERY dialect (#159) — PostgreSQL
+    expands it server-side with ``json_array_elements``, and binding it natively would hand the server
+    an ``int[][]`` no cast can turn into json. Any other array is a list of scalar cells: postgres binds
+    it natively (``= ANY($1)``), sqlite/mysql JSON-encode it as ONE scalar string
+    (``json_each`` / ``JSON_TABLE``). A scalar param binds unchanged."""
+    out: List[Any] = []
+    for p in params:
+        if not isinstance(p, list):
+            out.append(p)
+        elif dialect == "postgres" and not _is_tuple_set(p):
+            out.append(p)
+        else:
+            out.append(json.dumps(p, separators=(",", ":"), ensure_ascii=False))
+    return out
 
 
 def make_handlers(driver_or_ctx: Union[Driver, ExecutionContext], dialect: str) -> Dict[str, Handler]:

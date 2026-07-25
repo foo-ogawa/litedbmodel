@@ -7,7 +7,7 @@
 // (Behavior::runBehavior) — no execution logic is generated. Handlers are ALWAYS
 // injected at the boundary (IR + {effects,config,hooks} — concept.md §4.4); they
 // are never generated.
-// irFingerprint: fnv1a64:6bbcff5c38d988b7
+// irFingerprint: fnv1a64:35d3c251947aba11
 
 declare(strict_types=1);
 
@@ -15,7 +15,7 @@ declare(strict_types=1);
 $expectedSpecVersions = ['behavior' => 5, 'expression' => 2, 'plan' => 1];
 
 // FNV-1a 64 fingerprint of the source portable IR (canonical-json discipline, #208).
-$irFingerprint = 'fnv1a64:6bbcff5c38d988b7';
+$irFingerprint = 'fnv1a64:35d3c251947aba11';
 
 // Component names exposed by bind(), in IR declaration order.
 $componentNames = ['findAll', 'filterPaginateSort', 'findFirst', 'findUnique', 'nestedFindAll', 'nestedFindFirst', 'nestedFindUnique', 'nestedRelations', 'compositeRelations', 'create', 'update', 'upsert', 'createMany', 'upsertMany', 'updateMany', 'nestedCreate', 'nestedUpsert', 'nestedUpdate', 'delete'];
@@ -40,7 +40,7 @@ $irDoc = (object) [
                                 "email" => (object) [
                                     "opt" => "string",
                                 ],
-                                "id" => "float",
+                                "id" => "int",
                                 "name" => (object) [
                                     "opt" => "string",
                                 ],
@@ -102,7 +102,7 @@ $irDoc = (object) [
                         "email" => (object) [
                             "opt" => "string",
                         ],
-                        "id" => "float",
+                        "id" => "int",
                         "name" => (object) [
                             "opt" => "string",
                         ],
@@ -121,7 +121,7 @@ $irDoc = (object) [
                             "name" => "PostFullRow",
                             "obj" => (object) [
                                 "author_id" => (object) [
-                                    "opt" => "float",
+                                    "opt" => "int",
                                 ],
                                 "content" => (object) [
                                     "opt" => "string",
@@ -129,9 +129,9 @@ $irDoc = (object) [
                                 "created_at" => (object) [
                                     "opt" => "string",
                                 ],
-                                "id" => "float",
+                                "id" => "int",
                                 "published" => (object) [
-                                    "opt" => "float",
+                                    "opt" => "int",
                                 ],
                                 "title" => (object) [
                                     "opt" => "string",
@@ -203,7 +203,7 @@ $irDoc = (object) [
                 "arr" => (object) [
                     "obj" => (object) [
                         "author_id" => (object) [
-                            "opt" => "float",
+                            "opt" => "int",
                         ],
                         "content" => (object) [
                             "opt" => "string",
@@ -211,9 +211,9 @@ $irDoc = (object) [
                         "created_at" => (object) [
                             "opt" => "string",
                         ],
-                        "id" => "float",
+                        "id" => "int",
                         "published" => (object) [
-                            "opt" => "float",
+                            "opt" => "int",
                         ],
                         "title" => (object) [
                             "opt" => "string",
@@ -235,7 +235,7 @@ $irDoc = (object) [
                                 "email" => (object) [
                                     "opt" => "string",
                                 ],
-                                "id" => "float",
+                                "id" => "int",
                                 "name" => (object) [
                                     "opt" => "string",
                                 ],
@@ -308,7 +308,7 @@ $irDoc = (object) [
                         "email" => (object) [
                             "opt" => "string",
                         ],
-                        "id" => "float",
+                        "id" => "int",
                         "name" => (object) [
                             "opt" => "string",
                         ],
@@ -329,7 +329,7 @@ $irDoc = (object) [
                                 "email" => (object) [
                                     "opt" => "string",
                                 ],
-                                "id" => "float",
+                                "id" => "int",
                                 "name" => (object) [
                                     "opt" => "string",
                                 ],
@@ -402,7 +402,7 @@ $irDoc = (object) [
                         "email" => (object) [
                             "opt" => "string",
                         ],
-                        "id" => "float",
+                        "id" => "int",
                         "name" => (object) [
                             "opt" => "string",
                         ],
@@ -543,7 +543,7 @@ $irDoc = (object) [
                                 "email" => (object) [
                                     "opt" => "string",
                                 ],
-                                "id" => "float",
+                                "id" => "int",
                                 "name" => (object) [
                                     "opt" => "string",
                                 ],
@@ -552,9 +552,9 @@ $irDoc = (object) [
                                         "name" => "PostRow",
                                         "obj" => (object) [
                                             "author_id" => (object) [
-                                                "opt" => "float",
+                                                "opt" => "int",
                                             ],
-                                            "id" => "float",
+                                            "id" => "int",
                                             "title" => (object) [
                                                 "opt" => "string",
                                             ],
@@ -651,7 +651,7 @@ $irDoc = (object) [
                         "email" => (object) [
                             "opt" => "string",
                         ],
-                        "id" => "float",
+                        "id" => "int",
                         "name" => (object) [
                             "opt" => "string",
                         ],
@@ -659,9 +659,9 @@ $irDoc = (object) [
                             "arr" => (object) [
                                 "obj" => (object) [
                                     "author_id" => (object) [
-                                        "opt" => "float",
+                                        "opt" => "int",
                                     ],
-                                    "id" => "float",
+                                    "id" => "int",
                                     "title" => (object) [
                                         "opt" => "string",
                                     ],
@@ -812,7 +812,7 @@ $irDoc = (object) [
                                 "email" => (object) [
                                     "opt" => "string",
                                 ],
-                                "id" => "float",
+                                "id" => "int",
                                 "name" => (object) [
                                     "opt" => "string",
                                 ],
@@ -821,9 +821,9 @@ $irDoc = (object) [
                                         "name" => "PostRow",
                                         "obj" => (object) [
                                             "author_id" => (object) [
-                                                "opt" => "float",
+                                                "opt" => "int",
                                             ],
-                                            "id" => "float",
+                                            "id" => "int",
                                             "title" => (object) [
                                                 "opt" => "string",
                                             ],
@@ -925,7 +925,7 @@ $irDoc = (object) [
                         "email" => (object) [
                             "opt" => "string",
                         ],
-                        "id" => "float",
+                        "id" => "int",
                         "name" => (object) [
                             "opt" => "string",
                         ],
@@ -933,9 +933,9 @@ $irDoc = (object) [
                             "arr" => (object) [
                                 "obj" => (object) [
                                     "author_id" => (object) [
-                                        "opt" => "float",
+                                        "opt" => "int",
                                     ],
-                                    "id" => "float",
+                                    "id" => "int",
                                     "title" => (object) [
                                         "opt" => "string",
                                     ],
@@ -1086,7 +1086,7 @@ $irDoc = (object) [
                                 "email" => (object) [
                                     "opt" => "string",
                                 ],
-                                "id" => "float",
+                                "id" => "int",
                                 "name" => (object) [
                                     "opt" => "string",
                                 ],
@@ -1095,9 +1095,9 @@ $irDoc = (object) [
                                         "name" => "PostRow",
                                         "obj" => (object) [
                                             "author_id" => (object) [
-                                                "opt" => "float",
+                                                "opt" => "int",
                                             ],
-                                            "id" => "float",
+                                            "id" => "int",
                                             "title" => (object) [
                                                 "opt" => "string",
                                             ],
@@ -1199,7 +1199,7 @@ $irDoc = (object) [
                         "email" => (object) [
                             "opt" => "string",
                         ],
-                        "id" => "float",
+                        "id" => "int",
                         "name" => (object) [
                             "opt" => "string",
                         ],
@@ -1207,9 +1207,9 @@ $irDoc = (object) [
                             "arr" => (object) [
                                 "obj" => (object) [
                                     "author_id" => (object) [
-                                        "opt" => "float",
+                                        "opt" => "int",
                                     ],
-                                    "id" => "float",
+                                    "id" => "int",
                                     "title" => (object) [
                                         "opt" => "string",
                                     ],
@@ -1497,7 +1497,7 @@ $irDoc = (object) [
                                 "email" => (object) [
                                     "opt" => "string",
                                 ],
-                                "id" => "float",
+                                "id" => "int",
                                 "name" => (object) [
                                     "opt" => "string",
                                 ],
@@ -1506,7 +1506,7 @@ $irDoc = (object) [
                                         "name" => "PostWithComments",
                                         "obj" => (object) [
                                             "author_id" => (object) [
-                                                "opt" => "float",
+                                                "opt" => "int",
                                             ],
                                             "comments" => (object) [
                                                 "arr" => (object) [
@@ -1516,15 +1516,15 @@ $irDoc = (object) [
                                                             "opt" => "string",
                                                         ],
                                                         "id" => (object) [
-                                                            "opt" => "float",
+                                                            "opt" => "int",
                                                         ],
                                                         "post_id" => (object) [
-                                                            "opt" => "float",
+                                                            "opt" => "int",
                                                         ],
                                                     ],
                                                 ],
                                             ],
-                                            "id" => "float",
+                                            "id" => "int",
                                             "title" => (object) [
                                                 "opt" => "string",
                                             ],
@@ -1630,7 +1630,7 @@ $irDoc = (object) [
                         "email" => (object) [
                             "opt" => "string",
                         ],
-                        "id" => "float",
+                        "id" => "int",
                         "name" => (object) [
                             "opt" => "string",
                         ],
@@ -1638,7 +1638,7 @@ $irDoc = (object) [
                             "arr" => (object) [
                                 "obj" => (object) [
                                     "author_id" => (object) [
-                                        "opt" => "float",
+                                        "opt" => "int",
                                     ],
                                     "comments" => (object) [
                                         "arr" => (object) [
@@ -1647,16 +1647,16 @@ $irDoc = (object) [
                                                     "opt" => "string",
                                                 ],
                                                 "id" => (object) [
-                                                    "opt" => "float",
+                                                    "opt" => "int",
                                                 ],
                                                 "post_id" => (object) [
-                                                    "opt" => "float",
+                                                    "opt" => "int",
                                                 ],
                                             ],
                                             "name" => "CommentRow",
                                         ],
                                     ],
-                                    "id" => "float",
+                                    "id" => "int",
                                     "title" => (object) [
                                         "opt" => "string",
                                     ],
@@ -1960,37 +1960,37 @@ $irDoc = (object) [
                                                             "opt" => "string",
                                                         ],
                                                         "comment_id" => (object) [
-                                                            "opt" => "float",
+                                                            "opt" => "int",
                                                         ],
                                                         "post_id" => (object) [
-                                                            "opt" => "float",
+                                                            "opt" => "int",
                                                         ],
                                                         "tenant_id" => (object) [
-                                                            "opt" => "float",
+                                                            "opt" => "int",
                                                         ],
                                                     ],
                                                 ],
                                             ],
                                             "post_id" => (object) [
-                                                "opt" => "float",
+                                                "opt" => "int",
                                             ],
                                             "tenant_id" => (object) [
-                                                "opt" => "float",
+                                                "opt" => "int",
                                             ],
                                             "title" => (object) [
                                                 "opt" => "string",
                                             ],
                                             "user_id" => (object) [
-                                                "opt" => "float",
+                                                "opt" => "int",
                                             ],
                                         ],
                                     ],
                                 ],
                                 "tenant_id" => (object) [
-                                    "opt" => "float",
+                                    "opt" => "int",
                                 ],
                                 "user_id" => (object) [
-                                    "opt" => "float",
+                                    "opt" => "int",
                                 ],
                             ],
                         ],
@@ -2103,39 +2103,39 @@ $irDoc = (object) [
                                                     "opt" => "string",
                                                 ],
                                                 "comment_id" => (object) [
-                                                    "opt" => "float",
+                                                    "opt" => "int",
                                                 ],
                                                 "post_id" => (object) [
-                                                    "opt" => "float",
+                                                    "opt" => "int",
                                                 ],
                                                 "tenant_id" => (object) [
-                                                    "opt" => "float",
+                                                    "opt" => "int",
                                                 ],
                                             ],
                                             "name" => "TenantCommentRow",
                                         ],
                                     ],
                                     "post_id" => (object) [
-                                        "opt" => "float",
+                                        "opt" => "int",
                                     ],
                                     "tenant_id" => (object) [
-                                        "opt" => "float",
+                                        "opt" => "int",
                                     ],
                                     "title" => (object) [
                                         "opt" => "string",
                                     ],
                                     "user_id" => (object) [
-                                        "opt" => "float",
+                                        "opt" => "int",
                                     ],
                                 ],
                                 "name" => "TenantPostWithComments",
                             ],
                         ],
                         "tenant_id" => (object) [
-                            "opt" => "float",
+                            "opt" => "int",
                         ],
                         "user_id" => (object) [
-                            "opt" => "float",
+                            "opt" => "int",
                         ],
                     ],
                     "name" => "TenantUserWithPosts",
@@ -2337,7 +2337,7 @@ $irDoc = (object) [
                         "arr" => (object) [
                             "name" => "IdRow",
                             "obj" => (object) [
-                                "id" => "float",
+                                "id" => "int",
                             ],
                         ],
                     ],
@@ -2413,7 +2413,7 @@ $irDoc = (object) [
             "outputType" => (object) [
                 "arr" => (object) [
                     "obj" => (object) [
-                        "id" => "float",
+                        "id" => "int",
                     ],
                     "name" => "IdRow",
                 ],
@@ -2706,7 +2706,7 @@ $irDoc = (object) [
                         "arr" => (object) [
                             "name" => "IdRow",
                             "obj" => (object) [
-                                "id" => "float",
+                                "id" => "int",
                             ],
                         ],
                     ],
@@ -2873,7 +2873,7 @@ $irDoc = (object) [
                         "arr" => (object) [
                             "name" => "IdRow",
                             "obj" => (object) [
-                                "id" => "float",
+                                "id" => "int",
                             ],
                         ],
                     ],
@@ -3040,7 +3040,7 @@ $irDoc = (object) [
                         "arr" => (object) [
                             "name" => "IdRow",
                             "obj" => (object) [
-                                "id" => "float",
+                                "id" => "int",
                             ],
                         ],
                     ],
@@ -3207,7 +3207,7 @@ $irDoc = (object) [
                         "arr" => (object) [
                             "name" => "IdRow",
                             "obj" => (object) [
-                                "id" => "float",
+                                "id" => "int",
                             ],
                         ],
                     ],

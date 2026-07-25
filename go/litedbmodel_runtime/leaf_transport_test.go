@@ -235,7 +235,7 @@ func TestLeafParam_BatchRowsArrayEncoding(t *testing.T) {
 			{Key: "name", Val: wire.WireStr("B")},
 		}),
 	})
-	got := leafParam(rows)
+	got := leafParam(rows, "sqlite")
 	want := `[{"email":"a@x","name":"A"},{"email":"b@x","name":"B"}]`
 	if s, ok := got.(string); !ok || s != want {
 		t.Fatalf("batch rows leafParam = %#v, want JSON %q", got, want)
@@ -245,11 +245,11 @@ func TestLeafParam_BatchRowsArrayEncoding(t *testing.T) {
 // A scalar param binds directly (NOT JSON-wrapped) — only an array param (batch rows / plucked keys)
 // serializes to a JSON string. Guards the leafParam array-vs-scalar branch.
 func TestLeafParam_ScalarBindsDirect(t *testing.T) {
-	if got := leafParam(wire.WireStr("user@x")); got != "user@x" {
+	if got := leafParam(wire.WireStr("user@x"), "sqlite"); got != "user@x" {
 		t.Fatalf("scalar string leafParam = %#v, want the bare value", got)
 	}
 	// an integral wire number binds as int64 (toDriverParam collapses a whole float to the integer slot).
-	if got := leafParam(wire.WireInt(42)); got != int64(42) {
+	if got := leafParam(wire.WireInt(42), "sqlite"); got != int64(42) {
 		t.Fatalf("scalar int leafParam = %#v, want int64(42)", got)
 	}
 }

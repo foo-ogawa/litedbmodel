@@ -94,18 +94,18 @@ fn de_overflow(model: &str, field: &str, expected: &str, actual_wire: String, ra
 #[allow(dead_code)]
 pub struct UserRow {
     pub email: Option<String>, // "email"
-    pub id: f64, // "id"
+    pub id: i64, // "id"
     pub name: Option<String>, // "name"
 }
 
 #[derive(Clone, Default)]
 #[allow(dead_code)]
 pub struct PostFullRow {
-    pub author_id: Option<f64>, // "author_id"
+    pub author_id: Option<i64>, // "author_id"
     pub content: Option<String>, // "content"
     pub created_at: Option<String>, // "created_at"
-    pub id: f64, // "id"
-    pub published: Option<f64>, // "published"
+    pub id: i64, // "id"
+    pub published: Option<i64>, // "published"
     pub title: Option<String>, // "title"
 }
 
@@ -113,7 +113,7 @@ pub struct PostFullRow {
 #[allow(dead_code)]
 pub struct UserWithPosts {
     pub email: Option<String>, // "email"
-    pub id: f64, // "id"
+    pub id: i64, // "id"
     pub name: Option<String>, // "name"
     pub posts: Vec<PostRow>, // "posts"
 }
@@ -121,8 +121,8 @@ pub struct UserWithPosts {
 #[derive(Clone, Default)]
 #[allow(dead_code)]
 pub struct PostRow {
-    pub author_id: Option<f64>, // "author_id"
-    pub id: f64, // "id"
+    pub author_id: Option<i64>, // "author_id"
+    pub id: i64, // "id"
     pub title: Option<String>, // "title"
 }
 
@@ -130,7 +130,7 @@ pub struct PostRow {
 #[allow(dead_code)]
 pub struct UserWithPostsAndComments {
     pub email: Option<String>, // "email"
-    pub id: f64, // "id"
+    pub id: i64, // "id"
     pub name: Option<String>, // "name"
     pub posts: Vec<PostWithComments>, // "posts"
 }
@@ -138,9 +138,9 @@ pub struct UserWithPostsAndComments {
 #[derive(Clone, Default)]
 #[allow(dead_code)]
 pub struct PostWithComments {
-    pub author_id: Option<f64>, // "author_id"
+    pub author_id: Option<i64>, // "author_id"
     pub comments: Vec<CommentRow>, // "comments"
-    pub id: f64, // "id"
+    pub id: i64, // "id"
     pub title: Option<String>, // "title"
 }
 
@@ -148,8 +148,8 @@ pub struct PostWithComments {
 #[allow(dead_code)]
 pub struct CommentRow {
     pub body: Option<String>, // "body"
-    pub id: Option<f64>, // "id"
-    pub post_id: Option<f64>, // "post_id"
+    pub id: Option<i64>, // "id"
+    pub post_id: Option<i64>, // "post_id"
 }
 
 #[derive(Clone, Default)]
@@ -157,27 +157,27 @@ pub struct CommentRow {
 pub struct TenantUserWithPosts {
     pub name: Option<String>, // "name"
     pub posts: Vec<TenantPostWithComments>, // "posts"
-    pub tenant_id: Option<f64>, // "tenant_id"
-    pub user_id: Option<f64>, // "user_id"
+    pub tenant_id: Option<i64>, // "tenant_id"
+    pub user_id: Option<i64>, // "user_id"
 }
 
 #[derive(Clone, Default)]
 #[allow(dead_code)]
 pub struct TenantPostWithComments {
     pub comments: Vec<TenantCommentRow>, // "comments"
-    pub post_id: Option<f64>, // "post_id"
-    pub tenant_id: Option<f64>, // "tenant_id"
+    pub post_id: Option<i64>, // "post_id"
+    pub tenant_id: Option<i64>, // "tenant_id"
     pub title: Option<String>, // "title"
-    pub user_id: Option<f64>, // "user_id"
+    pub user_id: Option<i64>, // "user_id"
 }
 
 #[derive(Clone, Default)]
 #[allow(dead_code)]
 pub struct TenantCommentRow {
     pub body: Option<String>, // "body"
-    pub comment_id: Option<f64>, // "comment_id"
-    pub post_id: Option<f64>, // "post_id"
-    pub tenant_id: Option<f64>, // "tenant_id"
+    pub comment_id: Option<i64>, // "comment_id"
+    pub post_id: Option<i64>, // "post_id"
+    pub tenant_id: Option<i64>, // "tenant_id"
 }
 
 #[derive(Clone, Default)]
@@ -190,7 +190,7 @@ pub struct WriteSummary {
 #[derive(Clone, Default)]
 #[allow(dead_code)]
 pub struct IdRow {
-    pub id: f64, // "id"
+    pub id: i64, // "id"
 }
 
 #[derive(Clone, Default)]
@@ -255,13 +255,13 @@ pub fn findAll(
                             Probe::Null { .. } | Probe::Absent => None,
                         },
                         id: match sub1.probe_number("id") {
-                            NumProbe::Got { raw, actual_wire_type } => match raw.parse::<f64>() {
+                            NumProbe::Got { raw, actual_wire_type } => match raw.parse::<i64>() {
                                 Ok(n) => n,
-                                Err(_) => return Err(de_overflow("UserRow", "id", "float", actual_wire_type, raw)),
+                                Err(_) => return Err(de_overflow("UserRow", "id", "int", actual_wire_type, raw)),
                             },
                             NumProbe::Wrong { actual_wire_type, raw_value }
-                            | NumProbe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("UserRow", "id", "float", actual_wire_type, raw_value)),
-                            NumProbe::Absent => return Err(de_missing_field("UserRow", "id", "float")),
+                            | NumProbe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("UserRow", "id", "int", actual_wire_type, raw_value)),
+                            NumProbe::Absent => return Err(de_missing_field("UserRow", "id", "int")),
                         },
                         name: match sub1.probe_string("name") {
                             Probe::Got(v) => Some(v),
@@ -270,15 +270,15 @@ pub fn findAll(
                         },
                     },
                     Probe::Wrong { actual_wire_type, raw_value }
-                    | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n0", "n0", "obj{email:opt(string),id:float,name:opt(string)}", actual_wire_type, raw_value)),
-                    Probe::Absent => return Err(de_missing_field("n0", "n0", "obj{email:opt(string),id:float,name:opt(string)}")),
+                    | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n0", "n0", "obj{email:opt(string),id:int,name:opt(string)}", actual_wire_type, raw_value)),
+                    Probe::Absent => return Err(de_missing_field("n0", "n0", "obj{email:opt(string),id:int,name:opt(string)}")),
                 });
             }
             acc0
         },
         Probe::Wrong { actual_wire_type, raw_value }
-        | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n0", "n0", "arr(obj{email:opt(string),id:float,name:opt(string)})", actual_wire_type, raw_value)),
-        Probe::Absent => return Err(de_missing_field("n0", "n0", "arr(obj{email:opt(string),id:float,name:opt(string)})")),
+        | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n0", "n0", "arr(obj{email:opt(string),id:int,name:opt(string)})", actual_wire_type, raw_value)),
+        Probe::Absent => return Err(de_missing_field("n0", "n0", "arr(obj{email:opt(string),id:int,name:opt(string)})")),
     };
     produced_n0.set(true);
     let __out = cell_n0.borrow().clone();
@@ -316,11 +316,11 @@ pub fn filterPaginateSort(
                 acc0.push(match l0.elem_row(i0) {
                     Probe::Got(sub1) => PostFullRow {
                         author_id: match sub1.probe_number("author_id") {
-                            NumProbe::Got { raw, actual_wire_type } => match raw.parse::<f64>() {
+                            NumProbe::Got { raw, actual_wire_type } => match raw.parse::<i64>() {
                                 Ok(n) => Some(n),
-                                Err(_) => return Err(de_overflow("PostFullRow", "author_id", "opt(float)", actual_wire_type, raw)),
+                                Err(_) => return Err(de_overflow("PostFullRow", "author_id", "opt(int)", actual_wire_type, raw)),
                             },
-                            NumProbe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("PostFullRow", "author_id", "opt(float)", actual_wire_type, raw_value)),
+                            NumProbe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("PostFullRow", "author_id", "opt(int)", actual_wire_type, raw_value)),
                             NumProbe::Null { .. } | NumProbe::Absent => None,
                         },
                         content: match sub1.probe_string("content") {
@@ -334,20 +334,20 @@ pub fn filterPaginateSort(
                             Probe::Null { .. } | Probe::Absent => None,
                         },
                         id: match sub1.probe_number("id") {
-                            NumProbe::Got { raw, actual_wire_type } => match raw.parse::<f64>() {
+                            NumProbe::Got { raw, actual_wire_type } => match raw.parse::<i64>() {
                                 Ok(n) => n,
-                                Err(_) => return Err(de_overflow("PostFullRow", "id", "float", actual_wire_type, raw)),
+                                Err(_) => return Err(de_overflow("PostFullRow", "id", "int", actual_wire_type, raw)),
                             },
                             NumProbe::Wrong { actual_wire_type, raw_value }
-                            | NumProbe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("PostFullRow", "id", "float", actual_wire_type, raw_value)),
-                            NumProbe::Absent => return Err(de_missing_field("PostFullRow", "id", "float")),
+                            | NumProbe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("PostFullRow", "id", "int", actual_wire_type, raw_value)),
+                            NumProbe::Absent => return Err(de_missing_field("PostFullRow", "id", "int")),
                         },
                         published: match sub1.probe_number("published") {
-                            NumProbe::Got { raw, actual_wire_type } => match raw.parse::<f64>() {
+                            NumProbe::Got { raw, actual_wire_type } => match raw.parse::<i64>() {
                                 Ok(n) => Some(n),
-                                Err(_) => return Err(de_overflow("PostFullRow", "published", "opt(float)", actual_wire_type, raw)),
+                                Err(_) => return Err(de_overflow("PostFullRow", "published", "opt(int)", actual_wire_type, raw)),
                             },
-                            NumProbe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("PostFullRow", "published", "opt(float)", actual_wire_type, raw_value)),
+                            NumProbe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("PostFullRow", "published", "opt(int)", actual_wire_type, raw_value)),
                             NumProbe::Null { .. } | NumProbe::Absent => None,
                         },
                         title: match sub1.probe_string("title") {
@@ -357,15 +357,15 @@ pub fn filterPaginateSort(
                         },
                     },
                     Probe::Wrong { actual_wire_type, raw_value }
-                    | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n0", "n0", "obj{author_id:opt(float),content:opt(string),created_at:opt(string),id:float,published:opt(float),title:opt(string)}", actual_wire_type, raw_value)),
-                    Probe::Absent => return Err(de_missing_field("n0", "n0", "obj{author_id:opt(float),content:opt(string),created_at:opt(string),id:float,published:opt(float),title:opt(string)}")),
+                    | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n0", "n0", "obj{author_id:opt(int),content:opt(string),created_at:opt(string),id:int,published:opt(int),title:opt(string)}", actual_wire_type, raw_value)),
+                    Probe::Absent => return Err(de_missing_field("n0", "n0", "obj{author_id:opt(int),content:opt(string),created_at:opt(string),id:int,published:opt(int),title:opt(string)}")),
                 });
             }
             acc0
         },
         Probe::Wrong { actual_wire_type, raw_value }
-        | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n0", "n0", "arr(obj{author_id:opt(float),content:opt(string),created_at:opt(string),id:float,published:opt(float),title:opt(string)})", actual_wire_type, raw_value)),
-        Probe::Absent => return Err(de_missing_field("n0", "n0", "arr(obj{author_id:opt(float),content:opt(string),created_at:opt(string),id:float,published:opt(float),title:opt(string)})")),
+        | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n0", "n0", "arr(obj{author_id:opt(int),content:opt(string),created_at:opt(string),id:int,published:opt(int),title:opt(string)})", actual_wire_type, raw_value)),
+        Probe::Absent => return Err(de_missing_field("n0", "n0", "arr(obj{author_id:opt(int),content:opt(string),created_at:opt(string),id:int,published:opt(int),title:opt(string)})")),
     };
     produced_n0.set(true);
     let __out = cell_n0.borrow().clone();
@@ -408,13 +408,13 @@ pub fn findFirst(
                             Probe::Null { .. } | Probe::Absent => None,
                         },
                         id: match sub1.probe_number("id") {
-                            NumProbe::Got { raw, actual_wire_type } => match raw.parse::<f64>() {
+                            NumProbe::Got { raw, actual_wire_type } => match raw.parse::<i64>() {
                                 Ok(n) => n,
-                                Err(_) => return Err(de_overflow("UserRow", "id", "float", actual_wire_type, raw)),
+                                Err(_) => return Err(de_overflow("UserRow", "id", "int", actual_wire_type, raw)),
                             },
                             NumProbe::Wrong { actual_wire_type, raw_value }
-                            | NumProbe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("UserRow", "id", "float", actual_wire_type, raw_value)),
-                            NumProbe::Absent => return Err(de_missing_field("UserRow", "id", "float")),
+                            | NumProbe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("UserRow", "id", "int", actual_wire_type, raw_value)),
+                            NumProbe::Absent => return Err(de_missing_field("UserRow", "id", "int")),
                         },
                         name: match sub1.probe_string("name") {
                             Probe::Got(v) => Some(v),
@@ -423,15 +423,15 @@ pub fn findFirst(
                         },
                     },
                     Probe::Wrong { actual_wire_type, raw_value }
-                    | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n0", "n0", "obj{email:opt(string),id:float,name:opt(string)}", actual_wire_type, raw_value)),
-                    Probe::Absent => return Err(de_missing_field("n0", "n0", "obj{email:opt(string),id:float,name:opt(string)}")),
+                    | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n0", "n0", "obj{email:opt(string),id:int,name:opt(string)}", actual_wire_type, raw_value)),
+                    Probe::Absent => return Err(de_missing_field("n0", "n0", "obj{email:opt(string),id:int,name:opt(string)}")),
                 });
             }
             acc0
         },
         Probe::Wrong { actual_wire_type, raw_value }
-        | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n0", "n0", "arr(obj{email:opt(string),id:float,name:opt(string)})", actual_wire_type, raw_value)),
-        Probe::Absent => return Err(de_missing_field("n0", "n0", "arr(obj{email:opt(string),id:float,name:opt(string)})")),
+        | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n0", "n0", "arr(obj{email:opt(string),id:int,name:opt(string)})", actual_wire_type, raw_value)),
+        Probe::Absent => return Err(de_missing_field("n0", "n0", "arr(obj{email:opt(string),id:int,name:opt(string)})")),
     };
     produced_n0.set(true);
     let __out = cell_n0.borrow().clone();
@@ -474,13 +474,13 @@ pub fn findUnique(
                             Probe::Null { .. } | Probe::Absent => None,
                         },
                         id: match sub1.probe_number("id") {
-                            NumProbe::Got { raw, actual_wire_type } => match raw.parse::<f64>() {
+                            NumProbe::Got { raw, actual_wire_type } => match raw.parse::<i64>() {
                                 Ok(n) => n,
-                                Err(_) => return Err(de_overflow("UserRow", "id", "float", actual_wire_type, raw)),
+                                Err(_) => return Err(de_overflow("UserRow", "id", "int", actual_wire_type, raw)),
                             },
                             NumProbe::Wrong { actual_wire_type, raw_value }
-                            | NumProbe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("UserRow", "id", "float", actual_wire_type, raw_value)),
-                            NumProbe::Absent => return Err(de_missing_field("UserRow", "id", "float")),
+                            | NumProbe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("UserRow", "id", "int", actual_wire_type, raw_value)),
+                            NumProbe::Absent => return Err(de_missing_field("UserRow", "id", "int")),
                         },
                         name: match sub1.probe_string("name") {
                             Probe::Got(v) => Some(v),
@@ -489,15 +489,15 @@ pub fn findUnique(
                         },
                     },
                     Probe::Wrong { actual_wire_type, raw_value }
-                    | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n0", "n0", "obj{email:opt(string),id:float,name:opt(string)}", actual_wire_type, raw_value)),
-                    Probe::Absent => return Err(de_missing_field("n0", "n0", "obj{email:opt(string),id:float,name:opt(string)}")),
+                    | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n0", "n0", "obj{email:opt(string),id:int,name:opt(string)}", actual_wire_type, raw_value)),
+                    Probe::Absent => return Err(de_missing_field("n0", "n0", "obj{email:opt(string),id:int,name:opt(string)}")),
                 });
             }
             acc0
         },
         Probe::Wrong { actual_wire_type, raw_value }
-        | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n0", "n0", "arr(obj{email:opt(string),id:float,name:opt(string)})", actual_wire_type, raw_value)),
-        Probe::Absent => return Err(de_missing_field("n0", "n0", "arr(obj{email:opt(string),id:float,name:opt(string)})")),
+        | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n0", "n0", "arr(obj{email:opt(string),id:int,name:opt(string)})", actual_wire_type, raw_value)),
+        Probe::Absent => return Err(de_missing_field("n0", "n0", "arr(obj{email:opt(string),id:int,name:opt(string)})")),
     };
     produced_n0.set(true);
     let __out = cell_n0.borrow().clone();
@@ -592,13 +592,13 @@ pub fn nestedFindAll(
                                 Probe::Null { .. } | Probe::Absent => None,
                             },
                             id: match sub1.probe_number("id") {
-                                NumProbe::Got { raw, actual_wire_type } => match raw.parse::<f64>() {
+                                NumProbe::Got { raw, actual_wire_type } => match raw.parse::<i64>() {
                                     Ok(n) => n,
-                                    Err(_) => return Err(de_overflow("UserWithPosts", "id", "float", actual_wire_type, raw)),
+                                    Err(_) => return Err(de_overflow("UserWithPosts", "id", "int", actual_wire_type, raw)),
                                 },
                                 NumProbe::Wrong { actual_wire_type, raw_value }
-                                | NumProbe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("UserWithPosts", "id", "float", actual_wire_type, raw_value)),
-                                NumProbe::Absent => return Err(de_missing_field("UserWithPosts", "id", "float")),
+                                | NumProbe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("UserWithPosts", "id", "int", actual_wire_type, raw_value)),
+                                NumProbe::Absent => return Err(de_missing_field("UserWithPosts", "id", "int")),
                             },
                             name: match sub1.probe_string("name") {
                                 Probe::Got(v) => Some(v),
@@ -612,21 +612,21 @@ pub fn nestedFindAll(
                                         acc5.push(match l5.elem_row(i5) {
                                             Probe::Got(sub6) => PostRow {
                                                 author_id: match sub6.probe_number("author_id") {
-                                                    NumProbe::Got { raw, actual_wire_type } => match raw.parse::<f64>() {
+                                                    NumProbe::Got { raw, actual_wire_type } => match raw.parse::<i64>() {
                                                         Ok(n) => Some(n),
-                                                        Err(_) => return Err(de_overflow("PostRow", "author_id", "opt(float)", actual_wire_type, raw)),
+                                                        Err(_) => return Err(de_overflow("PostRow", "author_id", "opt(int)", actual_wire_type, raw)),
                                                     },
-                                                    NumProbe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("PostRow", "author_id", "opt(float)", actual_wire_type, raw_value)),
+                                                    NumProbe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("PostRow", "author_id", "opt(int)", actual_wire_type, raw_value)),
                                                     NumProbe::Null { .. } | NumProbe::Absent => None,
                                                 },
                                                 id: match sub6.probe_number("id") {
-                                                    NumProbe::Got { raw, actual_wire_type } => match raw.parse::<f64>() {
+                                                    NumProbe::Got { raw, actual_wire_type } => match raw.parse::<i64>() {
                                                         Ok(n) => n,
-                                                        Err(_) => return Err(de_overflow("PostRow", "id", "float", actual_wire_type, raw)),
+                                                        Err(_) => return Err(de_overflow("PostRow", "id", "int", actual_wire_type, raw)),
                                                     },
                                                     NumProbe::Wrong { actual_wire_type, raw_value }
-                                                    | NumProbe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("PostRow", "id", "float", actual_wire_type, raw_value)),
-                                                    NumProbe::Absent => return Err(de_missing_field("PostRow", "id", "float")),
+                                                    | NumProbe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("PostRow", "id", "int", actual_wire_type, raw_value)),
+                                                    NumProbe::Absent => return Err(de_missing_field("PostRow", "id", "int")),
                                                 },
                                                 title: match sub6.probe_string("title") {
                                                     Probe::Got(v) => Some(v),
@@ -635,27 +635,27 @@ pub fn nestedFindAll(
                                                 },
                                             },
                                             Probe::Wrong { actual_wire_type, raw_value }
-                                            | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("UserWithPosts", "posts", "obj{author_id:opt(float),id:float,title:opt(string)}", actual_wire_type, raw_value)),
-                                            Probe::Absent => return Err(de_missing_field("UserWithPosts", "posts", "obj{author_id:opt(float),id:float,title:opt(string)}")),
+                                            | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("UserWithPosts", "posts", "obj{author_id:opt(int),id:int,title:opt(string)}", actual_wire_type, raw_value)),
+                                            Probe::Absent => return Err(de_missing_field("UserWithPosts", "posts", "obj{author_id:opt(int),id:int,title:opt(string)}")),
                                         });
                                     }
                                     acc5
                                 },
                                 Probe::Wrong { actual_wire_type, raw_value }
-                                | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("UserWithPosts", "posts", "arr(obj{author_id:opt(float),id:float,title:opt(string)})", actual_wire_type, raw_value)),
-                                Probe::Absent => return Err(de_missing_field("UserWithPosts", "posts", "arr(obj{author_id:opt(float),id:float,title:opt(string)})")),
+                                | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("UserWithPosts", "posts", "arr(obj{author_id:opt(int),id:int,title:opt(string)})", actual_wire_type, raw_value)),
+                                Probe::Absent => return Err(de_missing_field("UserWithPosts", "posts", "arr(obj{author_id:opt(int),id:int,title:opt(string)})")),
                             },
                         },
                         Probe::Wrong { actual_wire_type, raw_value }
-                        | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n3", "n3", "obj{email:opt(string),id:float,name:opt(string),posts:arr(obj{author_id:opt(float),id:float,title:opt(string)})}", actual_wire_type, raw_value)),
-                        Probe::Absent => return Err(de_missing_field("n3", "n3", "obj{email:opt(string),id:float,name:opt(string),posts:arr(obj{author_id:opt(float),id:float,title:opt(string)})}")),
+                        | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n3", "n3", "obj{email:opt(string),id:int,name:opt(string),posts:arr(obj{author_id:opt(int),id:int,title:opt(string)})}", actual_wire_type, raw_value)),
+                        Probe::Absent => return Err(de_missing_field("n3", "n3", "obj{email:opt(string),id:int,name:opt(string),posts:arr(obj{author_id:opt(int),id:int,title:opt(string)})}")),
                     });
                 }
                 acc0
             },
             Probe::Wrong { actual_wire_type, raw_value }
-            | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n3", "n3", "arr(obj{email:opt(string),id:float,name:opt(string),posts:arr(obj{author_id:opt(float),id:float,title:opt(string)})})", actual_wire_type, raw_value)),
-            Probe::Absent => return Err(de_missing_field("n3", "n3", "arr(obj{email:opt(string),id:float,name:opt(string),posts:arr(obj{author_id:opt(float),id:float,title:opt(string)})})")),
+            | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n3", "n3", "arr(obj{email:opt(string),id:int,name:opt(string),posts:arr(obj{author_id:opt(int),id:int,title:opt(string)})})", actual_wire_type, raw_value)),
+            Probe::Absent => return Err(de_missing_field("n3", "n3", "arr(obj{email:opt(string),id:int,name:opt(string),posts:arr(obj{author_id:opt(int),id:int,title:opt(string)})})")),
         };
         produced_n3.set(true);
     }
@@ -752,13 +752,13 @@ pub fn nestedFindFirst(
                                 Probe::Null { .. } | Probe::Absent => None,
                             },
                             id: match sub1.probe_number("id") {
-                                NumProbe::Got { raw, actual_wire_type } => match raw.parse::<f64>() {
+                                NumProbe::Got { raw, actual_wire_type } => match raw.parse::<i64>() {
                                     Ok(n) => n,
-                                    Err(_) => return Err(de_overflow("UserWithPosts", "id", "float", actual_wire_type, raw)),
+                                    Err(_) => return Err(de_overflow("UserWithPosts", "id", "int", actual_wire_type, raw)),
                                 },
                                 NumProbe::Wrong { actual_wire_type, raw_value }
-                                | NumProbe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("UserWithPosts", "id", "float", actual_wire_type, raw_value)),
-                                NumProbe::Absent => return Err(de_missing_field("UserWithPosts", "id", "float")),
+                                | NumProbe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("UserWithPosts", "id", "int", actual_wire_type, raw_value)),
+                                NumProbe::Absent => return Err(de_missing_field("UserWithPosts", "id", "int")),
                             },
                             name: match sub1.probe_string("name") {
                                 Probe::Got(v) => Some(v),
@@ -772,21 +772,21 @@ pub fn nestedFindFirst(
                                         acc5.push(match l5.elem_row(i5) {
                                             Probe::Got(sub6) => PostRow {
                                                 author_id: match sub6.probe_number("author_id") {
-                                                    NumProbe::Got { raw, actual_wire_type } => match raw.parse::<f64>() {
+                                                    NumProbe::Got { raw, actual_wire_type } => match raw.parse::<i64>() {
                                                         Ok(n) => Some(n),
-                                                        Err(_) => return Err(de_overflow("PostRow", "author_id", "opt(float)", actual_wire_type, raw)),
+                                                        Err(_) => return Err(de_overflow("PostRow", "author_id", "opt(int)", actual_wire_type, raw)),
                                                     },
-                                                    NumProbe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("PostRow", "author_id", "opt(float)", actual_wire_type, raw_value)),
+                                                    NumProbe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("PostRow", "author_id", "opt(int)", actual_wire_type, raw_value)),
                                                     NumProbe::Null { .. } | NumProbe::Absent => None,
                                                 },
                                                 id: match sub6.probe_number("id") {
-                                                    NumProbe::Got { raw, actual_wire_type } => match raw.parse::<f64>() {
+                                                    NumProbe::Got { raw, actual_wire_type } => match raw.parse::<i64>() {
                                                         Ok(n) => n,
-                                                        Err(_) => return Err(de_overflow("PostRow", "id", "float", actual_wire_type, raw)),
+                                                        Err(_) => return Err(de_overflow("PostRow", "id", "int", actual_wire_type, raw)),
                                                     },
                                                     NumProbe::Wrong { actual_wire_type, raw_value }
-                                                    | NumProbe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("PostRow", "id", "float", actual_wire_type, raw_value)),
-                                                    NumProbe::Absent => return Err(de_missing_field("PostRow", "id", "float")),
+                                                    | NumProbe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("PostRow", "id", "int", actual_wire_type, raw_value)),
+                                                    NumProbe::Absent => return Err(de_missing_field("PostRow", "id", "int")),
                                                 },
                                                 title: match sub6.probe_string("title") {
                                                     Probe::Got(v) => Some(v),
@@ -795,27 +795,27 @@ pub fn nestedFindFirst(
                                                 },
                                             },
                                             Probe::Wrong { actual_wire_type, raw_value }
-                                            | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("UserWithPosts", "posts", "obj{author_id:opt(float),id:float,title:opt(string)}", actual_wire_type, raw_value)),
-                                            Probe::Absent => return Err(de_missing_field("UserWithPosts", "posts", "obj{author_id:opt(float),id:float,title:opt(string)}")),
+                                            | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("UserWithPosts", "posts", "obj{author_id:opt(int),id:int,title:opt(string)}", actual_wire_type, raw_value)),
+                                            Probe::Absent => return Err(de_missing_field("UserWithPosts", "posts", "obj{author_id:opt(int),id:int,title:opt(string)}")),
                                         });
                                     }
                                     acc5
                                 },
                                 Probe::Wrong { actual_wire_type, raw_value }
-                                | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("UserWithPosts", "posts", "arr(obj{author_id:opt(float),id:float,title:opt(string)})", actual_wire_type, raw_value)),
-                                Probe::Absent => return Err(de_missing_field("UserWithPosts", "posts", "arr(obj{author_id:opt(float),id:float,title:opt(string)})")),
+                                | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("UserWithPosts", "posts", "arr(obj{author_id:opt(int),id:int,title:opt(string)})", actual_wire_type, raw_value)),
+                                Probe::Absent => return Err(de_missing_field("UserWithPosts", "posts", "arr(obj{author_id:opt(int),id:int,title:opt(string)})")),
                             },
                         },
                         Probe::Wrong { actual_wire_type, raw_value }
-                        | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n3", "n3", "obj{email:opt(string),id:float,name:opt(string),posts:arr(obj{author_id:opt(float),id:float,title:opt(string)})}", actual_wire_type, raw_value)),
-                        Probe::Absent => return Err(de_missing_field("n3", "n3", "obj{email:opt(string),id:float,name:opt(string),posts:arr(obj{author_id:opt(float),id:float,title:opt(string)})}")),
+                        | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n3", "n3", "obj{email:opt(string),id:int,name:opt(string),posts:arr(obj{author_id:opt(int),id:int,title:opt(string)})}", actual_wire_type, raw_value)),
+                        Probe::Absent => return Err(de_missing_field("n3", "n3", "obj{email:opt(string),id:int,name:opt(string),posts:arr(obj{author_id:opt(int),id:int,title:opt(string)})}")),
                     });
                 }
                 acc0
             },
             Probe::Wrong { actual_wire_type, raw_value }
-            | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n3", "n3", "arr(obj{email:opt(string),id:float,name:opt(string),posts:arr(obj{author_id:opt(float),id:float,title:opt(string)})})", actual_wire_type, raw_value)),
-            Probe::Absent => return Err(de_missing_field("n3", "n3", "arr(obj{email:opt(string),id:float,name:opt(string),posts:arr(obj{author_id:opt(float),id:float,title:opt(string)})})")),
+            | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n3", "n3", "arr(obj{email:opt(string),id:int,name:opt(string),posts:arr(obj{author_id:opt(int),id:int,title:opt(string)})})", actual_wire_type, raw_value)),
+            Probe::Absent => return Err(de_missing_field("n3", "n3", "arr(obj{email:opt(string),id:int,name:opt(string),posts:arr(obj{author_id:opt(int),id:int,title:opt(string)})})")),
         };
         produced_n3.set(true);
     }
@@ -912,13 +912,13 @@ pub fn nestedFindUnique(
                                 Probe::Null { .. } | Probe::Absent => None,
                             },
                             id: match sub1.probe_number("id") {
-                                NumProbe::Got { raw, actual_wire_type } => match raw.parse::<f64>() {
+                                NumProbe::Got { raw, actual_wire_type } => match raw.parse::<i64>() {
                                     Ok(n) => n,
-                                    Err(_) => return Err(de_overflow("UserWithPosts", "id", "float", actual_wire_type, raw)),
+                                    Err(_) => return Err(de_overflow("UserWithPosts", "id", "int", actual_wire_type, raw)),
                                 },
                                 NumProbe::Wrong { actual_wire_type, raw_value }
-                                | NumProbe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("UserWithPosts", "id", "float", actual_wire_type, raw_value)),
-                                NumProbe::Absent => return Err(de_missing_field("UserWithPosts", "id", "float")),
+                                | NumProbe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("UserWithPosts", "id", "int", actual_wire_type, raw_value)),
+                                NumProbe::Absent => return Err(de_missing_field("UserWithPosts", "id", "int")),
                             },
                             name: match sub1.probe_string("name") {
                                 Probe::Got(v) => Some(v),
@@ -932,21 +932,21 @@ pub fn nestedFindUnique(
                                         acc5.push(match l5.elem_row(i5) {
                                             Probe::Got(sub6) => PostRow {
                                                 author_id: match sub6.probe_number("author_id") {
-                                                    NumProbe::Got { raw, actual_wire_type } => match raw.parse::<f64>() {
+                                                    NumProbe::Got { raw, actual_wire_type } => match raw.parse::<i64>() {
                                                         Ok(n) => Some(n),
-                                                        Err(_) => return Err(de_overflow("PostRow", "author_id", "opt(float)", actual_wire_type, raw)),
+                                                        Err(_) => return Err(de_overflow("PostRow", "author_id", "opt(int)", actual_wire_type, raw)),
                                                     },
-                                                    NumProbe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("PostRow", "author_id", "opt(float)", actual_wire_type, raw_value)),
+                                                    NumProbe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("PostRow", "author_id", "opt(int)", actual_wire_type, raw_value)),
                                                     NumProbe::Null { .. } | NumProbe::Absent => None,
                                                 },
                                                 id: match sub6.probe_number("id") {
-                                                    NumProbe::Got { raw, actual_wire_type } => match raw.parse::<f64>() {
+                                                    NumProbe::Got { raw, actual_wire_type } => match raw.parse::<i64>() {
                                                         Ok(n) => n,
-                                                        Err(_) => return Err(de_overflow("PostRow", "id", "float", actual_wire_type, raw)),
+                                                        Err(_) => return Err(de_overflow("PostRow", "id", "int", actual_wire_type, raw)),
                                                     },
                                                     NumProbe::Wrong { actual_wire_type, raw_value }
-                                                    | NumProbe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("PostRow", "id", "float", actual_wire_type, raw_value)),
-                                                    NumProbe::Absent => return Err(de_missing_field("PostRow", "id", "float")),
+                                                    | NumProbe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("PostRow", "id", "int", actual_wire_type, raw_value)),
+                                                    NumProbe::Absent => return Err(de_missing_field("PostRow", "id", "int")),
                                                 },
                                                 title: match sub6.probe_string("title") {
                                                     Probe::Got(v) => Some(v),
@@ -955,27 +955,27 @@ pub fn nestedFindUnique(
                                                 },
                                             },
                                             Probe::Wrong { actual_wire_type, raw_value }
-                                            | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("UserWithPosts", "posts", "obj{author_id:opt(float),id:float,title:opt(string)}", actual_wire_type, raw_value)),
-                                            Probe::Absent => return Err(de_missing_field("UserWithPosts", "posts", "obj{author_id:opt(float),id:float,title:opt(string)}")),
+                                            | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("UserWithPosts", "posts", "obj{author_id:opt(int),id:int,title:opt(string)}", actual_wire_type, raw_value)),
+                                            Probe::Absent => return Err(de_missing_field("UserWithPosts", "posts", "obj{author_id:opt(int),id:int,title:opt(string)}")),
                                         });
                                     }
                                     acc5
                                 },
                                 Probe::Wrong { actual_wire_type, raw_value }
-                                | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("UserWithPosts", "posts", "arr(obj{author_id:opt(float),id:float,title:opt(string)})", actual_wire_type, raw_value)),
-                                Probe::Absent => return Err(de_missing_field("UserWithPosts", "posts", "arr(obj{author_id:opt(float),id:float,title:opt(string)})")),
+                                | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("UserWithPosts", "posts", "arr(obj{author_id:opt(int),id:int,title:opt(string)})", actual_wire_type, raw_value)),
+                                Probe::Absent => return Err(de_missing_field("UserWithPosts", "posts", "arr(obj{author_id:opt(int),id:int,title:opt(string)})")),
                             },
                         },
                         Probe::Wrong { actual_wire_type, raw_value }
-                        | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n3", "n3", "obj{email:opt(string),id:float,name:opt(string),posts:arr(obj{author_id:opt(float),id:float,title:opt(string)})}", actual_wire_type, raw_value)),
-                        Probe::Absent => return Err(de_missing_field("n3", "n3", "obj{email:opt(string),id:float,name:opt(string),posts:arr(obj{author_id:opt(float),id:float,title:opt(string)})}")),
+                        | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n3", "n3", "obj{email:opt(string),id:int,name:opt(string),posts:arr(obj{author_id:opt(int),id:int,title:opt(string)})}", actual_wire_type, raw_value)),
+                        Probe::Absent => return Err(de_missing_field("n3", "n3", "obj{email:opt(string),id:int,name:opt(string),posts:arr(obj{author_id:opt(int),id:int,title:opt(string)})}")),
                     });
                 }
                 acc0
             },
             Probe::Wrong { actual_wire_type, raw_value }
-            | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n3", "n3", "arr(obj{email:opt(string),id:float,name:opt(string),posts:arr(obj{author_id:opt(float),id:float,title:opt(string)})})", actual_wire_type, raw_value)),
-            Probe::Absent => return Err(de_missing_field("n3", "n3", "arr(obj{email:opt(string),id:float,name:opt(string),posts:arr(obj{author_id:opt(float),id:float,title:opt(string)})})")),
+            | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n3", "n3", "arr(obj{email:opt(string),id:int,name:opt(string),posts:arr(obj{author_id:opt(int),id:int,title:opt(string)})})", actual_wire_type, raw_value)),
+            Probe::Absent => return Err(de_missing_field("n3", "n3", "arr(obj{email:opt(string),id:int,name:opt(string),posts:arr(obj{author_id:opt(int),id:int,title:opt(string)})})")),
         };
         produced_n3.set(true);
     }
@@ -1125,13 +1125,13 @@ pub fn nestedRelations(
                                 Probe::Null { .. } | Probe::Absent => None,
                             },
                             id: match sub1.probe_number("id") {
-                                NumProbe::Got { raw, actual_wire_type } => match raw.parse::<f64>() {
+                                NumProbe::Got { raw, actual_wire_type } => match raw.parse::<i64>() {
                                     Ok(n) => n,
-                                    Err(_) => return Err(de_overflow("UserWithPostsAndComments", "id", "float", actual_wire_type, raw)),
+                                    Err(_) => return Err(de_overflow("UserWithPostsAndComments", "id", "int", actual_wire_type, raw)),
                                 },
                                 NumProbe::Wrong { actual_wire_type, raw_value }
-                                | NumProbe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("UserWithPostsAndComments", "id", "float", actual_wire_type, raw_value)),
-                                NumProbe::Absent => return Err(de_missing_field("UserWithPostsAndComments", "id", "float")),
+                                | NumProbe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("UserWithPostsAndComments", "id", "int", actual_wire_type, raw_value)),
+                                NumProbe::Absent => return Err(de_missing_field("UserWithPostsAndComments", "id", "int")),
                             },
                             name: match sub1.probe_string("name") {
                                 Probe::Got(v) => Some(v),
@@ -1145,11 +1145,11 @@ pub fn nestedRelations(
                                         acc5.push(match l5.elem_row(i5) {
                                             Probe::Got(sub6) => PostWithComments {
                                                 author_id: match sub6.probe_number("author_id") {
-                                                    NumProbe::Got { raw, actual_wire_type } => match raw.parse::<f64>() {
+                                                    NumProbe::Got { raw, actual_wire_type } => match raw.parse::<i64>() {
                                                         Ok(n) => Some(n),
-                                                        Err(_) => return Err(de_overflow("PostWithComments", "author_id", "opt(float)", actual_wire_type, raw)),
+                                                        Err(_) => return Err(de_overflow("PostWithComments", "author_id", "opt(int)", actual_wire_type, raw)),
                                                     },
-                                                    NumProbe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("PostWithComments", "author_id", "opt(float)", actual_wire_type, raw_value)),
+                                                    NumProbe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("PostWithComments", "author_id", "opt(int)", actual_wire_type, raw_value)),
                                                     NumProbe::Null { .. } | NumProbe::Absent => None,
                                                 },
                                                 comments: match sub6.probe_list("comments") {
@@ -1164,41 +1164,41 @@ pub fn nestedRelations(
                                                                         Probe::Null { .. } | Probe::Absent => None,
                                                                     },
                                                                     id: match sub9.probe_number("id") {
-                                                                        NumProbe::Got { raw, actual_wire_type } => match raw.parse::<f64>() {
+                                                                        NumProbe::Got { raw, actual_wire_type } => match raw.parse::<i64>() {
                                                                             Ok(n) => Some(n),
-                                                                            Err(_) => return Err(de_overflow("CommentRow", "id", "opt(float)", actual_wire_type, raw)),
+                                                                            Err(_) => return Err(de_overflow("CommentRow", "id", "opt(int)", actual_wire_type, raw)),
                                                                         },
-                                                                        NumProbe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("CommentRow", "id", "opt(float)", actual_wire_type, raw_value)),
+                                                                        NumProbe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("CommentRow", "id", "opt(int)", actual_wire_type, raw_value)),
                                                                         NumProbe::Null { .. } | NumProbe::Absent => None,
                                                                     },
                                                                     post_id: match sub9.probe_number("post_id") {
-                                                                        NumProbe::Got { raw, actual_wire_type } => match raw.parse::<f64>() {
+                                                                        NumProbe::Got { raw, actual_wire_type } => match raw.parse::<i64>() {
                                                                             Ok(n) => Some(n),
-                                                                            Err(_) => return Err(de_overflow("CommentRow", "post_id", "opt(float)", actual_wire_type, raw)),
+                                                                            Err(_) => return Err(de_overflow("CommentRow", "post_id", "opt(int)", actual_wire_type, raw)),
                                                                         },
-                                                                        NumProbe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("CommentRow", "post_id", "opt(float)", actual_wire_type, raw_value)),
+                                                                        NumProbe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("CommentRow", "post_id", "opt(int)", actual_wire_type, raw_value)),
                                                                         NumProbe::Null { .. } | NumProbe::Absent => None,
                                                                     },
                                                                 },
                                                                 Probe::Wrong { actual_wire_type, raw_value }
-                                                                | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("PostWithComments", "comments", "obj{body:opt(string),id:opt(float),post_id:opt(float)}", actual_wire_type, raw_value)),
-                                                                Probe::Absent => return Err(de_missing_field("PostWithComments", "comments", "obj{body:opt(string),id:opt(float),post_id:opt(float)}")),
+                                                                | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("PostWithComments", "comments", "obj{body:opt(string),id:opt(int),post_id:opt(int)}", actual_wire_type, raw_value)),
+                                                                Probe::Absent => return Err(de_missing_field("PostWithComments", "comments", "obj{body:opt(string),id:opt(int),post_id:opt(int)}")),
                                                             });
                                                         }
                                                         acc8
                                                     },
                                                     Probe::Wrong { actual_wire_type, raw_value }
-                                                    | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("PostWithComments", "comments", "arr(obj{body:opt(string),id:opt(float),post_id:opt(float)})", actual_wire_type, raw_value)),
-                                                    Probe::Absent => return Err(de_missing_field("PostWithComments", "comments", "arr(obj{body:opt(string),id:opt(float),post_id:opt(float)})")),
+                                                    | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("PostWithComments", "comments", "arr(obj{body:opt(string),id:opt(int),post_id:opt(int)})", actual_wire_type, raw_value)),
+                                                    Probe::Absent => return Err(de_missing_field("PostWithComments", "comments", "arr(obj{body:opt(string),id:opt(int),post_id:opt(int)})")),
                                                 },
                                                 id: match sub6.probe_number("id") {
-                                                    NumProbe::Got { raw, actual_wire_type } => match raw.parse::<f64>() {
+                                                    NumProbe::Got { raw, actual_wire_type } => match raw.parse::<i64>() {
                                                         Ok(n) => n,
-                                                        Err(_) => return Err(de_overflow("PostWithComments", "id", "float", actual_wire_type, raw)),
+                                                        Err(_) => return Err(de_overflow("PostWithComments", "id", "int", actual_wire_type, raw)),
                                                     },
                                                     NumProbe::Wrong { actual_wire_type, raw_value }
-                                                    | NumProbe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("PostWithComments", "id", "float", actual_wire_type, raw_value)),
-                                                    NumProbe::Absent => return Err(de_missing_field("PostWithComments", "id", "float")),
+                                                    | NumProbe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("PostWithComments", "id", "int", actual_wire_type, raw_value)),
+                                                    NumProbe::Absent => return Err(de_missing_field("PostWithComments", "id", "int")),
                                                 },
                                                 title: match sub6.probe_string("title") {
                                                     Probe::Got(v) => Some(v),
@@ -1207,27 +1207,27 @@ pub fn nestedRelations(
                                                 },
                                             },
                                             Probe::Wrong { actual_wire_type, raw_value }
-                                            | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("UserWithPostsAndComments", "posts", "obj{author_id:opt(float),comments:arr(obj{body:opt(string),id:opt(float),post_id:opt(float)}),id:float,title:opt(string)}", actual_wire_type, raw_value)),
-                                            Probe::Absent => return Err(de_missing_field("UserWithPostsAndComments", "posts", "obj{author_id:opt(float),comments:arr(obj{body:opt(string),id:opt(float),post_id:opt(float)}),id:float,title:opt(string)}")),
+                                            | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("UserWithPostsAndComments", "posts", "obj{author_id:opt(int),comments:arr(obj{body:opt(string),id:opt(int),post_id:opt(int)}),id:int,title:opt(string)}", actual_wire_type, raw_value)),
+                                            Probe::Absent => return Err(de_missing_field("UserWithPostsAndComments", "posts", "obj{author_id:opt(int),comments:arr(obj{body:opt(string),id:opt(int),post_id:opt(int)}),id:int,title:opt(string)}")),
                                         });
                                     }
                                     acc5
                                 },
                                 Probe::Wrong { actual_wire_type, raw_value }
-                                | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("UserWithPostsAndComments", "posts", "arr(obj{author_id:opt(float),comments:arr(obj{body:opt(string),id:opt(float),post_id:opt(float)}),id:float,title:opt(string)})", actual_wire_type, raw_value)),
-                                Probe::Absent => return Err(de_missing_field("UserWithPostsAndComments", "posts", "arr(obj{author_id:opt(float),comments:arr(obj{body:opt(string),id:opt(float),post_id:opt(float)}),id:float,title:opt(string)})")),
+                                | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("UserWithPostsAndComments", "posts", "arr(obj{author_id:opt(int),comments:arr(obj{body:opt(string),id:opt(int),post_id:opt(int)}),id:int,title:opt(string)})", actual_wire_type, raw_value)),
+                                Probe::Absent => return Err(de_missing_field("UserWithPostsAndComments", "posts", "arr(obj{author_id:opt(int),comments:arr(obj{body:opt(string),id:opt(int),post_id:opt(int)}),id:int,title:opt(string)})")),
                             },
                         },
                         Probe::Wrong { actual_wire_type, raw_value }
-                        | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n6", "n6", "obj{email:opt(string),id:float,name:opt(string),posts:arr(obj{author_id:opt(float),comments:arr(obj{body:opt(string),id:opt(float),post_id:opt(float)}),id:float,title:opt(string)})}", actual_wire_type, raw_value)),
-                        Probe::Absent => return Err(de_missing_field("n6", "n6", "obj{email:opt(string),id:float,name:opt(string),posts:arr(obj{author_id:opt(float),comments:arr(obj{body:opt(string),id:opt(float),post_id:opt(float)}),id:float,title:opt(string)})}")),
+                        | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n6", "n6", "obj{email:opt(string),id:int,name:opt(string),posts:arr(obj{author_id:opt(int),comments:arr(obj{body:opt(string),id:opt(int),post_id:opt(int)}),id:int,title:opt(string)})}", actual_wire_type, raw_value)),
+                        Probe::Absent => return Err(de_missing_field("n6", "n6", "obj{email:opt(string),id:int,name:opt(string),posts:arr(obj{author_id:opt(int),comments:arr(obj{body:opt(string),id:opt(int),post_id:opt(int)}),id:int,title:opt(string)})}")),
                     });
                 }
                 acc0
             },
             Probe::Wrong { actual_wire_type, raw_value }
-            | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n6", "n6", "arr(obj{email:opt(string),id:float,name:opt(string),posts:arr(obj{author_id:opt(float),comments:arr(obj{body:opt(string),id:opt(float),post_id:opt(float)}),id:float,title:opt(string)})})", actual_wire_type, raw_value)),
-            Probe::Absent => return Err(de_missing_field("n6", "n6", "arr(obj{email:opt(string),id:float,name:opt(string),posts:arr(obj{author_id:opt(float),comments:arr(obj{body:opt(string),id:opt(float),post_id:opt(float)}),id:float,title:opt(string)})})")),
+            | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n6", "n6", "arr(obj{email:opt(string),id:int,name:opt(string),posts:arr(obj{author_id:opt(int),comments:arr(obj{body:opt(string),id:opt(int),post_id:opt(int)}),id:int,title:opt(string)})})", actual_wire_type, raw_value)),
+            Probe::Absent => return Err(de_missing_field("n6", "n6", "arr(obj{email:opt(string),id:int,name:opt(string),posts:arr(obj{author_id:opt(int),comments:arr(obj{body:opt(string),id:opt(int),post_id:opt(int)}),id:int,title:opt(string)})})")),
         };
         produced_n6.set(true);
     }
@@ -1394,55 +1394,55 @@ pub fn compositeRelations(
                                                                         Probe::Null { .. } | Probe::Absent => None,
                                                                     },
                                                                     comment_id: match sub6.probe_number("comment_id") {
-                                                                        NumProbe::Got { raw, actual_wire_type } => match raw.parse::<f64>() {
+                                                                        NumProbe::Got { raw, actual_wire_type } => match raw.parse::<i64>() {
                                                                             Ok(n) => Some(n),
-                                                                            Err(_) => return Err(de_overflow("TenantCommentRow", "comment_id", "opt(float)", actual_wire_type, raw)),
+                                                                            Err(_) => return Err(de_overflow("TenantCommentRow", "comment_id", "opt(int)", actual_wire_type, raw)),
                                                                         },
-                                                                        NumProbe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("TenantCommentRow", "comment_id", "opt(float)", actual_wire_type, raw_value)),
+                                                                        NumProbe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("TenantCommentRow", "comment_id", "opt(int)", actual_wire_type, raw_value)),
                                                                         NumProbe::Null { .. } | NumProbe::Absent => None,
                                                                     },
                                                                     post_id: match sub6.probe_number("post_id") {
-                                                                        NumProbe::Got { raw, actual_wire_type } => match raw.parse::<f64>() {
+                                                                        NumProbe::Got { raw, actual_wire_type } => match raw.parse::<i64>() {
                                                                             Ok(n) => Some(n),
-                                                                            Err(_) => return Err(de_overflow("TenantCommentRow", "post_id", "opt(float)", actual_wire_type, raw)),
+                                                                            Err(_) => return Err(de_overflow("TenantCommentRow", "post_id", "opt(int)", actual_wire_type, raw)),
                                                                         },
-                                                                        NumProbe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("TenantCommentRow", "post_id", "opt(float)", actual_wire_type, raw_value)),
+                                                                        NumProbe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("TenantCommentRow", "post_id", "opt(int)", actual_wire_type, raw_value)),
                                                                         NumProbe::Null { .. } | NumProbe::Absent => None,
                                                                     },
                                                                     tenant_id: match sub6.probe_number("tenant_id") {
-                                                                        NumProbe::Got { raw, actual_wire_type } => match raw.parse::<f64>() {
+                                                                        NumProbe::Got { raw, actual_wire_type } => match raw.parse::<i64>() {
                                                                             Ok(n) => Some(n),
-                                                                            Err(_) => return Err(de_overflow("TenantCommentRow", "tenant_id", "opt(float)", actual_wire_type, raw)),
+                                                                            Err(_) => return Err(de_overflow("TenantCommentRow", "tenant_id", "opt(int)", actual_wire_type, raw)),
                                                                         },
-                                                                        NumProbe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("TenantCommentRow", "tenant_id", "opt(float)", actual_wire_type, raw_value)),
+                                                                        NumProbe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("TenantCommentRow", "tenant_id", "opt(int)", actual_wire_type, raw_value)),
                                                                         NumProbe::Null { .. } | NumProbe::Absent => None,
                                                                     },
                                                                 },
                                                                 Probe::Wrong { actual_wire_type, raw_value }
-                                                                | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("TenantPostWithComments", "comments", "obj{body:opt(string),comment_id:opt(float),post_id:opt(float),tenant_id:opt(float)}", actual_wire_type, raw_value)),
-                                                                Probe::Absent => return Err(de_missing_field("TenantPostWithComments", "comments", "obj{body:opt(string),comment_id:opt(float),post_id:opt(float),tenant_id:opt(float)}")),
+                                                                | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("TenantPostWithComments", "comments", "obj{body:opt(string),comment_id:opt(int),post_id:opt(int),tenant_id:opt(int)}", actual_wire_type, raw_value)),
+                                                                Probe::Absent => return Err(de_missing_field("TenantPostWithComments", "comments", "obj{body:opt(string),comment_id:opt(int),post_id:opt(int),tenant_id:opt(int)}")),
                                                             });
                                                         }
                                                         acc5
                                                     },
                                                     Probe::Wrong { actual_wire_type, raw_value }
-                                                    | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("TenantPostWithComments", "comments", "arr(obj{body:opt(string),comment_id:opt(float),post_id:opt(float),tenant_id:opt(float)})", actual_wire_type, raw_value)),
-                                                    Probe::Absent => return Err(de_missing_field("TenantPostWithComments", "comments", "arr(obj{body:opt(string),comment_id:opt(float),post_id:opt(float),tenant_id:opt(float)})")),
+                                                    | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("TenantPostWithComments", "comments", "arr(obj{body:opt(string),comment_id:opt(int),post_id:opt(int),tenant_id:opt(int)})", actual_wire_type, raw_value)),
+                                                    Probe::Absent => return Err(de_missing_field("TenantPostWithComments", "comments", "arr(obj{body:opt(string),comment_id:opt(int),post_id:opt(int),tenant_id:opt(int)})")),
                                                 },
                                                 post_id: match sub4.probe_number("post_id") {
-                                                    NumProbe::Got { raw, actual_wire_type } => match raw.parse::<f64>() {
+                                                    NumProbe::Got { raw, actual_wire_type } => match raw.parse::<i64>() {
                                                         Ok(n) => Some(n),
-                                                        Err(_) => return Err(de_overflow("TenantPostWithComments", "post_id", "opt(float)", actual_wire_type, raw)),
+                                                        Err(_) => return Err(de_overflow("TenantPostWithComments", "post_id", "opt(int)", actual_wire_type, raw)),
                                                     },
-                                                    NumProbe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("TenantPostWithComments", "post_id", "opt(float)", actual_wire_type, raw_value)),
+                                                    NumProbe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("TenantPostWithComments", "post_id", "opt(int)", actual_wire_type, raw_value)),
                                                     NumProbe::Null { .. } | NumProbe::Absent => None,
                                                 },
                                                 tenant_id: match sub4.probe_number("tenant_id") {
-                                                    NumProbe::Got { raw, actual_wire_type } => match raw.parse::<f64>() {
+                                                    NumProbe::Got { raw, actual_wire_type } => match raw.parse::<i64>() {
                                                         Ok(n) => Some(n),
-                                                        Err(_) => return Err(de_overflow("TenantPostWithComments", "tenant_id", "opt(float)", actual_wire_type, raw)),
+                                                        Err(_) => return Err(de_overflow("TenantPostWithComments", "tenant_id", "opt(int)", actual_wire_type, raw)),
                                                     },
-                                                    NumProbe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("TenantPostWithComments", "tenant_id", "opt(float)", actual_wire_type, raw_value)),
+                                                    NumProbe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("TenantPostWithComments", "tenant_id", "opt(int)", actual_wire_type, raw_value)),
                                                     NumProbe::Null { .. } | NumProbe::Absent => None,
                                                 },
                                                 title: match sub4.probe_string("title") {
@@ -1451,52 +1451,52 @@ pub fn compositeRelations(
                                                     Probe::Null { .. } | Probe::Absent => None,
                                                 },
                                                 user_id: match sub4.probe_number("user_id") {
-                                                    NumProbe::Got { raw, actual_wire_type } => match raw.parse::<f64>() {
+                                                    NumProbe::Got { raw, actual_wire_type } => match raw.parse::<i64>() {
                                                         Ok(n) => Some(n),
-                                                        Err(_) => return Err(de_overflow("TenantPostWithComments", "user_id", "opt(float)", actual_wire_type, raw)),
+                                                        Err(_) => return Err(de_overflow("TenantPostWithComments", "user_id", "opt(int)", actual_wire_type, raw)),
                                                     },
-                                                    NumProbe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("TenantPostWithComments", "user_id", "opt(float)", actual_wire_type, raw_value)),
+                                                    NumProbe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("TenantPostWithComments", "user_id", "opt(int)", actual_wire_type, raw_value)),
                                                     NumProbe::Null { .. } | NumProbe::Absent => None,
                                                 },
                                             },
                                             Probe::Wrong { actual_wire_type, raw_value }
-                                            | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("TenantUserWithPosts", "posts", "obj{comments:arr(obj{body:opt(string),comment_id:opt(float),post_id:opt(float),tenant_id:opt(float)}),post_id:opt(float),tenant_id:opt(float),title:opt(string),user_id:opt(float)}", actual_wire_type, raw_value)),
-                                            Probe::Absent => return Err(de_missing_field("TenantUserWithPosts", "posts", "obj{comments:arr(obj{body:opt(string),comment_id:opt(float),post_id:opt(float),tenant_id:opt(float)}),post_id:opt(float),tenant_id:opt(float),title:opt(string),user_id:opt(float)}")),
+                                            | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("TenantUserWithPosts", "posts", "obj{comments:arr(obj{body:opt(string),comment_id:opt(int),post_id:opt(int),tenant_id:opt(int)}),post_id:opt(int),tenant_id:opt(int),title:opt(string),user_id:opt(int)}", actual_wire_type, raw_value)),
+                                            Probe::Absent => return Err(de_missing_field("TenantUserWithPosts", "posts", "obj{comments:arr(obj{body:opt(string),comment_id:opt(int),post_id:opt(int),tenant_id:opt(int)}),post_id:opt(int),tenant_id:opt(int),title:opt(string),user_id:opt(int)}")),
                                         });
                                     }
                                     acc3
                                 },
                                 Probe::Wrong { actual_wire_type, raw_value }
-                                | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("TenantUserWithPosts", "posts", "arr(obj{comments:arr(obj{body:opt(string),comment_id:opt(float),post_id:opt(float),tenant_id:opt(float)}),post_id:opt(float),tenant_id:opt(float),title:opt(string),user_id:opt(float)})", actual_wire_type, raw_value)),
-                                Probe::Absent => return Err(de_missing_field("TenantUserWithPosts", "posts", "arr(obj{comments:arr(obj{body:opt(string),comment_id:opt(float),post_id:opt(float),tenant_id:opt(float)}),post_id:opt(float),tenant_id:opt(float),title:opt(string),user_id:opt(float)})")),
+                                | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("TenantUserWithPosts", "posts", "arr(obj{comments:arr(obj{body:opt(string),comment_id:opt(int),post_id:opt(int),tenant_id:opt(int)}),post_id:opt(int),tenant_id:opt(int),title:opt(string),user_id:opt(int)})", actual_wire_type, raw_value)),
+                                Probe::Absent => return Err(de_missing_field("TenantUserWithPosts", "posts", "arr(obj{comments:arr(obj{body:opt(string),comment_id:opt(int),post_id:opt(int),tenant_id:opt(int)}),post_id:opt(int),tenant_id:opt(int),title:opt(string),user_id:opt(int)})")),
                             },
                             tenant_id: match sub1.probe_number("tenant_id") {
-                                NumProbe::Got { raw, actual_wire_type } => match raw.parse::<f64>() {
+                                NumProbe::Got { raw, actual_wire_type } => match raw.parse::<i64>() {
                                     Ok(n) => Some(n),
-                                    Err(_) => return Err(de_overflow("TenantUserWithPosts", "tenant_id", "opt(float)", actual_wire_type, raw)),
+                                    Err(_) => return Err(de_overflow("TenantUserWithPosts", "tenant_id", "opt(int)", actual_wire_type, raw)),
                                 },
-                                NumProbe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("TenantUserWithPosts", "tenant_id", "opt(float)", actual_wire_type, raw_value)),
+                                NumProbe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("TenantUserWithPosts", "tenant_id", "opt(int)", actual_wire_type, raw_value)),
                                 NumProbe::Null { .. } | NumProbe::Absent => None,
                             },
                             user_id: match sub1.probe_number("user_id") {
-                                NumProbe::Got { raw, actual_wire_type } => match raw.parse::<f64>() {
+                                NumProbe::Got { raw, actual_wire_type } => match raw.parse::<i64>() {
                                     Ok(n) => Some(n),
-                                    Err(_) => return Err(de_overflow("TenantUserWithPosts", "user_id", "opt(float)", actual_wire_type, raw)),
+                                    Err(_) => return Err(de_overflow("TenantUserWithPosts", "user_id", "opt(int)", actual_wire_type, raw)),
                                 },
-                                NumProbe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("TenantUserWithPosts", "user_id", "opt(float)", actual_wire_type, raw_value)),
+                                NumProbe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("TenantUserWithPosts", "user_id", "opt(int)", actual_wire_type, raw_value)),
                                 NumProbe::Null { .. } | NumProbe::Absent => None,
                             },
                         },
                         Probe::Wrong { actual_wire_type, raw_value }
-                        | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n6", "n6", "obj{name:opt(string),posts:arr(obj{comments:arr(obj{body:opt(string),comment_id:opt(float),post_id:opt(float),tenant_id:opt(float)}),post_id:opt(float),tenant_id:opt(float),title:opt(string),user_id:opt(float)}),tenant_id:opt(float),user_id:opt(float)}", actual_wire_type, raw_value)),
-                        Probe::Absent => return Err(de_missing_field("n6", "n6", "obj{name:opt(string),posts:arr(obj{comments:arr(obj{body:opt(string),comment_id:opt(float),post_id:opt(float),tenant_id:opt(float)}),post_id:opt(float),tenant_id:opt(float),title:opt(string),user_id:opt(float)}),tenant_id:opt(float),user_id:opt(float)}")),
+                        | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n6", "n6", "obj{name:opt(string),posts:arr(obj{comments:arr(obj{body:opt(string),comment_id:opt(int),post_id:opt(int),tenant_id:opt(int)}),post_id:opt(int),tenant_id:opt(int),title:opt(string),user_id:opt(int)}),tenant_id:opt(int),user_id:opt(int)}", actual_wire_type, raw_value)),
+                        Probe::Absent => return Err(de_missing_field("n6", "n6", "obj{name:opt(string),posts:arr(obj{comments:arr(obj{body:opt(string),comment_id:opt(int),post_id:opt(int),tenant_id:opt(int)}),post_id:opt(int),tenant_id:opt(int),title:opt(string),user_id:opt(int)}),tenant_id:opt(int),user_id:opt(int)}")),
                     });
                 }
                 acc0
             },
             Probe::Wrong { actual_wire_type, raw_value }
-            | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n6", "n6", "arr(obj{name:opt(string),posts:arr(obj{comments:arr(obj{body:opt(string),comment_id:opt(float),post_id:opt(float),tenant_id:opt(float)}),post_id:opt(float),tenant_id:opt(float),title:opt(string),user_id:opt(float)}),tenant_id:opt(float),user_id:opt(float)})", actual_wire_type, raw_value)),
-            Probe::Absent => return Err(de_missing_field("n6", "n6", "arr(obj{name:opt(string),posts:arr(obj{comments:arr(obj{body:opt(string),comment_id:opt(float),post_id:opt(float),tenant_id:opt(float)}),post_id:opt(float),tenant_id:opt(float),title:opt(string),user_id:opt(float)}),tenant_id:opt(float),user_id:opt(float)})")),
+            | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n6", "n6", "arr(obj{name:opt(string),posts:arr(obj{comments:arr(obj{body:opt(string),comment_id:opt(int),post_id:opt(int),tenant_id:opt(int)}),post_id:opt(int),tenant_id:opt(int),title:opt(string),user_id:opt(int)}),tenant_id:opt(int),user_id:opt(int)})", actual_wire_type, raw_value)),
+            Probe::Absent => return Err(de_missing_field("n6", "n6", "arr(obj{name:opt(string),posts:arr(obj{comments:arr(obj{body:opt(string),comment_id:opt(int),post_id:opt(int),tenant_id:opt(int)}),post_id:opt(int),tenant_id:opt(int),title:opt(string),user_id:opt(int)}),tenant_id:opt(int),user_id:opt(int)})")),
         };
         produced_n6.set(true);
     }
@@ -1668,25 +1668,25 @@ pub fn upsert(
                 acc0.push(match l0.elem_row(i0) {
                     Probe::Got(sub1) => IdRow {
                         id: match sub1.probe_number("id") {
-                            NumProbe::Got { raw, actual_wire_type } => match raw.parse::<f64>() {
+                            NumProbe::Got { raw, actual_wire_type } => match raw.parse::<i64>() {
                                 Ok(n) => n,
-                                Err(_) => return Err(de_overflow("IdRow", "id", "float", actual_wire_type, raw)),
+                                Err(_) => return Err(de_overflow("IdRow", "id", "int", actual_wire_type, raw)),
                             },
                             NumProbe::Wrong { actual_wire_type, raw_value }
-                            | NumProbe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("IdRow", "id", "float", actual_wire_type, raw_value)),
-                            NumProbe::Absent => return Err(de_missing_field("IdRow", "id", "float")),
+                            | NumProbe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("IdRow", "id", "int", actual_wire_type, raw_value)),
+                            NumProbe::Absent => return Err(de_missing_field("IdRow", "id", "int")),
                         },
                     },
                     Probe::Wrong { actual_wire_type, raw_value }
-                    | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n0", "n0", "obj{id:float}", actual_wire_type, raw_value)),
-                    Probe::Absent => return Err(de_missing_field("n0", "n0", "obj{id:float}")),
+                    | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n0", "n0", "obj{id:int}", actual_wire_type, raw_value)),
+                    Probe::Absent => return Err(de_missing_field("n0", "n0", "obj{id:int}")),
                 });
             }
             acc0
         },
         Probe::Wrong { actual_wire_type, raw_value }
-        | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n0", "n0", "arr(obj{id:float})", actual_wire_type, raw_value)),
-        Probe::Absent => return Err(de_missing_field("n0", "n0", "arr(obj{id:float})")),
+        | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n0", "n0", "arr(obj{id:int})", actual_wire_type, raw_value)),
+        Probe::Absent => return Err(de_missing_field("n0", "n0", "arr(obj{id:int})")),
     };
     produced_n0.set(true);
     let __out = cell_n0.borrow().clone();
@@ -1924,25 +1924,25 @@ pub fn nestedCreate(
                 acc0.push(match l0.elem_row(i0) {
                     Probe::Got(sub1) => IdRow {
                         id: match sub1.probe_number("id") {
-                            NumProbe::Got { raw, actual_wire_type } => match raw.parse::<f64>() {
+                            NumProbe::Got { raw, actual_wire_type } => match raw.parse::<i64>() {
                                 Ok(n) => n,
-                                Err(_) => return Err(de_overflow("IdRow", "id", "float", actual_wire_type, raw)),
+                                Err(_) => return Err(de_overflow("IdRow", "id", "int", actual_wire_type, raw)),
                             },
                             NumProbe::Wrong { actual_wire_type, raw_value }
-                            | NumProbe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("IdRow", "id", "float", actual_wire_type, raw_value)),
-                            NumProbe::Absent => return Err(de_missing_field("IdRow", "id", "float")),
+                            | NumProbe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("IdRow", "id", "int", actual_wire_type, raw_value)),
+                            NumProbe::Absent => return Err(de_missing_field("IdRow", "id", "int")),
                         },
                     },
                     Probe::Wrong { actual_wire_type, raw_value }
-                    | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n0", "n0", "obj{id:float}", actual_wire_type, raw_value)),
-                    Probe::Absent => return Err(de_missing_field("n0", "n0", "obj{id:float}")),
+                    | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n0", "n0", "obj{id:int}", actual_wire_type, raw_value)),
+                    Probe::Absent => return Err(de_missing_field("n0", "n0", "obj{id:int}")),
                 });
             }
             acc0
         },
         Probe::Wrong { actual_wire_type, raw_value }
-        | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n0", "n0", "arr(obj{id:float})", actual_wire_type, raw_value)),
-        Probe::Absent => return Err(de_missing_field("n0", "n0", "arr(obj{id:float})")),
+        | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n0", "n0", "arr(obj{id:int})", actual_wire_type, raw_value)),
+        Probe::Absent => return Err(de_missing_field("n0", "n0", "arr(obj{id:int})")),
     };
     produced_n0.set(true);
     // ── map 'n1' (executeSQL, per-element, into:null, parent:n0) ──
@@ -1950,7 +1950,7 @@ pub fn nestedCreate(
         let over_n1 = cell_n0.borrow().clone();
         let mut built_n1: Vec<Vec<WriteSummary>> = Vec::with_capacity(over_n1.len());
         for oel_n1 in over_n1.iter() {
-            let ep_n1 = WireRow { entries: vec![("bigint".to_string(), WireValue::Bool(false)), ("params".to_string(), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::float(oel_n1.id), WireValue::Str(title.clone())]; __v } })), ("returning".to_string(), WireValue::Bool(false)), ("sql".to_string(), WireValue::Str("INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)".to_string())), ("write".to_string(), WireValue::Bool(true))] };
+            let ep_n1 = WireRow { entries: vec![("bigint".to_string(), WireValue::Bool(false)), ("params".to_string(), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::int(oel_n1.id), WireValue::Str(title.clone())]; __v } })), ("returning".to_string(), WireValue::Bool(false)), ("sql".to_string(), WireValue::Str("INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)".to_string())), ("write".to_string(), WireValue::Bool(true))] };
             let er_n1 = match execute_sql(ep_n1) {
                 Ok(r) => r,
                 Err(e) => return Err(op_failed("n1", "fail", e)),
@@ -2037,25 +2037,25 @@ pub fn nestedUpsert(
                 acc0.push(match l0.elem_row(i0) {
                     Probe::Got(sub1) => IdRow {
                         id: match sub1.probe_number("id") {
-                            NumProbe::Got { raw, actual_wire_type } => match raw.parse::<f64>() {
+                            NumProbe::Got { raw, actual_wire_type } => match raw.parse::<i64>() {
                                 Ok(n) => n,
-                                Err(_) => return Err(de_overflow("IdRow", "id", "float", actual_wire_type, raw)),
+                                Err(_) => return Err(de_overflow("IdRow", "id", "int", actual_wire_type, raw)),
                             },
                             NumProbe::Wrong { actual_wire_type, raw_value }
-                            | NumProbe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("IdRow", "id", "float", actual_wire_type, raw_value)),
-                            NumProbe::Absent => return Err(de_missing_field("IdRow", "id", "float")),
+                            | NumProbe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("IdRow", "id", "int", actual_wire_type, raw_value)),
+                            NumProbe::Absent => return Err(de_missing_field("IdRow", "id", "int")),
                         },
                     },
                     Probe::Wrong { actual_wire_type, raw_value }
-                    | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n0", "n0", "obj{id:float}", actual_wire_type, raw_value)),
-                    Probe::Absent => return Err(de_missing_field("n0", "n0", "obj{id:float}")),
+                    | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n0", "n0", "obj{id:int}", actual_wire_type, raw_value)),
+                    Probe::Absent => return Err(de_missing_field("n0", "n0", "obj{id:int}")),
                 });
             }
             acc0
         },
         Probe::Wrong { actual_wire_type, raw_value }
-        | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n0", "n0", "arr(obj{id:float})", actual_wire_type, raw_value)),
-        Probe::Absent => return Err(de_missing_field("n0", "n0", "arr(obj{id:float})")),
+        | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n0", "n0", "arr(obj{id:int})", actual_wire_type, raw_value)),
+        Probe::Absent => return Err(de_missing_field("n0", "n0", "arr(obj{id:int})")),
     };
     produced_n0.set(true);
     // ── map 'n1' (executeSQL, per-element, into:null, parent:n0) ──
@@ -2063,7 +2063,7 @@ pub fn nestedUpsert(
         let over_n1 = cell_n0.borrow().clone();
         let mut built_n1: Vec<Vec<WriteSummary>> = Vec::with_capacity(over_n1.len());
         for oel_n1 in over_n1.iter() {
-            let ep_n1 = WireRow { entries: vec![("bigint".to_string(), WireValue::Bool(false)), ("params".to_string(), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::float(oel_n1.id), WireValue::Str(title.clone())]; __v } })), ("returning".to_string(), WireValue::Bool(false)), ("sql".to_string(), WireValue::Str("INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)".to_string())), ("write".to_string(), WireValue::Bool(true))] };
+            let ep_n1 = WireRow { entries: vec![("bigint".to_string(), WireValue::Bool(false)), ("params".to_string(), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::int(oel_n1.id), WireValue::Str(title.clone())]; __v } })), ("returning".to_string(), WireValue::Bool(false)), ("sql".to_string(), WireValue::Str("INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)".to_string())), ("write".to_string(), WireValue::Bool(true))] };
             let er_n1 = match execute_sql(ep_n1) {
                 Ok(r) => r,
                 Err(e) => return Err(op_failed("n1", "fail", e)),
@@ -2150,25 +2150,25 @@ pub fn nestedUpdate(
                 acc0.push(match l0.elem_row(i0) {
                     Probe::Got(sub1) => IdRow {
                         id: match sub1.probe_number("id") {
-                            NumProbe::Got { raw, actual_wire_type } => match raw.parse::<f64>() {
+                            NumProbe::Got { raw, actual_wire_type } => match raw.parse::<i64>() {
                                 Ok(n) => n,
-                                Err(_) => return Err(de_overflow("IdRow", "id", "float", actual_wire_type, raw)),
+                                Err(_) => return Err(de_overflow("IdRow", "id", "int", actual_wire_type, raw)),
                             },
                             NumProbe::Wrong { actual_wire_type, raw_value }
-                            | NumProbe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("IdRow", "id", "float", actual_wire_type, raw_value)),
-                            NumProbe::Absent => return Err(de_missing_field("IdRow", "id", "float")),
+                            | NumProbe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("IdRow", "id", "int", actual_wire_type, raw_value)),
+                            NumProbe::Absent => return Err(de_missing_field("IdRow", "id", "int")),
                         },
                     },
                     Probe::Wrong { actual_wire_type, raw_value }
-                    | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n0", "n0", "obj{id:float}", actual_wire_type, raw_value)),
-                    Probe::Absent => return Err(de_missing_field("n0", "n0", "obj{id:float}")),
+                    | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n0", "n0", "obj{id:int}", actual_wire_type, raw_value)),
+                    Probe::Absent => return Err(de_missing_field("n0", "n0", "obj{id:int}")),
                 });
             }
             acc0
         },
         Probe::Wrong { actual_wire_type, raw_value }
-        | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n0", "n0", "arr(obj{id:float})", actual_wire_type, raw_value)),
-        Probe::Absent => return Err(de_missing_field("n0", "n0", "arr(obj{id:float})")),
+        | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n0", "n0", "arr(obj{id:int})", actual_wire_type, raw_value)),
+        Probe::Absent => return Err(de_missing_field("n0", "n0", "arr(obj{id:int})")),
     };
     produced_n0.set(true);
     // ── map 'n1' (executeSQL, per-element, into:null, parent:n0) ──
@@ -2176,7 +2176,7 @@ pub fn nestedUpdate(
         let over_n1 = cell_n0.borrow().clone();
         let mut built_n1: Vec<Vec<WriteSummary>> = Vec::with_capacity(over_n1.len());
         for oel_n1 in over_n1.iter() {
-            let ep_n1 = WireRow { entries: vec![("bigint".to_string(), WireValue::Bool(false)), ("params".to_string(), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::Str(title.clone()), WireValue::float(oel_n1.id)]; __v } })), ("returning".to_string(), WireValue::Bool(false)), ("sql".to_string(), WireValue::Str("UPDATE benchmark_posts SET title = ? WHERE author_id = ?".to_string())), ("write".to_string(), WireValue::Bool(true))] };
+            let ep_n1 = WireRow { entries: vec![("bigint".to_string(), WireValue::Bool(false)), ("params".to_string(), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::Str(title.clone()), WireValue::int(oel_n1.id)]; __v } })), ("returning".to_string(), WireValue::Bool(false)), ("sql".to_string(), WireValue::Str("UPDATE benchmark_posts SET title = ? WHERE author_id = ?".to_string())), ("write".to_string(), WireValue::Bool(true))] };
             let er_n1 = match execute_sql(ep_n1) {
                 Ok(r) => r,
                 Err(e) => return Err(op_failed("n1", "fail", e)),
@@ -2262,25 +2262,25 @@ pub fn delete(
                 acc0.push(match l0.elem_row(i0) {
                     Probe::Got(sub1) => IdRow {
                         id: match sub1.probe_number("id") {
-                            NumProbe::Got { raw, actual_wire_type } => match raw.parse::<f64>() {
+                            NumProbe::Got { raw, actual_wire_type } => match raw.parse::<i64>() {
                                 Ok(n) => n,
-                                Err(_) => return Err(de_overflow("IdRow", "id", "float", actual_wire_type, raw)),
+                                Err(_) => return Err(de_overflow("IdRow", "id", "int", actual_wire_type, raw)),
                             },
                             NumProbe::Wrong { actual_wire_type, raw_value }
-                            | NumProbe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("IdRow", "id", "float", actual_wire_type, raw_value)),
-                            NumProbe::Absent => return Err(de_missing_field("IdRow", "id", "float")),
+                            | NumProbe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("IdRow", "id", "int", actual_wire_type, raw_value)),
+                            NumProbe::Absent => return Err(de_missing_field("IdRow", "id", "int")),
                         },
                     },
                     Probe::Wrong { actual_wire_type, raw_value }
-                    | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n0", "n0", "obj{id:float}", actual_wire_type, raw_value)),
-                    Probe::Absent => return Err(de_missing_field("n0", "n0", "obj{id:float}")),
+                    | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n0", "n0", "obj{id:int}", actual_wire_type, raw_value)),
+                    Probe::Absent => return Err(de_missing_field("n0", "n0", "obj{id:int}")),
                 });
             }
             acc0
         },
         Probe::Wrong { actual_wire_type, raw_value }
-        | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n0", "n0", "arr(obj{id:float})", actual_wire_type, raw_value)),
-        Probe::Absent => return Err(de_missing_field("n0", "n0", "arr(obj{id:float})")),
+        | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n0", "n0", "arr(obj{id:int})", actual_wire_type, raw_value)),
+        Probe::Absent => return Err(de_missing_field("n0", "n0", "arr(obj{id:int})")),
     };
     produced_n0.set(true);
     // ── map 'n1' (executeSQL, per-element, into:null, parent:n0) ──
@@ -2288,7 +2288,7 @@ pub fn delete(
         let over_n1 = cell_n0.borrow().clone();
         let mut built_n1: Vec<Vec<WriteSummary>> = Vec::with_capacity(over_n1.len());
         for oel_n1 in over_n1.iter() {
-            let ep_n1 = WireRow { entries: vec![("bigint".to_string(), WireValue::Bool(false)), ("params".to_string(), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::float(oel_n1.id)]; __v } })), ("returning".to_string(), WireValue::Bool(false)), ("sql".to_string(), WireValue::Str("DELETE FROM benchmark_users WHERE id = ?".to_string())), ("write".to_string(), WireValue::Bool(true))] };
+            let ep_n1 = WireRow { entries: vec![("bigint".to_string(), WireValue::Bool(false)), ("params".to_string(), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::int(oel_n1.id)]; __v } })), ("returning".to_string(), WireValue::Bool(false)), ("sql".to_string(), WireValue::Str("DELETE FROM benchmark_users WHERE id = ?".to_string())), ("write".to_string(), WireValue::Bool(true))] };
             let er_n1 = match execute_sql(ep_n1) {
                 Ok(r) => r,
                 Err(e) => return Err(op_failed("n1", "fail", e)),

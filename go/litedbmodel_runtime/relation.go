@@ -132,39 +132,28 @@ func (op RelationOp) targetKeyCols() []string {
 // the SINGLE source of truth this lazy/declarative path and the native leaf transport (leaf_transport.go)
 // both consume: KeyIdentity / DedupeKeyTuples / GroupByKey / AttachToParent (no duplicated grouping).
 
-// bindKeys binds the deduped keys to the op's params per dialect + arity (TS bindKeys). Single-key:
-// PG → ONE scalar array param; MySQL/SQLite → ONE JSON scalar-array string. Composite: PG → ONE
-// array param PER key column (transposed tuples); MySQL/SQLite → ONE JSON array-of-tuples string.
-// Returns the positional args list.
+// bindKeys binds the deduped keys to the op's params per dialect + arity (TS bindKeys). Composite:
+// ONE JSON array-of-tuples string on EVERY dialect (#159) — PostgreSQL expands it server-side with
+// json_array_elements, so the key set crosses as one param whatever its length and whatever its
+// arity. Single-key: PG -> ONE scalar array param; MySQL/SQLite -> ONE JSON scalar-array string.
 func bindKeys(op RelationOp, tuples [][]bc.Value) []any {
-	composite := op.ParentKeys != nil
-	if op.Dialect == "postgres" {
-		nCols := 1
-		if composite {
-			nCols = len(op.parentKeyCols())
-		}
-		args := make([]any, nCols)
-		for col := 0; col < nCols; col++ {
-			colArr := make([]any, len(tuples))
-			for i, t := range tuples {
-				colArr[i] = toDriverParam(t[col])
-			}
-			args[col] = colArr
-		}
-		return args
-	}
-	// MySQL/SQLite: ONE JSON param — a scalar array (single-key) or an array-of-tuples (composite).
-	var payload []bc.Value
-	if composite {
-		payload = make([]bc.Value, len(tuples))
+	if op.ParentKeys != nil {
+		payload := make([]bc.Value, len(tuples))
 		for i, t := range tuples {
 			payload[i] = bc.Value([]bc.Value(t))
 		}
-	} else {
-		payload = make([]bc.Value, len(tuples))
+		return []any{jsStringify(bc.Value(payload))}
+	}
+	if op.Dialect == "postgres" {
+		colArr := make([]any, len(tuples))
 		for i, t := range tuples {
-			payload[i] = t[0]
+			colArr[i] = toDriverParam(t[0])
 		}
+		return []any{colArr}
+	}
+	payload := make([]bc.Value, len(tuples))
+	for i, t := range tuples {
+		payload[i] = t[0]
 	}
 	return []any{jsStringify(bc.Value(payload))}
 }

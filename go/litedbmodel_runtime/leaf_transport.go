@@ -290,7 +290,7 @@ func ExecuteSQL(payload wire.WireRow) (wire.WireValue, error) {
 	}
 	args := make([]any, len(params))
 	for i, p := range params {
-		args[i] = leafParam(p)
+		args[i] = leafParam(p, leafDialect)
 	}
 	text := renderPlaceholders(sql, leafDialect)
 	if write && !returning {
@@ -508,15 +508,36 @@ func wireKeyFrag(cell wire.WireValue) string {
 	return ""
 }
 
-// leafParam converts ONE wire param to a driver-bindable arg. A wire LIST (the plucked batch keys)
-// binds as ONE JSON array string (json_each(?) contract, same as relation bindKeys); a scalar binds
-// via toDriverParam.
-func leafParam(p wire.WireValue) any {
+// leafParam converts ONE wire param to a driver-bindable arg, by the SAME rule as TS
+// `leaves.encodeParams`: a scalar binds via toDriverParam; a TUPLE SET (a composite relation key set —
+// a list whose elements are themselves lists) binds as ONE JSON array-of-tuples string on EVERY
+// dialect, because PostgreSQL expands it server-side with json_array_elements (#159); any other list
+// is a list of scalar cells, which PostgreSQL binds as a NATIVE array (`= ANY($1)`) and MySQL/SQLite
+// as ONE JSON array string (the `json_each(?)` / `JSON_TABLE(?)` contract).
+func leafParam(p wire.WireValue, dialect string) any {
 	v := wireToValue(p)
-	if arr, ok := v.([]bc.Value); ok {
-		return jsStringify(bc.Value(arr))
+	arr, ok := v.([]bc.Value)
+	if !ok {
+		return toDriverParam(v)
 	}
-	return toDriverParam(v)
+	if dialect == "postgres" && !isTupleSet(arr) {
+		out := make([]any, len(arr))
+		for i, e := range arr {
+			out[i] = toDriverParam(e)
+		}
+		return out
+	}
+	return jsStringify(bc.Value(arr))
+}
+
+// isTupleSet reports whether a bound array is a composite key set (its elements are key TUPLES). Every
+// other array param is a list of SCALAR cells, because no column class de-boxes to a nested list.
+func isTupleSet(arr []bc.Value) bool {
+	if len(arr) == 0 {
+		return false
+	}
+	_, ok := arr[0].([]bc.Value)
+	return ok
 }
 
 // ── wire ↔ Value bridge (transport edge only) ──────────────────────────────────────────────────────

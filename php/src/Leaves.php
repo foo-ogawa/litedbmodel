@@ -95,31 +95,38 @@ final class Leaves
     }
 
     /**
-     * Bind a leaf's resolved param list for the driver per dialect (mirror of python `_bind_params` /
-     * the rust driver `WireValue` → param encoding). An array param (a relation key set from `pluck` or
-     * a batch record set) is server-side-expanded: sqlite/mysql JSON-encode it as ONE scalar string
-     * (`json_each`/`JSON_TABLE`); postgres binds the array as-is (native `= ANY($1)` / `unnest`). A
-     * scalar param binds unchanged.
+     * Bind a leaf's resolved param list for the driver per dialect — the SAME rule as TS
+     * `leaves.encodeParams`, mirrored by the python / rust / go leaf transports.
+     *
+     * A COMPOSITE key set (an array whose elements are the key TUPLES) binds as ONE JSON
+     * array-of-tuples string on EVERY dialect (#159): PostgreSQL expands it server-side with
+     * `json_array_elements`, and a `{…}` array literal would hand the server a nested array no cast
+     * can turn into json. Any other array is a list of scalar cells: postgres binds it as the `{…}`
+     * array-literal TEXT (PDO binds scalars only) for `= ANY($1)`, sqlite/mysql JSON-encode it for
+     * `json_each` / `JSON_TABLE`. A scalar param binds unchanged.
      *
      * @param list<mixed> $params
      * @return list<mixed>
      */
     private static function bindParams(array $params, string $dialect): array
     {
-        if ($dialect === 'postgres') {
-            // PDO binds SCALARS only, so a PG array param rides as the `{…}` array-literal TEXT —
-            // the SAME conversion the imperative relation-batch / batch-write paths use
-            // ({@see StaticBundle::pgArrayLiteral}), never a second encoder.
-            return array_map(
-                static fn ($p) => is_array($p) ? StaticBundle::pgArrayLiteral($p) : $p,
-                array_values($params),
-            );
-        }
+        $json = static fn (array $p): string => (string) json_encode($p, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        // A composite key set — its first element is itself an array. No column class de-boxes to a
+        // nested list, so every other array param is a list of scalar cells.
+        $isTupleSet = static fn (array $p): bool => count($p) > 0 && is_array(array_values($p)[0]);
         return array_map(
-            static fn ($p) => is_array($p)
-                ? json_encode($p, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)
-                : $p,
-            $params,
+            static function ($p) use ($dialect, $json, $isTupleSet) {
+                if (!is_array($p)) {
+                    return $p;
+                }
+                if ($dialect === 'postgres' && !$isTupleSet($p)) {
+                    // PDO binds SCALARS only, so a PG array param rides as the `{…}` array-literal TEXT —
+                    // the SAME conversion the imperative paths use ({@see StaticBundle::pgArrayLiteral}).
+                    return StaticBundle::pgArrayLiteral($p);
+                }
+                return $json($p);
+            },
+            array_values($params),
         );
     }
 

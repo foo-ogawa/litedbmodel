@@ -336,7 +336,24 @@ pub fn execute_sql(mut payload: WireRow) -> Result<WireValue, BehaviorError> {
     let _ = bigint;
     let driver = current_driver()?;
     let rendered = render_placeholders(sql, driver.dialect());
-    let value_params: Vec<Value> = params.iter().map(wire_to_value).collect();
+    // A composite relation key set (a list whose elements are key TUPLES) binds as ONE JSON
+    // array-of-tuples string on EVERY dialect (#159) — PostgreSQL expands it server-side with
+    // `json_array_elements`, and its native array binder would otherwise hand the server an
+    // `int[][]` no cast can turn into json. Every other array is a list of SCALAR cells: PostgreSQL
+    // binds it natively (`= ANY($1)`) and the MySQL / SQLite binders already JSON-encode it. Same
+    // rule as TS `leaves.encodeParams`.
+    let value_params: Vec<Value> = params
+        .iter()
+        .map(|p| {
+            let v = wire_to_value(p);
+            match &v {
+                Value::Arr(items) if matches!(items.first(), Some(Value::Arr(_))) => {
+                    Value::Str(crate::value_codec::array_param_json(items, false))
+                }
+                _ => v,
+            }
+        })
+        .collect();
     let ctx = exec_context::for_driver(driver);
     if write && !returning {
         let info = exec_context::run(&ctx, &rendered, &value_params, &StatementIntent::write())

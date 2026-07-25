@@ -4,14 +4,14 @@
 # native dict literal and handed to the EXISTING runtime core (run_behavior) —
 # no execution logic is generated. Handlers are ALWAYS injected at the boundary
 # (IR + {effects,config,hooks}); they are never generated.
-# irFingerprint: fnv1a64:6bbcff5c38d988b7
+# irFingerprint: fnv1a64:35d3c251947aba11
 from behavior_contracts import SPEC_VERSIONS, ProvenanceError, load_compiled_ir, run_behavior
 
 # Spec versions baked at generation time (fail-closed constant comparison at load).
 EXPECTED_SPEC_VERSIONS = {"behavior": 5, "expression": 2, "plan": 1}
 
 # FNV-1a 64 fingerprint of the source portable IR (canonical_json discipline, #208).
-IR_FINGERPRINT = "fnv1a64:6bbcff5c38d988b7"
+IR_FINGERPRINT = "fnv1a64:35d3c251947aba11"
 
 # Component names exposed by bind(), in IR declaration order.
 COMPONENT_NAMES = ("findAll", "filterPaginateSort", "findFirst", "findUnique", "nestedFindAll", "nestedFindFirst", "nestedFindUnique", "nestedRelations", "compositeRelations", "create", "update", "upsert", "createMany", "upsertMany", "updateMany", "nestedCreate", "nestedUpsert", "nestedUpdate", "delete")
@@ -36,7 +36,7 @@ IR_DOC = {
                 "email": {
                   "opt": "string"
                 },
-                "id": "float",
+                "id": "int",
                 "name": {
                   "opt": "string"
                 }
@@ -98,7 +98,7 @@ IR_DOC = {
             "email": {
               "opt": "string"
             },
-            "id": "float",
+            "id": "int",
             "name": {
               "opt": "string"
             }
@@ -117,7 +117,7 @@ IR_DOC = {
               "name": "PostFullRow",
               "obj": {
                 "author_id": {
-                  "opt": "float"
+                  "opt": "int"
                 },
                 "content": {
                   "opt": "string"
@@ -125,9 +125,9 @@ IR_DOC = {
                 "created_at": {
                   "opt": "string"
                 },
-                "id": "float",
+                "id": "int",
                 "published": {
-                  "opt": "float"
+                  "opt": "int"
                 },
                 "title": {
                   "opt": "string"
@@ -199,7 +199,7 @@ IR_DOC = {
         "arr": {
           "obj": {
             "author_id": {
-              "opt": "float"
+              "opt": "int"
             },
             "content": {
               "opt": "string"
@@ -207,9 +207,9 @@ IR_DOC = {
             "created_at": {
               "opt": "string"
             },
-            "id": "float",
+            "id": "int",
             "published": {
-              "opt": "float"
+              "opt": "int"
             },
             "title": {
               "opt": "string"
@@ -231,7 +231,7 @@ IR_DOC = {
                 "email": {
                   "opt": "string"
                 },
-                "id": "float",
+                "id": "int",
                 "name": {
                   "opt": "string"
                 }
@@ -304,7 +304,7 @@ IR_DOC = {
             "email": {
               "opt": "string"
             },
-            "id": "float",
+            "id": "int",
             "name": {
               "opt": "string"
             }
@@ -325,7 +325,7 @@ IR_DOC = {
                 "email": {
                   "opt": "string"
                 },
-                "id": "float",
+                "id": "int",
                 "name": {
                   "opt": "string"
                 }
@@ -398,7 +398,7 @@ IR_DOC = {
             "email": {
               "opt": "string"
             },
-            "id": "float",
+            "id": "int",
             "name": {
               "opt": "string"
             }
@@ -539,7 +539,7 @@ IR_DOC = {
                 "email": {
                   "opt": "string"
                 },
-                "id": "float",
+                "id": "int",
                 "name": {
                   "opt": "string"
                 },
@@ -548,9 +548,9 @@ IR_DOC = {
                     "name": "PostRow",
                     "obj": {
                       "author_id": {
-                        "opt": "float"
+                        "opt": "int"
                       },
-                      "id": "float",
+                      "id": "int",
                       "title": {
                         "opt": "string"
                       }
@@ -647,7 +647,7 @@ IR_DOC = {
             "email": {
               "opt": "string"
             },
-            "id": "float",
+            "id": "int",
             "name": {
               "opt": "string"
             },
@@ -655,9 +655,9 @@ IR_DOC = {
               "arr": {
                 "obj": {
                   "author_id": {
-                    "opt": "float"
+                    "opt": "int"
                   },
-                  "id": "float",
+                  "id": "int",
                   "title": {
                     "opt": "string"
                   }
@@ -808,7 +808,7 @@ IR_DOC = {
                 "email": {
                   "opt": "string"
                 },
-                "id": "float",
+                "id": "int",
                 "name": {
                   "opt": "string"
                 },
@@ -817,9 +817,9 @@ IR_DOC = {
                     "name": "PostRow",
                     "obj": {
                       "author_id": {
-                        "opt": "float"
+                        "opt": "int"
                       },
-                      "id": "float",
+                      "id": "int",
                       "title": {
                         "opt": "string"
                       }
@@ -921,7 +921,7 @@ IR_DOC = {
             "email": {
               "opt": "string"
             },
-            "id": "float",
+            "id": "int",
             "name": {
               "opt": "string"
             },
@@ -929,9 +929,9 @@ IR_DOC = {
               "arr": {
                 "obj": {
                   "author_id": {
-                    "opt": "float"
+                    "opt": "int"
                   },
-                  "id": "float",
+                  "id": "int",
                   "title": {
                     "opt": "string"
                   }
@@ -1082,7 +1082,7 @@ IR_DOC = {
                 "email": {
                   "opt": "string"
                 },
-                "id": "float",
+                "id": "int",
                 "name": {
                   "opt": "string"
                 },
@@ -1091,9 +1091,9 @@ IR_DOC = {
                     "name": "PostRow",
                     "obj": {
                       "author_id": {
-                        "opt": "float"
+                        "opt": "int"
                       },
-                      "id": "float",
+                      "id": "int",
                       "title": {
                         "opt": "string"
                       }
@@ -1195,7 +1195,7 @@ IR_DOC = {
             "email": {
               "opt": "string"
             },
-            "id": "float",
+            "id": "int",
             "name": {
               "opt": "string"
             },
@@ -1203,9 +1203,9 @@ IR_DOC = {
               "arr": {
                 "obj": {
                   "author_id": {
-                    "opt": "float"
+                    "opt": "int"
                   },
-                  "id": "float",
+                  "id": "int",
                   "title": {
                     "opt": "string"
                   }
@@ -1493,7 +1493,7 @@ IR_DOC = {
                 "email": {
                   "opt": "string"
                 },
-                "id": "float",
+                "id": "int",
                 "name": {
                   "opt": "string"
                 },
@@ -1502,7 +1502,7 @@ IR_DOC = {
                     "name": "PostWithComments",
                     "obj": {
                       "author_id": {
-                        "opt": "float"
+                        "opt": "int"
                       },
                       "comments": {
                         "arr": {
@@ -1512,15 +1512,15 @@ IR_DOC = {
                               "opt": "string"
                             },
                             "id": {
-                              "opt": "float"
+                              "opt": "int"
                             },
                             "post_id": {
-                              "opt": "float"
+                              "opt": "int"
                             }
                           }
                         }
                       },
-                      "id": "float",
+                      "id": "int",
                       "title": {
                         "opt": "string"
                       }
@@ -1626,7 +1626,7 @@ IR_DOC = {
             "email": {
               "opt": "string"
             },
-            "id": "float",
+            "id": "int",
             "name": {
               "opt": "string"
             },
@@ -1634,7 +1634,7 @@ IR_DOC = {
               "arr": {
                 "obj": {
                   "author_id": {
-                    "opt": "float"
+                    "opt": "int"
                   },
                   "comments": {
                     "arr": {
@@ -1643,16 +1643,16 @@ IR_DOC = {
                           "opt": "string"
                         },
                         "id": {
-                          "opt": "float"
+                          "opt": "int"
                         },
                         "post_id": {
-                          "opt": "float"
+                          "opt": "int"
                         }
                       },
                       "name": "CommentRow"
                     }
                   },
-                  "id": "float",
+                  "id": "int",
                   "title": {
                     "opt": "string"
                   }
@@ -1956,37 +1956,37 @@ IR_DOC = {
                               "opt": "string"
                             },
                             "comment_id": {
-                              "opt": "float"
+                              "opt": "int"
                             },
                             "post_id": {
-                              "opt": "float"
+                              "opt": "int"
                             },
                             "tenant_id": {
-                              "opt": "float"
+                              "opt": "int"
                             }
                           }
                         }
                       },
                       "post_id": {
-                        "opt": "float"
+                        "opt": "int"
                       },
                       "tenant_id": {
-                        "opt": "float"
+                        "opt": "int"
                       },
                       "title": {
                         "opt": "string"
                       },
                       "user_id": {
-                        "opt": "float"
+                        "opt": "int"
                       }
                     }
                   }
                 },
                 "tenant_id": {
-                  "opt": "float"
+                  "opt": "int"
                 },
                 "user_id": {
-                  "opt": "float"
+                  "opt": "int"
                 }
               }
             }
@@ -2099,39 +2099,39 @@ IR_DOC = {
                           "opt": "string"
                         },
                         "comment_id": {
-                          "opt": "float"
+                          "opt": "int"
                         },
                         "post_id": {
-                          "opt": "float"
+                          "opt": "int"
                         },
                         "tenant_id": {
-                          "opt": "float"
+                          "opt": "int"
                         }
                       },
                       "name": "TenantCommentRow"
                     }
                   },
                   "post_id": {
-                    "opt": "float"
+                    "opt": "int"
                   },
                   "tenant_id": {
-                    "opt": "float"
+                    "opt": "int"
                   },
                   "title": {
                     "opt": "string"
                   },
                   "user_id": {
-                    "opt": "float"
+                    "opt": "int"
                   }
                 },
                 "name": "TenantPostWithComments"
               }
             },
             "tenant_id": {
-              "opt": "float"
+              "opt": "int"
             },
             "user_id": {
-              "opt": "float"
+              "opt": "int"
             }
           },
           "name": "TenantUserWithPosts"
@@ -2333,7 +2333,7 @@ IR_DOC = {
             "arr": {
               "name": "IdRow",
               "obj": {
-                "id": "float"
+                "id": "int"
               }
             }
           },
@@ -2409,7 +2409,7 @@ IR_DOC = {
       "outputType": {
         "arr": {
           "obj": {
-            "id": "float"
+            "id": "int"
           },
           "name": "IdRow"
         }
@@ -2702,7 +2702,7 @@ IR_DOC = {
             "arr": {
               "name": "IdRow",
               "obj": {
-                "id": "float"
+                "id": "int"
               }
             }
           },
@@ -2869,7 +2869,7 @@ IR_DOC = {
             "arr": {
               "name": "IdRow",
               "obj": {
-                "id": "float"
+                "id": "int"
               }
             }
           },
@@ -3036,7 +3036,7 @@ IR_DOC = {
             "arr": {
               "name": "IdRow",
               "obj": {
-                "id": "float"
+                "id": "int"
               }
             }
           },
@@ -3203,7 +3203,7 @@ IR_DOC = {
             "arr": {
               "name": "IdRow",
               "obj": {
-                "id": "float"
+                "id": "int"
               }
             }
           },

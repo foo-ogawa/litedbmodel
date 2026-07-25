@@ -114,72 +114,72 @@ func deOverflow(model, field, expected, actualWire, raw string) *BehaviorError {
 // Typed struct declarations (outType-derived; hash-dedup — shared type plan).
 type UserRow struct {
 	Email *string // "email"
-	Id    float64 // "id"
+	Id    int64   // "id"
 	Name  *string // "name"
 }
 
 type PostFullRow struct {
-	Author_id  *float64 // "author_id"
-	Content    *string  // "content"
-	Created_at *string  // "created_at"
-	Id         float64  // "id"
-	Published  *float64 // "published"
-	Title      *string  // "title"
+	Author_id  *int64  // "author_id"
+	Content    *string // "content"
+	Created_at *string // "created_at"
+	Id         int64   // "id"
+	Published  *int64  // "published"
+	Title      *string // "title"
 }
 
 type UserWithPosts struct {
 	Email *string   // "email"
-	Id    float64   // "id"
+	Id    int64     // "id"
 	Name  *string   // "name"
 	Posts []PostRow // "posts"
 }
 
 type PostRow struct {
-	Author_id *float64 // "author_id"
-	Id        float64  // "id"
-	Title     *string  // "title"
+	Author_id *int64  // "author_id"
+	Id        int64   // "id"
+	Title     *string // "title"
 }
 
 type UserWithPostsAndComments struct {
 	Email *string            // "email"
-	Id    float64            // "id"
+	Id    int64              // "id"
 	Name  *string            // "name"
 	Posts []PostWithComments // "posts"
 }
 
 type PostWithComments struct {
-	Author_id *float64     // "author_id"
+	Author_id *int64       // "author_id"
 	Comments  []CommentRow // "comments"
-	Id        float64      // "id"
+	Id        int64        // "id"
 	Title     *string      // "title"
 }
 
 type CommentRow struct {
-	Body    *string  // "body"
-	Id      *float64 // "id"
-	Post_id *float64 // "post_id"
+	Body    *string // "body"
+	Id      *int64  // "id"
+	Post_id *int64  // "post_id"
 }
 
 type TenantUserWithPosts struct {
 	Name      *string                  // "name"
 	Posts     []TenantPostWithComments // "posts"
-	Tenant_id *float64                 // "tenant_id"
-	User_id   *float64                 // "user_id"
+	Tenant_id *int64                   // "tenant_id"
+	User_id   *int64                   // "user_id"
 }
 
 type TenantPostWithComments struct {
 	Comments  []TenantCommentRow // "comments"
-	Post_id   *float64           // "post_id"
-	Tenant_id *float64           // "tenant_id"
+	Post_id   *int64             // "post_id"
+	Tenant_id *int64             // "tenant_id"
 	Title     *string            // "title"
-	User_id   *float64           // "user_id"
+	User_id   *int64             // "user_id"
 }
 
 type TenantCommentRow struct {
-	Body       *string  // "body"
-	Comment_id *float64 // "comment_id"
-	Post_id    *float64 // "post_id"
-	Tenant_id  *float64 // "tenant_id"
+	Body       *string // "body"
+	Comment_id *int64  // "comment_id"
+	Post_id    *int64  // "post_id"
+	Tenant_id  *int64  // "tenant_id"
 }
 
 type WriteSummary struct {
@@ -188,7 +188,7 @@ type WriteSummary struct {
 }
 
 type IdRow struct {
-	Id float64 // "id"
+	Id int64 // "id"
 }
 
 type NewUser struct {
@@ -251,17 +251,17 @@ func FindAll() ([]UserRow, error) {
 				}
 				p3 := p1.Got.ProbeNumber("id")
 				if p3.Kind == probeGot {
-					n3, nErr3 := strconv.ParseFloat(p3.Got, 64)
+					n3, nErr3 := strconv.ParseInt(p3.Got, 10, 64)
 					if nErr3 != nil {
-						return nil, deOverflow("UserRow", "id", "float", p3.ActualWireType, p3.Got)
+						return nil, deOverflow("UserRow", "id", "int", p3.ActualWireType, p3.Got)
 					}
 					rec1.Id = n3
 				} else if p3.Kind == probeWrong {
-					return nil, deTypeMismatch("UserRow", "id", "float", p3.ActualWireType, p3.Raw)
+					return nil, deTypeMismatch("UserRow", "id", "int", p3.ActualWireType, p3.Raw)
 				} else if p3.Kind == probeNull {
-					return nil, deTypeMismatch("UserRow", "id", "float", p3.ActualWireType, p3.Raw)
+					return nil, deTypeMismatch("UserRow", "id", "int", p3.ActualWireType, p3.Raw)
 				} else {
-					return nil, deMissingField("UserRow", "id", "float")
+					return nil, deMissingField("UserRow", "id", "int")
 				}
 				p4 := p1.Got.ProbeString("name")
 				if p4.Kind == probeGot {
@@ -272,21 +272,21 @@ func FindAll() ([]UserRow, error) {
 				}
 				el0 = rec1
 			} else if p1.Kind == probeWrong {
-				return nil, deTypeMismatch("n0", "n0", "obj{email:opt(string),id:float,name:opt(string)}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{email:opt(string),id:int,name:opt(string)}", p1.ActualWireType, p1.Raw)
 			} else if p1.Kind == probeNull {
-				return nil, deTypeMismatch("n0", "n0", "obj{email:opt(string),id:float,name:opt(string)}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{email:opt(string),id:int,name:opt(string)}", p1.ActualWireType, p1.Raw)
 			} else {
-				return nil, deMissingField("n0", "n0", "obj{email:opt(string),id:float,name:opt(string)}")
+				return nil, deMissingField("n0", "n0", "obj{email:opt(string),id:int,name:opt(string)}")
 			}
 			list0 = append(list0, el0)
 		}
 		t_n0 = list0
 	} else if p0.Kind == probeWrong {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{email:opt(string),id:float,name:opt(string)})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{email:opt(string),id:int,name:opt(string)})", p0.ActualWireType, p0.Raw)
 	} else if p0.Kind == probeNull {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{email:opt(string),id:float,name:opt(string)})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{email:opt(string),id:int,name:opt(string)})", p0.ActualWireType, p0.Raw)
 	} else {
-		return nil, deMissingField("n0", "n0", "arr(obj{email:opt(string),id:float,name:opt(string)})")
+		return nil, deMissingField("n0", "n0", "arr(obj{email:opt(string),id:int,name:opt(string)})")
 	}
 	produced_n0 = true
 	return t_n0, nil
@@ -325,13 +325,13 @@ func FilterPaginateSort(published int64) ([]PostFullRow, error) {
 				var rec1 PostFullRow
 				p2 := p1.Got.ProbeNumber("author_id")
 				if p2.Kind == probeGot {
-					n2, nErr2 := strconv.ParseFloat(p2.Got, 64)
+					n2, nErr2 := strconv.ParseInt(p2.Got, 10, 64)
 					if nErr2 != nil {
-						return nil, deOverflow("PostFullRow", "author_id", "opt(float)", p2.ActualWireType, p2.Got)
+						return nil, deOverflow("PostFullRow", "author_id", "opt(int)", p2.ActualWireType, p2.Got)
 					}
 					rec1.Author_id = &n2
 				} else if p2.Kind == probeWrong {
-					return nil, deTypeMismatch("PostFullRow", "author_id", "opt(float)", p2.ActualWireType, p2.Raw)
+					return nil, deTypeMismatch("PostFullRow", "author_id", "opt(int)", p2.ActualWireType, p2.Raw)
 				}
 				p3 := p1.Got.ProbeString("content")
 				if p3.Kind == probeGot {
@@ -349,27 +349,27 @@ func FilterPaginateSort(published int64) ([]PostFullRow, error) {
 				}
 				p5 := p1.Got.ProbeNumber("id")
 				if p5.Kind == probeGot {
-					n5, nErr5 := strconv.ParseFloat(p5.Got, 64)
+					n5, nErr5 := strconv.ParseInt(p5.Got, 10, 64)
 					if nErr5 != nil {
-						return nil, deOverflow("PostFullRow", "id", "float", p5.ActualWireType, p5.Got)
+						return nil, deOverflow("PostFullRow", "id", "int", p5.ActualWireType, p5.Got)
 					}
 					rec1.Id = n5
 				} else if p5.Kind == probeWrong {
-					return nil, deTypeMismatch("PostFullRow", "id", "float", p5.ActualWireType, p5.Raw)
+					return nil, deTypeMismatch("PostFullRow", "id", "int", p5.ActualWireType, p5.Raw)
 				} else if p5.Kind == probeNull {
-					return nil, deTypeMismatch("PostFullRow", "id", "float", p5.ActualWireType, p5.Raw)
+					return nil, deTypeMismatch("PostFullRow", "id", "int", p5.ActualWireType, p5.Raw)
 				} else {
-					return nil, deMissingField("PostFullRow", "id", "float")
+					return nil, deMissingField("PostFullRow", "id", "int")
 				}
 				p6 := p1.Got.ProbeNumber("published")
 				if p6.Kind == probeGot {
-					n6, nErr6 := strconv.ParseFloat(p6.Got, 64)
+					n6, nErr6 := strconv.ParseInt(p6.Got, 10, 64)
 					if nErr6 != nil {
-						return nil, deOverflow("PostFullRow", "published", "opt(float)", p6.ActualWireType, p6.Got)
+						return nil, deOverflow("PostFullRow", "published", "opt(int)", p6.ActualWireType, p6.Got)
 					}
 					rec1.Published = &n6
 				} else if p6.Kind == probeWrong {
-					return nil, deTypeMismatch("PostFullRow", "published", "opt(float)", p6.ActualWireType, p6.Raw)
+					return nil, deTypeMismatch("PostFullRow", "published", "opt(int)", p6.ActualWireType, p6.Raw)
 				}
 				p7 := p1.Got.ProbeString("title")
 				if p7.Kind == probeGot {
@@ -380,21 +380,21 @@ func FilterPaginateSort(published int64) ([]PostFullRow, error) {
 				}
 				el0 = rec1
 			} else if p1.Kind == probeWrong {
-				return nil, deTypeMismatch("n0", "n0", "obj{author_id:opt(float),content:opt(string),created_at:opt(string),id:float,published:opt(float),title:opt(string)}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{author_id:opt(int),content:opt(string),created_at:opt(string),id:int,published:opt(int),title:opt(string)}", p1.ActualWireType, p1.Raw)
 			} else if p1.Kind == probeNull {
-				return nil, deTypeMismatch("n0", "n0", "obj{author_id:opt(float),content:opt(string),created_at:opt(string),id:float,published:opt(float),title:opt(string)}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{author_id:opt(int),content:opt(string),created_at:opt(string),id:int,published:opt(int),title:opt(string)}", p1.ActualWireType, p1.Raw)
 			} else {
-				return nil, deMissingField("n0", "n0", "obj{author_id:opt(float),content:opt(string),created_at:opt(string),id:float,published:opt(float),title:opt(string)}")
+				return nil, deMissingField("n0", "n0", "obj{author_id:opt(int),content:opt(string),created_at:opt(string),id:int,published:opt(int),title:opt(string)}")
 			}
 			list0 = append(list0, el0)
 		}
 		t_n0 = list0
 	} else if p0.Kind == probeWrong {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{author_id:opt(float),content:opt(string),created_at:opt(string),id:float,published:opt(float),title:opt(string)})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{author_id:opt(int),content:opt(string),created_at:opt(string),id:int,published:opt(int),title:opt(string)})", p0.ActualWireType, p0.Raw)
 	} else if p0.Kind == probeNull {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{author_id:opt(float),content:opt(string),created_at:opt(string),id:float,published:opt(float),title:opt(string)})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{author_id:opt(int),content:opt(string),created_at:opt(string),id:int,published:opt(int),title:opt(string)})", p0.ActualWireType, p0.Raw)
 	} else {
-		return nil, deMissingField("n0", "n0", "arr(obj{author_id:opt(float),content:opt(string),created_at:opt(string),id:float,published:opt(float),title:opt(string)})")
+		return nil, deMissingField("n0", "n0", "arr(obj{author_id:opt(int),content:opt(string),created_at:opt(string),id:int,published:opt(int),title:opt(string)})")
 	}
 	produced_n0 = true
 	return t_n0, nil
@@ -440,17 +440,17 @@ func FindFirst(name string) ([]UserRow, error) {
 				}
 				p3 := p1.Got.ProbeNumber("id")
 				if p3.Kind == probeGot {
-					n3, nErr3 := strconv.ParseFloat(p3.Got, 64)
+					n3, nErr3 := strconv.ParseInt(p3.Got, 10, 64)
 					if nErr3 != nil {
-						return nil, deOverflow("UserRow", "id", "float", p3.ActualWireType, p3.Got)
+						return nil, deOverflow("UserRow", "id", "int", p3.ActualWireType, p3.Got)
 					}
 					rec1.Id = n3
 				} else if p3.Kind == probeWrong {
-					return nil, deTypeMismatch("UserRow", "id", "float", p3.ActualWireType, p3.Raw)
+					return nil, deTypeMismatch("UserRow", "id", "int", p3.ActualWireType, p3.Raw)
 				} else if p3.Kind == probeNull {
-					return nil, deTypeMismatch("UserRow", "id", "float", p3.ActualWireType, p3.Raw)
+					return nil, deTypeMismatch("UserRow", "id", "int", p3.ActualWireType, p3.Raw)
 				} else {
-					return nil, deMissingField("UserRow", "id", "float")
+					return nil, deMissingField("UserRow", "id", "int")
 				}
 				p4 := p1.Got.ProbeString("name")
 				if p4.Kind == probeGot {
@@ -461,21 +461,21 @@ func FindFirst(name string) ([]UserRow, error) {
 				}
 				el0 = rec1
 			} else if p1.Kind == probeWrong {
-				return nil, deTypeMismatch("n0", "n0", "obj{email:opt(string),id:float,name:opt(string)}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{email:opt(string),id:int,name:opt(string)}", p1.ActualWireType, p1.Raw)
 			} else if p1.Kind == probeNull {
-				return nil, deTypeMismatch("n0", "n0", "obj{email:opt(string),id:float,name:opt(string)}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{email:opt(string),id:int,name:opt(string)}", p1.ActualWireType, p1.Raw)
 			} else {
-				return nil, deMissingField("n0", "n0", "obj{email:opt(string),id:float,name:opt(string)}")
+				return nil, deMissingField("n0", "n0", "obj{email:opt(string),id:int,name:opt(string)}")
 			}
 			list0 = append(list0, el0)
 		}
 		t_n0 = list0
 	} else if p0.Kind == probeWrong {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{email:opt(string),id:float,name:opt(string)})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{email:opt(string),id:int,name:opt(string)})", p0.ActualWireType, p0.Raw)
 	} else if p0.Kind == probeNull {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{email:opt(string),id:float,name:opt(string)})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{email:opt(string),id:int,name:opt(string)})", p0.ActualWireType, p0.Raw)
 	} else {
-		return nil, deMissingField("n0", "n0", "arr(obj{email:opt(string),id:float,name:opt(string)})")
+		return nil, deMissingField("n0", "n0", "arr(obj{email:opt(string),id:int,name:opt(string)})")
 	}
 	produced_n0 = true
 	return t_n0, nil
@@ -521,17 +521,17 @@ func FindUnique(email string) ([]UserRow, error) {
 				}
 				p3 := p1.Got.ProbeNumber("id")
 				if p3.Kind == probeGot {
-					n3, nErr3 := strconv.ParseFloat(p3.Got, 64)
+					n3, nErr3 := strconv.ParseInt(p3.Got, 10, 64)
 					if nErr3 != nil {
-						return nil, deOverflow("UserRow", "id", "float", p3.ActualWireType, p3.Got)
+						return nil, deOverflow("UserRow", "id", "int", p3.ActualWireType, p3.Got)
 					}
 					rec1.Id = n3
 				} else if p3.Kind == probeWrong {
-					return nil, deTypeMismatch("UserRow", "id", "float", p3.ActualWireType, p3.Raw)
+					return nil, deTypeMismatch("UserRow", "id", "int", p3.ActualWireType, p3.Raw)
 				} else if p3.Kind == probeNull {
-					return nil, deTypeMismatch("UserRow", "id", "float", p3.ActualWireType, p3.Raw)
+					return nil, deTypeMismatch("UserRow", "id", "int", p3.ActualWireType, p3.Raw)
 				} else {
-					return nil, deMissingField("UserRow", "id", "float")
+					return nil, deMissingField("UserRow", "id", "int")
 				}
 				p4 := p1.Got.ProbeString("name")
 				if p4.Kind == probeGot {
@@ -542,21 +542,21 @@ func FindUnique(email string) ([]UserRow, error) {
 				}
 				el0 = rec1
 			} else if p1.Kind == probeWrong {
-				return nil, deTypeMismatch("n0", "n0", "obj{email:opt(string),id:float,name:opt(string)}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{email:opt(string),id:int,name:opt(string)}", p1.ActualWireType, p1.Raw)
 			} else if p1.Kind == probeNull {
-				return nil, deTypeMismatch("n0", "n0", "obj{email:opt(string),id:float,name:opt(string)}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{email:opt(string),id:int,name:opt(string)}", p1.ActualWireType, p1.Raw)
 			} else {
-				return nil, deMissingField("n0", "n0", "obj{email:opt(string),id:float,name:opt(string)}")
+				return nil, deMissingField("n0", "n0", "obj{email:opt(string),id:int,name:opt(string)}")
 			}
 			list0 = append(list0, el0)
 		}
 		t_n0 = list0
 	} else if p0.Kind == probeWrong {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{email:opt(string),id:float,name:opt(string)})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{email:opt(string),id:int,name:opt(string)})", p0.ActualWireType, p0.Raw)
 	} else if p0.Kind == probeNull {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{email:opt(string),id:float,name:opt(string)})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{email:opt(string),id:int,name:opt(string)})", p0.ActualWireType, p0.Raw)
 	} else {
-		return nil, deMissingField("n0", "n0", "arr(obj{email:opt(string),id:float,name:opt(string)})")
+		return nil, deMissingField("n0", "n0", "arr(obj{email:opt(string),id:int,name:opt(string)})")
 	}
 	produced_n0 = true
 	return t_n0, nil
@@ -670,17 +670,17 @@ func NestedFindAll() ([]UserWithPosts, error) {
 					}
 					p6 := p4.Got.ProbeNumber("id")
 					if p6.Kind == probeGot {
-						n6, nErr6 := strconv.ParseFloat(p6.Got, 64)
+						n6, nErr6 := strconv.ParseInt(p6.Got, 10, 64)
 						if nErr6 != nil {
-							return nil, deOverflow("UserWithPosts", "id", "float", p6.ActualWireType, p6.Got)
+							return nil, deOverflow("UserWithPosts", "id", "int", p6.ActualWireType, p6.Got)
 						}
 						rec4.Id = n6
 					} else if p6.Kind == probeWrong {
-						return nil, deTypeMismatch("UserWithPosts", "id", "float", p6.ActualWireType, p6.Raw)
+						return nil, deTypeMismatch("UserWithPosts", "id", "int", p6.ActualWireType, p6.Raw)
 					} else if p6.Kind == probeNull {
-						return nil, deTypeMismatch("UserWithPosts", "id", "float", p6.ActualWireType, p6.Raw)
+						return nil, deTypeMismatch("UserWithPosts", "id", "int", p6.ActualWireType, p6.Raw)
 					} else {
-						return nil, deMissingField("UserWithPosts", "id", "float")
+						return nil, deMissingField("UserWithPosts", "id", "int")
 					}
 					p7 := p4.Got.ProbeString("name")
 					if p7.Kind == probeGot {
@@ -699,27 +699,27 @@ func NestedFindAll() ([]UserWithPosts, error) {
 								var rec9 PostRow
 								p10 := p9.Got.ProbeNumber("author_id")
 								if p10.Kind == probeGot {
-									n10, nErr10 := strconv.ParseFloat(p10.Got, 64)
+									n10, nErr10 := strconv.ParseInt(p10.Got, 10, 64)
 									if nErr10 != nil {
-										return nil, deOverflow("PostRow", "author_id", "opt(float)", p10.ActualWireType, p10.Got)
+										return nil, deOverflow("PostRow", "author_id", "opt(int)", p10.ActualWireType, p10.Got)
 									}
 									rec9.Author_id = &n10
 								} else if p10.Kind == probeWrong {
-									return nil, deTypeMismatch("PostRow", "author_id", "opt(float)", p10.ActualWireType, p10.Raw)
+									return nil, deTypeMismatch("PostRow", "author_id", "opt(int)", p10.ActualWireType, p10.Raw)
 								}
 								p11 := p9.Got.ProbeNumber("id")
 								if p11.Kind == probeGot {
-									n11, nErr11 := strconv.ParseFloat(p11.Got, 64)
+									n11, nErr11 := strconv.ParseInt(p11.Got, 10, 64)
 									if nErr11 != nil {
-										return nil, deOverflow("PostRow", "id", "float", p11.ActualWireType, p11.Got)
+										return nil, deOverflow("PostRow", "id", "int", p11.ActualWireType, p11.Got)
 									}
 									rec9.Id = n11
 								} else if p11.Kind == probeWrong {
-									return nil, deTypeMismatch("PostRow", "id", "float", p11.ActualWireType, p11.Raw)
+									return nil, deTypeMismatch("PostRow", "id", "int", p11.ActualWireType, p11.Raw)
 								} else if p11.Kind == probeNull {
-									return nil, deTypeMismatch("PostRow", "id", "float", p11.ActualWireType, p11.Raw)
+									return nil, deTypeMismatch("PostRow", "id", "int", p11.ActualWireType, p11.Raw)
 								} else {
-									return nil, deMissingField("PostRow", "id", "float")
+									return nil, deMissingField("PostRow", "id", "int")
 								}
 								p12 := p9.Got.ProbeString("title")
 								if p12.Kind == probeGot {
@@ -730,39 +730,39 @@ func NestedFindAll() ([]UserWithPosts, error) {
 								}
 								el8 = rec9
 							} else if p9.Kind == probeWrong {
-								return nil, deTypeMismatch("UserWithPosts", "posts", "obj{author_id:opt(float),id:float,title:opt(string)}", p9.ActualWireType, p9.Raw)
+								return nil, deTypeMismatch("UserWithPosts", "posts", "obj{author_id:opt(int),id:int,title:opt(string)}", p9.ActualWireType, p9.Raw)
 							} else if p9.Kind == probeNull {
-								return nil, deTypeMismatch("UserWithPosts", "posts", "obj{author_id:opt(float),id:float,title:opt(string)}", p9.ActualWireType, p9.Raw)
+								return nil, deTypeMismatch("UserWithPosts", "posts", "obj{author_id:opt(int),id:int,title:opt(string)}", p9.ActualWireType, p9.Raw)
 							} else {
-								return nil, deMissingField("UserWithPosts", "posts", "obj{author_id:opt(float),id:float,title:opt(string)}")
+								return nil, deMissingField("UserWithPosts", "posts", "obj{author_id:opt(int),id:int,title:opt(string)}")
 							}
 							list8 = append(list8, el8)
 						}
 						rec4.Posts = list8
 					} else if p8.Kind == probeWrong {
-						return nil, deTypeMismatch("UserWithPosts", "posts", "arr(obj{author_id:opt(float),id:float,title:opt(string)})", p8.ActualWireType, p8.Raw)
+						return nil, deTypeMismatch("UserWithPosts", "posts", "arr(obj{author_id:opt(int),id:int,title:opt(string)})", p8.ActualWireType, p8.Raw)
 					} else if p8.Kind == probeNull {
-						return nil, deTypeMismatch("UserWithPosts", "posts", "arr(obj{author_id:opt(float),id:float,title:opt(string)})", p8.ActualWireType, p8.Raw)
+						return nil, deTypeMismatch("UserWithPosts", "posts", "arr(obj{author_id:opt(int),id:int,title:opt(string)})", p8.ActualWireType, p8.Raw)
 					} else {
-						return nil, deMissingField("UserWithPosts", "posts", "arr(obj{author_id:opt(float),id:float,title:opt(string)})")
+						return nil, deMissingField("UserWithPosts", "posts", "arr(obj{author_id:opt(int),id:int,title:opt(string)})")
 					}
 					el3 = rec4
 				} else if p4.Kind == probeWrong {
-					return nil, deTypeMismatch("n3", "n3", "obj{email:opt(string),id:float,name:opt(string),posts:arr(obj{author_id:opt(float),id:float,title:opt(string)})}", p4.ActualWireType, p4.Raw)
+					return nil, deTypeMismatch("n3", "n3", "obj{email:opt(string),id:int,name:opt(string),posts:arr(obj{author_id:opt(int),id:int,title:opt(string)})}", p4.ActualWireType, p4.Raw)
 				} else if p4.Kind == probeNull {
-					return nil, deTypeMismatch("n3", "n3", "obj{email:opt(string),id:float,name:opt(string),posts:arr(obj{author_id:opt(float),id:float,title:opt(string)})}", p4.ActualWireType, p4.Raw)
+					return nil, deTypeMismatch("n3", "n3", "obj{email:opt(string),id:int,name:opt(string),posts:arr(obj{author_id:opt(int),id:int,title:opt(string)})}", p4.ActualWireType, p4.Raw)
 				} else {
-					return nil, deMissingField("n3", "n3", "obj{email:opt(string),id:float,name:opt(string),posts:arr(obj{author_id:opt(float),id:float,title:opt(string)})}")
+					return nil, deMissingField("n3", "n3", "obj{email:opt(string),id:int,name:opt(string),posts:arr(obj{author_id:opt(int),id:int,title:opt(string)})}")
 				}
 				list3 = append(list3, el3)
 			}
 			t_n3 = list3
 		} else if p3.Kind == probeWrong {
-			return nil, deTypeMismatch("n3", "n3", "arr(obj{email:opt(string),id:float,name:opt(string),posts:arr(obj{author_id:opt(float),id:float,title:opt(string)})})", p3.ActualWireType, p3.Raw)
+			return nil, deTypeMismatch("n3", "n3", "arr(obj{email:opt(string),id:int,name:opt(string),posts:arr(obj{author_id:opt(int),id:int,title:opt(string)})})", p3.ActualWireType, p3.Raw)
 		} else if p3.Kind == probeNull {
-			return nil, deTypeMismatch("n3", "n3", "arr(obj{email:opt(string),id:float,name:opt(string),posts:arr(obj{author_id:opt(float),id:float,title:opt(string)})})", p3.ActualWireType, p3.Raw)
+			return nil, deTypeMismatch("n3", "n3", "arr(obj{email:opt(string),id:int,name:opt(string),posts:arr(obj{author_id:opt(int),id:int,title:opt(string)})})", p3.ActualWireType, p3.Raw)
 		} else {
-			return nil, deMissingField("n3", "n3", "arr(obj{email:opt(string),id:float,name:opt(string),posts:arr(obj{author_id:opt(float),id:float,title:opt(string)})})")
+			return nil, deMissingField("n3", "n3", "arr(obj{email:opt(string),id:int,name:opt(string),posts:arr(obj{author_id:opt(int),id:int,title:opt(string)})})")
 		}
 		produced_n3 = true
 	}
@@ -877,17 +877,17 @@ func NestedFindFirst(name string) ([]UserWithPosts, error) {
 					}
 					p6 := p4.Got.ProbeNumber("id")
 					if p6.Kind == probeGot {
-						n6, nErr6 := strconv.ParseFloat(p6.Got, 64)
+						n6, nErr6 := strconv.ParseInt(p6.Got, 10, 64)
 						if nErr6 != nil {
-							return nil, deOverflow("UserWithPosts", "id", "float", p6.ActualWireType, p6.Got)
+							return nil, deOverflow("UserWithPosts", "id", "int", p6.ActualWireType, p6.Got)
 						}
 						rec4.Id = n6
 					} else if p6.Kind == probeWrong {
-						return nil, deTypeMismatch("UserWithPosts", "id", "float", p6.ActualWireType, p6.Raw)
+						return nil, deTypeMismatch("UserWithPosts", "id", "int", p6.ActualWireType, p6.Raw)
 					} else if p6.Kind == probeNull {
-						return nil, deTypeMismatch("UserWithPosts", "id", "float", p6.ActualWireType, p6.Raw)
+						return nil, deTypeMismatch("UserWithPosts", "id", "int", p6.ActualWireType, p6.Raw)
 					} else {
-						return nil, deMissingField("UserWithPosts", "id", "float")
+						return nil, deMissingField("UserWithPosts", "id", "int")
 					}
 					p7 := p4.Got.ProbeString("name")
 					if p7.Kind == probeGot {
@@ -906,27 +906,27 @@ func NestedFindFirst(name string) ([]UserWithPosts, error) {
 								var rec9 PostRow
 								p10 := p9.Got.ProbeNumber("author_id")
 								if p10.Kind == probeGot {
-									n10, nErr10 := strconv.ParseFloat(p10.Got, 64)
+									n10, nErr10 := strconv.ParseInt(p10.Got, 10, 64)
 									if nErr10 != nil {
-										return nil, deOverflow("PostRow", "author_id", "opt(float)", p10.ActualWireType, p10.Got)
+										return nil, deOverflow("PostRow", "author_id", "opt(int)", p10.ActualWireType, p10.Got)
 									}
 									rec9.Author_id = &n10
 								} else if p10.Kind == probeWrong {
-									return nil, deTypeMismatch("PostRow", "author_id", "opt(float)", p10.ActualWireType, p10.Raw)
+									return nil, deTypeMismatch("PostRow", "author_id", "opt(int)", p10.ActualWireType, p10.Raw)
 								}
 								p11 := p9.Got.ProbeNumber("id")
 								if p11.Kind == probeGot {
-									n11, nErr11 := strconv.ParseFloat(p11.Got, 64)
+									n11, nErr11 := strconv.ParseInt(p11.Got, 10, 64)
 									if nErr11 != nil {
-										return nil, deOverflow("PostRow", "id", "float", p11.ActualWireType, p11.Got)
+										return nil, deOverflow("PostRow", "id", "int", p11.ActualWireType, p11.Got)
 									}
 									rec9.Id = n11
 								} else if p11.Kind == probeWrong {
-									return nil, deTypeMismatch("PostRow", "id", "float", p11.ActualWireType, p11.Raw)
+									return nil, deTypeMismatch("PostRow", "id", "int", p11.ActualWireType, p11.Raw)
 								} else if p11.Kind == probeNull {
-									return nil, deTypeMismatch("PostRow", "id", "float", p11.ActualWireType, p11.Raw)
+									return nil, deTypeMismatch("PostRow", "id", "int", p11.ActualWireType, p11.Raw)
 								} else {
-									return nil, deMissingField("PostRow", "id", "float")
+									return nil, deMissingField("PostRow", "id", "int")
 								}
 								p12 := p9.Got.ProbeString("title")
 								if p12.Kind == probeGot {
@@ -937,39 +937,39 @@ func NestedFindFirst(name string) ([]UserWithPosts, error) {
 								}
 								el8 = rec9
 							} else if p9.Kind == probeWrong {
-								return nil, deTypeMismatch("UserWithPosts", "posts", "obj{author_id:opt(float),id:float,title:opt(string)}", p9.ActualWireType, p9.Raw)
+								return nil, deTypeMismatch("UserWithPosts", "posts", "obj{author_id:opt(int),id:int,title:opt(string)}", p9.ActualWireType, p9.Raw)
 							} else if p9.Kind == probeNull {
-								return nil, deTypeMismatch("UserWithPosts", "posts", "obj{author_id:opt(float),id:float,title:opt(string)}", p9.ActualWireType, p9.Raw)
+								return nil, deTypeMismatch("UserWithPosts", "posts", "obj{author_id:opt(int),id:int,title:opt(string)}", p9.ActualWireType, p9.Raw)
 							} else {
-								return nil, deMissingField("UserWithPosts", "posts", "obj{author_id:opt(float),id:float,title:opt(string)}")
+								return nil, deMissingField("UserWithPosts", "posts", "obj{author_id:opt(int),id:int,title:opt(string)}")
 							}
 							list8 = append(list8, el8)
 						}
 						rec4.Posts = list8
 					} else if p8.Kind == probeWrong {
-						return nil, deTypeMismatch("UserWithPosts", "posts", "arr(obj{author_id:opt(float),id:float,title:opt(string)})", p8.ActualWireType, p8.Raw)
+						return nil, deTypeMismatch("UserWithPosts", "posts", "arr(obj{author_id:opt(int),id:int,title:opt(string)})", p8.ActualWireType, p8.Raw)
 					} else if p8.Kind == probeNull {
-						return nil, deTypeMismatch("UserWithPosts", "posts", "arr(obj{author_id:opt(float),id:float,title:opt(string)})", p8.ActualWireType, p8.Raw)
+						return nil, deTypeMismatch("UserWithPosts", "posts", "arr(obj{author_id:opt(int),id:int,title:opt(string)})", p8.ActualWireType, p8.Raw)
 					} else {
-						return nil, deMissingField("UserWithPosts", "posts", "arr(obj{author_id:opt(float),id:float,title:opt(string)})")
+						return nil, deMissingField("UserWithPosts", "posts", "arr(obj{author_id:opt(int),id:int,title:opt(string)})")
 					}
 					el3 = rec4
 				} else if p4.Kind == probeWrong {
-					return nil, deTypeMismatch("n3", "n3", "obj{email:opt(string),id:float,name:opt(string),posts:arr(obj{author_id:opt(float),id:float,title:opt(string)})}", p4.ActualWireType, p4.Raw)
+					return nil, deTypeMismatch("n3", "n3", "obj{email:opt(string),id:int,name:opt(string),posts:arr(obj{author_id:opt(int),id:int,title:opt(string)})}", p4.ActualWireType, p4.Raw)
 				} else if p4.Kind == probeNull {
-					return nil, deTypeMismatch("n3", "n3", "obj{email:opt(string),id:float,name:opt(string),posts:arr(obj{author_id:opt(float),id:float,title:opt(string)})}", p4.ActualWireType, p4.Raw)
+					return nil, deTypeMismatch("n3", "n3", "obj{email:opt(string),id:int,name:opt(string),posts:arr(obj{author_id:opt(int),id:int,title:opt(string)})}", p4.ActualWireType, p4.Raw)
 				} else {
-					return nil, deMissingField("n3", "n3", "obj{email:opt(string),id:float,name:opt(string),posts:arr(obj{author_id:opt(float),id:float,title:opt(string)})}")
+					return nil, deMissingField("n3", "n3", "obj{email:opt(string),id:int,name:opt(string),posts:arr(obj{author_id:opt(int),id:int,title:opt(string)})}")
 				}
 				list3 = append(list3, el3)
 			}
 			t_n3 = list3
 		} else if p3.Kind == probeWrong {
-			return nil, deTypeMismatch("n3", "n3", "arr(obj{email:opt(string),id:float,name:opt(string),posts:arr(obj{author_id:opt(float),id:float,title:opt(string)})})", p3.ActualWireType, p3.Raw)
+			return nil, deTypeMismatch("n3", "n3", "arr(obj{email:opt(string),id:int,name:opt(string),posts:arr(obj{author_id:opt(int),id:int,title:opt(string)})})", p3.ActualWireType, p3.Raw)
 		} else if p3.Kind == probeNull {
-			return nil, deTypeMismatch("n3", "n3", "arr(obj{email:opt(string),id:float,name:opt(string),posts:arr(obj{author_id:opt(float),id:float,title:opt(string)})})", p3.ActualWireType, p3.Raw)
+			return nil, deTypeMismatch("n3", "n3", "arr(obj{email:opt(string),id:int,name:opt(string),posts:arr(obj{author_id:opt(int),id:int,title:opt(string)})})", p3.ActualWireType, p3.Raw)
 		} else {
-			return nil, deMissingField("n3", "n3", "arr(obj{email:opt(string),id:float,name:opt(string),posts:arr(obj{author_id:opt(float),id:float,title:opt(string)})})")
+			return nil, deMissingField("n3", "n3", "arr(obj{email:opt(string),id:int,name:opt(string),posts:arr(obj{author_id:opt(int),id:int,title:opt(string)})})")
 		}
 		produced_n3 = true
 	}
@@ -1084,17 +1084,17 @@ func NestedFindUnique(email string) ([]UserWithPosts, error) {
 					}
 					p6 := p4.Got.ProbeNumber("id")
 					if p6.Kind == probeGot {
-						n6, nErr6 := strconv.ParseFloat(p6.Got, 64)
+						n6, nErr6 := strconv.ParseInt(p6.Got, 10, 64)
 						if nErr6 != nil {
-							return nil, deOverflow("UserWithPosts", "id", "float", p6.ActualWireType, p6.Got)
+							return nil, deOverflow("UserWithPosts", "id", "int", p6.ActualWireType, p6.Got)
 						}
 						rec4.Id = n6
 					} else if p6.Kind == probeWrong {
-						return nil, deTypeMismatch("UserWithPosts", "id", "float", p6.ActualWireType, p6.Raw)
+						return nil, deTypeMismatch("UserWithPosts", "id", "int", p6.ActualWireType, p6.Raw)
 					} else if p6.Kind == probeNull {
-						return nil, deTypeMismatch("UserWithPosts", "id", "float", p6.ActualWireType, p6.Raw)
+						return nil, deTypeMismatch("UserWithPosts", "id", "int", p6.ActualWireType, p6.Raw)
 					} else {
-						return nil, deMissingField("UserWithPosts", "id", "float")
+						return nil, deMissingField("UserWithPosts", "id", "int")
 					}
 					p7 := p4.Got.ProbeString("name")
 					if p7.Kind == probeGot {
@@ -1113,27 +1113,27 @@ func NestedFindUnique(email string) ([]UserWithPosts, error) {
 								var rec9 PostRow
 								p10 := p9.Got.ProbeNumber("author_id")
 								if p10.Kind == probeGot {
-									n10, nErr10 := strconv.ParseFloat(p10.Got, 64)
+									n10, nErr10 := strconv.ParseInt(p10.Got, 10, 64)
 									if nErr10 != nil {
-										return nil, deOverflow("PostRow", "author_id", "opt(float)", p10.ActualWireType, p10.Got)
+										return nil, deOverflow("PostRow", "author_id", "opt(int)", p10.ActualWireType, p10.Got)
 									}
 									rec9.Author_id = &n10
 								} else if p10.Kind == probeWrong {
-									return nil, deTypeMismatch("PostRow", "author_id", "opt(float)", p10.ActualWireType, p10.Raw)
+									return nil, deTypeMismatch("PostRow", "author_id", "opt(int)", p10.ActualWireType, p10.Raw)
 								}
 								p11 := p9.Got.ProbeNumber("id")
 								if p11.Kind == probeGot {
-									n11, nErr11 := strconv.ParseFloat(p11.Got, 64)
+									n11, nErr11 := strconv.ParseInt(p11.Got, 10, 64)
 									if nErr11 != nil {
-										return nil, deOverflow("PostRow", "id", "float", p11.ActualWireType, p11.Got)
+										return nil, deOverflow("PostRow", "id", "int", p11.ActualWireType, p11.Got)
 									}
 									rec9.Id = n11
 								} else if p11.Kind == probeWrong {
-									return nil, deTypeMismatch("PostRow", "id", "float", p11.ActualWireType, p11.Raw)
+									return nil, deTypeMismatch("PostRow", "id", "int", p11.ActualWireType, p11.Raw)
 								} else if p11.Kind == probeNull {
-									return nil, deTypeMismatch("PostRow", "id", "float", p11.ActualWireType, p11.Raw)
+									return nil, deTypeMismatch("PostRow", "id", "int", p11.ActualWireType, p11.Raw)
 								} else {
-									return nil, deMissingField("PostRow", "id", "float")
+									return nil, deMissingField("PostRow", "id", "int")
 								}
 								p12 := p9.Got.ProbeString("title")
 								if p12.Kind == probeGot {
@@ -1144,39 +1144,39 @@ func NestedFindUnique(email string) ([]UserWithPosts, error) {
 								}
 								el8 = rec9
 							} else if p9.Kind == probeWrong {
-								return nil, deTypeMismatch("UserWithPosts", "posts", "obj{author_id:opt(float),id:float,title:opt(string)}", p9.ActualWireType, p9.Raw)
+								return nil, deTypeMismatch("UserWithPosts", "posts", "obj{author_id:opt(int),id:int,title:opt(string)}", p9.ActualWireType, p9.Raw)
 							} else if p9.Kind == probeNull {
-								return nil, deTypeMismatch("UserWithPosts", "posts", "obj{author_id:opt(float),id:float,title:opt(string)}", p9.ActualWireType, p9.Raw)
+								return nil, deTypeMismatch("UserWithPosts", "posts", "obj{author_id:opt(int),id:int,title:opt(string)}", p9.ActualWireType, p9.Raw)
 							} else {
-								return nil, deMissingField("UserWithPosts", "posts", "obj{author_id:opt(float),id:float,title:opt(string)}")
+								return nil, deMissingField("UserWithPosts", "posts", "obj{author_id:opt(int),id:int,title:opt(string)}")
 							}
 							list8 = append(list8, el8)
 						}
 						rec4.Posts = list8
 					} else if p8.Kind == probeWrong {
-						return nil, deTypeMismatch("UserWithPosts", "posts", "arr(obj{author_id:opt(float),id:float,title:opt(string)})", p8.ActualWireType, p8.Raw)
+						return nil, deTypeMismatch("UserWithPosts", "posts", "arr(obj{author_id:opt(int),id:int,title:opt(string)})", p8.ActualWireType, p8.Raw)
 					} else if p8.Kind == probeNull {
-						return nil, deTypeMismatch("UserWithPosts", "posts", "arr(obj{author_id:opt(float),id:float,title:opt(string)})", p8.ActualWireType, p8.Raw)
+						return nil, deTypeMismatch("UserWithPosts", "posts", "arr(obj{author_id:opt(int),id:int,title:opt(string)})", p8.ActualWireType, p8.Raw)
 					} else {
-						return nil, deMissingField("UserWithPosts", "posts", "arr(obj{author_id:opt(float),id:float,title:opt(string)})")
+						return nil, deMissingField("UserWithPosts", "posts", "arr(obj{author_id:opt(int),id:int,title:opt(string)})")
 					}
 					el3 = rec4
 				} else if p4.Kind == probeWrong {
-					return nil, deTypeMismatch("n3", "n3", "obj{email:opt(string),id:float,name:opt(string),posts:arr(obj{author_id:opt(float),id:float,title:opt(string)})}", p4.ActualWireType, p4.Raw)
+					return nil, deTypeMismatch("n3", "n3", "obj{email:opt(string),id:int,name:opt(string),posts:arr(obj{author_id:opt(int),id:int,title:opt(string)})}", p4.ActualWireType, p4.Raw)
 				} else if p4.Kind == probeNull {
-					return nil, deTypeMismatch("n3", "n3", "obj{email:opt(string),id:float,name:opt(string),posts:arr(obj{author_id:opt(float),id:float,title:opt(string)})}", p4.ActualWireType, p4.Raw)
+					return nil, deTypeMismatch("n3", "n3", "obj{email:opt(string),id:int,name:opt(string),posts:arr(obj{author_id:opt(int),id:int,title:opt(string)})}", p4.ActualWireType, p4.Raw)
 				} else {
-					return nil, deMissingField("n3", "n3", "obj{email:opt(string),id:float,name:opt(string),posts:arr(obj{author_id:opt(float),id:float,title:opt(string)})}")
+					return nil, deMissingField("n3", "n3", "obj{email:opt(string),id:int,name:opt(string),posts:arr(obj{author_id:opt(int),id:int,title:opt(string)})}")
 				}
 				list3 = append(list3, el3)
 			}
 			t_n3 = list3
 		} else if p3.Kind == probeWrong {
-			return nil, deTypeMismatch("n3", "n3", "arr(obj{email:opt(string),id:float,name:opt(string),posts:arr(obj{author_id:opt(float),id:float,title:opt(string)})})", p3.ActualWireType, p3.Raw)
+			return nil, deTypeMismatch("n3", "n3", "arr(obj{email:opt(string),id:int,name:opt(string),posts:arr(obj{author_id:opt(int),id:int,title:opt(string)})})", p3.ActualWireType, p3.Raw)
 		} else if p3.Kind == probeNull {
-			return nil, deTypeMismatch("n3", "n3", "arr(obj{email:opt(string),id:float,name:opt(string),posts:arr(obj{author_id:opt(float),id:float,title:opt(string)})})", p3.ActualWireType, p3.Raw)
+			return nil, deTypeMismatch("n3", "n3", "arr(obj{email:opt(string),id:int,name:opt(string),posts:arr(obj{author_id:opt(int),id:int,title:opt(string)})})", p3.ActualWireType, p3.Raw)
 		} else {
-			return nil, deMissingField("n3", "n3", "arr(obj{email:opt(string),id:float,name:opt(string),posts:arr(obj{author_id:opt(float),id:float,title:opt(string)})})")
+			return nil, deMissingField("n3", "n3", "arr(obj{email:opt(string),id:int,name:opt(string),posts:arr(obj{author_id:opt(int),id:int,title:opt(string)})})")
 		}
 		produced_n3 = true
 	}
@@ -1360,17 +1360,17 @@ func NestedRelations() ([]UserWithPostsAndComments, error) {
 					}
 					p9 := p7.Got.ProbeNumber("id")
 					if p9.Kind == probeGot {
-						n9, nErr9 := strconv.ParseFloat(p9.Got, 64)
+						n9, nErr9 := strconv.ParseInt(p9.Got, 10, 64)
 						if nErr9 != nil {
-							return nil, deOverflow("UserWithPostsAndComments", "id", "float", p9.ActualWireType, p9.Got)
+							return nil, deOverflow("UserWithPostsAndComments", "id", "int", p9.ActualWireType, p9.Got)
 						}
 						rec7.Id = n9
 					} else if p9.Kind == probeWrong {
-						return nil, deTypeMismatch("UserWithPostsAndComments", "id", "float", p9.ActualWireType, p9.Raw)
+						return nil, deTypeMismatch("UserWithPostsAndComments", "id", "int", p9.ActualWireType, p9.Raw)
 					} else if p9.Kind == probeNull {
-						return nil, deTypeMismatch("UserWithPostsAndComments", "id", "float", p9.ActualWireType, p9.Raw)
+						return nil, deTypeMismatch("UserWithPostsAndComments", "id", "int", p9.ActualWireType, p9.Raw)
 					} else {
-						return nil, deMissingField("UserWithPostsAndComments", "id", "float")
+						return nil, deMissingField("UserWithPostsAndComments", "id", "int")
 					}
 					p10 := p7.Got.ProbeString("name")
 					if p10.Kind == probeGot {
@@ -1389,13 +1389,13 @@ func NestedRelations() ([]UserWithPostsAndComments, error) {
 								var rec12 PostWithComments
 								p13 := p12.Got.ProbeNumber("author_id")
 								if p13.Kind == probeGot {
-									n13, nErr13 := strconv.ParseFloat(p13.Got, 64)
+									n13, nErr13 := strconv.ParseInt(p13.Got, 10, 64)
 									if nErr13 != nil {
-										return nil, deOverflow("PostWithComments", "author_id", "opt(float)", p13.ActualWireType, p13.Got)
+										return nil, deOverflow("PostWithComments", "author_id", "opt(int)", p13.ActualWireType, p13.Got)
 									}
 									rec12.Author_id = &n13
 								} else if p13.Kind == probeWrong {
-									return nil, deTypeMismatch("PostWithComments", "author_id", "opt(float)", p13.ActualWireType, p13.Raw)
+									return nil, deTypeMismatch("PostWithComments", "author_id", "opt(int)", p13.ActualWireType, p13.Raw)
 								}
 								p14 := p12.Got.ProbeList("comments")
 								if p14.Kind == probeGot {
@@ -1414,55 +1414,55 @@ func NestedRelations() ([]UserWithPostsAndComments, error) {
 											}
 											p17 := p15.Got.ProbeNumber("id")
 											if p17.Kind == probeGot {
-												n17, nErr17 := strconv.ParseFloat(p17.Got, 64)
+												n17, nErr17 := strconv.ParseInt(p17.Got, 10, 64)
 												if nErr17 != nil {
-													return nil, deOverflow("CommentRow", "id", "opt(float)", p17.ActualWireType, p17.Got)
+													return nil, deOverflow("CommentRow", "id", "opt(int)", p17.ActualWireType, p17.Got)
 												}
 												rec15.Id = &n17
 											} else if p17.Kind == probeWrong {
-												return nil, deTypeMismatch("CommentRow", "id", "opt(float)", p17.ActualWireType, p17.Raw)
+												return nil, deTypeMismatch("CommentRow", "id", "opt(int)", p17.ActualWireType, p17.Raw)
 											}
 											p18 := p15.Got.ProbeNumber("post_id")
 											if p18.Kind == probeGot {
-												n18, nErr18 := strconv.ParseFloat(p18.Got, 64)
+												n18, nErr18 := strconv.ParseInt(p18.Got, 10, 64)
 												if nErr18 != nil {
-													return nil, deOverflow("CommentRow", "post_id", "opt(float)", p18.ActualWireType, p18.Got)
+													return nil, deOverflow("CommentRow", "post_id", "opt(int)", p18.ActualWireType, p18.Got)
 												}
 												rec15.Post_id = &n18
 											} else if p18.Kind == probeWrong {
-												return nil, deTypeMismatch("CommentRow", "post_id", "opt(float)", p18.ActualWireType, p18.Raw)
+												return nil, deTypeMismatch("CommentRow", "post_id", "opt(int)", p18.ActualWireType, p18.Raw)
 											}
 											el14 = rec15
 										} else if p15.Kind == probeWrong {
-											return nil, deTypeMismatch("PostWithComments", "comments", "obj{body:opt(string),id:opt(float),post_id:opt(float)}", p15.ActualWireType, p15.Raw)
+											return nil, deTypeMismatch("PostWithComments", "comments", "obj{body:opt(string),id:opt(int),post_id:opt(int)}", p15.ActualWireType, p15.Raw)
 										} else if p15.Kind == probeNull {
-											return nil, deTypeMismatch("PostWithComments", "comments", "obj{body:opt(string),id:opt(float),post_id:opt(float)}", p15.ActualWireType, p15.Raw)
+											return nil, deTypeMismatch("PostWithComments", "comments", "obj{body:opt(string),id:opt(int),post_id:opt(int)}", p15.ActualWireType, p15.Raw)
 										} else {
-											return nil, deMissingField("PostWithComments", "comments", "obj{body:opt(string),id:opt(float),post_id:opt(float)}")
+											return nil, deMissingField("PostWithComments", "comments", "obj{body:opt(string),id:opt(int),post_id:opt(int)}")
 										}
 										list14 = append(list14, el14)
 									}
 									rec12.Comments = list14
 								} else if p14.Kind == probeWrong {
-									return nil, deTypeMismatch("PostWithComments", "comments", "arr(obj{body:opt(string),id:opt(float),post_id:opt(float)})", p14.ActualWireType, p14.Raw)
+									return nil, deTypeMismatch("PostWithComments", "comments", "arr(obj{body:opt(string),id:opt(int),post_id:opt(int)})", p14.ActualWireType, p14.Raw)
 								} else if p14.Kind == probeNull {
-									return nil, deTypeMismatch("PostWithComments", "comments", "arr(obj{body:opt(string),id:opt(float),post_id:opt(float)})", p14.ActualWireType, p14.Raw)
+									return nil, deTypeMismatch("PostWithComments", "comments", "arr(obj{body:opt(string),id:opt(int),post_id:opt(int)})", p14.ActualWireType, p14.Raw)
 								} else {
-									return nil, deMissingField("PostWithComments", "comments", "arr(obj{body:opt(string),id:opt(float),post_id:opt(float)})")
+									return nil, deMissingField("PostWithComments", "comments", "arr(obj{body:opt(string),id:opt(int),post_id:opt(int)})")
 								}
 								p19 := p12.Got.ProbeNumber("id")
 								if p19.Kind == probeGot {
-									n19, nErr19 := strconv.ParseFloat(p19.Got, 64)
+									n19, nErr19 := strconv.ParseInt(p19.Got, 10, 64)
 									if nErr19 != nil {
-										return nil, deOverflow("PostWithComments", "id", "float", p19.ActualWireType, p19.Got)
+										return nil, deOverflow("PostWithComments", "id", "int", p19.ActualWireType, p19.Got)
 									}
 									rec12.Id = n19
 								} else if p19.Kind == probeWrong {
-									return nil, deTypeMismatch("PostWithComments", "id", "float", p19.ActualWireType, p19.Raw)
+									return nil, deTypeMismatch("PostWithComments", "id", "int", p19.ActualWireType, p19.Raw)
 								} else if p19.Kind == probeNull {
-									return nil, deTypeMismatch("PostWithComments", "id", "float", p19.ActualWireType, p19.Raw)
+									return nil, deTypeMismatch("PostWithComments", "id", "int", p19.ActualWireType, p19.Raw)
 								} else {
-									return nil, deMissingField("PostWithComments", "id", "float")
+									return nil, deMissingField("PostWithComments", "id", "int")
 								}
 								p20 := p12.Got.ProbeString("title")
 								if p20.Kind == probeGot {
@@ -1473,39 +1473,39 @@ func NestedRelations() ([]UserWithPostsAndComments, error) {
 								}
 								el11 = rec12
 							} else if p12.Kind == probeWrong {
-								return nil, deTypeMismatch("UserWithPostsAndComments", "posts", "obj{author_id:opt(float),comments:arr(obj{body:opt(string),id:opt(float),post_id:opt(float)}),id:float,title:opt(string)}", p12.ActualWireType, p12.Raw)
+								return nil, deTypeMismatch("UserWithPostsAndComments", "posts", "obj{author_id:opt(int),comments:arr(obj{body:opt(string),id:opt(int),post_id:opt(int)}),id:int,title:opt(string)}", p12.ActualWireType, p12.Raw)
 							} else if p12.Kind == probeNull {
-								return nil, deTypeMismatch("UserWithPostsAndComments", "posts", "obj{author_id:opt(float),comments:arr(obj{body:opt(string),id:opt(float),post_id:opt(float)}),id:float,title:opt(string)}", p12.ActualWireType, p12.Raw)
+								return nil, deTypeMismatch("UserWithPostsAndComments", "posts", "obj{author_id:opt(int),comments:arr(obj{body:opt(string),id:opt(int),post_id:opt(int)}),id:int,title:opt(string)}", p12.ActualWireType, p12.Raw)
 							} else {
-								return nil, deMissingField("UserWithPostsAndComments", "posts", "obj{author_id:opt(float),comments:arr(obj{body:opt(string),id:opt(float),post_id:opt(float)}),id:float,title:opt(string)}")
+								return nil, deMissingField("UserWithPostsAndComments", "posts", "obj{author_id:opt(int),comments:arr(obj{body:opt(string),id:opt(int),post_id:opt(int)}),id:int,title:opt(string)}")
 							}
 							list11 = append(list11, el11)
 						}
 						rec7.Posts = list11
 					} else if p11.Kind == probeWrong {
-						return nil, deTypeMismatch("UserWithPostsAndComments", "posts", "arr(obj{author_id:opt(float),comments:arr(obj{body:opt(string),id:opt(float),post_id:opt(float)}),id:float,title:opt(string)})", p11.ActualWireType, p11.Raw)
+						return nil, deTypeMismatch("UserWithPostsAndComments", "posts", "arr(obj{author_id:opt(int),comments:arr(obj{body:opt(string),id:opt(int),post_id:opt(int)}),id:int,title:opt(string)})", p11.ActualWireType, p11.Raw)
 					} else if p11.Kind == probeNull {
-						return nil, deTypeMismatch("UserWithPostsAndComments", "posts", "arr(obj{author_id:opt(float),comments:arr(obj{body:opt(string),id:opt(float),post_id:opt(float)}),id:float,title:opt(string)})", p11.ActualWireType, p11.Raw)
+						return nil, deTypeMismatch("UserWithPostsAndComments", "posts", "arr(obj{author_id:opt(int),comments:arr(obj{body:opt(string),id:opt(int),post_id:opt(int)}),id:int,title:opt(string)})", p11.ActualWireType, p11.Raw)
 					} else {
-						return nil, deMissingField("UserWithPostsAndComments", "posts", "arr(obj{author_id:opt(float),comments:arr(obj{body:opt(string),id:opt(float),post_id:opt(float)}),id:float,title:opt(string)})")
+						return nil, deMissingField("UserWithPostsAndComments", "posts", "arr(obj{author_id:opt(int),comments:arr(obj{body:opt(string),id:opt(int),post_id:opt(int)}),id:int,title:opt(string)})")
 					}
 					el6 = rec7
 				} else if p7.Kind == probeWrong {
-					return nil, deTypeMismatch("n6", "n6", "obj{email:opt(string),id:float,name:opt(string),posts:arr(obj{author_id:opt(float),comments:arr(obj{body:opt(string),id:opt(float),post_id:opt(float)}),id:float,title:opt(string)})}", p7.ActualWireType, p7.Raw)
+					return nil, deTypeMismatch("n6", "n6", "obj{email:opt(string),id:int,name:opt(string),posts:arr(obj{author_id:opt(int),comments:arr(obj{body:opt(string),id:opt(int),post_id:opt(int)}),id:int,title:opt(string)})}", p7.ActualWireType, p7.Raw)
 				} else if p7.Kind == probeNull {
-					return nil, deTypeMismatch("n6", "n6", "obj{email:opt(string),id:float,name:opt(string),posts:arr(obj{author_id:opt(float),comments:arr(obj{body:opt(string),id:opt(float),post_id:opt(float)}),id:float,title:opt(string)})}", p7.ActualWireType, p7.Raw)
+					return nil, deTypeMismatch("n6", "n6", "obj{email:opt(string),id:int,name:opt(string),posts:arr(obj{author_id:opt(int),comments:arr(obj{body:opt(string),id:opt(int),post_id:opt(int)}),id:int,title:opt(string)})}", p7.ActualWireType, p7.Raw)
 				} else {
-					return nil, deMissingField("n6", "n6", "obj{email:opt(string),id:float,name:opt(string),posts:arr(obj{author_id:opt(float),comments:arr(obj{body:opt(string),id:opt(float),post_id:opt(float)}),id:float,title:opt(string)})}")
+					return nil, deMissingField("n6", "n6", "obj{email:opt(string),id:int,name:opt(string),posts:arr(obj{author_id:opt(int),comments:arr(obj{body:opt(string),id:opt(int),post_id:opt(int)}),id:int,title:opt(string)})}")
 				}
 				list6 = append(list6, el6)
 			}
 			t_n6 = list6
 		} else if p6.Kind == probeWrong {
-			return nil, deTypeMismatch("n6", "n6", "arr(obj{email:opt(string),id:float,name:opt(string),posts:arr(obj{author_id:opt(float),comments:arr(obj{body:opt(string),id:opt(float),post_id:opt(float)}),id:float,title:opt(string)})})", p6.ActualWireType, p6.Raw)
+			return nil, deTypeMismatch("n6", "n6", "arr(obj{email:opt(string),id:int,name:opt(string),posts:arr(obj{author_id:opt(int),comments:arr(obj{body:opt(string),id:opt(int),post_id:opt(int)}),id:int,title:opt(string)})})", p6.ActualWireType, p6.Raw)
 		} else if p6.Kind == probeNull {
-			return nil, deTypeMismatch("n6", "n6", "arr(obj{email:opt(string),id:float,name:opt(string),posts:arr(obj{author_id:opt(float),comments:arr(obj{body:opt(string),id:opt(float),post_id:opt(float)}),id:float,title:opt(string)})})", p6.ActualWireType, p6.Raw)
+			return nil, deTypeMismatch("n6", "n6", "arr(obj{email:opt(string),id:int,name:opt(string),posts:arr(obj{author_id:opt(int),comments:arr(obj{body:opt(string),id:opt(int),post_id:opt(int)}),id:int,title:opt(string)})})", p6.ActualWireType, p6.Raw)
 		} else {
-			return nil, deMissingField("n6", "n6", "arr(obj{email:opt(string),id:float,name:opt(string),posts:arr(obj{author_id:opt(float),comments:arr(obj{body:opt(string),id:opt(float),post_id:opt(float)}),id:float,title:opt(string)})})")
+			return nil, deMissingField("n6", "n6", "arr(obj{email:opt(string),id:int,name:opt(string),posts:arr(obj{author_id:opt(int),comments:arr(obj{body:opt(string),id:opt(int),post_id:opt(int)}),id:int,title:opt(string)})})")
 		}
 		produced_n6 = true
 	}
@@ -1712,71 +1712,71 @@ func CompositeRelations() ([]TenantUserWithPosts, error) {
 											}
 											p14 := p12.Got.ProbeNumber("comment_id")
 											if p14.Kind == probeGot {
-												n14, nErr14 := strconv.ParseFloat(p14.Got, 64)
+												n14, nErr14 := strconv.ParseInt(p14.Got, 10, 64)
 												if nErr14 != nil {
-													return nil, deOverflow("TenantCommentRow", "comment_id", "opt(float)", p14.ActualWireType, p14.Got)
+													return nil, deOverflow("TenantCommentRow", "comment_id", "opt(int)", p14.ActualWireType, p14.Got)
 												}
 												rec12.Comment_id = &n14
 											} else if p14.Kind == probeWrong {
-												return nil, deTypeMismatch("TenantCommentRow", "comment_id", "opt(float)", p14.ActualWireType, p14.Raw)
+												return nil, deTypeMismatch("TenantCommentRow", "comment_id", "opt(int)", p14.ActualWireType, p14.Raw)
 											}
 											p15 := p12.Got.ProbeNumber("post_id")
 											if p15.Kind == probeGot {
-												n15, nErr15 := strconv.ParseFloat(p15.Got, 64)
+												n15, nErr15 := strconv.ParseInt(p15.Got, 10, 64)
 												if nErr15 != nil {
-													return nil, deOverflow("TenantCommentRow", "post_id", "opt(float)", p15.ActualWireType, p15.Got)
+													return nil, deOverflow("TenantCommentRow", "post_id", "opt(int)", p15.ActualWireType, p15.Got)
 												}
 												rec12.Post_id = &n15
 											} else if p15.Kind == probeWrong {
-												return nil, deTypeMismatch("TenantCommentRow", "post_id", "opt(float)", p15.ActualWireType, p15.Raw)
+												return nil, deTypeMismatch("TenantCommentRow", "post_id", "opt(int)", p15.ActualWireType, p15.Raw)
 											}
 											p16 := p12.Got.ProbeNumber("tenant_id")
 											if p16.Kind == probeGot {
-												n16, nErr16 := strconv.ParseFloat(p16.Got, 64)
+												n16, nErr16 := strconv.ParseInt(p16.Got, 10, 64)
 												if nErr16 != nil {
-													return nil, deOverflow("TenantCommentRow", "tenant_id", "opt(float)", p16.ActualWireType, p16.Got)
+													return nil, deOverflow("TenantCommentRow", "tenant_id", "opt(int)", p16.ActualWireType, p16.Got)
 												}
 												rec12.Tenant_id = &n16
 											} else if p16.Kind == probeWrong {
-												return nil, deTypeMismatch("TenantCommentRow", "tenant_id", "opt(float)", p16.ActualWireType, p16.Raw)
+												return nil, deTypeMismatch("TenantCommentRow", "tenant_id", "opt(int)", p16.ActualWireType, p16.Raw)
 											}
 											el11 = rec12
 										} else if p12.Kind == probeWrong {
-											return nil, deTypeMismatch("TenantPostWithComments", "comments", "obj{body:opt(string),comment_id:opt(float),post_id:opt(float),tenant_id:opt(float)}", p12.ActualWireType, p12.Raw)
+											return nil, deTypeMismatch("TenantPostWithComments", "comments", "obj{body:opt(string),comment_id:opt(int),post_id:opt(int),tenant_id:opt(int)}", p12.ActualWireType, p12.Raw)
 										} else if p12.Kind == probeNull {
-											return nil, deTypeMismatch("TenantPostWithComments", "comments", "obj{body:opt(string),comment_id:opt(float),post_id:opt(float),tenant_id:opt(float)}", p12.ActualWireType, p12.Raw)
+											return nil, deTypeMismatch("TenantPostWithComments", "comments", "obj{body:opt(string),comment_id:opt(int),post_id:opt(int),tenant_id:opt(int)}", p12.ActualWireType, p12.Raw)
 										} else {
-											return nil, deMissingField("TenantPostWithComments", "comments", "obj{body:opt(string),comment_id:opt(float),post_id:opt(float),tenant_id:opt(float)}")
+											return nil, deMissingField("TenantPostWithComments", "comments", "obj{body:opt(string),comment_id:opt(int),post_id:opt(int),tenant_id:opt(int)}")
 										}
 										list11 = append(list11, el11)
 									}
 									rec10.Comments = list11
 								} else if p11.Kind == probeWrong {
-									return nil, deTypeMismatch("TenantPostWithComments", "comments", "arr(obj{body:opt(string),comment_id:opt(float),post_id:opt(float),tenant_id:opt(float)})", p11.ActualWireType, p11.Raw)
+									return nil, deTypeMismatch("TenantPostWithComments", "comments", "arr(obj{body:opt(string),comment_id:opt(int),post_id:opt(int),tenant_id:opt(int)})", p11.ActualWireType, p11.Raw)
 								} else if p11.Kind == probeNull {
-									return nil, deTypeMismatch("TenantPostWithComments", "comments", "arr(obj{body:opt(string),comment_id:opt(float),post_id:opt(float),tenant_id:opt(float)})", p11.ActualWireType, p11.Raw)
+									return nil, deTypeMismatch("TenantPostWithComments", "comments", "arr(obj{body:opt(string),comment_id:opt(int),post_id:opt(int),tenant_id:opt(int)})", p11.ActualWireType, p11.Raw)
 								} else {
-									return nil, deMissingField("TenantPostWithComments", "comments", "arr(obj{body:opt(string),comment_id:opt(float),post_id:opt(float),tenant_id:opt(float)})")
+									return nil, deMissingField("TenantPostWithComments", "comments", "arr(obj{body:opt(string),comment_id:opt(int),post_id:opt(int),tenant_id:opt(int)})")
 								}
 								p17 := p10.Got.ProbeNumber("post_id")
 								if p17.Kind == probeGot {
-									n17, nErr17 := strconv.ParseFloat(p17.Got, 64)
+									n17, nErr17 := strconv.ParseInt(p17.Got, 10, 64)
 									if nErr17 != nil {
-										return nil, deOverflow("TenantPostWithComments", "post_id", "opt(float)", p17.ActualWireType, p17.Got)
+										return nil, deOverflow("TenantPostWithComments", "post_id", "opt(int)", p17.ActualWireType, p17.Got)
 									}
 									rec10.Post_id = &n17
 								} else if p17.Kind == probeWrong {
-									return nil, deTypeMismatch("TenantPostWithComments", "post_id", "opt(float)", p17.ActualWireType, p17.Raw)
+									return nil, deTypeMismatch("TenantPostWithComments", "post_id", "opt(int)", p17.ActualWireType, p17.Raw)
 								}
 								p18 := p10.Got.ProbeNumber("tenant_id")
 								if p18.Kind == probeGot {
-									n18, nErr18 := strconv.ParseFloat(p18.Got, 64)
+									n18, nErr18 := strconv.ParseInt(p18.Got, 10, 64)
 									if nErr18 != nil {
-										return nil, deOverflow("TenantPostWithComments", "tenant_id", "opt(float)", p18.ActualWireType, p18.Got)
+										return nil, deOverflow("TenantPostWithComments", "tenant_id", "opt(int)", p18.ActualWireType, p18.Got)
 									}
 									rec10.Tenant_id = &n18
 								} else if p18.Kind == probeWrong {
-									return nil, deTypeMismatch("TenantPostWithComments", "tenant_id", "opt(float)", p18.ActualWireType, p18.Raw)
+									return nil, deTypeMismatch("TenantPostWithComments", "tenant_id", "opt(int)", p18.ActualWireType, p18.Raw)
 								}
 								p19 := p10.Got.ProbeString("title")
 								if p19.Kind == probeGot {
@@ -1787,69 +1787,69 @@ func CompositeRelations() ([]TenantUserWithPosts, error) {
 								}
 								p20 := p10.Got.ProbeNumber("user_id")
 								if p20.Kind == probeGot {
-									n20, nErr20 := strconv.ParseFloat(p20.Got, 64)
+									n20, nErr20 := strconv.ParseInt(p20.Got, 10, 64)
 									if nErr20 != nil {
-										return nil, deOverflow("TenantPostWithComments", "user_id", "opt(float)", p20.ActualWireType, p20.Got)
+										return nil, deOverflow("TenantPostWithComments", "user_id", "opt(int)", p20.ActualWireType, p20.Got)
 									}
 									rec10.User_id = &n20
 								} else if p20.Kind == probeWrong {
-									return nil, deTypeMismatch("TenantPostWithComments", "user_id", "opt(float)", p20.ActualWireType, p20.Raw)
+									return nil, deTypeMismatch("TenantPostWithComments", "user_id", "opt(int)", p20.ActualWireType, p20.Raw)
 								}
 								el9 = rec10
 							} else if p10.Kind == probeWrong {
-								return nil, deTypeMismatch("TenantUserWithPosts", "posts", "obj{comments:arr(obj{body:opt(string),comment_id:opt(float),post_id:opt(float),tenant_id:opt(float)}),post_id:opt(float),tenant_id:opt(float),title:opt(string),user_id:opt(float)}", p10.ActualWireType, p10.Raw)
+								return nil, deTypeMismatch("TenantUserWithPosts", "posts", "obj{comments:arr(obj{body:opt(string),comment_id:opt(int),post_id:opt(int),tenant_id:opt(int)}),post_id:opt(int),tenant_id:opt(int),title:opt(string),user_id:opt(int)}", p10.ActualWireType, p10.Raw)
 							} else if p10.Kind == probeNull {
-								return nil, deTypeMismatch("TenantUserWithPosts", "posts", "obj{comments:arr(obj{body:opt(string),comment_id:opt(float),post_id:opt(float),tenant_id:opt(float)}),post_id:opt(float),tenant_id:opt(float),title:opt(string),user_id:opt(float)}", p10.ActualWireType, p10.Raw)
+								return nil, deTypeMismatch("TenantUserWithPosts", "posts", "obj{comments:arr(obj{body:opt(string),comment_id:opt(int),post_id:opt(int),tenant_id:opt(int)}),post_id:opt(int),tenant_id:opt(int),title:opt(string),user_id:opt(int)}", p10.ActualWireType, p10.Raw)
 							} else {
-								return nil, deMissingField("TenantUserWithPosts", "posts", "obj{comments:arr(obj{body:opt(string),comment_id:opt(float),post_id:opt(float),tenant_id:opt(float)}),post_id:opt(float),tenant_id:opt(float),title:opt(string),user_id:opt(float)}")
+								return nil, deMissingField("TenantUserWithPosts", "posts", "obj{comments:arr(obj{body:opt(string),comment_id:opt(int),post_id:opt(int),tenant_id:opt(int)}),post_id:opt(int),tenant_id:opt(int),title:opt(string),user_id:opt(int)}")
 							}
 							list9 = append(list9, el9)
 						}
 						rec7.Posts = list9
 					} else if p9.Kind == probeWrong {
-						return nil, deTypeMismatch("TenantUserWithPosts", "posts", "arr(obj{comments:arr(obj{body:opt(string),comment_id:opt(float),post_id:opt(float),tenant_id:opt(float)}),post_id:opt(float),tenant_id:opt(float),title:opt(string),user_id:opt(float)})", p9.ActualWireType, p9.Raw)
+						return nil, deTypeMismatch("TenantUserWithPosts", "posts", "arr(obj{comments:arr(obj{body:opt(string),comment_id:opt(int),post_id:opt(int),tenant_id:opt(int)}),post_id:opt(int),tenant_id:opt(int),title:opt(string),user_id:opt(int)})", p9.ActualWireType, p9.Raw)
 					} else if p9.Kind == probeNull {
-						return nil, deTypeMismatch("TenantUserWithPosts", "posts", "arr(obj{comments:arr(obj{body:opt(string),comment_id:opt(float),post_id:opt(float),tenant_id:opt(float)}),post_id:opt(float),tenant_id:opt(float),title:opt(string),user_id:opt(float)})", p9.ActualWireType, p9.Raw)
+						return nil, deTypeMismatch("TenantUserWithPosts", "posts", "arr(obj{comments:arr(obj{body:opt(string),comment_id:opt(int),post_id:opt(int),tenant_id:opt(int)}),post_id:opt(int),tenant_id:opt(int),title:opt(string),user_id:opt(int)})", p9.ActualWireType, p9.Raw)
 					} else {
-						return nil, deMissingField("TenantUserWithPosts", "posts", "arr(obj{comments:arr(obj{body:opt(string),comment_id:opt(float),post_id:opt(float),tenant_id:opt(float)}),post_id:opt(float),tenant_id:opt(float),title:opt(string),user_id:opt(float)})")
+						return nil, deMissingField("TenantUserWithPosts", "posts", "arr(obj{comments:arr(obj{body:opt(string),comment_id:opt(int),post_id:opt(int),tenant_id:opt(int)}),post_id:opt(int),tenant_id:opt(int),title:opt(string),user_id:opt(int)})")
 					}
 					p21 := p7.Got.ProbeNumber("tenant_id")
 					if p21.Kind == probeGot {
-						n21, nErr21 := strconv.ParseFloat(p21.Got, 64)
+						n21, nErr21 := strconv.ParseInt(p21.Got, 10, 64)
 						if nErr21 != nil {
-							return nil, deOverflow("TenantUserWithPosts", "tenant_id", "opt(float)", p21.ActualWireType, p21.Got)
+							return nil, deOverflow("TenantUserWithPosts", "tenant_id", "opt(int)", p21.ActualWireType, p21.Got)
 						}
 						rec7.Tenant_id = &n21
 					} else if p21.Kind == probeWrong {
-						return nil, deTypeMismatch("TenantUserWithPosts", "tenant_id", "opt(float)", p21.ActualWireType, p21.Raw)
+						return nil, deTypeMismatch("TenantUserWithPosts", "tenant_id", "opt(int)", p21.ActualWireType, p21.Raw)
 					}
 					p22 := p7.Got.ProbeNumber("user_id")
 					if p22.Kind == probeGot {
-						n22, nErr22 := strconv.ParseFloat(p22.Got, 64)
+						n22, nErr22 := strconv.ParseInt(p22.Got, 10, 64)
 						if nErr22 != nil {
-							return nil, deOverflow("TenantUserWithPosts", "user_id", "opt(float)", p22.ActualWireType, p22.Got)
+							return nil, deOverflow("TenantUserWithPosts", "user_id", "opt(int)", p22.ActualWireType, p22.Got)
 						}
 						rec7.User_id = &n22
 					} else if p22.Kind == probeWrong {
-						return nil, deTypeMismatch("TenantUserWithPosts", "user_id", "opt(float)", p22.ActualWireType, p22.Raw)
+						return nil, deTypeMismatch("TenantUserWithPosts", "user_id", "opt(int)", p22.ActualWireType, p22.Raw)
 					}
 					el6 = rec7
 				} else if p7.Kind == probeWrong {
-					return nil, deTypeMismatch("n6", "n6", "obj{name:opt(string),posts:arr(obj{comments:arr(obj{body:opt(string),comment_id:opt(float),post_id:opt(float),tenant_id:opt(float)}),post_id:opt(float),tenant_id:opt(float),title:opt(string),user_id:opt(float)}),tenant_id:opt(float),user_id:opt(float)}", p7.ActualWireType, p7.Raw)
+					return nil, deTypeMismatch("n6", "n6", "obj{name:opt(string),posts:arr(obj{comments:arr(obj{body:opt(string),comment_id:opt(int),post_id:opt(int),tenant_id:opt(int)}),post_id:opt(int),tenant_id:opt(int),title:opt(string),user_id:opt(int)}),tenant_id:opt(int),user_id:opt(int)}", p7.ActualWireType, p7.Raw)
 				} else if p7.Kind == probeNull {
-					return nil, deTypeMismatch("n6", "n6", "obj{name:opt(string),posts:arr(obj{comments:arr(obj{body:opt(string),comment_id:opt(float),post_id:opt(float),tenant_id:opt(float)}),post_id:opt(float),tenant_id:opt(float),title:opt(string),user_id:opt(float)}),tenant_id:opt(float),user_id:opt(float)}", p7.ActualWireType, p7.Raw)
+					return nil, deTypeMismatch("n6", "n6", "obj{name:opt(string),posts:arr(obj{comments:arr(obj{body:opt(string),comment_id:opt(int),post_id:opt(int),tenant_id:opt(int)}),post_id:opt(int),tenant_id:opt(int),title:opt(string),user_id:opt(int)}),tenant_id:opt(int),user_id:opt(int)}", p7.ActualWireType, p7.Raw)
 				} else {
-					return nil, deMissingField("n6", "n6", "obj{name:opt(string),posts:arr(obj{comments:arr(obj{body:opt(string),comment_id:opt(float),post_id:opt(float),tenant_id:opt(float)}),post_id:opt(float),tenant_id:opt(float),title:opt(string),user_id:opt(float)}),tenant_id:opt(float),user_id:opt(float)}")
+					return nil, deMissingField("n6", "n6", "obj{name:opt(string),posts:arr(obj{comments:arr(obj{body:opt(string),comment_id:opt(int),post_id:opt(int),tenant_id:opt(int)}),post_id:opt(int),tenant_id:opt(int),title:opt(string),user_id:opt(int)}),tenant_id:opt(int),user_id:opt(int)}")
 				}
 				list6 = append(list6, el6)
 			}
 			t_n6 = list6
 		} else if p6.Kind == probeWrong {
-			return nil, deTypeMismatch("n6", "n6", "arr(obj{name:opt(string),posts:arr(obj{comments:arr(obj{body:opt(string),comment_id:opt(float),post_id:opt(float),tenant_id:opt(float)}),post_id:opt(float),tenant_id:opt(float),title:opt(string),user_id:opt(float)}),tenant_id:opt(float),user_id:opt(float)})", p6.ActualWireType, p6.Raw)
+			return nil, deTypeMismatch("n6", "n6", "arr(obj{name:opt(string),posts:arr(obj{comments:arr(obj{body:opt(string),comment_id:opt(int),post_id:opt(int),tenant_id:opt(int)}),post_id:opt(int),tenant_id:opt(int),title:opt(string),user_id:opt(int)}),tenant_id:opt(int),user_id:opt(int)})", p6.ActualWireType, p6.Raw)
 		} else if p6.Kind == probeNull {
-			return nil, deTypeMismatch("n6", "n6", "arr(obj{name:opt(string),posts:arr(obj{comments:arr(obj{body:opt(string),comment_id:opt(float),post_id:opt(float),tenant_id:opt(float)}),post_id:opt(float),tenant_id:opt(float),title:opt(string),user_id:opt(float)}),tenant_id:opt(float),user_id:opt(float)})", p6.ActualWireType, p6.Raw)
+			return nil, deTypeMismatch("n6", "n6", "arr(obj{name:opt(string),posts:arr(obj{comments:arr(obj{body:opt(string),comment_id:opt(int),post_id:opt(int),tenant_id:opt(int)}),post_id:opt(int),tenant_id:opt(int),title:opt(string),user_id:opt(int)}),tenant_id:opt(int),user_id:opt(int)})", p6.ActualWireType, p6.Raw)
 		} else {
-			return nil, deMissingField("n6", "n6", "arr(obj{name:opt(string),posts:arr(obj{comments:arr(obj{body:opt(string),comment_id:opt(float),post_id:opt(float),tenant_id:opt(float)}),post_id:opt(float),tenant_id:opt(float),title:opt(string),user_id:opt(float)}),tenant_id:opt(float),user_id:opt(float)})")
+			return nil, deMissingField("n6", "n6", "arr(obj{name:opt(string),posts:arr(obj{comments:arr(obj{body:opt(string),comment_id:opt(int),post_id:opt(int),tenant_id:opt(int)}),post_id:opt(int),tenant_id:opt(int),title:opt(string),user_id:opt(int)}),tenant_id:opt(int),user_id:opt(int)})")
 		}
 		produced_n6 = true
 	}
@@ -2051,35 +2051,35 @@ func Upsert(email string, name string) ([]IdRow, error) {
 				var rec1 IdRow
 				p2 := p1.Got.ProbeNumber("id")
 				if p2.Kind == probeGot {
-					n2, nErr2 := strconv.ParseFloat(p2.Got, 64)
+					n2, nErr2 := strconv.ParseInt(p2.Got, 10, 64)
 					if nErr2 != nil {
-						return nil, deOverflow("IdRow", "id", "float", p2.ActualWireType, p2.Got)
+						return nil, deOverflow("IdRow", "id", "int", p2.ActualWireType, p2.Got)
 					}
 					rec1.Id = n2
 				} else if p2.Kind == probeWrong {
-					return nil, deTypeMismatch("IdRow", "id", "float", p2.ActualWireType, p2.Raw)
+					return nil, deTypeMismatch("IdRow", "id", "int", p2.ActualWireType, p2.Raw)
 				} else if p2.Kind == probeNull {
-					return nil, deTypeMismatch("IdRow", "id", "float", p2.ActualWireType, p2.Raw)
+					return nil, deTypeMismatch("IdRow", "id", "int", p2.ActualWireType, p2.Raw)
 				} else {
-					return nil, deMissingField("IdRow", "id", "float")
+					return nil, deMissingField("IdRow", "id", "int")
 				}
 				el0 = rec1
 			} else if p1.Kind == probeWrong {
-				return nil, deTypeMismatch("n0", "n0", "obj{id:float}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{id:int}", p1.ActualWireType, p1.Raw)
 			} else if p1.Kind == probeNull {
-				return nil, deTypeMismatch("n0", "n0", "obj{id:float}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{id:int}", p1.ActualWireType, p1.Raw)
 			} else {
-				return nil, deMissingField("n0", "n0", "obj{id:float}")
+				return nil, deMissingField("n0", "n0", "obj{id:int}")
 			}
 			list0 = append(list0, el0)
 		}
 		t_n0 = list0
 	} else if p0.Kind == probeWrong {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:float})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:int})", p0.ActualWireType, p0.Raw)
 	} else if p0.Kind == probeNull {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:float})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:int})", p0.ActualWireType, p0.Raw)
 	} else {
-		return nil, deMissingField("n0", "n0", "arr(obj{id:float})")
+		return nil, deMissingField("n0", "n0", "arr(obj{id:int})")
 	}
 	produced_n0 = true
 	return t_n0, nil
@@ -2365,35 +2365,35 @@ func NestedCreate(email string, name string, title string) ([][]WriteSummary, er
 				var rec1 IdRow
 				p2 := p1.Got.ProbeNumber("id")
 				if p2.Kind == probeGot {
-					n2, nErr2 := strconv.ParseFloat(p2.Got, 64)
+					n2, nErr2 := strconv.ParseInt(p2.Got, 10, 64)
 					if nErr2 != nil {
-						return nil, deOverflow("IdRow", "id", "float", p2.ActualWireType, p2.Got)
+						return nil, deOverflow("IdRow", "id", "int", p2.ActualWireType, p2.Got)
 					}
 					rec1.Id = n2
 				} else if p2.Kind == probeWrong {
-					return nil, deTypeMismatch("IdRow", "id", "float", p2.ActualWireType, p2.Raw)
+					return nil, deTypeMismatch("IdRow", "id", "int", p2.ActualWireType, p2.Raw)
 				} else if p2.Kind == probeNull {
-					return nil, deTypeMismatch("IdRow", "id", "float", p2.ActualWireType, p2.Raw)
+					return nil, deTypeMismatch("IdRow", "id", "int", p2.ActualWireType, p2.Raw)
 				} else {
-					return nil, deMissingField("IdRow", "id", "float")
+					return nil, deMissingField("IdRow", "id", "int")
 				}
 				el0 = rec1
 			} else if p1.Kind == probeWrong {
-				return nil, deTypeMismatch("n0", "n0", "obj{id:float}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{id:int}", p1.ActualWireType, p1.Raw)
 			} else if p1.Kind == probeNull {
-				return nil, deTypeMismatch("n0", "n0", "obj{id:float}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{id:int}", p1.ActualWireType, p1.Raw)
 			} else {
-				return nil, deMissingField("n0", "n0", "obj{id:float}")
+				return nil, deMissingField("n0", "n0", "obj{id:int}")
 			}
 			list0 = append(list0, el0)
 		}
 		t_n0 = list0
 	} else if p0.Kind == probeWrong {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:float})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:int})", p0.ActualWireType, p0.Raw)
 	} else if p0.Kind == probeNull {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:float})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:int})", p0.ActualWireType, p0.Raw)
 	} else {
-		return nil, deMissingField("n0", "n0", "arr(obj{id:float})")
+		return nil, deMissingField("n0", "n0", "arr(obj{id:int})")
 	}
 	produced_n0 = true
 	// ── map 'n1' (executeSQL, per-element, into:null, parent:n0) ──
@@ -2402,7 +2402,7 @@ func NestedCreate(email string, name string, title string) ([][]WriteSummary, er
 		t_n1 = make([][]WriteSummary, 0, len(over_n1))
 		for mk_n1 := range over_n1 {
 			oel_n1 := over_n1[mk_n1]
-			ep_n1 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireFloat(oel_n1.Id), wire.WireStr(title)})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)")}, wire.WireField{Key: "write", Val: wire.WireBool(true)}})
+			ep_n1 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireInt(oel_n1.Id), wire.WireStr(title)})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)")}, wire.WireField{Key: "write", Val: wire.WireBool(true)}})
 			mo_n1, mo_n1Err := litedbmodel_runtime.ExecuteSQL(ep_n1)
 			if mo_n1Err != nil {
 				return nil, opFailed("n1", "fail", mo_n1Err)
@@ -2506,35 +2506,35 @@ func NestedUpsert(email string, name string, title string) ([][]WriteSummary, er
 				var rec1 IdRow
 				p2 := p1.Got.ProbeNumber("id")
 				if p2.Kind == probeGot {
-					n2, nErr2 := strconv.ParseFloat(p2.Got, 64)
+					n2, nErr2 := strconv.ParseInt(p2.Got, 10, 64)
 					if nErr2 != nil {
-						return nil, deOverflow("IdRow", "id", "float", p2.ActualWireType, p2.Got)
+						return nil, deOverflow("IdRow", "id", "int", p2.ActualWireType, p2.Got)
 					}
 					rec1.Id = n2
 				} else if p2.Kind == probeWrong {
-					return nil, deTypeMismatch("IdRow", "id", "float", p2.ActualWireType, p2.Raw)
+					return nil, deTypeMismatch("IdRow", "id", "int", p2.ActualWireType, p2.Raw)
 				} else if p2.Kind == probeNull {
-					return nil, deTypeMismatch("IdRow", "id", "float", p2.ActualWireType, p2.Raw)
+					return nil, deTypeMismatch("IdRow", "id", "int", p2.ActualWireType, p2.Raw)
 				} else {
-					return nil, deMissingField("IdRow", "id", "float")
+					return nil, deMissingField("IdRow", "id", "int")
 				}
 				el0 = rec1
 			} else if p1.Kind == probeWrong {
-				return nil, deTypeMismatch("n0", "n0", "obj{id:float}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{id:int}", p1.ActualWireType, p1.Raw)
 			} else if p1.Kind == probeNull {
-				return nil, deTypeMismatch("n0", "n0", "obj{id:float}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{id:int}", p1.ActualWireType, p1.Raw)
 			} else {
-				return nil, deMissingField("n0", "n0", "obj{id:float}")
+				return nil, deMissingField("n0", "n0", "obj{id:int}")
 			}
 			list0 = append(list0, el0)
 		}
 		t_n0 = list0
 	} else if p0.Kind == probeWrong {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:float})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:int})", p0.ActualWireType, p0.Raw)
 	} else if p0.Kind == probeNull {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:float})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:int})", p0.ActualWireType, p0.Raw)
 	} else {
-		return nil, deMissingField("n0", "n0", "arr(obj{id:float})")
+		return nil, deMissingField("n0", "n0", "arr(obj{id:int})")
 	}
 	produced_n0 = true
 	// ── map 'n1' (executeSQL, per-element, into:null, parent:n0) ──
@@ -2543,7 +2543,7 @@ func NestedUpsert(email string, name string, title string) ([][]WriteSummary, er
 		t_n1 = make([][]WriteSummary, 0, len(over_n1))
 		for mk_n1 := range over_n1 {
 			oel_n1 := over_n1[mk_n1]
-			ep_n1 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireFloat(oel_n1.Id), wire.WireStr(title)})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)")}, wire.WireField{Key: "write", Val: wire.WireBool(true)}})
+			ep_n1 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireInt(oel_n1.Id), wire.WireStr(title)})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)")}, wire.WireField{Key: "write", Val: wire.WireBool(true)}})
 			mo_n1, mo_n1Err := litedbmodel_runtime.ExecuteSQL(ep_n1)
 			if mo_n1Err != nil {
 				return nil, opFailed("n1", "fail", mo_n1Err)
@@ -2647,35 +2647,35 @@ func NestedUpdate(id int64, name string, title string) ([][]WriteSummary, error)
 				var rec1 IdRow
 				p2 := p1.Got.ProbeNumber("id")
 				if p2.Kind == probeGot {
-					n2, nErr2 := strconv.ParseFloat(p2.Got, 64)
+					n2, nErr2 := strconv.ParseInt(p2.Got, 10, 64)
 					if nErr2 != nil {
-						return nil, deOverflow("IdRow", "id", "float", p2.ActualWireType, p2.Got)
+						return nil, deOverflow("IdRow", "id", "int", p2.ActualWireType, p2.Got)
 					}
 					rec1.Id = n2
 				} else if p2.Kind == probeWrong {
-					return nil, deTypeMismatch("IdRow", "id", "float", p2.ActualWireType, p2.Raw)
+					return nil, deTypeMismatch("IdRow", "id", "int", p2.ActualWireType, p2.Raw)
 				} else if p2.Kind == probeNull {
-					return nil, deTypeMismatch("IdRow", "id", "float", p2.ActualWireType, p2.Raw)
+					return nil, deTypeMismatch("IdRow", "id", "int", p2.ActualWireType, p2.Raw)
 				} else {
-					return nil, deMissingField("IdRow", "id", "float")
+					return nil, deMissingField("IdRow", "id", "int")
 				}
 				el0 = rec1
 			} else if p1.Kind == probeWrong {
-				return nil, deTypeMismatch("n0", "n0", "obj{id:float}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{id:int}", p1.ActualWireType, p1.Raw)
 			} else if p1.Kind == probeNull {
-				return nil, deTypeMismatch("n0", "n0", "obj{id:float}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{id:int}", p1.ActualWireType, p1.Raw)
 			} else {
-				return nil, deMissingField("n0", "n0", "obj{id:float}")
+				return nil, deMissingField("n0", "n0", "obj{id:int}")
 			}
 			list0 = append(list0, el0)
 		}
 		t_n0 = list0
 	} else if p0.Kind == probeWrong {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:float})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:int})", p0.ActualWireType, p0.Raw)
 	} else if p0.Kind == probeNull {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:float})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:int})", p0.ActualWireType, p0.Raw)
 	} else {
-		return nil, deMissingField("n0", "n0", "arr(obj{id:float})")
+		return nil, deMissingField("n0", "n0", "arr(obj{id:int})")
 	}
 	produced_n0 = true
 	// ── map 'n1' (executeSQL, per-element, into:null, parent:n0) ──
@@ -2684,7 +2684,7 @@ func NestedUpdate(id int64, name string, title string) ([][]WriteSummary, error)
 		t_n1 = make([][]WriteSummary, 0, len(over_n1))
 		for mk_n1 := range over_n1 {
 			oel_n1 := over_n1[mk_n1]
-			ep_n1 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireStr(title), wire.WireFloat(oel_n1.Id)})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("UPDATE benchmark_posts SET title = ? WHERE author_id = ?")}, wire.WireField{Key: "write", Val: wire.WireBool(true)}})
+			ep_n1 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireStr(title), wire.WireInt(oel_n1.Id)})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("UPDATE benchmark_posts SET title = ? WHERE author_id = ?")}, wire.WireField{Key: "write", Val: wire.WireBool(true)}})
 			mo_n1, mo_n1Err := litedbmodel_runtime.ExecuteSQL(ep_n1)
 			if mo_n1Err != nil {
 				return nil, opFailed("n1", "fail", mo_n1Err)
@@ -2788,35 +2788,35 @@ func Delete(email string, name string) ([][]WriteSummary, error) {
 				var rec1 IdRow
 				p2 := p1.Got.ProbeNumber("id")
 				if p2.Kind == probeGot {
-					n2, nErr2 := strconv.ParseFloat(p2.Got, 64)
+					n2, nErr2 := strconv.ParseInt(p2.Got, 10, 64)
 					if nErr2 != nil {
-						return nil, deOverflow("IdRow", "id", "float", p2.ActualWireType, p2.Got)
+						return nil, deOverflow("IdRow", "id", "int", p2.ActualWireType, p2.Got)
 					}
 					rec1.Id = n2
 				} else if p2.Kind == probeWrong {
-					return nil, deTypeMismatch("IdRow", "id", "float", p2.ActualWireType, p2.Raw)
+					return nil, deTypeMismatch("IdRow", "id", "int", p2.ActualWireType, p2.Raw)
 				} else if p2.Kind == probeNull {
-					return nil, deTypeMismatch("IdRow", "id", "float", p2.ActualWireType, p2.Raw)
+					return nil, deTypeMismatch("IdRow", "id", "int", p2.ActualWireType, p2.Raw)
 				} else {
-					return nil, deMissingField("IdRow", "id", "float")
+					return nil, deMissingField("IdRow", "id", "int")
 				}
 				el0 = rec1
 			} else if p1.Kind == probeWrong {
-				return nil, deTypeMismatch("n0", "n0", "obj{id:float}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{id:int}", p1.ActualWireType, p1.Raw)
 			} else if p1.Kind == probeNull {
-				return nil, deTypeMismatch("n0", "n0", "obj{id:float}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{id:int}", p1.ActualWireType, p1.Raw)
 			} else {
-				return nil, deMissingField("n0", "n0", "obj{id:float}")
+				return nil, deMissingField("n0", "n0", "obj{id:int}")
 			}
 			list0 = append(list0, el0)
 		}
 		t_n0 = list0
 	} else if p0.Kind == probeWrong {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:float})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:int})", p0.ActualWireType, p0.Raw)
 	} else if p0.Kind == probeNull {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:float})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:int})", p0.ActualWireType, p0.Raw)
 	} else {
-		return nil, deMissingField("n0", "n0", "arr(obj{id:float})")
+		return nil, deMissingField("n0", "n0", "arr(obj{id:int})")
 	}
 	produced_n0 = true
 	// ── map 'n1' (executeSQL, per-element, into:null, parent:n0) ──
@@ -2825,7 +2825,7 @@ func Delete(email string, name string) ([][]WriteSummary, error) {
 		t_n1 = make([][]WriteSummary, 0, len(over_n1))
 		for mk_n1 := range over_n1 {
 			oel_n1 := over_n1[mk_n1]
-			ep_n1 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireFloat(oel_n1.Id)})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("DELETE FROM benchmark_users WHERE id = ?")}, wire.WireField{Key: "write", Val: wire.WireBool(true)}})
+			ep_n1 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireInt(oel_n1.Id)})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("DELETE FROM benchmark_users WHERE id = ?")}, wire.WireField{Key: "write", Val: wire.WireBool(true)}})
 			mo_n1, mo_n1Err := litedbmodel_runtime.ExecuteSQL(ep_n1)
 			if mo_n1Err != nil {
 				return nil, opFailed("n1", "fail", mo_n1Err)

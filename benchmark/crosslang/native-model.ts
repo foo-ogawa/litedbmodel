@@ -42,26 +42,29 @@ import { behavior, type Int, type Float, type WireValue } from 'behavior-contrac
 import { Db } from '../../src/scp/leaf-transport.js';
 
 // ── row types: the de-box targets (each is exactly one op's terminal declaration) ────────────────────
+// Every numeric column below is an INTEGER column in `orm-domain.ts`'s DDL (INTEGER / INT /
+// SERIAL), so each is declared `Int`. `Float` here made bc widen every id to a float, which reads
+// back as `1.0` — invisible in a language with one number type, a wrong answer in PHP's `===`.
 /** `benchmark_users` projection — `id` is `INTEGER NOT NULL`, the rest nullable. */
-interface UserRow { id: Float; email: string | null; name: string | null }
+interface UserRow { id: Int; email: string | null; name: string | null }
 /** `benchmark_posts` full projection (filterPaginateSort). */
-interface PostFullRow { id: Float; title: string | null; content: string | null; published: Float | null; author_id: Float | null; created_at: string | null }
+interface PostFullRow { id: Int; title: string | null; content: string | null; published: Int | null; author_id: Int | null; created_at: string | null }
 /** A RETURNING-id projection: the upsert result, and the source row a tx `.map` chains off. */
-interface IdRow { id: Float }
+interface IdRow { id: Int }
 /** The uniform non-RETURNING write summary the `executeSQL` transport returns (`[{changes, …}]`). */
 interface WriteSummary { changes: Int; lastInsertRowid: Int }
 
 // Relation graph rows — nested exactly as `group`'s `into` port names each level.
-interface CommentRow { id: Float | null; body: string | null; post_id: Float | null }
-interface PostRow { id: Float; title: string | null; author_id: Float | null }
-interface PostWithComments { id: Float; title: string | null; author_id: Float | null; comments: CommentRow[] }
-interface UserWithPosts { id: Float; email: string | null; name: string | null; posts: PostRow[] }
-interface UserWithPostsAndComments { id: Float; email: string | null; name: string | null; posts: PostWithComments[] }
+interface CommentRow { id: Int | null; body: string | null; post_id: Int | null }
+interface PostRow { id: Int; title: string | null; author_id: Int | null }
+interface PostWithComments { id: Int; title: string | null; author_id: Int | null; comments: CommentRow[] }
+interface UserWithPosts { id: Int; email: string | null; name: string | null; posts: PostRow[] }
+interface UserWithPostsAndComments { id: Int; email: string | null; name: string | null; posts: PostWithComments[] }
 
 // Composite-key (2-column) relation graph — tenant_users → tenant_posts → tenant_comments.
-interface TenantCommentRow { tenant_id: Float | null; comment_id: Float | null; post_id: Float | null; body: string | null }
-interface TenantPostWithComments { tenant_id: Float | null; post_id: Float | null; user_id: Float | null; title: string | null; comments: TenantCommentRow[] }
-interface TenantUserWithPosts { tenant_id: Float | null; user_id: Float | null; name: string | null; posts: TenantPostWithComments[] }
+interface TenantCommentRow { tenant_id: Int | null; comment_id: Int | null; post_id: Int | null; body: string | null }
+interface TenantPostWithComments { tenant_id: Int | null; post_id: Int | null; user_id: Int | null; title: string | null; comments: TenantCommentRow[] }
+interface TenantUserWithPosts { tenant_id: Int | null; user_id: Int | null; name: string | null; posts: TenantPostWithComments[] }
 
 // Batch record-set inputs — bc emits a native `Vec<Row>` / `[]Row` entry parameter and boxes typed→wire
 // at the leaf-param boundary, so the bench harness passes native rows.
@@ -257,9 +260,9 @@ export class BenchPostgres {
   @behavior static compositeRelations(): TenantUserWithPosts[] {
     const tenantUsers: WireValue[] = Db.executeSQL("SELECT tenant_id, user_id, name FROM benchmark_tenant_users ORDER BY user_id ASC LIMIT 100", [], false, false, false);
     const tenantUserKeys: WireValue[] = Db.pluck(tenantUsers, ["tenant_id", "user_id"]);
-    const tenantPosts: WireValue[] = Db.executeSQL("SELECT tenant_id, post_id, user_id, title FROM benchmark_tenant_posts JOIN unnest(?::@@PG_ARRAY_CAST@@, ?::@@PG_ARRAY_CAST@@) AS _unnest_benchmark_tenant_posts(_unnest_benchmark_tenant_posts_tenant_id, _unnest_benchmark_tenant_posts_user_id) ON benchmark_tenant_posts.tenant_id = _unnest_benchmark_tenant_posts._unnest_benchmark_tenant_posts_tenant_id AND benchmark_tenant_posts.user_id = _unnest_benchmark_tenant_posts._unnest_benchmark_tenant_posts_user_id ORDER BY post_id ASC", [tenantUserKeys], false, false, false);
+    const tenantPosts: WireValue[] = Db.executeSQL("SELECT tenant_id, post_id, user_id, title FROM benchmark_tenant_posts JOIN (SELECT (_t->>0)::int AS key0, (_t->>1)::int AS key1 FROM json_array_elements(?::json) AS _t) AS _keys ON benchmark_tenant_posts.tenant_id = _keys.key0 AND benchmark_tenant_posts.user_id = _keys.key1 ORDER BY post_id ASC", [tenantUserKeys], false, false, false);
     const tenantPostKeys: WireValue[] = Db.pluck(tenantPosts, ["tenant_id", "post_id"]);
-    const tenantComments: WireValue[] = Db.executeSQL("SELECT tenant_id, comment_id, post_id, body FROM benchmark_tenant_comments JOIN unnest(?::@@PG_ARRAY_CAST@@, ?::@@PG_ARRAY_CAST@@) AS _unnest_benchmark_tenant_comments(_unnest_benchmark_tenant_comments_tenant_id, _unnest_benchmark_tenant_comments_post_id) ON benchmark_tenant_comments.tenant_id = _unnest_benchmark_tenant_comments._unnest_benchmark_tenant_comments_tenant_id AND benchmark_tenant_comments.post_id = _unnest_benchmark_tenant_comments._unnest_benchmark_tenant_comments_post_id ORDER BY comment_id ASC", [tenantPostKeys], false, false, false);
+    const tenantComments: WireValue[] = Db.executeSQL("SELECT tenant_id, comment_id, post_id, body FROM benchmark_tenant_comments JOIN (SELECT (_t->>0)::int AS key0, (_t->>1)::int AS key1 FROM json_array_elements(?::json) AS _t) AS _keys ON benchmark_tenant_comments.tenant_id = _keys.key0 AND benchmark_tenant_comments.post_id = _keys.key1 ORDER BY comment_id ASC", [tenantPostKeys], false, false, false);
     const tenantPostsWithComments: WireValue[] = Db.group(tenantPosts, tenantComments, ["tenant_id", "post_id"], ["tenant_id", "post_id"], "comments", false);
     const tenantUsersWithPosts: TenantUserWithPosts[] = Db.group(tenantUsers, tenantPostsWithComments, ["tenant_id", "user_id"], ["tenant_id", "user_id"], "posts", false) as TenantUserWithPosts[];
     return tenantUsersWithPosts;

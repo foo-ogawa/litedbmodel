@@ -151,7 +151,11 @@ export function ddl(dialect: OrmDialect): string[] {
       id SERIAL PRIMARY KEY,
       title VARCHAR(255) NOT NULL,
       content TEXT,
-      published BOOLEAN DEFAULT false,
+      -- SMALLINT, not BOOLEAN: a BOOLEAN column does not decode dialect-invariantly through the
+      -- leaf (PostgreSQL hands over a JS boolean while MySQL's TINYINT(1) and SQLite's INTEGER hand
+      -- over 1/0), so the three legs could not share one declared row type. Same resolution as the
+      -- conformance corpus's conf_typed.flag column.
+      published SMALLINT DEFAULT 0,
       author_id INTEGER,
       created_at TIMESTAMP DEFAULT NOW()
     )`,
@@ -207,7 +211,10 @@ export function seedCreatedAt(seq: number): string {
 }
 
 export function seedStatements(dialect: OrmDialect): SeedStmt[] {
-  const bool = (b: boolean) => (dialect === 'postgres' ? b : b ? 1 : 0);
+  // `published` is SMALLINT on every dialect (see `ddl`), so the seed binds 1/0 everywhere — a JS
+  // boolean would only fit a PostgreSQL BOOLEAN column, which is the divergence that DDL removed.
+  void dialect;
+  const bool = (b: boolean) => (b ? 1 : 0);
   const out: SeedStmt[] = [];
 
   for (let id = 1; id <= SEED.users; id++) {

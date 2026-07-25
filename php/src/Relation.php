@@ -61,30 +61,25 @@ final class Relation
     }
 
     /**
-     * Bind the deduped keys to the op's params per dialect + arity (mirrors TS bindKeys). Single-key:
-     * PG → ONE `{…}` array-literal param; MySQL/SQLite → ONE JSON scalar-array string. Composite: PG →
-     * ONE `{…}` array-literal PER key column (transposed tuples); MySQL/SQLite → ONE JSON
-     * array-of-tuples string. Returns the positional param list.
+     * Bind the deduped keys to the op's params per dialect + arity (mirrors TS bindKeys). Composite:
+     * ONE JSON array-of-tuples string on EVERY dialect (#159) — PostgreSQL expands it server-side with
+     * json_array_elements, so the key set crosses as one param whatever its length and whatever its
+     * arity. Single-key: PG → ONE `{…}` array-literal param; MySQL/SQLite → ONE JSON scalar-array string.
      *
      * @param list<list<mixed>> $tuples
      * @return list<string>
      */
     private static function bindKeys(\stdClass $op, array $tuples): array
     {
-        $composite = isset($op->parentKeys);
-        if ((string) $op->dialect === 'postgres') {
-            $nCols = $composite ? count(self::parentKeyCols($op)) : 1;
-            $args = [];
-            for ($col = 0; $col < $nCols; $col++) {
-                $colArr = array_map(static fn ($t) => $t[$col], $tuples);
-                $args[] = StaticBundle::pgArrayLiteral($colArr);
-            }
-            return $args;
+        if (isset($op->parentKeys)) {
+            $payload = array_map(static fn ($t) => array_values($t), $tuples);
+            return [json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)];
         }
-        $payload = $composite
-            ? array_map(static fn ($t) => array_values($t), $tuples)
-            : array_map(static fn ($t) => $t[0], $tuples);
-        return [json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)];
+        $keys = array_map(static fn ($t) => $t[0], $tuples);
+        if ((string) $op->dialect === 'postgres') {
+            return [StaticBundle::pgArrayLiteral($keys)];
+        }
+        return [json_encode($keys, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)];
     }
 
     /**
