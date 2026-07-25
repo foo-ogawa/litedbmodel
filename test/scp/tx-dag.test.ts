@@ -21,24 +21,17 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import Database from 'better-sqlite3';
 import {
-  SemanticBehavior,
-  components,
-  publishBehaviors,
   entityWrites,
   deriveTransactionPlan,
   compileCompositeWriteBundle,
-  executeCompositeCommand,
   executeTransactionBundle,
   executeTransaction,
   countingDriver,
   renderTxStatement,
   compileWriteNode,
-  emitWrite,
-  type In,
+  type TxOp,
   type SqlBundle,
 } from '../../src/scp';
-
-const L = components();
 
 /**
  * Fresh in-memory DB with a parent/child (author→post→comment) schema + join + outbox. The
@@ -70,33 +63,34 @@ function freshDb(): InstanceType<typeof Database> {
 
 // ── The composite Command: create a Post AND its first Comment in one tx (nested write) ──
 
-class BlogWrites extends SemanticBehavior {
-  static columns = {
-    posts: { id: 'INTEGER', author_id: 'INTEGER', title: 'TEXT' },
-    comments: { id: 'INTEGER', post_id: 'INTEGER', body: 'TEXT' },
-  };
-  // Parent write: Insert a post, RETURNING id (so the child can reference it).
-  CreatePost($: In<{ author_id: number; title: string; request_id: string }>) {
-    return emitWrite(L, 'Insert', {
+// Parent write: Insert a post, RETURNING id (so the child can reference it). `compileWriteNode` is
+// the SSoT write-descriptor→TxOp compiler (src/scp/makesql/tx.ts) — the same one the (now-removed)
+// `emitWrite` authoring sugar drove; the ports below are identical to what that sugar built.
+function createPostOp(): TxOp {
+  return compileWriteNode({
+    component: 'Insert',
+    ports: {
       table: 'posts',
-      'values.author_id': $.author_id,
-      'values.title': $.title,
+      'values.author_id': { ref: ['author_id'] },
+      'values.title': { ref: ['title'] },
       returning: 'id, author_id, title',
-    }, 'sqlite');
-  }
-  // Child write: Insert a comment whose post_id comes from the PARENT's RETURNING id.
-  CreateComment($: In<{ body: string }>) {
-    return emitWrite(L, 'Insert', {
-      table: 'comments',
-      // post_id is bound from `$.ref.post.id` — the parent write's RETURNING row (WS8a).
-      'values.post_id': $.body, // placeholder port; the real ref is injected via the effects below
-      'values.body': $.body,
-      returning: 'id, post_id, body',
-    }, 'sqlite');
-  }
+    },
+  } as never);
 }
-
-const contract = publishBehaviors(BlogWrites);
+// Child write: Insert a comment whose post_id comes from the PARENT's RETURNING id.
+// post_id is bound from `$.ref.post.id` — the parent write's RETURNING row (WS8a). The authored
+// port here is a placeholder ({ref:['body']}); the real ref is injected via the effects below.
+function createCommentOp(): TxOp {
+  return compileWriteNode({
+    component: 'Insert',
+    ports: {
+      table: 'comments',
+      'values.post_id': { ref: ['body'] }, // placeholder port; the real ref is injected via the effects below
+      'values.body': { ref: ['body'] },
+      returning: 'id, post_id, body',
+    },
+  } as never);
+}
 
 /**
  * The composite entries. The PARENT ('post') has gate-first guards (requires author + idempotency)
@@ -106,8 +100,8 @@ const contract = publishBehaviors(BlogWrites);
 function compositeEntries(withGates: boolean) {
   return [
     {
-      entry: 'CreatePost',
       name: 'post',
+      base: createPostOp(),
       lifecycle: entityWrites((w) => ({
         create: w.lifecycle({
           ...(withGates
@@ -123,8 +117,8 @@ function compositeEntries(withGates: boolean) {
       })).create!,
     },
     {
-      entry: 'CreateComment',
       name: 'comment',
+      base: createCommentOp(),
       lifecycle: entityWrites((w) => ({
         // The child links the post to a tag via an m2m edge keyed by the PARENT row.
         create: w.lifecycle({
@@ -296,7 +290,7 @@ describe('WS8a — gate-first across the DAG (a gate short-circuits ALL dependen
 describe('WS8a — compileCompositeWriteBundle → 1-tx execution (bundle is pure JSON)', () => {
   it('the derived plan serializes into the §8 bundle as pure JSON and round-trips', () => {
     // Use the runtime surface with the child body carrying the real parent ref (rewrite the op).
-    const bundle = compileCompositeWriteBundle(contract, compositeEntries(true) as never, 'create');
+    const bundle = compileCompositeWriteBundle(compositeEntries(true), 'create');
     // The authored child placeholder used $.body for post_id; rewrite to the real parent ref so the
     // bundle exercises the genuine dependency (mirrors childBodyWithParentRef).
     const childStmt = bundle.transaction!.statements.find((s) => s.binds === 'comment')!;

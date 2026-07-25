@@ -80,8 +80,9 @@ export interface RuntimeContextOptions {
 export interface RuntimeContext {
   /**
    * The Phase A-E execution context (routing + middleware + tx-pinning) over real pools. This IS the
-   * async read/write seam: reads run `bindBehaviors().runAsync` over `executeBehaviorAsync({execAsync: ctx})`
-   * (#141 — the retired reader `SqlExecutorAsync` / `executeReadGraphAsync` path is gone).
+   * async read/write seam every statement funnels through — a v1-built SELECT via `DBModel.execute`,
+   * a compiled write bundle via {@link executeWriteAsync}, and a generated read module via
+   * `bindAsync(leafHandlersAsync({ execAsync: ctx, dialect }))`.
    */
   readonly ctx: PooledAsyncContext;
   /** The compiled SQL dialect (`postgres` / `mysql`). */
@@ -163,9 +164,7 @@ export function buildContextFromConfig(config: RuntimeDbConfig, options: Runtime
   );
   const ctx = new PooledAsyncContext(built.routing);
 
-  // The `ctx` (PooledAsyncContext) IS the async read/write seam — reads run through
-  // `executeBehaviorAsync({execAsync: ctx})` (bindBehaviors().runAsync over the executeSQL leaf). No
-  // separate reader `SqlExecutorAsync` (#141 — the old reader-executor + async ReadGraph engine is gone).
+  // The `ctx` (PooledAsyncContext) IS the async read/write seam — there is no separate reader executor.
   const runtime: RuntimeContext = { ctx, dialect, close: built.close };
   return runtime;
 }

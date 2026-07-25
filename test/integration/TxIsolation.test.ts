@@ -31,11 +31,9 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { Pool } from 'pg';
 import mysql from 'mysql2/promise';
 import {
-  SemanticBehavior,
-  components,
-  publishBehaviors,
   entityWrites,
   compileWriteBundle,
+  compileWriteNode,
   compileCreateManyBundle,
   executeTransactionAsync,
   PooledAsyncContext,
@@ -44,7 +42,7 @@ import {
   type AsyncConnection,
   type AsyncConnectionPool,
   type EntityWritesDefinition,
-  type In,
+  type TxOp,
 } from '../../src/scp';
 
 // ── Connection config (host-published docker ports; matches docker-compose.livedb.yml) ──
@@ -78,30 +76,24 @@ async function endPoolBounded(end: () => Promise<void>): Promise<void> {
 }
 
 // ── The write behavior under test: a bare INSERT command (id, worker, seq) ──────
-const L = components();
-class IsoCommands extends SemanticBehavior {
-  Insert($: In<{ id: number; worker: number; seq: number }>) {
-    return L.Insert({
-      table: ISO_TBL,
-      'values.id': $.id,
-      'values.worker': $.worker,
-      'values.seq': $.seq,
-      returning: 'id, worker, seq',
-    });
-  }
-  // A gate-first command: INSERT only if worker 999's slot is absent (existsElseRollback proof).
-  GatedInsert($: In<{ id: number; worker: number; seq: number }>) {
-    return L.Insert({
-      table: ISO_TBL,
-      'values.id': $.id,
-      'values.worker': $.worker,
-      'values.seq': $.seq,
-      returning: 'id, worker, seq',
-    });
-  }
+// compileWriteNode is the SSoT write-descriptor→TxOp compiler (src/scp/makesql/tx.ts) — the same
+// one the (now-removed) catalog-call authoring (`L.Insert(...)`) drove internally.
+function insertOp(dialect: 'postgres' | 'mysql'): TxOp {
+  return compileWriteNode(
+    {
+      component: 'Insert',
+      ports: {
+        table: ISO_TBL,
+        'values.id': { ref: ['id'] },
+        'values.worker': { ref: ['worker'] },
+        'values.seq': { ref: ['seq'] },
+        returning: 'id, worker, seq',
+      },
+    } as never,
+    dialect,
+  );
 }
-const contract = publishBehaviors(IsoCommands);
-const insertWrites: EntityWritesDefinition = entityWrites<IsoCommands>((w) => ({ create: w.lifecycle({}) }));
+const insertWrites: EntityWritesDefinition = entityWrites((w) => ({ create: w.lifecycle({}) }));
 
 let pgPool: Pool | undefined;
 let myPool: mysql.Pool | undefined;
@@ -219,7 +211,7 @@ async function runConcurrentTxs(
   n: number,
   readAll: () => Promise<{ id: number; worker: number; seq: number }[]>,
 ): Promise<{ id: number; worker: number; seq: number }[]> {
-  const bundle0 = compileWriteBundle(contract, 'Insert', insertWrites, 'create', dialect);
+  const bundle0 = compileWriteBundle('Insert', insertOp(dialect), insertWrites, 'create', dialect);
   await Promise.all(
     Array.from({ length: n }, (_, k) =>
       // Each worker is its OWN logical transaction. Two statements per tx would need a multi-write
@@ -278,7 +270,7 @@ describe('Phase A #75 — concurrent-transaction isolation (per-execution connec
     // Pre-seed the row that makes ONE worker's UNIQUE INSERT collide → its whole tx must ROLLBACK.
     await pgPool!.query(`INSERT INTO ${ISO_TBL} (id, worker, seq) VALUES (0, 999, 9)`);
     const ctx = new PooledAsyncContext(pgConnectionPool(pgPool as never));
-    const bundle = compileWriteBundle(contract, 'Insert', insertWrites, 'create', 'postgres');
+    const bundle = compileWriteBundle('Insert', insertOp('postgres'), insertWrites, 'create', 'postgres');
 
     const outcomes = await Promise.all(
       Array.from({ length: N }, (_, k) =>
@@ -333,7 +325,7 @@ describe('Phase A #75 — concurrent-transaction isolation (per-execution connec
       dialect,
     );
     // The concurrent committing tx: a plain single INSERT (id 30) that MUST be unaffected.
-    const okBundle = compileWriteBundle(contract, 'Insert', insertWrites, 'create', dialect);
+    const okBundle = compileWriteBundle('Insert', insertOp(dialect), insertWrites, 'create', dialect);
 
     const [failOutcome, okOutcome] = await Promise.allSettled([
       executeTransactionAsync(ctx, failing.transaction!, {}, dialect, { guard: false }),
@@ -395,7 +387,7 @@ describe('Phase A #75 — concurrent-transaction isolation (per-execution connec
       release?: () => void,
     ): Promise<{ committedA: boolean; committedB: boolean }> {
       const ctx = new PooledAsyncContext(pool);
-      const bundle = compileWriteBundle(contract, 'Insert', insertWrites, 'create', 'postgres');
+      const bundle = compileWriteBundle('Insert', insertOp('postgres'), insertWrites, 'create', 'postgres');
 
       // Launch BOTH transactions concurrently. Under the owned pool each holds its OWN connection ⇒
       // both COMMIT. Under the shared slot the barrier holds tx-A open at its INSERT while tx-B's

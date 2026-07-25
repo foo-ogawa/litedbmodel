@@ -24,11 +24,9 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { Pool } from 'pg';
 import mysql from 'mysql2/promise';
 import {
-  SemanticBehavior,
-  components,
-  publishBehaviors,
   entityWrites,
   compileWriteBundle,
+  compileWriteNode,
   executeTransactionAsync,
   transaction,
   withReadOnly,
@@ -40,7 +38,7 @@ import {
   type AsyncConnection,
   type AsyncConnectionPool,
   type EntityWritesDefinition,
-  type In,
+  type TxOp,
 } from '../../src/scp';
 
 const PG = {
@@ -63,20 +61,24 @@ const MY = {
 const TBL = 'scp_tx_boundary';
 
 // ── The write behavior under test: a bare INSERT command (id, worker, seq) ──────
-const L = components();
-class BoundaryCommands extends SemanticBehavior {
-  Insert($: In<{ id: number; worker: number; seq: number }>) {
-    return L.Insert({
-      table: TBL,
-      'values.id': $.id,
-      'values.worker': $.worker,
-      'values.seq': $.seq,
-      returning: 'id, worker, seq',
-    });
-  }
+// compileWriteNode is the SSoT write-descriptor→TxOp compiler (src/scp/makesql/tx.ts) — the same
+// one the (now-removed) catalog-call authoring (`L.Insert(...)`) drove internally.
+function insertOp(dialect: 'postgres' | 'mysql'): TxOp {
+  return compileWriteNode(
+    {
+      component: 'Insert',
+      ports: {
+        table: TBL,
+        'values.id': { ref: ['id'] },
+        'values.worker': { ref: ['worker'] },
+        'values.seq': { ref: ['seq'] },
+        returning: 'id, worker, seq',
+      },
+    } as never,
+    dialect,
+  );
 }
-const contract = publishBehaviors(BoundaryCommands);
-const insertWrites: EntityWritesDefinition = entityWrites<BoundaryCommands>((w) => ({ create: w.lifecycle({}) }));
+const insertWrites: EntityWritesDefinition = entityWrites((w) => ({ create: w.lifecycle({}) }));
 
 let pgPool: Pool | undefined;
 let myPool: mysql.Pool | undefined;
@@ -171,7 +173,7 @@ describe('#86 transaction(fn) boundary — multi-operation atomicity (LIVE)', ()
     await reset();
     const cap = capturingPool(rawPool);
     const ctx = new PooledAsyncContext(cap);
-    const bundle = compileWriteBundle(contract, 'Insert', insertWrites, 'create', dialect);
+    const bundle = compileWriteBundle('Insert', insertOp(dialect), insertWrites, 'create', dialect);
 
     // TWO separate operations inside ONE boundary — they must JOIN the ambient tx.
     await transaction(
@@ -205,7 +207,7 @@ describe('#86 transaction(fn) boundary — multi-operation atomicity (LIVE)', ()
     await reset();
     const cap = capturingPool(rawPool);
     const ctx = new PooledAsyncContext(cap);
-    const bundle = compileWriteBundle(contract, 'Insert', insertWrites, 'create', dialect);
+    const bundle = compileWriteBundle('Insert', insertOp(dialect), insertWrites, 'create', dialect);
 
     // op A inserts id=1; op B collides on id=1 (PK) → B throws → the WHOLE boundary rolls back.
     await expect(
@@ -251,7 +253,7 @@ describe('#86 write=tx guard (LIVE) — writes require an explicit transaction',
   async function guardOutside(reset: () => Promise<void>, rawPool: AsyncConnectionPool, dialect: 'postgres' | 'mysql'): Promise<void> {
     await reset();
     const ctx = new PooledAsyncContext(rawPool);
-    const bundle = compileWriteBundle(contract, 'Insert', insertWrites, 'create', dialect);
+    const bundle = compileWriteBundle('Insert', insertOp(dialect), insertWrites, 'create', dialect);
     // A write OUTSIDE any transaction(fn) is REJECTED.
     await expect(executeTransactionAsync(ctx, bundle.transaction!, { id: 5, worker: 1, seq: 0 }, dialect)).rejects.toBeInstanceOf(
       WriteOutsideTransactionError,
@@ -260,7 +262,7 @@ describe('#86 write=tx guard (LIVE) — writes require an explicit transaction',
   async function guardReadOnly(reset: () => Promise<void>, rawPool: AsyncConnectionPool, dialect: 'postgres' | 'mysql'): Promise<void> {
     await reset();
     const ctx = new PooledAsyncContext(rawPool);
-    const bundle = compileWriteBundle(contract, 'Insert', insertWrites, 'create', dialect);
+    const bundle = compileWriteBundle('Insert', insertOp(dialect), insertWrites, 'create', dialect);
     // A write inside a withReadOnly scope is REJECTED (read-only takes precedence).
     await expect(
       withReadOnly(() => executeTransactionAsync(ctx, bundle.transaction!, { id: 6, worker: 1, seq: 0 }, dialect)),
@@ -269,7 +271,7 @@ describe('#86 write=tx guard (LIVE) — writes require an explicit transaction',
   async function guardInsideOk(reset: () => Promise<void>, rawPool: AsyncConnectionPool, dialect: 'postgres' | 'mysql', readAll: () => Promise<number[]>): Promise<void> {
     await reset();
     const ctx = new PooledAsyncContext(rawPool);
-    const bundle = compileWriteBundle(contract, 'Insert', insertWrites, 'create', dialect);
+    const bundle = compileWriteBundle('Insert', insertOp(dialect), insertWrites, 'create', dialect);
     await transaction(
       ctx,
       async () => {
@@ -309,7 +311,7 @@ describe('#86 nested transaction(fn) (LIVE) — joins the outer (one physical BE
     await reset();
     const cap = capturingPool(rawPool);
     const ctx = new PooledAsyncContext(cap);
-    const bundle = compileWriteBundle(contract, 'Insert', insertWrites, 'create', dialect);
+    const bundle = compileWriteBundle('Insert', insertOp(dialect), insertWrites, 'create', dialect);
 
     await transaction(
       ctx,
@@ -339,7 +341,7 @@ describe('#86 nested transaction(fn) (LIVE) — joins the outer (one physical BE
     await reset();
     const cap = capturingPool(rawPool);
     const ctx = new PooledAsyncContext(cap);
-    const bundle = compileWriteBundle(contract, 'Insert', insertWrites, 'create', dialect);
+    const bundle = compileWriteBundle('Insert', insertOp(dialect), insertWrites, 'create', dialect);
 
     await expect(
       transaction(

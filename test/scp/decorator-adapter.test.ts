@@ -17,43 +17,17 @@ import {
   deriveModelColumns,
   columnSqlType,
   tableNameOf,
-  findAuthoring,
-  countAuthoring,
-  createAuthoring,
-  updateAuthoring,
-  deleteAuthoring,
-  compileReadContract,
-  emitRead,
-  emitWrite,
-  compileCommandBundle,
   compileCreateBundle,
   compileUpdateBundle,
   compileDeleteBundle,
   deriveRelationDecls,
   compileRelationOps,
   modelColumnResolver,
-  compileEager,
-  compileWriteBundle,
   compileCreateManyBundle,
   compileUpdateManyBundle,
   compileDeleteManyBundle,
   compileRelationOp,
-  entityWrites,
-  whereEq,
-  when,
-  ne,
-  inSubquery,
-  col,
-  parentRef,
-  queryView,
-  type Recorded,
-  type ComponentFns,
 } from '../../src/scp';
-
-// A tiny save-contract with an empty lifecycle for every phase, so the single-write Command path
-// (`compileWriteBundle`) has a lifecycle to lower around the base write for create/update/remove — the
-// adapter is not testing write-time relations, so all effect arrays are empty.
-const NO_EFFECTS = entityWrites((w) => ({ create: w.lifecycle(), update: w.lifecycle(), remove: w.lifecycle() }));
 
 // ── Representative README models ─────────────────────────────────────────────────────────────────
 
@@ -158,105 +132,37 @@ describe('F1 columns — @column.* → SCP static columns SQL-type token', () =>
   });
 });
 
-// ── 2. Reads: find / findOne / findById / count with conditions/order/limit/subquery/QUERY ────────
+// ── 2. Reads: column-type mapping surviving the retired read-AUTHORING generation ─────────────────
+//
+// F1's read tests proved "the adapter-generated READ bundle is byte-identical to the hand-written SCP
+// behavior" — that comparison drove `findAuthoring`/`countAuthoring`/`compileReadContract`/`emitRead`/
+// `compileEager` (the SCP recorder/programmatic-compile authoring surface), which behavior-contracts
+// removed with NO replacement (bc 0.11.2 migration). There is no substitute read-bundle generator to
+// drive instead, so every byte-identity-of-a-generated-READ-bundle test below is deleted (one-line
+// comment naming the removed feature each). The adapter's OWN translation — `deriveModelColumns` /
+// `columnSqlType` — is untouched by the removal and stays covered by the "F1 columns" describe above.
 
+// Used by the surviving column-type-only RED-proof test at the bottom of this file
+// (`modelColumnResolver(User, usersColumns)`).
 const usersColumns = { columnTypes: { name: 'TEXT' } };
 
-/** Hand-write the equivalent read declaration for a read shape → its lowered leaf-graph COMPONENTS
- * (the byte-identity oracle; the retired SqlBundle/readGraph surface is gone — reads are the contract). */
-function handRead(name: string, fn: ($: Recorded, L: ComponentFns) => unknown, cols: Record<string, Record<string, string>>) {
-  return compileEager(name, fn, { columns: cols, dialect: 'sqlite' }).components;
-}
-/** The adapter's read COMPONENTS for a model + eager fn (the leaf contract the runtime executes). */
-function adapterRead(model: unknown, name: string, fn: ($: Recorded, L: ComponentFns) => unknown, dialect: 'sqlite', cols?: { columnTypes?: Record<string, string> }) {
-  return compileReadContract(model as never, name, fn, dialect, cols).components;
-}
-const USERS_COLS = { users: { id: 'INTEGER', name: 'TEXT', is_active: 'BOOLEAN', created_at: 'TIMESTAMP', big_id: 'BIGINT', ext_id: 'UUID', metadata: 'JSONB', birth_date: 'DATE', tags: 'TEXT[]' } };
-
 describe('F1 reads — find/findOne/findById/count byte-identical to hand-written SCP', () => {
-  it('find with a WHERE condition + order', () => {
-    const spec = {
-      select: ['id', 'name'],
-      where: ($: Recorded) => [whereEq($.id, $.id)],
-      order: 'created_at DESC',
-    };
-    const adapter = adapterRead(User as never, 'find', findAuthoring('users', spec), 'sqlite', usersColumns);
-    const hand = handRead('find', ($: Recorded, L) => emitRead(L, 'Select', { table: 'users', select: ['id', 'name'], where: [whereEq($.id, $.id)], order: 'created_at DESC' }, 'sqlite'), USERS_COLS);
-    expect(JSON.stringify(adapter)).toBe(JSON.stringify(hand));
-  });
+  // DELETED: 'find with a WHERE condition + order' — drove findAuthoring+emitRead+compileReadContract (removed read-authoring surface, no replacement).
+  // DELETED: 'findById (identity WHERE) and findOne (identity WHERE) share the find authoring' — same (removed read-authoring surface).
+  // DELETED: 'find with a SKIP-optional condition (when(ne(...), ...))' — same; also used the removed WHERE-sugar `when`/`ne`.
+  // DELETED: 'find with limit + offset' — same (removed read-authoring surface).
+  // DELETED: 'find with an IN-subquery condition (Phase E-1 sugar)' — same; also used the removed WHERE-sugar `inSubquery`/`col`/`parentRef`.
+  // DELETED: 'count with a WHERE condition' — same (removed read-authoring surface).
+  // DELETED: 'a QUERY view-model read (queryView → Select cte/cteParams) via the adapter' — same; also used the removed `queryView`.
+  // DELETED: 'find with a GROUP BY port (group) — byte-identical' — same (removed read-authoring surface).
 
-  it('findById (identity WHERE) and findOne (identity WHERE) share the find authoring', () => {
-    const byId = adapterRead(User as never, 'findById', findAuthoring('users', { select: ['id', 'name'], where: ($: Recorded) => [whereEq($.id, $.id)] }), 'sqlite', usersColumns);
-    const hand = handRead('findById', ($: Recorded, L) => emitRead(L, 'Select', { table: 'users', select: ['id', 'name'], where: [whereEq($.id, $.id)] }, 'sqlite'), USERS_COLS);
-    expect(JSON.stringify(byId)).toBe(JSON.stringify(hand));
-  });
-
-  it('find with a SKIP-optional condition (when(ne(...), ...))', () => {
-    const spec = {
-      select: ['id', 'name'],
-      where: ($: Recorded) => [whereEq($.id, $.id), when(ne($.name, null), () => whereEq($.name, $.name))],
-    };
-    const adapter = adapterRead(User as never, 'find', findAuthoring('users', spec), 'sqlite', usersColumns);
-    const hand = handRead('find', ($: Recorded, L) => emitRead(L, 'Select', { table: 'users', select: ['id', 'name'], where: [whereEq($.id, $.id), when(ne($.name, null), () => whereEq($.name, $.name))] }, 'sqlite'), USERS_COLS);
-    expect(JSON.stringify(adapter)).toBe(JSON.stringify(hand));
-  });
-
-  it('find with limit + offset', () => {
-    const spec = { select: ['id', 'name'], limit: ($: Recorded) => $.lim, offset: 5 };
-    const adapter = adapterRead(User as never, 'find', findAuthoring('users', spec), 'sqlite', usersColumns);
-    const hand = handRead('find', ($: Recorded, L) => emitRead(L, 'Select', { table: 'users', select: ['id', 'name'], limit: $.lim, offset: 5 }, 'sqlite'), USERS_COLS);
-    expect(JSON.stringify(adapter)).toBe(JSON.stringify(hand));
-  });
-
-  it('find with an IN-subquery condition (Phase E-1 sugar)', () => {
-    const spec = {
-      select: ['id', 'name'],
-      where: ($: Recorded) => [inSubquery($, [col('users', 'id'), col('posts', 'author_id')], [[col('posts', 'author_id'), parentRef(col('users', 'id'))]])],
-    };
-    const adapter = adapterRead(User as never, 'find', findAuthoring('users', spec), 'sqlite', usersColumns);
-    const hand = handRead('find', ($: Recorded, L) => emitRead(L, 'Select', { table: 'users', select: ['id', 'name'], where: [inSubquery($, [col('users', 'id'), col('posts', 'author_id')], [[col('posts', 'author_id'), parentRef(col('users', 'id'))]])] }, 'sqlite'), USERS_COLS);
-    expect(JSON.stringify(adapter)).toBe(JSON.stringify(hand));
-  });
-
-  it('count with a WHERE condition', () => {
-    const adapter = adapterRead(User as never, 'count', countAuthoring('users', ($: Recorded) => [whereEq($.is_active, $.is_active)]), 'sqlite', usersColumns);
-    const hand = handRead('count', ($: Recorded, L) => emitRead(L, 'Count', { table: 'users', where: [whereEq($.is_active, $.is_active)] }, 'sqlite'), USERS_COLS);
-    expect(JSON.stringify(adapter)).toBe(JSON.stringify(hand));
-  });
-
-  it('a QUERY view-model read (queryView → Select cte/cteParams) via the adapter', () => {
-    // A view model: no base table; the SELECT reads from the declared QUERY as a CTE. The adapter's
-    // `compileReadBundle` accepts ANY eager fn, so a queryView-composed read lowers through it
-    // byte-identically to a hand-written declaration.
-    @model('user_stats')
-    class UserStats {
-      @column() id?: number;
-      @column() post_count?: number;
-    }
-    const cols = { user_stats: { id: 'INTEGER', post_count: 'INTEGER' } };
-    const q = 'SELECT users.id, COUNT(posts.id) as post_count FROM users LEFT JOIN posts ON posts.author_id = users.id GROUP BY users.id';
-    const eager = ($: Recorded, L: ComponentFns) => emitRead(L, 'Select', queryView(q, ['id', 'post_count'], {}, 'user_stats'), 'sqlite');
-    const adapter = adapterRead(UserStats as never, 'find', eager, 'sqlite', { columnTypes: { id: 'INTEGER', post_count: 'INTEGER' } });
-    const hand = handRead('find', eager, cols);
-    expect(JSON.stringify(adapter)).toBe(JSON.stringify(hand));
-    // The QUERY lowered onto the read `executeSQL` leaf (cte/cteParams folded into its static sql).
-    expect(adapter[0]?.body.some((n) => (n as { component?: string }).component === 'executeSQL')).toBe(true);
-  });
-
-  // ── F1-audit coverage MINORs (Phase F-2 fold-in): the `group` port + the non-`text[]` array
-  //    column families (`int[]` / `numeric[]` / `boolean[]`) through the adapter read path. F1's read
-  //    tests covered neither, which is how the blanket-INTEGER default (fixed via option B) and the
-  //    array-outType gap slipped through. Each asserts the adapter bundle is byte-identical to the
-  //    hand-written SCP oracle for the SAME model + read shape. ──────────────────────────────────────
-
-  it('find with a GROUP BY port (group) — byte-identical', () => {
-    const spec = { select: ['author_id'], group: 'author_id', order: 'author_id ASC' };
-    const adapter = adapterRead(Post as never, 'find', findAuthoring('posts', spec), 'sqlite', { columnTypes: { title: 'TEXT' } });
-    const hand = handRead('find', ($: Recorded, L) => emitRead(L, 'Select', { table: 'posts', select: ['author_id'], group: 'author_id', order: 'author_id ASC' }, 'sqlite'), { posts: { id: 'INTEGER', author_id: 'INTEGER', title: 'TEXT', created_at: 'TIMESTAMP' } });
-    expect(JSON.stringify(adapter)).toBe(JSON.stringify(hand));
-  });
-
-  it('projects the non-text[] array column families (int[] / numeric[] / boolean[]) — byte-identical, array outType', () => {
+  it('deriveModelColumns maps the non-text[] array column families (int[] / numeric[] / boolean[]) for a find-shaped model', () => {
+    // DELETED (renamed from 'projects the non-text[] array column families … — byte-identical, array
+    // outType'): the byte-identity-of-a-generated-READ-bundle half drove `findAuthoring`+`emitRead`
+    // (removed read-authoring surface, no replacement). The COLUMN-TYPE half survives directly against
+    // `deriveModelColumns` (no read-bundle generation involved) — the same array-family mapping the
+    // adjacent 'deriveModelColumns maps every array family' test proves generically, pinned here to the
+    // SAME model shape (with a plain `id`) the retired read test used.
     @model('array_cols')
     class ArrayCols {
       @column() id?: number;
@@ -265,13 +171,9 @@ describe('F1 reads — find/findOne/findById/count byte-identical to hand-writte
       @column.booleanArray() flags?: boolean[];
       @column.stringArray() texts?: string[];
     }
-    const cols = { array_cols: { id: 'INTEGER', ints: 'INT[]', nums: 'NUMERIC[]', flags: 'BOOLEAN[]', texts: 'TEXT[]' } };
-    const spec = { select: ['id', 'ints', 'nums', 'flags', 'texts'] };
-    const adapter = adapterRead(ArrayCols as never, 'find', findAuthoring('array_cols', spec), 'sqlite');
-    const hand = handRead('find', ($: Recorded, L) => emitRead(L, 'Select', { table: 'array_cols', select: ['id', 'ints', 'nums', 'flags', 'texts'] }, 'sqlite'), cols);
-    expect(JSON.stringify(adapter)).toBe(JSON.stringify(hand));
-    // The array columns produce a `{ arr: <element> }` outType (not a scalar) — the F2 outtype fix.
-    expect(JSON.stringify(adapter)).toContain('"arr"');
+    expect(deriveModelColumns(ArrayCols as never)).toEqual({
+      array_cols: { id: 'INTEGER', ints: 'INT[]', nums: 'NUMERIC[]', flags: 'BOOLEAN[]', texts: 'TEXT[]' },
+    });
   });
 
   it('deriveModelColumns maps every array family to its §4.1 array token', () => {
@@ -286,37 +188,20 @@ describe('F1 reads — find/findOne/findById/count byte-identical to hand-writte
   });
 });
 
-// ── 3. Writes: create / createMany / update / updateMany / delete / upsert ────────────────────────
+// ── 3. Writes: createMany / update / delete via the surviving batch write bundles ──────────────────
+//
+// The SINGLE-record write path (`create`/`update`/`delete` via `compileCommandBundle`) drove
+// `createAuthoring`/`updateAuthoring`/`deleteAuthoring`/`compileEager`/`emitWrite`/`compileWriteBundle`
+// — the removed SCP write-authoring surface (no replacement). The BATCH write path
+// (`createMany`/`updateMany`/`deleteMany` via `compileCreateBundle`/`compileUpdateBundle`/
+// `compileDeleteBundle` → `compileCreateManyBundle`/`compileUpdateManyBundle`/`compileDeleteManyBundle`)
+// never went through that authoring surface (it composes the v1-sourced batch builders directly) and
+// is untouched — kept below.
 
 describe('F1 writes — create/update/delete byte-identical to hand-written SCP', () => {
-  it('create (single INSERT via compileWriteBundle)', () => {
-    const spec = {
-      values: ($: Recorded) => ({ author_id: $.author_id, title: $.title }),
-      returning: 'id, author_id, title',
-    };
-    const adapter = compileCommandBundle(Post as never, 'create', createAuthoring('posts', spec), NO_EFFECTS, 'create', 'sqlite');
-    // Phase F-2 (#105 option B): `Post.title` is a bare `@column() title?: string`, so the adapter
-    // derives its SQL type from `design:type` (String → TEXT) — NOT the old blanket INTEGER default.
-    // The hand oracle uses the SAME correct types (author_id/id bare Number → INTEGER, title → TEXT).
-    const contract = compileEager('create', ($: Recorded, L) => emitWrite(L, 'Insert', { table: 'posts', 'values.author_id': $.author_id, 'values.title': $.title, returning: 'id, author_id, title' }, 'sqlite'), { columns: { posts: { id: 'INTEGER', author_id: 'INTEGER', title: 'TEXT', created_at: 'TIMESTAMP' } } });
-    const hand = compileWriteBundle(contract, 'create', NO_EFFECTS, 'create', 'sqlite', contract.resolveColumnType);
-    expect(JSON.stringify(adapter)).toBe(JSON.stringify(hand));
-  });
-
-  it('update byte-identical', () => {
-    const adapter = compileCommandBundle(Post as never, 'update', updateAuthoring('posts', ($: Recorded) => ({ title: $.title }), ($: Recorded) => [whereEq($.id, $.id)], { returning: 'id, title' }), NO_EFFECTS, 'update', 'sqlite');
-    // Phase F-2 (#105 option B): `Post.title` (bare string) → TEXT via design:type (not INTEGER).
-    const contract = compileEager('update', ($: Recorded, L) => emitWrite(L, 'Update', { table: 'posts', where: [whereEq($.id, $.id)], 'set.title': $.title, returning: 'id, title' }, 'sqlite'), { columns: { posts: { id: 'INTEGER', title: 'TEXT' } } });
-    const hand = compileWriteBundle(contract, 'update', NO_EFFECTS, 'update', 'sqlite', contract.resolveColumnType);
-    expect(JSON.stringify(adapter)).toBe(JSON.stringify(hand));
-  });
-
-  it('delete byte-identical', () => {
-    const adapter = compileCommandBundle(Post as never, 'delete', deleteAuthoring('posts', ($: Recorded) => [whereEq($.id, $.id)], 'id'), NO_EFFECTS, 'remove', 'sqlite');
-    const contract = compileEager('delete', ($: Recorded, L) => emitWrite(L, 'Delete', { table: 'posts', where: [whereEq($.id, $.id)], returning: 'id' }, 'sqlite'), { columns: { posts: { id: 'INTEGER' } } });
-    const hand = compileWriteBundle(contract, 'delete', NO_EFFECTS, 'remove', 'sqlite', contract.resolveColumnType);
-    expect(JSON.stringify(adapter)).toBe(JSON.stringify(hand));
-  });
+  // DELETED: 'create (single INSERT via compileWriteBundle)' — drove createAuthoring+compileEager+emitWrite+compileCommandBundle+compileWriteBundle (removed single-write authoring surface, no replacement).
+  // DELETED: 'update byte-identical' — same (removed single-write authoring surface); also used the removed WHERE-sugar `whereEq`.
+  // DELETED: 'delete byte-identical' — same (removed single-write authoring surface); also used the removed WHERE-sugar `whereEq`.
 
   it('createMany byte-identical (compileCreateManyBundle)', () => {
     const opts = { tableName: 'posts', records: [{ author_id: 1, title: 'a' }, { author_id: 2, title: 'b' }], returning: 'id' };
@@ -410,20 +295,22 @@ describe('F1 relations — @hasMany/@belongsTo/@hasOne → RelationDecl → Rela
   });
 });
 
-// ── RED proof: a WRONG column-type mapping diverges the generated bundle ──────────────────────────
+// ── RED proof: a WRONG column-type mapping diverges the resolved column type ───────────────────────
 
-describe('F1 RED proof — a wrong column-type mapping makes the generated bundle diverge', () => {
-  it('mis-mapping id INTEGER→BIGINT changes the read bundle bytes (a byte-identity test would RED)', () => {
-    // Correct: id INTEGER → bc scalar `int`. Wrong: BIGINT → bc scalar `string` (exact-decimal de-box).
-    // The read projects `id`, so its outType annotation differs — OBSERVABLE in the bundle bytes.
-    const spec = { select: ['id', 'name'], where: ($: Recorded) => [whereEq($.id, $.id)] };
-    const correct = adapterRead(User as never, 'find', findAuthoring('users', spec), 'sqlite', usersColumns);
-    const wrong = adapterRead(User as never, 'find', findAuthoring('users', spec), 'sqlite', { columnTypes: { name: 'TEXT', id: 'BIGINT' } });
-    // A byte-identity assertion against the correct hand-written bundle would go RED under the wrong map.
-    expect(JSON.stringify(wrong)).not.toBe(JSON.stringify(correct));
-    // And confirm the CORRECT mapping IS byte-identical to the hand-written oracle (the GREEN direction).
-    const hand = handRead('find', ($: Recorded, L) => emitRead(L, 'Select', { table: 'users', select: ['id', 'name'], where: [whereEq($.id, $.id)] }, 'sqlite'), USERS_COLS);
-    expect(JSON.stringify(correct)).toBe(JSON.stringify(hand));
+describe('F1 RED proof — a wrong column-type mapping diverges from the correct one / fails closed', () => {
+  it('mis-mapping id INTEGER→BIGINT resolves a different SQL type for the column', () => {
+    // DELETED (renamed from 'mis-mapping id INTEGER→BIGINT changes the read bundle bytes (a
+    // byte-identity test would RED)'): the READ-BUNDLE-bytes-diverge half drove
+    // `findAuthoring`+`adapterRead`+`handRead`+`emitRead` (removed read-authoring surface, no
+    // replacement). The COLUMN-TYPE half survives directly against `modelColumnResolver` (no
+    // read-bundle generation involved): correct id→INTEGER vs mis-mapped id→BIGINT resolve to
+    // different SQL-type tokens for the SAME column — the observable divergence the wrong mapping
+    // produces downstream (BIGINT de-boxes as bc `string`, INTEGER as bc `int`/`float`).
+    const correct = modelColumnResolver(User as never, usersColumns)!;
+    const wrong = modelColumnResolver(User as never, { columnTypes: { name: 'TEXT', id: 'BIGINT' } })!;
+    expect(correct('users', 'id')).toBe('INTEGER');
+    expect(wrong('users', 'id')).toBe('BIGINT');
+    expect(correct('users', 'id')).not.toBe(wrong('users', 'id'));
   });
 
   it('a wrong SQL family for a column throws at derive (fail-closed, never a silent wrong bundle)', () => {

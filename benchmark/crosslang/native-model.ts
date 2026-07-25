@@ -3,12 +3,13 @@
 //
 // This module DECLARES the 19 ORM ops on behavior-contracts' native TS authoring surface. It is READ,
 // never executed: `bc generate --from <this file> --behavior <DialectClass>` type-extracts each method's
-// parameter/return types and lowers its body AST to IR, then runs the emitter. There is no IR dump, no
-// `publishBehaviors`, and no litedbmodel code in the generation or verification path — the native module
+// parameter/return types and lowers its body AST to IR, then runs the emitter. There is no IR dump and no
+// programmatic compile in the generation or verification path — the native module
 // is bc's own `bc generate` output and the drift gate is bc's own `bc check` (see gen-native.sh).
 //
-// Because the source is read rather than run, every SQL string is a LITERAL here. The 19-op semantics
-// SSoT is `ops.ts`; the schema/seed match `orm-domain.ts`.
+// Because the source is read rather than run, every SQL string is a LITERAL here. THIS FILE is the
+// 19-op semantics SSoT (the retired recorder-authored `ops.ts`/`domain.ts` are gone); the schema/seed
+// match `orm-domain.ts`.
 //
 // ── the de-box discipline (one de-box per chain) ──
 // The three leaves below are OP-AGNOSTIC: one `executeSQL` covers every statement of every op, and
