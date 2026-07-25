@@ -202,6 +202,192 @@
       "expectedCap": null
     },
     {
+      "name": "page: bound LIMIT/OFFSET (first window) [sqlite]",
+      "kind": "exec",
+      "dialect": "sqlite",
+      "entry": "page",
+      "input": {
+        "limit": 2,
+        "offset": 0
+      },
+      "case": "page: bound LIMIT/OFFSET (first window)",
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, title FROM conf_posts ORDER BY id ASC LIMIT ? OFFSET ?",
+          "params": [
+            2,
+            0
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "id": 10,
+          "title": "a1"
+        },
+        {
+          "id": 11,
+          "title": "a2"
+        }
+      ],
+      "expectedCap": null
+    },
+    {
+      "name": "page: bound LIMIT/OFFSET (first window) [postgres]",
+      "kind": "exec",
+      "dialect": "postgres",
+      "entry": "page",
+      "input": {
+        "limit": 2,
+        "offset": 0
+      },
+      "case": "page: bound LIMIT/OFFSET (first window)",
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, title FROM conf_posts ORDER BY id ASC LIMIT $1 OFFSET $2",
+          "params": [
+            2,
+            0
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "id": 10,
+          "title": "a1"
+        },
+        {
+          "id": 11,
+          "title": "a2"
+        }
+      ],
+      "expectedCap": null
+    },
+    {
+      "name": "page: bound LIMIT/OFFSET (first window) [mysql]",
+      "kind": "exec",
+      "dialect": "mysql",
+      "entry": "page",
+      "input": {
+        "limit": 2,
+        "offset": 0
+      },
+      "case": "page: bound LIMIT/OFFSET (first window)",
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, title FROM conf_posts ORDER BY id ASC LIMIT ? OFFSET ?",
+          "params": [
+            2,
+            0
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "id": 10,
+          "title": "a1"
+        },
+        {
+          "id": 11,
+          "title": "a2"
+        }
+      ],
+      "expectedCap": null
+    },
+    {
+      "name": "page: bound LIMIT/OFFSET (second window, same statement) [sqlite]",
+      "kind": "exec",
+      "dialect": "sqlite",
+      "entry": "page",
+      "input": {
+        "limit": 2,
+        "offset": 1
+      },
+      "case": "page: bound LIMIT/OFFSET (second window, same statement)",
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, title FROM conf_posts ORDER BY id ASC LIMIT ? OFFSET ?",
+          "params": [
+            2,
+            1
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "id": 11,
+          "title": "a2"
+        },
+        {
+          "id": 12,
+          "title": "b1"
+        }
+      ],
+      "expectedCap": null
+    },
+    {
+      "name": "page: bound LIMIT/OFFSET (second window, same statement) [postgres]",
+      "kind": "exec",
+      "dialect": "postgres",
+      "entry": "page",
+      "input": {
+        "limit": 2,
+        "offset": 1
+      },
+      "case": "page: bound LIMIT/OFFSET (second window, same statement)",
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, title FROM conf_posts ORDER BY id ASC LIMIT $1 OFFSET $2",
+          "params": [
+            2,
+            1
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "id": 11,
+          "title": "a2"
+        },
+        {
+          "id": 12,
+          "title": "b1"
+        }
+      ],
+      "expectedCap": null
+    },
+    {
+      "name": "page: bound LIMIT/OFFSET (second window, same statement) [mysql]",
+      "kind": "exec",
+      "dialect": "mysql",
+      "entry": "page",
+      "input": {
+        "limit": 2,
+        "offset": 1
+      },
+      "case": "page: bound LIMIT/OFFSET (second window, same statement)",
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, title FROM conf_posts ORDER BY id ASC LIMIT ? OFFSET ?",
+          "params": [
+            2,
+            1
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "id": 11,
+          "title": "a2"
+        },
+        {
+          "id": 12,
+          "title": "b1"
+        }
+      ],
+      "expectedCap": null
+    },
+    {
       "name": "postsByIds: IN-list (non-empty) [sqlite]",
       "kind": "exec",
       "dialect": "sqlite",

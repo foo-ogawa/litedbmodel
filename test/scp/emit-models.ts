@@ -126,6 +126,15 @@ export const EMIT_ENDPOINTS: EndpointSet = {
     view: { query: { sql: 'SELECT id, title FROM e2e_posts WHERE author_id = ?', params: [1] } },
     order: 'id ASC',
   },
+  /** #161 — PAGING: the page POSITION is an input, so LIMIT/OFFSET BIND instead of inlining. */
+  pagedPosts: {
+    kind: 'read',
+    model: Post,
+    select: ['id', 'title'],
+    order: 'id ASC',
+    limit: { param: 'limit' },
+    offset: { param: 'offset' },
+  },
   /** #133 — a COMPOSITE key set bound with a CONSTANT number of params (PG UNNEST). */
   tenantPostsByKeys: {
     kind: 'read',

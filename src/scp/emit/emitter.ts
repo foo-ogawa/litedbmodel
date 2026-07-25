@@ -55,7 +55,7 @@
 import type { PortableType } from 'behavior-contracts/runtime';
 import { DBExists, DBSubquery, DBParentRef, type ColumnRef, type SubqueryCondition } from '../../DBValues';
 import type { ConditionObject, ConditionValue } from '../../DBConditions';
-import { compileSelect, type SelectDesc } from '../makesql/compile-select';
+import { compileSelect, type BoundCount, type SelectDesc } from '../makesql/compile-select';
 import { compileWhere } from '../makesql/compile';
 import { inListPredicate, tupleInPredicate } from '../makesql/json-array';
 import { compileWriteNode, pgTypeSpecimen } from '../makesql/tx';
@@ -85,6 +85,7 @@ import type {
   EndpointSet,
   ExistsPredicate,
   InPredicate,
+  PageBound,
   Predicate,
   ReadEndpoint,
   RelationSelection,
@@ -265,12 +266,29 @@ class EmitContext {
 
   /**
    * The `findHardLimit` cap this read bakes: the configured cap when the endpoint declares NO explicit
-   * limit (an authored LIMIT governs — v1's skip rule), else `null`. Read from the config SSoT
+   * limit (an authored LIMIT governs — v1's skip rule; a BOUND limit is authored too, the author
+   * declared that this endpoint is paged), else `null`. Read from the config SSoT
    * ({@link resolveFindHardLimit}) at EMIT time, exactly as the retired compile-time bake did.
    */
   private bakedFindCap(endpoint: ReadEndpoint): number | null {
     if (endpoint.limit !== undefined) return null;
     return resolveFindHardLimit();
+  }
+
+  /**
+   * Lower ONE declared page position to the `compileSelect` tail. A static count passes straight
+   * through and inlines as the literal it always was; a `{ param }` position declares an `Int` method
+   * parameter and binds through the SAME tail as a {@link BoundCount} sentinel, so the paged and the
+   * bounded read are one statement builder and one param list.
+   *
+   * A count is an `Int` by SQL's own definition of `LIMIT` / `OFFSET` — it names no model column, so
+   * there is no column type to resolve it from.
+   */
+  private page(p: PageBound | undefined, params: ParamDecl[]): number | BoundCount | undefined {
+    if (p === undefined || typeof p === 'number') return p;
+    assertIdentifier(p.param, `parameter '${p.param}'`);
+    params.push({ name: p.param, type: tsScalar('int') });
+    return { bind: new ParamRef(p.param) };
   }
 
   private read(name: string, endpoint: ReadEndpoint): Method {
@@ -286,7 +304,6 @@ class EmitContext {
       endpoint.view !== undefined ? (t, c) => resolve(t === alias ? baseTable : t, c) : resolve;
 
     const cap = this.bakedFindCap(endpoint);
-    const limit = endpoint.limit ?? (cap !== null ? cap + 1 : undefined);
     const where = endpoint.where ?? [];
     const dynamic = where.some(isOptional);
     if (dynamic && endpoint.view !== undefined) {
@@ -299,6 +316,10 @@ class EmitContext {
 
     const params: ParamDecl[] = [];
     for (const p of where) this.declareWhereParams(model, p, params);
+    // The page tail binds AFTER the WHERE — the order its `?`s occupy in the finished statement, and
+    // therefore the order the parameters are declared in.
+    const limit = this.page(endpoint.limit ?? (cap !== null ? cap + 1 : undefined), params);
+    const offset = this.page(endpoint.offset, params);
 
     // A read with ANY optional predicate carries its WHOLE WHERE as fragments (the leaf assembles the
     // survivors at execution time); a fully-bounded read lowers its WHERE into the static `sql` here.
@@ -310,7 +331,7 @@ class EmitContext {
       ...(endpoint.view !== undefined ? { cte: cteOf(endpoint.view) } : {}),
       ...(endpoint.order !== undefined ? { order: endpoint.order } : {}),
       ...(limit !== undefined ? { limit } : {}),
-      ...(endpoint.offset !== undefined ? { offset: endpoint.offset } : {}),
+      ...(offset !== undefined ? { offset } : {}),
     } satisfies SelectDesc);
 
     const bigint = endpoint.bigint === true;

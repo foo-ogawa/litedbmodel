@@ -130,6 +130,18 @@ export interface QueryView {
   readonly alias?: string;
 }
 
+// ── paging ────────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * A declared page position (a `LIMIT` or an `OFFSET`).
+ *
+ * A plain `number` is STATIC: the count is baked into the SQL as a literal (v1's inline form), so the
+ * statement carries no extra parameter. `{ param }` makes the position an INPUT — the endpoint gains
+ * an `Int` parameter and the SQL binds it (`LIMIT ?`), which is how a runtime-paged read
+ * (`page(limit, offset)`) reaches the codegen path at all: a per-call page cannot be a literal.
+ */
+export type PageBound = number | { readonly param: string };
+
 // ── endpoints ─────────────────────────────────────────────────────────────────────────────────
 
 /** A statically declared READ. */
@@ -141,8 +153,10 @@ export interface ReadEndpoint {
   readonly select?: readonly string[];
   readonly where?: readonly Predicate[];
   readonly order?: string;
-  readonly limit?: number;
-  readonly offset?: number;
+  /** A static row cap (inlined), or `{ param }` for a bound one — see {@link PageBound}. */
+  readonly limit?: PageBound;
+  /** A static start offset (inlined), or `{ param }` for a bound one — see {@link PageBound}. */
+  readonly offset?: PageBound;
   /** Eagerly-selected relations (batched, N+1-free). */
   readonly with?: readonly RelationSelection[];
   /** #98 — read from a derived CTE (a QUERY view-model) instead of the base table. */

@@ -276,6 +276,87 @@ describe('emitter — WRITES', () => {
   });
 });
 
+describe('emitter — #161 paging (a page position may be an INPUT)', () => {
+  /** A page whose position is declared STATIC — the count is a literal, on every dialect. */
+  const staticPage: EndpointSet = {
+    top: { kind: 'read', model: User, select: ['id', 'name'], order: 'id ASC', limit: 2, offset: 1 },
+  };
+
+  it('a `{param}` limit/offset binds as `LIMIT ? OFFSET ?` and declares Int parameters', () => {
+    for (const dialect of ['postgres', 'sqlite', 'mysql'] as const) {
+      const r = emit(dialect, { pagedPosts: EMIT_ENDPOINTS.pagedPosts });
+      // ONE statement, the page bound — not baked. The `?`→`$N` render happens at execution time.
+      expect(bodyOf(r.source, 'pagedPosts')[0]).toContain(
+        'Db.executeSQL("SELECT id, title FROM e2e_posts ORDER BY id ASC LIMIT ? OFFSET ?", [limit, offset]',
+      );
+      expect(r.source).toContain('@behavior static pagedPosts(limit: Int, offset: Int): PagedPostsRow[]');
+      expect(r.endpoints[0].params).toEqual([{ name: 'limit', type: 'Int' }, { name: 'offset', type: 'Int' }]);
+    }
+  });
+
+  it('the STATIC form is byte-unchanged — the count is still an inlined literal, no param', () => {
+    for (const dialect of ['postgres', 'sqlite', 'mysql'] as const) {
+      const r = emit(dialect, staticPage);
+      expect(bodyOf(r.source, 'top')[0]).toContain(
+        'Db.executeSQL("SELECT id, name FROM e2e_users ORDER BY id ASC LIMIT 2 OFFSET 1", []',
+      );
+      expect(r.endpoints[0].params).toEqual([]);
+    }
+  });
+
+  it('the page binds AFTER the WHERE — the order the `?`s occupy in the finished statement', () => {
+    const r = emit('postgres', {
+      pagedByAuthor: {
+        kind: 'read',
+        model: Post,
+        select: ['id', 'title'],
+        where: [{ column: 'author_id', op: 'eq', param: 'authorId' }],
+        order: 'id ASC',
+        limit: { param: 'limit' },
+        offset: { param: 'offset' },
+      },
+    });
+    expect(bodyOf(r.source, 'pagedByAuthor')[0]).toContain(
+      'Db.executeSQL("SELECT id, title FROM e2e_posts WHERE author_id = ? ORDER BY id ASC LIMIT ? OFFSET ?", [authorId, limit, offset]',
+    );
+  });
+
+  it('a SKIP read pages too — the base params stay [limit, offset] behind the runtime-assembled WHERE', () => {
+    const r = emit('postgres', {
+      pagedFeed: {
+        kind: 'read',
+        model: Post,
+        select: ['id', 'title'],
+        where: [{ column: 'author_id', op: 'eq', param: 'authorId' }, { column: 'title', op: 'like', param: 'title', optional: true }],
+        order: 'id ASC',
+        limit: { param: 'limit' },
+      },
+    });
+    const line = bodyOf(r.source, 'pagedFeed')[0];
+    // The leaf splices the surviving WHERE before ` ORDER BY` and binds its params BEFORE these two
+    // (`assembleDynamicWhere`), so the tail's `?` stays last however many fragments survive.
+    expect(line).toContain('Db.executeSQL("SELECT id, title FROM e2e_posts ORDER BY id ASC LIMIT ?", [limit]');
+    expect(line).toContain('{ frags: [{ sql: "author_id = ?", params: [authorId] }, title !== null ? { sql: "title LIKE ?", params: [title] } : null] }');
+  });
+
+  it('a BOUND limit is an authored LIMIT — it governs, so no find cap is baked (v1 skip rule)', () => {
+    try {
+      setLimitConfig({ findHardLimit: 2 });
+      const r = emit('sqlite', { pagedPosts: EMIT_ENDPOINTS.pagedPosts });
+      expect(bodyOf(r.source, 'pagedPosts')[0]).toContain('ORDER BY id ASC LIMIT ? OFFSET ?');
+      expect(r.endpoints[0].findHardLimit).toBeUndefined();
+    } finally {
+      resetLimitConfig();
+    }
+  });
+
+  it('rejects a page parameter that is not an identifier', () => {
+    expect(() => emit('sqlite', { bad: { kind: 'read', model: User, limit: { param: 'not an ident' } } })).toThrow(
+      /parameter 'not an ident' is not a valid TypeScript identifier/,
+    );
+  });
+});
+
 describe('emitter — find hard-limit guard (the LIMIT cap+1 bounded fetch)', () => {
   it('bakes `LIMIT cap + 1` into a capped read and reports the cap the read boundary enforces', () => {
     try {

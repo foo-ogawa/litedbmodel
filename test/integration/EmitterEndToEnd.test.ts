@@ -52,6 +52,7 @@ interface Blog {
   authorsWithAnyPost(): Promise<UserRow[]>;
   usersWhoWrote(i: { title: string }): Promise<UserRow[]>;
   postsOfAuthorView(): Promise<ViewRow[]>;
+  pagedPosts(i: { limit: number; offset: number }): Promise<ViewRow[]>;
   createUser(i: { name: string }): Promise<UserRow[]>;
   renameUser(i: { name: string; id: number }): Promise<WriteSummary[]>;
   removeUser(i: { id: number }): Promise<WriteSummary[]>;
@@ -198,6 +199,16 @@ describe('#152 end-to-end — decorated model → emitter → bc generate → li
 
   it('#98 — a QUERY view reads through the derived CTE (its own param bound first)', async () => {
     expect(await blog.postsOfAuthorView()).toEqual([{ id: 10, title: 'a1' }, { id: 11, title: 'a2' }]);
+  });
+
+  it('#161 — a PAGED read binds its page position: ONE statement, a different window per call', async () => {
+    // Three calls, three windows, over the SAME emitted statement — the counts cannot have been baked.
+    expect(await blog.pagedPosts({ limit: 2, offset: 0 })).toEqual([{ id: 10, title: 'a1' }, { id: 11, title: 'a2' }]);
+    expect(await blog.pagedPosts({ limit: 2, offset: 1 })).toEqual([{ id: 11, title: 'a2' }, { id: 12, title: 'b1' }]);
+    expect(await blog.pagedPosts({ limit: 1, offset: 2 })).toEqual([{ id: 12, title: 'b1' }]);
+    // The emitted text carries `?` (the `?`→`$N` render is the transport's, after final assembly) and
+    // NO literal count — PostgreSQL would have rejected an unrendered `?` outright.
+    expect(emittedSource).toContain('SELECT id, title FROM e2e_posts ORDER BY id ASC LIMIT ? OFFSET ?", [limit, offset]');
   });
 
   it('writes: INSERT…RETURNING, UPDATE, DELETE and a batch INSERT all execute', async () => {

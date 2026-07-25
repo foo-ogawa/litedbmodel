@@ -224,6 +224,18 @@ const ENDPOINTS: EndpointSet = {
   },
   /** The SAME page with an EXPLICIT limit — an authored LIMIT governs, so no cap is baked. */
   postsTop: { kind: 'read', model: ConfPost, order: 'id ASC', limit: 2 },
+  /**
+   * #161 — PAGING: the page POSITION is an INPUT, so the counts BIND (`LIMIT ? OFFSET ?`) instead of
+   * inlining. One statement serves every window, and the placeholders render per dialect (PG `$N`).
+   */
+  page: {
+    kind: 'read',
+    model: ConfPost,
+    select: ['id', 'title'],
+    order: 'id ASC',
+    limit: { param: 'limit' },
+    offset: { param: 'offset' },
+  },
   /** #46 — a whole key set bound as ONE param (PG `= ANY(?)`, MySQL/SQLite single-JSON). */
   postsByIds: {
     kind: 'read',
@@ -745,6 +757,9 @@ const TAGS_STATE = 'SELECT id, post_id, label FROM conf_tags ORDER BY id';
 const EXEC_CASES: readonly ExecCase[] = [
   { id: 'posts: author page', entry: 'posts', input: { authorId: 1 } },
   { id: 'postsTop: explicit LIMIT 2', entry: 'postsTop', input: {} },
+  // #161 — the SAME emitted statement, two different windows: a baked count could not produce both.
+  { id: 'page: bound LIMIT/OFFSET (first window)', entry: 'page', input: { limit: 2, offset: 0 } },
+  { id: 'page: bound LIMIT/OFFSET (second window, same statement)', entry: 'page', input: { limit: 2, offset: 1 } },
   { id: 'postsByIds: IN-list (non-empty)', entry: 'postsByIds', input: { ids: [10, 12] } },
   { id: 'postsByIds: IN-list (EMPTY key set is legal)', entry: 'postsByIds', input: { ids: [] } },
   { id: 'feed: both optional predicates absent (SKIP drop)', entry: 'feed', input: { authorId: 1 } },

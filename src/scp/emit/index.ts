@@ -20,6 +20,7 @@ export type {
   Predicate,
   RelationSelection,
   QueryView,
+  PageBound,
   ReadEndpoint,
   ValueBinding,
   CreateEndpoint,
