@@ -1,9 +1,10 @@
 // litedbmodel v2 SCP — the op-INDEPENDENT NATIVE leaf TRANSPORT (#141), Go.
 //
-// The bc `go-typed-native` covered module (RunNativeRawStruct_<comp>) calls ONE op-agnostic leaf
+// The bc `go-typed-native` covered module (the generated `<Method>()` entry) calls ONE op-agnostic leaf
 // transport DIRECTLY at each covered node: `ExecuteSQL` (a SQL node), `PluckKeys` (relation key
-// extraction), `GroupChildren` (relation parent grouping). Post-bc#164 (wire-passthrough) each node's
-// result rides as a BC-OWNED `wire.WireValue`, so these three transports are the ONLY boundary between
+// extraction), `GroupChildren` (relation parent grouping). Each takes ONE generic `wire.WireRow`
+// payload (the node's ports as named fields) and each node's result rides back as a BC-OWNED
+// `wire.WireValue`, so these three transports are the ONLY boundary between
 // the wire plane and the runtime: they convert `wire.WireValue` ↔ bc `Value`/`*Obj` and delegate the
 // relation shaping to the SHARED grouping CORE (grouping.go `DedupeKeyTuples`/`GroupByKey`/
 // `AttachToParent`). There is NO second grouping implementation here — that core is the single source
@@ -48,11 +49,196 @@ func BindLeafTransport(db SQLDB, dialect string) {
 // UnbindLeafTransport clears the bound connection (leaves ExecuteSQL fail-closed until re-bound).
 func UnbindLeafTransport() { leafExecCtx = nil }
 
+// ── Port unbox — the generic-wire payload → the leaf's declared ports ───────────────────────────────
+//
+// A leaf transport takes ONE generic wire.WireRow payload whose fields ARE the node's ports (the
+// covered runner assembles it by name), so divergent port SETS across leaves are just different field
+// lists behind ONE signature <Leaf>(payload wire.WireRow) (wire.WireValue, error). Unbox is
+// FAIL-CLOSED: an absent or wrong-variant port is a loud error, never a silent default — a port that
+// is not there is an ABI break, not a data case.
+//
+// The BC-owned wire.WireRow / wire.WireList keep their backing slices UNEXPORTED, so a list port
+// cannot be aliased out of the payload: [wireItems] MATERIALIZES it to []wire.WireValue ONCE, here at
+// the transport edge, and every leaf body below then runs on that ONE materialization (de-box at most
+// once). The rebuild stays entirely INSIDE the wire type — it does not route through bc.Value, so the
+// wire-native grouping core the bodies consume is unchanged.
+
+// wireProbeAbsent mirrors the BC-OWNED wire package's probe Kind for "no attribute for this field"
+// (the wire package keeps its probe-kind consts unexported; 2 = absent is the stable contract).
+const wireProbeAbsent uint8 = 2
+
+// portErr is the fail-closed port failure: an ABSENT port names the port, a present-but-wrong one also
+// names the DECLARED wire kind and the producer's actual tag.
+func portErr(name, expected string, kind uint8, actual string) error {
+	if kind == wireProbeAbsent {
+		return fmt.Errorf("leaf transport: port %q is absent from the payload", name)
+	}
+	return fmt.Errorf("leaf transport: port %q expected a wire %s, got %s", name, expected, actual)
+}
+
+// portBool reads a bool port (write / returning / bigint / single).
+func portBool(payload wire.WireRow, name string) (bool, error) {
+	p := payload.ProbeBool(name)
+	if p.Kind != wireProbeGot {
+		return false, portErr(name, "bool", p.Kind, p.ActualWireType)
+	}
+	return p.Got, nil
+}
+
+// portString reads a string port (sql / into).
+func portString(payload wire.WireRow, name string) (string, error) {
+	p := payload.ProbeString(name)
+	if p.Kind != wireProbeGot {
+		return "", portErr(name, "string", p.Kind, p.ActualWireType)
+	}
+	return p.Got, nil
+}
+
+// portList reads a list port (params / rows / parents / children) as the transport's own materialized
+// slice — the ONE de-box of that port.
+func portList(payload wire.WireRow, name string) ([]wire.WireValue, error) {
+	p := payload.ProbeList(name)
+	if p.Kind != wireProbeGot {
+		return nil, portErr(name, "list", p.Kind, p.ActualWireType)
+	}
+	return wireItems(p.Got, name)
+}
+
+// portStrings reads an {arr:'string'} port — the ordered key-column TUPLE (col / pk / fk). Every
+// element must be a wire string (a column NAME), so it reads straight off the string probe: no cell
+// materialization is involved.
+func portStrings(payload wire.WireRow, name string) ([]string, error) {
+	p := payload.ProbeList(name)
+	if p.Kind != wireProbeGot {
+		return nil, portErr(name, "list", p.Kind, p.ActualWireType)
+	}
+	out := make([]string, p.Got.Len())
+	for i := range out {
+		e := p.Got.ElemString(i)
+		if e.Kind != wireProbeGot {
+			return nil, portErr(name, "string element", e.Kind, e.ActualWireType)
+		}
+		out[i] = e.Got
+	}
+	return out, nil
+}
+
+// ── Payload materialization (wire → wire; the go wire type's slices are unexported) ─────────────────
+
+// wireItems materializes a payload list port into the []wire.WireValue the leaf bodies consume.
+func wireItems(l wire.WireList, port string) ([]wire.WireValue, error) {
+	out := make([]wire.WireValue, l.Len())
+	for i := range out {
+		v, err := wireOfElem(l, i)
+		if err != nil {
+			return nil, fmt.Errorf("leaf transport: port %q element %d: %w", port, i, err)
+		}
+		out[i] = v
+	}
+	return out, nil
+}
+
+// wireScalarCell rebuilds a SCALAR cell from its STRING probe — the ONE probe that classifies every
+// variant (Got = a string; Null; Wrong carries the producer's ActualWireType + Raw). A number keeps its
+// RAW text, so the rebuild is byte-exact and no parse/format round-trip happens. ok=false means the cell
+// is COMPOSITE (M / L) or an unknown tag: only the CONTAINER accessor differs there, so the two callers
+// below hand back the nested handle and this classifier stays the single copy.
+func wireScalarCell(p wire.StringProbe) (wire.WireValue, bool) {
+	switch p.Kind {
+	case wireProbeGot:
+		return wire.WireStr(p.Got), true
+	case wireProbeNull:
+		return wire.WireNull(), true
+	}
+	switch p.ActualWireType {
+	case "N":
+		return wire.WireNum(p.Raw), true
+	case "BOOL":
+		return wire.WireBool(p.Raw == "true"), true
+	}
+	return wire.WireValue{}, false
+}
+
+// wireOfRow rebuilds a wire row VALUE from a row handle (keys in order, each cell classified once).
+func wireOfRow(r wire.WireRow) (wire.WireValue, error) {
+	keys := r.Keys()
+	fields := make([]wire.WireField, len(keys))
+	for i, k := range keys {
+		p := r.ProbeString(k)
+		v, ok := wireScalarCell(p)
+		if !ok {
+			var err error
+			switch p.ActualWireType {
+			case "M":
+				v, err = wireOfRow(r.ProbeRow(k).Got)
+			case "L":
+				v, err = wireOfList(r.ProbeList(k).Got)
+			default:
+				err = fmt.Errorf("unknown wire tag %q", p.ActualWireType)
+			}
+			if err != nil {
+				return wire.WireValue{}, fmt.Errorf("field %q: %w", k, err)
+			}
+		}
+		fields[i] = wire.WireField{Key: k, Val: v}
+	}
+	return wire.WireRowOf(fields), nil
+}
+
+// wireOfList rebuilds a wire list VALUE from a list handle (the element twin of [wireOfRow]).
+func wireOfList(l wire.WireList) (wire.WireValue, error) {
+	items := make([]wire.WireValue, l.Len())
+	for i := range items {
+		v, err := wireOfElem(l, i)
+		if err != nil {
+			return wire.WireValue{}, fmt.Errorf("element %d: %w", i, err)
+		}
+		items[i] = v
+	}
+	return wire.WireListOf(items), nil
+}
+
+// wireOfElem rebuilds ONE list element (the list accessor to [wireScalarCell]'s classification).
+func wireOfElem(l wire.WireList, i int) (wire.WireValue, error) {
+	p := l.ElemString(i)
+	if v, ok := wireScalarCell(p); ok {
+		return v, nil
+	}
+	switch p.ActualWireType {
+	case "M":
+		return wireOfRow(l.ElemRow(i).Got)
+	case "L":
+		return wireOfList(l.ElemList(i).Got)
+	}
+	return wire.WireValue{}, fmt.Errorf("unknown wire tag %q", p.ActualWireType)
+}
+
 // ExecuteSQL runs ONE SQL node and returns its rows as a wire list of wire rows (empty list for a
 // non-RETURNING write). Params ride as wire values: a scalar binds directly (toDriverParam); a wire
 // LIST param binds as ONE JSON array string (the `json_each(?)` batch-key contract — SAME rendering as
-// the runtime relation bindKeys). bigint is a render hint the native path does not need here.
-func ExecuteSQL(bigint bool, params []wire.WireValue, returning bool, sql string, write bool) (wire.WireValue, error) {
+// the runtime relation bindKeys). bigint is a render hint the native path does not need here. Ports
+// ride in the payload as {bigint, params, returning, sql, write}.
+func ExecuteSQL(payload wire.WireRow) (wire.WireValue, error) {
+	bigint, err := portBool(payload, "bigint")
+	if err != nil {
+		return wire.WireNull(), err
+	}
+	params, err := portList(payload, "params")
+	if err != nil {
+		return wire.WireNull(), err
+	}
+	returning, err := portBool(payload, "returning")
+	if err != nil {
+		return wire.WireNull(), err
+	}
+	sql, err := portString(payload, "sql")
+	if err != nil {
+		return wire.WireNull(), err
+	}
+	write, err := portBool(payload, "write")
+	if err != nil {
+		return wire.WireNull(), err
+	}
 	_ = bigint
 	if leafExecCtx == nil {
 		return wire.WireNull(), fmt.Errorf("leaf transport: no bound connection (call BindLeafTransport before running the native module)")
@@ -115,8 +301,16 @@ func WithAmbientTransaction(db TxDB, body func() error) error {
 // algorithm the runtime relation path consumes ([bcOps]); there is NO wire↔Value round-trip on the hot
 // read path. A single-key `col` emits a FLAT scalar key array (the deduped cell itself); a composite
 // `col` emits an array-of-tuples (each a wire list) — the SAME shape the child SQL's json_each param
-// expects. Go twin of the rust `pluck_keys` leaf.
-func PluckKeys(col []string, rows []wire.WireValue) (wire.WireValue, error) {
+// expects. Go twin of the rust `pluck_keys` leaf. Ports ride in the payload as {col, rows}.
+func PluckKeys(payload wire.WireRow) (wire.WireValue, error) {
+	col, err := portStrings(payload, "col")
+	if err != nil {
+		return wire.WireNull(), err
+	}
+	rows, err := portList(payload, "rows")
+	if err != nil {
+		return wire.WireNull(), err
+	}
 	tuples := dedupeKeyTuplesG(wireOps, rows, col) // dedupe DIRECTLY on wire rows — no wire↔Value round-trip
 	keys := make([]wire.WireValue, len(tuples))
 	for i, t := range tuples {
@@ -138,8 +332,32 @@ func PluckKeys(col []string, rows []wire.WireValue) (wire.WireValue, error) {
 // scalar-collapse cartesian). The parent-key columns are resolved ONCE (all parents share column
 // order). Each parent is shallow-copied before the own-key set (matching the TS `{...par, [into]: …}`
 // spread — the input is not mutated; nested children are referenced, not deep-cloned). Go twin of the
-// rust `group_children` leaf.
-func GroupChildren(children []wire.WireValue, fk []string, into string, parents []wire.WireValue, pk []string, single bool) (wire.WireValue, error) {
+// rust `group_children` leaf. Ports ride in the payload as {children, fk, into, parents, pk, single}.
+func GroupChildren(payload wire.WireRow) (wire.WireValue, error) {
+	children, err := portList(payload, "children")
+	if err != nil {
+		return wire.WireNull(), err
+	}
+	fk, err := portStrings(payload, "fk")
+	if err != nil {
+		return wire.WireNull(), err
+	}
+	into, err := portString(payload, "into")
+	if err != nil {
+		return wire.WireNull(), err
+	}
+	parents, err := portList(payload, "parents")
+	if err != nil {
+		return wire.WireNull(), err
+	}
+	pk, err := portStrings(payload, "pk")
+	if err != nil {
+		return wire.WireNull(), err
+	}
+	single, err := portBool(payload, "single")
+	if err != nil {
+		return wire.WireNull(), err
+	}
 	byKey := groupByKeyG(wireOps, children, fk)       // group DIRECTLY on wire children — no wire↔Value round-trip
 	pkIdx := resolveKeyIndicesG(wireOps, parents, pk) // parent key columns resolved ONCE (all parents share order)
 	out := make([]wire.WireValue, len(parents))

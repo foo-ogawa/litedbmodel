@@ -21,8 +21,9 @@
 //!
 //! ## Ambient driver — the leaves are free functions, the driver is scoped
 //!
-//! The covered runner (`run_native_raw_struct_<comp>`) takes NO driver argument — it calls the leaf
-//! transport symbols as free functions. `execute_sql` resolves the driver from a thread-scoped
+//! The covered runner (the generated `<method>()` entry) takes NO driver argument — it calls the leaf
+//! transport symbols as free functions with ONE generic `WireRow` payload each (the node's ports as
+//! named fields). `execute_sql` resolves the driver from a thread-scoped
 //! ambient set by [`with_ambient_driver`] (the consumer brackets each op call). This is the rust
 //! analogue of the TS `LeafContext.exec` bc injects at `bindBehaviors` time (C4 — never on the IR).
 
@@ -33,7 +34,7 @@ use behavior_contracts::Value;
 use crate::driver::Driver;
 use crate::exec_context::{self, StatementIntent};
 use crate::sql_render::render_placeholders;
-use crate::wire::{BehaviorError, WireList, WireRow, WireValue};
+use crate::wire::{BehaviorError, Probe, WireList, WireRow, WireValue};
 
 // ── Ambient driver (thread-scoped) ───────────────────────────────────────────────────────────────
 
@@ -200,6 +201,74 @@ fn sql_failure_to_behavior_error(e: crate::errors::SqlFailure) -> BehaviorError 
     BehaviorError::new("SQL_FAILURE", e.message)
 }
 
+// ── Port unbox — the generic-wire payload → the leaf's declared ports ──────────────────────────────
+//
+// A leaf transport takes ONE generic `WireRow` payload whose fields ARE the node's ports (the covered
+// runner assembles it by name; divergent port SETS across leaves are just different field lists, so
+// ONE signature `<leaf>(payload: WireRow) -> Result<WireValue, BehaviorError>` serves every role).
+// The transport OWNS the payload, so a port is MOVED out (`swap_remove`) — the large `rows` /
+// `parents` / `children` lists transfer with NO clone. Unbox is FAIL-CLOSED: an absent or
+// wrong-variant port is a loud failure, never a silent default (a port that is not there is an ABI
+// break, not a data case).
+
+/// Move port `name` OUT of the payload (no clone). Fail-closed: an absent port is a loud failure.
+fn take_port(payload: &mut WireRow, name: &str) -> Result<WireValue, BehaviorError> {
+    match payload.entries.iter().position(|(k, _)| k == name) {
+        Some(i) => Ok(payload.entries.swap_remove(i).1),
+        None => Err(BehaviorError::new(
+            "LEAF_PORT",
+            format!("scp leaf: port `{name}` is absent from the payload"),
+        )),
+    }
+}
+
+/// The fail-closed wrong-variant failure. The ACTUAL wire tag is read off the BC-owned probe
+/// classifier ([`WireValue::as_string`]'s `actual_wire_type`), so the tag rendering stays bc's.
+fn port_mismatch(name: &str, expected: &str, got: &WireValue) -> BehaviorError {
+    let actual = match got.as_string() {
+        Probe::Got(_) => "S".to_string(),
+        Probe::Wrong { actual_wire_type, .. } | Probe::Null { actual_wire_type, .. } => actual_wire_type,
+        Probe::Absent => "ABSENT".to_string(),
+    };
+    BehaviorError::new("LEAF_PORT", format!("scp leaf: port `{name}` expected a wire {expected}, got {actual}"))
+}
+
+/// A `bool` port (`write` / `returning` / `bigint` / `single`).
+fn port_bool(payload: &mut WireRow, name: &str) -> Result<bool, BehaviorError> {
+    match take_port(payload, name)? {
+        WireValue::Bool(b) => Ok(b),
+        other => Err(port_mismatch(name, "bool", &other)),
+    }
+}
+
+/// A `string` port (`sql` / `into`).
+fn port_string(payload: &mut WireRow, name: &str) -> Result<String, BehaviorError> {
+    match take_port(payload, name)? {
+        WireValue::Str(s) => Ok(s),
+        other => Err(port_mismatch(name, "string", &other)),
+    }
+}
+
+/// A list port (`params` / `rows` / `parents` / `children`), MOVED out as the transport's own `Vec`.
+fn port_list(payload: &mut WireRow, name: &str) -> Result<Vec<WireValue>, BehaviorError> {
+    match take_port(payload, name)? {
+        WireValue::List(l) => Ok(l.items),
+        other => Err(port_mismatch(name, "list", &other)),
+    }
+}
+
+/// A `{arr:'string'}` port — the ordered key-column TUPLE (`col` / `pk` / `fk`). Every element must be
+/// a wire string (a key column NAME); anything else is an ABI break, not a data case.
+fn port_strings(payload: &mut WireRow, name: &str) -> Result<Vec<String>, BehaviorError> {
+    port_list(payload, name)?
+        .into_iter()
+        .map(|c| match c {
+            WireValue::Str(s) => Ok(s),
+            other => Err(port_mismatch(name, "string element", &other)),
+        })
+        .collect()
+}
+
 // ── execute_sql — the SOLE op-independent SQL transport ────────────────────────────────────────────
 
 /// The SOLE SQL transport leaf (leaves.ts `executeSQL`). Binds `params` and runs `sql` through the
@@ -208,15 +277,15 @@ fn sql_failure_to_behavior_error(e: crate::errors::SqlFailure) -> BehaviorError 
 /// non-returning write returns a one-row `[{changes,lastInsertRowid}]` summary so the leaf output
 /// shape is uniform (a `List` of `Row`). `?`→`$N` is rendered here (the transport's placeholder SSoT,
 /// matching the TS `prepareSql`); an array param (a relation key set) rides as [`Value::Arr`], which
-/// the driver encodes per dialect (json_each / native array). Ports are spread alphabetically by the
-/// native emitter: `(bigint, params, returning, sql, write)`.
-pub fn execute_sql(
-    bigint: bool,
-    params: &[WireValue],
-    returning: bool,
-    sql: &str,
-    write: bool,
-) -> Result<WireValue, BehaviorError> {
+/// the driver encodes per dialect (json_each / native array). Ports ride in the payload as
+/// `{bigint, params, returning, sql, write}`.
+pub fn execute_sql(mut payload: WireRow) -> Result<WireValue, BehaviorError> {
+    let bigint = port_bool(&mut payload, "bigint")?;
+    let params_port = port_list(&mut payload, "params")?;
+    let returning = port_bool(&mut payload, "returning")?;
+    let sql_port = port_string(&mut payload, "sql")?;
+    let write = port_bool(&mut payload, "write")?;
+    let (params, sql): (&[WireValue], &str) = (&params_port, &sql_port);
     // `bigint` is the better-sqlite3 #59 safe-integers toggle; rust/PG/MySQL return BIGINT natively
     // (i64), so there is no exact-integer read mode to select (see exec_context docs) — the port is
     // accepted for signature parity with the TS leaf and does not branch the rust seam.
@@ -256,10 +325,13 @@ pub fn execute_sql(
 /// parent-key column TUPLE (single-key → 1 column; composite → the tuple): single-key emits a flat
 /// scalar key array (`json_each` scalar `value`), composite emits an array-of-tuples (`json_each`
 /// per-ordinal `$[i]`) — the SAME shape `relation.ts bindKeys` produces for the MySQL/SQLite JSON
-/// param. Ports are spread alphabetically by the native emitter: `(col, rows)`.
-pub fn pluck_keys(col: &[String], rows: &[WireValue]) -> Result<WireValue, BehaviorError> {
+/// param. Ports ride in the payload as `{col, rows}`.
+pub fn pluck_keys(mut payload: WireRow) -> Result<WireValue, BehaviorError> {
+    let col_port = port_strings(&mut payload, "col")?;
+    let rows_port = port_list(&mut payload, "rows")?;
+    let (col, rows): (&[String], &[WireValue]) = (&col_port, &rows_port);
     // The grouping core keys DIRECTLY on `WireValue` — no `WireValue`→`Value` conversion (the read path
-    // never boxes into bc's `Value`). `col` is the ordered key-column tuple spread as an owned `Vec<String>`.
+    // never boxes into bc's `Value`). `col` is the ordered key-column tuple (an owned `Vec<String>`).
     let tuples = crate::grouping::dedupe_key_tuples(rows, col);
     let keys: Vec<WireValue> = if col.len() == 1 {
         tuples.into_iter().map(|mut t| t.remove(0)).collect()
@@ -282,16 +354,16 @@ pub fn pluck_keys(col: &[String], rows: &[WireValue]) -> Result<WireValue, Behav
 /// column TUPLES (single-key → 1 column; composite → the tuple) — the core keys on the WHOLE tuple
 /// identity, so a composite relation nests by the full key (no scalar-collapse cartesian). Each parent
 /// is shallow-copied before the own-key set (matching the TS `{...par, [into]: …}` spread — the input
-/// is not mutated). Ports are spread alphabetically by the native emitter: `(children, fk, into,
-/// parents, pk, single)`.
-pub fn group_children(
-    children: &[WireValue],
-    fk: &[String],
-    into: &str,
-    parents: &[WireValue],
-    pk: &[String],
-    single: bool,
-) -> Result<WireValue, BehaviorError> {
+/// is not mutated). Ports ride in the payload as `{children, fk, into, parents, pk, single}`.
+pub fn group_children(mut payload: WireRow) -> Result<WireValue, BehaviorError> {
+    let children_port = port_list(&mut payload, "children")?;
+    let fk_port = port_strings(&mut payload, "fk")?;
+    let into_port = port_string(&mut payload, "into")?;
+    let parents_port = port_list(&mut payload, "parents")?;
+    let pk_port = port_strings(&mut payload, "pk")?;
+    let single = port_bool(&mut payload, "single")?;
+    let (children, fk, into, parents, pk): (&[WireValue], &[String], &str, &[WireValue], &[String]) =
+        (&children_port, &fk_port, &into_port, &parents_port, &pk_port);
     // The grouping core keys DIRECTLY on `WireValue` (no `WireValue`↔`Value` conversion). The buckets
     // hold REFERENCES into `children` — no per-child clone; a matched child is cloned exactly once, when
     // `attach_to_parent` nests it into a parent's output.
@@ -340,9 +412,16 @@ mod tests {
             _ => panic!("not a list"),
         }
     }
-    // The key-column tuple ports arrive as owned `Vec<String>` (bc 0.9.0 declared `{arr:'string'}`).
-    fn cols(c: &[&str]) -> Vec<String> {
-        c.iter().map(|s| (*s).to_string()).collect()
+    // The generic-wire PAYLOAD a covered runner hands a leaf: the node's ports as named fields.
+    fn payload(ports: Vec<(&str, WireValue)>) -> WireRow {
+        WireRow { entries: ports.into_iter().map(|(k, v)| (k.to_string(), v)).collect() }
+    }
+    fn wlist(items: Vec<WireValue>) -> WireValue {
+        WireValue::List(WireList { items })
+    }
+    // A key-column tuple port (`col`/`pk`/`fk`) — the ordered column names as wire strings.
+    fn cols(c: &[&str]) -> WireValue {
+        wlist(c.iter().map(|s| WireValue::Str((*s).to_string())).collect())
     }
 
     // ── with_ambient_transaction atomicity (#142): Ok → COMMIT (all rows persist), Err → ROLLBACK
@@ -352,7 +431,14 @@ mod tests {
         use crate::driver::SqliteDriver;
         let d = SqliteDriver::in_memory(&["CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)".to_string()]).unwrap();
         let ins = |id: i64, v: &str| -> Result<(), BehaviorError> {
-            execute_sql(false, &[WireValue::int(id), WireValue::Str(v.to_string())], false, "INSERT INTO t (id, v) VALUES (?, ?)", true).map(|_| ())
+            execute_sql(payload(vec![
+                ("bigint", WireValue::Bool(false)),
+                ("params", wlist(vec![WireValue::int(id), WireValue::Str(v.to_string())])),
+                ("returning", WireValue::Bool(false)),
+                ("sql", WireValue::Str("INSERT INTO t (id, v) VALUES (?, ?)".to_string())),
+                ("write", WireValue::Bool(true)),
+            ]))
+            .map(|_| ())
         };
         let row_count = |d: &SqliteDriver| -> i64 {
             let rows = d.prepare("SELECT COUNT(*) AS c FROM t").all(&[]).unwrap();
@@ -388,8 +474,8 @@ mod tests {
     // Single-key pluck emits a FLAT scalar key array (json_each scalar `value`).
     #[test]
     fn pluck_single_key_is_flat_scalars() {
-        let rows = [wrow(&[("id", WireValue::int(2))]), wrow(&[("id", WireValue::int(1))]), wrow(&[("id", WireValue::int(2))])];
-        let out = pluck_keys(&cols(&["id"]), &rows).unwrap();
+        let rows = vec![wrow(&[("id", WireValue::int(2))]), wrow(&[("id", WireValue::int(1))]), wrow(&[("id", WireValue::int(2))])];
+        let out = pluck_keys(payload(vec![("col", cols(&["id"])), ("rows", wlist(rows))])).unwrap();
         let ks = items(&out);
         assert_eq!(ks.len(), 2); // deduped, order preserved
         assert!(matches!(&ks[0], WireValue::Num(n) if n == "2"));
@@ -399,12 +485,12 @@ mod tests {
     // Composite pluck emits an array-of-TUPLES (json_each per-ordinal `$[i]`).
     #[test]
     fn pluck_composite_key_is_tuples() {
-        let rows = [
+        let rows = vec![
             wrow(&[("tenant_id", WireValue::int(1)), ("user_id", WireValue::int(9))]),
             wrow(&[("tenant_id", WireValue::int(1)), ("user_id", WireValue::int(9))]), // dup tuple
             wrow(&[("tenant_id", WireValue::int(1)), ("user_id", WireValue::int(8))]),
         ];
-        let out = pluck_keys(&cols(&["tenant_id", "user_id"]), &rows).unwrap();
+        let out = pluck_keys(payload(vec![("col", cols(&["tenant_id", "user_id"])), ("rows", wlist(rows))])).unwrap();
         let ks = items(&out);
         assert_eq!(ks.len(), 2); // deduped on the whole tuple
         assert_eq!(items(&ks[0]).len(), 2); // each key is a 2-element tuple
@@ -415,15 +501,23 @@ mod tests {
     // first-column-only key would wrongly attach).
     #[test]
     fn group_composite_is_not_cartesian() {
-        let parents = [
+        let parents = vec![
             wrow(&[("tenant_id", WireValue::int(1)), ("user_id", WireValue::int(9))]),
             wrow(&[("tenant_id", WireValue::int(1)), ("user_id", WireValue::int(8))]),
         ];
-        let children = [
+        let children = vec![
             wrow(&[("tenant_id", WireValue::int(1)), ("user_id", WireValue::int(9)), ("title", WireValue::Str("p9".into()))]),
             wrow(&[("tenant_id", WireValue::int(1)), ("user_id", WireValue::int(8)), ("title", WireValue::Str("p8".into()))]),
         ];
-        let out = group_children(&children, &cols(&["tenant_id", "user_id"]), "posts", &parents, &cols(&["tenant_id", "user_id"]), false).unwrap();
+        let out = group_children(payload(vec![
+            ("children", wlist(children)),
+            ("fk", cols(&["tenant_id", "user_id"])),
+            ("into", WireValue::Str("posts".to_string())),
+            ("parents", wlist(parents)),
+            ("pk", cols(&["tenant_id", "user_id"])),
+            ("single", WireValue::Bool(false)),
+        ]))
+        .unwrap();
         let ps = items(&out);
         for p in &ps {
             let posts = match p {
@@ -433,5 +527,34 @@ mod tests {
             // each parent nests EXACTLY its own one matching post (cartesian would nest both).
             assert_eq!(items(&posts).len(), 1, "composite grouping must not be cartesian");
         }
+    }
+
+    // Port unbox is FAIL-CLOSED: an ABSENT port and a WRONG-VARIANT port both surface a loud
+    // `LEAF_PORT` failure (never a silent default) — a port that is missing or mistyped is an ABI
+    // break, and a default would corrupt the result rather than stop it.
+    #[test]
+    fn port_unbox_is_fail_closed() {
+        // WireValue derives no Debug — take the failure structurally rather than via unwrap_err.
+        fn failure(r: Result<WireValue, BehaviorError>) -> BehaviorError {
+            match r {
+                Err(e) => e,
+                Ok(_) => panic!("a bad port must FAIL, not produce a result"),
+            }
+        }
+
+        // absent `rows`
+        let e = failure(pluck_keys(payload(vec![("col", cols(&["id"]))])));
+        assert_eq!(e.code, "LEAF_PORT");
+        assert!(e.message.contains("`rows`") && e.message.contains("absent"), "{}", e.message);
+
+        // `rows` present but a NUMBER, not a list — the failure names the actual wire tag.
+        let e = failure(pluck_keys(payload(vec![("col", cols(&["id"])), ("rows", WireValue::int(7))])));
+        assert_eq!(e.code, "LEAF_PORT");
+        assert!(e.message.contains("`rows`") && e.message.contains("got N"), "{}", e.message);
+
+        // a key-column tuple whose element is not a column NAME.
+        let e = failure(pluck_keys(payload(vec![("col", wlist(vec![WireValue::int(1)])), ("rows", wlist(vec![]))])));
+        assert_eq!(e.code, "LEAF_PORT");
+        assert!(e.message.contains("`col`") && e.message.contains("string element"), "{}", e.message);
     }
 }

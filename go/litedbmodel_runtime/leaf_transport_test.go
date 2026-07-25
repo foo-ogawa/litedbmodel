@@ -6,6 +6,7 @@ package litedbmodel_runtime
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/foo-ogawa/litedbmodel/go/litedbmodel_runtime/wire"
@@ -19,6 +20,21 @@ func wireUsers(ids ...int64) []wire.WireValue {
 		items[i] = wire.WireRowOf([]wire.WireField{{Key: "id", Val: wire.WireInt(id)}})
 	}
 	return items
+}
+
+// leafPayload builds the generic-wire PAYLOAD a covered runner hands a leaf — the node's ports as
+// named fields, the SAME shape the generated module assembles.
+func leafPayload(ports ...wire.WireField) wire.WireRow { return wire.WireRowOfFields(ports) }
+
+// port is one payload field; wireStrings builds an {arr:'string'} port (a key-column tuple).
+func port(key string, val wire.WireValue) wire.WireField { return wire.WireField{Key: key, Val: val} }
+
+func wireStrings(names ...string) wire.WireValue {
+	items := make([]wire.WireValue, len(names))
+	for i, n := range names {
+		items[i] = wire.WireStr(n)
+	}
+	return wire.WireListOf(items)
 }
 
 func wirePosts(idAuthor ...[2]int64) []wire.WireValue {
@@ -41,7 +57,7 @@ func TestPluckKeysDedupesNonNull(t *testing.T) {
 		wire.WireRowOf([]wire.WireField{{Key: "id", Val: wire.WireInt(1)}}),
 		wire.WireRowOf([]wire.WireField{{Key: "id", Val: wire.WireNull()}}),
 	}
-	out, err := PluckKeys([]string{"id"}, rows)
+	out, err := PluckKeys(leafPayload(port("col", wireStrings("id")), port("rows", wire.WireListOf(rows))))
 	if err != nil {
 		t.Fatalf("PluckKeys: %v", err)
 	}
@@ -66,7 +82,7 @@ func TestPluckKeysCompositeEmitsTuples(t *testing.T) {
 		})
 	}
 	rows := []wire.WireValue{mk(1, 9), mk(1, 9), mk(1, 8)} // one dup tuple
-	out, err := PluckKeys([]string{"tenant_id", "user_id"}, rows)
+	out, err := PluckKeys(leafPayload(port("col", wireStrings("tenant_id", "user_id")), port("rows", wire.WireListOf(rows))))
 	if err != nil {
 		t.Fatalf("PluckKeys composite: %v", err)
 	}
@@ -82,7 +98,14 @@ func TestPluckKeysCompositeEmitsTuples(t *testing.T) {
 func TestGroupChildrenDistributesPerParent(t *testing.T) {
 	parents := wireUsers(1, 2, 3)
 	children := wirePosts([2]int64{10, 1}, [2]int64{11, 1}, [2]int64{12, 2})
-	out, err := GroupChildren(children, []string{"author_id"}, "posts", parents, []string{"id"}, false)
+	out, err := GroupChildren(leafPayload(
+		port("children", wire.WireListOf(children)),
+		port("fk", wireStrings("author_id")),
+		port("into", wire.WireStr("posts")),
+		port("parents", wire.WireListOf(parents)),
+		port("pk", wireStrings("id")),
+		port("single", wire.WireBool(false)),
+	))
 	if err != nil {
 		t.Fatalf("GroupChildren: %v", err)
 	}
@@ -107,6 +130,93 @@ func TestGroupChildrenDistributesPerParent(t *testing.T) {
 	}
 	if got := postsLen(2); got != 0 {
 		t.Fatalf("parent id=3 expected 0 posts, got %d", got)
+	}
+}
+
+// The payload materialization is LOSSLESS. The BC-owned go wire types keep their backing slices
+// unexported, so a list port is rebuilt cell-by-cell at the transport edge; this pins that every
+// variant survives that rebuild EXACTLY — a number keeps its RAW text (no parse/format round-trip), a
+// bool / string / null keeps its variant, an already-nested child list (a grouped level feeding the
+// next one) survives whole, and the row's key ORDER is preserved.
+func TestPayloadMaterializationIsLossless(t *testing.T) {
+	parent := wire.WireRowOf([]wire.WireField{
+		{Key: "id", Val: wire.WireInt(1)},
+		{Key: "score", Val: wire.WireNum("1.500")}, // raw numeric text, NOT a normalized 1.5
+		{Key: "active", Val: wire.WireBool(true)},
+		{Key: "name", Val: wire.WireStr("A")},
+		{Key: "deleted_at", Val: wire.WireNull()},
+		{Key: "comments", Val: wire.WireListOf([]wire.WireValue{
+			wire.WireRowOf([]wire.WireField{{Key: "body", Val: wire.WireStr("c1")}}),
+		})},
+	})
+	out, err := GroupChildren(leafPayload(
+		port("children", wire.WireListOf(wirePosts([2]int64{10, 1}))),
+		port("fk", wireStrings("author_id")),
+		port("into", wire.WireStr("posts")),
+		port("parents", wire.WireListOf([]wire.WireValue{parent})),
+		port("pk", wireStrings("id")),
+		port("single", wire.WireBool(false)),
+	))
+	if err != nil {
+		t.Fatalf("GroupChildren: %v", err)
+	}
+	rp := out.AsList().Got.ElemRow(0)
+	if rp.Kind != wireProbeGot {
+		t.Fatalf("parent 0 is not a row (kind=%d)", rp.Kind)
+	}
+	row := rp.Got
+	if p := row.ProbeNumber("score"); p.Kind != wireProbeGot || p.Got != "1.500" {
+		t.Fatalf("raw numeric text not preserved: %+v", p)
+	}
+	if p := row.ProbeBool("active"); p.Kind != wireProbeGot || !p.Got {
+		t.Fatalf("bool cell not preserved: %+v", p)
+	}
+	if p := row.ProbeString("name"); p.Kind != wireProbeGot || p.Got != "A" {
+		t.Fatalf("string cell not preserved: %+v", p)
+	}
+	if p := row.ProbeString("deleted_at"); p.Kind != wireProbeNull {
+		t.Fatalf("null cell not preserved: %+v", p)
+	}
+	cs := row.ProbeList("comments")
+	if cs.Kind != wireProbeGot || cs.Got.Len() != 1 {
+		t.Fatalf("pre-nested child list not preserved: %+v", cs)
+	}
+	if b := cs.Got.ElemRow(0).Got.ProbeString("body"); b.Kind != wireProbeGot || b.Got != "c1" {
+		t.Fatalf("nested child row not preserved: %+v", b)
+	}
+	if p := row.ProbeList("posts"); p.Kind != wireProbeGot || p.Got.Len() != 1 {
+		t.Fatalf("grouped children missing: %+v", p)
+	}
+	want := []string{"id", "score", "active", "name", "deleted_at", "comments", "posts"}
+	got := row.Keys()
+	if len(got) != len(want) {
+		t.Fatalf("column order/count changed: %v", got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("column order changed: %v, want %v", got, want)
+		}
+	}
+}
+
+// Port unbox is FAIL-CLOSED: an ABSENT port and a WRONG-VARIANT port both surface a loud error (never a
+// silent default) — a port that is missing or mistyped is an ABI break, and a default would corrupt the
+// result instead of stopping it.
+func TestPortUnboxIsFailClosed(t *testing.T) {
+	_, err := PluckKeys(leafPayload(port("col", wireStrings("id"))))
+	if err == nil || !strings.Contains(err.Error(), `"rows"`) || !strings.Contains(err.Error(), "absent") {
+		t.Fatalf("absent port must fail loudly, got %v", err)
+	}
+	_, err = PluckKeys(leafPayload(port("col", wireStrings("id")), port("rows", wire.WireInt(7))))
+	if err == nil || !strings.Contains(err.Error(), `"rows"`) || !strings.Contains(err.Error(), "got N") {
+		t.Fatalf("wrong-variant port must name the actual wire tag, got %v", err)
+	}
+	_, err = PluckKeys(leafPayload(
+		port("col", wire.WireListOf([]wire.WireValue{wire.WireInt(1)})),
+		port("rows", wire.WireListOf(nil)),
+	))
+	if err == nil || !strings.Contains(err.Error(), `"col"`) || !strings.Contains(err.Error(), "string element") {
+		t.Fatalf("a key-column tuple element must be a column name, got %v", err)
 	}
 }
 

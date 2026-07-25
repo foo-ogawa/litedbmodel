@@ -2,7 +2,7 @@
 //
 // A litedbmodel-CONSUMER: it opens sqlite, seeds the canonical fixture (generated_setup STATEMENTS +
 // SEED, both from the orm-domain SSoT), BINDS the op-agnostic leaf transport to that connection, and
-// drives the bc-GENERATED covered readers (behaviors.RunNativeRawStruct_<op>) directly. Every SQL node
+// drives the bc-GENERATED covered readers (behaviors.<Method>(<params>)) directly. Every SQL node
 // funnels through litedbmodel_runtime.ExecuteSQL; PluckKeys/GroupChildren shape relations over the
 // shared grouping CORE. The consumer holds NO SQL, NO hand-written exec seam, NO node handlers.
 //
@@ -60,23 +60,23 @@ func openSeeded() (*sql.DB, error) {
 // (the json_each/JSON_TABLE batch param). `stable` reuses fixed emails (upsertMany — conflict-updates);
 // else the email varies by iteration so a plain INSERT stays insertable under the UNIQUE(email)
 // constraint. Mirrors the rust `user_rows` / python `_user_rows` batch shape.
-func userRows(it int, stable bool) []behaviors.T4 {
-	rows := make([]behaviors.T4, 10)
+func userRows(it int, stable bool) []behaviors.NewUser {
+	rows := make([]behaviors.NewUser, 10)
 	for i := 0; i < 10; i++ {
 		email := fmt.Sprintf("many%d_%d@bench.com", it, i)
 		if stable {
 			email = fmt.Sprintf("many%d@bench.com", i)
 		}
-		rows[i] = behaviors.T4{Email: email, Name: fmt.Sprintf("Many %d", i)}
+		rows[i] = behaviors.NewUser{Email: email, Name: fmt.Sprintf("Many %d", i)}
 	}
 	return rows
 }
 
 // updateManyRows builds the id-keyed 10-row batch set for updateMany (updates the seeded users 1..10).
-func updateManyRows() []behaviors.T5 {
-	rows := make([]behaviors.T5, 10)
+func updateManyRows() []behaviors.UserPatch {
+	rows := make([]behaviors.UserPatch, 10)
 	for i := 1; i <= 10; i++ {
-		rows[i-1] = behaviors.T5{Id: int64(i), Name: fmt.Sprintf("Many %d", i)}
+		rows[i-1] = behaviors.UserPatch{Id: int64(i), Name: fmt.Sprintf("Many %d", i)}
 	}
 	return rows
 }
@@ -89,78 +89,78 @@ func updateManyRows() []behaviors.T5 {
 func op(db *sql.DB, name string, it int) (int, error) {
 	switch name {
 	case "findAll":
-		r, err := behaviors.RunNativeRawStruct_findAll(behaviors.In_findAll{})
+		r, err := behaviors.FindAll()
 		return len(r), err
 	case "filterPaginateSort":
-		r, err := behaviors.RunNativeRawStruct_filterPaginateSort(behaviors.In_filterPaginateSort{Published: 1})
+		r, err := behaviors.FilterPaginateSort(1)
 		return len(r), err
 	case "findFirst":
-		r, err := behaviors.RunNativeRawStruct_findFirst(behaviors.In_findFirst{Name: "User%"})
+		r, err := behaviors.FindFirst("User%")
 		return len(r), err
 	case "findUnique":
-		r, err := behaviors.RunNativeRawStruct_findUnique(behaviors.In_findUnique{Email: "user500@example.com"})
+		r, err := behaviors.FindUnique("user500@example.com")
 		return len(r), err
 	case "nestedFindAll":
-		r, err := behaviors.RunNativeRawStruct_nestedFindAll(behaviors.In_nestedFindAll{})
+		r, err := behaviors.NestedFindAll()
 		return len(r), err
 	case "nestedFindFirst":
-		r, err := behaviors.RunNativeRawStruct_nestedFindFirst(behaviors.In_nestedFindFirst{Name: "User%"})
+		r, err := behaviors.NestedFindFirst("User%")
 		return len(r), err
 	case "nestedFindUnique":
-		r, err := behaviors.RunNativeRawStruct_nestedFindUnique(behaviors.In_nestedFindUnique{Email: "user1@example.com"})
+		r, err := behaviors.NestedFindUnique("user1@example.com")
 		return len(r), err
 	case "nestedRelations":
-		r, err := behaviors.RunNativeRawStruct_nestedRelations(behaviors.In_nestedRelations{})
+		r, err := behaviors.NestedRelations()
 		return len(r), err
 	case "compositeRelations":
-		r, err := behaviors.RunNativeRawStruct_compositeRelations(behaviors.In_compositeRelations{})
+		r, err := behaviors.CompositeRelations()
 		return len(r), err
 	case "create":
-		r, err := behaviors.RunNativeRawStruct_create(behaviors.In_create{Email: fmt.Sprintf("new%d@bench.com", it), Name: "New"})
+		r, err := behaviors.Create(fmt.Sprintf("new%d@bench.com", it), "New")
 		return len(r), err
 	case "update":
-		r, err := behaviors.RunNativeRawStruct_update(behaviors.In_update{Id: 1, Name: "Updated 1"})
+		r, err := behaviors.Update(1, "Updated 1")
 		return len(r), err
 	case "upsert":
-		r, err := behaviors.RunNativeRawStruct_upsert(behaviors.In_upsert{Email: "user1@example.com", Name: "Upserted One"})
+		r, err := behaviors.Upsert("user1@example.com", "Upserted One")
 		return len(r), err
 	case "createMany":
 		// 10 fresh rows — email is UNIQUE NOT NULL, so vary per iteration to stay insertable.
-		r, err := behaviors.RunNativeRawStruct_createMany(behaviors.In_createMany{Rows: userRows(it, false)})
+		r, err := behaviors.CreateMany(userRows(it, false))
 		return len(r), err
 	case "upsertMany":
 		// 10 rows keyed on email (ON CONFLICT DO UPDATE) — idempotent across iterations.
-		r, err := behaviors.RunNativeRawStruct_upsertMany(behaviors.In_upsertMany{Rows: userRows(it, true)})
+		r, err := behaviors.UpsertMany(userRows(it, true))
 		return len(r), err
 	case "updateMany":
 		// 10 rows keyed on id (1..10) — updates the seeded users.
-		r, err := behaviors.RunNativeRawStruct_updateMany(behaviors.In_updateMany{Rows: updateManyRows()})
+		r, err := behaviors.UpdateMany(updateManyRows())
 		return len(r), err
 	case "nestedCreate":
 		// Fresh user per iteration (email is UNIQUE) → INSERT user RETURNING id → INSERT post (author_id).
 		err := rt.WithAmbientTransaction(db, func() error {
-			_, e := behaviors.RunNativeRawStruct_nestedCreate(behaviors.In_nestedCreate{Email: fmt.Sprintf("nc%d@bench.com", it), Name: "NC", Title: "NC Post"})
+			_, e := behaviors.NestedCreate(fmt.Sprintf("nc%d@bench.com", it), "NC", "NC Post")
 			return e
 		})
 		return 0, err
 	case "nestedUpsert":
 		// Existing email (ON CONFLICT DO UPDATE) → INSERT post keyed on the upserted user's id.
 		err := rt.WithAmbientTransaction(db, func() error {
-			_, e := behaviors.RunNativeRawStruct_nestedUpsert(behaviors.In_nestedUpsert{Email: "user1@example.com", Name: "NUp", Title: "NUp Post"})
+			_, e := behaviors.NestedUpsert("user1@example.com", "NUp", "NUp Post")
 			return e
 		})
 		return 0, err
 	case "nestedUpdate":
 		// UPDATE seeded user 1 RETURNING id → UPDATE that user's posts.
 		err := rt.WithAmbientTransaction(db, func() error {
-			_, e := behaviors.RunNativeRawStruct_nestedUpdate(behaviors.In_nestedUpdate{Id: 1, Name: "NU", Title: "NU Post"})
+			_, e := behaviors.NestedUpdate(1, "NU", "NU Post")
 			return e
 		})
 		return 0, err
 	case "delete":
 		// Create-then-delete: INSERT a fresh user RETURNING id → DELETE the exact created row by id.
 		err := rt.WithAmbientTransaction(db, func() error {
-			_, e := behaviors.RunNativeRawStruct_delete(behaviors.In_delete{Email: fmt.Sprintf("del%d@bench.com", it), Name: "Del"})
+			_, e := behaviors.Delete(fmt.Sprintf("del%d@bench.com", it), "Del")
 			return e
 		})
 		return 0, err

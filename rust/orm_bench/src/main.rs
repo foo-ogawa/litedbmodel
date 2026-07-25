@@ -2,8 +2,8 @@
 //! ops through the litedbmodel-GENERATED post-#164 wire-passthrough modules + `litedbmodel_runtime`'s
 //! op-agnostic leaves, and print a flat CSV (`cell,dialect,op,iter,us`) the TS collector aggregates.
 //!
-//! This binary is a litedbmodel-CONSUMER: for each op it builds the CONCRETE `InNR_<comp>` input and
-//! calls the sole GENERATED public entry `run_native_raw_struct_<comp>(in_)`. It supplies NO `node_*`
+//! This binary is a litedbmodel-CONSUMER: for each op it calls the sole GENERATED public entry
+//! `<method>(<positional params>)` with native arguments (no input box). It supplies NO `node_*`
 //! and holds NO hand-written exec seam — the covered runner calls the op-agnostic leaf transports
 //! (`execute_sql`/`pluck_keys`/`group_children`) in `litedbmodel_runtime`, which run every DB access
 //! through the runtime's central execute/run seam over the AMBIENT driver the consumer brackets each op
@@ -111,62 +111,54 @@ fn seed(d: &dyn Driver, setup: &Setup) {
 fn run_op(d: &dyn Driver, op: &str, it: u64) {
     match op {
         "findAll" => {
-            bg::run_native_raw_struct_findAll(bg::InNRFindAll).unwrap();
+            bg::findAll().unwrap();
         }
         "filterPaginateSort" => {
-            // `published` is INTEGER (native port `int`); the generated input struct field is `i64`.
-            bg::run_native_raw_struct_filterPaginateSort(bg::InNRFilterPaginateSort { published: 1 }).unwrap();
+            // `published` is INTEGER (native port `int`); the generated parameter is `i64`.
+            bg::filterPaginateSort(1).unwrap();
         }
         "findFirst" => {
-            bg::run_native_raw_struct_findFirst(bg::InNRFindFirst { name: "User%".to_string() }).unwrap();
+            bg::findFirst("User%".to_string()).unwrap();
         }
         "findUnique" => {
-            bg::run_native_raw_struct_findUnique(bg::InNRFindUnique { email: "user1@example.com".to_string() }).unwrap();
+            bg::findUnique("user1@example.com".to_string()).unwrap();
         }
         "nestedFindAll" => {
-            bg::run_native_raw_struct_nestedFindAll(bg::InNRNestedFindAll).unwrap();
+            bg::nestedFindAll().unwrap();
         }
         "nestedFindFirst" => {
-            bg::run_native_raw_struct_nestedFindFirst(bg::InNRNestedFindFirst { name: "User%".to_string() }).unwrap();
+            bg::nestedFindFirst("User%".to_string()).unwrap();
         }
         "nestedFindUnique" => {
-            bg::run_native_raw_struct_nestedFindUnique(bg::InNRNestedFindUnique { email: "user1@example.com".to_string() }).unwrap();
+            bg::nestedFindUnique("user1@example.com".to_string()).unwrap();
         }
         "nestedRelations" => {
-            bg::run_native_raw_struct_nestedRelations(bg::InNRNestedRelations).unwrap();
+            bg::nestedRelations().unwrap();
         }
         "compositeRelations" => {
-            bg::run_native_raw_struct_compositeRelations(bg::InNRCompositeRelations).unwrap();
+            bg::compositeRelations().unwrap();
         }
         "create" => {
-            bg::run_native_raw_struct_create(bg::InNRCreate {
-                email: format!("new{it}@bench.com"),
-                name: "New".to_string(),
-            })
-            .unwrap();
+            bg::create(format!("new{it}@bench.com"), "New".to_string()).unwrap();
         }
         "update" => {
-            bg::run_native_raw_struct_update(bg::InNRUpdate { id: 1, name: "Updated 1".to_string() }).unwrap();
+            bg::update(1, "Updated 1".to_string()).unwrap();
         }
         "upsert" => {
-            bg::run_native_raw_struct_upsert(bg::InNRUpsert {
-                email: "user1@example.com".to_string(),
-                name: "Upserted One".to_string(),
-            })
-            .unwrap();
+            bg::upsert("user1@example.com".to_string(), "Upserted One".to_string()).unwrap();
         }
         "createMany" => {
             // 10 fresh rows — email is UNIQUE NOT NULL, so vary per iteration to stay insertable.
-            bg::run_native_raw_struct_createMany(bg::InNRCreateMany { rows: user_rows(it, false) }).unwrap();
+            bg::createMany(user_rows(it, false)).unwrap();
         }
         "upsertMany" => {
             // 10 rows keyed on email (ON CONFLICT DO UPDATE) — idempotent across iterations.
-            bg::run_native_raw_struct_upsertMany(bg::InNRUpsertMany { rows: user_rows(it, true) }).unwrap();
+            bg::upsertMany(user_rows(it, true)).unwrap();
         }
         "updateMany" => {
             // 10 rows keyed on id (1..=10) — updates the seeded users, no-op for absent ids.
-            let rows: Vec<bg::T5> = (1..=10).map(|id| bg::T5 { id, name: format!("Many {id}") }).collect();
-            bg::run_native_raw_struct_updateMany(bg::InNRUpdateMany { rows }).unwrap();
+            let rows: Vec<bg::UserPatch> = (1..=10).map(|id| bg::UserPatch { id, name: format!("Many {id}") }).collect();
+            bg::updateMany(rows).unwrap();
         }
         // ── RETURNING-chained transactions (#142): each runs THROUGH the runtime tx scope. The runner
         //    executes its 2 body statements via `execute_sql`; `with_ambient_transaction` brackets them
@@ -175,59 +167,38 @@ fn run_op(d: &dyn Driver, op: &str, it: u64) {
             // Fresh user per iteration (email is UNIQUE), then INSERT its post — INSERT user RETURNING id
             // → INSERT post (author_id = that id).
             with_ambient_transaction(d, || {
-                bg::run_native_raw_struct_nestedCreate(bg::InNRNestedCreate {
-                    email: format!("nc{it}@bench.com"),
-                    name: "NC".to_string(),
-                    title: "NC Post".to_string(),
-                })
+                bg::nestedCreate(format!("nc{it}@bench.com"), "NC".to_string(), "NC Post".to_string())
             })
             .unwrap();
         }
         "nestedUpsert" => {
             // Existing email (ON CONFLICT DO UPDATE) → INSERT post keyed on the upserted user's id.
             with_ambient_transaction(d, || {
-                bg::run_native_raw_struct_nestedUpsert(bg::InNRNestedUpsert {
-                    email: "user1@example.com".to_string(),
-                    name: "NUp".to_string(),
-                    title: "NUp Post".to_string(),
-                })
+                bg::nestedUpsert("user1@example.com".to_string(), "NUp".to_string(), "NUp Post".to_string())
             })
             .unwrap();
         }
         "nestedUpdate" => {
             // UPDATE seeded user 1 RETURNING id → UPDATE that user's posts (author_id = 1 exists in seed).
-            with_ambient_transaction(d, || {
-                bg::run_native_raw_struct_nestedUpdate(bg::InNRNestedUpdate {
-                    id: 1,
-                    name: "NU".to_string(),
-                    title: "NU Post".to_string(),
-                })
-            })
-            .unwrap();
+            with_ambient_transaction(d, || bg::nestedUpdate(1, "NU".to_string(), "NU Post".to_string())).unwrap();
         }
         "delete" => {
             // Create-then-delete: INSERT a fresh user RETURNING id → DELETE the exact created row
             // (its RETURNING id + inserted email). Fresh email per iteration (UNIQUE).
-            with_ambient_transaction(d, || {
-                bg::run_native_raw_struct_delete(bg::InNRDelete {
-                    email: format!("del{it}@bench.com"),
-                    name: "Del".to_string(),
-                })
-            })
-            .unwrap();
+            with_ambient_transaction(d, || bg::delete(format!("del{it}@bench.com"), "Del".to_string())).unwrap();
         }
         other => panic!("unknown op '{other}'"),
     }
 }
 
-// Build the 10-row batch record set for createMany/upsertMany as a NATIVE `Vec<T4>` (bc boxes it to the
-// json_each/JSON_TABLE batch param at the leaf boundary). `stable` reuses fixed emails (upsertMany —
+// Build the 10-row batch record set for createMany/upsertMany as a NATIVE `Vec<NewUser>` (bc boxes it to
+// the json_each/JSON_TABLE batch param at the leaf boundary). `stable` reuses fixed emails (upsertMany —
 // conflict-updates); else the email varies by iteration so a plain INSERT stays insertable under UNIQUE.
-fn user_rows(it: u64, stable: bool) -> Vec<bg::T4> {
+fn user_rows(it: u64, stable: bool) -> Vec<bg::NewUser> {
     (0..10)
         .map(|i| {
             let email = if stable { format!("many{i}@bench.com") } else { format!("many{it}_{i}@bench.com") };
-            bg::T4 { email, name: format!("Many {i}") }
+            bg::NewUser { email, name: format!("Many {i}") }
         })
         .collect()
 }

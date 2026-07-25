@@ -32,15 +32,26 @@ func openBoundT(t *testing.T) *sql.DB {
 	return db
 }
 
+// sqlPayload builds the executeSQL node payload (the ports the covered runner assembles by name).
+func sqlPayload(params []wire.WireValue, sql string, write bool) wire.WireRow {
+	return leafPayload(
+		port("bigint", wire.WireBool(false)),
+		port("params", wire.WireListOf(params)),
+		port("returning", wire.WireBool(false)),
+		port("sql", wire.WireStr(sql)),
+		port("write", wire.WireBool(write)),
+	)
+}
+
 // insT issues one INSERT through ExecuteSQL (the covered write path). Returns the leaf result wire.
 func insT(id int64, v string) (wire.WireValue, error) {
-	return ExecuteSQL(false, []wire.WireValue{wire.WireInt(id), wire.WireStr(v)}, false, "INSERT INTO t (id, v) VALUES (?, ?)", true)
+	return ExecuteSQL(sqlPayload([]wire.WireValue{wire.WireInt(id), wire.WireStr(v)}, "INSERT INTO t (id, v) VALUES (?, ?)", true))
 }
 
 // countT reads COUNT(*) via ExecuteSQL (the covered read path) and returns the single numeric cell.
 func countT(t *testing.T) string {
 	t.Helper()
-	out, err := ExecuteSQL(false, nil, false, "SELECT COUNT(*) AS c FROM t", false)
+	out, err := ExecuteSQL(sqlPayload(nil, "SELECT COUNT(*) AS c FROM t", false))
 	if err != nil {
 		t.Fatalf("count: %v", err)
 	}
