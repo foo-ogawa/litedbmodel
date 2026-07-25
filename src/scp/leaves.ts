@@ -150,12 +150,32 @@ function toBcInt(v: number | bigint): bigint {
  * batch record list bound as ONE param — `= ANY(?)` / `json_each(?)` / `JSON_TABLE(?)`) binds as the
  * raw array on PostgreSQL and as a single JSON string on MySQL/SQLite (the `makesql` locked model).
  *
+ * A TUPLE SET (an array whose elements are themselves arrays — the composite relation key set the
+ * `pluck` leaf yields) binds as the single JSON array-of-tuples string on EVERY dialect, PostgreSQL
+ * included: each dialect's composite batch expands that ONE param server-side
+ * (`json_array_elements` / `JSON_TABLE` / `json_each`), which is what lets a composite relation ride
+ * the same three-leaf transport as everything else instead of needing a per-column transpose (#159).
+ *
  * The JSON encoding is the SHARED one ({@link encodeJsonArrayParam}) — the same encoder the imperative
  * `inListJson` path uses, so the generated and imperative paths cannot drift on bigint / boolean
  * element handling.
  */
 function encodeParams(params: readonly unknown[], dialect: Dialect): unknown[] {
-  return params.map((p) => (Array.isArray(p) ? (dialect === 'postgres' ? p : encodeJsonArrayParam(dialect, p)) : p));
+  return params.map((p) => {
+    if (!Array.isArray(p)) return p;
+    if (dialect === 'postgres' && !isTupleSet(p)) return p;
+    return encodeJsonArrayParam(dialect, p);
+  });
+}
+
+/**
+ * A composite key set: a bound array whose elements are the key TUPLES (arrays). Total under the
+ * library's type system — every OTHER array param is a list of SCALAR cells (a single-key set, an
+ * IN-list, a batch write's per-column array), because every non-scalar column class (json / uuid /
+ * decimal) de-boxes to a bc STRING ({@link import('./coltype').keyArrayElemScalar}), never a JS array.
+ */
+function isTupleSet(param: readonly unknown[]): boolean {
+  return param.length > 0 && Array.isArray(param[0]);
 }
 
 /** Prepare a statement for the seam: resolve deferred PG cast(s), render `?`→`$N`, encode params. */

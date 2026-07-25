@@ -123,9 +123,11 @@ export function tupleInPredicate(dialect: Dialect, table: string, columns: reado
 }
 
 /**
- * Encode an array as the ONE JSON param the MySQL/SQLite server-side forms expand — the SINGLE array
- * encoder, shared by {@link inListJson} (the imperative path) and the leaf transport's `encodeParams`
- * (the generated path), so the two can never diverge:
+ * Encode an array as the ONE JSON param a server-side form expands — the SINGLE array encoder, shared
+ * by {@link inListJson} (the imperative path) and the leaf transport's `encodeParams` (the generated
+ * path), so the two can never diverge. MySQL/SQLite bind every array this way; PostgreSQL binds its
+ * scalar arrays natively and only its composite key TUPLE sets here ({@link tupleInPredicate} /
+ * the composite relation batch):
  *
  *  - a bc `int` arrives as a `BigInt`, which `JSON.stringify` cannot emit → coerced to a JSON number
  *    (`json_each` / `JSON_TABLE` compare numerically);
@@ -134,7 +136,7 @@ export function tupleInPredicate(dialect: Dialect, table: string, columns: reado
  *    mismatching. `1`/`0` is exactly what v1's `col IN (?)` bound (mysql2 sends a JS bool as `1`/`0`).
  *    SQLite's `json_each` coerces JSON booleans natively, so it keeps them as-is.
  */
-export function encodeJsonArrayParam(dialect: JsonArrayDialect, values: readonly unknown[]): string {
+export function encodeJsonArrayParam(dialect: Dialect, values: readonly unknown[]): string {
   return JSON.stringify(values, (_key, v: unknown) => {
     if (typeof v === 'bigint') return Number(v);
     if (dialect === 'mysql' && typeof v === 'boolean') return v ? 1 : 0;

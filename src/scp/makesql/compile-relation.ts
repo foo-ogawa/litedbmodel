@@ -15,6 +15,12 @@
  *     MySQL/SQLite `SELECT … FROM t WHERE (k1, k2) IN ((?, ?), …)`
  *   composite-key, per-parent limit: PG LATERAL composite / others ROW_NUMBER composite.
  *
+ * The STATIC composite forms ({@link compileCompositeKeyStaticUnlimited} /
+ * {@link compileCompositeKeyStaticLimited}) deviate from those v1 texts on EVERY dialect: they bind
+ * the key set as ONE array-of-tuples param (RESULT parity, not byte-identity) so a composite batch
+ * rides the same three-leaf transport as everything else. The v1 texts stay proven by the
+ * value-expanding builders below.
+ *
  * The PG type text (`?::type[]`) comes from the ORIGINAL `inferPgArrayType` (sqlCast
  * wins, else element-type inference). The .rs regressions are NOT reproduced: PG
  * per-parent-limit is LATERAL (not ROW_NUMBER), and PG types are sqlCast-driven (not
@@ -31,22 +37,32 @@ import { compileSelect } from './compile-select';
 import type { Dialect } from './handler';
 
 /**
+ * The PG ELEMENT type of a value set — the ONE type inference every PG cast in this module is built
+ * on ({@link inferPgArrayType} appends `[]`; the composite key-row expansion casts each key column
+ * with it). Reproduces the ORIGINAL `LazyRelation.inferPgArrayType`'s element decision (the PG
+ * anchor — NOT the .rs coarse text-folding).
+ */
+export function inferPgElementType(values: unknown[]): string {
+  if (values.length === 0) return 'text';
+  const sample = values[0];
+  if (typeof sample === 'number') {
+    if (values.every((v) => Number.isInteger(v))) return 'int';
+    return 'numeric';
+  }
+  if (typeof sample === 'bigint') return 'bigint';
+  if (typeof sample === 'boolean') return 'boolean';
+  if (sample instanceof Date) return 'timestamp';
+  return 'text';
+}
+
+/**
  * Reproduce the ORIGINAL `LazyRelation.inferPgArrayType`: sqlCast wins (`<cast>[]`);
  * otherwise infer the element type from the sample values. Byte-identical to the
  * original (which is the PG anchor — NOT the .rs coarse text-folding).
  */
 export function inferPgArrayType(values: unknown[], sqlCast?: string): string {
   if (sqlCast) return `${sqlCast}[]`;
-  if (values.length === 0) return 'text[]';
-  const sample = values[0];
-  if (typeof sample === 'number') {
-    if (values.every((v) => Number.isInteger(v))) return 'int[]';
-    return 'numeric[]';
-  }
-  if (typeof sample === 'bigint') return 'bigint[]';
-  if (typeof sample === 'boolean') return 'boolean[]';
-  if (sample instanceof Date) return 'timestamp[]';
-  return 'text[]';
+  return `${inferPgElementType(values)}[]`;
 }
 
 /**
@@ -106,49 +122,92 @@ function pgArrayCastType(values: unknown[], sqlCast?: string, defer?: boolean): 
   return inferPgArrayType(values);
 }
 
+/** The alias the PG composite key rows carry (`_keys.key0`, `_keys.key1`, … — one per key column). */
+const PG_KEYS_ALIAS = '_keys';
+
+/**
+ * The compile-time stand-in for the ONE array-of-tuples key param: the STATIC composite text is
+ * value-length-independent, so a single one-cell tuple fixes the param ARITY (1) and nothing else.
+ * The real deduped key tuples are bound at execute time against the same text.
+ */
+const PLACEHOLDER_TUPLES: unknown[][] = [[null]];
+
+/** The STATIC composite-key builders' options: {@link RelationCompileBase} + the PG key-column types. */
+export interface CompositeStaticBase extends RelationCompileBase {
+  /**
+   * PostgreSQL only: the PG ELEMENT type of each key column, positional with `targetKeys`, derived
+   * from the model's DECLARED column type (the schema SoT — never from the values, which are unknown
+   * at compile and empty at call time often enough to matter; the SAME rule the composite `tupleIn`
+   * predicate follows, `json-array.ts` `pgElementTypes`). The key rows carry these types so the JOIN
+   * compares `int = int` / `bigint = bigint` against the child key columns instead of `… = text`.
+   */
+  readonly pgKeyTypes?: readonly string[];
+}
+
+/**
+ * The PG composite key-set DERIVED TABLE: the ONE JSON array-of-tuples param (exactly what the
+ * `pluck` leaf yields, and exactly what MySQL/SQLite already bind) expanded SERVER-side into one
+ * typed row per key tuple — `key0 … keyN-1`, in `targetKeys` order.
+ *
+ * ONE `?`, fixed text, no per-column params: that is what lets a COMPOSITE relation ride the same
+ * three-leaf transport as every other statement (`pluck` → `executeSQL` → `group`) — the per-column
+ * `unnest(?::t1[], ?::t2[])` form needed a key-tuple TRANSPOSE that no composition of the three
+ * leaves can express (#159). `->>` yields text and the declared per-column cast normalizes it, so a
+ * key bound as a JSON number and one bound as a JSON string (a BIGINT read arrives as a string) both
+ * compare equal to the child column.
+ *
+ * The SINGLE spelling of the expansion — both static composite forms (unlimited JOIN + per-parent
+ * LATERAL) consume it, so their key rows cannot drift apart.
+ */
+function pgCompositeKeyRows(opts: { tableName: string; targetKeys: readonly string[]; pgKeyTypes?: readonly string[] }): string {
+  const cols = opts.targetKeys.map((key, i) => {
+    const type = opts.pgKeyTypes?.[i];
+    if (type === undefined || type === '') {
+      throw new Error(
+        `relation batch on postgres: the composite key column '${opts.tableName}.${key}' has no declared type — ` +
+          `the key rows must be cast to the child column's type (pass the model's ColumnTypeResolver to compileRelationOp)`,
+      );
+    }
+    return `(_t->>${i})::${type} AS key${i}`;
+  });
+  return `(SELECT ${cols.join(', ')} FROM json_array_elements(?::json) AS _t) AS ${PG_KEYS_ALIAS}`;
+}
+
 /**
  * The STATIC composite-key batch forms (#47 item 1) — length-INDEPENDENT so the compiled `op.sql`
- * is fixed (one param per column on PG; ONE JSON param on MySQL/SQLite), the SAME static-op
- * property the single-key relation forms have. PG stays byte-identical to v1's `unnest`-JOIN
- * (`batchLoadWithUnnestJoin`), with the element-type cast DEFERRED (#46) to render from the real
- * keys. MySQL/SQLite use the single-JSON tuple form (the owner-approved deviation the single-key
- * IN-list and the batch UPDATE composite already use — RESULT parity, NOT byte-identity): a
- * `JSON_TABLE`/`json_each` subquery over one JSON array-of-tuples param. The v1 literal
- * `(k1,k2) IN ((?,?),…)` byte-form stays proven by the golden `compileCompositeKeyUnlimited`.
+ * is fixed (ONE JSON array-of-tuples param on EVERY dialect), the SAME static-op property the
+ * single-key relation forms have. Every dialect now consumes the SAME single key param the relation
+ * key set is produced as (`pluck` — one array of key TUPLES): MySQL/SQLite expand it with
+ * `JSON_TABLE`/`json_each`, PostgreSQL with {@link pgCompositeKeyRows} (#159). This is the
+ * owner-approved deviation the single-key IN-list and the batch UPDATE composite already use —
+ * RESULT parity, NOT byte-identity with v1; the v1 literal `(k1,k2) IN ((?,?),…)` /
+ * `unnest(?::t1[], ?::t2[])` byte-forms stay proven by the goldens
+ * {@link compileCompositeKeyUnlimited} / {@link compileCompositeKeyLimited}.
  *
  * The JSON tuple param is `[[k1a,k2a],[k1b,k2b],…]` (positional element arrays), read back by
  * ordinal path (`$[0]`, `$[1]`, …) so no per-column JSON key names are needed.
  */
 export function compileCompositeKeyStaticUnlimited(
-  opts: RelationCompileBase & { targetKeys: string[] },
+  opts: CompositeStaticBase & { targetKeys: string[] },
 ): MakeSQL {
   const { tableName, targetKeys } = opts;
   if (opts.dialect === 'postgres') {
-    // PG unnest-JOIN — ONE array param per key column (length-independent). Deferred cast (#46):
-    // the element type is resolved at render from the real per-column key arrays.
-    const unnestParams = targetKeys
-      .map((k) => `?::${pgArrayCastType([], opts.sqlCastMap?.get(k), opts.deferPgArrayCast)}`)
-      .join(', ');
-    const unnestAlias = `_unnest_${tableName}`;
-    const columnAliases = targetKeys.map((k) => `_unnest_${tableName}_${k}`).join(', ');
-    const joinConditions = targetKeys
-      .map((key) => `${tableName}.${key} = ${unnestAlias}._unnest_${tableName}_${key}`)
-      .join(' AND ');
-    const joinClause = `JOIN unnest(${unnestParams}) AS ${unnestAlias}(${columnAliases}) ON ${joinConditions}`;
-    // One placeholder array PER column fixes the arity of the JOIN params (each binds one array).
+    // PG: JOIN the child table to the typed key rows the ONE JSON tuple param expands to.
+    const joinConditions = targetKeys.map((key, i) => `${tableName}.${key} = ${PG_KEYS_ALIAS}.key${i}`).join(' AND ');
+    const joinClause = `JOIN ${pgCompositeKeyRows(opts)} ON ${joinConditions}`;
     return compileSelect({
       dialect: opts.dialect,
       tableName,
       select: opts.select,
       join: joinClause,
-      joinParams: targetKeys.map(() => [null]),
+      joinParams: [PLACEHOLDER_TUPLES],
       conditions: opts.conditions,
       order: opts.order,
     });
   }
   // MySQL/SQLite: composite membership via ONE JSON array-of-tuples param, read by ORDINAL path.
   const jsonSubquery = compositeJsonMembership(opts.dialect, tableName, targetKeys);
-  const conditions: ConditionObject = { ...opts.conditions, __raw__: [jsonSubquery, [[null]]] };
+  const conditions: ConditionObject = { ...opts.conditions, __raw__: [jsonSubquery, PLACEHOLDER_TUPLES] };
   return compileSelect({
     dialect: opts.dialect,
     tableName,
@@ -381,38 +440,34 @@ export function compileCompositeKeyLimited(
 /**
  * The STATIC composite-key per-parent-LIMIT batch form (#47 last completeness gap) — the
  * length-INDEPENDENT sibling of {@link compileCompositeKeyLimited}, so the compiled `op.sql` is
- * FIXED (one array param per key column on PG; ONE JSON array-of-tuples param on MySQL/SQLite) and
- * can be a STATIC bundle op — exactly the property {@link compileSingleKeyLimited} and
- * {@link compileCompositeKeyStaticUnlimited} already have.
+ * FIXED (ONE JSON array-of-tuples param on every dialect) and can be a STATIC bundle op — exactly
+ * the property {@link compileSingleKeyLimited} and {@link compileCompositeKeyStaticUnlimited}
+ * already have.
  *
- * The per-parent window is IDENTICAL to the single-key-limited path:
- *   - **PG**: `CROSS JOIN LATERAL` over `unnest(?::t1[], ?::t2[])` — BYTE-identical to v1's
- *     `batchLoadWithLateralComposite` (the composite LATERAL is already structurally
- *     length-independent; only the element-type cast was value-derived, and that is DEFERRED (#46)
- *     to render from the real keys via {@link PG_ARRAY_CAST_TOKEN}). No deviation on PG.
+ * The per-parent window is IDENTICAL to the single-key-limited path, over the SAME single key param:
+ *   - **PG**: `CROSS JOIN LATERAL` over the typed key rows of {@link pgCompositeKeyRows} — v1's
+ *     `batchLoadWithLateralComposite` window verbatim, with its per-column `unnest(?::t1[], ?::t2[])`
+ *     key source replaced by the single-JSON-tuple expansion (#159), so the key set binds as the ONE
+ *     array `pluck` yields.
  *   - **MySQL/SQLite**: the SAME `ROW_NUMBER() OVER (PARTITION BY <keys> ORDER BY <order>)` CTE +
  *     `_rn <= limit` filter v1's `batchLoadWithRowNumberComposite` emits — but the CTE membership
  *     WHERE is the STATIC JSON-tuple predicate ({@link compositeJsonMembership}) instead of v1's
- *     value-dependent `(k1,k2) IN ((?,?),…)`. This is the owner-sanctioned static deviation the
- *     composite UNLIMITED form ({@link compileCompositeKeyStaticUnlimited}) and the single-key
- *     IN-list already use: the JSON subquery selects the SAME child rows the tuple-IN would, the
- *     window partitions/orders identically, so it is RESULT-parity to v1 (proven live). The v1
- *     literal `(k1,k2) IN ((?,?),…)` byte-form stays proven by the golden
- *     {@link compileCompositeKeyLimited}.
+ *     value-dependent `(k1,k2) IN ((?,?),…)`.
+ *
+ * Both are the owner-sanctioned static deviation the composite UNLIMITED form
+ * ({@link compileCompositeKeyStaticUnlimited}) and the single-key IN-list already use: the key rows
+ * select the SAME child rows the value-expanded form would and the window partitions/orders
+ * identically, so it is RESULT-parity to v1 (proven live). The v1 byte-forms stay proven by the
+ * golden {@link compileCompositeKeyLimited}.
  */
 export function compileCompositeKeyStaticLimited(
-  opts: RelationCompileBase & { targetKeys: string[]; limit: number },
+  opts: CompositeStaticBase & { targetKeys: string[]; limit: number },
 ): MakeSQL {
   const { tableName, targetKeys, limit } = opts;
   if (opts.dialect === 'postgres') {
-    // PG LATERAL composite — ONE array param per key column (length-independent). Deferred cast
-    // (#46): each element type resolved at render from that column's real key array.
-    const unnestParams = targetKeys
-      .map((k) => `?::${pgArrayCastType([], opts.sqlCastMap?.get(k), opts.deferPgArrayCast)}`)
-      .join(', ');
-    const keyAliases = targetKeys.map((_, i) => `key${i}`).join(', ');
+    // PG LATERAL composite — the per-parent window over the ONE JSON tuple param's typed key rows.
     const keyConditions = targetKeys
-      .map((key, i) => `${tableName}.${key} = _keys.key${i}`)
+      .map((key, i) => `${tableName}.${key} = ${PG_KEYS_ALIAS}.key${i}`)
       .join(' AND ');
     const lateralConditions: ConditionObject = { __raw__: keyConditions, ...opts.conditions };
     const inner = compileSelect({
@@ -423,10 +478,9 @@ export function compileCompositeKeyStaticLimited(
       limit,
     });
     const sql =
-      `SELECT ${tableName}.* FROM unnest(${unnestParams}) AS _keys(${keyAliases}) ` +
+      `SELECT ${tableName}.* FROM ${pgCompositeKeyRows(opts)} ` +
       `CROSS JOIN LATERAL (${inner.sql}) ${tableName}`;
-    // One placeholder array PER column fixes the arity (each binds one array param at execute time).
-    return { sql, params: [...targetKeys.map(() => [null]), ...inner.params] };
+    return { sql, params: [PLACEHOLDER_TUPLES, ...inner.params] };
   }
 
   // MySQL/SQLite: the SAME ROW_NUMBER composite CTE + `_rn <= limit` as v1, but with the STATIC
@@ -434,7 +488,7 @@ export function compileCompositeKeyStaticLimited(
   const orderBy = opts.order || targetKeys.join(', ');
   const partitionBy = targetKeys.join(', ');
   const jsonSubquery = compositeJsonMembership(opts.dialect, tableName, targetKeys);
-  const cteConditions: ConditionObject = { __raw__: [jsonSubquery, [[null]]], ...opts.conditions };
+  const cteConditions: ConditionObject = { __raw__: [jsonSubquery, PLACEHOLDER_TUPLES], ...opts.conditions };
   const cte = compileSelect({
     dialect: opts.dialect,
     tableName,
