@@ -56,18 +56,21 @@ final class Behavior
     /**
      * runBehavior — component-graph IR の統合実行 IF（scp-ir-architecture.md §7）。
      *
-     * @param \stdClass $ir       component-graph 可搬 IR（`{components:[...]}`, json_decode false 由来）。
+     * @param CompiledIr $ir compile 済み IR handle（{@see CompiledIr::load} が発行する。生の stdClass は
+     *                        出自ゲートで NON_COMPILED_IR — #208）。
      * @param array<string,callable> $handlers 専用コンポーネント handler registry（catalog名 → 実装。境界注入）。
      * @param array<string,mixed> $input エントリ component の inputPorts 束縛（param 値）。
      * @param string|null $entry 実行する component 名（省略時は先頭 component）。
      * @return mixed `output` を評価した最終 Value（Φ 合流）。
+     * @throws ProvenanceError handle でない IR（手組み / 無 token / 改竄）を渡したとき。
      * @throws BehaviorFailure UNKNOWN_COMPONENT / MAP_OVER_NOT_ARRAY / UNKNOWN_NODE_KIND / UNKNOWN_ENTRY。
      * @throws PlanFailure OP_FAILED 等（plan 実行由来）。
      * @throws ExprFailure port 式・output 評価由来。
      */
-    public static function runBehavior(\stdClass $ir, array $handlers, array $input = [], ?string $entry = null): mixed
+    public static function runBehavior(CompiledIr $ir, array $handlers, array $input = [], ?string $entry = null): mixed
     {
-        $components = get_object_vars($ir)['components'] ?? [];
+        // 出自ゲート（#208・TS runBehavior の assertCompiled と同位置）。型で要求し、handle から doc を開く。
+        $components = get_object_vars(CompiledIr::assertCompiled($ir)->doc)['components'] ?? [];
         if (!is_array($components)) {
             $components = [];
         }

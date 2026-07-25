@@ -10,6 +10,8 @@ dist/
 
 # The conformance harness's emitted + bc-generated modules (rebuilt from the declarations on demand)
 conformance/.generated/
+# The live-DB leg's emitted SCP TS (bc reads it to generate the language modules; regenerated on demand)
+conformance/.generated-livedb/
 
 # IDE
 .idea/

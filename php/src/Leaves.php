@@ -41,6 +41,60 @@ namespace LiteDbModel\Runtime;
 final class Leaves
 {
     /**
+     * The SQL keywords that may follow a WHERE clause — a dynamic WHERE splices in BEFORE the first
+     * of them, at exactly the position a bounded WHERE occupies.
+     */
+    private const WHERE_TAIL_RE = '/\s+(GROUP BY|ORDER BY|LIMIT|OFFSET|FOR UPDATE|RETURNING)\b/i';
+
+    /** Splice a ` WHERE …` clause (leading space included, or '') before the first tail keyword. */
+    private static function spliceWhere(string $baseSql, string $whereSql): string
+    {
+        if ($whereSql === '') {
+            return $baseSql;
+        }
+        if (preg_match(self::WHERE_TAIL_RE, $baseSql, $m, PREG_OFFSET_CAPTURE) !== 1) {
+            return $baseSql . $whereSql;
+        }
+        $at = $m[0][1];
+        return substr($baseSql, 0, $at) . $whereSql . substr($baseSql, $at);
+    }
+
+    /**
+     * The `[sql, params]` a statement actually executes: the DYNAMIC (SKIP) WHERE plan assembled when
+     * one is present, the ports verbatim otherwise. Port of `src/scp/leaves.ts` `assembleDynamicWhere`.
+     *
+     * A SKIP predicate's presence is per-CALL, so the FINAL statement can only be determined here, at
+     * execution time — which is why the placeholder render runs AFTER this (CLAUDE.md §2). bc has
+     * ALREADY evaluated each fragment's params and its SKIP guard, so a dropped fragment arrives as
+     * null; the survivors join with ` WHERE `/` AND ` and their params bind BEFORE the base params.
+     *
+     * @param array<string, mixed> $ports
+     * @return array{0: string, 1: list<mixed>}
+     */
+    private static function effectiveStatement(array $ports): array
+    {
+        /** @var list<mixed> $params */
+        $params = array_values($ports['params']);
+        $plan = $ports['whereDynamic'] ?? null;
+        if ($plan === null) {
+            return [(string) $ports['sql'], $params];
+        }
+        $whereSql = '';
+        $whereParams = [];
+        foreach (((array) $plan)['frags'] ?? [] as $frag) {
+            if ($frag === null) {
+                continue;
+            }
+            $f = (array) $frag;
+            $whereSql .= ($whereSql === '' ? ' WHERE ' : ' AND ') . (string) $f['sql'];
+            foreach ($f['params'] as $p) {
+                $whereParams[] = $p;
+            }
+        }
+        return [self::spliceWhere((string) $ports['sql'], $whereSql), array_merge($whereParams, $params)];
+    }
+
+    /**
      * Bind a leaf's resolved param list for the driver per dialect (mirror of python `_bind_params` /
      * the rust driver `WireValue` → param encoding). An array param (a relation key set from `pluck` or
      * a batch record set) is server-side-expanded: sqlite/mysql JSON-encode it as ONE scalar string
@@ -53,7 +107,13 @@ final class Leaves
     private static function bindParams(array $params, string $dialect): array
     {
         if ($dialect === 'postgres') {
-            return array_values($params);
+            // PDO binds SCALARS only, so a PG array param rides as the `{…}` array-literal TEXT —
+            // the SAME conversion the imperative relation-batch / batch-write paths use
+            // ({@see StaticBundle::pgArrayLiteral}), never a second encoder.
+            return array_map(
+                static fn ($p) => is_array($p) ? StaticBundle::pgArrayLiteral($p) : $p,
+                array_values($params),
+            );
         }
         return array_map(
             static fn ($p) => is_array($p)
@@ -82,8 +142,20 @@ final class Leaves
             // boundary is the runtime's, not baked into the generated runner. Outside a tx,
             // `currentContext()` is null ⇒ the bound ctx.
             $active = currentContext() ?? $ctx;
-            $sql = StaticBundle::renderPlaceholders($ports['sql'], $dialect);
-            $params = self::bindParams($ports['params'], $dialect);
+            // The DYNAMIC (SKIP) WHERE is assembled FIRST: the final statement shape is only known
+            // here, so the placeholder render must follow it (CLAUDE.md §2).
+            [$effectiveSql, $effectiveParams] = self::effectiveStatement($ports);
+            if ($dialect === 'postgres') {
+                // The DEFERRED `?::<T>[]` element type (#46) resolves from the REAL bound key set —
+                // the same render-layer step, and the same SSoT, the imperative relation path uses.
+                foreach ($effectiveParams as $p) {
+                    if (is_array($p)) {
+                        $effectiveSql = StaticBundle::resolvePgArrayCast($effectiveSql, $p);
+                    }
+                }
+            }
+            $sql = StaticBundle::renderPlaceholders($effectiveSql, $dialect);
+            $params = self::bindParams($effectiveParams, $dialect);
             try {
                 if (($ports['write'] ?? false) && !($ports['returning'] ?? false)) {
                     $info = run($active, $sql, $params, StatementIntent::write());
