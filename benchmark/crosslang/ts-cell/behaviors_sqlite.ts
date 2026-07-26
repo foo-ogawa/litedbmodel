@@ -40,7 +40,7 @@ function run_findAll(h$executeSQL: Handler | undefined, input: Scope): Value {
   // ── op 'n0' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n0: Record<string, Value> = {
-    "bigint": true,
+    "bigint": false,
     "params": cgp.arr([]),
     "returning": false,
     "sql": "SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100",
@@ -56,7 +56,7 @@ async function run_findAll_async(h$executeSQL: AsyncHandler | undefined, input: 
   // ── op 'n0' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n0: Record<string, Value> = {
-    "bigint": true,
+    "bigint": false,
     "params": cgp.arr([]),
     "returning": false,
     "sql": "SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100",
@@ -73,7 +73,7 @@ function run_filterPaginateSort(h$executeSQL: Handler | undefined, input: Scope)
   // ── op 'n0' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n0: Record<string, Value> = {
-    "bigint": true,
+    "bigint": false,
     "params": cgp.arr([cgp.ref(["published"], scope)]),
     "returning": false,
     "sql": "SELECT id, title, content, published, author_id, created_at FROM benchmark_posts WHERE published = ? ORDER BY created_at DESC LIMIT 20 OFFSET 10",
@@ -91,7 +91,7 @@ async function run_filterPaginateSort_async(h$executeSQL: AsyncHandler | undefin
   // ── op 'n0' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n0: Record<string, Value> = {
-    "bigint": true,
+    "bigint": false,
     "params": cgp.arr([cgp.ref(["published"], scope)]),
     "returning": false,
     "sql": "SELECT id, title, content, published, author_id, created_at FROM benchmark_posts WHERE published = ? ORDER BY created_at DESC LIMIT 20 OFFSET 10",
@@ -109,7 +109,7 @@ function run_findFirst(h$executeSQL: Handler | undefined, input: Scope): Value {
   // ── op 'n0' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n0: Record<string, Value> = {
-    "bigint": true,
+    "bigint": false,
     "params": cgp.arr([cgp.ref(["name"], scope)]),
     "returning": false,
     "sql": "SELECT id, email, name FROM benchmark_users WHERE name LIKE ? LIMIT 1",
@@ -127,7 +127,7 @@ async function run_findFirst_async(h$executeSQL: AsyncHandler | undefined, input
   // ── op 'n0' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n0: Record<string, Value> = {
-    "bigint": true,
+    "bigint": false,
     "params": cgp.arr([cgp.ref(["name"], scope)]),
     "returning": false,
     "sql": "SELECT id, email, name FROM benchmark_users WHERE name LIKE ? LIMIT 1",
@@ -145,7 +145,7 @@ function run_findUnique(h$executeSQL: Handler | undefined, input: Scope): Value 
   // ── op 'n0' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n0: Record<string, Value> = {
-    "bigint": true,
+    "bigint": false,
     "params": cgp.arr([cgp.ref(["email"], scope)]),
     "returning": false,
     "sql": "SELECT id, email, name FROM benchmark_users WHERE email = ? LIMIT 1",
@@ -163,7 +163,7 @@ async function run_findUnique_async(h$executeSQL: AsyncHandler | undefined, inpu
   // ── op 'n0' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n0: Record<string, Value> = {
-    "bigint": true,
+    "bigint": false,
     "params": cgp.arr([cgp.ref(["email"], scope)]),
     "returning": false,
     "sql": "SELECT id, email, name FROM benchmark_users WHERE email = ? LIMIT 1",
@@ -181,7 +181,7 @@ function run_nestedFindAll(h$executeSQL: Handler | undefined, h$pluck: Handler |
   // ── op 'n0' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n0: Record<string, Value> = {
-    "bigint": true,
+    "bigint": false,
     "params": cgp.arr([]),
     "returning": false,
     "sql": "SELECT id, email, name FROM benchmark_users LIMIT 100",
@@ -204,7 +204,7 @@ function run_nestedFindAll(h$executeSQL: Handler | undefined, h$pluck: Handler |
   // ── op 'n2' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n2: Record<string, Value> = {
-    "bigint": true,
+    "bigint": false,
     "params": cgp.arr([cgp.ref(["n1"], scope)]),
     "returning": false,
     "sql": "SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN (SELECT value FROM json_each(?)) ORDER BY id ASC",
@@ -236,7 +236,7 @@ async function run_nestedFindAll_async(h$executeSQL: AsyncHandler | undefined, h
   // ── op 'n0' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n0: Record<string, Value> = {
-    "bigint": true,
+    "bigint": false,
     "params": cgp.arr([]),
     "returning": false,
     "sql": "SELECT id, email, name FROM benchmark_users LIMIT 100",
@@ -259,7 +259,7 @@ async function run_nestedFindAll_async(h$executeSQL: AsyncHandler | undefined, h
   // ── op 'n2' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n2: Record<string, Value> = {
-    "bigint": true,
+    "bigint": false,
     "params": cgp.arr([cgp.ref(["n1"], scope)]),
     "returning": false,
     "sql": "SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN (SELECT value FROM json_each(?)) ORDER BY id ASC",
@@ -291,7 +291,7 @@ function run_nestedFindFirst(h$executeSQL: Handler | undefined, h$pluck: Handler
   // ── op 'n0' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n0: Record<string, Value> = {
-    "bigint": true,
+    "bigint": false,
     "params": cgp.arr([cgp.ref(["name"], scope)]),
     "returning": false,
     "sql": "SELECT id, email, name FROM benchmark_users WHERE name LIKE ? LIMIT 1",
@@ -314,7 +314,7 @@ function run_nestedFindFirst(h$executeSQL: Handler | undefined, h$pluck: Handler
   // ── op 'n2' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n2: Record<string, Value> = {
-    "bigint": true,
+    "bigint": false,
     "params": cgp.arr([cgp.ref(["n1"], scope)]),
     "returning": false,
     "sql": "SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN (SELECT value FROM json_each(?)) ORDER BY id ASC",
@@ -346,7 +346,7 @@ async function run_nestedFindFirst_async(h$executeSQL: AsyncHandler | undefined,
   // ── op 'n0' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n0: Record<string, Value> = {
-    "bigint": true,
+    "bigint": false,
     "params": cgp.arr([cgp.ref(["name"], scope)]),
     "returning": false,
     "sql": "SELECT id, email, name FROM benchmark_users WHERE name LIKE ? LIMIT 1",
@@ -369,7 +369,7 @@ async function run_nestedFindFirst_async(h$executeSQL: AsyncHandler | undefined,
   // ── op 'n2' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n2: Record<string, Value> = {
-    "bigint": true,
+    "bigint": false,
     "params": cgp.arr([cgp.ref(["n1"], scope)]),
     "returning": false,
     "sql": "SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN (SELECT value FROM json_each(?)) ORDER BY id ASC",
@@ -401,7 +401,7 @@ function run_nestedFindUnique(h$executeSQL: Handler | undefined, h$pluck: Handle
   // ── op 'n0' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n0: Record<string, Value> = {
-    "bigint": true,
+    "bigint": false,
     "params": cgp.arr([cgp.ref(["email"], scope)]),
     "returning": false,
     "sql": "SELECT id, email, name FROM benchmark_users WHERE email = ? LIMIT 1",
@@ -424,7 +424,7 @@ function run_nestedFindUnique(h$executeSQL: Handler | undefined, h$pluck: Handle
   // ── op 'n2' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n2: Record<string, Value> = {
-    "bigint": true,
+    "bigint": false,
     "params": cgp.arr([cgp.ref(["n1"], scope)]),
     "returning": false,
     "sql": "SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN (SELECT value FROM json_each(?)) ORDER BY id ASC",
@@ -456,7 +456,7 @@ async function run_nestedFindUnique_async(h$executeSQL: AsyncHandler | undefined
   // ── op 'n0' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n0: Record<string, Value> = {
-    "bigint": true,
+    "bigint": false,
     "params": cgp.arr([cgp.ref(["email"], scope)]),
     "returning": false,
     "sql": "SELECT id, email, name FROM benchmark_users WHERE email = ? LIMIT 1",
@@ -479,7 +479,7 @@ async function run_nestedFindUnique_async(h$executeSQL: AsyncHandler | undefined
   // ── op 'n2' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n2: Record<string, Value> = {
-    "bigint": true,
+    "bigint": false,
     "params": cgp.arr([cgp.ref(["n1"], scope)]),
     "returning": false,
     "sql": "SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN (SELECT value FROM json_each(?)) ORDER BY id ASC",
@@ -511,7 +511,7 @@ function run_nestedRelations(h$executeSQL: Handler | undefined, h$pluck: Handler
   // ── op 'n0' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n0: Record<string, Value> = {
-    "bigint": true,
+    "bigint": false,
     "params": cgp.arr([]),
     "returning": false,
     "sql": "SELECT id, email, name FROM benchmark_users LIMIT 100",
@@ -534,7 +534,7 @@ function run_nestedRelations(h$executeSQL: Handler | undefined, h$pluck: Handler
   // ── op 'n2' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n2: Record<string, Value> = {
-    "bigint": true,
+    "bigint": false,
     "params": cgp.arr([cgp.ref(["n1"], scope)]),
     "returning": false,
     "sql": "SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN (SELECT value FROM json_each(?)) ORDER BY id ASC",
@@ -557,7 +557,7 @@ function run_nestedRelations(h$executeSQL: Handler | undefined, h$pluck: Handler
   // ── op 'n4' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n4: Record<string, Value> = {
-    "bigint": true,
+    "bigint": false,
     "params": cgp.arr([cgp.ref(["n3"], scope)]),
     "returning": false,
     "sql": "SELECT id, body, post_id FROM benchmark_comments WHERE post_id IN (SELECT value FROM json_each(?)) ORDER BY id ASC",
@@ -603,7 +603,7 @@ async function run_nestedRelations_async(h$executeSQL: AsyncHandler | undefined,
   // ── op 'n0' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n0: Record<string, Value> = {
-    "bigint": true,
+    "bigint": false,
     "params": cgp.arr([]),
     "returning": false,
     "sql": "SELECT id, email, name FROM benchmark_users LIMIT 100",
@@ -626,7 +626,7 @@ async function run_nestedRelations_async(h$executeSQL: AsyncHandler | undefined,
   // ── op 'n2' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n2: Record<string, Value> = {
-    "bigint": true,
+    "bigint": false,
     "params": cgp.arr([cgp.ref(["n1"], scope)]),
     "returning": false,
     "sql": "SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN (SELECT value FROM json_each(?)) ORDER BY id ASC",
@@ -649,7 +649,7 @@ async function run_nestedRelations_async(h$executeSQL: AsyncHandler | undefined,
   // ── op 'n4' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n4: Record<string, Value> = {
-    "bigint": true,
+    "bigint": false,
     "params": cgp.arr([cgp.ref(["n3"], scope)]),
     "returning": false,
     "sql": "SELECT id, body, post_id FROM benchmark_comments WHERE post_id IN (SELECT value FROM json_each(?)) ORDER BY id ASC",
@@ -695,7 +695,7 @@ function run_compositeRelations(h$executeSQL: Handler | undefined, h$pluck: Hand
   // ── op 'n0' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n0: Record<string, Value> = {
-    "bigint": true,
+    "bigint": false,
     "params": cgp.arr([]),
     "returning": false,
     "sql": "SELECT tenant_id, user_id, name FROM benchmark_tenant_users ORDER BY user_id ASC LIMIT 100",
@@ -718,7 +718,7 @@ function run_compositeRelations(h$executeSQL: Handler | undefined, h$pluck: Hand
   // ── op 'n2' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n2: Record<string, Value> = {
-    "bigint": true,
+    "bigint": false,
     "params": cgp.arr([cgp.ref(["n1"], scope)]),
     "returning": false,
     "sql": "SELECT tenant_id, post_id, user_id, title FROM benchmark_tenant_posts WHERE EXISTS (SELECT 1 FROM json_each(?) je WHERE json_extract(je.value, '$[0]') = benchmark_tenant_posts.tenant_id AND json_extract(je.value, '$[1]') = benchmark_tenant_posts.user_id) ORDER BY post_id ASC",
@@ -741,7 +741,7 @@ function run_compositeRelations(h$executeSQL: Handler | undefined, h$pluck: Hand
   // ── op 'n4' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n4: Record<string, Value> = {
-    "bigint": true,
+    "bigint": false,
     "params": cgp.arr([cgp.ref(["n3"], scope)]),
     "returning": false,
     "sql": "SELECT tenant_id, comment_id, post_id, body FROM benchmark_tenant_comments WHERE EXISTS (SELECT 1 FROM json_each(?) je WHERE json_extract(je.value, '$[0]') = benchmark_tenant_comments.tenant_id AND json_extract(je.value, '$[1]') = benchmark_tenant_comments.post_id) ORDER BY comment_id ASC",
@@ -787,7 +787,7 @@ async function run_compositeRelations_async(h$executeSQL: AsyncHandler | undefin
   // ── op 'n0' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n0: Record<string, Value> = {
-    "bigint": true,
+    "bigint": false,
     "params": cgp.arr([]),
     "returning": false,
     "sql": "SELECT tenant_id, user_id, name FROM benchmark_tenant_users ORDER BY user_id ASC LIMIT 100",
@@ -810,7 +810,7 @@ async function run_compositeRelations_async(h$executeSQL: AsyncHandler | undefin
   // ── op 'n2' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n2: Record<string, Value> = {
-    "bigint": true,
+    "bigint": false,
     "params": cgp.arr([cgp.ref(["n1"], scope)]),
     "returning": false,
     "sql": "SELECT tenant_id, post_id, user_id, title FROM benchmark_tenant_posts WHERE EXISTS (SELECT 1 FROM json_each(?) je WHERE json_extract(je.value, '$[0]') = benchmark_tenant_posts.tenant_id AND json_extract(je.value, '$[1]') = benchmark_tenant_posts.user_id) ORDER BY post_id ASC",
@@ -833,7 +833,7 @@ async function run_compositeRelations_async(h$executeSQL: AsyncHandler | undefin
   // ── op 'n4' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n4: Record<string, Value> = {
-    "bigint": true,
+    "bigint": false,
     "params": cgp.arr([cgp.ref(["n3"], scope)]),
     "returning": false,
     "sql": "SELECT tenant_id, comment_id, post_id, body FROM benchmark_tenant_comments WHERE EXISTS (SELECT 1 FROM json_each(?) je WHERE json_extract(je.value, '$[0]') = benchmark_tenant_comments.tenant_id AND json_extract(je.value, '$[1]') = benchmark_tenant_comments.post_id) ORDER BY comment_id ASC",
@@ -879,7 +879,7 @@ function run_create(h$executeSQL: Handler | undefined, input: Scope): Value {
   // ── op 'n0' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n0: Record<string, Value> = {
-    "bigint": true,
+    "bigint": false,
     "params": cgp.arr([cgp.ref(["email"], scope), cgp.ref(["name"], scope)]),
     "returning": false,
     "sql": "INSERT INTO benchmark_users (email, name) VALUES (?, ?)",
@@ -897,7 +897,7 @@ async function run_create_async(h$executeSQL: AsyncHandler | undefined, input: S
   // ── op 'n0' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n0: Record<string, Value> = {
-    "bigint": true,
+    "bigint": false,
     "params": cgp.arr([cgp.ref(["email"], scope), cgp.ref(["name"], scope)]),
     "returning": false,
     "sql": "INSERT INTO benchmark_users (email, name) VALUES (?, ?)",
@@ -915,7 +915,7 @@ function run_update(h$executeSQL: Handler | undefined, input: Scope): Value {
   // ── op 'n0' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n0: Record<string, Value> = {
-    "bigint": true,
+    "bigint": false,
     "params": cgp.arr([cgp.ref(["name"], scope), cgp.ref(["id"], scope)]),
     "returning": false,
     "sql": "UPDATE benchmark_users SET name = ? WHERE id = ?",
@@ -933,7 +933,7 @@ async function run_update_async(h$executeSQL: AsyncHandler | undefined, input: S
   // ── op 'n0' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n0: Record<string, Value> = {
-    "bigint": true,
+    "bigint": false,
     "params": cgp.arr([cgp.ref(["name"], scope), cgp.ref(["id"], scope)]),
     "returning": false,
     "sql": "UPDATE benchmark_users SET name = ? WHERE id = ?",
@@ -951,7 +951,7 @@ function run_upsert(h$executeSQL: Handler | undefined, input: Scope): Value {
   // ── op 'n0' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n0: Record<string, Value> = {
-    "bigint": true,
+    "bigint": false,
     "params": cgp.arr([cgp.ref(["email"], scope), cgp.ref(["name"], scope)]),
     "returning": true,
     "sql": "INSERT INTO benchmark_users (email, name) VALUES (?, ?) ON CONFLICT (email) DO UPDATE SET email = excluded.email, name = excluded.name RETURNING id",
@@ -969,7 +969,7 @@ async function run_upsert_async(h$executeSQL: AsyncHandler | undefined, input: S
   // ── op 'n0' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n0: Record<string, Value> = {
-    "bigint": true,
+    "bigint": false,
     "params": cgp.arr([cgp.ref(["email"], scope), cgp.ref(["name"], scope)]),
     "returning": true,
     "sql": "INSERT INTO benchmark_users (email, name) VALUES (?, ?) ON CONFLICT (email) DO UPDATE SET email = excluded.email, name = excluded.name RETURNING id",
@@ -987,7 +987,7 @@ function run_createMany(h$executeSQL: Handler | undefined, input: Scope): Value 
   // ── op 'n0' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n0: Record<string, Value> = {
-    "bigint": true,
+    "bigint": false,
     "params": cgp.arr([cgp.ref(["rows"], scope)]),
     "returning": false,
     "sql": "INSERT INTO benchmark_users (email, name) SELECT json_extract(value, '$.email'), json_extract(value, '$.name') FROM json_each(?)",
@@ -1005,7 +1005,7 @@ async function run_createMany_async(h$executeSQL: AsyncHandler | undefined, inpu
   // ── op 'n0' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n0: Record<string, Value> = {
-    "bigint": true,
+    "bigint": false,
     "params": cgp.arr([cgp.ref(["rows"], scope)]),
     "returning": false,
     "sql": "INSERT INTO benchmark_users (email, name) SELECT json_extract(value, '$.email'), json_extract(value, '$.name') FROM json_each(?)",
@@ -1023,7 +1023,7 @@ function run_upsertMany(h$executeSQL: Handler | undefined, input: Scope): Value 
   // ── op 'n0' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n0: Record<string, Value> = {
-    "bigint": true,
+    "bigint": false,
     "params": cgp.arr([cgp.ref(["rows"], scope)]),
     "returning": false,
     "sql": "INSERT INTO benchmark_users (email, name) SELECT json_extract(value, '$.email'), json_extract(value, '$.name') FROM json_each(?) WHERE true ON CONFLICT (email) DO UPDATE SET email = excluded.email, name = excluded.name",
@@ -1041,7 +1041,7 @@ async function run_upsertMany_async(h$executeSQL: AsyncHandler | undefined, inpu
   // ── op 'n0' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n0: Record<string, Value> = {
-    "bigint": true,
+    "bigint": false,
     "params": cgp.arr([cgp.ref(["rows"], scope)]),
     "returning": false,
     "sql": "INSERT INTO benchmark_users (email, name) SELECT json_extract(value, '$.email'), json_extract(value, '$.name') FROM json_each(?) WHERE true ON CONFLICT (email) DO UPDATE SET email = excluded.email, name = excluded.name",
@@ -1059,7 +1059,7 @@ function run_updateMany(h$executeSQL: Handler | undefined, input: Scope): Value 
   // ── op 'n0' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n0: Record<string, Value> = {
-    "bigint": true,
+    "bigint": false,
     "params": cgp.arr([cgp.ref(["rows"], scope), cgp.ref(["rows"], scope)]),
     "returning": false,
     "sql": "UPDATE benchmark_users SET name = (SELECT json_extract(je.value, '$.name') FROM json_each(?) je WHERE json_extract(je.value, '$.id') = benchmark_users.id LIMIT 1) WHERE id IN (SELECT json_extract(value, '$.id') FROM json_each(?))",
@@ -1077,7 +1077,7 @@ async function run_updateMany_async(h$executeSQL: AsyncHandler | undefined, inpu
   // ── op 'n0' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n0: Record<string, Value> = {
-    "bigint": true,
+    "bigint": false,
     "params": cgp.arr([cgp.ref(["rows"], scope), cgp.ref(["rows"], scope)]),
     "returning": false,
     "sql": "UPDATE benchmark_users SET name = (SELECT json_extract(je.value, '$.name') FROM json_each(?) je WHERE json_extract(je.value, '$.id') = benchmark_users.id LIMIT 1) WHERE id IN (SELECT json_extract(value, '$.id') FROM json_each(?))",
@@ -1095,7 +1095,7 @@ function run_nestedCreate(h$executeSQL: Handler | undefined, input: Scope): Valu
   // ── op 'n0' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n0: Record<string, Value> = {
-    "bigint": true,
+    "bigint": false,
     "params": cgp.arr([cgp.ref(["email"], scope), cgp.ref(["name"], scope)]),
     "returning": true,
     "sql": "INSERT INTO benchmark_users (email, name) VALUES (?, ?) RETURNING id",
@@ -1115,7 +1115,7 @@ function run_nestedCreate(h$executeSQL: Handler | undefined, input: Scope): Valu
     const el_n1 = (over_n1 as Value[])[mi_n1];
     const mscope_n1: Scope = { ...scope, ["$e0"]: el_n1 };
     const ports_n1: Record<string, Value> = {
-      "bigint": true,
+      "bigint": false,
       "params": cgp.arr([cgp.ref(["$e0","id"], mscope_n1), cgp.ref(["title"], mscope_n1)]),
       "returning": false,
       "sql": "INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)",
@@ -1136,7 +1136,7 @@ async function run_nestedCreate_async(h$executeSQL: AsyncHandler | undefined, in
   // ── op 'n0' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n0: Record<string, Value> = {
-    "bigint": true,
+    "bigint": false,
     "params": cgp.arr([cgp.ref(["email"], scope), cgp.ref(["name"], scope)]),
     "returning": true,
     "sql": "INSERT INTO benchmark_users (email, name) VALUES (?, ?) RETURNING id",
@@ -1156,7 +1156,7 @@ async function run_nestedCreate_async(h$executeSQL: AsyncHandler | undefined, in
     const el_n1 = (over_n1 as Value[])[mi_n1];
     const mscope_n1: Scope = { ...scope, ["$e0"]: el_n1 };
     const ports_n1: Record<string, Value> = {
-      "bigint": true,
+      "bigint": false,
       "params": cgp.arr([cgp.ref(["$e0","id"], mscope_n1), cgp.ref(["title"], mscope_n1)]),
       "returning": false,
       "sql": "INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)",
@@ -1177,7 +1177,7 @@ function run_nestedUpsert(h$executeSQL: Handler | undefined, input: Scope): Valu
   // ── op 'n0' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n0: Record<string, Value> = {
-    "bigint": true,
+    "bigint": false,
     "params": cgp.arr([cgp.ref(["email"], scope), cgp.ref(["name"], scope)]),
     "returning": true,
     "sql": "INSERT INTO benchmark_users (email, name) VALUES (?, ?) ON CONFLICT (email) DO UPDATE SET email = excluded.email, name = excluded.name RETURNING id",
@@ -1197,7 +1197,7 @@ function run_nestedUpsert(h$executeSQL: Handler | undefined, input: Scope): Valu
     const el_n1 = (over_n1 as Value[])[mi_n1];
     const mscope_n1: Scope = { ...scope, ["$e0"]: el_n1 };
     const ports_n1: Record<string, Value> = {
-      "bigint": true,
+      "bigint": false,
       "params": cgp.arr([cgp.ref(["$e0","id"], mscope_n1), cgp.ref(["title"], mscope_n1)]),
       "returning": false,
       "sql": "INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)",
@@ -1218,7 +1218,7 @@ async function run_nestedUpsert_async(h$executeSQL: AsyncHandler | undefined, in
   // ── op 'n0' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n0: Record<string, Value> = {
-    "bigint": true,
+    "bigint": false,
     "params": cgp.arr([cgp.ref(["email"], scope), cgp.ref(["name"], scope)]),
     "returning": true,
     "sql": "INSERT INTO benchmark_users (email, name) VALUES (?, ?) ON CONFLICT (email) DO UPDATE SET email = excluded.email, name = excluded.name RETURNING id",
@@ -1238,7 +1238,7 @@ async function run_nestedUpsert_async(h$executeSQL: AsyncHandler | undefined, in
     const el_n1 = (over_n1 as Value[])[mi_n1];
     const mscope_n1: Scope = { ...scope, ["$e0"]: el_n1 };
     const ports_n1: Record<string, Value> = {
-      "bigint": true,
+      "bigint": false,
       "params": cgp.arr([cgp.ref(["$e0","id"], mscope_n1), cgp.ref(["title"], mscope_n1)]),
       "returning": false,
       "sql": "INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)",
@@ -1259,7 +1259,7 @@ function run_nestedUpdate(h$executeSQL: Handler | undefined, input: Scope): Valu
   // ── op 'n0' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n0: Record<string, Value> = {
-    "bigint": true,
+    "bigint": false,
     "params": cgp.arr([cgp.ref(["name"], scope), cgp.ref(["id"], scope)]),
     "returning": true,
     "sql": "UPDATE benchmark_users SET name = ? WHERE id = ? RETURNING id",
@@ -1279,7 +1279,7 @@ function run_nestedUpdate(h$executeSQL: Handler | undefined, input: Scope): Valu
     const el_n1 = (over_n1 as Value[])[mi_n1];
     const mscope_n1: Scope = { ...scope, ["$e0"]: el_n1 };
     const ports_n1: Record<string, Value> = {
-      "bigint": true,
+      "bigint": false,
       "params": cgp.arr([cgp.ref(["title"], mscope_n1), cgp.ref(["$e0","id"], mscope_n1)]),
       "returning": false,
       "sql": "UPDATE benchmark_posts SET title = ? WHERE author_id = ?",
@@ -1300,7 +1300,7 @@ async function run_nestedUpdate_async(h$executeSQL: AsyncHandler | undefined, in
   // ── op 'n0' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n0: Record<string, Value> = {
-    "bigint": true,
+    "bigint": false,
     "params": cgp.arr([cgp.ref(["name"], scope), cgp.ref(["id"], scope)]),
     "returning": true,
     "sql": "UPDATE benchmark_users SET name = ? WHERE id = ? RETURNING id",
@@ -1320,7 +1320,7 @@ async function run_nestedUpdate_async(h$executeSQL: AsyncHandler | undefined, in
     const el_n1 = (over_n1 as Value[])[mi_n1];
     const mscope_n1: Scope = { ...scope, ["$e0"]: el_n1 };
     const ports_n1: Record<string, Value> = {
-      "bigint": true,
+      "bigint": false,
       "params": cgp.arr([cgp.ref(["title"], mscope_n1), cgp.ref(["$e0","id"], mscope_n1)]),
       "returning": false,
       "sql": "UPDATE benchmark_posts SET title = ? WHERE author_id = ?",
@@ -1341,7 +1341,7 @@ function run_delete(h$executeSQL: Handler | undefined, input: Scope): Value {
   // ── op 'n0' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n0: Record<string, Value> = {
-    "bigint": true,
+    "bigint": false,
     "params": cgp.arr([cgp.ref(["email"], scope), cgp.ref(["name"], scope)]),
     "returning": true,
     "sql": "INSERT INTO benchmark_users (email, name) VALUES (?, ?) RETURNING id",
@@ -1361,7 +1361,7 @@ function run_delete(h$executeSQL: Handler | undefined, input: Scope): Value {
     const el_n1 = (over_n1 as Value[])[mi_n1];
     const mscope_n1: Scope = { ...scope, ["$e0"]: el_n1 };
     const ports_n1: Record<string, Value> = {
-      "bigint": true,
+      "bigint": false,
       "params": cgp.arr([cgp.ref(["$e0","id"], mscope_n1)]),
       "returning": false,
       "sql": "DELETE FROM benchmark_users WHERE id = ?",
@@ -1382,7 +1382,7 @@ async function run_delete_async(h$executeSQL: AsyncHandler | undefined, input: S
   // ── op 'n0' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n0: Record<string, Value> = {
-    "bigint": true,
+    "bigint": false,
     "params": cgp.arr([cgp.ref(["email"], scope), cgp.ref(["name"], scope)]),
     "returning": true,
     "sql": "INSERT INTO benchmark_users (email, name) VALUES (?, ?) RETURNING id",
@@ -1402,7 +1402,7 @@ async function run_delete_async(h$executeSQL: AsyncHandler | undefined, input: S
     const el_n1 = (over_n1 as Value[])[mi_n1];
     const mscope_n1: Scope = { ...scope, ["$e0"]: el_n1 };
     const ports_n1: Record<string, Value> = {
-      "bigint": true,
+      "bigint": false,
       "params": cgp.arr([cgp.ref(["$e0","id"], mscope_n1)]),
       "returning": false,
       "sql": "DELETE FROM benchmark_users WHERE id = ?",

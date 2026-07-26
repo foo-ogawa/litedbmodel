@@ -7,15 +7,12 @@
 // own `leafHandlers` (src/scp/leaves.ts) — the ONE op-agnostic transport, the same one the conformance
 // harness wires (conformance/harness.ts). The cell writes no SQL and no node handler of its own.
 
-import Database from 'better-sqlite3';
 import { Pool as PgPool, types as pgTypes } from 'pg';
 import mysql from 'mysql2/promise';
 import {
   clearMiddlewares,
   configurePgDeboxTypeParsers,
   createMiddleware,
-  connectionForDriver,
-  contextForConnection,
   leafHandlers,
   leafHandlersAsync,
   mysqlConnectionPool,
@@ -24,7 +21,6 @@ import {
   PooledAsyncContext,
   transaction,
   use,
-  withTransactionSync,
 } from '../../../dist/scp/index.mjs';
 
 import { inputFor, TX_OPS } from './inputs.js';
@@ -55,38 +51,15 @@ export async function openCodegen(dialect: Dialect): Promise<Cell> {
   );
   const mod = (await import(`./behaviors_${dialect}.js`)) as unknown as GeneratedModule;
 
+  // SQLite has NO codegen path in TypeScript. `buildContextFromConfig` throws for it —
+  // "the sqlite dialect is not routed through the async SCP runtime (v1 in-proc path)" — so a TS
+  // consumer on SQLite reaches litedbmodel through v1, and this cell reports that rather than
+  // inventing a path the product does not offer.
   if (dialect === 'sqlite') {
-    const db = new Database(':memory:');
-    for (const stmt of setup.schema) db.exec(stmt);
-    const ctx = contextForConnection(connectionForDriver(db as never));
-    const facade = mod.bindTyped(leafHandlers({ exec: ctx, dialect }));
-    return {
-      dialect,
-      sync: true,
-      // The fixture is applied on the RAW driver, never through the seam, so it can neither be
-      // counted nor timed (the same rule every other cell follows).
-      seed: () => {
-        for (const stmt of [...setup.delete, ...setup.insert]) db.exec(stmt);
-      },
-      // A RETURNING-chained op runs inside the runtime's transaction boundary: BEGIN, the two body
-      // statements through the leaf, COMMIT. That boundary is the CONSUMER's responsibility (the
-      // generated runner emits no BEGIN/COMMIT) — the same wiring go and rust do.
-      run: (op, it) => {
-        if (!TX_OPS.has(op)) {
-          facade[op](inputFor(op, it));
-          return;
-        }
-        withTransactionSync(ctx, () => ({ commit: true, value: facade[op](inputFor(op, it)) }), dialect);
-      },
-      close: () => {
-        clearMiddlewares();
-        db.close();
-      },
-      statements: () => count,
-      resetStatements: () => {
-        count = 0;
-      },
-    };
+    throw new Error(
+      'ts-cell: the codegen mode has no SQLite leg — litedbmodel routes SQLite through the v1 in-proc ' +
+        'path, not the SCP runtime (src/scp/dbmodel-runtime.ts). Run `v1` or `sdk` for this dialect.',
+    );
   }
 
   // The read-path de-box knobs the LIBRARY owns (#59): without them `pg` hands back a JS Date and
