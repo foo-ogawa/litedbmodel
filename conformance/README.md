@@ -82,10 +82,10 @@ from `TEST_DB_*` / `TEST_MYSQL_*`, defaulting to PostgreSQL 5433 and MySQL 3307.
 
 ## Cross-language legs
 
-`vectors-runner.ts`, `vectors-run.ts`, `gen-livedb.ts`, `livedb-run.ts`, `vectors-livedb/` and the
-per-language runners under `python/ php/ go/ rust/` are the BUNDLE-REPLAY model: they replay a
-serialized `SqlBundle` corpus through each language's `execute_bundle` / `read_bundle`. That model
-was retired on the library side by the CLI-only codegen cutover — a leaf-executed module cannot be
-replayed from serialized IR — so those legs do not run today. Migrating them (the runners and the
-corpus together, per language) is issue #144; they are deliberately untouched until then, because
-moving the corpus without the runners only breaks them differently.
+`npm run conformance:livedb` (`livedb-run.ts`) is the cross-language gate: it replays the
+`vectors-livedb/` corpus through each language's live-DB runner against real PostgreSQL and MySQL.
+`gen-livedb.ts` generates that corpus from the same `harness.ts` declarations.
+
+Python and PHP run. Go and Rust have no live-DB runner yet (#163) and the run reports them as
+`[GAP ] … NOT RUN` — the summary always names how many of the four ran, so a partial run can never
+read as a full one.

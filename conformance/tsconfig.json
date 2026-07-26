@@ -12,6 +12,6 @@
     "emitDecoratorMetadata": true,
     "noEmit": true
   },
-  "include": ["harness.ts", "gen-vectors.ts", "gen-vectors.test.ts", "gen-livedb.ts", "gen-livedb.test.ts", "vectors-runner.ts", "../src/**/*.ts"],
-  "// note": "vectors-run.ts / livedb-run.ts are EXCLUDED: they are process orchestrators (spawnSync over the language legs), validated by ACTUALLY RUNNING them (npm run conformance:run / conformance:livedb). Everything that imports the SCP reference from source — harness.ts, both generators and vectors-runner.ts — IS typechecked here."
+  "include": ["harness.ts", "gen-vectors.ts", "gen-vectors.test.ts", "gen-livedb.ts", "gen-livedb.test.ts", "../src/**/*.ts"],
+  "// note": "livedb-run.ts is EXCLUDED: it is a process orchestrator (spawnSync over the language legs), validated by ACTUALLY RUNNING it (npm run conformance:livedb). Everything that imports the SCP reference from source — harness.ts and both generators — IS typechecked here."
 }

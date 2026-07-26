@@ -78,11 +78,21 @@ interface LangLeg {
   cmd: string;
   args: string[];
   cwd?: string;
+  /** Set while this language has no live-DB runner yet: the issue that will supply it. */
+  blockedBy?: string;
 }
 
+/**
+ * EVERY language the corpus is supposed to run on — including the ones that cannot yet, each naming
+ * the issue that blocks it. Listing only the working legs is how a run of 2 languages came to print
+ * "PASS (2 language runtime(s) green)": nothing in the output said four were expected. A leg missing
+ * from this list is invisible; a leg present without `blockedBy` that fails to run is a FAILURE.
+ */
 const LEGS: LangLeg[] = [
   { lang: 'py', cmd: process.env.LIVEDB_PY || 'python3', args: [join(REPO, 'python', 'conformance', 'livedb_runner.py')] },
   { lang: 'php', cmd: 'php', args: [join(REPO, 'php', 'conformance', 'livedb_runner.php')] },
+  { lang: 'go', cmd: 'go', args: ['run', './conformance/livedb_runner.go'], cwd: join(REPO, 'go'), blockedBy: '#163' },
+  { lang: 'rust', cmd: 'cargo', args: ['run', '--quiet', '-p', 'livedb_runner', '--features', 'livedb'], cwd: join(REPO, 'rust'), blockedBy: '#163' },
 ];
 
 // The env each leg inherits (host-published docker ports; matches docker-compose.livedb.yml).
@@ -105,7 +115,12 @@ function main(): void {
   }
 
   let anyFail = false;
+  const blocked: LangLeg[] = [];
   for (const leg of LEGS) {
+    if (leg.blockedBy) {
+      blocked.push(leg);
+      continue;
+    }
     const proc = spawnSync(leg.cmd, leg.args, {
       cwd: leg.cwd ?? REPO,
       env,
@@ -140,11 +155,17 @@ function main(): void {
   }
 
   console.log('');
+  for (const leg of blocked) {
+    console.log(`  [GAP ] ${leg.lang.padEnd(4)} NOT RUN — no live-DB runner yet (${leg.blockedBy})`);
+  }
+  if (blocked.length) console.log('');
   if (anyFail) {
     console.error('conformance(livedb): FAIL — a language leg did not pass all live-DB vectors');
     process.exit(1);
   }
-  console.log(`conformance(livedb): PASS (${LEGS.length} language runtime(s) green on live PG + MySQL)`);
+  const ran = LEGS.length - blocked.length;
+  const gap = blocked.length ? ` — ${blocked.length} NOT RUN: ${blocked.map((l) => `${l.lang} (${l.blockedBy})`).join(', ')}` : '';
+  console.log(`conformance(livedb): ${ran}/${LEGS.length} language runtimes green on live PG + MySQL${gap}`);
 }
 
 main();

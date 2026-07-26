@@ -35,12 +35,10 @@ jobs:
       - name: Every test gate is reachable from CI
         run: npm run gates:check
 
-  # ── Cross-language conformance: corpus byte-true + all runnable language legs green ──
-  # `vectors-run.ts` DISCOVERS every implemented language runner (ts/py/php/go/rust) and runs
-  # each, and the codegen leg (mode-3) executes the py/go emitted modules — so the sibling
-  # toolchains must be present here too, exactly like graphddb's go.yml sets up Python/PHP/Rust
-  # for its conformance golden. (php + rust ship on the ubuntu runner; Node/Python/Go are set up
-  # below.) The go leg additionally needs the private behavior-contracts VCS module (secret).
+  # ── TS conformance: the corpus is byte-true to the pipeline and every vector passes ──
+  # `test/scp/conformance-vectors.test.ts` regenerates the corpus and diffs it (drift gate), then
+  # runs EVERY vector through the TS reference. The cross-LANGUAGE legs live in conformance-livedb
+  # below, which executes the same declarations on real PG + MySQL.
   conformance-ts:
     runs-on: ubuntu-latest
     env:
@@ -88,12 +86,6 @@ jobs:
         run: npm run build:scp
       - name: Corpus drift gate + TS reference runner (part of the suite)
         run: npx vitest run test/scp/conformance-vectors.test.ts
-      - name: Cross-language orchestrator (ts/py/php/go/rust auto-join, incl. codegen leg)
-        run: npx tsx conformance/vectors-run.ts
-      - name: Frozen golden unchanged (additive-refreeze)
-        run: |
-          npx tsx conformance/vectors-runner.ts > /tmp/ts-summary.json 2>/dev/null
-          diff <(jq -S . conformance/frozen/ts-golden.frozen.json) <(jq -S . /tmp/ts-summary.json)
 
   # ── Language scaffolds stay buildable (WS7b-e fill in the runtime bodies) ───
   scaffold-build:
