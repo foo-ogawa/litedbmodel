@@ -1355,6 +1355,7 @@ dependencies = [
 name = "orm_bench_sdk"
 version = "0.0.0"
 dependencies = [
+ "bytes",
  "mysql",
  "postgres",
  "rusqlite",

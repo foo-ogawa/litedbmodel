@@ -37,7 +37,6 @@ enum Dialect {
 enum P {
     I(i64),
     S(String),
-    B(bool),
 }
 
 /// A decoded result cell. Reads materialise every selected column (fair vs the native cell, which
@@ -77,7 +76,10 @@ impl Ph {
     }
     /// `ph,ph,…` for a flat `IN (…)` list of `count` scalars.
     fn list(&mut self, count: usize) -> String {
-        (0..count).map(|_| self.next()).collect::<Vec<_>>().join(",")
+        (0..count)
+            .map(|_| self.next())
+            .collect::<Vec<_>>()
+            .join(",")
     }
     /// A row-tuple IN body over `rows` tuples of `cols` columns each, in the form each dialect accepts:
     /// pg/mysql `((?,?),(?,?),…)`, sqlite `(VALUES (?,?),(?,?),…)`.
@@ -113,7 +115,6 @@ fn sqlite_value(p: &P) -> rusqlite::types::Value {
     match p {
         P::I(n) => Value::Integer(*n),
         P::S(s) => Value::Text(s.clone()),
-        P::B(b) => Value::Integer(if *b { 1 } else { 0 }),
     }
 }
 impl Db for SqliteDb {
@@ -128,26 +129,31 @@ impl Db for SqliteDb {
         let mut stmt = self.conn.prepare_cached(sql).expect("prepare");
         let ncols = stmt.column_count();
         let rows = stmt
-            .query_map(rusqlite::params_from_iter(params.iter().map(sqlite_value)), |row| {
-                Ok((0..ncols)
-                    .map(|i| match row.get_ref(i).unwrap() {
-                        rusqlite::types::ValueRef::Null => Cell::Null,
-                        rusqlite::types::ValueRef::Integer(n) => Cell::I(n),
-                        rusqlite::types::ValueRef::Real(f) => Cell::F(f),
-                        rusqlite::types::ValueRef::Text(t) => {
-                            Cell::S(String::from_utf8_lossy(t).into_owned())
-                        }
-                        rusqlite::types::ValueRef::Blob(_) => Cell::Null,
-                    })
-                    .collect::<Vec<Cell>>())
-            })
+            .query_map(
+                rusqlite::params_from_iter(params.iter().map(sqlite_value)),
+                |row| {
+                    Ok((0..ncols)
+                        .map(|i| match row.get_ref(i).unwrap() {
+                            rusqlite::types::ValueRef::Null => Cell::Null,
+                            rusqlite::types::ValueRef::Integer(n) => Cell::I(n),
+                            rusqlite::types::ValueRef::Real(f) => Cell::F(f),
+                            rusqlite::types::ValueRef::Text(t) => {
+                                Cell::S(String::from_utf8_lossy(t).into_owned())
+                            }
+                            rusqlite::types::ValueRef::Blob(_) => Cell::Null,
+                        })
+                        .collect::<Vec<Cell>>())
+                },
+            )
             .expect("query");
         rows.map(|r| r.unwrap()).collect()
     }
     fn exec(&mut self, sql: &str, params: &[P]) {
         QUERY_COUNT.fetch_add(1, Ordering::Relaxed);
         if params.is_empty() {
-            self.conn.execute_batch(sql).unwrap_or_else(|e| panic!("exec `{sql}`: {e}"));
+            self.conn
+                .execute_batch(sql)
+                .unwrap_or_else(|e| panic!("exec `{sql}`: {e}"));
         } else {
             self.conn
                 .prepare_cached(sql)
@@ -181,20 +187,54 @@ impl PgDb {
         if let Some(s) = self.stmts.get(sql) {
             return s.clone();
         }
-        let s = self.client.prepare(sql).unwrap_or_else(|e| panic!("prepare `{sql}`: {e}"));
+        let s = self
+            .client
+            .prepare(sql)
+            .unwrap_or_else(|e| panic!("prepare `{sql}`: {e}"));
         self.stmts.insert(sql.to_string(), s.clone());
         s
     }
 }
+/// An integer bind that fits whatever width the target column declares. rust-postgres matches a
+/// parameter's Rust type against the column's OID exactly — `i32` is int4 ONLY — so binding an `i32`
+/// against the fixture's `published SMALLINT` failed with "error serializing parameter 0". The fixture
+/// mixes widths (`published` int2, ids int4), and the seam does not know a column's width at bind
+/// time, so the ONE integer encoder narrows per the type PostgreSQL asks for.
+#[cfg(feature = "livedb")]
+#[derive(Debug)]
+struct PgInt(i64);
+
+#[cfg(feature = "livedb")]
+impl postgres::types::ToSql for PgInt {
+    fn to_sql(
+        &self,
+        ty: &postgres::types::Type,
+        out: &mut bytes::BytesMut,
+    ) -> Result<postgres::types::IsNull, Box<dyn std::error::Error + Sync + Send>> {
+        match *ty {
+            postgres::types::Type::INT2 => (self.0 as i16).to_sql(ty, out),
+            postgres::types::Type::INT4 => (self.0 as i32).to_sql(ty, out),
+            _ => self.0.to_sql(ty, out),
+        }
+    }
+
+    fn accepts(ty: &postgres::types::Type) -> bool {
+        matches!(
+            *ty,
+            postgres::types::Type::INT2 | postgres::types::Type::INT4 | postgres::types::Type::INT8
+        )
+    }
+
+    postgres::types::to_sql_checked!();
+}
+
 #[cfg(feature = "livedb")]
 fn pg_params(params: &[P]) -> Vec<Box<dyn postgres::types::ToSql + Sync>> {
     params
         .iter()
         .map(|p| match p {
-            // int4 columns everywhere in the fixture; values are small, so i32 matches the column type.
-            P::I(n) => Box::new(*n as i32) as Box<dyn postgres::types::ToSql + Sync>,
+            P::I(n) => Box::new(PgInt(*n)) as Box<dyn postgres::types::ToSql + Sync>,
             P::S(s) => Box::new(s.clone()),
-            P::B(b) => Box::new(*b),
         })
         .collect()
 }
@@ -204,16 +244,31 @@ fn pg_decode(row: &postgres::Row) -> Vec<Cell> {
         .iter()
         .enumerate()
         .map(|(i, col)| match col.type_().name() {
-            "int2" => row.get::<_, Option<i16>>(i).map(|v| Cell::I(v as i64)).unwrap_or(Cell::Null),
-            "int4" => row.get::<_, Option<i32>>(i).map(|v| Cell::I(v as i64)).unwrap_or(Cell::Null),
-            "int8" => row.get::<_, Option<i64>>(i).map(Cell::I).unwrap_or(Cell::Null),
-            "bool" => row.get::<_, Option<bool>>(i).map(Cell::B).unwrap_or(Cell::Null),
+            "int2" => row
+                .get::<_, Option<i16>>(i)
+                .map(|v| Cell::I(v as i64))
+                .unwrap_or(Cell::Null),
+            "int4" => row
+                .get::<_, Option<i32>>(i)
+                .map(|v| Cell::I(v as i64))
+                .unwrap_or(Cell::Null),
+            "int8" => row
+                .get::<_, Option<i64>>(i)
+                .map(Cell::I)
+                .unwrap_or(Cell::Null),
+            "bool" => row
+                .get::<_, Option<bool>>(i)
+                .map(Cell::B)
+                .unwrap_or(Cell::Null),
             "timestamp" | "timestamptz" => {
                 // Pull + decode the value (wire cost is what matters); content is unused downstream.
                 let _: Option<std::time::SystemTime> = row.get(i);
                 Cell::Null
             }
-            _ => row.get::<_, Option<String>>(i).map(Cell::S).unwrap_or(Cell::Null),
+            _ => row
+                .get::<_, Option<String>>(i)
+                .map(Cell::S)
+                .unwrap_or(Cell::Null),
         })
         .collect()
 }
@@ -239,13 +294,17 @@ impl Db for PgDb {
         QUERY_COUNT.fetch_add(1, Ordering::Relaxed);
         if params.is_empty() {
             // BEGIN/COMMIT + param-free seed statements: run outside the extended protocol.
-            self.client.batch_execute(sql).unwrap_or_else(|e| panic!("exec `{sql}`: {e}"));
+            self.client
+                .batch_execute(sql)
+                .unwrap_or_else(|e| panic!("exec `{sql}`: {e}"));
         } else {
             let boxed = pg_params(params);
             let refs: Vec<&(dyn postgres::types::ToSql + Sync)> =
                 boxed.iter().map(|b| b.as_ref()).collect();
             let stmt = self.prep(sql);
-            self.client.execute(&stmt, &refs).unwrap_or_else(|e| panic!("exec `{sql}`: {e}"));
+            self.client
+                .execute(&stmt, &refs)
+                .unwrap_or_else(|e| panic!("exec `{sql}`: {e}"));
         }
     }
     fn insert_returning_id(&mut self, sql: &str, params: &[P]) -> i64 {
@@ -255,7 +314,10 @@ impl Db for PgDb {
         let refs: Vec<&(dyn postgres::types::ToSql + Sync)> =
             boxed.iter().map(|b| b.as_ref()).collect();
         let stmt = self.prep(&sql);
-        let rows = self.client.query(&stmt, &refs).unwrap_or_else(|e| panic!("insert `{sql}`: {e}"));
+        let rows = self
+            .client
+            .query(&stmt, &refs)
+            .unwrap_or_else(|e| panic!("insert `{sql}`: {e}"));
         rows[0].get::<_, i32>(0) as i64
     }
 }
@@ -268,7 +330,6 @@ fn my_params(params: &[P]) -> Vec<mysql::Value> {
         .map(|p| match p {
             P::I(n) => mysql::Value::Int(*n),
             P::S(s) => mysql::Value::Bytes(s.clone().into_bytes()),
-            P::B(b) => mysql::Value::Int(if *b { 1 } else { 0 }),
         })
         .collect()
 }
@@ -309,15 +370,21 @@ impl Db for MyDb {
         use mysql::prelude::Queryable;
         QUERY_COUNT.fetch_add(1, Ordering::Relaxed);
         if params.is_empty() {
-            self.conn.query_drop(sql).unwrap_or_else(|e| panic!("exec `{sql}`: {e}"));
+            self.conn
+                .query_drop(sql)
+                .unwrap_or_else(|e| panic!("exec `{sql}`: {e}"));
         } else {
-            self.conn.exec_drop(sql, my_params(params)).unwrap_or_else(|e| panic!("exec `{sql}`: {e}"));
+            self.conn
+                .exec_drop(sql, my_params(params))
+                .unwrap_or_else(|e| panic!("exec `{sql}`: {e}"));
         }
     }
     fn insert_returning_id(&mut self, sql: &str, params: &[P]) -> i64 {
         use mysql::prelude::Queryable;
         QUERY_COUNT.fetch_add(1, Ordering::Relaxed);
-        self.conn.exec_drop(sql, my_params(params)).unwrap_or_else(|e| panic!("insert `{sql}`: {e}"));
+        self.conn
+            .exec_drop(sql, my_params(params))
+            .unwrap_or_else(|e| panic!("insert `{sql}`: {e}"));
         self.conn.last_insert_id() as i64
     }
 }
@@ -333,7 +400,9 @@ fn open_db(spec: &str) -> Box<dyn Db> {
         }
         if let Some(url) = spec.strip_prefix("mysql:") {
             let opts = mysql::Opts::from_url(url).expect("parse mysql url");
-            return Box::new(MyDb { conn: mysql::Conn::new(opts).expect("connect mysql") });
+            return Box::new(MyDb {
+                conn: mysql::Conn::new(opts).expect("connect mysql"),
+            });
         }
     }
     // sqlite pilot: an IN-MEMORY DB, matching the native cell (`orm_bench` uses
@@ -355,14 +424,26 @@ struct Setup {
     insert: Vec<String>,
 }
 fn load_setup(dialect: &str) -> Setup {
-    let path = format!("{}/../../benchmark/crosslang/.setup/{dialect}.json", env!("CARGO_MANIFEST_DIR"));
-    let txt = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read seed SSoT {path}: {e}"));
-    let v: serde_json::Value = serde_json::from_str(&txt).unwrap_or_else(|e| panic!("parse {path}: {e}"));
+    let path = format!(
+        "{}/../../benchmark/crosslang/.setup/{dialect}.json",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let txt =
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read seed SSoT {path}: {e}"));
+    let v: serde_json::Value =
+        serde_json::from_str(&txt).unwrap_or_else(|e| panic!("parse {path}: {e}"));
     let arr = |k: &str| {
-        v[k].as_array().unwrap_or_else(|| panic!("{path}: `{k}` not an array"))
-            .iter().map(|s| s.as_str().expect("statement is a string").to_string()).collect::<Vec<_>>()
+        v[k].as_array()
+            .unwrap_or_else(|| panic!("{path}: `{k}` not an array"))
+            .iter()
+            .map(|s| s.as_str().expect("statement is a string").to_string())
+            .collect::<Vec<_>>()
     };
-    Setup { schema: arr("schema"), delete: arr("delete"), insert: arr("insert") }
+    Setup {
+        schema: arr("schema"),
+        delete: arr("delete"),
+        insert: arr("insert"),
+    }
 }
 fn apply_schema(db: &mut dyn Db, setup: &Setup) {
     for sql in &setup.schema {
@@ -397,11 +478,17 @@ fn run_op(op: &str, it: u64, db: &mut dyn Db) {
     let dialect = db.dialect();
     match op {
         "findAll" => {
-            db.query("SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100", &[]);
+            db.query(
+                "SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100",
+                &[],
+            );
         }
         "filterPaginateSort" => {
             let mut ph = Ph::new(dialect);
-            let published = if dialect == Dialect::Pg { P::B(true) } else { P::I(1) };
+            // `published` is an integer column on every dialect (sqlite INTEGER / mysql TINYINT(1) /
+            // pg SMALLINT — see orm-domain.ts `ddl`), and the seed binds 1/0 everywhere. Binding a
+            // pg `bool` here failed with "error serializing parameter 0".
+            let published = P::I(1);
             let sql = format!(
                 "SELECT id, title, content, published, author_id, created_at FROM benchmark_posts \
                  WHERE published = {} ORDER BY created_at DESC LIMIT 20 OFFSET 10",
@@ -428,20 +515,29 @@ fn run_op(op: &str, it: u64, db: &mut dyn Db) {
         // ── nested reads: primary + ONE batched child (2 queries), assembled into the SAME nested
         //    typed object graph the native cell returns (users each holding their Vec<Post>). ───────
         "nestedFindAll" => {
-            let users = db.query("SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100", &[]);
+            let users = db.query(
+                "SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100",
+                &[],
+            );
             let roots = materialize_users_posts(db, users);
             std::hint::black_box(&roots);
         }
         "nestedFindFirst" => {
             let mut ph = Ph::new(dialect);
-            let sql = format!("SELECT id, email, name FROM benchmark_users WHERE name LIKE {} LIMIT 1", ph.next());
+            let sql = format!(
+                "SELECT id, email, name FROM benchmark_users WHERE name LIKE {} LIMIT 1",
+                ph.next()
+            );
             let users = db.query(&sql, &[P::S("User%".into())]);
             let roots = materialize_users_posts(db, users);
             std::hint::black_box(&roots);
         }
         "nestedFindUnique" => {
             let mut ph = Ph::new(dialect);
-            let sql = format!("SELECT id, email, name FROM benchmark_users WHERE email = {} LIMIT 1", ph.next());
+            let sql = format!(
+                "SELECT id, email, name FROM benchmark_users WHERE email = {} LIMIT 1",
+                ph.next()
+            );
             let users = db.query(&sql, &[P::S("user1@example.com".into())]);
             let roots = materialize_users_posts(db, users);
             std::hint::black_box(&roots);
@@ -449,7 +545,10 @@ fn run_op(op: &str, it: u64, db: &mut dyn Db) {
         // ── 3-level chain: users → posts → comments (3 queries), fully assembled (each user holds its
         //    Vec<Post>, each Post its Vec<Comment>). ──────────────────────────────────────────────────
         "nestedRelations" => {
-            let users = db.query("SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100", &[]);
+            let users = db.query(
+                "SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100",
+                &[],
+            );
             let roots = materialize_users_posts_comments(db, users);
             std::hint::black_box(&roots);
         }
@@ -466,7 +565,10 @@ fn run_op(op: &str, it: u64, db: &mut dyn Db) {
                 ph.next(),
                 ph.next()
             );
-            db.exec(&sql, &[P::S(format!("new{it}@bench.com")), P::S("New".into())]);
+            db.exec(
+                &sql,
+                &[P::S(format!("new{it}@bench.com")), P::S("New".into())],
+            );
         }
         "nestedCreate" => {
             db.exec("BEGIN", &[]);
@@ -486,10 +588,18 @@ fn run_op(op: &str, it: u64, db: &mut dyn Db) {
         "nestedUpdate" => {
             db.exec("BEGIN", &[]);
             let mut ph = Ph::new(dialect);
-            let s1 = format!("UPDATE benchmark_users SET name = {} WHERE id = {}", ph.next(), ph.next());
+            let s1 = format!(
+                "UPDATE benchmark_users SET name = {} WHERE id = {}",
+                ph.next(),
+                ph.next()
+            );
             db.exec(&s1, &[P::S("NU".into()), P::I(7)]);
             let mut ph = Ph::new(dialect);
-            let s2 = format!("UPDATE benchmark_posts SET title = {} WHERE author_id = {}", ph.next(), ph.next());
+            let s2 = format!(
+                "UPDATE benchmark_posts SET title = {} WHERE author_id = {}",
+                ph.next(),
+                ph.next()
+            );
             db.exec(&s2, &[P::S("NU Post".into()), P::I(7)]);
             db.exec("COMMIT", &[]);
         }
@@ -501,7 +611,13 @@ fn run_op(op: &str, it: u64, db: &mut dyn Db) {
                 ph.next(),
                 upsert_conflict(dialect)
             );
-            db.exec(&sql, &[P::S("user1@example.com".into()), P::S("Upserted One".into())]);
+            db.exec(
+                &sql,
+                &[
+                    P::S("user1@example.com".into()),
+                    P::S("Upserted One".into()),
+                ],
+            );
         }
         "nestedUpsert" => {
             db.exec("BEGIN", &[]);
@@ -533,8 +649,13 @@ fn run_op(op: &str, it: u64, db: &mut dyn Db) {
             let emails = batch_emails(it);
             let names = batch_names();
             let mut ph = Ph::new(dialect);
-            let rows: Vec<String> = (0..10).map(|_| format!("({}, {})", ph.next(), ph.next())).collect();
-            let sql = format!("INSERT INTO benchmark_users (email, name) VALUES {}", rows.join(","));
+            let rows: Vec<String> = (0..10)
+                .map(|_| format!("({}, {})", ph.next(), ph.next()))
+                .collect();
+            let sql = format!(
+                "INSERT INTO benchmark_users (email, name) VALUES {}",
+                rows.join(",")
+            );
             let mut params = Vec::with_capacity(20);
             for k in 0..10 {
                 params.push(P::S(emails[k].clone()));
@@ -543,11 +664,14 @@ fn run_op(op: &str, it: u64, db: &mut dyn Db) {
             db.exec(&sql, &params);
         }
         "upsertMany" => {
-            let mut emails: Vec<String> = vec!["user1@example.com".into(), "user2@example.com".into()];
+            let mut emails: Vec<String> =
+                vec!["user1@example.com".into(), "user2@example.com".into()];
             emails.extend((0..8).map(|k| format!("many{k}@bench.com")));
             let names = batch_names();
             let mut ph = Ph::new(dialect);
-            let rows: Vec<String> = (0..10).map(|_| format!("({}, {})", ph.next(), ph.next())).collect();
+            let rows: Vec<String> = (0..10)
+                .map(|_| format!("({}, {})", ph.next(), ph.next()))
+                .collect();
             let sql = format!(
                 "INSERT INTO benchmark_users (email, name) VALUES {}{}",
                 rows.join(","),
@@ -693,7 +817,10 @@ fn materialize_users_posts(db: &mut dyn Db, users: Vec<Vec<Cell>>) -> Vec<SdkUse
     // group posts by author_id, then MOVE each group into its parent user.
     let mut by_author: HashMap<i64, Vec<SdkPost>> = HashMap::new();
     for p in posts {
-        by_author.entry(p.author_id.unwrap_or(0)).or_default().push(p);
+        by_author
+            .entry(p.author_id.unwrap_or(0))
+            .or_default()
+            .push(p);
     }
     for u in &mut users {
         u.posts = by_author.remove(&u.id).unwrap_or_default();
@@ -714,7 +841,8 @@ fn materialize_users_posts_comments(db: &mut dyn Db, users: Vec<Vec<Cell>>) -> V
         "SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN ({}) ORDER BY id ASC",
         ph.list(uids.len())
     );
-    let mut posts = decode_posts(db.query(&psql, &uids.iter().map(|i| P::I(*i)).collect::<Vec<_>>()));
+    let mut posts =
+        decode_posts(db.query(&psql, &uids.iter().map(|i| P::I(*i)).collect::<Vec<_>>()));
     let pids: Vec<i64> = posts.iter().map(|p| p.id).collect();
     if !pids.is_empty() {
         let mut ph = Ph::new(db.dialect());
@@ -734,7 +862,10 @@ fn materialize_users_posts_comments(db: &mut dyn Db, users: Vec<Vec<Cell>>) -> V
     }
     let mut by_author: HashMap<i64, Vec<SdkPost>> = HashMap::new();
     for p in posts {
-        by_author.entry(p.author_id.unwrap_or(0)).or_default().push(p);
+        by_author
+            .entry(p.author_id.unwrap_or(0))
+            .or_default()
+            .push(p);
     }
     for u in &mut users {
         u.posts = by_author.remove(&u.id).unwrap_or_default();
@@ -822,7 +953,9 @@ fn materialize_composite(db: &mut dyn Db) -> Vec<SdkTenantUser> {
             by_post.entry((c.tenant_id, c.post_id)).or_default().push(c);
         }
         for p in &mut tposts {
-            p.comments = by_post.remove(&(p.tenant_id, p.post_id)).unwrap_or_default();
+            p.comments = by_post
+                .remove(&(p.tenant_id, p.post_id))
+                .unwrap_or_default();
         }
     }
     let mut by_user: HashMap<(i64, i64), Vec<SdkTenantPost>> = HashMap::new();
@@ -830,7 +963,9 @@ fn materialize_composite(db: &mut dyn Db) -> Vec<SdkTenantUser> {
         by_user.entry((p.tenant_id, p.user_id)).or_default().push(p);
     }
     for u in &mut tusers {
-        u.posts = by_user.remove(&(u.tenant_id, u.user_id)).unwrap_or_default();
+        u.posts = by_user
+            .remove(&(u.tenant_id, u.user_id))
+            .unwrap_or_default();
     }
     tusers
 }
@@ -838,12 +973,20 @@ fn materialize_composite(db: &mut dyn Db) -> Vec<SdkTenantUser> {
 // ── write helpers ─────────────────────────────────────────────────────────────────────────────────────
 fn insert_user(db: &mut dyn Db, email: String, name: &str) -> i64 {
     let mut ph = Ph::new(db.dialect());
-    let sql = format!("INSERT INTO benchmark_users (email, name) VALUES ({}, {})", ph.next(), ph.next());
+    let sql = format!(
+        "INSERT INTO benchmark_users (email, name) VALUES ({}, {})",
+        ph.next(),
+        ph.next()
+    );
     db.insert_returning_id(&sql, &[P::S(email), P::S(name.into())])
 }
 fn insert_post(db: &mut dyn Db, author_id: i64, title: &str) {
     let mut ph = Ph::new(db.dialect());
-    let sql = format!("INSERT INTO benchmark_posts (author_id, title) VALUES ({}, {})", ph.next(), ph.next());
+    let sql = format!(
+        "INSERT INTO benchmark_posts (author_id, title) VALUES ({}, {})",
+        ph.next(),
+        ph.next()
+    );
     db.exec(&sql, &[P::I(author_id), P::S(title.into())]);
 }
 
@@ -896,9 +1039,25 @@ fn update_many(db: &mut dyn Db) {
 }
 
 const OPS: &[&str] = &[
-    "findAll", "filterPaginateSort", "findFirst", "findUnique", "nestedFindAll", "nestedFindFirst",
-    "nestedFindUnique", "create", "nestedCreate", "update", "nestedUpdate", "upsert", "nestedUpsert",
-    "delete", "createMany", "upsertMany", "updateMany", "nestedRelations", "compositeRelations",
+    "findAll",
+    "filterPaginateSort",
+    "findFirst",
+    "findUnique",
+    "nestedFindAll",
+    "nestedFindFirst",
+    "nestedFindUnique",
+    "create",
+    "nestedCreate",
+    "update",
+    "nestedUpdate",
+    "upsert",
+    "nestedUpsert",
+    "delete",
+    "createMany",
+    "upsertMany",
+    "updateMany",
+    "nestedRelations",
+    "compositeRelations",
 ];
 
 fn main() {
@@ -909,8 +1068,14 @@ fn main() {
         run_safety(&dialect, &spec);
         return;
     }
-    let dialect = args.get(1).expect("usage: orm_bench_sdk <dialect> <spec> [reps] [warmup]").clone();
-    let spec = args.get(2).expect("usage: orm_bench_sdk <dialect> <spec> [reps] [warmup]").clone();
+    let dialect = args
+        .get(1)
+        .expect("usage: orm_bench_sdk <dialect> <spec> [reps] [warmup]")
+        .clone();
+    let spec = args
+        .get(2)
+        .expect("usage: orm_bench_sdk <dialect> <spec> [reps] [warmup]")
+        .clone();
     let reps: u64 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(300);
     let warmup: u64 = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(30);
 
@@ -945,12 +1110,30 @@ fn run_safety(dialect: &str, spec: &str) {
         run_op(op, 0, db);
         QUERY_COUNT.load(Ordering::SeqCst)
     };
-    println!("nestedFindAll queries={} (expect 2: 1 parent + 1 batched child)", count("nestedFindAll", db.as_mut()));
-    println!("nestedFindUnique queries={} (expect 2)", count("nestedFindUnique", db.as_mut()));
-    println!("nestedRelations queries={} (expect 3: users + posts + comments)", count("nestedRelations", db.as_mut()));
-    println!("compositeRelations queries={} (expect 3)", count("compositeRelations", db.as_mut()));
+    println!(
+        "nestedFindAll queries={} (expect 2: 1 parent + 1 batched child)",
+        count("nestedFindAll", db.as_mut())
+    );
+    println!(
+        "nestedFindUnique queries={} (expect 2)",
+        count("nestedFindUnique", db.as_mut())
+    );
+    println!(
+        "nestedRelations queries={} (expect 3: users + posts + comments)",
+        count("nestedRelations", db.as_mut())
+    );
+    println!(
+        "compositeRelations queries={} (expect 3)",
+        count("compositeRelations", db.as_mut())
+    );
     reseed(db.as_mut(), &setup);
-    println!("createMany queries={} (expect 1: one batched INSERT for 10 records)", count("createMany", db.as_mut()));
+    println!(
+        "createMany queries={} (expect 1: one batched INSERT for 10 records)",
+        count("createMany", db.as_mut())
+    );
     reseed(db.as_mut(), &setup);
-    println!("updateMany queries={} (expect 1)", count("updateMany", db.as_mut()));
+    println!(
+        "updateMany queries={} (expect 1)",
+        count("updateMany", db.as_mut())
+    );
 }
