@@ -7,6 +7,11 @@ pub struct Setup {
     pub schema: Vec<String>,
     pub delete: Vec<String>,
     pub insert: Vec<String>,
+    /// The statements each op issues, in order, captured from the GENERATED module at the runtime seam
+    /// (`lm_orm_native sql`). The SDK baseline executes THESE rather than hand-writing its own SQL: the
+    /// report divides native by sdk, which only isolates the runtime's cost if both send the same
+    /// statements. SQL is a property of the dialect, not of the language.
+    pub ops: std::collections::HashMap<String, Vec<String>>,
 }
 
 /// Read one dialect's setup. Anchored on the CALLER's manifest dir, which is `rust/<cell>/`.
@@ -22,7 +27,23 @@ pub fn load_setup(dialect: &str, manifest_dir: &str) -> Setup {
             .map(|s| s.as_str().expect("statement is a string").to_string())
             .collect::<Vec<_>>()
     };
-    Setup { schema: arr("schema"), delete: arr("delete"), insert: arr("insert") }
+    let ops = v["ops"]
+        .as_object()
+        .map(|m| {
+            m.iter()
+                .map(|(k, list)| {
+                    let stmts = list
+                        .as_array()
+                        .unwrap_or_else(|| panic!("{path}: ops.{k} not an array"))
+                        .iter()
+                        .map(|s| s.as_str().expect("statement is a string").to_string())
+                        .collect();
+                    (k.clone(), stmts)
+                })
+                .collect()
+        })
+        .unwrap_or_else(|| panic!("{path}: no `ops` — run `lm_orm_native sql` for this dialect"));
+    Setup { schema: arr("schema"), delete: arr("delete"), insert: arr("insert"), ops }
 }
 
 fn env_or(k: &str, def: &str) -> String {

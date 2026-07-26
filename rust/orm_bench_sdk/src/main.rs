@@ -15,7 +15,9 @@
 //! `<dialect>` is sqlite | postgres | mysql; postgres/mysql need `--features livedb` and take their
 //! connection from the TEST_* environment (orm_bench_common), never from a second argv knob.
 
-use orm_bench_common::{load_setup as load_setup_at, mysql_url, postgres_conn, Setup};
+use orm_bench_common::{load_setup as load_setup_at, Setup};
+#[cfg(feature = "livedb")]
+use orm_bench_common::{mysql_url, postgres_conn};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -40,6 +42,7 @@ enum Dialect {
 }
 
 /// A bind parameter, dialect-agnostic; each driver lowers it to its own param type in the exec seam.
+#[derive(Clone)]
 enum P {
     I(i64),
     S(String),
@@ -61,43 +64,6 @@ fn cell_i64(c: &Cell) -> i64 {
     match c {
         Cell::I(n) => *n,
         _ => 0,
-    }
-}
-
-/// Placeholder emitter: `?` for sqlite/mysql, `$1,$2,…` for postgres (positional per statement).
-struct Ph {
-    dialect: Dialect,
-    n: usize,
-}
-impl Ph {
-    fn new(d: Dialect) -> Self {
-        Ph { dialect: d, n: 0 }
-    }
-    fn next(&mut self) -> String {
-        self.n += 1;
-        match self.dialect {
-            Dialect::Pg => format!("${}", self.n),
-            _ => "?".to_string(),
-        }
-    }
-    /// `ph,ph,…` for a flat `IN (…)` list of `count` scalars.
-    fn list(&mut self, count: usize) -> String {
-        (0..count)
-            .map(|_| self.next())
-            .collect::<Vec<_>>()
-            .join(",")
-    }
-    /// A row-tuple IN body over `rows` tuples of `cols` columns each, in the form each dialect accepts:
-    /// pg/mysql `((?,?),(?,?),…)`, sqlite `(VALUES (?,?),(?,?),…)`.
-    fn tuple_in(&mut self, rows: usize, cols: usize) -> String {
-        let body = (0..rows)
-            .map(|_| format!("({})", self.list(cols)))
-            .collect::<Vec<_>>()
-            .join(",");
-        match self.dialect {
-            Dialect::Sqlite => format!("(VALUES {body})"),
-            _ => format!("({body})"),
-        }
     }
 }
 
@@ -133,10 +99,16 @@ trait Db {
         recover_params: &[P],
     ) -> i64 {
         if self.dialect() != Dialect::Mysql {
-            let rows = self.query(&format!("{sql} RETURNING id"), params);
+            let rows = self.query(sql, params);
             return cell_i64(&rows[0][0]);
         }
-        self.exec(sql, params);
+        // MySQL cannot parse RETURNING: strip the clause (and the /*scp:pk=…*/ hint naming the key) exactly
+        // as the runtime's mysql adapter does, then recover the written row with the keyed SELECT.
+        let stripped = match sql.to_uppercase().rfind(" RETURNING ") {
+            Some(at) => sql[..at].to_string(),
+            None => sql.to_string(),
+        };
+        self.exec(&stripped, params);
         let rows = self.recover_rows(recover, recover_params);
         cell_i64(&rows[0][0])
     }
@@ -451,6 +423,11 @@ fn reseed(db: &mut dyn Db, setup: &Setup) {
 }
 
 // ── batch-write inputs (mirror ops.ts / the native cell) ──────────────────────────────────────────────
+/// The stable 10-record email set `upsertMany` conflicts on — the SAME records the native cell upserts.
+fn batch_emails_stable() -> Vec<String> {
+    (0..10).map(|k| format!("many{k}@bench.com")).collect()
+}
+
 fn batch_emails(it: u64) -> Vec<String> {
     (0..10).map(|k| format!("many{it}_{k}@bench.com")).collect()
 }
@@ -459,210 +436,229 @@ fn batch_names() -> Vec<String> {
 }
 
 // ── upsert bodies differ only in the conflict clause; the column list + VALUES are shared. ───────────
-fn upsert_conflict(dialect: Dialect) -> &'static str {
-    match dialect {
-        Dialect::Mysql => " ON DUPLICATE KEY UPDATE email = VALUES(email), name = VALUES(name)",
-        _ => " ON CONFLICT (email) DO UPDATE SET email = excluded.email, name = excluded.name",
-    }
+/// One relation level's key set as the ONE param the captured SQL expects. The generated module binds a
+/// batched child read's key set as a single JSON array (`json_each(?)` / `JSON_TABLE(?)` /
+/// `UNNEST(?::t[])`), never as N placeholders — so the baseline binds it the same way, or it is running
+/// different SQL. A composite key is an array of tuples, a single key an array of scalars.
+/// The 10-row batch record set as (email, name) pairs — the same records the native cell passes.
+fn user_records(it: u64, stable: bool) -> Vec<(String, String)> {
+    let emails = if stable {
+        batch_emails_stable()
+    } else {
+        batch_emails(it)
+    };
+    let names = batch_names();
+    (0..10)
+        .map(|k| (emails[k].clone(), names[k].clone()))
+        .collect()
 }
+
+/// The id-keyed 10-row batch set `updateMany` binds.
+fn patch_records() -> Vec<(String, String)> {
+    let names = batch_names();
+    (0..10)
+        .map(|k| ((k + 1).to_string(), names[k].clone()))
+        .collect()
+}
+
+fn key_param(tuples: &[Vec<i64>]) -> P {
+    let body: Vec<String> = tuples
+        .iter()
+        .map(|t| {
+            if t.len() == 1 {
+                t[0].to_string()
+            } else {
+                format!(
+                    "[{}]",
+                    t.iter()
+                        .map(|v| v.to_string())
+                        .collect::<Vec<_>>()
+                        .join(",")
+                )
+            }
+        })
+        .collect();
+    P::S(format!("[{}]", body.join(",")))
+}
+
+/// A batch write's record set as the param(s) the captured statement expects: ONE JSON array on
+/// MySQL/SQLite, one array PER COLUMN on PostgreSQL (its `UNNEST` form takes column arrays). The payload
+/// repeats once per `?` — updateMany's SET subquery and its WHERE each read it.
+fn batch_params(dialect: Dialect, sql: &str, records: &[(String, String)], keyed: bool) -> Vec<P> {
+    let quote = |v: &str| format!("\"{}\"", v.replace('\\', "\\\\").replace('"', "\\\""));
+    let one: Vec<P> = if dialect == Dialect::Pg {
+        vec![
+            P::S(format!(
+                "[{}]",
+                records
+                    .iter()
+                    .map(|(a, _)| if keyed { a.clone() } else { quote(a) })
+                    .collect::<Vec<_>>()
+                    .join(",")
+            )),
+            P::S(format!(
+                "[{}]",
+                records
+                    .iter()
+                    .map(|(_, b)| quote(b))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            )),
+        ]
+    } else {
+        let key = if keyed { "id" } else { "email" };
+        let objs: Vec<String> = records
+            .iter()
+            .map(|(a, b)| {
+                let first = if keyed { a.clone() } else { quote(a) };
+                format!("{{\"{key}\":{first},\"name\":{}}}", quote(b))
+            })
+            .collect();
+        vec![P::S(format!("[{}]", objs.join(",")))]
+    };
+    // Count only `?`: the captured SQL always carries `?` (the runtime rewrites to `$N` below the
+    // seam), and `$` also appears inside the JSON paths `'$.email'` / `'$[0]'`.
+    let reps = (sql.matches('?').count() / one.len()).max(1);
+    (0..reps).flat_map(|_| one.clone()).collect()
+}
+
+/// The keyed SELECTs the runtime's MySQL adapter recovers a RETURNING write's rows with
+/// (src/scp/makesql/mysql-returning.ts): the conflict key for an upsert, the AUTO_INCREMENT range for an
+/// insert, the write's own WHERE for an update. Only MySQL runs them — the others have RETURNING.
+const RECOVER_BY_EMAIL: &str = "SELECT id FROM benchmark_users WHERE email = ?";
+const RECOVER_BY_LAST_INSERT_ID: &str =
+    "SELECT id FROM benchmark_users WHERE id = LAST_INSERT_ID()";
+const RECOVER_BY_ID: &str = "SELECT id FROM benchmark_users WHERE id = ?";
 
 // ── the 19 ORM ops (contract.ts order). Each runs ONE logical op for iteration `it`; mutating ops vary
 //    their UNIQUE column by `it`. Fixed inputs mirror ops.ts (the SCP SSoT). ──────────────────────────
-fn run_op(op: &str, it: u64, db: &mut dyn Db) {
+/// Run ONE op, issuing the statements the GENERATED module issues for this dialect (`sql` =
+/// `setup.ops[op]`, captured at the runtime seam). The baseline hand-writes no SQL: the report divides
+/// native by sdk, which only isolates the runtime's cost if both send the DB the same statements. What
+/// stays hand-written is what a raw-driver user writes: param binding, decode, grouping children into
+/// parents, and the transaction bracket.
+fn run_op(op: &str, it: u64, db: &mut dyn Db, sql: &[String]) {
     let dialect = db.dialect();
     match op {
         "findAll" => {
-            db.query(
-                "SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100",
-                &[],
-            );
+            db.query(&sql[0], &[]);
         }
         "filterPaginateSort" => {
-            let mut ph = Ph::new(dialect);
             // `published` is an integer column on every dialect (sqlite INTEGER / mysql TINYINT(1) /
-            // pg SMALLINT — see orm-domain.ts `ddl`), and the seed binds 1/0 everywhere. Binding a
-            // pg `bool` here failed with "error serializing parameter 0".
-            let published = P::I(1);
-            let sql = format!(
-                "SELECT id, title, content, published, author_id, created_at FROM benchmark_posts \
-                 WHERE published = {} ORDER BY created_at DESC LIMIT 20 OFFSET 10",
-                ph.next()
-            );
-            db.query(&sql, &[published]);
+            // pg SMALLINT — see orm-domain.ts `ddl`), and the seed binds 1/0 everywhere.
+            db.query(&sql[0], &[P::I(1)]);
         }
         "findFirst" => {
-            let mut ph = Ph::new(dialect);
-            let sql = format!(
-                "SELECT id, email, name FROM benchmark_users WHERE name LIKE {} LIMIT 1",
-                ph.next()
-            );
-            db.query(&sql, &[P::S("User%".into())]);
+            db.query(&sql[0], &[P::S("User%".into())]);
         }
         "findUnique" => {
-            let mut ph = Ph::new(dialect);
-            let sql = format!(
-                "SELECT id, email, name FROM benchmark_users WHERE email = {} LIMIT 1",
-                ph.next()
-            );
-            db.query(&sql, &[P::S("user500@example.com".into())]);
+            db.query(&sql[0], &[P::S("user500@example.com".into())]);
         }
-        // ── nested reads: primary + ONE batched child (2 queries), assembled into the SAME nested
-        //    typed object graph the native cell returns (users each holding their Vec<Post>). ───────
         "nestedFindAll" => {
-            let users = db.query(
-                "SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100",
-                &[],
-            );
-            let roots = materialize_users_posts(db, users);
+            let users = db.query(&sql[0], &[]);
+            let roots = materialize_users_posts(db, users, &sql[1]);
             std::hint::black_box(&roots);
         }
         "nestedFindFirst" => {
-            let mut ph = Ph::new(dialect);
-            let sql = format!(
-                "SELECT id, email, name FROM benchmark_users WHERE name LIKE {} LIMIT 1",
-                ph.next()
-            );
-            let users = db.query(&sql, &[P::S("User%".into())]);
-            let roots = materialize_users_posts(db, users);
+            let users = db.query(&sql[0], &[P::S("User%".into())]);
+            let roots = materialize_users_posts(db, users, &sql[1]);
             std::hint::black_box(&roots);
         }
         "nestedFindUnique" => {
-            let mut ph = Ph::new(dialect);
-            let sql = format!(
-                "SELECT id, email, name FROM benchmark_users WHERE email = {} LIMIT 1",
-                ph.next()
-            );
-            let users = db.query(&sql, &[P::S("user1@example.com".into())]);
-            let roots = materialize_users_posts(db, users);
+            let users = db.query(&sql[0], &[P::S("user1@example.com".into())]);
+            let roots = materialize_users_posts(db, users, &sql[1]);
             std::hint::black_box(&roots);
         }
-        // ── 3-level chain: users → posts → comments (3 queries), fully assembled (each user holds its
-        //    Vec<Post>, each Post its Vec<Comment>). ──────────────────────────────────────────────────
         "nestedRelations" => {
-            let users = db.query(
-                "SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100",
-                &[],
-            );
-            let roots = materialize_users_posts_comments(db, users);
+            let users = db.query(&sql[0], &[]);
+            let roots = materialize_users_posts_comments(db, users, &sql[1], &sql[2]);
             std::hint::black_box(&roots);
         }
-        // ── composite 3-level: tenant_users → tenant_posts → tenant_comments (3 queries), assembled by
-        //    the composite (tenant_id,*) key into the nested typed graph. ─────────────────────────────
         "compositeRelations" => {
-            let roots = materialize_composite(db);
+            let roots = materialize_composite(db, sql);
             std::hint::black_box(&roots);
         }
         "create" => {
-            let mut ph = Ph::new(dialect);
-            let sql = format!(
-                "INSERT INTO benchmark_users (email, name) VALUES ({}, {})",
-                ph.next(),
-                ph.next()
-            );
             db.exec(
-                &sql,
+                &sql[0],
                 &[P::S(format!("new{it}@bench.com")), P::S("New".into())],
             );
         }
-        "nestedCreate" => {
-            db.exec("BEGIN", &[]);
-            let uid = insert_user(db, format!("nc{it}@bench.com"), "NC");
-            insert_post(db, uid, "NC Post");
-            db.exec("COMMIT", &[]);
-        }
         "update" => {
-            let mut ph = Ph::new(dialect);
-            let sql = format!(
-                "UPDATE benchmark_users SET name = {} WHERE id = {}",
-                ph.next(),
-                ph.next()
-            );
-            db.exec(&sql, &[P::S("Updated 1".into()), P::I(1)]);
-        }
-        "nestedUpdate" => {
-            db.exec("BEGIN", &[]);
-            let mut ph = Ph::new(dialect);
-            let s1 = format!(
-                "UPDATE benchmark_users SET name = {} WHERE id = {}",
-                ph.next(),
-                ph.next()
-            );
-            let mut rph = Ph::new(dialect);
-            let recover = format!("SELECT id FROM benchmark_users WHERE id = {}", rph.next());
-            // The native module chains the dependent UPDATE off the id the first UPDATE returned; taking
-            // the id from the input instead would skip a statement's worth of work.
-            let uid = db.write_returning_id(
-                &s1,
-                &[P::S("NU".into()), P::I(1)],
-                &recover, // recovered by the write's own WHERE
-                &[P::I(1)],
-            );
-            let mut ph = Ph::new(dialect);
-            let s2 = format!(
-                "UPDATE benchmark_posts SET title = {} WHERE author_id = {}",
-                ph.next(),
-                ph.next()
-            );
-            db.exec(&s2, &[P::S("NU Post".into()), P::I(uid)]);
-            db.exec("COMMIT", &[]);
+            db.exec(&sql[0], &[P::S("Updated 1".into()), P::I(1)]);
         }
         "upsert" => {
-            // The native module declares ` RETURNING id` here, so the baseline reads the id back too.
-            let _ = upsert_user(db, "user1@example.com", "Upserted One");
+            // The captured statement declares ` RETURNING id`, so the baseline reads the id back too.
+            let _ = db.write_returning_id(
+                &sql[0],
+                &[
+                    P::S("user1@example.com".into()),
+                    P::S("Upserted One".into()),
+                ],
+                RECOVER_BY_EMAIL,
+                &[P::S("user1@example.com".into())],
+            );
+        }
+        "createMany" => {
+            let recs = user_records(it, false);
+            db.exec(&sql[0], &batch_params(dialect, &sql[0], &recs, false));
+        }
+        "upsertMany" => {
+            // The SAME 10 records the native module upserts.
+            let recs = user_records(it, true);
+            db.exec(&sql[0], &batch_params(dialect, &sql[0], &recs, false));
+        }
+        "updateMany" => {
+            let recs = patch_records();
+            db.exec(&sql[0], &batch_params(dialect, &sql[0], &recs, true));
+        }
+        "nestedCreate" => {
+            db.exec("BEGIN", &[]);
+            let uid = db.write_returning_id(
+                &sql[0],
+                &[P::S(format!("nc{it}@bench.com")), P::S("NC".into())],
+                RECOVER_BY_LAST_INSERT_ID,
+                &[],
+            );
+            db.exec(&sql[1], &[P::I(uid), P::S("NC Post".into())]);
+            db.exec("COMMIT", &[]);
         }
         "nestedUpsert" => {
             db.exec("BEGIN", &[]);
-            let uid = upsert_user(db, "user1@example.com", "NUp");
-            insert_post(db, uid, "NUp Post");
+            let uid = db.write_returning_id(
+                &sql[0],
+                &[P::S("user1@example.com".into()), P::S("NUp".into())],
+                RECOVER_BY_EMAIL,
+                &[P::S("user1@example.com".into())],
+            );
+            db.exec(&sql[1], &[P::I(uid), P::S("NUp Post".into())]);
+            db.exec("COMMIT", &[]);
+        }
+        "nestedUpdate" => {
+            db.exec("BEGIN", &[]);
+            // The generated runner chains the dependent UPDATE off the id the first UPDATE returned;
+            // taking the id from the input instead would skip a statement's worth of work.
+            let uid = db.write_returning_id(
+                &sql[0],
+                &[P::S("NU".into()), P::I(1)],
+                RECOVER_BY_ID,
+                &[P::I(1)],
+            );
+            db.exec(&sql[1], &[P::S("NU Post".into()), P::I(uid)]);
             db.exec("COMMIT", &[]);
         }
         "delete" => {
             db.exec("BEGIN", &[]);
-            let uid = insert_user(db, format!("del{it}@bench.com"), "Del");
-            let mut ph = Ph::new(dialect);
-            let del = format!("DELETE FROM benchmark_users WHERE id = {}", ph.next());
-            db.exec(&del, &[P::I(uid)]);
+            let uid = db.write_returning_id(
+                &sql[0],
+                &[P::S(format!("del{it}@bench.com")), P::S("Del".into())],
+                RECOVER_BY_LAST_INSERT_ID,
+                &[],
+            );
+            db.exec(&sql[1], &[P::I(uid)]);
             db.exec("COMMIT", &[]);
         }
-        "createMany" => {
-            let emails = batch_emails(it);
-            let names = batch_names();
-            let mut ph = Ph::new(dialect);
-            let rows: Vec<String> = (0..10)
-                .map(|_| format!("({}, {})", ph.next(), ph.next()))
-                .collect();
-            let sql = format!(
-                "INSERT INTO benchmark_users (email, name) VALUES {}",
-                rows.join(",")
-            );
-            let mut params = Vec::with_capacity(20);
-            for k in 0..10 {
-                params.push(P::S(emails[k].clone()));
-                params.push(P::S(names[k].clone()));
-            }
-            db.exec(&sql, &params);
-        }
-        "upsertMany" => {
-            let emails: Vec<String> = (0..10).map(|k| format!("many{k}@bench.com")).collect();
-            let names = batch_names();
-            let mut ph = Ph::new(dialect);
-            let rows: Vec<String> = (0..10)
-                .map(|_| format!("({}, {})", ph.next(), ph.next()))
-                .collect();
-            let sql = format!(
-                "INSERT INTO benchmark_users (email, name) VALUES {}{}",
-                rows.join(","),
-                upsert_conflict(dialect)
-            );
-            let mut params = Vec::with_capacity(20);
-            for k in 0..10 {
-                params.push(P::S(emails[k].clone()));
-                params.push(P::S(names[k].clone()));
-            }
-            db.exec(&sql, &params);
-        }
-        "updateMany" => update_many(db),
-        other => panic!("unknown op '{other}'"),
+        other => panic!("unknown op {other:?}"),
     }
 }
 
@@ -779,18 +775,17 @@ fn decode_comments(rows: Vec<Vec<Cell>>) -> Vec<SdkComment> {
 
 /// Read the batched child posts for `users`, decode them into typed `SdkPost` structs, and attach each
 /// group into its parent user BY MOVE (2 queries total; the parent read already happened in the op arm).
-fn materialize_users_posts(db: &mut dyn Db, users: Vec<Vec<Cell>>) -> Vec<SdkUser> {
+fn materialize_users_posts(
+    db: &mut dyn Db,
+    users: Vec<Vec<Cell>>,
+    child_sql: &str,
+) -> Vec<SdkUser> {
     let mut users = decode_users(users);
-    let ids: Vec<i64> = users.iter().map(|u| u.id).collect();
+    let ids: Vec<Vec<i64>> = users.iter().map(|u| vec![u.id]).collect();
     if ids.is_empty() {
         return users;
     }
-    let mut ph = Ph::new(db.dialect());
-    let sql = format!(
-        "SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN ({}) ORDER BY id ASC",
-        ph.list(ids.len())
-    );
-    let posts = decode_posts(db.query(&sql, &ids.iter().map(|i| P::I(*i)).collect::<Vec<_>>()));
+    let posts = decode_posts(db.query(child_sql, &[key_param(&ids)]));
     // group posts by author_id, then MOVE each group into its parent user.
     let mut by_author: HashMap<i64, Vec<SdkPost>> = HashMap::new();
     for p in posts {
@@ -807,28 +802,21 @@ fn materialize_users_posts(db: &mut dyn Db, users: Vec<Vec<Cell>>) -> Vec<SdkUse
 
 /// 3-level chain: read batched posts then batched comments, assemble the full nested typed graph
 /// (comments MOVED into posts by post_id, posts MOVED into users by author_id). 3 queries total.
-fn materialize_users_posts_comments(db: &mut dyn Db, users: Vec<Vec<Cell>>) -> Vec<SdkUser> {
+fn materialize_users_posts_comments(
+    db: &mut dyn Db,
+    users: Vec<Vec<Cell>>,
+    post_sql: &str,
+    comment_sql: &str,
+) -> Vec<SdkUser> {
     let mut users = decode_users(users);
-    let uids: Vec<i64> = users.iter().map(|u| u.id).collect();
+    let uids: Vec<Vec<i64>> = users.iter().map(|u| vec![u.id]).collect();
     if uids.is_empty() {
         return users;
     }
-    let mut ph = Ph::new(db.dialect());
-    let psql = format!(
-        "SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN ({}) ORDER BY id ASC",
-        ph.list(uids.len())
-    );
-    let mut posts =
-        decode_posts(db.query(&psql, &uids.iter().map(|i| P::I(*i)).collect::<Vec<_>>()));
-    let pids: Vec<i64> = posts.iter().map(|p| p.id).collect();
+    let mut posts = decode_posts(db.query(post_sql, &[key_param(&uids)]));
+    let pids: Vec<Vec<i64>> = posts.iter().map(|p| vec![p.id]).collect();
     if !pids.is_empty() {
-        let mut ph = Ph::new(db.dialect());
-        let csql = format!(
-            "SELECT id, body, post_id FROM benchmark_comments WHERE post_id IN ({}) ORDER BY id ASC",
-            ph.list(pids.len())
-        );
-        let comments =
-            decode_comments(db.query(&csql, &pids.iter().map(|i| P::I(*i)).collect::<Vec<_>>()));
+        let comments = decode_comments(db.query(comment_sql, &[key_param(&pids)]));
         let mut by_post: HashMap<i64, Vec<SdkComment>> = HashMap::new();
         for c in comments {
             by_post.entry(c.post_id.unwrap_or(0)).or_default().push(c);
@@ -853,13 +841,9 @@ fn materialize_users_posts_comments(db: &mut dyn Db, users: Vec<Vec<Cell>>) -> V
 /// compositeRelations: tenant_users(tenant=1) → batched tenant_posts by (tenant_id,user_id) → batched
 /// tenant_comments by (tenant_id,post_id). 3 queries; assembled into the nested typed graph keyed on the
 /// FULL composite (tenant_id,*) tuple (comments MOVED into posts, posts MOVED into users).
-fn materialize_composite(db: &mut dyn Db) -> Vec<SdkTenantUser> {
-    // The native module's parent window: ordered by user_id and capped at 100 ACROSS tenants. A
-    // single-tenant scan happens to return the same row count, but it is a different query and it does not
-    // exercise the composite key this op exists for (post_id/comment_id RESTART per tenant).
-    let sql = "SELECT tenant_id, user_id, name FROM benchmark_tenant_users ORDER BY user_id ASC LIMIT 100";
+fn materialize_composite(db: &mut dyn Db, sql: &[String]) -> Vec<SdkTenantUser> {
     let mut tusers: Vec<SdkTenantUser> = db
-        .query(sql, &[])
+        .query(&sql[0], &[])
         .into_iter()
         .map(|r| {
             let mut it = r.into_iter();
@@ -874,19 +858,13 @@ fn materialize_composite(db: &mut dyn Db) -> Vec<SdkTenantUser> {
     if tusers.is_empty() {
         return tusers;
     }
-    // batched posts by (tenant_id, user_id)
-    let mut ph = Ph::new(db.dialect());
-    let body = ph.tuple_in(tusers.len(), 2);
-    let psql = format!(
-        "SELECT tenant_id, post_id, user_id, title FROM benchmark_tenant_posts WHERE (tenant_id, user_id) IN {body}"
-    );
-    let mut pparams = Vec::new();
-    for u in &tusers {
-        pparams.push(P::I(u.tenant_id));
-        pparams.push(P::I(u.user_id));
-    }
+    // batched posts by (tenant_id, user_id) — the key set as ONE param, as the generated module binds it
+    let ukeys: Vec<Vec<i64>> = tusers
+        .iter()
+        .map(|u| vec![u.tenant_id, u.user_id])
+        .collect();
     let mut tposts: Vec<SdkTenantPost> = db
-        .query(&psql, &pparams)
+        .query(&sql[1], &[key_param(&ukeys)])
         .into_iter()
         .map(|r| {
             let mut it = r.into_iter();
@@ -901,18 +879,12 @@ fn materialize_composite(db: &mut dyn Db) -> Vec<SdkTenantUser> {
         .collect();
     if !tposts.is_empty() {
         // batched comments by (tenant_id, post_id)
-        let mut ph = Ph::new(db.dialect());
-        let body = ph.tuple_in(tposts.len(), 2);
-        let csql = format!(
-            "SELECT tenant_id, comment_id, post_id, body FROM benchmark_tenant_comments WHERE (tenant_id, post_id) IN {body}"
-        );
-        let mut cparams = Vec::new();
-        for p in &tposts {
-            cparams.push(P::I(p.tenant_id));
-            cparams.push(P::I(p.post_id));
-        }
+        let pkeys: Vec<Vec<i64>> = tposts
+            .iter()
+            .map(|p| vec![p.tenant_id, p.post_id])
+            .collect();
         let tcomments: Vec<SdkTenantComment> = db
-            .query(&csql, &cparams)
+            .query(&sql[2], &[key_param(&pkeys)])
             .into_iter()
             .map(|r| {
                 let mut it = r.into_iter();
@@ -944,101 +916,6 @@ fn materialize_composite(db: &mut dyn Db) -> Vec<SdkTenantUser> {
             .unwrap_or_default();
     }
     tusers
-}
-
-// ── write helpers ─────────────────────────────────────────────────────────────────────────────────────
-fn insert_user(db: &mut dyn Db, email: String, name: &str) -> i64 {
-    let mut ph = Ph::new(db.dialect());
-    let sql = format!(
-        "INSERT INTO benchmark_users (email, name) VALUES ({}, {})",
-        ph.next(),
-        ph.next()
-    );
-    db.write_returning_id(
-        &sql,
-        &[P::S(email), P::S(name.into())],
-        "SELECT id FROM benchmark_users WHERE id = LAST_INSERT_ID()", // AUTO_INCREMENT recovery
-        &[],
-    )
-}
-
-/// The upsert every write op above shares, reading its id back the way the native module's RETURNING does.
-fn upsert_user(db: &mut dyn Db, email: &str, name: &str) -> i64 {
-    let mut ph = Ph::new(db.dialect());
-    let sql = format!(
-        "INSERT INTO benchmark_users (email, name) VALUES ({}, {}){}",
-        ph.next(),
-        ph.next(),
-        upsert_conflict(db.dialect())
-    );
-    let mut rph = Ph::new(db.dialect());
-    let recover = format!(
-        "SELECT id FROM benchmark_users WHERE email = {}",
-        rph.next()
-    );
-    db.write_returning_id(
-        &sql,
-        &[P::S(email.into()), P::S(name.into())],
-        &recover, // the runtime's conflict-key recovery
-        &[P::S(email.into())],
-    )
-}
-fn insert_post(db: &mut dyn Db, author_id: i64, title: &str) {
-    let mut ph = Ph::new(db.dialect());
-    let sql = format!(
-        "INSERT INTO benchmark_posts (author_id, title) VALUES ({}, {})",
-        ph.next(),
-        ph.next()
-    );
-    db.exec(&sql, &[P::I(author_id), P::S(title.into())]);
-}
-
-/// updateMany: ONE statement setting names for ids 1..=10. sqlite/mysql use a `CASE id` expression with
-/// an `id IN (…)` guard; pg uses a `FROM (VALUES …)` join. All single-statement (N+1-avoided).
-fn update_many(db: &mut dyn Db) {
-    let names = batch_names();
-    match db.dialect() {
-        Dialect::Pg => {
-            let mut ph = Ph::new(Dialect::Pg);
-            // Cast the first tuple so postgres infers the VALUES column types.
-            let mut tuples: Vec<String> = Vec::with_capacity(10);
-            for k in 0..10 {
-                if k == 0 {
-                    tuples.push(format!("({}::integer, {}::varchar)", ph.next(), ph.next()));
-                } else {
-                    tuples.push(format!("({}, {})", ph.next(), ph.next()));
-                }
-            }
-            let sql = format!(
-                "UPDATE benchmark_users AS t SET name = v.name FROM (VALUES {}) AS v(id, name) WHERE t.id = v.id",
-                tuples.join(",")
-            );
-            let mut params = Vec::with_capacity(20);
-            for k in 0..10 {
-                params.push(P::I((k + 1) as i64));
-                params.push(P::S(names[k].clone()));
-            }
-            db.exec(&sql, &params);
-        }
-        _ => {
-            let mut ph = Ph::new(db.dialect());
-            let mut whens = String::new();
-            let mut params: Vec<P> = Vec::with_capacity(30);
-            for k in 0..10 {
-                whens.push_str(&format!(" WHEN {} THEN {}", ph.next(), ph.next()));
-                params.push(P::I((k + 1) as i64));
-                params.push(P::S(names[k].clone()));
-            }
-            let in_list = ph.list(10);
-            for k in 0..10 {
-                params.push(P::I((k + 1) as i64));
-            }
-            let sql = format!(
-                "UPDATE benchmark_users SET name = CASE id{whens} END WHERE id IN ({in_list})"
-            );
-            db.exec(&sql, &params);
-        }
-    }
 }
 
 const OPS: &[&str] = &[
@@ -1078,6 +955,7 @@ fn main() {
     let warmup: u64 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(30);
 
     let setup = load_setup(&dialect);
+    let ops = setup.ops.clone();
     let mut db = open_db(&dialect);
     apply_schema(db.as_mut(), &setup);
     println!("cell,dialect,op,iter,us,rows");
@@ -1086,16 +964,16 @@ fn main() {
         reseed(db.as_mut(), &setup);
         // One UN-TIMED probe measures the rows this op moves — the per-row denominator (#170).
         ROW_COUNT.store(0, Ordering::SeqCst);
-        run_op(op, 0, db.as_mut());
+        run_op(op, 0, db.as_mut(), &ops[*op]);
         let rows = ROW_COUNT.load(Ordering::SeqCst);
         for it in 0..warmup {
-            run_op(op, it + 1, db.as_mut());
+            run_op(op, it + 1, db.as_mut(), &ops[*op]);
         }
         for it in 0..reps {
             // Unique iteration id: the probe took 0, so warmup/timed start at 1.
             let g = it + warmup + 1;
             let t = Instant::now();
-            run_op(op, g, db.as_mut());
+            run_op(op, g, db.as_mut(), &ops[*op]);
             let us = t.elapsed().as_micros();
             println!("sdk,{dialect},{op},{it},{us},{rows}");
         }
@@ -1107,6 +985,7 @@ fn main() {
 // baseline's row yield be compared against the native cell's — the check #170 had no surface for.
 fn run_safety(dialect: &str) {
     let setup = load_setup(dialect);
+    let ops = setup.ops.clone();
     let mut db = open_db(dialect);
     apply_schema(db.as_mut(), &setup);
     // A relation op is 1 parent + 1 batched child PER LEVEL (N+1-free, independent of the row count); a
@@ -1126,7 +1005,7 @@ fn run_safety(dialect: &str) {
         reseed(db.as_mut(), &setup); // clean fixture per op
         QUERY_COUNT.store(0, Ordering::SeqCst);
         ROW_COUNT.store(0, Ordering::SeqCst);
-        run_op(op, 0, db.as_mut());
+        run_op(op, 0, db.as_mut(), &ops[*op]);
         let stmts = QUERY_COUNT.load(Ordering::SeqCst);
         let rows = ROW_COUNT.load(Ordering::SeqCst);
         if let Some((_, n)) = expected.iter().find(|(name, _)| name == op) {
