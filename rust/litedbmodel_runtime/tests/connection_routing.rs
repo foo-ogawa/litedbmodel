@@ -30,9 +30,10 @@ use litedbmodel_runtime::{
     WriterStickyClock,
 };
 
-fn enabled() -> bool {
-    std::env::var("LITEDBMODEL_PHASE_C").as_deref() == Ok("1")
-}
+mod common;
+
+/// The gate this suite runs behind (declared in `livedb-gates.env`).
+const GATE: &str = "LITEDBMODEL_PHASE_C";
 
 fn env(k: &str, d: &str) -> String {
     std::env::var(k)
@@ -197,14 +198,15 @@ fn n_of(v: &WireValue, key: &str) -> i64 {
 }
 fn str_of(v: &WireValue, key: &str) -> Option<String> {
     match v {
-        WireValue::Row(r) => r
-            .entries
-            .iter()
-            .find(|(k, _)| k == key)
-            .and_then(|(_, val)| match val {
-                WireValue::Str(s) => Some(s.clone()),
-                _ => None,
-            }),
+        WireValue::Row(r) => {
+            r.entries
+                .iter()
+                .find(|(k, _)| k == key)
+                .and_then(|(_, val)| match val {
+                    WireValue::Str(s) => Some(s.clone()),
+                    _ => None,
+                })
+        }
         _ => None,
     }
 }
@@ -1126,12 +1128,7 @@ fn current_search_path(driver: &Arc<dyn Driver + Send + Sync>, setup: &[String])
 
 #[test]
 fn phase_c_connection_routing_and_config() {
-    if !enabled() {
-        eprintln!(
-            "skipping Phase C live routing test (set LITEDBMODEL_PHASE_C=1 + docker PG/MySQL)"
-        );
-        return;
-    }
+    common::require_live_db(GATE);
     reset_pg();
     reset_mysql();
 

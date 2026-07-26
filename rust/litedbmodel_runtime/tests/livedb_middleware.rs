@@ -50,9 +50,10 @@ fn wire_has(rows: &[WireValue], needle: &str) -> bool {
 // on the shared PG). Each test appends a unique suffix so the 4 tests in THIS suite never race on one
 // table.
 
-fn enabled() -> bool {
-    std::env::var("LITEDBMODEL_LIVEDB_PARALLEL").as_deref() == Ok("1")
-}
+mod common;
+
+/// The gate this suite runs behind (declared in `livedb-gates.env`).
+const GATE: &str = "LITEDBMODEL_LIVEDB_PARALLEL";
 
 fn env(k: &str, d: &str) -> String {
     std::env::var(k)
@@ -104,10 +105,7 @@ fn observer(
 
 #[test]
 fn d1_live_middleware_intercepts_every_seam_statement() {
-    if !enabled() {
-        eprintln!("skipped (set LITEDBMODEL_LIVEDB_PARALLEL=1 + docker up)");
-        return;
-    }
+    common::require_live_db(GATE);
     const TBL: &str = "scp_mw_rust_d1";
     let db = connect();
     reset(&db, TBL);
@@ -146,10 +144,7 @@ fn d1_live_middleware_intercepts_every_seam_statement() {
 
 #[test]
 fn d1_red_live_without_registration_nothing_observed() {
-    if !enabled() {
-        eprintln!("skipped");
-        return;
-    }
+    common::require_live_db(GATE);
     const TBL: &str = "scp_mw_rust_red";
     let db = connect();
     reset(&db, TBL);
@@ -175,10 +170,7 @@ fn d1_red_live_without_registration_nothing_observed() {
 
 #[test]
 fn d1_live_concurrent_scope_isolation() {
-    if !enabled() {
-        eprintln!("skipped");
-        return;
-    }
+    common::require_live_db(GATE);
     // Two THREADS each in a `with_middleware_scope` body must not see each other's middleware — the
     // thread_local REGISTRY_SCOPE reproduces the TS concurrent-scope isolation on the live seam.
     fn scope(tag: &'static str) -> Vec<String> {
@@ -222,10 +214,7 @@ fn d1_live_concurrent_scope_isolation() {
 
 #[test]
 fn d3_live_raw_execute_query_through_seam_and_logger() {
-    if !enabled() {
-        eprintln!("skipped");
-        return;
-    }
+    common::require_live_db(GATE);
     const TBL: &str = "scp_mw_rust_d3";
     let db = connect();
     reset(&db, TBL);
@@ -291,10 +280,7 @@ fn d1_live_runtime_tx_boundaries_are_middleware_visible() {
     // full TS parity, issued through the seam on the SAME pinned owned connection. RED proof:
     // reverting the seam-routing of tx-control (see `with_transaction_decided_isolated_on`) makes the
     // tx-boundary observation go empty of BEGIN/COMMIT.
-    if !enabled() {
-        eprintln!("skipped (set LITEDBMODEL_LIVEDB_PARALLEL=1 + docker up)");
-        return;
-    }
+    common::require_live_db(GATE);
     const TBL: &str = "scp_mw_rust_txb";
     let db = connect();
     reset(&db, TBL);

@@ -32,6 +32,8 @@ jobs:
         run: npm run sync:versions:check
       - name: No local (../-escaping) dependencies
         run: npm run deps:check
+      - name: Every test gate is reachable from CI
+        run: npm run gates:check
 
   # ── Cross-language conformance: corpus byte-true + all runnable language legs green ──
   # `vectors-run.ts` DISCOVERS every implemented language runner (ts/py/php/go/rust) and runs
@@ -135,9 +137,15 @@ jobs:
         # now walk every committed package cleanly — including the #63 ORM-plan executor
         # (go/lm_bench/lm_orm), a self-contained package with no generated-artifact dependency.
         run: cd go && go build ./... && go vet ./...
-      - name: Rust — check
+      - name: Rust — check + fmt + clippy
         if: matrix.lang == 'rust'
-        run: cd rust && cargo check
+        # No workflow ran `cargo fmt --check` or clippy, so both drifted unnoticed (#168). They gate
+        # here, on the leg that already owns "the rust scaffold stays buildable".
+        run: |
+          cd rust
+          cargo fmt --all -- --check
+          cargo check
+          cargo clippy -p litedbmodel_runtime --features livedb --all-targets -- -D warnings
       - name: PHP — lint
         if: matrix.lang == 'php'
         run: |
@@ -218,17 +226,40 @@ jobs:
       - name: Install Node deps + Python DB drivers + PHP deps
         run: |
           npm ci --ignore-scripts
-          npm install behavior-contracts@0.8.0 --no-save
           # `ignore-scripts=false` override is required: a bare `npm rebuild`
           # honours the repo `.npmrc` ignore-scripts and reports success WITHOUT
           # building the addon (see conformance-ts). Force the install script to
           # run so `better_sqlite3.node` is actually produced.
           npm_config_ignore_scripts=false npm rebuild better-sqlite3 --build-from-source=false || (cd node_modules/better-sqlite3 && npx node-gyp rebuild --release)
-          python3 -m pip install "psycopg[binary]" pymysql behavior-contracts==0.8.0
+          # The behavior-contracts version is pinned by python/pyproject.toml (and package.json for
+          # npm) — installing the package here rather than naming a version keeps the pin in ONE
+          # place. `[livedb]` adds the psycopg/PyMySQL drivers the live legs need.
+          python3 -m pip install './python[livedb]'
           composer -d php install
+      # Open every live-DB test gate from the ONE declaration (#168). Without this the per-language
+      # suites below either skip themselves or run only their offline half, and report green.
+      - name: Open the live-DB test gates
+        # Declaration lines only — `$GITHUB_ENV` rejects anything that is not KEY=VALUE, so the
+        # comments in livedb-gates.env cannot be piped through.
+        run: grep -E '^[A-Z][A-Z0-9_]*=' livedb-gates.env >> "$GITHUB_ENV"
       - name: Build the SCP dist artifact (consumed by the corpus generator)
         run: npm run build:scp
       - name: Generate the live-DB corpus (pg+mysql bundles; cross-checked vs frozen)
         run: npm run conformance:gen:livedb
       - name: Run all 4 language live-DB legs against real PG + MySQL
         run: npm run conformance:livedb
+      # ── The per-language test suites (#168) ────────────────────────────────
+      # `conformance:livedb` above replays the frozen corpus; these are the suites that prove the
+      # runtime BEHAVIOURS around it — tx isolation levels, tx boundaries, reader/writer routing and
+      # the middleware seam — against the same real PG + MySQL. They never ran in any workflow, so
+      # four languages' worth of them had been green-by-default since they were written.
+      - name: TypeScript — full suite (unit + scp + parity + integration)
+        run: npm test
+      - name: Python — pytest
+        run: cd python && python3 -m pytest -q
+      - name: PHP — phpunit
+        run: cd php && ./vendor/bin/phpunit
+      - name: Go — go test
+        run: cd go && go test ./...
+      - name: Rust — cargo test (livedb)
+        run: cd rust && cargo test -p litedbmodel_runtime --features livedb -- --test-threads=1
