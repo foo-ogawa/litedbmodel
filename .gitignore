@@ -71,3 +71,6 @@ python/build/
 # resolve node_modules, then removes the dir; this catches a crashed run's leftovers)
 /.emit-e2e-*
 /.probe/
+
+# Compiled output of the TypeScript bench cell (benchmark/crosslang/ts-cell, built by tsc).
+benchmark/crosslang-build/

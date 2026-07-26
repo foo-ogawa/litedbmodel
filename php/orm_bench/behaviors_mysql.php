@@ -7,7 +7,7 @@
 // (Behavior::runBehavior) — no execution logic is generated. Handlers are ALWAYS
 // injected at the boundary (IR + {effects,config,hooks} — concept.md §4.4); they
 // are never generated.
-// irFingerprint: fnv1a64:1cb4fcc03199cb3b
+// irFingerprint: fnv1a64:6f82b6ebcba2cfbf
 
 declare(strict_types=1);
 
@@ -15,7 +15,7 @@ declare(strict_types=1);
 $expectedSpecVersions = ['behavior' => 5, 'expression' => 2, 'plan' => 1];
 
 // FNV-1a 64 fingerprint of the source portable IR (canonical-json discipline, #208).
-$irFingerprint = 'fnv1a64:1cb4fcc03199cb3b';
+$irFingerprint = 'fnv1a64:6f82b6ebcba2cfbf';
 
 // Component names exposed by bind(), in IR declaration order.
 $componentNames = ['findAll', 'filterPaginateSort', 'findFirst', 'findUnique', 'nestedFindAll', 'nestedFindFirst', 'nestedFindUnique', 'nestedRelations', 'compositeRelations', 'create', 'update', 'upsert', 'createMany', 'upsertMany', 'updateMany', 'nestedCreate', 'nestedUpsert', 'nestedUpdate', 'delete'];
@@ -71,7 +71,7 @@ $irDoc = (object) [
                         ],
                     ],
                     "ports" => (object) [
-                        "bigint" => false,
+                        "bigint" => true,
                         "params" => (object) [
                             "arr" => [],
                         ],
@@ -163,7 +163,7 @@ $irDoc = (object) [
                         ],
                     ],
                     "ports" => (object) [
-                        "bigint" => false,
+                        "bigint" => true,
                         "params" => (object) [
                             "arr" => [
                                 (object) [
@@ -266,7 +266,7 @@ $irDoc = (object) [
                         ],
                     ],
                     "ports" => (object) [
-                        "bigint" => false,
+                        "bigint" => true,
                         "params" => (object) [
                             "arr" => [
                                 (object) [
@@ -360,7 +360,7 @@ $irDoc = (object) [
                         ],
                     ],
                     "ports" => (object) [
-                        "bigint" => false,
+                        "bigint" => true,
                         "params" => (object) [
                             "arr" => [
                                 (object) [
@@ -443,7 +443,7 @@ $irDoc = (object) [
                         ],
                     ],
                     "ports" => (object) [
-                        "bigint" => false,
+                        "bigint" => true,
                         "params" => (object) [
                             "arr" => [],
                         ],
@@ -517,7 +517,7 @@ $irDoc = (object) [
                         ],
                     ],
                     "ports" => (object) [
-                        "bigint" => false,
+                        "bigint" => true,
                         "params" => (object) [
                             "arr" => [
                                 (object) [
@@ -706,7 +706,7 @@ $irDoc = (object) [
                         ],
                     ],
                     "ports" => (object) [
-                        "bigint" => false,
+                        "bigint" => true,
                         "params" => (object) [
                             "arr" => [
                                 (object) [
@@ -786,7 +786,7 @@ $irDoc = (object) [
                         ],
                     ],
                     "ports" => (object) [
-                        "bigint" => false,
+                        "bigint" => true,
                         "params" => (object) [
                             "arr" => [
                                 (object) [
@@ -980,7 +980,7 @@ $irDoc = (object) [
                         ],
                     ],
                     "ports" => (object) [
-                        "bigint" => false,
+                        "bigint" => true,
                         "params" => (object) [
                             "arr" => [
                                 (object) [
@@ -1060,7 +1060,7 @@ $irDoc = (object) [
                         ],
                     ],
                     "ports" => (object) [
-                        "bigint" => false,
+                        "bigint" => true,
                         "params" => (object) [
                             "arr" => [
                                 (object) [
@@ -1254,7 +1254,7 @@ $irDoc = (object) [
                         ],
                     ],
                     "ports" => (object) [
-                        "bigint" => false,
+                        "bigint" => true,
                         "params" => (object) [
                             "arr" => [],
                         ],
@@ -1328,7 +1328,7 @@ $irDoc = (object) [
                         ],
                     ],
                     "ports" => (object) [
-                        "bigint" => false,
+                        "bigint" => true,
                         "params" => (object) [
                             "arr" => [
                                 (object) [
@@ -1408,7 +1408,7 @@ $irDoc = (object) [
                         ],
                     ],
                     "ports" => (object) [
-                        "bigint" => false,
+                        "bigint" => true,
                         "params" => (object) [
                             "arr" => [
                                 (object) [
@@ -1701,7 +1701,7 @@ $irDoc = (object) [
                         ],
                     ],
                     "ports" => (object) [
-                        "bigint" => false,
+                        "bigint" => true,
                         "params" => (object) [
                             "arr" => [],
                         ],
@@ -1776,7 +1776,7 @@ $irDoc = (object) [
                         ],
                     ],
                     "ports" => (object) [
-                        "bigint" => false,
+                        "bigint" => true,
                         "params" => (object) [
                             "arr" => [
                                 (object) [
@@ -1857,7 +1857,7 @@ $irDoc = (object) [
                         ],
                     ],
                     "ports" => (object) [
-                        "bigint" => false,
+                        "bigint" => true,
                         "params" => (object) [
                             "arr" => [
                                 (object) [
@@ -2180,7 +2180,7 @@ $irDoc = (object) [
                         ],
                     ],
                     "ports" => (object) [
-                        "bigint" => false,
+                        "bigint" => true,
                         "params" => (object) [
                             "arr" => [
                                 (object) [
@@ -2273,7 +2273,7 @@ $irDoc = (object) [
                         ],
                     ],
                     "ports" => (object) [
-                        "bigint" => false,
+                        "bigint" => true,
                         "params" => (object) [
                             "arr" => [
                                 (object) [
@@ -2365,7 +2365,7 @@ $irDoc = (object) [
                         ],
                     ],
                     "ports" => (object) [
-                        "bigint" => false,
+                        "bigint" => true,
                         "params" => (object) [
                             "arr" => [
                                 (object) [
@@ -2457,7 +2457,7 @@ $irDoc = (object) [
                         ],
                     ],
                     "ports" => (object) [
-                        "bigint" => false,
+                        "bigint" => true,
                         "params" => (object) [
                             "arr" => [
                                 (object) [
@@ -2548,7 +2548,7 @@ $irDoc = (object) [
                         ],
                     ],
                     "ports" => (object) [
-                        "bigint" => false,
+                        "bigint" => true,
                         "params" => (object) [
                             "arr" => [
                                 (object) [
@@ -2639,7 +2639,7 @@ $irDoc = (object) [
                         ],
                     ],
                     "ports" => (object) [
-                        "bigint" => false,
+                        "bigint" => true,
                         "params" => (object) [
                             "arr" => [
                                 (object) [
@@ -2729,7 +2729,7 @@ $irDoc = (object) [
                         ],
                     ],
                     "ports" => (object) [
-                        "bigint" => false,
+                        "bigint" => true,
                         "params" => (object) [
                             "arr" => [
                                 (object) [
@@ -2784,7 +2784,7 @@ $irDoc = (object) [
                             ],
                         ],
                         "ports" => (object) [
-                            "bigint" => false,
+                            "bigint" => true,
                             "params" => (object) [
                                 "arr" => [
                                     (object) [
@@ -2896,7 +2896,7 @@ $irDoc = (object) [
                         ],
                     ],
                     "ports" => (object) [
-                        "bigint" => false,
+                        "bigint" => true,
                         "params" => (object) [
                             "arr" => [
                                 (object) [
@@ -2951,7 +2951,7 @@ $irDoc = (object) [
                             ],
                         ],
                         "ports" => (object) [
-                            "bigint" => false,
+                            "bigint" => true,
                             "params" => (object) [
                                 "arr" => [
                                     (object) [
@@ -3063,7 +3063,7 @@ $irDoc = (object) [
                         ],
                     ],
                     "ports" => (object) [
-                        "bigint" => false,
+                        "bigint" => true,
                         "params" => (object) [
                             "arr" => [
                                 (object) [
@@ -3118,7 +3118,7 @@ $irDoc = (object) [
                             ],
                         ],
                         "ports" => (object) [
-                            "bigint" => false,
+                            "bigint" => true,
                             "params" => (object) [
                                 "arr" => [
                                     (object) [
@@ -3230,7 +3230,7 @@ $irDoc = (object) [
                         ],
                     ],
                     "ports" => (object) [
-                        "bigint" => false,
+                        "bigint" => true,
                         "params" => (object) [
                             "arr" => [
                                 (object) [
@@ -3285,7 +3285,7 @@ $irDoc = (object) [
                             ],
                         ],
                         "ports" => (object) [
-                            "bigint" => false,
+                            "bigint" => true,
                             "params" => (object) [
                                 "arr" => [
                                     (object) [

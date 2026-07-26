@@ -51,7 +51,7 @@ GO_RT="github.com/foo-ogawa/litedbmodel/go/litedbmodel_runtime"
 GO_WIRE_PKG="$GO_RT/wire"
 GO_WIRE="$ROOT/go/litedbmodel_runtime/wire/wire.go"
 
-# One dialect's four legs. Every leg reads the SAME authored source and differs only in the emitter and
+# One dialect's five legs. Every leg reads the SAME authored source and differs only in the emitter and
 # the output path; the leaf-transport symbol map is the ONE op-agnostic transport per language, so it is
 # dialect-invariant too. `$1` = dialect, `$2` = generate|check.
 run_dialect() {
@@ -76,6 +76,12 @@ run_dialect() {
     --leaf-transport-import "$GO_RT")
   [ "$d" = sqlite ] && go_flags+=(--shared-types-out "$GO_WIRE")
 
+  # typescript — the NATIVE emitter's TS target. TS is type-erased, so the transport cannot be baked
+  # into the call the way go/rust bake it; the module exposes `bindTyped(handlers)` and the cell hands
+  # it litedbmodel's own `leafHandlers` (src/scp/leaves.ts). One file per dialect.
+  local ts_out="$ROOT/benchmark/crosslang/ts-cell/behaviors_$d.ts"
+  local ts_flags=(--lang typescript-native --out "$ts_out")
+
   # python / php — the LITERAL (ir-exec) twins, one file per dialect. Each exposes its own class
   # (bc#216), so the three import side by side.
   local py_out="$ROOT/python/orm_bench/behaviors_$d.py"
@@ -84,16 +90,18 @@ run_dialect() {
   local php_flags=(--lang php --out "$php_out" --runtime-import 'LiteDbModel\Runtime\BehaviorContracts')
 
   if [ "$mode" = generate ]; then
-    mkdir -p "$(dirname "$rust_out")" "$(dirname "$go_out")"
+    mkdir -p "$(dirname "$rust_out")" "$(dirname "$go_out")" "$(dirname "$ts_out")"
     "$BC" generate "${from[@]}" "${rust_flags[@]}"; echo "bc generate ($d) → $rust_out"
     "$BC" generate "${from[@]}" "${go_flags[@]}";   echo "bc generate ($d) → $go_out"
     "$BC" generate "${from[@]}" "${py_flags[@]}";   echo "bc generate ($d) → $py_out"
     "$BC" generate "${from[@]}" "${php_flags[@]}";  echo "bc generate ($d) → $php_out"
+    "$BC" generate "${from[@]}" "${ts_flags[@]}";   echo "bc generate ($d) → $ts_out"
   else
     "$BC" check "${from[@]}" "${rust_flags[@]}"
     "$BC" check "${from[@]}" "${go_flags[@]}"
     "$BC" check "${from[@]}" "${py_flags[@]}"
     "$BC" check "${from[@]}" "${php_flags[@]}"
+    "$BC" check "${from[@]}" "${ts_flags[@]}"
   fi
 }
 

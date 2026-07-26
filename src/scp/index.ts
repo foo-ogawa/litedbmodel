@@ -163,6 +163,11 @@ export {
   MiddlewareChain,
   PooledAsyncContext,
   withTransactionAsync,
+  // The SYNC transaction boundary. Its async twin was exported and this was not, so a TypeScript
+  // consumer driving the codegen path on SQLite — the one dialect whose seam is synchronous — had no
+  // way to open a transaction at all. go and rust already expose theirs (WithAmbientTransaction /
+  // with_ambient_transaction).
+  withTransactionSync,
   transaction,
   runWithPinnedAsyncConnection,
   currentPinnedAsyncConnection,

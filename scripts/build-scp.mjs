@@ -29,6 +29,7 @@
  */
 
 import { build } from 'esbuild';
+import { writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 
@@ -61,6 +62,13 @@ async function run() {
       format: 'cjs',
       external: alwaysExternal,
     });
+    // tsc writes the declarations as `.d.ts`, which TypeScript will not pair with a `.mjs`/`.cjs`
+    // entry under node16/nodenext resolution. Re-export them under the matching extensions so both
+    // bundles are typed for anyone importing them by path, not just through the exports map.
+    const base = out.split('/').pop();
+    for (const ext of ['d.mts', 'd.cts']) {
+      writeFileSync(resolve(root, `${out}.${ext}`), `export * from './${base}.js';\n`);
+    }
   }
 }
 

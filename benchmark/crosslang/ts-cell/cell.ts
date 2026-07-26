@@ -1,0 +1,111 @@
+// What every TypeScript bench mode presents to the runner, and the ONE seed-SSoT reader.
+//
+// The cell has three modes (#162) because TypeScript is the only language with three real execution
+// paths: `codegen` (the bc-generated module over litedbmodel's leaf transport — the twin of the other
+// languages' native cells), `v1` (the imperative DBModel path, which builds its SQL at run time), and
+// `sdk` (raw better-sqlite3 / pg / mysql2 — the baseline). One `Cell` shape lets the runner time all
+// three identically.
+
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+export type Dialect = 'sqlite' | 'postgres' | 'mysql';
+export const DIALECTS: readonly Dialect[] = ['sqlite', 'postgres', 'mysql'];
+
+export type Mode = 'codegen' | 'v1' | 'sdk';
+export const MODES: readonly Mode[] = ['codegen', 'v1', 'sdk'];
+
+export interface Cell {
+  readonly dialect: Dialect;
+  /**
+   * True when `run` returns synchronously. The sqlite legs of codegen and sdk are genuinely sync, and
+   * awaiting them would charge the measurement a microtask the real code never pays — the runner
+   * keeps a sync loop for those and an async loop for the rest.
+   */
+  readonly sync: boolean;
+  /** Re-apply the canonical fixture. Runs OFF the counted seam, before each op. */
+  seed(): void | Promise<void>;
+  run(op: string, it: number): void | Promise<void>;
+  close(): void | Promise<void>;
+  /** Statements issued since the last {@link resetStatements} — the N+1 / atomic-tx safety proof. */
+  statements(): number;
+  resetStatements(): void;
+  /**
+   * This mode's expected statement count per op, when it differs from the shared
+   * {@link import('./inputs.js').EXPECTED_STATEMENTS}. The v1 path refuses a write outside a
+   * transaction (WriteOutsideTransactionError — its safe-operation policy), so every single-row write
+   * there really is BEGIN + statement + COMMIT. That is a property of the path, and the bench reports
+   * it rather than hiding it behind a relaxed assertion.
+   */
+  readonly expectedStatements?: Readonly<Record<string, number>>;
+  /**
+   * Ops this mode cannot express, with why. The v1 imperative API has no upsert, so its cell declares
+   * that rather than reaching for hand-written SQL — which would make it an SDK cell wearing a v1
+   * label. The runner prints these and emits no rows for them.
+   */
+  readonly unsupported?: Readonly<Record<string, string>>;
+}
+
+/** One dialect's setup from the ONE seed SSoT (`.setup/<dialect>.json`, emitted by emit-setup.ts). */
+export interface Setup {
+  readonly dialect: string;
+  readonly users: number;
+  readonly schema: string[];
+  readonly delete: string[];
+  readonly insert: string[];
+}
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+
+// The bench's connection targets, from the same TEST_* environment the conformance live legs use —
+// the TypeScript member of the per-language bench config set (go: `lm_bench/setup/dsn.go`, rust:
+// `orm_bench_common`), so each language's cell owns its connection config next to itself.
+//
+// The cell loads the BUILT ESM bundles (`dist/*.mjs`), not `src/`. The other cells all consume built
+// runtimes too (a go module, a crate, an installed package), and here it is also required:
+// behavior-contracts publishes only an `import` condition, and `src/` sits under the CJS root package,
+// so nothing outside vitest can load it. The bundles are reached by relative path rather than by
+// package name because the nearest package.json above this directory is `benchmark/`'s
+// (name: orm-benchmark), which puts a self-reference to `litedbmodel` out of reach. Loading the built
+// artifact is what surfaced #169 — until it was fixed, the root entry did not load at all.
+const env = (k: string, d: string): string => process.env[k] || d;
+
+export const PG_CONFIG = {
+  host: env('TEST_DB_HOST', 'localhost'),
+  port: Number(env('TEST_DB_PORT', '5433')),
+  database: env('TEST_DB_NAME', 'testdb'),
+  user: env('TEST_DB_USER', 'testuser'),
+  password: env('TEST_DB_PASSWORD', 'testpass'),
+} as const;
+
+export const MYSQL_CONFIG = {
+  host: env('TEST_MYSQL_HOST', '127.0.0.1'),
+  port: Number(env('TEST_MYSQL_PORT', '3307')),
+  database: env('TEST_MYSQL_DB', 'testdb'),
+  user: env('TEST_MYSQL_USER', 'testuser'),
+  password: env('TEST_MYSQL_PASSWORD', 'testpass'),
+} as const;
+
+export const SQLITE_CONFIG = { database: ':memory:', driver: 'sqlite' } as const;
+
+/**
+ * Walk up from this module to the repo root — the directory that holds the seed SSoT. Anchoring on the
+ * repo rather than on this file's own location keeps the path right whether the cell runs from source
+ * or from the compiled sibling output, and independent of cwd. Same rule as go's `setup.Load` and
+ * rust's `load_setup`.
+ */
+function repoRoot(): string {
+  let dir = HERE;
+  while (!existsSync(join(dir, 'benchmark', 'crosslang', '.setup'))) {
+    const up = dirname(dir);
+    if (up === dir) throw new Error('cannot locate benchmark/crosslang/.setup above ' + HERE);
+    dir = up;
+  }
+  return dir;
+}
+
+export function setupFor(dialect: Dialect): Setup {
+  const path = join(repoRoot(), 'benchmark', 'crosslang', '.setup', `${dialect}.json`);
+  return JSON.parse(readFileSync(path, 'utf8')) as Setup;
+}
