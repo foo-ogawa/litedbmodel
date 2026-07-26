@@ -24,7 +24,7 @@
 //	                          N+1-free relation counts + the atomic tx statement counts (safety proof).
 //	lm_orm <dialect> bench [reps] [warmup]
 //	                        — additionally time each op over reps iterations (after warmup) and print a
-//	                          flat CSV (cell,dialect,op,iter,us) with cell label `sdk`.
+//	                          flat CSV (cell,dialect,op,iter,us,rows) with cell label `sdk`.
 package main
 
 import (
@@ -50,6 +50,8 @@ type cell struct {
 	dialect string               // the target; every dialect divergence below is derived from it
 	stmts   map[string]*sql.Stmt // per-SQL prepared-statement cache (reused across iterations)
 	count   int64                // statement counter (safety proof); bumped once per prepared statement
+	rows    int64                // rows this cell scanned (#170) — the report's per-row denominator, and
+	// the proof this hand-written baseline moved the SAME rows the runtime cell did
 }
 
 // render rewrites the `?` every op below writes into this driver's placeholder form: pgx binds `$N`
@@ -116,6 +118,7 @@ func (c *cell) query(sqlText string, args ...any) [][]any {
 		}
 		out = append(out, vals)
 	}
+	c.rows += int64(len(out))
 	return out
 }
 
@@ -615,6 +618,7 @@ func main() {
 	for _, name := range ops {
 		c.seed(doc) // clean fixture per op (matches the python/php/rust cells); off-seam, never counted
 		c.count = 0
+		c.rows = 0
 		c.op(name, 0)
 		q := int(c.count)
 		mark := "ok"
@@ -626,7 +630,7 @@ func main() {
 		if txOps[name] {
 			kind = " (BEGIN + body + COMMIT)"
 		}
-		fmt.Printf("%-20s  %-10d  %s%s\n", name, q, mark, kind)
+		fmt.Printf("%-20s  %-10d  %-5d %s%s\n", name, q, c.rows, mark, kind)
 	}
 
 	if doBench {
@@ -642,7 +646,7 @@ func main() {
 				warmup = n
 			}
 		}
-		fmt.Println("\ncell,dialect,op,iter,us")
+		fmt.Println("\ncell,dialect,op,iter,us,rows")
 		for _, name := range ops {
 			c.seed(doc) // clean fixture per op, as in the safety pass above
 			for it := 0; it < warmup; it++ {
@@ -650,9 +654,11 @@ func main() {
 			}
 			for it := 0; it < reps; it++ {
 				g := it + warmup + 1
+				// Reset OUTSIDE the timed region — rows are measured per iteration (#170).
+				c.rows = 0
 				t := time.Now()
 				c.op(name, g)
-				fmt.Printf("sdk,%s,%s,%d,%d\n", c.dialect, name, it, time.Since(t).Microseconds())
+				fmt.Printf("sdk,%s,%s,%d,%d,%d\n", c.dialect, name, it, time.Since(t).Microseconds(), c.rows)
 			}
 		}
 	}

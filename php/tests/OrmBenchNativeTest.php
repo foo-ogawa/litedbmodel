@@ -78,19 +78,35 @@ final class OrmBenchNativeTest extends TestCase
         foreach ($users as $u) {
             $byId[$u->id] = $u;
         }
-        $this->assertSame(['Post 1', 'Post 2'], array_map(static fn ($p) => $p->title, $byId[1]->posts)); // N+1-free batch-load
+        // The children are batch-loaded (N+1-free) and grouped onto the RIGHT parent: user 1 owns the
+        // seed's first contiguous run of posts. The fan-out is the fixture's, which the scale knob varies
+        // (#170), so the assertion pins the SHAPE — the empty-children bug (#150) still fails it.
+        $posts = $byId[1]->posts;
+        $this->assertNotEmpty($posts);
+        $this->assertSame(
+            array_map(static fn (int $i) => "Post {$i}", range(1, count($posts))),
+            array_map(static fn ($p) => $p->title, $posts),
+        );
 
         $deep = $this->op('nestedRelations');
         $u1 = $this->firstWhere($deep, static fn ($u) => $u->id === 1);
-        $this->assertSame([1, 2], array_map(static fn ($c) => $c->id, $u1->posts[0]->comments)); // 3-level chain
+        $comments = $u1->posts[0]->comments; // 3-level chain
+        $this->assertNotEmpty($comments);
+        $this->assertSame(range(1, count($comments)), array_map(static fn ($c) => $c->id, $comments));
     }
 
     public function testCompositeRelationsGroupByFullTuple(): void
     {
         $tenants = $this->op('compositeRelations');
         $tu1 = $this->firstWhere($tenants, static fn ($t) => $t->user_id === 1);
-        $this->assertSame([1, 2], array_map(static fn ($p) => $p->post_id, $tu1->posts));
-        $this->assertSame([1, 2], array_map(static fn ($c) => $c->comment_id, $tu1->posts[0]->comments));
+        // post_id / comment_id RESTART per tenant, so tenant 1 user 1 owns post_ids 1..n and post 1 owns
+        // comment_ids 1..m — grouping on the FULL tuple keeps other tenants' identical ids out.
+        $posts = $tu1->posts;
+        $this->assertNotEmpty($posts);
+        $this->assertSame(range(1, count($posts)), array_map(static fn ($p) => $p->post_id, $posts));
+        $comments = $posts[0]->comments;
+        $this->assertNotEmpty($comments);
+        $this->assertSame(range(1, count($comments)), array_map(static fn ($c) => $c->comment_id, $comments));
     }
 
     // ── single writes (executeSQL write path: summary for INSERT, RETURNING rows for upsert) ────────
@@ -171,9 +187,21 @@ final class OrmBenchNativeTest extends TestCase
 
     public function testSafetyStatementCounts(): void
     {
-        $counts = OrmBench::safetyCounts($this->driver, $this->fns);
         $expected = OrmBench::RELATION_QUERY_COUNTS + OrmBench::BATCH_QUERY_COUNTS + OrmBench::TX_STMT_COUNTS;
+        $counts = [];
+        foreach (array_keys($expected) as $op) {
+            $counts[$op] = OrmBench::probe($this->driver, $this->fns, 'sqlite', $op)['stmts'];
+        }
         $this->assertSame($expected, $counts); // relations 2/2/2/3/3, batch 1/1/1, tx 4/4/4/4
+    }
+
+    public function testProbeReportsTheRowsARelationOpMoves(): void
+    {
+        // The per-row denominator the report divides by (#170): a relation op reads a 100-parent window
+        // AND both child levels under it, so its row total dwarfs its 3 statements.
+        $deep = OrmBench::probe($this->driver, $this->fns, 'sqlite', 'nestedRelations')['rows'];
+        $flat = OrmBench::probe($this->driver, $this->fns, 'sqlite', 'findAll')['rows'];
+        $this->assertGreaterThan($flat, $deep);
     }
 
     // ── helpers ─────────────────────────────────────────────────────────────────────

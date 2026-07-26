@@ -27,6 +27,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	bc "github.com/foo-ogawa/behavior-contracts/go"
 	rt "github.com/foo-ogawa/litedbmodel/go/litedbmodel_runtime"
 	"github.com/foo-ogawa/litedbmodel/go/lm_bench/setup"
 
@@ -112,91 +113,92 @@ func updateManyRows() []UserPatch {
 	return rows
 }
 
-// op runs ONE covered op for iteration it and returns its row count (writes report the terminal row
-// count, which for a bare write is 0). Fixed inputs mirror the SCP ops SSoT; mutating ops vary their
+// op runs ONE covered op for iteration it. Rows are NOT reported here: the row count is taken at the
+// runtime seam (every row of every statement), which is the only place a relation's true 11,100-row
+// traversal is visible. Fixed inputs mirror the SCP ops SSoT; mutating ops vary their
 // UNIQUE column by it so a timed loop does not collide. A RETURNING-chained tx op runs THROUGH the
 // runtime tx boundary (WithAmbientTransaction over the bound db) so BEGIN/COMMIT bracket the leaf's 2
 // body statements on the tx-owned connection; the generated runner emits no BEGIN/COMMIT.
-func op(db *sql.DB, name string, it int) (int, error) {
+func op(db *sql.DB, name string, it int) error {
 	switch name {
 	case "findAll":
-		r, err := findAll()
-		return len(r), err
+		_, err := findAll()
+		return err
 	case "filterPaginateSort":
-		r, err := filterPaginateSort(1)
-		return len(r), err
+		_, err := filterPaginateSort(1)
+		return err
 	case "findFirst":
-		r, err := findFirst("User%")
-		return len(r), err
+		_, err := findFirst("User%")
+		return err
 	case "findUnique":
-		r, err := findUnique("user500@example.com")
-		return len(r), err
+		_, err := findUnique("user500@example.com")
+		return err
 	case "nestedFindAll":
-		r, err := nestedFindAll()
-		return len(r), err
+		_, err := nestedFindAll()
+		return err
 	case "nestedFindFirst":
-		r, err := nestedFindFirst("User%")
-		return len(r), err
+		_, err := nestedFindFirst("User%")
+		return err
 	case "nestedFindUnique":
-		r, err := nestedFindUnique("user1@example.com")
-		return len(r), err
+		_, err := nestedFindUnique("user1@example.com")
+		return err
 	case "nestedRelations":
-		r, err := nestedRelations()
-		return len(r), err
+		_, err := nestedRelations()
+		return err
 	case "compositeRelations":
-		r, err := compositeRelations()
-		return len(r), err
+		_, err := compositeRelations()
+		return err
 	case "create":
-		r, err := create(fmt.Sprintf("new%d@bench.com", it), "New")
-		return len(r), err
+		_, err := create(fmt.Sprintf("new%d@bench.com", it), "New")
+		return err
 	case "update":
-		r, err := update(1, "Updated 1")
-		return len(r), err
+		_, err := update(1, "Updated 1")
+		return err
 	case "upsert":
-		r, err := upsert("user1@example.com", "Upserted One")
-		return len(r), err
+		_, err := upsert("user1@example.com", "Upserted One")
+		return err
 	case "createMany":
 		// 10 fresh rows — email is UNIQUE NOT NULL, so vary per iteration to stay insertable.
-		r, err := createMany(userRows(it, false))
-		return len(r), err
+		_, err := createMany(userRows(it, false))
+		return err
 	case "upsertMany":
 		// 10 rows keyed on email (ON CONFLICT DO UPDATE) — idempotent across iterations.
-		r, err := upsertMany(userRows(it, true))
-		return len(r), err
+		_, err := upsertMany(userRows(it, true))
+		return err
 	case "updateMany":
 		// 10 rows keyed on id (1..10) — updates the seeded users.
-		r, err := updateMany(updateManyRows())
-		return len(r), err
+		_, err := updateMany(updateManyRows())
+		return err
 	case "nestedCreate":
 		// Fresh user per iteration (email is UNIQUE) → INSERT user RETURNING id → INSERT post (author_id).
 		err := rt.WithAmbientTransaction(db, func() error {
 			_, e := nestedCreate(fmt.Sprintf("nc%d@bench.com", it), "NC", "NC Post")
 			return e
 		})
-		return 0, err
+		return err
 	case "nestedUpsert":
 		// Existing email (ON CONFLICT DO UPDATE) → INSERT post keyed on the upserted user's id.
 		err := rt.WithAmbientTransaction(db, func() error {
 			_, e := nestedUpsert("user1@example.com", "NUp", "NUp Post")
 			return e
 		})
-		return 0, err
+		return err
 	case "nestedUpdate":
 		// UPDATE seeded user 1 RETURNING id → UPDATE that user's posts.
 		err := rt.WithAmbientTransaction(db, func() error {
 			_, e := nestedUpdate(1, "NU", "NU Post")
 			return e
 		})
-		return 0, err
+		return err
 	case "delete":
 		// Create-then-delete: INSERT a fresh user RETURNING id → DELETE the exact created row by id.
 		err := rt.WithAmbientTransaction(db, func() error {
 			_, e := delete(fmt.Sprintf("del%d@bench.com", it), "Del")
 			return e
 		})
-		return 0, err
+		return err
 	default:
-		return 0, fmt.Errorf("unknown op %q", name)
+		return fmt.Errorf("unknown op %q", name)
 	}
 }
 
@@ -240,10 +242,17 @@ func main() {
 	// through Execute/Run (reads + writes + tx-control BEGIN/COMMIT) — the SAME lens the python/php cells
 	// use. The bound leaf ctx resolves the process-global registry, so a global registration is seen.
 	var stmtCount int64
+	var rowCount int64
 	counter := rt.NewMiddleware(rt.MiddlewareConfig{
 		Execute: func(_ any, next rt.ExecNext, sqlText string, args []any) (any, error) {
 			atomic.AddInt64(&stmtCount, 1)
-			return next(sqlText, args)
+			out, err := next(sqlText, args)
+			// The read seam hands back `[]bc.Value` (the write seam a run summary, which adds nothing), so
+			// this ONE hook also totals the rows the op moved — the report's per-row denominator (#170).
+			if rows, ok := out.([]bc.Value); ok {
+				atomic.AddInt64(&rowCount, int64(len(rows)))
+			}
+			return out, err
 		},
 	})
 	unregister := rt.RegisterMiddleware(context.Background(), counter.Descriptor())
@@ -262,13 +271,16 @@ func main() {
 			os.Exit(1)
 		}
 		atomic.StoreInt64(&stmtCount, 0)
-		rows, err := op(db, name, 0)
-		if err != nil {
+		atomic.StoreInt64(&rowCount, 0)
+		if err := op(db, name, 0); err != nil {
 			fmt.Printf("%-20s  ERR: %v\n", name, err)
 			fail++
 			continue
 		}
 		q := int(atomic.LoadInt64(&stmtCount))
+		// Rows as counted at the seam — every row of every statement, not the terminal slice length (a
+		// relation's terminal holds 100 parents while the op moved 11,100 rows).
+		rows := int(atomic.LoadInt64(&rowCount))
 		mark := "ok"
 		if exp, ok := expectedStatements[name]; ok && exp != q {
 			mark = fmt.Sprintf("STATEMENT-COUNT MISMATCH (want %d)", exp)
@@ -294,26 +306,30 @@ func main() {
 				warmup = n
 			}
 		}
-		fmt.Println("\ncell,dialect,op,iter,us")
+		fmt.Println("\ncell,dialect,op,iter,us,rows")
 		for _, name := range ops {
 			if err := reseed(db, doc); err != nil {
 				fmt.Fprintf(os.Stderr, "FATAL: %v\n", err)
 				os.Exit(1)
 			}
 			for it := 0; it < warmup; it++ {
-				if _, err := op(db, name, it+1); err != nil {
+				if err := op(db, name, it+1); err != nil {
 					fmt.Fprintf(os.Stderr, "warmup %s: %v\n", name, err)
 					os.Exit(1)
 				}
 			}
 			for it := 0; it < reps; it++ {
 				g := it + warmup + 1
+				// Reset OUTSIDE the timed region: rows are measured per iteration, and the report divides
+				// the latency by them (#170).
+				atomic.StoreInt64(&rowCount, 0)
 				t := time.Now()
-				if _, err := op(db, name, g); err != nil {
+				if err := op(db, name, g); err != nil {
 					fmt.Fprintf(os.Stderr, "bench %s: %v\n", name, err)
 					os.Exit(1)
 				}
-				fmt.Printf("native,%s,%s,%d,%d\n", benchDialect, name, it, time.Since(t).Microseconds())
+				us := time.Since(t).Microseconds()
+				fmt.Printf("native,%s,%s,%d,%d,%d\n", benchDialect, name, it, us, atomic.LoadInt64(&rowCount))
 			}
 		}
 	}

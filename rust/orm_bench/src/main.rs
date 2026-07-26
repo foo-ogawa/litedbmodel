@@ -19,7 +19,8 @@ mod gen;
 use litedbmodel_runtime::driver::{forwarding_tx, forwarding_tx_no_begin, PreparedStatement};
 use litedbmodel_runtime::exec_context::TxConnection;
 use litedbmodel_runtime::{
-    with_ambient_driver, with_ambient_transaction, Driver, SqlFailure, SqliteDriver,
+    clear_middlewares, register_middleware, with_ambient_driver, with_ambient_transaction, Driver,
+    MiddlewareDescriptor, SeamResult, SqlFailure, SqlHookFn, SqliteDriver,
 };
 #[cfg(feature = "livedb")]
 use litedbmodel_runtime::{MysqlDriver, PostgresDriver};
@@ -36,6 +37,33 @@ use gen::active as bg;
 // the runtime issues). The N+1 proof: a batched relation runs 1 parent + 1 batched child per level =
 // 2 / 3 (not 1+N). The runtime + generated runner stay unchanged — the count rides the Driver seam.
 static QUERY_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+// ── row counter (the report's per-row denominator, #170) ─────────────────────────────────────────
+// Rows are visible at the runtime's SQL seam, not at the Driver: `SqlNext` hands back the read result
+// (`SeamResult::Rows`), while a write's `Run` summary carries none. `probe_rows` registers the hook,
+// runs ONE un-timed iteration and unregisters — so the published latencies never pay to observe it.
+static ROW_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+fn probe_rows(d: &dyn Driver, op: &str) -> usize {
+    clear_middlewares();
+    register_middleware(MiddlewareDescriptor::sql_only(Box::new(SqlHookFn(
+        |sql: &str,
+         params: &[behavior_contracts::Value],
+         next: &litedbmodel_runtime::middleware::SqlNext| {
+            let out = next(sql, params)?;
+            if let SeamResult::Rows(rows) = &out {
+                ROW_COUNT.fetch_add(rows.len(), Ordering::Relaxed);
+            }
+            Ok(out)
+        },
+    ))));
+    ROW_COUNT.store(0, Ordering::SeqCst);
+    with_ambient_driver(d, || run_op(d, op, 0));
+    let n = ROW_COUNT.load(Ordering::SeqCst);
+    clear_middlewares();
+    n
+}
+
 struct CountingDriver {
     inner: Box<dyn Driver>,
 }
@@ -267,11 +295,14 @@ fn main() {
     let setup = load_setup(dialect);
     let driver = open_driver(dialect, &setup);
     let d: &dyn Driver = driver.as_ref();
-    println!("cell,dialect,op,iter,us");
+    println!("cell,dialect,op,iter,us,rows");
     for op in OPS {
         // Re-seed the fixture before each op, then run the whole warmup+timed loop with the ambient
         // driver installed (the covered runner resolves it inside `execute_sql`).
         seed(d, &setup);
+        // One UN-TIMED probe measures the rows this op moves — the report's per-row denominator (#170).
+        let rows = probe_rows(d, op);
+        seed(d, &setup); // the probe mutated the fixture for a write op; restore it before timing
         with_ambient_driver(d, || {
             for it in 0..warmup {
                 run_op(d, op, it);
@@ -281,13 +312,16 @@ fn main() {
                 let t = Instant::now();
                 run_op(d, op, g);
                 let us = t.elapsed().as_micros();
-                println!("native,{dialect},{op},{it},{us}");
+                println!("native,{dialect},{op},{it},{us},{rows}");
             }
         });
     }
 }
 
-// ── N+1-avoidance proof (query counts) via the CountingDriver + the ambient seam. ──────────────────
+// ── The safety + fairness proof: EVERY op's statement count AND the rows it moves. ────────────────
+// Statements ride the CountingDriver (it sees the tx-control BEGIN/COMMIT too); rows ride the runtime
+// SQL seam (`probe_rows`). Covering all 19 ops — not just the guarded ones — is what lets this cell's
+// row yield be compared against every other language's, the fairness check #170 had no surface for.
 fn run_safety() {
     let dialect = gen::TARGET;
     let setup = load_setup(dialect);
@@ -295,49 +329,42 @@ fn run_safety() {
         inner: open_driver(dialect, &setup),
     };
     let d: &dyn Driver = &counting;
-    seed(d, &setup);
-    let count = |op: &str| -> usize {
-        QUERY_COUNT.store(0, Ordering::SeqCst);
-        with_ambient_driver(d, || run_op(d, op, 0));
-        QUERY_COUNT.load(Ordering::SeqCst)
-    };
-    // Each relation op is executed and fail-closed on its fixed batched query count: 1 parent + 1
-    // batched child per relation level (N+1-free), INDEPENDENT of the row count.
-    for (op, expected) in [
-        ("nestedFindAll", 2usize),
+    // The guarded expectations: a relation op is 1 parent + 1 batched child PER LEVEL (N+1-free,
+    // independent of the row count); a batch write is ONE statement for N records (the whole record set
+    // rides as one param); a RETURNING-chained tx is BEGIN + 2 body + COMMIT = 4.
+    let expected: &[(&str, usize)] = &[
+        ("nestedFindAll", 2),
         ("nestedFindFirst", 2),
         ("nestedFindUnique", 2),
         ("nestedRelations", 3),
-        // composite 3-level chain: 1 parent + 1 batched child per level = 3 (N+1-free, composite key).
         ("compositeRelations", 3),
-    ] {
-        let actual = count(op);
-        assert_eq!(actual, expected, "{op} query-count regression");
-        println!("{op} queries={actual} (expect {expected})");
-    }
-    // Batch writes are ONE statement for N records (the json_each/JSON_TABLE batch form) — the whole
-    // record set rides as ONE param, so the query count is a fixed 1, INDEPENDENT of the row count
-    // (the safety guarantee: no per-row statement fan-out).
-    for (op, expected) in [("createMany", 1usize), ("upsertMany", 1), ("updateMany", 1)] {
-        let actual = count(op);
-        assert_eq!(actual, expected, "{op} query-count regression");
-        println!("{op} queries={actual} (expect {expected})");
-    }
-    // RETURNING-chained transactions run through the runtime `with_ambient_transaction` scope: each is
-    // BEGIN + its 2 body statements (the RETURNING write + the dependent write) + COMMIT = 4 statements.
-    // The BEGIN/COMMIT are counted because the tx runs on a forwarding handle over THIS counted driver
-    // (see CountingDriver::begin_tx) — proof the generated runner emits none of them: the runtime does.
-    for (op, expected) in [
-        ("nestedCreate", 4usize),
+        ("createMany", 1),
+        ("upsertMany", 1),
+        ("updateMany", 1),
+        ("nestedCreate", 4),
         ("nestedUpsert", 4),
         ("nestedUpdate", 4),
         ("delete", 4),
-    ] {
-        let actual = count(op);
-        assert_eq!(
-            actual, expected,
-            "{op} tx statement-count regression (expect BEGIN + 2 body + COMMIT)"
-        );
-        println!("{op} statements={actual} (expect {expected} = BEGIN + 2 body + COMMIT)");
+    ];
+    println!("op                    statements  rows");
+    for op in OPS {
+        seed(d, &setup); // clean fixture per op; off-seam, never counted
+        let rows = probe_rows(d, op);
+        seed(d, &setup);
+        QUERY_COUNT.store(0, Ordering::SeqCst);
+        with_ambient_driver(d, || run_op(d, op, 0));
+        let stmts = QUERY_COUNT.load(Ordering::SeqCst);
+        let want = expected
+            .iter()
+            .find(|(name, _)| name == op)
+            .map(|(_, n)| *n);
+        let mark = match want {
+            Some(n) if n != stmts => {
+                println!("{op:<20}  {stmts:<10}  {rows:<6} STATEMENT-COUNT MISMATCH (want {n})");
+                panic!("{op} statement-count regression: got {stmts}, expect {n}");
+            }
+            _ => "ok",
+        };
+        println!("{op:<20}  {stmts:<10}  {rows:<6} {mark}");
     }
 }

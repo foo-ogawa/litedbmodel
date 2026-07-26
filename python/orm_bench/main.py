@@ -26,6 +26,7 @@ from __future__ import annotations
 import os
 import sys
 import time
+from contextlib import contextmanager
 from typing import Any, Callable, Dict, List
 
 # The shared seed-SSoT loader lives at the python/ root (one dir above this package) — anchor its import
@@ -192,10 +193,11 @@ def run_op(fns: Dict[str, Callable[..., Any]], driver: Any, op: str, it: int) ->
 def _measure(dialect: str, reps: int, warmup: int) -> None:
     driver = open_driver(dialect)
     fns = bound_ops(driver, dialect)
-    print("cell,dialect,op,iter,us")
+    print("cell,dialect,op,iter,us,rows")
     for op in OPS:
-        # Re-seed before each op so writes/reads start from the canonical fixture.
-        seed(driver, dialect)
+        # One UN-TIMED probe measures the rows this op moves (it re-seeds too) — the report's per-row
+        # denominator (#170). The counting middleware is unregistered before the timed loop.
+        rows = probe(driver, fns, dialect, op)["rows"]
         for it in range(warmup):
             run_op(fns, driver, op, it)
         for it in range(reps):
@@ -203,44 +205,57 @@ def _measure(dialect: str, reps: int, warmup: int) -> None:
             t = time.perf_counter_ns()
             run_op(fns, driver, op, g)
             us = (time.perf_counter_ns() - t) // 1000
-            print(f"native,{dialect},{op},{it},{us}")
+            print(f"native,{dialect},{op},{it},{us},{rows}")
 
 
-def safety_counts(driver: Any, fns: Dict[str, Callable[..., Any]], dialect: str = "sqlite") -> Dict[str, int]:
-    """Run each guarded op ONCE and return its statement count, observed at the runtime middleware seam
-    (every read / batch write / tx-control statement funnels through execute/run → middleware.wrap). The
-    seed runs on the driver directly (not the seam), so it is never counted."""
-    count = {"n": 0}
+@contextmanager
+def _counters() -> Any:
+    """Register the ONE counting middleware — statements AND rows — at the runtime seam, for the duration
+    of the block. Every read / batch write / tx-control statement funnels through execute/run →
+    middleware.wrap; the read seam hands the row list back, so the same hook totals both. The seed runs
+    on the driver directly (off-seam) and is never counted.
+
+    Scoped rather than process-wide on purpose: an op's rows are measured by an UN-TIMED probe, so the
+    published latencies never pay for the observation (#170).
+    """
+    tally = {"stmts": 0, "rows": 0}
 
     def counter(_state: Any, nxt: Callable[..., Any], sql: str, params: Any) -> Any:
-        count["n"] += 1
-        return nxt(sql, params)
+        tally["stmts"] += 1
+        out = nxt(sql, params)
+        if isinstance(out, list):
+            tally["rows"] += len(out)
+        return out
 
     clear_middlewares()
     unregister = register_middleware(create_middleware(execute=counter))
-    out: Dict[str, int] = {}
     try:
-        for op in list(RELATION_QUERY_COUNTS) + list(BATCH_QUERY_COUNTS) + list(TX_STMT_COUNTS):
-            seed(driver, dialect)  # clean fixture per op; not counted (runs off-seam)
-            count["n"] = 0
-            run_op(fns, driver, op, 0)
-            out[op] = count["n"]
+        yield tally
     finally:
         unregister()
         clear_middlewares()
-    return out
+
+
+def probe(driver: Any, fns: Dict[str, Callable[..., Any]], dialect: str, op: str) -> Dict[str, int]:
+    """Run ONE op once off the timed seam and report its ``{stmts, rows}`` — the safety assertion's input
+    and the report's per-row denominator, measured in one place."""
+    seed(driver, dialect)  # clean fixture; not counted (runs off-seam)
+    with _counters() as tally:
+        run_op(fns, driver, op, 0)
+        return dict(tally)
 
 
 def _safety(dialect: str) -> None:
     driver = open_driver(dialect)
     fns = bound_ops(driver, dialect)
-    counts = safety_counts(driver, fns, dialect)
     expected = {**RELATION_QUERY_COUNTS, **BATCH_QUERY_COUNTS, **TX_STMT_COUNTS}
-    for op, want in expected.items():
-        got = counts[op]
-        assert got == want, f"{op} statement-count regression: got {got}, expect {want}"
-        kind = "queries" if op not in TX_STMT_COUNTS else "statements (BEGIN + 2 body + COMMIT)"
-        print(f"{op} {kind}={got} (expect {want})")
+    print("op                    statements  rows")
+    for op in OPS:
+        got = probe(driver, fns, dialect, op)
+        want = expected.get(op)
+        mark = "ok" if want is None or got["stmts"] == want else f"STATEMENT-COUNT MISMATCH (want {want})"
+        print(f"{op:<20}  {got['stmts']:<10}  {got['rows']:<6} {mark}")
+        assert want is None or got["stmts"] == want, f"{op} statement-count regression: got {got['stmts']}, expect {want}"
 
 
 def main(argv: List[str]) -> None:

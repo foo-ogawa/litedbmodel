@@ -2,30 +2,85 @@
 // Unified ORM-bench DOMAIN — schema + seed for the 19-op cross-lang bench.
 // ════════════════════════════════════════════════════════════════════════════
 //
-// The SAME tables + seed the v1 SQL golden captured against (test/parity/
-// v1-sql-golden.test.ts): benchmark_users / benchmark_posts / benchmark_comments +
-// the composite-key tenant_* tables. Every language's live leg creates these in an
-// ISOLATED per-bench namespace (PG schema `scp_ts_bench` via search_path, MySQL
+// The tables the ORM-vs-ORM bench measures against (`benchmark/setup.ts`): benchmark_users /
+// benchmark_posts / benchmark_comments + the composite-key tenant_* tables. Every language's live leg
+// creates these in an ISOLATED per-bench namespace (PG schema `scp_ts_bench` via search_path, MySQL
 // database `scp_ts_bench`, sqlite fresh :memory:) so the bench never collides with the
 // conformance/integration fixtures.
 //
-// The seed is deterministic parameterised INSERTs (identical across dialects), matching
-// the golden's SEED so the 19 ops read exactly the rows the ORM-bench litedbmodel column
-// reads (rows/op parity → TS cross-lang == ORM column).
+// The seed is deterministic and identical across dialects, and it is sized to `benchmark/setup.ts`
+// (`ORM_SEED`) so the 19 ops read the SAME number of rows the ORM-bench litedbmodel column reads —
+// rows/op parity is what makes the two columns comparable AND what makes a per-row regression visible
+// (#170). `scaleSeed` re-sizes the child fan-outs for the fixed-overhead-vs-per-row-cost sweep.
 
 export type OrmDialect = 'sqlite' | 'mysql' | 'postgres';
 
-// Matches test/parity/v1-sql-golden.test.ts SEED.
-export const SEED = {
-  users: 110, // ids 1..110 (covers id=100..109 for update/updateMany)
-  extraUniqueUserId: 500, // user500@example.com (find unique)
-  postsPerUser: 2,
-  commentsPerPost: 2,
+/**
+ * The fixture shape. Every count an op's row yield depends on is a field here, so the fixture can be
+ * re-sized from one place and the SAME ops re-run at several scales (`scaleSeed`).
+ */
+export interface SeedShape {
+  /** Total `benchmark_users` rows. */
+  readonly users: number;
+  /** Users `1..nestedUsers` carry the deep graph (posts + comments) — the window every relation op reads. */
+  readonly nestedUsers: number;
+  /** Posts per deep-graph user. */
+  readonly nestedPostsPerUser: number;
+  /** Comments per deep-graph post. */
+  readonly commentsPerPost: number;
+  /** Posts per user OUTSIDE the deep-graph window (they carry no comments) — table bulk, as in the ORM bench. */
+  readonly shallowPostsPerUser: number;
+  readonly tenants: number;
+  readonly usersPerTenant: number;
+  readonly postsPerTenantUser: number;
+  readonly commentsPerTenantPost: number;
+}
+
+/**
+ * The fixture the ORM-vs-ORM bench measures against (`benchmark/setup.ts`): 1000 users, of which the
+ * first 100 carry 10 posts × 10 comments (the `100 → 1000 → 10000` graph its "Nested relations" op
+ * traverses), the rest 5 posts each; and the composite-key tenant graph whose LIMIT-100 window is
+ * likewise `100 → 1000 → 10000`.
+ *
+ * The cross-lang bench MUST read the same number of rows per op as that bench, or the two columns are
+ * not comparable and the per-row cost of the runtime is not observable: at the previous 110-user
+ * fixture `nestedRelations` read 700 rows against the ORM bench's 11,100, so a per-row regression could
+ * not show up as anything but noise against the fixed per-call overhead (#170).
+ *
+ * `tenants` × `usersPerTenant` = 500 tenant_users; `compositeRelations` orders by `user_id` and takes
+ * 100, so its window is user_id 1..20 across all 5 tenants = 100 users → 1000 posts → 10000 comments,
+ * the same window the ORM bench's `tenant_id IN (1..5) LIMIT 100` reads.
+ */
+export const ORM_SEED: SeedShape = {
+  users: 1000,
+  nestedUsers: 100,
+  nestedPostsPerUser: 10,
+  commentsPerPost: 10,
+  shallowPostsPerUser: 5,
   tenants: 5,
-  usersPerTenant: 4,
-  postsPerTenantUser: 2,
-  commentsPerTenantPost: 2,
-} as const;
+  usersPerTenant: 100,
+  postsPerTenantUser: 10,
+  commentsPerTenantPost: 10,
+};
+
+/**
+ * The SAME fixture with every per-parent FAN-OUT multiplied by `factor` (each floored at 1). The parent
+ * counts — `users`, `nestedUsers`, `tenants`, `usersPerTenant` — are deliberately NOT scaled: every op
+ * reads a LIMIT-100 parent window, so holding the parents fixed while the children scale makes the rows
+ * an op touches the ONLY thing that moves. Latency regressed on rows then separates the fixed per-call
+ * overhead (the intercept) from the per-row cost (the slope).
+ */
+export function scaleSeed(shape: SeedShape, factor: number): SeedShape {
+  const f = (n: number): number => Math.max(1, Math.round(n * factor));
+  return {
+    ...shape,
+    nestedPostsPerUser: f(shape.nestedPostsPerUser),
+    commentsPerPost: f(shape.commentsPerPost),
+    shallowPostsPerUser: f(shape.shallowPostsPerUser),
+    postsPerTenantUser: f(shape.postsPerTenantUser),
+    commentsPerTenantPost: f(shape.commentsPerTenantPost),
+  };
+}
 
 const DROP_ORDER = [
   'benchmark_tenant_comments',
@@ -188,12 +243,16 @@ export function ddl(dialect: OrmDialect): string[] {
   ];
 }
 
-// A seed statement as a portable `?`-placeholder SQL + params (each language binds via its driver;
-// PG rewrites `?`→`$N`). Deterministic + identical across dialects (booleans as 1/0 for mysql/sqlite,
-// true/false for pg).
-export interface SeedStmt {
-  readonly sql: string;
-  readonly params: readonly unknown[];
+/**
+ * One table's seed rows. Row-oriented rather than statement-oriented because the fixture is now large
+ * enough (tens of thousands of rows, re-applied per op) that it MUST go in as multi-row INSERTs — the
+ * emitter batches these rows into `VALUES (…),(…),…` exactly as `benchmark/setup.ts` does. Deterministic
+ * and identical across dialects (`published` is SMALLINT everywhere, so booleans go in as 1/0).
+ */
+export interface SeedTable {
+  readonly table: string;
+  readonly columns: readonly string[];
+  readonly rows: readonly (readonly unknown[])[];
 }
 
 /**
@@ -210,63 +269,86 @@ export function seedCreatedAt(seq: number): string {
   return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}`;
 }
 
-export function seedStatements(dialect: OrmDialect): SeedStmt[] {
-  // `published` is SMALLINT on every dialect (see `ddl`), so the seed binds 1/0 everywhere — a JS
+/**
+ * The whole fixture, one entry per table in parent→child order (the order it must be INSERTed in).
+ *
+ * The graph mirrors `benchmark/setup.ts`: users `1..nestedUsers` carry `nestedPostsPerUser` posts each,
+ * every one of those posts carries `commentsPerPost` comments, and the remaining users carry
+ * `shallowPostsPerUser` commentless posts (table bulk). Ids are explicit and deterministic so the ops'
+ * fixed inputs (`id = 1`, `user500@example.com`, ids 1..10 for `updateMany`) always resolve.
+ */
+export function seedTables(shape: SeedShape = ORM_SEED): SeedTable[] {
+  // `published` is SMALLINT on every dialect (see `ddl`), so the seed writes 1/0 everywhere — a JS
   // boolean would only fit a PostgreSQL BOOLEAN column, which is the divergence that DDL removed.
-  void dialect;
   const bool = (b: boolean) => (b ? 1 : 0);
-  const out: SeedStmt[] = [];
 
-  for (let id = 1; id <= SEED.users; id++) {
-    out.push({ sql: 'INSERT INTO benchmark_users (id, email, name) VALUES (?, ?, ?)', params: [id, `user${id}@example.com`, `User ${id}`] });
+  const users: unknown[][] = [];
+  for (let id = 1; id <= shape.users; id++) {
+    users.push([id, `user${id}@example.com`, `User ${id}`]);
   }
-  out.push({
-    sql: 'INSERT INTO benchmark_users (id, email, name) VALUES (?, ?, ?)',
-    params: [SEED.extraUniqueUserId, `user${SEED.extraUniqueUserId}@example.com`, `User ${SEED.extraUniqueUserId}`],
-  });
 
+  // The deep-graph posts come FIRST (ids 1..nestedUsers*nestedPostsPerUser) so the comment ids that
+  // hang off them are a contiguous prefix too — `nestedRelations` reads users 1..100 by LIMIT, and its
+  // posts/comments levels are then exactly the seeded deep graph.
+  const posts: unknown[][] = [];
   let postId = 1;
-  for (let uid = 1; uid <= SEED.users; uid++) {
-    for (let p = 0; p < SEED.postsPerUser; p++) {
-      const published = postId % 3 === 0;
-      out.push({
-        sql: 'INSERT INTO benchmark_posts (id, title, content, published, author_id, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-        params: [postId, `Post ${postId}`, `Content ${postId}`, bool(published), uid, seedCreatedAt(postId)],
-      });
+  const deepPostIds: number[] = [];
+  for (let uid = 1; uid <= shape.nestedUsers; uid++) {
+    for (let p = 0; p < shape.nestedPostsPerUser; p++) {
+      posts.push([postId, `Post ${postId}`, `Content ${postId}`, bool(postId % 3 === 0), uid, seedCreatedAt(postId)]);
+      deepPostIds.push(postId);
       postId++;
     }
   }
-  const maxPostId = postId - 1;
+  for (let uid = shape.nestedUsers + 1; uid <= shape.users; uid++) {
+    for (let p = 0; p < shape.shallowPostsPerUser; p++) {
+      posts.push([postId, `Post ${postId}`, `Content ${postId}`, bool(postId % 3 === 0), uid, seedCreatedAt(postId)]);
+      postId++;
+    }
+  }
 
+  const comments: unknown[][] = [];
   let commentId = 1;
-  for (let pid = 1; pid <= maxPostId; pid++) {
-    for (let c = 0; c < SEED.commentsPerPost; c++) {
-      out.push({ sql: 'INSERT INTO benchmark_comments (id, body, post_id) VALUES (?, ?, ?)', params: [commentId, `Comment ${commentId} for post ${pid}`, pid] });
+  for (const pid of deepPostIds) {
+    for (let c = 0; c < shape.commentsPerPost; c++) {
+      comments.push([commentId, `Comment ${commentId} for post ${pid}`, pid]);
       commentId++;
     }
   }
 
-  for (let t = 1; t <= SEED.tenants; t++) {
-    for (let u = 1; u <= SEED.usersPerTenant; u++) {
-      out.push({ sql: 'INSERT INTO benchmark_tenant_users (tenant_id, user_id, name) VALUES (?, ?, ?)', params: [t, u, `Tenant${t} User${u}`] });
+  // The composite-key graph. `post_id` / `comment_id` RESTART per tenant, so a query that forgets the
+  // tenant key matches rows from every tenant — the property `compositeRelations` exists to exercise.
+  const tenantUsers: unknown[][] = [];
+  const tenantPosts: unknown[][] = [];
+  const tenantComments: unknown[][] = [];
+  for (let t = 1; t <= shape.tenants; t++) {
+    for (let u = 1; u <= shape.usersPerTenant; u++) {
+      tenantUsers.push([t, u, `Tenant${t} User${u}`]);
     }
     let localPostId = 1;
-    for (let u = 1; u <= SEED.usersPerTenant; u++) {
-      for (let p = 0; p < SEED.postsPerTenantUser; p++) {
-        out.push({ sql: 'INSERT INTO benchmark_tenant_posts (tenant_id, post_id, user_id, title) VALUES (?, ?, ?, ?)', params: [t, localPostId, u, `T${t}Post ${localPostId}`] });
+    for (let u = 1; u <= shape.usersPerTenant; u++) {
+      for (let p = 0; p < shape.postsPerTenantUser; p++) {
+        tenantPosts.push([t, localPostId, u, `T${t}Post ${localPostId}`]);
         localPostId++;
       }
     }
-    const tenantPosts = localPostId - 1;
     let localCommentId = 1;
-    for (let lp = 1; lp <= tenantPosts; lp++) {
-      for (let c = 0; c < SEED.commentsPerTenantPost; c++) {
-        out.push({ sql: 'INSERT INTO benchmark_tenant_comments (tenant_id, comment_id, post_id, body) VALUES (?, ?, ?, ?)', params: [t, localCommentId, lp, `T${t}Comment ${localCommentId}`] });
+    for (let lp = 1; lp < localPostId; lp++) {
+      for (let c = 0; c < shape.commentsPerTenantPost; c++) {
+        tenantComments.push([t, localCommentId, lp, `T${t}Comment ${localCommentId}`]);
         localCommentId++;
       }
     }
   }
-  return out;
+
+  return [
+    { table: 'benchmark_users', columns: ['id', 'email', 'name'], rows: users },
+    { table: 'benchmark_posts', columns: ['id', 'title', 'content', 'published', 'author_id', 'created_at'], rows: posts },
+    { table: 'benchmark_comments', columns: ['id', 'body', 'post_id'], rows: comments },
+    { table: 'benchmark_tenant_users', columns: ['tenant_id', 'user_id', 'name'], rows: tenantUsers },
+    { table: 'benchmark_tenant_posts', columns: ['tenant_id', 'post_id', 'user_id', 'title'], rows: tenantPosts },
+    { table: 'benchmark_tenant_comments', columns: ['tenant_id', 'comment_id', 'post_id', 'body'], rows: tenantComments },
+  ];
 }
 
 // After the explicit-id seed, advance the PG SERIAL sequences past MAX(id) so the first Create

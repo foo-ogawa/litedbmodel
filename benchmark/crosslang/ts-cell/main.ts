@@ -50,16 +50,18 @@ async function safety(mode: Mode, dialect: Dialect): Promise<number> {
         continue;
       }
       await cell.seed();
-      cell.resetStatements();
+      cell.resetCounters();
       await step(cell, op, 0);
       const got = cell.statements();
       const want = expected[op];
       const kind = TX_OPS.has(op) ? 'statements (BEGIN + body + COMMIT)' : 'statements';
+      const rows = cell.rows();
+      const rowNote = `rows=${rows ?? '—'}`;
       if (got !== want) {
-        console.log(`${op.padEnd(20)} ${kind}=${got} MISMATCH (expect ${want})`);
+        console.log(`${op.padEnd(20)} ${kind}=${got} MISMATCH (expect ${want})  ${rowNote}`);
         failed++;
       } else {
-        console.log(`${op.padEnd(20)} ${kind}=${got} (expect ${want})`);
+        console.log(`${op.padEnd(20)} ${kind}=${got} (expect ${want})  ${rowNote}`);
       }
     }
   } finally {
@@ -72,20 +74,25 @@ async function measure(mode: Mode, dialect: Dialect, reps: number, warmup: numbe
   const cell = await open(mode, dialect);
   const label = CSV_CELL[mode];
   try {
-    console.log('cell,dialect,op,iter,us');
+    console.log('cell,dialect,op,iter,us,rows');
     for (const op of OPS) {
       if (cell.unsupported?.[op]) {
         console.error(`  skipping ${op}: ${cell.unsupported[op]}`);
         continue;
       }
       await cell.seed(); // clean fixture per op (as every other cell does)
+      // One UN-TIMED probe per op measures the rows it moves — the report's per-row denominator (#170).
+      // Off the timed seam by construction, so observing it costs the published latency nothing.
+      cell.resetCounters();
+      await step(cell, op, 0);
+      const rows = cell.rows() ?? '';
       for (let it = 0; it < warmup; it++) await step(cell, op, it);
       for (let it = 0; it < reps; it++) {
         const g = it + warmup;
         const t = process.hrtime.bigint();
         await step(cell, op, g);
         const us = Number((process.hrtime.bigint() - t) / 1000n);
-        console.log(`${label},${dialect},${op},${it},${us}`);
+        console.log(`${label},${dialect},${op},${it},${us},${rows}`);
       }
     }
   } finally {

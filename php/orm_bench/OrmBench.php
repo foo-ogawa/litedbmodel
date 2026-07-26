@@ -18,7 +18,7 @@ use function LiteDbModel\Runtime\withTransaction;
  *
  * Self-measures the covered ORM ops through the litedbmodel-GENERATED ir-exec module
  * (`behaviors_generated.php`, verbatim `bc generate --lang php`) + `litedbmodel_runtime`'s op-agnostic
- * leaf transport ({@see Leaves::makeHandlers}), and prints a flat CSV (`cell,dialect,op,iter,us`) the
+ * leaf transport ({@see Leaves::makeHandlers}), and prints a flat CSV (`cell,dialect,op,iter,us,rows`) the
  * TS collector aggregates.
  *
  * This cell is a litedbmodel-CONSUMER: it binds the leaf transport (`makeHandlers` →
@@ -216,54 +216,55 @@ final class OrmBench
     }
 
     /**
-     * Run each guarded op ONCE and return its statement count, observed at the runtime middleware seam
-     * (every read / batch write / tx-control statement funnels through execute/run/control →
-     * MiddlewareChain::wrap). The seed runs on the PDO directly (off-seam), so it is never counted.
+     * Run ONE op once OFF the timed seam and report `['stmts' => int, 'rows' => int]`, observed at the
+     * runtime middleware seam (every read / batch write / tx-control statement funnels through
+     * execute/run/control → MiddlewareChain::wrap; the read seam hands the row list back, so the same
+     * hook totals both). The seed runs on the PDO directly (off-seam), so it is never counted.
+     *
+     * The middleware is registered for the probe ONLY: an op's rows are the report's per-row denominator
+     * (#170), and the published latencies must not pay for observing them.
      *
      * @param array<string,callable> $fns
-     * @return array<string,int>
+     * @return array{stmts:int,rows:int}
      */
-    public static function safetyCounts(\PDO $driver, array $fns, string $dialect = 'sqlite'): array
+    public static function probe(\PDO $driver, array $fns, string $dialect, string $op): array
     {
-        $counter = new \stdClass();
-        $counter->n = 0;
+        $tally = new \stdClass();
+        $tally->stmts = 0;
+        $tally->rows = 0;
         $mw = createMiddleware([
-            'execute' => function (callable $next, string $sql, array $params) use ($counter): mixed {
-                $counter->n++;
-                return $next($sql, $params);
+            'execute' => function (callable $next, string $sql, array $params) use ($tally): mixed {
+                $tally->stmts++;
+                $out = $next($sql, $params);
+                if (is_array($out)) {
+                    $tally->rows += count($out);
+                }
+                return $out;
             },
         ]);
 
+        self::seed($driver, $dialect); // clean fixture; not counted (runs off-seam)
         clearMiddlewares();
         $unregister = registerMiddleware($mw);
-        $out = [];
         try {
-            $ops = array_merge(
-                array_keys(self::RELATION_QUERY_COUNTS),
-                array_keys(self::BATCH_QUERY_COUNTS),
-                array_keys(self::TX_STMT_COUNTS),
-            );
-            foreach ($ops as $op) {
-                self::seed($driver, $dialect); // clean fixture per op; not counted (runs off-seam)
-                $counter->n = 0;
-                self::runOp($fns, $driver, $op, 0);
-                $out[$op] = $counter->n;
-            }
+            self::runOp($fns, $driver, $op, 0);
         } finally {
             $unregister();
             clearMiddlewares();
         }
-        return $out;
+        return ['stmts' => $tally->stmts, 'rows' => $tally->rows];
     }
 
-    /** The measurement loop: for each op, re-seed then time `$reps` runs; print `cell,dialect,op,iter,us`. */
+    /** The measurement loop: for each op, re-seed then time `$reps` runs; print `cell,dialect,op,iter,us,rows`. */
     public static function measure(string $dialect, int $reps, int $warmup): void
     {
         $driver = self::openDriver($dialect);
         $fns = self::boundOps($driver, $dialect);
-        echo "cell,dialect,op,iter,us\n";
+        echo "cell,dialect,op,iter,us,rows\n";
         foreach (self::OPS as $op) {
-            self::seed($driver, $dialect); // re-seed before each op so writes/reads start from the canonical fixture
+            // One UN-TIMED probe measures the rows this op moves (it re-seeds too) — the per-row
+            // denominator (#170); the counting middleware is gone before the timed loop starts.
+            $rows = self::probe($driver, $fns, $dialect, $op)['rows'];
             for ($it = 0; $it < $warmup; $it++) {
                 self::runOp($fns, $driver, $op, $it);
             }
@@ -272,25 +273,29 @@ final class OrmBench
                 $t = hrtime(true);
                 self::runOp($fns, $driver, $op, $g);
                 $us = intdiv(hrtime(true) - $t, 1000);
-                echo "native,{$dialect},{$op},{$it},{$us}\n";
+                echo "native,{$dialect},{$op},{$it},{$us},{$rows}\n";
             }
         }
     }
 
-    /** The safety mode: assert each guarded op's statement count matches its expectation; print it. */
+    /**
+     * The safety mode: for EVERY op print the statements it issues and the rows it moves, asserting the
+     * guarded statement counts. Covering all 19 (not just the guarded subset) is what lets the rows column
+     * be compared against the other languages' cells — the fairness check #170 had no surface for.
+     */
     public static function safety(string $dialect): void
     {
         $driver = self::openDriver($dialect);
         $fns = self::boundOps($driver, $dialect);
-        $counts = self::safetyCounts($driver, $fns, $dialect);
         $expected = self::RELATION_QUERY_COUNTS + self::BATCH_QUERY_COUNTS + self::TX_STMT_COUNTS;
-        foreach ($expected as $op => $want) {
-            $got = $counts[$op];
-            if ($got !== $want) {
-                throw new \RuntimeException("{$op} statement-count regression: got {$got}, expect {$want}");
+        echo str_pad('op', 22) . str_pad('statements', 12) . "rows\n";
+        foreach (self::OPS as $op) {
+            $got = self::probe($driver, $fns, $dialect, $op);
+            $want = $expected[$op] ?? null;
+            if ($want !== null && $got['stmts'] !== $want) {
+                throw new \RuntimeException("{$op} statement-count regression: got {$got['stmts']}, expect {$want}");
             }
-            $kind = isset(self::TX_STMT_COUNTS[$op]) ? 'statements (BEGIN + 2 body + COMMIT)' : 'queries';
-            echo "{$op} {$kind}={$got} (expect {$want})\n";
+            echo str_pad($op, 22) . str_pad((string) $got['stmts'], 12) . $got['rows'] . "\n";
         }
     }
 }

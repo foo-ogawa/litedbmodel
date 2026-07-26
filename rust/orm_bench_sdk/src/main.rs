@@ -24,6 +24,10 @@ use std::time::Instant;
 // ── per-statement query counter (safety proof) — every prepared statement the crate issues bumps this
 //    in the ONE exec seam below, so the N+1 proof is measured, not asserted. ─────────────────────────
 static QUERY_COUNT: AtomicUsize = AtomicUsize::new(0);
+// ── per-row counter (#170) — bumped in the SAME seam, once per read, by the rows that seam returned.
+//    It is the report's per-row denominator AND the proof this hand-written baseline moved the SAME rows
+//    the native cell did: a baseline that quietly fetched fewer would post a flattering ratio.
+static ROW_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Clone, Copy, PartialEq)]
 enum Dialect {
@@ -101,7 +105,15 @@ impl Ph {
 //    the per-driver param/decode lowering each live in exactly one place per driver. ─────────────────
 trait Db {
     fn dialect(&self) -> Dialect;
-    fn query(&mut self, sql: &str, params: &[P]) -> Vec<Vec<Cell>>;
+    /// The ONE counted read seam: every SELECT rides it, so the statement and row counters each live in
+    /// exactly one place. A driver supplies only its own fetch ([`Db::fetch`]).
+    fn query(&mut self, sql: &str, params: &[P]) -> Vec<Vec<Cell>> {
+        QUERY_COUNT.fetch_add(1, Ordering::Relaxed);
+        let out = self.fetch(sql, params);
+        ROW_COUNT.fetch_add(out.len(), Ordering::Relaxed);
+        out
+    }
+    fn fetch(&mut self, sql: &str, params: &[P]) -> Vec<Vec<Cell>>;
     fn exec(&mut self, sql: &str, params: &[P]);
     /// INSERT one row and return its generated `id` (pg appends `RETURNING id`; sqlite/mysql read the
     /// driver's last-insert-id).
@@ -123,8 +135,7 @@ impl Db for SqliteDb {
     fn dialect(&self) -> Dialect {
         Dialect::Sqlite
     }
-    fn query(&mut self, sql: &str, params: &[P]) -> Vec<Vec<Cell>> {
-        QUERY_COUNT.fetch_add(1, Ordering::Relaxed);
+    fn fetch(&mut self, sql: &str, params: &[P]) -> Vec<Vec<Cell>> {
         // prepare_cached reuses the compiled statement across iterations (rusqlite's built-in per-conn
         // statement cache) — the fair "competent raw-driver user" baseline, matching native's prepared
         // cache. re-preparing per call was the strawman asymmetry.
@@ -279,8 +290,7 @@ impl Db for PgDb {
     fn dialect(&self) -> Dialect {
         Dialect::Pg
     }
-    fn query(&mut self, sql: &str, params: &[P]) -> Vec<Vec<Cell>> {
-        QUERY_COUNT.fetch_add(1, Ordering::Relaxed);
+    fn fetch(&mut self, sql: &str, params: &[P]) -> Vec<Vec<Cell>> {
         let boxed = pg_params(params);
         let refs: Vec<&(dyn postgres::types::ToSql + Sync)> =
             boxed.iter().map(|b| b.as_ref()).collect();
@@ -359,9 +369,8 @@ impl Db for MyDb {
     fn dialect(&self) -> Dialect {
         Dialect::Mysql
     }
-    fn query(&mut self, sql: &str, params: &[P]) -> Vec<Vec<Cell>> {
+    fn fetch(&mut self, sql: &str, params: &[P]) -> Vec<Vec<Cell>> {
         use mysql::prelude::Queryable;
-        QUERY_COUNT.fetch_add(1, Ordering::Relaxed);
         let rows: Vec<mysql::Row> = self
             .conn
             .exec(sql, my_params(params))
@@ -398,7 +407,8 @@ fn load_setup(dialect: &str) -> Setup {
 #[cfg(feature = "livedb")]
 fn open_pg() -> Box<dyn Db> {
     Box::new(PgDb {
-        client: postgres::Client::connect(&postgres_conn(), postgres::NoTls).expect("connect postgres"),
+        client: postgres::Client::connect(&postgres_conn(), postgres::NoTls)
+            .expect("connect postgres"),
         stmts: std::collections::HashMap::new(),
     })
 }
@@ -406,7 +416,9 @@ fn open_pg() -> Box<dyn Db> {
 #[cfg(feature = "livedb")]
 fn open_mysql() -> Box<dyn Db> {
     let opts = mysql::Opts::from_url(&mysql_url()).expect("parse mysql url");
-    Box::new(MyDb { conn: mysql::Conn::new(opts).expect("connect mysql") })
+    Box::new(MyDb {
+        conn: mysql::Conn::new(opts).expect("connect mysql"),
+    })
 }
 
 fn open_db(dialect: &str) -> Box<dyn Db> {
@@ -423,7 +435,9 @@ fn open_db(dialect: &str) -> Box<dyn Db> {
     }
     // sqlite: an in-memory DB. A FILE-backed sqlite would make the baseline pay fsync/WAL the
     // native in-memory cell never pays, over-crediting native on writes.
-    Box::new(SqliteDb { conn: rusqlite::Connection::open_in_memory().expect("open sqlite") })
+    Box::new(SqliteDb {
+        conn: rusqlite::Connection::open_in_memory().expect("open sqlite"),
+    })
 }
 
 fn apply_schema(db: &mut dyn Db, setup: &Setup) {
@@ -1058,10 +1072,15 @@ fn main() {
     let setup = load_setup(&dialect);
     let mut db = open_db(&dialect);
     apply_schema(db.as_mut(), &setup);
-    println!("cell,dialect,op,iter,us");
+    println!("cell,dialect,op,iter,us,rows");
     for op in OPS {
         // Re-seed before each op so reads see the seed state and writes start clean.
         reseed(db.as_mut(), &setup);
+        // One UN-TIMED probe measures the rows this op moves — the per-row denominator (#170).
+        ROW_COUNT.store(0, Ordering::SeqCst);
+        run_op(op, 0, db.as_mut());
+        let rows = ROW_COUNT.load(Ordering::SeqCst);
+        reseed(db.as_mut(), &setup); // the probe mutated the fixture for a write op
         for it in 0..warmup {
             run_op(op, it, db.as_mut());
         }
@@ -1070,46 +1089,41 @@ fn main() {
             let t = Instant::now();
             run_op(op, g, db.as_mut());
             let us = t.elapsed().as_micros();
-            println!("sdk,{dialect},{op},{it},{us}");
+            println!("sdk,{dialect},{op},{it},{us},{rows}");
         }
     }
 }
 
-// ── #129 safety proof: N+1-avoidance (query counts) via the per-statement QUERY_COUNT. ────────────────
+// ── The safety + fairness proof: EVERY op's statement count AND the rows it moves, both from the ONE
+// exec seam. Covering all 19 ops (the earlier form printed 6 and asserted none of them) is what lets this
+// baseline's row yield be compared against the native cell's — the check #170 had no surface for.
 fn run_safety(dialect: &str) {
     let setup = load_setup(dialect);
     let mut db = open_db(dialect);
     apply_schema(db.as_mut(), &setup);
-    reseed(db.as_mut(), &setup);
-    let count = |op: &str, db: &mut dyn Db| {
+    // A relation op is 1 parent + 1 batched child PER LEVEL (N+1-free, independent of the row count); a
+    // batch write is ONE statement for 10 records.
+    let expected: &[(&str, usize)] = &[
+        ("nestedFindAll", 2),
+        ("nestedFindFirst", 2),
+        ("nestedFindUnique", 2),
+        ("nestedRelations", 3),
+        ("compositeRelations", 3),
+        ("createMany", 1),
+        ("upsertMany", 1),
+        ("updateMany", 1),
+    ];
+    println!("op                    statements  rows");
+    for op in OPS {
+        reseed(db.as_mut(), &setup); // clean fixture per op
         QUERY_COUNT.store(0, Ordering::SeqCst);
-        run_op(op, 0, db);
-        QUERY_COUNT.load(Ordering::SeqCst)
-    };
-    println!(
-        "nestedFindAll queries={} (expect 2: 1 parent + 1 batched child)",
-        count("nestedFindAll", db.as_mut())
-    );
-    println!(
-        "nestedFindUnique queries={} (expect 2)",
-        count("nestedFindUnique", db.as_mut())
-    );
-    println!(
-        "nestedRelations queries={} (expect 3: users + posts + comments)",
-        count("nestedRelations", db.as_mut())
-    );
-    println!(
-        "compositeRelations queries={} (expect 3)",
-        count("compositeRelations", db.as_mut())
-    );
-    reseed(db.as_mut(), &setup);
-    println!(
-        "createMany queries={} (expect 1: one batched INSERT for 10 records)",
-        count("createMany", db.as_mut())
-    );
-    reseed(db.as_mut(), &setup);
-    println!(
-        "updateMany queries={} (expect 1)",
-        count("updateMany", db.as_mut())
-    );
+        ROW_COUNT.store(0, Ordering::SeqCst);
+        run_op(op, 0, db.as_mut());
+        let stmts = QUERY_COUNT.load(Ordering::SeqCst);
+        let rows = ROW_COUNT.load(Ordering::SeqCst);
+        if let Some((_, n)) = expected.iter().find(|(name, _)| name == op) {
+            assert_eq!(stmts, *n, "{op} statement-count regression");
+        }
+        println!("{op:<20}  {stmts:<10}  {rows:<6} ok");
+    }
 }

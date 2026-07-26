@@ -24,7 +24,7 @@ declare(strict_types=1);
  *     (findUnique=user1, update id=1, …).
  *
  * Usage:
- *   php orm_bench_sdk/main.php <dialect> [reps] [warmup]   # print the CSV (cell,dialect,op,iter,us)
+ *   php orm_bench_sdk/main.php <dialect> [reps] [warmup]   # print the CSV (cell,dialect,op,iter,us,rows)
  *   php orm_bench_sdk/main.php safety <dialect>            # assert + print the safety counts
  */
 
@@ -67,6 +67,12 @@ final class Db
     /** @var array<string,\PDOStatement> per-SQL prepared-statement cache (reused across iterations) */
     private array $stmts = [];
     public int $count = 0;
+    /**
+     * Rows this hand-written baseline scanned (#170) — the report's per-row denominator, and the proof the
+     * baseline moved the SAME rows the native cell did (a baseline that fetched fewer would post a
+     * flattering ratio).
+     */
+    public int $rows = 0;
 
     public function __construct(public \PDO $pdo, public string $dialect = 'sqlite')
     {
@@ -112,7 +118,9 @@ final class Db
         $stmt = $this->prep($sql);
         $this->bindAll($stmt, $params);
         $stmt->execute();
-        return $stmt->fetchAll(\PDO::FETCH_NUM);
+        $out = $stmt->fetchAll(\PDO::FETCH_NUM);
+        $this->rows += count($out);
+        return $out;
     }
 
     /** @param list<mixed> $params */
@@ -501,9 +509,13 @@ function runOp(Db $db, string $op, int $it): void
 function measure(string $dialect, int $reps, int $warmup): void
 {
     $db = openDb($dialect);
-    echo "cell,dialect,op,iter,us\n";
+    echo "cell,dialect,op,iter,us,rows\n";
     foreach (OPS as $op) {
         seed($db); // re-seed before each op (matches the native cell)
+        // One UN-TIMED probe measures the rows this op moves — the per-row denominator (#170).
+        $db->rows = 0;
+        runOp($db, $op, 0);
+        $rows = $db->rows;
         for ($it = 0; $it < $warmup; $it++) {
             runOp($db, $op, $it);
         }
@@ -512,7 +524,7 @@ function measure(string $dialect, int $reps, int $warmup): void
             $t = hrtime(true);
             runOp($db, $op, $g);
             $us = intdiv(hrtime(true) - $t, 1000);
-            echo "sdk,{$dialect},{$op},{$it},{$us}\n";
+            echo "sdk,{$dialect},{$op},{$it},{$us},{$rows}\n";
         }
     }
 }
@@ -521,16 +533,20 @@ function safety(string $dialect): void
 {
     $db = openDb($dialect);
     $expected = RELATION_QUERY_COUNTS + BATCH_QUERY_COUNTS + TX_STMT_COUNTS;
-    foreach ($expected as $op => $want) {
+    // EVERY op, with the rows it moves — the surface that lets this baseline's row yield be compared
+    // against the native cell's (#170), not just the guarded statement counts.
+    echo str_pad('op', 22) . str_pad('statements', 12) . "rows\n";
+    foreach (OPS as $op) {
         seed($db);
         $db->count = 0;
+        $db->rows = 0;
         runOp($db, $op, 0);
         $got = $db->count;
-        if ($got !== $want) {
+        $want = $expected[$op] ?? null;
+        if ($want !== null && $got !== $want) {
             throw new \RuntimeException("{$op} statement-count regression: got {$got}, expect {$want}");
         }
-        $kind = isset(TX_STMT_COUNTS[$op]) ? 'statements (BEGIN + body + COMMIT)' : 'queries';
-        echo "{$op} {$kind}={$got} (expect {$want})\n";
+        echo str_pad($op, 22) . str_pad((string) $got, 12) . $db->rows . "\n";
     }
 }
 

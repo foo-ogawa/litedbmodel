@@ -10,11 +10,12 @@
 // here really is BEGIN + INSERT + COMMIT. `EXPECTED` below states that rather than relaxing the check.
 
 import 'reflect-metadata';
-import { DBModel, closeAllPools, column, model, hasMany, belongsTo, type ColumnsOf } from '../../../dist/index.mjs';
+import { DBModel, closeAllPools, column, model, hasMany, belongsTo, type ColumnsOf } from '../../../dist/index.cjs';
+import { clearMiddlewares, createMiddleware, use } from '../../../dist/scp/index.mjs';
 
 import { EXPECTED_STATEMENTS, inputFor, userRows, updateManyRows } from './inputs.js';
 import type { Cell, Dialect } from './cell.js';
-import { MYSQL_CONFIG, PG_CONFIG, SQLITE_CONFIG, setupFor } from './cell.js';
+import { MYSQL_CONFIG, PG_CONFIG, SQLITE_CONFIG, setupFor, tallyRows } from './cell.js';
 
 // The six benchmark models. Decorators run at class definition, and the transform only accepts them at
 // module top level, so the models are declared once against `DBModel` and the dialect is applied by
@@ -113,12 +114,31 @@ let sink: unknown;
 export async function openV1(dialect: Dialect): Promise<Cell> {
   const setup = setupFor(dialect);
   const config = dialect === 'sqlite' ? SQLITE_CONFIG : dialect === 'postgres' ? PG_CONFIG : MYSQL_CONFIG;
+  // Count at the SCP middleware seam, not the v1 driver's logger. Phase F-2 (#105) routes DBModel
+  // through the SCP runtime whenever it is usable, so the driver logger sees only the statements that
+  // fall back to v1 — on PostgreSQL that was ZERO, and the counter read 0 for a query that ran.
   let count = 0;
+  // Rows are observable ONLY at the SCP middleware, which sees the result. The v1 in-proc path (SQLite)
+  // is reached through the driver LOGGER, which carries the SQL text and nothing else — so on that leg
+  // the row count is genuinely unavailable and `rows()` reports `null` rather than a misleading 0.
+  let rows: number | null = dialect === 'sqlite' ? null : 0;
+  clearMiddlewares();
+  use(
+    createMiddleware({
+      execute(next: (s: string, p?: readonly unknown[]) => unknown, sql: string, params: readonly unknown[]) {
+        count++;
+        return tallyRows(next(sql, params), (n) => {
+          if (rows !== null) rows += n;
+        });
+      },
+    }),
+  );
+  // …and at the v1 driver's logger as well: SQLite is NOT routed to the SCP runtime (it keeps the v1
+  // in-proc path), so on that dialect the middleware never fires. v1 has two execution paths and the
+  // count is whichever one DBModel picked; a statement can only travel one of them, so summing is exact.
   DBModel.setConfig(
     { ...config, max: 4 },
     {
-      // Every driver logs `SQL: <text>` for each statement it issues (src/drivers/*.ts) — the one
-      // place all of v1's SQL is observable, including the transaction's BEGIN/COMMIT.
       logger: {
         debug: (message: string) => {
           if (message.startsWith('SQL: ')) count++;
@@ -306,11 +326,14 @@ export async function openV1(dialect: Dialect): Promise<Cell> {
     },
     run: runOp,
     close: async () => {
+      clearMiddlewares();
       await closeAllPools();
     },
     statements: () => count,
-    resetStatements: () => {
+    rows: () => rows,
+    resetCounters: () => {
       count = 0;
+      if (rows !== null) rows = 0;
     },
   };
 }

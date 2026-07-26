@@ -22,8 +22,8 @@ from orm_bench.main import (
     TX_STMT_COUNTS,
     bound_ops,
     open_driver,
+    probe,
     run_op,
-    safety_counts,
     seed,
 )
 
@@ -63,20 +63,30 @@ def test_find_ops_return_expected_rows(harness):
 
 def test_nested_relations_hydrate_children(harness):
     driver, fns = harness
+    # The children are batch-loaded (N+1-free) and grouped onto the RIGHT parent: user 1 owns the seed's
+    # first contiguous run of posts, and that post's comments are the first contiguous run of comments.
+    # The fan-out itself is the fixture's, which the scale knob varies (#170), so the assertion pins the
+    # SHAPE — the empty-children bug (#150) still fails it, a re-scaled fixture does not.
     users = run_op(fns, driver, "nestedFindAll", 0)
     by_id = {u["id"]: u for u in users}
-    assert [p["title"] for p in by_id[1]["posts"]] == ["Post 1", "Post 2"]  # N+1-free batch-load
+    posts = by_id[1]["posts"]
+    assert posts and [p["title"] for p in posts] == [f"Post {i}" for i in range(1, len(posts) + 1)]
     deep = run_op(fns, driver, "nestedRelations", 0)
     u1 = next(u for u in deep if u["id"] == 1)
-    assert [c["id"] for c in u1["posts"][0]["comments"]] == [1, 2]  # 3-level chain
+    comments = u1["posts"][0]["comments"]  # 3-level chain
+    assert comments and [c["id"] for c in comments] == list(range(1, len(comments) + 1))
 
 
 def test_composite_relations_group_by_full_tuple(harness):
     driver, fns = harness
     tenants = run_op(fns, driver, "compositeRelations", 0)
     tu1 = next(t for t in tenants if t["user_id"] == 1)
-    assert [p["post_id"] for p in tu1["posts"]] == [1, 2]
-    assert [c["comment_id"] for c in tu1["posts"][0]["comments"]] == [1, 2]
+    posts = tu1["posts"]
+    # post_id / comment_id RESTART per tenant, so tenant 1 user 1 owns post_ids 1..n and post 1 owns
+    # comment_ids 1..m — grouping on the FULL tuple is what keeps other tenants' identical ids out.
+    assert posts and [p["post_id"] for p in posts] == list(range(1, len(posts) + 1))
+    comments = posts[0]["comments"]
+    assert comments and [c["comment_id"] for c in comments] == list(range(1, len(comments) + 1))
 
 
 # ── single writes (executeSQL write path: summary for INSERT, RETURNING rows for upsert) ────────────
@@ -152,6 +162,14 @@ def test_tx_atomicity_rolls_back_on_error(harness):
 
 def test_safety_statement_counts(harness):
     driver, fns = harness
-    counts = safety_counts(driver, fns)
     expected = {**RELATION_QUERY_COUNTS, **BATCH_QUERY_COUNTS, **TX_STMT_COUNTS}
+    counts = {op: probe(driver, fns, "sqlite", op)["stmts"] for op in expected}
     assert counts == expected  # relations 2/2/2/3/3, batch 1/1/1, tx 4/4/4/4
+
+
+def test_probe_reports_the_rows_a_relation_op_moves(harness):
+    driver, fns = harness
+    # The per-row denominator the report divides by (#170). A relation op reads a 100-parent window and
+    # both child levels under it, so its row total is far greater than its 3 statements — the property the
+    # 110-user fixture hid by making it 700 rows against the ORM bench's 11,100.
+    assert probe(driver, fns, "sqlite", "nestedRelations")["rows"] > probe(driver, fns, "sqlite", "findAll")["rows"]

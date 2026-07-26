@@ -16,7 +16,7 @@ import { Pool as PgPool } from 'pg';
 import mysql from 'mysql2/promise';
 import type { ResultSetHeader, RowDataPacket } from 'mysql2/promise';
 
-import { inputFor, userRows, updateManyRows } from './inputs.js';
+import { EXPECTED_STATEMENTS, inputFor, userRows, updateManyRows } from './inputs.js';
 import type { Cell, Dialect } from './cell.js';
 import { MYSQL_CONFIG, PG_CONFIG, setupFor } from './cell.js';
 
@@ -29,6 +29,8 @@ type Row = Record<string, unknown>;
  */
 abstract class Db {
   count = 0;
+  /** Rows this driver handed back — the per-row normalization denominator + the fairness proof (#170). */
+  rows = 0;
   constructor(readonly dialect: Dialect) {}
 
   /** `?` → this driver's placeholder. pg binds `$N` positionally; better-sqlite3 and mysql2 take `?`. */
@@ -52,7 +54,17 @@ abstract class Db {
     return this.dialect === 'sqlite' ? `(VALUES ${body})` : `(${body})`;
   }
 
-  abstract query(sql: string, params?: readonly unknown[]): Promise<Row[]>;
+  /**
+   * The ONE counted read seam — every SELECT (and every RETURNING write) rides it, so statements and
+   * rows are each counted in exactly one place. Subclasses supply only the driver call ({@link fetch}).
+   */
+  async query(sql: string, params: readonly unknown[] = []): Promise<Row[]> {
+    this.count++;
+    const out = await this.fetch(sql, params);
+    this.rows += out.length;
+    return out;
+  }
+  protected abstract fetch(sql: string, params: readonly unknown[]): Promise<Row[]>;
   abstract exec(sql: string, params?: readonly unknown[]): Promise<void>;
   /** INSERT one user and return its generated id (pg via RETURNING, others via last-insert-id). */
   abstract insertUserId(email: string, name: string): Promise<number>;
@@ -69,8 +81,7 @@ class SqliteDb extends Db {
     if (!s) this.stmts.set(sql, (s = this.db.prepare(sql)));
     return s;
   }
-  async query(sql: string, params: readonly unknown[] = []): Promise<Row[]> {
-    this.count++;
+  protected async fetch(sql: string, params: readonly unknown[]): Promise<Row[]> {
     return this.prep(sql).all(...(params as unknown[])) as Row[];
   }
   async exec(sql: string, params: readonly unknown[] = []): Promise<void> {
@@ -92,8 +103,7 @@ class PgDb extends Db {
   constructor(readonly pool: PgPool) {
     super('postgres');
   }
-  async query(sql: string, params: readonly unknown[] = []): Promise<Row[]> {
-    this.count++;
+  protected async fetch(sql: string, params: readonly unknown[]): Promise<Row[]> {
     // A named statement is prepared once per connection and reused — the pg twin of a statement
     // cache, so the baseline is not re-parsing every SQL the way an unprepared query would.
     const r = await this.pool.query({ text: this.render(sql), values: params as unknown[], name: cacheName(sql) });
@@ -116,8 +126,7 @@ class MysqlDb extends Db {
   constructor(readonly pool: mysql.Pool) {
     super('mysql');
   }
-  async query(sql: string, params: readonly unknown[] = []): Promise<Row[]> {
-    this.count++;
+  protected async fetch(sql: string, params: readonly unknown[]): Promise<Row[]> {
     const [rows] = await this.pool.execute<RowDataPacket[]>(sql, params as never[]); // `execute` = server-side prepared + cached
     return rows as Row[];
   }
@@ -316,15 +325,21 @@ async function runOp(db: Db, op: string, it: number): Promise<void> {
       return;
     }
     case 'nestedUpsert': {
+      // PostgreSQL reads the upserted id back with RETURNING (4 statements). SQLite and MySQL have no
+      // RETURNING on a conflict-update here, so the raw baseline pays one extra SELECT — 5 statements,
+      // exactly as the go/rust/python/php SDK cells do.
       await db.exec('BEGIN');
-      const rows = await db.query(
-        `INSERT INTO benchmark_users (email, name) VALUES (?, ?)${db.upsertTail()}${db.dialect === 'postgres' ? ' RETURNING id' : ''}`,
-        [input.email, input.name],
-      );
-      const uid =
-        db.dialect === 'postgres'
-          ? Number(rows[0].id)
-          : Number((await db.query('SELECT id FROM benchmark_users WHERE email = ?', [input.email]))[0].id);
+      let uid: number;
+      if (db.dialect === 'postgres') {
+        const rows = await db.query(
+          `INSERT INTO benchmark_users (email, name) VALUES (?, ?)${db.upsertTail()} RETURNING id`,
+          [input.email, input.name],
+        );
+        uid = Number(rows[0].id);
+      } else {
+        await db.exec(`INSERT INTO benchmark_users (email, name) VALUES (?, ?)${db.upsertTail()}`, [input.email, input.name]);
+        uid = Number((await db.query('SELECT id FROM benchmark_users WHERE email = ?', [input.email]))[0].id);
+      }
       await db.exec('INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)', [uid, input.title]);
       await db.exec('COMMIT');
       return;
@@ -370,6 +385,8 @@ export async function openSdk(dialect: Dialect): Promise<Cell> {
   return {
     dialect,
     sync: false,
+    // The raw baseline needs one extra SELECT for nestedUpsert wherever RETURNING is unavailable.
+    expectedStatements: dialect === 'postgres' ? EXPECTED_STATEMENTS : { ...EXPECTED_STATEMENTS, nestedUpsert: 5 },
     seed: async () => {
       for (const stmt of [...setup.delete, ...setup.insert]) {
         if (db instanceof SqliteDb) db.db.exec(stmt);
@@ -380,8 +397,10 @@ export async function openSdk(dialect: Dialect): Promise<Cell> {
     run: (op, it) => runOp(db, op, it),
     close: () => db.close(),
     statements: () => db.count,
-    resetStatements: () => {
+    rows: () => db.rows,
+    resetCounters: () => {
       db.count = 0;
+      db.rows = 0;
     },
   };
 }

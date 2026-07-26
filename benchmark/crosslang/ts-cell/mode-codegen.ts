@@ -25,7 +25,7 @@ import {
 
 import { inputFor, TX_OPS } from './inputs.js';
 import type { Cell, Dialect } from './cell.js';
-import { MYSQL_CONFIG, PG_CONFIG, setupFor } from './cell.js';
+import { MYSQL_CONFIG, PG_CONFIG, setupFor, tallyRows } from './cell.js';
 
 /** The generated module's public surface, as much of it as the cell touches. */
 interface GeneratedModule {
@@ -40,12 +40,15 @@ export async function openCodegen(dialect: Dialect): Promise<Cell> {
   // Count at the runtime's own SQL middleware seam — the same place the go/rust cells count, and the
   // only point every read, write and tx-control statement funnels through.
   let count = 0;
+  let rows = 0;
   clearMiddlewares();
   use(
     createMiddleware({
       execute(next: (s: string, p?: readonly unknown[]) => unknown, sql: string, params: readonly unknown[]) {
         count++;
-        return next(sql, params);
+        return tallyRows(next(sql, params), (n) => {
+          rows += n;
+        });
       },
     }),
   );
@@ -96,8 +99,10 @@ export async function openCodegen(dialect: Dialect): Promise<Cell> {
       await driverPool.end();
     },
     statements: () => count,
-    resetStatements: () => {
+    rows: () => rows,
+    resetCounters: () => {
       count = 0;
+      rows = 0;
     },
   };
 }

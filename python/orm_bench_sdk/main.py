@@ -60,6 +60,10 @@ class Db:
         self.conn = conn
         self.dialect = dialect
         self.count = 0
+        # Rows this hand-written baseline scanned (#170) — the report's per-row denominator, and the
+        # proof the baseline moved the SAME rows the native cell did (a baseline that fetched fewer
+        # would post a flattering ratio).
+        self.rows = 0
 
     def sql(self, sql: str) -> str:
         """`?` → the driver's placeholder. psycopg and PyMySQL both bind `%s` positionally; sqlite3 takes
@@ -80,6 +84,7 @@ class Db:
         self.count += 1
         cur = self._cursor(sql, params)
         rows = cur.fetchall()
+        self.rows += len(rows)
         return [tuple(r) for r in rows]
 
     def exec(self, sql: str, params: tuple = ()) -> None:
@@ -425,9 +430,13 @@ TX_STMT_COUNTS = {"nestedCreate": 4, "nestedUpsert": 5, "nestedUpdate": 4, "dele
 
 def _measure(dialect: str, reps: int, warmup: int) -> None:
     db = open_db(dialect)
-    print("cell,dialect,op,iter,us")
+    print("cell,dialect,op,iter,us,rows")
     for op in OPS:
         seed(db)  # re-seed before each op (matches the native cell)
+        # One UN-TIMED probe per op measures the rows it moves — the report's per-row denominator (#170).
+        db.rows = 0
+        run_op(db, op, 0)
+        rows = db.rows
         for it in range(warmup):
             run_op(db, op, it)
         for it in range(reps):
@@ -435,20 +444,23 @@ def _measure(dialect: str, reps: int, warmup: int) -> None:
             t = time.perf_counter_ns()
             run_op(db, op, g)
             us = (time.perf_counter_ns() - t) // 1000
-            print(f"sdk,{dialect},{op},{it},{us}")
+            print(f"sdk,{dialect},{op},{it},{us},{rows}")
 
 
 def _safety(dialect: str) -> None:
     db = open_db(dialect)
     expected = {**RELATION_QUERY_COUNTS, **BATCH_QUERY_COUNTS, **TX_STMT_COUNTS}
-    for op, want in expected.items():
+    print("op                    statements  rows")
+    for op in OPS:
         seed(db)
         db.count = 0
+        db.rows = 0
         run_op(db, op, 0)
-        got = db.count
-        assert got == want, f"{op} statement-count regression: got {got}, expect {want}"
-        kind = "queries" if op not in TX_STMT_COUNTS else "statements (BEGIN + body + COMMIT)"
-        print(f"{op} {kind}={got} (expect {want})")
+        got, rows = db.count, db.rows
+        want = expected.get(op)
+        mark = "ok" if want is None or got == want else f"STATEMENT-COUNT MISMATCH (want {want})"
+        print(f"{op:<20}  {got:<10}  {rows:<6} {mark}")
+        assert want is None or got == want, f"{op} statement-count regression: got {got}, expect {want}"
 
 
 def main(argv: List[str]) -> None:

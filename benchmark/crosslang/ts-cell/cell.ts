@@ -28,9 +28,22 @@ export interface Cell {
   seed(): void | Promise<void>;
   run(op: string, it: number): void | Promise<void>;
   close(): void | Promise<void>;
-  /** Statements issued since the last {@link resetStatements} — the N+1 / atomic-tx safety proof. */
+  /** Statements issued since the last {@link resetCounters} — the N+1 / atomic-tx safety proof. */
   statements(): number;
-  resetStatements(): void;
+  /**
+   * Rows the DB handed back since the last {@link resetCounters}, summed over the op's statements.
+   *
+   * This is the denominator the report normalizes latency by, and the evidence that every cell — the
+   * runtime cells AND the hand-written SDK baselines — really moved the same rows. A baseline that
+   * quietly fetched fewer rows would post a flattering ratio; #170 is what happens when nobody looks.
+   *
+   * `null` means this leg has NO row-observing seam (v1 on SQLite reaches the DB through the in-proc
+   * path, whose only hook is a SQL-text logger). The report then renders `—` for it; it never renders a
+   * zero, which would read as "moved no rows".
+   */
+  rows(): number | null;
+  /** Zero both counters (called off the timed seam, before each measured iteration). */
+  resetCounters(): void;
   /**
    * This mode's expected statement count per op, when it differs from the shared
    * {@link import('./inputs.js').EXPECTED_STATEMENTS}. The v1 path refuses a write outside a
@@ -45,6 +58,26 @@ export interface Cell {
    * label. The runner prints these and emits no rows for them.
    */
   readonly unsupported?: Readonly<Record<string, string>>;
+}
+
+/**
+ * Tally the rows a runtime SQL-middleware `next()` handed back and pass the result through unchanged —
+ * the ONE place the codegen and v1 modes derive `Cell.rows` from, since both ride the same seam.
+ *
+ * The read seam yields the row array; a non-RETURNING write yields a run summary, which contributes
+ * nothing. `next` is sync on an in-proc driver and a promise on a pooled one, so both are handled here
+ * rather than at each call site.
+ */
+export function tallyRows(result: unknown, add: (n: number) => void): unknown {
+  const rowsOf = (r: unknown): number => (Array.isArray(r) ? r.length : 0);
+  if (result instanceof Promise) {
+    return result.then((r) => {
+      add(rowsOf(r));
+      return r;
+    });
+  }
+  add(rowsOf(result));
+  return result;
 }
 
 /** One dialect's setup from the ONE seed SSoT (`.setup/<dialect>.json`, emitted by emit-setup.ts). */
