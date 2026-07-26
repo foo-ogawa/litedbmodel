@@ -87,6 +87,13 @@ export interface Setup {
   readonly schema: string[];
   readonly delete: string[];
   readonly insert: string[];
+  /**
+   * The statements each op issues, in order, captured from the GENERATED module at the runtime seam
+   * (`lm_orm_native sql`). The SDK baseline executes THESE rather than hand-writing its own SQL: the
+   * report divides native by sdk, which only isolates the runtime's cost if both send the same
+   * statements. SQL is a property of the dialect, not of the language.
+   */
+  readonly ops: Record<string, string[]>;
 }
 
 const HERE = dirname(fileURLToPath(import.meta.url));

@@ -40,20 +40,6 @@ abstract class Db {
     return sql.replace(/\?/g, () => `$${++n}`);
   }
 
-  /** The dialect's upsert tail for the UNIQUE `email`. */
-  upsertTail(): string {
-    return this.dialect === 'mysql'
-      ? ' ON DUPLICATE KEY UPDATE email = VALUES(email), name = VALUES(name)'
-      : ' ON CONFLICT (email) DO UPDATE SET email = excluded.email, name = excluded.name';
-  }
-
-  /** The operand of `(k1,k2) IN …`: sqlite needs a VALUES constructor, pg and mysql a bare row list. */
-  tupleIn(rows: number, cols: number): string {
-    const one = `(${Array(cols).fill('?').join(',')})`;
-    const body = Array(rows).fill(one).join(',');
-    return this.dialect === 'sqlite' ? `(VALUES ${body})` : `(${body})`;
-  }
-
   /**
    * The ONE counted read seam — every SELECT (and every RETURNING write) rides it, so statements and
    * rows are each counted in exactly one place. Subclasses supply only the driver call ({@link fetch}).
@@ -69,14 +55,16 @@ abstract class Db {
   abstract close(): Promise<void>;
 
   /**
-   * A write that hands back the id of the row it wrote — the ` RETURNING id` the authored native module
-   * declares for every id-chaining write (`benchmark/crosslang/native-model.ts`). The baseline issues the
-   * SAME statement and reads the SAME row back, so the two surfaces do the same work.
+   * A write that hands back the id of the row it wrote. `sql` is the captured statement, which already
+   * declares ` RETURNING id` — the baseline reads the same row back rather than taking a free
+   * last-insert-id off the driver's result metadata.
    *
-   * MySQL has no RETURNING: the runtime's mysql adapter strips the clause and recovers the written rows
-   * with a keyed SELECT on the same connection (`src/scp/makesql/mysql-returning.ts`). `recoverSql` /
-   * `recoverParams` are that same recovery, so the baseline pays it too rather than reading a free
-   * `insertId` off the driver's result metadata.
+   * MySQL cannot parse RETURNING: the runtime's mysql adapter strips the clause (and the
+   * `/*scp:pk=…*\/` hint that names the key) and recovers the written rows with a keyed SELECT on the
+   * same connection (src/scp/makesql/mysql-returning.ts). `recoverSql` is that same recovery, and it
+   * belongs to the SAME logical statement — the runtime's seam counts a MySQL RETURNING write as one (it
+   * issues the recovery below the seam) while counting the row it recovers — so its rows are tallied and
+   * the statement count is not bumped a second time.
    */
   async writeReturningId(
     sql: string,
@@ -85,14 +73,10 @@ abstract class Db {
     recoverParams: readonly unknown[],
   ): Promise<number> {
     if (this.dialect !== 'mysql') {
-      const rows = await this.query(`${sql} RETURNING id`, params);
+      const rows = await this.query(sql, params);
       return Number(rows[0].id);
     }
-    await this.exec(sql, params);
-    // The recovery is part of the SAME logical statement: the runtime's own seam counts a MySQL
-    // RETURNING write as ONE statement (it issues the recovery below the seam) while counting the row it
-    // recovers. Counting it as a second statement here would make the baseline look like it issued more
-    // work than it does — both surfaces send MySQL the same two SQL statements.
+    await this.exec(sql.replace(/\s+RETURNING\s+[\s\S]*$/i, ''), params);
     const rows = await this.recoverRows(recoverSql, recoverParams);
     return Number(rows[0].id);
   }
@@ -193,33 +177,31 @@ function groupBy(rows: Row[], cols: readonly string[]): Map<string, Row[]> {
   return m;
 }
 
-/** users → ONE batched posts read, moved into their author. */
-async function attachPosts(db: Db, users: SdkUser[]): Promise<SdkUser[]> {
+/**
+ * The key set of one relation level as the ONE param the captured SQL expects. The generated module binds
+ * a batched child read's key set as a single JSON array (`json_each(?)` / `JSON_TABLE(?)` /
+ * `UNNEST(?::t[])`), never as N placeholders — so the baseline binds it the same way, or it would be
+ * running different SQL. Composite keys are an array of tuples; a single key an array of scalars.
+ */
+function keyParam(rows: readonly Row[], cols: readonly string[]): string {
+  return JSON.stringify(rows.map((r) => (cols.length === 1 ? r[cols[0]] : cols.map((c) => r[c]))));
+}
+
+/** users → ONE batched posts read, moved into their author. `sql` = the op's [parent, child] statements. */
+async function attachPosts(db: Db, users: SdkUser[], childSql: string): Promise<SdkUser[]> {
   if (users.length === 0) return users;
-  const ids = users.map((u) => u.id);
-  const posts = (await db.query(
-    `SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN (${ids.map(() => '?').join(',')}) ORDER BY id ASC`,
-    ids,
-  )) as SdkPost[];
+  const posts = (await db.query(childSql, [keyParam(users, ['id'])])) as SdkPost[];
   const byAuthor = groupBy(posts, ['author_id']);
   for (const u of users) u.posts = (byAuthor.get(String(u.id)) as SdkPost[]) ?? [];
   return users;
 }
 
 /** users → batched posts → batched comments, assembled into the full three-level graph. */
-async function attachPostsAndComments(db: Db, users: SdkUser[]): Promise<SdkUser[]> {
+async function attachPostsAndComments(db: Db, users: SdkUser[], postSql: string, commentSql: string): Promise<SdkUser[]> {
   if (users.length === 0) return users;
-  const uids = users.map((u) => u.id);
-  const posts = (await db.query(
-    `SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN (${uids.map(() => '?').join(',')}) ORDER BY id ASC`,
-    uids,
-  )) as SdkPost[];
+  const posts = (await db.query(postSql, [keyParam(users, ['id'])])) as SdkPost[];
   if (posts.length > 0) {
-    const pids = posts.map((p) => p.id);
-    const comments = await db.query(
-      `SELECT id, body, post_id FROM benchmark_comments WHERE post_id IN (${pids.map(() => '?').join(',')}) ORDER BY id ASC`,
-      pids,
-    );
+    const comments = await db.query(commentSql, [keyParam(posts, ['id'])]);
     const byPost = groupBy(comments, ['post_id']);
     for (const p of posts) p.comments = byPost.get(String(p.id)) ?? [];
   }
@@ -228,168 +210,133 @@ async function attachPostsAndComments(db: Db, users: SdkUser[]): Promise<SdkUser
   return users;
 }
 
-/** tenant_users(tenant=1) → batched tenant_posts → batched tenant_comments, on the FULL key tuple. */
-async function compositeGraph(db: Db): Promise<Row[]> {
-  const tusers = await db.query(
-    'SELECT tenant_id, user_id, name FROM benchmark_tenant_users WHERE tenant_id = ? ORDER BY user_id ASC',
-    [1],
-  );
+/** tenant_users → batched tenant_posts → batched tenant_comments, on the FULL key tuple. */
+async function compositeGraph(db: Db, sql: readonly string[]): Promise<Row[]> {
+  const tusers = await db.query(sql[0]);
   if (tusers.length === 0) return tusers;
-  const pparams = tusers.flatMap((u) => [u.tenant_id, u.user_id]);
-  const tposts = await db.query(
-    `SELECT tenant_id, post_id, user_id, title FROM benchmark_tenant_posts WHERE (tenant_id, user_id) IN ${db.tupleIn(tusers.length, 2)}`,
-    pparams,
-  );
+  const tposts = await db.query(sql[1], [keyParam(tusers, ['tenant_id', 'user_id'])]);
   if (tposts.length > 0) {
-    const cparams = tposts.flatMap((p) => [p.tenant_id, p.post_id]);
-    const tcomments = await db.query(
-      `SELECT tenant_id, comment_id, post_id, body FROM benchmark_tenant_comments WHERE (tenant_id, post_id) IN ${db.tupleIn(tposts.length, 2)}`,
-      cparams,
-    );
+    const tcomments = await db.query(sql[2], [keyParam(tposts, ['tenant_id', 'post_id'])]);
     const byPost = groupBy(tcomments, ['tenant_id', 'post_id']);
-    for (const p of tposts) (p as SdkPost).comments = byPost.get(`${p.tenant_id}${p.post_id}`) ?? [];
+    for (const p of tposts) (p as SdkPost).comments = byPost.get(`${p.tenant_id}${p.post_id}`) ?? [];
   }
   const byUser = groupBy(tposts, ['tenant_id', 'user_id']);
-  for (const u of tusers) (u as SdkUser).posts = (byUser.get(`${u.tenant_id}${u.user_id}`) as SdkPost[]) ?? [];
+  for (const u of tusers) (u as SdkUser).posts = (byUser.get(`${u.tenant_id}${u.user_id}`) as SdkPost[]) ?? [];
   return tusers;
 }
 
-/** ONE multi-row INSERT for the 10 rows, optional conflict tail — never 10 statements. */
-async function batchInsert(db: Db, rows: readonly { email: string; name: string }[], tail: string): Promise<void> {
-  const values = rows.map(() => '(?, ?)').join(',');
-  await db.exec(
-    `INSERT INTO benchmark_users (email, name) VALUES ${values}${tail}`,
-    rows.flatMap((r) => [r.email, r.name]),
-  );
+/**
+ * A batch write's record set as the param(s) the captured statement expects: ONE JSON array on
+ * MySQL/SQLite (`json_each(?)` / `JSON_TABLE(?)`), and one array PER COLUMN on PostgreSQL, whose
+ * `UNNEST(?::text[], ?::text[])` form takes column arrays rather than a record array. `updateMany` binds
+ * the same payload once per `?` (its SET subquery and its WHERE each read it).
+ */
+function batchParams(db: Db, rows: readonly object[], sqlForArity?: string): unknown[] {
+  const cols = Object.keys(rows[0]) as (keyof (typeof rows)[number])[];
+  const one =
+    db.dialect === 'postgres' ? cols.map((c) => JSON.stringify(rows.map((r) => r[c]))) : [JSON.stringify(rows)];
+  const arity = sqlForArity === undefined ? 1 : (sqlForArity.match(/\?/g) ?? ['?']).length / one.length;
+  return Array.from({ length: Math.max(1, Math.round(arity)) }, () => one).flat();
 }
 
-/** ONE statement: CASE id … END WHERE id IN (…). */
-async function updateMany(db: Db): Promise<void> {
-  const rows = updateManyRows();
-  const whens = rows.map(() => ' WHEN ? THEN ?').join('');
-  const params = [...rows.flatMap((r) => [r.id, r.name]), ...rows.map((r) => r.id)];
-  await db.exec(
-    `UPDATE benchmark_users SET name = CASE id${whens} END WHERE id IN (${rows.map(() => '?').join(',')})`,
-    params,
-  );
-}
+/**
+ * The keyed SELECTs the runtime's MySQL adapter recovers a RETURNING write's rows with
+ * (src/scp/makesql/mysql-returning.ts): the conflict key for an upsert, the AUTO_INCREMENT range for an
+ * insert, the write's own WHERE for an update. Only MySQL runs them — the other dialects have RETURNING.
+ */
+const RECOVER = {
+  byEmail: 'SELECT id FROM benchmark_users WHERE email = ?',
+  byLastInsertId: 'SELECT id FROM benchmark_users WHERE id = LAST_INSERT_ID()',
+  byId: 'SELECT id FROM benchmark_users WHERE id = ?',
+} as const;
 
 /** The result of the last materialization, held so the engine cannot elide the assembly work. */
 let sink: unknown;
 
-async function runOp(db: Db, op: string, it: number): Promise<void> {
+/**
+ * Run ONE op, issuing the statements the GENERATED module issues for this dialect (`setup.ops[op]`,
+ * captured at the runtime seam). The baseline hand-writes no SQL: the ratio the report publishes is
+ * `native ÷ sdk`, which only isolates the runtime's cost if both sides send the DB the same statements.
+ *
+ * What stays hand-written here is what a raw-driver user actually writes: the param binding, the decode,
+ * the grouping of children into parents, and the transaction bracket.
+ */
+async function runOp(db: Db, op: string, it: number, sql: readonly string[]): Promise<void> {
   const input = inputFor(op, it) as Record<string, never>;
   switch (op) {
     case 'findAll':
-      await db.query('SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100');
+      await db.query(sql[0]);
       return;
     case 'filterPaginateSort':
-      await db.query(
-        'SELECT id, title, content, published, author_id, created_at FROM benchmark_posts WHERE published = ? ORDER BY created_at DESC LIMIT 20 OFFSET 10',
-        [input.published],
-      );
+      await db.query(sql[0], [input.published]);
       return;
     case 'findFirst':
-      await db.query('SELECT id, email, name FROM benchmark_users WHERE name LIKE ? LIMIT 1', [input.name]);
+      await db.query(sql[0], [input.name]);
       return;
     case 'findUnique':
-      await db.query('SELECT id, email, name FROM benchmark_users WHERE email = ? LIMIT 1', [input.email]);
+      await db.query(sql[0], [input.email]);
       return;
     case 'nestedFindAll':
-      sink = await attachPosts(db, await db.query('SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100'));
+      sink = await attachPosts(db, await db.query(sql[0]), sql[1]);
       return;
     case 'nestedFindFirst':
-      sink = await attachPosts(
-        db,
-        await db.query('SELECT id, email, name FROM benchmark_users WHERE name LIKE ? LIMIT 1', [input.name]),
-      );
+      sink = await attachPosts(db, await db.query(sql[0], [input.name]), sql[1]);
       return;
     case 'nestedFindUnique':
-      sink = await attachPosts(
-        db,
-        await db.query('SELECT id, email, name FROM benchmark_users WHERE email = ? LIMIT 1', [input.email]),
-      );
+      sink = await attachPosts(db, await db.query(sql[0], [input.email]), sql[1]);
       return;
     case 'nestedRelations':
-      sink = await attachPostsAndComments(
-        db,
-        await db.query('SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100'),
-      );
+      sink = await attachPostsAndComments(db, await db.query(sql[0]), sql[1], sql[2]);
       return;
     case 'compositeRelations':
-      sink = await compositeGraph(db);
+      sink = await compositeGraph(db, sql);
       return;
     case 'create':
-      await db.exec('INSERT INTO benchmark_users (email, name) VALUES (?, ?)', [input.email, input.name]);
+      await db.exec(sql[0], [input.email, input.name]);
       return;
     case 'update':
-      await db.exec('UPDATE benchmark_users SET name = ? WHERE id = ?', [input.name, input.id]);
+      await db.exec(sql[0], [input.name, input.id]);
       return;
     case 'upsert':
-      // The native module declares ` RETURNING id` here, so the baseline reads the id back too.
-      sink = await db.writeReturningId(
-        `INSERT INTO benchmark_users (email, name) VALUES (?, ?)${db.upsertTail()}`,
-        [input.email, input.name],
-        'SELECT id FROM benchmark_users WHERE email = ?', // the runtime's conflict-key recovery
-        [input.email],
-      );
+      // The generated statement declares ` RETURNING id`, so the baseline reads the id back too.
+      sink = await db.writeReturningId(sql[0], [input.email, input.name], RECOVER.byEmail, [input.email]);
       return;
     case 'createMany':
-      await batchInsert(db, userRows(it, false), '');
-      return;
     case 'upsertMany':
-      await batchInsert(db, userRows(it, true), db.upsertTail());
+      // ONE statement for the 10 records, the whole record set as ONE JSON param — the batch form the
+      // generated module uses (json_each / JSON_TABLE / UNNEST), not a multi-row VALUES list.
+      await db.exec(sql[0], batchParams(db, userRows(it, op === 'upsertMany')));
       return;
     case 'updateMany':
-      await updateMany(db);
+      await db.exec(sql[0], batchParams(db, updateManyRows(), sql[0]));
       return;
     case 'nestedCreate': {
       await db.exec('BEGIN');
-      const uid = await db.writeReturningId(
-        'INSERT INTO benchmark_users (email, name) VALUES (?, ?)',
-        [input.email, input.name],
-        'SELECT id FROM benchmark_users WHERE id = LAST_INSERT_ID()', // the runtime's AUTO_INCREMENT recovery
-        [],
-      );
-      await db.exec('INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)', [uid, input.title]);
+      const uid = await db.writeReturningId(sql[0], [input.email, input.name], RECOVER.byLastInsertId, []);
+      await db.exec(sql[1], [uid, input.title]);
       await db.exec('COMMIT');
       return;
     }
     case 'nestedUpsert': {
       await db.exec('BEGIN');
-      const uid = await db.writeReturningId(
-        `INSERT INTO benchmark_users (email, name) VALUES (?, ?)${db.upsertTail()}`,
-        [input.email, input.name],
-        'SELECT id FROM benchmark_users WHERE email = ?',
-        [input.email],
-      );
-      await db.exec('INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)', [uid, input.title]);
+      const uid = await db.writeReturningId(sql[0], [input.email, input.name], RECOVER.byEmail, [input.email]);
+      await db.exec(sql[1], [uid, input.title]);
       await db.exec('COMMIT');
       return;
     }
     case 'nestedUpdate': {
       await db.exec('BEGIN');
-      // The native module chains the dependent UPDATE off the id the first UPDATE returned; taking the
+      // The generated runner chains the dependent UPDATE off the id the first UPDATE returned; taking the
       // id from the input instead would skip a statement's worth of work.
-      const uid = await db.writeReturningId(
-        'UPDATE benchmark_users SET name = ? WHERE id = ?',
-        [input.name, input.id],
-        'SELECT id FROM benchmark_users WHERE id = ?', // the runtime recovers by the write's own WHERE
-        [input.id],
-      );
-      await db.exec('UPDATE benchmark_posts SET title = ? WHERE author_id = ?', [input.title, uid]);
+      const uid = await db.writeReturningId(sql[0], [input.name, input.id], RECOVER.byId, [input.id]);
+      await db.exec(sql[1], [input.title, uid]);
       await db.exec('COMMIT');
       return;
     }
     case 'delete': {
       await db.exec('BEGIN');
-      const uid = await db.writeReturningId(
-        'INSERT INTO benchmark_users (email, name) VALUES (?, ?)',
-        [input.email, input.name],
-        'SELECT id FROM benchmark_users WHERE id = LAST_INSERT_ID()',
-        [],
-      );
-      await db.exec('DELETE FROM benchmark_users WHERE id = ?', [uid]);
+      const uid = await db.writeReturningId(sql[0], [input.email, input.name], RECOVER.byLastInsertId, []);
+      await db.exec(sql[1], [uid]);
       await db.exec('COMMIT');
       return;
     }
@@ -429,7 +376,7 @@ export async function openSdk(dialect: Dialect): Promise<Cell> {
         else await (db as MysqlDb).pool.query(stmt);
       }
     },
-    run: (op, it) => runOp(db, op, it),
+    run: (op, it) => runOp(db, op, it, setup.ops[op]),
     close: () => db.close(),
     statements: () => db.count,
     rows: () => db.rows,
