@@ -1,13 +1,15 @@
 // Command lm_orm — the raw-driver SDK-baseline ORM-bench cell (Go), twin of go/lm_bench/lm_orm_native.
 //
 // The apples-to-apples SDK comparison for the go native cell: it runs the SAME 19 ORM ops over the SAME
-// canonical fixture (the codegen-owned behaviors.STATEMENTS DDL + behaviors.SEED — reused as FIXTURE
-// setup, never for op execution), on the SAME in-memory sqlite storage the native cell uses
-// (sql.Open("sqlite", ":memory:")) — but every op is HAND-WRITTEN SQL issued straight at database/sql.
-// litedbmodel_runtime and the bc-generated RunNativeRawStruct_* runners are NOT in the path.
+// canonical fixture (.setup/<dialect>.json, from orm-domain.ts — reused as FIXTURE setup, never for op
+// execution), against the SAME database the native cell of that dialect drives — but every op is
+// HAND-WRITTEN SQL issued straight at database/sql. litedbmodel_runtime and the bc-generated
+// RunNativeRawStruct_* runners are NOT in the path (#157 invariant 6): in particular MySQL is opened
+// with the PLAIN go-sql-driver, never the runtime's RETURNING-emulating "mysql-scp" wrapper, which
+// would hand the raw baseline a feature a raw driver does not have.
 //
 // Fairness (a strawman SDK invalidates the comparison):
-//   - SAME storage: in-memory sqlite (no file → no fsync/WAL the native in-memory cell never pays).
+//   - SAME storage per dialect: in-memory sqlite, or the same docker PG:5433 / MySQL:3307.
 //   - Prepared-statement REUSE: every op's SQL is prepared once and cached (map[string]*sql.Stmt),
 //     matching native's runtime prepared-statement cache — not re-parsed per call.
 //   - N+1-FREE relations: parent read → pluck keys → ONE batched child read (WHERE fk IN (…)) → group
@@ -18,11 +20,11 @@
 //
 // Modes:
 //
-//	lm_orm                  — run all 19 ops once; print per-op statement-count + row-count; assert the
+//	lm_orm <dialect>        — run all 19 ops once; print per-op statement-count + row-count; assert the
 //	                          N+1-free relation counts + the atomic tx statement counts (safety proof).
-//	lm_orm bench [reps] [warmup]
+//	lm_orm <dialect> bench [reps] [warmup]
 //	                        — additionally time each op over reps iterations (after warmup) and print a
-//	                          flat CSV (cell,op,iter,us) with cell label `sdk` — the go native format.
+//	                          flat CSV (cell,dialect,op,iter,us) with cell label `sdk`.
 package main
 
 import (
@@ -35,19 +37,51 @@ import (
 
 	"github.com/foo-ogawa/litedbmodel/go/lm_bench/setup"
 
-	_ "modernc.org/sqlite" // PURE-GO sqlite driver (registered as "sqlite") — the raw baseline
+	_ "github.com/go-sql-driver/mysql" // plain MySQL driver (registered as "mysql") — NOT the runtime's mysql-scp
+	_ "github.com/jackc/pgx/v5/stdlib" // plain Postgres driver (registered as "pgx")
+	_ "modernc.org/sqlite"             // PURE-GO sqlite driver (registered as "sqlite")
 )
 
 // ── the ONE exec seam. All DB access rides these methods, so the prepared-statement cache and the
 //
 //	per-op statement counter each live in exactly one place. ────────────────────────────────────────
 type cell struct {
-	db    *sql.DB
-	stmts map[string]*sql.Stmt // per-SQL prepared-statement cache (reused across iterations)
-	count int64                // statement counter (safety proof); bumped once per prepared statement
+	db      *sql.DB
+	dialect string               // the target; every dialect divergence below is derived from it
+	stmts   map[string]*sql.Stmt // per-SQL prepared-statement cache (reused across iterations)
+	count   int64                // statement counter (safety proof); bumped once per prepared statement
+}
+
+// render rewrites the `?` every op below writes into this driver's placeholder form: pgx binds `$N`
+// positionally, go-sql-driver and sqlite take `?` as written. One place, so no op carries a dialect if.
+func (c *cell) render(sqlText string) string {
+	if c.dialect != "postgres" {
+		return sqlText
+	}
+	var out strings.Builder
+	n := 0
+	for _, ch := range sqlText {
+		if ch == '?' {
+			n++
+			fmt.Fprintf(&out, "$%d", n)
+		} else {
+			out.WriteRune(ch)
+		}
+	}
+	return out.String()
+}
+
+// upsertTail is the dialect's upsert tail for the UNIQUE `email` (the rust/python/php cells' twin):
+// PostgreSQL and SQLite take ON CONFLICT, MySQL takes ON DUPLICATE KEY UPDATE.
+func (c *cell) upsertTail() string {
+	if c.dialect == "mysql" {
+		return " ON DUPLICATE KEY UPDATE email = VALUES(email), name = VALUES(name)"
+	}
+	return " ON CONFLICT (email) DO UPDATE SET email = excluded.email, name = excluded.name"
 }
 
 func (c *cell) prep(sqlText string) *sql.Stmt {
+	sqlText = c.render(sqlText)
 	if s, ok := c.stmts[sqlText]; ok {
 		return s
 	}
@@ -97,14 +131,22 @@ func (c *cell) exec(sqlText string, args ...any) {
 // execRaw runs a param-free statement directly (BEGIN / COMMIT / ROLLBACK).
 func (c *cell) execRaw(sqlText string) {
 	c.count++
-	if _, err := c.db.Exec(sqlText); err != nil {
+	if _, err := c.db.Exec(c.render(sqlText)); err != nil {
 		panic(fmt.Sprintf("exec %q: %v", sqlText, err))
 	}
 }
 
-// insertReturningID inserts one row and returns its generated id via last_insert_rowid (sqlite).
+// insertReturningID inserts one row and returns its generated id. PostgreSQL has no LastInsertId, so
+// it appends RETURNING id and reads the row back; sqlite/mysql read the driver's last-insert id.
 func (c *cell) insertReturningID(sqlText string, args ...any) int64 {
 	c.count++
+	if c.dialect == "postgres" {
+		var id int64
+		if err := c.prep(sqlText + " RETURNING id").QueryRow(args...).Scan(&id); err != nil {
+			panic(fmt.Sprintf("insert %q: %v", sqlText, err))
+		}
+		return id
+	}
 	res, err := c.prep(sqlText).Exec(args...)
 	if err != nil {
 		panic(fmt.Sprintf("insert %q: %v", sqlText, err))
@@ -116,40 +158,79 @@ func (c *cell) insertReturningID(sqlText string, args ...any) int64 {
 	return id
 }
 
-// asInt coerces a scanned cell (modernc.org/sqlite returns INTEGER as int64) to int64.
+// asInt coerces a scanned cell to int64. Each driver reports integers its own way: sqlite and
+// go-sql-driver as int64, pgx as int32 for int4 / int16 for int2, and MySQL sometimes as raw bytes.
 func asInt(v any) int64 {
 	switch n := v.(type) {
 	case int64:
 		return n
+	case int32:
+		return int64(n)
+	case int16:
+		return int64(n)
 	case int:
 		return int64(n)
+	case []byte:
+		i, _ := strconv.ParseInt(string(n), 10, 64)
+		return i
+	case string:
+		i, _ := strconv.ParseInt(n, 10, 64)
+		return i
 	default:
 		return 0
 	}
 }
 
-// openSeeded opens a fresh in-memory sqlite (SAME storage as the native cell) and applies the ONE seed
-// SSoT (.setup/sqlite.json, from orm-domain.ts) — the SAME fixture the native twin loads. It is shared
-// setup, NOT the generated op runners (which the SDK bypasses entirely).
-func openSeeded() *cell {
-	doc, err := setup.Load("sqlite")
+// openSeeded opens the target DB — the SAME database the native cell of that dialect drives (#157
+// invariant 1) — and applies this dialect's schema from the ONE seed SSoT (.setup/<dialect>.json, from
+// orm-domain.ts; invariant 2). The connection is the PLAIN driver: no litedbmodel_runtime, no generated
+// module (invariant 6). An unknown dialect is a LOUD failure — there is no sqlite fallback.
+func openSeeded(dialect string) *cell {
+	doc, err := setup.Load(dialect)
 	if err != nil {
 		panic(err)
 	}
-	db, err := sql.Open("sqlite", ":memory:")
-	if err != nil {
-		panic(err)
+	var db *sql.DB
+	switch dialect {
+	case "sqlite":
+		db, err = sql.Open("sqlite", ":memory:")
+		if err == nil {
+			db.SetMaxOpenConns(1) // one in-memory connection so schema + seed + ops share the same DB
+			db.SetMaxIdleConns(1)
+		}
+	case "postgres":
+		db, err = sql.Open("pgx", setup.PostgresDSN())
+	case "mysql":
+		db, err = sql.Open("mysql", setup.MysqlDSN())
+	default:
+		panic(fmt.Sprintf("unknown dialect %q (sqlite|postgres|mysql)", dialect))
 	}
-	db.SetMaxOpenConns(1) // one in-memory connection so schema + seed + ops share the same DB
-	db.SetMaxIdleConns(1)
-	for _, group := range [][]string{doc.Schema, doc.Delete, doc.Insert} {
+	if err != nil {
+		panic(fmt.Sprintf("open %s: %v", dialect, err))
+	}
+	if err := db.Ping(); err != nil {
+		panic(fmt.Sprintf("connect %s: %v", dialect, err))
+	}
+	c := &cell{db: db, dialect: dialect, stmts: map[string]*sql.Stmt{}}
+	for _, s := range doc.Schema {
+		if _, err := db.Exec(s); err != nil {
+			panic(fmt.Sprintf("schema %q: %v", s, err))
+		}
+	}
+	c.seed(doc)
+	return c
+}
+
+// seed re-applies this dialect's canonical fixture. Run before EACH op (as the python/php/rust cells
+// do), OFF the counted seam so it never lands in a statement count or a timing.
+func (c *cell) seed(doc setup.Doc) {
+	for _, group := range [][]string{doc.Delete, doc.Insert} {
 		for _, s := range group {
-			if _, err := db.Exec(s); err != nil {
-				panic(fmt.Sprintf("setup %q: %v", s, err))
+			if _, err := c.db.Exec(s); err != nil {
+				panic(fmt.Sprintf("seed %q: %v", s, err))
 			}
 		}
 	}
-	return &cell{db: db, stmts: map[string]*sql.Stmt{}}
 }
 
 // ── batch-write inputs (mirror the native cell's userRows / the ops SSoT) ────────────────────────────
@@ -322,7 +403,7 @@ func (c *cell) materializeComposite() []sdkTenantUser {
 	if len(tusers) == 0 {
 		return tusers
 	}
-	pbody := tupleIn(len(tusers), 2)
+	pbody := c.tupleIn(len(tusers), 2)
 	psql := "SELECT tenant_id, post_id, user_id, title FROM benchmark_tenant_posts WHERE (tenant_id, user_id) IN " + pbody
 	pparams := make([]any, 0, len(tusers)*2)
 	for _, u := range tusers {
@@ -334,7 +415,7 @@ func (c *cell) materializeComposite() []sdkTenantUser {
 		tposts[i] = sdkTenantPost{tenantID: asInt(r[0]), postID: asInt(r[1]), userID: asInt(r[2]), title: r[3]}
 	}
 	if len(tposts) > 0 {
-		cbody := tupleIn(len(tposts), 2)
+		cbody := c.tupleIn(len(tposts), 2)
 		csql := "SELECT tenant_id, comment_id, post_id, body FROM benchmark_tenant_comments WHERE (tenant_id, post_id) IN " + cbody
 		cparams := make([]any, 0, len(tposts)*2)
 		for _, p := range tposts {
@@ -413,8 +494,7 @@ func (c *cell) op(name string, it int) {
 	case "update":
 		c.exec("UPDATE benchmark_users SET name = ? WHERE id = ?", "Updated 1", 1)
 	case "upsert":
-		c.exec("INSERT INTO benchmark_users (email, name) VALUES (?, ?) "+
-			"ON CONFLICT (email) DO UPDATE SET email = excluded.email, name = excluded.name",
+		c.exec("INSERT INTO benchmark_users (email, name) VALUES (?, ?)"+c.upsertTail(),
 			"user1@example.com", "Upserted One")
 	case "createMany":
 		emails, names := batchRows(it, false)
@@ -425,8 +505,7 @@ func (c *cell) op(name string, it int) {
 			emails = append(emails, fmt.Sprintf("many%d@bench.com", k))
 		}
 		_, names := batchRows(it, true)
-		c.batchInsert(emails, names,
-			" ON CONFLICT (email) DO UPDATE SET email = excluded.email, name = excluded.name")
+		c.batchInsert(emails, names, c.upsertTail())
 	case "updateMany":
 		c.updateMany()
 	case "nestedCreate":
@@ -437,8 +516,7 @@ func (c *cell) op(name string, it int) {
 		c.execRaw("COMMIT")
 	case "nestedUpsert":
 		c.execRaw("BEGIN")
-		c.exec("INSERT INTO benchmark_users (email, name) VALUES (?, ?) "+
-			"ON CONFLICT (email) DO UPDATE SET email = excluded.email, name = excluded.name",
+		c.exec("INSERT INTO benchmark_users (email, name) VALUES (?, ?)"+c.upsertTail(),
 			"user1@example.com", "NUp")
 		rows := c.query("SELECT id FROM benchmark_users WHERE email = ?", "user1@example.com")
 		uid := asInt(rows[0][0])
@@ -475,10 +553,15 @@ func (c *cell) batchInsert(emails, names []string, conflict string) {
 // ── small SQL helpers ────────────────────────────────────────────────────────────────────────────────
 func placeholders(n int) string { return strings.TrimSuffix(strings.Repeat("?,", n), ",") }
 
-// tupleIn builds a row-tuple IN body sqlite accepts: (VALUES (?,?),(?,?),…).
-func tupleIn(rows, cols int) string {
+// tupleIn builds the composite key-set operand of `(k1,k2) IN …` in the form this dialect accepts:
+// sqlite needs a `(VALUES (…),(…))` constructor, PostgreSQL and MySQL take a bare row list.
+func (c *cell) tupleIn(rows, cols int) string {
 	one := "(" + placeholders(cols) + ")"
-	return "(VALUES " + strings.TrimSuffix(strings.Repeat(one+",", rows), ",") + ")"
+	body := strings.TrimSuffix(strings.Repeat(one+",", rows), ",")
+	if c.dialect == "sqlite" {
+		return "(VALUES " + body + ")"
+	}
+	return "(" + body + ")"
 }
 
 func intArgs(ids []int64) []any {
@@ -510,14 +593,27 @@ var expectedStatements = map[string]int{
 var txOps = map[string]bool{"nestedCreate": true, "nestedUpsert": true, "nestedUpdate": true, "delete": true}
 
 func main() {
-	doBench := len(os.Args) > 1 && os.Args[1] == "bench"
+	dialect := "sqlite"
+	if len(os.Args) > 1 && os.Args[1] != "bench" {
+		dialect = os.Args[1]
+	}
+	rest := os.Args[1:]
+	if len(rest) > 0 && rest[0] == dialect {
+		rest = rest[1:]
+	}
+	doBench := len(rest) > 0 && rest[0] == "bench"
 
-	c := openSeeded()
+	c := openSeeded(dialect)
 	defer c.db.Close()
+	doc, err := setup.Load(dialect)
+	if err != nil {
+		panic(err)
+	}
 
 	fmt.Println("op                    statements  rows")
 	fail := 0
 	for _, name := range ops {
+		c.seed(doc) // clean fixture per op (matches the python/php/rust cells); off-seam, never counted
 		c.count = 0
 		c.op(name, 0)
 		q := int(c.count)
@@ -536,18 +632,19 @@ func main() {
 	if doBench {
 		reps := 300
 		warmup := 30
-		if len(os.Args) > 2 {
-			if n, e := strconv.Atoi(os.Args[2]); e == nil {
+		if len(rest) > 1 {
+			if n, e := strconv.Atoi(rest[1]); e == nil {
 				reps = n
 			}
 		}
-		if len(os.Args) > 3 {
-			if n, e := strconv.Atoi(os.Args[3]); e == nil {
+		if len(rest) > 2 {
+			if n, e := strconv.Atoi(rest[2]); e == nil {
 				warmup = n
 			}
 		}
 		fmt.Println("\ncell,dialect,op,iter,us")
 		for _, name := range ops {
+			c.seed(doc) // clean fixture per op, as in the safety pass above
 			for it := 0; it < warmup; it++ {
 				c.op(name, it+1)
 			}
@@ -555,7 +652,7 @@ func main() {
 				g := it + warmup + 1
 				t := time.Now()
 				c.op(name, g)
-				fmt.Printf("sdk,sqlite,%s,%d,%d\n", name, it, time.Since(t).Microseconds())
+				fmt.Printf("sdk,%s,%s,%d,%d\n", c.dialect, name, it, time.Since(t).Microseconds())
 			}
 		}
 	}

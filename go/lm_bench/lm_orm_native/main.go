@@ -74,6 +74,19 @@ func openSeeded() (*sql.DB, error) {
 	return db, nil
 }
 
+// reseed re-applies this dialect's canonical fixture between ops (as the python/php/rust cells do), so
+// no op inherits the previous op's mutations. Runs on the raw connection, OFF the counted seam.
+func reseed(db *sql.DB, doc setup.Doc) error {
+	for _, group := range [][]string{doc.Delete, doc.Insert} {
+		for _, s := range group {
+			if _, err := db.Exec(s); err != nil {
+				return fmt.Errorf("seed %q: %w", s, err)
+			}
+		}
+	}
+	return nil
+}
+
 // userRows builds the 10-row batch record set for createMany/upsertMany as ONE opaque `rows` wire array
 // (the json_each/JSON_TABLE batch param). `stable` reuses fixed emails (upsertMany — conflict-updates);
 // else the email varies by iteration so a plain INSERT stays insertable under the UNIQUE(email)
@@ -237,8 +250,17 @@ func main() {
 	defer unregister()
 
 	fmt.Println("op                    statements  rows")
+	doc, err := setup.Load(benchDialect)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "FATAL: setup: %v\n", err)
+		os.Exit(1)
+	}
 	fail := 0
 	for _, name := range ops {
+		if err := reseed(db, doc); err != nil {
+			fmt.Fprintf(os.Stderr, "FATAL: %v\n", err)
+			os.Exit(1)
+		}
 		atomic.StoreInt64(&stmtCount, 0)
 		rows, err := op(db, name, 0)
 		if err != nil {
@@ -274,6 +296,10 @@ func main() {
 		}
 		fmt.Println("\ncell,dialect,op,iter,us")
 		for _, name := range ops {
+			if err := reseed(db, doc); err != nil {
+				fmt.Fprintf(os.Stderr, "FATAL: %v\n", err)
+				os.Exit(1)
+			}
 			for it := 0; it < warmup; it++ {
 				if _, err := op(db, name, it+1); err != nil {
 					fmt.Fprintf(os.Stderr, "warmup %s: %v\n", name, err)
