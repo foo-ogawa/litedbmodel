@@ -1,5 +1,5 @@
 /**
- * build-scp — dual ESM + CJS build of the litedbmodel v2 SCP subsystem (WS3, #23).
+ * build-scp — dual ESM + CJS build of litedbmodel's published entry points (WS3 #23, root entry #169).
  *
  * ## The ESM/CJS seam
  *
@@ -18,10 +18,14 @@
  *     output), so `require('litedbmodel/scp')` works with zero runtime ESM/CJS friction.
  * `better-sqlite3` stays external in both (a native addon; the consumer supplies it).
  *
- * The `litedbmodel/scp` subpath export (package.json `exports`) points `import` → the .mjs
- * and `require` → the .cjs. v1's CommonJS main (`dist/index.js`, built by `tsc`) is untouched
- * — v1 consumers keep working; only the new SCP surface gains the dual output. Types come
- * from `tsc` (`dist/scp/index.d.ts`).
+ * Each subpath export points `import` → the .mjs and `require` → the .cjs. Types come from `tsc`.
+ *
+ * The ROOT entry gets the same treatment (#169). It did not, originally: `dist/index.js` was plain
+ * `tsc` output and that was fine while v1 never touched bc. Phase F-2 (#105) gave DBModel the SCP
+ * runtime, so `dist/DBModel.js` now emits `require("behavior-contracts/runtime")` — and both
+ * `require('litedbmodel')` and `import 'litedbmodel'` began throwing ERR_PACKAGE_PATH_NOT_EXPORTED on
+ * a clean install. Nothing loaded the built package, so nothing noticed;
+ * `scripts/check-package-entrypoints.mjs` is the gate that now does.
  */
 
 import { build } from 'esbuild';
@@ -29,35 +33,35 @@ import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const entry = resolve(root, 'src/scp/index.ts');
+
+/** Every published entry that reaches behavior-contracts: source → the two output basenames. */
+const ENTRIES = [
+  { src: 'src/index.ts', out: 'dist/index' },
+  { src: 'src/scp/index.ts', out: 'dist/scp/index' },
+];
 
 /** External in every build: the native SQLite addon (consumer-supplied). */
 const alwaysExternal = ['better-sqlite3'];
 
 async function run() {
-  // ESM: bc stays external (a native ESM consumer imports it directly).
-  await build({
-    entryPoints: [entry],
-    outfile: resolve(root, 'dist/scp/index.mjs'),
-    bundle: true,
-    format: 'esm',
-    platform: 'node',
-    target: 'node18',
-    external: [...alwaysExternal, 'behavior-contracts'],
-    logLevel: 'info',
-  });
-
-  // CJS: bc is bundled IN so `require` works without touching bc's ESM-only exports.
-  await build({
-    entryPoints: [entry],
-    outfile: resolve(root, 'dist/scp/index.cjs'),
-    bundle: true,
-    format: 'cjs',
-    platform: 'node',
-    target: 'node18',
-    external: alwaysExternal,
-    logLevel: 'info',
-  });
+  for (const { src, out } of ENTRIES) {
+    const entryPoints = [resolve(root, src)];
+    const common = { entryPoints, bundle: true, platform: 'node', target: 'node18', logLevel: 'info' };
+    // ESM: bc stays external (a native ESM consumer imports it directly).
+    await build({
+      ...common,
+      outfile: resolve(root, `${out}.mjs`),
+      format: 'esm',
+      external: [...alwaysExternal, 'behavior-contracts'],
+    });
+    // CJS: bc is bundled IN so `require` works without touching bc's ESM-only exports.
+    await build({
+      ...common,
+      outfile: resolve(root, `${out}.cjs`),
+      format: 'cjs',
+      external: alwaysExternal,
+    });
+  }
 }
 
 run().catch((e) => {

@@ -124,6 +124,7 @@ Run from the repo root:
 - [ ] `npm run lint`                 — eslint clean
 - [ ] `npm test`                     — the whole vitest suite (unit + scp + parity + integration)
 - [ ] `npm run gates:check`          — every test gate is reachable from a PR/push workflow
+- [ ] `npm run pkg:check`            — every published subpath loads (CJS + ESM) from a clean install
 - [ ] `npm publish --dry-run`        — tarball has `dist/`, no `src/`/`../` leaks
 - [ ] `(cd python && python -m build && twine check dist/*)`
 - [ ] fresh-venv wheel smoke — `pip install` the built wheel + run a real vector

@@ -34,6 +34,10 @@ jobs:
         run: npm run deps:check
       - name: Every test gate is reachable from CI
         run: npm run gates:check
+      - name: The published package actually loads (CJS + ESM, clean install)
+        run: |
+          npm run build
+          npm run pkg:check
 
   # ── TS conformance: the corpus is byte-true to the pipeline and every vector passes ──
   # `test/scp/conformance-vectors.test.ts` regenerates the corpus and diffs it (drift gate), then
