@@ -45,7 +45,7 @@ func renderTxOp(op *bc.JObj, scope *bc.Obj, dialectName string) (Rendered, error
 	if err != nil {
 		return Rendered{}, err
 	}
-	return Rendered{SQL: renderPlaceholders(sqlOut, dialectName), Params: params}, nil
+	return Rendered{SQL: finalizeSQL(sqlOut, arrayBinds(params), dialectName), Params: params}, nil
 }
 
 // ShortCircuitReason is why a transaction did not commit (a gate short-circuit, not a driver error).

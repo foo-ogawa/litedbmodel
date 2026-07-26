@@ -1,6 +1,6 @@
 // Command lm_orm_native — the NATIVE-codegen ORM-bench cell (#141), Go twin of rust/orm_bench.
 //
-// A litedbmodel-CONSUMER: it opens sqlite, seeds the canonical fixture (generated_setup STATEMENTS +
+// A litedbmodel-CONSUMER: it opens this build's target DB, seeds the canonical fixture (generated_setup STATEMENTS +
 // SEED, both from the orm-domain SSoT), BINDS the op-agnostic leaf transport to that connection, and
 // drives the bc-GENERATED covered readers directly by their signatures — the per-dialect package is
 // selected at BUILD TIME by `-tags bench_<dialect>` (target_<dialect>.go). Every SQL node
@@ -33,19 +33,37 @@ import (
 	_ "modernc.org/sqlite" // PURE-GO sqlite driver (registered as "sqlite")
 )
 
-// openSeeded opens a fresh in-memory sqlite and applies the ONE seed SSoT (.setup/sqlite.json, from
+// openSeeded opens this build's target DB and applies the ONE seed SSoT (.setup/<dialect>.json, from
 // orm-domain.ts) — schema then the canonical 110-user fixture. No hand-written schema/seed here.
+//
+// The target is `benchDialect`, the SAME build-tag constant that selected the generated module
+// (target_<dialect>.go), so the SQL baked into that module and the DB it runs against can never
+// disagree. Postgres/MySQL are opened by litedbmodel_runtime, which owns this repo's live connections
+// (rt.OpenPostgres / rt.OpenMysql); the cell hand-writes no driver wiring. An unreachable DB is a LOUD
+// failure — there is no sqlite fallback to silently measure the wrong thing.
 func openSeeded() (*sql.DB, error) {
-	doc, err := setup.Load("sqlite")
+	doc, err := setup.Load(benchDialect)
 	if err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite", ":memory:")
-	if err != nil {
-		return nil, err
+	var db *sql.DB
+	switch benchDialect {
+	case "sqlite":
+		db, err = sql.Open("sqlite", ":memory:")
+		if err == nil {
+			db.SetMaxOpenConns(1) // one in-memory connection so schema + seed + ops share the same DB
+			db.SetMaxIdleConns(1)
+		}
+	case "postgres":
+		db, err = rt.OpenPostgres(setup.PostgresDSN())
+	case "mysql":
+		db, err = rt.OpenMysql(setup.MysqlDSN())
+	default:
+		return nil, fmt.Errorf("unknown bench dialect %q", benchDialect)
 	}
-	db.SetMaxOpenConns(1) // one in-memory connection so schema + seed + ops share the same DB
-	db.SetMaxIdleConns(1)
+	if err != nil {
+		return nil, fmt.Errorf("open %s: %w", benchDialect, err)
+	}
 	for _, group := range [][]string{doc.Schema, doc.Delete, doc.Insert} {
 		for _, s := range group {
 			if _, err := db.Exec(s); err != nil {
@@ -202,7 +220,7 @@ func main() {
 		os.Exit(1)
 	}
 	defer db.Close()
-	rt.BindLeafTransport(db, "sqlite")
+	rt.BindLeafTransport(db, benchDialect)
 	defer rt.UnbindLeafTransport()
 
 	// The N+1-avoidance / atomic-tx safety proof: a seam middleware counts EVERY statement that funnels
@@ -254,8 +272,6 @@ func main() {
 				warmup = n
 			}
 		}
-		// sqlite in-memory is the only target this cell opens (see openSeeded); emit it as the dialect
-		// column so the collector aggregates the go CSV in the same 5-column shape as every other cell.
 		fmt.Println("\ncell,dialect,op,iter,us")
 		for _, name := range ops {
 			for it := 0; it < warmup; it++ {
@@ -271,7 +287,7 @@ func main() {
 					fmt.Fprintf(os.Stderr, "bench %s: %v\n", name, err)
 					os.Exit(1)
 				}
-				fmt.Printf("native,sqlite,%s,%d,%d\n", name, it, time.Since(t).Microseconds())
+				fmt.Printf("native,%s,%s,%d,%d\n", benchDialect, name, it, time.Since(t).Microseconds())
 			}
 		}
 	}

@@ -181,16 +181,17 @@ func runRelationOpCtx(ctx *ExecutionContext, op RelationOp, parents []bc.Value) 
 	keys := DedupeKeyTuples(parents, pCols)
 	batch := RelationBatch{}
 	sqlText := op.SQL
+	var castArrays [][]bc.Value
 	if op.Dialect == "postgres" {
 		for col := range pCols {
 			colVals := make([]bc.Value, len(keys))
 			for i, t := range keys {
 				colVals[i] = t[col]
 			}
-			sqlText = resolvePgArrayCast(sqlText, colVals)
+			castArrays = append(castArrays, colVals)
 		}
 	}
-	sqlText = renderPlaceholders(sqlText, op.Dialect)
+	sqlText = finalizeSQL(sqlText, castArrays, op.Dialect)
 	if len(keys) == 0 {
 		return batch, nil
 	}

@@ -316,6 +316,39 @@ func resolvePgArrayCast(sql string, values []bc.Value) string {
 	return sql[:at] + inferPgArrayType(values) + sql[at+len(pgArrayCastToken):]
 }
 
+// finalizeSQL runs the render-layer steps that can only happen once a statement's SQL text AND its
+// bound params are final (spec §8): resolve each deferred PG array-cast token from the array param
+// that fills it, left-to-right, then rewrite `?` → `$N`. `arrays` is the ordered list of ARRAY-valued
+// binds — one per cast token, in the order the tokens appear; pass nil when a statement binds none.
+//
+// EVERY execution path renders through here so none can silently skip a step. The v1 relation path,
+// the IR bundle path and the native leaf transport each used to open-code this, and the leaf copy was
+// missing the cast resolution entirely — every relation child read on PG died with
+// `syntax error at or near "@@"`.
+// arrayBinds picks the ARRAY-valued binds out of a driver param list, in order — the arrays that fill
+// the deferred cast tokens (each postgres __jsonArray param resolves exactly one token).
+func arrayBinds(params []bc.Value) [][]bc.Value {
+	var out [][]bc.Value
+	for _, p := range params {
+		if arr, ok := p.([]bc.Value); ok {
+			out = append(out, arr)
+		}
+	}
+	return out
+}
+
+func finalizeSQL(sql string, arrays [][]bc.Value, dialectName string) string {
+	if dialectName == "postgres" {
+		for _, a := range arrays {
+			if !strings.Contains(sql, pgArrayCastToken) {
+				break
+			}
+			sql = resolvePgArrayCast(sql, a)
+		}
+	}
+	return renderPlaceholders(sql, dialectName)
+}
+
 // ── Statement-list render (port of static-bundle.ts renderStatements) ──────────
 
 // renderStatements evaluates a list of static statement templates against a scope → final SQL +
@@ -366,25 +399,13 @@ func renderStatements(statements []bc.JNode, dialectName string, scope *bc.Obj) 
 				}
 			}
 		}
-		// Resolve any deferred PG array cast (#46) from the bound array param, left-to-right —
-		// each postgres __jsonArray param resolves exactly one cast token in order.
-		if dialectName == "postgres" {
-			for _, p := range params {
-				if arr, ok := p.([]bc.Value); ok {
-					if !strings.Contains(sqlText, pgArrayCastToken) {
-						break
-					}
-					sqlText = resolvePgArrayCast(sqlText, arr)
-				}
-			}
-		}
 		nodes = append(nodes, makeSQLNode{sql: sqlText, params: params})
 	}
 	sql, params, err := composeMakeSQL(nodes)
 	if err != nil {
 		return Rendered{}, err
 	}
-	return Rendered{SQL: renderPlaceholders(sql, dialectName), Params: params}, nil
+	return Rendered{SQL: finalizeSQL(sql, arrayBinds(params), dialectName), Params: params}, nil
 }
 
 // ── Input normalization (SSoT-driven — mirrors TS normalizeInput) ─────────────

@@ -289,10 +289,12 @@ func ExecuteSQL(payload wire.WireRow) (wire.WireValue, error) {
 		return wire.WireNull(), fmt.Errorf("leaf transport: no bound connection (call BindLeafTransport before running the native module)")
 	}
 	args := make([]any, len(params))
+	values := make([]bc.Value, len(params))
 	for i, p := range params {
+		values[i] = wireToValue(p)
 		args[i] = leafParam(p, leafDialect)
 	}
-	text := renderPlaceholders(sql, leafDialect)
+	text := finalizeSQL(sql, arrayBinds(values), leafDialect)
 	if write && !returning {
 		info, err := Run(leafExecCtx, text, args, WriteIntent())
 		if err != nil {
