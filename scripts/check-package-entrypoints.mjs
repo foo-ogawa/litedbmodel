@@ -24,14 +24,37 @@ const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const PKG = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'));
 
 /**
- * subpath → the named export to touch, and which module systems must be able to load it.
- * `cjs: false` records a subpath whose only entry is ESM by design (its exports map has `import` and
- * no `require`), so a CJS consumer is expected to fail — that is a decision, not a defect.
+ * subpath → what to run against it, and which module systems must be able to load it.
+ *
+ * `exercise` is the point. Checking that a named export EXISTS proves almost nothing: the first
+ * version of this gate did exactly that, went green, and shipped a `dist/index.mjs` that imported
+ * perfectly and then threw `Dynamic require of "better-sqlite3" is not supported` at the first
+ * connection — the drivers load with a bare require() the ESM output cannot perform. So the root
+ * entry now OPENS A DATABASE AND RUNS A QUERY, and a subpath is only "loads" if it does its job.
  */
 const SUBPATHS = [
-  { path: '.', symbol: 'DBModel', cjs: true, esm: true },
-  { path: './drivers', symbol: 'getSqlBuilder', cjs: true, esm: true },
-  { path: './scp', symbol: 'leafHandlers', cjs: true, esm: true },
+  {
+    path: '.',
+    cjs: true,
+    esm: true,
+    // Drive the entry far enough to REACH the driver loader without installing a driver. The peer
+    // deps are absent here on purpose, so the library must answer with ITS OWN message; a bundle that
+    // cannot perform the require answers "Dynamic require of ... is not supported" instead — which is
+    // exactly the defect that shipped when this gate only checked that a symbol existed.
+    exercise: `
+      if (typeof m.column !== 'function' || typeof m.model !== 'function') throw new Error('decorators missing');
+      m.DBModel.setConfig({ database: ':memory:', driver: 'sqlite' });
+      let reached = '';
+      try { await m.DBModel.execute('SELECT 1'); reached = 'connected'; }
+      catch (e) { reached = String(e && e.message || e); }
+      if (/Dynamic require/.test(reached))
+        throw new Error('the bundle cannot load its drivers — ' + reached);
+      if (!/better-sqlite3/.test(reached) && reached !== 'connected')
+        throw new Error('unexpected failure reaching the driver loader: ' + reached);
+    `,
+  },
+  { path: './drivers', cjs: true, esm: true, exercise: `if (typeof m.getSqlBuilder('sqlite').buildInsert !== 'function') throw new Error('no sqlite SqlBuilder');` },
+  { path: './scp', cjs: true, esm: true, exercise: `if (typeof m.leafHandlers !== 'function' || typeof m.contextForConnection !== 'function') throw new Error('scp surface missing');` },
 ];
 
 function run(cmd, args, cwd) {
@@ -39,11 +62,12 @@ function run(cmd, args, cwd) {
 }
 
 /** Load `spec` in one module system inside `dir`; return null on success or the error's first line. */
-function load(dir, spec, symbol, mode) {
+function load(dir, spec, exercise, mode) {
+  const body = `(async () => {${exercise}})().catch((e) => { console.error(e); process.exit(1); });`;
   const src =
     mode === 'cjs'
-      ? `const m = require(${JSON.stringify(spec)}); if (m.${symbol} === undefined) throw new Error('no export ${symbol}');`
-      : `import * as m from ${JSON.stringify(spec)}; if (m.${symbol} === undefined && m.default?.${symbol} === undefined) throw new Error('no export ${symbol}');`;
+      ? `const m = require(${JSON.stringify(spec)});\n${body}`
+      : `import * as ns from ${JSON.stringify(spec)};\nconst m = ns.DBModel || ns.leafHandlers || ns.getSqlBuilder ? ns : ns.default;\n${body}`;
   const file = join(dir, mode === 'cjs' ? 'probe.cjs' : 'probe.mjs');
   writeFileSync(file, src);
   try {
@@ -64,13 +88,13 @@ try {
   writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'entrypoint-smoke', private: true, version: '0.0.0' }));
   run('npm', ['install', '--silent', '--no-audit', '--no-fund', join(dir, tarball)], dir);
 
-  for (const { path, symbol, cjs, esm } of SUBPATHS) {
+  for (const { path, exercise, cjs, esm } of SUBPATHS) {
     const spec = path === '.' ? PKG.name : `${PKG.name}/${path.slice(2)}`;
     for (const [mode, required] of [
       ['cjs', cjs],
       ['esm', esm],
     ]) {
-      const err = load(dir, spec, symbol, mode);
+      const err = load(dir, spec, exercise, mode);
       if (required && err) problems.push(`${mode.toUpperCase()} ${spec} — ${err}`);
       if (!required && !err) problems.push(`${mode.toUpperCase()} ${spec} loads, but SUBPATHS declares it unsupported — update the declaration.`);
     }
@@ -80,7 +104,7 @@ try {
 }
 
 if (problems.length === 0) {
-  console.log(`✅ every published subpath loads (${SUBPATHS.length} × CJS/ESM, from a clean install of the real tarball)`);
+  console.log(`✅ every published subpath LOADS AND WORKS (${SUBPATHS.length} × CJS/ESM, clean install of the real tarball; the root entry reaches its driver loader)`);
   process.exit(0);
 }
 console.error('❌ the published package cannot be loaded as declared:\n');
