@@ -37,13 +37,10 @@ require_once __DIR__ . '/../lm_bench_setup.php';
  *
  * @return array{schema:list<string>,delete:list<string>,insert:list<string>}
  */
-function benchSetup(): array
+function benchSetup(string $dialect = 'sqlite'): array
 {
-    static $doc = null;
-    if ($doc === null) {
-        $doc = lm_bench_load_setup('sqlite');
-    }
-    return $doc;
+    static $docs = [];
+    return $docs[$dialect] ??= lm_bench_load_setup($dialect);
 }
 
 const OPS = [
@@ -71,8 +68,21 @@ final class Db
     private array $stmts = [];
     public int $count = 0;
 
-    public function __construct(public \PDO $pdo)
+    public function __construct(public \PDO $pdo, public string $dialect = 'sqlite')
     {
+    }
+
+    /**
+     * The dialect's upsert tail for the UNIQUE `email`. PostgreSQL / SQLite take `ON CONFLICT`; MySQL
+     * takes `ON DUPLICATE KEY UPDATE` (the rust SDK cell's `upsert_tail` twin).
+     */
+    public function upsertTail(string $cols = 'email, name'): string
+    {
+        $names = array_map('trim', explode(',', $cols));
+        if ($this->dialect === 'mysql') {
+            return ' ON DUPLICATE KEY UPDATE ' . implode(', ', array_map(fn ($c) => "{$c} = VALUES({$c})", $names));
+        }
+        return ' ON CONFLICT (email) DO UPDATE SET ' . implode(', ', array_map(fn ($c) => "{$c} = excluded.{$c}", $names));
     }
 
     private function prep(string $sql): \PDOStatement
@@ -80,12 +90,28 @@ final class Db
         return $this->stmts[$sql] ??= $this->pdo->prepare($sql);
     }
 
+    /**
+     * Bind by VALUE TYPE, not as text. PDO's default is a string bind, which PostgreSQL refuses to
+     * compare against an integer column (`operator does not exist: integer = text`); sqlite and MySQL
+     * coerce, so the sqlite pilot never saw it. One place, so every op binds the same way.
+     *
+     * @param list<mixed> $params
+     */
+    private function bindAll(\PDOStatement $stmt, array $params): void
+    {
+        foreach ($params as $i => $v) {
+            $type = is_int($v) ? \PDO::PARAM_INT : (is_bool($v) ? \PDO::PARAM_BOOL : (is_null($v) ? \PDO::PARAM_NULL : \PDO::PARAM_STR));
+            $stmt->bindValue($i + 1, $v, $type);
+        }
+    }
+
     /** @param list<mixed> $params @return list<array<int,mixed>> */
     public function query(string $sql, array $params = []): array
     {
         $this->count++;
         $stmt = $this->prep($sql);
-        $stmt->execute($params);
+        $this->bindAll($stmt, $params);
+        $stmt->execute();
         return $stmt->fetchAll(\PDO::FETCH_NUM);
     }
 
@@ -93,7 +119,9 @@ final class Db
     public function exec(string $sql, array $params = []): void
     {
         $this->count++;
-        $this->prep($sql)->execute($params);
+        $stmt = $this->prep($sql);
+        $this->bindAll($stmt, $params);
+        $stmt->execute();
     }
 
     /** param-free control statement (BEGIN / COMMIT). */
@@ -106,27 +134,49 @@ final class Db
     /** @param list<mixed> $params */
     public function insertReturningId(string $sql, array $params): int
     {
+        // PostgreSQL has no lastInsertId for a plain INSERT — ask for the id back (the rust SDK twin).
+        if ($this->dialect === 'postgres') {
+            return (int) $this->query($sql . ' RETURNING id', $params)[0][0];
+        }
         $this->count++;
-        $this->prep($sql)->execute($params);
+        $stmt = $this->prep($sql);
+        $this->bindAll($stmt, $params);
+        $stmt->execute();
         return (int) $this->pdo->lastInsertId();
     }
 }
 
-function openDb(string $spec): Db
+function openDb(string $spec = 'sqlite'): Db
 {
-    unset($spec); // sqlite pilot: an IN-MEMORY DB — SAME storage as the native cell.
-    $pdo = new \PDO('sqlite::memory:');
+    // The raw PDO for ONE target — the SAME database the native cell of that dialect uses (#145
+    // invariant 1), seeded from the SAME `.setup/<dialect>.json` (invariant 2). Raw driver only: no
+    // litedbmodel runtime, no generated module (invariant 6). Unknown/unreachable = LOUD failure.
+    if ($spec === 'sqlite') {
+        $pdo = new \PDO('sqlite::memory:');
+    } elseif ($spec === 'postgres') {
+        $host = getenv('TEST_DB_HOST') ?: 'localhost';
+        $port = (int) (getenv('TEST_DB_PORT') ?: 5433);
+        $name = getenv('TEST_DB_NAME') ?: 'testdb';
+        $pdo = new \PDO("pgsql:host={$host};port={$port};dbname={$name}", getenv('TEST_DB_USER') ?: 'testuser', getenv('TEST_DB_PASSWORD') ?: 'testpass');
+    } elseif ($spec === 'mysql') {
+        $host = getenv('TEST_MYSQL_HOST') ?: '127.0.0.1';
+        $port = (int) (getenv('TEST_MYSQL_PORT') ?: 3307);
+        $name = getenv('TEST_MYSQL_DB') ?: 'testdb';
+        $pdo = new \PDO("mysql:host={$host};port={$port};dbname={$name}", getenv('TEST_MYSQL_USER') ?: 'testuser', getenv('TEST_MYSQL_PASSWORD') ?: 'testpass', [\PDO::ATTR_EMULATE_PREPARES => false]);
+    } else {
+        throw new \RuntimeException("orm_bench_sdk: unknown target '{$spec}' (sqlite|postgres|mysql)");
+    }
     $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
     $pdo->setAttribute(\PDO::ATTR_STRINGIFY_FETCHES, false);
-    foreach (benchSetup()['schema'] as $stmt) {
+    foreach (benchSetup($spec)['schema'] as $stmt) {
         $pdo->exec($stmt);
     }
-    return new Db($pdo);
+    return new Db($pdo, $spec);
 }
 
 function seed(Db $db): void
 {
-    foreach (array_merge(benchSetup()['delete'], benchSetup()['insert']) as $stmt) {
+    foreach (array_merge(benchSetup($db->dialect)['delete'], benchSetup($db->dialect)['insert']) as $stmt) {
         $db->pdo->exec($stmt); // runs on the PDO directly (off-seam) → never counted
     }
 }
@@ -148,11 +198,17 @@ function placeholders(int $n): string
     return implode(',', array_fill(0, $n, '?'));
 }
 
-/** row-tuple IN body sqlite accepts: (VALUES (?,?),(?,?),…). */
-function tupleIn(int $rows, int $cols): string
+/** The composite key-set operand: `(VALUES (…),(…))` on PG/SQLite, a bare row list on MySQL. */
+function tupleIn(int $rows, int $cols, string $dialect = 'sqlite'): string
 {
+    // PostgreSQL infers a VALUES constructor's column types from the first row, and a bare parameter
+    // there has none — it defaults to text and the `(int,int) IN` comparison fails. The first row
+    // carries the cast; the rest follow it.
     $one = '(' . placeholders($cols) . ')';
-    return '(VALUES ' . implode(',', array_fill(0, $rows, $one)) . ')';
+    $first = $dialect === 'postgres' ? '(' . implode(',', array_fill(0, $cols, '?::int')) . ')' : $one;
+    $rest = array_fill(0, max(0, $rows - 1), $one);
+    $body = implode(',', array_merge([$first], $rest));
+    return $dialect === 'mysql' ? '(' . $body . ')' : '(VALUES ' . $body . ')';
 }
 
 // ── nested materialization (fair vs the native cell) ─────────────────────────────────────────────────
@@ -284,7 +340,7 @@ function materializeComposite(Db $db): array
     if ($tusers === []) {
         return $tusers;
     }
-    $psql = 'SELECT tenant_id, post_id, user_id, title FROM benchmark_tenant_posts WHERE (tenant_id, user_id) IN ' . tupleIn(count($tusers), 2);
+    $psql = 'SELECT tenant_id, post_id, user_id, title FROM benchmark_tenant_posts WHERE (tenant_id, user_id) IN ' . tupleIn(count($tusers), 2, $db->dialect);
     $pparams = [];
     foreach ($tusers as $u) {
         $pparams[] = $u->tenantId;
@@ -301,7 +357,7 @@ function materializeComposite(Db $db): array
             $cparams[] = $p->tenantId;
             $cparams[] = $p->postId;
         }
-        $csql = 'SELECT tenant_id, comment_id, post_id, body FROM benchmark_tenant_comments WHERE (tenant_id, post_id) IN ' . tupleIn(count($tposts), 2);
+        $csql = 'SELECT tenant_id, comment_id, post_id, body FROM benchmark_tenant_comments WHERE (tenant_id, post_id) IN ' . tupleIn(count($tposts), 2, $db->dialect);
         $byPost = [];
         foreach ($db->query($csql, $cparams) as $r) {
             $c = new SdkTenantComment((int) $r[0], (int) $r[1], (int) $r[2], $r[3]);
@@ -393,8 +449,7 @@ function runOp(Db $db, string $op, int $it): void
             $db->exec('UPDATE benchmark_users SET name = ? WHERE id = ?', ['Updated 1', 1]);
             break;
         case 'upsert':
-            $db->exec('INSERT INTO benchmark_users (email, name) VALUES (?, ?) '
-                . 'ON CONFLICT (email) DO UPDATE SET email = excluded.email, name = excluded.name',
+            $db->exec('INSERT INTO benchmark_users (email, name) VALUES (?, ?)' . $db->upsertTail(),
                 ['user1@example.com', 'Upserted One']);
             break;
         case 'createMany':
@@ -407,7 +462,7 @@ function runOp(Db $db, string $op, int $it): void
                 $emails[] = "many{$k}@bench.com";
             }
             [, $names] = batchRows($it, true);
-            batchInsert($db, $emails, $names, ' ON CONFLICT (email) DO UPDATE SET email = excluded.email, name = excluded.name');
+            batchInsert($db, $emails, $names, $db->upsertTail());
             break;
         case 'updateMany':
             updateMany($db);
@@ -420,8 +475,7 @@ function runOp(Db $db, string $op, int $it): void
             break;
         case 'nestedUpsert':
             $db->execRaw('BEGIN');
-            $db->exec('INSERT INTO benchmark_users (email, name) VALUES (?, ?) '
-                . 'ON CONFLICT (email) DO UPDATE SET email = excluded.email, name = excluded.name',
+            $db->exec('INSERT INTO benchmark_users (email, name) VALUES (?, ?)' . $db->upsertTail(),
                 ['user1@example.com', 'NUp']);
             $rows = $db->query('SELECT id FROM benchmark_users WHERE email = ?', ['user1@example.com']);
             $db->exec('INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)', [(int) $rows[0][0], 'NUp Post']);
