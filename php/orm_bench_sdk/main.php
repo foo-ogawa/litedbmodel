@@ -224,9 +224,33 @@ function batchRows(int $it, bool $stable): array
  *
  * @param list<list<int>> $tuples
  */
-function keyParam(array $tuples): string
+function keyParam(array $tuples, string $sql): string
 {
-    return json_encode(array_map(static fn (array $t) => count($t) === 1 ? $t[0] : $t, $tuples), JSON_THROW_ON_ERROR);
+    $keys = array_map(static fn (array $t) => count($t) === 1 ? $t[0] : $t, $tuples);
+    // The statement says which encoding it wants: an ARRAY cast (`$1::int[]`, PostgreSQL's single-key
+    // predicate) takes a PostgreSQL array literal; a `::json` cast and MySQL/SQLite's json_each /
+    // JSON_TABLE take JSON. Reading it off the SQL keeps the encoding tied to the statement.
+    return pgArrayCast($sql) ? pgArrayLiteral($keys) : json_encode($keys, JSON_THROW_ON_ERROR);
+}
+
+/** True when the statement casts its param to a PostgreSQL array (`::int[]` / `::text[]`). */
+function pgArrayCast(string $sql): bool
+{
+    return preg_match('/::\w+\[\]/', $sql) === 1;
+}
+
+/**
+ * A PostgreSQL array literal (`{1,2,3}`), bound as TEXT and cast by the statement's own `::int[]` /
+ * `::text[]` — so it needs no driver-specific array support.
+ *
+ * @param list<mixed> $values
+ */
+function pgArrayLiteral(array $values): string
+{
+    $one = static fn ($v) => is_int($v) || is_float($v)
+        ? (string) $v
+        : '"' . str_replace(['\\', '"'], ['\\\\', '\\"'], (string) $v) . '"';
+    return '{' . implode(',', array_map($one, $values)) . '}';
 }
 
 /**
@@ -242,7 +266,7 @@ function batchParams(Db $db, array $records, string $sql): array
     if ($db->dialect === 'postgres') {
         $cols = array_keys($records[0]);
         sort($cols);
-        $one = array_map(static fn (string $c) => json_encode(array_column($records, $c), JSON_THROW_ON_ERROR), $cols);
+        $one = array_map(static fn (string $c) => pgArrayLiteral(array_column($records, $c)), $cols);
     } else {
         $one = [json_encode($records, JSON_THROW_ON_ERROR)];
     }
@@ -352,7 +376,7 @@ function materializeUsersPosts(Db $db, array $userRows, string $childSql): array
     if ($users === []) {
         return $users;
     }
-    $keys = keyParam(array_map(static fn (SdkUser $u): array => [$u->id], $users));
+    $keys = keyParam(array_map(static fn (SdkUser $u): array => [$u->id], $users), $childSql);
     $byAuthor = [];
     foreach ($db->query($childSql, [$keys]) as $r) {
         $p = new SdkPost((int) $r[0], $r[1], (int) $r[2]);
@@ -374,14 +398,14 @@ function materializeUsersPostsComments(Db $db, array $userRows, string $postSql,
     if ($users === []) {
         return $users;
     }
-    $ukeys = keyParam(array_map(static fn (SdkUser $u): array => [$u->id], $users));
+    $ukeys = keyParam(array_map(static fn (SdkUser $u): array => [$u->id], $users), $postSql);
     /** @var list<SdkPost> $posts */
     $posts = [];
     foreach ($db->query($postSql, [$ukeys]) as $r) {
         $posts[] = new SdkPost((int) $r[0], $r[1], (int) $r[2]);
     }
     if ($posts !== []) {
-        $pkeys = keyParam(array_map(static fn (SdkPost $p): array => [$p->id], $posts));
+        $pkeys = keyParam(array_map(static fn (SdkPost $p): array => [$p->id], $posts), $commentSql);
         $byPost = [];
         foreach ($db->query($commentSql, [$pkeys]) as $r) {
             $c = new SdkComment((int) $r[0], $r[1], (int) $r[2]);
@@ -411,14 +435,14 @@ function materializeComposite(Db $db, array $sqlList): array
     if ($tusers === []) {
         return $tusers;
     }
-    $ukeys = keyParam(array_map(static fn (SdkTenantUser $u): array => [$u->tenantId, $u->userId], $tusers));
+    $ukeys = keyParam(array_map(static fn (SdkTenantUser $u): array => [$u->tenantId, $u->userId], $tusers), $sqlList[1]);
     /** @var list<SdkTenantPost> $tposts */
     $tposts = [];
     foreach ($db->query($sqlList[1], [$ukeys]) as $r) {
         $tposts[] = new SdkTenantPost((int) $r[0], (int) $r[1], (int) $r[2], $r[3]);
     }
     if ($tposts !== []) {
-        $pkeys = keyParam(array_map(static fn (SdkTenantPost $p): array => [$p->tenantId, $p->postId], $tposts));
+        $pkeys = keyParam(array_map(static fn (SdkTenantPost $p): array => [$p->tenantId, $p->postId], $tposts), $sqlList[2]);
         $byPost = [];
         foreach ($db->query($sqlList[2], [$pkeys]) as $r) {
             $c = new SdkTenantComment((int) $r[0], (int) $r[1], (int) $r[2], $r[3]);

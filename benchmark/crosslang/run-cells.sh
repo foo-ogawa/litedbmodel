@@ -23,6 +23,13 @@ OUT="$HERE/results"
 [ "$SCALE" != "1" ] && OUT="$OUT/scale-$SCALE"
 mkdir -p "$OUT"
 
+# Capture the per-op SQL from the GENERATED module for this dialect into the artifact, so every SDK cell
+# executes the statements its native twin executes (#172). Runs before the fixture check so the check sees
+# the merged artifact.
+(cd "$ROOT/go" && go run -tags "bench_$DIALECT" ./lm_bench/lm_orm_native/ sql >/dev/null) || {
+  echo "✗ op-SQL capture failed on $DIALECT — the SDK cells have no statements to run"; exit 1
+}
+
 # The fixture must already be the one this run claims to measure.
 node -e "
   let d;

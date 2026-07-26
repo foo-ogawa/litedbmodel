@@ -46,6 +46,16 @@ enum Dialect {
 enum P {
     I(i64),
     S(String),
+    /// An ARRAY param the statement casts (`?::int[]` / `?::text[]`) — PostgreSQL's single-key relation
+    /// predicate and its batch `UNNEST` form. rust's `postgres` crate maps types strictly, so this must be
+    /// bound as a real array rather than as the array literal PDO / psycopg get away with sending as text.
+    /// The other two drivers never see it: their statements take a JSON param instead.
+    Ints(Vec<i64>),
+    Strs(Vec<String>),
+    /// A JSON param the statement casts (`?::json`) — PostgreSQL's composite-key relation predicate reads
+    /// the key tuples with `json_array_elements`. Bound as a real JSON value for the same strict-typing
+    /// reason as the array variants. MySQL/SQLite carry the identical JSON text in a plain string param.
+    Json(String),
 }
 
 /// A decoded result cell. Reads materialise every selected column (fair vs the native cell, which
@@ -130,6 +140,9 @@ fn sqlite_value(p: &P) -> rusqlite::types::Value {
     match p {
         P::I(n) => Value::Integer(*n),
         P::S(s) => Value::Text(s.clone()),
+        // sqlite/mysql statements bind a key set as ONE JSON *string* param, never as a pg array/json —
+        // unreachable.
+        P::Ints(_) | P::Strs(_) | P::Json(_) => unreachable!("sqlite takes no array/json param"),
     }
 }
 impl Db for SqliteDb {
@@ -186,16 +199,43 @@ struct PgDb {
     // iterations so the SDK, like native's prepare_cached, parses each SQL once. Keyed by SQL text.
     stmts: std::collections::HashMap<String, postgres::Statement>,
 }
+/// `?` → `$N`, quote-aware, left to right — the driver rendering PostgreSQL needs. The captured statement
+/// carries the canonical `?` (the runtime applies this same rewrite as its final one-pass over the fixed
+/// SQL; it cannot happen earlier, since a SKIP fragment changes the shape and so the numbering). A `?`
+/// inside a string literal is left alone.
+#[cfg(feature = "livedb")]
+fn to_dollar_placeholders(sql: &str) -> String {
+    let mut out = String::with_capacity(sql.len() + 8);
+    let mut in_string = false;
+    let mut n = 0;
+    for ch in sql.chars() {
+        match ch {
+            '\'' => {
+                in_string = !in_string;
+                out.push(ch);
+            }
+            '?' if !in_string => {
+                n += 1;
+                out.push('$');
+                out.push_str(&n.to_string());
+            }
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
 #[cfg(feature = "livedb")]
 impl PgDb {
     fn prep(&mut self, sql: &str) -> postgres::Statement {
         if let Some(s) = self.stmts.get(sql) {
             return s.clone();
         }
+        let rendered = to_dollar_placeholders(sql);
         let s = self
             .client
-            .prepare(sql)
-            .unwrap_or_else(|e| panic!("prepare `{sql}`: {e}"));
+            .prepare(&rendered)
+            .unwrap_or_else(|e| panic!("prepare `{rendered}`: {e}"));
         self.stmts.insert(sql.to_string(), s.clone());
         s
     }
@@ -240,6 +280,11 @@ fn pg_params(params: &[P]) -> Vec<Box<dyn postgres::types::ToSql + Sync>> {
         .map(|p| match p {
             P::I(n) => Box::new(PgInt(*n)) as Box<dyn postgres::types::ToSql + Sync>,
             P::S(s) => Box::new(s.clone()),
+            P::Ints(v) => Box::new(v.iter().map(|n| *n as i32).collect::<Vec<i32>>()),
+            P::Strs(v) => Box::new(v.clone()),
+            P::Json(s) => {
+                Box::new(serde_json::from_str::<serde_json::Value>(s).expect("key set is JSON"))
+            }
         })
         .collect()
 }
@@ -321,6 +366,7 @@ fn my_params(params: &[P]) -> Vec<mysql::Value> {
         .map(|p| match p {
             P::I(n) => mysql::Value::Int(*n),
             P::S(s) => mysql::Value::Bytes(s.clone().into_bytes()),
+            P::Ints(_) | P::Strs(_) | P::Json(_) => unreachable!("mysql takes no array/json param"),
         })
         .collect()
 }
@@ -461,7 +507,53 @@ fn patch_records() -> Vec<(String, String)> {
         .collect()
 }
 
-fn key_param(tuples: &[Vec<i64>]) -> P {
+/// True when the statement casts its param to a PostgreSQL array (`::int[]` / `::text[]`).
+fn is_pg_array_cast(sql: &str) -> bool {
+    sql.split("::").skip(1).any(|tail| {
+        let ident: String = tail
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect();
+        !ident.is_empty() && tail[ident.len()..].starts_with("[]")
+    })
+}
+
+/// A PostgreSQL array literal (`{a,b}`), bound as TEXT and cast by the statement's own `::int[]` /
+/// `::text[]` — so it needs no driver-specific array support.
+fn pg_array_literal(vals: &[String], quote: bool) -> String {
+    let body: Vec<String> = vals
+        .iter()
+        .map(|v| {
+            if quote {
+                format!("\"{}\"", v.replace('\\', "\\\\").replace('"', "\\\""))
+            } else {
+                v.clone()
+            }
+        })
+        .collect();
+    format!("{{{}}}", body.join(","))
+}
+
+/// One relation level's key set as the ONE param the captured statement expects. The generated module
+/// binds a batched child read's key set as a single param, never as N placeholders — so the baseline binds
+/// it the same way, or it is running different SQL.
+///
+/// The statement says which encoding it wants: an ARRAY cast (`?::int[]`, PostgreSQL's single-key
+/// predicate) takes a PostgreSQL array literal; a `::json` cast and MySQL/SQLite's json_each / JSON_TABLE
+/// take JSON. Reading it off the SQL keeps the encoding tied to the statement.
+fn key_param(sql: &str, tuples: &[Vec<i64>]) -> P {
+    if is_pg_array_cast(sql) {
+        return P::Ints(tuples.iter().map(|t| t[0]).collect());
+    }
+    let json = json_key_set(tuples);
+    if sql.contains("::json") {
+        return P::Json(json);
+    }
+    P::S(json)
+}
+
+/// The key set as JSON: an array of scalars for a single key, an array of tuples for a composite one.
+fn json_key_set(tuples: &[Vec<i64>]) -> String {
     let body: Vec<String> = tuples
         .iter()
         .map(|t| {
@@ -478,35 +570,34 @@ fn key_param(tuples: &[Vec<i64>]) -> P {
             }
         })
         .collect();
-    P::S(format!("[{}]", body.join(",")))
+    format!("[{}]", body.join(","))
 }
 
 /// A batch write's record set as the param(s) the captured statement expects: ONE JSON array on
 /// MySQL/SQLite, one array PER COLUMN on PostgreSQL (its `UNNEST` form takes column arrays). The payload
 /// repeats once per `?` — updateMany's SET subquery and its WHERE each read it.
 fn batch_params(dialect: Dialect, sql: &str, records: &[(String, String)], keyed: bool) -> Vec<P> {
-    let quote = |v: &str| format!("\"{}\"", v.replace('\\', "\\\\").replace('"', "\\\""));
     let one: Vec<P> = if dialect == Dialect::Pg {
+        // `UNNEST(?::int[], ?::text[])` — one array PER COLUMN, bound as a real array (the `postgres` crate
+        // maps types strictly). A keyed batch's first column is the id.
+        let first = if keyed {
+            P::Ints(
+                records
+                    .iter()
+                    .map(|(a, _)| a.parse().expect("id"))
+                    .collect(),
+            )
+        } else {
+            P::Strs(records.iter().map(|(a, _)| a.clone()).collect())
+        };
         vec![
-            P::S(format!(
-                "[{}]",
-                records
-                    .iter()
-                    .map(|(a, _)| if keyed { a.clone() } else { quote(a) })
-                    .collect::<Vec<_>>()
-                    .join(",")
-            )),
-            P::S(format!(
-                "[{}]",
-                records
-                    .iter()
-                    .map(|(_, b)| quote(b))
-                    .collect::<Vec<_>>()
-                    .join(",")
-            )),
+            first,
+            P::Strs(records.iter().map(|(_, b)| b.clone()).collect()),
         ]
     } else {
+        // MySQL/SQLite take the whole record set as ONE JSON array param.
         let key = if keyed { "id" } else { "email" };
+        let quote = |v: &str| format!("\"{}\"", v.replace('\\', "\\\\").replace('"', "\\\""));
         let objs: Vec<String> = records
             .iter()
             .map(|(a, b)| {
@@ -516,8 +607,6 @@ fn batch_params(dialect: Dialect, sql: &str, records: &[(String, String)], keyed
             .collect();
         vec![P::S(format!("[{}]", objs.join(",")))]
     };
-    // Count only `?`: the captured SQL always carries `?` (the runtime rewrites to `$N` below the
-    // seam), and `$` also appears inside the JSON paths `'$.email'` / `'$[0]'`.
     let reps = (sql.matches('?').count() / one.len()).max(1);
     (0..reps).flat_map(|_| one.clone()).collect()
 }
@@ -785,7 +874,7 @@ fn materialize_users_posts(
     if ids.is_empty() {
         return users;
     }
-    let posts = decode_posts(db.query(child_sql, &[key_param(&ids)]));
+    let posts = decode_posts(db.query(child_sql, &[key_param(child_sql, &ids)]));
     // group posts by author_id, then MOVE each group into its parent user.
     let mut by_author: HashMap<i64, Vec<SdkPost>> = HashMap::new();
     for p in posts {
@@ -813,10 +902,10 @@ fn materialize_users_posts_comments(
     if uids.is_empty() {
         return users;
     }
-    let mut posts = decode_posts(db.query(post_sql, &[key_param(&uids)]));
+    let mut posts = decode_posts(db.query(post_sql, &[key_param(post_sql, &uids)]));
     let pids: Vec<Vec<i64>> = posts.iter().map(|p| vec![p.id]).collect();
     if !pids.is_empty() {
-        let comments = decode_comments(db.query(comment_sql, &[key_param(&pids)]));
+        let comments = decode_comments(db.query(comment_sql, &[key_param(comment_sql, &pids)]));
         let mut by_post: HashMap<i64, Vec<SdkComment>> = HashMap::new();
         for c in comments {
             by_post.entry(c.post_id.unwrap_or(0)).or_default().push(c);
@@ -864,7 +953,7 @@ fn materialize_composite(db: &mut dyn Db, sql: &[String]) -> Vec<SdkTenantUser> 
         .map(|u| vec![u.tenant_id, u.user_id])
         .collect();
     let mut tposts: Vec<SdkTenantPost> = db
-        .query(&sql[1], &[key_param(&ukeys)])
+        .query(&sql[1], &[key_param(&sql[1], &ukeys)])
         .into_iter()
         .map(|r| {
             let mut it = r.into_iter();
@@ -884,7 +973,7 @@ fn materialize_composite(db: &mut dyn Db, sql: &[String]) -> Vec<SdkTenantUser> 
             .map(|p| vec![p.tenant_id, p.post_id])
             .collect();
         let tcomments: Vec<SdkTenantComment> = db
-            .query(&sql[2], &[key_param(&pkeys)])
+            .query(&sql[2], &[key_param(&sql[2], &pkeys)])
             .into_iter()
             .map(|r| {
                 let mut it = r.into_iter();

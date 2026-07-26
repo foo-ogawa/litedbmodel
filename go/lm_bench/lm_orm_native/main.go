@@ -43,6 +43,23 @@ import (
 // txControl matches the tx-control statements the RUNTIME issues around a transaction op.
 var txControl = regexp.MustCompile(`(?i)^\s*(BEGIN|COMMIT|ROLLBACK|START TRANSACTION)`)
 
+// dollarPlaceholder matches PostgreSQL's `$N` bind marker.
+var dollarPlaceholder = regexp.MustCompile(`\$\d+`)
+
+// canonicalPlaceholders restores the `?` the authored SQL declares. `?`→`$N` is the RUNTIME's final
+// one-pass over the fixed SQL (it cannot happen earlier: a SKIP fragment changes the shape, so the
+// numbering is only knowable once the statement is assembled), and the seam sits after it. The artifact
+// must carry the canonical form so each cell renders for its own driver — psycopg binds `%s`, PDO binds
+// `?`, pg and pgx bind `$N`. The runtime's OTHER finalizations are kept: the resolved
+// `@@PG_ARRAY_CAST@@` is genuinely only knowable at execution, from the key param's element type.
+func canonicalPlaceholders(sql string) string {
+	if benchDialect != "postgres" {
+		return sql
+	}
+	// `$` also occurs inside JSON paths (`'$[0]'`), which the `\$\d+` form does not match.
+	return dollarPlaceholder.ReplaceAllString(sql, "?")
+}
+
 // openSeeded opens this build's target DB and applies the ONE seed SSoT (.setup/<dialect>.json, from
 // orm-domain.ts) — schema then the canonical 110-user fixture. No hand-written schema/seed here.
 //
@@ -264,7 +281,7 @@ func main() {
 			// The tx-control statements are the runtime's, not the generated runner's: a baseline
 			// brackets its own transaction, so only the body statements are captured.
 			if !txControl.MatchString(sqlText) {
-				seenSQL = append(seenSQL, sqlText)
+				seenSQL = append(seenSQL, canonicalPlaceholders(sqlText))
 			}
 			out, err := next(sqlText, args)
 			// The read seam hands back `[]bc.Value` (the write seam a run summary, which adds nothing), so

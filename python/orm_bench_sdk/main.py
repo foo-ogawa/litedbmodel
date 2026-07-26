@@ -255,12 +255,29 @@ class TenantComment:
 _SINK: list = [None]
 
 
-def _key_param(tuples: List[tuple]) -> str:
+_PG_ARRAY_CAST = re.compile(r"::\w+\[\]")
+
+
+def _pg_array_literal(values: list) -> str:
+    """A PostgreSQL array literal (``{1,2,3}``), bound as TEXT and cast by the statement's own ``::int[]`` /
+    ``::text[]`` — so it needs no driver-specific array support."""
+    def one(v):
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            return str(v)
+        return '"' + str(v).replace("\\", "\\\\").replace('"', '\\"') + '"'
+    return "{" + ",".join(one(v) for v in values) + "}"
+
+
+def _key_param(tuples: List[tuple], sql: str) -> str:
     """One relation level's key set as the ONE param the captured SQL expects. The generated module binds a
-    batched child read's key set as a single JSON array (``json_each(?)`` / ``JSON_TABLE(?)`` /
-    ``UNNEST(?::t[])``), never as N placeholders — so the baseline binds it the same way, or it is running
-    different SQL. A composite key is an array of tuples, a single key an array of scalars."""
-    return json.dumps([t[0] if len(t) == 1 else list(t) for t in tuples])
+    batched child read's key set as a single param, never as N placeholders — so the baseline binds it the
+    same way, or it is running different SQL.
+
+    The statement says which encoding it wants: an ARRAY cast (``$1::int[]``, PostgreSQL's single-key
+    predicate) takes a PostgreSQL array literal; a ``::json`` cast and MySQL/SQLite's ``json_each`` /
+    ``JSON_TABLE`` take JSON. Reading it off the SQL keeps the encoding tied to the statement."""
+    keys = [t[0] if len(t) == 1 else list(t) for t in tuples]
+    return _pg_array_literal(keys) if _PG_ARRAY_CAST.search(sql) else json.dumps(keys)
 
 
 def _batch_params(db: Db, records: List[dict], sql: str) -> tuple:
@@ -268,7 +285,7 @@ def _batch_params(db: Db, records: List[dict], sql: str) -> tuple:
     MySQL/SQLite, one array PER COLUMN on PostgreSQL (its ``UNNEST`` form takes column arrays). The payload
     repeats once per ``?`` — updateMany's SET subquery and its WHERE each read it."""
     if db.dialect == "postgres":
-        one = [json.dumps([r[c] for r in records]) for c in sorted(records[0])]
+        one = [_pg_array_literal([r[c] for r in records]) for c in sorted(records[0])]
     else:
         one = [json.dumps(records)]
     reps = max(1, round(sql.count("?") / len(one)))
@@ -297,7 +314,7 @@ def _materialize_users_posts(db: Db, user_rows: List[tuple], child_sql: str) -> 
     users = [User(r[0], r[1], r[2]) for r in user_rows]
     if not users:
         return users
-    posts = [Post(r[0], r[1], r[2]) for r in db.query(child_sql, (_key_param([(u.id,) for u in users]),))]
+    posts = [Post(r[0], r[1], r[2]) for r in db.query(child_sql, (_key_param([(u.id,) for u in users], child_sql),))]
     by_author: dict = {}
     for p in posts:
         by_author.setdefault(p.author_id, []).append(p)
@@ -310,9 +327,9 @@ def _materialize_users_posts_comments(db: Db, user_rows: List[tuple], post_sql: 
     users = [User(r[0], r[1], r[2]) for r in user_rows]
     if not users:
         return users
-    posts = [Post(r[0], r[1], r[2]) for r in db.query(post_sql, (_key_param([(u.id,) for u in users]),))]
+    posts = [Post(r[0], r[1], r[2]) for r in db.query(post_sql, (_key_param([(u.id,) for u in users], post_sql),))]
     if posts:
-        comments = [Comment(r[0], r[1], r[2]) for r in db.query(comment_sql, (_key_param([(p.id,) for p in posts]),))]
+        comments = [Comment(r[0], r[1], r[2]) for r in db.query(comment_sql, (_key_param([(p.id,) for p in posts], comment_sql),))]
         by_post: dict = {}
         for c in comments:
             by_post.setdefault(c.post_id, []).append(c)
@@ -330,10 +347,10 @@ def _materialize_composite(db: Db, sql: List[str]) -> List[TenantUser]:
     tusers = [TenantUser(r[0], r[1], r[2]) for r in db.query(sql[0])]
     if not tusers:
         return tusers
-    ukeys = _key_param([(u.tenant_id, u.user_id) for u in tusers])
+    ukeys = _key_param([(u.tenant_id, u.user_id) for u in tusers], sql[1])
     tposts = [TenantPost(r[0], r[1], r[2], r[3]) for r in db.query(sql[1], (ukeys,))]
     if tposts:
-        pkeys = _key_param([(p.tenant_id, p.post_id) for p in tposts])
+        pkeys = _key_param([(p.tenant_id, p.post_id) for p in tposts], sql[2])
         tcomments = [TenantComment(r[0], r[1], r[2], r[3]) for r in db.query(sql[2], (pkeys,))]
         by_post: dict = {}
         for c in tcomments:

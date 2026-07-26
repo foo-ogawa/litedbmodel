@@ -183,14 +183,34 @@ function groupBy(rows: Row[], cols: readonly string[]): Map<string, Row[]> {
  * `UNNEST(?::t[])`), never as N placeholders — so the baseline binds it the same way, or it would be
  * running different SQL. Composite keys are an array of tuples; a single key an array of scalars.
  */
-function keyParam(rows: readonly Row[], cols: readonly string[]): string {
-  return JSON.stringify(rows.map((r) => (cols.length === 1 ? r[cols[0]] : cols.map((c) => r[c]))));
+function keyParam(rows: readonly Row[], cols: readonly string[], sql: string): string {
+  const keys = rows.map((r) => (cols.length === 1 ? r[cols[0]] : cols.map((c) => r[c])));
+  // The statement says which encoding it wants: an ARRAY cast (`$1::int[]`, PostgreSQL's single-key
+  // predicate) takes a PostgreSQL array literal, a `::json` cast and MySQL/SQLite's json_each /
+  // JSON_TABLE take JSON. Reading it off the SQL keeps the encoding tied to the statement rather than to
+  // a second table that could disagree with it.
+  return pgArrayCast(sql) ? pgArrayLiteral(keys as unknown[]) : JSON.stringify(keys);
+}
+
+/** True when the statement casts its param to a PostgreSQL array (`::int[]` / `::text[]`). */
+function pgArrayCast(sql: string): boolean {
+  return /::\w+\[\]/.test(sql);
+}
+
+/**
+ * A PostgreSQL array literal (`{1,2,3}`). Bound as TEXT and cast by the statement's own `::int[]` /
+ * `::text[]`, so it needs no driver-specific array support — the same text every language's cell can send.
+ */
+function pgArrayLiteral(values: readonly unknown[]): string {
+  const one = (v: unknown): string =>
+    typeof v === 'number' || typeof v === 'bigint' ? String(v) : `"${String(v).replace(/(["\\])/g, '\\$1')}"`;
+  return `{${values.map(one).join(',')}}`;
 }
 
 /** users → ONE batched posts read, moved into their author. `sql` = the op's [parent, child] statements. */
 async function attachPosts(db: Db, users: SdkUser[], childSql: string): Promise<SdkUser[]> {
   if (users.length === 0) return users;
-  const posts = (await db.query(childSql, [keyParam(users, ['id'])])) as SdkPost[];
+  const posts = (await db.query(childSql, [keyParam(users, ['id'], childSql)])) as SdkPost[];
   const byAuthor = groupBy(posts, ['author_id']);
   for (const u of users) u.posts = (byAuthor.get(String(u.id)) as SdkPost[]) ?? [];
   return users;
@@ -199,9 +219,9 @@ async function attachPosts(db: Db, users: SdkUser[], childSql: string): Promise<
 /** users → batched posts → batched comments, assembled into the full three-level graph. */
 async function attachPostsAndComments(db: Db, users: SdkUser[], postSql: string, commentSql: string): Promise<SdkUser[]> {
   if (users.length === 0) return users;
-  const posts = (await db.query(postSql, [keyParam(users, ['id'])])) as SdkPost[];
+  const posts = (await db.query(postSql, [keyParam(users, ['id'], postSql)])) as SdkPost[];
   if (posts.length > 0) {
-    const comments = await db.query(commentSql, [keyParam(posts, ['id'])]);
+    const comments = await db.query(commentSql, [keyParam(posts, ['id'], commentSql)]);
     const byPost = groupBy(comments, ['post_id']);
     for (const p of posts) p.comments = byPost.get(String(p.id)) ?? [];
   }
@@ -214,9 +234,9 @@ async function attachPostsAndComments(db: Db, users: SdkUser[], postSql: string,
 async function compositeGraph(db: Db, sql: readonly string[]): Promise<Row[]> {
   const tusers = await db.query(sql[0]);
   if (tusers.length === 0) return tusers;
-  const tposts = await db.query(sql[1], [keyParam(tusers, ['tenant_id', 'user_id'])]);
+  const tposts = await db.query(sql[1], [keyParam(tusers, ['tenant_id', 'user_id'], sql[1])]);
   if (tposts.length > 0) {
-    const tcomments = await db.query(sql[2], [keyParam(tposts, ['tenant_id', 'post_id'])]);
+    const tcomments = await db.query(sql[2], [keyParam(tposts, ['tenant_id', 'post_id'], sql[2])]);
     const byPost = groupBy(tcomments, ['tenant_id', 'post_id']);
     for (const p of tposts) (p as SdkPost).comments = byPost.get(`${p.tenant_id}${p.post_id}`) ?? [];
   }
@@ -234,7 +254,9 @@ async function compositeGraph(db: Db, sql: readonly string[]): Promise<Row[]> {
 function batchParams(db: Db, rows: readonly object[], sqlForArity?: string): unknown[] {
   const cols = Object.keys(rows[0]) as (keyof (typeof rows)[number])[];
   const one =
-    db.dialect === 'postgres' ? cols.map((c) => JSON.stringify(rows.map((r) => r[c]))) : [JSON.stringify(rows)];
+    db.dialect === 'postgres'
+      ? cols.map((c) => pgArrayLiteral(rows.map((r) => (r as Record<string, unknown>)[c])))
+      : [JSON.stringify(rows)];
   const arity = sqlForArity === undefined ? 1 : (sqlForArity.match(/\?/g) ?? ['?']).length / one.length;
   return Array.from({ length: Math.max(1, Math.round(arity)) }, () => one).flat();
 }

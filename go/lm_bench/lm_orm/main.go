@@ -344,7 +344,7 @@ func (c *cell) materializeUsersPosts(userRows [][]any, childSQL string) []sdkUse
 	for i, id := range ids {
 		keys[i] = []int64{id}
 	}
-	posts := decodePosts(c.query(childSQL, keyParam(keys)))
+	posts := decodePosts(c.query(childSQL, keyParam(childSQL, keys)))
 	byAuthor := make(map[int64][]sdkPost, len(posts))
 	for _, p := range posts {
 		byAuthor[p.authorID] = append(byAuthor[p.authorID], p)
@@ -366,13 +366,13 @@ func (c *cell) materializeUsersPostsComments(userRows [][]any, postSQL, commentS
 	for i, u := range users {
 		ukeys[i] = []int64{u.id}
 	}
-	posts := decodePosts(c.query(postSQL, keyParam(ukeys)))
+	posts := decodePosts(c.query(postSQL, keyParam(postSQL, ukeys)))
 	if len(posts) > 0 {
 		pkeys := make([][]int64, len(posts))
 		for i, p := range posts {
 			pkeys[i] = []int64{p.id}
 		}
-		comments := decodeComments(c.query(commentSQL, keyParam(pkeys)))
+		comments := decodeComments(c.query(commentSQL, keyParam(commentSQL, pkeys)))
 		byPost := make(map[int64][]sdkComment, len(comments))
 		for _, cm := range comments {
 			byPost[cm.postID] = append(byPost[cm.postID], cm)
@@ -407,7 +407,7 @@ func (c *cell) materializeComposite(sqlList []string) []sdkTenantUser {
 	for i, u := range tusers {
 		ukeys[i] = []int64{u.tenantID, u.userID}
 	}
-	prows := c.query(sqlList[1], keyParam(ukeys))
+	prows := c.query(sqlList[1], keyParam(sqlList[1], ukeys))
 	tposts := make([]sdkTenantPost, len(prows))
 	for i, r := range prows {
 		tposts[i] = sdkTenantPost{tenantID: asInt(r[0]), postID: asInt(r[1]), userID: asInt(r[2]), title: r[3]}
@@ -417,7 +417,7 @@ func (c *cell) materializeComposite(sqlList []string) []sdkTenantUser {
 		for i, p := range tposts {
 			pkeys[i] = []int64{p.tenantID, p.postID}
 		}
-		crows := c.query(sqlList[2], keyParam(pkeys))
+		crows := c.query(sqlList[2], keyParam(sqlList[2], pkeys))
 		byPost := make(map[key2][]sdkTenantComment, len(crows))
 		for _, r := range crows {
 			cm := sdkTenantComment{tenantID: asInt(r[0]), commentID: asInt(r[1]), postID: asInt(r[2]), body: r[3]}
@@ -443,12 +443,39 @@ func (c *cell) materializeComposite(sqlList []string) []sdkTenantUser {
 // module binds a batched child read's key set as a single JSON array (json_each(?) / JSON_TABLE(?) /
 // UNNEST(?::t[])), never as N placeholders — so the baseline binds it the same way, or it is running
 // different SQL. A composite key is an array of tuples, a single key an array of scalars.
-func keyParam(tuples [][]int64) string {
+func keyParam(sqlText string, tuples [][]int64) string {
+	// The statement says which encoding it wants: an ARRAY cast (`$1::int[]`, PostgreSQL's single-key
+	// predicate) takes a PostgreSQL array literal; a `::json` cast and MySQL/SQLite's json_each /
+	// JSON_TABLE take JSON. Reading it off the SQL keeps the encoding tied to the statement.
+	if pgArrayCast.MatchString(sqlText) {
+		flat := make([]string, len(tuples))
+		for i, t := range tuples {
+			flat[i] = strconv.FormatInt(t[0], 10)
+		}
+		return "{" + strings.Join(flat, ",") + "}"
+	}
 	out, err := json.Marshal(flattenSingles(tuples))
 	if err != nil {
 		panic(fmt.Sprintf("encode key set: %v", err))
 	}
 	return string(out)
+}
+
+// pgArrayCast matches a statement that casts its param to a PostgreSQL array (`::int[]` / `::text[]`).
+var pgArrayCast = regexp.MustCompile(`::\w+\[\]`)
+
+// pgArrayLiteral renders values as a PostgreSQL array literal (`{a,b}`), bound as TEXT and cast by the
+// statement's own `::int[]` / `::text[]` — so no driver-specific array support is needed.
+func pgArrayLiteral(vals []string, quote bool) string {
+	out := make([]string, len(vals))
+	for i, v := range vals {
+		if quote {
+			out[i] = `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(v) + `"`
+		} else {
+			out[i] = v
+		}
+	}
+	return "{" + strings.Join(out, ",") + "}"
 }
 
 // flattenSingles renders a 1-column key set as scalars and a multi-column one as tuples.
@@ -484,12 +511,17 @@ func (c *cell) batchParams(sqlText string, records []map[string]any) []any {
 		}
 		sort.Strings(cols)
 		for _, col := range cols {
-			vals := make([]any, len(records))
+			vals := make([]string, len(records))
+			numeric := true
 			for i, r := range records {
-				vals[i] = r[col]
+				if n, ok := r[col].(int64); ok {
+					vals[i] = strconv.FormatInt(n, 10)
+				} else {
+					vals[i] = fmt.Sprint(r[col])
+					numeric = false
+				}
 			}
-			enc, _ := json.Marshal(vals)
-			one = append(one, string(enc))
+			one = append(one, pgArrayLiteral(vals, !numeric))
 		}
 	} else {
 		enc, _ := json.Marshal(records)

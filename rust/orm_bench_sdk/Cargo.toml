@@ -30,7 +30,9 @@ serde_json = "1"
 
 # `livedb` (opt-in): the same 19 ops against docker Postgres / MySQL via the plain `postgres` + `mysql`
 # crates. The default (SQLite) build needs neither.
-postgres = { version = "0.19", optional = true }
+# `with-serde_json-1`: the generated PostgreSQL composite-key predicate binds its key set to a
+# `?::json` param, and the crate maps types strictly — a `String` cannot be sent for `json`.
+postgres = { version = "0.19", optional = true, features = ["with-serde_json-1"] }
 # `ToSql` hands the encoder a `BytesMut`, so the pg integer bind (PgInt, main.rs) needs the same
 # `bytes` postgres itself uses. Already in the lock as postgres' transitive dep — a pin, not a new dep.
 bytes = { version = "1", optional = true }
