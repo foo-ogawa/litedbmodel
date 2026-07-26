@@ -9,7 +9,7 @@
  *     `materializers` coercion map. Array columns read as `{arr:<element>}` (the SSoT array split
  *     {@link import('../coltype').arrayElementType}); the element rides the SAME de-box scalar.
  *   - {@link outputType} — composes the component `outputType` by walking the `output` Φ-expression
- *     against a `nodeId → outType` map (consumed by `authoring.lowerReadColumns`).
+ *     against a `nodeId → outType` map.
  *
  * Spec §4.1 discipline: an ambiguous/unmappable projection is a HARD ERROR (no-assume, no-fallback)
  * — a `*` projection, a computed column (typed reads only), or an undeclared/unknown-type column
@@ -107,7 +107,7 @@ export interface ReadRow {
  * column ONCE via the SHARED {@link parseProjectionColumn} + the coltype SSoT, producing BOTH:
  *   - `outType` — `{arr:{obj:{outputKey: keyArrayElemScalar(sqlType)}}}`, the READ-DE-BOXED scalar
  *     (int32→`float`(number) / BIGINT→`string` / BOOLEAN→`bool` / DATE→`string` / text/uuid→`string`).
- *     This is the ONE row-type representation: bc `generateModule` reads it for the NATIVE typed de-box
+ *     This is the ONE row-type representation: bc's native emitter reads it for the typed de-box
  *     (#154), and it is the conform target the TS leaf coercion below produces.
  *   - `materializers` — the TS-leaf coercion map ({@link sqlTypeToMaterializeClass}); the leaf coerces
  *     each driver cell (BIGINT→exact string / DATE→string / BOOLEAN→boolean) so the row MATCHES `outType`

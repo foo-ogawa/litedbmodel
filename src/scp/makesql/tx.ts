@@ -129,7 +129,7 @@ export interface TxOp {
   /**
    * NATIVE-CODEGEN typing metadata (E5/#120 — the RETURNING-chained tx chain). Additive: the runtime
    * tx ({@link executeTransaction}) IGNORES it; the bc native-codegen chain lowering
-   * (bc `generateModule`, rust/go typed-native emitter) reads it to type each statement's
+   * (bc's rust/go typed-native emitter) reads it to type each statement's
    * native param ports + its produced-row struct WITHOUT re-parsing the rendered SQL. The SHARED
    * {@link compileWriteNode} emits it from the structured ports it already has (one compiler feeds both
    * the runtime and the codegen chain). Present on a single-statement Insert/Update/Delete op; absent
@@ -716,10 +716,9 @@ function compileWriteNodeSql(node: WriteNodeLike, dialect: MakeSQLDialect, resol
         const writeMeta = { table, bindColumns: columns, returning: returningColumns(ports), batch: true };
         return { sql: shape.sql, params: Array.from({ length: nQ }, () => marker), ...(pk !== undefined ? { pk } : {}), writeMeta };
       }
-      // The WHERE is either INLINE here (the tx-DAG path passes the recorded where node) or DEFERRED to
-      // the `executeSQL` `where` port (the emitWrite op-builder path — lowered post-compile from recorded
-      // IR, appended by `lowerRecordedWhere`). When deferred, `ports.where` is absent ⇒ emit the base
-      // `UPDATE … SET …` and the post-compile pass appends the WHERE (the op builder guarantees a WHERE).
+      // An absent `where` port is an UNCONDITIONAL update — `UPDATE … SET …` with no tail. The port
+      // carries the structured `{arr:[…]}` member list and is lowered INLINE here; nothing appends a
+      // WHERE afterwards.
       const where = lowerWherePort(ports, 'Update', dialect);
       // v1 `DBModel._update` emits `<c> = ?::<sqlCast>` PER COLUMN on Postgres (skipping timestamp/date).
       const setClauses = setCols.map((c) => `${c} = ${castPlaceholder(dialect, sqlCastMap, c)}`).join(', ');
@@ -734,8 +733,7 @@ function compileWriteNodeSql(node: WriteNodeLike, dialect: MakeSQLDialect, resol
       return { sql, params: [...setCols.map((c) => set[c]), ...where.params], ...(pk !== undefined ? { pk } : {}), writeMeta };
     }
     case 'Delete': {
-      // As Update: WHERE inline (tx-DAG, recorded where) or deferred to the `executeSQL` `where` port
-      // (emitWrite path, appended post-compile). Absent `ports.where` ⇒ base `DELETE FROM t`.
+      // As Update: the `where` port is lowered inline. Absent ⇒ an unconditional `DELETE FROM t`.
       const where = lowerWherePort(ports, 'Delete', dialect);
       const sql = `DELETE FROM ${table}${where.sql === '' ? '' : ` WHERE ${where.sql}`}${returningTail(ports)}`;
       // The `?`s bind the WHERE columns; a DELETE has no SET/VALUES params. `pk` rides along so the

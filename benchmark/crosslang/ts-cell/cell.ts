@@ -111,7 +111,13 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 // artifact is what surfaced #169 — until it was fixed, the root entry did not load at all.
 const env = (k: string, d: string): string => process.env[k] || d;
 
+/**
+ * `driver` is explicit on every config. `DBModel.setConfig` defaults an unspecified driver to
+ * `postgres` (src/DBModel.ts:251), so the v1 cell was opening a PostgreSQL pool against MySQL — its
+ * MySQL leg never ran (`received invalid response: 4a`, MySQL's handshake reaching the pg parser).
+ */
 export const PG_CONFIG = {
+  driver: 'postgres',
   host: env('TEST_DB_HOST', 'localhost'),
   port: Number(env('TEST_DB_PORT', '5433')),
   database: env('TEST_DB_NAME', 'testdb'),
@@ -120,6 +126,7 @@ export const PG_CONFIG = {
 } as const;
 
 export const MYSQL_CONFIG = {
+  driver: 'mysql',
   host: env('TEST_MYSQL_HOST', '127.0.0.1'),
   port: Number(env('TEST_MYSQL_PORT', '3307')),
   database: env('TEST_MYSQL_DB', 'testdb'),
