@@ -24,7 +24,9 @@ Usage: ``python -m orm_bench_sdk.main <dialect> [reps] [warmup]`` or
 
 from __future__ import annotations
 
+import json
 import os
+import re
 import sqlite3
 import sys
 import time
@@ -91,13 +93,6 @@ class Db:
         self.count += 1
         self._cursor(sql, params)
 
-    def upsert_tail(self, cols: str) -> str:
-        """The dialect's upsert tail for a UNIQUE `email` (the rust SDK cell's `upsert_tail` twin).
-        PostgreSQL / SQLite take `ON CONFLICT`; MySQL takes `ON DUPLICATE KEY UPDATE`."""
-        if self.dialect == "mysql":
-            return " ON DUPLICATE KEY UPDATE " + ", ".join(f"{c} = VALUES({c})" for c in cols.split(", "))
-        return " ON CONFLICT (email) DO UPDATE SET " + ", ".join(f"{c} = excluded.{c}" for c in cols.split(", "))
-
     def write_returning_id(self, sql: str, params: tuple, recover_sql: str, recover_params: tuple = ()) -> int:
         """A write that hands back the id of the row it wrote — the `` RETURNING id`` the authored native
         module declares for every id-chaining write (``benchmark/crosslang/native-model.ts``). The baseline
@@ -110,8 +105,10 @@ class Db:
         the rows are tallied here and the statement count is not bumped a second time.
         """
         if self.dialect != "mysql":
-            return int(self.query(sql + " RETURNING id", params)[0][0])
-        self.exec(sql, params)
+            return int(self.query(sql, params)[0][0])
+        # MySQL cannot parse RETURNING: strip the clause (and the /*scp:pk=…*/ hint naming the key) exactly
+        # as the runtime's mysql adapter does, then recover the written row with the keyed SELECT.
+        self.exec(re.sub(r"\s+RETURNING\s+.*$", "", sql, flags=re.S | re.I), params)
         return int(self._recover_rows(recover_sql, recover_params)[0][0])
 
     def _recover_rows(self, sql: str, params: tuple) -> List[tuple]:
@@ -182,18 +179,6 @@ def batch_rows(it: int, stable: bool) -> tuple:
     emails = [(f"many{i}@bench.com" if stable else f"many{it}_{i}@bench.com") for i in range(10)]
     names = [f"Many {i}" for i in range(10)]
     return emails, names
-
-
-def _placeholders(n: int) -> str:
-    return ",".join(["?"] * n)
-
-
-def _tuple_in(rows: int, cols: int, dialect: str = "sqlite") -> str:
-    """The composite key-set operand of `(k1,k2) IN …`. PostgreSQL / SQLite take a `(VALUES (…),(…))`
-    constructor; MySQL takes a bare row list `((…),(…))` (the rust SDK cell's `tuple_in` twin)."""
-    one = "(" + _placeholders(cols) + ")"
-    body = ",".join([one] * rows)
-    return "(" + body + ")" if dialect == "mysql" else "(VALUES " + body + ")"
 
 
 # ── nested materialization (fair vs the native cell) ───────────────────────────────────────────────
@@ -270,14 +255,49 @@ class TenantComment:
 _SINK: list = [None]
 
 
-def _materialize_users_posts(db: Db, user_rows: List[tuple]) -> List[User]:
+def _key_param(tuples: List[tuple]) -> str:
+    """One relation level's key set as the ONE param the captured SQL expects. The generated module binds a
+    batched child read's key set as a single JSON array (``json_each(?)`` / ``JSON_TABLE(?)`` /
+    ``UNNEST(?::t[])``), never as N placeholders — so the baseline binds it the same way, or it is running
+    different SQL. A composite key is an array of tuples, a single key an array of scalars."""
+    return json.dumps([t[0] if len(t) == 1 else list(t) for t in tuples])
+
+
+def _batch_params(db: Db, records: List[dict], sql: str) -> tuple:
+    """A batch write's record set as the param(s) the captured statement expects: ONE JSON array on
+    MySQL/SQLite, one array PER COLUMN on PostgreSQL (its ``UNNEST`` form takes column arrays). The payload
+    repeats once per ``?`` — updateMany's SET subquery and its WHERE each read it."""
+    if db.dialect == "postgres":
+        one = [json.dumps([r[c] for r in records]) for c in sorted(records[0])]
+    else:
+        one = [json.dumps(records)]
+    reps = max(1, round(sql.count("?") / len(one)))
+    return tuple(one * reps)
+
+
+# The keyed SELECTs the runtime's MySQL adapter recovers a RETURNING write's rows with
+# (src/scp/makesql/mysql-returning.ts): the conflict key for an upsert, the AUTO_INCREMENT range for an
+# insert, the write's own WHERE for an update. Only MySQL runs them — the others have RETURNING.
+RECOVER_BY_EMAIL = "SELECT id FROM benchmark_users WHERE email = ?"
+RECOVER_BY_LAST_INSERT_ID = "SELECT id FROM benchmark_users WHERE id = LAST_INSERT_ID()"
+RECOVER_BY_ID = "SELECT id FROM benchmark_users WHERE id = ?"
+
+
+def _user_records(it: int, stable: bool) -> List[dict]:
+    emails, names = batch_rows(it, stable)
+    return [{"email": emails[i], "name": names[i]} for i in range(10)]
+
+
+def _patch_records() -> List[dict]:
+    _, names = batch_rows(0, False)
+    return [{"id": i + 1, "name": names[i]} for i in range(10)]
+
+
+def _materialize_users_posts(db: Db, user_rows: List[tuple], child_sql: str) -> List[User]:
     users = [User(r[0], r[1], r[2]) for r in user_rows]
     if not users:
         return users
-    ids = [u.id for u in users]
-    sql = ("SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN (%s) ORDER BY id ASC"
-           % _placeholders(len(ids)))
-    posts = [Post(r[0], r[1], r[2]) for r in db.query(sql, tuple(ids))]
+    posts = [Post(r[0], r[1], r[2]) for r in db.query(child_sql, (_key_param([(u.id,) for u in users]),))]
     by_author: dict = {}
     for p in posts:
         by_author.setdefault(p.author_id, []).append(p)
@@ -286,19 +306,13 @@ def _materialize_users_posts(db: Db, user_rows: List[tuple]) -> List[User]:
     return users
 
 
-def _materialize_users_posts_comments(db: Db, user_rows: List[tuple]) -> List[User]:
+def _materialize_users_posts_comments(db: Db, user_rows: List[tuple], post_sql: str, comment_sql: str) -> List[User]:
     users = [User(r[0], r[1], r[2]) for r in user_rows]
     if not users:
         return users
-    uids = [u.id for u in users]
-    psql = ("SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN (%s) ORDER BY id ASC"
-            % _placeholders(len(uids)))
-    posts = [Post(r[0], r[1], r[2]) for r in db.query(psql, tuple(uids))]
+    posts = [Post(r[0], r[1], r[2]) for r in db.query(post_sql, (_key_param([(u.id,) for u in users]),))]
     if posts:
-        pids = [p.id for p in posts]
-        csql = ("SELECT id, body, post_id FROM benchmark_comments WHERE post_id IN (%s) ORDER BY id ASC"
-                % _placeholders(len(pids)))
-        comments = [Comment(r[0], r[1], r[2]) for r in db.query(csql, tuple(pids))]
+        comments = [Comment(r[0], r[1], r[2]) for r in db.query(comment_sql, (_key_param([(p.id,) for p in posts]),))]
         by_post: dict = {}
         for c in comments:
             by_post.setdefault(c.post_id, []).append(c)
@@ -312,27 +326,15 @@ def _materialize_users_posts_comments(db: Db, user_rows: List[tuple]) -> List[Us
     return users
 
 
-def _materialize_composite(db: Db) -> List[TenantUser]:
-    tusers = [TenantUser(r[0], r[1], r[2]) for r in db.query(
-        "SELECT tenant_id, user_id, name FROM benchmark_tenant_users WHERE tenant_id = ? ORDER BY user_id ASC",
-        (1,))]
+def _materialize_composite(db: Db, sql: List[str]) -> List[TenantUser]:
+    tusers = [TenantUser(r[0], r[1], r[2]) for r in db.query(sql[0])]
     if not tusers:
         return tusers
-    pbody = _tuple_in(len(tusers), 2, db.dialect)
-    psql = ("SELECT tenant_id, post_id, user_id, title FROM benchmark_tenant_posts "
-            "WHERE (tenant_id, user_id) IN " + pbody)
-    pparams: list = []
-    for u in tusers:
-        pparams += [u.tenant_id, u.user_id]
-    tposts = [TenantPost(r[0], r[1], r[2], r[3]) for r in db.query(psql, tuple(pparams))]
+    ukeys = _key_param([(u.tenant_id, u.user_id) for u in tusers])
+    tposts = [TenantPost(r[0], r[1], r[2], r[3]) for r in db.query(sql[1], (ukeys,))]
     if tposts:
-        cbody = _tuple_in(len(tposts), 2, db.dialect)
-        csql = ("SELECT tenant_id, comment_id, post_id, body FROM benchmark_tenant_comments "
-                "WHERE (tenant_id, post_id) IN " + cbody)
-        cparams: list = []
-        for p in tposts:
-            cparams += [p.tenant_id, p.post_id]
-        tcomments = [TenantComment(r[0], r[1], r[2], r[3]) for r in db.query(csql, tuple(cparams))]
+        pkeys = _key_param([(p.tenant_id, p.post_id) for p in tposts])
+        tcomments = [TenantComment(r[0], r[1], r[2], r[3]) for r in db.query(sql[2], (pkeys,))]
         by_post: dict = {}
         for c in tcomments:
             by_post.setdefault((c.tenant_id, c.post_id), []).append(c)
@@ -346,109 +348,68 @@ def _materialize_composite(db: Db) -> List[TenantUser]:
     return tusers
 
 
-def _update_many(db: Db) -> None:
-    _, names = batch_rows(0, False)
-    whens = ""
-    params: list = []
-    for k in range(10):
-        whens += " WHEN ? THEN ?"
-        params += [k + 1, names[k]]
-    params += [k + 1 for k in range(10)]
-    sql = "UPDATE benchmark_users SET name = CASE id%s END WHERE id IN (%s)" % (whens, _placeholders(10))
-    db.exec(sql, tuple(params))
-
-
-def _batch_insert(db: Db, emails: List[str], names: List[str], conflict: str) -> None:
-    tuples = ",".join(["(?, ?)"] * 10)
-    params: list = []
-    for k in range(10):
-        params += [emails[k], names[k]]
-    db.exec("INSERT INTO benchmark_users (email, name) VALUES " + tuples + conflict, tuple(params))
-
-
 # ── the 19 ops (native-cell order). Fixed inputs mirror the python native cell; mutating ops vary their
 #    UNIQUE column by it. Read LIMIT/ORDER shapes match the ops SSoT (== the native generated SQL). ────
-def run_op(db: Db, op: str, it: int) -> None:
+def run_op(db: Db, op: str, it: int, sql: List[str]) -> None:
+    """Run ONE op, issuing the statements the GENERATED module issues for this dialect (``sql`` =
+    ``setup["ops"][op]``, captured at the runtime seam). The baseline hand-writes no SQL: the report
+    divides native by sdk, which only isolates the runtime's cost if both send the DB the same statements.
+    What stays hand-written is what a raw-driver user writes: param binding, decode, grouping children into
+    parents, and the transaction bracket."""
     if op == "findAll":
-        db.query("SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100")
+        db.query(sql[0])
     elif op == "filterPaginateSort":
-        db.query("SELECT id, title, content, published, author_id, created_at FROM benchmark_posts "
-                 "WHERE published = ? ORDER BY created_at DESC LIMIT 20 OFFSET 10", (1,))
+        db.query(sql[0], (1,))
     elif op == "findFirst":
-        db.query("SELECT id, email, name FROM benchmark_users WHERE name LIKE ? LIMIT 1", ("User%",))
+        db.query(sql[0], ("User%",))
     elif op == "findUnique":
-        db.query("SELECT id, email, name FROM benchmark_users WHERE email = ? LIMIT 1", ("user1@example.com",))
+        db.query(sql[0], ("user1@example.com",))
     elif op == "nestedFindAll":
-        _SINK[0] = _materialize_users_posts(db, db.query("SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100"))
+        _SINK[0] = _materialize_users_posts(db, db.query(sql[0]), sql[1])
     elif op == "nestedFindFirst":
-        _SINK[0] = _materialize_users_posts(db, db.query("SELECT id, email, name FROM benchmark_users WHERE name LIKE ? LIMIT 1", ("User%",)))
+        _SINK[0] = _materialize_users_posts(db, db.query(sql[0], ("User%",)), sql[1])
     elif op == "nestedFindUnique":
-        _SINK[0] = _materialize_users_posts(db, db.query("SELECT id, email, name FROM benchmark_users WHERE email = ? LIMIT 1", ("user1@example.com",)))
+        _SINK[0] = _materialize_users_posts(db, db.query(sql[0], ("user1@example.com",)), sql[1])
     elif op == "nestedRelations":
-        users = db.query("SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100")
-        _SINK[0] = _materialize_users_posts_comments(db, users)
+        _SINK[0] = _materialize_users_posts_comments(db, db.query(sql[0]), sql[1], sql[2])
     elif op == "compositeRelations":
-        _SINK[0] = _materialize_composite(db)
+        _SINK[0] = _materialize_composite(db, sql)
     elif op == "create":
-        db.exec("INSERT INTO benchmark_users (email, name) VALUES (?, ?)", (f"new{it}@bench.com", "New"))
+        db.exec(sql[0], (f"new{it}@bench.com", "New"))
     elif op == "update":
-        db.exec("UPDATE benchmark_users SET name = ? WHERE id = ?", ("Updated 1", 1))
+        db.exec(sql[0], ("Updated 1", 1))
     elif op == "upsert":
-        # The native module declares ` RETURNING id` here, so the baseline reads the id back too.
-        _SINK[0] = db.write_returning_id(
-            "INSERT INTO benchmark_users (email, name) VALUES (?, ?) " + db.upsert_tail("email, name"),
-            ("user1@example.com", "Upserted One"),
-            "SELECT id FROM benchmark_users WHERE email = ?",  # the runtime's conflict-key recovery
-            ("user1@example.com",),
-        )
+        # The captured statement declares ` RETURNING id`, so the baseline reads the id back too.
+        _SINK[0] = db.write_returning_id(sql[0], ("user1@example.com", "Upserted One"),
+                                        RECOVER_BY_EMAIL, ("user1@example.com",))
     elif op == "createMany":
-        emails, names = batch_rows(it, False)
-        _batch_insert(db, emails, names, "")
+        db.exec(sql[0], _batch_params(db, _user_records(it, False), sql[0]))
     elif op == "upsertMany":
-        # The SAME 10 records the native module upserts (``_user_rows(it, stable=True)``).
-        emails, names = batch_rows(it, True)
-        _batch_insert(db, emails, names, db.upsert_tail("email, name"))
+        # The SAME 10 records the native module upserts.
+        db.exec(sql[0], _batch_params(db, _user_records(it, True), sql[0]))
     elif op == "updateMany":
-        _update_many(db)
+        db.exec(sql[0], _batch_params(db, _patch_records(), sql[0]))
     elif op == "nestedCreate":
         db.exec_script("BEGIN")
-        uid = db.write_returning_id(
-            "INSERT INTO benchmark_users (email, name) VALUES (?, ?)",
-            (f"nc{it}@bench.com", "NC"),
-            "SELECT id FROM benchmark_users WHERE id = LAST_INSERT_ID()",  # AUTO_INCREMENT recovery
-        )
-        db.exec("INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)", (uid, "NC Post"))
+        uid = db.write_returning_id(sql[0], (f"nc{it}@bench.com", "NC"), RECOVER_BY_LAST_INSERT_ID)
+        db.exec(sql[1], (uid, "NC Post"))
         db.exec_script("COMMIT")
     elif op == "nestedUpsert":
         db.exec_script("BEGIN")
-        uid = db.write_returning_id(
-            "INSERT INTO benchmark_users (email, name) VALUES (?, ?) " + db.upsert_tail("email, name"),
-            ("user1@example.com", "NUp"),
-            "SELECT id FROM benchmark_users WHERE email = ?",
-            ("user1@example.com",),
-        )
-        db.exec("INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)", (uid, "NUp Post"))
+        uid = db.write_returning_id(sql[0], ("user1@example.com", "NUp"), RECOVER_BY_EMAIL, ("user1@example.com",))
+        db.exec(sql[1], (uid, "NUp Post"))
         db.exec_script("COMMIT")
     elif op == "nestedUpdate":
         db.exec_script("BEGIN")
-        # The native module chains the dependent UPDATE off the id the first UPDATE returned; taking the id
-        # from the input instead would skip a statement's worth of work.
-        uid = db.write_returning_id(
-            "UPDATE benchmark_users SET name = ? WHERE id = ?",
-            ("NU", 1),
-            "SELECT id FROM benchmark_users WHERE id = ?",  # recovered by the write's own WHERE
-            (1,),
-        )
-        db.exec("UPDATE benchmark_posts SET title = ? WHERE author_id = ?", ("NU Post", uid))
+        # The generated runner chains the dependent UPDATE off the id the first UPDATE returned; taking the
+        # id from the input instead would skip a statement's worth of work.
+        uid = db.write_returning_id(sql[0], ("NU", 1), RECOVER_BY_ID, (1,))
+        db.exec(sql[1], ("NU Post", uid))
         db.exec_script("COMMIT")
     elif op == "delete":
         db.exec_script("BEGIN")
-        uid = db.write_returning_id(
-            "INSERT INTO benchmark_users (email, name) VALUES (?, ?)",
-            (f"del{it}@bench.com", "Del"),
-            "SELECT id FROM benchmark_users WHERE id = LAST_INSERT_ID()",
-        )
-        db.exec("DELETE FROM benchmark_users WHERE id = ?", (uid,))
+        uid = db.write_returning_id(sql[0], (f"del{it}@bench.com", "Del"), RECOVER_BY_LAST_INSERT_ID)
+        db.exec(sql[1], (uid,))
         db.exec_script("COMMIT")
     else:
         raise ValueError(f"unknown op {op!r}")
@@ -465,33 +426,35 @@ TX_STMT_COUNTS = {"nestedCreate": 4, "nestedUpsert": 4, "nestedUpdate": 4, "dele
 
 def _measure(dialect: str, reps: int, warmup: int) -> None:
     db = open_db(dialect)
+    ops = lm_bench_setup.load(dialect)["ops"]
     print("cell,dialect,op,iter,us,rows")
     for op in OPS:
         seed(db)  # re-seed before each op (matches the native cell)
         # One UN-TIMED probe per op measures the rows it moves — the report's per-row denominator (#170).
         db.rows = 0
-        run_op(db, op, 0)
+        run_op(db, op, 0, ops[op])
         rows = db.rows
         for it in range(warmup):
-            run_op(db, op, it + 1)
+            run_op(db, op, it + 1, ops[op])
         for it in range(reps):
             # Unique iteration id: the probe took 0, so warmup/timed start at 1.
             g = it + warmup + 1
             t = time.perf_counter_ns()
-            run_op(db, op, g)
+            run_op(db, op, g, ops[op])
             us = (time.perf_counter_ns() - t) // 1000
             print(f"sdk,{dialect},{op},{it},{us},{rows}")
 
 
 def _safety(dialect: str) -> None:
     db = open_db(dialect)
+    ops = lm_bench_setup.load(dialect)["ops"]
     expected = {**RELATION_QUERY_COUNTS, **BATCH_QUERY_COUNTS, **TX_STMT_COUNTS}
     print("op                    statements  rows")
     for op in OPS:
         seed(db)
         db.count = 0
         db.rows = 0
-        run_op(db, op, 0)
+        run_op(db, op, 0, ops[op])
         got, rows = db.count, db.rows
         want = expected.get(op)
         mark = "ok" if want is None or got == want else f"STATEMENT-COUNT MISMATCH (want {want})"
