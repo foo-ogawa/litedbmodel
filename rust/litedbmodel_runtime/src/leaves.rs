@@ -116,7 +116,10 @@ impl crate::driver::PreparedStatement for TxPrepared<'_, '_> {
     fn all(&mut self, params: &[Value]) -> Result<Vec<WireValue>, crate::errors::SqlFailure> {
         self.driver.tx.borrow_mut().execute(&self.sql, params)
     }
-    fn run(&mut self, params: &[Value]) -> Result<crate::driver::RunInfo, crate::errors::SqlFailure> {
+    fn run(
+        &mut self,
+        params: &[Value],
+    ) -> Result<crate::driver::RunInfo, crate::errors::SqlFailure> {
         self.driver.tx.borrow_mut().run(&self.sql, params)
     }
 }
@@ -126,14 +129,21 @@ impl Driver for TxDriver<'_> {
         self.dialect
     }
     fn prepare(&self, sql: &str) -> Box<dyn crate::driver::PreparedStatement + '_> {
-        Box::new(TxPrepared { driver: self, sql: sql.to_string() })
+        Box::new(TxPrepared {
+            driver: self,
+            sql: sql.to_string(),
+        })
     }
     // A covered tx body never opens a NESTED transaction (the ambient IS the tx); fail closed rather
     // than silently begin a second BEGIN on the same connection.
-    fn begin_tx(&self) -> Result<Box<dyn crate::exec_context::TxConnection + '_>, crate::errors::SqlFailure> {
+    fn begin_tx(
+        &self,
+    ) -> Result<Box<dyn crate::exec_context::TxConnection + '_>, crate::errors::SqlFailure> {
         Err(nested_tx_unsupported())
     }
-    fn acquire_tx(&self) -> Result<Box<dyn crate::exec_context::TxConnection + '_>, crate::errors::SqlFailure> {
+    fn acquire_tx(
+        &self,
+    ) -> Result<Box<dyn crate::exec_context::TxConnection + '_>, crate::errors::SqlFailure> {
         Err(nested_tx_unsupported())
     }
 }
@@ -158,11 +168,17 @@ pub fn with_ambient_transaction<R>(
     body: impl FnOnce() -> Result<R, BehaviorError>,
 ) -> Result<R, BehaviorError> {
     let tx = driver.begin_tx().map_err(sql_failure_to_behavior_error)?; // BEGIN issued on the owned connection
-    let tx_driver = TxDriver { tx: std::cell::RefCell::new(tx), dialect: driver.dialect() };
+    let tx_driver = TxDriver {
+        tx: std::cell::RefCell::new(tx),
+        dialect: driver.dialect(),
+    };
     let result = with_ambient_driver(&tx_driver, body);
     let tx = tx_driver.tx.into_inner();
     match result {
-        Ok(r) => tx.commit().map(|_| r).map_err(sql_failure_to_behavior_error),
+        Ok(r) => tx
+            .commit()
+            .map(|_| r)
+            .map_err(sql_failure_to_behavior_error),
         Err(e) => {
             let _ = tx.rollback(); // best-effort; surface the ORIGINAL body error
             Err(e)
@@ -189,7 +205,12 @@ fn wire_to_value(w: &WireValue) -> Value {
         }
         WireValue::Bool(b) => Value::Bool(*b),
         WireValue::Null => Value::Null,
-        WireValue::Row(r) => Value::Obj(r.entries.iter().map(|(k, v)| (k.clone(), wire_to_value(v))).collect()),
+        WireValue::Row(r) => Value::Obj(
+            r.entries
+                .iter()
+                .map(|(k, v)| (k.clone(), wire_to_value(v)))
+                .collect(),
+        ),
         WireValue::List(l) => Value::Arr(l.items.iter().map(wire_to_value).collect()),
     }
 }
@@ -227,10 +248,18 @@ fn take_port(payload: &mut WireRow, name: &str) -> Result<WireValue, BehaviorErr
 fn port_mismatch(name: &str, expected: &str, got: &WireValue) -> BehaviorError {
     let actual = match got.as_string() {
         Probe::Got(_) => "S".to_string(),
-        Probe::Wrong { actual_wire_type, .. } | Probe::Null { actual_wire_type, .. } => actual_wire_type,
+        Probe::Wrong {
+            actual_wire_type, ..
+        }
+        | Probe::Null {
+            actual_wire_type, ..
+        } => actual_wire_type,
         Probe::Absent => "ABSENT".to_string(),
     };
-    BehaviorError::new("LEAF_PORT", format!("scp leaf: port `{name}` expected a wire {expected}, got {actual}"))
+    BehaviorError::new(
+        "LEAF_PORT",
+        format!("scp leaf: port `{name}` expected a wire {expected}, got {actual}"),
+    )
 }
 
 /// A `bool` port (`write` / `returning` / `bigint` / `single`).
@@ -280,9 +309,12 @@ fn port_relation_guard(payload: &mut WireRow) -> Result<Option<RelationGuard>, B
     };
     let field = |name: &str| row.entries.iter().find(|(k, _)| k == name).map(|(_, v)| v);
     let limit = match field("limit") {
-        Some(WireValue::Num(n)) => n
-            .parse::<i64>()
-            .map_err(|_| BehaviorError::new("LEAF_PORT", format!("scp leaf: port `guard.limit` is not an integer row cap: {n}")))?,
+        Some(WireValue::Num(n)) => n.parse::<i64>().map_err(|_| {
+            BehaviorError::new(
+                "LEAF_PORT",
+                format!("scp leaf: port `guard.limit` is not an integer row cap: {n}"),
+            )
+        })?,
         Some(other) => return Err(port_mismatch("guard.limit", "number", other)),
         None => return Err(port_mismatch("guard.limit", "number", &WireValue::Null)),
     };
@@ -295,7 +327,11 @@ fn port_relation_guard(payload: &mut WireRow) -> Result<Option<RelationGuard>, B
         Some(WireValue::Str(s)) => Some(s.clone()),
         _ => None,
     };
-    Ok(Some(RelationGuard { limit, model, relation }))
+    Ok(Some(RelationGuard {
+        limit,
+        model,
+        relation,
+    }))
 }
 
 /// A `{arr:'string'}` port — the ordered key-column TUPLE (`col` / `pk` / `fk`). Every element must be
@@ -363,7 +399,10 @@ pub fn execute_sql(mut payload: WireRow) -> Result<WireValue, BehaviorError> {
             items: vec![WireValue::Row(WireRow {
                 entries: vec![
                     ("changes".to_string(), WireValue::int(info.changes)),
-                    ("lastInsertRowid".to_string(), WireValue::int(info.last_insert_rowid)),
+                    (
+                        "lastInsertRowid".to_string(),
+                        WireValue::int(info.last_insert_rowid),
+                    ),
                 ],
             })],
         }))
@@ -439,8 +478,19 @@ pub fn group_children(mut payload: WireRow) -> Result<WireValue, BehaviorError> 
     let parents_port = port_list(&mut payload, "parents")?;
     let pk_port = port_strings(&mut payload, "pk")?;
     let single = port_bool(&mut payload, "single")?;
-    let (children, fk, into, parents, pk): (&[WireValue], &[String], &str, &[WireValue], &[String]) =
-        (&children_port, &fk_port, &into_port, &parents_port, &pk_port);
+    let (children, fk, into, parents, pk): (
+        &[WireValue],
+        &[String],
+        &str,
+        &[WireValue],
+        &[String],
+    ) = (
+        &children_port,
+        &fk_port,
+        &into_port,
+        &parents_port,
+        &pk_port,
+    );
     // The grouping core keys DIRECTLY on `WireValue` (no `WireValue`↔`Value` conversion). The buckets
     // hold REFERENCES into `children` — no per-child clone; a matched child is cloned exactly once, when
     // `attach_to_parent` nests it into a parent's output.
@@ -463,7 +513,9 @@ pub fn group_children(mut payload: WireRow) -> Result<WireValue, BehaviorError> 
                 WireValue::Row(r) => {
                     let mut entries = r.entries.clone();
                     match into_pos {
-                        Some(i) if entries.get(i).is_some_and(|(k, _)| k == into) => entries[i].1 = nested,
+                        Some(i) if entries.get(i).is_some_and(|(k, _)| k == into) => {
+                            entries[i].1 = nested
+                        }
                         _ => entries.push((into.to_string(), nested)),
                     }
                     WireValue::Row(WireRow { entries })
@@ -481,7 +533,12 @@ mod tests {
     use super::*;
 
     fn wrow(pairs: &[(&str, WireValue)]) -> WireValue {
-        WireValue::Row(WireRow { entries: pairs.iter().map(|(k, v)| (k.to_string(), v.clone())).collect() })
+        WireValue::Row(WireRow {
+            entries: pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.clone()))
+                .collect(),
+        })
     }
     fn items(w: &WireValue) -> Vec<WireValue> {
         match w {
@@ -491,7 +548,9 @@ mod tests {
     }
     // The generic-wire PAYLOAD a covered runner hands a leaf: the node's ports as named fields.
     fn payload(ports: Vec<(&str, WireValue)>) -> WireRow {
-        WireRow { entries: ports.into_iter().map(|(k, v)| (k.to_string(), v)).collect() }
+        WireRow {
+            entries: ports.into_iter().map(|(k, v)| (k.to_string(), v)).collect(),
+        }
     }
     fn wlist(items: Vec<WireValue>) -> WireValue {
         WireValue::List(WireList { items })
@@ -506,13 +565,22 @@ mod tests {
     #[test]
     fn tx_commits_on_ok_and_rolls_back_on_err() {
         use crate::driver::SqliteDriver;
-        let d = SqliteDriver::in_memory(&["CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)".to_string()]).unwrap();
+        let d = SqliteDriver::in_memory(&[
+            "CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)".to_string()
+        ])
+        .unwrap();
         let ins = |id: i64, v: &str| -> Result<(), BehaviorError> {
             execute_sql(payload(vec![
                 ("bigint", WireValue::Bool(false)),
-                ("params", wlist(vec![WireValue::int(id), WireValue::Str(v.to_string())])),
+                (
+                    "params",
+                    wlist(vec![WireValue::int(id), WireValue::Str(v.to_string())]),
+                ),
                 ("returning", WireValue::Bool(false)),
-                ("sql", WireValue::Str("INSERT INTO t (id, v) VALUES (?, ?)".to_string())),
+                (
+                    "sql",
+                    WireValue::Str("INSERT INTO t (id, v) VALUES (?, ?)".to_string()),
+                ),
                 ("write", WireValue::Bool(true)),
             ]))
             .map(|_| ())
@@ -522,7 +590,8 @@ mod tests {
             // The driver materializes rows DIRECTLY as `WireValue::Row`; the COUNT cell is a `Num` (raw
             // decimal text). Match the wire shape (WireValue derives no Debug — assert structurally).
             match &rows[0] {
-                WireValue::Row(r) => match r.entries.iter().find(|(k, _)| k == "c").map(|(_, v)| v) {
+                WireValue::Row(r) => match r.entries.iter().find(|(k, _)| k == "c").map(|(_, v)| v)
+                {
                     Some(WireValue::Num(n)) => n.parse().expect("count cell is an integer"),
                     _ => panic!("unexpected count cell"),
                 },
@@ -537,7 +606,11 @@ mod tests {
             Ok(())
         })
         .unwrap();
-        assert_eq!(row_count(&d), 2, "a committed tx must persist all its writes");
+        assert_eq!(
+            row_count(&d),
+            2,
+            "a committed tx must persist all its writes"
+        );
 
         // Err body: insert row 3 then fail mid-tx → ROLLBACK → row 3 must NOT persist (still 2 rows).
         let outcome: Result<(), BehaviorError> = with_ambient_transaction(&d, || {
@@ -545,13 +618,21 @@ mod tests {
             Err(BehaviorError::new("BOOM", "mid-tx failure")) // …then the body errors → rollback
         });
         assert!(outcome.is_err(), "the body error must propagate");
-        assert_eq!(row_count(&d), 2, "a rolled-back tx must leave NO rows committed (row 3 gone)");
+        assert_eq!(
+            row_count(&d),
+            2,
+            "a rolled-back tx must leave NO rows committed (row 3 gone)"
+        );
     }
 
     // Single-key pluck emits a FLAT scalar key array (json_each scalar `value`).
     #[test]
     fn pluck_single_key_is_flat_scalars() {
-        let rows = vec![wrow(&[("id", WireValue::int(2))]), wrow(&[("id", WireValue::int(1))]), wrow(&[("id", WireValue::int(2))])];
+        let rows = vec![
+            wrow(&[("id", WireValue::int(2))]),
+            wrow(&[("id", WireValue::int(1))]),
+            wrow(&[("id", WireValue::int(2))]),
+        ];
         let out = pluck_keys(payload(vec![("col", cols(&["id"])), ("rows", wlist(rows))])).unwrap();
         let ks = items(&out);
         assert_eq!(ks.len(), 2); // deduped, order preserved
@@ -563,11 +644,24 @@ mod tests {
     #[test]
     fn pluck_composite_key_is_tuples() {
         let rows = vec![
-            wrow(&[("tenant_id", WireValue::int(1)), ("user_id", WireValue::int(9))]),
-            wrow(&[("tenant_id", WireValue::int(1)), ("user_id", WireValue::int(9))]), // dup tuple
-            wrow(&[("tenant_id", WireValue::int(1)), ("user_id", WireValue::int(8))]),
+            wrow(&[
+                ("tenant_id", WireValue::int(1)),
+                ("user_id", WireValue::int(9)),
+            ]),
+            wrow(&[
+                ("tenant_id", WireValue::int(1)),
+                ("user_id", WireValue::int(9)),
+            ]), // dup tuple
+            wrow(&[
+                ("tenant_id", WireValue::int(1)),
+                ("user_id", WireValue::int(8)),
+            ]),
         ];
-        let out = pluck_keys(payload(vec![("col", cols(&["tenant_id", "user_id"])), ("rows", wlist(rows))])).unwrap();
+        let out = pluck_keys(payload(vec![
+            ("col", cols(&["tenant_id", "user_id"])),
+            ("rows", wlist(rows)),
+        ]))
+        .unwrap();
         let ks = items(&out);
         assert_eq!(ks.len(), 2); // deduped on the whole tuple
         assert_eq!(items(&ks[0]).len(), 2); // each key is a 2-element tuple
@@ -579,12 +673,26 @@ mod tests {
     #[test]
     fn group_composite_is_not_cartesian() {
         let parents = vec![
-            wrow(&[("tenant_id", WireValue::int(1)), ("user_id", WireValue::int(9))]),
-            wrow(&[("tenant_id", WireValue::int(1)), ("user_id", WireValue::int(8))]),
+            wrow(&[
+                ("tenant_id", WireValue::int(1)),
+                ("user_id", WireValue::int(9)),
+            ]),
+            wrow(&[
+                ("tenant_id", WireValue::int(1)),
+                ("user_id", WireValue::int(8)),
+            ]),
         ];
         let children = vec![
-            wrow(&[("tenant_id", WireValue::int(1)), ("user_id", WireValue::int(9)), ("title", WireValue::Str("p9".into()))]),
-            wrow(&[("tenant_id", WireValue::int(1)), ("user_id", WireValue::int(8)), ("title", WireValue::Str("p8".into()))]),
+            wrow(&[
+                ("tenant_id", WireValue::int(1)),
+                ("user_id", WireValue::int(9)),
+                ("title", WireValue::Str("p9".into())),
+            ]),
+            wrow(&[
+                ("tenant_id", WireValue::int(1)),
+                ("user_id", WireValue::int(8)),
+                ("title", WireValue::Str("p8".into())),
+            ]),
         ];
         let out = group_children(payload(vec![
             ("children", wlist(children)),
@@ -598,11 +706,20 @@ mod tests {
         let ps = items(&out);
         for p in &ps {
             let posts = match p {
-                WireValue::Row(r) => r.entries.iter().find(|(k, _)| k == "posts").map(|(_, v)| v.clone()).unwrap(),
+                WireValue::Row(r) => r
+                    .entries
+                    .iter()
+                    .find(|(k, _)| k == "posts")
+                    .map(|(_, v)| v.clone())
+                    .unwrap(),
                 _ => panic!(),
             };
             // each parent nests EXACTLY its own one matching post (cartesian would nest both).
-            assert_eq!(items(&posts).len(), 1, "composite grouping must not be cartesian");
+            assert_eq!(
+                items(&posts).len(),
+                1,
+                "composite grouping must not be cartesian"
+            );
         }
     }
 
@@ -625,7 +742,10 @@ mod tests {
                 ("bigint", WireValue::Bool(false)),
                 ("params", wlist(vec![])),
                 ("returning", WireValue::Bool(false)),
-                ("sql", WireValue::Str("SELECT id, v FROM t ORDER BY id".to_string())),
+                (
+                    "sql",
+                    WireValue::Str("SELECT id, v FROM t ORDER BY id".to_string()),
+                ),
                 ("write", WireValue::Bool(false)),
             ];
             if let Some(g) = guard {
@@ -656,7 +776,11 @@ mod tests {
 
         // 3 rows ≤ cap 3 ⇒ no failure, and the rows come back untouched.
         match read(Some(cap(3))) {
-            Ok(out) => assert_eq!(items(&out).len(), 3, "a batch within its cap returns its rows"),
+            Ok(out) => assert_eq!(
+                items(&out).len(),
+                3,
+                "a batch within its cap returns its rows"
+            ),
             Err(e) => panic!("a batch within its cap must pass: {}", e.message),
         }
 
@@ -680,16 +804,34 @@ mod tests {
         // absent `rows`
         let e = failure(pluck_keys(payload(vec![("col", cols(&["id"]))])));
         assert_eq!(e.code, "LEAF_PORT");
-        assert!(e.message.contains("`rows`") && e.message.contains("absent"), "{}", e.message);
+        assert!(
+            e.message.contains("`rows`") && e.message.contains("absent"),
+            "{}",
+            e.message
+        );
 
         // `rows` present but a NUMBER, not a list — the failure names the actual wire tag.
-        let e = failure(pluck_keys(payload(vec![("col", cols(&["id"])), ("rows", WireValue::int(7))])));
+        let e = failure(pluck_keys(payload(vec![
+            ("col", cols(&["id"])),
+            ("rows", WireValue::int(7)),
+        ])));
         assert_eq!(e.code, "LEAF_PORT");
-        assert!(e.message.contains("`rows`") && e.message.contains("got N"), "{}", e.message);
+        assert!(
+            e.message.contains("`rows`") && e.message.contains("got N"),
+            "{}",
+            e.message
+        );
 
         // a key-column tuple whose element is not a column NAME.
-        let e = failure(pluck_keys(payload(vec![("col", wlist(vec![WireValue::int(1)])), ("rows", wlist(vec![]))])));
+        let e = failure(pluck_keys(payload(vec![
+            ("col", wlist(vec![WireValue::int(1)])),
+            ("rows", wlist(vec![])),
+        ])));
         assert_eq!(e.code, "LEAF_PORT");
-        assert!(e.message.contains("`col`") && e.message.contains("string element"), "{}", e.message);
+        assert!(
+            e.message.contains("`col`") && e.message.contains("string element"),
+            "{}",
+            e.message
+        );
     }
 }

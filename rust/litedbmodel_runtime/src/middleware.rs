@@ -915,7 +915,10 @@ mod tests {
         )
         .unwrap();
         // The middleware rewrote the bound value before it hit the driver.
-        assert!(wire_has(&rows, "rewritten"), "rows must contain the rewritten value");
+        assert!(
+            wire_has(&rows, "rewritten"),
+            "rows must contain the rewritten value"
+        );
     }
 
     #[test]
@@ -948,7 +951,10 @@ mod tests {
             &StatementIntent::read(),
         )
         .unwrap();
-        assert!(wire_has(&real, "0"), "the real count must be 0 (DB bypassed)");
+        assert!(
+            wire_has(&real, "0"),
+            "the real count must be 0 (DB bypassed)"
+        );
     }
 
     #[test]

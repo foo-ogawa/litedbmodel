@@ -6,8 +6,8 @@ pub mod connection_routing;
 pub mod dialect;
 pub mod driver;
 pub mod errors;
-pub mod grouping;
 pub mod exec_context;
+pub mod grouping;
 pub mod leaves;
 pub mod middleware;
 pub mod sql_render;
@@ -67,17 +67,19 @@ pub use grouping::{attach_to_parent, dedupe_key_tuples, group_by_key, key_identi
 // The op-agnostic wire LEAVES (#141/#164) — the THREE transport symbols the native codegen calls
 // directly (`execute_sql`/`pluck_keys`/`group_children`, leaves.ts `LEAF_TRANSPORT_SYMBOLS`), plus
 // the ambient-driver scope the covered runner resolves them against. They consume the grouping CORE.
-pub use leaves::{execute_sql, group_children, pluck_keys, with_ambient_driver, with_ambient_transaction};
+pub use leaves::{
+    execute_sql, group_children, pluck_keys, with_ambient_driver, with_ambient_transaction,
+};
 // The BC-OWNED shared wire + error-value types (#164/#165 `--shared-types-import`) the leaves BUILD
 // and the generated covered runners de-box (stand-in for post-#165 bc regen — see `wire.rs`).
-pub use wire::{
-    BehaviorError, ErrorDetail, ErrorKind, NumProbe, Probe, WireList, WireRow, WireValue,
-};
 pub use sql_render::render_placeholders;
 pub use tx_options::{
     begin_statements, check_write_allowed, is_connection_error, is_retryable_tx_error,
     isolation_prelude, write_in_read_only, write_outside_transaction, Dialect as TxDialect,
     IsolationLevel, TransactionOptions,
+};
+pub use wire::{
+    BehaviorError, ErrorDetail, ErrorKind, NumProbe, Probe, WireList, WireRow, WireValue,
 };
 
 /// The bc runtime value used by native driver, wire, parameter, and relation primitives.

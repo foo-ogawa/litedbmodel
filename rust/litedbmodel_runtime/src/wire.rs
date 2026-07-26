@@ -59,11 +59,23 @@ pub struct BehaviorError {
 
 impl BehaviorError {
     pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
-        BehaviorError { code: code.into(), message: message.into(), detail: None }
+        BehaviorError {
+            code: code.into(),
+            message: message.into(),
+            detail: None,
+        }
     }
     /// The same failure carrying the leaf's structured Error Value.
-    pub fn with_detail(code: impl Into<String>, message: impl Into<String>, detail: ErrorDetail) -> Self {
-        BehaviorError { code: code.into(), message: message.into(), detail: Some(Box::new(detail)) }
+    pub fn with_detail(
+        code: impl Into<String>,
+        message: impl Into<String>,
+        detail: ErrorDetail,
+    ) -> Self {
+        BehaviorError {
+            code: code.into(),
+            message: message.into(),
+            detail: Some(Box::new(detail)),
+        }
     }
     /// The stable failure code (byte-equal to run_behavior) WITHOUT a bc-runtime type.
     pub fn code(&self) -> &str {
@@ -88,15 +100,30 @@ impl std::error::Error for BehaviorError {}
 // offending value stringified. Concrete enums — no boxed runtime value.
 pub enum Probe<T> {
     Got(T),
-    Wrong { actual_wire_type: String, raw_value: String },
-    Null { actual_wire_type: String, raw_value: String },
+    Wrong {
+        actual_wire_type: String,
+        raw_value: String,
+    },
+    Null {
+        actual_wire_type: String,
+        raw_value: String,
+    },
     Absent,
 }
 
 pub enum NumProbe {
-    Got { raw: String, actual_wire_type: String },
-    Wrong { actual_wire_type: String, raw_value: String },
-    Null { actual_wire_type: String, raw_value: String },
+    Got {
+        raw: String,
+        actual_wire_type: String,
+    },
+    Wrong {
+        actual_wire_type: String,
+        raw_value: String,
+    },
+    Null {
+        actual_wire_type: String,
+        raw_value: String,
+    },
     Absent,
 }
 
@@ -176,7 +203,10 @@ impl WireValue {
 
 impl WireRow {
     fn get(&self, field: &str) -> Option<&WireValue> {
-        self.entries.iter().find(|(k, _)| k.as_str() == field).map(|(_, v)| v)
+        self.entries
+            .iter()
+            .find(|(k, _)| k.as_str() == field)
+            .map(|(_, v)| v)
     }
     pub fn keys(&self) -> Vec<String> {
         self.entries.iter().map(|(k, _)| k.clone()).collect()
@@ -228,39 +258,72 @@ fn probe_string_at(v: Option<&WireValue>) -> Probe<String> {
     match v {
         None => Probe::Absent,
         Some(WireValue::Str(s)) => Probe::Got(s.clone()),
-        Some(WireValue::Null) => Probe::Null { actual_wire_type: "NULL".to_string(), raw_value: "null".to_string() },
-        Some(o) => Probe::Wrong { actual_wire_type: o.tag().to_string(), raw_value: o.raw() },
+        Some(WireValue::Null) => Probe::Null {
+            actual_wire_type: "NULL".to_string(),
+            raw_value: "null".to_string(),
+        },
+        Some(o) => Probe::Wrong {
+            actual_wire_type: o.tag().to_string(),
+            raw_value: o.raw(),
+        },
     }
 }
 fn probe_number_at(v: Option<&WireValue>) -> NumProbe {
     match v {
         None => NumProbe::Absent,
-        Some(WireValue::Num(s)) => NumProbe::Got { raw: s.clone(), actual_wire_type: "N".to_string() },
-        Some(WireValue::Null) => NumProbe::Null { actual_wire_type: "NULL".to_string(), raw_value: "null".to_string() },
-        Some(o) => NumProbe::Wrong { actual_wire_type: o.tag().to_string(), raw_value: o.raw() },
+        Some(WireValue::Num(s)) => NumProbe::Got {
+            raw: s.clone(),
+            actual_wire_type: "N".to_string(),
+        },
+        Some(WireValue::Null) => NumProbe::Null {
+            actual_wire_type: "NULL".to_string(),
+            raw_value: "null".to_string(),
+        },
+        Some(o) => NumProbe::Wrong {
+            actual_wire_type: o.tag().to_string(),
+            raw_value: o.raw(),
+        },
     }
 }
 fn probe_bool_at(v: Option<&WireValue>) -> Probe<bool> {
     match v {
         None => Probe::Absent,
         Some(WireValue::Bool(b)) => Probe::Got(*b),
-        Some(WireValue::Null) => Probe::Null { actual_wire_type: "NULL".to_string(), raw_value: "null".to_string() },
-        Some(o) => Probe::Wrong { actual_wire_type: o.tag().to_string(), raw_value: o.raw() },
+        Some(WireValue::Null) => Probe::Null {
+            actual_wire_type: "NULL".to_string(),
+            raw_value: "null".to_string(),
+        },
+        Some(o) => Probe::Wrong {
+            actual_wire_type: o.tag().to_string(),
+            raw_value: o.raw(),
+        },
     }
 }
 fn probe_row_at(v: Option<&WireValue>) -> Probe<&WireRow> {
     match v {
         None => Probe::Absent,
         Some(WireValue::Row(r)) => Probe::Got(r),
-        Some(WireValue::Null) => Probe::Null { actual_wire_type: "NULL".to_string(), raw_value: "null".to_string() },
-        Some(o) => Probe::Wrong { actual_wire_type: o.tag().to_string(), raw_value: o.raw() },
+        Some(WireValue::Null) => Probe::Null {
+            actual_wire_type: "NULL".to_string(),
+            raw_value: "null".to_string(),
+        },
+        Some(o) => Probe::Wrong {
+            actual_wire_type: o.tag().to_string(),
+            raw_value: o.raw(),
+        },
     }
 }
 fn probe_list_at(v: Option<&WireValue>) -> Probe<&WireList> {
     match v {
         None => Probe::Absent,
         Some(WireValue::List(l)) => Probe::Got(l),
-        Some(WireValue::Null) => Probe::Null { actual_wire_type: "NULL".to_string(), raw_value: "null".to_string() },
-        Some(o) => Probe::Wrong { actual_wire_type: o.tag().to_string(), raw_value: o.raw() },
+        Some(WireValue::Null) => Probe::Null {
+            actual_wire_type: "NULL".to_string(),
+            raw_value: "null".to_string(),
+        },
+        Some(o) => Probe::Wrong {
+            actual_wire_type: o.tag().to_string(),
+            raw_value: o.raw(),
+        },
     }
 }

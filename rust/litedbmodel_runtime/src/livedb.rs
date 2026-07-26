@@ -640,7 +640,9 @@ fn pg_cell_to_wire(row: &tokio_postgres::Row, idx: usize) -> Result<WireValue, S
             .map(|o| o.map(|d| WireValue::Str(d.format("%Y-%m-%d %H:%M:%S").to_string()))),
         PgType::TIMESTAMPTZ => row
             .try_get::<_, Option<chrono::DateTime<chrono::Utc>>>(idx)
-            .map(|o| o.map(|d| WireValue::Str(d.naive_utc().format("%Y-%m-%d %H:%M:%S").to_string()))),
+            .map(|o| {
+                o.map(|d| WireValue::Str(d.naive_utc().format("%Y-%m-%d %H:%M:%S").to_string()))
+            }),
         PgType::DATE => row
             .try_get::<_, Option<chrono::NaiveDate>>(idx)
             .map(|o| o.map(|d| WireValue::Str(d.format("%Y-%m-%d").to_string()))),
@@ -1125,7 +1127,12 @@ fn build_mysql_reselect(sql: &str) -> Result<Option<MysqlReselect>, SqlFailure> 
                 vec![ReselectBind::Param(idx)],
             )
         };
-        return Ok(Some(MysqlReselect { write_sql, select_sql, binds, before: false }));
+        return Ok(Some(MysqlReselect {
+            write_sql,
+            select_sql,
+            binds,
+            before: false,
+        }));
     }
 
     // create / createMany — recover by the AUTO_INCREMENT range [LAST_INSERT_ID, +affected), or by the
@@ -1176,7 +1183,10 @@ fn build_mysql_reselect(sql: &str) -> Result<Option<MysqlReselect>, SqlFailure> 
         }
         return Ok(Some(MysqlReselect {
             write_sql,
-            select_sql: format!("SELECT {cols} FROM {table} WHERE {}{order_by}", conds.join(" AND ")),
+            select_sql: format!(
+                "SELECT {cols} FROM {table} WHERE {}{order_by}",
+                conds.join(" AND ")
+            ),
             binds,
             before: false,
         }));

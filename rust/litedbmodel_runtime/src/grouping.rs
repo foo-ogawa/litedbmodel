@@ -76,7 +76,12 @@ fn resolve_indices(sample: &WireValue, cols: &[String]) -> Option<Vec<usize>> {
     };
     Some(
         cols.iter()
-            .map(|c| entries.iter().position(|(k, _)| k == c).unwrap_or(usize::MAX))
+            .map(|c| {
+                entries
+                    .iter()
+                    .position(|(k, _)| k == c)
+                    .unwrap_or(usize::MAX)
+            })
             .collect(),
     )
 }
@@ -191,7 +196,10 @@ mod tests {
     }
     fn row(pairs: &[(&str, WireValue)]) -> WireValue {
         WireValue::Row(WireRow {
-            entries: pairs.iter().map(|(k, v)| (k.to_string(), v.clone())).collect(),
+            entries: pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.clone()))
+                .collect(),
         })
     }
     fn cols(cs: &[&str]) -> Vec<String> {
@@ -217,9 +225,9 @@ mod tests {
         let rows = vec![
             row(&[("id", num(2))]),
             row(&[("id", num(1))]),
-            row(&[("id", num(2))]),           // dup
-            row(&[("id", WireValue::Null)]),  // dropped (null)
-            row(&[("other", num(9))]),        // dropped (absent id)
+            row(&[("id", num(2))]),          // dup
+            row(&[("id", WireValue::Null)]), // dropped (null)
+            row(&[("other", num(9))]),       // dropped (absent id)
         ];
         let keys = dedupe_key_tuples(&rows, &cols(&["id"]));
         let flat: Vec<String> = keys
@@ -241,14 +249,26 @@ mod tests {
         ];
         let by_key = group_by_key(&children, &cols(&["author_id"]));
         let parent1 = row(&[("id", num(1))]);
-        let nested = attach_to_parent(&parent1, &cols(&["id"]), &resolve_key_indices(std::slice::from_ref(&parent1), &cols(&["id"])), &by_key, false);
+        let nested = attach_to_parent(
+            &parent1,
+            &cols(&["id"]),
+            &resolve_key_indices(std::slice::from_ref(&parent1), &cols(&["id"])),
+            &by_key,
+            false,
+        );
         match nested {
             WireValue::List(l) => assert_eq!(l.items.len(), 2), // posts 10 and 12
             _ => panic!("expected a list"),
         }
         // a parent with no children → empty list
         let parent9 = row(&[("id", num(9))]);
-        match attach_to_parent(&parent9, &cols(&["id"]), &resolve_key_indices(std::slice::from_ref(&parent9), &cols(&["id"])), &by_key, false) {
+        match attach_to_parent(
+            &parent9,
+            &cols(&["id"]),
+            &resolve_key_indices(std::slice::from_ref(&parent9), &cols(&["id"])),
+            &by_key,
+            false,
+        ) {
             WireValue::List(l) => assert!(l.items.is_empty()),
             _ => panic!(),
         }
@@ -259,13 +279,25 @@ mod tests {
         let children = vec![row(&[("id", num(5)), ("user_id", num(1))])];
         let by_key = group_by_key(&children, &cols(&["user_id"]));
         let parent = row(&[("id", num(1))]);
-        match attach_to_parent(&parent, &cols(&["id"]), &resolve_key_indices(std::slice::from_ref(&parent), &cols(&["id"])), &by_key, true) {
+        match attach_to_parent(
+            &parent,
+            &cols(&["id"]),
+            &resolve_key_indices(std::slice::from_ref(&parent), &cols(&["id"])),
+            &by_key,
+            true,
+        ) {
             WireValue::Row(_) => {}
             _ => panic!("expected the single child row"),
         }
         let parent9 = row(&[("id", num(9))]);
         assert!(matches!(
-            attach_to_parent(&parent9, &cols(&["id"]), &resolve_key_indices(std::slice::from_ref(&parent9), &cols(&["id"])), &by_key, true),
+            attach_to_parent(
+                &parent9,
+                &cols(&["id"]),
+                &resolve_key_indices(std::slice::from_ref(&parent9), &cols(&["id"])),
+                &by_key,
+                true
+            ),
             WireValue::Null
         ));
     }
@@ -279,7 +311,13 @@ mod tests {
         let by_key = group_by_key(&children, &cols(&["t", "p"]));
         // parent (t=1, p=9) matches only the first child (full tuple, not cartesian).
         let parent = row(&[("t", num(1)), ("p", num(9))]);
-        match attach_to_parent(&parent, &cols(&["t", "p"]), &resolve_key_indices(std::slice::from_ref(&parent), &cols(&["t", "p"])), &by_key, false) {
+        match attach_to_parent(
+            &parent,
+            &cols(&["t", "p"]),
+            &resolve_key_indices(std::slice::from_ref(&parent), &cols(&["t", "p"])),
+            &by_key,
+            false,
+        ) {
             WireValue::List(l) => assert_eq!(l.items.len(), 1),
             _ => panic!(),
         }
