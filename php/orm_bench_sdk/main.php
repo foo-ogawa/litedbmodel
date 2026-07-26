@@ -79,19 +79,6 @@ final class Db
     {
     }
 
-    /**
-     * The dialect's upsert tail for the UNIQUE `email`. PostgreSQL / SQLite take `ON CONFLICT`; MySQL
-     * takes `ON DUPLICATE KEY UPDATE` (the rust SDK cell's `upsert_tail` twin).
-     */
-    public function upsertTail(string $cols = 'email, name'): string
-    {
-        $names = array_map('trim', explode(',', $cols));
-        if ($this->dialect === 'mysql') {
-            return ' ON DUPLICATE KEY UPDATE ' . implode(', ', array_map(fn ($c) => "{$c} = VALUES({$c})", $names));
-        }
-        return ' ON CONFLICT (email) DO UPDATE SET ' . implode(', ', array_map(fn ($c) => "{$c} = excluded.{$c}", $names));
-    }
-
     private function prep(string $sql): \PDOStatement
     {
         return $this->stmts[$sql] ??= $this->pdo->prepare($sql);
@@ -157,9 +144,11 @@ final class Db
     public function writeReturningId(string $sql, array $params, string $recoverSql, array $recoverParams = []): int
     {
         if ($this->dialect !== 'mysql') {
-            return (int) $this->query($sql . ' RETURNING id', $params)[0][0];
+            return (int) $this->query($sql, $params)[0][0];
         }
-        $this->exec($sql, $params);
+        // MySQL cannot parse RETURNING: strip the clause (and the /*scp:pk=…*/ hint naming the key) exactly
+        // as the runtime's mysql adapter does, then recover the written row with the keyed SELECT.
+        $this->exec((string) preg_replace('/\s+RETURNING\s+.*$/is', '', $sql), $params);
         return (int) $this->recoverRows($recoverSql, $recoverParams)[0][0];
     }
 
@@ -227,22 +216,73 @@ function batchRows(int $it, bool $stable): array
     return [$emails, $names];
 }
 
-function placeholders(int $n): string
+/**
+ * One relation level's key set as the ONE param the captured SQL expects. The generated module binds a
+ * batched child read's key set as a single JSON array (json_each(?) / JSON_TABLE(?) / UNNEST(?::t[])),
+ * never as N placeholders — so the baseline binds it the same way, or it is running different SQL. A
+ * composite key is an array of tuples, a single key an array of scalars.
+ *
+ * @param list<list<int>> $tuples
+ */
+function keyParam(array $tuples): string
 {
-    return implode(',', array_fill(0, $n, '?'));
+    return json_encode(array_map(static fn (array $t) => count($t) === 1 ? $t[0] : $t, $tuples), JSON_THROW_ON_ERROR);
 }
 
-/** The composite key-set operand: `(VALUES (…),(…))` on PG/SQLite, a bare row list on MySQL. */
-function tupleIn(int $rows, int $cols, string $dialect = 'sqlite'): string
+/**
+ * A batch write's record set as the param(s) the captured statement expects: ONE JSON array on
+ * MySQL/SQLite, one array PER COLUMN on PostgreSQL (its UNNEST form takes column arrays). The payload
+ * repeats once per `?` — updateMany's SET subquery and its WHERE each read it.
+ *
+ * @param list<array<string,mixed>> $records
+ * @return list<string>
+ */
+function batchParams(Db $db, array $records, string $sql): array
 {
-    // PostgreSQL infers a VALUES constructor's column types from the first row, and a bare parameter
-    // there has none — it defaults to text and the `(int,int) IN` comparison fails. The first row
-    // carries the cast; the rest follow it.
-    $one = '(' . placeholders($cols) . ')';
-    $first = $dialect === 'postgres' ? '(' . implode(',', array_fill(0, $cols, '?::int')) . ')' : $one;
-    $rest = array_fill(0, max(0, $rows - 1), $one);
-    $body = implode(',', array_merge([$first], $rest));
-    return $dialect === 'mysql' ? '(' . $body . ')' : '(VALUES ' . $body . ')';
+    if ($db->dialect === 'postgres') {
+        $cols = array_keys($records[0]);
+        sort($cols);
+        $one = array_map(static fn (string $c) => json_encode(array_column($records, $c), JSON_THROW_ON_ERROR), $cols);
+    } else {
+        $one = [json_encode($records, JSON_THROW_ON_ERROR)];
+    }
+    $reps = max(1, (int) round(substr_count($sql, '?') / count($one)));
+    $out = [];
+    for ($i = 0; $i < $reps; $i++) {
+        $out = array_merge($out, $one);
+    }
+    return $out;
+}
+
+/**
+ * The keyed SELECTs the runtime's MySQL adapter recovers a RETURNING write's rows with
+ * (src/scp/makesql/mysql-returning.ts): the conflict key for an upsert, the AUTO_INCREMENT range for an
+ * insert, the write's own WHERE for an update. Only MySQL runs them — the others have RETURNING.
+ */
+const RECOVER_BY_EMAIL = 'SELECT id FROM benchmark_users WHERE email = ?';
+const RECOVER_BY_LAST_INSERT_ID = 'SELECT id FROM benchmark_users WHERE id = LAST_INSERT_ID()';
+const RECOVER_BY_ID = 'SELECT id FROM benchmark_users WHERE id = ?';
+
+/** @return list<array<string,mixed>> */
+function userRecords(int $it, bool $stable): array
+{
+    [$emails, $names] = batchRows($it, $stable);
+    $out = [];
+    for ($k = 0; $k < 10; $k++) {
+        $out[] = ['email' => $emails[$k], 'name' => $names[$k]];
+    }
+    return $out;
+}
+
+/** @return list<array<string,mixed>> */
+function patchRecords(): array
+{
+    [, $names] = batchRows(0, false);
+    $out = [];
+    for ($k = 0; $k < 10; $k++) {
+        $out[] = ['id' => $k + 1, 'name' => $names[$k]];
+    }
+    return $out;
 }
 
 // ── nested materialization (fair vs the native cell) ─────────────────────────────────────────────────
@@ -303,7 +343,7 @@ final class SdkTenantComment
 }
 
 /** @param list<array<int,mixed>> $userRows @return list<SdkUser> */
-function materializeUsersPosts(Db $db, array $userRows): array
+function materializeUsersPosts(Db $db, array $userRows, string $childSql): array
 {
     $users = [];
     foreach ($userRows as $r) {
@@ -312,10 +352,9 @@ function materializeUsersPosts(Db $db, array $userRows): array
     if ($users === []) {
         return $users;
     }
-    $ids = array_map(static fn (SdkUser $u): int => $u->id, $users);
-    $sql = 'SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN (' . placeholders(count($ids)) . ') ORDER BY id ASC';
+    $keys = keyParam(array_map(static fn (SdkUser $u): array => [$u->id], $users));
     $byAuthor = [];
-    foreach ($db->query($sql, $ids) as $r) {
+    foreach ($db->query($childSql, [$keys]) as $r) {
         $p = new SdkPost((int) $r[0], $r[1], (int) $r[2]);
         $byAuthor[$p->authorId][] = $p;
     }
@@ -326,7 +365,7 @@ function materializeUsersPosts(Db $db, array $userRows): array
 }
 
 /** @param list<array<int,mixed>> $userRows @return list<SdkUser> */
-function materializeUsersPostsComments(Db $db, array $userRows): array
+function materializeUsersPostsComments(Db $db, array $userRows, string $postSql, string $commentSql): array
 {
     $users = [];
     foreach ($userRows as $r) {
@@ -335,18 +374,16 @@ function materializeUsersPostsComments(Db $db, array $userRows): array
     if ($users === []) {
         return $users;
     }
-    $uids = array_map(static fn (SdkUser $u): int => $u->id, $users);
-    $psql = 'SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN (' . placeholders(count($uids)) . ') ORDER BY id ASC';
+    $ukeys = keyParam(array_map(static fn (SdkUser $u): array => [$u->id], $users));
     /** @var list<SdkPost> $posts */
     $posts = [];
-    foreach ($db->query($psql, $uids) as $r) {
+    foreach ($db->query($postSql, [$ukeys]) as $r) {
         $posts[] = new SdkPost((int) $r[0], $r[1], (int) $r[2]);
     }
     if ($posts !== []) {
-        $pids = array_map(static fn (SdkPost $p): int => $p->id, $posts);
-        $csql = 'SELECT id, body, post_id FROM benchmark_comments WHERE post_id IN (' . placeholders(count($pids)) . ') ORDER BY id ASC';
+        $pkeys = keyParam(array_map(static fn (SdkPost $p): array => [$p->id], $posts));
         $byPost = [];
-        foreach ($db->query($csql, $pids) as $r) {
+        foreach ($db->query($commentSql, [$pkeys]) as $r) {
             $c = new SdkComment((int) $r[0], $r[1], (int) $r[2]);
             $byPost[$c->postId][] = $c;
         }
@@ -365,35 +402,25 @@ function materializeUsersPostsComments(Db $db, array $userRows): array
 }
 
 /** @return list<SdkTenantUser> */
-function materializeComposite(Db $db): array
+function materializeComposite(Db $db, array $sqlList): array
 {
     $tusers = [];
-    foreach ($db->query('SELECT tenant_id, user_id, name FROM benchmark_tenant_users WHERE tenant_id = ? ORDER BY user_id ASC', [1]) as $r) {
+    foreach ($db->query($sqlList[0]) as $r) {
         $tusers[] = new SdkTenantUser((int) $r[0], (int) $r[1], $r[2]);
     }
     if ($tusers === []) {
         return $tusers;
     }
-    $psql = 'SELECT tenant_id, post_id, user_id, title FROM benchmark_tenant_posts WHERE (tenant_id, user_id) IN ' . tupleIn(count($tusers), 2, $db->dialect);
-    $pparams = [];
-    foreach ($tusers as $u) {
-        $pparams[] = $u->tenantId;
-        $pparams[] = $u->userId;
-    }
+    $ukeys = keyParam(array_map(static fn (SdkTenantUser $u): array => [$u->tenantId, $u->userId], $tusers));
     /** @var list<SdkTenantPost> $tposts */
     $tposts = [];
-    foreach ($db->query($psql, $pparams) as $r) {
+    foreach ($db->query($sqlList[1], [$ukeys]) as $r) {
         $tposts[] = new SdkTenantPost((int) $r[0], (int) $r[1], (int) $r[2], $r[3]);
     }
     if ($tposts !== []) {
-        $cparams = [];
-        foreach ($tposts as $p) {
-            $cparams[] = $p->tenantId;
-            $cparams[] = $p->postId;
-        }
-        $csql = 'SELECT tenant_id, comment_id, post_id, body FROM benchmark_tenant_comments WHERE (tenant_id, post_id) IN ' . tupleIn(count($tposts), 2, $db->dialect);
+        $pkeys = keyParam(array_map(static fn (SdkTenantPost $p): array => [$p->tenantId, $p->postId], $tposts));
         $byPost = [];
-        foreach ($db->query($csql, $cparams) as $r) {
+        foreach ($db->query($sqlList[2], [$pkeys]) as $r) {
             $c = new SdkTenantComment((int) $r[0], (int) $r[1], (int) $r[2], $r[3]);
             $byPost[$c->tenantId . ':' . $c->postId][] = $c; // composite (tenant_id,post_id) key
         }
@@ -411,141 +438,94 @@ function materializeComposite(Db $db): array
     return $tusers;
 }
 
-function updateMany(Db $db): void
-{
-    [, $names] = batchRows(0, false);
-    $whens = '';
-    $params = [];
-    for ($k = 0; $k < 10; $k++) {
-        $whens .= ' WHEN ? THEN ?';
-        $params[] = $k + 1;
-        $params[] = $names[$k];
-    }
-    for ($k = 0; $k < 10; $k++) {
-        $params[] = $k + 1;
-    }
-    $sql = 'UPDATE benchmark_users SET name = CASE id' . $whens . ' END WHERE id IN (' . placeholders(10) . ')';
-    $db->exec($sql, $params);
-}
-
-/** @param list<string> $emails @param list<string> $names */
-function batchInsert(Db $db, array $emails, array $names, string $conflict): void
-{
-    $tuples = implode(',', array_fill(0, 10, '(?, ?)'));
-    $params = [];
-    for ($k = 0; $k < 10; $k++) {
-        $params[] = $emails[$k];
-        $params[] = $names[$k];
-    }
-    $db->exec('INSERT INTO benchmark_users (email, name) VALUES ' . $tuples . $conflict, $params);
-}
-
 /**
  * The 19 ops (native-cell order). Fixed inputs mirror the php native cell; mutating ops vary their
  * UNIQUE column by $it. Read LIMIT/ORDER shapes match the ops SSoT (== the native generated SQL).
  */
-function runOp(Db $db, string $op, int $it): void
+/**
+ * Run ONE op, issuing the statements the GENERATED module issues for this dialect ($sqlList =
+ * $setup['ops'][$op], captured at the runtime seam). The baseline hand-writes no SQL: the report divides
+ * native by sdk, which only isolates the runtime's cost if both send the DB the same statements. What
+ * stays hand-written is what a raw-driver user writes: param binding, decode, grouping children into
+ * parents, and the transaction bracket.
+ *
+ * @param list<string> $sqlList
+ */
+function runOp(Db $db, string $op, int $it, array $sqlList): void
 {
     switch ($op) {
         case 'findAll':
-            $db->query('SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100');
+            $db->query($sqlList[0]);
             break;
         case 'filterPaginateSort':
-            $db->query('SELECT id, title, content, published, author_id, created_at FROM benchmark_posts '
-                . 'WHERE published = ? ORDER BY created_at DESC LIMIT 20 OFFSET 10', [1]);
+            $db->query($sqlList[0], [1]);
             break;
         case 'findFirst':
-            $db->query('SELECT id, email, name FROM benchmark_users WHERE name LIKE ? LIMIT 1', ['User%']);
+            $db->query($sqlList[0], ['User%']);
             break;
         case 'findUnique':
-            $db->query('SELECT id, email, name FROM benchmark_users WHERE email = ? LIMIT 1', ['user1@example.com']);
+            $db->query($sqlList[0], ['user1@example.com']);
             break;
         case 'nestedFindAll':
-            $GLOBALS['benchSink'] = materializeUsersPosts($db, $db->query('SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100'));
+            $GLOBALS['benchSink'] = materializeUsersPosts($db, $db->query($sqlList[0]), $sqlList[1]);
             break;
         case 'nestedFindFirst':
-            $GLOBALS['benchSink'] = materializeUsersPosts($db, $db->query('SELECT id, email, name FROM benchmark_users WHERE name LIKE ? LIMIT 1', ['User%']));
+            $GLOBALS['benchSink'] = materializeUsersPosts($db, $db->query($sqlList[0], ['User%']), $sqlList[1]);
             break;
         case 'nestedFindUnique':
-            $GLOBALS['benchSink'] = materializeUsersPosts($db, $db->query('SELECT id, email, name FROM benchmark_users WHERE email = ? LIMIT 1', ['user1@example.com']));
+            $GLOBALS['benchSink'] = materializeUsersPosts($db, $db->query($sqlList[0], ['user1@example.com']), $sqlList[1]);
             break;
         case 'nestedRelations':
-            $users = $db->query('SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100');
-            $GLOBALS['benchSink'] = materializeUsersPostsComments($db, $users);
+            $GLOBALS['benchSink'] = materializeUsersPostsComments($db, $db->query($sqlList[0]), $sqlList[1], $sqlList[2]);
             break;
         case 'compositeRelations':
-            $GLOBALS['benchSink'] = materializeComposite($db);
+            $GLOBALS['benchSink'] = materializeComposite($db, $sqlList);
             break;
         case 'create':
-            $db->exec('INSERT INTO benchmark_users (email, name) VALUES (?, ?)', ["new{$it}@bench.com", 'New']);
+            $db->exec($sqlList[0], ["new{$it}@bench.com", 'New']);
             break;
         case 'update':
-            $db->exec('UPDATE benchmark_users SET name = ? WHERE id = ?', ['Updated 1', 1]);
+            $db->exec($sqlList[0], ['Updated 1', 1]);
             break;
         case 'upsert':
-            // The native module declares ` RETURNING id` here, so the baseline reads the id back too.
-            $sink = $db->writeReturningId(
-                'INSERT INTO benchmark_users (email, name) VALUES (?, ?)' . $db->upsertTail(),
-                ['user1@example.com', 'Upserted One'],
-                'SELECT id FROM benchmark_users WHERE email = ?', // the runtime's conflict-key recovery
-                ['user1@example.com'],
-            );
+            // The captured statement declares ` RETURNING id`, so the baseline reads the id back too.
+            $sink = $db->writeReturningId($sqlList[0], ['user1@example.com', 'Upserted One'], RECOVER_BY_EMAIL, ['user1@example.com']);
             unset($sink);
             break;
         case 'createMany':
-            [$emails, $names] = batchRows($it, false);
-            batchInsert($db, $emails, $names, '');
+            $db->exec($sqlList[0], batchParams($db, userRecords($it, false), $sqlList[0]));
             break;
         case 'upsertMany':
-            // The SAME 10 records the native module upserts (userRows($it, stable: true)).
-            [$emails, $names] = batchRows($it, true);
-            batchInsert($db, $emails, $names, $db->upsertTail());
+            // The SAME 10 records the native module upserts.
+            $db->exec($sqlList[0], batchParams($db, userRecords($it, true), $sqlList[0]));
             break;
         case 'updateMany':
-            updateMany($db);
+            $db->exec($sqlList[0], batchParams($db, patchRecords(), $sqlList[0]));
             break;
         case 'nestedCreate':
             $db->execRaw('BEGIN');
-            $uid = $db->writeReturningId(
-                'INSERT INTO benchmark_users (email, name) VALUES (?, ?)',
-                ["nc{$it}@bench.com", 'NC'],
-                'SELECT id FROM benchmark_users WHERE id = LAST_INSERT_ID()', // AUTO_INCREMENT recovery
-            );
-            $db->exec('INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)', [$uid, 'NC Post']);
+            $uid = $db->writeReturningId($sqlList[0], ["nc{$it}@bench.com", 'NC'], RECOVER_BY_LAST_INSERT_ID);
+            $db->exec($sqlList[1], [$uid, 'NC Post']);
             $db->execRaw('COMMIT');
             break;
         case 'nestedUpsert':
             $db->execRaw('BEGIN');
-            $uid = $db->writeReturningId(
-                'INSERT INTO benchmark_users (email, name) VALUES (?, ?)' . $db->upsertTail(),
-                ['user1@example.com', 'NUp'],
-                'SELECT id FROM benchmark_users WHERE email = ?',
-                ['user1@example.com'],
-            );
-            $db->exec('INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)', [$uid, 'NUp Post']);
+            $uid = $db->writeReturningId($sqlList[0], ['user1@example.com', 'NUp'], RECOVER_BY_EMAIL, ['user1@example.com']);
+            $db->exec($sqlList[1], [$uid, 'NUp Post']);
             $db->execRaw('COMMIT');
             break;
         case 'nestedUpdate':
             $db->execRaw('BEGIN');
-            // The native module chains the dependent UPDATE off the id the first UPDATE returned; taking
+            // The generated runner chains the dependent UPDATE off the id the first UPDATE returned; taking
             // the id from the input instead would skip a statement's worth of work.
-            $uid = $db->writeReturningId(
-                'UPDATE benchmark_users SET name = ? WHERE id = ?',
-                ['NU', 1],
-                'SELECT id FROM benchmark_users WHERE id = ?', // recovered by the write's own WHERE
-                [1],
-            );
-            $db->exec('UPDATE benchmark_posts SET title = ? WHERE author_id = ?', ['NU Post', $uid]);
+            $uid = $db->writeReturningId($sqlList[0], ['NU', 1], RECOVER_BY_ID, [1]);
+            $db->exec($sqlList[1], ['NU Post', $uid]);
             $db->execRaw('COMMIT');
             break;
         case 'delete':
             $db->execRaw('BEGIN');
-            $uid = $db->writeReturningId(
-                'INSERT INTO benchmark_users (email, name) VALUES (?, ?)',
-                ["del{$it}@bench.com", 'Del'],
-                'SELECT id FROM benchmark_users WHERE id = LAST_INSERT_ID()',
-            );
-            $db->exec('DELETE FROM benchmark_users WHERE id = ?', [$uid]);
+            $uid = $db->writeReturningId($sqlList[0], ["del{$it}@bench.com", 'Del'], RECOVER_BY_LAST_INSERT_ID);
+            $db->exec($sqlList[1], [$uid]);
             $db->execRaw('COMMIT');
             break;
         default:
@@ -556,21 +536,22 @@ function runOp(Db $db, string $op, int $it): void
 function measure(string $dialect, int $reps, int $warmup): void
 {
     $db = openDb($dialect);
+    $ops = benchSetup($dialect)['ops'];
     echo "cell,dialect,op,iter,us,rows\n";
     foreach (OPS as $op) {
         seed($db); // re-seed before each op (matches the native cell)
         // One UN-TIMED probe measures the rows this op moves — the per-row denominator (#170).
         $db->rows = 0;
-        runOp($db, $op, 0);
+        runOp($db, $op, 0, $ops[$op]);
         $rows = $db->rows;
         for ($it = 0; $it < $warmup; $it++) {
-            runOp($db, $op, $it + 1);
+            runOp($db, $op, $it + 1, $ops[$op]);
         }
         for ($it = 0; $it < $reps; $it++) {
             // Unique iteration id: the probe took 0, so warmup/timed start at 1.
             $g = $it + $warmup + 1;
             $t = hrtime(true);
-            runOp($db, $op, $g);
+            runOp($db, $op, $g, $ops[$op]);
             $us = intdiv(hrtime(true) - $t, 1000);
             echo "sdk,{$dialect},{$op},{$it},{$us},{$rows}\n";
         }
@@ -580,6 +561,7 @@ function measure(string $dialect, int $reps, int $warmup): void
 function safety(string $dialect): void
 {
     $db = openDb($dialect);
+    $ops = benchSetup($dialect)['ops'];
     $expected = RELATION_QUERY_COUNTS + BATCH_QUERY_COUNTS + TX_STMT_COUNTS;
     // EVERY op, with the rows it moves — the surface that lets this baseline's row yield be compared
     // against the native cell's (#170), not just the guarded statement counts.
@@ -588,7 +570,7 @@ function safety(string $dialect): void
         seed($db);
         $db->count = 0;
         $db->rows = 0;
-        runOp($db, $op, 0);
+        runOp($db, $op, 0, $ops[$op]);
         $got = $db->count;
         $want = $expected[$op] ?? null;
         if ($want !== null && $got !== $want) {
