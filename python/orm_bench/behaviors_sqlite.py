@@ -4,14 +4,14 @@
 # native dict literal and handed to the EXISTING runtime core (run_behavior) —
 # no execution logic is generated. Handlers are ALWAYS injected at the boundary
 # (IR + {effects,config,hooks}); they are never generated.
-# irFingerprint: fnv1a64:35d3c251947aba11
+# irFingerprint: fnv1a64:e7a6ba3511f83de9
 from behavior_contracts import SPEC_VERSIONS, ProvenanceError, load_compiled_ir, run_behavior
 
 # Spec versions baked at generation time (fail-closed constant comparison at load).
 EXPECTED_SPEC_VERSIONS = {"behavior": 5, "expression": 2, "plan": 1}
 
 # FNV-1a 64 fingerprint of the source portable IR (canonical_json discipline, #208).
-IR_FINGERPRINT = "fnv1a64:35d3c251947aba11"
+IR_FINGERPRINT = "fnv1a64:e7a6ba3511f83de9"
 
 # Component names exposed by bind(), in IR declaration order.
 COMPONENT_NAMES = ("findAll", "filterPaginateSort", "findFirst", "findUnique", "nestedFindAll", "nestedFindFirst", "nestedFindUnique", "nestedRelations", "compositeRelations", "create", "update", "upsert", "createMany", "upsertMany", "updateMany", "nestedCreate", "nestedUpsert", "nestedUpdate", "delete")
@@ -1783,7 +1783,7 @@ IR_DOC = {
               ]
             },
             "returning": False,
-            "sql": "SELECT tenant_id, post_id, user_id, title FROM benchmark_tenant_posts WHERE EXISTS (SELECT 1 FROM json_each(?) je WHERE json_extract(je.value, '$[0]') = benchmark_tenant_posts.tenant_id AND json_extract(je.value, '$[1]') = benchmark_tenant_posts.user_id) ORDER BY post_id ASC",
+            "sql": "SELECT tenant_id, post_id, user_id, title FROM benchmark_tenant_posts WHERE (benchmark_tenant_posts.tenant_id, benchmark_tenant_posts.user_id) IN (SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]') FROM json_each(?)) ORDER BY post_id ASC",
             "write": False
           },
           "wirePassthrough": True
@@ -1864,7 +1864,7 @@ IR_DOC = {
               ]
             },
             "returning": False,
-            "sql": "SELECT tenant_id, comment_id, post_id, body FROM benchmark_tenant_comments WHERE EXISTS (SELECT 1 FROM json_each(?) je WHERE json_extract(je.value, '$[0]') = benchmark_tenant_comments.tenant_id AND json_extract(je.value, '$[1]') = benchmark_tenant_comments.post_id) ORDER BY comment_id ASC",
+            "sql": "SELECT tenant_id, comment_id, post_id, body FROM benchmark_tenant_comments WHERE (benchmark_tenant_comments.tenant_id, benchmark_tenant_comments.post_id) IN (SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]') FROM json_each(?)) ORDER BY comment_id ASC",
             "write": False
           },
           "wirePassthrough": True

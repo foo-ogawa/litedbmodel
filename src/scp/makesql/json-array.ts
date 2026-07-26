@@ -100,8 +100,13 @@ export function inListPredicate(dialect: Dialect, col: string): string {
  *    cannot. Omitting them falls back to the deferred
  *    {@link import('./compile-relation').PG_ARRAY_CAST_TOKEN} (resolved from the bound values).
  *  - **MySQL / SQLite**: ONE JSON array-of-tuples param read back by ORDINAL path — MySQL a
- *    `JSON_TABLE` IN-subquery (so it inherits `(k1,k2) IN ((?,?),…)`'s per-column coercion), SQLite an
- *    `EXISTS` over `json_each`.
+ *    `JSON_TABLE` IN-subquery (so it inherits `(k1,k2) IN ((?,?),…)`'s per-column coercion), SQLite a
+ *    `json_each` IN-subquery projecting the tuple's ordinal paths.
+ *
+ * Every dialect's form is an IN over a subquery the planner evaluates ONCE — the whole point of binding
+ * the key set as a single param. A CORRELATED predicate over the same param (an `EXISTS` whose body
+ * compares against the outer row) re-expands the key set for every outer row and leaves the key columns
+ * unusable as an index lookup, so the batch load degrades as rows × keys.
  *
  * This is the ONE text for composite membership: the relation batch builders
  * ({@link import('./compile-relation').compileCompositeKeyStaticUnlimited}) consume the same function.
@@ -118,8 +123,8 @@ export function tupleInPredicate(dialect: Dialect, table: string, columns: reado
     const selectCols = cols.map((c) => `JSON_UNQUOTE(${c})`).join(', ');
     return `(${qualified.join(', ')}) IN (SELECT ${selectCols} FROM JSON_TABLE(?, '$[*]' COLUMNS(${jtCols})) jt)`;
   }
-  const match = columns.map((k, i) => `json_extract(je.value, '$[${i}]') = ${table}.${k}`).join(' AND ');
-  return `EXISTS (SELECT 1 FROM json_each(?) je WHERE ${match})`;
+  const projected = columns.map((_, i) => `json_extract(value, '$[${i}]')`).join(', ');
+  return `(${qualified.join(', ')}) IN (SELECT ${projected} FROM json_each(?))`;
 }
 
 /**

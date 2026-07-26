@@ -16,6 +16,11 @@
 //	lm_orm_native            — run all 19 covered ops once; print per-op statement-count + row-count;
 //	                           assert the N+1-free relation counts + the atomic tx statement counts.
 //	lm_orm_native bench      — additionally time each op over reps iterations and print a flat CSV.
+//	lm_orm_native sql        — capture the SQL each op issues at the runtime seam and merge it into
+//	                           .setup/<dialect>.json as `ops`. The SDK baselines execute THOSE
+//	                           statements, so the two surfaces cannot issue different SQL (#172). The
+//	                           final text is only knowable here: PostgreSQL's relation predicates carry
+//	                           a cast token the runtime resolves from the key param's element type.
 package main
 
 import (
@@ -23,6 +28,7 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"regexp"
 	"strconv"
 	"sync/atomic"
 	"time"
@@ -33,6 +39,9 @@ import (
 
 	_ "modernc.org/sqlite" // PURE-GO sqlite driver (registered as "sqlite")
 )
+
+// txControl matches the tx-control statements the RUNTIME issues around a transaction op.
+var txControl = regexp.MustCompile(`(?i)^\s*(BEGIN|COMMIT|ROLLBACK|START TRANSACTION)`)
 
 // openSeeded opens this build's target DB and applies the ONE seed SSoT (.setup/<dialect>.json, from
 // orm-domain.ts) — schema then the canonical 110-user fixture. No hand-written schema/seed here.
@@ -227,7 +236,12 @@ var expectedStatements = map[string]int{
 var txOps = map[string]bool{"nestedCreate": true, "nestedUpsert": true, "nestedUpdate": true, "delete": true}
 
 func main() {
-	doBench := len(os.Args) > 1 && os.Args[1] == "bench"
+	mode := ""
+	if len(os.Args) > 1 {
+		mode = os.Args[1]
+	}
+	doBench := mode == "bench"
+	captureSQL := mode == "sql"
 
 	db, err := openSeeded()
 	if err != nil {
@@ -243,9 +257,15 @@ func main() {
 	// use. The bound leaf ctx resolves the process-global registry, so a global registration is seen.
 	var stmtCount int64
 	var rowCount int64
+	var seenSQL []string
 	counter := rt.NewMiddleware(rt.MiddlewareConfig{
 		Execute: func(_ any, next rt.ExecNext, sqlText string, args []any) (any, error) {
 			atomic.AddInt64(&stmtCount, 1)
+			// The tx-control statements are the runtime's, not the generated runner's: a baseline
+			// brackets its own transaction, so only the body statements are captured.
+			if !txControl.MatchString(sqlText) {
+				seenSQL = append(seenSQL, sqlText)
+			}
 			out, err := next(sqlText, args)
 			// The read seam hands back `[]bc.Value` (the write seam a run summary, which adds nothing), so
 			// this ONE hook also totals the rows the op moved — the report's per-row denominator (#170).
@@ -262,6 +282,8 @@ func main() {
 	// The rows each op moves, measured in the proof pass below (iteration 0, off the timed loop) — the
 	// report's per-row denominator (#170).
 	rowsByOp := map[string]int64{}
+	// The statements each op issued, in order — written to the artifact by the `sql` mode (#172).
+	opSQL := map[string][]string{}
 	doc, err := setup.Load(benchDialect)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "FATAL: setup: %v\n", err)
@@ -275,6 +297,7 @@ func main() {
 		}
 		atomic.StoreInt64(&stmtCount, 0)
 		atomic.StoreInt64(&rowCount, 0)
+		seenSQL = nil
 		if err := op(db, name, 0); err != nil {
 			fmt.Printf("%-20s  ERR: %v\n", name, err)
 			fail++
@@ -285,6 +308,7 @@ func main() {
 		// relation's terminal holds 100 parents while the op moved 11,100 rows).
 		rows := int(atomic.LoadInt64(&rowCount))
 		rowsByOp[name] = int64(rows)
+		opSQL[name] = append([]string(nil), seenSQL...)
 		mark := "ok"
 		if exp, ok := expectedStatements[name]; ok && exp != q {
 			mark = fmt.Sprintf("STATEMENT-COUNT MISMATCH (want %d)", exp)
@@ -295,6 +319,15 @@ func main() {
 			kind = " (BEGIN + 2 body + COMMIT)"
 		}
 		fmt.Printf("%-20s  %-10d  %-5d %s%s\n", name, q, rows, mark, kind)
+	}
+
+	if captureSQL {
+		if err := setup.WriteOps(benchDialect, opSQL); err != nil {
+			fmt.Fprintf(os.Stderr, "FATAL: write ops: %v\n", err)
+			os.Exit(1)
+		}
+		path, _ := setup.Path(benchDialect)
+		fmt.Fprintf(os.Stderr, "  ✓ %s — ops captured for %d op(s)\n", path, len(opSQL))
 	}
 
 	if doBench {

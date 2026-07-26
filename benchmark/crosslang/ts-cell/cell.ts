@@ -138,7 +138,11 @@ function repoRoot(): string {
   return dir;
 }
 
+/** The one seed-SSoT path for a dialect — the ONLY place it is spelled (readers and the emitter share it). */
+export function setupPathFor(dialect: Dialect): string {
+  return join(repoRoot(), 'benchmark', 'crosslang', '.setup', `${dialect}.json`);
+}
+
 export function setupFor(dialect: Dialect): Setup {
-  const path = join(repoRoot(), 'benchmark', 'crosslang', '.setup', `${dialect}.json`);
-  return JSON.parse(readFileSync(path, 'utf8')) as Setup;
+  return JSON.parse(readFileSync(setupPathFor(dialect), 'utf8')) as Setup;
 }

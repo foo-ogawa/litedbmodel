@@ -136,7 +136,7 @@ describe('emitter — #133 composite tuple-IN (a CONSTANT number of params, what
     expect(my.endpoints[0].params).toEqual([{ name: 'keys', type: 'Int[][]' }]);
     const lite = emit('sqlite', { tenantPostsByKeys: EMIT_ENDPOINTS.tenantPostsByKeys });
     expect(bodyOf(lite.source, 'tenantPostsByKeys')[0]).toContain(
-      "EXISTS (SELECT 1 FROM json_each(?) je WHERE json_extract(je.value, '$[0]') = e2e_tenant_posts.tenant_id AND json_extract(je.value, '$[1]') = e2e_tenant_posts.user_id)",
+      "(e2e_tenant_posts.tenant_id, e2e_tenant_posts.user_id) IN (SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]') FROM json_each(?))",
     );
   });
 
@@ -217,7 +217,7 @@ describe('emitter — RELATIONS (one query per level, N+1-free)', () => {
   it('composite-key relations bind the key TUPLE set on mysql/sqlite', () => {
     const body = bodyOf(emit('sqlite').source, 'tenantUsersWithPosts');
     expect(body[1]).toContain('Db.pluck(rows, ["tenant_id", "user_id"])');
-    expect(body[2]).toContain("EXISTS (SELECT 1 FROM json_each(?) je WHERE json_extract(je.value, '$[0]') = e2e_tenant_posts.tenant_id");
+    expect(body[2]).toContain("(e2e_tenant_posts.tenant_id, e2e_tenant_posts.user_id) IN (SELECT json_extract(value, '$[0]')");
   });
 
   it('a composite-key relation on POSTGRES binds the SAME single key-tuple param (#159)', () => {

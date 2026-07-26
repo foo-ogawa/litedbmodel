@@ -1283,7 +1283,7 @@ describe('C. Composite STATIC per-parent-LIMIT relation form (#47 last gap)', ()
       // (JSON_TABLE for MySQL / json_each for SQLite) — the sanctioned result-parity deviation.
       const jsonPred = dialect === 'mysql'
         ? `(revs.tenant_id, revs.doc_id) IN (SELECT JSON_UNQUOTE(c0), JSON_UNQUOTE(c1) FROM JSON_TABLE(?, '$[*]' COLUMNS(c0 JSON PATH '$[0]', c1 JSON PATH '$[1]')) jt)`
-        : `EXISTS (SELECT 1 FROM json_each(?) je WHERE json_extract(je.value, '$[0]') = revs.tenant_id AND json_extract(je.value, '$[1]') = revs.doc_id)`;
+        : `(revs.tenant_id, revs.doc_id) IN (SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]') FROM json_each(?))`;
       expect(got.sql).toContain(jsonPred);
       // The whole key set binds as ONE JSON param (value-length-independent) → static op.
       expect(got.params).toEqual([[null]]);

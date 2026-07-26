@@ -226,3 +226,10 @@ for (const scale of sweep) for (const lang of LANGS) for (const dialect of DIALE
 
 writeFileSync(OUT_MD, PREAMBLE + out.join('\n') + '\n');
 process.stderr.write(`\nWrote ${OUT_MD}\n`);
+
+// rows/op is the fairness invariant: identical SQL over one shared fixture MUST move identical rows. A
+// disagreement means the cells are not comparable, so it fails the run rather than sitting in a table.
+if (disagree.length) {
+  process.stderr.write(`\n✗ ${disagree.length} op×dialect disagree on rows/op — the cells are not running the same work.\n`);
+  process.exit(1);
+}

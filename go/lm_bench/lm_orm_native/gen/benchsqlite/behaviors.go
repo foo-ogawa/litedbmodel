@@ -1597,7 +1597,7 @@ func CompositeRelations() ([]TenantUserWithPosts, error) {
 	}
 	// ── op 'n2' (executeSQL, parent:n1) ──
 	if produced_n1 {
-		payload_n2 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireListOf(t_n1)})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT tenant_id, post_id, user_id, title FROM benchmark_tenant_posts WHERE EXISTS (SELECT 1 FROM json_each(?) je WHERE json_extract(je.value, '$[0]') = benchmark_tenant_posts.tenant_id AND json_extract(je.value, '$[1]') = benchmark_tenant_posts.user_id) ORDER BY post_id ASC")}, wire.WireField{Key: "write", Val: wire.WireBool(false)}})
+		payload_n2 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireListOf(t_n1)})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT tenant_id, post_id, user_id, title FROM benchmark_tenant_posts WHERE (benchmark_tenant_posts.tenant_id, benchmark_tenant_posts.user_id) IN (SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]') FROM json_each(?)) ORDER BY post_id ASC")}, wire.WireField{Key: "write", Val: wire.WireBool(false)}})
 		wire_n2, wire_n2Err := litedbmodel_runtime.ExecuteSQL(payload_n2)
 		if wire_n2Err != nil {
 			return nil, opFailed("n2", "fail", wire_n2Err)
@@ -1635,7 +1635,7 @@ func CompositeRelations() ([]TenantUserWithPosts, error) {
 	}
 	// ── op 'n4' (executeSQL, parent:n3) ──
 	if produced_n3 {
-		payload_n4 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireListOf(t_n3)})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT tenant_id, comment_id, post_id, body FROM benchmark_tenant_comments WHERE EXISTS (SELECT 1 FROM json_each(?) je WHERE json_extract(je.value, '$[0]') = benchmark_tenant_comments.tenant_id AND json_extract(je.value, '$[1]') = benchmark_tenant_comments.post_id) ORDER BY comment_id ASC")}, wire.WireField{Key: "write", Val: wire.WireBool(false)}})
+		payload_n4 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireListOf(t_n3)})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT tenant_id, comment_id, post_id, body FROM benchmark_tenant_comments WHERE (benchmark_tenant_comments.tenant_id, benchmark_tenant_comments.post_id) IN (SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]') FROM json_each(?)) ORDER BY comment_id ASC")}, wire.WireField{Key: "write", Val: wire.WireBool(false)}})
 		wire_n4, wire_n4Err := litedbmodel_runtime.ExecuteSQL(payload_n4)
 		if wire_n4Err != nil {
 			return nil, opFailed("n4", "fail", wire_n4Err)

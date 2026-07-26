@@ -8176,7 +8176,7 @@
       ],
       "dialect": "sqlite",
       "keyShape": "single_json",
-      "sql": "SELECT tenant_id, post_id, user_id, title FROM benchmark_tenant_posts WHERE EXISTS (SELECT 1 FROM json_each(?) je WHERE json_extract(je.value, '$[0]') = benchmark_tenant_posts.tenant_id AND json_extract(je.value, '$[1]') = benchmark_tenant_posts.user_id) ORDER BY post_id ASC",
+      "sql": "SELECT tenant_id, post_id, user_id, title FROM benchmark_tenant_posts WHERE (benchmark_tenant_posts.tenant_id, benchmark_tenant_posts.user_id) IN (SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]') FROM json_each(?)) ORDER BY post_id ASC",
       "targetTable": "benchmark_tenant_posts",
       "select": [
         "tenant_id",
@@ -8203,7 +8203,7 @@
           ],
           "dialect": "sqlite",
           "keyShape": "single_json",
-          "sql": "SELECT tenant_id, comment_id, post_id, body FROM benchmark_tenant_comments WHERE EXISTS (SELECT 1 FROM json_each(?) je WHERE json_extract(je.value, '$[0]') = benchmark_tenant_comments.tenant_id AND json_extract(je.value, '$[1]') = benchmark_tenant_comments.post_id) ORDER BY comment_id ASC",
+          "sql": "SELECT tenant_id, comment_id, post_id, body FROM benchmark_tenant_comments WHERE (benchmark_tenant_comments.tenant_id, benchmark_tenant_comments.post_id) IN (SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]') FROM json_each(?)) ORDER BY comment_id ASC",
           "targetTable": "benchmark_tenant_comments",
           "select": [
             "tenant_id",

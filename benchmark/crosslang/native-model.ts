@@ -130,9 +130,9 @@ export class BenchSqlite {
   @behavior static compositeRelations(): TenantUserWithPosts[] {
     const tenantUsers: WireValue[] = Db.executeSQL("SELECT tenant_id, user_id, name FROM benchmark_tenant_users ORDER BY user_id ASC LIMIT 100", [], false, false, false);
     const tenantUserKeys: WireValue[] = Db.pluck(tenantUsers, ["tenant_id", "user_id"]);
-    const tenantPosts: WireValue[] = Db.executeSQL("SELECT tenant_id, post_id, user_id, title FROM benchmark_tenant_posts WHERE EXISTS (SELECT 1 FROM json_each(?) je WHERE json_extract(je.value, '$[0]') = benchmark_tenant_posts.tenant_id AND json_extract(je.value, '$[1]') = benchmark_tenant_posts.user_id) ORDER BY post_id ASC", [tenantUserKeys], false, false, false);
+    const tenantPosts: WireValue[] = Db.executeSQL("SELECT tenant_id, post_id, user_id, title FROM benchmark_tenant_posts WHERE (benchmark_tenant_posts.tenant_id, benchmark_tenant_posts.user_id) IN (SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]') FROM json_each(?)) ORDER BY post_id ASC", [tenantUserKeys], false, false, false);
     const tenantPostKeys: WireValue[] = Db.pluck(tenantPosts, ["tenant_id", "post_id"]);
-    const tenantComments: WireValue[] = Db.executeSQL("SELECT tenant_id, comment_id, post_id, body FROM benchmark_tenant_comments WHERE EXISTS (SELECT 1 FROM json_each(?) je WHERE json_extract(je.value, '$[0]') = benchmark_tenant_comments.tenant_id AND json_extract(je.value, '$[1]') = benchmark_tenant_comments.post_id) ORDER BY comment_id ASC", [tenantPostKeys], false, false, false);
+    const tenantComments: WireValue[] = Db.executeSQL("SELECT tenant_id, comment_id, post_id, body FROM benchmark_tenant_comments WHERE (benchmark_tenant_comments.tenant_id, benchmark_tenant_comments.post_id) IN (SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]') FROM json_each(?)) ORDER BY comment_id ASC", [tenantPostKeys], false, false, false);
     const tenantPostsWithComments: WireValue[] = Db.group(tenantPosts, tenantComments, ["tenant_id", "post_id"], ["tenant_id", "post_id"], "comments", false);
     const tenantUsersWithPosts: TenantUserWithPosts[] = Db.group(tenantUsers, tenantPostsWithComments, ["tenant_id", "user_id"], ["tenant_id", "user_id"], "posts", false) as TenantUserWithPosts[];
     return tenantUsersWithPosts;

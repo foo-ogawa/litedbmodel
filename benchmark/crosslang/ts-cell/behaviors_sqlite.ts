@@ -721,7 +721,7 @@ function run_compositeRelations(h$executeSQL: Handler | undefined, h$pluck: Hand
     "bigint": false,
     "params": cgp.arr([cgp.ref(["n1"], scope)]),
     "returning": false,
-    "sql": "SELECT tenant_id, post_id, user_id, title FROM benchmark_tenant_posts WHERE EXISTS (SELECT 1 FROM json_each(?) je WHERE json_extract(je.value, '$[0]') = benchmark_tenant_posts.tenant_id AND json_extract(je.value, '$[1]') = benchmark_tenant_posts.user_id) ORDER BY post_id ASC",
+    "sql": "SELECT tenant_id, post_id, user_id, title FROM benchmark_tenant_posts WHERE (benchmark_tenant_posts.tenant_id, benchmark_tenant_posts.user_id) IN (SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]') FROM json_each(?)) ORDER BY post_id ASC",
     "write": false,
   };
   const o_n2 = h$executeSQL(ports_n2, { nodeId: "n2", component: "executeSQL" });
@@ -744,7 +744,7 @@ function run_compositeRelations(h$executeSQL: Handler | undefined, h$pluck: Hand
     "bigint": false,
     "params": cgp.arr([cgp.ref(["n3"], scope)]),
     "returning": false,
-    "sql": "SELECT tenant_id, comment_id, post_id, body FROM benchmark_tenant_comments WHERE EXISTS (SELECT 1 FROM json_each(?) je WHERE json_extract(je.value, '$[0]') = benchmark_tenant_comments.tenant_id AND json_extract(je.value, '$[1]') = benchmark_tenant_comments.post_id) ORDER BY comment_id ASC",
+    "sql": "SELECT tenant_id, comment_id, post_id, body FROM benchmark_tenant_comments WHERE (benchmark_tenant_comments.tenant_id, benchmark_tenant_comments.post_id) IN (SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]') FROM json_each(?)) ORDER BY comment_id ASC",
     "write": false,
   };
   const o_n4 = h$executeSQL(ports_n4, { nodeId: "n4", component: "executeSQL" });
@@ -813,7 +813,7 @@ async function run_compositeRelations_async(h$executeSQL: AsyncHandler | undefin
     "bigint": false,
     "params": cgp.arr([cgp.ref(["n1"], scope)]),
     "returning": false,
-    "sql": "SELECT tenant_id, post_id, user_id, title FROM benchmark_tenant_posts WHERE EXISTS (SELECT 1 FROM json_each(?) je WHERE json_extract(je.value, '$[0]') = benchmark_tenant_posts.tenant_id AND json_extract(je.value, '$[1]') = benchmark_tenant_posts.user_id) ORDER BY post_id ASC",
+    "sql": "SELECT tenant_id, post_id, user_id, title FROM benchmark_tenant_posts WHERE (benchmark_tenant_posts.tenant_id, benchmark_tenant_posts.user_id) IN (SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]') FROM json_each(?)) ORDER BY post_id ASC",
     "write": false,
   };
   const o_n2 = await h$executeSQL(ports_n2, { nodeId: "n2", component: "executeSQL" });
@@ -836,7 +836,7 @@ async function run_compositeRelations_async(h$executeSQL: AsyncHandler | undefin
     "bigint": false,
     "params": cgp.arr([cgp.ref(["n3"], scope)]),
     "returning": false,
-    "sql": "SELECT tenant_id, comment_id, post_id, body FROM benchmark_tenant_comments WHERE EXISTS (SELECT 1 FROM json_each(?) je WHERE json_extract(je.value, '$[0]') = benchmark_tenant_comments.tenant_id AND json_extract(je.value, '$[1]') = benchmark_tenant_comments.post_id) ORDER BY comment_id ASC",
+    "sql": "SELECT tenant_id, comment_id, post_id, body FROM benchmark_tenant_comments WHERE (benchmark_tenant_comments.tenant_id, benchmark_tenant_comments.post_id) IN (SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]') FROM json_each(?)) ORDER BY comment_id ASC",
     "write": false,
   };
   const o_n4 = await h$executeSQL(ports_n4, { nodeId: "n4", component: "executeSQL" });

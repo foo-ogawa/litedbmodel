@@ -286,17 +286,14 @@ export function sqliteUpdateManyJson(opts: JsonUpdateManyOptions): MakeSQL {
     );
   });
 
-  // WHERE: restrict to the affected keys. Single key → k IN (SELECT …); composite →
-  // EXISTS over json_each matching all key columns.
-  let whereClause: string;
-  if (keyColumns.length === 1) {
-    params.push(jsonParam);
-    whereClause = `${keyColumns[0]} IN (SELECT json_extract(value, '$.${keyColumns[0]}') FROM json_each(?))`;
-  } else {
-    params.push(jsonParam);
-    const match = keyColumns.map((k) => `json_extract(je.value, '$.${k}') = ${tableName}.${k}`).join(' AND ');
-    whereClause = `EXISTS (SELECT 1 FROM json_each(?) je WHERE ${match})`;
-  }
+  // WHERE: restrict to the affected keys — an IN over a subquery evaluated ONCE, single or composite.
+  // A correlated `EXISTS (… WHERE json_extract(je.value,'$.k') = t.k)` re-expands the batch for every
+  // row of the table and makes the key columns unusable as an index lookup, which is the whole point of
+  // restricting by them.
+  params.push(jsonParam);
+  const projected = keyColumns.map((k) => `json_extract(value, '$.${k}')`).join(', ');
+  const target = keyColumns.length === 1 ? keyColumns[0] : `(${keyColumns.map((k) => `${tableName}.${k}`).join(', ')})`;
+  const whereClause = `${target} IN (SELECT ${projected} FROM json_each(?))`;
 
   let sql = `UPDATE ${tableName} SET ${setClauses.join(', ')} WHERE ${whereClause}`;
   if (returning) sql += ` RETURNING ${returning}`;
