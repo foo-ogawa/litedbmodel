@@ -266,10 +266,12 @@ final class OrmBench
             // denominator (#170); the counting middleware is gone before the timed loop starts.
             $rows = self::probe($driver, $fns, $dialect, $op)['rows'];
             for ($it = 0; $it < $warmup; $it++) {
-                self::runOp($fns, $driver, $op, $it);
+                self::runOp($fns, $driver, $op, $it + 1);
             }
             for ($it = 0; $it < $reps; $it++) {
-                $g = $it + $warmup; // unique iteration id (UNIQUE-email ops stay insertable across warmup+timed)
+                // Unique iteration id: the probe took 0, so warmup/timed start at 1 (a UNIQUE-email op
+                // must never see an id twice).
+                $g = $it + $warmup + 1;
                 $t = hrtime(true);
                 self::runOp($fns, $driver, $op, $g);
                 $us = intdiv(hrtime(true) - $t, 1000);

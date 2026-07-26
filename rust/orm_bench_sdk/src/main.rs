@@ -1080,12 +1080,12 @@ fn main() {
         ROW_COUNT.store(0, Ordering::SeqCst);
         run_op(op, 0, db.as_mut());
         let rows = ROW_COUNT.load(Ordering::SeqCst);
-        reseed(db.as_mut(), &setup); // the probe mutated the fixture for a write op
         for it in 0..warmup {
-            run_op(op, it, db.as_mut());
+            run_op(op, it + 1, db.as_mut());
         }
         for it in 0..reps {
-            let g = it + warmup;
+            // Unique iteration id: the probe took 0, so warmup/timed start at 1.
+            let g = it + warmup + 1;
             let t = Instant::now();
             run_op(op, g, db.as_mut());
             let us = t.elapsed().as_micros();

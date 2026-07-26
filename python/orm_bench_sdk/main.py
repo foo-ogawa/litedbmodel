@@ -438,9 +438,10 @@ def _measure(dialect: str, reps: int, warmup: int) -> None:
         run_op(db, op, 0)
         rows = db.rows
         for it in range(warmup):
-            run_op(db, op, it)
+            run_op(db, op, it + 1)
         for it in range(reps):
-            g = it + warmup
+            # Unique iteration id: the probe took 0, so warmup/timed start at 1.
+            g = it + warmup + 1
             t = time.perf_counter_ns()
             run_op(db, op, g)
             us = (time.perf_counter_ns() - t) // 1000

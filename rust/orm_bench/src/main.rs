@@ -302,13 +302,13 @@ fn main() {
         seed(d, &setup);
         // One UN-TIMED probe measures the rows this op moves — the report's per-row denominator (#170).
         let rows = probe_rows(d, op);
-        seed(d, &setup); // the probe mutated the fixture for a write op; restore it before timing
         with_ambient_driver(d, || {
             for it in 0..warmup {
-                run_op(d, op, it);
+                run_op(d, op, it + 1);
             }
             for it in 0..reps {
-                let g = it + warmup;
+                // Unique iteration id: the probe took 0, so warmup/timed start at 1.
+                let g = it + warmup + 1;
                 let t = Instant::now();
                 run_op(d, op, g);
                 let us = t.elapsed().as_micros();

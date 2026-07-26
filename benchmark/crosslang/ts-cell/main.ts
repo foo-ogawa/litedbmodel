@@ -82,13 +82,14 @@ async function measure(mode: Mode, dialect: Dialect, reps: number, warmup: numbe
       }
       await cell.seed(); // clean fixture per op (as every other cell does)
       // One UN-TIMED probe per op measures the rows it moves — the report's per-row denominator (#170).
-      // Off the timed seam by construction, so observing it costs the published latency nothing.
+      // Off the timed seam by construction, so observing it costs the published latency nothing. It is
+      // iteration 0, and warmup/timed start at 1: an op with a UNIQUE column must never see an id twice.
       cell.resetCounters();
       await step(cell, op, 0);
       const rows = cell.rows() ?? '';
-      for (let it = 0; it < warmup; it++) await step(cell, op, it);
+      for (let it = 0; it < warmup; it++) await step(cell, op, it + 1);
       for (let it = 0; it < reps; it++) {
-        const g = it + warmup;
+        const g = it + warmup + 1;
         const t = process.hrtime.bigint();
         await step(cell, op, g);
         const us = Number((process.hrtime.bigint() - t) / 1000n);

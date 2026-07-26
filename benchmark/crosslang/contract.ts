@@ -7,10 +7,10 @@
 // column) × the three real dialects. Each language executes the SAME ops driver-
 // included on all three real DBs (SQLite in-proc, MySQL :3307, PostgreSQL :5433).
 //
-// There is NO wire protocol. Each language is a STANDALONE process
-// (adapters/<lang>) that runs all 19 ops × 3 dialects, self-measures, and writes a
-// flat CSV to benchmark/crosslang/.results/<lang>.csv. The collector (collect.ts)
-// globs those CSVs and renders CROSS-LANG.md.
+// There is NO wire protocol. Each language is a STANDALONE process that runs all 19
+// ops × 3 dialects, self-measures, and writes a flat CSV
+// (`cell,dialect,op,iter,us,rows`) to benchmark/crosslang/results/. `run-cells.sh` is
+// the reproducible run; `results/aggregate.mjs` renders the report from those CSVs.
 //
 // This file is pure constants — the op/dialect axes only. It carries NO SQL and NO
 // artifact: the per-op, per-dialect SQL is emitted by BC codegen as native literals

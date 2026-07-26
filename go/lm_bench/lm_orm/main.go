@@ -614,6 +614,9 @@ func main() {
 	}
 
 	fmt.Println("op                    statements  rows")
+	// The rows each op moves, measured in the proof pass below (iteration 0, off the timed loop) — the
+	// report's per-row denominator (#170).
+	rowsByOp := map[string]int64{}
 	fail := 0
 	for _, name := range ops {
 		c.seed(doc) // clean fixture per op (matches the python/php/rust cells); off-seam, never counted
@@ -630,6 +633,7 @@ func main() {
 		if txOps[name] {
 			kind = " (BEGIN + body + COMMIT)"
 		}
+		rowsByOp[name] = c.rows
 		fmt.Printf("%-20s  %-10d  %-5d %s%s\n", name, q, c.rows, mark, kind)
 	}
 
@@ -654,11 +658,9 @@ func main() {
 			}
 			for it := 0; it < reps; it++ {
 				g := it + warmup + 1
-				// Reset OUTSIDE the timed region — rows are measured per iteration (#170).
-				c.rows = 0
 				t := time.Now()
 				c.op(name, g)
-				fmt.Printf("sdk,%s,%s,%d,%d,%d\n", c.dialect, name, it, time.Since(t).Microseconds(), c.rows)
+				fmt.Printf("sdk,%s,%s,%d,%d,%d\n", c.dialect, name, it, time.Since(t).Microseconds(), rowsByOp[name])
 			}
 		}
 	}

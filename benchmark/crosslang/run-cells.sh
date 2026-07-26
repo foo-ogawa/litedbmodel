@@ -25,7 +25,9 @@ mkdir -p "$OUT"
 
 # The fixture must already be the one this run claims to measure.
 node -e "
-  const d = require('$HERE/.setup/$DIALECT.json');
+  let d;
+  try { d = require('$HERE/.setup/$DIALECT.json'); }
+  catch { console.error('✗ no fixture — run: npx tsx benchmark/crosslang/emit-setup.ts $SCALE'); process.exit(1); }
   if (String(d.scale) !== '$SCALE') {
     console.error(\`✗ .setup/$DIALECT.json is scale \${d.scale}, not $SCALE — run: npx tsx benchmark/crosslang/emit-setup.ts $SCALE\`);
     process.exit(1);

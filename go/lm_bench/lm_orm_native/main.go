@@ -259,6 +259,9 @@ func main() {
 	defer unregister()
 
 	fmt.Println("op                    statements  rows")
+	// The rows each op moves, measured in the proof pass below (iteration 0, off the timed loop) — the
+	// report's per-row denominator (#170).
+	rowsByOp := map[string]int64{}
 	doc, err := setup.Load(benchDialect)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "FATAL: setup: %v\n", err)
@@ -281,6 +284,7 @@ func main() {
 		// Rows as counted at the seam — every row of every statement, not the terminal slice length (a
 		// relation's terminal holds 100 parents while the op moved 11,100 rows).
 		rows := int(atomic.LoadInt64(&rowCount))
+		rowsByOp[name] = int64(rows)
 		mark := "ok"
 		if exp, ok := expectedStatements[name]; ok && exp != q {
 			mark = fmt.Sprintf("STATEMENT-COUNT MISMATCH (want %d)", exp)
@@ -320,16 +324,13 @@ func main() {
 			}
 			for it := 0; it < reps; it++ {
 				g := it + warmup + 1
-				// Reset OUTSIDE the timed region: rows are measured per iteration, and the report divides
-				// the latency by them (#170).
-				atomic.StoreInt64(&rowCount, 0)
 				t := time.Now()
 				if err := op(db, name, g); err != nil {
 					fmt.Fprintf(os.Stderr, "bench %s: %v\n", name, err)
 					os.Exit(1)
 				}
 				us := time.Since(t).Microseconds()
-				fmt.Printf("native,%s,%s,%d,%d,%d\n", benchDialect, name, it, us, atomic.LoadInt64(&rowCount))
+				fmt.Printf("native,%s,%s,%d,%d,%d\n", benchDialect, name, it, us, rowsByOp[name])
 			}
 		}
 	}

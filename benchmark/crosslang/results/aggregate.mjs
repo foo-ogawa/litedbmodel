@@ -14,11 +14,18 @@
 // denominator, and — because every cell of every language runs byte-identical SQL over one shared
 // fixture — cells that disagree on it are doing DIFFERENT work, which the fairness section reports
 // loudly instead of averaging away.
-import { readdirSync, readFileSync, statSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
+const OUT_MD = resolve(HERE, '../../CROSS-LANG.md');
+
+// Every rendered line goes to the report file as well as stdout — the committed report and what this
+// prints can never disagree.
+const out = [];
+const console_log = console.log;
+const log = (line = '') => { out.push(line); console_log(line); };
 const OPS = ['findAll','filterPaginateSort','findFirst','findUnique','nestedFindAll','nestedFindFirst','nestedFindUnique','nestedRelations','compositeRelations','create','update','upsert','createMany','upsertMany','updateMany','nestedCreate','nestedUpsert','nestedUpdate','delete'];
 const LANGS = ['typescript','go','rust','python','php'];
 const DIALECTS = ['sqlite','postgres','mysql'];
@@ -65,13 +72,49 @@ const at = (scale, lang, surface, dialect, op) => data.get(`${scale}|${lang}|${s
 function rowsOf(e){ if(!e || e.rows.size !== 1) return null; return [...e.rows][0]; }
 const fmt = (n, d = 0) => n == null ? '—' : n.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
 
+
+// ── the report file: methodology, then the rendered tables ─────────────────────────────────────────
+const PREAMBLE = `# Cross-language ORM benchmark
+
+Each language runs the SAME 19 ORM-comparison ops through TWO surfaces against the same database:
+**native** = the litedbmodel-generated module over the shipped runtime; **sdk** = the same logical
+operation hand-written against the raw driver, litedbmodel not in the path. Both reuse prepared
+statements and bind params for reads and writes alike.
+
+The fixture is the one \`benchmark/setup.ts\` seeds for the ORM-vs-ORM bench — 1,000 users, 5,500 posts,
+10,000 comments, plus the composite-key tenant graph (500 tenant_users, 5,000 tenant_posts, 50,000
+tenant_comments), 72,000 rows in all. It is re-applied before every op. The relation ops therefore
+traverse 100 parents → 1,000 children → 10,000 grandchildren, the same window that bench measures.
+
+**rows/op is measured, per cell, at that cell's own exec seam** — the total rows the op moved across the
+DB→client boundary, summed over its statements. Every cell of every language runs byte-identical SQL over
+the one shared fixture, so cells that disagree on rows/op are doing different work; the fairness section
+reports that rather than averaging it away. A cell with no row-observing seam reports a dash, never a zero.
+Latency is p50 over the timed iterations; the row count comes from one un-timed probe per op, so the
+published latencies do not pay for the observation.
+
+Each language uses its own real driver per dialect (TypeScript: better-sqlite3 / pg / mysql2; Python:
+sqlite3 / psycopg 3 / PyMySQL; PHP: PDO; Rust: rusqlite / tokio-postgres / sqlx; Go: modernc.org/sqlite /
+pgx / go-sql-driver). Cross-language absolute times therefore carry a driver caveat; within a language the
+native and sdk columns are directly comparable. PostgreSQL and MySQL are network round-trips and converge
+across languages — the client-side cost is the larger fraction on SQLite in-proc.
+
+Reproduce:
+
+\`\`\`bash
+npx tsx benchmark/crosslang/emit-setup.ts
+./benchmark/crosslang/run-cells.sh sqlite
+node benchmark/crosslang/results/aggregate.mjs
+\`\`\`
+`;
+
 // ── ① absolute p50 + the native÷sdk ratio, with the rows each op moved ─────────────────────────────
 for (const dialect of DIALECTS) {
   const present = LANGS.filter((l) => OPS.some((op) => at(1,l,'native',dialect,op) || at(1,l,'sdk',dialect,op)));
   if (!present.length) continue;
-  console.log(`\n### ${dialect} — native_p50µs / sdk_p50µs (native÷sdk)\n`);
-  console.log('| op | rows/op | ' + present.join(' | ') + ' |');
-  console.log('|----|--------:|' + present.map(()=>'----').join('|') + '|');
+  log(`\n### ${dialect} — native_p50µs / sdk_p50µs (native÷sdk)\n`);
+  log('| op | rows/op | ' + present.join(' | ') + ' |');
+  log('|----|--------:|' + present.map(()=>'----').join('|') + '|');
   for (const op of OPS) {
     const rowSet = new Set(present.flatMap((l) => ['native','sdk'].map((s) => rowsOf(at(1,l,s,dialect,op)))).filter((r) => r !== null));
     const cells = present.map((l) => {
@@ -83,7 +126,7 @@ for (const dialect of DIALECTS) {
     });
     // More than one distinct value = the cells did different work; show them all rather than one of them.
     const rows = rowSet.size === 0 ? '—' : [...rowSet].sort((a,b)=>a-b).map((r)=>fmt(r)).join(' / ');
-    console.log(`| ${op} | ${rows} | ` + cells.join(' | ') + ' |');
+    log(`| ${op} | ${rows} | ` + cells.join(' | ') + ' |');
   }
 }
 
@@ -91,11 +134,11 @@ for (const dialect of DIALECTS) {
 for (const dialect of DIALECTS) {
   const present = LANGS.filter((l) => OPS.some((op) => at(1,l,'native',dialect,op)));
   if (!present.length) continue;
-  console.log(`\n### ${dialect} — per-row cost, native / sdk (ns per row)\n`);
-  console.log('> Only ops that move rows. A write that returns nothing has no per-row cost and reads `—`;');
-  console.log('> its cost is entirely the fixed per-call overhead in ①.\n');
-  console.log('| op | rows/op | ' + present.join(' | ') + ' |');
-  console.log('|----|--------:|' + present.map(()=>'----').join('|') + '|');
+  log(`\n### ${dialect} — per-row cost, native / sdk (ns per row)\n`);
+  log('> Only ops that move rows. A write that returns nothing has no per-row cost and reads `—`;');
+  log('> its cost is entirely the fixed per-call overhead in ①.\n');
+  log('| op | rows/op | ' + present.join(' | ') + ' |');
+  log('|----|--------:|' + present.map(()=>'----').join('|') + '|');
   for (const op of OPS) {
     const perRow = (l, s) => {
       const e = at(1,l,s,dialect,op);
@@ -112,7 +155,7 @@ for (const dialect of DIALECTS) {
       if (n == null && s == null) return 'SKIP';
       return `${n==null?'—':fmt(n)}/${s==null?'—':fmt(s)}`;
     });
-    console.log(`| ${op} | ${[...rowSet].sort((a,b)=>a-b).map((r)=>fmt(r)).join(' / ')} | ` + cells.join(' | ') + ' |');
+    log(`| ${op} | ${[...rowSet].sort((a,b)=>a-b).map((r)=>fmt(r)).join(' / ')} | ` + cells.join(' | ') + ' |');
   }
 }
 
@@ -122,9 +165,9 @@ for (const dialect of DIALECTS) {
 // single scale cannot do this, which is exactly why the old fixture hid a per-row regression (#170).
 const sweep = [...scales].sort((a,b)=>a-b);
 if (sweep.length >= 2) {
-  console.log(`\n### fixed overhead vs per-row cost — regressed over scales ${sweep.join(', ')}\n`);
-  console.log('| dialect | lang | surface | op | points (rows→p50µs) | fixed µs | µs per 1k rows |');
-  console.log('|---------|------|---------|----|--------------------|---------:|---------------:|');
+  log(`\n### fixed overhead vs per-row cost — regressed over scales ${sweep.join(', ')}\n`);
+  log('| dialect | lang | surface | op | points (rows→p50µs) | fixed µs | µs per 1k rows |');
+  log('|---------|------|---------|----|--------------------|---------:|---------------:|');
   for (const dialect of DIALECTS) for (const lang of LANGS) for (const surface of ['native','sdk']) for (const op of OPS) {
     const pts = sweep.map((sc) => { const e = at(sc,lang,surface,dialect,op); const r = rowsOf(e); const u = p50(e?.us ?? []); return (r && u != null) ? [r,u] : null; }).filter(Boolean);
     if (pts.length < 2) continue;
@@ -136,19 +179,19 @@ if (sweep.length >= 2) {
     const slope = (n*sxy - sx*sy)/den;
     const intercept = (sy - slope*sx)/n;
     const shown = pts.map(([x,y])=>`${fmt(x)}→${y.toFixed(0)}`).join(', ');
-    console.log(`| ${dialect} | ${lang} | ${surface} | ${op} | ${shown} | ${intercept.toFixed(1)} | ${(slope*1000).toFixed(1)} |`);
+    log(`| ${dialect} | ${lang} | ${surface} | ${op} | ${shown} | ${intercept.toFixed(1)} | ${(slope*1000).toFixed(1)} |`);
   }
 } else {
-  console.log(`\n### fixed overhead vs per-row cost\n`);
-  console.log(`Not separable from ONE scale (${sweep.join(', ')}). Re-emit the fixture at another scale and`);
-  console.log('re-run the cells into `results/scale-<factor>/`:\n');
-  console.log('```bash');
-  console.log('npx tsx benchmark/crosslang/emit-setup.ts 0.1   # then re-run the cells → results/scale-0.1/');
-  console.log('```');
+  log(`\n### fixed overhead vs per-row cost\n`);
+  log(`Not separable from ONE scale (${sweep.join(', ')}). Re-emit the fixture at another scale and`);
+  log('re-run the cells into `results/scale-<factor>/`:\n');
+  log('```bash');
+  log('npx tsx benchmark/crosslang/emit-setup.ts 0.1   # then re-run the cells → results/scale-0.1/');
+  log('```');
 }
 
 // ── ④ fairness — the cells must move the SAME rows, and be honest where they cannot say ────────────
-console.log('\n### fairness — rows/op agreement across cells\n');
+log('\n### fairness — rows/op agreement across cells\n');
 const disagree = [];
 const unmeasured = [];
 for (const dialect of DIALECTS) for (const op of OPS) {
@@ -163,20 +206,23 @@ for (const dialect of DIALECTS) for (const op of OPS) {
   }
   if (seen.size > 1) disagree.push({ dialect, op, seen });
 }
-if (!disagree.length) console.log('Every cell that can observe rows reports the SAME rows/op for every op × dialect.');
+if (!disagree.length) log('Every cell that can observe rows reports the SAME rows/op for every op × dialect.');
 else {
-  console.log('CELLS DISAGREE on the rows an op moves — they are NOT running the same work:\n');
-  console.log('| dialect | op | rows → cells |');
-  console.log('|---------|----|--------------|');
-  for (const d of disagree) console.log(`| ${d.dialect} | ${d.op} | ` + [...d.seen].map(([r,cs])=>`**${fmt(r)}**: ${cs.join(', ')}`).join('; ') + ' |');
+  log('CELLS DISAGREE on the rows an op moves — they are NOT running the same work:\n');
+  log('| dialect | op | rows → cells |');
+  log('|---------|----|--------------|');
+  for (const d of disagree) log(`| ${d.dialect} | ${d.op} | ` + [...d.seen].map(([r,cs])=>`**${fmt(r)}**: ${cs.join(', ')}`).join('; ') + ' |');
 }
-if (unmeasured.length) console.log(`\nNo row-observing seam (reported as \`—\`, never as 0): ${[...new Set(unmeasured.map((u)=>u.split(': ')[1]))].join(', ')}`);
+if (unmeasured.length) log(`\nNo row-observing seam (reported as \`—\`, never as 0): ${[...new Set(unmeasured.map((u)=>u.split(': ')[1]))].join(', ')}`);
 
 // ── ⑤ coverage: which (lang, surface, dialect) actually have data ──────────────────────────────────
-console.log('\n### coverage (rows collected)\n');
+log('\n### coverage (rows collected)\n');
 const seenCells = new Map();
 for (const key of data.keys()){ const [scale,lang,surface,dialect]=key.split('|'); const k=`${lang}.${surface}.${dialect} @scale ${scale}`; seenCells.set(k,(seenCells.get(k)||0)+data.get(key).us.length); }
 for (const scale of sweep) for (const lang of LANGS) for (const dialect of DIALECTS) for (const surface of ['native','sdk']){
   const k=`${lang}.${surface}.${dialect} @scale ${scale}`; const v=seenCells.get(k);
-  console.log(`${k.padEnd(40)} ${v?('samples='+v):'SKIP (no data)'}`);
+  log(`${k.padEnd(40)} ${v?('samples='+v):'SKIP (no data)'}`);
 }
+
+writeFileSync(OUT_MD, PREAMBLE + out.join('\n') + '\n');
+process.stderr.write(`\nWrote ${OUT_MD}\n`);
