@@ -174,6 +174,26 @@ final class Behavior
                     'map'
                 );
                 $component = $m['component'] ?? null;
+                // 純式 map（Component 呼びなし・#222）: 各要素を `as` 束縛入りスコープで評価するだけ。
+                // handler も要素ごとの Failure も無い（elementPolicy / batched / into / policy は guard が拒否）。
+                if ($component === null && array_key_exists('transform', $m)) {
+                    $asT = (string) ($m['as'] ?? '');
+                    $hasWhenT = array_key_exists('when', $m);
+                    $outT = [];
+                    foreach ($over as $el) {
+                        $scope = $baseScope();
+                        $scope[$asT] = $el;
+                        if ($hasWhenT) {
+                            $condNode = new \stdClass();
+                            $condNode->cond = [$m['when'], true, false];
+                            if (ExprEval::evaluate($condNode, $scope) !== true) {
+                                continue;
+                            }
+                        }
+                        $outT[] = ExprEval::evaluate($m['transform'], $scope);
+                    }
+                    return ['ok' => $outT];
+                }
                 if (!isset($handlers[$component])) {
                     BehaviorFailure::raise('UNKNOWN_COMPONENT', "component '{$component}' has no handler (fail-closed)");
                 }

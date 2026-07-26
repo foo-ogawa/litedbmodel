@@ -284,7 +284,7 @@ export class BenchPostgres {
   }
 
   @behavior static createMany(rows: NewUser[]): WriteSummary[] {
-    const summary: WriteSummary[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) SELECT v.email, v.name FROM UNNEST(?::text[], ?::text[]) AS v(email, name)", [rows, rows], true, false, false) as WriteSummary[];
+    const summary: WriteSummary[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) SELECT v.email, v.name FROM UNNEST(?::text[], ?::text[]) AS v(email, name)", [rows], true, false, false) as WriteSummary[];
     return summary;
   }
 
@@ -294,7 +294,7 @@ export class BenchPostgres {
   }
 
   @behavior static updateMany(rows: UserPatch[]): WriteSummary[] {
-    const summary: WriteSummary[] = Db.executeSQL("UPDATE benchmark_users AS t SET name = v.name FROM UNNEST(?::int[], ?::text[]) AS v(id, name) WHERE t.id = v.id", [rows, rows], true, false, false) as WriteSummary[];
+    const summary: WriteSummary[] = Db.executeSQL("UPDATE benchmark_users AS t SET name = v.name FROM UNNEST(?::int[], ?::text[]) AS v(id, name) WHERE t.id = v.id", [rows], true, false, false) as WriteSummary[];
     return summary;
   }
 
@@ -409,7 +409,7 @@ export class BenchMysql {
   }
 
   @behavior static upsert(email: string, name: string): IdRow[] {
-    const returned: IdRow[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) VALUES (?, ?) ON DUPLICATE KEY UPDATE email = VALUES(email), name = VALUES(name) RETURNING id", [email, name], true, true, false) as IdRow[];
+    const returned: IdRow[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) VALUES (?, ?) ON DUPLICATE KEY UPDATE email = VALUES(email), name = VALUES(name) RETURNING id /*scp:pk=id;ai=id;conflict=email*/", [email, name], true, true, false) as IdRow[];
     return returned;
   }
 
@@ -429,7 +429,7 @@ export class BenchMysql {
   }
 
   @behavior static nestedCreate(email: string, name: string, title: string): WriteSummary[][] {
-    const user: IdRow[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) VALUES (?, ?) RETURNING id", [email, name], true, true, false) as IdRow[];
+    const user: IdRow[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) VALUES (?, ?) RETURNING id /*scp:pk=id;ai=id*/", [email, name], true, true, false) as IdRow[];
     return user.map((u) => {
       const written: WriteSummary[] = Db.executeSQL("INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)", [u.id, title], true, false, false) as WriteSummary[];
       return written;
@@ -437,7 +437,7 @@ export class BenchMysql {
   }
 
   @behavior static nestedUpsert(email: string, name: string, title: string): WriteSummary[][] {
-    const user: IdRow[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) VALUES (?, ?) ON DUPLICATE KEY UPDATE email = VALUES(email), name = VALUES(name) RETURNING id", [email, name], true, true, false) as IdRow[];
+    const user: IdRow[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) VALUES (?, ?) ON DUPLICATE KEY UPDATE email = VALUES(email), name = VALUES(name) RETURNING id /*scp:pk=id;ai=id;conflict=email*/", [email, name], true, true, false) as IdRow[];
     return user.map((u) => {
       const written: WriteSummary[] = Db.executeSQL("INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)", [u.id, title], true, false, false) as WriteSummary[];
       return written;
@@ -445,7 +445,7 @@ export class BenchMysql {
   }
 
   @behavior static nestedUpdate(id: Int, name: string, title: string): WriteSummary[][] {
-    const user: IdRow[] = Db.executeSQL("UPDATE benchmark_users SET name = ? WHERE id = ? RETURNING id", [name, id], true, true, false) as IdRow[];
+    const user: IdRow[] = Db.executeSQL("UPDATE benchmark_users SET name = ? WHERE id = ? RETURNING id /*scp:pk=id;ai=id*/", [name, id], true, true, false) as IdRow[];
     return user.map((u) => {
       const written: WriteSummary[] = Db.executeSQL("UPDATE benchmark_posts SET title = ? WHERE author_id = ?", [title, u.id], true, false, false) as WriteSummary[];
       return written;
@@ -453,7 +453,7 @@ export class BenchMysql {
   }
 
   @behavior static delete(email: string, name: string): WriteSummary[][] {
-    const user: IdRow[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) VALUES (?, ?) RETURNING id", [email, name], true, true, false) as IdRow[];
+    const user: IdRow[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) VALUES (?, ?) RETURNING id /*scp:pk=id;ai=id*/", [email, name], true, true, false) as IdRow[];
     return user.map((u) => {
       const written: WriteSummary[] = Db.executeSQL("DELETE FROM benchmark_users WHERE id = ?", [u.id], true, false, false) as WriteSummary[];
       return written;

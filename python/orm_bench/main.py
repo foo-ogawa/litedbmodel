@@ -34,6 +34,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import lm_bench_setup  # noqa: E402
 
 from litedbmodel_runtime import (
+    MysqlDriver,
+    PostgresDriver,
     SqliteDriver,
     as_context,
     clear_middlewares,
@@ -43,13 +45,23 @@ from litedbmodel_runtime import (
     with_transaction,
 )
 
-from .behaviors_generated import bind
+# One generated module PER TARGET DB (#156): the SQL is baked per dialect, so a postgres run must load
+# the postgres module — there is no dialect fallback.
+from . import behaviors_mysql, behaviors_postgres, behaviors_sqlite
+
+_GENERATED = {"sqlite": behaviors_sqlite, "postgres": behaviors_postgres, "mysql": behaviors_mysql}
 
 # ── schema + seed from the ONE seed SSoT (benchmark/crosslang/.setup/sqlite.json, emitted from
 #    orm-domain.ts) — the SAME fixture every other cell loads. This is FIXTURE setup, not covered code:
 #    the harness measures the GENERATED op callables, it does not hand-write the seed. ──
-_SETUP = lm_bench_setup.load("sqlite")
-SCHEMA: List[str] = _SETUP["schema"]  # drop + create, applied once at open
+# The seed SSoT is PER TARGET DB (#156): `benchmark/crosslang/.setup/<dialect>.json`, emitted from the
+# one `orm-domain.ts`. `setup_for` is the only reader; nothing here hand-writes a schema or a seed.
+def setup_for(dialect: str) -> Dict[str, List[str]]:
+    return lm_bench_setup.load(dialect)
+
+
+_SETUP = setup_for("sqlite")
+SCHEMA: List[str] = _SETUP["schema"]  # the sqlite default (in-memory cell); a live target loads its own
 SEED: List[str] = _SETUP["delete"] + _SETUP["insert"]  # empty + the canonical 110-user fixture, per op
 
 # All 19 covered ops in generated declaration order (COMPONENT_NAMES).
@@ -117,27 +129,57 @@ def op_input(op: str, it: int) -> Dict[str, Any]:
     return {}
 
 
-def open_driver(spec: str) -> SqliteDriver:
-    """An in-memory sqlite DB built from the generated schema via the runtime's canonical constructor
-    (autocommit, so the runtime tx boundary's explicit BEGIN/COMMIT works); ``spec`` reserved for the
-    live pg/mysql legs."""
-    _ = spec
-    return SqliteDriver.in_memory(SCHEMA)
+def open_driver(spec: str) -> Any:
+    """The driver for ONE target DB, built with the runtime's own constructors (#156 — the cell writes no
+    connection code of its own).
+
+    sqlite = in-memory, built from the generated schema; postgres / mysql = the LIVE docker DB on the
+    established ports (``TEST_DB_PORT`` 5433 / ``TEST_MYSQL_PORT`` 3307), whose schema is applied here
+    from the SAME single-SSoT DDL. An unreachable target is a LOUD failure — never a silent fall back to
+    sqlite, which is exactly the defect that let "postgres" runs execute sqlite SQL.
+    """
+    setup = setup_for(spec if spec in ("sqlite", "postgres", "mysql") else "sqlite")
+    if spec == "sqlite":
+        return SqliteDriver.in_memory(setup["schema"])
+    if spec == "postgres":
+        driver = PostgresDriver.connect(
+            host=os.environ.get("TEST_DB_HOST", "localhost"),
+            port=int(os.environ.get("TEST_DB_PORT", "5433")),
+            user=os.environ.get("TEST_DB_USER", "testuser"),
+            password=os.environ.get("TEST_DB_PASSWORD", "testpass"),
+            dbname=os.environ.get("TEST_DB_NAME", "testdb"),
+        )
+    elif spec == "mysql":
+        driver = MysqlDriver.connect(
+            host=os.environ.get("TEST_MYSQL_HOST", "127.0.0.1"),
+            port=int(os.environ.get("TEST_MYSQL_PORT", "3307")),
+            user=os.environ.get("TEST_MYSQL_USER", "testuser"),
+            password=os.environ.get("TEST_MYSQL_PASSWORD", "testpass"),
+            dbname=os.environ.get("TEST_MYSQL_DB", "testdb"),
+        )
+    else:
+        raise SystemExit(f"orm_bench: unknown target {spec!r} (sqlite|postgres|mysql)")
+    driver.exec_ddl(list(setup["schema"]))
+    return driver
 
 
-def seed(driver: SqliteDriver) -> None:
-    """DELETE + INSERT the canonical nested fixture (runs on the driver directly — not through the seam,
-    so it is never counted by the safety middleware)."""
-    for stmt in SEED:
+def seed(driver: Any, dialect: str = "sqlite") -> None:
+    """DELETE + INSERT the canonical nested fixture of THIS target (runs on the driver directly — not
+    through the seam, so it is never counted by the safety middleware)."""
+    setup = setup_for(dialect)
+    for stmt in setup["delete"] + setup["insert"]:
         driver.prepare(stmt).run([])
 
 
-def bound_ops(driver: SqliteDriver, dialect: str) -> Dict[str, Callable[..., Any]]:
-    """Bind the op-agnostic leaf transport into the generated module — the per-op callables."""
-    return bind(make_handlers(driver, dialect))
+def bound_ops(driver: Any, dialect: str) -> Dict[str, Callable[..., Any]]:
+    """Bind the op-agnostic leaf transport into the generated module of THIS dialect."""
+    module = _GENERATED.get(dialect)
+    if module is None:
+        raise SystemExit(f"orm_bench: no generated module for dialect {dialect!r} (sqlite|postgres|mysql)")
+    return module.bind(make_handlers(driver, dialect))
 
 
-def run_op(fns: Dict[str, Callable[..., Any]], driver: SqliteDriver, op: str, it: int) -> Any:
+def run_op(fns: Dict[str, Callable[..., Any]], driver: Any, op: str, it: int) -> Any:
     """Run ONE covered op through its generated callable. A RETURNING-chained tx op runs THROUGH the
     runtime tx boundary (with_transaction over the driver ctx) so BEGIN/COMMIT bracket the leaf's body
     statements on the tx-owned connection; every other op runs the bound callable directly."""
@@ -153,7 +195,7 @@ def _measure(dialect: str, spec: str, reps: int, warmup: int) -> None:
     print("cell,dialect,op,iter,us")
     for op in OPS:
         # Re-seed before each op so writes/reads start from the canonical fixture.
-        seed(driver)
+        seed(driver, dialect)
         for it in range(warmup):
             run_op(fns, driver, op, it)
         for it in range(reps):
@@ -164,7 +206,7 @@ def _measure(dialect: str, spec: str, reps: int, warmup: int) -> None:
             print(f"native,{dialect},{op},{it},{us}")
 
 
-def safety_counts(driver: SqliteDriver, fns: Dict[str, Callable[..., Any]]) -> Dict[str, int]:
+def safety_counts(driver: Any, fns: Dict[str, Callable[..., Any]], dialect: str = "sqlite") -> Dict[str, int]:
     """Run each guarded op ONCE and return its statement count, observed at the runtime middleware seam
     (every read / batch write / tx-control statement funnels through execute/run → middleware.wrap). The
     seed runs on the driver directly (not the seam), so it is never counted."""
@@ -179,7 +221,7 @@ def safety_counts(driver: SqliteDriver, fns: Dict[str, Callable[..., Any]]) -> D
     out: Dict[str, int] = {}
     try:
         for op in list(RELATION_QUERY_COUNTS) + list(BATCH_QUERY_COUNTS) + list(TX_STMT_COUNTS):
-            seed(driver)  # clean fixture per op; not counted (runs off-seam)
+            seed(driver, dialect)  # clean fixture per op; not counted (runs off-seam)
             count["n"] = 0
             run_op(fns, driver, op, 0)
             out[op] = count["n"]
@@ -192,7 +234,7 @@ def safety_counts(driver: SqliteDriver, fns: Dict[str, Callable[..., Any]]) -> D
 def _safety(dialect: str, spec: str) -> None:
     driver = open_driver(spec)
     fns = bound_ops(driver, dialect)
-    counts = safety_counts(driver, fns)
+    counts = safety_counts(driver, fns, dialect)
     expected = {**RELATION_QUERY_COUNTS, **BATCH_QUERY_COUNTS, **TX_STMT_COUNTS}
     for op, want in expected.items():
         got = counts[op]

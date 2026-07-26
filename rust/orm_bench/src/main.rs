@@ -23,7 +23,7 @@ use litedbmodel_runtime::{MysqlDriver, PostgresDriver};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
-use gen::behaviors_generated as bg;
+use gen::active as bg;
 
 // ── query counter (consumer-side observability, N+1 proof) ──────────────────────────────────────
 // A `CountingDriver` decorator over the runtime Driver increments on each `prepare` (one per statement

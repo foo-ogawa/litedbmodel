@@ -44,15 +44,15 @@ final class OrmBench
      *
      * @return array{schema:list<string>,delete:list<string>,insert:list<string>}
      */
-    private static function setup(): array
+    private static function setup(string $dialect = 'sqlite'): array
     {
-        /** @var array<string,array>|null $cache */
-        static $cache = null;
-        if ($cache === null) {
+        /** @var array<string,array<string,array>> $cache */
+        static $cache = [];
+        if (!isset($cache[$dialect])) {
             require_once __DIR__ . '/../lm_bench_setup.php';
-            $cache = \lm_bench_load_setup('sqlite');
+            $cache[$dialect] = \lm_bench_load_setup($dialect);
         }
-        return $cache;
+        return $cache[$dialect];
     }
 
     /**
@@ -86,16 +86,38 @@ final class OrmBench
     public const TX_STMT_COUNTS = ['nestedCreate' => 4, 'nestedUpsert' => 4, 'nestedUpdate' => 4, 'delete' => 4];
 
     /**
-     * An in-memory sqlite DB built from the generated schema (autocommit, so the runtime tx boundary's
-     * explicit BEGIN/COMMIT works). `$spec` reserved for the live pg/mysql legs.
+     * The PDO for ONE target DB (#156). sqlite = in-memory; postgres / mysql = the LIVE docker DB on the
+     * established ports, opened through the runtime's OWN {@see LiveDb} constructors (the cell writes no
+     * connection code). Each applies the schema of ITS OWN target from the single seed SSoT. An unknown
+     * or unreachable target is a LOUD failure — never a silent fall back to sqlite, which is exactly the
+     * defect that let a "postgres" run execute sqlite SQL.
      */
     public static function openDriver(string $spec = 'sqlite'): \PDO
     {
-        unset($spec);
-        $db = new \PDO('sqlite::memory:');
-        $db->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
-        $db->setAttribute(\PDO::ATTR_STRINGIFY_FETCHES, false);
-        foreach (self::setup()['schema'] as $stmt) {
+        if ($spec === 'sqlite') {
+            $db = new \PDO('sqlite::memory:');
+            $db->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
+            $db->setAttribute(\PDO::ATTR_STRINGIFY_FETCHES, false);
+        } elseif ($spec === 'postgres') {
+            $db = \LiteDbModel\Runtime\LiveDb::postgres(
+                getenv('TEST_DB_HOST') ?: 'localhost',
+                (int) (getenv('TEST_DB_PORT') ?: 5433),
+                getenv('TEST_DB_USER') ?: 'testuser',
+                getenv('TEST_DB_PASSWORD') ?: 'testpass',
+                getenv('TEST_DB_NAME') ?: 'testdb',
+            );
+        } elseif ($spec === 'mysql') {
+            $db = \LiteDbModel\Runtime\LiveDb::mysql(
+                getenv('TEST_MYSQL_HOST') ?: '127.0.0.1',
+                (int) (getenv('TEST_MYSQL_PORT') ?: 3307),
+                getenv('TEST_MYSQL_USER') ?: 'testuser',
+                getenv('TEST_MYSQL_PASSWORD') ?: 'testpass',
+                getenv('TEST_MYSQL_DB') ?: 'testdb',
+            );
+        } else {
+            throw new \RuntimeException("orm_bench: unknown target '{$spec}' (sqlite|postgres|mysql)");
+        }
+        foreach (self::setup($spec)['schema'] as $stmt) {
             $db->exec($stmt);
         }
         return $db;
@@ -105,9 +127,9 @@ final class OrmBench
      * DELETE + INSERT the canonical nested fixture (runs on the PDO DIRECTLY — not through the seam, so
      * it is never counted by the safety middleware).
      */
-    public static function seed(\PDO $db): void
+    public static function seed(\PDO $db, string $dialect = 'sqlite'): void
     {
-        foreach (array_merge(self::setup()['delete'], self::setup()['insert']) as $stmt) {
+        foreach (array_merge(self::setup($dialect)['delete'], self::setup($dialect)['insert']) as $stmt) {
             $db->exec($stmt);
         }
     }
@@ -120,7 +142,12 @@ final class OrmBench
      */
     public static function boundOps(\PDO|ExecutionContext $driver, string $dialect): array
     {
-        $mod = require __DIR__ . '/behaviors_generated.php';
+        // One generated module PER TARGET DB (#156): the SQL is baked per dialect, so the dialect the
+        // handlers run under selects the module. No fallback.
+        if (!in_array($dialect, ['sqlite', 'postgres', 'mysql'], true)) {
+            throw new \RuntimeException("orm_bench: no generated module for dialect '{$dialect}'");
+        }
+        $mod = require __DIR__ . "/behaviors_{$dialect}.php";
         return ($mod->bind)(Leaves::makeHandlers(Context::of($driver), $dialect));
     }
 
@@ -193,7 +220,7 @@ final class OrmBench
      * @param array<string,callable> $fns
      * @return array<string,int>
      */
-    public static function safetyCounts(\PDO $driver, array $fns): array
+    public static function safetyCounts(\PDO $driver, array $fns, string $spec = 'sqlite'): array
     {
         $counter = new \stdClass();
         $counter->n = 0;
@@ -214,7 +241,7 @@ final class OrmBench
                 array_keys(self::TX_STMT_COUNTS),
             );
             foreach ($ops as $op) {
-                self::seed($driver); // clean fixture per op; not counted (runs off-seam)
+                self::seed($driver, $spec); // clean fixture per op; not counted (runs off-seam)
                 $counter->n = 0;
                 self::runOp($fns, $driver, $op, 0);
                 $out[$op] = $counter->n;
@@ -233,7 +260,7 @@ final class OrmBench
         $fns = self::boundOps($driver, $dialect);
         echo "cell,dialect,op,iter,us\n";
         foreach (self::OPS as $op) {
-            self::seed($driver); // re-seed before each op so writes/reads start from the canonical fixture
+            self::seed($driver, $spec); // re-seed before each op so writes/reads start from the canonical fixture
             for ($it = 0; $it < $warmup; $it++) {
                 self::runOp($fns, $driver, $op, $it);
             }
@@ -252,7 +279,7 @@ final class OrmBench
     {
         $driver = self::openDriver($spec);
         $fns = self::boundOps($driver, $dialect);
-        $counts = self::safetyCounts($driver, $fns);
+        $counts = self::safetyCounts($driver, $fns, $spec);
         $expected = self::RELATION_QUERY_COUNTS + self::BATCH_QUERY_COUNTS + self::TX_STMT_COUNTS;
         foreach ($expected as $op => $want) {
             $got = $counts[$op];

@@ -27,9 +27,12 @@ use litedbmodel_runtime::*;
 // synthesize or re-interpret it).
 #[allow(dead_code)]
 fn op_failed(node: &str, policy: &str, e: BehaviorError) -> BehaviorError {
+    // The Kind names itself, and 'retry' says it gave up — the attempts are Runtime-owned (scp-error.md:
+    // tuning never enters the IR), so what the plan reports is the exhausted retry.
+    let exhausted = if policy == "retry" { " (exhausted)" } else { "" };
     BehaviorError {
         code: "OP_FAILED".to_string(),
-        message: format!("operation '{node}' failed under '{policy}' policy: {}", e.message),
+        message: format!("operation '{node}' failed under '{policy}' policy{exhausted}: {}", e.message),
         detail: e.detail,
     }
 }
@@ -241,7 +244,7 @@ pub fn findAll(
     let payload_n0 = WireRow { entries: vec![("bigint".to_string(), WireValue::Bool(false)), ("params".to_string(), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![]; __v } })), ("returning".to_string(), WireValue::Bool(false)), ("sql".to_string(), WireValue::Str("SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100".to_string())), ("write".to_string(), WireValue::Bool(false))] };
     let wire_n0 = match execute_sql(payload_n0) {
         Ok(r) => r,
-        Err(e) => return Err(BehaviorError { code: "OP_FAILED".to_string(), message: format!("operation '{}' failed under 'fail' policy: {}", "n0", e.message), detail: e.detail }),
+        Err(e) => return Err(op_failed("n0", "fail", e)),
     };
     *cell_n0.borrow_mut() = match wire_n0.as_list() {
         Probe::Got(l0) => {
@@ -307,7 +310,7 @@ pub fn filterPaginateSort(
     let payload_n0 = WireRow { entries: vec![("bigint".to_string(), WireValue::Bool(false)), ("params".to_string(), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::int(published)]; __v } })), ("returning".to_string(), WireValue::Bool(false)), ("sql".to_string(), WireValue::Str("SELECT id, title, content, published, author_id, created_at FROM benchmark_posts WHERE published = ? ORDER BY created_at DESC LIMIT 20 OFFSET 10".to_string())), ("write".to_string(), WireValue::Bool(false))] };
     let wire_n0 = match execute_sql(payload_n0) {
         Ok(r) => r,
-        Err(e) => return Err(BehaviorError { code: "OP_FAILED".to_string(), message: format!("operation '{}' failed under 'fail' policy: {}", "n0", e.message), detail: e.detail }),
+        Err(e) => return Err(op_failed("n0", "fail", e)),
     };
     *cell_n0.borrow_mut() = match wire_n0.as_list() {
         Probe::Got(l0) => {
@@ -394,7 +397,7 @@ pub fn findFirst(
     let payload_n0 = WireRow { entries: vec![("bigint".to_string(), WireValue::Bool(false)), ("params".to_string(), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::Str(name.clone())]; __v } })), ("returning".to_string(), WireValue::Bool(false)), ("sql".to_string(), WireValue::Str("SELECT id, email, name FROM benchmark_users WHERE name LIKE ? LIMIT 1".to_string())), ("write".to_string(), WireValue::Bool(false))] };
     let wire_n0 = match execute_sql(payload_n0) {
         Ok(r) => r,
-        Err(e) => return Err(BehaviorError { code: "OP_FAILED".to_string(), message: format!("operation '{}' failed under 'fail' policy: {}", "n0", e.message), detail: e.detail }),
+        Err(e) => return Err(op_failed("n0", "fail", e)),
     };
     *cell_n0.borrow_mut() = match wire_n0.as_list() {
         Probe::Got(l0) => {
@@ -460,7 +463,7 @@ pub fn findUnique(
     let payload_n0 = WireRow { entries: vec![("bigint".to_string(), WireValue::Bool(false)), ("params".to_string(), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::Str(email.clone())]; __v } })), ("returning".to_string(), WireValue::Bool(false)), ("sql".to_string(), WireValue::Str("SELECT id, email, name FROM benchmark_users WHERE email = ? LIMIT 1".to_string())), ("write".to_string(), WireValue::Bool(false))] };
     let wire_n0 = match execute_sql(payload_n0) {
         Ok(r) => r,
-        Err(e) => return Err(BehaviorError { code: "OP_FAILED".to_string(), message: format!("operation '{}' failed under 'fail' policy: {}", "n0", e.message), detail: e.detail }),
+        Err(e) => return Err(op_failed("n0", "fail", e)),
     };
     *cell_n0.borrow_mut() = match wire_n0.as_list() {
         Probe::Got(l0) => {
@@ -534,7 +537,7 @@ pub fn nestedFindAll(
     let payload_n0 = WireRow { entries: vec![("bigint".to_string(), WireValue::Bool(false)), ("params".to_string(), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![]; __v } })), ("returning".to_string(), WireValue::Bool(false)), ("sql".to_string(), WireValue::Str("SELECT id, email, name FROM benchmark_users LIMIT 100".to_string())), ("write".to_string(), WireValue::Bool(false))] };
     let wire_n0 = match execute_sql(payload_n0) {
         Ok(r) => r,
-        Err(e) => return Err(BehaviorError { code: "OP_FAILED".to_string(), message: format!("operation '{}' failed under 'fail' policy: {}", "n0", e.message), detail: e.detail }),
+        Err(e) => return Err(op_failed("n0", "fail", e)),
     };
     *cell_n0.borrow_mut() = match wire_n0.as_list() {
         Probe::Got(l0) => l0.items.clone(),
@@ -548,7 +551,7 @@ pub fn nestedFindAll(
         let payload_n1 = WireRow { entries: vec![("col".to_string(), WireValue::List(WireList { items: { let __v: Vec<String> = vec!["id".to_string()]; __v }.into_iter().map(WireValue::Str).collect() })), ("rows".to_string(), WireValue::List(WireList { items: cell_n0.borrow().clone() }))] };
         let wire_n1 = match pluck_keys(payload_n1) {
             Ok(r) => r,
-            Err(e) => return Err(BehaviorError { code: "OP_FAILED".to_string(), message: format!("operation '{}' failed under 'fail' policy: {}", "n1", e.message), detail: e.detail }),
+            Err(e) => return Err(op_failed("n1", "fail", e)),
         };
         *cell_n1.borrow_mut() = match wire_n1.as_list() {
             Probe::Got(l0) => l0.items.clone(),
@@ -560,10 +563,10 @@ pub fn nestedFindAll(
     }
     // ── op 'n2' (executeSQL, parent:n1) ──
     if produced_n1.get() {
-        let payload_n2 = WireRow { entries: vec![("bigint".to_string(), WireValue::Bool(false)), ("params".to_string(), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::List(WireList { items: cell_n1.borrow().clone() })]; __v } })), ("returning".to_string(), WireValue::Bool(false)), ("sql".to_string(), WireValue::Str("SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN (SELECT value FROM json_each(?)) ORDER BY id ASC".to_string())), ("write".to_string(), WireValue::Bool(false))] };
+        let payload_n2 = WireRow { entries: vec![("bigint".to_string(), WireValue::Bool(false)), ("params".to_string(), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::List(WireList { items: cell_n1.borrow().clone() })]; __v } })), ("returning".to_string(), WireValue::Bool(false)), ("sql".to_string(), WireValue::Str("SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) ORDER BY id ASC".to_string())), ("write".to_string(), WireValue::Bool(false))] };
         let wire_n2 = match execute_sql(payload_n2) {
             Ok(r) => r,
-            Err(e) => return Err(BehaviorError { code: "OP_FAILED".to_string(), message: format!("operation '{}' failed under 'fail' policy: {}", "n2", e.message), detail: e.detail }),
+            Err(e) => return Err(op_failed("n2", "fail", e)),
         };
         *cell_n2.borrow_mut() = match wire_n2.as_list() {
             Probe::Got(l0) => l0.items.clone(),
@@ -578,7 +581,7 @@ pub fn nestedFindAll(
         let payload_n3 = WireRow { entries: vec![("children".to_string(), WireValue::List(WireList { items: cell_n2.borrow().clone() })), ("fk".to_string(), WireValue::List(WireList { items: { let __v: Vec<String> = vec!["author_id".to_string()]; __v }.into_iter().map(WireValue::Str).collect() })), ("into".to_string(), WireValue::Str("posts".to_string())), ("parents".to_string(), WireValue::List(WireList { items: cell_n0.borrow().clone() })), ("pk".to_string(), WireValue::List(WireList { items: { let __v: Vec<String> = vec!["id".to_string()]; __v }.into_iter().map(WireValue::Str).collect() })), ("single".to_string(), WireValue::Bool(false))] };
         let wire_n3 = match group_children(payload_n3) {
             Ok(r) => r,
-            Err(e) => return Err(BehaviorError { code: "OP_FAILED".to_string(), message: format!("operation '{}' failed under 'fail' policy: {}", "n3", e.message), detail: e.detail }),
+            Err(e) => return Err(op_failed("n3", "fail", e)),
         };
         *cell_n3.borrow_mut() = match wire_n3.as_list() {
             Probe::Got(l0) => {
@@ -694,7 +697,7 @@ pub fn nestedFindFirst(
     let payload_n0 = WireRow { entries: vec![("bigint".to_string(), WireValue::Bool(false)), ("params".to_string(), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::Str(name.clone())]; __v } })), ("returning".to_string(), WireValue::Bool(false)), ("sql".to_string(), WireValue::Str("SELECT id, email, name FROM benchmark_users WHERE name LIKE ? LIMIT 1".to_string())), ("write".to_string(), WireValue::Bool(false))] };
     let wire_n0 = match execute_sql(payload_n0) {
         Ok(r) => r,
-        Err(e) => return Err(BehaviorError { code: "OP_FAILED".to_string(), message: format!("operation '{}' failed under 'fail' policy: {}", "n0", e.message), detail: e.detail }),
+        Err(e) => return Err(op_failed("n0", "fail", e)),
     };
     *cell_n0.borrow_mut() = match wire_n0.as_list() {
         Probe::Got(l0) => l0.items.clone(),
@@ -708,7 +711,7 @@ pub fn nestedFindFirst(
         let payload_n1 = WireRow { entries: vec![("col".to_string(), WireValue::List(WireList { items: { let __v: Vec<String> = vec!["id".to_string()]; __v }.into_iter().map(WireValue::Str).collect() })), ("rows".to_string(), WireValue::List(WireList { items: cell_n0.borrow().clone() }))] };
         let wire_n1 = match pluck_keys(payload_n1) {
             Ok(r) => r,
-            Err(e) => return Err(BehaviorError { code: "OP_FAILED".to_string(), message: format!("operation '{}' failed under 'fail' policy: {}", "n1", e.message), detail: e.detail }),
+            Err(e) => return Err(op_failed("n1", "fail", e)),
         };
         *cell_n1.borrow_mut() = match wire_n1.as_list() {
             Probe::Got(l0) => l0.items.clone(),
@@ -720,10 +723,10 @@ pub fn nestedFindFirst(
     }
     // ── op 'n2' (executeSQL, parent:n1) ──
     if produced_n1.get() {
-        let payload_n2 = WireRow { entries: vec![("bigint".to_string(), WireValue::Bool(false)), ("params".to_string(), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::List(WireList { items: cell_n1.borrow().clone() })]; __v } })), ("returning".to_string(), WireValue::Bool(false)), ("sql".to_string(), WireValue::Str("SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN (SELECT value FROM json_each(?)) ORDER BY id ASC".to_string())), ("write".to_string(), WireValue::Bool(false))] };
+        let payload_n2 = WireRow { entries: vec![("bigint".to_string(), WireValue::Bool(false)), ("params".to_string(), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::List(WireList { items: cell_n1.borrow().clone() })]; __v } })), ("returning".to_string(), WireValue::Bool(false)), ("sql".to_string(), WireValue::Str("SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) ORDER BY id ASC".to_string())), ("write".to_string(), WireValue::Bool(false))] };
         let wire_n2 = match execute_sql(payload_n2) {
             Ok(r) => r,
-            Err(e) => return Err(BehaviorError { code: "OP_FAILED".to_string(), message: format!("operation '{}' failed under 'fail' policy: {}", "n2", e.message), detail: e.detail }),
+            Err(e) => return Err(op_failed("n2", "fail", e)),
         };
         *cell_n2.borrow_mut() = match wire_n2.as_list() {
             Probe::Got(l0) => l0.items.clone(),
@@ -738,7 +741,7 @@ pub fn nestedFindFirst(
         let payload_n3 = WireRow { entries: vec![("children".to_string(), WireValue::List(WireList { items: cell_n2.borrow().clone() })), ("fk".to_string(), WireValue::List(WireList { items: { let __v: Vec<String> = vec!["author_id".to_string()]; __v }.into_iter().map(WireValue::Str).collect() })), ("into".to_string(), WireValue::Str("posts".to_string())), ("parents".to_string(), WireValue::List(WireList { items: cell_n0.borrow().clone() })), ("pk".to_string(), WireValue::List(WireList { items: { let __v: Vec<String> = vec!["id".to_string()]; __v }.into_iter().map(WireValue::Str).collect() })), ("single".to_string(), WireValue::Bool(false))] };
         let wire_n3 = match group_children(payload_n3) {
             Ok(r) => r,
-            Err(e) => return Err(BehaviorError { code: "OP_FAILED".to_string(), message: format!("operation '{}' failed under 'fail' policy: {}", "n3", e.message), detail: e.detail }),
+            Err(e) => return Err(op_failed("n3", "fail", e)),
         };
         *cell_n3.borrow_mut() = match wire_n3.as_list() {
             Probe::Got(l0) => {
@@ -854,7 +857,7 @@ pub fn nestedFindUnique(
     let payload_n0 = WireRow { entries: vec![("bigint".to_string(), WireValue::Bool(false)), ("params".to_string(), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::Str(email.clone())]; __v } })), ("returning".to_string(), WireValue::Bool(false)), ("sql".to_string(), WireValue::Str("SELECT id, email, name FROM benchmark_users WHERE email = ? LIMIT 1".to_string())), ("write".to_string(), WireValue::Bool(false))] };
     let wire_n0 = match execute_sql(payload_n0) {
         Ok(r) => r,
-        Err(e) => return Err(BehaviorError { code: "OP_FAILED".to_string(), message: format!("operation '{}' failed under 'fail' policy: {}", "n0", e.message), detail: e.detail }),
+        Err(e) => return Err(op_failed("n0", "fail", e)),
     };
     *cell_n0.borrow_mut() = match wire_n0.as_list() {
         Probe::Got(l0) => l0.items.clone(),
@@ -868,7 +871,7 @@ pub fn nestedFindUnique(
         let payload_n1 = WireRow { entries: vec![("col".to_string(), WireValue::List(WireList { items: { let __v: Vec<String> = vec!["id".to_string()]; __v }.into_iter().map(WireValue::Str).collect() })), ("rows".to_string(), WireValue::List(WireList { items: cell_n0.borrow().clone() }))] };
         let wire_n1 = match pluck_keys(payload_n1) {
             Ok(r) => r,
-            Err(e) => return Err(BehaviorError { code: "OP_FAILED".to_string(), message: format!("operation '{}' failed under 'fail' policy: {}", "n1", e.message), detail: e.detail }),
+            Err(e) => return Err(op_failed("n1", "fail", e)),
         };
         *cell_n1.borrow_mut() = match wire_n1.as_list() {
             Probe::Got(l0) => l0.items.clone(),
@@ -880,10 +883,10 @@ pub fn nestedFindUnique(
     }
     // ── op 'n2' (executeSQL, parent:n1) ──
     if produced_n1.get() {
-        let payload_n2 = WireRow { entries: vec![("bigint".to_string(), WireValue::Bool(false)), ("params".to_string(), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::List(WireList { items: cell_n1.borrow().clone() })]; __v } })), ("returning".to_string(), WireValue::Bool(false)), ("sql".to_string(), WireValue::Str("SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN (SELECT value FROM json_each(?)) ORDER BY id ASC".to_string())), ("write".to_string(), WireValue::Bool(false))] };
+        let payload_n2 = WireRow { entries: vec![("bigint".to_string(), WireValue::Bool(false)), ("params".to_string(), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::List(WireList { items: cell_n1.borrow().clone() })]; __v } })), ("returning".to_string(), WireValue::Bool(false)), ("sql".to_string(), WireValue::Str("SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) ORDER BY id ASC".to_string())), ("write".to_string(), WireValue::Bool(false))] };
         let wire_n2 = match execute_sql(payload_n2) {
             Ok(r) => r,
-            Err(e) => return Err(BehaviorError { code: "OP_FAILED".to_string(), message: format!("operation '{}' failed under 'fail' policy: {}", "n2", e.message), detail: e.detail }),
+            Err(e) => return Err(op_failed("n2", "fail", e)),
         };
         *cell_n2.borrow_mut() = match wire_n2.as_list() {
             Probe::Got(l0) => l0.items.clone(),
@@ -898,7 +901,7 @@ pub fn nestedFindUnique(
         let payload_n3 = WireRow { entries: vec![("children".to_string(), WireValue::List(WireList { items: cell_n2.borrow().clone() })), ("fk".to_string(), WireValue::List(WireList { items: { let __v: Vec<String> = vec!["author_id".to_string()]; __v }.into_iter().map(WireValue::Str).collect() })), ("into".to_string(), WireValue::Str("posts".to_string())), ("parents".to_string(), WireValue::List(WireList { items: cell_n0.borrow().clone() })), ("pk".to_string(), WireValue::List(WireList { items: { let __v: Vec<String> = vec!["id".to_string()]; __v }.into_iter().map(WireValue::Str).collect() })), ("single".to_string(), WireValue::Bool(false))] };
         let wire_n3 = match group_children(payload_n3) {
             Ok(r) => r,
-            Err(e) => return Err(BehaviorError { code: "OP_FAILED".to_string(), message: format!("operation '{}' failed under 'fail' policy: {}", "n3", e.message), detail: e.detail }),
+            Err(e) => return Err(op_failed("n3", "fail", e)),
         };
         *cell_n3.borrow_mut() = match wire_n3.as_list() {
             Probe::Got(l0) => {
@@ -1022,7 +1025,7 @@ pub fn nestedRelations(
     let payload_n0 = WireRow { entries: vec![("bigint".to_string(), WireValue::Bool(false)), ("params".to_string(), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![]; __v } })), ("returning".to_string(), WireValue::Bool(false)), ("sql".to_string(), WireValue::Str("SELECT id, email, name FROM benchmark_users LIMIT 100".to_string())), ("write".to_string(), WireValue::Bool(false))] };
     let wire_n0 = match execute_sql(payload_n0) {
         Ok(r) => r,
-        Err(e) => return Err(BehaviorError { code: "OP_FAILED".to_string(), message: format!("operation '{}' failed under 'fail' policy: {}", "n0", e.message), detail: e.detail }),
+        Err(e) => return Err(op_failed("n0", "fail", e)),
     };
     *cell_n0.borrow_mut() = match wire_n0.as_list() {
         Probe::Got(l0) => l0.items.clone(),
@@ -1036,7 +1039,7 @@ pub fn nestedRelations(
         let payload_n1 = WireRow { entries: vec![("col".to_string(), WireValue::List(WireList { items: { let __v: Vec<String> = vec!["id".to_string()]; __v }.into_iter().map(WireValue::Str).collect() })), ("rows".to_string(), WireValue::List(WireList { items: cell_n0.borrow().clone() }))] };
         let wire_n1 = match pluck_keys(payload_n1) {
             Ok(r) => r,
-            Err(e) => return Err(BehaviorError { code: "OP_FAILED".to_string(), message: format!("operation '{}' failed under 'fail' policy: {}", "n1", e.message), detail: e.detail }),
+            Err(e) => return Err(op_failed("n1", "fail", e)),
         };
         *cell_n1.borrow_mut() = match wire_n1.as_list() {
             Probe::Got(l0) => l0.items.clone(),
@@ -1048,10 +1051,10 @@ pub fn nestedRelations(
     }
     // ── op 'n2' (executeSQL, parent:n1) ──
     if produced_n1.get() {
-        let payload_n2 = WireRow { entries: vec![("bigint".to_string(), WireValue::Bool(false)), ("params".to_string(), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::List(WireList { items: cell_n1.borrow().clone() })]; __v } })), ("returning".to_string(), WireValue::Bool(false)), ("sql".to_string(), WireValue::Str("SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN (SELECT value FROM json_each(?)) ORDER BY id ASC".to_string())), ("write".to_string(), WireValue::Bool(false))] };
+        let payload_n2 = WireRow { entries: vec![("bigint".to_string(), WireValue::Bool(false)), ("params".to_string(), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::List(WireList { items: cell_n1.borrow().clone() })]; __v } })), ("returning".to_string(), WireValue::Bool(false)), ("sql".to_string(), WireValue::Str("SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) ORDER BY id ASC".to_string())), ("write".to_string(), WireValue::Bool(false))] };
         let wire_n2 = match execute_sql(payload_n2) {
             Ok(r) => r,
-            Err(e) => return Err(BehaviorError { code: "OP_FAILED".to_string(), message: format!("operation '{}' failed under 'fail' policy: {}", "n2", e.message), detail: e.detail }),
+            Err(e) => return Err(op_failed("n2", "fail", e)),
         };
         *cell_n2.borrow_mut() = match wire_n2.as_list() {
             Probe::Got(l0) => l0.items.clone(),
@@ -1066,7 +1069,7 @@ pub fn nestedRelations(
         let payload_n3 = WireRow { entries: vec![("col".to_string(), WireValue::List(WireList { items: { let __v: Vec<String> = vec!["id".to_string()]; __v }.into_iter().map(WireValue::Str).collect() })), ("rows".to_string(), WireValue::List(WireList { items: cell_n2.borrow().clone() }))] };
         let wire_n3 = match pluck_keys(payload_n3) {
             Ok(r) => r,
-            Err(e) => return Err(BehaviorError { code: "OP_FAILED".to_string(), message: format!("operation '{}' failed under 'fail' policy: {}", "n3", e.message), detail: e.detail }),
+            Err(e) => return Err(op_failed("n3", "fail", e)),
         };
         *cell_n3.borrow_mut() = match wire_n3.as_list() {
             Probe::Got(l0) => l0.items.clone(),
@@ -1078,10 +1081,10 @@ pub fn nestedRelations(
     }
     // ── op 'n4' (executeSQL, parent:n3) ──
     if produced_n3.get() {
-        let payload_n4 = WireRow { entries: vec![("bigint".to_string(), WireValue::Bool(false)), ("params".to_string(), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::List(WireList { items: cell_n3.borrow().clone() })]; __v } })), ("returning".to_string(), WireValue::Bool(false)), ("sql".to_string(), WireValue::Str("SELECT id, body, post_id FROM benchmark_comments WHERE post_id IN (SELECT value FROM json_each(?)) ORDER BY id ASC".to_string())), ("write".to_string(), WireValue::Bool(false))] };
+        let payload_n4 = WireRow { entries: vec![("bigint".to_string(), WireValue::Bool(false)), ("params".to_string(), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::List(WireList { items: cell_n3.borrow().clone() })]; __v } })), ("returning".to_string(), WireValue::Bool(false)), ("sql".to_string(), WireValue::Str("SELECT id, body, post_id FROM benchmark_comments WHERE post_id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) ORDER BY id ASC".to_string())), ("write".to_string(), WireValue::Bool(false))] };
         let wire_n4 = match execute_sql(payload_n4) {
             Ok(r) => r,
-            Err(e) => return Err(BehaviorError { code: "OP_FAILED".to_string(), message: format!("operation '{}' failed under 'fail' policy: {}", "n4", e.message), detail: e.detail }),
+            Err(e) => return Err(op_failed("n4", "fail", e)),
         };
         *cell_n4.borrow_mut() = match wire_n4.as_list() {
             Probe::Got(l0) => l0.items.clone(),
@@ -1096,7 +1099,7 @@ pub fn nestedRelations(
         let payload_n5 = WireRow { entries: vec![("children".to_string(), WireValue::List(WireList { items: cell_n4.borrow().clone() })), ("fk".to_string(), WireValue::List(WireList { items: { let __v: Vec<String> = vec!["post_id".to_string()]; __v }.into_iter().map(WireValue::Str).collect() })), ("into".to_string(), WireValue::Str("comments".to_string())), ("parents".to_string(), WireValue::List(WireList { items: cell_n2.borrow().clone() })), ("pk".to_string(), WireValue::List(WireList { items: { let __v: Vec<String> = vec!["id".to_string()]; __v }.into_iter().map(WireValue::Str).collect() })), ("single".to_string(), WireValue::Bool(false))] };
         let wire_n5 = match group_children(payload_n5) {
             Ok(r) => r,
-            Err(e) => return Err(BehaviorError { code: "OP_FAILED".to_string(), message: format!("operation '{}' failed under 'fail' policy: {}", "n5", e.message), detail: e.detail }),
+            Err(e) => return Err(op_failed("n5", "fail", e)),
         };
         *cell_n5.borrow_mut() = match wire_n5.as_list() {
             Probe::Got(l0) => l0.items.clone(),
@@ -1111,7 +1114,7 @@ pub fn nestedRelations(
         let payload_n6 = WireRow { entries: vec![("children".to_string(), WireValue::List(WireList { items: cell_n5.borrow().clone() })), ("fk".to_string(), WireValue::List(WireList { items: { let __v: Vec<String> = vec!["author_id".to_string()]; __v }.into_iter().map(WireValue::Str).collect() })), ("into".to_string(), WireValue::Str("posts".to_string())), ("parents".to_string(), WireValue::List(WireList { items: cell_n0.borrow().clone() })), ("pk".to_string(), WireValue::List(WireList { items: { let __v: Vec<String> = vec!["id".to_string()]; __v }.into_iter().map(WireValue::Str).collect() })), ("single".to_string(), WireValue::Bool(false))] };
         let wire_n6 = match group_children(payload_n6) {
             Ok(r) => r,
-            Err(e) => return Err(BehaviorError { code: "OP_FAILED".to_string(), message: format!("operation '{}' failed under 'fail' policy: {}", "n6", e.message), detail: e.detail }),
+            Err(e) => return Err(op_failed("n6", "fail", e)),
         };
         *cell_n6.borrow_mut() = match wire_n6.as_list() {
             Probe::Got(l0) => {
@@ -1274,7 +1277,7 @@ pub fn compositeRelations(
     let payload_n0 = WireRow { entries: vec![("bigint".to_string(), WireValue::Bool(false)), ("params".to_string(), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![]; __v } })), ("returning".to_string(), WireValue::Bool(false)), ("sql".to_string(), WireValue::Str("SELECT tenant_id, user_id, name FROM benchmark_tenant_users ORDER BY user_id ASC LIMIT 100".to_string())), ("write".to_string(), WireValue::Bool(false))] };
     let wire_n0 = match execute_sql(payload_n0) {
         Ok(r) => r,
-        Err(e) => return Err(BehaviorError { code: "OP_FAILED".to_string(), message: format!("operation '{}' failed under 'fail' policy: {}", "n0", e.message), detail: e.detail }),
+        Err(e) => return Err(op_failed("n0", "fail", e)),
     };
     *cell_n0.borrow_mut() = match wire_n0.as_list() {
         Probe::Got(l0) => l0.items.clone(),
@@ -1288,7 +1291,7 @@ pub fn compositeRelations(
         let payload_n1 = WireRow { entries: vec![("col".to_string(), WireValue::List(WireList { items: { let __v: Vec<String> = vec!["tenant_id".to_string(), "user_id".to_string()]; __v }.into_iter().map(WireValue::Str).collect() })), ("rows".to_string(), WireValue::List(WireList { items: cell_n0.borrow().clone() }))] };
         let wire_n1 = match pluck_keys(payload_n1) {
             Ok(r) => r,
-            Err(e) => return Err(BehaviorError { code: "OP_FAILED".to_string(), message: format!("operation '{}' failed under 'fail' policy: {}", "n1", e.message), detail: e.detail }),
+            Err(e) => return Err(op_failed("n1", "fail", e)),
         };
         *cell_n1.borrow_mut() = match wire_n1.as_list() {
             Probe::Got(l0) => l0.items.clone(),
@@ -1300,10 +1303,10 @@ pub fn compositeRelations(
     }
     // ── op 'n2' (executeSQL, parent:n1) ──
     if produced_n1.get() {
-        let payload_n2 = WireRow { entries: vec![("bigint".to_string(), WireValue::Bool(false)), ("params".to_string(), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::List(WireList { items: cell_n1.borrow().clone() })]; __v } })), ("returning".to_string(), WireValue::Bool(false)), ("sql".to_string(), WireValue::Str("SELECT tenant_id, post_id, user_id, title FROM benchmark_tenant_posts WHERE EXISTS (SELECT 1 FROM json_each(?) je WHERE json_extract(je.value, '$[0]') = benchmark_tenant_posts.tenant_id AND json_extract(je.value, '$[1]') = benchmark_tenant_posts.user_id) ORDER BY post_id ASC".to_string())), ("write".to_string(), WireValue::Bool(false))] };
+        let payload_n2 = WireRow { entries: vec![("bigint".to_string(), WireValue::Bool(false)), ("params".to_string(), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::List(WireList { items: cell_n1.borrow().clone() })]; __v } })), ("returning".to_string(), WireValue::Bool(false)), ("sql".to_string(), WireValue::Str("SELECT tenant_id, post_id, user_id, title FROM benchmark_tenant_posts WHERE (benchmark_tenant_posts.tenant_id, benchmark_tenant_posts.user_id) IN (SELECT JSON_UNQUOTE(c0), JSON_UNQUOTE(c1) FROM JSON_TABLE(?, '$[*]' COLUMNS(c0 JSON PATH '$[0]', c1 JSON PATH '$[1]')) jt) ORDER BY post_id ASC".to_string())), ("write".to_string(), WireValue::Bool(false))] };
         let wire_n2 = match execute_sql(payload_n2) {
             Ok(r) => r,
-            Err(e) => return Err(BehaviorError { code: "OP_FAILED".to_string(), message: format!("operation '{}' failed under 'fail' policy: {}", "n2", e.message), detail: e.detail }),
+            Err(e) => return Err(op_failed("n2", "fail", e)),
         };
         *cell_n2.borrow_mut() = match wire_n2.as_list() {
             Probe::Got(l0) => l0.items.clone(),
@@ -1318,7 +1321,7 @@ pub fn compositeRelations(
         let payload_n3 = WireRow { entries: vec![("col".to_string(), WireValue::List(WireList { items: { let __v: Vec<String> = vec!["tenant_id".to_string(), "post_id".to_string()]; __v }.into_iter().map(WireValue::Str).collect() })), ("rows".to_string(), WireValue::List(WireList { items: cell_n2.borrow().clone() }))] };
         let wire_n3 = match pluck_keys(payload_n3) {
             Ok(r) => r,
-            Err(e) => return Err(BehaviorError { code: "OP_FAILED".to_string(), message: format!("operation '{}' failed under 'fail' policy: {}", "n3", e.message), detail: e.detail }),
+            Err(e) => return Err(op_failed("n3", "fail", e)),
         };
         *cell_n3.borrow_mut() = match wire_n3.as_list() {
             Probe::Got(l0) => l0.items.clone(),
@@ -1330,10 +1333,10 @@ pub fn compositeRelations(
     }
     // ── op 'n4' (executeSQL, parent:n3) ──
     if produced_n3.get() {
-        let payload_n4 = WireRow { entries: vec![("bigint".to_string(), WireValue::Bool(false)), ("params".to_string(), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::List(WireList { items: cell_n3.borrow().clone() })]; __v } })), ("returning".to_string(), WireValue::Bool(false)), ("sql".to_string(), WireValue::Str("SELECT tenant_id, comment_id, post_id, body FROM benchmark_tenant_comments WHERE EXISTS (SELECT 1 FROM json_each(?) je WHERE json_extract(je.value, '$[0]') = benchmark_tenant_comments.tenant_id AND json_extract(je.value, '$[1]') = benchmark_tenant_comments.post_id) ORDER BY comment_id ASC".to_string())), ("write".to_string(), WireValue::Bool(false))] };
+        let payload_n4 = WireRow { entries: vec![("bigint".to_string(), WireValue::Bool(false)), ("params".to_string(), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::List(WireList { items: cell_n3.borrow().clone() })]; __v } })), ("returning".to_string(), WireValue::Bool(false)), ("sql".to_string(), WireValue::Str("SELECT tenant_id, comment_id, post_id, body FROM benchmark_tenant_comments WHERE (benchmark_tenant_comments.tenant_id, benchmark_tenant_comments.post_id) IN (SELECT JSON_UNQUOTE(c0), JSON_UNQUOTE(c1) FROM JSON_TABLE(?, '$[*]' COLUMNS(c0 JSON PATH '$[0]', c1 JSON PATH '$[1]')) jt) ORDER BY comment_id ASC".to_string())), ("write".to_string(), WireValue::Bool(false))] };
         let wire_n4 = match execute_sql(payload_n4) {
             Ok(r) => r,
-            Err(e) => return Err(BehaviorError { code: "OP_FAILED".to_string(), message: format!("operation '{}' failed under 'fail' policy: {}", "n4", e.message), detail: e.detail }),
+            Err(e) => return Err(op_failed("n4", "fail", e)),
         };
         *cell_n4.borrow_mut() = match wire_n4.as_list() {
             Probe::Got(l0) => l0.items.clone(),
@@ -1348,7 +1351,7 @@ pub fn compositeRelations(
         let payload_n5 = WireRow { entries: vec![("children".to_string(), WireValue::List(WireList { items: cell_n4.borrow().clone() })), ("fk".to_string(), WireValue::List(WireList { items: { let __v: Vec<String> = vec!["tenant_id".to_string(), "post_id".to_string()]; __v }.into_iter().map(WireValue::Str).collect() })), ("into".to_string(), WireValue::Str("comments".to_string())), ("parents".to_string(), WireValue::List(WireList { items: cell_n2.borrow().clone() })), ("pk".to_string(), WireValue::List(WireList { items: { let __v: Vec<String> = vec!["tenant_id".to_string(), "post_id".to_string()]; __v }.into_iter().map(WireValue::Str).collect() })), ("single".to_string(), WireValue::Bool(false))] };
         let wire_n5 = match group_children(payload_n5) {
             Ok(r) => r,
-            Err(e) => return Err(BehaviorError { code: "OP_FAILED".to_string(), message: format!("operation '{}' failed under 'fail' policy: {}", "n5", e.message), detail: e.detail }),
+            Err(e) => return Err(op_failed("n5", "fail", e)),
         };
         *cell_n5.borrow_mut() = match wire_n5.as_list() {
             Probe::Got(l0) => l0.items.clone(),
@@ -1363,7 +1366,7 @@ pub fn compositeRelations(
         let payload_n6 = WireRow { entries: vec![("children".to_string(), WireValue::List(WireList { items: cell_n5.borrow().clone() })), ("fk".to_string(), WireValue::List(WireList { items: { let __v: Vec<String> = vec!["tenant_id".to_string(), "user_id".to_string()]; __v }.into_iter().map(WireValue::Str).collect() })), ("into".to_string(), WireValue::Str("posts".to_string())), ("parents".to_string(), WireValue::List(WireList { items: cell_n0.borrow().clone() })), ("pk".to_string(), WireValue::List(WireList { items: { let __v: Vec<String> = vec!["tenant_id".to_string(), "user_id".to_string()]; __v }.into_iter().map(WireValue::Str).collect() })), ("single".to_string(), WireValue::Bool(false))] };
         let wire_n6 = match group_children(payload_n6) {
             Ok(r) => r,
-            Err(e) => return Err(BehaviorError { code: "OP_FAILED".to_string(), message: format!("operation '{}' failed under 'fail' policy: {}", "n6", e.message), detail: e.detail }),
+            Err(e) => return Err(op_failed("n6", "fail", e)),
         };
         *cell_n6.borrow_mut() = match wire_n6.as_list() {
             Probe::Got(l0) => {
@@ -1527,7 +1530,7 @@ pub fn create(
     let payload_n0 = WireRow { entries: vec![("bigint".to_string(), WireValue::Bool(false)), ("params".to_string(), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::Str(email.clone()), WireValue::Str(name.clone())]; __v } })), ("returning".to_string(), WireValue::Bool(false)), ("sql".to_string(), WireValue::Str("INSERT INTO benchmark_users (email, name) VALUES (?, ?)".to_string())), ("write".to_string(), WireValue::Bool(true))] };
     let wire_n0 = match execute_sql(payload_n0) {
         Ok(r) => r,
-        Err(e) => return Err(BehaviorError { code: "OP_FAILED".to_string(), message: format!("operation '{}' failed under 'fail' policy: {}", "n0", e.message), detail: e.detail }),
+        Err(e) => return Err(op_failed("n0", "fail", e)),
     };
     *cell_n0.borrow_mut() = match wire_n0.as_list() {
         Probe::Got(l0) => {
@@ -1593,7 +1596,7 @@ pub fn update(
     let payload_n0 = WireRow { entries: vec![("bigint".to_string(), WireValue::Bool(false)), ("params".to_string(), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::Str(name.clone()), WireValue::int(id)]; __v } })), ("returning".to_string(), WireValue::Bool(false)), ("sql".to_string(), WireValue::Str("UPDATE benchmark_users SET name = ? WHERE id = ?".to_string())), ("write".to_string(), WireValue::Bool(true))] };
     let wire_n0 = match execute_sql(payload_n0) {
         Ok(r) => r,
-        Err(e) => return Err(BehaviorError { code: "OP_FAILED".to_string(), message: format!("operation '{}' failed under 'fail' policy: {}", "n0", e.message), detail: e.detail }),
+        Err(e) => return Err(op_failed("n0", "fail", e)),
     };
     *cell_n0.borrow_mut() = match wire_n0.as_list() {
         Probe::Got(l0) => {
@@ -1656,10 +1659,10 @@ pub fn upsert(
     let produced_n0 = std::cell::Cell::new(false);
     let _ = &produced_n0;
     // ── op 'n0' (executeSQL) ──
-    let payload_n0 = WireRow { entries: vec![("bigint".to_string(), WireValue::Bool(false)), ("params".to_string(), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::Str(email.clone()), WireValue::Str(name.clone())]; __v } })), ("returning".to_string(), WireValue::Bool(true)), ("sql".to_string(), WireValue::Str("INSERT INTO benchmark_users (email, name) VALUES (?, ?) ON CONFLICT (email) DO UPDATE SET email = excluded.email, name = excluded.name RETURNING id".to_string())), ("write".to_string(), WireValue::Bool(true))] };
+    let payload_n0 = WireRow { entries: vec![("bigint".to_string(), WireValue::Bool(false)), ("params".to_string(), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::Str(email.clone()), WireValue::Str(name.clone())]; __v } })), ("returning".to_string(), WireValue::Bool(true)), ("sql".to_string(), WireValue::Str("INSERT INTO benchmark_users (email, name) VALUES (?, ?) ON DUPLICATE KEY UPDATE email = VALUES(email), name = VALUES(name) RETURNING id /*scp:pk=id;ai=id;conflict=email*/".to_string())), ("write".to_string(), WireValue::Bool(true))] };
     let wire_n0 = match execute_sql(payload_n0) {
         Ok(r) => r,
-        Err(e) => return Err(BehaviorError { code: "OP_FAILED".to_string(), message: format!("operation '{}' failed under 'fail' policy: {}", "n0", e.message), detail: e.detail }),
+        Err(e) => return Err(op_failed("n0", "fail", e)),
     };
     *cell_n0.borrow_mut() = match wire_n0.as_list() {
         Probe::Got(l0) => {
@@ -1712,10 +1715,10 @@ pub fn createMany(
     let produced_n0 = std::cell::Cell::new(false);
     let _ = &produced_n0;
     // ── op 'n0' (executeSQL) ──
-    let payload_n0 = WireRow { entries: vec![("bigint".to_string(), WireValue::Bool(false)), ("params".to_string(), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::List(WireList { items: rows.clone().into_iter().map(|e0| WireValue::Row(WireRow { entries: vec![("email".to_string(), WireValue::Str(e0.email)), ("name".to_string(), WireValue::Str(e0.name))] })).collect() })]; __v } })), ("returning".to_string(), WireValue::Bool(false)), ("sql".to_string(), WireValue::Str("INSERT INTO benchmark_users (email, name) SELECT json_extract(value, '$.email'), json_extract(value, '$.name') FROM json_each(?)".to_string())), ("write".to_string(), WireValue::Bool(true))] };
+    let payload_n0 = WireRow { entries: vec![("bigint".to_string(), WireValue::Bool(false)), ("params".to_string(), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::List(WireList { items: rows.clone().into_iter().map(|e0| WireValue::Row(WireRow { entries: vec![("email".to_string(), WireValue::Str(e0.email)), ("name".to_string(), WireValue::Str(e0.name))] })).collect() })]; __v } })), ("returning".to_string(), WireValue::Bool(false)), ("sql".to_string(), WireValue::Str("INSERT INTO benchmark_users (email, name) SELECT JSON_UNQUOTE(jt.email), JSON_UNQUOTE(jt.name) FROM JSON_TABLE(?, '$[*]' COLUMNS(email JSON PATH '$.email', name JSON PATH '$.name')) jt".to_string())), ("write".to_string(), WireValue::Bool(true))] };
     let wire_n0 = match execute_sql(payload_n0) {
         Ok(r) => r,
-        Err(e) => return Err(BehaviorError { code: "OP_FAILED".to_string(), message: format!("operation '{}' failed under 'fail' policy: {}", "n0", e.message), detail: e.detail }),
+        Err(e) => return Err(op_failed("n0", "fail", e)),
     };
     *cell_n0.borrow_mut() = match wire_n0.as_list() {
         Probe::Got(l0) => {
@@ -1777,10 +1780,10 @@ pub fn upsertMany(
     let produced_n0 = std::cell::Cell::new(false);
     let _ = &produced_n0;
     // ── op 'n0' (executeSQL) ──
-    let payload_n0 = WireRow { entries: vec![("bigint".to_string(), WireValue::Bool(false)), ("params".to_string(), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::List(WireList { items: rows.clone().into_iter().map(|e0| WireValue::Row(WireRow { entries: vec![("email".to_string(), WireValue::Str(e0.email)), ("name".to_string(), WireValue::Str(e0.name))] })).collect() })]; __v } })), ("returning".to_string(), WireValue::Bool(false)), ("sql".to_string(), WireValue::Str("INSERT INTO benchmark_users (email, name) SELECT json_extract(value, '$.email'), json_extract(value, '$.name') FROM json_each(?) WHERE true ON CONFLICT (email) DO UPDATE SET email = excluded.email, name = excluded.name".to_string())), ("write".to_string(), WireValue::Bool(true))] };
+    let payload_n0 = WireRow { entries: vec![("bigint".to_string(), WireValue::Bool(false)), ("params".to_string(), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::List(WireList { items: rows.clone().into_iter().map(|e0| WireValue::Row(WireRow { entries: vec![("email".to_string(), WireValue::Str(e0.email)), ("name".to_string(), WireValue::Str(e0.name))] })).collect() })]; __v } })), ("returning".to_string(), WireValue::Bool(false)), ("sql".to_string(), WireValue::Str("INSERT INTO benchmark_users (email, name) SELECT JSON_UNQUOTE(jt.email), JSON_UNQUOTE(jt.name) FROM JSON_TABLE(?, '$[*]' COLUMNS(email JSON PATH '$.email', name JSON PATH '$.name')) jt ON DUPLICATE KEY UPDATE email = VALUES(email), name = VALUES(name)".to_string())), ("write".to_string(), WireValue::Bool(true))] };
     let wire_n0 = match execute_sql(payload_n0) {
         Ok(r) => r,
-        Err(e) => return Err(BehaviorError { code: "OP_FAILED".to_string(), message: format!("operation '{}' failed under 'fail' policy: {}", "n0", e.message), detail: e.detail }),
+        Err(e) => return Err(op_failed("n0", "fail", e)),
     };
     *cell_n0.borrow_mut() = match wire_n0.as_list() {
         Probe::Got(l0) => {
@@ -1842,10 +1845,10 @@ pub fn updateMany(
     let produced_n0 = std::cell::Cell::new(false);
     let _ = &produced_n0;
     // ── op 'n0' (executeSQL) ──
-    let payload_n0 = WireRow { entries: vec![("bigint".to_string(), WireValue::Bool(false)), ("params".to_string(), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::List(WireList { items: rows.clone().into_iter().map(|e0| WireValue::Row(WireRow { entries: vec![("id".to_string(), WireValue::int(e0.id)), ("name".to_string(), WireValue::Str(e0.name))] })).collect() }), WireValue::List(WireList { items: rows.clone().into_iter().map(|e0| WireValue::Row(WireRow { entries: vec![("id".to_string(), WireValue::int(e0.id)), ("name".to_string(), WireValue::Str(e0.name))] })).collect() })]; __v } })), ("returning".to_string(), WireValue::Bool(false)), ("sql".to_string(), WireValue::Str("UPDATE benchmark_users SET name = (SELECT json_extract(je.value, '$.name') FROM json_each(?) je WHERE json_extract(je.value, '$.id') = benchmark_users.id LIMIT 1) WHERE id IN (SELECT json_extract(value, '$.id') FROM json_each(?))".to_string())), ("write".to_string(), WireValue::Bool(true))] };
+    let payload_n0 = WireRow { entries: vec![("bigint".to_string(), WireValue::Bool(false)), ("params".to_string(), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::List(WireList { items: rows.clone().into_iter().map(|e0| WireValue::Row(WireRow { entries: vec![("id".to_string(), WireValue::int(e0.id)), ("name".to_string(), WireValue::Str(e0.name))] })).collect() })]; __v } })), ("returning".to_string(), WireValue::Bool(false)), ("sql".to_string(), WireValue::Str("UPDATE benchmark_users AS u JOIN JSON_TABLE(?, '$[*]' COLUMNS(id JSON PATH '$.id', name JSON PATH '$.name')) AS v ON u.id = JSON_UNQUOTE(v.id) SET u.name = JSON_UNQUOTE(v.name)".to_string())), ("write".to_string(), WireValue::Bool(true))] };
     let wire_n0 = match execute_sql(payload_n0) {
         Ok(r) => r,
-        Err(e) => return Err(BehaviorError { code: "OP_FAILED".to_string(), message: format!("operation '{}' failed under 'fail' policy: {}", "n0", e.message), detail: e.detail }),
+        Err(e) => return Err(op_failed("n0", "fail", e)),
     };
     *cell_n0.borrow_mut() = match wire_n0.as_list() {
         Probe::Got(l0) => {
@@ -1912,10 +1915,10 @@ pub fn nestedCreate(
     let produced_n1 = std::cell::Cell::new(false);
     let _ = &produced_n1;
     // ── op 'n0' (executeSQL) ──
-    let payload_n0 = WireRow { entries: vec![("bigint".to_string(), WireValue::Bool(false)), ("params".to_string(), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::Str(email.clone()), WireValue::Str(name.clone())]; __v } })), ("returning".to_string(), WireValue::Bool(true)), ("sql".to_string(), WireValue::Str("INSERT INTO benchmark_users (email, name) VALUES (?, ?) RETURNING id".to_string())), ("write".to_string(), WireValue::Bool(true))] };
+    let payload_n0 = WireRow { entries: vec![("bigint".to_string(), WireValue::Bool(false)), ("params".to_string(), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::Str(email.clone()), WireValue::Str(name.clone())]; __v } })), ("returning".to_string(), WireValue::Bool(true)), ("sql".to_string(), WireValue::Str("INSERT INTO benchmark_users (email, name) VALUES (?, ?) RETURNING id /*scp:pk=id;ai=id*/".to_string())), ("write".to_string(), WireValue::Bool(true))] };
     let wire_n0 = match execute_sql(payload_n0) {
         Ok(r) => r,
-        Err(e) => return Err(BehaviorError { code: "OP_FAILED".to_string(), message: format!("operation '{}' failed under 'fail' policy: {}", "n0", e.message), detail: e.detail }),
+        Err(e) => return Err(op_failed("n0", "fail", e)),
     };
     *cell_n0.borrow_mut() = match wire_n0.as_list() {
         Probe::Got(l0) => {
@@ -2025,10 +2028,10 @@ pub fn nestedUpsert(
     let produced_n1 = std::cell::Cell::new(false);
     let _ = &produced_n1;
     // ── op 'n0' (executeSQL) ──
-    let payload_n0 = WireRow { entries: vec![("bigint".to_string(), WireValue::Bool(false)), ("params".to_string(), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::Str(email.clone()), WireValue::Str(name.clone())]; __v } })), ("returning".to_string(), WireValue::Bool(true)), ("sql".to_string(), WireValue::Str("INSERT INTO benchmark_users (email, name) VALUES (?, ?) ON CONFLICT (email) DO UPDATE SET email = excluded.email, name = excluded.name RETURNING id".to_string())), ("write".to_string(), WireValue::Bool(true))] };
+    let payload_n0 = WireRow { entries: vec![("bigint".to_string(), WireValue::Bool(false)), ("params".to_string(), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::Str(email.clone()), WireValue::Str(name.clone())]; __v } })), ("returning".to_string(), WireValue::Bool(true)), ("sql".to_string(), WireValue::Str("INSERT INTO benchmark_users (email, name) VALUES (?, ?) ON DUPLICATE KEY UPDATE email = VALUES(email), name = VALUES(name) RETURNING id /*scp:pk=id;ai=id;conflict=email*/".to_string())), ("write".to_string(), WireValue::Bool(true))] };
     let wire_n0 = match execute_sql(payload_n0) {
         Ok(r) => r,
-        Err(e) => return Err(BehaviorError { code: "OP_FAILED".to_string(), message: format!("operation '{}' failed under 'fail' policy: {}", "n0", e.message), detail: e.detail }),
+        Err(e) => return Err(op_failed("n0", "fail", e)),
     };
     *cell_n0.borrow_mut() = match wire_n0.as_list() {
         Probe::Got(l0) => {
@@ -2138,10 +2141,10 @@ pub fn nestedUpdate(
     let produced_n1 = std::cell::Cell::new(false);
     let _ = &produced_n1;
     // ── op 'n0' (executeSQL) ──
-    let payload_n0 = WireRow { entries: vec![("bigint".to_string(), WireValue::Bool(false)), ("params".to_string(), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::Str(name.clone()), WireValue::int(id)]; __v } })), ("returning".to_string(), WireValue::Bool(true)), ("sql".to_string(), WireValue::Str("UPDATE benchmark_users SET name = ? WHERE id = ? RETURNING id".to_string())), ("write".to_string(), WireValue::Bool(true))] };
+    let payload_n0 = WireRow { entries: vec![("bigint".to_string(), WireValue::Bool(false)), ("params".to_string(), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::Str(name.clone()), WireValue::int(id)]; __v } })), ("returning".to_string(), WireValue::Bool(true)), ("sql".to_string(), WireValue::Str("UPDATE benchmark_users SET name = ? WHERE id = ? RETURNING id /*scp:pk=id;ai=id*/".to_string())), ("write".to_string(), WireValue::Bool(true))] };
     let wire_n0 = match execute_sql(payload_n0) {
         Ok(r) => r,
-        Err(e) => return Err(BehaviorError { code: "OP_FAILED".to_string(), message: format!("operation '{}' failed under 'fail' policy: {}", "n0", e.message), detail: e.detail }),
+        Err(e) => return Err(op_failed("n0", "fail", e)),
     };
     *cell_n0.borrow_mut() = match wire_n0.as_list() {
         Probe::Got(l0) => {
@@ -2250,10 +2253,10 @@ pub fn delete(
     let produced_n1 = std::cell::Cell::new(false);
     let _ = &produced_n1;
     // ── op 'n0' (executeSQL) ──
-    let payload_n0 = WireRow { entries: vec![("bigint".to_string(), WireValue::Bool(false)), ("params".to_string(), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::Str(email.clone()), WireValue::Str(name.clone())]; __v } })), ("returning".to_string(), WireValue::Bool(true)), ("sql".to_string(), WireValue::Str("INSERT INTO benchmark_users (email, name) VALUES (?, ?) RETURNING id".to_string())), ("write".to_string(), WireValue::Bool(true))] };
+    let payload_n0 = WireRow { entries: vec![("bigint".to_string(), WireValue::Bool(false)), ("params".to_string(), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::Str(email.clone()), WireValue::Str(name.clone())]; __v } })), ("returning".to_string(), WireValue::Bool(true)), ("sql".to_string(), WireValue::Str("INSERT INTO benchmark_users (email, name) VALUES (?, ?) RETURNING id /*scp:pk=id;ai=id*/".to_string())), ("write".to_string(), WireValue::Bool(true))] };
     let wire_n0 = match execute_sql(payload_n0) {
         Ok(r) => r,
-        Err(e) => return Err(BehaviorError { code: "OP_FAILED".to_string(), message: format!("operation '{}' failed under 'fail' policy: {}", "n0", e.message), detail: e.detail }),
+        Err(e) => return Err(op_failed("n0", "fail", e)),
     };
     *cell_n0.borrow_mut() = match wire_n0.as_list() {
         Probe::Got(l0) => {

@@ -24,15 +24,20 @@ litedbmodel_runtime = { path = "../litedbmodel_runtime", default-features = fals
 # Read the ONE seed SSoT (`benchmark/crosslang/.setup/<dialect>.json`, emitted from orm-domain.ts) at
 # runtime — the cell hand-writes NO schema/seed. serde_json is a bench-only dep (NOT in the runtime).
 serde_json = "1"
-# Pin the transitive behavior-contracts to the EXACT version the rust/ workspace lock uses (0.11.5) — the
+# Pin the transitive behavior-contracts to the EXACT version the rust/ workspace lock uses (0.11.6) — the
 # runtime is written against that rust-crate API (mirrors rust/e1_native_proof/Cargo.toml). Not used
 # directly here — a version-alignment pin only.
-behavior-contracts = { version = "=0.11.5", default-features = false }
+behavior-contracts = { version = "=0.11.6", default-features = false }
 
 # `livedb` (opt-in): route the SAME generated adapter + runtime against docker Postgres / MySQL via
 # litedbmodel_runtime's live Driver. The default (SQLite) build needs neither the postgres nor mysql crate.
 [features]
 default = []
+# The target DB this binary drives (#156). sqlite is the default (no feature); the generated module is
+# selected at COMPILE time in `src/gen/mod.rs`, so a `--features target_postgres` binary can only ever
+# run postgres.
+target_postgres = ["livedb"]
+target_mysql = ["livedb"]
 livedb = ["litedbmodel_runtime/livedb"]
 # `pg`: the postgres build only — selects the `bool` literal for the BOOLEAN `published` input (sqlite/
 # mysql type it `i64`). Set alongside `livedb` when building for postgres (see run-pilot.sh).
