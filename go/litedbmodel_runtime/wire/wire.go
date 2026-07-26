@@ -16,8 +16,8 @@ const (
 // Probe RESULT structs — concrete data the WireValue classifiers hand back; the de-box reads .Kind /
 // .Got / .ActualWireType / .Raw (exported fields).
 
-// StringProbe / NumberProbe / BoolProbe — a scalar probe result. Got holds the matched value (a
-// NumberProbe's Got is the raw numeric text; the de-box parses + range-checks it). ActualWireType is the
+// StringProbe / IntProbe / FloatProbe / BoolProbe — a scalar probe result. Got holds the matched value
+// already in its declared type — the wire carries int and float natively, so nothing is parsed. ActualWireType is the
 // producer's own wire tag (a free string, e.g. a DynamoDB "S"/"N"/"BOOL"); Raw is the offending value
 // stringified. Concrete structs — no boxed Value crosses the seam.
 type StringProbe struct {
@@ -27,9 +27,16 @@ type StringProbe struct {
 	Raw            string
 }
 
-type NumberProbe struct {
+type IntProbe struct {
 	Kind           uint8
-	Got            string
+	Got            int64
+	ActualWireType string
+	Raw            string
+}
+
+type FloatProbe struct {
+	Kind           uint8
+	Got            float64
 	ActualWireType string
 	Raw            string
 }
@@ -59,13 +66,14 @@ type ListProbe struct {
 }
 
 // WireValue — the BC-OWNED generic result the consumer's single op-agnostic transport builds + returns
-// (WireStr/WireNum/WireInt/WireFloat/WireBool/WireNull/WireRowOf/WireListOf) and implements NOTHING over.
-// A self-contained tagged union (no untyped box, no bc-runtime Value); numbers carry raw text (BC parses +
-// range-checks → overflow is BC's to detect). Composite = nested Entries (row) / Items (list).
+// (WireStr/WireInt/WireFloat/WireBool/WireNull/WireRowOf/WireListOf) and implements NOTHING over.
+// A self-contained tagged union (no untyped box, no bc-runtime Value); numbers are NATIVE (int64 / float64),
+// so the de-box parses nothing. Composite = nested Entries (row) / Items (list).
 type WireValue struct {
 	kind    uint8
 	str     string
-	num     string
+	i64v    int64
+	f64v    float64
 	bl      bool
 	Entries []WireField
 	Items   []WireValue
@@ -89,17 +97,17 @@ type WireList struct {
 const (
 	wireNull uint8 = 0
 	wireStr  uint8 = 1
-	wireNum  uint8 = 2
+	wireInt  uint8 = 2
+	wireFloat uint8 = 6
 	wireBool uint8 = 3
 	wireRow  uint8 = 4
 	wireList uint8 = 5
 )
 
-// constructors the consumer's transport uses to build the result (numbers ride as raw text).
+// constructors the consumer's transport uses to build the result (numbers carried natively).
 func WireStr(s string) WireValue          { return WireValue{kind: wireStr, str: s} }
-func WireNum(s string) WireValue          { return WireValue{kind: wireNum, num: s} }
-func WireInt(n int64) WireValue           { return WireValue{kind: wireNum, num: strconv.FormatInt(n, 10)} }
-func WireFloat(f float64) WireValue       { return WireValue{kind: wireNum, num: strconv.FormatFloat(f, 'g', -1, 64)} }
+func WireInt(n int64) WireValue           { return WireValue{kind: wireInt, i64v: n} }
+func WireFloat(f float64) WireValue       { return WireValue{kind: wireFloat, f64v: f} }
 func WireBool(b bool) WireValue           { return WireValue{kind: wireBool, bl: b} }
 func WireNull() WireValue                 { return WireValue{kind: wireNull} }
 func WireRowOf(fields []WireField) WireValue { return WireValue{kind: wireRow, Entries: fields} }
@@ -119,7 +127,7 @@ func (w *WireValue) wireTag() string {
 	switch w.kind {
 	case wireStr:
 		return "S"
-	case wireNum:
+	case wireInt, wireFloat:
 		return "N"
 	case wireBool:
 		return "BOOL"
@@ -135,8 +143,10 @@ func (w *WireValue) wireRaw() string {
 	switch w.kind {
 	case wireStr:
 		return w.str
-	case wireNum:
-		return w.num
+	case wireInt:
+		return strconv.FormatInt(w.i64v, 10)
+	case wireFloat:
+		return strconv.FormatFloat(w.f64v, 'g', -1, 64)
 	case wireBool:
 		if w.bl {
 			return "true"
@@ -150,11 +160,14 @@ func (w *WireValue) wireRaw() string {
 }
 
 // the top result is always present; field/elem probes share the same classifiers over *WireValue (nil = absent).
-func (w WireValue) AsString() StringProbe { return probeStringOf(&w) }
-func (w WireValue) AsNumber() NumberProbe { return probeNumberOf(&w) }
-func (w WireValue) AsBool() BoolProbe     { return probeBoolOf(&w) }
-func (w WireValue) AsRow() RowProbe       { return probeRowOf(&w) }
-func (w WireValue) AsList() ListProbe     { return probeListOf(&w) }
+// Value receivers: a hand-written transport reads its payload off values the compiler will not let it
+// address (a function result, a map element), so the probe surface stays callable on a value.
+func (w WireValue) AsString() StringProbe { return ProbeStringOf(&w) }
+func (w WireValue) AsInt() IntProbe       { return ProbeIntOf(&w) }
+func (w WireValue) AsFloat() FloatProbe   { return ProbeFloatOf(&w) }
+func (w WireValue) AsBool() BoolProbe     { return ProbeBoolOf(&w) }
+func (w WireValue) AsRow() RowProbe       { return ProbeRowOf(&w) }
+func (w WireValue) AsList() ListProbe     { return ProbeListOf(&w) }
 
 func (r WireRow) get(field string) *WireValue {
 	for i := range r.entries {
@@ -164,29 +177,28 @@ func (r WireRow) get(field string) *WireValue {
 	}
 	return nil
 }
-func (r WireRow) Keys() []string {
-	ks := make([]string, len(r.entries))
-	for i := range r.entries {
-		ks[i] = r.entries[i].Key
-	}
-	return ks
-}
-func (r WireRow) ProbeString(field string) StringProbe { return probeStringOf(r.get(field)) }
-func (r WireRow) ProbeNumber(field string) NumberProbe { return probeNumberOf(r.get(field)) }
-func (r WireRow) ProbeBool(field string) BoolProbe     { return probeBoolOf(r.get(field)) }
-func (r WireRow) ProbeRow(field string) RowProbe       { return probeRowOf(r.get(field)) }
-func (r WireRow) ProbeList(field string) ListProbe     { return probeListOf(r.get(field)) }
+// Entries — the row's fields as they are. A dynamic-keyed map de-box walks these directly instead of
+// materialising a []string of keys per row and then looking each one up again.
+func (r WireRow) Entries() []WireField { return r.entries }
+
+func (r WireRow) ProbeString(field string) StringProbe { return ProbeStringOf(r.get(field)) }
+func (r WireRow) ProbeInt(field string) IntProbe       { return ProbeIntOf(r.get(field)) }
+func (r WireRow) ProbeFloat(field string) FloatProbe   { return ProbeFloatOf(r.get(field)) }
+func (r WireRow) ProbeBool(field string) BoolProbe     { return ProbeBoolOf(r.get(field)) }
+func (r WireRow) ProbeRow(field string) RowProbe       { return ProbeRowOf(r.get(field)) }
+func (r WireRow) ProbeList(field string) ListProbe     { return ProbeListOf(r.get(field)) }
 
 func (l WireList) Len() int                     { return len(l.items) }
-func (l WireList) ElemString(i int) StringProbe { return probeStringOf(&l.items[i]) }
-func (l WireList) ElemNumber(i int) NumberProbe { return probeNumberOf(&l.items[i]) }
-func (l WireList) ElemBool(i int) BoolProbe     { return probeBoolOf(&l.items[i]) }
-func (l WireList) ElemRow(i int) RowProbe       { return probeRowOf(&l.items[i]) }
-func (l WireList) ElemList(i int) ListProbe     { return probeListOf(&l.items[i]) }
+func (l WireList) ElemString(i int) StringProbe { return ProbeStringOf(&l.items[i]) }
+func (l WireList) ElemInt(i int) IntProbe       { return ProbeIntOf(&l.items[i]) }
+func (l WireList) ElemFloat(i int) FloatProbe   { return ProbeFloatOf(&l.items[i]) }
+func (l WireList) ElemBool(i int) BoolProbe     { return ProbeBoolOf(&l.items[i]) }
+func (l WireList) ElemRow(i int) RowProbe       { return ProbeRowOf(&l.items[i]) }
+func (l WireList) ElemList(i int) ListProbe     { return ProbeListOf(&l.items[i]) }
 
 // the ONE classifier per kind, over *WireValue (nil = absent attribute/element). The BC-owned variant IS
 // the wire tag — no consumer classification.
-func probeStringOf(w *WireValue) StringProbe {
+func ProbeStringOf(w *WireValue) StringProbe {
 	if w == nil {
 		return StringProbe{Kind: probeAbsent}
 	}
@@ -199,20 +211,37 @@ func probeStringOf(w *WireValue) StringProbe {
 		return StringProbe{Kind: probeWrong, ActualWireType: w.wireTag(), Raw: w.wireRaw()}
 	}
 }
-func probeNumberOf(w *WireValue) NumberProbe {
+func ProbeIntOf(w *WireValue) IntProbe {
 	if w == nil {
-		return NumberProbe{Kind: probeAbsent}
+		return IntProbe{Kind: probeAbsent}
 	}
 	switch w.kind {
-	case wireNum:
-		return NumberProbe{Kind: probeGot, Got: w.num, ActualWireType: "N", Raw: w.num}
+	case wireInt:
+		return IntProbe{Kind: probeGot, Got: w.i64v, ActualWireType: "N"}
 	case wireNull:
-		return NumberProbe{Kind: probeNull, ActualWireType: "NULL", Raw: "null"}
+		return IntProbe{Kind: probeNull, ActualWireType: "NULL", Raw: "null"}
 	default:
-		return NumberProbe{Kind: probeWrong, ActualWireType: w.wireTag(), Raw: w.wireRaw()}
+		return IntProbe{Kind: probeWrong, ActualWireType: w.wireTag(), Raw: w.wireRaw()}
 	}
 }
-func probeBoolOf(w *WireValue) BoolProbe {
+
+// a float position accepts an int and widens it — the same widening the interpreter's outType check does.
+func ProbeFloatOf(w *WireValue) FloatProbe {
+	if w == nil {
+		return FloatProbe{Kind: probeAbsent}
+	}
+	switch w.kind {
+	case wireFloat:
+		return FloatProbe{Kind: probeGot, Got: w.f64v, ActualWireType: "N"}
+	case wireInt:
+		return FloatProbe{Kind: probeGot, Got: float64(w.i64v), ActualWireType: "N"}
+	case wireNull:
+		return FloatProbe{Kind: probeNull, ActualWireType: "NULL", Raw: "null"}
+	default:
+		return FloatProbe{Kind: probeWrong, ActualWireType: w.wireTag(), Raw: w.wireRaw()}
+	}
+}
+func ProbeBoolOf(w *WireValue) BoolProbe {
 	if w == nil {
 		return BoolProbe{Kind: probeAbsent}
 	}
@@ -225,7 +254,7 @@ func probeBoolOf(w *WireValue) BoolProbe {
 		return BoolProbe{Kind: probeWrong, ActualWireType: w.wireTag(), Raw: w.wireRaw()}
 	}
 }
-func probeRowOf(w *WireValue) RowProbe {
+func ProbeRowOf(w *WireValue) RowProbe {
 	if w == nil {
 		return RowProbe{Kind: probeAbsent}
 	}
@@ -238,7 +267,7 @@ func probeRowOf(w *WireValue) RowProbe {
 		return RowProbe{Kind: probeWrong, ActualWireType: w.wireTag(), Raw: w.wireRaw()}
 	}
 }
-func probeListOf(w *WireValue) ListProbe {
+func ProbeListOf(w *WireValue) ListProbe {
 	if w == nil {
 		return ListProbe{Kind: probeAbsent}
 	}

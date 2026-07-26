@@ -8,6 +8,8 @@
 
 // Local concrete failure type (runtime-free) — the covered runner + the transport crate share it. Only the
 // TYPE lives here; the de-box/op-failure CONSTRUCTORS stay in the covered module (they are called there).
+use std::borrow::Cow;
+
 // ErrorKind — what went wrong (the closed set of scp-error.md). A concrete enum: the covered plane
 // carries no strings-as-tags and no dynamic kind lookup.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -82,33 +84,34 @@ impl std::fmt::Display for BehaviorError {
 }
 impl std::error::Error for BehaviorError {}
 
-// Probe<T> / NumProbe — the outcome of classifying one wire attribute against a declared type. Got carries
-// the matched value (a NumProbe's raw numeric text, which the de-box parses + range-checks so overflow is
-// BC's to detect); actual_wire_type is the producer's own wire tag (S/N/BOOL/M/L/NULL); raw_value is the
-// offending value stringified. Concrete enums — no boxed runtime value.
+// Probe<T> — the outcome of classifying one wire attribute against a declared type. Got carries
+// the matched value MOVED OUT of the wire (a number arrives already native, so there is nothing to parse
+// and no range check to fail); actual_wire_type is the producer's own wire tag
+// (S/N/BOOL/M/L/NULL), a `&'static str` so classifying costs NO allocation; raw_value is the offending
+// value, borrowed when it is a fixed word. Concrete enums — no boxed runtime value.
+//
+// NO CLONE. Classification CONSUMES the wire: the transport's result is an owned local that is dead the
+// moment it is de-boxed, so every string / row / list is MOVED into the typed value. A `.clone()` here
+// would deep-copy the whole result set once per node boundary — that is a heap copy of every cell, it
+// scales with node count, and it is what made a generated native read lose to an interpreter. The purity
+// gate rejects `.clone()` and per-call `.to_string()` in this module; keep it that way.
 pub enum Probe<T> {
     Got(T),
-    Wrong { actual_wire_type: String, raw_value: String },
-    Null { actual_wire_type: String, raw_value: String },
-    Absent,
-}
-
-pub enum NumProbe {
-    Got { raw: String, actual_wire_type: String },
-    Wrong { actual_wire_type: String, raw_value: String },
-    Null { actual_wire_type: String, raw_value: String },
+    Wrong { actual_wire_type: &'static str, raw_value: Cow<'static, str> },
+    Null { actual_wire_type: &'static str, raw_value: Cow<'static, str> },
     Absent,
 }
 
 // WireValue — the BC-OWNED, BC-GENERATED, self-contained (runtime-free) generic result the consumer's
 // single op-agnostic transport returns. The consumer BUILDS it as it reads the producer (the raw I/O act)
-// — WireValue::Str/Num/Bool/Null/Row/List, or the int()/float() constructors — and implements NOTHING over
-// it. Numbers carry raw text (BC parses + range-checks → overflow is BC's to detect). A composite is a
-// nested WireRow / WireList. NO trait, NO consumer classification protocol.
+// — WireValue::Str/Int/Float/Bool/Null/Row/List, or the int()/float() constructors — and implements NOTHING
+// over it. Numbers are NATIVE (i64 / f64): the producer's own integer reaches the de-box unparsed. A
+// composite is a nested WireRow / WireList. NO trait, NO consumer classification protocol.
 #[derive(Clone)]
 pub enum WireValue {
-    Str(String),
-    Num(String),
+    Str(Cow<'static, str>),
+    Int(i64),
+    Float(f64),
     Bool(bool),
     Null,
     Row(WireRow),
@@ -116,12 +119,16 @@ pub enum WireValue {
 }
 
 // WireRow / WireList — a wire map (a DynamoDB "M") / wire array (an "L"). Native Vec-backed; the generated
-// de-box probes them by declared field / element and owns strictness (required/optional, present/absent,
-// error assembly). row/list probes return a BORROW (Probe<&WireRow>/Probe<&WireList>) so nested decode is
-// zero-copy — only leaf scalars are cloned into the covered typed struct.
+// de-box drains them by declared field / element and owns strictness (required/optional, present/absent,
+// error assembly).
+//
+// A key is `Cow<'static, str>`: the field names BC generates are compile-time constants and ride as
+// `Cow::Borrowed` (zero allocation, however many times a payload is built), while a producer-supplied key
+// read at run time rides as `Cow::Owned`. The same holds for Str — a generated SQL literal costs
+// nothing per call, a value read off the wire owns its text.
 #[derive(Clone)]
 pub struct WireRow {
-    pub entries: Vec<(String, WireValue)>,
+    pub entries: Vec<(Cow<'static, str>, WireValue)>,
 }
 
 #[derive(Clone)]
@@ -130,137 +137,98 @@ pub struct WireList {
 }
 
 impl WireValue {
-    // constructors the consumer's transport uses to build numeric results (numbers ride as raw text).
+    // constructors the consumer's transport uses to build numeric results (i64 / f64, carried natively).
     pub fn int(n: i64) -> Self {
-        WireValue::Num(n.to_string())
+        WireValue::Int(n)
     }
     pub fn float(n: f64) -> Self {
-        WireValue::Num(n.to_string())
-    }
-    // the top result is always present (Some(self)); the field/elem probes share the same classifiers.
-    pub fn as_string(&self) -> Probe<String> {
-        probe_string_at(Some(self))
-    }
-    pub fn as_number(&self) -> NumProbe {
-        probe_number_at(Some(self))
-    }
-    pub fn as_bool(&self) -> Probe<bool> {
-        probe_bool_at(Some(self))
-    }
-    pub fn as_row(&self) -> Probe<&WireRow> {
-        probe_row_at(Some(self))
-    }
-    pub fn as_list(&self) -> Probe<&WireList> {
-        probe_list_at(Some(self))
+        WireValue::Float(n)
     }
     fn tag(&self) -> &'static str {
         match self {
             WireValue::Str(_) => "S",
-            WireValue::Num(_) => "N",
+            WireValue::Int(_) | WireValue::Float(_) => "N",
             WireValue::Bool(_) => "BOOL",
             WireValue::Null => "NULL",
             WireValue::Row(_) => "M",
             WireValue::List(_) => "L",
         }
     }
-    fn raw(&self) -> String {
+    // the offending value as text, for a failure detail. CONSUMES the value (the cold path owns it by
+    // then), so reporting a wrong string moves it out instead of copying it.
+    fn into_raw(self) -> Cow<'static, str> {
         match self {
-            WireValue::Str(s) => s.clone(),
-            WireValue::Num(s) => s.clone(),
-            WireValue::Bool(b) => b.to_string(),
-            WireValue::Null => "null".to_string(),
-            WireValue::Row(_) | WireValue::List(_) => "[composite]".to_string(),
+            WireValue::Str(s) => s,
+            WireValue::Int(n) => Cow::Owned(n.to_string()),
+            WireValue::Float(f) => Cow::Owned(f.to_string()),
+            WireValue::Bool(b) => Cow::Owned(b.to_string()),
+            WireValue::Null => Cow::Borrowed("null"),
+            WireValue::Row(_) | WireValue::List(_) => Cow::Borrowed("[composite]"),
         }
     }
 }
 
 impl WireRow {
-    fn get(&self, field: &str) -> Option<&WireValue> {
-        self.entries.iter().find(|(k, _)| k.as_str() == field).map(|(_, v)| v)
-    }
-    pub fn keys(&self) -> Vec<String> {
-        self.entries.iter().map(|(k, _)| k.clone()).collect()
-    }
-    pub fn probe_string(&self, field: &str) -> Probe<String> {
-        probe_string_at(self.get(field))
-    }
-    pub fn probe_number(&self, field: &str) -> NumProbe {
-        probe_number_at(self.get(field))
-    }
-    pub fn probe_bool(&self, field: &str) -> Probe<bool> {
-        probe_bool_at(self.get(field))
-    }
-    pub fn probe_row(&self, field: &str) -> Probe<&WireRow> {
-        probe_row_at(self.get(field))
-    }
-    pub fn probe_list(&self, field: &str) -> Probe<&WireList> {
-        probe_list_at(self.get(field))
+    // Move the value at `field` OUT of the row (or None when the producer did not send it). The de-box
+    // reads each declared field exactly once, so taking is always right — and it is what keeps a cell
+    // from being copied: the String travels from the wire into the typed struct without a heap copy.
+    // Undeclared extras are simply left behind with the row.
+    pub fn take(&mut self, field: &str) -> Option<WireValue> {
+        self.entries.iter().position(|(k, _)| k == field).map(|i| self.entries.swap_remove(i).1)
     }
 }
 
-impl WireList {
-    pub fn len(&self) -> usize {
-        self.items.len()
-    }
-    pub fn is_empty(&self) -> bool {
-        self.items.is_empty()
-    }
-    pub fn elem_string(&self, i: usize) -> Probe<String> {
-        probe_string_at(self.items.get(i))
-    }
-    pub fn elem_number(&self, i: usize) -> NumProbe {
-        probe_number_at(self.items.get(i))
-    }
-    pub fn elem_bool(&self, i: usize) -> Probe<bool> {
-        probe_bool_at(self.items.get(i))
-    }
-    pub fn elem_row(&self, i: usize) -> Probe<&WireRow> {
-        probe_row_at(self.items.get(i))
-    }
-    pub fn elem_list(&self, i: usize) -> Probe<&WireList> {
-        probe_list_at(self.items.get(i))
-    }
-}
-
-// the ONE classifier per kind, over an Option<&WireValue> (None = absent attribute/element). The BC-owned
-// WireValue variant IS the wire tag — no consumer classification.
-fn probe_string_at(v: Option<&WireValue>) -> Probe<String> {
+// the ONE classifier per kind, over an OWNED Option<WireValue> (None = absent attribute/element). The
+// BC-owned WireValue variant IS the wire tag — no consumer classification. Each takes the value BY VALUE
+// and hands the match MOVED OUT: de-boxing a result never copies a cell, a row, or a list.
+pub fn probe_string_at(v: Option<WireValue>) -> Probe<Cow<'static, str>> {
     match v {
         None => Probe::Absent,
-        Some(WireValue::Str(s)) => Probe::Got(s.clone()),
-        Some(WireValue::Null) => Probe::Null { actual_wire_type: "NULL".to_string(), raw_value: "null".to_string() },
-        Some(o) => Probe::Wrong { actual_wire_type: o.tag().to_string(), raw_value: o.raw() },
+        Some(WireValue::Str(s)) => Probe::Got(s),
+        Some(WireValue::Null) => Probe::Null { actual_wire_type: "NULL", raw_value: Cow::Borrowed("null") },
+        Some(o) => Probe::Wrong { actual_wire_type: o.tag(), raw_value: o.into_raw() },
     }
 }
-fn probe_number_at(v: Option<&WireValue>) -> NumProbe {
-    match v {
-        None => NumProbe::Absent,
-        Some(WireValue::Num(s)) => NumProbe::Got { raw: s.clone(), actual_wire_type: "N".to_string() },
-        Some(WireValue::Null) => NumProbe::Null { actual_wire_type: "NULL".to_string(), raw_value: "null".to_string() },
-        Some(o) => NumProbe::Wrong { actual_wire_type: o.tag().to_string(), raw_value: o.raw() },
-    }
-}
-fn probe_bool_at(v: Option<&WireValue>) -> Probe<bool> {
+pub fn probe_int_at(v: Option<WireValue>) -> Probe<i64> {
     match v {
         None => Probe::Absent,
-        Some(WireValue::Bool(b)) => Probe::Got(*b),
-        Some(WireValue::Null) => Probe::Null { actual_wire_type: "NULL".to_string(), raw_value: "null".to_string() },
-        Some(o) => Probe::Wrong { actual_wire_type: o.tag().to_string(), raw_value: o.raw() },
+        Some(WireValue::Int(n)) => Probe::Got(n),
+        Some(WireValue::Null) => Probe::Null { actual_wire_type: "NULL", raw_value: Cow::Borrowed("null") },
+        Some(o) => Probe::Wrong { actual_wire_type: o.tag(), raw_value: o.into_raw() },
     }
 }
-fn probe_row_at(v: Option<&WireValue>) -> Probe<&WireRow> {
+// a float position accepts an int and widens it — the same widening the interpreter's outType check does,
+// so the generated read and run_behavior agree on an integral value in a float field.
+pub fn probe_float_at(v: Option<WireValue>) -> Probe<f64> {
+    match v {
+        None => Probe::Absent,
+        Some(WireValue::Float(f)) => Probe::Got(f),
+        Some(WireValue::Int(n)) => Probe::Got(n as f64),
+        Some(WireValue::Null) => Probe::Null { actual_wire_type: "NULL", raw_value: Cow::Borrowed("null") },
+        Some(o) => Probe::Wrong { actual_wire_type: o.tag(), raw_value: o.into_raw() },
+    }
+}
+pub fn probe_bool_at(v: Option<WireValue>) -> Probe<bool> {
+    match v {
+        None => Probe::Absent,
+        Some(WireValue::Bool(b)) => Probe::Got(b),
+        Some(WireValue::Null) => Probe::Null { actual_wire_type: "NULL", raw_value: Cow::Borrowed("null") },
+        Some(o) => Probe::Wrong { actual_wire_type: o.tag(), raw_value: o.into_raw() },
+    }
+}
+pub fn probe_row_at(v: Option<WireValue>) -> Probe<WireRow> {
     match v {
         None => Probe::Absent,
         Some(WireValue::Row(r)) => Probe::Got(r),
-        Some(WireValue::Null) => Probe::Null { actual_wire_type: "NULL".to_string(), raw_value: "null".to_string() },
-        Some(o) => Probe::Wrong { actual_wire_type: o.tag().to_string(), raw_value: o.raw() },
+        Some(WireValue::Null) => Probe::Null { actual_wire_type: "NULL", raw_value: Cow::Borrowed("null") },
+        Some(o) => Probe::Wrong { actual_wire_type: o.tag(), raw_value: o.into_raw() },
     }
 }
-fn probe_list_at(v: Option<&WireValue>) -> Probe<&WireList> {
+pub fn probe_list_at(v: Option<WireValue>) -> Probe<WireList> {
     match v {
         None => Probe::Absent,
         Some(WireValue::List(l)) => Probe::Got(l),
-        Some(WireValue::Null) => Probe::Null { actual_wire_type: "NULL".to_string(), raw_value: "null".to_string() },
-        Some(o) => Probe::Wrong { actual_wire_type: o.tag().to_string(), raw_value: o.raw() },
+        Some(WireValue::Null) => Probe::Null { actual_wire_type: "NULL", raw_value: Cow::Borrowed("null") },
+        Some(o) => Probe::Wrong { actual_wire_type: o.tag(), raw_value: o.into_raw() },
     }
 }

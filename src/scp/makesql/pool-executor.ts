@@ -36,8 +36,8 @@ import { buildMysqlReselect, bindReselect } from './mysql-returning';
 //     `mysqlDeboxPoolOptions` (`supportBigNumbers + bigNumberStrings` so BIGINT→string, and
 //     `dateStrings` so the date family→string). `mysqlDeboxPoolOptions` is those options.
 
-/** PG type OIDs for the date/time family + int8 (bigint). */
-const PG_OID = { INT8: 20, DATE: 1082, TIMESTAMP: 1114, TIMESTAMPTZ: 1184, TIME: 1083, TIMETZ: 1266 } as const;
+/** PG type OIDs for the integer family + the date/time family. */
+const PG_OID = { INT2: 21, INT4: 23, INT8: 20, DATE: 1082, TIMESTAMP: 1114, TIMESTAMPTZ: 1184, TIME: 1083, TIMETZ: 1266 } as const;
 
 /** The minimal `pg.types` surface: register a per-OID text parser. */
 export interface PgTypesLike {
@@ -47,8 +47,8 @@ export interface PgTypesLike {
 /**
  * Register `pg` type parsers so the read-path de-box (issue #59) gets coercible values: the
  * DATE/TIMESTAMP/TIMESTAMPTZ/TIME family is returned as its NATIVE TEXTUAL string (NOT a JS Date),
- * honoring the `date→string` outType and carrying the TZ for timestamptz. int8 already arrives as a
- * string (pg default), so it needs no parser. Idempotent. Call ONCE, before building the pool, from
+ * honoring the `date→string` outType and carrying the TZ for timestamptz; and the int2/int4/int8 family
+ * as a BigInt, the TS plane's `int` value model. Idempotent. Call ONCE, before building the pool, from
  * the consumer that owns the `pg` module (`import { types } from 'pg'; configurePgDeboxTypeParsers(types)`).
  *
  * WHY the GLOBAL parser (a documented, deliberate exception): `pg`'s default DATE parser builds a JS
@@ -62,6 +62,16 @@ export interface PgTypesLike {
  */
 export function configurePgDeboxTypeParsers(types: PgTypesLike): void {
   const asString = (v: string): string => v; // identity: keep the driver's native textual form
+  // An INTEGER column must arrive in bc's `int` value model, which on the TS plane is a BigInt. `pg`'s
+  // defaults hand back a JS number for int2/int4 and a string for int8, and bc classifies a JS number as
+  // FLOAT — so a column declared `Int` failed its outType check with `expected int, got float` on every
+  // read. The OID says the column is an integer, so nothing is guessed from the value: a REAL column
+  // whose value happens to be integral still arrives as a float. sqlite gets the same guarantee from
+  // better-sqlite3's `safeIntegers`, MySQL from {@link mysqlDeboxPoolOptions}'s integer typeCast.
+  const asBigInt = (v: string): bigint => BigInt(v);
+  types.setTypeParser(PG_OID.INT2, asBigInt);
+  types.setTypeParser(PG_OID.INT4, asBigInt);
+  types.setTypeParser(PG_OID.INT8, asBigInt);
   types.setTypeParser(PG_OID.DATE, asString);
   types.setTypeParser(PG_OID.TIMESTAMP, asString);
   types.setTypeParser(PG_OID.TIMESTAMPTZ, asString);
@@ -79,7 +89,34 @@ export const mysqlDeboxPoolOptions = {
   supportBigNumbers: true,
   bigNumberStrings: true,
   dateStrings: true,
+  /**
+   * An INTEGER column must arrive in bc's `int` value model — a BigInt on the TS plane. `mysql2` hands
+   * back a JS number for TINY/SHORT/INT24/LONG (only BIGINT becomes a string, via `bigNumberStrings`),
+   * and bc classifies a JS number as FLOAT, so a column declared `Int` failed its outType check with
+   * `expected int, got float`. The FIELD TYPE decides, never the value: a DOUBLE/DECIMAL column whose
+   * value happens to be integral still arrives as a float. sqlite gets the same guarantee from
+   * better-sqlite3's `safeIntegers`, PostgreSQL from {@link configurePgDeboxTypeParsers}'s int OIDs.
+   */
+  typeCast(field: MysqlFieldLike, next: () => unknown): unknown {
+    if (MYSQL_INT_TYPES.has(field.type)) {
+      const raw = field.string();
+      return raw === null ? null : BigInt(raw);
+    }
+    return next();
+  },
 } as const;
+
+/** The `mysql2` field surface `typeCast` reads: the column's declared type and its raw text. */
+export interface MysqlFieldLike {
+  readonly type: string;
+  string(): string | null;
+}
+
+/**
+ * `mysql2`'s field-type names for the INTEGER family. NEWDECIMAL / DOUBLE / FLOAT are deliberately
+ * absent — they are float columns, whatever their values look like.
+ */
+const MYSQL_INT_TYPES: ReadonlySet<string> = new Set(['TINY', 'SHORT', 'INT24', 'LONG', 'LONGLONG']);
 
 /** The minimal `pg.Pool` surface we need: `query(text, values)` resolving `{ rows }`. */
 export interface PgPoolLike {

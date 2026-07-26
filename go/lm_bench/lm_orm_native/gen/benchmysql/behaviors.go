@@ -7,7 +7,6 @@
 package benchmysql
 
 import (
-	"strconv"
 	"github.com/foo-ogawa/litedbmodel/go/litedbmodel_runtime/wire"
 	"github.com/foo-ogawa/litedbmodel/go/litedbmodel_runtime"
 )
@@ -99,10 +98,10 @@ func opFailed(node string, policy string, e error) *BehaviorError {
 	return &BehaviorError{Code: "OP_FAILED", Message: where + ": " + e.Error()}
 }
 
-// deTypeMismatch / deMissingField / deOverflow — the de-box mismatch failures the generated decode
+// deTypeMismatch / deMissingField — the de-box mismatch failures the generated decode
 // produces (scp-error.md "The Error Value"). Codes are byte-equal to the runtime outType check
 // (TYPE_MISMATCH / MISSING_PROP) so the covered read stays equivalent to run_behavior; detail.kind
-// distinguishes typeMismatch / missingField / overflow. ErrorDetail is built by a POSITIONAL literal so
+// distinguishes typeMismatch / missingField. ErrorDetail is built by a POSITIONAL literal so
 // the offending value is carried without naming the field (the covered module stays whole-file free of
 // the boxed result-type token; its only permitted occurrence is the ErrorDetail field declaration).
 func deTypeMismatch(model, field, expected, actualWire, raw string) *BehaviorError {
@@ -111,10 +110,6 @@ func deTypeMismatch(model, field, expected, actualWire, raw string) *BehaviorErr
 
 func deMissingField(model, field, expected string) *BehaviorError {
 	return &BehaviorError{Code: "MISSING_PROP", Message: "node '" + model + "': " + field + ": required field is absent", Detail: &ErrorDetail{"missingField", model, field, expected, "", "", nil}}
-}
-
-func deOverflow(model, field, expected, actualWire, raw string) *BehaviorError {
-	return &BehaviorError{Code: "TYPE_MISMATCH", Message: "node '" + model + "': " + field + ": " + raw + " is outside the range of " + expected, Detail: &ErrorDetail{"overflow", model, field, expected, actualWire, raw, nil}}
 }
 
 // Typed struct declarations (outType-derived; hash-dedup — shared type plan).
@@ -255,13 +250,9 @@ func FindAll() ([]UserRow, error) {
 				} else if p2.Kind == probeWrong {
 					return nil, deTypeMismatch("UserRow", "email", "opt(string)", p2.ActualWireType, p2.Raw)
 				}
-				p3 := p1.Got.ProbeNumber("id")
+				p3 := p1.Got.ProbeInt("id")
 				if p3.Kind == probeGot {
-					n3, nErr3 := strconv.ParseInt(p3.Got, 10, 64)
-					if nErr3 != nil {
-						return nil, deOverflow("UserRow", "id", "int", p3.ActualWireType, p3.Got)
-					}
-					rec1.Id = n3
+					rec1.Id = p3.Got
 				} else if p3.Kind == probeWrong {
 					return nil, deTypeMismatch("UserRow", "id", "int", p3.ActualWireType, p3.Raw)
 				} else if p3.Kind == probeNull {
@@ -329,13 +320,9 @@ func FilterPaginateSort(published int64) ([]PostFullRow, error) {
 			p1 := p0.Got.ElemRow(i0)
 			if p1.Kind == probeGot {
 				var rec1 PostFullRow
-				p2 := p1.Got.ProbeNumber("author_id")
+				p2 := p1.Got.ProbeInt("author_id")
 				if p2.Kind == probeGot {
-					n2, nErr2 := strconv.ParseInt(p2.Got, 10, 64)
-					if nErr2 != nil {
-						return nil, deOverflow("PostFullRow", "author_id", "opt(int)", p2.ActualWireType, p2.Got)
-					}
-					rec1.Author_id = &n2
+					rec1.Author_id = &p2.Got
 				} else if p2.Kind == probeWrong {
 					return nil, deTypeMismatch("PostFullRow", "author_id", "opt(int)", p2.ActualWireType, p2.Raw)
 				}
@@ -353,13 +340,9 @@ func FilterPaginateSort(published int64) ([]PostFullRow, error) {
 				} else if p4.Kind == probeWrong {
 					return nil, deTypeMismatch("PostFullRow", "created_at", "opt(string)", p4.ActualWireType, p4.Raw)
 				}
-				p5 := p1.Got.ProbeNumber("id")
+				p5 := p1.Got.ProbeInt("id")
 				if p5.Kind == probeGot {
-					n5, nErr5 := strconv.ParseInt(p5.Got, 10, 64)
-					if nErr5 != nil {
-						return nil, deOverflow("PostFullRow", "id", "int", p5.ActualWireType, p5.Got)
-					}
-					rec1.Id = n5
+					rec1.Id = p5.Got
 				} else if p5.Kind == probeWrong {
 					return nil, deTypeMismatch("PostFullRow", "id", "int", p5.ActualWireType, p5.Raw)
 				} else if p5.Kind == probeNull {
@@ -367,13 +350,9 @@ func FilterPaginateSort(published int64) ([]PostFullRow, error) {
 				} else {
 					return nil, deMissingField("PostFullRow", "id", "int")
 				}
-				p6 := p1.Got.ProbeNumber("published")
+				p6 := p1.Got.ProbeInt("published")
 				if p6.Kind == probeGot {
-					n6, nErr6 := strconv.ParseInt(p6.Got, 10, 64)
-					if nErr6 != nil {
-						return nil, deOverflow("PostFullRow", "published", "opt(int)", p6.ActualWireType, p6.Got)
-					}
-					rec1.Published = &n6
+					rec1.Published = &p6.Got
 				} else if p6.Kind == probeWrong {
 					return nil, deTypeMismatch("PostFullRow", "published", "opt(int)", p6.ActualWireType, p6.Raw)
 				}
@@ -444,13 +423,9 @@ func FindFirst(name string) ([]UserRow, error) {
 				} else if p2.Kind == probeWrong {
 					return nil, deTypeMismatch("UserRow", "email", "opt(string)", p2.ActualWireType, p2.Raw)
 				}
-				p3 := p1.Got.ProbeNumber("id")
+				p3 := p1.Got.ProbeInt("id")
 				if p3.Kind == probeGot {
-					n3, nErr3 := strconv.ParseInt(p3.Got, 10, 64)
-					if nErr3 != nil {
-						return nil, deOverflow("UserRow", "id", "int", p3.ActualWireType, p3.Got)
-					}
-					rec1.Id = n3
+					rec1.Id = p3.Got
 				} else if p3.Kind == probeWrong {
 					return nil, deTypeMismatch("UserRow", "id", "int", p3.ActualWireType, p3.Raw)
 				} else if p3.Kind == probeNull {
@@ -525,13 +500,9 @@ func FindUnique(email string) ([]UserRow, error) {
 				} else if p2.Kind == probeWrong {
 					return nil, deTypeMismatch("UserRow", "email", "opt(string)", p2.ActualWireType, p2.Raw)
 				}
-				p3 := p1.Got.ProbeNumber("id")
+				p3 := p1.Got.ProbeInt("id")
 				if p3.Kind == probeGot {
-					n3, nErr3 := strconv.ParseInt(p3.Got, 10, 64)
-					if nErr3 != nil {
-						return nil, deOverflow("UserRow", "id", "int", p3.ActualWireType, p3.Got)
-					}
-					rec1.Id = n3
+					rec1.Id = p3.Got
 				} else if p3.Kind == probeWrong {
 					return nil, deTypeMismatch("UserRow", "id", "int", p3.ActualWireType, p3.Raw)
 				} else if p3.Kind == probeNull {
@@ -674,13 +645,9 @@ func NestedFindAll() ([]UserWithPosts, error) {
 					} else if p5.Kind == probeWrong {
 						return nil, deTypeMismatch("UserWithPosts", "email", "opt(string)", p5.ActualWireType, p5.Raw)
 					}
-					p6 := p4.Got.ProbeNumber("id")
+					p6 := p4.Got.ProbeInt("id")
 					if p6.Kind == probeGot {
-						n6, nErr6 := strconv.ParseInt(p6.Got, 10, 64)
-						if nErr6 != nil {
-							return nil, deOverflow("UserWithPosts", "id", "int", p6.ActualWireType, p6.Got)
-						}
-						rec4.Id = n6
+						rec4.Id = p6.Got
 					} else if p6.Kind == probeWrong {
 						return nil, deTypeMismatch("UserWithPosts", "id", "int", p6.ActualWireType, p6.Raw)
 					} else if p6.Kind == probeNull {
@@ -703,23 +670,15 @@ func NestedFindAll() ([]UserWithPosts, error) {
 							p9 := p8.Got.ElemRow(i8)
 							if p9.Kind == probeGot {
 								var rec9 PostRow
-								p10 := p9.Got.ProbeNumber("author_id")
+								p10 := p9.Got.ProbeInt("author_id")
 								if p10.Kind == probeGot {
-									n10, nErr10 := strconv.ParseInt(p10.Got, 10, 64)
-									if nErr10 != nil {
-										return nil, deOverflow("PostRow", "author_id", "opt(int)", p10.ActualWireType, p10.Got)
-									}
-									rec9.Author_id = &n10
+									rec9.Author_id = &p10.Got
 								} else if p10.Kind == probeWrong {
 									return nil, deTypeMismatch("PostRow", "author_id", "opt(int)", p10.ActualWireType, p10.Raw)
 								}
-								p11 := p9.Got.ProbeNumber("id")
+								p11 := p9.Got.ProbeInt("id")
 								if p11.Kind == probeGot {
-									n11, nErr11 := strconv.ParseInt(p11.Got, 10, 64)
-									if nErr11 != nil {
-										return nil, deOverflow("PostRow", "id", "int", p11.ActualWireType, p11.Got)
-									}
-									rec9.Id = n11
+									rec9.Id = p11.Got
 								} else if p11.Kind == probeWrong {
 									return nil, deTypeMismatch("PostRow", "id", "int", p11.ActualWireType, p11.Raw)
 								} else if p11.Kind == probeNull {
@@ -881,13 +840,9 @@ func NestedFindFirst(name string) ([]UserWithPosts, error) {
 					} else if p5.Kind == probeWrong {
 						return nil, deTypeMismatch("UserWithPosts", "email", "opt(string)", p5.ActualWireType, p5.Raw)
 					}
-					p6 := p4.Got.ProbeNumber("id")
+					p6 := p4.Got.ProbeInt("id")
 					if p6.Kind == probeGot {
-						n6, nErr6 := strconv.ParseInt(p6.Got, 10, 64)
-						if nErr6 != nil {
-							return nil, deOverflow("UserWithPosts", "id", "int", p6.ActualWireType, p6.Got)
-						}
-						rec4.Id = n6
+						rec4.Id = p6.Got
 					} else if p6.Kind == probeWrong {
 						return nil, deTypeMismatch("UserWithPosts", "id", "int", p6.ActualWireType, p6.Raw)
 					} else if p6.Kind == probeNull {
@@ -910,23 +865,15 @@ func NestedFindFirst(name string) ([]UserWithPosts, error) {
 							p9 := p8.Got.ElemRow(i8)
 							if p9.Kind == probeGot {
 								var rec9 PostRow
-								p10 := p9.Got.ProbeNumber("author_id")
+								p10 := p9.Got.ProbeInt("author_id")
 								if p10.Kind == probeGot {
-									n10, nErr10 := strconv.ParseInt(p10.Got, 10, 64)
-									if nErr10 != nil {
-										return nil, deOverflow("PostRow", "author_id", "opt(int)", p10.ActualWireType, p10.Got)
-									}
-									rec9.Author_id = &n10
+									rec9.Author_id = &p10.Got
 								} else if p10.Kind == probeWrong {
 									return nil, deTypeMismatch("PostRow", "author_id", "opt(int)", p10.ActualWireType, p10.Raw)
 								}
-								p11 := p9.Got.ProbeNumber("id")
+								p11 := p9.Got.ProbeInt("id")
 								if p11.Kind == probeGot {
-									n11, nErr11 := strconv.ParseInt(p11.Got, 10, 64)
-									if nErr11 != nil {
-										return nil, deOverflow("PostRow", "id", "int", p11.ActualWireType, p11.Got)
-									}
-									rec9.Id = n11
+									rec9.Id = p11.Got
 								} else if p11.Kind == probeWrong {
 									return nil, deTypeMismatch("PostRow", "id", "int", p11.ActualWireType, p11.Raw)
 								} else if p11.Kind == probeNull {
@@ -1088,13 +1035,9 @@ func NestedFindUnique(email string) ([]UserWithPosts, error) {
 					} else if p5.Kind == probeWrong {
 						return nil, deTypeMismatch("UserWithPosts", "email", "opt(string)", p5.ActualWireType, p5.Raw)
 					}
-					p6 := p4.Got.ProbeNumber("id")
+					p6 := p4.Got.ProbeInt("id")
 					if p6.Kind == probeGot {
-						n6, nErr6 := strconv.ParseInt(p6.Got, 10, 64)
-						if nErr6 != nil {
-							return nil, deOverflow("UserWithPosts", "id", "int", p6.ActualWireType, p6.Got)
-						}
-						rec4.Id = n6
+						rec4.Id = p6.Got
 					} else if p6.Kind == probeWrong {
 						return nil, deTypeMismatch("UserWithPosts", "id", "int", p6.ActualWireType, p6.Raw)
 					} else if p6.Kind == probeNull {
@@ -1117,23 +1060,15 @@ func NestedFindUnique(email string) ([]UserWithPosts, error) {
 							p9 := p8.Got.ElemRow(i8)
 							if p9.Kind == probeGot {
 								var rec9 PostRow
-								p10 := p9.Got.ProbeNumber("author_id")
+								p10 := p9.Got.ProbeInt("author_id")
 								if p10.Kind == probeGot {
-									n10, nErr10 := strconv.ParseInt(p10.Got, 10, 64)
-									if nErr10 != nil {
-										return nil, deOverflow("PostRow", "author_id", "opt(int)", p10.ActualWireType, p10.Got)
-									}
-									rec9.Author_id = &n10
+									rec9.Author_id = &p10.Got
 								} else if p10.Kind == probeWrong {
 									return nil, deTypeMismatch("PostRow", "author_id", "opt(int)", p10.ActualWireType, p10.Raw)
 								}
-								p11 := p9.Got.ProbeNumber("id")
+								p11 := p9.Got.ProbeInt("id")
 								if p11.Kind == probeGot {
-									n11, nErr11 := strconv.ParseInt(p11.Got, 10, 64)
-									if nErr11 != nil {
-										return nil, deOverflow("PostRow", "id", "int", p11.ActualWireType, p11.Got)
-									}
-									rec9.Id = n11
+									rec9.Id = p11.Got
 								} else if p11.Kind == probeWrong {
 									return nil, deTypeMismatch("PostRow", "id", "int", p11.ActualWireType, p11.Raw)
 								} else if p11.Kind == probeNull {
@@ -1364,13 +1299,9 @@ func NestedRelations() ([]UserWithPostsAndComments, error) {
 					} else if p8.Kind == probeWrong {
 						return nil, deTypeMismatch("UserWithPostsAndComments", "email", "opt(string)", p8.ActualWireType, p8.Raw)
 					}
-					p9 := p7.Got.ProbeNumber("id")
+					p9 := p7.Got.ProbeInt("id")
 					if p9.Kind == probeGot {
-						n9, nErr9 := strconv.ParseInt(p9.Got, 10, 64)
-						if nErr9 != nil {
-							return nil, deOverflow("UserWithPostsAndComments", "id", "int", p9.ActualWireType, p9.Got)
-						}
-						rec7.Id = n9
+						rec7.Id = p9.Got
 					} else if p9.Kind == probeWrong {
 						return nil, deTypeMismatch("UserWithPostsAndComments", "id", "int", p9.ActualWireType, p9.Raw)
 					} else if p9.Kind == probeNull {
@@ -1393,13 +1324,9 @@ func NestedRelations() ([]UserWithPostsAndComments, error) {
 							p12 := p11.Got.ElemRow(i11)
 							if p12.Kind == probeGot {
 								var rec12 PostWithComments
-								p13 := p12.Got.ProbeNumber("author_id")
+								p13 := p12.Got.ProbeInt("author_id")
 								if p13.Kind == probeGot {
-									n13, nErr13 := strconv.ParseInt(p13.Got, 10, 64)
-									if nErr13 != nil {
-										return nil, deOverflow("PostWithComments", "author_id", "opt(int)", p13.ActualWireType, p13.Got)
-									}
-									rec12.Author_id = &n13
+									rec12.Author_id = &p13.Got
 								} else if p13.Kind == probeWrong {
 									return nil, deTypeMismatch("PostWithComments", "author_id", "opt(int)", p13.ActualWireType, p13.Raw)
 								}
@@ -1418,23 +1345,15 @@ func NestedRelations() ([]UserWithPostsAndComments, error) {
 											} else if p16.Kind == probeWrong {
 												return nil, deTypeMismatch("CommentRow", "body", "opt(string)", p16.ActualWireType, p16.Raw)
 											}
-											p17 := p15.Got.ProbeNumber("id")
+											p17 := p15.Got.ProbeInt("id")
 											if p17.Kind == probeGot {
-												n17, nErr17 := strconv.ParseInt(p17.Got, 10, 64)
-												if nErr17 != nil {
-													return nil, deOverflow("CommentRow", "id", "opt(int)", p17.ActualWireType, p17.Got)
-												}
-												rec15.Id = &n17
+												rec15.Id = &p17.Got
 											} else if p17.Kind == probeWrong {
 												return nil, deTypeMismatch("CommentRow", "id", "opt(int)", p17.ActualWireType, p17.Raw)
 											}
-											p18 := p15.Got.ProbeNumber("post_id")
+											p18 := p15.Got.ProbeInt("post_id")
 											if p18.Kind == probeGot {
-												n18, nErr18 := strconv.ParseInt(p18.Got, 10, 64)
-												if nErr18 != nil {
-													return nil, deOverflow("CommentRow", "post_id", "opt(int)", p18.ActualWireType, p18.Got)
-												}
-												rec15.Post_id = &n18
+												rec15.Post_id = &p18.Got
 											} else if p18.Kind == probeWrong {
 												return nil, deTypeMismatch("CommentRow", "post_id", "opt(int)", p18.ActualWireType, p18.Raw)
 											}
@@ -1456,13 +1375,9 @@ func NestedRelations() ([]UserWithPostsAndComments, error) {
 								} else {
 									return nil, deMissingField("PostWithComments", "comments", "arr(obj{body:opt(string),id:opt(int),post_id:opt(int)})")
 								}
-								p19 := p12.Got.ProbeNumber("id")
+								p19 := p12.Got.ProbeInt("id")
 								if p19.Kind == probeGot {
-									n19, nErr19 := strconv.ParseInt(p19.Got, 10, 64)
-									if nErr19 != nil {
-										return nil, deOverflow("PostWithComments", "id", "int", p19.ActualWireType, p19.Got)
-									}
-									rec12.Id = n19
+									rec12.Id = p19.Got
 								} else if p19.Kind == probeWrong {
 									return nil, deTypeMismatch("PostWithComments", "id", "int", p19.ActualWireType, p19.Raw)
 								} else if p19.Kind == probeNull {
@@ -1716,33 +1631,21 @@ func CompositeRelations() ([]TenantUserWithPosts, error) {
 											} else if p13.Kind == probeWrong {
 												return nil, deTypeMismatch("TenantCommentRow", "body", "opt(string)", p13.ActualWireType, p13.Raw)
 											}
-											p14 := p12.Got.ProbeNumber("comment_id")
+											p14 := p12.Got.ProbeInt("comment_id")
 											if p14.Kind == probeGot {
-												n14, nErr14 := strconv.ParseInt(p14.Got, 10, 64)
-												if nErr14 != nil {
-													return nil, deOverflow("TenantCommentRow", "comment_id", "opt(int)", p14.ActualWireType, p14.Got)
-												}
-												rec12.Comment_id = &n14
+												rec12.Comment_id = &p14.Got
 											} else if p14.Kind == probeWrong {
 												return nil, deTypeMismatch("TenantCommentRow", "comment_id", "opt(int)", p14.ActualWireType, p14.Raw)
 											}
-											p15 := p12.Got.ProbeNumber("post_id")
+											p15 := p12.Got.ProbeInt("post_id")
 											if p15.Kind == probeGot {
-												n15, nErr15 := strconv.ParseInt(p15.Got, 10, 64)
-												if nErr15 != nil {
-													return nil, deOverflow("TenantCommentRow", "post_id", "opt(int)", p15.ActualWireType, p15.Got)
-												}
-												rec12.Post_id = &n15
+												rec12.Post_id = &p15.Got
 											} else if p15.Kind == probeWrong {
 												return nil, deTypeMismatch("TenantCommentRow", "post_id", "opt(int)", p15.ActualWireType, p15.Raw)
 											}
-											p16 := p12.Got.ProbeNumber("tenant_id")
+											p16 := p12.Got.ProbeInt("tenant_id")
 											if p16.Kind == probeGot {
-												n16, nErr16 := strconv.ParseInt(p16.Got, 10, 64)
-												if nErr16 != nil {
-													return nil, deOverflow("TenantCommentRow", "tenant_id", "opt(int)", p16.ActualWireType, p16.Got)
-												}
-												rec12.Tenant_id = &n16
+												rec12.Tenant_id = &p16.Got
 											} else if p16.Kind == probeWrong {
 												return nil, deTypeMismatch("TenantCommentRow", "tenant_id", "opt(int)", p16.ActualWireType, p16.Raw)
 											}
@@ -1764,23 +1667,15 @@ func CompositeRelations() ([]TenantUserWithPosts, error) {
 								} else {
 									return nil, deMissingField("TenantPostWithComments", "comments", "arr(obj{body:opt(string),comment_id:opt(int),post_id:opt(int),tenant_id:opt(int)})")
 								}
-								p17 := p10.Got.ProbeNumber("post_id")
+								p17 := p10.Got.ProbeInt("post_id")
 								if p17.Kind == probeGot {
-									n17, nErr17 := strconv.ParseInt(p17.Got, 10, 64)
-									if nErr17 != nil {
-										return nil, deOverflow("TenantPostWithComments", "post_id", "opt(int)", p17.ActualWireType, p17.Got)
-									}
-									rec10.Post_id = &n17
+									rec10.Post_id = &p17.Got
 								} else if p17.Kind == probeWrong {
 									return nil, deTypeMismatch("TenantPostWithComments", "post_id", "opt(int)", p17.ActualWireType, p17.Raw)
 								}
-								p18 := p10.Got.ProbeNumber("tenant_id")
+								p18 := p10.Got.ProbeInt("tenant_id")
 								if p18.Kind == probeGot {
-									n18, nErr18 := strconv.ParseInt(p18.Got, 10, 64)
-									if nErr18 != nil {
-										return nil, deOverflow("TenantPostWithComments", "tenant_id", "opt(int)", p18.ActualWireType, p18.Got)
-									}
-									rec10.Tenant_id = &n18
+									rec10.Tenant_id = &p18.Got
 								} else if p18.Kind == probeWrong {
 									return nil, deTypeMismatch("TenantPostWithComments", "tenant_id", "opt(int)", p18.ActualWireType, p18.Raw)
 								}
@@ -1791,13 +1686,9 @@ func CompositeRelations() ([]TenantUserWithPosts, error) {
 								} else if p19.Kind == probeWrong {
 									return nil, deTypeMismatch("TenantPostWithComments", "title", "opt(string)", p19.ActualWireType, p19.Raw)
 								}
-								p20 := p10.Got.ProbeNumber("user_id")
+								p20 := p10.Got.ProbeInt("user_id")
 								if p20.Kind == probeGot {
-									n20, nErr20 := strconv.ParseInt(p20.Got, 10, 64)
-									if nErr20 != nil {
-										return nil, deOverflow("TenantPostWithComments", "user_id", "opt(int)", p20.ActualWireType, p20.Got)
-									}
-									rec10.User_id = &n20
+									rec10.User_id = &p20.Got
 								} else if p20.Kind == probeWrong {
 									return nil, deTypeMismatch("TenantPostWithComments", "user_id", "opt(int)", p20.ActualWireType, p20.Raw)
 								}
@@ -1819,23 +1710,15 @@ func CompositeRelations() ([]TenantUserWithPosts, error) {
 					} else {
 						return nil, deMissingField("TenantUserWithPosts", "posts", "arr(obj{comments:arr(obj{body:opt(string),comment_id:opt(int),post_id:opt(int),tenant_id:opt(int)}),post_id:opt(int),tenant_id:opt(int),title:opt(string),user_id:opt(int)})")
 					}
-					p21 := p7.Got.ProbeNumber("tenant_id")
+					p21 := p7.Got.ProbeInt("tenant_id")
 					if p21.Kind == probeGot {
-						n21, nErr21 := strconv.ParseInt(p21.Got, 10, 64)
-						if nErr21 != nil {
-							return nil, deOverflow("TenantUserWithPosts", "tenant_id", "opt(int)", p21.ActualWireType, p21.Got)
-						}
-						rec7.Tenant_id = &n21
+						rec7.Tenant_id = &p21.Got
 					} else if p21.Kind == probeWrong {
 						return nil, deTypeMismatch("TenantUserWithPosts", "tenant_id", "opt(int)", p21.ActualWireType, p21.Raw)
 					}
-					p22 := p7.Got.ProbeNumber("user_id")
+					p22 := p7.Got.ProbeInt("user_id")
 					if p22.Kind == probeGot {
-						n22, nErr22 := strconv.ParseInt(p22.Got, 10, 64)
-						if nErr22 != nil {
-							return nil, deOverflow("TenantUserWithPosts", "user_id", "opt(int)", p22.ActualWireType, p22.Got)
-						}
-						rec7.User_id = &n22
+						rec7.User_id = &p22.Got
 					} else if p22.Kind == probeWrong {
 						return nil, deTypeMismatch("TenantUserWithPosts", "user_id", "opt(int)", p22.ActualWireType, p22.Raw)
 					}
@@ -1893,13 +1776,9 @@ func Create(email string, name string) ([]WriteSummary, error) {
 			p1 := p0.Got.ElemRow(i0)
 			if p1.Kind == probeGot {
 				var rec1 WriteSummary
-				p2 := p1.Got.ProbeNumber("changes")
+				p2 := p1.Got.ProbeInt("changes")
 				if p2.Kind == probeGot {
-					n2, nErr2 := strconv.ParseInt(p2.Got, 10, 64)
-					if nErr2 != nil {
-						return nil, deOverflow("WriteSummary", "changes", "int", p2.ActualWireType, p2.Got)
-					}
-					rec1.Changes = n2
+					rec1.Changes = p2.Got
 				} else if p2.Kind == probeWrong {
 					return nil, deTypeMismatch("WriteSummary", "changes", "int", p2.ActualWireType, p2.Raw)
 				} else if p2.Kind == probeNull {
@@ -1907,13 +1786,9 @@ func Create(email string, name string) ([]WriteSummary, error) {
 				} else {
 					return nil, deMissingField("WriteSummary", "changes", "int")
 				}
-				p3 := p1.Got.ProbeNumber("lastInsertRowid")
+				p3 := p1.Got.ProbeInt("lastInsertRowid")
 				if p3.Kind == probeGot {
-					n3, nErr3 := strconv.ParseInt(p3.Got, 10, 64)
-					if nErr3 != nil {
-						return nil, deOverflow("WriteSummary", "lastInsertRowid", "int", p3.ActualWireType, p3.Got)
-					}
-					rec1.LastInsertRowid = n3
+					rec1.LastInsertRowid = p3.Got
 				} else if p3.Kind == probeWrong {
 					return nil, deTypeMismatch("WriteSummary", "lastInsertRowid", "int", p3.ActualWireType, p3.Raw)
 				} else if p3.Kind == probeNull {
@@ -1974,13 +1849,9 @@ func Update(id int64, name string) ([]WriteSummary, error) {
 			p1 := p0.Got.ElemRow(i0)
 			if p1.Kind == probeGot {
 				var rec1 WriteSummary
-				p2 := p1.Got.ProbeNumber("changes")
+				p2 := p1.Got.ProbeInt("changes")
 				if p2.Kind == probeGot {
-					n2, nErr2 := strconv.ParseInt(p2.Got, 10, 64)
-					if nErr2 != nil {
-						return nil, deOverflow("WriteSummary", "changes", "int", p2.ActualWireType, p2.Got)
-					}
-					rec1.Changes = n2
+					rec1.Changes = p2.Got
 				} else if p2.Kind == probeWrong {
 					return nil, deTypeMismatch("WriteSummary", "changes", "int", p2.ActualWireType, p2.Raw)
 				} else if p2.Kind == probeNull {
@@ -1988,13 +1859,9 @@ func Update(id int64, name string) ([]WriteSummary, error) {
 				} else {
 					return nil, deMissingField("WriteSummary", "changes", "int")
 				}
-				p3 := p1.Got.ProbeNumber("lastInsertRowid")
+				p3 := p1.Got.ProbeInt("lastInsertRowid")
 				if p3.Kind == probeGot {
-					n3, nErr3 := strconv.ParseInt(p3.Got, 10, 64)
-					if nErr3 != nil {
-						return nil, deOverflow("WriteSummary", "lastInsertRowid", "int", p3.ActualWireType, p3.Got)
-					}
-					rec1.LastInsertRowid = n3
+					rec1.LastInsertRowid = p3.Got
 				} else if p3.Kind == probeWrong {
 					return nil, deTypeMismatch("WriteSummary", "lastInsertRowid", "int", p3.ActualWireType, p3.Raw)
 				} else if p3.Kind == probeNull {
@@ -2055,13 +1922,9 @@ func Upsert(email string, name string) ([]IdRow, error) {
 			p1 := p0.Got.ElemRow(i0)
 			if p1.Kind == probeGot {
 				var rec1 IdRow
-				p2 := p1.Got.ProbeNumber("id")
+				p2 := p1.Got.ProbeInt("id")
 				if p2.Kind == probeGot {
-					n2, nErr2 := strconv.ParseInt(p2.Got, 10, 64)
-					if nErr2 != nil {
-						return nil, deOverflow("IdRow", "id", "int", p2.ActualWireType, p2.Got)
-					}
-					rec1.Id = n2
+					rec1.Id = p2.Got
 				} else if p2.Kind == probeWrong {
 					return nil, deTypeMismatch("IdRow", "id", "int", p2.ActualWireType, p2.Raw)
 				} else if p2.Kind == probeNull {
@@ -2122,13 +1985,9 @@ func CreateMany(rows []NewUser) ([]WriteSummary, error) {
 			p1 := p0.Got.ElemRow(i0)
 			if p1.Kind == probeGot {
 				var rec1 WriteSummary
-				p2 := p1.Got.ProbeNumber("changes")
+				p2 := p1.Got.ProbeInt("changes")
 				if p2.Kind == probeGot {
-					n2, nErr2 := strconv.ParseInt(p2.Got, 10, 64)
-					if nErr2 != nil {
-						return nil, deOverflow("WriteSummary", "changes", "int", p2.ActualWireType, p2.Got)
-					}
-					rec1.Changes = n2
+					rec1.Changes = p2.Got
 				} else if p2.Kind == probeWrong {
 					return nil, deTypeMismatch("WriteSummary", "changes", "int", p2.ActualWireType, p2.Raw)
 				} else if p2.Kind == probeNull {
@@ -2136,13 +1995,9 @@ func CreateMany(rows []NewUser) ([]WriteSummary, error) {
 				} else {
 					return nil, deMissingField("WriteSummary", "changes", "int")
 				}
-				p3 := p1.Got.ProbeNumber("lastInsertRowid")
+				p3 := p1.Got.ProbeInt("lastInsertRowid")
 				if p3.Kind == probeGot {
-					n3, nErr3 := strconv.ParseInt(p3.Got, 10, 64)
-					if nErr3 != nil {
-						return nil, deOverflow("WriteSummary", "lastInsertRowid", "int", p3.ActualWireType, p3.Got)
-					}
-					rec1.LastInsertRowid = n3
+					rec1.LastInsertRowid = p3.Got
 				} else if p3.Kind == probeWrong {
 					return nil, deTypeMismatch("WriteSummary", "lastInsertRowid", "int", p3.ActualWireType, p3.Raw)
 				} else if p3.Kind == probeNull {
@@ -2203,13 +2058,9 @@ func UpsertMany(rows []NewUser) ([]WriteSummary, error) {
 			p1 := p0.Got.ElemRow(i0)
 			if p1.Kind == probeGot {
 				var rec1 WriteSummary
-				p2 := p1.Got.ProbeNumber("changes")
+				p2 := p1.Got.ProbeInt("changes")
 				if p2.Kind == probeGot {
-					n2, nErr2 := strconv.ParseInt(p2.Got, 10, 64)
-					if nErr2 != nil {
-						return nil, deOverflow("WriteSummary", "changes", "int", p2.ActualWireType, p2.Got)
-					}
-					rec1.Changes = n2
+					rec1.Changes = p2.Got
 				} else if p2.Kind == probeWrong {
 					return nil, deTypeMismatch("WriteSummary", "changes", "int", p2.ActualWireType, p2.Raw)
 				} else if p2.Kind == probeNull {
@@ -2217,13 +2068,9 @@ func UpsertMany(rows []NewUser) ([]WriteSummary, error) {
 				} else {
 					return nil, deMissingField("WriteSummary", "changes", "int")
 				}
-				p3 := p1.Got.ProbeNumber("lastInsertRowid")
+				p3 := p1.Got.ProbeInt("lastInsertRowid")
 				if p3.Kind == probeGot {
-					n3, nErr3 := strconv.ParseInt(p3.Got, 10, 64)
-					if nErr3 != nil {
-						return nil, deOverflow("WriteSummary", "lastInsertRowid", "int", p3.ActualWireType, p3.Got)
-					}
-					rec1.LastInsertRowid = n3
+					rec1.LastInsertRowid = p3.Got
 				} else if p3.Kind == probeWrong {
 					return nil, deTypeMismatch("WriteSummary", "lastInsertRowid", "int", p3.ActualWireType, p3.Raw)
 				} else if p3.Kind == probeNull {
@@ -2284,13 +2131,9 @@ func UpdateMany(rows []UserPatch) ([]WriteSummary, error) {
 			p1 := p0.Got.ElemRow(i0)
 			if p1.Kind == probeGot {
 				var rec1 WriteSummary
-				p2 := p1.Got.ProbeNumber("changes")
+				p2 := p1.Got.ProbeInt("changes")
 				if p2.Kind == probeGot {
-					n2, nErr2 := strconv.ParseInt(p2.Got, 10, 64)
-					if nErr2 != nil {
-						return nil, deOverflow("WriteSummary", "changes", "int", p2.ActualWireType, p2.Got)
-					}
-					rec1.Changes = n2
+					rec1.Changes = p2.Got
 				} else if p2.Kind == probeWrong {
 					return nil, deTypeMismatch("WriteSummary", "changes", "int", p2.ActualWireType, p2.Raw)
 				} else if p2.Kind == probeNull {
@@ -2298,13 +2141,9 @@ func UpdateMany(rows []UserPatch) ([]WriteSummary, error) {
 				} else {
 					return nil, deMissingField("WriteSummary", "changes", "int")
 				}
-				p3 := p1.Got.ProbeNumber("lastInsertRowid")
+				p3 := p1.Got.ProbeInt("lastInsertRowid")
 				if p3.Kind == probeGot {
-					n3, nErr3 := strconv.ParseInt(p3.Got, 10, 64)
-					if nErr3 != nil {
-						return nil, deOverflow("WriteSummary", "lastInsertRowid", "int", p3.ActualWireType, p3.Got)
-					}
-					rec1.LastInsertRowid = n3
+					rec1.LastInsertRowid = p3.Got
 				} else if p3.Kind == probeWrong {
 					return nil, deTypeMismatch("WriteSummary", "lastInsertRowid", "int", p3.ActualWireType, p3.Raw)
 				} else if p3.Kind == probeNull {
@@ -2369,13 +2208,9 @@ func NestedCreate(email string, name string, title string) ([][]WriteSummary, er
 			p1 := p0.Got.ElemRow(i0)
 			if p1.Kind == probeGot {
 				var rec1 IdRow
-				p2 := p1.Got.ProbeNumber("id")
+				p2 := p1.Got.ProbeInt("id")
 				if p2.Kind == probeGot {
-					n2, nErr2 := strconv.ParseInt(p2.Got, 10, 64)
-					if nErr2 != nil {
-						return nil, deOverflow("IdRow", "id", "int", p2.ActualWireType, p2.Got)
-					}
-					rec1.Id = n2
+					rec1.Id = p2.Got
 				} else if p2.Kind == probeWrong {
 					return nil, deTypeMismatch("IdRow", "id", "int", p2.ActualWireType, p2.Raw)
 				} else if p2.Kind == probeNull {
@@ -2422,13 +2257,9 @@ func NestedCreate(email string, name string, title string) ([][]WriteSummary, er
 					p1 := p0.Got.ElemRow(i0)
 					if p1.Kind == probeGot {
 						var rec1 WriteSummary
-						p2 := p1.Got.ProbeNumber("changes")
+						p2 := p1.Got.ProbeInt("changes")
 						if p2.Kind == probeGot {
-							n2, nErr2 := strconv.ParseInt(p2.Got, 10, 64)
-							if nErr2 != nil {
-								return nil, deOverflow("WriteSummary", "changes", "int", p2.ActualWireType, p2.Got)
-							}
-							rec1.Changes = n2
+							rec1.Changes = p2.Got
 						} else if p2.Kind == probeWrong {
 							return nil, deTypeMismatch("WriteSummary", "changes", "int", p2.ActualWireType, p2.Raw)
 						} else if p2.Kind == probeNull {
@@ -2436,13 +2267,9 @@ func NestedCreate(email string, name string, title string) ([][]WriteSummary, er
 						} else {
 							return nil, deMissingField("WriteSummary", "changes", "int")
 						}
-						p3 := p1.Got.ProbeNumber("lastInsertRowid")
+						p3 := p1.Got.ProbeInt("lastInsertRowid")
 						if p3.Kind == probeGot {
-							n3, nErr3 := strconv.ParseInt(p3.Got, 10, 64)
-							if nErr3 != nil {
-								return nil, deOverflow("WriteSummary", "lastInsertRowid", "int", p3.ActualWireType, p3.Got)
-							}
-							rec1.LastInsertRowid = n3
+							rec1.LastInsertRowid = p3.Got
 						} else if p3.Kind == probeWrong {
 							return nil, deTypeMismatch("WriteSummary", "lastInsertRowid", "int", p3.ActualWireType, p3.Raw)
 						} else if p3.Kind == probeNull {
@@ -2510,13 +2337,9 @@ func NestedUpsert(email string, name string, title string) ([][]WriteSummary, er
 			p1 := p0.Got.ElemRow(i0)
 			if p1.Kind == probeGot {
 				var rec1 IdRow
-				p2 := p1.Got.ProbeNumber("id")
+				p2 := p1.Got.ProbeInt("id")
 				if p2.Kind == probeGot {
-					n2, nErr2 := strconv.ParseInt(p2.Got, 10, 64)
-					if nErr2 != nil {
-						return nil, deOverflow("IdRow", "id", "int", p2.ActualWireType, p2.Got)
-					}
-					rec1.Id = n2
+					rec1.Id = p2.Got
 				} else if p2.Kind == probeWrong {
 					return nil, deTypeMismatch("IdRow", "id", "int", p2.ActualWireType, p2.Raw)
 				} else if p2.Kind == probeNull {
@@ -2563,13 +2386,9 @@ func NestedUpsert(email string, name string, title string) ([][]WriteSummary, er
 					p1 := p0.Got.ElemRow(i0)
 					if p1.Kind == probeGot {
 						var rec1 WriteSummary
-						p2 := p1.Got.ProbeNumber("changes")
+						p2 := p1.Got.ProbeInt("changes")
 						if p2.Kind == probeGot {
-							n2, nErr2 := strconv.ParseInt(p2.Got, 10, 64)
-							if nErr2 != nil {
-								return nil, deOverflow("WriteSummary", "changes", "int", p2.ActualWireType, p2.Got)
-							}
-							rec1.Changes = n2
+							rec1.Changes = p2.Got
 						} else if p2.Kind == probeWrong {
 							return nil, deTypeMismatch("WriteSummary", "changes", "int", p2.ActualWireType, p2.Raw)
 						} else if p2.Kind == probeNull {
@@ -2577,13 +2396,9 @@ func NestedUpsert(email string, name string, title string) ([][]WriteSummary, er
 						} else {
 							return nil, deMissingField("WriteSummary", "changes", "int")
 						}
-						p3 := p1.Got.ProbeNumber("lastInsertRowid")
+						p3 := p1.Got.ProbeInt("lastInsertRowid")
 						if p3.Kind == probeGot {
-							n3, nErr3 := strconv.ParseInt(p3.Got, 10, 64)
-							if nErr3 != nil {
-								return nil, deOverflow("WriteSummary", "lastInsertRowid", "int", p3.ActualWireType, p3.Got)
-							}
-							rec1.LastInsertRowid = n3
+							rec1.LastInsertRowid = p3.Got
 						} else if p3.Kind == probeWrong {
 							return nil, deTypeMismatch("WriteSummary", "lastInsertRowid", "int", p3.ActualWireType, p3.Raw)
 						} else if p3.Kind == probeNull {
@@ -2651,13 +2466,9 @@ func NestedUpdate(id int64, name string, title string) ([][]WriteSummary, error)
 			p1 := p0.Got.ElemRow(i0)
 			if p1.Kind == probeGot {
 				var rec1 IdRow
-				p2 := p1.Got.ProbeNumber("id")
+				p2 := p1.Got.ProbeInt("id")
 				if p2.Kind == probeGot {
-					n2, nErr2 := strconv.ParseInt(p2.Got, 10, 64)
-					if nErr2 != nil {
-						return nil, deOverflow("IdRow", "id", "int", p2.ActualWireType, p2.Got)
-					}
-					rec1.Id = n2
+					rec1.Id = p2.Got
 				} else if p2.Kind == probeWrong {
 					return nil, deTypeMismatch("IdRow", "id", "int", p2.ActualWireType, p2.Raw)
 				} else if p2.Kind == probeNull {
@@ -2704,13 +2515,9 @@ func NestedUpdate(id int64, name string, title string) ([][]WriteSummary, error)
 					p1 := p0.Got.ElemRow(i0)
 					if p1.Kind == probeGot {
 						var rec1 WriteSummary
-						p2 := p1.Got.ProbeNumber("changes")
+						p2 := p1.Got.ProbeInt("changes")
 						if p2.Kind == probeGot {
-							n2, nErr2 := strconv.ParseInt(p2.Got, 10, 64)
-							if nErr2 != nil {
-								return nil, deOverflow("WriteSummary", "changes", "int", p2.ActualWireType, p2.Got)
-							}
-							rec1.Changes = n2
+							rec1.Changes = p2.Got
 						} else if p2.Kind == probeWrong {
 							return nil, deTypeMismatch("WriteSummary", "changes", "int", p2.ActualWireType, p2.Raw)
 						} else if p2.Kind == probeNull {
@@ -2718,13 +2525,9 @@ func NestedUpdate(id int64, name string, title string) ([][]WriteSummary, error)
 						} else {
 							return nil, deMissingField("WriteSummary", "changes", "int")
 						}
-						p3 := p1.Got.ProbeNumber("lastInsertRowid")
+						p3 := p1.Got.ProbeInt("lastInsertRowid")
 						if p3.Kind == probeGot {
-							n3, nErr3 := strconv.ParseInt(p3.Got, 10, 64)
-							if nErr3 != nil {
-								return nil, deOverflow("WriteSummary", "lastInsertRowid", "int", p3.ActualWireType, p3.Got)
-							}
-							rec1.LastInsertRowid = n3
+							rec1.LastInsertRowid = p3.Got
 						} else if p3.Kind == probeWrong {
 							return nil, deTypeMismatch("WriteSummary", "lastInsertRowid", "int", p3.ActualWireType, p3.Raw)
 						} else if p3.Kind == probeNull {
@@ -2792,13 +2595,9 @@ func Delete(email string, name string) ([][]WriteSummary, error) {
 			p1 := p0.Got.ElemRow(i0)
 			if p1.Kind == probeGot {
 				var rec1 IdRow
-				p2 := p1.Got.ProbeNumber("id")
+				p2 := p1.Got.ProbeInt("id")
 				if p2.Kind == probeGot {
-					n2, nErr2 := strconv.ParseInt(p2.Got, 10, 64)
-					if nErr2 != nil {
-						return nil, deOverflow("IdRow", "id", "int", p2.ActualWireType, p2.Got)
-					}
-					rec1.Id = n2
+					rec1.Id = p2.Got
 				} else if p2.Kind == probeWrong {
 					return nil, deTypeMismatch("IdRow", "id", "int", p2.ActualWireType, p2.Raw)
 				} else if p2.Kind == probeNull {
@@ -2845,13 +2644,9 @@ func Delete(email string, name string) ([][]WriteSummary, error) {
 					p1 := p0.Got.ElemRow(i0)
 					if p1.Kind == probeGot {
 						var rec1 WriteSummary
-						p2 := p1.Got.ProbeNumber("changes")
+						p2 := p1.Got.ProbeInt("changes")
 						if p2.Kind == probeGot {
-							n2, nErr2 := strconv.ParseInt(p2.Got, 10, 64)
-							if nErr2 != nil {
-								return nil, deOverflow("WriteSummary", "changes", "int", p2.ActualWireType, p2.Got)
-							}
-							rec1.Changes = n2
+							rec1.Changes = p2.Got
 						} else if p2.Kind == probeWrong {
 							return nil, deTypeMismatch("WriteSummary", "changes", "int", p2.ActualWireType, p2.Raw)
 						} else if p2.Kind == probeNull {
@@ -2859,13 +2654,9 @@ func Delete(email string, name string) ([][]WriteSummary, error) {
 						} else {
 							return nil, deMissingField("WriteSummary", "changes", "int")
 						}
-						p3 := p1.Got.ProbeNumber("lastInsertRowid")
+						p3 := p1.Got.ProbeInt("lastInsertRowid")
 						if p3.Kind == probeGot {
-							n3, nErr3 := strconv.ParseInt(p3.Got, 10, 64)
-							if nErr3 != nil {
-								return nil, deOverflow("WriteSummary", "lastInsertRowid", "int", p3.ActualWireType, p3.Got)
-							}
-							rec1.LastInsertRowid = n3
+							rec1.LastInsertRowid = p3.Got
 						} else if p3.Kind == probeWrong {
 							return nil, deTypeMismatch("WriteSummary", "lastInsertRowid", "int", p3.ActualWireType, p3.Raw)
 						} else if p3.Kind == probeNull {

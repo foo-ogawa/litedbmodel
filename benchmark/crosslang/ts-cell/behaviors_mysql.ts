@@ -1720,81 +1720,81 @@ export function bindAsync(handlers: AsyncHandlers): Record<string, (input?: Scop
 
 export interface UserRow {
   "email": (string | null);
-  "id": number;
+  "id": bigint;
   "name": (string | null);
 }
 
 export interface PostFullRow {
-  "author_id": (number | null);
+  "author_id": (bigint | null);
   "content": (string | null);
   "created_at": (string | null);
-  "id": number;
-  "published": (number | null);
+  "id": bigint;
+  "published": (bigint | null);
   "title": (string | null);
 }
 
 export interface UserWithPosts {
   "email": (string | null);
-  "id": number;
+  "id": bigint;
   "name": (string | null);
   "posts": PostRow[];
 }
 
 export interface PostRow {
-  "author_id": (number | null);
-  "id": number;
+  "author_id": (bigint | null);
+  "id": bigint;
   "title": (string | null);
 }
 
 export interface UserWithPostsAndComments {
   "email": (string | null);
-  "id": number;
+  "id": bigint;
   "name": (string | null);
   "posts": PostWithComments[];
 }
 
 export interface PostWithComments {
-  "author_id": (number | null);
+  "author_id": (bigint | null);
   "comments": CommentRow[];
-  "id": number;
+  "id": bigint;
   "title": (string | null);
 }
 
 export interface CommentRow {
   "body": (string | null);
-  "id": (number | null);
-  "post_id": (number | null);
+  "id": (bigint | null);
+  "post_id": (bigint | null);
 }
 
 export interface TenantUserWithPosts {
   "name": (string | null);
   "posts": TenantPostWithComments[];
-  "tenant_id": (number | null);
-  "user_id": (number | null);
+  "tenant_id": (bigint | null);
+  "user_id": (bigint | null);
 }
 
 export interface TenantPostWithComments {
   "comments": TenantCommentRow[];
-  "post_id": (number | null);
-  "tenant_id": (number | null);
+  "post_id": (bigint | null);
+  "tenant_id": (bigint | null);
   "title": (string | null);
-  "user_id": (number | null);
+  "user_id": (bigint | null);
 }
 
 export interface TenantCommentRow {
   "body": (string | null);
-  "comment_id": (number | null);
-  "post_id": (number | null);
-  "tenant_id": (number | null);
+  "comment_id": (bigint | null);
+  "post_id": (bigint | null);
+  "tenant_id": (bigint | null);
 }
 
 export interface WriteSummary {
-  "changes": number;
-  "lastInsertRowid": number;
+  "changes": bigint;
+  "lastInsertRowid": bigint;
 }
 
 export interface IdRow {
-  "id": number;
+  "id": bigint;
 }
 
 export interface NewUser {
@@ -1803,7 +1803,7 @@ export interface NewUser {
 }
 
 export interface UserPatch {
-  "id": number;
+  "id": bigint;
   "name": string;
 }
 
@@ -1813,7 +1813,7 @@ export function marshalUserRow(__v: Value): UserRow {
   const __o = __v as Record<string, Value>;
   return {
     "email": (__o["email"] === null ? null : (__o["email"] as unknown as string)),
-    "id": (__o["id"] as unknown as number),
+    "id": (__o["id"] as unknown as bigint),
     "name": (__o["name"] === null ? null : (__o["name"] as unknown as string)),
   };
 }
@@ -1823,11 +1823,11 @@ export function marshalUserRow(__v: Value): UserRow {
 export function marshalPostFullRow(__v: Value): PostFullRow {
   const __o = __v as Record<string, Value>;
   return {
-    "author_id": (__o["author_id"] === null ? null : (__o["author_id"] as unknown as number)),
+    "author_id": (__o["author_id"] === null ? null : (__o["author_id"] as unknown as bigint)),
     "content": (__o["content"] === null ? null : (__o["content"] as unknown as string)),
     "created_at": (__o["created_at"] === null ? null : (__o["created_at"] as unknown as string)),
-    "id": (__o["id"] as unknown as number),
-    "published": (__o["published"] === null ? null : (__o["published"] as unknown as number)),
+    "id": (__o["id"] as unknown as bigint),
+    "published": (__o["published"] === null ? null : (__o["published"] as unknown as bigint)),
     "title": (__o["title"] === null ? null : (__o["title"] as unknown as string)),
   };
 }
@@ -1838,7 +1838,7 @@ export function marshalUserWithPosts(__v: Value): UserWithPosts {
   const __o = __v as Record<string, Value>;
   return {
     "email": (__o["email"] === null ? null : (__o["email"] as unknown as string)),
-    "id": (__o["id"] as unknown as number),
+    "id": (__o["id"] as unknown as bigint),
     "name": (__o["name"] === null ? null : (__o["name"] as unknown as string)),
     "posts": (__o["posts"] as Value[]).map((__e): PostRow => marshalPostRow(__e)),
   };
@@ -1849,8 +1849,8 @@ export function marshalUserWithPosts(__v: Value): UserWithPosts {
 export function marshalPostRow(__v: Value): PostRow {
   const __o = __v as Record<string, Value>;
   return {
-    "author_id": (__o["author_id"] === null ? null : (__o["author_id"] as unknown as number)),
-    "id": (__o["id"] as unknown as number),
+    "author_id": (__o["author_id"] === null ? null : (__o["author_id"] as unknown as bigint)),
+    "id": (__o["id"] as unknown as bigint),
     "title": (__o["title"] === null ? null : (__o["title"] as unknown as string)),
   };
 }
@@ -1861,7 +1861,7 @@ export function marshalUserWithPostsAndComments(__v: Value): UserWithPostsAndCom
   const __o = __v as Record<string, Value>;
   return {
     "email": (__o["email"] === null ? null : (__o["email"] as unknown as string)),
-    "id": (__o["id"] as unknown as number),
+    "id": (__o["id"] as unknown as bigint),
     "name": (__o["name"] === null ? null : (__o["name"] as unknown as string)),
     "posts": (__o["posts"] as Value[]).map((__e): PostWithComments => marshalPostWithComments(__e)),
   };
@@ -1872,9 +1872,9 @@ export function marshalUserWithPostsAndComments(__v: Value): UserWithPostsAndCom
 export function marshalPostWithComments(__v: Value): PostWithComments {
   const __o = __v as Record<string, Value>;
   return {
-    "author_id": (__o["author_id"] === null ? null : (__o["author_id"] as unknown as number)),
+    "author_id": (__o["author_id"] === null ? null : (__o["author_id"] as unknown as bigint)),
     "comments": (__o["comments"] as Value[]).map((__e): CommentRow => marshalCommentRow(__e)),
-    "id": (__o["id"] as unknown as number),
+    "id": (__o["id"] as unknown as bigint),
     "title": (__o["title"] === null ? null : (__o["title"] as unknown as string)),
   };
 }
@@ -1885,8 +1885,8 @@ export function marshalCommentRow(__v: Value): CommentRow {
   const __o = __v as Record<string, Value>;
   return {
     "body": (__o["body"] === null ? null : (__o["body"] as unknown as string)),
-    "id": (__o["id"] === null ? null : (__o["id"] as unknown as number)),
-    "post_id": (__o["post_id"] === null ? null : (__o["post_id"] as unknown as number)),
+    "id": (__o["id"] === null ? null : (__o["id"] as unknown as bigint)),
+    "post_id": (__o["post_id"] === null ? null : (__o["post_id"] as unknown as bigint)),
   };
 }
 
@@ -1897,8 +1897,8 @@ export function marshalTenantUserWithPosts(__v: Value): TenantUserWithPosts {
   return {
     "name": (__o["name"] === null ? null : (__o["name"] as unknown as string)),
     "posts": (__o["posts"] as Value[]).map((__e): TenantPostWithComments => marshalTenantPostWithComments(__e)),
-    "tenant_id": (__o["tenant_id"] === null ? null : (__o["tenant_id"] as unknown as number)),
-    "user_id": (__o["user_id"] === null ? null : (__o["user_id"] as unknown as number)),
+    "tenant_id": (__o["tenant_id"] === null ? null : (__o["tenant_id"] as unknown as bigint)),
+    "user_id": (__o["user_id"] === null ? null : (__o["user_id"] as unknown as bigint)),
   };
 }
 
@@ -1908,10 +1908,10 @@ export function marshalTenantPostWithComments(__v: Value): TenantPostWithComment
   const __o = __v as Record<string, Value>;
   return {
     "comments": (__o["comments"] as Value[]).map((__e): TenantCommentRow => marshalTenantCommentRow(__e)),
-    "post_id": (__o["post_id"] === null ? null : (__o["post_id"] as unknown as number)),
-    "tenant_id": (__o["tenant_id"] === null ? null : (__o["tenant_id"] as unknown as number)),
+    "post_id": (__o["post_id"] === null ? null : (__o["post_id"] as unknown as bigint)),
+    "tenant_id": (__o["tenant_id"] === null ? null : (__o["tenant_id"] as unknown as bigint)),
     "title": (__o["title"] === null ? null : (__o["title"] as unknown as string)),
-    "user_id": (__o["user_id"] === null ? null : (__o["user_id"] as unknown as number)),
+    "user_id": (__o["user_id"] === null ? null : (__o["user_id"] as unknown as bigint)),
   };
 }
 
@@ -1921,9 +1921,9 @@ export function marshalTenantCommentRow(__v: Value): TenantCommentRow {
   const __o = __v as Record<string, Value>;
   return {
     "body": (__o["body"] === null ? null : (__o["body"] as unknown as string)),
-    "comment_id": (__o["comment_id"] === null ? null : (__o["comment_id"] as unknown as number)),
-    "post_id": (__o["post_id"] === null ? null : (__o["post_id"] as unknown as number)),
-    "tenant_id": (__o["tenant_id"] === null ? null : (__o["tenant_id"] as unknown as number)),
+    "comment_id": (__o["comment_id"] === null ? null : (__o["comment_id"] as unknown as bigint)),
+    "post_id": (__o["post_id"] === null ? null : (__o["post_id"] as unknown as bigint)),
+    "tenant_id": (__o["tenant_id"] === null ? null : (__o["tenant_id"] as unknown as bigint)),
   };
 }
 
@@ -1932,8 +1932,8 @@ export function marshalTenantCommentRow(__v: Value): TenantCommentRow {
 export function marshalWriteSummary(__v: Value): WriteSummary {
   const __o = __v as Record<string, Value>;
   return {
-    "changes": (__o["changes"] as unknown as number),
-    "lastInsertRowid": (__o["lastInsertRowid"] as unknown as number),
+    "changes": (__o["changes"] as unknown as bigint),
+    "lastInsertRowid": (__o["lastInsertRowid"] as unknown as bigint),
   };
 }
 
@@ -1942,7 +1942,7 @@ export function marshalWriteSummary(__v: Value): WriteSummary {
 export function marshalIdRow(__v: Value): IdRow {
   const __o = __v as Record<string, Value>;
   return {
-    "id": (__o["id"] as unknown as number),
+    "id": (__o["id"] as unknown as bigint),
   };
 }
 
@@ -1961,7 +1961,7 @@ export function marshalNewUser(__v: Value): NewUser {
 export function marshalUserPatch(__v: Value): UserPatch {
   const __o = __v as Record<string, Value>;
   return {
-    "id": (__o["id"] as unknown as number),
+    "id": (__o["id"] as unknown as bigint),
     "name": (__o["name"] as unknown as string),
   };
 }
