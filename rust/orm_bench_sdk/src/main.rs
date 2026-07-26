@@ -115,9 +115,38 @@ trait Db {
     }
     fn fetch(&mut self, sql: &str, params: &[P]) -> Vec<Vec<Cell>>;
     fn exec(&mut self, sql: &str, params: &[P]);
-    /// INSERT one row and return its generated `id` (pg appends `RETURNING id`; sqlite/mysql read the
-    /// driver's last-insert-id).
-    fn insert_returning_id(&mut self, sql: &str, params: &[P]) -> i64;
+
+    /// A write that hands back the id of the row it wrote — the ` RETURNING id` the authored native module
+    /// declares for every id-chaining write (`benchmark/crosslang/native-model.ts`). The baseline issues the
+    /// SAME statement and reads the SAME row back, so the two surfaces do equal work.
+    ///
+    /// MySQL has no RETURNING: the runtime's mysql adapter strips the clause and recovers the written rows
+    /// with a keyed SELECT on the same connection (`src/scp/makesql/mysql-returning.ts`). `recover` is that
+    /// same recovery, and it belongs to the SAME logical statement — the runtime's seam counts a MySQL
+    /// RETURNING write as one (its recovery runs below the seam) while counting the row it recovers — so the
+    /// rows are tallied and the statement count is not bumped a second time.
+    fn write_returning_id(
+        &mut self,
+        sql: &str,
+        params: &[P],
+        recover: &str,
+        recover_params: &[P],
+    ) -> i64 {
+        if self.dialect() != Dialect::Mysql {
+            let rows = self.query(&format!("{sql} RETURNING id"), params);
+            return cell_i64(&rows[0][0]);
+        }
+        self.exec(sql, params);
+        let rows = self.recover_rows(recover, recover_params);
+        cell_i64(&rows[0][0])
+    }
+
+    /// Fetch belonging to the logical statement just issued: rows tallied, statement count not bumped.
+    fn recover_rows(&mut self, sql: &str, params: &[P]) -> Vec<Vec<Cell>> {
+        let out = self.fetch(sql, params);
+        ROW_COUNT.fetch_add(out.len(), Ordering::Relaxed);
+        out
+    }
 }
 
 // ── sqlite (rusqlite) ───────────────────────────────────────────────────────────────────────────────
@@ -174,15 +203,6 @@ impl Db for SqliteDb {
                 .execute(rusqlite::params_from_iter(params.iter().map(sqlite_value)))
                 .unwrap_or_else(|e| panic!("exec `{sql}`: {e}"));
         }
-    }
-    fn insert_returning_id(&mut self, sql: &str, params: &[P]) -> i64 {
-        QUERY_COUNT.fetch_add(1, Ordering::Relaxed);
-        self.conn
-            .prepare_cached(sql)
-            .expect("prepare")
-            .execute(rusqlite::params_from_iter(params.iter().map(sqlite_value)))
-            .unwrap_or_else(|e| panic!("insert `{sql}`: {e}"));
-        self.conn.last_insert_rowid()
     }
 }
 
@@ -319,19 +339,6 @@ impl Db for PgDb {
                 .unwrap_or_else(|e| panic!("exec `{sql}`: {e}"));
         }
     }
-    fn insert_returning_id(&mut self, sql: &str, params: &[P]) -> i64 {
-        QUERY_COUNT.fetch_add(1, Ordering::Relaxed);
-        let sql = format!("{sql} RETURNING id");
-        let boxed = pg_params(params);
-        let refs: Vec<&(dyn postgres::types::ToSql + Sync)> =
-            boxed.iter().map(|b| b.as_ref()).collect();
-        let stmt = self.prep(&sql);
-        let rows = self
-            .client
-            .query(&stmt, &refs)
-            .unwrap_or_else(|e| panic!("insert `{sql}`: {e}"));
-        rows[0].get::<_, i32>(0) as i64
-    }
 }
 
 // ── mysql ────────────────────────────────────────────────────────────────────────────────────────────
@@ -389,14 +396,6 @@ impl Db for MyDb {
                 .exec_drop(sql, my_params(params))
                 .unwrap_or_else(|e| panic!("exec `{sql}`: {e}"));
         }
-    }
-    fn insert_returning_id(&mut self, sql: &str, params: &[P]) -> i64 {
-        use mysql::prelude::Queryable;
-        QUERY_COUNT.fetch_add(1, Ordering::Relaxed);
-        self.conn
-            .exec_drop(sql, my_params(params))
-            .unwrap_or_else(|e| panic!("insert `{sql}`: {e}"));
-        self.conn.last_insert_id() as i64
     }
 }
 
@@ -578,7 +577,7 @@ fn run_op(op: &str, it: u64, db: &mut dyn Db) {
                 ph.next(),
                 ph.next()
             );
-            db.exec(&sql, &[P::S("Updated 100".into()), P::I(100)]);
+            db.exec(&sql, &[P::S("Updated 1".into()), P::I(1)]);
         }
         "nestedUpdate" => {
             db.exec("BEGIN", &[]);
@@ -588,47 +587,32 @@ fn run_op(op: &str, it: u64, db: &mut dyn Db) {
                 ph.next(),
                 ph.next()
             );
-            db.exec(&s1, &[P::S("NU".into()), P::I(7)]);
+            let mut rph = Ph::new(dialect);
+            let recover = format!("SELECT id FROM benchmark_users WHERE id = {}", rph.next());
+            // The native module chains the dependent UPDATE off the id the first UPDATE returned; taking
+            // the id from the input instead would skip a statement's worth of work.
+            let uid = db.write_returning_id(
+                &s1,
+                &[P::S("NU".into()), P::I(1)],
+                &recover, // recovered by the write's own WHERE
+                &[P::I(1)],
+            );
             let mut ph = Ph::new(dialect);
             let s2 = format!(
                 "UPDATE benchmark_posts SET title = {} WHERE author_id = {}",
                 ph.next(),
                 ph.next()
             );
-            db.exec(&s2, &[P::S("NU Post".into()), P::I(7)]);
+            db.exec(&s2, &[P::S("NU Post".into()), P::I(uid)]);
             db.exec("COMMIT", &[]);
         }
         "upsert" => {
-            let mut ph = Ph::new(dialect);
-            let sql = format!(
-                "INSERT INTO benchmark_users (email, name) VALUES ({}, {}){}",
-                ph.next(),
-                ph.next(),
-                upsert_conflict(dialect)
-            );
-            db.exec(
-                &sql,
-                &[
-                    P::S("user1@example.com".into()),
-                    P::S("Upserted One".into()),
-                ],
-            );
+            // The native module declares ` RETURNING id` here, so the baseline reads the id back too.
+            let _ = upsert_user(db, "user1@example.com", "Upserted One");
         }
         "nestedUpsert" => {
             db.exec("BEGIN", &[]);
-            let mut ph = Ph::new(dialect);
-            let up = format!(
-                "INSERT INTO benchmark_users (email, name) VALUES ({}, {}){}",
-                ph.next(),
-                ph.next(),
-                upsert_conflict(dialect)
-            );
-            db.exec(&up, &[P::S("user1@example.com".into()), P::S("NUp".into())]);
-            // Re-select the id by the unique email (upsert has no portable RETURNING for the update path).
-            let mut ph = Ph::new(dialect);
-            let sel = format!("SELECT id FROM benchmark_users WHERE email = {}", ph.next());
-            let rows = db.query(&sel, &[P::S("user1@example.com".into())]);
-            let uid = cell_i64(&rows[0][0]);
+            let uid = upsert_user(db, "user1@example.com", "NUp");
             insert_post(db, uid, "NUp Post");
             db.exec("COMMIT", &[]);
         }
@@ -659,9 +643,7 @@ fn run_op(op: &str, it: u64, db: &mut dyn Db) {
             db.exec(&sql, &params);
         }
         "upsertMany" => {
-            let mut emails: Vec<String> =
-                vec!["user1@example.com".into(), "user2@example.com".into()];
-            emails.extend((0..8).map(|k| format!("many{k}@bench.com")));
+            let emails: Vec<String> = (0..10).map(|k| format!("many{k}@bench.com")).collect();
             let names = batch_names();
             let mut ph = Ph::new(dialect);
             let rows: Vec<String> = (0..10)
@@ -872,13 +854,12 @@ fn materialize_users_posts_comments(db: &mut dyn Db, users: Vec<Vec<Cell>>) -> V
 /// tenant_comments by (tenant_id,post_id). 3 queries; assembled into the nested typed graph keyed on the
 /// FULL composite (tenant_id,*) tuple (comments MOVED into posts, posts MOVED into users).
 fn materialize_composite(db: &mut dyn Db) -> Vec<SdkTenantUser> {
-    let mut ph = Ph::new(db.dialect());
-    let sql = format!(
-        "SELECT tenant_id, user_id, name FROM benchmark_tenant_users WHERE tenant_id = {} ORDER BY user_id ASC",
-        ph.next()
-    );
+    // The native module's parent window: ordered by user_id and capped at 100 ACROSS tenants. A
+    // single-tenant scan happens to return the same row count, but it is a different query and it does not
+    // exercise the composite key this op exists for (post_id/comment_id RESTART per tenant).
+    let sql = "SELECT tenant_id, user_id, name FROM benchmark_tenant_users ORDER BY user_id ASC LIMIT 100";
     let mut tusers: Vec<SdkTenantUser> = db
-        .query(&sql, &[P::I(1)])
+        .query(sql, &[])
         .into_iter()
         .map(|r| {
             let mut it = r.into_iter();
@@ -973,7 +954,34 @@ fn insert_user(db: &mut dyn Db, email: String, name: &str) -> i64 {
         ph.next(),
         ph.next()
     );
-    db.insert_returning_id(&sql, &[P::S(email), P::S(name.into())])
+    db.write_returning_id(
+        &sql,
+        &[P::S(email), P::S(name.into())],
+        "SELECT id FROM benchmark_users WHERE id = LAST_INSERT_ID()", // AUTO_INCREMENT recovery
+        &[],
+    )
+}
+
+/// The upsert every write op above shares, reading its id back the way the native module's RETURNING does.
+fn upsert_user(db: &mut dyn Db, email: &str, name: &str) -> i64 {
+    let mut ph = Ph::new(db.dialect());
+    let sql = format!(
+        "INSERT INTO benchmark_users (email, name) VALUES ({}, {}){}",
+        ph.next(),
+        ph.next(),
+        upsert_conflict(db.dialect())
+    );
+    let mut rph = Ph::new(db.dialect());
+    let recover = format!(
+        "SELECT id FROM benchmark_users WHERE email = {}",
+        rph.next()
+    );
+    db.write_returning_id(
+        &sql,
+        &[P::S(email.into()), P::S(name.into())],
+        &recover, // the runtime's conflict-key recovery
+        &[P::S(email.into())],
+    )
 }
 fn insert_post(db: &mut dyn Db, author_id: i64, title: &str) {
     let mut ph = Ph::new(db.dialect());

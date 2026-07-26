@@ -55,8 +55,9 @@ const RELATION_QUERY_COUNTS = [
     'nestedRelations' => 3, 'compositeRelations' => 3,
 ];
 const BATCH_QUERY_COUNTS = ['createMany' => 1, 'upsertMany' => 1, 'updateMany' => 1];
-// tx: BEGIN + body + COMMIT. nestedUpsert re-SELECTs the id (upsert has no portable RETURNING) → 5.
-const TX_STMT_COUNTS = ['nestedCreate' => 4, 'nestedUpsert' => 5, 'nestedUpdate' => 4, 'delete' => 4];
+// tx: BEGIN + body + COMMIT — the same count the native cell proves, since the baseline issues the same
+// statements (a MySQL RETURNING write plus its recovery is ONE logical statement in both surfaces).
+const TX_STMT_COUNTS = ['nestedCreate' => 4, 'nestedUpsert' => 4, 'nestedUpdate' => 4, 'delete' => 4];
 
 /**
  * The ONE exec seam. All DB access rides these methods, so the prepared-statement cache and the
@@ -139,18 +140,43 @@ final class Db
         $this->pdo->exec($sql);
     }
 
-    /** @param list<mixed> $params */
-    public function insertReturningId(string $sql, array $params): int
+    /**
+     * A write that hands back the id of the row it wrote — the ` RETURNING id` the authored native module
+     * declares for every id-chaining write (benchmark/crosslang/native-model.ts). The baseline issues the
+     * SAME statement and reads the SAME row back, so the two surfaces do equal work.
+     *
+     * MySQL has no RETURNING: the runtime's mysql adapter strips the clause and recovers the written rows
+     * with a keyed SELECT on the same connection (src/scp/makesql/mysql-returning.ts). $recoverSql is that
+     * same recovery, and it belongs to the SAME logical statement — the runtime's seam counts a MySQL
+     * RETURNING write as one (its recovery runs below the seam) while counting the row it recovers — so the
+     * rows are tallied and the statement count is not bumped a second time.
+     *
+     * @param list<mixed> $params
+     * @param list<mixed> $recoverParams
+     */
+    public function writeReturningId(string $sql, array $params, string $recoverSql, array $recoverParams = []): int
     {
-        // PostgreSQL has no lastInsertId for a plain INSERT — ask for the id back (the rust SDK twin).
-        if ($this->dialect === 'postgres') {
+        if ($this->dialect !== 'mysql') {
             return (int) $this->query($sql . ' RETURNING id', $params)[0][0];
         }
-        $this->count++;
+        $this->exec($sql, $params);
+        return (int) $this->recoverRows($recoverSql, $recoverParams)[0][0];
+    }
+
+    /**
+     * Fetch belonging to the logical statement just issued: rows tallied, statement count not bumped.
+     *
+     * @param list<mixed> $params
+     * @return list<array<int,mixed>>
+     */
+    private function recoverRows(string $sql, array $params): array
+    {
         $stmt = $this->prep($sql);
         $this->bindAll($stmt, $params);
         $stmt->execute();
-        return (int) $this->pdo->lastInsertId();
+        $out = $stmt->fetchAll(\PDO::FETCH_NUM);
+        $this->rows += count($out);
+        return $out;
     }
 }
 
@@ -457,19 +483,22 @@ function runOp(Db $db, string $op, int $it): void
             $db->exec('UPDATE benchmark_users SET name = ? WHERE id = ?', ['Updated 1', 1]);
             break;
         case 'upsert':
-            $db->exec('INSERT INTO benchmark_users (email, name) VALUES (?, ?)' . $db->upsertTail(),
-                ['user1@example.com', 'Upserted One']);
+            // The native module declares ` RETURNING id` here, so the baseline reads the id back too.
+            $sink = $db->writeReturningId(
+                'INSERT INTO benchmark_users (email, name) VALUES (?, ?)' . $db->upsertTail(),
+                ['user1@example.com', 'Upserted One'],
+                'SELECT id FROM benchmark_users WHERE email = ?', // the runtime's conflict-key recovery
+                ['user1@example.com'],
+            );
+            unset($sink);
             break;
         case 'createMany':
             [$emails, $names] = batchRows($it, false);
             batchInsert($db, $emails, $names, '');
             break;
         case 'upsertMany':
-            $emails = ['user1@example.com', 'user2@example.com'];
-            for ($k = 0; $k < 8; $k++) {
-                $emails[] = "many{$k}@bench.com";
-            }
-            [, $names] = batchRows($it, true);
+            // The SAME 10 records the native module upserts (userRows($it, stable: true)).
+            [$emails, $names] = batchRows($it, true);
             batchInsert($db, $emails, $names, $db->upsertTail());
             break;
         case 'updateMany':
@@ -477,27 +506,45 @@ function runOp(Db $db, string $op, int $it): void
             break;
         case 'nestedCreate':
             $db->execRaw('BEGIN');
-            $uid = $db->insertReturningId('INSERT INTO benchmark_users (email, name) VALUES (?, ?)', ["nc{$it}@bench.com", 'NC']);
+            $uid = $db->writeReturningId(
+                'INSERT INTO benchmark_users (email, name) VALUES (?, ?)',
+                ["nc{$it}@bench.com", 'NC'],
+                'SELECT id FROM benchmark_users WHERE id = LAST_INSERT_ID()', // AUTO_INCREMENT recovery
+            );
             $db->exec('INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)', [$uid, 'NC Post']);
             $db->execRaw('COMMIT');
             break;
         case 'nestedUpsert':
             $db->execRaw('BEGIN');
-            $db->exec('INSERT INTO benchmark_users (email, name) VALUES (?, ?)' . $db->upsertTail(),
-                ['user1@example.com', 'NUp']);
-            $rows = $db->query('SELECT id FROM benchmark_users WHERE email = ?', ['user1@example.com']);
-            $db->exec('INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)', [(int) $rows[0][0], 'NUp Post']);
+            $uid = $db->writeReturningId(
+                'INSERT INTO benchmark_users (email, name) VALUES (?, ?)' . $db->upsertTail(),
+                ['user1@example.com', 'NUp'],
+                'SELECT id FROM benchmark_users WHERE email = ?',
+                ['user1@example.com'],
+            );
+            $db->exec('INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)', [$uid, 'NUp Post']);
             $db->execRaw('COMMIT');
             break;
         case 'nestedUpdate':
             $db->execRaw('BEGIN');
-            $db->exec('UPDATE benchmark_users SET name = ? WHERE id = ?', ['NU', 1]);
-            $db->exec('UPDATE benchmark_posts SET title = ? WHERE author_id = ?', ['NU Post', 1]);
+            // The native module chains the dependent UPDATE off the id the first UPDATE returned; taking
+            // the id from the input instead would skip a statement's worth of work.
+            $uid = $db->writeReturningId(
+                'UPDATE benchmark_users SET name = ? WHERE id = ?',
+                ['NU', 1],
+                'SELECT id FROM benchmark_users WHERE id = ?', // recovered by the write's own WHERE
+                [1],
+            );
+            $db->exec('UPDATE benchmark_posts SET title = ? WHERE author_id = ?', ['NU Post', $uid]);
             $db->execRaw('COMMIT');
             break;
         case 'delete':
             $db->execRaw('BEGIN');
-            $uid = $db->insertReturningId('INSERT INTO benchmark_users (email, name) VALUES (?, ?)', ["del{$it}@bench.com", 'Del']);
+            $uid = $db->writeReturningId(
+                'INSERT INTO benchmark_users (email, name) VALUES (?, ?)',
+                ["del{$it}@bench.com", 'Del'],
+                'SELECT id FROM benchmark_users WHERE id = LAST_INSERT_ID()',
+            );
             $db->exec('DELETE FROM benchmark_users WHERE id = ?', [$uid]);
             $db->execRaw('COMMIT');
             break;

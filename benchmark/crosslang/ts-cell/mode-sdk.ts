@@ -16,7 +16,7 @@ import { Pool as PgPool } from 'pg';
 import mysql from 'mysql2/promise';
 import type { ResultSetHeader, RowDataPacket } from 'mysql2/promise';
 
-import { EXPECTED_STATEMENTS, inputFor, userRows, updateManyRows } from './inputs.js';
+import { inputFor, userRows, updateManyRows } from './inputs.js';
 import type { Cell, Dialect } from './cell.js';
 import { MYSQL_CONFIG, PG_CONFIG, setupFor } from './cell.js';
 
@@ -66,9 +66,43 @@ abstract class Db {
   }
   protected abstract fetch(sql: string, params: readonly unknown[]): Promise<Row[]>;
   abstract exec(sql: string, params?: readonly unknown[]): Promise<void>;
-  /** INSERT one user and return its generated id (pg via RETURNING, others via last-insert-id). */
-  abstract insertUserId(email: string, name: string): Promise<number>;
   abstract close(): Promise<void>;
+
+  /**
+   * A write that hands back the id of the row it wrote — the ` RETURNING id` the authored native module
+   * declares for every id-chaining write (`benchmark/crosslang/native-model.ts`). The baseline issues the
+   * SAME statement and reads the SAME row back, so the two surfaces do the same work.
+   *
+   * MySQL has no RETURNING: the runtime's mysql adapter strips the clause and recovers the written rows
+   * with a keyed SELECT on the same connection (`src/scp/makesql/mysql-returning.ts`). `recoverSql` /
+   * `recoverParams` are that same recovery, so the baseline pays it too rather than reading a free
+   * `insertId` off the driver's result metadata.
+   */
+  async writeReturningId(
+    sql: string,
+    params: readonly unknown[],
+    recoverSql: string,
+    recoverParams: readonly unknown[],
+  ): Promise<number> {
+    if (this.dialect !== 'mysql') {
+      const rows = await this.query(`${sql} RETURNING id`, params);
+      return Number(rows[0].id);
+    }
+    await this.exec(sql, params);
+    // The recovery is part of the SAME logical statement: the runtime's own seam counts a MySQL
+    // RETURNING write as ONE statement (it issues the recovery below the seam) while counting the row it
+    // recovers. Counting it as a second statement here would make the baseline look like it issued more
+    // work than it does — both surfaces send MySQL the same two SQL statements.
+    const rows = await this.recoverRows(recoverSql, recoverParams);
+    return Number(rows[0].id);
+  }
+
+  /** A fetch belonging to the logical statement just issued: rows are tallied, the statement count is not. */
+  private async recoverRows(sql: string, params: readonly unknown[]): Promise<Row[]> {
+    const out = await this.fetch(sql, params);
+    this.rows += out.length;
+    return out;
+  }
 }
 
 class SqliteDb extends Db {
@@ -89,11 +123,6 @@ class SqliteDb extends Db {
     if (params.length === 0 && /^\s*(BEGIN|COMMIT|ROLLBACK)/i.test(sql)) this.db.exec(sql);
     else this.prep(sql).run(...(params as unknown[]));
   }
-  async insertUserId(email: string, name: string): Promise<number> {
-    this.count++;
-    const info = this.prep('INSERT INTO benchmark_users (email, name) VALUES (?, ?)').run(email, name);
-    return Number(info.lastInsertRowid);
-  }
   async close(): Promise<void> {
     this.db.close();
   }
@@ -113,10 +142,6 @@ class PgDb extends Db {
     this.count++;
     await this.pool.query({ text: this.render(sql), values: params as unknown[], name: cacheName(sql) });
   }
-  async insertUserId(email: string, name: string): Promise<number> {
-    const rows = await this.query('INSERT INTO benchmark_users (email, name) VALUES (?, ?) RETURNING id', [email, name]);
-    return Number(rows[0].id);
-  }
   async close(): Promise<void> {
     await this.pool.end();
   }
@@ -134,11 +159,6 @@ class MysqlDb extends Db {
     this.count++;
     if (params.length === 0) await this.pool.query(sql);
     else await this.pool.execute(sql, params as never[]);
-  }
-  async insertUserId(email: string, name: string): Promise<number> {
-    this.count++;
-    const [res] = await this.pool.execute<ResultSetHeader>('INSERT INTO benchmark_users (email, name) VALUES (?, ?)', [email, name]);
-    return Number(res.insertId);
   }
   async close(): Promise<void> {
     await this.pool.end();
@@ -306,7 +326,13 @@ async function runOp(db: Db, op: string, it: number): Promise<void> {
       await db.exec('UPDATE benchmark_users SET name = ? WHERE id = ?', [input.name, input.id]);
       return;
     case 'upsert':
-      await db.exec(`INSERT INTO benchmark_users (email, name) VALUES (?, ?)${db.upsertTail()}`, [input.email, input.name]);
+      // The native module declares ` RETURNING id` here, so the baseline reads the id back too.
+      sink = await db.writeReturningId(
+        `INSERT INTO benchmark_users (email, name) VALUES (?, ?)${db.upsertTail()}`,
+        [input.email, input.name],
+        'SELECT id FROM benchmark_users WHERE email = ?', // the runtime's conflict-key recovery
+        [input.email],
+      );
       return;
     case 'createMany':
       await batchInsert(db, userRows(it, false), '');
@@ -319,40 +345,50 @@ async function runOp(db: Db, op: string, it: number): Promise<void> {
       return;
     case 'nestedCreate': {
       await db.exec('BEGIN');
-      const uid = await db.insertUserId(input.email, input.name);
+      const uid = await db.writeReturningId(
+        'INSERT INTO benchmark_users (email, name) VALUES (?, ?)',
+        [input.email, input.name],
+        'SELECT id FROM benchmark_users WHERE id = LAST_INSERT_ID()', // the runtime's AUTO_INCREMENT recovery
+        [],
+      );
       await db.exec('INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)', [uid, input.title]);
       await db.exec('COMMIT');
       return;
     }
     case 'nestedUpsert': {
-      // PostgreSQL reads the upserted id back with RETURNING (4 statements). SQLite and MySQL have no
-      // RETURNING on a conflict-update here, so the raw baseline pays one extra SELECT — 5 statements,
-      // exactly as the go/rust/python/php SDK cells do.
       await db.exec('BEGIN');
-      let uid: number;
-      if (db.dialect === 'postgres') {
-        const rows = await db.query(
-          `INSERT INTO benchmark_users (email, name) VALUES (?, ?)${db.upsertTail()} RETURNING id`,
-          [input.email, input.name],
-        );
-        uid = Number(rows[0].id);
-      } else {
-        await db.exec(`INSERT INTO benchmark_users (email, name) VALUES (?, ?)${db.upsertTail()}`, [input.email, input.name]);
-        uid = Number((await db.query('SELECT id FROM benchmark_users WHERE email = ?', [input.email]))[0].id);
-      }
+      const uid = await db.writeReturningId(
+        `INSERT INTO benchmark_users (email, name) VALUES (?, ?)${db.upsertTail()}`,
+        [input.email, input.name],
+        'SELECT id FROM benchmark_users WHERE email = ?',
+        [input.email],
+      );
       await db.exec('INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)', [uid, input.title]);
       await db.exec('COMMIT');
       return;
     }
-    case 'nestedUpdate':
+    case 'nestedUpdate': {
       await db.exec('BEGIN');
-      await db.exec('UPDATE benchmark_users SET name = ? WHERE id = ?', [input.name, input.id]);
-      await db.exec('UPDATE benchmark_posts SET title = ? WHERE author_id = ?', [input.title, input.id]);
+      // The native module chains the dependent UPDATE off the id the first UPDATE returned; taking the
+      // id from the input instead would skip a statement's worth of work.
+      const uid = await db.writeReturningId(
+        'UPDATE benchmark_users SET name = ? WHERE id = ?',
+        [input.name, input.id],
+        'SELECT id FROM benchmark_users WHERE id = ?', // the runtime recovers by the write's own WHERE
+        [input.id],
+      );
+      await db.exec('UPDATE benchmark_posts SET title = ? WHERE author_id = ?', [input.title, uid]);
       await db.exec('COMMIT');
       return;
+    }
     case 'delete': {
       await db.exec('BEGIN');
-      const uid = await db.insertUserId(input.email, input.name);
+      const uid = await db.writeReturningId(
+        'INSERT INTO benchmark_users (email, name) VALUES (?, ?)',
+        [input.email, input.name],
+        'SELECT id FROM benchmark_users WHERE id = LAST_INSERT_ID()',
+        [],
+      );
       await db.exec('DELETE FROM benchmark_users WHERE id = ?', [uid]);
       await db.exec('COMMIT');
       return;
@@ -386,7 +422,6 @@ export async function openSdk(dialect: Dialect): Promise<Cell> {
     dialect,
     sync: false,
     // The raw baseline needs one extra SELECT for nestedUpsert wherever RETURNING is unavailable.
-    expectedStatements: dialect === 'postgres' ? EXPECTED_STATEMENTS : { ...EXPECTED_STATEMENTS, nestedUpsert: 5 },
     seed: async () => {
       for (const stmt of [...setup.delete, ...setup.insert]) {
         if (db instanceof SqliteDb) db.db.exec(stmt);

@@ -98,15 +98,28 @@ class Db:
             return " ON DUPLICATE KEY UPDATE " + ", ".join(f"{c} = VALUES({c})" for c in cols.split(", "))
         return " ON CONFLICT (email) DO UPDATE SET " + ", ".join(f"{c} = excluded.{c}" for c in cols.split(", "))
 
-    def insert_user_id(self, email: str, name: str) -> int:
-        """INSERT one user and return its generated id — through the seam, so it is counted. PostgreSQL
-        appends `RETURNING id`; sqlite/mysql read the driver's last-insert id (the rust SDK cell's
-        `insert_returning_id` twin)."""
-        if self.dialect == "postgres":
-            return int(self.query("INSERT INTO benchmark_users (email, name) VALUES (?, ?) RETURNING id", (email, name))[0][0])
-        cur = self._cursor("INSERT INTO benchmark_users (email, name) VALUES (?, ?)", (email, name))
-        self.count += 1
-        return int(cur.lastrowid)
+    def write_returning_id(self, sql: str, params: tuple, recover_sql: str, recover_params: tuple = ()) -> int:
+        """A write that hands back the id of the row it wrote — the `` RETURNING id`` the authored native
+        module declares for every id-chaining write (``benchmark/crosslang/native-model.ts``). The baseline
+        issues the SAME statement and reads the SAME row back, so the two surfaces do equal work.
+
+        MySQL has no RETURNING: the runtime's mysql adapter strips the clause and recovers the written rows
+        with a keyed SELECT on the same connection (``src/scp/makesql/mysql-returning.ts``). ``recover_sql``
+        is that same recovery. It belongs to the SAME logical statement — the runtime's seam counts a MySQL
+        RETURNING write as one (its recovery runs below the seam) while counting the row it recovers — so
+        the rows are tallied here and the statement count is not bumped a second time.
+        """
+        if self.dialect != "mysql":
+            return int(self.query(sql + " RETURNING id", params)[0][0])
+        self.exec(sql, params)
+        return int(self._recover_rows(recover_sql, recover_params)[0][0])
+
+    def _recover_rows(self, sql: str, params: tuple) -> List[tuple]:
+        """Fetch belonging to the logical statement just issued: rows tallied, statement count not bumped."""
+        cur = self._cursor(sql, params)
+        rows = [tuple(r) for r in cur.fetchall()]
+        self.rows += len(rows)
+        return rows
 
     def exec_script(self, sql: str) -> None:
         # param-free control statement (BEGIN / COMMIT)
@@ -381,39 +394,60 @@ def run_op(db: Db, op: str, it: int) -> None:
     elif op == "update":
         db.exec("UPDATE benchmark_users SET name = ? WHERE id = ?", ("Updated 1", 1))
     elif op == "upsert":
-        db.exec("INSERT INTO benchmark_users (email, name) VALUES (?, ?) "
-                + db.upsert_tail("email, name"),
-                ("user1@example.com", "Upserted One"))
+        # The native module declares ` RETURNING id` here, so the baseline reads the id back too.
+        _SINK[0] = db.write_returning_id(
+            "INSERT INTO benchmark_users (email, name) VALUES (?, ?) " + db.upsert_tail("email, name"),
+            ("user1@example.com", "Upserted One"),
+            "SELECT id FROM benchmark_users WHERE email = ?",  # the runtime's conflict-key recovery
+            ("user1@example.com",),
+        )
     elif op == "createMany":
         emails, names = batch_rows(it, False)
         _batch_insert(db, emails, names, "")
     elif op == "upsertMany":
-        emails = ["user1@example.com", "user2@example.com"] + [f"many{k}@bench.com" for k in range(8)]
-        _, names = batch_rows(it, True)
+        # The SAME 10 records the native module upserts (``_user_rows(it, stable=True)``).
+        emails, names = batch_rows(it, True)
         _batch_insert(db, emails, names, db.upsert_tail("email, name"))
     elif op == "updateMany":
         _update_many(db)
     elif op == "nestedCreate":
         db.exec_script("BEGIN")
-        uid = db.insert_user_id(f"nc{it}@bench.com", "NC")
+        uid = db.write_returning_id(
+            "INSERT INTO benchmark_users (email, name) VALUES (?, ?)",
+            (f"nc{it}@bench.com", "NC"),
+            "SELECT id FROM benchmark_users WHERE id = LAST_INSERT_ID()",  # AUTO_INCREMENT recovery
+        )
         db.exec("INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)", (uid, "NC Post"))
         db.exec_script("COMMIT")
     elif op == "nestedUpsert":
         db.exec_script("BEGIN")
-        db.exec("INSERT INTO benchmark_users (email, name) VALUES (?, ?) "
-                + db.upsert_tail("email, name"),
-                ("user1@example.com", "NUp"))
-        rows = db.query("SELECT id FROM benchmark_users WHERE email = ?", ("user1@example.com",))
-        db.exec("INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)", (rows[0][0], "NUp Post"))
+        uid = db.write_returning_id(
+            "INSERT INTO benchmark_users (email, name) VALUES (?, ?) " + db.upsert_tail("email, name"),
+            ("user1@example.com", "NUp"),
+            "SELECT id FROM benchmark_users WHERE email = ?",
+            ("user1@example.com",),
+        )
+        db.exec("INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)", (uid, "NUp Post"))
         db.exec_script("COMMIT")
     elif op == "nestedUpdate":
         db.exec_script("BEGIN")
-        db.exec("UPDATE benchmark_users SET name = ? WHERE id = ?", ("NU", 1))
-        db.exec("UPDATE benchmark_posts SET title = ? WHERE author_id = ?", ("NU Post", 1))
+        # The native module chains the dependent UPDATE off the id the first UPDATE returned; taking the id
+        # from the input instead would skip a statement's worth of work.
+        uid = db.write_returning_id(
+            "UPDATE benchmark_users SET name = ? WHERE id = ?",
+            ("NU", 1),
+            "SELECT id FROM benchmark_users WHERE id = ?",  # recovered by the write's own WHERE
+            (1,),
+        )
+        db.exec("UPDATE benchmark_posts SET title = ? WHERE author_id = ?", ("NU Post", uid))
         db.exec_script("COMMIT")
     elif op == "delete":
         db.exec_script("BEGIN")
-        uid = db.insert_user_id(f"del{it}@bench.com", "Del")
+        uid = db.write_returning_id(
+            "INSERT INTO benchmark_users (email, name) VALUES (?, ?)",
+            (f"del{it}@bench.com", "Del"),
+            "SELECT id FROM benchmark_users WHERE id = LAST_INSERT_ID()",
+        )
         db.exec("DELETE FROM benchmark_users WHERE id = ?", (uid,))
         db.exec_script("COMMIT")
     else:
@@ -424,8 +458,9 @@ def run_op(db: Db, op: str, it: int) -> None:
 RELATION_QUERY_COUNTS = {"nestedFindAll": 2, "nestedFindFirst": 2, "nestedFindUnique": 2,
                          "nestedRelations": 3, "compositeRelations": 3}
 BATCH_QUERY_COUNTS = {"createMany": 1, "upsertMany": 1, "updateMany": 1}
-# tx: BEGIN + body + COMMIT. nestedUpsert re-SELECTs the id (upsert has no portable RETURNING) → 5.
-TX_STMT_COUNTS = {"nestedCreate": 4, "nestedUpsert": 5, "nestedUpdate": 4, "delete": 4}
+# tx: BEGIN + body + COMMIT — the same count the native cell proves, since the baseline issues the same
+# statements (a MySQL RETURNING write plus its recovery is ONE logical statement in both surfaces).
+TX_STMT_COUNTS = {"nestedCreate": 4, "nestedUpsert": 4, "nestedUpdate": 4, "delete": 4}
 
 
 def _measure(dialect: str, reps: int, warmup: int) -> None:

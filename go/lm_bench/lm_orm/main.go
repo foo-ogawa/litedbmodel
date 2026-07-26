@@ -100,6 +100,12 @@ func (c *cell) prep(sqlText string) *sql.Stmt {
 // downstream for batching, but all columns are scanned to pay the real decode cost.
 func (c *cell) query(sqlText string, args ...any) [][]any {
 	c.count++
+	return c.recoverRows(sqlText, args...)
+}
+
+// recoverRows fetches and tallies rows WITHOUT bumping the statement count. It is the body of `query`,
+// and it is also the MySQL RETURNING recovery, which belongs to the logical statement just issued.
+func (c *cell) recoverRows(sqlText string, args ...any) [][]any {
 	rows, err := c.prep(sqlText).Query(args...)
 	if err != nil {
 		panic(fmt.Sprintf("query %q: %v", sqlText, err))
@@ -139,26 +145,25 @@ func (c *cell) execRaw(sqlText string) {
 	}
 }
 
-// insertReturningID inserts one row and returns its generated id. PostgreSQL has no LastInsertId, so
-// it appends RETURNING id and reads the row back; sqlite/mysql read the driver's last-insert id.
-func (c *cell) insertReturningID(sqlText string, args ...any) int64 {
-	c.count++
-	if c.dialect == "postgres" {
-		var id int64
-		if err := c.prep(sqlText + " RETURNING id").QueryRow(args...).Scan(&id); err != nil {
-			panic(fmt.Sprintf("insert %q: %v", sqlText, err))
-		}
-		return id
+// writeReturningID runs a write that hands back the id of the row it wrote — the ` RETURNING id` the
+// authored native module declares for every id-chaining write (benchmark/crosslang/native-model.ts).
+// The baseline issues the SAME statement and reads the SAME row back, so the two surfaces do equal work.
+//
+// MySQL has no RETURNING: the runtime's mysql adapter strips the clause and recovers the written rows
+// with a keyed SELECT on the same connection (src/scp/makesql/mysql-returning.ts). `recoverSQL` is that
+// same recovery, so the baseline pays it too rather than reading a free last-insert-id off the driver.
+func (c *cell) writeReturningID(sqlText string, recoverSQL string, recoverArgs []any, args ...any) int64 {
+	if c.dialect != "mysql" {
+		rows := c.query(sqlText+" RETURNING id", args...)
+		return asInt(rows[0][0])
 	}
-	res, err := c.prep(sqlText).Exec(args...)
-	if err != nil {
-		panic(fmt.Sprintf("insert %q: %v", sqlText, err))
-	}
-	id, err := res.LastInsertId()
-	if err != nil {
-		panic(fmt.Sprintf("last_insert_id %q: %v", sqlText, err))
-	}
-	return id
+	c.exec(sqlText, args...)
+	// The recovery is part of the SAME logical statement: the runtime's own seam counts a MySQL RETURNING
+	// write as ONE statement (it issues the recovery below the seam) while counting the row it recovers.
+	// Counting it as a second statement here would make the baseline look like it issued more work than it
+	// does - both surfaces send MySQL the same two SQL statements.
+	rows := c.recoverRows(recoverSQL, recoverArgs...)
+	return asInt(rows[0][0])
 }
 
 // asInt coerces a scanned cell to int64. Each driver reports integers its own way: sqlite and
@@ -497,42 +502,47 @@ func (c *cell) op(name string, it int) {
 	case "update":
 		c.exec("UPDATE benchmark_users SET name = ? WHERE id = ?", "Updated 1", 1)
 	case "upsert":
-		c.exec("INSERT INTO benchmark_users (email, name) VALUES (?, ?)"+c.upsertTail(),
+		// The native module declares ` RETURNING id` here, so the baseline reads the id back too.
+		benchSink = c.writeReturningID("INSERT INTO benchmark_users (email, name) VALUES (?, ?)"+c.upsertTail(),
+			"SELECT id FROM benchmark_users WHERE email = ?", []any{"user1@example.com"}, // conflict-key recovery
 			"user1@example.com", "Upserted One")
 	case "createMany":
 		emails, names := batchRows(it, false)
 		c.batchInsert(emails, names, "")
 	case "upsertMany":
-		emails := []string{"user1@example.com", "user2@example.com"}
-		for k := 0; k < 8; k++ {
-			emails = append(emails, fmt.Sprintf("many%d@bench.com", k))
-		}
-		_, names := batchRows(it, true)
+		// The SAME 10 records the native module upserts (`userRows(it, stable=true)`): conflicting on a
+		// different record set is a different amount of work.
+		emails, names := batchRows(it, true)
 		c.batchInsert(emails, names, c.upsertTail())
 	case "updateMany":
 		c.updateMany()
 	case "nestedCreate":
 		c.execRaw("BEGIN")
-		uid := c.insertReturningID("INSERT INTO benchmark_users (email, name) VALUES (?, ?)",
+		uid := c.writeReturningID("INSERT INTO benchmark_users (email, name) VALUES (?, ?)",
+			"SELECT id FROM benchmark_users WHERE id = LAST_INSERT_ID()", nil, // AUTO_INCREMENT recovery
 			fmt.Sprintf("nc%d@bench.com", it), "NC")
 		c.exec("INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)", uid, "NC Post")
 		c.execRaw("COMMIT")
 	case "nestedUpsert":
 		c.execRaw("BEGIN")
-		c.exec("INSERT INTO benchmark_users (email, name) VALUES (?, ?)"+c.upsertTail(),
+		uid := c.writeReturningID("INSERT INTO benchmark_users (email, name) VALUES (?, ?)"+c.upsertTail(),
+			"SELECT id FROM benchmark_users WHERE email = ?", []any{"user1@example.com"},
 			"user1@example.com", "NUp")
-		rows := c.query("SELECT id FROM benchmark_users WHERE email = ?", "user1@example.com")
-		uid := asInt(rows[0][0])
 		c.exec("INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)", uid, "NUp Post")
 		c.execRaw("COMMIT")
 	case "nestedUpdate":
 		c.execRaw("BEGIN")
-		c.exec("UPDATE benchmark_users SET name = ? WHERE id = ?", "NU", 1)
-		c.exec("UPDATE benchmark_posts SET title = ? WHERE author_id = ?", "NU Post", 1)
+		// The native module chains the dependent UPDATE off the id the first UPDATE returned; taking the
+		// id from the input instead would skip a statement's worth of work.
+		uid := c.writeReturningID("UPDATE benchmark_users SET name = ? WHERE id = ?",
+			"SELECT id FROM benchmark_users WHERE id = ?", []any{1}, // recovered by the write's own WHERE
+			"NU", 1)
+		c.exec("UPDATE benchmark_posts SET title = ? WHERE author_id = ?", "NU Post", uid)
 		c.execRaw("COMMIT")
 	case "delete":
 		c.execRaw("BEGIN")
-		uid := c.insertReturningID("INSERT INTO benchmark_users (email, name) VALUES (?, ?)",
+		uid := c.writeReturningID("INSERT INTO benchmark_users (email, name) VALUES (?, ?)",
+			"SELECT id FROM benchmark_users WHERE id = LAST_INSERT_ID()", nil,
 			fmt.Sprintf("del%d@bench.com", it), "Del")
 		c.exec("DELETE FROM benchmark_users WHERE id = ?", uid)
 		c.execRaw("COMMIT")
@@ -590,7 +600,7 @@ var expectedStatements = map[string]int{
 	"nestedFindAll": 2, "nestedFindFirst": 2, "nestedFindUnique": 2, "nestedRelations": 3, "compositeRelations": 3,
 	"create": 1, "update": 1, "upsert": 1,
 	"createMany": 1, "upsertMany": 1, "updateMany": 1,
-	"nestedCreate": 4, "nestedUpsert": 5, "nestedUpdate": 4, "delete": 4,
+	"nestedCreate": 4, "nestedUpsert": 4, "nestedUpdate": 4, "delete": 4,
 }
 
 var txOps = map[string]bool{"nestedCreate": true, "nestedUpsert": true, "nestedUpdate": true, "delete": true}
