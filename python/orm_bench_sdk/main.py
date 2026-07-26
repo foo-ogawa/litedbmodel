@@ -51,38 +51,112 @@ OPS: List[str] = [
 # ── the ONE exec seam. All DB access rides these methods, so the statement counter (safety proof) lives
 #    in one place. Prepared-statement reuse is the sqlite3 connection's own statement cache. ──────────
 class Db:
-    def __init__(self, conn: sqlite3.Connection) -> None:
+    """The ONE exec seam. All DB access rides these methods, so the statement counter (the safety proof)
+    lives in one place, and the DIALECT lives here too: `sql()` renders this connection's placeholder
+    style, so every op below writes `?` once and the seam adapts it. Prepared-statement reuse is the
+    driver's own statement cache (sqlite3 by SQL text; psycopg / PyMySQL server-side)."""
+
+    def __init__(self, conn: Any, dialect: str = "sqlite") -> None:
         self.conn = conn
+        self.dialect = dialect
         self.count = 0
+
+    def sql(self, sql: str) -> str:
+        """`?` → the driver's placeholder. psycopg and PyMySQL both bind `%s` positionally; sqlite3 takes
+        `?` as written. A literal `%` is doubled for the two `%s` drivers."""
+        if self.dialect == "sqlite":
+            return sql
+        return sql.replace("%", "%%").replace("?", "%s")
+
+    def _cursor(self, sql: str, params: tuple):
+        # sqlite3's Connection.execute RETURNS the cursor; psycopg / PyMySQL execute ON one.
+        if self.dialect == "sqlite":
+            return self.conn.execute(sql, tuple(params))
+        cur = self.conn.cursor()
+        cur.execute(self.sql(sql), tuple(params))
+        return cur
 
     def query(self, sql: str, params: tuple = ()) -> List[tuple]:
         self.count += 1
-        cur = self.conn.execute(sql, params)  # sqlite3 reuses the cached compiled statement by SQL text
-        return cur.fetchall()
+        cur = self._cursor(sql, params)
+        rows = cur.fetchall()
+        return [tuple(r) for r in rows]
 
     def exec(self, sql: str, params: tuple = ()) -> None:
         self.count += 1
-        self.conn.execute(sql, params)
+        self._cursor(sql, params)
+
+    def upsert_tail(self, cols: str) -> str:
+        """The dialect's upsert tail for a UNIQUE `email` (the rust SDK cell's `upsert_tail` twin).
+        PostgreSQL / SQLite take `ON CONFLICT`; MySQL takes `ON DUPLICATE KEY UPDATE`."""
+        if self.dialect == "mysql":
+            return " ON DUPLICATE KEY UPDATE " + ", ".join(f"{c} = VALUES({c})" for c in cols.split(", "))
+        return " ON CONFLICT (email) DO UPDATE SET " + ", ".join(f"{c} = excluded.{c}" for c in cols.split(", "))
+
+    def insert_user_id(self, email: str, name: str) -> int:
+        """INSERT one user and return its generated id — through the seam, so it is counted. PostgreSQL
+        appends `RETURNING id`; sqlite/mysql read the driver's last-insert id (the rust SDK cell's
+        `insert_returning_id` twin)."""
+        if self.dialect == "postgres":
+            return int(self.query("INSERT INTO benchmark_users (email, name) VALUES (?, ?) RETURNING id", (email, name))[0][0])
+        cur = self._cursor("INSERT INTO benchmark_users (email, name) VALUES (?, ?)", (email, name))
+        self.count += 1
+        return int(cur.lastrowid)
 
     def exec_script(self, sql: str) -> None:
         # param-free control statement (BEGIN / COMMIT)
         self.count += 1
-        self.conn.execute(sql)
+        self._cursor(sql, ())
 
 
-def open_db(spec: str) -> Db:
-    _ = spec  # sqlite pilot: an IN-MEMORY DB — SAME storage as the native cell.
-    # isolation_level=None → autocommit, so the explicit BEGIN/COMMIT below bracket exactly one tx (the
-    # native cell's SqliteDriver is autocommit for the same reason).
-    conn = sqlite3.connect(":memory:", isolation_level=None, cached_statements=64)
-    for stmt in SCHEMA:
-        conn.execute(stmt)
-    return Db(conn)
+def open_db(spec: str = "sqlite") -> Db:
+    """The raw driver connection for ONE target — the SAME database the native cell of that dialect uses
+    (#145 invariant 1), seeded from the SAME `.setup/<dialect>.json` (invariant 2). Autocommit
+    everywhere, so the explicit BEGIN/COMMIT below bracket exactly one tx, as the native cell's driver
+    does. No litedbmodel runtime, no generated module — raw driver only (invariant 6). An unknown or
+    unreachable target is a LOUD failure."""
+    setup = lm_bench_setup.load(spec)
+    if spec == "sqlite":
+        conn = sqlite3.connect(":memory:", isolation_level=None, cached_statements=64)
+    elif spec == "postgres":
+        import psycopg  # lazy: the sqlite pilot never needs it
+
+        conn = psycopg.connect(
+            host=os.environ.get("TEST_DB_HOST", "localhost"),
+            port=int(os.environ.get("TEST_DB_PORT", "5433")),
+            user=os.environ.get("TEST_DB_USER", "testuser"),
+            password=os.environ.get("TEST_DB_PASSWORD", "testpass"),
+            dbname=os.environ.get("TEST_DB_NAME", "testdb"),
+            autocommit=True,
+        )
+    elif spec == "mysql":
+        import pymysql  # lazy
+
+        conn = pymysql.connect(
+            host=os.environ.get("TEST_MYSQL_HOST", "127.0.0.1"),
+            port=int(os.environ.get("TEST_MYSQL_PORT", "3307")),
+            user=os.environ.get("TEST_MYSQL_USER", "testuser"),
+            password=os.environ.get("TEST_MYSQL_PASSWORD", "testpass"),
+            database=os.environ.get("TEST_MYSQL_DB", "testdb"),
+            autocommit=True,
+        )
+    else:
+        raise SystemExit(f"orm_bench_sdk: unknown target {spec!r} (sqlite|postgres|mysql)")
+    db = Db(conn, spec)
+    for stmt in setup["schema"]:
+        db.exec_script(stmt)
+    db.count = 0
+    return db
 
 
 def seed(db: Db) -> None:
-    for stmt in SEED:
-        db.conn.execute(stmt)  # runs on the connection directly (off-seam) → never counted
+    """DELETE + INSERT this target's canonical fixture, off-seam so it is never counted."""
+    setup = lm_bench_setup.load(db.dialect)
+    for stmt in setup["delete"] + setup["insert"]:
+        if db.dialect == "sqlite":
+            db.conn.execute(stmt)
+        else:
+            db.conn.cursor().execute(stmt)
 
 
 # ── batch-write inputs (mirror ops.ts / the native cell) ───────────────────────────────────────────
@@ -96,9 +170,12 @@ def _placeholders(n: int) -> str:
     return ",".join(["?"] * n)
 
 
-def _tuple_in(rows: int, cols: int) -> str:
+def _tuple_in(rows: int, cols: int, dialect: str = "sqlite") -> str:
+    """The composite key-set operand of `(k1,k2) IN …`. PostgreSQL / SQLite take a `(VALUES (…),(…))`
+    constructor; MySQL takes a bare row list `((…),(…))` (the rust SDK cell's `tuple_in` twin)."""
     one = "(" + _placeholders(cols) + ")"
-    return "(VALUES " + ",".join([one] * rows) + ")"
+    body = ",".join([one] * rows)
+    return "(" + body + ")" if dialect == "mysql" else "(VALUES " + body + ")"
 
 
 # ── nested materialization (fair vs the native cell) ───────────────────────────────────────────────
@@ -223,7 +300,7 @@ def _materialize_composite(db: Db) -> List[TenantUser]:
         (1,))]
     if not tusers:
         return tusers
-    pbody = _tuple_in(len(tusers), 2)
+    pbody = _tuple_in(len(tusers), 2, db.dialect)
     psql = ("SELECT tenant_id, post_id, user_id, title FROM benchmark_tenant_posts "
             "WHERE (tenant_id, user_id) IN " + pbody)
     pparams: list = []
@@ -231,7 +308,7 @@ def _materialize_composite(db: Db) -> List[TenantUser]:
         pparams += [u.tenant_id, u.user_id]
     tposts = [TenantPost(r[0], r[1], r[2], r[3]) for r in db.query(psql, tuple(pparams))]
     if tposts:
-        cbody = _tuple_in(len(tposts), 2)
+        cbody = _tuple_in(len(tposts), 2, db.dialect)
         csql = ("SELECT tenant_id, comment_id, post_id, body FROM benchmark_tenant_comments "
                 "WHERE (tenant_id, post_id) IN " + cbody)
         cparams: list = []
@@ -300,7 +377,7 @@ def run_op(db: Db, op: str, it: int) -> None:
         db.exec("UPDATE benchmark_users SET name = ? WHERE id = ?", ("Updated 1", 1))
     elif op == "upsert":
         db.exec("INSERT INTO benchmark_users (email, name) VALUES (?, ?) "
-                "ON CONFLICT (email) DO UPDATE SET email = excluded.email, name = excluded.name",
+                + db.upsert_tail("email, name"),
                 ("user1@example.com", "Upserted One"))
     elif op == "createMany":
         emails, names = batch_rows(it, False)
@@ -308,20 +385,18 @@ def run_op(db: Db, op: str, it: int) -> None:
     elif op == "upsertMany":
         emails = ["user1@example.com", "user2@example.com"] + [f"many{k}@bench.com" for k in range(8)]
         _, names = batch_rows(it, True)
-        _batch_insert(db, emails, names,
-                      " ON CONFLICT (email) DO UPDATE SET email = excluded.email, name = excluded.name")
+        _batch_insert(db, emails, names, db.upsert_tail("email, name"))
     elif op == "updateMany":
         _update_many(db)
     elif op == "nestedCreate":
         db.exec_script("BEGIN")
-        cur = db.conn.execute("INSERT INTO benchmark_users (email, name) VALUES (?, ?)", (f"nc{it}@bench.com", "NC"))
-        db.count += 1
-        db.exec("INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)", (cur.lastrowid, "NC Post"))
+        uid = db.insert_user_id(f"nc{it}@bench.com", "NC")
+        db.exec("INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)", (uid, "NC Post"))
         db.exec_script("COMMIT")
     elif op == "nestedUpsert":
         db.exec_script("BEGIN")
         db.exec("INSERT INTO benchmark_users (email, name) VALUES (?, ?) "
-                "ON CONFLICT (email) DO UPDATE SET email = excluded.email, name = excluded.name",
+                + db.upsert_tail("email, name"),
                 ("user1@example.com", "NUp"))
         rows = db.query("SELECT id FROM benchmark_users WHERE email = ?", ("user1@example.com",))
         db.exec("INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)", (rows[0][0], "NUp Post"))
@@ -333,9 +408,8 @@ def run_op(db: Db, op: str, it: int) -> None:
         db.exec_script("COMMIT")
     elif op == "delete":
         db.exec_script("BEGIN")
-        cur = db.conn.execute("INSERT INTO benchmark_users (email, name) VALUES (?, ?)", (f"del{it}@bench.com", "Del"))
-        db.count += 1
-        db.exec("DELETE FROM benchmark_users WHERE id = ?", (cur.lastrowid,))
+        uid = db.insert_user_id(f"del{it}@bench.com", "Del")
+        db.exec("DELETE FROM benchmark_users WHERE id = ?", (uid,))
         db.exec_script("COMMIT")
     else:
         raise ValueError(f"unknown op {op!r}")
