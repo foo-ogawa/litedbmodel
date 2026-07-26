@@ -29,13 +29,15 @@ package main
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
+	"github.com/foo-ogawa/litedbmodel/go/lm_bench/setup"
 	"os"
+	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/foo-ogawa/litedbmodel/go/lm_bench/setup"
 
 	_ "github.com/go-sql-driver/mysql" // plain MySQL driver (registered as "mysql") — NOT the runtime's mysql-scp
 	_ "github.com/jackc/pgx/v5/stdlib" // plain Postgres driver (registered as "pgx")
@@ -71,15 +73,6 @@ func (c *cell) render(sqlText string) string {
 		}
 	}
 	return out.String()
-}
-
-// upsertTail is the dialect's upsert tail for the UNIQUE `email` (the rust/python/php cells' twin):
-// PostgreSQL and SQLite take ON CONFLICT, MySQL takes ON DUPLICATE KEY UPDATE.
-func (c *cell) upsertTail() string {
-	if c.dialect == "mysql" {
-		return " ON DUPLICATE KEY UPDATE email = VALUES(email), name = VALUES(name)"
-	}
-	return " ON CONFLICT (email) DO UPDATE SET email = excluded.email, name = excluded.name"
 }
 
 func (c *cell) prep(sqlText string) *sql.Stmt {
@@ -152,12 +145,17 @@ func (c *cell) execRaw(sqlText string) {
 // MySQL has no RETURNING: the runtime's mysql adapter strips the clause and recovers the written rows
 // with a keyed SELECT on the same connection (src/scp/makesql/mysql-returning.ts). `recoverSQL` is that
 // same recovery, so the baseline pays it too rather than reading a free last-insert-id off the driver.
+// returningTail matches the ` RETURNING …` tail (plus any trailing PK hint comment) MySQL cannot parse.
+var returningTail = regexp.MustCompile(`(?is)\s+RETURNING\s+.*$`)
+
 func (c *cell) writeReturningID(sqlText string, recoverSQL string, recoverArgs []any, args ...any) int64 {
 	if c.dialect != "mysql" {
-		rows := c.query(sqlText+" RETURNING id", args...)
+		rows := c.query(sqlText, args...)
 		return asInt(rows[0][0])
 	}
-	c.exec(sqlText, args...)
+	// MySQL cannot parse RETURNING: strip the clause (and the /*scp:pk=…*/ hint naming the key) exactly as
+	// the runtime's mysql adapter does, then recover the written row with the keyed SELECT.
+	c.exec(returningTail.ReplaceAllString(sqlText, ""), args...)
 	// The recovery is part of the SAME logical statement: the runtime's own seam counts a MySQL RETURNING
 	// write as ONE statement (it issues the recovery below the seam) while counting the row it recovers.
 	// Counting it as a second statement here would make the baseline look like it issued more work than it
@@ -333,7 +331,7 @@ func decodeComments(rows [][]any) []sdkComment {
 
 // materializeUsersPosts: ONE batched child posts read, decoded into typed structs and MOVED into their
 // parent user by author_id (2 queries; the parent read already happened in the op arm).
-func (c *cell) materializeUsersPosts(userRows [][]any) []sdkUser {
+func (c *cell) materializeUsersPosts(userRows [][]any, childSQL string) []sdkUser {
 	users := decodeUsers(userRows)
 	if len(users) == 0 {
 		return users
@@ -342,10 +340,11 @@ func (c *cell) materializeUsersPosts(userRows [][]any) []sdkUser {
 	for i, u := range users {
 		ids[i] = u.id
 	}
-	sqlText := fmt.Sprintf(
-		"SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN (%s) ORDER BY id ASC",
-		placeholders(len(ids)))
-	posts := decodePosts(c.query(sqlText, intArgs(ids)...))
+	keys := make([][]int64, len(ids))
+	for i, id := range ids {
+		keys[i] = []int64{id}
+	}
+	posts := decodePosts(c.query(childSQL, keyParam(keys)))
 	byAuthor := make(map[int64][]sdkPost, len(posts))
 	for _, p := range posts {
 		byAuthor[p.authorID] = append(byAuthor[p.authorID], p)
@@ -358,34 +357,28 @@ func (c *cell) materializeUsersPosts(userRows [][]any) []sdkUser {
 
 // materializeUsersPostsComments: 3-level chain — batched posts then batched comments, assembled into the
 // full nested typed graph (comments MOVED into posts by post_id, posts MOVED into users by author_id).
-func (c *cell) materializeUsersPostsComments(userRows [][]any) []sdkUser {
+func (c *cell) materializeUsersPostsComments(userRows [][]any, postSQL, commentSQL string) []sdkUser {
 	users := decodeUsers(userRows)
 	if len(users) == 0 {
 		return users
 	}
-	uids := make([]int64, len(users))
+	ukeys := make([][]int64, len(users))
 	for i, u := range users {
-		uids[i] = u.id
+		ukeys[i] = []int64{u.id}
 	}
-	psql := fmt.Sprintf(
-		"SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN (%s) ORDER BY id ASC",
-		placeholders(len(uids)))
-	posts := decodePosts(c.query(psql, intArgs(uids)...))
+	posts := decodePosts(c.query(postSQL, keyParam(ukeys)))
 	if len(posts) > 0 {
-		pids := make([]int64, len(posts))
+		pkeys := make([][]int64, len(posts))
 		for i, p := range posts {
-			pids[i] = p.id
+			pkeys[i] = []int64{p.id}
 		}
-		csql := fmt.Sprintf(
-			"SELECT id, body, post_id FROM benchmark_comments WHERE post_id IN (%s) ORDER BY id ASC",
-			placeholders(len(pids)))
-		comments := decodeComments(c.query(csql, intArgs(pids)...))
+		comments := decodeComments(c.query(commentSQL, keyParam(pkeys)))
 		byPost := make(map[int64][]sdkComment, len(comments))
 		for _, cm := range comments {
 			byPost[cm.postID] = append(byPost[cm.postID], cm)
 		}
 		for i := range posts {
-			posts[i].comments = byPost[posts[i].id]
+			posts[i].comments = byPost[posts[i].id] // MOVE the grouped slice into the parent
 		}
 	}
 	byAuthor := make(map[int64][]sdkPost, len(posts))
@@ -401,9 +394,8 @@ func (c *cell) materializeUsersPostsComments(userRows [][]any) []sdkUser {
 // materializeComposite: tenant_users(tenant=1) → batched tenant_posts by (tenant_id,user_id) → batched
 // tenant_comments by (tenant_id,post_id). 3 queries; assembled into the nested typed graph keyed on the
 // FULL composite (tenant_id,*) tuple.
-func (c *cell) materializeComposite() []sdkTenantUser {
-	trows := c.query(
-		"SELECT tenant_id, user_id, name FROM benchmark_tenant_users WHERE tenant_id = ? ORDER BY user_id ASC", 1)
+func (c *cell) materializeComposite(sqlList []string) []sdkTenantUser {
+	trows := c.query(sqlList[0])
 	tusers := make([]sdkTenantUser, len(trows))
 	for i, r := range trows {
 		tusers[i] = sdkTenantUser{tenantID: asInt(r[0]), userID: asInt(r[1]), name: r[2]}
@@ -411,25 +403,21 @@ func (c *cell) materializeComposite() []sdkTenantUser {
 	if len(tusers) == 0 {
 		return tusers
 	}
-	pbody := c.tupleIn(len(tusers), 2)
-	psql := "SELECT tenant_id, post_id, user_id, title FROM benchmark_tenant_posts WHERE (tenant_id, user_id) IN " + pbody
-	pparams := make([]any, 0, len(tusers)*2)
-	for _, u := range tusers {
-		pparams = append(pparams, u.tenantID, u.userID)
+	ukeys := make([][]int64, len(tusers))
+	for i, u := range tusers {
+		ukeys[i] = []int64{u.tenantID, u.userID}
 	}
-	prows := c.query(psql, pparams...)
+	prows := c.query(sqlList[1], keyParam(ukeys))
 	tposts := make([]sdkTenantPost, len(prows))
 	for i, r := range prows {
 		tposts[i] = sdkTenantPost{tenantID: asInt(r[0]), postID: asInt(r[1]), userID: asInt(r[2]), title: r[3]}
 	}
 	if len(tposts) > 0 {
-		cbody := c.tupleIn(len(tposts), 2)
-		csql := "SELECT tenant_id, comment_id, post_id, body FROM benchmark_tenant_comments WHERE (tenant_id, post_id) IN " + cbody
-		cparams := make([]any, 0, len(tposts)*2)
-		for _, p := range tposts {
-			cparams = append(cparams, p.tenantID, p.postID)
+		pkeys := make([][]int64, len(tposts))
+		for i, p := range tposts {
+			pkeys[i] = []int64{p.tenantID, p.postID}
 		}
-		crows := c.query(csql, cparams...)
+		crows := c.query(sqlList[2], keyParam(pkeys))
 		byPost := make(map[key2][]sdkTenantComment, len(crows))
 		for _, r := range crows {
 			cm := sdkTenantComment{tenantID: asInt(r[0]), commentID: asInt(r[1]), postID: asInt(r[2]), body: r[3]}
@@ -451,138 +439,166 @@ func (c *cell) materializeComposite() []sdkTenantUser {
 	return tusers
 }
 
-// updateMany: ONE statement (CASE id … END WHERE id IN (…)) — single-statement, N+1-avoided.
-func (c *cell) updateMany() {
+// keyParam encodes one relation level's key set as the ONE param the captured SQL expects. The generated
+// module binds a batched child read's key set as a single JSON array (json_each(?) / JSON_TABLE(?) /
+// UNNEST(?::t[])), never as N placeholders — so the baseline binds it the same way, or it is running
+// different SQL. A composite key is an array of tuples, a single key an array of scalars.
+func keyParam(tuples [][]int64) string {
+	out, err := json.Marshal(flattenSingles(tuples))
+	if err != nil {
+		panic(fmt.Sprintf("encode key set: %v", err))
+	}
+	return string(out)
+}
+
+// flattenSingles renders a 1-column key set as scalars and a multi-column one as tuples.
+func flattenSingles(tuples [][]int64) any {
+	if len(tuples) > 0 && len(tuples[0]) == 1 {
+		flat := make([]int64, len(tuples))
+		for i, t := range tuples {
+			flat[i] = t[0]
+		}
+		return flat
+	}
+	return tuples
+}
+
+// The keyed SELECTs the runtime's MySQL adapter recovers a RETURNING write's rows with
+// (src/scp/makesql/mysql-returning.ts): the conflict key for an upsert, the AUTO_INCREMENT range for an
+// insert, the write's own WHERE for an update. Only MySQL runs them — the others have RETURNING.
+const (
+	recoverByEmail        = "SELECT id FROM benchmark_users WHERE email = ?"
+	recoverByLastInsertID = "SELECT id FROM benchmark_users WHERE id = LAST_INSERT_ID()"
+	recoverByID           = "SELECT id FROM benchmark_users WHERE id = ?"
+)
+
+// batchParams renders a batch write's record set as the param(s) the captured statement expects: ONE JSON
+// array on MySQL/SQLite, one array PER COLUMN on PostgreSQL (its UNNEST form takes column arrays). The
+// payload repeats once per `?` — updateMany's SET subquery and its WHERE each read it.
+func (c *cell) batchParams(sqlText string, records []map[string]any) []any {
+	var one []any
+	if c.dialect == "postgres" {
+		cols := make([]string, 0, len(records[0]))
+		for k := range records[0] {
+			cols = append(cols, k)
+		}
+		sort.Strings(cols)
+		for _, col := range cols {
+			vals := make([]any, len(records))
+			for i, r := range records {
+				vals[i] = r[col]
+			}
+			enc, _ := json.Marshal(vals)
+			one = append(one, string(enc))
+		}
+	} else {
+		enc, _ := json.Marshal(records)
+		one = []any{string(enc)}
+	}
+	n := strings.Count(sqlText, "?") / len(one)
+	if n < 1 {
+		n = 1
+	}
+	out := make([]any, 0, n*len(one))
+	for i := 0; i < n; i++ {
+		out = append(out, one...)
+	}
+	return out
+}
+
+// userRecords is the 10-row batch record set (the same one the native cell passes).
+func userRecords(it int, stable bool) []map[string]any {
+	emails, names := batchRows(it, stable)
+	out := make([]map[string]any, 10)
+	for i := 0; i < 10; i++ {
+		out[i] = map[string]any{"email": emails[i], "name": names[i]}
+	}
+	return out
+}
+
+// patchRecords is the id-keyed 10-row batch set updateMany binds.
+func patchRecords() []map[string]any {
 	_, names := batchRows(0, false)
-	var whens strings.Builder
-	params := make([]any, 0, 30)
-	for k := 0; k < 10; k++ {
-		whens.WriteString(" WHEN ? THEN ?")
-		params = append(params, int64(k+1), names[k])
+	out := make([]map[string]any, 10)
+	for i := 0; i < 10; i++ {
+		out[i] = map[string]any{"id": int64(i + 1), "name": names[i]}
 	}
-	for k := 0; k < 10; k++ {
-		params = append(params, int64(k+1))
-	}
-	sqlText := fmt.Sprintf(
-		"UPDATE benchmark_users SET name = CASE id%s END WHERE id IN (%s)",
-		whens.String(), placeholders(10))
-	c.exec(sqlText, params...)
+	return out
 }
 
 // ── the 19 ops (native-cell order). Fixed inputs mirror the go native cell; mutating ops vary their
 //
 //	UNIQUE column by it. Reads: LIMIT/ORDER shapes match the ops SSoT (== the native generated SQL). ──
-func (c *cell) op(name string, it int) {
+//
+// op runs ONE op for iteration it, issuing the statements the GENERATED module issues for this dialect
+// (`sqlList` = doc.Ops[name], captured at the runtime seam). The baseline hand-writes no SQL: the report
+// divides native by sdk, which only isolates the runtime's cost if both send the DB the same statements.
+// What stays hand-written is what a raw-driver user writes: param binding, decode, grouping children into
+// parents, and the transaction bracket.
+func (c *cell) op(name string, it int, sqlList []string) {
 	switch name {
 	case "findAll":
-		c.query("SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100")
+		c.query(sqlList[0])
 	case "filterPaginateSort":
-		c.query("SELECT id, title, content, published, author_id, created_at FROM benchmark_posts "+
-			"WHERE published = ? ORDER BY created_at DESC LIMIT 20 OFFSET 10", 1)
+		c.query(sqlList[0], 1)
 	case "findFirst":
-		c.query("SELECT id, email, name FROM benchmark_users WHERE name LIKE ? LIMIT 1", "User%")
+		c.query(sqlList[0], "User%")
 	case "findUnique":
-		c.query("SELECT id, email, name FROM benchmark_users WHERE email = ? LIMIT 1", "user500@example.com")
+		c.query(sqlList[0], "user500@example.com")
 	case "nestedFindAll":
-		users := c.query("SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100")
-		benchSink = c.materializeUsersPosts(users)
+		benchSink = c.materializeUsersPosts(c.query(sqlList[0]), sqlList[1])
 	case "nestedFindFirst":
-		users := c.query("SELECT id, email, name FROM benchmark_users WHERE name LIKE ? LIMIT 1", "User%")
-		benchSink = c.materializeUsersPosts(users)
+		benchSink = c.materializeUsersPosts(c.query(sqlList[0], "User%"), sqlList[1])
 	case "nestedFindUnique":
-		users := c.query("SELECT id, email, name FROM benchmark_users WHERE email = ? LIMIT 1", "user1@example.com")
-		benchSink = c.materializeUsersPosts(users)
+		benchSink = c.materializeUsersPosts(c.query(sqlList[0], "user1@example.com"), sqlList[1])
 	case "nestedRelations":
-		users := c.query("SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100")
-		benchSink = c.materializeUsersPostsComments(users)
+		benchSink = c.materializeUsersPostsComments(c.query(sqlList[0]), sqlList[1], sqlList[2])
 	case "compositeRelations":
-		benchSink = c.materializeComposite()
+		benchSink = c.materializeComposite(sqlList)
 	case "create":
-		c.exec("INSERT INTO benchmark_users (email, name) VALUES (?, ?)", fmt.Sprintf("new%d@bench.com", it), "New")
+		c.exec(sqlList[0], fmt.Sprintf("new%d@bench.com", it), "New")
 	case "update":
-		c.exec("UPDATE benchmark_users SET name = ? WHERE id = ?", "Updated 1", 1)
+		c.exec(sqlList[0], "Updated 1", 1)
 	case "upsert":
-		// The native module declares ` RETURNING id` here, so the baseline reads the id back too.
-		benchSink = c.writeReturningID("INSERT INTO benchmark_users (email, name) VALUES (?, ?)"+c.upsertTail(),
-			"SELECT id FROM benchmark_users WHERE email = ?", []any{"user1@example.com"}, // conflict-key recovery
+		// The captured statement declares ` RETURNING id`, so the baseline reads the id back too.
+		benchSink = c.writeReturningID(sqlList[0], recoverByEmail, []any{"user1@example.com"},
 			"user1@example.com", "Upserted One")
 	case "createMany":
-		emails, names := batchRows(it, false)
-		c.batchInsert(emails, names, "")
+		c.exec(sqlList[0], c.batchParams(sqlList[0], userRecords(it, false))...)
 	case "upsertMany":
-		// The SAME 10 records the native module upserts (`userRows(it, stable=true)`): conflicting on a
-		// different record set is a different amount of work.
-		emails, names := batchRows(it, true)
-		c.batchInsert(emails, names, c.upsertTail())
+		// The SAME 10 records the native module upserts: conflicting on a different record set is a
+		// different amount of work.
+		c.exec(sqlList[0], c.batchParams(sqlList[0], userRecords(it, true))...)
 	case "updateMany":
-		c.updateMany()
+		c.exec(sqlList[0], c.batchParams(sqlList[0], patchRecords())...)
 	case "nestedCreate":
 		c.execRaw("BEGIN")
-		uid := c.writeReturningID("INSERT INTO benchmark_users (email, name) VALUES (?, ?)",
-			"SELECT id FROM benchmark_users WHERE id = LAST_INSERT_ID()", nil, // AUTO_INCREMENT recovery
+		uid := c.writeReturningID(sqlList[0], recoverByLastInsertID, nil,
 			fmt.Sprintf("nc%d@bench.com", it), "NC")
-		c.exec("INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)", uid, "NC Post")
+		c.exec(sqlList[1], uid, "NC Post")
 		c.execRaw("COMMIT")
 	case "nestedUpsert":
 		c.execRaw("BEGIN")
-		uid := c.writeReturningID("INSERT INTO benchmark_users (email, name) VALUES (?, ?)"+c.upsertTail(),
-			"SELECT id FROM benchmark_users WHERE email = ?", []any{"user1@example.com"},
+		uid := c.writeReturningID(sqlList[0], recoverByEmail, []any{"user1@example.com"},
 			"user1@example.com", "NUp")
-		c.exec("INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)", uid, "NUp Post")
+		c.exec(sqlList[1], uid, "NUp Post")
 		c.execRaw("COMMIT")
 	case "nestedUpdate":
 		c.execRaw("BEGIN")
-		// The native module chains the dependent UPDATE off the id the first UPDATE returned; taking the
-		// id from the input instead would skip a statement's worth of work.
-		uid := c.writeReturningID("UPDATE benchmark_users SET name = ? WHERE id = ?",
-			"SELECT id FROM benchmark_users WHERE id = ?", []any{1}, // recovered by the write's own WHERE
-			"NU", 1)
-		c.exec("UPDATE benchmark_posts SET title = ? WHERE author_id = ?", "NU Post", uid)
+		// The generated runner chains the dependent UPDATE off the id the first UPDATE returned; taking
+		// the id from the input instead would skip a statement's worth of work.
+		uid := c.writeReturningID(sqlList[0], recoverByID, []any{1}, "NU", 1)
+		c.exec(sqlList[1], "NU Post", uid)
 		c.execRaw("COMMIT")
 	case "delete":
 		c.execRaw("BEGIN")
-		uid := c.writeReturningID("INSERT INTO benchmark_users (email, name) VALUES (?, ?)",
-			"SELECT id FROM benchmark_users WHERE id = LAST_INSERT_ID()", nil,
+		uid := c.writeReturningID(sqlList[0], recoverByLastInsertID, nil,
 			fmt.Sprintf("del%d@bench.com", it), "Del")
-		c.exec("DELETE FROM benchmark_users WHERE id = ?", uid)
+		c.exec(sqlList[1], uid)
 		c.execRaw("COMMIT")
 	default:
 		panic("unknown op " + name)
 	}
-}
-
-// batchInsert: ONE multi-row INSERT for the 10 rows (N+1-avoided), optional ON CONFLICT tail.
-func (c *cell) batchInsert(emails, names []string, conflict string) {
-	tuples := make([]string, 10)
-	params := make([]any, 0, 20)
-	for k := 0; k < 10; k++ {
-		tuples[k] = "(?, ?)"
-		params = append(params, emails[k], names[k])
-	}
-	sqlText := "INSERT INTO benchmark_users (email, name) VALUES " + strings.Join(tuples, ",") + conflict
-	c.exec(sqlText, params...)
-}
-
-// ── small SQL helpers ────────────────────────────────────────────────────────────────────────────────
-func placeholders(n int) string { return strings.TrimSuffix(strings.Repeat("?,", n), ",") }
-
-// tupleIn builds the composite key-set operand of `(k1,k2) IN …` in the form this dialect accepts:
-// sqlite needs a `(VALUES (…),(…))` constructor, PostgreSQL and MySQL take a bare row list.
-func (c *cell) tupleIn(rows, cols int) string {
-	one := "(" + placeholders(cols) + ")"
-	body := strings.TrimSuffix(strings.Repeat(one+",", rows), ",")
-	if c.dialect == "sqlite" {
-		return "(VALUES " + body + ")"
-	}
-	return "(" + body + ")"
-}
-
-func intArgs(ids []int64) []any {
-	out := make([]any, len(ids))
-	for i, v := range ids {
-		out[i] = v
-	}
-	return out
 }
 
 var ops = []string{
@@ -632,7 +648,7 @@ func main() {
 		c.seed(doc) // clean fixture per op (matches the python/php/rust cells); off-seam, never counted
 		c.count = 0
 		c.rows = 0
-		c.op(name, 0)
+		c.op(name, 0, doc.Ops[name])
 		q := int(c.count)
 		mark := "ok"
 		if exp, okk := expectedStatements[name]; okk && exp != q {
@@ -664,12 +680,12 @@ func main() {
 		for _, name := range ops {
 			c.seed(doc) // clean fixture per op, as in the safety pass above
 			for it := 0; it < warmup; it++ {
-				c.op(name, it+1)
+				c.op(name, it+1, doc.Ops[name])
 			}
 			for it := 0; it < reps; it++ {
 				g := it + warmup + 1
 				t := time.Now()
-				c.op(name, g)
+				c.op(name, g, doc.Ops[name])
 				fmt.Printf("sdk,%s,%s,%d,%d,%d\n", c.dialect, name, it, time.Since(t).Microseconds(), rowsByOp[name])
 			}
 		}
