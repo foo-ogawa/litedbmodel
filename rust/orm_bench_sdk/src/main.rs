@@ -11,9 +11,11 @@
 //! statement. The `safety` mode proves those query counts (2 / 2 / 3 / 3 / 1 / 1) via a per-statement
 //! counter incremented in the one exec seam (`Db`).
 //!
-//! Usage: `orm_bench_sdk <dialect> <spec> [reps=300] [warmup=30]`  (spec = sqlite file path, or — with
-//! `--features livedb` — `pg:<libpq-conn>` / `mysql:<url>`); or `orm_bench_sdk safety <dialect> <spec>`.
+//! Usage: `orm_bench_sdk <dialect> [reps=300] [warmup=30]` or `orm_bench_sdk safety <dialect>`.
+//! `<dialect>` is sqlite | postgres | mysql; postgres/mysql need `--features livedb` and take their
+//! connection from the TEST_* environment (orm_bench_common), never from a second argv knob.
 
+use orm_bench_common::{load_setup as load_setup_at, mysql_url, postgres_conn, Setup};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -389,62 +391,41 @@ impl Db for MyDb {
     }
 }
 
-fn open_db(spec: &str) -> Box<dyn Db> {
-    #[cfg(feature = "livedb")]
-    {
-        if let Some(conn) = spec.strip_prefix("pg:") {
-            return Box::new(PgDb {
-                client: postgres::Client::connect(conn, postgres::NoTls).expect("connect postgres"),
-                stmts: std::collections::HashMap::new(),
-            });
-        }
-        if let Some(url) = spec.strip_prefix("mysql:") {
-            let opts = mysql::Opts::from_url(url).expect("parse mysql url");
-            return Box::new(MyDb {
-                conn: mysql::Conn::new(opts).expect("connect mysql"),
-            });
-        }
-    }
-    // sqlite pilot: an IN-MEMORY DB, matching the native cell (`orm_bench` uses
-    // `SqliteDriver::in_memory`). Both surfaces MUST share storage — a file DB would add fsync/WAL the
-    // native in-memory cell never pays, over-crediting native on writes. The `spec` is ignored for
-    // sqlite (only the `pg:` / `mysql:` prefixes consume it).
-    let _ = spec;
-    Box::new(SqliteDb {
-        conn: rusqlite::Connection::open_in_memory().expect("open in-memory sqlite"),
+fn load_setup(dialect: &str) -> Setup {
+    load_setup_at(dialect, env!("CARGO_MANIFEST_DIR"))
+}
+
+#[cfg(feature = "livedb")]
+fn open_pg() -> Box<dyn Db> {
+    Box::new(PgDb {
+        client: postgres::Client::connect(&postgres_conn(), postgres::NoTls).expect("connect postgres"),
+        stmts: std::collections::HashMap::new(),
     })
 }
 
-// ── setup: the ONE seed SSoT (`benchmark/crosslang/.setup/<dialect>.json`, emitted from orm-domain.ts).
-//    Same fixture the native twin loads — no hand-written seed. `schema` (drop+create) is applied once
-//    at open; `delete`+`insert` (the canonical 110-user literal fixture) is re-applied before each op. ─
-struct Setup {
-    schema: Vec<String>,
-    delete: Vec<String>,
-    insert: Vec<String>,
+#[cfg(feature = "livedb")]
+fn open_mysql() -> Box<dyn Db> {
+    let opts = mysql::Opts::from_url(&mysql_url()).expect("parse mysql url");
+    Box::new(MyDb { conn: mysql::Conn::new(opts).expect("connect mysql") })
 }
-fn load_setup(dialect: &str) -> Setup {
-    let path = format!(
-        "{}/../../benchmark/crosslang/.setup/{dialect}.json",
-        env!("CARGO_MANIFEST_DIR")
-    );
-    let txt =
-        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read seed SSoT {path}: {e}"));
-    let v: serde_json::Value =
-        serde_json::from_str(&txt).unwrap_or_else(|e| panic!("parse {path}: {e}"));
-    let arr = |k: &str| {
-        v[k].as_array()
-            .unwrap_or_else(|| panic!("{path}: `{k}` not an array"))
-            .iter()
-            .map(|s| s.as_str().expect("statement is a string").to_string())
-            .collect::<Vec<_>>()
-    };
-    Setup {
-        schema: arr("schema"),
-        delete: arr("delete"),
-        insert: arr("insert"),
+
+fn open_db(dialect: &str) -> Box<dyn Db> {
+    match dialect {
+        "sqlite" => {}
+        #[cfg(feature = "livedb")]
+        "postgres" => return open_pg(),
+        #[cfg(feature = "livedb")]
+        "mysql" => return open_mysql(),
+        other => panic!(
+            "orm_bench_sdk: unknown or unbuilt target {other:?} (sqlite|postgres|mysql; the live \
+             targets need --features livedb)"
+        ),
     }
+    // sqlite: an in-memory DB. A FILE-backed sqlite would make the baseline pay fsync/WAL the
+    // native in-memory cell never pays, over-crediting native on writes.
+    Box::new(SqliteDb { conn: rusqlite::Connection::open_in_memory().expect("open sqlite") })
 }
+
 fn apply_schema(db: &mut dyn Db, setup: &Setup) {
     for sql in &setup.schema {
         db.exec(sql, &[]);
@@ -1063,24 +1044,19 @@ const OPS: &[&str] = &[
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.get(1).map(String::as_str) == Some("safety") {
-        let dialect = args.get(2).expect("safety <dialect> <spec>").clone();
-        let spec = args.get(3).expect("safety <dialect> <spec>").clone();
-        run_safety(&dialect, &spec);
+        let dialect = args.get(2).expect("safety <dialect>").clone();
+        run_safety(&dialect);
         return;
     }
     let dialect = args
         .get(1)
-        .expect("usage: orm_bench_sdk <dialect> <spec> [reps] [warmup]")
+        .expect("usage: orm_bench_sdk <dialect> [reps] [warmup]")
         .clone();
-    let spec = args
-        .get(2)
-        .expect("usage: orm_bench_sdk <dialect> <spec> [reps] [warmup]")
-        .clone();
-    let reps: u64 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(300);
-    let warmup: u64 = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(30);
+    let reps: u64 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(300);
+    let warmup: u64 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(30);
 
     let setup = load_setup(&dialect);
-    let mut db = open_db(&spec);
+    let mut db = open_db(&dialect);
     apply_schema(db.as_mut(), &setup);
     println!("cell,dialect,op,iter,us");
     for op in OPS {
@@ -1100,9 +1076,9 @@ fn main() {
 }
 
 // ── #129 safety proof: N+1-avoidance (query counts) via the per-statement QUERY_COUNT. ────────────────
-fn run_safety(dialect: &str, spec: &str) {
+fn run_safety(dialect: &str) {
     let setup = load_setup(dialect);
-    let mut db = open_db(spec);
+    let mut db = open_db(dialect);
     apply_schema(db.as_mut(), &setup);
     reseed(db.as_mut(), &setup);
     let count = |op: &str, db: &mut dyn Db| {

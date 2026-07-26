@@ -33,7 +33,7 @@ use behavior_contracts::Value;
 
 use crate::driver::Driver;
 use crate::exec_context::{self, StatementIntent};
-use crate::sql_render::render_placeholders;
+use crate::sql_render::finalize_sql;
 use crate::wire::{BehaviorError, Probe, WireList, WireRow, WireValue};
 
 // ── Ambient driver (thread-scoped) ───────────────────────────────────────────────────────────────
@@ -371,7 +371,6 @@ pub fn execute_sql(mut payload: WireRow) -> Result<WireValue, BehaviorError> {
     // accepted for signature parity with the TS leaf and does not branch the rust seam.
     let _ = bigint;
     let driver = current_driver()?;
-    let rendered = render_placeholders(sql, driver.dialect());
     // A composite relation key set (a list whose elements are key TUPLES) binds as ONE JSON
     // array-of-tuples string on EVERY dialect (#159) — PostgreSQL expands it server-side with
     // `json_array_elements`, and its native array binder would otherwise hand the server an
@@ -390,6 +389,7 @@ pub fn execute_sql(mut payload: WireRow) -> Result<WireValue, BehaviorError> {
             }
         })
         .collect();
+    let rendered = finalize_sql(sql, &value_params, driver.dialect());
     let ctx = exec_context::for_driver(driver);
     if write && !returning {
         let info = exec_context::run(&ctx, &rendered, &value_params, &StatementIntent::write())

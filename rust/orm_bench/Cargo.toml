@@ -20,6 +20,8 @@ name = "orm_bench"
 path = "src/main.rs"
 
 [dependencies]
+# The shared bench setup (seed SSoT + TEST_*-env connection targets), also consumed by the SDK cell.
+orm_bench_common = { path = "../orm_bench_common" }
 litedbmodel_runtime = { path = "../litedbmodel_runtime", default-features = false, features = ["native"] }
 # Read the ONE seed SSoT (`benchmark/crosslang/.setup/<dialect>.json`, emitted from orm-domain.ts) at
 # runtime — the cell hand-writes NO schema/seed. serde_json is a bench-only dep (NOT in the runtime).

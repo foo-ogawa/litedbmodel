@@ -9,12 +9,12 @@ pub mod mysql;
 pub mod postgres;
 pub mod sqlite;
 
-#[cfg(all(not(feature = "target_postgres"), not(feature = "target_mysql")))]
-pub use sqlite as active;
-#[cfg(feature = "target_postgres")]
-pub use postgres as active;
 #[cfg(all(feature = "target_mysql", not(feature = "target_postgres")))]
 pub use mysql as active;
+#[cfg(feature = "target_postgres")]
+pub use postgres as active;
+#[cfg(all(not(feature = "target_postgres"), not(feature = "target_mysql")))]
+pub use sqlite as active;
 
 /// The target this binary was built for — the cell reports it in the CSV `dialect` column and opens
 /// the matching DB, so a mislabelled row is impossible.

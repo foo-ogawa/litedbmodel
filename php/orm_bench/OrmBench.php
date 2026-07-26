@@ -92,13 +92,13 @@ final class OrmBench
      * or unreachable target is a LOUD failure — never a silent fall back to sqlite, which is exactly the
      * defect that let a "postgres" run execute sqlite SQL.
      */
-    public static function openDriver(string $spec = 'sqlite'): \PDO
+    public static function openDriver(string $dialect = 'sqlite'): \PDO
     {
-        if ($spec === 'sqlite') {
+        if ($dialect === 'sqlite') {
             $db = new \PDO('sqlite::memory:');
             $db->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
             $db->setAttribute(\PDO::ATTR_STRINGIFY_FETCHES, false);
-        } elseif ($spec === 'postgres') {
+        } elseif ($dialect === 'postgres') {
             $db = \LiteDbModel\Runtime\LiveDb::postgres(
                 getenv('TEST_DB_HOST') ?: 'localhost',
                 (int) (getenv('TEST_DB_PORT') ?: 5433),
@@ -106,7 +106,7 @@ final class OrmBench
                 getenv('TEST_DB_PASSWORD') ?: 'testpass',
                 getenv('TEST_DB_NAME') ?: 'testdb',
             );
-        } elseif ($spec === 'mysql') {
+        } elseif ($dialect === 'mysql') {
             $db = \LiteDbModel\Runtime\LiveDb::mysql(
                 getenv('TEST_MYSQL_HOST') ?: '127.0.0.1',
                 (int) (getenv('TEST_MYSQL_PORT') ?: 3307),
@@ -115,9 +115,9 @@ final class OrmBench
                 getenv('TEST_MYSQL_DB') ?: 'testdb',
             );
         } else {
-            throw new \RuntimeException("orm_bench: unknown target '{$spec}' (sqlite|postgres|mysql)");
+            throw new \RuntimeException("orm_bench: unknown target '{$dialect}' (sqlite|postgres|mysql)");
         }
-        foreach (self::setup($spec)['schema'] as $stmt) {
+        foreach (self::setup($dialect)['schema'] as $stmt) {
             $db->exec($stmt);
         }
         return $db;
@@ -220,7 +220,7 @@ final class OrmBench
      * @param array<string,callable> $fns
      * @return array<string,int>
      */
-    public static function safetyCounts(\PDO $driver, array $fns, string $spec = 'sqlite'): array
+    public static function safetyCounts(\PDO $driver, array $fns, string $dialect = 'sqlite'): array
     {
         $counter = new \stdClass();
         $counter->n = 0;
@@ -241,7 +241,7 @@ final class OrmBench
                 array_keys(self::TX_STMT_COUNTS),
             );
             foreach ($ops as $op) {
-                self::seed($driver, $spec); // clean fixture per op; not counted (runs off-seam)
+                self::seed($driver, $dialect); // clean fixture per op; not counted (runs off-seam)
                 $counter->n = 0;
                 self::runOp($fns, $driver, $op, 0);
                 $out[$op] = $counter->n;
@@ -254,13 +254,13 @@ final class OrmBench
     }
 
     /** The measurement loop: for each op, re-seed then time `$reps` runs; print `cell,dialect,op,iter,us`. */
-    public static function measure(string $dialect, string $spec, int $reps, int $warmup): void
+    public static function measure(string $dialect, int $reps, int $warmup): void
     {
-        $driver = self::openDriver($spec);
+        $driver = self::openDriver($dialect);
         $fns = self::boundOps($driver, $dialect);
         echo "cell,dialect,op,iter,us\n";
         foreach (self::OPS as $op) {
-            self::seed($driver, $spec); // re-seed before each op so writes/reads start from the canonical fixture
+            self::seed($driver, $dialect); // re-seed before each op so writes/reads start from the canonical fixture
             for ($it = 0; $it < $warmup; $it++) {
                 self::runOp($fns, $driver, $op, $it);
             }
@@ -275,11 +275,11 @@ final class OrmBench
     }
 
     /** The safety mode: assert each guarded op's statement count matches its expectation; print it. */
-    public static function safety(string $dialect, string $spec): void
+    public static function safety(string $dialect): void
     {
-        $driver = self::openDriver($spec);
+        $driver = self::openDriver($dialect);
         $fns = self::boundOps($driver, $dialect);
-        $counts = self::safetyCounts($driver, $fns, $spec);
+        $counts = self::safetyCounts($driver, $fns, $dialect);
         $expected = self::RELATION_QUERY_COUNTS + self::BATCH_QUERY_COUNTS + self::TX_STMT_COUNTS;
         foreach ($expected as $op => $want) {
             $got = $counts[$op];

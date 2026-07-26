@@ -19,6 +19,10 @@ name = "orm_bench_sdk"
 path = "src/main.rs"
 
 [dependencies]
+# The shared bench setup (seed SSoT + TEST_*-env connection targets), also consumed by the native
+# cell — see rust/orm_bench_common. Depends on serde_json only, so the raw-driver baseline stays free
+# of litedbmodel_runtime (#157 invariant 6).
+orm_bench_common = { path = "../orm_bench_common" }
 rusqlite = { version = "0.31", features = ["bundled"] }
 # Read the ONE seed SSoT (`benchmark/crosslang/.setup/<dialect>.json`, emitted from orm-domain.ts) at
 # runtime — same fixture the native twin loads. serde_json is a bench-only dep.

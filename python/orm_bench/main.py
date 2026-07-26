@@ -17,8 +17,8 @@ the resulting per-op callables. It holds NO hand-written exec seam and NO hand-w
     generated ``.map`` runner emits its 2 body statements via the leaf; ``with_transaction`` pins the
     tx-owned connection (the leaf resolves it via ``current_context()``) and brackets BEGIN/COMMIT.
 
-Usage: ``python -m orm_bench.main <dialect> <spec> [reps] [warmup]`` or
-``python -m orm_bench.main safety <dialect> <spec>``.
+Usage: ``python -m orm_bench.main <dialect> [reps] [warmup]`` or
+``python -m orm_bench.main safety <dialect>``.
 """
 
 from __future__ import annotations
@@ -129,7 +129,7 @@ def op_input(op: str, it: int) -> Dict[str, Any]:
     return {}
 
 
-def open_driver(spec: str) -> Any:
+def open_driver(dialect: str) -> Any:
     """The driver for ONE target DB, built with the runtime's own constructors (#156 — the cell writes no
     connection code of its own).
 
@@ -138,10 +138,12 @@ def open_driver(spec: str) -> Any:
     from the SAME single-SSoT DDL. An unreachable target is a LOUD failure — never a silent fall back to
     sqlite, which is exactly the defect that let "postgres" runs execute sqlite SQL.
     """
-    setup = setup_for(spec if spec in ("sqlite", "postgres", "mysql") else "sqlite")
-    if spec == "sqlite":
+    if dialect not in ("sqlite", "postgres", "mysql"):
+        raise SystemExit(f"orm_bench: unknown target {dialect!r} (sqlite|postgres|mysql)")
+    setup = setup_for(dialect)
+    if dialect == "sqlite":
         return SqliteDriver.in_memory(setup["schema"])
-    if spec == "postgres":
+    if dialect == "postgres":
         driver = PostgresDriver.connect(
             host=os.environ.get("TEST_DB_HOST", "localhost"),
             port=int(os.environ.get("TEST_DB_PORT", "5433")),
@@ -149,7 +151,7 @@ def open_driver(spec: str) -> Any:
             password=os.environ.get("TEST_DB_PASSWORD", "testpass"),
             dbname=os.environ.get("TEST_DB_NAME", "testdb"),
         )
-    elif spec == "mysql":
+    elif dialect == "mysql":
         driver = MysqlDriver.connect(
             host=os.environ.get("TEST_MYSQL_HOST", "127.0.0.1"),
             port=int(os.environ.get("TEST_MYSQL_PORT", "3307")),
@@ -157,8 +159,6 @@ def open_driver(spec: str) -> Any:
             password=os.environ.get("TEST_MYSQL_PASSWORD", "testpass"),
             dbname=os.environ.get("TEST_MYSQL_DB", "testdb"),
         )
-    else:
-        raise SystemExit(f"orm_bench: unknown target {spec!r} (sqlite|postgres|mysql)")
     driver.exec_ddl(list(setup["schema"]))
     return driver
 
@@ -189,8 +189,8 @@ def run_op(fns: Dict[str, Callable[..., Any]], driver: Any, op: str, it: int) ->
     return fns[op](inp)
 
 
-def _measure(dialect: str, spec: str, reps: int, warmup: int) -> None:
-    driver = open_driver(spec)
+def _measure(dialect: str, reps: int, warmup: int) -> None:
+    driver = open_driver(dialect)
     fns = bound_ops(driver, dialect)
     print("cell,dialect,op,iter,us")
     for op in OPS:
@@ -231,8 +231,8 @@ def safety_counts(driver: Any, fns: Dict[str, Callable[..., Any]], dialect: str 
     return out
 
 
-def _safety(dialect: str, spec: str) -> None:
-    driver = open_driver(spec)
+def _safety(dialect: str) -> None:
+    driver = open_driver(dialect)
     fns = bound_ops(driver, dialect)
     counts = safety_counts(driver, fns, dialect)
     expected = {**RELATION_QUERY_COUNTS, **BATCH_QUERY_COUNTS, **TX_STMT_COUNTS}
@@ -245,13 +245,12 @@ def _safety(dialect: str, spec: str) -> None:
 
 def main(argv: List[str]) -> None:
     if argv and argv[0] == "safety":
-        _safety(argv[1] if len(argv) > 1 else "sqlite", argv[2] if len(argv) > 2 else "sqlite")
+        _safety(argv[1] if len(argv) > 1 else "sqlite")
         return
     dialect = argv[0] if argv else "sqlite"
-    spec = argv[1] if len(argv) > 1 else "sqlite"
-    reps = int(argv[2]) if len(argv) > 2 else 300
-    warmup = int(argv[3]) if len(argv) > 3 else 30
-    _measure(dialect, spec, reps, warmup)
+    reps = int(argv[1]) if len(argv) > 1 else 300
+    warmup = int(argv[2]) if len(argv) > 2 else 30
+    _measure(dialect, reps, warmup)
 
 
 if __name__ == "__main__":

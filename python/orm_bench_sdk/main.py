@@ -18,8 +18,8 @@ Fairness (a strawman SDK invalidates the comparison):
     ``orm_bench.main`` — the fixture each isolated cell carries), re-seeded before each op, and the SAME
     per-op inputs (findUnique=user1, update id=1, …).
 
-Usage: ``python -m orm_bench_sdk.main <dialect> <spec> [reps] [warmup]`` or
-``python -m orm_bench_sdk.main safety <dialect> <spec>``.
+Usage: ``python -m orm_bench_sdk.main <dialect> [reps] [warmup]`` or
+``python -m orm_bench_sdk.main safety <dialect>``.
 """
 
 from __future__ import annotations
@@ -109,16 +109,16 @@ class Db:
         self._cursor(sql, ())
 
 
-def open_db(spec: str = "sqlite") -> Db:
+def open_db(dialect: str = "sqlite") -> Db:
     """The raw driver connection for ONE target — the SAME database the native cell of that dialect uses
     (#145 invariant 1), seeded from the SAME `.setup/<dialect>.json` (invariant 2). Autocommit
     everywhere, so the explicit BEGIN/COMMIT below bracket exactly one tx, as the native cell's driver
     does. No litedbmodel runtime, no generated module — raw driver only (invariant 6). An unknown or
     unreachable target is a LOUD failure."""
-    setup = lm_bench_setup.load(spec)
-    if spec == "sqlite":
+    setup = lm_bench_setup.load(dialect)
+    if dialect == "sqlite":
         conn = sqlite3.connect(":memory:", isolation_level=None, cached_statements=64)
-    elif spec == "postgres":
+    elif dialect == "postgres":
         import psycopg  # lazy: the sqlite pilot never needs it
 
         conn = psycopg.connect(
@@ -129,7 +129,7 @@ def open_db(spec: str = "sqlite") -> Db:
             dbname=os.environ.get("TEST_DB_NAME", "testdb"),
             autocommit=True,
         )
-    elif spec == "mysql":
+    elif dialect == "mysql":
         import pymysql  # lazy
 
         conn = pymysql.connect(
@@ -141,8 +141,8 @@ def open_db(spec: str = "sqlite") -> Db:
             autocommit=True,
         )
     else:
-        raise SystemExit(f"orm_bench_sdk: unknown target {spec!r} (sqlite|postgres|mysql)")
-    db = Db(conn, spec)
+        raise SystemExit(f"orm_bench_sdk: unknown target {dialect!r} (sqlite|postgres|mysql)")
+    db = Db(conn, dialect)
     for stmt in setup["schema"]:
         db.exec_script(stmt)
     db.count = 0
@@ -423,8 +423,8 @@ BATCH_QUERY_COUNTS = {"createMany": 1, "upsertMany": 1, "updateMany": 1}
 TX_STMT_COUNTS = {"nestedCreate": 4, "nestedUpsert": 5, "nestedUpdate": 4, "delete": 4}
 
 
-def _measure(dialect: str, spec: str, reps: int, warmup: int) -> None:
-    db = open_db(spec)
+def _measure(dialect: str, reps: int, warmup: int) -> None:
+    db = open_db(dialect)
     print("cell,dialect,op,iter,us")
     for op in OPS:
         seed(db)  # re-seed before each op (matches the native cell)
@@ -438,8 +438,8 @@ def _measure(dialect: str, spec: str, reps: int, warmup: int) -> None:
             print(f"sdk,{dialect},{op},{it},{us}")
 
 
-def _safety(dialect: str, spec: str) -> None:
-    db = open_db(spec)
+def _safety(dialect: str) -> None:
+    db = open_db(dialect)
     expected = {**RELATION_QUERY_COUNTS, **BATCH_QUERY_COUNTS, **TX_STMT_COUNTS}
     for op, want in expected.items():
         seed(db)
@@ -453,13 +453,12 @@ def _safety(dialect: str, spec: str) -> None:
 
 def main(argv: List[str]) -> None:
     if argv and argv[0] == "safety":
-        _safety(argv[1] if len(argv) > 1 else "sqlite", argv[2] if len(argv) > 2 else "sqlite")
+        _safety(argv[1] if len(argv) > 1 else "sqlite")
         return
     dialect = argv[0] if argv else "sqlite"
-    spec = argv[1] if len(argv) > 1 else "sqlite"
-    reps = int(argv[2]) if len(argv) > 2 else 300
-    warmup = int(argv[3]) if len(argv) > 3 else 30
-    _measure(dialect, spec, reps, warmup)
+    reps = int(argv[1]) if len(argv) > 1 else 300
+    warmup = int(argv[2]) if len(argv) > 2 else 30
+    _measure(dialect, reps, warmup)
 
 
 if __name__ == "__main__":

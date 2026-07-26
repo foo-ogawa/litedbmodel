@@ -1352,11 +1352,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "orm_bench_common"
+version = "0.0.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "orm_bench_sdk"
 version = "0.0.0"
 dependencies = [
  "bytes",
  "mysql",
+ "orm_bench_common",
  "postgres",
  "rusqlite",
  "serde_json",

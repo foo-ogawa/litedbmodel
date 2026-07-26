@@ -63,3 +63,27 @@ pub fn resolve_pg_array_cast(sql: &str, values: &[Value]) -> String {
         ),
     }
 }
+
+/// The render-layer steps that can only run once a statement's SQL text AND its bound params are
+/// final (spec §8): resolve each deferred PostgreSQL array-cast token from the array param that fills
+/// it, left-to-right, then rewrite `?` → `$N`.
+///
+/// Every execution path renders through here so none can skip a step. The native leaf transport used
+/// to call [`render_placeholders`] alone and [`resolve_pg_array_cast`] was reachable from nowhere at
+/// all, so every relation child read on PostgreSQL reached the server with a literal
+/// `= ANY($1::@@PG_ARRAY_CAST@@)`.
+pub fn finalize_sql(sql: &str, params: &[Value], dialect_name: &str) -> String {
+    if dialect_name != "postgres" {
+        return render_placeholders(sql, dialect_name);
+    }
+    let mut out = sql.to_string();
+    for p in params {
+        if !out.contains(PG_ARRAY_CAST_TOKEN) {
+            break;
+        }
+        if let Value::Arr(items) = p {
+            out = resolve_pg_array_cast(&out, items);
+        }
+    }
+    render_placeholders(&out, dialect_name)
+}

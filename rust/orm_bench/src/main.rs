@@ -10,16 +10,22 @@
 //! with (`with_ambient_driver`). Relations are N+1-free: `parents → pluck → executeSQL(WHERE fk IN …)
 //! → group` runs 1 batched child query per level (nestedFindAll=2, nestedRelations=3).
 //!
-//! Usage: `orm_bench <dialect> <spec> [reps] [warmup]`, or `orm_bench safety <dialect> <spec>`.
+//! Usage: `orm_bench [reps] [warmup]`, or `orm_bench safety`. The TARGET DB is a BUILD-time choice
+//! (`--features target_postgres` / `target_mysql`, default sqlite), never an argument — see gen/mod.rs.
 
 #[path = "gen/mod.rs"]
 mod gen;
 
 use litedbmodel_runtime::driver::{forwarding_tx, forwarding_tx_no_begin, PreparedStatement};
 use litedbmodel_runtime::exec_context::TxConnection;
-use litedbmodel_runtime::{with_ambient_driver, with_ambient_transaction, Driver, SqlFailure, SqliteDriver};
+use litedbmodel_runtime::{
+    with_ambient_driver, with_ambient_transaction, Driver, SqlFailure, SqliteDriver,
+};
 #[cfg(feature = "livedb")]
 use litedbmodel_runtime::{MysqlDriver, PostgresDriver};
+use orm_bench_common::{load_setup as load_setup_at, Setup};
+#[cfg(feature = "livedb")]
+use orm_bench_common::{mysql_url, postgres_conn};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
@@ -52,45 +58,36 @@ impl Driver for CountingDriver {
     }
 }
 
-// ── the ONE seed SSoT: `benchmark/crosslang/.setup/<dialect>.json`, emitted from orm-domain.ts by
-//    emit-setup.ts. `schema` = drop+create (applied once at open); `delete`+`insert` = the canonical
-//    110-user fixture as LITERAL SQL (re-applied before each op). The cell hand-writes NOTHING. ───────
-struct Setup {
-    schema: Vec<String>,
-    delete: Vec<String>,
-    insert: Vec<String>,
-}
+// The seed SSoT loader + connection targets are SHARED with the SDK cell (rust/orm_bench_common) —
+// both used to carry a verbatim copy.
 fn load_setup(dialect: &str) -> Setup {
-    let path = format!("{}/../../benchmark/crosslang/.setup/{dialect}.json", env!("CARGO_MANIFEST_DIR"));
-    let txt = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read seed SSoT {path}: {e}"));
-    let v: serde_json::Value = serde_json::from_str(&txt).unwrap_or_else(|e| panic!("parse {path}: {e}"));
-    let arr = |k: &str| {
-        v[k].as_array().unwrap_or_else(|| panic!("{path}: `{k}` not an array"))
-            .iter().map(|s| s.as_str().expect("statement is a string").to_string()).collect::<Vec<_>>()
-    };
-    Setup { schema: arr("schema"), delete: arr("delete"), insert: arr("insert") }
+    load_setup_at(dialect, env!("CARGO_MANIFEST_DIR"))
 }
 
-fn open_driver(spec: &str, setup: &Setup) -> Box<dyn Driver> {
-    #[cfg(feature = "livedb")]
-    {
-        if let Some(conn) = spec.strip_prefix("pg:") {
-            let d = PostgresDriver::connect(conn).expect("connect postgres");
-            for s in &setup.schema {
-                d.prepare(s).run(&[]).unwrap_or_else(|e| panic!("schema `{s}`: {}", e.message));
-            }
-            return Box::new(d);
-        }
-        if let Some(url) = spec.strip_prefix("mysql:") {
-            let d = MysqlDriver::connect(url).expect("connect mysql");
-            for s in &setup.schema {
-                d.prepare(s).run(&[]).unwrap_or_else(|e| panic!("schema `{s}`: {}", e.message));
-            }
-            return Box::new(d);
-        }
+fn open_driver(dialect: &str, setup: &Setup) -> Box<dyn Driver> {
+    match dialect {
+        "sqlite" => {}
+        #[cfg(feature = "livedb")]
+        "postgres" => return open_live(PostgresDriver::connect(&postgres_conn()).expect("connect postgres"), setup),
+        #[cfg(feature = "livedb")]
+        "mysql" => return open_live(MysqlDriver::connect(&mysql_url()).expect("connect mysql"), setup),
+        other => panic!(
+            "orm_bench: unknown or unbuilt target {other:?} (sqlite|postgres|mysql; the live targets \
+             need --features livedb)"
+        ),
     }
-    let _ = spec; // sqlite pilot: an in-memory DB created from the canonical schema (spec ignored).
     Box::new(SqliteDriver::in_memory(&setup.schema).expect("open in-memory sqlite"))
+}
+
+/// Apply this dialect's schema to a freshly connected live driver and hand it back boxed.
+#[cfg(feature = "livedb")]
+fn open_live<D: Driver + 'static>(d: D, setup: &Setup) -> Box<dyn Driver> {
+    for s in &setup.schema {
+        d.prepare(s)
+            .run(&[])
+            .unwrap_or_else(|e| panic!("schema `{s}`: {}", e.message));
+    }
+    Box::new(d)
 }
 
 // ── seed: DELETE + INSERT the canonical fixture (schema already applied at open) ────────────────────
@@ -99,7 +96,9 @@ fn open_driver(spec: &str, setup: &Setup) -> Box<dyn Driver> {
 // real children, not 1+N). Runs on the driver directly (not through the leaves) — no ambient needed.
 fn seed(d: &dyn Driver, setup: &Setup) {
     for s in setup.delete.iter().chain(setup.insert.iter()) {
-        d.prepare(s).run(&[]).unwrap_or_else(|e| panic!("seed `{s}`: {}", e.message));
+        d.prepare(s)
+            .run(&[])
+            .unwrap_or_else(|e| panic!("seed `{s}`: {}", e.message));
     }
 }
 
@@ -157,7 +156,12 @@ fn run_op(d: &dyn Driver, op: &str, it: u64) {
         }
         "updateMany" => {
             // 10 rows keyed on id (1..=10) — updates the seeded users, no-op for absent ids.
-            let rows: Vec<bg::UserPatch> = (1..=10).map(|id| bg::UserPatch { id, name: format!("Many {id}") }).collect();
+            let rows: Vec<bg::UserPatch> = (1..=10)
+                .map(|id| bg::UserPatch {
+                    id,
+                    name: format!("Many {id}"),
+                })
+                .collect();
             bg::updateMany(rows).unwrap();
         }
         // ── RETURNING-chained transactions (#142): each runs THROUGH the runtime tx scope. The runner
@@ -167,25 +171,39 @@ fn run_op(d: &dyn Driver, op: &str, it: u64) {
             // Fresh user per iteration (email is UNIQUE), then INSERT its post — INSERT user RETURNING id
             // → INSERT post (author_id = that id).
             with_ambient_transaction(d, || {
-                bg::nestedCreate(format!("nc{it}@bench.com"), "NC".to_string(), "NC Post".to_string())
+                bg::nestedCreate(
+                    format!("nc{it}@bench.com"),
+                    "NC".to_string(),
+                    "NC Post".to_string(),
+                )
             })
             .unwrap();
         }
         "nestedUpsert" => {
             // Existing email (ON CONFLICT DO UPDATE) → INSERT post keyed on the upserted user's id.
             with_ambient_transaction(d, || {
-                bg::nestedUpsert("user1@example.com".to_string(), "NUp".to_string(), "NUp Post".to_string())
+                bg::nestedUpsert(
+                    "user1@example.com".to_string(),
+                    "NUp".to_string(),
+                    "NUp Post".to_string(),
+                )
             })
             .unwrap();
         }
         "nestedUpdate" => {
             // UPDATE seeded user 1 RETURNING id → UPDATE that user's posts (author_id = 1 exists in seed).
-            with_ambient_transaction(d, || bg::nestedUpdate(1, "NU".to_string(), "NU Post".to_string())).unwrap();
+            with_ambient_transaction(d, || {
+                bg::nestedUpdate(1, "NU".to_string(), "NU Post".to_string())
+            })
+            .unwrap();
         }
         "delete" => {
             // Create-then-delete: INSERT a fresh user RETURNING id → DELETE the exact created row
             // (its RETURNING id + inserted email). Fresh email per iteration (UNIQUE).
-            with_ambient_transaction(d, || bg::delete(format!("del{it}@bench.com"), "Del".to_string())).unwrap();
+            with_ambient_transaction(d, || {
+                bg::delete(format!("del{it}@bench.com"), "Del".to_string())
+            })
+            .unwrap();
         }
         other => panic!("unknown op '{other}'"),
     }
@@ -197,8 +215,15 @@ fn run_op(d: &dyn Driver, op: &str, it: u64) {
 fn user_rows(it: u64, stable: bool) -> Vec<bg::NewUser> {
     (0..10)
         .map(|i| {
-            let email = if stable { format!("many{i}@bench.com") } else { format!("many{it}_{i}@bench.com") };
-            bg::NewUser { email, name: format!("Many {i}") }
+            let email = if stable {
+                format!("many{i}@bench.com")
+            } else {
+                format!("many{it}_{i}@bench.com")
+            };
+            bg::NewUser {
+                email,
+                name: format!("Many {i}"),
+            }
         })
         .collect()
 }
@@ -229,18 +254,18 @@ const OPS: &[&str] = &[
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.get(1).map(String::as_str) == Some("safety") {
-        let dialect = args.get(2).expect("safety <dialect> <spec>");
-        let spec = args.get(3).expect("safety <dialect> <spec>");
-        run_safety(dialect, spec);
+        run_safety();
         return;
     }
-    let dialect = args.get(1).expect("usage: orm_bench <dialect> <spec> [reps] [warmup]").clone();
-    let spec = args.get(2).expect("usage: orm_bench <dialect> <spec> [reps] [warmup]").clone();
-    let reps: u64 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(300);
-    let warmup: u64 = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(30);
+    let reps: u64 = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(300);
+    let warmup: u64 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(30);
 
-    let setup = load_setup(&dialect);
-    let driver = open_driver(&spec, &setup);
+    // The dialect is NOT an argument: the generated module is chosen at COMPILE time by the cargo
+    // feature, so a runtime knob beside it could only ever disagree with the SQL that is already baked
+    // in. `gen::TARGET` is that one source — it names the module, the DB to open and the CSV label.
+    let dialect = gen::TARGET;
+    let setup = load_setup(dialect);
+    let driver = open_driver(dialect, &setup);
     let d: &dyn Driver = driver.as_ref();
     println!("cell,dialect,op,iter,us");
     for op in OPS {
@@ -263,9 +288,12 @@ fn main() {
 }
 
 // ── N+1-avoidance proof (query counts) via the CountingDriver + the ambient seam. ──────────────────
-fn run_safety(dialect: &str, spec: &str) {
+fn run_safety() {
+    let dialect = gen::TARGET;
     let setup = load_setup(dialect);
-    let counting = CountingDriver { inner: open_driver(spec, &setup) };
+    let counting = CountingDriver {
+        inner: open_driver(dialect, &setup),
+    };
     let d: &dyn Driver = &counting;
     seed(d, &setup);
     let count = |op: &str| -> usize {
@@ -299,9 +327,17 @@ fn run_safety(dialect: &str, spec: &str) {
     // BEGIN + its 2 body statements (the RETURNING write + the dependent write) + COMMIT = 4 statements.
     // The BEGIN/COMMIT are counted because the tx runs on a forwarding handle over THIS counted driver
     // (see CountingDriver::begin_tx) — proof the generated runner emits none of them: the runtime does.
-    for (op, expected) in [("nestedCreate", 4usize), ("nestedUpsert", 4), ("nestedUpdate", 4), ("delete", 4)] {
+    for (op, expected) in [
+        ("nestedCreate", 4usize),
+        ("nestedUpsert", 4),
+        ("nestedUpdate", 4),
+        ("delete", 4),
+    ] {
         let actual = count(op);
-        assert_eq!(actual, expected, "{op} tx statement-count regression (expect BEGIN + 2 body + COMMIT)");
+        assert_eq!(
+            actual, expected,
+            "{op} tx statement-count regression (expect BEGIN + 2 body + COMMIT)"
+        );
         println!("{op} statements={actual} (expect {expected} = BEGIN + 2 body + COMMIT)");
     }
 }

@@ -72,7 +72,7 @@ pub use leaves::{
 };
 // The BC-OWNED shared wire + error-value types (#164/#165 `--shared-types-import`) the leaves BUILD
 // and the generated covered runners de-box (stand-in for post-#165 bc regen — see `wire.rs`).
-pub use sql_render::render_placeholders;
+pub use sql_render::{finalize_sql, render_placeholders};
 pub use tx_options::{
     begin_statements, check_write_allowed, is_connection_error, is_retryable_tx_error,
     isolation_prelude, write_in_read_only, write_outside_transaction, Dialect as TxDialect,

@@ -1116,6 +1116,14 @@ version = "0.0.0"
 dependencies = [
  "behavior-contracts",
  "litedbmodel_runtime",
+ "orm_bench_common",
+ "serde_json",
+]
+
+[[package]]
+name = "orm_bench_common"
+version = "0.0.0"
+dependencies = [
  "serde_json",
 ]
 

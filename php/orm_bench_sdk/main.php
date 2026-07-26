@@ -24,8 +24,8 @@ declare(strict_types=1);
  *     (findUnique=user1, update id=1, …).
  *
  * Usage:
- *   php orm_bench_sdk/main.php <dialect> <spec> [reps] [warmup]   # print the CSV (cell,dialect,op,iter,us)
- *   php orm_bench_sdk/main.php safety <dialect> <spec>            # assert + print the safety counts
+ *   php orm_bench_sdk/main.php <dialect> [reps] [warmup]   # print the CSV (cell,dialect,op,iter,us)
+ *   php orm_bench_sdk/main.php safety <dialect>            # assert + print the safety counts
  */
 
 // ── the canonical fixture from the ONE seed SSoT (benchmark/crosslang/.setup/sqlite.json, emitted from
@@ -146,32 +146,32 @@ final class Db
     }
 }
 
-function openDb(string $spec = 'sqlite'): Db
+function openDb(string $dialect = 'sqlite'): Db
 {
     // The raw PDO for ONE target — the SAME database the native cell of that dialect uses (#145
     // invariant 1), seeded from the SAME `.setup/<dialect>.json` (invariant 2). Raw driver only: no
     // litedbmodel runtime, no generated module (invariant 6). Unknown/unreachable = LOUD failure.
-    if ($spec === 'sqlite') {
+    if ($dialect === 'sqlite') {
         $pdo = new \PDO('sqlite::memory:');
-    } elseif ($spec === 'postgres') {
+    } elseif ($dialect === 'postgres') {
         $host = getenv('TEST_DB_HOST') ?: 'localhost';
         $port = (int) (getenv('TEST_DB_PORT') ?: 5433);
         $name = getenv('TEST_DB_NAME') ?: 'testdb';
         $pdo = new \PDO("pgsql:host={$host};port={$port};dbname={$name}", getenv('TEST_DB_USER') ?: 'testuser', getenv('TEST_DB_PASSWORD') ?: 'testpass');
-    } elseif ($spec === 'mysql') {
+    } elseif ($dialect === 'mysql') {
         $host = getenv('TEST_MYSQL_HOST') ?: '127.0.0.1';
         $port = (int) (getenv('TEST_MYSQL_PORT') ?: 3307);
         $name = getenv('TEST_MYSQL_DB') ?: 'testdb';
         $pdo = new \PDO("mysql:host={$host};port={$port};dbname={$name}", getenv('TEST_MYSQL_USER') ?: 'testuser', getenv('TEST_MYSQL_PASSWORD') ?: 'testpass', [\PDO::ATTR_EMULATE_PREPARES => false]);
     } else {
-        throw new \RuntimeException("orm_bench_sdk: unknown target '{$spec}' (sqlite|postgres|mysql)");
+        throw new \RuntimeException("orm_bench_sdk: unknown target '{$dialect}' (sqlite|postgres|mysql)");
     }
     $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
     $pdo->setAttribute(\PDO::ATTR_STRINGIFY_FETCHES, false);
-    foreach (benchSetup($spec)['schema'] as $stmt) {
+    foreach (benchSetup($dialect)['schema'] as $stmt) {
         $pdo->exec($stmt);
     }
-    return new Db($pdo, $spec);
+    return new Db($pdo, $dialect);
 }
 
 function seed(Db $db): void
@@ -498,9 +498,9 @@ function runOp(Db $db, string $op, int $it): void
     }
 }
 
-function measure(string $dialect, string $spec, int $reps, int $warmup): void
+function measure(string $dialect, int $reps, int $warmup): void
 {
-    $db = openDb($spec);
+    $db = openDb($dialect);
     echo "cell,dialect,op,iter,us\n";
     foreach (OPS as $op) {
         seed($db); // re-seed before each op (matches the native cell)
@@ -517,10 +517,9 @@ function measure(string $dialect, string $spec, int $reps, int $warmup): void
     }
 }
 
-function safety(string $dialect, string $spec): void
+function safety(string $dialect): void
 {
-    unset($dialect);
-    $db = openDb($spec);
+    $db = openDb($dialect);
     $expected = RELATION_QUERY_COUNTS + BATCH_QUERY_COUNTS + TX_STMT_COUNTS;
     foreach ($expected as $op => $want) {
         seed($db);
@@ -539,11 +538,10 @@ function safety(string $dialect, string $spec): void
 $args = $_SERVER['argv'];
 array_shift($args); // drop the script name
 if (($args[0] ?? null) === 'safety') {
-    safety($args[1] ?? 'sqlite', $args[2] ?? 'sqlite');
+    safety($args[1] ?? 'sqlite');
     return;
 }
 $dialect = $args[0] ?? 'sqlite';
-$spec = $args[1] ?? 'sqlite';
-$reps = isset($args[2]) ? (int) $args[2] : 300;
-$warmup = isset($args[3]) ? (int) $args[3] : 30;
-measure($dialect, $spec, $reps, $warmup);
+$reps = isset($args[1]) ? (int) $args[1] : 300;
+$warmup = isset($args[2]) ? (int) $args[2] : 30;
+measure($dialect, $reps, $warmup);
