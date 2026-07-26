@@ -284,17 +284,25 @@ export class BenchPostgres {
   }
 
   @behavior static createMany(rows: NewUser[]): WriteSummary[] {
-    const summary: WriteSummary[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) SELECT v.email, v.name FROM UNNEST(?::text[], ?::text[]) AS v(email, name)", [rows], true, false, false) as WriteSummary[];
+    // PostgreSQL's UNNEST takes ONE ARRAY PER COLUMN, so the record array is transposed into column
+    // arrays by two independent pure-expression maps in the same stage (bc#225).
+    const emails: WireValue[] = rows.map(r => r.email);
+    const names: WireValue[] = rows.map(r => r.name);
+    const summary: WriteSummary[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) SELECT v.email, v.name FROM UNNEST(?::text[], ?::text[]) AS v(email, name)", [emails, names], true, false, false) as WriteSummary[];
     return summary;
   }
 
   @behavior static upsertMany(rows: NewUser[]): WriteSummary[] {
-    const summary: WriteSummary[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) SELECT v.email, v.name FROM UNNEST(?::text[], ?::text[]) AS v(email, name) ON CONFLICT (email) DO UPDATE SET email = EXCLUDED.email, name = EXCLUDED.name", [rows, rows], true, false, false) as WriteSummary[];
+    const emails: WireValue[] = rows.map(r => r.email);
+    const names: WireValue[] = rows.map(r => r.name);
+    const summary: WriteSummary[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) SELECT v.email, v.name FROM UNNEST(?::text[], ?::text[]) AS v(email, name) ON CONFLICT (email) DO UPDATE SET email = EXCLUDED.email, name = EXCLUDED.name", [emails, names], true, false, false) as WriteSummary[];
     return summary;
   }
 
   @behavior static updateMany(rows: UserPatch[]): WriteSummary[] {
-    const summary: WriteSummary[] = Db.executeSQL("UPDATE benchmark_users AS t SET name = v.name FROM UNNEST(?::int[], ?::text[]) AS v(id, name) WHERE t.id = v.id", [rows], true, false, false) as WriteSummary[];
+    const ids: WireValue[] = rows.map(r => r.id);
+    const names: WireValue[] = rows.map(r => r.name);
+    const summary: WriteSummary[] = Db.executeSQL("UPDATE benchmark_users AS t SET name = v.name FROM UNNEST(?::int[], ?::text[]) AS v(id, name) WHERE t.id = v.id", [ids, names], true, false, false) as WriteSummary[];
     return summary;
   }
 

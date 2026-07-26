@@ -168,7 +168,7 @@ final class OrmBench
             'upsert' => ['email' => 'user1@example.com', 'name' => 'Upserted One'],
             'createMany' => ['rows' => self::userRows($it, false)],
             'upsertMany' => ['rows' => self::userRows($it, true)],
-            'updateMany' => ['rows' => array_map(static fn (int $i) => ['id' => $i, 'name' => "Many {$i}"], range(1, 10))],
+            'updateMany' => ['rows' => array_map(static fn (int $i) => (object) ['id' => $i, 'name' => "Many {$i}"], range(1, 10))],
             'nestedCreate' => ['email' => "nc{$it}@bench.com", 'name' => 'NC', 'title' => 'NC Post'],
             'nestedUpsert' => ['email' => 'user1@example.com', 'name' => 'NUp', 'title' => 'NUp Post'],
             'nestedUpdate' => ['id' => 1, 'name' => 'NU', 'title' => 'NU Post'],
@@ -186,8 +186,11 @@ final class OrmBench
      */
     private static function userRows(int $it, bool $stable): array
     {
+        // A RECORD, not a map: the vendored bc runtime types every PHP array as `arr` and only a
+        // stdClass as `object` (ExprEval::typeName), so a batch row built as an associative array
+        // cannot answer `.email` — which is exactly what the PostgreSQL UNNEST transpose reads.
         return array_map(
-            static fn (int $i) => [
+            static fn (int $i) => (object) [
                 'email' => $stable ? "many{$i}@bench.com" : "many{$it}_{$i}@bench.com",
                 'name' => "Many {$i}",
             ],

@@ -16,8 +16,8 @@
 // EXPECTED_SPEC_VERSIONS + COMPONENT_NAMES. The IR fingerprint is a BUILD-TIME return on
 // GenerateResult.fingerprint (NOT baked into the module, 0.5.0); the fail-closed skew gate
 // lives on the consumer/build side (compare it against the fingerprint of the live IR).
-import { SPEC_VERSIONS, BehaviorFailure, PlanFailure, codegenPrimitives as cgp, conformResultToOutType } from "behavior-contracts/runtime";
-import type { AsyncHandler, AsyncHandlers, Handler, Handlers, Scope, Value } from "behavior-contracts/runtime";
+import { SPEC_VERSIONS, BehaviorFailure, PlanFailure, codegenPrimitives as cgp, conformResultToOutType, runPlan, runPlanAsync, unproducedValue } from "behavior-contracts/runtime";
+import type { AsyncExec, AsyncHandler, AsyncHandlers, Exec, ExecOutcome, Handler, Handlers, OpSpec, PortableType, RelationKind, Scope, Value } from "behavior-contracts/runtime";
 
 /** Spec versions baked at generation time (fail-closed constant comparison at load). */
 export const EXPECTED_SPEC_VERSIONS = { behavior: 5, expression: 2, plan: 1 } as const;
@@ -983,111 +983,531 @@ async function run_upsert_async(h$executeSQL: AsyncHandler | undefined, input: S
 }
 
 function run_createMany(h$executeSQL: Handler | undefined, input: Scope): Value {
-  const scope: Scope = input;
-  // ── op 'n0' (executeSQL) ──
-  if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
-  const ports_n0: Record<string, Value> = {
-    "bigint": false,
-    "params": cgp.arr([cgp.ref(["rows"], scope)]),
-    "returning": false,
-    "sql": "INSERT INTO benchmark_users (email, name) SELECT v.email, v.name FROM UNNEST(?::text[], ?::text[]) AS v(email, name)",
-    "write": true,
+  const ops: OpSpec[] = [
+    { id: "n0", parent: null },
+    { id: "n1", parent: null },
+    { id: "n2", parent: 0 },
+  ];
+  const results: Record<string, Value> = {};
+  const scope = (): Scope => ({ ...input, ...results });
+  const relationKinds: (RelationKind | undefined)[] = [undefined, undefined, undefined];
+  const outTypes: Record<string, { t: PortableType; m: boolean }> = {
+    "n0": { t: "value", m: true },
+    "n1": { t: "value", m: true },
+    "n2": { t: {"arr":{"name":"WriteSummary","obj":{"changes":"int","lastInsertRowid":"int"}}}, m: false },
   };
-  const o_n0 = h$executeSQL(ports_n0, { nodeId: "n0", component: "executeSQL" });
-  if ("error" in o_n0) throw new PlanFailure("OP_FAILED", `operation 'n0' failed under 'fail' policy: ${o_n0.error}`);
-  const r_n0: Value = conformResultToOutType("n0", o_n0.ok, {"arr":{"name":"WriteSummary","obj":{"changes":"int","lastInsertRowid":"int"}}}, false);
-  scope["n0"] = r_n0;
-  return r_n0;
+  // per-op exec は事前解決した関数表で引く（線形 ID 探索は無い — bc#75）。
+  const execs: Record<string, () => ExecOutcome> = {
+    "n0": (): ExecOutcome => {
+      {
+        const over = cgp.ref(["rows"], scope());
+        if (!Array.isArray(over)) throw new BehaviorFailure("MAP_OVER_NOT_ARRAY", `map 'n0': 'over' did not evaluate to an array`);
+        const keptIdx: number[] = [];
+        const collected: Value[] = [];
+        for (let mi = 0; mi < (over as Value[]).length; mi++) {
+          const el = (over as Value[])[mi];
+          const mscope = (): Scope => ({ ...scope(), ["$e0"]: el });
+          void mscope;
+          collected.push(cgp.ref(["$e0","email"], mscope()));
+        }
+        return { ok: collected };
+      }
+    },
+    "n1": (): ExecOutcome => {
+      {
+        const over = cgp.ref(["rows"], scope());
+        if (!Array.isArray(over)) throw new BehaviorFailure("MAP_OVER_NOT_ARRAY", `map 'n1': 'over' did not evaluate to an array`);
+        const keptIdx: number[] = [];
+        const collected: Value[] = [];
+        for (let mi = 0; mi < (over as Value[]).length; mi++) {
+          const el = (over as Value[])[mi];
+          const mscope = (): Scope => ({ ...scope(), ["$e1"]: el });
+          void mscope;
+          collected.push(cgp.ref(["$e1","name"], mscope()));
+        }
+        return { ok: collected };
+      }
+    },
+    "n2": (): ExecOutcome => {
+      {
+        const ports: Record<string, Value> = {
+          "bigint": false,
+          "params": cgp.arr([cgp.ref(["n0"], scope()), cgp.ref(["n1"], scope())]),
+          "returning": false,
+          "sql": "INSERT INTO benchmark_users (email, name) SELECT v.email, v.name FROM UNNEST(?::text[], ?::text[]) AS v(email, name)",
+          "write": true,
+        };
+        if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", `component 'executeSQL' has no handler (fail-closed)`);
+        return h$executeSQL(ports, { nodeId: "n2", component: "executeSQL" });
+      }
+    },
+  };
+  const exec: Exec = (op) => {
+    const f = execs[op.id];
+    if (!f) throw new BehaviorFailure("UNKNOWN_NODE_KIND", `op '${op.id}' has no generated exec arm (fail-closed)`);
+    const outcome = f();
+    if ("ok" in outcome) {
+      const ot = outTypes[op.id];
+      results[op.id] = ot === undefined ? outcome.ok : conformResultToOutType(op.id, outcome.ok, ot.t, ot.m);
+    }
+    return outcome;
+  };
+  const run = runPlan({
+    "concurrency": 16,
+    "groups": [
+      [
+        0,
+        1
+      ],
+      [
+        2
+      ]
+    ]
+  }, ops, exec);
+  run.states.forEach((st, i) => {
+    if (st.status === "skipped") results[ops[i].id] = unproducedValue(relationKinds[i]);
+  });
+  return cgp.ref(["n2"], scope());
 }
 
 async function run_createMany_async(h$executeSQL: AsyncHandler | undefined, input: Scope): Promise<Value> {
-  const scope: Scope = input;
-  // ── op 'n0' (executeSQL) ──
-  if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
-  const ports_n0: Record<string, Value> = {
-    "bigint": false,
-    "params": cgp.arr([cgp.ref(["rows"], scope)]),
-    "returning": false,
-    "sql": "INSERT INTO benchmark_users (email, name) SELECT v.email, v.name FROM UNNEST(?::text[], ?::text[]) AS v(email, name)",
-    "write": true,
+  const ops: OpSpec[] = [
+    { id: "n0", parent: null },
+    { id: "n1", parent: null },
+    { id: "n2", parent: 0 },
+  ];
+  const results: Record<string, Value> = {};
+  const scope = (): Scope => ({ ...input, ...results });
+  const relationKinds: (RelationKind | undefined)[] = [undefined, undefined, undefined];
+  const outTypes: Record<string, { t: PortableType; m: boolean }> = {
+    "n0": { t: "value", m: true },
+    "n1": { t: "value", m: true },
+    "n2": { t: {"arr":{"name":"WriteSummary","obj":{"changes":"int","lastInsertRowid":"int"}}}, m: false },
   };
-  const o_n0 = await h$executeSQL(ports_n0, { nodeId: "n0", component: "executeSQL" });
-  if ("error" in o_n0) throw new PlanFailure("OP_FAILED", `operation 'n0' failed under 'fail' policy: ${o_n0.error}`);
-  const r_n0: Value = conformResultToOutType("n0", o_n0.ok, {"arr":{"name":"WriteSummary","obj":{"changes":"int","lastInsertRowid":"int"}}}, false);
-  scope["n0"] = r_n0;
-  return r_n0;
+  // per-op exec は事前解決した関数表で引く（線形 ID 探索は無い — bc#75）。
+  const execs: Record<string, () => Promise<ExecOutcome>> = {
+    "n0": async (): Promise<ExecOutcome> => {
+      {
+        const over = cgp.ref(["rows"], scope());
+        if (!Array.isArray(over)) throw new BehaviorFailure("MAP_OVER_NOT_ARRAY", `map 'n0': 'over' did not evaluate to an array`);
+        const keptIdx: number[] = [];
+        const collected: Value[] = [];
+        for (let mi = 0; mi < (over as Value[]).length; mi++) {
+          const el = (over as Value[])[mi];
+          const mscope = (): Scope => ({ ...scope(), ["$e0"]: el });
+          void mscope;
+          collected.push(cgp.ref(["$e0","email"], mscope()));
+        }
+        return { ok: collected };
+      }
+    },
+    "n1": async (): Promise<ExecOutcome> => {
+      {
+        const over = cgp.ref(["rows"], scope());
+        if (!Array.isArray(over)) throw new BehaviorFailure("MAP_OVER_NOT_ARRAY", `map 'n1': 'over' did not evaluate to an array`);
+        const keptIdx: number[] = [];
+        const collected: Value[] = [];
+        for (let mi = 0; mi < (over as Value[]).length; mi++) {
+          const el = (over as Value[])[mi];
+          const mscope = (): Scope => ({ ...scope(), ["$e1"]: el });
+          void mscope;
+          collected.push(cgp.ref(["$e1","name"], mscope()));
+        }
+        return { ok: collected };
+      }
+    },
+    "n2": async (): Promise<ExecOutcome> => {
+      {
+        const ports: Record<string, Value> = {
+          "bigint": false,
+          "params": cgp.arr([cgp.ref(["n0"], scope()), cgp.ref(["n1"], scope())]),
+          "returning": false,
+          "sql": "INSERT INTO benchmark_users (email, name) SELECT v.email, v.name FROM UNNEST(?::text[], ?::text[]) AS v(email, name)",
+          "write": true,
+        };
+        if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", `component 'executeSQL' has no handler (fail-closed)`);
+        return await h$executeSQL(ports, { nodeId: "n2", component: "executeSQL" });
+      }
+    },
+  };
+  const exec: AsyncExec = async (op) => {
+    const f = execs[op.id];
+    if (!f) throw new BehaviorFailure("UNKNOWN_NODE_KIND", `op '${op.id}' has no generated exec arm (fail-closed)`);
+    const outcome = await f();
+    if ("ok" in outcome) {
+      const ot = outTypes[op.id];
+      results[op.id] = ot === undefined ? outcome.ok : conformResultToOutType(op.id, outcome.ok, ot.t, ot.m);
+    }
+    return outcome;
+  };
+  const run = await runPlanAsync({
+    "concurrency": 16,
+    "groups": [
+      [
+        0,
+        1
+      ],
+      [
+        2
+      ]
+    ]
+  }, ops, exec);
+  run.states.forEach((st, i) => {
+    if (st.status === "skipped") results[ops[i].id] = unproducedValue(relationKinds[i]);
+  });
+  return cgp.ref(["n2"], scope());
 }
 
 function run_upsertMany(h$executeSQL: Handler | undefined, input: Scope): Value {
-  const scope: Scope = input;
-  // ── op 'n0' (executeSQL) ──
-  if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
-  const ports_n0: Record<string, Value> = {
-    "bigint": false,
-    "params": cgp.arr([cgp.ref(["rows"], scope), cgp.ref(["rows"], scope)]),
-    "returning": false,
-    "sql": "INSERT INTO benchmark_users (email, name) SELECT v.email, v.name FROM UNNEST(?::text[], ?::text[]) AS v(email, name) ON CONFLICT (email) DO UPDATE SET email = EXCLUDED.email, name = EXCLUDED.name",
-    "write": true,
+  const ops: OpSpec[] = [
+    { id: "n0", parent: null },
+    { id: "n1", parent: null },
+    { id: "n2", parent: 0 },
+  ];
+  const results: Record<string, Value> = {};
+  const scope = (): Scope => ({ ...input, ...results });
+  const relationKinds: (RelationKind | undefined)[] = [undefined, undefined, undefined];
+  const outTypes: Record<string, { t: PortableType; m: boolean }> = {
+    "n0": { t: "value", m: true },
+    "n1": { t: "value", m: true },
+    "n2": { t: {"arr":{"name":"WriteSummary","obj":{"changes":"int","lastInsertRowid":"int"}}}, m: false },
   };
-  const o_n0 = h$executeSQL(ports_n0, { nodeId: "n0", component: "executeSQL" });
-  if ("error" in o_n0) throw new PlanFailure("OP_FAILED", `operation 'n0' failed under 'fail' policy: ${o_n0.error}`);
-  const r_n0: Value = conformResultToOutType("n0", o_n0.ok, {"arr":{"name":"WriteSummary","obj":{"changes":"int","lastInsertRowid":"int"}}}, false);
-  scope["n0"] = r_n0;
-  return r_n0;
+  // per-op exec は事前解決した関数表で引く（線形 ID 探索は無い — bc#75）。
+  const execs: Record<string, () => ExecOutcome> = {
+    "n0": (): ExecOutcome => {
+      {
+        const over = cgp.ref(["rows"], scope());
+        if (!Array.isArray(over)) throw new BehaviorFailure("MAP_OVER_NOT_ARRAY", `map 'n0': 'over' did not evaluate to an array`);
+        const keptIdx: number[] = [];
+        const collected: Value[] = [];
+        for (let mi = 0; mi < (over as Value[]).length; mi++) {
+          const el = (over as Value[])[mi];
+          const mscope = (): Scope => ({ ...scope(), ["$e0"]: el });
+          void mscope;
+          collected.push(cgp.ref(["$e0","email"], mscope()));
+        }
+        return { ok: collected };
+      }
+    },
+    "n1": (): ExecOutcome => {
+      {
+        const over = cgp.ref(["rows"], scope());
+        if (!Array.isArray(over)) throw new BehaviorFailure("MAP_OVER_NOT_ARRAY", `map 'n1': 'over' did not evaluate to an array`);
+        const keptIdx: number[] = [];
+        const collected: Value[] = [];
+        for (let mi = 0; mi < (over as Value[]).length; mi++) {
+          const el = (over as Value[])[mi];
+          const mscope = (): Scope => ({ ...scope(), ["$e1"]: el });
+          void mscope;
+          collected.push(cgp.ref(["$e1","name"], mscope()));
+        }
+        return { ok: collected };
+      }
+    },
+    "n2": (): ExecOutcome => {
+      {
+        const ports: Record<string, Value> = {
+          "bigint": false,
+          "params": cgp.arr([cgp.ref(["n0"], scope()), cgp.ref(["n1"], scope())]),
+          "returning": false,
+          "sql": "INSERT INTO benchmark_users (email, name) SELECT v.email, v.name FROM UNNEST(?::text[], ?::text[]) AS v(email, name) ON CONFLICT (email) DO UPDATE SET email = EXCLUDED.email, name = EXCLUDED.name",
+          "write": true,
+        };
+        if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", `component 'executeSQL' has no handler (fail-closed)`);
+        return h$executeSQL(ports, { nodeId: "n2", component: "executeSQL" });
+      }
+    },
+  };
+  const exec: Exec = (op) => {
+    const f = execs[op.id];
+    if (!f) throw new BehaviorFailure("UNKNOWN_NODE_KIND", `op '${op.id}' has no generated exec arm (fail-closed)`);
+    const outcome = f();
+    if ("ok" in outcome) {
+      const ot = outTypes[op.id];
+      results[op.id] = ot === undefined ? outcome.ok : conformResultToOutType(op.id, outcome.ok, ot.t, ot.m);
+    }
+    return outcome;
+  };
+  const run = runPlan({
+    "concurrency": 16,
+    "groups": [
+      [
+        0,
+        1
+      ],
+      [
+        2
+      ]
+    ]
+  }, ops, exec);
+  run.states.forEach((st, i) => {
+    if (st.status === "skipped") results[ops[i].id] = unproducedValue(relationKinds[i]);
+  });
+  return cgp.ref(["n2"], scope());
 }
 
 async function run_upsertMany_async(h$executeSQL: AsyncHandler | undefined, input: Scope): Promise<Value> {
-  const scope: Scope = input;
-  // ── op 'n0' (executeSQL) ──
-  if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
-  const ports_n0: Record<string, Value> = {
-    "bigint": false,
-    "params": cgp.arr([cgp.ref(["rows"], scope), cgp.ref(["rows"], scope)]),
-    "returning": false,
-    "sql": "INSERT INTO benchmark_users (email, name) SELECT v.email, v.name FROM UNNEST(?::text[], ?::text[]) AS v(email, name) ON CONFLICT (email) DO UPDATE SET email = EXCLUDED.email, name = EXCLUDED.name",
-    "write": true,
+  const ops: OpSpec[] = [
+    { id: "n0", parent: null },
+    { id: "n1", parent: null },
+    { id: "n2", parent: 0 },
+  ];
+  const results: Record<string, Value> = {};
+  const scope = (): Scope => ({ ...input, ...results });
+  const relationKinds: (RelationKind | undefined)[] = [undefined, undefined, undefined];
+  const outTypes: Record<string, { t: PortableType; m: boolean }> = {
+    "n0": { t: "value", m: true },
+    "n1": { t: "value", m: true },
+    "n2": { t: {"arr":{"name":"WriteSummary","obj":{"changes":"int","lastInsertRowid":"int"}}}, m: false },
   };
-  const o_n0 = await h$executeSQL(ports_n0, { nodeId: "n0", component: "executeSQL" });
-  if ("error" in o_n0) throw new PlanFailure("OP_FAILED", `operation 'n0' failed under 'fail' policy: ${o_n0.error}`);
-  const r_n0: Value = conformResultToOutType("n0", o_n0.ok, {"arr":{"name":"WriteSummary","obj":{"changes":"int","lastInsertRowid":"int"}}}, false);
-  scope["n0"] = r_n0;
-  return r_n0;
+  // per-op exec は事前解決した関数表で引く（線形 ID 探索は無い — bc#75）。
+  const execs: Record<string, () => Promise<ExecOutcome>> = {
+    "n0": async (): Promise<ExecOutcome> => {
+      {
+        const over = cgp.ref(["rows"], scope());
+        if (!Array.isArray(over)) throw new BehaviorFailure("MAP_OVER_NOT_ARRAY", `map 'n0': 'over' did not evaluate to an array`);
+        const keptIdx: number[] = [];
+        const collected: Value[] = [];
+        for (let mi = 0; mi < (over as Value[]).length; mi++) {
+          const el = (over as Value[])[mi];
+          const mscope = (): Scope => ({ ...scope(), ["$e0"]: el });
+          void mscope;
+          collected.push(cgp.ref(["$e0","email"], mscope()));
+        }
+        return { ok: collected };
+      }
+    },
+    "n1": async (): Promise<ExecOutcome> => {
+      {
+        const over = cgp.ref(["rows"], scope());
+        if (!Array.isArray(over)) throw new BehaviorFailure("MAP_OVER_NOT_ARRAY", `map 'n1': 'over' did not evaluate to an array`);
+        const keptIdx: number[] = [];
+        const collected: Value[] = [];
+        for (let mi = 0; mi < (over as Value[]).length; mi++) {
+          const el = (over as Value[])[mi];
+          const mscope = (): Scope => ({ ...scope(), ["$e1"]: el });
+          void mscope;
+          collected.push(cgp.ref(["$e1","name"], mscope()));
+        }
+        return { ok: collected };
+      }
+    },
+    "n2": async (): Promise<ExecOutcome> => {
+      {
+        const ports: Record<string, Value> = {
+          "bigint": false,
+          "params": cgp.arr([cgp.ref(["n0"], scope()), cgp.ref(["n1"], scope())]),
+          "returning": false,
+          "sql": "INSERT INTO benchmark_users (email, name) SELECT v.email, v.name FROM UNNEST(?::text[], ?::text[]) AS v(email, name) ON CONFLICT (email) DO UPDATE SET email = EXCLUDED.email, name = EXCLUDED.name",
+          "write": true,
+        };
+        if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", `component 'executeSQL' has no handler (fail-closed)`);
+        return await h$executeSQL(ports, { nodeId: "n2", component: "executeSQL" });
+      }
+    },
+  };
+  const exec: AsyncExec = async (op) => {
+    const f = execs[op.id];
+    if (!f) throw new BehaviorFailure("UNKNOWN_NODE_KIND", `op '${op.id}' has no generated exec arm (fail-closed)`);
+    const outcome = await f();
+    if ("ok" in outcome) {
+      const ot = outTypes[op.id];
+      results[op.id] = ot === undefined ? outcome.ok : conformResultToOutType(op.id, outcome.ok, ot.t, ot.m);
+    }
+    return outcome;
+  };
+  const run = await runPlanAsync({
+    "concurrency": 16,
+    "groups": [
+      [
+        0,
+        1
+      ],
+      [
+        2
+      ]
+    ]
+  }, ops, exec);
+  run.states.forEach((st, i) => {
+    if (st.status === "skipped") results[ops[i].id] = unproducedValue(relationKinds[i]);
+  });
+  return cgp.ref(["n2"], scope());
 }
 
 function run_updateMany(h$executeSQL: Handler | undefined, input: Scope): Value {
-  const scope: Scope = input;
-  // ── op 'n0' (executeSQL) ──
-  if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
-  const ports_n0: Record<string, Value> = {
-    "bigint": false,
-    "params": cgp.arr([cgp.ref(["rows"], scope)]),
-    "returning": false,
-    "sql": "UPDATE benchmark_users AS t SET name = v.name FROM UNNEST(?::int[], ?::text[]) AS v(id, name) WHERE t.id = v.id",
-    "write": true,
+  const ops: OpSpec[] = [
+    { id: "n0", parent: null },
+    { id: "n1", parent: null },
+    { id: "n2", parent: 0 },
+  ];
+  const results: Record<string, Value> = {};
+  const scope = (): Scope => ({ ...input, ...results });
+  const relationKinds: (RelationKind | undefined)[] = [undefined, undefined, undefined];
+  const outTypes: Record<string, { t: PortableType; m: boolean }> = {
+    "n0": { t: "value", m: true },
+    "n1": { t: "value", m: true },
+    "n2": { t: {"arr":{"name":"WriteSummary","obj":{"changes":"int","lastInsertRowid":"int"}}}, m: false },
   };
-  const o_n0 = h$executeSQL(ports_n0, { nodeId: "n0", component: "executeSQL" });
-  if ("error" in o_n0) throw new PlanFailure("OP_FAILED", `operation 'n0' failed under 'fail' policy: ${o_n0.error}`);
-  const r_n0: Value = conformResultToOutType("n0", o_n0.ok, {"arr":{"name":"WriteSummary","obj":{"changes":"int","lastInsertRowid":"int"}}}, false);
-  scope["n0"] = r_n0;
-  return r_n0;
+  // per-op exec は事前解決した関数表で引く（線形 ID 探索は無い — bc#75）。
+  const execs: Record<string, () => ExecOutcome> = {
+    "n0": (): ExecOutcome => {
+      {
+        const over = cgp.ref(["rows"], scope());
+        if (!Array.isArray(over)) throw new BehaviorFailure("MAP_OVER_NOT_ARRAY", `map 'n0': 'over' did not evaluate to an array`);
+        const keptIdx: number[] = [];
+        const collected: Value[] = [];
+        for (let mi = 0; mi < (over as Value[]).length; mi++) {
+          const el = (over as Value[])[mi];
+          const mscope = (): Scope => ({ ...scope(), ["$e0"]: el });
+          void mscope;
+          collected.push(cgp.ref(["$e0","id"], mscope()));
+        }
+        return { ok: collected };
+      }
+    },
+    "n1": (): ExecOutcome => {
+      {
+        const over = cgp.ref(["rows"], scope());
+        if (!Array.isArray(over)) throw new BehaviorFailure("MAP_OVER_NOT_ARRAY", `map 'n1': 'over' did not evaluate to an array`);
+        const keptIdx: number[] = [];
+        const collected: Value[] = [];
+        for (let mi = 0; mi < (over as Value[]).length; mi++) {
+          const el = (over as Value[])[mi];
+          const mscope = (): Scope => ({ ...scope(), ["$e1"]: el });
+          void mscope;
+          collected.push(cgp.ref(["$e1","name"], mscope()));
+        }
+        return { ok: collected };
+      }
+    },
+    "n2": (): ExecOutcome => {
+      {
+        const ports: Record<string, Value> = {
+          "bigint": false,
+          "params": cgp.arr([cgp.ref(["n0"], scope()), cgp.ref(["n1"], scope())]),
+          "returning": false,
+          "sql": "UPDATE benchmark_users AS t SET name = v.name FROM UNNEST(?::int[], ?::text[]) AS v(id, name) WHERE t.id = v.id",
+          "write": true,
+        };
+        if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", `component 'executeSQL' has no handler (fail-closed)`);
+        return h$executeSQL(ports, { nodeId: "n2", component: "executeSQL" });
+      }
+    },
+  };
+  const exec: Exec = (op) => {
+    const f = execs[op.id];
+    if (!f) throw new BehaviorFailure("UNKNOWN_NODE_KIND", `op '${op.id}' has no generated exec arm (fail-closed)`);
+    const outcome = f();
+    if ("ok" in outcome) {
+      const ot = outTypes[op.id];
+      results[op.id] = ot === undefined ? outcome.ok : conformResultToOutType(op.id, outcome.ok, ot.t, ot.m);
+    }
+    return outcome;
+  };
+  const run = runPlan({
+    "concurrency": 16,
+    "groups": [
+      [
+        0,
+        1
+      ],
+      [
+        2
+      ]
+    ]
+  }, ops, exec);
+  run.states.forEach((st, i) => {
+    if (st.status === "skipped") results[ops[i].id] = unproducedValue(relationKinds[i]);
+  });
+  return cgp.ref(["n2"], scope());
 }
 
 async function run_updateMany_async(h$executeSQL: AsyncHandler | undefined, input: Scope): Promise<Value> {
-  const scope: Scope = input;
-  // ── op 'n0' (executeSQL) ──
-  if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
-  const ports_n0: Record<string, Value> = {
-    "bigint": false,
-    "params": cgp.arr([cgp.ref(["rows"], scope)]),
-    "returning": false,
-    "sql": "UPDATE benchmark_users AS t SET name = v.name FROM UNNEST(?::int[], ?::text[]) AS v(id, name) WHERE t.id = v.id",
-    "write": true,
+  const ops: OpSpec[] = [
+    { id: "n0", parent: null },
+    { id: "n1", parent: null },
+    { id: "n2", parent: 0 },
+  ];
+  const results: Record<string, Value> = {};
+  const scope = (): Scope => ({ ...input, ...results });
+  const relationKinds: (RelationKind | undefined)[] = [undefined, undefined, undefined];
+  const outTypes: Record<string, { t: PortableType; m: boolean }> = {
+    "n0": { t: "value", m: true },
+    "n1": { t: "value", m: true },
+    "n2": { t: {"arr":{"name":"WriteSummary","obj":{"changes":"int","lastInsertRowid":"int"}}}, m: false },
   };
-  const o_n0 = await h$executeSQL(ports_n0, { nodeId: "n0", component: "executeSQL" });
-  if ("error" in o_n0) throw new PlanFailure("OP_FAILED", `operation 'n0' failed under 'fail' policy: ${o_n0.error}`);
-  const r_n0: Value = conformResultToOutType("n0", o_n0.ok, {"arr":{"name":"WriteSummary","obj":{"changes":"int","lastInsertRowid":"int"}}}, false);
-  scope["n0"] = r_n0;
-  return r_n0;
+  // per-op exec は事前解決した関数表で引く（線形 ID 探索は無い — bc#75）。
+  const execs: Record<string, () => Promise<ExecOutcome>> = {
+    "n0": async (): Promise<ExecOutcome> => {
+      {
+        const over = cgp.ref(["rows"], scope());
+        if (!Array.isArray(over)) throw new BehaviorFailure("MAP_OVER_NOT_ARRAY", `map 'n0': 'over' did not evaluate to an array`);
+        const keptIdx: number[] = [];
+        const collected: Value[] = [];
+        for (let mi = 0; mi < (over as Value[]).length; mi++) {
+          const el = (over as Value[])[mi];
+          const mscope = (): Scope => ({ ...scope(), ["$e0"]: el });
+          void mscope;
+          collected.push(cgp.ref(["$e0","id"], mscope()));
+        }
+        return { ok: collected };
+      }
+    },
+    "n1": async (): Promise<ExecOutcome> => {
+      {
+        const over = cgp.ref(["rows"], scope());
+        if (!Array.isArray(over)) throw new BehaviorFailure("MAP_OVER_NOT_ARRAY", `map 'n1': 'over' did not evaluate to an array`);
+        const keptIdx: number[] = [];
+        const collected: Value[] = [];
+        for (let mi = 0; mi < (over as Value[]).length; mi++) {
+          const el = (over as Value[])[mi];
+          const mscope = (): Scope => ({ ...scope(), ["$e1"]: el });
+          void mscope;
+          collected.push(cgp.ref(["$e1","name"], mscope()));
+        }
+        return { ok: collected };
+      }
+    },
+    "n2": async (): Promise<ExecOutcome> => {
+      {
+        const ports: Record<string, Value> = {
+          "bigint": false,
+          "params": cgp.arr([cgp.ref(["n0"], scope()), cgp.ref(["n1"], scope())]),
+          "returning": false,
+          "sql": "UPDATE benchmark_users AS t SET name = v.name FROM UNNEST(?::int[], ?::text[]) AS v(id, name) WHERE t.id = v.id",
+          "write": true,
+        };
+        if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", `component 'executeSQL' has no handler (fail-closed)`);
+        return await h$executeSQL(ports, { nodeId: "n2", component: "executeSQL" });
+      }
+    },
+  };
+  const exec: AsyncExec = async (op) => {
+    const f = execs[op.id];
+    if (!f) throw new BehaviorFailure("UNKNOWN_NODE_KIND", `op '${op.id}' has no generated exec arm (fail-closed)`);
+    const outcome = await f();
+    if ("ok" in outcome) {
+      const ot = outTypes[op.id];
+      results[op.id] = ot === undefined ? outcome.ok : conformResultToOutType(op.id, outcome.ok, ot.t, ot.m);
+    }
+    return outcome;
+  };
+  const run = await runPlanAsync({
+    "concurrency": 16,
+    "groups": [
+      [
+        0,
+        1
+      ],
+      [
+        2
+      ]
+    ]
+  }, ops, exec);
+  run.states.forEach((st, i) => {
+    if (st.status === "skipped") results[ops[i].id] = unproducedValue(relationKinds[i]);
+  });
+  return cgp.ref(["n2"], scope());
 }
 
 function run_nestedCreate(h$executeSQL: Handler | undefined, input: Scope): Value {

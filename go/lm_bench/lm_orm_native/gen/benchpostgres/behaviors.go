@@ -17,7 +17,7 @@ import (
 var ExpectedSpecVersions = map[string]int64{"behavior": 5, "expression": 2, "plan": 1}
 
 // COMBINED READ layer (bc#90 — the RUNTIME-FREE read de-box; STRUCT-ONLY, FULLY-NATIVE surface). A
-// covered read is a strictly-sequential typed componentRef chain (point reads + relationKind:single
+// covered read is a strictly-sequential typed componentRef chain (point reads + relation children
 // children), emitted ONLY here: each node builds a native ports struct by direct field assignment (every
 // port is a CONCRETE Go value — string / bool / []string projection / int64 limit — NO boxed Value, NO
 // PortReader accessor); the runner calls the op-agnostic leaf TRANSPORT symbol (default Leaf_<comp>)
@@ -28,7 +28,7 @@ var ExpectedSpecVersions = map[string]int64{"behavior": 5, "expression": 2, "pla
 // carries NO bc-runtime reference at all — failures use the LOCAL *BehaviorError (same codes, byte-equal to
 // run_behavior). Exec is INLINE sequential (no plan driver) so a relation child reads the parent's REAL
 // struct result via direct field access and the child-present decision is made from the real parent value —
-// relationSingle / connection converge with run_behavior (fixes #323/#74). The exposed API is the 1:1
+// relation / connection converge with run_behavior (fixes #323/#74). The exposed API is the 1:1
 // STRUCT-returning entry <Method>(<positional params>) (the In_<comp> box removed); the consumer supplies
 // the leaf transport symbols (default same-package Leaf_<comp>, or a leafTransport import). This module is
 // FULLY NATIVE: a naive grep for
@@ -221,7 +221,7 @@ const (
 // de-plumbed path. Ports are a native struct (direct field assignment); the handler
 // result is materialized straight into the node's outType struct. Node results are typed
 // struct locals; a relation child reads the parent's REAL struct result via direct field
-// access (child-present decision from the real parent value — relationSingle / connection
+// access (child-present decision from the real parent value — relation / connection
 // converge). A strictly-sequential plan is a plain statement list (no plan driver); a
 // real-concurrency stage (bc#87) is EXPLICIT static parallel orchestration — one goroutine
 // per statically-known parallel op, bounded by the static plan.concurrency via a semaphore
@@ -302,7 +302,7 @@ func FindAll() ([]UserRow, error) {
 // de-plumbed path. Ports are a native struct (direct field assignment); the handler
 // result is materialized straight into the node's outType struct. Node results are typed
 // struct locals; a relation child reads the parent's REAL struct result via direct field
-// access (child-present decision from the real parent value — relationSingle / connection
+// access (child-present decision from the real parent value — relation / connection
 // converge). A strictly-sequential plan is a plain statement list (no plan driver); a
 // real-concurrency stage (bc#87) is EXPLICIT static parallel orchestration — one goroutine
 // per statically-known parallel op, bounded by the static plan.concurrency via a semaphore
@@ -410,7 +410,7 @@ func FilterPaginateSort(published int64) ([]PostFullRow, error) {
 // de-plumbed path. Ports are a native struct (direct field assignment); the handler
 // result is materialized straight into the node's outType struct. Node results are typed
 // struct locals; a relation child reads the parent's REAL struct result via direct field
-// access (child-present decision from the real parent value — relationSingle / connection
+// access (child-present decision from the real parent value — relation / connection
 // converge). A strictly-sequential plan is a plain statement list (no plan driver); a
 // real-concurrency stage (bc#87) is EXPLICIT static parallel orchestration — one goroutine
 // per statically-known parallel op, bounded by the static plan.concurrency via a semaphore
@@ -491,7 +491,7 @@ func FindFirst(name string) ([]UserRow, error) {
 // de-plumbed path. Ports are a native struct (direct field assignment); the handler
 // result is materialized straight into the node's outType struct. Node results are typed
 // struct locals; a relation child reads the parent's REAL struct result via direct field
-// access (child-present decision from the real parent value — relationSingle / connection
+// access (child-present decision from the real parent value — relation / connection
 // converge). A strictly-sequential plan is a plain statement list (no plan driver); a
 // real-concurrency stage (bc#87) is EXPLICIT static parallel orchestration — one goroutine
 // per statically-known parallel op, bounded by the static plan.concurrency via a semaphore
@@ -572,7 +572,7 @@ func FindUnique(email string) ([]UserRow, error) {
 // de-plumbed path. Ports are a native struct (direct field assignment); the handler
 // result is materialized straight into the node's outType struct. Node results are typed
 // struct locals; a relation child reads the parent's REAL struct result via direct field
-// access (child-present decision from the real parent value — relationSingle / connection
+// access (child-present decision from the real parent value — relation / connection
 // converge). A strictly-sequential plan is a plain statement list (no plan driver); a
 // real-concurrency stage (bc#87) is EXPLICIT static parallel orchestration — one goroutine
 // per statically-known parallel op, bounded by the static plan.concurrency via a semaphore
@@ -779,7 +779,7 @@ func NestedFindAll() ([]UserWithPosts, error) {
 // de-plumbed path. Ports are a native struct (direct field assignment); the handler
 // result is materialized straight into the node's outType struct. Node results are typed
 // struct locals; a relation child reads the parent's REAL struct result via direct field
-// access (child-present decision from the real parent value — relationSingle / connection
+// access (child-present decision from the real parent value — relation / connection
 // converge). A strictly-sequential plan is a plain statement list (no plan driver); a
 // real-concurrency stage (bc#87) is EXPLICIT static parallel orchestration — one goroutine
 // per statically-known parallel op, bounded by the static plan.concurrency via a semaphore
@@ -986,7 +986,7 @@ func NestedFindFirst(name string) ([]UserWithPosts, error) {
 // de-plumbed path. Ports are a native struct (direct field assignment); the handler
 // result is materialized straight into the node's outType struct. Node results are typed
 // struct locals; a relation child reads the parent's REAL struct result via direct field
-// access (child-present decision from the real parent value — relationSingle / connection
+// access (child-present decision from the real parent value — relation / connection
 // converge). A strictly-sequential plan is a plain statement list (no plan driver); a
 // real-concurrency stage (bc#87) is EXPLICIT static parallel orchestration — one goroutine
 // per statically-known parallel op, bounded by the static plan.concurrency via a semaphore
@@ -1193,7 +1193,7 @@ func NestedFindUnique(email string) ([]UserWithPosts, error) {
 // de-plumbed path. Ports are a native struct (direct field assignment); the handler
 // result is materialized straight into the node's outType struct. Node results are typed
 // struct locals; a relation child reads the parent's REAL struct result via direct field
-// access (child-present decision from the real parent value — relationSingle / connection
+// access (child-present decision from the real parent value — relation / connection
 // converge). A strictly-sequential plan is a plain statement list (no plan driver); a
 // real-concurrency stage (bc#87) is EXPLICIT static parallel orchestration — one goroutine
 // per statically-known parallel op, bounded by the static plan.concurrency via a semaphore
@@ -1522,7 +1522,7 @@ func NestedRelations() ([]UserWithPostsAndComments, error) {
 // de-plumbed path. Ports are a native struct (direct field assignment); the handler
 // result is materialized straight into the node's outType struct. Node results are typed
 // struct locals; a relation child reads the parent's REAL struct result via direct field
-// access (child-present decision from the real parent value — relationSingle / connection
+// access (child-present decision from the real parent value — relation / connection
 // converge). A strictly-sequential plan is a plain statement list (no plan driver); a
 // real-concurrency stage (bc#87) is EXPLICIT static parallel orchestration — one goroutine
 // per statically-known parallel op, bounded by the static plan.concurrency via a semaphore
@@ -1866,7 +1866,7 @@ func CompositeRelations() ([]TenantUserWithPosts, error) {
 // de-plumbed path. Ports are a native struct (direct field assignment); the handler
 // result is materialized straight into the node's outType struct. Node results are typed
 // struct locals; a relation child reads the parent's REAL struct result via direct field
-// access (child-present decision from the real parent value — relationSingle / connection
+// access (child-present decision from the real parent value — relation / connection
 // converge). A strictly-sequential plan is a plain statement list (no plan driver); a
 // real-concurrency stage (bc#87) is EXPLICIT static parallel orchestration — one goroutine
 // per statically-known parallel op, bounded by the static plan.concurrency via a semaphore
@@ -1947,7 +1947,7 @@ func Create(email string, name string) ([]WriteSummary, error) {
 // de-plumbed path. Ports are a native struct (direct field assignment); the handler
 // result is materialized straight into the node's outType struct. Node results are typed
 // struct locals; a relation child reads the parent's REAL struct result via direct field
-// access (child-present decision from the real parent value — relationSingle / connection
+// access (child-present decision from the real parent value — relation / connection
 // converge). A strictly-sequential plan is a plain statement list (no plan driver); a
 // real-concurrency stage (bc#87) is EXPLICIT static parallel orchestration — one goroutine
 // per statically-known parallel op, bounded by the static plan.concurrency via a semaphore
@@ -2028,7 +2028,7 @@ func Update(id int64, name string) ([]WriteSummary, error) {
 // de-plumbed path. Ports are a native struct (direct field assignment); the handler
 // result is materialized straight into the node's outType struct. Node results are typed
 // struct locals; a relation child reads the parent's REAL struct result via direct field
-// access (child-present decision from the real parent value — relationSingle / connection
+// access (child-present decision from the real parent value — relation / connection
 // converge). A strictly-sequential plan is a plain statement list (no plan driver); a
 // real-concurrency stage (bc#87) is EXPLICIT static parallel orchestration — one goroutine
 // per statically-known parallel op, bounded by the static plan.concurrency via a semaphore
@@ -2095,7 +2095,7 @@ func Upsert(email string, name string) ([]IdRow, error) {
 // de-plumbed path. Ports are a native struct (direct field assignment); the handler
 // result is materialized straight into the node's outType struct. Node results are typed
 // struct locals; a relation child reads the parent's REAL struct result via direct field
-// access (child-present decision from the real parent value — relationSingle / connection
+// access (child-present decision from the real parent value — relation / connection
 // converge). A strictly-sequential plan is a plain statement list (no plan driver); a
 // real-concurrency stage (bc#87) is EXPLICIT static parallel orchestration — one goroutine
 // per statically-known parallel op, bounded by the static plan.concurrency via a semaphore
@@ -2104,79 +2104,105 @@ func Upsert(email string, name string) ([]IdRow, error) {
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
 func CreateMany(rows []NewUser) ([]WriteSummary, error) {
-	var t_n0 []WriteSummary
+	var t_n0 []wire.WireValue
 	produced_n0 := false
 	_ = t_n0
 	_ = produced_n0
-	// ── op 'n0' (executeSQL) ──
-	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range rows { it0 = append(it0, wire.WireRowOf([]wire.WireField{{Key: "email", Val: wire.WireStr(e0.Email)}, {Key: "name", Val: wire.WireStr(e0.Name)}})) }; return wire.WireListOf(it0) }()})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("INSERT INTO benchmark_users (email, name) SELECT v.email, v.name FROM UNNEST(?::text[], ?::text[]) AS v(email, name)")}, wire.WireField{Key: "write", Val: wire.WireBool(true)}})
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
-	if wire_n0Err != nil {
-		return nil, opFailed("n0", "fail", wire_n0Err)
-	}
-	p0 := wire_n0.AsList()
-	if p0.Kind == probeGot {
-		list0 := make([]WriteSummary, 0, p0.Got.Len())
-		for i0 := 0; i0 < p0.Got.Len(); i0++ {
-			var el0 WriteSummary
-			p1 := p0.Got.ElemRow(i0)
-			if p1.Kind == probeGot {
-				var rec1 WriteSummary
-				p2 := p1.Got.ProbeNumber("changes")
-				if p2.Kind == probeGot {
-					n2, nErr2 := strconv.ParseInt(p2.Got, 10, 64)
-					if nErr2 != nil {
-						return nil, deOverflow("WriteSummary", "changes", "int", p2.ActualWireType, p2.Got)
-					}
-					rec1.Changes = n2
-				} else if p2.Kind == probeWrong {
-					return nil, deTypeMismatch("WriteSummary", "changes", "int", p2.ActualWireType, p2.Raw)
-				} else if p2.Kind == probeNull {
-					return nil, deTypeMismatch("WriteSummary", "changes", "int", p2.ActualWireType, p2.Raw)
-				} else {
-					return nil, deMissingField("WriteSummary", "changes", "int")
-				}
-				p3 := p1.Got.ProbeNumber("lastInsertRowid")
-				if p3.Kind == probeGot {
-					n3, nErr3 := strconv.ParseInt(p3.Got, 10, 64)
-					if nErr3 != nil {
-						return nil, deOverflow("WriteSummary", "lastInsertRowid", "int", p3.ActualWireType, p3.Got)
-					}
-					rec1.LastInsertRowid = n3
-				} else if p3.Kind == probeWrong {
-					return nil, deTypeMismatch("WriteSummary", "lastInsertRowid", "int", p3.ActualWireType, p3.Raw)
-				} else if p3.Kind == probeNull {
-					return nil, deTypeMismatch("WriteSummary", "lastInsertRowid", "int", p3.ActualWireType, p3.Raw)
-				} else {
-					return nil, deMissingField("WriteSummary", "lastInsertRowid", "int")
-				}
-				el0 = rec1
-			} else if p1.Kind == probeWrong {
-				return nil, deTypeMismatch("n0", "n0", "obj{changes:int,lastInsertRowid:int}", p1.ActualWireType, p1.Raw)
-			} else if p1.Kind == probeNull {
-				return nil, deTypeMismatch("n0", "n0", "obj{changes:int,lastInsertRowid:int}", p1.ActualWireType, p1.Raw)
-			} else {
-				return nil, deMissingField("n0", "n0", "obj{changes:int,lastInsertRowid:int}")
-			}
-			list0 = append(list0, el0)
-		}
-		t_n0 = list0
-	} else if p0.Kind == probeWrong {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{changes:int,lastInsertRowid:int})", p0.ActualWireType, p0.Raw)
-	} else if p0.Kind == probeNull {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{changes:int,lastInsertRowid:int})", p0.ActualWireType, p0.Raw)
-	} else {
-		return nil, deMissingField("n0", "n0", "arr(obj{changes:int,lastInsertRowid:int})")
+	var t_n1 []wire.WireValue
+	produced_n1 := false
+	_ = t_n1
+	_ = produced_n1
+	var t_n2 []WriteSummary
+	produced_n2 := false
+	_ = t_n2
+	_ = produced_n2
+	// ── bc#87 real-concurrency stage {"n0", "n1"} — static parallel
+	// orchestration (goroutine per op, bound=16); preflight+commit in ascending index order.
+	// ── map 'n0' (pure expression, per-element, into:null) ──
+	over_n0 := rows
+	t_n0 = make([]wire.WireValue, 0, len(over_n0))
+	for _, oel_n0 := range over_n0 {
+		t_n0 = append(t_n0, wire.WireStr(oel_n0.Email))
 	}
 	produced_n0 = true
-	return t_n0, nil
+	// ── map 'n1' (pure expression, per-element, into:null) ──
+	over_n1 := rows
+	t_n1 = make([]wire.WireValue, 0, len(over_n1))
+	for _, oel_n1 := range over_n1 {
+		t_n1 = append(t_n1, wire.WireStr(oel_n1.Name))
+	}
+	produced_n1 = true
+	// ── op 'n2' (executeSQL, parent:n0) ──
+	if produced_n0 {
+		payload_n2 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireListOf(t_n0), wire.WireListOf(t_n1)})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("INSERT INTO benchmark_users (email, name) SELECT v.email, v.name FROM UNNEST(?::text[], ?::text[]) AS v(email, name)")}, wire.WireField{Key: "write", Val: wire.WireBool(true)}})
+		wire_n2, wire_n2Err := litedbmodel_runtime.ExecuteSQL(payload_n2)
+		if wire_n2Err != nil {
+			return nil, opFailed("n2", "fail", wire_n2Err)
+		}
+		p0 := wire_n2.AsList()
+		if p0.Kind == probeGot {
+			list0 := make([]WriteSummary, 0, p0.Got.Len())
+			for i0 := 0; i0 < p0.Got.Len(); i0++ {
+				var el0 WriteSummary
+				p1 := p0.Got.ElemRow(i0)
+				if p1.Kind == probeGot {
+					var rec1 WriteSummary
+					p2 := p1.Got.ProbeNumber("changes")
+					if p2.Kind == probeGot {
+						n2, nErr2 := strconv.ParseInt(p2.Got, 10, 64)
+						if nErr2 != nil {
+							return nil, deOverflow("WriteSummary", "changes", "int", p2.ActualWireType, p2.Got)
+						}
+						rec1.Changes = n2
+					} else if p2.Kind == probeWrong {
+						return nil, deTypeMismatch("WriteSummary", "changes", "int", p2.ActualWireType, p2.Raw)
+					} else if p2.Kind == probeNull {
+						return nil, deTypeMismatch("WriteSummary", "changes", "int", p2.ActualWireType, p2.Raw)
+					} else {
+						return nil, deMissingField("WriteSummary", "changes", "int")
+					}
+					p3 := p1.Got.ProbeNumber("lastInsertRowid")
+					if p3.Kind == probeGot {
+						n3, nErr3 := strconv.ParseInt(p3.Got, 10, 64)
+						if nErr3 != nil {
+							return nil, deOverflow("WriteSummary", "lastInsertRowid", "int", p3.ActualWireType, p3.Got)
+						}
+						rec1.LastInsertRowid = n3
+					} else if p3.Kind == probeWrong {
+						return nil, deTypeMismatch("WriteSummary", "lastInsertRowid", "int", p3.ActualWireType, p3.Raw)
+					} else if p3.Kind == probeNull {
+						return nil, deTypeMismatch("WriteSummary", "lastInsertRowid", "int", p3.ActualWireType, p3.Raw)
+					} else {
+						return nil, deMissingField("WriteSummary", "lastInsertRowid", "int")
+					}
+					el0 = rec1
+				} else if p1.Kind == probeWrong {
+					return nil, deTypeMismatch("n2", "n2", "obj{changes:int,lastInsertRowid:int}", p1.ActualWireType, p1.Raw)
+				} else if p1.Kind == probeNull {
+					return nil, deTypeMismatch("n2", "n2", "obj{changes:int,lastInsertRowid:int}", p1.ActualWireType, p1.Raw)
+				} else {
+					return nil, deMissingField("n2", "n2", "obj{changes:int,lastInsertRowid:int}")
+				}
+				list0 = append(list0, el0)
+			}
+			t_n2 = list0
+		} else if p0.Kind == probeWrong {
+			return nil, deTypeMismatch("n2", "n2", "arr(obj{changes:int,lastInsertRowid:int})", p0.ActualWireType, p0.Raw)
+		} else if p0.Kind == probeNull {
+			return nil, deTypeMismatch("n2", "n2", "arr(obj{changes:int,lastInsertRowid:int})", p0.ActualWireType, p0.Raw)
+		} else {
+			return nil, deMissingField("n2", "n2", "arr(obj{changes:int,lastInsertRowid:int})")
+		}
+		produced_n2 = true
+	}
+	return t_n2, nil
 }
 
 // UpsertMany — the STRUCT-RETURNING combined read (bc#77/#87): the fully
 // de-plumbed path. Ports are a native struct (direct field assignment); the handler
 // result is materialized straight into the node's outType struct. Node results are typed
 // struct locals; a relation child reads the parent's REAL struct result via direct field
-// access (child-present decision from the real parent value — relationSingle / connection
+// access (child-present decision from the real parent value — relation / connection
 // converge). A strictly-sequential plan is a plain statement list (no plan driver); a
 // real-concurrency stage (bc#87) is EXPLICIT static parallel orchestration — one goroutine
 // per statically-known parallel op, bounded by the static plan.concurrency via a semaphore
@@ -2185,79 +2211,105 @@ func CreateMany(rows []NewUser) ([]WriteSummary, error) {
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
 func UpsertMany(rows []NewUser) ([]WriteSummary, error) {
-	var t_n0 []WriteSummary
+	var t_n0 []wire.WireValue
 	produced_n0 := false
 	_ = t_n0
 	_ = produced_n0
-	// ── op 'n0' (executeSQL) ──
-	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range rows { it0 = append(it0, wire.WireRowOf([]wire.WireField{{Key: "email", Val: wire.WireStr(e0.Email)}, {Key: "name", Val: wire.WireStr(e0.Name)}})) }; return wire.WireListOf(it0) }(), func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range rows { it0 = append(it0, wire.WireRowOf([]wire.WireField{{Key: "email", Val: wire.WireStr(e0.Email)}, {Key: "name", Val: wire.WireStr(e0.Name)}})) }; return wire.WireListOf(it0) }()})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("INSERT INTO benchmark_users (email, name) SELECT v.email, v.name FROM UNNEST(?::text[], ?::text[]) AS v(email, name) ON CONFLICT (email) DO UPDATE SET email = EXCLUDED.email, name = EXCLUDED.name")}, wire.WireField{Key: "write", Val: wire.WireBool(true)}})
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
-	if wire_n0Err != nil {
-		return nil, opFailed("n0", "fail", wire_n0Err)
-	}
-	p0 := wire_n0.AsList()
-	if p0.Kind == probeGot {
-		list0 := make([]WriteSummary, 0, p0.Got.Len())
-		for i0 := 0; i0 < p0.Got.Len(); i0++ {
-			var el0 WriteSummary
-			p1 := p0.Got.ElemRow(i0)
-			if p1.Kind == probeGot {
-				var rec1 WriteSummary
-				p2 := p1.Got.ProbeNumber("changes")
-				if p2.Kind == probeGot {
-					n2, nErr2 := strconv.ParseInt(p2.Got, 10, 64)
-					if nErr2 != nil {
-						return nil, deOverflow("WriteSummary", "changes", "int", p2.ActualWireType, p2.Got)
-					}
-					rec1.Changes = n2
-				} else if p2.Kind == probeWrong {
-					return nil, deTypeMismatch("WriteSummary", "changes", "int", p2.ActualWireType, p2.Raw)
-				} else if p2.Kind == probeNull {
-					return nil, deTypeMismatch("WriteSummary", "changes", "int", p2.ActualWireType, p2.Raw)
-				} else {
-					return nil, deMissingField("WriteSummary", "changes", "int")
-				}
-				p3 := p1.Got.ProbeNumber("lastInsertRowid")
-				if p3.Kind == probeGot {
-					n3, nErr3 := strconv.ParseInt(p3.Got, 10, 64)
-					if nErr3 != nil {
-						return nil, deOverflow("WriteSummary", "lastInsertRowid", "int", p3.ActualWireType, p3.Got)
-					}
-					rec1.LastInsertRowid = n3
-				} else if p3.Kind == probeWrong {
-					return nil, deTypeMismatch("WriteSummary", "lastInsertRowid", "int", p3.ActualWireType, p3.Raw)
-				} else if p3.Kind == probeNull {
-					return nil, deTypeMismatch("WriteSummary", "lastInsertRowid", "int", p3.ActualWireType, p3.Raw)
-				} else {
-					return nil, deMissingField("WriteSummary", "lastInsertRowid", "int")
-				}
-				el0 = rec1
-			} else if p1.Kind == probeWrong {
-				return nil, deTypeMismatch("n0", "n0", "obj{changes:int,lastInsertRowid:int}", p1.ActualWireType, p1.Raw)
-			} else if p1.Kind == probeNull {
-				return nil, deTypeMismatch("n0", "n0", "obj{changes:int,lastInsertRowid:int}", p1.ActualWireType, p1.Raw)
-			} else {
-				return nil, deMissingField("n0", "n0", "obj{changes:int,lastInsertRowid:int}")
-			}
-			list0 = append(list0, el0)
-		}
-		t_n0 = list0
-	} else if p0.Kind == probeWrong {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{changes:int,lastInsertRowid:int})", p0.ActualWireType, p0.Raw)
-	} else if p0.Kind == probeNull {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{changes:int,lastInsertRowid:int})", p0.ActualWireType, p0.Raw)
-	} else {
-		return nil, deMissingField("n0", "n0", "arr(obj{changes:int,lastInsertRowid:int})")
+	var t_n1 []wire.WireValue
+	produced_n1 := false
+	_ = t_n1
+	_ = produced_n1
+	var t_n2 []WriteSummary
+	produced_n2 := false
+	_ = t_n2
+	_ = produced_n2
+	// ── bc#87 real-concurrency stage {"n0", "n1"} — static parallel
+	// orchestration (goroutine per op, bound=16); preflight+commit in ascending index order.
+	// ── map 'n0' (pure expression, per-element, into:null) ──
+	over_n0 := rows
+	t_n0 = make([]wire.WireValue, 0, len(over_n0))
+	for _, oel_n0 := range over_n0 {
+		t_n0 = append(t_n0, wire.WireStr(oel_n0.Email))
 	}
 	produced_n0 = true
-	return t_n0, nil
+	// ── map 'n1' (pure expression, per-element, into:null) ──
+	over_n1 := rows
+	t_n1 = make([]wire.WireValue, 0, len(over_n1))
+	for _, oel_n1 := range over_n1 {
+		t_n1 = append(t_n1, wire.WireStr(oel_n1.Name))
+	}
+	produced_n1 = true
+	// ── op 'n2' (executeSQL, parent:n0) ──
+	if produced_n0 {
+		payload_n2 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireListOf(t_n0), wire.WireListOf(t_n1)})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("INSERT INTO benchmark_users (email, name) SELECT v.email, v.name FROM UNNEST(?::text[], ?::text[]) AS v(email, name) ON CONFLICT (email) DO UPDATE SET email = EXCLUDED.email, name = EXCLUDED.name")}, wire.WireField{Key: "write", Val: wire.WireBool(true)}})
+		wire_n2, wire_n2Err := litedbmodel_runtime.ExecuteSQL(payload_n2)
+		if wire_n2Err != nil {
+			return nil, opFailed("n2", "fail", wire_n2Err)
+		}
+		p0 := wire_n2.AsList()
+		if p0.Kind == probeGot {
+			list0 := make([]WriteSummary, 0, p0.Got.Len())
+			for i0 := 0; i0 < p0.Got.Len(); i0++ {
+				var el0 WriteSummary
+				p1 := p0.Got.ElemRow(i0)
+				if p1.Kind == probeGot {
+					var rec1 WriteSummary
+					p2 := p1.Got.ProbeNumber("changes")
+					if p2.Kind == probeGot {
+						n2, nErr2 := strconv.ParseInt(p2.Got, 10, 64)
+						if nErr2 != nil {
+							return nil, deOverflow("WriteSummary", "changes", "int", p2.ActualWireType, p2.Got)
+						}
+						rec1.Changes = n2
+					} else if p2.Kind == probeWrong {
+						return nil, deTypeMismatch("WriteSummary", "changes", "int", p2.ActualWireType, p2.Raw)
+					} else if p2.Kind == probeNull {
+						return nil, deTypeMismatch("WriteSummary", "changes", "int", p2.ActualWireType, p2.Raw)
+					} else {
+						return nil, deMissingField("WriteSummary", "changes", "int")
+					}
+					p3 := p1.Got.ProbeNumber("lastInsertRowid")
+					if p3.Kind == probeGot {
+						n3, nErr3 := strconv.ParseInt(p3.Got, 10, 64)
+						if nErr3 != nil {
+							return nil, deOverflow("WriteSummary", "lastInsertRowid", "int", p3.ActualWireType, p3.Got)
+						}
+						rec1.LastInsertRowid = n3
+					} else if p3.Kind == probeWrong {
+						return nil, deTypeMismatch("WriteSummary", "lastInsertRowid", "int", p3.ActualWireType, p3.Raw)
+					} else if p3.Kind == probeNull {
+						return nil, deTypeMismatch("WriteSummary", "lastInsertRowid", "int", p3.ActualWireType, p3.Raw)
+					} else {
+						return nil, deMissingField("WriteSummary", "lastInsertRowid", "int")
+					}
+					el0 = rec1
+				} else if p1.Kind == probeWrong {
+					return nil, deTypeMismatch("n2", "n2", "obj{changes:int,lastInsertRowid:int}", p1.ActualWireType, p1.Raw)
+				} else if p1.Kind == probeNull {
+					return nil, deTypeMismatch("n2", "n2", "obj{changes:int,lastInsertRowid:int}", p1.ActualWireType, p1.Raw)
+				} else {
+					return nil, deMissingField("n2", "n2", "obj{changes:int,lastInsertRowid:int}")
+				}
+				list0 = append(list0, el0)
+			}
+			t_n2 = list0
+		} else if p0.Kind == probeWrong {
+			return nil, deTypeMismatch("n2", "n2", "arr(obj{changes:int,lastInsertRowid:int})", p0.ActualWireType, p0.Raw)
+		} else if p0.Kind == probeNull {
+			return nil, deTypeMismatch("n2", "n2", "arr(obj{changes:int,lastInsertRowid:int})", p0.ActualWireType, p0.Raw)
+		} else {
+			return nil, deMissingField("n2", "n2", "arr(obj{changes:int,lastInsertRowid:int})")
+		}
+		produced_n2 = true
+	}
+	return t_n2, nil
 }
 
 // UpdateMany — the STRUCT-RETURNING combined read (bc#77/#87): the fully
 // de-plumbed path. Ports are a native struct (direct field assignment); the handler
 // result is materialized straight into the node's outType struct. Node results are typed
 // struct locals; a relation child reads the parent's REAL struct result via direct field
-// access (child-present decision from the real parent value — relationSingle / connection
+// access (child-present decision from the real parent value — relation / connection
 // converge). A strictly-sequential plan is a plain statement list (no plan driver); a
 // real-concurrency stage (bc#87) is EXPLICIT static parallel orchestration — one goroutine
 // per statically-known parallel op, bounded by the static plan.concurrency via a semaphore
@@ -2266,79 +2318,105 @@ func UpsertMany(rows []NewUser) ([]WriteSummary, error) {
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
 func UpdateMany(rows []UserPatch) ([]WriteSummary, error) {
-	var t_n0 []WriteSummary
+	var t_n0 []wire.WireValue
 	produced_n0 := false
 	_ = t_n0
 	_ = produced_n0
-	// ── op 'n0' (executeSQL) ──
-	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range rows { it0 = append(it0, wire.WireRowOf([]wire.WireField{{Key: "id", Val: wire.WireInt(e0.Id)}, {Key: "name", Val: wire.WireStr(e0.Name)}})) }; return wire.WireListOf(it0) }()})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("UPDATE benchmark_users AS t SET name = v.name FROM UNNEST(?::int[], ?::text[]) AS v(id, name) WHERE t.id = v.id")}, wire.WireField{Key: "write", Val: wire.WireBool(true)}})
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
-	if wire_n0Err != nil {
-		return nil, opFailed("n0", "fail", wire_n0Err)
-	}
-	p0 := wire_n0.AsList()
-	if p0.Kind == probeGot {
-		list0 := make([]WriteSummary, 0, p0.Got.Len())
-		for i0 := 0; i0 < p0.Got.Len(); i0++ {
-			var el0 WriteSummary
-			p1 := p0.Got.ElemRow(i0)
-			if p1.Kind == probeGot {
-				var rec1 WriteSummary
-				p2 := p1.Got.ProbeNumber("changes")
-				if p2.Kind == probeGot {
-					n2, nErr2 := strconv.ParseInt(p2.Got, 10, 64)
-					if nErr2 != nil {
-						return nil, deOverflow("WriteSummary", "changes", "int", p2.ActualWireType, p2.Got)
-					}
-					rec1.Changes = n2
-				} else if p2.Kind == probeWrong {
-					return nil, deTypeMismatch("WriteSummary", "changes", "int", p2.ActualWireType, p2.Raw)
-				} else if p2.Kind == probeNull {
-					return nil, deTypeMismatch("WriteSummary", "changes", "int", p2.ActualWireType, p2.Raw)
-				} else {
-					return nil, deMissingField("WriteSummary", "changes", "int")
-				}
-				p3 := p1.Got.ProbeNumber("lastInsertRowid")
-				if p3.Kind == probeGot {
-					n3, nErr3 := strconv.ParseInt(p3.Got, 10, 64)
-					if nErr3 != nil {
-						return nil, deOverflow("WriteSummary", "lastInsertRowid", "int", p3.ActualWireType, p3.Got)
-					}
-					rec1.LastInsertRowid = n3
-				} else if p3.Kind == probeWrong {
-					return nil, deTypeMismatch("WriteSummary", "lastInsertRowid", "int", p3.ActualWireType, p3.Raw)
-				} else if p3.Kind == probeNull {
-					return nil, deTypeMismatch("WriteSummary", "lastInsertRowid", "int", p3.ActualWireType, p3.Raw)
-				} else {
-					return nil, deMissingField("WriteSummary", "lastInsertRowid", "int")
-				}
-				el0 = rec1
-			} else if p1.Kind == probeWrong {
-				return nil, deTypeMismatch("n0", "n0", "obj{changes:int,lastInsertRowid:int}", p1.ActualWireType, p1.Raw)
-			} else if p1.Kind == probeNull {
-				return nil, deTypeMismatch("n0", "n0", "obj{changes:int,lastInsertRowid:int}", p1.ActualWireType, p1.Raw)
-			} else {
-				return nil, deMissingField("n0", "n0", "obj{changes:int,lastInsertRowid:int}")
-			}
-			list0 = append(list0, el0)
-		}
-		t_n0 = list0
-	} else if p0.Kind == probeWrong {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{changes:int,lastInsertRowid:int})", p0.ActualWireType, p0.Raw)
-	} else if p0.Kind == probeNull {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{changes:int,lastInsertRowid:int})", p0.ActualWireType, p0.Raw)
-	} else {
-		return nil, deMissingField("n0", "n0", "arr(obj{changes:int,lastInsertRowid:int})")
+	var t_n1 []wire.WireValue
+	produced_n1 := false
+	_ = t_n1
+	_ = produced_n1
+	var t_n2 []WriteSummary
+	produced_n2 := false
+	_ = t_n2
+	_ = produced_n2
+	// ── bc#87 real-concurrency stage {"n0", "n1"} — static parallel
+	// orchestration (goroutine per op, bound=16); preflight+commit in ascending index order.
+	// ── map 'n0' (pure expression, per-element, into:null) ──
+	over_n0 := rows
+	t_n0 = make([]wire.WireValue, 0, len(over_n0))
+	for _, oel_n0 := range over_n0 {
+		t_n0 = append(t_n0, wire.WireInt(oel_n0.Id))
 	}
 	produced_n0 = true
-	return t_n0, nil
+	// ── map 'n1' (pure expression, per-element, into:null) ──
+	over_n1 := rows
+	t_n1 = make([]wire.WireValue, 0, len(over_n1))
+	for _, oel_n1 := range over_n1 {
+		t_n1 = append(t_n1, wire.WireStr(oel_n1.Name))
+	}
+	produced_n1 = true
+	// ── op 'n2' (executeSQL, parent:n0) ──
+	if produced_n0 {
+		payload_n2 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireListOf(t_n0), wire.WireListOf(t_n1)})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("UPDATE benchmark_users AS t SET name = v.name FROM UNNEST(?::int[], ?::text[]) AS v(id, name) WHERE t.id = v.id")}, wire.WireField{Key: "write", Val: wire.WireBool(true)}})
+		wire_n2, wire_n2Err := litedbmodel_runtime.ExecuteSQL(payload_n2)
+		if wire_n2Err != nil {
+			return nil, opFailed("n2", "fail", wire_n2Err)
+		}
+		p0 := wire_n2.AsList()
+		if p0.Kind == probeGot {
+			list0 := make([]WriteSummary, 0, p0.Got.Len())
+			for i0 := 0; i0 < p0.Got.Len(); i0++ {
+				var el0 WriteSummary
+				p1 := p0.Got.ElemRow(i0)
+				if p1.Kind == probeGot {
+					var rec1 WriteSummary
+					p2 := p1.Got.ProbeNumber("changes")
+					if p2.Kind == probeGot {
+						n2, nErr2 := strconv.ParseInt(p2.Got, 10, 64)
+						if nErr2 != nil {
+							return nil, deOverflow("WriteSummary", "changes", "int", p2.ActualWireType, p2.Got)
+						}
+						rec1.Changes = n2
+					} else if p2.Kind == probeWrong {
+						return nil, deTypeMismatch("WriteSummary", "changes", "int", p2.ActualWireType, p2.Raw)
+					} else if p2.Kind == probeNull {
+						return nil, deTypeMismatch("WriteSummary", "changes", "int", p2.ActualWireType, p2.Raw)
+					} else {
+						return nil, deMissingField("WriteSummary", "changes", "int")
+					}
+					p3 := p1.Got.ProbeNumber("lastInsertRowid")
+					if p3.Kind == probeGot {
+						n3, nErr3 := strconv.ParseInt(p3.Got, 10, 64)
+						if nErr3 != nil {
+							return nil, deOverflow("WriteSummary", "lastInsertRowid", "int", p3.ActualWireType, p3.Got)
+						}
+						rec1.LastInsertRowid = n3
+					} else if p3.Kind == probeWrong {
+						return nil, deTypeMismatch("WriteSummary", "lastInsertRowid", "int", p3.ActualWireType, p3.Raw)
+					} else if p3.Kind == probeNull {
+						return nil, deTypeMismatch("WriteSummary", "lastInsertRowid", "int", p3.ActualWireType, p3.Raw)
+					} else {
+						return nil, deMissingField("WriteSummary", "lastInsertRowid", "int")
+					}
+					el0 = rec1
+				} else if p1.Kind == probeWrong {
+					return nil, deTypeMismatch("n2", "n2", "obj{changes:int,lastInsertRowid:int}", p1.ActualWireType, p1.Raw)
+				} else if p1.Kind == probeNull {
+					return nil, deTypeMismatch("n2", "n2", "obj{changes:int,lastInsertRowid:int}", p1.ActualWireType, p1.Raw)
+				} else {
+					return nil, deMissingField("n2", "n2", "obj{changes:int,lastInsertRowid:int}")
+				}
+				list0 = append(list0, el0)
+			}
+			t_n2 = list0
+		} else if p0.Kind == probeWrong {
+			return nil, deTypeMismatch("n2", "n2", "arr(obj{changes:int,lastInsertRowid:int})", p0.ActualWireType, p0.Raw)
+		} else if p0.Kind == probeNull {
+			return nil, deTypeMismatch("n2", "n2", "arr(obj{changes:int,lastInsertRowid:int})", p0.ActualWireType, p0.Raw)
+		} else {
+			return nil, deMissingField("n2", "n2", "arr(obj{changes:int,lastInsertRowid:int})")
+		}
+		produced_n2 = true
+	}
+	return t_n2, nil
 }
 
 // NestedCreate — the STRUCT-RETURNING combined read (bc#77/#87): the fully
 // de-plumbed path. Ports are a native struct (direct field assignment); the handler
 // result is materialized straight into the node's outType struct. Node results are typed
 // struct locals; a relation child reads the parent's REAL struct result via direct field
-// access (child-present decision from the real parent value — relationSingle / connection
+// access (child-present decision from the real parent value — relation / connection
 // converge). A strictly-sequential plan is a plain statement list (no plan driver); a
 // real-concurrency stage (bc#87) is EXPLICIT static parallel orchestration — one goroutine
 // per statically-known parallel op, bounded by the static plan.concurrency via a semaphore
@@ -2479,7 +2557,7 @@ func NestedCreate(email string, name string, title string) ([][]WriteSummary, er
 // de-plumbed path. Ports are a native struct (direct field assignment); the handler
 // result is materialized straight into the node's outType struct. Node results are typed
 // struct locals; a relation child reads the parent's REAL struct result via direct field
-// access (child-present decision from the real parent value — relationSingle / connection
+// access (child-present decision from the real parent value — relation / connection
 // converge). A strictly-sequential plan is a plain statement list (no plan driver); a
 // real-concurrency stage (bc#87) is EXPLICIT static parallel orchestration — one goroutine
 // per statically-known parallel op, bounded by the static plan.concurrency via a semaphore
@@ -2620,7 +2698,7 @@ func NestedUpsert(email string, name string, title string) ([][]WriteSummary, er
 // de-plumbed path. Ports are a native struct (direct field assignment); the handler
 // result is materialized straight into the node's outType struct. Node results are typed
 // struct locals; a relation child reads the parent's REAL struct result via direct field
-// access (child-present decision from the real parent value — relationSingle / connection
+// access (child-present decision from the real parent value — relation / connection
 // converge). A strictly-sequential plan is a plain statement list (no plan driver); a
 // real-concurrency stage (bc#87) is EXPLICIT static parallel orchestration — one goroutine
 // per statically-known parallel op, bounded by the static plan.concurrency via a semaphore
@@ -2761,7 +2839,7 @@ func NestedUpdate(id int64, name string, title string) ([][]WriteSummary, error)
 // de-plumbed path. Ports are a native struct (direct field assignment); the handler
 // result is materialized straight into the node's outType struct. Node results are typed
 // struct locals; a relation child reads the parent's REAL struct result via direct field
-// access (child-present decision from the real parent value — relationSingle / connection
+// access (child-present decision from the real parent value — relation / connection
 // converge). A strictly-sequential plan is a plain statement list (no plan driver); a
 // real-concurrency stage (bc#87) is EXPLICIT static parallel orchestration — one goroutine
 // per statically-known parallel op, bounded by the static plan.concurrency via a semaphore

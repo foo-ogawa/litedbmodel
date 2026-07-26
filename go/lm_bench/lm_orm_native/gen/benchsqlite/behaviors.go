@@ -17,7 +17,7 @@ import (
 var ExpectedSpecVersions = map[string]int64{"behavior": 5, "expression": 2, "plan": 1}
 
 // COMBINED READ layer (bc#90 — the RUNTIME-FREE read de-box; STRUCT-ONLY, FULLY-NATIVE surface). A
-// covered read is a strictly-sequential typed componentRef chain (point reads + relationKind:single
+// covered read is a strictly-sequential typed componentRef chain (point reads + relation children
 // children), emitted ONLY here: each node builds a native ports struct by direct field assignment (every
 // port is a CONCRETE Go value — string / bool / []string projection / int64 limit — NO boxed Value, NO
 // PortReader accessor); the runner calls the op-agnostic leaf TRANSPORT symbol (default Leaf_<comp>)
@@ -28,7 +28,7 @@ var ExpectedSpecVersions = map[string]int64{"behavior": 5, "expression": 2, "pla
 // carries NO bc-runtime reference at all — failures use the LOCAL *BehaviorError (same codes, byte-equal to
 // run_behavior). Exec is INLINE sequential (no plan driver) so a relation child reads the parent's REAL
 // struct result via direct field access and the child-present decision is made from the real parent value —
-// relationSingle / connection converge with run_behavior (fixes #323/#74). The exposed API is the 1:1
+// relation / connection converge with run_behavior (fixes #323/#74). The exposed API is the 1:1
 // STRUCT-returning entry <Method>(<positional params>) (the In_<comp> box removed); the consumer supplies
 // the leaf transport symbols (default same-package Leaf_<comp>, or a leafTransport import). This module is
 // FULLY NATIVE: a naive grep for
@@ -221,7 +221,7 @@ const (
 // de-plumbed path. Ports are a native struct (direct field assignment); the handler
 // result is materialized straight into the node's outType struct. Node results are typed
 // struct locals; a relation child reads the parent's REAL struct result via direct field
-// access (child-present decision from the real parent value — relationSingle / connection
+// access (child-present decision from the real parent value — relation / connection
 // converge). A strictly-sequential plan is a plain statement list (no plan driver); a
 // real-concurrency stage (bc#87) is EXPLICIT static parallel orchestration — one goroutine
 // per statically-known parallel op, bounded by the static plan.concurrency via a semaphore
@@ -302,7 +302,7 @@ func FindAll() ([]UserRow, error) {
 // de-plumbed path. Ports are a native struct (direct field assignment); the handler
 // result is materialized straight into the node's outType struct. Node results are typed
 // struct locals; a relation child reads the parent's REAL struct result via direct field
-// access (child-present decision from the real parent value — relationSingle / connection
+// access (child-present decision from the real parent value — relation / connection
 // converge). A strictly-sequential plan is a plain statement list (no plan driver); a
 // real-concurrency stage (bc#87) is EXPLICIT static parallel orchestration — one goroutine
 // per statically-known parallel op, bounded by the static plan.concurrency via a semaphore
@@ -410,7 +410,7 @@ func FilterPaginateSort(published int64) ([]PostFullRow, error) {
 // de-plumbed path. Ports are a native struct (direct field assignment); the handler
 // result is materialized straight into the node's outType struct. Node results are typed
 // struct locals; a relation child reads the parent's REAL struct result via direct field
-// access (child-present decision from the real parent value — relationSingle / connection
+// access (child-present decision from the real parent value — relation / connection
 // converge). A strictly-sequential plan is a plain statement list (no plan driver); a
 // real-concurrency stage (bc#87) is EXPLICIT static parallel orchestration — one goroutine
 // per statically-known parallel op, bounded by the static plan.concurrency via a semaphore
@@ -491,7 +491,7 @@ func FindFirst(name string) ([]UserRow, error) {
 // de-plumbed path. Ports are a native struct (direct field assignment); the handler
 // result is materialized straight into the node's outType struct. Node results are typed
 // struct locals; a relation child reads the parent's REAL struct result via direct field
-// access (child-present decision from the real parent value — relationSingle / connection
+// access (child-present decision from the real parent value — relation / connection
 // converge). A strictly-sequential plan is a plain statement list (no plan driver); a
 // real-concurrency stage (bc#87) is EXPLICIT static parallel orchestration — one goroutine
 // per statically-known parallel op, bounded by the static plan.concurrency via a semaphore
@@ -572,7 +572,7 @@ func FindUnique(email string) ([]UserRow, error) {
 // de-plumbed path. Ports are a native struct (direct field assignment); the handler
 // result is materialized straight into the node's outType struct. Node results are typed
 // struct locals; a relation child reads the parent's REAL struct result via direct field
-// access (child-present decision from the real parent value — relationSingle / connection
+// access (child-present decision from the real parent value — relation / connection
 // converge). A strictly-sequential plan is a plain statement list (no plan driver); a
 // real-concurrency stage (bc#87) is EXPLICIT static parallel orchestration — one goroutine
 // per statically-known parallel op, bounded by the static plan.concurrency via a semaphore
@@ -779,7 +779,7 @@ func NestedFindAll() ([]UserWithPosts, error) {
 // de-plumbed path. Ports are a native struct (direct field assignment); the handler
 // result is materialized straight into the node's outType struct. Node results are typed
 // struct locals; a relation child reads the parent's REAL struct result via direct field
-// access (child-present decision from the real parent value — relationSingle / connection
+// access (child-present decision from the real parent value — relation / connection
 // converge). A strictly-sequential plan is a plain statement list (no plan driver); a
 // real-concurrency stage (bc#87) is EXPLICIT static parallel orchestration — one goroutine
 // per statically-known parallel op, bounded by the static plan.concurrency via a semaphore
@@ -986,7 +986,7 @@ func NestedFindFirst(name string) ([]UserWithPosts, error) {
 // de-plumbed path. Ports are a native struct (direct field assignment); the handler
 // result is materialized straight into the node's outType struct. Node results are typed
 // struct locals; a relation child reads the parent's REAL struct result via direct field
-// access (child-present decision from the real parent value — relationSingle / connection
+// access (child-present decision from the real parent value — relation / connection
 // converge). A strictly-sequential plan is a plain statement list (no plan driver); a
 // real-concurrency stage (bc#87) is EXPLICIT static parallel orchestration — one goroutine
 // per statically-known parallel op, bounded by the static plan.concurrency via a semaphore
@@ -1193,7 +1193,7 @@ func NestedFindUnique(email string) ([]UserWithPosts, error) {
 // de-plumbed path. Ports are a native struct (direct field assignment); the handler
 // result is materialized straight into the node's outType struct. Node results are typed
 // struct locals; a relation child reads the parent's REAL struct result via direct field
-// access (child-present decision from the real parent value — relationSingle / connection
+// access (child-present decision from the real parent value — relation / connection
 // converge). A strictly-sequential plan is a plain statement list (no plan driver); a
 // real-concurrency stage (bc#87) is EXPLICIT static parallel orchestration — one goroutine
 // per statically-known parallel op, bounded by the static plan.concurrency via a semaphore
@@ -1522,7 +1522,7 @@ func NestedRelations() ([]UserWithPostsAndComments, error) {
 // de-plumbed path. Ports are a native struct (direct field assignment); the handler
 // result is materialized straight into the node's outType struct. Node results are typed
 // struct locals; a relation child reads the parent's REAL struct result via direct field
-// access (child-present decision from the real parent value — relationSingle / connection
+// access (child-present decision from the real parent value — relation / connection
 // converge). A strictly-sequential plan is a plain statement list (no plan driver); a
 // real-concurrency stage (bc#87) is EXPLICIT static parallel orchestration — one goroutine
 // per statically-known parallel op, bounded by the static plan.concurrency via a semaphore
@@ -1866,7 +1866,7 @@ func CompositeRelations() ([]TenantUserWithPosts, error) {
 // de-plumbed path. Ports are a native struct (direct field assignment); the handler
 // result is materialized straight into the node's outType struct. Node results are typed
 // struct locals; a relation child reads the parent's REAL struct result via direct field
-// access (child-present decision from the real parent value — relationSingle / connection
+// access (child-present decision from the real parent value — relation / connection
 // converge). A strictly-sequential plan is a plain statement list (no plan driver); a
 // real-concurrency stage (bc#87) is EXPLICIT static parallel orchestration — one goroutine
 // per statically-known parallel op, bounded by the static plan.concurrency via a semaphore
@@ -1947,7 +1947,7 @@ func Create(email string, name string) ([]WriteSummary, error) {
 // de-plumbed path. Ports are a native struct (direct field assignment); the handler
 // result is materialized straight into the node's outType struct. Node results are typed
 // struct locals; a relation child reads the parent's REAL struct result via direct field
-// access (child-present decision from the real parent value — relationSingle / connection
+// access (child-present decision from the real parent value — relation / connection
 // converge). A strictly-sequential plan is a plain statement list (no plan driver); a
 // real-concurrency stage (bc#87) is EXPLICIT static parallel orchestration — one goroutine
 // per statically-known parallel op, bounded by the static plan.concurrency via a semaphore
@@ -2028,7 +2028,7 @@ func Update(id int64, name string) ([]WriteSummary, error) {
 // de-plumbed path. Ports are a native struct (direct field assignment); the handler
 // result is materialized straight into the node's outType struct. Node results are typed
 // struct locals; a relation child reads the parent's REAL struct result via direct field
-// access (child-present decision from the real parent value — relationSingle / connection
+// access (child-present decision from the real parent value — relation / connection
 // converge). A strictly-sequential plan is a plain statement list (no plan driver); a
 // real-concurrency stage (bc#87) is EXPLICIT static parallel orchestration — one goroutine
 // per statically-known parallel op, bounded by the static plan.concurrency via a semaphore
@@ -2095,7 +2095,7 @@ func Upsert(email string, name string) ([]IdRow, error) {
 // de-plumbed path. Ports are a native struct (direct field assignment); the handler
 // result is materialized straight into the node's outType struct. Node results are typed
 // struct locals; a relation child reads the parent's REAL struct result via direct field
-// access (child-present decision from the real parent value — relationSingle / connection
+// access (child-present decision from the real parent value — relation / connection
 // converge). A strictly-sequential plan is a plain statement list (no plan driver); a
 // real-concurrency stage (bc#87) is EXPLICIT static parallel orchestration — one goroutine
 // per statically-known parallel op, bounded by the static plan.concurrency via a semaphore
@@ -2176,7 +2176,7 @@ func CreateMany(rows []NewUser) ([]WriteSummary, error) {
 // de-plumbed path. Ports are a native struct (direct field assignment); the handler
 // result is materialized straight into the node's outType struct. Node results are typed
 // struct locals; a relation child reads the parent's REAL struct result via direct field
-// access (child-present decision from the real parent value — relationSingle / connection
+// access (child-present decision from the real parent value — relation / connection
 // converge). A strictly-sequential plan is a plain statement list (no plan driver); a
 // real-concurrency stage (bc#87) is EXPLICIT static parallel orchestration — one goroutine
 // per statically-known parallel op, bounded by the static plan.concurrency via a semaphore
@@ -2257,7 +2257,7 @@ func UpsertMany(rows []NewUser) ([]WriteSummary, error) {
 // de-plumbed path. Ports are a native struct (direct field assignment); the handler
 // result is materialized straight into the node's outType struct. Node results are typed
 // struct locals; a relation child reads the parent's REAL struct result via direct field
-// access (child-present decision from the real parent value — relationSingle / connection
+// access (child-present decision from the real parent value — relation / connection
 // converge). A strictly-sequential plan is a plain statement list (no plan driver); a
 // real-concurrency stage (bc#87) is EXPLICIT static parallel orchestration — one goroutine
 // per statically-known parallel op, bounded by the static plan.concurrency via a semaphore
@@ -2338,7 +2338,7 @@ func UpdateMany(rows []UserPatch) ([]WriteSummary, error) {
 // de-plumbed path. Ports are a native struct (direct field assignment); the handler
 // result is materialized straight into the node's outType struct. Node results are typed
 // struct locals; a relation child reads the parent's REAL struct result via direct field
-// access (child-present decision from the real parent value — relationSingle / connection
+// access (child-present decision from the real parent value — relation / connection
 // converge). A strictly-sequential plan is a plain statement list (no plan driver); a
 // real-concurrency stage (bc#87) is EXPLICIT static parallel orchestration — one goroutine
 // per statically-known parallel op, bounded by the static plan.concurrency via a semaphore
@@ -2479,7 +2479,7 @@ func NestedCreate(email string, name string, title string) ([][]WriteSummary, er
 // de-plumbed path. Ports are a native struct (direct field assignment); the handler
 // result is materialized straight into the node's outType struct. Node results are typed
 // struct locals; a relation child reads the parent's REAL struct result via direct field
-// access (child-present decision from the real parent value — relationSingle / connection
+// access (child-present decision from the real parent value — relation / connection
 // converge). A strictly-sequential plan is a plain statement list (no plan driver); a
 // real-concurrency stage (bc#87) is EXPLICIT static parallel orchestration — one goroutine
 // per statically-known parallel op, bounded by the static plan.concurrency via a semaphore
@@ -2620,7 +2620,7 @@ func NestedUpsert(email string, name string, title string) ([][]WriteSummary, er
 // de-plumbed path. Ports are a native struct (direct field assignment); the handler
 // result is materialized straight into the node's outType struct. Node results are typed
 // struct locals; a relation child reads the parent's REAL struct result via direct field
-// access (child-present decision from the real parent value — relationSingle / connection
+// access (child-present decision from the real parent value — relation / connection
 // converge). A strictly-sequential plan is a plain statement list (no plan driver); a
 // real-concurrency stage (bc#87) is EXPLICIT static parallel orchestration — one goroutine
 // per statically-known parallel op, bounded by the static plan.concurrency via a semaphore
@@ -2761,7 +2761,7 @@ func NestedUpdate(id int64, name string, title string) ([][]WriteSummary, error)
 // de-plumbed path. Ports are a native struct (direct field assignment); the handler
 // result is materialized straight into the node's outType struct. Node results are typed
 // struct locals; a relation child reads the parent's REAL struct result via direct field
-// access (child-present decision from the real parent value — relationSingle / connection
+// access (child-present decision from the real parent value — relation / connection
 // converge). A strictly-sequential plan is a plain statement list (no plan driver); a
 // real-concurrency stage (bc#87) is EXPLICIT static parallel orchestration — one goroutine
 // per statically-known parallel op, bounded by the static plan.concurrency via a semaphore

@@ -4,14 +4,14 @@
 # native dict literal and handed to the EXISTING runtime core (run_behavior) —
 # no execution logic is generated. Handlers are ALWAYS injected at the boundary
 # (IR + {effects,config,hooks}); they are never generated.
-# irFingerprint: fnv1a64:6d5d727886542169
+# irFingerprint: fnv1a64:2436a3f88d3875b4
 from behavior_contracts import SPEC_VERSIONS, ProvenanceError, load_compiled_ir, run_behavior
 
 # Spec versions baked at generation time (fail-closed constant comparison at load).
 EXPECTED_SPEC_VERSIONS = {"behavior": 5, "expression": 2, "plan": 1}
 
 # FNV-1a 64 fingerprint of the source portable IR (canonical_json discipline, #208).
-IR_FINGERPRINT = "fnv1a64:6d5d727886542169"
+IR_FINGERPRINT = "fnv1a64:2436a3f88d3875b4"
 
 # Component names exposed by bind(), in IR declaration order.
 COMPONENT_NAMES = ("findAll", "filterPaginateSort", "findFirst", "findUnique", "nestedFindAll", "nestedFindFirst", "nestedFindUnique", "nestedRelations", "compositeRelations", "create", "update", "upsert", "createMany", "upsertMany", "updateMany", "nestedCreate", "nestedUpsert", "nestedUpdate", "delete")
@@ -2418,8 +2418,44 @@ IR_DOC = {
     {
       "body": [
         {
-          "component": "executeSQL",
           "id": "n0",
+          "map": {
+            "as": "$e0",
+            "over": {
+              "ref": [
+                "rows"
+              ]
+            },
+            "transform": {
+              "ref": [
+                "$e0",
+                "email"
+              ]
+            }
+          },
+          "outType": "value"
+        },
+        {
+          "id": "n1",
+          "map": {
+            "as": "$e1",
+            "over": {
+              "ref": [
+                "rows"
+              ]
+            },
+            "transform": {
+              "ref": [
+                "$e1",
+                "name"
+              ]
+            }
+          },
+          "outType": "value"
+        },
+        {
+          "component": "executeSQL",
+          "id": "n2",
           "outType": {
             "arr": {
               "name": "WriteSummary",
@@ -2429,6 +2465,7 @@ IR_DOC = {
               }
             }
           },
+          "parent": "n0",
           "portSchemas": {
             "bigint": {
               "required": True,
@@ -2458,7 +2495,12 @@ IR_DOC = {
               "arr": [
                 {
                   "ref": [
-                    "rows"
+                    "n0"
+                  ]
+                },
+                {
+                  "ref": [
+                    "n1"
                   ]
                 }
               ]
@@ -2485,14 +2527,18 @@ IR_DOC = {
       "name": "createMany",
       "output": {
         "ref": [
-          "n0"
+          "n2"
         ]
       },
       "plan": {
         "concurrency": 16,
         "groups": [
           [
-            0
+            0,
+            1
+          ],
+          [
+            2
           ]
         ]
       },
@@ -2509,8 +2555,44 @@ IR_DOC = {
     {
       "body": [
         {
-          "component": "executeSQL",
           "id": "n0",
+          "map": {
+            "as": "$e0",
+            "over": {
+              "ref": [
+                "rows"
+              ]
+            },
+            "transform": {
+              "ref": [
+                "$e0",
+                "email"
+              ]
+            }
+          },
+          "outType": "value"
+        },
+        {
+          "id": "n1",
+          "map": {
+            "as": "$e1",
+            "over": {
+              "ref": [
+                "rows"
+              ]
+            },
+            "transform": {
+              "ref": [
+                "$e1",
+                "name"
+              ]
+            }
+          },
+          "outType": "value"
+        },
+        {
+          "component": "executeSQL",
+          "id": "n2",
           "outType": {
             "arr": {
               "name": "WriteSummary",
@@ -2520,6 +2602,7 @@ IR_DOC = {
               }
             }
           },
+          "parent": "n0",
           "portSchemas": {
             "bigint": {
               "required": True,
@@ -2549,12 +2632,12 @@ IR_DOC = {
               "arr": [
                 {
                   "ref": [
-                    "rows"
+                    "n0"
                   ]
                 },
                 {
                   "ref": [
-                    "rows"
+                    "n1"
                   ]
                 }
               ]
@@ -2581,14 +2664,18 @@ IR_DOC = {
       "name": "upsertMany",
       "output": {
         "ref": [
-          "n0"
+          "n2"
         ]
       },
       "plan": {
         "concurrency": 16,
         "groups": [
           [
-            0
+            0,
+            1
+          ],
+          [
+            2
           ]
         ]
       },
@@ -2605,8 +2692,44 @@ IR_DOC = {
     {
       "body": [
         {
-          "component": "executeSQL",
           "id": "n0",
+          "map": {
+            "as": "$e0",
+            "over": {
+              "ref": [
+                "rows"
+              ]
+            },
+            "transform": {
+              "ref": [
+                "$e0",
+                "id"
+              ]
+            }
+          },
+          "outType": "value"
+        },
+        {
+          "id": "n1",
+          "map": {
+            "as": "$e1",
+            "over": {
+              "ref": [
+                "rows"
+              ]
+            },
+            "transform": {
+              "ref": [
+                "$e1",
+                "name"
+              ]
+            }
+          },
+          "outType": "value"
+        },
+        {
+          "component": "executeSQL",
+          "id": "n2",
           "outType": {
             "arr": {
               "name": "WriteSummary",
@@ -2616,6 +2739,7 @@ IR_DOC = {
               }
             }
           },
+          "parent": "n0",
           "portSchemas": {
             "bigint": {
               "required": True,
@@ -2645,7 +2769,12 @@ IR_DOC = {
               "arr": [
                 {
                   "ref": [
-                    "rows"
+                    "n0"
+                  ]
+                },
+                {
+                  "ref": [
+                    "n1"
                   ]
                 }
               ]
@@ -2672,14 +2801,18 @@ IR_DOC = {
       "name": "updateMany",
       "output": {
         "ref": [
-          "n0"
+          "n2"
         ]
       },
       "plan": {
         "concurrency": 16,
         "groups": [
           [
-            0
+            0,
+            1
+          ],
+          [
+            2
           ]
         ]
       },
