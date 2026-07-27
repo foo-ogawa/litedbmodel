@@ -97,6 +97,15 @@ export type TxExpr = unknown;
 export function literalize(value: unknown): TxExpr {
   if (value === null || value === undefined) return null;
   if (Array.isArray(value)) return { arr: value.map((e) => literalize(e)) };
+  // A bc `int` is a BigInt on the TS plane. `evaluateExpression` accepts an integer only as a plain
+  // JS number (safe range) or the `{int:"…"}` literal — a RAW BigInt node is rejected ("invalid node").
+  // A value read back from an integer column now arrives as a BigInt (bc's int model), and using it in a
+  // later write (e.g. the id from a `create({returning:true})` fed to a nested `create`) sent that BigInt
+  // straight into `evaluateExpression`, which threw. Encode it as bc's own canonical int literal
+  // (`{int: v.toString()}`, exactly what bc emits for an out-of-safe-range int) — exact, no rounding,
+  // and no value inference. MUST be before the `typeof === 'object'` branch would ever see it (a bigint
+  // is a primitive, so it would fall through to the bare `return value`).
+  if (typeof value === 'bigint') return { int: value.toString() };
   if (typeof value === 'object') {
     const obj: Record<string, TxExpr> = {};
     for (const [k, v] of Object.entries(value as Record<string, unknown>)) obj[k] = literalize(v);
