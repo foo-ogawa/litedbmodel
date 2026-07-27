@@ -177,7 +177,7 @@ interface KyselyDB {
 
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { pgTable, serial, varchar, integer, boolean, timestamp, text, primaryKey } from 'drizzle-orm/pg-core';
-import { eq, desc, and, asc, sql as drizzleSql, relations, inArray } from 'drizzle-orm';
+import { eq, desc, and, asc, sql as drizzleSql, relations } from 'drizzle-orm';
 
 const drizzleUsers = pgTable('benchmark_users', {
   id: serial('id').primaryKey(),
@@ -278,7 +278,7 @@ const drizzleSchema = {
 // TypeORM Setup
 // ============================================
 
-import { DataSource, Entity, PrimaryGeneratedColumn, PrimaryColumn, Column as TypeORMColumn, Repository, ManyToOne, OneToMany, JoinColumn, In } from 'typeorm';
+import { DataSource, Entity, PrimaryGeneratedColumn, PrimaryColumn, Column as TypeORMColumn, Repository, ManyToOne, OneToMany, JoinColumn } from 'typeorm';
 
 @Entity('benchmark_users')
 class TypeORMUser {
@@ -1743,21 +1743,21 @@ async function main() {
     },
     
     // ============================================
-    // Nested Relations - Composite Key (5 tenants)
-    // 100 users across 5 tenants → 1000 posts → 5000 comments
-    // Tests proper multi-tenant batch loading with composite foreign keys
+    // Nested Relations - Composite Key
+    // First 100 tenant_users by user_id → 1000 posts → 10000 comments (every tenant_user has the same
+    // 10 posts × 10 comments shape, so any 100 of them traverse exactly 10000 comments).
+    // Tests proper multi-tenant batch loading with composite foreign keys. The selection rule is the
+    // crosslang composite op's (native-model.ts: `ORDER BY user_id ASC LIMIT 100`, no tenant filter) —
+    // NOT a `tenant_id IN (…)` filter, which would assume a fixed tenant layout.
     // ============================================
     {
-      name: 'Nested relations (composite key, 5 tenants)',
+      name: 'Nested relations (composite key)',
       tests: [
-        { 
-          orm: 'litedbmodel', 
+        {
+          orm: 'litedbmodel',
           fn: async () => {
-            // Fetch users from 5 tenants (20 users per tenant = 100 users total)
-            const users = await LiteTenantUser.find(
-              [[LiteTenantUser.tenant_id, [1, 2, 3, 4, 5]]],
-              { limit: 100 }
-            );
+            // First 100 tenant_users by user_id (matches the crosslang composite op's selection).
+            const users = await LiteTenantUser.find([], { limit: 100, order: LiteTenantUser.user_id.asc() });
             let commentCount = 0;
             for (const user of users) {
               const posts = await user.posts;
@@ -1768,7 +1768,7 @@ async function main() {
                 }
               }
             }
-            // tenant_id IN (1..5) LIMIT 100 = 100 tenant_users, each with 10 posts × 10 comments = 10000.
+            // 100 tenant_users, each with 10 posts × 10 comments = 10000.
             if (commentCount !== 10000) {
               throw new Error(`litedbmodel compositeRelations processed ${commentCount} comments, not 10000 — this cell is NOT traversing the same graph as the others; a benchmark number from it would be comparing different work (#170).`);
             }
@@ -1779,9 +1779,9 @@ async function main() {
           orm: 'Prisma', 
           fn: async () => {
             const users = await prisma.tenantUser.findMany({
-              where: { tenant_id: { in: [1, 2, 3, 4, 5] } },
               take: 100,
-              include: { 
+              orderBy: { user_id: 'asc' },
+              include: {
                 posts: {
                   include: { comments: true }
                 }
@@ -1807,8 +1807,8 @@ async function main() {
           fn: async () => {
             // Use Drizzle's query API with relations (LATERAL JOIN internally)
             const users = await drizzleDb.query.tenantUsers.findMany({
-              where: inArray(drizzleTenantUsers.tenant_id, [1, 2, 3, 4, 5]),
               limit: 100,
+              orderBy: asc(drizzleTenantUsers.user_id),
               with: { posts: { with: { comments: true } } }
             });
             let commentCount = 0;
@@ -1829,8 +1829,8 @@ async function main() {
           orm: 'TypeORM', 
           fn: async () => {
             const users = await typeormDS.getRepository(TypeORMTenantUser).find({
-              where: { tenant_id: In([1, 2, 3, 4, 5]) },
               take: 100,
+              order: { user_id: 'ASC' },
               relations: ['posts', 'posts.comments'],
             });
             let commentCount = 0;
