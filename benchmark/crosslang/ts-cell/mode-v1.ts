@@ -254,19 +254,25 @@ export async function openV1(dialect: Dialect): Promise<Cell> {
         await User.transaction(async () => User.update([[User.id, input.id]], [[User.name, input.name]]));
         return;
       case 'upsert':
-        await User.transaction(async () =>
-          User.create(
+        // `returning: true` is not decoration. The generated module's statement is
+        // `… ON CONFLICT … DO UPDATE … RETURNING id`, so omitting it makes this cell run a DIFFERENT
+        // statement and move one row fewer than every other cell — i.e. less work, in v1's favour.
+        await User.transaction(async () => {
+          const upserted = await User.create(
             [
               [User.email, input.email],
               [User.name, input.name],
             ],
-            { onConflict: User.email, onConflictUpdate: [User.name] },
-          ),
-        );
+            { onConflict: User.email, onConflictUpdate: [User.name], returning: true },
+          );
+          rows += upserted === null ? 0 : upserted.values.length;
+        });
         return;
       case 'createMany':
       case 'upsertMany': {
-        const rows = userRows(it, op === 'upsertMany').map(
+        // `records`, not `rows`: a local named `rows` here SHADOWS this cell's row accumulator, so an
+        // arm that later needs to tally would silently count nothing.
+        const records = userRows(it, op === 'upsertMany').map(
           (r) =>
             [
               [User.email, r.email],
@@ -275,20 +281,20 @@ export async function openV1(dialect: Dialect): Promise<Cell> {
         );
         await User.transaction(async () =>
           op === 'upsertMany'
-            ? User.createMany(rows, { onConflict: User.email, onConflictUpdate: [User.name] })
-            : User.createMany(rows),
+            ? User.createMany(records, { onConflict: User.email, onConflictUpdate: [User.name] })
+            : User.createMany(records),
         );
         return;
       }
       case 'updateMany': {
-        const rows = updateManyRows().map(
+        const records = updateManyRows().map(
           (r) =>
             [
               [User.id, r.id],
               [User.name, r.name],
             ] as const,
         );
-        await User.transaction(async () => User.updateMany(rows, { keyColumns: [User.id] }));
+        await User.transaction(async () => User.updateMany(records, { keyColumns: [User.id] }));
         return;
       }
       case 'nestedCreate':
@@ -300,6 +306,7 @@ export async function openV1(dialect: Dialect): Promise<Cell> {
             ],
             { returning: true },
           );
+          rows += created!.values.length;
           await Post.create([
             [Post.author_id, created!.values[0][0] as number],
             [Post.title, input.title],
@@ -315,6 +322,7 @@ export async function openV1(dialect: Dialect): Promise<Cell> {
             ],
             { onConflict: User.email, onConflictUpdate: [User.name], returning: true },
           );
+          rows += upserted!.values.length;
           await Post.create([
             [Post.author_id, upserted!.values[0][0] as number],
             [Post.title, input.title],
@@ -323,7 +331,12 @@ export async function openV1(dialect: Dialect): Promise<Cell> {
         return;
       case 'nestedUpdate':
         await User.transaction(async () => {
-          await User.update([[User.id, input.id]], [[User.name, input.name]]);
+          // The generated module's first statement is `UPDATE … SET name = ? WHERE id = ? RETURNING id`.
+          // Same reason as `upsert`: without `returning` this arm runs a different statement.
+          const updated = await User.update([[User.id, input.id]], [[User.name, input.name]], {
+            returning: true,
+          });
+          rows += updated === null ? 0 : updated.values.length;
           await Post.update([[Post.author_id, input.id]], [[Post.title, input.title]]);
         });
         return;
@@ -336,6 +349,7 @@ export async function openV1(dialect: Dialect): Promise<Cell> {
             ],
             { returning: true },
           );
+          rows += created!.values.length;
           await User.delete([[User.id, created!.values[0][0] as number]]);
         });
         return;
