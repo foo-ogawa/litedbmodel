@@ -80,7 +80,19 @@ run() {
 # TypeScript — three modes (codegen is labelled `native`, the twin of the other languages' native cells).
 npx tsc -p "$HERE/ts-cell/tsconfig.json" || exit 1
 TS_MAIN="$ROOT/benchmark/crosslang-build/ts-cell/main.js"
-[ "$DIALECT" = "sqlite" ] || run typescript.native "$ROOT" node "$TS_MAIN" codegen "$DIALECT" "$REPS" "$WARMUP"
+if [ "$DIALECT" = "sqlite" ]; then
+  # A LOUD skip, per this script's own contract. litedbmodel routes SQLite through the v1 in-proc path,
+  # so `pool-executor.ts` exports no `sqliteConnectionPool` and `dbmodel-runtime.ts` throws for it — there
+  # is no TS codegen leg to measure on this dialect, and `typescript.v1` is what a TS consumer on SQLite
+  # actually runs. This was skipped with no message at all, which reads as a missing measurement instead
+  # of an absent path. Note the asymmetry it leaves: go/rust/python/php all HAVE a native leg on SQLite,
+  # so TypeScript is the only language with no native÷sdk ratio on the dialect where client-side cost is
+  # the largest fraction.
+  echo "── typescript.native (sqlite): SKIP — no TS codegen leg for SQLite (v1 in-proc path; see"
+  echo "   src/scp/dbmodel-runtime.ts:145). typescript.v1 covers this dialect."
+else
+  run typescript.native "$ROOT" node "$TS_MAIN" codegen "$DIALECT" "$REPS" "$WARMUP"
+fi
 run typescript.v1  "$ROOT" node "$TS_MAIN" v1  "$DIALECT" "$REPS" "$WARMUP"
 run typescript.sdk "$ROOT" node "$TS_MAIN" sdk "$DIALECT" "$REPS" "$WARMUP"
 

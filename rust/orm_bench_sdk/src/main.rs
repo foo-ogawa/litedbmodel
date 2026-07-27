@@ -318,11 +318,17 @@ fn pg_decode(row: &postgres::Row) -> Vec<Cell> {
                 .get::<_, Option<bool>>(i)
                 .map(Cell::B)
                 .unwrap_or(Cell::Null),
-            "timestamp" | "timestamptz" => {
-                // Pull + decode the value (wire cost is what matters); content is unused downstream.
-                let _: Option<std::time::SystemTime> = row.get(i);
-                Cell::Null
-            }
+            // The SAME canonical text the native cell produces (livedb.rs:640) — parse + format +
+            // String, not a discarded SystemTime. A dropped value makes this baseline cheaper than the
+            // path it is the baseline for, on every row that projects `created_at`.
+            "timestamp" => row
+                .get::<_, Option<chrono::NaiveDateTime>>(i)
+                .map(|d| Cell::S(d.format("%Y-%m-%d %H:%M:%S").to_string()))
+                .unwrap_or(Cell::Null),
+            "timestamptz" => row
+                .get::<_, Option<chrono::DateTime<chrono::Utc>>>(i)
+                .map(|d| Cell::S(d.naive_utc().format("%Y-%m-%d %H:%M:%S").to_string()))
+                .unwrap_or(Cell::Null),
             _ => row
                 .get::<_, Option<String>>(i)
                 .map(Cell::S)

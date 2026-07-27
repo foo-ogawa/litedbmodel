@@ -68,8 +68,19 @@ function readDir(dir, scale) {
 readDir(HERE, 1);
 
 const at = (scale, lang, surface, dialect, op) => data.get(`${scale}|${lang}|${surface}|${dialect}|${op}`);
-/** The rows an op moved, or null when unmeasured. Cells that disagree are reported, not reconciled. */
-function rowsOf(e){ if(!e || e.rows.size !== 1) return null; return [...e.rows][0]; }
+/**
+ * The rows an op moved: a number when the cell reported ONE value, `null` when it has no row-observing
+ * seam, and the SET when the cell reported several across its own iterations.
+ *
+ * Those last two were both `null`, which classified a cell whose own row count FLUCTUATES as "no seam" —
+ * printed as a dash and passed over by the exit code. A cell that moves a different number of rows on
+ * different iterations of one op is the most serious thing this gate can find, not the least.
+ */
+function rowsOf(e){
+  if (!e || e.rows.size === 0) return null;
+  if (e.rows.size > 1) return e.rows;   // unstable within the cell — a disagreement with ITSELF
+  return [...e.rows][0];
+}
 const fmt = (n, d = 0) => n == null ? '—' : n.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
 
 
@@ -201,6 +212,14 @@ for (const dialect of DIALECTS) for (const op of OPS) {
     if (!e) continue;
     const r = rowsOf(e);
     if (r === null) { unmeasured.push(`${dialect}/${op}: ${lang}.${surface}`); continue; }
+    if (r instanceof Set) {
+      // The cell contradicts itself across iterations. Recorded as its own disagreement row so it both
+      // prints and fails, instead of hiding behind the unmeasured dash.
+      const label = `${[...r].map((n)=>fmt(n)).join('/')} (varies within the cell)`;
+      if (!seen.has(label)) seen.set(label, []);
+      seen.get(label).push(`${lang}.${surface}`);
+      continue;
+    }
     if (!seen.has(r)) seen.set(r, []);
     seen.get(r).push(`${lang}.${surface}`);
   }

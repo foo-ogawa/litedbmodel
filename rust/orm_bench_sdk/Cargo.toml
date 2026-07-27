@@ -32,7 +32,12 @@ serde_json = "1"
 # crates. The default (SQLite) build needs neither.
 # `with-serde_json-1`: the generated PostgreSQL composite-key predicate binds its key set to a
 # `?::json` param, and the crate maps types strictly — a `String` cannot be sent for `json`.
-postgres = { version = "0.19", optional = true, features = ["with-serde_json-1"] }
+# `with-chrono-0_4`: a TIMESTAMP column must de-box to the SAME canonical `YYYY-MM-DD HH:MM:SS` String
+# the native cell produces (rust/litedbmodel_runtime/src/livedb.rs:640). Reading it as a `SystemTime` and
+# dropping it, which is what this cell did, skipped the parse + format + String allocation the native path
+# pays on every row of `findAll`/`filterPaginateSort` — the baseline doing LESS work than what it baselines.
+postgres = { version = "0.19", optional = true, features = ["with-serde_json-1", "with-chrono-0_4"] }
+chrono = { version = "0.4", optional = true, default-features = false }
 # `ToSql` hands the encoder a `BytesMut`, so the pg integer bind (PgInt, main.rs) needs the same
 # `bytes` postgres itself uses. Already in the lock as postgres' transitive dep — a pin, not a new dep.
 bytes = { version = "1", optional = true }
@@ -40,7 +45,7 @@ mysql = { version = "25", optional = true }
 
 [features]
 default = []
-livedb = ["dep:postgres", "dep:mysql", "dep:bytes"]
+livedb = ["dep:postgres", "dep:mysql", "dep:bytes", "dep:chrono"]
 
 [profile.release]
 opt-level = 3
