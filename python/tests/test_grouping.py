@@ -29,21 +29,25 @@ _group = _HANDLERS["group"]
 _CTX = {"nodeId": "n0", "component": "test"}
 
 
-# ── key_identity — mirror of JS String(v) ──────────────────────────────────────
+# ── key_identity — the key CELLS, with String(v)'s collapses preserved ─────────
 
 
-def test_key_identity_matches_js_string():
+def test_key_identity_carries_the_cells():
     # whole float → integer text (a scanned INT column arrives as a whole float), bool/string verbatim.
-    assert key_identity([1.0]) == "1"
-    assert key_identity([2]) == "2"
+    # A whole float and the same int are ONE key; a numeric STRING collapses onto the int too (the
+    # rendering this replaced did, and a driver may hand a numeric column back as text).
+    assert key_identity([1.0]) == 1
+    assert key_identity([2]) == 2
+    assert key_identity(["2"]) == 2
     assert key_identity(["x"]) == "x"
-    assert key_identity([True]) == "true"
-    assert key_identity([False]) == "false"
-    assert key_identity([1.5]) == "1.5"
+    # bool is NOT an int key: True must not collide with 1.
+    assert key_identity([True]) is True
+    assert key_identity([False]) is False
+    assert key_identity([1.5]) == 1.5
     # tuple → single-space joined.
-    assert key_identity([1, "a"]) == "1 a"
+    assert key_identity([1, "a"]) == (1, "a")
     # null totality arm (never reached in a real grouping — nulls are dropped first).
-    assert key_identity([None]) == "null"
+    assert key_identity([None]) is None
 
 
 # ── dedupe_key_tuples — null-drop + dedupe preserving order ─────────────────────
@@ -77,8 +81,8 @@ def test_dedupe_composite_tuple():
     ]
     keys = dedupe_key_tuples(rows, ["t", "u"])
     assert len(keys) == 2
-    assert key_identity(keys[0]) == "1 9"
-    assert key_identity(keys[1]) == "1 8"
+    assert key_identity(keys[0]) == (1, 9)
+    assert key_identity(keys[1]) == (1, 8)
 
 
 # ── group_by_key + attach_to_parent — hasMany / single ──────────────────────────
@@ -130,8 +134,8 @@ def test_group_by_key_composite_fk():
         {"a": 1, "b": 3, "v": "z"},
     ]
     by_key = group_by_key(children, ["a", "b"])
-    assert [c["v"] for c in by_key["1 2"]] == ["x", "y"]
-    assert [c["v"] for c in by_key["1 3"]] == ["z"]
+    assert [c["v"] for c in by_key[(1, 2)]] == ["x", "y"]
+    assert [c["v"] for c in by_key[(1, 3)]] == ["z"]
 
 
 # ── leaf handler: pluck (ports dict → {"ok": key array}; col is the ordered key TUPLE) ──────────────

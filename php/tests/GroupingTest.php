@@ -23,10 +23,12 @@ final class GroupingTest extends TestCase
 
     public function testKeyIdentityMirrorsJsString(): void
     {
-        // whole float → integer text (a scanned INT column arrives as a whole float), int/string
-        // verbatim, bool → 'true'/'false', fractional float its string form, tuple space-joined.
+        // whole float → integer text (a scanned INT column arrives as a whole float), string verbatim,
+        // bool → 'true'/'false', fractional float its string form, tuple space-joined. An INT key rides as
+        // the int: a PHP array key casts an integer-like string to the int, so `2` and `'2'` are one bucket
+        // either way — the int skips the string conversion.
         self::assertSame('1', Grouping::keyIdentity([1.0]));
-        self::assertSame('2', Grouping::keyIdentity([2]));
+        self::assertSame(2, Grouping::keyIdentity([2]));
         self::assertSame('x', Grouping::keyIdentity(['x']));
         self::assertSame('true', Grouping::keyIdentity([true]));
         self::assertSame('false', Grouping::keyIdentity([false]));

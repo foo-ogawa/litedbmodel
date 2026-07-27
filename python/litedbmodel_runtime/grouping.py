@@ -45,17 +45,46 @@ def _stringify(v: Any) -> str:
     return str(v)
 
 
-def key_identity(values: Sequence[Any]) -> str:
-    """The stringified key identity for dedupe/grouping. Single scalar → its ``str`` rendering; a tuple
-    → the renderings joined by a single space (mirror of TS ``keyIdentity`` / Rust ``key_identity``)."""
-    return _KEY_SEP.join(_stringify(v) for v in values)
+def _key_cell(v: Any) -> Any:
+    """One key column's value, in the form a dict key takes it. A whole float and the same integer are ONE
+    key (a parent read as ``1`` and a child FK read as ``1.0`` must land in one bucket) — the rendering
+    this replaces collapsed them the same way (``str(int(v))``). ``bool`` is checked first: it is a
+    subclass of ``int``, and ``True`` must not collide with ``1``."""
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, float) and v == v and v not in (float("inf"), float("-inf")) and v.is_integer():
+        return int(v)
+    if isinstance(v, str) and v and (v[0].isdigit() or v[0] == "-"):
+        # `1` and `"1"` are ONE key. The rendering this replaces collapsed them (both `String(v)` to
+        # `"1"`), and a driver may hand back a numeric column as text (mysql2 does for BIGINT), so the
+        # collapse is load-bearing, not incidental. Only an EXACT round-trip collapses, so `"01"` and
+        # `" 1"` stay distinct strings, exactly as `String(v)` kept them.
+        try:
+            n = int(v)
+        except ValueError:
+            return v
+        return n if str(n) == v else v
+    return v
+
+
+def key_identity(values: Sequence[Any]) -> Any:
+    """The key identity for dedupe/grouping — the key CELLS, not a rendering of them.
+
+    A raw-driver consumer groups on the native value (a dict keyed by the id, a tuple key for a composite
+    one). Rendering each cell to text and joining built a generator, N strings and a joined string PER ROW,
+    per relation level; a tuple of the cells hashes directly and allocates one small tuple. A single-column
+    key is the cell itself — no tuple at all.
+    """
+    if len(values) == 1:
+        return _key_cell(values[0])
+    return tuple(_key_cell(v) for v in values)
 
 
 def dedupe_key_tuples(rows: Sequence[Mapping[str, Any]], key_cols: Sequence[str]) -> List[List[Any]]:
     """The deduped, non-null key TUPLES of ``rows`` over ``key_cols`` (insertion order preserved —
     deterministic). A tuple is DROPPED if ANY of its key columns is absent or ``None`` (no partial
-    keys); deduped on the stringified tuple identity. Port of TS ``dedupeKeyTuples``."""
-    seen: set[str] = set()
+    keys); deduped on the tuple identity. Port of TS ``dedupeKeyTuples``."""
+    seen: set = set()
     out: List[List[Any]] = []
     for r in rows:
         tuple_ = [r.get(c) for c in key_cols]
@@ -71,10 +100,10 @@ def dedupe_key_tuples(rows: Sequence[Mapping[str, Any]], key_cols: Sequence[str]
 
 def group_by_key(
     children: Sequence[Mapping[str, Any]], fk_cols: Sequence[str]
-) -> Dict[str, List[Mapping[str, Any]]]:
+) -> Dict[Any, List[Mapping[str, Any]]]:
     """Group ``children`` by their ``fk_cols`` tuple identity (a null/absent key drops the child). Child
     order within a bucket is the input order. Port of TS ``groupByKey``."""
-    by_key: Dict[str, List[Mapping[str, Any]]] = {}
+    by_key: Dict[Any, List[Mapping[str, Any]]] = {}
     for c in children:
         tuple_ = [c.get(col) for col in fk_cols]
         if any(v is None for v in tuple_):
@@ -86,7 +115,7 @@ def group_by_key(
 def attach_to_parent(
     parent: Mapping[str, Any],
     pk_cols: Sequence[str],
-    by_key: Mapping[str, List[Mapping[str, Any]]],
+    by_key: Mapping[Any, List[Mapping[str, Any]]],
     single: bool,
 ) -> Any:
     """Distribute grouped children onto ONE parent per cardinality (port of TS ``attachToParent``):

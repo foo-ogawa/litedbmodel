@@ -501,7 +501,8 @@ def test_middleware_observes_relation_batch_sql_end_to_end():
 
     with_middleware_scope(scope)
     # The relation actually loaded (2 children under parent 1) — a genuine relation-batch read.
-    assert result["batch"]["1"][0]["label"] == "a"
+    # The batch is keyed on the key CELLS now (an int id is an int key), not on a rendering of them.
+    assert result["batch"][1][0]["label"] == "a"
     # The middleware saw the relation-batch SELECT querying the child table.
     assert any("from child" in s.lower() for s in seen), seen
 
@@ -513,7 +514,7 @@ def test_red_relation_batch_not_observed_without_registration():
     parents = [{"id": 1, "name": "p"}]
     res = run_relation_op(_REL_OP, parents, SqliteDriver(conn))
     # The read still WORKS (byte-identical) — the relation loaded — but nothing was observed.
-    assert len(res["batch"]["1"]) == 2
+    assert len(res["batch"][1]) == 2
     assert not any("from child" in s.lower() for s in seen)
 
 

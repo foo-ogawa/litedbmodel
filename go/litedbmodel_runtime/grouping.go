@@ -19,6 +19,7 @@ package litedbmodel_runtime
 
 import (
 	"math"
+	"strconv"
 	"strings"
 
 	bc "github.com/foo-ogawa/behavior-contracts/go"
@@ -253,7 +254,7 @@ func bcKeyCell(v bc.Value) keyCell {
 		}
 		return keyCell{kind: 4}
 	case string:
-		return keyCell{kind: 3, s: t}
+		return stringKeyCell(t)
 	case int64:
 		return keyCell{kind: 1, num: t}
 	case float64:
@@ -264,6 +265,19 @@ func bcKeyCell(v bc.Value) keyCell {
 	default:
 		return keyCell{kind: 3, s: jsStringify(v)}
 	}
+}
+
+// stringKeyCell collapses a numeric string onto the int it renders as: `1` and `"1"` are ONE key. The
+// rendering this replaces collapsed them (both `String(v)` to "1"), and a driver may hand a numeric column
+// back as text, so the collapse is load-bearing. Only an EXACT round-trip collapses, so "01" and " 1" stay
+// distinct strings.
+func stringKeyCell(t string) keyCell {
+	if t != "" && (t[0] == '-' || (t[0] >= '0' && t[0] <= '9')) {
+		if n, err := strconv.ParseInt(t, 10, 64); err == nil && strconv.FormatInt(n, 10) == t {
+			return keyCell{kind: 1, num: n}
+		}
+	}
+	return keyCell{kind: 3, s: t}
 }
 
 func stringifyKey(v bc.Value) string {

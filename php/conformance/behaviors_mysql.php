@@ -12,7 +12,7 @@
 declare(strict_types=1);
 
 // Spec versions baked at generation time (fail-closed constant comparison at require).
-$expectedSpecVersions = ['behavior' => 5, 'expression' => 2, 'plan' => 1];
+$expectedSpecVersions = ['behavior' => 6, 'expression' => 2, 'plan' => 1];
 
 // FNV-1a 64 fingerprint of the source portable IR (canonical-json discipline, #208).
 $irFingerprint = 'fnv1a64:ec2bc26caed47a37';

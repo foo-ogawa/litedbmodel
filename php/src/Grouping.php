@@ -51,8 +51,20 @@ final class Grouping
      *
      * @param list<mixed> $values
      */
-    public static function keyIdentity(array $values): string
+    public static function keyIdentity(array $values): string|int
     {
+        // A single-column key — every hasMany/belongsTo FK — rides as the CELL. PHP array keys are int or
+        // string and an integer-like string is cast to the int, so `1` and `"1"` land in one bucket exactly
+        // as the rendering did; an int key skips the string conversion entirely. Two columns concatenate
+        // directly. Only a wider key pays `array_map` + `implode`, and no relation uses one.
+        $n = count($values);
+        if ($n === 1) {
+            $v = $values[0];
+            return is_int($v) ? $v : self::stringifyKey($v);
+        }
+        if ($n === 2) {
+            return self::stringifyKey($values[0]) . self::KEY_SEP . self::stringifyKey($values[1]);
+        }
         return implode(self::KEY_SEP, array_map([self::class, 'stringifyKey'], $values));
     }
 

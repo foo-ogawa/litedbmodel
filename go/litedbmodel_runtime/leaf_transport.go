@@ -508,7 +508,7 @@ func wireKeyCell(cell wire.WireValue) keyCell {
 		return keyCell{kind: 2, num: int64(math.Float64bits(p.Got))}
 	}
 	if p := cell.AsString(); p.Kind == wireProbeGot {
-		return keyCell{kind: 3, s: p.Got}
+		return stringKeyCell(p.Got)
 	}
 	if p := cell.AsBool(); p.Kind == wireProbeGot {
 		if p.Got {

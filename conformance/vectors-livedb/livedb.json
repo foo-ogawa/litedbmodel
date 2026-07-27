@@ -583,22 +583,34 @@
           "params": []
         },
         {
-          "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE conf_posts.author_id = ANY($1::int[]) ORDER BY id ASC",
+          "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE conf_posts.author_id = ANY($1::bigint[]) ORDER BY id ASC",
           "params": [
             [
-              1,
-              2,
-              3
+              {
+                "$bigint": "1"
+              },
+              {
+                "$bigint": "2"
+              },
+              {
+                "$bigint": "3"
+              }
             ]
           ]
         },
         {
-          "sql": "SELECT id, post_id, label FROM conf_tags WHERE conf_tags.post_id = ANY($1::int[]) ORDER BY id ASC",
+          "sql": "SELECT id, post_id, label FROM conf_tags WHERE conf_tags.post_id = ANY($1::bigint[]) ORDER BY id ASC",
           "params": [
             [
-              10,
-              11,
-              12
+              {
+                "$bigint": "10"
+              },
+              {
+                "$bigint": "11"
+              },
+              {
+                "$bigint": "12"
+              }
             ]
           ]
         }
@@ -759,11 +771,15 @@
           "params": []
         },
         {
-          "sql": "SELECT id, name, post_count FROM conf_users WHERE conf_users.id = ANY($1::int[])",
+          "sql": "SELECT id, name, post_count FROM conf_users WHERE conf_users.id = ANY($1::bigint[])",
           "params": [
             [
-              1,
-              2
+              {
+                "$bigint": "1"
+              },
+              {
+                "$bigint": "2"
+              }
             ]
           ]
         }
@@ -901,29 +917,45 @@
           "query": "SELECT id, author_id, title, status, created_at FROM conf_posts ORDER BY id",
           "rows": [
             {
-              "id": 10,
-              "author_id": 1,
+              "id": {
+                "$bigint": "10"
+              },
+              "author_id": {
+                "$bigint": "1"
+              },
               "title": "a1",
               "status": "live",
               "created_at": "2026-02-01"
             },
             {
-              "id": 11,
-              "author_id": 1,
+              "id": {
+                "$bigint": "11"
+              },
+              "author_id": {
+                "$bigint": "1"
+              },
               "title": "a2",
               "status": "draft",
               "created_at": "2026-03-01"
             },
             {
-              "id": 12,
-              "author_id": 2,
+              "id": {
+                "$bigint": "12"
+              },
+              "author_id": {
+                "$bigint": "2"
+              },
               "title": "b1",
               "status": "live",
               "created_at": "2026-01-15"
             },
             {
-              "id": 13,
-              "author_id": 1,
+              "id": {
+                "$bigint": "13"
+              },
+              "author_id": {
+                "$bigint": "1"
+              },
               "title": "c1",
               "status": "live",
               "created_at": "2026-04-01"
@@ -970,29 +1002,45 @@
           "query": "SELECT id, author_id, title, status, created_at FROM conf_posts ORDER BY id",
           "rows": [
             {
-              "id": 10,
-              "author_id": 1,
+              "id": {
+                "$bigint": "10"
+              },
+              "author_id": {
+                "$bigint": "1"
+              },
               "title": "a1",
               "status": "live",
               "created_at": "2026-02-01"
             },
             {
-              "id": 11,
-              "author_id": 1,
+              "id": {
+                "$bigint": "11"
+              },
+              "author_id": {
+                "$bigint": "1"
+              },
               "title": "a2",
               "status": "draft",
               "created_at": "2026-03-01"
             },
             {
-              "id": 12,
-              "author_id": 2,
+              "id": {
+                "$bigint": "12"
+              },
+              "author_id": {
+                "$bigint": "2"
+              },
               "title": "b1",
               "status": "live",
               "created_at": "2026-01-15"
             },
             {
-              "id": 13,
-              "author_id": 1,
+              "id": {
+                "$bigint": "13"
+              },
+              "author_id": {
+                "$bigint": "1"
+              },
               "title": "c1",
               "status": "live",
               "created_at": "2026-04-01"
@@ -1033,22 +1081,34 @@
           "query": "SELECT id, author_id, title, status, created_at FROM conf_posts ORDER BY id",
           "rows": [
             {
-              "id": 10,
-              "author_id": 1,
+              "id": {
+                "$bigint": "10"
+              },
+              "author_id": {
+                "$bigint": "1"
+              },
               "title": "a1-renamed",
               "status": "live",
               "created_at": "2026-02-01"
             },
             {
-              "id": 11,
-              "author_id": 1,
+              "id": {
+                "$bigint": "11"
+              },
+              "author_id": {
+                "$bigint": "1"
+              },
               "title": "a2",
               "status": "draft",
               "created_at": "2026-03-01"
             },
             {
-              "id": 12,
-              "author_id": 2,
+              "id": {
+                "$bigint": "12"
+              },
+              "author_id": {
+                "$bigint": "2"
+              },
               "title": "b1",
               "status": "live",
               "created_at": "2026-01-15"
@@ -1089,22 +1149,34 @@
           "query": "SELECT id, author_id, title, status, created_at FROM conf_posts ORDER BY id",
           "rows": [
             {
-              "id": 10,
-              "author_id": 1,
+              "id": {
+                "$bigint": "10"
+              },
+              "author_id": {
+                "$bigint": "1"
+              },
               "title": "a1-renamed",
               "status": "live",
               "created_at": "2026-02-01"
             },
             {
-              "id": 11,
-              "author_id": 1,
+              "id": {
+                "$bigint": "11"
+              },
+              "author_id": {
+                "$bigint": "1"
+              },
               "title": "a2",
               "status": "draft",
               "created_at": "2026-03-01"
             },
             {
-              "id": 12,
-              "author_id": 2,
+              "id": {
+                "$bigint": "12"
+              },
+              "author_id": {
+                "$bigint": "2"
+              },
               "title": "b1",
               "status": "live",
               "created_at": "2026-01-15"
@@ -1143,15 +1215,23 @@
           "query": "SELECT id, author_id, title, status, created_at FROM conf_posts ORDER BY id",
           "rows": [
             {
-              "id": 10,
-              "author_id": 1,
+              "id": {
+                "$bigint": "10"
+              },
+              "author_id": {
+                "$bigint": "1"
+              },
               "title": "a1",
               "status": "live",
               "created_at": "2026-02-01"
             },
             {
-              "id": 11,
-              "author_id": 1,
+              "id": {
+                "$bigint": "11"
+              },
+              "author_id": {
+                "$bigint": "1"
+              },
               "title": "a2",
               "status": "draft",
               "created_at": "2026-03-01"
@@ -1190,15 +1270,23 @@
           "query": "SELECT id, author_id, title, status, created_at FROM conf_posts ORDER BY id",
           "rows": [
             {
-              "id": 10,
-              "author_id": 1,
+              "id": {
+                "$bigint": "10"
+              },
+              "author_id": {
+                "$bigint": "1"
+              },
               "title": "a1",
               "status": "live",
               "created_at": "2026-02-01"
             },
             {
-              "id": 11,
-              "author_id": 1,
+              "id": {
+                "$bigint": "11"
+              },
+              "author_id": {
+                "$bigint": "1"
+              },
               "title": "a2",
               "status": "draft",
               "created_at": "2026-03-01"
@@ -1259,28 +1347,48 @@
           "query": "SELECT id, post_id, label FROM conf_tags ORDER BY id",
           "rows": [
             {
-              "id": 100,
-              "post_id": 10,
+              "id": {
+                "$bigint": "100"
+              },
+              "post_id": {
+                "$bigint": "10"
+              },
               "label": "greeting"
             },
             {
-              "id": 101,
-              "post_id": 10,
+              "id": {
+                "$bigint": "101"
+              },
+              "post_id": {
+                "$bigint": "10"
+              },
               "label": "first"
             },
             {
-              "id": 102,
-              "post_id": 12,
+              "id": {
+                "$bigint": "102"
+              },
+              "post_id": {
+                "$bigint": "12"
+              },
               "label": "world"
             },
             {
-              "id": 103,
-              "post_id": 11,
+              "id": {
+                "$bigint": "103"
+              },
+              "post_id": {
+                "$bigint": "11"
+              },
               "label": "x"
             },
             {
-              "id": 104,
-              "post_id": 11,
+              "id": {
+                "$bigint": "104"
+              },
+              "post_id": {
+                "$bigint": "11"
+              },
               "label": "y"
             }
           ]
@@ -1328,28 +1436,48 @@
           "query": "SELECT id, post_id, label FROM conf_tags ORDER BY id",
           "rows": [
             {
-              "id": 100,
-              "post_id": 10,
+              "id": {
+                "$bigint": "100"
+              },
+              "post_id": {
+                "$bigint": "10"
+              },
               "label": "greeting"
             },
             {
-              "id": 101,
-              "post_id": 10,
+              "id": {
+                "$bigint": "101"
+              },
+              "post_id": {
+                "$bigint": "10"
+              },
               "label": "first"
             },
             {
-              "id": 102,
-              "post_id": 12,
+              "id": {
+                "$bigint": "102"
+              },
+              "post_id": {
+                "$bigint": "12"
+              },
               "label": "world"
             },
             {
-              "id": 103,
-              "post_id": 11,
+              "id": {
+                "$bigint": "103"
+              },
+              "post_id": {
+                "$bigint": "11"
+              },
               "label": "x"
             },
             {
-              "id": 104,
-              "post_id": 11,
+              "id": {
+                "$bigint": "104"
+              },
+              "post_id": {
+                "$bigint": "11"
+              },
               "label": "y"
             }
           ]
@@ -1392,8 +1520,12 @@
           "query": "SELECT id, post_id, label FROM conf_tags ORDER BY id",
           "rows": [
             {
-              "id": 102,
-              "post_id": 12,
+              "id": {
+                "$bigint": "102"
+              },
+              "post_id": {
+                "$bigint": "12"
+              },
               "label": "world"
             }
           ]
@@ -1433,8 +1565,12 @@
           "query": "SELECT id, post_id, label FROM conf_tags ORDER BY id",
           "rows": [
             {
-              "id": 102,
-              "post_id": 12,
+              "id": {
+                "$bigint": "102"
+              },
+              "post_id": {
+                "$bigint": "12"
+              },
               "label": "world"
             }
           ]
@@ -1493,28 +1629,48 @@
           "query": "SELECT id, post_id, label FROM conf_tags ORDER BY id",
           "rows": [
             {
-              "id": 100,
-              "post_id": 10,
+              "id": {
+                "$bigint": "100"
+              },
+              "post_id": {
+                "$bigint": "10"
+              },
               "label": "greeting"
             },
             {
-              "id": 101,
-              "post_id": 10,
+              "id": {
+                "$bigint": "101"
+              },
+              "post_id": {
+                "$bigint": "10"
+              },
               "label": "first"
             },
             {
-              "id": 102,
-              "post_id": 12,
+              "id": {
+                "$bigint": "102"
+              },
+              "post_id": {
+                "$bigint": "12"
+              },
               "label": "world"
             },
             {
-              "id": 105,
-              "post_id": 11,
+              "id": {
+                "$bigint": "105"
+              },
+              "post_id": {
+                "$bigint": "11"
+              },
               "label": "p"
             },
             {
-              "id": 106,
-              "post_id": 12,
+              "id": {
+                "$bigint": "106"
+              },
+              "post_id": {
+                "$bigint": "12"
+              },
               "label": "q"
             }
           ]
@@ -1562,28 +1718,48 @@
           "query": "SELECT id, post_id, label FROM conf_tags ORDER BY id",
           "rows": [
             {
-              "id": 100,
-              "post_id": 10,
+              "id": {
+                "$bigint": "100"
+              },
+              "post_id": {
+                "$bigint": "10"
+              },
               "label": "greeting"
             },
             {
-              "id": 101,
-              "post_id": 10,
+              "id": {
+                "$bigint": "101"
+              },
+              "post_id": {
+                "$bigint": "10"
+              },
               "label": "first"
             },
             {
-              "id": 102,
-              "post_id": 12,
+              "id": {
+                "$bigint": "102"
+              },
+              "post_id": {
+                "$bigint": "12"
+              },
               "label": "world"
             },
             {
-              "id": 105,
-              "post_id": 11,
+              "id": {
+                "$bigint": "105"
+              },
+              "post_id": {
+                "$bigint": "11"
+              },
               "label": "p"
             },
             {
-              "id": 106,
-              "post_id": 12,
+              "id": {
+                "$bigint": "106"
+              },
+              "post_id": {
+                "$bigint": "12"
+              },
               "label": "q"
             }
           ]
@@ -1634,18 +1810,30 @@
           "query": "SELECT id, post_id, label FROM conf_tags ORDER BY id",
           "rows": [
             {
-              "id": 100,
-              "post_id": 10,
+              "id": {
+                "$bigint": "100"
+              },
+              "post_id": {
+                "$bigint": "10"
+              },
               "label": "re-100"
             },
             {
-              "id": 101,
-              "post_id": 10,
+              "id": {
+                "$bigint": "101"
+              },
+              "post_id": {
+                "$bigint": "10"
+              },
               "label": "first"
             },
             {
-              "id": 102,
-              "post_id": 12,
+              "id": {
+                "$bigint": "102"
+              },
+              "post_id": {
+                "$bigint": "12"
+              },
               "label": "re-102"
             }
           ]
@@ -1691,18 +1879,30 @@
           "query": "SELECT id, post_id, label FROM conf_tags ORDER BY id",
           "rows": [
             {
-              "id": 100,
-              "post_id": 10,
+              "id": {
+                "$bigint": "100"
+              },
+              "post_id": {
+                "$bigint": "10"
+              },
               "label": "re-100"
             },
             {
-              "id": 101,
-              "post_id": 10,
+              "id": {
+                "$bigint": "101"
+              },
+              "post_id": {
+                "$bigint": "10"
+              },
               "label": "first"
             },
             {
-              "id": 102,
-              "post_id": 12,
+              "id": {
+                "$bigint": "102"
+              },
+              "post_id": {
+                "$bigint": "12"
+              },
               "label": "re-102"
             }
           ]
@@ -1745,8 +1945,12 @@
           "query": "SELECT id, post_id, label FROM conf_tags ORDER BY id",
           "rows": [
             {
-              "id": 102,
-              "post_id": 12,
+              "id": {
+                "$bigint": "102"
+              },
+              "post_id": {
+                "$bigint": "12"
+              },
               "label": "world"
             }
           ]
@@ -1786,8 +1990,12 @@
           "query": "SELECT id, post_id, label FROM conf_tags ORDER BY id",
           "rows": [
             {
-              "id": 102,
-              "post_id": 12,
+              "id": {
+                "$bigint": "102"
+              },
+              "post_id": {
+                "$bigint": "12"
+              },
               "label": "world"
             }
           ]
@@ -1828,29 +2036,45 @@
           "query": "SELECT id, author_id, title, status, created_at FROM conf_posts ORDER BY id",
           "rows": [
             {
-              "id": 10,
-              "author_id": 1,
+              "id": {
+                "$bigint": "10"
+              },
+              "author_id": {
+                "$bigint": "1"
+              },
               "title": "a1",
               "status": "live",
               "created_at": "2026-02-01"
             },
             {
-              "id": 11,
-              "author_id": 1,
+              "id": {
+                "$bigint": "11"
+              },
+              "author_id": {
+                "$bigint": "1"
+              },
               "title": "a2",
               "status": "draft",
               "created_at": "2026-03-01"
             },
             {
-              "id": 12,
-              "author_id": 2,
+              "id": {
+                "$bigint": "12"
+              },
+              "author_id": {
+                "$bigint": "2"
+              },
               "title": "b1",
               "status": "live",
               "created_at": "2026-01-15"
             },
             {
-              "id": 14,
-              "author_id": 2,
+              "id": {
+                "$bigint": "14"
+              },
+              "author_id": {
+                "$bigint": "2"
+              },
               "title": "c2",
               "status": "live",
               "created_at": "2026-05-01"
@@ -1893,29 +2117,45 @@
           "query": "SELECT id, author_id, title, status, created_at FROM conf_posts ORDER BY id",
           "rows": [
             {
-              "id": 10,
-              "author_id": 1,
+              "id": {
+                "$bigint": "10"
+              },
+              "author_id": {
+                "$bigint": "1"
+              },
               "title": "a1",
               "status": "live",
               "created_at": "2026-02-01"
             },
             {
-              "id": 11,
-              "author_id": 1,
+              "id": {
+                "$bigint": "11"
+              },
+              "author_id": {
+                "$bigint": "1"
+              },
               "title": "a2",
               "status": "draft",
               "created_at": "2026-03-01"
             },
             {
-              "id": 12,
-              "author_id": 2,
+              "id": {
+                "$bigint": "12"
+              },
+              "author_id": {
+                "$bigint": "2"
+              },
               "title": "b1",
               "status": "live",
               "created_at": "2026-01-15"
             },
             {
-              "id": 14,
-              "author_id": 2,
+              "id": {
+                "$bigint": "14"
+              },
+              "author_id": {
+                "$bigint": "2"
+              },
               "title": "c2",
               "status": "live",
               "created_at": "2026-05-01"
@@ -1952,22 +2192,34 @@
           "query": "SELECT id, author_id, title, status, created_at FROM conf_posts ORDER BY id",
           "rows": [
             {
-              "id": 10,
-              "author_id": 1,
+              "id": {
+                "$bigint": "10"
+              },
+              "author_id": {
+                "$bigint": "1"
+              },
               "title": "a1-returned",
               "status": "live",
               "created_at": "2026-02-01"
             },
             {
-              "id": 11,
-              "author_id": 1,
+              "id": {
+                "$bigint": "11"
+              },
+              "author_id": {
+                "$bigint": "1"
+              },
               "title": "a2",
               "status": "draft",
               "created_at": "2026-03-01"
             },
             {
-              "id": 12,
-              "author_id": 2,
+              "id": {
+                "$bigint": "12"
+              },
+              "author_id": {
+                "$bigint": "2"
+              },
               "title": "b1",
               "status": "live",
               "created_at": "2026-01-15"
@@ -2004,22 +2256,34 @@
           "query": "SELECT id, author_id, title, status, created_at FROM conf_posts ORDER BY id",
           "rows": [
             {
-              "id": 10,
-              "author_id": 1,
+              "id": {
+                "$bigint": "10"
+              },
+              "author_id": {
+                "$bigint": "1"
+              },
               "title": "a1-returned",
               "status": "live",
               "created_at": "2026-02-01"
             },
             {
-              "id": 11,
-              "author_id": 1,
+              "id": {
+                "$bigint": "11"
+              },
+              "author_id": {
+                "$bigint": "1"
+              },
               "title": "a2",
               "status": "draft",
               "created_at": "2026-03-01"
             },
             {
-              "id": 12,
-              "author_id": 2,
+              "id": {
+                "$bigint": "12"
+              },
+              "author_id": {
+                "$bigint": "2"
+              },
               "title": "b1",
               "status": "live",
               "created_at": "2026-01-15"
@@ -2054,15 +2318,23 @@
           "query": "SELECT id, author_id, title, status, created_at FROM conf_posts ORDER BY id",
           "rows": [
             {
-              "id": 10,
-              "author_id": 1,
+              "id": {
+                "$bigint": "10"
+              },
+              "author_id": {
+                "$bigint": "1"
+              },
               "title": "a1",
               "status": "live",
               "created_at": "2026-02-01"
             },
             {
-              "id": 12,
-              "author_id": 2,
+              "id": {
+                "$bigint": "12"
+              },
+              "author_id": {
+                "$bigint": "2"
+              },
               "title": "b1",
               "status": "live",
               "created_at": "2026-01-15"
@@ -2097,15 +2369,23 @@
           "query": "SELECT id, author_id, title, status, created_at FROM conf_posts ORDER BY id",
           "rows": [
             {
-              "id": 10,
-              "author_id": 1,
+              "id": {
+                "$bigint": "10"
+              },
+              "author_id": {
+                "$bigint": "1"
+              },
               "title": "a1",
               "status": "live",
               "created_at": "2026-02-01"
             },
             {
-              "id": 12,
-              "author_id": 2,
+              "id": {
+                "$bigint": "12"
+              },
+              "author_id": {
+                "$bigint": "2"
+              },
               "title": "b1",
               "status": "live",
               "created_at": "2026-01-15"
@@ -2146,22 +2426,34 @@
           "query": "SELECT id, author_id, title, status, created_at FROM conf_posts ORDER BY id",
           "rows": [
             {
-              "id": 10,
-              "author_id": 1,
+              "id": {
+                "$bigint": "10"
+              },
+              "author_id": {
+                "$bigint": "1"
+              },
               "title": "a1",
               "status": "archived",
               "created_at": "2026-02-01"
             },
             {
-              "id": 11,
-              "author_id": 1,
+              "id": {
+                "$bigint": "11"
+              },
+              "author_id": {
+                "$bigint": "1"
+              },
               "title": "a2",
               "status": "archived",
               "created_at": "2026-03-01"
             },
             {
-              "id": 12,
-              "author_id": 2,
+              "id": {
+                "$bigint": "12"
+              },
+              "author_id": {
+                "$bigint": "2"
+              },
               "title": "b1",
               "status": "live",
               "created_at": "2026-01-15"
@@ -2202,22 +2494,34 @@
           "query": "SELECT id, author_id, title, status, created_at FROM conf_posts ORDER BY id",
           "rows": [
             {
-              "id": 10,
-              "author_id": 1,
+              "id": {
+                "$bigint": "10"
+              },
+              "author_id": {
+                "$bigint": "1"
+              },
               "title": "a1",
               "status": "archived",
               "created_at": "2026-02-01"
             },
             {
-              "id": 11,
-              "author_id": 1,
+              "id": {
+                "$bigint": "11"
+              },
+              "author_id": {
+                "$bigint": "1"
+              },
               "title": "a2",
               "status": "archived",
               "created_at": "2026-03-01"
             },
             {
-              "id": 12,
-              "author_id": 2,
+              "id": {
+                "$bigint": "12"
+              },
+              "author_id": {
+                "$bigint": "2"
+              },
               "title": "b1",
               "status": "live",
               "created_at": "2026-01-15"
@@ -2256,8 +2560,12 @@
           "query": "SELECT id, author_id, title, status, created_at FROM conf_posts ORDER BY id",
           "rows": [
             {
-              "id": 12,
-              "author_id": 2,
+              "id": {
+                "$bigint": "12"
+              },
+              "author_id": {
+                "$bigint": "2"
+              },
               "title": "b1",
               "status": "live",
               "created_at": "2026-01-15"
@@ -2296,8 +2604,12 @@
           "query": "SELECT id, author_id, title, status, created_at FROM conf_posts ORDER BY id",
           "rows": [
             {
-              "id": 12,
-              "author_id": 2,
+              "id": {
+                "$bigint": "12"
+              },
+              "author_id": {
+                "$bigint": "2"
+              },
               "title": "b1",
               "status": "live",
               "created_at": "2026-01-15"

@@ -55,7 +55,13 @@ fn key_cell(value: &WireValue) -> KeyCell {
     match value {
         WireValue::Null => KeyCell::Null,
         WireValue::Bool(b) => KeyCell::Bool(*b),
-        WireValue::Str(s) => KeyCell::Str(s.clone()),
+        // `1` and `"1"` are ONE key. The rendering this replaces collapsed them (both `String(v)` to
+        // `"1"`), and a driver may hand a numeric column back as text, so the collapse is load-bearing.
+        // Only an EXACT round-trip collapses, so `"01"` and `" 1"` stay distinct strings.
+        WireValue::Str(s) => match s.parse::<i64>() {
+            Ok(n) if n.to_string() == **s => KeyCell::Int(n),
+            _ => KeyCell::Str(s.clone()),
+        },
         WireValue::Int(i) => KeyCell::Int(*i),
         // A whole float and the same integer must land in the SAME bucket — a parent read as `1` and a
         // child FK read as `1.0` are the same key. Normalize to the integer, exactly as the rendering
