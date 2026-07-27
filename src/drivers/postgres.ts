@@ -165,10 +165,12 @@ function clearQueryCache(): void {
 // ============================================
 
 class PostgresConnection implements DBConnection {
-  constructor(private client: PoolClient) {}
+  /** See {@link PostgresDriver.getConnection}: a pooled connection's SQL must reach the logger too. */
+  constructor(private client: PoolClient, private logger: Logger) {}
 
   async query(sql: string, params?: unknown[]): Promise<QueryResult> {
     const q = resolveQuery(sql);
+    this.logger.debug(`SQL: ${q.convertedSql}`, params ?? []);
     const result = q.isMulti
       ? await this.client.query(q.convertedSql, params)
       : await this.client.query({ name: q.name, text: q.convertedSql, values: params });
@@ -298,7 +300,7 @@ export class PostgresDriver implements DBDriver {
     // Transactions always use writer pool for consistency
     const pool = this.writerPool || this.pool;
     const client = await pool.connect();
-    return new PostgresConnection(client);
+    return new PostgresConnection(client, this.logger);
   }
 
   /**

@@ -198,11 +198,13 @@ function removeReturning(sql: string): { sql: string; hasReturning: boolean; ret
 // ============================================
 
 class MysqlConnection implements DBConnection {
-  constructor(private connection: Mysql2PoolConnection) {}
+  /** See {@link MysqlDriver.getConnection}: a pooled connection's SQL must reach the logger too. */
+  constructor(private connection: Mysql2PoolConnection, private logger: Logger) {}
 
   async query(sql: string, params?: unknown[]): Promise<QueryResult> {
     // Handle MySQL-specific conversions
     const convertedSql = convertOnConflictToMysql(sql);
+    this.logger.debug(`SQL: ${convertedSql}`, params ?? []);
     
     // Handle RETURNING clause
     const { sql: sqlWithoutReturning, hasReturning, returningCols } = removeReturning(convertedSql);
@@ -508,7 +510,7 @@ export class MysqlDriver implements DBDriver {
     // Transactions always use writer pool for consistency
     const pool = this.writerPool || this.pool;
     const connection = await pool.getConnection();
-    return new MysqlConnection(connection);
+    return new MysqlConnection(connection, this.logger);
   }
 
   /**
