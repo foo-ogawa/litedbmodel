@@ -253,7 +253,15 @@ async function setup() {
   }
   
   console.log(`Composite key data: ${NUM_TENANTS} tenants, ${NUM_TENANTS * USERS_PER_TENANT} tenant_users, ${tenantPostValues.length} tenant_posts, ${tenantCommentValues.length} tenant_comments (across ${TENANTS_FOR_COMMENTS} tenants)`);
-  
+
+  // Refresh planner statistics after the bulk load. The indexes above were created on empty tables, so
+  // the optimizer's stats are stale until analyzed, and a relation query can pick a scan over the index —
+  // the same fair-conditions step the crosslang v2 fixture applies (benchmark/crosslang/orm-domain.ts
+  // analyzeStatements). It runs once here, benefits every ORM equally (they share these tables), and
+  // matches what a real deployment has (pg_restore / autovacuum keep stats current).
+  console.log('Analyzing tables (refresh planner statistics)...');
+  await pool.query('ANALYZE benchmark_users, benchmark_posts, benchmark_comments, benchmark_tenants, benchmark_tenant_users, benchmark_tenant_posts, benchmark_tenant_comments');
+
   // Verify data
   const userCount = await pool.query('SELECT COUNT(*) FROM benchmark_users');
   const postCount = await pool.query('SELECT COUNT(*) FROM benchmark_posts');
