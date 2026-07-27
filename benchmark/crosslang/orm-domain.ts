@@ -102,6 +102,19 @@ export function deleteStatements(_dialect: OrmDialect): string[] {
   return DROP_ORDER.map((t) => `DELETE FROM ${t}`);
 }
 
+// The indexes every relation's batched child read needs — one per relation FK, the column the child
+// SELECT filters on. WITHOUT these the child batch scans the whole table (the PK does not cover the FK):
+// on MySQL the 50,000-row composite comments table made compositeRelations take 2.3s per iteration, and
+// an index took the same query to 6.6ms. A real deployment indexes these; a bench that does not is
+// measuring a full scan, not a relation. `CREATE INDEX … ON … (…)` is byte-identical across sqlite /
+// mysql / postgres, so this is ONE list, spread into each dialect's DDL — not restated three times.
+const RELATION_INDEXES: readonly string[] = [
+  `CREATE INDEX ix_posts_author ON benchmark_posts (author_id)`, // User.posts
+  `CREATE INDEX ix_comments_post ON benchmark_comments (post_id)`, // Post.comments
+  `CREATE INDEX ix_tposts_tenant_user ON benchmark_tenant_posts (tenant_id, user_id)`, // TenantUser.posts
+  `CREATE INDEX ix_tcomments_tenant_post ON benchmark_tenant_comments (tenant_id, post_id)`, // TenantPost.comments
+];
+
 export function ddl(dialect: OrmDialect): string[] {
   if (dialect === 'sqlite') {
     return [
@@ -146,6 +159,7 @@ export function ddl(dialect: OrmDialect): string[] {
         body TEXT NOT NULL,
         PRIMARY KEY (tenant_id, comment_id)
       )`,
+      ...RELATION_INDEXES,
     ];
   }
   if (dialect === 'mysql') {
@@ -191,6 +205,7 @@ export function ddl(dialect: OrmDialect): string[] {
         body TEXT NOT NULL,
         PRIMARY KEY (tenant_id, comment_id)
       )`,
+      ...RELATION_INDEXES,
     ];
   }
   // postgres
@@ -240,6 +255,7 @@ export function ddl(dialect: OrmDialect): string[] {
       body TEXT NOT NULL,
       PRIMARY KEY (tenant_id, comment_id)
     )`,
+    ...RELATION_INDEXES,
   ];
 }
 
