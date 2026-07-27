@@ -93,11 +93,21 @@ func (c *cell) prep(sqlText string) *sql.Stmt {
 // is one, the pool otherwise. Every statement inside BEGIN..COMMIT must run on the transaction's own
 // connection — that is what makes it atomic.
 func (c *cell) stmt(sqlText string) *sql.Stmt {
-	s := c.prep(sqlText)
 	if c.tx != nil {
-		return c.tx.Stmt(s)
+		// Inside a transaction, prepare on the TRANSACTION's own connection. `tx.Stmt` over a DB-cached
+		// statement re-prepares on that connection anyway — a tx statement is closed with the tx — so this
+		// costs the same and never asks the pool for a second connection. That request is what deadlocked
+		// SQLite, whose pool is capped at 1 because the in-memory database has to be shared:
+		//
+		//	fatal error: all goroutines are asleep - deadlock!
+		//	database/sql.(*DB).conn ... database/sql.(*DB).prepare ... (*DB).Prepare
+		st, err := c.tx.Prepare(c.render(sqlText))
+		if err != nil {
+			panic(fmt.Sprintf("prepare in tx %q: %v", sqlText, err))
+		}
+		return st
 	}
-	return s
+	return c.prep(sqlText)
 }
 
 // begin / commit use database/sql's OWN transaction API rather than sending the words through Exec.
