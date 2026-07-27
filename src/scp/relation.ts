@@ -39,6 +39,7 @@ import { materializeCell, sqlTypeToMaterializeClass, type MaterializeClass, type
 import { parseProjectionColumn } from './makesql/outtype';
 import { assertRelationHardLimit, resolveHasManyHardLimit, type RelationGuard } from './limit-config';
 import { dedupeKeyTuples, groupByKey, attachToParent } from './grouping';
+import { encodeJsonParam } from './makesql/json-array';
 import {
   compileSingleKeyUnlimited,
   compileSingleKeyLimited,
@@ -440,11 +441,16 @@ export function relationGuard(op: RelationOp): RelationGuard | null {
  * MySQL `JSON_TABLE`, SQLite `json_each`), so the key binding is dialect-INDEPENDENT: no key-tuple
  * transpose anywhere. A SINGLE-key set is the scalar array — bound raw on PG (`= ANY(?::t[])` takes a
  * native array) and JSON-encoded on MySQL/SQLite.
+ *
+ * The JSON encoding goes through {@link encodeJsonParam}, the one serializer every JSON param uses.
+ * These keys came OFF a read, so an `int` key is a `BigInt` — a bare `JSON.stringify` here does not
+ * "diverge subtly", it THROWS `Do not know how to serialize a BigInt` and takes every relation read
+ * with an integer parent key down with it.
  */
 function bindKeys(op: RelationOp, tuples: readonly unknown[][]): unknown[] {
-  if (op.parentKeys !== undefined) return [JSON.stringify(tuples.map((t) => [...t]))];
+  if (op.parentKeys !== undefined) return [encodeJsonParam(op.dialect, tuples.map((t) => [...t]))];
   const keys = tuples.map((t) => t[0]);
-  return [op.dialect === 'postgres' ? keys : JSON.stringify(keys)];
+  return [op.dialect === 'postgres' ? keys : encodeJsonParam(op.dialect, keys)];
 }
 
 /**

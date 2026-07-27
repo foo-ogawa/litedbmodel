@@ -21,37 +21,17 @@ from typing import Any, Dict, List, Mapping, Sequence
 
 __all__ = ["key_identity", "dedupe_key_tuples", "group_by_key", "attach_to_parent"]
 
-#: A separator no scalar rendering contains, so distinct tuples never collide (matches TS ``KEY_SEP``).
-_KEY_SEP = " "
-
-
-def _stringify(v: Any) -> str:
-    """Mirror JS ``String(v)`` for the key identity (matches Rust ``stringify_key``).
-
-    ``bool`` → ``'true'``/``'false'`` (checked FIRST — ``bool`` is a subclass of ``int``); a WHOLE
-    float prints as integer text (a scanned INT column can arrive as a whole ``float`` — JS
-    ``String(1.0) === '1'``); a fractional float its shortest round-trip form; ``None`` → ``'null'``
-    (a null key is dropped before it is ever stringified, so this arm never affects a grouping result —
-    it exists only for totality); anything else its ``str``.
-    """
-    if isinstance(v, bool):
-        return "true" if v else "false"
-    if v is None:
-        return "null"
-    if isinstance(v, float):
-        if v == v and v not in (float("inf"), float("-inf")) and v.is_integer():
-            return str(int(v))
-        return str(v)
-    return str(v)
-
-
 def _key_cell(v: Any) -> Any:
     """One key column's value, in the form a dict key takes it. A whole float and the same integer are ONE
     key (a parent read as ``1`` and a child FK read as ``1.0`` must land in one bucket) — the rendering
-    this replaces collapsed them the same way (``str(int(v))``). ``bool`` is checked first: it is a
-    subclass of ``int``, and ``True`` must not collide with ``1``."""
+    this replaces collapsed them the same way (``str(int(v))``).
+
+    ``bool`` rides as its TEXT, and that is not cosmetic: ``bool`` is a subclass of ``int`` with
+    ``hash(True) == hash(1)`` and ``True == 1``, so RETURNING THE BOOL puts ``True`` and ``1`` in the SAME
+    dict bucket. Rendering it keeps them apart, exactly as the reference does (``String(true)`` is
+    ``'true'``, ``String(1)`` is ``'1'``)."""
     if isinstance(v, bool):
-        return v
+        return "true" if v else "false"
     if isinstance(v, float) and v == v and v not in (float("inf"), float("-inf")) and v.is_integer():
         return int(v)
     if isinstance(v, str) and v and (v[0].isdigit() or v[0] == "-"):

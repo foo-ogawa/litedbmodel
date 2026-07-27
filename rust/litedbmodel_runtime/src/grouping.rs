@@ -24,8 +24,10 @@ use crate::wire::{WireList, WireValue};
 /// (bc 0.11.9), the cells can BE the key.
 ///
 /// `Eq`/`Hash` are derived from the scalar variants. `Float` hashes on its bit pattern: two reads of the
-/// same stored value produce the same bits, which is what grouping needs (a NaN key never matches, and a
-/// float key column is not a thing a relation is keyed on anyway). A Row/List is never a scalar key.
+/// same stored value produce the same bits, which is what grouping needs. (Two NaN keys DO match here —
+/// identical bits — which is the reference's behaviour too, since `String(NaN)` is `"NaN"` for both.)
+/// A Row/List is not a scalar key, but `key_identity` is public and must be total, so each keys as its
+/// own distinct cell rather than sharing one with `Null`.
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub enum KeyCell {
     Str(std::borrow::Cow<'static, str>),
@@ -33,6 +35,8 @@ pub enum KeyCell {
     FloatBits(u64),
     Bool(bool),
     Null,
+    Row,
+    List,
 }
 
 /// The key a row contributes. A relation is keyed on ONE column (a FK) or TWO (a composite key), so
@@ -66,14 +70,23 @@ fn key_cell(value: &WireValue) -> KeyCell {
         // A whole float and the same integer must land in the SAME bucket — a parent read as `1` and a
         // child FK read as `1.0` are the same key. Normalize to the integer, exactly as the rendering
         // form did (`"1.0"` → `"1"`), and keep the bits only for a genuinely fractional value.
+        //
+        // The RANGE test is what makes this safe, and a round-trip through `i64` is not a substitute:
+        // `as` SATURATES, so every whole float above `i64::MAX` casts to `i64::MAX` and they would all
+        // share one bucket. A round-trip does not catch it either — `i64::MAX as f64` rounds UP to 2^63,
+        // so `2^63` would round-trip and collide with `i64::MAX`. Comparing against the bounds first is
+        // exact: both constants below are representable in `f64`.
         WireValue::Float(f) => {
-            if f.is_finite() && f.fract() == 0.0 {
+            const I64_MIN_F: f64 = -9_223_372_036_854_775_808.0; // i64::MIN, exact
+            const I64_SUP_F: f64 = 9_223_372_036_854_775_808.0; // 2^63, the first f64 past i64::MAX
+            if f.fract() == 0.0 && *f >= I64_MIN_F && *f < I64_SUP_F {
                 KeyCell::Int(*f as i64)
             } else {
                 KeyCell::FloatBits(f.to_bits())
             }
         }
-        WireValue::Row(_) | WireValue::List(_) => KeyCell::Null,
+        WireValue::Row(_) => KeyCell::Row,
+        WireValue::List(_) => KeyCell::List,
     }
 }
 
@@ -190,9 +203,9 @@ fn key_cells<'a>(row: &'a WireValue, cols: &[String], idx: &[usize]) -> Option<V
 pub fn dedupe_key_tuples(rows: &[WireValue], key_cols: &[String]) -> Vec<Vec<WireValue>> {
     let mut seen: std::collections::HashSet<KeyIdentity> = std::collections::HashSet::new();
     let mut out: Vec<Vec<WireValue>> = Vec::new();
-    let idx = rows.iter().find_map(|r| resolve_indices(r, key_cols));
+    let idx = resolve_key_indices(rows, key_cols);
     for row in rows {
-        let cells = match idx.as_deref().and_then(|ix| key_cells(row, key_cols, ix)) {
+        let cells = match key_cells(row, key_cols, &idx) {
             Some(c) => c,
             None => continue,
         };
@@ -217,9 +230,13 @@ pub fn group_by_key(
     fk_cols: &[String],
 ) -> HashMap<KeyIdentity, Vec<WireValue>> {
     let mut by_key: HashMap<KeyIdentity, Vec<WireValue>> = HashMap::new();
-    let idx = children.first().and_then(|c| resolve_indices(c, fk_cols));
+    // `resolve_key_indices`, NOT `children.first()`: the first element deciding for all of them means a
+    // single non-`Row` head resolves to nothing and then EVERY child is dropped — total, silent data
+    // loss. Its two siblings in this file already resolved off the first row that IS a `Row`; this is the
+    // one lookup, in one place.
+    let idx = resolve_key_indices(&children, fk_cols);
     for child in children {
-        let key = match idx.as_deref().and_then(|ix| row_key(&child, fk_cols, ix)) {
+        let key = match row_key(&child, fk_cols, &idx) {
             Some(k) => k,
             None => continue,
         };
@@ -271,7 +288,18 @@ pub fn attach_to_parent(
                 *n -= 1;
                 *n == 0
             }
-            None => true,
+            // Unreachable under the contract: `remaining` is counted over the SAME parent slice this is
+            // iterated over, so every parent's key is in it. It is `false`, not `true`, because the two
+            // failure modes are not symmetric — `true` would make this parent REMOVE the bucket and every
+            // later parent sharing the key silently receive nothing, i.e. wrong data. `false` clones, so a
+            // miscounted key costs a copy and still returns the right children.
+            None => {
+                debug_assert!(
+                    false,
+                    "attach_to_parent: parent key missing from the count map"
+                );
+                false
+            }
         };
         if last {
             by_key.remove(&id)
@@ -412,6 +440,86 @@ mod tests {
             attach_to_parent(&parent9, &pk, &idx9, &mut by_key, &mut remaining9, true),
             WireValue::Null
         ));
+    }
+
+    // ── the four cases keying on native cells broke, none of which any existing test could see ──
+
+    #[test]
+    fn whole_float_past_i64_keys_by_bits_not_a_saturated_int() {
+        // `*f as i64` SATURATES: every whole float above i64::MAX casts to i64::MAX, so without the range
+        // test 1e30, 1e31 and i64::MAX all shared ONE bucket. A round-trip is not enough either —
+        // `i64::MAX as f64` rounds up to 2^63, so 2^63 would round-trip onto i64::MAX.
+        let big = key_identity(&[&WireValue::Float(1e30)]);
+        let bigger = key_identity(&[&WireValue::Float(1e31)]);
+        let max = key_identity(&[&WireValue::Int(i64::MAX)]);
+        let two63 = key_identity(&[&WireValue::Float(9_223_372_036_854_775_808.0)]);
+        assert_ne!(big, bigger);
+        assert_ne!(big, max);
+        assert_ne!(two63, max);
+        // …while a whole float INSIDE the range still collapses onto the integer, which is the point.
+        // -2^53 is chosen because it is exactly representable in f64 (2^53+1 is not — it rounds, and an
+        // assertion about it would be testing the literal, not the key).
+        assert_eq!(
+            key_identity(&[&WireValue::Float(-9_007_199_254_740_992.0)]),
+            KeyIdentity::One(KeyCell::Int(-9_007_199_254_740_992))
+        );
+    }
+
+    #[test]
+    fn row_list_and_null_are_three_distinct_keys() {
+        // They shared `KeyCell::Null`, so a composite key holding a Row matched one holding a List or a
+        // genuine NULL. `key_identity` is public and must be total.
+        let r = key_identity(&[&row(&[("a", num(1))])]);
+        let l = key_identity(&[&WireValue::List(crate::wire::WireList { items: vec![] })]);
+        let n = key_identity(&[&WireValue::Null]);
+        assert_ne!(r, l);
+        assert_ne!(r, n);
+        assert_ne!(l, n);
+    }
+
+    #[test]
+    fn group_by_key_resolves_past_a_non_row_head() {
+        // The index came from `children.first()`, so ONE non-Row head made every following child resolve
+        // to nothing — total, silent data loss.
+        let children = vec![
+            WireValue::Int(0),
+            row(&[("id", num(5)), ("user_id", num(1))]),
+            row(&[("id", num(6)), ("user_id", num(1))]),
+        ];
+        let by_key = group_by_key(children, &cols(&["user_id"]));
+        assert_eq!(by_key.len(), 1);
+        assert_eq!(by_key[&KeyIdentity::One(KeyCell::Int(1))].len(), 2);
+    }
+
+    #[test]
+    fn duplicate_parent_keys_each_receive_every_child() {
+        // The pre-count is what lets a bucket be MOVED instead of cloned, and it must be taken over the
+        // WHOLE parent slice — which is what the production call site does (leaves.rs). Every other test
+        // in this file counts one parent at a time (`from_ref`), a convention under which the second
+        // parent of a shared key silently gets ZERO children; so none of them can see this.
+        let children = vec![
+            row(&[("id", num(5)), ("user_id", num(1))]),
+            row(&[("id", num(6)), ("user_id", num(1))]),
+        ];
+        let mut by_key = group_by_key(children, &cols(&["user_id"]));
+        let parents = vec![row(&[("id", num(1))]), row(&[("id", num(1))])];
+        let pk = cols(&["id"]);
+        let idx = resolve_key_indices(&parents, &pk);
+        let mut remaining = count_parent_keys(&parents, &pk, &idx);
+        let counts: Vec<usize> = parents
+            .iter()
+            .map(
+                |p| match attach_to_parent(p, &pk, &idx, &mut by_key, &mut remaining, false) {
+                    WireValue::List(l) => l.items.len(),
+                    _ => panic!("expected a list"),
+                },
+            )
+            .collect();
+        assert_eq!(
+            counts,
+            vec![2, 2],
+            "both parents of a shared key get all children"
+        );
     }
 
     #[test]

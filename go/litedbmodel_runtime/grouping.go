@@ -25,10 +25,11 @@ import (
 	bc "github.com/foo-ogawa/behavior-contracts/go"
 )
 
-// keySep is a separator no scalar key rendering contains, so distinct tuples never collide (matches the
-// TS `KEY_SEP`). Only a 3+-column key still renders — the 1- and 2-column keys every relation uses are
-// carried in [keyID]'s inline cells.
-const keySep = " "
+// keySep separates the encoded cells of a 3+-column key. It is NUL, the same byte the TS `KEY_SEP` uses,
+// and for the same reason: a SPACE (what this was) collides as soon as a text key contains one —
+// ("a", "b c") and ("a b", "c") became the same key. The 1- and 2-column keys every relation actually
+// uses are carried in [keyID]'s inline cells and never render.
+const keySep = "\x00"
 
 // keyCell is ONE key column's value, comparable and allocation-free. A raw-driver consumer groups on the
 // native value (`map[int64][]row`, a struct key for a composite one); rendering each cell to a string
@@ -46,8 +47,9 @@ type keyCell struct {
 	s    string
 }
 
-// keyID is a key tuple usable as a map key. The 1- and 2-column arms are inline; a wider key falls back
-// to the rendered form in `more` (rare, and still correct).
+// keyID is a key tuple usable as a map key. The 1- and 2-column arms are inline; a wider key encodes its
+// cells into `more` (rare — no relation is keyed on three columns — and by the same rule as the inline
+// arms, so the collapse semantics do not change with arity).
 type keyID struct {
 	a, b keyCell
 	more string
@@ -77,8 +79,6 @@ type recordOps[R any] struct {
 	isNull func(cell R) bool
 	// keyCellOf projects a scalar cell to its comparable key value (no allocation).
 	keyCellOf func(cell R) keyCell
-	// keyFrag renders a scalar cell to text — only for a 3+-column key, which [keyID] cannot inline.
-	keyFrag func(cell R) string
 	// makeList wraps children into a record-list value ([] when children is empty); nul is the
 	// null/absent value. These build the [attachG] output in the representation's own shape.
 	makeList func(children []R) R
@@ -86,7 +86,13 @@ type recordOps[R any] struct {
 }
 
 // keyIdentityG is the key identity for dedupe/grouping — the cells themselves for the 1- and 2-column
-// keys a relation is keyed on (no allocation), the rendered join for a wider one.
+// keys a relation is keyed on (no allocation); a wider key encodes the SAME cells into [keyID]'s one
+// string field, because [keyID] cannot inline more than two.
+//
+// Every arity derives its identity from keyCellOf. It used to render a 3+-column key through a separate
+// per-representation `keyFrag`, which gave a wide key DIFFERENT collapse semantics from a narrow one in
+// this same function — a bool and the string "true" were one key at three columns and two keys at two.
+// One rule, one place.
 func keyIdentityG[R any](ops recordOps[R], cells []R) keyID {
 	switch len(cells) {
 	case 1:
@@ -94,9 +100,10 @@ func keyIdentityG[R any](ops recordOps[R], cells []R) keyID {
 	case 2:
 		return keyID{a: ops.keyCellOf(cells[0]), b: ops.keyCellOf(cells[1])}
 	default:
-		parts := make([]string, len(cells))
-		for i, c := range cells {
-			parts[i] = ops.keyFrag(c)
+		parts := make([]string, 0, len(cells)*3)
+		for _, c := range cells {
+			kc := ops.keyCellOf(c)
+			parts = append(parts, strconv.Itoa(int(kc.kind)), strconv.FormatInt(kc.num, 10), kc.s)
 		}
 		return keyID{more: strings.Join(parts, keySep)}
 	}
@@ -233,17 +240,13 @@ var bcOps = recordOps[bc.Value]{
 	},
 	isNull:    func(cell bc.Value) bool { return cell == nil },
 	keyCellOf: bcKeyCell,
-	keyFrag:   stringifyKey,
 	makeList:  func(children []bc.Value) bc.Value { return bc.Value(children) },
 	nul:       nil,
 }
 
-// stringifyKey mirrors TS `String(v)` for the bc key identity. A whole float prints as an integer (a
-// scanned int column arrives as float64), int64 same, bool → "true"/"false", null → "null" (a null
-// key is dropped before it is ever stringified, so that arm only exists for totality).
 // bcKeyCell projects a bc row cell to its comparable key value. An integer and the same whole float are
 // the SAME key (a parent read as 1 and a child FK read as 1.0 must land in one bucket), matching the
-// rendered form this replaces (`encodeFloat` printed both as "1").
+// rendered form this replaces printed both as "1".
 func bcKeyCell(v bc.Value) keyCell {
 	switch t := v.(type) {
 	case nil:
@@ -258,7 +261,11 @@ func bcKeyCell(v bc.Value) keyCell {
 	case int64:
 		return keyCell{kind: 1, num: t}
 	case float64:
-		if t == float64(int64(t)) {
+		// The RANGE test, not a round-trip: converting an out-of-range float to int64 is IMPLEMENTATION
+		// DEFINED in Go, and a round-trip does not catch the boundary either — float64(math.MaxInt64)
+		// rounds UP to 2^63, so 2^63 would round-trip and collide with MaxInt64. Both bounds below are
+		// exactly representable in float64.
+		if t == math.Trunc(t) && t >= -9223372036854775808.0 && t < 9223372036854775808.0 {
 			return keyCell{kind: 1, num: int64(t)}
 		}
 		return keyCell{kind: 2, num: int64(math.Float64bits(t))}
@@ -280,29 +287,9 @@ func stringKeyCell(t string) keyCell {
 	return keyCell{kind: 3, s: t}
 }
 
-func stringifyKey(v bc.Value) string {
-	switch t := v.(type) {
-	case nil:
-		return "null"
-	case bool:
-		if t {
-			return "true"
-		}
-		return "false"
-	case string:
-		return t
-	case float64:
-		return encodeFloat(t)
-	case int64:
-		return encodeFloat(float64(t))
-	default:
-		return jsStringify(v)
-	}
-}
-
-// KeyIdentity is the stringified key identity of an already-extracted bc key tuple (a single scalar →
-// its stringifyKey rendering; a tuple → the renderings joined by keySep). Consumed by relation.go +
-// the unit tests.
+// KeyIdentity is the key identity of an already-extracted bc key tuple (the cells themselves for the 1-
+// and 2-column keys relations use; a wider tuple encodes the same cells into one string). Consumed by
+// relation.go + the unit tests.
 func KeyIdentity(values []bc.Value) keyID { return keyIdentityG(bcOps, values) }
 
 // DedupeKeyTuples returns the deduped, non-null bc key TUPLES of rows over keyCols (the runtime

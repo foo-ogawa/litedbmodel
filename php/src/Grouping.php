@@ -21,8 +21,12 @@ namespace LiteDbModel\Runtime;
  */
 final class Grouping
 {
-    /** A separator no scalar `String(v)` rendering contains, so distinct tuples never collide. */
-    private const KEY_SEP = ' ';
+    /**
+     * The separator between the rendered cells of a multi-column key. NUL, the same byte the TS `KEY_SEP`
+     * uses, and for the same reason: a SPACE (what this was) collides as soon as a text key contains one —
+     * `('a', 'b c')` and `('a b', 'c')` rendered to the same key.
+     */
+    private const KEY_SEP = "\0";
 
     /**
      * Mirror TS `String(v)` for the key-identity used by dedupe + grouping: bool → 'true'/'false',
@@ -36,8 +40,12 @@ final class Grouping
             return $v ? 'true' : 'false';
         }
         if (is_float($v)) {
-            // A whole float prints as an integer (JS String(7) === "7").
-            if (is_finite($v) && $v === floor($v)) {
+            // A whole float prints as an integer (JS String(7) === "7"), but ONLY inside the int range:
+            // `(int)` of an out-of-range float WRAPS in PHP — `(int) 1e30` is 5076964154930102272 — and
+            // that wrapped value then shares a bucket with a genuine integer key. Both bounds below are
+            // exactly representable as a float, and the upper one is exclusive because `(float) PHP_INT_MAX`
+            // rounds up to 2^63. The range test also excludes INF, for which `floor($v) === $v` holds.
+            if ($v === floor($v) && $v >= -9223372036854775808.0 && $v < 9223372036854775808.0) {
                 return (string) (int) $v;
             }
             return (string) $v;

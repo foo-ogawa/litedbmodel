@@ -476,7 +476,6 @@ var wireOps = recordOps[wire.WireValue]{
 	field:     wireField,
 	isNull:    func(cell wire.WireValue) bool { return cell.AsInt().Kind == wireProbeNull },
 	keyCellOf: wireKeyCell,
-	keyFrag:   wireKeyFrag,
 	makeList:  func(children []wire.WireValue) wire.WireValue { return wire.WireListOf(children) },
 	nul:       wire.WireNull(),
 }
@@ -517,29 +516,6 @@ func wireKeyCell(cell wire.WireValue) keyCell {
 		return keyCell{kind: 4}
 	}
 	return keyCell{}
-}
-
-// wireKeyFrag renders a scalar wire cell to its key-identity fragment (matches JS `String(v)`), the
-// wire twin of [stringifyKey]. A number's raw text is NORMALIZED exactly as the bc path renders it
-// (integer text / whole-float → integer, else shortest round-trip), so a wire-path key and a bc-path
-// key are byte-identical. A Row/List is never a scalar key (totality fallback only).
-func wireKeyFrag(cell wire.WireValue) string {
-	if p := cell.AsInt(); p.Kind == wireProbeGot {
-		return strconv.FormatInt(p.Got, 10)
-	}
-	if p := cell.AsFloat(); p.Kind == wireProbeGot {
-		return encodeFloat(p.Got)
-	}
-	if p := cell.AsString(); p.Kind == wireProbeGot {
-		return p.Got
-	}
-	if p := cell.AsBool(); p.Kind == wireProbeGot {
-		if p.Got {
-			return "true"
-		}
-		return "false"
-	}
-	return ""
 }
 
 // leafParam converts ONE wire param to a driver-bindable arg, by the SAME rule as TS

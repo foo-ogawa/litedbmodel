@@ -41,6 +41,49 @@ func TestKeyIdentity_CarriesTheCells(t *testing.T) {
 	}
 }
 
+// The three ways keying on cells could go wrong, none of which the table above can see.
+func TestKeyIdentity_CollapseRulesDoNotDependOnArity(t *testing.T) {
+	// A whole float PAST int64 must not fold onto MaxInt64: `int64(f)` out of range is implementation
+	// defined in Go, and a round-trip does not catch the boundary (float64(MaxInt64) rounds up to 2^63).
+	if KeyIdentity([]bc.Value{1e30}) == KeyIdentity([]bc.Value{1e31}) {
+		t.Error("1e30 and 1e31 share a bucket")
+	}
+	if KeyIdentity([]bc.Value{1e30}) == KeyIdentity([]bc.Value{int64(math.MaxInt64)}) {
+		t.Error("1e30 shares a bucket with MaxInt64")
+	}
+	if KeyIdentity([]bc.Value{float64(9223372036854775808)}) == KeyIdentity([]bc.Value{int64(math.MaxInt64)}) {
+		t.Error("2^63 shares a bucket with MaxInt64")
+	}
+	// …while a whole float inside the range still folds onto the integer, which is the point.
+	if KeyIdentity([]bc.Value{float64(-9007199254740992)}) != KeyIdentity([]bc.Value{int64(-9007199254740992)}) {
+		t.Error("-2^53 as float and as int must be one key")
+	}
+
+	// A 3-column key must collapse by the SAME rule as a 1- or 2-column one. It used to render through a
+	// separate `keyFrag`, under which bool true and the string "true" were ONE key at three columns and
+	// TWO at two — the identity rule silently changed with the key's width.
+	wide3 := func(a bc.Value) keyID { return KeyIdentity([]bc.Value{a, int64(0), int64(0)}) }
+	if wide3(true) == wide3("true") {
+		t.Error("3-column key: bool true collapses with the string \"true\"")
+	}
+	if (KeyIdentity([]bc.Value{true, int64(0)}) == KeyIdentity([]bc.Value{"true", int64(0)})) != (wide3(true) == wide3("true")) {
+		t.Error("the bool-vs-text collapse differs between a 2- and a 3-column key")
+	}
+
+	// The tuple separator must not be a byte a text key can contain: with a SPACE, ("a","b c","d") and
+	// ("a b","c","d") were the same key.
+	l := func(s ...string) keyID {
+		vs := make([]bc.Value, len(s))
+		for i, v := range s {
+			vs[i] = v
+		}
+		return KeyIdentity(vs)
+	}
+	if l("a", "b c", "d") == l("a b", "c", "d") {
+		t.Error("a space in a text key collides with the tuple separator")
+	}
+}
+
 func TestDedupeKeyTuples_DropsNullAndDedupesPreservingOrder(t *testing.T) {
 	rows := []bc.Value{
 		row("id", int64(2)),

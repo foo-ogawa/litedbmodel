@@ -24,16 +24,46 @@ final class GroupingTest extends TestCase
     public function testKeyIdentityMirrorsJsString(): void
     {
         // whole float → integer text (a scanned INT column arrives as a whole float), string verbatim,
-        // bool → 'true'/'false', fractional float its string form, tuple space-joined. An INT key rides as
-        // the int: a PHP array key casts an integer-like string to the int, so `2` and `'2'` are one bucket
-        // either way — the int skips the string conversion.
+        // bool → 'true'/'false', fractional float its string form. An INT key rides as the int: a PHP array
+        // key casts an integer-like string to the int, so `2` and `'2'` are one bucket either way — the int
+        // skips the string conversion.
         self::assertSame('1', Grouping::keyIdentity([1.0]));
         self::assertSame(2, Grouping::keyIdentity([2]));
         self::assertSame('x', Grouping::keyIdentity(['x']));
         self::assertSame('true', Grouping::keyIdentity([true]));
         self::assertSame('false', Grouping::keyIdentity([false]));
         self::assertSame('1.5', Grouping::keyIdentity([1.5]));
-        self::assertSame('1 a', Grouping::keyIdentity([1, 'a']));
+        // A composite key is the cells joined by a separator, and what matters about the separator is that
+        // distinct tuples cannot render alike — NOT which byte it is. Asserting the literal `'1 a'` pinned a
+        // SPACE, which is exactly the byte a text key can contain: `('a', 'b c')` and `('a b', 'c')` were
+        // one key.
+        self::assertNotSame(
+            Grouping::keyIdentity(['a', 'b c']),
+            Grouping::keyIdentity(['a b', 'c']),
+        );
+        self::assertNotSame(
+            Grouping::keyIdentity([1, 'a']),
+            Grouping::keyIdentity([1, 'b']),
+        );
+        self::assertSame(Grouping::keyIdentity([1, 'a']), Grouping::keyIdentity([1.0, 'a']));
+    }
+
+    public function testKeyIdentityKeepsAnOutOfRangeWholeFloatOffTheIntegerBuckets(): void
+    {
+        // `(int)` of an out-of-range float WRAPS in PHP — `(int) 1e30` is 5076964154930102272 — so without
+        // the range test a huge float shared a bucket with that genuine integer key.
+        $bucket = static function (array ...$keys): int {
+            $seen = [];
+            foreach ($keys as $i => $k) {
+                $seen[Grouping::keyIdentity($k)] = $i;
+            }
+            return count($seen);
+        };
+        self::assertSame(2, $bucket([1e30], [5076964154930102272]));
+        self::assertSame(2, $bucket([1e30], [1e31]));
+        self::assertSame(2, $bucket([true], [1]));
+        // …and a whole float INSIDE the range still shares the integer's bucket, which is the point.
+        self::assertSame(1, $bucket([1.0], [1]));
     }
 
     public function testDedupeDropsNullAndDedupesPreservingOrder(): void
@@ -60,8 +90,8 @@ final class GroupingTest extends TestCase
         ];
         $keys = Grouping::dedupeKeyTuples($rows, ['t', 'u']);
         self::assertCount(2, $keys);
-        self::assertSame('1 9', Grouping::keyIdentity($keys[0]));
-        self::assertSame('1 8', Grouping::keyIdentity($keys[1]));
+        self::assertSame($keys[0], [1, 9]);
+        self::assertSame($keys[1], [1, 8]);
     }
 
     public function testGroupAndAttachHasMany(): void

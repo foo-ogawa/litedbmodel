@@ -40,11 +40,13 @@ def test_key_identity_carries_the_cells():
     assert key_identity([2]) == 2
     assert key_identity(["2"]) == 2
     assert key_identity(["x"]) == "x"
-    # bool is NOT an int key: True must not collide with 1.
-    assert key_identity([True]) is True
-    assert key_identity([False]) is False
+    # bool must NOT share a bucket with the int — and the assertion has to be about the BUCKET, not the
+    # returned object. `key_identity([True]) is True` passes while `True` and `1` are the SAME dict key
+    # (``hash(True) == hash(1)`` and ``True == 1``), which is exactly how that collapse shipped green.
+    assert len({key_identity([True]): 1, key_identity([1]): 2}) == 2
+    assert len({key_identity([False]): 1, key_identity([0]): 2}) == 2
     assert key_identity([1.5]) == 1.5
-    # tuple → single-space joined.
+    # a composite key is the tuple of cells.
     assert key_identity([1, "a"]) == (1, "a")
     # null totality arm (never reached in a real grouping — nulls are dropped first).
     assert key_identity([None]) is None
