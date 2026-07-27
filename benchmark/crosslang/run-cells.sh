@@ -23,6 +23,26 @@ OUT="$HERE/results"
 [ "$SCALE" != "1" ] && OUT="$OUT/scale-$SCALE"
 mkdir -p "$OUT"
 
+# ── EXCLUSIVE. One run of this harness at a time, machine-wide — not per dialect. Two reasons, and both
+# produce numbers that look plausible and are wrong:
+#   1. every cell DROP/CREATEs the same `benchmark_*` tables, so a second run pulls the fixture out from
+#      under the first (`Table 'benchmark_tenant_users' doesn't exist` mid-seed is what that looks like);
+#   2. even on separate servers, two runs contend for the CPU they are measuring.
+# `mkdir` is the atomic test-and-set. A stale directory from a killed run is reclaimed by checking the pid.
+LOCK="${TMPDIR:-/tmp}/litedbmodel-crosslang-bench.lock"
+if ! mkdir "$LOCK" 2>/dev/null; then
+  owner="$(cat "$LOCK/pid" 2>/dev/null || echo '?')"
+  if [ "$owner" != '?' ] && kill -0 "$owner" 2>/dev/null; then
+    echo "✗ another crosslang bench run is live (pid $owner). Concurrent runs corrupt each other's fixture"
+    echo "  AND skew each other's timings — refusing to produce numbers. Wait for it, or kill it."
+    exit 1
+  fi
+  echo "  (reclaiming a stale lock from pid $owner)" >&2
+  rm -rf "$LOCK" && mkdir "$LOCK" || { echo "✗ cannot take $LOCK"; exit 1; }
+fi
+echo $$ > "$LOCK/pid"
+trap 'rm -rf "$LOCK"' EXIT INT TERM
+
 # Capture the per-op SQL from the GENERATED module for this dialect into the artifact, so every SDK cell
 # executes the statements its native twin executes (#172). Runs before the fixture check so the check sees
 # the merged artifact.
