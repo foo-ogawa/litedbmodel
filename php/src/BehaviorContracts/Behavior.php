@@ -856,6 +856,11 @@ final class Behavior
             if ($t === 'float' && is_int($v) && !is_bool($v)) {
                 return (float) $v; // int → float へ widen（de-box: ParseFloat と同一）
             }
+            // #261: 整数値の float variant は同じ値の別綴りなので厳密に narrow する（上の widening の鏡）。
+            // 非整数 / i64 の外は LOUD のまま（fail-closed 境界つきの厳密変換であって fallback ではない）。
+            if ($t === 'int' && is_float($v) && $v === floor($v) && $v >= -9223372036854775808.0 && $v < 9223372036854775808.0) {
+                return (int) $v;
+            }
             $ok = match ($t) {
                 'string' => is_string($v),
                 'int' => is_int($v) && !is_bool($v),

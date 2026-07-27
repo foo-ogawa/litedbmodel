@@ -218,6 +218,15 @@ func ProbeIntOf(w *WireValue) IntProbe {
 	switch w.kind {
 	case wireInt:
 		return IntProbe{Kind: probeGot, Got: w.i64v, ActualWireType: "N"}
+	case wireFloat:
+		// an int position accepts an INTEGRAL float and narrows it EXACTLY — the mirror of the widening
+		// below. A wire numeric type that spells the same attribute 1 or 1.0 leaves the producer no way to
+		// pick the variant. Non-integral, or beyond int64, stays LOUD (an exact conversion with a
+		// fail-closed boundary, not a fallback).
+		if f := w.f64v; f >= -9223372036854775808.0 && f < 9223372036854775808.0 && float64(int64(f)) == f {
+			return IntProbe{Kind: probeGot, Got: int64(f), ActualWireType: "N"}
+		}
+		return IntProbe{Kind: probeWrong, ActualWireType: w.wireTag(), Raw: w.wireRaw()}
 	case wireNull:
 		return IntProbe{Kind: probeNull, ActualWireType: "NULL", Raw: "null"}
 	default:

@@ -89,11 +89,14 @@ impl std::error::Error for BehaviorError {}
 // (S/N/BOOL/M/L/NULL), a `&'static str` so classifying costs NO allocation; raw_value is the offending
 // value, borrowed when it is a fixed word. Concrete enums — no boxed runtime value.
 //
-// NO CLONE. Classification CONSUMES the wire: the transport's result is an owned local that is dead the
-// moment it is de-boxed, so every string / row / list is MOVED into the typed value. A `.clone()` here
-// would deep-copy the whole result set once per node boundary — that is a heap copy of every cell, it
-// scales with node count, and it is what made a generated native read lose to an interpreter. The purity
-// gate rejects `.clone()` and per-call `.to_string()` in this module; keep it that way.
+// NO COPY TO READ. Classification CONSUMES the wire: the transport's result is an owned local that is dead
+// the moment it is de-boxed, so every string / row / list is MOVED into the typed value. Copying a result
+// set here would be a heap copy of every cell once per node boundary, it scales with node count, and it is
+// what made a generated native read lose to an interpreter. The codegen purity gate enforces this by naming
+// the copying spellings and failing the build on them: a wire classifier that BORROWS (which forces a
+// per-cell copy to de-box), a de-box that clones a list out of the wire, and a row cloned out of its cell
+// before a field is taken from the copy. Owning ONE leaf value that a borrow cannot outlive is not a copy
+// of the result set and is not forbidden.
 pub enum Probe<T> {
     Got(T),
     Wrong { actual_wire_type: &'static str, raw_value: Cow<'static, str> },
@@ -192,6 +195,11 @@ pub fn probe_int_at(v: Option<WireValue>) -> Probe<i64> {
     match v {
         None => Probe::Absent,
         Some(WireValue::Int(n)) => Probe::Got(n),
+        // an int position accepts an INTEGRAL float and narrows it EXACTLY — the mirror of the widening
+        // below. A wire numeric type that spells the same attribute 1 or 1.0 leaves the producer no way to
+        // pick the variant. Non-integral, or beyond i64, stays LOUD (an exact conversion with a
+        // fail-closed boundary, not a fallback).
+        Some(WireValue::Float(f)) if f >= -9223372036854775808.0 && f < 9223372036854775808.0 && f == f.trunc() => Probe::Got(f as i64),
         Some(WireValue::Null) => Probe::Null { actual_wire_type: "NULL", raw_value: Cow::Borrowed("null") },
         Some(o) => Probe::Wrong { actual_wire_type: o.tag(), raw_value: o.into_raw() },
     }

@@ -16,14 +16,16 @@
 // the consumer supplies the leaf transport symbols (default in-scope names leaf_<comp>, or a leafTransport
 // import).
 //
-// NO CLONE, NO PER-CALL ALLOCATION — the two rules this module is generated under:
+// NO COPY TO READ, NO PER-CALL ALLOCATION — the two rules this module is generated under:
 //   - Everything fixed at generation time (SQL text, port names, field names) rides as `&'static str`
 //     behind `Cow::Borrowed`, so building a payload allocates nothing for it, however often it is called.
-//   - De-boxing CONSUMES the transport's wire: every string, row and list is MOVED into the typed value.
-//     A `.clone()` on this path deep-copies the result set once per node boundary and scales with node
-//     count — it is the difference between beating a hand-written driver and losing to an interpreter.
-// The codegen purity gate rejects `.clone()` and per-call `.to_string()` here, and the cost is confirmed
-// by benchmark, not by asserting it in this comment.
+//   - De-boxing CONSUMES the transport's wire: every string, row and list is MOVED into the typed value,
+//     and a result with a single reader is MOVED out of its cell (`.take()`) rather than copied. Reading
+//     one field of a result that has several readers borrows to that field and owns only it — the row is
+//     never copied to read part of it.
+// The codegen purity gate fails the build on exactly those spellings (a wire classifier that borrows, a
+// de-box that clones a list out of the wire, a row cloned out of its cell before a field is taken from the
+// copy) and the cost is confirmed by benchmark, not by this comment.
 use std::borrow::Cow;
 use std::cell::RefCell;
 
