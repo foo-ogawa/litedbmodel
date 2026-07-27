@@ -192,7 +192,7 @@ function openDb(string $dialect = 'sqlite'): Db
     $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
     $pdo->setAttribute(\PDO::ATTR_STRINGIFY_FETCHES, false);
     foreach (benchSetup($dialect)['schema'] as $stmt) {
-        $pdo->exec($stmt);
+        \lm_bench_seed_apply($pdo, $stmt);
     }
     return new Db($pdo, $dialect);
 }
@@ -200,7 +200,7 @@ function openDb(string $dialect = 'sqlite'): Db
 function seed(Db $db): void
 {
     foreach (array_merge(benchSetup($db->dialect)['delete'], benchSetup($db->dialect)['insert']) as $stmt) {
-        $db->pdo->exec($stmt); // runs on the PDO directly (off-seam) → never counted
+        \lm_bench_seed_apply($db->pdo, $stmt); // runs on the PDO directly (off-seam) → never counted
     }
 }
 

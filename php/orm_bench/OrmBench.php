@@ -118,7 +118,7 @@ final class OrmBench
             throw new \RuntimeException("orm_bench: unknown target '{$dialect}' (sqlite|postgres|mysql)");
         }
         foreach (self::setup($dialect)['schema'] as $stmt) {
-            $db->exec($stmt);
+            \lm_bench_seed_apply($db, $stmt);
         }
         return $db;
     }
@@ -130,7 +130,7 @@ final class OrmBench
     public static function seed(\PDO $db, string $dialect = 'sqlite'): void
     {
         foreach (array_merge(self::setup($dialect)['delete'], self::setup($dialect)['insert']) as $stmt) {
-            $db->exec($stmt);
+            \lm_bench_seed_apply($db, $stmt);
         }
     }
 

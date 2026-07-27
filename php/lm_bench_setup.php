@@ -23,3 +23,21 @@ function lm_bench_load_setup(string $dialect): array
     }
     return $doc;
 }
+
+/**
+ * Apply ONE seed statement (schema / delete / insert) directly on the PDO — the single seed-exec point
+ * for BOTH php cells. Unlike `PDO::exec()`, this DRAINS any result set the statement produces: the
+ * terminal `insert` entry is MySQL `ANALYZE TABLE …` (a post-load stats refresh so the optimizer picks
+ * the seeded plans, not empty-table ones), which returns a status result set. With native prepares
+ * `exec()` leaves that set undrained, so the connection stays busy and the NEXT `prepare()` throws
+ * "2014 Cannot execute queries while other unbuffered queries are active" — which slipped past because
+ * `exec()` returns cleanly and only the FOLLOWING statement fails. `query()` + `closeCursor()` frees the
+ * result set (a no-op for the DDL/DML statements that return none), leaving the connection ready.
+ */
+function lm_bench_seed_apply(\PDO $pdo, string $sql): void
+{
+    $stmt = $pdo->query($sql);
+    if ($stmt instanceof \PDOStatement) {
+        $stmt->closeCursor();
+    }
+}
