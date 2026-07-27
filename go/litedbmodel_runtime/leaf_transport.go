@@ -21,10 +21,11 @@ package litedbmodel_runtime
 
 import (
 	"fmt"
+	"github.com/foo-ogawa/litedbmodel/go/litedbmodel_runtime/wire"
+	"math"
 	"strconv"
 
 	bc "github.com/foo-ogawa/behavior-contracts/go"
-	"github.com/foo-ogawa/litedbmodel/go/litedbmodel_runtime/wire"
 )
 
 // wireProbeGot mirrors the BC-OWNED wire package's probe-result Kind for "present and matching" (the
@@ -474,6 +475,7 @@ var wireOps = recordOps[wire.WireValue]{
 	cellAt:    func(v wire.WireValue, i int) wire.WireValue { return v.Entries[i].Val },
 	field:     wireField,
 	isNull:    func(cell wire.WireValue) bool { return cell.AsInt().Kind == wireProbeNull },
+	keyCellOf: wireKeyCell,
 	keyFrag:   wireKeyFrag,
 	makeList:  func(children []wire.WireValue) wire.WireValue { return wire.WireListOf(children) },
 	nul:       wire.WireNull(),
@@ -491,6 +493,30 @@ func wireField(w wire.WireValue, name string) (wire.WireValue, bool) {
 		}
 	}
 	return wire.WireValue{}, false
+}
+
+// wireKeyCell projects a scalar wire cell to its comparable key value — no allocation, the shape a
+// raw-driver consumer groups on. An integer and the same whole float are ONE key.
+func wireKeyCell(cell wire.WireValue) keyCell {
+	if p := cell.AsInt(); p.Kind == wireProbeGot {
+		return keyCell{kind: 1, num: p.Got}
+	}
+	if p := cell.AsFloat(); p.Kind == wireProbeGot {
+		if p.Got == float64(int64(p.Got)) {
+			return keyCell{kind: 1, num: int64(p.Got)}
+		}
+		return keyCell{kind: 2, num: int64(math.Float64bits(p.Got))}
+	}
+	if p := cell.AsString(); p.Kind == wireProbeGot {
+		return keyCell{kind: 3, s: p.Got}
+	}
+	if p := cell.AsBool(); p.Kind == wireProbeGot {
+		if p.Got {
+			return keyCell{kind: 4, num: 1}
+		}
+		return keyCell{kind: 4}
+	}
+	return keyCell{}
 }
 
 // wireKeyFrag renders a scalar wire cell to its key-identity fragment (matches JS `String(v)`), the

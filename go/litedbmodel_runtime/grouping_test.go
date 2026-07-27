@@ -4,6 +4,7 @@
 package litedbmodel_runtime
 
 import (
+	"math"
 	"testing"
 
 	bc "github.com/foo-ogawa/behavior-contracts/go"
@@ -17,23 +18,25 @@ func row(pairs ...any) bc.Value {
 
 func cols(cs ...string) []string { return cs }
 
-func TestKeyIdentity_MatchesJSString(t *testing.T) {
-	// whole float → integer text (a scanned INT column), int64 same, string/bool verbatim, tuple space-joined.
+func TestKeyIdentity_CarriesTheCells(t *testing.T) {
+	// A whole float and the same integer are ONE key (a parent read as 1 and a child FK read as 1.0 must
+	// land in one bucket); string/bool ride verbatim; a 2-column key is inline, not rendered.
 	cases := []struct {
 		in   []bc.Value
-		want string
+		want keyID
 	}{
-		{[]bc.Value{float64(1)}, "1"},
-		{[]bc.Value{int64(2)}, "2"},
-		{[]bc.Value{"x"}, "x"},
-		{[]bc.Value{true}, "true"},
-		{[]bc.Value{false}, "false"},
-		{[]bc.Value{float64(1.5)}, "1.5"},
-		{[]bc.Value{int64(1), "a"}, "1 a"},
+		{[]bc.Value{float64(1)}, keyID{a: keyCell{kind: 1, num: 1}}},
+		{[]bc.Value{int64(1)}, keyID{a: keyCell{kind: 1, num: 1}}},
+		{[]bc.Value{int64(2)}, keyID{a: keyCell{kind: 1, num: 2}}},
+		{[]bc.Value{"x"}, keyID{a: keyCell{kind: 3, s: "x"}}},
+		{[]bc.Value{true}, keyID{a: keyCell{kind: 4, num: 1}}},
+		{[]bc.Value{false}, keyID{a: keyCell{kind: 4}}},
+		{[]bc.Value{float64(1.5)}, keyID{a: keyCell{kind: 2, num: int64(math.Float64bits(1.5))}}},
+		{[]bc.Value{int64(1), "a"}, keyID{a: keyCell{kind: 1, num: 1}, b: keyCell{kind: 3, s: "a"}}},
 	}
 	for _, c := range cases {
 		if got := KeyIdentity(c.in); got != c.want {
-			t.Errorf("KeyIdentity(%v) = %q, want %q", c.in, got, c.want)
+			t.Errorf("KeyIdentity(%v) = %+v, want %+v", c.in, got, c.want)
 		}
 	}
 }
@@ -50,8 +53,9 @@ func TestDedupeKeyTuples_DropsNullAndDedupesPreservingOrder(t *testing.T) {
 	if len(keys) != 2 {
 		t.Fatalf("got %d tuples, want 2", len(keys))
 	}
-	if KeyIdentity(keys[0]) != "2" || KeyIdentity(keys[1]) != "1" {
-		t.Errorf("insertion order/dedupe wrong: got [%q %q], want [2 1]", KeyIdentity(keys[0]), KeyIdentity(keys[1]))
+	if KeyIdentity(keys[0]) != (keyID{a: keyCell{kind: 1, num: 2}}) ||
+		KeyIdentity(keys[1]) != (keyID{a: keyCell{kind: 1, num: 1}}) {
+		t.Errorf("insertion order/dedupe wrong: got [%+v %+v], want [2 1]", KeyIdentity(keys[0]), KeyIdentity(keys[1]))
 	}
 }
 
@@ -66,8 +70,10 @@ func TestDedupeKeyTuples_CompositeTuple(t *testing.T) {
 	if len(keys) != 2 {
 		t.Fatalf("got %d tuples, want 2", len(keys))
 	}
-	if KeyIdentity(keys[0]) != "1 9" || KeyIdentity(keys[1]) != "1 8" {
-		t.Errorf("composite tuples wrong: got [%q %q]", KeyIdentity(keys[0]), KeyIdentity(keys[1]))
+	want0 := keyID{a: keyCell{kind: 1, num: 1}, b: keyCell{kind: 1, num: 9}}
+	want1 := keyID{a: keyCell{kind: 1, num: 1}, b: keyCell{kind: 1, num: 8}}
+	if KeyIdentity(keys[0]) != want0 || KeyIdentity(keys[1]) != want1 {
+		t.Errorf("composite tuples wrong: got [%+v %+v]", KeyIdentity(keys[0]), KeyIdentity(keys[1]))
 	}
 }
 
@@ -103,9 +109,10 @@ func TestGroupByKey_And_AttachToParent_HasMany(t *testing.T) {
 		t.Errorf("hasMany no-match: want empty list, got %#v", a3)
 	}
 
-	// null-fk child was dropped → never in any bucket
-	if len(byKey["null"]) != 0 {
-		t.Errorf("null-fk child must be dropped, got bucket %#v", byKey["null"])
+	// null-fk child was dropped → never in any bucket (the null key cell is the zero keyCell)
+	nullKey := keyID{}
+	if len(byKey[nullKey]) != 0 {
+		t.Errorf("null-fk child must be dropped, got bucket %#v", byKey[nullKey])
 	}
 }
 

@@ -18,14 +18,39 @@
 package litedbmodel_runtime
 
 import (
+	"math"
 	"strings"
 
 	bc "github.com/foo-ogawa/behavior-contracts/go"
 )
 
-// keySep is a separator no scalar keyFrag rendering contains, so distinct tuples never collide
-// (matches the TS `KEY_SEP`).
+// keySep is a separator no scalar key rendering contains, so distinct tuples never collide (matches the
+// TS `KEY_SEP`). Only a 3+-column key still renders — the 1- and 2-column keys every relation uses are
+// carried in [keyID]'s inline cells.
 const keySep = " "
+
+// keyCell is ONE key column's value, comparable and allocation-free. A raw-driver consumer groups on the
+// native value (`map[int64][]row`, a struct key for a composite one); rendering each cell to a string
+// instead cost one allocation per row per level, which is what made a relation op lose to a raw driver.
+// A Go string field is a header copy, so a text key costs nothing either.
+//
+// The layout is deliberately TIGHT — 32 bytes, not one field per kind. Go hashes a map key by its bytes,
+// so a wide key costs more to hash than the short string it replaces, and a wider `keyCell` measured
+// SLOWER on the 1,100-row level even while it was faster on the 11,100-row one. `num` carries an int
+// directly and a float by its bit pattern (a whole float is normalized to the int, so a parent read as 1
+// and a child FK read as 1.0 are one key); a bool rides as 0/1 in `num`.
+type keyCell struct {
+	kind uint8 // 0 null/absent · 1 int · 2 float bits · 3 string · 4 bool
+	num  int64
+	s    string
+}
+
+// keyID is a key tuple usable as a map key. The 1- and 2-column arms are inline; a wider key falls back
+// to the rendered form in `more` (rare, and still correct).
+type keyID struct {
+	a, b keyCell
+	more string
+}
 
 // absentIdx marks a key column that is not present in the sample row's column order — its per-row
 // lookup then falls back to the linear name scan (matches the rust `usize::MAX` sentinel).
@@ -49,7 +74,9 @@ type recordOps[R any] struct {
 	field func(v R, name string) (R, bool)
 	// isNull reports a null/absent cell (dropped from a key tuple — the no-partial-keys rule).
 	isNull func(cell R) bool
-	// keyFrag renders a scalar cell to its key-identity fragment (matches JS `String(v)`).
+	// keyCellOf projects a scalar cell to its comparable key value (no allocation).
+	keyCellOf func(cell R) keyCell
+	// keyFrag renders a scalar cell to text — only for a 3+-column key, which [keyID] cannot inline.
 	keyFrag func(cell R) string
 	// makeList wraps children into a record-list value ([] when children is empty); nul is the
 	// null/absent value. These build the [attachG] output in the representation's own shape.
@@ -57,17 +84,21 @@ type recordOps[R any] struct {
 	nul      R
 }
 
-// keyIdentityG is the stringified key identity for dedupe/grouping. A single scalar → its keyFrag
-// rendering; a tuple → the renderings joined by keySep (matches TS `keyIdentity`).
-func keyIdentityG[R any](ops recordOps[R], cells []R) string {
-	if len(cells) == 1 {
-		return ops.keyFrag(cells[0])
+// keyIdentityG is the key identity for dedupe/grouping — the cells themselves for the 1- and 2-column
+// keys a relation is keyed on (no allocation), the rendered join for a wider one.
+func keyIdentityG[R any](ops recordOps[R], cells []R) keyID {
+	switch len(cells) {
+	case 1:
+		return keyID{a: ops.keyCellOf(cells[0])}
+	case 2:
+		return keyID{a: ops.keyCellOf(cells[0]), b: ops.keyCellOf(cells[1])}
+	default:
+		parts := make([]string, len(cells))
+		for i, c := range cells {
+			parts[i] = ops.keyFrag(c)
+		}
+		return keyID{more: strings.Join(parts, keySep)}
 	}
-	parts := make([]string, len(cells))
-	for i, c := range cells {
-		parts[i] = ops.keyFrag(c)
-	}
-	return strings.Join(parts, keySep)
 }
 
 // resolveKeyIndicesG resolves each key column to its POSITION in the first record of rows (every row
@@ -132,7 +163,7 @@ func keyCells[R any](ops recordOps[R], row R, cols []string, idx []int) ([]R, bo
 // deduped on the stringified tuple identity. Port of TS `dedupeKeyTuples`.
 func dedupeKeyTuplesG[R any](ops recordOps[R], rows []R, keyCols []string) [][]R {
 	idx := resolveKeyIndicesG(ops, rows, keyCols)
-	seen := map[string]struct{}{}
+	seen := map[keyID]struct{}{}
 	out := [][]R{}
 	for _, r := range rows {
 		cells, ok := keyCells(ops, r, keyCols, idx)
@@ -151,9 +182,9 @@ func dedupeKeyTuplesG[R any](ops recordOps[R], rows []R, keyCols []string) [][]R
 
 // groupByKeyG groups children by their fkCols tuple identity (a null/absent key drops the child). The
 // child list order within a bucket is the input order (append order). Port of TS `groupByKey`.
-func groupByKeyG[R any](ops recordOps[R], children []R, fkCols []string) map[string][]R {
+func groupByKeyG[R any](ops recordOps[R], children []R, fkCols []string) map[keyID][]R {
 	idx := resolveKeyIndicesG(ops, children, fkCols)
-	byKey := map[string][]R{}
+	byKey := map[keyID][]R{}
 	for _, c := range children {
 		cells, ok := keyCells(ops, c, fkCols, idx)
 		if !ok {
@@ -169,7 +200,7 @@ func groupByKeyG[R any](ops recordOps[R], children []R, fkCols []string) map[str
 // single==false (hasMany) → the child list ([] when none); single==true (belongsTo/hasOne) → the
 // single child (or the null value). Keyed by the parent's pkCols tuple identity (pkIdx resolved ONCE
 // by the caller — no per-parent index scan); a null/absent parent key matches nothing ([] / null).
-func attachG[R any](ops recordOps[R], parent R, pkCols []string, pkIdx []int, byKey map[string][]R, single bool) R {
+func attachG[R any](ops recordOps[R], parent R, pkCols []string, pkIdx []int, byKey map[keyID][]R, single bool) R {
 	var rows []R
 	if cells, ok := keyCells(ops, parent, pkCols, pkIdx); ok {
 		rows = byKey[keyIdentityG(ops, cells)]
@@ -199,15 +230,42 @@ var bcOps = recordOps[bc.Value]{
 		}
 		return o.Get(name) // ok=key present; a present-nil cell is dropped by isNull
 	},
-	isNull:   func(cell bc.Value) bool { return cell == nil },
-	keyFrag:  stringifyKey,
-	makeList: func(children []bc.Value) bc.Value { return bc.Value(children) },
-	nul:      nil,
+	isNull:    func(cell bc.Value) bool { return cell == nil },
+	keyCellOf: bcKeyCell,
+	keyFrag:   stringifyKey,
+	makeList:  func(children []bc.Value) bc.Value { return bc.Value(children) },
+	nul:       nil,
 }
 
 // stringifyKey mirrors TS `String(v)` for the bc key identity. A whole float prints as an integer (a
 // scanned int column arrives as float64), int64 same, bool → "true"/"false", null → "null" (a null
 // key is dropped before it is ever stringified, so that arm only exists for totality).
+// bcKeyCell projects a bc row cell to its comparable key value. An integer and the same whole float are
+// the SAME key (a parent read as 1 and a child FK read as 1.0 must land in one bucket), matching the
+// rendered form this replaces (`encodeFloat` printed both as "1").
+func bcKeyCell(v bc.Value) keyCell {
+	switch t := v.(type) {
+	case nil:
+		return keyCell{}
+	case bool:
+		if t {
+			return keyCell{kind: 4, num: 1}
+		}
+		return keyCell{kind: 4}
+	case string:
+		return keyCell{kind: 3, s: t}
+	case int64:
+		return keyCell{kind: 1, num: t}
+	case float64:
+		if t == float64(int64(t)) {
+			return keyCell{kind: 1, num: int64(t)}
+		}
+		return keyCell{kind: 2, num: int64(math.Float64bits(t))}
+	default:
+		return keyCell{kind: 3, s: jsStringify(v)}
+	}
+}
+
 func stringifyKey(v bc.Value) string {
 	switch t := v.(type) {
 	case nil:
@@ -231,7 +289,7 @@ func stringifyKey(v bc.Value) string {
 // KeyIdentity is the stringified key identity of an already-extracted bc key tuple (a single scalar →
 // its stringifyKey rendering; a tuple → the renderings joined by keySep). Consumed by relation.go +
 // the unit tests.
-func KeyIdentity(values []bc.Value) string { return keyIdentityG(bcOps, values) }
+func KeyIdentity(values []bc.Value) keyID { return keyIdentityG(bcOps, values) }
 
 // DedupeKeyTuples returns the deduped, non-null bc key TUPLES of rows over keyCols (the runtime
 // relation path's parent-key dedupe). See [dedupeKeyTuplesG].
@@ -241,14 +299,14 @@ func DedupeKeyTuples(rows []bc.Value, keyCols []string) [][]bc.Value {
 
 // GroupByKey groups bc children by their fkCols tuple identity (the runtime relation path's child
 // grouping). See [groupByKeyG].
-func GroupByKey(children []bc.Value, fkCols []string) map[string][]bc.Value {
+func GroupByKey(children []bc.Value, fkCols []string) map[keyID][]bc.Value {
 	return groupByKeyG(bcOps, children, fkCols)
 }
 
 // AttachToParent distributes grouped bc children onto ONE parent per cardinality (the runtime relation
 // path's per-parent attach): single==false (hasMany) → the child list ([]bc.Value{} when none);
 // single==true (belongsTo/hasOne) → the single child (or nil). See [attachG].
-func AttachToParent(parent *bc.Obj, pkCols []string, byKey map[string][]bc.Value, single bool) bc.Value {
+func AttachToParent(parent *bc.Obj, pkCols []string, byKey map[keyID][]bc.Value, single bool) bc.Value {
 	p := bc.Value(parent)
 	pkIdx := resolveKeyIndicesG(bcOps, []bc.Value{p}, pkCols)
 	return attachG(bcOps, p, pkCols, pkIdx, byKey, single)

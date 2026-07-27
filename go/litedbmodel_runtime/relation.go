@@ -159,7 +159,7 @@ func bindKeys(op RelationOp, tuples [][]bc.Value) []any {
 }
 
 // RelationBatch is the child rows grouped for a batch: stringified target-key identity → child rows.
-type RelationBatch map[string][]bc.Value
+type RelationBatch map[keyID][]bc.Value
 
 // RunRelationOp runs ONE relation batch op for a set of parent rows (port of TS runRelationOp).
 // Dedup the parent-key tuples, resolve the deferred PG array cast(s) from the REAL keys (one per key
