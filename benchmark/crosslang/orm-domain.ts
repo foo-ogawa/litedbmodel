@@ -47,9 +47,14 @@ export interface SeedShape {
  * fixture `nestedRelations` read 700 rows against the ORM bench's 11,100, so a per-row regression could
  * not show up as anything but noise against the fixed per-call overhead (#170).
  *
- * `tenants` × `usersPerTenant` = 500 tenant_users; `compositeRelations` orders by `user_id` and takes
- * 100, so its window is user_id 1..20 across all 5 tenants = 100 users → 1000 posts → 10000 comments,
- * the same window the ORM bench's `tenant_id IN (1..5) LIMIT 100` reads.
+ * `tenants` × `usersPerTenant` = 1000 tenant_users, EVERY tenant carrying comments. `compositeRelations`
+ * reads a NATURAL `ORDER BY user_id LIMIT 100` (no tenant filter shaped around which tenants happen to
+ * have comments) → 100 tenant_users → 1000 posts → 10000 comments, whichever 100 the window lands on.
+ *
+ * The record counts match the ORM-vs-ORM bench (`benchmark/setup.ts`) EXACTLY: 1000 users, 5500 posts,
+ * 10000 comments, 1000 tenant_users, 10000 tenant_posts, 100000 tenant_comments — so the two benches
+ * measure identical data (only the table format differs: the ORM bench adds a `benchmark_tenants` parent
+ * + FK constraints its Prisma model requires, which the dialect-invariant cross-lang schema omits).
  */
 export const ORM_SEED: SeedShape = {
   users: 1000,
@@ -57,7 +62,7 @@ export const ORM_SEED: SeedShape = {
   nestedPostsPerUser: 10,
   commentsPerPost: 10,
   shallowPostsPerUser: 5,
-  tenants: 5,
+  tenants: 10,
   usersPerTenant: 100,
   postsPerTenantUser: 10,
   commentsPerTenantPost: 10,
@@ -102,7 +107,7 @@ export function deleteStatements(_dialect: OrmDialect): string[] {
   return DROP_ORDER.map((t) => `DELETE FROM ${t}`);
 }
 
-// Refresh optimizer statistics AFTER the seed. The relation indexes (RELATION_INDEXES) are created on
+// Refresh optimizer statistics AFTER the seed. The indexes (BENCH_INDEXES) are created on
 // EMPTY tables and then bulk-loaded, so InnoDB's persistent index statistics stay at their empty-table
 // state — and a read never triggers a recalc, so they never self-correct across the bench's warmup or
 // timed iterations. With stale stats MySQL estimates the composite child table at ~1 row, picks the PK's
@@ -126,11 +131,12 @@ export function analyzeStatements(dialect: OrmDialect): string[] {
 // an index took the same query to 6.6ms. A real deployment indexes these; a bench that does not is
 // measuring a full scan, not a relation. `CREATE INDEX … ON … (…)` is byte-identical across sqlite /
 // mysql / postgres, so this is ONE list, spread into each dialect's DDL — not restated three times.
-const RELATION_INDEXES: readonly string[] = [
-  `CREATE INDEX ix_posts_author ON benchmark_posts (author_id)`, // User.posts
-  `CREATE INDEX ix_comments_post ON benchmark_comments (post_id)`, // Post.comments
-  `CREATE INDEX ix_tposts_tenant_user ON benchmark_tenant_posts (tenant_id, user_id)`, // TenantUser.posts
-  `CREATE INDEX ix_tcomments_tenant_post ON benchmark_tenant_comments (tenant_id, post_id)`, // TenantPost.comments
+const BENCH_INDEXES: readonly string[] = [
+  `CREATE INDEX ix_posts_author ON benchmark_posts (author_id)`, // User.posts (relation FK)
+  `CREATE INDEX ix_comments_post ON benchmark_comments (post_id)`, // Post.comments (relation FK)
+  `CREATE INDEX ix_tposts_tenant_user ON benchmark_tenant_posts (tenant_id, user_id)`, // TenantUser.posts (relation FK)
+  `CREATE INDEX ix_tcomments_tenant_post ON benchmark_tenant_comments (tenant_id, post_id)`, // TenantPost.comments (relation FK)
+  `CREATE INDEX ix_posts_published ON benchmark_posts (published)`, // filterPaginateSort predicate — matches the ORM bench's idx_posts_published
 ];
 
 export function ddl(dialect: OrmDialect): string[] {
@@ -177,7 +183,7 @@ export function ddl(dialect: OrmDialect): string[] {
         body TEXT NOT NULL,
         PRIMARY KEY (tenant_id, comment_id)
       )`,
-      ...RELATION_INDEXES,
+      ...BENCH_INDEXES,
     ];
   }
   if (dialect === 'mysql') {
@@ -223,7 +229,7 @@ export function ddl(dialect: OrmDialect): string[] {
         body TEXT NOT NULL,
         PRIMARY KEY (tenant_id, comment_id)
       )`,
-      ...RELATION_INDEXES,
+      ...BENCH_INDEXES,
     ];
   }
   // postgres
@@ -273,7 +279,7 @@ export function ddl(dialect: OrmDialect): string[] {
       body TEXT NOT NULL,
       PRIMARY KEY (tenant_id, comment_id)
     )`,
-    ...RELATION_INDEXES,
+    ...BENCH_INDEXES,
   ];
 }
 

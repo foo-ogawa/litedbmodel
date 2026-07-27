@@ -231,7 +231,10 @@ async function setup() {
   // A query using only post_id IN (1,2,3) would match posts from ALL tenants!
   console.log('Inserting tenant comments (multi-tenant, post_id repeats per tenant)...');
   const COMMENTS_PER_TENANT_POST = 10;
-  const TENANTS_FOR_COMMENTS = 5;  // Use tenants 1-5
+  const TENANTS_FOR_COMMENTS = NUM_TENANTS;  // EVERY tenant carries comments — matches the cross-lang
+  // fixture (orm-domain.ts) so the two benches hold identical record counts (100000 tenant_comments).
+  // With comments uniform across tenants, the composite op's `tenant_id IN (1..5)` is an ordinary
+  // tenant scope, not a filter shaped around which tenants happen to have comments.
   const POSTS_PER_TENANT = USERS_PER_TENANT * POSTS_PER_TENANT_USER; // 1000 posts per tenant
   
   const tenantCommentValues: string[] = [];
