@@ -23,6 +23,50 @@ OUT="$HERE/results"
 [ "$SCALE" != "1" ] && OUT="$OUT/scale-$SCALE"
 mkdir -p "$OUT"
 
+# ── arm64 TOOLCHAIN, PINNED AND GUARDED. This is an Apple-Silicon host, but the default PATH points at
+# the x86 Homebrew (/usr/local) — so `node`, `go`, `php`, `cargo` all resolve to x86_64 binaries that run
+# under Rosetta, and one language (python, a universal binary) runs arm64. That mixes architectures AND
+# measures emulation, not the machine. Every number this harness prints must be arm64-native, so the
+# toolchain is resolved to arm64 here and a mismatch is a HARD failure, never a silent Rosetta run.
+#
+# Override any entry with BENCH_NODE / BENCH_GO / BENCH_PHP / BENCH_PYTHON; otherwise: node from the
+# newest arm64 nvm install, go/php from /opt/homebrew (arm64 Homebrew), python3 from PATH (Xcode's is a
+# universal binary that already runs arm64). Rust builds with --target aarch64-apple-darwin below.
+RUST_TARGET="aarch64-apple-darwin"
+pick_arm64_node() {
+  [ -n "${BENCH_NODE:-}" ] && { echo "$BENCH_NODE"; return; }
+  local n
+  for n in $(ls -1d "$HOME"/.nvm/versions/node/*/bin/node 2>/dev/null | sort -rV); do
+    [ -x "$n" ] && file "$n" | grep -q arm64 && { echo "$n"; return; }
+  done
+}
+BENCH_NODE="$(pick_arm64_node)"
+[ -n "$BENCH_NODE" ] && export PATH="$(dirname "$BENCH_NODE"):$PATH"
+[ -d /opt/homebrew/bin ] && export PATH="/opt/homebrew/bin:$PATH"
+NODE="${BENCH_NODE:-node}"; GO="${BENCH_GO:-go}"; PHP="${BENCH_PHP:-php}"; PY="${BENCH_PYTHON:-python3}"
+
+# node/go/php resolve to THIN arm64 binaries, which run arm64 whatever the parent shell is. python3 here
+# is a UNIVERSAL binary, and macOS does not propagate an `arch -arm64` preference to a grandchild — so a
+# python spawned two shells deep from this x86 login shell runs x86. Launch it as a DIRECT child of
+# `arch -arm64` (that IS honoured), but only when the plain invocation is not already arm64.
+PY_LAUNCH="$PY"
+if [ "$($PY -c 'import platform;print(platform.machine())' 2>/dev/null)" != "arm64" ] \
+   && [ "$(arch -arm64 $PY -c 'import platform;print(platform.machine())' 2>/dev/null)" = "arm64" ]; then
+  PY_LAUNCH="arch -arm64 $PY"
+fi
+
+guard_arch() { # name actual  → fail unless arm64
+  case "$2" in
+    arm64|aarch64) : ;;
+    *) echo "✗ $1 is '$2', not arm64 — refusing to publish Rosetta/x86 numbers on an arm64 host."; echo "  Fix the arm64 toolchain (see the block in run-cells.sh) or set BENCH_$1."; exit 1 ;;
+  esac
+}
+guard_arch NODE "$("$NODE" -p process.arch 2>/dev/null)"
+guard_arch GO   "$("$GO" env GOARCH 2>/dev/null)"
+guard_arch PHP  "$("$PHP" -r 'echo php_uname("m");' 2>/dev/null)"
+guard_arch PYTHON "$($PY_LAUNCH -c 'import platform;print(platform.machine())' 2>/dev/null)"
+echo "arch: node/go/php/python all arm64; rust → $RUST_TARGET"
+
 # ── EXCLUSIVE. One run of this harness at a time, machine-wide — not per dialect. Two reasons, and both
 # produce numbers that look plausible and are wrong:
 #   1. every cell DROP/CREATEs the same `benchmark_*` tables, so a second run pulls the fixture out from
@@ -46,7 +90,7 @@ trap 'rm -rf "$LOCK"' EXIT INT TERM
 # Capture the per-op SQL from the GENERATED module for this dialect into the artifact, so every SDK cell
 # executes the statements its native twin executes (#172). Runs before the fixture check so the check sees
 # the merged artifact.
-(cd "$ROOT/go" && go run -tags "bench_$DIALECT" ./lm_bench/lm_orm_native/ sql >/dev/null) || {
+(cd "$ROOT/go" && "$GO" run -tags "bench_$DIALECT" ./lm_bench/lm_orm_native/ sql >/dev/null) || {
   echo "✗ op-SQL capture failed on $DIALECT — the SDK cells have no statements to run"; exit 1
 }
 
@@ -91,28 +135,28 @@ if [ "$DIALECT" = "sqlite" ]; then
   echo "── typescript.native (sqlite): SKIP — no TS codegen leg for SQLite (v1 in-proc path; see"
   echo "   src/scp/dbmodel-runtime.ts:145). typescript.v1 covers this dialect."
 else
-  run typescript.native "$ROOT" node "$TS_MAIN" codegen "$DIALECT" "$REPS" "$WARMUP"
+  run typescript.native "$ROOT" "$NODE" "$TS_MAIN" codegen "$DIALECT" "$REPS" "$WARMUP"
 fi
-run typescript.v1  "$ROOT" node "$TS_MAIN" v1  "$DIALECT" "$REPS" "$WARMUP"
-run typescript.sdk "$ROOT" node "$TS_MAIN" sdk "$DIALECT" "$REPS" "$WARMUP"
+run typescript.v1  "$ROOT" "$NODE" "$TS_MAIN" v1  "$DIALECT" "$REPS" "$WARMUP"
+run typescript.sdk "$ROOT" "$NODE" "$TS_MAIN" sdk "$DIALECT" "$REPS" "$WARMUP"
 
 # Go — the dialect is a BUILD tag on the native cell (the generated module is baked per dialect).
-run go.native "$ROOT/go" go run -tags "bench_$DIALECT" ./lm_bench/lm_orm_native/ bench "$REPS" "$WARMUP"
-run go.sdk    "$ROOT/go" go run ./lm_bench/lm_orm/ "$DIALECT" bench "$REPS" "$WARMUP"
+run go.native "$ROOT/go" "$GO" run -tags "bench_$DIALECT" ./lm_bench/lm_orm_native/ bench "$REPS" "$WARMUP"
+run go.sdk    "$ROOT/go" "$GO" run ./lm_bench/lm_orm/ "$DIALECT" bench "$REPS" "$WARMUP"
 
 # Rust — the dialect is a cargo FEATURE on the native cell, an argv on the SDK cell.
 RUST_FEATURES=""
 [ "$DIALECT" = "sqlite" ] || RUST_FEATURES="--features livedb,target_$DIALECT"
-run rust.native "$ROOT/rust" cargo run --quiet --release --manifest-path orm_bench/Cargo.toml $RUST_FEATURES -- "$REPS" "$WARMUP"
+run rust.native "$ROOT/rust" cargo run --quiet --release --target "$RUST_TARGET" --manifest-path orm_bench/Cargo.toml $RUST_FEATURES -- "$REPS" "$WARMUP"
 RUST_SDK_FEATURES=""
 [ "$DIALECT" = "sqlite" ] || RUST_SDK_FEATURES="--features livedb"
-run rust.sdk "$ROOT/rust" cargo run --quiet --release --manifest-path orm_bench_sdk/Cargo.toml $RUST_SDK_FEATURES -- "$DIALECT" "$REPS" "$WARMUP"
+run rust.sdk "$ROOT/rust" cargo run --quiet --release --target "$RUST_TARGET" --manifest-path orm_bench_sdk/Cargo.toml $RUST_SDK_FEATURES -- "$DIALECT" "$REPS" "$WARMUP"
 
-run python.native "$ROOT/python" python3 -m orm_bench.main "$DIALECT" "$REPS" "$WARMUP"
-run python.sdk    "$ROOT/python" python3 -m orm_bench_sdk.main "$DIALECT" "$REPS" "$WARMUP"
+run python.native "$ROOT/python" $PY_LAUNCH -m orm_bench.main "$DIALECT" "$REPS" "$WARMUP"
+run python.sdk    "$ROOT/python" $PY_LAUNCH -m orm_bench_sdk.main "$DIALECT" "$REPS" "$WARMUP"
 
-run php.native "$ROOT/php" php orm_bench/main.php "$DIALECT" "$REPS" "$WARMUP"
-run php.sdk    "$ROOT/php" php orm_bench_sdk/main.php "$DIALECT" "$REPS" "$WARMUP"
+run php.native "$ROOT/php" "$PHP" orm_bench/main.php "$DIALECT" "$REPS" "$WARMUP"
+run php.sdk    "$ROOT/php" "$PHP" orm_bench_sdk/main.php "$DIALECT" "$REPS" "$WARMUP"
 
 echo
 if [ "$fail" -gt 0 ]; then
