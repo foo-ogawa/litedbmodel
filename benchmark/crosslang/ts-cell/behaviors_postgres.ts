@@ -992,8 +992,8 @@ function run_createMany(h$executeSQL: Handler | undefined, input: Scope): Value 
   const scope = (): Scope => ({ ...input, ...results });
   const relationKinds: (RelationKind | undefined)[] = [undefined, undefined, undefined];
   const outTypes: Record<string, { t: PortableType; m: boolean }> = {
-    "n0": { t: "value", m: true },
-    "n1": { t: "value", m: true },
+    "n0": { t: "string", m: true },
+    "n1": { t: "string", m: true },
     "n2": { t: {"arr":{"name":"WriteSummary","obj":{"changes":"int","lastInsertRowid":"int"}}}, m: false },
   };
   // per-op exec は事前解決した関数表で引く（線形 ID 探索は無い — bc#75）。
@@ -1080,8 +1080,8 @@ async function run_createMany_async(h$executeSQL: AsyncHandler | undefined, inpu
   const scope = (): Scope => ({ ...input, ...results });
   const relationKinds: (RelationKind | undefined)[] = [undefined, undefined, undefined];
   const outTypes: Record<string, { t: PortableType; m: boolean }> = {
-    "n0": { t: "value", m: true },
-    "n1": { t: "value", m: true },
+    "n0": { t: "string", m: true },
+    "n1": { t: "string", m: true },
     "n2": { t: {"arr":{"name":"WriteSummary","obj":{"changes":"int","lastInsertRowid":"int"}}}, m: false },
   };
   // per-op exec は事前解決した関数表で引く（線形 ID 探索は無い — bc#75）。
@@ -1168,8 +1168,8 @@ function run_upsertMany(h$executeSQL: Handler | undefined, input: Scope): Value 
   const scope = (): Scope => ({ ...input, ...results });
   const relationKinds: (RelationKind | undefined)[] = [undefined, undefined, undefined];
   const outTypes: Record<string, { t: PortableType; m: boolean }> = {
-    "n0": { t: "value", m: true },
-    "n1": { t: "value", m: true },
+    "n0": { t: "string", m: true },
+    "n1": { t: "string", m: true },
     "n2": { t: {"arr":{"name":"WriteSummary","obj":{"changes":"int","lastInsertRowid":"int"}}}, m: false },
   };
   // per-op exec は事前解決した関数表で引く（線形 ID 探索は無い — bc#75）。
@@ -1256,8 +1256,8 @@ async function run_upsertMany_async(h$executeSQL: AsyncHandler | undefined, inpu
   const scope = (): Scope => ({ ...input, ...results });
   const relationKinds: (RelationKind | undefined)[] = [undefined, undefined, undefined];
   const outTypes: Record<string, { t: PortableType; m: boolean }> = {
-    "n0": { t: "value", m: true },
-    "n1": { t: "value", m: true },
+    "n0": { t: "string", m: true },
+    "n1": { t: "string", m: true },
     "n2": { t: {"arr":{"name":"WriteSummary","obj":{"changes":"int","lastInsertRowid":"int"}}}, m: false },
   };
   // per-op exec は事前解決した関数表で引く（線形 ID 探索は無い — bc#75）。
@@ -1344,8 +1344,8 @@ function run_updateMany(h$executeSQL: Handler | undefined, input: Scope): Value 
   const scope = (): Scope => ({ ...input, ...results });
   const relationKinds: (RelationKind | undefined)[] = [undefined, undefined, undefined];
   const outTypes: Record<string, { t: PortableType; m: boolean }> = {
-    "n0": { t: "value", m: true },
-    "n1": { t: "value", m: true },
+    "n0": { t: "int", m: true },
+    "n1": { t: "string", m: true },
     "n2": { t: {"arr":{"name":"WriteSummary","obj":{"changes":"int","lastInsertRowid":"int"}}}, m: false },
   };
   // per-op exec は事前解決した関数表で引く（線形 ID 探索は無い — bc#75）。
@@ -1432,8 +1432,8 @@ async function run_updateMany_async(h$executeSQL: AsyncHandler | undefined, inpu
   const scope = (): Scope => ({ ...input, ...results });
   const relationKinds: (RelationKind | undefined)[] = [undefined, undefined, undefined];
   const outTypes: Record<string, { t: PortableType; m: boolean }> = {
-    "n0": { t: "value", m: true },
-    "n1": { t: "value", m: true },
+    "n0": { t: "int", m: true },
+    "n1": { t: "string", m: true },
     "n2": { t: {"arr":{"name":"WriteSummary","obj":{"changes":"int","lastInsertRowid":"int"}}}, m: false },
   };
   // per-op exec は事前解決した関数表で引く（線形 ID 探索は無い — bc#75）。

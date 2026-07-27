@@ -1603,10 +1603,10 @@ pub fn upsert(
 pub fn createMany(
     rows: Vec<NewUser>,
 ) -> Result<Vec<WriteSummary>, BehaviorError> {
-    let cell_n0: RefCell<Vec<WireValue>> = RefCell::new(Default::default());
+    let cell_n0: RefCell<Vec<String>> = RefCell::new(Default::default());
     let produced_n0 = std::cell::Cell::new(false);
     let _ = &produced_n0;
-    let cell_n1: RefCell<Vec<WireValue>> = RefCell::new(Default::default());
+    let cell_n1: RefCell<Vec<String>> = RefCell::new(Default::default());
     let produced_n1 = std::cell::Cell::new(false);
     let _ = &produced_n1;
     let cell_n2: RefCell<Vec<WriteSummary>> = RefCell::new(Default::default());
@@ -1617,18 +1617,18 @@ pub fn createMany(
     // ── map 'n0' (pure expression, per-element, into:null) ──
     let over_n0 = rows.clone();
     for oel_n0 in over_n0.iter() {
-        cell_n0.borrow_mut().push(WireValue::Str(oel_n0.email.clone().into()));
+        cell_n0.borrow_mut().push(oel_n0.email.clone());
     }
     produced_n0.set(true);
     // ── map 'n1' (pure expression, per-element, into:null) ──
     let over_n1 = rows.clone();
     for oel_n1 in over_n1.iter() {
-        cell_n1.borrow_mut().push(WireValue::Str(oel_n1.name.clone().into()));
+        cell_n1.borrow_mut().push(oel_n1.name.clone());
     }
     produced_n1.set(true);
     // ── op 'n2' (executeSQL, parent:n0) ──
     if produced_n0.get() {
-        let payload_n2 = WireRow { entries: vec![(Cow::Borrowed("bigint"), WireValue::Bool(false)), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::List(WireList { items: cell_n0.take() }), WireValue::List(WireList { items: cell_n1.take() })]; __v } })), (Cow::Borrowed("returning"), WireValue::Bool(false)), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("INSERT INTO benchmark_users (email, name) SELECT v.email, v.name FROM UNNEST(?::text[], ?::text[]) AS v(email, name)"))), (Cow::Borrowed("write"), WireValue::Bool(true))] };
+        let payload_n2 = WireRow { entries: vec![(Cow::Borrowed("bigint"), WireValue::Bool(false)), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::List(WireList { items: cell_n0.take().into_iter().map(|e0| WireValue::Str(e0.into())).collect() }), WireValue::List(WireList { items: cell_n1.take().into_iter().map(|e0| WireValue::Str(e0.into())).collect() })]; __v } })), (Cow::Borrowed("returning"), WireValue::Bool(false)), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("INSERT INTO benchmark_users (email, name) SELECT v.email, v.name FROM UNNEST(?::text[], ?::text[]) AS v(email, name)"))), (Cow::Borrowed("write"), WireValue::Bool(true))] };
         let wire_n2 = match execute_sql(payload_n2) {
             Ok(r) => r,
             Err(e) => return Err(op_failed("n2", "fail", e)),
@@ -1684,10 +1684,10 @@ pub fn createMany(
 pub fn upsertMany(
     rows: Vec<NewUser>,
 ) -> Result<Vec<WriteSummary>, BehaviorError> {
-    let cell_n0: RefCell<Vec<WireValue>> = RefCell::new(Default::default());
+    let cell_n0: RefCell<Vec<String>> = RefCell::new(Default::default());
     let produced_n0 = std::cell::Cell::new(false);
     let _ = &produced_n0;
-    let cell_n1: RefCell<Vec<WireValue>> = RefCell::new(Default::default());
+    let cell_n1: RefCell<Vec<String>> = RefCell::new(Default::default());
     let produced_n1 = std::cell::Cell::new(false);
     let _ = &produced_n1;
     let cell_n2: RefCell<Vec<WriteSummary>> = RefCell::new(Default::default());
@@ -1698,18 +1698,18 @@ pub fn upsertMany(
     // ── map 'n0' (pure expression, per-element, into:null) ──
     let over_n0 = rows.clone();
     for oel_n0 in over_n0.iter() {
-        cell_n0.borrow_mut().push(WireValue::Str(oel_n0.email.clone().into()));
+        cell_n0.borrow_mut().push(oel_n0.email.clone());
     }
     produced_n0.set(true);
     // ── map 'n1' (pure expression, per-element, into:null) ──
     let over_n1 = rows.clone();
     for oel_n1 in over_n1.iter() {
-        cell_n1.borrow_mut().push(WireValue::Str(oel_n1.name.clone().into()));
+        cell_n1.borrow_mut().push(oel_n1.name.clone());
     }
     produced_n1.set(true);
     // ── op 'n2' (executeSQL, parent:n0) ──
     if produced_n0.get() {
-        let payload_n2 = WireRow { entries: vec![(Cow::Borrowed("bigint"), WireValue::Bool(false)), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::List(WireList { items: cell_n0.take() }), WireValue::List(WireList { items: cell_n1.take() })]; __v } })), (Cow::Borrowed("returning"), WireValue::Bool(false)), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("INSERT INTO benchmark_users (email, name) SELECT v.email, v.name FROM UNNEST(?::text[], ?::text[]) AS v(email, name) ON CONFLICT (email) DO UPDATE SET email = EXCLUDED.email, name = EXCLUDED.name"))), (Cow::Borrowed("write"), WireValue::Bool(true))] };
+        let payload_n2 = WireRow { entries: vec![(Cow::Borrowed("bigint"), WireValue::Bool(false)), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::List(WireList { items: cell_n0.take().into_iter().map(|e0| WireValue::Str(e0.into())).collect() }), WireValue::List(WireList { items: cell_n1.take().into_iter().map(|e0| WireValue::Str(e0.into())).collect() })]; __v } })), (Cow::Borrowed("returning"), WireValue::Bool(false)), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("INSERT INTO benchmark_users (email, name) SELECT v.email, v.name FROM UNNEST(?::text[], ?::text[]) AS v(email, name) ON CONFLICT (email) DO UPDATE SET email = EXCLUDED.email, name = EXCLUDED.name"))), (Cow::Borrowed("write"), WireValue::Bool(true))] };
         let wire_n2 = match execute_sql(payload_n2) {
             Ok(r) => r,
             Err(e) => return Err(op_failed("n2", "fail", e)),
@@ -1765,10 +1765,10 @@ pub fn upsertMany(
 pub fn updateMany(
     rows: Vec<UserPatch>,
 ) -> Result<Vec<WriteSummary>, BehaviorError> {
-    let cell_n0: RefCell<Vec<WireValue>> = RefCell::new(Default::default());
+    let cell_n0: RefCell<Vec<i64>> = RefCell::new(Default::default());
     let produced_n0 = std::cell::Cell::new(false);
     let _ = &produced_n0;
-    let cell_n1: RefCell<Vec<WireValue>> = RefCell::new(Default::default());
+    let cell_n1: RefCell<Vec<String>> = RefCell::new(Default::default());
     let produced_n1 = std::cell::Cell::new(false);
     let _ = &produced_n1;
     let cell_n2: RefCell<Vec<WriteSummary>> = RefCell::new(Default::default());
@@ -1779,18 +1779,18 @@ pub fn updateMany(
     // ── map 'n0' (pure expression, per-element, into:null) ──
     let over_n0 = rows.clone();
     for oel_n0 in over_n0.iter() {
-        cell_n0.borrow_mut().push(WireValue::Int(oel_n0.id));
+        cell_n0.borrow_mut().push(oel_n0.id);
     }
     produced_n0.set(true);
     // ── map 'n1' (pure expression, per-element, into:null) ──
     let over_n1 = rows.clone();
     for oel_n1 in over_n1.iter() {
-        cell_n1.borrow_mut().push(WireValue::Str(oel_n1.name.clone().into()));
+        cell_n1.borrow_mut().push(oel_n1.name.clone());
     }
     produced_n1.set(true);
     // ── op 'n2' (executeSQL, parent:n0) ──
     if produced_n0.get() {
-        let payload_n2 = WireRow { entries: vec![(Cow::Borrowed("bigint"), WireValue::Bool(false)), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::List(WireList { items: cell_n0.take() }), WireValue::List(WireList { items: cell_n1.take() })]; __v } })), (Cow::Borrowed("returning"), WireValue::Bool(false)), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("UPDATE benchmark_users AS t SET name = v.name FROM UNNEST(?::int[], ?::text[]) AS v(id, name) WHERE t.id = v.id"))), (Cow::Borrowed("write"), WireValue::Bool(true))] };
+        let payload_n2 = WireRow { entries: vec![(Cow::Borrowed("bigint"), WireValue::Bool(false)), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::List(WireList { items: cell_n0.take().into_iter().map(WireValue::Int).collect() }), WireValue::List(WireList { items: cell_n1.take().into_iter().map(|e0| WireValue::Str(e0.into())).collect() })]; __v } })), (Cow::Borrowed("returning"), WireValue::Bool(false)), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("UPDATE benchmark_users AS t SET name = v.name FROM UNNEST(?::int[], ?::text[]) AS v(id, name) WHERE t.id = v.id"))), (Cow::Borrowed("write"), WireValue::Bool(true))] };
         let wire_n2 = match execute_sql(payload_n2) {
             Ok(r) => r,
             Err(e) => return Err(op_failed("n2", "fail", e)),

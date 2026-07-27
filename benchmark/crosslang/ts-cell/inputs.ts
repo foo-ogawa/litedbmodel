@@ -16,7 +16,12 @@ export interface NewUser {
 }
 /** One batch record for updateMany (keyed on the seeded ids 1..10). */
 export interface UserPatch {
-  id: number;
+  /**
+   * `bigint`, not `number`: the authored model declares this column `Int`, and bc's `int` value model on
+   * the TS plane is a BigInt — a JS number is classified as a FLOAT and the op fails its outType check
+   * (`expected int, got float`). The other languages' harnesses pass a native int64 already.
+   */
+  id: bigint;
   name: string;
 }
 
@@ -28,7 +33,7 @@ export function userRows(it: number, stable: boolean): NewUser[] {
 }
 
 export function updateManyRows(): UserPatch[] {
-  return Array.from({ length: 10 }, (_, i) => ({ id: i + 1, name: `Many ${i + 1}` }));
+  return Array.from({ length: 10 }, (_, i) => ({ id: BigInt(i + 1), name: `Many ${i + 1}` }));
 }
 
 /** The input Scope for one op at iteration `it` (empty for the no-argument reads). */

@@ -7,7 +7,7 @@
 // (Behavior::runBehavior) — no execution logic is generated. Handlers are ALWAYS
 // injected at the boundary (IR + {effects,config,hooks} — concept.md §4.4); they
 // are never generated.
-// irFingerprint: fnv1a64:2436a3f88d3875b4
+// irFingerprint: fnv1a64:afb465824946c194
 
 declare(strict_types=1);
 
@@ -15,7 +15,7 @@ declare(strict_types=1);
 $expectedSpecVersions = ['behavior' => 6, 'expression' => 2, 'plan' => 1];
 
 // FNV-1a 64 fingerprint of the source portable IR (canonical-json discipline, #208).
-$irFingerprint = 'fnv1a64:2436a3f88d3875b4';
+$irFingerprint = 'fnv1a64:afb465824946c194';
 
 // Component names exposed by bind(), in IR declaration order.
 $componentNames = ['findAll', 'filterPaginateSort', 'findFirst', 'findUnique', 'nestedFindAll', 'nestedFindFirst', 'nestedFindUnique', 'nestedRelations', 'compositeRelations', 'create', 'update', 'upsert', 'createMany', 'upsertMany', 'updateMany', 'nestedCreate', 'nestedUpsert', 'nestedUpdate', 'delete'];
@@ -2437,7 +2437,7 @@ $irDoc = (object) [
                             ],
                         ],
                     ],
-                    "outType" => "value",
+                    "outType" => "string",
                 ],
                 (object) [
                     "id" => "n1",
@@ -2455,7 +2455,7 @@ $irDoc = (object) [
                             ],
                         ],
                     ],
-                    "outType" => "value",
+                    "outType" => "string",
                 ],
                 (object) [
                     "component" => "executeSQL",
@@ -2574,7 +2574,7 @@ $irDoc = (object) [
                             ],
                         ],
                     ],
-                    "outType" => "value",
+                    "outType" => "string",
                 ],
                 (object) [
                     "id" => "n1",
@@ -2592,7 +2592,7 @@ $irDoc = (object) [
                             ],
                         ],
                     ],
-                    "outType" => "value",
+                    "outType" => "string",
                 ],
                 (object) [
                     "component" => "executeSQL",
@@ -2711,7 +2711,7 @@ $irDoc = (object) [
                             ],
                         ],
                     ],
-                    "outType" => "value",
+                    "outType" => "int",
                 ],
                 (object) [
                     "id" => "n1",
@@ -2729,7 +2729,7 @@ $irDoc = (object) [
                             ],
                         ],
                     ],
-                    "outType" => "value",
+                    "outType" => "string",
                 ],
                 (object) [
                     "component" => "executeSQL",

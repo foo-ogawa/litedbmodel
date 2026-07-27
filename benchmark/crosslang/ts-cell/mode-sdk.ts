@@ -256,7 +256,9 @@ function batchParams(db: Db, rows: readonly object[], sqlForArity?: string): unk
   const one =
     db.dialect === 'postgres'
       ? cols.map((c) => pgArrayLiteral(rows.map((r) => (r as Record<string, unknown>)[c])))
-      : [JSON.stringify(rows)];
+      : // A bc `int` input is a BigInt, which `JSON.stringify` refuses; the JSON batch param carries it as
+        // a number, exactly as the runtime's own encoder does (src/scp/makesql/json-array.ts).
+        [JSON.stringify(rows, (_k, v: unknown) => (typeof v === 'bigint' ? Number(v) : v))];
   const arity = sqlForArity === undefined ? 1 : (sqlForArity.match(/\?/g) ?? ['?']).length / one.length;
   return Array.from({ length: Math.max(1, Math.round(arity)) }, () => one).flat();
 }

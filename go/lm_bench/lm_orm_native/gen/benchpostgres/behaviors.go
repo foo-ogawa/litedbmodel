@@ -1967,11 +1967,11 @@ func Upsert(email string, name string) ([]IdRow, error) {
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
 func CreateMany(rows []NewUser) ([]WriteSummary, error) {
-	var t_n0 []wire.WireValue
+	var t_n0 []string
 	produced_n0 := false
 	_ = t_n0
 	_ = produced_n0
-	var t_n1 []wire.WireValue
+	var t_n1 []string
 	produced_n1 := false
 	_ = t_n1
 	_ = produced_n1
@@ -1983,21 +1983,21 @@ func CreateMany(rows []NewUser) ([]WriteSummary, error) {
 	// orchestration (goroutine per op, bound=16); preflight+commit in ascending index order.
 	// ── map 'n0' (pure expression, per-element, into:null) ──
 	over_n0 := rows
-	t_n0 = make([]wire.WireValue, 0, len(over_n0))
+	t_n0 = make([]string, 0, len(over_n0))
 	for _, oel_n0 := range over_n0 {
-		t_n0 = append(t_n0, wire.WireStr(oel_n0.Email))
+		t_n0 = append(t_n0, oel_n0.Email)
 	}
 	produced_n0 = true
 	// ── map 'n1' (pure expression, per-element, into:null) ──
 	over_n1 := rows
-	t_n1 = make([]wire.WireValue, 0, len(over_n1))
+	t_n1 = make([]string, 0, len(over_n1))
 	for _, oel_n1 := range over_n1 {
-		t_n1 = append(t_n1, wire.WireStr(oel_n1.Name))
+		t_n1 = append(t_n1, oel_n1.Name)
 	}
 	produced_n1 = true
 	// ── op 'n2' (executeSQL, parent:n0) ──
 	if produced_n0 {
-		payload_n2 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireListOf(t_n0), wire.WireListOf(t_n1)})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("INSERT INTO benchmark_users (email, name) SELECT v.email, v.name FROM UNNEST(?::text[], ?::text[]) AS v(email, name)")}, wire.WireField{Key: "write", Val: wire.WireBool(true)}})
+		payload_n2 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range t_n0 { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }(), func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range t_n1 { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("INSERT INTO benchmark_users (email, name) SELECT v.email, v.name FROM UNNEST(?::text[], ?::text[]) AS v(email, name)")}, wire.WireField{Key: "write", Val: wire.WireBool(true)}})
 		wire_n2, wire_n2Err := litedbmodel_runtime.ExecuteSQL(payload_n2)
 		if wire_n2Err != nil {
 			return nil, opFailed("n2", "fail", wire_n2Err)
@@ -2066,11 +2066,11 @@ func CreateMany(rows []NewUser) ([]WriteSummary, error) {
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
 func UpsertMany(rows []NewUser) ([]WriteSummary, error) {
-	var t_n0 []wire.WireValue
+	var t_n0 []string
 	produced_n0 := false
 	_ = t_n0
 	_ = produced_n0
-	var t_n1 []wire.WireValue
+	var t_n1 []string
 	produced_n1 := false
 	_ = t_n1
 	_ = produced_n1
@@ -2082,21 +2082,21 @@ func UpsertMany(rows []NewUser) ([]WriteSummary, error) {
 	// orchestration (goroutine per op, bound=16); preflight+commit in ascending index order.
 	// ── map 'n0' (pure expression, per-element, into:null) ──
 	over_n0 := rows
-	t_n0 = make([]wire.WireValue, 0, len(over_n0))
+	t_n0 = make([]string, 0, len(over_n0))
 	for _, oel_n0 := range over_n0 {
-		t_n0 = append(t_n0, wire.WireStr(oel_n0.Email))
+		t_n0 = append(t_n0, oel_n0.Email)
 	}
 	produced_n0 = true
 	// ── map 'n1' (pure expression, per-element, into:null) ──
 	over_n1 := rows
-	t_n1 = make([]wire.WireValue, 0, len(over_n1))
+	t_n1 = make([]string, 0, len(over_n1))
 	for _, oel_n1 := range over_n1 {
-		t_n1 = append(t_n1, wire.WireStr(oel_n1.Name))
+		t_n1 = append(t_n1, oel_n1.Name)
 	}
 	produced_n1 = true
 	// ── op 'n2' (executeSQL, parent:n0) ──
 	if produced_n0 {
-		payload_n2 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireListOf(t_n0), wire.WireListOf(t_n1)})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("INSERT INTO benchmark_users (email, name) SELECT v.email, v.name FROM UNNEST(?::text[], ?::text[]) AS v(email, name) ON CONFLICT (email) DO UPDATE SET email = EXCLUDED.email, name = EXCLUDED.name")}, wire.WireField{Key: "write", Val: wire.WireBool(true)}})
+		payload_n2 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range t_n0 { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }(), func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range t_n1 { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("INSERT INTO benchmark_users (email, name) SELECT v.email, v.name FROM UNNEST(?::text[], ?::text[]) AS v(email, name) ON CONFLICT (email) DO UPDATE SET email = EXCLUDED.email, name = EXCLUDED.name")}, wire.WireField{Key: "write", Val: wire.WireBool(true)}})
 		wire_n2, wire_n2Err := litedbmodel_runtime.ExecuteSQL(payload_n2)
 		if wire_n2Err != nil {
 			return nil, opFailed("n2", "fail", wire_n2Err)
@@ -2165,11 +2165,11 @@ func UpsertMany(rows []NewUser) ([]WriteSummary, error) {
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
 func UpdateMany(rows []UserPatch) ([]WriteSummary, error) {
-	var t_n0 []wire.WireValue
+	var t_n0 []int64
 	produced_n0 := false
 	_ = t_n0
 	_ = produced_n0
-	var t_n1 []wire.WireValue
+	var t_n1 []string
 	produced_n1 := false
 	_ = t_n1
 	_ = produced_n1
@@ -2181,21 +2181,21 @@ func UpdateMany(rows []UserPatch) ([]WriteSummary, error) {
 	// orchestration (goroutine per op, bound=16); preflight+commit in ascending index order.
 	// ── map 'n0' (pure expression, per-element, into:null) ──
 	over_n0 := rows
-	t_n0 = make([]wire.WireValue, 0, len(over_n0))
+	t_n0 = make([]int64, 0, len(over_n0))
 	for _, oel_n0 := range over_n0 {
-		t_n0 = append(t_n0, wire.WireInt(oel_n0.Id))
+		t_n0 = append(t_n0, oel_n0.Id)
 	}
 	produced_n0 = true
 	// ── map 'n1' (pure expression, per-element, into:null) ──
 	over_n1 := rows
-	t_n1 = make([]wire.WireValue, 0, len(over_n1))
+	t_n1 = make([]string, 0, len(over_n1))
 	for _, oel_n1 := range over_n1 {
-		t_n1 = append(t_n1, wire.WireStr(oel_n1.Name))
+		t_n1 = append(t_n1, oel_n1.Name)
 	}
 	produced_n1 = true
 	// ── op 'n2' (executeSQL, parent:n0) ──
 	if produced_n0 {
-		payload_n2 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireListOf(t_n0), wire.WireListOf(t_n1)})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("UPDATE benchmark_users AS t SET name = v.name FROM UNNEST(?::int[], ?::text[]) AS v(id, name) WHERE t.id = v.id")}, wire.WireField{Key: "write", Val: wire.WireBool(true)}})
+		payload_n2 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range t_n0 { it0 = append(it0, wire.WireInt(e0)) }; return wire.WireListOf(it0) }(), func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range t_n1 { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("UPDATE benchmark_users AS t SET name = v.name FROM UNNEST(?::int[], ?::text[]) AS v(id, name) WHERE t.id = v.id")}, wire.WireField{Key: "write", Val: wire.WireBool(true)}})
 		wire_n2, wire_n2Err := litedbmodel_runtime.ExecuteSQL(payload_n2)
 		if wire_n2Err != nil {
 			return nil, opFailed("n2", "fail", wire_n2Err)
