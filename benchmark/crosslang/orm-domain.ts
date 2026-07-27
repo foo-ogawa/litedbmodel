@@ -102,6 +102,24 @@ export function deleteStatements(_dialect: OrmDialect): string[] {
   return DROP_ORDER.map((t) => `DELETE FROM ${t}`);
 }
 
+// Refresh optimizer statistics AFTER the seed. The relation indexes (RELATION_INDEXES) are created on
+// EMPTY tables and then bulk-loaded, so InnoDB's persistent index statistics stay at their empty-table
+// state — and a read never triggers a recalc, so they never self-correct across the bench's warmup or
+// timed iterations. With stale stats MySQL estimates the composite child table at ~1 row, picks the PK's
+// leading column over the relation index, and residual-filters: compositeRelations' comments child read
+// measured 2.3s. `ANALYZE TABLE` after the load takes the SAME query to 6ms — proven confound-free (the
+// query stayed at 2.24/2.24/2.29s across three repeats with no ANALYZE, then dropped to 6ms right after).
+// This is the standard post-bulk-load step (mysqldump / pg_restore both recommend it); the bench just
+// never did it. Runs in the untimed seed, so it does not enter any measurement.
+//
+// PostgreSQL and SQLite were already fast here, but a freshly bulk-loaded table has no current stats on
+// either, so analyzing keeps all three dialects on the realistic footing a real deployment has.
+export function analyzeStatements(dialect: OrmDialect): string[] {
+  if (dialect === 'mysql') return [`ANALYZE TABLE ${DROP_ORDER.join(', ')}`];
+  // PostgreSQL and SQLite both spell it `ANALYZE <table>`, one table per statement.
+  return DROP_ORDER.map((t) => `ANALYZE ${t}`);
+}
+
 // The indexes every relation's batched child read needs — one per relation FK, the column the child
 // SELECT filters on. WITHOUT these the child batch scans the whole table (the PK does not cover the FK):
 // on MySQL the 50,000-row composite comments table made compositeRelations take 2.3s per iteration, and

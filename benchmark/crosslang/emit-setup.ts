@@ -24,7 +24,7 @@ import { writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  ddl, deleteStatements, seedTables, dropStatements, pgSeqResetStatements, scaleSeed, ORM_SEED,
+  ddl, deleteStatements, analyzeStatements, seedTables, dropStatements, pgSeqResetStatements, scaleSeed, ORM_SEED,
   type OrmDialect, type SeedTable,
 } from './orm-domain';
 
@@ -79,6 +79,11 @@ mkdirSync(OUT_DIR, { recursive: true });
 for (const dialect of DIALECTS) {
   const inserts = tables.flatMap(insertStatements);
   if (dialect === 'postgres') inserts.push(...pgSeqResetStatements());
+  // Refresh optimizer statistics AFTER the rows land (and after the pg SERIAL fixups). Freshly
+  // bulk-loaded tables with an index built on the empty table have stale stats, and MySQL then ignores
+  // the relation index — 3.5s on the composite comments child read, vs 17ms once analyzed. Part of the
+  // `insert` group so it re-runs on every per-op re-seed, all of it in the untimed seed.
+  inserts.push(...analyzeStatements(dialect));
   const doc: SetupDoc = {
     dialect,
     scale,
