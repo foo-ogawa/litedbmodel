@@ -477,6 +477,29 @@ fn from_sql_ref(r: ValueRef<'_>) -> WireValue {
     }
 }
 
+/// Intern a column name to a `&'static str`.
+///
+/// The wire's keys are `Cow<'static, str>`, so a name read at run time can only ride as `Cow::Owned` —
+/// one `String` allocation PER CELL, i.e. rows × columns of them (33,300 for one 11,100-row relation op),
+/// for a name that is identical on every row of the result set. Interning makes it `Cow::Borrowed`:
+/// allocation-free from the second row on, and free across statements since result sets reuse names.
+///
+/// The set of column names an application selects is finite and small, so the leak is bounded — it is the
+/// standard interning trade, not an unbounded one.
+fn intern_column(name: &str) -> &'static str {
+    use std::collections::HashSet;
+    use std::sync::{Mutex, OnceLock};
+    static NAMES: OnceLock<Mutex<HashSet<&'static str>>> = OnceLock::new();
+    let set = NAMES.get_or_init(|| Mutex::new(HashSet::new()));
+    let mut set = set.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(n) = set.get(name) {
+        return n;
+    }
+    let leaked: &'static str = Box::leak(name.to_string().into_boxed_str());
+    set.insert(leaked);
+    leaked
+}
+
 /// An in-process `rusqlite` driver implementing the [`Driver`] seam.
 ///
 /// This is the runnable conformance seam: it binds `?` placeholders positionally, so a
@@ -552,7 +575,12 @@ impl PreparedStatement for SqlitePrepared<'_> {
             .conn
             .prepare(&self.sql)
             .map_err(|e| map_sqlite_error(&e))?;
-        let col_names: Vec<String> = stmt.column_names().iter().map(|c| c.to_string()).collect();
+        // Interned ONCE per statement: the per-cell key is then a borrow, not an allocation.
+        let col_names: Vec<&'static str> = stmt
+            .column_names()
+            .iter()
+            .map(|c| intern_column(c))
+            .collect();
         let param_refs: Vec<&dyn rusqlite::ToSql> =
             bound.iter().map(|v| v as &dyn rusqlite::ToSql).collect();
         let mut rows = stmt
@@ -568,7 +596,7 @@ impl PreparedStatement for SqlitePrepared<'_> {
                         Vec::with_capacity(col_names.len());
                     for (i, name) in col_names.iter().enumerate() {
                         let cell = row.get_ref(i).map_err(|e| map_sqlite_error(&e))?;
-                        entries.push((name.clone().into(), from_sql_ref(cell)));
+                        entries.push((std::borrow::Cow::Borrowed(*name), from_sql_ref(cell)));
                     }
                     out.push(WireValue::Row(WireRow { entries }));
                 }

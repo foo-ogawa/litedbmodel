@@ -468,27 +468,19 @@ pub fn group_children(mut payload: WireRow) -> Result<WireValue, BehaviorError> 
     let parents_port = port_list(&mut payload, "parents")?;
     let pk_port = port_strings(&mut payload, "pk")?;
     let single = port_bool(&mut payload, "single")?;
-    let (children, fk, into, parents, pk): (
-        &[WireValue],
-        &[String],
-        &str,
-        &[WireValue],
-        &[String],
-    ) = (
-        &children_port,
-        &fk_port,
-        &into_port,
-        &parents_port,
-        &pk_port,
-    );
-    // The grouping core keys DIRECTLY on `WireValue` (no `WireValue`↔`Value` conversion). The buckets
-    // hold REFERENCES into `children` — no per-child clone; a matched child is cloned exactly once, when
-    // `attach_to_parent` nests it into a parent's output.
-    let by_key = crate::grouping::group_by_key(children, fk);
+    let (fk, into, parents, pk): (&[String], &str, &[WireValue], &[String]) =
+        (&fk_port, &into_port, &parents_port, &pk_port);
+    // The grouping core keys DIRECTLY on `WireValue` (no `WireValue`↔`Value` conversion) and OWNS the
+    // children: each is moved into its bucket, and the bucket is moved into the parent it belongs to. No
+    // row is copied.
+    let mut by_key = crate::grouping::group_by_key(children_port, fk);
     // Resolve the parent `pk` indices + the `into` insert position ONCE (all parents share column
     // order) — the per-parent path then carries NO index scan, even when `parents` is a large nested
     // relation level (a 3-level chain groups the middle level as parents too).
     let pk_idx = crate::grouping::resolve_key_indices(parents, pk);
+    // How many parents claim each key: the last claimant MOVES its bucket, an earlier one clones (so
+    // parents sharing a key all still get the children).
+    let mut remaining = crate::grouping::count_parent_keys(parents, pk, &pk_idx);
     let into_pos = parents.iter().find_map(|p| match p {
         WireValue::Row(r) => r.entries.iter().position(|(k, _)| k == into),
         _ => None,
@@ -496,7 +488,14 @@ pub fn group_children(mut payload: WireRow) -> Result<WireValue, BehaviorError> 
     let out: Vec<WireValue> = parents
         .iter()
         .map(|p| {
-            let nested = crate::grouping::attach_to_parent(p, pk, &pk_idx, &by_key, single);
+            let nested = crate::grouping::attach_to_parent(
+                p,
+                pk,
+                &pk_idx,
+                &mut by_key,
+                &mut remaining,
+                single,
+            );
             match p {
                 // {...p, [into]: nested}: shallow-copy the parent's entries, then set an existing `into`
                 // in place (keeps its position) or append a new one — the TS `{...par, [into]: …}` spread.
