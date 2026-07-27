@@ -165,8 +165,39 @@ export function buildContextFromConfig(config: RuntimeDbConfig, options: Runtime
   const ctx = new PooledAsyncContext(built.routing);
 
   // The `ctx` (PooledAsyncContext) IS the async read/write seam — there is no separate reader executor.
-  const runtime: RuntimeContext = { ctx, dialect, close: built.close };
+  // The closer is REGISTERED as well as returned: a caller that drops its `RuntimeContext` without
+  // awaiting `close()` (which `DBModel.setConfig` does on every reconfigure) would otherwise leak the
+  // pools with no handle left to reach them. `closeAllScpRuntimes` is the drain.
+  const runtime: RuntimeContext = {
+    ctx,
+    dialect,
+    close: async () => {
+      liveClosers.delete(built.close);
+      await built.close();
+    },
+  };
+  liveClosers.add(built.close);
   return runtime;
+}
+
+/**
+ * Every pool set this module has constructed and not yet closed.
+ *
+ * The same shape `src/drivers/mysql.ts` uses for the v1 pools: the module that CREATES the pools owns
+ * the registry that can close them. Without it, `closeAllPools()` closed the v1 caches only and the
+ * routed SCP pools stayed open — `closeAllPools()` resolved in 0ms with three live sockets, and a
+ * consumer process could not exit.
+ */
+const liveClosers = new Set<PoolCloser>();
+
+/**
+ * Close every pool set {@link buildContextFromConfig} has constructed — including runtimes their owner
+ * discarded without closing. Part of the v1 `closeAllPools()` teardown, alongside the per-driver caches.
+ */
+export async function closeAllScpRuntimes(): Promise<void> {
+  const closers = [...liveClosers];
+  liveClosers.clear();
+  for (const close of closers) await close();
 }
 
 // ── 2. Write execution (bundle → executeTransactionAsync) ───────────────────────────────────────

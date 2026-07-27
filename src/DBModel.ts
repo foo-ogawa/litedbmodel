@@ -282,8 +282,12 @@ export abstract class DBModel {
   }
 
   /**
-   * Reset the cached SCP runtime (called on `setConfig`). Does NOT close the previous runtime's pools
-   * synchronously here — the caller (setConfig) closes them; this only clears the cache. @internal
+   * Reset the cached SCP runtime (called on `setConfig`). This clears the CACHE only; it does not close
+   * the displaced runtime's pools, because `setConfig` is synchronous and closing is not.
+   *
+   * It used to say the caller closed them. It did not — `setConfig` only called this — so every
+   * reconfigure leaked a routed pool set with no handle left to reach it. The displaced runtime stays in
+   * `dbmodel-runtime`'s own registry and is closed by `closeAllPools()`. @internal
    */
   protected static _resetScpRuntime(): void {
     this._scpRuntime = null;
