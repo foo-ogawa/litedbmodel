@@ -153,12 +153,14 @@ func TestExecuteBundleStatusPresentAndAbsent(t *testing.T) {
 	defer db.Close()
 
 	got := conf.EncodeConformanceJSON(mustRun(t, bundle, scope("author_id", float64(7), "status", "live"), db))
-	if got != `[{"id":1,"author_id":7,"status":"live"}]` {
+	// An INTEGER column reads back as bc's `int` (the conformance encoding renders it `$bigint`) — the
+	// scan no longer widens it to a float, since the wire carries int and float as distinct kinds.
+	if got != `[{"id":{"$bigint":"1"},"author_id":{"$bigint":"7"},"status":"live"}]` {
 		t.Errorf("status present: got %s", got)
 	}
 
 	got2 := conf.EncodeConformanceJSON(mustRun(t, bundle, scope("author_id", float64(7)), db))
-	if got2 != `[{"id":1,"author_id":7,"status":"live"},{"id":2,"author_id":7,"status":"draft"}]` {
+	if got2 != `[{"id":{"$bigint":"1"},"author_id":{"$bigint":"7"},"status":"live"},{"id":{"$bigint":"2"},"author_id":{"$bigint":"7"},"status":"draft"}]` {
 		t.Errorf("status absent (SKIP drop): got %s", got2)
 	}
 }

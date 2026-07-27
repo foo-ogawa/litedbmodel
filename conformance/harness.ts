@@ -71,6 +71,7 @@ import {
   entityWrites,
   executeAsync,
   execute,
+  executeSafe,
   executeTransactionBundle,
   leafHandlers,
   leafHandlersAsync,
@@ -735,7 +736,10 @@ async function seamFor(dialect: DialectName, config?: LimitConfigSpec): Promise<
     return seamOver(
       log,
       (entry, input) => facade[entry](input),
-      (sql) => Promise.resolve(execute(ctx, sql, [])),
+      // `executeSafe`, not `execute`: the runtime's read path reads INTEGER columns in bc's `int` model
+      // on every dialect, so a state-assertion query must too or §10 sees a dialect difference that the
+      // behaviour does not have.
+      (sql) => Promise.resolve(executeSafe(ctx, sql, [])),
       () => {
         db.close();
         return Promise.resolve();
@@ -1290,11 +1294,23 @@ async function guardVector(c: GuardCase, dialect: DialectName): Promise<ExpectEr
   };
 }
 
+/**
+ * A state-assertion query's rows, read in the SAME integer model the runtime reads in: `safeIntegers`, so
+ * an INTEGER column comes back a BigInt. Without it the SQLite leg reported a JS number where the
+ * PostgreSQL and MySQL legs report bc's `int` (their integer type parsers are unconditional), and §10
+ * rejected the vector as dialect-variant — the assertion, not the behaviour, was the thing that differed.
+ */
+function stateRows(db: InstanceType<typeof Database>, query: string): Record<string, unknown>[] {
+  const stmt = db.prepare(query) as { safeIntegers?(v: boolean): unknown; all(): unknown };
+  stmt.safeIntegers?.(true);
+  return stmt.all() as Record<string, unknown>[];
+}
+
 /** Build a tx vector by running the reference transaction bundle against a freshly seeded DB. */
 function txVector(name: string, bundle: SqlBundle, input: Record<string, unknown>, schema: readonly string[], dbQueries: readonly string[]): TxVector {
   const db = seedDb(schema);
   const result = executeTransactionBundle(bundle, input as never, { db });
-  const dbState = dbQueries.map((query) => ({ query, rows: encodeValue(db.prepare(query).all()) }));
+  const dbState = dbQueries.map((query) => ({ query, rows: encodeValue(stateRows(db, query)) }));
   db.close();
   return {
     name,
@@ -1454,7 +1470,7 @@ export async function runVector(v: Vector): Promise<VectorResult> {
     if (v.kind === 'tx') {
       const db = seedDb(v.schema);
       const result = encodeValue(executeTransactionBundle(v.bundle, decodeValue(v.input) as never, { db }));
-      const stateOk = (v.expectedDbState ?? []).every((s) => eq(encodeValue(db.prepare(s.query).all()), s.rows));
+      const stateOk = (v.expectedDbState ?? []).every((s) => eq(encodeValue(stateRows(db, s.query)), s.rows));
       db.close();
       const ok = eq(result, v.expectedResult) && stateOk;
       return { ...base, ok, detail: ok ? undefined : `result ${JSON.stringify(result)} != ${JSON.stringify(v.expectedResult)} (or db-state mismatch)` };

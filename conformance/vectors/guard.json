@@ -139,12 +139,18 @@
           "params": []
         },
         {
-          "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE conf_posts.author_id = ANY($1::int[]) ORDER BY id ASC",
+          "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE conf_posts.author_id = ANY($1::bigint[]) ORDER BY id ASC",
           "params": [
             [
-              1,
-              2,
-              3
+              {
+                "$bigint": "1"
+              },
+              {
+                "$bigint": "2"
+              },
+              {
+                "$bigint": "3"
+              }
             ]
           ]
         }
@@ -235,12 +241,18 @@
           "params": []
         },
         {
-          "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE conf_posts.author_id = ANY($1::int[]) ORDER BY id ASC",
+          "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE conf_posts.author_id = ANY($1::bigint[]) ORDER BY id ASC",
           "params": [
             [
-              1,
-              2,
-              3
+              {
+                "$bigint": "1"
+              },
+              {
+                "$bigint": "2"
+              },
+              {
+                "$bigint": "3"
+              }
             ]
           ]
         }

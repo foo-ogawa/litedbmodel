@@ -189,26 +189,20 @@ pub fn with_ambient_transaction<R>(
 // ── WireValue ↔ Value boundary codec (the ONLY place the two value models meet) ───────────────────
 
 /// A BC-owned [`WireValue`] → bc [`Value`] for the SQL bind PARAMS ONLY (the driver's param binder
-/// takes [`Value`]). A `Num` rides as raw text: an integral literal → [`Value::Int`] (the driver's
-/// INTEGER model), else [`Value::Float`]. Read RESULTS never use this — they stay `WireValue`.
+/// takes [`Value`]). The wire carries a number natively, so an `Int` maps to the driver's INTEGER model
+/// and a `Float` to its REAL model with nothing parsed. Read RESULTS never use this — they stay
+/// `WireValue`.
 fn wire_to_value(w: &WireValue) -> Value {
     match w {
-        WireValue::Str(s) => Value::Str(s.clone()),
-        WireValue::Num(s) => {
-            if let Ok(i) = s.parse::<i64>() {
-                Value::Int(i)
-            } else if let Ok(f) = s.parse::<f64>() {
-                Value::Float(f)
-            } else {
-                Value::Str(s.clone())
-            }
-        }
+        WireValue::Str(s) => Value::Str(s.to_string()),
+        WireValue::Int(i) => Value::Int(*i),
+        WireValue::Float(f) => Value::Float(*f),
         WireValue::Bool(b) => Value::Bool(*b),
         WireValue::Null => Value::Null,
         WireValue::Row(r) => Value::Obj(
             r.entries
                 .iter()
-                .map(|(k, v)| (k.clone(), wire_to_value(v)))
+                .map(|(k, v)| (k.to_string(), wire_to_value(v)))
                 .collect(),
         ),
         WireValue::List(l) => Value::Arr(l.items.iter().map(wire_to_value).collect()),
@@ -244,16 +238,17 @@ fn take_port(payload: &mut WireRow, name: &str) -> Result<WireValue, BehaviorErr
 }
 
 /// The fail-closed wrong-variant failure. The ACTUAL wire tag is read off the BC-owned probe
-/// classifier ([`WireValue::as_string`]'s `actual_wire_type`), so the tag rendering stays bc's.
+/// classifier (`probe_string_at`'s `actual_wire_type`), so the tag rendering stays bc's. The probe
+/// consumes its value, so the error path clones — errors are not the hot path.
 fn port_mismatch(name: &str, expected: &str, got: &WireValue) -> BehaviorError {
-    let actual = match got.as_string() {
+    let actual = match crate::wire::probe_string_at(Some(got.clone())) {
         Probe::Got(_) => "S".to_string(),
         Probe::Wrong {
             actual_wire_type, ..
         }
         | Probe::Null {
             actual_wire_type, ..
-        } => actual_wire_type,
+        } => actual_wire_type.to_string(),
         Probe::Absent => "ABSENT".to_string(),
     };
     BehaviorError::new(
@@ -273,7 +268,7 @@ fn port_bool(payload: &mut WireRow, name: &str) -> Result<bool, BehaviorError> {
 /// A `string` port (`sql` / `into`).
 fn port_string(payload: &mut WireRow, name: &str) -> Result<String, BehaviorError> {
     match take_port(payload, name)? {
-        WireValue::Str(s) => Ok(s),
+        WireValue::Str(s) => Ok(s.into_owned()),
         other => Err(port_mismatch(name, "string", &other)),
     }
 }
@@ -309,22 +304,17 @@ fn port_relation_guard(payload: &mut WireRow) -> Result<Option<RelationGuard>, B
     };
     let field = |name: &str| row.entries.iter().find(|(k, _)| k == name).map(|(_, v)| v);
     let limit = match field("limit") {
-        Some(WireValue::Num(n)) => n.parse::<i64>().map_err(|_| {
-            BehaviorError::new(
-                "LEAF_PORT",
-                format!("scp leaf: port `guard.limit` is not an integer row cap: {n}"),
-            )
-        })?,
-        Some(other) => return Err(port_mismatch("guard.limit", "number", other)),
-        None => return Err(port_mismatch("guard.limit", "number", &WireValue::Null)),
+        Some(WireValue::Int(n)) => *n,
+        Some(other) => return Err(port_mismatch("guard.limit", "int", other)),
+        None => return Err(port_mismatch("guard.limit", "int", &WireValue::Null)),
     };
     let relation = match field("relation") {
-        Some(WireValue::Str(s)) => s.clone(),
+        Some(WireValue::Str(s)) => s.to_string(),
         Some(other) => return Err(port_mismatch("guard.relation", "string", other)),
         None => return Err(port_mismatch("guard.relation", "string", &WireValue::Null)),
     };
     let model = match field("model") {
-        Some(WireValue::Str(s)) => Some(s.clone()),
+        Some(WireValue::Str(s)) => Some(s.to_string()),
         _ => None,
     };
     Ok(Some(RelationGuard {
@@ -340,7 +330,7 @@ fn port_strings(payload: &mut WireRow, name: &str) -> Result<Vec<String>, Behavi
     port_list(payload, name)?
         .into_iter()
         .map(|c| match c {
-            WireValue::Str(s) => Ok(s),
+            WireValue::Str(s) => Ok(s.into_owned()),
             other => Err(port_mismatch(name, "string element", &other)),
         })
         .collect()
@@ -398,9 +388,9 @@ pub fn execute_sql(mut payload: WireRow) -> Result<WireValue, BehaviorError> {
         Ok(WireValue::List(WireList {
             items: vec![WireValue::Row(WireRow {
                 entries: vec![
-                    ("changes".to_string(), WireValue::int(info.changes)),
+                    ("changes".into(), WireValue::int(info.changes)),
                     (
-                        "lastInsertRowid".to_string(),
+                        "lastInsertRowid".into(),
                         WireValue::int(info.last_insert_rowid),
                     ),
                 ],
@@ -516,7 +506,7 @@ pub fn group_children(mut payload: WireRow) -> Result<WireValue, BehaviorError> 
                         Some(i) if entries.get(i).is_some_and(|(k, _)| k == into) => {
                             entries[i].1 = nested
                         }
-                        _ => entries.push((into.to_string(), nested)),
+                        _ => entries.push((into.to_string().into(), nested)),
                     }
                     WireValue::Row(WireRow { entries })
                 }
@@ -536,7 +526,7 @@ mod tests {
         WireValue::Row(WireRow {
             entries: pairs
                 .iter()
-                .map(|(k, v)| (k.to_string(), v.clone()))
+                .map(|(k, v)| (k.to_string().into(), v.clone()))
                 .collect(),
         })
     }
@@ -549,7 +539,10 @@ mod tests {
     // The generic-wire PAYLOAD a covered runner hands a leaf: the node's ports as named fields.
     fn payload(ports: Vec<(&str, WireValue)>) -> WireRow {
         WireRow {
-            entries: ports.into_iter().map(|(k, v)| (k.to_string(), v)).collect(),
+            entries: ports
+                .into_iter()
+                .map(|(k, v)| (k.to_string().into(), v))
+                .collect(),
         }
     }
     fn wlist(items: Vec<WireValue>) -> WireValue {
@@ -557,7 +550,11 @@ mod tests {
     }
     // A key-column tuple port (`col`/`pk`/`fk`) — the ordered column names as wire strings.
     fn cols(c: &[&str]) -> WireValue {
-        wlist(c.iter().map(|s| WireValue::Str((*s).to_string())).collect())
+        wlist(
+            c.iter()
+                .map(|s| WireValue::Str((*s).to_string().into()))
+                .collect(),
+        )
     }
 
     // ── with_ambient_transaction atomicity (#142): Ok → COMMIT (all rows persist), Err → ROLLBACK
@@ -574,12 +571,15 @@ mod tests {
                 ("bigint", WireValue::Bool(false)),
                 (
                     "params",
-                    wlist(vec![WireValue::int(id), WireValue::Str(v.to_string())]),
+                    wlist(vec![
+                        WireValue::int(id),
+                        WireValue::Str(v.to_string().into()),
+                    ]),
                 ),
                 ("returning", WireValue::Bool(false)),
                 (
                     "sql",
-                    WireValue::Str("INSERT INTO t (id, v) VALUES (?, ?)".to_string()),
+                    WireValue::Str("INSERT INTO t (id, v) VALUES (?, ?)".into()),
                 ),
                 ("write", WireValue::Bool(true)),
             ]))
@@ -592,7 +592,7 @@ mod tests {
             match &rows[0] {
                 WireValue::Row(r) => match r.entries.iter().find(|(k, _)| k == "c").map(|(_, v)| v)
                 {
-                    Some(WireValue::Num(n)) => n.parse().expect("count cell is an integer"),
+                    Some(WireValue::Int(n)) => *n,
                     _ => panic!("unexpected count cell"),
                 },
                 _ => panic!("unexpected count row"),
@@ -636,7 +636,7 @@ mod tests {
         let out = pluck_keys(payload(vec![("col", cols(&["id"])), ("rows", wlist(rows))])).unwrap();
         let ks = items(&out);
         assert_eq!(ks.len(), 2); // deduped, order preserved
-        assert!(matches!(&ks[0], WireValue::Num(n) if n == "2"));
+        assert!(matches!(&ks[0], WireValue::Int(2)));
         assert!(!matches!(&ks[0], WireValue::List(_))); // scalar, NOT a 1-tuple
     }
 
@@ -697,7 +697,7 @@ mod tests {
         let out = group_children(payload(vec![
             ("children", wlist(children)),
             ("fk", cols(&["tenant_id", "user_id"])),
-            ("into", WireValue::Str("posts".to_string())),
+            ("into", WireValue::Str("posts".into())),
             ("parents", wlist(parents)),
             ("pk", cols(&["tenant_id", "user_id"])),
             ("single", WireValue::Bool(false)),
@@ -744,7 +744,7 @@ mod tests {
                 ("returning", WireValue::Bool(false)),
                 (
                     "sql",
-                    WireValue::Str("SELECT id, v FROM t ORDER BY id".to_string()),
+                    WireValue::Str("SELECT id, v FROM t ORDER BY id".into()),
                 ),
                 ("write", WireValue::Bool(false)),
             ];
@@ -756,8 +756,8 @@ mod tests {
         let cap = |limit: i64| {
             wrow(&[
                 ("limit", WireValue::int(limit)),
-                ("model", WireValue::Str("t".to_string())),
-                ("relation", WireValue::Str("things".to_string())),
+                ("model", WireValue::Str("t".into())),
+                ("relation", WireValue::Str("things".into())),
             ])
         };
 

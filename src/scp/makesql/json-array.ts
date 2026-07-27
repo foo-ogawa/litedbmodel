@@ -142,7 +142,17 @@ export function tupleInPredicate(dialect: Dialect, table: string, columns: reado
  *    SQLite's `json_each` coerces JSON booleans natively, so it keeps them as-is.
  */
 export function encodeJsonArrayParam(dialect: Dialect, values: readonly unknown[]): string {
-  return JSON.stringify(values, (_key, v: unknown) => {
+  return encodeJsonParam(dialect, values);
+}
+
+/**
+ * The ONE JSON-param serializer every single-JSON-param form goes through — the array/tuple sets here and
+ * the batch record sets in {@link import('./json-batch')} alike. Both bind values that came OFF a read, so
+ * both meet the same two cases (a bc `int` is a `BigInt`, which `JSON.stringify` refuses; a MySQL boolean
+ * must ride as 1/0), and a second bare `JSON.stringify` would silently diverge on either.
+ */
+export function encodeJsonParam(dialect: Dialect, payload: unknown): string {
+  return JSON.stringify(payload, (_key, v: unknown) => {
     if (typeof v === 'bigint') return Number(v);
     if (dialect === 'mysql' && typeof v === 'boolean') return v ? 1 : 0;
     return v;

@@ -35,7 +35,7 @@
 import { evaluateExpression, type Scope, type Value } from 'behavior-contracts/runtime';
 import { assembleMakeSQL } from './makesql';
 import { sqliteInsertJson, mysqlInsertJson, sqliteUpdateManyJson, mysqlUpdateManyJson } from './json-batch';
-import { inListPredicate } from './json-array';
+import { encodeJsonParam, inListPredicate } from './json-array';
 import { postgresSqlBuilder } from '../../drivers/PostgresSqlBuilder';
 import { sqlTypeToBcScalar, sqlTypeToMaterializeClass, type ColumnTypeResolver } from '../coltype';
 import { renderPlaceholders, type Dialect as MakeSQLDialect } from './handler';
@@ -1065,13 +1065,15 @@ export interface TransactionResult {
 }
 
 /** bc evaluates ints to bigint; convert a rendered param to a driver-bindable value. */
-function toDriverParam(v: Value): unknown {
+function toDriverParam(v: Value, dialect: MakeSQLDialect): unknown {
   if (typeof v === 'bigint') {
     if (v >= BigInt(Number.MIN_SAFE_INTEGER) && v <= BigInt(Number.MAX_SAFE_INTEGER)) return Number(v);
     return v;
   }
-  // An emit payload evaluates to a plain object (`{obj:{…}}`); serialize it to the outbox JSON text.
-  if (v !== null && typeof v === 'object' && !Array.isArray(v)) return JSON.stringify(v);
+  // An emit payload evaluates to a plain object (`{obj:{…}}`); serialize it to the outbox JSON text
+  // through the ONE JSON-param encoder, so a field that came off a read (a bc `int`, i.e. a BigInt that
+  // `JSON.stringify` refuses) is handled the same way the batch and array params handle it.
+  if (v !== null && typeof v === 'object' && !Array.isArray(v)) return encodeJsonParam(dialect, v);
   return v;
 }
 
@@ -1084,10 +1086,10 @@ function toDriverParam(v: Value): unknown {
  * This is the single eval/assemble/coerce for both the sync leaf exec ({@link execStatement}) and the
  * placeholder-rendered {@link renderStatement} (async path + golden export).
  */
-function evalAssemble(op: TxOp, scope: Scope): { sql: string; params: unknown[] } {
+function evalAssemble(op: TxOp, scope: Scope, dialect: MakeSQLDialect): { sql: string; params: unknown[] } {
   const concrete: unknown[] = op.params.map((p) => evaluateExpression(p, scope));
   const assembled = assembleMakeSQL({ sql: op.sql, params: concrete });
-  return { sql: assembled.sql, params: assembled.params.map((p) => toDriverParam(p as Value)) };
+  return { sql: assembled.sql, params: assembled.params.map((p) => toDriverParam(p as Value, dialect)) };
 }
 
 /**
@@ -1096,7 +1098,7 @@ function evalAssemble(op: TxOp, scope: Scope): { sql: string; params: unknown[] 
  * export {@link renderTxStatement}; the SYNC path renders via the transport leaf ({@link execStatement}).
  */
 function renderStatement(op: TxOp, scope: Scope, dialect: MakeSQLDialect): { sql: string; params: unknown[] } {
-  const { sql, params } = evalAssemble(op, scope);
+  const { sql, params } = evalAssemble(op, scope, dialect);
   return { sql: renderPlaceholders(sql, dialect), params };
 }
 
@@ -1111,7 +1113,7 @@ function execStatement(
   // first (`evalAssemble`); the leaf receives raw `?` SQL + concrete params. `write:true` ⇒ the tx-owned
   // connection resolves via `connectionFor` (§3); a SELECT/RETURNING statement reads rows (`returning`
   // ⇒ the row-returning seam), a bare write runs (the `[{changes,…}]` summary).
-  const { sql, params } = evalAssemble(op, scope);
+  const { sql, params } = evalAssemble(op, scope, dialect);
   const hasReturn = /\bselect\b/i.test(sql.slice(0, 8)) || /\breturning\b/i.test(sql);
   const out = executeSQL({ sql, params, write: true, returning: hasReturn, bigint: false }, { exec: ctx, dialect } satisfies LeafContext);
   return hasReturn ? { rows: out, changes: out.length } : { rows: [], changes: Number(out[0]?.changes ?? 0) };
@@ -1239,7 +1241,7 @@ async function execStatementAsync(
 ): Promise<{ rows: Record<string, unknown>[]; changes: number }> {
   // Eval value-specs + assemble to RAW `?` SQL + coerced params (the SSoT `evalAssemble`, shared with
   // the sync path). The leaf renders `?`→`$N` per dialect after the final SQL is assembled.
-  const { sql, params } = evalAssemble(op, scope);
+  const { sql, params } = evalAssemble(op, scope, dialect);
 
   // A SELECT/RETURNING reads rows; a bare write returns the `[{changes,…}]` summary.
   const hasReturn = /\bselect\b/i.test(sql.slice(0, 8)) || /\breturning\b/i.test(sql);

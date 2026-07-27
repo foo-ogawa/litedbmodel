@@ -32,7 +32,6 @@ import type { Handlers, AsyncHandlers, Value, ExecOutcome } from 'behavior-contr
 import {
   type ExecutionContext,
   type AsyncExecutionContext,
-  execute as seamExecute,
   executeSafe as seamExecuteSafe,
   run as seamRun,
   executeAsync as seamExecuteAsync,
@@ -213,16 +212,20 @@ function writeSummary(info: RunInfo): Array<Record<string, unknown>> {
 /**
  * The SYNC `executeSQL` body. `write` selects `run` (INSERT/UPDATE/DELETE) vs `execute` (SELECT /
  * RETURNING); a non-returning write returns the one-row `[{changes,lastInsertRowid}]` summary so the
- * leaf output shape is uniform. `bigint` runs the read in exact-integer mode (better-sqlite3
- * `safeIntegers`) so a 64-bit column arrives as an exact `BigInt` — the value bc's `int` scalar
- * declares. It is a sqlite-only driver toggle; PG/MySQL (and the rust/go transports) return BIGINT
- * natively and ignore it.
+ * leaf output shape is uniform.
+ *
+ * A read ALWAYS runs in exact-integer mode (better-sqlite3 `safeIntegers`), so an INTEGER column
+ * arrives as a `BigInt` — the value bc's `int` scalar declares. It is not conditional: the wire carries
+ * int and float as DISTINCT kinds, so a column declared `Int` cannot be satisfied by a JS number on any
+ * dialect, and gating exactness per endpoint made SQLite disagree with PostgreSQL and MySQL (whose
+ * integer type parsers are unconditional — `configurePgDeboxTypeParsers`, `mysqlDeboxPoolOptions`),
+ * which the conformance corpus rejects as dialect-variant. `bigint` is retained as a port because the
+ * generated modules declare it, but it no longer selects the seam.
  */
 export function executeSQL(p: ExecuteSqlPorts, ctx: LeafContext): Array<Record<string, unknown>> {
   const prepared = prepareSql(effectiveStatement(p), ctx.dialect);
   if (p.write === true && p.returning !== true) return writeSummary(seamRun(ctx.exec, prepared.sql, prepared.bound, prepared.intent));
-  const exec = p.bigint === true ? seamExecuteSafe : seamExecute;
-  const rows = exec(ctx.exec, prepared.sql, prepared.bound, prepared.intent) as Array<Record<string, unknown>>;
+  const rows = seamExecuteSafe(ctx.exec, prepared.sql, prepared.bound, prepared.intent) as Array<Record<string, unknown>>;
   assertRelationHardLimit(rows, p.guard);
   return rows;
 }

@@ -215,8 +215,12 @@
       "expectedResult": {
         "committed": true,
         "entity": {
-          "id": 1,
-          "author_id": 7,
+          "id": {
+            "$bigint": "1"
+          },
+          "author_id": {
+            "$bigint": "7"
+          },
           "title": "New Post"
         },
         "executed": [
@@ -233,8 +237,12 @@
           "query": "SELECT id, author_id, title FROM tx_posts ORDER BY id",
           "rows": [
             {
-              "id": 1,
-              "author_id": 7,
+              "id": {
+                "$bigint": "1"
+              },
+              "author_id": {
+                "$bigint": "7"
+              },
               "title": "New Post"
             }
           ]
@@ -243,12 +251,20 @@
           "query": "SELECT id, post_count FROM tx_users ORDER BY id",
           "rows": [
             {
-              "id": 7,
-              "post_count": 3
+              "id": {
+                "$bigint": "7"
+              },
+              "post_count": {
+                "$bigint": "3"
+              }
             },
             {
-              "id": 8,
-              "post_count": 0
+              "id": {
+                "$bigint": "8"
+              },
+              "post_count": {
+                "$bigint": "0"
+              }
             }
           ]
         },
@@ -492,12 +508,20 @@
           "query": "SELECT id, post_count FROM tx_users ORDER BY id",
           "rows": [
             {
-              "id": 7,
-              "post_count": 2
+              "id": {
+                "$bigint": "7"
+              },
+              "post_count": {
+                "$bigint": "2"
+              }
             },
             {
-              "id": 8,
-              "post_count": 0
+              "id": {
+                "$bigint": "8"
+              },
+              "post_count": {
+                "$bigint": "0"
+              }
             }
           ]
         },
@@ -674,8 +698,12 @@
           "query": "SELECT id, author_id, title FROM tx_posts ORDER BY id",
           "rows": [
             {
-              "id": 1,
-              "author_id": 7,
+              "id": {
+                "$bigint": "1"
+              },
+              "author_id": {
+                "$bigint": "7"
+              },
               "title": "Nested"
             }
           ]
@@ -684,8 +712,12 @@
           "query": "SELECT id, post_id, body FROM tx_comments ORDER BY id",
           "rows": [
             {
-              "id": 1,
-              "post_id": 1,
+              "id": {
+                "$bigint": "1"
+              },
+              "post_id": {
+                "$bigint": "1"
+              },
               "body": "First comment"
             }
           ]
@@ -694,8 +726,12 @@
           "query": "SELECT id, post_count FROM tx_users ORDER BY id",
           "rows": [
             {
-              "id": 7,
-              "post_count": 1
+              "id": {
+                "$bigint": "7"
+              },
+              "post_count": {
+                "$bigint": "1"
+              }
             }
           ]
         }
@@ -877,8 +913,12 @@
           "query": "SELECT id, post_count FROM tx_users ORDER BY id",
           "rows": [
             {
-              "id": 7,
-              "post_count": 0
+              "id": {
+                "$bigint": "7"
+              },
+              "post_count": {
+                "$bigint": "0"
+              }
             }
           ]
         }

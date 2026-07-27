@@ -68,7 +68,7 @@ func TestPluckKeysDedupesNonNull(t *testing.T) {
 	if lp.Got.Len() != 2 {
 		t.Fatalf("expected 2 deduped non-null keys, got %d", lp.Got.Len())
 	}
-	if k0 := lp.Got.ElemNumber(0); k0.Kind != 0 || k0.Got != "1" {
+	if k0 := lp.Got.ElemInt(0); k0.Kind != 0 || k0.Got != 1 {
 		t.Fatalf("single-key pluck must emit flat scalars; elem0 = %+v", k0)
 	}
 }
@@ -135,13 +135,14 @@ func TestGroupChildrenDistributesPerParent(t *testing.T) {
 
 // The payload materialization is LOSSLESS. The BC-owned go wire types keep their backing slices
 // unexported, so a list port is rebuilt cell-by-cell at the transport edge; this pins that every
-// variant survives that rebuild EXACTLY — a number keeps its RAW text (no parse/format round-trip), a
-// bool / string / null keeps its variant, an already-nested child list (a grouped level feeding the
+// variant survives that rebuild EXACTLY — a number keeps its NATIVE kind and value (int stays int, float
+// stays float, with no parse/format round-trip), a bool / string / null keeps its variant, an
+// already-nested child list (a grouped level feeding the
 // next one) survives whole, and the row's key ORDER is preserved.
 func TestPayloadMaterializationIsLossless(t *testing.T) {
 	parent := wire.WireRowOf([]wire.WireField{
 		{Key: "id", Val: wire.WireInt(1)},
-		{Key: "score", Val: wire.WireNum("1.500")}, // raw numeric text, NOT a normalized 1.5
+		{Key: "score", Val: wire.WireFloat(1.5)}, // a float cell, carried natively
 		{Key: "active", Val: wire.WireBool(true)},
 		{Key: "name", Val: wire.WireStr("A")},
 		{Key: "deleted_at", Val: wire.WireNull()},
@@ -165,8 +166,8 @@ func TestPayloadMaterializationIsLossless(t *testing.T) {
 		t.Fatalf("parent 0 is not a row (kind=%d)", rp.Kind)
 	}
 	row := rp.Got
-	if p := row.ProbeNumber("score"); p.Kind != wireProbeGot || p.Got != "1.500" {
-		t.Fatalf("raw numeric text not preserved: %+v", p)
+	if p := row.ProbeFloat("score"); p.Kind != wireProbeGot || p.Got != 1.5 {
+		t.Fatalf("float cell not preserved: %+v", p)
 	}
 	if p := row.ProbeBool("active"); p.Kind != wireProbeGot || !p.Got {
 		t.Fatalf("bool cell not preserved: %+v", p)
@@ -188,7 +189,10 @@ func TestPayloadMaterializationIsLossless(t *testing.T) {
 		t.Fatalf("grouped children missing: %+v", p)
 	}
 	want := []string{"id", "score", "active", "name", "deleted_at", "comments", "posts"}
-	got := row.Keys()
+	got := make([]string, 0, len(row.Entries()))
+	for _, e := range row.Entries() {
+		got = append(got, e.Key)
+	}
 	if len(got) != len(want) {
 		t.Fatalf("column order/count changed: %v", got)
 	}

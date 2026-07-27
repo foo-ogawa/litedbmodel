@@ -8,7 +8,7 @@
 from behavior_contracts import SPEC_VERSIONS, ProvenanceError, load_compiled_ir, run_behavior
 
 # Spec versions baked at generation time (fail-closed constant comparison at load).
-EXPECTED_SPEC_VERSIONS = {"behavior": 5, "expression": 2, "plan": 1}
+EXPECTED_SPEC_VERSIONS = {"behavior": 6, "expression": 2, "plan": 1}
 
 # FNV-1a 64 fingerprint of the source portable IR (canonical_json discipline, #208).
 IR_FINGERPRINT = "fnv1a64:e7a6ba3511f83de9"

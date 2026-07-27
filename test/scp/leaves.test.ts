@@ -42,8 +42,10 @@ test('relation read is N+1-free (2 queries) with JSON key param on sqlite + belo
     ctx,
   );
   const out = group({ parents: posts, children: authors, pk: ['author_id'], fk: ['id'], into: 'author', single: true });
-  // exactly two SELECTs — the child fetch is one batched `IN (json_each(?))`, never one-per-parent
-  expect(calls.filter((c) => c.kind === 'execute').length).toBe(2);
+  // exactly two SELECTs — the child fetch is one batched `IN (json_each(?))`, never one-per-parent.
+  // A read is always exact-integer (`executeSafeIntegers`), so an INTEGER column reads back in bc's `int`
+  // model on every dialect; the count is of reads, not of which driver entry point served them.
+  expect(calls.filter((c) => c.kind === 'executeSafe').length).toBe(2);
   // the deduped key set binds as ONE JSON string param
   expect(calls[1].params).toEqual(['[10,20]']);
   expect(out.length).toBe(3);

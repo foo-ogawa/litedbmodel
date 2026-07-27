@@ -8,6 +8,7 @@ package litedbmodel_runtime
 import (
 	"database/sql"
 	"errors"
+	"strconv"
 	"testing"
 
 	"github.com/foo-ogawa/litedbmodel/go/litedbmodel_runtime/wire"
@@ -60,11 +61,11 @@ func countT(t *testing.T) string {
 		t.Fatalf("count: want 1 row, got kind=%d len=%d", lp.Kind, lp.Got.Len())
 	}
 	row := lp.Got.ElemRow(0)
-	np := row.Got.ProbeNumber("c")
+	np := row.Got.ProbeInt("c")
 	if np.Kind != wireProbeGot {
-		t.Fatalf("count cell not numeric (kind=%d)", np.Kind)
+		t.Fatalf("count cell not an int (kind=%d)", np.Kind)
 	}
-	return np.Got
+	return strconv.FormatInt(np.Got, 10)
 }
 
 // A non-RETURNING write returns the uniform one-row [{changes,lastInsertRowid}] summary (rust
@@ -86,10 +87,10 @@ func TestExecuteSQL_WriteSummaryShape(t *testing.T) {
 	if row.Kind != wireProbeGot {
 		t.Fatalf("write summary elem is not a row (kind=%d)", row.Kind)
 	}
-	if ch := row.Got.ProbeNumber("changes"); ch.Kind != wireProbeGot || ch.Got != "1" {
+	if ch := row.Got.ProbeInt("changes"); ch.Kind != wireProbeGot || ch.Got != 1 {
 		t.Fatalf("changes = %+v, want 1", ch)
 	}
-	if li := row.Got.ProbeNumber("lastInsertRowid"); li.Kind != wireProbeGot || li.Got != "7" {
+	if li := row.Got.ProbeInt("lastInsertRowid"); li.Kind != wireProbeGot || li.Got != 7 {
 		t.Fatalf("lastInsertRowid = %+v, want 7 (the inserted PK)", li)
 	}
 }

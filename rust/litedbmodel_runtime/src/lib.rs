@@ -78,8 +78,13 @@ pub use tx_options::{
     isolation_prelude, write_in_read_only, write_outside_transaction, Dialect as TxDialect,
     IsolationLevel, TransactionOptions,
 };
+// The wire types AND the probe classifiers. A generated module reaches them through
+// `use litedbmodel_runtime::*` (`--shared-types-import litedbmodel_runtime`), so every symbol the
+// generated de-box calls must be re-exported here — the probes became free functions when they stopped
+// cloning (they CONSUME the wire value), and omitting them leaves the generated module uncompilable.
 pub use wire::{
-    BehaviorError, ErrorDetail, ErrorKind, NumProbe, Probe, WireList, WireRow, WireValue,
+    probe_bool_at, probe_float_at, probe_int_at, probe_list_at, probe_row_at, probe_string_at,
+    BehaviorError, ErrorDetail, ErrorKind, Probe, WireList, WireRow, WireValue,
 };
 
 /// The bc runtime value used by native driver, wire, parameter, and relation primitives.

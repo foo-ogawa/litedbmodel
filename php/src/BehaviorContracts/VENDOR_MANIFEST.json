@@ -2,8 +2,8 @@
   "generator": "scripts/vendor-behavior-contracts-php.mjs",
   "upstream": {
     "path": "/Users/ogawa/Work/my-libs/behavior-contracts/php/src",
-    "version": "0.11.8",
-    "commit": "b5ecda976d3b7aeca7c95690c580abf94b3045c7"
+    "version": "0.11.9",
+    "commit": "006dc3d2f609d6b45b1f9c0a353695992eb6dcb3"
   },
   "namespace": "LiteDbModel\\Runtime\\BehaviorContracts",
   "files": {
@@ -13,8 +13,8 @@
     "PlanFailure.php": "69b3a846807a2d064f58afc187724c6195785a238eb8290eb272ab9f40007f88",
     "Plan.php": "8f5ed9354994890dfe3e106d91e8b5afd6376f9f306b0c3464faac4e974231ee",
     "BehaviorFailure.php": "34f15ee9cba32dd762dcb97a8b510c5b0612fe2512c921ffd31a2d65ba492f46",
-    "Behavior.php": "228b8d66cf582e37134e7d4fc7ceb8569705c5d78578f809eda9eda748c81f1e",
-    "SpecVersions.php": "8c26c102e6e9c11a9b664d81f0fa5c4d5a962240d578849a147c3f743dfe14d2",
+    "Behavior.php": "afda0fc35050b3e07c4bd9a29fae5a29c0d06dcee726a47f1dd230bc93ec85bb",
+    "SpecVersions.php": "bf51d9767ec95bcf7ecd18643e9111d51e49d7a126553c9e3499922d671ca238",
     "FingerprintFailure.php": "754f909a0c5fce0bd15c06dc2a87e909d280dc0f86ef2eeed1fd17e04c32605e",
     "Fingerprint.php": "1d30f51f498f372723ffa3ed475f2335f40e6e4c9ec4b30fce4b78ea858dcad6",
     "ProvenanceError.php": "239de66244e555265fdb503fa38b936e433d97f8ef8e379cdc5443f276be906b",

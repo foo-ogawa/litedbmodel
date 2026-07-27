@@ -143,11 +143,11 @@ func portRelationGuard(payload wire.WireRow) (*relationGuard, error) {
 	if p.Kind != wireProbeGot {
 		return nil, portErr("guard", "row", p.Kind, p.ActualWireType)
 	}
-	n := p.Got.ProbeNumber("limit")
+	n := p.Got.ProbeInt("limit")
 	if n.Kind != wireProbeGot {
-		return nil, portErr("guard.limit", "number", n.Kind, n.ActualWireType)
+		return nil, portErr("guard.limit", "int", n.Kind, n.ActualWireType)
 	}
-	limit, err := strconv.Atoi(n.Got)
+	limit, err := int(n.Got), error(nil)
 	if err != nil {
 		return nil, fmt.Errorf("leaf transport: port %q is not an integer row cap: %q", "guard.limit", n.Got)
 	}
@@ -191,7 +191,15 @@ func wireScalarCell(p wire.StringProbe) (wire.WireValue, bool) {
 	}
 	switch p.ActualWireType {
 	case "N":
-		return wire.WireNum(p.Raw), true
+		// The wire carries int and float as distinct kinds, so the raw text decides which to rebuild:
+		// integer text → WireInt, anything else parseable → WireFloat.
+		if i, err := strconv.ParseInt(p.Raw, 10, 64); err == nil {
+			return wire.WireInt(i), true
+		}
+		if f, err := strconv.ParseFloat(p.Raw, 64); err == nil {
+			return wire.WireFloat(f), true
+		}
+		return wire.WireValue{}, false
 	case "BOOL":
 		return wire.WireBool(p.Raw == "true"), true
 	}
@@ -200,9 +208,10 @@ func wireScalarCell(p wire.StringProbe) (wire.WireValue, bool) {
 
 // wireOfRow rebuilds a wire row VALUE from a row handle (keys in order, each cell classified once).
 func wireOfRow(r wire.WireRow) (wire.WireValue, error) {
-	keys := r.Keys()
-	fields := make([]wire.WireField, len(keys))
-	for i, k := range keys {
+	entries := r.Entries()
+	fields := make([]wire.WireField, len(entries))
+	for i, e := range entries {
+		k := e.Key
 		p := r.ProbeString(k)
 		v, ok := wireScalarCell(p)
 		if !ok {
@@ -464,7 +473,7 @@ var wireOps = recordOps[wire.WireValue]{
 	colNameAt: func(v wire.WireValue, i int) string { return v.Entries[i].Key },
 	cellAt:    func(v wire.WireValue, i int) wire.WireValue { return v.Entries[i].Val },
 	field:     wireField,
-	isNull:    func(cell wire.WireValue) bool { return cell.AsNumber().Kind == wireProbeNull },
+	isNull:    func(cell wire.WireValue) bool { return cell.AsInt().Kind == wireProbeNull },
 	keyFrag:   wireKeyFrag,
 	makeList:  func(children []wire.WireValue) wire.WireValue { return wire.WireListOf(children) },
 	nul:       wire.WireNull(),
@@ -489,14 +498,11 @@ func wireField(w wire.WireValue, name string) (wire.WireValue, bool) {
 // (integer text / whole-float → integer, else shortest round-trip), so a wire-path key and a bc-path
 // key are byte-identical. A Row/List is never a scalar key (totality fallback only).
 func wireKeyFrag(cell wire.WireValue) string {
-	if p := cell.AsNumber(); p.Kind == wireProbeGot {
-		if i, err := strconv.ParseInt(p.Got, 10, 64); err == nil {
-			return strconv.FormatInt(i, 10)
-		}
-		if f, err := strconv.ParseFloat(p.Got, 64); err == nil {
-			return encodeFloat(f)
-		}
-		return p.Got
+	if p := cell.AsInt(); p.Kind == wireProbeGot {
+		return strconv.FormatInt(p.Got, 10)
+	}
+	if p := cell.AsFloat(); p.Kind == wireProbeGot {
+		return encodeFloat(p.Got)
 	}
 	if p := cell.AsString(); p.Kind == wireProbeGot {
 		return p.Got
@@ -580,8 +586,11 @@ func valueToWire(v bc.Value) wire.WireValue {
 // payload is unexported; the probe classifiers are the sanctioned reader). Exactly one classifier
 // matches a non-null value, so probe order is not ambiguous.
 func wireToValue(w wire.WireValue) bc.Value {
-	if p := w.AsNumber(); p.Kind == wireProbeGot {
-		return parseWireNum(p.Got)
+	if p := w.AsInt(); p.Kind == wireProbeGot {
+		return float64(p.Got) // the row-scan convention: a JS-number float64
+	}
+	if p := w.AsFloat(); p.Kind == wireProbeGot {
+		return p.Got
 	}
 	if p := w.AsString(); p.Kind == wireProbeGot {
 		return p.Got
@@ -605,16 +614,19 @@ func wireToValue(w wire.WireValue) bc.Value {
 // wireRowToObj rebuilds an insertion-ordered *Obj from a wire row (keys preserved).
 func wireRowToObj(r wire.WireRow) *bc.Obj {
 	o := bc.NewObj()
-	for _, k := range r.Keys() {
-		o.Set(k, wireFieldToValue(r, k))
+	for _, e := range r.Entries() {
+		o.Set(e.Key, wireFieldToValue(r, e.Key))
 	}
 	return o
 }
 
 // wireFieldToValue classifies one wire row field via the probe API.
 func wireFieldToValue(r wire.WireRow, k string) bc.Value {
-	if p := r.ProbeNumber(k); p.Kind == wireProbeGot {
-		return parseWireNum(p.Got)
+	if p := r.ProbeInt(k); p.Kind == wireProbeGot {
+		return float64(p.Got)
+	}
+	if p := r.ProbeFloat(k); p.Kind == wireProbeGot {
+		return p.Got
 	}
 	if p := r.ProbeString(k); p.Kind == wireProbeGot {
 		return p.Got
@@ -637,8 +649,11 @@ func wireFieldToValue(r wire.WireRow, k string) bc.Value {
 
 // wireElemToValue classifies one wire list element via the probe API.
 func wireElemToValue(l wire.WireList, i int) bc.Value {
-	if p := l.ElemNumber(i); p.Kind == wireProbeGot {
-		return parseWireNum(p.Got)
+	if p := l.ElemInt(i); p.Kind == wireProbeGot {
+		return float64(p.Got)
+	}
+	if p := l.ElemFloat(i); p.Kind == wireProbeGot {
+		return p.Got
 	}
 	if p := l.ElemString(i); p.Kind == wireProbeGot {
 		return p.Got
@@ -657,14 +672,4 @@ func wireElemToValue(l wire.WireList, i int) bc.Value {
 		return out
 	}
 	return nil
-}
-
-// parseWireNum decodes the raw numeric text a wire number carries into a float64 (the row-scan
-// convention — an integer column scans as a JS-number float64; grouping key identity handles it).
-func parseWireNum(raw string) bc.Value {
-	f, err := strconv.ParseFloat(raw, 64)
-	if err != nil {
-		return raw
-	}
-	return f
 }

@@ -184,11 +184,15 @@ describe('WS5 — create derives to ONE gate-first transaction (golden SQL + rea
     expect(result.committed).toBe(true);
     expect(result.shortCircuit).toBeUndefined();
     // The body RETURNING row is exposed as `$.entity`.
-    expect(result.entity).toEqual({ id: 1, author_id: 7, title: 'Hello' });
+    // An INTEGER column reads back in bc's `int` model — a BigInt on the TS plane — on every dialect
+    // (the read path is exact-integer unconditionally; PG/MySQL's integer type parsers likewise).
+    expect(result.entity).toEqual({ id: 1n, author_id: 7n, title: 'Hello' });
     // Every ordered statement ran.
     expect(result.executed).toHaveLength(6);
 
     // Body persisted.
+    // A RAW better-sqlite3 read (no `safeIntegers`) still yields plain numbers — this asserts what is
+    // PERSISTED, not what the runtime's read path hands back.
     expect(db.prepare('SELECT id, author_id, title FROM posts').all()).toEqual([{ id: 1, author_id: 7, title: 'Hello' }]);
     // derive: users.post_count 2 → 3 (the increment amount is from the declaration, not code).
     expect(db.prepare('SELECT post_count FROM users WHERE id = 7').get()).toEqual({ post_count: 3 });
@@ -440,7 +444,9 @@ describe('WS5 — edges (many-to-many intermediate-table link in the same tx)', 
     const result = executeTransactionBundle(bundle, { author_id: 7, title: 'Tagged', tag_id: 100, request_id: 'e-1' }, { db });
     expect(result.committed).toBe(true);
     // The join row links the just-created post to the tag (post_id from `$.entity.id`).
-    expect(db.prepare('SELECT post_id, tag_id FROM post_tags').all()).toEqual([{ post_id: result.entity!.id, tag_id: 100 }]);
+    // The raw read yields plain numbers; `result.entity.id` came off the runtime's read path, so it is a
+    // BigInt — compare it as the number the row holds.
+    expect(db.prepare('SELECT post_id, tag_id FROM post_tags').all()).toEqual([{ post_id: Number(result.entity!.id), tag_id: 100 }]);
   });
 });
 
@@ -528,7 +534,7 @@ describe('WS5 — executeTransaction runs a hand-derived plan against real SQLit
     );
     const result = executeTransaction(db, plan, { author_id: 7, title: 'Direct' });
     expect(result.committed).toBe(true);
-    expect(result.entity).toEqual({ id: 1 });
+    expect(result.entity).toEqual({ id: 1n });
     expect(db.prepare('SELECT COUNT(*) c FROM posts').get()).toEqual({ c: 1 });
   });
 });

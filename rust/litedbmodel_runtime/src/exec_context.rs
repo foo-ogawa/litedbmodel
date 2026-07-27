@@ -1041,7 +1041,7 @@ mod tests {
                 return Err(fail("boom"));
             }
             Ok(vec![WireValue::Row(WireRow {
-                entries: vec![("sql".into(), WireValue::Str(self.sql.clone()))],
+                entries: vec![("sql".into(), WireValue::Str(self.sql.clone().into()))],
             })])
         }
         fn run(&mut self, _p: &[Value]) -> Result<DrvRunInfo, SqlFailure> {
@@ -1124,7 +1124,7 @@ mod tests {
         let r = chain
             .wrap_read("SELECT 1", &[], &|_s, _p| Ok(vec![WireValue::int(42)]))
             .unwrap();
-        assert!(matches!(r.as_slice(), [WireValue::Num(n)] if n == "42"));
+        assert!(matches!(r.as_slice(), [WireValue::Int(42)]));
     }
 
     #[test]
@@ -1150,7 +1150,7 @@ mod tests {
             .wrap_read("SELECT 1", &[], &|_s, _p| Ok(vec![WireValue::int(1)]))
             .unwrap();
         assert!(
-            matches!(r.as_slice(), [WireValue::Num(n), WireValue::Str(s)] if n == "1" && s == "mw"),
+            matches!(r.as_slice(), [WireValue::Int(1), WireValue::Str(s)] if s == "mw"),
             "middleware should append its marker row after next()"
         );
     }

@@ -20,7 +20,7 @@ import { SPEC_VERSIONS, BehaviorFailure, PlanFailure, codegenPrimitives as cgp, 
 import type { AsyncExec, AsyncHandler, AsyncHandlers, Exec, ExecOutcome, Handler, Handlers, OpSpec, PortableType, RelationKind, Scope, Value } from "behavior-contracts/runtime";
 
 /** Spec versions baked at generation time (fail-closed constant comparison at load). */
-export const EXPECTED_SPEC_VERSIONS = { behavior: 5, expression: 2, plan: 1 } as const;
+export const EXPECTED_SPEC_VERSIONS = { behavior: 6, expression: 2, plan: 1 } as const;
 
 /** Component names exposed by bind(), in IR declaration order. */
 export const COMPONENT_NAMES: readonly string[] = ["findAll", "filterPaginateSort", "findFirst", "findUnique", "nestedFindAll", "nestedFindFirst", "nestedFindUnique", "nestedRelations", "compositeRelations", "create", "update", "upsert", "createMany", "upsertMany", "updateMany", "nestedCreate", "nestedUpsert", "nestedUpdate", "delete"];

@@ -224,7 +224,10 @@ func scanValue(v any) bc.Value {
 	case nil:
 		return nil
 	case int64:
-		return float64(t) // JS number (better-sqlite3 integer column → plain JSON number)
+		// An INTEGER column stays an int64. It used to be widened to float64 to mirror a JS number, but
+		// the wire carries int and float as DISTINCT kinds, so a column declared `Int` cannot be satisfied
+		// by a float — widening here made every typed read fail `expected int, got N`.
+		return t
 	case float64:
 		return t
 	case bool:

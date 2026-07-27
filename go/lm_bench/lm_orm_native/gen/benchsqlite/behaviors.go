@@ -13,7 +13,7 @@ import (
 
 // ExpectedSpecVersions are the spec versions baked at generation time (provenance only — the module
 // is runtime-free, so there is no runtime SpecVersions to skew-check against, bc#90 / change #5).
-var ExpectedSpecVersions = map[string]int64{"behavior": 5, "expression": 2, "plan": 1}
+var ExpectedSpecVersions = map[string]int64{"behavior": 6, "expression": 2, "plan": 1}
 
 // COMBINED READ layer (bc#90 — the RUNTIME-FREE read de-box; STRUCT-ONLY, FULLY-NATIVE surface). A
 // covered read is a strictly-sequential typed componentRef chain (point reads + relation children

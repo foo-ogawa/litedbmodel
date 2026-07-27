@@ -27,28 +27,24 @@ pub fn key_identity(values: &[&WireValue]) -> String {
         .join(KEY_SEP)
 }
 
-/// Mirror of JS `String(v)` for the key identity over a WIRE scalar. A wire number is carried as a
-/// canonical decimal string (`WireValue::Num`), so the key is that string NORMALIZED exactly as the
-/// typed path would render it: a whole number prints as integer text (`"1.0"`→`"1"`), a fractional its
-/// shortest round-trip form, bool `"true"`/`"false"`, string verbatim. Only the KEY columns are parsed
-/// (a handful), never every cell. Null is dropped before it is ever stringified (totality arm only).
+/// Mirror of JS `String(v)` for the key identity over a WIRE scalar. A wire number is carried NATIVELY
+/// (`WireValue::Int` / `WireValue::Float`), so the key renders straight from it, exactly as the typed path
+/// would: a whole number prints as integer text, a fractional its shortest round-trip form, bool
+/// `"true"`/`"false"`, string verbatim. Nothing is parsed, and no cell is copied to build a key. Null is
+/// dropped before it is ever stringified (totality arm only).
 fn stringify_key(value: &WireValue) -> String {
     match value {
         WireValue::Null => "null".to_string(),
         WireValue::Bool(b) => b.to_string(),
-        WireValue::Str(s) => s.clone(),
-        WireValue::Num(s) => {
-            // Normalize identically to the typed `stringify_key` (Int/whole-Float → integer text).
-            if let Ok(i) = s.parse::<i64>() {
-                i.to_string()
-            } else if let Ok(f) = s.parse::<f64>() {
-                if f.is_finite() && f.fract() == 0.0 {
-                    (f as i64).to_string()
-                } else {
-                    f.to_string()
-                }
+        WireValue::Str(s) => s.to_string(),
+        // The wire carries the number natively, so nothing is parsed. A whole float still renders as
+        // integer text, matching the typed `stringify_key` (and JS `String(v)`).
+        WireValue::Int(i) => i.to_string(),
+        WireValue::Float(f) => {
+            if f.is_finite() && f.fract() == 0.0 {
+                (*f as i64).to_string()
             } else {
-                s.clone()
+                f.to_string()
             }
         }
         // A Row/List is never a scalar key (keys are scalar columns); totality fallback only.
@@ -192,13 +188,13 @@ mod tests {
     use crate::wire::WireRow;
 
     fn num(n: i64) -> WireValue {
-        WireValue::Num(n.to_string())
+        WireValue::Int(n)
     }
     fn row(pairs: &[(&str, WireValue)]) -> WireValue {
         WireValue::Row(WireRow {
             entries: pairs
                 .iter()
-                .map(|(k, v)| (k.to_string(), v.clone()))
+                .map(|(k, v)| (k.to_string().into(), v.clone()))
                 .collect(),
         })
     }
@@ -209,13 +205,13 @@ mod tests {
     #[test]
     fn key_identity_matches_js_string() {
         // whole float → integer text (a scanned INT column), bool/string verbatim, tuple space-joined.
-        assert_eq!(key_identity(&[&WireValue::Num("1.0".into())]), "1");
-        assert_eq!(key_identity(&[&WireValue::Num("2".into())]), "2");
+        assert_eq!(key_identity(&[&WireValue::Float(1.0)]), "1");
+        assert_eq!(key_identity(&[&WireValue::Int(2)]), "2");
         assert_eq!(key_identity(&[&WireValue::Str("x".into())]), "x");
         assert_eq!(key_identity(&[&WireValue::Bool(true)]), "true");
-        assert_eq!(key_identity(&[&WireValue::Num("1.5".into())]), "1.5");
+        assert_eq!(key_identity(&[&WireValue::Float(1.5)]), "1.5");
         assert_eq!(
-            key_identity(&[&WireValue::Num("1".into()), &WireValue::Str("a".into())]),
+            key_identity(&[&WireValue::Int(1), &WireValue::Str("a".into())]),
             "1 a"
         );
     }
@@ -233,7 +229,7 @@ mod tests {
         let flat: Vec<String> = keys
             .iter()
             .map(|t| match &t[0] {
-                WireValue::Num(s) => s.clone(),
+                WireValue::Int(i) => i.to_string(),
                 _ => panic!(),
             })
             .collect();

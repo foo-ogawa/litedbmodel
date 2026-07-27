@@ -472,8 +472,8 @@ fn from_sql_ref(r: ValueRef<'_>) -> WireValue {
         ValueRef::Null => WireValue::Null,
         ValueRef::Integer(i) => WireValue::int(i),
         ValueRef::Real(f) => WireValue::float(f),
-        ValueRef::Text(bytes) => WireValue::Str(String::from_utf8_lossy(bytes).into_owned()),
-        ValueRef::Blob(bytes) => WireValue::Str(String::from_utf8_lossy(bytes).into_owned()),
+        ValueRef::Text(bytes) => WireValue::Str(String::from_utf8_lossy(bytes).into_owned().into()),
+        ValueRef::Blob(bytes) => WireValue::Str(String::from_utf8_lossy(bytes).into_owned().into()),
     }
 }
 
@@ -564,10 +564,11 @@ impl PreparedStatement for SqlitePrepared<'_> {
                 Ok(Some(row)) => {
                     // Materialize the row DIRECTLY as a `WireValue::Row` (one pass): decode each cell to
                     // wire on read — no intermediate `Value::Obj` that a second per-cell pass re-converts.
-                    let mut entries: Vec<(String, WireValue)> = Vec::with_capacity(col_names.len());
+                    let mut entries: Vec<(std::borrow::Cow<'static, str>, WireValue)> =
+                        Vec::with_capacity(col_names.len());
                     for (i, name) in col_names.iter().enumerate() {
                         let cell = row.get_ref(i).map_err(|e| map_sqlite_error(&e))?;
-                        entries.push((name.clone(), from_sql_ref(cell)));
+                        entries.push((name.clone().into(), from_sql_ref(cell)));
                     }
                     out.push(WireValue::Row(WireRow { entries }));
                 }

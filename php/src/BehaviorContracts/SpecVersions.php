@@ -35,7 +35,10 @@ final class SpecVersions
     // version fail-closed。validateEnvelope は envelope の specVersion「major.minor」文字列を見るので
     // あって behaviorVersion 整数ではない）。
     // v5 carries two changes: (a) a map node's Element Error Policy Kind (error|skip) + the structured detail a Failure carries (scp-error.md) — elementPolicy:skip changes which elements are present; (b) an OMITTED input key for a port DECLARED optional (inputPorts[name].required === false, i.e. {opt:T}) binds to null — the runner reads the component's own inputPorts declaration when building the entry scope. A required / undeclared name is unaffected (still UNKNOWN_BINDING). An old runtime (behavior<=4) loud-rejects a v5 IR via the baked-spec-skew gate + conformance pre-flight version fail-closed.
-    public const BEHAVIOR = 5;
+    // v6: de-box is TOTAL against the declared type — a key the wire carries that the declared outType
+    // does not name is DROPPED from the node result (the interpreters used to keep it while typed-native
+    // could not, so the same IR and the same data returned different key sets per language family).
+    public const BEHAVIOR = 6;
     // guard（v4・#205）: 不透明ワイヤ契約の 5 言語一致 — 型記法が `value`（bc#156）と `{map:T}` を受理し、node の wirePassthrough と outType は同値、component の outputType は `value` を含めない（§D4b）。（v3 = map elementPolicy 閉集合 + batched map での skip reject、v2 = assertCompiled + UNTYPED_NODE + operator 型シグネチャ SSoT。）
     public const GUARD = 4;
     // c2（c2-catalog-swap — catalog-swap 実行 + IR 構造一致の 5 言語 pin, bc#28）。

@@ -903,8 +903,9 @@ final class Behavior
             if (!($v instanceof \stdClass)) {
                 self::conformFail('TYPE_MISMATCH', "node '{$nodeId}': {$field}: expected obj, got " . self::wireTypeName($v), 'typeMismatch', $nodeId, $field, $t, $v, true);
             }
-            // 未宣言の余剰キーを保持しつつ宣言フィールドを overlay する（shallow clone）。
-            $out = clone $v;
+            // 宣言フィールドだけを組み直す（#233 — de-box は宣言型に対して total。宣言に無いキーは
+            // 「位置」ではなく、typed-native には載せる場所が無いので落とす）。
+            $out = new \stdClass();
             $vProps = get_object_vars($v);
             foreach (get_object_vars($props['obj']) as $k => $ft) {
                 if (!array_key_exists($k, $vProps)) {

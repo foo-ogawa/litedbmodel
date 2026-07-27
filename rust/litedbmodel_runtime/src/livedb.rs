@@ -630,25 +630,27 @@ fn pg_cell_to_wire(row: &tokio_postgres::Row, idx: usize) -> Result<WireValue, S
         // and format the canonical text — matching the SQLite/MySQL uuid-as-text row encoding.
         PgType::UUID => row
             .try_get::<_, Option<PgUuidText>>(idx)
-            .map(|o| o.map(|u| WireValue::Str(u.0))),
+            .map(|o| o.map(|u| WireValue::Str(u.0.into()))),
         // TIMESTAMP/DATE columns: tokio-postgres has no `String` FromSql for a temporal type, so read
         // the native chrono value and canonicalize to the SAME `YYYY-MM-DD HH:MM:SS` text the seed +
         // the SQLite/MySQL read use (the bind path above parses this exact form). date→canonical string
         // is the v2 read contract (a TIMESTAMP column round-trips as its text, never a driver-native type).
         PgType::TIMESTAMP => row
             .try_get::<_, Option<chrono::NaiveDateTime>>(idx)
-            .map(|o| o.map(|d| WireValue::Str(d.format("%Y-%m-%d %H:%M:%S").to_string()))),
+            .map(|o| o.map(|d| WireValue::Str(d.format("%Y-%m-%d %H:%M:%S").to_string().into()))),
         PgType::TIMESTAMPTZ => row
             .try_get::<_, Option<chrono::DateTime<chrono::Utc>>>(idx)
             .map(|o| {
-                o.map(|d| WireValue::Str(d.naive_utc().format("%Y-%m-%d %H:%M:%S").to_string()))
+                o.map(|d| {
+                    WireValue::Str(d.naive_utc().format("%Y-%m-%d %H:%M:%S").to_string().into())
+                })
             }),
         PgType::DATE => row
             .try_get::<_, Option<chrono::NaiveDate>>(idx)
-            .map(|o| o.map(|d| WireValue::Str(d.format("%Y-%m-%d").to_string()))),
+            .map(|o| o.map(|d| WireValue::Str(d.format("%Y-%m-%d").to_string().into()))),
         _ => row
             .try_get::<_, Option<String>>(idx)
-            .map(|o| o.map(WireValue::Str)),
+            .map(|o| o.map(|t| WireValue::Str(t.into()))),
     }
     .map_err(|e| driver_failure(format!("postgres read col {}: {e}", col.name())))?;
     Ok(v.unwrap_or(WireValue::Null))
@@ -657,9 +659,10 @@ fn pg_cell_to_wire(row: &tokio_postgres::Row, idx: usize) -> Result<WireValue, S
 fn pg_rows_to_wire(rows: &[tokio_postgres::Row]) -> Result<Vec<WireValue>, SqlFailure> {
     let mut out = Vec::with_capacity(rows.len());
     for row in rows {
-        let mut entries: Vec<(String, WireValue)> = Vec::with_capacity(row.columns().len());
+        let mut entries: Vec<(std::borrow::Cow<'static, str>, WireValue)> =
+            Vec::with_capacity(row.columns().len());
         for (i, col) in row.columns().iter().enumerate() {
-            entries.push((col.name().to_string(), pg_cell_to_wire(row, i)?));
+            entries.push((col.name().to_string().into(), pg_cell_to_wire(row, i)?));
         }
         out.push(WireValue::Row(WireRow { entries }));
     }
@@ -945,17 +948,18 @@ fn my_cell_to_wire(row: &MySqlRow, idx: usize) -> Result<WireValue, SqlFailure> 
         // the SAME `YYYY-MM-DD HH:MM:SS` text the seed + the SQLite/PG read use (date→canonical string is
         // the v2 read contract; conformance uses TEXT so this arm is inert there).
         row.try_get::<chrono::DateTime<chrono::Utc>, _>(idx)
-            .map(|d| WireValue::Str(d.naive_utc().format("%Y-%m-%d %H:%M:%S").to_string()))
+            .map(|d| WireValue::Str(d.naive_utc().format("%Y-%m-%d %H:%M:%S").to_string().into()))
     } else if type_name.contains("DATETIME") {
         // MySQL DATETIME (no tz) maps to `NaiveDateTime`.
         row.try_get::<chrono::NaiveDateTime, _>(idx)
-            .map(|d| WireValue::Str(d.format("%Y-%m-%d %H:%M:%S").to_string()))
+            .map(|d| WireValue::Str(d.format("%Y-%m-%d %H:%M:%S").to_string().into()))
     } else if type_name == "DATE" {
         row.try_get::<chrono::NaiveDate, _>(idx)
-            .map(|d| WireValue::Str(d.format("%Y-%m-%d").to_string()))
+            .map(|d| WireValue::Str(d.format("%Y-%m-%d").to_string().into()))
     } else {
         // Fall back to string for text/blob; try i64 first for count(*) style BIGINT aliases.
-        row.try_get::<String, _>(idx).map(WireValue::Str)
+        row.try_get::<String, _>(idx)
+            .map(|t| WireValue::Str(t.into()))
     }
     .map_err(|e| driver_failure(format!("mysql decode col {}: {e}", col.name())))?;
     Ok(v)
@@ -964,9 +968,10 @@ fn my_cell_to_wire(row: &MySqlRow, idx: usize) -> Result<WireValue, SqlFailure> 
 fn my_rows_to_wire(rows: &[MySqlRow]) -> Result<Vec<WireValue>, SqlFailure> {
     let mut out = Vec::with_capacity(rows.len());
     for row in rows {
-        let mut entries: Vec<(String, WireValue)> = Vec::with_capacity(row.columns().len());
+        let mut entries: Vec<(std::borrow::Cow<'static, str>, WireValue)> =
+            Vec::with_capacity(row.columns().len());
         for (i, col) in row.columns().iter().enumerate() {
-            entries.push((col.name().to_string(), my_cell_to_wire(row, i)?));
+            entries.push((col.name().to_string().into(), my_cell_to_wire(row, i)?));
         }
         out.push(WireValue::Row(WireRow { entries }));
     }
