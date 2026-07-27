@@ -630,18 +630,22 @@ fn run_op(op: &str, it: u64, db: &mut dyn Db, sql: &[String]) {
     let dialect = db.dialect();
     match op {
         "findAll" => {
-            db.query(&sql[0], &[]);
+            let rows = decode_users(db.query(&sql[0], &[]));
+            std::hint::black_box(&rows);
         }
         "filterPaginateSort" => {
             // `published` is an integer column on every dialect (sqlite INTEGER / mysql TINYINT(1) /
             // pg SMALLINT — see orm-domain.ts `ddl`), and the seed binds 1/0 everywhere.
-            db.query(&sql[0], &[P::I(1)]);
+            let rows = decode_posts_full(db.query(&sql[0], &[P::I(1)]));
+            std::hint::black_box(&rows);
         }
         "findFirst" => {
-            db.query(&sql[0], &[P::S("User%".into())]);
+            let rows = decode_users(db.query(&sql[0], &[P::S("User%".into())]));
+            std::hint::black_box(&rows);
         }
         "findUnique" => {
-            db.query(&sql[0], &[P::S("user500@example.com".into())]);
+            let rows = decode_users(db.query(&sql[0], &[P::S("user500@example.com".into())]));
+            std::hint::black_box(&rows);
         }
         "nestedFindAll" => {
             let users = db.query(&sql[0], &[]);
@@ -767,6 +771,36 @@ struct SdkUser {
     name: Option<String>,
     posts: Vec<SdkPost>,
 }
+/// `filterPaginateSort`'s row — the FULL projection the native module declares as `PostFullRow`. A read is
+/// only usable as data once its columns are in typed fields, so the baseline decodes into this exactly as
+/// the native cell de-boxes into its own row type; stopping at the driver's generic `Vec<Cell>` would
+/// compare a decode against no decode.
+#[allow(dead_code)]
+struct SdkPostFull {
+    id: i64,
+    title: Option<String>,
+    content: Option<String>,
+    published: i64,
+    author_id: i64,
+    created_at: Option<String>,
+}
+
+fn decode_posts_full(rows: Vec<Vec<Cell>>) -> Vec<SdkPostFull> {
+    rows.into_iter()
+        .map(|r| {
+            let mut it = r.into_iter();
+            SdkPostFull {
+                id: take_i64(it.next().unwrap()),
+                title: take_string(it.next().unwrap()),
+                content: take_string(it.next().unwrap()),
+                published: take_i64(it.next().unwrap()),
+                author_id: take_i64(it.next().unwrap()),
+                created_at: take_string(it.next().unwrap()),
+            }
+        })
+        .collect()
+}
+
 #[allow(dead_code)]
 struct SdkPost {
     id: i64,

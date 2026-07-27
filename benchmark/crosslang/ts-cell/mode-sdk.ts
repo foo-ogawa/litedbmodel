@@ -272,6 +272,30 @@ const RECOVER = {
   byId: 'SELECT id FROM benchmark_users WHERE id = ?',
 } as const;
 
+/** `UserRow` — the row type the native module declares for the user projections. */
+function userRow(r: Row): { id: number; email: unknown; name: unknown } {
+  return { id: Number(r.id), email: r.email, name: r.name };
+}
+
+/** `PostFullRow` — `filterPaginateSort`'s full projection. */
+function postFullRow(r: Row): {
+  id: number;
+  title: unknown;
+  content: unknown;
+  published: number;
+  author_id: number;
+  created_at: unknown;
+} {
+  return {
+    id: Number(r.id),
+    title: r.title,
+    content: r.content,
+    published: Number(r.published),
+    author_id: Number(r.author_id),
+    created_at: r.created_at,
+  };
+}
+
 /** The result of the last materialization, held so the engine cannot elide the assembly work. */
 let sink: unknown;
 
@@ -286,17 +310,20 @@ let sink: unknown;
 async function runOp(db: Db, op: string, it: number, sql: readonly string[]): Promise<void> {
   const input = inputFor(op, it) as Record<string, never>;
   switch (op) {
+    // A read is only usable as data once its columns are in typed fields, so the baseline materializes the
+    // same row objects the native cell de-boxes into; stopping at the driver's row would compare a decode
+    // against no decode.
     case 'findAll':
-      await db.query(sql[0]);
+      sink = (await db.query(sql[0])).map(userRow);
       return;
     case 'filterPaginateSort':
-      await db.query(sql[0], [input.published]);
+      sink = (await db.query(sql[0], [input.published])).map(postFullRow);
       return;
     case 'findFirst':
-      await db.query(sql[0], [input.name]);
+      sink = (await db.query(sql[0], [input.name])).map(userRow);
       return;
     case 'findUnique':
-      await db.query(sql[0], [input.email]);
+      sink = (await db.query(sql[0], [input.email])).map(userRow);
       return;
     case 'nestedFindAll':
       sink = await attachPosts(db, await db.query(sql[0]), sql[1]);

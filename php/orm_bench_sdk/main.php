@@ -317,6 +317,25 @@ function patchRecords(): array
 // so no child is cloned). The fully-assembled list-of-parents is held in $GLOBALS['benchSink'] so the
 // interpreter keeps it. Payload fields (email/name/title/body) are decoded-then-held (the same decode the
 // native pays) but never read downstream — only the key columns drive the grouping.
+/**
+ * `filterPaginateSort`'s row — the FULL projection the native module declares as `PostFullRow`. A read is
+ * only usable as data once its columns are in typed properties, so the baseline materializes this exactly
+ * as the native cell de-boxes into its own row type; stopping at PDO's numeric array would compare a
+ * decode against no decode.
+ */
+final class SdkPostFull
+{
+    public function __construct(
+        public int $id,
+        public mixed $title,
+        public mixed $content,
+        public int $published,
+        public int $authorId,
+        public mixed $createdAt,
+    ) {
+    }
+}
+
 final class SdkUser
 {
     /** @var list<SdkPost> */
@@ -479,16 +498,28 @@ function runOp(Db $db, string $op, int $it, array $sqlList): void
 {
     switch ($op) {
         case 'findAll':
-            $db->query($sqlList[0]);
+            $GLOBALS['benchSink'] = array_map(
+                static fn (array $r) => new SdkUser((int) $r[0], $r[1], $r[2]),
+                $db->query($sqlList[0]),
+            );
             break;
         case 'filterPaginateSort':
-            $db->query($sqlList[0], [1]);
+            $GLOBALS['benchSink'] = array_map(
+                static fn (array $r) => new SdkPostFull((int) $r[0], $r[1], $r[2], (int) $r[3], (int) $r[4], $r[5]),
+                $db->query($sqlList[0], [1]),
+            );
             break;
         case 'findFirst':
-            $db->query($sqlList[0], ['User%']);
+            $GLOBALS['benchSink'] = array_map(
+                static fn (array $r) => new SdkUser((int) $r[0], $r[1], $r[2]),
+                $db->query($sqlList[0], ['User%']),
+            );
             break;
         case 'findUnique':
-            $db->query($sqlList[0], ['user1@example.com']);
+            $GLOBALS['benchSink'] = array_map(
+                static fn (array $r) => new SdkUser((int) $r[0], $r[1], $r[2]),
+                $db->query($sqlList[0], ['user1@example.com']),
+            );
             break;
         case 'nestedFindAll':
             $GLOBALS['benchSink'] = materializeUsersPosts($db, $db->query($sqlList[0]), $sqlList[1]);

@@ -275,6 +275,31 @@ type sdkPost struct {
 	authorID int64
 	comments []sdkComment
 }
+
+// sdkPostFull is `filterPaginateSort`'s row — the FULL projection the native module declares as
+// `PostFullRow`. A read is only usable as data once its columns are in a typed field, so the baseline
+// decodes into this exactly as the native cell de-boxes into its own row type; stopping at the driver's
+// generic `[]any` would compare a decode against no decode.
+type sdkPostFull struct {
+	id        int64
+	title     any
+	content   any
+	published int64
+	authorID  int64
+	createdAt any
+}
+
+func decodePostsFull(rows [][]any) []sdkPostFull {
+	out := make([]sdkPostFull, len(rows))
+	for i, r := range rows {
+		out[i] = sdkPostFull{
+			id: asInt(r[0]), title: r[1], content: r[2],
+			published: asInt(r[3]), authorID: asInt(r[4]), createdAt: r[5],
+		}
+	}
+	return out
+}
+
 type sdkComment struct {
 	id     int64
 	body   any
@@ -570,13 +595,13 @@ func patchRecords() []map[string]any {
 func (c *cell) op(name string, it int, sqlList []string) {
 	switch name {
 	case "findAll":
-		c.query(sqlList[0])
+		benchSink = decodeUsers(c.query(sqlList[0]))
 	case "filterPaginateSort":
-		c.query(sqlList[0], 1)
+		benchSink = decodePostsFull(c.query(sqlList[0], 1))
 	case "findFirst":
-		c.query(sqlList[0], "User%")
+		benchSink = decodeUsers(c.query(sqlList[0], "User%"))
 	case "findUnique":
-		c.query(sqlList[0], "user500@example.com")
+		benchSink = decodeUsers(c.query(sqlList[0], "user500@example.com"))
 	case "nestedFindAll":
 		benchSink = c.materializeUsersPosts(c.query(sqlList[0]), sqlList[1])
 	case "nestedFindFirst":

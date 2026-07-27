@@ -210,6 +210,23 @@ class Post:
         self.comments: list = []
 
 
+class PostFull:
+    """`filterPaginateSort`'s row — the FULL projection the native module declares as ``PostFullRow``. A read
+    is only usable as data once its columns are in typed fields, so the baseline materializes this exactly as
+    the native cell de-boxes into its own row type; stopping at the driver's tuple would compare a decode
+    against no decode."""
+
+    __slots__ = ("id", "title", "content", "published", "author_id", "created_at")
+
+    def __init__(self, id: Any, title: Any, content: Any, published: Any, author_id: Any, created_at: Any) -> None:
+        self.id = id
+        self.title = title
+        self.content = content
+        self.published = published
+        self.author_id = author_id
+        self.created_at = created_at
+
+
 class Comment:
     __slots__ = ("id", "body", "post_id")
 
@@ -374,13 +391,13 @@ def run_op(db: Db, op: str, it: int, sql: List[str]) -> None:
     What stays hand-written is what a raw-driver user writes: param binding, decode, grouping children into
     parents, and the transaction bracket."""
     if op == "findAll":
-        db.query(sql[0])
+        _SINK[0] = [User(r[0], r[1], r[2]) for r in db.query(sql[0])]
     elif op == "filterPaginateSort":
-        db.query(sql[0], (1,))
+        _SINK[0] = [PostFull(*r) for r in db.query(sql[0], (1,))]
     elif op == "findFirst":
-        db.query(sql[0], ("User%",))
+        _SINK[0] = [User(r[0], r[1], r[2]) for r in db.query(sql[0], ("User%",))]
     elif op == "findUnique":
-        db.query(sql[0], ("user1@example.com",))
+        _SINK[0] = [User(r[0], r[1], r[2]) for r in db.query(sql[0], ("user1@example.com",))]
     elif op == "nestedFindAll":
         _SINK[0] = _materialize_users_posts(db, db.query(sql[0]), sql[1])
     elif op == "nestedFindFirst":
