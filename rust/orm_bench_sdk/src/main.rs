@@ -42,6 +42,11 @@ enum Dialect {
 }
 
 /// A bind parameter, dialect-agnostic; each driver lowers it to its own param type in the exec seam.
+///
+/// The three composite variants below are PostgreSQL-only: `pg_params` is the sole reader of their
+/// payloads, and it is `livedb`-gated, so a SQLite-only build has no code that can read them. Each is
+/// scoped with `cfg_attr(not(livedb))` — the same form `Dialect::Pg`/`Mysql` use above — rather than a
+/// blanket allow on the enum, so a payload that goes genuinely unread still warns in the `livedb` build.
 #[derive(Clone)]
 enum P {
     I(i64),
@@ -50,11 +55,14 @@ enum P {
     /// predicate and its batch `UNNEST` form. rust's `postgres` crate maps types strictly, so this must be
     /// bound as a real array rather than as the array literal PDO / psycopg get away with sending as text.
     /// The other two drivers never see it: their statements take a JSON param instead.
+    #[cfg_attr(not(feature = "livedb"), allow(dead_code))]
     Ints(Vec<i64>),
+    #[cfg_attr(not(feature = "livedb"), allow(dead_code))]
     Strs(Vec<String>),
     /// A JSON param the statement casts (`?::json`) — PostgreSQL's composite-key relation predicate reads
     /// the key tuples with `json_array_elements`. Bound as a real JSON value for the same strict-typing
     /// reason as the array variants. MySQL/SQLite carry the identical JSON text in a plain string param.
+    #[cfg_attr(not(feature = "livedb"), allow(dead_code))]
     Json(String),
 }
 
@@ -516,22 +524,6 @@ fn is_pg_array_cast(sql: &str) -> bool {
             .collect();
         !ident.is_empty() && tail[ident.len()..].starts_with("[]")
     })
-}
-
-/// A PostgreSQL array literal (`{a,b}`), bound as TEXT and cast by the statement's own `::int[]` /
-/// `::text[]` — so it needs no driver-specific array support.
-fn pg_array_literal(vals: &[String], quote: bool) -> String {
-    let body: Vec<String> = vals
-        .iter()
-        .map(|v| {
-            if quote {
-                format!("\"{}\"", v.replace('\\', "\\\\").replace('"', "\\\""))
-            } else {
-                v.clone()
-            }
-        })
-        .collect();
-    format!("{{{}}}", body.join(","))
 }
 
 /// One relation level's key set as the ONE param the captured statement expects. The generated module
