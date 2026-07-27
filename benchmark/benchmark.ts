@@ -1612,7 +1612,7 @@ async function main() {
             }
             // Verify we accessed all 10000 comments
             if (commentCount !== 10000) {
-              console.warn(`litedbmodel: Expected 10000 comments, got ${commentCount}`);
+              throw new Error(`litedbmodel nestedRelations processed ${commentCount} comments, not 10000 — this cell is NOT traversing the same graph as the others; a benchmark number from it would be comparing different work (#170).`);
             }
             return users;
           }
@@ -1638,7 +1638,7 @@ async function main() {
               }
             }
             if (commentCount !== 10000) {
-              console.warn(`Prisma: Expected 10000 comments, got ${commentCount}`);
+              throw new Error(`Prisma nestedRelations processed ${commentCount} comments, not 10000 — this cell is NOT traversing the same graph as the others; a benchmark number from it would be comparing different work (#170).`);
             }
             return users;
           }
@@ -1689,7 +1689,7 @@ async function main() {
               }
             }
             if (commentCount !== 10000) {
-              console.warn(`Kysely: Expected 10000 comments, got ${commentCount}`);
+              throw new Error(`Kysely nestedRelations processed ${commentCount} comments, not 10000 — this cell is NOT traversing the same graph as the others; a benchmark number from it would be comparing different work (#170).`);
             }
             return users;
           }
@@ -1712,7 +1712,7 @@ async function main() {
               }
             }
             if (commentCount !== 10000) {
-              console.warn(`Drizzle: Expected 10000 comments, got ${commentCount}`);
+              throw new Error(`Drizzle nestedRelations processed ${commentCount} comments, not 10000 — this cell is NOT traversing the same graph as the others; a benchmark number from it would be comparing different work (#170).`);
             }
             return users;
           }
@@ -1734,7 +1734,7 @@ async function main() {
               }
             }
             if (commentCount !== 10000) {
-              console.warn(`TypeORM: Expected 10000 comments, got ${commentCount}`);
+              throw new Error(`TypeORM nestedRelations processed ${commentCount} comments, not 10000 — this cell is NOT traversing the same graph as the others; a benchmark number from it would be comparing different work (#170).`);
             }
             return users;
           }
@@ -1768,12 +1768,9 @@ async function main() {
                 }
               }
             }
-            // 100 users × 10 posts × 10 comments = 10000, but only 5 tenants have comments
-            // 100 users × 10 posts = 1000 posts, each post has 10 comments = 10000 comments
-            // But comments exist only for tenants 1-5, so: 5 tenants × 100 users/tenant × 10 posts × 10 comments
-            // Actually: 5 tenants × 20 users × 10 posts × 10 comments = 10000
-            if (commentCount < 5000) {
-              console.warn(`litedbmodel (composite): Expected >= 5000 comments, got ${commentCount}`);
+            // tenant_id IN (1..5) LIMIT 100 = 100 tenant_users, each with 10 posts × 10 comments = 10000.
+            if (commentCount !== 10000) {
+              throw new Error(`litedbmodel compositeRelations processed ${commentCount} comments, not 10000 — this cell is NOT traversing the same graph as the others; a benchmark number from it would be comparing different work (#170).`);
             }
             return users;
           }
@@ -1798,6 +1795,9 @@ async function main() {
                 }
               }
             }
+            if (commentCount !== 10000) {
+              throw new Error(`compositeRelations processed ${commentCount} comments, not 10000 — this cell is NOT traversing the same graph as the others; a benchmark number from it would be comparing different work (#170).`);
+            }
             return users;
           }
         },
@@ -1819,6 +1819,9 @@ async function main() {
                 }
               }
             }
+            if (commentCount !== 10000) {
+              throw new Error(`compositeRelations processed ${commentCount} comments, not 10000 — this cell is NOT traversing the same graph as the others; a benchmark number from it would be comparing different work (#170).`);
+            }
             return users;
           }
         },
@@ -1837,6 +1840,9 @@ async function main() {
                   commentCount++;
                 }
               }
+            }
+            if (commentCount !== 10000) {
+              throw new Error(`compositeRelations processed ${commentCount} comments, not 10000 — this cell is NOT traversing the same graph as the others; a benchmark number from it would be comparing different work (#170).`);
             }
             return users;
           }
