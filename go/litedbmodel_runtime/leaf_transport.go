@@ -148,10 +148,7 @@ func portRelationGuard(payload wire.WireRow) (*relationGuard, error) {
 	if n.Kind != wireProbeGot {
 		return nil, portErr("guard.limit", "int", n.Kind, n.ActualWireType)
 	}
-	limit, err := int(n.Got), error(nil)
-	if err != nil {
-		return nil, fmt.Errorf("leaf transport: port %q is not an integer row cap: %q", "guard.limit", n.Got)
-	}
+	limit := int(n.Got)
 	rel := p.Got.ProbeString("relation")
 	if rel.Kind != wireProbeGot {
 		return nil, portErr("guard.relation", "string", rel.Kind, rel.ActualWireType)

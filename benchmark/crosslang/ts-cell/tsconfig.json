@@ -12,5 +12,5 @@
     "rootDir": "..",
     "outDir": "../../crosslang-build"
   },
-  "include": ["*.ts", "../contract.ts", "../orm-domain.ts", "../emit-setup.ts", "../emit-ops.ts"]
+  "include": ["*.ts", "../contract.ts", "../orm-domain.ts", "../emit-setup.ts"]
 }

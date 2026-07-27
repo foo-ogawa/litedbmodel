@@ -15,7 +15,7 @@ import { clearMiddlewares, createMiddleware, use } from '../../../dist/scp/index
 
 import { EXPECTED_STATEMENTS, inputFor, userRows, updateManyRows } from './inputs.js';
 import type { Cell, Dialect } from './cell.js';
-import { MYSQL_CONFIG, PG_CONFIG, SQLITE_CONFIG, setupFor, tallyRows } from './cell.js';
+import { MYSQL_CONFIG, PG_CONFIG, SQLITE_CONFIG, setupFor } from './cell.js';
 
 // The six benchmark models. Every relation property is `declare`: with `useDefineForClassFields` (the
 // default at target ES2022) a plain `posts?: Promise<Post[]>` emits a class FIELD, which defines an own

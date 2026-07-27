@@ -31,7 +31,6 @@ import { renderPlaceholders, type Dialect } from './makesql/handler';
 import {
   type ExecutionContext,
   type SqliteDriver,
-  execute as seamExecute,
   executeSafe as seamExecuteSafe,
   contextForDriver,
 } from './exec-context';
@@ -485,15 +484,16 @@ export function runRelationOp(
   const tCols = targetKeyCols(op);
   // Materialize the child rows (issue #59) exactly like the primary read, using the STATIC
   // materializers baked onto the op at compile (from the model's DDL — ZERO per-read introspection).
-  // Enable safeIntegers when the child projects a BIGINT so int8 arrives exact. A BIGINT/DATE/BOOL
-  // child column de-boxes identically to a top-level read (INT→number / BIGINT→string / DATE→string
-  // / bool). SQLite-shaped driver; the async PG/MySQL relation path materializes at its own seam.
+  // A BIGINT/DATE/BOOL child column de-boxes identically to a top-level read (INT→number /
+  // BIGINT→string / DATE→string / bool).
   const childCols = op.materializers;
-  const int64Child = childCols !== undefined && Object.values(childCols).includes('int64');
-  // Route the batch SELECT through the central READ seam (safeIntegers variant when a BIGINT child
-  // projects), so the relation path — like the primary read — never touches a driver directly.
+  // The EXACT-integer seam, unconditionally — the same one the `executeSQL` leaf reads through. This
+  // used to switch to the inexact seam unless a child column was declared `int64`, which made ONE
+  // column read back as two different JS types depending on which surface fetched it: `1n` through
+  // codegen, `1` through the lazy path. Exactness is not a per-endpoint choice; the DECLARED type
+  // decides the consumer-facing shape, and that narrowing is `materializeCell`'s job below.
   const boundParams = bindKeys(op, keys);
-  const rawRows = (int64Child ? seamExecuteSafe(ctx, sql, boundParams) : seamExecute(ctx, sql, boundParams)) as Record<string, unknown>[];
+  const rawRows = seamExecuteSafe(ctx, sql, boundParams) as Record<string, unknown>[];
   // Hard-limit runaway guard (Phase E-2, epic #74; v1 `_selectForRelation`): POST-fetch, if the batch
   // TOTAL exceeds the baked cap, throw with the EXACT count (the batch is fetched in full, no N+1).
   // The check itself is the SHARED relation primitive (`assertRelationHardLimit`) over the op's own
@@ -501,7 +501,7 @@ export function runRelationOp(
   // surfaces cannot drift on the cap, the count or the error identity. Runs BEFORE grouping/hydration
   // so an over-cap read never assembles an unbounded result set.
   assertRelationHardLimit(rawRows, relationGuard(op));
-  const rows = materializeChildRows(rawRows, childCols, int64Child);
+  const rows = materializeChildRows(rawRows, childCols);
   // Group the child rows by their target-key identity — the shared grouping SSoT ({@link groupByKey}),
   // the SAME core the eager `group` leaf uses (no duplicated grouping).
   return { sql, keys, batch: groupByKey(rows, tCols) };
@@ -511,15 +511,14 @@ export function runRelationOp(
 function materializeChildRows(
   rows: Record<string, unknown>[],
   cols: Record<string, MaterializeClass> | undefined,
-  safeIntegersOn: boolean,
 ): Record<string, unknown>[] {
-  if (cols === undefined && !safeIntegersOn) return rows;
   for (const row of rows) {
     for (const key of Object.keys(row)) {
       const klass = cols?.[key];
       if (klass !== undefined) { row[key] = materializeCell(row[key], klass); continue; }
-      // Defensive: under safeIntegers, an untyped int child column arrives as bigint — narrow it.
-      if (safeIntegersOn && typeof row[key] === 'bigint') {
+      // An UNDECLARED integer column arrives as bigint from the exact seam — narrow it here. There is
+      // no longer a mode in which it does not, so this is the normal path, not a defensive one.
+      if (typeof row[key] === 'bigint') {
         const v = row[key] as bigint;
         row[key] = v >= BigInt(Number.MIN_SAFE_INTEGER) && v <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(v) : v.toString();
       }
