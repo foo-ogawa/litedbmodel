@@ -399,18 +399,29 @@ async function runOp(db: Db, op: string, it: number, sql: readonly string[]): Pr
 export async function openSdk(dialect: Dialect): Promise<Cell> {
   const setup = setupFor(dialect);
   let db: Db;
+  // ONE connection per dialect, not a pool of four. `exec` sends BEGIN/COMMIT through the pool with no
+  // pinned client, so BEGIN, the two body writes and COMMIT could each land on a DIFFERENT connection and
+  // the BEGIN'd one went back to the pool holding an open transaction — the four tx ops were not
+  // transactions at all, and measured many times the library they are the baseline for.
+  //
+  // The library itself does this correctly and is NOT affected: `pgConnectionPool`/`mysqlConnectionPool`
+  // hand a transaction an OWNED connection (`acquire()` → `connect()`/`getConnection()`,
+  // src/scp/makesql/pool-executor.ts:162-171) and `ExecutionContext.withConnection` pins it, which is why
+  // the native cell keeps its pool. This cell is the RAW baseline, so it takes the raw fix — which is also
+  // what the other three SDK cells already do (rust one `postgres::Client`, python one connection, php one
+  // PDO). A serial workload occupies one connection either way.
   if (dialect === 'sqlite') {
     const conn = new Database(':memory:');
     for (const stmt of setup.schema) conn.exec(stmt);
     db = new SqliteDb(conn);
   } else if (dialect === 'postgres') {
-    const pool = new PgPool({ ...PG_CONFIG, max: 4 });
+    const pool = new PgPool({ ...PG_CONFIG, max: 1 });
     for (const stmt of setup.schema) await pool.query(stmt);
     db = new PgDb(pool);
   } else {
     const pool = mysql.createPool({
       ...MYSQL_CONFIG,
-      connectionLimit: 4,
+      connectionLimit: 1,
       multipleStatements: false,
     });
     for (const stmt of setup.schema) await pool.query(stmt);

@@ -51,6 +51,7 @@ type cell struct {
 	db      *sql.DB
 	dialect string               // the target; every dialect divergence below is derived from it
 	stmts   map[string]*sql.Stmt // per-SQL prepared-statement cache (reused across iterations)
+	tx      *sql.Tx              // the OPEN transaction, if any — every statement in one runs on it
 	count   int64                // statement counter (safety proof); bumped once per prepared statement
 	rows    int64                // rows this cell scanned (#170) — the report's per-row denominator, and
 	// the proof this hand-written baseline moved the SAME rows the runtime cell did
@@ -88,6 +89,47 @@ func (c *cell) prep(sqlText string) *sql.Stmt {
 	return s
 }
 
+// stmt returns the cached prepared statement BOUND TO THE CURRENT SCOPE: the open transaction if there
+// is one, the pool otherwise. Every statement inside BEGIN..COMMIT must run on the transaction's own
+// connection — that is what makes it atomic.
+func (c *cell) stmt(sqlText string) *sql.Stmt {
+	s := c.prep(sqlText)
+	if c.tx != nil {
+		return c.tx.Stmt(s)
+	}
+	return s
+}
+
+// begin / commit use database/sql's OWN transaction API rather than sending the words through Exec.
+// This is not style. `db.Exec("BEGIN")` leaves database/sql unaware that the connection is now in a
+// transaction: it hands the connection back to the pool, cannot reuse it safely, and reconnects —
+// measured against this bench's Postgres, 20 iterations each:
+//
+//	db.Exec("BEGIN") + db.Exec("COMMIT"), nothing between   7625 us
+//	Exec(BEGIN) + INSERT..RETURNING + Exec(COMMIT)          8867 us
+//	db.Begin()  + INSERT..RETURNING + tx.Commit()            929 us
+//	one INSERT..RETURNING, autocommit                         258 us
+//
+// So ~8ms per tx op was connection churn inside the driver layer, not the database and not fsync. It
+// made this baseline read ~12x the library it is the baseline FOR, on the four tx ops only. Both forms
+// put BEGIN and COMMIT on the wire, so the statement count is unchanged at 4.
+func (c *cell) begin() {
+	c.count++
+	tx, err := c.db.Begin()
+	if err != nil {
+		panic(fmt.Sprintf("begin: %v", err))
+	}
+	c.tx = tx
+}
+
+func (c *cell) commit() {
+	c.count++
+	if err := c.tx.Commit(); err != nil {
+		panic(fmt.Sprintf("commit: %v", err))
+	}
+	c.tx = nil
+}
+
 // query runs a prepared SELECT and materialises EVERY column of every row (fair vs the native cell,
 // which decodes full typed structs), returning each row as a []any. Only key columns are read
 // downstream for batching, but all columns are scanned to pay the real decode cost.
@@ -99,7 +141,7 @@ func (c *cell) query(sqlText string, args ...any) [][]any {
 // recoverRows fetches and tallies rows WITHOUT bumping the statement count. It is the body of `query`,
 // and it is also the MySQL RETURNING recovery, which belongs to the logical statement just issued.
 func (c *cell) recoverRows(sqlText string, args ...any) [][]any {
-	rows, err := c.prep(sqlText).Query(args...)
+	rows, err := c.stmt(sqlText).Query(args...)
 	if err != nil {
 		panic(fmt.Sprintf("query %q: %v", sqlText, err))
 	}
@@ -121,19 +163,10 @@ func (c *cell) recoverRows(sqlText string, args ...any) [][]any {
 	return out
 }
 
-// exec runs a prepared, parameterised write. Param-free control statements (BEGIN/COMMIT) go through
-// execRaw so they never hit the prepared-statement path.
+// exec runs a prepared, parameterised write on the current scope (the open transaction, or the pool).
 func (c *cell) exec(sqlText string, args ...any) {
 	c.count++
-	if _, err := c.prep(sqlText).Exec(args...); err != nil {
-		panic(fmt.Sprintf("exec %q: %v", sqlText, err))
-	}
-}
-
-// execRaw runs a param-free statement directly (BEGIN / COMMIT / ROLLBACK).
-func (c *cell) execRaw(sqlText string) {
-	c.count++
-	if _, err := c.db.Exec(c.render(sqlText)); err != nil {
+	if _, err := c.stmt(sqlText).Exec(args...); err != nil {
 		panic(fmt.Sprintf("exec %q: %v", sqlText, err))
 	}
 }
@@ -629,30 +662,30 @@ func (c *cell) op(name string, it int, sqlList []string) {
 	case "updateMany":
 		c.exec(sqlList[0], c.batchParams(sqlList[0], patchRecords())...)
 	case "nestedCreate":
-		c.execRaw("BEGIN")
+		c.begin()
 		uid := c.writeReturningID(sqlList[0], recoverByLastInsertID, nil,
 			fmt.Sprintf("nc%d@bench.com", it), "NC")
 		c.exec(sqlList[1], uid, "NC Post")
-		c.execRaw("COMMIT")
+		c.commit()
 	case "nestedUpsert":
-		c.execRaw("BEGIN")
+		c.begin()
 		uid := c.writeReturningID(sqlList[0], recoverByEmail, []any{"user1@example.com"},
 			"user1@example.com", "NUp")
 		c.exec(sqlList[1], uid, "NUp Post")
-		c.execRaw("COMMIT")
+		c.commit()
 	case "nestedUpdate":
-		c.execRaw("BEGIN")
+		c.begin()
 		// The generated runner chains the dependent UPDATE off the id the first UPDATE returned; taking
 		// the id from the input instead would skip a statement's worth of work.
 		uid := c.writeReturningID(sqlList[0], recoverByID, []any{1}, "NU", 1)
 		c.exec(sqlList[1], "NU Post", uid)
-		c.execRaw("COMMIT")
+		c.commit()
 	case "delete":
-		c.execRaw("BEGIN")
+		c.begin()
 		uid := c.writeReturningID(sqlList[0], recoverByLastInsertID, nil,
 			fmt.Sprintf("del%d@bench.com", it), "Del")
 		c.exec(sqlList[1], uid)
-		c.execRaw("COMMIT")
+		c.commit()
 	default:
 		panic("unknown op " + name)
 	}
