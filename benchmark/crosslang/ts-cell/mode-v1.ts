@@ -17,7 +17,14 @@ import { EXPECTED_STATEMENTS, inputFor, userRows, updateManyRows } from './input
 import type { Cell, Dialect } from './cell.js';
 import { MYSQL_CONFIG, PG_CONFIG, SQLITE_CONFIG, setupFor, tallyRows } from './cell.js';
 
-// The six benchmark models. Decorators run at class definition, and the transform only accepts them at
+// The six benchmark models. Every relation property is `declare`: with `useDefineForClassFields` (the
+// default at target ES2022) a plain `posts?: Promise<Post[]>` emits a class FIELD, which defines an own
+// `undefined` on the instance and SHADOWS the prototype's lazy getter — `await u.posts` then resolves
+// `undefined`, the relation issues no query, and the op silently reports an empty graph. That is what made
+// this cell's `nestedRelations` read 173µs while a raw driver reading the same 11,100 rows took 10,305µs
+// (#171). The library's own decorator docs spell it `declare` for exactly this reason.
+//
+// Decorators run at class definition, and the transform only accepts them at
 // module top level, so the models are declared once against `DBModel` and the dialect is applied by
 // `DBModel.setConfig` in `openV1` — correct here because the cell runs ONE dialect per process (the
 // same shape benchmark/benchmark.ts uses). Schema and columns match `orm-domain.ts`, the fixture every
@@ -28,7 +35,7 @@ class UserModel extends DBModel {
   @column() email?: string;
   @column() name?: string;
   @hasMany(() => [User.id, Post.author_id])
-  posts?: Promise<PostModel[]>;
+  declare posts: Promise<PostModel[]>;
 }
 const User = UserModel as typeof UserModel & ColumnsOf<UserModel>;
 
@@ -41,9 +48,9 @@ class PostModel extends DBModel {
   @column() author_id?: number;
   @column() created_at?: string;
   @belongsTo(() => [Post.author_id, User.id])
-  author?: Promise<UserModel | null>;
+  declare author: Promise<UserModel | null>;
   @hasMany(() => [Post.id, Comment.post_id])
-  comments?: Promise<CommentModel[]>;
+  declare comments: Promise<CommentModel[]>;
 }
 const Post = PostModel as typeof PostModel & ColumnsOf<PostModel>;
 
@@ -53,7 +60,7 @@ class CommentModel extends DBModel {
   @column() body?: string;
   @column() post_id?: number;
   @belongsTo(() => [Comment.post_id, Post.id])
-  post?: Promise<PostModel | null>;
+  declare post: Promise<PostModel | null>;
 }
 const Comment = CommentModel as typeof CommentModel & ColumnsOf<CommentModel>;
 
@@ -66,7 +73,7 @@ class TenantUserModel extends DBModel {
       [TenantUser.tenant_id, TenantPost.tenant_id],
       [TenantUser.user_id, TenantPost.user_id],
     ])
-  posts?: Promise<TenantPostModel[]>;
+  declare posts: Promise<TenantPostModel[]>;
 }
 const TenantUser = TenantUserModel as typeof TenantUserModel & ColumnsOf<TenantUserModel>;
 
@@ -80,7 +87,7 @@ class TenantPostModel extends DBModel {
       [TenantPost.tenant_id, TenantComment.tenant_id],
       [TenantPost.post_id, TenantComment.post_id],
     ])
-  comments?: Promise<TenantCommentModel[]>;
+  declare comments: Promise<TenantCommentModel[]>;
 }
 const TenantPost = TenantPostModel as typeof TenantPostModel & ColumnsOf<TenantPostModel>;
 
@@ -118,18 +125,18 @@ export async function openV1(dialect: Dialect): Promise<Cell> {
   // through the SCP runtime whenever it is usable, so the driver logger sees only the statements that
   // fall back to v1 — on PostgreSQL that was ZERO, and the counter read 0 for a query that ran.
   let count = 0;
-  // Rows are observable ONLY at the SCP middleware, which sees the result. The v1 in-proc path (SQLite)
-  // is reached through the driver LOGGER, which carries the SQL text and nothing else — so on that leg
-  // the row count is genuinely unavailable and `rows()` reports `null` rather than a misleading 0.
-  let rows: number | null = dialect === 'sqlite' ? null : 0;
+  // Rows are counted where this cell MATERIALIZES them, not at a seam. The SCP middleware sees the result
+  // but does not fire on the sqlite in-proc path, and the driver logger carries SQL text only — so the op
+  // arms below tally what they actually built. That is the guard #171 needed: a relation that silently
+  // returns nothing keeps its statement count plausible (2 or 3) while moving zero rows, which is how the
+  // shadowed lazy getter went unnoticed. Counting rows makes that impossible to miss.
+  let rows = 0;
   clearMiddlewares();
   use(
     createMiddleware({
       execute(next: (s: string, p?: readonly unknown[]) => unknown, sql: string, params: readonly unknown[]) {
         count++;
-        return tallyRows(next(sql, params), (n) => {
-          if (rows !== null) rows += n;
-        });
+        return next(sql, params);
       },
     }),
   );
@@ -159,20 +166,22 @@ export async function openV1(dialect: Dialect): Promise<Cell> {
     const input = inputFor(op, it) as Record<string, never>;
     switch (op) {
       case 'findAll':
-        await User.find([], { limit: 100, order: User.id.asc() });
+        rows += (await User.find([], { limit: 100, order: User.id.asc() })).length;
         return;
       case 'filterPaginateSort':
-        await Post.find([[Post.published, input.published]], {
-          order: Post.created_at.desc(),
-          limit: 20,
-          offset: 10,
-        });
+        rows += (
+          await Post.find([[Post.published, input.published]], {
+            order: Post.created_at.desc(),
+            limit: 20,
+            offset: 10,
+          })
+        ).length;
         return;
       case 'findFirst':
-        await User.findOne([[`${User.name} LIKE ?`, input.name]]);
+        rows += (await User.findOne([[`${User.name} LIKE ?`, input.name]])) === null ? 0 : 1;
         return;
       case 'findUnique':
-        await User.findOne([[User.email, input.email]]);
+        rows += (await User.findOne([[User.email, input.email]])) === null ? 0 : 1;
         return;
       case 'nestedFindAll':
       case 'nestedFindFirst':
@@ -185,29 +194,49 @@ export async function openV1(dialect: Dialect): Promise<Cell> {
               : await User.find([[User.email, input.email]], { limit: 1 });
         // The FIRST access batch-loads every user's posts through the shared LazyRelationContext.
         const graph = [];
-        for (const u of users) graph.push({ user: u, posts: await u.posts });
+        rows += users.length;
+        for (const u of users) {
+          const posts = await u.posts;
+          rows += posts.length;
+          graph.push({ user: u, posts });
+        }
         sink = graph;
         return;
       }
       case 'nestedRelations': {
         const users = await User.find([], { limit: 100, order: User.id.asc() });
         const graph = [];
+        rows += users.length;
         for (const u of users) {
           const posts = (await u.posts) ?? [];
+          rows += posts.length;
           const withComments = [];
-          for (const p of posts) withComments.push({ post: p, comments: await p.comments });
+          for (const p of posts) {
+            const comments = await p.comments;
+            rows += comments.length;
+            withComments.push({ post: p, comments });
+          }
           graph.push({ user: u, posts: withComments });
         }
         sink = graph;
         return;
       }
       case 'compositeRelations': {
-        const tusers = await TenantUser.find([[TenantUser.tenant_id, 1]], { order: TenantUser.user_id.asc() });
+        // The native module's parent window: ordered by user_id and capped at 100 ACROSS tenants. A
+        // single-tenant scan returns the same row count here but is a different query, and it does not
+        // exercise the composite key this op exists for (post_id/comment_id RESTART per tenant).
+        const tusers = await TenantUser.find([], { order: TenantUser.user_id.asc(), limit: 100 });
         const graph = [];
+        rows += tusers.length;
         for (const u of tusers) {
           const posts = (await u.posts) ?? [];
+          rows += posts.length;
           const withComments = [];
-          for (const p of posts) withComments.push({ post: p, comments: await p.comments });
+          for (const p of posts) {
+            const comments = await p.comments;
+            rows += comments.length;
+            withComments.push({ post: p, comments });
+          }
           graph.push({ user: u, posts: withComments });
         }
         sink = graph;
@@ -333,7 +362,7 @@ export async function openV1(dialect: Dialect): Promise<Cell> {
     rows: () => rows,
     resetCounters: () => {
       count = 0;
-      if (rows !== null) rows = 0;
+      rows = 0;
     },
   };
 }
