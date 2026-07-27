@@ -87,10 +87,13 @@ export function scaleSeed(shape: SeedShape, factor: number): SeedShape {
   };
 }
 
+// Child→parent order — a table is dropped/emptied BEFORE the table it references (FK-safe). `tenant_users`
+// references `benchmark_tenants`, so `benchmark_tenants` comes after it.
 const DROP_ORDER = [
   'benchmark_tenant_comments',
   'benchmark_tenant_posts',
   'benchmark_tenant_users',
+  'benchmark_tenants',
   'benchmark_comments',
   'benchmark_posts',
   'benchmark_users',
@@ -142,6 +145,13 @@ const BENCH_INDEXES: readonly string[] = [
 export function ddl(dialect: OrmDialect): string[] {
   if (dialect === 'sqlite') {
     return [
+      // SQLite does NOT enforce foreign keys unless the connection opts in — and it is a per-connection
+      // setting, off by default. Every cell applies this schema on the SAME connection it runs the ops
+      // on (:memory:), so enabling it here, as the first statement, makes the FK constraints below
+      // actually enforced — matching PostgreSQL/MySQL (which enforce by default). Without it the FK
+      // clauses would be declared-but-inert, and a write op would skip the referential check the other
+      // two dialects pay. It runs after the child-first DROPs (no FK check needed there).
+      `PRAGMA foreign_keys = ON`,
       `CREATE TABLE benchmark_users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         email TEXT NOT NULL UNIQUE,
@@ -155,33 +165,42 @@ export function ddl(dialect: OrmDialect): string[] {
         content TEXT,
         published INTEGER DEFAULT 0,
         author_id INTEGER,
-        created_at TEXT DEFAULT (datetime('now'))
+        created_at TEXT DEFAULT (datetime('now')),
+        FOREIGN KEY (author_id) REFERENCES benchmark_users(id) ON DELETE CASCADE
       )`,
       `CREATE TABLE benchmark_comments (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         body TEXT NOT NULL,
         post_id INTEGER,
-        created_at TEXT DEFAULT (datetime('now'))
+        created_at TEXT DEFAULT (datetime('now')),
+        FOREIGN KEY (post_id) REFERENCES benchmark_posts(id) ON DELETE CASCADE
+      )`,
+      `CREATE TABLE benchmark_tenants (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL
       )`,
       `CREATE TABLE benchmark_tenant_users (
         tenant_id INTEGER NOT NULL,
         user_id INTEGER NOT NULL,
         name TEXT,
-        PRIMARY KEY (tenant_id, user_id)
+        PRIMARY KEY (tenant_id, user_id),
+        FOREIGN KEY (tenant_id) REFERENCES benchmark_tenants(id) ON DELETE CASCADE
       )`,
       `CREATE TABLE benchmark_tenant_posts (
         tenant_id INTEGER NOT NULL,
         post_id INTEGER NOT NULL,
         user_id INTEGER NOT NULL,
         title TEXT NOT NULL,
-        PRIMARY KEY (tenant_id, post_id)
+        PRIMARY KEY (tenant_id, post_id),
+        FOREIGN KEY (tenant_id, user_id) REFERENCES benchmark_tenant_users(tenant_id, user_id) ON DELETE CASCADE
       )`,
       `CREATE TABLE benchmark_tenant_comments (
         tenant_id INTEGER NOT NULL,
         comment_id INTEGER NOT NULL,
         post_id INTEGER NOT NULL,
         body TEXT NOT NULL,
-        PRIMARY KEY (tenant_id, comment_id)
+        PRIMARY KEY (tenant_id, comment_id),
+        FOREIGN KEY (tenant_id, post_id) REFERENCES benchmark_tenant_posts(tenant_id, post_id) ON DELETE CASCADE
       )`,
       ...BENCH_INDEXES,
     ];
@@ -201,33 +220,42 @@ export function ddl(dialect: OrmDialect): string[] {
         content TEXT,
         published TINYINT(1) DEFAULT 0,
         author_id INT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (author_id) REFERENCES benchmark_users(id) ON DELETE CASCADE
       )`,
       `CREATE TABLE benchmark_comments (
         id INT AUTO_INCREMENT PRIMARY KEY,
         body TEXT NOT NULL,
         post_id INT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (post_id) REFERENCES benchmark_posts(id) ON DELETE CASCADE
+      )`,
+      `CREATE TABLE benchmark_tenants (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        name VARCHAR(255) NOT NULL
       )`,
       `CREATE TABLE benchmark_tenant_users (
         tenant_id INT NOT NULL,
         user_id INT NOT NULL,
         name VARCHAR(255),
-        PRIMARY KEY (tenant_id, user_id)
+        PRIMARY KEY (tenant_id, user_id),
+        FOREIGN KEY (tenant_id) REFERENCES benchmark_tenants(id) ON DELETE CASCADE
       )`,
       `CREATE TABLE benchmark_tenant_posts (
         tenant_id INT NOT NULL,
         post_id INT NOT NULL,
         user_id INT NOT NULL,
         title VARCHAR(255) NOT NULL,
-        PRIMARY KEY (tenant_id, post_id)
+        PRIMARY KEY (tenant_id, post_id),
+        FOREIGN KEY (tenant_id, user_id) REFERENCES benchmark_tenant_users(tenant_id, user_id) ON DELETE CASCADE
       )`,
       `CREATE TABLE benchmark_tenant_comments (
         tenant_id INT NOT NULL,
         comment_id INT NOT NULL,
         post_id INT NOT NULL,
         body TEXT NOT NULL,
-        PRIMARY KEY (tenant_id, comment_id)
+        PRIMARY KEY (tenant_id, comment_id),
+        FOREIGN KEY (tenant_id, post_id) REFERENCES benchmark_tenant_posts(tenant_id, post_id) ON DELETE CASCADE
       )`,
       ...BENCH_INDEXES,
     ];
@@ -251,33 +279,42 @@ export function ddl(dialect: OrmDialect): string[] {
       -- conformance corpus's conf_typed.flag column.
       published SMALLINT DEFAULT 0,
       author_id INTEGER,
-      created_at TIMESTAMP DEFAULT NOW()
+      created_at TIMESTAMP DEFAULT NOW(),
+      FOREIGN KEY (author_id) REFERENCES benchmark_users(id) ON DELETE CASCADE
     )`,
     `CREATE TABLE benchmark_comments (
       id SERIAL PRIMARY KEY,
       body TEXT NOT NULL,
       post_id INTEGER,
-      created_at TIMESTAMP DEFAULT NOW()
+      created_at TIMESTAMP DEFAULT NOW(),
+      FOREIGN KEY (post_id) REFERENCES benchmark_posts(id) ON DELETE CASCADE
+    )`,
+    `CREATE TABLE benchmark_tenants (
+      id SERIAL PRIMARY KEY,
+      name VARCHAR(255) NOT NULL
     )`,
     `CREATE TABLE benchmark_tenant_users (
       tenant_id INTEGER NOT NULL,
       user_id INTEGER NOT NULL,
       name VARCHAR(255),
-      PRIMARY KEY (tenant_id, user_id)
+      PRIMARY KEY (tenant_id, user_id),
+      FOREIGN KEY (tenant_id) REFERENCES benchmark_tenants(id) ON DELETE CASCADE
     )`,
     `CREATE TABLE benchmark_tenant_posts (
       tenant_id INTEGER NOT NULL,
       post_id INTEGER NOT NULL,
       user_id INTEGER NOT NULL,
       title VARCHAR(255) NOT NULL,
-      PRIMARY KEY (tenant_id, post_id)
+      PRIMARY KEY (tenant_id, post_id),
+      FOREIGN KEY (tenant_id, user_id) REFERENCES benchmark_tenant_users(tenant_id, user_id) ON DELETE CASCADE
     )`,
     `CREATE TABLE benchmark_tenant_comments (
       tenant_id INTEGER NOT NULL,
       comment_id INTEGER NOT NULL,
       post_id INTEGER NOT NULL,
       body TEXT NOT NULL,
-      PRIMARY KEY (tenant_id, comment_id)
+      PRIMARY KEY (tenant_id, comment_id),
+      FOREIGN KEY (tenant_id, post_id) REFERENCES benchmark_tenant_posts(tenant_id, post_id) ON DELETE CASCADE
     )`,
     ...BENCH_INDEXES,
   ];
@@ -358,6 +395,8 @@ export function seedTables(shape: SeedShape = ORM_SEED): SeedTable[] {
 
   // The composite-key graph. `post_id` / `comment_id` RESTART per tenant, so a query that forgets the
   // tenant key matches rows from every tenant — the property `compositeRelations` exists to exercise.
+  const tenants: unknown[][] = []; // the FK parent of tenant_users (matches the ORM bench's benchmark_tenants)
+  for (let t = 1; t <= shape.tenants; t++) tenants.push([t, `Tenant ${t}`]);
   const tenantUsers: unknown[][] = [];
   const tenantPosts: unknown[][] = [];
   const tenantComments: unknown[][] = [];
@@ -385,6 +424,7 @@ export function seedTables(shape: SeedShape = ORM_SEED): SeedTable[] {
     { table: 'benchmark_users', columns: ['id', 'email', 'name'], rows: users },
     { table: 'benchmark_posts', columns: ['id', 'title', 'content', 'published', 'author_id', 'created_at'], rows: posts },
     { table: 'benchmark_comments', columns: ['id', 'body', 'post_id'], rows: comments },
+    { table: 'benchmark_tenants', columns: ['id', 'name'], rows: tenants },
     { table: 'benchmark_tenant_users', columns: ['tenant_id', 'user_id', 'name'], rows: tenantUsers },
     { table: 'benchmark_tenant_posts', columns: ['tenant_id', 'post_id', 'user_id', 'title'], rows: tenantPosts },
     { table: 'benchmark_tenant_comments', columns: ['tenant_id', 'comment_id', 'post_id', 'body'], rows: tenantComments },
