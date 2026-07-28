@@ -60,11 +60,23 @@ pub struct BehaviorError {
 
 impl BehaviorError {
     pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
-        BehaviorError { code: code.into(), message: message.into(), detail: None }
+        BehaviorError {
+            code: code.into(),
+            message: message.into(),
+            detail: None,
+        }
     }
     /// The same failure carrying the leaf's structured Error Value.
-    pub fn with_detail(code: impl Into<String>, message: impl Into<String>, detail: ErrorDetail) -> Self {
-        BehaviorError { code: code.into(), message: message.into(), detail: Some(Box::new(detail)) }
+    pub fn with_detail(
+        code: impl Into<String>,
+        message: impl Into<String>,
+        detail: ErrorDetail,
+    ) -> Self {
+        BehaviorError {
+            code: code.into(),
+            message: message.into(),
+            detail: Some(Box::new(detail)),
+        }
     }
     /// The stable failure code (byte-equal to run_behavior) WITHOUT a bc-runtime type.
     pub fn code(&self) -> &str {
@@ -99,8 +111,14 @@ impl std::error::Error for BehaviorError {}
 // of the result set and is not forbidden.
 pub enum Probe<T> {
     Got(T),
-    Wrong { actual_wire_type: &'static str, raw_value: Cow<'static, str> },
-    Null { actual_wire_type: &'static str, raw_value: Cow<'static, str> },
+    Wrong {
+        actual_wire_type: &'static str,
+        raw_value: Cow<'static, str>,
+    },
+    Null {
+        actual_wire_type: &'static str,
+        raw_value: Cow<'static, str>,
+    },
     Absent,
 }
 
@@ -176,7 +194,10 @@ impl WireRow {
     // from being copied: the String travels from the wire into the typed struct without a heap copy.
     // Undeclared extras are simply left behind with the row.
     pub fn take(&mut self, field: &str) -> Option<WireValue> {
-        self.entries.iter().position(|(k, _)| k == field).map(|i| self.entries.swap_remove(i).1)
+        self.entries
+            .iter()
+            .position(|(k, _)| k == field)
+            .map(|i| self.entries.swap_remove(i).1)
     }
 }
 
@@ -187,8 +208,14 @@ pub fn probe_string_at(v: Option<WireValue>) -> Probe<Cow<'static, str>> {
     match v {
         None => Probe::Absent,
         Some(WireValue::Str(s)) => Probe::Got(s),
-        Some(WireValue::Null) => Probe::Null { actual_wire_type: "NULL", raw_value: Cow::Borrowed("null") },
-        Some(o) => Probe::Wrong { actual_wire_type: o.tag(), raw_value: o.into_raw() },
+        Some(WireValue::Null) => Probe::Null {
+            actual_wire_type: "NULL",
+            raw_value: Cow::Borrowed("null"),
+        },
+        Some(o) => Probe::Wrong {
+            actual_wire_type: o.tag(),
+            raw_value: o.into_raw(),
+        },
     }
 }
 pub fn probe_int_at(v: Option<WireValue>) -> Probe<i64> {
@@ -199,9 +226,19 @@ pub fn probe_int_at(v: Option<WireValue>) -> Probe<i64> {
         // below. A wire numeric type that spells the same attribute 1 or 1.0 leaves the producer no way to
         // pick the variant. Non-integral, or beyond i64, stays LOUD (an exact conversion with a
         // fail-closed boundary, not a fallback).
-        Some(WireValue::Float(f)) if f >= -9223372036854775808.0 && f < 9223372036854775808.0 && f == f.trunc() => Probe::Got(f as i64),
-        Some(WireValue::Null) => Probe::Null { actual_wire_type: "NULL", raw_value: Cow::Borrowed("null") },
-        Some(o) => Probe::Wrong { actual_wire_type: o.tag(), raw_value: o.into_raw() },
+        Some(WireValue::Float(f))
+            if (-9223372036854775808.0..9223372036854775808.0).contains(&f) && f == f.trunc() =>
+        {
+            Probe::Got(f as i64)
+        }
+        Some(WireValue::Null) => Probe::Null {
+            actual_wire_type: "NULL",
+            raw_value: Cow::Borrowed("null"),
+        },
+        Some(o) => Probe::Wrong {
+            actual_wire_type: o.tag(),
+            raw_value: o.into_raw(),
+        },
     }
 }
 // a float position accepts an int and widens it — the same widening the interpreter's outType check does,
@@ -211,31 +248,55 @@ pub fn probe_float_at(v: Option<WireValue>) -> Probe<f64> {
         None => Probe::Absent,
         Some(WireValue::Float(f)) => Probe::Got(f),
         Some(WireValue::Int(n)) => Probe::Got(n as f64),
-        Some(WireValue::Null) => Probe::Null { actual_wire_type: "NULL", raw_value: Cow::Borrowed("null") },
-        Some(o) => Probe::Wrong { actual_wire_type: o.tag(), raw_value: o.into_raw() },
+        Some(WireValue::Null) => Probe::Null {
+            actual_wire_type: "NULL",
+            raw_value: Cow::Borrowed("null"),
+        },
+        Some(o) => Probe::Wrong {
+            actual_wire_type: o.tag(),
+            raw_value: o.into_raw(),
+        },
     }
 }
 pub fn probe_bool_at(v: Option<WireValue>) -> Probe<bool> {
     match v {
         None => Probe::Absent,
         Some(WireValue::Bool(b)) => Probe::Got(b),
-        Some(WireValue::Null) => Probe::Null { actual_wire_type: "NULL", raw_value: Cow::Borrowed("null") },
-        Some(o) => Probe::Wrong { actual_wire_type: o.tag(), raw_value: o.into_raw() },
+        Some(WireValue::Null) => Probe::Null {
+            actual_wire_type: "NULL",
+            raw_value: Cow::Borrowed("null"),
+        },
+        Some(o) => Probe::Wrong {
+            actual_wire_type: o.tag(),
+            raw_value: o.into_raw(),
+        },
     }
 }
 pub fn probe_row_at(v: Option<WireValue>) -> Probe<WireRow> {
     match v {
         None => Probe::Absent,
         Some(WireValue::Row(r)) => Probe::Got(r),
-        Some(WireValue::Null) => Probe::Null { actual_wire_type: "NULL", raw_value: Cow::Borrowed("null") },
-        Some(o) => Probe::Wrong { actual_wire_type: o.tag(), raw_value: o.into_raw() },
+        Some(WireValue::Null) => Probe::Null {
+            actual_wire_type: "NULL",
+            raw_value: Cow::Borrowed("null"),
+        },
+        Some(o) => Probe::Wrong {
+            actual_wire_type: o.tag(),
+            raw_value: o.into_raw(),
+        },
     }
 }
 pub fn probe_list_at(v: Option<WireValue>) -> Probe<WireList> {
     match v {
         None => Probe::Absent,
         Some(WireValue::List(l)) => Probe::Got(l),
-        Some(WireValue::Null) => Probe::Null { actual_wire_type: "NULL", raw_value: Cow::Borrowed("null") },
-        Some(o) => Probe::Wrong { actual_wire_type: o.tag(), raw_value: o.into_raw() },
+        Some(WireValue::Null) => Probe::Null {
+            actual_wire_type: "NULL",
+            raw_value: Cow::Borrowed("null"),
+        },
+        Some(o) => Probe::Wrong {
+            actual_wire_type: o.tag(),
+            raw_value: o.into_raw(),
+        },
     }
 }

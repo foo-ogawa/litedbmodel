@@ -40,10 +40,17 @@ use litedbmodel_runtime::*;
 fn op_failed(node: &str, policy: &str, e: BehaviorError) -> BehaviorError {
     // The Kind names itself, and 'retry' says it gave up — the attempts are Runtime-owned (scp-error.md:
     // tuning never enters the IR), so what the plan reports is the exhausted retry.
-    let exhausted = if policy == "retry" { " (exhausted)" } else { "" };
+    let exhausted = if policy == "retry" {
+        " (exhausted)"
+    } else {
+        ""
+    };
     BehaviorError {
         code: "OP_FAILED".to_string(),
-        message: format!("operation '{node}' failed under '{policy}' policy{exhausted}: {}", e.message),
+        message: format!(
+            "operation '{node}' failed under '{policy}' policy{exhausted}: {}",
+            e.message
+        ),
         detail: e.detail,
     }
 }
@@ -53,7 +60,13 @@ fn op_failed(node: &str, policy: &str, e: BehaviorError) -> BehaviorError {
 // (TYPE_MISMATCH / MISSING_PROP) so the covered read stays equivalent to run_behavior; detail.kind
 // distinguishes typeMismatch / missingField.
 #[allow(dead_code)]
-fn de_type_mismatch(model: &str, field: &str, expected: &str, actual_wire: &str, raw: Cow<'static, str>) -> BehaviorError {
+fn de_type_mismatch(
+    model: &str,
+    field: &str,
+    expected: &str,
+    actual_wire: &str,
+    raw: Cow<'static, str>,
+) -> BehaviorError {
     BehaviorError::with_detail(
         "TYPE_MISMATCH",
         format!("node '{model}': {field}: expected {expected}, got {actual_wire}"),
@@ -86,6 +99,7 @@ fn de_missing_field(model: &str, field: &str, expected: &str) -> BehaviorError {
     )
 }
 
+#[rustfmt::skip]
 #[derive(Clone, Default)]
 #[allow(dead_code)]
 pub struct UserRow {
@@ -94,6 +108,7 @@ pub struct UserRow {
     pub name: Option<String>, // "name"
 }
 
+#[rustfmt::skip]
 #[derive(Clone, Default)]
 #[allow(dead_code)]
 pub struct PostFullRow {
@@ -105,6 +120,7 @@ pub struct PostFullRow {
     pub title: Option<String>, // "title"
 }
 
+#[rustfmt::skip]
 #[derive(Clone, Default)]
 #[allow(dead_code)]
 pub struct UserWithPosts {
@@ -114,6 +130,7 @@ pub struct UserWithPosts {
     pub posts: Vec<PostRow>, // "posts"
 }
 
+#[rustfmt::skip]
 #[derive(Clone, Default)]
 #[allow(dead_code)]
 pub struct PostRow {
@@ -122,6 +139,7 @@ pub struct PostRow {
     pub title: Option<String>, // "title"
 }
 
+#[rustfmt::skip]
 #[derive(Clone, Default)]
 #[allow(dead_code)]
 pub struct UserWithPostsAndComments {
@@ -131,6 +149,7 @@ pub struct UserWithPostsAndComments {
     pub posts: Vec<PostWithComments>, // "posts"
 }
 
+#[rustfmt::skip]
 #[derive(Clone, Default)]
 #[allow(dead_code)]
 pub struct PostWithComments {
@@ -140,6 +159,7 @@ pub struct PostWithComments {
     pub title: Option<String>, // "title"
 }
 
+#[rustfmt::skip]
 #[derive(Clone, Default)]
 #[allow(dead_code)]
 pub struct CommentRow {
@@ -148,6 +168,7 @@ pub struct CommentRow {
     pub post_id: Option<i64>, // "post_id"
 }
 
+#[rustfmt::skip]
 #[derive(Clone, Default)]
 #[allow(dead_code)]
 pub struct TenantUserWithPosts {
@@ -157,6 +178,7 @@ pub struct TenantUserWithPosts {
     pub user_id: Option<i64>, // "user_id"
 }
 
+#[rustfmt::skip]
 #[derive(Clone, Default)]
 #[allow(dead_code)]
 pub struct TenantPostWithComments {
@@ -167,6 +189,7 @@ pub struct TenantPostWithComments {
     pub user_id: Option<i64>, // "user_id"
 }
 
+#[rustfmt::skip]
 #[derive(Clone, Default)]
 #[allow(dead_code)]
 pub struct TenantCommentRow {
@@ -176,6 +199,7 @@ pub struct TenantCommentRow {
     pub tenant_id: Option<i64>, // "tenant_id"
 }
 
+#[rustfmt::skip]
 #[derive(Clone, Default)]
 #[allow(dead_code)]
 pub struct WriteSummary {
@@ -183,12 +207,14 @@ pub struct WriteSummary {
     pub lastInsertRowid: i64, // "lastInsertRowid"
 }
 
+#[rustfmt::skip]
 #[derive(Clone, Default)]
 #[allow(dead_code)]
 pub struct IdRow {
     pub id: i64, // "id"
 }
 
+#[rustfmt::skip]
 #[derive(Clone, Default)]
 #[allow(dead_code)]
 pub struct NewUser {
@@ -196,6 +222,7 @@ pub struct NewUser {
     pub name: String, // "name"
 }
 
+#[rustfmt::skip]
 #[derive(Clone, Default)]
 #[allow(dead_code)]
 pub struct UserPatch {
@@ -205,7 +232,10 @@ pub struct UserPatch {
 
 #[allow(dead_code)]
 fn unknown_component(component: &str) -> BehaviorError {
-    BehaviorError::new("UNKNOWN_COMPONENT", format!("component '{component}' has no handler (fail-closed)"))
+    BehaviorError::new(
+        "UNKNOWN_COMPONENT",
+        format!("component '{component}' has no handler (fail-closed)"),
+    )
 }
 
 // leaf_failure — a failure the LEAF reports (test glue): the runner assigns the node's failure code
@@ -216,6 +246,7 @@ fn leaf_failure(message: impl Into<String>) -> BehaviorError {
 }
 
 // Combined read runners (STRUCT-returning — the fully de-plumbed CONCRETE path).
+#[rustfmt::skip]
 // findAll — the STRUCT-RETURNING combined read (bc#77/#87/#94): the fully
 // de-plumbed CONCRETE path. At each covered node's execution point it calls the op-agnostic leaf
 // TRANSPORT symbol DIRECTLY (the node's port fields spread — no per-node handler indirection) and
@@ -278,6 +309,7 @@ pub fn findAll(
     Ok(__out)
 }
 
+#[rustfmt::skip]
 // filterPaginateSort — the STRUCT-RETURNING combined read (bc#77/#87/#94): the fully
 // de-plumbed CONCRETE path. At each covered node's execution point it calls the op-agnostic leaf
 // TRANSPORT symbol DIRECTLY (the node's port fields spread — no per-node handler indirection) and
@@ -356,6 +388,7 @@ pub fn filterPaginateSort(
     Ok(__out)
 }
 
+#[rustfmt::skip]
 // findFirst — the STRUCT-RETURNING combined read (bc#77/#87/#94): the fully
 // de-plumbed CONCRETE path. At each covered node's execution point it calls the op-agnostic leaf
 // TRANSPORT symbol DIRECTLY (the node's port fields spread — no per-node handler indirection) and
@@ -419,6 +452,7 @@ pub fn findFirst(
     Ok(__out)
 }
 
+#[rustfmt::skip]
 // findUnique — the STRUCT-RETURNING combined read (bc#77/#87/#94): the fully
 // de-plumbed CONCRETE path. At each covered node's execution point it calls the op-agnostic leaf
 // TRANSPORT symbol DIRECTLY (the node's port fields spread — no per-node handler indirection) and
@@ -482,6 +516,7 @@ pub fn findUnique(
     Ok(__out)
 }
 
+#[rustfmt::skip]
 // nestedFindAll — the STRUCT-RETURNING combined read (bc#77/#87/#94): the fully
 // de-plumbed CONCRETE path. At each covered node's execution point it calls the op-agnostic leaf
 // TRANSPORT symbol DIRECTLY (the node's port fields spread — no per-node handler indirection) and
@@ -632,6 +667,7 @@ pub fn nestedFindAll(
     Ok(__out)
 }
 
+#[rustfmt::skip]
 // nestedFindFirst — the STRUCT-RETURNING combined read (bc#77/#87/#94): the fully
 // de-plumbed CONCRETE path. At each covered node's execution point it calls the op-agnostic leaf
 // TRANSPORT symbol DIRECTLY (the node's port fields spread — no per-node handler indirection) and
@@ -783,6 +819,7 @@ pub fn nestedFindFirst(
     Ok(__out)
 }
 
+#[rustfmt::skip]
 // nestedFindUnique — the STRUCT-RETURNING combined read (bc#77/#87/#94): the fully
 // de-plumbed CONCRETE path. At each covered node's execution point it calls the op-agnostic leaf
 // TRANSPORT symbol DIRECTLY (the node's port fields spread — no per-node handler indirection) and
@@ -934,6 +971,7 @@ pub fn nestedFindUnique(
     Ok(__out)
 }
 
+#[rustfmt::skip]
 // nestedRelations — the STRUCT-RETURNING combined read (bc#77/#87/#94): the fully
 // de-plumbed CONCRETE path. At each covered node's execution point it calls the op-agnostic leaf
 // TRANSPORT symbol DIRECTLY (the node's port fields spread — no per-node handler indirection) and
@@ -1171,6 +1209,7 @@ pub fn nestedRelations(
     Ok(__out)
 }
 
+#[rustfmt::skip]
 // compositeRelations — the STRUCT-RETURNING combined read (bc#77/#87/#94): the fully
 // de-plumbed CONCRETE path. At each covered node's execution point it calls the op-agnostic leaf
 // TRANSPORT symbol DIRECTLY (the node's port fields spread — no per-node handler indirection) and
@@ -1416,6 +1455,7 @@ pub fn compositeRelations(
     Ok(__out)
 }
 
+#[rustfmt::skip]
 // create — the STRUCT-RETURNING combined read (bc#77/#87/#94): the fully
 // de-plumbed CONCRETE path. At each covered node's execution point it calls the op-agnostic leaf
 // TRANSPORT symbol DIRECTLY (the node's port fields spread — no per-node handler indirection) and
@@ -1476,6 +1516,7 @@ pub fn create(
     Ok(__out)
 }
 
+#[rustfmt::skip]
 // update — the STRUCT-RETURNING combined read (bc#77/#87/#94): the fully
 // de-plumbed CONCRETE path. At each covered node's execution point it calls the op-agnostic leaf
 // TRANSPORT symbol DIRECTLY (the node's port fields spread — no per-node handler indirection) and
@@ -1536,6 +1577,7 @@ pub fn update(
     Ok(__out)
 }
 
+#[rustfmt::skip]
 // upsert — the STRUCT-RETURNING combined read (bc#77/#87/#94): the fully
 // de-plumbed CONCRETE path. At each covered node's execution point it calls the op-agnostic leaf
 // TRANSPORT symbol DIRECTLY (the node's port fields spread — no per-node handler indirection) and
@@ -1590,6 +1632,7 @@ pub fn upsert(
     Ok(__out)
 }
 
+#[rustfmt::skip]
 // createMany — the STRUCT-RETURNING combined read (bc#77/#87/#94): the fully
 // de-plumbed CONCRETE path. At each covered node's execution point it calls the op-agnostic leaf
 // TRANSPORT symbol DIRECTLY (the node's port fields spread — no per-node handler indirection) and
@@ -1671,6 +1714,7 @@ pub fn createMany(
     Ok(__out)
 }
 
+#[rustfmt::skip]
 // upsertMany — the STRUCT-RETURNING combined read (bc#77/#87/#94): the fully
 // de-plumbed CONCRETE path. At each covered node's execution point it calls the op-agnostic leaf
 // TRANSPORT symbol DIRECTLY (the node's port fields spread — no per-node handler indirection) and
@@ -1752,6 +1796,7 @@ pub fn upsertMany(
     Ok(__out)
 }
 
+#[rustfmt::skip]
 // updateMany — the STRUCT-RETURNING combined read (bc#77/#87/#94): the fully
 // de-plumbed CONCRETE path. At each covered node's execution point it calls the op-agnostic leaf
 // TRANSPORT symbol DIRECTLY (the node's port fields spread — no per-node handler indirection) and
@@ -1833,6 +1878,7 @@ pub fn updateMany(
     Ok(__out)
 }
 
+#[rustfmt::skip]
 // nestedCreate — the STRUCT-RETURNING combined read (bc#77/#87/#94): the fully
 // de-plumbed CONCRETE path. At each covered node's execution point it calls the op-agnostic leaf
 // TRANSPORT symbol DIRECTLY (the node's port fields spread — no per-node handler indirection) and
@@ -1937,6 +1983,7 @@ pub fn nestedCreate(
     Ok(__out)
 }
 
+#[rustfmt::skip]
 // nestedUpsert — the STRUCT-RETURNING combined read (bc#77/#87/#94): the fully
 // de-plumbed CONCRETE path. At each covered node's execution point it calls the op-agnostic leaf
 // TRANSPORT symbol DIRECTLY (the node's port fields spread — no per-node handler indirection) and
@@ -2041,6 +2088,7 @@ pub fn nestedUpsert(
     Ok(__out)
 }
 
+#[rustfmt::skip]
 // nestedUpdate — the STRUCT-RETURNING combined read (bc#77/#87/#94): the fully
 // de-plumbed CONCRETE path. At each covered node's execution point it calls the op-agnostic leaf
 // TRANSPORT symbol DIRECTLY (the node's port fields spread — no per-node handler indirection) and
@@ -2145,6 +2193,7 @@ pub fn nestedUpdate(
     Ok(__out)
 }
 
+#[rustfmt::skip]
 // delete — the STRUCT-RETURNING combined read (bc#77/#87/#94): the fully
 // de-plumbed CONCRETE path. At each covered node's execution point it calls the op-agnostic leaf
 // TRANSPORT symbol DIRECTLY (the node's port fields spread — no per-node handler indirection) and
@@ -2248,6 +2297,7 @@ pub fn delete(
     Ok(__out)
 }
 
+#[rustfmt::skip]
 // COMPONENT_NAMES_NATIVE_RAW — covered reads exposed on the combined struct-native path. Each is a
 // 1:1 entry <method>(<positional params>) -> Result<T, BehaviorError>: a STRUCT return (the consumer calls
 // it with the authored args + supplies the op-agnostic leaf transport symbols the entry calls).
