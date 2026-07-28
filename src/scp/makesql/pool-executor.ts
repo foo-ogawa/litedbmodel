@@ -17,7 +17,6 @@
  * force either into a consumer that only uses the sync better-sqlite3 conformance path.
  */
 
-import type { SqlExecutor } from './handler';
 import type { AsyncConnection, AsyncConnectionPool, Rows, RunInfo } from '../exec-context';
 import type { ResolvedConnectionConfig, PoolFactory, PoolCloser } from '../connection-routing';
 // MySQL parses no RETURNING — the write→re-select derivation lives in ONE place for all five runtimes.

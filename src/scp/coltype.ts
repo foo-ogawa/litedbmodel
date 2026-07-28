@@ -46,6 +46,8 @@ export function sqlTypeToBcScalar(sqlType: string): BcScalar {
   const t = normalizeSqlTypeToken(sqlType);
   switch (t) {
     // int は既定 64bit(i64)。INTEGER も BIGINT も int（bigint を別型にしない — サイズ制限は列制約で表現）。
+    // PostgreSQL の SERIAL/SERIAL4/BIGSERIAL/SERIAL8/SMALLSERIAL/SERIAL2（auto-increment 疑似型）も
+    // 基底は整数（int4 / int8）で、read 型は plain integer。
     case 'INTEGER':
     case 'INT':
     case 'BIGINT':
@@ -55,8 +57,6 @@ export function sqlTypeToBcScalar(sqlType: string): BcScalar {
     case 'INT2':
     case 'INT4':
     case 'INT8':
-    // PostgreSQL auto-increment pseudo-types: a SERIAL column is an int4 (BIGSERIAL an int8) with a
-    // sequence default — the READ type is a plain integer.
     case 'SERIAL':
     case 'SERIAL4':
     case 'BIGSERIAL':
@@ -160,7 +160,8 @@ export function sqlTypeToMaterializeClass(sqlType: string): MaterializeClass {
     return 'passthrough';
   }
   switch (t) {
-    // 32-bit int family: JS number holds the full range exactly.
+    // 32-bit int family: JS number holds the full range exactly. The PostgreSQL SERIAL family maps to
+    // its underlying int width (SERIAL/SERIAL4=int4, SMALLSERIAL/SERIAL2=int2).
     case 'INTEGER':
     case 'INT':
     case 'SMALLINT':
@@ -168,7 +169,6 @@ export function sqlTypeToMaterializeClass(sqlType: string): MaterializeClass {
     case 'MEDIUMINT':
     case 'INT2':
     case 'INT4':
-    // PostgreSQL SERIAL family maps to its underlying int width (SERIAL=int4, SMALLSERIAL=int2).
     case 'SERIAL':
     case 'SERIAL4':
     case 'SMALLSERIAL':

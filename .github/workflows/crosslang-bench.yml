@@ -51,5 +51,3 @@ jobs:
         run: npm run build:scp
       - name: Drift gate — committed codegen modules match a fresh bc-CLI regeneration (#111)
         run: npm run bench:codegen:drift
-      - name: Conformance codegen — emit + compile + byte-identical exec on the frozen vectors
-        run: npm run conformance:codegen

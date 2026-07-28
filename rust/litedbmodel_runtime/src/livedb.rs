@@ -1017,10 +1017,9 @@ fn table_of(write_sql: &str) -> Option<String> {
         p + "insert into ".len()
     } else if let Some(p) = lower.find("delete from ") {
         p + "delete from ".len()
-    } else if let Some(p) = lower.find("update ") {
-        p + "update ".len()
     } else {
-        return None;
+        let p = lower.find("update ")?;
+        p + "update ".len()
     };
     let ident: String = write_sql[after..]
         .chars()
