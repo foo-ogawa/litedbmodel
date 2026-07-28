@@ -61,6 +61,10 @@ import { DBModel, model, column, ColumnsOf, closeAllPools, hasMany, belongsTo } 
 import { leafHandlersAsync, pgConnectionPool, PooledAsyncContext, transaction, configurePgDeboxTypeParsers } from 'litedbmodel/scp';
 import { inputFor, TX_OPS } from './crosslang/ts-cell/inputs.js';
 import { bindTypedAsync } from './crosslang/ts-cell/behaviors_postgres.js';
+// Per-op DB reset (setup.ts is the seed SSoT). Every op is measured on the SAME clean general graph —
+// the crosslang cells reset per op too; without it, a write op's mutations to seed rows leak into later
+// ops in the same round (they were only partially cleaned by a DELETE of inserted ids).
+import { resetGeneralGraph } from './setup.js';
 
 @model('benchmark_users')
 class LiteUserModel extends DBModel {
@@ -550,6 +554,11 @@ async function main() {
   const prisma = new PrismaClient();
   await prisma.$connect();
   
+  // Fixture-reset pool — bench infrastructure, not an ORM under test. Drives resetGeneralGraph()
+  // (TRUNCATE … RESTART IDENTITY + re-seed + ANALYZE) once per (op, ORM) so every measurement runs
+  // on the identical seeded graph, mirroring the crosslang cells' per-op cell.seed().
+  const resetPool = new pg.Pool(config);
+
   // Kysely
   const kyselyPool = new pg.Pool(config);
   const kysely = new Kysely<KyselyDB>({
@@ -1938,11 +1947,9 @@ async function main() {
     }
   }
   
-  // Cleanup warmup data (keep seed data: 1000 users, 5500 posts)
-  await DBModel.execute('DELETE FROM benchmark_posts WHERE id > 5500');
-  await DBModel.execute('DELETE FROM benchmark_users WHERE id > 1000');
-  
-  // Reset counters
+  // No warmup teardown needed: the first timed op's resetGeneralGraph() (per-op, below) TRUNCATEs and
+  // re-seeds the whole graph before anything is measured, so warmup writes never reach a measurement.
+  // Only the id counters must be rewound so timed create/upsert ops start from known, collision-free ids.
   createCounter = 10000;
   upsertCounter = 20000;
   
@@ -1957,19 +1964,18 @@ async function main() {
       
       // Run each ORM's iterations for this category
       for (const test of category.tests) {
+        // Clean general graph per (op, ORM) — the same reset discipline the crosslang cells apply per op.
+        // Every ORM measures the op on the identical seeded fixture, so a prior op's/ORM's writes never
+        // leak in. (TRUNCATE … RESTART IDENTITY, so `id = 100` targets still resolve; tenant graph is
+        // untouched — no op writes it.)
+        await resetGeneralGraph(resetPool);
         const times = categoryResults.get(test.orm)!;
-        
+
         for (let i = 0; i < ITERATIONS; i++) {
           const time = await runIteration(test.fn);
           times.push(time);
         }
       }
-    }
-    
-    // Cleanup inserted data after each round (keep seed data: 1000 users, 5500 posts)
-    if (round < ROUNDS) {
-      await DBModel.execute('DELETE FROM benchmark_posts WHERE id > 5500');
-      await DBModel.execute('DELETE FROM benchmark_users WHERE id > 1000');
     }
   }
   
@@ -2049,6 +2055,7 @@ async function main() {
   
   await closeAllPools();
   await codegenPool.end();
+  await resetPool.end();
   await prisma.$disconnect();
   await kyselyPool.end();
   await drizzlePool.end();

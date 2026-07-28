@@ -1,114 +1,114 @@
 Operation,ORM,Median,IQR,StdDev,Min,Max,Iterations
-"Find all (limit 100)","litedbmodel (runtime)",0.4500,0.0700,0.8300,0.3500,8.3600,250
-"Find all (limit 100)","Prisma",0.9000,0.2000,0.1600,0.7100,1.6900,250
-"Find all (limit 100)","Kysely",0.5000,0.0900,0.7900,0.4000,8.0200,250
-"Find all (limit 100)","Drizzle",0.5300,0.1400,0.1300,0.4000,1.4900,250
-"Find all (limit 100)","TypeORM",0.5900,0.1300,0.1300,0.4500,1.7500,250
-"Find all (limit 100)","litedbmodel (codegen)",0.4100,0.0700,0.3700,0.3300,5.0800,250
-"Filter, paginate & sort","litedbmodel (runtime)",0.5300,0.1300,0.8400,0.4200,8.3000,250
-"Filter, paginate & sort","Prisma",0.7600,0.1900,0.2000,0.5600,3.1700,250
-"Filter, paginate & sort","Kysely",0.5300,0.1600,0.2200,0.4200,2.1800,250
-"Filter, paginate & sort","Drizzle",0.5700,0.1600,0.1300,0.4300,1.3500,250
-"Filter, paginate & sort","TypeORM",0.5700,0.1500,0.1400,0.4300,1.9700,250
-"Filter, paginate & sort","litedbmodel (codegen)",0.4900,0.1000,0.2800,0.4100,3.6500,250
-"Nested find all (include posts)","litedbmodel (runtime)",2.1100,0.3200,0.5000,1.7400,6.3600,250
-"Nested find all (include posts)","Prisma",6.6300,0.7700,1.0200,5.7900,12.9900,250
-"Nested find all (include posts)","Kysely",3.3900,1.2900,1.1900,2.1700,8.6500,250
-"Nested find all (include posts)","Drizzle",4.0200,1.7900,1.2700,2.3800,10.4200,250
-"Nested find all (include posts)","TypeORM",5.2700,1.8400,2.5500,4.4100,40.6500,250
-"Nested find all (include posts)","litedbmodel (codegen)",2.6800,1.3400,0.9100,1.7100,9.9800,250
-"Find first","litedbmodel (runtime)",0.3000,0.1700,0.1700,0.2100,1.6800,250
-"Find first","Prisma",0.4500,0.1000,0.1400,0.3100,1.8700,250
-"Find first","Kysely",0.2800,0.0700,0.0800,0.2000,0.7800,250
-"Find first","Drizzle",0.2700,0.0800,0.0700,0.2100,0.6600,250
-"Find first","TypeORM",0.2600,0.0600,0.0700,0.2100,0.8400,250
-"Find first","litedbmodel (codegen)",0.2100,0.0500,0.0600,0.1500,0.5100,250
-"Nested find first (include posts)","litedbmodel (runtime)",0.4900,0.1200,0.1000,0.3600,1.0500,250
-"Nested find first (include posts)","Prisma",0.7300,0.1400,0.1400,0.5400,1.9000,250
-"Nested find first (include posts)","Kysely",0.5000,0.1000,0.1400,0.3900,2.2800,250
-"Nested find first (include posts)","Drizzle",0.5700,0.0900,0.0800,0.4500,1.0900,250
-"Nested find first (include posts)","TypeORM",0.4600,0.0900,0.1000,0.3000,0.9400,250
-"Nested find first (include posts)","litedbmodel (codegen)",0.5000,0.1200,0.0900,0.3100,0.8100,250
-"Find unique (by email)","litedbmodel (runtime)",0.2400,0.0400,0.1100,0.1900,1.1200,250
-"Find unique (by email)","Prisma",0.3800,0.1000,0.0900,0.2900,0.8500,250
-"Find unique (by email)","Kysely",0.2400,0.0500,0.1200,0.1900,1.2300,250
-"Find unique (by email)","Drizzle",0.2700,0.0700,0.0700,0.2100,0.8000,250
-"Find unique (by email)","TypeORM",0.2800,0.0600,0.0600,0.2200,0.6400,250
-"Find unique (by email)","litedbmodel (codegen)",0.2300,0.0500,0.1200,0.1600,1.1300,250
-"Nested find unique (include posts)","litedbmodel (runtime)",0.5000,0.0900,0.1000,0.3700,1.1400,250
-"Nested find unique (include posts)","Prisma",0.7100,0.1600,0.2300,0.5500,3.2700,250
-"Nested find unique (include posts)","Kysely",0.4900,0.1000,0.0900,0.3900,0.9000,250
-"Nested find unique (include posts)","Drizzle",0.5600,0.1100,0.1000,0.4500,1.0800,250
-"Nested find unique (include posts)","TypeORM",0.8600,0.2000,0.2400,0.6200,2.9000,250
-"Nested find unique (include posts)","litedbmodel (codegen)",0.4600,0.1200,0.0900,0.3300,0.8600,250
-"Create","litedbmodel (runtime)",0.6000,0.1300,0.1900,0.4700,1.6100,250
-"Create","Prisma",0.7900,0.1900,0.1700,0.5000,1.5100,250
-"Create","Kysely",0.5900,0.1000,0.1400,0.4700,1.5300,250
-"Create","Drizzle",0.6600,0.1700,0.6100,0.5300,6.4800,250
-"Create","TypeORM",0.7200,0.2000,0.3300,0.4700,4.1400,250
-"Create","litedbmodel (codegen)",0.2200,0.0500,0.0700,0.1700,0.7400,250
-"Nested create (with post)","litedbmodel (runtime)",0.9100,0.1900,0.2500,0.6700,3.5600,250
-"Nested create (with post)","Prisma",1.3700,0.2200,0.1900,1.1500,2.4800,250
-"Nested create (with post)","Kysely",0.8300,0.1600,0.1600,0.6700,1.7800,250
-"Nested create (with post)","Drizzle",0.8700,0.1500,0.1400,0.5900,1.7900,250
-"Nested create (with post)","TypeORM",1.0000,0.2200,0.1700,0.8000,1.9300,250
-"Nested create (with post)","litedbmodel (codegen)",0.8100,0.2000,0.6300,0.5400,6.0600,250
-"Update","litedbmodel (runtime)",0.5800,0.1100,0.0900,0.4900,0.9400,250
-"Update","Prisma",0.8200,0.1500,0.1600,0.6200,2.4700,250
-"Update","Kysely",0.5800,0.1400,0.1100,0.4400,1.2000,250
-"Update","Drizzle",0.6000,0.0900,0.1000,0.4400,1.4900,250
-"Update","TypeORM",0.6100,0.1200,0.0900,0.4800,1.0500,250
-"Update","litedbmodel (codegen)",0.2300,0.0500,0.0400,0.1800,0.4700,250
-"Nested update (update user + post)","litedbmodel (runtime)",0.8100,0.1300,0.1100,0.7000,1.3800,250
-"Nested update (update user + post)","Prisma",1.6400,0.2600,0.3300,1.3400,5.3900,250
-"Nested update (update user + post)","Kysely",0.7900,0.1500,0.1400,0.4900,1.5400,250
-"Nested update (update user + post)","Drizzle",0.8200,0.1200,0.1400,0.7200,2.2900,250
-"Nested update (update user + post)","TypeORM",0.8600,0.1700,0.1700,0.6300,1.8300,250
-"Nested update (update user + post)","litedbmodel (codegen)",0.8200,0.2000,0.2000,0.6400,2.1200,250
-"Upsert","litedbmodel (runtime)",0.6500,0.1100,0.1000,0.5200,1.2100,250
-"Upsert","Prisma",1.3800,0.2100,0.1900,1.1400,2.4700,250
-"Upsert","Kysely",0.6200,0.1500,0.2600,0.3900,3.8400,250
-"Upsert","Drizzle",0.6300,0.1400,0.1100,0.4300,1.1500,250
-"Upsert","TypeORM",0.6600,0.1300,0.1000,0.5300,1.2100,250
-"Upsert","litedbmodel (codegen)",0.2400,0.0600,0.0500,0.1800,0.4900,250
-"Nested upsert (user + post)","litedbmodel (runtime)",0.8900,0.1500,0.1200,0.7300,1.5500,250
-"Nested upsert (user + post)","Prisma",1.5600,0.2900,0.4300,1.2000,5.6500,250
-"Nested upsert (user + post)","Kysely",0.8600,0.1900,0.2400,0.7000,2.6500,250
-"Nested upsert (user + post)","Drizzle",0.9300,0.2300,0.2200,0.6100,3.0400,250
-"Nested upsert (user + post)","TypeORM",0.9300,0.1700,0.1300,0.7500,1.7000,250
-"Nested upsert (user + post)","litedbmodel (codegen)",0.8100,0.1600,0.1200,0.6400,1.1700,250
-"Delete","litedbmodel (runtime)",0.8500,0.1700,0.1500,0.6900,1.5700,250
-"Delete","Prisma",1.1700,0.2600,0.2300,0.9100,2.9500,250
-"Delete","Kysely",0.8400,0.1900,0.1500,0.5800,1.4900,250
-"Delete","Drizzle",0.9000,0.2000,0.2900,0.6600,4.1700,250
-"Delete","TypeORM",0.9400,0.1600,0.1300,0.7500,1.7300,250
-"Delete","litedbmodel (codegen)",0.8200,0.1400,0.1900,0.5500,2.1100,250
-"Create Many (10 records)","litedbmodel (runtime)",0.6600,0.1300,0.1400,0.5300,1.7400,250
-"Create Many (10 records)","Prisma",0.9000,0.1600,0.1500,0.7100,1.7900,250
-"Create Many (10 records)","Kysely",0.6400,0.1200,0.1000,0.4900,1.1400,250
-"Create Many (10 records)","Drizzle",0.8000,0.1500,0.2100,0.6300,3.4500,250
-"Create Many (10 records)","TypeORM",0.8300,0.1600,0.4400,0.6200,7.2300,250
-"Create Many (10 records)","litedbmodel (codegen)",0.3400,0.0800,0.0800,0.2500,0.7100,250
-"Upsert Many (10 records)","litedbmodel (runtime)",0.8000,0.1600,0.2500,0.6000,4.1400,250
-"Upsert Many (10 records)","Prisma",8.9600,1.5900,1.2400,7.0600,15.9100,250
-"Upsert Many (10 records)","Kysely",0.7900,0.1600,0.1300,0.5800,1.2700,250
-"Upsert Many (10 records)","Drizzle",0.9000,0.1700,0.3100,0.7300,5.2400,250
-"Upsert Many (10 records)","TypeORM",0.9300,0.1700,0.1400,0.7400,1.5300,250
-"Upsert Many (10 records)","litedbmodel (codegen)",0.3900,0.0900,0.1600,0.3100,2.7500,250
-"Update Many (10 different values)","litedbmodel (runtime)",0.6600,0.1400,0.1400,0.5500,1.3600,250
-"Update Many (10 different values)","Prisma",3.7200,0.6000,1.2700,3.0900,21.8100,250
-"Update Many (10 different values)","Kysely",2.5000,0.4400,0.5000,1.7400,6.6500,250
-"Update Many (10 different values)","Drizzle",2.3700,0.4800,0.6000,1.9600,6.9400,250
-"Update Many (10 different values)","TypeORM",2.5000,0.4400,0.3800,2.1600,4.6200,250
-"Update Many (10 different values)","litedbmodel (codegen)",0.2900,0.0700,0.1400,0.2100,2.1900,250
-"Nested relations (100→1000→10000)","litedbmodel (runtime)",12.1300,3.0300,3.0100,10.6900,41.8200,250
-"Nested relations (100→1000→10000)","Prisma",57.5100,8.2100,9.8900,46.3000,165.1400,250
-"Nested relations (100→1000→10000)","Kysely",15.7500,3.5900,3.7600,13.8800,41.2000,250
-"Nested relations (100→1000→10000)","Drizzle",18.3700,1.0800,1.9300,17.0700,37.9500,250
-"Nested relations (100→1000→10000)","TypeORM",53.5400,5.9400,7.9000,48.8100,108.4800,250
-"Nested relations (100→1000→10000)","litedbmodel (codegen)",16.4200,4.9100,3.3800,13.4600,39.7900,250
-"Nested relations (composite key)","litedbmodel (runtime)",18.1700,10.5800,6.7400,14.1100,53.2100,250
-"Nested relations (composite key)","Prisma",59.0700,5.4000,5.6300,50.5900,113.7700,250
-"Nested relations (composite key)","Drizzle",73.2500,4.4000,6.9600,68.3000,169.0200,250
-"Nested relations (composite key)","TypeORM",53.2200,4.6800,6.3000,47.7700,89.1000,250
-"Nested relations (composite key)","litedbmodel (codegen)",18.6800,2.3900,2.4800,16.8800,32.2100,250
+"Find all (limit 100)","litedbmodel (runtime)",0.4200,0.0600,1.8700,0.3700,20.1500,250
+"Find all (limit 100)","Prisma",1.1300,0.1300,0.9000,1.0300,8.4300,250
+"Find all (limit 100)","Kysely",0.5800,0.1100,1.6700,0.5000,15.3500,250
+"Find all (limit 100)","Drizzle",0.5500,0.1300,0.6000,0.4400,4.4000,250
+"Find all (limit 100)","TypeORM",0.6600,0.1800,0.9200,0.5400,9.8800,250
+"Find all (limit 100)","litedbmodel (codegen)",0.6300,0.2900,0.3800,0.3700,3.4300,250
+"Filter, paginate & sort","litedbmodel (runtime)",0.6500,0.3300,1.7200,0.4400,15.8200,250
+"Filter, paginate & sort","Prisma",0.8600,0.1900,0.3700,0.7200,3.8500,250
+"Filter, paginate & sort","Kysely",0.5700,0.3000,0.4500,0.4300,4.7400,250
+"Filter, paginate & sort","Drizzle",0.8200,0.4900,0.7100,0.4800,6.5800,250
+"Filter, paginate & sort","TypeORM",0.9000,0.5100,0.7600,0.5100,8.3000,250
+"Filter, paginate & sort","litedbmodel (codegen)",0.5700,0.3100,0.3700,0.4500,3.3800,250
+"Nested find all (include posts)","litedbmodel (runtime)",2.3900,0.3100,1.0100,2.1000,10.0200,250
+"Nested find all (include posts)","Prisma",9.6200,1.6100,1.9000,8.7900,22.7700,250
+"Nested find all (include posts)","Kysely",3.1000,0.3100,1.2000,2.8200,12.5400,250
+"Nested find all (include posts)","Drizzle",2.9800,0.2900,1.4800,2.6900,15.8700,250
+"Nested find all (include posts)","TypeORM",6.2800,0.7000,1.5100,5.8000,16.6100,250
+"Nested find all (include posts)","litedbmodel (codegen)",2.2200,0.3000,1.1300,1.9500,13.3400,250
+"Find first","litedbmodel (runtime)",0.3500,0.1900,0.7500,0.2400,7.9800,250
+"Find first","Prisma",0.5200,0.1200,0.5900,0.4300,6.3200,250
+"Find first","Kysely",0.3000,0.1200,0.4100,0.2400,5.5000,250
+"Find first","Drizzle",0.3700,0.1600,0.6900,0.2600,7.5700,250
+"Find first","TypeORM",0.3600,0.3400,0.8000,0.2700,9.7800,250
+"Find first","litedbmodel (codegen)",0.3300,0.1300,0.5700,0.2200,7.6600,250
+"Nested find first (include posts)","litedbmodel (runtime)",0.6100,0.2100,0.4800,0.5100,5.5300,250
+"Nested find first (include posts)","Prisma",1.0000,0.2300,0.5700,0.7900,4.9600,250
+"Nested find first (include posts)","Kysely",0.6200,0.1800,0.4500,0.3600,4.2300,250
+"Nested find first (include posts)","Drizzle",0.7000,0.5000,0.8500,0.4900,8.5900,250
+"Nested find first (include posts)","TypeORM",0.5100,0.2100,0.6200,0.3400,6.2600,250
+"Nested find first (include posts)","litedbmodel (codegen)",0.6900,0.2800,0.5100,0.4300,5.1900,250
+"Find unique (by email)","litedbmodel (runtime)",0.5200,0.4000,3.0500,0.1900,45.0700,250
+"Find unique (by email)","Prisma",0.5100,0.0900,0.4600,0.3600,4.4700,250
+"Find unique (by email)","Kysely",0.2900,0.0900,0.3400,0.2100,3.7800,250
+"Find unique (by email)","Drizzle",0.4000,0.3000,0.4100,0.2500,4.5100,250
+"Find unique (by email)","TypeORM",0.4400,0.2100,0.9000,0.2400,12.5400,250
+"Find unique (by email)","litedbmodel (codegen)",0.3300,0.1300,0.3300,0.2100,4.7800,250
+"Nested find unique (include posts)","litedbmodel (runtime)",0.7600,0.3000,0.3600,0.4600,3.3400,250
+"Nested find unique (include posts)","Prisma",0.9400,0.2300,0.3300,0.7300,3.4500,250
+"Nested find unique (include posts)","Kysely",0.6800,0.3300,0.4500,0.5000,4.6700,250
+"Nested find unique (include posts)","Drizzle",1.0700,0.6300,0.6200,0.5200,7.3200,250
+"Nested find unique (include posts)","TypeORM",1.0400,0.3400,0.7700,0.8200,9.2600,250
+"Nested find unique (include posts)","litedbmodel (codegen)",0.8100,0.3200,0.4200,0.4700,5.2900,250
+"Create","litedbmodel (runtime)",0.7700,0.2000,0.8300,0.5000,8.2900,250
+"Create","Prisma",1.1400,0.2300,0.8600,0.7400,9.5800,250
+"Create","Kysely",0.8000,0.3300,0.5400,0.5100,5.1700,250
+"Create","Drizzle",0.9300,0.5500,0.5100,0.5500,4.7100,250
+"Create","TypeORM",0.8500,0.2800,1.1700,0.6000,12.6500,250
+"Create","litedbmodel (codegen)",0.3900,0.2200,0.3700,0.2300,4.3500,250
+"Nested create (with post)","litedbmodel (runtime)",1.0900,0.4000,1.1300,0.7700,14.3500,250
+"Nested create (with post)","Prisma",1.7000,0.3400,0.9800,1.4700,15.5600,250
+"Nested create (with post)","Kysely",1.0400,0.4000,1.0800,0.6800,13.6900,250
+"Nested create (with post)","Drizzle",1.1700,0.3800,0.8000,0.8400,8.8400,250
+"Nested create (with post)","TypeORM",1.2600,0.5100,1.7500,0.8500,18.9800,250
+"Nested create (with post)","litedbmodel (codegen)",0.9800,0.3900,0.8600,0.6200,11.0700,250
+"Update","litedbmodel (runtime)",0.8200,0.3700,0.7900,0.5400,8.5600,250
+"Update","Prisma",1.1500,0.2000,1.0200,0.9700,14.2700,250
+"Update","Kysely",0.6700,0.1500,0.3800,0.4800,4.1400,250
+"Update","Drizzle",0.7300,0.1600,0.6800,0.5200,8.2100,250
+"Update","TypeORM",0.7300,0.2000,0.9000,0.5200,10.9700,250
+"Update","litedbmodel (codegen)",0.5200,0.2800,0.3300,0.2600,2.2600,250
+"Nested update (update user + post)","litedbmodel (runtime)",0.9500,0.5300,0.4500,0.7000,3.3600,250
+"Nested update (update user + post)","Prisma",2.1500,0.3500,0.6600,1.4300,7.6200,250
+"Nested update (update user + post)","Kysely",0.9000,0.2300,0.3300,0.6700,3.3100,250
+"Nested update (update user + post)","Drizzle",1.0500,0.4500,0.5800,0.7800,4.8100,250
+"Nested update (update user + post)","TypeORM",0.9900,0.2000,0.5900,0.7100,6.0200,250
+"Nested update (update user + post)","litedbmodel (codegen)",0.9600,0.3400,0.5500,0.6200,6.4500,250
+"Upsert","litedbmodel (runtime)",0.7600,0.2300,0.6400,0.5700,9.7700,250
+"Upsert","Prisma",1.7500,0.3200,0.8100,1.4000,8.3200,250
+"Upsert","Kysely",0.7200,0.1500,0.2700,0.5300,3.2500,250
+"Upsert","Drizzle",0.7400,0.2400,0.6100,0.5500,5.0000,250
+"Upsert","TypeORM",0.9300,0.6300,0.6300,0.5900,6.0100,250
+"Upsert","litedbmodel (codegen)",0.4400,0.2700,0.3700,0.2500,3.1900,250
+"Nested upsert (user + post)","litedbmodel (runtime)",1.2900,0.7000,0.7800,0.7600,5.6100,250
+"Nested upsert (user + post)","Prisma",2.0200,0.4200,0.6600,1.6900,8.0500,250
+"Nested upsert (user + post)","Kysely",1.1200,0.5000,0.7100,0.7600,7.6600,250
+"Nested upsert (user + post)","Drizzle",1.2400,0.5700,0.6900,0.8300,5.9500,250
+"Nested upsert (user + post)","TypeORM",1.3200,0.5900,0.6900,0.8500,5.9400,250
+"Nested upsert (user + post)","litedbmodel (codegen)",0.9900,0.4300,0.5700,0.6800,5.0600,250
+"Delete","litedbmodel (runtime)",1.0400,0.3800,0.9100,0.7300,13.1100,250
+"Delete","Prisma",1.5200,0.3600,0.8600,1.1600,11.8800,250
+"Delete","Kysely",1.0400,0.6600,0.6900,0.7200,6.5000,250
+"Delete","Drizzle",1.0900,0.5000,0.7000,0.7700,7.1700,250
+"Delete","TypeORM",1.2900,0.6700,1.1500,0.8200,14.3900,250
+"Delete","litedbmodel (codegen)",1.0100,0.4500,0.5100,0.6800,5.4500,250
+"Create Many (10 records)","litedbmodel (runtime)",0.8500,0.3400,0.5100,0.6100,5.7100,250
+"Create Many (10 records)","Prisma",1.2000,0.2300,0.5100,1.0300,6.0800,250
+"Create Many (10 records)","Kysely",0.8800,0.4300,0.4300,0.6900,3.8200,250
+"Create Many (10 records)","Drizzle",1.2000,0.5200,0.3800,0.8300,3.0800,250
+"Create Many (10 records)","TypeORM",1.0200,0.6200,0.6500,0.8000,5.9100,250
+"Create Many (10 records)","litedbmodel (codegen)",0.4100,0.1700,0.3600,0.3000,4.4800,250
+"Upsert Many (10 records)","litedbmodel (runtime)",1.2800,0.6400,0.5300,0.7600,3.3300,250
+"Upsert Many (10 records)","Prisma",9.7500,1.1800,2.1100,7.8800,23.6900,250
+"Upsert Many (10 records)","Kysely",0.7700,0.2700,0.3000,0.6400,3.4800,250
+"Upsert Many (10 records)","Drizzle",1.3800,0.7400,0.6700,0.8700,4.7900,250
+"Upsert Many (10 records)","TypeORM",1.1000,0.3000,0.6800,0.8500,8.4400,250
+"Upsert Many (10 records)","litedbmodel (codegen)",0.4600,0.1600,0.2800,0.3700,2.6500,250
+"Update Many (10 different values)","litedbmodel (runtime)",1.1200,0.3400,0.5500,0.7600,6.2400,250
+"Update Many (10 different values)","Prisma",4.9100,0.6300,1.0300,4.3700,12.3100,250
+"Update Many (10 different values)","Kysely",2.4200,0.6300,0.7200,1.8500,6.7800,250
+"Update Many (10 different values)","Drizzle",2.4200,0.3400,0.8100,1.8100,8.4400,250
+"Update Many (10 different values)","TypeORM",2.4900,0.4700,1.5400,1.9700,14.2800,250
+"Update Many (10 different values)","litedbmodel (codegen)",0.4700,0.2300,0.3300,0.3000,3.3900,250
+"Nested relations (100→1000→10000)","litedbmodel (runtime)",14.4300,3.3600,5.1700,13.2500,49.9400,250
+"Nested relations (100→1000→10000)","Prisma",79.6100,7.2600,6.1500,69.4200,107.4800,250
+"Nested relations (100→1000→10000)","Kysely",21.1100,3.7900,2.8000,18.7900,33.4000,250
+"Nested relations (100→1000→10000)","Drizzle",20.3300,0.9600,1.4000,19.3900,28.9700,250
+"Nested relations (100→1000→10000)","TypeORM",74.0400,10.0100,6.3700,66.9000,106.8100,250
+"Nested relations (100→1000→10000)","litedbmodel (codegen)",18.4600,3.5400,3.7600,15.8900,39.1500,250
+"Nested relations (composite key)","litedbmodel (runtime)",27.5200,3.6800,5.5100,24.9300,70.6000,250
+"Nested relations (composite key)","Prisma",83.7800,7.3500,6.4100,77.6100,113.1500,250
+"Nested relations (composite key)","Drizzle",74.3900,4.3600,4.0600,69.4400,101.6300,250
+"Nested relations (composite key)","TypeORM",57.4600,2.7400,4.3000,53.2200,90.4300,250
+"Nested relations (composite key)","litedbmodel (codegen)",23.9700,6.1200,3.9500,21.0400,41.7300,250

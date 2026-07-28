@@ -86,9 +86,9 @@ checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
 name = "behavior-contracts"
-version = "0.11.16"
+version = "0.11.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a006212a325823bad933ad1bdf48e7e7bc00cfeb8029999df403020e58e5c2fd"
+checksum = "b6f04b5a7adf5992184247051870fbd865aaf6b6d9948dae073d490a2cb55e1c"
 
 [[package]]
 name = "bitflags"
@@ -960,7 +960,7 @@ dependencies = [
 
 [[package]]
 name = "litedbmodel_runtime"
-version = "2.1.0"
+version = "2.2.0"
 dependencies = [
  "behavior-contracts",
  "chrono",
