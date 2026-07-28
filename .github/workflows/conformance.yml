@@ -237,6 +237,12 @@ jobs:
           extensions: pdo, pdo_pgsql, pdo_mysql, mbstring
       - name: Rust toolchain
         run: rustup toolchain install stable --profile minimal
+      # `npm test` runs test/scp/native-closure.test.ts, which compiles a probe crate against
+      # rust/litedbmodel_runtime under `--offline`. That resolves behavior-contracts from the cargo
+      # registry cache, which nothing in this job populates — so pre-fetch the rust workspace's deps
+      # (incl. the pinned behavior-contracts) ONLINE here, before the offline probe (#183).
+      - name: Warm the cargo registry cache for the offline native-closure probe (#183)
+        run: cargo fetch --manifest-path rust/Cargo.toml
       - name: Grant the test user the per-language `scp_%` MySQL databases
         run: |
           mysql -h 127.0.0.1 -P 3307 -u root -prootpass \
