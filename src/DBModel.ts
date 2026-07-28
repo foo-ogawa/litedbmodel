@@ -28,6 +28,7 @@ import {
   executeWriteAsync,
   compileCreateBundle,
   renderRawSql,
+  scpRuntimeGeneration,
   type RuntimeContext,
   type DeriveColumnsOptions,
   type ModelClassLike as ModelLike,
@@ -238,6 +239,13 @@ export abstract class DBModel {
   protected static _scpRuntime: RuntimeContext | null | false = null;
 
   /**
+   * The `scpRuntimeGeneration()` a cached `_scpRuntime` was built at. `closeAllPools()` bumps that
+   * generation and closes the pools; a cache from an older generation therefore points at a CLOSED pool
+   * and must be rebuilt on next use (#182). `-1` = never built. @internal
+   */
+  protected static _scpRuntimeGen: number = -1;
+
+  /**
    * Get the SCP runtime context for this model's config (Phase F-2 / #105), lazily built from
    * `_dbConfig`. Returns `null` when the model should use the v1 in-proc path (sqlite, or no live
    * config, or the pg/mysql peer dep is unavailable) — the backward-compat fallback (empty middleware
@@ -246,7 +254,10 @@ export abstract class DBModel {
    */
   protected static _getScpRuntime(): RuntimeContext | null {
     if (this._scpRuntime === false) return null;
-    if (this._scpRuntime !== null) return this._scpRuntime;
+    // A cached runtime is reusable only while its pools are still open — i.e. its generation still matches.
+    // After a `closeAllPools()` bumped the generation, the cache points at a closed pool; fall through to
+    // rebuild rather than hand back a runtime whose `acquire()` throws "pool after end" (#182).
+    if (this._scpRuntime !== null && this._scpRuntimeGen === scpRuntimeGeneration()) return this._scpRuntime;
     const config = this._dbConfig;
     const driver = config?.driver ?? (config ? 'postgres' : undefined);
     if (config === null || driver === 'sqlite' || driver === undefined) {
@@ -273,6 +284,7 @@ export abstract class DBModel {
         },
       );
       this._scpRuntime = rt;
+      this._scpRuntimeGen = scpRuntimeGeneration();
       return rt;
     } catch {
       // The pg/mysql peer dep is unavailable (or pool construction failed) — fall back to the v1 path.

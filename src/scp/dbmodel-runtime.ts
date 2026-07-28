@@ -191,12 +191,29 @@ export function buildContextFromConfig(config: RuntimeDbConfig, options: Runtime
 const liveClosers = new Set<PoolCloser>();
 
 /**
+ * Bumped every time {@link closeAllScpRuntimes} closes the pools. `DBModel` caches its `RuntimeContext`
+ * per (sub)class; that cache holds pools this generation counter invalidates — after a `closeAllPools()`,
+ * a cached runtime points at a CLOSED pool, and the next op must rebuild rather than reuse it (#182). The
+ * counter is the seam: the closer lives here (this module owns the pools), the cache lives on `DBModel`,
+ * and they agree through this monotonically increasing token.
+ */
+let scpRuntimeGen = 0;
+
+/** The current SCP-runtime generation; a cached runtime built at an older generation is stale (#182). */
+export function scpRuntimeGeneration(): number {
+  return scpRuntimeGen;
+}
+
+/**
  * Close every pool set {@link buildContextFromConfig} has constructed — including runtimes their owner
  * discarded without closing. Part of the v1 `closeAllPools()` teardown, alongside the per-driver caches.
+ * Bumps {@link scpRuntimeGeneration} so `DBModel`'s cached runtimes rebuild instead of reusing a now-closed
+ * pool (#182).
  */
 export async function closeAllScpRuntimes(): Promise<void> {
   const closers = [...liveClosers];
   liveClosers.clear();
+  scpRuntimeGen++;
   for (const close of closers) await close();
 }
 
