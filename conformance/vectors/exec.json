@@ -1027,7 +1027,7 @@
           "params": []
         },
         {
-          "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE conf_posts.author_id = ANY($1::bigint[]) ORDER BY id ASC",
+          "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE conf_posts.author_id = ANY($1::int[]) ORDER BY id ASC",
           "params": [
             [
               {
@@ -1043,7 +1043,7 @@
           ]
         },
         {
-          "sql": "SELECT id, post_id, label FROM conf_tags WHERE conf_tags.post_id = ANY($1::bigint[]) ORDER BY id ASC",
+          "sql": "SELECT id, post_id, label FROM conf_tags WHERE conf_tags.post_id = ANY($1::int[]) ORDER BY id ASC",
           "params": [
             [
               {
@@ -1317,7 +1317,7 @@
           "params": []
         },
         {
-          "sql": "SELECT id, name, post_count FROM conf_users WHERE conf_users.id = ANY($1::bigint[])",
+          "sql": "SELECT id, name, post_count FROM conf_users WHERE conf_users.id = ANY($1::int[])",
           "params": [
             [
               {
@@ -4563,7 +4563,7 @@
           "params": []
         },
         {
-          "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE conf_posts.author_id = ANY($1::bigint[]) ORDER BY id ASC",
+          "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE conf_posts.author_id = ANY($1::int[]) ORDER BY id ASC",
           "params": [
             [
               {
@@ -4776,7 +4776,7 @@
           "params": []
         },
         {
-          "sql": "SELECT conf_posts.* FROM unnest($1::bigint[]) AS _keys(key) CROSS JOIN LATERAL (SELECT * FROM conf_posts WHERE conf_posts.author_id = _keys.key ORDER BY id ASC LIMIT 1) conf_posts",
+          "sql": "SELECT conf_posts.* FROM unnest($1::int[]) AS _keys(key) CROSS JOIN LATERAL (SELECT * FROM conf_posts WHERE conf_posts.author_id = _keys.key ORDER BY id ASC LIMIT 1) conf_posts",
           "params": [
             [
               {

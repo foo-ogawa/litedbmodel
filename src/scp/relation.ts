@@ -350,6 +350,16 @@ function compiledBatchSql(decl: RelationDecl, dialect: Dialect, resolveColumnTyp
   // A one-element placeholder key set fixes the SQL text (single-JSON-param / `= ANY` forms are
   // value-length-independent). The concrete keys are bound at execute time.
   const placeholderKeys: unknown[] = [null];
+  // The PG `= ANY(?::<T>[])` element type comes from the target key COLUMN's DECLARED type — the same
+  // schema-derived derivation the composite path uses (`pgKeyTypesOf`). It must NOT be inferred at
+  // render from a bound value: the value's type differs by language (a bc int is a BigInt on the TS
+  // plane → `bigint[]`, a native int in python/php → `int[]`), which broke cross-language byte-identity.
+  // The column is the authority (an int column → `int[]`, byte-identical to v1's live-correct cast, and
+  // never the #43 `text[]`). Only fall back to render-time inference when no resolver is available.
+  const pgKeyCast =
+    dialect === 'postgres' && resolveColumnType !== undefined
+      ? inferPgElementType([pgTypeSpecimen(resolveColumnType(decl.targetTable, decl.targetKey as string))])
+      : undefined;
   const base = {
     dialect,
     tableName: decl.targetTable,
@@ -357,11 +367,9 @@ function compiledBatchSql(decl: RelationDecl, dialect: Dialect, resolveColumnTyp
     order: decl.order,
     targetKey: decl.targetKey as string,
     values: placeholderKeys,
-    // The keys are UNKNOWN at symbolic compile (placeholder set), so the PG `= ANY(?::<T>[])`
-    // element type is DEFERRED to render (#46) — resolved from the real deduped keys via
-    // `inferPgArrayType`, reproducing v1's live-correct cast (`::int[]` for int keys). Baking a
-    // compile-time `text[]` here was the #43 regression (`integer = text` on real PG).
-    deferPgArrayCast: true,
+    ...(pgKeyCast !== undefined
+      ? { sqlCastMap: new Map([[decl.targetKey as string, pgKeyCast]]) }
+      : { deferPgArrayCast: true }),
   };
   const node: MakeSQL =
     decl.limit !== undefined
