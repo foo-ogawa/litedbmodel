@@ -275,7 +275,7 @@ jobs:
           # The behavior-contracts version is pinned by python/pyproject.toml (and package.json for
           # npm) — installing the package here rather than naming a version keeps the pin in ONE
           # place. `[livedb]` adds the psycopg/PyMySQL drivers the live legs need.
-          python3 -m pip install './python[livedb]'
+          python3 -m pip install './python[livedb,test]'
           composer -d php install
       # Open every live-DB test gate from the ONE declaration (#168). Without this the per-language
       # suites below either skip themselves or run only their offline half, and report green.
