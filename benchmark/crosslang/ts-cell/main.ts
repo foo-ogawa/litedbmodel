@@ -4,30 +4,30 @@
 //   tsx benchmark/crosslang/ts-cell/main.ts <mode> <dialect> [reps] [warmup]
 //   tsx benchmark/crosslang/ts-cell/main.ts safety <mode> <dialect>
 //
-// <mode> = codegen | v1 | sdk   <dialect> = sqlite | postgres | mysql
+// <mode> = codegen | runtime | sdk   <dialect> = sqlite | postgres | mysql
 //
 // TypeScript is the only language with three real execution paths, so the CSV's `cell` column carries
-// the mode: `native` for codegen (the same surface the other languages' native cells measure), `v1`
-// for the imperative path, `sdk` for the raw-driver baseline. Connection targets come from the TEST_*
-// environment, like every other cell.
+// the mode: `native` for codegen (the same surface the other languages' native cells measure), `runtime`
+// for the imperative DBModel path, `sdk` for the raw-driver baseline. Connection targets come from the
+// TEST_* environment, like every other cell.
 
 import { ORM_OPS } from '../contract.js';
 import { EXPECTED_STATEMENTS, TX_OPS } from './inputs.js';
 import { DIALECTS, MODES, type Cell, type Dialect, type Mode } from './cell.js';
 import { openCodegen } from './mode-codegen.js';
 import { openSdk } from './mode-sdk.js';
-import { openV1 } from './mode-v1.js';
+import { openRuntime } from './mode-runtime.js';
 
 const OPS: readonly string[] = ORM_OPS.map((o) => o.id);
 /** The CSV `cell` label per mode — `native` keeps codegen comparable with the other languages' rows. */
-const CSV_CELL: Readonly<Record<Mode, string>> = { codegen: 'native', v1: 'v1', sdk: 'sdk' };
+const CSV_CELL: Readonly<Record<Mode, string>> = { codegen: 'native', runtime: 'runtime', sdk: 'sdk' };
 
 function open(mode: Mode, dialect: Dialect): Promise<Cell> {
   switch (mode) {
     case 'codegen':
       return openCodegen(dialect);
-    case 'v1':
-      return openV1(dialect);
+    case 'runtime':
+      return openRuntime(dialect);
     case 'sdk':
       return openSdk(dialect);
   }

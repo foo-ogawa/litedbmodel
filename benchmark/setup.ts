@@ -42,7 +42,7 @@ async function setup() {
       id SERIAL PRIMARY KEY,
       title VARCHAR(255) NOT NULL,
       content TEXT,
-      published BOOLEAN DEFAULT false,
+      published SMALLINT DEFAULT 0,
       author_id INTEGER REFERENCES benchmark_users(id) ON DELETE CASCADE,
       created_at TIMESTAMP DEFAULT NOW()
     );
@@ -126,7 +126,7 @@ async function setup() {
   let postId = 1;
   for (let userId = NESTED_USERS + 1; userId <= NUM_USERS; userId++) {
     for (let p = 1; p <= POSTS_PER_USER; p++) {
-      const published = postId % 3 === 0 ? 'true' : 'false';
+      const published = postId % 3 === 0 ? '1' : '0';
       generalPostValues.push(`('Post ${postId}', 'Content for post ${postId}', ${published}, ${userId})`);
       postId++;
     }
@@ -138,7 +138,7 @@ async function setup() {
   const nestedPostStartId = postId;
   for (let userId = 1; userId <= NESTED_USERS; userId++) {
     for (let p = 1; p <= NESTED_POSTS_PER_USER; p++) {
-      const published = postId % 3 === 0 ? 'true' : 'false';
+      const published = postId % 3 === 0 ? '1' : '0';
       nestedPostValues.push(`('Nested Post ${postId}', 'Content for nested post ${postId}', ${published}, ${userId})`);
       postId++;
     }

@@ -7,7 +7,7 @@
 // (Behavior::runBehavior) — no execution logic is generated. Handlers are ALWAYS
 // injected at the boundary (IR + {effects,config,hooks} — concept.md §4.4); they
 // are never generated.
-// irFingerprint: fnv1a64:e7a6ba3511f83de9
+// irFingerprint: fnv1a64:ab729fe5879e4fe7
 
 declare(strict_types=1);
 
@@ -15,7 +15,7 @@ declare(strict_types=1);
 $expectedSpecVersions = ['behavior' => 6, 'expression' => 2, 'plan' => 1];
 
 // FNV-1a 64 fingerprint of the source portable IR (canonical-json discipline, #208).
-$irFingerprint = 'fnv1a64:e7a6ba3511f83de9';
+$irFingerprint = 'fnv1a64:ab729fe5879e4fe7';
 
 // Component names exposed by bind(), in IR declaration order.
 $componentNames = ['findAll', 'filterPaginateSort', 'findFirst', 'findUnique', 'nestedFindAll', 'nestedFindFirst', 'nestedFindUnique', 'nestedRelations', 'compositeRelations', 'create', 'update', 'upsert', 'createMany', 'upsertMany', 'updateMany', 'nestedCreate', 'nestedUpsert', 'nestedUpdate', 'delete'];
@@ -277,7 +277,7 @@ $irDoc = (object) [
                             ],
                         ],
                         "returning" => false,
-                        "sql" => "SELECT id, email, name FROM benchmark_users WHERE name LIKE ? LIMIT 1",
+                        "sql" => "SELECT id, email, name FROM benchmark_users WHERE name LIKE ? ORDER BY id ASC LIMIT 1",
                         "write" => false,
                     ],
                 ],
@@ -448,7 +448,7 @@ $irDoc = (object) [
                             "arr" => [],
                         ],
                         "returning" => false,
-                        "sql" => "SELECT id, email, name FROM benchmark_users LIMIT 100",
+                        "sql" => "SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100",
                         "write" => false,
                     ],
                     "wirePassthrough" => true,
@@ -717,7 +717,7 @@ $irDoc = (object) [
                             ],
                         ],
                         "returning" => false,
-                        "sql" => "SELECT id, email, name FROM benchmark_users WHERE name LIKE ? LIMIT 1",
+                        "sql" => "SELECT id, email, name FROM benchmark_users WHERE name LIKE ? ORDER BY id ASC LIMIT 1",
                         "write" => false,
                     ],
                     "wirePassthrough" => true,
@@ -1259,7 +1259,7 @@ $irDoc = (object) [
                             "arr" => [],
                         ],
                         "returning" => false,
-                        "sql" => "SELECT id, email, name FROM benchmark_users LIMIT 100",
+                        "sql" => "SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100",
                         "write" => false,
                     ],
                     "wirePassthrough" => true,

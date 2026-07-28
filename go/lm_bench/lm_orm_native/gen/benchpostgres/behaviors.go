@@ -403,7 +403,7 @@ func FindFirst(name string) ([]UserRow, error) {
 	_ = t_n0
 	_ = produced_n0
 	// ── op 'n0' (executeSQL) ──
-	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireStr(name)})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, email, name FROM benchmark_users WHERE name LIKE ? LIMIT 1")}, wire.WireField{Key: "write", Val: wire.WireBool(false)}})
+	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireStr(name)})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, email, name FROM benchmark_users WHERE name LIKE ? ORDER BY id ASC LIMIT 1")}, wire.WireField{Key: "write", Val: wire.WireBool(false)}})
 	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
@@ -569,7 +569,7 @@ func NestedFindAll() ([]UserWithPosts, error) {
 	_ = t_n3
 	_ = produced_n3
 	// ── op 'n0' (executeSQL) ──
-	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, email, name FROM benchmark_users LIMIT 100")}, wire.WireField{Key: "write", Val: wire.WireBool(false)}})
+	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100")}, wire.WireField{Key: "write", Val: wire.WireBool(false)}})
 	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
@@ -764,7 +764,7 @@ func NestedFindFirst(name string) ([]UserWithPosts, error) {
 	_ = t_n3
 	_ = produced_n3
 	// ── op 'n0' (executeSQL) ──
-	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireStr(name)})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, email, name FROM benchmark_users WHERE name LIKE ? LIMIT 1")}, wire.WireField{Key: "write", Val: wire.WireBool(false)}})
+	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireStr(name)})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, email, name FROM benchmark_users WHERE name LIKE ? ORDER BY id ASC LIMIT 1")}, wire.WireField{Key: "write", Val: wire.WireBool(false)}})
 	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
@@ -1166,7 +1166,7 @@ func NestedRelations() ([]UserWithPostsAndComments, error) {
 	_ = t_n6
 	_ = produced_n6
 	// ── op 'n0' (executeSQL) ──
-	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, email, name FROM benchmark_users LIMIT 100")}, wire.WireField{Key: "write", Val: wire.WireBool(false)}})
+	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100")}, wire.WireField{Key: "write", Val: wire.WireBool(false)}})
 	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)

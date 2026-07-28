@@ -112,7 +112,7 @@ function run_findFirst(h$executeSQL: Handler | undefined, input: Scope): Value {
     "bigint": false,
     "params": cgp.arr([cgp.ref(["name"], scope)]),
     "returning": false,
-    "sql": "SELECT id, email, name FROM benchmark_users WHERE name LIKE ? LIMIT 1",
+    "sql": "SELECT id, email, name FROM benchmark_users WHERE name LIKE ? ORDER BY id ASC LIMIT 1",
     "write": false,
   };
   const o_n0 = h$executeSQL(ports_n0, { nodeId: "n0", component: "executeSQL" });
@@ -130,7 +130,7 @@ async function run_findFirst_async(h$executeSQL: AsyncHandler | undefined, input
     "bigint": false,
     "params": cgp.arr([cgp.ref(["name"], scope)]),
     "returning": false,
-    "sql": "SELECT id, email, name FROM benchmark_users WHERE name LIKE ? LIMIT 1",
+    "sql": "SELECT id, email, name FROM benchmark_users WHERE name LIKE ? ORDER BY id ASC LIMIT 1",
     "write": false,
   };
   const o_n0 = await h$executeSQL(ports_n0, { nodeId: "n0", component: "executeSQL" });
@@ -184,7 +184,7 @@ function run_nestedFindAll(h$executeSQL: Handler | undefined, h$pluck: Handler |
     "bigint": false,
     "params": cgp.arr([]),
     "returning": false,
-    "sql": "SELECT id, email, name FROM benchmark_users LIMIT 100",
+    "sql": "SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100",
     "write": false,
   };
   const o_n0 = h$executeSQL(ports_n0, { nodeId: "n0", component: "executeSQL" });
@@ -239,7 +239,7 @@ async function run_nestedFindAll_async(h$executeSQL: AsyncHandler | undefined, h
     "bigint": false,
     "params": cgp.arr([]),
     "returning": false,
-    "sql": "SELECT id, email, name FROM benchmark_users LIMIT 100",
+    "sql": "SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100",
     "write": false,
   };
   const o_n0 = await h$executeSQL(ports_n0, { nodeId: "n0", component: "executeSQL" });
@@ -294,7 +294,7 @@ function run_nestedFindFirst(h$executeSQL: Handler | undefined, h$pluck: Handler
     "bigint": false,
     "params": cgp.arr([cgp.ref(["name"], scope)]),
     "returning": false,
-    "sql": "SELECT id, email, name FROM benchmark_users WHERE name LIKE ? LIMIT 1",
+    "sql": "SELECT id, email, name FROM benchmark_users WHERE name LIKE ? ORDER BY id ASC LIMIT 1",
     "write": false,
   };
   const o_n0 = h$executeSQL(ports_n0, { nodeId: "n0", component: "executeSQL" });
@@ -349,7 +349,7 @@ async function run_nestedFindFirst_async(h$executeSQL: AsyncHandler | undefined,
     "bigint": false,
     "params": cgp.arr([cgp.ref(["name"], scope)]),
     "returning": false,
-    "sql": "SELECT id, email, name FROM benchmark_users WHERE name LIKE ? LIMIT 1",
+    "sql": "SELECT id, email, name FROM benchmark_users WHERE name LIKE ? ORDER BY id ASC LIMIT 1",
     "write": false,
   };
   const o_n0 = await h$executeSQL(ports_n0, { nodeId: "n0", component: "executeSQL" });
@@ -514,7 +514,7 @@ function run_nestedRelations(h$executeSQL: Handler | undefined, h$pluck: Handler
     "bigint": false,
     "params": cgp.arr([]),
     "returning": false,
-    "sql": "SELECT id, email, name FROM benchmark_users LIMIT 100",
+    "sql": "SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100",
     "write": false,
   };
   const o_n0 = h$executeSQL(ports_n0, { nodeId: "n0", component: "executeSQL" });
@@ -606,7 +606,7 @@ async function run_nestedRelations_async(h$executeSQL: AsyncHandler | undefined,
     "bigint": false,
     "params": cgp.arr([]),
     "returning": false,
-    "sql": "SELECT id, email, name FROM benchmark_users LIMIT 100",
+    "sql": "SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100",
     "write": false,
   };
   const o_n0 = await h$executeSQL(ports_n0, { nodeId: "n0", component: "executeSQL" });

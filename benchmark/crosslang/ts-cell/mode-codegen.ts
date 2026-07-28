@@ -55,13 +55,13 @@ export async function openCodegen(dialect: Dialect): Promise<Cell> {
   const mod = (await import(`./behaviors_${dialect}.js`)) as unknown as GeneratedModule;
 
   // SQLite has NO codegen path in TypeScript. `buildContextFromConfig` throws for it —
-  // "the sqlite dialect is not routed through the async SCP runtime (v1 in-proc path)" — so a TS
-  // consumer on SQLite reaches litedbmodel through v1, and this cell reports that rather than
+  // "the sqlite dialect is not routed through the async SCP runtime (runtime in-proc path)" — so a TS
+  // consumer on SQLite reaches litedbmodel through runtime, and this cell reports that rather than
   // inventing a path the product does not offer.
   if (dialect === 'sqlite') {
     throw new Error(
-      'ts-cell: the codegen mode has no SQLite leg — litedbmodel routes SQLite through the v1 in-proc ' +
-        'path, not the SCP runtime (src/scp/dbmodel-runtime.ts). Run `v1` or `sdk` for this dialect.',
+      'ts-cell: the codegen mode has no SQLite leg — litedbmodel routes SQLite through the runtime in-proc ' +
+        'path, not the SCP runtime (src/scp/dbmodel-runtime.ts). Run `runtime` or `sdk` for this dialect.',
     );
   }
 

@@ -29,7 +29,7 @@ const log = (line = '') => { out.push(line); console_log(line); };
 const OPS = ['findAll','filterPaginateSort','findFirst','findUnique','nestedFindAll','nestedFindFirst','nestedFindUnique','nestedRelations','compositeRelations','create','update','upsert','createMany','upsertMany','updateMany','nestedCreate','nestedUpsert','nestedUpdate','delete'];
 const LANGS = ['typescript','go','rust','python','php'];
 const DIALECTS = ['sqlite','postgres','mysql'];
-const FILE_RE = /^([a-z]+)\.(native|sdk|v1)\.(sqlite|postgres|mysql)\.csv$/;
+const FILE_RE = /^([a-z]+)\.(native|sdk|runtime)\.(sqlite|postgres|mysql)\.csv$/;
 
 function p50(nums){ if(!nums.length) return null; const s=[...nums].sort((a,b)=>a-b); const m=Math.floor(s.length/2); return s.length%2? s[m] : (s[m-1]+s[m])/2; }
 
@@ -59,7 +59,7 @@ function readDir(dir, scale) {
       let e = data.get(key);
       if (!e) data.set(key, (e = { us: [], rows: new Set() }));
       e.us.push(Number(us));
-      // An empty `rows` field means the cell has no row-observing seam (TS v1 on SQLite reaches the DB
+      // An empty `rows` field means the cell has no row-observing seam (TS runtime on SQLite reaches the DB
       // through the in-proc path, whose only hook carries the SQL text). Recorded as unknown, never 0.
       if (rows !== undefined && rows !== '') e.rows.add(Number(rows));
     }
@@ -92,9 +92,14 @@ Each language runs the SAME 19 ORM-comparison ops through TWO surfaces against t
 operation hand-written against the raw driver, litedbmodel not in the path. Both reuse prepared
 statements and bind params for reads and writes alike.
 
+What the codegen buys is **cross-language**: ONE TypeScript model declaration generates the native module
+for go, rust, python and php too — that is the differentiator this table exists to measure. Within
+TypeScript, `native` (codegen) versus the imperative `runtime` DBModel path is only an execution-mode
+choice, not a differentiator, since the authoring language is already TypeScript.
+
 The fixture is the one \`benchmark/setup.ts\` seeds for the ORM-vs-ORM bench — 1,000 users, 5,500 posts,
-10,000 comments, plus the composite-key tenant graph (500 tenant_users, 5,000 tenant_posts, 50,000
-tenant_comments), 72,000 rows in all. It is re-applied before every op. The relation ops therefore
+10,000 comments, plus the composite-key tenant graph (10 tenants, 1,000 tenant_users, 10,000 tenant_posts,
+100,000 tenant_comments), 127,510 rows in all. It is re-applied before every op. The relation ops therefore
 traverse 100 parents → 1,000 children → 10,000 grandchildren, the same window that bench measures.
 
 **rows/op is measured, per cell, at that cell's own exec seam** — the total rows the op moved across the
@@ -207,7 +212,7 @@ const disagree = [];
 const unmeasured = [];
 for (const dialect of DIALECTS) for (const op of OPS) {
   const seen = new Map(); // rows -> [cell…]
-  for (const lang of LANGS) for (const surface of ['native','sdk','v1']) {
+  for (const lang of LANGS) for (const surface of ['native','sdk','runtime']) {
     const e = at(1,lang,surface,dialect,op);
     if (!e) continue;
     const r = rowsOf(e);

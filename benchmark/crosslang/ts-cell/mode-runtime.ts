@@ -1,12 +1,12 @@
-// The V1 IMPERATIVE mode of the TypeScript cell — DBModel, which builds its SQL at run time.
+// The RUNTIME (imperative DBModel) mode of the TypeScript cell — DBModel, which builds its SQL at run time.
 //
 // The third real TypeScript execution path (#162). Where the codegen mode runs SQL that was fixed at
-// generate time, v1 walks `DBConditions` / `_buildSelectSQL` on every call and loads relations through
+// generate time, runtime walks `DBConditions` / `_buildSelectSQL` on every call and loads relations through
 // `LazyRelationContext`, which batches (one parent read + one batched child read per level) — so the
 // N+1 invariant holds here too. TypeScript is the only language with this path, which is why the TS
 // cell has three modes and the other languages have two.
 //
-// v1's writes are transaction-only by policy (`WriteOutsideTransactionError`), so a single-row create
+// runtime's writes are transaction-only by policy (`WriteOutsideTransactionError`), so a single-row create
 // here really is BEGIN + INSERT + COMMIT. `EXPECTED` below states that rather than relaxing the check.
 
 import 'reflect-metadata';
@@ -26,7 +26,7 @@ import { MYSQL_CONFIG, PG_CONFIG, SQLITE_CONFIG, setupFor } from './cell.js';
 //
 // Decorators run at class definition, and the transform only accepts them at
 // module top level, so the models are declared once against `DBModel` and the dialect is applied by
-// `DBModel.setConfig` in `openV1` — correct here because the cell runs ONE dialect per process (the
+// `DBModel.setConfig` in `openRuntime` — correct here because the cell runs ONE dialect per process (the
 // same shape benchmark/benchmark.ts uses). Schema and columns match `orm-domain.ts`, the fixture every
 // other cell loads.
 @model('benchmark_users')
@@ -102,7 +102,7 @@ const TenantComment = TenantCommentModel as typeof TenantCommentModel & ColumnsO
 
 
 /**
- * v1's counts. The reads match every other mode; the writes carry the +2 of the mandatory
+ * runtime's counts. The reads match every other mode; the writes carry the +2 of the mandatory
  * transaction, and the already-transactional ops are unchanged.
  */
 const EXPECTED: Readonly<Record<string, number>> = {
@@ -118,12 +118,12 @@ const EXPECTED: Readonly<Record<string, number>> = {
 /** Held so the engine cannot elide the relation materialization. */
 let sink: unknown;
 
-export async function openV1(dialect: Dialect): Promise<Cell> {
+export async function openRuntime(dialect: Dialect): Promise<Cell> {
   const setup = setupFor(dialect);
   const config = dialect === 'sqlite' ? SQLITE_CONFIG : dialect === 'postgres' ? PG_CONFIG : MYSQL_CONFIG;
-  // Count at the SCP middleware seam, not the v1 driver's logger. Phase F-2 (#105) routes DBModel
+  // Count at the SCP middleware seam, not the runtime driver's logger. Phase F-2 (#105) routes DBModel
   // through the SCP runtime whenever it is usable, so the driver logger sees only the statements that
-  // fall back to v1 — on PostgreSQL that was ZERO, and the counter read 0 for a query that ran.
+  // fall back to runtime — on PostgreSQL that was ZERO, and the counter read 0 for a query that ran.
   let count = 0;
   // Rows are counted where this cell MATERIALIZES them, not at a seam. The SCP middleware sees the result
   // but does not fire on the sqlite in-proc path, and the driver logger carries SQL text only — so the op
@@ -140,8 +140,8 @@ export async function openV1(dialect: Dialect): Promise<Cell> {
       },
     }),
   );
-  // …and at the v1 driver's logger as well: SQLite is NOT routed to the SCP runtime (it keeps the v1
-  // in-proc path), so on that dialect the middleware never fires. v1 has two execution paths and the
+  // …and at the runtime driver's logger as well: SQLite is NOT routed to the SCP runtime (it keeps the runtime
+  // in-proc path), so on that dialect the middleware never fires. runtime has two execution paths and the
   // count is whichever one DBModel picked; a statement can only travel one of them, so summing is exact.
   DBModel.setConfig(
     { ...config, max: 4 },
@@ -256,7 +256,7 @@ export async function openV1(dialect: Dialect): Promise<Cell> {
       case 'upsert':
         // `returning: true` is not decoration. The generated module's statement is
         // `… ON CONFLICT … DO UPDATE … RETURNING id`, so omitting it makes this cell run a DIFFERENT
-        // statement and move one row fewer than every other cell — i.e. less work, in v1's favour.
+        // statement and move one row fewer than every other cell — i.e. less work, in runtime's favour.
         await User.transaction(async () => {
           const upserted = await User.create(
             [

@@ -375,7 +375,7 @@ pub fn findFirst(
     let produced_n0 = std::cell::Cell::new(false);
     let _ = &produced_n0;
     // ── op 'n0' (executeSQL) ──
-    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("bigint"), WireValue::Bool(false)), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::Str(name.into())]; __v } })), (Cow::Borrowed("returning"), WireValue::Bool(false)), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("SELECT id, email, name FROM benchmark_users WHERE name LIKE ? LIMIT 1"))), (Cow::Borrowed("write"), WireValue::Bool(false))] };
+    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("bigint"), WireValue::Bool(false)), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::Str(name.into())]; __v } })), (Cow::Borrowed("returning"), WireValue::Bool(false)), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("SELECT id, email, name FROM benchmark_users WHERE name LIKE ? ORDER BY id ASC LIMIT 1"))), (Cow::Borrowed("write"), WireValue::Bool(false))] };
     let wire_n0 = match execute_sql(payload_n0) {
         Ok(r) => r,
         Err(e) => return Err(op_failed("n0", "fail", e)),
@@ -509,7 +509,7 @@ pub fn nestedFindAll(
     let produced_n3 = std::cell::Cell::new(false);
     let _ = &produced_n3;
     // ── op 'n0' (executeSQL) ──
-    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("bigint"), WireValue::Bool(false)), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![]; __v } })), (Cow::Borrowed("returning"), WireValue::Bool(false)), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("SELECT id, email, name FROM benchmark_users LIMIT 100"))), (Cow::Borrowed("write"), WireValue::Bool(false))] };
+    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("bigint"), WireValue::Bool(false)), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![]; __v } })), (Cow::Borrowed("returning"), WireValue::Bool(false)), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100"))), (Cow::Borrowed("write"), WireValue::Bool(false))] };
     let wire_n0 = match execute_sql(payload_n0) {
         Ok(r) => r,
         Err(e) => return Err(op_failed("n0", "fail", e)),
@@ -660,7 +660,7 @@ pub fn nestedFindFirst(
     let produced_n3 = std::cell::Cell::new(false);
     let _ = &produced_n3;
     // ── op 'n0' (executeSQL) ──
-    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("bigint"), WireValue::Bool(false)), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::Str(name.into())]; __v } })), (Cow::Borrowed("returning"), WireValue::Bool(false)), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("SELECT id, email, name FROM benchmark_users WHERE name LIKE ? LIMIT 1"))), (Cow::Borrowed("write"), WireValue::Bool(false))] };
+    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("bigint"), WireValue::Bool(false)), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::Str(name.into())]; __v } })), (Cow::Borrowed("returning"), WireValue::Bool(false)), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("SELECT id, email, name FROM benchmark_users WHERE name LIKE ? ORDER BY id ASC LIMIT 1"))), (Cow::Borrowed("write"), WireValue::Bool(false))] };
     let wire_n0 = match execute_sql(payload_n0) {
         Ok(r) => r,
         Err(e) => return Err(op_failed("n0", "fail", e)),
@@ -970,7 +970,7 @@ pub fn nestedRelations(
     let produced_n6 = std::cell::Cell::new(false);
     let _ = &produced_n6;
     // ── op 'n0' (executeSQL) ──
-    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("bigint"), WireValue::Bool(false)), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![]; __v } })), (Cow::Borrowed("returning"), WireValue::Bool(false)), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("SELECT id, email, name FROM benchmark_users LIMIT 100"))), (Cow::Borrowed("write"), WireValue::Bool(false))] };
+    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("bigint"), WireValue::Bool(false)), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![]; __v } })), (Cow::Borrowed("returning"), WireValue::Bool(false)), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100"))), (Cow::Borrowed("write"), WireValue::Bool(false))] };
     let wire_n0 = match execute_sql(payload_n0) {
         Ok(r) => r,
         Err(e) => return Err(op_failed("n0", "fail", e)),

@@ -112,7 +112,7 @@ run() {
   local name="$1" dir="$2"; shift 2
   local csv="$OUT/${name}.${DIALECT}.csv"
   echo "── $name ($DIALECT, reps=$REPS warmup=$WARMUP scale=$SCALE)"
-  if (cd "$dir" && "$@") | grep -E '^(cell,|(native|sdk|v1),)' > "$csv"; then
+  if (cd "$dir" && "$@") | grep -E '^(cell,|(native|sdk|runtime),)' > "$csv"; then
     echo "   → $csv ($(($(wc -l < "$csv") - 1)) samples)"
   else
     echo "   ✗ FAILED — $name did not run on $DIALECT; no numbers for it in the report"
@@ -125,19 +125,19 @@ run() {
 npx tsc -p "$HERE/ts-cell/tsconfig.json" || exit 1
 TS_MAIN="$ROOT/benchmark/crosslang-build/ts-cell/main.js"
 if [ "$DIALECT" = "sqlite" ]; then
-  # A LOUD skip, per this script's own contract. litedbmodel routes SQLite through the v1 in-proc path,
+  # A LOUD skip, per this script's own contract. litedbmodel routes SQLite through the runtime in-proc path,
   # so `pool-executor.ts` exports no `sqliteConnectionPool` and `dbmodel-runtime.ts` throws for it — there
-  # is no TS codegen leg to measure on this dialect, and `typescript.v1` is what a TS consumer on SQLite
+  # is no TS codegen leg to measure on this dialect, and `typescript.runtime` is what a TS consumer on SQLite
   # actually runs. This was skipped with no message at all, which reads as a missing measurement instead
   # of an absent path. Note the asymmetry it leaves: go/rust/python/php all HAVE a native leg on SQLite,
   # so TypeScript is the only language with no native÷sdk ratio on the dialect where client-side cost is
   # the largest fraction.
-  echo "── typescript.native (sqlite): SKIP — no TS codegen leg for SQLite (v1 in-proc path; see"
-  echo "   src/scp/dbmodel-runtime.ts:145). typescript.v1 covers this dialect."
+  echo "── typescript.native (sqlite): SKIP — no TS codegen leg for SQLite (runtime in-proc path; see"
+  echo "   src/scp/dbmodel-runtime.ts:145). typescript.runtime covers this dialect."
 else
   run typescript.native "$ROOT" "$NODE" "$TS_MAIN" codegen "$DIALECT" "$REPS" "$WARMUP"
 fi
-run typescript.v1  "$ROOT" "$NODE" "$TS_MAIN" v1  "$DIALECT" "$REPS" "$WARMUP"
+run typescript.runtime "$ROOT" "$NODE" "$TS_MAIN" runtime "$DIALECT" "$REPS" "$WARMUP"
 run typescript.sdk "$ROOT" "$NODE" "$TS_MAIN" sdk "$DIALECT" "$REPS" "$WARMUP"
 
 # Go — the dialect is a BUILD tag on the native cell (the generated module is baked per dialect).

@@ -83,7 +83,7 @@ export class BenchSqlite {
   }
 
   @behavior static findFirst(name: string): UserRow[] {
-    const rows: UserRow[] = Db.executeSQL("SELECT id, email, name FROM benchmark_users WHERE name LIKE ? LIMIT 1", [name], false, false, false) as UserRow[];
+    const rows: UserRow[] = Db.executeSQL("SELECT id, email, name FROM benchmark_users WHERE name LIKE ? ORDER BY id ASC LIMIT 1", [name], false, false, false) as UserRow[];
     return rows;
   }
 
@@ -93,7 +93,7 @@ export class BenchSqlite {
   }
 
   @behavior static nestedFindAll(): UserWithPosts[] {
-    const users: WireValue[] = Db.executeSQL("SELECT id, email, name FROM benchmark_users LIMIT 100", [], false, false, false);
+    const users: WireValue[] = Db.executeSQL("SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100", [], false, false, false);
     const userKeys: WireValue[] = Db.pluck(users, ["id"]);
     const posts: WireValue[] = Db.executeSQL("SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN (SELECT value FROM json_each(?)) ORDER BY id ASC", [userKeys], false, false, false);
     const usersWithPosts: UserWithPosts[] = Db.group(users, posts, ["id"], ["author_id"], "posts", false) as UserWithPosts[];
@@ -101,7 +101,7 @@ export class BenchSqlite {
   }
 
   @behavior static nestedFindFirst(name: string): UserWithPosts[] {
-    const users: WireValue[] = Db.executeSQL("SELECT id, email, name FROM benchmark_users WHERE name LIKE ? LIMIT 1", [name], false, false, false);
+    const users: WireValue[] = Db.executeSQL("SELECT id, email, name FROM benchmark_users WHERE name LIKE ? ORDER BY id ASC LIMIT 1", [name], false, false, false);
     const userKeys: WireValue[] = Db.pluck(users, ["id"]);
     const posts: WireValue[] = Db.executeSQL("SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN (SELECT value FROM json_each(?)) ORDER BY id ASC", [userKeys], false, false, false);
     const usersWithPosts: UserWithPosts[] = Db.group(users, posts, ["id"], ["author_id"], "posts", false) as UserWithPosts[];
@@ -117,7 +117,7 @@ export class BenchSqlite {
   }
 
   @behavior static nestedRelations(): UserWithPostsAndComments[] {
-    const users: WireValue[] = Db.executeSQL("SELECT id, email, name FROM benchmark_users LIMIT 100", [], false, false, false);
+    const users: WireValue[] = Db.executeSQL("SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100", [], false, false, false);
     const userKeys: WireValue[] = Db.pluck(users, ["id"]);
     const posts: WireValue[] = Db.executeSQL("SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN (SELECT value FROM json_each(?)) ORDER BY id ASC", [userKeys], false, false, false);
     const postKeys: WireValue[] = Db.pluck(posts, ["id"]);
@@ -213,7 +213,7 @@ export class BenchPostgres {
   }
 
   @behavior static findFirst(name: string): UserRow[] {
-    const rows: UserRow[] = Db.executeSQL("SELECT id, email, name FROM benchmark_users WHERE name LIKE ? LIMIT 1", [name], false, false, false) as UserRow[];
+    const rows: UserRow[] = Db.executeSQL("SELECT id, email, name FROM benchmark_users WHERE name LIKE ? ORDER BY id ASC LIMIT 1", [name], false, false, false) as UserRow[];
     return rows;
   }
 
@@ -223,7 +223,7 @@ export class BenchPostgres {
   }
 
   @behavior static nestedFindAll(): UserWithPosts[] {
-    const users: WireValue[] = Db.executeSQL("SELECT id, email, name FROM benchmark_users LIMIT 100", [], false, false, false);
+    const users: WireValue[] = Db.executeSQL("SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100", [], false, false, false);
     const userKeys: WireValue[] = Db.pluck(users, ["id"]);
     const posts: WireValue[] = Db.executeSQL("SELECT id, title, author_id FROM benchmark_posts WHERE benchmark_posts.author_id = ANY(?::@@PG_ARRAY_CAST@@) ORDER BY id ASC", [userKeys], false, false, false);
     const usersWithPosts: UserWithPosts[] = Db.group(users, posts, ["id"], ["author_id"], "posts", false) as UserWithPosts[];
@@ -231,7 +231,7 @@ export class BenchPostgres {
   }
 
   @behavior static nestedFindFirst(name: string): UserWithPosts[] {
-    const users: WireValue[] = Db.executeSQL("SELECT id, email, name FROM benchmark_users WHERE name LIKE ? LIMIT 1", [name], false, false, false);
+    const users: WireValue[] = Db.executeSQL("SELECT id, email, name FROM benchmark_users WHERE name LIKE ? ORDER BY id ASC LIMIT 1", [name], false, false, false);
     const userKeys: WireValue[] = Db.pluck(users, ["id"]);
     const posts: WireValue[] = Db.executeSQL("SELECT id, title, author_id FROM benchmark_posts WHERE benchmark_posts.author_id = ANY(?::@@PG_ARRAY_CAST@@) ORDER BY id ASC", [userKeys], false, false, false);
     const usersWithPosts: UserWithPosts[] = Db.group(users, posts, ["id"], ["author_id"], "posts", false) as UserWithPosts[];
@@ -247,7 +247,7 @@ export class BenchPostgres {
   }
 
   @behavior static nestedRelations(): UserWithPostsAndComments[] {
-    const users: WireValue[] = Db.executeSQL("SELECT id, email, name FROM benchmark_users LIMIT 100", [], false, false, false);
+    const users: WireValue[] = Db.executeSQL("SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100", [], false, false, false);
     const userKeys: WireValue[] = Db.pluck(users, ["id"]);
     const posts: WireValue[] = Db.executeSQL("SELECT id, title, author_id FROM benchmark_posts WHERE benchmark_posts.author_id = ANY(?::@@PG_ARRAY_CAST@@) ORDER BY id ASC", [userKeys], false, false, false);
     const postKeys: WireValue[] = Db.pluck(posts, ["id"]);
@@ -355,7 +355,7 @@ export class BenchMysql {
   }
 
   @behavior static findFirst(name: string): UserRow[] {
-    const rows: UserRow[] = Db.executeSQL("SELECT id, email, name FROM benchmark_users WHERE name LIKE ? LIMIT 1", [name], false, false, false) as UserRow[];
+    const rows: UserRow[] = Db.executeSQL("SELECT id, email, name FROM benchmark_users WHERE name LIKE ? ORDER BY id ASC LIMIT 1", [name], false, false, false) as UserRow[];
     return rows;
   }
 
@@ -365,7 +365,7 @@ export class BenchMysql {
   }
 
   @behavior static nestedFindAll(): UserWithPosts[] {
-    const users: WireValue[] = Db.executeSQL("SELECT id, email, name FROM benchmark_users LIMIT 100", [], false, false, false);
+    const users: WireValue[] = Db.executeSQL("SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100", [], false, false, false);
     const userKeys: WireValue[] = Db.pluck(users, ["id"]);
     const posts: WireValue[] = Db.executeSQL("SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) ORDER BY id ASC", [userKeys], false, false, false);
     const usersWithPosts: UserWithPosts[] = Db.group(users, posts, ["id"], ["author_id"], "posts", false) as UserWithPosts[];
@@ -373,7 +373,7 @@ export class BenchMysql {
   }
 
   @behavior static nestedFindFirst(name: string): UserWithPosts[] {
-    const users: WireValue[] = Db.executeSQL("SELECT id, email, name FROM benchmark_users WHERE name LIKE ? LIMIT 1", [name], false, false, false);
+    const users: WireValue[] = Db.executeSQL("SELECT id, email, name FROM benchmark_users WHERE name LIKE ? ORDER BY id ASC LIMIT 1", [name], false, false, false);
     const userKeys: WireValue[] = Db.pluck(users, ["id"]);
     const posts: WireValue[] = Db.executeSQL("SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) ORDER BY id ASC", [userKeys], false, false, false);
     const usersWithPosts: UserWithPosts[] = Db.group(users, posts, ["id"], ["author_id"], "posts", false) as UserWithPosts[];
@@ -389,7 +389,7 @@ export class BenchMysql {
   }
 
   @behavior static nestedRelations(): UserWithPostsAndComments[] {
-    const users: WireValue[] = Db.executeSQL("SELECT id, email, name FROM benchmark_users LIMIT 100", [], false, false, false);
+    const users: WireValue[] = Db.executeSQL("SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100", [], false, false, false);
     const userKeys: WireValue[] = Db.pluck(users, ["id"]);
     const posts: WireValue[] = Db.executeSQL("SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) ORDER BY id ASC", [userKeys], false, false, false);
     const postKeys: WireValue[] = Db.pluck(posts, ["id"]);

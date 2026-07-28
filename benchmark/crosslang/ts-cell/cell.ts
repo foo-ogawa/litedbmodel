@@ -2,7 +2,7 @@
 //
 // The cell has three modes (#162) because TypeScript is the only language with three real execution
 // paths: `codegen` (the bc-generated module over litedbmodel's leaf transport — the twin of the other
-// languages' native cells), `v1` (the imperative DBModel path, which builds its SQL at run time), and
+// languages' native cells), `runtime` (the imperative DBModel path, which builds its SQL at run time), and
 // `sdk` (raw better-sqlite3 / pg / mysql2 — the baseline). One `Cell` shape lets the runner time all
 // three identically.
 
@@ -13,8 +13,8 @@ import { fileURLToPath } from 'node:url';
 export type Dialect = 'sqlite' | 'postgres' | 'mysql';
 export const DIALECTS: readonly Dialect[] = ['sqlite', 'postgres', 'mysql'];
 
-export type Mode = 'codegen' | 'v1' | 'sdk';
-export const MODES: readonly Mode[] = ['codegen', 'v1', 'sdk'];
+export type Mode = 'codegen' | 'runtime' | 'sdk';
+export const MODES: readonly Mode[] = ['codegen', 'runtime', 'sdk'];
 
 export interface Cell {
   readonly dialect: Dialect;
@@ -37,7 +37,7 @@ export interface Cell {
    * runtime cells AND the hand-written SDK baselines — really moved the same rows. A baseline that
    * quietly fetched fewer rows would post a flattering ratio; #170 is what happens when nobody looks.
    *
-   * `null` means this leg has NO row-observing seam (v1 on SQLite reaches the DB through the in-proc
+   * `null` means this leg has NO row-observing seam (runtime on SQLite reaches the DB through the in-proc
    * path, whose only hook is a SQL-text logger). The report then renders `—` for it; it never renders a
    * zero, which would read as "moved no rows".
    */
@@ -46,15 +46,15 @@ export interface Cell {
   resetCounters(): void;
   /**
    * This mode's expected statement count per op, when it differs from the shared
-   * {@link import('./inputs.js').EXPECTED_STATEMENTS}. The v1 path refuses a write outside a
+   * {@link import('./inputs.js').EXPECTED_STATEMENTS}. The runtime path refuses a write outside a
    * transaction (WriteOutsideTransactionError — its safe-operation policy), so every single-row write
    * there really is BEGIN + statement + COMMIT. That is a property of the path, and the bench reports
    * it rather than hiding it behind a relaxed assertion.
    */
   readonly expectedStatements?: Readonly<Record<string, number>>;
   /**
-   * Ops this mode cannot express, with why. The v1 imperative API has no upsert, so its cell declares
-   * that rather than reaching for hand-written SQL — which would make it an SDK cell wearing a v1
+   * Ops this mode cannot express, with why. The runtime imperative API has no upsert, so its cell declares
+   * that rather than reaching for hand-written SQL — which would make it an SDK cell wearing a runtime
    * label. The runner prints these and emits no rows for them.
    */
   readonly unsupported?: Readonly<Record<string, string>>;
@@ -62,7 +62,7 @@ export interface Cell {
 
 /**
  * Tally the rows a runtime SQL-middleware `next()` handed back and pass the result through unchanged —
- * the ONE place the codegen and v1 modes derive `Cell.rows` from, since both ride the same seam.
+ * the ONE place the codegen and runtime modes derive `Cell.rows` from, since both ride the same seam.
  *
  * The read seam yields the row array; a non-RETURNING write yields a run summary, which contributes
  * nothing. `next` is sync on an in-proc driver and a promise on a pooled one, so both are handled here
@@ -113,7 +113,7 @@ const env = (k: string, d: string): string => process.env[k] || d;
 
 /**
  * `driver` is explicit on every config. `DBModel.setConfig` defaults an unspecified driver to
- * `postgres` (src/DBModel.ts:251), so the v1 cell was opening a PostgreSQL pool against MySQL — its
+ * `postgres` (src/DBModel.ts:251), so the runtime cell was opening a PostgreSQL pool against MySQL — its
  * MySQL leg never ran (`received invalid response: 4a`, MySQL's handshake reaching the pg parser).
  */
 export const PG_CONFIG = {

@@ -4,14 +4,14 @@
 # native dict literal and handed to the EXISTING runtime core (run_behavior) —
 # no execution logic is generated. Handlers are ALWAYS injected at the boundary
 # (IR + {effects,config,hooks}); they are never generated.
-# irFingerprint: fnv1a64:afb465824946c194
+# irFingerprint: fnv1a64:bf1f9768ff176ce6
 from behavior_contracts import SPEC_VERSIONS, ProvenanceError, load_compiled_ir, run_behavior
 
 # Spec versions baked at generation time (fail-closed constant comparison at load).
 EXPECTED_SPEC_VERSIONS = {"behavior": 6, "expression": 2, "plan": 1}
 
 # FNV-1a 64 fingerprint of the source portable IR (canonical_json discipline, #208).
-IR_FINGERPRINT = "fnv1a64:afb465824946c194"
+IR_FINGERPRINT = "fnv1a64:bf1f9768ff176ce6"
 
 # Component names exposed by bind(), in IR declaration order.
 COMPONENT_NAMES = ("findAll", "filterPaginateSort", "findFirst", "findUnique", "nestedFindAll", "nestedFindFirst", "nestedFindUnique", "nestedRelations", "compositeRelations", "create", "update", "upsert", "createMany", "upsertMany", "updateMany", "nestedCreate", "nestedUpsert", "nestedUpdate", "delete")
@@ -273,7 +273,7 @@ IR_DOC = {
               ]
             },
             "returning": False,
-            "sql": "SELECT id, email, name FROM benchmark_users WHERE name LIKE ? LIMIT 1",
+            "sql": "SELECT id, email, name FROM benchmark_users WHERE name LIKE ? ORDER BY id ASC LIMIT 1",
             "write": False
           }
         }
@@ -444,7 +444,7 @@ IR_DOC = {
               "arr": []
             },
             "returning": False,
-            "sql": "SELECT id, email, name FROM benchmark_users LIMIT 100",
+            "sql": "SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100",
             "write": False
           },
           "wirePassthrough": True
@@ -713,7 +713,7 @@ IR_DOC = {
               ]
             },
             "returning": False,
-            "sql": "SELECT id, email, name FROM benchmark_users WHERE name LIKE ? LIMIT 1",
+            "sql": "SELECT id, email, name FROM benchmark_users WHERE name LIKE ? ORDER BY id ASC LIMIT 1",
             "write": False
           },
           "wirePassthrough": True
@@ -1255,7 +1255,7 @@ IR_DOC = {
               "arr": []
             },
             "returning": False,
-            "sql": "SELECT id, email, name FROM benchmark_users LIMIT 100",
+            "sql": "SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100",
             "write": False
           },
           "wirePassthrough": True

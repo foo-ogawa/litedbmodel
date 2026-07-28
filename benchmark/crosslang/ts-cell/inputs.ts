@@ -1,6 +1,6 @@
 // The per-op INPUTS every TypeScript mode drives, in one place.
 //
-// The three modes (codegen / v1 / sdk) must issue the same logical work or their numbers are not
+// The three modes (codegen / runtime / sdk) must issue the same logical work or their numbers are not
 // comparable, and they must match what the go/rust/python/php cells do or the CROSS-language table is
 // not comparable either. `go/lm_bench/lm_orm_native/main.go`'s `op()` is the reference; these are the
 // same values, keyed by the parameter names the authored `@behavior` methods declare

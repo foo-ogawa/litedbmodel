@@ -52,6 +52,15 @@ const WARMUP_ITERATIONS = 5;
 // ============================================
 
 import { DBModel, model, column, ColumnsOf, closeAllPools, hasMany, belongsTo } from 'litedbmodel';
+// The CODEGEN execution mode of litedbmodel v2 (the same authored @behavior source in
+// benchmark/crosslang/native-model.ts, run through `bc generate` → behaviors_postgres.ts): the TS twin
+// of the go/rust/python/php native cells, and the path litedbmodel v2 ships. The `litedbmodel (codegen)`
+// row measures THIS; the `litedbmodel (runtime)` row measures the imperative DBModel path that builds its
+// SQL per call. Both are litedbmodel 2.1.0 — two execution modes, not two versions. Inputs come from the
+// ONE shared per-op input SSoT (inputs.ts), so this cell issues the same logical work as every other cell.
+import { leafHandlersAsync, pgConnectionPool, PooledAsyncContext, transaction, configurePgDeboxTypeParsers } from 'litedbmodel/scp';
+import { inputFor, TX_OPS } from './crosslang/ts-cell/inputs.js';
+import { bindTypedAsync } from './crosslang/ts-cell/behaviors_postgres.js';
 
 @model('benchmark_users')
 class LiteUserModel extends DBModel {
@@ -71,7 +80,7 @@ class LitePostModel extends DBModel {
   @column() id?: number;
   @column() title?: string;
   @column() content?: string;
-  @column() published?: boolean;
+  @column() published?: number;
   @column() author_id?: number;
   @column() created_at?: Date;
   
@@ -159,7 +168,7 @@ interface KyselyDB {
     id: Generated<number>;
     title: string;
     content: string | null;
-    published: Generated<boolean>;
+    published: Generated<number>;
     author_id: number;
     created_at: Generated<Date>;
   };
@@ -176,7 +185,7 @@ interface KyselyDB {
 // ============================================
 
 import { drizzle } from 'drizzle-orm/node-postgres';
-import { pgTable, serial, varchar, integer, boolean, timestamp, text, primaryKey } from 'drizzle-orm/pg-core';
+import { pgTable, serial, varchar, integer, smallint, timestamp, text, primaryKey } from 'drizzle-orm/pg-core';
 import { eq, desc, and, asc, sql as drizzleSql, relations } from 'drizzle-orm';
 
 const drizzleUsers = pgTable('benchmark_users', {
@@ -191,7 +200,7 @@ const drizzlePosts = pgTable('benchmark_posts', {
   id: serial('id').primaryKey(),
   title: varchar('title', { length: 255 }).notNull(),
   content: text('content'),
-  published: boolean('published').default(false),
+  published: smallint('published').default(0),
   author_id: integer('author_id').notNull(),
   created_at: timestamp('created_at').defaultNow(),
 });
@@ -312,8 +321,8 @@ class TypeORMPost {
   @TypeORMColumn({ type: 'text', nullable: true })
   content!: string | null;
   
-  @TypeORMColumn({ type: 'boolean', default: false })
-  published!: boolean;
+  @TypeORMColumn({ type: 'smallint', default: 0 })
+  published!: number;
   
   @TypeORMColumn({ type: 'int' })
   author_id!: number;
@@ -572,7 +581,35 @@ async function main() {
   // Counters for INSERT/UPDATE tests
   let createCounter = 10000;
   let upsertCounter = 20000;
-  
+
+  // ── litedbmodel (codegen): bind the bc-generated module to its OWN pg pool. The read-path de-box type
+  // parsers the library owns (#59: int → BigInt, timestamp → string) are applied POOL-SCOPED here, so the
+  // other ORMs' `pg` pools keep the driver's default parsing untouched.
+  const codegenDeboxParsers = new Map<number, (v: string) => unknown>();
+  configurePgDeboxTypeParsers({ setTypeParser: (oid: number, fn: (v: string) => unknown) => codegenDeboxParsers.set(oid, fn) } as never);
+  const codegenPool = new pg.Pool({
+    ...config,
+    max: 4,
+    types: { getTypeParser: (oid: number, fmt?: unknown) => codegenDeboxParsers.get(oid) ?? pg.types.getTypeParser(oid, fmt as never) },
+  } as never);
+  const codegenCtx = new PooledAsyncContext(pgConnectionPool(codegenPool as never));
+  const codegenFacade = bindTypedAsync(leafHandlersAsync({ execAsync: codegenCtx, dialect: 'postgres' })) as unknown as Record<string, (input?: Record<string, unknown>) => Promise<unknown>>;
+  let codegenWriteCounter = 1_000_000; // distinct email/id namespace from the runtime cell's counters
+  const codegenFn = (op: string) => async (): Promise<unknown> => {
+    const input = inputFor(op, codegenWriteCounter++);
+    const result = TX_OPS.has(op)
+      ? await transaction(codegenCtx, () => codegenFacade[op](input) as Promise<unknown>, {}, 'postgres')
+      : await codegenFacade[op](input);
+    if (op === 'nestedRelations' || op === 'compositeRelations') {
+      let c = 0;
+      for (const u of result as Array<{ posts: Array<{ comments: unknown[] }> }>) for (const p of u.posts) c += p.comments.length;
+      if (c !== 10000) {
+        throw new Error(`litedbmodel (codegen) ${op} processed ${c} comments, not 10000 — NOT the same graph as the other cells (#170).`);
+      }
+    }
+    return result;
+  };
+
   // Define all test categories (based on Prisma orm-benchmarks)
   const testCategories: TestDefinition[] = [
     // ============================================
@@ -582,7 +619,7 @@ async function main() {
       name: 'Find all (limit 100)',
       tests: [
         { 
-          orm: 'litedbmodel', 
+          orm: 'litedbmodel (runtime)',
           fn: () => LiteUser.find([], { limit: 100 }) 
         },
         { 
@@ -611,8 +648,8 @@ async function main() {
       name: 'Filter, paginate & sort',
       tests: [
         { 
-          orm: 'litedbmodel', 
-          fn: () => LitePost.find([[LitePost.published, true]], { 
+          orm: 'litedbmodel (runtime)',
+          fn: () => LitePost.find([[LitePost.published, 1]], {
             order: LitePost.created_at.desc(), 
             limit: 20, 
             offset: 10 
@@ -621,7 +658,7 @@ async function main() {
         { 
           orm: 'Prisma', 
           fn: () => prisma.post.findMany({
-            where: { published: true },
+            where: { published: 1 },
             orderBy: { createdAt: 'desc' },
             skip: 10,
             take: 20,
@@ -630,7 +667,7 @@ async function main() {
         { 
           orm: 'Kysely', 
           fn: () => kysely.selectFrom('benchmark_posts')
-            .where('published', '=', true)
+            .where('published', '=', 1)
             .orderBy('created_at', 'desc')
             .offset(10)
             .limit(20)
@@ -640,7 +677,7 @@ async function main() {
         { 
           orm: 'Drizzle', 
           fn: () => drizzleDb.select().from(drizzlePosts)
-            .where(eq(drizzlePosts.published, true))
+            .where(eq(drizzlePosts.published, 1))
             .orderBy(desc(drizzlePosts.created_at))
             .offset(10)
             .limit(20) 
@@ -648,7 +685,7 @@ async function main() {
         { 
           orm: 'TypeORM', 
           fn: () => typeormPostRepo.find({
-            where: { published: true },
+            where: { published: 1 },
             order: { created_at: 'DESC' },
             skip: 10,
             take: 20,
@@ -664,7 +701,7 @@ async function main() {
       name: 'Nested find all (include posts)',
       tests: [
         { 
-          orm: 'litedbmodel', 
+          orm: 'litedbmodel (runtime)',
           fn: async () => {
             // Auto batch loading via relation
             const users = await LiteUser.find([], { limit: 100 });
@@ -727,7 +764,7 @@ async function main() {
       name: 'Find first',
       tests: [
         { 
-          orm: 'litedbmodel', 
+          orm: 'litedbmodel (runtime)',
           fn: () => LiteUser.findOne([[`${LiteUser.name} LIKE ?`, 'User%']]) 
         },
         { 
@@ -767,7 +804,7 @@ async function main() {
       name: 'Nested find first (include posts)',
       tests: [
         { 
-          orm: 'litedbmodel', 
+          orm: 'litedbmodel (runtime)',
           fn: async () => {
             const user = await LiteUser.findOne([[`${LiteUser.name} LIKE ?`, 'User%']]);
             if (user) {
@@ -831,7 +868,7 @@ async function main() {
       name: 'Find unique (by email)',
       tests: [
         { 
-          orm: 'litedbmodel', 
+          orm: 'litedbmodel (runtime)',
           fn: () => LiteUser.findOne([[LiteUser.email, 'user500@example.com']]) 
         },
         { 
@@ -867,7 +904,7 @@ async function main() {
       name: 'Nested find unique (include posts)',
       tests: [
         { 
-          orm: 'litedbmodel', 
+          orm: 'litedbmodel (runtime)',
           fn: async () => {
             const user = await LiteUser.findOne([[LiteUser.email, 'user500@example.com']]);
             if (user) {
@@ -929,7 +966,7 @@ async function main() {
       name: 'Create',
       tests: [
         { 
-          orm: 'litedbmodel', 
+          orm: 'litedbmodel (runtime)',
           fn: () => LiteUser.transaction(async () => LiteUser.create([
             [LiteUser.email, `bench${createCounter++}@example.com`],
             [LiteUser.name, `Benchmark User`],
@@ -987,7 +1024,7 @@ async function main() {
       name: 'Nested create (with post)',
       tests: [
         { 
-          orm: 'litedbmodel', 
+          orm: 'litedbmodel (runtime)',
           fn: () => LiteUser.transaction(async () => {
             const result = await LiteUser.create([
               [LiteUser.email, `nested${createCounter++}@example.com`],
@@ -1078,7 +1115,7 @@ async function main() {
       name: 'Update',
       tests: [
         { 
-          orm: 'litedbmodel', 
+          orm: 'litedbmodel (runtime)',
           fn: () => LiteUser.transaction(async () => LiteUser.update([[LiteUser.id, 100]], [[LiteUser.name, 'Updated User']])) 
         },
         { 
@@ -1121,7 +1158,7 @@ async function main() {
       name: 'Nested update (update user + post)',
       tests: [
         { 
-          orm: 'litedbmodel', 
+          orm: 'litedbmodel (runtime)',
           fn: () => LiteUser.transaction(async () => {
             await LiteUser.update([[LiteUser.id, 100]], [[LiteUser.name, 'Nested Updated']]);
             await LitePost.update([[LitePost.author_id, 100]], [[LitePost.title, 'Updated Post']]);
@@ -1183,7 +1220,7 @@ async function main() {
       name: 'Upsert',
       tests: [
         { 
-          orm: 'litedbmodel', 
+          orm: 'litedbmodel (runtime)',
           fn: () => LiteUser.transaction(async () => LiteUser.create(
             [
               [LiteUser.email, `upsert${upsertCounter++}@example.com`],
@@ -1245,7 +1282,7 @@ async function main() {
       name: 'Nested upsert (user + post)',
       tests: [
         { 
-          orm: 'litedbmodel', 
+          orm: 'litedbmodel (runtime)',
           fn: () => LiteUser.transaction(async () => {
             const result = await LiteUser.create(
               [
@@ -1336,7 +1373,7 @@ async function main() {
       name: 'Delete',
       tests: [
         { 
-          orm: 'litedbmodel', 
+          orm: 'litedbmodel (runtime)',
           fn: () => LiteUser.transaction(async () => {
             // First create then delete
             const result = await LiteUser.create([
@@ -1392,7 +1429,7 @@ async function main() {
       name: 'Create Many (10 records)',
       tests: [
         { 
-          orm: 'litedbmodel', 
+          orm: 'litedbmodel (runtime)',
           fn: () => LiteUser.transaction(async () => {
             const records = Array.from({ length: 10 }, (_, i) => [
               [LiteUser.email, `bulk${createCounter++}@example.com`],
@@ -1452,7 +1489,7 @@ async function main() {
       name: 'Upsert Many (10 records)',
       tests: [
         { 
-          orm: 'litedbmodel', 
+          orm: 'litedbmodel (runtime)',
           fn: () => LiteUser.transaction(async () => {
             const records = Array.from({ length: 10 }, (_, i) => [
               [LiteUser.email, `upsertbulk${upsertCounter++}@example.com`],
@@ -1527,7 +1564,7 @@ async function main() {
       name: 'Update Many (10 different values)',
       tests: [
         { 
-          orm: 'litedbmodel', 
+          orm: 'litedbmodel (runtime)',
           fn: () => LiteUser.transaction(async () => {
             // Update 10 users with different names in a single query
             return LiteUser.updateMany(
@@ -1594,7 +1631,7 @@ async function main() {
       name: 'Nested relations (100→1000→10000)',
       tests: [
         { 
-          orm: 'litedbmodel', 
+          orm: 'litedbmodel (runtime)',
           fn: async () => {
             // Fetch first 100 users by ID (they have 10 posts each = 1000 posts)
             const users = await LiteUser.find([], { limit: 100, order: LiteUser.id.asc() });
@@ -1754,7 +1791,7 @@ async function main() {
       name: 'Nested relations (composite key)',
       tests: [
         {
-          orm: 'litedbmodel',
+          orm: 'litedbmodel (runtime)',
           fn: async () => {
             // First 100 tenant_users by user_id (matches the crosslang composite op's selection).
             const users = await LiteTenantUser.find([], { limit: 100, order: LiteTenantUser.user_id.asc() });
@@ -1850,7 +1887,37 @@ async function main() {
       ],
     },
   ];
-  
+
+  // Add the `litedbmodel (codegen)` cell to every category — the SAME op the runtime cell drives, but
+  // through the bc-generated module (`codegenFn`) instead of the imperative DBModel path. One map, so the
+  // two litedbmodel rows are guaranteed to benchmark identical logical work per op.
+  const CATEGORY_TO_OP: Readonly<Record<string, string>> = {
+    'Find all (limit 100)': 'findAll',
+    'Filter, paginate & sort': 'filterPaginateSort',
+    'Nested find all (include posts)': 'nestedFindAll',
+    'Find first': 'findFirst',
+    'Nested find first (include posts)': 'nestedFindFirst',
+    'Find unique (by email)': 'findUnique',
+    'Nested find unique (include posts)': 'nestedFindUnique',
+    'Create': 'create',
+    'Nested create (with post)': 'nestedCreate',
+    'Update': 'update',
+    'Nested update (update user + post)': 'nestedUpdate',
+    'Upsert': 'upsert',
+    'Nested upsert (user + post)': 'nestedUpsert',
+    'Delete': 'delete',
+    'Create Many (10 records)': 'createMany',
+    'Upsert Many (10 records)': 'upsertMany',
+    'Update Many (10 different values)': 'updateMany',
+    'Nested relations (100→1000→10000)': 'nestedRelations',
+    'Nested relations (composite key)': 'compositeRelations',
+  };
+  for (const category of testCategories) {
+    const op = CATEGORY_TO_OP[category.name];
+    if (!op) throw new Error(`benchmark: category '${category.name}' has no codegen op mapping`);
+    category.tests.push({ orm: 'litedbmodel (codegen)', fn: codegenFn(op) });
+  }
+
   // Store all results
   const allResults: Map<string, Map<string, number[]>> = new Map();
   
@@ -1941,8 +2008,8 @@ async function main() {
   console.log('\n' + '='.repeat(100));
   console.log('📋 SUMMARY - Median (ms)');
   console.log('='.repeat(100));
-  console.log('| Operation                       | litedbmodel | Prisma    | Kysely    | Drizzle   | TypeORM   |');
-  console.log('|---------------------------------|-------------|-----------|-----------|-----------|-----------|');
+  console.log('| Operation                       | litedbmodel (runtime) | litedbmodel (codegen) | Prisma      | Kysely      | Drizzle     | TypeORM     |');
+  console.log('|---------------------------------|-----------------------|-----------------------|-------------|-------------|-------------|-------------|');
   
   for (const category of testCategories) {
     const categoryResults = allResults.get(category.name)!;
@@ -1956,14 +2023,14 @@ async function main() {
     
     const fastest = Math.min(...medians.map(m => m.median));
     
-    for (const orm of ['litedbmodel', 'Prisma', 'Kysely', 'Drizzle', 'TypeORM']) {
+    for (const [orm, width] of [['litedbmodel (runtime)', 21], ['litedbmodel (codegen)', 21], ['Prisma', 11], ['Kysely', 11], ['Drizzle', 11], ['TypeORM', 11]] as const) {
       const entry = medians.find(m => m.orm === orm);
       if (entry) {
         const isFastest = entry.median === fastest;
         const val = isFastest ? `**${entry.median.toFixed(2)}ms**` : `${entry.median.toFixed(2)}ms`;
-        row.push(val.padStart(11));
+        row.push(val.padStart(width));
       } else {
-        row.push('-'.padStart(11));
+        row.push('-'.padStart(width));
       }
     }
     
@@ -1981,6 +2048,7 @@ async function main() {
   await DBModel.execute('DELETE FROM benchmark_users WHERE id > 1000');
   
   await closeAllPools();
+  await codegenPool.end();
   await prisma.$disconnect();
   await kyselyPool.end();
   await drizzlePool.end();
