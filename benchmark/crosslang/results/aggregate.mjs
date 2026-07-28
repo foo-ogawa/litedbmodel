@@ -94,7 +94,7 @@ statements and bind params for reads and writes alike.
 
 What the codegen buys is **cross-language**: ONE TypeScript model declaration generates the native module
 for go, rust, python and php too — that is the differentiator this table exists to measure. Within
-TypeScript, `native` (codegen) versus the imperative `runtime` DBModel path is only an execution-mode
+TypeScript, \`native\` (codegen) versus the imperative \`runtime\` DBModel path is only an execution-mode
 choice, not a differentiator, since the authoring language is already TypeScript.
 
 The fixture is the one \`benchmark/setup.ts\` seeds for the ORM-vs-ORM bench — 1,000 users, 5,500 posts,
