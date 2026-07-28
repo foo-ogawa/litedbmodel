@@ -35,7 +35,12 @@ jobs:
         run: echo "npm audit passed. No remediation PR needed."
       - name: Apply lockfile-only audit fix
         if: steps.audit.outcome == 'failure'
-        run: npm audit fix --package-lock-only --ignore-scripts
+        # `npm audit fix` exits 1 whenever any vulnerability remains, at any
+        # severity, so its exit code carries a stricter threshold than this
+        # workflow's gate. The updated lockfile is judged by the gate threshold.
+        run: |
+          npm audit fix --package-lock-only --ignore-scripts || true
+          npm audit --package-lock-only --audit-level=moderate
       - name: Reject package.json changes
         if: steps.audit.outcome == 'failure'
         run: git diff --exit-code -- package.json
