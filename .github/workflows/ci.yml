@@ -22,7 +22,10 @@ jobs:
       - name: Install
         run: npm ci --ignore-scripts
       - name: Audit
-        run: npm audit --audit-level=moderate
+        # Audit the PRODUCTION dependency tree — what actually ships in the package. Dev-only tooling
+        # (typedoc / eslint and their transitive postcss / linkify-it / js-yaml / brace-expansion) is not
+        # published and its advisories are handled by npm-audit-remediate.yml, so it does not gate a release.
+        run: npm audit --omit=dev --audit-level=moderate
       - name: Verify npm signatures
         run: npm audit signatures
       - name: Lint

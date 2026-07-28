@@ -188,7 +188,8 @@ fn n_of(v: &WireValue, key: &str) -> i64 {
             .iter()
             .find(|(k, _)| k == key)
             .map(|(_, val)| match val {
-                WireValue::Num(s) => s.parse::<f64>().map(|f| f as i64).unwrap_or(-1),
+                WireValue::Int(n) => *n,
+                WireValue::Float(f) => *f as i64,
                 WireValue::Str(s) => s.parse().unwrap_or(-1),
                 _ => -1,
             })
@@ -203,7 +204,7 @@ fn str_of(v: &WireValue, key: &str) -> Option<String> {
                 .iter()
                 .find(|(k, _)| k == key)
                 .and_then(|(_, val)| match val {
-                    WireValue::Str(s) => Some(s.clone()),
+                    WireValue::Str(s) => Some(s.to_string()),
                     _ => None,
                 })
         }

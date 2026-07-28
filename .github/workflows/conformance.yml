@@ -146,7 +146,7 @@ jobs:
         if: matrix.lang == 'php'
         run: |
           php -l php/src/Runtime.php
-          php -l php/conformance/vectors_runner.php
+          php -l php/conformance/livedb_runner.php
 
   # ── WS7g (#36): coordinated cross-language LIVE-DB validation (real PG + MySQL) ──
   # Each of Python/Go/PHP/Rust runs the exec/tx bundles compiled for postgres + mysql against a

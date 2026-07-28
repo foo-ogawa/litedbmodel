@@ -36,7 +36,9 @@ use litedbmodel_runtime::{
 fn wire_has(rows: &[WireValue], needle: &str) -> bool {
     fn walk(v: &WireValue, needle: &str) -> bool {
         match v {
-            WireValue::Str(s) | WireValue::Num(s) => s.contains(needle),
+            WireValue::Str(s) => s.contains(needle),
+            WireValue::Int(n) => n.to_string().contains(needle),
+            WireValue::Float(f) => f.to_string().contains(needle),
             WireValue::Bool(b) => b.to_string().contains(needle),
             WireValue::Null => false,
             WireValue::Row(r) => r.entries.iter().any(|(_, c)| walk(c, needle)),
