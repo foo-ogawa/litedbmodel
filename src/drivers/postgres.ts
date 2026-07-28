@@ -8,7 +8,7 @@
 import type { DBConfig, DBDriver, DBDriverOptions, DBConnection, QueryResult, Logger } from './types';
 import { defaultLogger } from './types';
 import { isConnectionError } from '../connection-errors';
-import { configurePgDeboxTypeParsers } from '../scp/makesql/pool-executor';
+import { configurePgDateTextParsers } from '../scp/makesql/pool-executor';
 
 // pg types (loaded dynamically)
 type Pool = import('pg').Pool;
@@ -35,10 +35,13 @@ function getPgModule(): typeof import('pg') {
     }
     // Read de-box (issue #9): register pg type parsers so the DATE/TIMESTAMP/TIMESTAMPTZ/TIME family
     // arrives as its NATIVE TEXTUAL string (carrying TZ) instead of a TZ-shifted JS Date — the form
-    // `materializeCell(_, 'date')` needs. int8 (BIGINT) already arrives as a string on pg. This is a
-    // process-global pg setting (pg exposes parsers only at module scope); set ONCE at module load,
-    // mirroring the v2 SCP `configurePgDeboxTypeParsers`. Idempotent.
-    configurePgDeboxTypeParsers(pgModule!.types);
+    // `materializeCell(_, 'date')` needs. int8 (BIGINT) already arrives as a string on pg, int2/int4 as a
+    // number — both forms the model's materializer accepts, so register the DATE parsers ONLY. This is a
+    // process-GLOBAL pg setting (pg exposes parsers only at module scope), so it must NOT pull in the SCP
+    // codegen leg's int→BigInt parsers (`configurePgDeboxTypeParsers`): that would globally turn every
+    // DBModel INTEGER read (id/count/…) into a raw BigInt, including reads served by the other pool (#181).
+    // Set ONCE at module load. Idempotent.
+    configurePgDateTextParsers(pgModule!.types);
   }
   return pgModule!;
 }
