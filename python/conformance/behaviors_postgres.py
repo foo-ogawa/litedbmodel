@@ -4,14 +4,14 @@
 # native dict literal and handed to the EXISTING runtime core (run_behavior) —
 # no execution logic is generated. Handlers are ALWAYS injected at the boundary
 # (IR + {effects,config,hooks}); they are never generated.
-# irFingerprint: fnv1a64:309babf73a7d2c7a
+# irFingerprint: fnv1a64:0d97e0ff16c58c82
 from behavior_contracts import SPEC_VERSIONS, ProvenanceError, load_compiled_ir, run_behavior
 
 # Spec versions baked at generation time (fail-closed constant comparison at load).
 EXPECTED_SPEC_VERSIONS = {"behavior": 6, "expression": 2, "plan": 1}
 
 # FNV-1a 64 fingerprint of the source portable IR (canonical_json discipline, #208).
-IR_FINGERPRINT = "fnv1a64:309babf73a7d2c7a"
+IR_FINGERPRINT = "fnv1a64:0d97e0ff16c58c82"
 
 # Component names exposed by bind(), in IR declaration order.
 COMPONENT_NAMES = ("posts", "postsTop", "page", "postsByIds", "feed", "usersWithPosts", "postsWithAuthor", "usersWithCappedPosts", "usersWithUncappedPosts", "usersWithTopPosts", "createPost", "renamePost", "removePost", "createPostReturning", "renamePostReturning", "removePostReturning", "restatusPostsReturning", "removePostsByAuthorReturning", "typedRows", "createTags", "removeTags", "createTagsReturning", "relabelTagsReturning", "removeTagsReturning")
@@ -734,7 +734,7 @@ IR_DOC = {
               ]
             },
             "returning": False,
-            "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE conf_posts.author_id = ANY(?::@@PG_ARRAY_CAST@@) ORDER BY id ASC",
+            "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE conf_posts.author_id = ANY(?::int[]) ORDER BY id ASC",
             "write": False
           },
           "wirePassthrough": True
@@ -814,7 +814,7 @@ IR_DOC = {
               ]
             },
             "returning": False,
-            "sql": "SELECT id, post_id, label FROM conf_tags WHERE conf_tags.post_id = ANY(?::@@PG_ARRAY_CAST@@) ORDER BY id ASC",
+            "sql": "SELECT id, post_id, label FROM conf_tags WHERE conf_tags.post_id = ANY(?::int[]) ORDER BY id ASC",
             "write": False
           },
           "wirePassthrough": True
@@ -1195,7 +1195,7 @@ IR_DOC = {
               ]
             },
             "returning": False,
-            "sql": "SELECT id, name, post_count FROM conf_users WHERE conf_users.id = ANY(?::@@PG_ARRAY_CAST@@)",
+            "sql": "SELECT id, name, post_count FROM conf_users WHERE conf_users.id = ANY(?::int[])",
             "write": False
           },
           "wirePassthrough": True
@@ -1493,7 +1493,7 @@ IR_DOC = {
               ]
             },
             "returning": False,
-            "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE conf_posts.author_id = ANY(?::@@PG_ARRAY_CAST@@) ORDER BY id ASC",
+            "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE conf_posts.author_id = ANY(?::int[]) ORDER BY id ASC",
             "whereDynamic": None,
             "write": False
           },
@@ -1771,7 +1771,7 @@ IR_DOC = {
               ]
             },
             "returning": False,
-            "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE conf_posts.author_id = ANY(?::@@PG_ARRAY_CAST@@) ORDER BY id ASC",
+            "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE conf_posts.author_id = ANY(?::int[]) ORDER BY id ASC",
             "write": False
           },
           "wirePassthrough": True
@@ -2048,7 +2048,7 @@ IR_DOC = {
               ]
             },
             "returning": False,
-            "sql": "SELECT conf_posts.* FROM unnest(?::@@PG_ARRAY_CAST@@) AS _keys(key) CROSS JOIN LATERAL (SELECT * FROM conf_posts WHERE conf_posts.author_id = _keys.key ORDER BY id ASC LIMIT 1) conf_posts",
+            "sql": "SELECT conf_posts.* FROM unnest(?::int[]) AS _keys(key) CROSS JOIN LATERAL (SELECT * FROM conf_posts WHERE conf_posts.author_id = _keys.key ORDER BY id ASC LIMIT 1) conf_posts",
             "write": False
           },
           "wirePassthrough": True
