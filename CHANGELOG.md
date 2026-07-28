@@ -5,6 +5,41 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.2.0] - 2026-07-28
+
+**初の安定版 v2。** 2.0.x / 2.1.0 の alpha 線を安定版へ昇格し、npm `latest` を v2 に切り替える
+（v1.2.10 は published のまま `latest` から外れる）。5 言語 conformance + live-DB 検証は緑。
+
+### Added
+
+- **宣言主キー + RETURNING write**（#130）: モデルが主キーを宣言し、RETURNING write が書き込んだ行を
+  取り戻す。MySQL でも RETURNING 相当を返す（RETURNING-strip + 協調 SELECT）。
+- **バッチ write の RETURNING**（#166, #167）: バッチ write が RETURNING を宣言し、各 write は行を
+  キー順に整列して返す。
+- **per-transaction writer override**（#134）: `TransactionOptions` でトランザクション単位に
+  writer-after-tx を上書き可能。
+
+### Changed (BREAKING)
+
+- **bc 0.11.16 追従**（`feat(bc)!` 0.11.9〜）: wire が数値をネイティブに運び、クローンしない。IR/wire の
+  境界型が変わるため、旧生成物は再生成が必要。
+- **複合キー述語 = IN-subquery**（`perf(scp)!` #174）: SQLite でも相関 EXISTS ではなく IN-subquery に統一。
+
+### Fixed
+
+- 遅延 relation 読みで整数が 2^53 を超えると暗黙に丸められていた（#173）。INTEGER 列は
+  PostgreSQL / MySQL で bc の int モデル（BigInt）として読み戻す。
+- relation キー同一性の 5 つの不整合（BigInt キーが throw する等）を修正。
+- bc int（BigInt）write パラメータは raw ノードではなく bc の `{int:"…"}` リテラルで渡す。
+- `closeAllPools()` が SCP 経路の開いたプールを閉じず、consumer プロセスが終了できなかった。
+- codegen 経路で relation の hardLimit を強制（#160）。
+- 複合キー relation バッチが PostgreSQL でも 1 個のキー・タプル param をバインドする（#159）。
+- プール接続の SQL がロガーに届く（全 3 ドライバ）。
+
+### Performance
+
+- relation grouping を、言語が許す各セルでキー化（#138）。
+
 ## [2.0.0] - 2026-07-10
 
 **BREAKING — v2.0 系リリース。** litedbmodel は「独自 ORM」から

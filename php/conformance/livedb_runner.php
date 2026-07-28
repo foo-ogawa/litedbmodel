@@ -3,15 +3,24 @@
 declare(strict_types=1);
 
 /**
- * litedbmodel SCP LIVE-DB conformance — PHP runner (WS7g, #36).
+ * litedbmodel SCP LIVE-DB conformance — the PHP leg (#36 WS7g; leaf/emitter cutover #144).
  *
- * The PHP leg of the coordinated cross-language live-DB pass (spec §10 dialect axis). It loads the
- * WS7g live-DB corpus (conformance/vectors-livedb/livedb.json — the exec/tx bundles compiled for
- * `postgres` + `mysql`), connects to REAL dockerized Postgres + MySQL via the live PDO seam
- * ({@see LiteDbModel\Runtime\LiveDb}), creates the needed tables in an ISOLATED per-language
- * database (scp_php), and runs each bundle through the SAME Runtime::executeBundle /
- * Runtime::executeTransactionBundle the SQLite conformance uses. It asserts the assembled result
- * equals the frozen SQLite reference (expectedResult / expectedDbState) — the §10 promise.
+ * What runs here is the module bc GENERATED for this language from the SAME declaration the TS leg
+ * runs (`conformance/harness.ts` → `emitBehaviorModule` → `bc generate --lang php`, one module per
+ * live dialect, written by `conformance/gen-livedb.ts`). Nothing is replayed from a serialized
+ * bundle: a leaf-executed module needs a LIVE in-process handle, which is exactly why the
+ * recorder-era bundle-replay model is gone.
+ *
+ * The only hand-wiring is the two lines that make the generated module callable — bind the
+ * op-agnostic leaf transport to a live PDO and call the endpoint by name:
+ *
+ *     $ops = ($mod->bind)(Leaves::makeHandlers($pdo, $dialect));
+ *     $ops[$vector['entry']]((array) $vector['input']);
+ *
+ * Every vector is compared against what the TS leg observed on the SAME server for the SAME dialect
+ * (`conformance/vectors-livedb/livedb.json`): the ORDERED statements the leaf handed the driver, the
+ * FULL nested result (relation children and their field values included — a row count is not a
+ * check, #150), and the resulting DB state for a write.
  *
  * REAL DBs, no mock, NO silent skip: if PG/MySQL is unreachable it ERRORS OUT (exit 3). Emits the
  * machine JSON summary as its LAST stdout line:
@@ -27,28 +36,42 @@ require $root . '/php/src/BehaviorContracts/PlanFailure.php';
 require $root . '/php/src/BehaviorContracts/Plan.php';
 require $root . '/php/src/BehaviorContracts/BehaviorFailure.php';
 require $root . '/php/src/BehaviorContracts/Behavior.php';
+require $root . '/php/src/BehaviorContracts/SpecVersions.php';
+require $root . '/php/src/BehaviorContracts/FingerprintFailure.php';
+require $root . '/php/src/BehaviorContracts/Fingerprint.php';
+require $root . '/php/src/BehaviorContracts/ProvenanceError.php';
+require $root . '/php/src/BehaviorContracts/CompiledIr.php';
 require $root . '/php/src/Dialect.php';
 require $root . '/php/src/SqlFailure.php';
+require $root . '/php/src/TxOptions.php';
+require $root . '/php/src/ExecutionContext.php';
+require $root . '/php/src/ConnectionRouting.php';
+require $root . '/php/src/Middleware.php';
 require $root . '/php/src/StaticBundle.php';
-require $root . '/php/src/WriteRuntime.php';
-require $root . '/php/src/Runtime.php';
-require $root . '/php/src/Relation.php';
+require $root . '/php/src/Grouping.php';
+require $root . '/php/src/Leaves.php';
 require $root . '/php/src/LiveDb.php';
 
+use LiteDbModel\Runtime\Leaves;
 use LiteDbModel\Runtime\LiveDb;
-use LiteDbModel\Runtime\Relation;
-use LiteDbModel\Runtime\Runtime;
 
-const SUPPORTED_CORPUS_VERSION = 3;
-const PG_SCHEMA = 'scp_php';
-const MYSQL_DB = 'scp_php';
+/** The corpus schema version this leg supports (harness CORPUS_VERSION — fail-closed). */
+const SUPPORTED_CORPUS_VERSION = 5;
 
 $corpusPath = getenv('LITEDBMODEL_LIVEDB_VECTORS');
 if ($corpusPath === false || $corpusPath === '') {
     $corpusPath = $root . '/conformance/vectors-livedb/livedb.json';
 }
 
-// ── value canon (mirror of vectors_runner.php) ─────────────────────────────────
+// ── canonical comparison ──────────────────────────────────────────────────────
+//
+// Two NUMERIC REPRESENTATIONS of one declared type are folded, and nothing else — a differing VALUE
+// still compares unequal:
+//   - {"$bigint": "N"} is how the TS reference encodes an `int` cell for JSON.
+//   - an INTEGRAL float is the integer it denotes: an int32 column's declared read type IS bc
+//     `float` (src/scp/coltype.ts — "an int32 column materializes to a JS number → bc float"), and
+//     each language renders that ONE declared type in its own numeric model. 10.5 still differs
+//     from 10.
 
 function canonical(mixed $v): mixed
 {
@@ -70,204 +93,202 @@ function canonical(mixed $v): mixed
         foreach ($v as $k => $val) {
             $out[$k] = canonical($val);
         }
-        if (!$isList) {
-            ksort($out);
-            return ['__obj__' => $out];
+        if ($isList) {
+            return $out;
         }
-        return $out;
+        ksort($out);
+        return ['__obj__' => $out];
+    }
+    if (is_float($v) && is_finite($v) && floor($v) === $v) {
+        return (int) $v;
     }
     return $v;
 }
 
+function canonJson(mixed $v): string
+{
+    return (string) json_encode(canonical($v), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+}
+
 function valuesEqual(mixed $a, mixed $b): bool
 {
-    return canonical($a) === canonical($b);
+    return canonJson($a) === canonJson($b);
 }
 
-function inputToScope(mixed $decoded): array
-{
-    if ($decoded instanceof \stdClass) {
-        return get_object_vars($decoded);
-    }
-    return is_array($decoded) ? $decoded : [];
-}
+// ── the statement TAP: what the leaf transport actually handed the driver ─────
+//
+// A SQL-level middleware on the runtime's OWN seam — the sanctioned interception point, and the SAME
+// layer the TS harness taps (`tapSync`/`tapAsyncPool` wrap the connection). What it records is the
+// exact driver-bound form: the dynamic (SKIP) WHERE already assembled, `?`→`$N` already rendered,
+// array params already encoded. Tapping the `\PDOStatement` instead would log the PG live PDO's
+// POST-rewrite text (it turns `$N` back into `?` for PDO_pgsql), which is a driver detail below the
+// contract, and would displace the RETURNING-emulating statement class MySQL needs.
 
-// The tables the corpus touches (drop dependents first).
-const ALL_TABLES = ['post_tags', 'order_lines', 'comments', 'posts', 'tags', 'docs', 'docs2', 'revs', 'typed', 'users', 'users2', 'idem', 'uniq', 'outbox'];
+/** @var list<array{sql: string, params: list<mixed>}> */
+$GLOBALS['STATEMENT_LOG'] = [];
 
-function resetPg(PDO $db, array $schema): void
-{
-    foreach (ALL_TABLES as $t) {
-        $db->exec("DROP TABLE IF EXISTS {$t} CASCADE");
-    }
-    foreach ($schema as $stmt) {
-        $db->exec((string) $stmt);
-    }
-}
-
-function resetMysql(PDO $db, array $schema): void
-{
-    $db->exec('SET FOREIGN_KEY_CHECKS = 0');
-    foreach (ALL_TABLES as $t) {
-        $db->exec("DROP TABLE IF EXISTS {$t}");
-    }
-    $db->exec('SET FOREIGN_KEY_CHECKS = 1');
-    foreach ($schema as $stmt) {
-        $db->exec((string) $stmt);
-    }
-}
-
-/** @return array{ok:bool, detail?:string} */
-function runExec(PDO $db, \stdClass $bundle, \stdClass $v): array
-{
-    $result = Runtime::executeBundle($bundle, inputToScope($v->input), $db);
-    $ok = valuesEqual($result, $v->expectedResult);
-    return $ok ? ['ok' => true] : ['ok' => false, 'detail' => 'result ' . json_encode($result) . ' != ' . json_encode($v->expectedResult)];
-}
+LiteDbModel\Runtime\registerMiddleware(LiteDbModel\Runtime\createMiddleware([
+    'execute' => function (callable $next, string $sql, array $params): mixed {
+        $GLOBALS['STATEMENT_LOG'][] = ['sql' => $sql, 'params' => array_values($params)];
+        return $next($sql, $params);
+    },
+]));
 
 /**
- * A read-RELATION EXECUTION vector: run the parent read + batch-load/hydrate the `with` relations,
- * compare to the PER-DIALECT golden ($expectedKey = expectedResultPg / expectedResultMysql — a
- * limited hasMany's `_rn` window column is present on MySQL but projected away by PG's LATERAL form).
+ * The expected statements AS THIS DRIVER MUST BIND THEM.
  *
- * @return array{ok:bool, detail?:string}
+ * The SQL text is byte-compared verbatim. Only one param form is driver-specific: PDO binds SCALARS
+ * only, so a PostgreSQL array param rides as the `{…}` array-literal TEXT, where node-postgres (the
+ * reference) binds a real array. This is not a looser comparison — the expected array is pushed
+ * through the runtime's OWN encoder ({@see StaticBundle::pgArrayLiteral}, the same SSoT the leaf
+ * binds with), so the assertion is "the leaf bound EXACTLY pgArrayLiteral(expected)". A different
+ * array still fails.
+ *
+ * @param list<object> $statements
+ * @return list<array{sql: string, params: list<mixed>}>
  */
-function runRead(PDO $db, \stdClass $bundle, \stdClass $v, string $expectedKey): array
+function expectedStatementsFor(string $dialect, array $statements): array
 {
-    $withNames = array_map('strval', (array) ($v->with ?? []));
-    $result = Relation::readBundle($bundle, inputToScope($v->input), $db, $withNames);
-    $expected = $v->{$expectedKey};
-    $ok = valuesEqual($result, $expected);
-    return $ok ? ['ok' => true] : ['ok' => false, 'detail' => 'result ' . json_encode($result) . ' != ' . json_encode($expected)];
+    return array_map(static function (object $s) use ($dialect): array {
+        $params = array_map(static function ($p) use ($dialect) {
+            if (!is_array($p)) {
+                return $p;
+            }
+            return $dialect === 'postgres'
+                ? \LiteDbModel\Runtime\StaticBundle::pgArrayLiteral(canonical($p))
+                : $p;
+        }, $s->params);
+        return ['sql' => $s->sql, 'params' => $params];
+    }, $statements);
 }
+
+// ── the generated modules ─────────────────────────────────────────────────────
+
+/** Load `php/conformance/behaviors_<dialect>.php` — `bc generate --lang php` for this dialect. */
+function loadGenerated(string $root, string $dialect): object
+{
+    $path = $root . "/php/conformance/behaviors_{$dialect}.php";
+    if (!is_file($path)) {
+        fwrite(STDERR, "FATAL: {$path} is missing — run `npm run conformance:gen:livedb`\n");
+        exit(2);
+    }
+    return require $path;
+}
+
+// ── one leg ───────────────────────────────────────────────────────────────────
 
 /**
- * A CROSS-DB read-RELATION vector (V0 R1): the parent runs on the PRIMARY $db and a TAGGED relation
- * on the SECONDARY $secondary (the target model's own DB). Seed the secondary DB with its own schema
- * (the parent DB has NO target table — a mis-route would fail loudly), then route the tagged relation
- * via the `connections` registry. A green hydrated result is unforgeable proof the tag routed the
- * batch to the secondary connection.
- *
- * @return array{ok:bool, detail?:string}
+ * @param array<string, callable> $ops
+ * @param array<string, mixed> $vector
+ * @return array{0: bool, 1: string}
  */
-function runCrossDb(PDO $db, PDO $secondary, callable $secondaryReset, \stdClass $bundle, \stdClass $v, string $expectedKey, string $secondarySchemaKey): array
+function runVector(array $ops, \PDO $pdo, array $vector): array
 {
-    $secondaryReset($secondary, array_map('strval', (array) $v->{$secondarySchemaKey}));
-    $withNames = array_map('strval', (array) ($v->with ?? []));
-    $connections = [(string) $v->connectionTag => $secondary];
-    $result = Relation::readBundle($bundle, inputToScope($v->input), $db, $withNames, $connections);
-    $expected = $v->{$expectedKey};
-    $ok = valuesEqual($result, $expected);
-    return $ok ? ['ok' => true] : ['ok' => false, 'detail' => 'result ' . json_encode($result) . ' != ' . json_encode($expected)];
-}
-
-/** @return array{ok:bool, detail?:string} */
-function runTx(PDO $db, \stdClass $bundle, \stdClass $v, string $txExpectedKey): array
-{
-    // A write may GENUINELY diverge by dialect (DELETE…RETURNING returns rows on PG, [] on MySQL);
-    // the mysql leg then carries `expectedResultMysql`. Fall back to the shared `expectedResult`.
-    $expected = isset($v->{$txExpectedKey}) ? $v->{$txExpectedKey} : $v->expectedResult;
-    $result = Runtime::executeTransactionBundle($bundle, inputToScope($v->input), $db);
-    $resultOk = valuesEqual($result, $expected);
-    $stateOk = true;
-    $detail = [];
-    if (!$resultOk) {
-        $detail[] = 'result ' . json_encode($result) . ' != ' . json_encode($expected);
+    $GLOBALS['STATEMENT_LOG'] = [];
+    $result = $ops[$vector['entry']]((array) $vector['input']);
+    $problems = [];
+    $expectedStatements = expectedStatementsFor((string) $vector['dialect'], $vector['expectedStatements']);
+    if (!valuesEqual($GLOBALS['STATEMENT_LOG'], $expectedStatements)) {
+        $problems[] = 'statements ' . canonJson($GLOBALS['STATEMENT_LOG']) . ' != ' . canonJson($expectedStatements);
     }
-    foreach (($v->expectedDbState ?? []) as $s) {
-        $rows = $db->query((string) $s->query)->fetchAll(PDO::FETCH_OBJ);
-        if (!valuesEqual($rows, $s->rows)) {
-            $stateOk = false;
-            $detail[] = "db-state `{$s->query}`: " . json_encode($rows) . ' != ' . json_encode($s->rows);
+    if (!valuesEqual($result, $vector['expectedResult'])) {
+        $problems[] = 'result ' . canonJson($result) . ' != ' . canonJson($vector['expectedResult']);
+    }
+    foreach ($vector['expectedDbState'] ?? [] as $state) {
+        $stmt = $pdo->query($state->query);
+        $got = $stmt === false ? [] : $stmt->fetchAll(\PDO::FETCH_OBJ);
+        if (!valuesEqual($got, $state->rows)) {
+            $problems[] = "db-state '{$state->query}': " . canonJson($got) . ' != ' . canonJson($state->rows);
         }
     }
-    $ok = $resultOk && $stateOk;
-    return $ok ? ['ok' => true] : ['ok' => false, 'detail' => implode('; ', $detail)];
+    return [count($problems) === 0, implode('; ', $problems)];
 }
 
 /**
- * @param array<int,\stdClass> $vectors
- * @return array{pass:int, fail:int}
+ * @param list<object> $vectors
+ * @param list<string> $schema
+ * @return array{pass: int, fail: int}
  */
-function runDialectLeg(string $dialect, PDO $db, callable $reset, array $vectors, string $bundleKey, string $schemaKey, string $readExpectedKey, PDO $secondary, callable $secondaryReset, string $secondarySchemaKey): array
+function runLeg(string $root, string $dialect, \PDO $pdo, array $vectors, array $schema): array
 {
-    $t = ['pass' => 0, 'fail' => 0];
+    $tally = ['pass' => 0, 'fail' => 0];
     fwrite(STDERR, "\nlivedb-{$dialect} — " . count($vectors) . " vectors (real {$dialect})\n");
+    $mod = loadGenerated($root, $dialect);
+    $ops = ($mod->bind)(Leaves::makeHandlers($pdo, $dialect));
     foreach ($vectors as $v) {
-        $kind = (string) $v->kind;
-        // CROSS-DB vectors carry their OWN primary schema key (the parent DB — NO target table).
-        $primarySchemaKey = $kind === 'crossdb' ? ($dialect === 'pg' ? 'primarySchemaPg' : 'primarySchemaMysql') : $schemaKey;
-        $schema = array_map('strval', (array) $v->{$primarySchemaKey});
-        $reset($db, $schema);
-        $bundle = $v->{$bundleKey};
         try {
-            $r = match ($kind) {
-                'exec' => runExec($db, $bundle, $v),
-                'read' => runRead($db, $bundle, $v, $readExpectedKey),
-                'crossdb' => runCrossDb($db, $secondary, $secondaryReset, $bundle, $v, $readExpectedKey, $secondarySchemaKey),
-                'tx' => runTx($db, $bundle, $v, $readExpectedKey),
-                default => ['ok' => false, 'detail' => "unknown kind {$kind}"],
-            };
-        } catch (\Throwable $e) {
-            $r = ['ok' => false, 'detail' => 'threw: ' . $e->getMessage() . "\n" . $e->getTraceAsString()];
+            // Every vector starts from the SAME seeded state the TS leg captured from.
+            foreach ($schema as $stmt) {
+                $pdo->exec($stmt);
+            }
+            [$ok, $detail] = runVector($ops, $pdo, (array) $v);
+        } catch (\Throwable $e) { // a live-DB failure is a vector FAILURE, never a fake pass
+            $ok = false;
+            $detail = 'threw: ' . $e->getMessage();
         }
-        if ($r['ok']) {
-            $t['pass']++;
+        if ($ok) {
+            $tally['pass']++;
             fwrite(STDERR, "  ok  {$v->name}\n");
         } else {
-            $t['fail']++;
-            fwrite(STDERR, "  XX  {$v->name}\n      " . ($r['detail'] ?? '') . "\n");
+            $tally['fail']++;
+            fwrite(STDERR, "  XX  {$v->name}\n      {$detail}\n");
         }
     }
-    return $t;
+    return $tally;
 }
 
-// ── main ───────────────────────────────────────────────────────────────────────
+// ── main ──────────────────────────────────────────────────────────────────────
 
-fwrite(STDERR, "litedbmodel SCP LIVE-DB conformance — PHP runner (real PG + MySQL)\n");
-
-$corpus = json_decode((string) file_get_contents($corpusPath), false);
+fwrite(STDERR, "litedbmodel SCP LIVE-DB conformance — PHP runner (bc-generated modules, real PG + MySQL)\n");
+$corpus = json_decode((string) file_get_contents($corpusPath));
 if (($corpus->corpusVersion ?? null) !== SUPPORTED_CORPUS_VERSION) {
-    fwrite(STDERR, "FAIL-CLOSED: corpusVersion mismatch\n");
-    echo json_encode(['lang' => 'php-livedb', 'suites' => new stdClass(), 'total_pass' => 0, 'total_fail' => 0, 'version_mismatch' => true]) . "\n";
+    fwrite(STDERR, 'FAIL-CLOSED: corpusVersion ' . json_encode($corpus->corpusVersion ?? null) . ' != ' . SUPPORTED_CORPUS_VERSION . "\n");
+    echo json_encode(['lang' => 'php-livedb', 'suites' => (object) [], 'total_pass' => 0, 'total_fail' => 0, 'version_mismatch' => true]), "\n";
     exit(2);
 }
+$schema = array_map('strval', $corpus->schema);
 
-$pgHost = getenv('TEST_DB_HOST') ?: 'localhost';
-$pgPort = (int) (getenv('TEST_DB_PORT') ?: '5433');
-$myHost = getenv('TEST_MYSQL_HOST') ?: '127.0.0.1';
-$myPort = (int) (getenv('TEST_MYSQL_PORT') ?: '3307');
-
+$pdos = [];
 try {
-    // Bootstrap the per-language PG schema on the base testdb, then connect into it.
-    $bootPg = LiveDb::postgres($pgHost, $pgPort, getenv('TEST_DB_USER') ?: 'testuser', getenv('TEST_DB_PASSWORD') ?: 'testpass', getenv('TEST_DB_NAME') ?: 'testdb');
-    $bootPg->exec('CREATE SCHEMA IF NOT EXISTS ' . PG_SCHEMA);
-    $bootPg->exec('SET search_path TO ' . PG_SCHEMA);
-    $pg = $bootPg;
+    $pdos['postgres'] = LiveDb::postgres(
+        getenv('TEST_DB_HOST') ?: 'localhost',
+        (int) (getenv('TEST_DB_PORT') ?: '5433'),
+        getenv('TEST_DB_USER') ?: 'testuser',
+        getenv('TEST_DB_PASSWORD') ?: 'testpass',
+        getenv('TEST_DB_NAME') ?: 'testdb',
+    );
 } catch (\Throwable $e) {
-    fwrite(STDERR, "FATAL: Postgres unreachable at {$pgHost}:{$pgPort} — {$e->getMessage()}\n");
+    fwrite(STDERR, 'FATAL: Postgres unreachable — ' . $e->getMessage() . "\n");
+    exit(3);
+}
+try {
+    $pdos['mysql'] = LiveDb::mysql(
+        getenv('TEST_MYSQL_HOST') ?: '127.0.0.1',
+        (int) (getenv('TEST_MYSQL_PORT') ?: '3307'),
+        getenv('TEST_MYSQL_USER') ?: 'testuser',
+        getenv('TEST_MYSQL_PASSWORD') ?: 'testpass',
+        getenv('TEST_MYSQL_DB') ?: 'testdb',
+    );
+} catch (\Throwable $e) {
+    fwrite(STDERR, 'FATAL: MySQL unreachable — ' . $e->getMessage() . "\n");
     exit(3);
 }
 
-try {
-    // Create the per-language MySQL database, then connect into it.
-    $bootMy = LiveDb::mysql($myHost, $myPort, getenv('TEST_MYSQL_USER') ?: 'testuser', getenv('TEST_MYSQL_PASSWORD') ?: 'testpass', getenv('TEST_MYSQL_DB') ?: 'testdb');
-    $bootMy->exec('CREATE DATABASE IF NOT EXISTS ' . MYSQL_DB);
-    $my = LiveDb::mysql($myHost, $myPort, getenv('TEST_MYSQL_USER') ?: 'testuser', getenv('TEST_MYSQL_PASSWORD') ?: 'testpass', MYSQL_DB);
-} catch (\Throwable $e) {
-    fwrite(STDERR, "FATAL: MySQL unreachable at {$myHost}:{$myPort} — {$e->getMessage()}\n");
-    exit(3);
+$suites = [];
+foreach (['postgres' => 'livedb-pg', 'mysql' => 'livedb-mysql'] as $dialect => $suite) {
+    $pdo = $pdos[$dialect];
+    $vectors = array_values(array_filter($corpus->vectors, static fn ($v) => $v->dialect === $dialect));
+    $suites[$suite] = runLeg($root, $dialect, $pdo, $vectors, $schema);
 }
 
-$vectors = $corpus->vectors;
-// CROSS-DB (V0 R1): each leg's SECONDARY connection is the OTHER live DB (pg leg → my; mysql leg →
-// pg), reset with the OTHER dialect's reset fn + the vector's per-leg secondary schema.
-$pgT = runDialectLeg('pg', $pg, 'resetPg', $vectors, 'bundlePg', 'schemaPg', 'expectedResultPg', $my, 'resetMysql', 'secondarySchemaPg');
-$myT = runDialectLeg('mysql', $my, 'resetMysql', $vectors, 'bundleMysql', 'schemaMysql', 'expectedResultMysql', $pg, 'resetPg', 'secondarySchemaMysql');
-
-$suites = ['livedb-pg' => $pgT, 'livedb-mysql' => $myT];
-$totalPass = $pgT['pass'] + $myT['pass'];
-$totalFail = $pgT['fail'] + $myT['fail'];
+$totalPass = array_sum(array_column($suites, 'pass'));
+$totalFail = array_sum(array_column($suites, 'fail'));
 fwrite(STDERR, "\n{$totalPass} passed, {$totalFail} failed / " . ($totalPass + $totalFail) . " live-DB vectors\n");
-echo json_encode(['lang' => 'php-livedb', 'suites' => $suites, 'total_pass' => $totalPass, 'total_fail' => $totalFail, 'version_mismatch' => false]) . "\n";
+echo json_encode([
+    'lang' => 'php-livedb',
+    'suites' => $suites,
+    'total_pass' => $totalPass,
+    'total_fail' => $totalFail,
+    'version_mismatch' => false,
+]), "\n";
 exit($totalFail > 0 ? 1 : 0);

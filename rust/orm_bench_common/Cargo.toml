@@ -1,0 +1,17 @@
+# Shared bench-cell setup for the two rust ORM-bench cells (orm_bench = native, orm_bench_sdk = SDK
+# baseline) — the rust twin of `go/lm_bench/setup`. It holds the ONE seed-SSoT loader and the ONE
+# TEST_*-env connection builder, which both cells had copied verbatim.
+#
+# Deliberately NOT a member of the rust/ workspace (like the two cells): it must never perturb the
+# conformance bar's build or lock. It depends on NOTHING but serde_json, so the SDK cell can consume
+# it without pulling litedbmodel_runtime into the raw-driver baseline (#157 invariant 6).
+[workspace]
+
+[package]
+name = "orm_bench_common"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+serde_json = "1"

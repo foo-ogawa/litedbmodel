@@ -14,6 +14,71 @@ const config = {
   password: process.env.DB_PASSWORD || 'testpass',
 };
 
+/**
+ * Seed the general graph (users → posts → comments) — the tables the write ops mutate. Assumes an empty,
+ * identity-reset set of tables (SERIAL ids come out 1..N). The tenant graph is seeded separately (once)
+ * because no bench op writes it.
+ */
+export async function seedGeneralGraph(pool: pg.Pool): Promise<void> {
+  const NUM_USERS = 1000; // Base users for general benchmarks
+  const POSTS_PER_USER = 5;
+  const NESTED_USERS = 100; // nested relation benchmark (first 100 users)
+  const NESTED_POSTS_PER_USER = 10; // 100 * 10 = 1000 posts
+  const COMMENTS_PER_POST = 10; // 1000 * 10 = 10000 comments
+
+  const userValues: string[] = [];
+  for (let i = 1; i <= NUM_USERS; i++) userValues.push(`('user${i}@example.com', 'User ${i}')`);
+  await pool.query(`INSERT INTO benchmark_users (email, name) VALUES ${userValues.join(', ')}`);
+
+  const generalPostValues: string[] = [];
+  let postId = 1;
+  for (let userId = NESTED_USERS + 1; userId <= NUM_USERS; userId++) {
+    for (let p = 1; p <= POSTS_PER_USER; p++) {
+      const published = postId % 3 === 0 ? '1' : '0';
+      generalPostValues.push(`('Post ${postId}', 'Content for post ${postId}', ${published}, ${userId})`);
+      postId++;
+    }
+  }
+  const nestedPostValues: string[] = [];
+  const nestedPostStartId = postId;
+  for (let userId = 1; userId <= NESTED_USERS; userId++) {
+    for (let p = 1; p <= NESTED_POSTS_PER_USER; p++) {
+      const published = postId % 3 === 0 ? '1' : '0';
+      nestedPostValues.push(`('Nested Post ${postId}', 'Content for nested post ${postId}', ${published}, ${userId})`);
+      postId++;
+    }
+  }
+  if (generalPostValues.length > 0) {
+    await pool.query(`INSERT INTO benchmark_posts (title, content, published, author_id) VALUES ${generalPostValues.join(', ')}`);
+  }
+  await pool.query(`INSERT INTO benchmark_posts (title, content, published, author_id) VALUES ${nestedPostValues.join(', ')}`);
+
+  const COMMENT_BATCH_SIZE = 1000;
+  const totalNestedPosts = NESTED_USERS * NESTED_POSTS_PER_USER;
+  for (let batch = 0; batch < (totalNestedPosts * COMMENTS_PER_POST) / COMMENT_BATCH_SIZE; batch++) {
+    const commentValues: string[] = [];
+    const startComment = batch * COMMENT_BATCH_SIZE;
+    const endComment = Math.min(startComment + COMMENT_BATCH_SIZE, totalNestedPosts * COMMENTS_PER_POST);
+    for (let i = startComment; i < endComment; i++) {
+      const belongsToPost = nestedPostStartId + Math.floor(i / COMMENTS_PER_POST);
+      commentValues.push(`('Comment ${i + 1} for post ${belongsToPost}', ${belongsToPost})`);
+    }
+    await pool.query(`INSERT INTO benchmark_comments (body, post_id) VALUES ${commentValues.join(', ')}`);
+  }
+}
+
+/**
+ * Reset the general graph to its exact seeded state, for a per-op clean fixture (the crosslang cells do
+ * this too). TRUNCATE … RESTART IDENTITY so re-seeded SERIAL ids come out 1..N again (an op that targets
+ * `id = 100` keeps working); CASCADE drops posts/comments. The tenant graph does NOT reference these
+ * tables, so it is untouched. Re-ANALYZE so the optimizer sees fresh stats (not empty-table stats).
+ */
+export async function resetGeneralGraph(pool: pg.Pool): Promise<void> {
+  await pool.query('TRUNCATE benchmark_comments, benchmark_posts, benchmark_users RESTART IDENTITY CASCADE');
+  await seedGeneralGraph(pool);
+  await pool.query('ANALYZE benchmark_users, benchmark_posts, benchmark_comments');
+}
+
 async function setup() {
   const pool = new pg.Pool(config);
   
@@ -42,7 +107,7 @@ async function setup() {
       id SERIAL PRIMARY KEY,
       title VARCHAR(255) NOT NULL,
       content TEXT,
-      published BOOLEAN DEFAULT false,
+      published SMALLINT DEFAULT 0,
       author_id INTEGER REFERENCES benchmark_users(id) ON DELETE CASCADE,
       created_at TIMESTAMP DEFAULT NOW()
     );
@@ -97,90 +162,10 @@ async function setup() {
   
   console.log('Tables created successfully');
   
-  // Insert seed data for read benchmarks
-  // Structure for nested relation benchmark:
-  // 100 users → 1000 posts (10 per user) → 10000 comments (10 per post)
-  console.log('Inserting seed data...');
-  
-  const NUM_USERS = 1000;  // Base users for general benchmarks
-  const POSTS_PER_USER = 5;
-  
-  // For nested relation benchmark (first 100 users)
-  const NESTED_USERS = 100;
-  const NESTED_POSTS_PER_USER = 10;  // 100 * 10 = 1000 posts
-  const COMMENTS_PER_POST = 10;      // 1000 * 10 = 10000 comments
-  
-  // Insert users
-  console.log(`Inserting ${NUM_USERS} users...`);
-  const userValues: string[] = [];
-  for (let i = 1; i <= NUM_USERS; i++) {
-    userValues.push(`('user${i}@example.com', 'User ${i}')`);
-  }
-  await pool.query(`
-    INSERT INTO benchmark_users (email, name) VALUES ${userValues.join(', ')}
-  `);
-  
-  // Insert posts for general benchmark (5 posts per user for users 101-1000)
-  console.log(`Inserting posts for general benchmarks...`);
-  const generalPostValues: string[] = [];
-  let postId = 1;
-  for (let userId = NESTED_USERS + 1; userId <= NUM_USERS; userId++) {
-    for (let p = 1; p <= POSTS_PER_USER; p++) {
-      const published = postId % 3 === 0 ? 'true' : 'false';
-      generalPostValues.push(`('Post ${postId}', 'Content for post ${postId}', ${published}, ${userId})`);
-      postId++;
-    }
-  }
-  
-  // Insert posts for nested relation benchmark (10 posts per user for first 100 users)
-  console.log(`Inserting ${NESTED_USERS * NESTED_POSTS_PER_USER} posts for nested benchmark...`);
-  const nestedPostValues: string[] = [];
-  const nestedPostStartId = postId;
-  for (let userId = 1; userId <= NESTED_USERS; userId++) {
-    for (let p = 1; p <= NESTED_POSTS_PER_USER; p++) {
-      const published = postId % 3 === 0 ? 'true' : 'false';
-      nestedPostValues.push(`('Nested Post ${postId}', 'Content for nested post ${postId}', ${published}, ${userId})`);
-      postId++;
-    }
-  }
-  
-  // Insert all posts
-  if (generalPostValues.length > 0) {
-    await pool.query(`
-      INSERT INTO benchmark_posts (title, content, published, author_id) VALUES ${generalPostValues.join(', ')}
-    `);
-  }
-  await pool.query(`
-    INSERT INTO benchmark_posts (title, content, published, author_id) VALUES ${nestedPostValues.join(', ')}
-  `);
-  
-  // Insert comments for nested relation benchmark (10 comments per post for first 1000 posts)
-  console.log(`Inserting ${NESTED_USERS * NESTED_POSTS_PER_USER * COMMENTS_PER_POST} comments...`);
-  const COMMENT_BATCH_SIZE = 1000;
-  const totalNestedPosts = NESTED_USERS * NESTED_POSTS_PER_USER;
-  
-  for (let batch = 0; batch < (totalNestedPosts * COMMENTS_PER_POST) / COMMENT_BATCH_SIZE; batch++) {
-    const commentValues: string[] = [];
-    const startComment = batch * COMMENT_BATCH_SIZE;
-    const endComment = Math.min(startComment + COMMENT_BATCH_SIZE, totalNestedPosts * COMMENTS_PER_POST);
-    
-    for (let i = startComment; i < endComment; i++) {
-      const belongsToPost = nestedPostStartId + Math.floor(i / COMMENTS_PER_POST);
-      commentValues.push(`('Comment ${i + 1} for post ${belongsToPost}', ${belongsToPost})`);
-    }
-    
-    await pool.query(`
-      INSERT INTO benchmark_comments (body, post_id) VALUES ${commentValues.join(', ')}
-    `);
-    
-    if ((batch + 1) % 5 === 0) {
-      console.log(`  Inserted ${endComment} comments...`);
-    }
-  }
-  
-  const totalPosts = generalPostValues.length + nestedPostValues.length;
-  const totalComments = NESTED_USERS * NESTED_POSTS_PER_USER * COMMENTS_PER_POST;
-  console.log(`Seed data inserted: ${NUM_USERS} users, ${totalPosts} posts, ${totalComments} comments`);
+  // General graph (users → posts → comments) — the tables the write ops mutate. Shared with the
+  // per-op reset in benchmark.ts via seedGeneralGraph (SSoT).
+  console.log('Inserting seed data (general graph)...');
+  await seedGeneralGraph(pool);
   
   // Insert composite key data for multi-key relation benchmark
   // 10 tenants × 100 users × 10 posts = 10000 posts
@@ -231,7 +216,10 @@ async function setup() {
   // A query using only post_id IN (1,2,3) would match posts from ALL tenants!
   console.log('Inserting tenant comments (multi-tenant, post_id repeats per tenant)...');
   const COMMENTS_PER_TENANT_POST = 10;
-  const TENANTS_FOR_COMMENTS = 5;  // Use tenants 1-5
+  const TENANTS_FOR_COMMENTS = NUM_TENANTS;  // EVERY tenant carries comments — matches the cross-lang
+  // fixture (orm-domain.ts) so the two benches hold identical record counts (100000 tenant_comments).
+  // With comments uniform across tenants, the composite op's `tenant_id IN (1..5)` is an ordinary
+  // tenant scope, not a filter shaped around which tenants happen to have comments.
   const POSTS_PER_TENANT = USERS_PER_TENANT * POSTS_PER_TENANT_USER; // 1000 posts per tenant
   
   const tenantCommentValues: string[] = [];
@@ -253,7 +241,15 @@ async function setup() {
   }
   
   console.log(`Composite key data: ${NUM_TENANTS} tenants, ${NUM_TENANTS * USERS_PER_TENANT} tenant_users, ${tenantPostValues.length} tenant_posts, ${tenantCommentValues.length} tenant_comments (across ${TENANTS_FOR_COMMENTS} tenants)`);
-  
+
+  // Refresh planner statistics after the bulk load. The indexes above were created on empty tables, so
+  // the optimizer's stats are stale until analyzed, and a relation query can pick a scan over the index —
+  // the same fair-conditions step the crosslang v2 fixture applies (benchmark/crosslang/orm-domain.ts
+  // analyzeStatements). It runs once here, benefits every ORM equally (they share these tables), and
+  // matches what a real deployment has (pg_restore / autovacuum keep stats current).
+  console.log('Analyzing tables (refresh planner statistics)...');
+  await pool.query('ANALYZE benchmark_users, benchmark_posts, benchmark_comments, benchmark_tenants, benchmark_tenant_users, benchmark_tenant_posts, benchmark_tenant_comments');
+
   // Verify data
   const userCount = await pool.query('SELECT COUNT(*) FROM benchmark_users');
   const postCount = await pool.query('SELECT COUNT(*) FROM benchmark_posts');
@@ -263,4 +259,8 @@ async function setup() {
   console.log('Setup complete!');
 }
 
-setup().catch(console.error);
+// Run the full setup only when executed directly (`tsx benchmark/setup.ts`). benchmark.ts imports the
+// exported seedGeneralGraph / resetGeneralGraph for its per-op reset and must NOT re-run setup on import.
+if (process.argv[1]?.endsWith('setup.ts')) {
+  setup().catch(console.error);
+}

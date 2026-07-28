@@ -7,14 +7,17 @@
  * wrapped so vitest resolves the ESM-only behavior-contracts from source. The frozen corpus it
  * writes is then asserted byte-true + green by `test/scp/conformance-vectors.test.ts`.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterAll } from 'vitest';
+import { closeLiveConnections } from './harness';
 import { writeCorpus } from './gen-vectors';
 
 describe('conformance corpus generation (WS7a)', () => {
-  it('writes the vector corpus from the TS reference', () => {
-    const written = writeCorpus();
+  afterAll(closeLiveConnections);
+
+  it('writes the vector corpus from the TS reference', async () => {
+    const written = await writeCorpus();
     expect(written.length).toBeGreaterThan(0);
     // eslint-disable-next-line no-console
     console.log(`wrote ${written.length} suite files:\n  ${written.join('\n  ')}`);
-  });
+  }, 300_000);
 });

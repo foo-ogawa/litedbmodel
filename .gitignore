@@ -8,6 +8,16 @@ dist/
 .codegen-conf-*/
 .codegen-out-*/
 
+# The cross-lang bench fixture, rendered from benchmark/crosslang/orm-domain.ts by emit-setup.ts. It is
+# ~8 MB of literal INSERTs and is re-rendered whenever the fixture is re-scaled, so it is generated on
+# demand (run-cells.sh checks that the emitted scale is the one the run claims to measure).
+benchmark/crosslang/.setup/
+
+# The conformance harness's emitted + bc-generated modules (rebuilt from the declarations on demand)
+conformance/.generated/
+# The live-DB leg's emitted SCP TS (bc reads it to generate the language modules; regenerated on demand)
+conformance/.generated-livedb/
+
 # IDE
 .idea/
 .vscode/
@@ -44,6 +54,8 @@ benchmark/node_modules/
 
 # Language runtime build artifacts (WS7 multi-language scaffold)
 rust/target/
+# The E1 proof crate is a standalone workspace, so it builds into its OWN target/ (not rust/target/).
+rust/e1_native_proof/target/
 go/bin/
 php/vendor/
 php/composer.lock
@@ -59,3 +71,11 @@ python/build/
 .playwright-mcp/
 /*.png
 /go/lm_bench/lm_orm/lm_orm
+
+# emitter end-to-end scratch (the test writes the emitted + generated modules inside the repo so they
+# resolve node_modules, then removes the dir; this catches a crashed run's leftovers)
+/.emit-e2e-*
+/.probe/
+
+# Compiled output of the TypeScript bench cell (benchmark/crosslang/ts-cell, built by tsc).
+benchmark/crosslang-build/

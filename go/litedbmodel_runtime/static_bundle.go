@@ -46,7 +46,20 @@ type ReadGraph struct {
 	IR               bc.JNode              // the surrogate ComponentGraphIR ({irVersion, exprVersion, components})
 	StatementsByID   map[string][]bc.JNode // nodeId → ordered StaticStatement templates
 	OptionalHeads    []string
-	primaryComponent *bc.JObj // components[0] (for input normalization + primary-node lookup)
+	FindGuard        *FindGuard // Phase E-2 (#74): post-fetch runaway cap on the primary read node (nil ⇒ no check)
+	primaryComponent *bc.JObj   // components[0] (for input normalization + primary-node lookup)
+}
+
+// FindGuard is the baked post-fetch hard-limit metadata (readGraph.findGuard; Phase E-2, epic #74).
+// The read injects `LIMIT HardLimit + 1` into the primary node's statements at compile, so a fetched
+// row count > HardLimit means the TRUE total exceeds the cap. When present, the native walker checks
+// the primary node's row count AFTER fetch and throws LimitExceededError (context "find"). Absent
+// (nil) ⇒ NO check (disabled / uncapped path — the artifact carries no findGuard). Caps come from the
+// ARTIFACT ONLY (no config surface).
+type FindGuard struct {
+	HardLimit int    // the row cap; a primary-node fetch of MORE than this throws
+	NodeID    string // the body-node id of the primary read node whose row count is checked
+	Model     string // the read model (LimitExceededError.Model)
 }
 
 // ReadGraphFromJObj parses a readGraph object (from a bundle or a render vector) into a ReadGraph.
@@ -88,7 +101,30 @@ func ReadGraphFromJObj(obj *bc.JObj) (*ReadGraph, error) {
 			}
 		}
 	}
+	// Phase E-2 (#74): the baked post-fetch find guard. Absent ⇒ nil ⇒ no check (uncapped path).
+	if fgN, ok := obj.Get("findGuard"); ok {
+		if fg, ok := fgN.(*bc.JObj); ok {
+			g.FindGuard = &FindGuard{
+				HardLimit: int(getIntJ(fg, "hardLimit")),
+				NodeID:    getStrJ(fg, "nodeId"),
+				Model:     getStrJ(fg, "model"),
+			}
+		}
+	}
 	return g, nil
+}
+
+// getIntJ reads an integer field off a parsed JObj (nil-safe, 0 if absent/non-int). Used for the
+// baked hard-limit caps (Phase E-2). The corpus stores these as plain JSON numbers.
+func getIntJ(o *bc.JObj, k string) int64 {
+	if v, ok := o.Get(k); ok {
+		if dv, err := bc.DecodeValue(v); err == nil {
+			if i, ok := dv.(int64); ok {
+				return i
+			}
+		}
+	}
+	return 0
 }
 
 // ── makeSQL assembly (port of makesql.ts assembleMakeSQL / composeMakeSQL) ─────
@@ -280,6 +316,39 @@ func resolvePgArrayCast(sql string, values []bc.Value) string {
 	return sql[:at] + inferPgArrayType(values) + sql[at+len(pgArrayCastToken):]
 }
 
+// finalizeSQL runs the render-layer steps that can only happen once a statement's SQL text AND its
+// bound params are final (spec §8): resolve each deferred PG array-cast token from the array param
+// that fills it, left-to-right, then rewrite `?` → `$N`. `arrays` is the ordered list of ARRAY-valued
+// binds — one per cast token, in the order the tokens appear; pass nil when a statement binds none.
+//
+// EVERY execution path renders through here so none can silently skip a step. The v1 relation path,
+// the IR bundle path and the native leaf transport each used to open-code this, and the leaf copy was
+// missing the cast resolution entirely — every relation child read on PG died with
+// `syntax error at or near "@@"`.
+// arrayBinds picks the ARRAY-valued binds out of a driver param list, in order — the arrays that fill
+// the deferred cast tokens (each postgres __jsonArray param resolves exactly one token).
+func arrayBinds(params []bc.Value) [][]bc.Value {
+	var out [][]bc.Value
+	for _, p := range params {
+		if arr, ok := p.([]bc.Value); ok {
+			out = append(out, arr)
+		}
+	}
+	return out
+}
+
+func finalizeSQL(sql string, arrays [][]bc.Value, dialectName string) string {
+	if dialectName == "postgres" {
+		for _, a := range arrays {
+			if !strings.Contains(sql, pgArrayCastToken) {
+				break
+			}
+			sql = resolvePgArrayCast(sql, a)
+		}
+	}
+	return renderPlaceholders(sql, dialectName)
+}
+
 // ── Statement-list render (port of static-bundle.ts renderStatements) ──────────
 
 // renderStatements evaluates a list of static statement templates against a scope → final SQL +
@@ -330,25 +399,13 @@ func renderStatements(statements []bc.JNode, dialectName string, scope *bc.Obj) 
 				}
 			}
 		}
-		// Resolve any deferred PG array cast (#46) from the bound array param, left-to-right —
-		// each postgres __jsonArray param resolves exactly one cast token in order.
-		if dialectName == "postgres" {
-			for _, p := range params {
-				if arr, ok := p.([]bc.Value); ok {
-					if !strings.Contains(sqlText, pgArrayCastToken) {
-						break
-					}
-					sqlText = resolvePgArrayCast(sqlText, arr)
-				}
-			}
-		}
 		nodes = append(nodes, makeSQLNode{sql: sqlText, params: params})
 	}
 	sql, params, err := composeMakeSQL(nodes)
 	if err != nil {
 		return Rendered{}, err
 	}
-	return Rendered{SQL: renderPlaceholders(sql, dialectName), Params: params}, nil
+	return Rendered{SQL: finalizeSQL(sql, arrayBinds(params), dialectName), Params: params}, nil
 }
 
 // ── Input normalization (SSoT-driven — mirrors TS normalizeInput) ─────────────
@@ -435,7 +492,17 @@ func (g *ReadGraph) primaryNodeID() (string, error) {
 // (ExecCtx above). Exported so the codegen bench cell's generated-module handler runs the SAME
 // render+execute the interpreter handler runs — the ONLY difference being that the generated
 // de-interpreted module (NOT RunBehavior) drives the call. Byte-identical rows to the ir path.
+//
+// Backward-compat wrapper (§6): wraps `db` in a thin ExecutionContext and delegates to the
+// ctx-threaded core, so an existing caller passing a raw db keeps its byte-identical behavior.
 func RenderExecuteNode(g *ReadGraph, nodeID, dialect string, scope *bc.Obj, db SQLDB) ([]bc.Value, error) {
+	return renderExecuteNodeCtx(ContextForDB(db), g, nodeID, dialect, scope)
+}
+
+// renderExecuteNodeCtx renders ONE read node's static statements and runs REAL SQL through the
+// CENTRAL SEAM (§2): renderStatements → Execute(ctx, …, ReadIntent) → the resolved connection. This
+// is the ctx-threaded core; RenderExecuteNode is the backward-compat wrapper.
+func renderExecuteNodeCtx(ctx *ExecutionContext, g *ReadGraph, nodeID, dialect string, scope *bc.Obj) ([]bc.Value, error) {
 	stmts, ok := g.StatementsByID[nodeID]
 	if !ok {
 		return nil, fmt.Errorf("static-bundle: no statements for node '%s'", nodeID)
@@ -448,7 +515,7 @@ func RenderExecuteNode(g *ReadGraph, nodeID, dialect string, scope *bc.Obj, db S
 	for i, p := range rendered.Params {
 		args[i] = toDriverParam(p)
 	}
-	rows, qerr := queryRows(db, rendered.SQL, args)
+	rows, qerr := Execute(ctx, rendered.SQL, args, ReadIntent())
 	if qerr != nil {
 		return nil, mapSqliteError(qerr)
 	}
@@ -456,7 +523,7 @@ func RenderExecuteNode(g *ReadGraph, nodeID, dialect string, scope *bc.Obj, db S
 }
 
 // PrimaryNodeID exposes the read graph's primary render node id (the SELECT relations map over) so
-// the codegen bench cell's handler can render it. Exported companion to RenderExecuteNode.
+// the codegen bench cell's handler can render it. Exported counterpart to RenderExecuteNode.
 func (g *ReadGraph) PrimaryNodeID() (string, error) { return g.primaryNodeID() }
 
 // ExecuteReadGraph executes a compiled ReadGraph NATIVELY (no bc RunBehavior / no IR interpreter):
@@ -467,9 +534,18 @@ func (g *ReadGraph) PrimaryNodeID() (string, error) { return g.primaryNodeID() }
 // Every statement's SQL is fixed text carried verbatim; only the deferred typed param slots + skip are
 // evaluated. Byte-identical to the former RunBehavior path for the closed read-graph shapes the
 // makeSQL corpus emits (single sequential componentRef reads + a single relationKind:single map).
+//
+// Backward-compat wrapper (§6): wraps `db` in a thin ExecutionContext and delegates to the
+// ctx-threaded core, so an existing caller passing a raw db keeps its byte-identical behavior.
 func ExecuteReadGraph(g *ReadGraph, input *bc.Obj, db SQLDB) (bc.Value, error) {
+	return executeReadGraphCtx(ContextForDB(db), g, input)
+}
+
+// executeReadGraphCtx is the ctx-threaded core of ExecuteReadGraph: normalize the input, then run the
+// native walker over the [ExecutionContext] (every SQL through the central seam).
+func executeReadGraphCtx(ctx *ExecutionContext, g *ReadGraph, input *bc.Obj) (bc.Value, error) {
 	normalized := normalizeReadGraphInput(g, input)
-	out, err := executeReadGraphNative(g, normalized, db)
+	out, err := executeReadGraphNative(ctx, g, normalized)
 	if err != nil {
 		return nil, reErrorToSqlFailure(err)
 	}
@@ -482,7 +558,7 @@ func ExecuteReadGraph(g *ReadGraph, input *bc.Obj, db SQLDB) (bc.Value, error) {
 // Expression IR (the per-statement param slots are still evaluated natively by renderStatements, the
 // typed-param-binding contract). Fail-closed: an out-of-set body node / output ref panics-equivalent
 // (returns an error) rather than silently degrading.
-func executeReadGraphNative(g *ReadGraph, scope *bc.Obj, db SQLDB) (bc.Value, error) {
+func executeReadGraphNative(ctx *ExecutionContext, g *ReadGraph, scope *bc.Obj) (bc.Value, error) {
 	comp := g.primaryComponent
 	if comp == nil {
 		return nil, fmt.Errorf("static-bundle: read graph has no component")
@@ -538,7 +614,7 @@ func executeReadGraphNative(g *ReadGraph, scope *bc.Obj, db SQLDB) (bc.Value, er
 					elemScope.Set(k, scope.Vals[k])
 				}
 				elemScope.Set(asVar, pr)
-				childRows, err := RenderExecuteNode(g, id, g.Dialect, elemScope, db)
+				childRows, err := renderExecuteNodeCtx(ctx, g, id, g.Dialect, elemScope)
 				if err != nil {
 					return err
 				}
@@ -551,8 +627,16 @@ func executeReadGraphNative(g *ReadGraph, scope *bc.Obj, db SQLDB) (bc.Value, er
 		if _, has := g.StatementsByID[id]; !has {
 			return fmt.Errorf("static-bundle: read graph body node '%s' has no static statements (out-of-set shape)", id)
 		}
-		rows, err := RenderExecuteNode(g, id, g.Dialect, scope, db)
+		rows, err := renderExecuteNodeCtx(ctx, g, id, g.Dialect, scope)
 		if err != nil {
+			return err
+		}
+		// Phase E-2 (#74): post-fetch hard-limit runaway guard. When the baked findGuard targets THIS
+		// node and its fetched row list is longer than the cap, throw LimitExceededError (context
+		// "find"). The read injected `LIMIT hardLimit + 1` at compile, so a length of hardLimit + 1
+		// means the TRUE total exceeds the cap (the reported count = the N+1 fetch size). A no-op for
+		// every other node / an uncapped graph. Same check the TS reference (assertFindGuard) runs.
+		if err := assertFindGuard(g, id, rows); err != nil {
 			return err
 		}
 		setResult(id, bc.Value(rows))
@@ -572,6 +656,29 @@ func executeReadGraphNative(g *ReadGraph, scope *bc.Obj, db SQLDB) (bc.Value, er
 	}
 
 	return assembleReadOutput(comp, nodeResults)
+}
+
+// assertFindGuard is the post-fetch hard-limit runaway guard (Phase E-2, epic #74; v1 DBModel find
+// hard-limit — port of the TS assertFindGuard). When g.FindGuard targets nodeID and the fetched row
+// list is longer than the cap, it returns a *LimitExceededError (context "find"). The read injected
+// `LIMIT hardLimit + 1` at compile, so a length of hardLimit + 1 means the TRUE total exceeds the cap
+// (the reported count is the N+1 fetch size). A no-op for every other node / an uncapped graph
+// (g.FindGuard nil). Caps come from the ARTIFACT ONLY (no config surface). The SAME check the
+// rust/py/php ports run off the same findGuard field.
+func assertFindGuard(g *ReadGraph, nodeID string, rows []bc.Value) error {
+	guard := g.FindGuard
+	if guard == nil || guard.NodeID != nodeID {
+		return nil
+	}
+	if len(rows) > guard.HardLimit {
+		return &LimitExceededError{
+			Limit:   guard.HardLimit,
+			Count:   len(rows),
+			Context: LimitContextFind,
+			Model:   guard.Model,
+		}
+	}
+	return nil
 }
 
 // readPlan extracts the component's staged exec plan: the ordered index groups + the concurrency

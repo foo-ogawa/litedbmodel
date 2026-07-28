@@ -1,76 +1,69 @@
 // ════════════════════════════════════════════════════════════════════════════
-// Cross-language benchmark adapter CONTRACT (litedbmodel epic #63)
+// Cross-language benchmark CASE/DIALECT CONSTANTS — the axis SSoT
 // ════════════════════════════════════════════════════════════════════════════
 //
-// SINGLE source of truth for the subprocess protocol every language adapter
-// (TS / Python / PHP / Rust / Go) implements. The cross-language harness
-// (harness.ts) spawns ONE production cell per language, speaks this line-delimited
-// JSON (NDJSON) protocol over stdin/stdout, and aggregates the returned metrics.
+// SINGLE source of truth for the axes every language runs: the 19 ORM-comparison
+// ops (== the v1 SQL golden == v2 SCP parity == benchmark.ts litedbmodel
+// column) × the three real dialects. Each language executes the SAME ops driver-
+// included on all three real DBs (SQLite in-proc, MySQL :3307, PostgreSQL :5433).
 //
-// ONE production path (epic #63): each language's THIN GENERIC RUNTIME executes the
-// SAME 19 ORM-comparison ops (== the #64 v1 SQL golden == #65 v2 SCP parity ==
-// benchmark.ts litedbmodel column), driver-included, DB-backed on all three real
-// dialects. There is NO impl axis (the old sql/codegen/ir/dynamic/prepared surfaces)
-// and NO I/O-excluded micro/mock axis — both are gone (V8-JIT/timing-confounded and
-// off the production path).
+// There is NO wire protocol. Each language is a STANDALONE process that runs all 19
+// ops × 3 dialects, self-measures, and writes a flat CSV
+// (`cell,dialect,op,iter,us,rows`) to benchmark/crosslang/results/. `run-cells.sh` is
+// the reproducible run; `results/aggregate.mjs` renders the report from those CSVs.
 //
-// Wire format: the harness writes ONE request object per line to the child's stdin
-// and reads ONE response object per line from its stdout. stderr is diagnostics. The
-// FIRST stdout line a fresh child writes MUST be `ready`. A child exits 0 on `shutdown`.
+// This file is pure constants — the op/dialect axes only. It carries NO SQL and NO
+// artifact: the per-op, per-dialect SQL is emitted by BC codegen as native literals
+// (see benchmark/crosslang/REBUILD.md, epic #107). It must never import a baked-SQL
+// plan artifact.
 
-import { ORM_OP_IDS, ORM_OP_LABEL, ORM_WRITE_OP_IDS, ORM_DIALECTS, type OrmDialect } from './orm-plan.js';
+// ── Dialects (the three real targets) ─────────────────────────────────────────
+export const ORM_DIALECTS = ['sqlite', 'mysql', 'postgres'] as const;
+export type OrmDialect = (typeof ORM_DIALECTS)[number];
+
+// ── The 19 ORM ops (== benchmark.ts testCategories) ─
+// Order + labels mirror benchmark/benchmark.ts exactly. `write` marks the ops whose
+// logical op mutates (they run inside a transaction: BEGIN … COMMIT).
+export interface OrmOpMeta {
+  readonly id: string; // stable slug (protocol id)
+  readonly label: string; // the human label (== benchmark.ts / golden op key)
+  readonly write: boolean;
+}
+
+export const ORM_OPS: readonly OrmOpMeta[] = [
+  { id: 'findAll', label: 'Find all (limit 100)', write: false },
+  { id: 'filterPaginateSort', label: 'Filter, paginate & sort', write: false },
+  { id: 'nestedFindAll', label: 'Nested find all (include posts)', write: false },
+  { id: 'findFirst', label: 'Find first', write: false },
+  { id: 'nestedFindFirst', label: 'Nested find first (include posts)', write: false },
+  { id: 'findUnique', label: 'Find unique (by email)', write: false },
+  { id: 'nestedFindUnique', label: 'Nested find unique (include posts)', write: false },
+  { id: 'create', label: 'Create', write: true },
+  { id: 'nestedCreate', label: 'Nested create (with post)', write: true },
+  { id: 'update', label: 'Update', write: true },
+  { id: 'nestedUpdate', label: 'Nested update (update user + post)', write: true },
+  { id: 'upsert', label: 'Upsert', write: true },
+  { id: 'nestedUpsert', label: 'Nested upsert (user + post)', write: true },
+  { id: 'delete', label: 'Delete', write: true },
+  { id: 'createMany', label: 'Create Many (10 records)', write: true },
+  { id: 'upsertMany', label: 'Upsert Many (10 records)', write: true },
+  { id: 'updateMany', label: 'Update Many (10 different values)', write: true },
+  { id: 'nestedRelations', label: 'Nested relations (100->1000->10000)', write: false },
+  { id: 'compositeRelations', label: 'Nested relations (composite key, 5 tenants)', write: false },
+] as const;
+
+export const ORM_OP_IDS: readonly string[] = ORM_OPS.map((o) => o.id);
+export const ORM_WRITE_OP_IDS: ReadonlySet<string> = new Set(ORM_OPS.filter((o) => o.write).map((o) => o.id));
+export const ORM_OP_LABEL: Record<string, string> = Object.fromEntries(ORM_OPS.map((o) => [o.id, o.label]));
 
 // ── The op axis — the 19 ORM-comparison ops (no subset) ──────────────────────
 export const CROSSLANG_CASE_IDS = ORM_OP_IDS;
 export type CrosslangCaseId = string;
 export const CROSSLANG_CASE_LABELS: Record<string, string> = ORM_OP_LABEL;
 
-// Ops whose logical op is a WRITE (the harness asserts queries/op parity for these,
-// rows/op parity for reads).
+// Ops whose logical op is a WRITE (the report tags these `W`, reads `R`).
 export const CROSSLANG_WRITE_CASES: ReadonlySet<string> = ORM_WRITE_OP_IDS;
 
 // ── The dialect axis (the three real targets) ────────────────────────────────
 export const CROSSLANG_DIALECTS = ORM_DIALECTS;
 export type CrosslangDialect = OrmDialect;
-
-// ── Protocol messages (harness → child) ──────────────────────────────────────
-// Every case-scoped request carries the target `dialect`: the child runs the op's plan
-// (from the shared orm-plan.json artifact) against the matching REAL database.
-export type Request =
-  | { kind: 'run'; case: CrosslangCaseId; dialect: CrosslangDialect; warmup: number; iterations: number }
-  | { kind: 'throughput'; case: CrosslangCaseId; dialect: CrosslangDialect; iterations: number; concurrency: number }
-  | { kind: 'cost'; case: CrosslangCaseId; dialect: CrosslangDialect }
-  | { kind: 'rss' }
-  | { kind: 'shutdown' };
-
-// ── Protocol messages (child → harness) ──────────────────────────────────────
-// A `skipped` response is an HONEST per-cell "did not run" (e.g. a language with no live
-// PG driver, or an op a language genuinely cannot run) — rendered as an explicit note,
-// never silently dropped.
-export type Response =
-  | { kind: 'ready'; language: string; impl: string; readyAtEpochMs: number }
-  | { kind: 'run'; case: CrosslangCaseId; dialect: CrosslangDialect; samplesMs: number[] }
-  | { kind: 'throughput'; case: CrosslangCaseId; dialect: CrosslangDialect; elapsedMs: number; completed: number }
-  | { kind: 'cost'; case: CrosslangCaseId; dialect: CrosslangDialect; queries: number; rows: number }
-  | { kind: 'rss'; rssBytes: number }
-  | { kind: 'skipped'; case: string; dialect: CrosslangDialect; reason: string }
-  | { kind: 'error'; message: string; stack?: string };
-
-// ── Serialization helpers (shared by harness AND the TS adapter) ─────────────
-export function encodeMessage(msg: Request | Response): string {
-  return JSON.stringify(msg) + '\n';
-}
-
-export function decodeMessages<T>(buffer: string): { messages: T[]; rest: string } {
-  const messages: T[] = [];
-  let rest = buffer;
-  let idx = rest.indexOf('\n');
-  while (idx !== -1) {
-    const line = rest.slice(0, idx);
-    rest = rest.slice(idx + 1);
-    const trimmed = line.trim();
-    if (trimmed.length > 0) messages.push(JSON.parse(trimmed) as T);
-    idx = rest.indexOf('\n');
-  }
-  return { messages, rest };
-}

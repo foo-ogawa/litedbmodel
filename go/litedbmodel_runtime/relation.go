@@ -15,8 +15,8 @@
 package litedbmodel_runtime
 
 import (
+	"context"
 	"fmt"
-	"strings"
 
 	bc "github.com/foo-ogawa/behavior-contracts/go"
 )
@@ -36,30 +36,55 @@ func errRelationNotDeclared(name string) error {
 // RelationOp is the pre-compiled STATIC batch op read out of bundle.relations[name] (pure JSON).
 // Single-key relations carry ParentKey/TargetKey; composite (#47 item 1) carry ParentKeys/TargetKeys.
 type RelationOp struct {
-	Name       string
-	Kind       string // "belongsTo" | "hasMany" | "hasOne"
-	ParentKey  string
-	TargetKey  string
-	ParentKeys []string // composite: ordered parent key columns (nil for single-key)
-	TargetKeys []string // composite: ordered child key columns (nil for single-key)
-	Dialect    string
-	Connection string // CROSS-DB (V0 R1): the target model's connection tag (empty for same-DB)
-	SQL        string
+	Name        string
+	Kind        string // "belongsTo" | "hasMany" | "hasOne"
+	ParentKey   string
+	TargetKey   string
+	ParentKeys  []string // composite: ordered parent key columns (nil for single-key)
+	TargetKeys  []string // composite: ordered child key columns (nil for single-key)
+	Dialect     string
+	Connection  string // CROSS-DB (V0 R1): the target model's connection tag (empty for same-DB)
+	SQL         string
+	TargetTable string // the child (target) table name — the LimitExceededError.Model for a relation
+	// HardLimit is the baked per-batch runaway cap (Phase E-2, epic #74; v1 _selectForRelation
+	// hasManyHardLimit): when the batch fetches MORE than this TOTAL, runRelationOp throws
+	// LimitExceededError (context "relation", EXACT count). nil ⇒ NO check (disabled, or an
+	// intrinsic per-parent LIMIT-window relation whose fanout is already bounded — the artifact omits
+	// the field). Caps come from the ARTIFACT ONLY (no config surface).
+	HardLimit *int
 }
 
 // relationOpFromJObj reads one bundle.relations entry into a RelationOp.
 func relationOpFromJObj(o *bc.JObj) RelationOp {
 	return RelationOp{
-		Name:       getStrJ(o, "name"),
-		Kind:       getStrJ(o, "kind"),
-		ParentKey:  getStrJ(o, "parentKey"),
-		TargetKey:  getStrJ(o, "targetKey"),
-		ParentKeys: getStrArrJ(o, "parentKeys"),
-		TargetKeys: getStrArrJ(o, "targetKeys"),
-		Dialect:    getStrJ(o, "dialect"),
-		Connection: getStrJ(o, "connection"),
-		SQL:        getStrJ(o, "sql"),
+		Name:        getStrJ(o, "name"),
+		Kind:        getStrJ(o, "kind"),
+		ParentKey:   getStrJ(o, "parentKey"),
+		TargetKey:   getStrJ(o, "targetKey"),
+		ParentKeys:  getStrArrJ(o, "parentKeys"),
+		TargetKeys:  getStrArrJ(o, "targetKeys"),
+		Dialect:     getStrJ(o, "dialect"),
+		Connection:  getStrJ(o, "connection"),
+		SQL:         getStrJ(o, "sql"),
+		TargetTable: getStrJ(o, "targetTable"),
+		HardLimit:   optIntJ(o, "hardLimit"),
 	}
+}
+
+// optIntJ reads an OPTIONAL integer field off a parsed JObj, returning nil when the key is absent (so
+// a present cap of 0 stays distinct from "no cap"). Used for the baked relation hard-limit (Phase E-2).
+func optIntJ(o *bc.JObj, k string) *int {
+	v, ok := o.Get(k)
+	if !ok {
+		return nil
+	}
+	if dv, err := bc.DecodeValue(v); err == nil {
+		if i, ok := dv.(int64); ok {
+			n := int(i)
+			return &n
+		}
+	}
+	return nil
 }
 
 func getStrJ(o *bc.JObj, k string) string {
@@ -103,182 +128,100 @@ func (op RelationOp) targetKeyCols() []string {
 	return []string{op.TargetKey}
 }
 
-// keyIdentity is the stringified key identity for dedupe/grouping (tuple → space-joined scalars).
-func keyIdentity(values []bc.Value) string {
-	parts := make([]string, len(values))
-	for i, v := range values {
-		parts[i] = stringifyKey(v)
-	}
-	return strings.Join(parts, " ")
-}
+// The key-identity + dedupe + group + attach primitives are the SHARED grouping CORE (grouping.go) —
+// the SINGLE source of truth this lazy/declarative path and the native leaf transport (leaf_transport.go)
+// both consume: KeyIdentity / DedupeKeyTuples / GroupByKey / AttachToParent (no duplicated grouping).
 
-// stringifyKey mirrors TS `String(v)` for the key-identity used by dedupe + grouping. A whole
-// float prints as an integer (a scanned int column arrives as float64), bool → "true"/"false".
-func stringifyKey(v bc.Value) string {
-	switch t := v.(type) {
-	case nil:
-		return "null"
-	case bool:
-		if t {
-			return "true"
-		}
-		return "false"
-	case string:
-		return t
-	case float64:
-		return encodeFloat(t)
-	case int64:
-		return encodeFloat(float64(t))
-	default:
-		return jsStringify(v)
-	}
-}
-
-// dedupeKeys returns the deduped, non-nil parent-key TUPLES (insertion order preserved). Drop a
-// tuple if ANY key column is nil; dedupe on the stringified tuple identity. Port of TS dedupeKeys.
-func dedupeKeys(parents []bc.Value, keyCols []string) [][]bc.Value {
-	seen := map[string]struct{}{}
-	out := [][]bc.Value{}
-	for _, p := range parents {
-		obj, ok := p.(*bc.Obj)
-		if !ok {
-			continue
-		}
-		tuple := make([]bc.Value, len(keyCols))
-		anyNil := false
-		for i, c := range keyCols {
-			v, present := obj.Get(c)
-			if !present || v == nil {
-				anyNil = true
-				break
-			}
-			tuple[i] = v
-		}
-		if anyNil {
-			continue
-		}
-		s := keyIdentity(tuple)
-		if _, dup := seen[s]; dup {
-			continue
-		}
-		seen[s] = struct{}{}
-		out = append(out, tuple)
-	}
-	return out
-}
-
-// bindKeys binds the deduped keys to the op's params per dialect + arity (TS bindKeys). Single-key:
-// PG → ONE scalar array param; MySQL/SQLite → ONE JSON scalar-array string. Composite: PG → ONE
-// array param PER key column (transposed tuples); MySQL/SQLite → ONE JSON array-of-tuples string.
-// Returns the positional args list.
+// bindKeys binds the deduped keys to the op's params per dialect + arity (TS bindKeys). Composite:
+// ONE JSON array-of-tuples string on EVERY dialect (#159) — PostgreSQL expands it server-side with
+// json_array_elements, so the key set crosses as one param whatever its length and whatever its
+// arity. Single-key: PG -> ONE scalar array param; MySQL/SQLite -> ONE JSON scalar-array string.
 func bindKeys(op RelationOp, tuples [][]bc.Value) []any {
-	composite := op.ParentKeys != nil
-	if op.Dialect == "postgres" {
-		nCols := 1
-		if composite {
-			nCols = len(op.parentKeyCols())
-		}
-		args := make([]any, nCols)
-		for col := 0; col < nCols; col++ {
-			colArr := make([]any, len(tuples))
-			for i, t := range tuples {
-				colArr[i] = toDriverParam(t[col])
-			}
-			args[col] = colArr
-		}
-		return args
-	}
-	// MySQL/SQLite: ONE JSON param — a scalar array (single-key) or an array-of-tuples (composite).
-	var payload []bc.Value
-	if composite {
-		payload = make([]bc.Value, len(tuples))
+	if op.ParentKeys != nil {
+		payload := make([]bc.Value, len(tuples))
 		for i, t := range tuples {
 			payload[i] = bc.Value([]bc.Value(t))
 		}
-	} else {
-		payload = make([]bc.Value, len(tuples))
+		return []any{jsStringify(bc.Value(payload))}
+	}
+	if op.Dialect == "postgres" {
+		colArr := make([]any, len(tuples))
 		for i, t := range tuples {
-			payload[i] = t[0]
+			colArr[i] = toDriverParam(t[0])
 		}
+		return []any{colArr}
+	}
+	payload := make([]bc.Value, len(tuples))
+	for i, t := range tuples {
+		payload[i] = t[0]
 	}
 	return []any{jsStringify(bc.Value(payload))}
 }
 
 // RelationBatch is the child rows grouped for a batch: stringified target-key identity → child rows.
-type RelationBatch map[string][]bc.Value
+type RelationBatch map[keyID][]bc.Value
 
 // RunRelationOp runs ONE relation batch op for a set of parent rows (port of TS runRelationOp).
 // Dedup the parent-key tuples, resolve the deferred PG array cast(s) from the REAL keys (one per key
 // column for composite) BEFORE the `?`→`$N` render; on a NON-empty key set execute binding the keys
 // (single array / per-column arrays / JSON tuples) and group the child rows by target-key identity.
 // An EMPTY key set issues NO query, matching TS.
+//
+// Backward-compat wrapper (§6): wraps `db` in a thin ExecutionContext and delegates to the
+// ctx-threaded core, so an existing caller passing a raw db keeps its byte-identical behavior.
 func RunRelationOp(op RelationOp, parents []bc.Value, db SQLDB) (RelationBatch, error) {
+	return runRelationOpCtx(ContextForDB(db), op, parents)
+}
+
+// runRelationOpCtx runs ONE relation batch op through the CENTRAL SEAM (§2): the batched child SELECT
+// funnels through Execute(ctx, …, ReadIntent) — the resolved connection is the tx-owned one when the
+// relation runs inside a tx-scoped ctx, else the primary db. This is the ctx-threaded core.
+func runRelationOpCtx(ctx *ExecutionContext, op RelationOp, parents []bc.Value) (RelationBatch, error) {
 	pCols := op.parentKeyCols()
-	keys := dedupeKeys(parents, pCols)
+	keys := DedupeKeyTuples(parents, pCols)
 	batch := RelationBatch{}
 	sqlText := op.SQL
+	var castArrays [][]bc.Value
 	if op.Dialect == "postgres" {
 		for col := range pCols {
 			colVals := make([]bc.Value, len(keys))
 			for i, t := range keys {
 				colVals[i] = t[col]
 			}
-			sqlText = resolvePgArrayCast(sqlText, colVals)
+			castArrays = append(castArrays, colVals)
 		}
 	}
-	sqlText = renderPlaceholders(sqlText, op.Dialect)
+	sqlText = finalizeSQL(sqlText, castArrays, op.Dialect)
 	if len(keys) == 0 {
 		return batch, nil
 	}
 	tCols := op.targetKeyCols()
-	rows, err := queryRows(db, sqlText, bindKeys(op, keys))
+	rows, err := Execute(ctx, sqlText, bindKeys(op, keys), ReadIntent())
 	if err != nil {
 		return nil, err
 	}
-	for _, r := range rows {
-		obj, ok := r.(*bc.Obj)
-		if !ok {
-			continue
+	// Phase E-2 (#74): post-fetch hard-limit runaway guard. When the batch TOTAL exceeds the baked
+	// cap, throw with the EXACT count (the batch is fetched in full, no N+1) BEFORE grouping/hydration
+	// so an over-cap read never assembles an unbounded result set. Field mapping: Model = the relation
+	// TARGET TABLE, Relation = the relation name. Absent op.HardLimit ⇒ disabled / intrinsic-limit
+	// relation ⇒ no check. One guard point → both eager (ReadBundle) and lazy (StitchRelation). The
+	// SAME check the TS reference (runRelationOp) + the rust/py/php ports run off the same field.
+	if op.HardLimit != nil {
+		if err := checkHardLimit(*op.HardLimit, len(rows), LimitContextRelation, op.TargetTable, op.Name); err != nil {
+			return nil, err
 		}
-		tuple := make([]bc.Value, len(tCols))
-		for i, c := range tCols {
-			tuple[i], _ = obj.Get(c)
-		}
-		k := keyIdentity(tuple)
-		batch[k] = append(batch[k], r)
 	}
+	// Group the fetched child rows by their target-key tuple identity via the shared CORE (GroupByKey).
+	batch = GroupByKey(rows, tCols)
 	return batch, nil
 }
 
 // DistributeToParent distributes a resolved batch onto ONE parent per cardinality (port of TS
 // distributeToParent): hasMany → the child list ([] when none); belongsTo/hasOne → the single child
-// (or nil). Keyed by the parent's key-tuple identity.
+// (or nil), keyed by the parent's key-tuple identity. Delegates to the shared CORE (AttachToParent) —
+// `single` = a non-hasMany cardinality (belongsTo/hasOne).
 func DistributeToParent(op RelationOp, parent *bc.Obj, batch RelationBatch) bc.Value {
-	var rows []bc.Value
-	pCols := op.parentKeyCols()
-	tuple := make([]bc.Value, len(pCols))
-	anyNil := false
-	for i, c := range pCols {
-		v, ok := parent.Get(c)
-		if !ok || v == nil {
-			anyNil = true
-			break
-		}
-		tuple[i] = v
-	}
-	if !anyNil {
-		rows = batch[keyIdentity(tuple)]
-	}
-	if op.Kind == "hasMany" {
-		if rows == nil {
-			return []bc.Value{}
-		}
-		return rows
-	}
-	if len(rows) > 0 {
-		return rows[0]
-	}
-	return nil
+	return AttachToParent(parent, op.parentKeyCols(), batch, op.Kind != "hasMany")
 }
 
 // driverForOp returns the driver a relation runs against: its tagged cross-DB connection, else the
@@ -311,11 +254,11 @@ func driverForOp(op RelationOp, db SQLDB, connections map[string]SQLDB) (SQLDB, 
 // reimplemented grouping — the semantics stay single-sourced here). `opJObj` is the relation op as
 // it appears under bundle.relations[name] (pure JSON, bc-ordered). The public seam the codegen bench
 // cell uses: it runs the GENERATED de-interpreted module for the primary read (its own distinct code
-// entry — NOT ExecuteBundle), then hydrates the companion relation through this shared stitch so the
+// entry — NOT ExecuteBundle), then hydrates the related rows through this shared stitch so the
 // hydrated result is byte-identical to ReadBundle's.
 func StitchRelation(opJObj *bc.JObj, parents []bc.Value, db SQLDB) ([]bc.Value, error) {
 	op := relationOpFromJObj(opJObj)
-	batch, err := RunRelationOp(op, parents, db)
+	batch, err := runRelationOpCtx(ContextForDB(db), op, parents)
 	if err != nil {
 		return nil, err
 	}
@@ -328,7 +271,24 @@ func StitchRelation(opJObj *bc.JObj, parents []bc.Value, db SQLDB) ([]bc.Value, 
 }
 
 func ReadBundle(bundle *SqlBundle, relations *bc.JObj, input *bc.Obj, db SQLDB, withNames []string, connections map[string]SQLDB) (bc.Value, error) {
-	out, err := ExecuteBundle(bundle, input, db)
+	return ReadBundleCtx(context.Background(), bundle, relations, input, db, withNames, connections)
+}
+
+// ReadBundleCtx is [ReadBundle] riding a caller-supplied (Phase D scoped) context.Context: the primary
+// read AND every relation-batch SELECT funnel through an [ExecutionContext] whose middleware chain
+// resolves THAT context's scope registry ([ContextForDBCtx]). A middleware registered inside a
+// [WithMiddlewareScope] therefore observes BOTH the primary read and the relation-batch SQL (the
+// end-to-end relation coverage the #92 reference asserts). A cross-DB relation derives a distinct ctx
+// over its tagged connection but shares the SAME scoped Go context, so its batch is intercepted too.
+// With no middleware registered the chain is empty ⇒ byte-identical to [ReadBundle].
+func ReadBundleCtx(goCtx context.Context, bundle *SqlBundle, relations *bc.JObj, input *bc.Obj, db SQLDB, withNames []string, connections map[string]SQLDB) (bc.Value, error) {
+	if goCtx == nil {
+		goCtx = context.Background()
+	}
+	// One ExecutionContext for the primary read; a cross-DB relation derives a distinct ctx over its
+	// tagged connection (§6), sharing the scoped Go context so its batch is intercepted too.
+	primaryCtx := ContextForDBCtx(goCtx, db)
+	out, err := executeBundleCtx(primaryCtx, bundle, input)
 	if err != nil {
 		return nil, err
 	}
@@ -350,7 +310,11 @@ func ReadBundle(bundle *SqlBundle, relations *bc.JObj, input *bc.Obj, db SQLDB, 
 		if err != nil {
 			return nil, err
 		}
-		batch, err := RunRelationOp(op, rows, relDB)
+		relCtx := primaryCtx
+		if relDB != db {
+			relCtx = ContextForDBCtx(goCtx, relDB)
+		}
+		batch, err := runRelationOpCtx(relCtx, op, rows)
 		if err != nil {
 			return nil, err
 		}

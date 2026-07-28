@@ -12,7 +12,7 @@
  * this handler + the compile that emits the SQL text.
  */
 
-import type { Handler, HandlerCtx, Value } from 'behavior-contracts';
+import type { Handler, HandlerCtx, Value } from 'behavior-contracts/runtime';
 import { assembleMakeSQL, type MakeSQL, type AssembledSql } from './makesql';
 
 /** A driver seam: run an already-rendered `{ sql, params }` and return result rows. */

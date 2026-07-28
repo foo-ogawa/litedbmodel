@@ -13,20 +13,41 @@
 export type BcScalar = 'string' | 'int' | 'float' | 'bool' | 'null';
 
 /**
+ * SQL 型トークンを基底型名へ正規化する SSoT（`sqlTypeToBcScalar` / `sqlTypeToMaterializeClass` が共有）。
+ * 括弧のサイズ/精度と、型判定に無関係な列修飾（`UNSIGNED`/`ZEROFILL`/`PRECISION` と NULL 可否
+ * `NOT NULL`/`NULL`）を落として基底型名だけを残す。NULL 可否は {@link sqlTypeIsNotNull} が別に読む
+ * （型スカラと直交する — nullability は outType の `opt` ラップの有無、基底スカラではない）。
+ */
+export function normalizeSqlTypeToken(sqlType: string): string {
+  return sqlType
+    .trim()
+    .toUpperCase()
+    .replace(/\(.*\)/, '')
+    .replace(/\b(UNSIGNED|ZEROFILL|PRECISION|NOT\s+NULL|NULL)\b/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * 宣言された SQL 型が `NOT NULL` 制約を持つか（`static columns` は列制約を型トークンに書ける）。
+ * `true` の列は読み出しセルが非 null 確定 → 読み outType は `opt` ラップ無しの生スカラ（RETURNING の
+ * 主キーのような非 null 値を value 位置で消費できる — spec §4.1 の nullability）。既定（無指定）は
+ * nullable（ドライバ列は NULL を返し得る）。
+ */
+export function sqlTypeIsNotNull(sqlType: string): boolean {
+  return /\bNOT\s+NULL\b/i.test(sqlType);
+}
+
+/**
  * SQL 型（DDL のトークン。`DECIMAL(10,2)` 等の括弧やサイズは無視）→ bc outType スカラ。
  * spec §4.1 の正規表に一致。未知/曖昧は throw（fail-closed）。
  */
 export function sqlTypeToBcScalar(sqlType: string): BcScalar {
-  // 括弧のサイズ/精度・`UNSIGNED` 等の修飾を落として基底型名で判定。
-  const t = sqlType
-    .trim()
-    .toUpperCase()
-    .replace(/\(.*\)/, '')
-    .replace(/\b(UNSIGNED|ZEROFILL|PRECISION)\b/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
+  const t = normalizeSqlTypeToken(sqlType);
   switch (t) {
     // int は既定 64bit(i64)。INTEGER も BIGINT も int（bigint を別型にしない — サイズ制限は列制約で表現）。
+    // PostgreSQL の SERIAL/SERIAL4/BIGSERIAL/SERIAL8/SMALLSERIAL/SERIAL2（auto-increment 疑似型）も
+    // 基底は整数（int4 / int8）で、read 型は plain integer。
     case 'INTEGER':
     case 'INT':
     case 'BIGINT':
@@ -36,6 +57,12 @@ export function sqlTypeToBcScalar(sqlType: string): BcScalar {
     case 'INT2':
     case 'INT4':
     case 'INT8':
+    case 'SERIAL':
+    case 'SERIAL4':
+    case 'BIGSERIAL':
+    case 'SERIAL8':
+    case 'SMALLSERIAL':
+    case 'SERIAL2':
       return 'int';
     // int と real は明確に分離。
     case 'REAL':
@@ -115,16 +142,26 @@ export type MaterializeClass = 'int32' | 'int64' | 'date' | 'bool' | 'passthroug
  * `int` scalar splits int32/int64 by width; `date`/`bool` get their own class; everything else is
  * `passthrough`.
  */
+export function arrayElementType(sqlType: string): string | null {
+  const m = /^(.+?)\s*\[\s*\]$/.exec(normalizeSqlTypeToken(sqlType));
+  return m === null ? null : m[1].trim();
+}
+
 export function sqlTypeToMaterializeClass(sqlType: string): MaterializeClass {
-  const t = sqlType
-    .trim()
-    .toUpperCase()
-    .replace(/\(.*\)/, '')
-    .replace(/\b(UNSIGNED|ZEROFILL|PRECISION)\b/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
+  const t = normalizeSqlTypeToken(sqlType);
+  // An ARRAY column (`TEXT[]` / `INT[]` / `NUMERIC[]` / `BOOLEAN[]` / `TIMESTAMP[]` / …) de-boxes as
+  // `passthrough`: the driver's own array typeCast already parses the wire form into a JS array whose
+  // ELEMENTS match the declared element outType, so the read path leaves the value unchanged (no
+  // per-cell coercion — a scalar materialize class does not apply to a whole list). The element base
+  // type is still validated (an unknown element type on a DECLARED array column is a hard error too).
+  const element = arrayElementType(t);
+  if (element !== null) {
+    sqlTypeToMaterializeClass(element); // validate the element base type (throws if unknown)
+    return 'passthrough';
+  }
   switch (t) {
-    // 32-bit int family: JS number holds the full range exactly.
+    // 32-bit int family: JS number holds the full range exactly. The PostgreSQL SERIAL family maps to
+    // its underlying int width (SERIAL/SERIAL4=int4, SMALLSERIAL/SERIAL2=int2).
     case 'INTEGER':
     case 'INT':
     case 'SMALLINT':
@@ -132,10 +169,16 @@ export function sqlTypeToMaterializeClass(sqlType: string): MaterializeClass {
     case 'MEDIUMINT':
     case 'INT2':
     case 'INT4':
+    case 'SERIAL':
+    case 'SERIAL4':
+    case 'SMALLSERIAL':
+    case 'SERIAL2':
       return 'int32';
     // 64-bit int: needs JS bigint for exactness.
     case 'BIGINT':
     case 'INT8':
+    case 'BIGSERIAL':
+    case 'SERIAL8':
       return 'int64';
     case 'BOOLEAN':
     case 'BOOL':
@@ -171,6 +214,30 @@ export function sqlTypeToMaterializeClass(sqlType: string): MaterializeClass {
           `(normalized '${t}'). Add it to the §4.1 table or fix the column — ambiguous/unknown types ` +
           `are a hard error (no-assume, no-fallback), never defaulted.`,
       );
+  }
+}
+
+/**
+ * The bc scalar of a de-boxed READ KEY value — the element type a relation key-array (`pluck` → `.as`)
+ * carries when it is bound to `= ANY($1)` / `json_each(?)` (#141, spec §4.1). A key array is an opaque
+ * transport value list, so its bc element tag is the JS type of the READ-materialized key cell, NOT the
+ * column's `sqlTypeToBcScalar` outType: an `int32` column materializes to a JS `number` (bc `float`),
+ * a `BIGINT`/`int64` to a decimal STRING (bc `string`), a `date` to a string, a `bool` to a boolean.
+ * Derived by composing {@link sqlTypeToMaterializeClass} (the read de-box class) with the base scalar,
+ * so it stays the SINGLE type-system SoT — no hand-rolled type table at the relation call site.
+ */
+export function keyArrayElemScalar(sqlType: string): BcScalar {
+  switch (sqlTypeToMaterializeClass(sqlType)) {
+    case 'int32':
+      return 'float'; // materializes to a JS number → bc float
+    case 'int64':
+    case 'date':
+      return 'string'; // materializes to a decimal / TZ string → bc string
+    case 'bool':
+      return 'bool';
+    case 'passthrough':
+      // float stays a JS number (bc float); text / uuid / decimal-as-string / json are all bc string.
+      return sqlTypeToBcScalar(sqlType) === 'float' ? 'float' : 'string';
   }
 }
 
@@ -312,7 +379,7 @@ export function failClosedMaterializeResolverFromColumnMap(
  * `outType` SoT). THROWS for an unknown `table`/`column` (no-assume, no-fallback — a typed-native
  * read must not silently box an untyped column). Built from the model's INLINE `columns` declaration
  * at registration, it replaces the external `schemaColumnTypeResolver(ddl)` as the codegen type
- * source, so `deriveReadOutTypes` reads the declared types.
+ * source, so `deriveReadRow` (the read de-box SSoT) reads the declared types.
  */
 export function columnTypeResolverFromColumnMap(
   columnTypes: ReadonlyMap<string, ReadonlyMap<string, string>>,

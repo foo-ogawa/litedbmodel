@@ -386,7 +386,7 @@ final class StaticBundle
      * @param array<string,mixed> $scope
      * @return list<mixed>
      */
-    private static function renderExecuteNode(\stdClass $graph, string $nodeId, array $scope, \PDO $db): array
+    private static function renderExecuteNode(\stdClass $graph, string $nodeId, array $scope, ExecutionContext $ctx): array
     {
         $dialectName = (string) $graph->dialect;
         $byId = $graph->statementsById ?? null;
@@ -410,10 +410,9 @@ final class StaticBundle
             return $v;
         }, $rendered['params']);
         try {
-            $stmt = $db->prepare($rendered['sql']);
-            $stmt->execute(array_values($params));
-            $rows = $stmt->fetchAll(\PDO::FETCH_OBJ);
-            return is_array($rows) ? array_values($rows) : [];
+            // The central READ seam (§2): ① middleware ② connectionFor ③ execute — the ONLY driver
+            // contact. Byte-identical to the pre-seam `$db->prepare()->execute()->fetchAll(OBJ)`.
+            return execute($ctx, $rendered['sql'], array_values($params));
         } catch (\PDOException $e) {
             throw SqlFailure::fromPdo($e);
         }
@@ -430,8 +429,9 @@ final class StaticBundle
      *
      * @param array<string,mixed> $input
      */
-    public static function executeReadGraph(\stdClass $graph, array $input, \PDO $db): mixed
+    public static function executeReadGraph(\stdClass $graph, array $input, \PDO|ExecutionContext $db): mixed
     {
+        $ctx = Context::of($db);
         $component = $graph->ir->components[0];
         $body = is_array($component->body ?? null) ? $component->body : [];
         $output = $component->output ?? null;
@@ -447,7 +447,8 @@ final class StaticBundle
             sort($stage); // ascending body index — deterministic failure precedence
             foreach ($stage as $idx) {
                 $node = $body[$idx];
-                $val = self::computeReadNode($graph, $node, $base, $db);
+                $val = self::computeReadNode($graph, $node, $base, $ctx);
+                self::assertFindGuard($graph, (string) $node->id, $val); // Phase E-2: throw if the primary read exceeded the cap
                 $results[] = [(string) $node->id, $val];
                 $base[(string) $node->id] = $val;
             }
@@ -485,7 +486,7 @@ final class StaticBundle
      *
      * @param array<string,mixed> $base
      */
-    private static function computeReadNode(\stdClass $graph, \stdClass $node, array $base, \PDO $db): mixed
+    private static function computeReadNode(\stdClass $graph, \stdClass $node, array $base, ExecutionContext $ctx): mixed
     {
         if (property_exists($node, 'cond')) {
             return ExprEval::evaluate($node->cond, $base);
@@ -502,11 +503,35 @@ final class StaticBundle
             foreach ($over as $el) {
                 $elemScope = $base;
                 $elemScope[$asName] = $el;
-                $out[] = self::renderExecuteNode($graph, $nodeId, $elemScope, $db);
+                $out[] = self::renderExecuteNode($graph, $nodeId, $elemScope, $ctx);
             }
             return $out;
         }
-        return self::renderExecuteNode($graph, $nodeId, $base, $db);
+        return self::renderExecuteNode($graph, $nodeId, $base, $ctx);
+    }
+
+    /**
+     * Post-fetch hard-limit runaway guard for the top-level read (Phase E-2, epic #74; v1
+     * `DBModel` find hard-limit; port of static-bundle.ts `assertFindGuard`). When the graph
+     * bakes a `findGuard` targeting `$nodeId` and that node's computed value is a row list
+     * LONGER than the cap, throw {@see LimitExceededError} (`context: 'find'`). The read injected
+     * `LIMIT hardLimit + 1` at compile, so a length of `hardLimit + 1` means the TRUE total
+     * exceeds the cap; the reported `count` is that N+1 fetch length. A no-op for every other
+     * node / an uncapped graph (ABSENT `findGuard` ⇒ NO check — the cap comes from the artifact
+     * ONLY). The SAME check the TS/rust/go/py ports run off this field.
+     */
+    private static function assertFindGuard(\stdClass $graph, string $nodeId, mixed $value): void
+    {
+        $guard = $graph->findGuard ?? null;
+        if (!($guard instanceof \stdClass) || (string) ($guard->nodeId ?? '') !== $nodeId) {
+            return;
+        }
+        if (is_array($value) && array_is_list($value)) {
+            $hardLimit = (int) ($guard->hardLimit ?? 0);
+            if (count($value) > $hardLimit) {
+                throw new LimitExceededError($hardLimit, count($value), 'find', (string) ($guard->model ?? ''));
+            }
+        }
     }
 
     // ── Tx op render (port of tx.ts renderStatement) ───────────────────────────

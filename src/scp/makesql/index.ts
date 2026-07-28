@@ -71,7 +71,7 @@ export type { RelationCompileBase } from './compile-relation';
 
 // Single-JSON-param array/batch forms for MySQL 8 + SQLite (epic #43/#45) — the
 // intentional deviation from v1's N-placeholder expansion (server-side JSON expansion).
-export { inListJson, JsonArrayConditions, conditionsFor } from './json-array';
+export { inListJson, inListPredicate, encodeJsonArrayParam, JsonArrayConditions, conditionsFor } from './json-array';
 export {
   mysqlInsertJson,
   sqliteInsertJson,
@@ -86,14 +86,19 @@ export {
   deriveTransactionPlan,
   deriveBatchPlan,
   literalize,
-  mysqlPkHint,
-  stripMysqlPkHint,
   executeTransaction,
+  executeTransactionAsync,
   countingDriver,
   renderTxStatement,
   compileWriteNode,
+  pgTypeSpecimen,
   IN_SENTINEL,
 } from './tx';
+
+// MySQL has no RETURNING: the pk-hint format + the write→re-select derivation the mysql connection
+// adapter (and the 4 native driver ports) share. ONE home for "MySQL cannot RETURN rows".
+export { mysqlPkHint, stripMysqlPkHint, buildMysqlReselect, bindReselect } from './mysql-returning';
+export type { MysqlReselect, ReselectBind } from './mysql-returning';
 export type {
   TxExpr,
   TxOp,
@@ -106,35 +111,10 @@ export type {
   SqliteDb,
   ShortCircuitReason,
   TransactionResult,
+  WriteExecOptions,
 } from './tx';
-
-// Authoring → makeSQL bundle (Phase A, epic #43/#45): the ADDITIVE producer that routes an
-// authored behavior's declared/eager query (WS2 `../authoring.ts` component IR) through the
-// makeSQL compile* — preserving the single-compile-path invariant (declaration ≡ eager).
-export {
-  compileAuthoredBehavior,
-  compileAuthoredNode,
-  compileRelationMap,
-} from './authoring-compile';
-export type { AuthoredMakeSQL, RelationMapInput } from './authoring-compile';
-
-// The STATIC, portable makeSQL bundle + runtime (design #45 owner-confirmed static-bundle):
-// symbolic compile (no concrete input) → deferred value-specs + skip expression, bc-evaluated
-// per-input at runtime. The SOLE makeSQL read/compile path (epic #43/#45 Phase B).
-export {
-  compileStaticBundle,
-  compileSelectNode,
-  executeStaticBundle,
-  executeStaticWrite,
-  executeReadBehavior,
-  compileReadGraph,
-  executeReadGraph,
-  executeReadGraphAsync,
-  renderReadPrimary,
-} from './static-bundle';
-export type { StaticBundle, StaticStatement, ValueSpec, ReadGraph, SqlExecutorAsync } from './static-bundle';
 
 // Pooled async executor factories (PG / MySQL) that turn the plan's concurrency into real parallel
 // read-relation DB I/O behind the async seam (#40).
-export { pgPoolExecutor, mysqlPoolExecutor, configurePgDeboxTypeParsers, mysqlDeboxPoolOptions, pgDeboxExecutor, mysqlDeboxExecutor } from './pool-executor';
-export type { PgPoolLike, MysqlPoolLike, PgTypesLike, PgModuleLike, Mysql2ModuleLike } from './pool-executor';
+export { configurePgDeboxTypeParsers, mysqlDeboxPoolOptions, pgConnectionPool, mysqlConnectionPool, pgPoolFactory, mysqlPoolFactory } from './pool-executor';
+export type { PgPoolLike, MysqlPoolLike, PgTypesLike, PgModuleLike, Mysql2ModuleLike, PgOwnedPoolLike, PgPoolClientLike, MysqlOwnedPoolLike, MysqlPoolConnLike, PgOwnedPoolWithEnd, MysqlOwnedPoolWithEnd, PgFactoryModuleLike } from './pool-executor';

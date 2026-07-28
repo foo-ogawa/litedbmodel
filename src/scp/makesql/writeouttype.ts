@@ -36,9 +36,9 @@
  * fields, so the empty-obj element type is exact (not an assumed default).
  */
 
-import type { PortableType, PortableScalarType } from 'behavior-contracts';
+import type { PortableType, PortableScalarType } from 'behavior-contracts/runtime';
 import { sqlTypeToBcScalar, type BcScalar, type ColumnTypeResolver } from '../coltype';
-import type { SqlBundle } from '../runtime';
+import type { SqlBundle } from '../write-bundle';
 import type { TransactionPlan, TxStatement } from './tx';
 
 /** Identity narrow (BcScalar is exactly bc's PortableScalarType); DATE→string happens in coltype. */
@@ -58,7 +58,9 @@ const SHORT_CIRCUIT_TYPE: PortableType = { obj: { statementId: 'string', reason:
  */
 function targetAndReturning(sql: string): { table: string; returning: string[] | null } {
   const s = sql.trim();
-  const ins = /^INSERT\s+(?:IGNORE\s+)?INTO\s+([A-Za-z_][A-Za-z0-9_]*)/i.exec(s);
+  // `INSERT INTO` / `INSERT IGNORE INTO` (MySQL DO-NOTHING) / `INSERT OR IGNORE INTO` (SQLite
+  // DO-NOTHING, v1 `sqliteSqlBuilder`) — the target table follows either conflict-ignore verb.
+  const ins = /^INSERT\s+(?:IGNORE\s+|OR\s+IGNORE\s+)?INTO\s+([A-Za-z_][A-Za-z0-9_]*)/i.exec(s);
   const upd = /^UPDATE\s+([A-Za-z_][A-Za-z0-9_]*)/i.exec(s);
   const del = /^DELETE\s+FROM\s+([A-Za-z_][A-Za-z0-9_]*)/i.exec(s);
   const m = ins ?? upd ?? del;
@@ -196,8 +198,8 @@ export function deriveWriteOutputType(plan: TransactionPlan, resolve: ColumnType
 
 /**
  * Attach the derived write output type to a write {@link SqlBundle} as an `outputType` field the
- * codegen companion carries (#12: writes have no component-graph IR — the makeSQL write surrogate is
- * eliminated — so the TransactionResult type rides the bundle/companion directly, not an IR node).
+ * generated adapter carries (#12: writes have no component-graph IR — the makeSQL write surrogate is
+ * eliminated — so the TransactionResult type rides the bundle directly, not an IR node).
  * Returns a NEW bundle carrying the `outputType`. A bundle with no transaction plan (a plain
  * single-statement write with no tx) throws — this de-box is for the write-Command / batch bundles.
  */

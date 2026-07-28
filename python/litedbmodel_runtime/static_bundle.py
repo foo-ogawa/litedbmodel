@@ -28,13 +28,19 @@ from __future__ import annotations
 import json
 import re
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Dict, List, Mapping, Sequence
+from typing import Any, Dict, List, Mapping, Sequence, Union
 
 from behavior_contracts import evaluate_expression
 
 from .dialect import Dialect, dialect_for
 from .driver import Driver
-from .errors import SqlFailure, map_sqlite_error
+from .errors import LimitExceededError, SqlFailure, map_sqlite_error
+from .exec_context import (
+    READ_INTENT,
+    ExecutionContext,
+    as_context,
+    execute as seam_execute,
+)
 
 _RETURNING_RE = re.compile(r"\breturning\b", re.IGNORECASE)
 
@@ -297,22 +303,23 @@ def _plan_concurrency(component: Mapping[str, Any]) -> int:
 
 
 def _render_execute_node(
-    graph: Mapping[str, Any], node_id: str, scope: Mapping[str, Any], driver: Driver
+    graph: Mapping[str, Any], node_id: str, scope: Mapping[str, Any], ctx: ExecutionContext
 ) -> List[Any]:
-    """Render node ``node_id``'s ``statementsById`` fragments against ``scope`` and run them."""
+    """Render node ``node_id``'s ``statementsById`` fragments against ``scope`` and run them THROUGH
+    THE SEAM (``execute(ctx, …, READ_INTENT)`` — the ONE driver contact for the read path)."""
     statements_by_id: Mapping[str, Any] = graph["statementsById"]
     stmts = statements_by_id.get(node_id)
     if stmts is None:
         raise ValueError(f"static-bundle: no statements for node '{node_id}'")
     rendered = render_statements(stmts, graph["dialect"], scope)
     try:
-        return driver.prepare(rendered["sql"]).all(rendered["params"])
+        return seam_execute(ctx, rendered["sql"], rendered["params"], READ_INTENT)
     except Exception as e:  # driver error → mapped SqlFailure
         raise map_sqlite_error(e)
 
 
 def _compute_read_node(
-    graph: Mapping[str, Any], node: Mapping[str, Any], base: Mapping[str, Any], driver: Driver
+    graph: Mapping[str, Any], node: Mapping[str, Any], base: Mapping[str, Any], ctx: ExecutionContext
 ) -> Any:
     """Compute ONE read-graph body node's value: a ``cond`` join, a ``map`` (per-element
     render+execute under the ``as`` binding), or a componentRef (render+execute)."""
@@ -329,20 +336,44 @@ def _compute_read_node(
         for el in over:
             elem_scope = dict(base)
             elem_scope[as_name] = el
-            out.append(_render_execute_node(graph, node_id, elem_scope, driver))
+            out.append(_render_execute_node(graph, node_id, elem_scope, ctx))
         return out
-    return _render_execute_node(graph, node_id, base, driver)
+    return _render_execute_node(graph, node_id, base, ctx)
 
 
-def execute_read_graph(graph: Mapping[str, Any], input_scope: Mapping[str, Any], driver: Driver) -> Any:
+def _assert_find_guard(graph: Mapping[str, Any], node_id: str, value: Any) -> None:
+    """Post-fetch hard-limit runaway guard (Phase E-2, epic #74; v1 ``DBModel`` find hard-limit).
+
+    Port of TS ``assertFindGuard``. When ``graph['findGuard']`` targets ``node_id`` and the node's
+    computed value is a row list longer than the baked cap, raise :class:`LimitExceededError`
+    (``context='find'``). The read injected ``LIMIT hardLimit + 1`` at compile, so a length of
+    ``hardLimit + 1`` means the TRUE total exceeds the cap; the reported ``count`` is that N+1 fetch
+    length. A no-op for every other node / an uncapped graph (the field is absent ⇒ NO check). The
+    SAME check the native ports (#100-103) run off the ``findGuard`` JSON field, with no config
+    surface of their own.
+    """
+    guard = graph.get("findGuard")
+    if not isinstance(guard, Mapping) or guard.get("nodeId") != node_id:
+        return
+    if isinstance(value, list) and len(value) > guard["hardLimit"]:
+        raise LimitExceededError(guard["hardLimit"], len(value), "find", guard.get("model"))
+
+
+def execute_read_graph(
+    graph: Mapping[str, Any], input_scope: Mapping[str, Any], driver: "Union[Driver, ExecutionContext]"
+) -> Any:
     """Execute a compiled ReadGraph via the NATIVE walker (#12): no bc ``run_behavior``.
 
     Walks ``compileBehaviors``' REAL ``Select``/``Count``/map node IR in ``plan.groups`` stage order —
-    computing each node's rows from its ``statementsById`` fragments (rendered against the walk scope)
-    and committing ``nodeId -> value`` — then evaluates the component ``output`` Φ expression.
-    litedbmodel owns map iteration / wire binding / Φ output; NO ``__makeSqlNode``/``__scope``
-    surrogate. The SAME native model the TS/rust/go/php runtimes follow — interpreter-free.
+    computing each node's rows from its ``statementsById`` fragments (rendered against the walk scope,
+    executed THROUGH THE CENTRAL SEAM) and committing ``nodeId -> value`` — then evaluates the
+    component ``output`` Φ expression. litedbmodel owns map iteration / wire binding / Φ output; NO
+    ``__makeSqlNode``/``__scope`` surrogate. The SAME native model the TS/rust/go/php runtimes follow.
+
+    ``driver`` is EITHER a raw :class:`Driver` (wrapped via :func:`context_for_driver` — byte-identical)
+    OR an :class:`ExecutionContext`.
     """
+    ctx = as_context(driver)
     component = graph["ir"]["components"][0]
     body = component.get("body", [])
     output = component.get("output")
@@ -356,14 +387,19 @@ def execute_read_graph(graph: Mapping[str, Any], input_scope: Mapping[str, Any],
                 base[nid] = val
             ordered = sorted(stage)  # ascending body index — deterministic commit order
             # Independent siblings of a stage run in bounded parallel (capped at the plan concurrency;
-            # concurrency <= 1 or a single member ⇒ serial); each dispatched on its own pooled
-            # connection against the driver. Results commit in ascending body index (deterministic).
+            # concurrency <= 1 or a single member ⇒ serial). Each sibling funnels through the seam;
+            # outside a tx the seam's connection_for hands each its OWN pooled connection (the read
+            # fan-out), so distinct threads run on distinct connections. Results commit in ascending
+            # body index (deterministic).
             if concurrency > 1 and len(ordered) > 1:
                 with ThreadPoolExecutor(max_workers=min(concurrency, len(ordered))) as pool:
-                    vals = list(pool.map(lambda idx: _compute_read_node(graph, body[idx], base, driver), ordered))
+                    vals = list(pool.map(lambda idx: _compute_read_node(graph, body[idx], base, ctx), ordered))
             else:
-                vals = [_compute_read_node(graph, body[idx], base, driver) for idx in ordered]
+                vals = [_compute_read_node(graph, body[idx], base, ctx) for idx in ordered]
             for idx, val in zip(ordered, vals):
+                # Phase E-2: raise if the primary read exceeded the cap (checked per computed node,
+                # covering BOTH the serial and the ThreadPool-fanned-out paths of this walker).
+                _assert_find_guard(graph, body[idx]["id"], val)
                 results.append((body[idx]["id"], val))
         scope = dict(normalized)
         for nid, val in results:

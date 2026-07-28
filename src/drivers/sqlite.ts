@@ -98,9 +98,17 @@ function convertParams(params: unknown[]): unknown[] {
 // ============================================
 
 class SqliteConnection implements DBConnection {
-  constructor(private db: BetterSqlite3Database) {}
+  /**
+   * `logger` is not optional: this wrapper is the path a POOLED connection executes on, and it used to log
+   * nothing at all — so enabling debug logging showed the statements that went through
+   * {@link SqliteDriver.execute} and silently omitted every one that went through a connection (which is
+   * most of them: the lazy-relation reads and the writes). A debug view that shows some of the SQL is worse
+   * than none, because it reads as complete.
+   */
+  constructor(private db: BetterSqlite3Database, private logger: Logger) {}
 
   async query(sql: string, params?: unknown[]): Promise<QueryResult> {
+    this.logger.debug(`SQL: ${sql}`, params ?? []);
     const stmt = this.db.prepare(sql);
     const normalizedSql = sql.trim().toUpperCase();
     const convertedParams = convertParams(params || []);
@@ -221,7 +229,7 @@ export class SqliteDriver implements DBDriver {
    * Get a connection (returns wrapper around the single db connection)
    */
   async getConnection(): Promise<DBConnection> {
-    return new SqliteConnection(this.getDb());
+    return new SqliteConnection(this.getDb(), this.logger);
   }
 
   /**

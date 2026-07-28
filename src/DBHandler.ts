@@ -23,6 +23,7 @@ import { setTypeCastImpl, type TypeCastFunctions } from './TypeCast';
 import { PostgresDriver, closeAllPools as closeAllPostgresPools } from './drivers/postgres';
 import { SqliteDriver } from './drivers/sqlite';
 import { MysqlDriver, closeAllMysqlPools } from './drivers/mysql';
+import { closeAllScpRuntimes } from './scp/dbmodel-runtime';
 import * as PostgresHelper from './drivers/PostgresHelper';
 import * as SqliteHelper from './drivers/SqliteHelper';
 import * as MysqlHelper from './drivers/MysqlHelper';
@@ -349,6 +350,11 @@ export async function closeAllPools(): Promise<void> {
   // Also close any remaining pools from all drivers
   await closeAllPostgresPools();
   await closeAllMysqlPools();
+  // …and the ROUTED pools the SCP execution path builds (`buildContextFromConfig`). Those live in their
+  // own registry, not in the per-driver caches above, so this call is what makes `closeAllPools` mean
+  // what its name says: without it the function resolved in 0ms with the SCP sockets still open, and a
+  // consumer's process could not exit.
+  await closeAllScpRuntimes();
 }
 
 // Backward compatibility alias

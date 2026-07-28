@@ -28,28 +28,21 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import Database from 'better-sqlite3';
 import {
-  SemanticBehavior,
-  components,
-  publishBehaviors,
   entityWrites,
   edgeWrites,
   deriveTransactionPlan,
   compileWriteBundle,
-  executeCommand,
   executeTransactionBundle,
   executeTransaction,
   countingDriver,
   renderTxStatement,
   compileWriteNode,
-  whereEq,
   SqlFailure,
-  type In,
+  type TxOp,
   type SqlBundle,
   type TransactionPlan,
   type EntityWritesDefinition,
 } from '../../src/scp';
-
-const L = components();
 
 /** Fresh in-memory DB with the α write schema + seed rows for each test. */
 function freshDb(): InstanceType<typeof Database> {
@@ -75,22 +68,34 @@ function freshDb(): InstanceType<typeof Database> {
   return db;
 }
 
-// ── The authored Command + its write-time-relations save contract (spec §2.2 / §2.4) ──
+// ── The authored Command's base writes (spec §2.2 / §2.4), compiled via the SSoT write-node
+// compiler (`compileWriteNode`, src/scp/makesql/tx.ts) — the same compiler the (now-removed)
+// `emitWrite` authoring sugar drove internally. ──
 
-class PostCommands extends SemanticBehavior {
-  // spec §2.4: `CreatePost` returns Insert(Post, {onWrite: Post.writes.create, returning}).
-  Create($: In<{ author_id: number; title: string; request_id: string }>) {
-    return L.Insert({
+// spec §2.4: `CreatePost` returns Insert(Post, {onWrite: Post.writes.create, returning}).
+function createPostOp(): TxOp {
+  return compileWriteNode({
+    component: 'Insert',
+    ports: {
       table: 'posts',
-      'values.author_id': $.author_id,
-      'values.title': $.title,
+      'values.author_id': { ref: ['author_id'] },
+      'values.title': { ref: ['title'] },
       returning: 'id, author_id, title',
-    });
-  }
+    },
+  } as never);
+}
 
-  Remove($: In<{ id: number; author_id: number }>) {
-    return L.Delete({ table: 'posts', where: [whereEq($.id, $.id)], returning: 'id' });
-  }
+// `Remove`: DELETE keyed by the input id (the old sugar's `whereEq($.id, $.id)` — a WHERE member
+// whose column ref AND value ref are both the input's `id` field).
+function removePostOp(): TxOp {
+  return compileWriteNode({
+    component: 'Delete',
+    ports: {
+      table: 'posts',
+      where: { arr: [{ eq: [{ ref: ['id'] }, { ref: ['id'] }] }] },
+      returning: 'id',
+    },
+  } as never);
 }
 
 /**
@@ -98,7 +103,7 @@ class PostCommands extends SemanticBehavior {
  * idempotency (request token) + uniqueness (title per author) as gate-first guards, then the
  * cascade counter (`users.post_count += 1`) and the outbox event, all in one tx.
  */
-const postWrites: EntityWritesDefinition = entityWrites<PostCommands>((w) => ({
+const postWrites: EntityWritesDefinition = entityWrites((w) => ({
   create: w.lifecycle({
     requires: [w.exists('users', { id: '$.input.author_id' })],
     idempotency: w.idempotentBy('idem', 'token', '$.input.request_id'),
@@ -112,8 +117,6 @@ const postWrites: EntityWritesDefinition = entityWrites<PostCommands>((w) => ({
     derive: [w.increment('users', { id: '$.input.author_id' }, 'post_count', -1)],
   }),
 }));
-
-const contract = publishBehaviors(PostCommands);
 
 // The exact ordered SQL group (rendered) for a CREATE — the golden bar (spec §6 example).
 const GOLDEN_CREATE_SQL: readonly string[] = [
@@ -134,8 +137,8 @@ describe('WS5 — create derives to ONE gate-first transaction (golden SQL + rea
   });
 
   it('the derived plan is the §6 ordered group (requires→idempotency→unique→body→derive→emit)', () => {
-    const bundle = compileWriteBundle(contract, 'Create', postWrites, 'create');
-    const plan = bundle.transaction!;
+    const bundle = compileWriteBundle('Create', createPostOp(), postWrites, 'create');
+    const plan = bundle.transaction;
     expect(plan.statements.map((s) => s.role)).toEqual([
       'gate:requires',
       'gate:idempotency',
@@ -158,7 +161,7 @@ describe('WS5 — create derives to ONE gate-first transaction (golden SQL + rea
   });
 
   it('golden: same input → byte-identical ordered SQL text group', () => {
-    const bundle = compileWriteBundle(contract, 'Create', postWrites, 'create');
+    const bundle = compileWriteBundle('Create', createPostOp(), postWrites, 'create');
     // Render every statement against a bound scope (entity row present for the derive/emit stage).
     const scope = {
       author_id: 7,
@@ -166,25 +169,30 @@ describe('WS5 — create derives to ONE gate-first transaction (golden SQL + rea
       request_id: 'r-123',
       __entity: { id: 3, author_id: 7, title: 'Hello' },
     };
-    const rendered = bundle.transaction!.statements.map((s) => renderTxStatement(s.op, scope).sql);
+    const rendered = bundle.transaction.statements.map((s) => renderTxStatement(s.op, scope).sql);
     expect(rendered).toEqual(GOLDEN_CREATE_SQL);
 
     // Deterministic derivation: recompiling yields a byte-identical plan (statement ids + SQL).
-    const again = compileWriteBundle(contract, 'Create', postWrites, 'create');
+    const again = compileWriteBundle('Create', createPostOp(), postWrites, 'create');
     expect(JSON.stringify(again.transaction)).toBe(JSON.stringify(bundle.transaction));
   });
 
-  it('executeCommand commits ALL side effects atomically in one tx (real DB state)', () => {
-    const result = executeCommand(contract, postWrites, 'create', { author_id: 7, title: 'Hello', request_id: 'r-1' }, { db, entry: 'Create' });
+  it('executeTransactionBundle commits ALL side effects atomically in one tx (real DB state)', () => {
+    const bundle = compileWriteBundle('Create', createPostOp(), postWrites, 'create');
+    const result = executeTransactionBundle(bundle, { author_id: 7, title: 'Hello', request_id: 'r-1' }, { db });
 
     expect(result.committed).toBe(true);
     expect(result.shortCircuit).toBeUndefined();
     // The body RETURNING row is exposed as `$.entity`.
-    expect(result.entity).toEqual({ id: 1, author_id: 7, title: 'Hello' });
+    // An INTEGER column reads back in bc's `int` model — a BigInt on the TS plane — on every dialect
+    // (the read path is exact-integer unconditionally; PG/MySQL's integer type parsers likewise).
+    expect(result.entity).toEqual({ id: 1n, author_id: 7n, title: 'Hello' });
     // Every ordered statement ran.
     expect(result.executed).toHaveLength(6);
 
     // Body persisted.
+    // A RAW better-sqlite3 read (no `safeIntegers`) still yields plain numbers — this asserts what is
+    // PERSISTED, not what the runtime's read path hands back.
     expect(db.prepare('SELECT id, author_id, title FROM posts').all()).toEqual([{ id: 1, author_id: 7, title: 'Hello' }]);
     // derive: users.post_count 2 → 3 (the increment amount is from the declaration, not code).
     expect(db.prepare('SELECT post_count FROM users WHERE id = 7').get()).toEqual({ post_count: 3 });
@@ -210,12 +218,11 @@ describe('WS5 — gate-first short-circuit (proven: tail SQL never runs, no side
   it('absent `requires` → ROLLBACK before the body; tail SQL is NEVER prepared', () => {
     const { db: counting, prepared } = countingDriver(db);
     // author_id 999 does not exist → the `requires` existence gate fails first.
-    const result = executeCommand(
-      contract,
-      postWrites,
-      'create',
+    const bundle = compileWriteBundle('Create', createPostOp(), postWrites, 'create');
+    const result = executeTransactionBundle(
+      bundle,
       { author_id: 999, title: 'Ghost', request_id: 'r-x' },
-      { db: counting, entry: 'Create' },
+      { db: counting },
     );
 
     expect(result.committed).toBe(false);
@@ -238,7 +245,8 @@ describe('WS5 — gate-first short-circuit (proven: tail SQL never runs, no side
 
   it('the requires gate short-circuits BEFORE the idempotency/unique gates (order matters)', () => {
     const { db: counting, prepared } = countingDriver(db);
-    executeCommand(contract, postWrites, 'create', { author_id: 999, title: 'X', request_id: 'r-y' }, { db: counting, entry: 'Create' });
+    const bundle = compileWriteBundle('Create', createPostOp(), postWrites, 'create');
+    executeTransactionBundle(bundle, { author_id: 999, title: 'X', request_id: 'r-y' }, { db: counting });
     // Neither the idempotency INSERT nor the unique INSERT was prepared — the requires gate is FIRST.
     expect(prepared.some((s) => /INSERT INTO idem/.test(s))).toBe(false);
     expect(prepared.some((s) => /INSERT INTO uniq/.test(s))).toBe(false);
@@ -252,7 +260,8 @@ describe('WS5 — idempotency guard (duplicate request_id → short-circuit, no 
     const db = freshDb();
     const input = { author_id: 7, title: 'Once', request_id: 'dup-1' };
 
-    const first = executeCommand(contract, postWrites, 'create', input, { db, entry: 'Create' });
+    const bundle = compileWriteBundle('Create', createPostOp(), postWrites, 'create');
+    const first = executeTransactionBundle(bundle, input, { db });
     expect(first.committed).toBe(true);
     expect(db.prepare('SELECT post_count FROM users WHERE id = 7').get()).toEqual({ post_count: 3 });
     expect(db.prepare('SELECT COUNT(*) c FROM posts').get()).toEqual({ c: 1 });
@@ -261,12 +270,10 @@ describe('WS5 — idempotency guard (duplicate request_id → short-circuit, no 
     // idempotency gate detects the duplicate token and short-circuits: NO second post, NO second
     // counter bump, NO second outbox row.
     const { db: counting, prepared } = countingDriver(db);
-    const second = executeCommand(
-      contract,
-      postWrites,
-      'create',
+    const second = executeTransactionBundle(
+      compileWriteBundle('Create', createPostOp(), postWrites, 'create'),
       { author_id: 7, title: 'Twice', request_id: 'dup-1' },
-      { db: counting, entry: 'Create' },
+      { db: counting },
     );
     expect(second.committed).toBe(false);
     expect(second.shortCircuit!.reason).toBe('idempotent_duplicate');
@@ -287,19 +294,17 @@ describe('WS5 — unique guard (title-per-author collision → ROLLBACK, no part
   it('a colliding (author, title) rolls the whole tx back after the body would have run', () => {
     const db = freshDb();
     // First create claims the unique (7, 'Dup').
-    executeCommand(contract, postWrites, 'create', { author_id: 7, title: 'Dup', request_id: 'u-1' }, { db, entry: 'Create' });
+    executeTransactionBundle(compileWriteBundle('Create', createPostOp(), postWrites, 'create'), { author_id: 7, title: 'Dup', request_id: 'u-1' }, { db });
     expect(db.prepare('SELECT COUNT(*) c FROM posts').get()).toEqual({ c: 1 });
     expect(db.prepare('SELECT post_count FROM users WHERE id = 7').get()).toEqual({ post_count: 3 });
 
     // Second create, SAME (author, title) but a fresh request_id (so idempotency passes) → the
     // unique gate collides and rolls back: no second post, counter unchanged.
     const { db: counting, prepared } = countingDriver(db);
-    const second = executeCommand(
-      contract,
-      postWrites,
-      'create',
+    const second = executeTransactionBundle(
+      compileWriteBundle('Create', createPostOp(), postWrites, 'create'),
       { author_id: 7, title: 'Dup', request_id: 'u-2' },
-      { db: counting, entry: 'Create' },
+      { db: counting },
     );
     expect(second.committed).toBe(false);
     expect(second.shortCircuit!.reason).toBe('unique_collision');
@@ -322,7 +327,7 @@ describe('WS5 — parity: the SCP tx == equivalent imperative execution of the s
 
     // (a) SCP path on DB #1.
     const dbScp = freshDb();
-    const scpResult = executeCommand(contract, postWrites, 'create', input, { db: dbScp, entry: 'Create' });
+    const scpResult = executeTransactionBundle(compileWriteBundle('Create', createPostOp(), postWrites, 'create'), input, { db: dbScp });
     expect(scpResult.committed).toBe(true);
 
     // (b) Equivalent IMPERATIVE execution on DB #2: hand-run the SAME ordered statements (the
@@ -360,36 +365,36 @@ describe('WS5 — remove lifecycle (base Delete + cascade counter −1, one tx)'
     // Seed a post to remove (author 7 starts at post_count 2).
     db.prepare('INSERT INTO posts (id, author_id, title) VALUES (?, ?, ?)').run(50, 7, 'Gone');
 
-    const result = executeCommand(contract, postWrites, 'remove', { id: 50, author_id: 7 }, { db, entry: 'Remove' });
+    const bundle = compileWriteBundle('Remove', removePostOp(), postWrites, 'remove');
+    const result = executeTransactionBundle(bundle, { id: 50, author_id: 7 }, { db });
     expect(result.committed).toBe(true);
     // Post gone.
     expect(db.prepare('SELECT COUNT(*) c FROM posts WHERE id = 50').get()).toEqual({ c: 0 });
     // Counter decremented 2 → 1 (the −1 amount is declared, not a code default).
     expect(db.prepare('SELECT post_count FROM users WHERE id = 7').get()).toEqual({ post_count: 1 });
     // Ordered group: body Delete, then derive.
-    const bundle = compileWriteBundle(contract, 'Remove', postWrites, 'remove');
-    expect(bundle.transaction!.statements.map((s) => s.role)).toEqual(['body', 'derive']);
+    expect(bundle.transaction.statements.map((s) => s.role)).toEqual(['body', 'derive']);
     // The rendered body Delete is byte-identical to v1's DELETE shape (WHERE id = ?).
-    expect(renderTxStatement(bundle.transaction!.statements[0].op, { id: 50 }).sql).toBe('DELETE FROM posts WHERE id = ? RETURNING id');
-    expect(renderTxStatement(bundle.transaction!.statements[1].op, { author_id: 7 }).sql).toBe('UPDATE users SET post_count = post_count + ? WHERE id = ?');
+    expect(renderTxStatement(bundle.transaction.statements[0].op, { id: 50 }).sql).toBe('DELETE FROM posts WHERE id = ? RETURNING id');
+    expect(renderTxStatement(bundle.transaction.statements[1].op, { author_id: 7 }).sql).toBe('UPDATE users SET post_count = post_count + ? WHERE id = ?');
   });
 });
 
 // ── Bundle round-trip: the transaction plan is pure JSON (WS7 self-sufficiency) ────
 
 describe('WS5 — §8 bundle carries the tx plan as pure JSON (round-trips, executes bc-core alone)', () => {
-  it('serialize → JSON.parse → executeTransactionBundle == direct executeCommand', () => {
+  it('serialize → JSON.parse → executeTransactionBundle == direct executeTransactionBundle', () => {
     const input = { author_id: 7, title: 'Roundtrip', request_id: 'rt-1' };
 
     // The published artifact: pure JSON, no TS state.
-    const json = JSON.stringify(compileWriteBundle(contract, 'Create', postWrites, 'create'));
+    const json = JSON.stringify(compileWriteBundle('Create', createPostOp(), postWrites, 'create'));
     const reparsed = JSON.parse(json) as SqlBundle;
     expect(reparsed.transaction).toBeDefined();
 
     const dbBundle = freshDb();
     const fromBundle = executeTransactionBundle(reparsed, input, { db: dbBundle });
     const dbDirect = freshDb();
-    const direct = executeCommand(contract, postWrites, 'create', input, { db: dbDirect, entry: 'Create' });
+    const direct = executeTransactionBundle(compileWriteBundle('Create', createPostOp(), postWrites, 'create'), input, { db: dbDirect });
 
     expect(fromBundle.entity).toEqual(direct.entity);
     expect(fromBundle.committed).toBe(true);
@@ -400,7 +405,7 @@ describe('WS5 — §8 bundle carries the tx plan as pure JSON (round-trips, exec
   });
 
   it('the serialized bundle carries NO function/TS state (pure JSON identity round-trips)', () => {
-    const bundle = compileWriteBundle(contract, 'Create', postWrites, 'create');
+    const bundle = compileWriteBundle('Create', createPostOp(), postWrites, 'create');
     const reparsed = JSON.parse(JSON.stringify(bundle)) as SqlBundle;
     expect(JSON.stringify(reparsed)).toBe(JSON.stringify(bundle));
   });
@@ -412,17 +417,17 @@ describe('WS5 — edges (many-to-many intermediate-table link in the same tx)', 
   it('an m2m `set` edge INSERTs the join row bound from `$.entity` + `$.input`', () => {
     const db = freshDb();
 
-    class TagPost extends SemanticBehavior {
-      Create($: In<{ author_id: number; title: string; tag_id: number; request_id: string }>) {
-        return L.Insert({
+    function tagPostOp(): TxOp {
+      return compileWriteNode({
+        component: 'Insert',
+        ports: {
           table: 'posts',
-          'values.author_id': $.author_id,
-          'values.title': $.title,
+          'values.author_id': { ref: ['author_id'] },
+          'values.title': { ref: ['title'] },
           returning: 'id, author_id, title',
-        });
-      }
+        },
+      } as never);
     }
-    const c = publishBehaviors(TagPost);
     const writes = entityWrites((w) => ({
       create: w.lifecycle({
         requires: [w.exists('users', { id: '$.input.author_id' })],
@@ -433,13 +438,15 @@ describe('WS5 — edges (many-to-many intermediate-table link in the same tx)', 
       }),
     }));
 
-    const plan = compileWriteBundle(c, 'Create', writes, 'create').transaction!;
-    expect(plan.statements.map((s) => s.role)).toEqual(['gate:requires', 'body', 'edge']);
+    const bundle = compileWriteBundle('Create', tagPostOp(), writes, 'create');
+    expect(bundle.transaction.statements.map((s) => s.role)).toEqual(['gate:requires', 'body', 'edge']);
 
-    const result = executeCommand(c, writes, 'create', { author_id: 7, title: 'Tagged', tag_id: 100, request_id: 'e-1' }, { db, entry: 'Create' });
+    const result = executeTransactionBundle(bundle, { author_id: 7, title: 'Tagged', tag_id: 100, request_id: 'e-1' }, { db });
     expect(result.committed).toBe(true);
     // The join row links the just-created post to the tag (post_id from `$.entity.id`).
-    expect(db.prepare('SELECT post_id, tag_id FROM post_tags').all()).toEqual([{ post_id: result.entity!.id, tag_id: 100 }]);
+    // The raw read yields plain numbers; `result.entity.id` came off the runtime's read path, so it is a
+    // BigInt — compare it as the number the row holds.
+    expect(db.prepare('SELECT post_id, tag_id FROM post_tags').all()).toEqual([{ post_id: Number(result.entity!.id), tag_id: 100 }]);
   });
 });
 
@@ -447,16 +454,16 @@ describe('WS5 — edges (many-to-many intermediate-table link in the same tx)', 
 
 describe('WS5 — fail-closed derivation guards (no bodging, no silent defaults)', () => {
   it('rejects a `$.entity.*` reference when the body write has no RETURNING', () => {
-    class NoReturn extends SemanticBehavior {
-      Create($: In<{ author_id: number; title: string }>) {
-        return L.Insert({ table: 'posts', 'values.author_id': $.author_id, 'values.title': $.title });
-      }
+    function noReturnOp(): TxOp {
+      return compileWriteNode({
+        component: 'Insert',
+        ports: { table: 'posts', 'values.author_id': { ref: ['author_id'] }, 'values.title': { ref: ['title'] } },
+      } as never);
     }
-    const c = publishBehaviors(NoReturn);
     const writes = entityWrites((w) => ({
       create: w.lifecycle({ emits: [w.event('X', 'outbox', { postId: '$.entity.id' })] }),
     }));
-    expect(() => compileWriteBundle(c, 'Create', writes, 'create')).toThrow(/no RETURNING/);
+    expect(() => compileWriteBundle('Create', noReturnOp(), writes, 'create')).toThrow(/no RETURNING/);
   });
 
   it('rejects a malformed path root at declaration time (fail-closed)', () => {
@@ -495,7 +502,7 @@ describe('WS5 — driver failure maps to SqlFailure and rolls the tx back', () =
     // author_id 404 violates the posts.author_id FK (no such user).
     let thrown: unknown;
     try {
-      executeCommand(contract, noGate, 'create', { author_id: 404, title: 'Bad', request_id: 'f-1' }, { db, entry: 'Create' });
+      executeTransactionBundle(compileWriteBundle('Create', createPostOp(), noGate, 'create'), { author_id: 404, title: 'Bad', request_id: 'f-1' }, { db });
     } catch (e) {
       thrown = e;
     }
@@ -527,7 +534,7 @@ describe('WS5 — executeTransaction runs a hand-derived plan against real SQLit
     );
     const result = executeTransaction(db, plan, { author_id: 7, title: 'Direct' });
     expect(result.committed).toBe(true);
-    expect(result.entity).toEqual({ id: 1 });
+    expect(result.entity).toEqual({ id: 1n });
     expect(db.prepare('SELECT COUNT(*) c FROM posts').get()).toEqual({ c: 1 });
   });
 });

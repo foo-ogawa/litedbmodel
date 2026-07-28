@@ -12,6 +12,6 @@
     "emitDecoratorMetadata": true,
     "noEmit": true
   },
-  "include": ["harness.ts", "gen-vectors.ts", "gen-vectors.test.ts", "../src/**/*.ts"],
-  "// note": "vectors-runner.ts and vectors-run.ts are EXCLUDED from the typecheck: they import the BUILT dist/scp/index.mjs (the consumer artifact) which TS bundler-resolution cannot type without a colocated .d.mts. They are validated by ACTUALLY RUNNING them (npm run conformance:vectors / conformance:run) — a stronger check than a type pass. harness.ts (source-imported) IS typechecked here."
+  "include": ["harness.ts", "gen-vectors.ts", "gen-vectors.test.ts", "gen-livedb.ts", "gen-livedb.test.ts", "../src/**/*.ts"],
+  "// note": "livedb-run.ts is EXCLUDED: it is a process orchestrator (spawnSync over the language legs), validated by ACTUALLY RUNNING it (npm run conformance:livedb). Everything that imports the SCP reference from source — harness.ts and both generators — IS typechecked here."
 }

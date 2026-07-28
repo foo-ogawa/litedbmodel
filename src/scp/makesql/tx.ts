@@ -32,11 +32,30 @@
  * bind, composite `$.entity`) are LOUD rejects — never a silently mis-ordered plan.
  */
 
-import { evaluateExpression, type Scope, type Value } from 'behavior-contracts';
-import { assembleMakeSQL, type MakeSQL } from './makesql';
+import { evaluateExpression, type Scope, type Value } from 'behavior-contracts/runtime';
+import { assembleMakeSQL } from './makesql';
+import { sqliteInsertJson, mysqlInsertJson, sqliteUpdateManyJson, mysqlUpdateManyJson } from './json-batch';
+import { encodeJsonParam, inListPredicate } from './json-array';
+import { postgresSqlBuilder } from '../../drivers/PostgresSqlBuilder';
+import { sqlTypeToBcScalar, sqlTypeToMaterializeClass, type ColumnTypeResolver } from '../coltype';
 import { renderPlaceholders, type Dialect as MakeSQLDialect } from './handler';
 import { formatterFor } from './compile';
 import { mapSqliteError } from '../errors';
+// The mysql pk-hint writer. `mysql-returning` imports `TxOp` from here TYPE-only (erased), so this
+// runtime import closes no cycle.
+import { mysqlPkHint } from './mysql-returning';
+import {
+  type ExecutionContext,
+  type AsyncExecutionContext,
+  type PooledAsyncContext,
+  type SqliteDriver,
+  contextForDriver,
+  withTransactionAsync,
+  withTransactionSync,
+} from '../exec-context';
+import { executeSQL, executeSQLAsync, type LeafContext, type AsyncLeafContext } from '../leaves';
+import { type TransactionOptions, checkWriteAllowed } from '../tx-options';
+import { isConnectionError } from '../../connection-errors';
 import { DBConditions, type ConditionObject } from '../../DBConditions';
 import {
   ENTITY_ROOT,
@@ -78,6 +97,15 @@ export type TxExpr = unknown;
 export function literalize(value: unknown): TxExpr {
   if (value === null || value === undefined) return null;
   if (Array.isArray(value)) return { arr: value.map((e) => literalize(e)) };
+  // A bc `int` is a BigInt on the TS plane. `evaluateExpression` accepts an integer only as a plain
+  // JS number (safe range) or the `{int:"…"}` literal — a RAW BigInt node is rejected ("invalid node").
+  // A value read back from an integer column now arrives as a BigInt (bc's int model), and using it in a
+  // later write (e.g. the id from a `create({returning:true})` fed to a nested `create`) sent that BigInt
+  // straight into `evaluateExpression`, which threw. Encode it as bc's own canonical int literal
+  // (`{int: v.toString()}`, exactly what bc emits for an out-of-safe-range int) — exact, no rounding,
+  // and no value inference. MUST be before the `typeof === 'object'` branch would ever see it (a bigint
+  // is a primitive, so it would fall through to the bare `return value`).
+  if (typeof value === 'bigint') return { int: value.toString() };
   if (typeof value === 'object') {
     const obj: Record<string, TxExpr> = {};
     for (const [k, v] of Object.entries(value as Record<string, unknown>)) obj[k] = literalize(v);
@@ -107,6 +135,29 @@ export interface TxOp {
    * the REAL PK — not a hardcoded `WHERE id = ?` (which breaks for UUID / composite PKs).
    */
   readonly pk?: { readonly columns: readonly string[]; readonly autoInc: string | null };
+  /**
+   * NATIVE-CODEGEN typing metadata (E5/#120 — the RETURNING-chained tx chain). Additive: the runtime
+   * tx ({@link executeTransaction}) IGNORES it; the bc native-codegen chain lowering
+   * (bc's rust/go typed-native emitter) reads it to type each statement's
+   * native param ports + its produced-row struct WITHOUT re-parsing the rendered SQL. The SHARED
+   * {@link compileWriteNode} emits it from the structured ports it already has (one compiler feeds both
+   * the runtime and the codegen chain). Present on a single-statement Insert/Update/Delete op; absent
+   * on a batch op (its `?` binds a `{__batchRows}` marker, not a column). `bindColumns[i]` is the table
+   * column the i-th `?` binds (parallel to `params`; `null` when the param is not a plain column value).
+   */
+  readonly writeMeta?: {
+    readonly table: string;
+    readonly bindColumns: readonly (string | null)[];
+    readonly returning: readonly string[];
+    /** The upsert conflict-target column list (`onConflict` port), when this write is an upsert — lets a
+     * downstream mysql RETURNING re-select recover the upserted row by its conflict key. Absent otherwise. */
+    readonly onConflict?: string;
+    /** True for a batch op (createMany/updateMany/upsertMany — its `?` binds a `{__batchRows}` marker,
+     * not per-column values). The native tx-chain lowering rejects a batch op (it types per-column); the
+     * flag lets it detect batch even though the op now carries `pk`/`onConflict` for the mysql RETURNING
+     * re-select (which the batch write, like the single write, must honor). */
+    readonly batch?: boolean;
+  };
 }
 
 /** The role a transaction statement plays (drives the runtime's gate-first interpretation). */
@@ -393,46 +444,172 @@ function v1EqualityWhereText(columns: readonly string[]): string {
   return v1ConditionText(conditions);
 }
 
-/** Lower one where-member Expression node → a `<sql, params>` WHERE fragment (deferred params). */
-function lowerWhereMember(node: unknown, at: string): { sql: string; params: TxExpr[] } {
+/**
+ * Lower one where-member Expression node → a `<sql, params, columns>` WHERE fragment (deferred
+ * params). `columns[i]` is the table column the i-th emitted param binds — parallel to `params` — so
+ * the native-codegen chain types each WHERE-bound `?` from its column (see {@link TxOp.writeMeta}).
+ */
+function lowerWhereMember(node: unknown, at: string, dialect: MakeSQLDialect): { sql: string; params: TxExpr[]; columns: string[] } {
   const op = opKey(node);
   if (op === undefined) throw new Error(`compileWriteNode: ${at}: a where member must be a single-operator Expression node`);
+  if (op === 'in') {
+    // Key-set membership — the SAME static single-param predicate the read IN-list uses
+    // ({@link inListPredicate}: PG `= ANY(?)`, MySQL/SQLite a JSON subquery), so a `deleteMany`'s
+    // statement comes from THIS compiler rather than being assembled by its caller.
+    const [col, val] = binOperands(node, op, at);
+    const column = columnOf(col, at);
+    return { sql: v1ConditionText({ [inListPredicate(dialect, column)]: PROBE }), params: [val], columns: [column] };
+  }
   if (op === 'eq') {
     const [col, val] = binOperands(node, op, at);
     const column = columnOf(col, at);
-    if (val === null) return { sql: v1ConditionText({ [column]: null }), params: [] };
-    return { sql: v1ConditionText({ [column]: PROBE }), params: [val] };
+    if (val === null) return { sql: v1ConditionText({ [column]: null }), params: [], columns: [] };
+    return { sql: v1ConditionText({ [column]: PROBE }), params: [val], columns: [column] };
   }
   if (op in CMP_OPS) {
     const [col, val] = binOperands(node, op, at);
     const column = columnOf(col, at);
-    if (op === 'ne' && val === null) return { sql: v1ConditionText({ [`${column} IS NOT NULL`]: true }), params: [] };
-    return { sql: v1ConditionText({ [`${column} ${CMP_OPS[op]} ?`]: PROBE }), params: [val] };
+    if (op === 'ne' && val === null) return { sql: v1ConditionText({ [`${column} IS NOT NULL`]: true }), params: [], columns: [] };
+    return { sql: v1ConditionText({ [`${column} ${CMP_OPS[op]} ?`]: PROBE }), params: [val], columns: [column] };
   }
   throw new Error(`compileWriteNode: ${at}: unsupported where operator '${op}' (write path supports eq/ne/lt/le/gt/ge)`);
 }
 
-function lowerWherePort(ports: Record<string, unknown>, at: string): { sql: string; params: TxExpr[] } {
+function lowerWherePort(ports: Record<string, unknown>, at: string, dialect: MakeSQLDialect): { sql: string; params: TxExpr[]; columns: string[] } {
   const v = ports.where;
-  if (v === undefined) return { sql: '', params: [] };
+  if (v === undefined) return { sql: '', params: [], columns: [] };
   if (typeof v !== 'object' || v === null || !('arr' in v) || !Array.isArray((v as { arr: unknown }).arr)) {
     throw new Error(`compileWriteNode: ${at}: 'where' must be an {arr:[…]} literal`);
   }
   const members = (v as { arr: unknown[] }).arr;
   const parts: string[] = [];
   const params: TxExpr[] = [];
+  const columns: string[] = [];
   members.forEach((m, i) => {
-    const f = lowerWhereMember(m, `${at}.where[${i}]`);
+    const f = lowerWhereMember(m, `${at}.where[${i}]`, dialect);
     parts.push(f.sql);
     params.push(...f.params);
+    columns.push(...f.columns);
   });
   // Join with the SAME ` AND ` connector `DBConditions.compile` uses (parts.join(' AND ')).
-  return { sql: parts.join(' AND '), params };
+  return { sql: parts.join(' AND '), params, columns };
+}
+
+/** The RETURNING column names (`['id','author_id']`), or `[]` when the op has no RETURNING clause. */
+function returningColumns(ports: Record<string, unknown>): string[] {
+  const r = stringPort(ports, 'returning');
+  return r === undefined ? [] : r.split(',').map((c) => c.trim()).filter((c) => c.length > 0);
 }
 
 function returningTail(ports: Record<string, unknown>): string {
   const r = stringPort(ports, 'returning');
   return r === undefined ? '' : ` RETURNING ${r}`;
+}
+
+/**
+ * The upsert `ON CONFLICT` / `ON DUPLICATE KEY` tail of an `Insert`, from the `onConflict` (the
+ * conflict-target column list) + `onConflictAction` (`'update'` default / `'ignore'`) ports. Absent
+ * `onConflict` ⇒ a plain INSERT (no tail). Per-dialect verbs, byte-matching the JSON-batch upsert
+ * form (`sqliteInsertJson`): pg/sqlite `ON CONFLICT (k) DO UPDATE SET c = excluded.c` / `DO NOTHING`;
+ * mysql `ON DUPLICATE KEY UPDATE c = VALUES(c)` (mysql ignores the target list). The DO-UPDATE sets
+ * every inserted column to its excluded value (`onConflictUpdate:'all'` — the v1 builder fallback);
+ * setting the key column to itself is a harmless no-op. This shared compiler is what BOTH the runtime
+ * (`executeStaticWrite`) and codegen read, so an authored upsert executes AND bakes identically.
+ */
+/** Map the `onConflict`/`onConflictAction` ports to the {@link JsonInsertOptions} upsert fields (the
+ * batch json_each builder's own shape) — so a batch UPSERT (upsertMany) reuses the SAME conflict verbs
+ * as the single upsert (E2). Absent `onConflict` ⇒ a plain batch INSERT. */
+function onConflictJsonOpts(ports: Record<string, unknown>, cols: readonly string[]): { onConflict?: string[]; onConflictUpdate?: 'all'; onConflictIgnore?: boolean } {
+  const conflict = stringPort(ports, 'onConflict');
+  if (conflict === undefined) return {};
+  const onConflict = conflict.split(',').map((c) => c.trim()).filter((c) => c.length > 0);
+  const action = stringPort(ports, 'onConflictAction') ?? 'update';
+  void cols;
+  return action === 'ignore' ? { onConflict, onConflictIgnore: true } : { onConflict, onConflictUpdate: 'all' };
+}
+
+function onConflictTail(dialect: MakeSQLDialect, ports: Record<string, unknown>, cols: readonly string[]): string {
+  const conflict = stringPort(ports, 'onConflict');
+  if (conflict === undefined) return '';
+  const action = stringPort(ports, 'onConflictAction') ?? 'update';
+  const conflictCols = conflict.split(',').map((c) => c.trim()).filter((c) => c.length > 0);
+  if (action === 'ignore') {
+    return dialect === 'mysql'
+      ? ` ON DUPLICATE KEY UPDATE ${conflictCols[0]} = ${conflictCols[0]}` // mysql no-op update = IGNORE-equivalent
+      : ` ON CONFLICT (${conflictCols.join(', ')}) DO NOTHING`;
+  }
+  if (dialect === 'mysql') {
+    return ` ON DUPLICATE KEY UPDATE ${cols.map((c) => `${c} = VALUES(${c})`).join(', ')}`;
+  }
+  return ` ON CONFLICT (${conflictCols.join(', ')}) DO UPDATE SET ${cols.map((c) => `${c} = excluded.${c}`).join(', ')}`;
+}
+
+/**
+ * A per-column raw VALUE SPECIMEN whose {@link import('../../drivers/PostgresSqlBuilder').inferPgType}
+ * matches the column's SCHEMA SQL type, so the PG batch UNNEST cast (`?::<pgType>[]`) the original
+ * `buildInsert`/`buildUpdateMany` emits is derived from the schema SoT — NOT from the runtime values
+ * the symbolic codegen path never sees. int32→number / int64→bigint / bool→boolean / date→Date /
+ * float→non-integer number / string(+decimal/uuid/json)→string, reproducing each `inferPgType` branch.
+ * Ambiguous only for a REAL column whose live value is integer-valued (v1 would infer `int`, not
+ * `numeric`); the bench columns (text/int/bigint) are unambiguous. Unknown SQL types are a hard error
+ * (fail-closed) via the §4.1 classifiers.
+ */
+export function pgTypeSpecimen(sqlType: string): unknown {
+  const klass = sqlTypeToMaterializeClass(sqlType);
+  if (klass === 'int32') return 0;
+  if (klass === 'int64') return 0n;
+  if (klass === 'bool') return false;
+  if (klass === 'date') return new Date(0);
+  // passthrough: float / decimal(→string) / text / uuid / json — split by the bc scalar.
+  const scalar = sqlTypeToBcScalar(sqlType);
+  if (scalar === 'float') return 0.5; // a non-integer number ⇒ inferPgType 'numeric'
+  return ''; // string family (text / varchar / uuid / decimal / json) ⇒ inferPgType 'text'
+}
+
+/**
+ * Compile a PG BATCH Insert/Update to its byte-identical v1 UNNEST form for the NATIVE codegen path,
+ * by driving the ORIGINAL `postgresSqlBuilder` (never a re-roll) with schema-typed specimen records
+ * (so the emitted `?::<pgType>[]` casts come from the schema SoT). Each `?` binds a per-column
+ * {@link BatchArrayMarker} — the PG (v1) twin of the sqlite/mysql (v2) `{__batchRows}` JSON marker:
+ * `refs[i]` is the WHOLE array for column `columns[i]`. codegen types the SAME array-input head off
+ * both markers (one shared path); the per-driver seam binds each PG marker as a `<elem>[]` array.
+ * Length-independent (the UNNEST text depends only on columns + types + onConflict/returning), so
+ * FIXED and bakeable.
+ */
+function pgBatchArrayParams(cols: string[], refFor: (c: string) => TxExpr, dialect: MakeSQLDialect): TxExpr[] {
+  return cols.map((c) => ({ __batchArray: { column: c, ref: refFor(c), dialect } }) as unknown as TxExpr);
+}
+
+function pgBatchInsert(table: string, sorted: string[], values: Record<string, TxExpr>, ports: Record<string, unknown>, resolve: ColumnTypeResolver, dialect: MakeSQLDialect): TxOp {
+  const specimen = Object.fromEntries(sorted.map((c) => [c, pgTypeSpecimen(resolve(table, c))]));
+  const records = [specimen, specimen]; // 2 rows ⇒ UNNEST branch (records.length > 1)
+  const { sql } = postgresSqlBuilder.buildInsert({
+    tableName: table, columns: sorted, records, rawRecords: records,
+    ...onConflictJsonOpts(ports, sorted),
+    ...(stringPort(ports, 'returning') !== undefined ? { returning: stringPort(ports, 'returning') } : {}),
+  });
+  return { sql, params: pgBatchArrayParams(sorted, (c) => values[c], dialect) };
+}
+
+function pgBatchUpdate(table: string, keyCols: string[], updateCols: string[], key: Record<string, TxExpr>, set: Record<string, TxExpr>, ports: Record<string, unknown>, resolve: ColumnTypeResolver, dialect: MakeSQLDialect): TxOp {
+  const allCols = [...keyCols, ...updateCols];
+  const specimen = Object.fromEntries(allCols.map((c) => [c, pgTypeSpecimen(resolve(table, c))]));
+  const records = [specimen, specimen];
+  // The pg batch UPDATE aliases the table `AS t` and the value source `AS v(keyCols…)`, so a BARE
+  // RETURNING column that is also a key column (in `v`) is ambiguous. v1's `DBModel.updateMany`
+  // qualifies RETURNING with the `t` alias via `buildReturning(table, cols, 't')` — reuse the SAME
+  // builder so the qualified RETURNING is byte-identical to v1 (never a hand-roll).
+  const returningPort = stringPort(ports, 'returning');
+  const returning = returningPort === undefined
+    ? undefined
+    : postgresSqlBuilder.buildReturning(table, returningPort.split(',').map((c) => c.trim()).filter((c) => c.length > 0), 't');
+  const { sql } = postgresSqlBuilder.buildUpdateMany({
+    tableName: table, keyColumns: keyCols, updateColumns: updateCols, records, rawRecords: records,
+    ...(returning !== undefined ? { returning } : {}),
+  });
+  // One array param per UNNEST column in [keyCols…, updateCols…] order (matches buildUpdateMany).
+  const refFor = (c: string): TxExpr => (keyCols.includes(c) ? key[c] : set[c]);
+  return { sql, params: pgBatchArrayParams(allCols, refFor, dialect) };
 }
 
 /**
@@ -442,7 +619,7 @@ function returningTail(ports: Record<string, unknown>): string {
  * defaults to null (the emulation then keeps its legacy `WHERE id`/`LAST_INSERT_ID` path, so the
  * existing auto-increment-`id` corpus is unchanged).
  */
-function pkPort(ports: Record<string, unknown>): { columns: readonly string[]; autoInc: string | null } | undefined {
+export function pkPort(ports: Record<string, unknown>): { columns: readonly string[]; autoInc: string | null } | undefined {
   const pk = stringPort(ports, 'pk');
   if (pk === undefined) return undefined;
   const columns = pk.split(',').map((c) => c.trim()).filter((c) => c.length > 0);
@@ -451,35 +628,23 @@ function pkPort(ports: Record<string, unknown>): { columns: readonly string[]; a
   return { columns, autoInc: ai ?? null };
 }
 
-/** The strip-before-execute PK-hint comment marker the MySQL RETURNING emulation reads. */
-const MYSQL_PK_HINT_RE = /\s*\/\*scp:pk=[^*]*\*\//;
-
-/**
- * Serialize a {@link TxOp.pk} descriptor into a strip-before-execute SQL comment appended to an
- * INSERT…RETURNING op, so the MySQL driver emulation can re-select by the REAL primary key. The
- * comment is STRIPPED (with the RETURNING clause) before the INSERT executes, so the executed SQL
- * stays byte-clean; it is emitted ONLY into the mysql-dialect bundle (PG/SQLite keep native
- * RETURNING and never see it). Format: ` /*scp:pk=col1,col2;ai=<autoIncCol|>* /`.
- */
-export function mysqlPkHint(op: TxOp): TxOp {
-  if (op.pk === undefined) return op;
-  if (!/\breturning\b/i.test(op.sql)) return op;
-  const hint = ` /*scp:pk=${op.pk.columns.join(',')};ai=${op.pk.autoInc ?? ''}*/`;
-  return { ...op, sql: op.sql + hint };
-}
-
-/** Strip a trailing MySQL PK-hint comment from a rendered SQL (defensive; runtimes strip too). */
-export function stripMysqlPkHint(sql: string): string {
-  return sql.replace(MYSQL_PK_HINT_RE, '');
-}
-
 /**
  * Compile ONE authored catalog write node (`Insert`/`Update`/`Delete`) into a makeSQL {@link TxOp}
  * — complete tuned SQL text + DEFERRED Expression-IR params. This is the makeSQL re-expression of
  * the reduced bridge's `compileNode` for the write path (the tx-DAG base writes). INSERT columns
  * are CANONICAL (alphabetical) sorted — the v2 write-path SSoT (matches `DBModel._insert`).
  */
-export function compileWriteNode(node: WriteNodeLike, dialect: MakeSQLDialect = 'sqlite'): TxOp {
+export function compileWriteNode(node: WriteNodeLike, dialect: MakeSQLDialect = 'sqlite', resolveColumnType?: ColumnTypeResolver): TxOp {
+  const op = compileWriteNodeSql(node, dialect, resolveColumnType);
+  // MySQL parses no RETURNING: the strip-before-execute pk hint rides the compiled SQL so the mysql
+  // connection adapter can re-select the written rows by the REAL key. It is applied HERE, at the one
+  // write compiler, rather than by each producer — the producers that forgot the ritual are exactly
+  // how a UUID / client-supplied / composite PK came to return no rows at all.
+  return dialect === 'mysql' ? mysqlPkHint(op) : op;
+}
+
+/** {@link compileWriteNode}'s SQL body — the dialect-neutral descriptor → statement compile. */
+function compileWriteNodeSql(node: WriteNodeLike, dialect: MakeSQLDialect, resolveColumnType?: ColumnTypeResolver): TxOp {
   const { component, ports } = node;
   const table = stringPort(ports, 'table');
   if (table === undefined) throw new Error(`compileWriteNode: ${component} node requires a literal 'table' port`);
@@ -492,29 +657,99 @@ export function compileWriteNode(node: WriteNodeLike, dialect: MakeSQLDialect = 
       const cols = Object.keys(values);
       if (cols.length === 0) throw new Error(`compileWriteNode: Insert requires at least one 'values.<field>' port`);
       const sorted = [...cols].sort();
+      // E3 (#118) BATCH insert (createMany / upsertMany): a `batch:'true'` marker means each
+      // `values.<col>` port is a PARALLEL ARRAY of that column's values (bc has no Vec<struct>, so the
+      // records ride as one scalar array per column). Reuse the EXISTING json_each batch f_sql (its
+      // text depends only on the columns + onConflict/returning — value-length-independent, so FIXED
+      // and bakeable); the ONE JSON `?` binds a `{__batchRows}` marker the runtime/codegen build from
+      // the parallel arrays at execute time (NOT literalized). One statement for N records.
+      if (stringPort(ports, 'batch') === 'true') {
+        if (dialect === 'postgres') {
+          if (resolveColumnType === undefined) throw new Error(`compileWriteNode: batch insert on postgres needs the column-type resolver (schema SoT) to derive the UNNEST element casts — pass it through compileCreateManyBundle/compileWriteBundle (the decorator-adapter write path).`);
+          return pgBatchInsert(table, sorted, values, ports, resolveColumnType, dialect);
+        }
+        const shapeOpts = { tableName: table, columns: sorted, records: [] as Record<string, unknown>[], ...onConflictJsonOpts(ports, sorted), ...(stringPort(ports, 'returning') !== undefined ? { returning: stringPort(ports, 'returning') } : {}) };
+        const shape = dialect === 'mysql' ? mysqlInsertJson(shapeOpts) : sqliteInsertJson(shapeOpts);
+        // The ONE json param = a deferred marker carrying the columns + their parallel array refs.
+        const marker = { __batchRows: { columns: sorted, refs: sorted.map((c) => values[c]), dialect } };
+        // Carry `pk` + `onConflict` (the SAME pkPort/onConflict SSoT the single INSERT path uses) so the
+        // mysql RETURNING re-select recovers ALL N written rows by the real key (auto-inc range, or the
+        // conflict key for upsertMany). `batch:true` keeps the native tx-chain lowering rejecting this op.
+        const pk = pkPort(ports);
+        const onConflictCols = stringPort(ports, 'onConflict');
+        const writeMeta = { table, bindColumns: sorted, returning: returningColumns(ports), batch: true, ...(onConflictCols !== undefined ? { onConflict: onConflictCols } : {}) };
+        return { sql: shape.sql, params: [marker], ...(pk !== undefined ? { pk } : {}), writeMeta };
+      }
       // v1 `DBModel._insert` emits `?::<sqlCast>` PER COLUMN on Postgres (skipping timestamp/date);
       // the placeholder list is thus per-column, NOT a uniform `?` join (the latent H1 divergence).
       const placeholders = sorted.map((c) => castPlaceholder(dialect, sqlCastMap, c)).join(', ');
-      const sql = `INSERT INTO ${table} (${sorted.join(', ')}) VALUES (${placeholders})${returningTail(ports)}`;
+      const sql = `INSERT INTO ${table} (${sorted.join(', ')}) VALUES (${placeholders})${onConflictTail(dialect, ports, sorted)}${returningTail(ports)}`;
       const pk = pkPort(ports);
-      return { sql, params: sorted.map((c) => values[c]), ...(pk !== undefined ? { pk } : {}) };
+      // The `?`s bind the value columns in sorted order (the ON CONFLICT / RETURNING tails add no `?`).
+      // `onConflict` (the conflict-target column list) rides on writeMeta ADDITIVELY (no SQL change) so a
+      // downstream mysql RETURNING re-select can recover an upserted row by its conflict key (mysql does
+      // not report the conflicted-row id) — used by the tx-chain codegen lowering.
+      const onConflictCols = stringPort(ports, 'onConflict');
+      const writeMeta = { table, bindColumns: sorted, returning: returningColumns(ports), ...(onConflictCols !== undefined ? { onConflict: onConflictCols } : {}) };
+      return { sql, params: sorted.map((c) => values[c]), ...(pk !== undefined ? { pk } : {}), writeMeta };
     }
     case 'Update': {
       const set = collectFamily(ports, 'set');
       const setCols = Object.keys(set);
       if (setCols.length === 0) throw new Error(`compileWriteNode: Update requires at least one 'set.<field>' port`);
-      const where = lowerWherePort(ports, 'Update');
-      if (where.sql === '') throw new Error(`compileWriteNode: Update requires a 'where' port`);
+      // E3 (#118) BATCH update (updateMany): `batch:'true'` — the `key.<col>` family names the match
+      // key(s) (parallel arrays), the `set.<col>` family the columns to set (parallel arrays). Reuse
+      // the EXISTING json_each/JSON_TABLE batch UPDATE (`sqliteUpdateManyJson`): its text depends only
+      // on the key + update columns, so it's FIXED and bakeable. It binds the ONE records-JSON to
+      // MULTIPLE `?` (one per SET clause + the WHERE) — each is the SAME `__batchRows` marker, so the
+      // runtime evalSpec (and the codegen seam) build the SAME JSON per `?`. ONE statement for N rows.
+      if (stringPort(ports, 'batch') === 'true') {
+        const key = collectFamily(ports, 'key');
+        const keyCols = Object.keys(key).sort();
+        if (keyCols.length === 0) throw new Error(`compileWriteNode: batch Update requires at least one 'key.<field>' port`);
+        const updateCols = [...setCols].sort();
+        if (dialect === 'postgres') {
+          if (resolveColumnType === undefined) throw new Error(`compileWriteNode: batch update on postgres needs the column-type resolver (schema SoT) to derive the UNNEST element casts — pass it through compileCreateManyBundle/compileWriteBundle (the decorator-adapter write path).`);
+          return pgBatchUpdate(table, keyCols, updateCols, key, set, ports, resolveColumnType, dialect);
+        }
+        const shapeOpts = { tableName: table, keyColumns: keyCols, updateColumns: updateCols, records: [] as Record<string, unknown>[], ...(stringPort(ports, 'returning') !== undefined ? { returning: stringPort(ports, 'returning') } : {}) };
+        const shape = dialect === 'mysql' ? mysqlUpdateManyJson(shapeOpts) : sqliteUpdateManyJson(shapeOpts);
+        // The JSON carries BOTH the key + update columns (in that order); one marker per `?`.
+        const columns = [...keyCols, ...updateCols];
+        const refs = [...keyCols.map((c) => key[c]), ...updateCols.map((c) => set[c])];
+        const nQ = (shape.sql.match(/\?/g) ?? []).length;
+        const marker = { __batchRows: { columns, refs, dialect } };
+        // Carry `pk` (the SAME pkPort SSoT) so the mysql RETURNING re-select orders the recovered rows by
+        // the real key (matching pg/sqlite RETURNING order). `batch:true` keeps the tx-chain rejecting it.
+        const pk = pkPort(ports);
+        const writeMeta = { table, bindColumns: columns, returning: returningColumns(ports), batch: true };
+        return { sql: shape.sql, params: Array.from({ length: nQ }, () => marker), ...(pk !== undefined ? { pk } : {}), writeMeta };
+      }
+      // An absent `where` port is an UNCONDITIONAL update — `UPDATE … SET …` with no tail. The port
+      // carries the structured `{arr:[…]}` member list and is lowered INLINE here; nothing appends a
+      // WHERE afterwards.
+      const where = lowerWherePort(ports, 'Update', dialect);
       // v1 `DBModel._update` emits `<c> = ?::<sqlCast>` PER COLUMN on Postgres (skipping timestamp/date).
       const setClauses = setCols.map((c) => `${c} = ${castPlaceholder(dialect, sqlCastMap, c)}`).join(', ');
-      const sql = `UPDATE ${table} SET ${setClauses} WHERE ${where.sql}${returningTail(ports)}`;
-      return { sql, params: [...setCols.map((c) => set[c]), ...where.params] };
+      const whereTail = where.sql === '' ? '' : ` WHERE ${where.sql}`;
+      const sql = `UPDATE ${table} SET ${setClauses}${whereTail}${returningTail(ports)}`;
+      // The `?`s bind the SET columns (in setCols order) then the WHERE columns (`where.columns`).
+      // `pk` rides along (the SAME pkPort SSoT the INSERT paths use) so a dialect without native
+      // RETURNING orders its recovered rows by the real key — without it a multi-row UPDATE…RETURNING
+      // comes back in the re-select's own order, which need not match PG's.
+      const writeMeta = { table, bindColumns: [...setCols, ...where.columns], returning: returningColumns(ports) };
+      const pk = pkPort(ports);
+      return { sql, params: [...setCols.map((c) => set[c]), ...where.params], ...(pk !== undefined ? { pk } : {}), writeMeta };
     }
     case 'Delete': {
-      const where = lowerWherePort(ports, 'Delete');
-      if (where.sql === '') throw new Error(`compileWriteNode: Delete requires a 'where' port`);
-      const sql = `DELETE FROM ${table} WHERE ${where.sql}${returningTail(ports)}`;
-      return { sql, params: where.params };
+      // As Update: the `where` port is lowered inline. Absent ⇒ an unconditional `DELETE FROM t`.
+      const where = lowerWherePort(ports, 'Delete', dialect);
+      const sql = `DELETE FROM ${table}${where.sql === '' ? '' : ` WHERE ${where.sql}`}${returningTail(ports)}`;
+      // The `?`s bind the WHERE columns; a DELETE has no SET/VALUES params. `pk` rides along so the
+      // pre-image re-select is ordered by the real key (as Update above).
+      const writeMeta = { table, bindColumns: where.columns, returning: returningColumns(ports) };
+      const pk = pkPort(ports);
+      return { sql, params: where.params, ...(pk !== undefined ? { pk } : {}), writeMeta };
     }
     default:
       throw new Error(`compileWriteNode: catalog component '${component}' has no write compile (SQL writes: Insert/Update/Delete)`);
@@ -803,12 +1038,20 @@ function collectRefHeads(node: unknown, heads: Set<string>): void {
 // Runtime — execute a TransactionPlan against real SQLite as ONE transaction.
 // ============================================================================
 
-/** The minimal synchronous SQLite driver surface the tx runtime needs (better-sqlite3). */
-export interface SqliteDb {
-  prepare(sql: string): {
-    all(...params: unknown[]): unknown[];
-    run(...params: unknown[]): { changes: number; lastInsertRowid: number | bigint };
-  };
+/**
+ * The minimal synchronous SQLite driver surface the tx runtime needs (better-sqlite3) — the
+ * backward-compat public seam. Internally the tx runs through the {@link ExecutionContext} seam
+ * (`../exec-context`); a raw driver passed here is wrapped via {@link contextForDriver}. Aliased to
+ * {@link SqliteDriver}.
+ */
+export type SqliteDb = SqliteDriver;
+
+/** A tx entry accepts either a raw {@link SqliteDb} or a full {@link ExecutionContext}. */
+export type DbOrContext = SqliteDb | ExecutionContext;
+
+/** Coerce a `SqliteDb | ExecutionContext` argument to a ctx (raw driver ⇒ backward-compat wrapper). */
+function asContext(dbOrCtx: DbOrContext): ExecutionContext {
+  return 'connectionFor' in dbOrCtx ? dbOrCtx : contextForDriver(dbOrCtx);
 }
 
 /** Why a transaction did not commit (a gate short-circuit outcome; not a driver error). */
@@ -831,44 +1074,58 @@ export interface TransactionResult {
 }
 
 /** bc evaluates ints to bigint; convert a rendered param to a driver-bindable value. */
-function toDriverParam(v: Value): unknown {
+function toDriverParam(v: Value, dialect: MakeSQLDialect): unknown {
   if (typeof v === 'bigint') {
     if (v >= BigInt(Number.MIN_SAFE_INTEGER) && v <= BigInt(Number.MAX_SAFE_INTEGER)) return Number(v);
     return v;
   }
-  // An emit payload evaluates to a plain object (`{obj:{…}}`); serialize it to the outbox JSON text.
-  if (v !== null && typeof v === 'object' && !Array.isArray(v)) return JSON.stringify(v);
+  // An emit payload evaluates to a plain object (`{obj:{…}}`); serialize it to the outbox JSON text
+  // through the ONE JSON-param encoder, so a field that came off a read (a bc `int`, i.e. a BigInt that
+  // `JSON.stringify` refuses) is handled the same way the batch and array params handle it.
+  if (v !== null && typeof v === 'object' && !Array.isArray(v)) return encodeJsonParam(dialect, v);
   return v;
 }
 
 /**
- * Render a statement's makeSQL op against the tx scope: evaluate each deferred Expression-IR
- * param to a concrete value (bc `evaluateExpression`), build a concrete `makeSQL`, then
- * assemble + render to the dialect placeholder form. This is the SAME assemble/render the read
- * path uses — only the param values come from the tx scope, not a compile-time input.
+ * Evaluate a statement's makeSQL op against the tx scope to RAW `?` SQL + driver-coerced params:
+ * evaluate each deferred Expression-IR param to a concrete value (bc `evaluateExpression`), assemble
+ * the concrete `makeSQL` (splice nested makeSQL), and coerce each param to the driver form
+ * ({@link toDriverParam}). Placeholder render (`?`→`$N`) is NOT done here — it is the transport leaf's
+ * job (`executeSQL`) so a tx body statement rides the SAME op-independent transport as every read/write.
+ * This is the single eval/assemble/coerce for both the sync leaf exec ({@link execStatement}) and the
+ * placeholder-rendered {@link renderStatement} (async path + golden export).
+ */
+function evalAssemble(op: TxOp, scope: Scope, dialect: MakeSQLDialect): { sql: string; params: unknown[] } {
+  const concrete: unknown[] = op.params.map((p) => evaluateExpression(p, scope));
+  const assembled = assembleMakeSQL({ sql: op.sql, params: concrete });
+  return { sql: assembled.sql, params: assembled.params.map((p) => toDriverParam(p as Value, dialect)) };
+}
+
+/**
+ * Render a statement's makeSQL op against the tx scope to the dialect placeholder form ({@link
+ * evalAssemble} + `?`→`$N`). Used by the ASYNC tx path ({@link execStatementAsync}) and the golden
+ * export {@link renderTxStatement}; the SYNC path renders via the transport leaf ({@link execStatement}).
  */
 function renderStatement(op: TxOp, scope: Scope, dialect: MakeSQLDialect): { sql: string; params: unknown[] } {
-  const concrete: unknown[] = op.params.map((p) => evaluateExpression(p, scope));
-  const node: MakeSQL = { sql: op.sql, params: concrete };
-  const assembled = assembleMakeSQL(node);
-  return { sql: renderPlaceholders(assembled.sql, dialect), params: assembled.params.map((p) => toDriverParam(p as Value)) };
+  const { sql, params } = evalAssemble(op, scope, dialect);
+  return { sql: renderPlaceholders(sql, dialect), params };
 }
 
 function execStatement(
-  db: SqliteDb,
+  ctx: ExecutionContext,
   op: TxOp,
   scope: Scope,
   dialect: MakeSQLDialect,
 ): { rows: Record<string, unknown>[]; changes: number } {
-  const { sql, params } = renderStatement(op, scope, dialect);
-  const stmt = db.prepare(sql);
+  // A tx body statement rides the SAME op-independent transport as every read/write: the `executeSQL`
+  // leaf (placeholder render + param encode + central seam). The tx scope-eval/assemble/coerce is done
+  // first (`evalAssemble`); the leaf receives raw `?` SQL + concrete params. `write:true` ⇒ the tx-owned
+  // connection resolves via `connectionFor` (§3); a SELECT/RETURNING statement reads rows (`returning`
+  // ⇒ the row-returning seam), a bare write runs (the `[{changes,…}]` summary).
+  const { sql, params } = evalAssemble(op, scope, dialect);
   const hasReturn = /\bselect\b/i.test(sql.slice(0, 8)) || /\breturning\b/i.test(sql);
-  if (hasReturn) {
-    const rows = stmt.all(...params) as Record<string, unknown>[];
-    return { rows, changes: rows.length };
-  }
-  const info = stmt.run(...params);
-  return { rows: [], changes: info.changes };
+  const out = executeSQL({ sql, params, write: true, returning: hasReturn, bigint: false }, { exec: ctx, dialect } satisfies LeafContext);
+  return hasReturn ? { rows: out, changes: out.length } : { rows: [], changes: Number(out[0]?.changes ?? 0) };
 }
 
 function gateShortCircuit(gate: GateRule, result: { rows: Record<string, unknown>[]; changes: number }): ShortCircuitReason | null {
@@ -887,9 +1144,17 @@ function gateShortCircuit(gate: GateRule, result: { rows: Record<string, unknown
   }
 }
 
-/** Execute a derived {@link TransactionPlan} as ONE real SQLite transaction with gate-first. */
-export function executeTransaction(db: SqliteDb, plan: TransactionPlan, input: Scope, dialect: MakeSQLDialect = 'sqlite'): TransactionResult {
-  db.prepare('BEGIN').run();
+/**
+ * Execute a derived {@link TransactionPlan} as ONE real SQLite transaction with gate-first
+ * short-circuit. Accepts a raw {@link SqliteDb} (wrapped via {@link contextForDriver}) or a full
+ * {@link ExecutionContext}. The transaction derives a tx-scoped ctx (`withConnection(conn, true)`)
+ * that PINS one connection so BEGIN, every body statement, and COMMIT/ROLLBACK all run on the SAME
+ * connection (§3, per-execution ownership). For the single-DB SQLite driver the pinned connection
+ * is the sole connection; the ownership shows its teeth on the pooled async path
+ * ({@link import('../exec-context').withTransactionAsync}), which this mirrors.
+ */
+export function executeTransaction(db: DbOrContext, plan: TransactionPlan, input: Scope, dialect: MakeSQLDialect = 'sqlite'): TransactionResult {
+  const outer = asContext(db);
   const executed: string[] = [];
   const scope: Scope = { ...input };
   let entity: Record<string, unknown> | null = null;
@@ -902,36 +1167,39 @@ export function executeTransaction(db: SqliteDb, plan: TransactionPlan, input: S
     plan.statements.every((s) => s.gate === undefined && s.binds === undefined && s.role === 'body');
   const returnedRows: Record<string, unknown>[][] = [];
 
+  // The tx boundary is the sync `ctx.transaction` ({@link withTransactionSync}: pin conn → BEGIN →
+  // body → COMMIT/ROLLBACK, inside `runInTransactionScope`). The body runs the derived plan's
+  // statements in order via the `executeSQL` transport leaf ({@link execStatement}); a gate
+  // short-circuit signals `{commit:false}` so the boundary ROLLBACKs but still returns the reason.
   try {
-    for (const stmt of plan.statements) {
-      const result = execStatement(db, stmt.op, scope, dialect);
-      executed.push(stmt.id);
+    return withTransactionSync<TransactionResult>(
+      outer,
+      (ctx): { commit: boolean; value: TransactionResult } => {
+        for (const stmt of plan.statements) {
+          const result = execStatement(ctx, stmt.op, scope, dialect);
+          executed.push(stmt.id);
 
-      if (stmt.gate !== undefined) {
-        const reason = gateShortCircuit(stmt.gate, result);
-        if (reason !== null) {
-          db.prepare('ROLLBACK').run();
-          return { committed: false, shortCircuit: { statementId: stmt.id, reason }, entity: null, executed };
+          if (stmt.gate !== undefined) {
+            const reason = gateShortCircuit(stmt.gate, result);
+            if (reason !== null) {
+              return { commit: false, value: { committed: false, shortCircuit: { statementId: stmt.id, reason }, entity: null, executed } };
+            }
+          }
+
+          if (stmt.id === plan.entityFrom) {
+            entity = result.rows.length > 0 ? result.rows[0] : null;
+            if (entity !== null) scope[ENTITY_ROOT] = entity as unknown as Value;
+          }
+          if (stmt.binds !== undefined && result.rows.length > 0) {
+            scope[stmt.binds] = result.rows[0] as unknown as Value;
+          }
+          if (isBatch && stmt.role === 'body' && result.rows.length > 0) returnedRows.push(result.rows);
         }
-      }
-
-      if (stmt.id === plan.entityFrom) {
-        entity = result.rows.length > 0 ? result.rows[0] : null;
-        if (entity !== null) scope[ENTITY_ROOT] = entity as unknown as Value;
-      }
-      if (stmt.binds !== undefined && result.rows.length > 0) {
-        scope[stmt.binds] = result.rows[0] as unknown as Value;
-      }
-      if (isBatch && stmt.role === 'body' && result.rows.length > 0) returnedRows.push(result.rows);
-    }
-    db.prepare('COMMIT').run();
-    return { committed: true, entity, executed, ...(returnedRows.length > 0 ? { returnedRows } : {}) };
+        return { commit: true, value: { committed: true, entity, executed, ...(returnedRows.length > 0 ? { returnedRows } : {}) } };
+      },
+      dialect,
+    );
   } catch (e) {
-    try {
-      db.prepare('ROLLBACK').run();
-    } catch {
-      /* ROLLBACK best-effort; surface the original failure below */
-    }
     throw mapSqliteError(e);
   }
 }
@@ -954,4 +1222,168 @@ export function countingDriver(db: SqliteDb): { db: SqliteDb; prepared: string[]
 /** Render one statement op to its dialect SQL text + params (exposed for golden tests). */
 export function renderTxStatement(op: TxOp, scope: Scope, dialect: MakeSQLDialect = 'sqlite'): { sql: string; params: unknown[] } {
   return renderStatement(op, scope, dialect);
+}
+
+// ============================================================================
+// Phase A (#75) — ASYNC transaction runtime (live PG / MySQL) with PER-EXECUTION
+// CONNECTION OWNERSHIP. The async twin of `executeTransaction`: it runs the derived
+// TransactionPlan through `withTransactionAsync`, which acquires ONE pooled connection,
+// pins it in the ALS ctx, and runs BEGIN…COMMIT on it. Concurrent transactions each own a
+// DISTINCT connection ⇒ isolated (no shared-slot cross-talk). This is the production async
+// write-tx path the concurrent-tx isolation test exercises.
+// ============================================================================
+
+/**
+ * Run ONE rendered tx statement through the async seam — the SAME op-independent `executeSQL`
+ * transport leaf every read/write rides. Returns `{ rows, changes }`.
+ *
+ * MySQL's missing RETURNING is NOT handled here: it is a property of the CONNECTION, and the mysql
+ * connection adapter ({@link import('./pool-executor').mysqlConnectionPool}) owns it — so the mode-2
+ * plan executor and a generated (codegen) write reach the identical write→re-select through one
+ * seam, and cannot disagree about the rows a write returns.
+ */
+async function execStatementAsync(
+  ctx: AsyncExecutionContext,
+  op: TxOp,
+  scope: Scope,
+  dialect: MakeSQLDialect,
+): Promise<{ rows: Record<string, unknown>[]; changes: number }> {
+  // Eval value-specs + assemble to RAW `?` SQL + coerced params (the SSoT `evalAssemble`, shared with
+  // the sync path). The leaf renders `?`→`$N` per dialect after the final SQL is assembled.
+  const { sql, params } = evalAssemble(op, scope, dialect);
+
+  // A SELECT/RETURNING reads rows; a bare write returns the `[{changes,…}]` summary.
+  const hasReturn = /\bselect\b/i.test(sql.slice(0, 8)) || /\breturning\b/i.test(sql);
+  const out = await executeSQLAsync({ sql, params, write: true, returning: hasReturn, bigint: false }, { execAsync: ctx, dialect } satisfies AsyncLeafContext);
+  return hasReturn ? { rows: out, changes: out.length } : { rows: [], changes: Number(out[0]?.changes ?? 0) };
+}
+
+/**
+ * Options for the live async write entry {@link executeTransactionAsync} — the tx {@link
+ * TransactionOptions} plus the write=tx `guard` policy (#86).
+ */
+export interface WriteExecOptions extends TransactionOptions {
+  /**
+   * Enforce the write=tx guard (#86 / #81 `checkWriteAllowed`): a write issued OUTSIDE a user
+   * `transaction(fn)` throws {@link WriteOutsideTransactionError}; a write in a {@link
+   * import('../tx-options').withReadOnly} scope throws {@link WriteInReadOnlyContextError}. This is
+   * the DEFAULT for the public write path — writes require an explicit transaction (v1 parity,
+   * `DBModel.ts:886`). Set `false` ONLY for the internal per-execution-ownership plane (the Phase A
+   * ownership proofs that drive the plan executor as its OWN auto-tx). @default true
+   */
+  readonly guard?: boolean;
+}
+
+/**
+ * Execute a derived {@link TransactionPlan} on a live PG / MySQL connection with gate-first
+ * short-circuit and **per-execution connection ownership** (§3). The live-DB WRITE entry (#86).
+ *
+ * ## Ambient-tx JOIN vs. its own envelope (the #86 core)
+ *
+ * `withTransactionAsync` (:495) decides the envelope:
+ *   - **inside a user `transaction(fn)`** (an outer connection is pinned in the ALS) → the write
+ *     JOINS the outer: its statements run on the outer's owned connection with NO new BEGIN/COMMIT,
+ *     so N writes in one boundary are ONE physical transaction (one BEGIN, one COMMIT, one conn);
+ *   - **outside any transaction** → it opens its OWN BEGIN…COMMIT on a freshly-acquired owned
+ *     connection (the per-execution auto-tx; concurrent calls each own a DISTINCT connection ⇒
+ *     isolated).
+ *
+ * ## write=tx guard (#86, wired here — fires at runtime, not a standalone helper)
+ *
+ * With `options.guard` (DEFAULT true), a write with NO ambient user tx is REJECTED via {@link
+ * checkWriteAllowed} BEFORE any SQL: `WriteOutsideTransactionError` (no active tx) /
+ * `WriteInReadOnlyContextError` (read-only scope). The check runs at ENTRY — before
+ * `withTransactionAsync` would open the write's own envelope — so it sees the CALLER's scope, exactly
+ * mirroring v1 `DBModel._checkWriteAllowed` (:886, called at the public write entry, not the plan
+ * executor). Inside a `transaction(fn)` the ambient marker is set ⇒ the guard passes and the write
+ * joins. The structured {@link TransactionResult} is identical to the sync {@link executeTransaction}.
+ */
+export function executeTransactionAsync(
+  ctx: PooledAsyncContext,
+  plan: TransactionPlan,
+  input: Scope,
+  dialect: MakeSQLDialect = 'sqlite',
+  options: WriteExecOptions = {},
+): Promise<TransactionResult> {
+  // write=tx guard (#86), enforced at ENTRY so it sees the CALLER's scope — a write inside a user
+  // `transaction(fn)` has the ambient "inside a tx" marker set (⇒ passes + JOINS the outer); a bare
+  // write outside any boundary has no marker (⇒ WriteOutsideTransactionError). Reject as a REJECTED
+  // promise (never a synchronous throw) since this entry is async. Tx-control statements the runtime
+  // itself issues (BEGIN/COMMIT) never pass through here — only data-write plans do.
+  if (options.guard !== false) {
+    // Run the guard, then the plan, as a REJECTED promise on failure (never a synchronous throw).
+    // `checkWriteAllowed` mirrors v1 ordering (:886): read-only is rejected FIRST
+    // (`WriteInReadOnlyContextError`), then a missing active tx (`WriteOutsideTransactionError`).
+    // Inside a user `transaction(fn)` the ambient marker is set ⇒ neither fires and the write JOINS
+    // the outer; outside any boundary the no-active-tx branch throws.
+    return Promise.resolve().then(() => {
+      checkWriteAllowed('WRITE', plan.statements[0]?.id);
+      return runTransactionPlanAsync(ctx, plan, input, dialect, options);
+    });
+  }
+  return runTransactionPlanAsync(ctx, plan, input, dialect, options);
+}
+
+/** The plan-executor body of {@link executeTransactionAsync}, split so the guard runs at entry. */
+function runTransactionPlanAsync(
+  ctx: PooledAsyncContext,
+  plan: TransactionPlan,
+  input: Scope,
+  dialect: MakeSQLDialect,
+  options: TransactionOptions,
+): Promise<TransactionResult> {
+  const isBatch =
+    plan.entityFrom === null &&
+    plan.statements.every((s) => s.gate === undefined && s.binds === undefined && s.role === 'body');
+
+  return withTransactionAsync(ctx, async (txCtx) => {
+    const executed: string[] = [];
+    const scope: Scope = { ...input };
+    let entity: Record<string, unknown> | null = null;
+    const returnedRows: Record<string, unknown>[][] = [];
+
+    for (const stmt of plan.statements) {
+      const result = await execStatementAsync(txCtx, stmt.op, scope, dialect);
+      executed.push(stmt.id);
+
+      if (stmt.gate !== undefined) {
+        const reason = gateShortCircuit(stmt.gate, result);
+        if (reason !== null) {
+          // A gate short-circuit ROLLBACKs the whole tx (atomicity): throw the sentinel so
+          // `withTransactionAsync` runs ROLLBACK on the owned connection, then translate to the
+          // structured non-committed result at the boundary.
+          throw new GateShortCircuit(stmt.id, reason, executed);
+        }
+      }
+
+      if (stmt.id === plan.entityFrom) {
+        entity = result.rows.length > 0 ? result.rows[0] : null;
+        if (entity !== null) scope[ENTITY_ROOT] = entity as unknown as Value;
+      }
+      if (stmt.binds !== undefined && result.rows.length > 0) {
+        scope[stmt.binds] = result.rows[0] as unknown as Value;
+      }
+      if (isBatch && stmt.role === 'body' && result.rows.length > 0) returnedRows.push(result.rows);
+    }
+    return { committed: true, entity, executed, ...(returnedRows.length > 0 ? { returnedRows } : {}) } as TransactionResult;
+  }, options, dialect === 'sqlite' ? 'postgres' : dialect, isConnectionError).catch((e: unknown) => {
+    // A gate short-circuit is NOT a failure — it ROLLBACKs and reports `committed:false`. Any other
+    // error is a real driver failure (already rolled back by withTransactionAsync) → re-surface.
+    if (e instanceof GateShortCircuit) {
+      return { committed: false, shortCircuit: { statementId: e.statementId, reason: e.reason }, entity: null, executed: e.executed };
+    }
+    throw mapSqliteError(e);
+  });
+}
+
+/** Internal sentinel: a gate short-circuit inside an async tx (ROLLBACK, then report non-committed). */
+class GateShortCircuit extends Error {
+  constructor(
+    readonly statementId: string,
+    readonly reason: ShortCircuitReason,
+    readonly executed: readonly string[],
+  ) {
+    super(`scp write: gate short-circuit at '${statementId}' (${reason})`);
+    this.name = 'GateShortCircuit';
+  }
 }

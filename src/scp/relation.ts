@@ -28,15 +28,26 @@
 
 import { assembleMakeSQL, type MakeSQL } from './makesql/makesql';
 import { renderPlaceholders, type Dialect } from './makesql/handler';
+import {
+  type ExecutionContext,
+  type SqliteDriver,
+  executeSafe as seamExecuteSafe,
+  contextForDriver,
+} from './exec-context';
 import { materializeCell, sqlTypeToMaterializeClass, type MaterializeClass, type ColumnTypeResolver } from './coltype';
 import { parseProjectionColumn } from './makesql/outtype';
+import { assertRelationHardLimit, resolveHasManyHardLimit, type RelationGuard } from './limit-config';
+import { dedupeKeyTuples, groupByKey, attachToParent } from './grouping';
+import { encodeJsonParam } from './makesql/json-array';
 import {
   compileSingleKeyUnlimited,
   compileSingleKeyLimited,
   compileCompositeKeyStaticUnlimited,
   compileCompositeKeyStaticLimited,
+  inferPgElementType,
   resolvePgArrayCast,
 } from './makesql/compile-relation';
+import { pgTypeSpecimen } from './makesql/tx';
 
 /** A read relation cardinality (v1 parity). `belongsTo`/`hasOne` are single; `hasMany` many. */
 export type RelationKind = 'belongsTo' | 'hasMany' | 'hasOne';
@@ -70,8 +81,26 @@ export interface RelationDecl {
   readonly order?: string;
   /** Optional per-parent row limit (`hasMany` only). */
   readonly limit?: number;
+  /**
+   * Per-relation hard-limit override (Phase E-2, epic #74; v1 `@hasMany({ hardLimit })`): the
+   * batch-total cap for THIS relation, winning over the global `hasManyHardLimit`. `null` DISABLES
+   * the check for this relation even when the global is set; `undefined` ⇒ use the global. `hasMany`
+   * only (a single-cardinality relation fetches at most one child per parent). A relation with an
+   * intrinsic per-parent {@link limit} window skips the batch-total check regardless (its fanout is
+   * already bounded). See {@link import('./limit-config').resolveHasManyHardLimit}.
+   */
+  readonly hardLimit?: number | null;
   /** The target SQL dialect the batch SELECT is compiled for (default `'sqlite'`). */
   readonly dialect?: Dialect;
+  /**
+   * CHAINED relations (nested `with`, e.g. users→posts→comments): the relations declared ON THIS
+   * relation's CHILD rows — a grandchild batch keyed by this relation's own result rows (level ≥ 3).
+   * Each is a normal {@link RelationDecl} whose parent is THIS relation's target table. The batch stays
+   * N+1-free per level (one query per depth): a per-language codegen lowers the chain as a batched map
+   * off the parent relation's node; the runtime resolves the flattened child keys once per level. Absent
+   * for a leaf (2-level) relation — additive, so existing single-level relations are byte-unchanged.
+   */
+  readonly childRelations?: readonly RelationDecl[];
   /**
    * CROSS-DB relations (V0 R1): the NAME of the connection the batch SELECT must execute against —
    * the TARGET model's DB, which may differ from the parent's (v1 `LazyRelation.ts:236` runs a
@@ -111,10 +140,11 @@ export interface RelationOp {
    */
   readonly connection?: string;
   /**
-   * The batched child SELECT as STATIC makeSQL text. Single-key: ONE `?` binds the deduped
-   * parent-key set (PG `= ANY(?::t[])` / MySQL·SQLite single-JSON). Composite: PG binds ONE array
-   * param PER key column (`unnest(?::t1[], ?::t2[])`); MySQL·SQLite bind ONE JSON array-of-tuples
-   * param. Value-length-independent either way, so `sql` is fixed.
+   * The batched child SELECT as STATIC makeSQL text. ONE `?` binds the deduped parent-key set on
+   * every dialect and arity: single-key as the scalar set (PG `= ANY(?::t[])` / MySQL·SQLite
+   * single-JSON), composite as the ONE array-of-tuples JSON param every dialect expands server-side
+   * (PG `json_array_elements`, MySQL `JSON_TABLE`, SQLite `json_each`). Value-length-independent, so
+   * `sql` is fixed — and the key set is exactly the ONE array the `pluck` leaf yields.
    */
   readonly sql: string;
   /**
@@ -124,12 +154,32 @@ export interface RelationOp {
   readonly targetTable?: string;
   readonly select?: readonly string[];
   /**
+   * CHAINED relations (nested `with`): the COMPILED grandchild relation ops keyed off THIS relation's
+   * child rows (level ≥ 3). Present iff the decl carried {@link RelationDecl.childRelations}. A codegen
+   * lowering injects each as a batched map off this relation's node (N+1-free per level); the mode-2
+   * flat-batch runtime does not recurse into it (single-level). Additive — absent for leaf relations.
+   */
+  readonly childRelations?: readonly RelationOp[];
+  /**
    * The child columns' STATIC materialize classes (issue #59): `column → MaterializeClass`, baked
    * at compile from the model's DDL resolver (only non-passthrough entries). The relation batch runs
    * these over its child rows so a BIGINT/DATE/BOOLEAN child de-boxes identically to the primary
    * read — with ZERO per-read DB introspection. Absent ⇒ the child rows stay raw (no schema).
    */
   readonly materializers?: Readonly<Record<string, MaterializeClass>>;
+  /**
+   * Hard-limit runaway cap (Phase E-2, epic #74; v1 `_selectForRelation` `hasManyHardLimit`): the
+   * effective per-batch row cap RESOLVED at compile (per-relation override → global). When the batch
+   * fetches MORE than this TOTAL, {@link import('./errors').LimitExceededError} is raised
+   * (`context: 'relation'`, EXACT count) — by {@link runRelationOp} on the typed-object / lazy
+   * surface, and by the `executeSQL` leaf on the CODEGEN surface, where the emitter bakes this cap
+   * into the child fetch's `guard` port (the raw child rows are only visible there, before `group`).
+   * BOTH read it through {@link relationGuard} + `assertRelationHardLimit`, so neither the cap nor the
+   * error identity can drift between surfaces or languages. Absent ⇒ no check (disabled, or a relation
+   * with an intrinsic per-parent `limit` window whose fanout is already bounded).
+   * See {@link import('./limit-config').resolveHasManyHardLimit}.
+   */
+  readonly hardLimit?: number;
 }
 
 /** The reserved input head the relation batch query binds its deduped key array to. */
@@ -157,7 +207,7 @@ export function compileRelationOp(decl: RelationDecl, resolveColumnType?: Column
   }
   const dialect: Dialect = decl.dialect ?? 'sqlite';
   const composite = isCompositeDecl(decl);
-  const sql = compiledBatchSql(decl, dialect);
+  const sql = compiledBatchSql(decl, dialect, resolveColumnType);
   // CROSS-DB (V0 R1): carry the target connection tag ONLY when set (a same-DB relation stays
   // untagged, so existing bundles are byte-unchanged — the field is additive/optional).
   const conn = decl.connection !== undefined ? { connection: decl.connection } : {};
@@ -177,11 +227,28 @@ export function compileRelationOp(decl: RelationDecl, resolveColumnType?: Column
       if (klass !== 'passthrough') materializers[entry.outputKey] = klass;
     }
   }
+  // CHAINED relations (nested `with`): compile each grandchild relation recursively, inheriting THIS
+  // relation's dialect. The SAME single compiler — a child is just another RelationDecl whose parent is
+  // this relation's target rows; no separate nested-relation path. Absent ⇒ a leaf (byte-unchanged).
+  const childRelations =
+    decl.childRelations !== undefined && decl.childRelations.length > 0
+      ? decl.childRelations.map((c) => compileRelationOp({ ...c, dialect: c.dialect ?? dialect }, resolveColumnType))
+      : undefined;
   const target = {
     targetTable: decl.targetTable,
     select: [...decl.select],
     ...(Object.keys(materializers).length > 0 ? { materializers } : {}),
+    ...(childRelations !== undefined ? { childRelations } : {}),
   };
+  // Hard-limit runaway cap (Phase E-2, epic #74; v1 `_selectForRelation`): resolve the effective
+  // batch-total cap ONCE at compile (per-relation override → global) and bake it onto the op as a
+  // plain number the native ports read. Only a `hasMany` is capped (single-cardinality fetches ≤1
+  // child per parent). A relation with an INTRINSIC per-parent `limit` window SKIPS the check — its
+  // fanout is already bounded per parent (v1 raw-SQL-with-LIMIT skip). `null` (per-relation or global)
+  // ⇒ disabled ⇒ the field is omitted (op stays byte-unchanged for the uncapped path).
+  const effectiveHardLimit =
+    decl.kind === 'hasMany' && decl.limit === undefined ? resolveHasManyHardLimit(decl.hardLimit) : null;
+  const guard = effectiveHardLimit !== null ? { hardLimit: effectiveHardLimit } : {};
   if (composite) {
     return {
       name: decl.name,
@@ -192,6 +259,7 @@ export function compileRelationOp(decl: RelationDecl, resolveColumnType?: Column
       ...conn,
       sql,
       ...target,
+      ...guard,
     };
   }
   return {
@@ -203,6 +271,7 @@ export function compileRelationOp(decl: RelationDecl, resolveColumnType?: Column
     ...conn,
     sql,
     ...target,
+    ...guard,
   };
 }
 
@@ -232,24 +301,45 @@ function isCompositeDecl(decl: RelationDecl): boolean {
 }
 
 /**
+ * The PG element type of each COMPOSITE key column, from the CHILD column's DECLARED type — the same
+ * schema-derived derivation the composite `tupleIn` predicate uses (`pgTypeSpecimen` →
+ * `inferPgElementType`), so the two composite PG forms cast identically. The child column is the one
+ * the key row is compared against, so its declared type is the type the key must carry.
+ *
+ * A composite PG batch cannot be compiled without them (the key rows come out of JSON as `text` and
+ * `int = text` fails at plan time), so a missing resolver is a LOUD compile error, never a silent
+ * `text` fallback.
+ */
+function pgKeyTypesOf(decl: RelationDecl, targetKeys: readonly string[], resolveColumnType?: ColumnTypeResolver): readonly string[] {
+  if (resolveColumnType === undefined) {
+    throw new Error(
+      `relation '${decl.name}': a COMPOSITE-key relation on postgres needs the target model's column types ` +
+        `(keys ${targetKeys.join(', ')} on '${decl.targetTable}') — pass a ColumnTypeResolver to compileRelationOp`,
+    );
+  }
+  return targetKeys.map((k) => inferPgElementType([pgTypeSpecimen(resolveColumnType(decl.targetTable, k))]));
+}
+
+/**
  * Compile the STATIC batch SELECT text: the makeSQL relation builder emits complete tuned SQL
  * whose deduped-key array is ONE param. We compile against a single placeholder key array so
  * the text is fixed; the runtime re-binds the real deduped keys against the SAME text (the
  * single-JSON / `= ANY` forms are length-independent, so the text is stable).
  */
-function compiledBatchSql(decl: RelationDecl, dialect: Dialect): string {
-  // A COMPOSITE decl compiles to the STATIC composite form (PG: one array param per key column;
-  // MySQL/SQLite: one JSON array-of-tuples param) — length-independent, so the text is fixed. A
-  // per-parent `limit` selects the STATIC composite-LIMITED builder (PG LATERAL / MySQL·SQLite
-  // ROW_NUMBER window over the SAME static key-set predicate — #47 last completeness gap).
+function compiledBatchSql(decl: RelationDecl, dialect: Dialect, resolveColumnType?: ColumnTypeResolver): string {
+  // A COMPOSITE decl compiles to the STATIC composite form — ONE JSON array-of-tuples param on every
+  // dialect, length-independent, so the text is fixed. A per-parent `limit` selects the STATIC
+  // composite-LIMITED builder (PG LATERAL / MySQL·SQLite ROW_NUMBER window over the SAME static
+  // key-set predicate — #47 last completeness gap).
   if (decl.parentKeys !== undefined) {
+    const targetKeys = [...(decl.targetKeys as readonly string[])];
     const compositeBase = {
       dialect,
       tableName: decl.targetTable,
       select: decl.select.join(', '),
       order: decl.order,
-      targetKeys: [...(decl.targetKeys as readonly string[])],
-      deferPgArrayCast: true,
+      targetKeys,
+      ...(dialect === 'postgres' ? { pgKeyTypes: pgKeyTypesOf(decl, targetKeys, resolveColumnType) } : {}),
     };
     const node =
       decl.limit !== undefined
@@ -260,6 +350,16 @@ function compiledBatchSql(decl: RelationDecl, dialect: Dialect): string {
   // A one-element placeholder key set fixes the SQL text (single-JSON-param / `= ANY` forms are
   // value-length-independent). The concrete keys are bound at execute time.
   const placeholderKeys: unknown[] = [null];
+  // The PG `= ANY(?::<T>[])` element type comes from the target key COLUMN's DECLARED type — the same
+  // schema-derived derivation the composite path uses (`pgKeyTypesOf`). It must NOT be inferred at
+  // render from a bound value: the value's type differs by language (a bc int is a BigInt on the TS
+  // plane → `bigint[]`, a native int in python/php → `int[]`), which broke cross-language byte-identity.
+  // The column is the authority (an int column → `int[]`, byte-identical to v1's live-correct cast, and
+  // never the #43 `text[]`). Only fall back to render-time inference when no resolver is available.
+  const pgKeyCast =
+    dialect === 'postgres' && resolveColumnType !== undefined
+      ? inferPgElementType([pgTypeSpecimen(resolveColumnType(decl.targetTable, decl.targetKey as string))])
+      : undefined;
   const base = {
     dialect,
     tableName: decl.targetTable,
@@ -267,11 +367,9 @@ function compiledBatchSql(decl: RelationDecl, dialect: Dialect): string {
     order: decl.order,
     targetKey: decl.targetKey as string,
     values: placeholderKeys,
-    // The keys are UNKNOWN at symbolic compile (placeholder set), so the PG `= ANY(?::<T>[])`
-    // element type is DEFERRED to render (#46) — resolved from the real deduped keys via
-    // `inferPgArrayType`, reproducing v1's live-correct cast (`::int[]` for int keys). Baking a
-    // compile-time `text[]` here was the #43 regression (`integer = text` on real PG).
-    deferPgArrayCast: true,
+    ...(pgKeyCast !== undefined
+      ? { sqlCastMap: new Map([[decl.targetKey as string, pgKeyCast]]) }
+      : { deferPgArrayCast: true }),
   };
   const node: MakeSQL =
     decl.limit !== undefined
@@ -285,44 +383,81 @@ function compiledBatchSql(decl: RelationDecl, dialect: Dialect): string {
 
 /** A minimal read-only driver surface (`prepare(sql).all(...params)`), the SQLite `Database`. */
 export interface RelationDriver {
-  prepare(sql: string): { all(...params: unknown[]): unknown[] };
+  prepare(sql: string): { all(...params: unknown[]): unknown[]; safeIntegers?(v: boolean): unknown };
+}
+
+/** A relation batch runs against either a raw {@link RelationDriver} or a full {@link ExecutionContext}. */
+export type RelationTarget = RelationDriver | ExecutionContext;
+
+/**
+ * Coerce a relation target to an {@link ExecutionContext}. A raw {@link RelationDriver} (read-only
+ * `prepare`) is adapted to a full sync driver (its `run` is never reached on the read-only relation
+ * path) and wrapped via {@link contextForDriver} — the backward-compat seam. So the relation batch
+ * ALSO funnels through the central seam (middleware → connectionFor → execute), no direct driver.
+ */
+function relationContext(target: RelationTarget): ExecutionContext {
+  if ('connectionFor' in target) return target;
+  const driver: SqliteDriver = {
+    prepare(sql: string) {
+      const s = target.prepare(sql);
+      return {
+        all: (...p: unknown[]) => s.all(...p),
+        // The read-only relation path never runs a write; a defensive stub keeps the driver shape total.
+        run: () => {
+          throw new Error('relation batch: unexpected write on a read-only relation driver');
+        },
+        safeIntegers: s.safeIntegers?.bind(s),
+      };
+    },
+  };
+  return contextForDriver(driver);
 }
 
 /** The child rows grouped for a batch: parent-key value (stringified) → child rows. */
 export type RelationBatch = Map<string, Record<string, unknown>[]>;
 
 /** The ordered PARENT key columns of an op (single-key → 1-element list; composite → the tuple). */
-function parentKeyCols(op: RelationOp): readonly string[] {
+export function parentKeyCols(op: RelationOp): readonly string[] {
   return op.parentKeys ?? [op.parentKey as string];
 }
 
 /** The ordered CHILD key columns of an op (single-key → 1-element list; composite → the tuple). */
-function targetKeyCols(op: RelationOp): readonly string[] {
+export function targetKeyCols(op: RelationOp): readonly string[] {
   return op.targetKeys ?? [op.targetKey as string];
 }
 
-/** The stringified key identity for dedupe/grouping. Single scalar → `String(v)`; tuple → joined. */
-function keyIdentity(values: readonly unknown[]): string {
-  // A NUL separator no scalar `String(v)` contains, so distinct tuples never collide.
-  return values.map((v) => String(v)).join(' ');
+/**
+ * The op's RELATION RUNAWAY GUARD, or `null` when it baked none (disabled, or an intrinsic per-parent
+ * `limit` window whose fanout is already bounded). The ONE projection of a compiled op onto the
+ * {@link RelationGuard} record — read by BOTH consumers of the cap: {@link runRelationOp} (the
+ * typed-object / lazy batch) and the emitter, which bakes this record into the generated child fetch's
+ * `guard` port so the leaf enforces the SAME resolved cap. Nothing downstream re-derives it.
+ */
+export function relationGuard(op: RelationOp): RelationGuard | null {
+  if (op.hardLimit === undefined) return null;
+  return {
+    limit: op.hardLimit,
+    ...(op.targetTable !== undefined ? { model: op.targetTable } : {}),
+    relation: op.name,
+  };
 }
 
 /**
- * Bind the deduped keys to the batch op's params per dialect + arity. Single-key: PG binds the
- * scalar array verbatim (`= ANY(?::t[])`); MySQL/SQLite bind the JSON-encoded array. Composite: PG
- * binds ONE array param PER key column (transposed tuples → `unnest(?::t1[], ?::t2[])`);
- * MySQL/SQLite bind ONE JSON array-of-tuples string. Returns the positional param list.
+ * Bind the deduped keys to the batch op's params — ONE param, every dialect and arity. A COMPOSITE
+ * key set is the JSON array-of-tuples every dialect expands server-side (PG `json_array_elements`,
+ * MySQL `JSON_TABLE`, SQLite `json_each`), so the key binding is dialect-INDEPENDENT: no key-tuple
+ * transpose anywhere. A SINGLE-key set is the scalar array — bound raw on PG (`= ANY(?::t[])` takes a
+ * native array) and JSON-encoded on MySQL/SQLite.
+ *
+ * The JSON encoding goes through {@link encodeJsonParam}, the one serializer every JSON param uses.
+ * These keys came OFF a read, so an `int` key is a `BigInt` — a bare `JSON.stringify` here does not
+ * "diverge subtly", it THROWS `Do not know how to serialize a BigInt` and takes every relation read
+ * with an integer parent key down with it.
  */
 function bindKeys(op: RelationOp, tuples: readonly unknown[][]): unknown[] {
-  const composite = op.parentKeys !== undefined;
-  if (op.dialect === 'postgres') {
-    if (!composite) return [tuples.map((t) => t[0])]; // ONE scalar array param
-    // Transpose tuples → per-column arrays: `[[1,a],[2,b]] → [[1,2],[a,b]]` — one array param each.
-    return parentKeyCols(op).map((_, col) => tuples.map((t) => t[col]));
-  }
-  // MySQL/SQLite: single-key → JSON scalar array; composite → JSON array-of-tuples. ONE param.
-  const payload = composite ? tuples.map((t) => [...t]) : tuples.map((t) => t[0]);
-  return [JSON.stringify(payload)];
+  if (op.parentKeys !== undefined) return [encodeJsonParam(op.dialect, tuples.map((t) => [...t]))];
+  const keys = tuples.map((t) => t[0]);
+  return [op.dialect === 'postgres' ? keys : encodeJsonParam(op.dialect, keys)];
 }
 
 /**
@@ -338,57 +473,60 @@ function bindKeys(op: RelationOp, tuples: readonly unknown[][]): unknown[] {
 export function runRelationOp(
   op: RelationOp,
   parents: readonly Record<string, unknown>[],
-  db: RelationDriver,
+  db: RelationTarget,
 ): { sql: string; keys: unknown[][]; batch: RelationBatch } {
+  const ctx = relationContext(db);
   const pCols = parentKeyCols(op);
-  const keys = dedupeKeys(parents, pCols);
+  const keys = dedupeKeyTuples(parents, pCols);
   const batch: RelationBatch = new Map();
-  // Resolve the deferred PG array cast(s) (#46) from the REAL keys BEFORE the `?`→`$N` render. A
-  // single-key op has ONE cast; a composite PG op has ONE cast PER key column — resolve each from
-  // its own column's key values, left-to-right (resolvePgArrayCast resolves the first token each
-  // call). MySQL/SQLite carry no cast token.
-  let cast = op.sql;
-  if (op.dialect === 'postgres') {
-    for (let col = 0; col < pCols.length; col++) cast = resolvePgArrayCast(cast, keys.map((t) => t[col]));
-  }
+  // Resolve the deferred PG array cast (#46) from the REAL keys BEFORE the `?`→`$N` render: the
+  // SINGLE-key `= ANY(?::<T>[])` is the only cast whose element type is value-derived. A composite
+  // batch carries no token (its key rows are cast from the DECLARED column types at compile) and
+  // MySQL/SQLite carry none at all.
+  const cast =
+    op.dialect === 'postgres' && op.parentKeys === undefined
+      ? resolvePgArrayCast(op.sql, keys.map((t) => t[0]))
+      : op.sql;
   const sql = renderPlaceholders(cast, op.dialect);
   if (keys.length === 0) return { sql, keys, batch };
   const tCols = targetKeyCols(op);
   // Materialize the child rows (issue #59) exactly like the primary read, using the STATIC
   // materializers baked onto the op at compile (from the model's DDL — ZERO per-read introspection).
-  // Enable safeIntegers when the child projects a BIGINT so int8 arrives exact. A BIGINT/DATE/BOOL
-  // child column de-boxes identically to a top-level read (INT→number / BIGINT→string / DATE→string
-  // / bool). SQLite-shaped driver; the async PG/MySQL relation path materializes at its own seam.
+  // A BIGINT/DATE/BOOL child column de-boxes identically to a top-level read (INT→number /
+  // BIGINT→string / DATE→string / bool).
   const childCols = op.materializers;
-  const int64Child = childCols !== undefined && Object.values(childCols).includes('int64');
-  const stmt = db.prepare(sql);
-  if (int64Child && typeof (stmt as { safeIntegers?: unknown }).safeIntegers === 'function') {
-    (stmt as unknown as { safeIntegers(v: boolean): unknown }).safeIntegers(true);
-  }
-  const rawRows = stmt.all(...bindKeys(op, keys)) as Record<string, unknown>[];
-  const rows = materializeChildRows(rawRows, childCols, int64Child);
-  for (const row of rows) {
-    const k = keyIdentity(tCols.map((c) => row[c]));
-    const list = batch.get(k);
-    if (list === undefined) batch.set(k, [row]);
-    else list.push(row);
-  }
-  return { sql, keys, batch };
+  // The EXACT-integer seam, unconditionally — the same one the `executeSQL` leaf reads through. This
+  // used to switch to the inexact seam unless a child column was declared `int64`, which made ONE
+  // column read back as two different JS types depending on which surface fetched it: `1n` through
+  // codegen, `1` through the lazy path. Exactness is not a per-endpoint choice; the DECLARED type
+  // decides the consumer-facing shape, and that narrowing is `materializeCell`'s job below.
+  const boundParams = bindKeys(op, keys);
+  const rawRows = seamExecuteSafe(ctx, sql, boundParams) as Record<string, unknown>[];
+  // Hard-limit runaway guard (Phase E-2, epic #74; v1 `_selectForRelation`): POST-fetch, if the batch
+  // TOTAL exceeds the baked cap, throw with the EXACT count (the batch is fetched in full, no N+1).
+  // The check itself is the SHARED relation primitive (`assertRelationHardLimit`) over the op's own
+  // guard — the SAME two functions the codegen path runs in the `executeSQL` leaf, so the two read
+  // surfaces cannot drift on the cap, the count or the error identity. Runs BEFORE grouping/hydration
+  // so an over-cap read never assembles an unbounded result set.
+  assertRelationHardLimit(rawRows, relationGuard(op));
+  const rows = materializeChildRows(rawRows, childCols);
+  // Group the child rows by their target-key identity — the shared grouping SSoT ({@link groupByKey}),
+  // the SAME core the eager `group` leaf uses (no duplicated grouping).
+  return { sql, keys, batch: groupByKey(rows, tCols) };
 }
 
 /** Materialize relation child rows (issue #59): same coercion as the primary read. */
 function materializeChildRows(
   rows: Record<string, unknown>[],
   cols: Record<string, MaterializeClass> | undefined,
-  safeIntegersOn: boolean,
 ): Record<string, unknown>[] {
-  if (cols === undefined && !safeIntegersOn) return rows;
   for (const row of rows) {
     for (const key of Object.keys(row)) {
       const klass = cols?.[key];
       if (klass !== undefined) { row[key] = materializeCell(row[key], klass); continue; }
-      // Defensive: under safeIntegers, an untyped int child column arrives as bigint — narrow it.
-      if (safeIntegersOn && typeof row[key] === 'bigint') {
+      // An UNDECLARED integer column arrives as bigint from the exact seam — narrow it here. There is
+      // no longer a mode in which it does not, so this is the normal path, not a defensive one.
+      if (typeof row[key] === 'bigint') {
         const v = row[key] as bigint;
         row[key] = v >= BigInt(Number.MIN_SAFE_INTEGER) && v <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(v) : v.toString();
       }
@@ -398,37 +536,16 @@ function materializeChildRows(
 }
 
 /**
- * The deduped, non-null parent-key TUPLES (insertion order preserved — deterministic). A tuple is
- * dropped if ANY of its key columns is null/undefined (no partial keys). Deduped on the stringified
- * tuple identity (so `1` and `"1"` collapse exactly as `String(v)`).
- */
-function dedupeKeys(parents: readonly Record<string, unknown>[], keyCols: readonly string[]): unknown[][] {
-  const seen = new Set<string>();
-  const out: unknown[][] = [];
-  for (const p of parents) {
-    const tuple = keyCols.map((c) => p[c]);
-    if (tuple.some((v) => v === undefined || v === null)) continue;
-    const s = keyIdentity(tuple);
-    if (seen.has(s)) continue;
-    seen.add(s);
-    out.push(tuple);
-  }
-  return out;
-}
-
-/**
  * Distribute a resolved {@link RelationBatch} onto ONE parent per the relation cardinality:
- * `hasMany` → the child list (`[]` when none); `belongsTo`/`hasOne` → the single child (or
- * `null`). Keyed by the parent's key-tuple identity. `null`/`[]` is the declared cardinality's
- * empty representation, not an ad-hoc default.
+ * `hasMany` → the child list (`[]` when none); `belongsTo`/`hasOne` → the single child (or `null`).
+ * A thin consumer over the shared grouping SSoT ({@link attachToParent}) — the SAME core the eager
+ * `group` leaf uses (no duplicated grouping). `null`/`[]` is the declared cardinality's empty
+ * representation, not an ad-hoc default.
  */
 export function distributeToParent(
   op: RelationOp,
   parent: Record<string, unknown>,
   batch: RelationBatch,
 ): Record<string, unknown>[] | Record<string, unknown> | null {
-  const tuple = parentKeyCols(op).map((c) => parent[c]);
-  const rows = tuple.some((v) => v === undefined || v === null) ? undefined : batch.get(keyIdentity(tuple));
-  if (op.kind === 'hasMany') return rows ?? [];
-  return rows !== undefined && rows.length > 0 ? rows[0] : null;
+  return attachToParent(parent, parentKeyCols(op), batch, op.kind !== 'hasMany');
 }

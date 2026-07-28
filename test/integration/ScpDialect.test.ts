@@ -11,55 +11,52 @@
  *       direct execution of the equivalent v1-SqlBuilder / v1-condition SQL on the SAME dialect.
  *
  * The SCP path renders + executes through the CURRENT shipped makeSQL runtime — reads via
- * `compileBundle` + `executeBundleAsync` + `pgPoolExecutor`/`mysqlPoolExecutor`, writes/tx via the
- * derived `TransactionPlan` + `renderTxStatement`, relation batches via `compileRelationOp` +
- * `renderReadPrimary`-style render (resolving the #46 deferred PG array cast from the real keys).
- * No mock, no hand-written SQL for the SCP side. The v1 side calls the REAL v1 SqlBuilders /
- * DBConditions / `inferPgArrayType` (not hand-written expectations — avoids the WS3 faked-parity
- * pattern).
+ * `compileSelect` + `executeSQLAsync` (the op-independent leaf transport), writes/tx via
+ * `compileWriteNode` + `compileWriteBundle`'s derived `TransactionPlan` + `renderTxStatement`,
+ * relation batches via `compileRelationOp` + its render (resolving the #46 deferred PG array cast
+ * from the real keys). No mock, no hand-written SQL for the SCP side. The v1 side calls the REAL v1
+ * SqlBuilders / DBConditions / `inferPgArrayType` (not hand-written expectations — avoids the WS3
+ * faked-parity pattern).
  *
  * Run in-container via the compose `test-integration` service (TEST_DB_HOST=postgres /
  * TEST_MYSQL_HOST=mysql on the internal network), or locally with published ports + env.
  */
 
+import 'reflect-metadata';
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { Pool } from 'pg';
 import mysql from 'mysql2/promise';
 import { DBConditions } from '../../src/DBConditions';
 import { postgresSqlBuilder } from '../../src/drivers/PostgresSqlBuilder';
 import { mysqlSqlBuilder } from '../../src/drivers/MysqlSqlBuilder';
 import {
-  SemanticBehavior,
-  components,
-  publishBehaviors,
-  compileBundle,
   compileWriteBundle,
+  compileWriteNode,
   compileCreateManyBundle,
   compileUpdateManyBundle,
   compileDeleteManyBundle,
   compileRelationOp,
-  executeBundleAsync,
-  pgPoolExecutor,
-  mysqlPoolExecutor,
+  executeSQLAsync,
   renderTxStatement,
-  renderReadPrimary,
   renderPlaceholders,
   resolvePgArrayCast,
   inferPgArrayType,
-  stripMysqlPkHint,
-  whereEq,
-  whereGe,
-  whereIn,
-  or,
-  coalesce,
-  opt,
-  inColumn,
+  mysqlConnectionPool,
   entityWrites,
+  MiddlewareChain,
   type SqlBundle,
-  type In,
-  type BehaviorModelContract,
+  type TxOp,
+  type AsyncExecutionContext,
+  type AsyncConnection,
+  type EntityWritesDefinition,
   type RelationOp,
 } from '../../src/scp';
+import { compileSelect, type SelectDesc, type Dialect as MakeSQLDialect } from '../../src/scp/makesql';
+import { emitBehaviorModule, leafHandlersAsync, PooledAsyncContext, pgConnectionPool, type EndpointSet } from '../../src/scp';
+import { model, column } from '../../src/decorators';
 
 // ── Connection config (env-driven; matches docker-compose.test.yml) ────────────
 
@@ -77,8 +74,6 @@ const MY = {
   user: process.env.TEST_MYSQL_USER || 'testuser',
   password: process.env.TEST_MYSQL_PASSWORD || 'testpass',
 };
-
-const L = components();
 
 // ── Isolated table namespace (fix #37) ─────────────────────────────────────────
 // This file owns dedicated `scp_posts` / `scp_users` tables that it seeds and tears
@@ -107,114 +102,151 @@ const POST_GUIDS = [
   '33333333-3333-3333-3333-333333333333',
 ];
 
-// ── The authored behaviors (declaration surface — dialect-neutral IR) ──────────
+const REPO_ROOT = resolve(__dirname, '../..');
 
-class PostQueries extends SemanticBehavior {
-  // Inline typed-column declaration (issue #59): the reads project from these declared types
-  // (matches the scp_posts / scp_typed DDL below). Required for a typed read — registration fails
-  // closed on an undeclared projected column.
-  static columns = {
-    [T_POSTS]: { id: 'INTEGER', user_id: 'INTEGER', title: 'VARCHAR(255)', content: 'TEXT', view_count: 'INTEGER', guid: 'UUID' },
-    [T_TYPED]: { big: 'BIGINT', txt: 'TEXT', flag: 'BOOLEAN', ts: 'TIMESTAMP', amt: 'DECIMAL(10,2)', label: 'TEXT' },
+// ── #153 / #46 — the DECORATED models + DECLARED IN-list endpoints the emitter lowers ────────────
+//
+// This is the whole ORM-side input: metadata collectors and endpoint declarations, no SQL. vitest
+// (esbuild) has no `emitDecoratorMetadata`, so a bare `@column()` carries no `design:type` and the
+// non-INTEGER columns are pinned through the adapter's documented `columnTypes` escape hatch.
+
+@model(T_POSTS)
+class ScpPost {
+  @column() id?: number;
+  @column() user_id?: number;
+  @column() title?: string;
+  @column() view_count?: number;
+  @column() guid?: string;
+}
+
+@model(T_TYPED)
+class ScpTyped {
+  @column() big?: number;
+  @column() txt?: string;
+  @column() flag?: boolean;
+  @column() ts?: string;
+  @column() amt?: string;
+  @column() label?: string;
+}
+
+const IN_LIST_MODELS: Record<string, never> = { ScpPost, ScpTyped } as unknown as Record<string, never>;
+const IN_LIST_COLUMN_TYPES = {
+  columnTypes: {
+    title: 'VARCHAR(255)', guid: 'UUID',
+    big: 'BIGINT', txt: 'TEXT', flag: 'BOOLEAN', ts: 'TIMESTAMP', amt: 'NUMERIC(10,2)', label: 'TEXT',
+  },
+};
+
+/** One IN-list endpoint per element type — each declares only a column and a parameter name. */
+const IN_LIST_ENDPOINTS: EndpointSet = {
+  byIds: { kind: 'read', model: ScpPost, select: ['id', 'title'], where: [{ kind: 'in', column: 'id', param: 'ids' }], order: 'id ASC' },
+  byGuids: { kind: 'read', model: ScpPost, select: ['id', 'guid'], where: [{ kind: 'in', column: 'guid', param: 'guids' }], order: 'id ASC' },
+  byBig: { kind: 'read', model: ScpTyped, select: ['label'], where: [{ kind: 'in', column: 'big', param: 'keys' }], order: 'label ASC' },
+  byTxt: { kind: 'read', model: ScpTyped, select: ['label'], where: [{ kind: 'in', column: 'txt', param: 'keys' }], order: 'label ASC' },
+  byFlag: { kind: 'read', model: ScpTyped, select: ['label'], where: [{ kind: 'in', column: 'flag', param: 'keys' }], order: 'label ASC' },
+  byTs: { kind: 'read', model: ScpTyped, select: ['label'], where: [{ kind: 'in', column: 'ts', param: 'keys' }], order: 'label ASC' },
+  byAmt: { kind: 'read', model: ScpTyped, select: ['label'], where: [{ kind: 'in', column: 'amt', param: 'keys' }], order: 'label ASC' },
+};
+
+/** The generated module's typed facade for {@link IN_LIST_ENDPOINTS}. */
+interface InListApi {
+  byIds(i: { ids: number[] }): Promise<Row[]>;
+  byGuids(i: { guids: string[] }): Promise<Row[]>;
+  byBig(i: { keys: unknown[] }): Promise<Row[]>;
+  byTxt(i: { keys: unknown[] }): Promise<Row[]>;
+  byFlag(i: { keys: unknown[] }): Promise<Row[]>;
+  byTs(i: { keys: unknown[] }): Promise<Row[]>;
+  byAmt(i: { keys: unknown[] }): Promise<Row[]>;
+}
+
+// ── The authored reads (SelectDesc builders, driven ONLY by the real `compileSelect` compiler) ──
+//
+// `SelectDesc.conditions` takes a v1 `ConditionObject` — exactly what the removed `whereEq`/
+// `whereIn`/`inColumn` recorder sugar lowered to before handing it to the SAME `compileSelect` /
+// `conditionsFor` compile step used here. So a plain-array condition (`{ id: [...] }`) still
+// compiles to the dialect-appropriate IN-list form: PG keeps v1's `IN ($1, $2, …)` (`conditionsFor`
+// returns the base `DBConditions` for postgres — byte-identical to the v1 comparison side below);
+// MySQL/SQLite get the single-JSON-param `JSON_TABLE`/`json_each` form (`JsonArrayConditions`,
+// `json-array.ts` — untouched by the recorder removal).
+
+function byUserDesc(dialect: MakeSQLDialect, userId: number): SelectDesc {
+  return { dialect, tableName: T_POSTS, select: 'id, user_id, title, view_count', conditions: { user_id: userId }, order: 'id ASC' };
+}
+
+/** #132 — the same read under a ROW LOCK (` FOR UPDATE` / ` FOR SHARE`), for the live lock legs. */
+function lockedByUserDesc(dialect: MakeSQLDialect, userId: number, lock: 'forUpdate' | 'forShare'): SelectDesc {
+  return { ...byUserDesc(dialect, userId), [lock]: true };
+}
+
+function byIdsDesc(dialect: MakeSQLDialect, ids: number[]): SelectDesc {
+  return { dialect, tableName: T_POSTS, select: 'id, title', conditions: { id: ids }, order: 'id ASC' };
+}
+
+// #46 item 4 (MySQL leg only — see the deletion note below): the single-JSON IN-list binds every PG
+// element type live through `T_TYPED`'s bigint/text/bool/timestamp/numeric key columns.
+function byTypedDesc(dialect: MakeSQLDialect, col: string, keys: unknown[]): SelectDesc {
+  return { dialect, tableName: T_TYPED, select: 'label', conditions: { [col]: keys }, order: 'label ASC' };
+}
+
+// #47 item 5 — the WHERE assembly (AND/OR group) + LIMIT/OFFSET tail, driven from v1's
+// DBConditions/compileSelect (not a v2 hand-roll). An OR group over two eq members + a LIMIT+OFFSET.
+function pageDesc(dialect: MakeSQLDialect, userId: number, otherId: number, offset: number): SelectDesc {
+  return {
+    dialect,
+    tableName: T_POSTS,
+    select: 'id, user_id, title',
+    conditions: { __or__: [{ user_id: userId }, { user_id: otherId }] },
+    order: 'id ASC',
+    limit: 2,
+    offset,
   };
-
-  ByUser($: In<{ user_id: number }>) {
-    return L.Select({
-      table: T_POSTS,
-      select: ['id', 'user_id', 'title', 'view_count'],
-      where: [whereEq($.user_id, $.user_id)],
-      order: 'id ASC',
-    });
-  }
-
-  ByIds($: In<{ ids: number[] }>) {
-    return L.Select({
-      table: T_POSTS,
-      select: ['id', 'title'],
-      where: [whereIn(inColumn($, 'id'), $.ids)],
-      order: 'id ASC',
-    });
-  }
-
-  // #46: an IN-list on a UUID column. Value-inference cannot tell a uuid from text by value, so
-  // the authored surface emits `= ANY($1)` with NO cast and lets PG infer `uuid[]` from the column.
-  ByGuids($: In<{ guids: string[] }>) {
-    return L.Select({
-      table: T_POSTS,
-      select: ['id', 'guid'],
-      where: [whereIn(inColumn($, 'guid'), $.guids)],
-      order: 'id ASC',
-    });
-  }
-
-  // #46 item 4: no-cast `= ANY($1)` IN-list on each PG element type — bigint / text / bool /
-  // timestamp / numeric. Each selects the stable text `label` so the assertion is dialect-invariant;
-  // PG infers the array element type from the column, MySQL uses the single-JSON form.
-  ByBig($: In<{ keys: number[] }>) {
-    return L.Select({ table: T_TYPED, select: ['label'], where: [whereIn(inColumn($, 'big'), $.keys)], order: 'label ASC' });
-  }
-  ByTxt($: In<{ keys: string[] }>) {
-    return L.Select({ table: T_TYPED, select: ['label'], where: [whereIn(inColumn($, 'txt'), $.keys)], order: 'label ASC' });
-  }
-  ByFlag($: In<{ keys: boolean[] }>) {
-    return L.Select({ table: T_TYPED, select: ['label'], where: [whereIn(inColumn($, 'flag'), $.keys)], order: 'label ASC' });
-  }
-  ByTs($: In<{ keys: string[] }>) {
-    return L.Select({ table: T_TYPED, select: ['label'], where: [whereIn(inColumn($, 'ts'), $.keys)], order: 'label ASC' });
-  }
-  ByAmt($: In<{ keys: number[] }>) {
-    return L.Select({ table: T_TYPED, select: ['label'], where: [whereIn(inColumn($, 'amt'), $.keys)], order: 'label ASC' });
-  }
-
-  // #47 item 5 — the WHERE assembly (AND/OR group) + LIMIT/OFFSET tail are now driven from v1's
-  // DBConditions/compileSelect (not a v2 hand-roll); this behavior exercises both live for parity.
-  // An OR group over two eq members + a LIMIT + OFFSET.
-  Page($: In<{ user_id: number; other_id: number; offset: number }>) {
-    return L.Select({
-      table: T_POSTS,
-      select: ['id', 'user_id', 'title'],
-      where: [or(whereEq($.user_id, $.user_id), whereEq($.user_id, $.other_id))],
-      order: 'id ASC',
-      limit: 2,
-      offset: coalesce(opt($.offset), 0),
-    });
-  }
-
-  // count() (#47 item 2 — v1 `DBModel._count`): `SELECT COUNT(*) as count FROM t[ WHERE …]`.
-  CountAll(_$: In<Record<string, never>>) {
-    return L.Count({ table: T_POSTS });
-  }
-  CountByUser($: In<{ user_id: number }>) {
-    return L.Count({ table: T_POSTS, where: [whereEq($.user_id, $.user_id)] });
-  }
 }
 
-class PostWrites extends SemanticBehavior {
-  Create($: In<{ user_id: number; title: string; content: string }>) {
-    return L.Insert({
-      table: T_POSTS,
-      'values.user_id': $.user_id,
-      'values.title': $.title,
-      'values.content': $.content,
-      returning: 'id, user_id, title, view_count',
-    });
-  }
+// count() (#47 item 2 — v1 `DBModel._count`): `SELECT COUNT(*) as count FROM t[ WHERE …]`.
+function countAllDesc(dialect: MakeSQLDialect): SelectDesc {
+  return { dialect, tableName: T_POSTS, select: 'COUNT(*) as count' };
+}
+function countByUserDesc(dialect: MakeSQLDialect, userId: number): SelectDesc {
+  return { dialect, tableName: T_POSTS, select: 'COUNT(*) as count', conditions: { user_id: userId } };
 }
 
-// A write-time-relations Command: Insert a post + derive the author's post count in ONE tx.
-class CreatePostWithCount extends SemanticBehavior {
-  Create($: In<{ user_id: number; title: string; content: string }>) {
-    return L.Insert({
-      table: T_POSTS,
-      'values.user_id': $.user_id,
-      'values.title': $.title,
-      'values.content': $.content,
-      returning: 'id, user_id, title',
-    });
-  }
+// ── The authored writes (TxOp builders via the real `compileWriteNode` SSoT write compiler) ──
+
+function createPostOp(dialect: MakeSQLDialect): TxOp {
+  return compileWriteNode(
+    {
+      component: 'Insert',
+      ports: {
+        table: T_POSTS,
+        'values.user_id': { ref: ['user_id'] },
+        'values.title': { ref: ['title'] },
+        'values.content': { ref: ['content'] },
+        returning: 'id, user_id, title, view_count',
+      },
+    } as never,
+    dialect,
+  );
 }
 
-const postCountWrites = entityWrites<CreatePostWithCount>((w) => ({
+// A write-time-relations Command's base write: Insert a post + derive the author's post count in
+// ONE tx (`postCountWrites` below carries the derive effect).
+function createPostWithCountOp(dialect: MakeSQLDialect): TxOp {
+  return compileWriteNode(
+    {
+      component: 'Insert',
+      ports: {
+        table: T_POSTS,
+        'values.user_id': { ref: ['user_id'] },
+        'values.title': { ref: ['title'] },
+        'values.content': { ref: ['content'] },
+        returning: 'id, user_id, title',
+      },
+    } as never,
+    dialect,
+  );
+}
+
+const postCountWrites: EntityWritesDefinition = entityWrites((w) => ({
   create: w.lifecycle({
     requires: [w.exists(T_USERS, { id: '$.input.user_id' })],
     derive: [w.increment(T_USERS, { id: '$.input.user_id' }, 'post_count_scp', +1)],
@@ -242,6 +274,39 @@ function toPlain(v: unknown): unknown {
 }
 
 /**
+ * Adapt a raw async `query(sql, params)` function to the {@link AsyncExecutionContext} seam
+ * `executeSQLAsync` (`../../src/scp/leaves`) needs to run a compiled read — a THIN environment
+ * adapter (no SQL, no compile), exactly what a `LeafContext`/`AsyncLeafContext` is: the boundary
+ * injection point, never a second compiler. `withConnection` is unused for a plain (non-tx) read.
+ */
+function asyncCtx(queryFn: (sql: string, params: unknown[]) => Promise<Row[]>): AsyncExecutionContext {
+  const conn: AsyncConnection = {
+    execute: (sql, params) => queryFn(sql, [...params]),
+    async run(sql, params) {
+      const rows = await queryFn(sql, [...params]);
+      return { changes: rows.length, lastInsertRowid: 0 };
+    },
+  };
+  const ctx: AsyncExecutionContext = { connectionFor: () => conn, middleware: new MiddlewareChain(), withConnection: () => ctx };
+  return ctx;
+}
+
+/**
+ * Compile a read with the REAL `compileSelect` SSoT compiler and execute it through the REAL
+ * op-independent `executeSQLAsync` leaf transport — the SAME two-step pipeline the removed
+ * `whereEq`/`whereIn` recorder sugar drove internally (compile → the ONE SQL transport). Also
+ * renders the dialect placeholder form (`renderPlaceholders`) for the SQL-shape assertions.
+ */
+async function scpSelect(desc: SelectDesc, execAsync: AsyncExecutionContext): Promise<{ rows: Row[]; renderedSql: string }> {
+  const compiled = compileSelect(desc);
+  const rows = (await executeSQLAsync(
+    { sql: compiled.sql, params: compiled.params, write: false, returning: false, bigint: false },
+    { execAsync, dialect: desc.dialect },
+  )) as Row[];
+  return { rows, renderedSql: renderPlaceholders(compiled.sql, desc.dialect) };
+}
+
+/**
  * Render a relation batch op's PG/MySQL SQL for a bound key set — the SAME render `runRelationOp`
  * performs: resolve the deferred PG array cast (#46) from the real keys, then `?`→`$N`. (The
  * MySQL/SQLite JSON single-param form carries no cast token, so it is a straight placeholder render.)
@@ -253,23 +318,26 @@ function renderRelationSql(op: RelationOp, keys: unknown[]): string {
 
 /**
  * Render + bind a COMPOSITE relation op for a set of parent key tuples (#47 item 1) — the SAME work
- * the composite `runRelationOp` does: resolve ONE deferred PG cast per key column, `?`→`$N`, then
- * bind ONE array param PER column (PG, transposed) / ONE JSON array-of-tuples param (MySQL). Returns
- * `{ sql, params }` for direct pool execution.
+ * the composite `runRelationOp` does: `?`→`$N`, then bind the ONE JSON array-of-tuples param every
+ * dialect's composite batch expands server-side (#159). Returns `{ sql, params }` for direct pool
+ * execution. The composite key set carries no deferred PG cast: its key rows are cast from the
+ * DECLARED column types at compile.
  */
-function renderCompositeRelation(
-  op: RelationOp,
-  cols: readonly string[],
-  tuples: readonly unknown[][],
-): { sql: string; params: unknown[] } {
-  let cast = op.sql;
-  if (op.dialect === 'postgres') {
-    for (let col = 0; col < cols.length; col++) cast = resolvePgArrayCast(cast, tuples.map((t) => t[col]));
-    return { sql: renderPlaceholders(cast, op.dialect), params: cols.map((_, col) => tuples.map((t) => t[col])) };
-  }
-  const sql = renderPlaceholders(op.sql, op.dialect);
-  return { sql, params: [JSON.stringify(tuples.map((t) => [...t]))] };
+function renderCompositeRelation(op: RelationOp, tuples: readonly unknown[][]): { sql: string; params: unknown[] } {
+  return { sql: renderPlaceholders(op.sql, op.dialect), params: [JSON.stringify(tuples.map((t) => [...t]))] };
 }
+
+/** The composite fixtures' declared column types — what a model's `static columns` supplies. */
+const COMPOSITE_COLUMNS: Record<string, Record<string, string>> = {
+  [T_USERS2]: { tenant_id: 'INTEGER', uid: 'INTEGER', name: 'TEXT' },
+  [T_DOCS2]: { tenant_id: 'INTEGER', doc_id: 'INTEGER', owner_id: 'INTEGER', title: 'TEXT' },
+  [T_REVS]: { tenant_id: 'INTEGER', doc_id: 'INTEGER', rev: 'TEXT' },
+};
+const compositeColumnType = (table: string, column: string): string => {
+  const t = COMPOSITE_COLUMNS[table]?.[column];
+  if (t === undefined) throw new Error(`no declared column ${table}.${column}`);
+  return t;
+};
 
 // ── Test lifecycle: connect, add the derive column, clean state ────────────────
 
@@ -418,19 +486,13 @@ afterAll(async () => {
 // ── Postgres ───────────────────────────────────────────────────────────────────
 
 describe('WS6 integration — Postgres: SCP-compiled SQL executes + parity with v1 direct execution', () => {
-  const contract: BehaviorModelContract = publishBehaviors(PostQueries);
+  const execAsync = () => asyncCtx((sql, params) => pgQuery(pgPool!, sql, params));
 
   it('SELECT by user_id: SCP rows == v1 direct execution (`$N` placeholders on real PG)', async () => {
-    const bundle = compileBundle(contract, 'ByUser', [], 'postgres');
-    // Assert the emitted PG SQL (`$N`) via the shipped render axis, then execute via the shipped
-    // async runtime (compileBundle + executeBundleAsync + pgPoolExecutor).
-    const rendered = renderReadPrimary(bundle.readGraph!, { user_id: 1 } as never);
-    expect(rendered.sql).toBe(`SELECT id, user_id, title, view_count FROM ${T_POSTS} WHERE user_id = $1 ORDER BY id ASC`);
-    const scpRows = (await executeBundleAsync(bundle, { user_id: 1 } as never, {
-      exec: pgPoolExecutor(pgPool!),
-      entry: 'ByUser',
-      dialect: 'postgres',
-    })) as unknown as Row[];
+    // Assert the emitted PG SQL (`$N`) via the real render axis, then execute via the real async
+    // runtime (compileSelect + executeSQLAsync).
+    const { rows: scpRows, renderedSql } = await scpSelect(byUserDesc('postgres', 1), execAsync());
+    expect(renderedSql).toBe(`SELECT id, user_id, title, view_count FROM ${T_POSTS} WHERE user_id = $1 ORDER BY id ASC`);
 
     // v1 direct execution: build the equivalent WHERE via v1 DBConditions, convert `?`→`$N`.
     const v1Params: unknown[] = [];
@@ -444,104 +506,119 @@ describe('WS6 integration — Postgres: SCP-compiled SQL executes + parity with 
     for (const r of scpRows) expect(r.user_id).toBe(1);
   });
 
-  it('SELECT IN-list on an INT column: no-cast `= ANY($1)` — #46; PG infers int[]; SCP rows == v1', async () => {
-    const bundle = compileBundle(contract, 'ByIds', [], 'postgres');
-    // #46: the authored IN-list emits `= ANY($1)` with NO element-type cast — PG infers `int[]` from
-    // the `id` column. A value-inferred `::text[]` cast threw `operator does not exist: integer =
-    // text` on real PG (the #43/#46 regression). No-cast is v1-RESULT-parity (same rows as v1's
-    // `IN (1, 3)`), and is the ONE form that also survives the empty + uuid cases below.
-    const rendered = renderReadPrimary(bundle.readGraph!, { ids: [1, 3] } as never);
-    expect(rendered.sql).toBe(`SELECT id, title FROM ${T_POSTS} WHERE id = ANY($1) ORDER BY id ASC`);
-    const scpRows = (await executeBundleAsync(bundle, { ids: [1, 3] } as never, {
-      exec: pgPoolExecutor(pgPool!),
-      entry: 'ByIds',
-      dialect: 'postgres',
-    })) as unknown as Row[];
-    expect(scpRows.map((r) => Number(r.id))).toEqual([1, 3]);
-
-    // v1 RESULT parity: v1's authored IN-list expanded to `id IN ($1, $2)` (DBConditions). Same rows.
-    const v1Params: unknown[] = [];
-    const v1Where = new DBConditions({ id: [1, 3] }).compile(v1Params);
-    let i = 0;
-    const v1Sql = `SELECT id, title FROM ${T_POSTS} WHERE ${v1Where} ORDER BY id ASC`.replace(/\?/g, () => `$${++i}`);
-    const v1Rows = await pgQuery(pgPool!, v1Sql, v1Params);
-    expect(scpRows).toEqual(v1Rows);
+  it('#132 row locks: ` FOR UPDATE` and ` FOR SHARE` both EXECUTE on real PG; rows unchanged', async () => {
+    // The locking clause is orthogonal to the row RESULT: the same read under either lock returns the
+    // unlocked rows. What is proven LIVE is that PostgreSQL PARSES + EXECUTES both tails (a wrong
+    // keyword — e.g. MySQL 5.x's `LOCK IN SHARE MODE` — errors out here).
+    const plain = await scpSelect(byUserDesc('postgres', 1), execAsync());
+    for (const [lock, tail] of [['forUpdate', 'FOR UPDATE'], ['forShare', 'FOR SHARE']] as const) {
+      const { rows, renderedSql } = await scpSelect(lockedByUserDesc('postgres', 1, lock), execAsync());
+      expect(renderedSql).toBe(
+        `SELECT id, user_id, title, view_count FROM ${T_POSTS} WHERE user_id = $1 ORDER BY id ASC ${tail}`,
+      );
+      expect(rows).toEqual(plain.rows);
+    }
+    expect(plain.rows.length).toBeGreaterThan(0);
   });
 
-  it('SELECT IN-list EMPTY int array: `= ANY($1)` with [] → ZERO rows, no error — #46; == v1 `1 = 0`', async () => {
-    const bundle = compileBundle(contract, 'ByIds', [], 'postgres');
-    // The blocker: an empty int IN-list. `inferPgArrayType([])` = `text[]` → `integer = text` at PLAN
-    // time. No-cast `= ANY($1)` with an empty array binds fine → PG infers int[] from the column and
-    // selects zero rows. v1 short-circuited `[]` to `1 = 0` (DBConditions) → the SAME zero rows.
-    const rendered = renderReadPrimary(bundle.readGraph!, { ids: [] } as never);
-    expect(rendered.sql).toBe(`SELECT id, title FROM ${T_POSTS} WHERE id = ANY($1) ORDER BY id ASC`);
-    const scpRows = (await executeBundleAsync(bundle, { ids: [] } as never, {
-      exec: pgPoolExecutor(pgPool!),
-      entry: 'ByIds',
-      dialect: 'postgres',
-    })) as unknown as Row[];
-    expect(scpRows).toEqual([]);
-  });
+  // ── #153 / #46 — the PG primary-read no-cast `= ANY($1)` IN-list, restored on the EMITTER ──────
+  //
+  // A declared `in` predicate lowers to the dialect's value-length-INDEPENDENT membership form
+  // (`inListPredicate`): on PostgreSQL `col = ANY(?)` with NO element-type cast. The cast is what
+  // broke: `inferPgArrayType` sees only the values, so an EMPTY int list infers `text[]` (→ `integer
+  // = text`) and a uuid list is indistinguishable from text (→ `uuid = text`). With no cast PG infers
+  // the array type FROM THE COLUMN, which is right for every element type — proven live below on
+  // int / uuid / bigint / text / bool / timestamp / numeric, empty lists included.
+  //
+  // The path under test is the REAL one end-to-end: decorated model → `emitBehaviorModule` →
+  // `bc generate` → `bindTypedAsync(leafHandlersAsync)` → this live Postgres.
+  describe('#46 no-cast `= ANY($1)` IN-list — decorated model → emitter → bc generate → live PG', () => {
+    let inWorkDir: string;
+    let emittedIn: string;
+    let q: InListApi;
 
-  it('SELECT IN-list on a UUID column (non-empty): `= ANY($1)` → PG infers uuid[]; correct rows — #46', async () => {
-    const bundle = compileBundle(contract, 'ByGuids', [], 'postgres');
-    // uuid values are indistinguishable-from-text by value, so a value-inferred cast is `text[]` →
-    // `uuid = text` error. No-cast lets PG infer `uuid[]` from the column.
-    const rendered = renderReadPrimary(bundle.readGraph!, { guids: [POST_GUIDS[0], POST_GUIDS[2]] } as never);
-    expect(rendered.sql).toBe(`SELECT id, guid FROM ${T_POSTS} WHERE guid = ANY($1) ORDER BY id ASC`);
-    const scpRows = (await executeBundleAsync(bundle, { guids: [POST_GUIDS[0], POST_GUIDS[2]] } as never, {
-      exec: pgPoolExecutor(pgPool!),
-      entry: 'ByGuids',
-      dialect: 'postgres',
-    })) as unknown as Row[];
-    expect(scpRows.map((r) => Number(r.id))).toEqual([1, 3]);
-    expect(scpRows.map((r) => String(r.guid))).toEqual([POST_GUIDS[0], POST_GUIDS[2]]);
-  });
-
-  it('SELECT IN-list EMPTY uuid array: `= ANY($1)` with [] → ZERO rows, no error — #46', async () => {
-    const bundle = compileBundle(contract, 'ByGuids', [], 'postgres');
-    const scpRows = (await executeBundleAsync(bundle, { guids: [] } as never, {
-      exec: pgPoolExecutor(pgPool!),
-      entry: 'ByGuids',
-      dialect: 'postgres',
-    })) as unknown as Row[];
-    expect(scpRows).toEqual([]);
-  });
-
-  // #46 item 4 — every PG element type binds live through the no-cast `= ANY($1)` IN-list. Each
-  // case selects the stable `label`, so `[A,C]` is the dialect-invariant expected result; the test
-  // proves the ARRAY BINDING of bigint / text / bool / timestamp / numeric through `pg`.
-  const pgTypeCases: { entry: string; keys: unknown[]; col: string }[] = [
-    { entry: 'ByBig', keys: [TYPED_BIG_TS[0], TYPED_BIG_TS[2]], col: 'big' },
-    { entry: 'ByTxt', keys: ['alpha', 'gamma'], col: 'txt' },
-    { entry: 'ByFlag', keys: [true], col: 'flag' },
-    { entry: 'ByTs', keys: [TYPED_TS_TS[0], TYPED_TS_TS[2]], col: 'ts' },
-    { entry: 'ByAmt', keys: [10.5, 30.75], col: 'amt' },
-  ];
-  for (const c of pgTypeCases) {
-    it(`SELECT IN-list on a ${c.col} column: no-cast \`= ANY($1)\` binds live — #46 item 4`, async () => {
-      const bundle = compileBundle(contract, c.entry, [], 'postgres');
-      const rendered = renderReadPrimary(bundle.readGraph!, { keys: c.keys } as never);
-      expect(rendered.sql).toBe(`SELECT label FROM ${T_TYPED} WHERE ${c.col} = ANY($1) ORDER BY label ASC`);
-      const scpRows = (await executeBundleAsync(bundle, { keys: c.keys } as never, {
-        exec: pgPoolExecutor(pgPool!),
-        entry: c.entry,
+    beforeAll(async () => {
+      const emitted = emitBehaviorModule({
+        behavior: 'InLists',
         dialect: 'postgres',
-      })) as unknown as Row[];
-      expect(scpRows.map((r) => String(r.label))).toEqual(['A', 'C']);
+        leafImport: resolve(REPO_ROOT, 'src/scp/leaf-transport.js'),
+        endpoints: IN_LIST_ENDPOINTS,
+        models: (n) => IN_LIST_MODELS[n],
+        columnOptions: IN_LIST_COLUMN_TYPES,
+      });
+      emittedIn = emitted.source;
+      inWorkDir = mkdtempSync(join(REPO_ROOT, '.emit-e2e-'));
+      const authored = join(inWorkDir, 'in-lists.ts');
+      writeFileSync(authored, emitted.source, 'utf8');
+      const out = join(inWorkDir, 'in-lists-generated.ts');
+      execFileSync(
+        join(REPO_ROOT, 'node_modules/.bin/bc'),
+        ['generate', '--lang', 'typescript-native', '--from', authored, '--behavior', 'InLists', '--out', out],
+        { cwd: REPO_ROOT, stdio: 'pipe' },
+      );
+      const generated = (await import(out)) as { bindTypedAsync: (h: ReturnType<typeof leafHandlersAsync>) => InListApi };
+      const execAsyncCtx = new PooledAsyncContext(pgConnectionPool(pgPool as never));
+      q = generated.bindTypedAsync(leafHandlersAsync({ execAsync: execAsyncCtx, dialect: 'postgres' }));
+    }, 120_000);
+
+    afterAll(() => {
+      if (inWorkDir !== undefined) rmSync(inWorkDir, { recursive: true, force: true });
     });
-  }
+
+    it('SELECT IN-list on an INT column: no-cast `= ANY(?)` — #46; PG infers int[]; SCP rows == v1', async () => {
+      expect(emittedIn).toContain(`SELECT id, title FROM ${T_POSTS} WHERE id = ANY(?) ORDER BY id ASC`);
+      expect(emittedIn).not.toContain('::text[]');
+      const scpRows = await q.byIds({ ids: [1, 3] });
+      expect(scpRows.map((r) => Number(r.id))).toEqual([1, 3]);
+
+      // v1 RESULT parity: v1's IN-list expanded to `id IN ($1, $2)` (DBConditions). Same rows.
+      const v1Params: unknown[] = [];
+      const v1Where = new DBConditions({ id: [1, 3] }).compile(v1Params);
+      let i = 0;
+      const v1Sql = `SELECT id, title FROM ${T_POSTS} WHERE ${v1Where} ORDER BY id ASC`.replace(/\?/g, () => `$${++i}`);
+      const v1Rows = await pgQuery(pgPool!, v1Sql, v1Params);
+      expect(scpRows).toEqual(v1Rows);
+    });
+
+    it('SELECT IN-list EMPTY int array: `= ANY(?)` with [] → ZERO rows, no error — #46; == v1 `1 = 0`', async () => {
+      // The blocker the cast caused: `inferPgArrayType([])` = `text[]` → `integer = text` at PLAN time.
+      expect(await q.byIds({ ids: [] })).toEqual([]);
+    });
+
+    it('SELECT IN-list on a UUID column (non-empty): `= ANY(?)` → PG infers uuid[]; correct rows — #46', async () => {
+      expect(emittedIn).toContain(`SELECT id, guid FROM ${T_POSTS} WHERE guid = ANY(?) ORDER BY id ASC`);
+      const scpRows = await q.byGuids({ guids: [POST_GUIDS[0], POST_GUIDS[2]] });
+      expect(scpRows.map((r) => Number(r.id))).toEqual([1, 3]);
+      expect(scpRows.map((r) => String(r.guid))).toEqual([POST_GUIDS[0], POST_GUIDS[2]]);
+    });
+
+    it('SELECT IN-list EMPTY uuid array: `= ANY(?)` with [] → ZERO rows, no error — #46', async () => {
+      expect(await q.byGuids({ guids: [] })).toEqual([]);
+    });
+
+    // #46 item 4 — every PG element type binds live through the no-cast `= ANY(?)` IN-list. Each case
+    // selects the stable `label`, so `[A,C]` is the dialect-invariant expected result; the test proves
+    // the ARRAY BINDING of bigint / text / bool / timestamp / numeric through `pg`.
+    const pgTypeCases: { entry: keyof InListApi & string; col: string; keys: unknown[] }[] = [
+      { entry: 'byBig', col: 'big', keys: [TYPED_BIG_TS[0], TYPED_BIG_TS[2]] },
+      { entry: 'byTxt', col: 'txt', keys: ['alpha', 'gamma'] },
+      { entry: 'byFlag', col: 'flag', keys: [true] },
+      { entry: 'byTs', col: 'ts', keys: [TYPED_TS_TS[0], TYPED_TS_TS[2]] },
+      { entry: 'byAmt', col: 'amt', keys: ['10.50', '30.75'] },
+    ];
+    for (const c of pgTypeCases) {
+      it(`SELECT IN-list on a ${c.col} column: no-cast \`= ANY(?)\` binds live — #46 item 4`, async () => {
+        expect(emittedIn).toContain(`SELECT label FROM ${T_TYPED} WHERE ${c.col} = ANY(?) ORDER BY label ASC`);
+        const rows = (await (q[c.entry] as (i: Record<string, unknown>) => Promise<Row[]>)({ keys: c.keys })) as Row[];
+        expect(rows.map((r) => String(r.label))).toEqual(['A', 'C']);
+      });
+    }
+  });
 
   // count() (#47 item 2) — `SELECT COUNT(*) as count FROM t[ WHERE …]` executes live + matches v1.
   it('COUNT(*) all rows: SCP `SELECT COUNT(*) as count` == v1 _count (real PG)', async () => {
-    const bundle = compileBundle(contract, 'CountAll', [], 'postgres');
-    const rendered = renderReadPrimary(bundle.readGraph!, {} as never);
-    expect(rendered.sql).toBe(`SELECT COUNT(*) as count FROM ${T_POSTS}`);
-    const scpRows = (await executeBundleAsync(bundle, {} as never, {
-      exec: pgPoolExecutor(pgPool!),
-      entry: 'CountAll',
-      dialect: 'postgres',
-    })) as unknown as Row[];
+    const { rows: scpRows, renderedSql } = await scpSelect(countAllDesc('postgres'), execAsync());
+    expect(renderedSql).toBe(`SELECT COUNT(*) as count FROM ${T_POSTS}`);
     // v1 _count returns parseInt(rows[0].count); the same one-row [{count}] shape is asserted.
     const v1Rows = await pgQuery(pgPool!, `SELECT COUNT(*) as count FROM ${T_POSTS}`, []);
     expect(Number(scpRows[0].count)).toBe(Number(v1Rows[0].count));
@@ -549,34 +626,18 @@ describe('WS6 integration — Postgres: SCP-compiled SQL executes + parity with 
   });
 
   it('COUNT(*) WHERE user_id: SCP == v1 _count with condition (real PG)', async () => {
-    const bundle = compileBundle(contract, 'CountByUser', [], 'postgres');
-    const rendered = renderReadPrimary(bundle.readGraph!, { user_id: 1 } as never);
-    expect(rendered.sql).toBe(`SELECT COUNT(*) as count FROM ${T_POSTS} WHERE user_id = $1`);
-    const scpRows = (await executeBundleAsync(bundle, { user_id: 1 } as never, {
-      exec: pgPoolExecutor(pgPool!),
-      entry: 'CountByUser',
-      dialect: 'postgres',
-    })) as unknown as Row[];
+    const { rows: scpRows, renderedSql } = await scpSelect(countByUserDesc('postgres', 1), execAsync());
+    expect(renderedSql).toBe(`SELECT COUNT(*) as count FROM ${T_POSTS} WHERE user_id = $1`);
     expect(Number(scpRows[0].count)).toBe(2);
     // Empty result → 0 (not null): a real DB always returns one COUNT row.
-    const empty = (await executeBundleAsync(bundle, { user_id: 999 } as never, {
-      exec: pgPoolExecutor(pgPool!),
-      entry: 'CountByUser',
-      dialect: 'postgres',
-    })) as unknown as Row[];
+    const { rows: empty } = await scpSelect(countByUserDesc('postgres', 999), execAsync());
     expect(Number(empty[0].count)).toBe(0);
   });
 
-  // #47 item 5 — the OR-group WHERE + LIMIT/OFFSET tail (now v1-sourced) execute live on PG and
+  // #47 item 5 — the OR-group WHERE + LIMIT/OFFSET tail (v1-sourced) execute live on PG and
   // return the SAME rows as v1 direct execution of the equivalent DBConditions OR + inline LIMIT.
   it('OR-group WHERE + LIMIT/OFFSET: SCP rows == v1 direct execution (real PG)', async () => {
-    const bundle = compileBundle(contract, 'Page', [], 'postgres');
-    const input = { user_id: 1, other_id: 2, offset: 0 };
-    const scpRows = (await executeBundleAsync(bundle, input as never, {
-      exec: pgPoolExecutor(pgPool!),
-      entry: 'Page',
-      dialect: 'postgres',
-    })) as unknown as Row[];
+    const { rows: scpRows } = await scpSelect(pageDesc('postgres', 1, 2, 0), execAsync());
     // v1 direct: an OR over the two user_ids + inline LIMIT/OFFSET (v1 inlines the count as a literal).
     const v1Params: unknown[] = [];
     const v1Where = new DBConditions({ __or__: [{ user_id: 1 }, { user_id: 2 }] }).compile(v1Params);
@@ -588,11 +649,9 @@ describe('WS6 integration — Postgres: SCP-compiled SQL executes + parity with 
   });
 
   it('INSERT + RETURNING: SCP persists + returns; parity with v1 postgresSqlBuilder', async () => {
-    const wc = publishBehaviors(PostWrites);
-    const bundle = compileBundle(wc, 'Create', [], 'postgres');
-    // A single-statement write bundle carries the compiled INSERT (canonical column order).
+    // The compiled base write statement (canonical column order) — no transaction plan needed here.
     const input = { user_id: 2, title: 'SCP PG Post', content: 'from scp' };
-    const { sql, params } = renderTxStatement(bundle.statement!, input as never, 'postgres');
+    const { sql, params } = renderTxStatement(createPostOp('postgres'), input as never, 'postgres');
     // The SCP Insert compiles columns in the canonical (alphabetical) order (WS3 SSoT), so the
     // column list is `content, title, user_id` regardless of declaration order.
     expect(sql).toBe(`INSERT INTO ${T_POSTS} (content, title, user_id) VALUES ($1, $2, $3) RETURNING id, user_id, title, view_count`);
@@ -647,17 +706,19 @@ describe('WS6 integration — Postgres: SCP-compiled SQL executes + parity with 
     expect(scpChildren.length).toBe(keys.length);
   });
 
-  // #47 item 1 — COMPOSITE-key relation batch binds + executes live on PG (unnest per-column arrays),
-  // and the (tenant_id, …) tuple correctly disambiguates the two tenants sharing uid/doc_id.
-  it('composite belongsTo (tenant_id, owner_id) → users2: `unnest(?::int[], ?::int[])` binds live on PG', async () => {
+  // #47 item 1 / #159 — COMPOSITE-key relation batch binds + executes live on PG (ONE JSON tuple param
+  // expanded to typed key rows), and the (tenant_id, …) tuple correctly disambiguates the two tenants
+  // sharing uid/doc_id.
+  it('composite belongsTo (tenant_id, owner_id) → users2: the single JSON key-tuple param binds live on PG', async () => {
     const op: RelationOp = compileRelationOp({
       name: 'owner', kind: 'belongsTo', targetTable: T_USERS2, select: ['tenant_id', 'uid', 'name'],
       parentKeys: ['tenant_id', 'owner_id'], targetKeys: ['tenant_id', 'uid'], dialect: 'postgres',
-    });
+    }, compositeColumnType);
     const docs = await pgQuery(pgPool!, `SELECT tenant_id, doc_id, owner_id FROM ${T_DOCS2} ORDER BY tenant_id, doc_id`, []);
     const tuples = docs.map((d) => [Number(d.tenant_id), Number(d.owner_id)]);
-    const { sql, params } = renderCompositeRelation(op, ['tenant_id', 'owner_id'], tuples);
-    expect(sql).toContain('unnest($1::int[], $2::int[])');
+    const { sql, params } = renderCompositeRelation(op, tuples);
+    expect(sql).toContain('JOIN (SELECT (_t->>0)::int AS key0, (_t->>1)::int AS key1 FROM json_array_elements($1::json) AS _t) AS _keys');
+    expect(params).toHaveLength(1); // the WHOLE key set is ONE param, whatever its length
     const children = await pgQuery(pgPool!, sql, params);
     // (2,100) must resolve to Bob (tenant 2), NOT Ada (tenant 1) — the composite key disambiguates.
     const bob = children.find((c) => Number(c.tenant_id) === 2 && Number(c.uid) === 100);
@@ -670,9 +731,9 @@ describe('WS6 integration — Postgres: SCP-compiled SQL executes + parity with 
     const op: RelationOp = compileRelationOp({
       name: 'revisions', kind: 'hasMany', targetTable: T_REVS, select: ['tenant_id', 'doc_id', 'rev'],
       parentKeys: ['tenant_id', 'doc_id'], targetKeys: ['tenant_id', 'doc_id'], order: 'rev ASC', dialect: 'postgres',
-    });
+    }, compositeColumnType);
     const tuples = [[1, 10], [2, 10]]; // same doc_id 10 across two tenants
-    const { sql, params } = renderCompositeRelation(op, ['tenant_id', 'doc_id'], tuples);
+    const { sql, params } = renderCompositeRelation(op, tuples);
     const rows = await pgQuery(pgPool!, sql, params);
     const t1 = rows.filter((r) => Number(r.tenant_id) === 1).map((r) => String(r.rev)).sort();
     const t2 = rows.filter((r) => Number(r.tenant_id) === 2).map((r) => String(r.rev)).sort();
@@ -684,11 +745,12 @@ describe('WS6 integration — Postgres: SCP-compiled SQL executes + parity with 
     const op: RelationOp = compileRelationOp({
       name: 'latestRev', kind: 'hasMany', targetTable: T_REVS, select: ['tenant_id', 'doc_id', 'rev'],
       parentKeys: ['tenant_id', 'doc_id'], targetKeys: ['tenant_id', 'doc_id'], order: 'rev DESC', limit: 1, dialect: 'postgres',
-    });
+    }, compositeColumnType);
     const tuples = [[1, 10], [1, 11], [2, 10]];
-    const { sql, params } = renderCompositeRelation(op, ['tenant_id', 'doc_id'], tuples);
-    // STATIC composite-LIMITED = v1 LATERAL over per-column unnest (length-independent, deferred cast).
-    expect(sql).toContain('unnest($1::int[], $2::int[])');
+    const { sql, params } = renderCompositeRelation(op, tuples);
+    // STATIC composite-LIMITED = the v1 LATERAL window over the ONE JSON key-tuple param's key rows.
+    expect(sql).toContain('FROM (SELECT (_t->>0)::int AS key0, (_t->>1)::int AS key1 FROM json_array_elements($1::json) AS _t) AS _keys');
+    expect(params).toHaveLength(1);
     expect(sql).toContain('CROSS JOIN LATERAL');
     expect(sql).toContain('ORDER BY rev DESC LIMIT 1');
     const rows = await pgQuery(pgPool!, sql, params);
@@ -700,8 +762,7 @@ describe('WS6 integration — Postgres: SCP-compiled SQL executes + parity with 
   });
 
   it('write-tx Command (Insert + derive counter) commits atomically as ONE tx on real PG', async () => {
-    const contract = publishBehaviors(CreatePostWithCount);
-    const bundle = compileWriteBundle(contract, 'Create', postCountWrites, 'create', 'postgres');
+    const bundle = compileWriteBundle('Create', createPostWithCountOp('postgres'), postCountWrites, 'create', 'postgres');
     expect(bundle.dialect).toBe('postgres');
     const plan = bundle.transaction!;
     const input = { user_id: 1, title: 'TX PG', content: 'c' };
@@ -751,17 +812,11 @@ describe('WS6 integration — Postgres: SCP-compiled SQL executes + parity with 
 // ── MySQL ───────────────────────────────────────────────────────────────────────
 
 describe('WS6 integration — MySQL: SCP-compiled SQL executes + parity with v1 direct execution', () => {
-  const contract: BehaviorModelContract = publishBehaviors(PostQueries);
+  const execAsync = () => asyncCtx((sql, params) => myQuery(myConn!, sql, params));
 
   it('SELECT by user_id: SCP rows == v1 direct execution (`?` placeholders on real MySQL)', async () => {
-    const bundle = compileBundle(contract, 'ByUser', [], 'mysql');
-    const rendered = renderReadPrimary(bundle.readGraph!, { user_id: 1 } as never);
-    expect(rendered.sql).toBe(`SELECT id, user_id, title, view_count FROM ${T_POSTS} WHERE user_id = ? ORDER BY id ASC`);
-    const scpRows = (await executeBundleAsync(bundle, { user_id: 1 } as never, {
-      exec: mysqlPoolExecutor(myConn! as never),
-      entry: 'ByUser',
-      dialect: 'mysql',
-    })) as unknown as Row[];
+    const { rows: scpRows, renderedSql } = await scpSelect(byUserDesc('mysql', 1), execAsync());
+    expect(renderedSql).toBe(`SELECT id, user_id, title, view_count FROM ${T_POSTS} WHERE user_id = ? ORDER BY id ASC`);
 
     const v1Params: unknown[] = [];
     const v1Where = new DBConditions({ user_id: 1 }).compile(v1Params);
@@ -771,70 +826,59 @@ describe('WS6 integration — MySQL: SCP-compiled SQL executes + parity with v1 
     expect(scpRows.length).toBeGreaterThan(0);
   });
 
+  it('#132 row locks: ` FOR UPDATE` and ` FOR SHARE` both EXECUTE on real MySQL; rows unchanged', async () => {
+    // MySQL 8.0 parses `FOR SHARE` (the 5.x spelling was `LOCK IN SHARE MODE`); the row RESULT is
+    // unchanged by either lock. The tail text is the SAME one PG gets — one aggregation point, no
+    // per-dialect lock branch.
+    const plain = await scpSelect(byUserDesc('mysql', 1), execAsync());
+    for (const [lock, tail] of [['forUpdate', 'FOR UPDATE'], ['forShare', 'FOR SHARE']] as const) {
+      const { rows, renderedSql } = await scpSelect(lockedByUserDesc('mysql', 1, lock), execAsync());
+      expect(renderedSql).toBe(
+        `SELECT id, user_id, title, view_count FROM ${T_POSTS} WHERE user_id = ? ORDER BY id ASC ${tail}`,
+      );
+      expect(rows).toEqual(plain.rows);
+    }
+    expect(plain.rows.length).toBeGreaterThan(0);
+  });
+
   it('SELECT IN-list: single-JSON-param form (no cast token — MySQL); SCP rows == v1', async () => {
-    const bundle = compileBundle(contract, 'ByIds', [], 'mysql');
-    const rendered = renderReadPrimary(bundle.readGraph!, { ids: [1, 3] } as never);
+    const { rows: scpRows, renderedSql } = await scpSelect(byIdsDesc('mysql', [1, 3]), execAsync());
     // MySQL uses the single-JSON-param IN-list (epic #43/#45), NOT `IN (?, ?)`; NO PG cast token.
-    expect(rendered.sql).toContain('JSON_TABLE');
-    expect(rendered.sql).not.toContain('PG_ARRAY_CAST');
-    const scpRows = (await executeBundleAsync(bundle, { ids: [1, 3] } as never, {
-      exec: mysqlPoolExecutor(myConn! as never),
-      entry: 'ByIds',
-      dialect: 'mysql',
-    })) as unknown as Row[];
+    expect(renderedSql).toContain('JSON_TABLE');
+    expect(renderedSql).not.toContain('PG_ARRAY_CAST');
     expect(scpRows.map((r) => Number(r.id))).toEqual([1, 3]);
   });
 
-  // #46 item 4 — every element type binds live through the single-JSON MySQL IN-list form. The
-  // BOOLEAN element is encoded `1`/`0` in the JSON param (MySQL's JSON_UNQUOTE would stringify a
-  // JSON `true` to `'true'` → coerce to 0 against TINYINT). Each selects the stable `label` → [A,C].
-  const myTypeCases: { entry: string; keys: unknown[] }[] = [
-    { entry: 'ByBig', keys: [TYPED_BIG_TS[0], TYPED_BIG_TS[2]] },
-    { entry: 'ByTxt', keys: ['alpha', 'gamma'] },
-    { entry: 'ByFlag', keys: [true] },
-    { entry: 'ByTs', keys: [TYPED_TS_TS[0], TYPED_TS_TS[2]] },
-    { entry: 'ByAmt', keys: [10.5, 30.75] },
+  // #46 item 4 — every element type binds live through the single-JSON MySQL IN-list form
+  // (`JsonArrayConditions`, `json-array.ts` — unaffected by the recorder removal). The BOOLEAN
+  // element is encoded `1`/`0` in the JSON param (MySQL's JSON_UNQUOTE would stringify a JSON `true`
+  // to `'true'` → coerce to 0 against TINYINT). Each selects the stable `label` → [A,C].
+  const myTypeCases: { entry: string; col: string; keys: unknown[] }[] = [
+    { entry: 'ByBig', col: 'big', keys: [TYPED_BIG_TS[0], TYPED_BIG_TS[2]] },
+    { entry: 'ByTxt', col: 'txt', keys: ['alpha', 'gamma'] },
+    { entry: 'ByFlag', col: 'flag', keys: [true] },
+    { entry: 'ByTs', col: 'ts', keys: [TYPED_TS_TS[0], TYPED_TS_TS[2]] },
+    { entry: 'ByAmt', col: 'amt', keys: [10.5, 30.75] },
   ];
   for (const c of myTypeCases) {
     it(`SELECT IN-list ${c.entry}: single-JSON form binds live on MySQL — #46 item 4`, async () => {
-      const bundle = compileBundle(contract, c.entry, [], 'mysql');
-      const scpRows = (await executeBundleAsync(bundle, { keys: c.keys } as never, {
-        exec: mysqlPoolExecutor(myConn! as never),
-        entry: c.entry,
-        dialect: 'mysql',
-      })) as unknown as Row[];
+      const { rows: scpRows } = await scpSelect(byTypedDesc('mysql', c.col, c.keys), execAsync());
       expect(scpRows.map((r) => String(r.label))).toEqual(['A', 'C']);
     });
   }
 
   // count() (#47 item 2) — `SELECT COUNT(*) as count FROM t[ WHERE …]` executes live on MySQL.
   it('COUNT(*) all rows + WHERE: SCP `SELECT COUNT(*) as count` on real MySQL', async () => {
-    const all = compileBundle(contract, 'CountAll', [], 'mysql');
-    expect(renderReadPrimary(all.readGraph!, {} as never).sql).toBe(`SELECT COUNT(*) as count FROM ${T_POSTS}`);
-    const allRows = (await executeBundleAsync(all, {} as never, {
-      exec: mysqlPoolExecutor(myConn! as never),
-      entry: 'CountAll',
-      dialect: 'mysql',
-    })) as unknown as Row[];
-    expect(Number(allRows[0].count)).toBe(3);
-    const byUser = compileBundle(contract, 'CountByUser', [], 'mysql');
-    const byRows = (await executeBundleAsync(byUser, { user_id: 1 } as never, {
-      exec: mysqlPoolExecutor(myConn! as never),
-      entry: 'CountByUser',
-      dialect: 'mysql',
-    })) as unknown as Row[];
-    expect(Number(byRows[0].count)).toBe(2);
+    const all = await scpSelect(countAllDesc('mysql'), execAsync());
+    expect(all.renderedSql).toBe(`SELECT COUNT(*) as count FROM ${T_POSTS}`);
+    expect(Number(all.rows[0].count)).toBe(3);
+    const byUser = await scpSelect(countByUserDesc('mysql', 1), execAsync());
+    expect(Number(byUser.rows[0].count)).toBe(2);
   });
 
   // #47 item 5 — OR-group WHERE + LIMIT/OFFSET tail (v1-sourced) execute live on MySQL, rows == v1.
   it('OR-group WHERE + LIMIT/OFFSET: SCP rows == v1 direct execution (real MySQL)', async () => {
-    const bundle = compileBundle(contract, 'Page', [], 'mysql');
-    const input = { user_id: 1, other_id: 2, offset: 0 };
-    const scpRows = (await executeBundleAsync(bundle, input as never, {
-      exec: mysqlPoolExecutor(myConn! as never),
-      entry: 'Page',
-      dialect: 'mysql',
-    })) as unknown as Row[];
+    const { rows: scpRows } = await scpSelect(pageDesc('mysql', 1, 2, 0), execAsync());
     const v1Params: unknown[] = [];
     const v1Where = new DBConditions({ __or__: [{ user_id: 1 }, { user_id: 2 }] }).compile(v1Params);
     const v1Sql = `SELECT id, user_id, title FROM ${T_POSTS} WHERE ${v1Where} ORDER BY id ASC LIMIT 2 OFFSET 0`;
@@ -844,10 +888,8 @@ describe('WS6 integration — MySQL: SCP-compiled SQL executes + parity with v1 
   });
 
   it('INSERT: SCP persists (MySQL keeps `?`, RETURNING stripped by re-select) + parity with v1', async () => {
-    const wc = publishBehaviors(PostWrites);
-    const bundle = compileBundle(wc, 'Create', [], 'mysql');
     const input = { user_id: 2, title: 'SCP MY Post', content: 'from scp' };
-    const { sql, params } = renderTxStatement(bundle.statement!, input as never, 'mysql');
+    const { sql, params } = renderTxStatement(createPostOp('mysql'), input as never, 'mysql');
     // MySQL has no native RETURNING; the compiled text carries it (driver simulates via re-select).
     // For the raw mysql2 seam we execute the INSERT sans RETURNING, then re-select — the v1
     // MysqlSqlBuilder + mysql.ts do the same (RETURNING stripped, re-select the inserted PK).
@@ -906,10 +948,10 @@ describe('WS6 integration — MySQL: SCP-compiled SQL executes + parity with v1 
     const op: RelationOp = compileRelationOp({
       name: 'owner', kind: 'belongsTo', targetTable: T_USERS2, select: ['tenant_id', 'uid', 'name'],
       parentKeys: ['tenant_id', 'owner_id'], targetKeys: ['tenant_id', 'uid'], dialect: 'mysql',
-    });
+    }, compositeColumnType);
     expect(op.sql).toContain('JSON_TABLE');
     const tuples = [[1, 100], [2, 100]]; // same uid 100 across two tenants
-    const { sql, params } = renderCompositeRelation(op, ['tenant_id', 'owner_id'], tuples);
+    const { sql, params } = renderCompositeRelation(op, tuples);
     const children = await myQuery(myConn!, sql, params);
     const bob = children.find((c) => Number(c.tenant_id) === 2 && Number(c.uid) === 100);
     const ada = children.find((c) => Number(c.tenant_id) === 1 && Number(c.uid) === 100);
@@ -922,8 +964,8 @@ describe('WS6 integration — MySQL: SCP-compiled SQL executes + parity with v1 
     const op: RelationOp = compileRelationOp({
       name: 'revisions', kind: 'hasMany', targetTable: T_REVS, select: ['tenant_id', 'doc_id', 'rev'],
       parentKeys: ['tenant_id', 'doc_id'], targetKeys: ['tenant_id', 'doc_id'], order: 'rev ASC', dialect: 'mysql',
-    });
-    const { sql, params } = renderCompositeRelation(op, ['tenant_id', 'doc_id'], [[1, 10], [2, 10]]);
+    }, compositeColumnType);
+    const { sql, params } = renderCompositeRelation(op, [[1, 10], [2, 10]]);
     const rows = await myQuery(myConn!, sql, params);
     const t1 = rows.filter((r) => Number(r.tenant_id) === 1).map((r) => String(r.rev)).sort();
     const t2 = rows.filter((r) => Number(r.tenant_id) === 2).map((r) => String(r.rev)).sort();
@@ -935,8 +977,8 @@ describe('WS6 integration — MySQL: SCP-compiled SQL executes + parity with v1 
     const op: RelationOp = compileRelationOp({
       name: 'latestRev', kind: 'hasMany', targetTable: T_REVS, select: ['tenant_id', 'doc_id', 'rev'],
       parentKeys: ['tenant_id', 'doc_id'], targetKeys: ['tenant_id', 'doc_id'], order: 'rev DESC', limit: 1, dialect: 'mysql',
-    });
-    const { sql, params } = renderCompositeRelation(op, ['tenant_id', 'doc_id'], [[1, 10], [1, 11], [2, 10]]);
+    }, compositeColumnType);
+    const { sql, params } = renderCompositeRelation(op, [[1, 10], [1, 11], [2, 10]]);
     // STATIC composite-LIMITED = v1 ROW_NUMBER window + static JSON key-set predicate (no tuple-IN).
     expect(sql).toContain('ROW_NUMBER() OVER (PARTITION BY tenant_id, doc_id ORDER BY rev DESC)');
     expect(sql).toContain('JSON_TABLE');
@@ -950,8 +992,7 @@ describe('WS6 integration — MySQL: SCP-compiled SQL executes + parity with v1 
   });
 
   it('write-tx Command (Insert + derive counter) commits atomically as ONE tx on real MySQL', async () => {
-    const contract = publishBehaviors(CreatePostWithCount);
-    const bundle = compileWriteBundle(contract, 'Create', postCountWrites, 'create', 'mysql');
+    const bundle = compileWriteBundle('Create', createPostWithCountOp('mysql'), postCountWrites, 'create', 'mysql');
     expect(bundle.dialect).toBe('mysql');
     const plan = bundle.transaction!;
     const input = { user_id: 1, title: 'TX MY', content: 'c' };
@@ -999,36 +1040,66 @@ describe('WS6 integration — MySQL: SCP-compiled SQL executes + parity with v1 
 //
 // createMany / updateMany / deleteMany / bare UPDATE·DELETE / UUID-PK + composite-PK INSERT
 // RETURNING — the SAME batch/write bundles the corpus ships, executed live on PG + MySQL through the
-// TS runtime's tx path (`renderTxStatement`). MySQL has no native RETURNING, so an INSERT…RETURNING
-// is emulated PK-aware (strip → INSERT → re-select by the REAL PK via the `/*scp:pk=…*/` hint), and a
-// non-INSERT RETURNING returns [] — the SAME contract the four non-TS runtimes implement. Dedicated
-// `wc_*` tables keep this isolated from the seed above.
+// TS runtime's tx path (`renderTxStatement`). MySQL has no native RETURNING, so EVERY write that
+// declares one — INSERT, upsert, UPDATE, DELETE — is run stripped and its written rows recovered by
+// the SELECT the connection adapter derives, which is why both dialects return the written rows here.
+// Dedicated `wc_*` tables keep this isolated from the seed above.
 
 const WC_POSTS = 'scp_wc_posts';
 const WC_DOCS = 'scp_wc_docs';
 const WC_LINES = 'scp_wc_lines';
 const WC_UUID = '44444444-4444-4444-4444-444444444444';
 
-class WcMutations extends SemanticBehavior {
-  Rename($: In<{ id: number; title: string }>) {
-    return L.Update({ table: WC_POSTS, 'set.title': $.title, where: [whereEq($.id, $.id)] });
-  }
-  Remove($: In<{ id: number }>) {
-    return L.Delete({ table: WC_POSTS, where: [whereEq($.id, $.id)] });
-  }
-  CreateDoc($: In<{ doc_id: string; title: string }>) {
-    return L.Insert({ table: WC_DOCS, 'values.doc_id': $.doc_id, 'values.title': $.title, returning: 'doc_id, title', pk: 'doc_id' });
-  }
-  CreateLine($: In<{ order_id: number; line_no: number; sku: string }>) {
-    return L.Insert({
-      table: WC_LINES,
-      'values.order_id': $.order_id,
-      'values.line_no': $.line_no,
-      'values.sku': $.sku,
-      returning: 'order_id, line_no, sku',
-      pk: 'order_id,line_no',
-    });
-  }
+// The where-member shape (`{arr:[{eq:[{ref:[…]},{ref:[…]}]}]}`) is `compileWriteNode`'s SSoT
+// structural WHERE — the SAME shape the removed `whereEq($.id, $.id)` recorder sugar lowered to.
+function idEqWhere(): { arr: [{ eq: [{ ref: string[] }, { ref: string[] }] }] } {
+  return { arr: [{ eq: [{ ref: ['id'] }, { ref: ['id'] }] }] };
+}
+function renameOp(dialect: MakeSQLDialect): TxOp {
+  return compileWriteNode({ component: 'Update', ports: { table: WC_POSTS, 'set.title': { ref: ['title'] }, where: idEqWhere() } } as never, dialect);
+}
+function removeOp(dialect: MakeSQLDialect): TxOp {
+  return compileWriteNode({ component: 'Delete', ports: { table: WC_POSTS, where: idEqWhere() } } as never, dialect);
+}
+// The RETURNING twins (#130). MySQL parses no RETURNING, so an UPDATE is recovered by re-running the
+// write's OWN WHERE after it (the row carries the new value) and a DELETE by that same WHERE BEFORE
+// it (afterwards there is nothing left to describe) — both keyed off the `pk` hint for row order.
+function renameReturningOp(dialect: MakeSQLDialect): TxOp {
+  return compileWriteNode(
+    { component: 'Update', ports: { table: WC_POSTS, 'set.title': { ref: ['title'] }, where: idEqWhere(), returning: 'id, title', pk: 'id' } } as never,
+    dialect,
+  );
+}
+function removeReturningOp(dialect: MakeSQLDialect): TxOp {
+  return compileWriteNode(
+    { component: 'Delete', ports: { table: WC_POSTS, where: idEqWhere(), returning: 'id, title', pk: 'id' } } as never,
+    dialect,
+  );
+}
+// `pk` is client-supplied (UUID / composite — no AUTO_INCREMENT), so on MySQL the written row is
+// recovered by the PK VALUES the INSERT itself bound, never by an id range. `compileWriteNode` bakes
+// the hint that carries the key; PG keeps native RETURNING and never reads it.
+function createDocOp(dialect: MakeSQLDialect): TxOp {
+  return compileWriteNode(
+    { component: 'Insert', ports: { table: WC_DOCS, 'values.doc_id': { ref: ['doc_id'] }, 'values.title': { ref: ['title'] }, returning: 'doc_id, title', pk: 'doc_id' } } as never,
+    dialect,
+  );
+}
+function createLineOp(dialect: MakeSQLDialect): TxOp {
+  return compileWriteNode(
+    {
+      component: 'Insert',
+      ports: {
+        table: WC_LINES,
+        'values.order_id': { ref: ['order_id'] },
+        'values.line_no': { ref: ['line_no'] },
+        'values.sku': { ref: ['sku'] },
+        returning: 'order_id, line_no, sku',
+        pk: 'order_id,line_no',
+      },
+    } as never,
+    dialect,
+  );
 }
 
 /** A minimal per-dialect live client seam (parameterized query → rows / affected count). */
@@ -1051,13 +1122,31 @@ function pgClient(pool: Pool): LiveClient {
   };
 }
 
+/**
+ * The MySQL leg goes through the PRODUCTION connection adapter (`mysqlConnectionPool` over this one
+ * connection), NOT a raw `conn.query`, so the RETURNING recovery under test is the one that ships —
+ * re-deriving it here would make this suite green against a broken `buildMysqlReselect`. Only the
+ * pool shim is local: `getConnection` hands back the test's own connection, and release/destroy are
+ * no-ops because the test owns its lifetime.
+ */
 function myClient(conn: mysql.Connection): LiveClient {
+  const pool = mysqlConnectionPool({
+    getConnection: async () => ({
+      query: (sql: string, values?: unknown[]) => conn.query(sql, values) as Promise<[unknown, unknown]>,
+      release: () => {},
+      destroy: () => {},
+    }),
+  });
   return {
     async query(sql, params) {
-      const [r] = await conn.query(sql, params);
-      if (Array.isArray(r)) return { rows: r as Row[], affected: (r as Row[]).length, insertId: 0 };
-      const h = r as mysql.ResultSetHeader;
-      return { rows: [], affected: h.affectedRows ?? 0, insertId: h.insertId ?? 0 };
+      // A RETURNING write rides `execute` (where the recovery lives); a bare write rides `run` — the
+      // same split `executeSQLAsync` makes from its `returning` port.
+      const ac = await pool.acquire();
+      if (/^\s*select\b/i.test(sql) || /\breturning\b/i.test(sql)) {
+        return { rows: (await ac.execute(sql, params)) as Row[], affected: 0, insertId: 0 };
+      }
+      const info = await ac.run(sql, params);
+      return { rows: [], affected: info.changes, insertId: Number(info.lastInsertRowid ?? 0) };
     },
     begin: async () => void (await conn.beginTransaction()),
     commit: async () => void (await conn.commit()),
@@ -1065,19 +1154,12 @@ function myClient(conn: mysql.Connection): LiveClient {
   };
 }
 
-/** Parse the ` /*scp:pk=cols;ai=col*​/` hint (mirrors the 4 runtime emulations). */
-function parsePkHint(sql: string): { cols: string[]; autoInc: string } | null {
-  const m = /\/\*scp:pk=([^;*]*);ai=([^*]*)\*\//i.exec(sql);
-  if (!m) return null;
-  return { cols: m[1].split(',').map((c) => c.trim()).filter(Boolean), autoInc: m[2].trim() };
-}
-
 /**
  * Execute a tx/batch bundle live through the TS runtime's render + a per-dialect client, with the
  * PK-aware MySQL RETURNING emulation. Returns the collected body RETURNING rows (batch "all created
  * rows" / single entity). This is the TS twin of the 4 runtimes' execute_transaction_bundle.
  */
-async function execTxLive(bundle: SqlBundle, input: Record<string, unknown>, client: LiveClient, isMysql: boolean): Promise<Row[][]> {
+async function execTxLive(bundle: SqlBundle, input: Record<string, unknown>, client: LiveClient): Promise<Row[][]> {
   const plan = bundle.transaction!;
   const scope: Record<string, unknown> = { ...input };
   const returned: Row[][] = [];
@@ -1085,33 +1167,11 @@ async function execTxLive(bundle: SqlBundle, input: Record<string, unknown>, cli
   try {
     for (const stmt of plan.statements) {
       const r = renderTxStatement(stmt.op, scope as never, bundle.dialect);
-      const params = r.params.map(toPlain);
+      // Dialect-BLIND: MySQL's missing RETURNING is the connection adapter's business (`myClient`),
+      // exactly as it is in production, so this loop is the same code for both dialects.
       const hasReturn = /^\s*select\b/i.test(r.sql) || /\breturning\b/i.test(r.sql);
-      let rows: Row[] = [];
-      if (isMysql && /\breturning\b/i.test(r.sql)) {
-        // MySQL RETURNING emulation (PK-aware): strip RETURNING (+ hint), run, re-select by real PK.
-        const retMatch = /\s+RETURNING\s+(.+?)\s*$/is.exec(r.sql)!;
-        const cols = stripMysqlPkHint(retMatch[1]).trim();
-        const writeSql = stripMysqlPkHint(r.sql.slice(0, retMatch.index));
-        const pk = parsePkHint(r.sql);
-        const isInsert = /^\s*INSERT\b/i.test(writeSql);
-        const res = await client.query(writeSql, params);
-        if (!isInsert) {
-          rows = []; // non-INSERT RETURNING: no rows (v1 parity)
-        } else if (pk === null) {
-          rows = (await client.query(`SELECT ${cols} FROM ${insertTable(writeSql)} WHERE id = ?`, [res.insertId])).rows;
-        } else if (pk.autoInc && pk.cols.length === 1 && pk.cols[0] === pk.autoInc) {
-          rows = (await client.query(`SELECT ${cols} FROM ${insertTable(writeSql)} WHERE ${pk.autoInc} >= ? AND ${pk.autoInc} < ?`, [res.insertId, res.insertId + Math.max(1, res.affected)])).rows;
-        } else {
-          const insCols = insertCols(writeSql);
-          const where = pk.cols.map((c) => `${c} = ?`).join(' AND ');
-          const vals = pk.cols.map((c) => params[insCols.indexOf(c)]);
-          rows = (await client.query(`SELECT ${cols} FROM ${insertTable(writeSql)} WHERE ${where}`, vals)).rows;
-        }
-      } else {
-        const res = await client.query(r.sql, params);
-        rows = hasReturn ? res.rows : [];
-      }
+      const res = await client.query(r.sql, r.params.map(toPlain));
+      const rows = hasReturn ? res.rows : [];
       if (stmt.role === 'body' && rows.length > 0) returned.push(rows);
       if (stmt.id === plan.entityFrom && rows.length > 0) scope.__entity = rows[0];
       if (stmt.binds !== undefined && rows.length > 0) scope[stmt.binds] = rows[0];
@@ -1124,17 +1184,7 @@ async function execTxLive(bundle: SqlBundle, input: Record<string, unknown>, cli
   return returned;
 }
 
-function insertTable(sql: string): string {
-  return /INSERT\s+(?:IGNORE\s+)?INTO\s+([A-Za-z_][A-Za-z0-9_]*)/i.exec(sql)![1];
-}
-function insertCols(sql: string): string[] {
-  const m = /INSERT\s+(?:IGNORE\s+)?INTO\s+[A-Za-z_][A-Za-z0-9_]*\s*\(([^)]*)\)/i.exec(sql);
-  return m ? m[1].split(',').map((c) => c.trim()) : [];
-}
-
 describe('WS#47 write-path completeness — batch + bare + PK RETURNING execute live (TS leg, PG + MySQL)', () => {
-  const mut = () => publishBehaviors(WcMutations);
-
   async function setupPg(): Promise<void> {
     await pgPool!.query(`DROP TABLE IF EXISTS ${WC_POSTS}`);
     await pgPool!.query(`DROP TABLE IF EXISTS ${WC_DOCS}`);
@@ -1162,68 +1212,95 @@ describe('WS#47 write-path completeness — batch + bare + PK RETURNING execute 
 
     // ── PG ──
     await setupPg();
-    const cmPg = await execTxLive(compileCreateManyBundle('CM', cmOpts, 'postgres'), {}, pgClient(pgPool!), false);
+    const cmPg = await execTxLive(compileCreateManyBundle('CM', cmOpts, 'postgres'), {}, pgClient(pgPool!));
     expect(cmPg.flat().map((r) => r.title).sort()).toEqual(['B1', 'B2', 'B3']);
     const umPg = compileUpdateManyBundle('UM', { tableName: WC_POSTS, keyColumns: ['id'], updateColumns: ['title'], records: [{ id: 1, title: 'B1x' }, { id: 3, title: 'B3x' }], rawRecords: [{ id: 1, title: 'B1x' }, { id: 3, title: 'B3x' }] }, 'postgres');
-    await execTxLive(umPg, {}, pgClient(pgPool!), false);
+    await execTxLive(umPg, {}, pgClient(pgPool!));
     const afterUmPg = await pgQuery(pgPool!, `SELECT id, title FROM ${WC_POSTS} ORDER BY id`, []);
     expect(afterUmPg.map((r) => r.title)).toEqual(['B1x', 'B2', 'B3x']);
-    await execTxLive(compileDeleteManyBundle('DM', { tableName: WC_POSTS, keyColumns: ['id'], keys: [{ id: 1 }, { id: 3 }] }, 'postgres'), {}, pgClient(pgPool!), false);
+    await execTxLive(compileDeleteManyBundle('DM', { tableName: WC_POSTS, keyColumns: ['id'], keys: [{ id: 1 }, { id: 3 }] }, 'postgres'), {}, pgClient(pgPool!));
     const afterDmPg = await pgQuery(pgPool!, `SELECT id FROM ${WC_POSTS} ORDER BY id`, []);
     expect(afterDmPg.map((r) => Number(r.id))).toEqual([2]);
 
     // ── MySQL ──
     await setupMy();
-    const cmMy = await execTxLive(compileCreateManyBundle('CM', cmOpts, 'mysql'), {}, myClient(myConn!), true);
+    const cmMy = await execTxLive(compileCreateManyBundle('CM', cmOpts, 'mysql'), {}, myClient(myConn!));
     expect(cmMy.flat().map((r) => r.title).sort()).toEqual(['B1', 'B2', 'B3']); // multi-row RETURNING range re-select
     const umMy = compileUpdateManyBundle('UM', { tableName: WC_POSTS, keyColumns: ['id'], updateColumns: ['title'], records: [{ id: 1, title: 'B1x' }, { id: 3, title: 'B3x' }] }, 'mysql');
-    await execTxLive(umMy, {}, myClient(myConn!), true);
+    await execTxLive(umMy, {}, myClient(myConn!));
     const afterUmMy = await myQuery(myConn!, `SELECT id, title FROM ${WC_POSTS} ORDER BY id`, []);
     expect(afterUmMy.map((r) => r.title)).toEqual(['B1x', 'B2', 'B3x']);
-    await execTxLive(compileDeleteManyBundle('DM', { tableName: WC_POSTS, keyColumns: ['id'], keys: [{ id: 1 }, { id: 3 }] }, 'mysql'), {}, myClient(myConn!), true);
+    await execTxLive(compileDeleteManyBundle('DM', { tableName: WC_POSTS, keyColumns: ['id'], keys: [{ id: 1 }, { id: 3 }] }, 'mysql'), {}, myClient(myConn!));
     const afterDmMy = await myQuery(myConn!, `SELECT id FROM ${WC_POSTS} ORDER BY id`, []);
     expect(afterDmMy.map((r) => Number(r.id))).toEqual([2]);
   });
 
   it('bare UPDATE + bare DELETE execute on PG and MySQL', async () => {
-    const contract = mut();
-    const upd = { update: { effects: {} } };
-    const rem = { remove: { effects: {} } };
+    const upd: EntityWritesDefinition = { update: { effects: {} } };
+    const rem: EntityWritesDefinition = { remove: { effects: {} } };
 
     await setupPg();
     await pgPool!.query(`INSERT INTO ${WC_POSTS} (id, author_id, title) VALUES (1,7,'One'),(2,7,'Two')`);
-    await execTxLive(compileWriteBundle(contract, 'Rename', upd, 'update', 'postgres'), { id: 2, title: 'Two-x' }, pgClient(pgPool!), false);
+    await execTxLive(compileWriteBundle('Rename', renameOp('postgres'), upd, 'update', 'postgres'), { id: 2, title: 'Two-x' }, pgClient(pgPool!));
     expect((await pgQuery(pgPool!, `SELECT title FROM ${WC_POSTS} WHERE id=2`, []))[0].title).toBe('Two-x');
-    await execTxLive(compileWriteBundle(contract, 'Remove', rem, 'remove', 'postgres'), { id: 1 }, pgClient(pgPool!), false);
+    await execTxLive(compileWriteBundle('Remove', removeOp('postgres'), rem, 'remove', 'postgres'), { id: 1 }, pgClient(pgPool!));
     expect((await pgQuery(pgPool!, `SELECT id FROM ${WC_POSTS} ORDER BY id`, [])).map((r) => Number(r.id))).toEqual([2]);
 
     await setupMy();
     await myConn!.query(`INSERT INTO ${WC_POSTS} (id, author_id, title) VALUES (1,7,'One'),(2,7,'Two')`);
-    await execTxLive(compileWriteBundle(contract, 'Rename', upd, 'update', 'mysql'), { id: 2, title: 'Two-x' }, myClient(myConn!), true);
+    await execTxLive(compileWriteBundle('Rename', renameOp('mysql'), upd, 'update', 'mysql'), { id: 2, title: 'Two-x' }, myClient(myConn!));
     expect((await myQuery(myConn!, `SELECT title FROM ${WC_POSTS} WHERE id=2`, []))[0].title).toBe('Two-x');
-    await execTxLive(compileWriteBundle(contract, 'Remove', rem, 'remove', 'mysql'), { id: 1 }, myClient(myConn!), true);
+    await execTxLive(compileWriteBundle('Remove', removeOp('mysql'), rem, 'remove', 'mysql'), { id: 1 }, myClient(myConn!));
     expect((await myQuery(myConn!, `SELECT id FROM ${WC_POSTS} ORDER BY id`, [])).map((r) => Number(r.id))).toEqual([2]);
   });
 
+  it('#130 UPDATE + DELETE … RETURNING return the WRITTEN rows, identically on PG and MySQL', async () => {
+    const upd: EntityWritesDefinition = { update: { effects: {} } };
+    const rem: EntityWritesDefinition = { remove: { effects: {} } };
+    const seed = `INSERT INTO ${WC_POSTS} (id, author_id, title) VALUES (1,7,'One'),(2,7,'Two')`;
+    const norm = (rows: Row[][]): unknown[] => rows.flat().map((r) => ({ id: Number(r.id), title: String(r.title) }));
+
+    // An UPDATE describes its rows AFTER the write — the new title, not the pre-image.
+    await setupPg();
+    await pgPool!.query(seed);
+    const updPg = await execTxLive(compileWriteBundle('Rename', renameReturningOp('postgres'), upd, 'update', 'postgres'), { id: 2, title: 'Two-x' }, pgClient(pgPool!));
+    await setupMy();
+    await myConn!.query(seed);
+    const updMy = await execTxLive(compileWriteBundle('Rename', renameReturningOp('mysql'), upd, 'update', 'mysql'), { id: 2, title: 'Two-x' }, myClient(myConn!));
+    expect(norm(updPg)).toEqual([{ id: 2, title: 'Two-x' }]);
+    expect(norm(updMy)).toEqual(norm(updPg)); // §10 all-dialect parity — NOT [] on MySQL any more
+
+    // A DELETE describes the rows it removed — the pre-image, captured before the write.
+    await setupPg();
+    await pgPool!.query(seed);
+    const remPg = await execTxLive(compileWriteBundle('Remove', removeReturningOp('postgres'), rem, 'remove', 'postgres'), { id: 1 }, pgClient(pgPool!));
+    expect((await pgQuery(pgPool!, `SELECT id FROM ${WC_POSTS} ORDER BY id`, [])).map((r) => Number(r.id))).toEqual([2]);
+    await setupMy();
+    await myConn!.query(seed);
+    const remMy = await execTxLive(compileWriteBundle('Remove', removeReturningOp('mysql'), rem, 'remove', 'mysql'), { id: 1 }, myClient(myConn!));
+    expect((await myQuery(myConn!, `SELECT id FROM ${WC_POSTS} ORDER BY id`, [])).map((r) => Number(r.id))).toEqual([2]);
+    expect(norm(remPg)).toEqual([{ id: 1, title: 'One' }]);
+    expect(norm(remMy)).toEqual(norm(remPg)); // the delete still happened AND its rows came back
+  });
+
   it('UUID-PK + composite-PK INSERT RETURNING: MySQL emul re-selects by the REAL PK (#4)', async () => {
-    const contract = mut();
-    const cr = { create: { effects: {} } };
+    const cr: EntityWritesDefinition = { create: { effects: {} } };
 
     // ── UUID PK ──
     await setupPg();
-    const docPg = await execTxLive(compileWriteBundle(contract, 'CreateDoc', cr, 'create', 'postgres'), { doc_id: WC_UUID, title: 'Doc' }, pgClient(pgPool!), false);
+    const docPg = await execTxLive(compileWriteBundle('CreateDoc', createDocOp('postgres'), cr, 'create', 'postgres'), { doc_id: WC_UUID, title: 'Doc' }, pgClient(pgPool!));
     expect(String(docPg[0][0].doc_id)).toBe(WC_UUID);
     await setupMy();
-    const docMy = await execTxLive(compileWriteBundle(contract, 'CreateDoc', cr, 'create', 'mysql'), { doc_id: WC_UUID, title: 'Doc' }, myClient(myConn!), true);
+    const docMy = await execTxLive(compileWriteBundle('CreateDoc', createDocOp('mysql'), cr, 'create', 'mysql'), { doc_id: WC_UUID, title: 'Doc' }, myClient(myConn!));
     expect(String(docMy[0][0].doc_id)).toBe(WC_UUID); // re-selected by doc_id, NOT id
     expect(docMy[0][0].title).toBe('Doc');
 
     // ── Composite PK ──
     await setupPg();
-    const linePg = await execTxLive(compileWriteBundle(contract, 'CreateLine', cr, 'create', 'postgres'), { order_id: 10, line_no: 2, sku: 'SKU-2' }, pgClient(pgPool!), false);
+    const linePg = await execTxLive(compileWriteBundle('CreateLine', createLineOp('postgres'), cr, 'create', 'postgres'), { order_id: 10, line_no: 2, sku: 'SKU-2' }, pgClient(pgPool!));
     expect(linePg[0][0]).toMatchObject({ order_id: 10, line_no: 2, sku: 'SKU-2' });
     await setupMy();
-    const lineMy = await execTxLive(compileWriteBundle(contract, 'CreateLine', cr, 'create', 'mysql'), { order_id: 10, line_no: 2, sku: 'SKU-2' }, myClient(myConn!), true);
+    const lineMy = await execTxLive(compileWriteBundle('CreateLine', createLineOp('mysql'), cr, 'create', 'mysql'), { order_id: 10, line_no: 2, sku: 'SKU-2' }, myClient(myConn!));
     expect(lineMy[0][0]).toMatchObject({ order_id: 10, line_no: 2, sku: 'SKU-2' }); // re-selected by (order_id, line_no)
 
     // cleanup

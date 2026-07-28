@@ -521,10 +521,11 @@ describe.skipIf(skipIntegrationTests)('createDBBase()', () => {
   describe('Independent SQL Execution', () => {
     it('should execute queries on different base classes', async () => {
       const baseResult = await BaseDB.execute('SELECT 1 as val');
-      expect(baseResult.rows[0].val).toBe(1);
+      // v2 read contract: an integer (incl. a raw-SQL int literal) reads back in bc's int model → BigInt.
+      expect(baseResult.rows[0].val).toBe(1n);
 
       const cmsResult = await CmsDB.execute('SELECT 2 as val');
-      expect(cmsResult.rows[0].val).toBe(2);
+      expect(cmsResult.rows[0].val).toBe(2n);
     });
 
     it('should execute transactions independently', async () => {
@@ -848,7 +849,7 @@ describe.skipIf(skipIntegrationTests)('Backwards Compatibility', () => {
   it('should work without writerConfig', async () => {
     // Read operations should work
     const result = await DBModel.execute('SELECT 1 as val');
-    expect(result.rows[0].val).toBe(1);
+    expect(result.rows[0].val).toBe(1n); // v2: integers read back as BigInt (bc int model)
   });
 
   it('should still require transaction for writes', async () => {

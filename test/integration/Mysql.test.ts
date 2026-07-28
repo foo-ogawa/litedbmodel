@@ -615,7 +615,7 @@ describe('MySQL Driver', () => {
       expect(result).not.toBeNull();
       const [created] = await AllTypes.findById(result!);
       expect(created.id).toBeDefined();
-      expect(created.int_val).toBe(42);
+      expect(created.int_val).toBe(42n); // v2: INTEGER → BigInt (bc int model); float stays number
       expect(created.float_val).toBeCloseTo(3.14159, 4);
       expect(created.bool_val).toBe(true);
       expect(created.text_val).toBe('long text content');
@@ -628,7 +628,7 @@ describe('MySQL Driver', () => {
       // Find and verify values are preserved
       const found = await AllTypes.findOne([[AllTypes.id, created.id]]);
       expect(found).not.toBeNull();
-      expect(found!.int_val).toBe(42);
+      expect(found!.int_val).toBe(42n); // v2: INTEGER → BigInt
       expect(found!.float_val).toBeCloseTo(3.14159, 4);
       expect(found!.bool_val).toBe(true);
       expect(found!.text_val).toBe('long text content');
@@ -737,7 +737,7 @@ describe('MySQL Driver', () => {
       // Find and verify updated values
       const found = await AllTypes.findOne([[AllTypes.id, created.id]]);
       expect(found).not.toBeNull();
-      expect(found!.int_val).toBe(99);
+      expect(found!.int_val).toBe(99n); // v2: INTEGER → BigInt
       expect(found!.float_val).toBeCloseTo(9.99, 2);
       expect(found!.bool_val).toBe(true);
       expect(found!.text_val).toBe('updated text');
@@ -764,7 +764,7 @@ describe('MySQL Driver', () => {
       });
       
       const [created] = await AllTypes.findById(result!);
-      expect(created.int_val).toBe(0);
+      expect(created.int_val).toBe(0n); // v2: INTEGER → BigInt
       expect(created.float_val).toBe(0);
       expect(created.bool_val).toBe(false);
       expect(created.text_val).toBe('');
@@ -774,7 +774,7 @@ describe('MySQL Driver', () => {
       // Find and verify
       const found = await AllTypes.findOne([[AllTypes.id, created.id]]);
       expect(found).not.toBeNull();
-      expect(found!.int_val).toBe(0);
+      expect(found!.int_val).toBe(0n); // v2: INTEGER → BigInt
       expect(found!.float_val).toBe(0);
       expect(found!.bool_val).toBe(false);
       expect(found!.text_val).toBe('');

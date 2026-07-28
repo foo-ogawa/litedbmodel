@@ -122,15 +122,16 @@ Run from the repo root:
 - [ ] `npm run deps:check`           — no `../`-escaping local deps in any manifest
 - [ ] `npm run build`                — TS build + SCP bundle
 - [ ] `npm run lint`                 — eslint clean
-- [ ] `npx vitest run test/scp test/unit`
-- [ ] `npm run conformance:run`      — 5-lang 49/49 + cross-language agreement + codegen leg
+- [ ] `npm test`                     — the whole vitest suite (unit + scp + parity + integration)
+- [ ] `npm run gates:check`          — every test gate is reachable from a PR/push workflow
+- [ ] `npm run pkg:check`            — every published subpath loads (CJS + ESM) from a clean install
 - [ ] `npm publish --dry-run`        — tarball has `dist/`, no `src/`/`../` leaks
 - [ ] `(cd python && python -m build && twine check dist/*)`
 - [ ] fresh-venv wheel smoke — `pip install` the built wheel + run a real vector
 - [ ] `(cd rust && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test && cargo publish -p litedbmodel_runtime --dry-run)`
 - [ ] `(cd php && composer validate && vendor/bin/phpunit)`
 - [ ] `(cd go && gofmt -l . ; go vet ./... ; go test ./...)` — module path `.../litedbmodel/go`
-- [ ] live-DB (optional, needs docker): `npm run conformance:livedb:docker` — py/php/go/rust × PG+MySQL
+- [ ] live-DB (needs docker): `npm run conformance:livedb:docker` — the corpus on real PG + MySQL; the run names how many of the four language legs ran (go/rust: #163)
 
 ---
 

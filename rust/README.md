@@ -49,8 +49,9 @@ cargo clippy --all-targets -- -D warnings
 cargo fmt --check
 ```
 
-The cross-language orchestrator (`conformance/vectors-run.ts`, `npm run conformance:run`) launches
-this runner as the Rust leg and asserts per-suite agreement across ts/py/php/rust.
+The cross-language gate is `npm run conformance:livedb`, which replays the live-DB corpus through
+each language's runner against real PostgreSQL and MySQL. The Rust leg is not wired to it yet
+(#163); the run reports Rust as `NOT RUN` rather than omitting it.
 
 ## SQL-handler seam (PG/MySQL)
 

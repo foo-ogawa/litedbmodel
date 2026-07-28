@@ -31,6 +31,7 @@
 import { DBConditions, type ConditionObject, type ConditionValue } from '../../DBConditions';
 import { DBToken } from '../../DBValues';
 import type { SqlCastFormatter } from '../../DBValues';
+import { PG_ARRAY_CAST_TOKEN } from './compile-relation';
 import type { Dialect } from './handler';
 
 /** Dialects that use the single-JSON-param array forms (everything except PostgreSQL). */
@@ -60,18 +61,102 @@ export type JsonArrayDialect = 'mysql' | 'sqlite';
  * MySQL 8 + SQLite in `test/scp/json-array-parity.test.ts`.
  */
 export function inListJson(dialect: JsonArrayDialect, col: string, values: unknown[]): { sql: string; param: string } {
-  if (dialect === 'mysql') {
-    return {
-      sql: `${col} IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt)`,
-      // A BOOLEAN element serializes to `1`/`0` in the MySQL JSON param (NOT JSON `true`/`false`):
-      // `JSON_UNQUOTE(v)` on JSON `true` yields the STRING `'true'`, which MySQL coerces to `0`
-      // against a TINYINT(1) — silently mismatching. `1`/`0` is exactly what v1's `col IN (?)`
-      // bound (the mysql2 driver sends a JS bool as `1`/`0`), so this keeps v1 RESULT parity. SQL
-      // text + PG are untouched; SQLite's `json_each` coerces JSON booleans natively (no change).
-      param: JSON.stringify(values.map((v) => (typeof v === 'boolean' ? (v ? 1 : 0) : v))),
-    };
+  return { sql: inListPredicate(dialect, col), param: encodeJsonArrayParam(dialect, values) };
+}
+
+/**
+ * The STATIC, value-length-INDEPENDENT membership predicate for `col` — the ONE place each dialect's
+ * single-param IN-list TEXT lives, so a caller never re-spells it:
+ *
+ *  - **PostgreSQL**: `col = ANY(?)` with NO element-type cast (#46). A value-inferred cast is wrong for
+ *    every column whose type is not recoverable from the values (`inferPgArrayType([])` = `text[]` →
+ *    `integer = text` on an EMPTY int list; a uuid list is indistinguishable from text) — no-cast lets
+ *    PG infer the array type FROM THE COLUMN, which is correct for int / uuid / bigint / bool /
+ *    timestamp / numeric alike. This is the form a GENERATED module needs: one param, fixed text.
+ *  - **MySQL / SQLite**: the single-JSON `JSON_TABLE` / `json_each` SUBQUERY described above.
+ *
+ * The IMPERATIVE v1 path is untouched: {@link conditionsFor} still hands PostgreSQL the base
+ * `DBConditions`, whose `IN (?, ?, …)` stays byte-identical to v1 (its placeholder count is free to
+ * depend on the values because it is built per request).
+ */
+export function inListPredicate(dialect: Dialect, col: string): string {
+  if (dialect === 'postgres') return `${col} = ANY(?)`;
+  if (dialect === 'mysql') return `${col} IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt)`;
+  return `${col} IN (SELECT value FROM json_each(?))`;
+}
+
+/**
+ * The STATIC composite-key membership predicate — the multi-column sibling of
+ * {@link inListPredicate}, with the SAME property: a FIXED number of `?`, independent of how many key
+ * tuples are bound.
+ *
+ *  - **PostgreSQL**: `(t.k1, t.k2) IN (SELECT * FROM UNNEST(?::<T1>, ?::<T2>))` — ONE array param PER
+ *    key column (the constant-param form; v1's `dbTupleIn` binds 2×N params instead, which is the
+ *    degradation this replaces). `UNNEST` needs its argument types, so `pgElementTypes` supplies one
+ *    per key column, derived from the SCHEMA (the declared column type). Deriving them from the VALUES
+ *    is not an option here: an EMPTY key set infers `text[]` and the statement fails
+ *    `operator does not exist: integer = text` at plan time — the same trap #46 hit on the single-key
+ *    IN-list, which could drop the cast entirely because `= ANY` infers from the column while `UNNEST`
+ *    cannot. Omitting them falls back to the deferred
+ *    {@link import('./compile-relation').PG_ARRAY_CAST_TOKEN} (resolved from the bound values).
+ *  - **MySQL / SQLite**: ONE JSON array-of-tuples param read back by ORDINAL path — MySQL a
+ *    `JSON_TABLE` IN-subquery (so it inherits `(k1,k2) IN ((?,?),…)`'s per-column coercion), SQLite a
+ *    `json_each` IN-subquery projecting the tuple's ordinal paths.
+ *
+ * Every dialect's form is an IN over a subquery the planner evaluates ONCE — the whole point of binding
+ * the key set as a single param. A CORRELATED predicate over the same param (an `EXISTS` whose body
+ * compares against the outer row) re-expands the key set for every outer row and leaves the key columns
+ * unusable as an index lookup, so the batch load degrades as rows × keys.
+ *
+ * This is the ONE text for composite membership: the relation batch builders
+ * ({@link import('./compile-relation').compileCompositeKeyStaticUnlimited}) consume the same function.
+ */
+export function tupleInPredicate(dialect: Dialect, table: string, columns: readonly string[], pgElementTypes?: readonly string[]): string {
+  const qualified = columns.map((k) => `${table}.${k}`);
+  if (dialect === 'postgres') {
+    const unnest = columns.map((_, i) => `?::${pgElementTypes?.[i] ?? PG_ARRAY_CAST_TOKEN}`).join(', ');
+    return `(${qualified.join(', ')}) IN (SELECT * FROM UNNEST(${unnest}))`;
   }
-  return { sql: `${col} IN (SELECT value FROM json_each(?))`, param: JSON.stringify(values) };
+  if (dialect === 'mysql') {
+    const cols = columns.map((_, i) => `c${i}`);
+    const jtCols = cols.map((c, i) => `${c} JSON PATH '$[${i}]'`).join(', ');
+    const selectCols = cols.map((c) => `JSON_UNQUOTE(${c})`).join(', ');
+    return `(${qualified.join(', ')}) IN (SELECT ${selectCols} FROM JSON_TABLE(?, '$[*]' COLUMNS(${jtCols})) jt)`;
+  }
+  const projected = columns.map((_, i) => `json_extract(value, '$[${i}]')`).join(', ');
+  return `(${qualified.join(', ')}) IN (SELECT ${projected} FROM json_each(?))`;
+}
+
+/**
+ * Encode an array as the ONE JSON param a server-side form expands — the SINGLE array encoder, shared
+ * by {@link inListJson} (the imperative path) and the leaf transport's `encodeParams` (the generated
+ * path), so the two can never diverge. MySQL/SQLite bind every array this way; PostgreSQL binds its
+ * scalar arrays natively and only its composite key TUPLE sets here ({@link tupleInPredicate} /
+ * the composite relation batch):
+ *
+ *  - a bc `int` arrives as a `BigInt`, which `JSON.stringify` cannot emit → coerced to a JSON number
+ *    (`json_each` / `JSON_TABLE` compare numerically);
+ *  - a BOOLEAN element serializes to `1`/`0` on MySQL, NOT JSON `true`/`false`: `JSON_UNQUOTE(v)` on
+ *    JSON `true` yields the STRING `'true'`, which MySQL coerces to `0` against a TINYINT(1) — silently
+ *    mismatching. `1`/`0` is exactly what v1's `col IN (?)` bound (mysql2 sends a JS bool as `1`/`0`).
+ *    SQLite's `json_each` coerces JSON booleans natively, so it keeps them as-is.
+ */
+export function encodeJsonArrayParam(dialect: Dialect, values: readonly unknown[]): string {
+  return encodeJsonParam(dialect, values);
+}
+
+/**
+ * The ONE JSON-param serializer every single-JSON-param form goes through — the array/tuple sets here and
+ * the batch record sets in {@link import('./json-batch')} alike. Both bind values that came OFF a read, so
+ * both meet the same two cases (a bc `int` is a `BigInt`, which `JSON.stringify` refuses; a MySQL boolean
+ * must ride as 1/0), and a second bare `JSON.stringify` would silently diverge on either.
+ */
+export function encodeJsonParam(dialect: Dialect, payload: unknown): string {
+  return JSON.stringify(payload, (_key, v: unknown) => {
+    if (typeof v === 'bigint') return Number(v);
+    if (dialect === 'mysql' && typeof v === 'boolean') return v ? 1 : 0;
+    return v;
+  });
 }
 
 /**

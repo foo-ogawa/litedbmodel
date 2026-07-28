@@ -16,6 +16,9 @@ import json
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Union
 
 from .driver import Driver
+from .errors import LimitExceededError
+from .exec_context import READ_INTENT, ExecutionContext, as_context, execute as seam_execute
+from .grouping import attach_to_parent, dedupe_key_tuples, group_by_key
 from .static_bundle import PG_ARRAY_CAST_TOKEN, render_placeholders, resolve_pg_array_cast
 
 __all__ = ["dedupe_keys", "run_relation_op", "distribute_to_parent", "read_bundle"]
@@ -33,65 +36,46 @@ def _target_key_cols(op: Mapping[str, Any]) -> List[str]:
     return list(tk) if tk is not None else [op["targetKey"]]
 
 
-def _stringify(v: Any) -> str:
-    """Mirror TS ``String(v)`` for the key-identity used by dedupe + grouping (bool → 'true'/'false')."""
-    if isinstance(v, bool):
-        return "true" if v else "false"
-    return str(v)
-
-
-def _key_identity(values: Sequence[Any]) -> str:
-    """The stringified key identity for dedupe/grouping (tuple → space-joined scalars, mirror of TS)."""
-    return " ".join(_stringify(v) for v in values)
-
-
 def dedupe_keys(parents: Sequence[Mapping[str, Any]], key_cols: Sequence[str]) -> List[List[Any]]:
-    """The deduped, non-null parent-key TUPLES (insertion order preserved). Drop a tuple if ANY key
-    column is None; dedupe on the stringified tuple identity. Port of TS ``dedupeKeys``."""
-    seen: set[str] = set()
-    out: List[List[Any]] = []
-    for p in parents:
-        tuple_ = [p.get(c) for c in key_cols]
-        if any(v is None for v in tuple_):
-            continue
-        s = _key_identity(tuple_)
-        if s in seen:
-            continue
-        seen.add(s)
-        out.append(tuple_)
-    return out
+    """The deduped, non-null parent-key TUPLES (insertion order preserved). Thin delegator to the shared
+    grouping core :func:`~litedbmodel_runtime.grouping.dedupe_key_tuples` (SSoT — no local copy)."""
+    return dedupe_key_tuples(parents, key_cols)
 
 
 def _bind_keys(op: Mapping[str, Any], tuples: Sequence[Sequence[Any]]) -> List[Any]:
     """Bind the deduped keys to the op's params per dialect + arity (mirrors TS ``bindKeys``).
 
-    Single-key: PG → ONE scalar list param; MySQL/SQLite → ONE JSON scalar-array string. Composite:
-    PG → ONE list param PER key column (transposed tuples → ``unnest(?::t1[], ?::t2[])``);
-    MySQL/SQLite → ONE JSON array-of-tuples string. Returns the positional param list.
+    Composite: ONE JSON array-of-tuples string on EVERY dialect (#159) — PostgreSQL expands it
+    server-side with json_array_elements, so the key set crosses as one param whatever its length
+    and whatever its arity. Single-key: PG → ONE scalar array param; MySQL/SQLite → ONE JSON
+    scalar-array string.
     """
-    composite = op.get("parentKeys") is not None
+    if op.get("parentKeys") is not None:
+        payload = [list(t) for t in tuples]
+        return [json.dumps(payload, separators=(",", ":"), ensure_ascii=False)]
+    keys = [t[0] for t in tuples]
     if op["dialect"] == "postgres":
-        if not composite:
-            return [[t[0] for t in tuples]]  # ONE scalar array param
-        n = len(_parent_key_cols(op))
-        return [[t[col] for t in tuples] for col in range(n)]  # one array param per column
-    payload = [list(t) for t in tuples] if composite else [t[0] for t in tuples]
-    return [json.dumps(payload, separators=(",", ":"), ensure_ascii=False)]
+        return [keys]
+    return [json.dumps(keys, separators=(",", ":"), ensure_ascii=False)]
 
 
 def run_relation_op(
     op: Mapping[str, Any],
     parents: Sequence[Mapping[str, Any]],
-    driver: Driver,
+    driver: Union[Driver, ExecutionContext],
 ) -> Dict[str, Any]:
     """Run ONE relation batch op for a set of parent rows (byte-for-byte port of TS ``runRelationOp``).
 
     Dedup the parent-key tuples, resolve the deferred PG array cast(s) from the REAL keys (one per
     key column for composite) BEFORE the ``?``→``$N`` render, render placeholders, then — on a
-    NON-empty key set — execute binding the keys (single array / per-column arrays / JSON tuples) and
-    group the child rows by their target-key identity. EMPTY key set → NO query. Returns
-    ``{sql, keys, batch}`` (``keys`` = the deduped parent-key tuples).
+    NON-empty key set — execute (THROUGH THE CENTRAL SEAM, ``READ_INTENT``) binding the keys (single
+    array / per-column arrays / JSON tuples) and group the child rows by their target-key identity.
+    EMPTY key set → NO query. Returns ``{sql, keys, batch}`` (``keys`` = the deduped parent-key tuples).
+
+    ``driver`` is EITHER a raw :class:`Driver` (wrapped via :func:`context_for_driver` — byte-identical)
+    OR an :class:`ExecutionContext`.
     """
+    ctx = as_context(driver)
     p_cols = _parent_key_cols(op)
     keys = dedupe_keys(parents, p_cols)
     batch: Dict[str, List[Dict[str, Any]]] = {}
@@ -103,10 +87,22 @@ def run_relation_op(
     if len(keys) == 0:
         return {"sql": sql, "keys": keys, "batch": batch}
     t_cols = _target_key_cols(op)
-    rows = driver.prepare(sql).all(_bind_keys(op, keys))
-    for row in rows:
-        k = _key_identity([row[c] for c in t_cols])
-        batch.setdefault(k, []).append(row)
+    rows = seam_execute(ctx, sql, _bind_keys(op, keys), READ_INTENT)
+    # Hard-limit runaway guard (Phase E-2, epic #74; v1 ``_selectForRelation``; port of the TS
+    # ``runRelationOp`` guard). POST-fetch, if the batch TOTAL exceeds the baked cap, raise with the
+    # EXACT count (the batch is fetched in full, no N+1). ⚠️ field mapping: ``model`` = the relation
+    # TARGET TABLE, ``relation`` = the relation NAME. Absent ``op['hardLimit']`` ⇒ disabled / an
+    # intrinsic per-parent ``limit`` window ⇒ NO check. The native ports (#100-103) run the SAME check
+    # off the same JSON field. Raised BEFORE grouping/hydration so an over-cap read never assembles an
+    # unbounded result set. ONE guard point → both the eager (``read_bundle``) and lazy surfaces.
+    hard_limit = op.get("hardLimit")
+    if hard_limit is not None:
+        # The relation-context arm of the shared runaway check (SSoT) — the SAME `count > limit ⇒ raise`
+        # primitive the find guard (`check_find_hard_limit`) calls, so the comparison lives in one place.
+        LimitExceededError.check(hard_limit, len(rows), "relation", op.get("targetTable"), op.get("name"))
+    # Group the fetched child rows by their target-key identity — the shared grouping core (SSoT), the
+    # SAME `group_by_key` the op-independent `group` leaf uses (no duplicated grouping).
+    batch = group_by_key(rows, t_cols)
     return {"sql": sql, "keys": keys, "batch": batch}
 
 
@@ -118,13 +114,10 @@ def distribute_to_parent(
     """Distribute a resolved batch onto ONE parent per cardinality (port of TS ``distributeToParent``).
 
     ``hasMany`` → the child list (``[]`` when none); ``belongsTo``/``hasOne`` → the single child (or
-    ``None``). Keyed by the parent's key-tuple identity.
+    ``None``). Keyed by the parent's key-tuple identity. Thin delegator to the shared grouping core
+    :func:`~litedbmodel_runtime.grouping.attach_to_parent` (SSoT — no local grouping copy).
     """
-    tuple_ = [parent.get(c) for c in _parent_key_cols(op)]
-    rows = None if any(v is None for v in tuple_) else batch.get(_key_identity(tuple_))
-    if op["kind"] == "hasMany":
-        return rows if rows is not None else []
-    return rows[0] if rows else None
+    return attach_to_parent(parent, _parent_key_cols(op), batch, op["kind"] != "hasMany")
 
 
 def _driver_for_op(op: Mapping[str, Any], driver: Driver, connections: Optional[Mapping[str, Driver]]) -> Driver:
@@ -145,6 +138,38 @@ def _driver_for_op(op: Mapping[str, Any], driver: Driver, connections: Optional[
             "(pass it in read_bundle connections)"
         )
     return d
+
+
+def _hydrate_relation(
+    op: Mapping[str, Any],
+    parents: Sequence[Dict[str, Any]],
+    driver: Driver,
+    connections: Optional[Mapping[str, Driver]],
+    attach_name: str,
+) -> None:
+    """Hydrate ONE relation edge over ``parents`` (ONE batched query, N+1-free), then RECURSE into
+    ``op['childRelations']`` — the batched-map-over-batched-map chain the native codegen path lowers,
+    reproduced for the runtime/ir-exec path (py/php/ts).
+
+    One edge = one query, INDEPENDENT of the parent count: :func:`run_relation_op` dedupes the parent
+    keys and fetches ALL children with ONE ``WHERE fk IN (…)`` batch, then the grouping SSoT nests them
+    onto each parent via :func:`distribute_to_parent`. A nested level batches over the FLATTENED child
+    rows fetched here — the EXACT dict objects attached to the parents, so grandchildren hydrate in
+    place (users→posts→comments = 3 queries, not 1 + N + N·M). No new mechanism: every level runs the
+    SAME ``run_relation_op`` + grouping core.
+    """
+    rel_driver = _driver_for_op(op, driver, connections)
+    batch = run_relation_op(op, parents, rel_driver)["batch"]
+    for p in parents:
+        p[attach_name] = distribute_to_parent(op, p, batch)
+    child_ops = op.get("childRelations")
+    if child_ops:
+        # The flattened child rows (each child appears ONCE, keyed by its target tuple) = the next
+        # level's parent set. Empty ⇒ no grandchild query (short-circuit, still N+1-free).
+        child_rows = [c for children in batch.values() for c in children]
+        if child_rows:
+            for child_op in child_ops:
+                _hydrate_relation(child_op, child_rows, driver, connections, child_op["name"])
 
 
 def read_bundle(
@@ -182,8 +207,5 @@ def read_bundle(
         op = relations.get(name)
         if op is None:
             raise ValueError(f"declarative select: relation '{name}' is not declared on this model")
-        rel_driver = _driver_for_op(op, driver, connections)
-        batch = run_relation_op(op, rows, rel_driver)["batch"]
-        for o in rows:
-            o[name] = distribute_to_parent(op, o, batch)
+        _hydrate_relation(op, rows, driver, connections, name)
     return rows

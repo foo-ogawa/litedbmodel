@@ -17,12 +17,17 @@
             "LiteDbModel\\Runtime\\": "src/"
         },
         "files": [
-            "src/BehaviorContracts/Constants.php"
+            "src/BehaviorContracts/Constants.php",
+            "src/TxOptions.php",
+            "src/ExecutionContext.php",
+            "src/ConnectionRouting.php",
+            "src/Middleware.php"
         ]
     },
     "autoload-dev": {
         "psr-4": {
-            "LiteDbModel\\Runtime\\Tests\\": "tests/"
+            "LiteDbModel\\Runtime\\Tests\\": "tests/",
+            "LiteDbModel\\Bench\\": "orm_bench/"
         }
     },
     "config": {

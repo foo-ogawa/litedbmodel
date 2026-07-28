@@ -21,6 +21,8 @@
  */
 
 import { DBToken } from '../../DBValues';
+import { encodeJsonParam } from './json-array';
+import type { Dialect } from './handler';
 import type { MakeSQL } from './makesql';
 
 /** MySQL/SQLite batch dialects. */
@@ -85,13 +87,13 @@ export function mysqlJsonTableColumn(
  * string element, matching what v1 binds. `undefined` cells are dropped (the group is
  * homogeneous by construction, so every column is present in every row).
  */
-function rowsToJson(rows: Record<string, unknown>[], columns: string[]): string {
+function rowsToJson(dialect: Dialect, rows: Record<string, unknown>[], columns: string[]): string {
   const objects = rows.map((r) => {
     const o: Record<string, unknown> = {};
     for (const c of columns) o[c] = r[c] === undefined ? null : r[c];
     return o;
   });
-  return JSON.stringify(objects);
+  return encodeJsonParam(dialect, objects);
 }
 
 // ============================================================================
@@ -121,7 +123,7 @@ export function mysqlInsertJson(opts: JsonInsertOptions): MakeSQL {
     jtCols.push(`${col} ${colType} PATH '$.${col}'`);
     selectExprs.push(selectExpr(`jt.${col}`));
   }
-  const jsonParam = rowsToJson(records, columns);
+  const jsonParam = rowsToJson('mysql', records, columns);
   const source =
     `SELECT ${selectExprs.join(', ')} ` +
     `FROM JSON_TABLE(?, '$[*]' COLUMNS(${jtCols.join(', ')})) jt`;
@@ -148,7 +150,7 @@ export function mysqlInsertJson(opts: JsonInsertOptions): MakeSQL {
 export function sqliteInsertJson(opts: JsonInsertOptions): MakeSQL {
   const { tableName, columns, records, onConflict, onConflictIgnore, onConflictUpdate, returning } = opts;
   const selectExprs = columns.map((c) => `json_extract(value, '$.${c}')`);
-  const jsonParam = rowsToJson(records, columns);
+  const jsonParam = rowsToJson('sqlite', records, columns);
   const source = `SELECT ${selectExprs.join(', ')} FROM json_each(?)`;
 
   let sql: string;
@@ -208,7 +210,7 @@ export function mysqlUpdateManyJson(opts: JsonUpdateManyOptions): MakeSQL {
     for (const c of skipCols) o[`_skip_${c}`] = skipMap.get(i)?.has(c) ? 1 : 0;
     return o;
   });
-  const jsonParam = JSON.stringify(payload);
+  const jsonParam = encodeJsonParam('mysql', payload);
 
   const jtCols: string[] = [];
   const selectExprOf = new Map<string, (ref: string) => string>();
@@ -270,7 +272,7 @@ export function sqliteUpdateManyJson(opts: JsonUpdateManyOptions): MakeSQL {
     for (const c of skipCols) o[`_skip_${c}`] = skipMap.get(i)?.has(c) ? 1 : 0;
     return o;
   });
-  const jsonParam = JSON.stringify(payload);
+  const jsonParam = encodeJsonParam('sqlite', payload);
 
   const params: unknown[] = [];
   const keyMatch = keyColumns.map((k) => `json_extract(je.value, '$.${k}') = ${tableName}.${k}`).join(' AND ');
@@ -286,17 +288,14 @@ export function sqliteUpdateManyJson(opts: JsonUpdateManyOptions): MakeSQL {
     );
   });
 
-  // WHERE: restrict to the affected keys. Single key → k IN (SELECT …); composite →
-  // EXISTS over json_each matching all key columns.
-  let whereClause: string;
-  if (keyColumns.length === 1) {
-    params.push(jsonParam);
-    whereClause = `${keyColumns[0]} IN (SELECT json_extract(value, '$.${keyColumns[0]}') FROM json_each(?))`;
-  } else {
-    params.push(jsonParam);
-    const match = keyColumns.map((k) => `json_extract(je.value, '$.${k}') = ${tableName}.${k}`).join(' AND ');
-    whereClause = `EXISTS (SELECT 1 FROM json_each(?) je WHERE ${match})`;
-  }
+  // WHERE: restrict to the affected keys — an IN over a subquery evaluated ONCE, single or composite.
+  // A correlated `EXISTS (… WHERE json_extract(je.value,'$.k') = t.k)` re-expands the batch for every
+  // row of the table and makes the key columns unusable as an index lookup, which is the whole point of
+  // restricting by them.
+  params.push(jsonParam);
+  const projected = keyColumns.map((k) => `json_extract(value, '$.${k}')`).join(', ');
+  const target = keyColumns.length === 1 ? keyColumns[0] : `(${keyColumns.map((k) => `${tableName}.${k}`).join(', ')})`;
+  const whereClause = `${target} IN (SELECT ${projected} FROM json_each(?))`;
 
   let sql = `UPDATE ${tableName} SET ${setClauses.join(', ')} WHERE ${whereClause}`;
   if (returning) sql += ` RETURNING ${returning}`;

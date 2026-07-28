@@ -55,21 +55,6 @@ const targets = [
     render: (v) => `version = "${v}"`,
   },
   {
-    label: 'rust/vectors_runner/Cargo.toml',
-    path: resolve(root, 'rust/vectors_runner/Cargo.toml'),
-    re: /^version = "([^"]*)"$/m,
-    render: (v) => `version = "${v}"`,
-  },
-  {
-    // Workspace member (publish = false) but version-locked to the SSoT so the whole cargo
-    // workspace — and Cargo.lock — stays coherent at one version. It depends on
-    // litedbmodel_runtime via an in-repo `path`, so its version must never lag the published crate.
-    label: 'rust/livedb_runner/Cargo.toml',
-    path: resolve(root, 'rust/livedb_runner/Cargo.toml'),
-    re: /^version = "([^"]*)"$/m,
-    render: (v) => `version = "${v}"`,
-  },
-  {
     // The published crate's runtime version constant (crates.io ships this file). Must track the
     // SSoT or `litedbmodel_runtime::VERSION` reports a stale version in the published artifact.
     label: 'rust/litedbmodel_runtime/src/lib.rs',

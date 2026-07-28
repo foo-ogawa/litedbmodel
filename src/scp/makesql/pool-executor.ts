@@ -1,11 +1,11 @@
 /**
- * litedbmodel v2 SCP — pooled async `SqlExecutorAsync` factories for PG / MySQL (#40).
+ * litedbmodel v2 SCP — pooled async `SqlExecutor` factories for PG / MySQL (#40).
  *
  * The read-graph async execution model (`executeReadGraphAsync`) dispatches independent sibling
  * relations in bounded parallel via bc `runBehaviorAsync`. For that concurrency to become REAL
  * parallel DB I/O the driver seam must be an async CONNECTION POOL — each concurrent `exec` call
  * checks out a DISTINCT pooled connection. These factories adapt a `pg.Pool` / `mysql2` pool to the
- * {@link SqlExecutorAsync} seam.
+ * {@link SqlExecutor} seam.
  *
  * The read graph already renders the dialect placeholder form (`$N` for postgres, `?` for
  * MySQL/SQLite, via `renderPlaceholders`) and flattens params 1:1, so each executor is a THIN
@@ -17,7 +17,10 @@
  * force either into a consumer that only uses the sync better-sqlite3 conformance path.
  */
 
-import type { SqlExecutorAsync } from './static-bundle';
+import type { AsyncConnection, AsyncConnectionPool, Rows, RunInfo } from '../exec-context';
+import type { ResolvedConnectionConfig, PoolFactory, PoolCloser } from '../connection-routing';
+// MySQL parses no RETURNING — the write→re-select derivation lives in ONE place for all five runtimes.
+import { buildMysqlReselect, bindReselect } from './mysql-returning';
 
 // ── TS read-path driver de-box config (issue #59) ─────────────────────────────
 // The read-path materializer (`materializeCell`) coerces each driver cell to the JS form its SQL
@@ -32,8 +35,8 @@ import type { SqlExecutorAsync } from './static-bundle';
 //     `mysqlDeboxPoolOptions` (`supportBigNumbers + bigNumberStrings` so BIGINT→string, and
 //     `dateStrings` so the date family→string). `mysqlDeboxPoolOptions` is those options.
 
-/** PG type OIDs for the date/time family + int8 (bigint). */
-const PG_OID = { INT8: 20, DATE: 1082, TIMESTAMP: 1114, TIMESTAMPTZ: 1184, TIME: 1083, TIMETZ: 1266 } as const;
+/** PG type OIDs for the integer family + the date/time family. */
+const PG_OID = { INT2: 21, INT4: 23, INT8: 20, DATE: 1082, TIMESTAMP: 1114, TIMESTAMPTZ: 1184, TIME: 1083, TIMETZ: 1266 } as const;
 
 /** The minimal `pg.types` surface: register a per-OID text parser. */
 export interface PgTypesLike {
@@ -43,8 +46,8 @@ export interface PgTypesLike {
 /**
  * Register `pg` type parsers so the read-path de-box (issue #59) gets coercible values: the
  * DATE/TIMESTAMP/TIMESTAMPTZ/TIME family is returned as its NATIVE TEXTUAL string (NOT a JS Date),
- * honoring the `date→string` outType and carrying the TZ for timestamptz. int8 already arrives as a
- * string (pg default), so it needs no parser. Idempotent. Call ONCE, before building the pool, from
+ * honoring the `date→string` outType and carrying the TZ for timestamptz; and the int2/int4/int8 family
+ * as a BigInt, the TS plane's `int` value model. Idempotent. Call ONCE, before building the pool, from
  * the consumer that owns the `pg` module (`import { types } from 'pg'; configurePgDeboxTypeParsers(types)`).
  *
  * WHY the GLOBAL parser (a documented, deliberate exception): `pg`'s default DATE parser builds a JS
@@ -58,6 +61,16 @@ export interface PgTypesLike {
  */
 export function configurePgDeboxTypeParsers(types: PgTypesLike): void {
   const asString = (v: string): string => v; // identity: keep the driver's native textual form
+  // An INTEGER column must arrive in bc's `int` value model, which on the TS plane is a BigInt. `pg`'s
+  // defaults hand back a JS number for int2/int4 and a string for int8, and bc classifies a JS number as
+  // FLOAT — so a column declared `Int` failed its outType check with `expected int, got float` on every
+  // read. The OID says the column is an integer, so nothing is guessed from the value: a REAL column
+  // whose value happens to be integral still arrives as a float. sqlite gets the same guarantee from
+  // better-sqlite3's `safeIntegers`, MySQL from {@link mysqlDeboxPoolOptions}'s integer typeCast.
+  const asBigInt = (v: string): bigint => BigInt(v);
+  types.setTypeParser(PG_OID.INT2, asBigInt);
+  types.setTypeParser(PG_OID.INT4, asBigInt);
+  types.setTypeParser(PG_OID.INT8, asBigInt);
   types.setTypeParser(PG_OID.DATE, asString);
   types.setTypeParser(PG_OID.TIMESTAMP, asString);
   types.setTypeParser(PG_OID.TIMESTAMPTZ, asString);
@@ -75,7 +88,34 @@ export const mysqlDeboxPoolOptions = {
   supportBigNumbers: true,
   bigNumberStrings: true,
   dateStrings: true,
+  /**
+   * An INTEGER column must arrive in bc's `int` value model — a BigInt on the TS plane. `mysql2` hands
+   * back a JS number for TINY/SHORT/INT24/LONG (only BIGINT becomes a string, via `bigNumberStrings`),
+   * and bc classifies a JS number as FLOAT, so a column declared `Int` failed its outType check with
+   * `expected int, got float`. The FIELD TYPE decides, never the value: a DOUBLE/DECIMAL column whose
+   * value happens to be integral still arrives as a float. sqlite gets the same guarantee from
+   * better-sqlite3's `safeIntegers`, PostgreSQL from {@link configurePgDeboxTypeParsers}'s int OIDs.
+   */
+  typeCast(field: MysqlFieldLike, next: () => unknown): unknown {
+    if (MYSQL_INT_TYPES.has(field.type)) {
+      const raw = field.string();
+      return raw === null ? null : BigInt(raw);
+    }
+    return next();
+  },
 } as const;
+
+/** The `mysql2` field surface `typeCast` reads: the column's declared type and its raw text. */
+export interface MysqlFieldLike {
+  readonly type: string;
+  string(): string | null;
+}
+
+/**
+ * `mysql2`'s field-type names for the INTEGER family. NEWDECIMAL / DOUBLE / FLOAT are deliberately
+ * absent — they are float columns, whatever their values look like.
+ */
+const MYSQL_INT_TYPES: ReadonlySet<string> = new Set(['TINY', 'SHORT', 'INT24', 'LONG', 'LONGLONG']);
 
 /** The minimal `pg.Pool` surface we need: `query(text, values)` resolving `{ rows }`. */
 export interface PgPoolLike {
@@ -87,20 +127,6 @@ export interface MysqlPoolLike {
   query(sql: string, values?: unknown[]): Promise<[Record<string, unknown>[], unknown]>;
 }
 
-/**
- * Adapt a `pg.Pool` to the async executor seam. Each `exec` runs `pool.query`, which acquires a
- * pooled connection, runs the query, and releases it — so N concurrent siblings run on N pooled
- * connections in parallel. The graph renders `$N` placeholders for the `postgres` dialect, so the
- * `sql` is already in `pg`'s native form.
- *
- * Recommend constructing the pool with `max` ≥ the plan's `concurrency` (default 16).
- */
-export function pgPoolExecutor(pool: PgPoolLike): SqlExecutorAsync {
-  return async (sql: string, params: unknown[]): Promise<Record<string, unknown>[]> => {
-    const result = await pool.query(sql, params);
-    return result.rows;
-  };
-}
 
 /**
  * Adapt a `mysql2/promise` pool to the async executor seam. `pool.query` acquires + releases a
@@ -127,33 +153,212 @@ export interface Mysql2ModuleLike {
   createPool(config: Record<string, unknown>): MysqlPoolLike & { end?: () => Promise<void> };
 }
 
-/**
- * Build a PG pool + executor with the read-path de-box wired IN (issue #59): registers the pg date
- * type parsers (DATE/TIMESTAMP family → native textual string) globally, then builds the pool.
- * int8 already arrives as a string on pg. Returns `{ pool, exec }` — pass `exec` to
- * `executeBehaviorAsync`. This is the production async path's de-box-correct entry (no hand-spread
- * options).
- */
-export function pgDeboxExecutor(pg: PgModuleLike, config: Record<string, unknown>): { pool: PgPoolLike & { end?: () => Promise<void> }; exec: SqlExecutorAsync } {
-  configurePgDeboxTypeParsers(pg.types);
-  const pool = new pg.Pool(config);
-  return { pool, exec: pgPoolExecutor(pool) };
+
+
+
+// ── Phase A (#75): OWNED-connection pool adapters — the per-execution-ownership substrate ─────
+//
+// `pgPoolExecutor` / `mysqlPoolExecutor` above are the READ fan-out seam (acquire-run-release per
+// statement). A TRANSACTION instead needs ONE owned connection held across BEGIN…COMMIT — the
+// `AsyncConnectionPool` contract (`../exec-context`). These adapters expose a pg / mysql2 pool as
+// that owned-connection pool so `withTransactionAsync` pins one connection per tx and concurrent
+// transactions never share a connection (the isolation the shared-`pool.query`-per-statement model
+// violates). Query results de-box exactly as the read executors above (same pool config).
+
+/** A pg `Pool` that hands out an owned `PoolClient` (`connect()` → `release()`). */
+export interface PgOwnedPoolLike {
+  connect(): Promise<PgPoolClientLike>;
+}
+/** The pg `PoolClient`: parameterized `query`, and `release(destroy?)` back to the pool. */
+export interface PgPoolClientLike {
+  query(text: string, values?: unknown[]): Promise<{ rows: Record<string, unknown>[]; rowCount?: number | null }>;
+  release(destroy?: boolean): void;
+}
+
+/** Adapt a pg `PoolClient` to the {@link AsyncConnection} seam (one owned connection). */
+function pgConnection(client: PgPoolClientLike): AsyncConnection {
+  return {
+    async execute(sql, params) {
+      const r = await client.query(sql, params as unknown[]);
+      return r.rows as Rows;
+    },
+    async run(sql, params) {
+      const r = await client.query(sql, params as unknown[]);
+      return { changes: r.rowCount ?? 0, lastInsertRowid: 0 } as RunInfo;
+    },
+  };
 }
 
 /**
- * Build a MySQL pool + executor with the read-path de-box wired IN (issue #59): the pool carries
- * {@link mysqlDeboxPoolOptions} (`supportBigNumbers + bigNumberStrings` so BIGINT → exact string,
- * `dateStrings` so the date family → string) — options that MUST be set at pool construction (a
- * rounded BIGINT cannot be un-rounded post-hoc). Returns `{ pool, exec }` for `executeBehaviorAsync`.
+ * Adapt a pg `Pool` to the {@link AsyncConnectionPool} contract — `acquire` checks out an owned
+ * `PoolClient`, `release` returns it (destroyed on a poisoned tx). Feed this to
+ * `withTransactionAsync` for per-execution connection ownership.
  */
-export function mysqlDeboxExecutor(mysql2: Mysql2ModuleLike, config: Record<string, unknown>): { pool: MysqlPoolLike & { end?: () => Promise<void> }; exec: SqlExecutorAsync } {
-  const pool = mysql2.createPool({ ...config, ...mysqlDeboxPoolOptions });
-  return { pool, exec: mysqlPoolExecutor(pool) };
+export function pgConnectionPool(pool: PgOwnedPoolLike): AsyncConnectionPool {
+  const handles = new WeakMap<AsyncConnection, PgPoolClientLike>();
+  return {
+    async acquire() {
+      const client = await pool.connect();
+      const conn = pgConnection(client);
+      handles.set(conn, client);
+      return conn;
+    },
+    async release(conn, destroy) {
+      handles.get(conn)?.release(destroy === true);
+    },
+  };
 }
 
-export function mysqlPoolExecutor(pool: MysqlPoolLike): SqlExecutorAsync {
-  return async (sql: string, params: unknown[]): Promise<Record<string, unknown>[]> => {
-    const [rows] = await pool.query(sql, params);
-    return rows;
+/** A mysql2/promise `Pool` that hands out an owned connection (`getConnection()` → `release()`). */
+export interface MysqlOwnedPoolLike {
+  getConnection(): Promise<MysqlPoolConnLike>;
+}
+/** A mysql2/promise pooled connection: `query`, and `release()` back to the pool. */
+export interface MysqlPoolConnLike {
+  query(sql: string, values?: unknown[]): Promise<[unknown, unknown]>;
+  release(): void;
+  destroy(): void;
+}
+
+/**
+ * Adapt a mysql2 pooled connection to the {@link AsyncConnection} seam (one owned connection).
+ *
+ * `execute` also carries the **MySQL RETURNING emulation** ({@link buildMysqlReselect}): MySQL parses
+ * no `RETURNING`, so a write that declares one is run stripped and its written rows recovered by a
+ * SELECT on THIS connection (before the write for a DELETE, after it otherwise). Placing it on the
+ * connection — the mysql analogue of the rust/go/py/php driver wrappers — is what makes the mode-2
+ * plan executor and a generated (codegen) write return the SAME rows: both reach the DB here.
+ */
+function mysqlConnection(conn: MysqlPoolConnLike): AsyncConnection {
+  const rowsOf = (raw: unknown): Rows => (Array.isArray(raw) ? raw : []) as Rows;
+  return {
+    async execute(sql, params) {
+      const reselect = buildMysqlReselect(sql);
+      if (reselect === null) return rowsOf((await conn.query(sql, params as unknown[]))[0]);
+      const bound = params as unknown[];
+      if (reselect.before) {
+        // DELETE…RETURNING: the pre-image IS the written row set — capture it, THEN delete.
+        const [pre] = await conn.query(reselect.selectSql, bindReselect(reselect.binds, bound, 0, 0));
+        await conn.query(reselect.writeSql, bound);
+        return rowsOf(pre);
+      }
+      const [res] = await conn.query(reselect.writeSql, bound);
+      const h = res as { affectedRows?: number; insertId?: number };
+      const [rows] = await conn.query(
+        reselect.selectSql,
+        bindReselect(reselect.binds, bound, Number(h?.insertId ?? 0), Number(h?.affectedRows ?? 0)),
+      );
+      return rowsOf(rows);
+    },
+    async run(sql, params) {
+      const [res] = await conn.query(sql, params as unknown[]);
+      const h = res as { affectedRows?: number; insertId?: number };
+      return { changes: h?.affectedRows ?? 0, lastInsertRowid: h?.insertId ?? 0 } as RunInfo;
+    },
+  };
+}
+
+/**
+ * Adapt a mysql2/promise `Pool` to the {@link AsyncConnectionPool} contract — `acquire` checks out
+ * an owned connection, `release` returns it (or `destroy`s a poisoned one). Feed this to
+ * `withTransactionAsync` for per-execution connection ownership.
+ */
+export function mysqlConnectionPool(pool: MysqlOwnedPoolLike): AsyncConnectionPool {
+  const handles = new WeakMap<AsyncConnection, MysqlPoolConnLike>();
+  return {
+    async acquire() {
+      const raw = await pool.getConnection();
+      const conn = mysqlConnection(raw);
+      handles.set(conn, raw);
+      return conn;
+    },
+    async release(conn, destroy) {
+      const raw = handles.get(conn);
+      if (raw === undefined) return;
+      if (destroy === true) raw.destroy();
+      else raw.release();
+    },
+  };
+}
+
+// ── Phase C (#87): driver POOL FACTORIES — sizing/keepAlive applied at construction ───────────
+//
+// `buildRoutingConfig` (connection-routing.ts) OWNS pool construction so the C3 config's CONSTRUCTION
+// knobs — pool sizing (`minPool`/`maxPool`) + `keepAlive`/`keepAliveInitialDelayMillis` — reach the
+// real driver at `new pg.Pool({ max, … })` / `mysql2.createPool({ connectionLimit, … })` time (a
+// pre-built pool can no longer accept them). These factories map a {@link ResolvedConnectionConfig}
+// to the driver's pool options and return the owned-connection {@link AsyncConnectionPool} adapter +
+// a closer. The configured sizing is thus the SOLE source of the pool cap. Session knobs
+// (queryTimeout/searchPath/charset) are layered separately by `configuredPool` on checkout.
+
+/** A pg `Pool` the factory constructs: owned-connection surface + `end()` (the closer). */
+export type PgOwnedPoolWithEnd = PgOwnedPoolLike & { end(): Promise<void> };
+
+/** The `pg` module surface the pool factory needs: an OWNED-connection `Pool` ctor + `types`. */
+export interface PgFactoryModuleLike {
+  Pool: new (config: Record<string, unknown>) => PgOwnedPoolWithEnd;
+  types: PgTypesLike;
+}
+
+/**
+ * A {@link PoolFactory} for `pg`: constructs a `new pg.Pool(...)` from a {@link ResolvedConnectionConfig},
+ * applying the pool SIZING (`max` = `maxPool`, `min` = `minPool`) and `keepAlive` /
+ * `keepAliveInitialDelayMillis` AT CONSTRUCTION — the config is the sole source of the cap. Connection
+ * params (host/port/database/user/password) also flow from the config. Registers the read-path de-box
+ * type parsers (issue #59, global, idempotent) once. Returns the owned-connection adapter + closer.
+ *
+ * `role` is accepted for the reader/writer replica split; the caller may vary host per role via the
+ * config it passes. `Pool` is the `pg.Pool` ctor (peer dep, passed in — this module imports no driver).
+ */
+export function pgPoolFactory(pg: PgFactoryModuleLike): PoolFactory {
+  return (config: ResolvedConnectionConfig, _role: 'reader' | 'writer'): { pool: AsyncConnectionPool; close: PoolCloser } => {
+    configurePgDeboxTypeParsers(pg.types);
+    const pool = new pg.Pool({
+      ...(config.host !== undefined ? { host: config.host } : {}),
+      ...(config.port !== undefined ? { port: config.port } : {}),
+      ...(config.database !== undefined ? { database: config.database } : {}),
+      ...(config.user !== undefined ? { user: config.user } : {}),
+      ...(config.password !== undefined ? { password: config.password } : {}),
+      // SIZING (construction knob): the config is the sole source of the cap.
+      max: config.maxPool,
+      min: config.minPool,
+      // keepAlive (construction knob): TCP keepalive for serverless/long-idle connections.
+      keepAlive: config.keepAlive,
+      ...(config.keepAlive ? { keepAliveInitialDelayMillis: config.keepAliveInitialDelayMillis } : {}),
+    });
+    return { pool: pgConnectionPool(pool), close: () => pool.end() };
+  };
+}
+
+/** A mysql2 `Pool` the factory constructs: owned-connection surface + `end()` (the closer). */
+export type MysqlOwnedPoolWithEnd = MysqlOwnedPoolLike & { end(): Promise<void> };
+
+/**
+ * A {@link PoolFactory} for `mysql2/promise`: constructs a `mysql2.createPool(...)` from a
+ * {@link ResolvedConnectionConfig}, applying the pool SIZING (`connectionLimit` = `maxPool`) +
+ * `enableKeepAlive` / `keepAliveInitialDelay` AT CONSTRUCTION (the config is the sole source of the
+ * cap) plus the read-path de-box options ({@link mysqlDeboxPoolOptions}). Connection params flow from
+ * the config. Returns the owned-connection adapter + closer.
+ *
+ * NB: mysql2 has no `min` idle floor — `minPool` is a no-op there (a documented per-driver deviation;
+ * the SIZING CAP that matters — `maxPool` → `connectionLimit` — is honored). `createPool` is the
+ * `mysql2/promise` factory (peer dep, passed in).
+ */
+export function mysqlPoolFactory(mysql2: { createPool(config: Record<string, unknown>): MysqlOwnedPoolWithEnd }): PoolFactory {
+  return (config: ResolvedConnectionConfig, _role: 'reader' | 'writer'): { pool: AsyncConnectionPool; close: PoolCloser } => {
+    const pool = mysql2.createPool({
+      ...(config.host !== undefined ? { host: config.host } : {}),
+      ...(config.port !== undefined ? { port: config.port } : {}),
+      ...(config.database !== undefined ? { database: config.database } : {}),
+      ...(config.user !== undefined ? { user: config.user } : {}),
+      ...(config.password !== undefined ? { password: config.password } : {}),
+      // SIZING (construction knob): connectionLimit = maxPool (the sole source of the cap).
+      connectionLimit: config.maxPool,
+      // keepAlive (construction knob).
+      enableKeepAlive: config.keepAlive,
+      ...(config.keepAlive ? { keepAliveInitialDelay: config.keepAliveInitialDelayMillis } : {}),
+      ...mysqlDeboxPoolOptions,
+    });
+    return { pool: mysqlConnectionPool(pool), close: () => pool.end() };
   };
 }
