@@ -8,7 +8,7 @@
 import type { DBConfig, DBDriver, DBDriverOptions, DBConnection, QueryResult, Logger } from './types';
 import { defaultLogger } from './types';
 import { isConnectionError } from '../connection-errors';
-import { mysqlDateStringPoolOptions } from '../scp/makesql/pool-executor';
+import { mysqlDeboxPoolOptions } from '../scp/makesql/pool-executor';
 
 // mysql2 types (loaded dynamically)
 interface Mysql2Pool {
@@ -91,11 +91,9 @@ function getPool(config: DBConfig): Mysql2Pool {
       connectTimeout: (config.timeout || 30) * 1000,
       // Read de-box (issue #9): make BIGINT arrive as an exact string (else mysql2 rounds it to a JS
       // number past 2^53) and the DATE/TIMESTAMP/DATETIME family arrive as its native textual string
-      // (else a TZ-shifted JS Date) — the coercible forms `materializeCell` (int64/date) expects.
-      // Smaller ints stay mysql2's native number (a form the model's materializer accepts); the DBModel
-      // path must NOT add the SCP codegen leg's int→BigInt typeCast (`mysqlDeboxPoolOptions`), or every
-      // INTEGER read (id/count/…) returns a raw BigInt (#181).
-      ...mysqlDateStringPoolOptions,
+      // (else a TZ-shifted JS Date) — the coercible forms `materializeCell` (int64/date) expects. Same
+      // options the v2 SCP pool-executor sets (`mysqlDeboxPoolOptions`).
+      ...mysqlDeboxPoolOptions,
     });
     pools.set(key, pool);
   }

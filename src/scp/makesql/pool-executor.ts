@@ -59,18 +59,18 @@ export interface PgTypesLike {
  * materializer's `Date → ISO string` path remains as a defensive fallback for any driver/config that
  * still slips a Date through, but the correct-day guarantee for pg DATE comes from this parser.
  */
-/**
- * Register ONLY the pg DATE/TIME family → native-textual-string parsers (the read de-box's date contract,
- * issue #9: pg would otherwise hand back a TZ-shifted JS `Date`, losing the calendar day). This is the
- * WHOLE parser set the v1/v2 DBModel RUNTIME path needs — its integer contract is pg's native int4→number
- * / int8→string, forms `materializeCell` already accepts. Only the SCP CODEGEN leg needs int→BigInt (so
- * bc's Int/Float classifier sees `Int`, not FLOAT); it layers those on top via
- * {@link configurePgDeboxTypeParsers}. The runtime pool factory ({@link pgPoolFactory}) must register the
- * date parsers ONLY — pull in the int→BigInt parsers and `id`, `count`, and every INTEGER column read back
- * a raw BigInt across the whole DBModel read path (#181).
- */
-export function configurePgDateTextParsers(types: PgTypesLike): void {
+export function configurePgDeboxTypeParsers(types: PgTypesLike): void {
   const asString = (v: string): string => v; // identity: keep the driver's native textual form
+  // An INTEGER column must arrive in bc's `int` value model, which on the TS plane is a BigInt. `pg`'s
+  // defaults hand back a JS number for int2/int4 and a string for int8, and bc classifies a JS number as
+  // FLOAT — so a column declared `Int` failed its outType check with `expected int, got float` on every
+  // read. The OID says the column is an integer, so nothing is guessed from the value: a REAL column
+  // whose value happens to be integral still arrives as a float. sqlite gets the same guarantee from
+  // better-sqlite3's `safeIntegers`, MySQL from {@link mysqlDeboxPoolOptions}'s integer typeCast.
+  const asBigInt = (v: string): bigint => BigInt(v);
+  types.setTypeParser(PG_OID.INT2, asBigInt);
+  types.setTypeParser(PG_OID.INT4, asBigInt);
+  types.setTypeParser(PG_OID.INT8, asBigInt);
   types.setTypeParser(PG_OID.DATE, asString);
   types.setTypeParser(PG_OID.TIMESTAMP, asString);
   types.setTypeParser(PG_OID.TIMESTAMPTZ, asString);
@@ -78,49 +78,24 @@ export function configurePgDateTextParsers(types: PgTypesLike): void {
   types.setTypeParser(PG_OID.TIMETZ, asString);
 }
 
-export function configurePgDeboxTypeParsers(types: PgTypesLike): void {
-  // SCP/codegen leg only (a SUPERSET of the runtime's date parsers above): an INTEGER column must arrive
-  // in bc's `int` value model, which on the TS plane is a BigInt. `pg`'s defaults hand back a JS number
-  // for int2/int4 and a string for int8, and bc classifies a JS number as FLOAT — so a column declared
-  // `Int` failed its outType check with `expected int, got float` on every read. The OID says the column
-  // is an integer, so nothing is guessed from the value: a REAL column whose value happens to be integral
-  // still arrives as a float. sqlite gets the same guarantee from better-sqlite3's `safeIntegers`, MySQL
-  // from {@link mysqlDeboxPoolOptions}'s integer typeCast. The DBModel runtime path must NOT call this —
-  // it materializes ints from the model, not bc's classifier, so int→BigInt only breaks it (#181).
-  const asBigInt = (v: string): bigint => BigInt(v);
-  types.setTypeParser(PG_OID.INT2, asBigInt);
-  types.setTypeParser(PG_OID.INT4, asBigInt);
-  types.setTypeParser(PG_OID.INT8, asBigInt);
-  configurePgDateTextParsers(types);
-}
-
 /**
- * The `mysql2` pool options the read de-box's DATE + BIGINT contract needs (issue #9/#59): `supportBigNumbers`
- * + `bigNumberStrings` so BIGINT arrives as an EXACT string (→ bigint; a plain number would already have
- * rounded it past 2^53), and `dateStrings` so the DATE/TIMESTAMP/DATETIME family arrives as its native
- * textual string (→ the `date→string` outType, NOT a JS Date). This is the WHOLE set the DBModel RUNTIME
- * path needs — its smaller-int contract is mysql2's native number, a form `materializeCell` already
- * accepts. Only the SCP codegen leg needs the int typeCast; it layers it on via {@link mysqlDeboxPoolOptions}.
- * The runtime pool factory ({@link mysqlPoolFactory}) must spread THESE — add the int typeCast and `id`,
- * `count`, and every INTEGER column read back a raw BigInt across the DBModel read path (#181).
+ * The `mysql2` pool options the read-path de-box (issue #59) requires: `supportBigNumbers` +
+ * `bigNumberStrings` so BIGINT arrives as an EXACT string (→ bigint; a plain number would already
+ * have rounded it), and `dateStrings` so the DATE/TIMESTAMP/DATETIME family arrives as its native
+ * textual string (→ the `date→string` outType, NOT a JS Date). Spread into `mysql.createPool(...)`.
  */
-export const mysqlDateStringPoolOptions = {
+export const mysqlDeboxPoolOptions = {
   supportBigNumbers: true,
   bigNumberStrings: true,
   dateStrings: true,
-} as const;
-
-/**
- * The SCP/codegen leg's mysql de-box: {@link mysqlDateStringPoolOptions} PLUS an int typeCast (a SUPERSET).
- * An INTEGER column must arrive in bc's `int` value model — a BigInt on the TS plane. `mysql2` hands back a
- * JS number for TINY/SHORT/INT24/LONG (only BIGINT becomes a string, via `bigNumberStrings`), and bc
- * classifies a JS number as FLOAT, so a column declared `Int` failed its outType check with `expected int,
- * got float`. The FIELD TYPE decides, never the value: a DOUBLE/DECIMAL column whose value happens to be
- * integral still arrives as a float. sqlite gets the same guarantee from better-sqlite3's `safeIntegers`,
- * PostgreSQL from {@link configurePgDeboxTypeParsers}'s int OIDs.
- */
-export const mysqlDeboxPoolOptions = {
-  ...mysqlDateStringPoolOptions,
+  /**
+   * An INTEGER column must arrive in bc's `int` value model — a BigInt on the TS plane. `mysql2` hands
+   * back a JS number for TINY/SHORT/INT24/LONG (only BIGINT becomes a string, via `bigNumberStrings`),
+   * and bc classifies a JS number as FLOAT, so a column declared `Int` failed its outType check with
+   * `expected int, got float`. The FIELD TYPE decides, never the value: a DOUBLE/DECIMAL column whose
+   * value happens to be integral still arrives as a float. sqlite gets the same guarantee from
+   * better-sqlite3's `safeIntegers`, PostgreSQL from {@link configurePgDeboxTypeParsers}'s int OIDs.
+   */
   typeCast(field: MysqlFieldLike, next: () => unknown): unknown {
     if (MYSQL_INT_TYPES.has(field.type)) {
       const raw = field.string();
@@ -329,20 +304,15 @@ export interface PgFactoryModuleLike {
  * A {@link PoolFactory} for `pg`: constructs a `new pg.Pool(...)` from a {@link ResolvedConnectionConfig},
  * applying the pool SIZING (`max` = `maxPool`, `min` = `minPool`) and `keepAlive` /
  * `keepAliveInitialDelayMillis` AT CONSTRUCTION — the config is the sole source of the cap. Connection
- * params (host/port/database/user/password) also flow from the config. Registers the DATE-family read-path
- * parsers (issue #9, global, idempotent) once. Returns the owned-connection adapter + closer.
- *
- * This is the DBModel RUNTIME pool: it registers {@link configurePgDateTextParsers} ONLY — the runtime
- * materializes integers from the model, so it takes pg's native int4→number / int8→string and must NOT
- * pull in the SCP codegen leg's int→BigInt parsers, or every INTEGER read (id/count/…) returns a raw
- * BigInt (#181). The codegen path calls {@link configurePgDeboxTypeParsers} directly, not this factory.
+ * params (host/port/database/user/password) also flow from the config. Registers the read-path de-box
+ * type parsers (issue #59, global, idempotent) once. Returns the owned-connection adapter + closer.
  *
  * `role` is accepted for the reader/writer replica split; the caller may vary host per role via the
  * config it passes. `Pool` is the `pg.Pool` ctor (peer dep, passed in — this module imports no driver).
  */
 export function pgPoolFactory(pg: PgFactoryModuleLike): PoolFactory {
   return (config: ResolvedConnectionConfig, _role: 'reader' | 'writer'): { pool: AsyncConnectionPool; close: PoolCloser } => {
-    configurePgDateTextParsers(pg.types);
+    configurePgDeboxTypeParsers(pg.types);
     const pool = new pg.Pool({
       ...(config.host !== undefined ? { host: config.host } : {}),
       ...(config.port !== undefined ? { port: config.port } : {}),
@@ -367,13 +337,8 @@ export type MysqlOwnedPoolWithEnd = MysqlOwnedPoolLike & { end(): Promise<void> 
  * A {@link PoolFactory} for `mysql2/promise`: constructs a `mysql2.createPool(...)` from a
  * {@link ResolvedConnectionConfig}, applying the pool SIZING (`connectionLimit` = `maxPool`) +
  * `enableKeepAlive` / `keepAliveInitialDelay` AT CONSTRUCTION (the config is the sole source of the
- * cap) plus the DATE/BIGINT read-path options ({@link mysqlDateStringPoolOptions}). Connection params flow
- * from the config. Returns the owned-connection adapter + closer.
- *
- * This is the DBModel RUNTIME pool: it spreads {@link mysqlDateStringPoolOptions} ONLY — the runtime
- * materializes integers from the model, so it takes mysql2's native number for the smaller ints and must
- * NOT add the SCP codegen leg's int→BigInt typeCast ({@link mysqlDeboxPoolOptions}), or every INTEGER read
- * (id/count/…) returns a raw BigInt (#181). The codegen path spreads the full options, not this factory.
+ * cap) plus the read-path de-box options ({@link mysqlDeboxPoolOptions}). Connection params flow from
+ * the config. Returns the owned-connection adapter + closer.
  *
  * NB: mysql2 has no `min` idle floor — `minPool` is a no-op there (a documented per-driver deviation;
  * the SIZING CAP that matters — `maxPool` → `connectionLimit` — is honored). `createPool` is the
@@ -392,7 +357,7 @@ export function mysqlPoolFactory(mysql2: { createPool(config: Record<string, unk
       // keepAlive (construction knob).
       enableKeepAlive: config.keepAlive,
       ...(config.keepAlive ? { keepAliveInitialDelay: config.keepAliveInitialDelayMillis } : {}),
-      ...mysqlDateStringPoolOptions,
+      ...mysqlDeboxPoolOptions,
     });
     return { pool: mysqlConnectionPool(pool), close: () => pool.end() };
   };
