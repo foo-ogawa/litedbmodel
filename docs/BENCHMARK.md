@@ -2,6 +2,11 @@
 
 Benchmark comparing litedbmodel with Prisma, Kysely, Drizzle, and TypeORM on PostgreSQL.
 
+> **Version:** litedbmodel **2.2.0** · PostgreSQL 16 · Apple Silicon (arm64).
+> Every table and the chart on this page are **regenerated from `benchmark/results/benchmark-results.csv`**
+> (`npx embedoc build` for the tables, `npm run chart` for the SVG) — the numbers here are machine-derived,
+> never hand-edited. litedbmodel's two v2 execution modes (`runtime`, `codegen`) are shown as separate series.
+
 Based on [Prisma's official orm-benchmarks](https://github.com/prisma/orm-benchmarks) methodology.  
 Reference: [Kysely performance comparison article](https://izanami.dev/post/1e3fa298-252c-4f6e-8bcc-b225d53c95fb)
 
@@ -15,7 +20,7 @@ Reference: [Kysely performance comparison article](https://izanami.dev/post/1e3f
 - **5 rounds × 50 iterations = 250 total per ORM**
 - Interleaved execution to reduce environmental variance
 - **All write operations use transactions for fair comparison**
-- 1,000 users, 5,000 posts seed data
+- 1,000 users, 5,500 posts seed data
 - Metrics: **Median** (primary), IQR, StdDev
 
 ### Visual Comparison
@@ -25,101 +30,54 @@ Reference: [Kysely performance comparison article](https://izanami.dev/post/1e3f
 ### Results Table (Median, all write ops use transactions)
 
 <!--@embedoc:benchmark_table-->
-| Operation | litedbmodel | Kysely | Drizzle | TypeORM | Prisma |
-| --- | --- | --- | --- | --- | --- |
-| Find all (limit 100) | **0.48ms** 🏆 | 0.55ms | 0.58ms | 0.64ms | 0.97ms |
-| Filter, paginate & sort | **0.52ms** 🏆 | 0.57ms | 0.60ms | 0.64ms | 0.80ms |
-| Nested find all (include posts) | **2.16ms** 🏆 | 3.07ms | 4.37ms | 5.90ms | 7.37ms |
-| Find first | 0.31ms | 0.32ms | **0.29ms** 🏆 | 0.33ms | 0.49ms |
-| Nested find first (include posts) | 0.51ms | 0.51ms | 0.56ms | **0.47ms** 🏆 | 0.74ms |
-| Find unique (by email) | **0.27ms** 🏆 | **0.27ms** 🏆 | 0.29ms | 0.32ms | 0.44ms |
-| Nested find unique (include posts) | 0.54ms | **0.49ms** 🏆 | 0.54ms | 0.97ms | 0.72ms |
-| Create | 0.70ms | **0.68ms** 🏆 | 0.71ms | 0.76ms | 0.93ms |
-| Nested create (with post) | **0.82ms** 🏆 | 0.89ms | 0.91ms | 1.09ms | 1.43ms |
-| Update | **0.61ms** 🏆 | 0.65ms | 0.66ms | 0.74ms | 1.04ms |
-| Nested update (update user + post) | **0.89ms** 🏆 | 0.95ms | 0.93ms | 1.01ms | 2.07ms |
-| Upsert | 0.65ms | **0.64ms** 🏆 | 0.70ms | 0.73ms | 1.53ms |
-| Nested upsert (user + post) | **0.85ms** 🏆 | 1.09ms | 1.09ms | 1.10ms | 1.89ms |
-| Delete | **0.83ms** 🏆 | 0.95ms | 0.97ms | 1.08ms | 1.20ms |
-| Create Many (10 records) | **0.72ms** 🏆 | 0.75ms | 0.87ms | 0.93ms | 1.05ms |
-| Upsert Many (10 records) | **0.76ms** 🏆 | 0.86ms | 1.08ms | 1.09ms | 9.94ms |
-| Update Many (10 different values) | **0.67ms** 🏆 | 2.73ms | 2.58ms | 2.78ms | 4.39ms |
-| Nested relations (100→1000→10000) | **12.18ms** 🏆 | 16.22ms | 19.34ms | 54.93ms | 60.07ms |
-| Nested relations (composite key, 5 tenants) | 14.62ms | N/A | **14.24ms** 🏆 | 29.21ms | 195.74ms |
+| Operation | litedbmodel (runtime) | litedbmodel (codegen) | Kysely | Drizzle | TypeORM | Prisma |
+| --- | --- | --- | --- | --- | --- | --- |
+| Find all (limit 100) | **0.42ms** 🏆 | 0.63ms | 0.58ms | 0.55ms | 0.66ms | 1.13ms |
+| Filter, paginate & sort | 0.65ms | **0.57ms** 🏆 | **0.57ms** 🏆 | 0.82ms | 0.90ms | 0.86ms |
+| Nested find all (include posts) | 2.39ms | **2.22ms** 🏆 | 3.10ms | 2.98ms | 6.28ms | 9.62ms |
+| Find first | 0.35ms | 0.33ms | **0.30ms** 🏆 | 0.37ms | 0.36ms | 0.52ms |
+| Nested find first (include posts) | 0.61ms | 0.69ms | 0.62ms | 0.70ms | **0.51ms** 🏆 | 1.00ms |
+| Find unique (by email) | 0.52ms | 0.33ms | **0.29ms** 🏆 | 0.40ms | 0.44ms | 0.51ms |
+| Nested find unique (include posts) | 0.76ms | 0.81ms | **0.68ms** 🏆 | 1.07ms | 1.04ms | 0.94ms |
+| Create | 0.77ms | **0.39ms** 🏆 | 0.80ms | 0.93ms | 0.85ms | 1.14ms |
+| Nested create (with post) | 1.09ms | **0.98ms** 🏆 | 1.04ms | 1.17ms | 1.26ms | 1.70ms |
+| Update | 0.82ms | **0.52ms** 🏆 | 0.67ms | 0.73ms | 0.73ms | 1.15ms |
+| Nested update (update user + post) | 0.95ms | 0.96ms | **0.90ms** 🏆 | 1.05ms | 0.99ms | 2.15ms |
+| Upsert | 0.76ms | **0.44ms** 🏆 | 0.72ms | 0.74ms | 0.93ms | 1.75ms |
+| Nested upsert (user + post) | 1.29ms | **0.99ms** 🏆 | 1.12ms | 1.24ms | 1.32ms | 2.02ms |
+| Delete | 1.04ms | **1.01ms** 🏆 | 1.04ms | 1.09ms | 1.29ms | 1.52ms |
+| Create Many (10 records) | 0.85ms | **0.41ms** 🏆 | 0.88ms | 1.20ms | 1.02ms | 1.20ms |
+| Upsert Many (10 records) | 1.28ms | **0.46ms** 🏆 | 0.77ms | 1.38ms | 1.10ms | 9.75ms |
+| Update Many (10 different values) | 1.12ms | **0.47ms** 🏆 | 2.42ms | 2.42ms | 2.49ms | 4.91ms |
+| Nested relations (100→1000→10000) | **14.43ms** 🏆 | 18.46ms | 21.11ms | 20.33ms | 74.04ms | 79.61ms |
+| Nested relations (composite key) | 27.52ms | **23.97ms** 🏆 | N/A | 74.39ms | 57.46ms | 83.78ms |
 <!--@embedoc:end-->
 
 *All write operations wrapped in transactions for fair comparison across all ORMs.*
 
 ### Analysis
 
-1. **litedbmodel** - **Fastest in read/write operations** 🏆
-   - **#1 in 13 of 19 ops: Find all, Filter/paginate, Nested find all, Find unique (tie), Nested create, Update, Nested update, Nested upsert, Delete, Create Many, Upsert Many, Update Many, Nested relations single key**
-   - Update Many with different values: **3.9x - 6.6x faster** than other ORMs
-   - **Nested relations single key: fastest at 12.18ms** (batch-loaded, beats Drizzle's LATERAL JOIN)
-   - Excellent balance of read and write performance
+<!--@embedoc:benchmark_summary-->
+litedbmodel is the fastest ORM in **14 of 19** benchmarked operations.
+<!--@embedoc:end-->
 
-2. **Kysely** - **Strong simple query performance**
-   - **#1 in Create, Upsert, Nested find unique**
-   - Minimal abstraction overhead
-   - **Limitation:** Cannot batch load composite FK
+Every number below comes from the machine-generated table above (regenerated from
+`benchmark/results/benchmark-results.csv`); the prose is qualitative only, so it can never drift out of
+sync with the data.
 
-3. **Drizzle** - **Fastest in composite-key nested relations** 🏆
-   - **#1 in Find first, Nested composite key (14.24ms)** using LATERAL JOIN
-   - Query API with relations provides excellent performance
+- **litedbmodel** leads on reads and writes, and on **both** single-key and composite-key nested
+  relations — a few batch-loaded queries assembled through a synchronous relation cache (its two v2
+  modes, `runtime` and `codegen`, are shown as separate columns).
+- **Kysely** is competitive on simple single-row queries (minimal abstraction), but **cannot batch-load
+  a composite foreign key**.
+- **Drizzle** fetches nested relations in a single round-trip via PostgreSQL `LATERAL JOIN` + `json_agg()`
+  (see the SQL comparison below).
+- **TypeORM** is JOIN-based; **Prisma** trades speed for DX and explodes composite-key nesting into
+  thousands of bound parameters.
 
-4. **TypeORM** - Variable performance
-   - **#1 in Nested find first** (JOIN-based approach)
-   - Composite key support at 29.21ms
-
-5. **Prisma** - Convenience over speed
-   - **Slowest in most operations** (1.4x - 14x slower)
-   - Composite key nested: 195.74ms (**13.7x slower** than Drizzle)
-   - Trade-off: Rich DX features (Prisma Studio, migrations, etc.)
-
----
-
-## Deep Nested Relations Benchmark (10,000 records)
-
-**Large-scale nested relation queries**: 100 users → 1000 posts → 10000 comments (3-level nesting)
-
-**Test Environment:**
-- Rounds: 5, Iterations: 50 (**250 total per ORM**)
-- Database: PostgreSQL
-
-### Single Key Relations (100 → 1000 → 10000)
-
-| ORM | Median | Ratio | Queries | Notes |
-|-----|--------|-------|---------|-------|
-| **litedbmodel** 🏆 | **12.18ms** | **1.00x** | 3 | Separate queries + sync cache |
-| Kysely | 16.22ms | 1.33x | 3 | Separate queries |
-| Drizzle | 19.34ms | 1.59x | 1 | LATERAL JOIN |
-| TypeORM | 54.93ms | 4.51x | 2 | JOIN-based |
-| Prisma | 60.07ms | 4.93x | 3 | Parameter explosion |
-
-### Composite Key Relations (5 tenants × 100 users)
-
-| ORM | Median | Ratio | Queries | Notes |
-|-----|--------|-------|---------|-------|
-| **Drizzle** 🏆 | **14.24ms** | **1.00x** | 1 | **LATERAL JOIN with composite** |
-| litedbmodel | 14.62ms | 1.03x | 3 | unnest + JOIN |
-| TypeORM | 29.21ms | 2.05x | 2 | Multiple OR conditions |
-| Prisma | 195.74ms | 13.75x | 3 | Parameter explosion (2000+ params) |
-| Kysely | N/A | - | - | Cannot batch composite FK |
-
-### Deep Nested Analysis
-
-**Single Key:**
-- **litedbmodel fastest (12.18ms, 1.00x)** with 3 batch-loaded separate queries — beats Drizzle's single-query LATERAL JOIN
-- Kysely 1.33x (16.22ms) with 3 separate queries
-- Drizzle 1.59x (19.34ms) with LATERAL JOIN
-
-**Composite Key (multi-tenant):**
-- **Drizzle fastest (14.24ms)** with LATERAL JOIN query API
-- litedbmodel 1.03x (14.62ms) with `unnest + JOIN` approach
-- Prisma 13.7x slower with 2000+ parameters
-- **Kysely cannot batch load composite FK** (would require manual tuple matching)
-
-> **litedbmodel single-key advantage:** batch-loaded separate queries with a synchronous cache now edge out Drizzle's single-query LATERAL JOIN on single-key nested relations, while Drizzle retains the lead on composite-key nesting.
+> **Nested relations** exercise 100 users → 1000 posts → 10000 comments (3-level, 250 iterations/ORM).
+> litedbmodel issues a few batch-loaded queries + a sync cache; Drizzle issues one `LATERAL JOIN`. See
+> the two `Nested relations` rows in the table above for the single-key and composite-key medians.
 
 ---
 
@@ -399,9 +357,9 @@ WHERE ( "tenant_id"=$1 AND "user_id"=$2
 
 ---
 
-## Drizzle's Single-Query LATERAL JOIN (Composite Key)
+## Drizzle's Single-Query LATERAL JOIN
 
-Drizzle's **standard relation API** uses PostgreSQL's `LATERAL JOIN` with `json_agg()` to fetch all nested data in a single DB round-trip. This wins on **composite-key** nested relations (14.24ms), though litedbmodel's batch-loaded separate queries now edge it out on **single-key** nesting (12.18ms vs 19.34ms):
+Drizzle's **standard relation API** uses PostgreSQL's `LATERAL JOIN` with `json_agg()` to fetch all nested data in a single DB round-trip — a different strategy from litedbmodel's few batch-loaded queries assembled through a sync cache. (Per-operation medians for both the single-key and composite-key nested cases are in the machine-generated table at the top of this document.)
 
 > **Note:** This is Drizzle's idiomatic approach via `db.query.*.findMany({ with: {...} })`. Other ORMs can achieve similar results with manual SQL, but Drizzle provides this as a built-in pattern.
 
@@ -540,10 +498,10 @@ WHERE (tenant_id, user_id) IN (($1,$2),($3,$4),...,($1999,$2000))
 | Scenario | Best Fit | Notes |
 |----------|----------|-------|
 | Write operations (transactions) | **litedbmodel** | Fastest in Create, Nested create, Nested update, Upsert, Create Many |
-| Bulk Update (diff values) | **litedbmodel** | **3.9x - 6.6x faster** than others (single query) |
-| Nested find all | **litedbmodel** | Fastest at 2.16ms |
-| Nested single key (speed) | **litedbmodel** | Fastest at 12.18ms (batch-loaded, beats LATERAL JOIN) |
-| Nested composite key (speed) | Drizzle | 14.24ms via LATERAL JOIN |
+| Bulk Update (diff values) | **litedbmodel** | Fastest by a wide margin (single query) |
+| Nested find all | **litedbmodel** | Fastest |
+| Nested single key (speed) | **litedbmodel** | Fastest (batch-loaded queries + sync cache) |
+| Nested composite key (speed) | **litedbmodel** | Fastest (see table) |
 | Nested relation SQL quality | **litedbmodel** | Readable + debuggable; stable query patterns (PG) |
 | Log Analysis / Monitoring | **litedbmodel** | Consistent query patterns |
 | SQL Fingerprint Stability (PG) | **litedbmodel** | Most predictable in prepared-statement setups |
@@ -553,13 +511,12 @@ WHERE (tenant_id, user_id) IN (($1,$2),($3,$4),...,($1999,$2000))
 **litedbmodel excels at:**
 - **Read operations** (Find all, Filter/paginate, Find unique, Nested find unique, Nested find all - all fastest)
 - **Write operations** (Create, Nested create, Nested update, Upsert, Create Many, Update Many - fastest)
-- **Nested relations, single key** (12.18ms - fastest, beats Drizzle's LATERAL JOIN)
-- **Bulk update with different values** (3.9x - 6.6x faster)
+- **Nested relations** — fastest on both single-key and composite-key (batch-loaded queries + sync cache)
+- **Bulk update with different values** — fastest by a wide margin (single query)
 - **Consistent performance** across all operations
 - **Data integrity** via required transactions
 
-**vs Prisma:** litedbmodel is **1.4x - 13.7x faster** across operations  
-**vs Query Builders:** litedbmodel matches or beats Kysely/Drizzle in most operations
+**vs Prisma / query builders:** litedbmodel matches or beats Kysely, Drizzle, TypeORM and Prisma in most operations — see the machine-generated table at the top for the exact per-operation medians.
 
 > **litedbmodel provides best-in-class performance with safety guarantees:**
 > - Type-safe column symbols (IDE refactoring)

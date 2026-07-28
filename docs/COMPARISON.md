@@ -2,6 +2,10 @@
 
 A detailed comparison of litedbmodel with popular TypeScript/JavaScript ORMs.
 
+> **Benchmark figures:** litedbmodel **2.2.0**. The only performance number on this page is the
+> machine-computed win count below; the full per-operation table lives in
+> [BENCHMARK.md](./BENCHMARK.md) (regenerated from `benchmark/results/benchmark-results.csv`).
+
 ## Quick Comparison Matrix
 
 > Legend: ✅ built-in / automatic, ⚠️ possible but manual / opt-in / partial, ❌ not provided / not typical
@@ -1077,15 +1081,17 @@ For detailed benchmark results comparing litedbmodel with Prisma, Kysely, Drizzl
 
 ### Summary
 
-| Operation Type | litedbmodel Performance |
-|----------------|------------------------|
-| Standard CRUD | **Fastest in 9/19 operations** (Filter/sort, Nested find all, Find unique, Nested find unique, Nested create, Delete, Upsert Many, Update Many, etc.) |
-| Nested relations | Competitive (within 6% of fastest) |
-| Deep nested (10K) | 3.3x faster than Prisma |
-| SQL quality | ⭐⭐⭐⭐⭐ (readable, fixed params on PG) |
+<!--@embedoc:benchmark_summary-->
+litedbmodel is the fastest ORM in **14 of 19** benchmarked operations.
+<!--@embedoc:end-->
 
-**vs Prisma:** litedbmodel is **1.5x - 13.5x faster** across all operations  
-**vs Query Builders:** litedbmodel matches or beats Kysely/Drizzle in most operations
+| Aspect | litedbmodel |
+|--------|-------------|
+| Reads & writes | Fastest across most CRUD operations |
+| Nested relations | Fastest on both single-key and composite-key |
+| SQL quality | Readable, fixed parameter count on PostgreSQL (`ANY($1::int[])`) |
+
+This page keeps **no hand-copied numbers** — the win count above is machine-computed from the same CSV as [BENCHMARK.md](./BENCHMARK.md), where the full per-operation table (regenerated from `benchmark/results/benchmark-results.csv`) lives.
 
 ---
 

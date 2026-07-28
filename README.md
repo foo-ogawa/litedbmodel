@@ -1408,7 +1408,7 @@ const article = await CmsDB.withWriter(async () => {
 | **IDE Refactoring** | ✅ | ❌ | ⚠️ Partial | ❌ | ❌ |
 | **SKIP Pattern** | ✅ | ❌ | ❌ | ❌ | ❌ |
 | **Extensibility** | Middleware | Plugins | ❌ Manual | Subscribers | Extensions |
-| **Performance** | 🏆 Fastest (9/19 wins) | Fast | Fast | Medium | Slow |
+| **Performance** | 🏆 Fastest overall ([benchmarks](./docs/BENCHMARK.md)) | Fast | Fast | Medium | Slow |
 
 > See [COMPARISON.md](./docs/COMPARISON.md) for detailed analysis and [BENCHMARK.md](./docs/BENCHMARK.md) for benchmarks.
 

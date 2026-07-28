@@ -26,14 +26,17 @@ interface BenchmarkRow {
   iterations: number;
 }
 
-// ORM order and colors
-const ORM_ORDER = ['litedbmodel', 'Kysely', 'Drizzle', 'TypeORM', 'Prisma'];
+// ORM order and colors. litedbmodel's two v2 execution modes (runtime = imperative DBModel; codegen =
+// bc-generated static module) are separate CSV series and both are charted — never collapsed to one
+// hand-picked number. Keys match the CSV `ORM` values.
+const ORM_ORDER = ['litedbmodel (runtime)', 'litedbmodel (codegen)', 'Kysely', 'Drizzle', 'TypeORM', 'Prisma'];
 const ORM_COLORS: Record<string, string> = {
-  'litedbmodel': '#3b82f6',  // Blue
-  'Kysely': '#22c55e',       // Green
-  'Drizzle': '#f59e0b',      // Amber
-  'TypeORM': '#ef4444',      // Red
-  'Prisma': '#8b5cf6',       // Purple
+  'litedbmodel (runtime)': '#3b82f6',  // Blue
+  'litedbmodel (codegen)': '#0ea5e9',  // Sky
+  'Kysely': '#22c55e',                 // Green
+  'Drizzle': '#f59e0b',                // Amber
+  'TypeORM': '#ef4444',                // Red
+  'Prisma': '#8b5cf6',                 // Purple
 };
 
 // Maximum relative value to show (bars exceeding this are truncated)
