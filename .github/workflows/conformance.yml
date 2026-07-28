@@ -247,6 +247,14 @@ jobs:
         run: |
           mysql -h 127.0.0.1 -P 3307 -u root -prootpass \
             -e "GRANT ALL PRIVILEGES ON \`scp\_%\`.* TO 'testuser'@'%'; FLUSH PRIVILEGES;"
+      # The docker-compose stack mounts test/fixtures/init*.sql via docker-entrypoint-initdb.d, but the
+      # inline CI `services:` do NOT — so testdb had none of the integration-test schema
+      # (users/posts/tags/post_tags/all_types_test) and every `npm test` integration test failed with
+      # "relation/table does not exist". Load it here, after checkout, before npm test (#184).
+      - name: Load the integration-test schema into the live DBs (#184)
+        run: |
+          PGPASSWORD=testpass psql -h localhost -p 5433 -U testuser -d testdb -v ON_ERROR_STOP=1 -f test/fixtures/init.sql
+          mysql -h 127.0.0.1 -P 3307 -u testuser -ptestpass testdb < test/fixtures/init-mysql.sql
       - name: Auth for the private behavior-contracts Go VCS-tag dependency
         env:
           # Same fine-grained read-only PAT graphddb uses (Contents: Read on
