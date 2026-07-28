@@ -243,10 +243,11 @@ jobs:
       # (incl. the pinned behavior-contracts) ONLINE here, before the offline probe (#183).
       - name: Warm the cargo registry cache for the offline native-closure probe (#183)
         run: cargo fetch --manifest-path rust/Cargo.toml
-      - name: Grant the test user the per-language `scp_%` MySQL databases
-        run: |
-          mysql -h 127.0.0.1 -P 3307 -u root -prootpass \
-            -e "GRANT ALL PRIVILEGES ON \`scp\_%\`.* TO 'testuser'@'%'; FLUSH PRIVILEGES;"
+      # Create + grant the per-language `scp_%` MySQL databases from the SSoT the docker stack mounts
+      # (test/fixtures/livedb-grants.sql) — the inline `services:` don't mount it, and the rust/go/py/php
+      # livedb suites connect straight to scp_<lang> (which must already exist) instead of CREATE-ing it.
+      - name: Create + grant the per-language `scp_%` MySQL databases
+        run: mysql -h 127.0.0.1 -P 3307 -u root -prootpass < test/fixtures/livedb-grants.sql
       # The docker-compose stack mounts test/fixtures/init*.sql via docker-entrypoint-initdb.d, but the
       # inline CI `services:` do NOT — so testdb had none of the integration-test schema
       # (users/posts/tags/post_tags/all_types_test) and every `npm test` integration test failed with
