@@ -22,6 +22,7 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"time"
 
 	bc "github.com/foo-ogawa/behavior-contracts/go"
 )
@@ -236,6 +237,13 @@ func scanValue(v any) bc.Value {
 		return string(t)
 	case string:
 		return t
+	case time.Time:
+		// A TIMESTAMP/DATE column the pgx stdlib driver scans as a native time.Time (MySQL/SQLite return
+		// these as text and land in the string/[]byte arms). Canonicalize to the SAME `YYYY-MM-DD
+		// HH:MM:SS` wall-clock text the seed uses and the rust driver's pg_cell_to_wire emits, so a
+		// TIMESTAMP column reads identically across dialects — NOT Go's default `%v` (`… +0000 UTC`),
+		// which is a driver-native rendering below the v2 date→canonical-string read contract.
+		return t.UTC().Format("2006-01-02 15:04:05")
 	default:
 		return fmt.Sprintf("%v", t)
 	}

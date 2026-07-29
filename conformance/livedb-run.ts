@@ -10,15 +10,15 @@
  *
  * ## The legs
  *
- *   - `py`  — `python/conformance/livedb_runner.py`   (bc `--lang python`)
- *   - `php` — `php/conformance/livedb_runner.php`     (bc `--lang php`)
+ *   - `py`   — `python/conformance/livedb_runner.py`          (bc `--lang python`)
+ *   - `php`  — `php/conformance/livedb_runner.php`            (bc `--lang php`)
+ *   - `go`   — `go/conformance/livedb/livedb_runner.go`       (bc `--lang go-typed-native`)
+ *   - `rust` — `rust/livedb_runner` crate                     (bc `--lang rust-typed-native`)
  *
- * There is no go / rust leg: BOTH typed-native emitters fail closed on the SKIP endpoint's
- * `whereDynamic` port ("component 'feed': node 'n0' port 'whereDynamic' is not statically
- * resolvable"), so no module can be generated for them from this declaration. `conformance/
- * gen-livedb.ts` carries the verbatim repro; adding the leg back is one `LANG_TARGETS` entry plus a
- * call table once bc covers the port. The TS leg over these same vectors is
- * `test/scp/conformance-vectors.test.ts` (in the main suite, live PG + MySQL).
+ * All four run the SAME live-DB corpus. go / rust execute the typed-native module bc generates for
+ * their language (the SKIP endpoint's `whereDynamic` port lowers to a `{frags}` plan the leaf
+ * transport assembles at execution time, CLAUDE.md §2), the SAME way python / php run their literal
+ * module. The TS leg over these same vectors is `test/scp/conformance-vectors.test.ts` (main suite).
  *
  * Prerequisite: the docker stack is UP with host-published ports (docker-compose.livedb.yml) and
  * the corpus + language modules are generated. Typical driver:
@@ -91,8 +91,8 @@ interface LangLeg {
 const LEGS: LangLeg[] = [
   { lang: 'py', cmd: process.env.LIVEDB_PY || 'python3', args: [join(REPO, 'python', 'conformance', 'livedb_runner.py')] },
   { lang: 'php', cmd: 'php', args: [join(REPO, 'php', 'conformance', 'livedb_runner.php')] },
-  { lang: 'go', cmd: 'go', args: ['run', './conformance/livedb_runner.go'], cwd: join(REPO, 'go'), blockedBy: '#163' },
-  { lang: 'rust', cmd: 'cargo', args: ['run', '--quiet', '-p', 'livedb_runner', '--features', 'livedb'], cwd: join(REPO, 'rust'), blockedBy: '#163' },
+  { lang: 'go', cmd: 'go', args: ['run', './conformance/livedb'], cwd: join(REPO, 'go') },
+  { lang: 'rust', cmd: 'cargo', args: ['run', '--quiet', '-p', 'livedb_runner', '--features', 'livedb'], cwd: join(REPO, 'rust') },
 ];
 
 // The env each leg inherits (host-published docker ports; matches docker-compose.livedb.yml).

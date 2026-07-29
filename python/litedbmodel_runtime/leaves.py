@@ -13,7 +13,7 @@ typed-native runners call positionally (``rust/litedbmodel_runtime/src/leaves.rs
     JSON-encode it for ``json_each``/``JSON_TABLE``, postgres binds the array as-is), and run it through
     the runtime's central execute/run seam (:func:`exec_context.execute` / :func:`exec_context.run`) on
     the bound driver — the ONLY driver contact. The OPTIONAL ``guard`` port is the RELATION runaway cap
-    of a guarded relation child fetch: the raw rows are asserted against it HERE
+    of a guarded relation child fetch (absent/None ⇒ uncapped): the raw rows are asserted against it HERE
     (:meth:`errors.LimitExceededError.check`) because past ``group`` the graph is already nested. A
     non-returning write returns a one-row ``[{changes, lastInsertRowid}]`` summary so the leaf output
     shape is uniform (a list of rows).
@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple, Union
+from typing import Any, Callable, Dict, List, Mapping, Sequence, Tuple, Union
 
 from .driver import Driver
 from .errors import LimitExceededError, SqlFailure
@@ -81,19 +81,21 @@ def _splice_where(base_sql: str, where_sql: str) -> str:
 
 
 def _effective_statement(ports: Mapping[str, Any]) -> Tuple[str, List[Any]]:
-    """The ``(sql, params)`` a statement actually executes: the dynamic plan assembled when one is
+    """The ``(sql, params)`` a statement actually executes: the dynamic-WHERE plan assembled when one is
     present, the ports verbatim otherwise.
 
-    bc has ALREADY evaluated each fragment's params and its SKIP guard against the input, so a dropped
-    fragment arrives as ``None``. The survivors join with ``WHERE``/``AND`` and their params bind
-    BEFORE the base params (the WHERE ``?``s precede the tail's)."""
-    plan: Optional[Mapping[str, Any]] = ports.get("whereDynamic")
+    ``whereDynamic`` is OPTIONAL (absent/None ⇒ no dynamic WHERE — a bounded read, a write, and an
+    uncapped fetch omit it; CLAUDE.md §2). bc carries each fragment's SKIP decision as DATA: a skipped
+    fragment is PRESENT with ``skipped`` true (never omitted), so assembly DROPS the ``skipped``
+    fragments. The survivors join with ``WHERE``/``AND`` and their params bind BEFORE the base params
+    (the WHERE ``?``s precede the tail's)."""
     params: List[Any] = list(ports["params"])
+    plan = ports.get("whereDynamic")
     if plan is None:
         return ports["sql"], params
     where_sql = ""
     where_params: List[Any] = []
-    for frag in (f for f in (plan.get("frags") or []) if f is not None):
+    for frag in (f for f in plan["frags"] if not f["skipped"]):
         where_sql += (" WHERE " if where_sql == "" else " AND ") + frag["sql"]
         where_params.extend(frag["params"])
     return _splice_where(ports["sql"], where_sql), where_params + params

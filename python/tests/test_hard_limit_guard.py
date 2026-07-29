@@ -65,6 +65,8 @@ def test_relation_guard_trips_on_the_raw_child_rows():
     ctx = {"nodeId": "n0", "component": "executeSQL"}
 
     def read(guard):
+        # `guard` is the OPTIONAL relation cap (absent ⇒ uncapped); `whereDynamic` is likewise omitted
+        # on this bounded read — both control ports are present-or-absent per call.
         ports = {"sql": "SELECT id, v FROM t ORDER BY id", "params": [], "write": False,
                  "returning": False, "bigint": False}
         if guard is not None:

@@ -7,7 +7,7 @@
 // (Behavior::runBehavior) — no execution logic is generated. Handlers are ALWAYS
 // injected at the boundary (IR + {effects,config,hooks} — concept.md §4.4); they
 // are never generated.
-// irFingerprint: fnv1a64:0d97e0ff16c58c82
+// irFingerprint: fnv1a64:11dc780c893fbcd9
 
 declare(strict_types=1);
 
@@ -15,7 +15,7 @@ declare(strict_types=1);
 $expectedSpecVersions = ['behavior' => 6, 'expression' => 2, 'plan' => 1];
 
 // FNV-1a 64 fingerprint of the source portable IR (canonical-json discipline, #208).
-$irFingerprint = 'fnv1a64:0d97e0ff16c58c82';
+$irFingerprint = 'fnv1a64:11dc780c893fbcd9';
 
 // Component names exposed by bind(), in IR declaration order.
 $componentNames = ['posts', 'postsTop', 'page', 'postsByIds', 'feed', 'usersWithPosts', 'postsWithAuthor', 'usersWithCappedPosts', 'usersWithUncappedPosts', 'usersWithTopPosts', 'createPost', 'renamePost', 'removePost', 'createPostReturning', 'renamePostReturning', 'removePostReturning', 'restatusPostsReturning', 'removePostsByAuthorReturning', 'typedRows', 'createTags', 'removeTags', 'createTagsReturning', 'relabelTagsReturning', 'removeTagsReturning'];
@@ -474,8 +474,27 @@ $irDoc = (object) [
                             "type" => "string",
                         ],
                         "whereDynamic" => (object) [
+                            "elemType" => (object) [
+                                "name" => "DynamicWherePlan",
+                                "obj" => (object) [
+                                    "frags" => (object) [
+                                        "arr" => (object) [
+                                            "name" => "DynamicWhereFrag",
+                                            "obj" => (object) [
+                                                "params" => (object) [
+                                                    "arr" => (object) [
+                                                        "opt" => "value",
+                                                    ],
+                                                ],
+                                                "skipped" => "bool",
+                                                "sql" => "string",
+                                            ],
+                                        ],
+                                    ],
+                                ],
+                            ],
                             "required" => false,
-                            "type" => "value",
+                            "type" => "object",
                         ],
                         "write" => (object) [
                             "required" => true,
@@ -504,13 +523,23 @@ $irDoc = (object) [
                                                         ],
                                                     ],
                                                 ],
+                                                "skipped" => false,
                                                 "sql" => "author_id = ?",
                                             ],
                                         ],
                                         (object) [
-                                            "cond" => [
-                                                (object) [
-                                                    "ne" => [
+                                            "obj" => (object) [
+                                                "params" => (object) [
+                                                    "arr" => [
+                                                        (object) [
+                                                            "ref" => [
+                                                                "status",
+                                                            ],
+                                                        ],
+                                                    ],
+                                                ],
+                                                "skipped" => (object) [
+                                                    "eq" => [
                                                         (object) [
                                                             "ref" => [
                                                                 "status",
@@ -519,27 +548,22 @@ $irDoc = (object) [
                                                         null,
                                                     ],
                                                 ],
-                                                (object) [
-                                                    "obj" => (object) [
-                                                        "params" => (object) [
-                                                            "arr" => [
-                                                                (object) [
-                                                                    "ref" => [
-                                                                        "status",
-                                                                    ],
-                                                                ],
-                                                            ],
-                                                        ],
-                                                        "sql" => "status = ?",
-                                                    ],
-                                                ],
-                                                null,
+                                                "sql" => "status = ?",
                                             ],
                                         ],
                                         (object) [
-                                            "cond" => [
-                                                (object) [
-                                                    "ne" => [
+                                            "obj" => (object) [
+                                                "params" => (object) [
+                                                    "arr" => [
+                                                        (object) [
+                                                            "ref" => [
+                                                                "since",
+                                                            ],
+                                                        ],
+                                                    ],
+                                                ],
+                                                "skipped" => (object) [
+                                                    "eq" => [
                                                         (object) [
                                                             "ref" => [
                                                                 "since",
@@ -548,21 +572,7 @@ $irDoc = (object) [
                                                         null,
                                                     ],
                                                 ],
-                                                (object) [
-                                                    "obj" => (object) [
-                                                        "params" => (object) [
-                                                            "arr" => [
-                                                                (object) [
-                                                                    "ref" => [
-                                                                        "since",
-                                                                    ],
-                                                                ],
-                                                            ],
-                                                        ],
-                                                        "sql" => "created_at >= ?",
-                                                    ],
-                                                ],
-                                                null,
+                                                "sql" => "created_at >= ?",
                                             ],
                                         ],
                                     ],
@@ -1453,8 +1463,18 @@ $irDoc = (object) [
                             "type" => "bool",
                         ],
                         "guard" => (object) [
+                            "elemType" => (object) [
+                                "name" => "CapGuard",
+                                "obj" => (object) [
+                                    "limit" => "int",
+                                    "model" => (object) [
+                                        "opt" => "string",
+                                    ],
+                                    "relation" => "string",
+                                ],
+                            ],
                             "required" => false,
-                            "type" => "value",
+                            "type" => "object",
                         ],
                         "params" => (object) [
                             "elemType" => "value",
@@ -1470,8 +1490,27 @@ $irDoc = (object) [
                             "type" => "string",
                         ],
                         "whereDynamic" => (object) [
+                            "elemType" => (object) [
+                                "name" => "DynamicWherePlan",
+                                "obj" => (object) [
+                                    "frags" => (object) [
+                                        "arr" => (object) [
+                                            "name" => "DynamicWhereFrag",
+                                            "obj" => (object) [
+                                                "params" => (object) [
+                                                    "arr" => (object) [
+                                                        "opt" => "value",
+                                                    ],
+                                                ],
+                                                "skipped" => "bool",
+                                                "sql" => "string",
+                                            ],
+                                        ],
+                                    ],
+                                ],
+                            ],
                             "required" => false,
-                            "type" => "value",
+                            "type" => "object",
                         ],
                         "write" => (object) [
                             "required" => true,
@@ -1498,7 +1537,13 @@ $irDoc = (object) [
                         ],
                         "returning" => false,
                         "sql" => "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE conf_posts.author_id = ANY(?::int[]) ORDER BY id ASC",
-                        "whereDynamic" => null,
+                        "whereDynamic" => (object) [
+                            "obj" => (object) [
+                                "frags" => (object) [
+                                    "arr" => [],
+                                ],
+                            ],
+                        ],
                         "write" => false,
                     ],
                     "wirePassthrough" => true,

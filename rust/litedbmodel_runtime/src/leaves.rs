@@ -324,6 +324,81 @@ fn port_relation_guard(payload: &mut WireRow) -> Result<Option<RelationGuard>, B
     }))
 }
 
+/// One unboxed dynamic-WHERE fragment (leaves.ts `DynamicWhereFrag`): its SQL text, its bound params
+/// (wire), and the per-call SKIP flag. The homogeneous fragment vocabulary CLAUDE.md §2 fixes — SQL
+/// text + params + a SKIP flag — a skipped fragment is PRESENT with `skipped` true, never a null element.
+struct DynamicWhereFrag {
+    skipped: bool,
+    sql: String,
+    params: Vec<WireValue>,
+}
+
+/// Read the OPTIONAL `whereDynamic` plan port — a wire row `{frags: [...]}`. ABSENT (or an explicit
+/// null) ⇒ `None` ⇒ no dynamic WHERE (the statement passes through unchanged): a bounded read, a write,
+/// and an uncapped fetch OMIT it (CLAUDE.md §2). PRESENT but wrong-variant, or a malformed fragment, is
+/// a LOUD failure.
+fn port_dynamic_where(
+    payload: &mut WireRow,
+) -> Result<Option<Vec<DynamicWhereFrag>>, BehaviorError> {
+    let row = match payload
+        .entries
+        .iter()
+        .position(|(k, _)| k == "whereDynamic")
+    {
+        None => return Ok(None),
+        Some(i) => match payload.entries.swap_remove(i).1 {
+            WireValue::Null => return Ok(None),
+            WireValue::Row(r) => r,
+            other => return Err(port_mismatch("whereDynamic", "row", &other)),
+        },
+    };
+    let frags = match row.entries.into_iter().find(|(k, _)| k == "frags") {
+        Some((_, WireValue::List(l))) => l.items,
+        Some((_, other)) => return Err(port_mismatch("whereDynamic.frags", "list", &other)),
+        None => {
+            return Err(BehaviorError::new(
+                "LEAF_PORT",
+                "scp leaf: port `whereDynamic.frags` is absent from the plan",
+            ))
+        }
+    };
+    frags
+        .into_iter()
+        .map(parse_where_frag)
+        .collect::<Result<Vec<_>, _>>()
+        .map(Some)
+}
+
+/// Unbox ONE dynamic-WHERE fragment row `{skipped, sql, params}`. Fail-closed: a missing or mistyped
+/// field is a LOUD failure (the fragment vocabulary is fixed, never partial).
+fn parse_where_frag(frag: WireValue) -> Result<DynamicWhereFrag, BehaviorError> {
+    let row = match frag {
+        WireValue::Row(r) => r,
+        other => return Err(port_mismatch("whereDynamic.frags element", "row", &other)),
+    };
+    let (mut skipped, mut sql, mut params): (Option<bool>, Option<String>, Option<Vec<WireValue>>) =
+        (None, None, None);
+    for (k, v) in row.entries {
+        match (k.as_ref(), v) {
+            ("skipped", WireValue::Bool(b)) => skipped = Some(b),
+            ("sql", WireValue::Str(s)) => sql = Some(s.into_owned()),
+            ("params", WireValue::List(l)) => params = Some(l.items),
+            _ => {}
+        }
+    }
+    match (skipped, sql, params) {
+        (Some(skipped), Some(sql), Some(params)) => Ok(DynamicWhereFrag {
+            skipped,
+            sql,
+            params,
+        }),
+        _ => Err(BehaviorError::new(
+            "LEAF_PORT",
+            "scp leaf: a whereDynamic fragment must be {skipped: bool, sql: string, params: list}",
+        )),
+    }
+}
+
 /// A `{arr:'string'}` port — the ordered key-column TUPLE (`col` / `pk` / `fk`). Every element must be
 /// a wire string (a key column NAME); anything else is an ABI break, not a data case.
 fn port_strings(payload: &mut WireRow, name: &str) -> Result<Vec<String>, BehaviorError> {
@@ -336,6 +411,101 @@ fn port_strings(payload: &mut WireRow, name: &str) -> Result<Vec<String>, Behavi
         .collect()
 }
 
+// ── the DYNAMIC (SKIP) WHERE: assembled by the transport, at execution time (leaves.ts) ─────────────
+
+/// The SQL keywords that may follow a WHERE clause (leaves.ts `WHERE_TAIL_RE`
+/// `/\s+(GROUP BY|ORDER BY|LIMIT|OFFSET|FOR UPDATE|RETURNING)\b/i`). The dynamic WHERE splices in
+/// BEFORE the first of them, so it lands at exactly the position a bounded WHERE occupies.
+const WHERE_TAIL_KEYWORDS: [&str; 6] = [
+    "GROUP BY",
+    "ORDER BY",
+    "LIMIT",
+    "OFFSET",
+    "FOR UPDATE",
+    "RETURNING",
+];
+
+/// An ASCII whitespace byte (RE2 `\s`: space, tab, LF, FF, CR — the corpus SQL uses only these).
+fn is_ascii_ws(c: u8) -> bool {
+    matches!(c, b' ' | b'\t' | b'\n' | 0x0c | b'\r')
+}
+
+/// An ASCII word byte (RE2/JS `\w`: `[A-Za-z0-9_]`).
+fn is_ascii_word(c: u8) -> bool {
+    c.is_ascii_alphanumeric() || c == b'_'
+}
+
+/// The byte index of the leading-whitespace run of the FIRST tail keyword in `sql`, or `None`. Matches
+/// the TS `WHERE_TAIL_RE.exec(...).index` WITHOUT a regex dependency: the leftmost run of one or more
+/// whitespace bytes (`\s+`) immediately followed by a tail keyword (case-insensitive) that ends on a
+/// word boundary (`\b` — end of string or a non-word byte). Scanning `i` ascending returns the first
+/// whitespace of that run (a match starting mid-run would have matched one byte earlier).
+fn where_tail_index(sql: &str) -> Option<usize> {
+    let b = sql.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        if !is_ascii_ws(b[i]) {
+            i += 1;
+            continue;
+        }
+        let mut j = i;
+        while j < b.len() && is_ascii_ws(b[j]) {
+            j += 1;
+        }
+        for kw in WHERE_TAIL_KEYWORDS {
+            let k = kw.len();
+            if j + k <= b.len()
+                && b[j..j + k].eq_ignore_ascii_case(kw.as_bytes())
+                && (j + k == b.len() || !is_ascii_word(b[j + k]))
+            {
+                return Some(i);
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Splice a ` WHERE …` clause (leading space included, or "") into `base_sql` before its first tail
+/// keyword. Byte-for-byte port of leaves.ts `spliceWhere`.
+fn splice_where(base_sql: &str, where_sql: &str) -> String {
+    if where_sql.is_empty() {
+        return base_sql.to_string();
+    }
+    match where_tail_index(base_sql) {
+        Some(at) => format!("{}{}{}", &base_sql[..at], where_sql, &base_sql[at..]),
+        None => format!("{base_sql}{where_sql}"),
+    }
+}
+
+/// Assemble the effective (sql, params) from the dynamic-WHERE fragments (leaves.ts
+/// `assembleDynamicWhere`): DROP the skipped fragments, join the survivors with ` WHERE `(first)/
+/// ` AND `(rest) + the fragment SQL, splice the clause before the first tail keyword (`splice_where`),
+/// and bind the surviving fragments' params BEFORE the base params (the WHERE `?`s precede the tail's).
+/// A plan with no surviving fragment leaves the statement unchanged.
+fn assemble_dynamic_where(
+    base_sql: &str,
+    base_params: Vec<WireValue>,
+    frags: Vec<DynamicWhereFrag>,
+) -> (String, Vec<WireValue>) {
+    let mut where_sql = String::new();
+    let mut params: Vec<WireValue> = Vec::new();
+    for f in frags {
+        if f.skipped {
+            continue;
+        }
+        where_sql.push_str(if where_sql.is_empty() {
+            " WHERE "
+        } else {
+            " AND "
+        });
+        where_sql.push_str(&f.sql);
+        params.extend(f.params);
+    }
+    params.extend(base_params);
+    (splice_where(base_sql, &where_sql), params)
+}
+
 // ── execute_sql — the SOLE op-independent SQL transport ────────────────────────────────────────────
 
 /// The SOLE SQL transport leaf (leaves.ts `executeSQL`). Binds `params` and runs `sql` through the
@@ -344,18 +514,29 @@ fn port_strings(payload: &mut WireRow, name: &str) -> Result<Vec<String>, Behavi
 /// non-returning write returns a one-row `[{changes,lastInsertRowid}]` summary so the leaf output
 /// shape is uniform (a `List` of `Row`). `?`→`$N` is rendered here (the transport's placeholder SSoT,
 /// matching the TS `prepareSql`); an array param (a relation key set) rides as [`Value::Arr`], which
-/// the driver encodes per dialect (json_each / native array). The OPTIONAL `guard` port is the
-/// RELATION runaway cap of a guarded relation child fetch: the raw rows are asserted against it here
-/// ([`crate::errors::LimitExceededError::check`]) because past [`group_children`] the graph is already
-/// nested. Ports ride in the payload as `{bigint, guard?, params, returning, sql, write}`.
+/// the driver encodes per dialect (json_each / native array). The DYNAMIC (SKIP) WHERE
+/// ([`assemble_dynamic_where`]) is assembled FIRST — the final statement shape is only known here, so
+/// the `?`→`$N` render must follow it (CLAUDE.md §2). The OPTIONAL `guard` port is the RELATION runaway
+/// cap of a guarded relation child fetch (absent/null ⇒ uncapped): the raw rows are asserted
+/// against it here ([`crate::errors::LimitExceededError::check`]) because past [`group_children`] the
+/// graph is already nested. Both control ports are OPTIONAL, so ports ride in the payload as
+/// `{bigint, guard?, params, returning, sql, whereDynamic?, write}`.
 pub fn execute_sql(mut payload: WireRow) -> Result<WireValue, BehaviorError> {
     let bigint = port_bool(&mut payload, "bigint")?;
     let params_port = port_list(&mut payload, "params")?;
     let returning = port_bool(&mut payload, "returning")?;
     let sql_port = port_string(&mut payload, "sql")?;
     let write = port_bool(&mut payload, "write")?;
+    let where_plan = port_dynamic_where(&mut payload)?;
     let guard = port_relation_guard(&mut payload)?;
-    let (params, sql): (&[WireValue], &str) = (&params_port, &sql_port);
+    // Assemble the DYNAMIC (SKIP) WHERE FIRST when a plan is present: drop skipped fragments, splice the
+    // survivors before the first tail keyword, and bind their params before the base params — the
+    // effective statement the `?`→`$N` render (`finalize_sql`, below) then operates on. An ABSENT plan
+    // leaves the bounded sql/params untouched (pass-through).
+    let (sql, params) = match where_plan {
+        None => (sql_port, params_port),
+        Some(frags) => assemble_dynamic_where(&sql_port, params_port, frags),
+    };
     // `bigint` is the better-sqlite3 #59 safe-integers toggle; rust/PG/MySQL return BIGINT natively
     // (i64), so there is no exact-integer read mode to select (see exec_context docs) — the port is
     // accepted for signature parity with the TS leaf and does not branch the rust seam.
@@ -379,7 +560,7 @@ pub fn execute_sql(mut payload: WireRow) -> Result<WireValue, BehaviorError> {
             }
         })
         .collect();
-    let rendered = finalize_sql(sql, &value_params, driver.dialect());
+    let rendered = finalize_sql(&sql, &value_params, driver.dialect());
     let ctx = exec_context::for_driver(driver);
     if write && !returning {
         let info = exec_context::run(&ctx, &rendered, &value_params, &StatementIntent::write())
@@ -555,7 +736,6 @@ mod tests {
                 .collect(),
         )
     }
-
     // ── with_ambient_transaction atomicity (#142): Ok → COMMIT (all rows persist), Err → ROLLBACK
     //    (NO rows persist). Proves the tx boundary the covered runner relies on is genuinely atomic. ──
     #[test]
@@ -737,6 +917,7 @@ mod tests {
         ])
         .unwrap();
         let read = |guard: Option<WireValue>| -> Result<WireValue, BehaviorError> {
+            // The runaway cap rides as the OPTIONAL single `guard` port (absent ⇒ uncapped).
             let mut ports = vec![
                 ("bigint", WireValue::Bool(false)),
                 ("params", wlist(vec![])),
@@ -785,6 +966,50 @@ mod tests {
 
         // No guard port at all ⇒ never checked (the uncapped statement is byte-unchanged).
         assert!(read(None).is_ok(), "an uncapped read must not be guarded");
+    }
+
+    // The DYNAMIC (SKIP) WHERE assembled by execute_sql (leaves.ts assembleDynamicWhere / spliceWhere),
+    // proven end-to-end against a real in-memory sqlite: a surviving fragment splices ` WHERE …` before
+    // the first tail keyword (ORDER BY) — exactly a bounded WHERE's position — its params bind BEFORE
+    // the base params, and a `skipped` fragment is DROPPED (its param never binds). The rust leg of the
+    // five-language SKIP-WHERE parity.
+    #[test]
+    fn dynamic_where_assembles_and_drops_skipped() {
+        use crate::driver::SqliteDriver;
+        let d = SqliteDriver::in_memory(&[
+            "CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)".to_string(),
+            "INSERT INTO t (id, v) VALUES (1,'a'), (2,'b'), (3,'c')".to_string(),
+        ])
+        .unwrap();
+        let frag = |skipped: bool, sql: &str, p: WireValue| {
+            wrow(&[
+                ("skipped", WireValue::Bool(skipped)),
+                ("sql", WireValue::Str(sql.to_string().into())),
+                ("params", wlist(vec![p])),
+            ])
+        };
+        // frag 0 survives (`id > 1`); frag 1 is skipped (`v = 'zzz'`) — its param must NEVER bind.
+        let plan = wrow(&[(
+            "frags",
+            wlist(vec![
+                frag(false, "id > ?", WireValue::int(1)),
+                frag(true, "v = ?", WireValue::Str("zzz".into())),
+            ]),
+        )]);
+        let out = with_ambient_driver(&d, || {
+            execute_sql(payload(vec![
+                ("bigint", WireValue::Bool(false)),
+                ("params", wlist(vec![])),
+                ("returning", WireValue::Bool(false)),
+                ("sql", WireValue::Str("SELECT id FROM t ORDER BY id".into())),
+                ("whereDynamic", plan),
+                ("write", WireValue::Bool(false)),
+            ]))
+        })
+        .unwrap();
+        // WHERE id > 1 → ids {2,3}; the skipped `v = ?` fragment was dropped (else a bind-count error
+        // or 0 rows). Proves splice position, skip-drop, and the single surviving param binding.
+        assert_eq!(items(&out).len(), 2);
     }
 
     // Port unbox is FAIL-CLOSED: an ABSENT port and a WRONG-VARIANT port both surface a loud

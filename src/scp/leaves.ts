@@ -40,6 +40,7 @@ import {
   type RunInfo,
 } from './exec-context';
 import { assertRelationHardLimit, type RelationGuard } from './limit-config';
+import type { DynamicWherePlan } from './leaf-transport';
 import { renderPlaceholders, type Dialect } from './makesql/handler';
 import { encodeJsonArrayParam } from './makesql/json-array';
 import { resolvePgArrayCast } from './makesql/compile-relation';
@@ -75,7 +76,7 @@ interface ExecuteSqlPorts {
   readonly write: boolean;
   readonly returning: boolean;
   readonly bigint: boolean;
-  /** The DYNAMIC WHERE plan (absent on a fully-bounded statement). See {@link assembleDynamicWhere}. */
+  /** The DYNAMIC WHERE plan (absent on a fully-bounded statement — CLAUDE.md §2). See {@link assembleDynamicWhere}. */
   readonly whereDynamic?: DynamicWherePlan | null;
   /**
    * The RELATION runaway cap this statement's rows are asserted against (absent ⇒ uncapped). Carried
@@ -100,25 +101,11 @@ export function spliceWhere(baseSql: string, whereSql: string): string {
 }
 
 /**
- * ONE evaluated WHERE fragment of a dynamic plan. bc has ALREADY evaluated the fragment's params and
- * its SKIP guard against the input: a fragment whose guard was false evaluated LAZILY to `null` (bc's
- * `cond` only evaluates the taken branch, so a dropped fragment's params are never evaluated).
- */
-export interface DynamicWhereFrag {
-  readonly sql: string;
-  readonly params: readonly unknown[];
-}
-
-/** The evaluated dynamic-WHERE plan: the fragment list, holes (skipped fragments) included. */
-export interface DynamicWherePlan {
-  readonly frags?: readonly (DynamicWhereFrag | null)[];
-}
-
-/**
- * Assemble the effective statement from a DYNAMIC WHERE plan: drop the absent (`null`) fragments,
- * join the survivors with ` WHERE ` / ` AND `, splice the clause into the base `sql` before its first
- * tail keyword ({@link spliceWhere}) — the exact position a bounded WHERE occupies — and bind the
- * surviving fragments' params BEFORE the base params (the WHERE `?`s precede the tail's).
+ * Assemble the effective statement from a DYNAMIC WHERE plan: drop the SKIPPED fragments (`skipped`
+ * true — the per-call SKIP decision the emitter carried as DATA), join the survivors with ` WHERE ` /
+ * ` AND `, splice the clause into the base `sql` before its first tail keyword ({@link spliceWhere}) —
+ * the exact position a bounded WHERE occupies — and bind the surviving fragments' params BEFORE the
+ * base params (the WHERE `?`s precede the tail's).
  *
  * A SKIP predicate's presence is per-CALL, so the FINAL statement can only be determined here, at
  * execution time — which is also why `?`→`$N` is rendered after this ({@link prepareSql}), never at
@@ -126,7 +113,7 @@ export interface DynamicWherePlan {
  * the static `sql` at emit time and it never reaches this function.
  */
 export function assembleDynamicWhere(p: { sql: string; params: unknown[]; whereDynamic: DynamicWherePlan }): { sql: string; params: unknown[] } {
-  const frags = (p.whereDynamic.frags ?? []).filter((f): f is DynamicWhereFrag => f != null);
+  const frags = p.whereDynamic.frags.filter((f) => !f.skipped);
   let whereSql = '';
   const whereParams: unknown[] = [];
   frags.forEach((f, i) => {
