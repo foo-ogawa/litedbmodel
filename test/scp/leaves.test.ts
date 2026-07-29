@@ -198,19 +198,20 @@ test('the leaf handler unboxes the guard port fail-closed (bc int is a BigInt; a
   // …and so is a control RECORD that cannot be unboxed: every fact the transport branches on lives in
   // it, so a record read as "absent" would silently downgrade a write to a read and drop the cap.
   const badOpts = { sql: 'SELECT id FROM posts', params: [], opts: 'nope' } as unknown as Record<string, Value>;
-  expect(() => handler(badOpts, { nodeId: 'n0', component: 'executeSQL' })).toThrow(/'opts' port must be/);
+  expect(() => handler(badOpts, { nodeId: 'n0', component: 'executeSQL' })).toThrow(/'opts' must be record\|null/);
 
   // An ABSENT record is the plain READ a bounded statement declares by omission — not an error.
   const plain = { sql: 'SELECT id, author_id FROM posts', params: [] } as unknown as Record<string, Value>;
   expect(handler(plain, { nodeId: 'n0', component: 'executeSQL' })).toEqual({ ok: expect.any(Array) });
 });
 
-// #205 — a field that is ABSENT from a PRESENT struct is an ABI BREAK, never an absent VALUE. bc types
-// a port by the literal wired into it and REJECTS a partial struct, so a generated module always spells
-// every field of every struct it wires (`null` is how absence is spelled). A missing key therefore did
-// not come from one, and defaulting it silently downgrades a write to a read, drops a relation cap, or
-// erases a SKIP predicate. The five languages must agree; this is the TS leg.
-test('a MISSING field of a present struct is loud in every position (#205, #209)', () => {
+// #205 — a field that is ABSENT from a PRESENT struct, or present with the WRONG TYPE, is an ABI BREAK,
+// never an absent VALUE. bc types a port by the literal wired into it and REJECTS a partial struct, so a
+// generated module always spells every field of every struct it wires, with the type the port declares
+// (`null` is how absence is spelled). Neither shape therefore came from one, and defaulting or coercing
+// it silently downgrades a write to a read, drops a relation cap, or erases a SKIP predicate. The five
+// languages must agree; this is the TS leg.
+test('a MISSING or MISTYPED field of a present struct is loud in every position (#205, #209)', () => {
   const calls: Call[] = [];
   const handler = leafHandlers({ exec: contextForConnection(recordingConn(calls)), dialect: 'sqlite' }).executeSQL;
   const ctx = { nodeId: 'n0', component: 'executeSQL' };
@@ -255,6 +256,29 @@ test('a MISSING field of a present struct is loud in every position (#205, #209)
   // A SKIPPED fragment is unboxed too — it is spelled in full like any other, so a hole in one is the
   // same ABI break (and `skipped` alone would otherwise let the other two fields go unread).
   expect(() => run(plan({ skipped: true, params: ['zzz'] }))).toThrow(/fragment is missing its 'sql' field/);
+
+  // A field of the WRONG TYPE is the same ABI break, in every one of those positions: bc emits the
+  // literal the port's type says, so nothing else can arrive from a generated module, and coercing it
+  // is how a `returning` that is not a bool ran an INSERT on the READ seam and a `skipped` that is not
+  // a bool applied a predicate the call SKIPPED — the #209 failure modes, reached by another route.
+  expect(() => run({ sql: 42, params: [] })).toThrow(/payload's 'sql' must be string/);
+  expect(() => run({ sql: SQL, params: 'x' })).toThrow(/payload's 'params' must be list/);
+  expect(() => run({ sql: SQL, params: [], opts: 'nope' })).toThrow(/payload's 'opts' must be record\|null/);
+  const badOpt = (kw: Record<string, unknown>): unknown => ({ sql: SQL, params: [], opts: { write: null, whereDynamic: null, guard: null, ...kw } });
+  expect(() => run(badOpt({ write: 'nope' }))).toThrow(/control record's 'write' must be record\|null/);
+  expect(() => run(badOpt({ write: { returning: 'nope' } }))).toThrow(/'write' mode's 'returning' must be bool/);
+  expect(() => run(badOpt({ write: { returning: 0 } }))).toThrow(/'write' mode's 'returning' must be bool/);
+  expect(() => run(badOpt({ whereDynamic: 'nope' }))).toThrow(/control record's 'whereDynamic' must be record\|null/);
+  expect(() => run(badOpt({ whereDynamic: { frags: 'nope' } }))).toThrow(/'whereDynamic' plan's 'frags' must be list/);
+  expect(() => run(badOpt({ guard: 'nope' }))).toThrow(/control record's 'guard' must be record\|null/);
+  expect(() => run(badOpt({ guard: { limit: 'nope', model: 'posts', relation: 'posts' } }))).toThrow(/'guard' cap's 'limit' must be int/);
+  expect(() => run(badOpt({ guard: { limit: 2.5, model: 'posts', relation: 'posts' } }))).toThrow(/'guard' cap's 'limit' must be int/);
+  expect(() => run(badOpt({ guard: { limit: 2n, model: 42, relation: 'posts' } }))).toThrow(/'guard' cap's 'model' must be string\|null/);
+  expect(() => run(badOpt({ guard: { limit: 2n, model: 'posts', relation: 42 } }))).toThrow(/'guard' cap's 'relation' must be string/);
+  expect(() => run(plan('nope'))).toThrow(/fragment must be record/);
+  expect(() => run(plan({ skipped: 'no', sql: 'v = ?', params: ['zzz'] }))).toThrow(/fragment's 'skipped' must be bool/);
+  expect(() => run(plan({ skipped: false, sql: 42, params: [] }))).toThrow(/fragment's 'sql' must be string/);
+  expect(() => run(plan({ skipped: false, sql: 'v = ?', params: 'z' }))).toThrow(/fragment's 'params' must be list/);
 
   // The LEGAL absences stay silent: the omitted record is a plain read, and a null FIELD is how an
   // absent write mode / plan / cap is spelled. Neither may be turned into a failure by the above.

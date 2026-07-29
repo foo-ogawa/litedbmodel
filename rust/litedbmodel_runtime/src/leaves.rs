@@ -303,15 +303,18 @@ fn take_opt_row(row: &mut WireRow, name: &str) -> Result<Option<WireRow>, Behavi
 
 /// The unboxed `guard` port: the relation runaway cap the emitter baked onto a guarded relation child
 /// fetch, plus the identity the raised error reports (the Rust twin of the litedbmodel `RelationGuard`
-/// record). `model` is optional exactly as [`crate::errors::LimitExceededError::model`] is.
+/// record). On the WIRE `model`'s key is always spelled — bc types a port by the literal wired into it
+/// and rejects a partial struct — so "no model" rides as a wire null (`None` ⇒ "unknown" in the error),
+/// and the key itself is read fail-closed rather than defaulted when absent.
 struct RelationGuard {
     limit: i64,
     model: Option<String>,
     relation: String,
 }
 
-/// Read the `guard` field of the control record. ABSENT (or null) ⇒ `None` ⇒ the statement is uncapped
-/// and NO check runs. PRESENT but malformed is a LOUD port failure, never a silently dropped guard — a
+/// Read the `guard` field of the control record. A wire NULL ⇒ `None` ⇒ the statement is uncapped and NO
+/// check runs; an ABSENT KEY is LOUD ([`take_opt_row`]), because a guard read as "no cap" is the runaway
+/// the cap exists to stop. PRESENT but malformed is equally loud, never a silently dropped guard — a
 /// guard that fails to unbox is a runaway that would otherwise sail through.
 fn port_relation_guard(opts: &mut WireRow) -> Result<Option<RelationGuard>, BehaviorError> {
     let row = match take_opt_row(opts, "guard")? {
@@ -322,12 +325,12 @@ fn port_relation_guard(opts: &mut WireRow) -> Result<Option<RelationGuard>, Beha
     let limit = match field("limit") {
         Some(WireValue::Int(n)) => *n,
         Some(other) => return Err(port_mismatch("guard.limit", "int", other)),
-        None => return Err(port_mismatch("guard.limit", "int", &WireValue::Null)),
+        None => return Err(port_absent("guard.limit")),
     };
     let relation = match field("relation") {
         Some(WireValue::Str(s)) => s.to_string(),
         Some(other) => return Err(port_mismatch("guard.relation", "string", other)),
-        None => return Err(port_mismatch("guard.relation", "string", &WireValue::Null)),
+        None => return Err(port_absent("guard.relation")),
     };
     let model = match field("model") {
         Some(WireValue::Str(s)) => Some(s.to_string()),
@@ -351,10 +354,11 @@ struct DynamicWhereFrag {
     params: Vec<WireValue>,
 }
 
-/// Read the `whereDynamic` field of the control record — a wire row `{frags: [...]}`. ABSENT (or null)
-/// ⇒ `None` ⇒ no dynamic WHERE (the statement passes through unchanged): only a read that declares an
-/// OPTIONAL predicate carries a plan (CLAUDE.md §2). PRESENT but wrong-variant, or a malformed
-/// fragment, is a LOUD failure.
+/// Read the `whereDynamic` field of the control record — a wire row `{frags: [...]}`. A wire NULL ⇒
+/// `None` ⇒ no dynamic WHERE (the statement passes through unchanged): only a read that declares an
+/// OPTIONAL predicate carries a plan (CLAUDE.md §2). An ABSENT KEY is LOUD ([`take_opt_row`]), because a
+/// plan read as "no plan" erases the call's SKIP predicates. PRESENT but wrong-variant, or a malformed
+/// fragment, is equally loud.
 fn port_dynamic_where(opts: &mut WireRow) -> Result<Option<Vec<DynamicWhereFrag>>, BehaviorError> {
     let row = match take_opt_row(opts, "whereDynamic")? {
         None => return Ok(None),
@@ -420,8 +424,9 @@ struct WriteMode {
     returning: bool,
 }
 
-/// Read the `write` field of the control record. ABSENT (or null) ⇒ `None` ⇒ a READ. PRESENT but
-/// malformed is a LOUD port failure — a write read as a read runs an INSERT on the read seam.
+/// Read the `write` field of the control record. A wire NULL ⇒ `None` ⇒ a READ; an ABSENT KEY is LOUD
+/// ([`take_opt_row`]), and PRESENT but malformed is equally loud — a write read as a read runs an INSERT
+/// on the read seam.
 fn port_write_mode(opts: &mut WireRow) -> Result<Option<WriteMode>, BehaviorError> {
     let mut row = match take_opt_row(opts, "write")? {
         None => return Ok(None),
@@ -1093,13 +1098,14 @@ mod tests {
         assert_eq!(items(&out).len(), 2);
     }
 
-    // #205 — a field ABSENT from a PRESENT struct is an ABI BREAK, never an absent VALUE. bc types a
-    // port by the literal wired into it and REJECTS a partial struct, so a generated module always
-    // spells every field of every struct it wires (`null` is how absence is spelled). A key that is not
-    // there did not come from one, and reading it as null would silently drop a relation cap, erase a
-    // SKIP predicate, or run a write as a read. The five languages must agree; this is the rust leg.
+    // #205 — a field ABSENT from a PRESENT struct, or present as the WRONG VARIANT, is an ABI BREAK,
+    // never an absent VALUE. bc types a port by the literal wired into it and REJECTS a partial struct,
+    // so a generated module always spells every field of every struct it wires, with the type the port
+    // declares (`null` is how absence is spelled). Neither shape came from one, and reading it anyway
+    // would silently drop a relation cap, erase a SKIP predicate, or run a write as a read. The five
+    // languages must agree; this is the rust leg.
     #[test]
-    fn a_missing_field_of_a_present_struct_is_loud() {
+    fn a_missing_or_mistyped_field_of_a_present_struct_is_loud() {
         use crate::driver::SqliteDriver;
         let d = SqliteDriver::in_memory(&[
             "CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)".to_string(),
@@ -1134,7 +1140,8 @@ mod tests {
             ("relation", WireValue::Str("things".into())),
         ]);
 
-        // Each case drops exactly ONE declared field of a struct that is present.
+        // Each case breaks exactly ONE declared field of a struct that is present — by DROPPING it
+        // first…
         let cases: Vec<(&str, Vec<(&str, WireValue)>, &str)> = vec![
             (
                 "payload without sql",
@@ -1225,6 +1232,42 @@ mod tests {
                 },
                 "`guard.model` is absent",
             ),
+            // An absent `guard.limit` / `guard.relation` reports ABSENT, not "expected an int, got NULL":
+            // #205/#210's whole point is that a wire null and a missing key are different failures, and
+            // a reader that names the wrong one sends the next reader looking for a null that was never
+            // there.
+            (
+                "guard without limit",
+                {
+                    let mut p = base();
+                    p.push(opts(
+                        WireValue::Null,
+                        WireValue::Null,
+                        wrow(&[
+                            ("model", WireValue::Str("t".into())),
+                            ("relation", WireValue::Str("things".into())),
+                        ]),
+                    ));
+                    p
+                },
+                "`guard.limit` is absent",
+            ),
+            (
+                "guard without relation",
+                {
+                    let mut p = base();
+                    p.push(opts(
+                        WireValue::Null,
+                        WireValue::Null,
+                        wrow(&[
+                            ("limit", WireValue::int(2)),
+                            ("model", WireValue::Str("t".into())),
+                        ]),
+                    ));
+                    p
+                },
+                "`guard.relation` is absent",
+            ),
             // …and the PLAN and its FRAGMENTS, one level further down (#209).
             (
                 "plan without frags",
@@ -1268,13 +1311,191 @@ mod tests {
                 ])),
                 "must be {skipped: bool, sql: string, params: list}",
             ),
+            // …and then by giving it the WRONG VARIANT, which is the same ABI break in every one of
+            // those positions: bc emits the literal the port's type says, so nothing else can arrive
+            // from a generated module, and reading it anyway is how a `returning` that is not a bool
+            // would run an INSERT on the READ seam and a `skipped` that is not a bool would apply a
+            // predicate the call SKIPPED — the #209 failure modes, reached by another route.
+            (
+                "payload sql not a string",
+                vec![("params", wlist(vec![])), ("sql", WireValue::int(42))],
+                "`sql` expected a wire string",
+            ),
+            (
+                "payload params not a list",
+                vec![
+                    ("params", WireValue::Str("x".into())),
+                    (
+                        "sql",
+                        WireValue::Str("SELECT id, v FROM t ORDER BY id".into()),
+                    ),
+                ],
+                "`params` expected a wire list",
+            ),
+            (
+                "opts not a row",
+                {
+                    let mut p = base();
+                    p.push(("opts", WireValue::Str("nope".into())));
+                    p
+                },
+                "`opts` expected a wire row",
+            ),
+            (
+                "write not a row",
+                {
+                    let mut p = base();
+                    p.push(opts(
+                        WireValue::Str("nope".into()),
+                        WireValue::Null,
+                        WireValue::Null,
+                    ));
+                    p
+                },
+                "`write` expected a wire row",
+            ),
+            (
+                "returning not a bool",
+                {
+                    let mut p = base();
+                    p.push(opts(
+                        wrow(&[("returning", WireValue::Str("nope".into()))]),
+                        WireValue::Null,
+                        WireValue::Null,
+                    ));
+                    p
+                },
+                "`returning` expected a wire bool",
+            ),
+            (
+                "whereDynamic not a row",
+                {
+                    let mut p = base();
+                    p.push(opts(
+                        WireValue::Null,
+                        WireValue::Str("nope".into()),
+                        WireValue::Null,
+                    ));
+                    p
+                },
+                "`whereDynamic` expected a wire row",
+            ),
+            (
+                "frags not a list",
+                {
+                    let mut p = base();
+                    p.push(opts(
+                        WireValue::Null,
+                        wrow(&[("frags", WireValue::Str("nope".into()))]),
+                        WireValue::Null,
+                    ));
+                    p
+                },
+                "`whereDynamic.frags` expected a wire list",
+            ),
+            (
+                "fragment not a row",
+                plan_of(WireValue::Str("nope".into())),
+                "`whereDynamic.frags element` expected a wire row",
+            ),
+            (
+                "fragment skipped not a bool",
+                plan_of(wrow(&[
+                    ("params", wlist(vec![])),
+                    ("skipped", WireValue::Str("no".into())),
+                    ("sql", WireValue::Str("v = ?".into())),
+                ])),
+                "must be {skipped: bool, sql: string, params: list}",
+            ),
+            (
+                "fragment sql not a string",
+                plan_of(wrow(&[
+                    ("params", wlist(vec![])),
+                    ("skipped", WireValue::Bool(false)),
+                    ("sql", WireValue::int(42)),
+                ])),
+                "must be {skipped: bool, sql: string, params: list}",
+            ),
+            (
+                "fragment params not a list",
+                plan_of(wrow(&[
+                    ("params", WireValue::Str("z".into())),
+                    ("skipped", WireValue::Bool(false)),
+                    ("sql", WireValue::Str("v = ?".into())),
+                ])),
+                "must be {skipped: bool, sql: string, params: list}",
+            ),
+            (
+                "guard not a row",
+                {
+                    let mut p = base();
+                    p.push(opts(
+                        WireValue::Null,
+                        WireValue::Null,
+                        WireValue::Str("nope".into()),
+                    ));
+                    p
+                },
+                "`guard` expected a wire row",
+            ),
+            (
+                "guard limit not an int",
+                {
+                    let mut p = base();
+                    p.push(opts(
+                        WireValue::Null,
+                        WireValue::Null,
+                        wrow(&[
+                            ("limit", WireValue::Str("nope".into())),
+                            ("model", WireValue::Str("t".into())),
+                            ("relation", WireValue::Str("things".into())),
+                        ]),
+                    ));
+                    p
+                },
+                "`guard.limit` expected a wire int",
+            ),
+            (
+                "guard model not a string",
+                {
+                    let mut p = base();
+                    p.push(opts(
+                        WireValue::Null,
+                        WireValue::Null,
+                        wrow(&[
+                            ("limit", WireValue::int(2)),
+                            ("model", WireValue::int(42)),
+                            ("relation", WireValue::Str("things".into())),
+                        ]),
+                    ));
+                    p
+                },
+                "`guard.model` expected a wire string",
+            ),
+            (
+                "guard relation not a string",
+                {
+                    let mut p = base();
+                    p.push(opts(
+                        WireValue::Null,
+                        WireValue::Null,
+                        wrow(&[
+                            ("limit", WireValue::int(2)),
+                            ("model", WireValue::Str("t".into())),
+                            ("relation", WireValue::int(42)),
+                        ]),
+                    ));
+                    p
+                },
+                "`guard.relation` expected a wire string",
+            ),
         ];
         for (name, ports, want) in cases {
             match run(ports) {
                 Ok(_) => panic!("{name}: must be loud, got Ok"),
                 Err(e) => assert!(
                     e.message.contains(want),
-                    "{name}: message {:?} does not name the missing field ({want})",
+                    "{name}: message {:?} does not name the broken field ({want})",
                     e.message
                 ),
             }

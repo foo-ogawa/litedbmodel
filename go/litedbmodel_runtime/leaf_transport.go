@@ -146,16 +146,19 @@ func optRowField(row wire.WireRow, name string) (wire.WireRow, bool, error) {
 
 // relationGuard is the unboxed `guard` port: the relation runaway cap the emitter baked onto a guarded
 // relation child fetch, together with the identity the raised error reports (Go twin of the litedbmodel
-// `RelationGuard` record). Model is optional exactly as LimitExceededError.Model is ("" ⇒ "unknown").
+// `RelationGuard` record). On the WIRE `model`'s key is always spelled — bc types a port by the literal
+// wired into it and rejects a partial struct — so "no model" rides as a wire null ("" ⇒ "unknown" in the
+// error), and the key itself is read fail-closed rather than defaulted when absent.
 type relationGuard struct {
 	limit    int
 	model    string
 	relation string
 }
 
-// portRelationGuard reads the `guard` field of the control record. ABSENT (or null) ⇒ nil ⇒ the
-// statement is uncapped and NO check runs. PRESENT but malformed is a LOUD port error, never a silently
-// dropped guard — a guard that fails to unbox is a runaway that would otherwise sail through.
+// portRelationGuard reads the `guard` field of the control record. A wire NULL ⇒ nil ⇒ the statement is
+// uncapped and NO check runs; an ABSENT KEY is LOUD ([optRowField]), because a guard read as "no cap" is
+// the runaway the cap exists to stop. PRESENT but malformed is equally loud, never a silently dropped
+// guard — a guard that fails to unbox is a runaway that would otherwise sail through.
 func portRelationGuard(opts wire.WireRow) (*relationGuard, error) {
 	row, present, err := optRowField(opts, "guard")
 	if err != nil {
@@ -197,9 +200,10 @@ type dynamicWhereFrag struct {
 }
 
 // portDynamicWhere reads the `whereDynamic` field of the control record — a wire row `{frags: [...]}`.
-// ABSENT (or null) ⇒ nil ⇒ no dynamic WHERE (the statement passes through unchanged): only a read that
-// declares an OPTIONAL predicate carries a plan (CLAUDE.md §2). PRESENT but wrong-variant, or a
-// malformed fragment, is a LOUD error.
+// A wire NULL ⇒ nil ⇒ no dynamic WHERE (the statement passes through unchanged): only a read that
+// declares an OPTIONAL predicate carries a plan (CLAUDE.md §2). An ABSENT KEY is LOUD ([optRowField]),
+// because a plan read as "no plan" erases the call's SKIP predicates. PRESENT but wrong-variant, or a
+// malformed fragment, is equally loud.
 func portDynamicWhere(opts wire.WireRow) ([]dynamicWhereFrag, error) {
 	row, present, err := optRowField(opts, "whereDynamic")
 	if err != nil {
@@ -255,8 +259,9 @@ type writeMode struct {
 	returning bool
 }
 
-// portWriteMode reads the `write` field of the control record. ABSENT (or null) ⇒ nil ⇒ a READ. PRESENT
-// but malformed is a LOUD port error — a write read as a read runs an INSERT on the read seam.
+// portWriteMode reads the `write` field of the control record. A wire NULL ⇒ nil ⇒ a READ; an ABSENT KEY
+// is LOUD ([optRowField]), and PRESENT but malformed is equally loud — a write read as a read runs an
+// INSERT on the read seam.
 func portWriteMode(opts wire.WireRow) (*writeMode, error) {
 	row, present, err := optRowField(opts, "write")
 	if err != nil {

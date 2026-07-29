@@ -280,12 +280,13 @@ func TestExecuteSQL_DynamicWhereContinuesBoundedWhere(t *testing.T) {
 	}
 }
 
-// #205 — a field ABSENT from a PRESENT struct is an ABI BREAK, never an absent VALUE. bc types a port
-// by the literal wired into it and REJECTS a partial struct, so a generated module always spells every
-// field of every struct it wires (`null` is how absence is spelled). A key that is not there did not
-// come from one, and reading it as null would silently drop a relation cap, erase a SKIP predicate, or
-// run a write as a read. The five languages must agree; this is the go leg.
-func TestExecuteSQL_MissingFieldOfAPresentStructIsLoud(t *testing.T) {
+// #205 — a field ABSENT from a PRESENT struct, or present as the WRONG VARIANT, is an ABI BREAK, never
+// an absent VALUE. bc types a port by the literal wired into it and REJECTS a partial struct, so a
+// generated module always spells every field of every struct it wires, with the type the port declares
+// (`null` is how absence is spelled). Neither shape came from one, and reading it anyway would silently
+// drop a relation cap, erase a SKIP predicate, or run a write as a read. The five languages must agree;
+// this is the go leg.
+func TestExecuteSQL_MissingOrMistypedFieldOfAPresentStructIsLoud(t *testing.T) {
 	db := openBoundT(t)
 	defer db.Close()
 	defer UnbindLeafTransport()
@@ -303,7 +304,7 @@ func TestExecuteSQL_MissingFieldOfAPresentStructIsLoud(t *testing.T) {
 		{Key: "relation", Val: wire.WireStr("things")},
 	})
 
-	// Each case drops exactly ONE declared field of a struct that is present.
+	// Each case breaks exactly ONE declared field of a struct that is present — by DROPPING it first…
 	for _, tc := range []struct {
 		name    string
 		payload wire.WireRow
@@ -325,6 +326,15 @@ func TestExecuteSQL_MissingFieldOfAPresentStructIsLoud(t *testing.T) {
 		{"guard without model", leafPayload(sqlPort, paramsPort, optsPort(wire.WireNull(), wire.WireNull(),
 			wire.WireRowOf([]wire.WireField{{Key: "limit", Val: wire.WireInt(2)}, {Key: "relation", Val: wire.WireStr("things")}}))),
 			`port "guard.model" is absent`},
+		// An absent `guard.limit` / `guard.relation` reports ABSENT, not "expected an int, got NULL":
+		// #205/#210's whole point is that a wire null and a missing key are different failures, and a
+		// reader that names the wrong one sends the next reader looking for a null that was never there.
+		{"guard without limit", leafPayload(sqlPort, paramsPort, optsPort(wire.WireNull(), wire.WireNull(),
+			wire.WireRowOf([]wire.WireField{{Key: "model", Val: wire.WireStr("t")}, {Key: "relation", Val: wire.WireStr("things")}}))),
+			`port "guard.limit" is absent`},
+		{"guard without relation", leafPayload(sqlPort, paramsPort, optsPort(wire.WireNull(), wire.WireNull(),
+			wire.WireRowOf([]wire.WireField{{Key: "limit", Val: wire.WireInt(2)}, {Key: "model", Val: wire.WireStr("t")}}))),
+			`port "guard.relation" is absent`},
 		// …and the PLAN and its FRAGMENTS, one level further down (#209).
 		{"plan without frags", leafPayload(sqlPort, paramsPort,
 			optsPort(wire.WireNull(), wire.WireRowOf(nil), wire.WireNull())), `port "whereDynamic.frags" is absent`},
@@ -341,13 +351,65 @@ func TestExecuteSQL_MissingFieldOfAPresentStructIsLoud(t *testing.T) {
 		{"skipped fragment without sql", leafPayload(sqlPort, paramsPort, planPort(wire.WireRowOf([]wire.WireField{
 			{Key: "skipped", Val: wire.WireBool(true)}, {Key: "params", Val: wire.WireListOf(nil)},
 		}))), `whereDynamic.frags.sql`},
+		// …and then by giving it the WRONG VARIANT, which is the same ABI break in every one of those
+		// positions: bc emits the literal the port's type says, so nothing else can arrive from a
+		// generated module, and reading it anyway is how a `returning` that is not a bool would run an
+		// INSERT on the READ seam and a `skipped` that is not a bool would apply a predicate the call
+		// SKIPPED — the #209 failure modes, reached by another route.
+		{"payload sql not a string", leafPayload(paramsPort, port("sql", wire.WireInt(42))),
+			`port "sql" expected a wire string`},
+		{"payload params not a list", leafPayload(sqlPort, port("params", wire.WireStr("x"))),
+			`port "params" expected a wire list`},
+		{"opts not a row", leafPayload(sqlPort, paramsPort, port("opts", wire.WireStr("nope"))),
+			`port "opts" expected a wire row`},
+		{"write not a row", leafPayload(sqlPort, paramsPort, optsPort(wire.WireStr("nope"), wire.WireNull(), wire.WireNull())),
+			`port "write" expected a wire row`},
+		{"returning not a bool", leafPayload(sqlPort, paramsPort, optsPort(
+			wire.WireRowOf([]wire.WireField{{Key: "returning", Val: wire.WireStr("nope")}}), wire.WireNull(), wire.WireNull())),
+			`port "returning" expected a wire bool`},
+		{"whereDynamic not a row", leafPayload(sqlPort, paramsPort, optsPort(wire.WireNull(), wire.WireStr("nope"), wire.WireNull())),
+			`port "whereDynamic" expected a wire row`},
+		{"frags not a list", leafPayload(sqlPort, paramsPort, optsPort(wire.WireNull(),
+			wire.WireRowOf([]wire.WireField{{Key: "frags", Val: wire.WireStr("nope")}}), wire.WireNull())),
+			`port "whereDynamic.frags" expected a wire list`},
+		{"fragment not a row", leafPayload(sqlPort, paramsPort, planPort(wire.WireStr("nope"))),
+			`port "whereDynamic.frags element" expected a wire row`},
+		{"fragment skipped not a bool", leafPayload(sqlPort, paramsPort, planPort(wire.WireRowOf([]wire.WireField{
+			{Key: "skipped", Val: wire.WireStr("no")}, {Key: "sql", Val: wire.WireStr("v = ?")},
+			{Key: "params", Val: wire.WireListOf(nil)},
+		}))), `port "whereDynamic.frags.skipped" expected a wire bool`},
+		{"fragment sql not a string", leafPayload(sqlPort, paramsPort, planPort(wire.WireRowOf([]wire.WireField{
+			{Key: "skipped", Val: wire.WireBool(false)}, {Key: "sql", Val: wire.WireInt(42)},
+			{Key: "params", Val: wire.WireListOf(nil)},
+		}))), `port "whereDynamic.frags.sql" expected a wire string`},
+		{"fragment params not a list", leafPayload(sqlPort, paramsPort, planPort(wire.WireRowOf([]wire.WireField{
+			{Key: "skipped", Val: wire.WireBool(false)}, {Key: "sql", Val: wire.WireStr("v = ?")},
+			{Key: "params", Val: wire.WireStr("z")},
+		}))), `port "whereDynamic.frags.params" expected a wire list`},
+		{"guard not a row", leafPayload(sqlPort, paramsPort, optsPort(wire.WireNull(), wire.WireNull(), wire.WireStr("nope"))),
+			`port "guard" expected a wire row`},
+		{"guard limit not an int", leafPayload(sqlPort, paramsPort, optsPort(wire.WireNull(), wire.WireNull(),
+			wire.WireRowOf([]wire.WireField{
+				{Key: "limit", Val: wire.WireStr("nope")}, {Key: "model", Val: wire.WireStr("t")},
+				{Key: "relation", Val: wire.WireStr("things")},
+			}))), `port "guard.limit" expected a wire int`},
+		{"guard model not a string", leafPayload(sqlPort, paramsPort, optsPort(wire.WireNull(), wire.WireNull(),
+			wire.WireRowOf([]wire.WireField{
+				{Key: "limit", Val: wire.WireInt(2)}, {Key: "model", Val: wire.WireInt(42)},
+				{Key: "relation", Val: wire.WireStr("things")},
+			}))), `port "guard.model" expected a wire string`},
+		{"guard relation not a string", leafPayload(sqlPort, paramsPort, optsPort(wire.WireNull(), wire.WireNull(),
+			wire.WireRowOf([]wire.WireField{
+				{Key: "limit", Val: wire.WireInt(2)}, {Key: "model", Val: wire.WireStr("t")},
+				{Key: "relation", Val: wire.WireInt(42)},
+			}))), `port "guard.relation" expected a wire string`},
 	} {
 		_, err := ExecuteSQL(tc.payload)
 		if err == nil {
 			t.Fatalf("%s: must be loud, got no error", tc.name)
 		}
 		if !strings.Contains(err.Error(), tc.want) {
-			t.Fatalf("%s: error %q does not name the missing field (want %q)", tc.name, err.Error(), tc.want)
+			t.Fatalf("%s: error %q does not name the broken field (want %q)", tc.name, err.Error(), tc.want)
 		}
 	}
 

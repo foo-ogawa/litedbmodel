@@ -82,15 +82,54 @@ final class Leaves
         return [$at, $keyword, substr_count(substr($baseSql, $at), '?')];
     }
 
-    /** The two `at` labels the fail-closed field read names — the payload itself and the control record. */
+    /**
+     * The four `at` labels the fail-closed field read names — the payload itself, the control record,
+     * the dynamic-WHERE plan and one of its fragments.
+     */
     private const PAYLOAD = 'the executeSQL payload';
     private const RECORD = "the 'opts' control record";
     private const PLAN = "the 'whereDynamic' plan";
     private const FRAG = "a 'whereDynamic' fragment";
 
     /**
+     * Confirm ONE unboxed value against its DECLARED type, exactly as the catalog spells it
+     * (`src/scp/leaf-transport.ts`) — the php leg's ONE wrong-type failure, and the twin of the go
+     * `portErr` wrong-variant half / rust `port_mismatch`. A `|null` suffix marks a NULLABLE field,
+     * whose `null` is the declared absence.
+     *
+     * A field of the wrong type is the same ABI break as a missing one, for the same reason: the
+     * generator emits the literal the port's type says, so nothing else can arrive from a generated
+     * module. Coercing it instead ran an INSERT on the read seam (`returning` not a bool), applied a
+     * predicate the call SKIPPED (`skipped` not a bool) or spliced a cast number in place of a
+     * predicate (`sql` not a string). A leaf STRUCT is a `\stdClass` on this plane and a leaf LIST is a
+     * PHP array — the bc php value model (`ExprEval` renders `{obj:…}` / `{arr:…}` as exactly those).
+     */
+    private static function typed(mixed $value, string $what, string $declared): mixed
+    {
+        $kind = str_ends_with($declared, '|null') ? substr($declared, 0, -5) : $declared;
+        if ($kind !== $declared && $value === null) {
+            return null;
+        }
+        $ok = match ($kind) {
+            'bool' => is_bool($value),
+            'int' => is_int($value),
+            'string' => is_string($value),
+            'list' => is_array($value),
+            'record' => is_object($value),
+        };
+        if (!$ok) {
+            throw new \RuntimeException(
+                "scp leaf executeSQL: {$what} must be {$declared}, got " . json_encode($value),
+            );
+        }
+        return $value;
+    }
+
+    /**
      * Read ONE DECLARED field out of a payload / struct that IS present — the php leg's ONE fail-closed
-     * field read (the twin of the go `portErr` / rust `port_mismatch` discipline).
+     * field read (the twin of the go `optRowField` / rust `take_opt_row` discipline). Presence and the
+     * DECLARED type ({@see typed()}) are confirmed at the SAME read, exactly as go's and rust's typed
+     * probes confirm both.
      *
      * `null` is a VALUE (the declared absence of a write mode / a plan / a cap / a model); a MISSING KEY
      * is an ABI BREAK, and the two must not collapse: bc types a port by the literal wired into it and
@@ -100,7 +139,7 @@ final class Leaves
      *
      * @param array<string, mixed>|object $record
      */
-    private static function required(array|object $record, string $name, string $at): mixed
+    private static function required(array|object $record, string $name, string $at, string $declared): mixed
     {
         $present = is_array($record) ? array_key_exists($name, $record) : property_exists($record, $name);
         if (!$present) {
@@ -110,7 +149,7 @@ final class Leaves
                 . 'is how an absent write mode / plan / cap is spelled)',
             );
         }
-        return is_array($record) ? $record[$name] : $record->{$name};
+        return self::typed(is_array($record) ? $record[$name] : $record->{$name}, "{$at}'s '{$name}'", $declared);
     }
 
     /**
@@ -133,8 +172,8 @@ final class Leaves
     private static function effectiveStatement(array $ports, mixed $plan): array
     {
         /** @var list<mixed> $params */
-        $params = array_values(self::required($ports, 'params', self::PAYLOAD));
-        $sql = (string) self::required($ports, 'sql', self::PAYLOAD);
+        $params = array_values(self::required($ports, 'params', self::PAYLOAD, 'list'));
+        $sql = self::required($ports, 'sql', self::PAYLOAD, 'string');
         if ($plan === null) {
             return [$sql, $params];
         }
@@ -142,14 +181,15 @@ final class Leaves
         $whereParams = [];
         // EVERY field of EVERY fragment is unboxed fail-closed BEFORE any of them is used, skipped ones
         // included — a fragment is a PRESENT struct like every other and the generator spells it in
-        // full, so a missing field is an ABI break and NOT a default: without `skipped` the statement
-        // applies a predicate the call SKIPPED, without `sql` the predicate is erased entirely, and
-        // without `params` a value binds where none belongs — each silently returning DIFFERENT ROWS
-        // (#209). The go / rust transports unbox the same three fields the same way.
-        foreach (self::required($plan, 'frags', self::PLAN) as $frag) {
-            $skipped = self::required($frag, 'skipped', self::FRAG);
-            $fragSql = (string) self::required($frag, 'sql', self::FRAG);
-            $fragParams = self::required($frag, 'params', self::FRAG);
+        // full, so a missing or mistyped field is an ABI break and NOT a default: without `skipped` the
+        // statement applies a predicate the call SKIPPED, without `sql` the predicate is erased
+        // entirely, and without `params` a value binds where none belongs — each silently returning
+        // DIFFERENT ROWS (#209). The go / rust transports unbox the same three fields the same way.
+        foreach (self::required($plan, 'frags', self::PLAN, 'list') as $frag) {
+            $frag = self::typed($frag, self::FRAG, 'record');
+            $skipped = self::required($frag, 'skipped', self::FRAG, 'bool');
+            $fragSql = self::required($frag, 'sql', self::FRAG, 'string');
+            $fragParams = self::required($frag, 'params', self::FRAG, 'list');
             if ($skipped) {
                 continue;
             }
@@ -225,12 +265,16 @@ final class Leaves
             // `currentContext()` is null ⇒ the bound ctx.
             $active = currentContext() ?? $ctx;
             // The OPTIONAL `opts` control record — how to run the statement plus the two optional control
-            // structs. ABSENT ⇒ a plain READ with no dynamic WHERE and no cap (the ONE statement shape
-            // that omits the port, so its payload is `sql` + `params` and nothing else).
-            $opts = $ports['opts'] ?? null;
-            // An OMITTED record is the ONE legitimate absence (a plain read); every FIELD of a record
-            // that IS present is required — a missing key is an ABI break, not an absent value.
-            $plan = $opts === null ? null : self::required($opts, 'whereDynamic', self::RECORD);
+            // structs. An OMITTED port is the ONE legitimate absence: a plain READ with no dynamic WHERE
+            // and no cap (the ONE statement shape that omits it, so its payload is `sql` + `params` and
+            // nothing else). Once the port IS there it is read exactly like every field below — its own
+            // `null` is the same plain read, anything that is not the control record is an ABI break.
+            $opts = array_key_exists('opts', $ports)
+                ? self::required($ports, 'opts', self::PAYLOAD, 'record|null')
+                : null;
+            // Every FIELD of a record that IS present is required — a missing or mistyped key is an ABI
+            // break, not an absent value.
+            $plan = $opts === null ? null : self::required($opts, 'whereDynamic', self::RECORD, 'record|null');
             // The DYNAMIC (SKIP) WHERE is assembled FIRST: the final statement shape is only known
             // here, so the placeholder render must follow it (CLAUDE.md §2).
             [$effectiveSql, $effectiveParams] = self::effectiveStatement($ports, $plan);
@@ -249,8 +293,8 @@ final class Leaves
                 // `write` is the statement's RUN MODE: null ⇒ a read; an object ⇒ a write carrying
                 // its OWN `returning` (ONE field, three values — "returns rows but is not a write" is
                 // not a state the ABI can hold, #206).
-                $write = $opts === null ? null : self::required($opts, 'write', self::RECORD);
-                if ($write !== null && !self::required($write, 'returning', "the 'write' mode")) {
+                $write = $opts === null ? null : self::required($opts, 'write', self::RECORD, 'record|null');
+                if ($write !== null && !self::required($write, 'returning', "the 'write' mode", 'bool')) {
                     $info = run($active, $sql, $params, StatementIntent::write());
                     // The affected-write summary row (uniform list output shape — TS `writeSummary`).
                     return ['ok' => [(object) ['changes' => $info->changes, 'lastInsertRowid' => $info->lastInsertRowid]]];
@@ -265,16 +309,15 @@ final class Leaves
             // so this path cannot drift from the runtime relation path ({@see Relation}) or from the TS
             // reference. It THROWS rather than returning `['error' => …]`: a runaway is a litedbmodel
             // policy error with typed fields, not a mapped transport failure (the TS leaf throws too).
-            $guard = $opts === null ? null : self::required($opts, 'guard', self::RECORD);
+            $guard = $opts === null ? null : self::required($opts, 'guard', self::RECORD, 'record|null');
             if ($guard !== null) {
                 $at = "the 'guard' cap";
-                $model = self::required($guard, 'model', $at);
                 LimitExceededError::check(
-                    (int) self::required($guard, 'limit', $at),
+                    self::required($guard, 'limit', $at, 'int'),
                     count($rows),
                     'relation',
-                    $model === null ? null : (string) $model,
-                    (string) self::required($guard, 'relation', $at),
+                    self::required($guard, 'model', $at, 'string|null'),
+                    self::required($guard, 'relation', $at, 'string'),
                 );
             }
             return ['ok' => $rows];

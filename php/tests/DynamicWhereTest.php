@@ -39,7 +39,10 @@ final class DynamicWhereTest extends TestCase
     }
 
     /**
-     * @param list<array{skipped: bool, sql: string, params: list<mixed>}> $frags
+     * @param list<object> $frags every fragment as the OBJECT a generated module wires (`ExprEval`
+     *                            renders an `{obj: …}` struct literal as a `\stdClass`), never an assoc
+     *                            array — the leaf reads the declared type, so the gate has to feed the
+     *                            shape the real seam carries.
      * @return list<int>
      */
     private function ids(array $frags): array
@@ -62,44 +65,51 @@ final class DynamicWhereTest extends TestCase
     {
         // `id > 1 AND v = 'c' ORDER BY id LIMIT 2` selects exactly row 3. Any other assembly fails loud
         // or empty: a second ` WHERE ` is a syntax error, any other param order binds `id > 'c'`.
-        self::assertSame([3], $this->ids([['skipped' => false, 'sql' => 'v = ?', 'params' => ['c']]]));
+        self::assertSame([3], $this->ids([(object) ['skipped' => false, 'sql' => 'v = ?', 'params' => ['c']]]));
     }
 
     public function testASkippedFragmentIsDroppedFromTextAndBinding(): void
     {
         // The skipped fragment's param is never bound (else the bind count would not match the `?`s).
         self::assertSame([3], $this->ids([
-            ['skipped' => true, 'sql' => 'v = ?', 'params' => [null]],
-            ['skipped' => false, 'sql' => 'v <> ?', 'params' => ['b']],
+            (object) ['skipped' => true, 'sql' => 'v = ?', 'params' => [null]],
+            (object) ['skipped' => false, 'sql' => 'v <> ?', 'params' => ['b']],
         ]));
     }
 
     public function testEveryFragmentSkippedRunsTheStatementAsCompiled(): void
     {
         // No survivor ⇒ the emitted statement is untouched: its OWN bounded WHERE + page tail still apply.
-        self::assertSame([2, 3], $this->ids([['skipped' => true, 'sql' => 'v = ?', 'params' => [null]]]));
+        self::assertSame([2, 3], $this->ids([(object) ['skipped' => true, 'sql' => 'v = ?', 'params' => [null]]]));
     }
 
     /**
-     * #205 — a field ABSENT from a PRESENT struct is an ABI BREAK, never an absent VALUE. bc types a
-     * port by the literal wired into it and REJECTS a partial struct, so a generated module always
-     * spells every field of every struct it wires (`null` is how absence is spelled). A key that is not
-     * there did not come from one, and defaulting it would silently downgrade a write to a read, drop a
-     * relation cap, or erase a SKIP predicate. The five languages must agree; this is the php leg.
+     * #205 — a field ABSENT from a PRESENT struct, or present with the WRONG TYPE, is an ABI BREAK,
+     * never an absent VALUE. bc types a port by the literal wired into it and REJECTS a partial struct,
+     * so a generated module always spells every field of every struct it wires, with the type the port
+     * declares (`null` is how absence is spelled). Neither shape came from one, and defaulting or
+     * coercing it would silently downgrade a write to a read, drop a relation cap, or erase a SKIP
+     * predicate. The five languages must agree; this is the php leg.
      */
-    public function testAMissingFieldOfAPresentStructIsLoud(): void
+    public function testAMissingOrMistypedFieldOfAPresentStructIsLoud(): void
     {
         $ctx = ['nodeId' => 'n0', 'component' => 'executeSQL'];
         $sql = 'SELECT id, v FROM t ORDER BY id';
         $nulls = (object) ['write' => null, 'whereDynamic' => null, 'guard' => null];
         // Ports whose control record carries a `whereDynamic` plan of ONE fragment (the #209 cases).
-        $plan = static fn (object $frag): array => [
+        $plan = static fn (mixed $frag): array => [
             'sql' => 'SELECT id, v FROM t ORDER BY id',
             'params' => [],
             'opts' => (object) ['write' => null, 'whereDynamic' => (object) ['frags' => [$frag]], 'guard' => null],
         ];
+        // Ports whose control record has ONE field replaced (every other field spelled as its null).
+        $opts = static fn (array $kw): array => [
+            'sql' => 'SELECT id, v FROM t ORDER BY id',
+            'params' => [],
+            'opts' => (object) array_merge(['write' => null, 'whereDynamic' => null, 'guard' => null], $kw),
+        ];
 
-        // Each case drops exactly ONE declared field of a struct that is present.
+        // Each case breaks exactly ONE declared field of a struct that is present — by DROPPING it first…
         $cases = [
             [['params' => []], "'sql' field"],
             [['sql' => $sql], "'params' field"],
@@ -124,6 +134,28 @@ final class DynamicWhereTest extends TestCase
             [$plan((object) ['skipped' => false, 'sql' => 'v = ?']), "'params' field"],
             // A SKIPPED fragment is unboxed too — it is spelled in full like any other.
             [$plan((object) ['skipped' => true, 'params' => ['zzz']]), "'sql' field"],
+            // …and then by giving it the WRONG TYPE, which is the same ABI break in every one of those
+            // positions: bc emits the literal the port's type says, so nothing else can arrive from a
+            // generated module, and coercing it is how a `returning` that is not a bool ran an INSERT on
+            // the READ seam and a `skipped` that is not a bool applied a predicate the call SKIPPED —
+            // the #209 failure modes, reached by another route.
+            [['sql' => 42, 'params' => []], "payload's 'sql' must be string"],
+            [['sql' => $sql, 'params' => 'x'], "payload's 'params' must be list"],
+            [['sql' => $sql, 'params' => [], 'opts' => 'nope'], "payload's 'opts' must be record|null"],
+            [$opts(['write' => 'nope']), "control record's 'write' must be record|null"],
+            [$opts(['write' => (object) ['returning' => 'nope']]), "'write' mode's 'returning' must be bool"],
+            [$opts(['write' => (object) ['returning' => 0]]), "'write' mode's 'returning' must be bool"],
+            [$opts(['whereDynamic' => 'nope']), "control record's 'whereDynamic' must be record|null"],
+            [$opts(['whereDynamic' => (object) ['frags' => 'nope']]), "'whereDynamic' plan's 'frags' must be list"],
+            [$opts(['guard' => 'nope']), "control record's 'guard' must be record|null"],
+            [$opts(['guard' => (object) ['limit' => 'nope', 'model' => 't', 'relation' => 'things']]), "'guard' cap's 'limit' must be int"],
+            [$opts(['guard' => (object) ['limit' => 2.5, 'model' => 't', 'relation' => 'things']]), "'guard' cap's 'limit' must be int"],
+            [$opts(['guard' => (object) ['limit' => 2, 'model' => 42, 'relation' => 'things']]), "'guard' cap's 'model' must be string|null"],
+            [$opts(['guard' => (object) ['limit' => 2, 'model' => 't', 'relation' => 42]]), "'guard' cap's 'relation' must be string"],
+            [$plan('nope'), 'fragment must be record'],
+            [$plan((object) ['skipped' => 'no', 'sql' => 'v = ?', 'params' => ['zzz']]), "fragment's 'skipped' must be bool"],
+            [$plan((object) ['skipped' => false, 'sql' => 42, 'params' => []]), "fragment's 'sql' must be string"],
+            [$plan((object) ['skipped' => false, 'sql' => 'v = ?', 'params' => 'z']), "fragment's 'params' must be list"],
         ];
         foreach ($cases as [$ports, $want]) {
             // The assertions live OUTSIDE the catch on purpose: PHPUnit's own AssertionFailedError

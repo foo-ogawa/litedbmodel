@@ -294,8 +294,52 @@ export function group(p: { parents: Array<Record<string, unknown>>; children: Ar
 // ── handler maps: the boundary injection a generated module's bind()/bindAsync() consumes ──
 
 /**
+ * The DECLARED type of every leaf field, exactly as the catalog spells it
+ * ({@link import('./leaf-transport')}) — the predicate {@link portTyped} confirms. A `|null` suffix
+ * marks a NULLABLE field, whose `null` is the declared absence (no write mode / plan / cap / model).
+ * `int` accepts bc's `int` value model (a BigInt on the TS plane) and the plain integer the runtime's
+ * own {@link RelationGuard} carries, since both reach the cap check as the same `number`.
+ */
+const PORT_TYPES = {
+  bool: (v: unknown) => typeof v === 'boolean',
+  int: (v: unknown) => typeof v === 'bigint' || (typeof v === 'number' && Number.isInteger(v)),
+  string: (v: unknown) => typeof v === 'string',
+  list: (v: unknown) => Array.isArray(v),
+  record: (v: unknown) => typeof v === 'object' && v !== null && !Array.isArray(v),
+};
+
+/**
+ * A field's declared type as a reader spells it — one of {@link PORT_TYPES}, optionally `|null`. It is a
+ * UNION rather than a `string` so a reader that names a type the catalog does not have fails to COMPILE,
+ * which is the nearest this plane gets to go's and rust's typed probes.
+ */
+type Declared = keyof typeof PORT_TYPES | `${keyof typeof PORT_TYPES}|null`;
+
+/**
+ * Confirm ONE unboxed value against its DECLARED type — the ONE wrong-type failure on the TS plane, and
+ * the twin of the go `portErr` wrong-variant half / rust `port_mismatch`. A field of the wrong type is
+ * the same ABI break as a missing one, for the same reason: the generator emits the literal the port's
+ * type says, so nothing else can arrive from a generated module. Coercing it instead ran an INSERT on
+ * the read seam (`returning` not a bool), applied a predicate the call SKIPPED (`skipped` not a bool) or
+ * erased one entirely (`sql` not a string).
+ */
+function portTyped(value: unknown, what: string, declared: Declared): unknown {
+  const kind = (declared.endsWith('|null') ? declared.slice(0, -'|null'.length) : declared) as keyof typeof PORT_TYPES;
+  if (kind !== declared && value === null) return null;
+  if (!PORT_TYPES[kind](value)) {
+    // bc's `int` value model is a BigInt on this plane, so the rendering has to survive one appearing
+    // where another type was declared — a bare JSON.stringify throws on it and would replace the port
+    // failure with a serializer failure.
+    const got = JSON.stringify(value, (_k, v: unknown) => (typeof v === 'bigint' ? `${v}n` : v));
+    throw new Error(`scp leaf executeSQL: ${what} must be ${declared}, got ${got}`);
+  }
+  return value;
+}
+
+/**
  * Read ONE DECLARED field out of a payload / struct that is PRESENT — the ONE fail-closed field read on
- * the TS plane, and the twin of the go `portErr` / rust `port_mismatch` discipline.
+ * the TS plane, and the twin of the go `optRowField` / rust `take_opt_row` discipline. Presence and the
+ * DECLARED type are confirmed at the SAME read, exactly as go's and rust's typed probes confirm both.
  *
  * `null` is a VALUE (the declared absence of a write mode / a plan / a cap / a model); a MISSING KEY is
  * an ABI BREAK. The two are not the same thing and must not collapse: bc types a port by the literal
@@ -304,7 +348,7 @@ export function group(p: { parents: Array<Record<string, unknown>>; children: Ar
  * every struct it wires. A key that is not there did not come from one, and reading it as its default
  * would silently downgrade a write to a read, drop a relation cap, or erase a SKIP predicate (#205).
  */
-function requiredField(record: Record<string, unknown>, name: string, at: string): unknown {
+function requiredField(record: Record<string, unknown>, name: string, at: string, declared: Declared): unknown {
   if (!(name in record)) {
     throw new Error(
       `scp leaf executeSQL: ${at} is missing its '${name}' field — a generated module spells every ` +
@@ -312,7 +356,7 @@ function requiredField(record: Record<string, unknown>, name: string, at: string
         `absent write mode / plan / cap is spelled)`,
     );
   }
-  return record[name];
+  return portTyped(record[name], `${at}'s '${name}'`, declared);
 }
 
 /**
@@ -324,23 +368,15 @@ function requiredField(record: Record<string, unknown>, name: string, at: string
  * fragment is unboxed, skipped ones included, exactly as the go / rust transports unbox them.
  */
 function dynamicWhereFrags(plan: DynamicWherePlan): DynamicWhereFrag[] {
-  const frags = requiredField(plan as unknown as Record<string, unknown>, 'frags', `the 'whereDynamic' plan`);
-  if (!Array.isArray(frags)) {
-    throw new Error(`scp leaf executeSQL: the 'whereDynamic' plan's 'frags' must be a list, got ${JSON.stringify(frags)}`);
-  }
+  const frags = requiredField(plan as unknown as Record<string, unknown>, 'frags', `the 'whereDynamic' plan`, 'list') as unknown[];
+  const at = `a 'whereDynamic' fragment`;
   return frags.map((frag) => {
-    const f = frag as Record<string, unknown>;
-    const at = `a 'whereDynamic' fragment`;
-    const skipped = requiredField(f, 'skipped', at);
-    const sql = requiredField(f, 'sql', at);
-    const params = requiredField(f, 'params', at);
-    if (typeof skipped !== 'boolean' || typeof sql !== 'string' || !Array.isArray(params)) {
-      throw new Error(
-        `scp leaf executeSQL: a 'whereDynamic' fragment must be {skipped: bool, sql: string, params: list}, ` +
-          `got ${JSON.stringify(frag)}`,
-      );
-    }
-    return { skipped, sql, params: params as DynamicWhereFrag['params'] };
+    const f = portTyped(frag, at, 'record') as Record<string, unknown>;
+    return {
+      skipped: requiredField(f, 'skipped', at, 'bool') as boolean,
+      sql: requiredField(f, 'sql', at, 'string') as string,
+      params: requiredField(f, 'params', at, 'list') as DynamicWhereFrag['params'],
+    };
   });
 }
 
@@ -348,52 +384,32 @@ function dynamicWhereFrags(plan: DynamicWherePlan): DynamicWhereFrag[] {
  * Read the relation `guard` field of the control record. `null` ⇒ the statement is uncapped. The cap
  * arrives in bc's `int` value model, which on the TS plane is a BigInt, so it is normalized to the
  * `number` {@link RelationGuard} (and {@link import('./errors').LimitExceededError}) declare — the
- * SAME numeric type the rust/go/python/php transports hand their own check. A guard that is present
- * but not a `{limit, model, relation}` record is a LOUD port failure, never a silently dropped cap: a
- * guard that fails to unbox is a runaway that would otherwise sail through.
+ * SAME numeric type the rust/go/python/php transports hand their own check. `model` is the one NULLABLE
+ * field: its key is always spelled and "no model" rides as `null`, which the error reports as "unknown".
+ * A field that is missing or not the declared type is a LOUD port failure, never a silently dropped cap:
+ * a guard that fails to unbox is a runaway that would otherwise sail through.
  */
 function relationGuardPort(port: unknown): RelationGuard | null {
   if (port === null) return null;
   const g = port as Record<string, unknown>;
   const at = `the 'guard' cap`;
-  const raw = requiredField(g, 'limit', at);
-  const limit = typeof raw === 'bigint' ? Number(raw) : raw;
-  const relation = requiredField(g, 'relation', at);
-  const model = requiredField(g, 'model', at);
-  if (typeof limit !== 'number' || !Number.isInteger(limit) || typeof relation !== 'string') {
-    throw new Error(
-      `scp leaf executeSQL: the 'guard' port must be a {limit:int, model:string|null, relation:string} ` +
-        `relation cap, got ${JSON.stringify(port)}`,
-    );
-  }
-  return { limit, ...(typeof model === 'string' ? { model } : {}), relation };
+  const raw = requiredField(g, 'limit', at, 'int') as number | bigint;
+  const model = requiredField(g, 'model', at, 'string|null') as string | null;
+  return {
+    limit: typeof raw === 'bigint' ? Number(raw) : raw,
+    ...(model === null ? {} : { model }),
+    relation: requiredField(g, 'relation', at, 'string') as string,
+  };
 }
 
 /**
- * Read one DECLARED field of the control record. The name is `keyof ExecOptions`, so the reader is tied
- * to the leaf declaration at compile time: renaming a field there breaks HERE rather than silently
- * reading a key the generator no longer writes.
+ * Read one DECLARED field of the control record — each of the three is a CONCRETE control struct or the
+ * `null` that spells its absence. The name is `keyof ExecOptions`, so the reader is tied to the leaf
+ * declaration at compile time: renaming a field there breaks HERE rather than silently reading a key the
+ * generator no longer writes.
  */
 function optsField(opts: Record<string, unknown>, name: keyof ExecOptions): unknown {
-  return requiredField(opts, name, `the 'opts' control record`);
-}
-
-/**
- * Read the OPTIONAL `opts` control record ({@link ExecOptions}) off the evaluated port record. ABSENT
- * (or null) ⇒ `null` ⇒ a plain READ: not a write, no dynamic plan, uncapped — the one statement shape
- * that omits the port entirely, so a bounded read's payload is `sql` + `params` and nothing else. That
- * is the ONE legitimate absence here; every FIELD of a record that IS present is required
- * ({@link optsField}). PRESENT but not a record is a LOUD port failure.
- */
-function execOptionsPort(port: Value | undefined): Record<string, unknown> | null {
-  if (port === undefined || port === null) return null;
-  if (typeof port !== 'object' || Array.isArray(port)) {
-    throw new Error(
-      `scp leaf executeSQL: the 'opts' port must be the {write, whereDynamic, guard} control ` +
-        `record, got ${JSON.stringify(port)}`,
-    );
-  }
-  return port as unknown as Record<string, unknown>;
+  return requiredField(opts, name, `the 'opts' control record`, 'record|null');
 }
 
 /**
@@ -403,21 +419,19 @@ function execOptionsPort(port: Value | undefined): Record<string, unknown> | nul
  */
 function writeModePort(port: unknown): WriteMode | null {
   if (port === null) return null;
-  const returning = requiredField(port as Record<string, unknown>, 'returning', `the 'write' mode`);
-  if (typeof returning !== 'boolean') {
-    throw new Error(`scp leaf executeSQL: the 'write' mode's 'returning' must be a bool, got ${JSON.stringify(port)}`);
-  }
-  return { returning };
+  return { returning: requiredField(port as Record<string, unknown>, 'returning', `the 'write' mode`, 'bool') as boolean };
 }
 
 /** Read the declared `executeSQL` ports off the evaluated port record (the generated module's Values). */
 function executeSqlPorts(ports: Record<string, Value>): ExecuteSqlPorts {
   const at = 'the executeSQL payload';
-  const sql = requiredField(ports, 'sql', at) as string;
-  const params = requiredField(ports, 'params', at) as unknown[];
-  const opts = execOptionsPort(ports.opts);
+  const sql = requiredField(ports, 'sql', at, 'string') as string;
+  const params = requiredField(ports, 'params', at, 'list') as unknown[];
   // The ONE legitimate absence: no control record at all ⇒ the plain READ a bounded statement declares
-  // by omitting the port. Every field of a record that IS present is read fail-closed below.
+  // by OMITTING the port, so its payload is `sql` + `params` and nothing else. Once the port IS there it
+  // is read exactly like every field below — its own `null` is the same plain read, anything that is not
+  // an {@link ExecOptions} record is an ABI break.
+  const opts = 'opts' in ports ? (requiredField(ports, 'opts', at, 'record|null') as Record<string, unknown> | null) : null;
   if (opts === null) return { sql, params, write: null };
   return {
     sql,
