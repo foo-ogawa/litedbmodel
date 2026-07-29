@@ -192,7 +192,7 @@ func TestPhaseCRoutingWriterStickyLive(t *testing.T) {
 
 	// A committed transaction on the writer db ARMS the sticky clock (WithTransactionDecidedIsolated
 	// .Mark()s on a successful commit because the ctx carries routing).
-	_, err := Transaction(ctx, db, "postgres", DefaultTransactionOptions(), func(txCtx *ExecutionContext) (int, error) {
+	_, err := Transaction(ctx, "postgres", DefaultTransactionOptions(), func(txCtx *ExecutionContext) (int, error) {
 		_, e := RunGuarded(txCtx, fmt.Sprintf("INSERT INTO %s (id, val) VALUES ($1,$2) ON CONFLICT (id) DO NOTHING", tbl), []any{int64(2), "b"}, "INSERT", "M")
 		return 0, e
 	})
@@ -218,7 +218,7 @@ func TestPhaseCRoutingWriterStickyLive(t *testing.T) {
 	// The very next tx, with the option left unset, DOES arm it — proving the suppression is per-tx.
 	optOut := DefaultTransactionOptions()
 	optOut.UseWriterAfterTransaction = boolPtr(false)
-	_, err = Transaction(ctx, db, "postgres", optOut, func(txCtx *ExecutionContext) (int, error) {
+	_, err = Transaction(ctx, "postgres", optOut, func(txCtx *ExecutionContext) (int, error) {
 		_, e := RunGuarded(txCtx, fmt.Sprintf("INSERT INTO %s (id, val) VALUES ($1,$2) ON CONFLICT (id) DO NOTHING", tbl), []any{int64(4), "d"}, "INSERT", "M")
 		return 0, e
 	})
@@ -230,7 +230,7 @@ func TestPhaseCRoutingWriterStickyLive(t *testing.T) {
 	if log[len(log)-1] != "reader" {
 		t.Fatalf("per-tx UseWriterAfterTransaction=false: in-window read = %v, want reader (sticky NOT armed)", log[len(log)-1])
 	}
-	_, err = Transaction(ctx, db, "postgres", DefaultTransactionOptions(), func(txCtx *ExecutionContext) (int, error) {
+	_, err = Transaction(ctx, "postgres", DefaultTransactionOptions(), func(txCtx *ExecutionContext) (int, error) {
 		_, e := RunGuarded(txCtx, fmt.Sprintf("INSERT INTO %s (id, val) VALUES ($1,$2) ON CONFLICT (id) DO NOTHING", tbl), []any{int64(5), "e"}, "INSERT", "M")
 		return 0, e
 	})
@@ -252,7 +252,7 @@ func TestPhaseCRoutingWriterStickyLive(t *testing.T) {
 	mwriter := newLivePool("writer", db, &mlog, &mu)
 	mreg, _ := RegistryFromDefault(ReaderWriterPools{Reader: mreader, Writer: mwriter}).Build()
 	mctx := ContextForRouting(RoutingConfig{Registry: mreg, Sticky: NewWriterStickyClock(StickyOptions{UseWriterAfterTransaction: boolPtr(false), Now: func() int64 { return mclock }})}, nil)
-	_, err = Transaction(mctx, db, "postgres", DefaultTransactionOptions(), func(txCtx *ExecutionContext) (int, error) {
+	_, err = Transaction(mctx, "postgres", DefaultTransactionOptions(), func(txCtx *ExecutionContext) (int, error) {
 		_, e := RunGuarded(txCtx, fmt.Sprintf("INSERT INTO %s (id, val) VALUES ($1,$2) ON CONFLICT (id) DO NOTHING", tbl), []any{int64(3), "c"}, "INSERT", "M")
 		return 0, e
 	})
@@ -405,7 +405,7 @@ func TestPhaseCRoutingTxPinPrecedenceLive(t *testing.T) {
 	// Every statement inside resolves the PINNED connection (step 1 wins) — the recording pools are
 	// NOT re-acquired mid-tx.
 	log = log[:0]
-	_, err := Transaction(ctx, my, "mysql", DefaultTransactionOptions(), func(txCtx *ExecutionContext) (int, error) {
+	_, err := Transaction(ctx, "mysql", DefaultTransactionOptions(), func(txCtx *ExecutionContext) (int, error) {
 		if _, e := RunGuarded(txCtx, fmt.Sprintf("INSERT INTO %s (id, val) VALUES (?,?)", goRouteTable), []any{int64(300), "tx1"}, "INSERT", "M"); e != nil {
 			return 0, e
 		}

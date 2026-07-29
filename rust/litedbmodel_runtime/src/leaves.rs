@@ -25,7 +25,7 @@
 //! transport symbols as free functions with ONE generic `WireRow` payload each (the node's ports as
 //! named fields). `execute_sql` resolves the [`ExecutionContext`] from a thread-scoped ambient set by
 //! [`with_ambient_context`] (the consumer brackets each op call). The ambient is the CONTEXT, not a
-//! bare [`Driver`]: the ctx is what carries the connection ROUTING (reader/writer split, named DB,
+//! bare [`Driver`](crate::driver::Driver): the ctx is what carries the connection ROUTING (reader/writer split, named DB,
 //! writer-sticky), so this — the only path a bc typed-native module reaches a connection by — is where
 //! a routed consumer configuration has to arrive. Synthesizing the ctx inside the leaf instead
 //! (`exec_context::for_driver`, whose `routing` is `None`) left every routed setup inert (#214). This
@@ -36,8 +36,7 @@ use std::cell::Cell;
 
 use behavior_contracts::Value;
 
-use crate::driver::Driver;
-use crate::exec_context::{self, ExecutionContext, StatementIntent};
+use crate::exec_context::{self, ExecutionContext, StatementIntent, TxDecision};
 use crate::sql_render::finalize_sql;
 use crate::wire::{BehaviorError, Probe, WireList, WireRow, WireValue};
 
@@ -94,110 +93,44 @@ fn current_context() -> Result<&'static ExecutionContext<'static, 'static>, Beha
 //
 // The DB transaction boundary (BEGIN/COMMIT/ROLLBACK + atomicity) is litedbmodel's job, NOT a bc
 // feature and NOT emitted into the generated runner — the covered runner just runs its body statements
-// via `execute_sql` and returns `Result`. THIS wrapper brackets that runner in a transaction using the
-// EXISTING tx primitives ([`Driver::begin_tx`] issues BEGIN; [`TxConnection::commit`]/[`rollback`] issue
-// COMMIT/ROLLBACK on the owned connection) and the EXISTING ambient mechanism
-// ([`with_ambient_context`]) — no new tx execution engine, no parallel exec path. Statement execution
-// stays the ONE seam ([`execute_sql`] → [`exec_context`]); only the tx-control is added around it.
+// via `execute_sql` and returns `Result`. THIS wrapper brackets that runner in the runtime's ONE
+// transaction ([`exec_context::with_transaction_decided`]) and swaps the ambient for the tx-scoped ctx
+// that boundary derives — no second tx engine, no parallel exec path. Statement execution stays the
+// ONE seam ([`execute_sql`] → [`exec_context`]); this only decides WHERE the body runs.
 
-/// A [`Driver`] adapter over a tx's OWNED [`TxConnection`]: it forwards every prepared statement to the
-/// pinned tx connection, so a covered runner's `execute_sql` (which resolves the ambient context and runs
-/// through the central seam) executes ON the transaction. Wrapped in the ambient context installed for
-/// the span of the tx body by [`with_ambient_transaction`]. `dialect` mirrors the underlying driver so
-/// `execute_sql`'s `?`→`$N` placeholder render is unchanged.
-struct TxDriver<'a> {
-    tx: std::cell::RefCell<Box<dyn crate::exec_context::TxConnection + 'a>>,
-    dialect: &'static str,
-}
-
-/// A [`PreparedStatement`] over the tx connection: `all`/`run` forward the (already placeholder-rendered)
-/// SQL to the pinned tx connection ([`crate::exec_context::TxConnection`]). The tx connection is the ONE
-/// connection the whole BEGIN…COMMIT runs on (the owned-connection contract).
-struct TxPrepared<'a, 'd> {
-    driver: &'d TxDriver<'a>,
-    sql: String,
-}
-
-impl crate::driver::PreparedStatement for TxPrepared<'_, '_> {
-    fn all(&mut self, params: &[Value]) -> Result<Vec<WireValue>, crate::errors::SqlFailure> {
-        self.driver.tx.borrow_mut().execute(&self.sql, params)
-    }
-    fn run(
-        &mut self,
-        params: &[Value],
-    ) -> Result<crate::driver::RunInfo, crate::errors::SqlFailure> {
-        self.driver.tx.borrow_mut().run(&self.sql, params)
-    }
-}
-
-impl Driver for TxDriver<'_> {
-    fn dialect(&self) -> &'static str {
-        self.dialect
-    }
-    fn prepare(&self, sql: &str) -> Box<dyn crate::driver::PreparedStatement + '_> {
-        Box::new(TxPrepared {
-            driver: self,
-            sql: sql.to_string(),
-        })
-    }
-    // A covered tx body never opens a NESTED transaction (the ambient IS the tx); fail closed rather
-    // than silently begin a second BEGIN on the same connection.
-    fn begin_tx(
-        &self,
-    ) -> Result<Box<dyn crate::exec_context::TxConnection + '_>, crate::errors::SqlFailure> {
-        Err(nested_tx_unsupported())
-    }
-    fn acquire_tx(
-        &self,
-    ) -> Result<Box<dyn crate::exec_context::TxConnection + '_>, crate::errors::SqlFailure> {
-        Err(nested_tx_unsupported())
-    }
-}
-
-/// A tx-pinned driver has no nested-tx path (the ambient IS the open transaction) — fail closed.
-fn nested_tx_unsupported() -> crate::errors::SqlFailure {
-    crate::errors::SqlFailure {
-        kind: "driver_error".into(),
-        policy: "fail".into(),
-        sqlite_code: None,
-        message: "scp tx-scope: nested transaction on a tx-pinned driver is not supported".into(),
-    }
-}
-
-/// Run `body` inside a transaction on `ctx`, threading the tx connection as the ambient context so a
-/// covered runner's `execute_sql` executes on it: [`Driver::begin_tx`] (BEGIN) → run `body` under the
-/// tx-pinned ambient → COMMIT on `Ok` / ROLLBACK on `Err` (the atomicity guarantee). A body error rolls
-/// back and re-raises; a COMMIT that itself fails rolls back and surfaces the error. This is the covered
-/// plane's tx boundary — the runtime owns it (the generated runner emits NO BEGIN/COMMIT).
+/// Run `body` inside a transaction on `ctx`, with the tx-scoped ctx installed as the ambient so a
+/// covered runner's `execute_sql` executes ON the transaction: `Ok` ⇒ COMMIT, `Err` ⇒ ROLLBACK + the
+/// body error re-raised (the atomicity guarantee). This is the covered plane's tx boundary — the
+/// runtime owns it (the generated runner emits NO BEGIN/COMMIT).
 ///
-/// WHICH connection the transaction opens on is the ctx's answer, not this function's:
-/// [`ExecutionContext::tx_driver`] is the one resolver for it (the WRITER pool of the default
-/// connection under a routing config, the single primary driver without one).
+/// The transaction itself is the CENTRAL one ([`exec_context::with_transaction_decided`], the same
+/// mechanism the public [`exec_context::transaction`] boundary drives), so the covered plane gets what
+/// running its own BEGIN/COMMIT never did: the owned connection is acquired from the ctx's WRITER pool
+/// ([`ExecutionContext::tx_driver`] → `acquire_tx`), the tx-control is issued THROUGH the seam (a
+/// registered middleware OBSERVES the BEGIN/COMMIT/ROLLBACK), the connection is released — destroyed
+/// when poisoned — and a successful COMMIT arms the writer-sticky clock, so reads after a covered tx
+/// route to the writer (read-your-writes). Duplicating any of that here is what #215 removed.
+///
+/// The body's failure is a [`BehaviorError`] and the boundary transports [`SqlFailure`], so a body
+/// error rides out as the boundary's non-error [`TxDecision::Rollback`] value: the ROLLBACK is
+/// seam-issued exactly as an `Err` would issue it, nothing commits, and the ORIGINAL error surfaces
+/// here. A failure of the tx-control itself (BEGIN / COMMIT / ROLLBACK) arrives as a `SqlFailure` and
+/// is mapped to the leaf transport's one error channel.
 pub fn with_ambient_transaction<R>(
     ctx: &ExecutionContext,
     body: impl FnOnce() -> Result<R, BehaviorError>,
 ) -> Result<R, BehaviorError> {
-    let driver = ctx.tx_driver(None).map_err(sql_failure_to_behavior_error)?;
-    let tx = driver.begin_tx().map_err(sql_failure_to_behavior_error)?; // BEGIN issued on the owned connection
-    let tx_driver = TxDriver {
-        tx: std::cell::RefCell::new(tx),
-        dialect: driver.dialect(),
-    };
-    let result = {
-        // The tx-pinned ambient: every statement the body issues resolves THIS connection.
-        let tx_ctx = exec_context::for_driver(&tx_driver);
-        with_ambient_context(&tx_ctx, body)
-    };
-    let tx = tx_driver.tx.into_inner();
-    match result {
-        Ok(r) => tx
-            .commit()
-            .map(|_| r)
-            .map_err(sql_failure_to_behavior_error),
-        Err(e) => {
-            let _ = tx.rollback(); // best-effort; surface the ORIGINAL body error
-            Err(e)
-        }
+    let outcome = exec_context::with_transaction_decided(ctx, |tx_ctx| {
+        // The tx-scoped ctx is the ambient: `connection_for` resolves its pinned owned connection
+        // (STEP 1) for every statement the body issues through `execute_sql`.
+        Ok(match with_ambient_context(tx_ctx, body) {
+            Ok(r) => TxDecision::Commit(Ok(r)),
+            Err(e) => TxDecision::Rollback(Err(e)),
+        })
+    });
+    match outcome {
+        Ok(body_result) => body_result,
+        Err(e) => Err(sql_failure_to_behavior_error(e)),
     }
 }
 
@@ -804,6 +737,10 @@ pub fn group_children(mut payload: WireRow) -> Result<WireValue, BehaviorError> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    // The tests drive concrete drivers (`SqliteDriver`) directly, so they need the trait in scope;
+    // the transport itself only ever holds a `dyn Driver` behind the ctx (#215 removed its last
+    // `impl Driver`).
+    use crate::driver::Driver;
 
     fn wrow(pairs: &[(&str, WireValue)]) -> WireValue {
         WireValue::Row(WireRow {
@@ -1822,5 +1759,121 @@ mod tests {
             ),
             _ => panic!("the write summary element is not a row"),
         }
+    }
+
+    // #215 — a covered-plane transaction is the runtime's ONE transaction. `with_ambient_transaction`
+    // ran its own BEGIN/COMMIT on a driver it fetched itself, which looked equivalent and was not: the
+    // central boundary ALSO seam-issues its tx-control (so a middleware sees it) and marks the
+    // writer-sticky clock on COMMIT (so the reads AFTER a covered write are read-your-writes). Neither
+    // happened, and the single-pool conformance/livedb setups cannot tell — reader IS writer there.
+    //
+    // The gate runs a covered tx on a routed ctx over a SPLIT pair and reads back three transcripts:
+    // WHICH pool each statement went to, WHAT a registered middleware saw, and where the read AFTER the
+    // tx landed. All three come from the PRODUCTION functions (`with_ambient_transaction` +
+    // `execute_sql` through `with_ambient_context`) — nothing here re-derives a rule.
+    #[test]
+    fn a_covered_transaction_runs_through_the_central_boundary() {
+        use crate::connection_routing::test_support::{recording_stub, SeamLog};
+        use crate::connection_routing::{
+            ConnectionRegistry, ManualClock, ReaderWriterPools, RoutingConfig, StickyOptions,
+            WriterStickyClock,
+        };
+        use crate::middleware::{
+            create_middleware, use_middleware, with_middleware_scope, SqlHookFn, SqlNext,
+        };
+        use std::sync::{Arc, Mutex};
+
+        let pools: SeamLog = Arc::new(Mutex::new(Vec::new()));
+        let routing = RoutingConfig {
+            registry: ConnectionRegistry::from_default(ReaderWriterPools {
+                reader: recording_stub("reader", &pools),
+                writer: recording_stub("writer", &pools),
+            })
+            .build()
+            .unwrap(),
+            // Writer-sticky ENABLED on a manual clock (the instrument the sticky-expiry test already
+            // uses): the read after the commit is inside the 5s window, so "armed" and "not armed" are
+            // distinguishable deterministically.
+            sticky: WriterStickyClock::new(StickyOptions {
+                use_writer_after_transaction: true,
+                clock: Arc::new(ManualClock::new(1_000_000)),
+                ..StickyOptions::default()
+            }),
+        };
+        let ctx = exec_context::for_routing(&routing).unwrap();
+        let read = || {
+            with_ambient_context(&ctx, || {
+                execute_sql(payload(vec![
+                    ("params", wlist(vec![])),
+                    ("sql", WireValue::Str("SELECT id FROM users".into())),
+                ]))
+            })
+        };
+
+        // Before any transaction: a read is a plain read ⇒ the READER (the sticky clock is unarmed).
+        read().unwrap();
+        assert_eq!(pools.lock().unwrap().as_slice(), ["reader:all"]);
+
+        let seen = Arc::new(Mutex::new(Vec::<String>::new()));
+        let observed = Arc::clone(&seen);
+        with_middleware_scope(|| {
+            let mw = create_middleware::<(), _, fn() -> ()>(
+                Some(SqlHookFn(
+                    move |sql: &str, params: &[Value], next: &SqlNext| {
+                        observed.lock().unwrap().push(sql.to_string());
+                        next(sql, params)
+                    },
+                )),
+                None,
+            );
+            use_middleware(&mw);
+            with_ambient_transaction(&ctx, || {
+                // A READ inside the tx: its intent says READER, but the tx PIN wins — this is the
+                // "a read in a transaction sticks to the tx connection" half.
+                execute_sql(payload(vec![
+                    ("params", wlist(vec![])),
+                    ("sql", WireValue::Str("SELECT id FROM users".into())),
+                ]))?;
+                execute_sql(payload(vec![
+                    opts(write_mode(false), WireValue::Null, WireValue::Null),
+                    ("params", wlist(vec![])),
+                    (
+                        "sql",
+                        WireValue::Str("INSERT INTO users (name) VALUES (?)".into()),
+                    ),
+                ]))
+                .map(|_| ())
+            })
+            .unwrap();
+        });
+
+        // (1) the BEGIN is drawn from the WRITER pool, and (2) BOTH body statements — the READ included
+        // — ran on that same tx connection, never on the reader.
+        assert_eq!(
+            pools.lock().unwrap().as_slice(),
+            [
+                "reader:all", // the pre-tx read
+                "writer:run", // BEGIN, on the connection acquired from the WRITER pool
+                "writer:all", // the body's READ — the tx pin wins over its read intent
+                "writer:run", // the body's write
+                "writer:run", // COMMIT, on the same pinned connection
+            ]
+        );
+        // (3) the tx-control is SEAM-issued, so a registered middleware observes the whole envelope.
+        assert_eq!(
+            seen.lock().unwrap().as_slice(),
+            [
+                "BEGIN",
+                "SELECT id FROM users",
+                "INSERT INTO users (name) VALUES (?)",
+                "COMMIT",
+            ]
+        );
+
+        // (2, continued) the COMMIT armed the writer-sticky clock: the SAME plain read that opened this
+        // test on the reader now routes to the WRITER (read-your-writes).
+        pools.lock().unwrap().clear();
+        read().unwrap();
+        assert_eq!(pools.lock().unwrap().as_slice(), ["writer:all"]);
     }
 }

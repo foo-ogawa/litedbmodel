@@ -294,3 +294,77 @@ def test_a_missing_or_mistyped_pluck_or_group_port_is_loud():
     assert handlers["group"](group_ports(single=True), CTX) == {
         "ok": [{"id": 1, "kids": kids[0]}, {"id": 2, "kids": None}]
     }
+
+
+# #215 — a covered-plane transaction is the runtime's ONE transaction: it acquires from the WRITER pool,
+# PINS that connection for the whole body, issues its tx-control THROUGH the seam (so a registered
+# middleware sees BEGIN/COMMIT) and arms writer-sticky on COMMIT. Python gets all four from
+# ``with_transaction`` because the CTX answers WHICH connection a transaction opens on
+# (``ExecutionContext.begin_tx`` → ``routed_begin_tx``); go and rust each ran a private BEGIN/COMMIT
+# beside the central one and lost some of them. The single-pool conformance/livedb setups cannot tell
+# (reader IS writer there), so the gate SPLITS the pair — the python leg of the five.
+
+
+def test_a_covered_transaction_opens_on_the_writer_and_is_seam_visible():
+    from litedbmodel_runtime import with_middleware_scope, create_middleware, use
+    from litedbmodel_runtime.exec_context import with_transaction
+    from litedbmodel_runtime.middleware import active_sql_middlewares
+
+    conn = sqlite3.connect(":memory:")
+    # Autocommit: the runtime tx boundary issues BEGIN/COMMIT explicitly through the seam (the SAME
+    # reason SqliteDriver.in_memory sets it).
+    conn.isolation_level = None
+    conn.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
+    pools: list = []
+    clock = [1_000_000]
+    routing = RoutingConfig(
+        ConnectionRegistry.from_default(
+            reader_writer_pair(_RecordingPool("reader", conn, pools), _RecordingPool("writer", conn, pools))
+        ).build(),
+        WriterStickyClock(use_writer_after_transaction=True, writer_sticky_duration=5000, now=lambda: clock[0]),
+    )
+    ctx = ExecutionContext(None, MiddlewareChain(active_sql_middlewares), routing=routing)
+    execute_sql = make_handlers(ctx, "sqlite")["executeSQL"]
+    seen: list = []
+
+    def read():
+        return execute_sql({"sql": "SELECT id FROM users", "params": []}, CTX)
+
+    def observe(_state, next_, sql, params):
+        seen.append(sql)
+        return next_(sql, params)
+
+    def body():
+        use(create_middleware(execute=observe))
+        # Before any transaction: a plain read ⇒ the READER (the sticky clock is unarmed).
+        read()
+
+        def in_tx(_tx_ctx):
+            # A READ inside the tx: its intent says READER, but the tx PIN wins — and it acquires NO
+            # further connection, because the pinned one is not drawn from a pool per statement.
+            read()
+            return execute_sql(
+                {
+                    "sql": "INSERT INTO users (name) VALUES (?)",
+                    "params": ["A"],
+                    "opts": {"write": {"returning": False}, "whereDynamic": None, "guard": None},
+                },
+                CTX,
+            )
+
+        with_transaction(ctx, in_tx)
+        # The COMMIT armed writer-sticky: the SAME plain read now routes to the WRITER (read-your-writes).
+        clock[0] += 100
+        read()
+
+    with_middleware_scope(body)
+
+    assert pools == ["reader", "writer", "writer"]
+    assert seen == [
+        "SELECT id FROM users",
+        "BEGIN",
+        "SELECT id FROM users",
+        "INSERT INTO users (name) VALUES (?)",
+        "COMMIT",
+        "SELECT id FROM users",
+    ]

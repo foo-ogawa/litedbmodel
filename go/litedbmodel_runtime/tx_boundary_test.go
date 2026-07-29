@@ -379,12 +379,12 @@ func TestTransactionBoundaryOneBeginOneCommitForNOps(t *testing.T) {
 	db, sink := openRec(t, "file:txb1?mode=memory&cache=shared")
 	defer db.Close()
 	ctx := ContextForDB(db)
-	_, err := Transaction(ctx, db, "sqlite", DefaultTransactionOptions(), func(txCtx *ExecutionContext) (int, error) {
+	_, err := Transaction(ctx, "sqlite", DefaultTransactionOptions(), func(txCtx *ExecutionContext) (int, error) {
 		if _, err := RunGuarded(txCtx, "INSERT INTO t (id, v) VALUES (?, ?)", []any{int64(2), "b"}, "INSERT", "t"); err != nil {
 			return 0, err
 		}
 		// A "nested" Transaction (as a joined write would do) must NOT open a new BeginTx.
-		return Transaction(txCtx, db, "sqlite", DefaultTransactionOptions(), func(inner *ExecutionContext) (int, error) {
+		return Transaction(txCtx, "sqlite", DefaultTransactionOptions(), func(inner *ExecutionContext) (int, error) {
 			if _, err := RunGuarded(inner, "INSERT INTO t (id, v) VALUES (?, ?)", []any{int64(3), "c"}, "INSERT", "t"); err != nil {
 				return 0, err
 			}
@@ -413,7 +413,7 @@ func TestTransactionBodyErrorRollsBackTheWholeTx(t *testing.T) {
 	db, sink := openRec(t, "file:txb2?mode=memory&cache=shared")
 	defer db.Close()
 	ctx := ContextForDB(db)
-	_, err := Transaction(ctx, db, "sqlite", DefaultTransactionOptions(), func(txCtx *ExecutionContext) (int, error) {
+	_, err := Transaction(ctx, "sqlite", DefaultTransactionOptions(), func(txCtx *ExecutionContext) (int, error) {
 		if _, err := RunGuarded(txCtx, "INSERT INTO t (id, v) VALUES (?, ?)", []any{int64(2), "b"}, "INSERT", "t"); err != nil {
 			return 0, err
 		}
@@ -445,7 +445,7 @@ func TestTransactionRollbackOnlyReturnsValueButDoesNotCommit(t *testing.T) {
 	ctx := ContextForDB(db)
 	o := DefaultTransactionOptions()
 	o.RollbackOnly = true
-	out, err := Transaction(ctx, db, "sqlite", o, func(txCtx *ExecutionContext) (int, error) {
+	out, err := Transaction(ctx, "sqlite", o, func(txCtx *ExecutionContext) (int, error) {
 		if _, err := RunGuarded(txCtx, "INSERT INTO t (id, v) VALUES (?, ?)", []any{int64(2), "b"}, "INSERT", "t"); err != nil {
 			return 0, err
 		}
@@ -481,7 +481,7 @@ func TestGuardWriteOutsideVsReadOnlyVsInside(t *testing.T) {
 		t.Errorf("bare write must be WriteOutsideTransaction: %v", e)
 	}
 	// Read-only-scoped write inside a tx → WriteInReadOnly (read-only checked first).
-	_, _ = WithTransaction(ctx, db, func(txCtx *ExecutionContext) (int, error) {
+	_, _ = WithTransaction(ctx, func(txCtx *ExecutionContext) (int, error) {
 		ro := txCtx.WithReadOnly()
 		e := func() error {
 			_, err := RunGuarded(ro, "UPDATE t SET v='y' WHERE id=1", nil, "UPDATE", "t")
@@ -493,7 +493,7 @@ func TestGuardWriteOutsideVsReadOnlyVsInside(t *testing.T) {
 		return 0, nil
 	})
 	// Inside a Transaction() boundary → succeeds.
-	_, err := Transaction(ctx, db, "sqlite", DefaultTransactionOptions(), func(txCtx *ExecutionContext) (int, error) {
+	_, err := Transaction(ctx, "sqlite", DefaultTransactionOptions(), func(txCtx *ExecutionContext) (int, error) {
 		_, err := RunGuarded(txCtx, "INSERT INTO t (id,v) VALUES (6,'z')", nil, "INSERT", "t")
 		return 0, err
 	})
@@ -511,7 +511,7 @@ func TestRetryRerunsWholeTxOnRetryableError(t *testing.T) {
 	o := DefaultTransactionOptions()
 	o.RetryDurationMs = 0 // no sleep in the test
 	fails := 1            // fail once, succeed on attempt 2
-	out, err := Transaction(ctx, db, "sqlite", o, func(txCtx *ExecutionContext) (int, error) {
+	out, err := Transaction(ctx, "sqlite", o, func(txCtx *ExecutionContext) (int, error) {
 		if _, err := RunGuarded(txCtx, "INSERT INTO t (id,v) VALUES (7,'w')", nil, "INSERT", "t"); err != nil {
 			return 0, err
 		}
@@ -540,7 +540,7 @@ func TestNonRetryableErrorDoesNotRetry(t *testing.T) {
 	o := DefaultTransactionOptions()
 	o.RetryDurationMs = 0
 	calls := 0
-	_, err := Transaction(ctx, db, "sqlite", o, func(txCtx *ExecutionContext) (int, error) {
+	_, err := Transaction(ctx, "sqlite", o, func(txCtx *ExecutionContext) (int, error) {
 		calls++
 		return 0, errors.New("some non-retryable driver error")
 	})

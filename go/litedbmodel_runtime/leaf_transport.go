@@ -58,7 +58,7 @@ func BindLeafTransport(ctx *ExecutionContext, dialect string) {
 	leafDialect = dialect
 }
 
-// UnbindLeafTransport clears the bound connection (leaves ExecuteSQL fail-closed until re-bound).
+// UnbindLeafTransport clears the bound CONTEXT (leaves ExecuteSQL fail-closed until re-bound).
 func UnbindLeafTransport() { leafExecCtx = nil }
 
 // ── Port unbox — the generic-wire payload → the leaf's declared ports ───────────────────────────────
@@ -503,7 +503,7 @@ func ExecuteSQL(payload wire.WireRow) (wire.WireValue, error) {
 		return wire.WireNull(), err
 	}
 	if leafExecCtx == nil {
-		return wire.WireNull(), fmt.Errorf("leaf transport: no bound connection (call BindLeafTransport before running the native module)")
+		return wire.WireNull(), fmt.Errorf("leaf transport: no bound execution context (call BindLeafTransport before running the native module)")
 	}
 	// Assemble the DYNAMIC (SKIP) WHERE FIRST when a plan is present: the final statement shape is only
 	// known here, so the placeholder render (finalizeSQL, below) must follow it (CLAUDE.md §2). An
@@ -560,21 +560,25 @@ func ExecuteSQL(payload wire.WireRow) (wire.WireValue, error) {
 	return wire.WireListOf(items), nil
 }
 
-// WithAmbientTransaction runs `body` inside ONE transaction on `db`, threading the tx-owned connection
-// as the AMBIENT the free-function [ExecuteSQL] resolves — so a bc-generated tx runner (which calls
-// ExecuteSQL directly, taking no db handle) executes every statement ON the transaction. BEGIN →
-// run body under the tx-pinned ambient → COMMIT on ok / ROLLBACK on a body error (atomicity). This is
-// the CONSUMER's tx-boundary responsibility (NOT a bc feature, NOT emitted into the generated runner);
-// it adds NO tx engine — it reuses the existing tx combinator ([WithTransaction], which owns BEGIN/
-// COMMIT/ROLLBACK through the central seam) and only swaps the ambient leaf ctx for the body span.
-// Go twin of the rust `with_ambient_transaction` leaf. Requires a bound transport ([BindLeafTransport]).
-func WithAmbientTransaction(db TxDB, body func() error) error {
+// WithAmbientTransaction runs `body` inside ONE transaction on the BOUND context, threading the
+// tx-owned connection as the AMBIENT the free-function [ExecuteSQL] resolves — so a bc-generated tx
+// runner (which calls ExecuteSQL directly, taking no db handle) executes every statement ON the
+// transaction. BEGIN → run body under the tx-pinned ambient → COMMIT on ok / ROLLBACK on a body error
+// (atomicity). This is the CONSUMER's tx-boundary responsibility (NOT a bc feature, NOT emitted into
+// the generated runner); it adds NO tx engine — it reuses the existing tx combinator
+// ([WithTransaction], which owns BEGIN/COMMIT/ROLLBACK through the central seam, acquires the tx's
+// owned connection from the ctx's WRITER pool and arms writer-sticky on COMMIT) and only swaps the
+// ambient leaf ctx for the body span. WHICH connection the transaction opens on is therefore the same
+// question the bound ctx already answers for every statement — taking a `db` here instead let a routed
+// covered plane BEGIN outside its own routing (#215). Go twin of the rust `with_ambient_transaction`
+// leaf. Requires a bound transport ([BindLeafTransport]).
+func WithAmbientTransaction(body func() error) error {
 	base := leafExecCtx
 	if base == nil {
 		return fmt.Errorf("leaf transport: WithAmbientTransaction needs a bound transport (call BindLeafTransport first)")
 	}
 	prev := leafExecCtx
-	_, err := WithTransaction(base, db, func(txCtx *ExecutionContext) (struct{}, error) {
+	_, err := WithTransaction(base, func(txCtx *ExecutionContext) (struct{}, error) {
 		leafExecCtx = txCtx                   // the tx-owned ctx is the ambient the covered runner's ExecuteSQL resolves…
 		defer func() { leafExecCtx = prev }() // …restored on COMMIT / ROLLBACK / panic (scopes restore)
 		return struct{}{}, body()

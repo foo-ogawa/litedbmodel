@@ -104,9 +104,9 @@ func openMysqlRec(t *testing.T) (*sql.DB, *recSink) {
 // ── (1) MULTI-OP ATOMICITY through the REAL Transaction() boundary ─────────────
 
 // boundaryInsert runs a single-INSERT bundle as ONE op JOINing the ambient tx (guard ON).
-func boundaryInsert(t *testing.T, txCtx *ExecutionContext, db TxDB, dialect string, id, worker, seq int64) error {
+func boundaryInsert(t *testing.T, txCtx *ExecutionContext, dialect string, id, worker, seq int64) error {
 	t.Helper()
-	_, err := ExecuteTransactionBundleCtx(insertBundle(t, dialect), txInput(id, worker, seq), txCtx, db, true)
+	_, err := ExecuteTransactionBundleCtx(insertBundle(t, dialect), txInput(id, worker, seq), txCtx, true)
 	return err
 }
 
@@ -117,11 +117,11 @@ func multiOpAtomicityCommit(t *testing.T, db *sql.DB, sink *recSink, dialect str
 	sink.reset()
 
 	ctx := ContextForDB(db)
-	_, err := Transaction(ctx, db, dialect, DefaultTransactionOptions(), func(txCtx *ExecutionContext) (int, error) {
-		if err := boundaryInsert(t, txCtx, db, dialect, 100, 1, 0); err != nil { // opA
+	_, err := Transaction(ctx, dialect, DefaultTransactionOptions(), func(txCtx *ExecutionContext) (int, error) {
+		if err := boundaryInsert(t, txCtx, dialect, 100, 1, 0); err != nil { // opA
 			return 0, err
 		}
-		if err := boundaryInsert(t, txCtx, db, dialect, 101, 1, 1); err != nil { // opB — JOINs opA
+		if err := boundaryInsert(t, txCtx, dialect, 101, 1, 1); err != nil { // opB — JOINs opA
 			return 0, err
 		}
 		return 0, nil
@@ -151,11 +151,11 @@ func multiOpAtomicityRollback(t *testing.T, db *sql.DB, sink *recSink, dialect s
 	sink.reset()
 
 	ctx := ContextForDB(db)
-	_, err := Transaction(ctx, db, dialect, DefaultTransactionOptions(), func(txCtx *ExecutionContext) (int, error) {
-		if err := boundaryInsert(t, txCtx, db, dialect, 200, 2, 0); err != nil { // opA — valid
+	_, err := Transaction(ctx, dialect, DefaultTransactionOptions(), func(txCtx *ExecutionContext) (int, error) {
+		if err := boundaryInsert(t, txCtx, dialect, 200, 2, 0); err != nil { // opA — valid
 			return 0, err
 		}
-		if err := boundaryInsert(t, txCtx, db, dialect, 201, 2, 1); err != nil { // opB — PK collision
+		if err := boundaryInsert(t, txCtx, dialect, 201, 2, 1); err != nil { // opB — PK collision
 			return 0, err
 		}
 		return 0, nil
@@ -179,22 +179,22 @@ func multiOpAtomicityRollback(t *testing.T, db *sql.DB, sink *recSink, dialect s
 func guardLive(t *testing.T, db *sql.DB, dialect string) {
 	ctx := ContextForDB(db)
 	// Outside any Transaction() → WriteOutsideTransactionError, no row written.
-	_, err := ExecuteTransactionBundleCtx(insertBundle(t, dialect), txInput(300, 3, 0), ctx, db, true)
+	_, err := ExecuteTransactionBundleCtx(insertBundle(t, dialect), txInput(300, 3, 0), ctx, true)
 	if f, ok := err.(*SqlFailure); !ok || f.Kind != "write_outside_transaction" {
 		t.Errorf("%s: bare write must be WriteOutsideTransactionError, got %v", dialect, err)
 	}
 	// Read-only-scoped write inside a Transaction() → WriteInReadOnly (read-only first).
-	_, _ = Transaction(ctx, db, dialect, DefaultTransactionOptions(), func(txCtx *ExecutionContext) (int, error) {
+	_, _ = Transaction(ctx, dialect, DefaultTransactionOptions(), func(txCtx *ExecutionContext) (int, error) {
 		ro := txCtx.WithReadOnly()
-		_, e := ExecuteTransactionBundleCtx(insertBundle(t, dialect), txInput(301, 3, 0), ro, db, true)
+		_, e := ExecuteTransactionBundleCtx(insertBundle(t, dialect), txInput(301, 3, 0), ro, true)
 		if f, ok := e.(*SqlFailure); !ok || f.Kind != "write_in_read_only_context" {
 			t.Errorf("%s: read-only write must be WriteInReadOnly, got %v", dialect, e)
 		}
 		return 0, nil
 	})
 	// Inside a Transaction() → succeeds.
-	_, err = Transaction(ctx, db, dialect, DefaultTransactionOptions(), func(txCtx *ExecutionContext) (int, error) {
-		return 0, boundaryInsert(t, txCtx, db, dialect, 302, 3, 0)
+	_, err = Transaction(ctx, dialect, DefaultTransactionOptions(), func(txCtx *ExecutionContext) (int, error) {
+		return 0, boundaryInsert(t, txCtx, dialect, 302, 3, 0)
 	})
 	if err != nil {
 		t.Errorf("%s: guarded write inside a Transaction() must succeed: %v", dialect, err)
@@ -239,7 +239,7 @@ func isolationBehavior(t *testing.T, db *sql.DB, dialect string) {
 	o := DefaultTransactionOptions()
 	o.Isolation = IsolationRepeatableRead
 	ctx := ContextForDB(db)
-	_, err := Transaction(ctx, db, dialect, o, func(txCtx *ExecutionContext) (int, error) {
+	_, err := Transaction(ctx, dialect, o, func(txCtx *ExecutionContext) (int, error) {
 		first := readSeqDirect(txCtx)
 		// A concurrent committed UPDATE (its own connection) between the two reads.
 		if _, e := db.Exec(fmt.Sprintf("UPDATE %s SET seq = 99 WHERE id = 1", isoTbl)); e != nil {
@@ -259,7 +259,7 @@ func isolationBehavior(t *testing.T, db *sql.DB, dialect string) {
 	reset()
 	o2 := DefaultTransactionOptions()
 	o2.Isolation = IsolationReadCommitted
-	_, err = Transaction(ctx, db, dialect, o2, func(txCtx *ExecutionContext) (int, error) {
+	_, err = Transaction(ctx, dialect, o2, func(txCtx *ExecutionContext) (int, error) {
 		first := readSeqDirect(txCtx)
 		if _, e := db.Exec(fmt.Sprintf("UPDATE %s SET seq = 77 WHERE id = 1", isoTbl)); e != nil {
 			t.Fatalf("concurrent update: %v", e)
@@ -309,7 +309,7 @@ func retryPgWriteSkew(t *testing.T, db *sql.DB, sink *recSink, typedOnly bool) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			_, e := Transaction(ctx, db, "postgres", o, func(txCtx *ExecutionContext) (int, error) {
+			_, e := Transaction(ctx, "postgres", o, func(txCtx *ExecutionContext) (int, error) {
 				// Read the sum of both rows (the write-skew read set).
 				rows, err := Execute(txCtx, fmt.Sprintf("SELECT COALESCE(SUM(seq),0) AS s FROM %s", isoTbl), nil, ReadIntent())
 				if err != nil {
@@ -384,7 +384,7 @@ func retryMysqlDeadlock(t *testing.T, db *sql.DB, sink *recSink, typedOnly bool)
 					first, second = 2, 1 // opposite lock order → deadlock
 				}
 				done := false
-				_, e := Transaction(ctx, db, "mysql", o, func(txCtx *ExecutionContext) (int, error) {
+				_, e := Transaction(ctx, "mysql", o, func(txCtx *ExecutionContext) (int, error) {
 					if _, err := Run(txCtx, fmt.Sprintf("UPDATE %s SET seq = seq + 1 WHERE id = ?", isoTbl), []any{first}, WriteIntent()); err != nil {
 						return 0, err
 					}
@@ -436,8 +436,8 @@ func nonRetryableDoesNotRetry(t *testing.T, db *sql.DB, sink *recSink, dialect s
 	ctx := ContextForDB(db)
 	o := DefaultTransactionOptions() // retry ON
 	o.RetryDurationMs = 5
-	_, err := Transaction(ctx, db, dialect, o, func(txCtx *ExecutionContext) (int, error) {
-		return 0, boundaryInsert(t, txCtx, db, dialect, 400, 4, 0) // PK collision — non-retryable
+	_, err := Transaction(ctx, dialect, o, func(txCtx *ExecutionContext) (int, error) {
+		return 0, boundaryInsert(t, txCtx, dialect, 400, 4, 0) // PK collision — non-retryable
 	})
 	if err == nil {
 		t.Fatalf("%s: a unique collision must fail the boundary", dialect)
@@ -457,13 +457,13 @@ func nestedOneBeginCommit(t *testing.T, db *sql.DB, sink *recSink, dialect strin
 	}
 	sink.reset()
 	ctx := ContextForDB(db)
-	_, err := Transaction(ctx, db, dialect, DefaultTransactionOptions(), func(outer *ExecutionContext) (int, error) {
-		if err := boundaryInsert(t, outer, db, dialect, 500, 5, 0); err != nil {
+	_, err := Transaction(ctx, dialect, DefaultTransactionOptions(), func(outer *ExecutionContext) (int, error) {
+		if err := boundaryInsert(t, outer, dialect, 500, 5, 0); err != nil {
 			return 0, err
 		}
 		// A nested Transaction() JOINs the outer — no new BEGIN/COMMIT.
-		return Transaction(outer, db, dialect, DefaultTransactionOptions(), func(inner *ExecutionContext) (int, error) {
-			return 0, boundaryInsert(t, inner, db, dialect, 501, 5, 1)
+		return Transaction(outer, dialect, DefaultTransactionOptions(), func(inner *ExecutionContext) (int, error) {
+			return 0, boundaryInsert(t, inner, dialect, 501, 5, 1)
 		})
 	})
 	if err != nil {
@@ -482,12 +482,12 @@ func nestedOneBeginCommit(t *testing.T, db *sql.DB, sink *recSink, dialect strin
 	if _, e := db.Exec(fmt.Sprintf("INSERT INTO %s (id, worker, seq) VALUES (601, 999, 9)", isoTbl)); e != nil {
 		t.Fatalf("preseed 601: %v", e)
 	}
-	_, err = Transaction(ctx, db, dialect, DefaultTransactionOptions(), func(outer *ExecutionContext) (int, error) {
-		if err := boundaryInsert(t, outer, db, dialect, 600, 6, 0); err != nil {
+	_, err = Transaction(ctx, dialect, DefaultTransactionOptions(), func(outer *ExecutionContext) (int, error) {
+		if err := boundaryInsert(t, outer, dialect, 600, 6, 0); err != nil {
 			return 0, err
 		}
-		return Transaction(outer, db, dialect, DefaultTransactionOptions(), func(inner *ExecutionContext) (int, error) {
-			return 0, boundaryInsert(t, inner, db, dialect, 601, 6, 1) // inner PK collision
+		return Transaction(outer, dialect, DefaultTransactionOptions(), func(inner *ExecutionContext) (int, error) {
+			return 0, boundaryInsert(t, inner, dialect, 601, 6, 1) // inner PK collision
 		})
 	})
 	if err == nil {

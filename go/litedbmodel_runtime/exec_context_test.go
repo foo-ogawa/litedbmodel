@@ -111,7 +111,7 @@ func TestWithTransactionCommitsOnOk(t *testing.T) {
 	db := seedSeed(t)
 	defer db.Close()
 	ctx := ContextForDB(db)
-	out, err := WithTransaction(ctx, db, func(txCtx *ExecutionContext) (int, error) {
+	out, err := WithTransaction(ctx, func(txCtx *ExecutionContext) (int, error) {
 		if !txCtx.InTransaction() {
 			t.Errorf("txCtx must report InTransaction() true")
 		}
@@ -134,7 +134,7 @@ func TestWithTransactionRollsBackOnErr(t *testing.T) {
 	db := seedSeed(t)
 	defer db.Close()
 	ctx := ContextForDB(db)
-	_, err := WithTransaction(ctx, db, func(txCtx *ExecutionContext) (int, error) {
+	_, err := WithTransaction(ctx, func(txCtx *ExecutionContext) (int, error) {
 		if _, err := Run(txCtx, "INSERT INTO t (id, v) VALUES (?, ?)", []any{int64(2), "b"}, WriteIntent()); err != nil {
 			return 0, err
 		}
@@ -160,7 +160,7 @@ func TestWithTransactionDecidedRollbackReturnsValue(t *testing.T) {
 	db := seedSeed(t)
 	defer db.Close()
 	ctx := ContextForDB(db)
-	out, err := WithTransactionDecided(ctx, db, func(txCtx *ExecutionContext) (string, TxDecision, error) {
+	out, err := WithTransactionDecided(ctx, func(txCtx *ExecutionContext) (string, TxDecision, error) {
 		if _, err := Run(txCtx, "INSERT INTO t (id, v) VALUES (?, ?)", []any{int64(2), "b"}, WriteIntent()); err != nil {
 			return "", Commit(), err
 		}
@@ -187,7 +187,7 @@ func TestConnectionForResolution(t *testing.T) {
 	if _, ok := ctx.ConnectionFor(ReadIntent()).(dbConnection); !ok {
 		t.Errorf("base ctx ConnectionFor must be a dbConnection")
 	}
-	_, _ = WithTransaction(ctx, db, func(txCtx *ExecutionContext) (int, error) {
+	_, _ = WithTransaction(ctx, func(txCtx *ExecutionContext) (int, error) {
 		if !txCtx.InTransaction() {
 			t.Errorf("tx ctx must report InTransaction() true")
 		}

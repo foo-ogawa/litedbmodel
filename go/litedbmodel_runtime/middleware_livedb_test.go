@@ -52,7 +52,7 @@ func TestPhaseDLiveTxControlVisiblePG(t *testing.T) {
 	_, err := WithMiddlewareScope(context.Background(), func(scopeCtx context.Context) (struct{}, error) {
 		RegisterMiddleware(scopeCtx, observeMiddleware(&seen, &mu).Descriptor())
 		ctx := ContextForDBCtx(scopeCtx, db)
-		_, e := Transaction(ctx, db, "postgres", DefaultTransactionOptions(), func(txCtx *ExecutionContext) (int, error) {
+		_, e := Transaction(ctx, "postgres", DefaultTransactionOptions(), func(txCtx *ExecutionContext) (int, error) {
 			_, err := Run(txCtx, fmt.Sprintf("INSERT INTO %s (id, val) VALUES ($1, $2)", mwTxTbl), []any{int64(1), "a"}, WriteIntent())
 			return 0, err
 		})
@@ -79,7 +79,7 @@ func TestPhaseDLiveTxControlVisiblePG(t *testing.T) {
 	resetMwTx(t, db)
 	var unseen []string
 	ctx := ContextForDB(db) // no scope, no registration → empty chain
-	_, err = Transaction(ctx, db, "postgres", DefaultTransactionOptions(), func(txCtx *ExecutionContext) (int, error) {
+	_, err = Transaction(ctx, "postgres", DefaultTransactionOptions(), func(txCtx *ExecutionContext) (int, error) {
 		_, e := Run(txCtx, fmt.Sprintf("INSERT INTO %s (id, val) VALUES ($1, $2)", mwTxTbl), []any{int64(2), "b"}, WriteIntent())
 		return 0, e
 	})
@@ -108,7 +108,7 @@ func TestPhaseDLiveTxControlVisibleRollbackPG(t *testing.T) {
 	_, _ = WithMiddlewareScope(context.Background(), func(scopeCtx context.Context) (struct{}, error) {
 		RegisterMiddleware(scopeCtx, observeMiddleware(&seen, &mu).Descriptor())
 		ctx := ContextForDBCtx(scopeCtx, db)
-		_, e := Transaction(ctx, db, "postgres", DefaultTransactionOptions(), func(txCtx *ExecutionContext) (int, error) {
+		_, e := Transaction(ctx, "postgres", DefaultTransactionOptions(), func(txCtx *ExecutionContext) (int, error) {
 			// A PK collision fails the boundary ⇒ ROLLBACK.
 			_, err := Run(txCtx, fmt.Sprintf("INSERT INTO %s (id, val) VALUES ($1, $2)", mwTxTbl), []any{int64(1), "dup"}, WriteIntent())
 			return 0, err

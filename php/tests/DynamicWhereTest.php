@@ -6,6 +6,7 @@ namespace LiteDbModel\Runtime\Tests;
 
 use LiteDbModel\Runtime\Connection;
 use LiteDbModel\Runtime\ConnectionRegistry;
+use LiteDbModel\Runtime\Context;
 use LiteDbModel\Runtime\Leaves;
 use LiteDbModel\Runtime\MiddlewareChain;
 use LiteDbModel\Runtime\PdoDriver;
@@ -15,6 +16,11 @@ use LiteDbModel\Runtime\RoutingConfig;
 use LiteDbModel\Runtime\RoutingExecutionContext;
 use LiteDbModel\Runtime\WriterStickyClock;
 use PHPUnit\Framework\TestCase;
+
+use function LiteDbModel\Runtime\createMiddleware;
+use function LiteDbModel\Runtime\routedTransaction;
+use function LiteDbModel\Runtime\use_;
+use function LiteDbModel\Runtime\withMiddlewareScope;
 
 /**
  * The DYNAMIC (SKIP) WHERE assembled by the `executeSQL` leaf (#192), over a real in-memory sqlite.
@@ -260,6 +266,77 @@ final class DynamicWhereTest extends TestCase
         self::assertSame(1, $row['changes']);
     }
 
+
+    /**
+     * #215 — a covered-plane transaction is the runtime's ONE transaction: it takes its owned
+     * connection from the WRITER pool, PINS it for the whole body, issues its tx-control THROUGH the
+     * seam (so a registered middleware sees BEGIN/COMMIT) and arms writer-sticky on COMMIT. PHP gets all
+     * four from {@see \LiteDbModel\Runtime\routedTransaction()}, which is why it is one of the three
+     * legs that were already right; go and rust each ran a private BEGIN/COMMIT beside the central one
+     * and lost some of them. The single-pool conformance/livedb setups cannot tell (reader IS writer
+     * there), so the gate SPLITS the pair. The PHP leg of the five.
+     */
+    public function testACoveredTransactionOpensOnTheWriterAndIsSeamVisible(): void
+    {
+        $pdo = new \PDO('sqlite::memory:', null, null, [\PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION]);
+        $pdo->exec('CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)');
+        $driver = new PdoDriver($pdo);
+        $log = new \ArrayObject();
+        $clock = 1000000.0;
+        $routing = new RoutingConfig(
+            ConnectionRegistry::fromDefault(new ReaderWriterPools(
+                new RecordingPdoPool('reader', $driver, $log),
+                new RecordingPdoPool('writer', $driver, $log),
+            ))->build(),
+            new WriterStickyClock(
+                useWriterAfterTransaction: true,
+                writerStickyDuration: 5000,
+                now: static function () use (&$clock): float { return $clock; },
+            ),
+        );
+        // The AMBIENT middleware chain (what a routed deployment gets), so the registered observer below
+        // sees every statement the seam issues — including the runtime's own tx-control.
+        $execCtx = new RoutingExecutionContext($driver, Context::ambientChain(), $routing);
+        $executeSQL = Leaves::makeHandlers($execCtx, 'sqlite')['executeSQL'];
+        $ctx = ['nodeId' => 'n0', 'component' => 'executeSQL'];
+        $seen = [];
+        $read = static function () use ($executeSQL, $ctx): void {
+            $executeSQL(['sql' => 'SELECT id FROM users', 'params' => []], $ctx);
+        };
+
+        withMiddlewareScope(function () use ($execCtx, $executeSQL, $ctx, $read, &$seen, &$clock): void {
+            use_(createMiddleware(['execute' => function (callable $next, string $sql, array $params) use (&$seen) {
+                $seen[] = $sql;
+                return $next($sql, $params);
+            }]));
+            // Before any transaction: a plain read => the READER (the sticky clock is unarmed).
+            $read();
+            routedTransaction($execCtx, static function () use ($executeSQL, $ctx, $read): void {
+                // A READ inside the tx: its intent says READER, but the tx PIN wins — and it acquires NO
+                // further pooled connection.
+                $read();
+                $executeSQL([
+                    'sql' => 'INSERT INTO users (name) VALUES (?)',
+                    'params' => ['A'],
+                    'opts' => (object) ['write' => (object) ['returning' => false], 'whereDynamic' => null, 'guard' => null],
+                ], $ctx);
+            }, null, 'sqlite');
+            // The COMMIT armed writer-sticky: the SAME plain read now routes to the WRITER.
+            $clock += 100.0;
+            $read();
+        });
+
+        self::assertSame(['reader', 'writer:tx', 'writer'], $log->getArrayCopy());
+        self::assertSame([
+            'SELECT id FROM users',
+            'BEGIN',
+            'SELECT id FROM users',
+            'INSERT INTO users (name) VALUES (?)',
+            'COMMIT',
+            'SELECT id FROM users',
+        ], $seen);
+    }
+
     /**
      * #213 — `pluck` / `group` read their ports through the SAME fail-closed reader as the SQL transport.
      * Their ports are FLAT, which is not a reason to trust them: the generator spells every one with the
@@ -365,6 +442,10 @@ final class RecordingPdoPool implements PdoPool
 
     public function backingDriver(): PdoDriver
     {
+        // A TRANSACTION takes its owned connection from the pool's backing driver (the production call
+        // `routedTransaction` makes to pin the writer), so recording it is how a test observes WHICH
+        // pool a covered transaction opened on.
+        $this->log[] = $this->label . ':tx';
         return $this->backing;
     }
 }

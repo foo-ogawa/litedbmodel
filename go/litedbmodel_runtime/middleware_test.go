@@ -123,7 +123,7 @@ func TestD1TxControlVisibleCommit(t *testing.T) {
 	_, err := WithMiddlewareScope(context.Background(), func(scopeCtx context.Context) (struct{}, error) {
 		RegisterMiddleware(scopeCtx, observeMiddleware(&seen, &mu).Descriptor())
 		ctx := ContextForDBCtx(scopeCtx, db)
-		_, e := Transaction(ctx, db, "sqlite", DefaultTransactionOptions(), func(txCtx *ExecutionContext) (int, error) {
+		_, e := Transaction(ctx, "sqlite", DefaultTransactionOptions(), func(txCtx *ExecutionContext) (int, error) {
 			// A guarded user write JOINs the boundary — it runs on the SAME pinned conn.
 			_, err := RunGuarded(txCtx, "INSERT INTO t (name) VALUES (?)", []any{"tx"}, "INSERT", "t")
 			return 0, err
@@ -151,7 +151,7 @@ func TestD1TxControlVisibleRollback(t *testing.T) {
 	_, _ = WithMiddlewareScope(context.Background(), func(scopeCtx context.Context) (struct{}, error) {
 		RegisterMiddleware(scopeCtx, observeMiddleware(&seen, &mu).Descriptor())
 		ctx := ContextForDBCtx(scopeCtx, db)
-		_, e := Transaction(ctx, db, "sqlite", DefaultTransactionOptions(), func(txCtx *ExecutionContext) (int, error) {
+		_, e := Transaction(ctx, "sqlite", DefaultTransactionOptions(), func(txCtx *ExecutionContext) (int, error) {
 			// A PK collision inside the boundary → the whole tx errors ⇒ ROLLBACK.
 			_, err := RunGuarded(txCtx, "INSERT INTO t (id, name) VALUES (1, 'dup')", nil, "INSERT", "t")
 			return 0, err
@@ -175,7 +175,7 @@ func TestD1TxControlRedNotObserved(t *testing.T) {
 	defer db.Close()
 	var seen []string
 	ctx := ContextForDB(db) // no scope, no registration → empty chain
-	_, err := Transaction(ctx, db, "sqlite", DefaultTransactionOptions(), func(txCtx *ExecutionContext) (int, error) {
+	_, err := Transaction(ctx, "sqlite", DefaultTransactionOptions(), func(txCtx *ExecutionContext) (int, error) {
 		_, e := RunGuarded(txCtx, "INSERT INTO t (name) VALUES (?)", []any{"tx"}, "INSERT", "t")
 		return 0, e
 	})

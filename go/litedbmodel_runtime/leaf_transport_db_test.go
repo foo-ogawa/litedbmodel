@@ -129,7 +129,7 @@ func TestWithAmbientTransaction_CommitsOnOkRollsBackOnErr(t *testing.T) {
 	defer UnbindLeafTransport()
 
 	// Ok body: two inserts on the tx-owned connection → COMMIT → both rows persist.
-	if err := WithAmbientTransaction(db, func() error {
+	if err := WithAmbientTransaction(func() error {
 		if _, e := insT(1, "a"); e != nil {
 			return e
 		}
@@ -144,7 +144,7 @@ func TestWithAmbientTransaction_CommitsOnOkRollsBackOnErr(t *testing.T) {
 
 	// Err body: insert row 3 then fail mid-tx → ROLLBACK → row 3 must NOT persist (still 2 rows).
 	boom := errors.New("mid-tx failure")
-	err := WithAmbientTransaction(db, func() error {
+	err := WithAmbientTransaction(func() error {
 		if _, e := insT(3, "c"); e != nil { // issued inside the tx…
 			return e
 		}
@@ -165,7 +165,7 @@ func TestWithAmbientTransaction_RestoresAmbient(t *testing.T) {
 	defer db.Close()
 	defer UnbindLeafTransport()
 
-	if err := WithAmbientTransaction(db, func() error { _, e := insT(1, "a"); return e }); err != nil {
+	if err := WithAmbientTransaction(func() error { _, e := insT(1, "a"); return e }); err != nil {
 		t.Fatalf("tx: %v", err)
 	}
 	if _, err := insT(2, "b"); err != nil { // outside any tx — on the restored ambient

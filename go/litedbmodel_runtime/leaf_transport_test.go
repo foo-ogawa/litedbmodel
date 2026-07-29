@@ -5,9 +5,11 @@
 package litedbmodel_runtime
 
 import (
+	"context"
 	"errors"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/foo-ogawa/litedbmodel/go/litedbmodel_runtime/wire"
@@ -401,5 +403,82 @@ func TestExecuteSQL_RunModePicksThePool(t *testing.T) {
 	}
 	if ch := summary.AsList().Got.ElemRow(0).Got.ProbeInt("changes"); ch.Kind != wireProbeGot {
 		t.Fatalf("a non-returning write must return the [{changes,lastInsertRowid}] summary (kind=%d)", ch.Kind)
+	}
+}
+
+// #215 — a covered-plane transaction is the runtime's ONE transaction, on the connection the BOUND
+// context resolves. [WithAmbientTransaction] took the tx's db as an ARGUMENT and BEGAN on it, so a
+// routed covered plane opened its transaction outside its own routing — and it could not do otherwise,
+// because a [Pool] hands out owned connections and the tx path only knew how to ask a [TxDB]. The
+// single-pool conformance/livedb setups cannot see any of this: reader IS writer there.
+//
+// The gate runs a covered tx on a routed ctx over a SPLIT pair and reads back three transcripts —
+// WHICH pool each acquire came from, WHAT a registered middleware saw, and where the read AFTER the tx
+// landed — all from the PRODUCTION wiring: the ctx goes in through the PUBLIC binder
+// ([BindLeafTransport]), the statements through [ExecuteSQL], the boundary through
+// [WithAmbientTransaction]. Nothing here re-derives a rule.
+func TestWithAmbientTransaction_OpensOnTheWriterAndIsSeamVisible(t *testing.T) {
+	var pools []string
+	reader := newRecordPool("reader", &pools)
+	writer := newRecordPool("writer", &pools)
+	clock := int64(1_000_000)
+	sticky := NewWriterStickyClock(StickyOptions{
+		UseWriterAfterTransaction: boolPtr(true),
+		WriterStickyDuration:      intPtr(5000),
+		Now:                       func() int64 { return clock },
+	})
+	read := func() error {
+		_, err := ExecuteSQL(sqlPayload(nil, "SELECT id FROM users", false))
+		return err
+	}
+
+	var seen []string
+	var mu sync.Mutex
+	if _, err := WithMiddlewareScope(context.Background(), func(scopeCtx context.Context) (struct{}, error) {
+		RegisterMiddleware(scopeCtx, observeMiddleware(&seen, &mu).Descriptor())
+		BindLeafTransport(ContextForRoutingCtx(scopeCtx, routingWithPools(reader, writer, sticky)), "sqlite")
+		defer UnbindLeafTransport()
+
+		// Before any transaction: a read is a plain read ⇒ the READER (the sticky clock is unarmed).
+		if err := read(); err != nil {
+			return struct{}{}, err
+		}
+		if err := WithAmbientTransaction(func() error {
+			// A READ inside the tx: its intent says READER, but the tx PIN wins — this is the "a read in
+			// a transaction sticks to the tx connection" half, and it acquires NO further connection.
+			if err := read(); err != nil {
+				return err
+			}
+			_, err := ExecuteSQL(sqlPayload(nil, "INSERT INTO users (name) VALUES (?)", true))
+			return err
+		}); err != nil {
+			return struct{}{}, err
+		}
+		// The COMMIT armed the writer-sticky clock: the SAME plain read that opened this test on the
+		// reader now routes to the WRITER (read-your-writes).
+		clock += 100
+		return struct{}{}, read()
+	}); err != nil {
+		t.Fatalf("covered tx: %v", err)
+	}
+
+	// (1) the BEGIN is drawn from the WRITER pool, and (2) it is the tx's ONLY acquire — both body
+	// statements, the READ included, ran on that pinned connection. The trailing writer is the post-tx
+	// read: sticky armed.
+	if !reflect.DeepEqual(pools, []string{"reader", "writer", "writer"}) {
+		t.Fatalf("pool acquires = %v, want [reader writer writer] (pre-tx read, the tx's ONE writer "+
+			"connection, the sticky post-tx read)", pools)
+	}
+	// (3) the tx-control is SEAM-issued, so a registered middleware observes the whole envelope.
+	want := []string{
+		"SELECT id FROM users",
+		"BEGIN",
+		"SELECT id FROM users",
+		"INSERT INTO users (name) VALUES (?)",
+		"COMMIT",
+		"SELECT id FROM users",
+	}
+	if !reflect.DeepEqual(seen, want) {
+		t.Fatalf("middleware saw %v, want %v", seen, want)
 	}
 }

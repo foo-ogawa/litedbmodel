@@ -18,6 +18,7 @@ import type { Value } from 'behavior-contracts/runtime';
 import {
   contextForConnection,
   PooledAsyncContext,
+  withTransactionAsync,
   type SyncConnection,
   type AsyncConnection,
   type AsyncConnectionPool,
@@ -25,6 +26,7 @@ import {
   type RunInfo,
 } from '../../src/scp/exec-context';
 import { ConnectionRegistry, WriterStickyClock } from '../../src/scp/connection-routing';
+import { createMiddleware, use, withMiddlewareScope } from '../../src/scp/middleware';
 
 interface Call { kind: 'execute' | 'executeSafe' | 'run'; sql: string; params: unknown[] }
 
@@ -355,6 +357,70 @@ test('#207 — the RUN MODE, not the seam branch, picks the pool: a RETURNING wr
   const summary = await call({ returning: false });
   expect(log).toEqual(['reader', 'writer', 'writer']);
   expect(summary).toEqual({ ok: [{ changes: 1n, lastInsertRowid: 7n }] });
+});
+
+// #215 — a covered-plane transaction is the runtime's ONE transaction: it acquires from the WRITER
+// pool, PINS that connection for the whole body, issues its tx-control THROUGH the seam (so a
+// registered middleware sees BEGIN/COMMIT) and arms writer-sticky on COMMIT. TS gets all four from
+// `withTransactionAsync`, which is why it is the reference — go and rust each ran a private BEGIN/
+// COMMIT beside the central one and lost some of them. The single-pool conformance/livedb setups
+// cannot tell (reader IS writer there), so the gate SPLITS the pair — the TS leg of the five.
+test('#215 — a covered transaction opens on the WRITER, pins its body, and is seam-visible', async () => {
+  const pools: string[] = [];
+  const seen: string[] = [];
+  let clock = 1_000_000;
+  const recording = (label: string): AsyncConnectionPool => ({
+    async acquire(): Promise<AsyncConnection> {
+      pools.push(label);
+      return {
+        async execute(): Promise<Rows> {
+          return [{ id: 1 }];
+        },
+        async run(): Promise<RunInfo> {
+          return { changes: 1, lastInsertRowid: 7 } as RunInfo;
+        },
+      };
+    },
+    async release(): Promise<void> {},
+  });
+  const routing = {
+    registry: ConnectionRegistry.fromDefault({ reader: recording('reader'), writer: recording('writer') }).build(),
+    sticky: new WriterStickyClock({ useWriterAfterTransaction: true, writerStickyDuration: 5000, now: () => clock }),
+  };
+  const ctx = new PooledAsyncContext(routing);
+  const handler = leafHandlersAsync({ execAsync: ctx, dialect: 'postgres' }).executeSQL;
+  const leafCtx = { nodeId: 'n0', component: 'executeSQL' };
+  const read = (): Promise<unknown> => handler({ sql: 'SELECT id FROM users', params: [] } as unknown as Record<string, Value>, leafCtx);
+  const write = (): Promise<unknown> =>
+    handler(
+      { sql: 'INSERT INTO users (name) VALUES (?)', params: ['A'], opts: { write: { returning: false }, whereDynamic: null, guard: null } } as unknown as Record<string, Value>,
+      leafCtx,
+    );
+
+  await withMiddlewareScope(async () => {
+    use(createMiddleware({ execute: function (next, sql, params) { seen.push(sql); return next(sql, params); } }));
+    // Before any transaction: a plain read ⇒ the READER (the sticky clock is unarmed).
+    await read();
+    await withTransactionAsync(ctx, async () => {
+      // A READ inside the tx: its intent says READER, but the tx PIN wins — and it acquires NO further
+      // connection, because the pinned one is not drawn from a pool per statement.
+      await read();
+      await write();
+    });
+    // The COMMIT armed writer-sticky: the SAME plain read now routes to the WRITER (read-your-writes).
+    clock += 100;
+    await read();
+  });
+
+  expect(pools).toEqual(['reader', 'writer', 'writer']);
+  expect(seen).toEqual([
+    'SELECT id FROM users',
+    'BEGIN',
+    'SELECT id FROM users',
+    'INSERT INTO users (name) VALUES ($1)',
+    'COMMIT',
+    'SELECT id FROM users',
+  ]);
 });
 
 // #213 — `pluck` / `group` read their ports through the SAME fail-closed reader as the SQL transport.

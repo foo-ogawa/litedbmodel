@@ -143,9 +143,9 @@ func updateManyRows() []UserPatch {
 // runtime seam (every row of every statement), which is the only place a relation's true 11,100-row
 // traversal is visible. Fixed inputs mirror the SCP ops SSoT; mutating ops vary their
 // UNIQUE column by it so a timed loop does not collide. A RETURNING-chained tx op runs THROUGH the
-// runtime tx boundary (WithAmbientTransaction over the bound db) so BEGIN/COMMIT bracket the leaf's 2
+// runtime tx boundary (WithAmbientTransaction on the BOUND ctx) so BEGIN/COMMIT bracket the leaf's 2
 // body statements on the tx-owned connection; the generated runner emits no BEGIN/COMMIT.
-func op(db *sql.DB, name string, it int) error {
+func op(name string, it int) error {
 	switch name {
 	case "findAll":
 		_, err := findAll()
@@ -197,28 +197,28 @@ func op(db *sql.DB, name string, it int) error {
 		return err
 	case "nestedCreate":
 		// Fresh user per iteration (email is UNIQUE) → INSERT user RETURNING id → INSERT post (author_id).
-		err := rt.WithAmbientTransaction(db, func() error {
+		err := rt.WithAmbientTransaction(func() error {
 			_, e := nestedCreate(fmt.Sprintf("nc%d@bench.com", it), "NC", "NC Post")
 			return e
 		})
 		return err
 	case "nestedUpsert":
 		// Existing email (ON CONFLICT DO UPDATE) → INSERT post keyed on the upserted user's id.
-		err := rt.WithAmbientTransaction(db, func() error {
+		err := rt.WithAmbientTransaction(func() error {
 			_, e := nestedUpsert("user1@example.com", "NUp", "NUp Post")
 			return e
 		})
 		return err
 	case "nestedUpdate":
 		// UPDATE seeded user 1 RETURNING id → UPDATE that user's posts.
-		err := rt.WithAmbientTransaction(db, func() error {
+		err := rt.WithAmbientTransaction(func() error {
 			_, e := nestedUpdate(1, "NU", "NU Post")
 			return e
 		})
 		return err
 	case "delete":
 		// Create-then-delete: INSERT a fresh user RETURNING id → DELETE the exact created row by id.
-		err := rt.WithAmbientTransaction(db, func() error {
+		err := rt.WithAmbientTransaction(func() error {
 			_, e := delete(fmt.Sprintf("del%d@bench.com", it), "Del")
 			return e
 		})
@@ -315,7 +315,7 @@ func main() {
 		atomic.StoreInt64(&stmtCount, 0)
 		atomic.StoreInt64(&rowCount, 0)
 		seenSQL = nil
-		if err := op(db, name, 0); err != nil {
+		if err := op(name, 0); err != nil {
 			fmt.Printf("%-20s  ERR: %v\n", name, err)
 			fail++
 			continue
@@ -367,7 +367,7 @@ func main() {
 				os.Exit(1)
 			}
 			for it := 0; it < warmup; it++ {
-				if err := op(db, name, it+1); err != nil {
+				if err := op(name, it+1); err != nil {
 					fmt.Fprintf(os.Stderr, "warmup %s: %v\n", name, err)
 					os.Exit(1)
 				}
@@ -375,7 +375,7 @@ func main() {
 			for it := 0; it < reps; it++ {
 				g := it + warmup + 1
 				t := time.Now()
-				if err := op(db, name, g); err != nil {
+				if err := op(name, g); err != nil {
 					fmt.Fprintf(os.Stderr, "bench %s: %v\n", name, err)
 					os.Exit(1)
 				}
