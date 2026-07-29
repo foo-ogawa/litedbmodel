@@ -55,7 +55,8 @@ final class Leaves
     private const WHERE_RE = '/\s+WHERE\b/i';
 
     /**
-     * Where a dynamic WHERE clause joins `$baseSql` (port of leaves.ts `whereSplice`):
+     * Where a dynamic WHERE clause joins `$baseSql` (port of leaves.ts `whereSplice`) — the ONE scan
+     * {@see effectiveStatement()} makes, and everything it needs to place both the text and the values:
      *
      *  - `at`      — the end of the statement's WHERE region: before the first tail keyword, or the end
      *                of the statement. The exact position a bounded WHERE occupies.
@@ -65,7 +66,9 @@ final class Leaves
      *                bound count (`LIMIT ?` / `OFFSET ?`) — the only placeholders the emitted SELECT
      *                carries after the WHERE — so the surviving fragments' params bind before exactly
      *                that many of the base params, which is the position their own `?`s occupy in the
-     *                final statement.
+     *                final statement. It counts a SUBSTRING's placeholders and every placeholder binds
+     *                one param, so it never exceeds `count($params)` for a statement that can be bound
+     *                at all.
      *
      * @return array{0: int, 1: string, 2: int}
      */
@@ -76,16 +79,6 @@ final class Leaves
             : strlen($baseSql);
         $keyword = preg_match(self::WHERE_RE, substr($baseSql, 0, $at)) === 1 ? ' AND ' : ' WHERE ';
         return [$at, $keyword, substr_count(substr($baseSql, $at), '?')];
-    }
-
-    /** Splice a WHERE clause (leading connector included, or '') into `$baseSql` at its WHERE position. */
-    private static function spliceWhere(string $baseSql, string $whereSql): string
-    {
-        if ($whereSql === '') {
-            return $baseSql;
-        }
-        [$at] = self::whereSplice($baseSql);
-        return substr($baseSql, 0, $at) . $whereSql . substr($baseSql, $at);
     }
 
     /**
@@ -129,10 +122,10 @@ final class Leaves
         if ($clause === '') {
             return [$sql, $params];
         }
-        [, $keyword, $tail] = self::whereSplice($sql);
-        $bind = max(count($params) - $tail, 0);
+        [$at, $keyword, $tail] = self::whereSplice($sql);
+        $bind = count($params) - $tail;
         return [
-            self::spliceWhere($sql, $keyword . $clause),
+            substr($sql, 0, $at) . $keyword . $clause . substr($sql, $at),
             array_merge(array_slice($params, 0, $bind), $whereParams, array_slice($params, $bind)),
         ];
     }

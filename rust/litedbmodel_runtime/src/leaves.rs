@@ -467,7 +467,8 @@ fn keyword_index(sql: &str, keywords: &[&str]) -> Option<usize> {
     None
 }
 
-/// Where a dynamic WHERE clause joins `base_sql` (port of leaves.ts `where_splice`):
+/// Where a dynamic WHERE clause joins `base_sql` (port of leaves.ts `whereSplice`) — the ONE scan
+/// [`assemble_dynamic_where`] makes, and everything it needs to place both the text and the values:
 ///
 ///  - `.0` — the end of the statement's WHERE region: before the first tail keyword, or the end of the
 ///    statement. The exact position a bounded WHERE occupies.
@@ -476,7 +477,9 @@ fn keyword_index(sql: &str, keywords: &[&str]) -> Option<usize> {
 ///  - `.2` — how many base params bind AFTER the clause. Every `?` past the splice point is a page-tail
 ///    bound count (`LIMIT ?` / `OFFSET ?`) — the only placeholders the emitted SELECT carries after the
 ///    WHERE — so the surviving fragments' params bind before exactly that many of the base params, which
-///    is the position their own `?`s occupy in the final statement.
+///    is the position their own `?`s occupy in the final statement. It counts a SUBSTRING's placeholders
+///    and every placeholder binds one param, so it never exceeds `params.len()` for a statement that can
+///    be bound at all.
 fn where_splice(base_sql: &str) -> (usize, &'static str, usize) {
     let at = keyword_index(base_sql, &WHERE_TAIL_KEYWORDS).unwrap_or(base_sql.len());
     let keyword = if keyword_index(&base_sql[..at], &["WHERE"]).is_some() {
@@ -485,16 +488,6 @@ fn where_splice(base_sql: &str) -> (usize, &'static str, usize) {
         " WHERE "
     };
     (at, keyword, base_sql[at..].matches('?').count())
-}
-
-/// Splice a WHERE clause (leading connector included, or "") into `base_sql` at its WHERE position.
-/// Byte-for-byte port of leaves.ts `spliceWhere`.
-fn splice_where(base_sql: &str, where_sql: &str) -> String {
-    if where_sql.is_empty() {
-        return base_sql.to_string();
-    }
-    let at = where_splice(base_sql).0;
-    format!("{}{}{}", &base_sql[..at], where_sql, &base_sql[at..])
 }
 
 /// Assemble the effective (sql, params) from the dynamic-WHERE fragments (leaves.ts
@@ -523,14 +516,13 @@ fn assemble_dynamic_where(
     if clause.is_empty() {
         return (base_sql.to_string(), base_params);
     }
-    let (_, keyword, tail) = where_splice(base_sql);
+    let (at, keyword, tail) = where_splice(base_sql);
     let mut params = base_params;
-    let at = params.len().saturating_sub(tail);
-    let page = params.split_off(at);
+    let page = params.split_off(params.len() - tail);
     params.extend(where_params);
     params.extend(page);
     (
-        splice_where(base_sql, &format!("{keyword}{clause}")),
+        format!("{}{keyword}{clause}{}", &base_sql[..at], &base_sql[at..]),
         params,
     )
 }
@@ -997,7 +989,7 @@ mod tests {
         assert!(read(None).is_ok(), "an uncapped read must not be guarded");
     }
 
-    // The DYNAMIC (SKIP) WHERE assembled by execute_sql (leaves.ts assembleDynamicWhere / spliceWhere),
+    // The DYNAMIC (SKIP) WHERE assembled by execute_sql (leaves.ts assembleDynamicWhere / whereSplice),
     // proven end-to-end against a real in-memory sqlite: a surviving fragment splices ` WHERE …` before
     // the first tail keyword (ORDER BY) — exactly a bounded WHERE's position — its params bind BEFORE
     // the base params, and a `skipped` fragment is DROPPED (its param never binds). The rust leg of the

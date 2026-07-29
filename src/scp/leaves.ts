@@ -101,8 +101,8 @@ const WHERE_TAIL_RE = /\s+(GROUP BY|ORDER BY|LIMIT|OFFSET|FOR UPDATE|RETURNING)\
 const WHERE_RE = /\s+WHERE\b/i;
 
 /**
- * Where a dynamic WHERE clause joins the base statement — the ONE scan both {@link spliceWhere} and
- * {@link assembleDynamicWhere} read:
+ * Where a dynamic WHERE clause joins the base statement — the ONE scan {@link assembleDynamicWhere}
+ * makes, and everything it needs to place both the text and the values:
  *
  *  - `at`      — the end of the statement's WHERE region: before the first tail keyword, or the end of
  *                the statement. The exact position a bounded WHERE occupies.
@@ -111,7 +111,9 @@ const WHERE_RE = /\s+WHERE\b/i;
  *  - `tail`    — how many base params bind AFTER the clause. Every `?` past `at` is a page-tail bound
  *                count (`LIMIT ?` / `OFFSET ?`) — the only placeholders `compileSelect` emits after the
  *                WHERE — so the surviving fragments' params bind before exactly that many of the base
- *                params, which is the position their own `?`s occupy in the final statement.
+ *                params, which is the position their own `?`s occupy in the final statement. `tail`
+ *                counts a SUBSTRING's placeholders and every placeholder binds one param, so it never
+ *                exceeds `params.length` for a statement that can be bound at all.
  */
 function whereSplice(baseSql: string): { at: number; keyword: string; tail: number } {
   const m = WHERE_TAIL_RE.exec(baseSql);
@@ -121,13 +123,6 @@ function whereSplice(baseSql: string): { at: number; keyword: string; tail: numb
     keyword: WHERE_RE.test(baseSql.slice(0, at)) ? ' AND ' : ' WHERE ',
     tail: baseSql.slice(at).split('?').length - 1,
   };
-}
-
-/** Splice a WHERE clause (leading connector included, or `''`) into `baseSql` at its WHERE position. */
-export function spliceWhere(baseSql: string, whereSql: string): string {
-  if (whereSql === '') return baseSql;
-  const { at } = whereSplice(baseSql);
-  return baseSql.slice(0, at) + whereSql + baseSql.slice(at);
 }
 
 /**
@@ -146,11 +141,11 @@ export function spliceWhere(baseSql: string, whereSql: string): string {
 export function assembleDynamicWhere(p: { sql: string; params: unknown[]; whereDynamic: DynamicWherePlan }): { sql: string; params: unknown[] } {
   const frags = p.whereDynamic.frags.filter((f) => !f.skipped);
   if (frags.length === 0) return { sql: p.sql, params: p.params };
-  const { keyword, tail } = whereSplice(p.sql);
-  const at = Math.max(p.params.length - tail, 0);
+  const { at, keyword, tail } = whereSplice(p.sql);
+  const bind = p.params.length - tail;
   return {
-    sql: spliceWhere(p.sql, keyword + frags.map((f) => f.sql).join(' AND ')),
-    params: [...p.params.slice(0, at), ...frags.flatMap((f) => f.params), ...p.params.slice(at)],
+    sql: p.sql.slice(0, at) + keyword + frags.map((f) => f.sql).join(' AND ') + p.sql.slice(at),
+    params: [...p.params.slice(0, bind), ...frags.flatMap((f) => f.params), ...p.params.slice(bind)],
   };
 }
 

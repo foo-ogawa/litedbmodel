@@ -60,7 +60,7 @@ Handler = Callable[[Mapping[str, Any], Mapping[str, Any]], Outcome]
 
 # ── the DYNAMIC (SKIP) WHERE: assembled by the transport, at execution time ────────────────────
 #
-# Port of ``src/scp/leaves.ts`` ``spliceWhere``/``assembleDynamicWhere`` (the TS reference). A SKIP
+# Port of ``src/scp/leaves.ts`` ``whereSplice``/``assembleDynamicWhere`` (the TS reference). A SKIP
 # predicate's presence is per-CALL, so the FINAL statement can only be determined here — which is
 # also why the placeholder render runs AFTER this. A statement with no optional predicate carries no
 # plan and never reaches this code.
@@ -76,7 +76,8 @@ _WHERE_RE = re.compile(r"\s+WHERE\b", re.IGNORECASE)
 
 
 def _where_splice(base_sql: str) -> Tuple[int, str, int]:
-    """Where a dynamic WHERE clause joins ``base_sql`` (port of leaves.ts ``whereSplice``):
+    """Where a dynamic WHERE clause joins ``base_sql`` (port of leaves.ts ``whereSplice``) — the ONE scan
+    :func:`_effective_statement` makes, and everything it needs to place both the text and the values:
 
     * ``at`` — the end of the statement's WHERE region: before the first tail keyword, or the end of the
       statement. The exact position a bounded WHERE occupies.
@@ -85,19 +86,13 @@ def _where_splice(base_sql: str) -> Tuple[int, str, int]:
     * ``tail`` — how many base params bind AFTER the clause. Every ``?`` past ``at`` is a page-tail bound
       count (``LIMIT ?`` / ``OFFSET ?``) — the only placeholders the emitted SELECT carries after the
       WHERE — so the surviving fragments' params bind before exactly that many of the base params, which
-      is the position their own ``?``s occupy in the final statement."""
+      is the position their own ``?``s occupy in the final statement. It counts a SUBSTRING's
+      placeholders and every placeholder binds one param, so it never exceeds ``len(params)`` for a
+      statement that can be bound at all."""
     m = _WHERE_TAIL_RE.search(base_sql)
     at = len(base_sql) if m is None else m.start()
     keyword = " AND " if _WHERE_RE.search(base_sql[:at]) else " WHERE "
     return at, keyword, base_sql[at:].count("?")
-
-
-def _splice_where(base_sql: str, where_sql: str) -> str:
-    """Splice a WHERE clause (leading connector included, or ``''``) into ``base_sql`` at its WHERE position."""
-    if where_sql == "":
-        return base_sql
-    at = _where_splice(base_sql)[0]
-    return base_sql[:at] + where_sql + base_sql[at:]
 
 
 def _effective_statement(ports: Mapping[str, Any]) -> Tuple[str, List[Any]]:
@@ -117,11 +112,12 @@ def _effective_statement(ports: Mapping[str, Any]) -> Tuple[str, List[Any]]:
     frags = [f for f in plan["frags"] if not f["skipped"]]
     if not frags:
         return ports["sql"], params
-    _, keyword, tail = _where_splice(ports["sql"])
+    sql: str = ports["sql"]
+    at, keyword, tail = _where_splice(sql)
     where_params: List[Any] = [p for f in frags for p in f["params"]]
-    bind = max(len(params) - tail, 0)
+    bind = len(params) - tail
     clause = keyword + " AND ".join(f["sql"] for f in frags)
-    return _splice_where(ports["sql"], clause), params[:bind] + where_params + params[bind:]
+    return sql[:at] + clause + sql[at:], params[:bind] + where_params + params[bind:]
 
 
 def _is_tuple_set(param: Sequence[Any]) -> bool:

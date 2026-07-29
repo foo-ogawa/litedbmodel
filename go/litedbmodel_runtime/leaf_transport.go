@@ -326,7 +326,8 @@ var whereTailRe = regexp.MustCompile(`(?i)\s+(GROUP BY|ORDER BY|LIMIT|OFFSET|FOR
 // WHERE, which a dynamic clause CONTINUES instead of opening a second one.
 var whereRe = regexp.MustCompile(`(?i)\s+WHERE\b`)
 
-// whereSplice reports where a dynamic WHERE clause joins baseSql (port of leaves.ts `whereSplice`):
+// whereSplice reports where a dynamic WHERE clause joins baseSql (port of leaves.ts `whereSplice`) —
+// the ONE scan assembleDynamicWhere makes, and everything it needs to place both the text and the values:
 //   - at      — the end of the statement's WHERE region: before the first tail keyword, or the end of
 //     the statement. The exact position a bounded WHERE occupies.
 //   - keyword — how the clause joins: " AND " when the statement already carries a WHERE (its BOUNDED
@@ -334,7 +335,9 @@ var whereRe = regexp.MustCompile(`(?i)\s+WHERE\b`)
 //   - tail    — how many base params bind AFTER the clause. Every `?` past `at` is a page-tail bound
 //     count (`LIMIT ?` / `OFFSET ?`) — the only placeholders the emitted SELECT carries after the
 //     WHERE — so the surviving fragments' params bind before exactly that many of the base params,
-//     which is the position their own `?`s occupy in the final statement.
+//     which is the position their own `?`s occupy in the final statement. `tail` counts a SUBSTRING's
+//     placeholders and every placeholder binds one param, so it never exceeds len(params) for a
+//     statement that can be bound at all.
 func whereSplice(baseSql string) (at int, keyword string, tail int) {
 	at = len(baseSql)
 	if loc := whereTailRe.FindStringIndex(baseSql); loc != nil {
@@ -345,16 +348,6 @@ func whereSplice(baseSql string) (at int, keyword string, tail int) {
 		keyword = " AND "
 	}
 	return at, keyword, strings.Count(baseSql[at:], "?")
-}
-
-// spliceWhere splices a WHERE clause (leading connector included, or "") into baseSql at its WHERE
-// position. Byte-for-byte port of leaves.ts `spliceWhere`.
-func spliceWhere(baseSql, whereSql string) string {
-	if whereSql == "" {
-		return baseSql
-	}
-	at, _, _ := whereSplice(baseSql)
-	return baseSql[:at] + whereSql + baseSql[at:]
 }
 
 // assembleDynamicWhere assembles the effective (sql, params) from the dynamic-WHERE plan: DROP the
@@ -379,16 +372,13 @@ func assembleDynamicWhere(baseSql string, baseParams []wire.WireValue, frags []d
 	if clause == "" {
 		return baseSql, baseParams
 	}
-	_, keyword, tail := whereSplice(baseSql)
-	at := len(baseParams) - tail
-	if at < 0 {
-		at = 0
-	}
+	at, keyword, tail := whereSplice(baseSql)
+	bind := len(baseParams) - tail
 	params := make([]wire.WireValue, 0, len(baseParams)+len(whereParams))
-	params = append(params, baseParams[:at]...)
+	params = append(params, baseParams[:bind]...)
 	params = append(params, whereParams...)
-	params = append(params, baseParams[at:]...)
-	return spliceWhere(baseSql, keyword+clause), params
+	params = append(params, baseParams[bind:]...)
+	return baseSql[:at] + keyword + clause + baseSql[at:], params
 }
 
 // ExecuteSQL runs ONE SQL node and returns its rows as a wire list of wire rows (empty list for a

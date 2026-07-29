@@ -83,7 +83,7 @@ export { Db } from './leaf-transport';
 // The two dynamic-WHERE control-port types live WITH the leaf catalog (the `--from` SSoT), not the
 // runtime bodies; `CapGuard` (the `guard` port's bc struct) is emitter-internal and not re-exported.
 export type { DynamicWhereFrag, DynamicWherePlan } from './leaf-transport';
-export { executeSQL, executeSQLAsync, pluck, group, leafHandlers, leafHandlersAsync, LEAF_TRANSPORT_SYMBOLS, prepareSql, spliceWhere, assembleDynamicWhere } from './leaves';
+export { executeSQL, executeSQLAsync, pluck, group, leafHandlers, leafHandlersAsync, LEAF_TRANSPORT_SYMBOLS, prepareSql, assembleDynamicWhere } from './leaves';
 export type { LeafContext, AsyncLeafContext } from './leaves';
 
 // ── The decorator → SCP LOWERING (CLAUDE.md §1): declared endpoints + `@column`/`@hasMany` metadata
