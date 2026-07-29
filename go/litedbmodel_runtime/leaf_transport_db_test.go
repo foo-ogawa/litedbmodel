@@ -9,6 +9,7 @@ import (
 	"database/sql"
 	"errors"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/foo-ogawa/litedbmodel/go/litedbmodel_runtime/wire"
@@ -269,5 +270,74 @@ func TestExecuteSQL_DynamicWhereContinuesBoundedWhere(t *testing.T) {
 	}
 	if id := lp.Got.ElemRow(0).Got.ProbeInt("id"); id.Kind != wireProbeGot || id.Got != 3 {
 		t.Fatalf("id = %+v, want 3", id)
+	}
+}
+
+// #205 — a field ABSENT from a PRESENT struct is an ABI BREAK, never an absent VALUE. bc types a port
+// by the literal wired into it and REJECTS a partial struct, so a generated module always spells every
+// field of every struct it wires (`null` is how absence is spelled). A key that is not there did not
+// come from one, and reading it as null would silently drop a relation cap, erase a SKIP predicate, or
+// run a write as a read. The five languages must agree; this is the go leg.
+func TestExecuteSQL_MissingFieldOfAPresentStructIsLoud(t *testing.T) {
+	db := openBoundT(t)
+	defer db.Close()
+	defer UnbindLeafTransport()
+	for i, v := range []string{"a", "b", "c"} {
+		if _, err := insT(int64(i+1), v); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+	}
+
+	sqlPort := port("sql", wire.WireStr("SELECT id, v FROM t ORDER BY id"))
+	paramsPort := port("params", wire.WireListOf(nil))
+	cap2 := wire.WireRowOf([]wire.WireField{
+		{Key: "limit", Val: wire.WireInt(2)},
+		{Key: "model", Val: wire.WireStr("t")},
+		{Key: "relation", Val: wire.WireStr("things")},
+	})
+
+	// Each case drops exactly ONE declared field of a struct that is present.
+	for _, tc := range []struct {
+		name    string
+		payload wire.WireRow
+		want    string
+	}{
+		{"payload without sql", leafPayload(paramsPort), `port "sql" is absent`},
+		{"payload without params", leafPayload(sqlPort), `port "params" is absent`},
+		{"record without write", leafPayload(sqlPort, paramsPort, port("opts", wire.WireRowOf([]wire.WireField{
+			{Key: "guard", Val: wire.WireNull()}, {Key: "whereDynamic", Val: wire.WireNull()},
+		}))), `port "write" is absent`},
+		{"record without whereDynamic", leafPayload(sqlPort, paramsPort, port("opts", wire.WireRowOf([]wire.WireField{
+			{Key: "guard", Val: wire.WireNull()}, {Key: "write", Val: wire.WireNull()},
+		}))), `port "whereDynamic" is absent`},
+		{"record without guard", leafPayload(sqlPort, paramsPort, port("opts", wire.WireRowOf([]wire.WireField{
+			{Key: "whereDynamic", Val: wire.WireNull()}, {Key: "write", Val: wire.WireNull()},
+		}))), `port "guard" is absent`},
+		{"write mode without returning", leafPayload(sqlPort, paramsPort,
+			optsPort(wire.WireRowOf(nil), wire.WireNull(), wire.WireNull())), `port "returning" is absent`},
+		{"guard without model", leafPayload(sqlPort, paramsPort, optsPort(wire.WireNull(), wire.WireNull(),
+			wire.WireRowOf([]wire.WireField{{Key: "limit", Val: wire.WireInt(2)}, {Key: "relation", Val: wire.WireStr("things")}}))),
+			`port "guard.model" is absent`},
+	} {
+		_, err := ExecuteSQL(tc.payload)
+		if err == nil {
+			t.Fatalf("%s: must be loud, got no error", tc.name)
+		}
+		if !strings.Contains(err.Error(), tc.want) {
+			t.Fatalf("%s: error %q does not name the missing field (want %q)", tc.name, err.Error(), tc.want)
+		}
+	}
+
+	// The LEGAL absences stay silent: an omitted record is a plain read, and a null FIELD is how an
+	// absent write mode / plan / cap is spelled. Neither may be turned into a failure by the above.
+	if _, err := ExecuteSQL(leafPayload(sqlPort, paramsPort)); err != nil {
+		t.Fatalf("an omitted control record is a plain read, got %v", err)
+	}
+	if _, err := ExecuteSQL(leafPayload(sqlPort, paramsPort, optsPort(wire.WireNull(), wire.WireNull(), wire.WireNull()))); err != nil {
+		t.Fatalf("an all-null control record is a plain read, got %v", err)
+	}
+	// …and a cap that IS spelled still trips (the fail-closed reads did not disarm it).
+	if _, err := ExecuteSQL(leafPayload(sqlPort, paramsPort, optsPort(wire.WireNull(), wire.WireNull(), cap2))); err == nil {
+		t.Fatal("a relation batch over its cap must still raise")
 	}
 }

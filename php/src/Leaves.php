@@ -82,6 +82,35 @@ final class Leaves
         return [$at, $keyword, substr_count(substr($baseSql, $at), '?')];
     }
 
+    /** The two `at` labels the fail-closed field read names — the payload itself and the control record. */
+    private const PAYLOAD = 'the executeSQL payload';
+    private const RECORD = "the 'opts' control record";
+
+    /**
+     * Read ONE DECLARED field out of a payload / struct that IS present — the php leg's ONE fail-closed
+     * field read (the twin of the go `portErr` / rust `port_mismatch` discipline).
+     *
+     * `null` is a VALUE (the declared absence of a write mode / a plan / a cap / a model); a MISSING KEY
+     * is an ABI BREAK, and the two must not collapse: bc types a port by the literal wired into it and
+     * REJECTS a partial struct, so a generated module ALWAYS spells every field of every struct it
+     * wires. A key that is not there did not come from one, and defaulting it would silently downgrade a
+     * write to a read, drop a relation cap, or erase a SKIP predicate (#205).
+     *
+     * @param array<string, mixed>|object $record
+     */
+    private static function required(array|object $record, string $name, string $at): mixed
+    {
+        $present = is_array($record) ? array_key_exists($name, $record) : property_exists($record, $name);
+        if (!$present) {
+            throw new \RuntimeException(
+                "scp leaf executeSQL: {$at} is missing its '{$name}' field — a generated module spells "
+                . 'every field of every struct it wires, so an ABSENT key is an ABI break (a null VALUE '
+                . 'is how an absent write mode / plan / cap is spelled)',
+            );
+        }
+        return is_array($record) ? $record[$name] : $record->{$name};
+    }
+
     /**
      * The `[sql, params]` a statement actually executes: the DYNAMIC (SKIP) WHERE plan assembled when it
      * has surviving fragments, the ports verbatim otherwise. Port of `src/scp/leaves.ts`
@@ -102,8 +131,8 @@ final class Leaves
     private static function effectiveStatement(array $ports, mixed $plan): array
     {
         /** @var list<mixed> $params */
-        $params = array_values($ports['params']);
-        $sql = (string) $ports['sql'];
+        $params = array_values(self::required($ports, 'params', self::PAYLOAD));
+        $sql = (string) self::required($ports, 'sql', self::PAYLOAD);
         if ($plan === null) {
             return [$sql, $params];
         }
@@ -189,9 +218,12 @@ final class Leaves
             // structs. ABSENT ⇒ a plain READ with no dynamic WHERE and no cap (the ONE statement shape
             // that omits the port, so its payload is `sql` + `params` and nothing else).
             $opts = $ports['opts'] ?? null;
+            // An OMITTED record is the ONE legitimate absence (a plain read); every FIELD of a record
+            // that IS present is required — a missing key is an ABI break, not an absent value.
+            $plan = $opts === null ? null : self::required($opts, 'whereDynamic', self::RECORD);
             // The DYNAMIC (SKIP) WHERE is assembled FIRST: the final statement shape is only known
             // here, so the placeholder render must follow it (CLAUDE.md §2).
-            [$effectiveSql, $effectiveParams] = self::effectiveStatement($ports, $opts?->whereDynamic ?? null);
+            [$effectiveSql, $effectiveParams] = self::effectiveStatement($ports, $plan);
             if ($dialect === 'postgres') {
                 // The DEFERRED `?::<T>[]` element type (#46) resolves from the REAL bound key set —
                 // the same render-layer step, and the same SSoT, the imperative relation path uses.
@@ -207,8 +239,8 @@ final class Leaves
                 // `write` is the statement's RUN MODE: null ⇒ a read; an object ⇒ a write carrying
                 // its OWN `returning` (ONE field, three values — "returns rows but is not a write" is
                 // not a state the ABI can hold, #206).
-                $write = $opts?->write ?? null;
-                if ($write !== null && !($write->returning ?? false)) {
+                $write = $opts === null ? null : self::required($opts, 'write', self::RECORD);
+                if ($write !== null && !self::required($write, 'returning', "the 'write' mode")) {
                     $info = run($active, $sql, $params, StatementIntent::write());
                     // The affected-write summary row (uniform list output shape — TS `writeSummary`).
                     return ['ok' => [(object) ['changes' => $info->changes, 'lastInsertRowid' => $info->lastInsertRowid]]];
@@ -223,14 +255,16 @@ final class Leaves
             // so this path cannot drift from the runtime relation path ({@see Relation}) or from the TS
             // reference. It THROWS rather than returning `['error' => …]`: a runaway is a litedbmodel
             // policy error with typed fields, not a mapped transport failure (the TS leaf throws too).
-            $guard = $opts?->guard ?? null;
+            $guard = $opts === null ? null : self::required($opts, 'guard', self::RECORD);
             if ($guard !== null) {
+                $at = "the 'guard' cap";
+                $model = self::required($guard, 'model', $at);
                 LimitExceededError::check(
-                    (int) $guard->limit,
+                    (int) self::required($guard, 'limit', $at),
                     count($rows),
                     'relation',
-                    isset($guard->model) ? (string) $guard->model : null,
-                    (string) $guard->relation,
+                    $model === null ? null : (string) $model,
+                    (string) self::required($guard, 'relation', $at),
                 );
             }
             return ['ok' => $rows];

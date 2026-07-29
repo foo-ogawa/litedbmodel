@@ -281,6 +281,26 @@ fn port_list(payload: &mut WireRow, name: &str) -> Result<Vec<WireValue>, Behavi
     }
 }
 
+/// Take a NULLABLE STRUCT field out of a struct that IS present. A wire `Null` is the declared ABSENCE
+/// (no cap / no plan / a read); an ABSENT KEY is an ABI BREAK, and the two must not collapse: bc types
+/// a port by the literal wired into it and REJECTS a partial struct, so a generated module ALWAYS
+/// spells every field (`null` is how absence is spelled). A key that is not there did not come from
+/// one, and reading it as null would silently drop a relation cap, erase a SKIP predicate, or run a
+/// write as a read (#205).
+fn take_opt_row(row: &mut WireRow, name: &str) -> Result<Option<WireRow>, BehaviorError> {
+    match row.entries.iter().position(|(k, _)| k == name) {
+        None => Err(BehaviorError::new(
+            "LEAF_PORT",
+            format!("scp leaf: port `{name}` is absent from the payload"),
+        )),
+        Some(i) => match row.entries.swap_remove(i).1 {
+            WireValue::Null => Ok(None),
+            WireValue::Row(r) => Ok(Some(r)),
+            other => Err(port_mismatch(name, "row", &other)),
+        },
+    }
+}
+
 /// The unboxed `guard` port: the relation runaway cap the emitter baked onto a guarded relation child
 /// fetch, plus the identity the raised error reports (the Rust twin of the litedbmodel `RelationGuard`
 /// record). `model` is optional exactly as [`crate::errors::LimitExceededError::model`] is.
@@ -294,13 +314,9 @@ struct RelationGuard {
 /// and NO check runs. PRESENT but malformed is a LOUD port failure, never a silently dropped guard — a
 /// guard that fails to unbox is a runaway that would otherwise sail through.
 fn port_relation_guard(opts: &mut WireRow) -> Result<Option<RelationGuard>, BehaviorError> {
-    let row = match opts.entries.iter().position(|(k, _)| k == "guard") {
+    let row = match take_opt_row(opts, "guard")? {
         None => return Ok(None),
-        Some(i) => match opts.entries.swap_remove(i).1 {
-            WireValue::Null => return Ok(None),
-            WireValue::Row(r) => r,
-            other => return Err(port_mismatch("guard", "row", &other)),
-        },
+        Some(r) => r,
     };
     let field = |name: &str| row.entries.iter().find(|(k, _)| k == name).map(|(_, v)| v);
     let limit = match field("limit") {
@@ -315,7 +331,14 @@ fn port_relation_guard(opts: &mut WireRow) -> Result<Option<RelationGuard>, Beha
     };
     let model = match field("model") {
         Some(WireValue::Str(s)) => Some(s.to_string()),
-        _ => None,
+        Some(WireValue::Null) => None,
+        Some(other) => return Err(port_mismatch("guard.model", "string", other)),
+        None => {
+            return Err(BehaviorError::new(
+                "LEAF_PORT",
+                "scp leaf: port `guard.model` is absent from the payload".to_string(),
+            ))
+        }
     };
     Ok(Some(RelationGuard {
         limit,
@@ -338,13 +361,9 @@ struct DynamicWhereFrag {
 /// OPTIONAL predicate carries a plan (CLAUDE.md §2). PRESENT but wrong-variant, or a malformed
 /// fragment, is a LOUD failure.
 fn port_dynamic_where(opts: &mut WireRow) -> Result<Option<Vec<DynamicWhereFrag>>, BehaviorError> {
-    let row = match opts.entries.iter().position(|(k, _)| k == "whereDynamic") {
+    let row = match take_opt_row(opts, "whereDynamic")? {
         None => return Ok(None),
-        Some(i) => match opts.entries.swap_remove(i).1 {
-            WireValue::Null => return Ok(None),
-            WireValue::Row(r) => r,
-            other => return Err(port_mismatch("whereDynamic", "row", &other)),
-        },
+        Some(r) => r,
     };
     let frags = match row.entries.into_iter().find(|(k, _)| k == "frags") {
         Some((_, WireValue::List(l))) => l.items,
@@ -414,13 +433,9 @@ struct WriteMode {
 /// Read the `write` field of the control record. ABSENT (or null) ⇒ `None` ⇒ a READ. PRESENT but
 /// malformed is a LOUD port failure — a write read as a read runs an INSERT on the read seam.
 fn port_write_mode(opts: &mut WireRow) -> Result<Option<WriteMode>, BehaviorError> {
-    let mut row = match opts.entries.iter().position(|(k, _)| k == "write") {
+    let mut row = match take_opt_row(opts, "write")? {
         None => return Ok(None),
-        Some(i) => match opts.entries.swap_remove(i).1 {
-            WireValue::Null => return Ok(None),
-            WireValue::Row(r) => r,
-            other => return Err(port_mismatch("write", "row", &other)),
-        },
+        Some(r) => r,
     };
     Ok(Some(WriteMode {
         returning: port_bool(&mut row, "returning")?,
@@ -1086,6 +1101,155 @@ mod tests {
         // WHERE id > 1 → ids {2,3}; the skipped `v = ?` fragment was dropped (else a bind-count error
         // or 0 rows). Proves splice position, skip-drop, and the single surviving param binding.
         assert_eq!(items(&out).len(), 2);
+    }
+
+    // #205 — a field ABSENT from a PRESENT struct is an ABI BREAK, never an absent VALUE. bc types a
+    // port by the literal wired into it and REJECTS a partial struct, so a generated module always
+    // spells every field of every struct it wires (`null` is how absence is spelled). A key that is not
+    // there did not come from one, and reading it as null would silently drop a relation cap, erase a
+    // SKIP predicate, or run a write as a read. The five languages must agree; this is the rust leg.
+    #[test]
+    fn a_missing_field_of_a_present_struct_is_loud() {
+        use crate::driver::SqliteDriver;
+        let d = SqliteDriver::in_memory(&[
+            "CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)".to_string(),
+            "INSERT INTO t (id, v) VALUES (1,'a'), (2,'b'), (3,'c')".to_string(),
+        ])
+        .unwrap();
+        let base = || {
+            vec![
+                ("params", wlist(vec![])),
+                (
+                    "sql",
+                    WireValue::Str("SELECT id, v FROM t ORDER BY id".into()),
+                ),
+            ]
+        };
+        let run = |ports: Vec<(&str, WireValue)>| -> Result<WireValue, BehaviorError> {
+            with_ambient_driver(&d, || execute_sql(payload(ports.clone())))
+        };
+        let cap = wrow(&[
+            ("limit", WireValue::int(2)),
+            ("model", WireValue::Str("t".into())),
+            ("relation", WireValue::Str("things".into())),
+        ]);
+
+        // Each case drops exactly ONE declared field of a struct that is present.
+        let cases: Vec<(&str, Vec<(&str, WireValue)>, &str)> = vec![
+            (
+                "payload without sql",
+                vec![("params", wlist(vec![]))],
+                "`sql` is absent",
+            ),
+            (
+                "payload without params",
+                vec![(
+                    "sql",
+                    WireValue::Str("SELECT id, v FROM t ORDER BY id".into()),
+                )],
+                "`params` is absent",
+            ),
+            (
+                "record without write",
+                vec![
+                    ("params", wlist(vec![])),
+                    (
+                        "sql",
+                        WireValue::Str("SELECT id, v FROM t ORDER BY id".into()),
+                    ),
+                    (
+                        "opts",
+                        wrow(&[
+                            ("guard", WireValue::Null),
+                            ("whereDynamic", WireValue::Null),
+                        ]),
+                    ),
+                ],
+                "`write` is absent",
+            ),
+            (
+                "record without whereDynamic",
+                vec![
+                    ("params", wlist(vec![])),
+                    (
+                        "sql",
+                        WireValue::Str("SELECT id, v FROM t ORDER BY id".into()),
+                    ),
+                    (
+                        "opts",
+                        wrow(&[("guard", WireValue::Null), ("write", WireValue::Null)]),
+                    ),
+                ],
+                "`whereDynamic` is absent",
+            ),
+            (
+                "record without guard",
+                vec![
+                    ("params", wlist(vec![])),
+                    (
+                        "sql",
+                        WireValue::Str("SELECT id, v FROM t ORDER BY id".into()),
+                    ),
+                    (
+                        "opts",
+                        wrow(&[
+                            ("whereDynamic", WireValue::Null),
+                            ("write", WireValue::Null),
+                        ]),
+                    ),
+                ],
+                "`guard` is absent",
+            ),
+            (
+                "write mode without returning",
+                {
+                    let mut p = base();
+                    p.push(opts(wrow(&[]), WireValue::Null, WireValue::Null));
+                    p
+                },
+                "`returning` is absent",
+            ),
+            (
+                "guard without model",
+                {
+                    let mut p = base();
+                    p.push(opts(
+                        WireValue::Null,
+                        WireValue::Null,
+                        wrow(&[
+                            ("limit", WireValue::int(2)),
+                            ("relation", WireValue::Str("things".into())),
+                        ]),
+                    ));
+                    p
+                },
+                "`guard.model` is absent",
+            ),
+        ];
+        for (name, ports, want) in cases {
+            match run(ports) {
+                Ok(_) => panic!("{name}: must be loud, got Ok"),
+                Err(e) => assert!(
+                    e.message.contains(want),
+                    "{name}: message {:?} does not name the missing field ({want})",
+                    e.message
+                ),
+            }
+        }
+
+        // The LEGAL absences stay silent: an omitted record is a plain read, and a null FIELD is how an
+        // absent write mode / plan / cap is spelled.
+        assert_eq!(items(&run(base()).unwrap()).len(), 3);
+        let mut all_null = base();
+        all_null.push(opts(WireValue::Null, WireValue::Null, WireValue::Null));
+        assert_eq!(items(&run(all_null).unwrap()).len(), 3);
+        // …and a cap that IS spelled still trips (the fail-closed reads did not disarm it).
+        let mut capped = base();
+        capped.push(opts(WireValue::Null, WireValue::Null, cap));
+        match run(capped) {
+            Err(e) => assert_eq!(e.code, "LIMIT_EXCEEDED"),
+            Ok(_) => panic!("a relation batch over its cap must still raise"),
+        }
     }
 
     // #192 — a MIXED read as the emitter now lowers it (CLAUDE.md §2): the BOUNDED predicate is the

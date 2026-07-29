@@ -294,42 +294,77 @@ export function group(p: { parents: Array<Record<string, unknown>>; children: Ar
 // ── handler maps: the boundary injection a generated module's bind()/bindAsync() consumes ──
 
 /**
- * Read the relation `guard` field of the control record. Absent (or null) ⇒ the statement is uncapped. The cap
+ * Read ONE DECLARED field out of a payload / struct that is PRESENT — the ONE fail-closed field read on
+ * the TS plane, and the twin of the go `portErr` / rust `port_mismatch` discipline.
+ *
+ * `null` is a VALUE (the declared absence of a write mode / a plan / a cap / a model); a MISSING KEY is
+ * an ABI BREAK. The two are not the same thing and must not collapse: bc types a port by the literal
+ * wired into it and REJECTS a partial struct (an omitted field is a different type, not a default —
+ * `bc: … the value wired into it has type obj{…}`), so a generated module ALWAYS spells every field of
+ * every struct it wires. A key that is not there did not come from one, and reading it as its default
+ * would silently downgrade a write to a read, drop a relation cap, or erase a SKIP predicate (#205).
+ */
+function requiredField(record: Record<string, unknown>, name: string, at: string): unknown {
+  if (!(name in record)) {
+    throw new Error(
+      `scp leaf executeSQL: ${at} is missing its '${name}' field — a generated module spells every ` +
+        `field of every struct it wires, so an ABSENT key is an ABI break (a null VALUE is how an ` +
+        `absent write mode / plan / cap is spelled)`,
+    );
+  }
+  return record[name];
+}
+
+/**
+ * Read the relation `guard` field of the control record. `null` ⇒ the statement is uncapped. The cap
  * arrives in bc's `int` value model, which on the TS plane is a BigInt, so it is normalized to the
  * `number` {@link RelationGuard} (and {@link import('./errors').LimitExceededError}) declare — the
  * SAME numeric type the rust/go/python/php transports hand their own check. A guard that is present
- * but not a `{limit, relation}` record is a LOUD port failure, never a silently dropped cap: a guard
- * that fails to unbox is a runaway that would otherwise sail through.
+ * but not a `{limit, model, relation}` record is a LOUD port failure, never a silently dropped cap: a
+ * guard that fails to unbox is a runaway that would otherwise sail through.
  */
-function relationGuardPort(port: Value | undefined): RelationGuard | null {
-  if (port === undefined || port === null) return null;
-  const g = port as unknown as { limit?: unknown; model?: unknown; relation?: unknown };
-  const limit = typeof g.limit === 'bigint' ? Number(g.limit) : g.limit;
-  if (typeof limit !== 'number' || !Number.isInteger(limit) || typeof g.relation !== 'string') {
+function relationGuardPort(port: unknown): RelationGuard | null {
+  if (port === null) return null;
+  const g = port as Record<string, unknown>;
+  const at = `the 'guard' cap`;
+  const raw = requiredField(g, 'limit', at);
+  const limit = typeof raw === 'bigint' ? Number(raw) : raw;
+  const relation = requiredField(g, 'relation', at);
+  const model = requiredField(g, 'model', at);
+  if (typeof limit !== 'number' || !Number.isInteger(limit) || typeof relation !== 'string') {
     throw new Error(
-      `scp leaf executeSQL: the 'guard' port must be a {limit:int, model?:string, relation:string} ` +
+      `scp leaf executeSQL: the 'guard' port must be a {limit:int, model:string|null, relation:string} ` +
         `relation cap, got ${JSON.stringify(port)}`,
     );
   }
-  return { limit, ...(typeof g.model === 'string' ? { model: g.model } : {}), relation: g.relation };
+  return { limit, ...(typeof model === 'string' ? { model } : {}), relation };
 }
 
 /**
  * Read the OPTIONAL `opts` control record ({@link ExecOptions}) off the evaluated port record. ABSENT
- * (or null) ⇒ a plain READ: not a write, no dynamic plan, uncapped — the one statement shape that omits
- * the port entirely, so a bounded read's payload is `sql` + `params` and nothing else. PRESENT but not
- * a record is a LOUD port failure: every fact the transport branches on lives in there, so a record
- * that fails to unbox would silently downgrade a write to a read and drop a relation cap.
+ * (or null) ⇒ `null` ⇒ a plain READ: not a write, no dynamic plan, uncapped — the one statement shape
+ * that omits the port entirely, so a bounded read's payload is `sql` + `params` and nothing else. That
+ * is the ONE legitimate absence here; every FIELD of a record that IS present is required
+ * ({@link requiredField}). PRESENT but not a record is a LOUD port failure.
  */
-function execOptionsPort(port: Value | undefined): Partial<Record<keyof ExecOptions, Value>> {
-  if (port === undefined || port === null) return {};
+/**
+ * Read one DECLARED field of the control record. The name is `keyof ExecOptions`, so the reader is tied
+ * to the leaf declaration at compile time: renaming a field there breaks HERE rather than silently
+ * reading a key the generator no longer writes.
+ */
+function optsField(opts: Record<string, unknown>, name: keyof ExecOptions): unknown {
+  return requiredField(opts, name, `the 'opts' control record`);
+}
+
+function execOptionsPort(port: Value | undefined): Record<string, unknown> | null {
+  if (port === undefined || port === null) return null;
   if (typeof port !== 'object' || Array.isArray(port)) {
     throw new Error(
       `scp leaf executeSQL: the 'opts' port must be the {write, whereDynamic, guard} control ` +
         `record, got ${JSON.stringify(port)}`,
     );
   }
-  return port as unknown as Partial<Record<keyof ExecOptions, Value>>;
+  return port as unknown as Record<string, unknown>;
 }
 
 /**
@@ -337,21 +372,30 @@ function execOptionsPort(port: Value | undefined): Partial<Record<keyof ExecOpti
  * {@link WriteMode} ⇒ a write, carrying its own `returning`. The nesting is what makes "returns rows
  * but is not a write" unrepresentable, so this reader has three outcomes, not four.
  */
-function writeModePort(port: Value | undefined): WriteMode | null {
-  if (port === undefined || port === null) return null;
-  const mode = port as unknown as { returning?: unknown };
-  return { returning: mode.returning === true };
+function writeModePort(port: unknown): WriteMode | null {
+  if (port === null) return null;
+  const returning = requiredField(port as Record<string, unknown>, 'returning', `the 'write' mode`);
+  if (typeof returning !== 'boolean') {
+    throw new Error(`scp leaf executeSQL: the 'write' mode's 'returning' must be a bool, got ${JSON.stringify(port)}`);
+  }
+  return { returning };
 }
 
 /** Read the declared `executeSQL` ports off the evaluated port record (the generated module's Values). */
 function executeSqlPorts(ports: Record<string, Value>): ExecuteSqlPorts {
+  const at = 'the executeSQL payload';
+  const sql = requiredField(ports, 'sql', at) as string;
+  const params = requiredField(ports, 'params', at) as unknown[];
   const opts = execOptionsPort(ports.opts);
+  // The ONE legitimate absence: no control record at all ⇒ the plain READ a bounded statement declares
+  // by omitting the port. Every field of a record that IS present is read fail-closed below.
+  if (opts === null) return { sql, params, write: null };
   return {
-    sql: ports.sql as unknown as string,
-    params: ports.params as unknown as unknown[],
-    write: writeModePort(opts.write),
-    whereDynamic: (opts.whereDynamic ?? null) as unknown as DynamicWherePlan | null,
-    guard: relationGuardPort(opts.guard),
+    sql,
+    params,
+    write: writeModePort(optsField(opts, 'write')),
+    whereDynamic: optsField(opts, 'whereDynamic') as DynamicWherePlan | null,
+    guard: relationGuardPort(optsField(opts, 'guard')),
   };
 }
 

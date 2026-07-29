@@ -189,8 +189,11 @@ test('the leaf handler unboxes the guard port fail-closed (bc int is a BigInt; a
     expect(err.limit).toBe(2);
   }
 
-  // A guard that cannot be unboxed is LOUD — a dropped cap is a runaway that would sail through.
-  expect(() => handler(ports({ model: 'posts' }), { nodeId: 'n0', component: 'executeSQL' })).toThrow(/guard.*port/i);
+  // A guard that cannot be unboxed is LOUD — a dropped cap is a runaway that would sail through, and
+  // the failure NAMES the field that is missing (#205).
+  expect(() => handler(ports({ model: 'posts' }), { nodeId: 'n0', component: 'executeSQL' })).toThrow(
+    /'guard' cap is missing its 'limit' field/,
+  );
 
   // …and so is a control RECORD that cannot be unboxed: every fact the transport branches on lives in
   // it, so a record read as "absent" would silently downgrade a write to a read and drop the cap.
@@ -200,4 +203,49 @@ test('the leaf handler unboxes the guard port fail-closed (bc int is a BigInt; a
   // An ABSENT record is the plain READ a bounded statement declares by omission — not an error.
   const plain = { sql: 'SELECT id, author_id FROM posts', params: [] } as unknown as Record<string, Value>;
   expect(handler(plain, { nodeId: 'n0', component: 'executeSQL' })).toEqual({ ok: expect.any(Array) });
+});
+
+// #205 — a field that is ABSENT from a PRESENT struct is an ABI BREAK, never an absent VALUE. bc types
+// a port by the literal wired into it and REJECTS a partial struct, so a generated module always spells
+// every field of every struct it wires (`null` is how absence is spelled). A missing key therefore did
+// not come from one, and defaulting it silently downgrades a write to a read, drops a relation cap, or
+// erases a SKIP predicate. The five languages must agree; this is the TS leg.
+test('a MISSING field of a present struct is loud in every position (#205)', () => {
+  const calls: Call[] = [];
+  const handler = leafHandlers({ exec: contextForConnection(recordingConn(calls)), dialect: 'sqlite' }).executeSQL;
+  const ctx = { nodeId: 'n0', component: 'executeSQL' };
+  const run = (ports: unknown): void => void handler(ports as Record<string, Value>, ctx);
+  const SQL = 'SELECT id, author_id FROM posts';
+  const cap = { limit: 2n, model: 'posts', relation: 'posts' };
+
+  // The two REQUIRED top-level ports.
+  expect(() => run({ params: [], opts: null })).toThrow(/payload is missing its 'sql' field/);
+  expect(() => run({ sql: SQL, opts: null })).toThrow(/payload is missing its 'params' field/);
+
+  // Each field of a PRESENT control record — dropping one used to read as its default.
+  expect(() => run({ sql: SQL, params: [], opts: { whereDynamic: null, guard: null } })).toThrow(
+    /control record is missing its 'write' field/,
+  );
+  expect(() => run({ sql: SQL, params: [], opts: { write: null, guard: null } })).toThrow(
+    /control record is missing its 'whereDynamic' field/,
+  );
+  expect(() => run({ sql: SQL, params: [], opts: { write: null, whereDynamic: null } })).toThrow(
+    /control record is missing its 'guard' field/,
+  );
+
+  // …and the fields NESTED in the two concrete control structs.
+  expect(() => run({ sql: SQL, params: [], opts: { write: {}, whereDynamic: null, guard: null } })).toThrow(
+    /'write' mode is missing its 'returning' field/,
+  );
+  expect(() => run({ sql: SQL, params: [], opts: { write: null, whereDynamic: null, guard: { limit: 2n, relation: 'posts' } } })).toThrow(
+    /'guard' cap is missing its 'model' field/,
+  );
+
+  // The LEGAL absences stay silent: the omitted record is a plain read, and a null FIELD is how an
+  // absent write mode / plan / cap is spelled. Neither may be turned into a failure by the above.
+  expect(handler({ sql: SQL, params: [] } as unknown as Record<string, Value>, ctx)).toEqual({ ok: expect.any(Array) });
+  const allNull = { sql: SQL, params: [], opts: { write: null, whereDynamic: null, guard: null } };
+  expect(handler(allNull as unknown as Record<string, Value>, ctx)).toEqual({ ok: expect.any(Array) });
+  // A guard that IS spelled still enforces the cap (the fail-closed reads did not disarm it).
+  expect(() => run({ sql: SQL, params: [], opts: { write: null, whereDynamic: null, guard: cap } })).toThrow(LimitExceededError);
 });

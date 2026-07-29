@@ -79,4 +79,57 @@ final class DynamicWhereTest extends TestCase
         // No survivor ⇒ the emitted statement is untouched: its OWN bounded WHERE + page tail still apply.
         self::assertSame([2, 3], $this->ids([['skipped' => true, 'sql' => 'v = ?', 'params' => [null]]]));
     }
+
+    /**
+     * #205 — a field ABSENT from a PRESENT struct is an ABI BREAK, never an absent VALUE. bc types a
+     * port by the literal wired into it and REJECTS a partial struct, so a generated module always
+     * spells every field of every struct it wires (`null` is how absence is spelled). A key that is not
+     * there did not come from one, and defaulting it would silently downgrade a write to a read, drop a
+     * relation cap, or erase a SKIP predicate. The five languages must agree; this is the php leg.
+     */
+    public function testAMissingFieldOfAPresentStructIsLoud(): void
+    {
+        $ctx = ['nodeId' => 'n0', 'component' => 'executeSQL'];
+        $sql = 'SELECT id, v FROM t ORDER BY id';
+        $nulls = (object) ['write' => null, 'whereDynamic' => null, 'guard' => null];
+
+        // Each case drops exactly ONE declared field of a struct that is present.
+        $cases = [
+            [['params' => []], "'sql' field"],
+            [['sql' => $sql], "'params' field"],
+            [['sql' => $sql, 'params' => [], 'opts' => (object) ['whereDynamic' => null, 'guard' => null]], "'write' field"],
+            [['sql' => $sql, 'params' => [], 'opts' => (object) ['write' => null, 'guard' => null]], "'whereDynamic' field"],
+            [['sql' => $sql, 'params' => [], 'opts' => (object) ['write' => null, 'whereDynamic' => null]], "'guard' field"],
+            [['sql' => $sql, 'params' => [], 'opts' => (object) ['write' => (object) [], 'whereDynamic' => null, 'guard' => null]], "'returning' field"],
+            [
+                ['sql' => $sql, 'params' => [], 'opts' => (object) [
+                    'write' => null, 'whereDynamic' => null,
+                    'guard' => (object) ['limit' => 2, 'relation' => 'things'],
+                ]],
+                "'model' field",
+            ],
+        ];
+        foreach ($cases as [$ports, $want]) {
+            try {
+                ($this->executeSQL)($ports, $ctx);
+                self::fail("a missing {$want} must be loud");
+            } catch (\RuntimeException $e) {
+                self::assertStringContainsString($want, $e->getMessage());
+            }
+        }
+
+        // The LEGAL absences stay silent: an omitted record is a plain read, and a null FIELD is how an
+        // absent write mode / plan / cap is spelled.
+        self::assertCount(3, ($this->executeSQL)(['sql' => $sql, 'params' => []], $ctx)['ok']);
+        self::assertCount(3, ($this->executeSQL)(['sql' => $sql, 'params' => [], 'opts' => $nulls], $ctx)['ok']);
+
+        // …and a cap that IS spelled still trips (the fail-closed reads did not disarm it).
+        $capped = ['sql' => $sql, 'params' => [], 'opts' => (object) [
+            'write' => null, 'whereDynamic' => null,
+            'guard' => (object) ['limit' => 2, 'model' => 't', 'relation' => 'things'],
+        ]];
+        $this->expectException(\LiteDbModel\Runtime\LimitExceededError::class);
+        ($this->executeSQL)($capped, $ctx);
+    }
+
 }

@@ -126,6 +126,24 @@ func portStrings(payload wire.WireRow, name string) ([]string, error) {
 	return out, nil
 }
 
+// optRowField reads a NULLABLE STRUCT field of a struct that IS present. A wire NULL is the declared
+// ABSENCE (no cap / no plan / a read); an ABSENT KEY is an ABI BREAK, and the two must not collapse:
+// bc types a port by the literal wired into it and REJECTS a partial struct, so a generated module
+// ALWAYS spells every field (`null` is how absence is spelled). A key that is not there did not come
+// from one, and reading it as null would silently drop a relation cap, erase a SKIP predicate, or run a
+// write as a read (#205).
+func optRowField(row wire.WireRow, name string) (wire.WireRow, bool, error) {
+	p := row.ProbeRow(name)
+	switch p.Kind {
+	case wireProbeGot:
+		return p.Got, true, nil
+	case wireProbeNull:
+		return wire.WireRow{}, false, nil
+	default:
+		return wire.WireRow{}, false, portErr(name, "row", p.Kind, p.ActualWireType)
+	}
+}
+
 // relationGuard is the unboxed `guard` port: the relation runaway cap the emitter baked onto a guarded
 // relation child fetch, together with the identity the raised error reports (Go twin of the litedbmodel
 // `RelationGuard` record). Model is optional exactly as LimitExceededError.Model is ("" ⇒ "unknown").
@@ -139,25 +157,31 @@ type relationGuard struct {
 // statement is uncapped and NO check runs. PRESENT but malformed is a LOUD port error, never a silently
 // dropped guard — a guard that fails to unbox is a runaway that would otherwise sail through.
 func portRelationGuard(opts wire.WireRow) (*relationGuard, error) {
-	p := opts.ProbeRow("guard")
-	if p.Kind == wireProbeAbsent || p.Kind == wireProbeNull {
+	row, present, err := optRowField(opts, "guard")
+	if err != nil {
+		return nil, err
+	}
+	if !present {
 		return nil, nil
 	}
-	if p.Kind != wireProbeGot {
-		return nil, portErr("guard", "row", p.Kind, p.ActualWireType)
-	}
-	n := p.Got.ProbeInt("limit")
+	n := row.ProbeInt("limit")
 	if n.Kind != wireProbeGot {
 		return nil, portErr("guard.limit", "int", n.Kind, n.ActualWireType)
 	}
 	limit := int(n.Got)
-	rel := p.Got.ProbeString("relation")
+	rel := row.ProbeString("relation")
 	if rel.Kind != wireProbeGot {
 		return nil, portErr("guard.relation", "string", rel.Kind, rel.ActualWireType)
 	}
 	g := &relationGuard{limit: limit, relation: rel.Got}
-	if model := p.Got.ProbeString("model"); model.Kind == wireProbeGot {
+	// `model` is a NULLABLE field, so a wire null is its declared absence ("" ⇒ "unknown" in the error)
+	// — but the KEY must be there, exactly like every other field of a struct the generator wrote.
+	switch model := row.ProbeString("model"); model.Kind {
+	case wireProbeGot:
 		g.model = model.Got
+	case wireProbeNull:
+	default:
+		return nil, portErr("guard.model", "string", model.Kind, model.ActualWireType)
 	}
 	return g, nil
 }
@@ -177,14 +201,14 @@ type dynamicWhereFrag struct {
 // declares an OPTIONAL predicate carries a plan (CLAUDE.md §2). PRESENT but wrong-variant, or a
 // malformed fragment, is a LOUD error.
 func portDynamicWhere(opts wire.WireRow) ([]dynamicWhereFrag, error) {
-	p := opts.ProbeRow("whereDynamic")
-	if p.Kind == wireProbeAbsent || p.Kind == wireProbeNull {
+	row, present, err := optRowField(opts, "whereDynamic")
+	if err != nil {
+		return nil, err
+	}
+	if !present {
 		return nil, nil
 	}
-	if p.Kind != wireProbeGot {
-		return nil, portErr("whereDynamic", "row", p.Kind, p.ActualWireType)
-	}
-	fl := p.Got.ProbeList("frags")
+	fl := row.ProbeList("frags")
 	if fl.Kind != wireProbeGot {
 		return nil, portErr("whereDynamic.frags", "list", fl.Kind, fl.ActualWireType)
 	}
@@ -234,14 +258,14 @@ type writeMode struct {
 // portWriteMode reads the `write` field of the control record. ABSENT (or null) ⇒ nil ⇒ a READ. PRESENT
 // but malformed is a LOUD port error — a write read as a read runs an INSERT on the read seam.
 func portWriteMode(opts wire.WireRow) (*writeMode, error) {
-	p := opts.ProbeRow("write")
-	if p.Kind == wireProbeAbsent || p.Kind == wireProbeNull {
+	row, present, err := optRowField(opts, "write")
+	if err != nil {
+		return nil, err
+	}
+	if !present {
 		return nil, nil
 	}
-	if p.Kind != wireProbeGot {
-		return nil, portErr("write", "row", p.Kind, p.ActualWireType)
-	}
-	returning, err := portBool(p.Got, "returning")
+	returning, err := portBool(row, "returning")
 	if err != nil {
 		return nil, err
 	}

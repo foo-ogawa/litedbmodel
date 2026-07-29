@@ -96,6 +96,29 @@ def _where_splice(base_sql: str) -> Tuple[int, str, int]:
     return at, keyword, base_sql[at:].count("?")
 
 
+#: The two `at` labels the fail-closed field read names — the payload itself and the control record.
+_PAYLOAD = "the executeSQL payload"
+_RECORD = "the 'opts' control record"
+
+
+def _required(record: Mapping[str, Any], name: str, at: str) -> Any:
+    """Read ONE DECLARED field out of a struct that IS present — the python leg's ONE fail-closed field
+    read (the twin of the go ``portErr`` / rust ``port_mismatch`` discipline).
+
+    ``None`` is a VALUE (the declared absence of a write mode / a plan / a cap / a model); a MISSING KEY
+    is an ABI BREAK, and the two must not collapse: bc types a port by the literal wired into it and
+    REJECTS a partial struct, so a generated module ALWAYS spells every field of every struct it wires.
+    A key that is not there did not come from one, and defaulting it would silently downgrade a write to
+    a read, drop a relation cap, or erase a SKIP predicate (#205)."""
+    if name not in record:
+        raise ValueError(
+            f"scp leaf executeSQL: {at} is missing its '{name}' field — a generated module spells every "
+            f"field of every struct it wires, so an ABSENT key is an ABI break (a null VALUE is how an "
+            f"absent write mode / plan / cap is spelled)"
+        )
+    return record[name]
+
+
 def _effective_statement(ports: Mapping[str, Any], plan: Any) -> Tuple[str, List[Any]]:
     """The ``(sql, params)`` a statement actually executes: the dynamic-WHERE plan assembled when one is
     present, the ports verbatim otherwise.
@@ -106,13 +129,14 @@ def _effective_statement(ports: Mapping[str, Any], plan: Any) -> Tuple[str, List
     ``skipped`` fragments. The survivors join with ``AND``, the clause CONTINUES the bounded WHERE the
     emitter already lowered (or opens one when there is none), and their params bind at the slot their
     ``?``s occupy: after the base params the clause follows, before the page tail's."""
-    params: List[Any] = list(ports["params"])
+    params: List[Any] = list(_required(ports, "params", _PAYLOAD))
+    sql_port: str = _required(ports, "sql", _PAYLOAD)
     if plan is None:
-        return ports["sql"], params
+        return sql_port, params
     frags = [f for f in plan["frags"] if not f["skipped"]]
     if not frags:
-        return ports["sql"], params
-    sql: str = ports["sql"]
+        return sql_port, params
+    sql: str = sql_port
     at, keyword, tail = _where_splice(sql)
     where_params: List[Any] = [p for f in frags for p in f["params"]]
     bind = len(params) - tail
@@ -163,10 +187,13 @@ def make_handlers(driver_or_ctx: Union[Driver, ExecutionContext], dialect: str) 
         # The OPTIONAL ``opts`` control record — how to run the statement plus the two optional control
         # structs. ABSENT ⇒ the empty record: a plain READ with no dynamic WHERE and no cap (the ONE
         # statement shape that omits the port, so its payload is ``sql`` + ``params`` and nothing else).
-        opts: Mapping[str, Any] = ports.get("opts") or {}
+        opts = ports.get("opts")
         # The DYNAMIC (SKIP) WHERE is assembled FIRST: the final statement shape is only known here,
         # so the placeholder render must follow it (CLAUDE.md §2).
-        effective_sql, effective_params = _effective_statement(ports, opts.get("whereDynamic"))
+        # An OMITTED record is the ONE legitimate absence (a plain read); every FIELD of a record that
+        # IS present is required — a missing key is an ABI break, not an absent value.
+        plan = None if opts is None else _required(opts, "whereDynamic", _RECORD)
+        effective_sql, effective_params = _effective_statement(ports, plan)
         if dialect == "postgres":
             # The DEFERRED `?::<T>[]` element type (#46) is resolved from the REAL bound key set —
             # the same render-layer step, and the same SSoT, the imperative relation path uses.
@@ -179,8 +206,8 @@ def make_handlers(driver_or_ctx: Union[Driver, ExecutionContext], dialect: str) 
             # ``write`` is the statement's RUN MODE: None ⇒ a read; a mapping ⇒ a write carrying its
             # OWN ``returning`` (ONE field, three values — "returns rows but is not a write" is not a
             # state the ABI can hold, #206).
-            write = opts.get("write")
-            if write is not None and not write.get("returning"):
+            write = None if opts is None else _required(opts, "write", _RECORD)
+            if write is not None and not _required(write, "returning", "the 'write' mode"):
                 info = seam_run(active, sql, params, WRITE_INTENT)
                 # The affected-write summary row (uniform ``items`` output shape — TS ``writeSummary``).
                 return {"ok": [{"changes": info.changes, "lastInsertRowid": info.last_insert_rowid}]}
@@ -193,10 +220,15 @@ def make_handlers(driver_or_ctx: Union[Driver, ExecutionContext], dialect: str) 
         # path cannot drift from the runtime relation path (relation.py) or from the TS reference. It
         # RAISES rather than returning ``{"error": …}``: a runaway is a litedbmodel policy error with
         # typed fields, not a mapped transport failure (the TS leaf throws the same class).
-        guard = opts.get("guard")
+        guard = None if opts is None else _required(opts, "guard", _RECORD)
         if guard is not None:
+            at = "the 'guard' cap"
             LimitExceededError.check(
-                int(guard["limit"]), len(rows), "relation", guard.get("model"), guard["relation"]
+                int(_required(guard, "limit", at)),
+                len(rows),
+                "relation",
+                _required(guard, "model", at),
+                _required(guard, "relation", at),
             )
         return {"ok": rows}
 

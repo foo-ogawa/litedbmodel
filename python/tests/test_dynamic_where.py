@@ -16,6 +16,7 @@ import sqlite3
 
 import pytest
 
+from litedbmodel_runtime import LimitExceededError
 from litedbmodel_runtime.driver import SqliteDriver
 from litedbmodel_runtime.leaves import make_handlers
 
@@ -69,3 +70,40 @@ def test_every_fragment_skipped_runs_the_statement_as_compiled(execute_sql):
     # No survivor ⇒ the emitted statement is untouched: its OWN bounded WHERE + page tail still apply.
     rows = read(execute_sql, [{"skipped": True, "sql": "v = ?", "params": [None]}])
     assert [r["id"] for r in rows] == [2, 3]
+
+
+# #205 — a field ABSENT from a PRESENT struct is an ABI BREAK, never an absent VALUE. bc types a port by
+# the literal wired into it and REJECTS a partial struct, so a generated module always spells every field
+# of every struct it wires (``None`` is how absence is spelled). A key that is not there did not come
+# from one, and defaulting it would silently downgrade a write to a read, drop a relation cap, or erase a
+# SKIP predicate. The five languages must agree; this is the python leg.
+def test_a_missing_field_of_a_present_struct_is_loud(execute_sql):
+    sql = "SELECT id, v FROM t ORDER BY id"
+    cap = {"limit": 2, "model": "t", "relation": "things"}
+
+    # Each case drops exactly ONE declared field of a struct that is present.
+    cases = [
+        ({"params": []}, "'sql' field"),
+        ({"sql": sql}, "'params' field"),
+        ({"sql": sql, "params": [], "opts": {"whereDynamic": None, "guard": None}}, "'write' field"),
+        ({"sql": sql, "params": [], "opts": {"write": None, "guard": None}}, "'whereDynamic' field"),
+        ({"sql": sql, "params": [], "opts": {"write": None, "whereDynamic": None}}, "'guard' field"),
+        ({"sql": sql, "params": [], "opts": {"write": {}, "whereDynamic": None, "guard": None}}, "'returning' field"),
+        (
+            {"sql": sql, "params": [], "opts": {"write": None, "whereDynamic": None, "guard": {"limit": 2, "relation": "things"}}},
+            "'model' field",
+        ),
+    ]
+    for ports, want in cases:
+        with pytest.raises(ValueError) as ei:
+            execute_sql(ports, CTX)
+        assert want in str(ei.value), f"{ports}: {ei.value} does not name the missing field ({want})"
+
+    # The LEGAL absences stay silent: an omitted record is a plain read, and a null FIELD is how an
+    # absent write mode / plan / cap is spelled.
+    assert len(execute_sql({"sql": sql, "params": []}, CTX)["ok"]) == 3
+    all_null = {"write": None, "whereDynamic": None, "guard": None}
+    assert len(execute_sql({"sql": sql, "params": [], "opts": all_null}, CTX)["ok"]) == 3
+    # …and a cap that IS spelled still trips (the fail-closed reads did not disarm it).
+    with pytest.raises(LimitExceededError):
+        execute_sql({"sql": sql, "params": [], "opts": {**all_null, "guard": cap}}, CTX)
