@@ -34,6 +34,11 @@ jobs:
         run: npm run deps:check
       - name: Every test gate is reachable from CI
         run: npm run gates:check
+      # The two hand-written live-DB runners (go, rust) dispatch on the vector's entry through a switch
+      # that ENDS IN A CATCH-ALL, so a missed entry compiles in both languages and fails as a vector —
+      # after docker is up and the other three legs have run (#201). Static, no toolchain, no DB.
+      - name: The live-DB runners dispatch every corpus entry
+        run: npm run conformance:dispatch:check
       - name: The published package actually loads (CJS + ESM, clean install)
         run: |
           npm run build
@@ -164,7 +169,7 @@ jobs:
         # now walk every committed package cleanly — including the #63 ORM-plan executor
         # (go/lm_bench/lm_orm), a self-contained package with no generated-artifact dependency.
         run: cd go && go build ./... && go vet ./...
-      - name: Rust — check (--locked) + fmt + clippy
+      - name: Rust — check (--locked) + fmt + clippy (runtime AND the livedb runner)
         if: matrix.lang == 'rust'
         # No workflow ran `cargo fmt --check` or clippy, so both drifted unnoticed (#168). They gate
         # here, on the leg that already owns "the rust scaffold stays buildable".
@@ -172,11 +177,22 @@ jobs:
         # `--locked` (#197): without it cargo SILENTLY rewrites a stale Cargo.lock and goes green, so a
         # version bump that missed the lock — 2.2.1 — was invisible until a clean tree came back dirty
         # from running the suite. Now the stale lock fails the job instead of being repaired in place.
+        #
+        # `-p livedb_runner --features livedb` (#201): the runner is NOT a default-member and its
+        # bc-generated modules are behind that feature, so NOTHING here compiled them. Adding a
+        # conformance endpoint means hand-following the entry switch AND an `impl_to_compare!` per
+        # outType in both dialect modules; a missed one is a trait-bound error that used to appear only
+        # in the live-DB leg, after docker was up and py/php/go had run. Measured with one
+        # `impl_to_compare!(pg::PagedFeedRow …)` removed: `cargo check` exit 0, `cargo clippy
+        # --workspace --all-targets -- -D warnings` exit 0 (it compiles the crate WITHOUT the feature,
+        # so the generated tree is not in the build at all), this line exit 101 with E0599 — in 51s,
+        # no database.
         run: |
           cd rust
           cargo fmt --all -- --check
           cargo check --locked
           cargo clippy -p litedbmodel_runtime --features livedb --all-targets -- -D warnings
+          cargo clippy -p livedb_runner --features livedb --all-targets -- -D warnings
       - name: PHP — lint
         if: matrix.lang == 'php'
         run: |

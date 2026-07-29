@@ -56,6 +56,7 @@
     "pkg:check": "node scripts/check-package-entrypoints.mjs",
     "vendor:bc-php": "node scripts/vendor-behavior-contracts-php.mjs",
     "vendor:bc-php:check": "node scripts/vendor-behavior-contracts-php.mjs --check",
+    "conformance:dispatch:check": "node scripts/check-livedb-runner-dispatch.mjs",
     "conformance:gen": "vitest run --config conformance/vitest.config.ts",
     "conformance:gen:livedb": "vitest run --config conformance/vitest.livedb.config.ts",
     "conformance:check:livedb": "LIVEDB_GEN_MODE=check vitest run --config conformance/vitest.livedb.config.ts",

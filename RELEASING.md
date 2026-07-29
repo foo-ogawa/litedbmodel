@@ -128,12 +128,17 @@ Run from the repo root.
 - [ ] `npm run lint`                 — eslint clean
 - [ ] `npm run gates:check`          — every test gate is reachable from a PR/push workflow
 - [ ] `npm run pkg:check`            — every published subpath loads (CJS + ESM) from a clean install
+- [ ] `npm run conformance:dispatch:check` — the go + rust live-DB runners dispatch every corpus entry
+      (their switch ends in a catch-all, so a missed entry compiles and fails only as a vector)
 - [ ] `npm publish --dry-run`        — tarball has `dist/`, no `src/`/`../` leaks
 - [ ] `(cd python && python -m build && twine check dist/*)`
 - [ ] fresh-venv wheel smoke — `pip install` the built wheel + run a real vector
 - [ ] `(cd php && composer validate)`
-- [ ] `(cd rust && cargo fmt --check && cargo check --locked && cargo clippy --all-targets -- -D warnings && cargo publish -p litedbmodel_runtime --dry-run)`
-      — `--locked` makes cargo ACCEPT the committed lock instead of rewriting it under you
+- [ ] `(cd rust && cargo fmt --check && cargo check --locked && cargo clippy --all-targets -- -D warnings && cargo clippy -p livedb_runner --features livedb --all-targets -- -D warnings && cargo publish -p litedbmodel_runtime --dry-run)`
+      — `--locked` makes cargo ACCEPT the committed lock instead of rewriting it under you.
+      **`-p livedb_runner --features livedb` is not optional**: the runner is no default-member and its
+      generated modules are behind that feature, so neither `cargo check` nor `clippy --workspace`
+      compiles them, and a missing `impl_to_compare!` surfaces only in the live-DB leg
 - [ ] `(cd go && gofmt -l . ; go vet ./...)` — module path `.../litedbmodel/go`
 
 ### The five test suites — WITH THE LIVE-DB GATES OPEN (needs docker)

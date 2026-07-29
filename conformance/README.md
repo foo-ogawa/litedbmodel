@@ -86,6 +86,21 @@ from `TEST_DB_*` / `TEST_MYSQL_*`, defaulting to PostgreSQL 5433 and MySQL 3307.
 `vectors-livedb/` corpus through each language's live-DB runner against real PostgreSQL and MySQL.
 `gen-livedb.ts` generates that corpus from the same `harness.ts` declarations.
 
-Python and PHP run. Go and Rust have no live-DB runner yet (#163) and the run reports them as
-`[GAP ] … NOT RUN` — the summary always names how many of the four ran, so a partial run can never
+All four languages run; the summary always names how many of the four did, so a partial run can never
 read as a full one.
+
+### Adding an endpoint means hand-following two runners
+
+Python and PHP dispatch `ops[vector['entry']]` — a name lookup on the generated module's facade — so
+they need no edit. Go and Rust cannot look a method up by name, so each holds a signature-direct call
+table (the form CLAUDE.md §3.1 sanctions), and Rust additionally lowers each outType for comparison
+through `impl_to_compare!`. A new endpoint needs all three followed by hand, and **neither omission
+is a build failure**:
+
+| omission | what sees it |
+| --- | --- |
+| a missing `case "<entry>":` / `"<entry>" => {` | `npm run conformance:dispatch:check` — both tables end in a catch-all, so a missing arm compiles in both languages and would otherwise fail as a vector, with docker up |
+| a missing `impl_to_compare!` | `cargo clippy -p livedb_runner --features livedb --all-targets` — the runner is no default-member and its generated modules are behind that feature, so plain `cargo check` and `clippy --workspace` compile neither |
+
+Both are static and need no database. What still only the live run can tell you is whether a present
+arm calls the right generated entry with the right arguments.
