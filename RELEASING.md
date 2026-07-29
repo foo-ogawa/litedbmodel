@@ -153,7 +153,7 @@ set -a && . ./livedb-gates.env && set +a && export TEST_DB_HOST=localhost
 - [ ] `npm test`                             — the whole vitest suite (unit + scp + parity + integration)
 - [ ] `(cd python && python3 -m pytest -q)`  — **0 skipped**; with the gates closed 25 of these skip
 - [ ] `(cd php && ./vendor/bin/phpunit)`     — **0 skipped**; a skip shows up only as a trailing "but some tests were skipped!"
-- [ ] `npm run go:test`                      — `go test ./...`, read from its whole `-json` stream: **skip budget 0**, no unbuilt package, go's own exit code. A bare `go test ./...` reports none of those (#219)
+- [ ] `npm run go:test`                      — `go test ./... -count=1`, read from its whole `-json` stream and checked against the source tree: **every top-level `func Test*` under `go/` reported a verdict**, **skip budget 0**, no unbuilt package, the live-DB legs still present, go's own exit code. A bare `go test ./...` reports none of those — it calls a skip a success, replays a cached run with the DB down, and stays green when the test set shrinks (#219)
 - [ ] `(cd rust && cargo test -p litedbmodel_runtime --features livedb -- --test-threads=1)` — **`--features livedb` is not optional**: without it the 6 live tests are not compiled at all, and 71 tests run where 77 should
 - [ ] live-DB corpus: `npm run conformance:livedb:docker` — the corpus on real PG + MySQL; the run names how many of the four language legs ran (go/rust: #163). Run it LAST — it takes the stack down afterwards
 

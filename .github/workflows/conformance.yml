@@ -306,13 +306,17 @@ jobs:
         run: cd python && python3 -m pytest -q
       - name: PHP — phpunit
         run: cd php && ./vendor/bin/phpunit
-      # `go test` reports a SKIPPED test as a success, and a package that fails to BUILD prints its
-      # error into the -json stream and nothing to stderr — so a bare `go test ./...` step stayed
-      # green while the sixteen live-DB legs skipped themselves, which is how a named-DB transaction
-      # regression reached a commit (#219). `npm run go:test` runs the same `./...` suite and reads
-      # the whole stream: zero skips, zero unbuilt packages, and go's own exit code (it owns the
-      # process, so nothing here depends on the step's shell being one with `pipefail`).
-      - name: Go — go test (every package BUILDS, every live leg RUNS; skip budget 0)
+      # A bare `go test ./...` cannot report that its suite ran. It calls a SKIPPED test a success, it
+      # replays a whole CACHED run without starting the binary (cache keyed on source and env, never
+      # on whether the DB is still up), it says nothing when the set of tests SHRANK, and it prints a
+      # package that failed to BUILD only into the -json stream, not stderr. Each of those was green
+      # here while the sixteen live-DB legs executed nothing, which is how a named-DB transaction
+      # regression reached a commit (#219). `npm run go:test` runs the same `./...` suite with
+      # `-count=1` and checks the stream against the source tree: every top-level `func Test*` under
+      # go/ reported a verdict, zero skips, zero unbuilt packages, the live legs still present, and
+      # go's own exit code (it owns the process, so nothing here depends on the step's shell being
+      # one with `pipefail`).
+      - name: Go — go test (uncached; every declared test RUNS, every package BUILDS; skip budget 0)
         run: npm run go:test
       - name: Rust — cargo test (livedb)
         run: cd rust && cargo test -p litedbmodel_runtime --features livedb -- --test-threads=1

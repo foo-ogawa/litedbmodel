@@ -10,7 +10,7 @@
  * (a named-DB transaction opening on the WRONG database) reached a commit: the checklist ran
  * `go test ./...` with the gate closed.
  *
- * So this RUNS the suite and counts what came back:
+ * So this RUNS the suite and checks what came back against what the tree DECLARES:
  *
  *     npm run go:test
  *
@@ -18,9 +18,32 @@
  * unless the caller remembers `set -o pipefail` — and a gate whose redness depends on the shell it
  * was invoked from is the same class of hole it exists to close.
  *
+ * `-count=1` is not a detail. Go's test cache REPLAYS a previous run's output with the test binary
+ * never started, and its key is the source and the environment — not whether the database these
+ * tests need is still up. Measured on a package whose only test dials a service: service up →
+ * `ok 0.506s`; service killed → `ok (cached)`, exit 0; with `-count=1` → `connection refused`, exit
+ * 1. Without it this script printed `every go test ran (122 passed)` in 0.737s having started
+ * nothing — so bringing the docker stack down and re-running the checklist produced a green go leg,
+ * which is #219 itself one level up.
+ *
+ * Counting is not enough either, because a suite that SHRANK reports no skips. Measured: excluding
+ * one live file with a build tag gave `112 passed, 0 skipped` ✅ exit 0, and an ambient
+ * `GOFLAGS=-run=TestTxIsolation` gave `2 passed` ✅ exit 0 — the file dropped was the one holding
+ * `TestPhaseCRoutingTxPinPrecedenceLive`, the test that caught #215. So the run is checked against
+ * the source tree: every top-level `func Test*` under `go/` must report a verdict. That is
+ * self-maintaining (a new test needs no edit here, it is simply required from the moment it exists)
+ * and it catches a build tag, a `-run` filter and a package left out of the build.
+ *
+ * What a source scan structurally CANNOT catch is a test that has been DELETED — it is missing from
+ * the scan too. That is what `LIVE_TESTS` below is for, and only the live-DB legs are listed: a
+ * whole-suite inventory would have to be edited every time anyone adds a test, and a count floor is
+ * defeated by deleting one test and adding another. Its sibling gate does not cover this either —
+ * all four live go files read the SAME `LITEDBMODEL_TX_ISOLATION`, so deleting one leaves
+ * `check-reachable-test-gates.mjs`'s dead-declaration clause green.
+ *
  * It is red when any of the following holds, and prints its green line only when none does:
  *
- *   - `go test` could not be started at all.
+ *   - `go test` could not be started at all, or was killed by a signal.
  *   - a package that FAILED TO BUILD. `go test -json` reports these as `build-output`/`build-fail`
  *     events keyed by `ImportPath` (NOT `Package`) and writes nothing to stderr, so a checker that
  *     only reads test-level events prints a full, healthy-looking count for the packages that did
@@ -28,16 +51,23 @@
  *   - a package-level `fail`. A package fails with no failing test of its own when it does not
  *     build, when it panics, or when its `TestMain` errors; the test counts never show it.
  *   - a failed test, or more skipped tests than the budget below — each one NAMED.
+ *   - a test the tree declares that reported NO verdict — it did not run.
+ *   - a verdict for a top-level test the tree does not declare. The scan is then wrong, and a rule
+ *     built on a wrong scan passes vacuously; that must be loud, not silent.
+ *   - `LIVE_TESTS` disagreeing with the tree in EITHER direction: a listed leg gone (deleted or
+ *     renamed), or a new live leg not listed (so it would go unprotected).
  *   - no test reporting a verdict at all: the suite never ran.
  *   - `go test` exiting non-zero for a reason none of the above explains, or putting anything on
  *     stdout that is not a `-json` event. Unmodelled ⇒ red, never green.
  */
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
-import { dirname, join } from 'node:path';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
+const GO_DIR = join(ROOT, 'go');
 
 /**
  * How many go tests may skip. ZERO: every live-DB leg is gated on `LITEDBMODEL_TX_ISOLATION`, which
@@ -46,15 +76,75 @@ const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
  */
 const SKIP_BUDGET = 0;
 
-const go = spawn('go', ['test', './...', '-json'], {
-  cwd: join(ROOT, 'go'),
+/**
+ * The live-DB legs, by name — the tests that only mean anything with a real PG/MySQL behind them,
+ * and the ones whose disappearance is invisible: `go test` cannot miss a test that is not there.
+ *
+ * Derived, not guessed: these are exactly the top-level tests declared in a `go/**\/*_test.go` that
+ * reads a `LITEDBMODEL_*` gate, and exactly the sixteen that skipped when the gates were closed
+ * (106 passed / 16 skipped → 122 / 0 with them open). The check below is bidirectional against that
+ * same derivation, so adding a live leg without listing it here is red too.
+ *
+ * Removing a name is a decision about coverage, not a formality: say which test and why.
+ */
+const LIVE_TESTS = [
+  'TestPhaseCConfigCharsetResetOnReleaseLiveMySQL',
+  'TestPhaseCConfigMaxPoolSoleCapLivePG',
+  'TestPhaseCConfigQueryTimeoutLiveMySQL',
+  'TestPhaseCConfigQueryTimeoutLivePG',
+  'TestPhaseCConfigSearchPathResetOnReleaseLivePG',
+  'TestPhaseCRoutingMultiDBLive',
+  'TestPhaseCRoutingReaderWriterSplitLive',
+  'TestPhaseCRoutingTxPinPrecedenceLive',
+  'TestPhaseCRoutingWithWriterLive',
+  'TestPhaseCRoutingWriterStickyLive',
+  'TestPhaseDLiveTxControlVisiblePG',
+  'TestPhaseDLiveTxControlVisibleRollbackPG',
+  'TestTxBoundaryMysql',
+  'TestTxBoundaryPostgres',
+  'TestTxIsolationMysql',
+  'TestTxIsolationPostgres',
+];
+
+/** Every `*_test.go` under `go/`. Build constraints are deliberately NOT honoured: a test the build
+ *  excludes is a test that did not run, which is the thing being detected. */
+function goTestFiles(dir) {
+  const out = [];
+  for (const e of readdirSync(dir)) {
+    if (e === 'vendor' || e === 'testdata' || e.startsWith('.')) continue;
+    const p = join(dir, e);
+    if (statSync(p).isDirectory()) out.push(...goTestFiles(p));
+    else if (e.endsWith('_test.go')) out.push(p);
+  }
+  return out;
+}
+
+const MODULE = /^module\s+(\S+)/m.exec(readFileSync(join(GO_DIR, 'go.mod'), 'utf8'))[1];
+/** `<import path> <TestName>` — the same label `go test -json` events carry → the declaring file. */
+const declared = new Map();
+/** Live legs as the TREE has them now, for the bidirectional check against `LIVE_TESTS`. */
+const liveInTree = new Set();
+for (const file of goTestFiles(GO_DIR)) {
+  const src = readFileSync(file, 'utf8');
+  const rel = relative(GO_DIR, file);
+  const pkg = dirname(rel) === '.' ? MODULE : `${MODULE}/${dirname(rel)}`;
+  const isLive = /LITEDBMODEL_[A-Z0-9_]+/.test(src);
+  for (const [, name] of src.matchAll(/^func (Test[A-Za-z0-9_]*)\s*\(/gm)) {
+    if (name === 'TestMain') continue; // the package entry point, not a test — it reports no verdict
+    declared.set(`${pkg} ${name}`, relative(ROOT, file));
+    if (isLive) liveInTree.add(name);
+  }
+}
+
+const go = spawn('go', ['test', './...', '-json', '-count=1'], {
+  cwd: GO_DIR,
   stdio: ['ignore', 'pipe', 'inherit'],
 });
 let spawnError = null;
 go.on('error', (err) => {
   spawnError = err;
 });
-const exited = new Promise((resolve) => go.on('close', resolve));
+const exited = new Promise((resolve) => go.on('close', (code, signal) => resolve({ code, signal })));
 
 /** Verdict actions. `start`/`run` carry none; everything else on an event is output. */
 const VERDICT = new Set(['pass', 'fail', 'skip', 'build-fail']);
@@ -85,13 +175,15 @@ for await (const line of createInterface({ input: go.stdout })) {
       ? ['test', `${e.Package} ${e.Test}`]
       : ['package', e.Package];
   const k = `${kind}\0${label}`;
-  if (!seen.has(k)) seen.set(k, { kind, label, action: null, output: [] });
+  // `Test` is kept apart from `label` because a subtest is spelled `Parent/Sub` while the import
+  // path in `label` is full of slashes too — only the tree's top-level `func Test*` can be matched.
+  if (!seen.has(k)) seen.set(k, { kind, label, test: e.Test ?? null, action: null, output: [] });
   const s = seen.get(k);
   if (VERDICT.has(e.Action)) s.action = e.Action;
   else if (e.Output !== undefined) s.output.push(e.Output);
 }
 
-const goExit = await exited;
+const { code: goExit, signal: goSignal } = await exited;
 if (spawnError) {
   console.error(`\n❌ could not run \`go test\`: ${spawnError.message}`);
   process.exit(1);
@@ -101,6 +193,17 @@ const of = (kind, action) => [...seen.values()].filter((s) => s.kind === kind &&
 const [passed, failed, skipped] = [of('test', 'pass'), of('test', 'fail'), of('test', 'skip')];
 const [unbuilt, failedPkgs] = [of('build', 'build-fail'), of('package', 'fail')];
 const named = (rows) => rows.map((r) => `      ${r.label}`).join('\n');
+const list = (names) => names.map((n) => `      ${n}`).join('\n');
+
+// What the run covered, against what the tree declares. Verdicts are taken at top level only —
+// subtests are reported as `Parent/Sub` and the tree declares no `func` for them.
+const reported = new Set(
+  [...seen.values()].filter((s) => s.kind === 'test' && s.action && !s.test.includes('/')).map((s) => s.label),
+);
+const neverRan = [...declared.keys()].filter((l) => !reported.has(l)).sort();
+const unscanned = [...reported].filter((l) => !declared.has(l)).sort();
+const liveGone = LIVE_TESTS.filter((n) => !liveInTree.has(n));
+const liveUnlisted = [...liveInTree].filter((n) => !LIVE_TESTS.includes(n)).sort();
 
 // Replayed in the order `go test` prints them: build errors, then the failing tests, then the
 // per-package FAIL summaries.
@@ -131,6 +234,35 @@ if (skipped.length > SKIP_BUDGET) {
       `      npm run docker:livedb:up && set -a && . ./livedb-gates.env && set +a`,
   );
 }
+if (neverRan.length > 0) {
+  problems.push(
+    `${neverRan.length} go test(s) the tree DECLARES reported no verdict — they did not run, and a suite that shrank reports no skips:\n` +
+      neverRan.map((l) => `      ${l}   (${declared.get(l)})`).join('\n') +
+      `\n\n      A build tag on the file, a \`-run\` filter (check GOFLAGS), or a package \`./...\`\n` +
+      `      no longer reaches all look exactly like this.`,
+  );
+}
+if (unscanned.length > 0) {
+  problems.push(
+    `${unscanned.length} top-level go test(s) reported a verdict that this script's scan of go/**/*_test.go never found. The scan is wrong — and the check above is only as strong as the scan, so a broken scan passes it vacuously:\n` +
+      list(unscanned),
+  );
+}
+if (liveGone.length > 0) {
+  problems.push(
+    `${liveGone.length} test(s) listed in LIVE_TESTS are no longer live legs in the tree — deleted, renamed, or no longer in a file that reads a LITEDBMODEL_* gate:\n` +
+      list(liveGone) +
+      `\n\n      Nothing else notices this. A source scan cannot miss a test that is not there, and\n` +
+      `      all four live files read the SAME LITEDBMODEL_TX_ISOLATION, so the declaration in\n` +
+      `      livedb-gates.env stays alive and check-reachable-test-gates.mjs stays green.`,
+  );
+}
+if (liveUnlisted.length > 0) {
+  problems.push(
+    `${liveUnlisted.length} live-DB test(s) exist under go/ but are not in LIVE_TESTS, so deleting them would be silent. List them:\n` +
+      list(liveUnlisted),
+  );
+}
 if (passed.length + failed.length + skipped.length === 0) {
   problems.push('the stream reported no tests at all — the suite never ran.');
 }
@@ -140,7 +272,11 @@ if (foreign.length > 0) {
       foreign.map((l) => `      ${l}`).join('\n'),
   );
 }
-if (goExit !== 0 && problems.length === 0) {
+if (goSignal) {
+  problems.push(
+    `\`go test\` was KILLED by ${goSignal}. Its stream stops where the process died, so everything after that point was never reported — a partial stream is not a green run.`,
+  );
+} else if (goExit !== 0 && problems.length === 0) {
   problems.push(
     `\`go test\` exited ${goExit} while every event in its stream reported success — something failed that this check does not model. Do not read that as green.`,
   );
@@ -151,5 +287,7 @@ if (problems.length > 0) {
   process.exit(1);
 }
 console.log(
-  `✅ every go package built and every go test ran (${passed.length} passed, ${skipped.length} skipped, budget ${SKIP_BUDGET})`,
+  `✅ every go package built; all ${declared.size} tests the tree declares RAN uncached (-count=1) and passed ` +
+    `(${passed.length} verdicts incl. subtests, ${skipped.length} skipped, budget ${SKIP_BUDGET}); ` +
+    `all ${LIVE_TESTS.length} live-DB legs still present`,
 );
