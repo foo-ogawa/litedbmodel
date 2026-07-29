@@ -132,6 +132,8 @@ Run from the repo root:
 - [ ] `(cd php && composer validate && vendor/bin/phpunit)`
 - [ ] `(cd go && gofmt -l . ; go vet ./... ; go test ./...)` — module path `.../litedbmodel/go`
 - [ ] live-DB (needs docker): `npm run conformance:livedb:docker` — the corpus on real PG + MySQL; the run names how many of the four language legs ran (go/rust: #163)
+- [ ] live-DB go legs (needs docker), with the gates from their SSoT — the bare `go test ./...` above SKIPS all sixteen of them, and a skip reads as a pass (#219):
+      `set -a && . ./livedb-gates.env && set +a && (cd go && go test ./... -json | node ../scripts/check-go-test-skips.mjs)`
 
 ---
 

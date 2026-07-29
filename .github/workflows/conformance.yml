@@ -306,7 +306,13 @@ jobs:
         run: cd python && python3 -m pytest -q
       - name: PHP — phpunit
         run: cd php && ./vendor/bin/phpunit
-      - name: Go — go test
-        run: cd go && go test ./...
+      # `go test` reports a SKIPPED test as a success, so this step stayed green while the sixteen
+      # live-DB legs skipped themselves — which is what a closed gate looks like from here, and how a
+      # named-DB transaction regression reached a commit (#219). The budget makes it visible: with the
+      # gates opened above, ZERO go tests may skip. `shell: bash` for pipefail — go's exit code must
+      # not be swallowed by the pipe (the checker fails on a test failure too, belt and braces).
+      - name: Go — go test (every live leg RUNS; skip budget 0)
+        shell: bash
+        run: cd go && go test ./... -json | node ../scripts/check-go-test-skips.mjs
       - name: Rust — cargo test (livedb)
         run: cd rust && cargo test -p litedbmodel_runtime --features livedb -- --test-threads=1
