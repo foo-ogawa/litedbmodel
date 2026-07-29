@@ -52,6 +52,7 @@
     "sync:versions:check": "node scripts/sync-versions.mjs --check",
     "deps:check": "node scripts/check-no-local-deps.mjs",
     "gates:check": "node scripts/check-reachable-test-gates.mjs",
+    "go:fmt:check": "node scripts/check-go-fmt.mjs",
     "go:test": "node scripts/check-go-test-skips.mjs",
     "pkg:check": "node scripts/check-package-entrypoints.mjs",
     "tracked:check": "node scripts/check-tracked-files.mjs",

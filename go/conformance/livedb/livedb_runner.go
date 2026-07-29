@@ -38,8 +38,8 @@ import (
 
 	rt "github.com/foo-ogawa/litedbmodel/go/litedbmodel_runtime"
 
-	pg "github.com/foo-ogawa/litedbmodel/go/conformance/gen/postgres"
 	my "github.com/foo-ogawa/litedbmodel/go/conformance/gen/mysql"
+	pg "github.com/foo-ogawa/litedbmodel/go/conformance/gen/postgres"
 )
 
 // SupportedCorpusVersion is the corpus schema version this leg supports (harness.CORPUS_VERSION —

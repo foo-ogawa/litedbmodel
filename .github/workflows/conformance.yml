@@ -152,6 +152,11 @@ jobs:
           # The WS7c Go runtime consumes behavior-contracts + a pure-Go SQLite (modernc); the
           # dependency graph's `go` floors require a modern toolchain (mirrors graphddb's go leg).
           go-version: '1.25'
+      - name: Go — setup node (the gofmt gate is a node script; no npm install needed)
+        if: matrix.lang == 'go'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
       - name: Go — auth for the private behavior-contracts VCS-tag dependency
         if: matrix.lang == 'go'
         env:
@@ -167,13 +172,24 @@ jobs:
       - name: Go — warm private module graph (retry transient auth)
         if: matrix.lang == 'go'
         uses: ./.github/actions/warm-go-module
-      - name: Go — build + vet (all packages)
+      - name: Go — build + vet + gofmt (all packages)
         if: matrix.lang == 'go'
         # #63 cleanup: the retired codegen bench (go/lm_bench cgcell·cgplans + go/lm_codegen, which
         # imported the GITIGNORED generated cgmods/**) is DELETED, so `go build ./...` / `go vet ./...`
         # now walk every committed package cleanly — including the #63 ORM-plan executor
         # (go/lm_bench/lm_orm), a self-contained package with no generated-artifact dependency.
-        run: cd go && go build ./... && go vet ./...
+        #
+        # gofmt (#204): rust has had `cargo fmt --check` since #168; go had nothing, and gofmt affects
+        # neither the build nor vet nor the tests, so four hand-written files stayed unformatted with no
+        # symptom at all. The gate is a script rather than a bare `gofmt -l` because the bc-GENERATED
+        # modules must be EXEMPT — bc's go output is not gofmt-clean and is byte-compared against a
+        # fresh generation, so `gofmt -w` on one produces `bc: DRIFT` (measured). It checks that
+        # exemption BOTH WAYS against the files' own bc marker, so a hand-written file cannot hide in it
+        # and a newly generated module cannot go unlisted. `gofmt -l` also exits 0 whatever it finds, so
+        # a bare invocation would need `[ -z "$(...)" ]` and would call a gofmt CRASH clean.
+        run: |
+          (cd go && go build ./... && go vet ./...)
+          npm run go:fmt:check
       - name: Rust — check (--locked) + fmt + clippy (runtime AND the livedb runner)
         if: matrix.lang == 'rust'
         # No workflow ran `cargo fmt --check` or clippy, so both drifted unnoticed (#168). They gate

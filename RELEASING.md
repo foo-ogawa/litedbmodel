@@ -141,7 +141,9 @@ Run from the repo root.
       **`-p livedb_runner --features livedb` is not optional**: the runner is no default-member and its
       generated modules are behind that feature, so neither `cargo check` nor `clippy --workspace`
       compiles them, and a missing `impl_to_compare!` surfaces only in the live-DB leg
-- [ ] `(cd go && gofmt -l . ; go vet ./...)` — module path `.../litedbmodel/go`
+- [ ] `(cd go && go vet ./...) && npm run go:fmt:check` — module path `.../litedbmodel/go`.
+      `gofmt -l` alone is not a gate: it exits 0 whatever it prints, and the bc-generated modules are
+      legitimately unformatted (gofmt-ing them is a `bc check` drift), so they would always be listed
 
 ### The five test suites — WITH THE LIVE-DB GATES OPEN (needs docker)
 

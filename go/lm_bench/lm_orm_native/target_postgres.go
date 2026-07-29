@@ -11,28 +11,28 @@ import g "github.com/foo-ogawa/litedbmodel/go/lm_bench/lm_orm_native/gen/benchpo
 const benchDialect = "postgres"
 
 type (
-	NewUser = g.NewUser
+	NewUser   = g.NewUser
 	UserPatch = g.UserPatch
 )
 
 var (
-	findAll = g.FindAll
+	findAll            = g.FindAll
 	filterPaginateSort = g.FilterPaginateSort
-	findFirst = g.FindFirst
-	findUnique = g.FindUnique
-	nestedFindAll = g.NestedFindAll
-	nestedFindFirst = g.NestedFindFirst
-	nestedFindUnique = g.NestedFindUnique
-	nestedRelations = g.NestedRelations
+	findFirst          = g.FindFirst
+	findUnique         = g.FindUnique
+	nestedFindAll      = g.NestedFindAll
+	nestedFindFirst    = g.NestedFindFirst
+	nestedFindUnique   = g.NestedFindUnique
+	nestedRelations    = g.NestedRelations
 	compositeRelations = g.CompositeRelations
-	create = g.Create
-	update = g.Update
-	upsert = g.Upsert
-	createMany = g.CreateMany
-	upsertMany = g.UpsertMany
-	updateMany = g.UpdateMany
-	nestedCreate = g.NestedCreate
-	nestedUpsert = g.NestedUpsert
-	nestedUpdate = g.NestedUpdate
-	delete = g.Delete
+	create             = g.Create
+	update             = g.Update
+	upsert             = g.Upsert
+	createMany         = g.CreateMany
+	upsertMany         = g.UpsertMany
+	updateMany         = g.UpdateMany
+	nestedCreate       = g.NestedCreate
+	nestedUpsert       = g.NestedUpsert
+	nestedUpdate       = g.NestedUpdate
+	delete             = g.Delete
 )
