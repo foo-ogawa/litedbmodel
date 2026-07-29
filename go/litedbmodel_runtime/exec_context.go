@@ -379,10 +379,14 @@ func (c *ExecutionContext) InWriterScope() bool { return c.writerScope }
 //     owned pooled connection per statement (the per-statement ownership the read fan-out uses);
 //  3. else (Phase A/B single-primary-db path), the primary db (byte-identical — routing nil).
 //
-// A routing-resolution error (an unknown named DB — a loud wiring bug) is deferred to the acquired
-// connection's Execute/Run: Go's Connection has no error return on ConnectionFor, so the error is
-// carried by a [failingConnection] whose Execute/Run surface it — the seam propagates it uniformly
-// (mirrors the TS synchronous throw inside connectionFor being surfaced through the seam).
+// A resolution failure — an unknown named DB, or a ctx that reaches step 3 with NO primary db (e.g. a
+// [ContextForRouting] ctx whose routing was dropped along the way) — is a loud WIRING bug, and it is
+// deferred to the acquired connection's Execute/Run: Go's Connection has no error return on
+// ConnectionFor, so the error is carried by a [failingConnection] whose Execute/Run surface it — the
+// seam propagates it uniformly (mirrors the TS synchronous throw inside connectionFor being surfaced
+// through the seam). Handing back a dbConnection over a nil db instead made that wiring bug a SIGSEGV
+// inside queryRows, which names no port, no ctx and no reason — and takes the whole test binary with
+// it (#216).
 func (c *ExecutionContext) ConnectionFor(intent StatementIntent) Connection {
 	if c.pinned != nil {
 		return c.pinned
@@ -393,6 +397,11 @@ func (c *ExecutionContext) ConnectionFor(intent StatementIntent) Connection {
 			return failingConnection{err: err}
 		}
 		return pooledStatementConnection{pool: pool}
+	}
+	if c.db == nil {
+		return failingConnection{err: &SqlFailure{Kind: KindDriverError, Policy: "fail",
+			Msg: "scp exec-context: this context has no connection to run a statement on — it carries " +
+				"neither a routing config nor a primary db. Build it with ContextForDB/ContextForRouting."}}
 	}
 	return dbConnection{db: c.db}
 }

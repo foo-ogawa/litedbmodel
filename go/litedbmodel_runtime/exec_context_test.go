@@ -7,7 +7,9 @@
 package litedbmodel_runtime
 
 import (
+	"context"
 	"database/sql"
+	"strings"
 	"testing"
 
 	bc "github.com/foo-ogawa/behavior-contracts/go"
@@ -173,6 +175,36 @@ func TestWithTransactionDecidedRollbackReturnsValue(t *testing.T) {
 	rows, _ := Execute(ctx, "SELECT v FROM t WHERE id = ?", []any{int64(2)}, ReadIntent())
 	if len(rows) != 0 {
 		t.Errorf("decided rollback: id=2 must be undone, got %d rows", len(rows))
+	}
+}
+
+// #216 — a ctx that reaches ConnectionFor's LAST step with no primary db is a WIRING bug, and it fails
+// closed like every other resolution failure in this seam: the [failingConnection] the function already
+// carries an unknown-named-DB error on. Handing back a dbConnection over a nil db instead deferred the
+// bug to a nil-pointer dereference inside queryRows — a SIGSEGV that names neither the ctx nor the
+// reason and, being a panic, takes the whole test binary down with it, so every gate after it stops
+// reporting. This drives the PRODUCTION seam ([Execute] / [Run] → ConnectionFor), not the resolver in
+// isolation, because the surfacing is what the fix is about: the error must arrive as a return value.
+func TestConnectionForNilDbFailsClosed(t *testing.T) {
+	// The shape that produced it: a routed ctx (ContextForRouting takes no db) whose routing is absent.
+	ctx := &ExecutionContext{middleware: registryChainFor(context.Background())}
+	if _, ok := ctx.ConnectionFor(ReadIntent()).(failingConnection); !ok {
+		t.Fatalf("a ctx with no routing and no db must resolve to a failingConnection")
+	}
+	for _, tc := range []struct {
+		name string
+		run  func() error
+	}{
+		{"read", func() error { _, err := Execute(ctx, "SELECT 1", nil, ReadIntent()); return err }},
+		{"write", func() error { _, err := Run(ctx, "INSERT INTO t (id) VALUES (1)", nil, WriteIntent()); return err }},
+	} {
+		err := tc.run()
+		if err == nil {
+			t.Fatalf("%s on a db-less ctx must fail loudly, got nil", tc.name)
+		}
+		if !strings.Contains(err.Error(), "no connection to run a statement on") {
+			t.Fatalf("%s error must name the missing connection, got: %v", tc.name, err)
+		}
 	}
 }
 
