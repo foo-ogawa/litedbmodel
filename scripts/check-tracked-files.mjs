@@ -25,9 +25,10 @@
  *        - inside a `target/` directory whose parent holds a `Cargo.toml`. The manifest is what makes
  *          it cargo's output directory — the directory NAME alone proves nothing, and `go/lm_bench/
  *          lm_orm_native/target_mysql.go` is a source file whose name starts with the same word.
- *        - a file git records EXECUTABLE (mode 100755) whose BLOB does not begin with `#!`. A script
- *          committed with the bit set has a shebang; a compiled binary does not. This is the clause
- *          that needs no new line per binary.
+ *        - a file git records EXECUTABLE (mode 100755) whose BLOB does not begin with `#!`. This is the
+ *          clause that needs no new line per binary. It is a test on two properties the INDEX records —
+ *          the mode bit and the first two bytes — and neither is a reliable property of "being a
+ *          compiled binary"; both directions in which that breaks are named in the limitations below.
  *   C. No tracked file is EMPTY, outside {@link EMPTY_FILES}. Zero bytes is the signature of a shell
  *      redirect that created a file nobody wanted, which is clause A's junk file exactly — and this
  *      one catches it in a subdirectory too, where no inventory exists.
@@ -56,6 +57,12 @@
  *     contents: `git add --chmod=-x` clears it, and a checkout with `core.fileMode=false` (Windows, or
  *     some network filesystems) records 100644 for everything. Clause B is a check on what the index
  *     SAYS, which is all the index knows.
+ *   - a compiled binary that BEGINS with `#!`. Nothing stops one: prepending `#!/bin/sh\n` to a 20 MB
+ *     Mach-O and staging it 100755 (blob 20040410 bytes) passes clause B. A shebang is two bytes anyone
+ *     can write, so its absence is evidence and its presence is not — the same asymmetry as the
+ *     executable bit above, in the other field. Neither weakens the gate against what it was built for
+ *     (a `go build` artifact, which carries the bit and no shebang); both are ways to walk around it
+ *     deliberately, and clause A still covers the repository root.
  *   - a SYMLINK (mode 120000). Its blob is the target path, so it is neither empty nor a binary, and
  *     outside the root nothing inventories it — a link into a build directory or out of the repository
  *     would pass.
@@ -251,7 +258,9 @@ console.log(
     `   NOT checked, and all fall GREEN: a build artifact that is neither executable nor under a cargo\n` +
     `   \`target/\` (a .o, a wheel, a force-added dist file); a binary committed WITHOUT the executable bit\n` +
     `   (\`git add --chmod=-x\`, or any checkout with core.fileMode=false — the bit is not a property of the\n` +
-    `   contents, and this checks what the index SAYS); a SYMLINK (mode 120000, whose blob is a path, so\n` +
+    `   contents, and this checks what the index SAYS); a binary that BEGINS with \`#!\` (measured: a 20 MB\n` +
+    `   Mach-O with \`#!/bin/sh\` prepended, staged 100755, blob 20040410 bytes, passes — a shebang's absence\n` +
+    `   is evidence, its presence is not); a SYMLINK (mode 120000, whose blob is a path, so\n` +
     `   neither empty nor a binary); junk in a SUBDIRECTORY with a plausible name and non-zero content\n` +
     `   (only the root is inventoried); and anything UNTRACKED — that is \`git status\`, which works, which\n` +
     `   is why only the tracked ones needed a gate.`,

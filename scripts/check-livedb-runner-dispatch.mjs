@@ -44,12 +44,16 @@
  * What it does NOT check, and every one of these falls GREEN — the direction that matters, so each is
  * named:
  *
- *   - a literal form {@link codeMask} does not model. It handles what these two languages have: line
- *     and block comments; `"…"` with backslash escapes; go's backtick raw strings; rust's `r"…"`,
- *     `r#"…"#`, `b"…"`, `br#"…"#` with any number of hashes; and `'x'` / `'\n'` char literals. A form
- *     outside that list would be scanned as code, and a label inside it would count. Being scanned as
- *     a string when it is code is the opposite direction and fails RED, which is why `'` is only taken
- *     as a char literal in the exact `'x'` shape — a rust lifetime (`&'static str`) is left as code.
+ *   - a comment or literal construct {@link codeMask} does not model. What it RECOGNISES: line and
+ *     block comments, the latter nesting or not per the language; `"…"` with backslash escapes; go's
+ *     backtick raw strings; rust's `r"…"`, `r#"…"#`, `b"…"`, `br#"…"#` with any number of hashes; and
+ *     `'x'` / `'\n'` char literals. That is the list it handles and NOT a claim to completeness — the
+ *     previous version of this comment called the same list exhaustive for go and rust while rust's
+ *     comment NESTING was missing from it, and a label hidden inside a nested comment counted as an arm
+ *     (see {@link codeMask}). Anything outside the list is scanned as code, so a label inside it counts;
+ *     being scanned as a literal when it is code is the opposite direction and fails RED, which is why
+ *     `'` is only taken as a char literal in the exact `'x'` shape — a rust lifetime (`&'static str`)
+ *     and a loop label (`'outer:`) are left as code.
  *   - a label that is PRESENT but calls the wrong generated entry, passes the wrong arguments, or
  *     compares the wrong thing. This proves the table has an arm for every vector, not that the arm is
  *     correct.
@@ -65,8 +69,11 @@
  *     runs (the runner is not a default-member and its generated modules are behind `--features
  *     livedb`, so a plain `cargo check`/`--workspace` clippy compiles neither).
  *
- * Everything else errs RED: a re-indented label, a table whose bounds are not found, a commented-out
- * label, a label the mask places outside code.
+ * Measured to err RED: a re-indented label, a table whose open or close bound is not found, a label
+ * commented out with `//` or with a block comment (nested or not), a label inside a string literal, and
+ * a runner entry that fails to declare whether its language's block comments nest. Those are the cases
+ * that have been broken and observed failing — not a closing claim that nothing else can pass, which is
+ * what the two previous versions of this comment asserted and what the audits then disproved twice.
  *
  *   node scripts/check-livedb-runner-dispatch.mjs
  */
@@ -80,8 +87,14 @@ const CORPUS = join(ROOT, 'conformance', 'vectors-livedb', 'livedb.json');
 /**
  * The two runners that dispatch by hand, each as: the file, the line that OPENS its dispatch table,
  * the line that CLOSES it (the catch-all — the arm that turns an unknown entry into a runtime error),
- * and the form of one label. `label` must capture the entry name in group 1 and match the WHOLE line
- * so that nothing embedded in a longer line can satisfy it.
+ * the form of one label, and whether the language's block comments NEST. `label` must capture the
+ * entry name in group 1 and match the WHOLE line so that nothing embedded in a longer line can satisfy
+ * it.
+ *
+ * `nestedBlockComments` is a property of the LANGUAGE, which is why it is declared here beside the
+ * other per-language syntax rather than assumed inside the scanner. Go: "Comments do not nest"
+ * (spec, Comments). Rust: block comments nest (reference, Comments). Reading rust's as flat let a
+ * commented-out label go uncounted while the arm it was hiding did not exist — see {@link codeMask}.
  */
 const RUNNERS = [
   {
@@ -91,6 +104,7 @@ const RUNNERS = [
     closes: /^\s*default:\s*$/,
     label: /^\s*case "([A-Za-z0-9_]+)":\s*$/,
     how: 'case "<entry>":',
+    nestedBlockComments: false,
   },
   {
     lang: 'rust',
@@ -99,8 +113,23 @@ const RUNNERS = [
     closes: /^\s*other =>/,
     label: /^\s*"([A-Za-z0-9_]+)" => \{\s*$/,
     how: '"<entry>" => {',
+    nestedBlockComments: true,
   },
 ];
+
+// `nestedBlockComments` must be DECLARED, not defaulted. Omitting it on the rust entry is a mistake
+// already made once here, and because `undefined` is falsy it silently selected the flat scan — the
+// exact hole this property exists to close, reintroduced by a missing line. An absent or non-boolean
+// declaration is therefore red before anything is scanned.
+for (const r of RUNNERS) {
+  if (typeof r.nestedBlockComments !== 'boolean') {
+    console.error(
+      `❌ the ${r.lang} runner entry does not declare \`nestedBlockComments\` (got ${JSON.stringify(r.nestedBlockComments)}). ` +
+        `Whether block comments nest is a property of the language and decides how ${r.file} is scanned; left undefined it would default to NOT nesting, which is how a commented-out label came to be counted as an arm.`,
+    );
+    process.exit(1);
+  }
+}
 
 /**
  * A byte-for-byte mask over `src`: 1 where the character is CODE, 0 where it is the body of a comment
@@ -114,17 +143,33 @@ const RUNNERS = [
  * the first non-whitespace character of every rust label line) while the body and the closing
  * delimiter do not. A label nested in a raw string therefore starts inside that string's body, at 0.
  *
- * One pass, and it is the only normalisation the label matcher consumes. Handled, which is everything
- * these two languages have: `//` to end of line; `/*` through its terminator, across lines; `"…"` with
- * backslash escapes; go's backtick raw strings; rust's `r"…"` / `r#"…"#` / `b"…"` / `br##"…"##` with
- * any number of hashes; and char literals in the exact `'x'` / `'\n'` shape ONLY, so a rust lifetime
- * (`&'static str`) stays code rather than opening a literal that swallows the rest of the line.
+ * One pass, and it is the only normalisation the label matcher consumes. What it recognises: `//` to
+ * end of line; `/*` through its terminator, NESTING where `nestedBlockComments` says the language
+ * nests; `"…"` with backslash escapes; go's backtick raw strings; rust's `r"…"` / `r#"…"#` / `b"…"` /
+ * `br##"…"##` with any number of hashes; and char literals in the exact `'x'` / `'\n'` shape ONLY, so a
+ * rust lifetime (`&'static str`) and a loop label (`'outer:`) stay code rather than opening a literal
+ * that swallows the rest of the line.
  *
- * Where it is wrong it is wrong in a direction: marking code as literal loses label matches and fails
- * RED, marking a literal as code could invent one and falls GREEN. The second is why the handled list
- * above is exhaustive for go and rust rather than best-effort.
+ * Nesting is not a detail. Rust's block comments nest and go's do not, and reading rust's as flat made
+ * the scanner leave a nested comment at the INNER terminator and call the rest of those lines code.
+ * Measured, with rust's real `"usersWithPosts" => {` arm DELETED and, at the arm indentation, an outer
+ * block comment holding a complete inner one, then the label, then the outer terminator:
+ *
+ *     `grep -c pg::usersWithPosts`                                    0
+ *     cargo fmt --all -- --check                                      exit 0
+ *     cargo clippy -p livedb_runner --features livedb --all-targets    exit 0
+ *     this script                                                     exit 0
+ *
+ * The label inside the comment was counted as the arm that was gone, and its eight vectors would have
+ * hit the catch-all on a live database.
+ *
+ * Where it is wrong it is wrong in a direction: marking code as a comment or literal loses label
+ * matches and fails RED, while treating a comment or literal as code can invent one and falls GREEN.
+ * The recognised list above is therefore not offered as exhaustive — the nesting hole was exactly a
+ * missing item on a list that claimed to be — and "a construct this does not model" stays a named
+ * green-falling limitation rather than a solved problem.
  */
-function codeMask(src) {
+function codeMask(src, nestedBlockComments) {
   const mask = new Uint8Array(src.length).fill(1);
   /** Mark [from, to) as non-code. Newlines are marked too — nothing reads the mask at one. */
   const body = (from, to) => {
@@ -142,9 +187,23 @@ function codeMask(src) {
       continue;
     }
     if (c === '/' && src[i + 1] === '*') {
+      // Depth-counted, which is the flat scan when the language does not nest: `depth` starts at 1 and
+      // only `*/` decrements it, so go behaves exactly as before while rust's inner terminator closes
+      // the inner comment instead of the outer one. An UNTERMINATED comment runs to end of file, marking
+      // everything after it non-code — the table bounds are then not found, which is red.
       let j = i + 2;
-      while (j < src.length && !(src[j] === '*' && src[j + 1] === '/')) j++;
-      j = Math.min(j + 2, src.length);
+      let depth = 1;
+      while (j < src.length && depth > 0) {
+        if (nestedBlockComments && src[j] === '/' && src[j + 1] === '*') {
+          depth++;
+          j += 2;
+        } else if (src[j] === '*' && src[j + 1] === '/') {
+          depth--;
+          j += 2;
+        } else {
+          j++;
+        }
+      }
       body(i, j);
       i = j;
       continue;
@@ -195,7 +254,7 @@ const indentOf = (line) => line.length - line.trimStart().length;
  */
 function labelsOf(runner) {
   const src = readFileSync(join(ROOT, runner.file), 'utf8');
-  const mask = codeMask(src);
+  const mask = codeMask(src, runner.nestedBlockComments);
   // Every line, with the mask value at its FIRST non-whitespace character — the one question asked of
   // the mask. A blank line begins in nothing and is never a bound or a label.
   let at = 0;
@@ -282,13 +341,21 @@ console.log(
   `✅ both hand-written live-DB runners dispatch EXACTLY the ${required.size} entries the ${corpus.vectors.length}-vector corpus uses, with no dead arm —\n` +
     RUNNERS.map((r) => `   ${r.file}   (\`${r.how}\`)`).join('\n') +
     `\n   Each label is a position in the dispatch table: inside the signature → catch-all region, at the\n` +
-    `   first label's indentation, and BEGINNING IN CODE — not in a comment and not in a string literal.\n` +
+    `   first label's indentation, and BEGINNING IN CODE — not in a comment and not in a string literal,\n` +
+    `   with rust's block comments read as NESTING and go's as flat, per language.\n` +
     `   NOT checked, and every one of these falls GREEN:\n` +
-    `     - a literal form the scanner does not model. It covers what go and rust have (line + block\n` +
+    `     - a comment or literal construct the scanner does not model. It recognises line + block\n` +
     `       comments, "…" with escapes, go backtick raw strings, rust r"…"/r#"…"#/b"…"/br##"…"##, and\n` +
-    `       '\\n'-shape char literals). A label inside anything OUTSIDE that list would be read as code\n` +
-    `       and counted; the reverse mistake loses matches and fails red.\n` +
+    `       '\\n'-shape char literals — offered as the list it HANDLES, not as a complete one: rust's\n` +
+    `       comment nesting was a missing item on this list, and a label hidden by it counted as an arm.\n` +
+    `       Anything outside the list is read as code, so a label inside it counts; the reverse mistake\n` +
+    `       loses matches and fails red.\n` +
     `     - whether a PRESENT arm calls the right generated entry with the right arguments.\n` +
+    `     - a DELETED catch-all: the close bound is the first one after the signature, so removing the\n` +
+    `       table's own extends the region to the next in the file. That can only ADD labels, and an\n` +
+    `       unreached label is reported as a dead arm — so it errs red — but it would hide a missing arm\n` +
+    `       if another switch in the same file spelled that entry. Measured: no label-shaped line exists\n` +
+    `       outside either table.\n` +
     `     - python/php, which are not checked at all and need no arm — they dispatch \`ops[entry]\` by name.\n` +
     `   rust's \`impl_to_compare!\` lowering is a COMPILE error: cargo clippy -p livedb_runner --features livedb.`,
 );
