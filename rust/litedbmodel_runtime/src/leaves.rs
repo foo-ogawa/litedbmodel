@@ -226,14 +226,20 @@ fn sql_failure_to_behavior_error(e: crate::errors::SqlFailure) -> BehaviorError 
 // wrong-variant port is a loud failure, never a silent default (a port that is not there is an ABI
 // break, not a data case).
 
+/// The fail-closed ABSENT failure — the ONE place "this key is not there" is spelled, for every port and
+/// every nested field (the twin of [`port_mismatch`], which spells the wrong-variant half).
+fn port_absent(name: &str) -> BehaviorError {
+    BehaviorError::new(
+        "LEAF_PORT",
+        format!("scp leaf: port `{name}` is absent from the payload"),
+    )
+}
+
 /// Move port `name` OUT of the payload (no clone). Fail-closed: an absent port is a loud failure.
 fn take_port(payload: &mut WireRow, name: &str) -> Result<WireValue, BehaviorError> {
     match payload.entries.iter().position(|(k, _)| k == name) {
         Some(i) => Ok(payload.entries.swap_remove(i).1),
-        None => Err(BehaviorError::new(
-            "LEAF_PORT",
-            format!("scp leaf: port `{name}` is absent from the payload"),
-        )),
+        None => Err(port_absent(name)),
     }
 }
 
@@ -288,16 +294,10 @@ fn port_list(payload: &mut WireRow, name: &str) -> Result<Vec<WireValue>, Behavi
 /// one, and reading it as null would silently drop a relation cap, erase a SKIP predicate, or run a
 /// write as a read (#205).
 fn take_opt_row(row: &mut WireRow, name: &str) -> Result<Option<WireRow>, BehaviorError> {
-    match row.entries.iter().position(|(k, _)| k == name) {
-        None => Err(BehaviorError::new(
-            "LEAF_PORT",
-            format!("scp leaf: port `{name}` is absent from the payload"),
-        )),
-        Some(i) => match row.entries.swap_remove(i).1 {
-            WireValue::Null => Ok(None),
-            WireValue::Row(r) => Ok(Some(r)),
-            other => Err(port_mismatch(name, "row", &other)),
-        },
+    match take_port(row, name)? {
+        WireValue::Null => Ok(None),
+        WireValue::Row(r) => Ok(Some(r)),
+        other => Err(port_mismatch(name, "row", &other)),
     }
 }
 
@@ -333,12 +333,7 @@ fn port_relation_guard(opts: &mut WireRow) -> Result<Option<RelationGuard>, Beha
         Some(WireValue::Str(s)) => Some(s.to_string()),
         Some(WireValue::Null) => None,
         Some(other) => return Err(port_mismatch("guard.model", "string", other)),
-        None => {
-            return Err(BehaviorError::new(
-                "LEAF_PORT",
-                "scp leaf: port `guard.model` is absent from the payload".to_string(),
-            ))
-        }
+        None => return Err(port_absent("guard.model")),
     };
     Ok(Some(RelationGuard {
         limit,
@@ -368,12 +363,7 @@ fn port_dynamic_where(opts: &mut WireRow) -> Result<Option<Vec<DynamicWhereFrag>
     let frags = match row.entries.into_iter().find(|(k, _)| k == "frags") {
         Some((_, WireValue::List(l))) => l.items,
         Some((_, other)) => return Err(port_mismatch("whereDynamic.frags", "list", &other)),
-        None => {
-            return Err(BehaviorError::new(
-                "LEAF_PORT",
-                "scp leaf: port `whereDynamic.frags` is absent from the plan",
-            ))
-        }
+        None => return Err(port_absent("whereDynamic.frags")),
     };
     frags
         .into_iter()
