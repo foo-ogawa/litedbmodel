@@ -42,17 +42,19 @@
  * ## SKIP / dynamic WHERE (CLAUDE.md §2 — settled)
  *
  * A predicate declared `optional` is present-or-absent PER CALL, so the final SQL can only be
- * determined at execution time. The emitter therefore does NOT bake it: it passes the WHERE as
- * FRAGMENTS — each a `{skipped, sql, params}` struct — and the `executeSQL` leaf assembles the
- * NON-skipped survivors when it runs ({@link import('../leaves').assembleDynamicWhere}); the `?`→`$N`
- * render happens after that, on the final SQL. There is no intermediate IR vocabulary: a fragment is
- * SQL text + params + a SKIP FLAG (`skipped` = `param === null` for an optional predicate, `false` for
- * a bounded one). Every fragment is the SAME struct — never a `cond`-to-null element — so the go/rust
- * native-codegen emitters resolve the plan (a variant/nullable array element is the one shape they
- * reject).
+ * determined at execution time. A BOUNDED predicate is not — it is the same on every call — so it is
+ * lowered into the static `sql` HERE, at emit time (native-clean), exactly as it is on a read that
+ * declares no optional predicate at all. A read's WHERE therefore splits by that ONE property: the
+ * bounded predicates ARE the emitted statement's WHERE, and only the ACTUALLY-optional ones accumulate
+ * a plan — one `{skipped, sql, params}` FRAGMENT each, which the `executeSQL` leaf continues the static
+ * WHERE with when it runs ({@link import('../leaves').assembleDynamicWhere}); the `?`→`$N` render
+ * happens after that, on the final SQL. There is no intermediate IR vocabulary: a fragment is SQL text
+ * + params + a SKIP FLAG (`skipped` = `param === null`). Every fragment is the SAME struct — never a
+ * `cond`-to-null element — so the go/rust native-codegen emitters resolve the plan (a variant/nullable
+ * array element is the one shape they reject).
  *
- * A statement with NO optional predicate carries no plan at all — its WHERE is lowered into the
- * static `sql` at emit time (native-clean). One path, chosen per statement.
+ * A read with NO optional predicate carries no plan at all. One statement, one plan holding exactly the
+ * predicates that are optional.
  */
 
 import type { PortableType } from 'behavior-contracts/runtime';
@@ -308,12 +310,15 @@ class EmitContext {
 
     const cap = this.bakedFindCap(endpoint);
     const where = endpoint.where ?? [];
-    const dynamic = where.some(isOptional);
-    if (dynamic && endpoint.view !== undefined) {
+    // CLAUDE.md §2: the WHERE splits by ONE property — a BOUNDED predicate is lowered into the static
+    // statement below, only an ACTUALLY-optional one accumulates a plan the leaf assembles per call.
+    const optional = where.filter(isOptional);
+    if (optional.length > 0 && endpoint.view !== undefined) {
       throw new Error(
-        `emit: endpoint '${name}': a QUERY view-model binds its own CTE params BEFORE the WHERE, and a ` +
-          `dynamic (SKIP) WHERE is assembled at execution time — the two cannot share one param order. ` +
-          `Declare the view's own predicate inside the view query, or drop the optional predicate.`,
+        `emit: endpoint '${name}': a QUERY view-model's CTE is a statement of its own, and the leaf locates ` +
+          `the dynamic WHERE by the FIRST tail keyword (GROUP BY / ORDER BY / LIMIT / …) — it cannot tell a ` +
+          `tail inside the CTE from the outer statement's. Declare the view's own predicate inside the view ` +
+          `query, or drop the optional predicate.`,
       );
     }
 
@@ -324,13 +329,13 @@ class EmitContext {
     const limit = this.page(endpoint.limit ?? (cap !== null ? cap + 1 : undefined), params);
     const offset = this.page(endpoint.offset, params);
 
-    // A read with ANY optional predicate carries its WHOLE WHERE as fragments (the leaf assembles the
-    // survivors at execution time); a fully-bounded read lowers its WHERE into the static `sql` here.
     const compiled = compileSelect({
       dialect: this.spec.dialect,
       tableName: table,
       select: projection.join(', '),
-      ...(dynamic ? {} : { conditions: this.conditions(model, where) }),
+      // The BOUNDED predicates — this read's static WHERE, whatever else it declares. (An all-optional
+      // read compiles an EMPTY condition set, which is the same no-WHERE statement it always was.)
+      conditions: this.conditions(model, where.filter((p) => !isOptional(p))),
       ...(endpoint.view !== undefined ? { cte: cteOf(endpoint.view) } : {}),
       ...(endpoint.order !== undefined ? { order: endpoint.order } : {}),
       ...(limit !== undefined ? { limit } : {}),
@@ -340,7 +345,7 @@ class EmitContext {
 
     const bigint = endpoint.bigint === true;
     const call = `${quote(compiled.sql)}, [${compiled.params.map(renderSlot).join(', ')}], false, false, ${bigint}${
-      dynamic ? `, ${this.dynamicWherePlan(model, where)}` : ''
+      optional.length > 0 ? `, ${this.dynamicWherePlan(model, optional)}` : ''
     }`;
 
     const rowObj = objOf(deriveReadRow(table, projection, readResolve, `endpoint '${name}'`).outType, name);
@@ -372,19 +377,19 @@ class EmitContext {
   }
 
   /**
-   * The DYNAMIC WHERE plan expression: ONE fragment per declared predicate, every one the SAME struct
-   * `{skipped, sql, params}` — `sql`/`params` from the SAME `compileWhere` that produces a bounded
-   * WHERE, and `skipped` the per-call SKIP decision carried as DATA (a bounded predicate is a literal
-   * `false`; an optional one is `param === null`). That is the whole fragment vocabulary (CLAUDE.md §2:
-   * SQL + params + a SKIP flag). The array is HOMOGENEOUS — never a `cond`-to-null element — so the
-   * go/rust native-codegen emitters resolve it (a variant/nullable array element is the one shape they
-   * reject); the `executeSQL` leaf drops the `skipped` fragments at run.
+   * The DYNAMIC WHERE plan expression: ONE fragment per OPTIONAL predicate — never a bounded one, which
+   * is already in the static statement (CLAUDE.md §2) — every fragment the SAME struct
+   * `{skipped, sql, params}`, with `sql`/`params` from the SAME `compileWhere` that produces a bounded
+   * WHERE and `skipped` the per-call SKIP decision carried as DATA (`param === null`). That is the whole
+   * fragment vocabulary (SQL + params + a SKIP flag). The array is HOMOGENEOUS — never a `cond`-to-null
+   * element — so the go/rust native-codegen emitters resolve it (a variant/nullable array element is the
+   * one shape they reject); the `executeSQL` leaf drops the `skipped` fragments at run and continues the
+   * static WHERE with the survivors.
    */
-  private dynamicWherePlan(model: ModelClassLike, where: readonly Predicate[]): string {
-    const frags = where.map((p) => {
+  private dynamicWherePlan(model: ModelClassLike, optional: readonly OptionalPredicate[]): string {
+    const frags = optional.map((p) => {
       const w = compileWhere(this.conditions(model, [p]), this.spec.dialect);
-      const skipped = isParameterised(p) && p.optional === true ? `${p.param} === null` : 'false';
-      return `{ skipped: ${skipped}, sql: ${quote(w.sql)}, params: [${w.params.map(renderSlot).join(', ')}] }`;
+      return `{ skipped: ${p.param} === null, sql: ${quote(w.sql)}, params: [${w.params.map(renderSlot).join(', ')}] }`;
     });
     return `{ frags: [${frags.join(', ')}] }`;
   }
@@ -857,8 +862,11 @@ function isParameterised(p: Predicate): p is ComparePredicate | InPredicate {
   return p.kind === undefined || p.kind === 'compare' || p.kind === 'in';
 }
 
+/** A SKIP member: a parameterised predicate declared `optional` — present-or-absent PER CALL. */
+type OptionalPredicate = (ComparePredicate | InPredicate) & { readonly optional: true };
+
 /** A predicate is a SKIP member when it declares `optional` (only a parameterised member can be one). */
-function isOptional(p: Predicate): boolean {
+function isOptional(p: Predicate): p is OptionalPredicate {
   return isParameterised(p) && p.optional === true;
 }
 

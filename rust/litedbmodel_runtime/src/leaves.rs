@@ -435,12 +435,13 @@ fn is_ascii_word(c: u8) -> bool {
     c.is_ascii_alphanumeric() || c == b'_'
 }
 
-/// The byte index of the leading-whitespace run of the FIRST tail keyword in `sql`, or `None`. Matches
-/// the TS `WHERE_TAIL_RE.exec(...).index` WITHOUT a regex dependency: the leftmost run of one or more
-/// whitespace bytes (`\s+`) immediately followed by a tail keyword (case-insensitive) that ends on a
-/// word boundary (`\b` — end of string or a non-word byte). Scanning `i` ascending returns the first
-/// whitespace of that run (a match starting mid-run would have matched one byte earlier).
-fn where_tail_index(sql: &str) -> Option<usize> {
+/// The byte index of the leading-whitespace run of the FIRST of `keywords` in `sql`, or `None`. Matches
+/// the TS regexes (`WHERE_TAIL_RE` / `WHERE_RE`) WITHOUT a regex dependency: the leftmost run of one or
+/// more whitespace bytes (`\s+`) immediately followed by one of the keywords (case-insensitive) that
+/// ends on a word boundary (`\b` — end of string or a non-word byte). Scanning `i` ascending returns the
+/// first whitespace of that run (a match starting mid-run would have matched one byte earlier). ONE
+/// scanner for both keyword sets — the tail keywords and WHERE itself are the same lexical rule.
+fn keyword_index(sql: &str, keywords: &[&str]) -> Option<usize> {
     let b = sql.as_bytes();
     let mut i = 0;
     while i < b.len() {
@@ -452,7 +453,7 @@ fn where_tail_index(sql: &str) -> Option<usize> {
         while j < b.len() && is_ascii_ws(b[j]) {
             j += 1;
         }
-        for kw in WHERE_TAIL_KEYWORDS {
+        for kw in keywords {
             let k = kw.len();
             if j + k <= b.len()
                 && b[j..j + k].eq_ignore_ascii_case(kw.as_bytes())
@@ -466,44 +467,72 @@ fn where_tail_index(sql: &str) -> Option<usize> {
     None
 }
 
-/// Splice a ` WHERE …` clause (leading space included, or "") into `base_sql` before its first tail
-/// keyword. Byte-for-byte port of leaves.ts `spliceWhere`.
+/// Where a dynamic WHERE clause joins `base_sql` (port of leaves.ts `where_splice`):
+///
+///  - `.0` — the end of the statement's WHERE region: before the first tail keyword, or the end of the
+///    statement. The exact position a bounded WHERE occupies.
+///  - `.1` — how the clause joins: `" AND "` when the statement already carries a WHERE (its BOUNDED
+///    predicates, lowered at emit — CLAUDE.md §2), `" WHERE "` when it carries none.
+///  - `.2` — how many base params bind AFTER the clause. Every `?` past the splice point is a page-tail
+///    bound count (`LIMIT ?` / `OFFSET ?`) — the only placeholders the emitted SELECT carries after the
+///    WHERE — so the surviving fragments' params bind before exactly that many of the base params, which
+///    is the position their own `?`s occupy in the final statement.
+fn where_splice(base_sql: &str) -> (usize, &'static str, usize) {
+    let at = keyword_index(base_sql, &WHERE_TAIL_KEYWORDS).unwrap_or(base_sql.len());
+    let keyword = if keyword_index(&base_sql[..at], &["WHERE"]).is_some() {
+        " AND "
+    } else {
+        " WHERE "
+    };
+    (at, keyword, base_sql[at..].matches('?').count())
+}
+
+/// Splice a WHERE clause (leading connector included, or "") into `base_sql` at its WHERE position.
+/// Byte-for-byte port of leaves.ts `spliceWhere`.
 fn splice_where(base_sql: &str, where_sql: &str) -> String {
     if where_sql.is_empty() {
         return base_sql.to_string();
     }
-    match where_tail_index(base_sql) {
-        Some(at) => format!("{}{}{}", &base_sql[..at], where_sql, &base_sql[at..]),
-        None => format!("{base_sql}{where_sql}"),
-    }
+    let at = where_splice(base_sql).0;
+    format!("{}{}{}", &base_sql[..at], where_sql, &base_sql[at..])
 }
 
 /// Assemble the effective (sql, params) from the dynamic-WHERE fragments (leaves.ts
-/// `assembleDynamicWhere`): DROP the skipped fragments, join the survivors with ` WHERE `(first)/
-/// ` AND `(rest) + the fragment SQL, splice the clause before the first tail keyword (`splice_where`),
-/// and bind the surviving fragments' params BEFORE the base params (the WHERE `?`s precede the tail's).
-/// A plan with no surviving fragment leaves the statement unchanged.
+/// `assembleDynamicWhere`): DROP the skipped fragments, join the survivors with ` AND `, splice the
+/// clause at the statement's WHERE position — CONTINUING the bounded WHERE the emitter already lowered,
+/// or opening one when there is none — and bind the survivors' params at the slot their `?`s occupy:
+/// after the base params the clause follows, before the page tail's. A plan whose fragments are all
+/// skipped leaves the emitted statement exactly as it was compiled.
 fn assemble_dynamic_where(
     base_sql: &str,
     base_params: Vec<WireValue>,
     frags: Vec<DynamicWhereFrag>,
 ) -> (String, Vec<WireValue>) {
-    let mut where_sql = String::new();
-    let mut params: Vec<WireValue> = Vec::new();
+    let mut clause = String::new();
+    let mut where_params: Vec<WireValue> = Vec::new();
     for f in frags {
         if f.skipped {
             continue;
         }
-        where_sql.push_str(if where_sql.is_empty() {
-            " WHERE "
-        } else {
-            " AND "
-        });
-        where_sql.push_str(&f.sql);
-        params.extend(f.params);
+        if !clause.is_empty() {
+            clause.push_str(" AND ");
+        }
+        clause.push_str(&f.sql);
+        where_params.extend(f.params);
     }
-    params.extend(base_params);
-    (splice_where(base_sql, &where_sql), params)
+    if clause.is_empty() {
+        return (base_sql.to_string(), base_params);
+    }
+    let (_, keyword, tail) = where_splice(base_sql);
+    let mut params = base_params;
+    let at = params.len().saturating_sub(tail);
+    let page = params.split_off(at);
+    params.extend(where_params);
+    params.extend(page);
+    (
+        splice_where(base_sql, &format!("{keyword}{clause}")),
+        params,
+    )
 }
 
 // ── execute_sql — the SOLE op-independent SQL transport ────────────────────────────────────────────
@@ -1010,6 +1039,52 @@ mod tests {
         // WHERE id > 1 → ids {2,3}; the skipped `v = ?` fragment was dropped (else a bind-count error
         // or 0 rows). Proves splice position, skip-drop, and the single surviving param binding.
         assert_eq!(items(&out).len(), 2);
+    }
+
+    // #192 — a MIXED read as the emitter now lowers it (CLAUDE.md §2): the BOUNDED predicate is the
+    // statement's own static WHERE and the page count binds after it, so the surviving fragment has to
+    // CONTINUE that WHERE with ` AND ` (a second ` WHERE ` is a syntax error) and its param has to bind
+    // BETWEEN the bounded value and the count (any other order binds `id > 'c'` / `v = 1` and returns
+    // nothing). Proven end-to-end against a real sqlite: only the correct assembly yields row 3.
+    #[test]
+    fn dynamic_where_continues_a_bounded_where() {
+        use crate::driver::SqliteDriver;
+        let d = SqliteDriver::in_memory(&[
+            "CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)".to_string(),
+            "INSERT INTO t (id, v) VALUES (1,'a'), (2,'b'), (3,'c')".to_string(),
+        ])
+        .unwrap();
+        let plan = wrow(&[(
+            "frags",
+            wlist(vec![wrow(&[
+                ("skipped", WireValue::Bool(false)),
+                ("sql", WireValue::Str("v = ?".into())),
+                ("params", wlist(vec![WireValue::Str("c".into())])),
+            ])]),
+        )]);
+        let out = with_ambient_driver(&d, || {
+            execute_sql(payload(vec![
+                ("bigint", WireValue::Bool(false)),
+                ("params", wlist(vec![WireValue::int(1), WireValue::int(2)])),
+                ("returning", WireValue::Bool(false)),
+                (
+                    "sql",
+                    WireValue::Str("SELECT id FROM t WHERE id > ? ORDER BY id LIMIT ?".into()),
+                ),
+                ("whereDynamic", plan),
+                ("write", WireValue::Bool(false)),
+            ]))
+        })
+        .unwrap();
+        let rows = items(&out);
+        assert_eq!(rows.len(), 1, "id > 1 AND v = 'c' selects exactly one row");
+        match &rows[0] {
+            WireValue::Row(r) => match r.entries.iter().find(|(k, _)| k == "id").map(|(_, v)| v) {
+                Some(WireValue::Int(n)) => assert_eq!(*n, 3),
+                _ => panic!("unexpected id cell"),
+            },
+            _ => panic!("unexpected row"),
+        }
     }
 
     // Port unbox is FAIL-CLOSED: an ABSENT port and a WRONG-VARIANT port both surface a loud

@@ -106,6 +106,37 @@ test('a SKIP plan assembles only the surviving fragments, at the WHERE position,
   expect(calls[2].sql).toBe('SELECT id, author_id FROM posts ORDER BY id ASC LIMIT 20');
 });
 
+test('#192 — the survivors CONTINUE the statement\'s BOUNDED WHERE, binding between it and the page tail', () => {
+  const calls: Call[] = [];
+  const ctx: LeafContext = { exec: contextForConnection(recordingConn(calls)), dialect: 'sqlite' };
+  // A MIXED read as the emitter now lowers it (CLAUDE.md §2): the bounded predicate IS the statement's
+  // WHERE (static SQL + a main param), the page count binds after it, and ONLY the optional predicates
+  // ride the plan.
+  const base = {
+    sql: 'SELECT id, author_id FROM posts WHERE author_id = ? ORDER BY id ASC LIMIT ?',
+    params: [10, 20],
+    write: false,
+    returning: false,
+    bigint: false,
+  };
+
+  executeSQL({ ...base, whereDynamic: { frags: [{ skipped: false, sql: 'status = ?', params: ['live'] }, { skipped: false, sql: 'id >= ?', params: [2] }] } }, ctx);
+  // ONE WHERE — the survivors continue the bounded one with ` AND `, at the position it ends…
+  expect(calls[0].sql).toBe('SELECT id, author_id FROM posts WHERE author_id = ? AND status = ? AND id >= ? ORDER BY id ASC LIMIT ?');
+  // …and their params bind at the slot their own `?`s occupy: after the bounded value, before the count.
+  expect(calls[0].params).toEqual([10, 'live', 2, 20]);
+
+  // A skipped fragment is dropped from BOTH the text and the binding.
+  executeSQL({ ...base, whereDynamic: { frags: [{ skipped: true, sql: 'status = ?', params: [null] }, { skipped: false, sql: 'id >= ?', params: [2] }] } }, ctx);
+  expect(calls[1].sql).toBe('SELECT id, author_id FROM posts WHERE author_id = ? AND id >= ? ORDER BY id ASC LIMIT ?');
+  expect(calls[1].params).toEqual([10, 2, 20]);
+
+  // EVERY fragment skipped ⇒ the emitted statement runs exactly as it was compiled (bounded WHERE and all).
+  executeSQL({ ...base, whereDynamic: { frags: [{ skipped: true, sql: 'status = ?', params: [null] }, { skipped: true, sql: 'id >= ?', params: [null] }] } }, ctx);
+  expect(calls[2].sql).toBe(base.sql);
+  expect(calls[2].params).toEqual([10, 20]);
+});
+
 test('`?`→`$N` is rendered AFTER the SKIP assembly, so the numbering follows the FINAL statement', () => {
   const calls: Call[] = [];
   const ctx: LeafContext = { exec: contextForConnection(recordingConn(calls)), dialect: 'postgres' };

@@ -93,34 +93,65 @@ interface ExecuteSqlPorts {
  */
 const WHERE_TAIL_RE = /\s+(GROUP BY|ORDER BY|LIMIT|OFFSET|FOR UPDATE|RETURNING)\b/i;
 
-/** Splice a ` WHERE …` clause (leading space included, or `''`) into `baseSql` before its first tail keyword. */
+/**
+ * The WHERE keyword itself — matched the SAME way {@link WHERE_TAIL_RE} matches a tail keyword, so the
+ * five language ports share one lexical rule. A statement that carries it already has a (bounded) WHERE,
+ * which a dynamic clause CONTINUES instead of opening a second one.
+ */
+const WHERE_RE = /\s+WHERE\b/i;
+
+/**
+ * Where a dynamic WHERE clause joins the base statement — the ONE scan both {@link spliceWhere} and
+ * {@link assembleDynamicWhere} read:
+ *
+ *  - `at`      — the end of the statement's WHERE region: before the first tail keyword, or the end of
+ *                the statement. The exact position a bounded WHERE occupies.
+ *  - `keyword` — how the clause joins: ` AND ` when the statement already carries a WHERE (its BOUNDED
+ *                predicates, lowered at emit — CLAUDE.md §2), ` WHERE ` when it carries none.
+ *  - `tail`    — how many base params bind AFTER the clause. Every `?` past `at` is a page-tail bound
+ *                count (`LIMIT ?` / `OFFSET ?`) — the only placeholders `compileSelect` emits after the
+ *                WHERE — so the surviving fragments' params bind before exactly that many of the base
+ *                params, which is the position their own `?`s occupy in the final statement.
+ */
+function whereSplice(baseSql: string): { at: number; keyword: string; tail: number } {
+  const m = WHERE_TAIL_RE.exec(baseSql);
+  const at = m === null ? baseSql.length : m.index;
+  return {
+    at,
+    keyword: WHERE_RE.test(baseSql.slice(0, at)) ? ' AND ' : ' WHERE ',
+    tail: baseSql.slice(at).split('?').length - 1,
+  };
+}
+
+/** Splice a WHERE clause (leading connector included, or `''`) into `baseSql` at its WHERE position. */
 export function spliceWhere(baseSql: string, whereSql: string): string {
   if (whereSql === '') return baseSql;
-  const tail = WHERE_TAIL_RE.exec(baseSql);
-  return tail === null ? baseSql + whereSql : baseSql.slice(0, tail.index) + whereSql + baseSql.slice(tail.index);
+  const { at } = whereSplice(baseSql);
+  return baseSql.slice(0, at) + whereSql + baseSql.slice(at);
 }
 
 /**
  * Assemble the effective statement from a DYNAMIC WHERE plan: drop the SKIPPED fragments (`skipped`
- * true — the per-call SKIP decision the emitter carried as DATA), join the survivors with ` WHERE ` /
- * ` AND `, splice the clause into the base `sql` before its first tail keyword ({@link spliceWhere}) —
- * the exact position a bounded WHERE occupies — and bind the surviving fragments' params BEFORE the
- * base params (the WHERE `?`s precede the tail's).
+ * true — the per-call SKIP decision the emitter carried as DATA), join the survivors with ` AND `,
+ * splice the clause at the statement's WHERE position ({@link whereSplice}) — CONTINUING the bounded
+ * WHERE the emitter already lowered, or opening one when there is none — and bind the survivors' params
+ * at the slot their `?`s occupy: after the base params the clause follows, before the page tail's.
  *
  * A SKIP predicate's presence is per-CALL, so the FINAL statement can only be determined here, at
  * execution time — which is also why `?`→`$N` is rendered after this ({@link prepareSql}), never at
- * emit time. A statement with NO optional predicate carries no plan at all: its WHERE is spliced into
- * the static `sql` at emit time and it never reaches this function.
+ * emit time. Only the ACTUALLY-optional predicates are in the plan (CLAUDE.md §2): a read with none
+ * carries no plan at all and never reaches this function, and one whose fragments are all skipped
+ * leaves the emitted statement exactly as it was compiled.
  */
 export function assembleDynamicWhere(p: { sql: string; params: unknown[]; whereDynamic: DynamicWherePlan }): { sql: string; params: unknown[] } {
   const frags = p.whereDynamic.frags.filter((f) => !f.skipped);
-  let whereSql = '';
-  const whereParams: unknown[] = [];
-  frags.forEach((f, i) => {
-    whereSql += (i === 0 ? ' WHERE ' : ' AND ') + f.sql;
-    whereParams.push(...f.params);
-  });
-  return { sql: spliceWhere(p.sql, whereSql), params: [...whereParams, ...p.params] };
+  if (frags.length === 0) return { sql: p.sql, params: p.params };
+  const { keyword, tail } = whereSplice(p.sql);
+  const at = Math.max(p.params.length - tail, 0);
+  return {
+    sql: spliceWhere(p.sql, keyword + frags.map((f) => f.sql).join(' AND ')),
+    params: [...p.params.slice(0, at), ...frags.flatMap((f) => f.params), ...p.params.slice(at)],
+  };
 }
 
 /**

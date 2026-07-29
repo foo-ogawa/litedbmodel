@@ -47,16 +47,44 @@ final class Leaves
      */
     private const WHERE_TAIL_RE = '/\s+(GROUP BY|ORDER BY|LIMIT|OFFSET|FOR UPDATE|RETURNING)\b/i';
 
-    /** Splice a ` WHERE …` clause (leading space included, or '') before the first tail keyword. */
+    /**
+     * The WHERE keyword itself, matched the SAME way a tail keyword is, so the five language ports
+     * share one lexical rule. A statement that carries it already has a (bounded) WHERE, which a
+     * dynamic clause CONTINUES instead of opening a second one.
+     */
+    private const WHERE_RE = '/\s+WHERE\b/i';
+
+    /**
+     * Where a dynamic WHERE clause joins `$baseSql` (port of leaves.ts `whereSplice`):
+     *
+     *  - `at`      — the end of the statement's WHERE region: before the first tail keyword, or the end
+     *                of the statement. The exact position a bounded WHERE occupies.
+     *  - `keyword` — how the clause joins: ` AND ` when the statement already carries a WHERE (its
+     *                BOUNDED predicates, lowered at emit — CLAUDE.md §2), ` WHERE ` when it carries none.
+     *  - `tail`    — how many base params bind AFTER the clause. Every `?` past `at` is a page-tail
+     *                bound count (`LIMIT ?` / `OFFSET ?`) — the only placeholders the emitted SELECT
+     *                carries after the WHERE — so the surviving fragments' params bind before exactly
+     *                that many of the base params, which is the position their own `?`s occupy in the
+     *                final statement.
+     *
+     * @return array{0: int, 1: string, 2: int}
+     */
+    private static function whereSplice(string $baseSql): array
+    {
+        $at = preg_match(self::WHERE_TAIL_RE, $baseSql, $m, PREG_OFFSET_CAPTURE) === 1
+            ? (int) $m[0][1]
+            : strlen($baseSql);
+        $keyword = preg_match(self::WHERE_RE, substr($baseSql, 0, $at)) === 1 ? ' AND ' : ' WHERE ';
+        return [$at, $keyword, substr_count(substr($baseSql, $at), '?')];
+    }
+
+    /** Splice a WHERE clause (leading connector included, or '') into `$baseSql` at its WHERE position. */
     private static function spliceWhere(string $baseSql, string $whereSql): string
     {
         if ($whereSql === '') {
             return $baseSql;
         }
-        if (preg_match(self::WHERE_TAIL_RE, $baseSql, $m, PREG_OFFSET_CAPTURE) !== 1) {
-            return $baseSql . $whereSql;
-        }
-        $at = $m[0][1];
+        [$at] = self::whereSplice($baseSql);
         return substr($baseSql, 0, $at) . $whereSql . substr($baseSql, $at);
     }
 
@@ -65,12 +93,14 @@ final class Leaves
      * has surviving fragments, the ports verbatim otherwise. Port of `src/scp/leaves.ts`
      * `assembleDynamicWhere`.
      *
-     * `whereDynamic` is OPTIONAL (absent/null ⇒ no dynamic WHERE — a bounded read, a write, and an
-     * uncapped fetch omit it; CLAUDE.md §2). A SKIP predicate's presence is per-CALL, so the FINAL
-     * statement can only be determined here, at execution time — which is why the placeholder render
-     * runs AFTER this. bc carries each fragment's SKIP decision as DATA: a skipped fragment is PRESENT
-     * with `skipped` true (never omitted), so assembly DROPS the `skipped` fragments; the survivors join
-     * with ` WHERE `/` AND ` and their params bind BEFORE the base params.
+     * `whereDynamic` is OPTIONAL (absent/null ⇒ no dynamic WHERE — a read with no optional predicate, a
+     * write, and an uncapped fetch omit it; CLAUDE.md §2). A SKIP predicate's presence is per-CALL, so
+     * the FINAL statement can only be determined here, at execution time — which is why the placeholder
+     * render runs AFTER this. bc carries each fragment's SKIP decision as DATA: a skipped fragment is
+     * PRESENT with `skipped` true (never omitted), so assembly DROPS the `skipped` fragments; the
+     * survivors join with ` AND `, the clause CONTINUES the bounded WHERE the emitter already lowered
+     * (or opens one when there is none), and their params bind at the slot their `?`s occupy: after the
+     * base params the clause follows, before the page tail's.
      *
      * @param array<string, mixed> $ports
      * @return array{0: string, 1: list<mixed>}
@@ -79,23 +109,32 @@ final class Leaves
     {
         /** @var list<mixed> $params */
         $params = array_values($ports['params']);
+        $sql = (string) $ports['sql'];
         $plan = $ports['whereDynamic'] ?? null;
         if ($plan === null) {
-            return [(string) $ports['sql'], $params];
+            return [$sql, $params];
         }
-        $whereSql = '';
+        $clause = '';
         $whereParams = [];
         foreach (((array) $plan)['frags'] as $frag) {
             $f = (array) $frag;
             if ($f['skipped']) {
                 continue;
             }
-            $whereSql .= ($whereSql === '' ? ' WHERE ' : ' AND ') . (string) $f['sql'];
+            $clause .= ($clause === '' ? '' : ' AND ') . (string) $f['sql'];
             foreach ($f['params'] as $p) {
                 $whereParams[] = $p;
             }
         }
-        return [self::spliceWhere((string) $ports['sql'], $whereSql), array_merge($whereParams, $params)];
+        if ($clause === '') {
+            return [$sql, $params];
+        }
+        [, $keyword, $tail] = self::whereSplice($sql);
+        $bind = max(count($params) - $tail, 0);
+        return [
+            self::spliceWhere($sql, $keyword . $clause),
+            array_merge(array_slice($params, 0, $bind), $whereParams, array_slice($params, $bind)),
+        ];
     }
 
     /**

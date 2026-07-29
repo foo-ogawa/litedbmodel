@@ -26,9 +26,9 @@ export type ComparisonOp = 'eq' | 'ne' | 'lt' | 'le' | 'gt' | 'ge' | 'like';
 /**
  * `<column> <op> <param>`. The parameter's TS type is resolved from the column's declared SQL type.
  *
- * `optional: true` makes the predicate a SKIP member: the parameter is nullable and the fragment is
- * DROPPED when it is null. The emitter lowers that to a conditional over the two STATIC SQL texts
- * (bc's `?:` → a Conditional node), so every branch is still fully static SQL.
+ * `optional: true` makes the predicate a SKIP member: the parameter is nullable and the predicate is
+ * DROPPED when it is null. Only such a predicate rides the dynamic-WHERE plan the `executeSQL` leaf
+ * assembles per call; a BOUNDED one is lowered into the emitted statement's static WHERE (CLAUDE.md §2).
  */
 export interface ComparePredicate {
   readonly kind?: 'compare';

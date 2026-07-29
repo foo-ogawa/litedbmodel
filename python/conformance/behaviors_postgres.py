@@ -4,14 +4,14 @@
 # native dict literal and handed to the EXISTING runtime core (run_behavior) —
 # no execution logic is generated. Handlers are ALWAYS injected at the boundary
 # (IR + {effects,config,hooks}); they are never generated.
-# irFingerprint: fnv1a64:11dc780c893fbcd9
+# irFingerprint: fnv1a64:00ae4b78c1637cb5
 from behavior_contracts import SPEC_VERSIONS, ProvenanceError, load_compiled_ir, run_behavior
 
 # Spec versions baked at generation time (fail-closed constant comparison at load).
 EXPECTED_SPEC_VERSIONS = {"behavior": 6, "expression": 2, "plan": 1}
 
 # FNV-1a 64 fingerprint of the source portable IR (canonical_json discipline, #208).
-IR_FINGERPRINT = "fnv1a64:11dc780c893fbcd9"
+IR_FINGERPRINT = "fnv1a64:00ae4b78c1637cb5"
 
 # Component names exposed by bind(), in IR declaration order.
 COMPONENT_NAMES = ("posts", "postsTop", "page", "postsByIds", "feed", "usersWithPosts", "postsWithAuthor", "usersWithCappedPosts", "usersWithUncappedPosts", "usersWithTopPosts", "createPost", "renamePost", "removePost", "createPostReturning", "renamePostReturning", "removePostReturning", "restatusPostsReturning", "removePostsByAuthorReturning", "typedRows", "createTags", "removeTags", "createTagsReturning", "relabelTagsReturning", "removeTagsReturning")
@@ -500,29 +500,20 @@ IR_DOC = {
           "ports": {
             "bigint": False,
             "params": {
-              "arr": []
+              "arr": [
+                {
+                  "ref": [
+                    "authorId"
+                  ]
+                }
+              ]
             },
             "returning": False,
-            "sql": "SELECT id, author_id, title, status FROM conf_posts ORDER BY id ASC",
+            "sql": "SELECT id, author_id, title, status FROM conf_posts WHERE author_id = ? ORDER BY id ASC",
             "whereDynamic": {
               "obj": {
                 "frags": {
                   "arr": [
-                    {
-                      "obj": {
-                        "params": {
-                          "arr": [
-                            {
-                              "ref": [
-                                "authorId"
-                              ]
-                            }
-                          ]
-                        },
-                        "skipped": False,
-                        "sql": "author_id = ?"
-                      }
-                    },
                     {
                       "obj": {
                         "params": {

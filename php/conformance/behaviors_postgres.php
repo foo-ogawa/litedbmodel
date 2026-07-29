@@ -7,7 +7,7 @@
 // (Behavior::runBehavior) — no execution logic is generated. Handlers are ALWAYS
 // injected at the boundary (IR + {effects,config,hooks} — concept.md §4.4); they
 // are never generated.
-// irFingerprint: fnv1a64:11dc780c893fbcd9
+// irFingerprint: fnv1a64:00ae4b78c1637cb5
 
 declare(strict_types=1);
 
@@ -15,7 +15,7 @@ declare(strict_types=1);
 $expectedSpecVersions = ['behavior' => 6, 'expression' => 2, 'plan' => 1];
 
 // FNV-1a 64 fingerprint of the source portable IR (canonical-json discipline, #208).
-$irFingerprint = 'fnv1a64:11dc780c893fbcd9';
+$irFingerprint = 'fnv1a64:00ae4b78c1637cb5';
 
 // Component names exposed by bind(), in IR declaration order.
 $componentNames = ['posts', 'postsTop', 'page', 'postsByIds', 'feed', 'usersWithPosts', 'postsWithAuthor', 'usersWithCappedPosts', 'usersWithUncappedPosts', 'usersWithTopPosts', 'createPost', 'renamePost', 'removePost', 'createPostReturning', 'renamePostReturning', 'removePostReturning', 'restatusPostsReturning', 'removePostsByAuthorReturning', 'typedRows', 'createTags', 'removeTags', 'createTagsReturning', 'relabelTagsReturning', 'removeTagsReturning'];
@@ -504,29 +504,20 @@ $irDoc = (object) [
                     "ports" => (object) [
                         "bigint" => false,
                         "params" => (object) [
-                            "arr" => [],
+                            "arr" => [
+                                (object) [
+                                    "ref" => [
+                                        "authorId",
+                                    ],
+                                ],
+                            ],
                         ],
                         "returning" => false,
-                        "sql" => "SELECT id, author_id, title, status FROM conf_posts ORDER BY id ASC",
+                        "sql" => "SELECT id, author_id, title, status FROM conf_posts WHERE author_id = ? ORDER BY id ASC",
                         "whereDynamic" => (object) [
                             "obj" => (object) [
                                 "frags" => (object) [
                                     "arr" => [
-                                        (object) [
-                                            "obj" => (object) [
-                                                "params" => (object) [
-                                                    "arr" => [
-                                                        (object) [
-                                                            "ref" => [
-                                                                "authorId",
-                                                            ],
-                                                        ],
-                                                    ],
-                                                ],
-                                                "skipped" => false,
-                                                "sql" => "author_id = ?",
-                                            ],
-                                        ],
                                         (object) [
                                             "obj" => (object) [
                                                 "params" => (object) [

@@ -25,6 +25,7 @@ import (
 	"math"
 	"regexp"
 	"strconv"
+	"strings"
 
 	bc "github.com/foo-ogawa/behavior-contracts/go"
 )
@@ -320,42 +321,74 @@ func wireOfElem(l wire.WireList, i int) (wire.WireValue, error) {
 // TS `WHERE_TAIL_RE` (`/\s+(GROUP BY|ORDER BY|LIMIT|OFFSET|FOR UPDATE|RETURNING)\b/i`).
 var whereTailRe = regexp.MustCompile(`(?i)\s+(GROUP BY|ORDER BY|LIMIT|OFFSET|FOR UPDATE|RETURNING)\b`)
 
-// spliceWhere splices a ` WHERE …` clause (leading space included, or "") into baseSql before its first
-// tail keyword. Byte-for-byte port of leaves.ts `spliceWhere`.
+// whereRe matches the WHERE keyword the SAME way whereTailRe matches a tail keyword (TS `WHERE_RE`), so
+// the five language ports share one lexical rule. A statement that carries it already has a (bounded)
+// WHERE, which a dynamic clause CONTINUES instead of opening a second one.
+var whereRe = regexp.MustCompile(`(?i)\s+WHERE\b`)
+
+// whereSplice reports where a dynamic WHERE clause joins baseSql (port of leaves.ts `whereSplice`):
+//   - at      — the end of the statement's WHERE region: before the first tail keyword, or the end of
+//     the statement. The exact position a bounded WHERE occupies.
+//   - keyword — how the clause joins: " AND " when the statement already carries a WHERE (its BOUNDED
+//     predicates, lowered at emit — CLAUDE.md §2), " WHERE " when it carries none.
+//   - tail    — how many base params bind AFTER the clause. Every `?` past `at` is a page-tail bound
+//     count (`LIMIT ?` / `OFFSET ?`) — the only placeholders the emitted SELECT carries after the
+//     WHERE — so the surviving fragments' params bind before exactly that many of the base params,
+//     which is the position their own `?`s occupy in the final statement.
+func whereSplice(baseSql string) (at int, keyword string, tail int) {
+	at = len(baseSql)
+	if loc := whereTailRe.FindStringIndex(baseSql); loc != nil {
+		at = loc[0]
+	}
+	keyword = " WHERE "
+	if whereRe.MatchString(baseSql[:at]) {
+		keyword = " AND "
+	}
+	return at, keyword, strings.Count(baseSql[at:], "?")
+}
+
+// spliceWhere splices a WHERE clause (leading connector included, or "") into baseSql at its WHERE
+// position. Byte-for-byte port of leaves.ts `spliceWhere`.
 func spliceWhere(baseSql, whereSql string) string {
 	if whereSql == "" {
 		return baseSql
 	}
-	loc := whereTailRe.FindStringIndex(baseSql)
-	if loc == nil {
-		return baseSql + whereSql
-	}
-	return baseSql[:loc[0]] + whereSql + baseSql[loc[0]:]
+	at, _, _ := whereSplice(baseSql)
+	return baseSql[:at] + whereSql + baseSql[at:]
 }
 
 // assembleDynamicWhere assembles the effective (sql, params) from the dynamic-WHERE plan: DROP the
-// skipped fragments, join the survivors with ` WHERE `(first)/` AND `(rest) + the fragment SQL, splice
-// the clause before the first tail keyword (spliceWhere), and bind the surviving fragments' params
-// BEFORE the base params (the WHERE `?`s precede the tail's). Byte-for-byte port of leaves.ts
-// `assembleDynamicWhere`; a plan with no surviving fragment leaves the statement unchanged.
+// skipped fragments, join the survivors with " AND ", splice the clause at the statement's WHERE
+// position — CONTINUING the bounded WHERE the emitter already lowered, or opening one when there is
+// none — and bind the survivors' params at the slot their `?`s occupy: after the base params the clause
+// follows, before the page tail's. Byte-for-byte port of leaves.ts `assembleDynamicWhere`; a plan whose
+// fragments are all skipped leaves the emitted statement exactly as it was compiled.
 func assembleDynamicWhere(baseSql string, baseParams []wire.WireValue, frags []dynamicWhereFrag) (string, []wire.WireValue) {
-	whereSql := ""
+	clause := ""
 	var whereParams []wire.WireValue
 	for _, f := range frags {
 		if f.skipped {
 			continue
 		}
-		if whereSql == "" {
-			whereSql += " WHERE " + f.sql
-		} else {
-			whereSql += " AND " + f.sql
+		if clause != "" {
+			clause += " AND "
 		}
+		clause += f.sql
 		whereParams = append(whereParams, f.params...)
 	}
-	params := make([]wire.WireValue, 0, len(whereParams)+len(baseParams))
+	if clause == "" {
+		return baseSql, baseParams
+	}
+	_, keyword, tail := whereSplice(baseSql)
+	at := len(baseParams) - tail
+	if at < 0 {
+		at = 0
+	}
+	params := make([]wire.WireValue, 0, len(baseParams)+len(whereParams))
+	params = append(params, baseParams[:at]...)
 	params = append(params, whereParams...)
-	params = append(params, baseParams...)
-	return spliceWhere(baseSql, whereSql), params
+	params = append(params, baseParams[at:]...)
+	return spliceWhere(baseSql, keyword+clause), params
 }
 
 // ExecuteSQL runs ONE SQL node and returns its rows as a wire list of wire rows (empty list for a

@@ -51,30 +51,31 @@ function declarationStub(leafName: string, args: readonly unknown[]): never {
 // ── the two CONCRETE control-port structs (the leaf-contract SSoT; read by `bc generate --from`) ─────
 
 /**
- * ONE dynamic-WHERE fragment: the fragment's SQL text and its bound `params`, plus a SKIP FLAG. The
- * fragment vocabulary CLAUDE.md §2 fixes — "SQL text + params + SKIP flag" and nothing else. `skipped`
- * carries the per-call SKIP decision as DATA (a bounded predicate is always `false`; an optional one is
- * `param === null`), so every element of a plan is the SAME struct — never a `cond`-to-null variant,
- * which the native-codegen emitters reject. `params` rides opaque (`WireValue[]`) exactly like the base
- * `params` port; the leaf binds them in order. The runtime side ({@link import('./leaves')}) READS this
- * struct — it never constructs one — so the one definition serves both the emitter's authored literal
- * and the leaf's runtime assembly.
+ * ONE dynamic-WHERE fragment — always an OPTIONAL predicate's, never a bounded one's (a bounded
+ * predicate is lowered into the statement's static WHERE at emit, CLAUDE.md §2). The fragment
+ * vocabulary that §2 fixes: the fragment's SQL text, its bound `params`, and a SKIP FLAG — nothing
+ * else. `skipped` carries the per-call SKIP decision as DATA (`param === null`), so every element of a
+ * plan is the SAME struct — never a `cond`-to-null variant, which the native-codegen emitters reject.
+ * `params` rides opaque (`WireValue[]`) exactly like the base `params` port; the leaf binds them in
+ * order. The runtime side ({@link import('./leaves')}) READS this struct — it never constructs one — so
+ * the one definition serves both the emitter's authored literal and the leaf's runtime assembly.
  */
 export interface DynamicWhereFrag {
   readonly skipped: boolean;
   readonly sql: string;
   /**
-   * The fragment's bound params (`WireValue`), the SAME order the fragment's `?`s appear. An OPTIONAL
-   * predicate binds its own parameter, which is `null` exactly when the predicate is SKIPPED — so the
-   * element is `WireValue | null`; a skipped fragment's params are never bound (the leaf drops it), so
-   * the null is inert. A bounded predicate's params are non-null.
+   * The fragment's bound params (`WireValue`), the SAME order the fragment's `?`s appear. The predicate
+   * binds its own parameter, which is `null` exactly when the fragment is SKIPPED — so the element is
+   * `WireValue | null`; a skipped fragment's params are never bound (the leaf drops it), so the null is
+   * inert.
    */
   readonly params: (WireValue | null)[];
 }
 
 /**
- * The dynamic-WHERE plan a SKIP read carries (OPTIONAL — a bounded read omits it): a HOMOGENEOUS
- * fragment list the leaf assembles at run, dropping the `skipped` fragments.
+ * The dynamic-WHERE plan a SKIP read carries (OPTIONAL — a read with no optional predicate omits it): a
+ * HOMOGENEOUS fragment list the leaf assembles at run, dropping the `skipped` fragments and continuing
+ * the statement's static WHERE with the survivors.
  */
 export interface DynamicWherePlan {
   readonly frags: readonly DynamicWhereFrag[];

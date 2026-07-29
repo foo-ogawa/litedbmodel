@@ -158,13 +158,14 @@ describe('emitter — SKIP / dynamic WHERE (assembled by the leaf at execution t
   it('bakes the BOUNDED predicate statically and passes only the optional ones as fragments', () => {
     const body = bodyOf(emit('sqlite').source, 'feed');
     const call = body.join(' ');
-    // The base statement carries the head + tail only — the WHERE is assembled at execution time.
-    expect(call).toContain('SELECT id, author_id, title FROM e2e_posts ORDER BY id ASC", []');
-    // Every fragment is literal SQL text + params (the whole vocabulary); the BOUNDED one is
-    // unguarded, so it is a constant in the generated native code too.
-    expect(call).toContain('frags: [{ skipped: false, sql: "author_id = ?", params: [authorId] }');
-    expect(call).toContain('{ skipped: title === null, sql: "title LIKE ?", params: [title] }');
-    expect(call).toContain('{ skipped: minId === null, sql: "id >= ?", params: [minId] }');
+    // The BOUNDED predicate IS the emitted statement's WHERE — static SQL + a main param, exactly as it
+    // is on a read that declares no optional predicate at all (CLAUDE.md §2, native-clean).
+    expect(call).toContain('SELECT id, author_id, title FROM e2e_posts WHERE author_id = ? ORDER BY id ASC", [authorId]');
+    // …so the plan holds the ACTUALLY-optional predicates and nothing else: no `skipped: false` frag,
+    // and `author_id` never appears in one.
+    expect(call).toContain('{ frags: [{ skipped: title === null, sql: "title LIKE ?", params: [title] }, { skipped: minId === null, sql: "id >= ?", params: [minId] }] }');
+    expect(call).not.toContain('skipped: false');
+    expect(call.slice(call.indexOf('frags'))).not.toContain('author_id');
   });
 
   it('the optional parameters are declared nullable; the bounded one is not', () => {
@@ -354,7 +355,7 @@ describe('emitter — #161 paging (a page position may be an INPUT)', () => {
     );
   });
 
-  it('a SKIP read pages too — the base params stay [limit, offset] behind the runtime-assembled WHERE', () => {
+  it('a SKIP read pages too — the bounded value and the page count keep their static slots', () => {
     const r = emit('postgres', {
       pagedFeed: {
         kind: 'read',
@@ -366,10 +367,11 @@ describe('emitter — #161 paging (a page position may be an INPUT)', () => {
       },
     });
     const line = bodyOf(r.source, 'pagedFeed')[0];
-    // The leaf splices the surviving WHERE before ` ORDER BY` and binds its params BEFORE these two
-    // (`assembleDynamicWhere`), so the tail's `?` stays last however many fragments survive.
-    expect(line).toContain('Db.executeSQL("SELECT id, title FROM e2e_posts ORDER BY id ASC LIMIT ?", [limit]');
-    expect(line).toContain('{ frags: [{ skipped: false, sql: "author_id = ?", params: [authorId] }, { skipped: title === null, sql: "title LIKE ?", params: [title] }] }');
+    // The bounded predicate is baked; the page tail binds after it. The leaf CONTINUES that WHERE with
+    // the surviving fragment (`assembleDynamicWhere`) and binds its param between the two — the slot
+    // the fragment's own `?` occupies — so `LIMIT ?` stays last however many fragments survive.
+    expect(line).toContain('Db.executeSQL("SELECT id, title FROM e2e_posts WHERE author_id = ? ORDER BY id ASC LIMIT ?", [authorId, limit]');
+    expect(line).toContain('{ frags: [{ skipped: title === null, sql: "title LIKE ?", params: [title] }] }');
   });
 
   it('a BOUND limit is an authored LIMIT — it governs, so no find cap is baked (v1 skip rule)', () => {
@@ -432,7 +434,7 @@ describe('emitter — fail-closed', () => {
     );
   });
 
-  it('rejects a SKIP predicate on a QUERY view (the CTE and the plan cannot share one param order)', () => {
+  it('rejects a SKIP predicate on a QUERY view (a tail inside the CTE would take the splice position)', () => {
     expect(() =>
       emit('sqlite', {
         bad: {
@@ -443,6 +445,6 @@ describe('emitter — fail-closed', () => {
           where: [{ column: 'title', op: 'like', param: 'title', optional: true }],
         },
       }),
-    ).toThrow(/cannot share one param order/);
+    ).toThrow(/cannot tell a tail inside the CTE from the outer statement's/);
   });
 });

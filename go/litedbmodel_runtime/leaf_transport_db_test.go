@@ -216,3 +216,47 @@ func TestExecuteSQL_RelationGuardOnRawChildRows(t *testing.T) {
 		t.Fatalf("an uncapped read must not be guarded: %v", err)
 	}
 }
+
+// #192 — a MIXED read as the emitter now lowers it (CLAUDE.md §2): the BOUNDED predicate is the
+// statement's own static WHERE and the page count binds after it, so the surviving fragment has to
+// CONTINUE that WHERE with " AND " (a second " WHERE " is a syntax error) and its param has to bind
+// BETWEEN the bounded value and the count (any other order binds `id > 'c'` / `v = 1` and returns
+// nothing). Proven end-to-end against a real sqlite: only the correct assembly yields row 3. The go leg
+// of the five-language parity (rust `dynamic_where_continues_a_bounded_where`, python
+// `test_dynamic_where_continues_a_bounded_where`, php `DynamicWhereTest`, TS `leaves.test.ts`).
+func TestExecuteSQL_DynamicWhereContinuesBoundedWhere(t *testing.T) {
+	db := openBoundT(t)
+	defer db.Close()
+	defer UnbindLeafTransport()
+	for i, v := range []string{"a", "b", "c"} {
+		if _, err := insT(int64(i+1), v); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+	}
+
+	frag := wire.WireRowOf([]wire.WireField{
+		{Key: "skipped", Val: wire.WireBool(false)},
+		{Key: "sql", Val: wire.WireStr("v = ?")},
+		{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireStr("c")})},
+	})
+	out, err := ExecuteSQL(leafPayload(
+		port("bigint", wire.WireBool(false)),
+		port("params", wire.WireListOf([]wire.WireValue{wire.WireInt(1), wire.WireInt(2)})),
+		port("returning", wire.WireBool(false)),
+		port("sql", wire.WireStr("SELECT id FROM t WHERE id > ? ORDER BY id LIMIT ?")),
+		port("whereDynamic", wire.WireRowOf([]wire.WireField{
+			{Key: "frags", Val: wire.WireListOf([]wire.WireValue{frag})},
+		})),
+		port("write", wire.WireBool(false)),
+	))
+	if err != nil {
+		t.Fatalf("dynamic read: %v", err)
+	}
+	lp := out.AsList()
+	if lp.Kind != wireProbeGot || lp.Got.Len() != 1 {
+		t.Fatalf("id > 1 AND v = 'c' selects exactly one row, got kind=%d len=%d", lp.Kind, lp.Got.Len())
+	}
+	if id := lp.Got.ElemRow(0).Got.ProbeInt("id"); id.Kind != wireProbeGot || id.Got != 3 {
+		t.Fatalf("id = %+v, want 3", id)
+	}
+}

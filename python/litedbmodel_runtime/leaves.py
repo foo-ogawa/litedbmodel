@@ -69,36 +69,59 @@ Handler = Callable[[Mapping[str, Any], Mapping[str, Any]], Outcome]
 #: at exactly the position a bounded WHERE occupies.
 _WHERE_TAIL_RE = re.compile(r"\s+(GROUP BY|ORDER BY|LIMIT|OFFSET|FOR UPDATE|RETURNING)\b", re.IGNORECASE)
 
+#: The WHERE keyword itself, matched the SAME way a tail keyword is, so the five language ports share
+#: one lexical rule. A statement that carries it already has a (bounded) WHERE, which a dynamic clause
+#: CONTINUES instead of opening a second one.
+_WHERE_RE = re.compile(r"\s+WHERE\b", re.IGNORECASE)
+
+
+def _where_splice(base_sql: str) -> Tuple[int, str, int]:
+    """Where a dynamic WHERE clause joins ``base_sql`` (port of leaves.ts ``whereSplice``):
+
+    * ``at`` — the end of the statement's WHERE region: before the first tail keyword, or the end of the
+      statement. The exact position a bounded WHERE occupies.
+    * ``keyword`` — how the clause joins: ``' AND '`` when the statement already carries a WHERE (its
+      BOUNDED predicates, lowered at emit — CLAUDE.md §2), ``' WHERE '`` when it carries none.
+    * ``tail`` — how many base params bind AFTER the clause. Every ``?`` past ``at`` is a page-tail bound
+      count (``LIMIT ?`` / ``OFFSET ?``) — the only placeholders the emitted SELECT carries after the
+      WHERE — so the surviving fragments' params bind before exactly that many of the base params, which
+      is the position their own ``?``s occupy in the final statement."""
+    m = _WHERE_TAIL_RE.search(base_sql)
+    at = len(base_sql) if m is None else m.start()
+    keyword = " AND " if _WHERE_RE.search(base_sql[:at]) else " WHERE "
+    return at, keyword, base_sql[at:].count("?")
+
 
 def _splice_where(base_sql: str, where_sql: str) -> str:
-    """Splice a ``` WHERE …``` clause (leading space included, or ``''``) before the first tail keyword."""
+    """Splice a WHERE clause (leading connector included, or ``''``) into ``base_sql`` at its WHERE position."""
     if where_sql == "":
         return base_sql
-    tail = _WHERE_TAIL_RE.search(base_sql)
-    if tail is None:
-        return base_sql + where_sql
-    return base_sql[: tail.start()] + where_sql + base_sql[tail.start() :]
+    at = _where_splice(base_sql)[0]
+    return base_sql[:at] + where_sql + base_sql[at:]
 
 
 def _effective_statement(ports: Mapping[str, Any]) -> Tuple[str, List[Any]]:
     """The ``(sql, params)`` a statement actually executes: the dynamic-WHERE plan assembled when one is
     present, the ports verbatim otherwise.
 
-    ``whereDynamic`` is OPTIONAL (absent/None ⇒ no dynamic WHERE — a bounded read, a write, and an
-    uncapped fetch omit it; CLAUDE.md §2). bc carries each fragment's SKIP decision as DATA: a skipped
-    fragment is PRESENT with ``skipped`` true (never omitted), so assembly DROPS the ``skipped``
-    fragments. The survivors join with ``WHERE``/``AND`` and their params bind BEFORE the base params
-    (the WHERE ``?``s precede the tail's)."""
+    ``whereDynamic`` is OPTIONAL (absent/None ⇒ no dynamic WHERE — a read with no optional predicate, a
+    write, and an uncapped fetch omit it; CLAUDE.md §2). bc carries each fragment's SKIP decision as
+    DATA: a skipped fragment is PRESENT with ``skipped`` true (never omitted), so assembly DROPS the
+    ``skipped`` fragments. The survivors join with ``AND``, the clause CONTINUES the bounded WHERE the
+    emitter already lowered (or opens one when there is none), and their params bind at the slot their
+    ``?``s occupy: after the base params the clause follows, before the page tail's."""
     params: List[Any] = list(ports["params"])
     plan = ports.get("whereDynamic")
     if plan is None:
         return ports["sql"], params
-    where_sql = ""
-    where_params: List[Any] = []
-    for frag in (f for f in plan["frags"] if not f["skipped"]):
-        where_sql += (" WHERE " if where_sql == "" else " AND ") + frag["sql"]
-        where_params.extend(frag["params"])
-    return _splice_where(ports["sql"], where_sql), where_params + params
+    frags = [f for f in plan["frags"] if not f["skipped"]]
+    if not frags:
+        return ports["sql"], params
+    _, keyword, tail = _where_splice(ports["sql"])
+    where_params: List[Any] = [p for f in frags for p in f["params"]]
+    bind = max(len(params) - tail, 0)
+    clause = keyword + " AND ".join(f["sql"] for f in frags)
+    return _splice_where(ports["sql"], clause), params[:bind] + where_params + params[bind:]
 
 
 def _is_tuple_set(param: Sequence[Any]) -> bool:
