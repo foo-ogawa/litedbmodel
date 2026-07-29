@@ -120,7 +120,9 @@ Run from the repo root.
 
 ### Packaging and the static gates
 
-- [ ] `npm run sync:versions:check`  — every language target in lockstep at the SSoT version
+- [ ] `npm run sync:versions:check`  — every language target in lockstep at the SSoT version, **both
+      `Cargo.lock`s included** (a bump that rewrites only the manifests leaves the lock behind, and the
+      next cargo command repairs it silently — that is how 2.2.1 shipped a 2.2.0 lock)
 - [ ] `npm run deps:check`           — no `../`-escaping local deps in any manifest
 - [ ] `npm run build`                — TS build + SCP bundle
 - [ ] `npm run lint`                 — eslint clean
@@ -130,7 +132,8 @@ Run from the repo root.
 - [ ] `(cd python && python -m build && twine check dist/*)`
 - [ ] fresh-venv wheel smoke — `pip install` the built wheel + run a real vector
 - [ ] `(cd php && composer validate)`
-- [ ] `(cd rust && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo publish -p litedbmodel_runtime --dry-run)`
+- [ ] `(cd rust && cargo fmt --check && cargo check --locked && cargo clippy --all-targets -- -D warnings && cargo publish -p litedbmodel_runtime --dry-run)`
+      — `--locked` makes cargo ACCEPT the committed lock instead of rewriting it under you
 - [ ] `(cd go && gofmt -l . ; go vet ./...)` — module path `.../litedbmodel/go`
 
 ### The five test suites — WITH THE LIVE-DB GATES OPEN (needs docker)

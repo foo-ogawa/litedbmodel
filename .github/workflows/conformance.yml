@@ -164,14 +164,18 @@ jobs:
         # now walk every committed package cleanly — including the #63 ORM-plan executor
         # (go/lm_bench/lm_orm), a self-contained package with no generated-artifact dependency.
         run: cd go && go build ./... && go vet ./...
-      - name: Rust — check + fmt + clippy
+      - name: Rust — check (--locked) + fmt + clippy
         if: matrix.lang == 'rust'
         # No workflow ran `cargo fmt --check` or clippy, so both drifted unnoticed (#168). They gate
         # here, on the leg that already owns "the rust scaffold stays buildable".
+        #
+        # `--locked` (#197): without it cargo SILENTLY rewrites a stale Cargo.lock and goes green, so a
+        # version bump that missed the lock — 2.2.1 — was invisible until a clean tree came back dirty
+        # from running the suite. Now the stale lock fails the job instead of being repaired in place.
         run: |
           cd rust
           cargo fmt --all -- --check
-          cargo check
+          cargo check --locked
           cargo clippy -p litedbmodel_runtime --features livedb --all-targets -- -D warnings
       - name: PHP — lint
         if: matrix.lang == 'php'
@@ -241,8 +245,10 @@ jobs:
       # rust/litedbmodel_runtime under `--offline`. That resolves behavior-contracts from the cargo
       # registry cache, which nothing in this job populates — so pre-fetch the rust workspace's deps
       # (incl. the pinned behavior-contracts) ONLINE here, before the offline probe (#183).
+      # `--locked` because this is the FIRST cargo command in the job: a fetch that re-resolves would
+      # rewrite a stale lock in place and every later `--locked` command would then agree with it (#197).
       - name: Warm the cargo registry cache for the offline native-closure probe (#183)
-        run: cargo fetch --manifest-path rust/Cargo.toml
+        run: cargo fetch --locked --manifest-path rust/Cargo.toml
       # Create + grant the per-language `scp_%` MySQL databases from the SSoT the docker stack mounts
       # (test/fixtures/livedb-grants.sql) — the inline `services:` don't mount it, and the rust/go/py/php
       # livedb suites connect straight to scp_<lang> (which must already exist) instead of CREATE-ing it.
@@ -319,4 +325,4 @@ jobs:
       - name: Go — go test (uncached; every declared test RUNS, every package BUILDS; skip budget 0)
         run: npm run go:test
       - name: Rust — cargo test (livedb)
-        run: cd rust && cargo test -p litedbmodel_runtime --features livedb -- --test-threads=1
+        run: cd rust && cargo test --locked -p litedbmodel_runtime --features livedb -- --test-threads=1
