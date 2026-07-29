@@ -83,10 +83,12 @@ final class Leaves
     }
 
     /**
-     * The four `at` labels the fail-closed field read names — the payload itself, the control record,
-     * the dynamic-WHERE plan and one of its fragments.
+     * The six `at` labels the fail-closed field read names — one per leaf payload (`executeSQL` /
+     * `pluck` / `group`), plus the control record, the dynamic-WHERE plan and one of its fragments.
      */
     private const PAYLOAD = 'the executeSQL payload';
+    private const PLUCK = 'the pluck payload';
+    private const GROUP = 'the group payload';
     private const RECORD = "the 'opts' control record";
     private const PLAN = "the 'whereDynamic' plan";
     private const FRAG = "a 'whereDynamic' fragment";
@@ -115,11 +117,14 @@ final class Leaves
             'int' => is_int($value),
             'string' => is_string($value),
             'list' => is_array($value),
+            // The ordered key-column TUPLE (`col` / `pk` / `fk`): every element must be a column NAME —
+            // the same element check the go `portStrings` / rust `port_strings` probes make.
+            'string[]' => is_array($value) && $value === array_filter($value, 'is_string'),
             'record' => is_object($value),
         };
         if (!$ok) {
             throw new \RuntimeException(
-                "scp leaf executeSQL: {$what} must be {$declared}, got " . json_encode($value),
+                "scp leaf: {$what} must be {$declared}, got " . json_encode($value),
             );
         }
         return $value;
@@ -144,7 +149,7 @@ final class Leaves
         $present = is_array($record) ? array_key_exists($name, $record) : property_exists($record, $name);
         if (!$present) {
             throw new \RuntimeException(
-                "scp leaf executeSQL: {$at} is missing its '{$name}' field — a generated module spells "
+                "scp leaf: {$at} is missing its '{$name}' field — a generated module spells "
                 . 'every field of every struct it wires, so an ABSENT key is an ABI break (a null VALUE '
                 . 'is how an absent write mode / plan / cap is spelled)',
             );
@@ -330,10 +335,15 @@ final class Leaves
             return ['ok' => $rows];
         };
 
+        // `pluck` / `group` read their ports through the SAME fail-closed reader the SQL transport uses
+        // ({@see required()}) — a FLAT port shape is not a reason to trust it. The `(string)` / `(bool)`
+        // casts below WERE the silent path: a mistyped `single` flipped the relation's CARDINALITY (a
+        // `hasMany` nesting ONE child), `into` = 42 nested the relation under `"42"`, and an absent
+        // `pk` / `col` raised an E_WARNING-shaped failure that named no port at all (#213).
         $pluck = static function (array $ports, array $_ctx): array {
             /** @var list<string> $col */
-            $col = $ports['col'];
-            $tuples = Grouping::dedupeKeyTuples($ports['rows'], $col);
+            $col = self::required($ports, 'col', self::PLUCK, 'string[]');
+            $tuples = Grouping::dedupeKeyTuples(self::required($ports, 'rows', self::PLUCK, 'list'), $col);
             // single-key → a flat scalar key array (json_each scalar `value`); composite → an
             // array-of-tuples (json_each per-ordinal `$[i]`) — the SAME shape `Relation` binds.
             $keys = count($col) === 1
@@ -343,17 +353,20 @@ final class Leaves
         };
 
         $group = static function (array $ports, array $_ctx): array {
-            $into = (string) $ports['into'];
-            $single = (bool) $ports['single'];
+            $into = self::required($ports, 'into', self::GROUP, 'string');
+            $single = self::required($ports, 'single', self::GROUP, 'bool');
             /** @var list<string> $pk */
-            $pk = $ports['pk'];
-            $byKey = Grouping::groupByKey($ports['children'], $ports['fk']);
+            $pk = self::required($ports, 'pk', self::GROUP, 'string[]');
+            $byKey = Grouping::groupByKey(
+                self::required($ports, 'children', self::GROUP, 'list'),
+                self::required($ports, 'fk', self::GROUP, 'string[]'),
+            );
             // {...par, [into]: nested}: shallow-clone each parent (the input is not mutated — TS spread).
             $out = array_map(static function (\stdClass $par) use ($pk, $into, $byKey, $single): \stdClass {
                 $o = clone $par;
                 $o->{$into} = Grouping::attachToParent($par, $pk, $byKey, $single);
                 return $o;
-            }, $ports['parents']);
+            }, self::required($ports, 'parents', self::GROUP, 'list'));
             return ['ok' => $out];
         };
 

@@ -223,6 +223,57 @@ func TestPortUnboxIsFailClosed(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), `"col"`) || !strings.Contains(err.Error(), "string element") {
 		t.Fatalf("a key-column tuple element must be a column name, got %v", err)
 	}
+
+	// #213 — the SAME discipline on GroupChildren's six ports. A silent default here does not corrupt a
+	// value, it changes the SHAPE of the graph: `single` read loosely flips the relation's CARDINALITY
+	// (a hasMany nesting ONE child), `into` read loosely nests the children under a stringified number.
+	// go was already loud on all six; this pins it against the TS / python / php legs that were not.
+	groupPorts := func(skip string, override ...wire.WireField) wire.WireRow {
+		base := []wire.WireField{
+			port("children", wire.WireListOf(nil)),
+			port("fk", wireStrings("post_id")),
+			port("into", wire.WireStr("kids")),
+			port("parents", wire.WireListOf(nil)),
+			port("pk", wireStrings("id")),
+			port("single", wire.WireBool(false)),
+		}
+		out := make([]wire.WireField, 0, len(base)+len(override))
+		for _, f := range base {
+			if f.Key == skip {
+				continue
+			}
+			out = append(out, f)
+		}
+		return leafPayload(append(out, override...)...)
+	}
+	for _, name := range []string{"children", "fk", "into", "parents", "pk", "single"} {
+		if _, err := GroupChildren(groupPorts(name)); err == nil ||
+			!strings.Contains(err.Error(), `"`+name+`"`) || !strings.Contains(err.Error(), "absent") {
+			t.Fatalf("an absent %q port must fail loudly and name itself, got %v", name, err)
+		}
+	}
+	for _, c := range []struct {
+		name string
+		val  wire.WireValue
+		want string
+	}{
+		{"single", wire.WireStr("yes"), "bool"},                                      // the CARDINALITY flip
+		{"into", wire.WireInt(42), "string"},                                         // the nest key
+		{"pk", wire.WireListOf([]wire.WireValue{wire.WireInt(1)}), "string element"}, // a key column that is not a NAME
+		{"fk", wire.WireStr("post_id"), "list"},                                      // the tuple, not one column
+		{"parents", wire.WireInt(7), "list"},
+		{"children", wire.WireStr("x"), "list"},
+	} {
+		if _, err := GroupChildren(groupPorts(c.name, port(c.name, c.val))); err == nil ||
+			!strings.Contains(err.Error(), `"`+c.name+`"`) || !strings.Contains(err.Error(), c.want) {
+			t.Fatalf("a mistyped %q port must name the port and its declared wire kind, got %v", c.name, err)
+		}
+	}
+
+	// The LEGAL shape stays silent, and the CARDINALITY the ports declare is the one that comes out.
+	if _, err := GroupChildren(groupPorts("")); err != nil {
+		t.Fatalf("a well-formed group payload must pass, got %v", err)
+	}
 }
 
 // A batch write's opaque `rows` array param (createMany/upsertMany/updateMany) rides as ONE JSON array

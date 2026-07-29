@@ -96,21 +96,26 @@ def _where_splice(base_sql: str) -> Tuple[int, str, int]:
     return at, keyword, base_sql[at:].count("?")
 
 
-#: The four `at` labels the fail-closed field read names — the payload itself, the control record, the
-#: dynamic-WHERE plan and one of its fragments.
+#: The six `at` labels the fail-closed field read names — one per leaf payload (``executeSQL`` /
+#: ``pluck`` / ``group``), plus the control record, the dynamic-WHERE plan and one of its fragments.
 _PAYLOAD = "the executeSQL payload"
+_PLUCK = "the pluck payload"
+_GROUP = "the group payload"
 _RECORD = "the 'opts' control record"
 _PLAN = "the 'whereDynamic' plan"
 _FRAG = "a 'whereDynamic' fragment"
 
-#: The DECLARED type of every leaf field, exactly as the catalog spells it (``src/scp/leaf-transport.ts``)
-#: — the predicate :func:`_typed` confirms. ``int`` excludes ``bool`` (a python bool IS an int) for the
-#: same reason bc's own value model does.
+#: The DECLARED type of every leaf PORT and every field of every leaf struct, exactly as the catalog
+#: spells it (``src/scp/leaf-transport.ts``) — the predicate :func:`_typed` confirms. ``int`` excludes
+#: ``bool`` (a python bool IS an int) for the same reason bc's own value model does. ``string[]`` is the
+#: ordered key-column TUPLE (``col`` / ``pk`` / ``fk``): every element must be a column NAME, the same
+#: element check the go ``portStrings`` / rust ``port_strings`` probes make.
 _PORT_TYPES: Dict[str, Callable[[Any], bool]] = {
     "bool": lambda v: isinstance(v, bool),
     "int": lambda v: isinstance(v, int) and not isinstance(v, bool),
     "string": lambda v: isinstance(v, str),
     "list": lambda v: isinstance(v, list),
+    "string[]": lambda v: isinstance(v, list) and all(isinstance(e, str) for e in v),
     "record": lambda v: isinstance(v, Mapping),
 }
 
@@ -123,29 +128,32 @@ def _typed(value: Any, what: str, declared: str) -> Any:
     wrong type is the same ABI break as a missing one, for the same reason: the generator emits the
     literal the port's type says, so nothing else can arrive from a generated module. Coercing it instead
     ran an INSERT on the read seam (``returning`` not a bool), applied a predicate the call SKIPPED
-    (``skipped`` not a bool) or bound a value where none belongs (``params`` not a list)."""
+    (``skipped`` not a bool), bound a value where none belongs (``params`` not a list), or FLIPPED a
+    relation's cardinality — ``single`` coerced to a bool turned a ``hasMany`` into ONE nested child
+    (#213)."""
     kind = declared[: -len("|null")] if declared.endswith("|null") else declared
     if kind != declared and value is None:
         return None
     if not _PORT_TYPES[kind](value):
-        raise ValueError(f"scp leaf executeSQL: {what} must be {declared}, got {value!r}")
+        raise ValueError(f"scp leaf: {what} must be {declared}, got {value!r}")
     return value
 
 
 def _required(record: Mapping[str, Any], name: str, at: str, declared: str) -> Any:
     """Read ONE DECLARED field out of a struct that IS present — the python leg's ONE fail-closed field
-    read (the twin of the go ``optRowField`` / rust ``take_opt_row`` discipline). Presence and the
-    DECLARED type (:func:`_typed`) are confirmed at the SAME read, exactly as go's and rust's typed
-    probes confirm both.
+    read, for all THREE leaves (the twin of the go ``optRowField`` / rust ``take_opt_row`` discipline).
+    Presence and the DECLARED type (:func:`_typed`) are confirmed at the SAME read, exactly as go's and
+    rust's typed probes confirm both.
 
     ``None`` is a VALUE (the declared absence of a write mode / a plan / a cap / a model); a MISSING KEY
     is an ABI BREAK, and the two must not collapse: bc types a port by the literal wired into it and
     REJECTS a partial struct, so a generated module ALWAYS spells every field of every struct it wires.
     A key that is not there did not come from one, and defaulting it would silently downgrade a write to
-    a read, drop a relation cap, or erase a SKIP predicate (#205)."""
+    a read, drop a relation cap, erase a SKIP predicate (#205), or — on ``group`` — raise a bare
+    ``KeyError`` that names no port at all (#213)."""
     if name not in record:
         raise ValueError(
-            f"scp leaf executeSQL: {at} is missing its '{name}' field — a generated module spells every "
+            f"scp leaf: {at} is missing its '{name}' field — a generated module spells every "
             f"field of every struct it wires, so an ABSENT key is an ABI break (a null VALUE is how an "
             f"absent write mode / plan / cap is spelled)"
         )
@@ -287,21 +295,32 @@ def make_handlers(driver_or_ctx: Union[Driver, ExecutionContext], dialect: str) 
             )
         return {"ok": rows}
 
+    # ``pluck`` / ``group`` read their ports through the SAME fail-closed reader the SQL transport uses
+    # (:func:`_required`) — a FLAT port shape is not a reason to trust it. A raw index turned a MISTYPED
+    # ``single`` into a silently flipped relation CARDINALITY (a ``hasMany`` nesting ONE child), a
+    # mistyped ``into`` into a relation nested under a stringified number, and an absent ``pk`` / ``col``
+    # into a bare ``KeyError`` that names no port at all (#213).
+
     def pluck(ports: Mapping[str, Any], _ctx: Mapping[str, Any]) -> Outcome:
-        col: Sequence[str] = ports["col"]
-        tuples = dedupe_key_tuples(ports["rows"], col)
+        col: Sequence[str] = _required(ports, "col", _PLUCK, "string[]")
+        tuples = dedupe_key_tuples(_required(ports, "rows", _PLUCK, "list"), col)
         # single-key → a flat scalar key array (json_each scalar ``value``); composite → an
         # array-of-tuples (json_each per-ordinal ``$[i]``) — the SAME shape ``relation.py`` binds.
         keys = [t[0] for t in tuples] if len(col) == 1 else [list(t) for t in tuples]
         return {"ok": keys}
 
     def group(ports: Mapping[str, Any], _ctx: Mapping[str, Any]) -> Outcome:
-        into = ports["into"]
-        single = ports["single"]
-        pk: Sequence[str] = ports["pk"]
-        by_key = group_by_key(ports["children"], ports["fk"])
+        into = _required(ports, "into", _GROUP, "string")
+        single = _required(ports, "single", _GROUP, "bool")
+        pk: Sequence[str] = _required(ports, "pk", _GROUP, "string[]")
+        by_key = group_by_key(
+            _required(ports, "children", _GROUP, "list"), _required(ports, "fk", _GROUP, "string[]")
+        )
         # {...par, [into]: nested}: shallow-copy each parent (the input is not mutated — TS spread).
-        out = [{**par, into: attach_to_parent(par, pk, by_key, single)} for par in ports["parents"]]
+        out = [
+            {**par, into: attach_to_parent(par, pk, by_key, single)}
+            for par in _required(ports, "parents", _GROUP, "list")
+        ]
         return {"ok": out}
 
     return {"executeSQL": execute_sql, "pluck": pluck, "group": group}

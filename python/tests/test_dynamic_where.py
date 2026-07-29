@@ -238,3 +238,55 @@ def test_the_run_mode_not_the_seam_branch_picks_the_pool():
     )
     assert log == ["reader", "writer", "writer"]
     assert summary == {"ok": [{"changes": 1, "lastInsertRowid": 2}]}
+
+
+# #213 — ``pluck`` / ``group`` read their ports through the SAME fail-closed reader as the SQL transport.
+# Their ports are FLAT, which is not a reason to trust them: the generator spells every one with the type
+# the catalog declares, so anything else is an ABI break — and on ``group`` the break is SILENT and
+# changes the SHAPE of the returned graph. A ``single`` that is not a bool flipped the relation's
+# CARDINALITY, an ``into`` that is not a string nested the children under a stringified number, and an
+# absent ``pk``/``col`` surfaced as a bare ``KeyError`` that named no port at all. The python leg.
+
+
+def test_a_missing_or_mistyped_pluck_or_group_port_is_loud():
+    handlers = make_handlers(SqliteDriver(sqlite3.connect(":memory:")), "sqlite")
+    rows = [{"id": 1}, {"id": 2}]
+    kids = [{"post_id": 1, "t": "a"}, {"post_id": 1, "t": "b"}]
+    pluck_ports = lambda **kw: {"rows": rows, "col": ["id"], **kw}  # noqa: E731
+    group_ports = lambda **kw: {  # noqa: E731
+        "parents": rows, "children": kids, "pk": ["id"], "fk": ["post_id"], "into": "kids",
+        "single": False, **kw,
+    }
+    drop = lambda ports, name: {k: v for k, v in ports.items() if k != name}  # noqa: E731
+
+    for name in ("rows", "col"):
+        with pytest.raises(ValueError, match=rf"the pluck payload is missing its '{name}' field"):
+            handlers["pluck"](drop(pluck_ports(), name), CTX)
+    for name in ("parents", "children", "pk", "fk", "into", "single"):
+        with pytest.raises(ValueError, match=rf"the group payload is missing its '{name}' field"):
+            handlers["group"](drop(group_ports(), name), CTX)
+
+    # The MISTYPED ports — the silent failures the issue measured.
+    mistyped = [
+        ("pluck", pluck_ports(rows="x"), "the pluck payload's 'rows' must be list"),
+        ("pluck", pluck_ports(col=[1]), "the pluck payload's 'col' must be string[]"),
+        ("group", group_ports(single="yes"), "the group payload's 'single' must be bool"),
+        ("group", group_ports(into=42), "the group payload's 'into' must be string"),
+        ("group", group_ports(pk=[1]), "the group payload's 'pk' must be string[]"),
+        ("group", group_ports(fk="post_id"), "the group payload's 'fk' must be string[]"),
+        ("group", group_ports(parents="x"), "the group payload's 'parents' must be list"),
+        ("group", group_ports(children="x"), "the group payload's 'children' must be list"),
+    ]
+    for leaf, ports, want in mistyped:
+        with pytest.raises(ValueError) as ei:
+            handlers[leaf](ports, CTX)
+        assert want in str(ei.value), f"{ports}: {ei.value} does not name the broken port ({want})"
+
+    # The LEGAL shapes stay silent, and the CARDINALITY the ports declare is the one that comes out: a
+    # hasMany nests the LIST, ``single`` nests the ONE child. (The mistyped ``single`` above used to land
+    # on the other branch without a word.)
+    assert handlers["pluck"](pluck_ports(), CTX) == {"ok": [1, 2]}
+    assert handlers["group"](group_ports(), CTX) == {"ok": [{"id": 1, "kids": kids}, {"id": 2, "kids": []}]}
+    assert handlers["group"](group_ports(single=True), CTX) == {
+        "ok": [{"id": 1, "kids": kids[0]}, {"id": 2, "kids": None}]
+    }

@@ -356,3 +356,48 @@ test('#207 — the RUN MODE, not the seam branch, picks the pool: a RETURNING wr
   expect(log).toEqual(['reader', 'writer', 'writer']);
   expect(summary).toEqual({ ok: [{ changes: 1n, lastInsertRowid: 7n }] });
 });
+
+// #213 — `pluck` / `group` read their ports through the SAME fail-closed reader as the SQL transport.
+// Their ports are FLAT, which is not a reason to trust them: the generator spells every one with the
+// type the catalog declares, so anything else is an ABI break — and on `group` the break is SILENT and
+// changes the SHAPE of the returned graph. A `single` that is not a bool flipped the relation's
+// CARDINALITY, an `into` that is not a string nested the children under a stringified number, and an
+// absent `pk`/`col` surfaced as a raw `Cannot read properties of undefined` that named no port at all.
+test('#213 — a MISSING or MISTYPED pluck / group port is loud, and names the port', () => {
+  const calls: Call[] = [];
+  const handlers = leafHandlers({ exec: contextForConnection(recordingConn(calls)), dialect: 'sqlite' });
+  const ctx = { nodeId: 'n0', component: 'group' };
+  const rows = [{ id: 1 }, { id: 2 }];
+  const kids = [{ post_id: 1, t: 'a' }, { post_id: 1, t: 'b' }];
+  const pluckPorts = (kw: Record<string, unknown>): Record<string, Value> => ({ rows, col: ['id'], ...kw }) as unknown as Record<string, Value>;
+  const groupPorts = (kw: Record<string, unknown>): Record<string, Value> =>
+    ({ parents: rows, children: kids, pk: ['id'], fk: ['post_id'], into: 'kids', single: false, ...kw }) as unknown as Record<string, Value>;
+  const drop = (ports: Record<string, Value>, name: string): Record<string, Value> => {
+    const { [name]: _dropped, ...rest } = ports;
+    return rest as Record<string, Value>;
+  };
+
+  // ABSENT ports — every one of the two + six, by name.
+  expect(() => handlers.pluck(drop(pluckPorts({}), 'rows'), ctx)).toThrow(/pluck payload is missing its 'rows' field/);
+  expect(() => handlers.pluck(drop(pluckPorts({}), 'col'), ctx)).toThrow(/pluck payload is missing its 'col' field/);
+  for (const name of ['parents', 'children', 'pk', 'fk', 'into', 'single']) {
+    expect(() => handlers.group(drop(groupPorts({}), name), ctx)).toThrow(new RegExp(`group payload is missing its '${name}' field`));
+  }
+
+  // MISTYPED ports — the SILENT failures the issue measured.
+  expect(() => handlers.pluck(pluckPorts({ rows: 'x' }), ctx)).toThrow(/pluck payload's 'rows' must be list/);
+  expect(() => handlers.pluck(pluckPorts({ col: [1] }), ctx)).toThrow(/pluck payload's 'col' must be string\[\]/);
+  expect(() => handlers.group(groupPorts({ single: 'yes' }), ctx)).toThrow(/group payload's 'single' must be bool/);
+  expect(() => handlers.group(groupPorts({ into: 42 }), ctx)).toThrow(/group payload's 'into' must be string/);
+  expect(() => handlers.group(groupPorts({ pk: [1] }), ctx)).toThrow(/group payload's 'pk' must be string\[\]/);
+  expect(() => handlers.group(groupPorts({ fk: 'post_id' }), ctx)).toThrow(/group payload's 'fk' must be string\[\]/);
+  expect(() => handlers.group(groupPorts({ parents: 'x' }), ctx)).toThrow(/group payload's 'parents' must be list/);
+  expect(() => handlers.group(groupPorts({ children: 'x' }), ctx)).toThrow(/group payload's 'children' must be list/);
+
+  // The LEGAL shapes stay silent, and the CARDINALITY the ports declare is the one that comes out: a
+  // hasMany nests the LIST, `single` nests the ONE child. (The mistyped `single` above used to land on
+  // the other branch without a word.)
+  expect(handlers.pluck(pluckPorts({}), ctx)).toEqual({ ok: [1, 2] });
+  expect(handlers.group(groupPorts({}), ctx)).toEqual({ ok: [{ id: 1, kids: kids }, { id: 2, kids: [] }] });
+  expect(handlers.group(groupPorts({ single: true }), ctx)).toEqual({ ok: [{ id: 1, kids: kids[0] }, { id: 2, kids: null }] });
+});

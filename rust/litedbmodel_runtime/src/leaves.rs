@@ -1620,6 +1620,59 @@ mod tests {
             "{}",
             e.message
         );
+
+        // #213 — the SAME discipline on `group_children`'s six ports. A silent default here does not
+        // corrupt a value, it changes the SHAPE of the graph: `single` read loosely FLIPS the relation's
+        // cardinality (a hasMany nesting ONE child), `into` read loosely nests the children under a
+        // stringified number. rust was already loud on all six; this pins it against the TS / python /
+        // php legs that were not.
+        let group_ports = |skip: &str, over: Option<(&'static str, WireValue)>| {
+            let mut ports: Vec<(&str, WireValue)> = vec![
+                ("children", wlist(vec![])),
+                ("fk", cols(&["post_id"])),
+                ("into", WireValue::Str("kids".into())),
+                ("parents", wlist(vec![])),
+                ("pk", cols(&["id"])),
+                ("single", WireValue::Bool(false)),
+            ]
+            .into_iter()
+            .filter(|(k, _)| *k != skip)
+            .collect();
+            if let Some(o) = over {
+                ports.push(o);
+            }
+            payload(ports)
+        };
+        for name in ["children", "fk", "into", "parents", "pk", "single"] {
+            let e = failure(group_children(group_ports(name, None)));
+            assert_eq!(e.code, "LEAF_PORT");
+            assert!(
+                e.message.contains(&format!("`{name}`")) && e.message.contains("absent"),
+                "an absent `{name}` port must name itself: {}",
+                e.message
+            );
+        }
+        for (name, val, want) in [
+            ("single", WireValue::Str("yes".into()), "bool"), // the CARDINALITY flip
+            ("into", WireValue::int(42), "string"),           // the nest key
+            ("pk", wlist(vec![WireValue::int(1)]), "string element"), // a key column that is not a NAME
+            ("fk", WireValue::Str("post_id".into()), "list"),         // the tuple, not one column
+            ("parents", WireValue::int(7), "list"),
+            ("children", WireValue::Str("x".into()), "list"),
+        ] {
+            let e = failure(group_children(group_ports(name, Some((name, val)))));
+            assert_eq!(e.code, "LEAF_PORT");
+            assert!(
+                e.message.contains(&format!("`{name}`")) && e.message.contains(want),
+                "a mistyped `{name}` port must name the port and its declared wire kind: {}",
+                e.message
+            );
+        }
+        // The LEGAL shape stays silent.
+        assert!(
+            group_children(group_ports("", None)).is_ok(),
+            "a well-formed group payload must pass"
+        );
     }
 
     // #207 — the leaf hands the central seam ONE `StatementIntent`, derived from the statement's RUN

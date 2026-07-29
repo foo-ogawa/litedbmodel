@@ -259,6 +259,69 @@ final class DynamicWhereTest extends TestCase
         self::assertSame(['changes', 'lastInsertRowid'], array_keys($row));
         self::assertSame(1, $row['changes']);
     }
+
+    /**
+     * #213 — `pluck` / `group` read their ports through the SAME fail-closed reader as the SQL transport.
+     * Their ports are FLAT, which is not a reason to trust them: the generator spells every one with the
+     * type the catalog declares, so anything else is an ABI break — and on `group` the break is SILENT
+     * and changes the SHAPE of the returned graph. A `single` cast with `(bool)` flipped the relation's
+     * CARDINALITY, an `into` cast with `(string)` nested the children under `"42"`, and an absent
+     * `pk`/`col` surfaced as an E_WARNING-shaped failure that named no port at all. The PHP leg.
+     */
+    public function testAMissingOrMistypedPluckOrGroupPortIsLoud(): void
+    {
+        $handlers = Leaves::makeHandlers(new \PDO('sqlite::memory:'), 'sqlite');
+        $ctx = ['nodeId' => 'n0', 'component' => 'group'];
+        $rows = [(object) ['id' => 1], (object) ['id' => 2]];
+        $kids = [(object) ['post_id' => 1, 't' => 'a'], (object) ['post_id' => 1, 't' => 'b']];
+        $pluckPorts = static fn (array $kw = []): array => array_merge(['rows' => $rows, 'col' => ['id']], $kw);
+        $groupPorts = static fn (array $kw = []): array => array_merge([
+            'parents' => $rows, 'children' => $kids, 'pk' => ['id'], 'fk' => ['post_id'],
+            'into' => 'kids', 'single' => false,
+        ], $kw);
+        $loud = function (string $leaf, array $ports, string $want) use ($handlers, $ctx): void {
+            $caught = null;
+            try {
+                $handlers[$leaf]($ports, $ctx);
+            } catch (\RuntimeException $e) {
+                $caught = $e;
+            }
+            self::assertNotNull($caught, "{$want} must be loud, but the leaf ran");
+            self::assertStringContainsString($want, $caught->getMessage());
+        };
+        $drop = static function (array $ports, string $name): array {
+            unset($ports[$name]);
+            return $ports;
+        };
+
+        foreach (['rows', 'col'] as $name) {
+            $loud('pluck', $drop($pluckPorts(), $name), "the pluck payload is missing its '{$name}' field");
+        }
+        foreach (['parents', 'children', 'pk', 'fk', 'into', 'single'] as $name) {
+            $loud('group', $drop($groupPorts(), $name), "the group payload is missing its '{$name}' field");
+        }
+
+        // The MISTYPED ports — the silent failures the issue measured.
+        $loud('pluck', $pluckPorts(['rows' => 'x']), "the pluck payload's 'rows' must be list");
+        $loud('pluck', $pluckPorts(['col' => [1]]), "the pluck payload's 'col' must be string[]");
+        $loud('group', $groupPorts(['single' => 'yes']), "the group payload's 'single' must be bool");
+        $loud('group', $groupPorts(['into' => 42]), "the group payload's 'into' must be string");
+        $loud('group', $groupPorts(['pk' => [1]]), "the group payload's 'pk' must be string[]");
+        $loud('group', $groupPorts(['fk' => 'post_id']), "the group payload's 'fk' must be string[]");
+        $loud('group', $groupPorts(['parents' => 'x']), "the group payload's 'parents' must be list");
+        $loud('group', $groupPorts(['children' => 'x']), "the group payload's 'children' must be list");
+
+        // The LEGAL shapes stay silent, and the CARDINALITY the ports declare is the one that comes out:
+        // a hasMany nests the LIST, `single` nests the ONE child. (The mistyped `single` above used to
+        // land on the other branch without a word.)
+        self::assertSame(['ok' => [1, 2]], $handlers['pluck']($pluckPorts(), $ctx));
+        $many = $handlers['group']($groupPorts(), $ctx)['ok'];
+        self::assertSame($kids, $many[0]->kids);
+        self::assertSame([], $many[1]->kids);
+        $one = $handlers['group']($groupPorts(['single' => true]), $ctx)['ok'];
+        self::assertSame($kids[0], $one[0]->kids);
+        self::assertNull($one[1]->kids);
+    }
 }
 
 /**

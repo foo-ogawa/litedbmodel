@@ -295,23 +295,25 @@ export function pluck(p: { rows: Array<Record<string, unknown>>; col: string[] }
  */
 export function group(p: { parents: Array<Record<string, unknown>>; children: Array<Record<string, unknown>>; pk: string[]; fk: string[]; into: string; single: boolean }): Array<Record<string, unknown>> {
   const byKey = groupByKey(p.children, p.fk);
-  return p.parents.map((par) => ({ ...par, [p.into]: attachToParent(par, p.pk, byKey, p.single === true) }));
+  return p.parents.map((par) => ({ ...par, [p.into]: attachToParent(par, p.pk, byKey, p.single) }));
 }
 
 // ── handler maps: the boundary injection a generated module's bind()/bindAsync() consumes ──
 
 /**
- * The DECLARED type of every leaf field, exactly as the catalog spells it
- * ({@link import('./leaf-transport')}) — the predicate {@link portTyped} confirms. A `|null` suffix
- * marks a NULLABLE field, whose `null` is the declared absence (no write mode / plan / cap / model).
- * `int` accepts bc's `int` value model (a BigInt on the TS plane) and the plain integer the runtime's
- * own {@link RelationGuard} carries, since both reach the cap check as the same `number`.
+ * The DECLARED type of every leaf PORT and every field of every leaf struct, exactly as the catalog
+ * spells it ({@link import('./leaf-transport')}) — the predicate {@link portTyped} confirms. A `|null`
+ * suffix marks a NULLABLE field, whose `null` is the declared absence (no write mode / plan / cap /
+ * model). `int` is bc's `int` value model, which on this plane is a BigInt and nothing else.
+ * `string[]` is the ordered key-column TUPLE (`col` / `pk` / `fk`): every element must be a column
+ * NAME, the same element check the go `portStrings` / rust `port_strings` probes make.
  */
 const PORT_TYPES = {
   bool: (v: unknown) => typeof v === 'boolean',
-  int: (v: unknown) => typeof v === 'bigint' || (typeof v === 'number' && Number.isInteger(v)),
+  int: (v: unknown) => typeof v === 'bigint',
   string: (v: unknown) => typeof v === 'string',
   list: (v: unknown) => Array.isArray(v),
+  'string[]': (v: unknown) => Array.isArray(v) && v.every((e) => typeof e === 'string'),
   record: (v: unknown) => typeof v === 'object' && v !== null && !Array.isArray(v),
 };
 
@@ -327,8 +329,10 @@ type Declared = keyof typeof PORT_TYPES | `${keyof typeof PORT_TYPES}|null`;
  * the twin of the go `portErr` wrong-variant half / rust `port_mismatch`. A field of the wrong type is
  * the same ABI break as a missing one, for the same reason: the generator emits the literal the port's
  * type says, so nothing else can arrive from a generated module. Coercing it instead ran an INSERT on
- * the read seam (`returning` not a bool), applied a predicate the call SKIPPED (`skipped` not a bool) or
- * erased one entirely (`sql` not a string).
+ * the read seam (`returning` not a bool), applied a predicate the call SKIPPED (`skipped` not a bool),
+ * erased one entirely (`sql` not a string), or FLIPPED a relation's cardinality — `single` cast to a
+ * bool turned the one nested child into a LIST, and `into` cast to a string nested it under `"42"`
+ * (#213).
  */
 function portTyped(value: unknown, what: string, declared: Declared): unknown {
   const kind = (declared.endsWith('|null') ? declared.slice(0, -'|null'.length) : declared) as keyof typeof PORT_TYPES;
@@ -338,27 +342,29 @@ function portTyped(value: unknown, what: string, declared: Declared): unknown {
     // where another type was declared — a bare JSON.stringify throws on it and would replace the port
     // failure with a serializer failure.
     const got = JSON.stringify(value, (_k, v: unknown) => (typeof v === 'bigint' ? `${v}n` : v));
-    throw new Error(`scp leaf executeSQL: ${what} must be ${declared}, got ${got}`);
+    throw new Error(`scp leaf: ${what} must be ${declared}, got ${got}`);
   }
   return value;
 }
 
 /**
  * Read ONE DECLARED field out of a payload / struct that is PRESENT — the ONE fail-closed field read on
- * the TS plane, and the twin of the go `optRowField` / rust `take_opt_row` discipline. Presence and the
- * DECLARED type are confirmed at the SAME read, exactly as go's and rust's typed probes confirm both.
+ * the TS plane, for all THREE leaves, and the twin of the go `optRowField` / rust `take_opt_row`
+ * discipline. Presence and the DECLARED type are confirmed at the SAME read, exactly as go's and rust's
+ * typed probes confirm both.
  *
  * `null` is a VALUE (the declared absence of a write mode / a plan / a cap / a model); a MISSING KEY is
  * an ABI BREAK. The two are not the same thing and must not collapse: bc types a port by the literal
  * wired into it and REJECTS a partial struct (an omitted field is a different type, not a default —
  * `bc: … the value wired into it has type obj{…}`), so a generated module ALWAYS spells every field of
  * every struct it wires. A key that is not there did not come from one, and reading it as its default
- * would silently downgrade a write to a read, drop a relation cap, or erase a SKIP predicate (#205).
+ * would silently downgrade a write to a read, drop a relation cap, erase a SKIP predicate (#205), or —
+ * on `group` — nest the children under `"undefined"` so the relation vanishes from the graph (#213).
  */
 function requiredField(record: Record<string, unknown>, name: string, at: string, declared: Declared): unknown {
   if (!(name in record)) {
     throw new Error(
-      `scp leaf executeSQL: ${at} is missing its '${name}' field — a generated module spells every ` +
+      `scp leaf: ${at} is missing its '${name}' field — a generated module spells every ` +
         `field of every struct it wires, so an ABSENT key is an ABI break (a null VALUE is how an ` +
         `absent write mode / plan / cap is spelled)`,
     );
@@ -400,10 +406,10 @@ function relationGuardPort(port: unknown): RelationGuard | null {
   if (port === null) return null;
   const g = port as Record<string, unknown>;
   const at = `the 'guard' cap`;
-  const raw = requiredField(g, 'limit', at, 'int') as number | bigint;
+  const raw = requiredField(g, 'limit', at, 'int') as bigint;
   const model = requiredField(g, 'model', at, 'string|null') as string | null;
   return {
-    limit: typeof raw === 'bigint' ? Number(raw) : raw,
+    limit: Number(raw),
     ...(model === null ? {} : { model }),
     relation: requiredField(g, 'relation', at, 'string') as string,
   };
@@ -452,17 +458,30 @@ function executeSqlPorts(ports: Record<string, Value>): ExecuteSqlPorts {
 /**
  * The two ENVIRONMENT-FREE relation handlers. `pluck`/`group` are pure in-memory shaping, so the sync
  * and async maps share this ONE definition (never a second copy per environment).
+ *
+ * Their ports are read through the SAME fail-closed reader the SQL transport uses
+ * ({@link requiredField}) — the flat shape is not a reason to trust it. A raw index + cast turned a
+ * MISTYPED `single` into a silently flipped relation CARDINALITY (a `hasOne` nesting a LIST, a `hasMany`
+ * nesting one child), a mistyped `into` into a relation nested under `"42"`, and an absent `pk`/`col`
+ * into a bare `Cannot read properties of undefined` that names no port at all (#213).
  */
+const PLUCK_AT = 'the pluck payload';
+const GROUP_AT = 'the group payload';
 const shapingHandlers: Handlers = {
-  pluck: (ports): ExecOutcome => ({ ok: pluck({ rows: ports.rows as unknown as Array<Record<string, unknown>>, col: ports.col as unknown as string[] }) as unknown as Value }),
+  pluck: (ports): ExecOutcome => ({
+    ok: pluck({
+      rows: requiredField(ports, 'rows', PLUCK_AT, 'list') as Array<Record<string, unknown>>,
+      col: requiredField(ports, 'col', PLUCK_AT, 'string[]') as string[],
+    }) as unknown as Value,
+  }),
   group: (ports): ExecOutcome => ({
     ok: group({
-      parents: ports.parents as unknown as Array<Record<string, unknown>>,
-      children: ports.children as unknown as Array<Record<string, unknown>>,
-      pk: ports.pk as unknown as string[],
-      fk: ports.fk as unknown as string[],
-      into: ports.into as unknown as string,
-      single: ports.single === true,
+      parents: requiredField(ports, 'parents', GROUP_AT, 'list') as Array<Record<string, unknown>>,
+      children: requiredField(ports, 'children', GROUP_AT, 'list') as Array<Record<string, unknown>>,
+      pk: requiredField(ports, 'pk', GROUP_AT, 'string[]') as string[],
+      fk: requiredField(ports, 'fk', GROUP_AT, 'string[]') as string[],
+      into: requiredField(ports, 'into', GROUP_AT, 'string') as string,
+      single: requiredField(ports, 'single', GROUP_AT, 'bool') as boolean,
     }) as unknown as Value,
   }),
 };
