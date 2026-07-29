@@ -25,19 +25,40 @@
  *        - inside a `target/` directory whose parent holds a `Cargo.toml`. The manifest is what makes
  *          it cargo's output directory — the directory NAME alone proves nothing, and `go/lm_bench/
  *          lm_orm_native/target_mysql.go` is a source file whose name starts with the same word.
- *        - a file git records EXECUTABLE (mode 100755) that does not begin with `#!`. A compiled
- *          binary always carries the executable bit and never a shebang; a script always has one.
- *          This is the clause that needs no new line per binary.
+ *        - a file git records EXECUTABLE (mode 100755) whose BLOB does not begin with `#!`. A script
+ *          committed with the bit set has a shebang; a compiled binary does not. This is the clause
+ *          that needs no new line per binary.
  *   C. No tracked file is EMPTY, outside {@link EMPTY_FILES}. Zero bytes is the signature of a shell
  *      redirect that created a file nobody wanted, which is clause A's junk file exactly — and this
- *      one catches it in a subdirectory too, where no inventory exists. Decided from the BLOB (git's
- *      empty-blob hash), so it reads the index and not the working tree.
+ *      one catches it in a subdirectory too, where no inventory exists.
+ *
+ * EVERY clause reads the INDEX and nothing else — mode, sha, and the blob behind the sha. Clause B did
+ * not: it took the mode from the index and then opened the WORKING TREE for the shebang, and mixing the
+ * two made the gate lie. Measured — a 20 MB Mach-O staged 100755, then the worktree file alone replaced
+ * with `#!/bin/sh`:
+ *
+ *     index says            100755 67ac6231… go/lm_bench/lm_orm_v2   (blob size 20040400)
+ *     before the swap       exit 1   ← correctly red
+ *     after the swap        exit 0   ← green, with the 20 MB binary still in the index
+ *
+ * CI would not be fooled (it checks out fresh), but RELEASING.md asks for this locally, where the tree
+ * is dirty by definition — and a smudge filter would do the same thing to a clean one.
+ *
+ * All three lists — {@link ROOT_FILES}, {@link EMPTY_FILES}, and the tree itself — are compared
+ * BIDIRECTIONALLY, so an exemption cannot outlive the file it was written for.
  *
  * What it does NOT check, and all of these fall GREEN — the direction that matters:
  *
  *   - a build artifact that is neither executable nor under a cargo `target/`: a `.o`, a wheel, a
  *     `.node` addon, a `dist/` file force-added. Clause B knows the two shapes that have actually
  *     happened here, not the category.
+ *   - a compiled binary committed WITHOUT the executable bit. The bit is not a property of the file's
+ *     contents: `git add --chmod=-x` clears it, and a checkout with `core.fileMode=false` (Windows, or
+ *     some network filesystems) records 100644 for everything. Clause B is a check on what the index
+ *     SAYS, which is all the index knows.
+ *   - a SYMLINK (mode 120000). Its blob is the target path, so it is neither empty nor a binary, and
+ *     outside the root nothing inventories it — a link into a build directory or out of the repository
+ *     would pass.
  *   - junk in a SUBDIRECTORY with a plausible name and non-zero content. Only the root is inventoried;
  *     enumerating every directory would be a list nobody could keep true, and a list nobody keeps true
  *     is the thing clause A's bidirectional check exists to prevent.
@@ -47,8 +68,7 @@
  *   node scripts/check-tracked-files.mjs
  */
 import { execFileSync } from 'node:child_process';
-import { openSync, readSync, closeSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -115,21 +135,23 @@ function indexEntries() {
   return entries;
 }
 
-/** Whether `path` begins with `#!` — read from the working tree, the only place the bytes are. */
-function hasShebang(path) {
-  const buf = Buffer.alloc(2);
-  let fd;
+/**
+ * Whether the BLOB `sha` begins with `#!`.
+ *
+ * The blob, not the working-tree file at that path. Those are different bytes whenever the tree is
+ * dirty, and reading the tree while taking the mode from the index is what let a 20 MB Mach-O staged
+ * 100755 pass by overwriting only the worktree copy with `#!/bin/sh` (exit 1 → exit 0, blob untouched
+ * at 20040400 bytes). The index is what would be committed; it is the only thing this may consult.
+ */
+function hasShebang(sha, path) {
+  let blob;
   try {
-    fd = openSync(join(ROOT, path), 'r');
+    blob = execFileSync('git', ['cat-file', 'blob', sha], { cwd: ROOT, maxBuffer: 512 * 1024 * 1024 });
   } catch (err) {
-    console.error(`❌ ${path} is tracked as executable but could not be opened to tell a script from a binary: ${err.message}`);
+    console.error(`❌ ${path} is staged executable but its blob ${sha} could not be read, so a script cannot be told from a binary: ${err.message}`);
     process.exit(1);
   }
-  try {
-    return readSync(fd, buf, 0, 2, 0) === 2 && buf.toString('latin1') === '#!';
-  } finally {
-    closeSync(fd);
-  }
+  return blob.subarray(0, 2).toString('latin1') === '#!';
 }
 
 const entries = indexEntries();
@@ -179,11 +201,11 @@ if (cargoOut.length > 0) {
       `      the way its siblings have one.`,
   );
 }
-/** Executable, no shebang — a compiled binary. A script has a shebang; a binary never does. */
-const binaries = entries.filter((e) => e.mode === '100755' && !cargoOut.includes(e.path) && !hasShebang(e.path)).map((e) => e.path).sort();
+/** Staged executable, and its BLOB has no shebang — a compiled binary, not a script. */
+const binaries = entries.filter((e) => e.mode === '100755' && !cargoOut.includes(e.path) && !hasShebang(e.sha, e.path)).map((e) => e.path).sort();
 if (binaries.length > 0) {
   problems.push(
-    `${binaries.length} tracked file(s) are EXECUTABLE but are not scripts (no \`#!\`), i.e. compiled binaries:\n` +
+    `${binaries.length} tracked file(s) are staged EXECUTABLE but their blobs are not scripts (no \`#!\`), i.e. compiled binaries:\n` +
       binaries.map((p) => `      ${p}`).join('\n') +
       `\n\n      A build product does not belong in the index — it is per-platform, it is megabytes,\n` +
       `      and nothing reads it (the bench cells run \`go run ./<pkg>/\`). \`git rm\` it and ignore\n` +
@@ -191,14 +213,25 @@ if (binaries.length > 0) {
   );
 }
 
-// ── C. empty files ──────────────────────────────────────────────────────────
-const empties = entries.filter((e) => e.sha === EMPTY_BLOB && !EMPTY_FILES.includes(e.path) && !cargoOut.includes(e.path)).map((e) => e.path).sort();
+// ── C. empty files, both directions ─────────────────────────────────────────
+const emptyNow = new Set(entries.filter((e) => e.sha === EMPTY_BLOB).map((e) => e.path));
+const empties = [...emptyNow].filter((p) => !EMPTY_FILES.includes(p) && !cargoOut.includes(p)).sort();
+// The reverse: an exemption that has outlived its file. ROOT_FILES and check-go-fmt's GENERATED are
+// both checked this way; EMPTY_FILES was not, so a path-specific licence to be empty would have stayed
+// in force after the file stopped being empty — or stopped existing.
+const stillExempt = EMPTY_FILES.filter((p) => !emptyNow.has(p)).sort();
 if (empties.length > 0) {
   problems.push(
     `${empties.length} tracked file(s) are EMPTY and not in EMPTY_FILES:\n` +
       empties.map((p) => `      ${JSON.stringify(p)}`).join('\n') +
       `\n\n      Zero bytes is what a shell redirect leaves behind when a command was meant to run\n` +
       `      instead. If the file is deliberate (a package marker), list it in EMPTY_FILES.`,
+  );
+}
+if (stillExempt.length > 0) {
+  problems.push(
+    `${stillExempt.length} name(s) in EMPTY_FILES are not empty tracked files any more — the exemption has outlived what it was written for, and a standing exemption nobody rechecks is how the next empty file at that path goes unnoticed:\n` +
+      stillExempt.map((p) => `      ${p}   (${tracked.has(p) ? 'tracked, but no longer empty' : 'not tracked at all'})`).join('\n'),
   );
 }
 
@@ -209,12 +242,17 @@ if (problems.length > 0) {
   process.exit(1);
 }
 console.log(
-  `✅ ${entries.length} tracked files: the repository root holds EXACTLY the ${ROOT_FILES.length} files ROOT_FILES lists\n` +
-    `   (checked both ways, so the list cannot go stale); none is cargo build output (inside a \`target/\`\n` +
-    `   whose parent holds a Cargo.toml) or a compiled binary (mode 100755 without a \`#!\`); and the only\n` +
-    `   empty ones are the ${EMPTY_FILES.length} EMPTY_FILES declares.\n` +
+  `✅ ${entries.length} tracked files, judged ENTIRELY from the index — mode, sha, and the blob behind the sha, never\n` +
+    `   the working tree, so a dirty tree cannot change the answer. The repository root holds EXACTLY the\n` +
+    `   ${ROOT_FILES.length} files ROOT_FILES lists; none is cargo build output (inside a \`target/\` whose parent holds a\n` +
+    `   Cargo.toml) or a compiled binary (staged 100755, blob without a \`#!\`); and the only empty ones are\n` +
+    `   the ${EMPTY_FILES.length} EMPTY_FILES declares. Both lists are checked BOTH WAYS, so neither an inventory nor an\n` +
+    `   exemption can outlive the file it was written for.\n` +
     `   NOT checked, and all fall GREEN: a build artifact that is neither executable nor under a cargo\n` +
-    `   \`target/\` (a .o, a wheel, a force-added dist file); junk in a SUBDIRECTORY with a plausible name\n` +
-    `   and non-zero content (only the root is inventoried); and anything UNTRACKED — that is \`git\n` +
-    `   status\`, which works, which is why only the tracked ones needed a gate.`,
+    `   \`target/\` (a .o, a wheel, a force-added dist file); a binary committed WITHOUT the executable bit\n` +
+    `   (\`git add --chmod=-x\`, or any checkout with core.fileMode=false — the bit is not a property of the\n` +
+    `   contents, and this checks what the index SAYS); a SYMLINK (mode 120000, whose blob is a path, so\n` +
+    `   neither empty nor a binary); junk in a SUBDIRECTORY with a plausible name and non-zero content\n` +
+    `   (only the root is inventoried); and anything UNTRACKED — that is \`git status\`, which works, which\n` +
+    `   is why only the tracked ones needed a gate.`,
 );

@@ -45,9 +45,10 @@ const check = process.argv.includes('--check');
  *
  * Rewritten TEXTUALLY, as one more row of that table, rather than by shelling out to `cargo update`:
  * publish-pypi.yml runs this script in a job set up with Node + Python and no rust toolchain, so a
- * cargo call there would fail the publish outright. A lock holds one `[[package]]` entry per package,
- * so `name = "…"` immediately followed by `version = "…"` matches exactly one place — and the NAME is
- * part of the match, which is what keeps it off the other 263 `version =` lines in the file.
+ * cargo call there would fail the publish outright. A lock holds one `[[package]]` entry per package, so
+ * `name = "…"` immediately followed by `version = "…"` is meant to be unique — the NAME being part of
+ * the match is what keeps it off the other 263 `version =` lines in the file — and the loop below
+ * CHECKS that rather than trusting it.
  *
  * This settles the version FIELD, which is all the SSoT owns. That cargo still ACCEPTS the lock — no
  * dependency added to a manifest without being resolved into it — is `cargo check --locked`, which
@@ -65,7 +66,8 @@ function cargoLock(label) {
 /**
  * Each target: a file + the regex whose FIRST capture group is the version to replace, and a
  * `render(v)` producing the full replacement line. The regex must match exactly one place (the
- * package/manifest version marker), never a dependency spec.
+ * package/manifest version marker), never a dependency spec — the loop below ENFORCES that count, so a
+ * pattern that grows a second match fails loudly instead of updating only the first.
  */
 const targets = [
   {
@@ -124,12 +126,22 @@ let drift = false;
 
 for (const { label, path, re, render } of targets) {
   const contents = readFileSync(path, 'utf8');
-  const m = re.exec(contents);
-  if (!m) {
-    console.error(`Could not find a version marker in ${label} (pattern ${re})`);
+  // "Matches exactly one place" is what every pattern above is written to do, and it is what `exec` and
+  // `replace` SILENTLY assume: neither carries the `g` flag, so both take the FIRST match and ignore any
+  // others. Read one version, rewrite one line, and a second matching place — a transitive
+  // `litedbmodel_runtime` entry appearing in a lock, a second `version = "…"` at line start in a
+  // manifest — would be left behind at the old version with nothing said. So the assumption is checked
+  // instead of assumed: not exactly one ⇒ red.
+  const found = [...contents.matchAll(new RegExp(re.source, re.flags.includes('g') ? re.flags : `${re.flags}g`))];
+  if (found.length !== 1) {
+    console.error(
+      found.length === 0
+        ? `Could not find a version marker in ${label} (pattern ${re})`
+        : `Ambiguous version marker in ${label}: pattern ${re} matches ${found.length} places, and this script reads and rewrites only the FIRST — so the rest would silently keep the old version. Narrow the pattern.`,
+    );
     process.exit(1);
   }
-  const current = m[1];
+  const current = found[0][1];
   if (current === version) {
     console.log(`${label} already at ${version}`);
     continue;
