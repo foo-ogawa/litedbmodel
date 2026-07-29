@@ -1128,6 +1128,16 @@ mod tests {
         let run = |ports: Vec<(&str, WireValue)>| -> Result<WireValue, BehaviorError> {
             with_ambient_driver(&d, || execute_sql(payload(ports.clone())))
         };
+        // An `opts` record whose `whereDynamic` carries ONE fragment (the #209 cases).
+        let plan_of = |frag: WireValue| -> Vec<(&str, WireValue)> {
+            let mut p = base();
+            p.push(opts(
+                WireValue::Null,
+                wrow(&[("frags", wlist(vec![frag]))]),
+                WireValue::Null,
+            ));
+            p
+        };
         let cap = wrow(&[
             ("limit", WireValue::int(2)),
             ("model", WireValue::Str("t".into())),
@@ -1224,6 +1234,49 @@ mod tests {
                     p
                 },
                 "`guard.model` is absent",
+            ),
+            // …and the PLAN and its FRAGMENTS, one level further down (#209).
+            (
+                "plan without frags",
+                {
+                    let mut p = base();
+                    p.push(opts(WireValue::Null, wrow(&[]), WireValue::Null));
+                    p
+                },
+                "`whereDynamic.frags` is absent",
+            ),
+            (
+                "fragment without skipped",
+                plan_of(wrow(&[
+                    ("params", wlist(vec![WireValue::Str("zzz".into())])),
+                    ("sql", WireValue::Str("v = ?".into())),
+                ])),
+                "must be {skipped: bool, sql: string, params: list}",
+            ),
+            (
+                "fragment without sql",
+                plan_of(wrow(&[
+                    ("params", wlist(vec![WireValue::Str("zzz".into())])),
+                    ("skipped", WireValue::Bool(false)),
+                ])),
+                "must be {skipped: bool, sql: string, params: list}",
+            ),
+            (
+                "fragment without params",
+                plan_of(wrow(&[
+                    ("skipped", WireValue::Bool(false)),
+                    ("sql", WireValue::Str("v = ?".into())),
+                ])),
+                "must be {skipped: bool, sql: string, params: list}",
+            ),
+            // A SKIPPED fragment is unboxed too — it is spelled in full like any other.
+            (
+                "skipped fragment without sql",
+                plan_of(wrow(&[
+                    ("params", wlist(vec![])),
+                    ("skipped", WireValue::Bool(true)),
+                ])),
+                "must be {skipped: bool, sql: string, params: list}",
             ),
         ];
         for (name, ports, want) in cases {

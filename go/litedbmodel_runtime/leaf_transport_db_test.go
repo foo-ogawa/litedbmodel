@@ -51,6 +51,13 @@ func writeModeRow(returning bool) wire.WireValue {
 	return wire.WireRowOf([]wire.WireField{{Key: "returning", Val: wire.WireBool(returning)}})
 }
 
+// planPort builds an `opts` record whose `whereDynamic` carries ONE fragment (the #209 cases).
+func planPort(frag wire.WireValue) wire.WireField {
+	return optsPort(wire.WireNull(), wire.WireRowOf([]wire.WireField{
+		{Key: "frags", Val: wire.WireListOf([]wire.WireValue{frag})},
+	}), wire.WireNull())
+}
+
 // sqlPayload builds the executeSQL node payload (the ports the covered runner assembles by name). A
 // plain READ omits the control record entirely — exactly what the emitter generates for one — so this
 // covers both the absent-record default and the present-record path.
@@ -318,6 +325,22 @@ func TestExecuteSQL_MissingFieldOfAPresentStructIsLoud(t *testing.T) {
 		{"guard without model", leafPayload(sqlPort, paramsPort, optsPort(wire.WireNull(), wire.WireNull(),
 			wire.WireRowOf([]wire.WireField{{Key: "limit", Val: wire.WireInt(2)}, {Key: "relation", Val: wire.WireStr("things")}}))),
 			`port "guard.model" is absent`},
+		// …and the PLAN and its FRAGMENTS, one level further down (#209).
+		{"plan without frags", leafPayload(sqlPort, paramsPort,
+			optsPort(wire.WireNull(), wire.WireRowOf(nil), wire.WireNull())), `port "whereDynamic.frags" is absent`},
+		{"fragment without skipped", leafPayload(sqlPort, paramsPort, planPort(wire.WireRowOf([]wire.WireField{
+			{Key: "sql", Val: wire.WireStr("v = ?")}, {Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireStr("zzz")})},
+		}))), `whereDynamic.frags.skipped`},
+		{"fragment without sql", leafPayload(sqlPort, paramsPort, planPort(wire.WireRowOf([]wire.WireField{
+			{Key: "skipped", Val: wire.WireBool(false)}, {Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireStr("zzz")})},
+		}))), `whereDynamic.frags.sql`},
+		{"fragment without params", leafPayload(sqlPort, paramsPort, planPort(wire.WireRowOf([]wire.WireField{
+			{Key: "skipped", Val: wire.WireBool(false)}, {Key: "sql", Val: wire.WireStr("v = ?")},
+		}))), `whereDynamic.frags.params`},
+		// A SKIPPED fragment is unboxed too — it is spelled in full like any other.
+		{"skipped fragment without sql", leafPayload(sqlPort, paramsPort, planPort(wire.WireRowOf([]wire.WireField{
+			{Key: "skipped", Val: wire.WireBool(true)}, {Key: "params", Val: wire.WireListOf(nil)},
+		}))), `whereDynamic.frags.sql`},
 	} {
 		_, err := ExecuteSQL(tc.payload)
 		if err == nil {

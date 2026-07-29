@@ -210,7 +210,7 @@ test('the leaf handler unboxes the guard port fail-closed (bc int is a BigInt; a
 // every field of every struct it wires (`null` is how absence is spelled). A missing key therefore did
 // not come from one, and defaulting it silently downgrades a write to a read, drops a relation cap, or
 // erases a SKIP predicate. The five languages must agree; this is the TS leg.
-test('a MISSING field of a present struct is loud in every position (#205)', () => {
+test('a MISSING field of a present struct is loud in every position (#205, #209)', () => {
   const calls: Call[] = [];
   const handler = leafHandlers({ exec: contextForConnection(recordingConn(calls)), dialect: 'sqlite' }).executeSQL;
   const ctx = { nodeId: 'n0', component: 'executeSQL' };
@@ -233,13 +233,28 @@ test('a MISSING field of a present struct is loud in every position (#205)', () 
     /control record is missing its 'guard' field/,
   );
 
-  // …and the fields NESTED in the two concrete control structs.
+  // …the fields NESTED in the two concrete control structs…
   expect(() => run({ sql: SQL, params: [], opts: { write: {}, whereDynamic: null, guard: null } })).toThrow(
     /'write' mode is missing its 'returning' field/,
   );
   expect(() => run({ sql: SQL, params: [], opts: { write: null, whereDynamic: null, guard: { limit: 2n, relation: 'posts' } } })).toThrow(
     /'guard' cap is missing its 'model' field/,
   );
+
+  // …and the PLAN and its FRAGMENTS, one level further down (#209). A fragment is a PRESENT struct
+  // like every other: without `skipped` the statement applies a predicate the call SKIPPED, without
+  // `sql` the predicate is erased entirely, and without `params` a value binds where none belongs —
+  // all three used to run SILENTLY and return DIFFERENT ROWS.
+  const plan = (frag: unknown): unknown => ({ sql: SQL, params: [], opts: { write: null, whereDynamic: { frags: [frag] }, guard: null } });
+  expect(() => run({ sql: SQL, params: [], opts: { write: null, whereDynamic: {}, guard: null } })).toThrow(
+    /'whereDynamic' plan is missing its 'frags' field/,
+  );
+  expect(() => run(plan({ sql: 'v = ?', params: ['zzz'] }))).toThrow(/fragment is missing its 'skipped' field/);
+  expect(() => run(plan({ skipped: false, params: ['zzz'] }))).toThrow(/fragment is missing its 'sql' field/);
+  expect(() => run(plan({ skipped: false, sql: 'v = ?' }))).toThrow(/fragment is missing its 'params' field/);
+  // A SKIPPED fragment is unboxed too — it is spelled in full like any other, so a hole in one is the
+  // same ABI break (and `skipped` alone would otherwise let the other two fields go unread).
+  expect(() => run(plan({ skipped: true, params: ['zzz'] }))).toThrow(/fragment is missing its 'sql' field/);
 
   // The LEGAL absences stay silent: the omitted record is a plain read, and a null FIELD is how an
   // absent write mode / plan / cap is spelled. Neither may be turned into a failure by the above.
@@ -248,4 +263,12 @@ test('a MISSING field of a present struct is loud in every position (#205)', () 
   expect(handler(allNull as unknown as Record<string, Value>, ctx)).toEqual({ ok: expect.any(Array) });
   // A guard that IS spelled still enforces the cap (the fail-closed reads did not disarm it).
   expect(() => run({ sql: SQL, params: [], opts: { write: null, whereDynamic: null, guard: cap } })).toThrow(LimitExceededError);
+  // …and a WELL-FORMED plan still assembles: the surviving fragment reaches the statement, the skipped
+  // one does not (the unbox reads every fragment, it does not change which ones apply).
+  calls.length = 0;
+  run(plan({ skipped: false, sql: 'author_id = ?', params: [7] }));
+  expect(calls[0].sql).toBe('SELECT id, author_id FROM posts WHERE author_id = ?');
+  expect(calls[0].params).toEqual([7]);
+  run(plan({ skipped: true, sql: 'author_id = ?', params: [null] }));
+  expect(calls[1].sql).toBe(SQL);
 });

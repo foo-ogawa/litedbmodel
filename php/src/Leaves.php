@@ -85,6 +85,8 @@ final class Leaves
     /** The two `at` labels the fail-closed field read names — the payload itself and the control record. */
     private const PAYLOAD = 'the executeSQL payload';
     private const RECORD = "the 'opts' control record";
+    private const PLAN = "the 'whereDynamic' plan";
+    private const FRAG = "a 'whereDynamic' fragment";
 
     /**
      * Read ONE DECLARED field out of a payload / struct that IS present — the php leg's ONE fail-closed
@@ -138,13 +140,21 @@ final class Leaves
         }
         $clause = '';
         $whereParams = [];
-        foreach (((array) $plan)['frags'] as $frag) {
-            $f = (array) $frag;
-            if ($f['skipped']) {
+        // EVERY field of EVERY fragment is unboxed fail-closed BEFORE any of them is used, skipped ones
+        // included — a fragment is a PRESENT struct like every other and the generator spells it in
+        // full, so a missing field is an ABI break and NOT a default: without `skipped` the statement
+        // applies a predicate the call SKIPPED, without `sql` the predicate is erased entirely, and
+        // without `params` a value binds where none belongs — each silently returning DIFFERENT ROWS
+        // (#209). The go / rust transports unbox the same three fields the same way.
+        foreach (self::required($plan, 'frags', self::PLAN) as $frag) {
+            $skipped = self::required($frag, 'skipped', self::FRAG);
+            $fragSql = (string) self::required($frag, 'sql', self::FRAG);
+            $fragParams = self::required($frag, 'params', self::FRAG);
+            if ($skipped) {
                 continue;
             }
-            $clause .= ($clause === '' ? '' : ' AND ') . (string) $f['sql'];
-            foreach ($f['params'] as $p) {
+            $clause .= ($clause === '' ? '' : ' AND ') . $fragSql;
+            foreach ($fragParams as $p) {
                 $whereParams[] = $p;
             }
         }

@@ -41,7 +41,7 @@ import {
   type RunInfo,
 } from './exec-context';
 import { assertRelationHardLimit, type RelationGuard } from './limit-config';
-import type { DynamicWherePlan, ExecOptions, WriteMode } from './leaf-transport';
+import type { DynamicWhereFrag, DynamicWherePlan, ExecOptions, WriteMode } from './leaf-transport';
 import { renderPlaceholders, type Dialect } from './makesql/handler';
 import { encodeJsonArrayParam } from './makesql/json-array';
 import { resolvePgArrayCast } from './makesql/compile-relation';
@@ -148,7 +148,7 @@ function whereSplice(baseSql: string): { at: number; keyword: string; tail: numb
  * leaves the emitted statement exactly as it was compiled.
  */
 export function assembleDynamicWhere(p: { sql: string; params: unknown[]; whereDynamic: DynamicWherePlan }): { sql: string; params: unknown[] } {
-  const frags = p.whereDynamic.frags.filter((f) => !f.skipped);
+  const frags = dynamicWhereFrags(p.whereDynamic).filter((f) => !f.skipped);
   if (frags.length === 0) return { sql: p.sql, params: p.params };
   const { at, keyword, tail } = whereSplice(p.sql);
   const bind = p.params.length - tail;
@@ -313,6 +313,35 @@ function requiredField(record: Record<string, unknown>, name: string, at: string
     );
   }
   return record[name];
+}
+
+/**
+ * Unbox a plan's FRAGMENTS — every field of every fragment, fail-closed ({@link requiredField}), before
+ * any of them is used. A fragment is a PRESENT struct like every other, and the generator spells it in
+ * full, so a missing field is an ABI break and NOT a default: without `skipped` the statement applies a
+ * predicate the call SKIPPED, without `sql` the predicate is erased entirely, and without `params` a
+ * value binds where none belongs — each of them silently returning DIFFERENT ROWS (#209). Every
+ * fragment is unboxed, skipped ones included, exactly as the go / rust transports unbox them.
+ */
+function dynamicWhereFrags(plan: DynamicWherePlan): DynamicWhereFrag[] {
+  const frags = requiredField(plan as unknown as Record<string, unknown>, 'frags', `the 'whereDynamic' plan`);
+  if (!Array.isArray(frags)) {
+    throw new Error(`scp leaf executeSQL: the 'whereDynamic' plan's 'frags' must be a list, got ${JSON.stringify(frags)}`);
+  }
+  return frags.map((frag) => {
+    const f = frag as Record<string, unknown>;
+    const at = `a 'whereDynamic' fragment`;
+    const skipped = requiredField(f, 'skipped', at);
+    const sql = requiredField(f, 'sql', at);
+    const params = requiredField(f, 'params', at);
+    if (typeof skipped !== 'boolean' || typeof sql !== 'string' || !Array.isArray(params)) {
+      throw new Error(
+        `scp leaf executeSQL: a 'whereDynamic' fragment must be {skipped: bool, sql: string, params: list}, ` +
+          `got ${JSON.stringify(frag)}`,
+      );
+    }
+    return { skipped, sql, params: params as DynamicWhereFrag['params'] };
+  });
 }
 
 /**

@@ -77,6 +77,15 @@ def test_every_fragment_skipped_runs_the_statement_as_compiled(execute_sql):
 # of every struct it wires (``None`` is how absence is spelled). A key that is not there did not come
 # from one, and defaulting it would silently downgrade a write to a read, drop a relation cap, or erase a
 # SKIP predicate. The five languages must agree; this is the python leg.
+def _plan(frag):
+    """Ports whose control record carries a `whereDynamic` plan of ONE fragment (the #209 cases)."""
+    return {
+        "sql": "SELECT id, v FROM t ORDER BY id",
+        "params": [],
+        "opts": {"write": None, "whereDynamic": {"frags": [frag]}, "guard": None},
+    }
+
+
 def test_a_missing_field_of_a_present_struct_is_loud(execute_sql):
     sql = "SELECT id, v FROM t ORDER BY id"
     cap = {"limit": 2, "model": "t", "relation": "things"}
@@ -93,6 +102,13 @@ def test_a_missing_field_of_a_present_struct_is_loud(execute_sql):
             {"sql": sql, "params": [], "opts": {"write": None, "whereDynamic": None, "guard": {"limit": 2, "relation": "things"}}},
             "'model' field",
         ),
+        # …and the PLAN and its FRAGMENTS, one level further down (#209).
+        ({"sql": sql, "params": [], "opts": {"write": None, "whereDynamic": {}, "guard": None}}, "'frags' field"),
+        (_plan({"sql": "v = ?", "params": ["zzz"]}), "'skipped' field"),
+        (_plan({"skipped": False, "params": ["zzz"]}), "'sql' field"),
+        (_plan({"skipped": False, "sql": "v = ?"}), "'params' field"),
+        # A SKIPPED fragment is unboxed too — it is spelled in full like any other.
+        (_plan({"skipped": True, "params": ["zzz"]}), "'sql' field"),
     ]
     for ports, want in cases:
         with pytest.raises(ValueError) as ei:
@@ -107,3 +123,6 @@ def test_a_missing_field_of_a_present_struct_is_loud(execute_sql):
     # …and a cap that IS spelled still trips (the fail-closed reads did not disarm it).
     with pytest.raises(LimitExceededError):
         execute_sql({"sql": sql, "params": [], "opts": {**all_null, "guard": cap}}, CTX)
+    # A WELL-FORMED plan still assembles: the surviving fragment applies, the skipped one does not.
+    assert [r["id"] for r in execute_sql(_plan({"skipped": False, "sql": "v = ?", "params": ["c"]}), CTX)["ok"]] == [3]
+    assert len(execute_sql(_plan({"skipped": True, "sql": "v = ?", "params": [None]}), CTX)["ok"]) == 3

@@ -99,6 +99,8 @@ def _where_splice(base_sql: str) -> Tuple[int, str, int]:
 #: The two `at` labels the fail-closed field read names — the payload itself and the control record.
 _PAYLOAD = "the executeSQL payload"
 _RECORD = "the 'opts' control record"
+_PLAN = "the 'whereDynamic' plan"
+_FRAG = "a 'whereDynamic' fragment"
 
 
 def _required(record: Mapping[str, Any], name: str, at: str) -> Any:
@@ -133,14 +135,23 @@ def _effective_statement(ports: Mapping[str, Any], plan: Any) -> Tuple[str, List
     sql_port: str = _required(ports, "sql", _PAYLOAD)
     if plan is None:
         return sql_port, params
-    frags = [f for f in plan["frags"] if not f["skipped"]]
+    # EVERY field of EVERY fragment is unboxed fail-closed BEFORE any of them is used, skipped ones
+    # included — a fragment is a PRESENT struct like every other and the generator spells it in full, so
+    # a missing field is an ABI break and NOT a default: without ``skipped`` the statement applies a
+    # predicate the call SKIPPED, without ``sql`` the predicate is erased entirely, and without
+    # ``params`` a value binds where none belongs — each silently returning DIFFERENT ROWS (#209).
+    unboxed = [
+        (_required(f, "skipped", _FRAG), _required(f, "sql", _FRAG), _required(f, "params", _FRAG))
+        for f in _required(plan, "frags", _PLAN)
+    ]
+    frags = [(frag_sql, frag_params) for skipped, frag_sql, frag_params in unboxed if not skipped]
     if not frags:
         return sql_port, params
     sql: str = sql_port
     at, keyword, tail = _where_splice(sql)
-    where_params: List[Any] = [p for f in frags for p in f["params"]]
+    where_params: List[Any] = [p for _, frag_params in frags for p in frag_params]
     bind = len(params) - tail
-    clause = keyword + " AND ".join(f["sql"] for f in frags)
+    clause = keyword + " AND ".join(frag_sql for frag_sql, _ in frags)
     return sql[:at] + clause + sql[at:], params[:bind] + where_params + params[bind:]
 
 

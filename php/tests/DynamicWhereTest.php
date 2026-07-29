@@ -92,6 +92,12 @@ final class DynamicWhereTest extends TestCase
         $ctx = ['nodeId' => 'n0', 'component' => 'executeSQL'];
         $sql = 'SELECT id, v FROM t ORDER BY id';
         $nulls = (object) ['write' => null, 'whereDynamic' => null, 'guard' => null];
+        // Ports whose control record carries a `whereDynamic` plan of ONE fragment (the #209 cases).
+        $plan = static fn (object $frag): array => [
+            'sql' => 'SELECT id, v FROM t ORDER BY id',
+            'params' => [],
+            'opts' => (object) ['write' => null, 'whereDynamic' => (object) ['frags' => [$frag]], 'guard' => null],
+        ];
 
         // Each case drops exactly ONE declared field of a struct that is present.
         $cases = [
@@ -108,20 +114,41 @@ final class DynamicWhereTest extends TestCase
                 ]],
                 "'model' field",
             ],
+            // …and the PLAN and its FRAGMENTS, one level further down (#209).
+            [
+                ['sql' => $sql, 'params' => [], 'opts' => (object) ['write' => null, 'whereDynamic' => (object) [], 'guard' => null]],
+                "'frags' field",
+            ],
+            [$plan((object) ['sql' => 'v = ?', 'params' => ['zzz']]), "'skipped' field"],
+            [$plan((object) ['skipped' => false, 'params' => ['zzz']]), "'sql' field"],
+            [$plan((object) ['skipped' => false, 'sql' => 'v = ?']), "'params' field"],
+            // A SKIPPED fragment is unboxed too — it is spelled in full like any other.
+            [$plan((object) ['skipped' => true, 'params' => ['zzz']]), "'sql' field"],
         ];
         foreach ($cases as [$ports, $want]) {
+            // The assertions live OUTSIDE the catch on purpose: PHPUnit's own AssertionFailedError
+            // extends \RuntimeException, so a `self::fail()` inside the try would be swallowed by the
+            // catch below and its message ("a missing 'sql' field …") would even satisfy the
+            // assertStringContainsString — a gate that passes while the transport runs on SILENTLY.
+            $caught = null;
             try {
                 ($this->executeSQL)($ports, $ctx);
-                self::fail("a missing {$want} must be loud");
             } catch (\RuntimeException $e) {
-                self::assertStringContainsString($want, $e->getMessage());
+                $caught = $e;
             }
+            self::assertNotNull($caught, "a missing {$want} must be loud, but the statement ran");
+            self::assertStringContainsString($want, $caught->getMessage());
         }
 
         // The LEGAL absences stay silent: an omitted record is a plain read, and a null FIELD is how an
         // absent write mode / plan / cap is spelled.
         self::assertCount(3, ($this->executeSQL)(['sql' => $sql, 'params' => []], $ctx)['ok']);
         self::assertCount(3, ($this->executeSQL)(['sql' => $sql, 'params' => [], 'opts' => $nulls], $ctx)['ok']);
+
+        // A WELL-FORMED plan still assembles: the surviving fragment applies, the skipped one does not.
+        $survived = ($this->executeSQL)($plan((object) ['skipped' => false, 'sql' => 'v = ?', 'params' => ['c']]), $ctx);
+        self::assertSame([3], array_map(static fn ($r): int => (int) ((array) $r)['id'], $survived['ok']));
+        self::assertCount(3, ($this->executeSQL)($plan((object) ['skipped' => true, 'sql' => 'v = ?', 'params' => [null]]), $ctx)['ok']);
 
         // …and a cap that IS spelled still trips (the fail-closed reads did not disarm it).
         $capped = ['sql' => $sql, 'params' => [], 'opts' => (object) [
