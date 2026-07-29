@@ -370,13 +370,6 @@ function relationGuardPort(port: unknown): RelationGuard | null {
 }
 
 /**
- * Read the OPTIONAL `opts` control record ({@link ExecOptions}) off the evaluated port record. ABSENT
- * (or null) ⇒ `null` ⇒ a plain READ: not a write, no dynamic plan, uncapped — the one statement shape
- * that omits the port entirely, so a bounded read's payload is `sql` + `params` and nothing else. That
- * is the ONE legitimate absence here; every FIELD of a record that IS present is required
- * ({@link requiredField}). PRESENT but not a record is a LOUD port failure.
- */
-/**
  * Read one DECLARED field of the control record. The name is `keyof ExecOptions`, so the reader is tied
  * to the leaf declaration at compile time: renaming a field there breaks HERE rather than silently
  * reading a key the generator no longer writes.
@@ -385,6 +378,13 @@ function optsField(opts: Record<string, unknown>, name: keyof ExecOptions): unkn
   return requiredField(opts, name, `the 'opts' control record`);
 }
 
+/**
+ * Read the OPTIONAL `opts` control record ({@link ExecOptions}) off the evaluated port record. ABSENT
+ * (or null) ⇒ `null` ⇒ a plain READ: not a write, no dynamic plan, uncapped — the one statement shape
+ * that omits the port entirely, so a bounded read's payload is `sql` + `params` and nothing else. That
+ * is the ONE legitimate absence here; every FIELD of a record that IS present is required
+ * ({@link optsField}). PRESENT but not a record is a LOUD port failure.
+ */
 function execOptionsPort(port: Value | undefined): Record<string, unknown> | null {
   if (port === undefined || port === null) return null;
   if (typeof port !== 'object' || Array.isArray(port)) {

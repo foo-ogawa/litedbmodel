@@ -91,7 +91,10 @@ export interface DynamicWherePlan {
  * SEPARATE type on purpose: `limit` is bc's `Int` brand so the native struct field is an integer (a
  * plain `number` would emit as a float and the wire int-probe would miss it), whereas the runtime
  * `RelationGuard` is `number`-typed because it is CONSTRUCTED from `resolveHasManyHardLimit`'s plain
- * numbers — the two cannot be one type. `model` is optional exactly as `LimitExceededError.model` is.
+ * numbers — the two cannot be one type. `model` names the capped relation's target table, the identity
+ * `LimitExceededError` reports. On the WIRE its key is always spelled — bc types a port by the literal
+ * wired into it and rejects a partial struct — so "no model" rides as `null`, and every language
+ * transport reads the key fail-closed rather than defaulting an absent one.
  */
 export interface CapGuard {
   readonly limit: Int;
@@ -147,9 +150,10 @@ export interface WriteMode {
 export class Db {
   /**
    * The SOLE SQL transport: bind `params` and run `sql` through the central execute/run seam. Its
-   * whole control surface is the OPTIONAL {@link ExecOptions} record: `opts.write` selects `run`
-   * (INSERT/UPDATE/DELETE) vs `execute` (SELECT / RETURNING) and `opts.returning` keeps a RETURNING
-   * write on the row path — a non-returning write yields the one-row `[{changes, lastInsertRowid}]`
+   * whole control surface is the OPTIONAL {@link ExecOptions} record: `opts.write` is the statement's
+   * RUN MODE — `null` selects `execute` (a read), a {@link WriteMode} selects `run`
+   * (INSERT/UPDATE/DELETE), and its own `opts.write.returning` keeps a RETURNING write on the row path
+   * (`execute`) instead. A non-returning write yields the one-row `[{changes, lastInsertRowid}]`
    * summary so the output shape is uniform. `opts.guard` is the RELATION runaway cap
    * ({@link CapGuard}, the compiled op's own resolved cap) a guarded relation child fetch carries: the
    * transport asserts the fetched row count against it and raises `LimitExceededError` when the batch
