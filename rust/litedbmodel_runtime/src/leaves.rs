@@ -1725,26 +1725,25 @@ mod tests {
     // what this transport did — sent `INSERT … RETURNING` to the READ REPLICA. The conformance/livedb
     // setups run reader === writer, which is why no cross-language leg saw it.
     //
-    // The other four legs drive the leaf against a SPLIT reader/writer pair and record which pool served
-    // the statement. This one cannot: rust's leaf resolves an ambient `&dyn Driver` and builds its ctx
-    // with `exec_context::for_driver`, whose `routing` is `None` — so no routed ctx can reach
-    // `execute_sql`, and the intent it hands the seam is inert THERE. The gate therefore joins the two
-    // production halves directly: the intent `statement_intent` derives, resolved by the production
-    // `resolve_pool` over a split pair.
+    // The gate drives the PRODUCTION function: a routed ctx over a SPLIT reader/writer pair is installed
+    // as the ambient the way a consumer installs one (`with_ambient_context`, reachable since #214), and
+    // each pool records the statements it served. What comes back is where `execute_sql` actually sent
+    // them — not where a re-derivation of the rule says it should have. Composing `statement_intent` with
+    // `resolve_pool` in the test instead proved only that those two agree with each other: it stayed
+    // green with `execute_sql`'s intent handoff reverted to the #207 shape, which is no gate at all.
     #[test]
     fn the_run_mode_not_the_seam_branch_picks_the_pool() {
-        use crate::connection_routing::test_support::stub;
+        use crate::connection_routing::test_support::{recording_stub, SeamLog};
         use crate::connection_routing::{
-            resolve_pool, ConnectionRegistry, ReaderWriterPools, RoutingConfig, StickyOptions,
-            WriterStickyClock,
+            ConnectionRegistry, ReaderWriterPools, RoutingConfig, StickyOptions, WriterStickyClock,
         };
-        use std::sync::Arc;
+        use std::sync::{Arc, Mutex};
 
-        let (reader, writer) = (stub("reader"), stub("writer"));
+        let log: SeamLog = Arc::new(Mutex::new(Vec::new()));
         let routing = RoutingConfig {
             registry: ConnectionRegistry::from_default(ReaderWriterPools {
-                reader: Arc::clone(&reader),
-                writer: Arc::clone(&writer),
+                reader: recording_stub("reader", &log),
+                writer: recording_stub("writer", &log),
             })
             .build()
             .unwrap(),
@@ -1753,25 +1752,40 @@ mod tests {
                 ..Default::default()
             }),
         };
-        let pool_of = |write: Option<&WriteMode>| -> &'static str {
-            let p = resolve_pool(&statement_intent(write), &routing, false).unwrap();
-            if Arc::ptr_eq(p, &writer) {
-                "writer"
-            } else if Arc::ptr_eq(p, &reader) {
-                "reader"
-            } else {
-                "?"
+        let ctx = exec_context::for_routing(&routing).unwrap();
+        let issue = |write: Option<bool>, sql: &str| {
+            // A READ carries NO control record at all (the emitter omits the port); a write carries the
+            // run mode, whose `returning` picks the SEAM.
+            let mut ports = vec![
+                ("params", wlist(vec![])),
+                ("sql", WireValue::Str(sql.to_string().into())),
+            ];
+            if let Some(returning) = write {
+                ports.push(opts(
+                    wrow(&[("returning", WireValue::Bool(returning))]),
+                    WireValue::Null,
+                    WireValue::Null,
+                ));
             }
+            with_ambient_context(&ctx, || execute_sql(payload(ports))).unwrap();
         };
-        // A READ (no write mode) → the READER; BOTH write modes → the WRITER. The RETURNING one is the
-        // #207 case: with the intent taken from the seam branch it resolved to the reader.
-        assert_eq!(pool_of(None), "reader");
-        assert_eq!(pool_of(Some(&WriteMode { returning: true })), "writer");
-        assert_eq!(pool_of(Some(&WriteMode { returning: false })), "writer");
+        issue(None, "SELECT id FROM users");
+        issue(
+            Some(true),
+            "INSERT INTO users (name) VALUES (?) RETURNING id",
+        );
+        issue(Some(false), "INSERT INTO users (name) VALUES (?)");
+        // A READ → the READER; BOTH write modes → the WRITER. The RETURNING one is the #207 case: with
+        // the intent taken from the seam BRANCH it landed on the reader. And the trailing seam name
+        // shows the two decisions are INDEPENDENT rather than accidentally aligned — the RETURNING write
+        // is on the WRITER *and* on the ROW seam (`all`), the plain write on the WRITE seam (`run`).
+        assert_eq!(
+            log.lock().unwrap().as_slice(),
+            ["reader:all", "writer:all", "writer:run"],
+        );
 
-        // …and the two decisions are INDEPENDENT, not accidentally aligned: end-to-end on a real sqlite,
-        // a RETURNING write takes the ROW seam (its rows come back), a non-returning one the
-        // `[{changes,lastInsertRowid}]` summary.
+        // The shape that pairs with those seams, end-to-end on a real sqlite: a RETURNING write returns
+        // its ROWS, a non-returning one the `[{changes,lastInsertRowid}]` summary.
         use crate::driver::SqliteDriver;
         let d = SqliteDriver::in_memory(&[
             "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)".to_string(),

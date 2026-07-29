@@ -311,6 +311,12 @@ final class DynamicWhereTest extends TestCase
         $loud('group', $groupPorts(['parents' => 'x']), "the group payload's 'parents' must be list");
         $loud('group', $groupPorts(['children' => 'x']), "the group payload's 'children' must be list");
 
+        // A string-KEYED array is a `record` on this plane, never a list — the same answer TS's
+        // `Array.isArray` and python's `isinstance(v, list)` give. php's `is_array` alone says yes to
+        // one, so both list-shaped declarations passed a map straight through to the grouping core.
+        $loud('pluck', $pluckPorts(['rows' => ['a' => 1]]), "the pluck payload's 'rows' must be list");
+        $loud('pluck', $pluckPorts(['col' => ['a' => 'id']]), "the pluck payload's 'col' must be string[]");
+
         // The LEGAL shapes stay silent, and the CARDINALITY the ports declare is the one that comes out:
         // a hasMany nests the LIST, `single` nests the ONE child. (The mistyped `single` above used to
         // land on the other branch without a word.)

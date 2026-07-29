@@ -276,6 +276,10 @@ def test_a_missing_or_mistyped_pluck_or_group_port_is_loud():
         ("group", group_ports(fk="post_id"), "the group payload's 'fk' must be string[]"),
         ("group", group_ports(parents="x"), "the group payload's 'parents' must be list"),
         ("group", group_ports(children="x"), "the group payload's 'children' must be list"),
+        # A KEYED map is a ``record`` on this plane, never a list. php's ``is_array`` used to say
+        # otherwise, so the case is pinned in all three of the legs that can spell it.
+        ("pluck", pluck_ports(rows={"a": 1}), "the pluck payload's 'rows' must be list"),
+        ("pluck", pluck_ports(col={"a": "id"}), "the pluck payload's 'col' must be string[]"),
     ]
     for leaf, ports, want in mistyped:
         with pytest.raises(ValueError) as ei:

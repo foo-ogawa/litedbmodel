@@ -393,6 +393,10 @@ test('#213 — a MISSING or MISTYPED pluck / group port is loud, and names the p
   expect(() => handlers.group(groupPorts({ fk: 'post_id' }), ctx)).toThrow(/group payload's 'fk' must be string\[\]/);
   expect(() => handlers.group(groupPorts({ parents: 'x' }), ctx)).toThrow(/group payload's 'parents' must be list/);
   expect(() => handlers.group(groupPorts({ children: 'x' }), ctx)).toThrow(/group payload's 'children' must be list/);
+  // A KEYED map is a `record` on this plane, never a list. php's `is_array` used to say otherwise, so
+  // the case is pinned in all three of the legs that can spell it.
+  expect(() => handlers.pluck(pluckPorts({ rows: { a: 1 } }), ctx)).toThrow(/pluck payload's 'rows' must be list/);
+  expect(() => handlers.pluck(pluckPorts({ col: { a: 'id' } }), ctx)).toThrow(/pluck payload's 'col' must be string\[\]/);
 
   // The LEGAL shapes stay silent, and the CARDINALITY the ports declare is the one that comes out: a
   // hasMany nests the LIST, `single` nests the ONE child. (The mistyped `single` above used to land on

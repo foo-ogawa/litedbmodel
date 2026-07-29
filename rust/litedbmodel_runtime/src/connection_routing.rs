@@ -725,17 +725,41 @@ pub(crate) mod test_support {
     use super::*;
     use crate::driver::{PreparedStatement, RunInfo};
     use crate::exec_context::TxConnection;
+    use crate::wire::WireValue;
     use behavior_contracts::Value;
+    use std::sync::Mutex;
 
-    /// A stub driver whose ONLY use is `Arc`-identity (a test asserts WHICH driver a resolution returns
-    /// via `Arc::ptr_eq`). It never actually executes SQL in these no-DB unit tests.
-    struct StubDriver;
-    struct StubStmt;
+    /// The ordered `"<pool>:<seam>"` stream the pools of ONE routing config append to: which pool
+    /// served each statement and which driver seam (`all` = rows, `run` = the write summary) it took.
+    /// It is how a test observes WHERE a statement went with no DB in the picture.
+    pub(crate) type SeamLog = Arc<Mutex<Vec<String>>>;
+
+    /// A stub driver. For the routing tests its only use is `Arc`-identity (they assert WHICH driver a
+    /// resolution returns via `Arc::ptr_eq`) and it is built without a log; built WITH one
+    /// ([`recording_stub`]) it records every statement it serves, which is what lets a test drive the
+    /// real leaf transport and read back the pool that answered.
+    struct StubDriver {
+        label: &'static str,
+        log: Option<SeamLog>,
+    }
+    struct StubStmt {
+        label: &'static str,
+        log: Option<SeamLog>,
+    }
+    impl StubStmt {
+        fn record(&self, seam: &str) {
+            if let Some(log) = &self.log {
+                log.lock().unwrap().push(format!("{}:{}", self.label, seam));
+            }
+        }
+    }
     impl PreparedStatement for StubStmt {
-        fn all(&mut self, _p: &[Value]) -> Result<Vec<crate::wire::WireValue>, SqlFailure> {
+        fn all(&mut self, _p: &[Value]) -> Result<Vec<WireValue>, SqlFailure> {
+            self.record("all");
             Ok(Vec::new())
         }
         fn run(&mut self, _p: &[Value]) -> Result<RunInfo, SqlFailure> {
+            self.record("run");
             Ok(RunInfo {
                 changes: 0,
                 last_insert_rowid: 0,
@@ -744,7 +768,10 @@ pub(crate) mod test_support {
     }
     impl Driver for StubDriver {
         fn prepare(&self, _sql: &str) -> Box<dyn PreparedStatement + '_> {
-            Box::new(StubStmt)
+            Box::new(StubStmt {
+                label: self.label,
+                log: self.log.clone(),
+            })
         }
         fn begin_tx(&self) -> Result<Box<dyn TxConnection + '_>, SqlFailure> {
             crate::driver::forwarding_tx(self)
@@ -753,8 +780,18 @@ pub(crate) mod test_support {
             crate::driver::forwarding_tx_no_begin(self)
         }
     }
-    pub(crate) fn stub(_label: &'static str) -> Arc<dyn Driver + Send + Sync> {
-        Arc::new(StubDriver)
+    pub(crate) fn stub(label: &'static str) -> Arc<dyn Driver + Send + Sync> {
+        Arc::new(StubDriver { label, log: None })
+    }
+    /// A [`stub`] that appends `"<label>:<seam>"` to `log` for every statement it serves.
+    pub(crate) fn recording_stub(
+        label: &'static str,
+        log: &SeamLog,
+    ) -> Arc<dyn Driver + Send + Sync> {
+        Arc::new(StubDriver {
+            label,
+            log: Some(Arc::clone(log)),
+        })
     }
 }
 

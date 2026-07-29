@@ -116,10 +116,15 @@ final class Leaves
             'bool' => is_bool($value),
             'int' => is_int($value),
             'string' => is_string($value),
-            'list' => is_array($value),
-            // The ordered key-column TUPLE (`col` / `pk` / `fk`): every element must be a column NAME —
-            // the same element check the go `portStrings` / rust `port_strings` probes make.
-            'string[]' => is_array($value) && $value === array_filter($value, 'is_string'),
+            // A leaf LIST is a php array with the keys 0..n-1. `array_is_list` is what makes that the
+            // SAME predicate the other four legs apply (TS `Array.isArray`, python `isinstance(v, list)`,
+            // the go / rust `list` wire variant): php's `is_array` alone also accepts a string-keyed MAP,
+            // which is a `record` on this plane and never a list.
+            'list' => is_array($value) && array_is_list($value),
+            // The ordered key-column TUPLE (`col` / `pk` / `fk`): a list whose every element is a column
+            // NAME — the same element check the go `portStrings` / rust `port_strings` probes make.
+            'string[]' => is_array($value) && array_is_list($value)
+                && $value === array_filter($value, 'is_string'),
             'record' => is_object($value),
         };
         if (!$ok) {
