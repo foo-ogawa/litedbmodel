@@ -70,7 +70,13 @@ python/build/
 # stray preview/diagram artifacts (playwright-mcp, diagram-contracts previews) — never commit
 .playwright-mcp/
 /*.png
+# `go build` drops a binary named after the package next to wherever it was invoked. Two 20 MB Mach-O
+# executables reached a commit that way (#203). These are the paths seen so far; the backstop that does
+# not need a new line per binary is `npm run tracked:check`, which rejects any tracked executable that
+# is not a script.
 /go/lm_bench/lm_orm/lm_orm
+/go/lm_orm
+/go/lm_orm_native
 
 # emitter end-to-end scratch (the test writes the emitted + generated modules inside the repo so they
 # resolve node_modules, then removes the dir; this catches a crashed run's leftovers)

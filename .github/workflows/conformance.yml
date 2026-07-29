@@ -32,6 +32,11 @@ jobs:
         run: npm run sync:versions:check
       - name: No local (../-escaping) dependencies
         run: npm run deps:check
+      # A TRACKED file is invisible to BOTH `git status` and .gitignore, which is how a 0-byte file whose
+      # name was a psql connection string, 27 MB of cargo build cache and two 20 MB Mach-O binaries all
+      # sat in the index unnoticed (#203).
+      - name: The index holds only files someone meant to commit
+        run: npm run tracked:check
       - name: Every test gate is reachable from CI
         run: npm run gates:check
       # The two hand-written live-DB runners (go, rust) dispatch on the vector's entry through a switch
