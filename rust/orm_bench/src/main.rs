@@ -6,9 +6,10 @@
 //! `<method>(<positional params>)` with native arguments (no input box). It supplies NO `node_*`
 //! and holds NO hand-written exec seam — the covered runner calls the op-agnostic leaf transports
 //! (`execute_sql`/`pluck_keys`/`group_children`) in `litedbmodel_runtime`, which run every DB access
-//! through the runtime's central execute/run seam over the AMBIENT driver the consumer brackets each op
-//! with (`with_ambient_driver`). Relations are N+1-free: `parents → pluck → executeSQL(WHERE fk IN …)
-//! → group` runs 1 batched child query per level (nestedFindAll=2, nestedRelations=3).
+//! through the runtime's central execute/run seam over the AMBIENT execution context the consumer
+//! brackets each op with (`with_ambient_context`). Relations are N+1-free: `parents → pluck →
+//! executeSQL(WHERE fk IN …) → group` runs 1 batched child query per level (nestedFindAll=2,
+//! nestedRelations=3).
 //!
 //! Usage: `orm_bench [reps] [warmup]`, or `orm_bench safety`. The TARGET DB is a BUILD-time choice
 //! (`--features target_postgres` / `target_mysql`, default sqlite), never an argument — see gen/mod.rs.
@@ -19,8 +20,8 @@ mod gen;
 use litedbmodel_runtime::driver::{forwarding_tx, forwarding_tx_no_begin, PreparedStatement};
 use litedbmodel_runtime::exec_context::TxConnection;
 use litedbmodel_runtime::{
-    clear_middlewares, register_middleware, with_ambient_driver, with_ambient_transaction, Driver,
-    MiddlewareDescriptor, SeamResult, SqlFailure, SqlHookFn, SqliteDriver,
+    clear_middlewares, for_driver, register_middleware, with_ambient_context, with_ambient_transaction,
+    Driver, ExecutionContext, MiddlewareDescriptor, SeamResult, SqlFailure, SqlHookFn, SqliteDriver,
 };
 #[cfg(feature = "livedb")]
 use litedbmodel_runtime::{MysqlDriver, PostgresDriver};
@@ -58,7 +59,8 @@ fn probe_rows(d: &dyn Driver, op: &str) -> usize {
         },
     ))));
     ROW_COUNT.store(0, Ordering::SeqCst);
-    with_ambient_driver(d, || run_op(d, op, 0));
+    let ctx = for_driver(d);
+    with_ambient_context(&ctx, || run_op(&ctx, op, 0));
     let n = ROW_COUNT.load(Ordering::SeqCst);
     clear_middlewares();
     n
@@ -131,11 +133,11 @@ fn seed(d: &dyn Driver, setup: &Setup) {
 }
 
 // ── the covered ops. Each runs ONE logical op for iteration `it` (mutating ops vary their UNIQUE
-//    column). Reads/single-writes/batches resolve the AMBIENT driver (bracketed by the caller). The
-//    RETURNING-chained TRANSACTIONS run through the runtime `with_ambient_transaction(d, …)` scope
+//    column). Reads/single-writes/batches resolve the AMBIENT context (bracketed by the caller). The
+//    RETURNING-chained TRANSACTIONS run through the runtime `with_ambient_transaction(ctx, …)` scope
 //    (begin_tx → runner → COMMIT on Ok / ROLLBACK on Err) — the consumer's tx-boundary responsibility;
-//    the generated runner emits NO BEGIN/COMMIT, so `d` is threaded here to open/close the tx. ──
-fn run_op(d: &dyn Driver, op: &str, it: u64) {
+//    the generated runner emits NO BEGIN/COMMIT, so `ctx` is threaded here to open/close the tx. ──
+fn run_op(ctx: &ExecutionContext, op: &str, it: u64) {
     match op {
         "findAll" => {
             bg::findAll().unwrap();
@@ -198,7 +200,7 @@ fn run_op(d: &dyn Driver, op: &str, it: u64) {
         "nestedCreate" => {
             // Fresh user per iteration (email is UNIQUE), then INSERT its post — INSERT user RETURNING id
             // → INSERT post (author_id = that id).
-            with_ambient_transaction(d, || {
+            with_ambient_transaction(ctx, || {
                 bg::nestedCreate(
                     format!("nc{it}@bench.com"),
                     "NC".to_string(),
@@ -209,7 +211,7 @@ fn run_op(d: &dyn Driver, op: &str, it: u64) {
         }
         "nestedUpsert" => {
             // Existing email (ON CONFLICT DO UPDATE) → INSERT post keyed on the upserted user's id.
-            with_ambient_transaction(d, || {
+            with_ambient_transaction(ctx, || {
                 bg::nestedUpsert(
                     "user1@example.com".to_string(),
                     "NUp".to_string(),
@@ -220,7 +222,7 @@ fn run_op(d: &dyn Driver, op: &str, it: u64) {
         }
         "nestedUpdate" => {
             // UPDATE seeded user 1 RETURNING id → UPDATE that user's posts (author_id = 1 exists in seed).
-            with_ambient_transaction(d, || {
+            with_ambient_transaction(ctx, || {
                 bg::nestedUpdate(1, "NU".to_string(), "NU Post".to_string())
             })
             .unwrap();
@@ -228,7 +230,7 @@ fn run_op(d: &dyn Driver, op: &str, it: u64) {
         "delete" => {
             // Create-then-delete: INSERT a fresh user RETURNING id → DELETE the exact created row
             // (its RETURNING id + inserted email). Fresh email per iteration (UNIQUE).
-            with_ambient_transaction(d, || {
+            with_ambient_transaction(ctx, || {
                 bg::delete(format!("del{it}@bench.com"), "Del".to_string())
             })
             .unwrap();
@@ -302,15 +304,16 @@ fn main() {
         seed(d, &setup);
         // One UN-TIMED probe measures the rows this op moves — the report's per-row denominator (#170).
         let rows = probe_rows(d, op);
-        with_ambient_driver(d, || {
+        let ctx = for_driver(d);
+        with_ambient_context(&ctx, || {
             for it in 0..warmup {
-                run_op(d, op, it + 1);
+                run_op(&ctx, op, it + 1);
             }
             for it in 0..reps {
                 // Unique iteration id: the probe took 0, so warmup/timed start at 1.
                 let g = it + warmup + 1;
                 let t = Instant::now();
-                run_op(d, op, g);
+                run_op(&ctx, op, g);
                 let us = t.elapsed().as_micros();
                 println!("native,{dialect},{op},{it},{us},{rows}");
             }
@@ -352,7 +355,8 @@ fn run_safety() {
         let rows = probe_rows(d, op);
         seed(d, &setup);
         QUERY_COUNT.store(0, Ordering::SeqCst);
-        with_ambient_driver(d, || run_op(d, op, 0));
+        let ctx = for_driver(d);
+        with_ambient_context(&ctx, || run_op(&ctx, op, 0));
         let stmts = QUERY_COUNT.load(Ordering::SeqCst);
         let want = expected
             .iter()

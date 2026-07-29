@@ -266,7 +266,7 @@ func main() {
 		os.Exit(1)
 	}
 	defer db.Close()
-	rt.BindLeafTransport(db, benchDialect)
+	rt.BindLeafTransport(rt.ContextForDB(db), benchDialect)
 	defer rt.UnbindLeafTransport()
 
 	// The N+1-avoidance / atomic-tx safety proof: a seam middleware counts EVERY statement that funnels

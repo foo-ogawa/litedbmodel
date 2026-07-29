@@ -223,6 +223,16 @@ func TestPortUnboxIsFailClosed(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), `"col"`) || !strings.Contains(err.Error(), "string element") {
 		t.Fatalf("a key-column tuple element must be a column name, got %v", err)
 	}
+	// The SAME two failures on the OTHER pluck port, so both are pinned on both — the TS / python / php
+	// legs pin all four, and a parity that holds on 6 of 8 is a parity nobody is watching.
+	_, err = PluckKeys(leafPayload(port("rows", wire.WireListOf(nil))))
+	if err == nil || !strings.Contains(err.Error(), `"col"`) || !strings.Contains(err.Error(), "absent") {
+		t.Fatalf("an absent %q port must fail loudly and name itself, got %v", "col", err)
+	}
+	_, err = PluckKeys(leafPayload(port("col", wire.WireStr("id")), port("rows", wire.WireListOf(nil))))
+	if err == nil || !strings.Contains(err.Error(), `"col"`) || !strings.Contains(err.Error(), "list") {
+		t.Fatalf("a key-column TUPLE that is one bare column name must be loud, got %v", err)
+	}
 
 	// #213 — the SAME discipline on GroupChildren's six ports. A silent default here does not corrupt a
 	// value, it changes the SHAPE of the graph: `single` read loosely flips the relation's CARDINALITY
@@ -344,15 +354,23 @@ func TestCheckFindHardLimit(t *testing.T) {
 //
 // The conformance/livedb setups run reader === writer (every intent returns the same pool), which is
 // why no cross-language leg saw this; the gate therefore SPLITS the pair and records which pool served
-// each statement. The ambient ctx is installed the same way [WithAmbientTransaction] installs a
-// tx-scoped one (save → set → restore); [BindLeafTransport] itself only builds a single-DB ctx.
+// each statement.
+//
+// It drives the PRODUCTION wiring end to end: the routed ctx goes in through the PUBLIC binder
+// ([BindLeafTransport]), which is the only way a consumer installs one, and comes back out as the pool
+// [ExecuteSQL] actually acquired. Binding a raw db instead — the shape that wrapped it in
+// [ContextForDB], whose `routing` is nil — made every routed setup inert in this leg (#214), so both
+// halves are load-bearing here: break the binder and the routing observation dies, break the intent
+// derivation and the RETURNING write lands on the reader.
 func TestExecuteSQL_RunModePicksThePool(t *testing.T) {
 	var log []string
 	reader := newRecordPool("reader", &log)
 	writer := newRecordPool("writer", &log)
-	prev := leafExecCtx
-	leafExecCtx = ContextForRouting(routingWithPools(reader, writer, NewWriterStickyClock(StickyOptions{UseWriterAfterTransaction: boolPtr(false)})), nil)
-	defer func() { leafExecCtx = prev }()
+	BindLeafTransport(
+		ContextForRouting(routingWithPools(reader, writer, NewWriterStickyClock(StickyOptions{UseWriterAfterTransaction: boolPtr(false)})), nil),
+		"sqlite",
+	)
+	defer UnbindLeafTransport()
 
 	// A plain READ — the bounded payload that omits the control record entirely → the READER.
 	if _, err := ExecuteSQL(sqlPayload(nil, "SELECT id FROM users", false)); err != nil {

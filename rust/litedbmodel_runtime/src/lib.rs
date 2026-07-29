@@ -66,9 +66,10 @@ pub use middleware::{
 pub use grouping::{attach_to_parent, dedupe_key_tuples, group_by_key, key_identity};
 // The op-agnostic wire LEAVES (#141/#164) — the THREE transport symbols the native codegen calls
 // directly (`execute_sql`/`pluck_keys`/`group_children`, leaves.ts `LEAF_TRANSPORT_SYMBOLS`), plus
-// the ambient-driver scope the covered runner resolves them against. They consume the grouping CORE.
+// the ambient-CONTEXT scope the covered runner resolves them against (the ctx is what carries the
+// connection routing into the leaf). They consume the grouping CORE.
 pub use leaves::{
-    execute_sql, group_children, pluck_keys, with_ambient_driver, with_ambient_transaction,
+    execute_sql, group_children, pluck_keys, with_ambient_context, with_ambient_transaction,
 };
 // The BC-OWNED shared wire + error-value types (#164/#165 `--shared-types-import`) the leaves BUILD
 // and the generated covered runners de-box (stand-in for post-#165 bc regen — see `wire.rs`).

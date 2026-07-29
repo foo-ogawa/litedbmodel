@@ -562,9 +562,9 @@ func runLeg(dialect string, db *sql.DB, corpus corpusT) tally {
 		}
 	}
 	fmt.Fprintf(os.Stderr, "\nlivedb-%s — %d vectors (real %s)\n", dialect, len(vectors), dialect)
-	rt.BindLeafTransport(db, dialect)
-	defer rt.UnbindLeafTransport()
 	ctx := rt.ContextForDB(db)
+	rt.BindLeafTransport(ctx, dialect)
+	defer rt.UnbindLeafTransport()
 	for _, v := range vectors {
 		// Every vector starts from the SAME seeded state the TS leg captured from (raw, OFF the seam).
 		if err := applySchema(db, corpus.Schema); err != nil {

@@ -14,8 +14,13 @@
 // contract), NOT the py/php native-record method leaf.
 //
 // CONNECTION: the covered module calls these as free functions (bc's transport contract carries no db
-// handle), so the consumer BINDS the target connection once via [BindLeafTransport] before driving the
-// generated runners. This is the leaf transport's single bound connection — not a fallback path.
+// handle), so the consumer BINDS the target [ExecutionContext] once via [BindLeafTransport] before
+// driving the generated runners. This is the leaf transport's single bound context — not a fallback
+// path. It is the CONTEXT that is bound, not a raw db: the ctx is what carries the connection ROUTING
+// (reader/writer split, named DB, writer-sticky), and this is the only path a bc typed-native module
+// reaches a connection by, so a routed consumer configuration has to arrive HERE. Wrapping the db in
+// [ContextForDB] inside the binder instead — which never sets `routing` — left every routed setup
+// inert (#214).
 
 package litedbmodel_runtime
 
@@ -36,16 +41,20 @@ import (
 const wireProbeGot uint8 = 0
 
 // leaf transport bound state (set by BindLeafTransport). The bench/consumer drives the generated
-// runners sequentially against ONE bound connection; ExecuteSQL funnels every SQL node through it.
+// runners sequentially against ONE bound context; ExecuteSQL funnels every SQL node through it.
 var (
 	leafExecCtx *ExecutionContext
 	leafDialect = "sqlite"
 )
 
-// BindLeafTransport binds the connection (+ dialect for placeholder rendering) the free-function leaf
-// transport issues SQL against. Call ONCE before driving RunNativeRawStruct_<comp>.
-func BindLeafTransport(db SQLDB, dialect string) {
-	leafExecCtx = ContextForDB(db)
+// BindLeafTransport binds the [ExecutionContext] (+ dialect for placeholder rendering) the
+// free-function leaf transport issues SQL against. Call ONCE before driving
+// RunNativeRawStruct_<comp>. A single-DB consumer passes [ContextForDB]; a routed one passes
+// [ContextForRouting], and its reader/writer split, named-DB registry and writer-sticky clock then
+// resolve per statement inside [ExecutionContext.ConnectionFor] — the leaf issues an INTENT, the ctx
+// picks the connection.
+func BindLeafTransport(ctx *ExecutionContext, dialect string) {
+	leafExecCtx = ctx
 	leafDialect = dialect
 }
 

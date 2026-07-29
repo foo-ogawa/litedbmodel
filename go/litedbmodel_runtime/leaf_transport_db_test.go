@@ -30,7 +30,7 @@ func openBoundT(t *testing.T) *sql.DB {
 	if _, err := db.Exec("CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)"); err != nil {
 		t.Fatalf("ddl: %v", err)
 	}
-	BindLeafTransport(db, "sqlite")
+	BindLeafTransport(ContextForDB(db), "sqlite")
 	return db
 }
 

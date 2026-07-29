@@ -19,67 +19,73 @@
 //! is the handful of SQL bind PARAMS (`wire_to_value`), because the driver's param binder takes
 //! [`Value`]; no read datum ever round-trips through `Value`.
 //!
-//! ## Ambient driver — the leaves are free functions, the driver is scoped
+//! ## Ambient execution context — the leaves are free functions, the CONTEXT is scoped
 //!
-//! The covered runner (the generated `<method>()` entry) takes NO driver argument — it calls the leaf
+//! The covered runner (the generated `<method>()` entry) takes NO context argument — it calls the leaf
 //! transport symbols as free functions with ONE generic `WireRow` payload each (the node's ports as
-//! named fields). `execute_sql` resolves the driver from a thread-scoped
-//! ambient set by [`with_ambient_driver`] (the consumer brackets each op call). This is the rust
-//! analogue of the TS `LeafContext.exec` bc injects at `bindBehaviors` time (C4 — never on the IR).
+//! named fields). `execute_sql` resolves the [`ExecutionContext`] from a thread-scoped ambient set by
+//! [`with_ambient_context`] (the consumer brackets each op call). The ambient is the CONTEXT, not a
+//! bare [`Driver`]: the ctx is what carries the connection ROUTING (reader/writer split, named DB,
+//! writer-sticky), so this — the only path a bc typed-native module reaches a connection by — is where
+//! a routed consumer configuration has to arrive. Synthesizing the ctx inside the leaf instead
+//! (`exec_context::for_driver`, whose `routing` is `None`) left every routed setup inert (#214). This
+//! is the rust analogue of the TS `LeafContext.exec` bc injects at `bindBehaviors` time (C4 — never on
+//! the IR).
 
 use std::cell::Cell;
 
 use behavior_contracts::Value;
 
 use crate::driver::Driver;
-use crate::exec_context::{self, StatementIntent};
+use crate::exec_context::{self, ExecutionContext, StatementIntent};
 use crate::sql_render::finalize_sql;
 use crate::wire::{BehaviorError, Probe, WireList, WireRow, WireValue};
 
-// ── Ambient driver (thread-scoped) ───────────────────────────────────────────────────────────────
+// ── Ambient execution context (thread-scoped) ────────────────────────────────────────────────────
 
-/// A type-erased pointer to the ambient [`Driver`]. Set only for the duration of a
-/// [`with_ambient_driver`] scope (which brackets the whole covered-op call), then restored — so the
+/// A type-erased pointer to the ambient [`ExecutionContext`]. Set only for the duration of a
+/// [`with_ambient_context`] scope (which brackets the whole covered-op call), then restored — so the
 /// pointer never outlives the borrow it was made from.
 #[derive(Clone, Copy)]
-struct DriverPtr(*const (dyn Driver + 'static));
+struct CtxPtr(*const ExecutionContext<'static, 'static>);
 
 thread_local! {
-    static AMBIENT_DRIVER: Cell<Option<DriverPtr>> = const { Cell::new(None) };
+    static AMBIENT_CTX: Cell<Option<CtxPtr>> = const { Cell::new(None) };
 }
 
-/// Run `f` with `driver` installed as the thread's ambient driver (the covered runner's
+/// Run `f` with `ctx` installed as the thread's ambient [`ExecutionContext`] (the covered runner's
 /// `execute_sql` transport resolves it). The previous ambient is restored on return / unwind, so
-/// scopes nest. The consumer brackets each covered-op call with this (the driver argument the
-/// op-agnostic leaves no longer take explicitly).
-pub fn with_ambient_driver<R>(driver: &dyn Driver, f: impl FnOnce() -> R) -> R {
+/// scopes nest. The consumer brackets each covered-op call with this (the context argument the
+/// op-agnostic leaves no longer take explicitly) — and because it is the CONTEXT that is installed, a
+/// routed one ([`exec_context::for_routing`]) carries its reader/writer split, named-DB registry and
+/// writer-sticky clock all the way into the leaf's `connection_for` resolution.
+pub fn with_ambient_context<R>(ctx: &ExecutionContext, f: impl FnOnce() -> R) -> R {
     // SAFETY: the raw pointer is installed ONLY for the span of `f` and cleared before this function
     // returns (the `Restore` guard runs on normal return AND on unwind), so it can never be
-    // dereferenced after `driver`'s borrow ends. The lifetime is erased to `'static` to store it in
-    // the thread-local; every read (`current_driver`) reborrows it with a shorter, call-scoped
+    // dereferenced after `ctx`'s borrow ends. The lifetimes are erased to `'static` to store it in
+    // the thread-local; every read (`current_context`) reborrows it with a shorter, call-scoped
     // lifetime bounded by this frame.
-    let erased: *const (dyn Driver + 'static) =
-        unsafe { std::mem::transmute::<*const dyn Driver, *const (dyn Driver + 'static)>(driver) };
-    let prev = AMBIENT_DRIVER.with(|c| c.replace(Some(DriverPtr(erased))));
+    let erased = std::ptr::from_ref(ctx).cast::<ExecutionContext<'static, 'static>>();
+    let prev = AMBIENT_CTX.with(|c| c.replace(Some(CtxPtr(erased))));
 
-    struct Restore(Option<DriverPtr>);
+    struct Restore(Option<CtxPtr>);
     impl Drop for Restore {
         fn drop(&mut self) {
-            AMBIENT_DRIVER.with(|c| c.set(self.0));
+            AMBIENT_CTX.with(|c| c.set(self.0));
         }
     }
     let _restore = Restore(prev);
     f()
 }
 
-/// The current ambient driver, or a fail-closed [`BehaviorError`] if none is installed (the consumer
-/// must bracket the op call with [`with_ambient_driver`]). The returned reference is bounded by the
-/// caller's frame (SAFETY note on [`with_ambient_driver`]).
-fn current_driver() -> Result<&'static dyn Driver, BehaviorError> {
-    AMBIENT_DRIVER.with(|c| c.get()).map(|p| unsafe { &*p.0 }).ok_or_else(|| {
+/// The current ambient [`ExecutionContext`], or a fail-closed [`BehaviorError`] if none is installed
+/// (the consumer must bracket the op call with [`with_ambient_context`]). The returned reference is
+/// bounded by the caller's frame (SAFETY note on [`with_ambient_context`]).
+fn current_context() -> Result<&'static ExecutionContext<'static, 'static>, BehaviorError> {
+    AMBIENT_CTX.with(|c| c.get()).map(|p| unsafe { &*p.0 }).ok_or_else(|| {
         BehaviorError::new(
-            "NO_AMBIENT_DRIVER",
-            "scp leaf: execute_sql called with no ambient driver — bracket the op with with_ambient_driver",
+            "NO_AMBIENT_CONTEXT",
+            "scp leaf: execute_sql called with no ambient execution context — bracket the op with with_ambient_context",
         )
     })
 }
@@ -90,14 +96,14 @@ fn current_driver() -> Result<&'static dyn Driver, BehaviorError> {
 // feature and NOT emitted into the generated runner — the covered runner just runs its body statements
 // via `execute_sql` and returns `Result`. THIS wrapper brackets that runner in a transaction using the
 // EXISTING tx primitives ([`Driver::begin_tx`] issues BEGIN; [`TxConnection::commit`]/[`rollback`] issue
-// COMMIT/ROLLBACK on the owned connection) and the EXISTING ambient-driver mechanism
-// ([`with_ambient_driver`]) — no new tx execution engine, no parallel exec path. Statement execution
+// COMMIT/ROLLBACK on the owned connection) and the EXISTING ambient mechanism
+// ([`with_ambient_context`]) — no new tx execution engine, no parallel exec path. Statement execution
 // stays the ONE seam ([`execute_sql`] → [`exec_context`]); only the tx-control is added around it.
 
 /// A [`Driver`] adapter over a tx's OWNED [`TxConnection`]: it forwards every prepared statement to the
-/// pinned tx connection, so a covered runner's `execute_sql` (which resolves the ambient driver and runs
-/// through the central seam) executes ON the transaction. Installed as the ambient driver for the span
-/// of the tx body by [`with_ambient_transaction`]. `dialect` mirrors the underlying driver so
+/// pinned tx connection, so a covered runner's `execute_sql` (which resolves the ambient context and runs
+/// through the central seam) executes ON the transaction. Wrapped in the ambient context installed for
+/// the span of the tx body by [`with_ambient_transaction`]. `dialect` mirrors the underlying driver so
 /// `execute_sql`'s `?`→`$N` placeholder render is unchanged.
 struct TxDriver<'a> {
     tx: std::cell::RefCell<Box<dyn crate::exec_context::TxConnection + 'a>>,
@@ -158,21 +164,30 @@ fn nested_tx_unsupported() -> crate::errors::SqlFailure {
     }
 }
 
-/// Run `body` inside a transaction on `driver`, threading the tx connection as the ambient driver so a
+/// Run `body` inside a transaction on `ctx`, threading the tx connection as the ambient context so a
 /// covered runner's `execute_sql` executes on it: [`Driver::begin_tx`] (BEGIN) → run `body` under the
 /// tx-pinned ambient → COMMIT on `Ok` / ROLLBACK on `Err` (the atomicity guarantee). A body error rolls
 /// back and re-raises; a COMMIT that itself fails rolls back and surfaces the error. This is the covered
 /// plane's tx boundary — the runtime owns it (the generated runner emits NO BEGIN/COMMIT).
+///
+/// WHICH connection the transaction opens on is the ctx's answer, not this function's:
+/// [`ExecutionContext::tx_driver`] is the one resolver for it (the WRITER pool of the default
+/// connection under a routing config, the single primary driver without one).
 pub fn with_ambient_transaction<R>(
-    driver: &dyn Driver,
+    ctx: &ExecutionContext,
     body: impl FnOnce() -> Result<R, BehaviorError>,
 ) -> Result<R, BehaviorError> {
+    let driver = ctx.tx_driver(None).map_err(sql_failure_to_behavior_error)?;
     let tx = driver.begin_tx().map_err(sql_failure_to_behavior_error)?; // BEGIN issued on the owned connection
     let tx_driver = TxDriver {
         tx: std::cell::RefCell::new(tx),
         dialect: driver.dialect(),
     };
-    let result = with_ambient_driver(&tx_driver, body);
+    let result = {
+        // The tx-pinned ambient: every statement the body issues resolves THIS connection.
+        let tx_ctx = exec_context::for_driver(&tx_driver);
+        with_ambient_context(&tx_ctx, body)
+    };
     let tx = tx_driver.tx.into_inner();
     match result {
         Ok(r) => tx
@@ -602,8 +617,8 @@ fn statement_intent(write: Option<&WriteMode>) -> StatementIntent {
 }
 
 /// The SOLE SQL transport leaf (leaves.ts `executeSQL`). Binds `params` and runs `sql` through the
-/// central seam ([`exec_context::execute`] / [`exec_context::run`]) on the AMBIENT driver — the ONLY
-/// driver contact. `opts.write` selects `run` (INSERT/UPDATE/DELETE) vs `execute` (SELECT / RETURNING)
+/// central seam ([`exec_context::execute`] / [`exec_context::run`]) on the AMBIENT context — the ONLY
+/// connection contact. `opts.write` selects `run` (INSERT/UPDATE/DELETE) vs `execute` (SELECT / RETURNING)
 /// and, through [`statement_intent`], the READ/WRITE intent the connection is resolved from;
 /// a non-returning write returns a one-row `[{changes,lastInsertRowid}]` summary so the leaf output
 /// shape is uniform (a `List` of `Row`). `?`→`$N` is rendered here (the transport's placeholder SSoT,
@@ -627,7 +642,7 @@ pub fn execute_sql(mut payload: WireRow) -> Result<WireValue, BehaviorError> {
         None => (sql_port, params_port),
         Some(frags) => assemble_dynamic_where(&sql_port, params_port, frags),
     };
-    let driver = current_driver()?;
+    let ctx = current_context()?;
     // A composite relation key set (a list whose elements are key TUPLES) binds as ONE JSON
     // array-of-tuples string on EVERY dialect (#159) — PostgreSQL expands it server-side with
     // `json_array_elements`, and its native array binder would otherwise hand the server an
@@ -646,11 +661,12 @@ pub fn execute_sql(mut payload: WireRow) -> Result<WireValue, BehaviorError> {
             }
         })
         .collect();
-    let rendered = finalize_sql(&sql, &value_params, driver.dialect());
-    let ctx = exec_context::for_driver(driver);
+    // The placeholder style is a CONNECTION property, read off the ctx's driver (the spelling
+    // [`Driver::dialect`] documents for this seam).
+    let rendered = finalize_sql(&sql, &value_params, ctx.driver().dialect());
     let intent = statement_intent(opts.write.as_ref());
     if opts.write.as_ref().is_some_and(|w| !w.returning) {
-        let info = exec_context::run(&ctx, &rendered, &value_params, &intent)
+        let info = exec_context::run(ctx, &rendered, &value_params, &intent)
             .map_err(sql_failure_to_behavior_error)?;
         // The affected-write summary row (uniform `items` output shape — TS `writeSummary`).
         Ok(WireValue::List(WireList {
@@ -668,7 +684,7 @@ pub fn execute_sql(mut payload: WireRow) -> Result<WireValue, BehaviorError> {
         // The driver materialized the rows DIRECTLY as `WireValue` (one pass) — return them verbatim
         // as the leaf's `List` output. NO second per-cell pass (the retired `value_to_wire` map): the
         // read path never boxes into bc's `Value`.
-        let rows = exec_context::execute(&ctx, &rendered, &value_params, &intent)
+        let rows = exec_context::execute(ctx, &rendered, &value_params, &intent)
             .map_err(sql_failure_to_behavior_error)?;
         // The RELATION runaway guard, on the RAW child rows — the only point they are visible (past
         // `group_children` the graph is already nested) and the reason the cap rides on this transport.
@@ -886,7 +902,7 @@ mod tests {
         };
 
         // Ok body: two inserts on the tx connection → COMMIT → both rows persist.
-        with_ambient_transaction(&d, || {
+        with_ambient_transaction(&exec_context::for_driver(&d), || {
             ins(1, "a")?;
             ins(2, "b")?;
             Ok(())
@@ -899,10 +915,11 @@ mod tests {
         );
 
         // Err body: insert row 3 then fail mid-tx → ROLLBACK → row 3 must NOT persist (still 2 rows).
-        let outcome: Result<(), BehaviorError> = with_ambient_transaction(&d, || {
-            ins(3, "c")?; // this write is issued inside the tx…
-            Err(BehaviorError::new("BOOM", "mid-tx failure")) // …then the body errors → rollback
-        });
+        let outcome: Result<(), BehaviorError> =
+            with_ambient_transaction(&exec_context::for_driver(&d), || {
+                ins(3, "c")?; // this write is issued inside the tx…
+                Err(BehaviorError::new("BOOM", "mid-tx failure")) // …then the body errors → rollback
+            });
         assert!(outcome.is_err(), "the body error must propagate");
         assert_eq!(
             row_count(&d),
@@ -1036,7 +1053,9 @@ mod tests {
             if let Some(g) = guard {
                 ports.push(opts(WireValue::Null, WireValue::Null, g));
             }
-            with_ambient_driver(&d, || execute_sql(payload(ports.clone())))
+            with_ambient_context(&exec_context::for_driver(&d), || {
+                execute_sql(payload(ports.clone()))
+            })
         };
         let cap = |limit: i64| {
             wrow(&[
@@ -1101,7 +1120,7 @@ mod tests {
                 frag(true, "v = ?", WireValue::Str("zzz".into())),
             ]),
         )]);
-        let out = with_ambient_driver(&d, || {
+        let out = with_ambient_context(&exec_context::for_driver(&d), || {
             execute_sql(payload(vec![
                 opts(WireValue::Null, plan, WireValue::Null),
                 ("params", wlist(vec![])),
@@ -1138,7 +1157,9 @@ mod tests {
             ]
         };
         let run = |ports: Vec<(&str, WireValue)>| -> Result<WireValue, BehaviorError> {
-            with_ambient_driver(&d, || execute_sql(payload(ports.clone())))
+            with_ambient_context(&exec_context::for_driver(&d), || {
+                execute_sql(payload(ports.clone()))
+            })
         };
         // An `opts` record whose `whereDynamic` carries ONE fragment (the #209 cases).
         let plan_of = |frag: WireValue| -> Vec<(&str, WireValue)> {
@@ -1553,7 +1574,7 @@ mod tests {
                 ("params", wlist(vec![WireValue::Str("c".into())])),
             ])]),
         )]);
-        let out = with_ambient_driver(&d, || {
+        let out = with_ambient_context(&exec_context::for_driver(&d), || {
             execute_sql(payload(vec![
                 opts(WireValue::Null, plan, WireValue::Null),
                 ("params", wlist(vec![WireValue::int(1), WireValue::int(2)])),
@@ -1617,6 +1638,28 @@ mod tests {
         assert_eq!(e.code, "LEAF_PORT");
         assert!(
             e.message.contains("`col`") && e.message.contains("string element"),
+            "{}",
+            e.message
+        );
+
+        // The SAME two failures on the OTHER pluck port, so both are pinned on both — the TS / python /
+        // php legs pin all four, and a parity that holds on 6 of 8 is a parity nobody is watching.
+        let e = failure(pluck_keys(payload(vec![("rows", wlist(vec![]))])));
+        assert_eq!(e.code, "LEAF_PORT");
+        assert!(
+            e.message.contains("`col`") && e.message.contains("absent"),
+            "{}",
+            e.message
+        );
+
+        // `col` present but ONE bare column name, not the ordered TUPLE the port declares.
+        let e = failure(pluck_keys(payload(vec![
+            ("col", WireValue::Str("id".into())),
+            ("rows", wlist(vec![])),
+        ])));
+        assert_eq!(e.code, "LEAF_PORT");
+        assert!(
+            e.message.contains("`col`") && e.message.contains("list"),
             "{}",
             e.message
         );
@@ -1744,7 +1787,10 @@ mod tests {
                 ("params", wlist(vec![WireValue::Str("A".into())])),
                 ("sql", WireValue::Str(sql.to_string().into())),
             ];
-            with_ambient_driver(&d, || execute_sql(payload(ports))).unwrap()
+            with_ambient_context(&exec_context::for_driver(&d), || {
+                execute_sql(payload(ports))
+            })
+            .unwrap()
         };
         let returning = insert(true, "INSERT INTO users (name) VALUES (?) RETURNING id");
         match &items(&returning)[0] {

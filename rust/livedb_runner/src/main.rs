@@ -7,7 +7,7 @@
 // is why the recorder-era bundle-replay model is gone.
 //
 // The ONLY hand-wiring is what makes the generated modules callable as a HARNESS (CLAUDE.md §3.1): the
-// leaf transport (`execute_sql`) resolves the ambient driver a `with_ambient_driver` scope installs, so
+// leaf transport (`execute_sql`) resolves the ambient context a `with_ambient_context` scope installs, so
 // each entry is invoked by its SIGNATURE inside that scope; the `callEntry` switch is the sanctioned
 // signature-direct call table on `vector.entry`, not a per-endpoint exec seam.
 //
@@ -59,8 +59,8 @@ mod imp {
     use std::cell::RefCell;
 
     use litedbmodel_runtime::{
-        with_ambient_driver, BehaviorError, Driver, MysqlDriver, PostgresDriver, PreparedStatement,
-        RunInfo, SessionConnection, SqlFailure, TxConnection, Value, WireValue,
+        for_driver, with_ambient_context, BehaviorError, Driver, MysqlDriver, PostgresDriver,
+        PreparedStatement, RunInfo, SessionConnection, SqlFailure, TxConnection, Value, WireValue,
     };
     use serde_json::{Map, Number, Value as J};
 
@@ -781,7 +781,7 @@ mod imp {
         let empty = J::Object(Map::new());
         let input = v.get("input").unwrap_or(&empty);
 
-        let result = with_ambient_driver(tap, || call_entry(dialect, entry, input));
+        let result = with_ambient_context(&for_driver(tap), || call_entry(dialect, entry, input));
 
         // Snapshot the vector's statements BEFORE the DB-state queries (which run OFF the tap anyway).
         let observed: Vec<(String, Vec<Value>)> = log.borrow().clone();
