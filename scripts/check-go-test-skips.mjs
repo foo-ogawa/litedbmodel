@@ -2,15 +2,16 @@
 /**
  * The Go suite's RUN GATE (#219) — the running counterpart of `check-reachable-test-gates.mjs`.
  *
- * That script is static: it proves a `LITEDBMODEL_*` gate is declared and that some workflow loads
- * the declaration. It cannot prove the gate actually OPENED. `go test` reports a skipped test as a
- * success, so a live-DB leg that skips itself — the environment variable unset, the docker stack
- * down, a `t.Skip` added later — is indistinguishable from one that ran and passed. Sixteen go live
- * tests skipping is a green suite that executed none of them, which is how the #215 regression
- * (a named-DB transaction opening on the WRONG database) reached a commit: the checklist ran
- * `go test ./...` with the gate closed.
+ * That script is static: it proves a `LITEDBMODEL_*` gate is declared and that a workflow runs a
+ * command that loads the declaration. It cannot prove the gate was OPEN where the suite actually
+ * ran. `go test` reports a skipped test as a success, so a live-DB leg that skips itself — the
+ * environment variable unset, the docker stack down, a `t.Skip` added later — is indistinguishable
+ * from one that ran and passed. Sixteen go live tests skipping is a green suite that executed none
+ * of them, which is how the #215 regression (a named-DB transaction opening on the WRONG database)
+ * reached a commit: the checklist ran `go test ./...` with the gate closed.
  *
- * So this RUNS the suite and checks what came back against what the tree DECLARES:
+ * So this asserts the gates are open in its OWN environment, then RUNS the suite and checks what
+ * came back against what the tree DECLARES:
  *
  *     npm run go:test
  *
@@ -41,8 +42,17 @@
  * all four live go files read the SAME `LITEDBMODEL_TX_ISOLATION`, so deleting one leaves
  * `check-reachable-test-gates.mjs`'s dead-declaration clause green.
  *
+ * All of that checks the OUTCOME. It did not check the PRECONDITION the outcome is read against —
+ * that the gates were open — and so the outcome could be produced without it. Measured: replacing
+ * each of the sixteen live legs' `t.Skip(...)` with a bare `return` gave `122 passed, 0 failed,
+ * 0 skipped` and the full green line, with the gates CLOSED and no database touched. A skip is one
+ * spelling of "this leg did not run" and the budget knows only that one. So the gates are now
+ * asserted against `livedb-gates.env` BEFORE `go test` is started, which is independent of how a
+ * leg spells its bail-out. The residual hole is stated where it is checked, below.
+ *
  * It is red when any of the following holds, and prints its green line only when none does:
  *
+ *   - a gate `livedb-gates.env` declares is not open in this process — checked before anything runs.
  *   - `go test` could not be started at all, or was killed by a signal.
  *   - a package that FAILED TO BUILD. `go test -json` reports these as `build-output`/`build-fail`
  *     events keyed by `ImportPath` (NOT `Package`) and writes nothing to stderr, so a checker that
@@ -65,14 +75,16 @@ import { createInterface } from 'node:readline';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { GATES_ENV, readGateDeclarations } from './livedb-gates.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const GO_DIR = join(ROOT, 'go');
 
 /**
  * How many go tests may skip. ZERO: every live-DB leg is gated on `LITEDBMODEL_TX_ISOLATION`, which
- * `livedb-gates.env` declares and CI opens before the go step — so with the stack up nothing has a
- * reason to skip. Raising this is a decision about coverage, not a formality: name the tests and why.
+ * `livedb-gates.env` declares and CI opens before the go step — so with the gates asserted open
+ * below and the stack up, nothing has a reason to skip. Raising this is a decision about coverage,
+ * not a formality: name the tests and why.
  */
 const SKIP_BUDGET = 0;
 
@@ -134,6 +146,43 @@ for (const file of goTestFiles(GO_DIR)) {
     declared.set(`${pkg} ${name}`, relative(ROOT, file));
     if (isLive) liveInTree.add(name);
   }
+}
+
+/**
+ * The precondition every other check here is read against: the gates are OPEN. Asserted BEFORE the
+ * suite is started, because a run with them shut has nothing to say and should not happen.
+ *
+ * `SKIP_BUDGET = 0` is only meaningful when they are open — with them closed the honest result IS
+ * sixteen skips. Checking the outcome alone let the outcome be manufactured: with each live leg's
+ * `t.Skip(...)` replaced by a bare `return`, this printed `122 passed, 0 failed, 0 skipped` and a
+ * full green line with the gates closed and no database touched. The budget only knows one spelling
+ * of "did not run"; the environment the legs read is the same for all of them, so it is checked
+ * directly instead.
+ *
+ * ALL of `livedb-gates.env` is required, not just the gate go happens to read: the file is the SSoT
+ * for "the live legs are open", CI opens it in one step for every language, and an environment
+ * holding only some of it is not the one CI runs. VALUES are compared, not just presence —
+ * `LITEDBMODEL_SKIP_LIVE` has INVERTED polarity and is pinned to `0`, so merely being "set" is
+ * satisfied by the value that CLOSES it.
+ *
+ * What this does NOT prove, and it falls GREEN: with the gates open, a live leg whose body has been
+ * emptied still passes. This establishes that the legs were enabled and that every declared test
+ * reported a verdict from an uncached run — not that a given test dialled the database.
+ */
+const gateDeclarations = readGateDeclarations();
+const shut = [...gateDeclarations].filter(([name, value]) => process.env[name] !== value);
+if (shut.length > 0) {
+  console.error(
+    `\n❌ ${shut.length} of the ${gateDeclarations.size} live-DB gates \`${GATES_ENV}\` declares are not open in this ` +
+      `process, so the go suite would run with its live-DB legs disabled — and a leg that does not run reports nothing ` +
+      `this check could catch:\n` +
+      shut
+        .map(([n, v]) => `      ${n}: declared ${JSON.stringify(v)}, this environment has ${process.env[n] === undefined ? '(unset)' : JSON.stringify(process.env[n])}`)
+        .join('\n') +
+      `\n\n      npm run docker:livedb:up && set -a && . ./${GATES_ENV} && set +a\n` +
+      `      (CI opens them in conformance.yml, step "Open the live-DB test gates".)`,
+  );
+  process.exit(1);
 }
 
 const go = spawn('go', ['test', './...', '-json', '-count=1'], {
@@ -230,8 +279,8 @@ if (skipped.length > SKIP_BUDGET) {
   problems.push(
     `${skipped.length} go test(s) SKIPPED, budget ${SKIP_BUDGET}. A skipped test is not a passing test:\n` +
       named(skipped) +
-      `\n\n      Open the live-DB gates and bring the stack up, then re-run:\n` +
-      `      npm run docker:livedb:up && set -a && . ./livedb-gates.env && set +a`,
+      `\n\n      The gates were open, so this is not a closed gate — bring the stack up and re-run:\n` +
+      `      npm run docker:livedb:up`,
   );
 }
 if (neverRan.length > 0) {
@@ -254,7 +303,7 @@ if (liveGone.length > 0) {
       list(liveGone) +
       `\n\n      Nothing else notices this. A source scan cannot miss a test that is not there, and\n` +
       `      all four live files read the SAME LITEDBMODEL_TX_ISOLATION, so the declaration in\n` +
-      `      livedb-gates.env stays alive and check-reachable-test-gates.mjs stays green.`,
+      `      ${GATES_ENV} stays alive and check-reachable-test-gates.mjs stays green.`,
   );
 }
 if (liveUnlisted.length > 0) {
@@ -287,7 +336,8 @@ if (problems.length > 0) {
   process.exit(1);
 }
 console.log(
-  `✅ every go package built; all ${declared.size} tests the tree declares RAN uncached (-count=1) and passed ` +
-    `(${passed.length} verdicts incl. subtests, ${skipped.length} skipped, budget ${SKIP_BUDGET}); ` +
-    `all ${LIVE_TESTS.length} live-DB legs still present`,
+  `✅ the ${gateDeclarations.size} live-DB gates ${GATES_ENV} declares were OPEN in this process before the suite started; ` +
+    `every go package built; each of the ${declared.size} tests the tree declares reported a verdict from an UNCACHED ` +
+    `(-count=1) run, and every verdict was a pass (${passed.length} incl. subtests, ${skipped.length} skipped, ` +
+    `budget ${SKIP_BUDGET}); all ${LIVE_TESTS.length} live-DB legs listed in LIVE_TESTS are still present in the tree`,
 );
