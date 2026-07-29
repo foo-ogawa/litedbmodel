@@ -146,6 +146,19 @@ type FeedRow struct {
 	Title     *string  // "title"
 }
 
+type ExecOptions struct {
+	Guard        *CapGuard         // "guard"
+	Returning    bool              // "returning"
+	WhereDynamic *DynamicWherePlan // "whereDynamic"
+	Write        bool              // "write"
+}
+
+type CapGuard struct {
+	Limit    int64   // "limit"
+	Model    *string // "model"
+	Relation string  // "relation"
+}
+
 type DynamicWherePlan struct {
 	Frags []DynamicWhereFrag // "frags"
 }
@@ -197,12 +210,6 @@ type PostsWithAuthorRow_author struct {
 	Id         *float64 // "id"
 	Name       *string  // "name"
 	Post_count *float64 // "post_count"
-}
-
-type CapGuard struct {
-	Limit    int64   // "limit"
-	Model    *string // "model"
-	Relation string  // "relation"
 }
 
 type UsersWithCappedPostsRow struct {
@@ -344,7 +351,7 @@ func Posts(authorId int64) ([]PostsRow, error) {
 	_ = t_n0
 	_ = produced_n0
 	// ── op 'n0' (executeSQL) ──
-	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireInt(authorId)})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, author_id, title, status, created_at FROM conf_posts WHERE author_id = ? ORDER BY id ASC")}, wire.WireField{Key: "write", Val: wire.WireBool(false)}})
+	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireInt(authorId)})}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, author_id, title, status, created_at FROM conf_posts WHERE author_id = ? ORDER BY id ASC")}})
 	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
@@ -430,7 +437,7 @@ func PostsTop() ([]PostsTopRow, error) {
 	_ = t_n0
 	_ = produced_n0
 	// ── op 'n0' (executeSQL) ──
-	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, author_id, title, status, created_at FROM conf_posts ORDER BY id ASC LIMIT 2")}, wire.WireField{Key: "write", Val: wire.WireBool(false)}})
+	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{})}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, author_id, title, status, created_at FROM conf_posts ORDER BY id ASC LIMIT 2")}})
 	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
@@ -516,7 +523,7 @@ func Page(limit int64, offset int64) ([]PageRow, error) {
 	_ = t_n0
 	_ = produced_n0
 	// ── op 'n0' (executeSQL) ──
-	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireInt(limit), wire.WireInt(offset)})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, title FROM conf_posts ORDER BY id ASC LIMIT ? OFFSET ?")}, wire.WireField{Key: "write", Val: wire.WireBool(false)}})
+	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireInt(limit), wire.WireInt(offset)})}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, title FROM conf_posts ORDER BY id ASC LIMIT ? OFFSET ?")}})
 	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
@@ -582,7 +589,7 @@ func PostsByIds(ids []int64) ([]PostsByIdsRow, error) {
 	_ = t_n0
 	_ = produced_n0
 	// ── op 'n0' (executeSQL) ──
-	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range ids { it0 = append(it0, wire.WireInt(e0)) }; return wire.WireListOf(it0) }()})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, title FROM conf_posts WHERE id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) ORDER BY id ASC")}, wire.WireField{Key: "write", Val: wire.WireBool(false)}})
+	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range ids { it0 = append(it0, wire.WireInt(e0)) }; return wire.WireListOf(it0) }()})}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, title FROM conf_posts WHERE id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) ORDER BY id ASC")}})
 	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
@@ -649,8 +656,9 @@ func Feed(authorId int64, status *string, since *string) ([]FeedRow, error) {
 	_ = produced_n0
 	// ── op 'n0' (executeSQL) ──
 	pf_n0, pe_n0 := func() ([]wire.WireField, error) {
-		ex_15 := DynamicWherePlan{Frags: []DynamicWhereFrag{DynamicWhereFrag{Params: []*wire.WireValue{func() *wire.WireValue { __oo := status; if __oo == nil { return nil }; __ov := (*__oo); __ob := wire.WireStr(__ov); return &__ob }()}, Skipped: (status == nil), Sql: "status = ?"}, DynamicWhereFrag{Params: []*wire.WireValue{func() *wire.WireValue { __oo := since; if __oo == nil { return nil }; __ov := (*__oo); __ob := wire.WireStr(__ov); return &__ob }()}, Skipped: (since == nil), Sql: "created_at >= ?"}}}
-		return []wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireInt(authorId)})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, author_id, title, status FROM conf_posts WHERE author_id = ? ORDER BY id ASC")}, wire.WireField{Key: "whereDynamic", Val: func() wire.WireValue { o0 := &ex_15; if o0 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "frags", Val: func() wire.WireValue { it1 := []wire.WireValue{}; for _, e1 := range (*o0).Frags { it1 = append(it1, wire.WireRowOf([]wire.WireField{{Key: "params", Val: func() wire.WireValue { it3 := []wire.WireValue{}; for _, e3 := range e1.Params { it3 = append(it3, func() wire.WireValue { o4 := e3; if o4 == nil { return wire.WireNull() }; return (*o4) }()) }; return wire.WireListOf(it3) }()}, {Key: "skipped", Val: wire.WireBool(e1.Skipped)}, {Key: "sql", Val: wire.WireStr(e1.Sql)}})) }; return wire.WireListOf(it1) }()}}) }()}, wire.WireField{Key: "write", Val: wire.WireBool(false)}}, nil
+		ex_60 := DynamicWherePlan{Frags: []DynamicWhereFrag{DynamicWhereFrag{Params: []*wire.WireValue{func() *wire.WireValue { __oo := status; if __oo == nil { return nil }; __ov := (*__oo); __ob := wire.WireStr(__ov); return &__ob }()}, Skipped: (status == nil), Sql: "status = ?"}, DynamicWhereFrag{Params: []*wire.WireValue{func() *wire.WireValue { __oo := since; if __oo == nil { return nil }; __ov := (*__oo); __ob := wire.WireStr(__ov); return &__ob }()}, Skipped: (since == nil), Sql: "created_at >= ?"}}}
+		ex_61 := ExecOptions{Guard: nil, Returning: false, WhereDynamic: &ex_60, Write: false}
+		return []wire.WireField{wire.WireField{Key: "opts", Val: func() wire.WireValue { o0 := &ex_61; if o0 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "guard", Val: func() wire.WireValue { o1 := (*o0).Guard; if o1 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "limit", Val: wire.WireInt((*o1).Limit)}, {Key: "model", Val: func() wire.WireValue { o2 := (*o1).Model; if o2 == nil { return wire.WireNull() }; return wire.WireStr((*o2)) }()}, {Key: "relation", Val: wire.WireStr((*o1).Relation)}}) }()}, {Key: "returning", Val: wire.WireBool((*o0).Returning)}, {Key: "whereDynamic", Val: func() wire.WireValue { o1 := (*o0).WhereDynamic; if o1 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "frags", Val: func() wire.WireValue { it2 := []wire.WireValue{}; for _, e2 := range (*o1).Frags { it2 = append(it2, wire.WireRowOf([]wire.WireField{{Key: "params", Val: func() wire.WireValue { it4 := []wire.WireValue{}; for _, e4 := range e2.Params { it4 = append(it4, func() wire.WireValue { o5 := e4; if o5 == nil { return wire.WireNull() }; return (*o5) }()) }; return wire.WireListOf(it4) }()}, {Key: "skipped", Val: wire.WireBool(e2.Skipped)}, {Key: "sql", Val: wire.WireStr(e2.Sql)}})) }; return wire.WireListOf(it2) }()}}) }()}, {Key: "write", Val: wire.WireBool((*o0).Write)}}) }()}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireInt(authorId)})}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, author_id, title, status FROM conf_posts WHERE author_id = ? ORDER BY id ASC")}}, nil
 	}()
 	if pe_n0 != nil {
 		return nil, pe_n0
@@ -735,8 +743,9 @@ func PagedFeed(authorId int64, minId *int64, status *string, limit int64, offset
 	_ = produced_n0
 	// ── op 'n0' (executeSQL) ──
 	pf_n0, pe_n0 := func() ([]wire.WireField, error) {
-		ex_16 := DynamicWherePlan{Frags: []DynamicWhereFrag{DynamicWhereFrag{Params: []*wire.WireValue{func() *wire.WireValue { __oo := minId; if __oo == nil { return nil }; __ov := (*__oo); __ob := wire.WireInt(__ov); return &__ob }()}, Skipped: (minId == nil), Sql: "id >= ?"}, DynamicWhereFrag{Params: []*wire.WireValue{func() *wire.WireValue { __oo := status; if __oo == nil { return nil }; __ov := (*__oo); __ob := wire.WireStr(__ov); return &__ob }()}, Skipped: (status == nil), Sql: "status = ?"}}}
-		return []wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireInt(authorId), wire.WireInt(limit), wire.WireInt(offset)})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, author_id, title, status FROM conf_posts WHERE author_id = ? ORDER BY id ASC LIMIT ? OFFSET ?")}, wire.WireField{Key: "whereDynamic", Val: func() wire.WireValue { o0 := &ex_16; if o0 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "frags", Val: func() wire.WireValue { it1 := []wire.WireValue{}; for _, e1 := range (*o0).Frags { it1 = append(it1, wire.WireRowOf([]wire.WireField{{Key: "params", Val: func() wire.WireValue { it3 := []wire.WireValue{}; for _, e3 := range e1.Params { it3 = append(it3, func() wire.WireValue { o4 := e3; if o4 == nil { return wire.WireNull() }; return (*o4) }()) }; return wire.WireListOf(it3) }()}, {Key: "skipped", Val: wire.WireBool(e1.Skipped)}, {Key: "sql", Val: wire.WireStr(e1.Sql)}})) }; return wire.WireListOf(it1) }()}}) }()}, wire.WireField{Key: "write", Val: wire.WireBool(false)}}, nil
+		ex_62 := DynamicWherePlan{Frags: []DynamicWhereFrag{DynamicWhereFrag{Params: []*wire.WireValue{func() *wire.WireValue { __oo := minId; if __oo == nil { return nil }; __ov := (*__oo); __ob := wire.WireInt(__ov); return &__ob }()}, Skipped: (minId == nil), Sql: "id >= ?"}, DynamicWhereFrag{Params: []*wire.WireValue{func() *wire.WireValue { __oo := status; if __oo == nil { return nil }; __ov := (*__oo); __ob := wire.WireStr(__ov); return &__ob }()}, Skipped: (status == nil), Sql: "status = ?"}}}
+		ex_63 := ExecOptions{Guard: nil, Returning: false, WhereDynamic: &ex_62, Write: false}
+		return []wire.WireField{wire.WireField{Key: "opts", Val: func() wire.WireValue { o0 := &ex_63; if o0 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "guard", Val: func() wire.WireValue { o1 := (*o0).Guard; if o1 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "limit", Val: wire.WireInt((*o1).Limit)}, {Key: "model", Val: func() wire.WireValue { o2 := (*o1).Model; if o2 == nil { return wire.WireNull() }; return wire.WireStr((*o2)) }()}, {Key: "relation", Val: wire.WireStr((*o1).Relation)}}) }()}, {Key: "returning", Val: wire.WireBool((*o0).Returning)}, {Key: "whereDynamic", Val: func() wire.WireValue { o1 := (*o0).WhereDynamic; if o1 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "frags", Val: func() wire.WireValue { it2 := []wire.WireValue{}; for _, e2 := range (*o1).Frags { it2 = append(it2, wire.WireRowOf([]wire.WireField{{Key: "params", Val: func() wire.WireValue { it4 := []wire.WireValue{}; for _, e4 := range e2.Params { it4 = append(it4, func() wire.WireValue { o5 := e4; if o5 == nil { return wire.WireNull() }; return (*o5) }()) }; return wire.WireListOf(it4) }()}, {Key: "skipped", Val: wire.WireBool(e2.Skipped)}, {Key: "sql", Val: wire.WireStr(e2.Sql)}})) }; return wire.WireListOf(it2) }()}}) }()}, {Key: "write", Val: wire.WireBool((*o0).Write)}}) }()}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireInt(authorId), wire.WireInt(limit), wire.WireInt(offset)})}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, author_id, title, status FROM conf_posts WHERE author_id = ? ORDER BY id ASC LIMIT ? OFFSET ?")}}, nil
 	}()
 	if pe_n0 != nil {
 		return nil, pe_n0
@@ -844,7 +853,7 @@ func UsersWithPosts() ([]UsersWithPostsRow, error) {
 	_ = t_n6
 	_ = produced_n6
 	// ── op 'n0' (executeSQL) ──
-	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, name FROM conf_users ORDER BY id ASC")}, wire.WireField{Key: "write", Val: wire.WireBool(false)}})
+	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{})}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, name FROM conf_users ORDER BY id ASC")}})
 	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
@@ -881,7 +890,7 @@ func UsersWithPosts() ([]UsersWithPostsRow, error) {
 	}
 	// ── op 'n2' (executeSQL, parent:n1) ──
 	if produced_n1 {
-		payload_n2 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireListOf(t_n1)})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, author_id, title, status, created_at FROM conf_posts WHERE author_id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) ORDER BY id ASC")}, wire.WireField{Key: "write", Val: wire.WireBool(false)}})
+		payload_n2 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireListOf(t_n1)})}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, author_id, title, status, created_at FROM conf_posts WHERE author_id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) ORDER BY id ASC")}})
 		wire_n2, wire_n2Err := litedbmodel_runtime.ExecuteSQL(payload_n2)
 		if wire_n2Err != nil {
 			return nil, opFailed("n2", "fail", wire_n2Err)
@@ -919,7 +928,7 @@ func UsersWithPosts() ([]UsersWithPostsRow, error) {
 	}
 	// ── op 'n4' (executeSQL, parent:n3) ──
 	if produced_n3 {
-		payload_n4 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireListOf(t_n3)})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, post_id, label FROM conf_tags WHERE post_id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) ORDER BY id ASC")}, wire.WireField{Key: "write", Val: wire.WireBool(false)}})
+		payload_n4 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireListOf(t_n3)})}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, post_id, label FROM conf_tags WHERE post_id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) ORDER BY id ASC")}})
 		wire_n4, wire_n4Err := litedbmodel_runtime.ExecuteSQL(payload_n4)
 		if wire_n4Err != nil {
 			return nil, opFailed("n4", "fail", wire_n4Err)
@@ -1140,7 +1149,7 @@ func PostsWithAuthor() ([]PostsWithAuthorRow, error) {
 	_ = t_n3
 	_ = produced_n3
 	// ── op 'n0' (executeSQL) ──
-	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, author_id, title, status, created_at FROM conf_posts ORDER BY id ASC")}, wire.WireField{Key: "write", Val: wire.WireBool(false)}})
+	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{})}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, author_id, title, status, created_at FROM conf_posts ORDER BY id ASC")}})
 	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
@@ -1177,7 +1186,7 @@ func PostsWithAuthor() ([]PostsWithAuthorRow, error) {
 	}
 	// ── op 'n2' (executeSQL, parent:n1) ──
 	if produced_n1 {
-		payload_n2 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireListOf(t_n1)})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, name, post_count FROM conf_users WHERE id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt)")}, wire.WireField{Key: "write", Val: wire.WireBool(false)}})
+		payload_n2 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireListOf(t_n1)})}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, name, post_count FROM conf_users WHERE id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt)")}})
 		wire_n2, wire_n2Err := litedbmodel_runtime.ExecuteSQL(payload_n2)
 		if wire_n2Err != nil {
 			return nil, opFailed("n2", "fail", wire_n2Err)
@@ -1321,7 +1330,7 @@ func UsersWithCappedPosts() ([]UsersWithCappedPostsRow, error) {
 	_ = t_n3
 	_ = produced_n3
 	// ── op 'n0' (executeSQL) ──
-	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, name FROM conf_users ORDER BY id ASC")}, wire.WireField{Key: "write", Val: wire.WireBool(false)}})
+	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{})}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, name FROM conf_users ORDER BY id ASC")}})
 	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
@@ -1359,10 +1368,10 @@ func UsersWithCappedPosts() ([]UsersWithCappedPostsRow, error) {
 	// ── op 'n2' (executeSQL, parent:n1) ──
 	if produced_n1 {
 		pf_n2, pe_n2 := func() ([]wire.WireField, error) {
-			ex_17 := "conf_posts"
-			ex_18 := CapGuard{Limit: int64(2), Model: &ex_17, Relation: "cappedPosts"}
-			ex_19 := DynamicWherePlan{Frags: []DynamicWhereFrag{}}
-			return []wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "guard", Val: func() wire.WireValue { o0 := &ex_18; if o0 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "limit", Val: wire.WireInt((*o0).Limit)}, {Key: "model", Val: func() wire.WireValue { o1 := (*o0).Model; if o1 == nil { return wire.WireNull() }; return wire.WireStr((*o1)) }()}, {Key: "relation", Val: wire.WireStr((*o0).Relation)}}) }()}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireListOf(t_n1)})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, author_id, title, status, created_at FROM conf_posts WHERE author_id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) ORDER BY id ASC")}, wire.WireField{Key: "whereDynamic", Val: func() wire.WireValue { o0 := &ex_19; if o0 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "frags", Val: func() wire.WireValue { it1 := []wire.WireValue{}; for _, e1 := range (*o0).Frags { it1 = append(it1, wire.WireRowOf([]wire.WireField{{Key: "params", Val: func() wire.WireValue { it3 := []wire.WireValue{}; for _, e3 := range e1.Params { it3 = append(it3, func() wire.WireValue { o4 := e3; if o4 == nil { return wire.WireNull() }; return (*o4) }()) }; return wire.WireListOf(it3) }()}, {Key: "skipped", Val: wire.WireBool(e1.Skipped)}, {Key: "sql", Val: wire.WireStr(e1.Sql)}})) }; return wire.WireListOf(it1) }()}}) }()}, wire.WireField{Key: "write", Val: wire.WireBool(false)}}, nil
+			ex_64 := "conf_posts"
+			ex_65 := CapGuard{Limit: int64(2), Model: &ex_64, Relation: "cappedPosts"}
+			ex_66 := ExecOptions{Guard: &ex_65, Returning: false, WhereDynamic: nil, Write: false}
+			return []wire.WireField{wire.WireField{Key: "opts", Val: func() wire.WireValue { o0 := &ex_66; if o0 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "guard", Val: func() wire.WireValue { o1 := (*o0).Guard; if o1 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "limit", Val: wire.WireInt((*o1).Limit)}, {Key: "model", Val: func() wire.WireValue { o2 := (*o1).Model; if o2 == nil { return wire.WireNull() }; return wire.WireStr((*o2)) }()}, {Key: "relation", Val: wire.WireStr((*o1).Relation)}}) }()}, {Key: "returning", Val: wire.WireBool((*o0).Returning)}, {Key: "whereDynamic", Val: func() wire.WireValue { o1 := (*o0).WhereDynamic; if o1 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "frags", Val: func() wire.WireValue { it2 := []wire.WireValue{}; for _, e2 := range (*o1).Frags { it2 = append(it2, wire.WireRowOf([]wire.WireField{{Key: "params", Val: func() wire.WireValue { it4 := []wire.WireValue{}; for _, e4 := range e2.Params { it4 = append(it4, func() wire.WireValue { o5 := e4; if o5 == nil { return wire.WireNull() }; return (*o5) }()) }; return wire.WireListOf(it4) }()}, {Key: "skipped", Val: wire.WireBool(e2.Skipped)}, {Key: "sql", Val: wire.WireStr(e2.Sql)}})) }; return wire.WireListOf(it2) }()}}) }()}, {Key: "write", Val: wire.WireBool((*o0).Write)}}) }()}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireListOf(t_n1)})}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, author_id, title, status, created_at FROM conf_posts WHERE author_id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) ORDER BY id ASC")}}, nil
 		}()
 		if pe_n2 != nil {
 			return nil, pe_n2
@@ -1524,7 +1533,7 @@ func UsersWithUncappedPosts() ([]UsersWithUncappedPostsRow, error) {
 	_ = t_n3
 	_ = produced_n3
 	// ── op 'n0' (executeSQL) ──
-	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, name FROM conf_users ORDER BY id ASC")}, wire.WireField{Key: "write", Val: wire.WireBool(false)}})
+	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{})}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, name FROM conf_users ORDER BY id ASC")}})
 	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
@@ -1561,7 +1570,7 @@ func UsersWithUncappedPosts() ([]UsersWithUncappedPostsRow, error) {
 	}
 	// ── op 'n2' (executeSQL, parent:n1) ──
 	if produced_n1 {
-		payload_n2 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireListOf(t_n1)})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, author_id, title, status, created_at FROM conf_posts WHERE author_id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) ORDER BY id ASC")}, wire.WireField{Key: "write", Val: wire.WireBool(false)}})
+		payload_n2 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireListOf(t_n1)})}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, author_id, title, status, created_at FROM conf_posts WHERE author_id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) ORDER BY id ASC")}})
 		wire_n2, wire_n2Err := litedbmodel_runtime.ExecuteSQL(payload_n2)
 		if wire_n2Err != nil {
 			return nil, opFailed("n2", "fail", wire_n2Err)
@@ -1718,7 +1727,7 @@ func UsersWithTopPosts() ([]UsersWithTopPostsRow, error) {
 	_ = t_n3
 	_ = produced_n3
 	// ── op 'n0' (executeSQL) ──
-	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, name FROM conf_users ORDER BY id ASC")}, wire.WireField{Key: "write", Val: wire.WireBool(false)}})
+	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{})}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, name FROM conf_users ORDER BY id ASC")}})
 	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
@@ -1755,7 +1764,7 @@ func UsersWithTopPosts() ([]UsersWithTopPostsRow, error) {
 	}
 	// ── op 'n2' (executeSQL, parent:n1) ──
 	if produced_n1 {
-		payload_n2 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireListOf(t_n1)})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("WITH ranked AS (SELECT *, ROW_NUMBER() OVER (PARTITION BY author_id ORDER BY id ASC) AS _rn FROM conf_posts WHERE author_id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt)) SELECT * FROM ranked WHERE _rn <= 1")}, wire.WireField{Key: "write", Val: wire.WireBool(false)}})
+		payload_n2 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireListOf(t_n1)})}, wire.WireField{Key: "sql", Val: wire.WireStr("WITH ranked AS (SELECT *, ROW_NUMBER() OVER (PARTITION BY author_id ORDER BY id ASC) AS _rn FROM conf_posts WHERE author_id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt)) SELECT * FROM ranked WHERE _rn <= 1")}})
 		wire_n2, wire_n2Err := litedbmodel_runtime.ExecuteSQL(payload_n2)
 		if wire_n2Err != nil {
 			return nil, opFailed("n2", "fail", wire_n2Err)
@@ -1900,7 +1909,14 @@ func CreatePost(id int64, authorId int64, title string, status string, createdAt
 	_ = t_n0
 	_ = produced_n0
 	// ── op 'n0' (executeSQL) ──
-	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireInt(authorId), wire.WireStr(createdAt), wire.WireInt(id), wire.WireStr(status), wire.WireStr(title)})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("INSERT INTO conf_posts (author_id, created_at, id, status, title) VALUES (?, ?, ?, ?, ?)")}, wire.WireField{Key: "write", Val: wire.WireBool(true)}})
+	pf_n0, pe_n0 := func() ([]wire.WireField, error) {
+		ex_67 := ExecOptions{Guard: nil, Returning: false, WhereDynamic: nil, Write: true}
+		return []wire.WireField{wire.WireField{Key: "opts", Val: func() wire.WireValue { o0 := &ex_67; if o0 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "guard", Val: func() wire.WireValue { o1 := (*o0).Guard; if o1 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "limit", Val: wire.WireInt((*o1).Limit)}, {Key: "model", Val: func() wire.WireValue { o2 := (*o1).Model; if o2 == nil { return wire.WireNull() }; return wire.WireStr((*o2)) }()}, {Key: "relation", Val: wire.WireStr((*o1).Relation)}}) }()}, {Key: "returning", Val: wire.WireBool((*o0).Returning)}, {Key: "whereDynamic", Val: func() wire.WireValue { o1 := (*o0).WhereDynamic; if o1 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "frags", Val: func() wire.WireValue { it2 := []wire.WireValue{}; for _, e2 := range (*o1).Frags { it2 = append(it2, wire.WireRowOf([]wire.WireField{{Key: "params", Val: func() wire.WireValue { it4 := []wire.WireValue{}; for _, e4 := range e2.Params { it4 = append(it4, func() wire.WireValue { o5 := e4; if o5 == nil { return wire.WireNull() }; return (*o5) }()) }; return wire.WireListOf(it4) }()}, {Key: "skipped", Val: wire.WireBool(e2.Skipped)}, {Key: "sql", Val: wire.WireStr(e2.Sql)}})) }; return wire.WireListOf(it2) }()}}) }()}, {Key: "write", Val: wire.WireBool((*o0).Write)}}) }()}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireInt(authorId), wire.WireStr(createdAt), wire.WireInt(id), wire.WireStr(status), wire.WireStr(title)})}, wire.WireField{Key: "sql", Val: wire.WireStr("INSERT INTO conf_posts (author_id, created_at, id, status, title) VALUES (?, ?, ?, ?, ?)")}}, nil
+	}()
+	if pe_n0 != nil {
+		return nil, pe_n0
+	}
+	payload_n0 := wire.WireRowOfFields(pf_n0)
 	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
@@ -1973,7 +1989,14 @@ func RenamePost(title string, id int64) ([]WriteSummary, error) {
 	_ = t_n0
 	_ = produced_n0
 	// ── op 'n0' (executeSQL) ──
-	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireStr(title), wire.WireInt(id)})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("UPDATE conf_posts SET title = ? WHERE id = ?")}, wire.WireField{Key: "write", Val: wire.WireBool(true)}})
+	pf_n0, pe_n0 := func() ([]wire.WireField, error) {
+		ex_68 := ExecOptions{Guard: nil, Returning: false, WhereDynamic: nil, Write: true}
+		return []wire.WireField{wire.WireField{Key: "opts", Val: func() wire.WireValue { o0 := &ex_68; if o0 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "guard", Val: func() wire.WireValue { o1 := (*o0).Guard; if o1 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "limit", Val: wire.WireInt((*o1).Limit)}, {Key: "model", Val: func() wire.WireValue { o2 := (*o1).Model; if o2 == nil { return wire.WireNull() }; return wire.WireStr((*o2)) }()}, {Key: "relation", Val: wire.WireStr((*o1).Relation)}}) }()}, {Key: "returning", Val: wire.WireBool((*o0).Returning)}, {Key: "whereDynamic", Val: func() wire.WireValue { o1 := (*o0).WhereDynamic; if o1 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "frags", Val: func() wire.WireValue { it2 := []wire.WireValue{}; for _, e2 := range (*o1).Frags { it2 = append(it2, wire.WireRowOf([]wire.WireField{{Key: "params", Val: func() wire.WireValue { it4 := []wire.WireValue{}; for _, e4 := range e2.Params { it4 = append(it4, func() wire.WireValue { o5 := e4; if o5 == nil { return wire.WireNull() }; return (*o5) }()) }; return wire.WireListOf(it4) }()}, {Key: "skipped", Val: wire.WireBool(e2.Skipped)}, {Key: "sql", Val: wire.WireStr(e2.Sql)}})) }; return wire.WireListOf(it2) }()}}) }()}, {Key: "write", Val: wire.WireBool((*o0).Write)}}) }()}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireStr(title), wire.WireInt(id)})}, wire.WireField{Key: "sql", Val: wire.WireStr("UPDATE conf_posts SET title = ? WHERE id = ?")}}, nil
+	}()
+	if pe_n0 != nil {
+		return nil, pe_n0
+	}
+	payload_n0 := wire.WireRowOfFields(pf_n0)
 	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
@@ -2046,7 +2069,14 @@ func RemovePost(id int64) ([]WriteSummary, error) {
 	_ = t_n0
 	_ = produced_n0
 	// ── op 'n0' (executeSQL) ──
-	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireInt(id)})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("DELETE FROM conf_posts WHERE id = ?")}, wire.WireField{Key: "write", Val: wire.WireBool(true)}})
+	pf_n0, pe_n0 := func() ([]wire.WireField, error) {
+		ex_69 := ExecOptions{Guard: nil, Returning: false, WhereDynamic: nil, Write: true}
+		return []wire.WireField{wire.WireField{Key: "opts", Val: func() wire.WireValue { o0 := &ex_69; if o0 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "guard", Val: func() wire.WireValue { o1 := (*o0).Guard; if o1 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "limit", Val: wire.WireInt((*o1).Limit)}, {Key: "model", Val: func() wire.WireValue { o2 := (*o1).Model; if o2 == nil { return wire.WireNull() }; return wire.WireStr((*o2)) }()}, {Key: "relation", Val: wire.WireStr((*o1).Relation)}}) }()}, {Key: "returning", Val: wire.WireBool((*o0).Returning)}, {Key: "whereDynamic", Val: func() wire.WireValue { o1 := (*o0).WhereDynamic; if o1 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "frags", Val: func() wire.WireValue { it2 := []wire.WireValue{}; for _, e2 := range (*o1).Frags { it2 = append(it2, wire.WireRowOf([]wire.WireField{{Key: "params", Val: func() wire.WireValue { it4 := []wire.WireValue{}; for _, e4 := range e2.Params { it4 = append(it4, func() wire.WireValue { o5 := e4; if o5 == nil { return wire.WireNull() }; return (*o5) }()) }; return wire.WireListOf(it4) }()}, {Key: "skipped", Val: wire.WireBool(e2.Skipped)}, {Key: "sql", Val: wire.WireStr(e2.Sql)}})) }; return wire.WireListOf(it2) }()}}) }()}, {Key: "write", Val: wire.WireBool((*o0).Write)}}) }()}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireInt(id)})}, wire.WireField{Key: "sql", Val: wire.WireStr("DELETE FROM conf_posts WHERE id = ?")}}, nil
+	}()
+	if pe_n0 != nil {
+		return nil, pe_n0
+	}
+	payload_n0 := wire.WireRowOfFields(pf_n0)
 	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
@@ -2119,7 +2149,14 @@ func CreatePostReturning(id int64, authorId int64, title string, status string, 
 	_ = t_n0
 	_ = produced_n0
 	// ── op 'n0' (executeSQL) ──
-	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireInt(authorId), wire.WireStr(createdAt), wire.WireInt(id), wire.WireStr(status), wire.WireStr(title)})}, wire.WireField{Key: "returning", Val: wire.WireBool(true)}, wire.WireField{Key: "sql", Val: wire.WireStr("INSERT INTO conf_posts (author_id, created_at, id, status, title) VALUES (?, ?, ?, ?, ?) RETURNING id, title /*scp:pk=id;ai=*/")}, wire.WireField{Key: "write", Val: wire.WireBool(true)}})
+	pf_n0, pe_n0 := func() ([]wire.WireField, error) {
+		ex_70 := ExecOptions{Guard: nil, Returning: true, WhereDynamic: nil, Write: true}
+		return []wire.WireField{wire.WireField{Key: "opts", Val: func() wire.WireValue { o0 := &ex_70; if o0 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "guard", Val: func() wire.WireValue { o1 := (*o0).Guard; if o1 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "limit", Val: wire.WireInt((*o1).Limit)}, {Key: "model", Val: func() wire.WireValue { o2 := (*o1).Model; if o2 == nil { return wire.WireNull() }; return wire.WireStr((*o2)) }()}, {Key: "relation", Val: wire.WireStr((*o1).Relation)}}) }()}, {Key: "returning", Val: wire.WireBool((*o0).Returning)}, {Key: "whereDynamic", Val: func() wire.WireValue { o1 := (*o0).WhereDynamic; if o1 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "frags", Val: func() wire.WireValue { it2 := []wire.WireValue{}; for _, e2 := range (*o1).Frags { it2 = append(it2, wire.WireRowOf([]wire.WireField{{Key: "params", Val: func() wire.WireValue { it4 := []wire.WireValue{}; for _, e4 := range e2.Params { it4 = append(it4, func() wire.WireValue { o5 := e4; if o5 == nil { return wire.WireNull() }; return (*o5) }()) }; return wire.WireListOf(it4) }()}, {Key: "skipped", Val: wire.WireBool(e2.Skipped)}, {Key: "sql", Val: wire.WireStr(e2.Sql)}})) }; return wire.WireListOf(it2) }()}}) }()}, {Key: "write", Val: wire.WireBool((*o0).Write)}}) }()}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireInt(authorId), wire.WireStr(createdAt), wire.WireInt(id), wire.WireStr(status), wire.WireStr(title)})}, wire.WireField{Key: "sql", Val: wire.WireStr("INSERT INTO conf_posts (author_id, created_at, id, status, title) VALUES (?, ?, ?, ?, ?) RETURNING id, title /*scp:pk=id;ai=*/")}}, nil
+	}()
+	if pe_n0 != nil {
+		return nil, pe_n0
+	}
+	payload_n0 := wire.WireRowOfFields(pf_n0)
 	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
@@ -2185,7 +2222,14 @@ func RenamePostReturning(title string, id int64) ([]RenamePostReturningRow, erro
 	_ = t_n0
 	_ = produced_n0
 	// ── op 'n0' (executeSQL) ──
-	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireStr(title), wire.WireInt(id)})}, wire.WireField{Key: "returning", Val: wire.WireBool(true)}, wire.WireField{Key: "sql", Val: wire.WireStr("UPDATE conf_posts SET title = ? WHERE id = ? RETURNING id, title /*scp:pk=id;ai=*/")}, wire.WireField{Key: "write", Val: wire.WireBool(true)}})
+	pf_n0, pe_n0 := func() ([]wire.WireField, error) {
+		ex_71 := ExecOptions{Guard: nil, Returning: true, WhereDynamic: nil, Write: true}
+		return []wire.WireField{wire.WireField{Key: "opts", Val: func() wire.WireValue { o0 := &ex_71; if o0 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "guard", Val: func() wire.WireValue { o1 := (*o0).Guard; if o1 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "limit", Val: wire.WireInt((*o1).Limit)}, {Key: "model", Val: func() wire.WireValue { o2 := (*o1).Model; if o2 == nil { return wire.WireNull() }; return wire.WireStr((*o2)) }()}, {Key: "relation", Val: wire.WireStr((*o1).Relation)}}) }()}, {Key: "returning", Val: wire.WireBool((*o0).Returning)}, {Key: "whereDynamic", Val: func() wire.WireValue { o1 := (*o0).WhereDynamic; if o1 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "frags", Val: func() wire.WireValue { it2 := []wire.WireValue{}; for _, e2 := range (*o1).Frags { it2 = append(it2, wire.WireRowOf([]wire.WireField{{Key: "params", Val: func() wire.WireValue { it4 := []wire.WireValue{}; for _, e4 := range e2.Params { it4 = append(it4, func() wire.WireValue { o5 := e4; if o5 == nil { return wire.WireNull() }; return (*o5) }()) }; return wire.WireListOf(it4) }()}, {Key: "skipped", Val: wire.WireBool(e2.Skipped)}, {Key: "sql", Val: wire.WireStr(e2.Sql)}})) }; return wire.WireListOf(it2) }()}}) }()}, {Key: "write", Val: wire.WireBool((*o0).Write)}}) }()}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireStr(title), wire.WireInt(id)})}, wire.WireField{Key: "sql", Val: wire.WireStr("UPDATE conf_posts SET title = ? WHERE id = ? RETURNING id, title /*scp:pk=id;ai=*/")}}, nil
+	}()
+	if pe_n0 != nil {
+		return nil, pe_n0
+	}
+	payload_n0 := wire.WireRowOfFields(pf_n0)
 	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
@@ -2251,7 +2295,14 @@ func RemovePostReturning(id int64) ([]RemovePostReturningRow, error) {
 	_ = t_n0
 	_ = produced_n0
 	// ── op 'n0' (executeSQL) ──
-	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireInt(id)})}, wire.WireField{Key: "returning", Val: wire.WireBool(true)}, wire.WireField{Key: "sql", Val: wire.WireStr("DELETE FROM conf_posts WHERE id = ? RETURNING id, title /*scp:pk=id;ai=*/")}, wire.WireField{Key: "write", Val: wire.WireBool(true)}})
+	pf_n0, pe_n0 := func() ([]wire.WireField, error) {
+		ex_72 := ExecOptions{Guard: nil, Returning: true, WhereDynamic: nil, Write: true}
+		return []wire.WireField{wire.WireField{Key: "opts", Val: func() wire.WireValue { o0 := &ex_72; if o0 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "guard", Val: func() wire.WireValue { o1 := (*o0).Guard; if o1 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "limit", Val: wire.WireInt((*o1).Limit)}, {Key: "model", Val: func() wire.WireValue { o2 := (*o1).Model; if o2 == nil { return wire.WireNull() }; return wire.WireStr((*o2)) }()}, {Key: "relation", Val: wire.WireStr((*o1).Relation)}}) }()}, {Key: "returning", Val: wire.WireBool((*o0).Returning)}, {Key: "whereDynamic", Val: func() wire.WireValue { o1 := (*o0).WhereDynamic; if o1 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "frags", Val: func() wire.WireValue { it2 := []wire.WireValue{}; for _, e2 := range (*o1).Frags { it2 = append(it2, wire.WireRowOf([]wire.WireField{{Key: "params", Val: func() wire.WireValue { it4 := []wire.WireValue{}; for _, e4 := range e2.Params { it4 = append(it4, func() wire.WireValue { o5 := e4; if o5 == nil { return wire.WireNull() }; return (*o5) }()) }; return wire.WireListOf(it4) }()}, {Key: "skipped", Val: wire.WireBool(e2.Skipped)}, {Key: "sql", Val: wire.WireStr(e2.Sql)}})) }; return wire.WireListOf(it2) }()}}) }()}, {Key: "write", Val: wire.WireBool((*o0).Write)}}) }()}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireInt(id)})}, wire.WireField{Key: "sql", Val: wire.WireStr("DELETE FROM conf_posts WHERE id = ? RETURNING id, title /*scp:pk=id;ai=*/")}}, nil
+	}()
+	if pe_n0 != nil {
+		return nil, pe_n0
+	}
+	payload_n0 := wire.WireRowOfFields(pf_n0)
 	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
@@ -2317,7 +2368,14 @@ func RestatusPostsReturning(status string, authorId int64) ([]RestatusPostsRetur
 	_ = t_n0
 	_ = produced_n0
 	// ── op 'n0' (executeSQL) ──
-	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireStr(status), wire.WireInt(authorId)})}, wire.WireField{Key: "returning", Val: wire.WireBool(true)}, wire.WireField{Key: "sql", Val: wire.WireStr("UPDATE conf_posts SET status = ? WHERE author_id = ? RETURNING id, status /*scp:pk=id;ai=*/")}, wire.WireField{Key: "write", Val: wire.WireBool(true)}})
+	pf_n0, pe_n0 := func() ([]wire.WireField, error) {
+		ex_73 := ExecOptions{Guard: nil, Returning: true, WhereDynamic: nil, Write: true}
+		return []wire.WireField{wire.WireField{Key: "opts", Val: func() wire.WireValue { o0 := &ex_73; if o0 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "guard", Val: func() wire.WireValue { o1 := (*o0).Guard; if o1 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "limit", Val: wire.WireInt((*o1).Limit)}, {Key: "model", Val: func() wire.WireValue { o2 := (*o1).Model; if o2 == nil { return wire.WireNull() }; return wire.WireStr((*o2)) }()}, {Key: "relation", Val: wire.WireStr((*o1).Relation)}}) }()}, {Key: "returning", Val: wire.WireBool((*o0).Returning)}, {Key: "whereDynamic", Val: func() wire.WireValue { o1 := (*o0).WhereDynamic; if o1 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "frags", Val: func() wire.WireValue { it2 := []wire.WireValue{}; for _, e2 := range (*o1).Frags { it2 = append(it2, wire.WireRowOf([]wire.WireField{{Key: "params", Val: func() wire.WireValue { it4 := []wire.WireValue{}; for _, e4 := range e2.Params { it4 = append(it4, func() wire.WireValue { o5 := e4; if o5 == nil { return wire.WireNull() }; return (*o5) }()) }; return wire.WireListOf(it4) }()}, {Key: "skipped", Val: wire.WireBool(e2.Skipped)}, {Key: "sql", Val: wire.WireStr(e2.Sql)}})) }; return wire.WireListOf(it2) }()}}) }()}, {Key: "write", Val: wire.WireBool((*o0).Write)}}) }()}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireStr(status), wire.WireInt(authorId)})}, wire.WireField{Key: "sql", Val: wire.WireStr("UPDATE conf_posts SET status = ? WHERE author_id = ? RETURNING id, status /*scp:pk=id;ai=*/")}}, nil
+	}()
+	if pe_n0 != nil {
+		return nil, pe_n0
+	}
+	payload_n0 := wire.WireRowOfFields(pf_n0)
 	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
@@ -2383,7 +2441,14 @@ func RemovePostsByAuthorReturning(authorId int64) ([]RemovePostsByAuthorReturnin
 	_ = t_n0
 	_ = produced_n0
 	// ── op 'n0' (executeSQL) ──
-	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireInt(authorId)})}, wire.WireField{Key: "returning", Val: wire.WireBool(true)}, wire.WireField{Key: "sql", Val: wire.WireStr("DELETE FROM conf_posts WHERE author_id = ? RETURNING id, title /*scp:pk=id;ai=*/")}, wire.WireField{Key: "write", Val: wire.WireBool(true)}})
+	pf_n0, pe_n0 := func() ([]wire.WireField, error) {
+		ex_74 := ExecOptions{Guard: nil, Returning: true, WhereDynamic: nil, Write: true}
+		return []wire.WireField{wire.WireField{Key: "opts", Val: func() wire.WireValue { o0 := &ex_74; if o0 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "guard", Val: func() wire.WireValue { o1 := (*o0).Guard; if o1 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "limit", Val: wire.WireInt((*o1).Limit)}, {Key: "model", Val: func() wire.WireValue { o2 := (*o1).Model; if o2 == nil { return wire.WireNull() }; return wire.WireStr((*o2)) }()}, {Key: "relation", Val: wire.WireStr((*o1).Relation)}}) }()}, {Key: "returning", Val: wire.WireBool((*o0).Returning)}, {Key: "whereDynamic", Val: func() wire.WireValue { o1 := (*o0).WhereDynamic; if o1 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "frags", Val: func() wire.WireValue { it2 := []wire.WireValue{}; for _, e2 := range (*o1).Frags { it2 = append(it2, wire.WireRowOf([]wire.WireField{{Key: "params", Val: func() wire.WireValue { it4 := []wire.WireValue{}; for _, e4 := range e2.Params { it4 = append(it4, func() wire.WireValue { o5 := e4; if o5 == nil { return wire.WireNull() }; return (*o5) }()) }; return wire.WireListOf(it4) }()}, {Key: "skipped", Val: wire.WireBool(e2.Skipped)}, {Key: "sql", Val: wire.WireStr(e2.Sql)}})) }; return wire.WireListOf(it2) }()}}) }()}, {Key: "write", Val: wire.WireBool((*o0).Write)}}) }()}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireInt(authorId)})}, wire.WireField{Key: "sql", Val: wire.WireStr("DELETE FROM conf_posts WHERE author_id = ? RETURNING id, title /*scp:pk=id;ai=*/")}}, nil
+	}()
+	if pe_n0 != nil {
+		return nil, pe_n0
+	}
+	payload_n0 := wire.WireRowOfFields(pf_n0)
 	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
@@ -2449,7 +2514,7 @@ func TypedRows() ([]TypedRowsRow, error) {
 	_ = t_n0
 	_ = produced_n0
 	// ── op 'n0' (executeSQL) ──
-	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, ts, flag, label FROM conf_typed ORDER BY id ASC")}, wire.WireField{Key: "write", Val: wire.WireBool(false)}})
+	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{})}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, ts, flag, label FROM conf_typed ORDER BY id ASC")}})
 	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
@@ -2528,7 +2593,14 @@ func CreateTags(rows []CreateTagsRecord) ([]WriteSummary, error) {
 	_ = t_n0
 	_ = produced_n0
 	// ── op 'n0' (executeSQL) ──
-	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range rows { it0 = append(it0, wire.WireRowOf([]wire.WireField{{Key: "id", Val: wire.WireInt(e0.Id)}, {Key: "label", Val: wire.WireStr(e0.Label)}, {Key: "post_id", Val: wire.WireInt(e0.Post_id)}})) }; return wire.WireListOf(it0) }()})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("INSERT INTO conf_tags (id, label, post_id) SELECT JSON_UNQUOTE(jt.id), JSON_UNQUOTE(jt.label), JSON_UNQUOTE(jt.post_id) FROM JSON_TABLE(?, '$[*]' COLUMNS(id JSON PATH '$.id', label JSON PATH '$.label', post_id JSON PATH '$.post_id')) jt")}, wire.WireField{Key: "write", Val: wire.WireBool(true)}})
+	pf_n0, pe_n0 := func() ([]wire.WireField, error) {
+		ex_75 := ExecOptions{Guard: nil, Returning: false, WhereDynamic: nil, Write: true}
+		return []wire.WireField{wire.WireField{Key: "opts", Val: func() wire.WireValue { o0 := &ex_75; if o0 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "guard", Val: func() wire.WireValue { o1 := (*o0).Guard; if o1 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "limit", Val: wire.WireInt((*o1).Limit)}, {Key: "model", Val: func() wire.WireValue { o2 := (*o1).Model; if o2 == nil { return wire.WireNull() }; return wire.WireStr((*o2)) }()}, {Key: "relation", Val: wire.WireStr((*o1).Relation)}}) }()}, {Key: "returning", Val: wire.WireBool((*o0).Returning)}, {Key: "whereDynamic", Val: func() wire.WireValue { o1 := (*o0).WhereDynamic; if o1 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "frags", Val: func() wire.WireValue { it2 := []wire.WireValue{}; for _, e2 := range (*o1).Frags { it2 = append(it2, wire.WireRowOf([]wire.WireField{{Key: "params", Val: func() wire.WireValue { it4 := []wire.WireValue{}; for _, e4 := range e2.Params { it4 = append(it4, func() wire.WireValue { o5 := e4; if o5 == nil { return wire.WireNull() }; return (*o5) }()) }; return wire.WireListOf(it4) }()}, {Key: "skipped", Val: wire.WireBool(e2.Skipped)}, {Key: "sql", Val: wire.WireStr(e2.Sql)}})) }; return wire.WireListOf(it2) }()}}) }()}, {Key: "write", Val: wire.WireBool((*o0).Write)}}) }()}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range rows { it0 = append(it0, wire.WireRowOf([]wire.WireField{{Key: "id", Val: wire.WireInt(e0.Id)}, {Key: "label", Val: wire.WireStr(e0.Label)}, {Key: "post_id", Val: wire.WireInt(e0.Post_id)}})) }; return wire.WireListOf(it0) }()})}, wire.WireField{Key: "sql", Val: wire.WireStr("INSERT INTO conf_tags (id, label, post_id) SELECT JSON_UNQUOTE(jt.id), JSON_UNQUOTE(jt.label), JSON_UNQUOTE(jt.post_id) FROM JSON_TABLE(?, '$[*]' COLUMNS(id JSON PATH '$.id', label JSON PATH '$.label', post_id JSON PATH '$.post_id')) jt")}}, nil
+	}()
+	if pe_n0 != nil {
+		return nil, pe_n0
+	}
+	payload_n0 := wire.WireRowOfFields(pf_n0)
 	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
@@ -2601,7 +2673,14 @@ func RemoveTags(ids []int64) ([]WriteSummary, error) {
 	_ = t_n0
 	_ = produced_n0
 	// ── op 'n0' (executeSQL) ──
-	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range ids { it0 = append(it0, wire.WireInt(e0)) }; return wire.WireListOf(it0) }()})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("DELETE FROM conf_tags WHERE id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt)")}, wire.WireField{Key: "write", Val: wire.WireBool(true)}})
+	pf_n0, pe_n0 := func() ([]wire.WireField, error) {
+		ex_76 := ExecOptions{Guard: nil, Returning: false, WhereDynamic: nil, Write: true}
+		return []wire.WireField{wire.WireField{Key: "opts", Val: func() wire.WireValue { o0 := &ex_76; if o0 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "guard", Val: func() wire.WireValue { o1 := (*o0).Guard; if o1 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "limit", Val: wire.WireInt((*o1).Limit)}, {Key: "model", Val: func() wire.WireValue { o2 := (*o1).Model; if o2 == nil { return wire.WireNull() }; return wire.WireStr((*o2)) }()}, {Key: "relation", Val: wire.WireStr((*o1).Relation)}}) }()}, {Key: "returning", Val: wire.WireBool((*o0).Returning)}, {Key: "whereDynamic", Val: func() wire.WireValue { o1 := (*o0).WhereDynamic; if o1 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "frags", Val: func() wire.WireValue { it2 := []wire.WireValue{}; for _, e2 := range (*o1).Frags { it2 = append(it2, wire.WireRowOf([]wire.WireField{{Key: "params", Val: func() wire.WireValue { it4 := []wire.WireValue{}; for _, e4 := range e2.Params { it4 = append(it4, func() wire.WireValue { o5 := e4; if o5 == nil { return wire.WireNull() }; return (*o5) }()) }; return wire.WireListOf(it4) }()}, {Key: "skipped", Val: wire.WireBool(e2.Skipped)}, {Key: "sql", Val: wire.WireStr(e2.Sql)}})) }; return wire.WireListOf(it2) }()}}) }()}, {Key: "write", Val: wire.WireBool((*o0).Write)}}) }()}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range ids { it0 = append(it0, wire.WireInt(e0)) }; return wire.WireListOf(it0) }()})}, wire.WireField{Key: "sql", Val: wire.WireStr("DELETE FROM conf_tags WHERE id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt)")}}, nil
+	}()
+	if pe_n0 != nil {
+		return nil, pe_n0
+	}
+	payload_n0 := wire.WireRowOfFields(pf_n0)
 	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
@@ -2674,7 +2753,14 @@ func CreateTagsReturning(rows []CreateTagsReturningRecord) ([]CreateTagsReturnin
 	_ = t_n0
 	_ = produced_n0
 	// ── op 'n0' (executeSQL) ──
-	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range rows { it0 = append(it0, wire.WireRowOf([]wire.WireField{{Key: "id", Val: wire.WireInt(e0.Id)}, {Key: "label", Val: wire.WireStr(e0.Label)}, {Key: "post_id", Val: wire.WireInt(e0.Post_id)}})) }; return wire.WireListOf(it0) }()})}, wire.WireField{Key: "returning", Val: wire.WireBool(true)}, wire.WireField{Key: "sql", Val: wire.WireStr("INSERT INTO conf_tags (id, label, post_id) SELECT JSON_UNQUOTE(jt.id), JSON_UNQUOTE(jt.label), JSON_UNQUOTE(jt.post_id) FROM JSON_TABLE(?, '$[*]' COLUMNS(id JSON PATH '$.id', label JSON PATH '$.label', post_id JSON PATH '$.post_id')) jt RETURNING id, label /*scp:pk=id;ai=*/")}, wire.WireField{Key: "write", Val: wire.WireBool(true)}})
+	pf_n0, pe_n0 := func() ([]wire.WireField, error) {
+		ex_77 := ExecOptions{Guard: nil, Returning: true, WhereDynamic: nil, Write: true}
+		return []wire.WireField{wire.WireField{Key: "opts", Val: func() wire.WireValue { o0 := &ex_77; if o0 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "guard", Val: func() wire.WireValue { o1 := (*o0).Guard; if o1 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "limit", Val: wire.WireInt((*o1).Limit)}, {Key: "model", Val: func() wire.WireValue { o2 := (*o1).Model; if o2 == nil { return wire.WireNull() }; return wire.WireStr((*o2)) }()}, {Key: "relation", Val: wire.WireStr((*o1).Relation)}}) }()}, {Key: "returning", Val: wire.WireBool((*o0).Returning)}, {Key: "whereDynamic", Val: func() wire.WireValue { o1 := (*o0).WhereDynamic; if o1 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "frags", Val: func() wire.WireValue { it2 := []wire.WireValue{}; for _, e2 := range (*o1).Frags { it2 = append(it2, wire.WireRowOf([]wire.WireField{{Key: "params", Val: func() wire.WireValue { it4 := []wire.WireValue{}; for _, e4 := range e2.Params { it4 = append(it4, func() wire.WireValue { o5 := e4; if o5 == nil { return wire.WireNull() }; return (*o5) }()) }; return wire.WireListOf(it4) }()}, {Key: "skipped", Val: wire.WireBool(e2.Skipped)}, {Key: "sql", Val: wire.WireStr(e2.Sql)}})) }; return wire.WireListOf(it2) }()}}) }()}, {Key: "write", Val: wire.WireBool((*o0).Write)}}) }()}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range rows { it0 = append(it0, wire.WireRowOf([]wire.WireField{{Key: "id", Val: wire.WireInt(e0.Id)}, {Key: "label", Val: wire.WireStr(e0.Label)}, {Key: "post_id", Val: wire.WireInt(e0.Post_id)}})) }; return wire.WireListOf(it0) }()})}, wire.WireField{Key: "sql", Val: wire.WireStr("INSERT INTO conf_tags (id, label, post_id) SELECT JSON_UNQUOTE(jt.id), JSON_UNQUOTE(jt.label), JSON_UNQUOTE(jt.post_id) FROM JSON_TABLE(?, '$[*]' COLUMNS(id JSON PATH '$.id', label JSON PATH '$.label', post_id JSON PATH '$.post_id')) jt RETURNING id, label /*scp:pk=id;ai=*/")}}, nil
+	}()
+	if pe_n0 != nil {
+		return nil, pe_n0
+	}
+	payload_n0 := wire.WireRowOfFields(pf_n0)
 	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
@@ -2740,7 +2826,14 @@ func RelabelTagsReturning(rows []RelabelTagsReturningRecord) ([]RelabelTagsRetur
 	_ = t_n0
 	_ = produced_n0
 	// ── op 'n0' (executeSQL) ──
-	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range rows { it0 = append(it0, wire.WireRowOf([]wire.WireField{{Key: "id", Val: wire.WireInt(e0.Id)}, {Key: "label", Val: wire.WireStr(e0.Label)}})) }; return wire.WireListOf(it0) }()})}, wire.WireField{Key: "returning", Val: wire.WireBool(true)}, wire.WireField{Key: "sql", Val: wire.WireStr("UPDATE conf_tags AS u JOIN JSON_TABLE(?, '$[*]' COLUMNS(id JSON PATH '$.id', label JSON PATH '$.label')) AS v ON u.id = JSON_UNQUOTE(v.id) SET u.label = JSON_UNQUOTE(v.label) RETURNING id, label /*scp:pk=id;ai=*/")}, wire.WireField{Key: "write", Val: wire.WireBool(true)}})
+	pf_n0, pe_n0 := func() ([]wire.WireField, error) {
+		ex_78 := ExecOptions{Guard: nil, Returning: true, WhereDynamic: nil, Write: true}
+		return []wire.WireField{wire.WireField{Key: "opts", Val: func() wire.WireValue { o0 := &ex_78; if o0 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "guard", Val: func() wire.WireValue { o1 := (*o0).Guard; if o1 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "limit", Val: wire.WireInt((*o1).Limit)}, {Key: "model", Val: func() wire.WireValue { o2 := (*o1).Model; if o2 == nil { return wire.WireNull() }; return wire.WireStr((*o2)) }()}, {Key: "relation", Val: wire.WireStr((*o1).Relation)}}) }()}, {Key: "returning", Val: wire.WireBool((*o0).Returning)}, {Key: "whereDynamic", Val: func() wire.WireValue { o1 := (*o0).WhereDynamic; if o1 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "frags", Val: func() wire.WireValue { it2 := []wire.WireValue{}; for _, e2 := range (*o1).Frags { it2 = append(it2, wire.WireRowOf([]wire.WireField{{Key: "params", Val: func() wire.WireValue { it4 := []wire.WireValue{}; for _, e4 := range e2.Params { it4 = append(it4, func() wire.WireValue { o5 := e4; if o5 == nil { return wire.WireNull() }; return (*o5) }()) }; return wire.WireListOf(it4) }()}, {Key: "skipped", Val: wire.WireBool(e2.Skipped)}, {Key: "sql", Val: wire.WireStr(e2.Sql)}})) }; return wire.WireListOf(it2) }()}}) }()}, {Key: "write", Val: wire.WireBool((*o0).Write)}}) }()}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range rows { it0 = append(it0, wire.WireRowOf([]wire.WireField{{Key: "id", Val: wire.WireInt(e0.Id)}, {Key: "label", Val: wire.WireStr(e0.Label)}})) }; return wire.WireListOf(it0) }()})}, wire.WireField{Key: "sql", Val: wire.WireStr("UPDATE conf_tags AS u JOIN JSON_TABLE(?, '$[*]' COLUMNS(id JSON PATH '$.id', label JSON PATH '$.label')) AS v ON u.id = JSON_UNQUOTE(v.id) SET u.label = JSON_UNQUOTE(v.label) RETURNING id, label /*scp:pk=id;ai=*/")}}, nil
+	}()
+	if pe_n0 != nil {
+		return nil, pe_n0
+	}
+	payload_n0 := wire.WireRowOfFields(pf_n0)
 	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
@@ -2806,7 +2899,14 @@ func RemoveTagsReturning(ids []int64) ([]RemoveTagsReturningRow, error) {
 	_ = t_n0
 	_ = produced_n0
 	// ── op 'n0' (executeSQL) ──
-	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range ids { it0 = append(it0, wire.WireInt(e0)) }; return wire.WireListOf(it0) }()})}, wire.WireField{Key: "returning", Val: wire.WireBool(true)}, wire.WireField{Key: "sql", Val: wire.WireStr("DELETE FROM conf_tags WHERE id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) RETURNING id, label /*scp:pk=id;ai=*/")}, wire.WireField{Key: "write", Val: wire.WireBool(true)}})
+	pf_n0, pe_n0 := func() ([]wire.WireField, error) {
+		ex_79 := ExecOptions{Guard: nil, Returning: true, WhereDynamic: nil, Write: true}
+		return []wire.WireField{wire.WireField{Key: "opts", Val: func() wire.WireValue { o0 := &ex_79; if o0 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "guard", Val: func() wire.WireValue { o1 := (*o0).Guard; if o1 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "limit", Val: wire.WireInt((*o1).Limit)}, {Key: "model", Val: func() wire.WireValue { o2 := (*o1).Model; if o2 == nil { return wire.WireNull() }; return wire.WireStr((*o2)) }()}, {Key: "relation", Val: wire.WireStr((*o1).Relation)}}) }()}, {Key: "returning", Val: wire.WireBool((*o0).Returning)}, {Key: "whereDynamic", Val: func() wire.WireValue { o1 := (*o0).WhereDynamic; if o1 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "frags", Val: func() wire.WireValue { it2 := []wire.WireValue{}; for _, e2 := range (*o1).Frags { it2 = append(it2, wire.WireRowOf([]wire.WireField{{Key: "params", Val: func() wire.WireValue { it4 := []wire.WireValue{}; for _, e4 := range e2.Params { it4 = append(it4, func() wire.WireValue { o5 := e4; if o5 == nil { return wire.WireNull() }; return (*o5) }()) }; return wire.WireListOf(it4) }()}, {Key: "skipped", Val: wire.WireBool(e2.Skipped)}, {Key: "sql", Val: wire.WireStr(e2.Sql)}})) }; return wire.WireListOf(it2) }()}}) }()}, {Key: "write", Val: wire.WireBool((*o0).Write)}}) }()}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range ids { it0 = append(it0, wire.WireInt(e0)) }; return wire.WireListOf(it0) }()})}, wire.WireField{Key: "sql", Val: wire.WireStr("DELETE FROM conf_tags WHERE id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) RETURNING id, label /*scp:pk=id;ai=*/")}}, nil
+	}()
+	if pe_n0 != nil {
+		return nil, pe_n0
+	}
+	payload_n0 := wire.WireRowOfFields(pf_n0)
 	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)

@@ -257,7 +257,7 @@ fn port_mismatch(name: &str, expected: &str, got: &WireValue) -> BehaviorError {
     )
 }
 
-/// A `bool` port (`write` / `returning` / `bigint` / `single`).
+/// A `bool` port (the control record's `write` / `returning`, or `group_children`'s `single`).
 fn port_bool(payload: &mut WireRow, name: &str) -> Result<bool, BehaviorError> {
     match take_port(payload, name)? {
         WireValue::Bool(b) => Ok(b),
@@ -290,13 +290,13 @@ struct RelationGuard {
     relation: String,
 }
 
-/// Read the OPTIONAL `guard` port. ABSENT (or an explicit null) ⇒ `None` ⇒ the statement is uncapped
+/// Read the `guard` field of the control record. ABSENT (or null) ⇒ `None` ⇒ the statement is uncapped
 /// and NO check runs. PRESENT but malformed is a LOUD port failure, never a silently dropped guard — a
 /// guard that fails to unbox is a runaway that would otherwise sail through.
-fn port_relation_guard(payload: &mut WireRow) -> Result<Option<RelationGuard>, BehaviorError> {
-    let row = match payload.entries.iter().position(|(k, _)| k == "guard") {
+fn port_relation_guard(opts: &mut WireRow) -> Result<Option<RelationGuard>, BehaviorError> {
+    let row = match opts.entries.iter().position(|(k, _)| k == "guard") {
         None => return Ok(None),
-        Some(i) => match payload.entries.swap_remove(i).1 {
+        Some(i) => match opts.entries.swap_remove(i).1 {
             WireValue::Null => return Ok(None),
             WireValue::Row(r) => r,
             other => return Err(port_mismatch("guard", "row", &other)),
@@ -333,20 +333,14 @@ struct DynamicWhereFrag {
     params: Vec<WireValue>,
 }
 
-/// Read the OPTIONAL `whereDynamic` plan port — a wire row `{frags: [...]}`. ABSENT (or an explicit
-/// null) ⇒ `None` ⇒ no dynamic WHERE (the statement passes through unchanged): a bounded read, a write,
-/// and an uncapped fetch OMIT it (CLAUDE.md §2). PRESENT but wrong-variant, or a malformed fragment, is
-/// a LOUD failure.
-fn port_dynamic_where(
-    payload: &mut WireRow,
-) -> Result<Option<Vec<DynamicWhereFrag>>, BehaviorError> {
-    let row = match payload
-        .entries
-        .iter()
-        .position(|(k, _)| k == "whereDynamic")
-    {
+/// Read the `whereDynamic` field of the control record — a wire row `{frags: [...]}`. ABSENT (or null)
+/// ⇒ `None` ⇒ no dynamic WHERE (the statement passes through unchanged): only a read that declares an
+/// OPTIONAL predicate carries a plan (CLAUDE.md §2). PRESENT but wrong-variant, or a malformed
+/// fragment, is a LOUD failure.
+fn port_dynamic_where(opts: &mut WireRow) -> Result<Option<Vec<DynamicWhereFrag>>, BehaviorError> {
+    let row = match opts.entries.iter().position(|(k, _)| k == "whereDynamic") {
         None => return Ok(None),
-        Some(i) => match payload.entries.swap_remove(i).1 {
+        Some(i) => match opts.entries.swap_remove(i).1 {
             WireValue::Null => return Ok(None),
             WireValue::Row(r) => r,
             other => return Err(port_mismatch("whereDynamic", "row", &other)),
@@ -397,6 +391,39 @@ fn parse_where_frag(frag: WireValue) -> Result<DynamicWhereFrag, BehaviorError> 
             "scp leaf: a whereDynamic fragment must be {skipped: bool, sql: string, params: list}",
         )),
     }
+}
+
+/// The UNBOXED control record of one statement (the `opts` port — the TS `ExecOptions`): how to run it
+/// plus the two optional control structs. Everything the transport branches on besides the statement
+/// itself lives here, so a new fact is a new FIELD and no call site's arguments shift (#193). The
+/// default is the PLAIN READ the absent port denotes.
+#[derive(Default)]
+struct ExecOptions {
+    write: bool,
+    returning: bool,
+    where_frags: Option<Vec<DynamicWhereFrag>>,
+    guard: Option<RelationGuard>,
+}
+
+/// Read the OPTIONAL `opts` control record. ABSENT (or null) ⇒ the DEFAULT record — a plain READ with no
+/// dynamic WHERE and no cap, which is the ONE statement shape that omits the port (such a payload
+/// carries `sql` and `params` alone). PRESENT ⇒ every field is read FAIL-CLOSED: the record is what
+/// says whether the statement writes, so a missing field is an ABI break, never a default.
+fn port_exec_options(payload: &mut WireRow) -> Result<ExecOptions, BehaviorError> {
+    let mut row = match payload.entries.iter().position(|(k, _)| k == "opts") {
+        None => return Ok(ExecOptions::default()),
+        Some(i) => match payload.entries.swap_remove(i).1 {
+            WireValue::Null => return Ok(ExecOptions::default()),
+            WireValue::Row(r) => r,
+            other => return Err(port_mismatch("opts", "row", &other)),
+        },
+    };
+    Ok(ExecOptions {
+        write: port_bool(&mut row, "write")?,
+        returning: port_bool(&mut row, "returning")?,
+        where_frags: port_dynamic_where(&mut row)?,
+        guard: port_relation_guard(&mut row)?,
+    })
 }
 
 /// A `{arr:'string'}` port — the ordered key-column TUPLE (`col` / `pk` / `fk`). Every element must be
@@ -531,37 +558,29 @@ fn assemble_dynamic_where(
 
 /// The SOLE SQL transport leaf (leaves.ts `executeSQL`). Binds `params` and runs `sql` through the
 /// central seam ([`exec_context::execute`] / [`exec_context::run`]) on the AMBIENT driver — the ONLY
-/// driver contact. `write` selects `run` (INSERT/UPDATE/DELETE) vs `execute` (SELECT / RETURNING); a
-/// non-returning write returns a one-row `[{changes,lastInsertRowid}]` summary so the leaf output
+/// driver contact. `opts.write` selects `run` (INSERT/UPDATE/DELETE) vs `execute` (SELECT / RETURNING);
+/// a non-returning write returns a one-row `[{changes,lastInsertRowid}]` summary so the leaf output
 /// shape is uniform (a `List` of `Row`). `?`→`$N` is rendered here (the transport's placeholder SSoT,
 /// matching the TS `prepareSql`); an array param (a relation key set) rides as [`Value::Arr`], which
 /// the driver encodes per dialect (json_each / native array). The DYNAMIC (SKIP) WHERE
 /// ([`assemble_dynamic_where`]) is assembled FIRST — the final statement shape is only known here, so
-/// the `?`→`$N` render must follow it (CLAUDE.md §2). The OPTIONAL `guard` port is the RELATION runaway
-/// cap of a guarded relation child fetch (absent/null ⇒ uncapped): the raw rows are asserted
-/// against it here ([`crate::errors::LimitExceededError::check`]) because past [`group_children`] the
-/// graph is already nested. Both control ports are OPTIONAL, so ports ride in the payload as
-/// `{bigint, guard?, params, returning, sql, whereDynamic?, write}`.
+/// the `?`→`$N` render must follow it (CLAUDE.md §2). `opts.guard` is the RELATION runaway cap of a
+/// guarded relation child fetch (absent ⇒ uncapped): the raw rows are asserted against it here
+/// ([`crate::errors::LimitExceededError::check`]) because past [`group_children`] the graph is already
+/// nested. The whole control surface is ONE optional record, so ports ride in the payload as
+/// `{opts?, params, sql}` — a bounded read carries `sql` and `params` alone.
 pub fn execute_sql(mut payload: WireRow) -> Result<WireValue, BehaviorError> {
-    let bigint = port_bool(&mut payload, "bigint")?;
     let params_port = port_list(&mut payload, "params")?;
-    let returning = port_bool(&mut payload, "returning")?;
     let sql_port = port_string(&mut payload, "sql")?;
-    let write = port_bool(&mut payload, "write")?;
-    let where_plan = port_dynamic_where(&mut payload)?;
-    let guard = port_relation_guard(&mut payload)?;
+    let opts = port_exec_options(&mut payload)?;
     // Assemble the DYNAMIC (SKIP) WHERE FIRST when a plan is present: drop skipped fragments, splice the
     // survivors before the first tail keyword, and bind their params before the base params — the
     // effective statement the `?`→`$N` render (`finalize_sql`, below) then operates on. An ABSENT plan
     // leaves the bounded sql/params untouched (pass-through).
-    let (sql, params) = match where_plan {
+    let (sql, params) = match opts.where_frags {
         None => (sql_port, params_port),
         Some(frags) => assemble_dynamic_where(&sql_port, params_port, frags),
     };
-    // `bigint` is the better-sqlite3 #59 safe-integers toggle; rust/PG/MySQL return BIGINT natively
-    // (i64), so there is no exact-integer read mode to select (see exec_context docs) — the port is
-    // accepted for signature parity with the TS leaf and does not branch the rust seam.
-    let _ = bigint;
     let driver = current_driver()?;
     // A composite relation key set (a list whose elements are key TUPLES) binds as ONE JSON
     // array-of-tuples string on EVERY dialect (#159) — PostgreSQL expands it server-side with
@@ -583,7 +602,7 @@ pub fn execute_sql(mut payload: WireRow) -> Result<WireValue, BehaviorError> {
         .collect();
     let rendered = finalize_sql(&sql, &value_params, driver.dialect());
     let ctx = exec_context::for_driver(driver);
-    if write && !returning {
+    if opts.write && !opts.returning {
         let info = exec_context::run(&ctx, &rendered, &value_params, &StatementIntent::write())
             .map_err(sql_failure_to_behavior_error)?;
         // The affected-write summary row (uniform `items` output shape — TS `writeSummary`).
@@ -610,7 +629,7 @@ pub fn execute_sql(mut payload: WireRow) -> Result<WireValue, BehaviorError> {
         // [`crate::errors::LimitExceededError::check`] SSoT, so this path cannot drift from the TS
         // reference. It surfaces as a `BehaviorError` because that is the leaf transport's ONE error
         // channel (the same way a `SqlFailure` does), under its own stable code.
-        if let Some(g) = guard {
+        if let Some(g) = opts.guard {
             crate::errors::LimitExceededError::check(
                 g.limit,
                 rows.len() as i64,
@@ -749,6 +768,25 @@ mod tests {
     fn wlist(items: Vec<WireValue>) -> WireValue {
         WireValue::List(WireList { items })
     }
+    // The `opts` control record port — the `ExecOptions` record the covered runner assembles: how to run
+    // the statement plus its two optional control structs (`WireValue::Null` ⇒ the record's null field,
+    // which is how ABSENCE is spelled now that nothing is positional). A plain READ omits the port.
+    fn opts(
+        write: bool,
+        returning: bool,
+        where_dynamic: WireValue,
+        guard: WireValue,
+    ) -> (&'static str, WireValue) {
+        (
+            "opts",
+            wrow(&[
+                ("guard", guard),
+                ("returning", WireValue::Bool(returning)),
+                ("whereDynamic", where_dynamic),
+                ("write", WireValue::Bool(write)),
+            ]),
+        )
+    }
     // A key-column tuple port (`col`/`pk`/`fk`) — the ordered column names as wire strings.
     fn cols(c: &[&str]) -> WireValue {
         wlist(
@@ -768,7 +806,7 @@ mod tests {
         .unwrap();
         let ins = |id: i64, v: &str| -> Result<(), BehaviorError> {
             execute_sql(payload(vec![
-                ("bigint", WireValue::Bool(false)),
+                opts(true, false, WireValue::Null, WireValue::Null),
                 (
                     "params",
                     wlist(vec![
@@ -776,12 +814,10 @@ mod tests {
                         WireValue::Str(v.to_string().into()),
                     ]),
                 ),
-                ("returning", WireValue::Bool(false)),
                 (
                     "sql",
                     WireValue::Str("INSERT INTO t (id, v) VALUES (?, ?)".into()),
                 ),
-                ("write", WireValue::Bool(true)),
             ]))
             .map(|_| ())
         };
@@ -938,19 +974,17 @@ mod tests {
         ])
         .unwrap();
         let read = |guard: Option<WireValue>| -> Result<WireValue, BehaviorError> {
-            // The runaway cap rides as the OPTIONAL single `guard` port (absent ⇒ uncapped).
+            // The runaway cap rides as the `guard` FIELD of the control record; an UNCAPPED read
+            // carries no record at all (the emitter omits the port entirely).
             let mut ports = vec![
-                ("bigint", WireValue::Bool(false)),
                 ("params", wlist(vec![])),
-                ("returning", WireValue::Bool(false)),
                 (
                     "sql",
                     WireValue::Str("SELECT id, v FROM t ORDER BY id".into()),
                 ),
-                ("write", WireValue::Bool(false)),
             ];
             if let Some(g) = guard {
-                ports.push(("guard", g));
+                ports.push(opts(false, false, WireValue::Null, g));
             }
             with_ambient_driver(&d, || execute_sql(payload(ports.clone())))
         };
@@ -1019,12 +1053,9 @@ mod tests {
         )]);
         let out = with_ambient_driver(&d, || {
             execute_sql(payload(vec![
-                ("bigint", WireValue::Bool(false)),
+                opts(false, false, plan, WireValue::Null),
                 ("params", wlist(vec![])),
-                ("returning", WireValue::Bool(false)),
                 ("sql", WireValue::Str("SELECT id FROM t ORDER BY id".into())),
-                ("whereDynamic", plan),
-                ("write", WireValue::Bool(false)),
             ]))
         })
         .unwrap();
@@ -1056,15 +1087,12 @@ mod tests {
         )]);
         let out = with_ambient_driver(&d, || {
             execute_sql(payload(vec![
-                ("bigint", WireValue::Bool(false)),
+                opts(false, false, plan, WireValue::Null),
                 ("params", wlist(vec![WireValue::int(1), WireValue::int(2)])),
-                ("returning", WireValue::Bool(false)),
                 (
                     "sql",
                     WireValue::Str("SELECT id FROM t WHERE id > ? ORDER BY id LIMIT ?".into()),
                 ),
-                ("whereDynamic", plan),
-                ("write", WireValue::Bool(false)),
             ]))
         })
         .unwrap();

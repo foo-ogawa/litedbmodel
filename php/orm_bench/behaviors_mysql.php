@@ -7,7 +7,7 @@
 // (Behavior::runBehavior) — no execution logic is generated. Handlers are ALWAYS
 // injected at the boundary (IR + {effects,config,hooks} — concept.md §4.4); they
 // are never generated.
-// irFingerprint: fnv1a64:ea1396590aea2d25
+// irFingerprint: fnv1a64:b139147d7b0cac75
 
 declare(strict_types=1);
 
@@ -15,7 +15,7 @@ declare(strict_types=1);
 $expectedSpecVersions = ['behavior' => 6, 'expression' => 2, 'plan' => 1];
 
 // FNV-1a 64 fingerprint of the source portable IR (canonical-json discipline, #208).
-$irFingerprint = 'fnv1a64:ea1396590aea2d25';
+$irFingerprint = 'fnv1a64:b139147d7b0cac75';
 
 // Component names exposed by bind(), in IR declaration order.
 $componentNames = ['findAll', 'filterPaginateSort', 'findFirst', 'findUnique', 'nestedFindAll', 'nestedFindFirst', 'nestedFindUnique', 'nestedRelations', 'compositeRelations', 'create', 'update', 'upsert', 'createMany', 'upsertMany', 'updateMany', 'nestedCreate', 'nestedUpsert', 'nestedUpdate', 'delete'];
@@ -48,36 +48,21 @@ $irDoc = (object) [
                         ],
                     ],
                     "portSchemas" => (object) [
-                        "bigint" => (object) [
-                            "required" => true,
-                            "type" => "bool",
-                        ],
                         "params" => (object) [
                             "elemType" => "value",
                             "required" => true,
                             "type" => "array",
                         ],
-                        "returning" => (object) [
-                            "required" => true,
-                            "type" => "bool",
-                        ],
                         "sql" => (object) [
                             "required" => true,
                             "type" => "string",
                         ],
-                        "write" => (object) [
-                            "required" => true,
-                            "type" => "bool",
-                        ],
                     ],
                     "ports" => (object) [
-                        "bigint" => false,
                         "params" => (object) [
                             "arr" => [],
                         ],
-                        "returning" => false,
                         "sql" => "SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100",
-                        "write" => false,
                     ],
                 ],
             ],
@@ -140,30 +125,17 @@ $irDoc = (object) [
                         ],
                     ],
                     "portSchemas" => (object) [
-                        "bigint" => (object) [
-                            "required" => true,
-                            "type" => "bool",
-                        ],
                         "params" => (object) [
                             "elemType" => "value",
                             "required" => true,
                             "type" => "array",
                         ],
-                        "returning" => (object) [
-                            "required" => true,
-                            "type" => "bool",
-                        ],
                         "sql" => (object) [
                             "required" => true,
                             "type" => "string",
                         ],
-                        "write" => (object) [
-                            "required" => true,
-                            "type" => "bool",
-                        ],
                     ],
                     "ports" => (object) [
-                        "bigint" => false,
                         "params" => (object) [
                             "arr" => [
                                 (object) [
@@ -173,9 +145,7 @@ $irDoc = (object) [
                                 ],
                             ],
                         ],
-                        "returning" => false,
                         "sql" => "SELECT id, title, content, published, author_id, created_at FROM benchmark_posts WHERE published = ? ORDER BY created_at DESC LIMIT 20 OFFSET 10",
-                        "write" => false,
                     ],
                 ],
             ],
@@ -243,30 +213,17 @@ $irDoc = (object) [
                         ],
                     ],
                     "portSchemas" => (object) [
-                        "bigint" => (object) [
-                            "required" => true,
-                            "type" => "bool",
-                        ],
                         "params" => (object) [
                             "elemType" => "value",
                             "required" => true,
                             "type" => "array",
                         ],
-                        "returning" => (object) [
-                            "required" => true,
-                            "type" => "bool",
-                        ],
                         "sql" => (object) [
                             "required" => true,
                             "type" => "string",
                         ],
-                        "write" => (object) [
-                            "required" => true,
-                            "type" => "bool",
-                        ],
                     ],
                     "ports" => (object) [
-                        "bigint" => false,
                         "params" => (object) [
                             "arr" => [
                                 (object) [
@@ -276,9 +233,7 @@ $irDoc = (object) [
                                 ],
                             ],
                         ],
-                        "returning" => false,
                         "sql" => "SELECT id, email, name FROM benchmark_users WHERE name LIKE ? ORDER BY id ASC LIMIT 1",
-                        "write" => false,
                     ],
                 ],
             ],
@@ -337,30 +292,17 @@ $irDoc = (object) [
                         ],
                     ],
                     "portSchemas" => (object) [
-                        "bigint" => (object) [
-                            "required" => true,
-                            "type" => "bool",
-                        ],
                         "params" => (object) [
                             "elemType" => "value",
                             "required" => true,
                             "type" => "array",
                         ],
-                        "returning" => (object) [
-                            "required" => true,
-                            "type" => "bool",
-                        ],
                         "sql" => (object) [
                             "required" => true,
                             "type" => "string",
                         ],
-                        "write" => (object) [
-                            "required" => true,
-                            "type" => "bool",
-                        ],
                     ],
                     "ports" => (object) [
-                        "bigint" => false,
                         "params" => (object) [
                             "arr" => [
                                 (object) [
@@ -370,9 +312,7 @@ $irDoc = (object) [
                                 ],
                             ],
                         ],
-                        "returning" => false,
                         "sql" => "SELECT id, email, name FROM benchmark_users WHERE email = ? LIMIT 1",
-                        "write" => false,
                     ],
                 ],
             ],
@@ -420,36 +360,21 @@ $irDoc = (object) [
                         "arr" => "value",
                     ],
                     "portSchemas" => (object) [
-                        "bigint" => (object) [
-                            "required" => true,
-                            "type" => "bool",
-                        ],
                         "params" => (object) [
                             "elemType" => "value",
                             "required" => true,
                             "type" => "array",
                         ],
-                        "returning" => (object) [
-                            "required" => true,
-                            "type" => "bool",
-                        ],
                         "sql" => (object) [
                             "required" => true,
                             "type" => "string",
                         ],
-                        "write" => (object) [
-                            "required" => true,
-                            "type" => "bool",
-                        ],
                     ],
                     "ports" => (object) [
-                        "bigint" => false,
                         "params" => (object) [
                             "arr" => [],
                         ],
-                        "returning" => false,
                         "sql" => "SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100",
-                        "write" => false,
                     ],
                     "wirePassthrough" => true,
                 ],
@@ -494,30 +419,17 @@ $irDoc = (object) [
                     ],
                     "parent" => "n1",
                     "portSchemas" => (object) [
-                        "bigint" => (object) [
-                            "required" => true,
-                            "type" => "bool",
-                        ],
                         "params" => (object) [
                             "elemType" => "value",
                             "required" => true,
                             "type" => "array",
                         ],
-                        "returning" => (object) [
-                            "required" => true,
-                            "type" => "bool",
-                        ],
                         "sql" => (object) [
                             "required" => true,
                             "type" => "string",
                         ],
-                        "write" => (object) [
-                            "required" => true,
-                            "type" => "bool",
-                        ],
                     ],
                     "ports" => (object) [
-                        "bigint" => false,
                         "params" => (object) [
                             "arr" => [
                                 (object) [
@@ -527,9 +439,7 @@ $irDoc = (object) [
                                 ],
                             ],
                         ],
-                        "returning" => false,
                         "sql" => "SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '\$[*]' COLUMNS(v JSON PATH '\$')) jt) ORDER BY id ASC",
-                        "write" => false,
                     ],
                     "wirePassthrough" => true,
                 ],
@@ -683,30 +593,17 @@ $irDoc = (object) [
                         "arr" => "value",
                     ],
                     "portSchemas" => (object) [
-                        "bigint" => (object) [
-                            "required" => true,
-                            "type" => "bool",
-                        ],
                         "params" => (object) [
                             "elemType" => "value",
                             "required" => true,
                             "type" => "array",
                         ],
-                        "returning" => (object) [
-                            "required" => true,
-                            "type" => "bool",
-                        ],
                         "sql" => (object) [
                             "required" => true,
                             "type" => "string",
                         ],
-                        "write" => (object) [
-                            "required" => true,
-                            "type" => "bool",
-                        ],
                     ],
                     "ports" => (object) [
-                        "bigint" => false,
                         "params" => (object) [
                             "arr" => [
                                 (object) [
@@ -716,9 +613,7 @@ $irDoc = (object) [
                                 ],
                             ],
                         ],
-                        "returning" => false,
                         "sql" => "SELECT id, email, name FROM benchmark_users WHERE name LIKE ? ORDER BY id ASC LIMIT 1",
-                        "write" => false,
                     ],
                     "wirePassthrough" => true,
                 ],
@@ -763,30 +658,17 @@ $irDoc = (object) [
                     ],
                     "parent" => "n1",
                     "portSchemas" => (object) [
-                        "bigint" => (object) [
-                            "required" => true,
-                            "type" => "bool",
-                        ],
                         "params" => (object) [
                             "elemType" => "value",
                             "required" => true,
                             "type" => "array",
                         ],
-                        "returning" => (object) [
-                            "required" => true,
-                            "type" => "bool",
-                        ],
                         "sql" => (object) [
                             "required" => true,
                             "type" => "string",
                         ],
-                        "write" => (object) [
-                            "required" => true,
-                            "type" => "bool",
-                        ],
                     ],
                     "ports" => (object) [
-                        "bigint" => false,
                         "params" => (object) [
                             "arr" => [
                                 (object) [
@@ -796,9 +678,7 @@ $irDoc = (object) [
                                 ],
                             ],
                         ],
-                        "returning" => false,
                         "sql" => "SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '\$[*]' COLUMNS(v JSON PATH '\$')) jt) ORDER BY id ASC",
-                        "write" => false,
                     ],
                     "wirePassthrough" => true,
                 ],
@@ -957,30 +837,17 @@ $irDoc = (object) [
                         "arr" => "value",
                     ],
                     "portSchemas" => (object) [
-                        "bigint" => (object) [
-                            "required" => true,
-                            "type" => "bool",
-                        ],
                         "params" => (object) [
                             "elemType" => "value",
                             "required" => true,
                             "type" => "array",
                         ],
-                        "returning" => (object) [
-                            "required" => true,
-                            "type" => "bool",
-                        ],
                         "sql" => (object) [
                             "required" => true,
                             "type" => "string",
                         ],
-                        "write" => (object) [
-                            "required" => true,
-                            "type" => "bool",
-                        ],
                     ],
                     "ports" => (object) [
-                        "bigint" => false,
                         "params" => (object) [
                             "arr" => [
                                 (object) [
@@ -990,9 +857,7 @@ $irDoc = (object) [
                                 ],
                             ],
                         ],
-                        "returning" => false,
                         "sql" => "SELECT id, email, name FROM benchmark_users WHERE email = ? LIMIT 1",
-                        "write" => false,
                     ],
                     "wirePassthrough" => true,
                 ],
@@ -1037,30 +902,17 @@ $irDoc = (object) [
                     ],
                     "parent" => "n1",
                     "portSchemas" => (object) [
-                        "bigint" => (object) [
-                            "required" => true,
-                            "type" => "bool",
-                        ],
                         "params" => (object) [
                             "elemType" => "value",
                             "required" => true,
                             "type" => "array",
                         ],
-                        "returning" => (object) [
-                            "required" => true,
-                            "type" => "bool",
-                        ],
                         "sql" => (object) [
                             "required" => true,
                             "type" => "string",
                         ],
-                        "write" => (object) [
-                            "required" => true,
-                            "type" => "bool",
-                        ],
                     ],
                     "ports" => (object) [
-                        "bigint" => false,
                         "params" => (object) [
                             "arr" => [
                                 (object) [
@@ -1070,9 +922,7 @@ $irDoc = (object) [
                                 ],
                             ],
                         ],
-                        "returning" => false,
                         "sql" => "SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '\$[*]' COLUMNS(v JSON PATH '\$')) jt) ORDER BY id ASC",
-                        "write" => false,
                     ],
                     "wirePassthrough" => true,
                 ],
@@ -1231,36 +1081,21 @@ $irDoc = (object) [
                         "arr" => "value",
                     ],
                     "portSchemas" => (object) [
-                        "bigint" => (object) [
-                            "required" => true,
-                            "type" => "bool",
-                        ],
                         "params" => (object) [
                             "elemType" => "value",
                             "required" => true,
                             "type" => "array",
                         ],
-                        "returning" => (object) [
-                            "required" => true,
-                            "type" => "bool",
-                        ],
                         "sql" => (object) [
                             "required" => true,
                             "type" => "string",
                         ],
-                        "write" => (object) [
-                            "required" => true,
-                            "type" => "bool",
-                        ],
                     ],
                     "ports" => (object) [
-                        "bigint" => false,
                         "params" => (object) [
                             "arr" => [],
                         ],
-                        "returning" => false,
                         "sql" => "SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100",
-                        "write" => false,
                     ],
                     "wirePassthrough" => true,
                 ],
@@ -1305,30 +1140,17 @@ $irDoc = (object) [
                     ],
                     "parent" => "n1",
                     "portSchemas" => (object) [
-                        "bigint" => (object) [
-                            "required" => true,
-                            "type" => "bool",
-                        ],
                         "params" => (object) [
                             "elemType" => "value",
                             "required" => true,
                             "type" => "array",
                         ],
-                        "returning" => (object) [
-                            "required" => true,
-                            "type" => "bool",
-                        ],
                         "sql" => (object) [
                             "required" => true,
                             "type" => "string",
                         ],
-                        "write" => (object) [
-                            "required" => true,
-                            "type" => "bool",
-                        ],
                     ],
                     "ports" => (object) [
-                        "bigint" => false,
                         "params" => (object) [
                             "arr" => [
                                 (object) [
@@ -1338,9 +1160,7 @@ $irDoc = (object) [
                                 ],
                             ],
                         ],
-                        "returning" => false,
                         "sql" => "SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '\$[*]' COLUMNS(v JSON PATH '\$')) jt) ORDER BY id ASC",
-                        "write" => false,
                     ],
                     "wirePassthrough" => true,
                 ],
@@ -1385,30 +1205,17 @@ $irDoc = (object) [
                     ],
                     "parent" => "n3",
                     "portSchemas" => (object) [
-                        "bigint" => (object) [
-                            "required" => true,
-                            "type" => "bool",
-                        ],
                         "params" => (object) [
                             "elemType" => "value",
                             "required" => true,
                             "type" => "array",
                         ],
-                        "returning" => (object) [
-                            "required" => true,
-                            "type" => "bool",
-                        ],
                         "sql" => (object) [
                             "required" => true,
                             "type" => "string",
                         ],
-                        "write" => (object) [
-                            "required" => true,
-                            "type" => "bool",
-                        ],
                     ],
                     "ports" => (object) [
-                        "bigint" => false,
                         "params" => (object) [
                             "arr" => [
                                 (object) [
@@ -1418,9 +1225,7 @@ $irDoc = (object) [
                                 ],
                             ],
                         ],
-                        "returning" => false,
                         "sql" => "SELECT id, body, post_id FROM benchmark_comments WHERE post_id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '\$[*]' COLUMNS(v JSON PATH '\$')) jt) ORDER BY id ASC",
-                        "write" => false,
                     ],
                     "wirePassthrough" => true,
                 ],
@@ -1678,36 +1483,21 @@ $irDoc = (object) [
                         "arr" => "value",
                     ],
                     "portSchemas" => (object) [
-                        "bigint" => (object) [
-                            "required" => true,
-                            "type" => "bool",
-                        ],
                         "params" => (object) [
                             "elemType" => "value",
                             "required" => true,
                             "type" => "array",
                         ],
-                        "returning" => (object) [
-                            "required" => true,
-                            "type" => "bool",
-                        ],
                         "sql" => (object) [
                             "required" => true,
                             "type" => "string",
                         ],
-                        "write" => (object) [
-                            "required" => true,
-                            "type" => "bool",
-                        ],
                     ],
                     "ports" => (object) [
-                        "bigint" => false,
                         "params" => (object) [
                             "arr" => [],
                         ],
-                        "returning" => false,
                         "sql" => "SELECT tenant_id, user_id, name FROM benchmark_tenant_users ORDER BY user_id ASC LIMIT 100",
-                        "write" => false,
                     ],
                     "wirePassthrough" => true,
                 ],
@@ -1753,30 +1543,17 @@ $irDoc = (object) [
                     ],
                     "parent" => "n1",
                     "portSchemas" => (object) [
-                        "bigint" => (object) [
-                            "required" => true,
-                            "type" => "bool",
-                        ],
                         "params" => (object) [
                             "elemType" => "value",
                             "required" => true,
                             "type" => "array",
                         ],
-                        "returning" => (object) [
-                            "required" => true,
-                            "type" => "bool",
-                        ],
                         "sql" => (object) [
                             "required" => true,
                             "type" => "string",
                         ],
-                        "write" => (object) [
-                            "required" => true,
-                            "type" => "bool",
-                        ],
                     ],
                     "ports" => (object) [
-                        "bigint" => false,
                         "params" => (object) [
                             "arr" => [
                                 (object) [
@@ -1786,9 +1563,7 @@ $irDoc = (object) [
                                 ],
                             ],
                         ],
-                        "returning" => false,
                         "sql" => "SELECT tenant_id, post_id, user_id, title FROM benchmark_tenant_posts WHERE (benchmark_tenant_posts.tenant_id, benchmark_tenant_posts.user_id) IN (SELECT JSON_UNQUOTE(c0), JSON_UNQUOTE(c1) FROM JSON_TABLE(?, '\$[*]' COLUMNS(c0 JSON PATH '\$[0]', c1 JSON PATH '\$[1]')) jt) ORDER BY post_id ASC",
-                        "write" => false,
                     ],
                     "wirePassthrough" => true,
                 ],
@@ -1834,30 +1609,17 @@ $irDoc = (object) [
                     ],
                     "parent" => "n3",
                     "portSchemas" => (object) [
-                        "bigint" => (object) [
-                            "required" => true,
-                            "type" => "bool",
-                        ],
                         "params" => (object) [
                             "elemType" => "value",
                             "required" => true,
                             "type" => "array",
                         ],
-                        "returning" => (object) [
-                            "required" => true,
-                            "type" => "bool",
-                        ],
                         "sql" => (object) [
                             "required" => true,
                             "type" => "string",
                         ],
-                        "write" => (object) [
-                            "required" => true,
-                            "type" => "bool",
-                        ],
                     ],
                     "ports" => (object) [
-                        "bigint" => false,
                         "params" => (object) [
                             "arr" => [
                                 (object) [
@@ -1867,9 +1629,7 @@ $irDoc = (object) [
                                 ],
                             ],
                         ],
-                        "returning" => false,
                         "sql" => "SELECT tenant_id, comment_id, post_id, body FROM benchmark_tenant_comments WHERE (benchmark_tenant_comments.tenant_id, benchmark_tenant_comments.post_id) IN (SELECT JSON_UNQUOTE(c0), JSON_UNQUOTE(c1) FROM JSON_TABLE(?, '\$[*]' COLUMNS(c0 JSON PATH '\$[0]', c1 JSON PATH '\$[1]')) jt) ORDER BY comment_id ASC",
-                        "write" => false,
                     ],
                     "wirePassthrough" => true,
                 ],
@@ -2157,30 +1917,69 @@ $irDoc = (object) [
                         ],
                     ],
                     "portSchemas" => (object) [
-                        "bigint" => (object) [
-                            "required" => true,
-                            "type" => "bool",
+                        "opts" => (object) [
+                            "elemType" => (object) [
+                                "name" => "ExecOptions",
+                                "obj" => (object) [
+                                    "guard" => (object) [
+                                        "opt" => (object) [
+                                            "name" => "CapGuard",
+                                            "obj" => (object) [
+                                                "limit" => "int",
+                                                "model" => (object) [
+                                                    "opt" => "string",
+                                                ],
+                                                "relation" => "string",
+                                            ],
+                                        ],
+                                    ],
+                                    "returning" => "bool",
+                                    "whereDynamic" => (object) [
+                                        "opt" => (object) [
+                                            "name" => "DynamicWherePlan",
+                                            "obj" => (object) [
+                                                "frags" => (object) [
+                                                    "arr" => (object) [
+                                                        "name" => "DynamicWhereFrag",
+                                                        "obj" => (object) [
+                                                            "params" => (object) [
+                                                                "arr" => (object) [
+                                                                    "opt" => "value",
+                                                                ],
+                                                            ],
+                                                            "skipped" => "bool",
+                                                            "sql" => "string",
+                                                        ],
+                                                    ],
+                                                ],
+                                            ],
+                                        ],
+                                    ],
+                                    "write" => "bool",
+                                ],
+                            ],
+                            "required" => false,
+                            "type" => "object",
                         ],
                         "params" => (object) [
                             "elemType" => "value",
                             "required" => true,
                             "type" => "array",
                         ],
-                        "returning" => (object) [
-                            "required" => true,
-                            "type" => "bool",
-                        ],
                         "sql" => (object) [
                             "required" => true,
                             "type" => "string",
                         ],
-                        "write" => (object) [
-                            "required" => true,
-                            "type" => "bool",
-                        ],
                     ],
                     "ports" => (object) [
-                        "bigint" => false,
+                        "opts" => (object) [
+                            "obj" => (object) [
+                                "guard" => null,
+                                "returning" => false,
+                                "whereDynamic" => null,
+                                "write" => true,
+                            ],
+                        ],
                         "params" => (object) [
                             "arr" => [
                                 (object) [
@@ -2195,9 +1994,7 @@ $irDoc = (object) [
                                 ],
                             ],
                         ],
-                        "returning" => false,
                         "sql" => "INSERT INTO benchmark_users (email, name) VALUES (?, ?)",
-                        "write" => true,
                     ],
                 ],
             ],
@@ -2250,30 +2047,69 @@ $irDoc = (object) [
                         ],
                     ],
                     "portSchemas" => (object) [
-                        "bigint" => (object) [
-                            "required" => true,
-                            "type" => "bool",
+                        "opts" => (object) [
+                            "elemType" => (object) [
+                                "name" => "ExecOptions",
+                                "obj" => (object) [
+                                    "guard" => (object) [
+                                        "opt" => (object) [
+                                            "name" => "CapGuard",
+                                            "obj" => (object) [
+                                                "limit" => "int",
+                                                "model" => (object) [
+                                                    "opt" => "string",
+                                                ],
+                                                "relation" => "string",
+                                            ],
+                                        ],
+                                    ],
+                                    "returning" => "bool",
+                                    "whereDynamic" => (object) [
+                                        "opt" => (object) [
+                                            "name" => "DynamicWherePlan",
+                                            "obj" => (object) [
+                                                "frags" => (object) [
+                                                    "arr" => (object) [
+                                                        "name" => "DynamicWhereFrag",
+                                                        "obj" => (object) [
+                                                            "params" => (object) [
+                                                                "arr" => (object) [
+                                                                    "opt" => "value",
+                                                                ],
+                                                            ],
+                                                            "skipped" => "bool",
+                                                            "sql" => "string",
+                                                        ],
+                                                    ],
+                                                ],
+                                            ],
+                                        ],
+                                    ],
+                                    "write" => "bool",
+                                ],
+                            ],
+                            "required" => false,
+                            "type" => "object",
                         ],
                         "params" => (object) [
                             "elemType" => "value",
                             "required" => true,
                             "type" => "array",
                         ],
-                        "returning" => (object) [
-                            "required" => true,
-                            "type" => "bool",
-                        ],
                         "sql" => (object) [
                             "required" => true,
                             "type" => "string",
                         ],
-                        "write" => (object) [
-                            "required" => true,
-                            "type" => "bool",
-                        ],
                     ],
                     "ports" => (object) [
-                        "bigint" => false,
+                        "opts" => (object) [
+                            "obj" => (object) [
+                                "guard" => null,
+                                "returning" => false,
+                                "whereDynamic" => null,
+                                "write" => true,
+                            ],
+                        ],
                         "params" => (object) [
                             "arr" => [
                                 (object) [
@@ -2288,9 +2124,7 @@ $irDoc = (object) [
                                 ],
                             ],
                         ],
-                        "returning" => false,
                         "sql" => "UPDATE benchmark_users SET name = ? WHERE id = ?",
-                        "write" => true,
                     ],
                 ],
             ],
@@ -2342,30 +2176,69 @@ $irDoc = (object) [
                         ],
                     ],
                     "portSchemas" => (object) [
-                        "bigint" => (object) [
-                            "required" => true,
-                            "type" => "bool",
+                        "opts" => (object) [
+                            "elemType" => (object) [
+                                "name" => "ExecOptions",
+                                "obj" => (object) [
+                                    "guard" => (object) [
+                                        "opt" => (object) [
+                                            "name" => "CapGuard",
+                                            "obj" => (object) [
+                                                "limit" => "int",
+                                                "model" => (object) [
+                                                    "opt" => "string",
+                                                ],
+                                                "relation" => "string",
+                                            ],
+                                        ],
+                                    ],
+                                    "returning" => "bool",
+                                    "whereDynamic" => (object) [
+                                        "opt" => (object) [
+                                            "name" => "DynamicWherePlan",
+                                            "obj" => (object) [
+                                                "frags" => (object) [
+                                                    "arr" => (object) [
+                                                        "name" => "DynamicWhereFrag",
+                                                        "obj" => (object) [
+                                                            "params" => (object) [
+                                                                "arr" => (object) [
+                                                                    "opt" => "value",
+                                                                ],
+                                                            ],
+                                                            "skipped" => "bool",
+                                                            "sql" => "string",
+                                                        ],
+                                                    ],
+                                                ],
+                                            ],
+                                        ],
+                                    ],
+                                    "write" => "bool",
+                                ],
+                            ],
+                            "required" => false,
+                            "type" => "object",
                         ],
                         "params" => (object) [
                             "elemType" => "value",
                             "required" => true,
                             "type" => "array",
                         ],
-                        "returning" => (object) [
-                            "required" => true,
-                            "type" => "bool",
-                        ],
                         "sql" => (object) [
                             "required" => true,
                             "type" => "string",
                         ],
-                        "write" => (object) [
-                            "required" => true,
-                            "type" => "bool",
-                        ],
                     ],
                     "ports" => (object) [
-                        "bigint" => false,
+                        "opts" => (object) [
+                            "obj" => (object) [
+                                "guard" => null,
+                                "returning" => true,
+                                "whereDynamic" => null,
+                                "write" => true,
+                            ],
+                        ],
                         "params" => (object) [
                             "arr" => [
                                 (object) [
@@ -2380,9 +2253,7 @@ $irDoc = (object) [
                                 ],
                             ],
                         ],
-                        "returning" => true,
                         "sql" => "INSERT INTO benchmark_users (email, name) VALUES (?, ?) ON DUPLICATE KEY UPDATE email = VALUES(email), name = VALUES(name) RETURNING id /*scp:pk=id;ai=id;conflict=email*/",
-                        "write" => true,
                     ],
                 ],
             ],
@@ -2434,30 +2305,69 @@ $irDoc = (object) [
                         ],
                     ],
                     "portSchemas" => (object) [
-                        "bigint" => (object) [
-                            "required" => true,
-                            "type" => "bool",
+                        "opts" => (object) [
+                            "elemType" => (object) [
+                                "name" => "ExecOptions",
+                                "obj" => (object) [
+                                    "guard" => (object) [
+                                        "opt" => (object) [
+                                            "name" => "CapGuard",
+                                            "obj" => (object) [
+                                                "limit" => "int",
+                                                "model" => (object) [
+                                                    "opt" => "string",
+                                                ],
+                                                "relation" => "string",
+                                            ],
+                                        ],
+                                    ],
+                                    "returning" => "bool",
+                                    "whereDynamic" => (object) [
+                                        "opt" => (object) [
+                                            "name" => "DynamicWherePlan",
+                                            "obj" => (object) [
+                                                "frags" => (object) [
+                                                    "arr" => (object) [
+                                                        "name" => "DynamicWhereFrag",
+                                                        "obj" => (object) [
+                                                            "params" => (object) [
+                                                                "arr" => (object) [
+                                                                    "opt" => "value",
+                                                                ],
+                                                            ],
+                                                            "skipped" => "bool",
+                                                            "sql" => "string",
+                                                        ],
+                                                    ],
+                                                ],
+                                            ],
+                                        ],
+                                    ],
+                                    "write" => "bool",
+                                ],
+                            ],
+                            "required" => false,
+                            "type" => "object",
                         ],
                         "params" => (object) [
                             "elemType" => "value",
                             "required" => true,
                             "type" => "array",
                         ],
-                        "returning" => (object) [
-                            "required" => true,
-                            "type" => "bool",
-                        ],
                         "sql" => (object) [
                             "required" => true,
                             "type" => "string",
                         ],
-                        "write" => (object) [
-                            "required" => true,
-                            "type" => "bool",
-                        ],
                     ],
                     "ports" => (object) [
-                        "bigint" => false,
+                        "opts" => (object) [
+                            "obj" => (object) [
+                                "guard" => null,
+                                "returning" => false,
+                                "whereDynamic" => null,
+                                "write" => true,
+                            ],
+                        ],
                         "params" => (object) [
                             "arr" => [
                                 (object) [
@@ -2467,9 +2377,7 @@ $irDoc = (object) [
                                 ],
                             ],
                         ],
-                        "returning" => false,
                         "sql" => "INSERT INTO benchmark_users (email, name) SELECT JSON_UNQUOTE(jt.email), JSON_UNQUOTE(jt.name) FROM JSON_TABLE(?, '\$[*]' COLUMNS(email JSON PATH '\$.email', name JSON PATH '\$.name')) jt",
-                        "write" => true,
                     ],
                 ],
             ],
@@ -2525,30 +2433,69 @@ $irDoc = (object) [
                         ],
                     ],
                     "portSchemas" => (object) [
-                        "bigint" => (object) [
-                            "required" => true,
-                            "type" => "bool",
+                        "opts" => (object) [
+                            "elemType" => (object) [
+                                "name" => "ExecOptions",
+                                "obj" => (object) [
+                                    "guard" => (object) [
+                                        "opt" => (object) [
+                                            "name" => "CapGuard",
+                                            "obj" => (object) [
+                                                "limit" => "int",
+                                                "model" => (object) [
+                                                    "opt" => "string",
+                                                ],
+                                                "relation" => "string",
+                                            ],
+                                        ],
+                                    ],
+                                    "returning" => "bool",
+                                    "whereDynamic" => (object) [
+                                        "opt" => (object) [
+                                            "name" => "DynamicWherePlan",
+                                            "obj" => (object) [
+                                                "frags" => (object) [
+                                                    "arr" => (object) [
+                                                        "name" => "DynamicWhereFrag",
+                                                        "obj" => (object) [
+                                                            "params" => (object) [
+                                                                "arr" => (object) [
+                                                                    "opt" => "value",
+                                                                ],
+                                                            ],
+                                                            "skipped" => "bool",
+                                                            "sql" => "string",
+                                                        ],
+                                                    ],
+                                                ],
+                                            ],
+                                        ],
+                                    ],
+                                    "write" => "bool",
+                                ],
+                            ],
+                            "required" => false,
+                            "type" => "object",
                         ],
                         "params" => (object) [
                             "elemType" => "value",
                             "required" => true,
                             "type" => "array",
                         ],
-                        "returning" => (object) [
-                            "required" => true,
-                            "type" => "bool",
-                        ],
                         "sql" => (object) [
                             "required" => true,
                             "type" => "string",
                         ],
-                        "write" => (object) [
-                            "required" => true,
-                            "type" => "bool",
-                        ],
                     ],
                     "ports" => (object) [
-                        "bigint" => false,
+                        "opts" => (object) [
+                            "obj" => (object) [
+                                "guard" => null,
+                                "returning" => false,
+                                "whereDynamic" => null,
+                                "write" => true,
+                            ],
+                        ],
                         "params" => (object) [
                             "arr" => [
                                 (object) [
@@ -2558,9 +2505,7 @@ $irDoc = (object) [
                                 ],
                             ],
                         ],
-                        "returning" => false,
                         "sql" => "INSERT INTO benchmark_users (email, name) SELECT JSON_UNQUOTE(jt.email), JSON_UNQUOTE(jt.name) FROM JSON_TABLE(?, '\$[*]' COLUMNS(email JSON PATH '\$.email', name JSON PATH '\$.name')) jt ON DUPLICATE KEY UPDATE email = VALUES(email), name = VALUES(name)",
-                        "write" => true,
                     ],
                 ],
             ],
@@ -2616,30 +2561,69 @@ $irDoc = (object) [
                         ],
                     ],
                     "portSchemas" => (object) [
-                        "bigint" => (object) [
-                            "required" => true,
-                            "type" => "bool",
+                        "opts" => (object) [
+                            "elemType" => (object) [
+                                "name" => "ExecOptions",
+                                "obj" => (object) [
+                                    "guard" => (object) [
+                                        "opt" => (object) [
+                                            "name" => "CapGuard",
+                                            "obj" => (object) [
+                                                "limit" => "int",
+                                                "model" => (object) [
+                                                    "opt" => "string",
+                                                ],
+                                                "relation" => "string",
+                                            ],
+                                        ],
+                                    ],
+                                    "returning" => "bool",
+                                    "whereDynamic" => (object) [
+                                        "opt" => (object) [
+                                            "name" => "DynamicWherePlan",
+                                            "obj" => (object) [
+                                                "frags" => (object) [
+                                                    "arr" => (object) [
+                                                        "name" => "DynamicWhereFrag",
+                                                        "obj" => (object) [
+                                                            "params" => (object) [
+                                                                "arr" => (object) [
+                                                                    "opt" => "value",
+                                                                ],
+                                                            ],
+                                                            "skipped" => "bool",
+                                                            "sql" => "string",
+                                                        ],
+                                                    ],
+                                                ],
+                                            ],
+                                        ],
+                                    ],
+                                    "write" => "bool",
+                                ],
+                            ],
+                            "required" => false,
+                            "type" => "object",
                         ],
                         "params" => (object) [
                             "elemType" => "value",
                             "required" => true,
                             "type" => "array",
                         ],
-                        "returning" => (object) [
-                            "required" => true,
-                            "type" => "bool",
-                        ],
                         "sql" => (object) [
                             "required" => true,
                             "type" => "string",
                         ],
-                        "write" => (object) [
-                            "required" => true,
-                            "type" => "bool",
-                        ],
                     ],
                     "ports" => (object) [
-                        "bigint" => false,
+                        "opts" => (object) [
+                            "obj" => (object) [
+                                "guard" => null,
+                                "returning" => false,
+                                "whereDynamic" => null,
+                                "write" => true,
+                            ],
+                        ],
                         "params" => (object) [
                             "arr" => [
                                 (object) [
@@ -2649,9 +2633,7 @@ $irDoc = (object) [
                                 ],
                             ],
                         ],
-                        "returning" => false,
                         "sql" => "UPDATE benchmark_users AS u JOIN JSON_TABLE(?, '\$[*]' COLUMNS(id JSON PATH '\$.id', name JSON PATH '\$.name')) AS v ON u.id = JSON_UNQUOTE(v.id) SET u.name = JSON_UNQUOTE(v.name)",
-                        "write" => true,
                     ],
                 ],
             ],
@@ -2706,30 +2688,69 @@ $irDoc = (object) [
                         ],
                     ],
                     "portSchemas" => (object) [
-                        "bigint" => (object) [
-                            "required" => true,
-                            "type" => "bool",
+                        "opts" => (object) [
+                            "elemType" => (object) [
+                                "name" => "ExecOptions",
+                                "obj" => (object) [
+                                    "guard" => (object) [
+                                        "opt" => (object) [
+                                            "name" => "CapGuard",
+                                            "obj" => (object) [
+                                                "limit" => "int",
+                                                "model" => (object) [
+                                                    "opt" => "string",
+                                                ],
+                                                "relation" => "string",
+                                            ],
+                                        ],
+                                    ],
+                                    "returning" => "bool",
+                                    "whereDynamic" => (object) [
+                                        "opt" => (object) [
+                                            "name" => "DynamicWherePlan",
+                                            "obj" => (object) [
+                                                "frags" => (object) [
+                                                    "arr" => (object) [
+                                                        "name" => "DynamicWhereFrag",
+                                                        "obj" => (object) [
+                                                            "params" => (object) [
+                                                                "arr" => (object) [
+                                                                    "opt" => "value",
+                                                                ],
+                                                            ],
+                                                            "skipped" => "bool",
+                                                            "sql" => "string",
+                                                        ],
+                                                    ],
+                                                ],
+                                            ],
+                                        ],
+                                    ],
+                                    "write" => "bool",
+                                ],
+                            ],
+                            "required" => false,
+                            "type" => "object",
                         ],
                         "params" => (object) [
                             "elemType" => "value",
                             "required" => true,
                             "type" => "array",
                         ],
-                        "returning" => (object) [
-                            "required" => true,
-                            "type" => "bool",
-                        ],
                         "sql" => (object) [
                             "required" => true,
                             "type" => "string",
                         ],
-                        "write" => (object) [
-                            "required" => true,
-                            "type" => "bool",
-                        ],
                     ],
                     "ports" => (object) [
-                        "bigint" => false,
+                        "opts" => (object) [
+                            "obj" => (object) [
+                                "guard" => null,
+                                "returning" => true,
+                                "whereDynamic" => null,
+                                "write" => true,
+                            ],
+                        ],
                         "params" => (object) [
                             "arr" => [
                                 (object) [
@@ -2744,9 +2765,7 @@ $irDoc = (object) [
                                 ],
                             ],
                         ],
-                        "returning" => true,
                         "sql" => "INSERT INTO benchmark_users (email, name) VALUES (?, ?) RETURNING id /*scp:pk=id;ai=id*/",
-                        "write" => true,
                     ],
                 ],
                 (object) [
@@ -2761,30 +2780,69 @@ $irDoc = (object) [
                         ],
                         "parent" => "n0",
                         "portSchemas" => (object) [
-                            "bigint" => (object) [
-                                "required" => true,
-                                "type" => "bool",
+                            "opts" => (object) [
+                                "elemType" => (object) [
+                                    "name" => "ExecOptions",
+                                    "obj" => (object) [
+                                        "guard" => (object) [
+                                            "opt" => (object) [
+                                                "name" => "CapGuard",
+                                                "obj" => (object) [
+                                                    "limit" => "int",
+                                                    "model" => (object) [
+                                                        "opt" => "string",
+                                                    ],
+                                                    "relation" => "string",
+                                                ],
+                                            ],
+                                        ],
+                                        "returning" => "bool",
+                                        "whereDynamic" => (object) [
+                                            "opt" => (object) [
+                                                "name" => "DynamicWherePlan",
+                                                "obj" => (object) [
+                                                    "frags" => (object) [
+                                                        "arr" => (object) [
+                                                            "name" => "DynamicWhereFrag",
+                                                            "obj" => (object) [
+                                                                "params" => (object) [
+                                                                    "arr" => (object) [
+                                                                        "opt" => "value",
+                                                                    ],
+                                                                ],
+                                                                "skipped" => "bool",
+                                                                "sql" => "string",
+                                                            ],
+                                                        ],
+                                                    ],
+                                                ],
+                                            ],
+                                        ],
+                                        "write" => "bool",
+                                    ],
+                                ],
+                                "required" => false,
+                                "type" => "object",
                             ],
                             "params" => (object) [
                                 "elemType" => "value",
                                 "required" => true,
                                 "type" => "array",
                             ],
-                            "returning" => (object) [
-                                "required" => true,
-                                "type" => "bool",
-                            ],
                             "sql" => (object) [
                                 "required" => true,
                                 "type" => "string",
                             ],
-                            "write" => (object) [
-                                "required" => true,
-                                "type" => "bool",
-                            ],
                         ],
                         "ports" => (object) [
-                            "bigint" => false,
+                            "opts" => (object) [
+                                "obj" => (object) [
+                                    "guard" => null,
+                                    "returning" => false,
+                                    "whereDynamic" => null,
+                                    "write" => true,
+                                ],
+                            ],
                             "params" => (object) [
                                 "arr" => [
                                     (object) [
@@ -2800,9 +2858,7 @@ $irDoc = (object) [
                                     ],
                                 ],
                             ],
-                            "returning" => false,
                             "sql" => "INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)",
-                            "write" => true,
                         ],
                     ],
                     "outType" => (object) [
@@ -2873,30 +2929,69 @@ $irDoc = (object) [
                         ],
                     ],
                     "portSchemas" => (object) [
-                        "bigint" => (object) [
-                            "required" => true,
-                            "type" => "bool",
+                        "opts" => (object) [
+                            "elemType" => (object) [
+                                "name" => "ExecOptions",
+                                "obj" => (object) [
+                                    "guard" => (object) [
+                                        "opt" => (object) [
+                                            "name" => "CapGuard",
+                                            "obj" => (object) [
+                                                "limit" => "int",
+                                                "model" => (object) [
+                                                    "opt" => "string",
+                                                ],
+                                                "relation" => "string",
+                                            ],
+                                        ],
+                                    ],
+                                    "returning" => "bool",
+                                    "whereDynamic" => (object) [
+                                        "opt" => (object) [
+                                            "name" => "DynamicWherePlan",
+                                            "obj" => (object) [
+                                                "frags" => (object) [
+                                                    "arr" => (object) [
+                                                        "name" => "DynamicWhereFrag",
+                                                        "obj" => (object) [
+                                                            "params" => (object) [
+                                                                "arr" => (object) [
+                                                                    "opt" => "value",
+                                                                ],
+                                                            ],
+                                                            "skipped" => "bool",
+                                                            "sql" => "string",
+                                                        ],
+                                                    ],
+                                                ],
+                                            ],
+                                        ],
+                                    ],
+                                    "write" => "bool",
+                                ],
+                            ],
+                            "required" => false,
+                            "type" => "object",
                         ],
                         "params" => (object) [
                             "elemType" => "value",
                             "required" => true,
                             "type" => "array",
                         ],
-                        "returning" => (object) [
-                            "required" => true,
-                            "type" => "bool",
-                        ],
                         "sql" => (object) [
                             "required" => true,
                             "type" => "string",
                         ],
-                        "write" => (object) [
-                            "required" => true,
-                            "type" => "bool",
-                        ],
                     ],
                     "ports" => (object) [
-                        "bigint" => false,
+                        "opts" => (object) [
+                            "obj" => (object) [
+                                "guard" => null,
+                                "returning" => true,
+                                "whereDynamic" => null,
+                                "write" => true,
+                            ],
+                        ],
                         "params" => (object) [
                             "arr" => [
                                 (object) [
@@ -2911,9 +3006,7 @@ $irDoc = (object) [
                                 ],
                             ],
                         ],
-                        "returning" => true,
                         "sql" => "INSERT INTO benchmark_users (email, name) VALUES (?, ?) ON DUPLICATE KEY UPDATE email = VALUES(email), name = VALUES(name) RETURNING id /*scp:pk=id;ai=id;conflict=email*/",
-                        "write" => true,
                     ],
                 ],
                 (object) [
@@ -2928,30 +3021,69 @@ $irDoc = (object) [
                         ],
                         "parent" => "n0",
                         "portSchemas" => (object) [
-                            "bigint" => (object) [
-                                "required" => true,
-                                "type" => "bool",
+                            "opts" => (object) [
+                                "elemType" => (object) [
+                                    "name" => "ExecOptions",
+                                    "obj" => (object) [
+                                        "guard" => (object) [
+                                            "opt" => (object) [
+                                                "name" => "CapGuard",
+                                                "obj" => (object) [
+                                                    "limit" => "int",
+                                                    "model" => (object) [
+                                                        "opt" => "string",
+                                                    ],
+                                                    "relation" => "string",
+                                                ],
+                                            ],
+                                        ],
+                                        "returning" => "bool",
+                                        "whereDynamic" => (object) [
+                                            "opt" => (object) [
+                                                "name" => "DynamicWherePlan",
+                                                "obj" => (object) [
+                                                    "frags" => (object) [
+                                                        "arr" => (object) [
+                                                            "name" => "DynamicWhereFrag",
+                                                            "obj" => (object) [
+                                                                "params" => (object) [
+                                                                    "arr" => (object) [
+                                                                        "opt" => "value",
+                                                                    ],
+                                                                ],
+                                                                "skipped" => "bool",
+                                                                "sql" => "string",
+                                                            ],
+                                                        ],
+                                                    ],
+                                                ],
+                                            ],
+                                        ],
+                                        "write" => "bool",
+                                    ],
+                                ],
+                                "required" => false,
+                                "type" => "object",
                             ],
                             "params" => (object) [
                                 "elemType" => "value",
                                 "required" => true,
                                 "type" => "array",
                             ],
-                            "returning" => (object) [
-                                "required" => true,
-                                "type" => "bool",
-                            ],
                             "sql" => (object) [
                                 "required" => true,
                                 "type" => "string",
                             ],
-                            "write" => (object) [
-                                "required" => true,
-                                "type" => "bool",
-                            ],
                         ],
                         "ports" => (object) [
-                            "bigint" => false,
+                            "opts" => (object) [
+                                "obj" => (object) [
+                                    "guard" => null,
+                                    "returning" => false,
+                                    "whereDynamic" => null,
+                                    "write" => true,
+                                ],
+                            ],
                             "params" => (object) [
                                 "arr" => [
                                     (object) [
@@ -2967,9 +3099,7 @@ $irDoc = (object) [
                                     ],
                                 ],
                             ],
-                            "returning" => false,
                             "sql" => "INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)",
-                            "write" => true,
                         ],
                     ],
                     "outType" => (object) [
@@ -3040,30 +3170,69 @@ $irDoc = (object) [
                         ],
                     ],
                     "portSchemas" => (object) [
-                        "bigint" => (object) [
-                            "required" => true,
-                            "type" => "bool",
+                        "opts" => (object) [
+                            "elemType" => (object) [
+                                "name" => "ExecOptions",
+                                "obj" => (object) [
+                                    "guard" => (object) [
+                                        "opt" => (object) [
+                                            "name" => "CapGuard",
+                                            "obj" => (object) [
+                                                "limit" => "int",
+                                                "model" => (object) [
+                                                    "opt" => "string",
+                                                ],
+                                                "relation" => "string",
+                                            ],
+                                        ],
+                                    ],
+                                    "returning" => "bool",
+                                    "whereDynamic" => (object) [
+                                        "opt" => (object) [
+                                            "name" => "DynamicWherePlan",
+                                            "obj" => (object) [
+                                                "frags" => (object) [
+                                                    "arr" => (object) [
+                                                        "name" => "DynamicWhereFrag",
+                                                        "obj" => (object) [
+                                                            "params" => (object) [
+                                                                "arr" => (object) [
+                                                                    "opt" => "value",
+                                                                ],
+                                                            ],
+                                                            "skipped" => "bool",
+                                                            "sql" => "string",
+                                                        ],
+                                                    ],
+                                                ],
+                                            ],
+                                        ],
+                                    ],
+                                    "write" => "bool",
+                                ],
+                            ],
+                            "required" => false,
+                            "type" => "object",
                         ],
                         "params" => (object) [
                             "elemType" => "value",
                             "required" => true,
                             "type" => "array",
                         ],
-                        "returning" => (object) [
-                            "required" => true,
-                            "type" => "bool",
-                        ],
                         "sql" => (object) [
                             "required" => true,
                             "type" => "string",
                         ],
-                        "write" => (object) [
-                            "required" => true,
-                            "type" => "bool",
-                        ],
                     ],
                     "ports" => (object) [
-                        "bigint" => false,
+                        "opts" => (object) [
+                            "obj" => (object) [
+                                "guard" => null,
+                                "returning" => true,
+                                "whereDynamic" => null,
+                                "write" => true,
+                            ],
+                        ],
                         "params" => (object) [
                             "arr" => [
                                 (object) [
@@ -3078,9 +3247,7 @@ $irDoc = (object) [
                                 ],
                             ],
                         ],
-                        "returning" => true,
                         "sql" => "UPDATE benchmark_users SET name = ? WHERE id = ? RETURNING id /*scp:pk=id;ai=id*/",
-                        "write" => true,
                     ],
                 ],
                 (object) [
@@ -3095,30 +3262,69 @@ $irDoc = (object) [
                         ],
                         "parent" => "n0",
                         "portSchemas" => (object) [
-                            "bigint" => (object) [
-                                "required" => true,
-                                "type" => "bool",
+                            "opts" => (object) [
+                                "elemType" => (object) [
+                                    "name" => "ExecOptions",
+                                    "obj" => (object) [
+                                        "guard" => (object) [
+                                            "opt" => (object) [
+                                                "name" => "CapGuard",
+                                                "obj" => (object) [
+                                                    "limit" => "int",
+                                                    "model" => (object) [
+                                                        "opt" => "string",
+                                                    ],
+                                                    "relation" => "string",
+                                                ],
+                                            ],
+                                        ],
+                                        "returning" => "bool",
+                                        "whereDynamic" => (object) [
+                                            "opt" => (object) [
+                                                "name" => "DynamicWherePlan",
+                                                "obj" => (object) [
+                                                    "frags" => (object) [
+                                                        "arr" => (object) [
+                                                            "name" => "DynamicWhereFrag",
+                                                            "obj" => (object) [
+                                                                "params" => (object) [
+                                                                    "arr" => (object) [
+                                                                        "opt" => "value",
+                                                                    ],
+                                                                ],
+                                                                "skipped" => "bool",
+                                                                "sql" => "string",
+                                                            ],
+                                                        ],
+                                                    ],
+                                                ],
+                                            ],
+                                        ],
+                                        "write" => "bool",
+                                    ],
+                                ],
+                                "required" => false,
+                                "type" => "object",
                             ],
                             "params" => (object) [
                                 "elemType" => "value",
                                 "required" => true,
                                 "type" => "array",
                             ],
-                            "returning" => (object) [
-                                "required" => true,
-                                "type" => "bool",
-                            ],
                             "sql" => (object) [
                                 "required" => true,
                                 "type" => "string",
                             ],
-                            "write" => (object) [
-                                "required" => true,
-                                "type" => "bool",
-                            ],
                         ],
                         "ports" => (object) [
-                            "bigint" => false,
+                            "opts" => (object) [
+                                "obj" => (object) [
+                                    "guard" => null,
+                                    "returning" => false,
+                                    "whereDynamic" => null,
+                                    "write" => true,
+                                ],
+                            ],
                             "params" => (object) [
                                 "arr" => [
                                     (object) [
@@ -3134,9 +3340,7 @@ $irDoc = (object) [
                                     ],
                                 ],
                             ],
-                            "returning" => false,
                             "sql" => "UPDATE benchmark_posts SET title = ? WHERE author_id = ?",
-                            "write" => true,
                         ],
                     ],
                     "outType" => (object) [
@@ -3207,30 +3411,69 @@ $irDoc = (object) [
                         ],
                     ],
                     "portSchemas" => (object) [
-                        "bigint" => (object) [
-                            "required" => true,
-                            "type" => "bool",
+                        "opts" => (object) [
+                            "elemType" => (object) [
+                                "name" => "ExecOptions",
+                                "obj" => (object) [
+                                    "guard" => (object) [
+                                        "opt" => (object) [
+                                            "name" => "CapGuard",
+                                            "obj" => (object) [
+                                                "limit" => "int",
+                                                "model" => (object) [
+                                                    "opt" => "string",
+                                                ],
+                                                "relation" => "string",
+                                            ],
+                                        ],
+                                    ],
+                                    "returning" => "bool",
+                                    "whereDynamic" => (object) [
+                                        "opt" => (object) [
+                                            "name" => "DynamicWherePlan",
+                                            "obj" => (object) [
+                                                "frags" => (object) [
+                                                    "arr" => (object) [
+                                                        "name" => "DynamicWhereFrag",
+                                                        "obj" => (object) [
+                                                            "params" => (object) [
+                                                                "arr" => (object) [
+                                                                    "opt" => "value",
+                                                                ],
+                                                            ],
+                                                            "skipped" => "bool",
+                                                            "sql" => "string",
+                                                        ],
+                                                    ],
+                                                ],
+                                            ],
+                                        ],
+                                    ],
+                                    "write" => "bool",
+                                ],
+                            ],
+                            "required" => false,
+                            "type" => "object",
                         ],
                         "params" => (object) [
                             "elemType" => "value",
                             "required" => true,
                             "type" => "array",
                         ],
-                        "returning" => (object) [
-                            "required" => true,
-                            "type" => "bool",
-                        ],
                         "sql" => (object) [
                             "required" => true,
                             "type" => "string",
                         ],
-                        "write" => (object) [
-                            "required" => true,
-                            "type" => "bool",
-                        ],
                     ],
                     "ports" => (object) [
-                        "bigint" => false,
+                        "opts" => (object) [
+                            "obj" => (object) [
+                                "guard" => null,
+                                "returning" => true,
+                                "whereDynamic" => null,
+                                "write" => true,
+                            ],
+                        ],
                         "params" => (object) [
                             "arr" => [
                                 (object) [
@@ -3245,9 +3488,7 @@ $irDoc = (object) [
                                 ],
                             ],
                         ],
-                        "returning" => true,
                         "sql" => "INSERT INTO benchmark_users (email, name) VALUES (?, ?) RETURNING id /*scp:pk=id;ai=id*/",
-                        "write" => true,
                     ],
                 ],
                 (object) [
@@ -3262,30 +3503,69 @@ $irDoc = (object) [
                         ],
                         "parent" => "n0",
                         "portSchemas" => (object) [
-                            "bigint" => (object) [
-                                "required" => true,
-                                "type" => "bool",
+                            "opts" => (object) [
+                                "elemType" => (object) [
+                                    "name" => "ExecOptions",
+                                    "obj" => (object) [
+                                        "guard" => (object) [
+                                            "opt" => (object) [
+                                                "name" => "CapGuard",
+                                                "obj" => (object) [
+                                                    "limit" => "int",
+                                                    "model" => (object) [
+                                                        "opt" => "string",
+                                                    ],
+                                                    "relation" => "string",
+                                                ],
+                                            ],
+                                        ],
+                                        "returning" => "bool",
+                                        "whereDynamic" => (object) [
+                                            "opt" => (object) [
+                                                "name" => "DynamicWherePlan",
+                                                "obj" => (object) [
+                                                    "frags" => (object) [
+                                                        "arr" => (object) [
+                                                            "name" => "DynamicWhereFrag",
+                                                            "obj" => (object) [
+                                                                "params" => (object) [
+                                                                    "arr" => (object) [
+                                                                        "opt" => "value",
+                                                                    ],
+                                                                ],
+                                                                "skipped" => "bool",
+                                                                "sql" => "string",
+                                                            ],
+                                                        ],
+                                                    ],
+                                                ],
+                                            ],
+                                        ],
+                                        "write" => "bool",
+                                    ],
+                                ],
+                                "required" => false,
+                                "type" => "object",
                             ],
                             "params" => (object) [
                                 "elemType" => "value",
                                 "required" => true,
                                 "type" => "array",
                             ],
-                            "returning" => (object) [
-                                "required" => true,
-                                "type" => "bool",
-                            ],
                             "sql" => (object) [
                                 "required" => true,
                                 "type" => "string",
                             ],
-                            "write" => (object) [
-                                "required" => true,
-                                "type" => "bool",
-                            ],
                         ],
                         "ports" => (object) [
-                            "bigint" => false,
+                            "opts" => (object) [
+                                "obj" => (object) [
+                                    "guard" => null,
+                                    "returning" => false,
+                                    "whereDynamic" => null,
+                                    "write" => true,
+                                ],
+                            ],
                             "params" => (object) [
                                 "arr" => [
                                     (object) [
@@ -3296,9 +3576,7 @@ $irDoc = (object) [
                                     ],
                                 ],
                             ],
-                            "returning" => false,
                             "sql" => "DELETE FROM benchmark_users WHERE id = ?",
-                            "write" => true,
                         ],
                     ],
                     "outType" => (object) [

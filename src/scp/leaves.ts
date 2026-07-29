@@ -40,7 +40,7 @@ import {
   type RunInfo,
 } from './exec-context';
 import { assertRelationHardLimit, type RelationGuard } from './limit-config';
-import type { DynamicWherePlan } from './leaf-transport';
+import type { DynamicWherePlan, ExecOptions } from './leaf-transport';
 import { renderPlaceholders, type Dialect } from './makesql/handler';
 import { encodeJsonArrayParam } from './makesql/json-array';
 import { resolvePgArrayCast } from './makesql/compile-relation';
@@ -69,13 +69,18 @@ export interface AsyncLeafContext {
   readonly dialect: Dialect;
 }
 
-/** The evaluated `executeSQL` ports a generated module hands the transport. */
+/**
+ * The UNBOXED `executeSQL` ports the transport body runs on: the statement plus the facts its ONE
+ * optional control record ({@link import('./leaf-transport').ExecOptions}) carries, already read out
+ * ({@link executeSqlPorts}) — the same flattening the rust / go / python / php transports do after
+ * probing the payload. The imperative tx runner ({@link import('./makesql/tx')}) hands this record
+ * directly, since it holds the statement facts already and has no wire payload to decode.
+ */
 interface ExecuteSqlPorts {
   readonly sql: string;
   readonly params: unknown[];
   readonly write: boolean;
   readonly returning: boolean;
-  readonly bigint: boolean;
   /** The DYNAMIC WHERE plan (absent on a fully-bounded statement — CLAUDE.md §2). See {@link assembleDynamicWhere}. */
   readonly whereDynamic?: DynamicWherePlan | null;
   /**
@@ -232,8 +237,8 @@ function writeSummary(info: RunInfo): Array<Record<string, unknown>> {
  * int and float as DISTINCT kinds, so a column declared `Int` cannot be satisfied by a JS number on any
  * dialect, and gating exactness per endpoint made SQLite disagree with PostgreSQL and MySQL (whose
  * integer type parsers are unconditional — `configurePgDeboxTypeParsers`, `mysqlDeboxPoolOptions`),
- * which the conformance corpus rejects as dialect-variant. `bigint` is retained as a port because the
- * generated modules declare it, but it no longer selects the seam.
+ * which the conformance corpus rejects as dialect-variant. There is therefore no exactness port at all
+ * (#193 deleted the `bigint` one, which no language read).
  */
 export function executeSQL(p: ExecuteSqlPorts, ctx: LeafContext): Array<Record<string, unknown>> {
   const prepared = prepareSql(effectiveStatement(p), ctx.dialect);
@@ -283,7 +288,7 @@ export function group(p: { parents: Array<Record<string, unknown>>; children: Ar
 // ── handler maps: the boundary injection a generated module's bind()/bindAsync() consumes ──
 
 /**
- * Read the OPTIONAL relation `guard` port. Absent (or null) ⇒ the statement is uncapped. The cap
+ * Read the relation `guard` field of the control record. Absent (or null) ⇒ the statement is uncapped. The cap
  * arrives in bc's `int` value model, which on the TS plane is a BigInt, so it is normalized to the
  * `number` {@link RelationGuard} (and {@link import('./errors').LimitExceededError}) declare — the
  * SAME numeric type the rust/go/python/php transports hand their own check. A guard that is present
@@ -303,16 +308,34 @@ function relationGuardPort(port: Value | undefined): RelationGuard | null {
   return { limit, ...(typeof g.model === 'string' ? { model: g.model } : {}), relation: g.relation };
 }
 
+/**
+ * Read the OPTIONAL `opts` control record ({@link ExecOptions}) off the evaluated port record. ABSENT
+ * (or null) ⇒ a plain READ: not a write, no dynamic plan, uncapped — the one statement shape that omits
+ * the port entirely, so a bounded read's payload is `sql` + `params` and nothing else. PRESENT but not
+ * a record is a LOUD port failure: every fact the transport branches on lives in there, so a record
+ * that fails to unbox would silently downgrade a write to a read and drop a relation cap.
+ */
+function execOptionsPort(port: Value | undefined): Partial<Record<keyof ExecOptions, Value>> {
+  if (port === undefined || port === null) return {};
+  if (typeof port !== 'object' || Array.isArray(port)) {
+    throw new Error(
+      `scp leaf executeSQL: the 'opts' port must be the {write, returning, whereDynamic, guard} control ` +
+        `record, got ${JSON.stringify(port)}`,
+    );
+  }
+  return port as unknown as Partial<Record<keyof ExecOptions, Value>>;
+}
+
 /** Read the declared `executeSQL` ports off the evaluated port record (the generated module's Values). */
 function executeSqlPorts(ports: Record<string, Value>): ExecuteSqlPorts {
+  const opts = execOptionsPort(ports.opts);
   return {
     sql: ports.sql as unknown as string,
     params: ports.params as unknown as unknown[],
-    write: ports.write === true,
-    returning: ports.returning === true,
-    bigint: ports.bigint === true,
-    whereDynamic: (ports.whereDynamic ?? null) as unknown as DynamicWherePlan | null,
-    guard: relationGuardPort(ports.guard),
+    write: opts.write === true,
+    returning: opts.returning === true,
+    whereDynamic: (opts.whereDynamic ?? null) as unknown as DynamicWherePlan | null,
+    guard: relationGuardPort(opts.guard),
   };
 }
 

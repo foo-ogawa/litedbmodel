@@ -33,15 +33,27 @@ func openBoundT(t *testing.T) *sql.DB {
 	return db
 }
 
-// sqlPayload builds the executeSQL node payload (the ports the covered runner assembles by name).
+// optsPort builds the `opts` control record port — the ExecOptions record the covered runner assembles:
+// how to run the statement plus its two optional control structs (wire.WireNull() ⇒ the record's null
+// field, which is how ABSENCE is spelled now that nothing is positional).
+func optsPort(write, returning bool, whereDynamic, guard wire.WireValue) wire.WireField {
+	return port("opts", wire.WireRowOf([]wire.WireField{
+		{Key: "guard", Val: guard},
+		{Key: "returning", Val: wire.WireBool(returning)},
+		{Key: "whereDynamic", Val: whereDynamic},
+		{Key: "write", Val: wire.WireBool(write)},
+	}))
+}
+
+// sqlPayload builds the executeSQL node payload (the ports the covered runner assembles by name). A
+// plain READ omits the control record entirely — exactly what the emitter generates for one — so this
+// covers both the absent-record default and the present-record path.
 func sqlPayload(params []wire.WireValue, sql string, write bool) wire.WireRow {
-	return leafPayload(
-		port("bigint", wire.WireBool(false)),
-		port("params", wire.WireListOf(params)),
-		port("returning", wire.WireBool(false)),
-		port("sql", wire.WireStr(sql)),
-		port("write", wire.WireBool(write)),
-	)
+	ports := []wire.WireField{port("params", wire.WireListOf(params)), port("sql", wire.WireStr(sql))}
+	if write {
+		ports = append(ports, optsPort(true, false, wire.WireNull(), wire.WireNull()))
+	}
+	return leafPayload(ports...)
 }
 
 // insT issues one INSERT through ExecuteSQL (the covered write path). Returns the leaf result wire.
@@ -151,20 +163,17 @@ func TestWithAmbientTransaction_RestoresAmbient(t *testing.T) {
 	}
 }
 
-// guardPayload builds a READ executeSQL payload carrying the OPTIONAL relation `guard` port — the
+// guardPayload builds a READ executeSQL payload whose control record carries the relation `guard` — the
 // runaway cap the emitter bakes onto a guarded relation child fetch (`{limit, model, relation}`).
 func guardPayload(sql string, limit int64, model, relation string) wire.WireRow {
 	return leafPayload(
-		port("bigint", wire.WireBool(false)),
-		port("guard", wire.WireRowOf([]wire.WireField{
+		optsPort(false, false, wire.WireNull(), wire.WireRowOf([]wire.WireField{
 			{Key: "limit", Val: wire.WireInt(limit)},
 			{Key: "model", Val: wire.WireStr(model)},
 			{Key: "relation", Val: wire.WireStr(relation)},
 		})),
 		port("params", wire.WireListOf(nil)),
-		port("returning", wire.WireBool(false)),
 		port("sql", wire.WireStr(sql)),
-		port("write", wire.WireBool(false)),
 	)
 }
 
@@ -240,14 +249,11 @@ func TestExecuteSQL_DynamicWhereContinuesBoundedWhere(t *testing.T) {
 		{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireStr("c")})},
 	})
 	out, err := ExecuteSQL(leafPayload(
-		port("bigint", wire.WireBool(false)),
-		port("params", wire.WireListOf([]wire.WireValue{wire.WireInt(1), wire.WireInt(2)})),
-		port("returning", wire.WireBool(false)),
-		port("sql", wire.WireStr("SELECT id FROM t WHERE id > ? ORDER BY id LIMIT ?")),
-		port("whereDynamic", wire.WireRowOf([]wire.WireField{
+		optsPort(false, false, wire.WireRowOf([]wire.WireField{
 			{Key: "frags", Val: wire.WireListOf([]wire.WireValue{frag})},
-		})),
-		port("write", wire.WireBool(false)),
+		}), wire.WireNull()),
+		port("params", wire.WireListOf([]wire.WireValue{wire.WireInt(1), wire.WireInt(2)})),
+		port("sql", wire.WireStr("SELECT id FROM t WHERE id > ? ORDER BY id LIMIT ?")),
 	))
 	if err != nil {
 		t.Fatalf("dynamic read: %v", err)

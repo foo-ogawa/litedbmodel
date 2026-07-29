@@ -81,7 +81,8 @@ export type {
 // its executable bodies, injected into a generated module's `bind`/`bindAsync`.
 export { Db } from './leaf-transport';
 // The two dynamic-WHERE control-port types live WITH the leaf catalog (the `--from` SSoT), not the
-// runtime bodies; `CapGuard` (the `guard` port's bc struct) is emitter-internal and not re-exported.
+// runtime bodies; `ExecOptions` (the `opts` control record) and `CapGuard` (its `guard` struct) are
+// emitter-internal — the emitted module writes the literal, so nothing downstream names the type.
 export type { DynamicWhereFrag, DynamicWherePlan } from './leaf-transport';
 export { executeSQL, executeSQLAsync, pluck, group, leafHandlers, leafHandlersAsync, LEAF_TRANSPORT_SYMBOLS, prepareSql, assembleDynamicWhere } from './leaves';
 export type { LeafContext, AsyncLeafContext } from './leaves';

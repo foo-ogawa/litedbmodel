@@ -343,10 +343,9 @@ class EmitContext {
       ...(endpoint.lock === 'update' ? { forUpdate: true } : endpoint.lock === 'share' ? { forShare: true } : {}),
     } satisfies SelectDesc);
 
-    const bigint = endpoint.bigint === true;
-    const call = `${quote(compiled.sql)}, [${compiled.params.map(renderSlot).join(', ')}], false, false, ${bigint}${
-      optional.length > 0 ? `, ${this.dynamicWherePlan(model, optional)}` : ''
-    }`;
+    const call = `${quote(compiled.sql)}, [${compiled.params.map(renderSlot).join(', ')}]${execOptions(
+      optional.length > 0 ? { whereDynamic: this.dynamicWherePlan(model, optional) } : {},
+    )}`;
 
     const rowObj = objOf(deriveReadRow(table, projection, readResolve, `endpoint '${name}'`).outType, name);
     const selections = normalizeSelections(endpoint.with ?? []);
@@ -367,7 +366,7 @@ class EmitContext {
     const lines: string[] = [];
     const parentVar = fresh('rows');
     lines.push(`const ${parentVar}: WireValue[] = Db.executeSQL(${call});`);
-    const graph = this.relations(model, parentVar, rowObj, selections, lines, fresh, bigint, `endpoint '${name}'`);
+    const graph = this.relations(model, parentVar, rowObj, selections, lines, fresh, `endpoint '${name}'`);
     const rowType = this.declareInterface(`${cap1(name)}Row`, graph.obj);
     // The terminal binding is the SINGLE de-box point: the annotation is what bc reads, the one
     // assertion is what narrows the opaque wire value for tsc.
@@ -407,7 +406,6 @@ class EmitContext {
     selections: readonly { name: string; with: readonly RelationSelection[] }[],
     lines: string[],
     fresh: (base: string) => string,
-    bigint: boolean,
     at: string,
   ): { obj: Record<string, PortableType>; terminalCall: string; terminalVar: string } {
     let acc = parentVar;
@@ -421,12 +419,10 @@ class EmitContext {
       lines.push(`const ${keysVar}: WireValue[] = Db.pluck(${acc}, ${jsonArray(parentKeyCols(op))});`);
       const childVar = fresh(sel.name);
       // The runaway guard the compiled op resolved (`hasManyHardLimit` / the per-relation override):
-      // baked onto the child fetch so the `executeSQL` transport asserts the RAW child row count —
-      // the only point they are visible, since `group` receives an already-nested graph. A relation
-      // batch never carries a dynamic WHERE (its SQL is fully static), so `whereDynamic` is passed as an
-      // EMPTY plan (`{frags:[]}` ≡ no dynamic WHERE) purely to reach the trailing `guard` arg positionally
-      // — NOT `null`, which bc's go emitter mis-lowers to an untyped `nil` in the wire payload (the
-      // positional-filler smell tracked by #193). Uncapped ⇒ both ports are omitted entirely.
+      // baked onto the child fetch so the `executeSQL` transport asserts the RAW child row count — the
+      // only point they are visible, since `group` receives an already-nested graph. A relation batch
+      // never carries a dynamic WHERE (its SQL is fully static), and it says so with the `whereDynamic:
+      // null` FIELD of the option record — an uncapped batch carries no record at all.
       const guard = relationGuard(op);
       // The guard rides as a CONCRETE `CapGuard` struct (leaf-transport), so the native emitters build
       // it directly: `limit` is an `Int` LITERAL (a plain `number` would emit as a float and the wire
@@ -434,16 +430,17 @@ class EmitContext {
       const guardExpr =
         guard !== null
           ? `{ limit: ${guard.limit} as Int, ${guard.model !== undefined ? `model: ${quote(guard.model)}, ` : ''}relation: ${quote(guard.relation)} }`
-          : null;
-      const guardPorts = guardExpr !== null ? `, { frags: [] }, ${guardExpr}` : '';
-      lines.push(`const ${childVar}: WireValue[] = Db.executeSQL(${quote(op.sql)}, [${keysVar}], false, false, ${bigint}${guardPorts});`);
+          : undefined;
+      lines.push(
+        `const ${childVar}: WireValue[] = Db.executeSQL(${quote(op.sql)}, [${keysVar}]${execOptions(guardExpr !== undefined ? { guard: guardExpr } : {})});`,
+      );
       let childRows = childVar;
       let childObj = objOf(
         deriveReadRow(decl.targetTable, decl.select, this.resolver(targetModel), `${at} relation '${sel.name}'`).outType,
         `${at} relation '${sel.name}'`,
       );
       if (sel.with.length > 0) {
-        const nested = this.relations(targetModel, childVar, childObj, normalizeSelections(sel.with), lines, fresh, bigint, `${at}.${sel.name}`);
+        const nested = this.relations(targetModel, childVar, childObj, normalizeSelections(sel.with), lines, fresh, `${at}.${sel.name}`);
         childObj = nested.obj;
         childRows = nested.terminalVar;
       }
@@ -505,7 +502,7 @@ class EmitContext {
       params,
       returnType: `${rowType}[]`,
       lines: [
-        `const ${out}: ${rowType}[] = Db.executeSQL(${quote(op.sql)}, [${op.params.map(renderSlot).join(', ')}], true, ${returning !== undefined}, false) as ${rowType}[];`,
+        `const ${out}: ${rowType}[] = Db.executeSQL(${quote(op.sql)}, [${op.params.map(renderSlot).join(', ')}]${execOptions({ write: { returning: returning !== undefined } })}) as ${rowType}[];`,
         `return ${out};`,
       ],
     };
@@ -598,7 +595,7 @@ class EmitContext {
       params,
       returnType: `${rowType}[]`,
       lines: [
-        `const ${out}: ${rowType}[] = Db.executeSQL(${quote(op.sql)}, [${slots.join(', ')}], true, ${endpoint.returning !== undefined}, false) as ${rowType}[];`,
+        `const ${out}: ${rowType}[] = Db.executeSQL(${quote(op.sql)}, [${slots.join(', ')}]${execOptions({ write: { returning: endpoint.returning !== undefined } })}) as ${rowType}[];`,
         `return ${out};`,
       ],
     };
@@ -627,7 +624,7 @@ class EmitContext {
       params,
       returnType: `${rowType}[]`,
       lines: [
-        `const ${out}: ${rowType}[] = Db.executeSQL(${quote(op.sql)}, [${op.params.map(renderSlot).join(', ')}], true, ${endpoint.returning !== undefined}, false) as ${rowType}[];`,
+        `const ${out}: ${rowType}[] = Db.executeSQL(${quote(op.sql)}, [${op.params.map(renderSlot).join(', ')}]${execOptions({ write: { returning: endpoint.returning !== undefined } })}) as ${rowType}[];`,
         `return ${out};`,
       ],
     };
@@ -868,6 +865,31 @@ type OptionalPredicate = (ComparePredicate | InPredicate) & { readonly optional:
 /** A predicate is a SKIP member when it declares `optional` (only a parameterised member can be one). */
 function isOptional(p: Predicate): p is OptionalPredicate {
   return isParameterised(p) && p.optional === true;
+}
+
+/**
+ * Render the OPTIONAL `opts` argument of `Db.executeSQL` — the ONE place the option record
+ * ({@link import('../leaf-transport').ExecOptions}) is spelled, for every emitted statement of every op.
+ *
+ * A statement that carries NO option at all (a bounded read, an uncapped relation child) renders
+ * NOTHING: the port is omitted and the payload stays `sql` + `params` (native-clean). Any other
+ * statement spells the WHOLE record — bc types a port by the literal wired into it and rejects a
+ * partial one — so each absent fact is the `null` VALUE of its own NAMED field. That is what removed
+ * the positional filler #193 is about: nothing has to be passed to reach the field after it.
+ *
+ * `write` carries the write's own `returning`, so "returns rows but is not a write" is not
+ * expressible at the only place the record is built.
+ */
+function execOptions(o: {
+  /** The statement WRITES, and whether that write yields ROWS (absent ⇒ a read). */
+  readonly write?: { readonly returning: boolean };
+  /** The rendered DYNAMIC (SKIP) plan expression (absent ⇒ the read declares no optional predicate). */
+  readonly whereDynamic?: string;
+  /** The rendered relation cap expression (absent ⇒ the fetch is uncapped). */
+  readonly guard?: string;
+}): string {
+  if (o.write === undefined && o.whereDynamic === undefined && o.guard === undefined) return '';
+  return `, { write: ${o.write !== undefined}, returning: ${o.write?.returning === true}, whereDynamic: ${o.whereDynamic ?? 'null'}, guard: ${o.guard ?? 'null'} }`;
 }
 
 /**

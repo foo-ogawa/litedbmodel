@@ -79,7 +79,7 @@ func portErr(name, expected string, kind uint8, actual string) error {
 	return fmt.Errorf("leaf transport: port %q expected a wire %s, got %s", name, expected, actual)
 }
 
-// portBool reads a bool port (write / returning / bigint / single).
+// portBool reads a bool port (the control record's write / returning, or group's single).
 func portBool(payload wire.WireRow, name string) (bool, error) {
 	p := payload.ProbeBool(name)
 	if p.Kind != wireProbeGot {
@@ -135,11 +135,11 @@ type relationGuard struct {
 	relation string
 }
 
-// portRelationGuard reads the OPTIONAL `guard` port. ABSENT (or an explicit null) ⇒ nil ⇒ the statement
-// is uncapped and NO check runs. PRESENT but malformed is a LOUD port error, never a silently dropped
-// guard — a guard that fails to unbox is a runaway that would otherwise sail through.
-func portRelationGuard(payload wire.WireRow) (*relationGuard, error) {
-	p := payload.ProbeRow("guard")
+// portRelationGuard reads the `guard` field of the control record. ABSENT (or null) ⇒ nil ⇒ the
+// statement is uncapped and NO check runs. PRESENT but malformed is a LOUD port error, never a silently
+// dropped guard — a guard that fails to unbox is a runaway that would otherwise sail through.
+func portRelationGuard(opts wire.WireRow) (*relationGuard, error) {
+	p := opts.ProbeRow("guard")
 	if p.Kind == wireProbeAbsent || p.Kind == wireProbeNull {
 		return nil, nil
 	}
@@ -172,12 +172,12 @@ type dynamicWhereFrag struct {
 	params  []wire.WireValue
 }
 
-// portDynamicWhere reads the OPTIONAL `whereDynamic` plan port — a wire row `{frags: [...]}`. ABSENT (or
-// an explicit null) ⇒ nil ⇒ no dynamic WHERE (the statement passes through unchanged): a bounded read, a
-// write, and an uncapped fetch OMIT it (CLAUDE.md §2). PRESENT but wrong-variant, or a malformed
-// fragment, is a LOUD error.
-func portDynamicWhere(payload wire.WireRow) ([]dynamicWhereFrag, error) {
-	p := payload.ProbeRow("whereDynamic")
+// portDynamicWhere reads the `whereDynamic` field of the control record — a wire row `{frags: [...]}`.
+// ABSENT (or null) ⇒ nil ⇒ no dynamic WHERE (the statement passes through unchanged): only a read that
+// declares an OPTIONAL predicate carries a plan (CLAUDE.md §2). PRESENT but wrong-variant, or a
+// malformed fragment, is a LOUD error.
+func portDynamicWhere(opts wire.WireRow) ([]dynamicWhereFrag, error) {
+	p := opts.ProbeRow("whereDynamic")
 	if p.Kind == wireProbeAbsent || p.Kind == wireProbeNull {
 		return nil, nil
 	}
@@ -213,6 +213,47 @@ func portDynamicWhere(payload wire.WireRow) ([]dynamicWhereFrag, error) {
 		frags[i] = dynamicWhereFrag{skipped: skipped.Got, sql: sql.Got, params: items}
 	}
 	return frags, nil
+}
+
+// execOptions is the UNBOXED control record of one statement (the `opts` port — the TS `ExecOptions`):
+// how to run it plus the two optional control structs. Everything the transport branches on besides the
+// statement itself lives here, so a new fact is a new FIELD and no call site's arguments shift (#193).
+type execOptions struct {
+	write      bool
+	returning  bool
+	whereFrags []dynamicWhereFrag
+	guard      *relationGuard
+}
+
+// portExecOptions reads the OPTIONAL `opts` control record. ABSENT (or null) ⇒ the ZERO record — a plain
+// READ with no dynamic WHERE and no cap, which is the ONE statement shape that omits the port (its
+// payload is `sql` + `params` and nothing else). PRESENT ⇒ every field is read FAIL-CLOSED: the record
+// is what says whether the statement writes, so a missing field is an ABI break, never a default.
+func portExecOptions(payload wire.WireRow) (execOptions, error) {
+	p := payload.ProbeRow("opts")
+	if p.Kind == wireProbeAbsent || p.Kind == wireProbeNull {
+		return execOptions{}, nil
+	}
+	if p.Kind != wireProbeGot {
+		return execOptions{}, portErr("opts", "row", p.Kind, p.ActualWireType)
+	}
+	write, err := portBool(p.Got, "write")
+	if err != nil {
+		return execOptions{}, err
+	}
+	returning, err := portBool(p.Got, "returning")
+	if err != nil {
+		return execOptions{}, err
+	}
+	frags, err := portDynamicWhere(p.Got)
+	if err != nil {
+		return execOptions{}, err
+	}
+	guard, err := portRelationGuard(p.Got)
+	if err != nil {
+		return execOptions{}, err
+	}
+	return execOptions{write: write, returning: returning, whereFrags: frags, guard: guard}, nil
 }
 
 // ── Payload materialization (wire → wire; the go wire type's slices are unexported) ─────────────────
@@ -386,21 +427,13 @@ func assembleDynamicWhere(baseSql string, baseParams []wire.WireValue, frags []d
 // (assembleDynamicWhere): the final statement shape is only known here, so the placeholder render
 // (finalizeSQL) must follow it (CLAUDE.md §2). Params ride as wire values: a scalar binds directly
 // (toDriverParam); a wire LIST param binds as ONE JSON array string (the `json_each(?)` batch-key
-// contract — SAME rendering as the runtime relation bindKeys). bigint is a render hint the native path
-// does not need here. The OPTIONAL `guard` port is the RELATION runaway cap of a guarded relation child
-// fetch (absent/null ⇒ uncapped): the raw rows are asserted against it HERE (the shared checkHardLimit
-// SSoT) because past [GroupChildren] the graph is already nested. Both control ports are OPTIONAL, so
-// ports ride in the payload as {bigint, guard?, params, returning, sql, whereDynamic?, write}.
+// contract — SAME rendering as the runtime relation bindKeys). `opts.guard` is the RELATION runaway cap
+// of a guarded relation child fetch (absent ⇒ uncapped): the raw rows are asserted against it HERE (the
+// shared checkHardLimit SSoT) because past [GroupChildren] the graph is already nested. The whole
+// control surface is ONE optional record, so ports ride in the payload as {opts?, params, sql} — a
+// bounded read carries `sql` and `params` alone.
 func ExecuteSQL(payload wire.WireRow) (wire.WireValue, error) {
-	bigint, err := portBool(payload, "bigint")
-	if err != nil {
-		return wire.WireNull(), err
-	}
 	params, err := portList(payload, "params")
-	if err != nil {
-		return wire.WireNull(), err
-	}
-	returning, err := portBool(payload, "returning")
 	if err != nil {
 		return wire.WireNull(), err
 	}
@@ -408,27 +441,18 @@ func ExecuteSQL(payload wire.WireRow) (wire.WireValue, error) {
 	if err != nil {
 		return wire.WireNull(), err
 	}
-	write, err := portBool(payload, "write")
+	opts, err := portExecOptions(payload)
 	if err != nil {
 		return wire.WireNull(), err
 	}
-	whereFrags, err := portDynamicWhere(payload)
-	if err != nil {
-		return wire.WireNull(), err
-	}
-	guard, err := portRelationGuard(payload)
-	if err != nil {
-		return wire.WireNull(), err
-	}
-	_ = bigint
 	if leafExecCtx == nil {
 		return wire.WireNull(), fmt.Errorf("leaf transport: no bound connection (call BindLeafTransport before running the native module)")
 	}
 	// Assemble the DYNAMIC (SKIP) WHERE FIRST when a plan is present: the final statement shape is only
 	// known here, so the placeholder render (finalizeSQL, below) must follow it (CLAUDE.md §2). An
 	// ABSENT plan (whereFrags nil) leaves the bounded sql/params untouched (pass-through).
-	if whereFrags != nil {
-		sql, params = assembleDynamicWhere(sql, params, whereFrags)
+	if opts.whereFrags != nil {
+		sql, params = assembleDynamicWhere(sql, params, opts.whereFrags)
 	}
 	args := make([]any, len(params))
 	values := make([]bc.Value, len(params))
@@ -437,7 +461,7 @@ func ExecuteSQL(payload wire.WireRow) (wire.WireValue, error) {
 		args[i] = leafParam(p, leafDialect)
 	}
 	text := finalizeSQL(sql, arrayBinds(values), leafDialect)
-	if write && !returning {
+	if opts.write && !opts.returning {
 		info, err := Run(leafExecCtx, text, args, WriteIntent())
 		if err != nil {
 			return wire.WireNull(), err
@@ -458,8 +482,8 @@ func ExecuteSQL(payload wire.WireRow) (wire.WireValue, error) {
 	// GroupChildren the graph is already nested) and the reason the cap rides on this transport at all.
 	// The comparison + error assembly are the shared [checkHardLimit] SSoT, so this path cannot drift
 	// from the runtime relation path (relation.go) or from the TS reference.
-	if guard != nil {
-		if err := checkHardLimit(guard.limit, len(rows), LimitContextRelation, guard.model, guard.relation); err != nil {
+	if opts.guard != nil {
+		if err := checkHardLimit(opts.guard.limit, len(rows), LimitContextRelation, opts.guard.model, opts.guard.relation); err != nil {
 			return wire.WireNull(), err
 		}
 	}

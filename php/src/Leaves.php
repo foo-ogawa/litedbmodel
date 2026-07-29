@@ -20,8 +20,9 @@ namespace LiteDbModel\Runtime;
  *     param — a relation key set from `pluck` or a batch record set — rides per dialect: sqlite/mysql
  *     JSON-encode it for `json_each`/`JSON_TABLE`, postgres binds the array as-is), and run it through
  *     the runtime's central {@see execute()} / {@see run()} seam on the bound context — the ONLY driver
- *     contact. The OPTIONAL `guard` port is the RELATION runaway cap of a guarded relation child fetch
- *     (absent/null ⇒ uncapped): the raw rows are asserted against it HERE
+ *     contact. Everything besides the statement rides in the OPTIONAL `opts` control record (absent ⇒ a
+ *     plain read): `opts->guard` is the RELATION runaway cap of a guarded relation child fetch
+ *     (absent/null ⇒ uncapped), asserted against the raw rows HERE
  *     ({@see LimitExceededError::check}) because past `group` the graph is already nested. A
  *     non-returning write returns a one-row
  *     `[{changes, lastInsertRowid}]` summary so the leaf output shape is uniform (a list of rows).
@@ -86,24 +87,23 @@ final class Leaves
      * has surviving fragments, the ports verbatim otherwise. Port of `src/scp/leaves.ts`
      * `assembleDynamicWhere`.
      *
-     * `whereDynamic` is OPTIONAL (absent/null ⇒ no dynamic WHERE — a read with no optional predicate, a
-     * write, and an uncapped fetch omit it; CLAUDE.md §2). A SKIP predicate's presence is per-CALL, so
-     * the FINAL statement can only be determined here, at execution time — which is why the placeholder
-     * render runs AFTER this. bc carries each fragment's SKIP decision as DATA: a skipped fragment is
-     * PRESENT with `skipped` true (never omitted), so assembly DROPS the `skipped` fragments; the
-     * survivors join with ` AND `, the clause CONTINUES the bounded WHERE the emitter already lowered
-     * (or opens one when there is none), and their params bind at the slot their `?`s occupy: after the
-     * base params the clause follows, before the page tail's.
+     * `$plan` is the control record's `whereDynamic` field (null ⇒ no dynamic WHERE — only a read that
+     * declares an OPTIONAL predicate carries one; CLAUDE.md §2). A SKIP predicate's presence is
+     * per-CALL, so the FINAL statement can only be determined here, at execution time — which is why the
+     * placeholder render runs AFTER this. bc carries each fragment's SKIP decision as DATA: a skipped
+     * fragment is PRESENT with `skipped` true (never omitted), so assembly DROPS the `skipped`
+     * fragments; the survivors join with ` AND `, the clause CONTINUES the bounded WHERE the emitter
+     * already lowered (or opens one when there is none), and their params bind at the slot their `?`s
+     * occupy: after the base params the clause follows, before the page tail's.
      *
      * @param array<string, mixed> $ports
      * @return array{0: string, 1: list<mixed>}
      */
-    private static function effectiveStatement(array $ports): array
+    private static function effectiveStatement(array $ports, mixed $plan): array
     {
         /** @var list<mixed> $params */
         $params = array_values($ports['params']);
         $sql = (string) $ports['sql'];
-        $plan = $ports['whereDynamic'] ?? null;
         if ($plan === null) {
             return [$sql, $params];
         }
@@ -185,9 +185,13 @@ final class Leaves
             // boundary is the runtime's, not baked into the generated runner. Outside a tx,
             // `currentContext()` is null ⇒ the bound ctx.
             $active = currentContext() ?? $ctx;
+            // The OPTIONAL `opts` control record — how to run the statement plus the two optional control
+            // structs. ABSENT ⇒ a plain READ with no dynamic WHERE and no cap (the ONE statement shape
+            // that omits the port, so its payload is `sql` + `params` and nothing else).
+            $opts = $ports['opts'] ?? null;
             // The DYNAMIC (SKIP) WHERE is assembled FIRST: the final statement shape is only known
             // here, so the placeholder render must follow it (CLAUDE.md §2).
-            [$effectiveSql, $effectiveParams] = self::effectiveStatement($ports);
+            [$effectiveSql, $effectiveParams] = self::effectiveStatement($ports, $opts?->whereDynamic ?? null);
             if ($dialect === 'postgres') {
                 // The DEFERRED `?::<T>[]` element type (#46) resolves from the REAL bound key set —
                 // the same render-layer step, and the same SSoT, the imperative relation path uses.
@@ -200,7 +204,7 @@ final class Leaves
             $sql = StaticBundle::renderPlaceholders($effectiveSql, $dialect);
             $params = self::bindParams($effectiveParams, $dialect);
             try {
-                if (($ports['write'] ?? false) && !($ports['returning'] ?? false)) {
+                if (($opts?->write ?? false) && !($opts?->returning ?? false)) {
                     $info = run($active, $sql, $params, StatementIntent::write());
                     // The affected-write summary row (uniform list output shape — TS `writeSummary`).
                     return ['ok' => [(object) ['changes' => $info->changes, 'lastInsertRowid' => $info->lastInsertRowid]]];
@@ -215,7 +219,7 @@ final class Leaves
             // so this path cannot drift from the runtime relation path ({@see Relation}) or from the TS
             // reference. It THROWS rather than returning `['error' => …]`: a runaway is a litedbmodel
             // policy error with typed fields, not a mapped transport failure (the TS leaf throws too).
-            $guard = $ports['guard'] ?? null;
+            $guard = $opts?->guard ?? null;
             if ($guard !== null) {
                 LimitExceededError::check(
                     (int) $guard->limit,

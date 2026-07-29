@@ -171,11 +171,6 @@ export interface ReadEndpoint {
   readonly with?: readonly RelationSelection[];
   /** #98 — read from a derived CTE (a QUERY view-model) instead of the base table. */
   readonly view?: QueryView;
-  /**
-   * Read the row set in EXACT-integer mode (`bigint` port). Set when the projection carries a
-   * 64-bit column so the driver hands over exact values rather than rounded doubles.
-   */
-  readonly bigint?: boolean;
 }
 
 /** `column ← param` for a write's VALUES / SET list. */

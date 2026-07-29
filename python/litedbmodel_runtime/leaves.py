@@ -12,8 +12,9 @@ typed-native runners call positionally (``rust/litedbmodel_runtime/src/leaves.rs
     param — a relation key set from ``pluck`` or a batch record set — rides per dialect: sqlite/mysql
     JSON-encode it for ``json_each``/``JSON_TABLE``, postgres binds the array as-is), and run it through
     the runtime's central execute/run seam (:func:`exec_context.execute` / :func:`exec_context.run`) on
-    the bound driver — the ONLY driver contact. The OPTIONAL ``guard`` port is the RELATION runaway cap
-    of a guarded relation child fetch (absent/None ⇒ uncapped): the raw rows are asserted against it HERE
+    the bound driver — the ONLY driver contact. Everything besides the statement rides in the OPTIONAL
+    ``opts`` control record (absent ⇒ a plain read): ``opts["guard"]`` is the RELATION runaway cap of a
+    guarded relation child fetch (absent/None ⇒ uncapped), asserted against the raw rows HERE
     (:meth:`errors.LimitExceededError.check`) because past ``group`` the graph is already nested. A
     non-returning write returns a one-row ``[{changes, lastInsertRowid}]`` summary so the leaf output
     shape is uniform (a list of rows).
@@ -95,18 +96,17 @@ def _where_splice(base_sql: str) -> Tuple[int, str, int]:
     return at, keyword, base_sql[at:].count("?")
 
 
-def _effective_statement(ports: Mapping[str, Any]) -> Tuple[str, List[Any]]:
+def _effective_statement(ports: Mapping[str, Any], plan: Any) -> Tuple[str, List[Any]]:
     """The ``(sql, params)`` a statement actually executes: the dynamic-WHERE plan assembled when one is
     present, the ports verbatim otherwise.
 
-    ``whereDynamic`` is OPTIONAL (absent/None ⇒ no dynamic WHERE — a read with no optional predicate, a
-    write, and an uncapped fetch omit it; CLAUDE.md §2). bc carries each fragment's SKIP decision as
-    DATA: a skipped fragment is PRESENT with ``skipped`` true (never omitted), so assembly DROPS the
+    ``plan`` is the control record's ``whereDynamic`` field (None ⇒ no dynamic WHERE — only a read that
+    declares an OPTIONAL predicate carries one; CLAUDE.md §2). bc carries each fragment's SKIP decision
+    as DATA: a skipped fragment is PRESENT with ``skipped`` true (never omitted), so assembly DROPS the
     ``skipped`` fragments. The survivors join with ``AND``, the clause CONTINUES the bounded WHERE the
     emitter already lowered (or opens one when there is none), and their params bind at the slot their
     ``?``s occupy: after the base params the clause follows, before the page tail's."""
     params: List[Any] = list(ports["params"])
-    plan = ports.get("whereDynamic")
     if plan is None:
         return ports["sql"], params
     frags = [f for f in plan["frags"] if not f["skipped"]]
@@ -160,9 +160,13 @@ def make_handlers(driver_or_ctx: Union[Driver, ExecutionContext], dialect: str) 
         # the generated runner. Outside a tx, `current_context()` is None ⇒ the bound driver ctx (the
         # documented `current_context` contract — a raw-driver callee still resolves the pinned tx conn).
         active = current_context() or ctx
+        # The OPTIONAL ``opts`` control record — how to run the statement plus the two optional control
+        # structs. ABSENT ⇒ the empty record: a plain READ with no dynamic WHERE and no cap (the ONE
+        # statement shape that omits the port, so its payload is ``sql`` + ``params`` and nothing else).
+        opts: Mapping[str, Any] = ports.get("opts") or {}
         # The DYNAMIC (SKIP) WHERE is assembled FIRST: the final statement shape is only known here,
         # so the placeholder render must follow it (CLAUDE.md §2).
-        effective_sql, effective_params = _effective_statement(ports)
+        effective_sql, effective_params = _effective_statement(ports, opts.get("whereDynamic"))
         if dialect == "postgres":
             # The DEFERRED `?::<T>[]` element type (#46) is resolved from the REAL bound key set —
             # the same render-layer step, and the same SSoT, the imperative relation path uses.
@@ -172,7 +176,7 @@ def make_handlers(driver_or_ctx: Union[Driver, ExecutionContext], dialect: str) 
         sql = render_placeholders(effective_sql, dialect)
         params = _bind_params(effective_params, dialect)
         try:
-            if ports.get("write") and not ports.get("returning"):
+            if opts.get("write") and not opts.get("returning"):
                 info = seam_run(active, sql, params, WRITE_INTENT)
                 # The affected-write summary row (uniform ``items`` output shape — TS ``writeSummary``).
                 return {"ok": [{"changes": info.changes, "lastInsertRowid": info.last_insert_rowid}]}
@@ -185,7 +189,7 @@ def make_handlers(driver_or_ctx: Union[Driver, ExecutionContext], dialect: str) 
         # path cannot drift from the runtime relation path (relation.py) or from the TS reference. It
         # RAISES rather than returning ``{"error": …}``: a runaway is a litedbmodel policy error with
         # typed fields, not a mapped transport failure (the TS leaf throws the same class).
-        guard = ports.get("guard")
+        guard = opts.get("guard")
         if guard is not None:
             LimitExceededError.check(
                 int(guard["limit"]), len(rows), "relation", guard.get("model"), guard["relation"]

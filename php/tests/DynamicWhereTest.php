@@ -44,13 +44,17 @@ final class DynamicWhereTest extends TestCase
      */
     private function ids(array $frags): array
     {
+        // Everything besides the statement rides in the ONE `opts` control record (#193) — the object
+        // the generated module builds (bc's php emitter renders a struct literal as a stdClass).
         $out = ($this->executeSQL)([
             'sql' => self::BASE_SQL,
             'params' => [1, 2],
-            'write' => false,
-            'returning' => false,
-            'bigint' => false,
-            'whereDynamic' => ['frags' => $frags],
+            'opts' => (object) [
+                'write' => false,
+                'returning' => false,
+                'whereDynamic' => (object) ['frags' => $frags],
+                'guard' => null,
+            ],
         ], ['nodeId' => 'n0', 'component' => 'executeSQL']);
         return array_map(static fn ($r): int => (int) ((array) $r)['id'], $out['ok']);
     }

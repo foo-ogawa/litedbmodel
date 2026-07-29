@@ -39,10 +39,8 @@ def read(execute_sql, frags):
         {
             "sql": BASE_SQL,
             "params": [1, 2],
-            "write": False,
-            "returning": False,
-            "bigint": False,
-            "whereDynamic": {"frags": frags},
+            # Everything besides the statement rides in the ONE ``opts`` control record (#193).
+            "opts": {"write": False, "returning": False, "whereDynamic": {"frags": frags}, "guard": None},
         },
         CTX,
     )["ok"]

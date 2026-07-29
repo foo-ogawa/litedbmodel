@@ -1124,7 +1124,7 @@ function execStatement(
   // ⇒ the row-returning seam), a bare write runs (the `[{changes,…}]` summary).
   const { sql, params } = evalAssemble(op, scope, dialect);
   const hasReturn = /\bselect\b/i.test(sql.slice(0, 8)) || /\breturning\b/i.test(sql);
-  const out = executeSQL({ sql, params, write: true, returning: hasReturn, bigint: false }, { exec: ctx, dialect } satisfies LeafContext);
+  const out = executeSQL({ sql, params, write: true, returning: hasReturn }, { exec: ctx, dialect } satisfies LeafContext);
   return hasReturn ? { rows: out, changes: out.length } : { rows: [], changes: Number(out[0]?.changes ?? 0) };
 }
 
@@ -1254,7 +1254,7 @@ async function execStatementAsync(
 
   // A SELECT/RETURNING reads rows; a bare write returns the `[{changes,…}]` summary.
   const hasReturn = /\bselect\b/i.test(sql.slice(0, 8)) || /\breturning\b/i.test(sql);
-  const out = await executeSQLAsync({ sql, params, write: true, returning: hasReturn, bigint: false }, { execAsync: ctx, dialect } satisfies AsyncLeafContext);
+  const out = await executeSQLAsync({ sql, params, write: true, returning: hasReturn }, { execAsync: ctx, dialect } satisfies AsyncLeafContext);
   return hasReturn ? { rows: out, changes: out.length } : { rows: [], changes: Number(out[0]?.changes ?? 0) };
 }
 

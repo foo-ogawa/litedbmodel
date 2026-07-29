@@ -4,14 +4,14 @@
 # native dict literal and handed to the EXISTING runtime core (run_behavior) —
 # no execution logic is generated. Handlers are ALWAYS injected at the boundary
 # (IR + {effects,config,hooks}); they are never generated.
-# irFingerprint: fnv1a64:f4eab1640a23fe36
+# irFingerprint: fnv1a64:60efaa00ae7565c2
 from behavior_contracts import SPEC_VERSIONS, ProvenanceError, load_compiled_ir, run_behavior
 
 # Spec versions baked at generation time (fail-closed constant comparison at load).
 EXPECTED_SPEC_VERSIONS = {"behavior": 6, "expression": 2, "plan": 1}
 
 # FNV-1a 64 fingerprint of the source portable IR (canonical_json discipline, #208).
-IR_FINGERPRINT = "fnv1a64:f4eab1640a23fe36"
+IR_FINGERPRINT = "fnv1a64:60efaa00ae7565c2"
 
 # Component names exposed by bind(), in IR declaration order.
 COMPONENT_NAMES = ("posts", "postsTop", "page", "postsByIds", "feed", "pagedFeed", "usersWithPosts", "postsWithAuthor", "usersWithCappedPosts", "usersWithUncappedPosts", "usersWithTopPosts", "createPost", "renamePost", "removePost", "createPostReturning", "renamePostReturning", "removePostReturning", "restatusPostsReturning", "removePostsByAuthorReturning", "typedRows", "createTags", "removeTags", "createTagsReturning", "relabelTagsReturning", "removeTagsReturning")
@@ -52,30 +52,17 @@ IR_DOC = {
             }
           },
           "portSchemas": {
-            "bigint": {
-              "required": True,
-              "type": "bool"
-            },
             "params": {
               "elemType": "value",
               "required": True,
               "type": "array"
             },
-            "returning": {
-              "required": True,
-              "type": "bool"
-            },
             "sql": {
               "required": True,
               "type": "string"
-            },
-            "write": {
-              "required": True,
-              "type": "bool"
             }
           },
           "ports": {
-            "bigint": False,
             "params": {
               "arr": [
                 {
@@ -85,9 +72,7 @@ IR_DOC = {
                 }
               ]
             },
-            "returning": False,
-            "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE author_id = ? ORDER BY id ASC",
-            "write": False
+            "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE author_id = ? ORDER BY id ASC"
           }
         }
       ],
@@ -162,36 +147,21 @@ IR_DOC = {
             }
           },
           "portSchemas": {
-            "bigint": {
-              "required": True,
-              "type": "bool"
-            },
             "params": {
               "elemType": "value",
               "required": True,
               "type": "array"
             },
-            "returning": {
-              "required": True,
-              "type": "bool"
-            },
             "sql": {
               "required": True,
               "type": "string"
-            },
-            "write": {
-              "required": True,
-              "type": "bool"
             }
           },
           "ports": {
-            "bigint": False,
             "params": {
               "arr": []
             },
-            "returning": False,
-            "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts ORDER BY id ASC LIMIT 2",
-            "write": False
+            "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts ORDER BY id ASC LIMIT 2"
           }
         }
       ],
@@ -252,30 +222,17 @@ IR_DOC = {
             }
           },
           "portSchemas": {
-            "bigint": {
-              "required": True,
-              "type": "bool"
-            },
             "params": {
               "elemType": "value",
               "required": True,
               "type": "array"
             },
-            "returning": {
-              "required": True,
-              "type": "bool"
-            },
             "sql": {
               "required": True,
               "type": "string"
-            },
-            "write": {
-              "required": True,
-              "type": "bool"
             }
           },
           "ports": {
-            "bigint": False,
             "params": {
               "arr": [
                 {
@@ -290,9 +247,7 @@ IR_DOC = {
                 }
               ]
             },
-            "returning": False,
-            "sql": "SELECT id, title FROM conf_posts ORDER BY id ASC LIMIT ? OFFSET ?",
-            "write": False
+            "sql": "SELECT id, title FROM conf_posts ORDER BY id ASC LIMIT ? OFFSET ?"
           }
         }
       ],
@@ -353,30 +308,17 @@ IR_DOC = {
             }
           },
           "portSchemas": {
-            "bigint": {
-              "required": True,
-              "type": "bool"
-            },
             "params": {
               "elemType": "value",
               "required": True,
               "type": "array"
             },
-            "returning": {
-              "required": True,
-              "type": "bool"
-            },
             "sql": {
               "required": True,
               "type": "string"
-            },
-            "write": {
-              "required": True,
-              "type": "bool"
             }
           },
           "ports": {
-            "bigint": False,
             "params": {
               "arr": [
                 {
@@ -386,9 +328,7 @@ IR_DOC = {
                 }
               ]
             },
-            "returning": False,
-            "sql": "SELECT id, title FROM conf_posts WHERE id = ANY(?) ORDER BY id ASC",
-            "write": False
+            "sql": "SELECT id, title FROM conf_posts WHERE id = ANY(?) ORDER BY id ASC"
           }
         }
       ],
@@ -452,53 +392,124 @@ IR_DOC = {
             }
           },
           "portSchemas": {
-            "bigint": {
-              "required": True,
-              "type": "bool"
+            "opts": {
+              "elemType": {
+                "name": "ExecOptions",
+                "obj": {
+                  "guard": {
+                    "opt": {
+                      "name": "CapGuard",
+                      "obj": {
+                        "limit": "int",
+                        "model": {
+                          "opt": "string"
+                        },
+                        "relation": "string"
+                      }
+                    }
+                  },
+                  "returning": "bool",
+                  "whereDynamic": {
+                    "opt": {
+                      "name": "DynamicWherePlan",
+                      "obj": {
+                        "frags": {
+                          "arr": {
+                            "name": "DynamicWhereFrag",
+                            "obj": {
+                              "params": {
+                                "arr": {
+                                  "opt": "value"
+                                }
+                              },
+                              "skipped": "bool",
+                              "sql": "string"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "write": "bool"
+                }
+              },
+              "required": False,
+              "type": "object"
             },
             "params": {
               "elemType": "value",
               "required": True,
               "type": "array"
             },
-            "returning": {
-              "required": True,
-              "type": "bool"
-            },
             "sql": {
               "required": True,
               "type": "string"
-            },
-            "whereDynamic": {
-              "elemType": {
-                "name": "DynamicWherePlan",
-                "obj": {
-                  "frags": {
-                    "arr": {
-                      "name": "DynamicWhereFrag",
-                      "obj": {
-                        "params": {
-                          "arr": {
-                            "opt": "value"
-                          }
-                        },
-                        "skipped": "bool",
-                        "sql": "string"
-                      }
-                    }
-                  }
-                }
-              },
-              "required": False,
-              "type": "object"
-            },
-            "write": {
-              "required": True,
-              "type": "bool"
             }
           },
           "ports": {
-            "bigint": False,
+            "opts": {
+              "obj": {
+                "guard": None,
+                "returning": False,
+                "whereDynamic": {
+                  "obj": {
+                    "frags": {
+                      "arr": [
+                        {
+                          "obj": {
+                            "params": {
+                              "arr": [
+                                {
+                                  "ref": [
+                                    "status"
+                                  ]
+                                }
+                              ]
+                            },
+                            "skipped": {
+                              "eq": [
+                                {
+                                  "ref": [
+                                    "status"
+                                  ]
+                                },
+                                None
+                              ]
+                            },
+                            "sql": "status = ?"
+                          }
+                        },
+                        {
+                          "obj": {
+                            "params": {
+                              "arr": [
+                                {
+                                  "ref": [
+                                    "since"
+                                  ]
+                                }
+                              ]
+                            },
+                            "skipped": {
+                              "eq": [
+                                {
+                                  "ref": [
+                                    "since"
+                                  ]
+                                },
+                                None
+                              ]
+                            },
+                            "sql": "created_at >= ?"
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                "write": False
+              }
+            },
             "params": {
               "arr": [
                 {
@@ -508,65 +519,7 @@ IR_DOC = {
                 }
               ]
             },
-            "returning": False,
-            "sql": "SELECT id, author_id, title, status FROM conf_posts WHERE author_id = ? ORDER BY id ASC",
-            "whereDynamic": {
-              "obj": {
-                "frags": {
-                  "arr": [
-                    {
-                      "obj": {
-                        "params": {
-                          "arr": [
-                            {
-                              "ref": [
-                                "status"
-                              ]
-                            }
-                          ]
-                        },
-                        "skipped": {
-                          "eq": [
-                            {
-                              "ref": [
-                                "status"
-                              ]
-                            },
-                            None
-                          ]
-                        },
-                        "sql": "status = ?"
-                      }
-                    },
-                    {
-                      "obj": {
-                        "params": {
-                          "arr": [
-                            {
-                              "ref": [
-                                "since"
-                              ]
-                            }
-                          ]
-                        },
-                        "skipped": {
-                          "eq": [
-                            {
-                              "ref": [
-                                "since"
-                              ]
-                            },
-                            None
-                          ]
-                        },
-                        "sql": "created_at >= ?"
-                      }
-                    }
-                  ]
-                }
-              }
-            },
-            "write": False
+            "sql": "SELECT id, author_id, title, status FROM conf_posts WHERE author_id = ? ORDER BY id ASC"
           }
         }
       ],
@@ -643,53 +596,124 @@ IR_DOC = {
             }
           },
           "portSchemas": {
-            "bigint": {
-              "required": True,
-              "type": "bool"
+            "opts": {
+              "elemType": {
+                "name": "ExecOptions",
+                "obj": {
+                  "guard": {
+                    "opt": {
+                      "name": "CapGuard",
+                      "obj": {
+                        "limit": "int",
+                        "model": {
+                          "opt": "string"
+                        },
+                        "relation": "string"
+                      }
+                    }
+                  },
+                  "returning": "bool",
+                  "whereDynamic": {
+                    "opt": {
+                      "name": "DynamicWherePlan",
+                      "obj": {
+                        "frags": {
+                          "arr": {
+                            "name": "DynamicWhereFrag",
+                            "obj": {
+                              "params": {
+                                "arr": {
+                                  "opt": "value"
+                                }
+                              },
+                              "skipped": "bool",
+                              "sql": "string"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "write": "bool"
+                }
+              },
+              "required": False,
+              "type": "object"
             },
             "params": {
               "elemType": "value",
               "required": True,
               "type": "array"
             },
-            "returning": {
-              "required": True,
-              "type": "bool"
-            },
             "sql": {
               "required": True,
               "type": "string"
-            },
-            "whereDynamic": {
-              "elemType": {
-                "name": "DynamicWherePlan",
-                "obj": {
-                  "frags": {
-                    "arr": {
-                      "name": "DynamicWhereFrag",
-                      "obj": {
-                        "params": {
-                          "arr": {
-                            "opt": "value"
-                          }
-                        },
-                        "skipped": "bool",
-                        "sql": "string"
-                      }
-                    }
-                  }
-                }
-              },
-              "required": False,
-              "type": "object"
-            },
-            "write": {
-              "required": True,
-              "type": "bool"
             }
           },
           "ports": {
-            "bigint": False,
+            "opts": {
+              "obj": {
+                "guard": None,
+                "returning": False,
+                "whereDynamic": {
+                  "obj": {
+                    "frags": {
+                      "arr": [
+                        {
+                          "obj": {
+                            "params": {
+                              "arr": [
+                                {
+                                  "ref": [
+                                    "minId"
+                                  ]
+                                }
+                              ]
+                            },
+                            "skipped": {
+                              "eq": [
+                                {
+                                  "ref": [
+                                    "minId"
+                                  ]
+                                },
+                                None
+                              ]
+                            },
+                            "sql": "id >= ?"
+                          }
+                        },
+                        {
+                          "obj": {
+                            "params": {
+                              "arr": [
+                                {
+                                  "ref": [
+                                    "status"
+                                  ]
+                                }
+                              ]
+                            },
+                            "skipped": {
+                              "eq": [
+                                {
+                                  "ref": [
+                                    "status"
+                                  ]
+                                },
+                                None
+                              ]
+                            },
+                            "sql": "status = ?"
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                "write": False
+              }
+            },
             "params": {
               "arr": [
                 {
@@ -709,65 +733,7 @@ IR_DOC = {
                 }
               ]
             },
-            "returning": False,
-            "sql": "SELECT id, author_id, title, status FROM conf_posts WHERE author_id = ? ORDER BY id ASC LIMIT ? OFFSET ?",
-            "whereDynamic": {
-              "obj": {
-                "frags": {
-                  "arr": [
-                    {
-                      "obj": {
-                        "params": {
-                          "arr": [
-                            {
-                              "ref": [
-                                "minId"
-                              ]
-                            }
-                          ]
-                        },
-                        "skipped": {
-                          "eq": [
-                            {
-                              "ref": [
-                                "minId"
-                              ]
-                            },
-                            None
-                          ]
-                        },
-                        "sql": "id >= ?"
-                      }
-                    },
-                    {
-                      "obj": {
-                        "params": {
-                          "arr": [
-                            {
-                              "ref": [
-                                "status"
-                              ]
-                            }
-                          ]
-                        },
-                        "skipped": {
-                          "eq": [
-                            {
-                              "ref": [
-                                "status"
-                              ]
-                            },
-                            None
-                          ]
-                        },
-                        "sql": "status = ?"
-                      }
-                    }
-                  ]
-                }
-              }
-            },
-            "write": False
+            "sql": "SELECT id, author_id, title, status FROM conf_posts WHERE author_id = ? ORDER BY id ASC LIMIT ? OFFSET ?"
           }
         }
       ],
@@ -836,36 +802,21 @@ IR_DOC = {
             "arr": "value"
           },
           "portSchemas": {
-            "bigint": {
-              "required": True,
-              "type": "bool"
-            },
             "params": {
               "elemType": "value",
               "required": True,
               "type": "array"
             },
-            "returning": {
-              "required": True,
-              "type": "bool"
-            },
             "sql": {
               "required": True,
               "type": "string"
-            },
-            "write": {
-              "required": True,
-              "type": "bool"
             }
           },
           "ports": {
-            "bigint": False,
             "params": {
               "arr": []
             },
-            "returning": False,
-            "sql": "SELECT id, name FROM conf_users ORDER BY id ASC",
-            "write": False
+            "sql": "SELECT id, name FROM conf_users ORDER BY id ASC"
           },
           "wirePassthrough": True
         },
@@ -910,30 +861,17 @@ IR_DOC = {
           },
           "parent": "n1",
           "portSchemas": {
-            "bigint": {
-              "required": True,
-              "type": "bool"
-            },
             "params": {
               "elemType": "value",
               "required": True,
               "type": "array"
             },
-            "returning": {
-              "required": True,
-              "type": "bool"
-            },
             "sql": {
               "required": True,
               "type": "string"
-            },
-            "write": {
-              "required": True,
-              "type": "bool"
             }
           },
           "ports": {
-            "bigint": False,
             "params": {
               "arr": [
                 {
@@ -943,9 +881,7 @@ IR_DOC = {
                 }
               ]
             },
-            "returning": False,
-            "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE conf_posts.author_id = ANY(?::int[]) ORDER BY id ASC",
-            "write": False
+            "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE conf_posts.author_id = ANY(?::int[]) ORDER BY id ASC"
           },
           "wirePassthrough": True
         },
@@ -990,30 +926,17 @@ IR_DOC = {
           },
           "parent": "n3",
           "portSchemas": {
-            "bigint": {
-              "required": True,
-              "type": "bool"
-            },
             "params": {
               "elemType": "value",
               "required": True,
               "type": "array"
             },
-            "returning": {
-              "required": True,
-              "type": "bool"
-            },
             "sql": {
               "required": True,
               "type": "string"
-            },
-            "write": {
-              "required": True,
-              "type": "bool"
             }
           },
           "ports": {
-            "bigint": False,
             "params": {
               "arr": [
                 {
@@ -1023,9 +946,7 @@ IR_DOC = {
                 }
               ]
             },
-            "returning": False,
-            "sql": "SELECT id, post_id, label FROM conf_tags WHERE conf_tags.post_id = ANY(?::int[]) ORDER BY id ASC",
-            "write": False
+            "sql": "SELECT id, post_id, label FROM conf_tags WHERE conf_tags.post_id = ANY(?::int[]) ORDER BY id ASC"
           },
           "wirePassthrough": True
         },
@@ -1297,36 +1218,21 @@ IR_DOC = {
             "arr": "value"
           },
           "portSchemas": {
-            "bigint": {
-              "required": True,
-              "type": "bool"
-            },
             "params": {
               "elemType": "value",
               "required": True,
               "type": "array"
             },
-            "returning": {
-              "required": True,
-              "type": "bool"
-            },
             "sql": {
               "required": True,
               "type": "string"
-            },
-            "write": {
-              "required": True,
-              "type": "bool"
             }
           },
           "ports": {
-            "bigint": False,
             "params": {
               "arr": []
             },
-            "returning": False,
-            "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts ORDER BY id ASC",
-            "write": False
+            "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts ORDER BY id ASC"
           },
           "wirePassthrough": True
         },
@@ -1371,30 +1277,17 @@ IR_DOC = {
           },
           "parent": "n1",
           "portSchemas": {
-            "bigint": {
-              "required": True,
-              "type": "bool"
-            },
             "params": {
               "elemType": "value",
               "required": True,
               "type": "array"
             },
-            "returning": {
-              "required": True,
-              "type": "bool"
-            },
             "sql": {
               "required": True,
               "type": "string"
-            },
-            "write": {
-              "required": True,
-              "type": "bool"
             }
           },
           "ports": {
-            "bigint": False,
             "params": {
               "arr": [
                 {
@@ -1404,9 +1297,7 @@ IR_DOC = {
                 }
               ]
             },
-            "returning": False,
-            "sql": "SELECT id, name, post_count FROM conf_users WHERE conf_users.id = ANY(?::int[])",
-            "write": False
+            "sql": "SELECT id, name, post_count FROM conf_users WHERE conf_users.id = ANY(?::int[])"
           },
           "wirePassthrough": True
         },
@@ -1580,36 +1471,21 @@ IR_DOC = {
             "arr": "value"
           },
           "portSchemas": {
-            "bigint": {
-              "required": True,
-              "type": "bool"
-            },
             "params": {
               "elemType": "value",
               "required": True,
               "type": "array"
             },
-            "returning": {
-              "required": True,
-              "type": "bool"
-            },
             "sql": {
               "required": True,
               "type": "string"
-            },
-            "write": {
-              "required": True,
-              "type": "bool"
             }
           },
           "ports": {
-            "bigint": False,
             "params": {
               "arr": []
             },
-            "returning": False,
-            "sql": "SELECT id, name FROM conf_users ORDER BY id ASC",
-            "write": False
+            "sql": "SELECT id, name FROM conf_users ORDER BY id ASC"
           },
           "wirePassthrough": True
         },
@@ -1654,19 +1530,45 @@ IR_DOC = {
           },
           "parent": "n1",
           "portSchemas": {
-            "bigint": {
-              "required": True,
-              "type": "bool"
-            },
-            "guard": {
+            "opts": {
               "elemType": {
-                "name": "CapGuard",
+                "name": "ExecOptions",
                 "obj": {
-                  "limit": "int",
-                  "model": {
-                    "opt": "string"
+                  "guard": {
+                    "opt": {
+                      "name": "CapGuard",
+                      "obj": {
+                        "limit": "int",
+                        "model": {
+                          "opt": "string"
+                        },
+                        "relation": "string"
+                      }
+                    }
                   },
-                  "relation": "string"
+                  "returning": "bool",
+                  "whereDynamic": {
+                    "opt": {
+                      "name": "DynamicWherePlan",
+                      "obj": {
+                        "frags": {
+                          "arr": {
+                            "name": "DynamicWhereFrag",
+                            "obj": {
+                              "params": {
+                                "arr": {
+                                  "opt": "value"
+                                }
+                              },
+                              "skipped": "bool",
+                              "sql": "string"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "write": "bool"
                 }
               },
               "required": False,
@@ -1677,49 +1579,24 @@ IR_DOC = {
               "required": True,
               "type": "array"
             },
-            "returning": {
-              "required": True,
-              "type": "bool"
-            },
             "sql": {
               "required": True,
               "type": "string"
-            },
-            "whereDynamic": {
-              "elemType": {
-                "name": "DynamicWherePlan",
-                "obj": {
-                  "frags": {
-                    "arr": {
-                      "name": "DynamicWhereFrag",
-                      "obj": {
-                        "params": {
-                          "arr": {
-                            "opt": "value"
-                          }
-                        },
-                        "skipped": "bool",
-                        "sql": "string"
-                      }
-                    }
-                  }
-                }
-              },
-              "required": False,
-              "type": "object"
-            },
-            "write": {
-              "required": True,
-              "type": "bool"
             }
           },
           "ports": {
-            "bigint": False,
-            "guard": {
+            "opts": {
               "obj": {
-                "limit": 2,
-                "model": "conf_posts",
-                "relation": "cappedPosts"
+                "guard": {
+                  "obj": {
+                    "limit": 2,
+                    "model": "conf_posts",
+                    "relation": "cappedPosts"
+                  }
+                },
+                "returning": False,
+                "whereDynamic": None,
+                "write": False
               }
             },
             "params": {
@@ -1731,16 +1608,7 @@ IR_DOC = {
                 }
               ]
             },
-            "returning": False,
-            "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE conf_posts.author_id = ANY(?::int[]) ORDER BY id ASC",
-            "whereDynamic": {
-              "obj": {
-                "frags": {
-                  "arr": []
-                }
-              }
-            },
-            "write": False
+            "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE conf_posts.author_id = ANY(?::int[]) ORDER BY id ASC"
           },
           "wirePassthrough": True
         },
@@ -1908,36 +1776,21 @@ IR_DOC = {
             "arr": "value"
           },
           "portSchemas": {
-            "bigint": {
-              "required": True,
-              "type": "bool"
-            },
             "params": {
               "elemType": "value",
               "required": True,
               "type": "array"
             },
-            "returning": {
-              "required": True,
-              "type": "bool"
-            },
             "sql": {
               "required": True,
               "type": "string"
-            },
-            "write": {
-              "required": True,
-              "type": "bool"
             }
           },
           "ports": {
-            "bigint": False,
             "params": {
               "arr": []
             },
-            "returning": False,
-            "sql": "SELECT id, name FROM conf_users ORDER BY id ASC",
-            "write": False
+            "sql": "SELECT id, name FROM conf_users ORDER BY id ASC"
           },
           "wirePassthrough": True
         },
@@ -1982,30 +1835,17 @@ IR_DOC = {
           },
           "parent": "n1",
           "portSchemas": {
-            "bigint": {
-              "required": True,
-              "type": "bool"
-            },
             "params": {
               "elemType": "value",
               "required": True,
               "type": "array"
             },
-            "returning": {
-              "required": True,
-              "type": "bool"
-            },
             "sql": {
               "required": True,
               "type": "string"
-            },
-            "write": {
-              "required": True,
-              "type": "bool"
             }
           },
           "ports": {
-            "bigint": False,
             "params": {
               "arr": [
                 {
@@ -2015,9 +1855,7 @@ IR_DOC = {
                 }
               ]
             },
-            "returning": False,
-            "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE conf_posts.author_id = ANY(?::int[]) ORDER BY id ASC",
-            "write": False
+            "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE conf_posts.author_id = ANY(?::int[]) ORDER BY id ASC"
           },
           "wirePassthrough": True
         },
@@ -2185,36 +2023,21 @@ IR_DOC = {
             "arr": "value"
           },
           "portSchemas": {
-            "bigint": {
-              "required": True,
-              "type": "bool"
-            },
             "params": {
               "elemType": "value",
               "required": True,
               "type": "array"
             },
-            "returning": {
-              "required": True,
-              "type": "bool"
-            },
             "sql": {
               "required": True,
               "type": "string"
-            },
-            "write": {
-              "required": True,
-              "type": "bool"
             }
           },
           "ports": {
-            "bigint": False,
             "params": {
               "arr": []
             },
-            "returning": False,
-            "sql": "SELECT id, name FROM conf_users ORDER BY id ASC",
-            "write": False
+            "sql": "SELECT id, name FROM conf_users ORDER BY id ASC"
           },
           "wirePassthrough": True
         },
@@ -2259,30 +2082,17 @@ IR_DOC = {
           },
           "parent": "n1",
           "portSchemas": {
-            "bigint": {
-              "required": True,
-              "type": "bool"
-            },
             "params": {
               "elemType": "value",
               "required": True,
               "type": "array"
             },
-            "returning": {
-              "required": True,
-              "type": "bool"
-            },
             "sql": {
               "required": True,
               "type": "string"
-            },
-            "write": {
-              "required": True,
-              "type": "bool"
             }
           },
           "ports": {
-            "bigint": False,
             "params": {
               "arr": [
                 {
@@ -2292,9 +2102,7 @@ IR_DOC = {
                 }
               ]
             },
-            "returning": False,
-            "sql": "SELECT conf_posts.* FROM unnest(?::int[]) AS _keys(key) CROSS JOIN LATERAL (SELECT * FROM conf_posts WHERE conf_posts.author_id = _keys.key ORDER BY id ASC LIMIT 1) conf_posts",
-            "write": False
+            "sql": "SELECT conf_posts.* FROM unnest(?::int[]) AS _keys(key) CROSS JOIN LATERAL (SELECT * FROM conf_posts WHERE conf_posts.author_id = _keys.key ORDER BY id ASC LIMIT 1) conf_posts"
           },
           "wirePassthrough": True
         },
@@ -2468,30 +2276,69 @@ IR_DOC = {
             }
           },
           "portSchemas": {
-            "bigint": {
-              "required": True,
-              "type": "bool"
+            "opts": {
+              "elemType": {
+                "name": "ExecOptions",
+                "obj": {
+                  "guard": {
+                    "opt": {
+                      "name": "CapGuard",
+                      "obj": {
+                        "limit": "int",
+                        "model": {
+                          "opt": "string"
+                        },
+                        "relation": "string"
+                      }
+                    }
+                  },
+                  "returning": "bool",
+                  "whereDynamic": {
+                    "opt": {
+                      "name": "DynamicWherePlan",
+                      "obj": {
+                        "frags": {
+                          "arr": {
+                            "name": "DynamicWhereFrag",
+                            "obj": {
+                              "params": {
+                                "arr": {
+                                  "opt": "value"
+                                }
+                              },
+                              "skipped": "bool",
+                              "sql": "string"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "write": "bool"
+                }
+              },
+              "required": False,
+              "type": "object"
             },
             "params": {
               "elemType": "value",
               "required": True,
               "type": "array"
             },
-            "returning": {
-              "required": True,
-              "type": "bool"
-            },
             "sql": {
               "required": True,
               "type": "string"
-            },
-            "write": {
-              "required": True,
-              "type": "bool"
             }
           },
           "ports": {
-            "bigint": False,
+            "opts": {
+              "obj": {
+                "guard": None,
+                "returning": False,
+                "whereDynamic": None,
+                "write": True
+              }
+            },
             "params": {
               "arr": [
                 {
@@ -2521,9 +2368,7 @@ IR_DOC = {
                 }
               ]
             },
-            "returning": False,
-            "sql": "INSERT INTO conf_posts (author_id, created_at, id, status, title) VALUES (?, ?, ?, ?, ?)",
-            "write": True
+            "sql": "INSERT INTO conf_posts (author_id, created_at, id, status, title) VALUES (?, ?, ?, ?, ?)"
           }
         }
       ],
@@ -2588,30 +2433,69 @@ IR_DOC = {
             }
           },
           "portSchemas": {
-            "bigint": {
-              "required": True,
-              "type": "bool"
+            "opts": {
+              "elemType": {
+                "name": "ExecOptions",
+                "obj": {
+                  "guard": {
+                    "opt": {
+                      "name": "CapGuard",
+                      "obj": {
+                        "limit": "int",
+                        "model": {
+                          "opt": "string"
+                        },
+                        "relation": "string"
+                      }
+                    }
+                  },
+                  "returning": "bool",
+                  "whereDynamic": {
+                    "opt": {
+                      "name": "DynamicWherePlan",
+                      "obj": {
+                        "frags": {
+                          "arr": {
+                            "name": "DynamicWhereFrag",
+                            "obj": {
+                              "params": {
+                                "arr": {
+                                  "opt": "value"
+                                }
+                              },
+                              "skipped": "bool",
+                              "sql": "string"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "write": "bool"
+                }
+              },
+              "required": False,
+              "type": "object"
             },
             "params": {
               "elemType": "value",
               "required": True,
               "type": "array"
             },
-            "returning": {
-              "required": True,
-              "type": "bool"
-            },
             "sql": {
               "required": True,
               "type": "string"
-            },
-            "write": {
-              "required": True,
-              "type": "bool"
             }
           },
           "ports": {
-            "bigint": False,
+            "opts": {
+              "obj": {
+                "guard": None,
+                "returning": False,
+                "whereDynamic": None,
+                "write": True
+              }
+            },
             "params": {
               "arr": [
                 {
@@ -2626,9 +2510,7 @@ IR_DOC = {
                 }
               ]
             },
-            "returning": False,
-            "sql": "UPDATE conf_posts SET title = ? WHERE id = ?",
-            "write": True
+            "sql": "UPDATE conf_posts SET title = ? WHERE id = ?"
           }
         }
       ],
@@ -2681,30 +2563,69 @@ IR_DOC = {
             }
           },
           "portSchemas": {
-            "bigint": {
-              "required": True,
-              "type": "bool"
+            "opts": {
+              "elemType": {
+                "name": "ExecOptions",
+                "obj": {
+                  "guard": {
+                    "opt": {
+                      "name": "CapGuard",
+                      "obj": {
+                        "limit": "int",
+                        "model": {
+                          "opt": "string"
+                        },
+                        "relation": "string"
+                      }
+                    }
+                  },
+                  "returning": "bool",
+                  "whereDynamic": {
+                    "opt": {
+                      "name": "DynamicWherePlan",
+                      "obj": {
+                        "frags": {
+                          "arr": {
+                            "name": "DynamicWhereFrag",
+                            "obj": {
+                              "params": {
+                                "arr": {
+                                  "opt": "value"
+                                }
+                              },
+                              "skipped": "bool",
+                              "sql": "string"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "write": "bool"
+                }
+              },
+              "required": False,
+              "type": "object"
             },
             "params": {
               "elemType": "value",
               "required": True,
               "type": "array"
             },
-            "returning": {
-              "required": True,
-              "type": "bool"
-            },
             "sql": {
               "required": True,
               "type": "string"
-            },
-            "write": {
-              "required": True,
-              "type": "bool"
             }
           },
           "ports": {
-            "bigint": False,
+            "opts": {
+              "obj": {
+                "guard": None,
+                "returning": False,
+                "whereDynamic": None,
+                "write": True
+              }
+            },
             "params": {
               "arr": [
                 {
@@ -2714,9 +2635,7 @@ IR_DOC = {
                 }
               ]
             },
-            "returning": False,
-            "sql": "DELETE FROM conf_posts WHERE id = ?",
-            "write": True
+            "sql": "DELETE FROM conf_posts WHERE id = ?"
           }
         }
       ],
@@ -2769,30 +2688,69 @@ IR_DOC = {
             }
           },
           "portSchemas": {
-            "bigint": {
-              "required": True,
-              "type": "bool"
+            "opts": {
+              "elemType": {
+                "name": "ExecOptions",
+                "obj": {
+                  "guard": {
+                    "opt": {
+                      "name": "CapGuard",
+                      "obj": {
+                        "limit": "int",
+                        "model": {
+                          "opt": "string"
+                        },
+                        "relation": "string"
+                      }
+                    }
+                  },
+                  "returning": "bool",
+                  "whereDynamic": {
+                    "opt": {
+                      "name": "DynamicWherePlan",
+                      "obj": {
+                        "frags": {
+                          "arr": {
+                            "name": "DynamicWhereFrag",
+                            "obj": {
+                              "params": {
+                                "arr": {
+                                  "opt": "value"
+                                }
+                              },
+                              "skipped": "bool",
+                              "sql": "string"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "write": "bool"
+                }
+              },
+              "required": False,
+              "type": "object"
             },
             "params": {
               "elemType": "value",
               "required": True,
               "type": "array"
             },
-            "returning": {
-              "required": True,
-              "type": "bool"
-            },
             "sql": {
               "required": True,
               "type": "string"
-            },
-            "write": {
-              "required": True,
-              "type": "bool"
             }
           },
           "ports": {
-            "bigint": False,
+            "opts": {
+              "obj": {
+                "guard": None,
+                "returning": True,
+                "whereDynamic": None,
+                "write": True
+              }
+            },
             "params": {
               "arr": [
                 {
@@ -2822,9 +2780,7 @@ IR_DOC = {
                 }
               ]
             },
-            "returning": True,
-            "sql": "INSERT INTO conf_posts (author_id, created_at, id, status, title) VALUES (?, ?, ?, ?, ?) RETURNING id, title",
-            "write": True
+            "sql": "INSERT INTO conf_posts (author_id, created_at, id, status, title) VALUES (?, ?, ?, ?, ?) RETURNING id, title"
           }
         }
       ],
@@ -2897,30 +2853,69 @@ IR_DOC = {
             }
           },
           "portSchemas": {
-            "bigint": {
-              "required": True,
-              "type": "bool"
+            "opts": {
+              "elemType": {
+                "name": "ExecOptions",
+                "obj": {
+                  "guard": {
+                    "opt": {
+                      "name": "CapGuard",
+                      "obj": {
+                        "limit": "int",
+                        "model": {
+                          "opt": "string"
+                        },
+                        "relation": "string"
+                      }
+                    }
+                  },
+                  "returning": "bool",
+                  "whereDynamic": {
+                    "opt": {
+                      "name": "DynamicWherePlan",
+                      "obj": {
+                        "frags": {
+                          "arr": {
+                            "name": "DynamicWhereFrag",
+                            "obj": {
+                              "params": {
+                                "arr": {
+                                  "opt": "value"
+                                }
+                              },
+                              "skipped": "bool",
+                              "sql": "string"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "write": "bool"
+                }
+              },
+              "required": False,
+              "type": "object"
             },
             "params": {
               "elemType": "value",
               "required": True,
               "type": "array"
             },
-            "returning": {
-              "required": True,
-              "type": "bool"
-            },
             "sql": {
               "required": True,
               "type": "string"
-            },
-            "write": {
-              "required": True,
-              "type": "bool"
             }
           },
           "ports": {
-            "bigint": False,
+            "opts": {
+              "obj": {
+                "guard": None,
+                "returning": True,
+                "whereDynamic": None,
+                "write": True
+              }
+            },
             "params": {
               "arr": [
                 {
@@ -2935,9 +2930,7 @@ IR_DOC = {
                 }
               ]
             },
-            "returning": True,
-            "sql": "UPDATE conf_posts SET title = ? WHERE id = ? RETURNING id, title",
-            "write": True
+            "sql": "UPDATE conf_posts SET title = ? WHERE id = ? RETURNING id, title"
           }
         }
       ],
@@ -2998,30 +2991,69 @@ IR_DOC = {
             }
           },
           "portSchemas": {
-            "bigint": {
-              "required": True,
-              "type": "bool"
+            "opts": {
+              "elemType": {
+                "name": "ExecOptions",
+                "obj": {
+                  "guard": {
+                    "opt": {
+                      "name": "CapGuard",
+                      "obj": {
+                        "limit": "int",
+                        "model": {
+                          "opt": "string"
+                        },
+                        "relation": "string"
+                      }
+                    }
+                  },
+                  "returning": "bool",
+                  "whereDynamic": {
+                    "opt": {
+                      "name": "DynamicWherePlan",
+                      "obj": {
+                        "frags": {
+                          "arr": {
+                            "name": "DynamicWhereFrag",
+                            "obj": {
+                              "params": {
+                                "arr": {
+                                  "opt": "value"
+                                }
+                              },
+                              "skipped": "bool",
+                              "sql": "string"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "write": "bool"
+                }
+              },
+              "required": False,
+              "type": "object"
             },
             "params": {
               "elemType": "value",
               "required": True,
               "type": "array"
             },
-            "returning": {
-              "required": True,
-              "type": "bool"
-            },
             "sql": {
               "required": True,
               "type": "string"
-            },
-            "write": {
-              "required": True,
-              "type": "bool"
             }
           },
           "ports": {
-            "bigint": False,
+            "opts": {
+              "obj": {
+                "guard": None,
+                "returning": True,
+                "whereDynamic": None,
+                "write": True
+              }
+            },
             "params": {
               "arr": [
                 {
@@ -3031,9 +3063,7 @@ IR_DOC = {
                 }
               ]
             },
-            "returning": True,
-            "sql": "DELETE FROM conf_posts WHERE id = ? RETURNING id, title",
-            "write": True
+            "sql": "DELETE FROM conf_posts WHERE id = ? RETURNING id, title"
           }
         }
       ],
@@ -3090,30 +3120,69 @@ IR_DOC = {
             }
           },
           "portSchemas": {
-            "bigint": {
-              "required": True,
-              "type": "bool"
+            "opts": {
+              "elemType": {
+                "name": "ExecOptions",
+                "obj": {
+                  "guard": {
+                    "opt": {
+                      "name": "CapGuard",
+                      "obj": {
+                        "limit": "int",
+                        "model": {
+                          "opt": "string"
+                        },
+                        "relation": "string"
+                      }
+                    }
+                  },
+                  "returning": "bool",
+                  "whereDynamic": {
+                    "opt": {
+                      "name": "DynamicWherePlan",
+                      "obj": {
+                        "frags": {
+                          "arr": {
+                            "name": "DynamicWhereFrag",
+                            "obj": {
+                              "params": {
+                                "arr": {
+                                  "opt": "value"
+                                }
+                              },
+                              "skipped": "bool",
+                              "sql": "string"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "write": "bool"
+                }
+              },
+              "required": False,
+              "type": "object"
             },
             "params": {
               "elemType": "value",
               "required": True,
               "type": "array"
             },
-            "returning": {
-              "required": True,
-              "type": "bool"
-            },
             "sql": {
               "required": True,
               "type": "string"
-            },
-            "write": {
-              "required": True,
-              "type": "bool"
             }
           },
           "ports": {
-            "bigint": False,
+            "opts": {
+              "obj": {
+                "guard": None,
+                "returning": True,
+                "whereDynamic": None,
+                "write": True
+              }
+            },
             "params": {
               "arr": [
                 {
@@ -3128,9 +3197,7 @@ IR_DOC = {
                 }
               ]
             },
-            "returning": True,
-            "sql": "UPDATE conf_posts SET status = ? WHERE author_id = ? RETURNING id, status",
-            "write": True
+            "sql": "UPDATE conf_posts SET status = ? WHERE author_id = ? RETURNING id, status"
           }
         }
       ],
@@ -3191,30 +3258,69 @@ IR_DOC = {
             }
           },
           "portSchemas": {
-            "bigint": {
-              "required": True,
-              "type": "bool"
+            "opts": {
+              "elemType": {
+                "name": "ExecOptions",
+                "obj": {
+                  "guard": {
+                    "opt": {
+                      "name": "CapGuard",
+                      "obj": {
+                        "limit": "int",
+                        "model": {
+                          "opt": "string"
+                        },
+                        "relation": "string"
+                      }
+                    }
+                  },
+                  "returning": "bool",
+                  "whereDynamic": {
+                    "opt": {
+                      "name": "DynamicWherePlan",
+                      "obj": {
+                        "frags": {
+                          "arr": {
+                            "name": "DynamicWhereFrag",
+                            "obj": {
+                              "params": {
+                                "arr": {
+                                  "opt": "value"
+                                }
+                              },
+                              "skipped": "bool",
+                              "sql": "string"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "write": "bool"
+                }
+              },
+              "required": False,
+              "type": "object"
             },
             "params": {
               "elemType": "value",
               "required": True,
               "type": "array"
             },
-            "returning": {
-              "required": True,
-              "type": "bool"
-            },
             "sql": {
               "required": True,
               "type": "string"
-            },
-            "write": {
-              "required": True,
-              "type": "bool"
             }
           },
           "ports": {
-            "bigint": False,
+            "opts": {
+              "obj": {
+                "guard": None,
+                "returning": True,
+                "whereDynamic": None,
+                "write": True
+              }
+            },
             "params": {
               "arr": [
                 {
@@ -3224,9 +3330,7 @@ IR_DOC = {
                 }
               ]
             },
-            "returning": True,
-            "sql": "DELETE FROM conf_posts WHERE author_id = ? RETURNING id, title",
-            "write": True
+            "sql": "DELETE FROM conf_posts WHERE author_id = ? RETURNING id, title"
           }
         }
       ],
@@ -3289,36 +3393,21 @@ IR_DOC = {
             }
           },
           "portSchemas": {
-            "bigint": {
-              "required": True,
-              "type": "bool"
-            },
             "params": {
               "elemType": "value",
               "required": True,
               "type": "array"
             },
-            "returning": {
-              "required": True,
-              "type": "bool"
-            },
             "sql": {
               "required": True,
               "type": "string"
-            },
-            "write": {
-              "required": True,
-              "type": "bool"
             }
           },
           "ports": {
-            "bigint": False,
             "params": {
               "arr": []
             },
-            "returning": False,
-            "sql": "SELECT id, ts, flag, label FROM conf_typed ORDER BY id ASC",
-            "write": False
+            "sql": "SELECT id, ts, flag, label FROM conf_typed ORDER BY id ASC"
           }
         }
       ],
@@ -3372,30 +3461,69 @@ IR_DOC = {
             }
           },
           "portSchemas": {
-            "bigint": {
-              "required": True,
-              "type": "bool"
+            "opts": {
+              "elemType": {
+                "name": "ExecOptions",
+                "obj": {
+                  "guard": {
+                    "opt": {
+                      "name": "CapGuard",
+                      "obj": {
+                        "limit": "int",
+                        "model": {
+                          "opt": "string"
+                        },
+                        "relation": "string"
+                      }
+                    }
+                  },
+                  "returning": "bool",
+                  "whereDynamic": {
+                    "opt": {
+                      "name": "DynamicWherePlan",
+                      "obj": {
+                        "frags": {
+                          "arr": {
+                            "name": "DynamicWhereFrag",
+                            "obj": {
+                              "params": {
+                                "arr": {
+                                  "opt": "value"
+                                }
+                              },
+                              "skipped": "bool",
+                              "sql": "string"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "write": "bool"
+                }
+              },
+              "required": False,
+              "type": "object"
             },
             "params": {
               "elemType": "value",
               "required": True,
               "type": "array"
             },
-            "returning": {
-              "required": True,
-              "type": "bool"
-            },
             "sql": {
               "required": True,
               "type": "string"
-            },
-            "write": {
-              "required": True,
-              "type": "bool"
             }
           },
           "ports": {
-            "bigint": False,
+            "opts": {
+              "obj": {
+                "guard": None,
+                "returning": False,
+                "whereDynamic": None,
+                "write": True
+              }
+            },
             "params": {
               "arr": [
                 {
@@ -3415,9 +3543,7 @@ IR_DOC = {
                 }
               ]
             },
-            "returning": False,
-            "sql": "INSERT INTO conf_tags (id, label, post_id) SELECT v.id, v.label, v.post_id FROM UNNEST(?::int[], ?::text[], ?::int[]) AS v(id, label, post_id)",
-            "write": True
+            "sql": "INSERT INTO conf_tags (id, label, post_id) SELECT v.id, v.label, v.post_id FROM UNNEST(?::int[], ?::text[], ?::int[]) AS v(id, label, post_id)"
           }
         }
       ],
@@ -3477,30 +3603,69 @@ IR_DOC = {
             }
           },
           "portSchemas": {
-            "bigint": {
-              "required": True,
-              "type": "bool"
+            "opts": {
+              "elemType": {
+                "name": "ExecOptions",
+                "obj": {
+                  "guard": {
+                    "opt": {
+                      "name": "CapGuard",
+                      "obj": {
+                        "limit": "int",
+                        "model": {
+                          "opt": "string"
+                        },
+                        "relation": "string"
+                      }
+                    }
+                  },
+                  "returning": "bool",
+                  "whereDynamic": {
+                    "opt": {
+                      "name": "DynamicWherePlan",
+                      "obj": {
+                        "frags": {
+                          "arr": {
+                            "name": "DynamicWhereFrag",
+                            "obj": {
+                              "params": {
+                                "arr": {
+                                  "opt": "value"
+                                }
+                              },
+                              "skipped": "bool",
+                              "sql": "string"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "write": "bool"
+                }
+              },
+              "required": False,
+              "type": "object"
             },
             "params": {
               "elemType": "value",
               "required": True,
               "type": "array"
             },
-            "returning": {
-              "required": True,
-              "type": "bool"
-            },
             "sql": {
               "required": True,
               "type": "string"
-            },
-            "write": {
-              "required": True,
-              "type": "bool"
             }
           },
           "ports": {
-            "bigint": False,
+            "opts": {
+              "obj": {
+                "guard": None,
+                "returning": False,
+                "whereDynamic": None,
+                "write": True
+              }
+            },
             "params": {
               "arr": [
                 {
@@ -3510,9 +3675,7 @@ IR_DOC = {
                 }
               ]
             },
-            "returning": False,
-            "sql": "DELETE FROM conf_tags WHERE id = ANY(?)",
-            "write": True
+            "sql": "DELETE FROM conf_tags WHERE id = ANY(?)"
           }
         }
       ],
@@ -3566,30 +3729,69 @@ IR_DOC = {
             }
           },
           "portSchemas": {
-            "bigint": {
-              "required": True,
-              "type": "bool"
+            "opts": {
+              "elemType": {
+                "name": "ExecOptions",
+                "obj": {
+                  "guard": {
+                    "opt": {
+                      "name": "CapGuard",
+                      "obj": {
+                        "limit": "int",
+                        "model": {
+                          "opt": "string"
+                        },
+                        "relation": "string"
+                      }
+                    }
+                  },
+                  "returning": "bool",
+                  "whereDynamic": {
+                    "opt": {
+                      "name": "DynamicWherePlan",
+                      "obj": {
+                        "frags": {
+                          "arr": {
+                            "name": "DynamicWhereFrag",
+                            "obj": {
+                              "params": {
+                                "arr": {
+                                  "opt": "value"
+                                }
+                              },
+                              "skipped": "bool",
+                              "sql": "string"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "write": "bool"
+                }
+              },
+              "required": False,
+              "type": "object"
             },
             "params": {
               "elemType": "value",
               "required": True,
               "type": "array"
             },
-            "returning": {
-              "required": True,
-              "type": "bool"
-            },
             "sql": {
               "required": True,
               "type": "string"
-            },
-            "write": {
-              "required": True,
-              "type": "bool"
             }
           },
           "ports": {
-            "bigint": False,
+            "opts": {
+              "obj": {
+                "guard": None,
+                "returning": True,
+                "whereDynamic": None,
+                "write": True
+              }
+            },
             "params": {
               "arr": [
                 {
@@ -3609,9 +3811,7 @@ IR_DOC = {
                 }
               ]
             },
-            "returning": True,
-            "sql": "INSERT INTO conf_tags (id, label, post_id) SELECT v.id, v.label, v.post_id FROM UNNEST(?::int[], ?::text[], ?::int[]) AS v(id, label, post_id) RETURNING id, label",
-            "write": True
+            "sql": "INSERT INTO conf_tags (id, label, post_id) SELECT v.id, v.label, v.post_id FROM UNNEST(?::int[], ?::text[], ?::int[]) AS v(id, label, post_id) RETURNING id, label"
           }
         }
       ],
@@ -3679,30 +3879,69 @@ IR_DOC = {
             }
           },
           "portSchemas": {
-            "bigint": {
-              "required": True,
-              "type": "bool"
+            "opts": {
+              "elemType": {
+                "name": "ExecOptions",
+                "obj": {
+                  "guard": {
+                    "opt": {
+                      "name": "CapGuard",
+                      "obj": {
+                        "limit": "int",
+                        "model": {
+                          "opt": "string"
+                        },
+                        "relation": "string"
+                      }
+                    }
+                  },
+                  "returning": "bool",
+                  "whereDynamic": {
+                    "opt": {
+                      "name": "DynamicWherePlan",
+                      "obj": {
+                        "frags": {
+                          "arr": {
+                            "name": "DynamicWhereFrag",
+                            "obj": {
+                              "params": {
+                                "arr": {
+                                  "opt": "value"
+                                }
+                              },
+                              "skipped": "bool",
+                              "sql": "string"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "write": "bool"
+                }
+              },
+              "required": False,
+              "type": "object"
             },
             "params": {
               "elemType": "value",
               "required": True,
               "type": "array"
             },
-            "returning": {
-              "required": True,
-              "type": "bool"
-            },
             "sql": {
               "required": True,
               "type": "string"
-            },
-            "write": {
-              "required": True,
-              "type": "bool"
             }
           },
           "ports": {
-            "bigint": False,
+            "opts": {
+              "obj": {
+                "guard": None,
+                "returning": True,
+                "whereDynamic": None,
+                "write": True
+              }
+            },
             "params": {
               "arr": [
                 {
@@ -3717,9 +3956,7 @@ IR_DOC = {
                 }
               ]
             },
-            "returning": True,
-            "sql": "UPDATE conf_tags AS t SET label = v.label FROM UNNEST(?::int[], ?::text[]) AS v(id, label) WHERE t.id = v.id RETURNING t.id, t.label",
-            "write": True
+            "sql": "UPDATE conf_tags AS t SET label = v.label FROM UNNEST(?::int[], ?::text[]) AS v(id, label) WHERE t.id = v.id RETURNING t.id, t.label"
           }
         }
       ],
@@ -3782,30 +4019,69 @@ IR_DOC = {
             }
           },
           "portSchemas": {
-            "bigint": {
-              "required": True,
-              "type": "bool"
+            "opts": {
+              "elemType": {
+                "name": "ExecOptions",
+                "obj": {
+                  "guard": {
+                    "opt": {
+                      "name": "CapGuard",
+                      "obj": {
+                        "limit": "int",
+                        "model": {
+                          "opt": "string"
+                        },
+                        "relation": "string"
+                      }
+                    }
+                  },
+                  "returning": "bool",
+                  "whereDynamic": {
+                    "opt": {
+                      "name": "DynamicWherePlan",
+                      "obj": {
+                        "frags": {
+                          "arr": {
+                            "name": "DynamicWhereFrag",
+                            "obj": {
+                              "params": {
+                                "arr": {
+                                  "opt": "value"
+                                }
+                              },
+                              "skipped": "bool",
+                              "sql": "string"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "write": "bool"
+                }
+              },
+              "required": False,
+              "type": "object"
             },
             "params": {
               "elemType": "value",
               "required": True,
               "type": "array"
             },
-            "returning": {
-              "required": True,
-              "type": "bool"
-            },
             "sql": {
               "required": True,
               "type": "string"
-            },
-            "write": {
-              "required": True,
-              "type": "bool"
             }
           },
           "ports": {
-            "bigint": False,
+            "opts": {
+              "obj": {
+                "guard": None,
+                "returning": True,
+                "whereDynamic": None,
+                "write": True
+              }
+            },
             "params": {
               "arr": [
                 {
@@ -3815,9 +4091,7 @@ IR_DOC = {
                 }
               ]
             },
-            "returning": True,
-            "sql": "DELETE FROM conf_tags WHERE id = ANY(?) RETURNING id, label",
-            "write": True
+            "sql": "DELETE FROM conf_tags WHERE id = ANY(?) RETURNING id, label"
           }
         }
       ],

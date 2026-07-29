@@ -202,6 +202,25 @@ describe('emitter — RELATIONS (one query per level, N+1-free)', () => {
     expect(body[6]).toContain('Db.group(rows, commentsGraph, ["id"], ["author_id"], "posts", false)');
   });
 
+  it('a GUARDED relation child carries the cap as a NAMED field — no empty-plan filler (#193)', () => {
+    try {
+      setLimitConfig({ hasManyHardLimit: 7 });
+      const body = bodyOf(emit('sqlite').source, 'usersWithPosts');
+      // The child fetch's whole control surface is ONE record: the cap under its own `guard` field,
+      // and "no dynamic WHERE" spelled as `whereDynamic: null`. Before #193 the guard could only be
+      // reached POSITIONALLY, so the emitter passed an EMPTY plan (`{ frags: [] }`) to get past the
+      // `whereDynamic` slot — a value that claimed a plan the statement does not have.
+      expect(body[2]).toContain(
+        ', { write: false, returning: false, whereDynamic: null, guard: { limit: 7 as Int, model: "e2e_posts", relation: "posts" } });',
+      );
+      expect(body[2]).not.toContain('frags');
+      // The relation batch is a READ: the same record says so, and no write seam is selected.
+      expect(body[4]).toContain('guard: { limit: 7 as Int,');
+    } finally {
+      resetLimitConfig();
+    }
+  });
+
   it('the SINGLE de-box is the terminal group; every intermediate stays opaque WireValue[]', () => {
     const body = bodyOf(emit('sqlite').source, 'usersWithPosts');
     expect(body.filter((l) => l.includes(' as ')).length).toBe(1);
@@ -231,7 +250,9 @@ describe('emitter — RELATIONS (one query per level, N+1-free)', () => {
         'ON e2e_tenant_posts.tenant_id = _keys.key0 AND e2e_tenant_posts.user_id = _keys.key1',
     );
     expect(body[2]).toContain('Db.executeSQL(');
-    expect(body[2]).toContain(', [postsKeys], false, false, false)');
+    // An UNCAPPED relation child carries NO control record at all — the statement is `sql` + `params`
+    // and nothing else (#193: there is no trailing port left to reach, so no filler is emitted).
+    expect(body[2]).toContain(', [postsKeys]);');
     expect(body[2].match(/\?/g)).toHaveLength(1); // ONE placeholder ⇒ ONE bound param
   });
 });
@@ -258,7 +279,7 @@ describe('emitter — WRITES', () => {
     // the adapter strips it and re-selects. Emitting the mysql module must therefore NOT throw.
     const { source } = emit('mysql', { createUser: EMIT_ENDPOINTS.createUser });
     expect(bodyOf(source, 'createUser')[0]).toContain('INSERT INTO e2e_users (name) VALUES (?) RETURNING id, name');
-    expect(bodyOf(source, 'createUser')[0]).toContain('true, true'); // write=true, returning=true
+    expect(bodyOf(source, 'createUser')[0]).toContain('{ write: true, returning: true, whereDynamic: null, guard: null }');
   });
 
   it('batch writes bind ONE record-array JSON param on mysql/sqlite', () => {

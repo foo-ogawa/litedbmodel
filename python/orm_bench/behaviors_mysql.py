@@ -4,14 +4,14 @@
 # native dict literal and handed to the EXISTING runtime core (run_behavior) —
 # no execution logic is generated. Handlers are ALWAYS injected at the boundary
 # (IR + {effects,config,hooks}); they are never generated.
-# irFingerprint: fnv1a64:ea1396590aea2d25
+# irFingerprint: fnv1a64:b139147d7b0cac75
 from behavior_contracts import SPEC_VERSIONS, ProvenanceError, load_compiled_ir, run_behavior
 
 # Spec versions baked at generation time (fail-closed constant comparison at load).
 EXPECTED_SPEC_VERSIONS = {"behavior": 6, "expression": 2, "plan": 1}
 
 # FNV-1a 64 fingerprint of the source portable IR (canonical_json discipline, #208).
-IR_FINGERPRINT = "fnv1a64:ea1396590aea2d25"
+IR_FINGERPRINT = "fnv1a64:b139147d7b0cac75"
 
 # Component names exposed by bind(), in IR declaration order.
 COMPONENT_NAMES = ("findAll", "filterPaginateSort", "findFirst", "findUnique", "nestedFindAll", "nestedFindFirst", "nestedFindUnique", "nestedRelations", "compositeRelations", "create", "update", "upsert", "createMany", "upsertMany", "updateMany", "nestedCreate", "nestedUpsert", "nestedUpdate", "delete")
@@ -44,36 +44,21 @@ IR_DOC = {
             }
           },
           "portSchemas": {
-            "bigint": {
-              "required": True,
-              "type": "bool"
-            },
             "params": {
               "elemType": "value",
               "required": True,
               "type": "array"
             },
-            "returning": {
-              "required": True,
-              "type": "bool"
-            },
             "sql": {
               "required": True,
               "type": "string"
-            },
-            "write": {
-              "required": True,
-              "type": "bool"
             }
           },
           "ports": {
-            "bigint": False,
             "params": {
               "arr": []
             },
-            "returning": False,
-            "sql": "SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100",
-            "write": False
+            "sql": "SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100"
           }
         }
       ],
@@ -136,30 +121,17 @@ IR_DOC = {
             }
           },
           "portSchemas": {
-            "bigint": {
-              "required": True,
-              "type": "bool"
-            },
             "params": {
               "elemType": "value",
               "required": True,
               "type": "array"
             },
-            "returning": {
-              "required": True,
-              "type": "bool"
-            },
             "sql": {
               "required": True,
               "type": "string"
-            },
-            "write": {
-              "required": True,
-              "type": "bool"
             }
           },
           "ports": {
-            "bigint": False,
             "params": {
               "arr": [
                 {
@@ -169,9 +141,7 @@ IR_DOC = {
                 }
               ]
             },
-            "returning": False,
-            "sql": "SELECT id, title, content, published, author_id, created_at FROM benchmark_posts WHERE published = ? ORDER BY created_at DESC LIMIT 20 OFFSET 10",
-            "write": False
+            "sql": "SELECT id, title, content, published, author_id, created_at FROM benchmark_posts WHERE published = ? ORDER BY created_at DESC LIMIT 20 OFFSET 10"
           }
         }
       ],
@@ -239,30 +209,17 @@ IR_DOC = {
             }
           },
           "portSchemas": {
-            "bigint": {
-              "required": True,
-              "type": "bool"
-            },
             "params": {
               "elemType": "value",
               "required": True,
               "type": "array"
             },
-            "returning": {
-              "required": True,
-              "type": "bool"
-            },
             "sql": {
               "required": True,
               "type": "string"
-            },
-            "write": {
-              "required": True,
-              "type": "bool"
             }
           },
           "ports": {
-            "bigint": False,
             "params": {
               "arr": [
                 {
@@ -272,9 +229,7 @@ IR_DOC = {
                 }
               ]
             },
-            "returning": False,
-            "sql": "SELECT id, email, name FROM benchmark_users WHERE name LIKE ? ORDER BY id ASC LIMIT 1",
-            "write": False
+            "sql": "SELECT id, email, name FROM benchmark_users WHERE name LIKE ? ORDER BY id ASC LIMIT 1"
           }
         }
       ],
@@ -333,30 +288,17 @@ IR_DOC = {
             }
           },
           "portSchemas": {
-            "bigint": {
-              "required": True,
-              "type": "bool"
-            },
             "params": {
               "elemType": "value",
               "required": True,
               "type": "array"
             },
-            "returning": {
-              "required": True,
-              "type": "bool"
-            },
             "sql": {
               "required": True,
               "type": "string"
-            },
-            "write": {
-              "required": True,
-              "type": "bool"
             }
           },
           "ports": {
-            "bigint": False,
             "params": {
               "arr": [
                 {
@@ -366,9 +308,7 @@ IR_DOC = {
                 }
               ]
             },
-            "returning": False,
-            "sql": "SELECT id, email, name FROM benchmark_users WHERE email = ? LIMIT 1",
-            "write": False
+            "sql": "SELECT id, email, name FROM benchmark_users WHERE email = ? LIMIT 1"
           }
         }
       ],
@@ -416,36 +356,21 @@ IR_DOC = {
             "arr": "value"
           },
           "portSchemas": {
-            "bigint": {
-              "required": True,
-              "type": "bool"
-            },
             "params": {
               "elemType": "value",
               "required": True,
               "type": "array"
             },
-            "returning": {
-              "required": True,
-              "type": "bool"
-            },
             "sql": {
               "required": True,
               "type": "string"
-            },
-            "write": {
-              "required": True,
-              "type": "bool"
             }
           },
           "ports": {
-            "bigint": False,
             "params": {
               "arr": []
             },
-            "returning": False,
-            "sql": "SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100",
-            "write": False
+            "sql": "SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100"
           },
           "wirePassthrough": True
         },
@@ -490,30 +415,17 @@ IR_DOC = {
           },
           "parent": "n1",
           "portSchemas": {
-            "bigint": {
-              "required": True,
-              "type": "bool"
-            },
             "params": {
               "elemType": "value",
               "required": True,
               "type": "array"
             },
-            "returning": {
-              "required": True,
-              "type": "bool"
-            },
             "sql": {
               "required": True,
               "type": "string"
-            },
-            "write": {
-              "required": True,
-              "type": "bool"
             }
           },
           "ports": {
-            "bigint": False,
             "params": {
               "arr": [
                 {
@@ -523,9 +435,7 @@ IR_DOC = {
                 }
               ]
             },
-            "returning": False,
-            "sql": "SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) ORDER BY id ASC",
-            "write": False
+            "sql": "SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) ORDER BY id ASC"
           },
           "wirePassthrough": True
         },
@@ -679,30 +589,17 @@ IR_DOC = {
             "arr": "value"
           },
           "portSchemas": {
-            "bigint": {
-              "required": True,
-              "type": "bool"
-            },
             "params": {
               "elemType": "value",
               "required": True,
               "type": "array"
             },
-            "returning": {
-              "required": True,
-              "type": "bool"
-            },
             "sql": {
               "required": True,
               "type": "string"
-            },
-            "write": {
-              "required": True,
-              "type": "bool"
             }
           },
           "ports": {
-            "bigint": False,
             "params": {
               "arr": [
                 {
@@ -712,9 +609,7 @@ IR_DOC = {
                 }
               ]
             },
-            "returning": False,
-            "sql": "SELECT id, email, name FROM benchmark_users WHERE name LIKE ? ORDER BY id ASC LIMIT 1",
-            "write": False
+            "sql": "SELECT id, email, name FROM benchmark_users WHERE name LIKE ? ORDER BY id ASC LIMIT 1"
           },
           "wirePassthrough": True
         },
@@ -759,30 +654,17 @@ IR_DOC = {
           },
           "parent": "n1",
           "portSchemas": {
-            "bigint": {
-              "required": True,
-              "type": "bool"
-            },
             "params": {
               "elemType": "value",
               "required": True,
               "type": "array"
             },
-            "returning": {
-              "required": True,
-              "type": "bool"
-            },
             "sql": {
               "required": True,
               "type": "string"
-            },
-            "write": {
-              "required": True,
-              "type": "bool"
             }
           },
           "ports": {
-            "bigint": False,
             "params": {
               "arr": [
                 {
@@ -792,9 +674,7 @@ IR_DOC = {
                 }
               ]
             },
-            "returning": False,
-            "sql": "SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) ORDER BY id ASC",
-            "write": False
+            "sql": "SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) ORDER BY id ASC"
           },
           "wirePassthrough": True
         },
@@ -953,30 +833,17 @@ IR_DOC = {
             "arr": "value"
           },
           "portSchemas": {
-            "bigint": {
-              "required": True,
-              "type": "bool"
-            },
             "params": {
               "elemType": "value",
               "required": True,
               "type": "array"
             },
-            "returning": {
-              "required": True,
-              "type": "bool"
-            },
             "sql": {
               "required": True,
               "type": "string"
-            },
-            "write": {
-              "required": True,
-              "type": "bool"
             }
           },
           "ports": {
-            "bigint": False,
             "params": {
               "arr": [
                 {
@@ -986,9 +853,7 @@ IR_DOC = {
                 }
               ]
             },
-            "returning": False,
-            "sql": "SELECT id, email, name FROM benchmark_users WHERE email = ? LIMIT 1",
-            "write": False
+            "sql": "SELECT id, email, name FROM benchmark_users WHERE email = ? LIMIT 1"
           },
           "wirePassthrough": True
         },
@@ -1033,30 +898,17 @@ IR_DOC = {
           },
           "parent": "n1",
           "portSchemas": {
-            "bigint": {
-              "required": True,
-              "type": "bool"
-            },
             "params": {
               "elemType": "value",
               "required": True,
               "type": "array"
             },
-            "returning": {
-              "required": True,
-              "type": "bool"
-            },
             "sql": {
               "required": True,
               "type": "string"
-            },
-            "write": {
-              "required": True,
-              "type": "bool"
             }
           },
           "ports": {
-            "bigint": False,
             "params": {
               "arr": [
                 {
@@ -1066,9 +918,7 @@ IR_DOC = {
                 }
               ]
             },
-            "returning": False,
-            "sql": "SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) ORDER BY id ASC",
-            "write": False
+            "sql": "SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) ORDER BY id ASC"
           },
           "wirePassthrough": True
         },
@@ -1227,36 +1077,21 @@ IR_DOC = {
             "arr": "value"
           },
           "portSchemas": {
-            "bigint": {
-              "required": True,
-              "type": "bool"
-            },
             "params": {
               "elemType": "value",
               "required": True,
               "type": "array"
             },
-            "returning": {
-              "required": True,
-              "type": "bool"
-            },
             "sql": {
               "required": True,
               "type": "string"
-            },
-            "write": {
-              "required": True,
-              "type": "bool"
             }
           },
           "ports": {
-            "bigint": False,
             "params": {
               "arr": []
             },
-            "returning": False,
-            "sql": "SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100",
-            "write": False
+            "sql": "SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100"
           },
           "wirePassthrough": True
         },
@@ -1301,30 +1136,17 @@ IR_DOC = {
           },
           "parent": "n1",
           "portSchemas": {
-            "bigint": {
-              "required": True,
-              "type": "bool"
-            },
             "params": {
               "elemType": "value",
               "required": True,
               "type": "array"
             },
-            "returning": {
-              "required": True,
-              "type": "bool"
-            },
             "sql": {
               "required": True,
               "type": "string"
-            },
-            "write": {
-              "required": True,
-              "type": "bool"
             }
           },
           "ports": {
-            "bigint": False,
             "params": {
               "arr": [
                 {
@@ -1334,9 +1156,7 @@ IR_DOC = {
                 }
               ]
             },
-            "returning": False,
-            "sql": "SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) ORDER BY id ASC",
-            "write": False
+            "sql": "SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) ORDER BY id ASC"
           },
           "wirePassthrough": True
         },
@@ -1381,30 +1201,17 @@ IR_DOC = {
           },
           "parent": "n3",
           "portSchemas": {
-            "bigint": {
-              "required": True,
-              "type": "bool"
-            },
             "params": {
               "elemType": "value",
               "required": True,
               "type": "array"
             },
-            "returning": {
-              "required": True,
-              "type": "bool"
-            },
             "sql": {
               "required": True,
               "type": "string"
-            },
-            "write": {
-              "required": True,
-              "type": "bool"
             }
           },
           "ports": {
-            "bigint": False,
             "params": {
               "arr": [
                 {
@@ -1414,9 +1221,7 @@ IR_DOC = {
                 }
               ]
             },
-            "returning": False,
-            "sql": "SELECT id, body, post_id FROM benchmark_comments WHERE post_id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) ORDER BY id ASC",
-            "write": False
+            "sql": "SELECT id, body, post_id FROM benchmark_comments WHERE post_id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) ORDER BY id ASC"
           },
           "wirePassthrough": True
         },
@@ -1674,36 +1479,21 @@ IR_DOC = {
             "arr": "value"
           },
           "portSchemas": {
-            "bigint": {
-              "required": True,
-              "type": "bool"
-            },
             "params": {
               "elemType": "value",
               "required": True,
               "type": "array"
             },
-            "returning": {
-              "required": True,
-              "type": "bool"
-            },
             "sql": {
               "required": True,
               "type": "string"
-            },
-            "write": {
-              "required": True,
-              "type": "bool"
             }
           },
           "ports": {
-            "bigint": False,
             "params": {
               "arr": []
             },
-            "returning": False,
-            "sql": "SELECT tenant_id, user_id, name FROM benchmark_tenant_users ORDER BY user_id ASC LIMIT 100",
-            "write": False
+            "sql": "SELECT tenant_id, user_id, name FROM benchmark_tenant_users ORDER BY user_id ASC LIMIT 100"
           },
           "wirePassthrough": True
         },
@@ -1749,30 +1539,17 @@ IR_DOC = {
           },
           "parent": "n1",
           "portSchemas": {
-            "bigint": {
-              "required": True,
-              "type": "bool"
-            },
             "params": {
               "elemType": "value",
               "required": True,
               "type": "array"
             },
-            "returning": {
-              "required": True,
-              "type": "bool"
-            },
             "sql": {
               "required": True,
               "type": "string"
-            },
-            "write": {
-              "required": True,
-              "type": "bool"
             }
           },
           "ports": {
-            "bigint": False,
             "params": {
               "arr": [
                 {
@@ -1782,9 +1559,7 @@ IR_DOC = {
                 }
               ]
             },
-            "returning": False,
-            "sql": "SELECT tenant_id, post_id, user_id, title FROM benchmark_tenant_posts WHERE (benchmark_tenant_posts.tenant_id, benchmark_tenant_posts.user_id) IN (SELECT JSON_UNQUOTE(c0), JSON_UNQUOTE(c1) FROM JSON_TABLE(?, '$[*]' COLUMNS(c0 JSON PATH '$[0]', c1 JSON PATH '$[1]')) jt) ORDER BY post_id ASC",
-            "write": False
+            "sql": "SELECT tenant_id, post_id, user_id, title FROM benchmark_tenant_posts WHERE (benchmark_tenant_posts.tenant_id, benchmark_tenant_posts.user_id) IN (SELECT JSON_UNQUOTE(c0), JSON_UNQUOTE(c1) FROM JSON_TABLE(?, '$[*]' COLUMNS(c0 JSON PATH '$[0]', c1 JSON PATH '$[1]')) jt) ORDER BY post_id ASC"
           },
           "wirePassthrough": True
         },
@@ -1830,30 +1605,17 @@ IR_DOC = {
           },
           "parent": "n3",
           "portSchemas": {
-            "bigint": {
-              "required": True,
-              "type": "bool"
-            },
             "params": {
               "elemType": "value",
               "required": True,
               "type": "array"
             },
-            "returning": {
-              "required": True,
-              "type": "bool"
-            },
             "sql": {
               "required": True,
               "type": "string"
-            },
-            "write": {
-              "required": True,
-              "type": "bool"
             }
           },
           "ports": {
-            "bigint": False,
             "params": {
               "arr": [
                 {
@@ -1863,9 +1625,7 @@ IR_DOC = {
                 }
               ]
             },
-            "returning": False,
-            "sql": "SELECT tenant_id, comment_id, post_id, body FROM benchmark_tenant_comments WHERE (benchmark_tenant_comments.tenant_id, benchmark_tenant_comments.post_id) IN (SELECT JSON_UNQUOTE(c0), JSON_UNQUOTE(c1) FROM JSON_TABLE(?, '$[*]' COLUMNS(c0 JSON PATH '$[0]', c1 JSON PATH '$[1]')) jt) ORDER BY comment_id ASC",
-            "write": False
+            "sql": "SELECT tenant_id, comment_id, post_id, body FROM benchmark_tenant_comments WHERE (benchmark_tenant_comments.tenant_id, benchmark_tenant_comments.post_id) IN (SELECT JSON_UNQUOTE(c0), JSON_UNQUOTE(c1) FROM JSON_TABLE(?, '$[*]' COLUMNS(c0 JSON PATH '$[0]', c1 JSON PATH '$[1]')) jt) ORDER BY comment_id ASC"
           },
           "wirePassthrough": True
         },
@@ -2153,30 +1913,69 @@ IR_DOC = {
             }
           },
           "portSchemas": {
-            "bigint": {
-              "required": True,
-              "type": "bool"
+            "opts": {
+              "elemType": {
+                "name": "ExecOptions",
+                "obj": {
+                  "guard": {
+                    "opt": {
+                      "name": "CapGuard",
+                      "obj": {
+                        "limit": "int",
+                        "model": {
+                          "opt": "string"
+                        },
+                        "relation": "string"
+                      }
+                    }
+                  },
+                  "returning": "bool",
+                  "whereDynamic": {
+                    "opt": {
+                      "name": "DynamicWherePlan",
+                      "obj": {
+                        "frags": {
+                          "arr": {
+                            "name": "DynamicWhereFrag",
+                            "obj": {
+                              "params": {
+                                "arr": {
+                                  "opt": "value"
+                                }
+                              },
+                              "skipped": "bool",
+                              "sql": "string"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "write": "bool"
+                }
+              },
+              "required": False,
+              "type": "object"
             },
             "params": {
               "elemType": "value",
               "required": True,
               "type": "array"
             },
-            "returning": {
-              "required": True,
-              "type": "bool"
-            },
             "sql": {
               "required": True,
               "type": "string"
-            },
-            "write": {
-              "required": True,
-              "type": "bool"
             }
           },
           "ports": {
-            "bigint": False,
+            "opts": {
+              "obj": {
+                "guard": None,
+                "returning": False,
+                "whereDynamic": None,
+                "write": True
+              }
+            },
             "params": {
               "arr": [
                 {
@@ -2191,9 +1990,7 @@ IR_DOC = {
                 }
               ]
             },
-            "returning": False,
-            "sql": "INSERT INTO benchmark_users (email, name) VALUES (?, ?)",
-            "write": True
+            "sql": "INSERT INTO benchmark_users (email, name) VALUES (?, ?)"
           }
         }
       ],
@@ -2246,30 +2043,69 @@ IR_DOC = {
             }
           },
           "portSchemas": {
-            "bigint": {
-              "required": True,
-              "type": "bool"
+            "opts": {
+              "elemType": {
+                "name": "ExecOptions",
+                "obj": {
+                  "guard": {
+                    "opt": {
+                      "name": "CapGuard",
+                      "obj": {
+                        "limit": "int",
+                        "model": {
+                          "opt": "string"
+                        },
+                        "relation": "string"
+                      }
+                    }
+                  },
+                  "returning": "bool",
+                  "whereDynamic": {
+                    "opt": {
+                      "name": "DynamicWherePlan",
+                      "obj": {
+                        "frags": {
+                          "arr": {
+                            "name": "DynamicWhereFrag",
+                            "obj": {
+                              "params": {
+                                "arr": {
+                                  "opt": "value"
+                                }
+                              },
+                              "skipped": "bool",
+                              "sql": "string"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "write": "bool"
+                }
+              },
+              "required": False,
+              "type": "object"
             },
             "params": {
               "elemType": "value",
               "required": True,
               "type": "array"
             },
-            "returning": {
-              "required": True,
-              "type": "bool"
-            },
             "sql": {
               "required": True,
               "type": "string"
-            },
-            "write": {
-              "required": True,
-              "type": "bool"
             }
           },
           "ports": {
-            "bigint": False,
+            "opts": {
+              "obj": {
+                "guard": None,
+                "returning": False,
+                "whereDynamic": None,
+                "write": True
+              }
+            },
             "params": {
               "arr": [
                 {
@@ -2284,9 +2120,7 @@ IR_DOC = {
                 }
               ]
             },
-            "returning": False,
-            "sql": "UPDATE benchmark_users SET name = ? WHERE id = ?",
-            "write": True
+            "sql": "UPDATE benchmark_users SET name = ? WHERE id = ?"
           }
         }
       ],
@@ -2338,30 +2172,69 @@ IR_DOC = {
             }
           },
           "portSchemas": {
-            "bigint": {
-              "required": True,
-              "type": "bool"
+            "opts": {
+              "elemType": {
+                "name": "ExecOptions",
+                "obj": {
+                  "guard": {
+                    "opt": {
+                      "name": "CapGuard",
+                      "obj": {
+                        "limit": "int",
+                        "model": {
+                          "opt": "string"
+                        },
+                        "relation": "string"
+                      }
+                    }
+                  },
+                  "returning": "bool",
+                  "whereDynamic": {
+                    "opt": {
+                      "name": "DynamicWherePlan",
+                      "obj": {
+                        "frags": {
+                          "arr": {
+                            "name": "DynamicWhereFrag",
+                            "obj": {
+                              "params": {
+                                "arr": {
+                                  "opt": "value"
+                                }
+                              },
+                              "skipped": "bool",
+                              "sql": "string"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "write": "bool"
+                }
+              },
+              "required": False,
+              "type": "object"
             },
             "params": {
               "elemType": "value",
               "required": True,
               "type": "array"
             },
-            "returning": {
-              "required": True,
-              "type": "bool"
-            },
             "sql": {
               "required": True,
               "type": "string"
-            },
-            "write": {
-              "required": True,
-              "type": "bool"
             }
           },
           "ports": {
-            "bigint": False,
+            "opts": {
+              "obj": {
+                "guard": None,
+                "returning": True,
+                "whereDynamic": None,
+                "write": True
+              }
+            },
             "params": {
               "arr": [
                 {
@@ -2376,9 +2249,7 @@ IR_DOC = {
                 }
               ]
             },
-            "returning": True,
-            "sql": "INSERT INTO benchmark_users (email, name) VALUES (?, ?) ON DUPLICATE KEY UPDATE email = VALUES(email), name = VALUES(name) RETURNING id /*scp:pk=id;ai=id;conflict=email*/",
-            "write": True
+            "sql": "INSERT INTO benchmark_users (email, name) VALUES (?, ?) ON DUPLICATE KEY UPDATE email = VALUES(email), name = VALUES(name) RETURNING id /*scp:pk=id;ai=id;conflict=email*/"
           }
         }
       ],
@@ -2430,30 +2301,69 @@ IR_DOC = {
             }
           },
           "portSchemas": {
-            "bigint": {
-              "required": True,
-              "type": "bool"
+            "opts": {
+              "elemType": {
+                "name": "ExecOptions",
+                "obj": {
+                  "guard": {
+                    "opt": {
+                      "name": "CapGuard",
+                      "obj": {
+                        "limit": "int",
+                        "model": {
+                          "opt": "string"
+                        },
+                        "relation": "string"
+                      }
+                    }
+                  },
+                  "returning": "bool",
+                  "whereDynamic": {
+                    "opt": {
+                      "name": "DynamicWherePlan",
+                      "obj": {
+                        "frags": {
+                          "arr": {
+                            "name": "DynamicWhereFrag",
+                            "obj": {
+                              "params": {
+                                "arr": {
+                                  "opt": "value"
+                                }
+                              },
+                              "skipped": "bool",
+                              "sql": "string"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "write": "bool"
+                }
+              },
+              "required": False,
+              "type": "object"
             },
             "params": {
               "elemType": "value",
               "required": True,
               "type": "array"
             },
-            "returning": {
-              "required": True,
-              "type": "bool"
-            },
             "sql": {
               "required": True,
               "type": "string"
-            },
-            "write": {
-              "required": True,
-              "type": "bool"
             }
           },
           "ports": {
-            "bigint": False,
+            "opts": {
+              "obj": {
+                "guard": None,
+                "returning": False,
+                "whereDynamic": None,
+                "write": True
+              }
+            },
             "params": {
               "arr": [
                 {
@@ -2463,9 +2373,7 @@ IR_DOC = {
                 }
               ]
             },
-            "returning": False,
-            "sql": "INSERT INTO benchmark_users (email, name) SELECT JSON_UNQUOTE(jt.email), JSON_UNQUOTE(jt.name) FROM JSON_TABLE(?, '$[*]' COLUMNS(email JSON PATH '$.email', name JSON PATH '$.name')) jt",
-            "write": True
+            "sql": "INSERT INTO benchmark_users (email, name) SELECT JSON_UNQUOTE(jt.email), JSON_UNQUOTE(jt.name) FROM JSON_TABLE(?, '$[*]' COLUMNS(email JSON PATH '$.email', name JSON PATH '$.name')) jt"
           }
         }
       ],
@@ -2521,30 +2429,69 @@ IR_DOC = {
             }
           },
           "portSchemas": {
-            "bigint": {
-              "required": True,
-              "type": "bool"
+            "opts": {
+              "elemType": {
+                "name": "ExecOptions",
+                "obj": {
+                  "guard": {
+                    "opt": {
+                      "name": "CapGuard",
+                      "obj": {
+                        "limit": "int",
+                        "model": {
+                          "opt": "string"
+                        },
+                        "relation": "string"
+                      }
+                    }
+                  },
+                  "returning": "bool",
+                  "whereDynamic": {
+                    "opt": {
+                      "name": "DynamicWherePlan",
+                      "obj": {
+                        "frags": {
+                          "arr": {
+                            "name": "DynamicWhereFrag",
+                            "obj": {
+                              "params": {
+                                "arr": {
+                                  "opt": "value"
+                                }
+                              },
+                              "skipped": "bool",
+                              "sql": "string"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "write": "bool"
+                }
+              },
+              "required": False,
+              "type": "object"
             },
             "params": {
               "elemType": "value",
               "required": True,
               "type": "array"
             },
-            "returning": {
-              "required": True,
-              "type": "bool"
-            },
             "sql": {
               "required": True,
               "type": "string"
-            },
-            "write": {
-              "required": True,
-              "type": "bool"
             }
           },
           "ports": {
-            "bigint": False,
+            "opts": {
+              "obj": {
+                "guard": None,
+                "returning": False,
+                "whereDynamic": None,
+                "write": True
+              }
+            },
             "params": {
               "arr": [
                 {
@@ -2554,9 +2501,7 @@ IR_DOC = {
                 }
               ]
             },
-            "returning": False,
-            "sql": "INSERT INTO benchmark_users (email, name) SELECT JSON_UNQUOTE(jt.email), JSON_UNQUOTE(jt.name) FROM JSON_TABLE(?, '$[*]' COLUMNS(email JSON PATH '$.email', name JSON PATH '$.name')) jt ON DUPLICATE KEY UPDATE email = VALUES(email), name = VALUES(name)",
-            "write": True
+            "sql": "INSERT INTO benchmark_users (email, name) SELECT JSON_UNQUOTE(jt.email), JSON_UNQUOTE(jt.name) FROM JSON_TABLE(?, '$[*]' COLUMNS(email JSON PATH '$.email', name JSON PATH '$.name')) jt ON DUPLICATE KEY UPDATE email = VALUES(email), name = VALUES(name)"
           }
         }
       ],
@@ -2612,30 +2557,69 @@ IR_DOC = {
             }
           },
           "portSchemas": {
-            "bigint": {
-              "required": True,
-              "type": "bool"
+            "opts": {
+              "elemType": {
+                "name": "ExecOptions",
+                "obj": {
+                  "guard": {
+                    "opt": {
+                      "name": "CapGuard",
+                      "obj": {
+                        "limit": "int",
+                        "model": {
+                          "opt": "string"
+                        },
+                        "relation": "string"
+                      }
+                    }
+                  },
+                  "returning": "bool",
+                  "whereDynamic": {
+                    "opt": {
+                      "name": "DynamicWherePlan",
+                      "obj": {
+                        "frags": {
+                          "arr": {
+                            "name": "DynamicWhereFrag",
+                            "obj": {
+                              "params": {
+                                "arr": {
+                                  "opt": "value"
+                                }
+                              },
+                              "skipped": "bool",
+                              "sql": "string"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "write": "bool"
+                }
+              },
+              "required": False,
+              "type": "object"
             },
             "params": {
               "elemType": "value",
               "required": True,
               "type": "array"
             },
-            "returning": {
-              "required": True,
-              "type": "bool"
-            },
             "sql": {
               "required": True,
               "type": "string"
-            },
-            "write": {
-              "required": True,
-              "type": "bool"
             }
           },
           "ports": {
-            "bigint": False,
+            "opts": {
+              "obj": {
+                "guard": None,
+                "returning": False,
+                "whereDynamic": None,
+                "write": True
+              }
+            },
             "params": {
               "arr": [
                 {
@@ -2645,9 +2629,7 @@ IR_DOC = {
                 }
               ]
             },
-            "returning": False,
-            "sql": "UPDATE benchmark_users AS u JOIN JSON_TABLE(?, '$[*]' COLUMNS(id JSON PATH '$.id', name JSON PATH '$.name')) AS v ON u.id = JSON_UNQUOTE(v.id) SET u.name = JSON_UNQUOTE(v.name)",
-            "write": True
+            "sql": "UPDATE benchmark_users AS u JOIN JSON_TABLE(?, '$[*]' COLUMNS(id JSON PATH '$.id', name JSON PATH '$.name')) AS v ON u.id = JSON_UNQUOTE(v.id) SET u.name = JSON_UNQUOTE(v.name)"
           }
         }
       ],
@@ -2702,30 +2684,69 @@ IR_DOC = {
             }
           },
           "portSchemas": {
-            "bigint": {
-              "required": True,
-              "type": "bool"
+            "opts": {
+              "elemType": {
+                "name": "ExecOptions",
+                "obj": {
+                  "guard": {
+                    "opt": {
+                      "name": "CapGuard",
+                      "obj": {
+                        "limit": "int",
+                        "model": {
+                          "opt": "string"
+                        },
+                        "relation": "string"
+                      }
+                    }
+                  },
+                  "returning": "bool",
+                  "whereDynamic": {
+                    "opt": {
+                      "name": "DynamicWherePlan",
+                      "obj": {
+                        "frags": {
+                          "arr": {
+                            "name": "DynamicWhereFrag",
+                            "obj": {
+                              "params": {
+                                "arr": {
+                                  "opt": "value"
+                                }
+                              },
+                              "skipped": "bool",
+                              "sql": "string"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "write": "bool"
+                }
+              },
+              "required": False,
+              "type": "object"
             },
             "params": {
               "elemType": "value",
               "required": True,
               "type": "array"
             },
-            "returning": {
-              "required": True,
-              "type": "bool"
-            },
             "sql": {
               "required": True,
               "type": "string"
-            },
-            "write": {
-              "required": True,
-              "type": "bool"
             }
           },
           "ports": {
-            "bigint": False,
+            "opts": {
+              "obj": {
+                "guard": None,
+                "returning": True,
+                "whereDynamic": None,
+                "write": True
+              }
+            },
             "params": {
               "arr": [
                 {
@@ -2740,9 +2761,7 @@ IR_DOC = {
                 }
               ]
             },
-            "returning": True,
-            "sql": "INSERT INTO benchmark_users (email, name) VALUES (?, ?) RETURNING id /*scp:pk=id;ai=id*/",
-            "write": True
+            "sql": "INSERT INTO benchmark_users (email, name) VALUES (?, ?) RETURNING id /*scp:pk=id;ai=id*/"
           }
         },
         {
@@ -2757,30 +2776,69 @@ IR_DOC = {
             },
             "parent": "n0",
             "portSchemas": {
-              "bigint": {
-                "required": True,
-                "type": "bool"
+              "opts": {
+                "elemType": {
+                  "name": "ExecOptions",
+                  "obj": {
+                    "guard": {
+                      "opt": {
+                        "name": "CapGuard",
+                        "obj": {
+                          "limit": "int",
+                          "model": {
+                            "opt": "string"
+                          },
+                          "relation": "string"
+                        }
+                      }
+                    },
+                    "returning": "bool",
+                    "whereDynamic": {
+                      "opt": {
+                        "name": "DynamicWherePlan",
+                        "obj": {
+                          "frags": {
+                            "arr": {
+                              "name": "DynamicWhereFrag",
+                              "obj": {
+                                "params": {
+                                  "arr": {
+                                    "opt": "value"
+                                  }
+                                },
+                                "skipped": "bool",
+                                "sql": "string"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "write": "bool"
+                  }
+                },
+                "required": False,
+                "type": "object"
               },
               "params": {
                 "elemType": "value",
                 "required": True,
                 "type": "array"
               },
-              "returning": {
-                "required": True,
-                "type": "bool"
-              },
               "sql": {
                 "required": True,
                 "type": "string"
-              },
-              "write": {
-                "required": True,
-                "type": "bool"
               }
             },
             "ports": {
-              "bigint": False,
+              "opts": {
+                "obj": {
+                  "guard": None,
+                  "returning": False,
+                  "whereDynamic": None,
+                  "write": True
+                }
+              },
               "params": {
                 "arr": [
                   {
@@ -2796,9 +2854,7 @@ IR_DOC = {
                   }
                 ]
               },
-              "returning": False,
-              "sql": "INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)",
-              "write": True
+              "sql": "INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)"
             }
           },
           "outType": {
@@ -2869,30 +2925,69 @@ IR_DOC = {
             }
           },
           "portSchemas": {
-            "bigint": {
-              "required": True,
-              "type": "bool"
+            "opts": {
+              "elemType": {
+                "name": "ExecOptions",
+                "obj": {
+                  "guard": {
+                    "opt": {
+                      "name": "CapGuard",
+                      "obj": {
+                        "limit": "int",
+                        "model": {
+                          "opt": "string"
+                        },
+                        "relation": "string"
+                      }
+                    }
+                  },
+                  "returning": "bool",
+                  "whereDynamic": {
+                    "opt": {
+                      "name": "DynamicWherePlan",
+                      "obj": {
+                        "frags": {
+                          "arr": {
+                            "name": "DynamicWhereFrag",
+                            "obj": {
+                              "params": {
+                                "arr": {
+                                  "opt": "value"
+                                }
+                              },
+                              "skipped": "bool",
+                              "sql": "string"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "write": "bool"
+                }
+              },
+              "required": False,
+              "type": "object"
             },
             "params": {
               "elemType": "value",
               "required": True,
               "type": "array"
             },
-            "returning": {
-              "required": True,
-              "type": "bool"
-            },
             "sql": {
               "required": True,
               "type": "string"
-            },
-            "write": {
-              "required": True,
-              "type": "bool"
             }
           },
           "ports": {
-            "bigint": False,
+            "opts": {
+              "obj": {
+                "guard": None,
+                "returning": True,
+                "whereDynamic": None,
+                "write": True
+              }
+            },
             "params": {
               "arr": [
                 {
@@ -2907,9 +3002,7 @@ IR_DOC = {
                 }
               ]
             },
-            "returning": True,
-            "sql": "INSERT INTO benchmark_users (email, name) VALUES (?, ?) ON DUPLICATE KEY UPDATE email = VALUES(email), name = VALUES(name) RETURNING id /*scp:pk=id;ai=id;conflict=email*/",
-            "write": True
+            "sql": "INSERT INTO benchmark_users (email, name) VALUES (?, ?) ON DUPLICATE KEY UPDATE email = VALUES(email), name = VALUES(name) RETURNING id /*scp:pk=id;ai=id;conflict=email*/"
           }
         },
         {
@@ -2924,30 +3017,69 @@ IR_DOC = {
             },
             "parent": "n0",
             "portSchemas": {
-              "bigint": {
-                "required": True,
-                "type": "bool"
+              "opts": {
+                "elemType": {
+                  "name": "ExecOptions",
+                  "obj": {
+                    "guard": {
+                      "opt": {
+                        "name": "CapGuard",
+                        "obj": {
+                          "limit": "int",
+                          "model": {
+                            "opt": "string"
+                          },
+                          "relation": "string"
+                        }
+                      }
+                    },
+                    "returning": "bool",
+                    "whereDynamic": {
+                      "opt": {
+                        "name": "DynamicWherePlan",
+                        "obj": {
+                          "frags": {
+                            "arr": {
+                              "name": "DynamicWhereFrag",
+                              "obj": {
+                                "params": {
+                                  "arr": {
+                                    "opt": "value"
+                                  }
+                                },
+                                "skipped": "bool",
+                                "sql": "string"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "write": "bool"
+                  }
+                },
+                "required": False,
+                "type": "object"
               },
               "params": {
                 "elemType": "value",
                 "required": True,
                 "type": "array"
               },
-              "returning": {
-                "required": True,
-                "type": "bool"
-              },
               "sql": {
                 "required": True,
                 "type": "string"
-              },
-              "write": {
-                "required": True,
-                "type": "bool"
               }
             },
             "ports": {
-              "bigint": False,
+              "opts": {
+                "obj": {
+                  "guard": None,
+                  "returning": False,
+                  "whereDynamic": None,
+                  "write": True
+                }
+              },
               "params": {
                 "arr": [
                   {
@@ -2963,9 +3095,7 @@ IR_DOC = {
                   }
                 ]
               },
-              "returning": False,
-              "sql": "INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)",
-              "write": True
+              "sql": "INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)"
             }
           },
           "outType": {
@@ -3036,30 +3166,69 @@ IR_DOC = {
             }
           },
           "portSchemas": {
-            "bigint": {
-              "required": True,
-              "type": "bool"
+            "opts": {
+              "elemType": {
+                "name": "ExecOptions",
+                "obj": {
+                  "guard": {
+                    "opt": {
+                      "name": "CapGuard",
+                      "obj": {
+                        "limit": "int",
+                        "model": {
+                          "opt": "string"
+                        },
+                        "relation": "string"
+                      }
+                    }
+                  },
+                  "returning": "bool",
+                  "whereDynamic": {
+                    "opt": {
+                      "name": "DynamicWherePlan",
+                      "obj": {
+                        "frags": {
+                          "arr": {
+                            "name": "DynamicWhereFrag",
+                            "obj": {
+                              "params": {
+                                "arr": {
+                                  "opt": "value"
+                                }
+                              },
+                              "skipped": "bool",
+                              "sql": "string"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "write": "bool"
+                }
+              },
+              "required": False,
+              "type": "object"
             },
             "params": {
               "elemType": "value",
               "required": True,
               "type": "array"
             },
-            "returning": {
-              "required": True,
-              "type": "bool"
-            },
             "sql": {
               "required": True,
               "type": "string"
-            },
-            "write": {
-              "required": True,
-              "type": "bool"
             }
           },
           "ports": {
-            "bigint": False,
+            "opts": {
+              "obj": {
+                "guard": None,
+                "returning": True,
+                "whereDynamic": None,
+                "write": True
+              }
+            },
             "params": {
               "arr": [
                 {
@@ -3074,9 +3243,7 @@ IR_DOC = {
                 }
               ]
             },
-            "returning": True,
-            "sql": "UPDATE benchmark_users SET name = ? WHERE id = ? RETURNING id /*scp:pk=id;ai=id*/",
-            "write": True
+            "sql": "UPDATE benchmark_users SET name = ? WHERE id = ? RETURNING id /*scp:pk=id;ai=id*/"
           }
         },
         {
@@ -3091,30 +3258,69 @@ IR_DOC = {
             },
             "parent": "n0",
             "portSchemas": {
-              "bigint": {
-                "required": True,
-                "type": "bool"
+              "opts": {
+                "elemType": {
+                  "name": "ExecOptions",
+                  "obj": {
+                    "guard": {
+                      "opt": {
+                        "name": "CapGuard",
+                        "obj": {
+                          "limit": "int",
+                          "model": {
+                            "opt": "string"
+                          },
+                          "relation": "string"
+                        }
+                      }
+                    },
+                    "returning": "bool",
+                    "whereDynamic": {
+                      "opt": {
+                        "name": "DynamicWherePlan",
+                        "obj": {
+                          "frags": {
+                            "arr": {
+                              "name": "DynamicWhereFrag",
+                              "obj": {
+                                "params": {
+                                  "arr": {
+                                    "opt": "value"
+                                  }
+                                },
+                                "skipped": "bool",
+                                "sql": "string"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "write": "bool"
+                  }
+                },
+                "required": False,
+                "type": "object"
               },
               "params": {
                 "elemType": "value",
                 "required": True,
                 "type": "array"
               },
-              "returning": {
-                "required": True,
-                "type": "bool"
-              },
               "sql": {
                 "required": True,
                 "type": "string"
-              },
-              "write": {
-                "required": True,
-                "type": "bool"
               }
             },
             "ports": {
-              "bigint": False,
+              "opts": {
+                "obj": {
+                  "guard": None,
+                  "returning": False,
+                  "whereDynamic": None,
+                  "write": True
+                }
+              },
               "params": {
                 "arr": [
                   {
@@ -3130,9 +3336,7 @@ IR_DOC = {
                   }
                 ]
               },
-              "returning": False,
-              "sql": "UPDATE benchmark_posts SET title = ? WHERE author_id = ?",
-              "write": True
+              "sql": "UPDATE benchmark_posts SET title = ? WHERE author_id = ?"
             }
           },
           "outType": {
@@ -3203,30 +3407,69 @@ IR_DOC = {
             }
           },
           "portSchemas": {
-            "bigint": {
-              "required": True,
-              "type": "bool"
+            "opts": {
+              "elemType": {
+                "name": "ExecOptions",
+                "obj": {
+                  "guard": {
+                    "opt": {
+                      "name": "CapGuard",
+                      "obj": {
+                        "limit": "int",
+                        "model": {
+                          "opt": "string"
+                        },
+                        "relation": "string"
+                      }
+                    }
+                  },
+                  "returning": "bool",
+                  "whereDynamic": {
+                    "opt": {
+                      "name": "DynamicWherePlan",
+                      "obj": {
+                        "frags": {
+                          "arr": {
+                            "name": "DynamicWhereFrag",
+                            "obj": {
+                              "params": {
+                                "arr": {
+                                  "opt": "value"
+                                }
+                              },
+                              "skipped": "bool",
+                              "sql": "string"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "write": "bool"
+                }
+              },
+              "required": False,
+              "type": "object"
             },
             "params": {
               "elemType": "value",
               "required": True,
               "type": "array"
             },
-            "returning": {
-              "required": True,
-              "type": "bool"
-            },
             "sql": {
               "required": True,
               "type": "string"
-            },
-            "write": {
-              "required": True,
-              "type": "bool"
             }
           },
           "ports": {
-            "bigint": False,
+            "opts": {
+              "obj": {
+                "guard": None,
+                "returning": True,
+                "whereDynamic": None,
+                "write": True
+              }
+            },
             "params": {
               "arr": [
                 {
@@ -3241,9 +3484,7 @@ IR_DOC = {
                 }
               ]
             },
-            "returning": True,
-            "sql": "INSERT INTO benchmark_users (email, name) VALUES (?, ?) RETURNING id /*scp:pk=id;ai=id*/",
-            "write": True
+            "sql": "INSERT INTO benchmark_users (email, name) VALUES (?, ?) RETURNING id /*scp:pk=id;ai=id*/"
           }
         },
         {
@@ -3258,30 +3499,69 @@ IR_DOC = {
             },
             "parent": "n0",
             "portSchemas": {
-              "bigint": {
-                "required": True,
-                "type": "bool"
+              "opts": {
+                "elemType": {
+                  "name": "ExecOptions",
+                  "obj": {
+                    "guard": {
+                      "opt": {
+                        "name": "CapGuard",
+                        "obj": {
+                          "limit": "int",
+                          "model": {
+                            "opt": "string"
+                          },
+                          "relation": "string"
+                        }
+                      }
+                    },
+                    "returning": "bool",
+                    "whereDynamic": {
+                      "opt": {
+                        "name": "DynamicWherePlan",
+                        "obj": {
+                          "frags": {
+                            "arr": {
+                              "name": "DynamicWhereFrag",
+                              "obj": {
+                                "params": {
+                                  "arr": {
+                                    "opt": "value"
+                                  }
+                                },
+                                "skipped": "bool",
+                                "sql": "string"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "write": "bool"
+                  }
+                },
+                "required": False,
+                "type": "object"
               },
               "params": {
                 "elemType": "value",
                 "required": True,
                 "type": "array"
               },
-              "returning": {
-                "required": True,
-                "type": "bool"
-              },
               "sql": {
                 "required": True,
                 "type": "string"
-              },
-              "write": {
-                "required": True,
-                "type": "bool"
               }
             },
             "ports": {
-              "bigint": False,
+              "opts": {
+                "obj": {
+                  "guard": None,
+                  "returning": False,
+                  "whereDynamic": None,
+                  "write": True
+                }
+              },
               "params": {
                 "arr": [
                   {
@@ -3292,9 +3572,7 @@ IR_DOC = {
                   }
                 ]
               },
-              "returning": False,
-              "sql": "DELETE FROM benchmark_users WHERE id = ?",
-              "write": True
+              "sql": "DELETE FROM benchmark_users WHERE id = ?"
             }
           },
           "outType": {
