@@ -116,24 +116,48 @@ This is a manual owner action and is intentionally **not** automated.
 
 ## Pre-release checklist (all green before the merge in step 1)
 
-Run from the repo root:
+Run from the repo root.
+
+### Packaging and the static gates
 
 - [ ] `npm run sync:versions:check`  — every language target in lockstep at the SSoT version
 - [ ] `npm run deps:check`           — no `../`-escaping local deps in any manifest
 - [ ] `npm run build`                — TS build + SCP bundle
 - [ ] `npm run lint`                 — eslint clean
-- [ ] `npm test`                     — the whole vitest suite (unit + scp + parity + integration)
 - [ ] `npm run gates:check`          — every test gate is reachable from a PR/push workflow
 - [ ] `npm run pkg:check`            — every published subpath loads (CJS + ESM) from a clean install
 - [ ] `npm publish --dry-run`        — tarball has `dist/`, no `src/`/`../` leaks
 - [ ] `(cd python && python -m build && twine check dist/*)`
 - [ ] fresh-venv wheel smoke — `pip install` the built wheel + run a real vector
-- [ ] `(cd rust && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test && cargo publish -p litedbmodel_runtime --dry-run)`
-- [ ] `(cd php && composer validate && vendor/bin/phpunit)`
-- [ ] `(cd go && gofmt -l . ; go vet ./... ; go test ./...)` — module path `.../litedbmodel/go`
-- [ ] live-DB (needs docker): `npm run conformance:livedb:docker` — the corpus on real PG + MySQL; the run names how many of the four language legs ran (go/rust: #163)
-- [ ] live-DB go legs (needs docker), with the gates from their SSoT — the bare `go test ./...` above SKIPS all sixteen of them, and a skip reads as a pass (#219):
-      `set -a && . ./livedb-gates.env && set +a && (cd go && go test ./... -json | node ../scripts/check-go-test-skips.mjs)`
+- [ ] `(cd php && composer validate)`
+- [ ] `(cd rust && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo publish -p litedbmodel_runtime --dry-run)`
+- [ ] `(cd go && gofmt -l . ; go vet ./...)` — module path `.../litedbmodel/go`
+
+### The five test suites — WITH THE LIVE-DB GATES OPEN (needs docker)
+
+Every live-DB test in every language gates itself on a `LITEDBMODEL_*` variable declared in
+`livedb-gates.env`. CI opens all of them from that one file before it runs any suite
+(`conformance.yml`, step "Open the live-DB test gates"), so a local run that does not open them is
+**not running what CI runs** — it runs less and reports green for the difference. Measured, running
+these same commands with the gates closed: python skips 25, go skips 16, php skips 1, and rust does
+not even COMPILE its 6 live tests. Reading that as a pass is how the #215 regression reached a
+commit (#219).
+
+So open them once, and run this whole section in that shell:
+
+```bash
+npm run docker:livedb:up && sleep 5
+set -a && . ./livedb-gates.env && set +a && export TEST_DB_HOST=localhost
+```
+
+- [ ] `npm test`                             — the whole vitest suite (unit + scp + parity + integration)
+- [ ] `(cd python && python3 -m pytest -q)`  — **0 skipped**; with the gates closed 25 of these skip
+- [ ] `(cd php && ./vendor/bin/phpunit)`     — **0 skipped**; a skip shows up only as a trailing "but some tests were skipped!"
+- [ ] `npm run go:test`                      — `go test ./...`, read from its whole `-json` stream: **skip budget 0**, no unbuilt package, go's own exit code. A bare `go test ./...` reports none of those (#219)
+- [ ] `(cd rust && cargo test -p litedbmodel_runtime --features livedb -- --test-threads=1)` — **`--features livedb` is not optional**: without it the 6 live tests are not compiled at all, and 71 tests run where 77 should
+- [ ] live-DB corpus: `npm run conformance:livedb:docker` — the corpus on real PG + MySQL; the run names how many of the four language legs ran (go/rust: #163). Run it LAST — it takes the stack down afterwards
+
+A skip line in any of these is a coverage report, not a pass. Read them.
 
 ---
 

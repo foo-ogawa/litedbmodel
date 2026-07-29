@@ -40,14 +40,20 @@ const NOT_A_GATE = new Set(['LITEDBMODEL_LIVEDB_VECTORS']);
  * These match the unrestricted invocation on purpose. A path-narrowed run is the same bug one level
  * down: `test:ci` was `vitest run test/unit`, which left test/scp, test/parity and test/integration —
  * 1138 tests — out of CI while the job reported green. So TypeScript must be `npm test` (the full
- * `vitest run`), not any `vitest run <dir>`, and Go must be `./...`, not a single package. `pytest`,
- * `phpunit` and `cargo test` already mean "everything" when invoked bare.
+ * `vitest run`), not any `vitest run <dir>`. `pytest`, `phpunit` and `cargo test` already mean
+ * "everything" when invoked bare.
+ *
+ * Go names `npm run go:test` and NOT a bare `go test ./...`, because for Go "everything ran" is a
+ * claim `go test` does not make: it reports a skipped test as a success and a package that failed to
+ * build only inside its -json stream. `scripts/check-go-test-skips.mjs` runs the `./...` suite and
+ * reads that stream (#219); a workflow that reverts to the bare command is back to green-by-default
+ * and must not satisfy this clause.
  */
 const RUNNERS = [
   ['TypeScript', /\bnpm test\b/],
   ['Python', /\bpytest\b/],
   ['PHP', /\bphpunit\b/],
-  ['Go', /\bgo test \.\/\.\.\./],
+  ['Go', /\bnpm run go:test\b/],
   ['Rust', /\bcargo test\b/],
 ];
 
