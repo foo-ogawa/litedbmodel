@@ -418,6 +418,24 @@ def reader_writer_pair(reader: ConnectionPool, writer: ConnectionPool) -> Reader
 DEFAULT_CONNECTION = "default"
 
 
+def assert_routable_named_db(db: Optional[str], context_description: str) -> None:
+    """Reject a statement that NAMES a database on a context that holds NO connection registry (the
+    single-driver :class:`~litedbmodel_runtime.exec_context.ExecutionContext`). The companion of
+    :meth:`ConnectionRegistry.pair_for`'s unknown-name failure, and for the same reason: an unresolvable
+    name must be LOUD, because the alternative is running the statement against whatever single driver
+    the context happens to hold — a DIFFERENT database than the statement's model declares (#217).
+    ``None`` (the default connection) is the single-driver case itself and passes. Mirrors the TS
+    ``assertRoutableNamedDb`` / go ``namedDBUnroutable`` / rust ``assert_routable_named_db``."""
+    if db is None or db == DEFAULT_CONNECTION:
+        return
+    raise ValueError(
+        "scp connection routing: a statement names connection '%s', but it is executing on %s — there "
+        "is no connection registry to resolve the name against. Build the context from a RoutingConfig "
+        "(set_config/ConnectionRegistry), or drop the connection tag on the model."
+        % (db, context_description)
+    )
+
+
 class ConnectionRegistry:
     """The multi-DB connection registry (C2): a map from a connection NAME → its
     :class:`ReaderWriterPools`. :func:`resolve_pool` selects the pair by ``intent.db`` (the connection

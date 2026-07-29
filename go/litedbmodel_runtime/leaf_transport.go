@@ -256,6 +256,10 @@ func portDynamicWhere(opts wire.WireRow) ([]dynamicWhereFrag, error) {
 // how to run it plus the two optional control structs. Everything the transport branches on besides the
 // statement itself lives here, so a new fact is a new FIELD and no call site's arguments shift (#193).
 type execOptions struct {
+	// db is the NAMED connection (database) the statement runs on — "" ⇒ the DEFAULT connection. Baked
+	// at emit from the statement's model (the litedbmodel `connectionOf`), or, for a relation child
+	// fetch, from the compiled op's TARGET model. It reaches the router as [StatementIntent.DB].
+	db         string
 	write      *writeMode
 	whereFrags []dynamicWhereFrag
 	guard      *relationGuard
@@ -298,6 +302,10 @@ func portExecOptions(payload wire.WireRow) (execOptions, error) {
 	if p.Kind != wireProbeGot {
 		return execOptions{}, portErr("opts", "row", p.Kind, p.ActualWireType)
 	}
+	db, err := portNamedDB(p.Got)
+	if err != nil {
+		return execOptions{}, err
+	}
 	write, err := portWriteMode(p.Got)
 	if err != nil {
 		return execOptions{}, err
@@ -310,7 +318,23 @@ func portExecOptions(payload wire.WireRow) (execOptions, error) {
 	if err != nil {
 		return execOptions{}, err
 	}
-	return execOptions{write: write, whereFrags: frags, guard: guard}, nil
+	return execOptions{db: db, write: write, whereFrags: frags, guard: guard}, nil
+}
+
+// portNamedDB reads the `db` field of the control record — the NAMED connection the statement runs on.
+// A wire NULL ⇒ "" ⇒ the DEFAULT connection; an ABSENT KEY is LOUD, exactly like every other field of a
+// struct the generator wrote, because a name read as "no name" runs the statement against a DIFFERENT
+// database than its model declares (#217). It is the only control field that is a bare nullable STRING
+// rather than a struct, so it reads off the string probe instead of [optRowField].
+func portNamedDB(opts wire.WireRow) (string, error) {
+	switch db := opts.ProbeString("db"); db.Kind {
+	case wireProbeGot:
+		return db.Got, nil
+	case wireProbeNull:
+		return "", nil
+	default:
+		return "", portErr("db", "string", db.Kind, db.ActualWireType)
+	}
 }
 
 // ── Payload materialization (wire → wire; the go wire type's slices are unexported) ─────────────────
@@ -523,10 +547,10 @@ func ExecuteSQL(payload wire.WireRow) (wire.WireValue, error) {
 	// SEAM (`returning` ⇒ the row seam) while the intent selects the CONNECTION: a RETURNING write runs
 	// on [Execute] and still belongs on the WRITER. Reading `returning` as the intent sent
 	// `INSERT … RETURNING` to the READ REPLICA (#207). Same rule in all five languages (TS `prepareSql`).
-	intent := ReadIntent()
-	if opts.write != nil {
-		intent = WriteIntent()
-	}
+	// The NAMED database rides on the SAME intent, because [resolvePool] resolves both together: it picks
+	// the named connection's reader/writer PAIR first, then the write/sticky split within it. "" ⇒ the
+	// default connection, i.e. the intent every single-DB statement has always carried.
+	intent := StatementIntent{Write: opts.write != nil, DB: opts.db}
 	if opts.write != nil && !opts.write.returning {
 		info, err := Run(leafExecCtx, text, args, intent)
 		if err != nil {

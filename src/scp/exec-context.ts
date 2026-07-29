@@ -67,6 +67,7 @@ import {
   type RoutingConfig,
   ConnectionRegistry,
   WriterStickyClock,
+  assertRoutableNamedDb,
   resolvePool,
 } from './connection-routing';
 import type { Dialect } from './makesql/handler';
@@ -304,7 +305,8 @@ export function connectionForDriver(driver: SqliteDriver): SyncConnection {
  * A thin, single-DB, middleware-free {@link ExecutionContext} over ONE connection. A tx-scoped ctx
  * (`withConnection(conn, true)`) pins that connection for every `connectionFor` — this is the
  * per-execution connection ownership (§3). Absent a pinned tx connection, it returns the base
- * connection (the single-DB Phase A case; reader/writer/named-DB routing is B/C/D on this seam).
+ * connection (the single-DB Phase A case; the reader/writer split and the named-DB registry live on
+ * the ROUTED ctx, {@link PooledAsyncContext}).
  */
 class BasicContext implements ExecutionContext {
   readonly middleware: MiddlewareChain;
@@ -318,9 +320,15 @@ class BasicContext implements ExecutionContext {
     this.pinned = pinned;
   }
 
-  connectionFor(_intent: StatementIntent): SyncConnection {
-    // Phase A resolution: the tx-owned (pinned) connection wins; else the single base connection.
-    // Reader/writer split (§3-2/3) + named-DB routing (§3-4) extend HERE in B/C/D.
+  connectionFor(intent: StatementIntent): SyncConnection {
+    // A statement that NAMES a database has nowhere to go on a single-connection ctx — this one holds
+    // no registry — so it is LOUD, exactly as an unregistered name is on the routed ctx
+    // (`ConnectionRegistry.pairFor`). Returning the base connection instead would run the statement
+    // against a DIFFERENT database than the one its model declares, silently, which is the whole defect
+    // named-DB lowering exists to close (#217): the wrong DB reads a missing table or, worse, a
+    // same-named one.
+    assertRoutableNamedDb(intent.db, 'a single-connection (non-routed) execution context');
+    // The tx-owned (pinned) connection wins; else the single base connection.
     return this.pinned ?? this.base;
   }
 

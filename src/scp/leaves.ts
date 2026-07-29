@@ -27,6 +27,11 @@
  * the IR (C4): {@link leafHandlers} closes over a sync {@link LeafContext} and {@link
  * leafHandlersAsync} over an {@link AsyncLeafContext}. The same three symbols are what the native
  * codegen calls directly ({@link LEAF_TRANSPORT_SYMBOLS}).
+ *
+ * What the statement DOES carry is the NAME of its database (`opts.db`) — a static property of its
+ * model, not an environment fact: the factory owns the connection REGISTRY, the statement owns which
+ * entry of it it belongs to. The two meet on the {@link StatementIntent} ({@link prepareSql}), which is
+ * the only input `connectionFor` routes on.
  */
 
 import type { Handlers, AsyncHandlers, Value, ExecOutcome } from 'behavior-contracts/runtime';
@@ -80,6 +85,13 @@ export interface AsyncLeafContext {
 interface ExecuteSqlPorts {
   readonly sql: string;
   readonly params: unknown[];
+  /**
+   * The NAMED connection (database) this statement runs on — `null`/absent ⇒ the DEFAULT connection.
+   * Baked at emit from the statement's model ({@link import('./decorator-adapter').connectionOf}) or, for
+   * a relation child fetch, from the compiled op's target ({@link import('./relation').RelationOp.connection}).
+   * It reaches the router as the {@link StatementIntent}'s `db` ({@link prepareSql}).
+   */
+  readonly db?: string | null;
   /**
    * How the statement RUNS: `null` ⇒ a READ; a {@link WriteMode} ⇒ a write carrying its OWN
    * `returning`. ONE field, three values — "returns rows but is not a write" is not representable.
@@ -162,11 +174,13 @@ export function assembleDynamicWhere(p: { sql: string; params: unknown[]; whereD
  * The effective `{sql, params}` a statement executes: the dynamic plan assembled when one is present,
  * the ports verbatim otherwise. The ONE place the two shapes converge — both transports consume it.
  */
-function effectiveStatement(p: ExecuteSqlPorts): { sql: string; params: unknown[]; write: boolean } {
-  // The seam's INTENT is the one boolean the statement's `write` mode reduces to (present ⇒ a write).
+function effectiveStatement(p: ExecuteSqlPorts): { sql: string; params: unknown[]; write: boolean; db: string | null } {
+  // The seam's INTENT is the one boolean the statement's `write` mode reduces to (present ⇒ a write),
+  // plus the NAMED database it belongs to (absent ⇒ the default connection).
   const write = p.write !== null;
-  if (p.whereDynamic == null) return { sql: p.sql, params: p.params, write };
-  return { ...assembleDynamicWhere({ sql: p.sql, params: p.params, whereDynamic: p.whereDynamic }), write };
+  const db = p.db ?? null;
+  if (p.whereDynamic == null) return { sql: p.sql, params: p.params, write, db };
+  return { ...assembleDynamicWhere({ sql: p.sql, params: p.params, whereDynamic: p.whereDynamic }), write, db };
 }
 
 /** Normalize a driver integer (number|bigint) to bc's `int` value model (BigInt). */
@@ -217,14 +231,18 @@ function isTupleSet(param: readonly unknown[]): boolean {
  * ({@link import('./connection-routing').resolvePool}), so a RETURNING write runs on `execute` and
  * still routes to the WRITER. The four native transports derive it the same way (#207).
  */
-export function prepareSql(p: { sql: string; params: unknown[]; write: boolean }, dialect: Dialect): { sql: string; bound: unknown[]; intent: StatementIntent } {
+export function prepareSql(p: { sql: string; params: unknown[]; write: boolean; db?: string | null }, dialect: Dialect): { sql: string; bound: unknown[]; intent: StatementIntent } {
   let sql = p.sql;
   if (dialect === 'postgres') {
     for (const param of p.params) if (Array.isArray(param)) sql = resolvePgArrayCast(sql, param);
   }
   sql = renderPlaceholders(sql, dialect);
   const bound = encodeParams(p.params, dialect);
-  const intent: StatementIntent = { write: p.write };
+  // The NAMED database rides on the SAME intent as the write mode, because it is resolved by the same
+  // function: `resolvePool` picks the named connection's reader/writer PAIR first, then applies the
+  // write/sticky split within it. Absent ⇒ the key is omitted (the default connection), which keeps a
+  // single-DB intent identical to the one this seam has always built.
+  const intent: StatementIntent = { write: p.write, ...(p.db != null ? { db: p.db } : {}) };
   return { sql, bound, intent };
 }
 
@@ -421,8 +439,9 @@ function relationGuardPort(port: unknown): RelationGuard | null {
  * declaration at compile time: renaming a field there breaks HERE rather than silently reading a key the
  * generator no longer writes.
  */
+const OPTS_AT = `the 'opts' control record`;
 function optsField(opts: Record<string, unknown>, name: keyof ExecOptions): unknown {
-  return requiredField(opts, name, `the 'opts' control record`, 'record|null');
+  return requiredField(opts, name, OPTS_AT, 'record|null');
 }
 
 /**
@@ -449,6 +468,9 @@ function executeSqlPorts(ports: Record<string, Value>): ExecuteSqlPorts {
   return {
     sql,
     params,
+    // The NAMED database — the one control field that is a bare `string|null` rather than a struct, so
+    // it is read against its own declared type instead of through `optsField`'s `record|null`.
+    db: requiredField(opts, 'db', OPTS_AT, 'string|null') as string | null,
     write: writeModePort(optsField(opts, 'write')),
     whereDynamic: optsField(opts, 'whereDynamic') as DynamicWherePlan | null,
     guard: relationGuardPort(optsField(opts, 'guard')),

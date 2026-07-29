@@ -21,8 +21,9 @@
  * wire plane and materializes the whole nested typed graph exactly once, at the end.
  *
  * Everything a statement carries BESIDES its text and its bound values rides in ONE optional CONTROL
- * struct, {@link ExecOptions} (`opts`): how to run it (`write` / `returning`) and the two CONCRETE
- * control structs — {@link DynamicWherePlan} (`whereDynamic`) and {@link CapGuard} (`guard`) — the
+ * struct, {@link ExecOptions} (`opts`): WHICH database it runs on (`db`), how to run it (`write` /
+ * `returning`) and the two CONCRETE control structs — {@link DynamicWherePlan} (`whereDynamic`) and
+ * {@link CapGuard} (`guard`) — the
  * emitter CONSTRUCTS at the call site from the endpoint's own parameters (not leaf→leaf wire values),
  * so a native-codegen emitter builds them as typed structs. It is ONE argument because a mode flag is a
  * NAMED FIELD there: a positional list grows a new slot per fact and every call site's remaining
@@ -117,6 +118,21 @@ export interface CapGuard {
  * run time in five languages; as a nested struct it does not exist to be rejected.
  */
 export interface ExecOptions {
+  /**
+   * The NAME of the connection (database) this statement runs on — the multi-DB routing key. `null` ⇒
+   * the DEFAULT connection, which is every single-DB deployment.
+   *
+   * It is a STATIC field, not a per-call value: which database a statement belongs to is a property of
+   * its MODEL (v1 gives the model that authority through its `createDBBase` handler, and loads a
+   * relation on the TARGET model's — `LazyRelation.ts:236`), so the emitter resolves it at emit time
+   * from {@link import('./decorator-adapter').connectionOf} and bakes the name in. The transport puts
+   * it on the statement's {@link import('./exec-context').StatementIntent}, which is the ONE input
+   * `connectionFor` → {@link import('./connection-routing').resolvePool} routes on: the named
+   * connection's reader/writer pair is selected FIRST, then the tx-pin / writer-sticky / reader-writer
+   * split apply within it. An unregistered name is LOUD — never a silent run against another database,
+   * which is exactly what a dropped name did.
+   */
+  readonly db: string | null;
   /**
    * How the statement RUNS: `null` ⇒ a READ (the `execute` seam, read intent); a {@link WriteMode} ⇒
    * an INSERT/UPDATE/DELETE (the write seam + the write intent), carrying whether it yields rows.

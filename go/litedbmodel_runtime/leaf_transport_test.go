@@ -380,7 +380,7 @@ func TestExecuteSQL_RunModePicksThePool(t *testing.T) {
 	}
 	// A RETURNING write → the WRITER, even though it runs on the ROW seam.
 	returning, err := ExecuteSQL(leafPayload(
-		optsPort(writeModeRow(true), wire.WireNull(), wire.WireNull()),
+		optsPort(wire.WireNull(), writeModeRow(true), wire.WireNull(), wire.WireNull()),
 		port("params", wire.WireListOf(nil)),
 		port("sql", wire.WireStr("INSERT INTO users (name) VALUES (?) RETURNING id")),
 	))

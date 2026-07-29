@@ -9,7 +9,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { emitBehaviorModule, resetLimitConfig, setLimitConfig, type EndpointSet } from '../../src/scp';
-import { EMIT_COLUMN_OPTIONS, EMIT_ENDPOINTS, emitModels, Post, TenantUser, User } from './emit-models';
+import { EMIT_COLUMN_OPTIONS, EMIT_ENDPOINTS, NAMED_DB, NAMED_DB_ENDPOINTS, emitModels, Post, TenantUser, User } from './emit-models';
 
 const LEAF = '../../src/scp/leaf-transport.js';
 
@@ -211,7 +211,7 @@ describe('emitter — RELATIONS (one query per level, N+1-free)', () => {
       // reached POSITIONALLY, so the emitter passed an EMPTY plan (`{ frags: [] }`) to get past the
       // `whereDynamic` slot — a value that claimed a plan the statement does not have.
       expect(body[2]).toContain(
-        ', { write: null, whereDynamic: null, guard: { limit: 7 as Int, model: "e2e_posts", relation: "posts" } });',
+        ', { db: null, write: null, whereDynamic: null, guard: { limit: 7 as Int, model: "e2e_posts", relation: "posts" } });',
       );
       expect(body[2]).not.toContain('frags');
       // The relation batch is a READ — `write: null` is how the record says so (#206: one field,
@@ -280,7 +280,7 @@ describe('emitter — WRITES', () => {
     // the adapter strips it and re-selects. Emitting the mysql module must therefore NOT throw.
     const { source } = emit('mysql', { createUser: EMIT_ENDPOINTS.createUser });
     expect(bodyOf(source, 'createUser')[0]).toContain('INSERT INTO e2e_users (name) VALUES (?) RETURNING id, name');
-    expect(bodyOf(source, 'createUser')[0]).toContain('{ write: { returning: true }, whereDynamic: null, guard: null }');
+    expect(bodyOf(source, 'createUser')[0]).toContain('{ db: null, write: { returning: true }, whereDynamic: null, guard: null }');
   });
 
   it('batch writes bind ONE record-array JSON param on mysql/sqlite', () => {
@@ -468,5 +468,49 @@ describe('emitter — fail-closed', () => {
         },
       }),
     ).toThrow(/cannot tell a tail inside the CTE from the outer statement's/);
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════════
+// #217 — named-DB routing: the emitter LOWERS the connection name onto the statement
+// ════════════════════════════════════════════════════════════════════════════════
+
+describe('emitter — named-DB (#217): the model names the database, the emitter bakes it in', () => {
+  const named = (dialect: 'sqlite' | 'postgres' | 'mysql' = 'sqlite') =>
+    emit(dialect, NAMED_DB_ENDPOINTS).source;
+
+  it('a CROSS-DB relation batches on the TARGET model\'s connection, not the parent\'s (v1 LazyRelation.ts:236)', () => {
+    const body = bodyOf(named(), 'postsWithAuthor');
+    // The PARENT read is on the DEFAULT connection, so it carries NO control record at all — the
+    // native-clean payload (`sql` + `params`). This is why a single-DB module is byte-unchanged.
+    expect(body[0]).toContain('Db.executeSQL("SELECT id, author_id, title FROM scp217_posts ORDER BY id ASC", [])');
+    expect(body[0]).not.toContain('db:');
+    // The CHILD fetch names `analytics` — the target model's database. Dropping this field is exactly
+    // the defect: the batch would run against the parent's DB, where scp217_users does not exist.
+    expect(body[2]).toContain(`, { db: "${NAMED_DB}", write: null, whereDynamic: null, guard: null });`);
+  });
+
+  it('an ENDPOINT whose own model is on another connection runs EVERY statement there (read and write)', () => {
+    const source = named();
+    expect(bodyOf(source, 'usersOnB')[0]).toContain(`, { db: "${NAMED_DB}", write: null, whereDynamic: null, guard: null })`);
+    // A WRITE names it too — the `db` field and the `write` field are independent facts of ONE record.
+    expect(bodyOf(source, 'renameUserOnB')[0]).toContain(
+      `, { db: "${NAMED_DB}", write: { returning: false }, whereDynamic: null, guard: null })`,
+    );
+  });
+
+  it('the name is DIALECT-INDEPENDENT — it routes the statement, it does not shape the SQL', () => {
+    // Same connection name on all three dialects: `db` is a routing tag, so only the SQL text differs.
+    for (const dialect of ['sqlite', 'postgres', 'mysql'] as const) {
+      expect(bodyOf(named(dialect), 'usersOnB')[0]).toContain(`{ db: "${NAMED_DB}",`);
+    }
+  });
+
+  it('a DEFAULT-connection model names nothing — the whole option record stays unspelled', () => {
+    // The negative half of the same rule: `EMIT_ENDPOINTS`' models declare no connection, so no `db`
+    // appears anywhere in that module. A `db: null` leaking into a bounded read would un-do the
+    // native-clean payload for every single-DB consumer.
+    const body = bodyOf(emit('sqlite').source, 'usersByIds');
+    expect(body[0]).not.toContain('db:');
   });
 });

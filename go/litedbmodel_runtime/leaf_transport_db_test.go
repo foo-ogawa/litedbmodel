@@ -38,8 +38,9 @@ func openBoundT(t *testing.T) *sql.DB {
 // how to run the statement plus its two optional control structs (wire.WireNull() ⇒ the record's null
 // field, which is how ABSENCE is spelled now that nothing is positional). `write` is the WriteMode ROW
 // (or null for a read), so a read cannot claim a `returning` of its own (#206).
-func optsPort(write, whereDynamic, guard wire.WireValue) wire.WireField {
+func optsPort(db, write, whereDynamic, guard wire.WireValue) wire.WireField {
 	return port("opts", wire.WireRowOf([]wire.WireField{
+		{Key: "db", Val: db},
 		{Key: "guard", Val: guard},
 		{Key: "whereDynamic", Val: whereDynamic},
 		{Key: "write", Val: write},
@@ -53,7 +54,7 @@ func writeModeRow(returning bool) wire.WireValue {
 
 // planPort builds an `opts` record whose `whereDynamic` carries ONE fragment (the #209 cases).
 func planPort(frag wire.WireValue) wire.WireField {
-	return optsPort(wire.WireNull(), wire.WireRowOf([]wire.WireField{
+	return optsPort(wire.WireNull(), wire.WireNull(), wire.WireRowOf([]wire.WireField{
 		{Key: "frags", Val: wire.WireListOf([]wire.WireValue{frag})},
 	}), wire.WireNull())
 }
@@ -64,7 +65,7 @@ func planPort(frag wire.WireValue) wire.WireField {
 func sqlPayload(params []wire.WireValue, sql string, write bool) wire.WireRow {
 	ports := []wire.WireField{port("params", wire.WireListOf(params)), port("sql", wire.WireStr(sql))}
 	if write {
-		ports = append(ports, optsPort(writeModeRow(false), wire.WireNull(), wire.WireNull()))
+		ports = append(ports, optsPort(wire.WireNull(), writeModeRow(false), wire.WireNull(), wire.WireNull()))
 	}
 	return leafPayload(ports...)
 }
@@ -180,7 +181,7 @@ func TestWithAmbientTransaction_RestoresAmbient(t *testing.T) {
 // runaway cap the emitter bakes onto a guarded relation child fetch (`{limit, model, relation}`).
 func guardPayload(sql string, limit int64, model, relation string) wire.WireRow {
 	return leafPayload(
-		optsPort(wire.WireNull(), wire.WireNull(), wire.WireRowOf([]wire.WireField{
+		optsPort(wire.WireNull(), wire.WireNull(), wire.WireNull(), wire.WireRowOf([]wire.WireField{
 			{Key: "limit", Val: wire.WireInt(limit)},
 			{Key: "model", Val: wire.WireStr(model)},
 			{Key: "relation", Val: wire.WireStr(relation)},
@@ -262,7 +263,7 @@ func TestExecuteSQL_DynamicWhereContinuesBoundedWhere(t *testing.T) {
 		{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireStr("c")})},
 	})
 	out, err := ExecuteSQL(leafPayload(
-		optsPort(wire.WireNull(), wire.WireRowOf([]wire.WireField{
+		optsPort(wire.WireNull(), wire.WireNull(), wire.WireRowOf([]wire.WireField{
 			{Key: "frags", Val: wire.WireListOf([]wire.WireValue{frag})},
 		}), wire.WireNull()),
 		port("params", wire.WireListOf([]wire.WireValue{wire.WireInt(1), wire.WireInt(2)})),
@@ -312,32 +313,39 @@ func TestExecuteSQL_MissingOrMistypedFieldOfAPresentStructIsLoud(t *testing.T) {
 	}{
 		{"payload without sql", leafPayload(paramsPort), `port "sql" is absent`},
 		{"payload without params", leafPayload(sqlPort), `port "params" is absent`},
+		{"record without db", leafPayload(sqlPort, paramsPort, port("opts", wire.WireRowOf([]wire.WireField{
+			{Key: "guard", Val: wire.WireNull()}, {Key: "whereDynamic", Val: wire.WireNull()},
+			{Key: "write", Val: wire.WireNull()},
+		}))), `port "db" is absent`},
 		{"record without write", leafPayload(sqlPort, paramsPort, port("opts", wire.WireRowOf([]wire.WireField{
+			{Key: "db", Val: wire.WireNull()},
 			{Key: "guard", Val: wire.WireNull()}, {Key: "whereDynamic", Val: wire.WireNull()},
 		}))), `port "write" is absent`},
 		{"record without whereDynamic", leafPayload(sqlPort, paramsPort, port("opts", wire.WireRowOf([]wire.WireField{
+			{Key: "db", Val: wire.WireNull()},
 			{Key: "guard", Val: wire.WireNull()}, {Key: "write", Val: wire.WireNull()},
 		}))), `port "whereDynamic" is absent`},
 		{"record without guard", leafPayload(sqlPort, paramsPort, port("opts", wire.WireRowOf([]wire.WireField{
+			{Key: "db", Val: wire.WireNull()},
 			{Key: "whereDynamic", Val: wire.WireNull()}, {Key: "write", Val: wire.WireNull()},
 		}))), `port "guard" is absent`},
 		{"write mode without returning", leafPayload(sqlPort, paramsPort,
-			optsPort(wire.WireRowOf(nil), wire.WireNull(), wire.WireNull())), `port "returning" is absent`},
-		{"guard without model", leafPayload(sqlPort, paramsPort, optsPort(wire.WireNull(), wire.WireNull(),
+			optsPort(wire.WireNull(), wire.WireRowOf(nil), wire.WireNull(), wire.WireNull())), `port "returning" is absent`},
+		{"guard without model", leafPayload(sqlPort, paramsPort, optsPort(wire.WireNull(), wire.WireNull(), wire.WireNull(),
 			wire.WireRowOf([]wire.WireField{{Key: "limit", Val: wire.WireInt(2)}, {Key: "relation", Val: wire.WireStr("things")}}))),
 			`port "guard.model" is absent`},
 		// An absent `guard.limit` / `guard.relation` reports ABSENT, not "expected an int, got NULL":
 		// #205/#210's whole point is that a wire null and a missing key are different failures, and a
 		// reader that names the wrong one sends the next reader looking for a null that was never there.
-		{"guard without limit", leafPayload(sqlPort, paramsPort, optsPort(wire.WireNull(), wire.WireNull(),
+		{"guard without limit", leafPayload(sqlPort, paramsPort, optsPort(wire.WireNull(), wire.WireNull(), wire.WireNull(),
 			wire.WireRowOf([]wire.WireField{{Key: "model", Val: wire.WireStr("t")}, {Key: "relation", Val: wire.WireStr("things")}}))),
 			`port "guard.limit" is absent`},
-		{"guard without relation", leafPayload(sqlPort, paramsPort, optsPort(wire.WireNull(), wire.WireNull(),
+		{"guard without relation", leafPayload(sqlPort, paramsPort, optsPort(wire.WireNull(), wire.WireNull(), wire.WireNull(),
 			wire.WireRowOf([]wire.WireField{{Key: "limit", Val: wire.WireInt(2)}, {Key: "model", Val: wire.WireStr("t")}}))),
 			`port "guard.relation" is absent`},
 		// …and the PLAN and its FRAGMENTS, one level further down (#209).
 		{"plan without frags", leafPayload(sqlPort, paramsPort,
-			optsPort(wire.WireNull(), wire.WireRowOf(nil), wire.WireNull())), `port "whereDynamic.frags" is absent`},
+			optsPort(wire.WireNull(), wire.WireNull(), wire.WireRowOf(nil), wire.WireNull())), `port "whereDynamic.frags" is absent`},
 		{"fragment without skipped", leafPayload(sqlPort, paramsPort, planPort(wire.WireRowOf([]wire.WireField{
 			{Key: "sql", Val: wire.WireStr("v = ?")}, {Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireStr("zzz")})},
 		}))), `whereDynamic.frags.skipped`},
@@ -362,14 +370,14 @@ func TestExecuteSQL_MissingOrMistypedFieldOfAPresentStructIsLoud(t *testing.T) {
 			`port "params" expected a wire list`},
 		{"opts not a row", leafPayload(sqlPort, paramsPort, port("opts", wire.WireStr("nope"))),
 			`port "opts" expected a wire row`},
-		{"write not a row", leafPayload(sqlPort, paramsPort, optsPort(wire.WireStr("nope"), wire.WireNull(), wire.WireNull())),
+		{"write not a row", leafPayload(sqlPort, paramsPort, optsPort(wire.WireNull(), wire.WireStr("nope"), wire.WireNull(), wire.WireNull())),
 			`port "write" expected a wire row`},
-		{"returning not a bool", leafPayload(sqlPort, paramsPort, optsPort(
+		{"returning not a bool", leafPayload(sqlPort, paramsPort, optsPort(wire.WireNull(),
 			wire.WireRowOf([]wire.WireField{{Key: "returning", Val: wire.WireStr("nope")}}), wire.WireNull(), wire.WireNull())),
 			`port "returning" expected a wire bool`},
-		{"whereDynamic not a row", leafPayload(sqlPort, paramsPort, optsPort(wire.WireNull(), wire.WireStr("nope"), wire.WireNull())),
+		{"whereDynamic not a row", leafPayload(sqlPort, paramsPort, optsPort(wire.WireNull(), wire.WireNull(), wire.WireStr("nope"), wire.WireNull())),
 			`port "whereDynamic" expected a wire row`},
-		{"frags not a list", leafPayload(sqlPort, paramsPort, optsPort(wire.WireNull(),
+		{"frags not a list", leafPayload(sqlPort, paramsPort, optsPort(wire.WireNull(), wire.WireNull(),
 			wire.WireRowOf([]wire.WireField{{Key: "frags", Val: wire.WireStr("nope")}}), wire.WireNull())),
 			`port "whereDynamic.frags" expected a wire list`},
 		{"fragment not a row", leafPayload(sqlPort, paramsPort, planPort(wire.WireStr("nope"))),
@@ -386,19 +394,19 @@ func TestExecuteSQL_MissingOrMistypedFieldOfAPresentStructIsLoud(t *testing.T) {
 			{Key: "skipped", Val: wire.WireBool(false)}, {Key: "sql", Val: wire.WireStr("v = ?")},
 			{Key: "params", Val: wire.WireStr("z")},
 		}))), `port "whereDynamic.frags.params" expected a wire list`},
-		{"guard not a row", leafPayload(sqlPort, paramsPort, optsPort(wire.WireNull(), wire.WireNull(), wire.WireStr("nope"))),
+		{"guard not a row", leafPayload(sqlPort, paramsPort, optsPort(wire.WireNull(), wire.WireNull(), wire.WireNull(), wire.WireStr("nope"))),
 			`port "guard" expected a wire row`},
-		{"guard limit not an int", leafPayload(sqlPort, paramsPort, optsPort(wire.WireNull(), wire.WireNull(),
+		{"guard limit not an int", leafPayload(sqlPort, paramsPort, optsPort(wire.WireNull(), wire.WireNull(), wire.WireNull(),
 			wire.WireRowOf([]wire.WireField{
 				{Key: "limit", Val: wire.WireStr("nope")}, {Key: "model", Val: wire.WireStr("t")},
 				{Key: "relation", Val: wire.WireStr("things")},
 			}))), `port "guard.limit" expected a wire int`},
-		{"guard model not a string", leafPayload(sqlPort, paramsPort, optsPort(wire.WireNull(), wire.WireNull(),
+		{"guard model not a string", leafPayload(sqlPort, paramsPort, optsPort(wire.WireNull(), wire.WireNull(), wire.WireNull(),
 			wire.WireRowOf([]wire.WireField{
 				{Key: "limit", Val: wire.WireInt(2)}, {Key: "model", Val: wire.WireInt(42)},
 				{Key: "relation", Val: wire.WireStr("things")},
 			}))), `port "guard.model" expected a wire string`},
-		{"guard relation not a string", leafPayload(sqlPort, paramsPort, optsPort(wire.WireNull(), wire.WireNull(),
+		{"guard relation not a string", leafPayload(sqlPort, paramsPort, optsPort(wire.WireNull(), wire.WireNull(), wire.WireNull(),
 			wire.WireRowOf([]wire.WireField{
 				{Key: "limit", Val: wire.WireInt(2)}, {Key: "model", Val: wire.WireStr("t")},
 				{Key: "relation", Val: wire.WireInt(42)},
@@ -418,11 +426,122 @@ func TestExecuteSQL_MissingOrMistypedFieldOfAPresentStructIsLoud(t *testing.T) {
 	if _, err := ExecuteSQL(leafPayload(sqlPort, paramsPort)); err != nil {
 		t.Fatalf("an omitted control record is a plain read, got %v", err)
 	}
-	if _, err := ExecuteSQL(leafPayload(sqlPort, paramsPort, optsPort(wire.WireNull(), wire.WireNull(), wire.WireNull()))); err != nil {
+	if _, err := ExecuteSQL(leafPayload(sqlPort, paramsPort, optsPort(wire.WireNull(), wire.WireNull(), wire.WireNull(), wire.WireNull()))); err != nil {
 		t.Fatalf("an all-null control record is a plain read, got %v", err)
 	}
 	// …and a cap that IS spelled still trips (the fail-closed reads did not disarm it).
-	if _, err := ExecuteSQL(leafPayload(sqlPort, paramsPort, optsPort(wire.WireNull(), wire.WireNull(), cap2))); err == nil {
+	if _, err := ExecuteSQL(leafPayload(sqlPort, paramsPort, optsPort(wire.WireNull(), wire.WireNull(), wire.WireNull(), cap2))); err == nil {
 		t.Fatal("a relation batch over its cap must still raise")
+	}
+}
+
+// ── #217 named-DB: the statement's own connection reaches the router, or is LOUD ─────────────────
+
+// namedDBPools opens TWO in-proc sqlite databases and registers them as the `default` and `B`
+// connections. `B` alone holds the table, so a statement that lands on the WRONG connection does not
+// return the wrong rows — it cannot see a table at all. A single-DB fixture cannot tell a honored
+// connection name from a dropped one, which is exactly why the defect survived the single-DB
+// conformance and livedb suites (#217).
+func namedDBPools(t *testing.T) (*ExecutionContext, func()) {
+	t.Helper()
+	open := func(seed ...string) *sql.DB {
+		db, err := sql.Open("sqlite", ":memory:")
+		if err != nil {
+			t.Fatalf("open: %v", err)
+		}
+		db.SetMaxOpenConns(1)
+		db.SetMaxIdleConns(1)
+		for _, s := range seed {
+			if _, err := db.Exec(s); err != nil {
+				t.Fatalf("seed %q: %v", s, err)
+			}
+		}
+		return db
+	}
+	// DB "A" (the default connection) holds an UNRELATED table; DB "B" holds `named_users`.
+	a := open("CREATE TABLE only_in_a (id INTEGER PRIMARY KEY)")
+	b := open("CREATE TABLE named_users (id INTEGER PRIMARY KEY, name TEXT)",
+		"INSERT INTO named_users VALUES (1,'Ada'),(2,'Bob')")
+	reg := NewConnectionRegistry(map[string]ReaderWriterPools{
+		DefaultConnection: SinglePoolPair(NewSQLDBPool(a)),
+		"B":               SinglePoolPair(NewSQLDBPool(b)),
+	})
+	ctx := ContextForRouting(RoutingConfig{
+		Registry: reg,
+		Sticky:   NewWriterStickyClock(StickyOptions{UseWriterAfterTransaction: boolPtr(false)}),
+	}, nil)
+	BindLeafTransport(ctx, "sqlite")
+	return ctx, func() {
+		UnbindLeafTransport()
+		_ = a.Close()
+		_ = b.Close()
+	}
+}
+
+// The go leg of "the same behaviour in all five languages": the `db` field of the control record is the
+// ONLY thing that decides which registered connection serves the statement. The twin of the TS
+// `leaves.test.ts` #217 tests, the rust `named_db_routes_the_statement`, the python
+// `test_named_db_routes_the_statement` and the php `NamedDbRoutingTest`.
+func TestExecuteSQL_NamedDBRoutesTheStatement(t *testing.T) {
+	_, done := namedDBPools(t)
+	defer done()
+
+	read := func(db wire.WireValue) (wire.WireValue, error) {
+		return ExecuteSQL(leafPayload(
+			port("sql", wire.WireStr("SELECT id, name FROM named_users ORDER BY id")),
+			port("params", wire.WireListOf(nil)),
+			optsPort(db, wire.WireNull(), wire.WireNull(), wire.WireNull()),
+		))
+	}
+
+	// NAMED ⇒ B served it. The rows are unforgeable: `named_users` exists in NO other registered db.
+	got, err := read(wire.WireStr("B"))
+	if err != nil {
+		t.Fatalf(`db "B": %v`, err)
+	}
+	if l := got.AsList(); l.Kind != wireProbeGot || l.Got.Len() != 2 {
+		t.Fatalf(`db "B" returned %v, want the 2 rows of the named db`, got)
+	}
+
+	// NEGATIVE CONTROL — the name DROPPED (a wire null, which is exactly the pre-#217 lowering) sends the
+	// SAME statement to the DEFAULT connection, where the table does not exist. Measured, not reasoned:
+	// this is the failure a cross-DB relation produced before the emitter lowered the name.
+	if _, err := read(wire.WireNull()); err == nil {
+		t.Fatal("db null must hit the DEFAULT connection, where named_users does not exist — got no error")
+	} else if !strings.Contains(err.Error(), "named_users") {
+		t.Fatalf("db null error = %v, want a missing-table failure naming named_users", err)
+	}
+
+	// An UNREGISTERED name is LOUD, never a silent fall back to the default.
+	if _, err := read(wire.WireStr("ghost")); err == nil || !strings.Contains(err.Error(), "no connection registered under name 'ghost'") {
+		t.Fatalf(`db "ghost" error = %v, want the loud unregistered-name failure`, err)
+	}
+}
+
+// A named statement on a NON-ROUTED ctx (the single-primary-db [ContextForDB] path) has no registry to
+// resolve the name against, so it must be LOUD. Running it on the primary db anyway is the silent
+// wrong-database execution named-DB lowering exists to prevent — and a single-DB deployment is exactly
+// where it would go unnoticed.
+func TestExecuteSQL_NamedDBOnANonRoutedContextIsLoud(t *testing.T) {
+	db := openBoundT(t)
+	defer func() {
+		UnbindLeafTransport()
+		_ = db.Close()
+	}()
+	_, err := ExecuteSQL(leafPayload(
+		port("sql", wire.WireStr("SELECT id FROM t")),
+		port("params", wire.WireListOf(nil)),
+		optsPort(wire.WireStr("analytics"), wire.WireNull(), wire.WireNull(), wire.WireNull()),
+	))
+	if err == nil || !strings.Contains(err.Error(), "a statement names connection 'analytics'") {
+		t.Fatalf("non-routed named statement error = %v, want the loud no-registry failure", err)
+	}
+	// The DEFAULT connection is the single-db case itself and still runs.
+	if _, err := ExecuteSQL(leafPayload(
+		port("sql", wire.WireStr("SELECT id FROM t")),
+		port("params", wire.WireListOf(nil)),
+		optsPort(wire.WireNull(), wire.WireNull(), wire.WireNull(), wire.WireNull()),
+	)); err != nil {
+		t.Fatalf("unnamed statement on the single-db ctx: %v", err)
 	}
 }

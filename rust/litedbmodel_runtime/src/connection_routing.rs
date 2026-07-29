@@ -255,6 +255,33 @@ impl ReaderWriterPools {
 /// Mirrors the TS `DEFAULT_CONNECTION`.
 pub const DEFAULT_CONNECTION: &str = "default";
 
+/// Reject a statement that NAMES a database on a context that holds NO connection registry (the base
+/// [`crate::exec_context::for_driver`] path). The companion of [`ConnectionRegistry::pair_for`]'s
+/// unknown-name failure, and for the same reason: an unresolvable name must be LOUD, because the
+/// alternative is running the statement against whatever single driver the context happens to hold — a
+/// DIFFERENT database than the statement's model declares (#217). `None` (the default connection) is the
+/// single-driver case itself and passes. Mirrors the TS `assertRoutableNamedDb` / go `namedDBUnroutable`.
+pub fn assert_routable_named_db(
+    db: Option<&str>,
+    context_description: &str,
+) -> Result<(), SqlFailure> {
+    match db {
+        None => Ok(()),
+        Some(DEFAULT_CONNECTION) => Ok(()),
+        Some(name) => Err(SqlFailure {
+            kind: "driver_error".into(),
+            policy: "fail".into(),
+            sqlite_code: None,
+            message: format!(
+                "scp connection routing: a statement names connection '{name}', but it is executing on \
+                 {context_description} — there is no connection registry to resolve the name against. \
+                 Build the context from a RoutingConfig (set_config/ConnectionRegistry), or drop the \
+                 connection tag on the model."
+            ),
+        }),
+    }
+}
+
 /// The multi-DB connection registry (C2): a map from a connection NAME → its [`ReaderWriterPools`].
 /// [`resolve_pool`] selects the pair by `intent.db` (the connection name the bundle/model metadata
 /// carries), falling back to [`DEFAULT_CONNECTION`] when unnamed. Selecting a name that was never

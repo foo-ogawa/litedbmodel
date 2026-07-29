@@ -492,12 +492,16 @@ class ExecutionContext
     }
 
     /**
-     * Resolve WHICH connection a statement runs on (§3). Phase A resolution: the tx-owned (pinned)
-     * connection wins; else the primary driver's connection. Reader/writer split (§3-2/3) + named-DB
-     * routing (§3-4) extend HERE in B/C/D — the seam does not change.
+     * Resolve WHICH connection a statement runs on (§3): the tx-owned (pinned) connection wins; else the
+     * primary driver's connection. The reader/writer split and the named-DB registry live on the ROUTED
+     * ctx ({@see RoutingExecutionContext}), so a statement that NAMES a database has nowhere to go here
+     * and is LOUD — exactly as an unregistered name is on the routed ctx
+     * ({@see ConnectionRegistry::pairFor()}). Running it on the primary connection instead would execute
+     * it against a DIFFERENT database than its model declares, silently (#217).
      */
     public function connectionFor(StatementIntent $intent): Connection
     {
+        assertRoutableNamedDb($intent->db, 'a single-connection (non-routed) execution context');
         return $this->pinned ?? $this->driver->connection();
     }
 

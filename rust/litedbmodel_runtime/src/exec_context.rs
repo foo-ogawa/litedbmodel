@@ -351,6 +351,16 @@ pub struct ExecutionContext<'a, 't> {
     /// ALSO sets `read_only` — a write in it is REJECTED. Threaded explicitly (the approved
     /// rust-idiomatic decision — no task-local). Derived via [`ExecutionContext::with_writer`].
     in_writer_scope: bool,
+    /// The NAMED DB this ctx's TRANSACTIONS open on (Phase C-2 multi-DB): [`ExecutionContext::tx_driver`]
+    /// resolves the WRITER pool of THIS name. `None` ⇒ the default connection; ignored without a routing
+    /// config (the base [`for_driver`] path). A STATEMENT names its DB per call
+    /// ([`StatementIntent::db`]) — a transaction cannot, because the covered plane's tx boundary
+    /// ([`crate::leaves::with_ambient_transaction`]) takes only a body, so the tx's target rides on the
+    /// ctx. Derived via [`ExecutionContext::with_connection_name`]; the twin of go
+    /// `ExecutionContext.WithConnectionName` and python `ExecutionContext.with_connection_name`, and the
+    /// ONE channel the acquire reads — the public `transaction_on(ctx, connection, …)` argument lands
+    /// HERE rather than being threaded beside it (python's shape).
+    connection: Option<String>,
 }
 
 /// The shared empty (Phase A) middleware chain — a `'static` passthrough so [`for_driver`] can build
@@ -391,6 +401,7 @@ pub fn for_routing(routing: &RoutingConfig) -> Result<ExecutionContext<'_, '_>, 
         read_only: false,
         routing: Some(routing),
         in_writer_scope: false,
+        connection: None,
     })
 }
 
@@ -406,6 +417,7 @@ impl<'a> ExecutionContext<'a, 'a> {
             read_only: false,
             routing: None,
             in_writer_scope: false,
+            connection: None,
         }
     }
 }
@@ -423,13 +435,52 @@ impl<'a, 't> ExecutionContext<'a, 't> {
     }
 
     /// The WRITER driver a transaction runs against (Phase C / #88 named-DB tx routing — mirror the TS
-    /// `connectionPoolFor({write:true, db})`). A transaction is a write ⇒ the writer pool of the named
-    /// `connection` (or the default). WITHOUT a routing config (base ctx) ⇒ the single primary driver
-    /// (byte-identical Phase A/B). Loud on an unregistered connection name.
-    pub fn tx_driver(&self, connection: Option<&str>) -> Result<&'a dyn Driver, SqlFailure> {
+    /// `connectionPoolFor({write:true, db})`). A transaction is a write ⇒ the writer pool of the ctx's
+    /// OWN named connection ([`ExecutionContext::with_connection_name`]), or the default when it names
+    /// none. WITHOUT a routing config (base ctx) ⇒ the single primary driver (byte-identical Phase A/B).
+    /// Loud on an unregistered connection name.
+    ///
+    /// The name comes off the CTX and nowhere else — the same single channel go's `acquireTxConnection`
+    /// and python's `begin_tx` read. It used to be a parameter, which the covered plane's boundary
+    /// ([`crate::leaves::with_ambient_transaction`]) had no way to supply: `with_transaction_decided`
+    /// passed `None` and every covered transaction opened on the DEFAULT connection's writer (#217, the
+    /// rust half of go's #215).
+    pub fn tx_driver(&self) -> Result<&'a dyn Driver, SqlFailure> {
         match self.routing {
-            Some(routing) => Ok(routing.registry.pair_for(connection)?.writer.as_ref()),
+            Some(routing) => Ok(routing
+                .registry
+                .pair_for(self.connection.as_deref())?
+                .writer
+                .as_ref()),
             None => Ok(self.driver),
+        }
+    }
+
+    /// The NAMED connection this ctx's transactions open on (`None` ⇒ the default). See
+    /// [`ExecutionContext::with_connection_name`].
+    pub fn connection(&self) -> Option<&str> {
+        self.connection.as_deref()
+    }
+
+    /// Derive a ctx whose TRANSACTIONS open on the NAMED connection `name` (Phase C-2 multi-DB):
+    /// [`ExecutionContext::tx_driver`] then checks the tx's owned connection out of THAT connection's
+    /// WRITER pool, and the pin makes every statement in the body run on it. `None` clears the name (the
+    /// default connection). The derived ctx shares everything else — driver, middleware, routing, pin,
+    /// writer/read-only markers.
+    ///
+    /// This is the channel a transaction's target rides on, because a transaction has no statement to
+    /// carry it: a STATEMENT names its DB in its own [`StatementIntent`], and the covered plane's
+    /// boundary [`crate::leaves::with_ambient_transaction`] takes only a body. The go analogue is
+    /// `WithConnectionName`, the python one `with_connection_name`.
+    pub fn with_connection_name(&self, name: Option<&str>) -> ExecutionContext<'a, 't> {
+        ExecutionContext {
+            driver: self.driver,
+            middleware: self.middleware,
+            pinned: self.pinned,
+            read_only: self.read_only,
+            routing: self.routing,
+            in_writer_scope: self.in_writer_scope,
+            connection: name.map(str::to_string),
         }
     }
 
@@ -469,6 +520,7 @@ impl<'a, 't> ExecutionContext<'a, 't> {
             read_only: true,
             routing: self.routing,
             in_writer_scope: self.in_writer_scope,
+            connection: self.connection.clone(),
         }
     }
 
@@ -489,6 +541,7 @@ impl<'a, 't> ExecutionContext<'a, 't> {
             read_only: true,
             routing: self.routing,
             in_writer_scope: true,
+            connection: self.connection.clone(),
         }
     }
 
@@ -524,7 +577,15 @@ impl<'a, 't> ExecutionContext<'a, 't> {
             let pool = resolve_pool(intent, routing, self.in_writer_scope)?;
             return Ok(Box::new(DriverConnection::new(pool.as_ref())));
         }
-        // Base ctx: the single primary driver (byte-identical Phase A/B single-DB path).
+        // Base ctx: the single primary driver (byte-identical Phase A/B single-DB path). A statement that
+        // NAMES a database has nowhere to go here — there is no registry to resolve the name against —
+        // so it is LOUD, exactly as an unregistered name is on a routed ctx
+        // ([`crate::connection_routing::ConnectionRegistry::pair_for`]). Running it on the primary driver
+        // instead would execute it against a DIFFERENT database than its model declares, silently (#217).
+        crate::connection_routing::assert_routable_named_db(
+            intent.db.as_deref(),
+            "a single-driver (non-routed) execution context",
+        )?;
         Ok(Box::new(DriverConnection::new(self.driver)))
     }
 
@@ -542,6 +603,7 @@ impl<'a, 't> ExecutionContext<'a, 't> {
             read_only: self.read_only,
             routing: self.routing,
             in_writer_scope: self.in_writer_scope,
+            connection: self.connection.clone(),
         }
     }
 }
@@ -704,6 +766,19 @@ pub fn with_transaction_decided<'a, R>(
 /// [`transaction`] boundary and the write-tx plan executor both drive; the retry loop + nested-join
 /// live in [`transaction`], while THIS runs exactly ONE attempt on a freshly-acquired owned
 /// connection.
+///
+/// WHICH database it opens on is the CTX's ([`ExecutionContext::with_connection_name`] →
+/// [`ExecutionContext::tx_driver`]), so a named-DB transaction runs its whole BEGIN…COMMIT on ONE pinned
+/// writer connection of THAT database (the active-tx pin then wins over routing for every statement in
+/// the body — the Phase A per-execution ownership is unbroken). WITHOUT a routing config (base ctx) the
+/// ctx names none and this is the byte-identical single-driver path. The name used to be a PARAMETER of
+/// a second `…_isolated_on` entry point, which the covered plane's boundary had no way to supply — it
+/// passed `None`, so every covered transaction opened on the default connection's writer (#217).
+///
+/// On a successful (non-rollback) COMMIT it `.mark()`s the writer-sticky clock (read-your-writes) —
+/// unless `use_writer_after_transaction` is false, the per-transaction opt-out
+/// ([`crate::tx_options::TransactionOptions::use_writer_after_transaction`], resolved by
+/// [`transaction_decided_on`] and passed down here, where the arming actually happens).
 pub fn with_transaction_decided_isolated<'a, R>(
     ctx: &ExecutionContext<'a, '_>,
     before_begin: &[String],
@@ -711,39 +786,11 @@ pub fn with_transaction_decided_isolated<'a, R>(
     use_writer_after_transaction: bool,
     body: impl FnOnce(&ExecutionContext) -> Result<TxDecision<R>, SqlFailure>,
 ) -> Result<R, SqlFailure> {
-    with_transaction_decided_isolated_on(
-        ctx,
-        None,
-        before_begin,
-        after_begin,
-        use_writer_after_transaction,
-        body,
-    )
-}
-
-/// The named-connection form of [`with_transaction_decided_isolated`] (Phase C / #88): the tx's owned
-/// connection is acquired from the WRITER pool of the named `connection` (or the default) via
-/// [`ExecutionContext::tx_driver`] — so a named-DB `transaction()` runs its whole BEGIN…COMMIT on ONE
-/// pinned writer connection of THAT database (the active-tx pin then wins over routing for every
-/// statement in the body — the Phase A per-execution ownership is unbroken). WITHOUT a routing config
-/// (base ctx) `connection` must be `None` and this is byte-identical to
-/// [`with_transaction_decided_isolated`]. On a successful (non-rollback) COMMIT it `.mark()`s the
-/// writer-sticky clock (read-your-writes) — unless `use_writer_after_transaction` is false, the
-/// per-transaction opt-out ([`crate::tx_options::TransactionOptions::use_writer_after_transaction`],
-/// resolved by [`transaction_decided_on`] and passed down here, where the arming actually happens).
-pub fn with_transaction_decided_isolated_on<'a, R>(
-    ctx: &ExecutionContext<'a, '_>,
-    connection: Option<&str>,
-    before_begin: &[String],
-    after_begin: &[String],
-    use_writer_after_transaction: bool,
-    body: impl FnOnce(&ExecutionContext) -> Result<TxDecision<R>, SqlFailure>,
-) -> Result<R, SqlFailure> {
-    // Acquire the tx's OWNED connection from the WRITER pool of the named connection (Phase C) — or the
-    // single primary driver (base ctx) — WITHOUT issuing BEGIN (#93 / owner option A: the tx-control is
+    // Acquire the tx's OWNED connection from the WRITER pool of the CTX's named connection (Phase C) — or
+    // the single primary driver (base ctx) — WITHOUT issuing BEGIN (#93 / owner option A: the tx-control is
     // seam-issued so a registered middleware observes it). The handle borrows the routing/driver (`'a`);
     // the slot holds it for the body AND for the seam-issued BEGIN/COMMIT/ROLLBACK on the SAME conn.
-    let tx: Box<dyn TxConnection + 'a> = ctx.tx_driver(connection)?.acquire_tx()?;
+    let tx: Box<dyn TxConnection + 'a> = ctx.tx_driver()?.acquire_tx()?;
     let slot: TxSlot<'a> = std::cell::RefCell::new(Some(tx));
     let tx_ctx = ctx.with_tx_connection(&slot);
 
@@ -956,6 +1003,11 @@ pub fn transaction_decided_on<'a, R>(
             TxDecision::Commit(r) | TxDecision::Rollback(r) => Ok(r),
         };
     }
+    // The named connection lands on the CTX — the ONE channel the acquire reads
+    // ([`ExecutionContext::tx_driver`]), so this public argument and the covered plane's
+    // `ctx.with_connection_name(...)` are the SAME mechanism rather than two. python's shape
+    // (`transaction(..., connection=...)` → `ExecutionContext._connection` → `begin_tx`).
+    let ctx = &ctx.with_connection_name(connection);
 
     // The isolation prelude (PG SET post-BEGIN / MySQL SET pre-BEGIN / SQLite = hard-error on a level).
     let (before_begin, after_begin) =
@@ -972,9 +1024,8 @@ pub fn transaction_decided_on<'a, R>(
         attempt += 1;
         // ONE attempt on a FRESH owned connection (a retry after a connection error thus RECONNECTS),
         // acquired from the named connection's WRITER pool (Phase C) or the single primary driver.
-        let outcome = with_transaction_decided_isolated_on(
+        let outcome = with_transaction_decided_isolated(
             ctx,
-            connection,
             &before_begin,
             &after_begin,
             options.use_writer_after_transaction,

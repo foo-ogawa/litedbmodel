@@ -4,14 +4,14 @@
 # native dict literal and handed to the EXISTING runtime core (run_behavior) —
 # no execution logic is generated. Handlers are ALWAYS injected at the boundary
 # (IR + {effects,config,hooks}); they are never generated.
-# irFingerprint: fnv1a64:65fd0ac844813939
+# irFingerprint: fnv1a64:eb29aa8c79609e35
 from behavior_contracts import SPEC_VERSIONS, ProvenanceError, load_compiled_ir, run_behavior
 
 # Spec versions baked at generation time (fail-closed constant comparison at load).
 EXPECTED_SPEC_VERSIONS = {"behavior": 6, "expression": 2, "plan": 1}
 
 # FNV-1a 64 fingerprint of the source portable IR (canonical_json discipline, #208).
-IR_FINGERPRINT = "fnv1a64:65fd0ac844813939"
+IR_FINGERPRINT = "fnv1a64:eb29aa8c79609e35"
 
 # Component names exposed by bind(), in IR declaration order.
 COMPONENT_NAMES = ("posts", "postsTop", "page", "postsByIds", "feed", "pagedFeed", "usersWithPosts", "postsWithAuthor", "usersWithCappedPosts", "usersWithUncappedPosts", "usersWithTopPosts", "createPost", "renamePost", "removePost", "createPostReturning", "renamePostReturning", "removePostReturning", "restatusPostsReturning", "removePostsByAuthorReturning", "typedRows", "createTags", "removeTags", "createTagsReturning", "relabelTagsReturning", "removeTagsReturning")
@@ -396,6 +396,9 @@ IR_DOC = {
               "elemType": {
                 "name": "ExecOptions",
                 "obj": {
+                  "db": {
+                    "opt": "string"
+                  },
                   "guard": {
                     "opt": {
                       "name": "CapGuard",
@@ -455,6 +458,7 @@ IR_DOC = {
           "ports": {
             "opts": {
               "obj": {
+                "db": None,
                 "guard": None,
                 "whereDynamic": {
                   "obj": {
@@ -605,6 +609,9 @@ IR_DOC = {
               "elemType": {
                 "name": "ExecOptions",
                 "obj": {
+                  "db": {
+                    "opt": "string"
+                  },
                   "guard": {
                     "opt": {
                       "name": "CapGuard",
@@ -664,6 +671,7 @@ IR_DOC = {
           "ports": {
             "opts": {
               "obj": {
+                "db": None,
                 "guard": None,
                 "whereDynamic": {
                   "obj": {
@@ -1544,6 +1552,9 @@ IR_DOC = {
               "elemType": {
                 "name": "ExecOptions",
                 "obj": {
+                  "db": {
+                    "opt": "string"
+                  },
                   "guard": {
                     "opt": {
                       "name": "CapGuard",
@@ -1603,6 +1614,7 @@ IR_DOC = {
           "ports": {
             "opts": {
               "obj": {
+                "db": None,
                 "guard": {
                   "obj": {
                     "limit": 2,
@@ -2295,6 +2307,9 @@ IR_DOC = {
               "elemType": {
                 "name": "ExecOptions",
                 "obj": {
+                  "db": {
+                    "opt": "string"
+                  },
                   "guard": {
                     "opt": {
                       "name": "CapGuard",
@@ -2354,6 +2369,7 @@ IR_DOC = {
           "ports": {
             "opts": {
               "obj": {
+                "db": None,
                 "guard": None,
                 "whereDynamic": None,
                 "write": {
@@ -2461,6 +2477,9 @@ IR_DOC = {
               "elemType": {
                 "name": "ExecOptions",
                 "obj": {
+                  "db": {
+                    "opt": "string"
+                  },
                   "guard": {
                     "opt": {
                       "name": "CapGuard",
@@ -2520,6 +2539,7 @@ IR_DOC = {
           "ports": {
             "opts": {
               "obj": {
+                "db": None,
                 "guard": None,
                 "whereDynamic": None,
                 "write": {
@@ -2600,6 +2620,9 @@ IR_DOC = {
               "elemType": {
                 "name": "ExecOptions",
                 "obj": {
+                  "db": {
+                    "opt": "string"
+                  },
                   "guard": {
                     "opt": {
                       "name": "CapGuard",
@@ -2659,6 +2682,7 @@ IR_DOC = {
           "ports": {
             "opts": {
               "obj": {
+                "db": None,
                 "guard": None,
                 "whereDynamic": None,
                 "write": {
@@ -2734,6 +2758,9 @@ IR_DOC = {
               "elemType": {
                 "name": "ExecOptions",
                 "obj": {
+                  "db": {
+                    "opt": "string"
+                  },
                   "guard": {
                     "opt": {
                       "name": "CapGuard",
@@ -2793,6 +2820,7 @@ IR_DOC = {
           "ports": {
             "opts": {
               "obj": {
+                "db": None,
                 "guard": None,
                 "whereDynamic": None,
                 "write": {
@@ -2908,6 +2936,9 @@ IR_DOC = {
               "elemType": {
                 "name": "ExecOptions",
                 "obj": {
+                  "db": {
+                    "opt": "string"
+                  },
                   "guard": {
                     "opt": {
                       "name": "CapGuard",
@@ -2967,6 +2998,7 @@ IR_DOC = {
           "ports": {
             "opts": {
               "obj": {
+                "db": None,
                 "guard": None,
                 "whereDynamic": None,
                 "write": {
@@ -3055,6 +3087,9 @@ IR_DOC = {
               "elemType": {
                 "name": "ExecOptions",
                 "obj": {
+                  "db": {
+                    "opt": "string"
+                  },
                   "guard": {
                     "opt": {
                       "name": "CapGuard",
@@ -3114,6 +3149,7 @@ IR_DOC = {
           "ports": {
             "opts": {
               "obj": {
+                "db": None,
                 "guard": None,
                 "whereDynamic": None,
                 "write": {
@@ -3193,6 +3229,9 @@ IR_DOC = {
               "elemType": {
                 "name": "ExecOptions",
                 "obj": {
+                  "db": {
+                    "opt": "string"
+                  },
                   "guard": {
                     "opt": {
                       "name": "CapGuard",
@@ -3252,6 +3291,7 @@ IR_DOC = {
           "ports": {
             "opts": {
               "obj": {
+                "db": None,
                 "guard": None,
                 "whereDynamic": None,
                 "write": {
@@ -3340,6 +3380,9 @@ IR_DOC = {
               "elemType": {
                 "name": "ExecOptions",
                 "obj": {
+                  "db": {
+                    "opt": "string"
+                  },
                   "guard": {
                     "opt": {
                       "name": "CapGuard",
@@ -3399,6 +3442,7 @@ IR_DOC = {
           "ports": {
             "opts": {
               "obj": {
+                "db": None,
                 "guard": None,
                 "whereDynamic": None,
                 "write": {
@@ -3552,6 +3596,9 @@ IR_DOC = {
               "elemType": {
                 "name": "ExecOptions",
                 "obj": {
+                  "db": {
+                    "opt": "string"
+                  },
                   "guard": {
                     "opt": {
                       "name": "CapGuard",
@@ -3611,6 +3658,7 @@ IR_DOC = {
           "ports": {
             "opts": {
               "obj": {
+                "db": None,
                 "guard": None,
                 "whereDynamic": None,
                 "write": {
@@ -3690,6 +3738,9 @@ IR_DOC = {
               "elemType": {
                 "name": "ExecOptions",
                 "obj": {
+                  "db": {
+                    "opt": "string"
+                  },
                   "guard": {
                     "opt": {
                       "name": "CapGuard",
@@ -3749,6 +3800,7 @@ IR_DOC = {
           "ports": {
             "opts": {
               "obj": {
+                "db": None,
                 "guard": None,
                 "whereDynamic": None,
                 "write": {
@@ -3825,6 +3877,9 @@ IR_DOC = {
               "elemType": {
                 "name": "ExecOptions",
                 "obj": {
+                  "db": {
+                    "opt": "string"
+                  },
                   "guard": {
                     "opt": {
                       "name": "CapGuard",
@@ -3884,6 +3939,7 @@ IR_DOC = {
           "ports": {
             "opts": {
               "obj": {
+                "db": None,
                 "guard": None,
                 "whereDynamic": None,
                 "write": {
@@ -3971,6 +4027,9 @@ IR_DOC = {
               "elemType": {
                 "name": "ExecOptions",
                 "obj": {
+                  "db": {
+                    "opt": "string"
+                  },
                   "guard": {
                     "opt": {
                       "name": "CapGuard",
@@ -4030,6 +4089,7 @@ IR_DOC = {
           "ports": {
             "opts": {
               "obj": {
+                "db": None,
                 "guard": None,
                 "whereDynamic": None,
                 "write": {
@@ -4116,6 +4176,9 @@ IR_DOC = {
               "elemType": {
                 "name": "ExecOptions",
                 "obj": {
+                  "db": {
+                    "opt": "string"
+                  },
                   "guard": {
                     "opt": {
                       "name": "CapGuard",
@@ -4175,6 +4238,7 @@ IR_DOC = {
           "ports": {
             "opts": {
               "obj": {
+                "db": None,
                 "guard": None,
                 "whereDynamic": None,
                 "write": {

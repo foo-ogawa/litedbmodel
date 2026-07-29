@@ -165,11 +165,36 @@ export function deriveModelColumns(modelClass: ModelClassLike, options: DeriveCo
 export interface ModelClassLike {
   readonly name: string;
   readonly TABLE_NAME?: string;
+  /**
+   * The NAME of the connection (database) this model lives in — `@model(table, { connection })`
+   * (`src/decorators.ts`). Absent ⇒ the default connection. See {@link connectionOf}.
+   */
+  readonly CONNECTION?: string;
 }
 
 /** The effective table name (v1 `@model` rule): explicit `TABLE_NAME`, else the model name lowercased. */
 export function tableNameOf(modelClass: ModelClassLike): string {
   return modelClass.TABLE_NAME ?? modelClass.name.toLowerCase();
+}
+
+/**
+ * The NAME of the connection a model's statements run on — the multi-DB routing key, and the ONE
+ * reader of the model's `CONNECTION` static (the twin of {@link tableNameOf}). `undefined` ⇒ the
+ * DEFAULT connection, which is what a single-DB deployment always is.
+ *
+ * The MODEL is the authority, exactly as in v1: a v1 model selects its database by extending a
+ * `DBModel.createDBBase(config)` base class whose handler owns the connection, and every statement a
+ * model issues goes through THAT handler (`DBModel.getHandler()` → `getDriverType()`). Both codegen
+ * consumers derive from here and neither re-derives it:
+ *
+ *  - an ENDPOINT's statements take their own model's connection (`emit/emitter.ts`);
+ *  - a RELATION's batch child fetch takes the TARGET model's ({@link relationDeclOf} →
+ *    {@link RelationDecl.connection}), which is v1 `LazyRelation.ts:236`'s
+ *    "Use target model's driver type (important for multi-DB scenarios)" — the target's connection
+ *    regardless of the parent's, because the child rows live in the target's database.
+ */
+export function connectionOf(modelClass: ModelClassLike): string | undefined {
+  return modelClass.CONNECTION;
 }
 
 // ── 2. Write bundles (createMany / updateMany / deleteMany) ─────────────────────────────────────
@@ -303,12 +328,18 @@ export function relationDeclOf(
   const select = targetProjection(targetModel);
   const order = rel.options?.order ? orderToString(rel.options.order() as OrderSpec) : undefined;
 
+  // CROSS-DB (V0 R1): the batch child SELECT runs on the TARGET model's connection — v1
+  // `LazyRelation.ts:236` loads a relation on `TargetClass.getDriverType()`'s driver, so the target's
+  // database is the authority whatever the parent's is. Absent ⇒ the default connection (untagged, the
+  // same-DB case every single-DB deployment is).
+  const connection = connectionOf(targetModel);
   const base = {
     name: rel.propertyKey,
     kind: rel.type as RelationKind,
     targetTable,
     select,
     dialect,
+    ...(connection !== undefined ? { connection } : {}),
     ...(order !== undefined ? { order } : {}),
     ...(rel.options?.limit !== undefined ? { limit: rel.options.limit } : {}),
     ...(rel.options?.hardLimit !== undefined ? { hardLimit: rel.options.hardLimit } : {}),

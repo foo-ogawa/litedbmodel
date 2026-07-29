@@ -408,6 +408,26 @@ func ReaderWriterPair(reader, writer Pool) ReaderWriterPools {
 // uses this. Mirrors the TS DEFAULT_CONNECTION.
 const DefaultConnection = "default"
 
+// namedDBUnroutable rejects a statement that NAMES a database on a context that holds NO connection
+// registry (the single-primary-db [ContextForDB] path). The companion of [ConnectionRegistry.PairFor]'s
+// unknown-name failure, and for the same reason: an unresolvable name must be LOUD, because the
+// alternative is running the statement against whatever single db the context happens to hold — a
+// DIFFERENT database than the statement's model declares (#217). "" (the default connection) is the
+// single-db case itself and passes. Mirrors the TS assertRoutableNamedDb.
+func namedDBUnroutable(db string, contextDescription string) error {
+	if db == "" || db == DefaultConnection {
+		return nil
+	}
+	return &SqlFailure{
+		Kind:   KindDriverError,
+		Policy: "fail",
+		Msg: fmt.Sprintf("scp connection routing: a statement names connection '%s', but it is executing "+
+			"on %s — there is no connection registry to resolve the name against. Build the context from a "+
+			"RoutingConfig (SetConfig/ConnectionRegistry), or drop the connection tag on the model.",
+			db, contextDescription),
+	}
+}
+
 // ConnectionRegistry is the multi-DB connection registry (C2): a map from a connection NAME →
 // its [ReaderWriterPools]. [ExecutionContext.ConnectionFor] selects the pair by intent.DB (the
 // connection name the bundle/model metadata carries — decorator-free; decorator wiring is Phase F),

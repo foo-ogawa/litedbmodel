@@ -340,6 +340,13 @@ class ExecutionContext:
             from .connection_routing import PoolConnection, resolve_pool
 
             return PoolConnection(resolve_pool(intent, self._routing))
+        # A statement that NAMES a database has nowhere to go on a single-driver ctx (there is no
+        # registry to resolve the name against), so it is LOUD — exactly as an unregistered name is on a
+        # routed ctx (``ConnectionRegistry.pair_for``). Running it on the primary driver instead would
+        # execute it against a DIFFERENT database than its model declares, silently (#217).
+        from .connection_routing import assert_routable_named_db
+
+        assert_routable_named_db(intent.db, "a single-driver (non-routed) execution context")
         return DriverConnection(self._driver)
 
     def with_connection(self, conn: Connection, tx: bool) -> "ExecutionContext":

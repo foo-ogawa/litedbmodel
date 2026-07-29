@@ -68,6 +68,7 @@ final class DynamicWhereTest extends TestCase
             'sql' => self::BASE_SQL,
             'params' => [1, 2],
             'opts' => (object) [
+                'db' => null,
                 'write' => null,
                 'whereDynamic' => (object) ['frags' => $frags],
                 'guard' => null,
@@ -110,38 +111,40 @@ final class DynamicWhereTest extends TestCase
     {
         $ctx = ['nodeId' => 'n0', 'component' => 'executeSQL'];
         $sql = 'SELECT id, v FROM t ORDER BY id';
-        $nulls = (object) ['write' => null, 'whereDynamic' => null, 'guard' => null];
+        $nulls = (object) ['db' => null, 'write' => null, 'whereDynamic' => null, 'guard' => null];
         // Ports whose control record carries a `whereDynamic` plan of ONE fragment (the #209 cases).
         $plan = static fn (mixed $frag): array => [
             'sql' => 'SELECT id, v FROM t ORDER BY id',
             'params' => [],
-            'opts' => (object) ['write' => null, 'whereDynamic' => (object) ['frags' => [$frag]], 'guard' => null],
+            'opts' => (object) ['db' => null, 'write' => null, 'whereDynamic' => (object) ['frags' => [$frag]], 'guard' => null],
         ];
         // Ports whose control record has ONE field replaced (every other field spelled as its null).
         $opts = static fn (array $kw): array => [
             'sql' => 'SELECT id, v FROM t ORDER BY id',
             'params' => [],
-            'opts' => (object) array_merge(['write' => null, 'whereDynamic' => null, 'guard' => null], $kw),
+            'opts' => (object) array_merge(['db' => null, 'write' => null, 'whereDynamic' => null, 'guard' => null], $kw),
         ];
 
         // Each case breaks exactly ONE declared field of a struct that is present — by DROPPING it first…
         $cases = [
             [['params' => []], "'sql' field"],
             [['sql' => $sql], "'params' field"],
-            [['sql' => $sql, 'params' => [], 'opts' => (object) ['whereDynamic' => null, 'guard' => null]], "'write' field"],
-            [['sql' => $sql, 'params' => [], 'opts' => (object) ['write' => null, 'guard' => null]], "'whereDynamic' field"],
-            [['sql' => $sql, 'params' => [], 'opts' => (object) ['write' => null, 'whereDynamic' => null]], "'guard' field"],
-            [['sql' => $sql, 'params' => [], 'opts' => (object) ['write' => (object) [], 'whereDynamic' => null, 'guard' => null]], "'returning' field"],
+            [['sql' => $sql, 'params' => [], 'opts' => (object) ['write' => null, 'whereDynamic' => null, 'guard' => null]], "'db' field"],
+            [['sql' => $sql, 'params' => [], 'opts' => (object) ['db' => null, 'whereDynamic' => null, 'guard' => null]], "'write' field"],
+            [['sql' => $sql, 'params' => [], 'opts' => (object) ['db' => null, 'write' => null, 'guard' => null]], "'whereDynamic' field"],
+            [['sql' => $sql, 'params' => [], 'opts' => (object) ['db' => null, 'write' => null, 'whereDynamic' => null]], "'guard' field"],
+            [['sql' => $sql, 'params' => [], 'opts' => (object) ['db' => null, 'write' => (object) [], 'whereDynamic' => null, 'guard' => null]], "'returning' field"],
             [
                 ['sql' => $sql, 'params' => [], 'opts' => (object) [
                     'write' => null, 'whereDynamic' => null,
+                    'db' => null,
                     'guard' => (object) ['limit' => 2, 'relation' => 'things'],
                 ]],
                 "'model' field",
             ],
             // …and the PLAN and its FRAGMENTS, one level further down (#209).
             [
-                ['sql' => $sql, 'params' => [], 'opts' => (object) ['write' => null, 'whereDynamic' => (object) [], 'guard' => null]],
+                ['sql' => $sql, 'params' => [], 'opts' => (object) ['db' => null, 'write' => null, 'whereDynamic' => (object) [], 'guard' => null]],
                 "'frags' field",
             ],
             [$plan((object) ['sql' => 'v = ?', 'params' => ['zzz']]), "'skipped' field"],
@@ -199,7 +202,7 @@ final class DynamicWhereTest extends TestCase
 
         // …and a cap that IS spelled still trips (the fail-closed reads did not disarm it).
         $capped = ['sql' => $sql, 'params' => [], 'opts' => (object) [
-            'write' => null, 'whereDynamic' => null,
+            'db' => null, 'write' => null, 'whereDynamic' => null,
             'guard' => (object) ['limit' => 2, 'model' => 't', 'relation' => 'things'],
         ]];
         $this->expectException(\LiteDbModel\Runtime\LimitExceededError::class);
@@ -246,7 +249,7 @@ final class DynamicWhereTest extends TestCase
         $returning = $executeSQL([
             'sql' => 'INSERT INTO users (name) VALUES (?) RETURNING id',
             'params' => ['A'],
-            'opts' => (object) ['write' => (object) ['returning' => true], 'whereDynamic' => null, 'guard' => null],
+            'opts' => (object) ['db' => null, 'write' => (object) ['returning' => true], 'whereDynamic' => null, 'guard' => null],
         ], $ctx);
         self::assertSame(['reader', 'writer'], $log->getArrayCopy());
         // …and the two decisions are INDEPENDENT, not accidentally aligned: it took the ROW seam.
@@ -256,7 +259,7 @@ final class DynamicWhereTest extends TestCase
         $summary = $executeSQL([
             'sql' => 'INSERT INTO users (name) VALUES (?)',
             'params' => ['B'],
-            'opts' => (object) ['write' => (object) ['returning' => false], 'whereDynamic' => null, 'guard' => null],
+            'opts' => (object) ['db' => null, 'write' => (object) ['returning' => false], 'whereDynamic' => null, 'guard' => null],
         ], $ctx);
         self::assertSame(['reader', 'writer', 'writer'], $log->getArrayCopy());
         // The affected-rows summary, not rows (`lastInsertRowid` is deliberately 0 on this plane — see
@@ -318,7 +321,7 @@ final class DynamicWhereTest extends TestCase
                 $executeSQL([
                     'sql' => 'INSERT INTO users (name) VALUES (?)',
                     'params' => ['A'],
-                    'opts' => (object) ['write' => (object) ['returning' => false], 'whereDynamic' => null, 'guard' => null],
+                    'opts' => (object) ['db' => null, 'write' => (object) ['returning' => false], 'whereDynamic' => null, 'guard' => null],
                 ], $ctx);
             }, null, 'sqlite');
             // The COMMIT armed writer-sticky: the SAME plain read now routes to the WRITER.
@@ -404,6 +407,111 @@ final class DynamicWhereTest extends TestCase
         $one = $handlers['group']($groupPorts(['single' => true]), $ctx)['ok'];
         self::assertSame($kids[0], $one[0]->kids);
         self::assertNull($one[1]->kids);
+    }
+
+    /**
+     * #217 — the statement's own NAMED DATABASE reaches the router. The `db` field of the control record
+     * is the ONLY thing that decides WHICH registered connection serves the statement.
+     *
+     * A single-DB fixture cannot tell a honored connection name from a dropped one — which is exactly why
+     * the defect survived the single-DB conformance and livedb suites — so this gate registers TWO
+     * connections over TWO SEPARATE in-memory sqlite databases whose tables are DISJOINT: `named_users`
+     * exists ONLY in "B". A statement that lands on the wrong connection therefore does not return the
+     * wrong rows, it cannot see a table at all.
+     *
+     * The PHP leg of "the same behaviour in all five languages": the twin of the TS `leaves.test.ts` #217
+     * tests, the go `TestExecuteSQL_NamedDBRoutesTheStatement`, the rust `named_db_routes_the_statement`
+     * and the python `test_named_db_routes_the_statement`.
+     */
+    public function testNamedDbRoutesTheStatement(): void
+    {
+        $open = static function (array $seed): PdoDriver {
+            $pdo = new \PDO('sqlite::memory:', null, null, [\PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION]);
+            foreach ($seed as $sql) {
+                $pdo->exec($sql);
+            }
+            return new PdoDriver($pdo);
+        };
+        // DB "A" (the default connection) holds an UNRELATED table; DB "B" holds `named_users`.
+        $a = $open(['CREATE TABLE only_in_a (id INTEGER PRIMARY KEY)']);
+        $b = $open([
+            'CREATE TABLE named_users (id INTEGER PRIMARY KEY, name TEXT)',
+            "INSERT INTO named_users VALUES (1,'Ada'),(2,'Bob')",
+        ]);
+        $log = new \ArrayObject();
+        $routing = new RoutingConfig(
+            ConnectionRegistry::fromDefault(ReaderWriterPools::single(new RecordingPdoPool('A', $a, $log)))
+                ->add('B', ReaderWriterPools::single(new RecordingPdoPool('B', $b, $log)))
+                ->build(),
+            new WriterStickyClock(useWriterAfterTransaction: false),
+        );
+        $executeSQL = Leaves::makeHandlers(
+            new RoutingExecutionContext($a, new MiddlewareChain(), $routing),
+            'sqlite',
+        )['executeSQL'];
+        $at = ['nodeId' => 'n0', 'component' => 'executeSQL'];
+        $read = static fn (?string $db): array => $executeSQL([
+            'sql' => 'SELECT id, name FROM named_users ORDER BY id',
+            'params' => [],
+            'opts' => (object) ['db' => $db, 'write' => null, 'whereDynamic' => null, 'guard' => null],
+        ], $at);
+
+        // NAMED ⇒ B served it. The rows are unforgeable: `named_users` exists in NO other registered db.
+        self::assertSame(
+            [['id' => 1, 'name' => 'Ada'], ['id' => 2, 'name' => 'Bob']],
+            array_map(static fn ($r): array => (array) $r, $read('B')['ok']),
+        );
+        self::assertSame(['B'], $log->getArrayCopy());
+
+        // NEGATIVE CONTROL — the name DROPPED (`null`, which is exactly the pre-#217 lowering) sends the
+        // SAME statement to the DEFAULT connection, where the table does not exist. Measured, not
+        // reasoned: this is the failure a cross-DB relation produced before the emitter lowered the name.
+        // Both negatives are caught rather than declared, so all three outcomes are asserted in ONE run
+        // (an `expectException` would end the test at the first of them).
+        $failure = static function (callable $fn): string {
+            try {
+                $fn();
+            } catch (\Throwable $e) {
+                return $e->getMessage();
+            }
+            return '';
+        };
+        self::assertStringContainsString(
+            'named_users',
+            $failure(static fn () => $read(null)),
+            'a dropped name must land on the DEFAULT connection, where the table does not exist',
+        );
+        self::assertSame(['B', 'A'], $log->getArrayCopy());
+
+        // An UNREGISTERED name is LOUD, never a silent fall back to the default.
+        self::assertStringContainsString(
+            "no connection registered under name 'ghost'",
+            $failure(static fn () => $read('ghost')),
+        );
+    }
+
+    /**
+     * A named statement on a NON-ROUTED (single-connection) ctx has no registry to resolve the name
+     * against, so it must be LOUD. Running it on that one connection anyway is the silent wrong-database
+     * execution named-DB lowering exists to prevent — and a single-DB deployment is exactly where it
+     * would go unnoticed.
+     */
+    public function testNamedDbOnANonRoutedContextIsLoud(): void
+    {
+        $pdo = new \PDO('sqlite::memory:', null, null, [\PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION]);
+        $pdo->exec('CREATE TABLE t (id INTEGER PRIMARY KEY)');
+        $executeSQL = Leaves::makeHandlers($pdo, 'sqlite')['executeSQL'];
+        $at = ['nodeId' => 'n0', 'component' => 'executeSQL'];
+        $ports = static fn (?string $db): array => [
+            'sql' => 'SELECT id FROM t',
+            'params' => [],
+            'opts' => (object) ['db' => $db, 'write' => null, 'whereDynamic' => null, 'guard' => null],
+        ];
+        // The DEFAULT connection is the single-connection case itself and still runs.
+        self::assertSame([], $executeSQL($ports(null), $at)['ok']);
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessageMatches("/a statement names connection 'analytics'/");
+        $executeSQL($ports('analytics'), $at);
     }
 }
 

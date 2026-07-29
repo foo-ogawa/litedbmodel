@@ -177,6 +177,26 @@ export function readerWriterPair(reader: AsyncConnectionPool, writer: AsyncConne
 export const DEFAULT_CONNECTION = 'default';
 
 /**
+ * Reject a statement that NAMES a database on a context that holds NO connection registry (the single
+ * -connection / non-routed contexts: the TS `BasicContext`, and each language's `for_driver` twin). The
+ * companion of {@link ConnectionRegistry.pairFor}'s unknown-name throw, and for the same reason: a name
+ * that cannot be resolved must be LOUD, because the alternative is running the statement against
+ * whatever single connection the context happens to hold — a DIFFERENT database than the statement's
+ * model declares. That silent substitution is the defect named-DB lowering closes (#217), and a
+ * single-DB deployment is exactly where it would go unnoticed.
+ *
+ * `undefined`/`null` (the default connection) passes — that IS the single-connection case.
+ */
+export function assertRoutableNamedDb(db: string | undefined | null, contextDescription: string): void {
+  if (db === undefined || db === null || db === DEFAULT_CONNECTION) return;
+  throw new Error(
+    `scp connection routing: a statement names connection '${db}', but it is executing on ` +
+      `${contextDescription} — there is no connection registry to resolve the name against. Build the ` +
+      `context from a RoutingConfig (setConfig/ConnectionRegistry), or drop the connection tag on the model.`,
+  );
+}
+
+/**
  * The multi-DB connection registry (C2): a map from a connection NAME → its {@link ReaderWriterPools}.
  * `connectionFor(intent)` selects the pair by `intent.db` (the connection name the bundle/model
  * metadata carries — decorator-free, from config + metadata; decorator wiring is Phase F), falling

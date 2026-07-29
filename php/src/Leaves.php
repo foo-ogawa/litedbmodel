@@ -285,6 +285,11 @@ final class Leaves
             // Every FIELD of a record that IS present is required — a missing or mistyped key is an ABI
             // break, not an absent value.
             $plan = $opts === null ? null : self::required($opts, 'whereDynamic', self::RECORD, 'record|null');
+            // The NAMED connection (database) this statement runs on — the only control field that is a
+            // bare nullable STRING rather than a struct. `null` ⇒ the DEFAULT connection; an ABSENT KEY is
+            // LOUD like every other field of a record that IS present, because a name read as "no name"
+            // runs the statement against a DIFFERENT database than its model declares (#217).
+            $db = $opts === null ? null : self::required($opts, 'db', self::RECORD, 'string|null');
             // The DYNAMIC (SKIP) WHERE is assembled FIRST: the final statement shape is only known
             // here, so the placeholder render must follow it (CLAUDE.md §2).
             [$effectiveSql, $effectiveParams] = self::effectiveStatement($ports, $plan);
@@ -310,7 +315,12 @@ final class Leaves
                 // ({@see resolvePool()}): a RETURNING write runs on {@see execute()} and still belongs on
                 // the WRITER. Reading `returning` as the intent sent `INSERT … RETURNING` to the READ
                 // REPLICA (#207).
-                $intent = $write === null ? StatementIntent::read() : StatementIntent::write();
+                //
+                // The NAMED database rides on the SAME intent, because {@see resolvePool()} resolves both
+                // together: it picks the named connection's reader/writer PAIR first, then the
+                // write/sticky split within it. `null` ⇒ the default connection, i.e. the intent every
+                // single-DB statement has always carried.
+                $intent = new StatementIntent($write !== null, $db);
                 if ($write !== null && !self::required($write, 'returning', "the 'write' mode", 'bool')) {
                     $info = run($active, $sql, $params, $intent);
                     // The affected-write summary row (uniform list output shape — TS `writeSummary`).

@@ -42,7 +42,7 @@ final class RelationGuardTest extends TestCase
             'params' => [],
         ];
         if ($guard !== null) {
-            $ports['opts'] = (object) ['write' => null, 'whereDynamic' => null, 'guard' => $guard];
+            $ports['opts'] = (object) ['db' => null, 'write' => null, 'whereDynamic' => null, 'guard' => $guard];
         }
         return ($this->executeSQL)($ports, ['nodeId' => 'n0', 'component' => 'executeSQL']);
     }

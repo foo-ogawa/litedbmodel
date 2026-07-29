@@ -55,6 +55,19 @@ export interface ModelOptions {
 
   /** DEFAULT_GROUP: Returns Column(s) or string for default grouping */
   group?: () => Column | Column[] | string;
+
+  /**
+   * CONNECTION: the NAME of the database this model lives in (multi-DB). Absent ⇒ the default
+   * connection. This is the SAME authority v1 gives the model — a v1 model picks its database by
+   * extending a `DBModel.createDBBase(config)` base class, whose handler owns the connection, and a
+   * relation is batch-loaded on the TARGET model's (`LazyRelation.ts:236`
+   * `TargetClass.getDriverType()`). Naming it makes that authority READABLE at emit time, which is
+   * what the codegen path needs: the emitter bakes the name onto every statement of every endpoint
+   * declared over this model, and onto the child fetch of every relation whose TARGET is this model,
+   * so a per-language runtime routes the statement to the pooled driver registered under it
+   * (`ConnectionRegistry`). Unregistered ⇒ LOUD, never a silent run against the wrong database.
+   */
+  connection?: string;
 }
 
 // ============================================

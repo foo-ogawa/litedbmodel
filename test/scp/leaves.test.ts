@@ -186,7 +186,7 @@ test('the leaf handler unboxes the guard port fail-closed (bc int is a BigInt; a
   const handler = leafHandlers({ exec: contextForConnection(recordingConn(calls)), dialect: 'sqlite' }).executeSQL;
   // The generated module hands the control facts as the ONE `opts` record (#193), never as loose ports.
   const ports = (guard: unknown): Record<string, Value> =>
-    ({ sql: 'SELECT id, author_id FROM posts', params: [], opts: { write: null, whereDynamic: null, guard } }) as unknown as Record<string, Value>;
+    ({ sql: 'SELECT id, author_id FROM posts', params: [], opts: { db: null, write: null, whereDynamic: null, guard } }) as unknown as Record<string, Value>;
 
   // The cap arrives in bc's `int` value model — a BigInt on the TS plane — and must still compare and
   // REPORT as the `number` the error contract declares.
@@ -235,21 +235,21 @@ test('a MISSING or MISTYPED field of a present struct is loud in every position 
   expect(() => run({ sql: SQL, opts: null })).toThrow(/payload is missing its 'params' field/);
 
   // Each field of a PRESENT control record — dropping one used to read as its default.
-  expect(() => run({ sql: SQL, params: [], opts: { whereDynamic: null, guard: null } })).toThrow(
+  expect(() => run({ sql: SQL, params: [], opts: { db: null, whereDynamic: null, guard: null } })).toThrow(
     /control record is missing its 'write' field/,
   );
-  expect(() => run({ sql: SQL, params: [], opts: { write: null, guard: null } })).toThrow(
+  expect(() => run({ sql: SQL, params: [], opts: { db: null, write: null, guard: null } })).toThrow(
     /control record is missing its 'whereDynamic' field/,
   );
-  expect(() => run({ sql: SQL, params: [], opts: { write: null, whereDynamic: null } })).toThrow(
+  expect(() => run({ sql: SQL, params: [], opts: { db: null, write: null, whereDynamic: null } })).toThrow(
     /control record is missing its 'guard' field/,
   );
 
   // …the fields NESTED in the two concrete control structs…
-  expect(() => run({ sql: SQL, params: [], opts: { write: {}, whereDynamic: null, guard: null } })).toThrow(
+  expect(() => run({ sql: SQL, params: [], opts: { db: null, write: {}, whereDynamic: null, guard: null } })).toThrow(
     /'write' mode is missing its 'returning' field/,
   );
-  expect(() => run({ sql: SQL, params: [], opts: { write: null, whereDynamic: null, guard: { limit: 2n, relation: 'posts' } } })).toThrow(
+  expect(() => run({ sql: SQL, params: [], opts: { db: null, write: null, whereDynamic: null, guard: { limit: 2n, relation: 'posts' } } })).toThrow(
     /'guard' cap is missing its 'model' field/,
   );
 
@@ -257,8 +257,8 @@ test('a MISSING or MISTYPED field of a present struct is loud in every position 
   // like every other: without `skipped` the statement applies a predicate the call SKIPPED, without
   // `sql` the predicate is erased entirely, and without `params` a value binds where none belongs —
   // all three used to run SILENTLY and return DIFFERENT ROWS.
-  const plan = (frag: unknown): unknown => ({ sql: SQL, params: [], opts: { write: null, whereDynamic: { frags: [frag] }, guard: null } });
-  expect(() => run({ sql: SQL, params: [], opts: { write: null, whereDynamic: {}, guard: null } })).toThrow(
+  const plan = (frag: unknown): unknown => ({ sql: SQL, params: [], opts: { db: null, write: null, whereDynamic: { frags: [frag] }, guard: null } });
+  expect(() => run({ sql: SQL, params: [], opts: { db: null, write: null, whereDynamic: {}, guard: null } })).toThrow(
     /'whereDynamic' plan is missing its 'frags' field/,
   );
   expect(() => run(plan({ sql: 'v = ?', params: ['zzz'] }))).toThrow(/fragment is missing its 'skipped' field/);
@@ -275,7 +275,7 @@ test('a MISSING or MISTYPED field of a present struct is loud in every position 
   expect(() => run({ sql: 42, params: [] })).toThrow(/payload's 'sql' must be string/);
   expect(() => run({ sql: SQL, params: 'x' })).toThrow(/payload's 'params' must be list/);
   expect(() => run({ sql: SQL, params: [], opts: 'nope' })).toThrow(/payload's 'opts' must be record\|null/);
-  const badOpt = (kw: Record<string, unknown>): unknown => ({ sql: SQL, params: [], opts: { write: null, whereDynamic: null, guard: null, ...kw } });
+  const badOpt = (kw: Record<string, unknown>): unknown => ({ sql: SQL, params: [], opts: { db: null, write: null, whereDynamic: null, guard: null, ...kw } });
   expect(() => run(badOpt({ write: 'nope' }))).toThrow(/control record's 'write' must be record\|null/);
   expect(() => run(badOpt({ write: { returning: 'nope' } }))).toThrow(/'write' mode's 'returning' must be bool/);
   expect(() => run(badOpt({ write: { returning: 0 } }))).toThrow(/'write' mode's 'returning' must be bool/);
@@ -294,10 +294,10 @@ test('a MISSING or MISTYPED field of a present struct is loud in every position 
   // The LEGAL absences stay silent: the omitted record is a plain read, and a null FIELD is how an
   // absent write mode / plan / cap is spelled. Neither may be turned into a failure by the above.
   expect(handler({ sql: SQL, params: [] } as unknown as Record<string, Value>, ctx)).toEqual({ ok: expect.any(Array) });
-  const allNull = { sql: SQL, params: [], opts: { write: null, whereDynamic: null, guard: null } };
+  const allNull = { sql: SQL, params: [], opts: { db: null, write: null, whereDynamic: null, guard: null } };
   expect(handler(allNull as unknown as Record<string, Value>, ctx)).toEqual({ ok: expect.any(Array) });
   // A guard that IS spelled still enforces the cap (the fail-closed reads did not disarm it).
-  expect(() => run({ sql: SQL, params: [], opts: { write: null, whereDynamic: null, guard: cap } })).toThrow(LimitExceededError);
+  expect(() => run({ sql: SQL, params: [], opts: { db: null, write: null, whereDynamic: null, guard: cap } })).toThrow(LimitExceededError);
   // …and a WELL-FORMED plan still assembles: the surviving fragment reaches the statement, the skipped
   // one does not (the unbox reads every fragment, it does not change which ones apply).
   calls.length = 0;
@@ -339,7 +339,7 @@ test('#207 — the RUN MODE, not the seam branch, picks the pool: a RETURNING wr
   const handler = leafHandlersAsync({ execAsync: new PooledAsyncContext(routing), dialect: 'postgres' }).executeSQL;
   const ctx = { nodeId: 'n0', component: 'executeSQL' };
   const call = (write: unknown): Promise<unknown> =>
-    handler({ sql: 'INSERT INTO users (name) VALUES (?) RETURNING id', params: ['A'], opts: { write, whereDynamic: null, guard: null } } as unknown as Record<string, Value>, ctx);
+    handler({ sql: 'INSERT INTO users (name) VALUES (?) RETURNING id', params: ['A'], opts: { db: null, write, whereDynamic: null, guard: null } } as unknown as Record<string, Value>, ctx);
 
   // A plain READ (the bounded payload that omits `opts` entirely) → the READER.
   await handler({ sql: 'SELECT id FROM users', params: [] } as unknown as Record<string, Value>, ctx);
@@ -393,7 +393,7 @@ test('#215 — a covered transaction opens on the WRITER, pins its body, and is 
   const read = (): Promise<unknown> => handler({ sql: 'SELECT id FROM users', params: [] } as unknown as Record<string, Value>, leafCtx);
   const write = (): Promise<unknown> =>
     handler(
-      { sql: 'INSERT INTO users (name) VALUES (?)', params: ['A'], opts: { write: { returning: false }, whereDynamic: null, guard: null } } as unknown as Record<string, Value>,
+      { sql: 'INSERT INTO users (name) VALUES (?)', params: ['A'], opts: { db: null, write: { returning: false }, whereDynamic: null, guard: null } } as unknown as Record<string, Value>,
       leafCtx,
     );
 
@@ -470,4 +470,59 @@ test('#213 — a MISSING or MISTYPED pluck / group port is loud, and names the p
   expect(handlers.pluck(pluckPorts({}), ctx)).toEqual({ ok: [1, 2] });
   expect(handlers.group(groupPorts({}), ctx)).toEqual({ ok: [{ id: 1, kids: kids }, { id: 2, kids: [] }] });
   expect(handlers.group(groupPorts({ single: true }), ctx)).toEqual({ ok: [{ id: 1, kids: kids[0] }, { id: 2, kids: null }] });
+});
+
+// ── #217 named-DB: the statement's own connection reaches the router, or is LOUD ─────────────────
+
+test('#217 — the leaf carries `opts.db` onto the StatementIntent, so the ROUTER sees the named database', async () => {
+  // The wire half of the lowering, on the async (routed) plane: two registered connections, each its own
+  // pool, and the leaf's `db` field is the ONLY thing that decides which one serves the statement. A
+  // recording pool per connection makes the choice observable — the offline twin of the live cross-DB
+  // gate (`test/integration/NamedDbCodegen.test.ts`).
+  const served: string[] = [];
+  const poolFor = (label: string): AsyncConnectionPool => ({
+    async acquire(): Promise<AsyncConnection> {
+      served.push(label);
+      return {
+        execute: () => Promise.resolve([{ who: label }] as Rows),
+        run: () => Promise.resolve({ changes: 1, lastInsertRowid: 0 } as RunInfo),
+      };
+    },
+    release: () => Promise.resolve(),
+  });
+  const a = poolFor('A');
+  const b = poolFor('B');
+  const registry = new ConnectionRegistry(new Map([
+    ['default', { reader: a, writer: a }],
+    ['B', { reader: b, writer: b }],
+  ]));
+  const execAsync = new PooledAsyncContext({ registry, sticky: new WriterStickyClock({ useWriterAfterTransaction: false }) });
+  const handler = leafHandlersAsync({ execAsync, dialect: 'postgres' }).executeSQL;
+  const at = { nodeId: 'n0', component: 'executeSQL' };
+  const call = (db: string | null): Promise<{ ok?: Value }> =>
+    handler({ sql: 'SELECT 1', params: [], opts: { db, write: null, whereDynamic: null, guard: null } } as unknown as Record<string, Value>, at) as Promise<{ ok?: Value }>;
+
+  // NAMED ⇒ B's pool served it, and the row proves it came from there (not merely that B was acquired).
+  expect((await call('B')).ok).toEqual([{ who: 'B' }]);
+  // NULL (the default connection — and the pre-#217 lowering) ⇒ the DEFAULT pool. This is the negative
+  // control in place: with the name dropped, the SAME statement lands on a DIFFERENT database.
+  expect((await call(null)).ok).toEqual([{ who: 'A' }]);
+  expect(served).toEqual(['B', 'A']);
+  // An UNREGISTERED name is LOUD, never a silent fall back to the default.
+  await expect((async () => call('ghost'))()).rejects.toThrow(/no connection registered under name 'ghost'/);
+});
+
+test('#217 — a NON-ROUTED (single-connection) context REJECTS a named statement instead of running it', () => {
+  // The seam's own fail-closed half: `contextForConnection` holds ONE connection and no registry, so a
+  // statement naming another database cannot be honored. Running it on that one connection anyway is the
+  // silent wrong-database execution the named-DB lowering exists to prevent — every single-DB deployment
+  // is precisely where it would go unnoticed.
+  const calls: Call[] = [];
+  const ctx: LeafContext = { exec: contextForConnection(recordingConn(calls)), dialect: 'sqlite' };
+  expect(() => executeSQL({ sql: 'SELECT id, name FROM users', params: [], write: null, db: 'analytics' }, ctx)).toThrow(
+    /a statement names connection 'analytics'.*no connection registry/s,
+  );
+  expect(calls).toEqual([]); // it never reached the database
+  // The DEFAULT connection is the single-connection case itself and still runs.
+  expect(executeSQL({ sql: 'SELECT id, name FROM users', params: [], write: null, db: null }, ctx).length).toBe(2);
 });

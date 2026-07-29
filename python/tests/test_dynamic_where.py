@@ -22,6 +22,7 @@ from litedbmodel_runtime import (
     RoutingConfig,
     WriterStickyClock,
     reader_writer_pair,
+    single_pool_pair,
 )
 from litedbmodel_runtime.connection_routing import ConnectionPool
 from litedbmodel_runtime.driver import SqliteDriver
@@ -49,7 +50,7 @@ def read(execute_sql, frags):
             "sql": BASE_SQL,
             "params": [1, 2],
             # Everything besides the statement rides in the ONE ``opts`` control record (#193).
-            "opts": {"write": None, "whereDynamic": {"frags": frags}, "guard": None},
+            "opts": {"db": None, "write": None, "whereDynamic": {"frags": frags}, "guard": None},
         },
         CTX,
     )["ok"]
@@ -91,7 +92,7 @@ def _plan(frag):
     return {
         "sql": "SELECT id, v FROM t ORDER BY id",
         "params": [],
-        "opts": {"write": None, "whereDynamic": {"frags": [frag]}, "guard": None},
+        "opts": {"db": None, "write": None, "whereDynamic": {"frags": [frag]}, "guard": None},
     }
 
 
@@ -100,7 +101,7 @@ def _opts(**kw):
     return {
         "sql": "SELECT id, v FROM t ORDER BY id",
         "params": [],
-        "opts": {"write": None, "whereDynamic": None, "guard": None, **kw},
+        "opts": {"db": None, "write": None, "whereDynamic": None, "guard": None, **kw},
     }
 
 
@@ -112,16 +113,17 @@ def test_a_missing_or_mistyped_field_of_a_present_struct_is_loud(execute_sql):
     cases = [
         ({"params": []}, "'sql' field"),
         ({"sql": sql}, "'params' field"),
-        ({"sql": sql, "params": [], "opts": {"whereDynamic": None, "guard": None}}, "'write' field"),
-        ({"sql": sql, "params": [], "opts": {"write": None, "guard": None}}, "'whereDynamic' field"),
-        ({"sql": sql, "params": [], "opts": {"write": None, "whereDynamic": None}}, "'guard' field"),
-        ({"sql": sql, "params": [], "opts": {"write": {}, "whereDynamic": None, "guard": None}}, "'returning' field"),
+        ({"sql": sql, "params": [], "opts": {"guard": None, "whereDynamic": None, "write": None}}, "'db' field"),
+        ({"sql": sql, "params": [], "opts": {"db": None, "whereDynamic": None, "guard": None}}, "'write' field"),
+        ({"sql": sql, "params": [], "opts": {"db": None, "write": None, "guard": None}}, "'whereDynamic' field"),
+        ({"sql": sql, "params": [], "opts": {"db": None, "write": None, "whereDynamic": None}}, "'guard' field"),
+        ({"sql": sql, "params": [], "opts": {"db": None, "write": {}, "whereDynamic": None, "guard": None}}, "'returning' field"),
         (
-            {"sql": sql, "params": [], "opts": {"write": None, "whereDynamic": None, "guard": {"limit": 2, "relation": "things"}}},
+            {"sql": sql, "params": [], "opts": {"db": None, "write": None, "whereDynamic": None, "guard": {"limit": 2, "relation": "things"}}},
             "'model' field",
         ),
         # …and the PLAN and its FRAGMENTS, one level further down (#209).
-        ({"sql": sql, "params": [], "opts": {"write": None, "whereDynamic": {}, "guard": None}}, "'frags' field"),
+        ({"sql": sql, "params": [], "opts": {"db": None, "write": None, "whereDynamic": {}, "guard": None}}, "'frags' field"),
         (_plan({"sql": "v = ?", "params": ["zzz"]}), "'skipped' field"),
         (_plan({"skipped": False, "params": ["zzz"]}), "'sql' field"),
         (_plan({"skipped": False, "sql": "v = ?"}), "'params' field"),
@@ -158,7 +160,7 @@ def test_a_missing_or_mistyped_field_of_a_present_struct_is_loud(execute_sql):
     # The LEGAL absences stay silent: an omitted record is a plain read, and a null FIELD is how an
     # absent write mode / plan / cap is spelled.
     assert len(execute_sql({"sql": sql, "params": []}, CTX)["ok"]) == 3
-    all_null = {"write": None, "whereDynamic": None, "guard": None}
+    all_null = {"db": None, "write": None, "whereDynamic": None, "guard": None}
     assert len(execute_sql({"sql": sql, "params": [], "opts": all_null}, CTX)["ok"]) == 3
     # …and a cap that IS spelled still trips (the fail-closed reads did not disarm it).
     with pytest.raises(LimitExceededError):
@@ -219,7 +221,7 @@ def test_the_run_mode_not_the_seam_branch_picks_the_pool():
         {
             "sql": "INSERT INTO users (name) VALUES (?) RETURNING id",
             "params": ["A"],
-            "opts": {"write": {"returning": True}, "whereDynamic": None, "guard": None},
+            "opts": {"db": None, "write": {"returning": True}, "whereDynamic": None, "guard": None},
         },
         CTX,
     )
@@ -232,7 +234,7 @@ def test_the_run_mode_not_the_seam_branch_picks_the_pool():
         {
             "sql": "INSERT INTO users (name) VALUES (?)",
             "params": ["B"],
-            "opts": {"write": {"returning": False}, "whereDynamic": None, "guard": None},
+            "opts": {"db": None, "write": {"returning": False}, "whereDynamic": None, "guard": None},
         },
         CTX,
     )
@@ -347,7 +349,7 @@ def test_a_covered_transaction_opens_on_the_writer_and_is_seam_visible():
                 {
                     "sql": "INSERT INTO users (name) VALUES (?)",
                     "params": ["A"],
-                    "opts": {"write": {"returning": False}, "whereDynamic": None, "guard": None},
+                    "opts": {"db": None, "write": {"returning": False}, "whereDynamic": None, "guard": None},
                 },
                 CTX,
             )
@@ -368,3 +370,80 @@ def test_a_covered_transaction_opens_on_the_writer_and_is_seam_visible():
         "COMMIT",
         "SELECT id FROM users",
     ]
+
+
+# ── #217 named-DB: the statement's own connection reaches the router, or is LOUD ──────────────────
+#
+# The ``db`` field of the control record is the ONLY thing that decides WHICH registered connection
+# serves the statement. A single-DB fixture cannot tell a honored connection name from a dropped one —
+# which is exactly why the defect survived the single-DB conformance and livedb suites — so this gate
+# registers TWO connections over TWO SEPARATE in-memory sqlite databases whose tables are DISJOINT:
+# ``named_users`` exists ONLY in "B". A statement that lands on the wrong connection therefore does not
+# return the wrong rows, it cannot see a table at all.
+#
+# The python leg of "the same behaviour in all five languages": the twin of the TS ``leaves.test.ts``
+# #217 tests, the go ``TestExecuteSQL_NamedDBRoutesTheStatement``, the rust
+# ``named_db_routes_the_statement`` and the php ``NamedDbRoutingTest``.
+
+
+def _named_db_handler():
+    a = sqlite3.connect(":memory:")
+    a.execute("CREATE TABLE only_in_a (id INTEGER PRIMARY KEY)")
+    b = sqlite3.connect(":memory:")
+    b.execute("CREATE TABLE named_users (id INTEGER PRIMARY KEY, name TEXT)")
+    b.executemany("INSERT INTO named_users VALUES (?, ?)", [(1, "Ada"), (2, "Bob")])
+    log: list = []
+    routing = RoutingConfig(
+        ConnectionRegistry.from_default(single_pool_pair(_RecordingPool("A", a, log)))
+        .add("B", single_pool_pair(_RecordingPool("B", b, log)))
+        .build(),
+        WriterStickyClock(use_writer_after_transaction=False),
+    )
+    handler = make_handlers(ExecutionContext(None, MiddlewareChain(), routing=routing), "sqlite")["executeSQL"]
+
+    def read(db):
+        return handler(
+            {
+                "sql": "SELECT id, name FROM named_users ORDER BY id",
+                "params": [],
+                "opts": {"db": db, "write": None, "whereDynamic": None, "guard": None},
+            },
+            CTX,
+        )
+
+    return read, log
+
+
+def test_named_db_routes_the_statement():
+    read, log = _named_db_handler()
+    # NAMED ⇒ B served it. The rows are unforgeable: `named_users` exists in NO other registered db.
+    assert read("B")["ok"] == [{"id": 1, "name": "Ada"}, {"id": 2, "name": "Bob"}]
+    assert log == ["B"]
+    # NEGATIVE CONTROL — the name DROPPED (``None``, which is exactly the pre-#217 lowering) sends the
+    # SAME statement to the DEFAULT connection, where the table does not exist. Measured, not reasoned:
+    # this is the failure a cross-DB relation produced before the emitter lowered the name.
+    with pytest.raises(Exception) as ei:
+        read(None)
+    assert "named_users" in str(ei.value)
+    assert log == ["B", "A"]
+    # An UNREGISTERED name is LOUD, never a silent fall back to the default.
+    with pytest.raises(ValueError, match="no connection registered under name 'ghost'"):
+        read("ghost")
+
+
+def test_named_db_on_a_non_routed_context_is_loud():
+    # A named statement on a single-driver ctx has no registry to resolve the name against, so it must be
+    # LOUD. Running it on the primary driver anyway is the silent wrong-database execution named-DB
+    # lowering exists to prevent — and a single-DB deployment is exactly where it would go unnoticed.
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE t (id INTEGER PRIMARY KEY)")
+    handler = make_handlers(SqliteDriver(conn), "sqlite")["executeSQL"]
+    ports = lambda db: {  # noqa: E731 — one expression, read twice
+        "sql": "SELECT id FROM t",
+        "params": [],
+        "opts": {"db": db, "write": None, "whereDynamic": None, "guard": None},
+    }
+    with pytest.raises(ValueError, match="a statement names connection 'analytics'"):
+        handler(ports("analytics"), CTX)
+    # The DEFAULT connection is the single-driver case itself and still runs.
+    assert handler(ports(None), CTX)["ok"] == []

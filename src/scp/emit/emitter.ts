@@ -28,6 +28,7 @@
  *  | row types                    | `makesql/outtype.deriveReadRow` over the model's `@column` SoT   |
  *  | column SQL types             | `decorator-adapter.deriveModelColumns` / `modelColumnResolver`   |
  *  | relation declarations        | `decorator-adapter.relationDeclOf`                               |
+ *  | the statement's NAMED db     | `decorator-adapter.connectionOf` (a relation's: the op's own)     |
  *  | find hard-limit cap          | `limit-config.resolveFindHardLimit`                              |
  *  | the leaf catalog             | `leaf-transport.Db` (imported by the emitted module)             |
  *
@@ -70,6 +71,7 @@ import { inferPgArrayType } from '../makesql/compile-relation';
 import { compileRelationOp, parentKeyCols, relationGuard, targetKeyCols, type RelationDecl } from '../relation';
 import { resolveFindHardLimit } from '../limit-config';
 import {
+  connectionOf,
   deriveModelColumns,
   modelColumnResolver,
   relationDeclOf,
@@ -237,6 +239,21 @@ class EmitContext {
     return tsScalar(sqlTypeToBcScalar(this.sqlTypeOf(model, column)));
   }
 
+  /**
+   * The NAMED connection every statement of an endpoint declared over `model` runs on — read from the
+   * model, the ONE authority ({@link connectionOf}), and handed to {@link execOptions} as its `db`
+   * field. `{}` ⇒ the DEFAULT connection, which leaves a bounded read's option record unspelled
+   * entirely (native-clean, and byte-unchanged for every single-DB module).
+   *
+   * A RELATION's child fetch does NOT come through here: its connection is the TARGET model's, which
+   * `relationDeclOf` already resolved onto the compiled op (`RelationOp.connection`) — the emitter
+   * consumes that rather than re-deriving it from a second model handle.
+   */
+  private dbOf(model: ModelClassLike): { readonly db?: string } {
+    const db = connectionOf(model);
+    return db !== undefined ? { db } : {};
+  }
+
   // ── methods ────────────────────────────────────────────────────────────────────────────────
 
   method(name: string, endpoint: Endpoint): Method {
@@ -343,9 +360,10 @@ class EmitContext {
       ...(endpoint.lock === 'update' ? { forUpdate: true } : endpoint.lock === 'share' ? { forShare: true } : {}),
     } satisfies SelectDesc);
 
-    const call = `${quote(compiled.sql)}, [${compiled.params.map(renderSlot).join(', ')}]${execOptions(
-      optional.length > 0 ? { whereDynamic: this.dynamicWherePlan(model, optional) } : {},
-    )}`;
+    const call = `${quote(compiled.sql)}, [${compiled.params.map(renderSlot).join(', ')}]${execOptions({
+      ...this.dbOf(model),
+      ...(optional.length > 0 ? { whereDynamic: this.dynamicWherePlan(model, optional) } : {}),
+    })}`;
 
     const rowObj = objOf(deriveReadRow(table, projection, readResolve, `endpoint '${name}'`).outType, name);
     const selections = normalizeSelections(endpoint.with ?? []);
@@ -422,7 +440,8 @@ class EmitContext {
       // baked onto the child fetch so the `executeSQL` transport asserts the RAW child row count — the
       // only point they are visible, since `group` receives an already-nested graph. A relation batch
       // never carries a dynamic WHERE (its SQL is fully static), and it says so with the `whereDynamic:
-      // null` FIELD of the option record — an uncapped batch carries no record at all.
+      // null` FIELD of the option record — an uncapped batch on the DEFAULT connection carries no
+      // record at all.
       const guard = relationGuard(op);
       // The guard rides as a CONCRETE `CapGuard` struct (leaf-transport), so the native emitters build
       // it directly: `limit` is an `Int` LITERAL (a plain `number` would emit as a float and the wire
@@ -431,8 +450,15 @@ class EmitContext {
       // module (#208); `relationGuard` is total in `model` so there is nothing to branch on.
       const guardExpr =
         guard !== null ? `{ limit: ${guard.limit} as Int, model: ${quote(guard.model)}, relation: ${quote(guard.relation)} }` : undefined;
+      // CROSS-DB (V0 R1): the batch runs on the TARGET model's connection, which `relationDeclOf`
+      // already resolved onto the compiled op — v1 `LazyRelation.ts:236` runs a relation on
+      // `TargetClass.getDriverType()`'s driver, so a relation whose target lives in another database is
+      // fetched THERE and not against the parent's (which would read a missing / same-named table).
       lines.push(
-        `const ${childVar}: WireValue[] = Db.executeSQL(${quote(op.sql)}, [${keysVar}]${execOptions(guardExpr !== undefined ? { guard: guardExpr } : {})});`,
+        `const ${childVar}: WireValue[] = Db.executeSQL(${quote(op.sql)}, [${keysVar}]${execOptions({
+          ...(op.connection !== undefined ? { db: op.connection } : {}),
+          ...(guardExpr !== undefined ? { guard: guardExpr } : {}),
+        })});`,
       );
       let childRows = childVar;
       let childObj = objOf(
@@ -502,7 +528,7 @@ class EmitContext {
       params,
       returnType: `${rowType}[]`,
       lines: [
-        `const ${out}: ${rowType}[] = Db.executeSQL(${quote(op.sql)}, [${op.params.map(renderSlot).join(', ')}]${execOptions({ write: { returning: returning !== undefined } })}) as ${rowType}[];`,
+        `const ${out}: ${rowType}[] = Db.executeSQL(${quote(op.sql)}, [${op.params.map(renderSlot).join(', ')}]${execOptions({ ...this.dbOf(model), write: { returning: returning !== undefined } })}) as ${rowType}[];`,
         `return ${out};`,
       ],
     };
@@ -595,7 +621,7 @@ class EmitContext {
       params,
       returnType: `${rowType}[]`,
       lines: [
-        `const ${out}: ${rowType}[] = Db.executeSQL(${quote(op.sql)}, [${slots.join(', ')}]${execOptions({ write: { returning: endpoint.returning !== undefined } })}) as ${rowType}[];`,
+        `const ${out}: ${rowType}[] = Db.executeSQL(${quote(op.sql)}, [${slots.join(', ')}]${execOptions({ ...this.dbOf(model), write: { returning: endpoint.returning !== undefined } })}) as ${rowType}[];`,
         `return ${out};`,
       ],
     };
@@ -624,7 +650,7 @@ class EmitContext {
       params,
       returnType: `${rowType}[]`,
       lines: [
-        `const ${out}: ${rowType}[] = Db.executeSQL(${quote(op.sql)}, [${op.params.map(renderSlot).join(', ')}]${execOptions({ write: { returning: endpoint.returning !== undefined } })}) as ${rowType}[];`,
+        `const ${out}: ${rowType}[] = Db.executeSQL(${quote(op.sql)}, [${op.params.map(renderSlot).join(', ')}]${execOptions({ ...this.dbOf(model), write: { returning: endpoint.returning !== undefined } })}) as ${rowType}[];`,
         `return ${out};`,
       ],
     };
@@ -871,16 +897,19 @@ function isOptional(p: Predicate): p is OptionalPredicate {
  * Render the OPTIONAL `opts` argument of `Db.executeSQL` — the ONE place the option record
  * ({@link import('../leaf-transport').ExecOptions}) is spelled, for every emitted statement of every op.
  *
- * A statement that carries NO option at all (a bounded read, an uncapped relation child) renders
- * NOTHING: the port is omitted and the payload stays `sql` + `params` (native-clean). Any other
- * statement spells the WHOLE record — bc types a port by the literal wired into it and rejects a
- * partial one — so each absent fact is the `null` VALUE of its own NAMED field. That is what removed
- * the positional filler #193 is about: nothing has to be passed to reach the field after it.
+ * A statement that carries NO option at all (a bounded read of a DEFAULT-connection model, an uncapped
+ * relation child of one) renders NOTHING: the port is omitted and the payload stays `sql` + `params`
+ * (native-clean) — which is why a single-DB deployment's modules are byte-unchanged by named-DB
+ * routing. Any other statement spells the WHOLE record — bc types a port by the literal wired into it
+ * and rejects a partial one — so each absent fact is the `null` VALUE of its own NAMED field. That is
+ * what removed the positional filler #193 is about: nothing has to be passed to reach the field after it.
  *
  * `write` is ONE field carrying the write's own `returning` (the `WriteMode` struct), so "returns rows
  * but is not a write" is not a state the ABI can hold — three statement shapes, three values.
  */
 function execOptions(o: {
+  /** The NAMED connection the statement runs on (absent ⇒ the DEFAULT connection). */
+  readonly db?: string;
   /** The statement WRITES, and whether that write yields ROWS (absent ⇒ a read). */
   readonly write?: { readonly returning: boolean };
   /** The rendered DYNAMIC (SKIP) plan expression (absent ⇒ the read declares no optional predicate). */
@@ -888,9 +917,9 @@ function execOptions(o: {
   /** The rendered relation cap expression (absent ⇒ the fetch is uncapped). */
   readonly guard?: string;
 }): string {
-  if (o.write === undefined && o.whereDynamic === undefined && o.guard === undefined) return '';
+  if (o.db === undefined && o.write === undefined && o.whereDynamic === undefined && o.guard === undefined) return '';
   const write = o.write === undefined ? 'null' : `{ returning: ${o.write.returning} }`;
-  return `, { write: ${write}, whereDynamic: ${o.whereDynamic ?? 'null'}, guard: ${o.guard ?? 'null'} }`;
+  return `, { db: ${o.db === undefined ? 'null' : quote(o.db)}, write: ${write}, whereDynamic: ${o.whereDynamic ?? 'null'}, guard: ${o.guard ?? 'null'} }`;
 }
 
 /**

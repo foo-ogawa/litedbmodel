@@ -409,6 +409,27 @@ final class ReaderWriterPools
 const DEFAULT_CONNECTION = 'default';
 
 /**
+ * Reject a statement that NAMES a database on a context that holds NO connection registry (the
+ * single-connection {@see ExecutionContext}). The companion of {@see ConnectionRegistry::pairFor()}'s
+ * unknown-name throw, and for the same reason: an unresolvable name must be LOUD, because the
+ * alternative is running the statement against whatever single connection the context happens to hold —
+ * a DIFFERENT database than the statement's model declares (#217). `null` (the default connection) is
+ * the single-connection case itself and passes. Mirrors the TS `assertRoutableNamedDb` / go
+ * `namedDBUnroutable` / rust + python `assert_routable_named_db`.
+ */
+function assertRoutableNamedDb(?string $db, string $contextDescription): void
+{
+    if ($db === null || $db === DEFAULT_CONNECTION) {
+        return;
+    }
+    throw new \RuntimeException(
+        "scp connection routing: a statement names connection '$db', but it is executing on "
+        . "$contextDescription — there is no connection registry to resolve the name against. Build the "
+        . 'context from a RoutingConfig (setConfig/ConnectionRegistry), or drop the connection tag on the model.'
+    );
+}
+
+/**
  * The multi-DB connection registry (C2): a map from a connection NAME → its {@see ReaderWriterPools}.
  * The routing ctx selects the pair by `intent.db` (the connection name the bundle/model metadata
  * carries — decorator-free; Phase F wires decorators), falling back to {@see DEFAULT_CONNECTION} when

@@ -426,6 +426,13 @@ func (c *ExecutionContext) ConnectionFor(intent StatementIntent) Connection {
 			Msg: "scp exec-context: this context has no connection to run a statement on — it carries " +
 				"neither a routing config nor a primary db. Build it with ContextForDB/ContextForRouting."}}
 	}
+	// A statement that NAMES a database has nowhere to go on a single-primary-db ctx (there is no
+	// registry to resolve the name against), so it is LOUD — exactly as an unregistered name is on a
+	// routed ctx ([ConnectionRegistry.PairFor]). Running it on the primary db instead would execute it
+	// against a DIFFERENT database than its model declares, silently (#217).
+	if err := namedDBUnroutable(intent.DB, "a single-primary-db (non-routed) execution context"); err != nil {
+		return failingConnection{err: err}
+	}
 	return dbConnection{db: c.db}
 }
 

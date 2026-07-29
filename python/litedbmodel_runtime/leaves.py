@@ -40,9 +40,8 @@ from typing import Any, Callable, Dict, List, Mapping, Sequence, Tuple, Union
 from .driver import Driver
 from .errors import LimitExceededError, SqlFailure
 from .exec_context import (
-    READ_INTENT,
-    WRITE_INTENT,
     ExecutionContext,
+    StatementIntent,
     as_context,
     current_context,
 )
@@ -244,6 +243,11 @@ def make_handlers(driver_or_ctx: Union[Driver, ExecutionContext], dialect: str) 
         # nothing else). Once the port IS there it is read exactly like every field below — its own
         # ``None`` is the same plain read, anything that is not the control record is an ABI break.
         opts = _required(ports, "opts", _PAYLOAD, "record|null") if "opts" in ports else None
+        # The NAMED connection (database) this statement runs on — the only control field that is a bare
+        # nullable STRING rather than a struct. ``None`` ⇒ the DEFAULT connection; an ABSENT KEY is LOUD
+        # like every other field of a record that IS present, because a name read as "no name" runs the
+        # statement against a DIFFERENT database than its model declares (#217).
+        db = None if opts is None else _required(opts, "db", _RECORD, "string|null")
         # The DYNAMIC (SKIP) WHERE is assembled FIRST: the final statement shape is only known here,
         # so the placeholder render must follow it (CLAUDE.md §2).
         # Every FIELD of a record that IS present is required — a missing or mistyped key is an ABI
@@ -269,7 +273,12 @@ def make_handlers(driver_or_ctx: Union[Driver, ExecutionContext], dialect: str) 
             # (:func:`~litedbmodel_runtime.connection_routing.resolve_pool`): a RETURNING write runs on
             # ``seam_execute`` and still belongs on the WRITER. Reading ``returning`` as the intent sent
             # ``INSERT … RETURNING`` to the READ REPLICA (#207).
-            intent = READ_INTENT if write is None else WRITE_INTENT
+            #
+            # The NAMED database rides on the SAME intent, because ``resolve_pool`` resolves both
+            # together: it picks the named connection's reader/writer PAIR first, then the write/sticky
+            # split within it. ``None`` ⇒ the default connection, i.e. the intent every single-DB
+            # statement has always carried.
+            intent = StatementIntent(write is not None, db)
             if write is not None and not _required(write, "returning", "the 'write' mode", "bool"):
                 info = seam_run(active, sql, params, intent)
                 # The affected-write summary row (uniform ``items`` output shape — TS ``writeSummary``).

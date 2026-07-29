@@ -371,6 +371,10 @@ fn parse_where_frag(frag: WireValue) -> Result<DynamicWhereFrag, BehaviorError> 
 /// default is the PLAIN READ the absent port denotes.
 #[derive(Default)]
 struct ExecOptions {
+    /// The NAMED connection (database) the statement runs on — `None` ⇒ the DEFAULT connection. Baked
+    /// at emit from the statement's model (the litedbmodel `connectionOf`), or, for a relation child
+    /// fetch, from the compiled op's TARGET model. It reaches the router as [`StatementIntent::db`].
+    db: Option<String>,
     write: Option<WriteMode>,
     where_frags: Option<Vec<DynamicWhereFrag>>,
     guard: Option<RelationGuard>,
@@ -410,10 +414,24 @@ fn port_exec_options(payload: &mut WireRow) -> Result<ExecOptions, BehaviorError
         },
     };
     Ok(ExecOptions {
+        db: port_named_db(&mut row)?,
         write: port_write_mode(&mut row)?,
         where_frags: port_dynamic_where(&mut row)?,
         guard: port_relation_guard(&mut row)?,
     })
+}
+
+/// Read the `db` field of the control record — the NAMED connection the statement runs on. A wire NULL
+/// ⇒ `None` ⇒ the DEFAULT connection; an ABSENT KEY is LOUD, exactly like every other field of a struct
+/// the generator wrote, because a name read as "no name" runs the statement against a DIFFERENT database
+/// than its model declares (#217). It is the only control field that is a bare nullable STRING rather
+/// than a struct, so it does not go through [`take_opt_row`].
+fn port_named_db(opts: &mut WireRow) -> Result<Option<String>, BehaviorError> {
+    match take_port(opts, "db")? {
+        WireValue::Null => Ok(None),
+        WireValue::Str(s) => Ok(Some(s.into_owned())),
+        other => Err(port_mismatch("db", "string", &other)),
+    }
 }
 
 /// A `{arr:'string'}` port — the ordered key-column TUPLE (`col` / `pk` / `fk`). Every element must be
@@ -553,10 +571,14 @@ fn assemble_dynamic_where(
 /// `returning` (a RETURNING write runs on [`exec_context::execute`]), the CONNECTION by the statement's
 /// own mode. Conflating the two sent `INSERT … RETURNING` to the READ REPLICA (#207). Same rule in all
 /// five languages (TS `prepareSql`, go `ExecuteSQL`).
-fn statement_intent(write: Option<&WriteMode>) -> StatementIntent {
-    match write {
-        Some(_) => StatementIntent::write(),
-        None => StatementIntent::read(),
+///
+/// The NAMED database rides on the SAME intent, because `resolve_pool` resolves both together: it picks
+/// the named connection's reader/writer PAIR first, then the write/sticky split within it. `None` ⇒ the
+/// default connection, i.e. the intent every single-DB statement has always carried.
+fn statement_intent(write: Option<&WriteMode>, db: Option<&str>) -> StatementIntent {
+    StatementIntent {
+        write: write.is_some(),
+        db: db.map(str::to_string),
     }
 }
 
@@ -608,7 +630,7 @@ pub fn execute_sql(mut payload: WireRow) -> Result<WireValue, BehaviorError> {
     // The placeholder style is a CONNECTION property, read off the ctx's driver (the spelling
     // [`Driver::dialect`] documents for this seam).
     let rendered = finalize_sql(&sql, &value_params, ctx.driver().dialect());
-    let intent = statement_intent(opts.write.as_ref());
+    let intent = statement_intent(opts.write.as_ref(), opts.db.as_deref());
     if opts.write.as_ref().is_some_and(|w| !w.returning) {
         let info = exec_context::run(ctx, &rendered, &value_params, &intent)
             .map_err(sql_failure_to_behavior_error)?;
@@ -786,6 +808,7 @@ mod tests {
     // the statement plus its two optional control structs (`WireValue::Null` ⇒ the record's null field,
     // which is how ABSENCE is spelled now that nothing is positional). A plain READ omits the port.
     fn opts(
+        db: WireValue,
         write: WireValue,
         where_dynamic: WireValue,
         guard: WireValue,
@@ -793,6 +816,7 @@ mod tests {
         (
             "opts",
             wrow(&[
+                ("db", db),
                 ("guard", guard),
                 ("whereDynamic", where_dynamic),
                 ("write", write),
@@ -823,7 +847,12 @@ mod tests {
         .unwrap();
         let ins = |id: i64, v: &str| -> Result<(), BehaviorError> {
             execute_sql(payload(vec![
-                opts(write_mode(false), WireValue::Null, WireValue::Null),
+                opts(
+                    WireValue::Null,
+                    write_mode(false),
+                    WireValue::Null,
+                    WireValue::Null,
+                ),
                 (
                     "params",
                     wlist(vec![
@@ -1002,7 +1031,7 @@ mod tests {
                 ),
             ];
             if let Some(g) = guard {
-                ports.push(opts(WireValue::Null, WireValue::Null, g));
+                ports.push(opts(WireValue::Null, WireValue::Null, WireValue::Null, g));
             }
             with_ambient_context(&exec_context::for_driver(&d), || {
                 execute_sql(payload(ports.clone()))
@@ -1073,7 +1102,7 @@ mod tests {
         )]);
         let out = with_ambient_context(&exec_context::for_driver(&d), || {
             execute_sql(payload(vec![
-                opts(WireValue::Null, plan, WireValue::Null),
+                opts(WireValue::Null, WireValue::Null, plan, WireValue::Null),
                 ("params", wlist(vec![])),
                 ("sql", WireValue::Str("SELECT id FROM t ORDER BY id".into())),
             ]))
@@ -1117,6 +1146,7 @@ mod tests {
             let mut p = base();
             p.push(opts(
                 WireValue::Null,
+                WireValue::Null,
                 wrow(&[("frags", wlist(vec![frag]))]),
                 WireValue::Null,
             ));
@@ -1145,6 +1175,25 @@ mod tests {
                 "`params` is absent",
             ),
             (
+                "record without db",
+                vec![
+                    ("params", wlist(vec![])),
+                    (
+                        "sql",
+                        WireValue::Str("SELECT id, v FROM t ORDER BY id".into()),
+                    ),
+                    (
+                        "opts",
+                        wrow(&[
+                            ("guard", WireValue::Null),
+                            ("whereDynamic", WireValue::Null),
+                            ("write", WireValue::Null),
+                        ]),
+                    ),
+                ],
+                "`db` is absent",
+            ),
+            (
                 "record without write",
                 vec![
                     ("params", wlist(vec![])),
@@ -1155,6 +1204,7 @@ mod tests {
                     (
                         "opts",
                         wrow(&[
+                            ("db", WireValue::Null),
                             ("guard", WireValue::Null),
                             ("whereDynamic", WireValue::Null),
                         ]),
@@ -1172,7 +1222,11 @@ mod tests {
                     ),
                     (
                         "opts",
-                        wrow(&[("guard", WireValue::Null), ("write", WireValue::Null)]),
+                        wrow(&[
+                            ("db", WireValue::Null),
+                            ("guard", WireValue::Null),
+                            ("write", WireValue::Null),
+                        ]),
                     ),
                 ],
                 "`whereDynamic` is absent",
@@ -1188,6 +1242,7 @@ mod tests {
                     (
                         "opts",
                         wrow(&[
+                            ("db", WireValue::Null),
                             ("whereDynamic", WireValue::Null),
                             ("write", WireValue::Null),
                         ]),
@@ -1199,7 +1254,12 @@ mod tests {
                 "write mode without returning",
                 {
                     let mut p = base();
-                    p.push(opts(wrow(&[]), WireValue::Null, WireValue::Null));
+                    p.push(opts(
+                        WireValue::Null,
+                        wrow(&[]),
+                        WireValue::Null,
+                        WireValue::Null,
+                    ));
                     p
                 },
                 "`returning` is absent",
@@ -1209,6 +1269,7 @@ mod tests {
                 {
                     let mut p = base();
                     p.push(opts(
+                        WireValue::Null,
                         WireValue::Null,
                         WireValue::Null,
                         wrow(&[
@@ -1231,6 +1292,7 @@ mod tests {
                     p.push(opts(
                         WireValue::Null,
                         WireValue::Null,
+                        WireValue::Null,
                         wrow(&[
                             ("model", WireValue::Str("t".into())),
                             ("relation", WireValue::Str("things".into())),
@@ -1247,6 +1309,7 @@ mod tests {
                     p.push(opts(
                         WireValue::Null,
                         WireValue::Null,
+                        WireValue::Null,
                         wrow(&[
                             ("limit", WireValue::int(2)),
                             ("model", WireValue::Str("t".into())),
@@ -1261,7 +1324,12 @@ mod tests {
                 "plan without frags",
                 {
                     let mut p = base();
-                    p.push(opts(WireValue::Null, wrow(&[]), WireValue::Null));
+                    p.push(opts(
+                        WireValue::Null,
+                        WireValue::Null,
+                        wrow(&[]),
+                        WireValue::Null,
+                    ));
                     p
                 },
                 "`whereDynamic.frags` is absent",
@@ -1334,6 +1402,7 @@ mod tests {
                 {
                     let mut p = base();
                     p.push(opts(
+                        WireValue::Null,
                         WireValue::Str("nope".into()),
                         WireValue::Null,
                         WireValue::Null,
@@ -1347,6 +1416,7 @@ mod tests {
                 {
                     let mut p = base();
                     p.push(opts(
+                        WireValue::Null,
                         wrow(&[("returning", WireValue::Str("nope".into()))]),
                         WireValue::Null,
                         WireValue::Null,
@@ -1361,6 +1431,7 @@ mod tests {
                     let mut p = base();
                     p.push(opts(
                         WireValue::Null,
+                        WireValue::Null,
                         WireValue::Str("nope".into()),
                         WireValue::Null,
                     ));
@@ -1373,6 +1444,7 @@ mod tests {
                 {
                     let mut p = base();
                     p.push(opts(
+                        WireValue::Null,
                         WireValue::Null,
                         wrow(&[("frags", WireValue::Str("nope".into()))]),
                         WireValue::Null,
@@ -1420,6 +1492,7 @@ mod tests {
                     p.push(opts(
                         WireValue::Null,
                         WireValue::Null,
+                        WireValue::Null,
                         WireValue::Str("nope".into()),
                     ));
                     p
@@ -1431,6 +1504,7 @@ mod tests {
                 {
                     let mut p = base();
                     p.push(opts(
+                        WireValue::Null,
                         WireValue::Null,
                         WireValue::Null,
                         wrow(&[
@@ -1450,6 +1524,7 @@ mod tests {
                     p.push(opts(
                         WireValue::Null,
                         WireValue::Null,
+                        WireValue::Null,
                         wrow(&[
                             ("limit", WireValue::int(2)),
                             ("model", WireValue::int(42)),
@@ -1465,6 +1540,7 @@ mod tests {
                 {
                     let mut p = base();
                     p.push(opts(
+                        WireValue::Null,
                         WireValue::Null,
                         WireValue::Null,
                         wrow(&[
@@ -1493,11 +1569,16 @@ mod tests {
         // absent write mode / plan / cap is spelled.
         assert_eq!(items(&run(base()).unwrap()).len(), 3);
         let mut all_null = base();
-        all_null.push(opts(WireValue::Null, WireValue::Null, WireValue::Null));
+        all_null.push(opts(
+            WireValue::Null,
+            WireValue::Null,
+            WireValue::Null,
+            WireValue::Null,
+        ));
         assert_eq!(items(&run(all_null).unwrap()).len(), 3);
         // …and a cap that IS spelled still trips (the fail-closed reads did not disarm it).
         let mut capped = base();
-        capped.push(opts(WireValue::Null, WireValue::Null, cap));
+        capped.push(opts(WireValue::Null, WireValue::Null, WireValue::Null, cap));
         match run(capped) {
             Err(e) => assert_eq!(e.code, "LIMIT_EXCEEDED"),
             Ok(_) => panic!("a relation batch over its cap must still raise"),
@@ -1527,7 +1608,7 @@ mod tests {
         )]);
         let out = with_ambient_context(&exec_context::for_driver(&d), || {
             execute_sql(payload(vec![
-                opts(WireValue::Null, plan, WireValue::Null),
+                opts(WireValue::Null, WireValue::Null, plan, WireValue::Null),
                 ("params", wlist(vec![WireValue::int(1), WireValue::int(2)])),
                 (
                     "sql",
@@ -1669,6 +1750,191 @@ mod tests {
         );
     }
 
+    // #217 (the TRANSACTION half, the rust twin of go's #215) — WHICH database a COVERED transaction
+    // opens on is the CTX's answer. A statement names its db in its own `StatementIntent`; a transaction
+    // has no statement to carry one, and this boundary takes only a body — so the name rides on the ctx
+    // (`with_connection_name`) and the ONE acquire point reads it (`tx_driver`). It used to be a
+    // PARAMETER of a second `…_isolated_on` entry point that `with_transaction_decided` called with
+    // `None`, so EVERY covered transaction opened on the DEFAULT connection's writer however the ctx was
+    // built — rust alone, since go (`WithConnectionName`), python (`with_connection_name`), TS
+    // (`withTransactionAsync(…, connection?)`) and php (`routedTransaction(…, ?string)`) all name it.
+    //
+    // The transcript is the proof: the whole BEGIN…COMMIT envelope, the body's statement included, runs
+    // on the NAMED connection and the default sees NOTHING.
+    #[test]
+    fn a_covered_transaction_opens_on_the_db_the_ctx_names() {
+        use crate::connection_routing::test_support::{recording_stub, SeamLog};
+        use crate::connection_routing::{
+            ConnectionRegistry, ReaderWriterPools, RoutingConfig, StickyOptions, WriterStickyClock,
+        };
+        use std::sync::{Arc, Mutex};
+
+        let transcript = |name: Option<&str>| -> Vec<String> {
+            let log: SeamLog = Arc::new(Mutex::new(Vec::new()));
+            let routing = RoutingConfig {
+                registry: ConnectionRegistry::from_default(ReaderWriterPools::single(
+                    recording_stub("A", &log),
+                ))
+                .add("B", ReaderWriterPools::single(recording_stub("B", &log)))
+                .build()
+                .unwrap(),
+                sticky: WriterStickyClock::new(StickyOptions {
+                    use_writer_after_transaction: false,
+                    ..Default::default()
+                }),
+            };
+            let base = exec_context::for_routing(&routing).unwrap();
+            let ctx = base.with_connection_name(name);
+            with_ambient_transaction(&ctx, || {
+                execute_sql(payload(vec![
+                    ("params", wlist(vec![])),
+                    ("sql", WireValue::Str("SELECT 1".into())),
+                ]))
+                .map(|_| ())
+            })
+            .unwrap();
+            let seen = log.lock().unwrap().clone();
+            seen
+        };
+
+        // NAMED ⇒ the whole envelope on B; the default connection is never touched.
+        let named = transcript(Some("B"));
+        assert!(
+            named.iter().all(|e| e.starts_with("B:")),
+            "a named covered tx must run entirely on that db: {named:?}"
+        );
+        assert_eq!(
+            named.len(),
+            3,
+            "BEGIN + the body statement + COMMIT, all seam-issued: {named:?}"
+        );
+        // UNNAMED (the other side of the same rule) ⇒ the DEFAULT connection. A `B:` here would mean the
+        // name leaked from somewhere other than the ctx.
+        let unnamed = transcript(None);
+        assert!(
+            unnamed.iter().all(|e| e.starts_with("A:")),
+            "an unnamed covered tx must run on the default connection: {unnamed:?}"
+        );
+    }
+
+    // #217 — the statement's own NAMED DATABASE reaches the router. The `db` field of the control
+    // record is the ONLY thing that decides WHICH registered connection serves the statement; a single-DB
+    // setup cannot tell a honored name from a dropped one, which is exactly why the defect survived the
+    // single-DB conformance and livedb suites.
+    //
+    // The two connections are made DISJOINT the way two real databases are: the DEFAULT connection's
+    // driver REFUSES this statement (a `failing_stub` — the stand-in for "that table does not exist
+    // here"), `B`'s serves it. So the negative control is IN PLACE rather than reasoned about: with the
+    // name dropped to a wire null (the pre-#217 lowering) the SAME statement lands on the default and
+    // fails, which is what a cross-DB relation did against its parent's database.
+    //
+    // The rust leg of "the same behaviour in all five languages": the twin of the TS `leaves.test.ts`
+    // #217 tests, the go `TestExecuteSQL_NamedDBRoutesTheStatement`, the python
+    // `test_named_db_routes_the_statement` and the php `NamedDbRoutingTest`.
+    #[test]
+    fn named_db_routes_the_statement() {
+        use crate::connection_routing::test_support::{failing_stub, recording_stub, SeamLog};
+        use crate::connection_routing::{
+            ConnectionRegistry, ReaderWriterPools, RoutingConfig, StickyOptions, WriterStickyClock,
+        };
+        use std::sync::{Arc, Mutex};
+
+        const SQL: &str = "SELECT id, name FROM named_users ORDER BY id";
+        let log: SeamLog = Arc::new(Mutex::new(Vec::new()));
+        let routing = RoutingConfig {
+            registry: ConnectionRegistry::from_default(ReaderWriterPools::single(failing_stub(
+                "A", &log, SQL,
+            )))
+            .add("B", ReaderWriterPools::single(recording_stub("B", &log)))
+            .build()
+            .unwrap(),
+            sticky: WriterStickyClock::new(StickyOptions {
+                use_writer_after_transaction: false,
+                ..Default::default()
+            }),
+        };
+        let ctx = exec_context::for_routing(&routing).unwrap();
+        let read = |db: WireValue| {
+            with_ambient_context(&ctx, || {
+                execute_sql(payload(vec![
+                    ("params", wlist(vec![])),
+                    ("sql", WireValue::Str(SQL.into())),
+                    opts(db, WireValue::Null, WireValue::Null, WireValue::Null),
+                ]))
+            })
+        };
+
+        // NAMED ⇒ B served it (and B alone — the default would have refused).
+        assert!(
+            read(WireValue::Str("B".into())).is_ok(),
+            "a `db: \"B\"` statement must be served by the B connection"
+        );
+        assert_eq!(*log.lock().unwrap(), vec!["B:all".to_string()]);
+
+        // NEGATIVE CONTROL — the name DROPPED (a wire null, the pre-#217 lowering) sends the SAME
+        // statement to the DEFAULT connection, which cannot serve it.
+        let e = match read(WireValue::Null) {
+            Err(e) => e,
+            Ok(_) => {
+                panic!("a `db: null` statement must land on the DEFAULT connection and fail there")
+            }
+        };
+        assert!(
+            e.message.contains("refuses"),
+            "the dropped name must reach the DEFAULT connection: {}",
+            e.message
+        );
+        assert_eq!(
+            *log.lock().unwrap(),
+            vec!["B:all".to_string(), "A:all".to_string()],
+            "the log must show the second statement served by A, not B"
+        );
+
+        // An UNREGISTERED name is LOUD, never a silent fall back to the default.
+        let g = match read(WireValue::Str("ghost".into())) {
+            Err(e) => e,
+            Ok(_) => panic!("an unregistered connection name must be LOUD"),
+        };
+        assert!(
+            g.message
+                .contains("no connection registered under name 'ghost'"),
+            "unknown-name failure = {}",
+            g.message
+        );
+    }
+
+    // A named statement on a NON-ROUTED ctx (the base `for_driver` path) has no registry to resolve the
+    // name against, so it must be LOUD. Running it on the single driver anyway is the silent
+    // wrong-database execution named-DB lowering exists to prevent.
+    #[test]
+    fn named_db_on_a_non_routed_context_is_loud() {
+        use crate::driver::SqliteDriver;
+        let d = SqliteDriver::in_memory(&["CREATE TABLE t (id INTEGER PRIMARY KEY)".to_string()])
+            .unwrap();
+        let ctx = exec_context::for_driver(&d);
+        let read = |db: WireValue| {
+            with_ambient_context(&ctx, || {
+                execute_sql(payload(vec![
+                    ("params", wlist(vec![])),
+                    ("sql", WireValue::Str("SELECT id FROM t".into())),
+                    opts(db, WireValue::Null, WireValue::Null, WireValue::Null),
+                ]))
+            })
+        };
+        let e = match read(WireValue::Str("analytics".into())) {
+            Err(e) => e,
+            Ok(_) => panic!("a named statement on a non-routed ctx must be LOUD"),
+        };
+        assert!(
+            e.message
+                .contains("a statement names connection 'analytics'"),
+            "non-routed named failure = {}",
+            e.message
+        );
+        // The DEFAULT connection is the single-driver case itself and still runs.
+        assert!(read(WireValue::Null).is_ok());
+    }
+
     // #207 — the leaf hands the central seam ONE `StatementIntent`, derived from the statement's RUN
     // MODE, and `connection_for` resolves the CONNECTION from it (`resolve_pool`: write ⇒ the writer
     // pool). The branch that selects the SEAM is a DIFFERENT question: a RETURNING write runs on the ROW
@@ -1713,6 +1979,7 @@ mod tests {
             ];
             if let Some(returning) = write {
                 ports.push(opts(
+                    WireValue::Null,
                     wrow(&[("returning", WireValue::Bool(returning))]),
                     WireValue::Null,
                     WireValue::Null,
@@ -1745,6 +2012,7 @@ mod tests {
         let insert = |returning: bool, sql: &str| {
             let ports = vec![
                 opts(
+                    WireValue::Null,
                     wrow(&[("returning", WireValue::Bool(returning))]),
                     WireValue::Null,
                     WireValue::Null,
@@ -1849,7 +2117,12 @@ mod tests {
                     ("sql", WireValue::Str("SELECT id FROM users".into())),
                 ]))?;
                 execute_sql(payload(vec![
-                    opts(write_mode(false), WireValue::Null, WireValue::Null),
+                    opts(
+                        WireValue::Null,
+                        write_mode(false),
+                        WireValue::Null,
+                        WireValue::Null,
+                    ),
                     ("params", wlist(vec![])),
                     (
                         "sql",

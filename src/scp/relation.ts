@@ -104,9 +104,11 @@ export interface RelationDecl {
   /**
    * CROSS-DB relations (V0 R1): the NAME of the connection the batch SELECT must execute against —
    * the TARGET model's DB, which may differ from the parent's (v1 `LazyRelation.ts:236` runs a
-   * relation on `TargetClass.getDriverType()`'s driver/connection). Absent ⇒ the parent's own
-   * connection (the same-DB default). The SQL is v1-identical either way; the tag only ROUTES the
-   * statement — a per-language runtime with a connection registry picks the pooled driver by name.
+   * relation on `TargetClass.getDriverType()`'s driver/connection). Derived from the target model by
+   * {@link import('./decorator-adapter').relationDeclOf}. Absent ⇒ the DEFAULT connection (the
+   * same-DB case, which is every single-DB deployment). The SQL is v1-identical either way; the tag
+   * only ROUTES the statement — a per-language runtime with a connection registry picks the pooled
+   * driver by name.
    */
   readonly connection?: string;
 }
@@ -133,10 +135,11 @@ export interface RelationOp {
   /** The target SQL dialect the batch SELECT text is compiled for. */
   readonly dialect: Dialect;
   /**
-   * CROSS-DB relations (V0 R1): the connection NAME the batch executes against (the target model's
-   * DB). Present ONLY when it differs from the parent's connection (a same-DB relation omits it).
-   * A per-language runtime routes the statement to the pooled driver of this name; the SQL text and
-   * `dialect`-driven placeholder/bind are already correct for the target (v1 `LazyRelation` parity).
+   * CROSS-DB relations (V0 R1): the connection NAME the batch executes against (the TARGET model's
+   * DB — v1 `LazyRelation` parity). Present iff the target model declares one; absent ⇒ the DEFAULT
+   * connection. A per-language runtime routes the statement to the pooled driver of this name (the
+   * emitter bakes it into the child fetch's `db` control field, {@link import('./leaf-transport').ExecOptions});
+   * the SQL text and `dialect`-driven placeholder/bind are already correct for the target.
    */
   readonly connection?: string;
   /**

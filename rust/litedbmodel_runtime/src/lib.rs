@@ -45,10 +45,9 @@ pub use errors::{
 pub use exec_context::{
     execute as seam_execute, for_driver, for_routing, run as seam_run, run_guarded, transaction,
     transaction_decided, transaction_decided_on, transaction_on, with_transaction,
-    with_transaction_decided, with_transaction_decided_isolated,
-    with_transaction_decided_isolated_on, Connection, DriverConnection, Dyn, ExecutionContext,
-    Middleware, MiddlewareChain, SeamResult, SessionConnection, StatementIntent, TxConnection,
-    TxConnectionRef, TxDecision,
+    with_transaction_decided, with_transaction_decided_isolated, Connection, DriverConnection, Dyn,
+    ExecutionContext, Middleware, MiddlewareChain, SeamResult, SessionConnection, StatementIntent,
+    TxConnection, TxConnectionRef, TxDecision,
 };
 // Phase D (#93) — the middleware layer (SQL-level `execute` hook + method-level hooks + Logger +
 // raw execute/query), mirroring the TS `src/scp/middleware.ts` API reference.
