@@ -113,24 +113,35 @@ fn current_context() -> Result<&'static ExecutionContext<'static, 'static>, Beha
 ///
 /// The body's failure is a [`BehaviorError`] and the boundary transports [`SqlFailure`], so a body
 /// error rides out as the boundary's non-error [`TxDecision::Rollback`] value: the ROLLBACK is
-/// seam-issued exactly as an `Err` would issue it, nothing commits, and the ORIGINAL error surfaces
-/// here. A failure of the tx-control itself (BEGIN / COMMIT / ROLLBACK) arrives as a `SqlFailure` and
-/// is mapped to the leaf transport's one error channel.
+/// seam-issued exactly as an `Err` would issue it and nothing commits. The ORIGINAL error is what
+/// surfaces — ALWAYS, and that is why it is also held HERE: the boundary DISCARDS a `Rollback` value
+/// when the seam-issued ROLLBACK itself fails (right for the gate short-circuit that arm was written
+/// for, where that failure is the only error there is), which would otherwise let a broken connection
+/// MASK the failure the covered plane must re-raise. go returns `bodyErr` whatever its ROLLBACK did
+/// (`exec_context.go:676-683`) and the TS rethrows the caught `error` (`exec-context.ts:594-601`); the
+/// covered plane says the same thing in all three. A failure of the tx-control itself (BEGIN / COMMIT /
+/// ROLLBACK) with NO body error arrives as a `SqlFailure` and is mapped to the leaf transport's one
+/// error channel.
 pub fn with_ambient_transaction<R>(
     ctx: &ExecutionContext,
     body: impl FnOnce() -> Result<R, BehaviorError>,
 ) -> Result<R, BehaviorError> {
+    let mut rolled_back_for: Option<BehaviorError> = None;
     let outcome = exec_context::with_transaction_decided(ctx, |tx_ctx| {
         // The tx-scoped ctx is the ambient: `connection_for` resolves its pinned owned connection
         // (STEP 1) for every statement the body issues through `execute_sql`.
         Ok(match with_ambient_context(tx_ctx, body) {
             Ok(r) => TxDecision::Commit(Ok(r)),
-            Err(e) => TxDecision::Rollback(Err(e)),
+            Err(e) => {
+                rolled_back_for = Some(e.clone());
+                TxDecision::Rollback(Err(e))
+            }
         })
     });
     match outcome {
         Ok(body_result) => body_result,
-        Err(e) => Err(sql_failure_to_behavior_error(e)),
+        // The tx-control failed. If it was the ROLLBACK of a FAILED body, the body's error is the truth.
+        Err(e) => Err(rolled_back_for.unwrap_or_else(|| sql_failure_to_behavior_error(e))),
     }
 }
 
@@ -1875,5 +1886,30 @@ mod tests {
         pools.lock().unwrap().clear();
         read().unwrap();
         assert_eq!(pools.lock().unwrap().as_slice(), ["writer:all"]);
+    }
+
+    // A body error surfaces UNMASKED even when the seam-issued ROLLBACK ALSO fails. The covered plane
+    // transports a body failure as the boundary's `TxDecision::Rollback` value, and the boundary drops
+    // that value when its ROLLBACK errors (correct for the gate short-circuit that arm serves — there
+    // the ROLLBACK failure IS the only error), so without the leaf holding the body error a broken
+    // connection would rewrite the caller's failure into a driver message. go returns `bodyErr`
+    // whatever its ROLLBACK did (`exec_context.go:676-683`) and the TS rethrows the caught error
+    // (`exec-context.ts:594-601`) — all three say the same thing here.
+    #[test]
+    fn a_failing_rollback_does_not_mask_the_body_error() {
+        use crate::connection_routing::test_support::{failing_stub, SeamLog};
+        use std::sync::{Arc, Mutex};
+
+        let log: SeamLog = Arc::new(Mutex::new(Vec::new()));
+        let driver = failing_stub("solo", &log, "ROLLBACK");
+        let ctx = exec_context::for_driver(driver.as_ref());
+
+        let outcome: Result<(), BehaviorError> =
+            with_ambient_transaction(&ctx, || Err(BehaviorError::new("BOOM", "mid-tx failure")));
+        let err = outcome.expect_err("a body error must propagate");
+        assert_eq!(err.code, "BOOM", "the leaf surfaced {:?}", err.message);
+        assert_eq!(err.message, "mid-tx failure");
+        // The ROLLBACK really was attempted (and really did fail) — the transcript, not a claim.
+        assert_eq!(log.lock().unwrap().as_slice(), ["solo:run", "solo:run"]);
     }
 }

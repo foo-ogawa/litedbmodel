@@ -246,6 +246,15 @@ type ExecutionContext struct {
 	// and — because WithWriter also sets readOnly — any write is rejected. Derived via
 	// [ExecutionContext.WithWriter].
 	writerScope bool
+	// connection is the NAMED DB this ctx's TRANSACTIONS open on (Phase C-2 multi-DB):
+	// [ExecutionContext.acquireTxConnection] resolves the WRITER pool of THIS name. "" ⇒ the default
+	// connection; ignored when routing is nil (the Phase A/B single-db path). A STATEMENT names its DB
+	// per call ([StatementIntent.DB]) — a transaction cannot, because the covered plane's tx boundary
+	// ([WithAmbientTransaction]) takes only a body, so the tx's target rides on the ctx. Derived via
+	// [ExecutionContext.WithConnectionName]; twin of python `ExecutionContext._connection` (read by
+	// `begin_tx`) and of the `connection` argument rust `transaction_on` / TS `withTransactionAsync` /
+	// php `routedTransaction` take.
+	connection string
 }
 
 // sharedEmptyChain is the Phase A middleware chain — a nil-source empty passthrough so a ctx can be
@@ -355,7 +364,7 @@ func (c *ExecutionContext) ReadOnly() bool { return c.readOnly }
 // writer-pinned read scope that must never accidentally mutate. Shares the primary db + middleware +
 // Go context + pinned tx connection.
 func (c *ExecutionContext) WithReadOnly() *ExecutionContext {
-	return &ExecutionContext{ctx: c.ctx, db: c.db, middleware: c.middleware, pinned: c.pinned, readOnly: true, routing: c.routing, writerScope: c.writerScope}
+	return &ExecutionContext{ctx: c.ctx, db: c.db, middleware: c.middleware, pinned: c.pinned, readOnly: true, routing: c.routing, writerScope: c.writerScope, connection: c.connection}
 }
 
 // WithWriter derives a WRITER-scoped ctx (Phase C / #89 — the go analogue of the TS `withWriter`):
@@ -366,11 +375,25 @@ func (c *ExecutionContext) WithReadOnly() *ExecutionContext {
 // ConnectionFor, so WithWriter there is a no-op on routing (matches v1 :2941). Shares the primary db +
 // middleware + Go context + pinned tx connection + routing.
 func (c *ExecutionContext) WithWriter() *ExecutionContext {
-	return &ExecutionContext{ctx: c.ctx, db: c.db, middleware: c.middleware, pinned: c.pinned, readOnly: true, routing: c.routing, writerScope: true}
+	return &ExecutionContext{ctx: c.ctx, db: c.db, middleware: c.middleware, pinned: c.pinned, readOnly: true, routing: c.routing, writerScope: true, connection: c.connection}
 }
 
 // InWriterScope reports whether this is a [WithWriter]-scoped ctx (reads route to the writer).
 func (c *ExecutionContext) InWriterScope() bool { return c.writerScope }
+
+// WithConnectionName derives a ctx whose TRANSACTIONS open on the NAMED connection `name` (Phase C-2
+// multi-DB): [ExecutionContext.acquireTxConnection] then checks the tx's owned connection out of THAT
+// registry pair's WRITER pool, so the whole BEGIN…COMMIT — and every statement in the body, which
+// resolves the pin — runs on that database. "" ⇒ the default connection; a no-op shape change on the
+// single-db path (routing nil). Reads/writes OUTSIDE a transaction still name their DB per statement
+// ([StatementIntent.DB]) — this answers the one question a statement intent cannot reach, because a
+// transaction is opened by the boundary, not by a statement. Shares the primary db + middleware + Go
+// context + pinned tx connection + routing + writer/read-only markers. Go analogue of python
+// `with_connection_name`; the `connection` argument of rust `transaction_on` / the TS
+// `withTransactionAsync` / php `routedTransaction` names the same thing.
+func (c *ExecutionContext) WithConnectionName(name string) *ExecutionContext {
+	return &ExecutionContext{ctx: c.ctx, db: c.db, middleware: c.middleware, pinned: c.pinned, readOnly: c.readOnly, routing: c.routing, writerScope: c.writerScope, connection: name}
+}
 
 // ConnectionFor resolves WHICH connection a statement runs on (§3). Resolution order:
 //  1. the tx-owned (pinned) connection wins (Phase A — only the ctx holds the pin);
@@ -413,16 +436,17 @@ func (c *ExecutionContext) ConnectionFor(intent StatementIntent) Connection {
 func (c *ExecutionContext) WithTxConnection(conn Connection) *ExecutionContext {
 	// A tx-scoped ctx INHERITS the read-only + writer markers + routing: a Transaction() opened inside
 	// a read-only scope is still read-only (v1 parity — withWriter reads never mutate).
-	return &ExecutionContext{ctx: c.ctx, db: c.db, middleware: c.middleware, pinned: conn, readOnly: c.readOnly, routing: c.routing, writerScope: c.writerScope}
+	return &ExecutionContext{ctx: c.ctx, db: c.db, middleware: c.middleware, pinned: conn, readOnly: c.readOnly, routing: c.routing, writerScope: c.writerScope, connection: c.connection}
 }
 
 // acquireTxConnection checks out the ONE OWNED connection a TRANSACTION runs on (§3) — the ownership
 // step, resolved BY THIS CTX exactly as [ExecutionContext.ConnectionFor] resolves a statement's, and
 // returning the release hook that gives it back. Resolution order:
 //
-//  1. WITH a Phase C [RoutingConfig]: a transaction is a WRITE ⇒ [resolvePool] on a write intent picks
-//     the WRITER pool, which hands out one owned connection ([Pool.Acquire]); the hook returns it to
-//     THAT pool (destroyed when poisoned). Every statement of the body then resolves the pin
+//  1. WITH a Phase C [RoutingConfig]: a transaction is a WRITE on the ctx's NAMED db ⇒ [resolvePool]
+//     on that intent picks the WRITER pool OF THAT DB ([ExecutionContext.WithConnectionName]; "" ⇒ the
+//     default connection), which hands out one owned connection ([Pool.Acquire]); the hook returns it
+//     to THAT pool (destroyed when poisoned). Every statement of the body then resolves the pin
 //     (ConnectionFor step 1), so the whole BEGIN…COMMIT runs on that one writer connection.
 //  2. else (Phase A/B single-primary-db path): the ctx's primary db checks out one *sql.Conn (db.Conn
 //     — Go's connection-owning primitive), carrying the tx's prepared-statement cache; the hook closes
@@ -432,11 +456,11 @@ func (c *ExecutionContext) WithTxConnection(conn Connection) *ExecutionContext {
 // neither routing nor a tx-capable db cannot open a transaction and says so LOUDLY. Taking the tx's db
 // as a caller PARAMETER is what let a routed ctx BEGIN outside its own routing (#215): for a
 // transaction exactly as for a statement, the ctx is the single answer to WHICH connection. Twin of
-// rust `ctx.tx_driver(…)?.acquire_tx()` / python `ExecutionContext.begin_tx` / the php
-// `routedTransaction` writer pin.
+// rust `ctx.tx_driver(connection)?.acquire_tx()` / python `ExecutionContext.begin_tx` (reading
+// `_connection`) / the php `routedTransaction` writer pin.
 func (c *ExecutionContext) acquireTxConnection() (Connection, func(poisoned bool), error) {
 	if c.routing != nil {
-		pool, err := resolvePool(WriteIntent(), c.writerScope, *c.routing)
+		pool, err := resolvePool(StatementIntent{Write: true, DB: c.connection}, c.writerScope, *c.routing)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -744,7 +768,8 @@ func WithTransaction[R any](ctx *ExecutionContext, body func(txCtx *ExecutionCon
 //
 // # What it does (v1 `DBModel.transaction` :2787 parity, on the SCP seam)
 //
-// It checks out ONE owned connection FROM THE CTX (its routed WRITER pool, else the primary db's
+// It checks out ONE owned connection FROM THE CTX (the WRITER pool of the db that ctx names — see
+// [ExecutionContext.WithConnectionName] for a multi-DB target — else the primary db's
 // *sql.Conn), issues the isolation-aware BEGIN as REAL SQL THROUGH
 // the seam ([BeginStatements]: PG `BEGIN ISOLATION LEVEL …`; MySQL a preceding `SET TRANSACTION
 // ISOLATION LEVEL …` then `BEGIN`), pins that connection into a tx-scoped [ExecutionContext], runs

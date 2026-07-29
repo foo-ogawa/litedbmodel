@@ -741,25 +741,39 @@ pub(crate) mod test_support {
     struct StubDriver {
         label: &'static str,
         log: Option<SeamLog>,
+        /// The SQL this driver REFUSES to serve (a loud [`SqlFailure`] from both seams) — how a test
+        /// makes one specific statement, e.g. the runtime's own `ROLLBACK`, fail.
+        fail_on: Option<&'static str>,
     }
     struct StubStmt {
         label: &'static str,
         log: Option<SeamLog>,
+        sql: String,
+        fail_on: Option<&'static str>,
     }
     impl StubStmt {
-        fn record(&self, seam: &str) {
+        fn record(&self, seam: &str) -> Result<(), SqlFailure> {
             if let Some(log) = &self.log {
                 log.lock().unwrap().push(format!("{}:{}", self.label, seam));
             }
+            if self.fail_on == Some(self.sql.as_str()) {
+                return Err(SqlFailure {
+                    kind: "driver_error".into(),
+                    policy: "fail".into(),
+                    sqlite_code: None,
+                    message: format!("stub driver refuses `{}`", self.sql),
+                });
+            }
+            Ok(())
         }
     }
     impl PreparedStatement for StubStmt {
         fn all(&mut self, _p: &[Value]) -> Result<Vec<WireValue>, SqlFailure> {
-            self.record("all");
+            self.record("all")?;
             Ok(Vec::new())
         }
         fn run(&mut self, _p: &[Value]) -> Result<RunInfo, SqlFailure> {
-            self.record("run");
+            self.record("run")?;
             Ok(RunInfo {
                 changes: 0,
                 last_insert_rowid: 0,
@@ -767,10 +781,12 @@ pub(crate) mod test_support {
         }
     }
     impl Driver for StubDriver {
-        fn prepare(&self, _sql: &str) -> Box<dyn PreparedStatement + '_> {
+        fn prepare(&self, sql: &str) -> Box<dyn PreparedStatement + '_> {
             Box::new(StubStmt {
                 label: self.label,
                 log: self.log.clone(),
+                sql: sql.to_string(),
+                fail_on: self.fail_on,
             })
         }
         fn begin_tx(&self) -> Result<Box<dyn TxConnection + '_>, SqlFailure> {
@@ -781,7 +797,11 @@ pub(crate) mod test_support {
         }
     }
     pub(crate) fn stub(label: &'static str) -> Arc<dyn Driver + Send + Sync> {
-        Arc::new(StubDriver { label, log: None })
+        Arc::new(StubDriver {
+            label,
+            log: None,
+            fail_on: None,
+        })
     }
     /// A [`stub`] that appends `"<label>:<seam>"` to `log` for every statement it serves.
     pub(crate) fn recording_stub(
@@ -791,6 +811,21 @@ pub(crate) mod test_support {
         Arc::new(StubDriver {
             label,
             log: Some(Arc::clone(log)),
+            fail_on: None,
+        })
+    }
+    /// A [`recording_stub`] that FAILS `fail_on` — a broken connection, modelled: it still records the
+    /// statement, then refuses it. Lets a test drive the runtime's error paths (a failing `ROLLBACK`,
+    /// `COMMIT` or `BEGIN`) through the production seam with no DB in the picture.
+    pub(crate) fn failing_stub(
+        label: &'static str,
+        log: &SeamLog,
+        fail_on: &'static str,
+    ) -> Arc<dyn Driver + Send + Sync> {
+        Arc::new(StubDriver {
+            label,
+            log: Some(Arc::clone(log)),
+            fail_on: Some(fail_on),
         })
     }
 }

@@ -293,6 +293,57 @@ func TestNamedDBRouting(t *testing.T) {
 	}
 }
 
+// C2, the TRANSACTION half of named-DB routing (#215): WHICH db a transaction opens on is the ctx's
+// answer ([ExecutionContext.WithConnectionName]), not the caller's. A statement carries its db in its
+// own [StatementIntent]; a transaction has no statement to carry it — and the covered plane's boundary
+// ([WithAmbientTransaction]) takes no argument at all — so the name rides on the ctx and
+// [ExecutionContext.acquireTxConnection] resolves the WRITER pool of THAT db.
+//
+// This is the OFFLINE twin of TestPhaseCRoutingTxPinPrecedenceLive: the live one proves it against a
+// real PG (A) + MySQL (B) pair, this one proves it in the default `go test ./...`, where no
+// environment gate can hide it.
+func TestNamedDBTransactionOpensOnThatDBsWriter(t *testing.T) {
+	newCtx := func(log *[]string) (*ExecutionContext, *recordPool, *recordPool) {
+		a := newRecordPool("A", log)
+		b := newRecordPool("B", log)
+		reg := NewConnectionRegistry(map[string]ReaderWriterPools{"default": SinglePoolPair(a), "B": SinglePoolPair(b)})
+		return ContextForRouting(RoutingConfig{Registry: reg, Sticky: NewWriterStickyClock(StickyOptions{UseWriterAfterTransaction: boolPtr(false)})}, nil), a, b
+	}
+	// One read inside the boundary, so the transcript also shows the tx PIN winning over routing.
+	body := func(txCtx *ExecutionContext) (int, error) {
+		_, err := Execute(txCtx, "SELECT 1", nil, StatementIntent{Write: false})
+		return 0, err
+	}
+
+	var log []string
+	ctx, a, b := newCtx(&log)
+	if _, err := Transaction(ctx.WithConnectionName("B"), "sqlite", DefaultTransactionOptions(), body); err != nil {
+		t.Fatal(err)
+	}
+	// ONE acquire, from B — and nothing more, because every statement of the body resolved that pin.
+	if !reflect.DeepEqual(log, []string{"B"}) {
+		t.Fatalf("named tx acquires = %v, want [B] (the tx opens on the NAMED db's writer)", log)
+	}
+	// The WHOLE envelope — the seam-issued BEGIN/COMMIT included — ran on B's connection; A saw nothing.
+	if !reflect.DeepEqual(b.stmts, []string{"BEGIN", "SELECT 1", "COMMIT"}) {
+		t.Fatalf("B ran %v, want [BEGIN SELECT 1 COMMIT] (the whole tx on the named db)", b.stmts)
+	}
+	if len(a.stmts) != 0 {
+		t.Fatalf("the default db ran %v, want nothing (the tx was named B)", a.stmts)
+	}
+
+	// UNNAMED (the other side of the same rule): no name ⇒ the DEFAULT connection's writer. A `[B]` here
+	// would mean the name leaked from somewhere other than the ctx.
+	var dlog []string
+	dctx, _, _ := newCtx(&dlog)
+	if _, err := Transaction(dctx, "sqlite", DefaultTransactionOptions(), body); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(dlog, []string{"A"}) {
+		t.Fatalf("unnamed tx acquires = %v, want [A] (the default connection)", dlog)
+	}
+}
+
 func TestUnknownNameLoudFailure(t *testing.T) {
 	var log []string
 	aPool := newRecordPool("A", &log)

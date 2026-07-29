@@ -401,11 +401,11 @@ func TestPhaseCRoutingTxPinPrecedenceLive(t *testing.T) {
 	reg := NewConnectionRegistry(map[string]ReaderWriterPools{"default": SinglePoolPair(aPool), "B": SinglePoolPair(bPool)})
 	ctx := ContextForRouting(RoutingConfig{Registry: reg, Sticky: NewWriterStickyClock(StickyOptions{UseWriterAfterTransaction: boolPtr(false)})}, nil)
 
-	// Run a tx on DB B (MySQL): the tx is opened on `my` (the writer of DB B) and pins ONE *sql.Tx.
-	// Every statement inside resolves the PINNED connection (step 1 wins) — the recording pools are
-	// NOT re-acquired mid-tx.
+	// Run a tx on DB B (MySQL): the ctx NAMES B ([ExecutionContext.WithConnectionName]), so the tx is
+	// opened on B's WRITER pool and pins that ONE connection. Every statement inside resolves the PINNED
+	// connection (step 1 wins) — the recording pools are NOT re-acquired mid-tx.
 	log = log[:0]
-	_, err := Transaction(ctx, "mysql", DefaultTransactionOptions(), func(txCtx *ExecutionContext) (int, error) {
+	_, err := Transaction(ctx.WithConnectionName("B"), "mysql", DefaultTransactionOptions(), func(txCtx *ExecutionContext) (int, error) {
 		if _, e := RunGuarded(txCtx, fmt.Sprintf("INSERT INTO %s (id, val) VALUES (?,?)", goRouteTable), []any{int64(300), "tx1"}, "INSERT", "M"); e != nil {
 			return 0, e
 		}
@@ -425,10 +425,14 @@ func TestPhaseCRoutingTxPinPrecedenceLive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The routing recording pools saw ZERO acquisitions for the in-tx statements (the pin won every
-	// time). This is the tx-pin-precedence proof: Phase C routing did NOT break Phase B ownership.
-	if len(log) != 0 {
-		t.Fatalf("in-tx statements must resolve the PINNED conn, not the routing pool; got acquisitions %v", log)
+	// EXACTLY ONE acquisition, and it came from DB B: the tx's OWN connection, checked out of the named
+	// db's WRITER pool (#215 — the ctx, not the caller, answers WHICH db a transaction opens on). The
+	// in-tx statements added NOTHING to the log, so every one of them resolved that pin — the
+	// tx-pin-precedence proof that Phase C routing did not break Phase B ownership. `[A]` would mean the
+	// tx ignored the name (the #215 regression: a `?`-placeholder MySQL statement sent to PG); `[B B B B]`
+	// would mean the pin lost and each statement re-acquired.
+	if !equalStrings(log, []string{"B"}) {
+		t.Fatalf("tx acquisitions = %v, want [B] (ONE acquire on DB B's writer, then the pin wins for every statement)", log)
 	}
 	// Both rows committed on the ONE pinned connection.
 	var c int
