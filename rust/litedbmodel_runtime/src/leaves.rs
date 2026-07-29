@@ -753,6 +753,9 @@ mod tests {
     // `impl Driver`).
     use crate::driver::Driver;
 
+    // The ports of ONE leaf call, named — the shape every payload in these tests is assembled as.
+    type Ports<'a> = Vec<(&'a str, WireValue)>;
+
     fn wrow(pairs: &[(&str, WireValue)]) -> WireValue {
         WireValue::Row(WireRow {
             entries: pairs
@@ -768,7 +771,7 @@ mod tests {
         }
     }
     // The generic-wire PAYLOAD a covered runner hands a leaf: the node's ports as named fields.
-    fn payload(ports: Vec<(&str, WireValue)>) -> WireRow {
+    fn payload(ports: Ports<'_>) -> WireRow {
         WireRow {
             entries: ports
                 .into_iter()
@@ -1104,13 +1107,13 @@ mod tests {
                 ),
             ]
         };
-        let run = |ports: Vec<(&str, WireValue)>| -> Result<WireValue, BehaviorError> {
+        let run = |ports: Ports<'_>| -> Result<WireValue, BehaviorError> {
             with_ambient_context(&exec_context::for_driver(&d), || {
                 execute_sql(payload(ports.clone()))
             })
         };
         // An `opts` record whose `whereDynamic` carries ONE fragment (the #209 cases).
-        let plan_of = |frag: WireValue| -> Vec<(&str, WireValue)> {
+        let plan_of = |frag: WireValue| -> Ports<'static> {
             let mut p = base();
             p.push(opts(
                 WireValue::Null,
@@ -1127,7 +1130,7 @@ mod tests {
 
         // Each case breaks exactly ONE declared field of a struct that is present — by DROPPING it
         // first…
-        let cases: Vec<(&str, Vec<(&str, WireValue)>, &str)> = vec![
+        let cases: Vec<(&str, Ports, &str)> = vec![
             (
                 "payload without sql",
                 vec![("params", wlist(vec![]))],
@@ -1618,7 +1621,7 @@ mod tests {
         // stringified number. rust was already loud on all six; this pins it against the TS / python /
         // php legs that were not.
         let group_ports = |skip: &str, over: Option<(&'static str, WireValue)>| {
-            let mut ports: Vec<(&str, WireValue)> = vec![
+            let mut ports: Ports = vec![
                 ("children", wlist(vec![])),
                 ("fk", cols(&["post_id"])),
                 ("into", WireValue::Str("kids".into())),
