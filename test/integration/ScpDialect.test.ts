@@ -300,7 +300,7 @@ function asyncCtx(queryFn: (sql: string, params: unknown[]) => Promise<Row[]>): 
 async function scpSelect(desc: SelectDesc, execAsync: AsyncExecutionContext): Promise<{ rows: Row[]; renderedSql: string }> {
   const compiled = compileSelect(desc);
   const rows = (await executeSQLAsync(
-    { sql: compiled.sql, params: compiled.params, write: false, returning: false, bigint: false },
+    { sql: compiled.sql, params: compiled.params, write: null },
     { execAsync, dialect: desc.dialect },
   )) as Row[];
   return { rows, renderedSql: renderPlaceholders(compiled.sql, desc.dialect) };

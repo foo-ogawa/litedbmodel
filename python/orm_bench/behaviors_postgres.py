@@ -4,14 +4,14 @@
 # native dict literal and handed to the EXISTING runtime core (run_behavior) —
 # no execution logic is generated. Handlers are ALWAYS injected at the boundary
 # (IR + {effects,config,hooks}); they are never generated.
-# irFingerprint: fnv1a64:83e72b9dc1655b50
+# irFingerprint: fnv1a64:54ecb8442fbdeb1c
 from behavior_contracts import SPEC_VERSIONS, ProvenanceError, load_compiled_ir, run_behavior
 
 # Spec versions baked at generation time (fail-closed constant comparison at load).
 EXPECTED_SPEC_VERSIONS = {"behavior": 6, "expression": 2, "plan": 1}
 
 # FNV-1a 64 fingerprint of the source portable IR (canonical_json discipline, #208).
-IR_FINGERPRINT = "fnv1a64:83e72b9dc1655b50"
+IR_FINGERPRINT = "fnv1a64:54ecb8442fbdeb1c"
 
 # Component names exposed by bind(), in IR declaration order.
 COMPONENT_NAMES = ("findAll", "filterPaginateSort", "findFirst", "findUnique", "nestedFindAll", "nestedFindFirst", "nestedFindUnique", "nestedRelations", "compositeRelations", "create", "update", "upsert", "createMany", "upsertMany", "updateMany", "nestedCreate", "nestedUpsert", "nestedUpdate", "delete")
@@ -1929,7 +1929,6 @@ IR_DOC = {
                       }
                     }
                   },
-                  "returning": "bool",
                   "whereDynamic": {
                     "opt": {
                       "name": "DynamicWherePlan",
@@ -1951,7 +1950,14 @@ IR_DOC = {
                       }
                     }
                   },
-                  "write": "bool"
+                  "write": {
+                    "opt": {
+                      "name": "WriteMode",
+                      "obj": {
+                        "returning": "bool"
+                      }
+                    }
+                  }
                 }
               },
               "required": False,
@@ -1971,9 +1977,12 @@ IR_DOC = {
             "opts": {
               "obj": {
                 "guard": None,
-                "returning": False,
                 "whereDynamic": None,
-                "write": True
+                "write": {
+                  "obj": {
+                    "returning": False
+                  }
+                }
               }
             },
             "params": {
@@ -2059,7 +2068,6 @@ IR_DOC = {
                       }
                     }
                   },
-                  "returning": "bool",
                   "whereDynamic": {
                     "opt": {
                       "name": "DynamicWherePlan",
@@ -2081,7 +2089,14 @@ IR_DOC = {
                       }
                     }
                   },
-                  "write": "bool"
+                  "write": {
+                    "opt": {
+                      "name": "WriteMode",
+                      "obj": {
+                        "returning": "bool"
+                      }
+                    }
+                  }
                 }
               },
               "required": False,
@@ -2101,9 +2116,12 @@ IR_DOC = {
             "opts": {
               "obj": {
                 "guard": None,
-                "returning": False,
                 "whereDynamic": None,
-                "write": True
+                "write": {
+                  "obj": {
+                    "returning": False
+                  }
+                }
               }
             },
             "params": {
@@ -2188,7 +2206,6 @@ IR_DOC = {
                       }
                     }
                   },
-                  "returning": "bool",
                   "whereDynamic": {
                     "opt": {
                       "name": "DynamicWherePlan",
@@ -2210,7 +2227,14 @@ IR_DOC = {
                       }
                     }
                   },
-                  "write": "bool"
+                  "write": {
+                    "opt": {
+                      "name": "WriteMode",
+                      "obj": {
+                        "returning": "bool"
+                      }
+                    }
+                  }
                 }
               },
               "required": False,
@@ -2230,9 +2254,12 @@ IR_DOC = {
             "opts": {
               "obj": {
                 "guard": None,
-                "returning": True,
                 "whereDynamic": None,
-                "write": True
+                "write": {
+                  "obj": {
+                    "returning": True
+                  }
+                }
               }
             },
             "params": {
@@ -2354,7 +2381,6 @@ IR_DOC = {
                       }
                     }
                   },
-                  "returning": "bool",
                   "whereDynamic": {
                     "opt": {
                       "name": "DynamicWherePlan",
@@ -2376,7 +2402,14 @@ IR_DOC = {
                       }
                     }
                   },
-                  "write": "bool"
+                  "write": {
+                    "opt": {
+                      "name": "WriteMode",
+                      "obj": {
+                        "returning": "bool"
+                      }
+                    }
+                  }
                 }
               },
               "required": False,
@@ -2396,9 +2429,12 @@ IR_DOC = {
             "opts": {
               "obj": {
                 "guard": None,
-                "returning": False,
                 "whereDynamic": None,
-                "write": True
+                "write": {
+                  "obj": {
+                    "returning": False
+                  }
+                }
               }
             },
             "params": {
@@ -2528,7 +2564,6 @@ IR_DOC = {
                       }
                     }
                   },
-                  "returning": "bool",
                   "whereDynamic": {
                     "opt": {
                       "name": "DynamicWherePlan",
@@ -2550,7 +2585,14 @@ IR_DOC = {
                       }
                     }
                   },
-                  "write": "bool"
+                  "write": {
+                    "opt": {
+                      "name": "WriteMode",
+                      "obj": {
+                        "returning": "bool"
+                      }
+                    }
+                  }
                 }
               },
               "required": False,
@@ -2570,9 +2612,12 @@ IR_DOC = {
             "opts": {
               "obj": {
                 "guard": None,
-                "returning": False,
                 "whereDynamic": None,
-                "write": True
+                "write": {
+                  "obj": {
+                    "returning": False
+                  }
+                }
               }
             },
             "params": {
@@ -2702,7 +2747,6 @@ IR_DOC = {
                       }
                     }
                   },
-                  "returning": "bool",
                   "whereDynamic": {
                     "opt": {
                       "name": "DynamicWherePlan",
@@ -2724,7 +2768,14 @@ IR_DOC = {
                       }
                     }
                   },
-                  "write": "bool"
+                  "write": {
+                    "opt": {
+                      "name": "WriteMode",
+                      "obj": {
+                        "returning": "bool"
+                      }
+                    }
+                  }
                 }
               },
               "required": False,
@@ -2744,9 +2795,12 @@ IR_DOC = {
             "opts": {
               "obj": {
                 "guard": None,
-                "returning": False,
                 "whereDynamic": None,
-                "write": True
+                "write": {
+                  "obj": {
+                    "returning": False
+                  }
+                }
               }
             },
             "params": {
@@ -2838,7 +2892,6 @@ IR_DOC = {
                       }
                     }
                   },
-                  "returning": "bool",
                   "whereDynamic": {
                     "opt": {
                       "name": "DynamicWherePlan",
@@ -2860,7 +2913,14 @@ IR_DOC = {
                       }
                     }
                   },
-                  "write": "bool"
+                  "write": {
+                    "opt": {
+                      "name": "WriteMode",
+                      "obj": {
+                        "returning": "bool"
+                      }
+                    }
+                  }
                 }
               },
               "required": False,
@@ -2880,9 +2940,12 @@ IR_DOC = {
             "opts": {
               "obj": {
                 "guard": None,
-                "returning": True,
                 "whereDynamic": None,
-                "write": True
+                "write": {
+                  "obj": {
+                    "returning": True
+                  }
+                }
               }
             },
             "params": {
@@ -2930,7 +2993,6 @@ IR_DOC = {
                         }
                       }
                     },
-                    "returning": "bool",
                     "whereDynamic": {
                       "opt": {
                         "name": "DynamicWherePlan",
@@ -2952,7 +3014,14 @@ IR_DOC = {
                         }
                       }
                     },
-                    "write": "bool"
+                    "write": {
+                      "opt": {
+                        "name": "WriteMode",
+                        "obj": {
+                          "returning": "bool"
+                        }
+                      }
+                    }
                   }
                 },
                 "required": False,
@@ -2972,9 +3041,12 @@ IR_DOC = {
               "opts": {
                 "obj": {
                   "guard": None,
-                  "returning": False,
                   "whereDynamic": None,
-                  "write": True
+                  "write": {
+                    "obj": {
+                      "returning": False
+                    }
+                  }
                 }
               },
               "params": {
@@ -3079,7 +3151,6 @@ IR_DOC = {
                       }
                     }
                   },
-                  "returning": "bool",
                   "whereDynamic": {
                     "opt": {
                       "name": "DynamicWherePlan",
@@ -3101,7 +3172,14 @@ IR_DOC = {
                       }
                     }
                   },
-                  "write": "bool"
+                  "write": {
+                    "opt": {
+                      "name": "WriteMode",
+                      "obj": {
+                        "returning": "bool"
+                      }
+                    }
+                  }
                 }
               },
               "required": False,
@@ -3121,9 +3199,12 @@ IR_DOC = {
             "opts": {
               "obj": {
                 "guard": None,
-                "returning": True,
                 "whereDynamic": None,
-                "write": True
+                "write": {
+                  "obj": {
+                    "returning": True
+                  }
+                }
               }
             },
             "params": {
@@ -3171,7 +3252,6 @@ IR_DOC = {
                         }
                       }
                     },
-                    "returning": "bool",
                     "whereDynamic": {
                       "opt": {
                         "name": "DynamicWherePlan",
@@ -3193,7 +3273,14 @@ IR_DOC = {
                         }
                       }
                     },
-                    "write": "bool"
+                    "write": {
+                      "opt": {
+                        "name": "WriteMode",
+                        "obj": {
+                          "returning": "bool"
+                        }
+                      }
+                    }
                   }
                 },
                 "required": False,
@@ -3213,9 +3300,12 @@ IR_DOC = {
               "opts": {
                 "obj": {
                   "guard": None,
-                  "returning": False,
                   "whereDynamic": None,
-                  "write": True
+                  "write": {
+                    "obj": {
+                      "returning": False
+                    }
+                  }
                 }
               },
               "params": {
@@ -3320,7 +3410,6 @@ IR_DOC = {
                       }
                     }
                   },
-                  "returning": "bool",
                   "whereDynamic": {
                     "opt": {
                       "name": "DynamicWherePlan",
@@ -3342,7 +3431,14 @@ IR_DOC = {
                       }
                     }
                   },
-                  "write": "bool"
+                  "write": {
+                    "opt": {
+                      "name": "WriteMode",
+                      "obj": {
+                        "returning": "bool"
+                      }
+                    }
+                  }
                 }
               },
               "required": False,
@@ -3362,9 +3458,12 @@ IR_DOC = {
             "opts": {
               "obj": {
                 "guard": None,
-                "returning": True,
                 "whereDynamic": None,
-                "write": True
+                "write": {
+                  "obj": {
+                    "returning": True
+                  }
+                }
               }
             },
             "params": {
@@ -3412,7 +3511,6 @@ IR_DOC = {
                         }
                       }
                     },
-                    "returning": "bool",
                     "whereDynamic": {
                       "opt": {
                         "name": "DynamicWherePlan",
@@ -3434,7 +3532,14 @@ IR_DOC = {
                         }
                       }
                     },
-                    "write": "bool"
+                    "write": {
+                      "opt": {
+                        "name": "WriteMode",
+                        "obj": {
+                          "returning": "bool"
+                        }
+                      }
+                    }
                   }
                 },
                 "required": False,
@@ -3454,9 +3559,12 @@ IR_DOC = {
               "opts": {
                 "obj": {
                   "guard": None,
-                  "returning": False,
                   "whereDynamic": None,
-                  "write": True
+                  "write": {
+                    "obj": {
+                      "returning": False
+                    }
+                  }
                 }
               },
               "params": {
@@ -3561,7 +3669,6 @@ IR_DOC = {
                       }
                     }
                   },
-                  "returning": "bool",
                   "whereDynamic": {
                     "opt": {
                       "name": "DynamicWherePlan",
@@ -3583,7 +3690,14 @@ IR_DOC = {
                       }
                     }
                   },
-                  "write": "bool"
+                  "write": {
+                    "opt": {
+                      "name": "WriteMode",
+                      "obj": {
+                        "returning": "bool"
+                      }
+                    }
+                  }
                 }
               },
               "required": False,
@@ -3603,9 +3717,12 @@ IR_DOC = {
             "opts": {
               "obj": {
                 "guard": None,
-                "returning": True,
                 "whereDynamic": None,
-                "write": True
+                "write": {
+                  "obj": {
+                    "returning": True
+                  }
+                }
               }
             },
             "params": {
@@ -3653,7 +3770,6 @@ IR_DOC = {
                         }
                       }
                     },
-                    "returning": "bool",
                     "whereDynamic": {
                       "opt": {
                         "name": "DynamicWherePlan",
@@ -3675,7 +3791,14 @@ IR_DOC = {
                         }
                       }
                     },
-                    "write": "bool"
+                    "write": {
+                      "opt": {
+                        "name": "WriteMode",
+                        "obj": {
+                          "returning": "bool"
+                        }
+                      }
+                    }
                   }
                 },
                 "required": False,
@@ -3695,9 +3818,12 @@ IR_DOC = {
               "opts": {
                 "obj": {
                   "guard": None,
-                  "returning": False,
                   "whereDynamic": None,
-                  "write": True
+                  "write": {
+                    "obj": {
+                      "returning": False
+                    }
+                  }
                 }
               },
               "params": {

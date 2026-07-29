@@ -10,10 +10,11 @@
  *
  *   - {@link executeSQL} — the SOLE SQL transport. Binds params and runs one statement through the
  *     central {@link import('./exec-context') execute/run seam} (the ONLY driver contact). Read
- *     (`write:false`) → rows; write (`write:true`) → a one-row `[{changes,lastInsertRowid}]` summary
- *     (RETURNING writes return their rows via `execute`). It owns the transport-level param shaping a
- *     relation key-set needs — the dialect array encoding + deferred PG cast resolution + `?`→`$N`
- *     render — and, when the statement is a GUARDED relation child fetch, the runaway check on its raw
+ *     (`write:null`) → rows; write (`write:{returning}`) → a one-row `[{changes,lastInsertRowid}]`
+ *     summary (a RETURNING write returns its rows via `execute` instead). It owns the transport-level
+ *     param shaping a relation key-set needs — the dialect array encoding + deferred PG cast
+ *     resolution + `?`→`$N` render — and, when the statement is a GUARDED relation child fetch, the
+ *     runaway check on its raw
  *     rows ({@link import('./limit-config').assertRelationHardLimit}): the RAW child rows exist only
  *     here, since `group` already sees a nested graph and SCP itself has no throw.
  *   - {@link pluck} — rows + the ordered key-column tuple → the deduped, non-null key array (the
@@ -40,7 +41,7 @@ import {
   type RunInfo,
 } from './exec-context';
 import { assertRelationHardLimit, type RelationGuard } from './limit-config';
-import type { DynamicWherePlan, ExecOptions } from './leaf-transport';
+import type { DynamicWherePlan, ExecOptions, WriteMode } from './leaf-transport';
 import { renderPlaceholders, type Dialect } from './makesql/handler';
 import { encodeJsonArrayParam } from './makesql/json-array';
 import { resolvePgArrayCast } from './makesql/compile-relation';
@@ -79,8 +80,11 @@ export interface AsyncLeafContext {
 interface ExecuteSqlPorts {
   readonly sql: string;
   readonly params: unknown[];
-  readonly write: boolean;
-  readonly returning: boolean;
+  /**
+   * How the statement RUNS: `null` ⇒ a READ; a {@link WriteMode} ⇒ a write carrying its OWN
+   * `returning`. ONE field, three values — "returns rows but is not a write" is not representable.
+   */
+  readonly write: WriteMode | null;
   /** The DYNAMIC WHERE plan (absent on a fully-bounded statement — CLAUDE.md §2). See {@link assembleDynamicWhere}. */
   readonly whereDynamic?: DynamicWherePlan | null;
   /**
@@ -159,8 +163,10 @@ export function assembleDynamicWhere(p: { sql: string; params: unknown[]; whereD
  * the ports verbatim otherwise. The ONE place the two shapes converge — both transports consume it.
  */
 function effectiveStatement(p: ExecuteSqlPorts): { sql: string; params: unknown[]; write: boolean } {
-  if (p.whereDynamic == null) return p;
-  return { ...assembleDynamicWhere({ sql: p.sql, params: p.params, whereDynamic: p.whereDynamic }), write: p.write };
+  // The seam's INTENT is the one boolean the statement's `write` mode reduces to (present ⇒ a write).
+  const write = p.write !== null;
+  if (p.whereDynamic == null) return { sql: p.sql, params: p.params, write };
+  return { ...assembleDynamicWhere({ sql: p.sql, params: p.params, whereDynamic: p.whereDynamic }), write };
 }
 
 /** Normalize a driver integer (number|bigint) to bc's `int` value model (BigInt). */
@@ -242,7 +248,7 @@ function writeSummary(info: RunInfo): Array<Record<string, unknown>> {
  */
 export function executeSQL(p: ExecuteSqlPorts, ctx: LeafContext): Array<Record<string, unknown>> {
   const prepared = prepareSql(effectiveStatement(p), ctx.dialect);
-  if (p.write === true && p.returning !== true) return writeSummary(seamRun(ctx.exec, prepared.sql, prepared.bound, prepared.intent));
+  if (p.write !== null && !p.write.returning) return writeSummary(seamRun(ctx.exec, prepared.sql, prepared.bound, prepared.intent));
   const rows = seamExecuteSafe(ctx.exec, prepared.sql, prepared.bound, prepared.intent) as Array<Record<string, unknown>>;
   assertRelationHardLimit(rows, p.guard);
   return rows;
@@ -251,7 +257,7 @@ export function executeSQL(p: ExecuteSqlPorts, ctx: LeafContext): Array<Record<s
 /** The ASYNC (live PG / MySQL) `executeSQL` body — the twin of {@link executeSQL} over the async seam. */
 export async function executeSQLAsync(p: ExecuteSqlPorts, ctx: AsyncLeafContext): Promise<Array<Record<string, unknown>>> {
   const prepared = prepareSql(effectiveStatement(p), ctx.dialect);
-  if (p.write === true && p.returning !== true) return writeSummary(await seamRunAsync(ctx.execAsync, prepared.sql, prepared.bound, prepared.intent));
+  if (p.write !== null && !p.write.returning) return writeSummary(await seamRunAsync(ctx.execAsync, prepared.sql, prepared.bound, prepared.intent));
   const rows = (await seamExecuteAsync(ctx.execAsync, prepared.sql, prepared.bound, prepared.intent)) as Array<Record<string, unknown>>;
   assertRelationHardLimit(rows, p.guard);
   return rows;
@@ -319,11 +325,22 @@ function execOptionsPort(port: Value | undefined): Partial<Record<keyof ExecOpti
   if (port === undefined || port === null) return {};
   if (typeof port !== 'object' || Array.isArray(port)) {
     throw new Error(
-      `scp leaf executeSQL: the 'opts' port must be the {write, returning, whereDynamic, guard} control ` +
+      `scp leaf executeSQL: the 'opts' port must be the {write, whereDynamic, guard} control ` +
         `record, got ${JSON.stringify(port)}`,
     );
   }
   return port as unknown as Partial<Record<keyof ExecOptions, Value>>;
+}
+
+/**
+ * Read the `write` field of the control record — the statement's RUN MODE. `null` ⇒ a READ; a
+ * {@link WriteMode} ⇒ a write, carrying its own `returning`. The nesting is what makes "returns rows
+ * but is not a write" unrepresentable, so this reader has three outcomes, not four.
+ */
+function writeModePort(port: Value | undefined): WriteMode | null {
+  if (port === undefined || port === null) return null;
+  const mode = port as unknown as { returning?: unknown };
+  return { returning: mode.returning === true };
 }
 
 /** Read the declared `executeSQL` ports off the evaluated port record (the generated module's Values). */
@@ -332,8 +349,7 @@ function executeSqlPorts(ports: Record<string, Value>): ExecuteSqlPorts {
   return {
     sql: ports.sql as unknown as string,
     params: ports.params as unknown as unknown[],
-    write: opts.write === true,
-    returning: opts.returning === true,
+    write: writeModePort(opts.write),
     whereDynamic: (opts.whereDynamic ?? null) as unknown as DynamicWherePlan | null,
     guard: relationGuardPort(opts.guard),
   };

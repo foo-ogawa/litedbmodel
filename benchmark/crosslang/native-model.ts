@@ -139,63 +139,63 @@ export class BenchSqlite {
   }
 
   @behavior static create(email: string, name: string): WriteSummary[] {
-    const summary: WriteSummary[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) VALUES (?, ?)", [email, name], { write: true, returning: false, whereDynamic: null, guard: null }) as WriteSummary[];
+    const summary: WriteSummary[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) VALUES (?, ?)", [email, name], { write: { returning: false }, whereDynamic: null, guard: null }) as WriteSummary[];
     return summary;
   }
 
   @behavior static update(id: Int, name: string): WriteSummary[] {
-    const summary: WriteSummary[] = Db.executeSQL("UPDATE benchmark_users SET name = ? WHERE id = ?", [name, id], { write: true, returning: false, whereDynamic: null, guard: null }) as WriteSummary[];
+    const summary: WriteSummary[] = Db.executeSQL("UPDATE benchmark_users SET name = ? WHERE id = ?", [name, id], { write: { returning: false }, whereDynamic: null, guard: null }) as WriteSummary[];
     return summary;
   }
 
   @behavior static upsert(email: string, name: string): IdRow[] {
-    const returned: IdRow[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) VALUES (?, ?) ON CONFLICT (email) DO UPDATE SET email = excluded.email, name = excluded.name RETURNING id", [email, name], { write: true, returning: true, whereDynamic: null, guard: null }) as IdRow[];
+    const returned: IdRow[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) VALUES (?, ?) ON CONFLICT (email) DO UPDATE SET email = excluded.email, name = excluded.name RETURNING id", [email, name], { write: { returning: true }, whereDynamic: null, guard: null }) as IdRow[];
     return returned;
   }
 
   @behavior static createMany(rows: NewUser[]): WriteSummary[] {
-    const summary: WriteSummary[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) SELECT json_extract(value, '$.email'), json_extract(value, '$.name') FROM json_each(?)", [rows], { write: true, returning: false, whereDynamic: null, guard: null }) as WriteSummary[];
+    const summary: WriteSummary[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) SELECT json_extract(value, '$.email'), json_extract(value, '$.name') FROM json_each(?)", [rows], { write: { returning: false }, whereDynamic: null, guard: null }) as WriteSummary[];
     return summary;
   }
 
   @behavior static upsertMany(rows: NewUser[]): WriteSummary[] {
-    const summary: WriteSummary[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) SELECT json_extract(value, '$.email'), json_extract(value, '$.name') FROM json_each(?) WHERE true ON CONFLICT (email) DO UPDATE SET email = excluded.email, name = excluded.name", [rows], { write: true, returning: false, whereDynamic: null, guard: null }) as WriteSummary[];
+    const summary: WriteSummary[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) SELECT json_extract(value, '$.email'), json_extract(value, '$.name') FROM json_each(?) WHERE true ON CONFLICT (email) DO UPDATE SET email = excluded.email, name = excluded.name", [rows], { write: { returning: false }, whereDynamic: null, guard: null }) as WriteSummary[];
     return summary;
   }
 
   @behavior static updateMany(rows: UserPatch[]): WriteSummary[] {
-    const summary: WriteSummary[] = Db.executeSQL("UPDATE benchmark_users SET name = (SELECT json_extract(je.value, '$.name') FROM json_each(?) je WHERE json_extract(je.value, '$.id') = benchmark_users.id LIMIT 1) WHERE id IN (SELECT json_extract(value, '$.id') FROM json_each(?))", [rows, rows], { write: true, returning: false, whereDynamic: null, guard: null }) as WriteSummary[];
+    const summary: WriteSummary[] = Db.executeSQL("UPDATE benchmark_users SET name = (SELECT json_extract(je.value, '$.name') FROM json_each(?) je WHERE json_extract(je.value, '$.id') = benchmark_users.id LIMIT 1) WHERE id IN (SELECT json_extract(value, '$.id') FROM json_each(?))", [rows, rows], { write: { returning: false }, whereDynamic: null, guard: null }) as WriteSummary[];
     return summary;
   }
 
   @behavior static nestedCreate(email: string, name: string, title: string): WriteSummary[][] {
-    const user: IdRow[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) VALUES (?, ?) RETURNING id", [email, name], { write: true, returning: true, whereDynamic: null, guard: null }) as IdRow[];
+    const user: IdRow[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) VALUES (?, ?) RETURNING id", [email, name], { write: { returning: true }, whereDynamic: null, guard: null }) as IdRow[];
     return user.map((u) => {
-      const written: WriteSummary[] = Db.executeSQL("INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)", [u.id, title], { write: true, returning: false, whereDynamic: null, guard: null }) as WriteSummary[];
+      const written: WriteSummary[] = Db.executeSQL("INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)", [u.id, title], { write: { returning: false }, whereDynamic: null, guard: null }) as WriteSummary[];
       return written;
     });
   }
 
   @behavior static nestedUpsert(email: string, name: string, title: string): WriteSummary[][] {
-    const user: IdRow[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) VALUES (?, ?) ON CONFLICT (email) DO UPDATE SET email = excluded.email, name = excluded.name RETURNING id", [email, name], { write: true, returning: true, whereDynamic: null, guard: null }) as IdRow[];
+    const user: IdRow[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) VALUES (?, ?) ON CONFLICT (email) DO UPDATE SET email = excluded.email, name = excluded.name RETURNING id", [email, name], { write: { returning: true }, whereDynamic: null, guard: null }) as IdRow[];
     return user.map((u) => {
-      const written: WriteSummary[] = Db.executeSQL("INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)", [u.id, title], { write: true, returning: false, whereDynamic: null, guard: null }) as WriteSummary[];
+      const written: WriteSummary[] = Db.executeSQL("INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)", [u.id, title], { write: { returning: false }, whereDynamic: null, guard: null }) as WriteSummary[];
       return written;
     });
   }
 
   @behavior static nestedUpdate(id: Int, name: string, title: string): WriteSummary[][] {
-    const user: IdRow[] = Db.executeSQL("UPDATE benchmark_users SET name = ? WHERE id = ? RETURNING id", [name, id], { write: true, returning: true, whereDynamic: null, guard: null }) as IdRow[];
+    const user: IdRow[] = Db.executeSQL("UPDATE benchmark_users SET name = ? WHERE id = ? RETURNING id", [name, id], { write: { returning: true }, whereDynamic: null, guard: null }) as IdRow[];
     return user.map((u) => {
-      const written: WriteSummary[] = Db.executeSQL("UPDATE benchmark_posts SET title = ? WHERE author_id = ?", [title, u.id], { write: true, returning: false, whereDynamic: null, guard: null }) as WriteSummary[];
+      const written: WriteSummary[] = Db.executeSQL("UPDATE benchmark_posts SET title = ? WHERE author_id = ?", [title, u.id], { write: { returning: false }, whereDynamic: null, guard: null }) as WriteSummary[];
       return written;
     });
   }
 
   @behavior static delete(email: string, name: string): WriteSummary[][] {
-    const user: IdRow[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) VALUES (?, ?) RETURNING id", [email, name], { write: true, returning: true, whereDynamic: null, guard: null }) as IdRow[];
+    const user: IdRow[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) VALUES (?, ?) RETURNING id", [email, name], { write: { returning: true }, whereDynamic: null, guard: null }) as IdRow[];
     return user.map((u) => {
-      const written: WriteSummary[] = Db.executeSQL("DELETE FROM benchmark_users WHERE id = ?", [u.id], { write: true, returning: false, whereDynamic: null, guard: null }) as WriteSummary[];
+      const written: WriteSummary[] = Db.executeSQL("DELETE FROM benchmark_users WHERE id = ?", [u.id], { write: { returning: false }, whereDynamic: null, guard: null }) as WriteSummary[];
       return written;
     });
   }
@@ -269,17 +269,17 @@ export class BenchPostgres {
   }
 
   @behavior static create(email: string, name: string): WriteSummary[] {
-    const summary: WriteSummary[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) VALUES (?, ?)", [email, name], { write: true, returning: false, whereDynamic: null, guard: null }) as WriteSummary[];
+    const summary: WriteSummary[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) VALUES (?, ?)", [email, name], { write: { returning: false }, whereDynamic: null, guard: null }) as WriteSummary[];
     return summary;
   }
 
   @behavior static update(id: Int, name: string): WriteSummary[] {
-    const summary: WriteSummary[] = Db.executeSQL("UPDATE benchmark_users SET name = ? WHERE id = ?", [name, id], { write: true, returning: false, whereDynamic: null, guard: null }) as WriteSummary[];
+    const summary: WriteSummary[] = Db.executeSQL("UPDATE benchmark_users SET name = ? WHERE id = ?", [name, id], { write: { returning: false }, whereDynamic: null, guard: null }) as WriteSummary[];
     return summary;
   }
 
   @behavior static upsert(email: string, name: string): IdRow[] {
-    const returned: IdRow[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) VALUES (?, ?) ON CONFLICT (email) DO UPDATE SET email = excluded.email, name = excluded.name RETURNING id", [email, name], { write: true, returning: true, whereDynamic: null, guard: null }) as IdRow[];
+    const returned: IdRow[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) VALUES (?, ?) ON CONFLICT (email) DO UPDATE SET email = excluded.email, name = excluded.name RETURNING id", [email, name], { write: { returning: true }, whereDynamic: null, guard: null }) as IdRow[];
     return returned;
   }
 
@@ -292,52 +292,52 @@ export class BenchPostgres {
     // boxes to wire at the leaf-param boundary, which is where the box belongs.
     const emails: string[] = rows.map(r => r.email);
     const names: string[] = rows.map(r => r.name);
-    const summary: WriteSummary[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) SELECT v.email, v.name FROM UNNEST(?::text[], ?::text[]) AS v(email, name)", [emails, names], { write: true, returning: false, whereDynamic: null, guard: null }) as WriteSummary[];
+    const summary: WriteSummary[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) SELECT v.email, v.name FROM UNNEST(?::text[], ?::text[]) AS v(email, name)", [emails, names], { write: { returning: false }, whereDynamic: null, guard: null }) as WriteSummary[];
     return summary;
   }
 
   @behavior static upsertMany(rows: NewUser[]): WriteSummary[] {
     const emails: string[] = rows.map(r => r.email);
     const names: string[] = rows.map(r => r.name);
-    const summary: WriteSummary[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) SELECT v.email, v.name FROM UNNEST(?::text[], ?::text[]) AS v(email, name) ON CONFLICT (email) DO UPDATE SET email = EXCLUDED.email, name = EXCLUDED.name", [emails, names], { write: true, returning: false, whereDynamic: null, guard: null }) as WriteSummary[];
+    const summary: WriteSummary[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) SELECT v.email, v.name FROM UNNEST(?::text[], ?::text[]) AS v(email, name) ON CONFLICT (email) DO UPDATE SET email = EXCLUDED.email, name = EXCLUDED.name", [emails, names], { write: { returning: false }, whereDynamic: null, guard: null }) as WriteSummary[];
     return summary;
   }
 
   @behavior static updateMany(rows: UserPatch[]): WriteSummary[] {
     const ids: Int[] = rows.map(r => r.id);
     const names: string[] = rows.map(r => r.name);
-    const summary: WriteSummary[] = Db.executeSQL("UPDATE benchmark_users AS t SET name = v.name FROM UNNEST(?::int[], ?::text[]) AS v(id, name) WHERE t.id = v.id", [ids, names], { write: true, returning: false, whereDynamic: null, guard: null }) as WriteSummary[];
+    const summary: WriteSummary[] = Db.executeSQL("UPDATE benchmark_users AS t SET name = v.name FROM UNNEST(?::int[], ?::text[]) AS v(id, name) WHERE t.id = v.id", [ids, names], { write: { returning: false }, whereDynamic: null, guard: null }) as WriteSummary[];
     return summary;
   }
 
   @behavior static nestedCreate(email: string, name: string, title: string): WriteSummary[][] {
-    const user: IdRow[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) VALUES (?, ?) RETURNING id", [email, name], { write: true, returning: true, whereDynamic: null, guard: null }) as IdRow[];
+    const user: IdRow[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) VALUES (?, ?) RETURNING id", [email, name], { write: { returning: true }, whereDynamic: null, guard: null }) as IdRow[];
     return user.map((u) => {
-      const written: WriteSummary[] = Db.executeSQL("INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)", [u.id, title], { write: true, returning: false, whereDynamic: null, guard: null }) as WriteSummary[];
+      const written: WriteSummary[] = Db.executeSQL("INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)", [u.id, title], { write: { returning: false }, whereDynamic: null, guard: null }) as WriteSummary[];
       return written;
     });
   }
 
   @behavior static nestedUpsert(email: string, name: string, title: string): WriteSummary[][] {
-    const user: IdRow[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) VALUES (?, ?) ON CONFLICT (email) DO UPDATE SET email = excluded.email, name = excluded.name RETURNING id", [email, name], { write: true, returning: true, whereDynamic: null, guard: null }) as IdRow[];
+    const user: IdRow[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) VALUES (?, ?) ON CONFLICT (email) DO UPDATE SET email = excluded.email, name = excluded.name RETURNING id", [email, name], { write: { returning: true }, whereDynamic: null, guard: null }) as IdRow[];
     return user.map((u) => {
-      const written: WriteSummary[] = Db.executeSQL("INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)", [u.id, title], { write: true, returning: false, whereDynamic: null, guard: null }) as WriteSummary[];
+      const written: WriteSummary[] = Db.executeSQL("INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)", [u.id, title], { write: { returning: false }, whereDynamic: null, guard: null }) as WriteSummary[];
       return written;
     });
   }
 
   @behavior static nestedUpdate(id: Int, name: string, title: string): WriteSummary[][] {
-    const user: IdRow[] = Db.executeSQL("UPDATE benchmark_users SET name = ? WHERE id = ? RETURNING id", [name, id], { write: true, returning: true, whereDynamic: null, guard: null }) as IdRow[];
+    const user: IdRow[] = Db.executeSQL("UPDATE benchmark_users SET name = ? WHERE id = ? RETURNING id", [name, id], { write: { returning: true }, whereDynamic: null, guard: null }) as IdRow[];
     return user.map((u) => {
-      const written: WriteSummary[] = Db.executeSQL("UPDATE benchmark_posts SET title = ? WHERE author_id = ?", [title, u.id], { write: true, returning: false, whereDynamic: null, guard: null }) as WriteSummary[];
+      const written: WriteSummary[] = Db.executeSQL("UPDATE benchmark_posts SET title = ? WHERE author_id = ?", [title, u.id], { write: { returning: false }, whereDynamic: null, guard: null }) as WriteSummary[];
       return written;
     });
   }
 
   @behavior static delete(email: string, name: string): WriteSummary[][] {
-    const user: IdRow[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) VALUES (?, ?) RETURNING id", [email, name], { write: true, returning: true, whereDynamic: null, guard: null }) as IdRow[];
+    const user: IdRow[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) VALUES (?, ?) RETURNING id", [email, name], { write: { returning: true }, whereDynamic: null, guard: null }) as IdRow[];
     return user.map((u) => {
-      const written: WriteSummary[] = Db.executeSQL("DELETE FROM benchmark_users WHERE id = ?", [u.id], { write: true, returning: false, whereDynamic: null, guard: null }) as WriteSummary[];
+      const written: WriteSummary[] = Db.executeSQL("DELETE FROM benchmark_users WHERE id = ?", [u.id], { write: { returning: false }, whereDynamic: null, guard: null }) as WriteSummary[];
       return written;
     });
   }
@@ -411,63 +411,63 @@ export class BenchMysql {
   }
 
   @behavior static create(email: string, name: string): WriteSummary[] {
-    const summary: WriteSummary[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) VALUES (?, ?)", [email, name], { write: true, returning: false, whereDynamic: null, guard: null }) as WriteSummary[];
+    const summary: WriteSummary[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) VALUES (?, ?)", [email, name], { write: { returning: false }, whereDynamic: null, guard: null }) as WriteSummary[];
     return summary;
   }
 
   @behavior static update(id: Int, name: string): WriteSummary[] {
-    const summary: WriteSummary[] = Db.executeSQL("UPDATE benchmark_users SET name = ? WHERE id = ?", [name, id], { write: true, returning: false, whereDynamic: null, guard: null }) as WriteSummary[];
+    const summary: WriteSummary[] = Db.executeSQL("UPDATE benchmark_users SET name = ? WHERE id = ?", [name, id], { write: { returning: false }, whereDynamic: null, guard: null }) as WriteSummary[];
     return summary;
   }
 
   @behavior static upsert(email: string, name: string): IdRow[] {
-    const returned: IdRow[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) VALUES (?, ?) ON DUPLICATE KEY UPDATE email = VALUES(email), name = VALUES(name) RETURNING id /*scp:pk=id;ai=id;conflict=email*/", [email, name], { write: true, returning: true, whereDynamic: null, guard: null }) as IdRow[];
+    const returned: IdRow[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) VALUES (?, ?) ON DUPLICATE KEY UPDATE email = VALUES(email), name = VALUES(name) RETURNING id /*scp:pk=id;ai=id;conflict=email*/", [email, name], { write: { returning: true }, whereDynamic: null, guard: null }) as IdRow[];
     return returned;
   }
 
   @behavior static createMany(rows: NewUser[]): WriteSummary[] {
-    const summary: WriteSummary[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) SELECT JSON_UNQUOTE(jt.email), JSON_UNQUOTE(jt.name) FROM JSON_TABLE(?, '$[*]' COLUMNS(email JSON PATH '$.email', name JSON PATH '$.name')) jt", [rows], { write: true, returning: false, whereDynamic: null, guard: null }) as WriteSummary[];
+    const summary: WriteSummary[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) SELECT JSON_UNQUOTE(jt.email), JSON_UNQUOTE(jt.name) FROM JSON_TABLE(?, '$[*]' COLUMNS(email JSON PATH '$.email', name JSON PATH '$.name')) jt", [rows], { write: { returning: false }, whereDynamic: null, guard: null }) as WriteSummary[];
     return summary;
   }
 
   @behavior static upsertMany(rows: NewUser[]): WriteSummary[] {
-    const summary: WriteSummary[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) SELECT JSON_UNQUOTE(jt.email), JSON_UNQUOTE(jt.name) FROM JSON_TABLE(?, '$[*]' COLUMNS(email JSON PATH '$.email', name JSON PATH '$.name')) jt ON DUPLICATE KEY UPDATE email = VALUES(email), name = VALUES(name)", [rows], { write: true, returning: false, whereDynamic: null, guard: null }) as WriteSummary[];
+    const summary: WriteSummary[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) SELECT JSON_UNQUOTE(jt.email), JSON_UNQUOTE(jt.name) FROM JSON_TABLE(?, '$[*]' COLUMNS(email JSON PATH '$.email', name JSON PATH '$.name')) jt ON DUPLICATE KEY UPDATE email = VALUES(email), name = VALUES(name)", [rows], { write: { returning: false }, whereDynamic: null, guard: null }) as WriteSummary[];
     return summary;
   }
 
   @behavior static updateMany(rows: UserPatch[]): WriteSummary[] {
-    const summary: WriteSummary[] = Db.executeSQL("UPDATE benchmark_users AS u JOIN JSON_TABLE(?, '$[*]' COLUMNS(id JSON PATH '$.id', name JSON PATH '$.name')) AS v ON u.id = JSON_UNQUOTE(v.id) SET u.name = JSON_UNQUOTE(v.name)", [rows], { write: true, returning: false, whereDynamic: null, guard: null }) as WriteSummary[];
+    const summary: WriteSummary[] = Db.executeSQL("UPDATE benchmark_users AS u JOIN JSON_TABLE(?, '$[*]' COLUMNS(id JSON PATH '$.id', name JSON PATH '$.name')) AS v ON u.id = JSON_UNQUOTE(v.id) SET u.name = JSON_UNQUOTE(v.name)", [rows], { write: { returning: false }, whereDynamic: null, guard: null }) as WriteSummary[];
     return summary;
   }
 
   @behavior static nestedCreate(email: string, name: string, title: string): WriteSummary[][] {
-    const user: IdRow[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) VALUES (?, ?) RETURNING id /*scp:pk=id;ai=id*/", [email, name], { write: true, returning: true, whereDynamic: null, guard: null }) as IdRow[];
+    const user: IdRow[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) VALUES (?, ?) RETURNING id /*scp:pk=id;ai=id*/", [email, name], { write: { returning: true }, whereDynamic: null, guard: null }) as IdRow[];
     return user.map((u) => {
-      const written: WriteSummary[] = Db.executeSQL("INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)", [u.id, title], { write: true, returning: false, whereDynamic: null, guard: null }) as WriteSummary[];
+      const written: WriteSummary[] = Db.executeSQL("INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)", [u.id, title], { write: { returning: false }, whereDynamic: null, guard: null }) as WriteSummary[];
       return written;
     });
   }
 
   @behavior static nestedUpsert(email: string, name: string, title: string): WriteSummary[][] {
-    const user: IdRow[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) VALUES (?, ?) ON DUPLICATE KEY UPDATE email = VALUES(email), name = VALUES(name) RETURNING id /*scp:pk=id;ai=id;conflict=email*/", [email, name], { write: true, returning: true, whereDynamic: null, guard: null }) as IdRow[];
+    const user: IdRow[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) VALUES (?, ?) ON DUPLICATE KEY UPDATE email = VALUES(email), name = VALUES(name) RETURNING id /*scp:pk=id;ai=id;conflict=email*/", [email, name], { write: { returning: true }, whereDynamic: null, guard: null }) as IdRow[];
     return user.map((u) => {
-      const written: WriteSummary[] = Db.executeSQL("INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)", [u.id, title], { write: true, returning: false, whereDynamic: null, guard: null }) as WriteSummary[];
+      const written: WriteSummary[] = Db.executeSQL("INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)", [u.id, title], { write: { returning: false }, whereDynamic: null, guard: null }) as WriteSummary[];
       return written;
     });
   }
 
   @behavior static nestedUpdate(id: Int, name: string, title: string): WriteSummary[][] {
-    const user: IdRow[] = Db.executeSQL("UPDATE benchmark_users SET name = ? WHERE id = ? RETURNING id /*scp:pk=id;ai=id*/", [name, id], { write: true, returning: true, whereDynamic: null, guard: null }) as IdRow[];
+    const user: IdRow[] = Db.executeSQL("UPDATE benchmark_users SET name = ? WHERE id = ? RETURNING id /*scp:pk=id;ai=id*/", [name, id], { write: { returning: true }, whereDynamic: null, guard: null }) as IdRow[];
     return user.map((u) => {
-      const written: WriteSummary[] = Db.executeSQL("UPDATE benchmark_posts SET title = ? WHERE author_id = ?", [title, u.id], { write: true, returning: false, whereDynamic: null, guard: null }) as WriteSummary[];
+      const written: WriteSummary[] = Db.executeSQL("UPDATE benchmark_posts SET title = ? WHERE author_id = ?", [title, u.id], { write: { returning: false }, whereDynamic: null, guard: null }) as WriteSummary[];
       return written;
     });
   }
 
   @behavior static delete(email: string, name: string): WriteSummary[][] {
-    const user: IdRow[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) VALUES (?, ?) RETURNING id /*scp:pk=id;ai=id*/", [email, name], { write: true, returning: true, whereDynamic: null, guard: null }) as IdRow[];
+    const user: IdRow[] = Db.executeSQL("INSERT INTO benchmark_users (email, name) VALUES (?, ?) RETURNING id /*scp:pk=id;ai=id*/", [email, name], { write: { returning: true }, whereDynamic: null, guard: null }) as IdRow[];
     return user.map((u) => {
-      const written: WriteSummary[] = Db.executeSQL("DELETE FROM benchmark_users WHERE id = ?", [u.id], { write: true, returning: false, whereDynamic: null, guard: null }) as WriteSummary[];
+      const written: WriteSummary[] = Db.executeSQL("DELETE FROM benchmark_users WHERE id = ?", [u.id], { write: { returning: false }, whereDynamic: null, guard: null }) as WriteSummary[];
       return written;
     });
   }

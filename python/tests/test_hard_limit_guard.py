@@ -69,7 +69,7 @@ def test_relation_guard_trips_on_the_raw_child_rows():
         # all (the emitter omits the port entirely on a bounded, uncapped statement).
         ports = {"sql": "SELECT id, v FROM t ORDER BY id", "params": []}
         if guard is not None:
-            ports["opts"] = {"write": False, "returning": False, "whereDynamic": None, "guard": guard}
+            ports["opts"] = {"write": None, "whereDynamic": None, "guard": guard}
         return execute_sql(ports, ctx)
 
     cap = lambda limit: {"limit": limit, "model": "t", "relation": "things"}  # noqa: E731

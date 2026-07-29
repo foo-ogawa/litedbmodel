@@ -877,8 +877,8 @@ function isOptional(p: Predicate): p is OptionalPredicate {
  * partial one — so each absent fact is the `null` VALUE of its own NAMED field. That is what removed
  * the positional filler #193 is about: nothing has to be passed to reach the field after it.
  *
- * `write` carries the write's own `returning`, so "returns rows but is not a write" is not
- * expressible at the only place the record is built.
+ * `write` is ONE field carrying the write's own `returning` (the `WriteMode` struct), so "returns rows
+ * but is not a write" is not a state the ABI can hold — three statement shapes, three values.
  */
 function execOptions(o: {
   /** The statement WRITES, and whether that write yields ROWS (absent ⇒ a read). */
@@ -889,7 +889,8 @@ function execOptions(o: {
   readonly guard?: string;
 }): string {
   if (o.write === undefined && o.whereDynamic === undefined && o.guard === undefined) return '';
-  return `, { write: ${o.write !== undefined}, returning: ${o.write?.returning === true}, whereDynamic: ${o.whereDynamic ?? 'null'}, guard: ${o.guard ?? 'null'} }`;
+  const write = o.write === undefined ? 'null' : `{ returning: ${o.write.returning} }`;
+  return `, { write: ${write}, whereDynamic: ${o.whereDynamic ?? 'null'}, guard: ${o.guard ?? 'null'} }`;
 }
 
 /**

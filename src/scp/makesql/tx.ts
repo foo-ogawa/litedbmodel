@@ -1119,12 +1119,12 @@ function execStatement(
 ): { rows: Record<string, unknown>[]; changes: number } {
   // A tx body statement rides the SAME op-independent transport as every read/write: the `executeSQL`
   // leaf (placeholder render + param encode + central seam). The tx scope-eval/assemble/coerce is done
-  // first (`evalAssemble`); the leaf receives raw `?` SQL + concrete params. `write:true` ⇒ the tx-owned
-  // connection resolves via `connectionFor` (§3); a SELECT/RETURNING statement reads rows (`returning`
-  // ⇒ the row-returning seam), a bare write runs (the `[{changes,…}]` summary).
+  // first (`evalAssemble`); the leaf receives raw `?` SQL + concrete params. A `write` mode ⇒ the
+  // tx-owned connection resolves via `connectionFor` (§3); a SELECT/RETURNING statement reads rows
+  // (`returning` ⇒ the row-returning seam), a bare write runs (the `[{changes,…}]` summary).
   const { sql, params } = evalAssemble(op, scope, dialect);
   const hasReturn = /\bselect\b/i.test(sql.slice(0, 8)) || /\breturning\b/i.test(sql);
-  const out = executeSQL({ sql, params, write: true, returning: hasReturn }, { exec: ctx, dialect } satisfies LeafContext);
+  const out = executeSQL({ sql, params, write: { returning: hasReturn } }, { exec: ctx, dialect } satisfies LeafContext);
   return hasReturn ? { rows: out, changes: out.length } : { rows: [], changes: Number(out[0]?.changes ?? 0) };
 }
 
@@ -1254,7 +1254,7 @@ async function execStatementAsync(
 
   // A SELECT/RETURNING reads rows; a bare write returns the `[{changes,…}]` summary.
   const hasReturn = /\bselect\b/i.test(sql.slice(0, 8)) || /\breturning\b/i.test(sql);
-  const out = await executeSQLAsync({ sql, params, write: true, returning: hasReturn }, { execAsync: ctx, dialect } satisfies AsyncLeafContext);
+  const out = await executeSQLAsync({ sql, params, write: { returning: hasReturn } }, { execAsync: ctx, dialect } satisfies AsyncLeafContext);
   return hasReturn ? { rows: out, changes: out.length } : { rows: [], changes: Number(out[0]?.changes ?? 0) };
 }
 

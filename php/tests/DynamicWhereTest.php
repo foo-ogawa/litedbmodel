@@ -50,8 +50,7 @@ final class DynamicWhereTest extends TestCase
             'sql' => self::BASE_SQL,
             'params' => [1, 2],
             'opts' => (object) [
-                'write' => false,
-                'returning' => false,
+                'write' => null,
                 'whereDynamic' => (object) ['frags' => $frags],
                 'guard' => null,
             ],

@@ -783,7 +783,7 @@ function run_create(h$executeSQL: Handler | undefined, input: Scope): Value {
   // ── op 'n0' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n0: Record<string, Value> = {
-    "opts": cgp.obj([["guard", () => null], ["returning", () => false], ["whereDynamic", () => null], ["write", () => true]]),
+    "opts": cgp.obj([["guard", () => null], ["whereDynamic", () => null], ["write", () => cgp.obj([["returning", () => false]])]]),
     "params": cgp.arr([cgp.ref(["email"], scope), cgp.ref(["name"], scope)]),
     "sql": "INSERT INTO benchmark_users (email, name) VALUES (?, ?)",
   };
@@ -799,7 +799,7 @@ async function run_create_async(h$executeSQL: AsyncHandler | undefined, input: S
   // ── op 'n0' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n0: Record<string, Value> = {
-    "opts": cgp.obj([["guard", () => null], ["returning", () => false], ["whereDynamic", () => null], ["write", () => true]]),
+    "opts": cgp.obj([["guard", () => null], ["whereDynamic", () => null], ["write", () => cgp.obj([["returning", () => false]])]]),
     "params": cgp.arr([cgp.ref(["email"], scope), cgp.ref(["name"], scope)]),
     "sql": "INSERT INTO benchmark_users (email, name) VALUES (?, ?)",
   };
@@ -815,7 +815,7 @@ function run_update(h$executeSQL: Handler | undefined, input: Scope): Value {
   // ── op 'n0' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n0: Record<string, Value> = {
-    "opts": cgp.obj([["guard", () => null], ["returning", () => false], ["whereDynamic", () => null], ["write", () => true]]),
+    "opts": cgp.obj([["guard", () => null], ["whereDynamic", () => null], ["write", () => cgp.obj([["returning", () => false]])]]),
     "params": cgp.arr([cgp.ref(["name"], scope), cgp.ref(["id"], scope)]),
     "sql": "UPDATE benchmark_users SET name = ? WHERE id = ?",
   };
@@ -831,7 +831,7 @@ async function run_update_async(h$executeSQL: AsyncHandler | undefined, input: S
   // ── op 'n0' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n0: Record<string, Value> = {
-    "opts": cgp.obj([["guard", () => null], ["returning", () => false], ["whereDynamic", () => null], ["write", () => true]]),
+    "opts": cgp.obj([["guard", () => null], ["whereDynamic", () => null], ["write", () => cgp.obj([["returning", () => false]])]]),
     "params": cgp.arr([cgp.ref(["name"], scope), cgp.ref(["id"], scope)]),
     "sql": "UPDATE benchmark_users SET name = ? WHERE id = ?",
   };
@@ -847,7 +847,7 @@ function run_upsert(h$executeSQL: Handler | undefined, input: Scope): Value {
   // ── op 'n0' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n0: Record<string, Value> = {
-    "opts": cgp.obj([["guard", () => null], ["returning", () => true], ["whereDynamic", () => null], ["write", () => true]]),
+    "opts": cgp.obj([["guard", () => null], ["whereDynamic", () => null], ["write", () => cgp.obj([["returning", () => true]])]]),
     "params": cgp.arr([cgp.ref(["email"], scope), cgp.ref(["name"], scope)]),
     "sql": "INSERT INTO benchmark_users (email, name) VALUES (?, ?) ON CONFLICT (email) DO UPDATE SET email = excluded.email, name = excluded.name RETURNING id",
   };
@@ -863,7 +863,7 @@ async function run_upsert_async(h$executeSQL: AsyncHandler | undefined, input: S
   // ── op 'n0' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n0: Record<string, Value> = {
-    "opts": cgp.obj([["guard", () => null], ["returning", () => true], ["whereDynamic", () => null], ["write", () => true]]),
+    "opts": cgp.obj([["guard", () => null], ["whereDynamic", () => null], ["write", () => cgp.obj([["returning", () => true]])]]),
     "params": cgp.arr([cgp.ref(["email"], scope), cgp.ref(["name"], scope)]),
     "sql": "INSERT INTO benchmark_users (email, name) VALUES (?, ?) ON CONFLICT (email) DO UPDATE SET email = excluded.email, name = excluded.name RETURNING id",
   };
@@ -879,7 +879,7 @@ function run_createMany(h$executeSQL: Handler | undefined, input: Scope): Value 
   // ── op 'n0' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n0: Record<string, Value> = {
-    "opts": cgp.obj([["guard", () => null], ["returning", () => false], ["whereDynamic", () => null], ["write", () => true]]),
+    "opts": cgp.obj([["guard", () => null], ["whereDynamic", () => null], ["write", () => cgp.obj([["returning", () => false]])]]),
     "params": cgp.arr([cgp.ref(["rows"], scope)]),
     "sql": "INSERT INTO benchmark_users (email, name) SELECT json_extract(value, '$.email'), json_extract(value, '$.name') FROM json_each(?)",
   };
@@ -895,7 +895,7 @@ async function run_createMany_async(h$executeSQL: AsyncHandler | undefined, inpu
   // ── op 'n0' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n0: Record<string, Value> = {
-    "opts": cgp.obj([["guard", () => null], ["returning", () => false], ["whereDynamic", () => null], ["write", () => true]]),
+    "opts": cgp.obj([["guard", () => null], ["whereDynamic", () => null], ["write", () => cgp.obj([["returning", () => false]])]]),
     "params": cgp.arr([cgp.ref(["rows"], scope)]),
     "sql": "INSERT INTO benchmark_users (email, name) SELECT json_extract(value, '$.email'), json_extract(value, '$.name') FROM json_each(?)",
   };
@@ -911,7 +911,7 @@ function run_upsertMany(h$executeSQL: Handler | undefined, input: Scope): Value 
   // ── op 'n0' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n0: Record<string, Value> = {
-    "opts": cgp.obj([["guard", () => null], ["returning", () => false], ["whereDynamic", () => null], ["write", () => true]]),
+    "opts": cgp.obj([["guard", () => null], ["whereDynamic", () => null], ["write", () => cgp.obj([["returning", () => false]])]]),
     "params": cgp.arr([cgp.ref(["rows"], scope)]),
     "sql": "INSERT INTO benchmark_users (email, name) SELECT json_extract(value, '$.email'), json_extract(value, '$.name') FROM json_each(?) WHERE true ON CONFLICT (email) DO UPDATE SET email = excluded.email, name = excluded.name",
   };
@@ -927,7 +927,7 @@ async function run_upsertMany_async(h$executeSQL: AsyncHandler | undefined, inpu
   // ── op 'n0' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n0: Record<string, Value> = {
-    "opts": cgp.obj([["guard", () => null], ["returning", () => false], ["whereDynamic", () => null], ["write", () => true]]),
+    "opts": cgp.obj([["guard", () => null], ["whereDynamic", () => null], ["write", () => cgp.obj([["returning", () => false]])]]),
     "params": cgp.arr([cgp.ref(["rows"], scope)]),
     "sql": "INSERT INTO benchmark_users (email, name) SELECT json_extract(value, '$.email'), json_extract(value, '$.name') FROM json_each(?) WHERE true ON CONFLICT (email) DO UPDATE SET email = excluded.email, name = excluded.name",
   };
@@ -943,7 +943,7 @@ function run_updateMany(h$executeSQL: Handler | undefined, input: Scope): Value 
   // ── op 'n0' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n0: Record<string, Value> = {
-    "opts": cgp.obj([["guard", () => null], ["returning", () => false], ["whereDynamic", () => null], ["write", () => true]]),
+    "opts": cgp.obj([["guard", () => null], ["whereDynamic", () => null], ["write", () => cgp.obj([["returning", () => false]])]]),
     "params": cgp.arr([cgp.ref(["rows"], scope), cgp.ref(["rows"], scope)]),
     "sql": "UPDATE benchmark_users SET name = (SELECT json_extract(je.value, '$.name') FROM json_each(?) je WHERE json_extract(je.value, '$.id') = benchmark_users.id LIMIT 1) WHERE id IN (SELECT json_extract(value, '$.id') FROM json_each(?))",
   };
@@ -959,7 +959,7 @@ async function run_updateMany_async(h$executeSQL: AsyncHandler | undefined, inpu
   // ── op 'n0' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n0: Record<string, Value> = {
-    "opts": cgp.obj([["guard", () => null], ["returning", () => false], ["whereDynamic", () => null], ["write", () => true]]),
+    "opts": cgp.obj([["guard", () => null], ["whereDynamic", () => null], ["write", () => cgp.obj([["returning", () => false]])]]),
     "params": cgp.arr([cgp.ref(["rows"], scope), cgp.ref(["rows"], scope)]),
     "sql": "UPDATE benchmark_users SET name = (SELECT json_extract(je.value, '$.name') FROM json_each(?) je WHERE json_extract(je.value, '$.id') = benchmark_users.id LIMIT 1) WHERE id IN (SELECT json_extract(value, '$.id') FROM json_each(?))",
   };
@@ -975,7 +975,7 @@ function run_nestedCreate(h$executeSQL: Handler | undefined, input: Scope): Valu
   // ── op 'n0' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n0: Record<string, Value> = {
-    "opts": cgp.obj([["guard", () => null], ["returning", () => true], ["whereDynamic", () => null], ["write", () => true]]),
+    "opts": cgp.obj([["guard", () => null], ["whereDynamic", () => null], ["write", () => cgp.obj([["returning", () => true]])]]),
     "params": cgp.arr([cgp.ref(["email"], scope), cgp.ref(["name"], scope)]),
     "sql": "INSERT INTO benchmark_users (email, name) VALUES (?, ?) RETURNING id",
   };
@@ -993,7 +993,7 @@ function run_nestedCreate(h$executeSQL: Handler | undefined, input: Scope): Valu
     const el_n1 = (over_n1 as Value[])[mi_n1];
     const mscope_n1: Scope = { ...scope, ["$e0"]: el_n1 };
     const ports_n1: Record<string, Value> = {
-      "opts": cgp.obj([["guard", () => null], ["returning", () => false], ["whereDynamic", () => null], ["write", () => true]]),
+      "opts": cgp.obj([["guard", () => null], ["whereDynamic", () => null], ["write", () => cgp.obj([["returning", () => false]])]]),
       "params": cgp.arr([cgp.ref(["$e0","id"], mscope_n1), cgp.ref(["title"], mscope_n1)]),
       "sql": "INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)",
     };
@@ -1012,7 +1012,7 @@ async function run_nestedCreate_async(h$executeSQL: AsyncHandler | undefined, in
   // ── op 'n0' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n0: Record<string, Value> = {
-    "opts": cgp.obj([["guard", () => null], ["returning", () => true], ["whereDynamic", () => null], ["write", () => true]]),
+    "opts": cgp.obj([["guard", () => null], ["whereDynamic", () => null], ["write", () => cgp.obj([["returning", () => true]])]]),
     "params": cgp.arr([cgp.ref(["email"], scope), cgp.ref(["name"], scope)]),
     "sql": "INSERT INTO benchmark_users (email, name) VALUES (?, ?) RETURNING id",
   };
@@ -1030,7 +1030,7 @@ async function run_nestedCreate_async(h$executeSQL: AsyncHandler | undefined, in
     const el_n1 = (over_n1 as Value[])[mi_n1];
     const mscope_n1: Scope = { ...scope, ["$e0"]: el_n1 };
     const ports_n1: Record<string, Value> = {
-      "opts": cgp.obj([["guard", () => null], ["returning", () => false], ["whereDynamic", () => null], ["write", () => true]]),
+      "opts": cgp.obj([["guard", () => null], ["whereDynamic", () => null], ["write", () => cgp.obj([["returning", () => false]])]]),
       "params": cgp.arr([cgp.ref(["$e0","id"], mscope_n1), cgp.ref(["title"], mscope_n1)]),
       "sql": "INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)",
     };
@@ -1049,7 +1049,7 @@ function run_nestedUpsert(h$executeSQL: Handler | undefined, input: Scope): Valu
   // ── op 'n0' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n0: Record<string, Value> = {
-    "opts": cgp.obj([["guard", () => null], ["returning", () => true], ["whereDynamic", () => null], ["write", () => true]]),
+    "opts": cgp.obj([["guard", () => null], ["whereDynamic", () => null], ["write", () => cgp.obj([["returning", () => true]])]]),
     "params": cgp.arr([cgp.ref(["email"], scope), cgp.ref(["name"], scope)]),
     "sql": "INSERT INTO benchmark_users (email, name) VALUES (?, ?) ON CONFLICT (email) DO UPDATE SET email = excluded.email, name = excluded.name RETURNING id",
   };
@@ -1067,7 +1067,7 @@ function run_nestedUpsert(h$executeSQL: Handler | undefined, input: Scope): Valu
     const el_n1 = (over_n1 as Value[])[mi_n1];
     const mscope_n1: Scope = { ...scope, ["$e0"]: el_n1 };
     const ports_n1: Record<string, Value> = {
-      "opts": cgp.obj([["guard", () => null], ["returning", () => false], ["whereDynamic", () => null], ["write", () => true]]),
+      "opts": cgp.obj([["guard", () => null], ["whereDynamic", () => null], ["write", () => cgp.obj([["returning", () => false]])]]),
       "params": cgp.arr([cgp.ref(["$e0","id"], mscope_n1), cgp.ref(["title"], mscope_n1)]),
       "sql": "INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)",
     };
@@ -1086,7 +1086,7 @@ async function run_nestedUpsert_async(h$executeSQL: AsyncHandler | undefined, in
   // ── op 'n0' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n0: Record<string, Value> = {
-    "opts": cgp.obj([["guard", () => null], ["returning", () => true], ["whereDynamic", () => null], ["write", () => true]]),
+    "opts": cgp.obj([["guard", () => null], ["whereDynamic", () => null], ["write", () => cgp.obj([["returning", () => true]])]]),
     "params": cgp.arr([cgp.ref(["email"], scope), cgp.ref(["name"], scope)]),
     "sql": "INSERT INTO benchmark_users (email, name) VALUES (?, ?) ON CONFLICT (email) DO UPDATE SET email = excluded.email, name = excluded.name RETURNING id",
   };
@@ -1104,7 +1104,7 @@ async function run_nestedUpsert_async(h$executeSQL: AsyncHandler | undefined, in
     const el_n1 = (over_n1 as Value[])[mi_n1];
     const mscope_n1: Scope = { ...scope, ["$e0"]: el_n1 };
     const ports_n1: Record<string, Value> = {
-      "opts": cgp.obj([["guard", () => null], ["returning", () => false], ["whereDynamic", () => null], ["write", () => true]]),
+      "opts": cgp.obj([["guard", () => null], ["whereDynamic", () => null], ["write", () => cgp.obj([["returning", () => false]])]]),
       "params": cgp.arr([cgp.ref(["$e0","id"], mscope_n1), cgp.ref(["title"], mscope_n1)]),
       "sql": "INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)",
     };
@@ -1123,7 +1123,7 @@ function run_nestedUpdate(h$executeSQL: Handler | undefined, input: Scope): Valu
   // ── op 'n0' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n0: Record<string, Value> = {
-    "opts": cgp.obj([["guard", () => null], ["returning", () => true], ["whereDynamic", () => null], ["write", () => true]]),
+    "opts": cgp.obj([["guard", () => null], ["whereDynamic", () => null], ["write", () => cgp.obj([["returning", () => true]])]]),
     "params": cgp.arr([cgp.ref(["name"], scope), cgp.ref(["id"], scope)]),
     "sql": "UPDATE benchmark_users SET name = ? WHERE id = ? RETURNING id",
   };
@@ -1141,7 +1141,7 @@ function run_nestedUpdate(h$executeSQL: Handler | undefined, input: Scope): Valu
     const el_n1 = (over_n1 as Value[])[mi_n1];
     const mscope_n1: Scope = { ...scope, ["$e0"]: el_n1 };
     const ports_n1: Record<string, Value> = {
-      "opts": cgp.obj([["guard", () => null], ["returning", () => false], ["whereDynamic", () => null], ["write", () => true]]),
+      "opts": cgp.obj([["guard", () => null], ["whereDynamic", () => null], ["write", () => cgp.obj([["returning", () => false]])]]),
       "params": cgp.arr([cgp.ref(["title"], mscope_n1), cgp.ref(["$e0","id"], mscope_n1)]),
       "sql": "UPDATE benchmark_posts SET title = ? WHERE author_id = ?",
     };
@@ -1160,7 +1160,7 @@ async function run_nestedUpdate_async(h$executeSQL: AsyncHandler | undefined, in
   // ── op 'n0' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n0: Record<string, Value> = {
-    "opts": cgp.obj([["guard", () => null], ["returning", () => true], ["whereDynamic", () => null], ["write", () => true]]),
+    "opts": cgp.obj([["guard", () => null], ["whereDynamic", () => null], ["write", () => cgp.obj([["returning", () => true]])]]),
     "params": cgp.arr([cgp.ref(["name"], scope), cgp.ref(["id"], scope)]),
     "sql": "UPDATE benchmark_users SET name = ? WHERE id = ? RETURNING id",
   };
@@ -1178,7 +1178,7 @@ async function run_nestedUpdate_async(h$executeSQL: AsyncHandler | undefined, in
     const el_n1 = (over_n1 as Value[])[mi_n1];
     const mscope_n1: Scope = { ...scope, ["$e0"]: el_n1 };
     const ports_n1: Record<string, Value> = {
-      "opts": cgp.obj([["guard", () => null], ["returning", () => false], ["whereDynamic", () => null], ["write", () => true]]),
+      "opts": cgp.obj([["guard", () => null], ["whereDynamic", () => null], ["write", () => cgp.obj([["returning", () => false]])]]),
       "params": cgp.arr([cgp.ref(["title"], mscope_n1), cgp.ref(["$e0","id"], mscope_n1)]),
       "sql": "UPDATE benchmark_posts SET title = ? WHERE author_id = ?",
     };
@@ -1197,7 +1197,7 @@ function run_delete(h$executeSQL: Handler | undefined, input: Scope): Value {
   // ── op 'n0' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n0: Record<string, Value> = {
-    "opts": cgp.obj([["guard", () => null], ["returning", () => true], ["whereDynamic", () => null], ["write", () => true]]),
+    "opts": cgp.obj([["guard", () => null], ["whereDynamic", () => null], ["write", () => cgp.obj([["returning", () => true]])]]),
     "params": cgp.arr([cgp.ref(["email"], scope), cgp.ref(["name"], scope)]),
     "sql": "INSERT INTO benchmark_users (email, name) VALUES (?, ?) RETURNING id",
   };
@@ -1215,7 +1215,7 @@ function run_delete(h$executeSQL: Handler | undefined, input: Scope): Value {
     const el_n1 = (over_n1 as Value[])[mi_n1];
     const mscope_n1: Scope = { ...scope, ["$e0"]: el_n1 };
     const ports_n1: Record<string, Value> = {
-      "opts": cgp.obj([["guard", () => null], ["returning", () => false], ["whereDynamic", () => null], ["write", () => true]]),
+      "opts": cgp.obj([["guard", () => null], ["whereDynamic", () => null], ["write", () => cgp.obj([["returning", () => false]])]]),
       "params": cgp.arr([cgp.ref(["$e0","id"], mscope_n1)]),
       "sql": "DELETE FROM benchmark_users WHERE id = ?",
     };
@@ -1234,7 +1234,7 @@ async function run_delete_async(h$executeSQL: AsyncHandler | undefined, input: S
   // ── op 'n0' (executeSQL) ──
   if (!h$executeSQL) throw new BehaviorFailure("UNKNOWN_COMPONENT", "component 'executeSQL' has no handler (fail-closed)");
   const ports_n0: Record<string, Value> = {
-    "opts": cgp.obj([["guard", () => null], ["returning", () => true], ["whereDynamic", () => null], ["write", () => true]]),
+    "opts": cgp.obj([["guard", () => null], ["whereDynamic", () => null], ["write", () => cgp.obj([["returning", () => true]])]]),
     "params": cgp.arr([cgp.ref(["email"], scope), cgp.ref(["name"], scope)]),
     "sql": "INSERT INTO benchmark_users (email, name) VALUES (?, ?) RETURNING id",
   };
@@ -1252,7 +1252,7 @@ async function run_delete_async(h$executeSQL: AsyncHandler | undefined, input: S
     const el_n1 = (over_n1 as Value[])[mi_n1];
     const mscope_n1: Scope = { ...scope, ["$e0"]: el_n1 };
     const ports_n1: Record<string, Value> = {
-      "opts": cgp.obj([["guard", () => null], ["returning", () => false], ["whereDynamic", () => null], ["write", () => true]]),
+      "opts": cgp.obj([["guard", () => null], ["whereDynamic", () => null], ["write", () => cgp.obj([["returning", () => false]])]]),
       "params": cgp.arr([cgp.ref(["$e0","id"], mscope_n1)]),
       "sql": "DELETE FROM benchmark_users WHERE id = ?",
     };
@@ -1643,9 +1643,8 @@ export interface WriteSummary {
 
 export interface ExecOptions {
   "guard": (CapGuard | null);
-  "returning": boolean;
   "whereDynamic": (DynamicWherePlan | null);
-  "write": boolean;
+  "write": (WriteMode | null);
 }
 
 export interface CapGuard {
@@ -1662,6 +1661,10 @@ export interface DynamicWhereFrag {
   "params": (Value | null)[];
   "skipped": boolean;
   "sql": string;
+}
+
+export interface WriteMode {
+  "returning": boolean;
 }
 
 export interface IdRow {

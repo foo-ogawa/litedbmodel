@@ -204,7 +204,11 @@ final class Leaves
             $sql = StaticBundle::renderPlaceholders($effectiveSql, $dialect);
             $params = self::bindParams($effectiveParams, $dialect);
             try {
-                if (($opts?->write ?? false) && !($opts?->returning ?? false)) {
+                // `write` is the statement's RUN MODE: null ⇒ a read; an object ⇒ a write carrying
+                // its OWN `returning` (ONE field, three values — "returns rows but is not a write" is
+                // not a state the ABI can hold, #206).
+                $write = $opts?->write ?? null;
+                if ($write !== null && !($write->returning ?? false)) {
                     $info = run($active, $sql, $params, StatementIntent::write());
                     // The affected-write summary row (uniform list output shape — TS `writeSummary`).
                     return ['ok' => [(object) ['changes' => $info->changes, 'lastInsertRowid' => $info->lastInsertRowid]]];

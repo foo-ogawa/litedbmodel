@@ -7,7 +7,7 @@
 // (Behavior::runBehavior) — no execution logic is generated. Handlers are ALWAYS
 // injected at the boundary (IR + {effects,config,hooks} — concept.md §4.4); they
 // are never generated.
-// irFingerprint: fnv1a64:60efaa00ae7565c2
+// irFingerprint: fnv1a64:0a8b2b289fb79e0e
 
 declare(strict_types=1);
 
@@ -15,7 +15,7 @@ declare(strict_types=1);
 $expectedSpecVersions = ['behavior' => 6, 'expression' => 2, 'plan' => 1];
 
 // FNV-1a 64 fingerprint of the source portable IR (canonical-json discipline, #208).
-$irFingerprint = 'fnv1a64:60efaa00ae7565c2';
+$irFingerprint = 'fnv1a64:0a8b2b289fb79e0e';
 
 // Component names exposed by bind(), in IR declaration order.
 $componentNames = ['posts', 'postsTop', 'page', 'postsByIds', 'feed', 'pagedFeed', 'usersWithPosts', 'postsWithAuthor', 'usersWithCappedPosts', 'usersWithUncappedPosts', 'usersWithTopPosts', 'createPost', 'renamePost', 'removePost', 'createPostReturning', 'renamePostReturning', 'removePostReturning', 'restatusPostsReturning', 'removePostsByAuthorReturning', 'typedRows', 'createTags', 'removeTags', 'createTagsReturning', 'relabelTagsReturning', 'removeTagsReturning'];
@@ -412,7 +412,6 @@ $irDoc = (object) [
                                             ],
                                         ],
                                     ],
-                                    "returning" => "bool",
                                     "whereDynamic" => (object) [
                                         "opt" => (object) [
                                             "name" => "DynamicWherePlan",
@@ -434,7 +433,14 @@ $irDoc = (object) [
                                             ],
                                         ],
                                     ],
-                                    "write" => "bool",
+                                    "write" => (object) [
+                                        "opt" => (object) [
+                                            "name" => "WriteMode",
+                                            "obj" => (object) [
+                                                "returning" => "bool",
+                                            ],
+                                        ],
+                                    ],
                                 ],
                             ],
                             "required" => false,
@@ -454,7 +460,6 @@ $irDoc = (object) [
                         "opts" => (object) [
                             "obj" => (object) [
                                 "guard" => null,
-                                "returning" => false,
                                 "whereDynamic" => (object) [
                                     "obj" => (object) [
                                         "frags" => (object) [
@@ -511,7 +516,7 @@ $irDoc = (object) [
                                         ],
                                     ],
                                 ],
-                                "write" => false,
+                                "write" => null,
                             ],
                         ],
                         "params" => (object) [
@@ -616,7 +621,6 @@ $irDoc = (object) [
                                             ],
                                         ],
                                     ],
-                                    "returning" => "bool",
                                     "whereDynamic" => (object) [
                                         "opt" => (object) [
                                             "name" => "DynamicWherePlan",
@@ -638,7 +642,14 @@ $irDoc = (object) [
                                             ],
                                         ],
                                     ],
-                                    "write" => "bool",
+                                    "write" => (object) [
+                                        "opt" => (object) [
+                                            "name" => "WriteMode",
+                                            "obj" => (object) [
+                                                "returning" => "bool",
+                                            ],
+                                        ],
+                                    ],
                                 ],
                             ],
                             "required" => false,
@@ -658,7 +669,6 @@ $irDoc = (object) [
                         "opts" => (object) [
                             "obj" => (object) [
                                 "guard" => null,
-                                "returning" => false,
                                 "whereDynamic" => (object) [
                                     "obj" => (object) [
                                         "frags" => (object) [
@@ -715,7 +725,7 @@ $irDoc = (object) [
                                         ],
                                     ],
                                 ],
-                                "write" => false,
+                                "write" => null,
                             ],
                         ],
                         "params" => (object) [
@@ -1550,7 +1560,6 @@ $irDoc = (object) [
                                             ],
                                         ],
                                     ],
-                                    "returning" => "bool",
                                     "whereDynamic" => (object) [
                                         "opt" => (object) [
                                             "name" => "DynamicWherePlan",
@@ -1572,7 +1581,14 @@ $irDoc = (object) [
                                             ],
                                         ],
                                     ],
-                                    "write" => "bool",
+                                    "write" => (object) [
+                                        "opt" => (object) [
+                                            "name" => "WriteMode",
+                                            "obj" => (object) [
+                                                "returning" => "bool",
+                                            ],
+                                        ],
+                                    ],
                                 ],
                             ],
                             "required" => false,
@@ -1598,9 +1614,8 @@ $irDoc = (object) [
                                         "relation" => "cappedPosts",
                                     ],
                                 ],
-                                "returning" => false,
                                 "whereDynamic" => null,
-                                "write" => false,
+                                "write" => null,
                             ],
                         ],
                         "params" => (object) [
@@ -2296,7 +2311,6 @@ $irDoc = (object) [
                                             ],
                                         ],
                                     ],
-                                    "returning" => "bool",
                                     "whereDynamic" => (object) [
                                         "opt" => (object) [
                                             "name" => "DynamicWherePlan",
@@ -2318,7 +2332,14 @@ $irDoc = (object) [
                                             ],
                                         ],
                                     ],
-                                    "write" => "bool",
+                                    "write" => (object) [
+                                        "opt" => (object) [
+                                            "name" => "WriteMode",
+                                            "obj" => (object) [
+                                                "returning" => "bool",
+                                            ],
+                                        ],
+                                    ],
                                 ],
                             ],
                             "required" => false,
@@ -2338,9 +2359,12 @@ $irDoc = (object) [
                         "opts" => (object) [
                             "obj" => (object) [
                                 "guard" => null,
-                                "returning" => false,
                                 "whereDynamic" => null,
-                                "write" => true,
+                                "write" => (object) [
+                                    "obj" => (object) [
+                                        "returning" => false,
+                                    ],
+                                ],
                             ],
                         ],
                         "params" => (object) [
@@ -2453,7 +2477,6 @@ $irDoc = (object) [
                                             ],
                                         ],
                                     ],
-                                    "returning" => "bool",
                                     "whereDynamic" => (object) [
                                         "opt" => (object) [
                                             "name" => "DynamicWherePlan",
@@ -2475,7 +2498,14 @@ $irDoc = (object) [
                                             ],
                                         ],
                                     ],
-                                    "write" => "bool",
+                                    "write" => (object) [
+                                        "opt" => (object) [
+                                            "name" => "WriteMode",
+                                            "obj" => (object) [
+                                                "returning" => "bool",
+                                            ],
+                                        ],
+                                    ],
                                 ],
                             ],
                             "required" => false,
@@ -2495,9 +2525,12 @@ $irDoc = (object) [
                         "opts" => (object) [
                             "obj" => (object) [
                                 "guard" => null,
-                                "returning" => false,
                                 "whereDynamic" => null,
-                                "write" => true,
+                                "write" => (object) [
+                                    "obj" => (object) [
+                                        "returning" => false,
+                                    ],
+                                ],
                             ],
                         ],
                         "params" => (object) [
@@ -2583,7 +2616,6 @@ $irDoc = (object) [
                                             ],
                                         ],
                                     ],
-                                    "returning" => "bool",
                                     "whereDynamic" => (object) [
                                         "opt" => (object) [
                                             "name" => "DynamicWherePlan",
@@ -2605,7 +2637,14 @@ $irDoc = (object) [
                                             ],
                                         ],
                                     ],
-                                    "write" => "bool",
+                                    "write" => (object) [
+                                        "opt" => (object) [
+                                            "name" => "WriteMode",
+                                            "obj" => (object) [
+                                                "returning" => "bool",
+                                            ],
+                                        ],
+                                    ],
                                 ],
                             ],
                             "required" => false,
@@ -2625,9 +2664,12 @@ $irDoc = (object) [
                         "opts" => (object) [
                             "obj" => (object) [
                                 "guard" => null,
-                                "returning" => false,
                                 "whereDynamic" => null,
-                                "write" => true,
+                                "write" => (object) [
+                                    "obj" => (object) [
+                                        "returning" => false,
+                                    ],
+                                ],
                             ],
                         ],
                         "params" => (object) [
@@ -2708,7 +2750,6 @@ $irDoc = (object) [
                                             ],
                                         ],
                                     ],
-                                    "returning" => "bool",
                                     "whereDynamic" => (object) [
                                         "opt" => (object) [
                                             "name" => "DynamicWherePlan",
@@ -2730,7 +2771,14 @@ $irDoc = (object) [
                                             ],
                                         ],
                                     ],
-                                    "write" => "bool",
+                                    "write" => (object) [
+                                        "opt" => (object) [
+                                            "name" => "WriteMode",
+                                            "obj" => (object) [
+                                                "returning" => "bool",
+                                            ],
+                                        ],
+                                    ],
                                 ],
                             ],
                             "required" => false,
@@ -2750,9 +2798,12 @@ $irDoc = (object) [
                         "opts" => (object) [
                             "obj" => (object) [
                                 "guard" => null,
-                                "returning" => true,
                                 "whereDynamic" => null,
-                                "write" => true,
+                                "write" => (object) [
+                                    "obj" => (object) [
+                                        "returning" => true,
+                                    ],
+                                ],
                             ],
                         ],
                         "params" => (object) [
@@ -2873,7 +2924,6 @@ $irDoc = (object) [
                                             ],
                                         ],
                                     ],
-                                    "returning" => "bool",
                                     "whereDynamic" => (object) [
                                         "opt" => (object) [
                                             "name" => "DynamicWherePlan",
@@ -2895,7 +2945,14 @@ $irDoc = (object) [
                                             ],
                                         ],
                                     ],
-                                    "write" => "bool",
+                                    "write" => (object) [
+                                        "opt" => (object) [
+                                            "name" => "WriteMode",
+                                            "obj" => (object) [
+                                                "returning" => "bool",
+                                            ],
+                                        ],
+                                    ],
                                 ],
                             ],
                             "required" => false,
@@ -2915,9 +2972,12 @@ $irDoc = (object) [
                         "opts" => (object) [
                             "obj" => (object) [
                                 "guard" => null,
-                                "returning" => true,
                                 "whereDynamic" => null,
-                                "write" => true,
+                                "write" => (object) [
+                                    "obj" => (object) [
+                                        "returning" => true,
+                                    ],
+                                ],
                             ],
                         ],
                         "params" => (object) [
@@ -3011,7 +3071,6 @@ $irDoc = (object) [
                                             ],
                                         ],
                                     ],
-                                    "returning" => "bool",
                                     "whereDynamic" => (object) [
                                         "opt" => (object) [
                                             "name" => "DynamicWherePlan",
@@ -3033,7 +3092,14 @@ $irDoc = (object) [
                                             ],
                                         ],
                                     ],
-                                    "write" => "bool",
+                                    "write" => (object) [
+                                        "opt" => (object) [
+                                            "name" => "WriteMode",
+                                            "obj" => (object) [
+                                                "returning" => "bool",
+                                            ],
+                                        ],
+                                    ],
                                 ],
                             ],
                             "required" => false,
@@ -3053,9 +3119,12 @@ $irDoc = (object) [
                         "opts" => (object) [
                             "obj" => (object) [
                                 "guard" => null,
-                                "returning" => true,
                                 "whereDynamic" => null,
-                                "write" => true,
+                                "write" => (object) [
+                                    "obj" => (object) [
+                                        "returning" => true,
+                                    ],
+                                ],
                             ],
                         ],
                         "params" => (object) [
@@ -3140,7 +3209,6 @@ $irDoc = (object) [
                                             ],
                                         ],
                                     ],
-                                    "returning" => "bool",
                                     "whereDynamic" => (object) [
                                         "opt" => (object) [
                                             "name" => "DynamicWherePlan",
@@ -3162,7 +3230,14 @@ $irDoc = (object) [
                                             ],
                                         ],
                                     ],
-                                    "write" => "bool",
+                                    "write" => (object) [
+                                        "opt" => (object) [
+                                            "name" => "WriteMode",
+                                            "obj" => (object) [
+                                                "returning" => "bool",
+                                            ],
+                                        ],
+                                    ],
                                 ],
                             ],
                             "required" => false,
@@ -3182,9 +3257,12 @@ $irDoc = (object) [
                         "opts" => (object) [
                             "obj" => (object) [
                                 "guard" => null,
-                                "returning" => true,
                                 "whereDynamic" => null,
-                                "write" => true,
+                                "write" => (object) [
+                                    "obj" => (object) [
+                                        "returning" => true,
+                                    ],
+                                ],
                             ],
                         ],
                         "params" => (object) [
@@ -3278,7 +3356,6 @@ $irDoc = (object) [
                                             ],
                                         ],
                                     ],
-                                    "returning" => "bool",
                                     "whereDynamic" => (object) [
                                         "opt" => (object) [
                                             "name" => "DynamicWherePlan",
@@ -3300,7 +3377,14 @@ $irDoc = (object) [
                                             ],
                                         ],
                                     ],
-                                    "write" => "bool",
+                                    "write" => (object) [
+                                        "opt" => (object) [
+                                            "name" => "WriteMode",
+                                            "obj" => (object) [
+                                                "returning" => "bool",
+                                            ],
+                                        ],
+                                    ],
                                 ],
                             ],
                             "required" => false,
@@ -3320,9 +3404,12 @@ $irDoc = (object) [
                         "opts" => (object) [
                             "obj" => (object) [
                                 "guard" => null,
-                                "returning" => true,
                                 "whereDynamic" => null,
-                                "write" => true,
+                                "write" => (object) [
+                                    "obj" => (object) [
+                                        "returning" => true,
+                                    ],
+                                ],
                             ],
                         ],
                         "params" => (object) [
@@ -3481,7 +3568,6 @@ $irDoc = (object) [
                                             ],
                                         ],
                                     ],
-                                    "returning" => "bool",
                                     "whereDynamic" => (object) [
                                         "opt" => (object) [
                                             "name" => "DynamicWherePlan",
@@ -3503,7 +3589,14 @@ $irDoc = (object) [
                                             ],
                                         ],
                                     ],
-                                    "write" => "bool",
+                                    "write" => (object) [
+                                        "opt" => (object) [
+                                            "name" => "WriteMode",
+                                            "obj" => (object) [
+                                                "returning" => "bool",
+                                            ],
+                                        ],
+                                    ],
                                 ],
                             ],
                             "required" => false,
@@ -3523,9 +3616,12 @@ $irDoc = (object) [
                         "opts" => (object) [
                             "obj" => (object) [
                                 "guard" => null,
-                                "returning" => false,
                                 "whereDynamic" => null,
-                                "write" => true,
+                                "write" => (object) [
+                                    "obj" => (object) [
+                                        "returning" => false,
+                                    ],
+                                ],
                             ],
                         ],
                         "params" => (object) [
@@ -3623,7 +3719,6 @@ $irDoc = (object) [
                                             ],
                                         ],
                                     ],
-                                    "returning" => "bool",
                                     "whereDynamic" => (object) [
                                         "opt" => (object) [
                                             "name" => "DynamicWherePlan",
@@ -3645,7 +3740,14 @@ $irDoc = (object) [
                                             ],
                                         ],
                                     ],
-                                    "write" => "bool",
+                                    "write" => (object) [
+                                        "opt" => (object) [
+                                            "name" => "WriteMode",
+                                            "obj" => (object) [
+                                                "returning" => "bool",
+                                            ],
+                                        ],
+                                    ],
                                 ],
                             ],
                             "required" => false,
@@ -3665,9 +3767,12 @@ $irDoc = (object) [
                         "opts" => (object) [
                             "obj" => (object) [
                                 "guard" => null,
-                                "returning" => false,
                                 "whereDynamic" => null,
-                                "write" => true,
+                                "write" => (object) [
+                                    "obj" => (object) [
+                                        "returning" => false,
+                                    ],
+                                ],
                             ],
                         ],
                         "params" => (object) [
@@ -3749,7 +3854,6 @@ $irDoc = (object) [
                                             ],
                                         ],
                                     ],
-                                    "returning" => "bool",
                                     "whereDynamic" => (object) [
                                         "opt" => (object) [
                                             "name" => "DynamicWherePlan",
@@ -3771,7 +3875,14 @@ $irDoc = (object) [
                                             ],
                                         ],
                                     ],
-                                    "write" => "bool",
+                                    "write" => (object) [
+                                        "opt" => (object) [
+                                            "name" => "WriteMode",
+                                            "obj" => (object) [
+                                                "returning" => "bool",
+                                            ],
+                                        ],
+                                    ],
                                 ],
                             ],
                             "required" => false,
@@ -3791,9 +3902,12 @@ $irDoc = (object) [
                         "opts" => (object) [
                             "obj" => (object) [
                                 "guard" => null,
-                                "returning" => true,
                                 "whereDynamic" => null,
-                                "write" => true,
+                                "write" => (object) [
+                                    "obj" => (object) [
+                                        "returning" => true,
+                                    ],
+                                ],
                             ],
                         ],
                         "params" => (object) [
@@ -3899,7 +4013,6 @@ $irDoc = (object) [
                                             ],
                                         ],
                                     ],
-                                    "returning" => "bool",
                                     "whereDynamic" => (object) [
                                         "opt" => (object) [
                                             "name" => "DynamicWherePlan",
@@ -3921,7 +4034,14 @@ $irDoc = (object) [
                                             ],
                                         ],
                                     ],
-                                    "write" => "bool",
+                                    "write" => (object) [
+                                        "opt" => (object) [
+                                            "name" => "WriteMode",
+                                            "obj" => (object) [
+                                                "returning" => "bool",
+                                            ],
+                                        ],
+                                    ],
                                 ],
                             ],
                             "required" => false,
@@ -3941,9 +4061,12 @@ $irDoc = (object) [
                         "opts" => (object) [
                             "obj" => (object) [
                                 "guard" => null,
-                                "returning" => true,
                                 "whereDynamic" => null,
-                                "write" => true,
+                                "write" => (object) [
+                                    "obj" => (object) [
+                                        "returning" => true,
+                                    ],
+                                ],
                             ],
                         ],
                         "params" => (object) [
@@ -4039,7 +4162,6 @@ $irDoc = (object) [
                                             ],
                                         ],
                                     ],
-                                    "returning" => "bool",
                                     "whereDynamic" => (object) [
                                         "opt" => (object) [
                                             "name" => "DynamicWherePlan",
@@ -4061,7 +4183,14 @@ $irDoc = (object) [
                                             ],
                                         ],
                                     ],
-                                    "write" => "bool",
+                                    "write" => (object) [
+                                        "opt" => (object) [
+                                            "name" => "WriteMode",
+                                            "obj" => (object) [
+                                                "returning" => "bool",
+                                            ],
+                                        ],
+                                    ],
                                 ],
                             ],
                             "required" => false,
@@ -4081,9 +4210,12 @@ $irDoc = (object) [
                         "opts" => (object) [
                             "obj" => (object) [
                                 "guard" => null,
-                                "returning" => true,
                                 "whereDynamic" => null,
-                                "write" => true,
+                                "write" => (object) [
+                                    "obj" => (object) [
+                                        "returning" => true,
+                                    ],
+                                ],
                             ],
                         ],
                         "params" => (object) [

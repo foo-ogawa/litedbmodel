@@ -399,10 +399,32 @@ fn parse_where_frag(frag: WireValue) -> Result<DynamicWhereFrag, BehaviorError> 
 /// default is the PLAIN READ the absent port denotes.
 #[derive(Default)]
 struct ExecOptions {
-    write: bool,
-    returning: bool,
+    write: Option<WriteMode>,
     where_frags: Option<Vec<DynamicWhereFrag>>,
     guard: Option<RelationGuard>,
+}
+
+/// The unboxed `write` field: `None` ⇒ the statement is a READ, `Some` ⇒ a write carrying its OWN
+/// `returning`. ONE field with three values, so "returns rows but is not a write" is not a state this
+/// transport can be handed (#206) — there is nothing to reject at run time because it cannot exist.
+struct WriteMode {
+    returning: bool,
+}
+
+/// Read the `write` field of the control record. ABSENT (or null) ⇒ `None` ⇒ a READ. PRESENT but
+/// malformed is a LOUD port failure — a write read as a read runs an INSERT on the read seam.
+fn port_write_mode(opts: &mut WireRow) -> Result<Option<WriteMode>, BehaviorError> {
+    let mut row = match opts.entries.iter().position(|(k, _)| k == "write") {
+        None => return Ok(None),
+        Some(i) => match opts.entries.swap_remove(i).1 {
+            WireValue::Null => return Ok(None),
+            WireValue::Row(r) => r,
+            other => return Err(port_mismatch("write", "row", &other)),
+        },
+    };
+    Ok(Some(WriteMode {
+        returning: port_bool(&mut row, "returning")?,
+    }))
 }
 
 /// Read the OPTIONAL `opts` control record. ABSENT (or null) ⇒ the DEFAULT record — a plain READ with no
@@ -419,8 +441,7 @@ fn port_exec_options(payload: &mut WireRow) -> Result<ExecOptions, BehaviorError
         },
     };
     Ok(ExecOptions {
-        write: port_bool(&mut row, "write")?,
-        returning: port_bool(&mut row, "returning")?,
+        write: port_write_mode(&mut row)?,
         where_frags: port_dynamic_where(&mut row)?,
         guard: port_relation_guard(&mut row)?,
     })
@@ -602,7 +623,7 @@ pub fn execute_sql(mut payload: WireRow) -> Result<WireValue, BehaviorError> {
         .collect();
     let rendered = finalize_sql(&sql, &value_params, driver.dialect());
     let ctx = exec_context::for_driver(driver);
-    if opts.write && !opts.returning {
+    if opts.write.as_ref().is_some_and(|w| !w.returning) {
         let info = exec_context::run(&ctx, &rendered, &value_params, &StatementIntent::write())
             .map_err(sql_failure_to_behavior_error)?;
         // The affected-write summary row (uniform `items` output shape — TS `writeSummary`).
@@ -772,8 +793,7 @@ mod tests {
     // the statement plus its two optional control structs (`WireValue::Null` ⇒ the record's null field,
     // which is how ABSENCE is spelled now that nothing is positional). A plain READ omits the port.
     fn opts(
-        write: bool,
-        returning: bool,
+        write: WireValue,
         where_dynamic: WireValue,
         guard: WireValue,
     ) -> (&'static str, WireValue) {
@@ -781,11 +801,15 @@ mod tests {
             "opts",
             wrow(&[
                 ("guard", guard),
-                ("returning", WireValue::Bool(returning)),
                 ("whereDynamic", where_dynamic),
-                ("write", WireValue::Bool(write)),
+                ("write", write),
             ]),
         )
+    }
+    // The `write` field's WriteMode row — a write, and whether it yields rows. A READ passes
+    // `WireValue::Null` instead, so a read cannot carry a `returning` of its own (#206).
+    fn write_mode(returning: bool) -> WireValue {
+        wrow(&[("returning", WireValue::Bool(returning))])
     }
     // A key-column tuple port (`col`/`pk`/`fk`) — the ordered column names as wire strings.
     fn cols(c: &[&str]) -> WireValue {
@@ -806,7 +830,7 @@ mod tests {
         .unwrap();
         let ins = |id: i64, v: &str| -> Result<(), BehaviorError> {
             execute_sql(payload(vec![
-                opts(true, false, WireValue::Null, WireValue::Null),
+                opts(write_mode(false), WireValue::Null, WireValue::Null),
                 (
                     "params",
                     wlist(vec![
@@ -984,7 +1008,7 @@ mod tests {
                 ),
             ];
             if let Some(g) = guard {
-                ports.push(opts(false, false, WireValue::Null, g));
+                ports.push(opts(WireValue::Null, WireValue::Null, g));
             }
             with_ambient_driver(&d, || execute_sql(payload(ports.clone())))
         };
@@ -1053,7 +1077,7 @@ mod tests {
         )]);
         let out = with_ambient_driver(&d, || {
             execute_sql(payload(vec![
-                opts(false, false, plan, WireValue::Null),
+                opts(WireValue::Null, plan, WireValue::Null),
                 ("params", wlist(vec![])),
                 ("sql", WireValue::Str("SELECT id FROM t ORDER BY id".into())),
             ]))
@@ -1087,7 +1111,7 @@ mod tests {
         )]);
         let out = with_ambient_driver(&d, || {
             execute_sql(payload(vec![
-                opts(false, false, plan, WireValue::Null),
+                opts(WireValue::Null, plan, WireValue::Null),
                 ("params", wlist(vec![WireValue::int(1), WireValue::int(2)])),
                 (
                     "sql",

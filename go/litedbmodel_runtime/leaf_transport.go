@@ -219,10 +219,33 @@ func portDynamicWhere(opts wire.WireRow) ([]dynamicWhereFrag, error) {
 // how to run it plus the two optional control structs. Everything the transport branches on besides the
 // statement itself lives here, so a new fact is a new FIELD and no call site's arguments shift (#193).
 type execOptions struct {
-	write      bool
-	returning  bool
+	write      *writeMode
 	whereFrags []dynamicWhereFrag
 	guard      *relationGuard
+}
+
+// writeMode is the unboxed `write` field: nil ⇒ the statement is a READ, non-nil ⇒ a write carrying its
+// OWN `returning`. ONE field with three values, so "returns rows but is not a write" is not a state
+// this transport can be handed (#206) — there is nothing to reject at run time because it cannot exist.
+type writeMode struct {
+	returning bool
+}
+
+// portWriteMode reads the `write` field of the control record. ABSENT (or null) ⇒ nil ⇒ a READ. PRESENT
+// but malformed is a LOUD port error — a write read as a read runs an INSERT on the read seam.
+func portWriteMode(opts wire.WireRow) (*writeMode, error) {
+	p := opts.ProbeRow("write")
+	if p.Kind == wireProbeAbsent || p.Kind == wireProbeNull {
+		return nil, nil
+	}
+	if p.Kind != wireProbeGot {
+		return nil, portErr("write", "row", p.Kind, p.ActualWireType)
+	}
+	returning, err := portBool(p.Got, "returning")
+	if err != nil {
+		return nil, err
+	}
+	return &writeMode{returning: returning}, nil
 }
 
 // portExecOptions reads the OPTIONAL `opts` control record. ABSENT (or null) ⇒ the ZERO record — a plain
@@ -237,11 +260,7 @@ func portExecOptions(payload wire.WireRow) (execOptions, error) {
 	if p.Kind != wireProbeGot {
 		return execOptions{}, portErr("opts", "row", p.Kind, p.ActualWireType)
 	}
-	write, err := portBool(p.Got, "write")
-	if err != nil {
-		return execOptions{}, err
-	}
-	returning, err := portBool(p.Got, "returning")
+	write, err := portWriteMode(p.Got)
 	if err != nil {
 		return execOptions{}, err
 	}
@@ -253,7 +272,7 @@ func portExecOptions(payload wire.WireRow) (execOptions, error) {
 	if err != nil {
 		return execOptions{}, err
 	}
-	return execOptions{write: write, returning: returning, whereFrags: frags, guard: guard}, nil
+	return execOptions{write: write, whereFrags: frags, guard: guard}, nil
 }
 
 // ── Payload materialization (wire → wire; the go wire type's slices are unexported) ─────────────────
@@ -461,7 +480,7 @@ func ExecuteSQL(payload wire.WireRow) (wire.WireValue, error) {
 		args[i] = leafParam(p, leafDialect)
 	}
 	text := finalizeSQL(sql, arrayBinds(values), leafDialect)
-	if opts.write && !opts.returning {
+	if opts.write != nil && !opts.write.returning {
 		info, err := Run(leafExecCtx, text, args, WriteIntent())
 		if err != nil {
 			return wire.WireNull(), err

@@ -176,7 +176,11 @@ def make_handlers(driver_or_ctx: Union[Driver, ExecutionContext], dialect: str) 
         sql = render_placeholders(effective_sql, dialect)
         params = _bind_params(effective_params, dialect)
         try:
-            if opts.get("write") and not opts.get("returning"):
+            # ``write`` is the statement's RUN MODE: None ⇒ a read; a mapping ⇒ a write carrying its
+            # OWN ``returning`` (ONE field, three values — "returns rows but is not a write" is not a
+            # state the ABI can hold, #206).
+            write = opts.get("write")
+            if write is not None and not write.get("returning"):
                 info = seam_run(active, sql, params, WRITE_INTENT)
                 # The affected-write summary row (uniform ``items`` output shape — TS ``writeSummary``).
                 return {"ok": [{"changes": info.changes, "lastInsertRowid": info.last_insert_rowid}]}

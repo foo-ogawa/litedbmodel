@@ -35,10 +35,10 @@ function recordingConn(calls: Call[]): SyncConnection {
 test('relation read is N+1-free (2 queries) with JSON key param on sqlite + belongsTo grouping', () => {
   const calls: Call[] = [];
   const ctx: LeafContext = { exec: contextForConnection(recordingConn(calls)), dialect: 'sqlite' };
-  const posts = executeSQL({ sql: 'SELECT id, author_id FROM posts', params: [], write: false, returning: false }, ctx);
+  const posts = executeSQL({ sql: 'SELECT id, author_id FROM posts', params: [], write: null }, ctx);
   const ids = pluck({ rows: posts, col: ['author_id'] });
   const authors = executeSQL(
-    { sql: 'SELECT id, name FROM users WHERE id IN (SELECT value FROM json_each(?))', params: [ids], write: false, returning: false },
+    { sql: 'SELECT id, name FROM users WHERE id IN (SELECT value FROM json_each(?))', params: [ids], write: null },
     ctx,
   );
   const out = group({ parents: posts, children: authors, pk: ['author_id'], fk: ['id'], into: 'author', single: true });
@@ -56,10 +56,10 @@ test('relation read is N+1-free (2 queries) with JSON key param on sqlite + belo
 test('postgres: key array binds raw, deferred cast resolves to ::int[], placeholders render $N', () => {
   const calls: Call[] = [];
   const ctx: LeafContext = { exec: contextForConnection(recordingConn(calls)), dialect: 'postgres' };
-  const posts = executeSQL({ sql: 'SELECT id, author_id FROM posts', params: [], write: false, returning: false }, ctx);
+  const posts = executeSQL({ sql: 'SELECT id, author_id FROM posts', params: [], write: null }, ctx);
   const ids = pluck({ rows: posts, col: ['author_id'] });
   executeSQL(
-    { sql: 'SELECT id, name FROM users WHERE id = ANY(?::@@PG_ARRAY_CAST@@)', params: [ids], write: false, returning: false },
+    { sql: 'SELECT id, name FROM users WHERE id = ANY(?::@@PG_ARRAY_CAST@@)', params: [ids], write: null },
     ctx,
   );
   expect(calls[1].sql).toContain('$1');
@@ -70,7 +70,7 @@ test('postgres: key array binds raw, deferred cast resolves to ::int[], placehol
 test('write routes through the run seam and returns the affected summary', () => {
   const calls: Call[] = [];
   const ctx: LeafContext = { exec: contextForConnection(recordingConn(calls)), dialect: 'sqlite' };
-  const out = executeSQL({ sql: 'INSERT INTO users(id,name) VALUES (?,?)', params: [30, 'C'], write: true, returning: false }, ctx);
+  const out = executeSQL({ sql: 'INSERT INTO users(id,name) VALUES (?,?)', params: [30, 'C'], write: { returning: false } }, ctx);
   expect(calls[0].kind).toBe('run');
   expect(out[0].changes).toBe(1n); // the summary is bc `int` on BOTH fields (the declared contract)
   expect(out[0].lastInsertRowid).toBe(42n);
@@ -88,7 +88,7 @@ test('write routes through the run seam and returns the affected summary', () =>
 test('a SKIP plan assembles only the surviving fragments, at the WHERE position, before the tail', () => {
   const calls: Call[] = [];
   const ctx: LeafContext = { exec: contextForConnection(recordingConn(calls)), dialect: 'sqlite' };
-  const base = { sql: 'SELECT id, author_id FROM posts ORDER BY id ASC LIMIT 20', params: [], write: false, returning: false };
+  const base = { sql: 'SELECT id, author_id FROM posts ORDER BY id ASC LIMIT 20', params: [], write: null };
 
   // The middle fragment is SKIPPED (`skipped: true`) — present with plausible sql/params, but dropped
   // by the leaf, so the surviving assembly is exactly `author_id = ? AND id >= ?`.
@@ -115,8 +115,7 @@ test('#192 — the survivors CONTINUE the statement\'s BOUNDED WHERE, binding be
   const base = {
     sql: 'SELECT id, author_id FROM posts WHERE author_id = ? ORDER BY id ASC LIMIT ?',
     params: [10, 20],
-    write: false,
-    returning: false,
+    write: null,
   };
 
   executeSQL({ ...base, whereDynamic: { frags: [{ skipped: false, sql: 'status = ?', params: ['live'] }, { skipped: false, sql: 'id >= ?', params: [2] }] } }, ctx);
@@ -139,7 +138,7 @@ test('#192 — the survivors CONTINUE the statement\'s BOUNDED WHERE, binding be
 test('`?`→`$N` is rendered AFTER the SKIP assembly, so the numbering follows the FINAL statement', () => {
   const calls: Call[] = [];
   const ctx: LeafContext = { exec: contextForConnection(recordingConn(calls)), dialect: 'postgres' };
-  const base = { sql: 'SELECT id, author_id FROM posts ORDER BY id ASC', params: [], write: false, returning: false };
+  const base = { sql: 'SELECT id, author_id FROM posts ORDER BY id ASC', params: [], write: null };
 
   executeSQL({ ...base, whereDynamic: { frags: [{ skipped: false, sql: 'author_id = ?', params: [10] }, { skipped: false, sql: 'id >= ?', params: [2] }] } }, ctx);
   expect(calls[0].sql).toBe('SELECT id, author_id FROM posts WHERE author_id = $1 AND id >= $2 ORDER BY id ASC');
@@ -153,7 +152,7 @@ test('`?`→`$N` is rendered AFTER the SKIP assembly, so the numbering follows t
 test('the relation guard trips on the RAW child rows, and an uncapped statement is never checked', () => {
   const calls: Call[] = [];
   const ctx: LeafContext = { exec: contextForConnection(recordingConn(calls)), dialect: 'sqlite' };
-  const base = { sql: 'SELECT id, author_id FROM posts', params: [], write: false, returning: false };
+  const base = { sql: 'SELECT id, author_id FROM posts', params: [], write: null };
 
   // 3 child rows > cap 2 ⇒ the transport throws with the relation-context fields and the EXACT batch
   // total (the batch is fetched in full — v1 `_selectForRelation` parity, no `LIMIT cap + 1` here).
@@ -176,7 +175,7 @@ test('the leaf handler unboxes the guard port fail-closed (bc int is a BigInt; a
   const handler = leafHandlers({ exec: contextForConnection(recordingConn(calls)), dialect: 'sqlite' }).executeSQL;
   // The generated module hands the control facts as the ONE `opts` record (#193), never as loose ports.
   const ports = (guard: unknown): Record<string, Value> =>
-    ({ sql: 'SELECT id, author_id FROM posts', params: [], opts: { write: false, returning: false, whereDynamic: null, guard } }) as unknown as Record<string, Value>;
+    ({ sql: 'SELECT id, author_id FROM posts', params: [], opts: { write: null, whereDynamic: null, guard } }) as unknown as Record<string, Value>;
 
   // The cap arrives in bc's `int` value model — a BigInt on the TS plane — and must still compare and
   // REPORT as the `number` the error contract declares.

@@ -211,10 +211,11 @@ describe('emitter — RELATIONS (one query per level, N+1-free)', () => {
       // reached POSITIONALLY, so the emitter passed an EMPTY plan (`{ frags: [] }`) to get past the
       // `whereDynamic` slot — a value that claimed a plan the statement does not have.
       expect(body[2]).toContain(
-        ', { write: false, returning: false, whereDynamic: null, guard: { limit: 7 as Int, model: "e2e_posts", relation: "posts" } });',
+        ', { write: null, whereDynamic: null, guard: { limit: 7 as Int, model: "e2e_posts", relation: "posts" } });',
       );
       expect(body[2]).not.toContain('frags');
-      // The relation batch is a READ: the same record says so, and no write seam is selected.
+      // The relation batch is a READ — `write: null` is how the record says so (#206: one field,
+      // three values, so a read cannot accidentally claim to return rows without being a write).
       expect(body[4]).toContain('guard: { limit: 7 as Int,');
     } finally {
       resetLimitConfig();
@@ -279,7 +280,7 @@ describe('emitter — WRITES', () => {
     // the adapter strips it and re-selects. Emitting the mysql module must therefore NOT throw.
     const { source } = emit('mysql', { createUser: EMIT_ENDPOINTS.createUser });
     expect(bodyOf(source, 'createUser')[0]).toContain('INSERT INTO e2e_users (name) VALUES (?) RETURNING id, name');
-    expect(bodyOf(source, 'createUser')[0]).toContain('{ write: true, returning: true, whereDynamic: null, guard: null }');
+    expect(bodyOf(source, 'createUser')[0]).toContain('{ write: { returning: true }, whereDynamic: null, guard: null }');
   });
 
   it('batch writes bind ONE record-array JSON param on mysql/sqlite', () => {

@@ -107,21 +107,35 @@ export interface CapGuard {
  * That is the point: absence is the `null` VALUE of a NAMED field, so no call site ever passes a
  * stand-in value to reach the field after it.
  *
- * `write` and `returning` describe the STATEMENT, not the transport's branch: `write` is the
- * statement's intent (it selects the write seam and the write connection), `returning` says the write
- * yields ROWS. The transport reads them together — a write that does NOT return rows yields the
- * one-row `[{changes, lastInsertRowid}]` summary instead, which is what keeps the leaf's output shape
- * uniform. A read declares both `false`.
+ * `write` describes the STATEMENT, not the transport's branch, and it carries its OWN `returning`
+ * ({@link WriteMode}) rather than sitting beside a sibling flag: a statement is a read (`null`) or a
+ * write, and only a write can say whether it yields rows. A flag PAIR would encode four states for
+ * three meanings, and the fourth — "returns rows but is not a write" — has no meaning to reject at
+ * run time in five languages; as a nested struct it does not exist to be rejected.
  */
 export interface ExecOptions {
-  /** The statement WRITES (INSERT/UPDATE/DELETE — the write seam + the write intent). */
-  readonly write: boolean;
-  /** The write yields ROWS (a RETURNING write) rather than the affected-rows summary. */
-  readonly returning: boolean;
+  /**
+   * How the statement RUNS: `null` ⇒ a READ (the `execute` seam, read intent); a {@link WriteMode} ⇒
+   * an INSERT/UPDATE/DELETE (the write seam + the write intent), carrying whether it yields rows.
+   */
+  readonly write: WriteMode | null;
   /** The DYNAMIC (SKIP) WHERE plan — `null` unless the read declares an OPTIONAL predicate. */
   readonly whereDynamic: DynamicWherePlan | null;
   /** The RELATION runaway cap — `null` unless this is a GUARDED relation child fetch. */
   readonly guard: CapGuard | null;
+}
+
+/**
+ * A WRITE statement's own shape — the value of {@link ExecOptions.write} (its absence, `null`, is what
+ * makes a statement a read). `returning` is nested HERE because it is only meaningful under a write:
+ * a RETURNING write stays on the ROW path, a plain write yields the one-row
+ * `[{changes, lastInsertRowid}]` summary instead, which is what keeps the leaf's output shape uniform.
+ * bc lowers this exactly as it lowers {@link CapGuard} — an optional concrete struct, native in go and
+ * rust with no boxing — so the three statement shapes are three values of ONE field.
+ */
+export interface WriteMode {
+  /** The write yields ROWS (a RETURNING write) rather than the affected-rows summary. */
+  readonly returning: boolean;
 }
 
 /**
