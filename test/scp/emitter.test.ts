@@ -162,9 +162,9 @@ describe('emitter — SKIP / dynamic WHERE (assembled by the leaf at execution t
     expect(call).toContain('SELECT id, author_id, title FROM e2e_posts ORDER BY id ASC", []');
     // Every fragment is literal SQL text + params (the whole vocabulary); the BOUNDED one is
     // unguarded, so it is a constant in the generated native code too.
-    expect(call).toContain('frags: [{ sql: "author_id = ?", params: [authorId] }');
-    expect(call).toContain('title !== null ? { sql: "title LIKE ?", params: [title] } : null');
-    expect(call).toContain('minId !== null ? { sql: "id >= ?", params: [minId] } : null');
+    expect(call).toContain('frags: [{ skipped: false, sql: "author_id = ?", params: [authorId] }');
+    expect(call).toContain('{ skipped: title === null, sql: "title LIKE ?", params: [title] }');
+    expect(call).toContain('{ skipped: minId === null, sql: "id >= ?", params: [minId] }');
   });
 
   it('the optional parameters are declared nullable; the bounded one is not', () => {
@@ -369,7 +369,7 @@ describe('emitter — #161 paging (a page position may be an INPUT)', () => {
     // The leaf splices the surviving WHERE before ` ORDER BY` and binds its params BEFORE these two
     // (`assembleDynamicWhere`), so the tail's `?` stays last however many fragments survive.
     expect(line).toContain('Db.executeSQL("SELECT id, title FROM e2e_posts ORDER BY id ASC LIMIT ?", [limit]');
-    expect(line).toContain('{ frags: [{ sql: "author_id = ?", params: [authorId] }, title !== null ? { sql: "title LIKE ?", params: [title] } : null] }');
+    expect(line).toContain('{ frags: [{ skipped: false, sql: "author_id = ?", params: [authorId] }, { skipped: title === null, sql: "title LIKE ?", params: [title] }] }');
   });
 
   it('a BOUND limit is an authored LIMIT — it governs, so no find cap is baked (v1 skip rule)', () => {

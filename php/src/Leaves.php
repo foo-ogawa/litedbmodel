@@ -20,9 +20,10 @@ namespace LiteDbModel\Runtime;
  *     param — a relation key set from `pluck` or a batch record set — rides per dialect: sqlite/mysql
  *     JSON-encode it for `json_each`/`JSON_TABLE`, postgres binds the array as-is), and run it through
  *     the runtime's central {@see execute()} / {@see run()} seam on the bound context — the ONLY driver
- *     contact. The OPTIONAL `guard` port is the RELATION runaway cap of a guarded relation child fetch:
- *     the raw rows are asserted against it HERE ({@see LimitExceededError::check}) because past `group`
- *     the graph is already nested. A non-returning write returns a one-row
+ *     contact. The OPTIONAL `guard` port is the RELATION runaway cap of a guarded relation child fetch
+ *     (absent/null ⇒ uncapped): the raw rows are asserted against it HERE
+ *     ({@see LimitExceededError::check}) because past `group` the graph is already nested. A
+ *     non-returning write returns a one-row
  *     `[{changes, lastInsertRowid}]` summary so the leaf output shape is uniform (a list of rows).
  *   - `pluck` — rows + the ordered key-column TUPLE → the deduped, non-null batch key set (single-key →
  *     a flat scalar array; composite → an array-of-tuples). Delegates the dedupe to the shared grouping
@@ -60,13 +61,16 @@ final class Leaves
     }
 
     /**
-     * The `[sql, params]` a statement actually executes: the DYNAMIC (SKIP) WHERE plan assembled when
-     * one is present, the ports verbatim otherwise. Port of `src/scp/leaves.ts` `assembleDynamicWhere`.
+     * The `[sql, params]` a statement actually executes: the DYNAMIC (SKIP) WHERE plan assembled when it
+     * has surviving fragments, the ports verbatim otherwise. Port of `src/scp/leaves.ts`
+     * `assembleDynamicWhere`.
      *
-     * A SKIP predicate's presence is per-CALL, so the FINAL statement can only be determined here, at
-     * execution time — which is why the placeholder render runs AFTER this (CLAUDE.md §2). bc has
-     * ALREADY evaluated each fragment's params and its SKIP guard, so a dropped fragment arrives as
-     * null; the survivors join with ` WHERE `/` AND ` and their params bind BEFORE the base params.
+     * `whereDynamic` is OPTIONAL (absent/null ⇒ no dynamic WHERE — a bounded read, a write, and an
+     * uncapped fetch omit it; CLAUDE.md §2). A SKIP predicate's presence is per-CALL, so the FINAL
+     * statement can only be determined here, at execution time — which is why the placeholder render
+     * runs AFTER this. bc carries each fragment's SKIP decision as DATA: a skipped fragment is PRESENT
+     * with `skipped` true (never omitted), so assembly DROPS the `skipped` fragments; the survivors join
+     * with ` WHERE `/` AND ` and their params bind BEFORE the base params.
      *
      * @param array<string, mixed> $ports
      * @return array{0: string, 1: list<mixed>}
@@ -81,11 +85,11 @@ final class Leaves
         }
         $whereSql = '';
         $whereParams = [];
-        foreach (((array) $plan)['frags'] ?? [] as $frag) {
-            if ($frag === null) {
+        foreach (((array) $plan)['frags'] as $frag) {
+            $f = (array) $frag;
+            if ($f['skipped']) {
                 continue;
             }
-            $f = (array) $frag;
             $whereSql .= ($whereSql === '' ? ' WHERE ' : ' AND ') . (string) $f['sql'];
             foreach ($f['params'] as $p) {
                 $whereParams[] = $p;

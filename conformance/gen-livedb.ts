@@ -64,26 +64,18 @@ const BEHAVIOR = 'Conformance';
 // ══════════════════════════════════════════════════════════════════════════════
 
 /**
- * NO go / rust leg. Both TYPED-NATIVE emitters fail closed on the SKIP endpoint's `whereDynamic`
- * port — the dynamic-WHERE fragment list the leaf assembles at execution time (CLAUDE.md §2). The
- * declaration is legal and `typescript-native` lowers it; the typed-native emitters do not cover the
- * shape yet. Reproduce, verbatim, from the emitted source this module writes:
+ * FOUR language legs — python, php, go, rust. The go / rust TYPED-NATIVE emitters cover the SKIP
+ * endpoint's `whereDynamic` port now (the dynamic-WHERE fragment list the leaf assembles at execution
+ * time, CLAUDE.md §2): the emitter lowers the optional predicates to a `{frags}` plan the leaf
+ * transport assembles, so all four modules generate from the SAME declaration. The go / rust flag
+ * sets mirror `benchmark/crosslang/gen-native.sh` (the same bc CLI, the same leaf-transport symbol
+ * map). No `--shared-types-out`: the BC-owned wire types are ALREADY committed in the runtimes
+ * (`go/litedbmodel_runtime/wire`, the rust `litedbmodel_runtime` crate root), so both generated
+ * modules IMPORT them via `--shared-types-import` rather than re-emitting a second copy.
  *
- * ```
- * npx vitest run --config conformance/vitest.livedb.config.ts   # writes .generated-livedb/*.ts
- * node_modules/.bin/bc generate --lang go-typed-native \
- *   --from conformance/.generated-livedb/postgres.authored.ts --behavior Conformance --out /tmp/x.go \
- *   --runtime-import github.com/foo-ogawa/litedbmodel/go/litedbmodel_runtime \
- *   --shared-types-import github.com/foo-ogawa/litedbmodel/go/litedbmodel_runtime/wire \
- *   --leaf-transport executeSQL=ExecuteSQL pluck=PluckKeys group=GroupChildren \
- *   --leaf-transport-import github.com/foo-ogawa/litedbmodel/go/litedbmodel_runtime
- * # bc: go typed-native (native codegen) surface: 1 component(s) are NOT a covered native read:
- * #   - component 'feed': node 'n0' port 'whereDynamic' is not statically resolvable
- * ```
- *
- * `--lang rust-typed-native` fails identically; `--lang typescript-native` succeeds. Adding the go
- * leg here is one entry in {@link LANG_TARGETS} plus a call table in the go runner — nothing else —
- * once bc covers the port.
+ * The go modules land one PER DIALECT in their own package directory (bc names every package after
+ * the `Conformance` class, so the two would collide in one dir); the rust modules are the
+ * `livedb_runner` crate's `gen/<dialect>.rs`. Both are drift-gated by `conformance:check:livedb`.
  */
 
 /**
@@ -99,6 +91,9 @@ interface LangTarget {
   readonly flags: readonly string[];
 }
 
+/** The go runtime module path (the `--runtime-import` / `--leaf-transport-import` base). */
+const GO_RT = 'github.com/foo-ogawa/litedbmodel/go/litedbmodel_runtime';
+
 const LANG_TARGETS: readonly LangTarget[] = [
   {
     lang: 'python',
@@ -111,6 +106,31 @@ const LANG_TARGETS: readonly LangTarget[] = [
     // The php bc runtime-core is VENDORED (bc php is unpublished — `npm run vendor:bc-php`), so the
     // generated module's require-time gates + `runBehavior` call resolve to that namespace.
     flags: ['--runtime-import', 'LiteDbModel\\Runtime\\BehaviorContracts'],
+  },
+  {
+    // go-typed-native — one covered module per dialect, each its OWN package directory (bc names the
+    // package after the `Conformance` class, so two dialects cannot share one dir). The runner imports
+    // both and dispatches on the vector's dialect. Flags mirror gen-native.sh's go leg.
+    lang: 'go-typed-native',
+    out: (d) => join(ROOT, 'go', 'conformance', 'gen', d, 'behaviors.go'),
+    flags: [
+      '--runtime-import', GO_RT,
+      '--shared-types-import', `${GO_RT}/wire`,
+      '--leaf-transport', 'executeSQL=ExecuteSQL', 'pluck=PluckKeys', 'group=GroupChildren',
+      '--leaf-transport-import', GO_RT,
+    ],
+  },
+  {
+    // rust-typed-native — one covered module per dialect under the `livedb_runner` crate's `gen/`. The
+    // leaf transports resolve in-scope from `use litedbmodel_runtime::*` (the runtime import), so no
+    // `--leaf-transport-import` (matching gen-native.sh's rust leg). Wire types import from the crate.
+    lang: 'rust-typed-native',
+    out: (d) => join(ROOT, 'rust', 'livedb_runner', 'src', 'gen', `${d}.rs`),
+    flags: [
+      '--runtime-import', 'litedbmodel_runtime',
+      '--shared-types-import', 'litedbmodel_runtime',
+      '--leaf-transport', 'executeSQL=execute_sql', 'pluck=pluck_keys', 'group=group_children',
+    ],
   },
 ];
 

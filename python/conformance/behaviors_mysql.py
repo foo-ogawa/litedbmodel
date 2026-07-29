@@ -4,14 +4,14 @@
 # native dict literal and handed to the EXISTING runtime core (run_behavior) —
 # no execution logic is generated. Handlers are ALWAYS injected at the boundary
 # (IR + {effects,config,hooks}); they are never generated.
-# irFingerprint: fnv1a64:ec2bc26caed47a37
+# irFingerprint: fnv1a64:6ca3203e934531aa
 from behavior_contracts import SPEC_VERSIONS, ProvenanceError, load_compiled_ir, run_behavior
 
 # Spec versions baked at generation time (fail-closed constant comparison at load).
 EXPECTED_SPEC_VERSIONS = {"behavior": 6, "expression": 2, "plan": 1}
 
 # FNV-1a 64 fingerprint of the source portable IR (canonical_json discipline, #208).
-IR_FINGERPRINT = "fnv1a64:ec2bc26caed47a37"
+IR_FINGERPRINT = "fnv1a64:6ca3203e934531aa"
 
 # Component names exposed by bind(), in IR declaration order.
 COMPONENT_NAMES = ("posts", "postsTop", "page", "postsByIds", "feed", "usersWithPosts", "postsWithAuthor", "usersWithCappedPosts", "usersWithUncappedPosts", "usersWithTopPosts", "createPost", "renamePost", "removePost", "createPostReturning", "renamePostReturning", "removePostReturning", "restatusPostsReturning", "removePostsByAuthorReturning", "typedRows", "createTags", "removeTags", "createTagsReturning", "relabelTagsReturning", "removeTagsReturning")
@@ -470,8 +470,27 @@ IR_DOC = {
               "type": "string"
             },
             "whereDynamic": {
+              "elemType": {
+                "name": "DynamicWherePlan",
+                "obj": {
+                  "frags": {
+                    "arr": {
+                      "name": "DynamicWhereFrag",
+                      "obj": {
+                        "params": {
+                          "arr": {
+                            "opt": "value"
+                          }
+                        },
+                        "skipped": "bool",
+                        "sql": "string"
+                      }
+                    }
+                  }
+                }
+              },
               "required": False,
-              "type": "value"
+              "type": "object"
             },
             "write": {
               "required": True,
@@ -500,13 +519,23 @@ IR_DOC = {
                             }
                           ]
                         },
+                        "skipped": False,
                         "sql": "author_id = ?"
                       }
                     },
                     {
-                      "cond": [
-                        {
-                          "ne": [
+                      "obj": {
+                        "params": {
+                          "arr": [
+                            {
+                              "ref": [
+                                "status"
+                              ]
+                            }
+                          ]
+                        },
+                        "skipped": {
+                          "eq": [
                             {
                               "ref": [
                                 "status"
@@ -515,27 +544,22 @@ IR_DOC = {
                             None
                           ]
                         },
-                        {
-                          "obj": {
-                            "params": {
-                              "arr": [
-                                {
-                                  "ref": [
-                                    "status"
-                                  ]
-                                }
-                              ]
-                            },
-                            "sql": "status = ?"
-                          }
-                        },
-                        None
-                      ]
+                        "sql": "status = ?"
+                      }
                     },
                     {
-                      "cond": [
-                        {
-                          "ne": [
+                      "obj": {
+                        "params": {
+                          "arr": [
+                            {
+                              "ref": [
+                                "since"
+                              ]
+                            }
+                          ]
+                        },
+                        "skipped": {
+                          "eq": [
                             {
                               "ref": [
                                 "since"
@@ -544,22 +568,8 @@ IR_DOC = {
                             None
                           ]
                         },
-                        {
-                          "obj": {
-                            "params": {
-                              "arr": [
-                                {
-                                  "ref": [
-                                    "since"
-                                  ]
-                                }
-                              ]
-                            },
-                            "sql": "created_at >= ?"
-                          }
-                        },
-                        None
-                      ]
+                        "sql": "created_at >= ?"
+                      }
                     }
                   ]
                 }
@@ -1449,8 +1459,18 @@ IR_DOC = {
               "type": "bool"
             },
             "guard": {
+              "elemType": {
+                "name": "CapGuard",
+                "obj": {
+                  "limit": "int",
+                  "model": {
+                    "opt": "string"
+                  },
+                  "relation": "string"
+                }
+              },
               "required": False,
-              "type": "value"
+              "type": "object"
             },
             "params": {
               "elemType": "value",
@@ -1466,8 +1486,27 @@ IR_DOC = {
               "type": "string"
             },
             "whereDynamic": {
+              "elemType": {
+                "name": "DynamicWherePlan",
+                "obj": {
+                  "frags": {
+                    "arr": {
+                      "name": "DynamicWhereFrag",
+                      "obj": {
+                        "params": {
+                          "arr": {
+                            "opt": "value"
+                          }
+                        },
+                        "skipped": "bool",
+                        "sql": "string"
+                      }
+                    }
+                  }
+                }
+              },
               "required": False,
-              "type": "value"
+              "type": "object"
             },
             "write": {
               "required": True,
@@ -1494,7 +1533,13 @@ IR_DOC = {
             },
             "returning": False,
             "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE author_id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) ORDER BY id ASC",
-            "whereDynamic": None,
+            "whereDynamic": {
+              "obj": {
+                "frags": {
+                  "arr": []
+                }
+              }
+            },
             "write": False
           },
           "wirePassthrough": True

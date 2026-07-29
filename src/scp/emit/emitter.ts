@@ -43,11 +43,13 @@
  *
  * A predicate declared `optional` is present-or-absent PER CALL, so the final SQL can only be
  * determined at execution time. The emitter therefore does NOT bake it: it passes the WHERE as
- * FRAGMENTS — SQL text + params, and a skipped fragment is simply omitted — and the `executeSQL`
- * leaf assembles the survivors when it runs ({@link import('../leaves').assembleDynamicWhere}); the
- * `?`→`$N` render happens after that, on the final SQL. There is no intermediate IR vocabulary: a
- * fragment is `{sql, params}` and nothing else, and a skipped one evaluates to `null` (bc's `cond` is
- * lazy, so a dropped fragment's params are never evaluated).
+ * FRAGMENTS — each a `{skipped, sql, params}` struct — and the `executeSQL` leaf assembles the
+ * NON-skipped survivors when it runs ({@link import('../leaves').assembleDynamicWhere}); the `?`→`$N`
+ * render happens after that, on the final SQL. There is no intermediate IR vocabulary: a fragment is
+ * SQL text + params + a SKIP FLAG (`skipped` = `param === null` for an optional predicate, `false` for
+ * a bounded one). Every fragment is the SAME struct — never a `cond`-to-null element — so the go/rust
+ * native-codegen emitters resolve the plan (a variant/nullable array element is the one shape they
+ * reject).
  *
  * A statement with NO optional predicate carries no plan at all — its WHERE is lowered into the
  * static `sql` at emit time (native-clean). One path, chosen per statement.
@@ -370,15 +372,19 @@ class EmitContext {
   }
 
   /**
-   * The DYNAMIC WHERE plan expression: one fragment per declared predicate — `{sql, params}` from the
-   * SAME `compileWhere` that produces a bounded WHERE — with an optional one wrapped in a conditional
-   * that yields `null` when its parameter is absent. That is the whole fragment vocabulary.
+   * The DYNAMIC WHERE plan expression: ONE fragment per declared predicate, every one the SAME struct
+   * `{skipped, sql, params}` — `sql`/`params` from the SAME `compileWhere` that produces a bounded
+   * WHERE, and `skipped` the per-call SKIP decision carried as DATA (a bounded predicate is a literal
+   * `false`; an optional one is `param === null`). That is the whole fragment vocabulary (CLAUDE.md §2:
+   * SQL + params + a SKIP flag). The array is HOMOGENEOUS — never a `cond`-to-null element — so the
+   * go/rust native-codegen emitters resolve it (a variant/nullable array element is the one shape they
+   * reject); the `executeSQL` leaf drops the `skipped` fragments at run.
    */
   private dynamicWherePlan(model: ModelClassLike, where: readonly Predicate[]): string {
     const frags = where.map((p) => {
       const w = compileWhere(this.conditions(model, [p]), this.spec.dialect);
-      const frag = `{ sql: ${quote(w.sql)}, params: [${w.params.map(renderSlot).join(', ')}] }`;
-      return isParameterised(p) && p.optional === true ? `${p.param} !== null ? ${frag} : null` : frag;
+      const skipped = isParameterised(p) && p.optional === true ? `${p.param} === null` : 'false';
+      return `{ skipped: ${skipped}, sql: ${quote(w.sql)}, params: [${w.params.map(renderSlot).join(', ')}] }`;
     });
     return `{ frags: [${frags.join(', ')}] }`;
   }
@@ -412,10 +418,19 @@ class EmitContext {
       // The runaway guard the compiled op resolved (`hasManyHardLimit` / the per-relation override):
       // baked onto the child fetch so the `executeSQL` transport asserts the RAW child row count —
       // the only point they are visible, since `group` receives an already-nested graph. A relation
-      // batch never carries a dynamic WHERE (its SQL is fully static), so the `whereDynamic` slot is
-      // an honest `null`. Uncapped ⇒ the ports stop at `bigint` and the call is byte-unchanged.
+      // batch never carries a dynamic WHERE (its SQL is fully static), so `whereDynamic` is passed as an
+      // EMPTY plan (`{frags:[]}` ≡ no dynamic WHERE) purely to reach the trailing `guard` arg positionally
+      // — NOT `null`, which bc's go emitter mis-lowers to an untyped `nil` in the wire payload (the
+      // positional-filler smell tracked by #193). Uncapped ⇒ both ports are omitted entirely.
       const guard = relationGuard(op);
-      const guardPorts = guard !== null ? `, null, ${JSON.stringify(guard)}` : '';
+      // The guard rides as a CONCRETE `CapGuard` struct (leaf-transport), so the native emitters build
+      // it directly: `limit` is an `Int` LITERAL (a plain `number` would emit as a float and the wire
+      // int-probe would miss the cap); `model` is omitted when the op resolved none.
+      const guardExpr =
+        guard !== null
+          ? `{ limit: ${guard.limit} as Int, ${guard.model !== undefined ? `model: ${quote(guard.model)}, ` : ''}relation: ${quote(guard.relation)} }`
+          : null;
+      const guardPorts = guardExpr !== null ? `, { frags: [] }, ${guardExpr}` : '';
       lines.push(`const ${childVar}: WireValue[] = Db.executeSQL(${quote(op.sql)}, [${keysVar}], false, false, ${bigint}${guardPorts});`);
       let childRows = childVar;
       let childObj = objOf(

@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"github.com/foo-ogawa/litedbmodel/go/litedbmodel_runtime/wire"
 	"math"
+	"regexp"
 	"strconv"
 
 	bc "github.com/foo-ogawa/behavior-contracts/go"
@@ -138,7 +139,7 @@ type relationGuard struct {
 // guard — a guard that fails to unbox is a runaway that would otherwise sail through.
 func portRelationGuard(payload wire.WireRow) (*relationGuard, error) {
 	p := payload.ProbeRow("guard")
-	if p.Kind == wireProbeAbsent || p.ActualWireType == "NULL" {
+	if p.Kind == wireProbeAbsent || p.Kind == wireProbeNull {
 		return nil, nil
 	}
 	if p.Kind != wireProbeGot {
@@ -158,6 +159,59 @@ func portRelationGuard(payload wire.WireRow) (*relationGuard, error) {
 		g.model = model.Got
 	}
 	return g, nil
+}
+
+// dynamicWhereFrag is one unboxed dynamic-WHERE fragment: its SQL text, its bound params (wire), and the
+// per-call SKIP flag. The homogeneous fragment vocabulary the leaf assembles at run (CLAUDE.md §2: SQL
+// text + params + a SKIP flag) — a skipped fragment is PRESENT with `skipped` true, never a null
+// element. Go twin of the TS `DynamicWhereFrag`.
+type dynamicWhereFrag struct {
+	skipped bool
+	sql     string
+	params  []wire.WireValue
+}
+
+// portDynamicWhere reads the OPTIONAL `whereDynamic` plan port — a wire row `{frags: [...]}`. ABSENT (or
+// an explicit null) ⇒ nil ⇒ no dynamic WHERE (the statement passes through unchanged): a bounded read, a
+// write, and an uncapped fetch OMIT it (CLAUDE.md §2). PRESENT but wrong-variant, or a malformed
+// fragment, is a LOUD error.
+func portDynamicWhere(payload wire.WireRow) ([]dynamicWhereFrag, error) {
+	p := payload.ProbeRow("whereDynamic")
+	if p.Kind == wireProbeAbsent || p.Kind == wireProbeNull {
+		return nil, nil
+	}
+	if p.Kind != wireProbeGot {
+		return nil, portErr("whereDynamic", "row", p.Kind, p.ActualWireType)
+	}
+	fl := p.Got.ProbeList("frags")
+	if fl.Kind != wireProbeGot {
+		return nil, portErr("whereDynamic.frags", "list", fl.Kind, fl.ActualWireType)
+	}
+	frags := make([]dynamicWhereFrag, fl.Got.Len())
+	for i := range frags {
+		row := fl.Got.ElemRow(i)
+		if row.Kind != wireProbeGot {
+			return nil, portErr("whereDynamic.frags element", "row", row.Kind, row.ActualWireType)
+		}
+		skipped := row.Got.ProbeBool("skipped")
+		if skipped.Kind != wireProbeGot {
+			return nil, portErr("whereDynamic.frags.skipped", "bool", skipped.Kind, skipped.ActualWireType)
+		}
+		sql := row.Got.ProbeString("sql")
+		if sql.Kind != wireProbeGot {
+			return nil, portErr("whereDynamic.frags.sql", "string", sql.Kind, sql.ActualWireType)
+		}
+		fp := row.Got.ProbeList("params")
+		if fp.Kind != wireProbeGot {
+			return nil, portErr("whereDynamic.frags.params", "list", fp.Kind, fp.ActualWireType)
+		}
+		items, err := wireItems(fp.Got, "whereDynamic.frags.params")
+		if err != nil {
+			return nil, err
+		}
+		frags[i] = dynamicWhereFrag{skipped: skipped.Got, sql: sql.Got, params: items}
+	}
+	return frags, nil
 }
 
 // ── Payload materialization (wire → wire; the go wire type's slices are unexported) ─────────────────
@@ -259,13 +313,61 @@ func wireOfElem(l wire.WireList, i int) (wire.WireValue, error) {
 	return wire.WireValue{}, fmt.Errorf("unknown wire tag %q", p.ActualWireType)
 }
 
+// ── the DYNAMIC (SKIP) WHERE: assembled by the transport, at execution time (leaves.ts) ─────────────
+
+// whereTailRe matches the SQL keywords that may follow a WHERE clause; the dynamic WHERE splices in
+// BEFORE the first of them, so it lands at exactly the position a bounded WHERE occupies. Port of the
+// TS `WHERE_TAIL_RE` (`/\s+(GROUP BY|ORDER BY|LIMIT|OFFSET|FOR UPDATE|RETURNING)\b/i`).
+var whereTailRe = regexp.MustCompile(`(?i)\s+(GROUP BY|ORDER BY|LIMIT|OFFSET|FOR UPDATE|RETURNING)\b`)
+
+// spliceWhere splices a ` WHERE …` clause (leading space included, or "") into baseSql before its first
+// tail keyword. Byte-for-byte port of leaves.ts `spliceWhere`.
+func spliceWhere(baseSql, whereSql string) string {
+	if whereSql == "" {
+		return baseSql
+	}
+	loc := whereTailRe.FindStringIndex(baseSql)
+	if loc == nil {
+		return baseSql + whereSql
+	}
+	return baseSql[:loc[0]] + whereSql + baseSql[loc[0]:]
+}
+
+// assembleDynamicWhere assembles the effective (sql, params) from the dynamic-WHERE plan: DROP the
+// skipped fragments, join the survivors with ` WHERE `(first)/` AND `(rest) + the fragment SQL, splice
+// the clause before the first tail keyword (spliceWhere), and bind the surviving fragments' params
+// BEFORE the base params (the WHERE `?`s precede the tail's). Byte-for-byte port of leaves.ts
+// `assembleDynamicWhere`; a plan with no surviving fragment leaves the statement unchanged.
+func assembleDynamicWhere(baseSql string, baseParams []wire.WireValue, frags []dynamicWhereFrag) (string, []wire.WireValue) {
+	whereSql := ""
+	var whereParams []wire.WireValue
+	for _, f := range frags {
+		if f.skipped {
+			continue
+		}
+		if whereSql == "" {
+			whereSql += " WHERE " + f.sql
+		} else {
+			whereSql += " AND " + f.sql
+		}
+		whereParams = append(whereParams, f.params...)
+	}
+	params := make([]wire.WireValue, 0, len(whereParams)+len(baseParams))
+	params = append(params, whereParams...)
+	params = append(params, baseParams...)
+	return spliceWhere(baseSql, whereSql), params
+}
+
 // ExecuteSQL runs ONE SQL node and returns its rows as a wire list of wire rows (empty list for a
-// non-RETURNING write). Params ride as wire values: a scalar binds directly (toDriverParam); a wire
-// LIST param binds as ONE JSON array string (the `json_each(?)` batch-key contract — SAME rendering as
-// the runtime relation bindKeys). bigint is a render hint the native path does not need here. The
-// OPTIONAL guard port is the RELATION runaway cap of a guarded relation child fetch: the raw rows are
-// asserted against it HERE (the shared checkHardLimit SSoT) because past [GroupChildren] the graph is
-// already nested. Ports ride in the payload as {bigint, guard?, params, returning, sql, write}.
+// non-RETURNING write). The DYNAMIC (SKIP) WHERE is assembled FIRST when a plan is present
+// (assembleDynamicWhere): the final statement shape is only known here, so the placeholder render
+// (finalizeSQL) must follow it (CLAUDE.md §2). Params ride as wire values: a scalar binds directly
+// (toDriverParam); a wire LIST param binds as ONE JSON array string (the `json_each(?)` batch-key
+// contract — SAME rendering as the runtime relation bindKeys). bigint is a render hint the native path
+// does not need here. The OPTIONAL `guard` port is the RELATION runaway cap of a guarded relation child
+// fetch (absent/null ⇒ uncapped): the raw rows are asserted against it HERE (the shared checkHardLimit
+// SSoT) because past [GroupChildren] the graph is already nested. Both control ports are OPTIONAL, so
+// ports ride in the payload as {bigint, guard?, params, returning, sql, whereDynamic?, write}.
 func ExecuteSQL(payload wire.WireRow) (wire.WireValue, error) {
 	bigint, err := portBool(payload, "bigint")
 	if err != nil {
@@ -287,6 +389,10 @@ func ExecuteSQL(payload wire.WireRow) (wire.WireValue, error) {
 	if err != nil {
 		return wire.WireNull(), err
 	}
+	whereFrags, err := portDynamicWhere(payload)
+	if err != nil {
+		return wire.WireNull(), err
+	}
 	guard, err := portRelationGuard(payload)
 	if err != nil {
 		return wire.WireNull(), err
@@ -294,6 +400,12 @@ func ExecuteSQL(payload wire.WireRow) (wire.WireValue, error) {
 	_ = bigint
 	if leafExecCtx == nil {
 		return wire.WireNull(), fmt.Errorf("leaf transport: no bound connection (call BindLeafTransport before running the native module)")
+	}
+	// Assemble the DYNAMIC (SKIP) WHERE FIRST when a plan is present: the final statement shape is only
+	// known here, so the placeholder render (finalizeSQL, below) must follow it (CLAUDE.md §2). An
+	// ABSENT plan (whereFrags nil) leaves the bounded sql/params untouched (pass-through).
+	if whereFrags != nil {
+		sql, params = assembleDynamicWhere(sql, params, whereFrags)
 	}
 	args := make([]any, len(params))
 	values := make([]bc.Value, len(params))

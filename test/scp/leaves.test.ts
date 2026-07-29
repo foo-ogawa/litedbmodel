@@ -78,22 +78,26 @@ test('write routes through the run seam and returns the affected summary', () =>
 
 // ── #151 the DYNAMIC (SKIP) WHERE — assembled by the transport at EXECUTION time ────────────────
 //
-// The fragment vocabulary is SQL text + params + SKIP (a skipped fragment is simply omitted — bc's
-// lazy `cond` hands the leaf a `null` in its place). The leaf joins the survivors, splices the clause
-// at the WHERE position, and only THEN renders `?`→`$N` on the final SQL: the statement's shape is not
-// known until the call, so it cannot be rendered at generate time.
+// The fragment vocabulary is SQL text + params + a SKIP FLAG: every fragment is the SAME homogeneous
+// struct `{ skipped, sql, params }`, and a skipped one is PRESENT with `skipped: true` (bc carries the
+// per-call SKIP decision as DATA, never a `cond`-to-null variant element). The leaf drops the skipped
+// fragments, joins the survivors, splices the clause at the WHERE position, and only THEN renders
+// `?`→`$N` on the final SQL: the statement's shape is not known until the call, so it cannot be
+// rendered at generate time. `whereDynamic` is OPTIONAL — a bounded statement OMITS it (no plan).
 
 test('a SKIP plan assembles only the surviving fragments, at the WHERE position, before the tail', () => {
   const calls: Call[] = [];
   const ctx: LeafContext = { exec: contextForConnection(recordingConn(calls)), dialect: 'sqlite' };
   const base = { sql: 'SELECT id, author_id FROM posts ORDER BY id ASC LIMIT 20', params: [], write: false, returning: false, bigint: false };
 
-  executeSQL({ ...base, whereDynamic: { frags: [{ sql: 'author_id = ?', params: [10] }, null, { sql: 'id >= ?', params: [2] }] } }, ctx);
+  // The middle fragment is SKIPPED (`skipped: true`) — present with plausible sql/params, but dropped
+  // by the leaf, so the surviving assembly is exactly `author_id = ? AND id >= ?`.
+  executeSQL({ ...base, whereDynamic: { frags: [{ skipped: false, sql: 'author_id = ?', params: [10] }, { skipped: true, sql: 'status = ?', params: ['draft'] }, { skipped: false, sql: 'id >= ?', params: [2] }] } }, ctx);
   expect(calls[0].sql).toBe('SELECT id, author_id FROM posts WHERE author_id = ? AND id >= ? ORDER BY id ASC LIMIT 20');
   expect(calls[0].params).toEqual([10, 2]);
 
   // Every fragment skipped ⇒ no WHERE at all (the base statement is untouched).
-  executeSQL({ ...base, whereDynamic: { frags: [null, null] } }, ctx);
+  executeSQL({ ...base, whereDynamic: { frags: [{ skipped: true, sql: 'status = ?', params: ['draft'] }, { skipped: true, sql: 'author_id = ?', params: [99] }] } }, ctx);
   expect(calls[1].sql).toBe('SELECT id, author_id FROM posts ORDER BY id ASC LIMIT 20');
   expect(calls[1].params).toEqual([]);
 
@@ -107,11 +111,11 @@ test('`?`→`$N` is rendered AFTER the SKIP assembly, so the numbering follows t
   const ctx: LeafContext = { exec: contextForConnection(recordingConn(calls)), dialect: 'postgres' };
   const base = { sql: 'SELECT id, author_id FROM posts ORDER BY id ASC', params: [], write: false, returning: false, bigint: false };
 
-  executeSQL({ ...base, whereDynamic: { frags: [{ sql: 'author_id = ?', params: [10] }, { sql: 'id >= ?', params: [2] }] } }, ctx);
+  executeSQL({ ...base, whereDynamic: { frags: [{ skipped: false, sql: 'author_id = ?', params: [10] }, { skipped: false, sql: 'id >= ?', params: [2] }] } }, ctx);
   expect(calls[0].sql).toBe('SELECT id, author_id FROM posts WHERE author_id = $1 AND id >= $2 ORDER BY id ASC');
 
   // The SAME plan with the first fragment skipped renumbers — proof the render cannot happen earlier.
-  executeSQL({ ...base, whereDynamic: { frags: [null, { sql: 'id >= ?', params: [2] }] } }, ctx);
+  executeSQL({ ...base, whereDynamic: { frags: [{ skipped: true, sql: 'author_id = ?', params: [10] }, { skipped: false, sql: 'id >= ?', params: [2] }] } }, ctx);
   expect(calls[1].sql).toBe('SELECT id, author_id FROM posts WHERE id >= $1 ORDER BY id ASC');
   expect(calls[1].params).toEqual([2]);
 });
@@ -123,6 +127,7 @@ test('the relation guard trips on the RAW child rows, and an uncapped statement 
 
   // 3 child rows > cap 2 ⇒ the transport throws with the relation-context fields and the EXACT batch
   // total (the batch is fetched in full — v1 `_selectForRelation` parity, no `LIMIT cap + 1` here).
+  // The cap rides as the OPTIONAL single `guard` port — the resolved relation cap.
   expect(() => executeSQL({ ...base, guard: { limit: 2, model: 'posts', relation: 'posts' } }, ctx)).toThrow(LimitExceededError);
   try {
     executeSQL({ ...base, guard: { limit: 2, model: 'posts', relation: 'posts' } }, ctx);

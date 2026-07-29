@@ -14,14 +14,25 @@
  *
  * ## The port vocabulary
  *
- * The ports are declared `WireValue` / `WireValue[]` — bc's OPAQUE wire type. A binding annotated
+ * The DATA ports are declared `WireValue` / `WireValue[]` — bc's OPAQUE wire type. A binding annotated
  * `WireValue[]` stays opaque (wire passthrough), so an intermediate result flows leaf→leaf with no
  * typed↔generic round-trip; the SINGLE de-box happens at the one binding that declares a CONCRETE row
  * type. A relation op therefore runs `executeSQL → pluck → executeSQL → … → group` entirely on the
  * wire plane and materializes the whole nested typed graph exactly once, at the end.
+ *
+ * The two CONTROL ports — {@link DynamicWherePlan} (`whereDynamic`) and {@link CapGuard} (`guard`) —
+ * are CONCRETE STRUCTS the emitter CONSTRUCTS at the call site from the endpoint's own parameters (not
+ * leaf→leaf wire values), so a native-codegen emitter builds them as typed structs. They are OPTIONAL:
+ * only a read with a SKIP predicate carries `whereDynamic`, only a guarded relation child carries
+ * `guard` — a bounded read, a write, and an uncapped fetch OMIT them (native-clean, CLAUDE.md §2 "only
+ * actually-optional predicates accumulate a plan"). bc typed-native lowers a NON-NULL struct into an
+ * `opt<named>` port via `optSome` (bc#275), so a concrete optional port is native — no boxing, and no
+ * empty plan carried on every statement. The fragment vocabulary is CLAUDE.md §2's: SQL + params + a
+ * SKIP FLAG (a homogeneous `{skipped, sql, params}` struct), assembled by the leaf at run — never a
+ * `cond`-to-null variant element (which the native-codegen emitters reject).
  */
 
-import { leaf, type WireValue } from 'behavior-contracts';
+import { leaf, type Int, type WireValue } from 'behavior-contracts';
 
 /**
  * The body of every declaration below. A `@leaf` body is never lowered and never executed — bc derives
@@ -37,6 +48,53 @@ function declarationStub(leafName: string, args: readonly unknown[]): never {
   );
 }
 
+// ── the two CONCRETE control-port structs (the leaf-contract SSoT; read by `bc generate --from`) ─────
+
+/**
+ * ONE dynamic-WHERE fragment: the fragment's SQL text and its bound `params`, plus a SKIP FLAG. The
+ * fragment vocabulary CLAUDE.md §2 fixes — "SQL text + params + SKIP flag" and nothing else. `skipped`
+ * carries the per-call SKIP decision as DATA (a bounded predicate is always `false`; an optional one is
+ * `param === null`), so every element of a plan is the SAME struct — never a `cond`-to-null variant,
+ * which the native-codegen emitters reject. `params` rides opaque (`WireValue[]`) exactly like the base
+ * `params` port; the leaf binds them in order. The runtime side ({@link import('./leaves')}) READS this
+ * struct — it never constructs one — so the one definition serves both the emitter's authored literal
+ * and the leaf's runtime assembly.
+ */
+export interface DynamicWhereFrag {
+  readonly skipped: boolean;
+  readonly sql: string;
+  /**
+   * The fragment's bound params (`WireValue`), the SAME order the fragment's `?`s appear. An OPTIONAL
+   * predicate binds its own parameter, which is `null` exactly when the predicate is SKIPPED — so the
+   * element is `WireValue | null`; a skipped fragment's params are never bound (the leaf drops it), so
+   * the null is inert. A bounded predicate's params are non-null.
+   */
+  readonly params: (WireValue | null)[];
+}
+
+/**
+ * The dynamic-WHERE plan a SKIP read carries (OPTIONAL — a bounded read omits it): a HOMOGENEOUS
+ * fragment list the leaf assembles at run, dropping the `skipped` fragments.
+ */
+export interface DynamicWherePlan {
+  readonly frags: readonly DynamicWhereFrag[];
+}
+
+/**
+ * The relation runaway cap a GUARDED child fetch carries — the bc wire-construction twin of the runtime
+ * {@link import('./limit-config').RelationGuard} (the emitter serializes the compiled op's resolved
+ * guard into this shape; the leaf transport asserts the raw child-row count against it). It is a
+ * SEPARATE type on purpose: `limit` is bc's `Int` brand so the native struct field is an integer (a
+ * plain `number` would emit as a float and the wire int-probe would miss it), whereas the runtime
+ * `RelationGuard` is `number`-typed because it is CONSTRUCTED from `resolveHasManyHardLimit`'s plain
+ * numbers — the two cannot be one type. `model` is optional exactly as `LimitExceededError.model` is.
+ */
+export interface CapGuard {
+  readonly limit: Int;
+  readonly model?: string;
+  readonly relation: string;
+}
+
 /**
  * The three OP-AGNOSTIC leaf transports. The bodies are declaration stubs — `bc generate --from`
  * reads this source and derives the catalog from the signatures; the executable side is the handler
@@ -50,14 +108,16 @@ export class Db {
    * a RETURNING write on the row path; `bigint` runs the read in exact-integer mode. A non-returning
    * write yields the one-row `[{changes, lastInsertRowid}]` summary so the output shape is uniform.
    *
-   * `guard` is the RELATION runaway cap (`{limit, model, relation}` — the compiled op's own
-   * {@link import('./limit-config').RelationGuard}) that a guarded relation child fetch carries: the
-   * transport asserts the fetched row count against it and raises `LimitExceededError` when the batch
-   * overruns. It rides HERE because this is where the RAW child rows exist — past `group` the graph is
-   * already nested — and because SCP has no throw, so the enforcement must live in the transport. A
-   * statement with no cap omits the port entirely (every non-relation call is byte-unchanged).
+   * `guard` is the RELATION runaway cap ({@link CapGuard}, the compiled op's own resolved cap) a
+   * guarded relation child fetch carries: the transport asserts the fetched row count against it and
+   * raises `LimitExceededError` when the batch overruns. It rides HERE because this is where the RAW
+   * child rows exist — past `group` the graph is already nested — and because SCP has no throw. Both
+   * control ports are OPTIONAL: a bounded read, a write, and an uncapped fetch OMIT them (native-clean,
+   * CLAUDE.md §2 "only actually-optional predicates accumulate a plan") — `whereDynamic` is present only
+   * on a read with a SKIP predicate, `guard` only on a guarded relation child. bc typed-native lowers an
+   * `opt<named>` port fed a non-null struct via `optSome` (bc#275), so a concrete OPTIONAL port is native.
    */
-  @leaf static executeSQL(sql: string, params: WireValue[], write: boolean, returning: boolean, bigint: boolean, whereDynamic?: WireValue | null, guard?: WireValue | null): WireValue[] { return declarationStub('executeSQL', [sql, params, write, returning, bigint, whereDynamic, guard]); }
+  @leaf static executeSQL(sql: string, params: WireValue[], write: boolean, returning: boolean, bigint: boolean, whereDynamic?: DynamicWherePlan | null, guard?: CapGuard | null): WireValue[] { return declarationStub('executeSQL', [sql, params, write, returning, bigint, whereDynamic, guard]); }
 
   /** Relation key extraction: the deduped, non-null key set over the ordered key-column tuple `col`. */
   @leaf static pluck(rows: WireValue[], col: string[]): WireValue[] { return declarationStub('pluck', [rows, col]); }
