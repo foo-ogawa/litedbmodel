@@ -37,7 +37,13 @@ fn main() {
 // nested relation outTypes bc names `Row_child` are non-camel-case TYPES, and the covered de-box is not
 // this runner's code to lint, so the generated tree is held OUT of the runner's lint gate here.
 #[cfg(feature = "livedb")]
-#[allow(non_camel_case_types, non_snake_case, dead_code, clippy::all, clippy::pedantic)]
+#[allow(
+    non_camel_case_types,
+    non_snake_case,
+    dead_code,
+    clippy::all,
+    clippy::pedantic
+)]
 mod gen {
     pub mod mysql;
     pub mod postgres;
@@ -189,28 +195,104 @@ mod imp {
     // so the same fields). Only the endpoints the live-DB corpus actually carries are here (the
     // config-gated capped/uncapped/top relation reads are excluded by gen-livedb.ts, so their structs
     // are not lowered).
-    impl_to_compare!(pg::PostsRow { author_id, created_at, id, status, title });
-    impl_to_compare!(my::PostsRow { author_id, created_at, id, status, title });
-    impl_to_compare!(pg::PostsTopRow { author_id, created_at, id, status, title });
-    impl_to_compare!(my::PostsTopRow { author_id, created_at, id, status, title });
+    impl_to_compare!(pg::PostsRow {
+        author_id,
+        created_at,
+        id,
+        status,
+        title
+    });
+    impl_to_compare!(my::PostsRow {
+        author_id,
+        created_at,
+        id,
+        status,
+        title
+    });
+    impl_to_compare!(pg::PostsTopRow {
+        author_id,
+        created_at,
+        id,
+        status,
+        title
+    });
+    impl_to_compare!(my::PostsTopRow {
+        author_id,
+        created_at,
+        id,
+        status,
+        title
+    });
     impl_to_compare!(pg::PageRow { id, title });
     impl_to_compare!(my::PageRow { id, title });
     impl_to_compare!(pg::PostsByIdsRow { id, title });
     impl_to_compare!(my::PostsByIdsRow { id, title });
-    impl_to_compare!(pg::FeedRow { author_id, id, status, title });
-    impl_to_compare!(my::FeedRow { author_id, id, status, title });
+    impl_to_compare!(pg::FeedRow {
+        author_id,
+        id,
+        status,
+        title
+    });
+    impl_to_compare!(my::FeedRow {
+        author_id,
+        id,
+        status,
+        title
+    });
     impl_to_compare!(pg::UsersWithPostsRow { id, name, posts });
     impl_to_compare!(my::UsersWithPostsRow { id, name, posts });
-    impl_to_compare!(pg::UsersWithPostsRow_posts { author_id, created_at, id, status, tags, title });
-    impl_to_compare!(my::UsersWithPostsRow_posts { author_id, created_at, id, status, tags, title });
+    impl_to_compare!(pg::UsersWithPostsRow_posts {
+        author_id,
+        created_at,
+        id,
+        status,
+        tags,
+        title
+    });
+    impl_to_compare!(my::UsersWithPostsRow_posts {
+        author_id,
+        created_at,
+        id,
+        status,
+        tags,
+        title
+    });
     impl_to_compare!(pg::UsersWithPostsRow_posts_tags { id, label, post_id });
     impl_to_compare!(my::UsersWithPostsRow_posts_tags { id, label, post_id });
-    impl_to_compare!(pg::PostsWithAuthorRow { author, author_id, created_at, id, status, title });
-    impl_to_compare!(my::PostsWithAuthorRow { author, author_id, created_at, id, status, title });
-    impl_to_compare!(pg::PostsWithAuthorRow_author { id, name, post_count });
-    impl_to_compare!(my::PostsWithAuthorRow_author { id, name, post_count });
-    impl_to_compare!(pg::WriteSummary { changes, lastInsertRowid });
-    impl_to_compare!(my::WriteSummary { changes, lastInsertRowid });
+    impl_to_compare!(pg::PostsWithAuthorRow {
+        author,
+        author_id,
+        created_at,
+        id,
+        status,
+        title
+    });
+    impl_to_compare!(my::PostsWithAuthorRow {
+        author,
+        author_id,
+        created_at,
+        id,
+        status,
+        title
+    });
+    impl_to_compare!(pg::PostsWithAuthorRow_author {
+        id,
+        name,
+        post_count
+    });
+    impl_to_compare!(my::PostsWithAuthorRow_author {
+        id,
+        name,
+        post_count
+    });
+    impl_to_compare!(pg::WriteSummary {
+        changes,
+        lastInsertRowid
+    });
+    impl_to_compare!(my::WriteSummary {
+        changes,
+        lastInsertRowid
+    });
     impl_to_compare!(pg::CreatePostReturningRow { id, title });
     impl_to_compare!(my::CreatePostReturningRow { id, title });
     impl_to_compare!(pg::RenamePostReturningRow { id, title });
@@ -221,8 +303,18 @@ mod imp {
     impl_to_compare!(my::RestatusPostsReturningRow { id, status });
     impl_to_compare!(pg::RemovePostsByAuthorReturningRow { id, title });
     impl_to_compare!(my::RemovePostsByAuthorReturningRow { id, title });
-    impl_to_compare!(pg::TypedRowsRow { flag, id, label, ts });
-    impl_to_compare!(my::TypedRowsRow { flag, id, label, ts });
+    impl_to_compare!(pg::TypedRowsRow {
+        flag,
+        id,
+        label,
+        ts
+    });
+    impl_to_compare!(my::TypedRowsRow {
+        flag,
+        id,
+        label,
+        ts
+    });
     impl_to_compare!(pg::CreateTagsReturningRow { id, label });
     impl_to_compare!(my::CreateTagsReturningRow { id, label });
     impl_to_compare!(pg::RelabelTagsReturningRow { id, label });
@@ -253,7 +345,11 @@ mod imp {
             .and_then(J::as_array)
             .map(|a| {
                 a.iter()
-                    .map(|e| e.as_i64().or_else(|| e.as_f64().map(|f| f as i64)).unwrap_or(0))
+                    .map(|e| {
+                        e.as_i64()
+                            .or_else(|| e.as_f64().map(|f| f as i64))
+                            .unwrap_or(0)
+                    })
                     .collect()
             })
             .unwrap_or_default()
@@ -261,7 +357,11 @@ mod imp {
     fn in_strs(o: &J, k: &str) -> Vec<String> {
         o.get(k)
             .and_then(J::as_array)
-            .map(|a| a.iter().map(|e| e.as_str().unwrap_or("").to_string()).collect())
+            .map(|a| {
+                a.iter()
+                    .map(|e| e.as_str().unwrap_or("").to_string())
+                    .collect()
+            })
             .unwrap_or_default()
     }
     fn in_records(o: &J) -> Vec<J> {
@@ -282,97 +382,222 @@ mod imp {
         match entry {
             "posts" => {
                 let a = in_i64(input, "authorId");
-                if pg { pg::posts(a).map(|r| r.to_compare()) } else { my::posts(a).map(|r| r.to_compare()) }
+                if pg {
+                    pg::posts(a).map(|r| r.to_compare())
+                } else {
+                    my::posts(a).map(|r| r.to_compare())
+                }
             }
             "postsTop" => {
-                if pg { pg::postsTop().map(|r| r.to_compare()) } else { my::postsTop().map(|r| r.to_compare()) }
+                if pg {
+                    pg::postsTop().map(|r| r.to_compare())
+                } else {
+                    my::postsTop().map(|r| r.to_compare())
+                }
             }
             "page" => {
                 let (l, o) = (in_i64(input, "limit"), in_i64(input, "offset"));
-                if pg { pg::page(l, o).map(|r| r.to_compare()) } else { my::page(l, o).map(|r| r.to_compare()) }
+                if pg {
+                    pg::page(l, o).map(|r| r.to_compare())
+                } else {
+                    my::page(l, o).map(|r| r.to_compare())
+                }
             }
             "postsByIds" => {
                 let ids = in_i64s(input, "ids");
-                if pg { pg::postsByIds(ids).map(|r| r.to_compare()) } else { my::postsByIds(ids).map(|r| r.to_compare()) }
+                if pg {
+                    pg::postsByIds(ids).map(|r| r.to_compare())
+                } else {
+                    my::postsByIds(ids).map(|r| r.to_compare())
+                }
             }
             "feed" => {
-                let (a, s, si) = (in_i64(input, "authorId"), in_opt_str(input, "status"), in_opt_str(input, "since"));
-                if pg { pg::feed(a, s, si).map(|r| r.to_compare()) } else { my::feed(a, s, si).map(|r| r.to_compare()) }
+                let (a, s, si) = (
+                    in_i64(input, "authorId"),
+                    in_opt_str(input, "status"),
+                    in_opt_str(input, "since"),
+                );
+                if pg {
+                    pg::feed(a, s, si).map(|r| r.to_compare())
+                } else {
+                    my::feed(a, s, si).map(|r| r.to_compare())
+                }
             }
             "usersWithPosts" => {
-                if pg { pg::usersWithPosts().map(|r| r.to_compare()) } else { my::usersWithPosts().map(|r| r.to_compare()) }
+                if pg {
+                    pg::usersWithPosts().map(|r| r.to_compare())
+                } else {
+                    my::usersWithPosts().map(|r| r.to_compare())
+                }
             }
             "postsWithAuthor" => {
-                if pg { pg::postsWithAuthor().map(|r| r.to_compare()) } else { my::postsWithAuthor().map(|r| r.to_compare()) }
+                if pg {
+                    pg::postsWithAuthor().map(|r| r.to_compare())
+                } else {
+                    my::postsWithAuthor().map(|r| r.to_compare())
+                }
             }
             "createPost" => {
-                let (id, a, t, s, c) = (in_i64(input, "id"), in_i64(input, "authorId"), in_str(input, "title"), in_str(input, "status"), in_str(input, "createdAt"));
-                if pg { pg::createPost(id, a, t, s, c).map(|r| r.to_compare()) } else { my::createPost(id, a, t, s, c).map(|r| r.to_compare()) }
+                let (id, a, t, s, c) = (
+                    in_i64(input, "id"),
+                    in_i64(input, "authorId"),
+                    in_str(input, "title"),
+                    in_str(input, "status"),
+                    in_str(input, "createdAt"),
+                );
+                if pg {
+                    pg::createPost(id, a, t, s, c).map(|r| r.to_compare())
+                } else {
+                    my::createPost(id, a, t, s, c).map(|r| r.to_compare())
+                }
             }
             "renamePost" => {
                 let (t, id) = (in_str(input, "title"), in_i64(input, "id"));
-                if pg { pg::renamePost(t, id).map(|r| r.to_compare()) } else { my::renamePost(t, id).map(|r| r.to_compare()) }
+                if pg {
+                    pg::renamePost(t, id).map(|r| r.to_compare())
+                } else {
+                    my::renamePost(t, id).map(|r| r.to_compare())
+                }
             }
             "removePost" => {
                 let id = in_i64(input, "id");
-                if pg { pg::removePost(id).map(|r| r.to_compare()) } else { my::removePost(id).map(|r| r.to_compare()) }
+                if pg {
+                    pg::removePost(id).map(|r| r.to_compare())
+                } else {
+                    my::removePost(id).map(|r| r.to_compare())
+                }
             }
             "createPostReturning" => {
-                let (id, a, t, s, c) = (in_i64(input, "id"), in_i64(input, "authorId"), in_str(input, "title"), in_str(input, "status"), in_str(input, "createdAt"));
-                if pg { pg::createPostReturning(id, a, t, s, c).map(|r| r.to_compare()) } else { my::createPostReturning(id, a, t, s, c).map(|r| r.to_compare()) }
+                let (id, a, t, s, c) = (
+                    in_i64(input, "id"),
+                    in_i64(input, "authorId"),
+                    in_str(input, "title"),
+                    in_str(input, "status"),
+                    in_str(input, "createdAt"),
+                );
+                if pg {
+                    pg::createPostReturning(id, a, t, s, c).map(|r| r.to_compare())
+                } else {
+                    my::createPostReturning(id, a, t, s, c).map(|r| r.to_compare())
+                }
             }
             "renamePostReturning" => {
                 let (t, id) = (in_str(input, "title"), in_i64(input, "id"));
-                if pg { pg::renamePostReturning(t, id).map(|r| r.to_compare()) } else { my::renamePostReturning(t, id).map(|r| r.to_compare()) }
+                if pg {
+                    pg::renamePostReturning(t, id).map(|r| r.to_compare())
+                } else {
+                    my::renamePostReturning(t, id).map(|r| r.to_compare())
+                }
             }
             "removePostReturning" => {
                 let id = in_i64(input, "id");
-                if pg { pg::removePostReturning(id).map(|r| r.to_compare()) } else { my::removePostReturning(id).map(|r| r.to_compare()) }
+                if pg {
+                    pg::removePostReturning(id).map(|r| r.to_compare())
+                } else {
+                    my::removePostReturning(id).map(|r| r.to_compare())
+                }
             }
             "restatusPostsReturning" => {
                 let (s, a) = (in_str(input, "status"), in_i64(input, "authorId"));
-                if pg { pg::restatusPostsReturning(s, a).map(|r| r.to_compare()) } else { my::restatusPostsReturning(s, a).map(|r| r.to_compare()) }
+                if pg {
+                    pg::restatusPostsReturning(s, a).map(|r| r.to_compare())
+                } else {
+                    my::restatusPostsReturning(s, a).map(|r| r.to_compare())
+                }
             }
             "removePostsByAuthorReturning" => {
                 let a = in_i64(input, "authorId");
-                if pg { pg::removePostsByAuthorReturning(a).map(|r| r.to_compare()) } else { my::removePostsByAuthorReturning(a).map(|r| r.to_compare()) }
+                if pg {
+                    pg::removePostsByAuthorReturning(a).map(|r| r.to_compare())
+                } else {
+                    my::removePostsByAuthorReturning(a).map(|r| r.to_compare())
+                }
             }
             "typedRows" => {
-                if pg { pg::typedRows().map(|r| r.to_compare()) } else { my::typedRows().map(|r| r.to_compare()) }
+                if pg {
+                    pg::typedRows().map(|r| r.to_compare())
+                } else {
+                    my::typedRows().map(|r| r.to_compare())
+                }
             }
             "removeTags" => {
                 let ids = in_i64s(input, "ids");
-                if pg { pg::removeTags(ids).map(|r| r.to_compare()) } else { my::removeTags(ids).map(|r| r.to_compare()) }
+                if pg {
+                    pg::removeTags(ids).map(|r| r.to_compare())
+                } else {
+                    my::removeTags(ids).map(|r| r.to_compare())
+                }
             }
             "removeTagsReturning" => {
                 let ids = in_i64s(input, "ids");
-                if pg { pg::removeTagsReturning(ids).map(|r| r.to_compare()) } else { my::removeTagsReturning(ids).map(|r| r.to_compare()) }
+                if pg {
+                    pg::removeTagsReturning(ids).map(|r| r.to_compare())
+                } else {
+                    my::removeTagsReturning(ids).map(|r| r.to_compare())
+                }
             }
             "createTags" => {
                 if pg {
-                    pg::createTags(in_i64s(input, "rows_id"), in_i64s(input, "rows_post_id"), in_strs(input, "rows_label")).map(|r| r.to_compare())
+                    pg::createTags(
+                        in_i64s(input, "rows_id"),
+                        in_i64s(input, "rows_post_id"),
+                        in_strs(input, "rows_label"),
+                    )
+                    .map(|r| r.to_compare())
                 } else {
-                    let rows = in_records(input).iter().map(|r| my::CreateTagsRecord { id: in_i64(r, "id"), post_id: in_i64(r, "post_id"), label: in_str(r, "label") }).collect();
+                    let rows = in_records(input)
+                        .iter()
+                        .map(|r| my::CreateTagsRecord {
+                            id: in_i64(r, "id"),
+                            post_id: in_i64(r, "post_id"),
+                            label: in_str(r, "label"),
+                        })
+                        .collect();
                     my::createTags(rows).map(|r| r.to_compare())
                 }
             }
             "createTagsReturning" => {
                 if pg {
-                    pg::createTagsReturning(in_i64s(input, "rows_id"), in_i64s(input, "rows_post_id"), in_strs(input, "rows_label")).map(|r| r.to_compare())
+                    pg::createTagsReturning(
+                        in_i64s(input, "rows_id"),
+                        in_i64s(input, "rows_post_id"),
+                        in_strs(input, "rows_label"),
+                    )
+                    .map(|r| r.to_compare())
                 } else {
-                    let rows = in_records(input).iter().map(|r| my::CreateTagsReturningRecord { id: in_i64(r, "id"), post_id: in_i64(r, "post_id"), label: in_str(r, "label") }).collect();
+                    let rows = in_records(input)
+                        .iter()
+                        .map(|r| my::CreateTagsReturningRecord {
+                            id: in_i64(r, "id"),
+                            post_id: in_i64(r, "post_id"),
+                            label: in_str(r, "label"),
+                        })
+                        .collect();
                     my::createTagsReturning(rows).map(|r| r.to_compare())
                 }
             }
             "relabelTagsReturning" => {
                 if pg {
-                    pg::relabelTagsReturning(in_i64s(input, "rows_id"), in_strs(input, "rows_label")).map(|r| r.to_compare())
+                    pg::relabelTagsReturning(
+                        in_i64s(input, "rows_id"),
+                        in_strs(input, "rows_label"),
+                    )
+                    .map(|r| r.to_compare())
                 } else {
-                    let rows = in_records(input).iter().map(|r| my::RelabelTagsReturningRecord { id: in_i64(r, "id"), label: in_str(r, "label") }).collect();
+                    let rows = in_records(input)
+                        .iter()
+                        .map(|r| my::RelabelTagsReturningRecord {
+                            id: in_i64(r, "id"),
+                            label: in_str(r, "label"),
+                        })
+                        .collect();
                     my::relabelTagsReturning(rows).map(|r| r.to_compare())
                 }
             }
-            other => Err(BehaviorError::new("UNKNOWN_ENTRY", format!("unknown entry {other:?}"))),
+            other => Err(BehaviorError::new(
+                "UNKNOWN_ENTRY",
+                format!("unknown entry {other:?}"),
+            )),
         }
     }
 
@@ -400,11 +625,15 @@ mod imp {
 
     impl PreparedStatement for TapPrepared<'_> {
         fn all(&mut self, params: &[Value]) -> Result<Vec<WireValue>, SqlFailure> {
-            self.log.borrow_mut().push((self.sql.clone(), params.to_vec()));
+            self.log
+                .borrow_mut()
+                .push((self.sql.clone(), params.to_vec()));
             self.inner.all(params)
         }
         fn run(&mut self, params: &[Value]) -> Result<RunInfo, SqlFailure> {
-            self.log.borrow_mut().push((self.sql.clone(), params.to_vec()));
+            self.log
+                .borrow_mut()
+                .push((self.sql.clone(), params.to_vec()));
             self.inner.run(params)
         }
     }
@@ -452,7 +681,11 @@ mod imp {
             Value::Float(f) => num_f64(*f),
             Value::Str(s) => J::String(s.clone()),
             Value::Arr(a) => J::Array(a.iter().map(param_to_j).collect()),
-            Value::Obj(o) => J::Object(o.iter().map(|(k, val)| (k.clone(), param_to_j(val))).collect()),
+            Value::Obj(o) => J::Object(
+                o.iter()
+                    .map(|(k, val)| (k.clone(), param_to_j(val)))
+                    .collect(),
+            ),
         }
     }
 
@@ -465,7 +698,12 @@ mod imp {
             WireValue::Int(i) => J::Number(Number::from(*i)),
             WireValue::Float(f) => num_f64(*f),
             WireValue::Str(s) => J::String(s.to_string()),
-            WireValue::Row(r) => J::Object(r.entries.iter().map(|(k, v)| (k.to_string(), wire_to_j(v))).collect()),
+            WireValue::Row(r) => J::Object(
+                r.entries
+                    .iter()
+                    .map(|(k, v)| (k.to_string(), wire_to_j(v)))
+                    .collect(),
+            ),
             WireValue::List(l) => J::Array(l.items.iter().map(wire_to_j).collect()),
         }
     }
@@ -536,7 +774,11 @@ mod imp {
                     a.iter()
                         .map(|s| {
                             let sql = s.get("sql").and_then(J::as_str).unwrap_or("");
-                            let params = s.get("params").and_then(J::as_array).cloned().unwrap_or_default();
+                            let params = s
+                                .get("params")
+                                .and_then(J::as_array)
+                                .cloned()
+                                .unwrap_or_default();
                             stmt_j(sql, params)
                         })
                         .collect()
@@ -544,14 +786,22 @@ mod imp {
                 .unwrap_or_default(),
         );
         if canon(&got_stmts) != canon(&want_stmts) {
-            problems.push(format!("statements {} != {}", canon(&got_stmts), canon(&want_stmts)));
+            problems.push(format!(
+                "statements {} != {}",
+                canon(&got_stmts),
+                canon(&want_stmts)
+            ));
         }
 
         // The FULL typed result (nested children + their values, #150).
         let empty_result = J::Null;
         let want_result = v.get("expectedResult").unwrap_or(&empty_result);
         if canon(&result) != canon(want_result) {
-            problems.push(format!("result {} != {}", canon(&result), canon(want_result)));
+            problems.push(format!(
+                "result {} != {}",
+                canon(&result),
+                canon(want_result)
+            ));
         }
 
         // DB state after a write, read directly on the inner driver (OFF the tap).
@@ -563,10 +813,16 @@ mod imp {
                     Ok(rows) => {
                         let got_rows = J::Array(rows.iter().map(wire_to_j).collect());
                         if canon(&got_rows) != canon(&want_rows) {
-                            problems.push(format!("db-state '{query}': {} != {}", canon(&got_rows), canon(&want_rows)));
+                            problems.push(format!(
+                                "db-state '{query}': {} != {}",
+                                canon(&got_rows),
+                                canon(&want_rows)
+                            ));
                         }
                     }
-                    Err(e) => problems.push(format!("db-state '{query}' query error: {}", e.message)),
+                    Err(e) => {
+                        problems.push(format!("db-state '{query}' query error: {}", e.message))
+                    }
                 }
             }
         }
@@ -585,9 +841,15 @@ mod imp {
         reseed: &dyn Fn() -> Result<(), SqlFailure>,
         vectors: &[&J],
     ) -> (usize, usize) {
-        eprintln!("\nlivedb-{dialect} — {} vectors (real {dialect})", vectors.len());
+        eprintln!(
+            "\nlivedb-{dialect} — {} vectors (real {dialect})",
+            vectors.len()
+        );
         let log: Log = RefCell::new(Vec::new());
-        let tap = TapDriver { inner: driver, log: &log };
+        let tap = TapDriver {
+            inner: driver,
+            log: &log,
+        };
         let (mut pass, mut fail) = (0usize, 0usize);
         for v in vectors {
             let name = v.get("name").and_then(J::as_str).unwrap_or("?");
@@ -611,7 +873,10 @@ mod imp {
     // ── connection config (env-driven; matches the python leg's defaults + docker-compose.livedb.yml) ──
 
     fn env_or(k: &str, def: &str) -> String {
-        std::env::var(k).ok().filter(|v| !v.is_empty()).unwrap_or_else(|| def.to_string())
+        std::env::var(k)
+            .ok()
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| def.to_string())
     }
 
     fn pg_conn() -> String {
@@ -686,11 +951,22 @@ mod imp {
         let schema: Vec<String> = corpus
             .get("schema")
             .and_then(J::as_array)
-            .map(|a| a.iter().filter_map(|s| s.as_str().map(str::to_string)).collect())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|s| s.as_str().map(str::to_string))
+                    .collect()
+            })
             .unwrap_or_default();
-        let all_vectors: &[J] = corpus.get("vectors").and_then(J::as_array).map(Vec::as_slice).unwrap_or(&[]);
+        let all_vectors: &[J] = corpus
+            .get("vectors")
+            .and_then(J::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
         let vectors_of = |d: &str| -> Vec<&J> {
-            all_vectors.iter().filter(|v| v.get("dialect").and_then(J::as_str) == Some(d)).collect()
+            all_vectors
+                .iter()
+                .filter(|v| v.get("dialect").and_then(J::as_str) == Some(d))
+                .collect()
         };
 
         let pg_driver = match PostgresDriver::connect(&pg_conn()) {
@@ -708,12 +984,25 @@ mod imp {
             }
         };
 
-        let pg_tally = run_leg("postgres", &pg_driver, &|| pg_driver.exec_ddl(&schema), &vectors_of("postgres"));
-        let my_tally = run_leg("mysql", &my_driver, &|| my_driver.exec_ddl(&schema), &vectors_of("mysql"));
+        let pg_tally = run_leg(
+            "postgres",
+            &pg_driver,
+            &|| pg_driver.exec_ddl(&schema),
+            &vectors_of("postgres"),
+        );
+        let my_tally = run_leg(
+            "mysql",
+            &my_driver,
+            &|| my_driver.exec_ddl(&schema),
+            &vectors_of("mysql"),
+        );
 
         let total_pass = pg_tally.0 + my_tally.0;
         let total_fail = pg_tally.1 + my_tally.1;
-        eprintln!("\n{total_pass} passed, {total_fail} failed / {} live-DB vectors", total_pass + total_fail);
+        eprintln!(
+            "\n{total_pass} passed, {total_fail} failed / {} live-DB vectors",
+            total_pass + total_fail
+        );
         print_summary(pg_tally, my_tally, false);
         i32::from(total_fail > 0)
     }

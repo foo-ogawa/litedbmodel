@@ -1946,26 +1946,6 @@ export function marshalIdRow(__v: Value): IdRow {
   };
 }
 
-// marshalNewUser — materialize a boxed Value into NewUser by reading each declared field (de-interpreted
-// shape walk; the leaf `as` is the handler Value boundary — a no-op under TS erasure).
-export function marshalNewUser(__v: Value): NewUser {
-  const __o = __v as Record<string, Value>;
-  return {
-    "email": (__o["email"] as unknown as string),
-    "name": (__o["name"] as unknown as string),
-  };
-}
-
-// marshalUserPatch — materialize a boxed Value into UserPatch by reading each declared field (de-interpreted
-// shape walk; the leaf `as` is the handler Value boundary — a no-op under TS erasure).
-export function marshalUserPatch(__v: Value): UserPatch {
-  const __o = __v as Record<string, Value>;
-  return {
-    "id": (__o["id"] as unknown as bigint),
-    "name": (__o["name"] as unknown as string),
-  };
-}
-
 // marshalOutput_findAll — materialize component 'findAll' output into its declared outputType (UserRow[]).
 // The straight-line body already produced the canonical Value; this retypes it (tsc-checked shape
 // walk). Runtime-equivalent under erasure (same value, retyped) — the equivalence pin holds.

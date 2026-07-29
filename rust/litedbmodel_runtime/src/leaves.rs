@@ -337,8 +337,14 @@ struct DynamicWhereFrag {
 /// null) ⇒ `None` ⇒ no dynamic WHERE (the statement passes through unchanged): a bounded read, a write,
 /// and an uncapped fetch OMIT it (CLAUDE.md §2). PRESENT but wrong-variant, or a malformed fragment, is
 /// a LOUD failure.
-fn port_dynamic_where(payload: &mut WireRow) -> Result<Option<Vec<DynamicWhereFrag>>, BehaviorError> {
-    let row = match payload.entries.iter().position(|(k, _)| k == "whereDynamic") {
+fn port_dynamic_where(
+    payload: &mut WireRow,
+) -> Result<Option<Vec<DynamicWhereFrag>>, BehaviorError> {
+    let row = match payload
+        .entries
+        .iter()
+        .position(|(k, _)| k == "whereDynamic")
+    {
         None => return Ok(None),
         Some(i) => match payload.entries.swap_remove(i).1 {
             WireValue::Null => return Ok(None),
