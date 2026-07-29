@@ -6,6 +6,7 @@ package litedbmodel_runtime
 
 import (
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -281,5 +282,55 @@ func TestCheckFindHardLimit(t *testing.T) {
 		"Set a higher limit or use pagination."
 	if lim.Error() != want {
 		t.Fatalf("find-context message mismatch:\n got: %s\nwant: %s", lim.Error(), want)
+	}
+}
+
+// #207 — the leaf hands the central seam ONE StatementIntent, derived from the statement's RUN MODE,
+// and [ExecutionContext.ConnectionFor] resolves the CONNECTION from it ([resolvePool]: write ⇒ the
+// writer pool). The branch that selects the SEAM is a DIFFERENT question: a RETURNING write runs on the
+// ROW seam ([Execute]) and is still a write. Deriving the intent from the branch — which is what this
+// transport did — sent `INSERT … RETURNING` to the READ REPLICA.
+//
+// The conformance/livedb setups run reader === writer (every intent returns the same pool), which is
+// why no cross-language leg saw this; the gate therefore SPLITS the pair and records which pool served
+// each statement. The ambient ctx is installed the same way [WithAmbientTransaction] installs a
+// tx-scoped one (save → set → restore); [BindLeafTransport] itself only builds a single-DB ctx.
+func TestExecuteSQL_RunModePicksThePool(t *testing.T) {
+	var log []string
+	reader := newRecordPool("reader", &log)
+	writer := newRecordPool("writer", &log)
+	prev := leafExecCtx
+	leafExecCtx = ContextForRouting(routingWithPools(reader, writer, NewWriterStickyClock(StickyOptions{UseWriterAfterTransaction: boolPtr(false)})), nil)
+	defer func() { leafExecCtx = prev }()
+
+	// A plain READ — the bounded payload that omits the control record entirely → the READER.
+	if _, err := ExecuteSQL(sqlPayload(nil, "SELECT id FROM users", false)); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	// A RETURNING write → the WRITER, even though it runs on the ROW seam.
+	returning, err := ExecuteSQL(leafPayload(
+		optsPort(writeModeRow(true), wire.WireNull(), wire.WireNull()),
+		port("params", wire.WireListOf(nil)),
+		port("sql", wire.WireStr("INSERT INTO users (name) VALUES (?) RETURNING id")),
+	))
+	if err != nil {
+		t.Fatalf("returning write: %v", err)
+	}
+	// A NON-returning write → the WRITER too (the half that was already right stays right).
+	summary, err := ExecuteSQL(sqlPayload(nil, "INSERT INTO users (name) VALUES (?)", true))
+	if err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	if !reflect.DeepEqual(log, []string{"reader", "writer", "writer"}) {
+		t.Fatalf("leaf routing = %v, want [reader writer writer]", log)
+	}
+	// …and the two decisions are INDEPENDENT, not accidentally aligned: the RETURNING write really did
+	// take the ROW seam (its rows come back), the non-returning one the affected-rows summary.
+	if ch := returning.AsList().Got.ElemRow(0).Got.ProbeInt("changes"); ch.Kind != wireProbeAbsent {
+		t.Fatalf("a RETURNING write must return ROWS, not the write summary (kind=%d)", ch.Kind)
+	}
+	if ch := summary.AsList().Got.ElemRow(0).Got.ProbeInt("changes"); ch.Kind != wireProbeGot {
+		t.Fatalf("a non-returning write must return the [{changes,lastInsertRowid}] summary (kind=%d)", ch.Kind)
 	}
 }

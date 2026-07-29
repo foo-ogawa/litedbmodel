@@ -16,8 +16,16 @@ import sqlite3
 
 import pytest
 
-from litedbmodel_runtime import LimitExceededError
+from litedbmodel_runtime import (
+    ConnectionRegistry,
+    LimitExceededError,
+    RoutingConfig,
+    WriterStickyClock,
+    reader_writer_pair,
+)
+from litedbmodel_runtime.connection_routing import ConnectionPool
 from litedbmodel_runtime.driver import SqliteDriver
+from litedbmodel_runtime.exec_context import ExecutionContext, MiddlewareChain
 from litedbmodel_runtime.leaves import make_handlers
 
 CTX = {"nodeId": "n0", "component": "executeSQL"}
@@ -158,3 +166,75 @@ def test_a_missing_or_mistyped_field_of_a_present_struct_is_loud(execute_sql):
     # A WELL-FORMED plan still assembles: the surviving fragment applies, the skipped one does not.
     assert [r["id"] for r in execute_sql(_plan({"skipped": False, "sql": "v = ?", "params": ["c"]}), CTX)["ok"]] == [3]
     assert len(execute_sql(_plan({"skipped": True, "sql": "v = ?", "params": [None]}), CTX)["ok"]) == 3
+
+
+# #207 — the leaf hands the central seam ONE StatementIntent, derived from the statement's RUN MODE, and
+# ``ExecutionContext.connection_for`` resolves the CONNECTION from it (``resolve_pool``: write ⇒ the
+# writer pool). The branch that selects the SEAM is a DIFFERENT question: a RETURNING write runs on the
+# ROW seam (``seam_execute``) and is still a write. Deriving the intent from the branch — which is what
+# this transport did — sent ``INSERT … RETURNING`` to the READ REPLICA.
+#
+# The conformance/livedb setups run reader === writer (every intent returns the same pool), which is why
+# no cross-language leg saw this; the gate therefore SPLITS the pair and records which pool served each
+# statement. The python leg of the five.
+
+
+class _RecordingPool(ConnectionPool):
+    """A pool that records its label on every acquire and hands out ONE shared raw connection, so a test
+    can assert WHICH pool (reader vs writer) ``resolve_pool`` selected for a leaf's statement while the
+    SQL really runs. The go/rust/TS/php legs use the same recording-pool instrument."""
+
+    def __init__(self, label, conn, log):
+        self._label = label
+        self._conn = conn
+        self._log = log
+
+    def acquire(self):
+        self._log.append(self._label)
+        return self._conn
+
+    def release(self, conn, destroy=False):
+        pass
+
+
+def test_the_run_mode_not_the_seam_branch_picks_the_pool():
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
+    log: list = []
+    routing = RoutingConfig(
+        ConnectionRegistry.from_default(
+            reader_writer_pair(_RecordingPool("reader", conn, log), _RecordingPool("writer", conn, log))
+        ).build(),
+        WriterStickyClock(use_writer_after_transaction=False),
+    )
+    execute_sql = make_handlers(ExecutionContext(None, MiddlewareChain(), routing=routing), "sqlite")["executeSQL"]
+
+    # A plain READ — the bounded payload that omits the control record entirely → the READER.
+    execute_sql({"sql": "SELECT id FROM users", "params": []}, CTX)
+    assert log == ["reader"]
+
+    # A RETURNING write → the WRITER, even though it runs on the ROW seam. This is the #207 case: with
+    # the intent taken from the branch it landed on the reader above.
+    returning = execute_sql(
+        {
+            "sql": "INSERT INTO users (name) VALUES (?) RETURNING id",
+            "params": ["A"],
+            "opts": {"write": {"returning": True}, "whereDynamic": None, "guard": None},
+        },
+        CTX,
+    )
+    assert log == ["reader", "writer"]
+    # …and the two decisions are INDEPENDENT, not accidentally aligned: it really did take the ROW seam.
+    assert returning == {"ok": [{"id": 1}]}
+
+    # A NON-returning write → the WRITER too (the half that was already right stays right).
+    summary = execute_sql(
+        {
+            "sql": "INSERT INTO users (name) VALUES (?)",
+            "params": ["B"],
+            "opts": {"write": {"returning": False}, "whereDynamic": None, "guard": None},
+        },
+        CTX,
+    )
+    assert log == ["reader", "writer", "writer"]
+    assert summary == {"ok": [{"changes": 1, "lastInsertRowid": 2}]}

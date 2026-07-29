@@ -12,10 +12,19 @@
  */
 
 import { test, expect } from 'vitest';
-import { executeSQL, pluck, group, leafHandlers, type LeafContext } from '../../src/scp/leaves';
+import { executeSQL, pluck, group, leafHandlers, leafHandlersAsync, type LeafContext } from '../../src/scp/leaves';
 import { LimitExceededError } from '../../src/scp/errors';
 import type { Value } from 'behavior-contracts/runtime';
-import { contextForConnection, type SyncConnection, type Rows, type RunInfo } from '../../src/scp/exec-context';
+import {
+  contextForConnection,
+  PooledAsyncContext,
+  type SyncConnection,
+  type AsyncConnection,
+  type AsyncConnectionPool,
+  type Rows,
+  type RunInfo,
+} from '../../src/scp/exec-context';
+import { ConnectionRegistry, WriterStickyClock } from '../../src/scp/connection-routing';
 
 interface Call { kind: 'execute' | 'executeSafe' | 'run'; sql: string; params: unknown[] }
 
@@ -295,4 +304,55 @@ test('a MISSING or MISTYPED field of a present struct is loud in every position 
   expect(calls[0].params).toEqual([7]);
   run(plan({ skipped: true, sql: 'author_id = ?', params: [null] }));
   expect(calls[1].sql).toBe(SQL);
+});
+
+// #207 — the leaf hands the seam ONE StatementIntent, derived from the statement's RUN MODE, and the
+// routing layer resolves the CONNECTION from it (`resolvePool`: write ⇒ writer). The branch that picks
+// the SEAM is a different question: a RETURNING write runs on the ROW seam (`execute`) yet is still a
+// write. Deriving the intent from the branch instead sent `INSERT … RETURNING` to the READ REPLICA.
+// The single-pool conformance setup cannot see this (every intent returns the same pool), so the gate
+// SPLITS reader and writer and records which pool served each statement — the TS leg of the five.
+test('#207 — the RUN MODE, not the seam branch, picks the pool: a RETURNING write goes to the WRITER', async () => {
+  const log: string[] = [];
+  // A recording pool over a canned connection: the label is pushed on ACQUIRE, which is where
+  // `PooledAsyncContext.connectionFor` reaches a pool after `resolvePool` has chosen it.
+  const recording = (label: string): AsyncConnectionPool => ({
+    async acquire(): Promise<AsyncConnection> {
+      log.push(label);
+      return {
+        async execute(): Promise<Rows> {
+          return [{ id: 1 }];
+        },
+        async run(): Promise<RunInfo> {
+          return { changes: 1, lastInsertRowid: 7 } as RunInfo;
+        },
+      };
+    },
+    async release(): Promise<void> {},
+  });
+  const routing = {
+    registry: ConnectionRegistry.fromDefault({ reader: recording('reader'), writer: recording('writer') }).build(),
+    sticky: new WriterStickyClock({ useWriterAfterTransaction: false }),
+  };
+  const handler = leafHandlersAsync({ execAsync: new PooledAsyncContext(routing), dialect: 'postgres' }).executeSQL;
+  const ctx = { nodeId: 'n0', component: 'executeSQL' };
+  const call = (write: unknown): Promise<unknown> =>
+    handler({ sql: 'INSERT INTO users (name) VALUES (?) RETURNING id', params: ['A'], opts: { write, whereDynamic: null, guard: null } } as unknown as Record<string, Value>, ctx);
+
+  // A plain READ (the bounded payload that omits `opts` entirely) → the READER.
+  await handler({ sql: 'SELECT id FROM users', params: [] } as unknown as Record<string, Value>, ctx);
+  expect(log).toEqual(['reader']);
+
+  // A RETURNING write → the WRITER, even though it runs on the ROW seam. This is the #207 case: with
+  // the intent taken from the branch it landed on the reader above.
+  const returning = await call({ returning: true });
+  expect(log).toEqual(['reader', 'writer']);
+  // …and it really did take the ROW seam (the rows, not the `[{changes,lastInsertRowid}]` summary) —
+  // so the two decisions are proven INDEPENDENT, not accidentally aligned.
+  expect(returning).toEqual({ ok: [{ id: 1 }] });
+
+  // A NON-returning write → the WRITER too (the half that was already right stays right).
+  const summary = await call({ returning: false });
+  expect(log).toEqual(['reader', 'writer', 'writer']);
+  expect(summary).toEqual({ ok: [{ changes: 1n, lastInsertRowid: 7n }] });
 });

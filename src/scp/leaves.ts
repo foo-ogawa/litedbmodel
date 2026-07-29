@@ -209,7 +209,14 @@ function isTupleSet(param: readonly unknown[]): boolean {
   return param.length > 0 && Array.isArray(param[0]);
 }
 
-/** Prepare a statement for the seam: resolve deferred PG cast(s), render `?`→`$N`, encode params. */
+/**
+ * Prepare a statement for the seam: resolve deferred PG cast(s), render `?`→`$N`, encode params, and
+ * carry the ONE {@link StatementIntent} both seams take. The intent is the statement's RUN MODE
+ * ({@link effectiveStatement} — a write mode present ⇒ a write), NOT the branch: the branch picks the
+ * SEAM (`returning` ⇒ the row seam), the intent picks the CONNECTION
+ * ({@link import('./connection-routing').resolvePool}), so a RETURNING write runs on `execute` and
+ * still routes to the WRITER. The four native transports derive it the same way (#207).
+ */
 export function prepareSql(p: { sql: string; params: unknown[]; write: boolean }, dialect: Dialect): { sql: string; bound: unknown[]; intent: StatementIntent } {
   let sql = p.sql;
   if (dialect === 'postgres') {
@@ -217,7 +224,7 @@ export function prepareSql(p: { sql: string; params: unknown[]; write: boolean }
   }
   sql = renderPlaceholders(sql, dialect);
   const bound = encodeParams(p.params, dialect);
-  const intent: StatementIntent = { write: p.write === true };
+  const intent: StatementIntent = { write: p.write };
   return { sql, bound, intent };
 }
 

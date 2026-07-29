@@ -509,8 +509,17 @@ func ExecuteSQL(payload wire.WireRow) (wire.WireValue, error) {
 		args[i] = leafParam(p, leafDialect)
 	}
 	text := finalizeSQL(sql, arrayBinds(values), leafDialect)
+	// The seam INTENT the statement's RUN MODE reduces to: a write mode PRESENT ⇒ a WRITE (the writer /
+	// tx connection), absent ⇒ a READ. Derived ONCE, BEFORE the branch, because the branch selects the
+	// SEAM (`returning` ⇒ the row seam) while the intent selects the CONNECTION: a RETURNING write runs
+	// on [Execute] and still belongs on the WRITER. Reading `returning` as the intent sent
+	// `INSERT … RETURNING` to the READ REPLICA (#207). Same rule in all five languages (TS `prepareSql`).
+	intent := ReadIntent()
+	if opts.write != nil {
+		intent = WriteIntent()
+	}
 	if opts.write != nil && !opts.write.returning {
-		info, err := Run(leafExecCtx, text, args, WriteIntent())
+		info, err := Run(leafExecCtx, text, args, intent)
 		if err != nil {
 			return wire.WireNull(), err
 		}
@@ -522,7 +531,7 @@ func ExecuteSQL(payload wire.WireRow) (wire.WireValue, error) {
 		})
 		return wire.WireListOf([]wire.WireValue{summary}), nil
 	}
-	rows, err := Execute(leafExecCtx, text, args, ReadIntent())
+	rows, err := Execute(leafExecCtx, text, args, intent)
 	if err != nil {
 		return wire.WireNull(), err
 	}

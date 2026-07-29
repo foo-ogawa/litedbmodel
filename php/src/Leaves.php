@@ -294,12 +294,19 @@ final class Leaves
                 // its OWN `returning` (ONE field, three values — "returns rows but is not a write" is
                 // not a state the ABI can hold, #206).
                 $write = $opts === null ? null : self::required($opts, 'write', self::RECORD, 'record|null');
+                // The seam INTENT the RUN MODE reduces to: a write mode PRESENT ⇒ a WRITE (the writer /
+                // tx connection), absent ⇒ a READ. Derived BEFORE the branch, because the branch selects
+                // the SEAM (`returning` ⇒ the row seam) while the intent selects the CONNECTION
+                // ({@see resolvePool()}): a RETURNING write runs on {@see execute()} and still belongs on
+                // the WRITER. Reading `returning` as the intent sent `INSERT … RETURNING` to the READ
+                // REPLICA (#207).
+                $intent = $write === null ? StatementIntent::read() : StatementIntent::write();
                 if ($write !== null && !self::required($write, 'returning', "the 'write' mode", 'bool')) {
-                    $info = run($active, $sql, $params, StatementIntent::write());
+                    $info = run($active, $sql, $params, $intent);
                     // The affected-write summary row (uniform list output shape — TS `writeSummary`).
                     return ['ok' => [(object) ['changes' => $info->changes, 'lastInsertRowid' => $info->lastInsertRowid]]];
                 }
-                $rows = execute($active, $sql, $params, StatementIntent::read());
+                $rows = execute($active, $sql, $params, $intent);
             } catch (SqlFailure $e) {
                 return ['error' => $e->getMessage()];
             }

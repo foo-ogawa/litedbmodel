@@ -718,8 +718,10 @@ pub fn mysql_pool_factory(
 
 // ── Unit tests (no DB) — the pure routing / config surface ─────────────────────
 
+/// The no-DB pool stand-in the routing tests resolve against, shared with the leaf-transport tests
+/// (`crate::leaves`) so there is ONE stub driver in the crate rather than a copy per test module.
 #[cfg(test)]
-mod tests {
+pub(crate) mod test_support {
     use super::*;
     use crate::driver::{PreparedStatement, RunInfo};
     use crate::exec_context::TxConnection;
@@ -751,9 +753,16 @@ mod tests {
             crate::driver::forwarding_tx_no_begin(self)
         }
     }
-    fn stub(_label: &'static str) -> Arc<dyn Driver + Send + Sync> {
+    pub(crate) fn stub(_label: &'static str) -> Arc<dyn Driver + Send + Sync> {
         Arc::new(StubDriver)
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::test_support::stub;
+    use super::*;
+
     fn label_of(
         d: &Arc<dyn Driver + Send + Sync>,
         candidates: &[(&'static str, &Arc<dyn Driver + Send + Sync>)],

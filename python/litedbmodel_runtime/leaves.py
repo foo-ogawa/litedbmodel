@@ -255,11 +255,18 @@ def make_handlers(driver_or_ctx: Union[Driver, ExecutionContext], dialect: str) 
             # OWN ``returning`` (ONE field, three values — "returns rows but is not a write" is not a
             # state the ABI can hold, #206).
             write = None if opts is None else _required(opts, "write", _RECORD, "record|null")
+            # The seam INTENT the RUN MODE reduces to: a write mode PRESENT ⇒ a WRITE (the writer / tx
+            # connection), absent ⇒ a READ. Derived BEFORE the branch, because the branch selects the
+            # SEAM (``returning`` ⇒ the row seam) while the intent selects the CONNECTION
+            # (:func:`~litedbmodel_runtime.connection_routing.resolve_pool`): a RETURNING write runs on
+            # ``seam_execute`` and still belongs on the WRITER. Reading ``returning`` as the intent sent
+            # ``INSERT … RETURNING`` to the READ REPLICA (#207).
+            intent = READ_INTENT if write is None else WRITE_INTENT
             if write is not None and not _required(write, "returning", "the 'write' mode", "bool"):
-                info = seam_run(active, sql, params, WRITE_INTENT)
+                info = seam_run(active, sql, params, intent)
                 # The affected-write summary row (uniform ``items`` output shape — TS ``writeSummary``).
                 return {"ok": [{"changes": info.changes, "lastInsertRowid": info.last_insert_rowid}]}
-            rows = seam_execute(active, sql, params, READ_INTENT)
+            rows = seam_execute(active, sql, params, intent)
         except SqlFailure as e:
             return {"error": e.message}
         # The RELATION runaway guard, on the RAW child rows — the only point they are visible (past

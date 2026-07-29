@@ -587,9 +587,24 @@ fn assemble_dynamic_where(
 
 // ── execute_sql — the SOLE op-independent SQL transport ────────────────────────────────────────────
 
+/// The seam INTENT a statement's RUN MODE reduces to: a write mode PRESENT ⇒ a WRITE (the writer / tx
+/// connection), absent ⇒ a READ. It is the input
+/// [`connection_for`](crate::exec_context::ExecutionContext) routes on
+/// ([`crate::connection_routing::resolve_pool`]), and it is NOT the seam selector: the seam is chosen by
+/// `returning` (a RETURNING write runs on [`exec_context::execute`]), the CONNECTION by the statement's
+/// own mode. Conflating the two sent `INSERT … RETURNING` to the READ REPLICA (#207). Same rule in all
+/// five languages (TS `prepareSql`, go `ExecuteSQL`).
+fn statement_intent(write: Option<&WriteMode>) -> StatementIntent {
+    match write {
+        Some(_) => StatementIntent::write(),
+        None => StatementIntent::read(),
+    }
+}
+
 /// The SOLE SQL transport leaf (leaves.ts `executeSQL`). Binds `params` and runs `sql` through the
 /// central seam ([`exec_context::execute`] / [`exec_context::run`]) on the AMBIENT driver — the ONLY
-/// driver contact. `opts.write` selects `run` (INSERT/UPDATE/DELETE) vs `execute` (SELECT / RETURNING);
+/// driver contact. `opts.write` selects `run` (INSERT/UPDATE/DELETE) vs `execute` (SELECT / RETURNING)
+/// and, through [`statement_intent`], the READ/WRITE intent the connection is resolved from;
 /// a non-returning write returns a one-row `[{changes,lastInsertRowid}]` summary so the leaf output
 /// shape is uniform (a `List` of `Row`). `?`→`$N` is rendered here (the transport's placeholder SSoT,
 /// matching the TS `prepareSql`); an array param (a relation key set) rides as [`Value::Arr`], which
@@ -633,8 +648,9 @@ pub fn execute_sql(mut payload: WireRow) -> Result<WireValue, BehaviorError> {
         .collect();
     let rendered = finalize_sql(&sql, &value_params, driver.dialect());
     let ctx = exec_context::for_driver(driver);
+    let intent = statement_intent(opts.write.as_ref());
     if opts.write.as_ref().is_some_and(|w| !w.returning) {
-        let info = exec_context::run(&ctx, &rendered, &value_params, &StatementIntent::write())
+        let info = exec_context::run(&ctx, &rendered, &value_params, &intent)
             .map_err(sql_failure_to_behavior_error)?;
         // The affected-write summary row (uniform `items` output shape — TS `writeSummary`).
         Ok(WireValue::List(WireList {
@@ -652,7 +668,7 @@ pub fn execute_sql(mut payload: WireRow) -> Result<WireValue, BehaviorError> {
         // The driver materialized the rows DIRECTLY as `WireValue` (one pass) — return them verbatim
         // as the leaf's `List` output. NO second per-cell pass (the retired `value_to_wire` map): the
         // read path never boxes into bc's `Value`.
-        let rows = exec_context::execute(&ctx, &rendered, &value_params, &StatementIntent::read())
+        let rows = exec_context::execute(&ctx, &rendered, &value_params, &intent)
             .map_err(sql_failure_to_behavior_error)?;
         // The RELATION runaway guard, on the RAW child rows — the only point they are visible (past
         // `group_children` the graph is already nested) and the reason the cap rides on this transport.
@@ -1604,5 +1620,94 @@ mod tests {
             "{}",
             e.message
         );
+    }
+
+    // #207 — the leaf hands the central seam ONE `StatementIntent`, derived from the statement's RUN
+    // MODE, and `connection_for` resolves the CONNECTION from it (`resolve_pool`: write ⇒ the writer
+    // pool). The branch that selects the SEAM is a DIFFERENT question: a RETURNING write runs on the ROW
+    // seam (`exec_context::execute`) and is still a write. Deriving the intent from the branch — which is
+    // what this transport did — sent `INSERT … RETURNING` to the READ REPLICA. The conformance/livedb
+    // setups run reader === writer, which is why no cross-language leg saw it.
+    //
+    // The other four legs drive the leaf against a SPLIT reader/writer pair and record which pool served
+    // the statement. This one cannot: rust's leaf resolves an ambient `&dyn Driver` and builds its ctx
+    // with `exec_context::for_driver`, whose `routing` is `None` — so no routed ctx can reach
+    // `execute_sql`, and the intent it hands the seam is inert THERE. The gate therefore joins the two
+    // production halves directly: the intent `statement_intent` derives, resolved by the production
+    // `resolve_pool` over a split pair.
+    #[test]
+    fn the_run_mode_not_the_seam_branch_picks_the_pool() {
+        use crate::connection_routing::test_support::stub;
+        use crate::connection_routing::{
+            resolve_pool, ConnectionRegistry, ReaderWriterPools, RoutingConfig, StickyOptions,
+            WriterStickyClock,
+        };
+        use std::sync::Arc;
+
+        let (reader, writer) = (stub("reader"), stub("writer"));
+        let routing = RoutingConfig {
+            registry: ConnectionRegistry::from_default(ReaderWriterPools {
+                reader: Arc::clone(&reader),
+                writer: Arc::clone(&writer),
+            })
+            .build()
+            .unwrap(),
+            sticky: WriterStickyClock::new(StickyOptions {
+                use_writer_after_transaction: false,
+                ..Default::default()
+            }),
+        };
+        let pool_of = |write: Option<&WriteMode>| -> &'static str {
+            let p = resolve_pool(&statement_intent(write), &routing, false).unwrap();
+            if Arc::ptr_eq(p, &writer) {
+                "writer"
+            } else if Arc::ptr_eq(p, &reader) {
+                "reader"
+            } else {
+                "?"
+            }
+        };
+        // A READ (no write mode) → the READER; BOTH write modes → the WRITER. The RETURNING one is the
+        // #207 case: with the intent taken from the seam branch it resolved to the reader.
+        assert_eq!(pool_of(None), "reader");
+        assert_eq!(pool_of(Some(&WriteMode { returning: true })), "writer");
+        assert_eq!(pool_of(Some(&WriteMode { returning: false })), "writer");
+
+        // …and the two decisions are INDEPENDENT, not accidentally aligned: end-to-end on a real sqlite,
+        // a RETURNING write takes the ROW seam (its rows come back), a non-returning one the
+        // `[{changes,lastInsertRowid}]` summary.
+        use crate::driver::SqliteDriver;
+        let d = SqliteDriver::in_memory(&[
+            "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)".to_string(),
+        ])
+        .unwrap();
+        let insert = |returning: bool, sql: &str| {
+            let ports = vec![
+                opts(
+                    wrow(&[("returning", WireValue::Bool(returning))]),
+                    WireValue::Null,
+                    WireValue::Null,
+                ),
+                ("params", wlist(vec![WireValue::Str("A".into())])),
+                ("sql", WireValue::Str(sql.to_string().into())),
+            ];
+            with_ambient_driver(&d, || execute_sql(payload(ports))).unwrap()
+        };
+        let returning = insert(true, "INSERT INTO users (name) VALUES (?) RETURNING id");
+        match &items(&returning)[0] {
+            WireValue::Row(r) => assert!(
+                r.entries.iter().any(|(k, _)| k == "id"),
+                "a RETURNING write must return ROWS, not the write summary"
+            ),
+            _ => panic!("the RETURNING write's result element is not a row"),
+        }
+        let summary = insert(false, "INSERT INTO users (name) VALUES (?)");
+        match &items(&summary)[0] {
+            WireValue::Row(r) => assert!(
+                r.entries.iter().any(|(k, _)| k == "changes"),
+                "a non-returning write must return the affected-rows summary"
+            ),
+            _ => panic!("the write summary element is not a row"),
+        }
     }
 }

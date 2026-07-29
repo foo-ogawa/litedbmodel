@@ -4,7 +4,16 @@ declare(strict_types=1);
 
 namespace LiteDbModel\Runtime\Tests;
 
+use LiteDbModel\Runtime\Connection;
+use LiteDbModel\Runtime\ConnectionRegistry;
 use LiteDbModel\Runtime\Leaves;
+use LiteDbModel\Runtime\MiddlewareChain;
+use LiteDbModel\Runtime\PdoDriver;
+use LiteDbModel\Runtime\PdoPool;
+use LiteDbModel\Runtime\ReaderWriterPools;
+use LiteDbModel\Runtime\RoutingConfig;
+use LiteDbModel\Runtime\RoutingExecutionContext;
+use LiteDbModel\Runtime\WriterStickyClock;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -191,4 +200,102 @@ final class DynamicWhereTest extends TestCase
         ($this->executeSQL)($capped, $ctx);
     }
 
+    /**
+     * #207 — the leaf hands the central seam ONE {@see \LiteDbModel\Runtime\StatementIntent}, derived
+     * from the statement's RUN MODE, and `connectionFor` resolves the CONNECTION from it
+     * ({@see \LiteDbModel\Runtime\resolvePool()}: write ⇒ the writer pool). The branch that selects the
+     * SEAM is a DIFFERENT question: a RETURNING write runs on the ROW seam ({@see
+     * \LiteDbModel\Runtime\execute()}) and is still a write. Deriving the intent from the branch — which
+     * is what this transport did — sent `INSERT … RETURNING` to the READ REPLICA.
+     *
+     * The conformance/livedb setups run reader === writer (every intent returns the same pool), which is
+     * why no cross-language leg saw this; the gate therefore SPLITS the pair and records which pool
+     * served each statement. The PHP leg of the five.
+     */
+    public function testTheRunModeNotTheSeamBranchPicksThePool(): void
+    {
+        $pdo = new \PDO('sqlite::memory:', null, null, [\PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION]);
+        $pdo->exec('CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)');
+        $driver = new PdoDriver($pdo);
+        $log = new \ArrayObject();
+        $routing = new RoutingConfig(
+            ConnectionRegistry::fromDefault(new ReaderWriterPools(
+                new RecordingPdoPool('reader', $driver, $log),
+                new RecordingPdoPool('writer', $driver, $log),
+            ))->build(),
+            new WriterStickyClock(useWriterAfterTransaction: false),
+        );
+        $executeSQL = Leaves::makeHandlers(
+            new RoutingExecutionContext($driver, new MiddlewareChain(), $routing),
+            'sqlite',
+        )['executeSQL'];
+        $ctx = ['nodeId' => 'n0', 'component' => 'executeSQL'];
+
+        // A plain READ — the bounded payload that omits the control record entirely → the READER.
+        $executeSQL(['sql' => 'SELECT id FROM users', 'params' => []], $ctx);
+        self::assertSame(['reader'], $log->getArrayCopy());
+
+        // A RETURNING write → the WRITER, even though it runs on the ROW seam. This is the #207 case:
+        // with the intent taken from the branch it landed on the reader above.
+        $returning = $executeSQL([
+            'sql' => 'INSERT INTO users (name) VALUES (?) RETURNING id',
+            'params' => ['A'],
+            'opts' => (object) ['write' => (object) ['returning' => true], 'whereDynamic' => null, 'guard' => null],
+        ], $ctx);
+        self::assertSame(['reader', 'writer'], $log->getArrayCopy());
+        // …and the two decisions are INDEPENDENT, not accidentally aligned: it took the ROW seam.
+        self::assertSame([['id' => 1]], array_map(static fn ($r): array => (array) $r, $returning['ok']));
+
+        // A NON-returning write → the WRITER too (the half that was already right stays right).
+        $summary = $executeSQL([
+            'sql' => 'INSERT INTO users (name) VALUES (?)',
+            'params' => ['B'],
+            'opts' => (object) ['write' => (object) ['returning' => false], 'whereDynamic' => null, 'guard' => null],
+        ], $ctx);
+        self::assertSame(['reader', 'writer', 'writer'], $log->getArrayCopy());
+        // The affected-rows summary, not rows (`lastInsertRowid` is deliberately 0 on this plane — see
+        // {@see \LiteDbModel\Runtime\PdoConnection::run()}), so the seam it took is unambiguous.
+        $row = (array) $summary['ok'][0];
+        self::assertSame(['changes', 'lastInsertRowid'], array_keys($row));
+        self::assertSame(1, $row['changes']);
+    }
+}
+
+/**
+ * A {@see PdoPool} that records its label on every acquire and delegates to ONE real {@see PdoDriver},
+ * so a test can assert WHICH pool (reader vs writer) `resolvePool` selected for a leaf's statement while
+ * the SQL really runs. The go/rust/TS/python legs use the same recording-pool instrument.
+ */
+final class RecordingPdoPool implements PdoPool
+{
+    public function __construct(
+        private readonly string $label,
+        private readonly PdoDriver $backing,
+        private readonly \ArrayObject $log,
+    ) {
+    }
+
+    public function acquire(): Connection
+    {
+        $this->log[] = $this->label;
+        return $this->backing->connection();
+    }
+
+    public function release(Connection $conn, bool $destroy = false): void
+    {
+    }
+
+    public function close(): void
+    {
+    }
+
+    public function driver(): string
+    {
+        return 'sqlite';
+    }
+
+    public function backingDriver(): PdoDriver
+    {
+        return $this->backing;
+    }
 }
