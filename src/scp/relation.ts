@@ -148,11 +148,15 @@ export interface RelationOp {
    */
   readonly sql: string;
   /**
-   * The child (target) table + projected columns (issue #59) — carried for diagnostics + as the
-   * basis of the baked `materializers` map. Additive/optional.
+   * The child (target) table + projected columns (issue #59) — carried for diagnostics, as the basis
+   * of the baked `materializers` map, and as the capped relation's IDENTITY in {@link relationGuard}.
+   * Both are ALWAYS set: {@link compileRelationOp} is the only constructor of a `RelationOp` and it
+   * copies them from the decl's own required fields. They were once typed optional, which is what let
+   * the emitter grow a "no target table ⇒ omit `model`" branch that could not run — and would have
+   * emitted a module `bc generate` rejects if it had (#208).
    */
-  readonly targetTable?: string;
-  readonly select?: readonly string[];
+  readonly targetTable: string;
+  readonly select: readonly string[];
   /**
    * CHAINED relations (nested `with`): the COMPILED grandchild relation ops keyed off THIS relation's
    * child rows (level ≥ 3). Present iff the decl carried {@link RelationDecl.childRelations}. A codegen
@@ -432,14 +436,16 @@ export function targetKeyCols(op: RelationOp): readonly string[] {
  * {@link RelationGuard} record — read by BOTH consumers of the cap: {@link runRelationOp} (the
  * typed-object / lazy batch) and the emitter, which bakes this record into the generated child fetch's
  * `guard` port so the leaf enforces the SAME resolved cap. Nothing downstream re-derives it.
+ *
+ * TOTAL in `model`: a compiled op always carries its {@link RelationOp.targetTable}, so this side of
+ * the cap never produces the "unknown model" case. Only the WIRE side does — the port is `opt(string)`
+ * and {@link import('./leaves').leafHandlers}' reader still has to accept a `null` — which is why the
+ * return type is narrower than {@link RelationGuard} itself: the emitter must be able to spell `model`
+ * with NO branch (a branch that omits the key emits a module `bc generate` rejects, #208).
  */
-export function relationGuard(op: RelationOp): RelationGuard | null {
+export function relationGuard(op: RelationOp): (RelationGuard & { readonly model: string }) | null {
   if (op.hardLimit === undefined) return null;
-  return {
-    limit: op.hardLimit,
-    ...(op.targetTable !== undefined ? { model: op.targetTable } : {}),
-    relation: op.name,
-  };
+  return { limit: op.hardLimit, model: op.targetTable, relation: op.name };
 }
 
 /**

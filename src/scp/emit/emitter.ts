@@ -426,11 +426,11 @@ class EmitContext {
       const guard = relationGuard(op);
       // The guard rides as a CONCRETE `CapGuard` struct (leaf-transport), so the native emitters build
       // it directly: `limit` is an `Int` LITERAL (a plain `number` would emit as a float and the wire
-      // int-probe would miss the cap); `model` is omitted when the op resolved none.
+      // int-probe would miss the cap). EVERY field is spelled — bc types a port by the literal wired
+      // into it, so a struct with a field left out is a DIFFERENT type and `bc generate` rejects the
+      // module (#208); `relationGuard` is total in `model` so there is nothing to branch on.
       const guardExpr =
-        guard !== null
-          ? `{ limit: ${guard.limit} as Int, ${guard.model !== undefined ? `model: ${quote(guard.model)}, ` : ''}relation: ${quote(guard.relation)} }`
-          : undefined;
+        guard !== null ? `{ limit: ${guard.limit} as Int, model: ${quote(guard.model)}, relation: ${quote(guard.relation)} }` : undefined;
       lines.push(
         `const ${childVar}: WireValue[] = Db.executeSQL(${quote(op.sql)}, [${keysVar}]${execOptions(guardExpr !== undefined ? { guard: guardExpr } : {})});`,
       );

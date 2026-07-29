@@ -98,7 +98,7 @@ export interface DynamicWherePlan {
  */
 export interface CapGuard {
   readonly limit: Int;
-  readonly model?: string;
+  readonly model: string | null;
   readonly relation: string;
 }
 
