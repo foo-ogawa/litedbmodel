@@ -30,7 +30,7 @@ import (
 
 // Version is synced from package.json by scripts/sync-versions.mjs (Go = VCS tag, not a manifest
 // field, so this constant is the in-source mirror the CI tag check compares against).
-const Version = "2.2.0"
+const Version = "2.2.1"
 
 // entityRoot is the body-write RETURNING row exposed to later tx stages under `$.entity.*`
 // (writes.ts ENTITY_ROOT).
