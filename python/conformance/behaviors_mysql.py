@@ -4,17 +4,17 @@
 # native dict literal and handed to the EXISTING runtime core (run_behavior) —
 # no execution logic is generated. Handlers are ALWAYS injected at the boundary
 # (IR + {effects,config,hooks}); they are never generated.
-# irFingerprint: fnv1a64:192dd2d3fb2f625e
+# irFingerprint: fnv1a64:e3fe203e5c35eb17
 from behavior_contracts import SPEC_VERSIONS, ProvenanceError, load_compiled_ir, run_behavior
 
 # Spec versions baked at generation time (fail-closed constant comparison at load).
 EXPECTED_SPEC_VERSIONS = {"behavior": 6, "expression": 2, "plan": 1}
 
 # FNV-1a 64 fingerprint of the source portable IR (canonical_json discipline, #208).
-IR_FINGERPRINT = "fnv1a64:192dd2d3fb2f625e"
+IR_FINGERPRINT = "fnv1a64:e3fe203e5c35eb17"
 
 # Component names exposed by bind(), in IR declaration order.
-COMPONENT_NAMES = ("posts", "postsTop", "page", "postsByIds", "feed", "usersWithPosts", "postsWithAuthor", "usersWithCappedPosts", "usersWithUncappedPosts", "usersWithTopPosts", "createPost", "renamePost", "removePost", "createPostReturning", "renamePostReturning", "removePostReturning", "restatusPostsReturning", "removePostsByAuthorReturning", "typedRows", "createTags", "removeTags", "createTagsReturning", "relabelTagsReturning", "removeTagsReturning")
+COMPONENT_NAMES = ("posts", "postsTop", "page", "postsByIds", "feed", "pagedFeed", "usersWithPosts", "postsWithAuthor", "usersWithCappedPosts", "usersWithUncappedPosts", "usersWithTopPosts", "createPost", "renamePost", "removePost", "createPostReturning", "renamePostReturning", "removePostReturning", "restatusPostsReturning", "removePostsByAuthorReturning", "typedRows", "createTags", "removeTags", "createTagsReturning", "relabelTagsReturning", "removeTagsReturning")
 
 # The portable component-graph IR *document*, embedded as a native dict literal (no JSON parse at
 # runtime). It carries no provenance token — the load-time load_compiled_ir() below verifies the baked
@@ -615,6 +615,215 @@ IR_DOC = {
             }
           },
           "name": "FeedRow"
+        }
+      }
+    },
+    {
+      "body": [
+        {
+          "component": "executeSQL",
+          "id": "n0",
+          "outType": {
+            "arr": {
+              "name": "PagedFeedRow",
+              "obj": {
+                "author_id": {
+                  "opt": "float"
+                },
+                "id": {
+                  "opt": "float"
+                },
+                "status": {
+                  "opt": "string"
+                },
+                "title": {
+                  "opt": "string"
+                }
+              }
+            }
+          },
+          "portSchemas": {
+            "bigint": {
+              "required": True,
+              "type": "bool"
+            },
+            "params": {
+              "elemType": "value",
+              "required": True,
+              "type": "array"
+            },
+            "returning": {
+              "required": True,
+              "type": "bool"
+            },
+            "sql": {
+              "required": True,
+              "type": "string"
+            },
+            "whereDynamic": {
+              "elemType": {
+                "name": "DynamicWherePlan",
+                "obj": {
+                  "frags": {
+                    "arr": {
+                      "name": "DynamicWhereFrag",
+                      "obj": {
+                        "params": {
+                          "arr": {
+                            "opt": "value"
+                          }
+                        },
+                        "skipped": "bool",
+                        "sql": "string"
+                      }
+                    }
+                  }
+                }
+              },
+              "required": False,
+              "type": "object"
+            },
+            "write": {
+              "required": True,
+              "type": "bool"
+            }
+          },
+          "ports": {
+            "bigint": False,
+            "params": {
+              "arr": [
+                {
+                  "ref": [
+                    "authorId"
+                  ]
+                },
+                {
+                  "ref": [
+                    "limit"
+                  ]
+                },
+                {
+                  "ref": [
+                    "offset"
+                  ]
+                }
+              ]
+            },
+            "returning": False,
+            "sql": "SELECT id, author_id, title, status FROM conf_posts WHERE author_id = ? ORDER BY id ASC LIMIT ? OFFSET ?",
+            "whereDynamic": {
+              "obj": {
+                "frags": {
+                  "arr": [
+                    {
+                      "obj": {
+                        "params": {
+                          "arr": [
+                            {
+                              "ref": [
+                                "minId"
+                              ]
+                            }
+                          ]
+                        },
+                        "skipped": {
+                          "eq": [
+                            {
+                              "ref": [
+                                "minId"
+                              ]
+                            },
+                            None
+                          ]
+                        },
+                        "sql": "id >= ?"
+                      }
+                    },
+                    {
+                      "obj": {
+                        "params": {
+                          "arr": [
+                            {
+                              "ref": [
+                                "status"
+                              ]
+                            }
+                          ]
+                        },
+                        "skipped": {
+                          "eq": [
+                            {
+                              "ref": [
+                                "status"
+                              ]
+                            },
+                            None
+                          ]
+                        },
+                        "sql": "status = ?"
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "write": False
+          }
+        }
+      ],
+      "inputPorts": {
+        "authorId": {
+          "required": True,
+          "type": "int"
+        },
+        "limit": {
+          "required": True,
+          "type": "int"
+        },
+        "minId": {
+          "required": False,
+          "type": "int"
+        },
+        "offset": {
+          "required": True,
+          "type": "int"
+        },
+        "status": {
+          "required": False,
+          "type": "string"
+        }
+      },
+      "name": "pagedFeed",
+      "output": {
+        "ref": [
+          "n0"
+        ]
+      },
+      "plan": {
+        "concurrency": 16,
+        "groups": [
+          [
+            0
+          ]
+        ]
+      },
+      "outputType": {
+        "arr": {
+          "obj": {
+            "author_id": {
+              "opt": "float"
+            },
+            "id": {
+              "opt": "float"
+            },
+            "status": {
+              "opt": "string"
+            },
+            "title": {
+              "opt": "string"
+            }
+          },
+          "name": "PagedFeedRow"
         }
       }
     },
@@ -3681,6 +3890,10 @@ class Conformance:
     @staticmethod
     def feed(authorId, status, since, handlers):
         return run_behavior(IR, handlers, {"authorId": authorId, "status": status, "since": since}, "feed")
+
+    @staticmethod
+    def paged_feed(authorId, minId, status, limit, offset, handlers):
+        return run_behavior(IR, handlers, {"authorId": authorId, "minId": minId, "status": status, "limit": limit, "offset": offset}, "pagedFeed")
 
     @staticmethod
     def users_with_posts(handlers):

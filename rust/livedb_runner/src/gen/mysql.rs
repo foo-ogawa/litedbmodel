@@ -166,6 +166,16 @@ pub struct DynamicWhereFrag {
 #[rustfmt::skip]
 #[derive(Clone, Default)]
 #[allow(dead_code)]
+pub struct PagedFeedRow {
+    pub author_id: Option<f64>, // "author_id"
+    pub id: Option<f64>, // "id"
+    pub status: Option<String>, // "status"
+    pub title: Option<String>, // "title"
+}
+
+#[rustfmt::skip]
+#[derive(Clone, Default)]
+#[allow(dead_code)]
 pub struct UsersWithPostsRow {
     pub id: Option<f64>, // "id"
     pub name: Option<String>, // "name"
@@ -720,6 +730,78 @@ pub fn feed(
                         title: match probe_string_at(sub1.take("title")) {
                             Probe::Got(v) => Some(v.into_owned()),
                             Probe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("FeedRow", "title", "opt(string)", actual_wire_type, raw_value)),
+                            Probe::Null { .. } | Probe::Absent => None,
+                        },
+                    },
+                    Probe::Wrong { actual_wire_type, raw_value }
+                    | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n0", "n0", "obj{author_id:opt(float),id:opt(float),status:opt(string),title:opt(string)}", actual_wire_type, raw_value)),
+                    Probe::Absent => return Err(de_missing_field("n0", "n0", "obj{author_id:opt(float),id:opt(float),status:opt(string),title:opt(string)}")),
+                });
+            }
+            acc0
+        },
+        Probe::Wrong { actual_wire_type, raw_value }
+        | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n0", "n0", "arr(obj{author_id:opt(float),id:opt(float),status:opt(string),title:opt(string)})", actual_wire_type, raw_value)),
+        Probe::Absent => return Err(de_missing_field("n0", "n0", "arr(obj{author_id:opt(float),id:opt(float),status:opt(string),title:opt(string)})")),
+    };
+    produced_n0.set(true);
+    let __out = cell_n0.take();
+    Ok(__out)
+}
+
+#[rustfmt::skip]
+// pagedFeed — the STRUCT-RETURNING combined read (bc#77/#87/#94): the fully
+// de-plumbed CONCRETE path. At each covered node's execution point it calls the op-agnostic leaf
+// TRANSPORT symbol DIRECTLY (the node's port fields spread — no per-node handler indirection) and
+// de-boxes the returned wire INLINE (match wire.as_*() { … } fully unrolled — no decode helper) into
+// the node's outType struct cell — no boxed handler result, no generic enum crossing, no dispatch on a dynamic value on the covered plane. Node
+// results are typed struct cells; a relation child reads the parent's REAL struct result via
+// direct field access (child-present decision from the real parent value — relation /
+// connection converge). A real-concurrency stage (bc#87) is static parallel orchestration —
+// scoped worker threads (bounded by the static plan.concurrency) call the transport; preflight +
+// interpret are committed in ascending index order so the value / op multiset / failure
+// precedence byte-match run_behavior. The output is a typed struct/value assembled by struct
+// literal + field access — the consumer keeps it native.
+pub fn pagedFeed(
+    authorId: i64,
+    minId: Option<i64>,
+    status: Option<String>,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<PagedFeedRow>, BehaviorError> {
+    let cell_n0: RefCell<Vec<PagedFeedRow>> = RefCell::new(Default::default());
+    let produced_n0 = std::cell::Cell::new(false);
+    let _ = &produced_n0;
+    // ── op 'n0' (executeSQL) ──
+    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("bigint"), WireValue::Bool(false)), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::Int(authorId), WireValue::Int(limit), WireValue::Int(offset)]; __v } })), (Cow::Borrowed("returning"), WireValue::Bool(false)), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("SELECT id, author_id, title, status FROM conf_posts WHERE author_id = ? ORDER BY id ASC LIMIT ? OFFSET ?"))), (Cow::Borrowed("whereDynamic"), match Some(DynamicWherePlan { frags: { let __v: Vec<DynamicWhereFrag> = vec![DynamicWhereFrag { params: { let __v: Vec<Option<WireValue>> = vec![minId.map(|__ov| WireValue::Int(__ov))]; __v }, skipped: minId.is_none(), sql: "id >= ?".to_string() }, DynamicWhereFrag { params: { let __v: Vec<Option<WireValue>> = vec![status.clone().map(|__ov| WireValue::Str(__ov.into()))]; __v }, skipped: status.is_none(), sql: "status = ?".to_string() }]; __v } }) { Some(ov0) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("frags"), WireValue::List(WireList { items: ov0.frags.into_iter().map(|e1| WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("params"), WireValue::List(WireList { items: e1.params.into_iter().map(|e3| match e3 { Some(ov4) => ov4, _ => WireValue::Null }).collect() })), (Cow::Borrowed("skipped"), WireValue::Bool(e1.skipped)), (Cow::Borrowed("sql"), WireValue::Str(e1.sql.into()))] })).collect() }))] }), _ => WireValue::Null }), (Cow::Borrowed("write"), WireValue::Bool(false))] };
+    let wire_n0 = match execute_sql(payload_n0) {
+        Ok(r) => r,
+        Err(e) => return Err(op_failed("n0", "fail", e)),
+    };
+    *cell_n0.borrow_mut() = match probe_list_at(Some(wire_n0)) {
+        Probe::Got(l0) => {
+            let mut acc0 = Vec::with_capacity(l0.items.len());
+            for e0 in l0.items {
+                acc0.push(match probe_row_at(Some(e0)) {
+                    Probe::Got(mut sub1) => PagedFeedRow {
+                        author_id: match probe_float_at(sub1.take("author_id")) {
+                            Probe::Got(v) => Some(v),
+                            Probe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("PagedFeedRow", "author_id", "opt(float)", actual_wire_type, raw_value)),
+                            Probe::Null { .. } | Probe::Absent => None,
+                        },
+                        id: match probe_float_at(sub1.take("id")) {
+                            Probe::Got(v) => Some(v),
+                            Probe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("PagedFeedRow", "id", "opt(float)", actual_wire_type, raw_value)),
+                            Probe::Null { .. } | Probe::Absent => None,
+                        },
+                        status: match probe_string_at(sub1.take("status")) {
+                            Probe::Got(v) => Some(v.into_owned()),
+                            Probe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("PagedFeedRow", "status", "opt(string)", actual_wire_type, raw_value)),
+                            Probe::Null { .. } | Probe::Absent => None,
+                        },
+                        title: match probe_string_at(sub1.take("title")) {
+                            Probe::Got(v) => Some(v.into_owned()),
+                            Probe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("PagedFeedRow", "title", "opt(string)", actual_wire_type, raw_value)),
                             Probe::Null { .. } | Probe::Absent => None,
                         },
                     },
@@ -2436,4 +2518,4 @@ pub fn removeTagsReturning(
 // 1:1 entry <method>(<positional params>) -> Result<T, BehaviorError>: a STRUCT return (the consumer calls
 // it with the authored args + supplies the op-agnostic leaf transport symbols the entry calls).
 // See INTEGRATION.md §6.
-pub const COMPONENT_NAMES_NATIVE_RAW: [&str; 24] = ["posts", "postsTop", "page", "postsByIds", "feed", "usersWithPosts", "postsWithAuthor", "usersWithCappedPosts", "usersWithUncappedPosts", "usersWithTopPosts", "createPost", "renamePost", "removePost", "createPostReturning", "renamePostReturning", "removePostReturning", "restatusPostsReturning", "removePostsByAuthorReturning", "typedRows", "createTags", "removeTags", "createTagsReturning", "relabelTagsReturning", "removeTagsReturning"];
+pub const COMPONENT_NAMES_NATIVE_RAW: [&str; 25] = ["posts", "postsTop", "page", "postsByIds", "feed", "pagedFeed", "usersWithPosts", "postsWithAuthor", "usersWithCappedPosts", "usersWithUncappedPosts", "usersWithTopPosts", "createPost", "renamePost", "removePost", "createPostReturning", "renamePostReturning", "removePostReturning", "restatusPostsReturning", "removePostsByAuthorReturning", "typedRows", "createTags", "removeTags", "createTagsReturning", "relabelTagsReturning", "removeTagsReturning"];

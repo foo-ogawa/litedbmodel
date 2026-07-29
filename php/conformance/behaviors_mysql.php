@@ -7,7 +7,7 @@
 // (Behavior::runBehavior) — no execution logic is generated. Handlers are ALWAYS
 // injected at the boundary (IR + {effects,config,hooks} — concept.md §4.4); they
 // are never generated.
-// irFingerprint: fnv1a64:192dd2d3fb2f625e
+// irFingerprint: fnv1a64:e3fe203e5c35eb17
 
 declare(strict_types=1);
 
@@ -15,10 +15,10 @@ declare(strict_types=1);
 $expectedSpecVersions = ['behavior' => 6, 'expression' => 2, 'plan' => 1];
 
 // FNV-1a 64 fingerprint of the source portable IR (canonical-json discipline, #208).
-$irFingerprint = 'fnv1a64:192dd2d3fb2f625e';
+$irFingerprint = 'fnv1a64:e3fe203e5c35eb17';
 
 // Component names exposed by bind(), in IR declaration order.
-$componentNames = ['posts', 'postsTop', 'page', 'postsByIds', 'feed', 'usersWithPosts', 'postsWithAuthor', 'usersWithCappedPosts', 'usersWithUncappedPosts', 'usersWithTopPosts', 'createPost', 'renamePost', 'removePost', 'createPostReturning', 'renamePostReturning', 'removePostReturning', 'restatusPostsReturning', 'removePostsByAuthorReturning', 'typedRows', 'createTags', 'removeTags', 'createTagsReturning', 'relabelTagsReturning', 'removeTagsReturning'];
+$componentNames = ['posts', 'postsTop', 'page', 'postsByIds', 'feed', 'pagedFeed', 'usersWithPosts', 'postsWithAuthor', 'usersWithCappedPosts', 'usersWithUncappedPosts', 'usersWithTopPosts', 'createPost', 'renamePost', 'removePost', 'createPostReturning', 'renamePostReturning', 'removePostReturning', 'restatusPostsReturning', 'removePostsByAuthorReturning', 'typedRows', 'createTags', 'removeTags', 'createTagsReturning', 'relabelTagsReturning', 'removeTagsReturning'];
 
 // The portable component-graph IR *document*, embedded as a native literal (no JSON parse at require).
 // It carries no provenance token — the require-time CompiledIr::load() below verifies the baked
@@ -619,6 +619,215 @@ $irDoc = (object) [
                         ],
                     ],
                     "name" => "FeedRow",
+                ],
+            ],
+        ],
+        (object) [
+            "body" => [
+                (object) [
+                    "component" => "executeSQL",
+                    "id" => "n0",
+                    "outType" => (object) [
+                        "arr" => (object) [
+                            "name" => "PagedFeedRow",
+                            "obj" => (object) [
+                                "author_id" => (object) [
+                                    "opt" => "float",
+                                ],
+                                "id" => (object) [
+                                    "opt" => "float",
+                                ],
+                                "status" => (object) [
+                                    "opt" => "string",
+                                ],
+                                "title" => (object) [
+                                    "opt" => "string",
+                                ],
+                            ],
+                        ],
+                    ],
+                    "portSchemas" => (object) [
+                        "bigint" => (object) [
+                            "required" => true,
+                            "type" => "bool",
+                        ],
+                        "params" => (object) [
+                            "elemType" => "value",
+                            "required" => true,
+                            "type" => "array",
+                        ],
+                        "returning" => (object) [
+                            "required" => true,
+                            "type" => "bool",
+                        ],
+                        "sql" => (object) [
+                            "required" => true,
+                            "type" => "string",
+                        ],
+                        "whereDynamic" => (object) [
+                            "elemType" => (object) [
+                                "name" => "DynamicWherePlan",
+                                "obj" => (object) [
+                                    "frags" => (object) [
+                                        "arr" => (object) [
+                                            "name" => "DynamicWhereFrag",
+                                            "obj" => (object) [
+                                                "params" => (object) [
+                                                    "arr" => (object) [
+                                                        "opt" => "value",
+                                                    ],
+                                                ],
+                                                "skipped" => "bool",
+                                                "sql" => "string",
+                                            ],
+                                        ],
+                                    ],
+                                ],
+                            ],
+                            "required" => false,
+                            "type" => "object",
+                        ],
+                        "write" => (object) [
+                            "required" => true,
+                            "type" => "bool",
+                        ],
+                    ],
+                    "ports" => (object) [
+                        "bigint" => false,
+                        "params" => (object) [
+                            "arr" => [
+                                (object) [
+                                    "ref" => [
+                                        "authorId",
+                                    ],
+                                ],
+                                (object) [
+                                    "ref" => [
+                                        "limit",
+                                    ],
+                                ],
+                                (object) [
+                                    "ref" => [
+                                        "offset",
+                                    ],
+                                ],
+                            ],
+                        ],
+                        "returning" => false,
+                        "sql" => "SELECT id, author_id, title, status FROM conf_posts WHERE author_id = ? ORDER BY id ASC LIMIT ? OFFSET ?",
+                        "whereDynamic" => (object) [
+                            "obj" => (object) [
+                                "frags" => (object) [
+                                    "arr" => [
+                                        (object) [
+                                            "obj" => (object) [
+                                                "params" => (object) [
+                                                    "arr" => [
+                                                        (object) [
+                                                            "ref" => [
+                                                                "minId",
+                                                            ],
+                                                        ],
+                                                    ],
+                                                ],
+                                                "skipped" => (object) [
+                                                    "eq" => [
+                                                        (object) [
+                                                            "ref" => [
+                                                                "minId",
+                                                            ],
+                                                        ],
+                                                        null,
+                                                    ],
+                                                ],
+                                                "sql" => "id >= ?",
+                                            ],
+                                        ],
+                                        (object) [
+                                            "obj" => (object) [
+                                                "params" => (object) [
+                                                    "arr" => [
+                                                        (object) [
+                                                            "ref" => [
+                                                                "status",
+                                                            ],
+                                                        ],
+                                                    ],
+                                                ],
+                                                "skipped" => (object) [
+                                                    "eq" => [
+                                                        (object) [
+                                                            "ref" => [
+                                                                "status",
+                                                            ],
+                                                        ],
+                                                        null,
+                                                    ],
+                                                ],
+                                                "sql" => "status = ?",
+                                            ],
+                                        ],
+                                    ],
+                                ],
+                            ],
+                        ],
+                        "write" => false,
+                    ],
+                ],
+            ],
+            "inputPorts" => (object) [
+                "authorId" => (object) [
+                    "required" => true,
+                    "type" => "int",
+                ],
+                "limit" => (object) [
+                    "required" => true,
+                    "type" => "int",
+                ],
+                "minId" => (object) [
+                    "required" => false,
+                    "type" => "int",
+                ],
+                "offset" => (object) [
+                    "required" => true,
+                    "type" => "int",
+                ],
+                "status" => (object) [
+                    "required" => false,
+                    "type" => "string",
+                ],
+            ],
+            "name" => "pagedFeed",
+            "output" => (object) [
+                "ref" => [
+                    "n0",
+                ],
+            ],
+            "plan" => (object) [
+                "concurrency" => 16,
+                "groups" => [
+                    [
+                        0,
+                    ],
+                ],
+            ],
+            "outputType" => (object) [
+                "arr" => (object) [
+                    "obj" => (object) [
+                        "author_id" => (object) [
+                            "opt" => "float",
+                        ],
+                        "id" => (object) [
+                            "opt" => "float",
+                        ],
+                        "status" => (object) [
+                            "opt" => "string",
+                        ],
+                        "title" => (object) [
+                            "opt" => "string",
+                        ],
+                    ],
+                    "name" => "PagedFeedRow",
                 ],
             ],
         ],
@@ -3668,6 +3877,10 @@ if (!\class_exists('Conformance', false)) {
 
         public static function feed($authorId, $status, $since, array $handlers): mixed {
             return \LiteDbModel\Runtime\BehaviorContracts\Behavior::runBehavior(self::$ir, $handlers, ['authorId' => $authorId, 'status' => $status, 'since' => $since], 'feed');
+        }
+
+        public static function pagedFeed($authorId, $minId, $status, $limit, $offset, array $handlers): mixed {
+            return \LiteDbModel\Runtime\BehaviorContracts\Behavior::runBehavior(self::$ir, $handlers, ['authorId' => $authorId, 'minId' => $minId, 'status' => $status, 'limit' => $limit, 'offset' => $offset], 'pagedFeed');
         }
 
         public static function usersWithPosts(array $handlers): mixed {

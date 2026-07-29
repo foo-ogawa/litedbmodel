@@ -247,6 +247,17 @@ func optStr(m map[string]any, k string) *string {
 	return &s
 }
 
+// optI64 is the INT twin of optStr (PagedFeed's `minId` cursor) — nil on an absent / null key.
+func optI64(m map[string]any, k string) *int64 {
+	v, ok := m[k]
+	if !ok || v == nil {
+		return nil
+	}
+	f, _ := v.(float64)
+	n := int64(f)
+	return &n
+}
+
 func i64s(m map[string]any, k string) []int64 {
 	arr, _ := m[k].([]any)
 	out := make([]int64, len(arr))
@@ -306,6 +317,11 @@ func callEntry(dialect, entry string, in map[string]any) (any, error) {
 			return pg.Feed(i64(in, "authorId"), optStr(in, "status"), optStr(in, "since"))
 		}
 		return my.Feed(i64(in, "authorId"), optStr(in, "status"), optStr(in, "since"))
+	case "pagedFeed":
+		if postgres {
+			return pg.PagedFeed(i64(in, "authorId"), optI64(in, "minId"), optStr(in, "status"), i64(in, "limit"), i64(in, "offset"))
+		}
+		return my.PagedFeed(i64(in, "authorId"), optI64(in, "minId"), optStr(in, "status"), i64(in, "limit"), i64(in, "offset"))
 	case "usersWithPosts":
 		if postgres {
 			return pg.UsersWithPosts()

@@ -239,6 +239,18 @@ mod imp {
         status,
         title
     });
+    impl_to_compare!(pg::PagedFeedRow {
+        author_id,
+        id,
+        status,
+        title
+    });
+    impl_to_compare!(my::PagedFeedRow {
+        author_id,
+        id,
+        status,
+        title
+    });
     impl_to_compare!(pg::UsersWithPostsRow { id, name, posts });
     impl_to_compare!(my::UsersWithPostsRow { id, name, posts });
     impl_to_compare!(pg::UsersWithPostsRow_posts {
@@ -340,6 +352,13 @@ mod imp {
             Some(v) => v.as_str().map(str::to_string),
         }
     }
+    /// The INT twin of `in_opt_str` (PagedFeed's `minId` cursor) — the go `optI64`.
+    fn in_opt_i64(o: &J, k: &str) -> Option<i64> {
+        match o.get(k) {
+            None | Some(J::Null) => None,
+            Some(v) => v.as_i64().or_else(|| v.as_f64().map(|f| f as i64)),
+        }
+    }
     fn in_i64s(o: &J, k: &str) -> Vec<i64> {
         o.get(k)
             .and_then(J::as_array)
@@ -409,6 +428,20 @@ mod imp {
                     pg::postsByIds(ids).map(|r| r.to_compare())
                 } else {
                     my::postsByIds(ids).map(|r| r.to_compare())
+                }
+            }
+            "pagedFeed" => {
+                let (a, m, s, l, o) = (
+                    in_i64(input, "authorId"),
+                    in_opt_i64(input, "minId"),
+                    in_opt_str(input, "status"),
+                    in_i64(input, "limit"),
+                    in_i64(input, "offset"),
+                );
+                if pg {
+                    pg::pagedFeed(a, m, s, l, o).map(|r| r.to_compare())
+                } else {
+                    my::pagedFeed(a, m, s, l, o).map(|r| r.to_compare())
                 }
             }
             "feed" => {

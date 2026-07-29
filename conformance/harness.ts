@@ -308,6 +308,28 @@ const ENDPOINTS: EndpointSet = {
     ],
     order: 'id ASC',
   },
+  /**
+   * SKIP **×** a BOUND page — the combination that puts base params on BOTH sides of the dynamic
+   * clause (#200). The bounded `author_id` binds before it and the page counts bind after it, so the
+   * leaf must splice the surviving fragments' params into the MIDDLE of the base params
+   * (`assembleDynamicWhere`), not at either end. `minId` is an INT cursor on purpose: it is
+   * type-compatible with the three base params, so a mis-placed slot produces a different ROW SET
+   * rather than a bind error — the only shape that catches this on every dialect (PostgreSQL renders
+   * `?`→`$N` AFTER assembly, so a swapped binding still LOOKS like correct SQL).
+   */
+  pagedFeed: {
+    kind: 'read',
+    model: ConfPost,
+    select: ['id', 'author_id', 'title', 'status'],
+    where: [
+      { column: 'author_id', op: 'eq', param: 'authorId' },
+      { column: 'id', op: 'ge', param: 'minId', optional: true },
+      { column: 'status', op: 'eq', param: 'status', optional: true },
+    ],
+    order: 'id ASC',
+    limit: { param: 'limit' },
+    offset: { param: 'offset' },
+  },
   /** Two relation levels off ONE parent read: users → posts → tags (3 queries, N+1-free). */
   usersWithPosts: {
     kind: 'read',
@@ -958,6 +980,17 @@ const EXEC_CASES: readonly ExecCase[] = [
   { id: 'feed: status present, since absent', entry: 'feed', input: { authorId: 1, status: 'draft' } },
   { id: 'feed: since present, status absent', entry: 'feed', input: { authorId: 1, since: '2026-03-01' } },
   { id: 'feed: both present', entry: 'feed', input: { authorId: 1, status: 'live', since: '2026-01-01' } },
+  // #200 — SKIP × a BOUND page: the survivors' params splice into the MIDDLE of the base params
+  // (`author_id` binds before the clause, `LIMIT`/`OFFSET` after it). `minId` is an INT, so every
+  // mis-placement stays type-valid and shows up as a DIFFERENT ROW SET — the only thing that catches
+  // it, since PostgreSQL renumbers `?`→`$N` after assembly and the statement TEXT looks right either
+  // way. With authorId=1, minId=2, limit=1, offset=0 the correct binding yields post 10, while
+  // binding the fragment first yields post 12 (author 2), binding it last yields nothing (LIMIT 0
+  // OFFSET 2), and counting one page param instead of two yields both posts.
+  { id: 'pagedFeed: bound page, both optional predicates absent (SKIP drop)', entry: 'pagedFeed', input: { authorId: 1, limit: 1, offset: 1 } },
+  { id: 'pagedFeed: bound page + an INT optional cursor (params splice mid-list)', entry: 'pagedFeed', input: { authorId: 1, minId: 2, limit: 1, offset: 0 } },
+  { id: 'pagedFeed: same statement, second window (the page still moves under a surviving fragment)', entry: 'pagedFeed', input: { authorId: 1, minId: 2, limit: 1, offset: 1 } },
+  { id: 'pagedFeed: bound page + both optional predicates', entry: 'pagedFeed', input: { authorId: 1, minId: 2, status: 'draft', limit: 1, offset: 0 } },
   {
     id: 'usersWithPosts: two relation levels materialize WITH THEIR FIELDS',
     entry: 'usersWithPosts',

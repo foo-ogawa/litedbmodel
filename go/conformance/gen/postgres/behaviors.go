@@ -156,6 +156,13 @@ type DynamicWhereFrag struct {
 	Sql     string            // "sql"
 }
 
+type PagedFeedRow struct {
+	Author_id *float64 // "author_id"
+	Id        *float64 // "id"
+	Status    *string  // "status"
+	Title     *string  // "title"
+}
+
 type UsersWithPostsRow struct {
 	Id    *float64                  // "id"
 	Name  *string                   // "name"
@@ -625,8 +632,8 @@ func Feed(authorId int64, status *string, since *string) ([]FeedRow, error) {
 	_ = produced_n0
 	// ── op 'n0' (executeSQL) ──
 	pf_n0, pe_n0 := func() ([]wire.WireField, error) {
-		ex_12 := DynamicWherePlan{Frags: []DynamicWhereFrag{DynamicWhereFrag{Params: []*wire.WireValue{func() *wire.WireValue { __oo := status; if __oo == nil { return nil }; __ov := (*__oo); __ob := wire.WireStr(__ov); return &__ob }()}, Skipped: (status == nil), Sql: "status = ?"}, DynamicWhereFrag{Params: []*wire.WireValue{func() *wire.WireValue { __oo := since; if __oo == nil { return nil }; __ov := (*__oo); __ob := wire.WireStr(__ov); return &__ob }()}, Skipped: (since == nil), Sql: "created_at >= ?"}}}
-		return []wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireInt(authorId)})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, author_id, title, status FROM conf_posts WHERE author_id = ? ORDER BY id ASC")}, wire.WireField{Key: "whereDynamic", Val: func() wire.WireValue { o0 := &ex_12; if o0 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "frags", Val: func() wire.WireValue { it1 := []wire.WireValue{}; for _, e1 := range (*o0).Frags { it1 = append(it1, wire.WireRowOf([]wire.WireField{{Key: "params", Val: func() wire.WireValue { it3 := []wire.WireValue{}; for _, e3 := range e1.Params { it3 = append(it3, func() wire.WireValue { o4 := e3; if o4 == nil { return wire.WireNull() }; return (*o4) }()) }; return wire.WireListOf(it3) }()}, {Key: "skipped", Val: wire.WireBool(e1.Skipped)}, {Key: "sql", Val: wire.WireStr(e1.Sql)}})) }; return wire.WireListOf(it1) }()}}) }()}, wire.WireField{Key: "write", Val: wire.WireBool(false)}}, nil
+		ex_15 := DynamicWherePlan{Frags: []DynamicWhereFrag{DynamicWhereFrag{Params: []*wire.WireValue{func() *wire.WireValue { __oo := status; if __oo == nil { return nil }; __ov := (*__oo); __ob := wire.WireStr(__ov); return &__ob }()}, Skipped: (status == nil), Sql: "status = ?"}, DynamicWhereFrag{Params: []*wire.WireValue{func() *wire.WireValue { __oo := since; if __oo == nil { return nil }; __ov := (*__oo); __ob := wire.WireStr(__ov); return &__ob }()}, Skipped: (since == nil), Sql: "created_at >= ?"}}}
+		return []wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireInt(authorId)})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, author_id, title, status FROM conf_posts WHERE author_id = ? ORDER BY id ASC")}, wire.WireField{Key: "whereDynamic", Val: func() wire.WireValue { o0 := &ex_15; if o0 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "frags", Val: func() wire.WireValue { it1 := []wire.WireValue{}; for _, e1 := range (*o0).Frags { it1 = append(it1, wire.WireRowOf([]wire.WireField{{Key: "params", Val: func() wire.WireValue { it3 := []wire.WireValue{}; for _, e3 := range e1.Params { it3 = append(it3, func() wire.WireValue { o4 := e3; if o4 == nil { return wire.WireNull() }; return (*o4) }()) }; return wire.WireListOf(it3) }()}, {Key: "skipped", Val: wire.WireBool(e1.Skipped)}, {Key: "sql", Val: wire.WireStr(e1.Sql)}})) }; return wire.WireListOf(it1) }()}}) }()}, wire.WireField{Key: "write", Val: wire.WireBool(false)}}, nil
 	}()
 	if pe_n0 != nil {
 		return nil, pe_n0
@@ -669,6 +676,92 @@ func Feed(authorId int64, status *string, since *string) ([]FeedRow, error) {
 					rec1.Title = &sv5
 				} else if p5.Kind == probeWrong {
 					return nil, deTypeMismatch("FeedRow", "title", "opt(string)", p5.ActualWireType, p5.Raw)
+				}
+				el0 = rec1
+			} else if p1.Kind == probeWrong {
+				return nil, deTypeMismatch("n0", "n0", "obj{author_id:opt(float),id:opt(float),status:opt(string),title:opt(string)}", p1.ActualWireType, p1.Raw)
+			} else if p1.Kind == probeNull {
+				return nil, deTypeMismatch("n0", "n0", "obj{author_id:opt(float),id:opt(float),status:opt(string),title:opt(string)}", p1.ActualWireType, p1.Raw)
+			} else {
+				return nil, deMissingField("n0", "n0", "obj{author_id:opt(float),id:opt(float),status:opt(string),title:opt(string)}")
+			}
+			list0 = append(list0, el0)
+		}
+		t_n0 = list0
+	} else if p0.Kind == probeWrong {
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{author_id:opt(float),id:opt(float),status:opt(string),title:opt(string)})", p0.ActualWireType, p0.Raw)
+	} else if p0.Kind == probeNull {
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{author_id:opt(float),id:opt(float),status:opt(string),title:opt(string)})", p0.ActualWireType, p0.Raw)
+	} else {
+		return nil, deMissingField("n0", "n0", "arr(obj{author_id:opt(float),id:opt(float),status:opt(string),title:opt(string)})")
+	}
+	produced_n0 = true
+	return t_n0, nil
+}
+
+// PagedFeed — the STRUCT-RETURNING combined read (bc#77/#87): the fully
+// de-plumbed path. Ports are a native struct (direct field assignment); the handler
+// result is materialized straight into the node's outType struct. Node results are typed
+// struct locals; a relation child reads the parent's REAL struct result via direct field
+// access (child-present decision from the real parent value — relation / connection
+// converge). A strictly-sequential plan is a plain statement list (no plan driver); a
+// real-concurrency stage (bc#87) is EXPLICIT static parallel orchestration — one goroutine
+// per statically-known parallel op, bounded by the static plan.concurrency via a semaphore
+// of known size, with a sync.WaitGroup; preflight + interpret are committed in ascending
+// index order so the observed value / op multiset / failure precedence byte-match run_behavior
+// (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
+// struct/value assembled by struct literal + field access — the consumer keeps it native.
+func PagedFeed(authorId int64, minId *int64, status *string, limit int64, offset int64) ([]PagedFeedRow, error) {
+	var t_n0 []PagedFeedRow
+	produced_n0 := false
+	_ = t_n0
+	_ = produced_n0
+	// ── op 'n0' (executeSQL) ──
+	pf_n0, pe_n0 := func() ([]wire.WireField, error) {
+		ex_16 := DynamicWherePlan{Frags: []DynamicWhereFrag{DynamicWhereFrag{Params: []*wire.WireValue{func() *wire.WireValue { __oo := minId; if __oo == nil { return nil }; __ov := (*__oo); __ob := wire.WireInt(__ov); return &__ob }()}, Skipped: (minId == nil), Sql: "id >= ?"}, DynamicWhereFrag{Params: []*wire.WireValue{func() *wire.WireValue { __oo := status; if __oo == nil { return nil }; __ov := (*__oo); __ob := wire.WireStr(__ov); return &__ob }()}, Skipped: (status == nil), Sql: "status = ?"}}}
+		return []wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireInt(authorId), wire.WireInt(limit), wire.WireInt(offset)})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, author_id, title, status FROM conf_posts WHERE author_id = ? ORDER BY id ASC LIMIT ? OFFSET ?")}, wire.WireField{Key: "whereDynamic", Val: func() wire.WireValue { o0 := &ex_16; if o0 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "frags", Val: func() wire.WireValue { it1 := []wire.WireValue{}; for _, e1 := range (*o0).Frags { it1 = append(it1, wire.WireRowOf([]wire.WireField{{Key: "params", Val: func() wire.WireValue { it3 := []wire.WireValue{}; for _, e3 := range e1.Params { it3 = append(it3, func() wire.WireValue { o4 := e3; if o4 == nil { return wire.WireNull() }; return (*o4) }()) }; return wire.WireListOf(it3) }()}, {Key: "skipped", Val: wire.WireBool(e1.Skipped)}, {Key: "sql", Val: wire.WireStr(e1.Sql)}})) }; return wire.WireListOf(it1) }()}}) }()}, wire.WireField{Key: "write", Val: wire.WireBool(false)}}, nil
+	}()
+	if pe_n0 != nil {
+		return nil, pe_n0
+	}
+	payload_n0 := wire.WireRowOfFields(pf_n0)
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
+	if wire_n0Err != nil {
+		return nil, opFailed("n0", "fail", wire_n0Err)
+	}
+	p0 := wire_n0.AsList()
+	if p0.Kind == probeGot {
+		list0 := make([]PagedFeedRow, 0, p0.Got.Len())
+		for i0 := 0; i0 < p0.Got.Len(); i0++ {
+			var el0 PagedFeedRow
+			p1 := p0.Got.ElemRow(i0)
+			if p1.Kind == probeGot {
+				var rec1 PagedFeedRow
+				p2 := p1.Got.ProbeFloat("author_id")
+				if p2.Kind == probeGot {
+					rec1.Author_id = &p2.Got
+				} else if p2.Kind == probeWrong {
+					return nil, deTypeMismatch("PagedFeedRow", "author_id", "opt(float)", p2.ActualWireType, p2.Raw)
+				}
+				p3 := p1.Got.ProbeFloat("id")
+				if p3.Kind == probeGot {
+					rec1.Id = &p3.Got
+				} else if p3.Kind == probeWrong {
+					return nil, deTypeMismatch("PagedFeedRow", "id", "opt(float)", p3.ActualWireType, p3.Raw)
+				}
+				p4 := p1.Got.ProbeString("status")
+				if p4.Kind == probeGot {
+					sv4 := p4.Got
+					rec1.Status = &sv4
+				} else if p4.Kind == probeWrong {
+					return nil, deTypeMismatch("PagedFeedRow", "status", "opt(string)", p4.ActualWireType, p4.Raw)
+				}
+				p5 := p1.Got.ProbeString("title")
+				if p5.Kind == probeGot {
+					sv5 := p5.Got
+					rec1.Title = &sv5
+				} else if p5.Kind == probeWrong {
+					return nil, deTypeMismatch("PagedFeedRow", "title", "opt(string)", p5.ActualWireType, p5.Raw)
 				}
 				el0 = rec1
 			} else if p1.Kind == probeWrong {
@@ -1249,10 +1342,10 @@ func UsersWithCappedPosts() ([]UsersWithCappedPostsRow, error) {
 	// ── op 'n2' (executeSQL, parent:n1) ──
 	if produced_n1 {
 		pf_n2, pe_n2 := func() ([]wire.WireField, error) {
-			ex_13 := "conf_posts"
-			ex_14 := CapGuard{Limit: int64(2), Model: &ex_13, Relation: "cappedPosts"}
-			ex_15 := DynamicWherePlan{Frags: []DynamicWhereFrag{}}
-			return []wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "guard", Val: func() wire.WireValue { o0 := &ex_14; if o0 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "limit", Val: wire.WireInt((*o0).Limit)}, {Key: "model", Val: func() wire.WireValue { o1 := (*o0).Model; if o1 == nil { return wire.WireNull() }; return wire.WireStr((*o1)) }()}, {Key: "relation", Val: wire.WireStr((*o0).Relation)}}) }()}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireListOf(t_n1)})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, author_id, title, status, created_at FROM conf_posts WHERE conf_posts.author_id = ANY(?::int[]) ORDER BY id ASC")}, wire.WireField{Key: "whereDynamic", Val: func() wire.WireValue { o0 := &ex_15; if o0 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "frags", Val: func() wire.WireValue { it1 := []wire.WireValue{}; for _, e1 := range (*o0).Frags { it1 = append(it1, wire.WireRowOf([]wire.WireField{{Key: "params", Val: func() wire.WireValue { it3 := []wire.WireValue{}; for _, e3 := range e1.Params { it3 = append(it3, func() wire.WireValue { o4 := e3; if o4 == nil { return wire.WireNull() }; return (*o4) }()) }; return wire.WireListOf(it3) }()}, {Key: "skipped", Val: wire.WireBool(e1.Skipped)}, {Key: "sql", Val: wire.WireStr(e1.Sql)}})) }; return wire.WireListOf(it1) }()}}) }()}, wire.WireField{Key: "write", Val: wire.WireBool(false)}}, nil
+			ex_17 := "conf_posts"
+			ex_18 := CapGuard{Limit: int64(2), Model: &ex_17, Relation: "cappedPosts"}
+			ex_19 := DynamicWherePlan{Frags: []DynamicWhereFrag{}}
+			return []wire.WireField{wire.WireField{Key: "bigint", Val: wire.WireBool(false)}, wire.WireField{Key: "guard", Val: func() wire.WireValue { o0 := &ex_18; if o0 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "limit", Val: wire.WireInt((*o0).Limit)}, {Key: "model", Val: func() wire.WireValue { o1 := (*o0).Model; if o1 == nil { return wire.WireNull() }; return wire.WireStr((*o1)) }()}, {Key: "relation", Val: wire.WireStr((*o0).Relation)}}) }()}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireListOf(t_n1)})}, wire.WireField{Key: "returning", Val: wire.WireBool(false)}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, author_id, title, status, created_at FROM conf_posts WHERE conf_posts.author_id = ANY(?::int[]) ORDER BY id ASC")}, wire.WireField{Key: "whereDynamic", Val: func() wire.WireValue { o0 := &ex_19; if o0 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "frags", Val: func() wire.WireValue { it1 := []wire.WireValue{}; for _, e1 := range (*o0).Frags { it1 = append(it1, wire.WireRowOf([]wire.WireField{{Key: "params", Val: func() wire.WireValue { it3 := []wire.WireValue{}; for _, e3 := range e1.Params { it3 = append(it3, func() wire.WireValue { o4 := e3; if o4 == nil { return wire.WireNull() }; return (*o4) }()) }; return wire.WireListOf(it3) }()}, {Key: "skipped", Val: wire.WireBool(e1.Skipped)}, {Key: "sql", Val: wire.WireStr(e1.Sql)}})) }; return wire.WireListOf(it1) }()}}) }()}, wire.WireField{Key: "write", Val: wire.WireBool(false)}}, nil
 		}()
 		if pe_n2 != nil {
 			return nil, pe_n2
@@ -2748,4 +2841,4 @@ func RemoveTagsReturning(ids []int64) ([]RemoveTagsReturningRow, error) {
 // Each is a 1:1 entry <Method>(<positional params>) -> (T, error): a native return; the consumer keeps the
 // model native (no Value serialization on the read hot path — the boxing residue bc#77 removes) and
 // supplies the op-agnostic leaf transport symbols the entry calls. See INTEGRATION.md §6.
-var ComponentNamesNativeRaw = []string{"posts", "postsTop", "page", "postsByIds", "feed", "usersWithPosts", "postsWithAuthor", "usersWithCappedPosts", "usersWithUncappedPosts", "usersWithTopPosts", "createPost", "renamePost", "removePost", "createPostReturning", "renamePostReturning", "removePostReturning", "restatusPostsReturning", "removePostsByAuthorReturning", "typedRows", "createTags", "removeTags", "createTagsReturning", "relabelTagsReturning", "removeTagsReturning"}
+var ComponentNamesNativeRaw = []string{"posts", "postsTop", "page", "postsByIds", "feed", "pagedFeed", "usersWithPosts", "postsWithAuthor", "usersWithCappedPosts", "usersWithUncappedPosts", "usersWithTopPosts", "createPost", "renamePost", "removePost", "createPostReturning", "renamePostReturning", "removePostReturning", "restatusPostsReturning", "removePostsByAuthorReturning", "typedRows", "createTags", "removeTags", "createTagsReturning", "relabelTagsReturning", "removeTagsReturning"}
