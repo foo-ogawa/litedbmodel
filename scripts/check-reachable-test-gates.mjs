@@ -8,7 +8,7 @@
  * go test or cargo test — so the tx isolation, tx boundary, connection routing and middleware suites
  * in four languages reported green while never executing.
  *
- * The invariant, in three clauses:
+ * The invariant, in four clauses:
  *
  *   A. Every `LITEDBMODEL_*` gate a test reads is declared in `livedb-gates.env`, and every variable
  *      declared there gates some test (no undeclared gate, no dead declaration).
@@ -16,6 +16,10 @@
  *      a declaration no workflow reads sets nothing.
  *   C. That same class of workflow EXECUTES each language's RUN GATE (`scripts/check-*-test-skips.mjs`),
  *      which is the only thing that can report that the suite then ran: see {@link RUNNERS}.
+ *   D. NO workflow, on any trigger, gating or not, invokes a BARE runner. A–C ask what gates a change
+ *      and so look only at pull_request workflows; that left every other workflow free to run a
+ *      command whose green means nothing, and two were — one of them gating the crates.io publish.
+ *      See {@link RUNNERS} and {@link NOT_A_SUITE_RUN}.
  *
  * Clauses B and C are about execution, and every weaker reading of them has been satisfied by text
  * no shell would ever run, or by a command whose failure nothing was watching. Six, each measured on
@@ -129,7 +133,7 @@ const PR_TYPES = ['opened', 'synchronize', 'reopened'];
  * comment claimed that "`pytest`, `phpunit` and `cargo test` already mean everything when invoked
  * bare" — a claim no code here made, and a claim that was FALSE for the rust command this repository
  * actually runs, `cargo test -p litedbmodel_runtime --features livedb`. Measured green on the version
- * before this one: `python3 -m pytest -q tests/test_types.py`, `phpunit --filter NothingMatchesThis`,
+ * before this one: `python3 -m pytest -q tests/test_dialect.py`, `phpunit --filter NothingMatchesThis`,
  * `cargo test --lib nothing_matches_this`, `npx vitest run --config=…`.
  *
  * A run gate owns the runner's argv in tracked source, so the narrowing cannot come from a workflow
@@ -147,12 +151,74 @@ const PR_TYPES = ['opened', 'synchronize', 'reopened'];
 const runGate = (script) => (a) =>
   /(?:^|\/)node$/.test(a[0] ?? '') && (a[1] ?? '').replace(/^\.\//, '') === `scripts/${script}`;
 
+/**
+ * Per language: the run gate a change-gating workflow MUST invoke, and the bare runner NO workflow may
+ * invoke at all. Both facts in one row, because they are one decision — kept apart, a language could
+ * end up with a required gate in one table and a permitted lie in the other.
+ *
+ * The bare-runner half is not a duplicate of the gate half: it is enforced over EVERY workflow, on any
+ * trigger, gating or not. That is the hole {@link onChange} cannot see, and two live examples were
+ * found by audit rather than by this script:
+ *
+ *   publish-crates.yml   `cargo test -p litedbmodel_runtime` — no `--features livedb`, so the six live
+ *                        tests were NOT COMPILED, and this gated the crates.io publish. `tests/common/
+ *                        mod.rs` documents the damage: "publish-crates.yml gated a crate release on ten
+ *                        tests that had never executed".
+ *   ci.yml, release.yml, `npm run test:ci` = `vitest run test/unit` — 13 of the tree's 51 test files,
+ *   publish.yml,         under a step called "Test". The #168 narrowing itself, alive as a second path
+ *   npm-audit-remediate  in four workflows, one of them a pull_request.
+ *
+ * Both are gone, and the steps with them: a DB-less duplicate of a suite conformance.yml already runs
+ * through the run gates against a real PG + MySQL adds no coverage, and its green says something untrue.
+ */
 const RUNNERS = [
-  ['TypeScript', 'node scripts/check-ts-test-skips.mjs   (what `npm run ts:test` must bind to)', runGate('check-ts-test-skips.mjs')],
-  ['Python', 'node scripts/check-python-test-skips.mjs   (what `npm run py:test` must bind to)', runGate('check-python-test-skips.mjs')],
-  ['PHP', 'node scripts/check-php-test-skips.mjs   (what `npm run php:test` must bind to)', runGate('check-php-test-skips.mjs')],
-  ['Go', 'node scripts/check-go-test-skips.mjs   (what `npm run go:test` must bind to)', runGate('check-go-test-skips.mjs')],
-  ['Rust', 'node scripts/check-rust-test-skips.mjs   (what `npm run rust:test` must bind to)', runGate('check-rust-test-skips.mjs')],
+  [
+    'TypeScript',
+    'node scripts/check-ts-test-skips.mjs   (what `npm run ts:test` must bind to)',
+    runGate('check-ts-test-skips.mjs'),
+    (a) => a[0] === 'vitest',
+  ],
+  [
+    'Python',
+    'node scripts/check-python-test-skips.mjs   (what `npm run py:test` must bind to)',
+    runGate('check-python-test-skips.mjs'),
+    (a) => /(?:^|\/)pytest$/.test(a[0] ?? '') || (/(?:^|\/)python[0-9.]*$/.test(a[0] ?? '') && a[1] === '-m' && a[2] === 'pytest'),
+  ],
+  [
+    'PHP',
+    'node scripts/check-php-test-skips.mjs   (what `npm run php:test` must bind to)',
+    runGate('check-php-test-skips.mjs'),
+    (a) => /(?:^|\/)phpunit$/.test(a[0] ?? ''),
+  ],
+  [
+    'Go',
+    'node scripts/check-go-test-skips.mjs   (what `npm run go:test` must bind to)',
+    runGate('check-go-test-skips.mjs'),
+    (a) => a[0] === 'go' && a[1] === 'test',
+  ],
+  [
+    'Rust',
+    'node scripts/check-rust-test-skips.mjs   (what `npm run rust:test` must bind to)',
+    runGate('check-rust-test-skips.mjs'),
+    (a) => a[0] === 'cargo' && a[1] === 'test',
+  ],
+];
+
+/**
+ * The runner invocations in a workflow that are NOT a suite run, as the exact argv each reduces to.
+ * Every other one is red wherever it appears.
+ *
+ * Both entries drive a vitest project that is not the test suite: the live-DB CORPUS, generated and
+ * drift-checked by `conformance/vitest.livedb.config.ts`, and the corpus drift gate + TS reference
+ * runner, a single named file. Neither claims to run the suite, and `npm run ts:test` runs it in the
+ * same workflow.
+ *
+ * BIDIRECTIONAL: an entry that matches no command in any workflow is stale and red, so this cannot
+ * quietly become a licence for a narrowing nobody runs any more.
+ */
+const NOT_A_SUITE_RUN = [
+  'vitest run --config conformance/vitest.livedb.config.ts',
+  'vitest run test/scp/conformance-vectors.test.ts',
 ];
 
 /**
@@ -263,7 +329,7 @@ function notGatingKey(key, value) {
  * same shape the trigger scan below reads. A `run:` this shape does not place inside a job belongs
  * to no job and is dropped — the same RED direction as everything else here.
  */
-function runBodies(text) {
+function runBodies(text, { gatingOnly = true } = {}) {
   const lines = text.split('\n');
   const bodies = [];
   /** The step being read: its `- ` lead, whether a key of its own disowns it, and its commands. */
@@ -273,13 +339,17 @@ function runBodies(text) {
   let inJobs = false;
   /** Whether a workflow-level key disowns every job in the file. */
   let workflowNotGating = false;
+  // `gatingOnly: false` keeps the steps a key would disown — for the clause that asks what a workflow
+  // RUNS rather than what it gates. `publish-crates.yml`'s bare `cargo test` sat behind
+  // `if: steps.need.outputs.publish == 'true'`, so the gating read dropped it and it gated a publish
+  // while being invisible here.
   const endStep = () => {
-    if (step && job && !step.notGating) job.runs.push(...step.runs);
+    if (step && job && (!gatingOnly || !step.notGating)) job.runs.push(...step.runs);
     step = null;
   };
   const endJob = () => {
     endStep();
-    if (job && !job.notGating) bodies.push(...job.runs);
+    if (job && (!gatingOnly || !job.notGating)) bodies.push(...job.runs);
     job = null;
   };
   for (let i = 0; i < lines.length; i++) {
@@ -609,14 +679,26 @@ function gatesEveryChange(filters) {
   );
 }
 
-/** Workflows a pull_request triggers on ANY change — the only ones that gate a change. */
-const onChange = readdirSync(WORKFLOWS)
+/**
+ * Every workflow, with the commands it would run — `commands` as a change GATE (a step, job or
+ * workflow a key disowns is dropped), `allCommands` as everything it runs whatever the trigger and
+ * whatever guards it. The bare-runner clause needs the second: a lying test step is a lying test step
+ * behind an `if:`, on a `release:` trigger, in a scheduled job.
+ */
+const workflows = readdirSync(WORKFLOWS)
   .filter((f) => /\.ya?ml$/.test(f))
   .map((f) => {
     const text = readFileSync(join(WORKFLOWS, f), 'utf8');
-    return { name: f, text, commands: runBodies(text).flatMap((b) => commandsOf(b, f)) };
-  })
-  .filter((w) => gatesEveryChange(pullRequestFilters(w.text.slice(0, w.text.search(/^jobs:/m) >>> 0))));
+    return {
+      name: f,
+      text,
+      commands: runBodies(text).flatMap((b) => commandsOf(b, f)),
+      allCommands: runBodies(text, { gatingOnly: false }).flatMap((b) => commandsOf(b, f)),
+    };
+  });
+
+/** Workflows a pull_request triggers on ANY change — the only ones that gate a change. */
+const onChange = workflows.filter((w) => gatesEveryChange(pullRequestFilters(w.text.slice(0, w.text.search(/^jobs:/m) >>> 0))));
 
 const problems = [];
 
@@ -652,6 +734,40 @@ for (const [lang, how, isRunner] of RUNNERS) {
         `      bash/sh, nor a pull_request trigger that does not fire for every change — a \`paths:\`,\n` +
         `      a \`paths-ignore:\`, a \`branches:\` without \`${DEFAULT_BRANCH}\`, a \`types:\` missing one of\n` +
         `      ${PR_TYPES.join('/')}, or a \`push:\` trigger, which is POST-MERGE.)`,
+    );
+  }
+}
+// Clause D: NO workflow, on ANY trigger, invokes a bare runner. Each of the five reports a suite that
+// skipped, shrank or was never compiled as a success, so a step that runs one is a step whose green
+// means nothing — and this is asked of every workflow because the two that were doing it gated a
+// crates.io PUBLISH and a pull_request, neither of which any other clause here looks at.
+const matchedAllowance = new Set();
+for (const w of workflows) {
+  for (const cmd of w.allCommands) {
+    const argv = argvOf(cmd);
+    const normalized = argv.join(' ');
+    const runner = RUNNERS.find(([, , , isBare]) => isBare(argv));
+    if (!runner) continue;
+    if (NOT_A_SUITE_RUN.includes(normalized)) {
+      matchedAllowance.add(normalized);
+      continue;
+    }
+    problems.push(
+      `${w.name} invokes the BARE ${runner[0]} runner, whose green does not mean the suite ran:\n` +
+        `      ${cmd.trim()}\n\n` +
+        `      Run the gate instead: ${runner[1]}\n` +
+        `      (\`go test\` calls a skipped test a success and replays a cached run; \`pytest\` and\n` +
+        `      \`phpunit\` report skips beside "passed"/"OK"; \`cargo test\` without \`--features livedb\`\n` +
+        `      compiles the live tests to NOTHING and exits 0; \`vitest\` reports \`success: true\` with\n` +
+        `      tests pending. If this invocation is not a suite run at all, add its exact argv to\n` +
+        `      NOT_A_SUITE_RUN with the reason.)`,
+    );
+  }
+}
+for (const a of NOT_A_SUITE_RUN) {
+  if (!matchedAllowance.has(a)) {
+    problems.push(
+      `NOT_A_SUITE_RUN allows \`${a}\`, but no workflow runs it. Remove the entry — an allowance nothing uses is one nobody re-reads before relying on it.`,
     );
   }
 }

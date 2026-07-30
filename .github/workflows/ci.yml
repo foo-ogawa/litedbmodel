@@ -32,8 +32,6 @@ jobs:
         run: npm run lint --if-present
       - name: Build
         run: npm run build
-      - name: Test
-        run: npm run test:ci
       - name: Verify package contents
         run: npm pack --dry-run
 

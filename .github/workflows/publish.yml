@@ -60,10 +60,6 @@ jobs:
         if: steps.need.outputs.publish == 'true'
         run: npm run build
 
-      - name: Run tests
-        if: steps.need.outputs.publish == 'true'
-        run: npm run test:ci
-
       - name: Publish to npm
         if: steps.need.outputs.publish == 'true'
         run: npm publish --access public

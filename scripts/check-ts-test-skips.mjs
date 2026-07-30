@@ -26,9 +26,12 @@
  *     `vitest list`, not its module graph — because a narrowed `include` narrows what vitest would say
  *     exactly as much as it narrows the run, and the run cannot report a file it was never told about:
  *
- *         a path argument            `vitest run test/unit` — what `test:ci` used to be, leaving
- *                                    test/scp, test/parity and test/integration (1138 tests) out of
- *                                    CI with the job green (#168)
+ *         a path argument            `vitest run test/unit` — leaving test/scp, test/parity and
+ *                                    test/integration (1138 tests) out of CI with the job green
+ *                                    (#168). That command was `test:ci` in package.json, still called
+ *                                    by four workflows including a pull_request one, until #220
+ *                                    deleted the alias and the steps; clause D of
+ *                                    check-reachable-test-gates.mjs is what keeps it deleted
  *         a narrowed `include`       the same, one level down in the config
  *         `--testNamePattern`        every file still reported, but with no tests in it — which is why
  *                                    a file must report at least ONE test, not merely appear

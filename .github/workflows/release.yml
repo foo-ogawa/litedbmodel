@@ -61,9 +61,6 @@ jobs:
       - name: Build
         if: steps.tag.outcome == 'failure'
         run: npm run build
-      - name: Test
-        if: steps.tag.outcome == 'failure'
-        run: npm run test:ci
       - name: Verify package contents
         if: steps.tag.outcome == 'failure'
         run: npm pack --dry-run
