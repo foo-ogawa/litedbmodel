@@ -432,7 +432,7 @@ func TestPhaseCRoutingTxPinPrecedenceLive(t *testing.T) {
 	// tx ignored the name (the #215 regression: a `?`-placeholder MySQL statement sent to PG); `[B B B B]`
 	// would mean the pin lost and each statement re-acquired.
 	if !equalStrings(log, []string{"B"}) {
-		t.Fatalf("tx acquisitions = %v, want [B] (ONE acquire on DB B's writer, then the pin wins for every statement)", log)
+		t.Fatalf("tx acquisitions = %v, want [B] (ONE acquire on DB B's writer, then the pin serves every in-body statement of that db)", log)
 	}
 	// Both rows committed on the ONE pinned connection.
 	var c int

@@ -609,7 +609,7 @@ fn c2_unknown_name_loud() {
 }
 
 /// tx-pin precedence: a named-DB transaction runs its WHOLE body on ONE pinned writer connection of
-/// that DB — the active-tx pin STILL wins over routing (Phase B unbroken). Prove: inside a tx to "B",
+/// that DB — the active-tx pin comes first for every in-body statement of that DB. Prove: inside a tx to "B",
 /// even a read-intent statement resolves the SAME pinned MySQL connection (label recorded ONCE at
 /// begin_tx, then the pinned conn serves every statement — no further checkouts on B's recording driver).
 fn c2_tx_pin_precedence() {
@@ -626,7 +626,8 @@ fn c2_tx_pin_precedence() {
     let ctx = for_routing(&routing).unwrap();
 
     // A transaction routed to "B": one checkout on B's recording driver (begin_tx), and every statement
-    // in the body — write AND read — runs on the pinned owned connection (NOT a fresh checkout).
+    // in the body that belongs to that database — write AND read — runs on the pinned owned connection
+    // (NOT a fresh checkout); one naming a DIFFERENT database is rejected instead.
     transaction_on(&ctx, Some("B"), TxDialect::Mysql, &TransactionOptions::default(), |tx| {
         seam_run(
             tx,
@@ -634,7 +635,7 @@ fn c2_tx_pin_precedence() {
             &[Value::Int(300), Value::Str("tx-B".into())],
             &StatementIntent::write(),
         )?;
-        // A read INSIDE the tx: the pin wins over routing, so it runs on the SAME MySQL connection
+        // A read INSIDE the tx: the pin comes first, so it runs on the SAME MySQL connection
         // (sees the just-inserted row before COMMIT) — NOT routed afresh to any pool.
         let r = seam_execute(
             tx,
@@ -653,7 +654,7 @@ fn c2_tx_pin_precedence() {
     assert_eq!(
         log,
         vec!["B"],
-        "tx-pin: one begin_tx checkout on B; body statements reuse the pinned conn (pin wins over routing)"
+        "tx-pin: one begin_tx checkout on B; body statements reuse the pinned conn (the pin comes first)"
     );
 
     // Read-back OUTSIDE the tx (routed): the committed row is on B, absent from A.

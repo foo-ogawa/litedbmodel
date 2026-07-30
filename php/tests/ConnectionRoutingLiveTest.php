@@ -49,7 +49,8 @@ use function LiteDbModel\Runtime\withWriter;
  *   C2 multi-DB connection registry + name→connection routing (PG=A default, MySQL=B)
  *     - untagged → DB A (PG); "B"-tagged → DB B (MySQL); real cross-DB read-back; mutation: ignore
  *       intent.db (route a MySQL-`?` query to PG) ⇒ it throws on PG's `$N`-only placeholder.
- *     - active-tx pin STILL wins over routing (named-DB tx runs entirely on ONE pinned writer conn).
+ *     - the active-tx pin comes first (a named-DB tx runs entirely on ONE pinned writer conn; a
+ *       statement naming a DIFFERENT database inside it is rejected, not routed).
  *   C3 setConfig
  *     - `queryTimeout` fires a SERVER statement timeout (PG pg_sleep; MySQL a HEAVY SELECT — NOT SLEEP,
  *       which MySQL's max_execution_time exempts); mutation: an unconfigured pool does NOT time out.
@@ -365,7 +366,7 @@ final class ConnectionRoutingLiveTest extends TestCase
 
     public function testActiveTxPinWinsOverRouting(): void
     {
-        // C2: a named-DB transaction runs ENTIRELY on ONE pinned writer connection — routing is inert
+        // C2: a named-DB transaction runs ENTIRELY on ONE pinned writer connection — no routed acquire
         // inside the tx (the tx-pin wins). Prove: a tx on DB B (MySQL) runs BOTH a write and a read on
         // the SAME MySQL connection despite the read carrying no db tag (the pinned conn wins).
         $my = $this->connectOrFail([self::class, 'mysql'], 'mysql');
@@ -390,7 +391,7 @@ final class ConnectionRoutingLiveTest extends TestCase
         // Routing was INERT inside the tx: the tx-pin (STEP 1) wins in connectionFor, so NEITHER the
         // in-tx write NOR the untagged read went through the routing pool's acquire() — the whole
         // named-DB tx ran on ONE pinned writer connection (Phase B ownership preserved).
-        $this->assertSame($countBeforeTx, count($log), 'routing is inert inside the tx (the tx-pin wins) — no routed acquire per in-tx statement');
+        $this->assertSame($countBeforeTx, count($log), 'the tx-pin serves every in-body statement of this db — no routed acquire per in-tx statement');
         // And the row committed (a real named-DB tx on the B connection).
         $committed = execute($ctx, 'SELECT val FROM ' . self::TBL . ' WHERE id=?', [1], new StatementIntent(write: false));
         $this->assertSame('tx', $committed[0]->val, 'the named-DB tx committed on the B connection');

@@ -160,8 +160,9 @@ final class PdoConnection implements Connection
 
 /**
  * A {@see Connection} view over a tx's OWNED {@see PdoTxConnection} handle. The seam resolves this
- * (via `connectionFor`) for every statement inside a tx, so all of them run on the SAME owned
- * connection. It funnels `execute`/`run` to the handle's PDO — the SAME single `\PDO` the tx issued
+ * (via `connectionFor`) for every statement inside a tx that belongs to the tx's own database — an
+ * unnamed one, or one naming that database — so all of THOSE run on the SAME owned connection (one
+ * naming another database is rejected instead). It funnels `execute`/`run` to the handle's PDO — the SAME single `\PDO` the tx issued
  * its `BEGIN` on — so a statement mis-routed to a DIFFERENT (autocommit) connection would escape the
  * transaction (the mutation the atomicity "teeth" test exploits).
  */

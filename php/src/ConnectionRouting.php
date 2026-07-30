@@ -268,7 +268,8 @@ interface PdoPool
     /**
      * The backing {@see PdoDriver} (the ONE `\PDO` this pool holds). A transaction acquires its OWNED
      * connection by calling {@see PdoDriver::beginTx()} on THIS — so a named-DB tx runs entirely on the
-     * target connection's writer `\PDO` (the tx-pin STILL wins over routing; Phase B is not broken).
+     * target connection's writer `\PDO`: the tx-pin comes first in `connectionFor` for every statement of
+     * the body except one naming a DIFFERENT database, which is rejected rather than run on it.
      */
     public function backingDriver(): PdoDriver;
 }
@@ -843,7 +844,14 @@ final class RoutingExecutionContext extends ExecutionContext
         );
     }
 
-    /** Derive a read-only-scoped routing ctx (write-reject). Overrides the base to keep routing. */
+    /**
+     * Derive a read-only-scoped routing ctx (write-reject). Overrides the base to keep routing — AND the
+     * transaction's connection NAME, which this derivation must carry for the same reason it carries the
+     * pin: it keeps the pinned connection, so dropping the name left a tx-scoped ctx that still resolved
+     * B's connection while claiming to be on the default. A statement naming the tx's OWN database then
+     * failed the agreement check ({@see assertTxDbAgrees()}) and one naming the DEFAULT ran on B — both
+     * halves of #217 reopened, reachable from {@see withWriter()} (which derives exactly this ctx).
+     */
     public function withReadOnly(): ExecutionContext
     {
         return new RoutingExecutionContext(
@@ -852,6 +860,7 @@ final class RoutingExecutionContext extends ExecutionContext
             $this->routing,
             $this->pinnedConnection(),
             true,
+            $this->connection,
         );
     }
 }
@@ -1173,9 +1182,10 @@ function routingContext(RoutingConfig $routing, ?MiddlewareChain $middleware = n
  *
  *   - **C2 named-DB tx pin**: it acquires the tx's OWNED connection from the WRITER pool of the target
  *     connection (`$connection` name, or the default) — so a named-DB transaction runs ENTIRELY on that
- *     ONE pinned writer `\PDO`. The active-tx pin STILL wins over routing (the base ctx resolves the
- *     pinned connection FIRST in `connectionFor`), so every statement in the body — read or write, any
- *     `intent.db` — runs on that ONE connection (Phase B ownership is NOT broken).
+ *     ONE pinned writer `\PDO`. The active-tx pin comes FIRST in `connectionFor`, so every UNNAMED
+ *     in-body statement — read or write — runs on that ONE connection, and so does one naming THAT
+ *     connection. One naming a DIFFERENT database is REJECTED ({@see assertTxDbAgrees()}): a transaction
+ *     cannot span two databases, so running it on this one would be the wrong database, silently (#217).
  *   - **C1 writer-sticky mark**: on a SUCCESSFUL commit it `mark()`s the {@see WriterStickyClock}, so
  *     reads issued AFTER the tx (within `writerStickyDuration`) route to the writer pool
  *     (read-your-writes). A `rollbackOnly` (dry-run) tx committed NOTHING ⇒ it does NOT arm stickiness.

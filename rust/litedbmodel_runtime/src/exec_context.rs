@@ -458,8 +458,9 @@ impl<'a, 't> ExecutionContext<'a, 't> {
 
     /// Derive a ctx whose TRANSACTIONS open on the NAMED connection `name` (Phase C-2 multi-DB):
     /// [`ExecutionContext::tx_driver`] then checks the tx's owned connection out of THAT connection's
-    /// WRITER pool, and the pin makes every statement in the body run on it. `None` clears the name (the
-    /// default connection). The derived ctx shares everything else — driver, middleware, routing, pin,
+    /// WRITER pool, and the pin makes every statement in the body that belongs to that database run on it
+    /// (one naming a DIFFERENT database is rejected — a transaction cannot span two). `None` clears the
+    /// name (the default connection). The derived ctx shares everything else — driver, middleware, routing, pin,
     /// writer/read-only markers.
     ///
     /// This is the channel a transaction's target rides on, because a transaction has no statement to

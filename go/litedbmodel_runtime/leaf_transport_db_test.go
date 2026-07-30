@@ -660,3 +660,52 @@ func TestExecuteSQL_NamedDBOnANonRoutedContextIsLoudInsideATransactionToo(t *tes
 		t.Fatalf("tx: %v", err)
 	}
 }
+
+// #217 (2nd remand) — the READ-ONLY / WRITER DERIVATION of a tx-scoped ctx must carry the transaction's
+// connection NAME. Such a derivation keeps the PIN, so dropping the name leaves a ctx that still resolves
+// the transaction's connection while claiming to be on another database: a statement naming the tx's OWN
+// database gets a FALSE LOUD, and one naming the other database RUNS on the pinned connection. php was
+// the language that dropped it; go carries it at [ExecutionContext.WithReadOnly] / [WithWriter] — this
+// pins that, because the R1 gates only used the ctx the tx boundary hands the body DIRECTLY.
+//
+// Driven through the central seam ([Execute]), which is where ConnectionFor is called.
+func TestNamedDBAgreementSurvivesTheReadOnlyAndWriterDerivations(t *testing.T) {
+	ctx, done := namedDBPools(t)
+	defer done()
+	const sql = "SELECT id, name FROM named_users ORDER BY id"
+
+	_, err := WithTransaction(ctx.WithConnectionName("B"), func(txCtx *ExecutionContext) (struct{}, error) {
+		for _, d := range []struct {
+			what string
+			ctx  *ExecutionContext
+		}{
+			{"the tx ctx itself", txCtx},
+			{"WithReadOnly()", txCtx.WithReadOnly()},
+			{"WithWriter()", txCtx.WithWriter()},
+			{"WithReadOnly().WithWriter()", txCtx.WithReadOnly().WithWriter()},
+		} {
+			// NO FALSE LOUD: the tx's OWN database still runs, on the pinned connection. The rows are
+			// unforgeable — named_users exists in NO other registered db.
+			rows, err := Execute(d.ctx, sql, nil, StatementIntent{DB: "B"})
+			if err != nil {
+				t.Fatalf("%s: the tx's own db must NOT be falsely rejected: %v", d.what, err)
+			}
+			if len(rows) != 2 {
+				t.Fatalf("%s: got %d rows, want B's 2", d.what, len(rows))
+			}
+			// An UNNAMED statement runs too (the ordinary in-body statement).
+			if _, err := Execute(d.ctx, sql, nil, ReadIntent()); err != nil {
+				t.Fatalf("%s: an unnamed in-body statement must run: %v", d.what, err)
+			}
+			// …and a DIFFERENT database is still LOUD (it would otherwise run on B's pinned conn).
+			if _, err := Execute(d.ctx, sql, nil, StatementIntent{DB: DefaultConnection}); err == nil ||
+				!strings.Contains(err.Error(), "transaction opened on 'B'") {
+				t.Fatalf("%s: a different db must stay rejected, got %v", d.what, err)
+			}
+		}
+		return struct{}{}, nil
+	})
+	if err != nil {
+		t.Fatalf("named tx: %v", err)
+	}
+}

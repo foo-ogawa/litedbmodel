@@ -150,8 +150,9 @@ class DriverConnection(Connection):
 
 class _TxConnectionAdapter(Connection):
     """A :class:`Connection` view over a tx's OWNED :class:`TxConnection` handle. The seam resolves
-    this (via ``connection_for``) for every statement inside a tx, so all of them run on the SAME
-    owned connection. Concurrent transactions each hold a DISTINCT handle over a DISTINCT pooled
+    this (via ``connection_for``) for every statement inside a tx that belongs to the tx's own database —
+    an unnamed one, or one naming that database — so all of THOSE run on the SAME owned connection (one
+    naming another database is rejected instead). Concurrent transactions each hold a DISTINCT handle over a DISTINCT pooled
     connection, so their writes never cross-talk — the isolation the removed driver-global ``_writer``
     slot violated.
     """

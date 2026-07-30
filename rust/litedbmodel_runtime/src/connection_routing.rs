@@ -286,7 +286,10 @@ pub fn assert_tx_db_agrees(db: Option<&str>, tx_db: Option<&str>) -> Result<(), 
         policy: "fail".into(),
         sqlite_code: None,
         message: format!(
-            "scp connection routing: a statement names connection '{want}', but it is executing inside a              transaction opened on '{open}' — a transaction is ONE connection on ONE database, so the two              cannot both be honored. Open the transaction on '{want}', or issue the statement outside it."
+            "scp connection routing: a statement names connection '{want}', but it is executing \
+             inside a transaction opened on '{open}' — a transaction is ONE connection on ONE \
+             database, so the two cannot both be honored. Open the transaction on '{want}', or \
+             issue the statement outside it."
         ),
     })
 }

@@ -383,8 +383,9 @@ func (c *ExecutionContext) InWriterScope() bool { return c.writerScope }
 
 // WithConnectionName derives a ctx whose TRANSACTIONS open on the NAMED connection `name` (Phase C-2
 // multi-DB): [ExecutionContext.acquireTxConnection] then checks the tx's owned connection out of THAT
-// registry pair's WRITER pool, so the whole BEGIN…COMMIT — and every statement in the body, which
-// resolves the pin — runs on that database. "" ⇒ the default connection; a no-op shape change on the
+// registry pair's WRITER pool, so the whole BEGIN…COMMIT — and every statement in the body that
+// belongs to that database, which resolves the pin — runs on it. A statement naming a DIFFERENT database
+// is rejected ([namedDBDisagreesWithTx]): a transaction cannot span two. "" ⇒ the default connection; a no-op shape change on the
 // single-db path (routing nil). Reads/writes OUTSIDE a transaction still name their DB per statement
 // ([StatementIntent.DB]) — this answers the one question a statement intent cannot reach, because a
 // transaction is opened by the boundary, not by a statement. Shares the primary db + middleware + Go

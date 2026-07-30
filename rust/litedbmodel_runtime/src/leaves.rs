@@ -129,7 +129,8 @@ pub fn with_ambient_transaction<R>(
     let mut rolled_back_for: Option<BehaviorError> = None;
     let outcome = exec_context::with_transaction_decided(ctx, |tx_ctx| {
         // The tx-scoped ctx is the ambient: `connection_for` resolves its pinned owned connection
-        // (STEP 1) for every statement the body issues through `execute_sql`.
+        // (STEP 1) for every statement the body issues through `execute_sql` that belongs to the tx's own
+        // database — one naming a DIFFERENT database is rejected rather than run on the pin.
         Ok(match with_ambient_context(tx_ctx, body) {
             Ok(r) => TxDecision::Commit(Ok(r)),
             Err(e) => {
@@ -1870,6 +1871,85 @@ mod tests {
             );
             // …and the ordinary unnamed statement still runs on the pin.
             stmt(WireValue::Null).map(|_| ())
+        })
+        .unwrap();
+    }
+
+    // #217 (2nd remand) — the READ-ONLY / WRITER DERIVATION of a tx-scoped ctx must carry the
+    // transaction's connection NAME. Such a derivation keeps the PIN, so dropping the name leaves a ctx
+    // that still resolves the transaction's connection while claiming to be on another database: a
+    // statement naming the tx's OWN database gets a FALSE LOUD, and one naming the other database RUNS on
+    // the pinned connection. php was the language that dropped it; rust carries it in `with_read_only` /
+    // `with_writer` — this pins that, because the R1 gates only used the ctx the tx boundary hands the
+    // body DIRECTLY. Driven through the central seam, which is where `connection_for` is called.
+    #[test]
+    fn named_db_agreement_survives_the_read_only_and_writer_derivations() {
+        use crate::connection_routing::test_support::{recording_stub, SeamLog};
+        use crate::connection_routing::{
+            ConnectionRegistry, ReaderWriterPools, RoutingConfig, StickyOptions, WriterStickyClock,
+        };
+        use crate::exec_context::{execute, StatementIntent, TxDecision};
+        use std::sync::{Arc, Mutex};
+
+        let log: SeamLog = Arc::new(Mutex::new(Vec::new()));
+        let routing = RoutingConfig {
+            registry: ConnectionRegistry::from_default(ReaderWriterPools::single(recording_stub(
+                "A", &log,
+            )))
+            .add("B", ReaderWriterPools::single(recording_stub("B", &log)))
+            .build()
+            .unwrap(),
+            sticky: WriterStickyClock::new(StickyOptions {
+                use_writer_after_transaction: false,
+                ..Default::default()
+            }),
+        };
+        let base = exec_context::for_routing(&routing).unwrap();
+        let on_b = base.with_connection_name(Some("B"));
+        exec_context::with_transaction_decided(&on_b, |tx_ctx| {
+            let ro = tx_ctx.with_read_only();
+            let wr = tx_ctx.with_writer();
+            let both = ro.with_writer();
+            for (what, ctx) in [
+                ("the tx ctx itself", tx_ctx),
+                ("with_read_only()", &ro),
+                ("with_writer()", &wr),
+                ("with_read_only().with_writer()", &both),
+            ] {
+                // NO FALSE LOUD: the tx's OWN database still runs on the pinned connection, and so does an
+                // UNNAMED statement (the ordinary in-body one).
+                for intent in [
+                    StatementIntent {
+                        write: false,
+                        db: Some("B".to_string()),
+                    },
+                    StatementIntent::read(),
+                ] {
+                    assert!(
+                        execute(ctx, "SELECT 1", &[], &intent).is_ok(),
+                        "{what}: a statement of the tx's own db must NOT be rejected"
+                    );
+                }
+                // …and a DIFFERENT database is still LOUD (it would otherwise run on B's pinned conn).
+                let e = match execute(
+                    ctx,
+                    "SELECT 1",
+                    &[],
+                    &StatementIntent {
+                        write: false,
+                        db: Some("default".to_string()),
+                    },
+                ) {
+                    Err(e) => e,
+                    Ok(_) => panic!("{what}: a different db must stay rejected"),
+                };
+                assert!(
+                    e.message.contains("transaction opened on 'B'"),
+                    "{what}: {}",
+                    e.message
+                );
+            }
+            Ok(TxDecision::Commit(()))
         })
         .unwrap();
     }

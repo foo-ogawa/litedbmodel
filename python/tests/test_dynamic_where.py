@@ -29,10 +29,12 @@ from litedbmodel_runtime.driver import SqliteDriver
 from litedbmodel_runtime.exec_context import (
     ExecutionContext,
     MiddlewareChain,
+    StatementIntent,
     as_context,
     commit,
     with_transaction_decided,
 )
+from litedbmodel_runtime.exec_context import execute as seam_execute
 from litedbmodel_runtime.leaves import make_handlers
 
 CTX = {"nodeId": "n0", "component": "executeSQL"}
@@ -534,3 +536,30 @@ def test_named_db_on_a_non_routed_context_is_loud_inside_a_transaction_too():
         return commit(None)
 
     with_transaction_decided(ctx, body)
+
+
+def test_named_db_agreement_survives_the_read_only_derivation():
+    """#217 (2nd remand) — the READ-ONLY DERIVATION of a tx-scoped ctx must carry the transaction's
+    connection NAME.
+
+    Such a derivation keeps the PIN, so dropping the name leaves a ctx that still resolves the
+    transaction's connection while claiming to be on another database: a statement naming the tx's OWN
+    database gets a FALSE LOUD, and one naming the other database RUNS on the pinned connection. php was
+    the language that dropped it; python carries it in ``with_read_only`` — this pins that, because the R1
+    gates only used the ctx the tx boundary hands the body DIRECTLY. Driven through the central seam, which
+    is where ``connection_for`` is called."""
+    ctx, _log = _named_db_ctx()
+    sql = "SELECT id, name FROM named_users ORDER BY id"
+
+    def body(tx_ctx):
+        for what, c in [("the tx ctx itself", tx_ctx), ("with_read_only()", tx_ctx.with_read_only())]:
+            # NO FALSE LOUD: the tx's OWN database still runs on the pinned connection — the rows are
+            # unforgeable (`named_users` exists in NO other registered db) — and so does an UNNAMED one.
+            assert len(seam_execute(c, sql, [], StatementIntent(False, "B"))) == 2, what
+            assert len(seam_execute(c, sql, [], StatementIntent(False, None))) == 2, what
+            # …and a DIFFERENT database is still LOUD (it would otherwise run on B's pinned conn).
+            with pytest.raises(ValueError, match="transaction opened on 'B'"):
+                seam_execute(c, sql, [], StatementIntent(False, "default"))
+        return commit(None)
+
+    with_transaction_decided(ctx.with_connection_name("B"), body)

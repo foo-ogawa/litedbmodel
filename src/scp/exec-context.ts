@@ -403,8 +403,9 @@ const asyncCtxStore = new AsyncLocalStorage<PinnedTx>();
  * A pooled async {@link AsyncExecutionContext}. Outside a transaction, `connectionFor` acquires a
  * fresh pooled connection per statement (the existing read fan-out model — each concurrent sibling
  * on its own connection). Inside a transaction, {@link withTransactionAsync} pins ONE acquired
- * connection into the ALS store; `connectionFor` returns THAT for every statement in the body, so
- * the whole tx runs on one owned connection — isolated from concurrent transactions.
+ * connection into the ALS store; `connectionFor` returns THAT for every statement in the body that
+ * belongs to the tx's own database (an unnamed one, or one naming that database — one naming ANOTHER is
+ * rejected), so the whole tx runs on one owned connection — isolated from concurrent transactions.
  *
  * NB: outside a tx, `connectionFor` returns a **per-statement** owned connection wrapper that
  * acquires-runs-releases; the read walker issues one statement per `executeAsync`, matching the

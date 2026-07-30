@@ -15,13 +15,16 @@ use LiteDbModel\Runtime\PdoPool;
 use LiteDbModel\Runtime\ReaderWriterPools;
 use LiteDbModel\Runtime\RoutingConfig;
 use LiteDbModel\Runtime\RoutingExecutionContext;
+use LiteDbModel\Runtime\StatementIntent;
 use LiteDbModel\Runtime\WriterStickyClock;
 use PHPUnit\Framework\TestCase;
 
 use function LiteDbModel\Runtime\createMiddleware;
+use function LiteDbModel\Runtime\execute;
 use function LiteDbModel\Runtime\currentContext;
 use function LiteDbModel\Runtime\routedTransaction;
 use function LiteDbModel\Runtime\transaction;
+use function LiteDbModel\Runtime\withWriter;
 use function LiteDbModel\Runtime\use_;
 use function LiteDbModel\Runtime\withMiddlewareScope;
 
@@ -643,6 +646,97 @@ final class DynamicWhereTest extends TestCase
             // …and the ordinary unnamed statement still runs on the pin.
             self::assertSame([], $handler($ports(null), $at)['ok']);
         }, null, 'sqlite');
+    }
+
+    /**
+     * #217 (2nd remand) — the READ-ONLY / withWriter DERIVATION of a tx-scoped ctx must carry the
+     * transaction's connection NAME.
+     *
+     * `withReadOnly()` keeps the PIN but used to drop the name, so a tx-scoped ctx derived through it
+     * still resolved B's pinned connection while claiming to be on the default: a statement naming the
+     * tx's OWN database got a FALSE LOUD, and one naming the DEFAULT ran on B — both halves of #217
+     * reopened, on a path production reaches through {@see \LiteDbModel\Runtime\withWriter()}. php was
+     * the only language that dropped it (go `exec_context.go:367,378`, python `exec_context.py:322`, rust
+     * `exec_context.rs:510,529` all carry it; TS keeps the name in the ALS pin, which derivations cannot
+     * touch). The R1 gates missed it because they used the ctx `routedTransaction` hands the body
+     * DIRECTLY and never derived from it — so this pins the DERIVED ctx, in all five languages.
+     */
+    public function testTheReadOnlyDerivationOfATxCtxKeepsTheConnectionName(): void
+    {
+        $open = static function (array $seed): PdoDriver {
+            $pdo = new \PDO('sqlite::memory:', null, null, [\PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION]);
+            foreach ($seed as $sql) {
+                $pdo->exec($sql);
+            }
+            return new PdoDriver($pdo);
+        };
+        $a = $open(['CREATE TABLE only_in_a (id INTEGER PRIMARY KEY)']);
+        $b = $open([
+            'CREATE TABLE named_users (id INTEGER PRIMARY KEY, name TEXT)',
+            "INSERT INTO named_users VALUES (1,'Ada'),(2,'Bob')",
+        ]);
+        $log = new \ArrayObject();
+        $routing = new RoutingConfig(
+            ConnectionRegistry::fromDefault(ReaderWriterPools::single(new RecordingPdoPool('A', $a, $log)))
+                ->add('B', ReaderWriterPools::single(new RecordingPdoPool('B', $b, $log)))
+                ->build(),
+            new WriterStickyClock(useWriterAfterTransaction: false),
+        );
+        $at = ['nodeId' => 'n0', 'component' => 'executeSQL'];
+        $read = static fn (ExecutionContext $ctx, ?string $db): array =>
+            Leaves::makeHandlers($ctx, 'sqlite')['executeSQL']([
+                'sql' => 'SELECT id, name FROM named_users ORDER BY id',
+                'params' => [],
+                'opts' => (object) ['db' => $db, 'write' => null, 'whereDynamic' => null, 'guard' => null],
+            ], $at);
+        $failure = static function (callable $fn): string {
+            try {
+                $fn();
+            } catch (\Throwable $e) {
+                return $e->getMessage();
+            }
+            return '';
+        };
+
+        $ctx = new RoutingExecutionContext($a, new MiddlewareChain(), $routing);
+        routedTransaction($ctx, function () use ($read, $failure): void {
+            $tx = currentContext();
+            self::assertInstanceOf(RoutingExecutionContext::class, $tx);
+            self::assertSame('B', $tx->connectionName(), 'the tx ctx names the db it opened on');
+
+            // The DERIVED read-only ctx keeps the pin AND the name.
+            $ro = $tx->withReadOnly();
+            self::assertInstanceOf(RoutingExecutionContext::class, $ro);
+            self::assertTrue($ro->inTransaction(), 'the derivation keeps the pin');
+            // The BEHAVIOUR first, because that is the defect. Driven through the SEAM, not the leaf: the
+            // leaf resolves the AMBIENT ctx ({@see Leaves} `$active = currentContext() ?? $ctx`), so a
+            // DERIVED ctx handed to it would be shadowed by the ambient tx ctx and prove nothing.
+            $sql = 'SELECT id, name FROM named_users ORDER BY id';
+            // NO FALSE LOUD: the tx's own database still runs, on the pinned connection.
+            self::assertCount(2, execute($ro, $sql, [], new StatementIntent(false, 'B')),
+                'the tx\'s own db must NOT be falsely rejected on the DERIVED ctx');
+            self::assertCount(2, execute($ro, $sql, [], new StatementIntent(false, null)));
+            // …and a DIFFERENT database is still LOUD (it used to RUN, on B's pinned conn).
+            self::assertStringContainsString(
+                "transaction opened on 'B'",
+                $failure(static fn () => execute($ro, $sql, [], new StatementIntent(false, 'default'))),
+                'a different db must still be rejected on the DERIVED ctx',
+            );
+            // …and the mechanism that makes both true.
+            self::assertSame('B', $ro->connectionName(), 'the derivation must keep the NAME too');
+
+            // The production entry: withWriter() derives exactly that read-only ctx as the ambient.
+            withWriter(function () use ($read, $failure): void {
+                $amb = currentContext();
+                self::assertInstanceOf(RoutingExecutionContext::class, $amb);
+                self::assertSame('B', $amb->connectionName(), 'withWriter must not lose the name either');
+                self::assertCount(2, $read($amb, 'B')['ok']);
+                self::assertStringContainsString(
+                    "transaction opened on 'B'",
+                    $failure(static fn () => $read($amb, 'default')),
+                );
+            }, $tx);
+        }, null, 'sqlite', 'B');
     }
 }
 

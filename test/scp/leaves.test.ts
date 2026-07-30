@@ -25,7 +25,7 @@ import {
   type Rows,
   type RunInfo,
 } from '../../src/scp/exec-context';
-import { ConnectionRegistry, WriterStickyClock } from '../../src/scp/connection-routing';
+import { ConnectionRegistry, WriterStickyClock, withWriter } from '../../src/scp/connection-routing';
 import { createMiddleware, use, withMiddlewareScope } from '../../src/scp/middleware';
 
 interface Call { kind: 'execute' | 'executeSafe' | 'run'; sql: string; params: unknown[] }
@@ -598,4 +598,46 @@ test('#217 R2 — a NON-ROUTED context rejects a named statement identically ins
     );
     expect(executeSQL({ sql: 'SELECT id, name FROM users', params: [], write: null, db: null }, leaf).length).toBe(2);
   }
+});
+
+test('#217 — the writer/read-only SCOPE inside a named tx keeps the agreement (TS carries the name on the ALS pin)', async () => {
+  // The 5-language twin of the php/go/rust/python "derivation keeps the name" gates. php dropped the tx's
+  // connection name when DERIVING a read-only ctx (its `withReadOnly()`), which kept the PIN — so the tx's
+  // OWN database got a FALSE LOUD and the other one RAN on the pinned connection. TS cannot lose it the
+  // same way, because the name rides on the ALS pin rather than on the ctx object and `withWriter` /
+  // `withReadOnly` are ALS scopes that do not re-derive it — this pins exactly that, so a future change to
+  // where the name lives cannot silently reintroduce php's defect here.
+  const served: string[] = [];
+  const poolFor = (label: string): AsyncConnectionPool => ({
+    async acquire(): Promise<AsyncConnection> {
+      served.push(label);
+      return {
+        execute: () => Promise.resolve([{ who: label }] as Rows),
+        run: () => Promise.resolve({ changes: 1, lastInsertRowid: 0 } as RunInfo),
+      };
+    },
+    release: () => Promise.resolve(),
+  });
+  const a = poolFor('A');
+  const b = poolFor('B');
+  const execAsync = new PooledAsyncContext({
+    registry: new ConnectionRegistry(new Map([['default', { reader: a, writer: a }], ['B', { reader: b, writer: b }]])),
+    sticky: new WriterStickyClock({ useWriterAfterTransaction: false }),
+  });
+  const handler = leafHandlersAsync({ execAsync, dialect: 'postgres' }).executeSQL;
+  const at = { nodeId: 'n0', component: 'executeSQL' };
+  const call = (db: string | null): Promise<{ ok?: Value }> =>
+    handler({ sql: 'SELECT 1', params: [], opts: { db, write: null, whereDynamic: null, guard: null } } as unknown as Record<string, Value>, at) as Promise<{ ok?: Value }>;
+
+  await withTransactionAsync(execAsync, async () => {
+    // Inside a withWriter scope (which also enters the read-only scope — the two derivations php split):
+    // the tx's OWN database still runs on the pin, an unnamed statement does too, and the OTHER database
+    // stays LOUD. `withWriter` cannot even divert the pool here — the pin wins first.
+    await withWriter(async () => {
+      expect((await call('B')).ok).toEqual([{ who: 'B' }]);
+      expect((await call(null)).ok).toEqual([{ who: 'B' }]);
+      await expect(call('default')).rejects.toThrow(/names connection 'default'.*transaction opened on 'B'/s);
+    });
+  }, {}, 'postgres', undefined, 'B');
+  expect(served).toEqual(['B']); // ONE acquire for the whole tx — the scope did not check out a second
 });
