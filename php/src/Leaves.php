@@ -44,46 +44,6 @@ namespace LiteDbModel\Runtime;
 final class Leaves
 {
     /**
-     * The SQL keywords that may follow a WHERE clause — a dynamic WHERE splices in BEFORE the first
-     * of them, at exactly the position a bounded WHERE occupies.
-     */
-    private const WHERE_TAIL_RE = '/\s+(GROUP BY|ORDER BY|LIMIT|OFFSET|FOR UPDATE|RETURNING)\b/i';
-
-    /**
-     * The WHERE keyword itself, matched the SAME way a tail keyword is, so the five language ports
-     * share one lexical rule. A statement that carries it already has a (bounded) WHERE, which a
-     * dynamic clause CONTINUES instead of opening a second one.
-     */
-    private const WHERE_RE = '/\s+WHERE\b/i';
-
-    /**
-     * Where a dynamic WHERE clause joins `$baseSql` (port of leaves.ts `whereSplice`) — the ONE scan
-     * {@see effectiveStatement()} makes, and everything it needs to place both the text and the values:
-     *
-     *  - `at`      — the end of the statement's WHERE region: before the first tail keyword, or the end
-     *                of the statement. The exact position a bounded WHERE occupies.
-     *  - `keyword` — how the clause joins: ` AND ` when the statement already carries a WHERE (its
-     *                BOUNDED predicates, lowered at emit — CLAUDE.md §2), ` WHERE ` when it carries none.
-     *  - `tail`    — how many base params bind AFTER the clause. Every `?` past `at` is a page-tail
-     *                bound count (`LIMIT ?` / `OFFSET ?`) — the only placeholders the emitted SELECT
-     *                carries after the WHERE — so the surviving fragments' params bind before exactly
-     *                that many of the base params, which is the position their own `?`s occupy in the
-     *                final statement. It counts a SUBSTRING's placeholders and every placeholder binds
-     *                one param, so it never exceeds `count($params)` for a statement that can be bound
-     *                at all.
-     *
-     * @return array{0: int, 1: string, 2: int}
-     */
-    private static function whereSplice(string $baseSql): array
-    {
-        $at = preg_match(self::WHERE_TAIL_RE, $baseSql, $m, PREG_OFFSET_CAPTURE) === 1
-            ? (int) $m[0][1]
-            : strlen($baseSql);
-        $keyword = preg_match(self::WHERE_RE, substr($baseSql, 0, $at)) === 1 ? ' AND ' : ' WHERE ';
-        return [$at, $keyword, substr_count(substr($baseSql, $at), '?')];
-    }
-
-    /**
      * The six `at` labels the fail-closed field read names — one per leaf payload (`executeSQL` /
      * `pluck` / `group`), plus the control record, the dynamic-WHERE plan and one of its fragments.
      */
@@ -173,9 +133,14 @@ final class Leaves
      * per-CALL, so the FINAL statement can only be determined here, at execution time — which is why the
      * placeholder render runs AFTER this. bc carries each fragment's SKIP decision as DATA: a skipped
      * fragment is PRESENT with `skipped` true (never omitted), so assembly DROPS the `skipped`
-     * fragments; the survivors join with ` AND `, the clause CONTINUES the bounded WHERE the emitter
-     * already lowered (or opens one when there is none), and their params bind at the slot their `?`s
-     * occupy: after the base params the clause follows, before the page tail's.
+     * fragments; the survivors join with ` AND ` and the three pieces already in hand are CONCATENATED —
+     * the statement's HEAD (the `sql` port when a plan is present), the clause, the plan's `tail` — with
+     * the params in the same order: the head's, the survivors', the tail's.
+     *
+     * Nothing is LOCATED here: the emitter's SELECT builder is what put the WHERE in the statement, so
+     * `lead` / `tail` / `tailParams` arrive on the plan. A scan of the finished statement took a NESTED
+     * statement's tail keyword for the outer one's (#198) and counted a QUOTED `?` the placeholder render
+     * skips (#202).
      *
      * @param array<string, mixed> $ports
      * @return array{0: string, 1: list<mixed>}
@@ -195,7 +160,9 @@ final class Leaves
         // full, so a missing or mistyped field is an ABI break and NOT a default: without `skipped` the
         // statement applies a predicate the call SKIPPED, without `sql` the predicate is erased
         // entirely, and without `params` a value binds where none belongs — each silently returning
-        // DIFFERENT ROWS (#209). The go / rust transports unbox the same three fields the same way.
+        // DIFFERENT ROWS (#209). The go / rust transports unbox the same three fields the same way. The
+        // plan's own three fields are read the same way: a defaulted `lead` opens a second WHERE (or
+        // continues an absent one) and a defaulted tail DROPS the ORDER BY and the page.
         foreach (self::required($plan, 'frags', self::PLAN, 'list') as $frag) {
             $frag = self::typed($frag, self::FRAG, 'record');
             $skipped = self::required($frag, 'skipped', self::FRAG, 'bool');
@@ -209,14 +176,12 @@ final class Leaves
                 $whereParams[] = $p;
             }
         }
-        if ($clause === '') {
-            return [$sql, $params];
-        }
-        [$at, $keyword, $tail] = self::whereSplice($sql);
-        $bind = count($params) - $tail;
+        $lead = self::required($plan, 'lead', self::PLAN, 'string');
+        $tail = self::required($plan, 'tail', self::PLAN, 'string');
+        $tailParams = array_values(self::required($plan, 'tailParams', self::PLAN, 'list'));
         return [
-            substr($sql, 0, $at) . $keyword . $clause . substr($sql, $at),
-            array_merge(array_slice($params, 0, $bind), $whereParams, array_slice($params, $bind)),
+            $sql . ($clause === '' ? '' : " {$lead} {$clause}") . $tail,
+            array_merge($params, $whereParams, $tailParams),
         ];
     }
 

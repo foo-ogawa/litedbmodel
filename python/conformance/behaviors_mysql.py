@@ -4,17 +4,17 @@
 # native dict literal and handed to the EXISTING runtime core (run_behavior) —
 # no execution logic is generated. Handlers are ALWAYS injected at the boundary
 # (IR + {effects,config,hooks}); they are never generated.
-# irFingerprint: fnv1a64:eb29aa8c79609e35
+# irFingerprint: fnv1a64:b8c9c0788ce9893c
 from behavior_contracts import SPEC_VERSIONS, ProvenanceError, load_compiled_ir, run_behavior
 
 # Spec versions baked at generation time (fail-closed constant comparison at load).
 EXPECTED_SPEC_VERSIONS = {"behavior": 6, "expression": 2, "plan": 1}
 
 # FNV-1a 64 fingerprint of the source portable IR (canonical_json discipline, #208).
-IR_FINGERPRINT = "fnv1a64:eb29aa8c79609e35"
+IR_FINGERPRINT = "fnv1a64:b8c9c0788ce9893c"
 
 # Component names exposed by bind(), in IR declaration order.
-COMPONENT_NAMES = ("posts", "postsTop", "page", "postsByIds", "feed", "pagedFeed", "usersWithPosts", "postsWithAuthor", "usersWithCappedPosts", "usersWithUncappedPosts", "usersWithTopPosts", "createPost", "renamePost", "removePost", "createPostReturning", "renamePostReturning", "removePostReturning", "restatusPostsReturning", "removePostsByAuthorReturning", "typedRows", "createTags", "removeTags", "createTagsReturning", "relabelTagsReturning", "removeTagsReturning")
+COMPONENT_NAMES = ("posts", "postsTop", "page", "postsByIds", "feed", "pagedFeed", "optionalOnlyFeed", "quotedOrderFeed", "quotedWhereOrderFeed", "viewFeed", "usersWithPosts", "postsWithAuthor", "usersWithCappedPosts", "usersWithUncappedPosts", "usersWithTopPosts", "createPost", "renamePost", "removePost", "createPostReturning", "renamePostReturning", "removePostReturning", "restatusPostsReturning", "removePostsByAuthorReturning", "typedRows", "createTags", "removeTags", "createTagsReturning", "relabelTagsReturning", "removeTagsReturning")
 
 # The portable component-graph IR *document*, embedded as a native dict literal (no JSON parse at
 # runtime). It carries no provenance token — the load-time load_compiled_ir() below verifies the baked
@@ -428,6 +428,11 @@ IR_DOC = {
                               "sql": "string"
                             }
                           }
+                        },
+                        "lead": "string",
+                        "tail": "string",
+                        "tailParams": {
+                          "arr": "value"
                         }
                       }
                     }
@@ -513,6 +518,11 @@ IR_DOC = {
                           }
                         }
                       ]
+                    },
+                    "lead": "AND",
+                    "tail": " ORDER BY id ASC",
+                    "tailParams": {
+                      "arr": []
                     }
                   }
                 },
@@ -528,7 +538,7 @@ IR_DOC = {
                 }
               ]
             },
-            "sql": "SELECT id, author_id, title, status FROM conf_posts WHERE author_id = ? ORDER BY id ASC"
+            "sql": "SELECT id, author_id, title, status FROM conf_posts WHERE author_id = ?"
           }
         }
       ],
@@ -641,6 +651,11 @@ IR_DOC = {
                               "sql": "string"
                             }
                           }
+                        },
+                        "lead": "string",
+                        "tail": "string",
+                        "tailParams": {
+                          "arr": "value"
                         }
                       }
                     }
@@ -726,6 +741,22 @@ IR_DOC = {
                           }
                         }
                       ]
+                    },
+                    "lead": "AND",
+                    "tail": " ORDER BY id ASC LIMIT ? OFFSET ?",
+                    "tailParams": {
+                      "arr": [
+                        {
+                          "ref": [
+                            "limit"
+                          ]
+                        },
+                        {
+                          "ref": [
+                            "offset"
+                          ]
+                        }
+                      ]
                     }
                   }
                 },
@@ -738,20 +769,10 @@ IR_DOC = {
                   "ref": [
                     "authorId"
                   ]
-                },
-                {
-                  "ref": [
-                    "limit"
-                  ]
-                },
-                {
-                  "ref": [
-                    "offset"
-                  ]
                 }
               ]
             },
-            "sql": "SELECT id, author_id, title, status FROM conf_posts WHERE author_id = ? ORDER BY id ASC LIMIT ? OFFSET ?"
+            "sql": "SELECT id, author_id, title, status FROM conf_posts WHERE author_id = ?"
           }
         }
       ],
@@ -808,6 +829,782 @@ IR_DOC = {
             }
           },
           "name": "PagedFeedRow"
+        }
+      }
+    },
+    {
+      "body": [
+        {
+          "component": "executeSQL",
+          "id": "n0",
+          "outType": {
+            "arr": {
+              "name": "OptionalOnlyFeedRow",
+              "obj": {
+                "author_id": {
+                  "opt": "float"
+                },
+                "id": {
+                  "opt": "float"
+                },
+                "status": {
+                  "opt": "string"
+                }
+              }
+            }
+          },
+          "portSchemas": {
+            "opts": {
+              "elemType": {
+                "name": "ExecOptions",
+                "obj": {
+                  "db": {
+                    "opt": "string"
+                  },
+                  "guard": {
+                    "opt": {
+                      "name": "CapGuard",
+                      "obj": {
+                        "limit": "int",
+                        "model": {
+                          "opt": "string"
+                        },
+                        "relation": "string"
+                      }
+                    }
+                  },
+                  "whereDynamic": {
+                    "opt": {
+                      "name": "DynamicWherePlan",
+                      "obj": {
+                        "frags": {
+                          "arr": {
+                            "name": "DynamicWhereFrag",
+                            "obj": {
+                              "params": {
+                                "arr": {
+                                  "opt": "value"
+                                }
+                              },
+                              "skipped": "bool",
+                              "sql": "string"
+                            }
+                          }
+                        },
+                        "lead": "string",
+                        "tail": "string",
+                        "tailParams": {
+                          "arr": "value"
+                        }
+                      }
+                    }
+                  },
+                  "write": {
+                    "opt": {
+                      "name": "WriteMode",
+                      "obj": {
+                        "returning": "bool"
+                      }
+                    }
+                  }
+                }
+              },
+              "required": False,
+              "type": "object"
+            },
+            "params": {
+              "elemType": "value",
+              "required": True,
+              "type": "array"
+            },
+            "sql": {
+              "required": True,
+              "type": "string"
+            }
+          },
+          "ports": {
+            "opts": {
+              "obj": {
+                "db": None,
+                "guard": None,
+                "whereDynamic": {
+                  "obj": {
+                    "frags": {
+                      "arr": [
+                        {
+                          "obj": {
+                            "params": {
+                              "arr": [
+                                {
+                                  "ref": [
+                                    "authorId"
+                                  ]
+                                }
+                              ]
+                            },
+                            "skipped": {
+                              "eq": [
+                                {
+                                  "ref": [
+                                    "authorId"
+                                  ]
+                                },
+                                None
+                              ]
+                            },
+                            "sql": "author_id = ?"
+                          }
+                        },
+                        {
+                          "obj": {
+                            "params": {
+                              "arr": [
+                                {
+                                  "ref": [
+                                    "status"
+                                  ]
+                                }
+                              ]
+                            },
+                            "skipped": {
+                              "eq": [
+                                {
+                                  "ref": [
+                                    "status"
+                                  ]
+                                },
+                                None
+                              ]
+                            },
+                            "sql": "status = ?"
+                          }
+                        }
+                      ]
+                    },
+                    "lead": "WHERE",
+                    "tail": " ORDER BY id ASC",
+                    "tailParams": {
+                      "arr": []
+                    }
+                  }
+                },
+                "write": None
+              }
+            },
+            "params": {
+              "arr": []
+            },
+            "sql": "SELECT id, author_id, status FROM conf_posts"
+          }
+        }
+      ],
+      "inputPorts": {
+        "authorId": {
+          "required": False,
+          "type": "int"
+        },
+        "status": {
+          "required": False,
+          "type": "string"
+        }
+      },
+      "name": "optionalOnlyFeed",
+      "output": {
+        "ref": [
+          "n0"
+        ]
+      },
+      "plan": {
+        "concurrency": 16,
+        "groups": [
+          [
+            0
+          ]
+        ]
+      },
+      "outputType": {
+        "arr": {
+          "obj": {
+            "author_id": {
+              "opt": "float"
+            },
+            "id": {
+              "opt": "float"
+            },
+            "status": {
+              "opt": "string"
+            }
+          },
+          "name": "OptionalOnlyFeedRow"
+        }
+      }
+    },
+    {
+      "body": [
+        {
+          "component": "executeSQL",
+          "id": "n0",
+          "outType": {
+            "arr": {
+              "name": "QuotedOrderFeedRow",
+              "obj": {
+                "author_id": {
+                  "opt": "float"
+                },
+                "id": {
+                  "opt": "float"
+                },
+                "status": {
+                  "opt": "string"
+                },
+                "title": {
+                  "opt": "string"
+                }
+              }
+            }
+          },
+          "portSchemas": {
+            "opts": {
+              "elemType": {
+                "name": "ExecOptions",
+                "obj": {
+                  "db": {
+                    "opt": "string"
+                  },
+                  "guard": {
+                    "opt": {
+                      "name": "CapGuard",
+                      "obj": {
+                        "limit": "int",
+                        "model": {
+                          "opt": "string"
+                        },
+                        "relation": "string"
+                      }
+                    }
+                  },
+                  "whereDynamic": {
+                    "opt": {
+                      "name": "DynamicWherePlan",
+                      "obj": {
+                        "frags": {
+                          "arr": {
+                            "name": "DynamicWhereFrag",
+                            "obj": {
+                              "params": {
+                                "arr": {
+                                  "opt": "value"
+                                }
+                              },
+                              "skipped": "bool",
+                              "sql": "string"
+                            }
+                          }
+                        },
+                        "lead": "string",
+                        "tail": "string",
+                        "tailParams": {
+                          "arr": "value"
+                        }
+                      }
+                    }
+                  },
+                  "write": {
+                    "opt": {
+                      "name": "WriteMode",
+                      "obj": {
+                        "returning": "bool"
+                      }
+                    }
+                  }
+                }
+              },
+              "required": False,
+              "type": "object"
+            },
+            "params": {
+              "elemType": "value",
+              "required": True,
+              "type": "array"
+            },
+            "sql": {
+              "required": True,
+              "type": "string"
+            }
+          },
+          "ports": {
+            "opts": {
+              "obj": {
+                "db": None,
+                "guard": None,
+                "whereDynamic": {
+                  "obj": {
+                    "frags": {
+                      "arr": [
+                        {
+                          "obj": {
+                            "params": {
+                              "arr": [
+                                {
+                                  "ref": [
+                                    "minId"
+                                  ]
+                                }
+                              ]
+                            },
+                            "skipped": {
+                              "eq": [
+                                {
+                                  "ref": [
+                                    "minId"
+                                  ]
+                                },
+                                None
+                              ]
+                            },
+                            "sql": "id >= ?"
+                          }
+                        }
+                      ]
+                    },
+                    "lead": "AND",
+                    "tail": " ORDER BY CASE WHEN status = '?' THEN 0 ELSE 1 END, id ASC LIMIT ?",
+                    "tailParams": {
+                      "arr": [
+                        {
+                          "ref": [
+                            "limit"
+                          ]
+                        }
+                      ]
+                    }
+                  }
+                },
+                "write": None
+              }
+            },
+            "params": {
+              "arr": [
+                {
+                  "ref": [
+                    "authorId"
+                  ]
+                }
+              ]
+            },
+            "sql": "SELECT id, author_id, status, title FROM conf_posts WHERE author_id = ?"
+          }
+        }
+      ],
+      "inputPorts": {
+        "authorId": {
+          "required": True,
+          "type": "int"
+        },
+        "limit": {
+          "required": True,
+          "type": "int"
+        },
+        "minId": {
+          "required": False,
+          "type": "int"
+        }
+      },
+      "name": "quotedOrderFeed",
+      "output": {
+        "ref": [
+          "n0"
+        ]
+      },
+      "plan": {
+        "concurrency": 16,
+        "groups": [
+          [
+            0
+          ]
+        ]
+      },
+      "outputType": {
+        "arr": {
+          "obj": {
+            "author_id": {
+              "opt": "float"
+            },
+            "id": {
+              "opt": "float"
+            },
+            "status": {
+              "opt": "string"
+            },
+            "title": {
+              "opt": "string"
+            }
+          },
+          "name": "QuotedOrderFeedRow"
+        }
+      }
+    },
+    {
+      "body": [
+        {
+          "component": "executeSQL",
+          "id": "n0",
+          "outType": {
+            "arr": {
+              "name": "QuotedWhereOrderFeedRow",
+              "obj": {
+                "id": {
+                  "opt": "float"
+                },
+                "status": {
+                  "opt": "string"
+                },
+                "title": {
+                  "opt": "string"
+                }
+              }
+            }
+          },
+          "portSchemas": {
+            "opts": {
+              "elemType": {
+                "name": "ExecOptions",
+                "obj": {
+                  "db": {
+                    "opt": "string"
+                  },
+                  "guard": {
+                    "opt": {
+                      "name": "CapGuard",
+                      "obj": {
+                        "limit": "int",
+                        "model": {
+                          "opt": "string"
+                        },
+                        "relation": "string"
+                      }
+                    }
+                  },
+                  "whereDynamic": {
+                    "opt": {
+                      "name": "DynamicWherePlan",
+                      "obj": {
+                        "frags": {
+                          "arr": {
+                            "name": "DynamicWhereFrag",
+                            "obj": {
+                              "params": {
+                                "arr": {
+                                  "opt": "value"
+                                }
+                              },
+                              "skipped": "bool",
+                              "sql": "string"
+                            }
+                          }
+                        },
+                        "lead": "string",
+                        "tail": "string",
+                        "tailParams": {
+                          "arr": "value"
+                        }
+                      }
+                    }
+                  },
+                  "write": {
+                    "opt": {
+                      "name": "WriteMode",
+                      "obj": {
+                        "returning": "bool"
+                      }
+                    }
+                  }
+                }
+              },
+              "required": False,
+              "type": "object"
+            },
+            "params": {
+              "elemType": "value",
+              "required": True,
+              "type": "array"
+            },
+            "sql": {
+              "required": True,
+              "type": "string"
+            }
+          },
+          "ports": {
+            "opts": {
+              "obj": {
+                "db": None,
+                "guard": None,
+                "whereDynamic": {
+                  "obj": {
+                    "frags": {
+                      "arr": [
+                        {
+                          "obj": {
+                            "params": {
+                              "arr": [
+                                {
+                                  "ref": [
+                                    "status"
+                                  ]
+                                }
+                              ]
+                            },
+                            "skipped": {
+                              "eq": [
+                                {
+                                  "ref": [
+                                    "status"
+                                  ]
+                                },
+                                None
+                              ]
+                            },
+                            "sql": "status = ?"
+                          }
+                        }
+                      ]
+                    },
+                    "lead": "WHERE",
+                    "tail": " ORDER BY CASE WHEN title = ' WHERE ' THEN 0 ELSE 1 END, id ASC",
+                    "tailParams": {
+                      "arr": []
+                    }
+                  }
+                },
+                "write": None
+              }
+            },
+            "params": {
+              "arr": []
+            },
+            "sql": "SELECT id, status, title FROM conf_posts"
+          }
+        }
+      ],
+      "inputPorts": {
+        "status": {
+          "required": False,
+          "type": "string"
+        }
+      },
+      "name": "quotedWhereOrderFeed",
+      "output": {
+        "ref": [
+          "n0"
+        ]
+      },
+      "plan": {
+        "concurrency": 16,
+        "groups": [
+          [
+            0
+          ]
+        ]
+      },
+      "outputType": {
+        "arr": {
+          "obj": {
+            "id": {
+              "opt": "float"
+            },
+            "status": {
+              "opt": "string"
+            },
+            "title": {
+              "opt": "string"
+            }
+          },
+          "name": "QuotedWhereOrderFeedRow"
+        }
+      }
+    },
+    {
+      "body": [
+        {
+          "component": "executeSQL",
+          "id": "n0",
+          "outType": {
+            "arr": {
+              "name": "ViewFeedRow",
+              "obj": {
+                "author_id": {
+                  "opt": "float"
+                },
+                "id": {
+                  "opt": "float"
+                },
+                "status": {
+                  "opt": "string"
+                },
+                "title": {
+                  "opt": "string"
+                }
+              }
+            }
+          },
+          "portSchemas": {
+            "opts": {
+              "elemType": {
+                "name": "ExecOptions",
+                "obj": {
+                  "db": {
+                    "opt": "string"
+                  },
+                  "guard": {
+                    "opt": {
+                      "name": "CapGuard",
+                      "obj": {
+                        "limit": "int",
+                        "model": {
+                          "opt": "string"
+                        },
+                        "relation": "string"
+                      }
+                    }
+                  },
+                  "whereDynamic": {
+                    "opt": {
+                      "name": "DynamicWherePlan",
+                      "obj": {
+                        "frags": {
+                          "arr": {
+                            "name": "DynamicWhereFrag",
+                            "obj": {
+                              "params": {
+                                "arr": {
+                                  "opt": "value"
+                                }
+                              },
+                              "skipped": "bool",
+                              "sql": "string"
+                            }
+                          }
+                        },
+                        "lead": "string",
+                        "tail": "string",
+                        "tailParams": {
+                          "arr": "value"
+                        }
+                      }
+                    }
+                  },
+                  "write": {
+                    "opt": {
+                      "name": "WriteMode",
+                      "obj": {
+                        "returning": "bool"
+                      }
+                    }
+                  }
+                }
+              },
+              "required": False,
+              "type": "object"
+            },
+            "params": {
+              "elemType": "value",
+              "required": True,
+              "type": "array"
+            },
+            "sql": {
+              "required": True,
+              "type": "string"
+            }
+          },
+          "ports": {
+            "opts": {
+              "obj": {
+                "db": None,
+                "guard": None,
+                "whereDynamic": {
+                  "obj": {
+                    "frags": {
+                      "arr": [
+                        {
+                          "obj": {
+                            "params": {
+                              "arr": [
+                                {
+                                  "ref": [
+                                    "status"
+                                  ]
+                                }
+                              ]
+                            },
+                            "skipped": {
+                              "eq": [
+                                {
+                                  "ref": [
+                                    "status"
+                                  ]
+                                },
+                                None
+                              ]
+                            },
+                            "sql": "status = ?"
+                          }
+                        }
+                      ]
+                    },
+                    "lead": "WHERE",
+                    "tail": " ORDER BY id ASC",
+                    "tailParams": {
+                      "arr": []
+                    }
+                  }
+                },
+                "write": None
+              }
+            },
+            "params": {
+              "arr": []
+            },
+            "sql": "WITH derived AS (SELECT id, author_id, title, status, created_at FROM conf_posts WHERE title <> ' WHERE ' ORDER BY id ASC LIMIT 2) SELECT id, author_id, status, title FROM derived"
+          }
+        }
+      ],
+      "inputPorts": {
+        "status": {
+          "required": False,
+          "type": "string"
+        }
+      },
+      "name": "viewFeed",
+      "output": {
+        "ref": [
+          "n0"
+        ]
+      },
+      "plan": {
+        "concurrency": 16,
+        "groups": [
+          [
+            0
+          ]
+        ]
+      },
+      "outputType": {
+        "arr": {
+          "obj": {
+            "author_id": {
+              "opt": "float"
+            },
+            "id": {
+              "opt": "float"
+            },
+            "status": {
+              "opt": "string"
+            },
+            "title": {
+              "opt": "string"
+            }
+          },
+          "name": "ViewFeedRow"
         }
       }
     },
@@ -1584,6 +2381,11 @@ IR_DOC = {
                               "sql": "string"
                             }
                           }
+                        },
+                        "lead": "string",
+                        "tail": "string",
+                        "tailParams": {
+                          "arr": "value"
                         }
                       }
                     }
@@ -2339,6 +3141,11 @@ IR_DOC = {
                               "sql": "string"
                             }
                           }
+                        },
+                        "lead": "string",
+                        "tail": "string",
+                        "tailParams": {
+                          "arr": "value"
                         }
                       }
                     }
@@ -2509,6 +3316,11 @@ IR_DOC = {
                               "sql": "string"
                             }
                           }
+                        },
+                        "lead": "string",
+                        "tail": "string",
+                        "tailParams": {
+                          "arr": "value"
                         }
                       }
                     }
@@ -2652,6 +3464,11 @@ IR_DOC = {
                               "sql": "string"
                             }
                           }
+                        },
+                        "lead": "string",
+                        "tail": "string",
+                        "tailParams": {
+                          "arr": "value"
                         }
                       }
                     }
@@ -2790,6 +3607,11 @@ IR_DOC = {
                               "sql": "string"
                             }
                           }
+                        },
+                        "lead": "string",
+                        "tail": "string",
+                        "tailParams": {
+                          "arr": "value"
                         }
                       }
                     }
@@ -2968,6 +3790,11 @@ IR_DOC = {
                               "sql": "string"
                             }
                           }
+                        },
+                        "lead": "string",
+                        "tail": "string",
+                        "tailParams": {
+                          "arr": "value"
                         }
                       }
                     }
@@ -3119,6 +3946,11 @@ IR_DOC = {
                               "sql": "string"
                             }
                           }
+                        },
+                        "lead": "string",
+                        "tail": "string",
+                        "tailParams": {
+                          "arr": "value"
                         }
                       }
                     }
@@ -3261,6 +4093,11 @@ IR_DOC = {
                               "sql": "string"
                             }
                           }
+                        },
+                        "lead": "string",
+                        "tail": "string",
+                        "tailParams": {
+                          "arr": "value"
                         }
                       }
                     }
@@ -3412,6 +4249,11 @@ IR_DOC = {
                               "sql": "string"
                             }
                           }
+                        },
+                        "lead": "string",
+                        "tail": "string",
+                        "tailParams": {
+                          "arr": "value"
                         }
                       }
                     }
@@ -3628,6 +4470,11 @@ IR_DOC = {
                               "sql": "string"
                             }
                           }
+                        },
+                        "lead": "string",
+                        "tail": "string",
+                        "tailParams": {
+                          "arr": "value"
                         }
                       }
                     }
@@ -3770,6 +4617,11 @@ IR_DOC = {
                               "sql": "string"
                             }
                           }
+                        },
+                        "lead": "string",
+                        "tail": "string",
+                        "tailParams": {
+                          "arr": "value"
                         }
                       }
                     }
@@ -3909,6 +4761,11 @@ IR_DOC = {
                               "sql": "string"
                             }
                           }
+                        },
+                        "lead": "string",
+                        "tail": "string",
+                        "tailParams": {
+                          "arr": "value"
                         }
                       }
                     }
@@ -4059,6 +4916,11 @@ IR_DOC = {
                               "sql": "string"
                             }
                           }
+                        },
+                        "lead": "string",
+                        "tail": "string",
+                        "tailParams": {
+                          "arr": "value"
                         }
                       }
                     }
@@ -4208,6 +5070,11 @@ IR_DOC = {
                               "sql": "string"
                             }
                           }
+                        },
+                        "lead": "string",
+                        "tail": "string",
+                        "tailParams": {
+                          "arr": "value"
                         }
                       }
                     }
@@ -4364,6 +5231,22 @@ class Conformance:
     @staticmethod
     def paged_feed(authorId, minId, status, limit, offset, handlers):
         return run_behavior(IR, handlers, {"authorId": authorId, "minId": minId, "status": status, "limit": limit, "offset": offset}, "pagedFeed")
+
+    @staticmethod
+    def optional_only_feed(authorId, status, handlers):
+        return run_behavior(IR, handlers, {"authorId": authorId, "status": status}, "optionalOnlyFeed")
+
+    @staticmethod
+    def quoted_order_feed(authorId, minId, limit, handlers):
+        return run_behavior(IR, handlers, {"authorId": authorId, "minId": minId, "limit": limit}, "quotedOrderFeed")
+
+    @staticmethod
+    def quoted_where_order_feed(status, handlers):
+        return run_behavior(IR, handlers, {"status": status}, "quotedWhereOrderFeed")
+
+    @staticmethod
+    def view_feed(status, handlers):
+        return run_behavior(IR, handlers, {"status": status}, "viewFeed")
 
     @staticmethod
     def users_with_posts(handlers):

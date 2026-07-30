@@ -195,12 +195,20 @@ fn port_absent(name: &str) -> BehaviorError {
     )
 }
 
-/// Move port `name` OUT of the payload (no clone). Fail-closed: an absent port is a loud failure.
-fn take_port(payload: &mut WireRow, name: &str) -> Result<WireValue, BehaviorError> {
-    match payload.entries.iter().position(|(k, _)| k == name) {
+/// Move field `key` OUT of `payload` (no clone), reporting an absence as `at`. Fail-closed: an absent
+/// port is a loud failure. `at` is what the failure NAMES — the same as `key` for a top-level port, and
+/// the QUALIFIED path (`whereDynamic.tail`) for a field of a nested struct, which would otherwise not
+/// say where the ABI break is.
+fn take_port_as(payload: &mut WireRow, key: &str, at: &str) -> Result<WireValue, BehaviorError> {
+    match payload.entries.iter().position(|(k, _)| k == key) {
         Some(i) => Ok(payload.entries.swap_remove(i).1),
-        None => Err(port_absent(name)),
+        None => Err(port_absent(at)),
     }
+}
+
+/// Move a TOP-LEVEL port OUT of the payload — [`take_port_as`] where the port names itself.
+fn take_port(payload: &mut WireRow, name: &str) -> Result<WireValue, BehaviorError> {
+    take_port_as(payload, name, name)
 }
 
 /// The fail-closed wrong-variant failure. The ACTUAL wire tag is read off the BC-owned probe
@@ -314,26 +322,60 @@ struct DynamicWhereFrag {
     params: Vec<WireValue>,
 }
 
-/// Read the `whereDynamic` field of the control record — a wire row `{frags: [...]}`. A wire NULL ⇒
-/// `None` ⇒ no dynamic WHERE (the statement passes through unchanged): only a read that declares an
-/// OPTIONAL predicate carries a plan (CLAUDE.md §2). An ABSENT KEY is LOUD ([`take_opt_row`]), because a
-/// plan read as "no plan" erases the call's SKIP predicates. PRESENT but wrong-variant, or a malformed
-/// fragment, is equally loud.
-fn port_dynamic_where(opts: &mut WireRow) -> Result<Option<Vec<DynamicWhereFrag>>, BehaviorError> {
-    let row = match take_opt_row(opts, "whereDynamic")? {
+/// The unboxed `whereDynamic` plan: the fragments plus the three facts that FINISH the statement.
+/// `lead` is the connector the first surviving fragment joins the head with (`"AND"` when the head
+/// already ends in a static WHERE, `"WHERE"` when it does not); `tail` is the text that follows the WHERE
+/// region (` ORDER BY …` / the page / the row lock, `""` when the statement ends there) and `tail_params`
+/// its own bound values. They come from the emitter's SELECT builder, which is what put the WHERE in the
+/// statement — so assembly is a CONCATENATION and no scan of the base SQL is involved. Rust twin of the
+/// TS `DynamicWherePlan`.
+struct DynamicWherePlan {
+    frags: Vec<DynamicWhereFrag>,
+    lead: String,
+    tail: String,
+    tail_params: Vec<WireValue>,
+}
+
+/// A `string` field of the dynamic-WHERE plan, named QUALIFIED in any failure.
+fn plan_string(row: &mut WireRow, name: &str) -> Result<String, BehaviorError> {
+    let at = format!("whereDynamic.{name}");
+    match take_port_as(row, name, &at)? {
+        WireValue::Str(s) => Ok(s.into_owned()),
+        other => Err(port_mismatch(&at, "string", &other)),
+    }
+}
+
+/// A `list` field of the dynamic-WHERE plan, named QUALIFIED in any failure.
+fn plan_list(row: &mut WireRow, name: &str) -> Result<Vec<WireValue>, BehaviorError> {
+    let at = format!("whereDynamic.{name}");
+    match take_port_as(row, name, &at)? {
+        WireValue::List(l) => Ok(l.items),
+        other => Err(port_mismatch(&at, "list", &other)),
+    }
+}
+
+/// Read the `whereDynamic` field of the control record — a wire row `{frags, lead, tail, tailParams}`. A
+/// wire NULL ⇒ `None` ⇒ no dynamic WHERE (the statement passes through unchanged): only a read that
+/// declares an OPTIONAL predicate carries a plan (CLAUDE.md §2). An ABSENT KEY is LOUD ([`take_opt_row`]),
+/// because a plan read as "no plan" erases the call's SKIP predicates. PRESENT but wrong-variant, or a
+/// malformed fragment, is equally loud — and so is a missing `lead` / `tail` / `tailParams`: defaulting
+/// `lead` opens a second WHERE (or continues an absent one), and defaulting the tail DROPS the statement's
+/// ORDER BY and page while still returning rows.
+fn port_dynamic_where(opts: &mut WireRow) -> Result<Option<DynamicWherePlan>, BehaviorError> {
+    let mut row = match take_opt_row(opts, "whereDynamic")? {
         None => return Ok(None),
         Some(r) => r,
     };
-    let frags = match row.entries.into_iter().find(|(k, _)| k == "frags") {
-        Some((_, WireValue::List(l))) => l.items,
-        Some((_, other)) => return Err(port_mismatch("whereDynamic.frags", "list", &other)),
-        None => return Err(port_absent("whereDynamic.frags")),
-    };
-    frags
+    let frags = plan_list(&mut row, "frags")?
         .into_iter()
         .map(parse_where_frag)
-        .collect::<Result<Vec<_>, _>>()
-        .map(Some)
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(Some(DynamicWherePlan {
+        frags,
+        lead: plan_string(&mut row, "lead")?,
+        tail: plan_string(&mut row, "tail")?,
+        tail_params: plan_list(&mut row, "tailParams")?,
+    }))
 }
 
 /// Unbox ONE dynamic-WHERE fragment row `{skipped, sql, params}`. Fail-closed: a missing or mistyped
@@ -377,7 +419,7 @@ struct ExecOptions {
     /// fetch, from the compiled op's TARGET model. It reaches the router as [`StatementIntent::db`].
     db: Option<String>,
     write: Option<WriteMode>,
-    where_frags: Option<Vec<DynamicWhereFrag>>,
+    where_plan: Option<DynamicWherePlan>,
     guard: Option<RelationGuard>,
 }
 
@@ -417,7 +459,7 @@ fn port_exec_options(payload: &mut WireRow) -> Result<ExecOptions, BehaviorError
     Ok(ExecOptions {
         db: port_named_db(&mut row)?,
         write: port_write_mode(&mut row)?,
-        where_frags: port_dynamic_where(&mut row)?,
+        where_plan: port_dynamic_where(&mut row)?,
         guard: port_relation_guard(&mut row)?,
     })
 }
@@ -449,118 +491,42 @@ fn port_strings(payload: &mut WireRow, name: &str) -> Result<Vec<String>, Behavi
 
 // ── the DYNAMIC (SKIP) WHERE: assembled by the transport, at execution time (leaves.ts) ─────────────
 
-/// The SQL keywords that may follow a WHERE clause (leaves.ts `WHERE_TAIL_RE`
-/// `/\s+(GROUP BY|ORDER BY|LIMIT|OFFSET|FOR UPDATE|RETURNING)\b/i`). The dynamic WHERE splices in
-/// BEFORE the first of them, so it lands at exactly the position a bounded WHERE occupies.
-const WHERE_TAIL_KEYWORDS: [&str; 6] = [
-    "GROUP BY",
-    "ORDER BY",
-    "LIMIT",
-    "OFFSET",
-    "FOR UPDATE",
-    "RETURNING",
-];
-
-/// An ASCII whitespace byte (RE2 `\s`: space, tab, LF, FF, CR — the corpus SQL uses only these).
-fn is_ascii_ws(c: u8) -> bool {
-    matches!(c, b' ' | b'\t' | b'\n' | 0x0c | b'\r')
-}
-
-/// An ASCII word byte (RE2/JS `\w`: `[A-Za-z0-9_]`).
-fn is_ascii_word(c: u8) -> bool {
-    c.is_ascii_alphanumeric() || c == b'_'
-}
-
-/// The byte index of the leading-whitespace run of the FIRST of `keywords` in `sql`, or `None`. Matches
-/// the TS regexes (`WHERE_TAIL_RE` / `WHERE_RE`) WITHOUT a regex dependency: the leftmost run of one or
-/// more whitespace bytes (`\s+`) immediately followed by one of the keywords (case-insensitive) that
-/// ends on a word boundary (`\b` — end of string or a non-word byte). Scanning `i` ascending returns the
-/// first whitespace of that run (a match starting mid-run would have matched one byte earlier). ONE
-/// scanner for both keyword sets — the tail keywords and WHERE itself are the same lexical rule.
-fn keyword_index(sql: &str, keywords: &[&str]) -> Option<usize> {
-    let b = sql.as_bytes();
-    let mut i = 0;
-    while i < b.len() {
-        if !is_ascii_ws(b[i]) {
-            i += 1;
-            continue;
-        }
-        let mut j = i;
-        while j < b.len() && is_ascii_ws(b[j]) {
-            j += 1;
-        }
-        for kw in keywords {
-            let k = kw.len();
-            if j + k <= b.len()
-                && b[j..j + k].eq_ignore_ascii_case(kw.as_bytes())
-                && (j + k == b.len() || !is_ascii_word(b[j + k]))
-            {
-                return Some(i);
-            }
-        }
-        i += 1;
-    }
-    None
-}
-
-/// Where a dynamic WHERE clause joins `base_sql` (port of leaves.ts `whereSplice`) — the ONE scan
-/// [`assemble_dynamic_where`] makes, and everything it needs to place both the text and the values:
+/// Assemble the effective (sql, params) from the dynamic-WHERE plan (leaves.ts
+/// `assembleDynamicWhere`): DROP the skipped fragments, join the survivors with ` AND `, and CONCATENATE
+/// the three pieces already in hand — the statement's HEAD (which ends at its WHERE region), the
+/// assembled clause, and the plan's tail. The params follow the same order: the head's, the survivors',
+/// the tail's.
 ///
-///  - `.0` — the end of the statement's WHERE region: before the first tail keyword, or the end of the
-///    statement. The exact position a bounded WHERE occupies.
-///  - `.1` — how the clause joins: `" AND "` when the statement already carries a WHERE (its BOUNDED
-///    predicates, lowered at emit — CLAUDE.md §2), `" WHERE "` when it carries none.
-///  - `.2` — how many base params bind AFTER the clause. Every `?` past the splice point is a page-tail
-///    bound count (`LIMIT ?` / `OFFSET ?`) — the only placeholders the emitted SELECT carries after the
-///    WHERE — so the surviving fragments' params bind before exactly that many of the base params, which
-///    is the position their own `?`s occupy in the final statement. It counts a SUBSTRING's placeholders
-///    and every placeholder binds one param, so it never exceeds `params.len()` for a statement that can
-///    be bound at all.
-fn where_splice(base_sql: &str) -> (usize, &'static str, usize) {
-    let at = keyword_index(base_sql, &WHERE_TAIL_KEYWORDS).unwrap_or(base_sql.len());
-    let keyword = if keyword_index(&base_sql[..at], &["WHERE"]).is_some() {
-        " AND "
-    } else {
-        " WHERE "
-    };
-    (at, keyword, base_sql[at..].matches('?').count())
-}
-
-/// Assemble the effective (sql, params) from the dynamic-WHERE fragments (leaves.ts
-/// `assembleDynamicWhere`): DROP the skipped fragments, join the survivors with ` AND `, splice the
-/// clause at the statement's WHERE position — CONTINUING the bounded WHERE the emitter already lowered,
-/// or opening one when there is none — and bind the survivors' params at the slot their `?`s occupy:
-/// after the base params the clause follows, before the page tail's. A plan whose fragments are all
-/// skipped leaves the emitted statement exactly as it was compiled.
+/// Nothing is LOCATED here. The emitter's SELECT builder is what puts the WHERE in the statement, so it
+/// hands the boundary over on the plan (`lead` says whether the head already ends in a WHERE, `tail` /
+/// `tail_params` are what follows it) instead of leaving five transports to rediscover it by scanning: a
+/// scan took a NESTED statement's tail keyword for the outer statement's (#198), counted a QUOTED `?` the
+/// placeholder render skips (#202), and produced a byte offset that is not the same number in five
+/// languages. A plan whose fragments are all skipped leaves the emitted statement exactly as it was
+/// compiled (head + tail, no clause).
 fn assemble_dynamic_where(
-    base_sql: &str,
-    base_params: Vec<WireValue>,
-    frags: Vec<DynamicWhereFrag>,
+    head: &str,
+    head_params: Vec<WireValue>,
+    plan: DynamicWherePlan,
 ) -> (String, Vec<WireValue>) {
     let mut clause = String::new();
-    let mut where_params: Vec<WireValue> = Vec::new();
-    for f in frags {
+    let mut params = head_params;
+    for f in plan.frags {
         if f.skipped {
             continue;
         }
-        if !clause.is_empty() {
+        if clause.is_empty() {
+            clause.push(' ');
+            clause.push_str(&plan.lead);
+            clause.push(' ');
+        } else {
             clause.push_str(" AND ");
         }
         clause.push_str(&f.sql);
-        where_params.extend(f.params);
+        params.extend(f.params);
     }
-    if clause.is_empty() {
-        return (base_sql.to_string(), base_params);
-    }
-    let (at, keyword, tail) = where_splice(base_sql);
-    let mut params = base_params;
-    let page = params.split_off(params.len() - tail);
-    params.extend(where_params);
-    params.extend(page);
-    (
-        format!("{}{keyword}{clause}{}", &base_sql[..at], &base_sql[at..]),
-        params,
-    )
+    params.extend(plan.tail_params);
+    (format!("{head}{clause}{}", plan.tail), params)
 }
 
 // ── execute_sql — the SOLE op-independent SQL transport ────────────────────────────────────────────
@@ -601,13 +567,13 @@ pub fn execute_sql(mut payload: WireRow) -> Result<WireValue, BehaviorError> {
     let params_port = port_list(&mut payload, "params")?;
     let sql_port = port_string(&mut payload, "sql")?;
     let opts = port_exec_options(&mut payload)?;
-    // Assemble the DYNAMIC (SKIP) WHERE FIRST when a plan is present: drop skipped fragments, splice the
-    // survivors before the first tail keyword, and bind their params before the base params — the
-    // effective statement the `?`→`$N` render (`finalize_sql`, below) then operates on. An ABSENT plan
-    // leaves the bounded sql/params untouched (pass-through).
-    let (sql, params) = match opts.where_frags {
+    // Assemble the DYNAMIC (SKIP) WHERE FIRST when a plan is present: drop the skipped fragments and
+    // concatenate the statement's HEAD (which the `sql` port carries when there IS a plan), the surviving
+    // clause and the plan's tail — the effective statement the `?`→`$N` render (`finalize_sql`, below)
+    // then operates on. An ABSENT plan means `sql`/`params` are the WHOLE statement (pass-through).
+    let (sql, params) = match opts.where_plan {
         None => (sql_port, params_port),
-        Some(frags) => assemble_dynamic_where(&sql_port, params_port, frags),
+        Some(plan) => assemble_dynamic_where(&sql_port, params_port, plan),
     };
     let ctx = current_context()?;
     // A composite relation key set (a list whose elements are key TUPLES) binds as ONE JSON
@@ -1073,11 +1039,11 @@ mod tests {
         assert!(read(None).is_ok(), "an uncapped read must not be guarded");
     }
 
-    // The DYNAMIC (SKIP) WHERE assembled by execute_sql (leaves.ts assembleDynamicWhere / whereSplice),
-    // proven end-to-end against a real in-memory sqlite: a surviving fragment splices ` WHERE …` before
-    // the first tail keyword (ORDER BY) — exactly a bounded WHERE's position — its params bind BEFORE
-    // the base params, and a `skipped` fragment is DROPPED (its param never binds). The rust leg of the
-    // five-language SKIP-WHERE parity.
+    // The DYNAMIC (SKIP) WHERE assembled by execute_sql (leaves.ts assembleDynamicWhere), proven
+    // end-to-end against a real in-memory sqlite: a surviving fragment joins the HEAD with the plan's
+    // `lead` (` WHERE …` here) and the plan's ` ORDER BY` tail is appended after it, its params bind
+    // BEFORE the tail params, and a `skipped` fragment is DROPPED (its param never binds). The rust leg
+    // of the five-language SKIP-WHERE parity.
     #[test]
     fn dynamic_where_assembles_and_drops_skipped() {
         use crate::driver::SqliteDriver;
@@ -1093,19 +1059,27 @@ mod tests {
                 ("params", wlist(vec![p])),
             ])
         };
-        // frag 0 survives (`id > 1`); frag 1 is skipped (`v = 'zzz'`) — its param must NEVER bind.
-        let plan = wrow(&[(
-            "frags",
-            wlist(vec![
-                frag(false, "id > ?", WireValue::int(1)),
-                frag(true, "v = ?", WireValue::Str("zzz".into())),
-            ]),
-        )]);
+        // frag 0 survives (`id > 1`); frag 1 is skipped (`v = 'zzz'`) — its param must NEVER bind. The
+        // plan carries what finishes the statement: no static WHERE in the head ⇒ `lead: "WHERE"` (the
+        // survivor OPENS one), and the ` ORDER BY id` tail. The transport concatenates head + clause +
+        // tail — it never scans for the boundary.
+        let plan = wrow(&[
+            (
+                "frags",
+                wlist(vec![
+                    frag(false, "id > ?", WireValue::int(1)),
+                    frag(true, "v = ?", WireValue::Str("zzz".into())),
+                ]),
+            ),
+            ("lead", WireValue::Str("WHERE".into())),
+            ("tail", WireValue::Str(" ORDER BY id".into())),
+            ("tailParams", wlist(vec![])),
+        ]);
         let out = with_ambient_context(&exec_context::for_driver(&d), || {
             execute_sql(payload(vec![
                 opts(WireValue::Null, WireValue::Null, plan, WireValue::Null),
                 ("params", wlist(vec![])),
-                ("sql", WireValue::Str("SELECT id FROM t ORDER BY id".into())),
+                ("sql", WireValue::Str("SELECT id FROM t".into())),
             ]))
         })
         .unwrap();
@@ -1334,6 +1308,101 @@ mod tests {
                     p
                 },
                 "`whereDynamic.frags` is absent",
+            ),
+            // The plan's OWN three fields (#198/#202): without `lead` the clause cannot know whether it
+            // OPENS a WHERE or CONTINUES one, and without `tail`/`tailParams` the statement loses its
+            // ORDER BY and page — a different, unbounded row set that still looks like a successful read.
+            (
+                "plan without lead",
+                {
+                    let mut p = base();
+                    p.push(opts(
+                        WireValue::Null,
+                        WireValue::Null,
+                        wrow(&[
+                            ("frags", wlist(vec![])),
+                            ("tail", WireValue::Str("".into())),
+                            ("tailParams", wlist(vec![])),
+                        ]),
+                        WireValue::Null,
+                    ));
+                    p
+                },
+                "`whereDynamic.lead` is absent",
+            ),
+            (
+                "plan without tail",
+                {
+                    let mut p = base();
+                    p.push(opts(
+                        WireValue::Null,
+                        WireValue::Null,
+                        wrow(&[
+                            ("frags", wlist(vec![])),
+                            ("lead", WireValue::Str("WHERE".into())),
+                            ("tailParams", wlist(vec![])),
+                        ]),
+                        WireValue::Null,
+                    ));
+                    p
+                },
+                "`whereDynamic.tail` is absent",
+            ),
+            (
+                "plan without tailParams",
+                {
+                    let mut p = base();
+                    p.push(opts(
+                        WireValue::Null,
+                        WireValue::Null,
+                        wrow(&[
+                            ("frags", wlist(vec![])),
+                            ("lead", WireValue::Str("WHERE".into())),
+                            ("tail", WireValue::Str("".into())),
+                        ]),
+                        WireValue::Null,
+                    ));
+                    p
+                },
+                "`whereDynamic.tailParams` is absent",
+            ),
+            (
+                "plan lead not a string",
+                {
+                    let mut p = base();
+                    p.push(opts(
+                        WireValue::Null,
+                        WireValue::Null,
+                        wrow(&[
+                            ("frags", wlist(vec![])),
+                            ("lead", WireValue::int(42)),
+                            ("tail", WireValue::Str("".into())),
+                            ("tailParams", wlist(vec![])),
+                        ]),
+                        WireValue::Null,
+                    ));
+                    p
+                },
+                "`whereDynamic.lead` expected a wire string",
+            ),
+            (
+                "plan tailParams not a list",
+                {
+                    let mut p = base();
+                    p.push(opts(
+                        WireValue::Null,
+                        WireValue::Null,
+                        wrow(&[
+                            ("frags", wlist(vec![])),
+                            ("lead", WireValue::Str("WHERE".into())),
+                            ("tail", WireValue::Str("".into())),
+                            ("tailParams", WireValue::Str("z".into())),
+                        ]),
+                        WireValue::Null,
+                    ));
+                    p
+                },
+                "`whereDynamic.tailParams` expected a wire list",
             ),
             (
                 "fragment without skipped",
@@ -1599,21 +1668,29 @@ mod tests {
             "INSERT INTO t (id, v) VALUES (1,'a'), (2,'b'), (3,'c')".to_string(),
         ])
         .unwrap();
-        let plan = wrow(&[(
-            "frags",
-            wlist(vec![wrow(&[
-                ("skipped", WireValue::Bool(false)),
-                ("sql", WireValue::Str("v = ?".into())),
-                ("params", wlist(vec![WireValue::Str("c".into())])),
-            ])]),
-        )]);
+        // With a plan the `sql` port is the statement's HEAD (up to its WHERE region) and the plan
+        // carries what finishes it: `lead: "AND"` (the head ends in a static WHERE), the
+        // ` ORDER BY id LIMIT ?` tail and the tail's own bound count.
+        let plan = wrow(&[
+            (
+                "frags",
+                wlist(vec![wrow(&[
+                    ("skipped", WireValue::Bool(false)),
+                    ("sql", WireValue::Str("v = ?".into())),
+                    ("params", wlist(vec![WireValue::Str("c".into())])),
+                ])]),
+            ),
+            ("lead", WireValue::Str("AND".into())),
+            ("tail", WireValue::Str(" ORDER BY id LIMIT ?".into())),
+            ("tailParams", wlist(vec![WireValue::int(2)])),
+        ]);
         let out = with_ambient_context(&exec_context::for_driver(&d), || {
             execute_sql(payload(vec![
                 opts(WireValue::Null, WireValue::Null, plan, WireValue::Null),
-                ("params", wlist(vec![WireValue::int(1), WireValue::int(2)])),
+                ("params", wlist(vec![WireValue::int(1)])),
                 (
                     "sql",
-                    WireValue::Str("SELECT id FROM t WHERE id > ? ORDER BY id LIMIT ?".into()),
+                    WireValue::Str("SELECT id FROM t WHERE id > ?".into()),
                 ),
             ]))
         })

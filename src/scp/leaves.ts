@@ -109,64 +109,34 @@ interface ExecuteSqlPorts {
 // ── the DYNAMIC (SKIP) WHERE: assembled by the transport, at execution time ────────────────────
 
 /**
- * The SQL keywords that may follow a WHERE clause. The WHERE must be spliced BEFORE the first of
- * them, so a dynamic WHERE lands at exactly the position a bounded one occupies.
- */
-const WHERE_TAIL_RE = /\s+(GROUP BY|ORDER BY|LIMIT|OFFSET|FOR UPDATE|RETURNING)\b/i;
-
-/**
- * The WHERE keyword itself — matched the SAME way {@link WHERE_TAIL_RE} matches a tail keyword, so the
- * five language ports share one lexical rule. A statement that carries it already has a (bounded) WHERE,
- * which a dynamic clause CONTINUES instead of opening a second one.
- */
-const WHERE_RE = /\s+WHERE\b/i;
-
-/**
- * Where a dynamic WHERE clause joins the base statement — the ONE scan {@link assembleDynamicWhere}
- * makes, and everything it needs to place both the text and the values:
- *
- *  - `at`      — the end of the statement's WHERE region: before the first tail keyword, or the end of
- *                the statement. The exact position a bounded WHERE occupies.
- *  - `keyword` — how the clause joins: ` AND ` when the statement already carries a WHERE (its BOUNDED
- *                predicates, lowered at emit — CLAUDE.md §2), ` WHERE ` when it carries none.
- *  - `tail`    — how many base params bind AFTER the clause. Every `?` past `at` is a page-tail bound
- *                count (`LIMIT ?` / `OFFSET ?`) — the only placeholders `compileSelect` emits after the
- *                WHERE — so the surviving fragments' params bind before exactly that many of the base
- *                params, which is the position their own `?`s occupy in the final statement. `tail`
- *                counts a SUBSTRING's placeholders and every placeholder binds one param, so it never
- *                exceeds `params.length` for a statement that can be bound at all.
- */
-function whereSplice(baseSql: string): { at: number; keyword: string; tail: number } {
-  const m = WHERE_TAIL_RE.exec(baseSql);
-  const at = m === null ? baseSql.length : m.index;
-  return {
-    at,
-    keyword: WHERE_RE.test(baseSql.slice(0, at)) ? ' AND ' : ' WHERE ',
-    tail: baseSql.slice(at).split('?').length - 1,
-  };
-}
-
-/**
  * Assemble the effective statement from a DYNAMIC WHERE plan: drop the SKIPPED fragments (`skipped`
- * true — the per-call SKIP decision the emitter carried as DATA), join the survivors with ` AND `,
- * splice the clause at the statement's WHERE position ({@link whereSplice}) — CONTINUING the bounded
- * WHERE the emitter already lowered, or opening one when there is none — and bind the survivors' params
- * at the slot their `?`s occupy: after the base params the clause follows, before the page tail's.
+ * true — the per-call SKIP decision the emitter carried as DATA), join the survivors with ` AND `, and
+ * CONCATENATE the three pieces the plan and the ports already hold — the statement's HEAD (`sql`, which
+ * ends at its WHERE region), the assembled clause, and the plan's `tail`. The params follow the same
+ * three-way order: the head's, the survivors', the tail's.
+ *
+ * There is nothing to LOCATE here. The emitter's SELECT builder is what puts the WHERE in the statement,
+ * so it hands the boundary over ({@link import('./makesql/compile-select').SelectBundle}) instead of
+ * leaving the transport to rediscover it: `plan.lead` says whether the head already ends in a WHERE (so
+ * the clause CONTINUES it) or not (so it OPENS one), and `plan.tailParams` are the tail's own bound
+ * values. That is what removed a lexical scan the five transports each carried a copy of — one that
+ * took a NESTED statement's tail keyword for the outer statement's (#198), counted a QUOTED `?` the
+ * placeholder render skips (#202), and derived a byte offset that is not the same number in five
+ * languages.
  *
  * A SKIP predicate's presence is per-CALL, so the FINAL statement can only be determined here, at
  * execution time — which is also why `?`→`$N` is rendered after this ({@link prepareSql}), never at
  * emit time. Only the ACTUALLY-optional predicates are in the plan (CLAUDE.md §2): a read with none
  * carries no plan at all and never reaches this function, and one whose fragments are all skipped
- * leaves the emitted statement exactly as it was compiled.
+ * leaves the emitted statement exactly as it was compiled (head + tail, no clause).
  */
 export function assembleDynamicWhere(p: { sql: string; params: unknown[]; whereDynamic: DynamicWherePlan }): { sql: string; params: unknown[] } {
-  const frags = dynamicWhereFrags(p.whereDynamic).filter((f) => !f.skipped);
-  if (frags.length === 0) return { sql: p.sql, params: p.params };
-  const { at, keyword, tail } = whereSplice(p.sql);
-  const bind = p.params.length - tail;
+  const plan = dynamicWherePlan(p.whereDynamic);
+  const frags = plan.frags.filter((f) => !f.skipped);
+  const clause = frags.length === 0 ? '' : ` ${plan.lead} ${frags.map((f) => f.sql).join(' AND ')}`;
   return {
-    sql: p.sql.slice(0, at) + keyword + frags.map((f) => f.sql).join(' AND ') + p.sql.slice(at),
-    params: [...p.params.slice(0, bind), ...frags.flatMap((f) => f.params), ...p.params.slice(bind)],
+    sql: p.sql + clause + plan.tail,
+    params: [...p.params, ...frags.flatMap((f) => f.params), ...plan.tailParams],
   };
 }
 
@@ -391,17 +361,24 @@ function requiredField(record: Record<string, unknown>, name: string, at: string
 }
 
 /**
- * Unbox a plan's FRAGMENTS — every field of every fragment, fail-closed ({@link requiredField}), before
- * any of them is used. A fragment is a PRESENT struct like every other, and the generator spells it in
- * full, so a missing field is an ABI break and NOT a default: without `skipped` the statement applies a
- * predicate the call SKIPPED, without `sql` the predicate is erased entirely, and without `params` a
- * value binds where none belongs — each of them silently returning DIFFERENT ROWS (#209). Every
- * fragment is unboxed, skipped ones included, exactly as the go / rust transports unbox them.
+ * Unbox the WHOLE plan — its FRAGMENTS (every field of every one, skipped included) and the three facts
+ * that finish the statement (`lead` / `tail` / `tailParams`) — fail-closed ({@link requiredField}),
+ * before any of them is used.
+ *
+ * A fragment is a PRESENT struct like every other, and the generator spells it in full, so a missing
+ * field is an ABI break and NOT a default: without `skipped` the statement applies a predicate the call
+ * SKIPPED, without `sql` the predicate is erased entirely, and without `params` a value binds where none
+ * belongs — each of them silently returning DIFFERENT ROWS (#209). The plan's own three fields are read
+ * the same way and for the same reason: a defaulted `lead` opens a SECOND WHERE on a statement that has
+ * one (a syntax error) or continues one that does not (also a syntax error), and a defaulted `tail` /
+ * `tailParams` DROPS the statement's ORDER BY and page — returning a different, unbounded row set that
+ * still looks like a successful read.
  */
-function dynamicWhereFrags(plan: DynamicWherePlan): DynamicWhereFrag[] {
-  const frags = requiredField(plan as unknown as Record<string, unknown>, 'frags', `the 'whereDynamic' plan`, 'list') as unknown[];
+const PLAN_AT = `the 'whereDynamic' plan`;
+function dynamicWherePlan(port: DynamicWherePlan): { frags: DynamicWhereFrag[]; lead: string; tail: string; tailParams: unknown[] } {
+  const plan = port as unknown as Record<string, unknown>;
   const at = `a 'whereDynamic' fragment`;
-  return frags.map((frag) => {
+  const frags = (requiredField(plan, 'frags', PLAN_AT, 'list') as unknown[]).map((frag) => {
     const f = portTyped(frag, at, 'record') as Record<string, unknown>;
     return {
       skipped: requiredField(f, 'skipped', at, 'bool') as boolean,
@@ -409,6 +386,12 @@ function dynamicWhereFrags(plan: DynamicWherePlan): DynamicWhereFrag[] {
       params: requiredField(f, 'params', at, 'list') as DynamicWhereFrag['params'],
     };
   });
+  return {
+    frags,
+    lead: requiredField(plan, 'lead', PLAN_AT, 'string') as string,
+    tail: requiredField(plan, 'tail', PLAN_AT, 'string') as string,
+    tailParams: requiredField(plan, 'tailParams', PLAN_AT, 'list') as unknown[],
+  };
 }
 
 /**

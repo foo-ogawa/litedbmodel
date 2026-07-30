@@ -39,9 +39,11 @@ from litedbmodel_runtime.leaves import make_handlers
 
 CTX = {"nodeId": "n0", "component": "executeSQL"}
 
-#: A MIXED read exactly as the emitter now lowers it: the bounded `id > ?` IS the statement's WHERE and
-#: the page count binds after it.
-BASE_SQL = "SELECT id FROM t WHERE id > ? ORDER BY id LIMIT ?"
+#: A MIXED read exactly as the emitter now lowers it: the bounded `id > ?` IS the statement's WHERE, so
+#: the ``sql`` port is the HEAD (up to that WHERE region) and the plan carries what finishes it — the
+#: connector ``AND``, the ` ORDER BY … LIMIT ?` tail and the tail's own bound count.
+BASE_HEAD = "SELECT id FROM t WHERE id > ?"
+BASE_TAIL = {"lead": "AND", "tail": " ORDER BY id LIMIT ?", "tailParams": [2]}
 
 
 @pytest.fixture()
@@ -55,10 +57,11 @@ def execute_sql():
 def read(execute_sql, frags):
     return execute_sql(
         {
-            "sql": BASE_SQL,
-            "params": [1, 2],
-            # Everything besides the statement rides in the ONE ``opts`` control record (#193).
-            "opts": {"db": None, "write": None, "whereDynamic": {"frags": frags}, "guard": None},
+            "sql": BASE_HEAD,
+            "params": [1],
+            # Everything besides the statement rides in the ONE ``opts`` control record (#193). The plan
+            # carries the frags AND the three facts that finish the statement (lead / tail / tailParams).
+            "opts": {"db": None, "write": None, "whereDynamic": {"frags": frags, **BASE_TAIL}, "guard": None},
         },
         CTX,
     )["ok"]
@@ -95,12 +98,19 @@ def test_every_fragment_skipped_runs_the_statement_as_compiled(execute_sql):
 # how absence is spelled). Neither shape came from one, and defaulting or coercing it would silently
 # downgrade a write to a read, drop a relation cap, or erase a SKIP predicate. The five languages must
 # agree; this is the python leg.
+#: A well-formed plan tail with NO static WHERE in the head — the survivor OPENS a WHERE, the
+#: ` ORDER BY id` rides the tail. The head is the bare table read.
+_PLAN_HEAD = "SELECT id, v FROM t"
+_PLAN_TAIL = {"lead": "WHERE", "tail": " ORDER BY id", "tailParams": []}
+
+
 def _plan(frag):
-    """Ports whose control record carries a `whereDynamic` plan of ONE fragment (the #209 cases)."""
+    """Ports whose control record carries a `whereDynamic` plan of ONE fragment (the #209 cases). The
+    plan's own three fields are spelled valid so a fragment-field case reaches the FRAGMENT check."""
     return {
-        "sql": "SELECT id, v FROM t ORDER BY id",
+        "sql": _PLAN_HEAD,
         "params": [],
-        "opts": {"db": None, "write": None, "whereDynamic": {"frags": [frag]}, "guard": None},
+        "opts": {"db": None, "write": None, "whereDynamic": {"frags": [frag], **_PLAN_TAIL}, "guard": None},
     }
 
 
@@ -132,6 +142,12 @@ def test_a_missing_or_mistyped_field_of_a_present_struct_is_loud(execute_sql):
         ),
         # …and the PLAN and its FRAGMENTS, one level further down (#209).
         ({"sql": sql, "params": [], "opts": {"db": None, "write": None, "whereDynamic": {}, "guard": None}}, "'frags' field"),
+        # The plan's OWN three fields (#198/#202): without ``lead`` the clause cannot know whether it OPENS
+        # a WHERE or CONTINUES one, and without ``tail``/``tailParams`` the statement loses its ORDER BY and
+        # page — a different, unbounded row set that still looks like a successful read.
+        ({"sql": sql, "params": [], "opts": {"db": None, "write": None, "whereDynamic": {"frags": [], "tail": "", "tailParams": []}, "guard": None}}, "'lead' field"),
+        ({"sql": sql, "params": [], "opts": {"db": None, "write": None, "whereDynamic": {"frags": [], "lead": "WHERE", "tailParams": []}, "guard": None}}, "'tail' field"),
+        ({"sql": sql, "params": [], "opts": {"db": None, "write": None, "whereDynamic": {"frags": [], "lead": "WHERE", "tail": ""}, "guard": None}}, "'tailParams' field"),
         (_plan({"sql": "v = ?", "params": ["zzz"]}), "'skipped' field"),
         (_plan({"skipped": False, "params": ["zzz"]}), "'sql' field"),
         (_plan({"skipped": False, "sql": "v = ?"}), "'params' field"),
@@ -150,6 +166,8 @@ def test_a_missing_or_mistyped_field_of_a_present_struct_is_loud(execute_sql):
         (_opts(write={"returning": 0}), "'write' mode's 'returning' must be bool"),
         (_opts(whereDynamic="nope"), "control record's 'whereDynamic' must be record|null"),
         (_opts(whereDynamic={"frags": "nope"}), "'whereDynamic' plan's 'frags' must be list"),
+        (_opts(whereDynamic={"frags": [], "lead": 42, "tail": "", "tailParams": []}), "'whereDynamic' plan's 'lead' must be string"),
+        (_opts(whereDynamic={"frags": [], "lead": "WHERE", "tail": "", "tailParams": "z"}), "'whereDynamic' plan's 'tailParams' must be list"),
         (_opts(guard="nope"), "control record's 'guard' must be record|null"),
         (_opts(guard={"limit": "nope", "model": "t", "relation": "things"}), "'guard' cap's 'limit' must be int"),
         (_opts(guard={"limit": 2.5, "model": "t", "relation": "things"}), "'guard' cap's 'limit' must be int"),

@@ -33,7 +33,7 @@ from typing import Any, Dict, List, Mapping, Sequence, Union
 from behavior_contracts import evaluate_expression
 
 from .dialect import Dialect, dialect_for
-from .driver import Driver
+from .driver import Driver, rewrite_unquoted_placeholders
 from .errors import LimitExceededError, SqlFailure, map_sqlite_error
 from .exec_context import (
     READ_INTENT,
@@ -119,23 +119,7 @@ def render_placeholders(sql: str, dialect_name: str) -> str:
     """
     if dialect_name != "postgres":
         return sql
-    out: List[str] = []
-    index = 0
-    in_string = False
-    for ch in sql:
-        if in_string:
-            out.append(ch)
-            if ch == "'":
-                in_string = False
-        elif ch == "'":
-            out.append(ch)
-            in_string = True
-        elif ch == "?":
-            index += 1
-            out.append(f"${index}")
-        else:
-            out.append(ch)
-    return "".join(out)
+    return rewrite_unquoted_placeholders(sql, lambda n: f"${n}")
 
 
 # ── Deferred value-spec evaluation (port of static-bundle.ts evalSpec) ─────────

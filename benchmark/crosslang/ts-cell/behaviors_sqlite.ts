@@ -1656,6 +1656,9 @@ export interface CapGuard {
 
 export interface DynamicWherePlan {
   "frags": DynamicWhereFrag[];
+  "lead": string;
+  "tail": string;
+  "tailParams": Value[];
 }
 
 export interface DynamicWhereFrag {

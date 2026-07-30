@@ -322,6 +322,26 @@ func callEntry(dialect, entry string, in map[string]any) (any, error) {
 			return pg.PagedFeed(i64(in, "authorId"), optI64(in, "minId"), optStr(in, "status"), i64(in, "limit"), i64(in, "offset"))
 		}
 		return my.PagedFeed(i64(in, "authorId"), optI64(in, "minId"), optStr(in, "status"), i64(in, "limit"), i64(in, "offset"))
+	case "optionalOnlyFeed":
+		if postgres {
+			return pg.OptionalOnlyFeed(optI64(in, "authorId"), optStr(in, "status"))
+		}
+		return my.OptionalOnlyFeed(optI64(in, "authorId"), optStr(in, "status"))
+	case "quotedOrderFeed":
+		if postgres {
+			return pg.QuotedOrderFeed(i64(in, "authorId"), optI64(in, "minId"), i64(in, "limit"))
+		}
+		return my.QuotedOrderFeed(i64(in, "authorId"), optI64(in, "minId"), i64(in, "limit"))
+	case "quotedWhereOrderFeed":
+		if postgres {
+			return pg.QuotedWhereOrderFeed(optStr(in, "status"))
+		}
+		return my.QuotedWhereOrderFeed(optStr(in, "status"))
+	case "viewFeed":
+		if postgres {
+			return pg.ViewFeed(optStr(in, "status"))
+		}
+		return my.ViewFeed(optStr(in, "status"))
 	case "usersWithPosts":
 		if postgres {
 			return pg.UsersWithPosts()

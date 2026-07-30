@@ -54,11 +54,21 @@ func writeModeRow(returning bool) wire.WireValue {
 	return wire.WireRowOf([]wire.WireField{{Key: "returning", Val: wire.WireBool(returning)}})
 }
 
-// planPort builds an `opts` record whose `whereDynamic` carries ONE fragment (the #209 cases).
+// planRow builds a `whereDynamic` plan wire row from its frags and the three facts that finish the
+// statement (`lead` / `tail` / `tailParams`), so a test states exactly the shape the emitter now wires.
+func planRow(frags []wire.WireValue, lead, tail string, tailParams []wire.WireValue) wire.WireValue {
+	return wire.WireRowOf([]wire.WireField{
+		{Key: "frags", Val: wire.WireListOf(frags)},
+		{Key: "lead", Val: wire.WireStr(lead)},
+		{Key: "tail", Val: wire.WireStr(tail)},
+		{Key: "tailParams", Val: wire.WireListOf(tailParams)},
+	})
+}
+
+// planPort builds an `opts` record whose `whereDynamic` carries ONE fragment (the #209 cases). The
+// plan's own three fields are spelled valid so the fragment-field cases reach the FRAGMENT check.
 func planPort(frag wire.WireValue) wire.WireField {
-	return optsPort(wire.WireNull(), wire.WireNull(), wire.WireRowOf([]wire.WireField{
-		{Key: "frags", Val: wire.WireListOf([]wire.WireValue{frag})},
-	}), wire.WireNull())
+	return optsPort(wire.WireNull(), wire.WireNull(), planRow([]wire.WireValue{frag}, "WHERE", "", nil), wire.WireNull())
 }
 
 // sqlPayload builds the executeSQL node payload (the ports the covered runner assembles by name). A
@@ -264,12 +274,14 @@ func TestExecuteSQL_DynamicWhereContinuesBoundedWhere(t *testing.T) {
 		{Key: "sql", Val: wire.WireStr("v = ?")},
 		{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireStr("c")})},
 	})
+	// With a plan the `sql` port is the statement's HEAD (up to its WHERE region) and the plan carries
+	// what finishes it: `lead: "AND"` (the head ends in a static WHERE), the ` ORDER BY … LIMIT ?` tail
+	// and the tail's own bound count. The transport concatenates — it never scans for the boundary.
 	out, err := ExecuteSQL(leafPayload(
-		optsPort(wire.WireNull(), wire.WireNull(), wire.WireRowOf([]wire.WireField{
-			{Key: "frags", Val: wire.WireListOf([]wire.WireValue{frag})},
-		}), wire.WireNull()),
-		port("params", wire.WireListOf([]wire.WireValue{wire.WireInt(1), wire.WireInt(2)})),
-		port("sql", wire.WireStr("SELECT id FROM t WHERE id > ? ORDER BY id LIMIT ?")),
+		optsPort(wire.WireNull(), wire.WireNull(),
+			planRow([]wire.WireValue{frag}, "AND", " ORDER BY id LIMIT ?", []wire.WireValue{wire.WireInt(2)}), wire.WireNull()),
+		port("params", wire.WireListOf([]wire.WireValue{wire.WireInt(1)})),
+		port("sql", wire.WireStr("SELECT id FROM t WHERE id > ?")),
 	))
 	if err != nil {
 		t.Fatalf("dynamic read: %v", err)
@@ -348,6 +360,29 @@ func TestExecuteSQL_MissingOrMistypedFieldOfAPresentStructIsLoud(t *testing.T) {
 		// …and the PLAN and its FRAGMENTS, one level further down (#209).
 		{"plan without frags", leafPayload(sqlPort, paramsPort,
 			optsPort(wire.WireNull(), wire.WireNull(), wire.WireRowOf(nil), wire.WireNull())), `port "whereDynamic.frags" is absent`},
+		// The plan's OWN three fields (#198/#202): without `lead` the clause cannot know whether it OPENS
+		// a WHERE or CONTINUES one, and without `tail`/`tailParams` the statement loses its ORDER BY and
+		// page — a different, unbounded row set that still looks like a successful read.
+		{"plan without lead", leafPayload(sqlPort, paramsPort, optsPort(wire.WireNull(), wire.WireNull(),
+			wire.WireRowOf([]wire.WireField{{Key: "frags", Val: wire.WireListOf(nil)},
+				{Key: "tail", Val: wire.WireStr("")}, {Key: "tailParams", Val: wire.WireListOf(nil)}}), wire.WireNull())),
+			`port "whereDynamic.lead" is absent`},
+		{"plan without tail", leafPayload(sqlPort, paramsPort, optsPort(wire.WireNull(), wire.WireNull(),
+			wire.WireRowOf([]wire.WireField{{Key: "frags", Val: wire.WireListOf(nil)},
+				{Key: "lead", Val: wire.WireStr("WHERE")}, {Key: "tailParams", Val: wire.WireListOf(nil)}}), wire.WireNull())),
+			`port "whereDynamic.tail" is absent`},
+		{"plan without tailParams", leafPayload(sqlPort, paramsPort, optsPort(wire.WireNull(), wire.WireNull(),
+			wire.WireRowOf([]wire.WireField{{Key: "frags", Val: wire.WireListOf(nil)},
+				{Key: "lead", Val: wire.WireStr("WHERE")}, {Key: "tail", Val: wire.WireStr("")}}), wire.WireNull())),
+			`port "whereDynamic.tailParams" is absent`},
+		{"plan lead not a string", leafPayload(sqlPort, paramsPort, optsPort(wire.WireNull(), wire.WireNull(),
+			wire.WireRowOf([]wire.WireField{{Key: "frags", Val: wire.WireListOf(nil)}, {Key: "lead", Val: wire.WireInt(42)},
+				{Key: "tail", Val: wire.WireStr("")}, {Key: "tailParams", Val: wire.WireListOf(nil)}}), wire.WireNull())),
+			`port "whereDynamic.lead" expected a wire string`},
+		{"plan tailParams not a list", leafPayload(sqlPort, paramsPort, optsPort(wire.WireNull(), wire.WireNull(),
+			wire.WireRowOf([]wire.WireField{{Key: "frags", Val: wire.WireListOf(nil)}, {Key: "lead", Val: wire.WireStr("WHERE")},
+				{Key: "tail", Val: wire.WireStr("")}, {Key: "tailParams", Val: wire.WireStr("z")}}), wire.WireNull())),
+			`port "whereDynamic.tailParams" expected a wire list`},
 		{"fragment without skipped", leafPayload(sqlPort, paramsPort, planPort(wire.WireRowOf([]wire.WireField{
 			{Key: "sql", Val: wire.WireStr("v = ?")}, {Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireStr("zzz")})},
 		}))), `whereDynamic.frags.skipped`},

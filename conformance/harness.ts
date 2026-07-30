@@ -330,6 +330,69 @@ const ENDPOINTS: EndpointSet = {
     limit: { param: 'limit' },
     offset: { param: 'offset' },
   },
+  /**
+   * SKIP with NO bounded predicate — the statement's HEAD ends with no WHERE at all, so the first
+   * surviving fragment must OPEN one (`lead: 'WHERE'`) instead of continuing one. The three arms (all
+   * skipped / one surviving / both surviving) are the whole `lead` contract on this side; `feed` and
+   * `pagedFeed` above are the other side (a head that ends IN a WHERE ⇒ `lead: 'AND'`).
+   */
+  optionalOnlyFeed: {
+    kind: 'read',
+    model: ConfPost,
+    select: ['id', 'author_id', 'status'],
+    where: [
+      { column: 'author_id', op: 'eq', param: 'authorId', optional: true },
+      { column: 'status', op: 'eq', param: 'status', optional: true },
+    ],
+    order: 'id ASC',
+  },
+  /**
+   * #202 — a QUOTED `?` in the ORDER BY. `order` is a free string on the PUBLIC `ReadEndpoint` type and
+   * reaches the statement's tail verbatim, so a `?` inside a string literal is TEXT that binds nothing.
+   * The tail here holds that quoted `?` AND a real bound `LIMIT ?`, with base params on BOTH sides of
+   * the dynamic clause — every value is an INT, so a mis-bound slot returns a DIFFERENT ROW SET rather
+   * than a type error (PostgreSQL renumbers `?`→`$N` after assembly, so the text looks right either way).
+   */
+  quotedOrderFeed: {
+    kind: 'read',
+    model: ConfPost,
+    select: ['id', 'author_id', 'status', 'title'],
+    where: [
+      { column: 'author_id', op: 'eq', param: 'authorId' },
+      { column: 'id', op: 'ge', param: 'minId', optional: true },
+    ],
+    order: "CASE WHEN status = '?' THEN 0 ELSE 1 END, id ASC",
+    limit: { param: 'limit' },
+  },
+  /**
+   * #202 — a QUOTED ` WHERE ` in the ORDER BY, on a read whose head carries NO WHERE: the clause still
+   * has to OPEN one. The tail is text the transport appends, never text it interprets.
+   */
+  quotedWhereOrderFeed: {
+    kind: 'read',
+    model: ConfPost,
+    select: ['id', 'status', 'title'],
+    where: [{ column: 'status', op: 'eq', param: 'status', optional: true }],
+    order: "CASE WHEN title = ' WHERE ' THEN 0 ELSE 1 END, id ASC",
+  },
+  /**
+   * #198 — SKIP × a QUERY view (#98). The CTE is a statement of its OWN: it carries its own tail
+   * (` ORDER BY … LIMIT 2`), its own WHERE and a QUOTED ` WHERE `. All of it is part of the HEAD, whose
+   * end is the OUTER statement's WHERE region — so the clause lands after `FROM derived` and OPENS a
+   * WHERE. The CTE's `LIMIT 2` is what makes the placement OBSERVABLE: filtering inside the CTE picks
+   * the first 2 MATCHING rows, filtering outside it picks the matching rows among the first 2.
+   */
+  viewFeed: {
+    kind: 'read',
+    model: ConfPost,
+    select: ['id', 'author_id', 'status', 'title'],
+    view: {
+      query:
+        "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE title <> ' WHERE ' ORDER BY id ASC LIMIT 2",
+    },
+    where: [{ column: 'status', op: 'eq', param: 'status', optional: true }],
+    order: 'id ASC',
+  },
   /** Two relation levels off ONE parent read: users → posts → tags (3 queries, N+1-free). */
   usersWithPosts: {
     kind: 'read',
@@ -991,6 +1054,32 @@ const EXEC_CASES: readonly ExecCase[] = [
   { id: 'pagedFeed: bound page + an INT optional cursor (params splice mid-list)', entry: 'pagedFeed', input: { authorId: 1, minId: 2, limit: 1, offset: 0 } },
   { id: 'pagedFeed: same statement, second window (the page still moves under a surviving fragment)', entry: 'pagedFeed', input: { authorId: 1, minId: 2, limit: 1, offset: 1 } },
   { id: 'pagedFeed: bound page + both optional predicates', entry: 'pagedFeed', input: { authorId: 1, minId: 2, status: 'draft', limit: 1, offset: 0 } },
+  // #198 / #202 — the statement's HEAD / TAIL split is DECLARED by the builder that emitted it, so the
+  // transport concatenates instead of scanning the finished text for the WHERE boundary. These four
+  // endpoints are the shapes a scan got wrong, and none of them could be DECLARED before: `order` never
+  // carried a quoted `?` or ` WHERE ` in this corpus, a read with only optional predicates never existed,
+  // and SKIP × a QUERY view was a hard emitter REJECT (its CTE's own tail took the splice position).
+  //
+  // `optionalOnlyFeed` — a head with NO WHERE: the first survivor OPENS one. All three arms.
+  { id: 'optionalOnlyFeed: BOTH optional predicates absent (no WHERE at all)', entry: 'optionalOnlyFeed', input: {} },
+  { id: 'optionalOnlyFeed: one surviving fragment OPENS the WHERE', entry: 'optionalOnlyFeed', input: { authorId: 1 } },
+  { id: 'optionalOnlyFeed: two surviving fragments — the second joins with AND', entry: 'optionalOnlyFeed', input: { authorId: 1, status: 'live' } },
+  // `quotedOrderFeed` — a quoted `?` in the tail beside a real bound `LIMIT ?`, base params on BOTH
+  // sides of the clause. With authorId=1, minId=11, limit=2 the correct binding yields post 11; counting
+  // the tail's `?`s (2 of them, one of which binds nothing) bound `minId` into `author_id` and returned
+  // NOTHING, in the three languages that did not panic on the negative index instead (#199 / #202).
+  { id: 'quotedOrderFeed: quoted `?` in ORDER BY, optional cursor absent', entry: 'quotedOrderFeed', input: { authorId: 1, limit: 2 } },
+  { id: 'quotedOrderFeed: quoted `?` in ORDER BY + a surviving INT cursor', entry: 'quotedOrderFeed', input: { authorId: 1, minId: 11, limit: 2 } },
+  { id: 'quotedOrderFeed: same statement, LIMIT 1 (the page still binds LAST)', entry: 'quotedOrderFeed', input: { authorId: 1, minId: 10, limit: 1 } },
+  // `quotedWhereOrderFeed` — a quoted ` WHERE ` in the tail: still an OPENED WHERE, never a continued one.
+  { id: 'quotedWhereOrderFeed: quoted ` WHERE ` in ORDER BY, fragment skipped', entry: 'quotedWhereOrderFeed', input: {} },
+  { id: 'quotedWhereOrderFeed: quoted ` WHERE ` in ORDER BY, fragment surviving', entry: 'quotedWhereOrderFeed', input: { status: 'live' } },
+  // `viewFeed` — the CTE (own WHERE, own quoted ` WHERE `, own ORDER BY + LIMIT 2) is inside the HEAD.
+  // The CTE yields posts 10 and 11; the clause filters them AFTER it, so `status: 'live'` yields post 10
+  // alone. Splicing inside the CTE would have filtered FIRST and yielded posts 10 and 12.
+  { id: 'viewFeed: SKIP × QUERY view, fragment skipped', entry: 'viewFeed', input: {} },
+  { id: 'viewFeed: SKIP × QUERY view, fragment surviving AFTER the CTE (not inside it)', entry: 'viewFeed', input: { status: 'live' } },
+  { id: 'viewFeed: SKIP × QUERY view, the other status', entry: 'viewFeed', input: { status: 'draft' } },
   {
     id: 'usersWithPosts: two relation levels materialize WITH THEIR FIELDS',
     entry: 'usersWithPosts',

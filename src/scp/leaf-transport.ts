@@ -80,9 +80,35 @@ export interface DynamicWhereFrag {
  * The dynamic-WHERE plan a SKIP read carries (OPTIONAL — a read with no optional predicate omits it): a
  * HOMOGENEOUS fragment list the leaf assembles at run, dropping the `skipped` fragments and continuing
  * the statement's static WHERE with the survivors.
+ *
+ * When a plan is present the statement's `sql`/`params` ports carry only its HEAD — the text up to the
+ * end of its WHERE region — and the plan carries everything needed to finish it. That split comes from
+ * the emitter's own SELECT builder ({@link import('./makesql/compile-select').SelectBundle}), which knows
+ * the boundary because it is the code that puts the WHERE there. The leaf therefore CONCATENATES
+ * (`head` + the survivors + `tail`) and never SCANS: a scan of the finished statement mistakes a nested
+ * statement's tail keyword for the outer one's (#198) and counts a quoted `?` the placeholder render
+ * skips (#202), and a scan-derived byte OFFSET is not even the same number in five languages.
  */
 export interface DynamicWherePlan {
   readonly frags: readonly DynamicWhereFrag[];
+  /**
+   * How the FIRST surviving fragment joins the head: `'AND'` when the head ends in a static WHERE (its
+   * BOUNDED predicates, lowered at emit — CLAUDE.md §2), `'WHERE'` when it carries none. Further
+   * survivors always join with `AND`, which is the leaf's own separator.
+   */
+  readonly lead: string;
+  /**
+   * The statement text that follows the WHERE region — ` GROUP BY …` / ` ORDER BY …` / the page / the
+   * row lock / a raw append tail, `''` when the statement ends at its WHERE. Appended VERBATIM after the
+   * assembled clause.
+   */
+  readonly tail: string;
+  /**
+   * The params `tail`'s own placeholders bind (a bound ` LIMIT ?` then ` OFFSET ?`), which are therefore
+   * the LAST values of the effective statement — after the head's and the survivors'. Carrying them
+   * separately is what removes the `?`-counting arithmetic: there is no position to compute.
+   */
+  readonly tailParams: WireValue[];
 }
 
 /**

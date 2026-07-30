@@ -251,6 +251,42 @@ mod imp {
         status,
         title
     });
+    impl_to_compare!(pg::OptionalOnlyFeedRow {
+        author_id,
+        id,
+        status
+    });
+    impl_to_compare!(my::OptionalOnlyFeedRow {
+        author_id,
+        id,
+        status
+    });
+    impl_to_compare!(pg::QuotedOrderFeedRow {
+        author_id,
+        id,
+        status,
+        title
+    });
+    impl_to_compare!(my::QuotedOrderFeedRow {
+        author_id,
+        id,
+        status,
+        title
+    });
+    impl_to_compare!(pg::QuotedWhereOrderFeedRow { id, status, title });
+    impl_to_compare!(my::QuotedWhereOrderFeedRow { id, status, title });
+    impl_to_compare!(pg::ViewFeedRow {
+        author_id,
+        id,
+        status,
+        title
+    });
+    impl_to_compare!(my::ViewFeedRow {
+        author_id,
+        id,
+        status,
+        title
+    });
     impl_to_compare!(pg::UsersWithPostsRow { id, name, posts });
     impl_to_compare!(my::UsersWithPostsRow { id, name, posts });
     impl_to_compare!(pg::UsersWithPostsRow_posts {
@@ -454,6 +490,42 @@ mod imp {
                     pg::feed(a, s, si).map(|r| r.to_compare())
                 } else {
                     my::feed(a, s, si).map(|r| r.to_compare())
+                }
+            }
+            "optionalOnlyFeed" => {
+                let (a, s) = (in_opt_i64(input, "authorId"), in_opt_str(input, "status"));
+                if pg {
+                    pg::optionalOnlyFeed(a, s).map(|r| r.to_compare())
+                } else {
+                    my::optionalOnlyFeed(a, s).map(|r| r.to_compare())
+                }
+            }
+            "quotedOrderFeed" => {
+                let (a, m, l) = (
+                    in_i64(input, "authorId"),
+                    in_opt_i64(input, "minId"),
+                    in_i64(input, "limit"),
+                );
+                if pg {
+                    pg::quotedOrderFeed(a, m, l).map(|r| r.to_compare())
+                } else {
+                    my::quotedOrderFeed(a, m, l).map(|r| r.to_compare())
+                }
+            }
+            "quotedWhereOrderFeed" => {
+                let s = in_opt_str(input, "status");
+                if pg {
+                    pg::quotedWhereOrderFeed(s).map(|r| r.to_compare())
+                } else {
+                    my::quotedWhereOrderFeed(s).map(|r| r.to_compare())
+                }
+            }
+            "viewFeed" => {
+                let s = in_opt_str(input, "status");
+                if pg {
+                    pg::viewFeed(s).map(|r| r.to_compare())
+                } else {
+                    my::viewFeed(s).map(|r| r.to_compare())
                 }
             }
             "usersWithPosts" => {
