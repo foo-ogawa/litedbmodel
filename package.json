@@ -35,7 +35,7 @@
     "test": "vitest run",
     "test:unit": "vitest run test/unit",
     "test:integration": "TEST_DB_HOST=localhost vitest run test/integration",
-    "parity:capture": "TEST_DB_HOST=localhost TEST_DB_PORT=5433 vitest run test/parity/v1-sql-golden.test.ts",
+    "parity:capture": "PARITY_CAPTURE_WRITE=1 TEST_DB_HOST=localhost TEST_DB_PORT=5433 vitest run test/parity/v1-sql-golden.test.ts",
     "parity:scp": "vitest run test/parity/v2-scp-parity.test.ts",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
