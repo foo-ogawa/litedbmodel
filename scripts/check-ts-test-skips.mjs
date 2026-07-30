@@ -65,11 +65,13 @@
  * THERE, and a test that PASSES anyway never dialled one. 423 tests across the 17 live files, none
  * passing except the 38 in OFFLINE_TESTS.
  *
- * That rule was not writable until #230. `Mysql.test.ts` reported all 28 as PASSED with no MySQL —
+ * #230 stopped this from LYING for `Mysql.test.ts`: it reported all 28 as PASSED with no MySQL —
  * `isMysqlAvailable()` failed and every test then did `if (!mysqlAvailable) return;`, a PASS for a test
  * that executed nothing, indistinguishable in the output from a real run and invisible to a skip budget
- * because it does not skip. Its `beforeAll` now THROWS (fail-closed, as rust's `require_live_db`
- * panics), so those tests report SKIPPED and the file FAILS — a verdict phase 2 can read.
+ * because it does not skip. Its `beforeAll` now THROWS (fail-closed, as rust's `require_live_db` panics),
+ * so those 28 report SKIPPED and no longer PASS without a server. They still do not RUN their bodies
+ * against the dead server, though, so — like every hook-guarded file — phase 2 learns nothing about an
+ * emptied body there (below); it reads a body only where the test's OWN body dials, e.g. Postgres.
  *
  * Not proven, and it falls GREEN: that a leg asserted anything USEFUL about what it read. A body reduced
  * to a bare connect dials, so it satisfies both phases. Nor does phase 2 learn anything about a file
@@ -261,7 +263,12 @@ const list = (names) => names.map((n) => `      ${n}`).join('\n');
 const silent = [...inTree].filter((f) => (reported.get(f) ?? []).length === 0);
 const unglobbed = [...reported.keys()].filter((f) => !inTree.has(f)).sort();
 const liveGone = LIVE_FILES.filter((f) => !inTree.has(f));
-const liveUnlisted = [...inTree].filter(
+/**
+ * A file under test/integration in NEITHER LIVE_FILES nor OFFLINE_FILES. ONE predicate, because it is
+ * one condition: such a file is both unprotected against silent deletion AND unclassified for phase 2,
+ * and stating it twice let two messages drift apart while asking the identical question.
+ */
+const unclassified = [...inTree].filter(
   (f) => f.startsWith('test/integration/') && !LIVE_FILES.includes(f) && !OFFLINE_FILES.includes(f),
 );
 
@@ -302,24 +309,15 @@ if (liveGone.length > 0) {
       `      eighteen still gate on the same SKIP_INTEGRATION_TESTS.`,
   );
 }
-const unclassified = [...inTree].filter(
-  (f) => f.startsWith('test/integration/') && !LIVE_FILES.includes(f) && !OFFLINE_FILES.includes(f),
-);
 if (unclassified.length > 0) {
   problems.push(
-    `${unclassified.length} file(s) under test/integration are in neither LIVE_FILES nor OFFLINE_FILES, so phase 2 does not know whether they may pass without a server:\n` +
+    `${unclassified.length} file(s) under test/integration are in neither LIVE_FILES nor OFFLINE_FILES, so deleting one would be silent AND phase 2 does not know whether it may pass without a server:\n` +
       list(unclassified),
   );
 }
 const offlineGone = OFFLINE_FILES.filter((f) => !inTree.has(f));
 if (offlineGone.length > 0) {
   problems.push(`${offlineGone.length} file(s) listed in OFFLINE_FILES are no longer in the tree — deleted or renamed:\n` + list(offlineGone));
-}
-if (liveUnlisted.length > 0) {
-  problems.push(
-    `${liveUnlisted.length} live-DB test file(s) exist under test/integration but are not in LIVE_FILES, so deleting them would be silent. List them:\n` +
-      list(liveUnlisted),
-  );
 }
 if (results.length === 0) problems.push('vitest reported no tests at all — the suite never ran.');
 exitProblem(run, label, problems);
@@ -331,9 +329,11 @@ exitProblem(run, label, problems);
 // again against a database that is NOT THERE, and a test that PASSES anyway never touched a server —
 // unless it is named in OFFLINE_TESTS, which then must pass.
 //
-// This was not writable until #230: `Mysql.test.ts` reported all 28 as PASSED with no MySQL, because
-// each test opened with `if (!mysqlAvailable) return;`. Its `beforeAll` now throws, so those tests
-// report SKIPPED and the file FAILS, which is a verdict phase 2 can read.
+// #230 removed the FALSE-PASS this used to see: `Mysql.test.ts` reported all 28 as PASSED with no MySQL
+// because each test opened with `if (!mysqlAvailable) return;`. Its `beforeAll` now throws, so those
+// tests report SKIPPED and no longer pass without a server. But a throwing beforeAll makes them SKIP,
+// not run — so phase 2 still cannot tell an emptied body from a real one in Mysql (or any hook-guarded
+// file); it catches that only where the test's OWN body dials, e.g. Postgres. See the green line's SCOPE.
 if (problems.length === 0) {
   const out2 = join(mkdtempSync(join(tmpdir(), 'litedbmodel-vitest-p2-')), 'vitest.json');
   const p2 = mustHaveStarted(
@@ -395,9 +395,13 @@ report(
     `   SKIP_INTEGRATION_TESTS=1 took the live-DB half out of the run, which vitest itself would have called\n` +
     `   \`success: true\`. All ${LIVE_FILES.length} live-DB files listed in LIVE_FILES are still present in the tree.\n` +
     `   The ${LIVE_FILES.length} live-DB files were then run AGAIN against an UNREACHABLE database (${UNREACHABLE.TEST_DB_HOST}:${UNREACHABLE.TEST_DB_PORT}) and NO test\n` +
-    `   passed there except the ${OFFLINE_TESTS.length} named in OFFLINE_TESTS, which were required to — so each really dials a\n` +
-    `   server rather than passing on an empty body or a bail-out that RETURNS (#230).\n` +
-    `   Not proven, and it falls GREEN: that a leg ASSERTED anything useful about what it read, and\n` +
-    `   anything at all about a file whose HOOKS fail without a server — its tests never run, so none of\n` +
-    `   them can pass either way.`,
+    `   passed there except the ${OFFLINE_TESTS.length} named in OFFLINE_TESTS, which were required to — so no live test passes\n` +
+    `   with no server behind it (an emptied body or a bail-out that RETURNS would, #230).\n` +
+    `   SCOPE, and it falls GREEN: phase 2 tells an emptied body from a real one ONLY for a test whose OWN\n` +
+    `   body dials — measured, ~47 of the live tests (Postgres + MultiDB), where an emptied body FLIPS to\n` +
+    `   passed against the dead server and is named. A file that dials in a HOOK (beforeAll/beforeEach) is\n` +
+    `   fail-closed — correct — but its tests then report SKIPPED or hook-FAILED whatever their bodies say,\n` +
+    `   so phase 2 cannot probe an emptied body there. Moving a file's connect out of its hooks is the only\n` +
+    `   thing that would widen this, and is a test-architecture change, not a gate one.\n` +
+    `   Also not proven: that a leg ASSERTED anything useful about what it read.`,
 );
