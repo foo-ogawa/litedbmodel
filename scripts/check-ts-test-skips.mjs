@@ -21,9 +21,10 @@
  *
  *   - the OUTCOMES come from `--reporter=json`, vitest's own machine-readable report: one entry per
  *     test FILE, each with its assertion results and their statuses.
- *   - the FILES come from the tree — `test/**\/*.test.ts`, the same shape as `include` in
- *     vitest.config.ts. Deliberately from the tree and not from the run, because the run cannot
- *     report a file it was never told about, and that is the thing being detected:
+ *   - the FILES come from the TREE, by globbing the pattern `vitest.config.ts` and this share
+ *     (`scripts/test-include.mjs`). Deliberately the filesystem and NOT anything vitest reports — not
+ *     `vitest list`, not its module graph — because a narrowed `include` narrows what vitest would say
+ *     exactly as much as it narrows the run, and the run cannot report a file it was never told about:
  *
  *         a path argument            `vitest run test/unit` — what `test:ci` used to be, leaving
  *                                    test/scp, test/parity and test/integration (1138 tests) out of
@@ -57,7 +58,7 @@
  *   - vitest exiting non-zero for a reason none of the above explains. Unmodelled ⇒ red.
  *
  * Not proven, and it falls GREEN: that a live leg TOUCHED a database. An outcome cannot tell a leg
- * that queried PG from one whose body is empty — both pass. Go's gate re-runs its live legs against an
+ * that queried PG from one whose body is empty — both pass. The go and python gates re-run their live legs against an
  * unreachable database to close that; TypeScript has no equivalent yet.
  */
 import { readFileSync, globSync, mkdtempSync, existsSync } from 'node:fs';
@@ -66,10 +67,16 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { assertGatesOpen, runOwned, mustHaveStarted, exitProblem, report } from './run-gate.mjs';
 import { GATES_ENV } from './livedb-gates.mjs';
+import { TEST_INCLUDE } from './test-include.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
-/** `test.include` in vitest.config.ts. A narrowing THERE leaves this glob unchanged, which is red. */
-const INCLUDE = 'test/**/*.test.ts';
+/**
+ * The suite's file pattern, from the module `vitest.config.ts` reads it from too — so the two cannot
+ * drift — applied HERE to the filesystem rather than to anything vitest says. That is what makes it
+ * independent: a narrowed `include`, a path argument or a `--testNamePattern` narrows vitest's answer
+ * as much as it narrows the run, and leaves this glob unchanged, which is red.
+ */
+const INCLUDE = TEST_INCLUDE;
 
 /**
  * How many vitest tests may skip. ZERO: the only conditional in the suite is
@@ -204,6 +211,6 @@ report(
     `   SKIP_INTEGRATION_TESTS=1 took the live-DB half out of the run, which vitest itself would have called\n` +
     `   \`success: true\`. All ${LIVE_FILES.length} live-DB files listed in LIVE_FILES are still present in the tree.\n` +
     `   Not proven, and it falls GREEN: that a live leg TOUCHED a database. An emptied body passes an\n` +
-    `   outcome check the same way a real query does — go's gate re-runs its legs against an unreachable\n` +
+    `   outcome check the same way a real query does — the go and python gates re-run theirs against an unreachable\n` +
     `   server to close that, and TypeScript has no equivalent yet.`,
 );

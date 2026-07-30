@@ -40,12 +40,17 @@
  *     `<directory>` narrowed in phpunit.xml     a whole subtree stops being a test suite
  *     a class that stops extending TestCase     phpunit collects nothing from it; reflection still
  *                                               sees its `test*` methods
- *     a method renamed off the `test` prefix    invisible to a per-FILE count, because the file's
- *                                               other tests still report
  *
  * The walk is deliberately WIDER than phpunit's own collection rules — every `test*` public method of
  * every class, whether or not the class is a TestCase — so a test phpunit would not collect is RED
  * here rather than silently absent. It errs loud.
+ *
+ * NOT caught, and it falls GREEN: a method renamed OFF the `test` prefix. The walk selects methods by
+ * that same prefix, so both sides go blind together — measured, `testRenderAllFragmentsPresent` →
+ * `renderAllFragmentsPresent` took the run from `152 testcases from 134 declared tests` to `151 … from
+ * 133` with no new problem reported. Enumerating `#[Test]`/`@test` as well (this suite uses neither)
+ * would not change that: a method with neither the prefix nor the attribute is invisible to phpunit
+ * and to reflection alike. python's gate has the identical hole for the same reason.
  *
  * What a source walk structurally CANNOT catch is a test that has been DELETED: it is missing from the
  * walk too. That is what {@link LIVE_TESTS} is for, and only the live-DB legs are listed — a
@@ -71,7 +76,7 @@
  *   - phpunit exiting non-zero for a reason none of the above explains. Unmodelled ⇒ red.
  *
  * Not proven, and it falls GREEN: that a live leg TOUCHED a database. An outcome cannot tell a leg
- * that queried PG from one whose body is empty — both pass. Go's gate re-runs its live legs against an
+ * that queried PG from one whose body is empty — both pass. The go and python gates re-run their live legs against an
  * unreachable database to close that; php has no equivalent yet.
  */
 import { readFileSync, mkdtempSync, existsSync } from 'node:fs';
@@ -298,6 +303,6 @@ report(
     `   and every one of the ${cases.length} testcases was a pass (${skipped.length} skipped, budget ${SKIP_BUDGET}); all ${LIVE_TESTS.length} live-DB legs listed in\n` +
     `   LIVE_TESTS are still present in the tree.\n` +
     `   Not proven, and it falls GREEN: that a live leg TOUCHED a database. An emptied body passes an\n` +
-    `   outcome check the same way a real query does — go's gate re-runs its legs against an unreachable\n` +
+    `   outcome check the same way a real query does — the go and python gates re-run theirs against an unreachable\n` +
     `   server to close that, and php has no equivalent yet.`,
 );

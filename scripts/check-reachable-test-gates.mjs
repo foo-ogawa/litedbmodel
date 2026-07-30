@@ -632,7 +632,7 @@ for (const d of [...declared].sort()) {
 }
 if (!onChange.some((w) => w.commands.some((c) => GATE_LOADER.is(argvOf(c))))) {
   problems.push(
-    `no pull_request/push workflow runs a command that LOADS ${GATES_ENV}, so every gate in it stays unset in CI.\n` +
+    `no pull_request workflow that fires for every change runs a command that LOADS ${GATES_ENV}, so every gate in it stays unset in CI.\n` +
       `      Expected, as a command in a \`run:\` step: ${GATE_LOADER.how}\n` +
       `      (The file's NAME in some other command is not a load — \`rm -f ${GATES_ENV}\` names it too.)`,
   );
