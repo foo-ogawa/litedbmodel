@@ -224,6 +224,22 @@ def test_writer_sticky_clock_expiry_deterministic():
     assert c.is_sticky() is False
 
 
+def test_writer_sticky_armed_at_clock_zero():
+    # t=0 REGRESSION (#218): a mark() when the clock reads 0 MUST arm stickiness, so the read right
+    # after the commit routes to the WRITER (read-your-writes). The old code stored 0 as "never marked"
+    # (a value sentinel) → the commit failed to stick and the read leaked to the reader replica. Revert
+    # _last_write_at to 0 + `== 0` ⇒ both asserts below go RED. Every OTHER sticky test marks at a
+    # non-zero clock, so this t=0 case was previously unproven.
+    reader, writer = _FakePool("reader"), _FakePool("writer")
+    sticky = WriterStickyClock(use_writer_after_transaction=True, writer_sticky_duration=5000, now=lambda: 0)
+    routing = _routing(reader, writer, sticky=sticky)
+    # Before any mark → reader (absence, not sticky), even at t=0.
+    assert resolve_pool(StatementIntent(write=False), routing) is reader
+    # A commit at clock t=0 arms the sticky clock.
+    sticky.mark()
+    assert resolve_pool(StatementIntent(write=False), routing) is writer  # read-your-writes → writer
+
+
 # ── C3: configured_pool session apply/reset (no session leak) — fake conn ────────
 
 

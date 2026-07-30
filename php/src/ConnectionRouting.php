@@ -623,7 +623,13 @@ function withWriter(callable $fn, ?ExecutionContext $ctx = null): mixed
  */
 final class WriterStickyClock
 {
-    private float $lastWriteAt = 0.0;
+    /**
+     * `null` until the first `mark()` — absence, NOT a value sentinel. The injectable clock legitimately
+     * returns 0 (rust's `SystemClock` does right after process start), so encoding "never marked" as the
+     * value `0.0` would mis-classify a `mark()` at clock t=0 as unmarked and leak the read-your-writes
+     * read to the reader replica. Absence must be distinct from the value 0.
+     */
+    private ?float $lastWriteAt = null;
     private readonly bool $enabled;
     private readonly int $stickyDurationMs;
     /** @var callable():float the injectable clock (ms); defaults to a wall clock. */
@@ -653,7 +659,7 @@ final class WriterStickyClock
     /** Is a read currently sticky-to-writer (within `writerStickyDuration` of the last write)? */
     public function isSticky(): bool
     {
-        if (!$this->enabled || $this->lastWriteAt === 0.0) {
+        if (!$this->enabled || $this->lastWriteAt === null) {
             return false;
         }
         return (($this->now)() - $this->lastWriteAt) < $this->stickyDurationMs;
@@ -662,7 +668,7 @@ final class WriterStickyClock
     /** Reset the clock (e.g. between tests / on closeAllPools). */
     public function reset(): void
     {
-        $this->lastWriteAt = 0.0;
+        $this->lastWriteAt = null;
     }
 }
 

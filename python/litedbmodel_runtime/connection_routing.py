@@ -596,7 +596,11 @@ class WriterStickyClock:
         writer_sticky_duration: int = 5000,
         now: Optional[Callable[[], int]] = None,
     ) -> None:
-        self._last_write_at = 0
+        # ``None`` until the first ``mark()`` — absence, NOT a value sentinel. The injectable clock
+        # legitimately returns 0 (rust's SystemClock does right after process start), so encoding
+        # "never marked" as the value 0 would mis-classify a ``mark()`` at clock t=0 as unmarked and
+        # leak the read-your-writes read to the reader replica. Absence must be distinct from value 0.
+        self._last_write_at: Optional[int] = None
         self._enabled = use_writer_after_transaction
         self._sticky_duration_ms = writer_sticky_duration
         # Default clock: monotonic ms (Date.now analogue). An injectable clock makes expiry deterministic.
@@ -609,13 +613,13 @@ class WriterStickyClock:
 
     def is_sticky(self) -> bool:
         """Is a read currently sticky-to-writer (within ``writer_sticky_duration`` of the last write)?"""
-        if not self._enabled or self._last_write_at == 0:
+        if not self._enabled or self._last_write_at is None:
             return False
         return (self._now() - self._last_write_at) < self._sticky_duration_ms
 
     def reset(self) -> None:
         """Reset the clock (e.g. between tests / on :func:`close_all_pools`)."""
-        self._last_write_at = 0
+        self._last_write_at = None
 
 
 # ── The routing config a ctx carries (C1+C2+C3) ────────────────────────────────

@@ -448,9 +448,13 @@ impl Clock for ManualClock {
 ///
 /// `use_writer_after_transaction=false` disables it entirely (`.is_sticky()` always false). A
 /// single-pool deployment (reader === writer) is unaffected by stickiness — the diverted pool is the
-/// SAME `Arc`. Interior-mutable (`AtomicU64`) so the shared ctx (`&self`) can `mark()` it.
+/// SAME `Arc`. Interior-mutable (`Mutex`) so the shared ctx (`&self`) can `mark()` it.
 pub struct WriterStickyClock {
-    last_write_at: std::sync::atomic::AtomicU64,
+    /// `None` until the first `mark()` — absence, NOT a value sentinel. `now_ms()` legitimately returns
+    /// 0 — `SystemClock` (`Instant::elapsed`) does right after process start — so encoding "never
+    /// marked" as the value 0 would mis-classify a `mark()` at clock t=0 as unmarked and leak the
+    /// read-your-writes read to the reader replica. Absence must be distinct from the value 0.
+    last_write_at: std::sync::Mutex<Option<u64>>,
     enabled: bool,
     sticky_duration_ms: u64,
     clock: Arc<dyn Clock>,
@@ -480,7 +484,7 @@ impl WriterStickyClock {
     /// Build from [`StickyOptions`] (mirror the TS `new WriterStickyClock(opts)`).
     pub fn new(opts: StickyOptions) -> Self {
         WriterStickyClock {
-            last_write_at: std::sync::atomic::AtomicU64::new(0),
+            last_write_at: std::sync::Mutex::new(None),
             enabled: opts.use_writer_after_transaction,
             sticky_duration_ms: opts.writer_sticky_duration,
             clock: opts.clock,
@@ -499,8 +503,7 @@ impl WriterStickyClock {
     /// Record that a write/commit just happened (the tx runtime calls this on success).
     pub fn mark(&self) {
         if self.enabled {
-            self.last_write_at
-                .store(self.clock.now_ms(), std::sync::atomic::Ordering::SeqCst);
+            *self.last_write_at.lock().unwrap() = Some(self.clock.now_ms());
         }
     }
 
@@ -509,17 +512,15 @@ impl WriterStickyClock {
         if !self.enabled {
             return false;
         }
-        let last = self.last_write_at.load(std::sync::atomic::Ordering::SeqCst);
-        if last == 0 {
+        let Some(last) = *self.last_write_at.lock().unwrap() else {
             return false;
-        }
+        };
         self.clock.now_ms().saturating_sub(last) < self.sticky_duration_ms
     }
 
     /// Reset the clock (e.g. between tests / on close).
     pub fn reset(&self) {
-        self.last_write_at
-            .store(0, std::sync::atomic::Ordering::SeqCst);
+        *self.last_write_at.lock().unwrap() = None;
     }
 }
 
@@ -1059,6 +1060,46 @@ mod tests {
         let sticky = WriterStickyClock::disabled();
         sticky.mark();
         assert!(!sticky.is_sticky());
+    }
+
+    #[test]
+    fn writer_sticky_armed_at_clock_zero_routes_read_to_writer() {
+        // t=0 REGRESSION (#218): a `mark()` when the clock reads 0 MUST arm stickiness, so the read
+        // right after the commit routes to the WRITER (read-your-writes). `SystemClock`
+        // (`Instant::elapsed`) returns 0 right after process start, so this is a real production case.
+        // The old code stored 0 as "never marked" (a value sentinel) → the commit failed to stick and
+        // the read leaked to the reader replica. Revert `last_write_at` to `AtomicU64` + `last == 0`
+        // ⇒ both asserts below go RED. Every OTHER sticky test marks at a non-zero clock, so this t=0
+        // case was previously unproven.
+        let clock = Arc::new(ManualClock::new(0));
+        let reader = stub("reader");
+        let writer = stub("writer");
+        let reg = ConnectionRegistry::from_default(ReaderWriterPools::split(
+            reader.clone(),
+            writer.clone(),
+        ))
+        .build()
+        .unwrap();
+        let routing = RoutingConfig {
+            registry: reg,
+            sticky: WriterStickyClock::new(StickyOptions {
+                use_writer_after_transaction: true,
+                writer_sticky_duration: 5000,
+                clock: clock.clone(),
+            }),
+        };
+        let cands = [("reader", &reader), ("writer", &writer)];
+        // Before any mark → reader (absence, not sticky), even at t=0.
+        let pre = resolve_pool(&StatementIntent::read(), &routing, false).unwrap();
+        assert_eq!(label_of(pre, &cands), "reader");
+        // A commit at clock t=0 arms the sticky clock.
+        routing.sticky.mark();
+        let post = resolve_pool(&StatementIntent::read(), &routing, false).unwrap();
+        assert_eq!(
+            label_of(post, &cands),
+            "writer",
+            "a read right after a t=0 commit must route to the writer (read-your-writes)"
+        );
     }
 
     #[test]
