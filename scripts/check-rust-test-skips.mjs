@@ -23,8 +23,7 @@
  *   - every PACKAGE in the workspace, not just `litedbmodel_runtime`. The canonical command was
  *     `cargo test -p litedbmodel_runtime --features livedb`, and a `-p` is a narrowing that no static
  *     check of the workflow text could ever call complete: `check-reachable-test-gates.mjs` could
- *     only ask for `cargo test`, which this repository does not run. Now the package set comes from
- *     the manifest, so a member whose tests nothing runs is red rather than invisible.
+ *     only ask for `cargo test`, which this repository does not run.
  *   - every TARGET that carries tests — the lib's unit tests, each `tests/*.rs`, each bin, and the
  *     lib's doc-tests — run ONE AT A TIME. libtest's report says `running N tests` with no mention of
  *     which binary it belongs to (cargo's `Running <path>` line goes to stderr, interleaved), so a
@@ -34,13 +33,23 @@
  *     feature table rather than a literal in a workflow.
  *
  * A target reporting ZERO tests is therefore red unless it is named in {@link EXPECTED_EMPTY}, which
- * is bidirectional: a listed target that grows tests must be removed from the list. That is the check
- * the missing feature runs into.
+ * is bidirectional in both directions: a listed target that grows tests must be removed from the list,
+ * and a listed target that stops being RUN is stale. That is the check the missing feature runs into.
+ *
+ * What `cargo metadata` alone could NOT see is a narrowing of the manifest itself, because that is the
+ * same file. Measured: one line, `[lib] test = false`, and this gate ran 3 targets instead of 5 with
+ * NOTHING said — the lib's 71 unit tests and the doc-tests simply left the set, which on a tree with a
+ * live database is a green run of a suite missing 71 tests; `[lib] doctest = false` did it to `--doc`.
+ * So the set to run is also derived from the TREE, by cargo's own layout rules ({@link requiredUnits}),
+ * which is the independent enumeration the other four run gates have — go walks `go/**\/*_test.go`,
+ * python and php parse every source file, TypeScript globs the tree — and this one did not.
  *
  * It is red when any of the following holds, and prints its green line only when none does:
  *
  *   - a gate `livedb-gates.env` declares is not open in this process — checked before anything runs;
  *   - `cargo metadata` or a `cargo test` could not be started, or was killed by a signal;
+ *   - a unit the TREE requires that the manifest does not report, or a crate under `rust/` that is not
+ *     a workspace member and not named in {@link NOT_A_MEMBER} (nor the reverse of either);
  *   - a target that reported NO `test result:` line: it did not build, or it did not run. A crate that
  *     fails to compile prints its errors to stderr and runs no test, and `0 targets ran` would
  *     otherwise be as green as a clean suite;
@@ -59,11 +68,11 @@
  *   - a `cargo test` exiting non-zero for a reason none of the above explains. Unmodelled ⇒ red.
  *
  * Not proven, and it falls GREEN: that a live leg TOUCHED a database. An outcome cannot tell a leg
- * that queried PG from one whose body is empty — both pass. Go's gate re-runs its live legs against an
+ * that queried PG from one whose body is empty — both pass. The go and python gates re-run their live legs against an
  * unreachable database to close that; rust has no equivalent yet.
  */
-import { readdirSync, readFileSync, statSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { existsSync, globSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { dirname, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { assertGatesOpen, runOwned, mustHaveStarted, exitProblem, report } from './run-gate.mjs';
 import { GATES_ENV, readsAGate } from './livedb-gates.mjs';
@@ -136,12 +145,13 @@ if (metadata.exit !== 0) {
  * One entry per thing to run: the package, the target selector cargo needs to run JUST that target,
  * and whether its sources read a gate.
  *
- * `test: true` is cargo's own flag for "this target is compiled as a test harness", so the set comes
- * from the manifest (including cargo's auto-discovery of `tests/*.rs`) and not from a list here. The
- * lib's doc-tests are a SEPARATE run: `--lib` does not execute them.
+ * `test: true` / `doctest: true` are cargo's own flags for "this target is compiled as a test
+ * harness", so this is what the MANIFEST says there is to run — and the manifest is the same file a
+ * narrowing goes into. It is checked against {@link requiredUnits}, which reads the tree.
  */
+const packages = JSON.parse(metadata.stdout).packages;
 const units = [];
-for (const pkg of JSON.parse(metadata.stdout).packages) {
+for (const pkg of packages) {
   const features = 'livedb' in pkg.features ? ['--features', 'livedb'] : [];
   for (const t of pkg.targets) {
     if (!t.test) continue;
@@ -150,6 +160,83 @@ for (const pkg of JSON.parse(metadata.stdout).packages) {
     const live = sources(tree).some((f) => readsAGate(readFileSync(f, 'utf8')));
     units.push({ pkg: pkg.name, selector, features, live });
     if (t.kind.includes('lib') && t.doctest) units.push({ pkg: pkg.name, selector: ['--doc'], features, live: false });
+  }
+}
+
+/**
+ * Crates under `rust/` that are deliberately NOT workspace members, so no `cargo test` here runs
+ * them. BIDIRECTIONAL: one that becomes a member must be removed from this list.
+ *
+ * The three `orm_bench*` crates are standalone bench consumers, built and run by
+ * `benchmark/crosslang/` on their own; `rust/Cargo.toml` is the workspace manifest itself and has no
+ * `[package]`.
+ */
+const NOT_A_MEMBER = ['rust/Cargo.toml', 'rust/orm_bench/Cargo.toml', 'rust/orm_bench_common/Cargo.toml', 'rust/orm_bench_sdk/Cargo.toml'];
+
+/**
+ * The units cargo's own LAYOUT rules require of a crate directory — read from the TREE, which is the
+ * independent enumeration every other run gate in this repository has and this one did not.
+ *
+ * Deriving the set from `cargo metadata` alone made the manifest both the thing that says what to run
+ * and the thing a narrowing goes into, so a narrowing was invisible. Measured on the version before
+ * this: one line, `[lib] test = false`, and only 3 targets ran — the lib's 71 unit tests and the
+ * doc-tests dropped out of the set with NOTHING said about them, and on a tree with a live database
+ * (where the live legs pass) that is a GREEN run of a suite missing 71 tests. `doctest = false` did
+ * the same to `--doc`. `autotests = false` and a deleted `[[test]]` are the same shape.
+ *
+ * Cargo's rules, so the tree alone decides: `src/lib.rs` is the lib (and its doc-tests), `src/main.rs`
+ * is a bin, every top-level `tests/*.rs` and every `tests/<dir>/main.rs` is an integration test.
+ * `tests/common/mod.rs` is NOT one — a subdirectory without `main.rs` is a module, which is why the
+ * shared `require_live_db` helper lives there.
+ *
+ * A unit the manifest declares that the tree does not predict is NOT a problem — a `[[test]]` at a
+ * custom path still has to run, and it does. Only the reverse direction is a hole.
+ */
+function requiredUnits(crateDir) {
+  const required = [];
+  if (existsSync(join(crateDir, 'src', 'lib.rs'))) required.push('--lib', '--doc');
+  if (existsSync(join(crateDir, 'src', 'main.rs'))) required.push('--bin');
+  const testsDir = join(crateDir, 'tests');
+  if (existsSync(testsDir)) {
+    for (const e of readdirSync(testsDir)) {
+      if (e.endsWith('.rs')) required.push(`--test ${e.slice(0, -3)}`);
+      else if (statSync(join(testsDir, e)).isDirectory() && existsSync(join(testsDir, e, 'main.rs'))) required.push(`--test ${e}`);
+    }
+  }
+  return required;
+}
+
+const problems = [];
+/** Crate directory → the package `cargo metadata` reports for it, for the tree-vs-manifest check. */
+const crates = new Map(packages.map((p) => [dirname(p.manifest_path), p]));
+for (const manifest of globSync('rust/**/Cargo.toml', { cwd: ROOT }).sort()) {
+  const rel = manifest.split(sep).join('/');
+  if (rel.includes('/target/')) continue;
+  const isMember = crates.has(join(ROOT, dirname(rel)));
+  if (!isMember && !NOT_A_MEMBER.includes(rel)) {
+    problems.push(
+      `${rel} is a crate that \`cargo metadata\` does not report as a workspace member, so NO test of it runs here.\n` +
+        `      Add it to \`members\` in rust/Cargo.toml, or to NOT_A_MEMBER in this file with the reason\n` +
+        `      nothing needs to test it.`,
+    );
+  }
+  if (isMember && NOT_A_MEMBER.includes(rel)) {
+    problems.push(`${rel} is listed in NOT_A_MEMBER but IS a workspace member now. Remove it from that list — while it is there, dropping it from \`members\` again would be silent.`);
+  }
+}
+for (const [crateDir, pkg] of crates) {
+  const actual = units.filter((u) => u.pkg === pkg.name).map((u) => u.selector.join(' '));
+  const missing = requiredUnits(crateDir).filter((r) => (r === '--bin' ? !actual.some((a) => a.startsWith('--bin ')) : !actual.includes(r)));
+  if (missing.length > 0) {
+    problems.push(
+      `${missing.length} test unit(s) the TREE requires of ${relative(ROOT, crateDir)} are not in what \`cargo metadata\` reports, so nothing runs them:\n` +
+        missing.map((m) => `      cargo test -p ${pkg.name} ${m}`).join('\n') +
+        `\n\n      cargo's layout says these exist (src/lib.rs is the lib and its doc-tests, src/main.rs a\n` +
+        `      bin, every tests/*.rs an integration test). A \`[lib] test = false\`, a \`doctest = false\`,\n` +
+        `      an \`autotests = false\` or a deleted \`[[test]]\` removes one from the manifest's answer\n` +
+        `      while leaving the tests themselves in the tree — measured, \`[lib] test = false\` alone\n` +
+        `      dropped 71 unit tests from this gate's set in silence.`,
+    );
   }
 }
 
@@ -166,7 +253,6 @@ assertGatesOpen('rust');
 const SUMMARY = /^test result: \w+\. (\d+) passed; (\d+) failed; (\d+) ignored; \d+ measured; (\d+) filtered out/gm;
 const VERDICT = /^test (\S+) \.\.\. (ok|FAILED|ignored)/gm;
 
-const problems = [];
 const ran = [];
 for (const unit of units) {
   const label = `cargo test -p ${unit.pkg} ${unit.selector.join(' ')}`;
@@ -234,6 +320,20 @@ for (const unit of ran) {
   }
 }
 
+// The other half of EXPECTED_EMPTY's bidirectionality: an entry naming a unit that did not RUN is
+// stale, and it was silent. Measured on the version before this: `[lib] doctest = false` removed the
+// `--doc` unit from the set entirely, and the entry excusing its emptiness went on standing while the
+// green line kept saying "the 2 in EXPECTED_EMPTY" — an entry that excuses a target nobody runs.
+const didNotRun = EXPECTED_EMPTY.filter((e) => !ran.some((u) => `${u.pkg} ${u.selector.join(' ')}` === e));
+if (didNotRun.length > 0) {
+  problems.push(
+    `${didNotRun.length} entry/entries in EXPECTED_EMPTY name a unit that did not run at all:\n` +
+      didNotRun.map((e) => `      ${e}`).join('\n') +
+      `\n\n      An entry only means "this target runs and is legitimately empty". If the target is gone,\n` +
+      `      remove the entry; if it stopped being reported, that is the hole above, not an exemption.`,
+  );
+}
+
 // AFTER the per-target analysis, never inside the run loop: `exitProblem` reports an exit code that
 // nothing else explains, and "nothing else" is only known once every target has been read. Called
 // from inside the loop it announced `exited 101 while everything this gate reads reported success`
@@ -261,8 +361,10 @@ if (liveUnlisted.length > 0) {
 const total = ran.reduce((n, u) => n + (u.summaries[0]?.[0] ?? 0), 0);
 report(
   problems,
-  `✅ the live-DB gates ${GATES_ENV} declares were OPEN in this process before cargo test started; each of the\n` +
-    `   ${units.length} test-carrying targets \`cargo metadata\` reports for the ${new Set(units.map((u) => u.pkg)).size} workspace package(s) — lib unit tests,\n` +
+  `✅ the live-DB gates ${GATES_ENV} declares were OPEN in this process before cargo test started; every crate\n` +
+    `   under rust/ is a workspace member or named as deliberately outside it, every test unit cargo's LAYOUT\n` +
+    `   RULES require of each member's tree is one the manifest reports, and each of the ${units.length} test-carrying\n` +
+    `   targets for the ${new Set(units.map((u) => u.pkg)).size} package(s) — lib unit tests,\n` +
     `   every tests/*.rs, every bin and the doc-tests — was run SEPARATELY, with \`--features livedb\` on every\n` +
     `   package that declares it, and every one reported a \`test result:\` line whose counts match the verdict\n` +
     `   lines beside it: ${total} passed, 0 failed, 0 ignored (budget ${IGNORE_BUDGET}), 0 filtered out, and no target ran 0 tests\n` +
@@ -270,6 +372,6 @@ report(
     `   sources read a gate — so the \`#![cfg(feature = "livedb")]\` files were COMPILED, which is what a\n` +
     `   \`cargo test\` without the feature silently stops doing.\n` +
     `   Not proven, and it falls GREEN: that a live leg TOUCHED a database. An emptied body passes an\n` +
-    `   outcome check the same way a real query does — go's gate re-runs its legs against an unreachable\n` +
+    `   outcome check the same way a real query does — the go and python gates re-run theirs against an unreachable\n` +
     `   server to close that, and rust has no equivalent yet.`,
 );
