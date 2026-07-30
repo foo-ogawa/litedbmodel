@@ -16,27 +16,55 @@
  *     run from `go/` instead of the package directory. Nothing invokes them: the bench cells run
  *     `go run ./lm_bench/lm_orm_native/` (benchmark/crosslang/run-cells.sh:144-145).
  *
- * Three clauses, one per way a file gets in:
+ * Four clauses:
  *
  *   A. Every tracked file at the repository ROOT is one of {@link ROOT_FILES}. The root is where a
  *      mistyped shell command lands, and it is small enough to enumerate. BIDIRECTIONAL: a name in
  *      that list that is no longer tracked is red too, so the list cannot rot into a rubber stamp.
- *   B. No tracked file is BUILD OUTPUT, in either of the two shapes seen:
- *        - inside a `target/` directory whose parent holds a `Cargo.toml`. The manifest is what makes
- *          it cargo's output directory — the directory NAME alone proves nothing, and `go/lm_bench/
- *          lm_orm_native/target_mysql.go` is a source file whose name starts with the same word.
- *        - a file git records EXECUTABLE (mode 100755) whose BLOB does not begin with `#!`. This is the
- *          clause that needs no new line per binary. It is a test on two properties the INDEX records —
- *          the mode bit and the first two bytes — and neither is a reliable property of "being a
- *          compiled binary"; both directions in which that breaks are named in the limitations below.
+ *   B. No tracked file is BUILD OUTPUT, in three shapes:
+ *        - a PATH the repository itself declares is output: inside a `target/` whose parent holds a
+ *          `Cargo.toml` (the manifest is what makes it cargo's output directory — the directory NAME
+ *          alone proves nothing, and `go/lm_bench/lm_orm_native/target_mysql.go` is a source file whose
+ *          name starts with the same word), or a path the committed `.gitignore` set matches, which
+ *          takes a `git add -f` and nothing else. Neither subsumes the other: the cargo cache above got
+ *          in BECAUSE that crate's `.gitignore` was missing, and `.gitignore` in turn covers `dist/`,
+ *          `php/vendor/`, `python/**\/__pycache__/`, `coverage/`, `*.log` — none of which cargo's rule
+ *          knows about.
+ *        - a blob whose CONTENT is not source text: it begins with an executable or archive magic
+ *          number ({@link MAGIC}), or it holds a NUL byte anywhere.
+ *        - a blob git records EXECUTABLE (100755) that is neither a `#!` script nor a binary the rule
+ *          above named. `execve` runs exactly two things, a `#!` script and a native executable format,
+ *          so a third thing carrying the bit cannot be run at all — either the bit is wrong or this
+ *          gate does not know the format, and unmodelled is RED.
  *   C. No tracked file is EMPTY, outside {@link EMPTY_FILES}. Zero bytes is the signature of a shell
  *      redirect that created a file nobody wanted, which is clause A's junk file exactly — and this
  *      one catches it in a subdirectory too, where no inventory exists.
+ *   D. Every index entry is a REGULAR FILE, mode 100644 or 100755. A 120000 is a SYMLINK, whose blob is
+ *      a target path git stores and never validates: it may leave the repository, point into a build
+ *      directory or dangle, and being neither empty nor binary it satisfies every other clause here. A
+ *      160000 is a SUBMODULE, whose sha is a commit rather than a blob, so no content check can see it
+ *      at all. This tree has zero of either; one would be a deliberate change to this gate.
  *
- * EVERY clause reads the INDEX and nothing else — mode, sha, and the blob behind the sha. Clause B did
- * not: it took the mode from the index and then opened the WORKING TREE for the shebang, and mixing the
- * two made the gate lie. Measured — a 20 MB Mach-O staged 100755, then the worktree file alone replaced
- * with `#!/bin/sh`:
+ * Clause B judges CONTENT because the three things it judged before were all properties anyone can set
+ * without changing what the file IS. It was "mode 100755, and the blob does not begin with `#!`", and
+ * all of these passed it (#222 D/E/F):
+ *
+ *     a `.o`, a wheel, a `.node` addon         no executable bit, and no cargo `target/` above them
+ *     that 20 MB Mach-O, `git add --chmod=-x`  the bit is not a property of the contents — and a
+ *                                              checkout with core.fileMode=false records 100644 for
+ *                                              everything, so it is not even a property of the machine
+ *     the same binary with `#!/bin/sh\n` on it  measured: blob 20040410 bytes, exit 0
+ *
+ * A NUL byte ANYWHERE is what makes the last one unwalkable-around: a magic number is read at offset 0,
+ * so prepending ten bytes moves it out of view, while the payload's NULs do not move. {@link MAGIC}
+ * therefore does not carry the detection — it NAMES the format in the message, and it is a second
+ * trigger for a format that somehow holds no NUL. `MZ` is why it needs care in the other direction: two
+ * printable letters a text file may legitimately begin with, so PE must also carry its own `PE\0\0`
+ * signature at the offset its DOS header points to.
+ *
+ * EVERY clause reads the INDEX — mode, sha, and the blob behind the sha. Clause B did not: it took the
+ * mode from the index and then opened the WORKING TREE for the shebang, and mixing the two made the gate
+ * lie. Measured — a 20 MB Mach-O staged 100755, then the worktree file alone replaced with `#!/bin/sh`:
  *
  *     index says            100755 67ac6231… go/lm_bench/lm_orm_v2   (blob size 20040400)
  *     before the swap       exit 1   ← correctly red
@@ -45,37 +73,41 @@
  * CI would not be fooled (it checks out fresh), but RELEASING.md asks for this locally, where the tree
  * is dirty by definition — and a smudge filter would do the same thing to a clean one.
  *
- * All three lists — {@link ROOT_FILES}, {@link EMPTY_FILES}, and the tree itself — are compared
- * BIDIRECTIONALLY, so an exemption cannot outlive the file it was written for.
+ * The one rule that CANNOT read only the index is the `.gitignore` one, because git's exclude machinery
+ * has no index-only mode: `--exclude-per-directory=.gitignore` reads the files on disk. It is fenced so
+ * that it cannot go green against a set this repository does not declare — every tracked `.gitignore`
+ * must equal its blob, and an UNTRACKED `.gitignore` is red, since a `!pattern` in one re-includes a
+ * path and would mask the very force-add being looked for. `--exclude-per-directory` and not
+ * `--exclude-standard` for the same reason: the standard set adds `$GIT_DIR/info/exclude` and the user's
+ * global file, neither of which is in the repository, so its answer would differ per machine.
  *
- * What it does NOT check, and all of these fall GREEN — the direction that matters:
+ * {@link ROOT_FILES}, {@link EMPTY_FILES} and the tree itself are compared BIDIRECTIONALLY, so an
+ * exemption cannot outlive the file it was written for. Clause B's content rule has no allowlist and
+ * needs none: no tracked blob holds a NUL byte or a magic number, which is what the green line below
+ * measures every time it prints. A legitimately binary tracked file — an image, a fixture database —
+ * is RED, and would have to be declared here deliberately.
  *
- *   - a build artifact that is neither executable nor under a cargo `target/`: a `.o`, a wheel, a
- *     `.node` addon, a `dist/` file force-added. Clause B knows the two shapes that have actually
- *     happened here, not the category.
- *   - a compiled binary committed WITHOUT the executable bit. The bit is not a property of the file's
- *     contents: `git add --chmod=-x` clears it, and a checkout with `core.fileMode=false` (Windows, or
- *     some network filesystems) records 100644 for everything. Clause B is a check on what the index
- *     SAYS, which is all the index knows.
- *   - a compiled binary that BEGINS with `#!`. Nothing stops one: prepending `#!/bin/sh\n` to a 20 MB
- *     Mach-O and staging it 100755 (blob 20040410 bytes) passes clause B. A shebang is two bytes anyone
- *     can write, so its absence is evidence and its presence is not — the same asymmetry as the
- *     executable bit above, in the other field. Neither weakens the gate against what it was built for
- *     (a `go build` artifact, which carries the bit and no shebang); both are ways to walk around it
- *     deliberately, and clause A still covers the repository root.
- *   - a SYMLINK (mode 120000). Its blob is the target path, so it is neither empty nor a binary, and
- *     outside the root nothing inventories it — a link into a build directory or out of the repository
- *     would pass.
- *   - junk in a SUBDIRECTORY with a plausible name and non-zero content. Only the root is inventoried;
- *     enumerating every directory would be a list nobody could keep true, and a list nobody keeps true
- *     is the thing clause A's bidirectional check exists to prevent.
+ * What it does NOT check, and these fall GREEN — the direction that matters:
+ *
+ *   - a build artifact that is TEXT, is not ignored, and sits outside a cargo `target/`: a `.d` dep
+ *     file, a generated `.json`, an emitted `.ts`. Nothing in its bytes distinguishes it from source.
+ *   - junk in a SUBDIRECTORY with a plausible name and non-zero text content. Only the root is
+ *     inventoried; enumerating every directory would be a list nobody could keep true, and a list
+ *     nobody keeps true is what clause A's bidirectional check exists to prevent. Nothing else in this
+ *     repository covers it either — measured: a 6-line valid-TypeScript `src/scp/notes.ts` that nothing
+ *     imports leaves `tsc`, `eslint src` and every other `scripts/check-*.mjs` green.
  *   - anything UNTRACKED. That is `git status`'s job, and it does it — which is precisely why the
  *     tracked ones needed this.
+ *
+ * Where it errs otherwise, it errs RED, which is why these are not holes: a locally modified or added
+ * `.gitignore` (the fence above), an index entry whose mode or blob this cannot parse, and a repository
+ * whose blobs together exceed the 512 MB read buffer.
  *
  *   node scripts/check-tracked-files.mjs
  */
 import { execFileSync } from 'node:child_process';
-import { dirname } from 'node:path';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -116,6 +148,55 @@ const EMPTY_FILES = ['python/orm_bench_sdk/__init__.py'];
 /** git's hash of the empty blob — every zero-byte file in the index has exactly this one. */
 const EMPTY_BLOB = 'e69de29bb2d1d6434b8b29ae775ad8c2e48c5391';
 
+/** The modes an index entry may have. Anything else is clause D — a symlink, or a submodule. */
+const REGULAR = new Set(['100644', '100755']);
+
+/** Whether `blob` begins with exactly these bytes. Out of range compares as a miss. */
+const begins = (blob, ...bytes) => bytes.every((b, i) => blob[i] === b);
+
+/**
+ * PE's own signature, at the offset its DOS header points to. Required because the two bytes a PE
+ * file starts with, `MZ`, are printable ASCII a text file may legitimately begin with — this is the
+ * one entry in {@link MAGIC} whose first bytes are not by themselves evidence of anything.
+ */
+const isPE = (blob) => blob.length >= 0x40 && begins(blob.subarray(blob.readUInt32LE(0x3c)), 0x50, 0x45, 0x00, 0x00);
+
+/**
+ * Compiled and archived formats, by the bytes a file of that format BEGINS with, and what to call it.
+ *
+ * Every one of these is something a build produced: a compiler, a linker, `go build`, `cargo build`,
+ * `pip wheel`, `javac`. The list NAMES what was found — the detection that does not depend on
+ * enumerating formats is the NUL-byte test beside it, because a magic number is at offset 0 and
+ * anything prepended hides it.
+ *
+ * Byte orders: Mach-O's magic is written in the host's order, so a file produced on a big-endian host
+ * and read here has it reversed (`MH_CIGAM`) — both are the same format and both are output. The
+ * universal-binary header `0xCAFEBABE` is also the Java class-file magic, which needs no separate
+ * entry: a `.class` is build output too.
+ */
+const MAGIC = [
+  ['ELF — a Linux executable, a `.so`, or a `.o`', (b) => begins(b, 0x7f, 0x45, 0x4c, 0x46)],
+  [
+    'Mach-O — a macOS executable, a `.dylib`, a `.o`, or a `.node` addon',
+    (b) =>
+      begins(b, 0xfe, 0xed, 0xfa, 0xce) || // MH_MAGIC     32-bit
+      begins(b, 0xce, 0xfa, 0xed, 0xfe) || // MH_CIGAM     32-bit, byte-swapped
+      begins(b, 0xfe, 0xed, 0xfa, 0xcf) || // MH_MAGIC_64
+      begins(b, 0xcf, 0xfa, 0xed, 0xfe), //  MH_CIGAM_64
+  ],
+  [
+    'a Mach-O universal binary, or a Java `.class`',
+    (b) =>
+      begins(b, 0xca, 0xfe, 0xba, 0xbe) || // FAT_MAGIC / Java
+      begins(b, 0xbe, 0xba, 0xfe, 0xca) || // FAT_CIGAM
+      begins(b, 0xca, 0xfe, 0xba, 0xbf) || // FAT_MAGIC_64
+      begins(b, 0xbf, 0xba, 0xfe, 0xca), //  FAT_CIGAM_64
+  ],
+  ['PE/COFF — a Windows `.exe`, `.dll`, or `.obj`', (b) => begins(b, 0x4d, 0x5a) && isPE(b)],
+  ['an `ar` archive — a `.a` static library, or a rust `.rlib`', (b) => begins(b, 0x21, 0x3c, 0x61, 0x72, 0x63, 0x68, 0x3e, 0x0a)],
+  ['a zip archive — a `.whl` wheel, a `.jar`, a `.zip`', (b) => begins(b, 0x50, 0x4b, 0x03, 0x04)],
+];
+
 /** The index, as `{ mode, sha, path }` — NUL-separated, because a junk filename can contain spaces. */
 function indexEntries() {
   let out;
@@ -143,27 +224,105 @@ function indexEntries() {
 }
 
 /**
- * Whether the BLOB `sha` begins with `#!`.
+ * The BLOB behind every sha, as `sha → Buffer`.
  *
- * The blob, not the working-tree file at that path. Those are different bytes whenever the tree is
+ * The blobs, not the working-tree files at those paths. Those are different bytes whenever the tree is
  * dirty, and reading the tree while taking the mode from the index is what let a 20 MB Mach-O staged
  * 100755 pass by overwriting only the worktree copy with `#!/bin/sh` (exit 1 → exit 0, blob untouched
  * at 20040400 bytes). The index is what would be committed; it is the only thing this may consult.
+ *
+ * ONE `git cat-file --batch` for the whole index. Per-blob `git cat-file blob <sha>` is the same bytes
+ * and reads far better, but it is a process per file: 40 s for this repository's 519, against 0.2 s
+ * here — and a gate slow enough to be skipped is a gate nobody runs. Its output frames each blob as
+ * `<sha> blob <size>\n<contents>\n`, so `missing`, a `commit` (a submodule sha) and a short stream all
+ * fail the frame and are RED rather than silently absent.
  */
-function hasShebang(sha, path) {
-  let blob;
+function blobsOf(entries) {
+  const shas = [...new Set(entries.map((e) => e.sha))];
+  let out;
   try {
-    blob = execFileSync('git', ['cat-file', 'blob', sha], { cwd: ROOT, maxBuffer: 512 * 1024 * 1024 });
+    out = execFileSync('git', ['cat-file', '--batch'], { cwd: ROOT, input: `${shas.join('\n')}\n`, maxBuffer: 512 * 1024 * 1024 });
   } catch (err) {
-    console.error(`❌ ${path} is staged executable but its blob ${sha} could not be read, so a script cannot be told from a binary: ${err.message}`);
+    console.error(`❌ could not read the index's blobs (\`git cat-file --batch\`), so their contents could not be judged at all: ${err.message}`);
     process.exit(1);
   }
-  return blob.subarray(0, 2).toString('latin1') === '#!';
+  const blobs = new Map();
+  let at = 0;
+  for (const sha of shas) {
+    const eol = out.indexOf(0x0a, at);
+    const header = eol === -1 ? out.subarray(at).toString('latin1') : out.subarray(at, eol).toString('latin1');
+    const m = /^([0-9a-f]{40}) blob (\d+)$/.exec(header);
+    if (!m || m[1] !== sha) {
+      console.error(
+        `❌ \`git cat-file --batch\` answered ${JSON.stringify(header)} where the blob ${sha} was expected, so this file's contents were never judged:\n` +
+          `      ${entries.filter((e) => e.sha === sha).map((e) => e.path).join('\n      ')}`,
+      );
+      process.exit(1);
+    }
+    blobs.set(sha, out.subarray(eol + 1, eol + 1 + Number(m[2])));
+    at = eol + 1 + Number(m[2]) + 1; // the LF git writes after the contents
+  }
+  if (at !== out.length) {
+    console.error(`❌ \`git cat-file --batch\` left ${out.length - at} byte(s) unaccounted for after the ${shas.length} blobs asked for, so this script's reading of its output is wrong.`);
+    process.exit(1);
+  }
+  return blobs;
 }
+
+/**
+ * Tracked paths the committed `.gitignore` set matches — a `git add -f`, and nothing else can produce
+ * one. `--exclude-per-directory` rather than `--exclude-standard`: see the header. The two fences that
+ * make this an INDEX answer are checked at the call site.
+ */
+function ignoredButTracked() {
+  try {
+    return execFileSync('git', ['ls-files', '-z', '-i', '-c', '--exclude-per-directory=.gitignore'], {
+      cwd: ROOT,
+      encoding: 'utf8',
+      maxBuffer: 64 * 1024 * 1024,
+    })
+      .split('\0')
+      .filter(Boolean);
+  } catch (err) {
+    console.error(`❌ could not ask git which tracked paths .gitignore matches: ${err.message}`);
+    process.exit(1);
+  }
+}
+
+/** Files in the tree that git does not track and `.gitignore` does not cover. */
+function untracked() {
+  try {
+    return execFileSync('git', ['ls-files', '-z', '-o', '--exclude-per-directory=.gitignore'], {
+      cwd: ROOT,
+      encoding: 'utf8',
+      maxBuffer: 64 * 1024 * 1024,
+    })
+      .split('\0')
+      .filter(Boolean);
+  } catch (err) {
+    console.error(`❌ could not ask git for the untracked files: ${err.message}`);
+    process.exit(1);
+  }
+}
+
+const IGNORE_FILE = (p) => p === '.gitignore' || p.endsWith('/.gitignore');
 
 const entries = indexEntries();
 const tracked = new Set(entries.map((e) => e.path));
+// Clause D's split, made here because everything below reads a BLOB, and a symlink's or submodule's
+// entry has none to read: 120000 stores a path, 160000 stores a commit sha.
+const irregular = entries.filter((e) => !REGULAR.has(e.mode));
+const regular = entries.filter((e) => REGULAR.has(e.mode));
+const blobs = blobsOf(regular);
 const problems = [];
+
+/** A path is reported under the FIRST clause that explains it — one file, one reason, one fix. */
+const claimed = new Set();
+const take = (paths) => {
+  const mine = [...new Set(paths)].filter((p) => !claimed.has(p)).sort();
+  for (const p of mine) claimed.add(p);
+  return mine;
+};
 
 // ── A. the root inventory, both directions ──────────────────────────────────
 const rootNow = entries.map((e) => e.path).filter((p) => !p.includes('/'));
@@ -186,19 +345,20 @@ if (vanished.length > 0) {
 }
 
 // ── B. build output ─────────────────────────────────────────────────────────
-/** Paths inside a `target/` whose parent holds a Cargo.toml — cargo's output dir, by its manifest. */
-const cargoOut = entries
-  .map((e) => e.path)
-  .filter((p) => {
-    const parts = p.split('/');
-    for (let i = 0; i < parts.length - 1; i++) {
-      if (parts[i] !== 'target') continue;
-      const crate = parts.slice(0, i).join('/');
-      if (tracked.has(crate === '' ? 'Cargo.toml' : `${crate}/Cargo.toml`)) return true;
-    }
-    return false;
-  })
-  .sort();
+// B1, by path: a `target/` whose parent holds a Cargo.toml — cargo's output dir, by its manifest.
+const cargoOut = take(
+  entries
+    .map((e) => e.path)
+    .filter((p) => {
+      const parts = p.split('/');
+      for (let i = 0; i < parts.length - 1; i++) {
+        if (parts[i] !== 'target') continue;
+        const crate = parts.slice(0, i).join('/');
+        if (tracked.has(crate === '' ? 'Cargo.toml' : `${crate}/Cargo.toml`)) return true;
+      }
+      return false;
+    }),
+);
 if (cargoOut.length > 0) {
   const dirs = [...new Set(cargoOut.map((p) => p.slice(0, p.indexOf('/target/') + 8)))];
   problems.push(
@@ -208,21 +368,86 @@ if (cargoOut.length > 0) {
       `      the way its siblings have one.`,
   );
 }
-/** Staged executable, and its BLOB has no shebang — a compiled binary, not a script. */
-const binaries = entries.filter((e) => e.mode === '100755' && !cargoOut.includes(e.path) && !hasShebang(e.sha, e.path)).map((e) => e.path).sort();
-if (binaries.length > 0) {
+// B1, by path: what the repository's own `.gitignore` set declares is not source. Both fences first —
+// the answer must be the one the COMMITTED .gitignore files give, or this rule is not an index rule.
+const driftedIgnores = regular
+  .filter((e) => IGNORE_FILE(e.path))
+  .filter((e) => {
+    let onDisk;
+    try {
+      onDisk = readFileSync(join(ROOT, e.path));
+    } catch {
+      return true; // tracked and gone from the tree: git reads no patterns from it at all
+    }
+    return !onDisk.equals(blobs.get(e.sha));
+  })
+  .map((e) => e.path)
+  .sort();
+const addedIgnores = untracked().filter(IGNORE_FILE).sort();
+if (driftedIgnores.length > 0 || addedIgnores.length > 0) {
   problems.push(
-    `${binaries.length} tracked file(s) are staged EXECUTABLE but their blobs are not scripts (no \`#!\`), i.e. compiled binaries:\n` +
-      binaries.map((p) => `      ${p}`).join('\n') +
+    `${driftedIgnores.length + addedIgnores.length} \`.gitignore\` file(s) in this tree are not the ones the index holds, so the rule below would be judged against an ignore set this repository does not declare:\n` +
+      driftedIgnores.map((p) => `      ${p}   (${tracked.has(p) ? 'tracked, and the file on disk differs from its blob' : 'gone'})`).join('\n') +
+      (driftedIgnores.length > 0 && addedIgnores.length > 0 ? '\n' : '') +
+      addedIgnores.map((p) => `      ${p}   (untracked — nothing in the index says these patterns exist)`).join('\n') +
+      `\n\n      git's exclude machinery has no index-only mode, so this one rule reads the tree. Commit\n` +
+      `      or remove the change: a \`!pattern\` in a local .gitignore RE-INCLUDES a path and would\n` +
+      `      hide exactly the \`git add -f\` this is looking for, so it is red rather than trusted.`,
+  );
+}
+const forceAdded = take(ignoredButTracked());
+if (forceAdded.length > 0) {
+  problems.push(
+    `${forceAdded.length} tracked file(s) are matched by this repository's own \`.gitignore\` — they can only have been added with \`git add -f\`:\n` +
+      forceAdded.map((p) => `      ${JSON.stringify(p)}`).join('\n') +
+      `\n\n      .gitignore is where this repository says what is not source: a build directory\n` +
+      `      (\`dist/\`, \`php/vendor/\`, \`__pycache__/\`), a log, a coverage report. \`git rm --cached\`\n` +
+      `      it — while it is tracked, the ignore rule that names it does nothing.`,
+  );
+}
+// B2, by content: what the blob IS. Not what its mode says, and not what its name says.
+const notSource = new Map();
+for (const e of regular) {
+  const blob = blobs.get(e.sha);
+  const format = MAGIC.find(([, is]) => is(blob));
+  const nul = blob.indexOf(0);
+  if (format) notSource.set(e.path, `begins with the magic number of ${format[0]}`);
+  else if (nul !== -1) notSource.set(e.path, `binary — a NUL byte at offset ${nul} of ${blob.length}`);
+}
+const artifacts = take([...notSource.keys()]);
+if (artifacts.length > 0) {
+  problems.push(
+    `${artifacts.length} tracked file(s) are BUILD OUTPUT by their contents — the blob is not source text:\n` +
+      artifacts.map((p) => `      ${JSON.stringify(p)}   (${notSource.get(p)})`).join('\n') +
       `\n\n      A build product does not belong in the index — it is per-platform, it is megabytes,\n` +
       `      and nothing reads it (the bench cells run \`go run ./<pkg>/\`). \`git rm\` it and ignore\n` +
-      `      the path.`,
+      `      the path. This is a test on the CONTENT, so neither dropping the executable bit\n` +
+      `      (\`git add --chmod=-x\`) nor prepending \`#!/bin/sh\` changes the answer.`,
+  );
+}
+// B3: staged executable, and its blob is neither a script nor a binary the rule above could name.
+const unclassifiable = take(
+  regular.filter((e) => e.mode === '100755' && !notSource.has(e.path) && blobs.get(e.sha).subarray(0, 2).toString('latin1') !== '#!').map((e) => e.path),
+);
+if (unclassifiable.length > 0) {
+  problems.push(
+    `${unclassifiable.length} tracked file(s) are staged EXECUTABLE (100755) but their blobs are neither \`#!\` scripts nor any binary format this script knows:\n` +
+      unclassifiable
+        .map((p) => {
+          const blob = blobs.get(entries.find((e) => e.path === p).sha);
+          return `      ${JSON.stringify(p)}   (${blob.length} bytes, begins ${JSON.stringify(blob.subarray(0, 8).toString('latin1'))})`;
+        })
+        .join('\n') +
+      `\n\n      \`execve\` runs exactly two things: a \`#!\` script, and a native executable format.\n` +
+      `      A file carrying the bit that is neither cannot be run at all, so either the bit is\n` +
+      `      wrong (\`git update-index --chmod=-x <path>\`) or this gate does not know the format —\n` +
+      `      and an executable it cannot classify is red, not green.`,
   );
 }
 
 // ── C. empty files, both directions ─────────────────────────────────────────
 const emptyNow = new Set(entries.filter((e) => e.sha === EMPTY_BLOB).map((e) => e.path));
-const empties = [...emptyNow].filter((p) => !EMPTY_FILES.includes(p) && !cargoOut.includes(p)).sort();
+const empties = take([...emptyNow].filter((p) => !EMPTY_FILES.includes(p)));
 // The reverse: an exemption that has outlived its file. ROOT_FILES and check-go-fmt's GENERATED are
 // both checked this way; EMPTY_FILES was not, so a path-specific licence to be empty would have stayed
 // in force after the file stopped being empty — or stopped existing.
@@ -242,6 +467,23 @@ if (stillExempt.length > 0) {
   );
 }
 
+// ── D. every entry is a regular file ────────────────────────────────────────
+if (irregular.length > 0) {
+  problems.push(
+    `${irregular.length} index entr${irregular.length === 1 ? 'y is' : 'ies are'} not a REGULAR FILE:\n` +
+      irregular
+        .map((e) => {
+          const what = e.mode === '120000' ? 'a SYMLINK — its blob is a target path git stores and never validates' : e.mode === '160000' ? 'a SUBMODULE — its sha is a commit, not a blob' : 'a mode this script does not model';
+          return `      ${JSON.stringify(e.path)}   (mode ${e.mode}: ${what})`;
+        })
+        .join('\n') +
+      `\n\n      Every content check here reads a blob, and these have none to read: a symlink may\n` +
+      `      leave the repository, point into a build directory or dangle, and it is neither empty\n` +
+      `      nor binary, so it satisfies every other clause. This tree had none of either when the\n` +
+      `      clause was written; if one is now deliberate, that is a change to make HERE.`,
+  );
+}
+
 if (problems.length > 0) {
   console.error('❌ the git index holds files nobody meant to commit:\n');
   for (const p of problems) console.error(`  ${p}\n`);
@@ -249,19 +491,23 @@ if (problems.length > 0) {
   process.exit(1);
 }
 console.log(
-  `✅ ${entries.length} tracked files, judged ENTIRELY from the index — mode, sha, and the blob behind the sha, never\n` +
-    `   the working tree, so a dirty tree cannot change the answer. The repository root holds EXACTLY the\n` +
-    `   ${ROOT_FILES.length} files ROOT_FILES lists; none is cargo build output (inside a \`target/\` whose parent holds a\n` +
-    `   Cargo.toml) or a compiled binary (staged 100755, blob without a \`#!\`); and the only empty ones are\n` +
-    `   the ${EMPTY_FILES.length} EMPTY_FILES declares. Both lists are checked BOTH WAYS, so neither an inventory nor an\n` +
-    `   exemption can outlive the file it was written for.\n` +
-    `   NOT checked, and all fall GREEN: a build artifact that is neither executable nor under a cargo\n` +
-    `   \`target/\` (a .o, a wheel, a force-added dist file); a binary committed WITHOUT the executable bit\n` +
-    `   (\`git add --chmod=-x\`, or any checkout with core.fileMode=false — the bit is not a property of the\n` +
-    `   contents, and this checks what the index SAYS); a binary that BEGINS with \`#!\` (measured: a 20 MB\n` +
-    `   Mach-O with \`#!/bin/sh\` prepended, staged 100755, blob 20040410 bytes, passes — a shebang's absence\n` +
-    `   is evidence, its presence is not); a SYMLINK (mode 120000, whose blob is a path, so\n` +
-    `   neither empty nor a binary); junk in a SUBDIRECTORY with a plausible name and non-zero content\n` +
-    `   (only the root is inventoried); and anything UNTRACKED — that is \`git status\`, which works, which\n` +
-    `   is why only the tracked ones needed a gate.`,
+  `✅ ${entries.length} tracked files, judged from the index — mode, sha, and the blob behind the sha. Every\n` +
+    `   entry is a REGULAR FILE (100644/100755): no symlink, no submodule. NO blob holds a NUL byte or begins\n` +
+    `   with an executable/archive magic number (ELF, Mach-O incl. universal, PE/COFF with its PE signature,\n` +
+    `   \`ar\`, zip), so a compiled artifact is red under any name, in any directory, with or without the\n` +
+    `   executable bit, and with a \`#!\` line prepended; nothing is staged 100755 but a \`#!\` script. None is\n` +
+    `   cargo build output (inside a \`target/\` whose parent holds a Cargo.toml) or a path this repository's\n` +
+    `   own \`.gitignore\` matches (a \`git add -f\`) — and every tracked \`.gitignore\` equals its blob with no\n` +
+    `   untracked one beside it, which is what makes that last answer the INDEX's and not this machine's.\n` +
+    `   The root holds EXACTLY the ${ROOT_FILES.length} files ROOT_FILES lists; the only empty files are the ${EMPTY_FILES.length} EMPTY_FILES\n` +
+    `   declares. Both lists are checked BOTH WAYS, so neither an inventory nor an exemption can outlive the\n` +
+    `   file it was written for.\n` +
+    `   NOT checked, and these fall GREEN: a build artifact that is TEXT, is not ignored, and sits outside a\n` +
+    `   cargo \`target/\` (a \`.d\` dep file, a generated \`.json\`, an emitted \`.ts\`) — nothing in its bytes\n` +
+    `   distinguishes it from source; junk in a SUBDIRECTORY with a plausible name and non-zero text content\n` +
+    `   (only the root is inventoried, and nothing else here covers it — measured: a valid-TypeScript\n` +
+    `   src/scp/notes.ts that nothing imports leaves tsc, \`eslint src\` and every other check-*.mjs green);\n` +
+    `   and anything UNTRACKED — that is \`git status\`, which works, which is why only the tracked ones\n` +
+    `   needed a gate. Where it errs otherwise it errs RED: a locally modified or added \`.gitignore\`, an\n` +
+    `   entry whose mode or blob it cannot parse, blobs together past its 512 MB read buffer.`,
 );
