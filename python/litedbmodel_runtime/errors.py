@@ -124,7 +124,7 @@ class LimitExceededError(Exception):
     ) -> None:
         """The SHARED post-fetch runaway check (SSoT) — the ONE ``count > limit ⇒ raise`` primitive
         both the FIND-context guard (:func:`check_find_hard_limit`) and the RELATION-context guard
-        (:func:`litedbmodel_runtime.relation.run_relation_op`) call, so no path re-implements the
+        (the ``guard`` control field the emitter bakes) call, so no path re-implements the
         comparison or the error assembly (Python port of the rust ``LimitExceededError::check`` /
         go ``CheckLimit`` SSoT). ``None`` (returns) when within the cap; raises otherwise."""
         if count > limit:

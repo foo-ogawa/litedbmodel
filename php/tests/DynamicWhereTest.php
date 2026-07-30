@@ -12,7 +12,6 @@ use LiteDbModel\Runtime\MiddlewareChain;
 use LiteDbModel\Runtime\PdoDriver;
 use LiteDbModel\Runtime\PdoPool;
 use LiteDbModel\Runtime\ReaderWriterPools;
-use LiteDbModel\Runtime\Relation;
 use LiteDbModel\Runtime\RoutingConfig;
 use LiteDbModel\Runtime\RoutingExecutionContext;
 use LiteDbModel\Runtime\WriterStickyClock;
@@ -37,6 +36,8 @@ use function LiteDbModel\Runtime\withMiddlewareScope;
  */
 final class DynamicWhereTest extends TestCase
 {
+    use RelationThroughLeavesTrait;
+
     /**
      * A MIXED read exactly as the emitter now lowers it: the bounded `id > ?` IS the statement's WHERE
      * and the page count binds after it.
@@ -440,7 +441,9 @@ final class DynamicWhereTest extends TestCase
             }
             return new PdoDriver($pdo);
         };
-        $a = $open(['CREATE TABLE only_in_a (id INTEGER PRIMARY KEY)']);
+        // `only_in_a` is also the PARENT page of the cross-DB relation gate below: its rows live on A,
+        // their children only on B, so one relation's two halves genuinely straddle two databases.
+        $a = $open(['CREATE TABLE only_in_a (id INTEGER PRIMARY KEY)', 'INSERT INTO only_in_a VALUES (1),(2)']);
         $b = $open([
             'CREATE TABLE named_users (id INTEGER PRIMARY KEY, name TEXT)',
             "INSERT INTO named_users VALUES (1,'Ada'),(2,'Bob')",
@@ -504,45 +507,34 @@ final class DynamicWhereTest extends TestCase
     }
 
     /**
-     * The RELATION-BATCH consumer of the same channel: a relation names its own database on the compiled
-     * op (`connection` — the TARGET model's), and `runRelationOp` puts that name on the StatementIntent
-     * for the SAME `connectionFor` + `ConnectionRegistry` to resolve. There is no second registry: the
-     * eager/lazy read surface hands the name to the seam exactly as the leaf does.
+     * A CROSS-DB RELATION through the production path: the parent page reads from the DEFAULT connection
+     * and the batched child fetch names the TARGET model's database, so one relation's two statements land
+     * on DIFFERENT servers. The emitter bakes that name into the child fetch's `db` control field; here the
+     * leaf carries it to `connectionFor` and the ONE ConnectionRegistry resolves it. The tables are
+     * DISJOINT, so a mis-routed half sees no table at all.
      */
-    public function testNamedDbRoutesTheRelationBatch(): void
+    public function testNamedDbRoutesTheRelationChildFetch(): void
     {
         [$ctx, $log] = self::namedDbContext();
-        $parents = [(object) ['id' => 10, 'author_id' => 1]];
-        $op = static fn (?string $connection): \stdClass => (object) [
-            'name' => 'author',
-            'kind' => 'belongsTo',
-            'parentKey' => 'author_id',
-            'targetKey' => 'id',
-            'dialect' => 'sqlite',
-            'sql' => 'SELECT id, name FROM named_users WHERE id IN (SELECT value FROM json_each(?))',
-            ...($connection !== null ? ['connection' => $connection] : []),
-        ];
+        $handlers = Leaves::makeHandlers($ctx, 'sqlite');
+        $parentSql = 'SELECT id FROM only_in_a ORDER BY id';
+        $childSql = 'SELECT id, name FROM named_users WHERE id IN (SELECT value FROM json_each(?)) ORDER BY id';
+        $run = fn (?string $db): array => self::relationThroughLeaves($handlers, $parentSql, $childSql, 'id', 'id', 'kids', $db);
 
-        // NAMED ⇒ B served the batch, and the child row proves it came from there.
-        $batch = Relation::runRelationOp($op('B'), $parents, $ctx);
-        self::assertSame([['id' => 1, 'name' => 'Ada']], array_map(
-            static fn ($r): array => (array) $r,
-            $batch[array_key_first($batch)],
-        ));
-        self::assertSame(['B'], $log->getArrayCopy());
+        // NAMED ⇒ B served the child fetch; the nested row proves it (`named_users` is on NO other connection).
+        $grouped = $run('B');
+        self::assertSame(['Ada'], array_map(static fn (\stdClass $r) => $r->name, $grouped[0]->kids));
+        // Parent read on the default connection, child fetch on the named one.
+        self::assertSame(['A', 'B'], $log->getArrayCopy());
 
-        // NEGATIVE CONTROL — the SAME batch with the op's name dropped lands on the parent's connection,
-        // where `named_users` does not exist.
-        self::assertStringContainsString(
-            'named_users',
-            self::failureMessage(static fn () => Relation::runRelationOp($op(null), $parents, $ctx)),
-        );
-        self::assertSame(['B', 'A'], $log->getArrayCopy());
+        // NEGATIVE CONTROL — the SAME relation with the child fetch's name DROPPED (`null`, exactly the
+        // pre-#217 lowering) sends it to the DEFAULT connection, where `named_users` does not exist.
+        self::assertStringContainsString('named_users', self::failureMessage(static fn () => $run(null)));
 
         // An UNREGISTERED name is LOUD, never a silent fall back to the parent's database.
         self::assertStringContainsString(
             "no connection registered under name 'ghost'",
-            self::failureMessage(static fn () => Relation::runRelationOp($op('ghost'), $parents, $ctx)),
+            self::failureMessage(static fn () => $run('ghost')),
         );
     }
 

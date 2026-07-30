@@ -45,12 +45,12 @@ from litedbmodel_runtime import (
     run as seam_run,
     run_guarded,
     run_method,
-    run_relation_op,
     transaction,
     use,
     with_middleware_scope,
 )
 from litedbmodel_runtime.exec_context import current_context
+from litedbmodel_runtime.leaves import make_handlers
 
 
 def _fresh_db() -> sqlite3.Connection:
@@ -460,15 +460,9 @@ def test_tx_control_is_exempt_from_write_tx_guard():
 # ── D1 END-TO-END: a real relation-BATCH read is observed by a registered middleware ──
 
 
-_REL_OP = {
-    "name": "kids",
-    "kind": "hasMany",
-    "targetTable": "child",
-    "sql": "SELECT id, parent_id, label FROM child WHERE parent_id IN (SELECT value FROM json_each(?))",
-    "parentKey": "id",
-    "targetKey": "parent_id",
-    "dialect": "sqlite",
-}
+#: The two statements a relation issues, as the codegen path issues them (three leaves, no other entry).
+_REL_PARENT_SQL = "SELECT id, name FROM parent WHERE id = 1"
+_REL_CHILD_SQL = "SELECT id, parent_id, label FROM child WHERE parent_id IN (SELECT value FROM json_each(?))"
 
 
 def _rel_db() -> sqlite3.Connection:
@@ -481,39 +475,41 @@ def _rel_db() -> sqlite3.Connection:
     return conn
 
 
-def test_middleware_observes_relation_batch_sql_end_to_end():
-    """A registered middleware observes the relation-BATCH SELECT (on `child`) of a multi-node read.
+def test_middleware_observes_relation_batch_sql_end_to_end(relation_through_leaves):
+    """A registered middleware observes BOTH statements of a relation, on the path PRODUCTION takes.
 
-    ``run_relation_op(op, parents, driver)`` wraps the raw driver via ``as_context`` →
-    ``context_for_driver``, which sources the ambient registry — so the relation batch is NOT a
-    driver-direct call; it funnels through the SAME seam, and a registered SQL middleware sees it."""
+    A generated module reaches a relation through the three leaves only, so the parent read and the
+    batched child fetch are two ``executeSQL`` calls — each crossing the central seam over the ctx the
+    handlers were built with, which is what makes them middleware-visible."""
     conn = _rel_db()
     seen = []
     result = {}
 
     def scope():
         use(create_middleware(execute=lambda st, nxt, sql, params: (seen.append(sql), nxt(sql, params))[1]))
-        # The hasMany batch SELECT on `child` (fan-out over the parent keys) funnels through the seam.
-        parents = [{"id": 1, "name": "p"}]
-        res = run_relation_op(_REL_OP, parents, SqliteDriver(conn))
-        result["batch"] = res["batch"]
+        handlers = make_handlers(SqliteDriver(conn), "sqlite")
+        result["grouped"] = relation_through_leaves(
+            handlers, _REL_PARENT_SQL, _REL_CHILD_SQL, "id", "parent_id", "kids"
+        )
 
     with_middleware_scope(scope)
-    # The relation actually loaded (2 children under parent 1) — a genuine relation-batch read.
-    # The batch is keyed on the key CELLS now (an int id is an int key), not on a rendering of them.
-    assert result["batch"][1][0]["label"] == "a"
-    # The middleware saw the relation-batch SELECT querying the child table.
+    # The relation actually loaded (2 children under parent 1) — a genuine two-statement read, not a
+    # middleware fixture that observed an empty result.
+    assert len(result["grouped"][0]["kids"]) == 2
+    assert result["grouped"][0]["kids"][0]["label"] == "a"
+    # The middleware saw the batched child fetch AND the parent read.
     assert any("from child" in s.lower() for s in seen), seen
+    assert any("from parent" in s.lower() for s in seen), seen
 
 
-def test_red_relation_batch_not_observed_without_registration():
+def test_red_relation_batch_not_observed_without_registration(relation_through_leaves):
     conn = _rel_db()
     seen = []
-    # No middleware registered → the relation batch runs as a byte-identical passthrough.
-    parents = [{"id": 1, "name": "p"}]
-    res = run_relation_op(_REL_OP, parents, SqliteDriver(conn))
+    # No middleware registered → both statements run as a byte-identical passthrough.
+    handlers = make_handlers(SqliteDriver(conn), "sqlite")
+    grouped = relation_through_leaves(handlers, _REL_PARENT_SQL, _REL_CHILD_SQL, "id", "parent_id", "kids")
     # The read still WORKS (byte-identical) — the relation loaded — but nothing was observed.
-    assert len(res["batch"][1]) == 2
+    assert len(grouped[0]["kids"]) == 2
     assert not any("from child" in s.lower() for s in seen)
 
 

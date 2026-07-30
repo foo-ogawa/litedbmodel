@@ -28,7 +28,6 @@ from litedbmodel_runtime.connection_routing import ConnectionPool
 from litedbmodel_runtime.driver import SqliteDriver
 from litedbmodel_runtime.exec_context import ExecutionContext, MiddlewareChain
 from litedbmodel_runtime.leaves import make_handlers
-from litedbmodel_runtime.relation import run_relation_op
 
 CTX = {"nodeId": "n0", "component": "executeSQL"}
 
@@ -392,7 +391,10 @@ def _named_db_context():
     connection) holds an UNRELATED table, DB "B" holds ``named_users``. Returns the ctx plus the log of
     WHICH connection each acquire drew from."""
     a = sqlite3.connect(":memory:")
+    # `only_in_a` is also the PARENT page of the cross-DB relation gate below: its rows live on A, their
+    # children only on B, so the two halves of one relation genuinely straddle two databases.
     a.execute("CREATE TABLE only_in_a (id INTEGER PRIMARY KEY)")
+    a.executemany("INSERT INTO only_in_a VALUES (?)", [(1,), (2,)])
     b = sqlite3.connect(":memory:")
     b.execute("CREATE TABLE named_users (id INTEGER PRIMARY KEY, name TEXT)")
     b.executemany("INSERT INTO named_users VALUES (?, ?)", [(1, "Ada"), (2, "Bob")])
@@ -440,38 +442,29 @@ def test_named_db_routes_the_statement():
         read("ghost")
 
 
-def test_named_db_routes_the_relation_batch():
-    """The RELATION-BATCH consumer of the same channel: a relation names its own database on the compiled
-    op (``connection`` — the TARGET model's), and ``run_relation_op`` puts that name on the
-    StatementIntent for the SAME ``connection_for`` + ``ConnectionRegistry`` to resolve. There is no
-    second registry: the eager/lazy read surface hands the name to the seam exactly as the leaf does."""
+def test_named_db_routes_the_relation_batch(relation_through_leaves):
+    """A CROSS-DB RELATION through the production path: the parent page reads from the DEFAULT connection
+    and the batched child fetch names the TARGET model's database, so one relation's two statements land
+    on DIFFERENT servers. The emitter bakes that name into the child fetch's ``db`` control field; here
+    the leaf carries it to ``connection_for`` and the ONE ``ConnectionRegistry`` resolves it. The tables
+    are DISJOINT, so a mis-routed half sees no table at all."""
     ctx, log = _named_db_context()
-    parents = [{"id": 10, "author_id": 1}]
+    handlers = make_handlers(ctx, "sqlite")
+    parent_sql = "SELECT id FROM only_in_a ORDER BY id"
+    child_sql = "SELECT id, name FROM named_users WHERE id IN (SELECT value FROM json_each(?)) ORDER BY id"
 
-    def op(connection):
-        return {
-            "name": "author",
-            "kind": "belongsTo",
-            "parentKey": "author_id",
-            "targetKey": "id",
-            "dialect": "sqlite",
-            "sql": "SELECT id, name FROM named_users WHERE id IN (SELECT value FROM json_each(?))",
-            **({"connection": connection} if connection is not None else {}),
-        }
-
-    # NAMED ⇒ B served the batch, and the child row proves it came from there.
-    batch = run_relation_op(op("B"), parents, ctx)["batch"]
-    assert list(batch.values()) == [[{"id": 1, "name": "Ada"}]]
-    assert log == ["B"]
-    # NEGATIVE CONTROL — the SAME batch with the op's name dropped lands on the parent's connection,
-    # where `named_users` does not exist.
+    # NAMED ⇒ B served the child fetch; the nested row proves it (`named_users` is on NO other connection).
+    grouped = relation_through_leaves(handlers, parent_sql, child_sql, "id", "id", "kids", "B")
+    assert [k["name"] for k in grouped[0]["kids"]] == ["Ada"]
+    assert log == ["A", "B"]  # parent read on the default connection, child fetch on the named one
+    # NEGATIVE CONTROL — the SAME relation with the child fetch's name DROPPED (``None``, exactly the
+    # pre-#217 lowering) sends it to the DEFAULT connection, where `named_users` does not exist.
     with pytest.raises(Exception) as ei:
-        run_relation_op(op(None), parents, ctx)
+        relation_through_leaves(handlers, parent_sql, child_sql, "id", "id", "kids", None)
     assert "named_users" in str(ei.value)
-    assert log == ["B", "A"]
     # An UNREGISTERED name is LOUD, never a silent fall back to the parent's database.
     with pytest.raises(ValueError, match="no connection registered under name 'ghost'"):
-        run_relation_op(op("ghost"), parents, ctx)
+        relation_through_leaves(handlers, parent_sql, child_sql, "id", "id", "kids", "ghost")
 
 
 def test_named_db_on_a_non_routed_context_is_loud():

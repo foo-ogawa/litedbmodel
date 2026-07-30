@@ -12,7 +12,6 @@ import (
 	"strings"
 	"testing"
 
-	bc "github.com/foo-ogawa/behavior-contracts/go"
 	"github.com/foo-ogawa/litedbmodel/go/litedbmodel_runtime/wire"
 
 	_ "modernc.org/sqlite" // pure-go sqlite driver (registered as "sqlite")
@@ -436,6 +435,66 @@ func TestExecuteSQL_MissingOrMistypedFieldOfAPresentStructIsLoud(t *testing.T) {
 	}
 }
 
+// relationThroughLeaves runs a relation THE ONLY WAY PRODUCTION REACHES ONE — through the three leaves
+// the codegen path calls (`src/scp/leaf-transport.ts:184,187,190`): `executeSQL` for the parent read,
+// `pluck` to dedupe the parent keys, `executeSQL` again for the BATCHED child fetch (the statement a
+// cross-DB relation names its own database on), then `group` to nest the children onto their parents.
+// There is no fourth entry point; the generated module has nothing else to call. `childDB` is the child
+// fetch's `db` control field — a wire null is the DEFAULT connection.
+//
+// Every statement here crosses the same central seam the walker does, so a registered middleware
+// observes both of them; and the leaf transport must be BOUND by the caller (that is what decides which
+// context, and therefore which connection registry, the statements resolve against).
+func relationThroughLeaves(parentSQL, childSQL, pk, fk, into string, childDB wire.WireValue) (wire.WireValue, error) {
+	noOpts := func() wire.WireField {
+		return optsPort(wire.WireNull(), wire.WireNull(), wire.WireNull(), wire.WireNull())
+	}
+	parents, err := ExecuteSQL(leafPayload(
+		port("sql", wire.WireStr(parentSQL)), port("params", wire.WireListOf(nil)), noOpts()))
+	if err != nil {
+		return wire.WireNull(), err
+	}
+	keys, err := PluckKeys(leafPayload(port("col", wireStrings(pk)), port("rows", parents)))
+	if err != nil {
+		return wire.WireNull(), err
+	}
+	// ONE param: the deduped key set. The leaf owns its dialect encoding (a JSON array on sqlite/MySQL,
+	// a native array on PG) — the same shaping the batched child SELECT is compiled against.
+	children, err := ExecuteSQL(leafPayload(
+		port("sql", wire.WireStr(childSQL)),
+		port("params", wire.WireListOf([]wire.WireValue{keys})),
+		optsPort(childDB, wire.WireNull(), wire.WireNull(), wire.WireNull())))
+	if err != nil {
+		return wire.WireNull(), err
+	}
+	return GroupChildren(leafPayload(
+		port("children", children),
+		port("fk", wireStrings(fk)),
+		port("into", wire.WireStr(into)),
+		port("parents", parents),
+		port("pk", wireStrings(pk)),
+		port("single", wire.WireBool(false)),
+	))
+}
+
+// childrenUnder returns how many children the grouped output nested on parent index `i` under `into`.
+func childrenUnder(t *testing.T, grouped wire.WireValue, i int, into string) int {
+	t.Helper()
+	lp := grouped.AsList()
+	if lp.Kind != wireProbeGot || lp.Got.Len() <= i {
+		t.Fatalf("grouped output is not a list of at least %d parents: %+v", i+1, grouped)
+	}
+	row := lp.Got.ElemRow(i)
+	if row.Kind != wireProbeGot {
+		t.Fatalf("parent %d is not a row", i)
+	}
+	kids := row.Got.ProbeList(into)
+	if kids.Kind != wireProbeGot {
+		t.Fatalf("parent %d carries no %q list", i, into)
+	}
+	return kids.Got.Len()
+}
+
 // ── #217 named-DB: the statement's own connection reaches the router, or is LOUD ─────────────────
 
 // namedDBPools opens TWO in-proc sqlite databases and registers them as the `default` and `B`
@@ -459,8 +518,10 @@ func namedDBPools(t *testing.T) (*ExecutionContext, func()) {
 		}
 		return db
 	}
-	// DB "A" (the default connection) holds an UNRELATED table; DB "B" holds `named_users`.
-	a := open("CREATE TABLE only_in_a (id INTEGER PRIMARY KEY)")
+	// DB "A" (the default connection) holds an UNRELATED table; DB "B" holds `named_users`. `only_in_a`
+	// is also the PARENT page of the cross-DB relation gate below — its rows live on A, their children
+	// only on B, so the two halves of a relation genuinely straddle two databases.
+	a := open("CREATE TABLE only_in_a (id INTEGER PRIMARY KEY)", "INSERT INTO only_in_a VALUES (1),(2)")
 	b := open("CREATE TABLE named_users (id INTEGER PRIMARY KEY, name TEXT)",
 		"INSERT INTO named_users VALUES (1,'Ada'),(2,'Bob')")
 	reg := NewConnectionRegistry(map[string]ReaderWriterPools{
@@ -519,48 +580,41 @@ func TestExecuteSQL_NamedDBRoutesTheStatement(t *testing.T) {
 	}
 }
 
-// The RELATION-BATCH consumer of the SAME channel: a relation names its own database on the compiled op
-// (Connection — the TARGET model's), and runRelationOpCtx puts that name on the StatementIntent for the
-// SAME ConnectionFor + [ConnectionRegistry] to resolve. There is no second registry: the eager/lazy read
-// surface hands the name to the seam exactly as the leaf does.
-func TestRunRelationOp_NamedDBRoutesTheBatch(t *testing.T) {
-	ctx, done := namedDBPools(t)
+// A CROSS-DB RELATION through the production path: the parent page reads from the DEFAULT connection and
+// the batched child fetch names the TARGET model's database, so the two statements of one relation land
+// on DIFFERENT servers. The emitter bakes that name into the child fetch's `db` control field
+// (`test/scp/emitter.test.ts` gates the lowering); here the leaf carries it to ConnectionFor and the ONE
+// [ConnectionRegistry] resolves it. The tables are DISJOINT, so a mis-routed half sees no table at all.
+func TestRelationThroughLeaves_NamedDBRoutesTheChildFetch(t *testing.T) {
+	_, done := namedDBPools(t)
 	defer done()
 
-	parent := bc.NewObj()
-	parent.Set("id", float64(10))
-	parent.Set("author_id", float64(1))
-	op := func(connection string) RelationOp {
-		return RelationOp{
-			Name: "author", Kind: "belongsTo",
-			ParentKey: "author_id", TargetKey: "id", Dialect: "sqlite",
-			SQL:        "SELECT id, name FROM named_users WHERE id IN (SELECT value FROM json_each(?))",
-			Connection: connection,
-		}
-	}
+	const parentSQL = "SELECT id FROM only_in_a ORDER BY id"
+	const childSQL = "SELECT id, name FROM named_users WHERE id IN (SELECT value FROM json_each(?)) ORDER BY id"
 
-	// NAMED ⇒ B served the batch, and the child row proves it came from there.
-	batch, err := runRelationOpCtx(ctx, op("B"), []bc.Value{parent})
+	// NAMED ⇒ B served the child fetch, and the nested rows prove it: `named_users` exists in NO other
+	// registered database, and `only_in_a` exists ONLY on the default one.
+	grouped, err := relationThroughLeaves(parentSQL, childSQL, "id", "id", "kids", wire.WireStr("B"))
 	if err != nil {
-		t.Fatalf(`connection "B": %v`, err)
+		t.Fatalf(`child fetch on "B": %v`, err)
 	}
-	kids := batch[KeyIdentity([]bc.Value{float64(1)})]
-	if len(kids) != 1 {
-		t.Fatalf(`connection "B" batched %v, want the 1 child row of the named db`, batch)
+	if n := childrenUnder(t, grouped, 0, "kids"); n != 1 {
+		t.Fatalf(`child fetch on "B" nested %d children on parent 1, want 1`, n)
 	}
 
-	// NEGATIVE CONTROL — the SAME batch with the op's name dropped lands on the parent's connection,
-	// where named_users does not exist. Measured, not reasoned.
-	if _, err := runRelationOpCtx(ctx, op(""), []bc.Value{parent}); err == nil {
-		t.Fatal("an untagged batch must hit the DEFAULT connection, where named_users does not exist — got no error")
+	// NEGATIVE CONTROL — the SAME relation with the child fetch's name DROPPED (a wire null, which is
+	// exactly the pre-#217 lowering) sends it to the DEFAULT connection, where `named_users` does not
+	// exist. Measured, not reasoned: this is the wrong-database execution the name prevents.
+	if _, err := relationThroughLeaves(parentSQL, childSQL, "id", "id", "kids", wire.WireNull()); err == nil {
+		t.Fatal("a dropped name must hit the DEFAULT connection, where named_users does not exist — got no error")
 	} else if !strings.Contains(err.Error(), "named_users") {
-		t.Fatalf("untagged batch error = %v, want a missing-table failure naming named_users", err)
+		t.Fatalf("dropped-name error = %v, want a missing-table failure naming named_users", err)
 	}
 
 	// An UNREGISTERED name is LOUD, never a silent fall back to the parent's database.
-	if _, err := runRelationOpCtx(ctx, op("ghost"), []bc.Value{parent}); err == nil ||
+	if _, err := relationThroughLeaves(parentSQL, childSQL, "id", "id", "kids", wire.WireStr("ghost")); err == nil ||
 		!strings.Contains(err.Error(), "no connection registered under name 'ghost'") {
-		t.Fatalf(`connection "ghost" error = %v, want the loud unregistered-name failure`, err)
+		t.Fatalf(`child fetch on "ghost" error = %v, want the loud unregistered-name failure`, err)
 	}
 }
 

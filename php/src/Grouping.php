@@ -13,7 +13,7 @@ namespace LiteDbModel\Runtime;
  * is a single source of truth (no duplicated grouping logic):
  *
  *   - the EAGER graph — the op-independent `pluck` / `group` leaves ({@link Leaves});
- *   - the RUNTIME lazy / declarative path ({@link Relation} `runRelationOp` / `distributeToParent`),
+ *   - already-fetched rows, grouped over the SAME algorithm,
  *     which groups already-fetched rows over the SAME core.
  *
  * Nothing here touches SQL or a driver: it is pure in-memory grouping over already-fetched rows

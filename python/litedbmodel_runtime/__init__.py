@@ -116,11 +116,6 @@ from .runtime import (
     execute_transaction_bundle,
     order_by_nulls,
 )
-from .relation import (
-    dedupe_keys,
-    distribute_to_parent,
-    run_relation_op,
-)
 from .leaves import make_handlers
 
 __version__ = "2.2.2"
@@ -243,9 +238,6 @@ __all__ = [
     "execute_transaction_bundle",
     "order_by_nulls",
     # read-relation batch execution + hydration (#43)
-    "dedupe_keys",
-    "distribute_to_parent",
-    "run_relation_op",
     # op-agnostic leaf transport for the bc-generated native (ir-exec) modules (#141 / epic #123)
     "make_handlers",
 ]

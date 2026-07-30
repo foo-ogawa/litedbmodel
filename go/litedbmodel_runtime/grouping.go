@@ -9,8 +9,7 @@
 //     `Pluck` / `Group` leaf transports (leaf_transport.go) run the WIRE instantiation directly, so
 //     the hot read path carries NO `WireValue`↔`Value` conversion (the read never boxes into bc's
 //     `Value` — mirrors the rust core);
-//   - `bc.Value` — the runtime lazy / declarative path (relation.go `runRelationOpCtx` /
-//     `DistributeToParent`), which groups already-fetched bc rows over the SAME algorithm.
+//   - `bc.Value` — already-fetched bc rows, grouped over the SAME algorithm.
 //
 // Nothing here touches SQL or a driver: it is pure in-memory grouping over already-fetched rows.
 // Ordered TUPLE keys are supported (composite keys), matching TS.

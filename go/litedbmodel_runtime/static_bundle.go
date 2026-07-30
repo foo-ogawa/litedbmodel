@@ -63,6 +63,16 @@ type FindGuard struct {
 }
 
 // ReadGraphFromJObj parses a readGraph object (from a bundle or a render vector) into a ReadGraph.
+// getStrJ reads a string field off a parsed JObj ("" when absent) — the guard fields the static
+// bundle's fragment records carry. Lives here because this file is its only reader.
+func getStrJ(o *bc.JObj, k string) string {
+	if v, ok := o.Get(k); ok {
+		s, _ := v.(string)
+		return s
+	}
+	return ""
+}
+
 func ReadGraphFromJObj(obj *bc.JObj) (*ReadGraph, error) {
 	g := &ReadGraph{StatementsByID: map[string][]bc.JNode{}}
 	if d, ok := obj.Get("dialect"); ok {

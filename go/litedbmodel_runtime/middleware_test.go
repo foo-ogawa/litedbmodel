@@ -28,6 +28,7 @@ import (
 	"time"
 
 	bc "github.com/foo-ogawa/behavior-contracts/go"
+	"github.com/foo-ogawa/litedbmodel/go/litedbmodel_runtime/wire"
 
 	_ "modernc.org/sqlite"
 )
@@ -527,69 +528,58 @@ func relE2EDB(t *testing.T) *sql.DB {
 	return db
 }
 
-// A registered middleware observes the relation-BATCH SELECT (the hasMany child fan-out) of a
-// multi-node read — funneled through the SAME central seam (runRelationOpCtx → Execute) as the walker.
+// The SQL a relation issues — both statements of it — is middleware-visible, on the path PRODUCTION
+// takes: the codegen module reaches a relation through the three leaves only, so the parent read and the
+// batched child fetch are two `executeSQL` calls, each crossing the central seam. A middleware
+// registered in the scope the leaf transport is bound to therefore observes BOTH.
+const relParentSQL = "SELECT id, name FROM parent WHERE id = 1"
+const relChildSQL = "SELECT id, parent_id, label FROM child WHERE parent_id IN (SELECT value FROM json_each(?))"
+
 func TestD1RelationBatchEndToEnd(t *testing.T) {
 	db := relE2EDB(t)
 	defer db.Close()
 	var seen []string
 	var mu sync.Mutex
-	op := RelationOp{
-		Name: "kids", Kind: "hasMany",
-		ParentKey: "id", TargetKey: "parent_id", Dialect: "sqlite",
-		SQL: "SELECT id, parent_id, label FROM child WHERE parent_id IN (SELECT value FROM json_each(?))",
-	}
-	parent := bc.NewObj()
-	parent.Set("id", float64(1))
-	parent.Set("name", "p")
 
-	var batch RelationBatch
+	var grouped wire.WireValue
 	_, err := WithMiddlewareScope(context.Background(), func(scopeCtx context.Context) (struct{}, error) {
 		RegisterMiddleware(scopeCtx, observeMiddleware(&seen, &mu).Descriptor())
-		ctx := ContextForDBCtx(scopeCtx, db)
-		// The primary read on `parent` PLUS the hasMany batch SELECT on `child` — both funnel the seam.
-		if _, e := Execute(ctx, "SELECT id, name FROM parent WHERE id = ?", []any{int64(1)}, ReadIntent()); e != nil {
-			return struct{}{}, e
-		}
-		b, e := runRelationOpCtx(ctx, op, []bc.Value{parent})
-		batch = b
+		BindLeafTransport(ContextForDBCtx(scopeCtx, db), "sqlite")
+		defer UnbindLeafTransport()
+		g, e := relationThroughLeaves(relParentSQL, relChildSQL, "id", "parent_id", "kids", wire.WireNull())
+		grouped = g
 		return struct{}{}, e
 	})
 	if err != nil {
 		t.Fatalf("scope: %v", err)
 	}
-	// The relation actually loaded (2 children under parent 1) — a genuine multi-node read.
-	if got := len(batch[KeyIdentity([]bc.Value{float64(1)})]); got != 2 {
+	// The relation actually loaded (2 children under parent 1) — a genuine two-statement read, not a
+	// middleware fixture that observed an empty result.
+	if got := childrenUnder(t, grouped, 0, "kids"); got != 2 {
 		t.Fatalf("relation load: got %d children want 2", got)
 	}
-	// The middleware saw the primary read AND the relation-batch SELECT (querying the child table).
+	// The middleware saw the parent read AND the batched child fetch.
 	if !containsSub(seen, "from child") && !containsSub(seen, "FROM child") {
-		t.Errorf("relation-batch SQL not observed: %v", seen)
+		t.Errorf("relation child-fetch SQL not observed: %v", seen)
 	}
 	if !containsSub(seen, "FROM parent") {
 		t.Errorf("primary read SQL not observed: %v", seen)
 	}
 }
 
-// RED proof: without registration, the relation-batch SELECT is NOT observed (byte-identical).
+// RED proof: without registration, neither statement is observed — and the relation still loads, so the
+// unregistered chain is a byte-identical passthrough rather than a broken path.
 func TestD1RelationBatchRed(t *testing.T) {
 	db := relE2EDB(t)
 	defer db.Close()
 	var seen []string
-	op := RelationOp{
-		Name: "kids", Kind: "hasMany",
-		ParentKey: "id", TargetKey: "parent_id", Dialect: "sqlite",
-		SQL: "SELECT id, parent_id, label FROM child WHERE parent_id IN (SELECT value FROM json_each(?))",
-	}
-	parent := bc.NewObj()
-	parent.Set("id", float64(1))
-	// No middleware registered → the relation batch runs as a byte-identical passthrough.
-	batch, err := RunRelationOp(op, []bc.Value{parent}, db)
+	BindLeafTransport(ContextForDB(db), "sqlite")
+	defer UnbindLeafTransport()
+	grouped, err := relationThroughLeaves(relParentSQL, relChildSQL, "id", "parent_id", "kids", wire.WireNull())
 	if err != nil {
-		t.Fatalf("run relation: %v", err)
+		t.Fatalf("relation through leaves: %v", err)
 	}
-	// The read still WORKS (byte-identical) — the relation loaded — but nothing was observed.
-	if got := len(batch[KeyIdentity([]bc.Value{float64(1)})]); got != 2 {
+	if got := childrenUnder(t, grouped, 0, "kids"); got != 2 {
 		t.Fatalf("relation load: got %d want 2", got)
 	}
 	if len(seen) != 0 {
