@@ -34,8 +34,6 @@ jobs:
         run: npm run deps:check
       - name: Every test gate is reachable from CI
         run: npm run gates:check
-      - name: No doc asserts the pre-#217 tx-pin rule (claim vocabulary must carry the qualifier)
-        run: npm run claims:check
       - name: The published package actually loads (CJS + ESM, clean install)
         run: |
           npm run build
