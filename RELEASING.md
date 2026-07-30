@@ -203,17 +203,15 @@ set -a && . ./livedb-gates.env && set +a && export TEST_DB_HOST=localhost
 A skip line in any of these is a coverage report, not a pass — and each gate now names the tests
 instead of leaving you to read a count.
 
-`go:test`, `py:test`, `php:test` and `rust:test` each then re-run their live legs against an
-UNREACHABLE server, so a leg whose body is empty — which passes an outcome check exactly as a real
-query does — is caught.
+All five gates then re-run their live legs against an UNREACHABLE server, so a leg whose body is empty
+— which passes an outcome check exactly as a real query does — is caught. `php:test` and `py:test`
+except their offline corpus checks BY NAME and require those to pass instead; `ts:test` does the same
+for the 38 offline tests inside its live files.
 
-What is still **not** proven, and it falls GREEN, is **TypeScript's** phase 2. Measured, `vitest run
-test/integration` against `127.0.0.1:1`: 66 failed, 291 skipped and **112 passed** — most legitimately
-(in-memory SQLite, wiring assertions), but all **28 in `Mysql.test.ts` vacuously**: its availability
-probe fails and every test then does `if (!mysqlAvailable) return;`. That is a leg reporting PASS
-having executed nothing, the #219 defect in TypeScript, and no skip budget can see it because it does
-not skip. Until those tests FAIL when MySQL is absent (as go's `require_live_db` panics), a phase-2
-rule for TypeScript cannot tell that leg from one that queried a database.
+What is still **not** proven, and it falls GREEN everywhere: that a leg ASSERTED anything useful about
+what it read. A body reduced to a bare connect dials, so it satisfies both phases. For TypeScript,
+phase 2 also learns nothing about a file whose HOOKS fail without a server (`PkeyResult`, and every file
+that skips itself): its tests never run, so none of them can pass either way.
 
 ---
 
