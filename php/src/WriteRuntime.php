@@ -100,7 +100,9 @@ final class WriteRuntime
 
         // OWN-TX path (outside a boundary): the tx owns ONE connection for its whole span;
         // BEGIN/COMMIT/ROLLBACK are the combinator's, and every body statement funnels through the
-        // seam onto the pinned tx connection. A gate short-circuit is a non-error ROLLBACK decision
+        // seam, which resolves the pinned tx connection for it — a write plan names no database, so
+        // that holds for the whole plan; one that DID name another database would be REJECTED there
+        // instead of running on the pin. A gate short-circuit is a non-error ROLLBACK decision
         // (returns committed:false); a driver / gate-abort failure throws (the combinator rolls back +
         // re-raises the mapped SqlFailure). The combinator releases the connection exactly once. This
         // is the per-command auto-tx the conformance / livedb corpus runs here, byte-identically.

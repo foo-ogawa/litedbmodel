@@ -381,8 +381,9 @@ func TestPhaseCRoutingMultiDBLive(t *testing.T) {
 	}
 }
 
-// tx-pin precedence: a named-DB transaction runs ENTIRELY on ONE pinned writer connection — the
-// routing steps 2-4 do NOT re-resolve mid-tx (Phase B ownership is preserved). Proven by running a
+// tx-pin precedence: a named-DB transaction runs its statements of the tx's own database on ONE
+// pinned writer connection of that DB — the routing steps 2-4 do NOT re-resolve mid-tx for them
+// (Phase B ownership is preserved). Proven by running a
 // multi-statement tx on DB B (MySQL) and confirming every statement of the tx's own database (an unnamed one, or one naming that database) hit the
 // SAME pinned *sql.Tx (the routing recording pool is NOT touched for such in-tx statements — the pin is
 // resolved first in ConnectionFor; one naming a DIFFERENT database is rejected there).

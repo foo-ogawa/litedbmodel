@@ -104,7 +104,8 @@ pub trait Driver {
     /// runtime pins THIS connection, then issues the isolation SET + `BEGIN` + `COMMIT`/`ROLLBACK`
     /// THROUGH the central seam (`run(txctx, …)`), so a registered middleware observes the tx-control —
     /// full TS parity (TS issues `runAsync(txCtx, 'BEGIN'/'COMMIT'/…)`). The connection is the SAME one
-    /// every body statement (and the seam-issued tx-control) resolves via `connection_for`, so
+    /// every body statement of the tx's own database (and the seam-issued tx-control) resolves via
+    /// `connection_for` — one naming a DIFFERENT database is rejected there instead — so
     /// per-execution ownership + the concurrent-tx isolation are UNCHANGED — only WHERE the BEGIN/COMMIT
     /// text is issued from moved (into the seam), not which connection runs it.
     ///

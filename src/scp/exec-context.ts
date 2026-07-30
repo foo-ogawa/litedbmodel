@@ -305,10 +305,13 @@ export function connectionForDriver(driver: SqliteDriver): SyncConnection {
 
 /**
  * A thin, single-DB, middleware-free {@link ExecutionContext} over ONE connection. A tx-scoped ctx
- * (`withConnection(conn, true)`) pins that connection for every `connectionFor` — this is the
- * per-execution connection ownership (§3). Absent a pinned tx connection, it returns the base
- * connection (the single-DB Phase A case; the reader/writer split and the named-DB registry live on
- * the ROUTED ctx, {@link PooledAsyncContext}).
+ * (`withConnection(conn, true)`) pins that connection for every statement of the tx's own database —
+ * this is the per-execution connection ownership (§3). This ctx holds ONE connection and no registry,
+ * so the transaction opened on the default and "the tx's own database" is the UNNAMED statement: one
+ * naming a DIFFERENT database is REJECTED by `connectionFor` (`assertTxDbAgrees`) rather than run on
+ * the pin. Absent a pinned tx connection, it returns the base connection (the single-DB Phase A case;
+ * the reader/writer split and the named-DB registry live on the ROUTED ctx,
+ * {@link PooledAsyncContext}).
  */
 class BasicContext implements ExecutionContext {
   readonly middleware: MiddlewareChain;
@@ -508,9 +511,12 @@ function isRoutingConfig(x: AsyncConnectionPool | RoutingConfig): x is RoutingCo
 }
 
 /**
- * Run `fn` inside the ALS scope with `conn` pinned as the ambient tx connection (§3). Every
- * `connectionFor` inside `fn` (async boundaries included) returns `conn`. This is the TS
- * per-execution ownership mechanism (v1 `DBModel.ts` `txContext.run`); the native ports use
+ * Run `fn` inside the ALS scope with `conn` pinned as the ambient tx connection (§3), together with
+ * `db` — the connection NAME the transaction opened on. Every `connectionFor` inside `fn` (async
+ * boundaries included) returns `conn` for a statement of the tx's own database — an unnamed one, or
+ * one naming `db`; one naming a DIFFERENT database is REJECTED there (`assertTxDbAgrees`), because a
+ * transaction is ONE connection on ONE database. This is the TS per-execution ownership mechanism
+ * (v1 `DBModel.ts` `txContext.run`); the native ports use
  * task-local (rust) / `context.Context` (go) / contextvars (py) / an explicit arg (php) for the
  * SAME effect.
  */

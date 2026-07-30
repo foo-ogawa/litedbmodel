@@ -1149,7 +1149,9 @@ function gateShortCircuit(gate: GateRule, result: { rows: Record<string, unknown
  * short-circuit. Accepts a raw {@link SqliteDb} (wrapped via {@link contextForDriver}) or a full
  * {@link ExecutionContext}. The transaction derives a tx-scoped ctx (`withConnection(conn, true)`)
  * that PINS one connection so BEGIN, every body statement, and COMMIT/ROLLBACK all run on the SAME
- * connection (§3, per-execution ownership). For the single-DB SQLite driver the pinned connection
+ * connection (§3, per-execution ownership) — a write plan names no database, so that holds for the
+ * whole plan; a statement that DID name one would be REJECTED by `connectionFor` rather than run on
+ * the pin. For the single-DB SQLite driver the pinned connection
  * is the sole connection; the ownership shows its teeth on the pooled async path
  * ({@link import('../exec-context').withTransactionAsync}), which this mirrors.
  */
