@@ -16,7 +16,7 @@
  *     run from `go/` instead of the package directory. Nothing invokes them: the bench cells run
  *     `go run ./lm_bench/lm_orm_native/` (benchmark/crosslang/run-cells.sh:144-145).
  *
- * Four clauses:
+ * Five clauses:
  *
  *   A. Every tracked file at the repository ROOT is one of {@link ROOT_FILES}. The root is where a
  *      mistyped shell command lands, and it is small enough to enumerate. BIDIRECTIONAL: a name in
@@ -44,6 +44,11 @@
  *      directory or dangle, and being neither empty nor binary it satisfies every other clause here. A
  *      160000 is a SUBMODULE, whose sha is a commit rather than a blob, so no content check can see it
  *      at all. This tree has zero of either; one would be a deliberate change to this gate.
+ *   E. Every module under `src/` is REACHED by something — a published `exports` entry, a tracked file
+ *      outside `src`, or one of those transitively. This is the shape of junk clause A structurally
+ *      cannot see: a plausible name, in a subdirectory, holding ordinary text. Measured, a six-line
+ *      valid-TypeScript `src/scp/notes.ts` that nothing imports left `tsc --noEmit`, `eslint src`,
+ *      `npm run build` and every other `scripts/check-*.mjs` at exit 0.
  *
  * Clause B judges CONTENT because the three things it judged before were all properties anyone can set
  * without changing what the file IS. It was "mode 100755, and the blob does not begin with `#!`", and
@@ -91,11 +96,12 @@
  *
  *   - a build artifact that is TEXT, is not ignored, and sits outside a cargo `target/`: a `.d` dep
  *     file, a generated `.json`, an emitted `.ts`. Nothing in its bytes distinguishes it from source.
- *   - junk in a SUBDIRECTORY with a plausible name and non-zero text content. Only the root is
- *     inventoried; enumerating every directory would be a list nobody could keep true, and a list
- *     nobody keeps true is what clause A's bidirectional check exists to prevent. Nothing else in this
- *     repository covers it either — measured: a 6-line valid-TypeScript `src/scp/notes.ts` that nothing
- *     imports leaves `tsc`, `eslint src` and every other `scripts/check-*.mjs` green.
+ *   - junk in a subdirectory OUTSIDE `src/` with a plausible name and text content: a stray `.go`,
+ *     `.py`, `.php` or `.md`. Clause E answers this for the TypeScript source tree by asking what
+ *     reaches a module, and there is no equivalent for the others: an unreferenced `.go` file in an
+ *     existing package still compiles under `go build ./...`, and a new package with no importer is
+ *     built all the same, so the toolchain says nothing. The root inventory is the only thing covering
+ *     the one directory it covers.
  *   - anything UNTRACKED. That is `git status`'s job, and it does it — which is precisely why the
  *     tracked ones needed this.
  *
@@ -147,6 +153,27 @@ const EMPTY_FILES = ['python/orm_bench_sdk/__init__.py'];
 
 /** git's hash of the empty blob — every zero-byte file in the index has exactly this one. */
 const EMPTY_BLOB = 'e69de29bb2d1d6434b8b29ae775ad8c2e48c5391';
+
+/**
+ * Clause E's published entry points: the `src` module behind each `exports` subpath, and the ONLY roots
+ * that are not derived from the index.
+ *
+ * `exports` names built artifacts (`./dist/scp/index.cjs`), so the source they are built from is a
+ * convention rather than something the manifest states. Rather than trust the convention, this map is
+ * checked BOTH ways against `package.json`: an `exports` subpath with no line here is red, and a line
+ * whose file is not tracked is red. `./eslint-plugin` maps to `null` deliberately — it resolves to
+ * `./eslint-plugin/index.js`, a hand-written directory outside `src` that nothing builds, so it has no
+ * `src` module and contributes no root.
+ */
+const ENTRY_POINTS = {
+  '.': 'src/index.ts',
+  './drivers': 'src/drivers/index.ts',
+  './scp': 'src/scp/index.ts',
+  './eslint-plugin': null,
+};
+
+/** The extensions clause E follows imports through, and the ones that may be a root outside `src`. */
+const JS_LIKE = /\.(?:m|c)?(?:ts|js)$/;
 
 /** The modes an index entry may have. Anything else is clause D — a symlink, or a submodule. */
 const REGULAR = new Set(['100644', '100755']);
@@ -484,6 +511,92 @@ if (irregular.length > 0) {
   );
 }
 
+// ── E. every src module is REACHED by something ──────────────────────────────
+//
+// The one shape of junk clause A cannot see: a file in a SUBDIRECTORY, with a plausible name and
+// ordinary text content. Measured, with a six-line valid-TypeScript `src/scp/notes.ts` that nothing
+// imports staged: `tsc --noEmit`, `eslint src`, `npm run build` and every other `scripts/check-*.mjs`
+// all exit 0. Nothing in this repository caught it, so being told it was "not checked" was the whole
+// protection.
+//
+// It is caught by asking what REACHES it. A module under `src` is either published — reachable from an
+// `exports` subpath's entry — or exercised by something outside `src` (a test, a conformance harness, a
+// bench cell, a script), or reached from one of those transitively. A file none of that reaches is in
+// the index for no reason anyone can point at.
+//
+// Roots come from the INDEX, not from a list here: every tracked JS-like file outside `src`. The only
+// declared roots are the `exports` entries, which cannot be derived because `exports` names built
+// artifacts — and that map is checked both ways against package.json.
+//
+// The import walk reads BLOBS, like every other clause, and it is deliberately crude: a regex over
+// specifiers, static and relative only. Crude in the RED direction — an import form it fails to see
+// makes a file look unreached, which is a false alarm someone must answer, never a silent pass. A
+// dynamic `import(variable)` is the one shape that would need a real parser, and it too errs red.
+const srcTs = regular.map((e) => e.path).filter((p) => p.startsWith('src/') && p.endsWith('.ts'));
+if (srcTs.length > 0) {
+  const pkg = JSON.parse(blobs.get(entries.find((e) => e.path === 'package.json').sha).toString('utf8'));
+  const named = Object.keys(ENTRY_POINTS);
+  const exported = Object.keys(pkg.exports ?? {});
+  const unmapped = exported.filter((s) => !named.includes(s)).sort();
+  const stale = named.filter((s) => !exported.includes(s)).sort();
+  const gone = named.filter((s) => ENTRY_POINTS[s] !== null && !tracked.has(ENTRY_POINTS[s])).sort();
+  if (unmapped.length > 0 || stale.length > 0 || gone.length > 0) {
+    problems.push(
+      `ENTRY_POINTS no longer describes package.json's \`exports\`, so clause E would walk from the wrong roots and a module reachable only from a published entry would read as unreferenced:\n` +
+        [
+          ...unmapped.map((s) => `      ${s}   (exported, but this script names no src module for it)`),
+          ...stale.map((s) => `      ${s}   (named here, but package.json exports no such subpath)`),
+          ...gone.map((s) => `      ${s} → ${ENTRY_POINTS[s]}   (named here, but that file is not tracked)`),
+        ].join('\n'),
+    );
+  } else {
+    /** `from '…'`, `import('…')`, `require('…')` — the specifier only. */
+    const SPEC = /(?:\bfrom\s*|\bimport\s*\(?\s*|\brequire\s*\(\s*)['"]([^'"]+)['"]/g;
+    const resolveSpec = (fromPath, spec) => {
+      if (!spec.startsWith('.')) return null; // a bare specifier is a package, never a file under src/
+      const base = join(dirname(fromPath), spec).replace(/\.(?:m|c)?js$/, '');
+      for (const c of [`${base}.ts`, `${base}.mts`, `${base}.cts`, `${base}.js`, `${base}.mjs`, `${base}.cjs`, `${base}/index.ts`]) {
+        if (tracked.has(c)) return c;
+      }
+      return null;
+    };
+    const reached = new Set();
+    const queue = [];
+    for (const r of [...Object.values(ENTRY_POINTS).filter(Boolean), ...regular.map((e) => e.path).filter((p) => !p.startsWith('src/') && JS_LIKE.test(p))]) {
+      if (!reached.has(r)) {
+        reached.add(r);
+        queue.push(r);
+      }
+    }
+    const shaOf = new Map(regular.map((e) => [e.path, e.sha]));
+    while (queue.length > 0) {
+      const from = queue.shift();
+      const blob = blobs.get(shaOf.get(from));
+      if (!blob) continue;
+      for (const [, spec] of blob.toString('utf8').matchAll(SPEC)) {
+        const to = resolveSpec(from, spec);
+        if (to && !reached.has(to)) {
+          reached.add(to);
+          queue.push(to);
+        }
+      }
+    }
+    const unreferenced = take(srcTs.filter((p) => !reached.has(p)));
+    if (unreferenced.length > 0) {
+      problems.push(
+        `${unreferenced.length} module(s) under src/ are reached by NOTHING — not from a published \`exports\` entry, not from any tracked file outside src/, and not transitively from either:\n` +
+          unreferenced.map((p) => `      ${p}`).join('\n') +
+          `\n\n      A file in a subdirectory with a plausible name and ordinary text content is the one\n` +
+          `      shape the root inventory cannot see, and nothing else here sees it: measured, a\n` +
+          `      six-line valid-TypeScript src/scp/notes.ts that nothing imports leaves tsc, eslint,\n` +
+          `      the build and every other check-*.mjs green. Delete it, or import it from whatever\n` +
+          `      was supposed to use it. If it IS imported by a form this crude walk cannot see (a\n` +
+          `      dynamic \`import(variable)\`), that is worth knowing too — this errs red.`,
+      );
+    }
+  }
+}
+
 if (problems.length > 0) {
   console.error('❌ the git index holds files nobody meant to commit:\n');
   for (const p of problems) console.error(`  ${p}\n`);
@@ -502,12 +615,14 @@ console.log(
     `   The root holds EXACTLY the ${ROOT_FILES.length} files ROOT_FILES lists; the only empty files are the ${EMPTY_FILES.length} EMPTY_FILES\n` +
     `   declares. Both lists are checked BOTH WAYS, so neither an inventory nor an exemption can outlive the\n` +
     `   file it was written for.\n` +
+    `   Every module under src/ is REACHED by something — a published \`exports\` entry, a tracked file\n` +
+    `   outside src/, or one of those transitively — so a plausibly-named text file nothing imports is red\n` +
+    `   even though tsc, eslint and the build accept it.\n` +
     `   NOT checked, and these fall GREEN: a build artifact that is TEXT, is not ignored, and sits outside a\n` +
     `   cargo \`target/\` (a \`.d\` dep file, a generated \`.json\`, an emitted \`.ts\`) — nothing in its bytes\n` +
-    `   distinguishes it from source; junk in a SUBDIRECTORY with a plausible name and non-zero text content\n` +
-    `   (only the root is inventoried, and nothing else here covers it — measured: a valid-TypeScript\n` +
-    `   src/scp/notes.ts that nothing imports leaves tsc, \`eslint src\` and every other check-*.mjs green);\n` +
-    `   and anything UNTRACKED — that is \`git status\`, which works, which is why only the tracked ones\n` +
-    `   needed a gate. Where it errs otherwise it errs RED: a locally modified or added \`.gitignore\`, an\n` +
+    `   distinguishes it from source; junk in a subdirectory OUTSIDE src/ with a plausible name and text\n` +
+    `   content (a stray .go/.py/.php — an unreferenced .go file still compiles under \`go build ./...\`, so\n` +
+    `   the toolchain says nothing, and only the root is inventoried); and anything UNTRACKED — that is\n` +
+    `   \`git status\`, which works, which is why only the tracked ones needed a gate. Where it errs otherwise it errs RED: a locally modified or added \`.gitignore\`, an\n` +
     `   entry whose mode or blob it cannot parse, blobs together past its 512 MB read buffer.`,
 );
