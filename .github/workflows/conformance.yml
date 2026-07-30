@@ -223,7 +223,7 @@ jobs:
           cargo check --locked
           cargo clippy -p litedbmodel_runtime --features livedb --all-targets -- -D warnings
           cargo clippy -p livedb_runner --features livedb --all-targets -- -D warnings
-          cd .. && npm run rust:dispatch:check
+          npm run rust:dispatch:check
       - name: PHP — lint
         if: matrix.lang == 'php'
         run: |
