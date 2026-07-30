@@ -42,6 +42,11 @@
  * class, not only `Test*` classes — so a test pytest would not collect is RED here rather than
  * silently absent. It errs loud.
  *
+ * NOT caught, and it falls GREEN: a function renamed OFF the `test` prefix. The walk selects on that
+ * same prefix, so both sides go blind together — measured, `def test_tx_isolation_postgres` →
+ * `def tx_isolation_postgres` took the walk from 167 to 166 and pytest's collection from 178 to 177,
+ * each of them one smaller and neither of them surprised. php's gate has the identical hole.
+ *
  * What a source scan structurally CANNOT catch is a test that has been DELETED: it is missing from the
  * scan too. That is what {@link LIVE_TESTS} is for, and only the live-DB legs are listed — a
  * whole-suite inventory would need editing every time anyone adds a test, and a count floor is
@@ -65,16 +70,20 @@
  *   - no test reporting a verdict at all: the suite never ran;
  *   - pytest exiting non-zero for a reason none of the above explains. Unmodelled ⇒ red.
  *
- * Not proven, and it falls GREEN: that a live leg TOUCHED a database. An outcome cannot tell a leg
- * that queried PG from one whose body is empty — both pass. Go's gate re-runs its live legs against
- * an unreachable database to close that; here it is open, and it is the reason the green line below
- * says the legs were ENABLED rather than that they ran against a server.
+ * Then PHASE 2, at the bottom of this file: the live legs are re-run against a database that is NOT
+ * THERE, and a leg that PASSES anyway never dialled one — an outcome cannot otherwise tell a real
+ * query from an empty body, since both pass. 24 of the 29 take part today; the five in
+ * `test_conformance_corpus.py` go through the corpus runner, whose pool blocks forever with no
+ * connection to be had (#225), so they are probed under a TIMEOUT and answer the day that is fixed.
+ *
+ * Not proven, and it falls GREEN: that a leg asserted anything USEFUL about what it read. A body
+ * reduced to a bare connect dials, so it satisfies both phases.
  */
 import { readFileSync, mkdtempSync, existsSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { assertGatesOpen, runOwned, mustHaveStarted, exitProblem, junitTestcases, report } from './run-gate.mjs';
+import { assertGatesOpen, runOwned, mustHaveStarted, exitProblem, junitTestcases, report, UNREACHABLE } from './run-gate.mjs';
 import { GATES_ENV, readsAGate } from './livedb-gates.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -293,6 +302,81 @@ if (liveUnlisted.length > 0) {
 if (cases.length === 0) problems.push('pytest reported no testcases at all — the suite never ran.');
 exitProblem(run, label, problems);
 
+// ── PHASE 2: the live legs really DIAL a database ───────────────────────────────────────────────────
+//
+// Everything above reads the OUTCOME of a run against a live server, and an outcome cannot distinguish a
+// leg that queried the database from a leg whose body is empty: both pass. So the live legs are re-run
+// against a database that is NOT THERE, with the gates still open. A leg that dials must FAIL or ERROR;
+// one that PASSES never touched a server.
+//
+// Five of the 29 cannot take part yet: `test_conformance_corpus.py`'s legs go through the live corpus
+// runner, whose pool BLOCKS FOREVER when no connection can be opened (#225 — the acquire has no
+// timeout). Measured, one of them against 127.0.0.1:1: still running at 45s, killed, exit 124.
+//
+// They are not excluded by name. They are run under a TIMEOUT, and a timeout is tolerated only for them
+// — so the day #225 is fixed and they answer instead of hanging, this gate says the allowance is stale
+// and the exclusion lifts itself. That is the difference between an exemption and a measurement.
+const BLOCKED_FILE = 'test_conformance_corpus.py';
+const BLOCKED_TIMEOUT_MS = 20_000;
+const nodeId = (l) => `tests/${l}`;
+if (problems.length === 0) {
+  const dialling = LIVE_TESTS.filter((l) => !l.startsWith(`${BLOCKED_FILE}::`));
+  const blocked = LIVE_TESTS.filter((l) => l.startsWith(`${BLOCKED_FILE}::`));
+  /** One phase-2 run: the ids, the report it wrote, and whether our own timeout killed it. */
+  const rerun = async (ids, timeoutMs) => {
+    const out = join(mkdtempSync(join(tmpdir(), 'litedbmodel-pytest-p2-')), 'junit.xml');
+    const r = mustHaveStarted(
+      await runOwned('python3', ['-m', 'pytest', '-q', `--junitxml=${out}`, ...ids.map(nodeId)], {
+        cwd: PY_DIR,
+        stdout: 'inherit',
+        env: UNREACHABLE,
+        timeoutMs,
+      }),
+      `${label} (unreachable database)`,
+    );
+    const verdicts = new Map();
+    if (existsSync(out)) for (const c of junitTestcases(readFileSync(out, 'utf8'))) verdicts.set(labelOf(c), c.outcome);
+    return { ...r, verdicts };
+  };
+
+  const p2 = await rerun(dialling, undefined);
+  const passedWithoutServer = dialling.filter((l) => p2.verdicts.get(l) === 'passed');
+  const noVerdict = dialling.filter((l) => !p2.verdicts.has(l));
+  if (passedWithoutServer.length > 0) {
+    problems.push(
+      `${passedWithoutServer.length} live-DB leg(s) PASSED with no database behind them (${UNREACHABLE.TEST_DB_HOST}:${UNREACHABLE.TEST_DB_PORT} refuses every connection). A leg that passes without a server never dialled one, so its green above says nothing about a live database:\n` +
+        list(passedWithoutServer) +
+        `\n\n      An emptied body, a removed assertion block, or a connect that is never made all look\n` +
+        `      exactly like this. The other ${dialling.length - passedWithoutServer.length} failed as they should.`,
+    );
+  }
+  if (noVerdict.length > 0) {
+    problems.push(
+      `${noVerdict.length} live-DB leg(s) reported NO verdict from the unreachable-database run, so nothing was learned about them — a set of node ids that matches nothing passes this check vacuously:\n` +
+        list(noVerdict),
+    );
+  }
+
+  const probe = await rerun(blocked, BLOCKED_TIMEOUT_MS);
+  const blockedPassed = blocked.filter((l) => probe.verdicts.get(l) === 'passed');
+  if (blockedPassed.length > 0) {
+    problems.push(
+      `${blockedPassed.length} live-DB leg(s) PASSED with no database behind them:\n` + list(blockedPassed),
+    );
+  } else if (!probe.timedOut) {
+    problems.push(
+      `the ${blocked.length} leg(s) in ${BLOCKED_FILE} answered the unreachable-database run in under ${BLOCKED_TIMEOUT_MS / 1000}s instead of hanging, so the timeout allowance for them is STALE — #225 (the python pool's acquire has no timeout) appears to be fixed.\n` +
+        `      Delete BLOCKED_FILE/BLOCKED_TIMEOUT_MS and let them run with the other ${dialling.length}. While the\n` +
+        `      allowance stands, a hang in these legs is tolerated, and a hang is not a verdict.`,
+    );
+  }
+  console.log(
+    probe.timedOut
+      ? `phase 2: ${dialling.length} live leg(s) re-run against ${UNREACHABLE.TEST_DB_HOST}:${UNREACHABLE.TEST_DB_PORT}, none passed; the ${blocked.length} in ${BLOCKED_FILE} still hang (#225) and were killed at ${BLOCKED_TIMEOUT_MS / 1000}s`
+      : `phase 2: all ${LIVE_TESTS.length} live leg(s) re-run against ${UNREACHABLE.TEST_DB_HOST}:${UNREACHABLE.TEST_DB_PORT}, none passed`,
+  );
+}
+
 report(
   problems,
   `✅ the live-DB gates ${GATES_ENV} declares were OPEN in this process before pytest started; each of the ` +
@@ -300,7 +384,10 @@ report(
     `   the tree declares (Python's own \`ast\`, every .py under python/tests, every \`test*\` in any class)\n` +
     `   reported a verdict in pytest's own --junitxml report, and every one of the ${cases.length} testcases was a pass\n` +
     `   (${skipped.length} skipped, budget ${SKIP_BUDGET}); all ${LIVE_TESTS.length} live-DB legs listed in LIVE_TESTS are still present in the tree.\n` +
-    `   Not proven, and it falls GREEN: that a live leg TOUCHED a database. An emptied body passes an\n` +
-    `   outcome check the same way a real query does — go's gate re-runs its legs against an unreachable\n` +
-    `   server to close that, and python has no equivalent yet.`,
+    `   Those legs were then re-run against an UNREACHABLE database (${UNREACHABLE.TEST_DB_HOST}:${UNREACHABLE.TEST_DB_PORT}) and NONE of them passed — so\n` +
+    `   each really dials a server rather than passing on an empty body. The ${LIVE_TESTS.filter((l) => l.startsWith(`${BLOCKED_FILE}::`)).length} in ${BLOCKED_FILE}\n` +
+    `   are probed under a ${BLOCKED_TIMEOUT_MS / 1000}s timeout because they HANG against a dead server (#225), and this goes red\n` +
+    `   the day they stop hanging, so that allowance cannot outlive its reason.\n` +
+    `   Not proven, and it falls GREEN: that a leg ASSERTED anything useful about what it read. A body\n` +
+    `   reduced to a bare connect dials, so it satisfies both phases.`,
 );

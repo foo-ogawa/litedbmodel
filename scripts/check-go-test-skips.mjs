@@ -73,7 +73,7 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { assertGatesOpen, runOwned, mustHaveStarted, exitProblem, report } from './run-gate.mjs';
+import { assertGatesOpen, runOwned, mustHaveStarted, exitProblem, report, UNREACHABLE } from './run-gate.mjs';
 import { GATES_ENV, readsAGate } from './livedb-gates.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -324,15 +324,11 @@ exitProblem(phase1.run, 'go test', problems);
 // 127.0.0.1:1: connect: connection refused"), and with one body emptied that leg passes — which is the
 // detection.
 //
-// This needs NO database, which is the point: it is the absence of a server that is the instrument. It
-// cannot reach the real stack either, because every live test builds its DSN from `envOr("TEST_DB_HOST",
-// …)` / `envOr("TEST_MYSQL_HOST", …)` (the 5433/3307 literals in those files are defaults and comments),
-// and all four of those variables are overridden here.
+// The `UNREACHABLE` environment it runs under is shared with the other gates' phase 2 (run-gate.mjs).
 //
 // What it does NOT prove: that a leg asserted anything USEFUL about what it read. A body reduced to a
 // single connect-and-close dials, so it passes this and would pass with an empty assertion set. That is
 // the residual, and it is much narrower than "the body may be empty".
-const UNREACHABLE = { TEST_DB_HOST: '127.0.0.1', TEST_DB_PORT: '1', TEST_MYSQL_HOST: '127.0.0.1', TEST_MYSQL_PORT: '1' };
 if (problems.length === 0) {
   const runFilter = `^(${LIVE_TESTS.join('|')})$`;
   const phase2 = await goTest([`-run=${runFilter}`], UNREACHABLE);

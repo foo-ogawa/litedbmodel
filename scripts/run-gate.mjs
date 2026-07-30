@@ -23,11 +23,18 @@
  *   4. is every verdict a pass, with the skip budget the language's gate declares.
  *
  * (3) and (4) are per-language, because the enumeration and the report format are. What is NOT
- * per-language is where the enumeration comes from: the language's OWN toolchain (python `ast`, php
- * `ReflectionClass`, `cargo metadata` + libtest, the vitest module graph) rather than a scanner of
- * this repository's making. #222 (A) is why: a hand-written source scanner was fooled twice by
- * comment and string syntax it did not model, and deleting it in favour of the runtime's own dispatch
- * table both shortened the gate and closed the hole.
+ * per-language is the requirement that the enumeration be INDEPENDENT of the run: the run cannot
+ * report a test it was never told about, so the thing it is checked against has to come from
+ * somewhere the narrowing does not reach.
+ *
+ * Where possible that is the language's own parser or manifest, never a scanner of this repository's
+ * making — python `ast`, php `ReflectionClass`, cargo's LAYOUT rules read off the tree — because
+ * #222 (A) is what a hand-written scanner was worth: fooled twice by comment and string syntax it did
+ * not model, 361 lines deleted in favour of asking the runtime. Where a parser would add nothing the
+ * instrument is the FILESYSTEM: go globs `go/**\/*_test.go` for its `func Test*`, TypeScript globs
+ * `scripts/test-include.mjs`'s pattern for its test files. Neither of those is a toolchain and this
+ * comment used to claim otherwise for vitest, which has no such enumeration to give — asking vitest
+ * would only have asked the narrowed side twice.
  */
 import { spawn } from 'node:child_process';
 import { GATES_ENV, readGateDeclarations } from './livedb-gates.mjs';
@@ -73,21 +80,49 @@ export function assertGatesOpen(suite) {
 }
 
 /**
+ * A database that is NOT THERE — `127.0.0.1:1` refuses every connection instantly.
+ *
+ * The instrument of every gate's PHASE 2: an outcome cannot tell a leg that queried the database from
+ * one whose body is empty, because both pass. Re-run against a server that does not exist, a leg that
+ * dials must FAIL; one that PASSES never touched a database, whatever its body claims.
+ *
+ * It needs no database, which is the point — the ABSENCE of a server is what does the measuring. Nor
+ * can it reach the real stack by accident: every live leg in every language builds its DSN from these
+ * four variables (the 5433/3307 literals in those files are defaults), and all four are overridden.
+ * Shared because it is one idea; two copies could drift into one gate pointing at a port something
+ * actually listens on, which would make its phase 2 pass for the wrong reason.
+ */
+export const UNREACHABLE = { TEST_DB_HOST: '127.0.0.1', TEST_DB_PORT: '1', TEST_MYSQL_HOST: '127.0.0.1', TEST_MYSQL_PORT: '1' };
+
+/**
  * One child process, OWNED rather than piped — a pipe loses the runner's exit code unless the caller
  * remembers `set -o pipefail`, and a gate whose redness depends on the shell it was invoked from is
  * the same class of hole it exists to close.
+ *
+ * `timeoutMs` kills the child and reports `timedOut`, for the one case where a runner is expected to
+ * HANG rather than answer: python's live corpus leg blocks forever against an unreachable database
+ * (#225 — the pool's acquire has no timeout), and a gate that waited for it would never finish. It is
+ * reported apart from a real signal so a hang can never be read as a verdict.
  *
  * `stdout: 'inherit'` is for the runners whose machine-readable output goes to a FILE (pytest's
  * `--junitxml`, phpunit's `--log-junit`, vitest's `--outputFile`): their console output is progress,
  * and swallowing it would leave a CI log with nothing in it for the minutes the suite takes. `'pipe'`
  * is for the ones whose stdout IS the data (`go test -json`, libtest). stderr is always inherited.
  */
-export async function runOwned(program, args, { cwd, env = {}, stdout = 'pipe' } = {}) {
+export async function runOwned(program, args, { cwd, env = {}, stdout = 'pipe', timeoutMs } = {}) {
   const child = spawn(program, args, { cwd, stdio: ['ignore', stdout, 'inherit'], env: { ...process.env, ...env } });
   let spawnError = null;
   child.on('error', (err) => {
     spawnError = err;
   });
+  let timedOut = false;
+  const timer =
+    timeoutMs === undefined
+      ? null
+      : setTimeout(() => {
+          timedOut = true;
+          child.kill('SIGKILL');
+        }, timeoutMs);
   let out = '';
   if (child.stdout) {
     child.stdout.setEncoding('utf8');
@@ -96,7 +131,8 @@ export async function runOwned(program, args, { cwd, env = {}, stdout = 'pipe' }
     });
   }
   const { code, signal } = await new Promise((resolve) => child.on('close', (code, signal) => resolve({ code, signal })));
-  return { stdout: out, exit: code, signal, spawnError, argv: [program, ...args] };
+  if (timer) clearTimeout(timer);
+  return { stdout: out, exit: code, signal, timedOut, spawnError, argv: [program, ...args] };
 }
 
 /** A runner that could not be STARTED proves nothing at all, so this ends the gate on the spot. */

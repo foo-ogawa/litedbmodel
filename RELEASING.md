@@ -179,7 +179,11 @@ set -a && . ./livedb-gates.env && set +a && export TEST_DB_HOST=localhost
       inherited `SKIP_INTEGRATION_TESTS=1` silently drops all 19 live-DB files
 - [ ] `npm run py:test`   — pytest's own `--junitxml`, checked against **every `def test*` Python's `ast`
       finds under `python/tests`** (every `.py`, every class — wider than pytest's own collection rules, so
-      a file renamed off `test_*.py` or a `Test*` class renamed is red rather than absent)
+      a file renamed off `test_*.py` or a `Test*` class renamed is red rather than absent). Then PHASE 2:
+      the live legs are re-run against an UNREACHABLE database and one that PASSES anyway never dialled a
+      server. 24 of the 29 take part; the 5 in `test_conformance_corpus.py` HANG against a dead server
+      (`#225` — the pool's acquire has no timeout), so they are probed under a 20s timeout and the
+      allowance goes red the day they stop hanging
 - [ ] `npm run php:test`  — phpunit's own `--log-junit`, checked against **every `test*` method
       `ReflectionClass` finds** in every class declared under `php/tests`. The precondition covers the
       INVERTED gate: `LITEDBMODEL_SKIP_LIVE=1` in the environment is red before phpunit starts. Needs
@@ -196,9 +200,12 @@ set -a && . ./livedb-gates.env && set +a && export TEST_DB_HOST=localhost
 - [ ] live-DB corpus: `npm run conformance:livedb:docker` — the corpus on real PG + MySQL; the run names how many of the four language legs ran (go/rust: #163). Run it LAST — it takes the stack down afterwards
 
 A skip line in any of these is a coverage report, not a pass — and each gate now names the tests
-instead of leaving you to read a count. What none of them proves, and it falls GREEN in four of the
-five: that a live leg TOUCHED a database. An emptied body passes an outcome check exactly as a real
-query does; only `go:test`'s phase 2 rules that out.
+instead of leaving you to read a count.
+
+What is still **not** proven, and it falls GREEN in **php, rust and TypeScript**: that a live leg
+TOUCHED a database. An emptied body passes an outcome check exactly as a real query does. `go:test`
+and `py:test` rule that out by re-running their live legs against an unreachable server; the other
+three have no phase 2 yet.
 
 ---
 
