@@ -1971,16 +1971,19 @@ mod tests {
         // Every statement of the whole transaction — the seam-issued BEGIN/COMMIT included — ran on B, and
         // NOTHING on the default: the derivations did not divert an in-body statement to another
         // connection. (`recording_stub` logs one entry per statement it serves, so this is the transcript.)
-        // ONE checkout for the whole transaction, on B — the derivations did not turn an in-body statement
-        // into a second connection. The COUNT is the load-bearing half: `all(starts_with("B:"))` alone stays
-        // green even when the pin is lost, because a statement that ROUTES still lands on B's driver.
-        // `:checkout` comes from the stub's `acquire_tx`/`begin_tx` hook, which is rust's checkout.
+        //
+        // This is the ONE assertion here, and a `.filter(ends_with(":checkout")).count() == 1` next to it
+        // was deleted rather than kept: in rust it cannot fail. `ConnectionRegistry` holds
+        // `Arc<dyn Driver>`, not pools (`connection_routing.rs` `ReaderWriterPools`), `resolve_pool`
+        // returns a BORROW of the very same `Arc`, and `ReaderWriterPools::single` puts one allocation in
+        // both roles — so an in-body statement that resolved by ROUTING instead of by the pin would reach
+        // the SAME stub and log the SAME `B:all`, via `prepare()`, which is not a checkout
+        // (`:checkout` comes only from the stub's `acquire_tx`/`begin_tx` hook). The count is 1 whether the
+        // pin holds or not; an assertion that cannot go red is not a gate. What DOES fire is this
+        // transcript, when the tx opens on the wrong driver (`["A:checkout", "A:run", …]`), and — measured —
+        // the in-body "a different db must stay rejected" assertions above, which fail the moment the
+        // disagreement guard stops rejecting.
         let seen = log.lock().unwrap().clone();
-        assert_eq!(
-            seen.iter().filter(|e| e.ends_with(":checkout")).count(),
-            1,
-            "ONE checkout for the whole tx: {seen:?}"
-        );
         assert!(
             seen.iter().all(|e| e.starts_with("B:")) && !seen.is_empty(),
             "the whole tx must run on B: {seen:?}"
