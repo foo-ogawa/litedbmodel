@@ -181,9 +181,10 @@ set -a && . ./livedb-gates.env && set +a && export TEST_DB_HOST=localhost
       finds under `python/tests`** (every `.py`, every class — wider than pytest's own collection rules, so
       a file renamed off `test_*.py` or a `Test*` class renamed is red rather than absent). Then PHASE 2:
       the live legs are re-run against an UNREACHABLE database and one that PASSES anyway never dialled a
-      server. 24 of the 29 take part; the 5 in `test_conformance_corpus.py` HANG against a dead server
-      (`#225` — the pool's acquire has no timeout), so they are probed under a 20s timeout and the
-      allowance goes red the day they stop hanging
+      server. 24 of the 29 must FAIL there; 4 are `test_conformance_corpus.py`'s offline corpus checks and
+      must PASS instead; exactly 1 — `test_live_db_conformance_all_vectors_pass` — HANGS against a dead
+      server (`#225` — the pool's acquire has no timeout), so it alone is probed under a 20s timeout and
+      that allowance goes red the day it stops hanging
 - [ ] `npm run php:test`  — phpunit's own `--log-junit`, checked against **every `test*` method
       `ReflectionClass` finds** in every class declared under `php/tests`. The precondition covers the
       INVERTED gate: `LITEDBMODEL_SKIP_LIVE=1` in the environment is red before phpunit starts. Needs
@@ -202,10 +203,17 @@ set -a && . ./livedb-gates.env && set +a && export TEST_DB_HOST=localhost
 A skip line in any of these is a coverage report, not a pass — and each gate now names the tests
 instead of leaving you to read a count.
 
-What is still **not** proven, and it falls GREEN in **php, rust and TypeScript**: that a live leg
-TOUCHED a database. An emptied body passes an outcome check exactly as a real query does. `go:test`
-and `py:test` rule that out by re-running their live legs against an unreachable server; the other
-three have no phase 2 yet.
+`go:test`, `py:test`, `php:test` and `rust:test` each then re-run their live legs against an
+UNREACHABLE server, so a leg whose body is empty — which passes an outcome check exactly as a real
+query does — is caught.
+
+What is still **not** proven, and it falls GREEN, is **TypeScript's** phase 2. Measured, `vitest run
+test/integration` against `127.0.0.1:1`: 66 failed, 291 skipped and **112 passed** — most legitimately
+(in-memory SQLite, wiring assertions), but all **28 in `Mysql.test.ts` vacuously**: its availability
+probe fails and every test then does `if (!mysqlAvailable) return;`. That is a leg reporting PASS
+having executed nothing, the #219 defect in TypeScript, and no skip budget can see it because it does
+not skip. Until those tests FAIL when MySQL is absent (as go's `require_live_db` panics), a phase-2
+rule for TypeScript cannot tell that leg from one that queried a database.
 
 ---
 
