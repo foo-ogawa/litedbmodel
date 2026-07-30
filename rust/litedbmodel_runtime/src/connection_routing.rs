@@ -21,9 +21,10 @@
 //!
 //! ## The `connection_for(intent)` resolution order (design §3, v1 `DBModel.ts:313` parity)
 //!
-//!   1. **active tx connection** — inside a transaction, always the tx-owned connection (Phase A,
-//!      resolved in [`ExecutionContext`](crate::exec_context) BEFORE this module, since only the ctx
-//!      holds the tx pin).
+//!   1. **active tx connection** — inside a transaction, the tx-owned connection — a statement naming a
+//!      DIFFERENT database than the tx opened on is REJECTED there rather than routed
+//!      ([`assert_tx_db_agrees`]) (Phase A, resolved in [`ExecutionContext`](crate::exec_context) BEFORE
+//!      this module, since only the ctx holds the tx pin).
 //!   2. **writer scope / writer-sticky** — inside [`with_writer`](crate::exec_context) or within
 //!      `writer_sticky_duration` after a committed tx, a READ goes to the WRITER pool (read-your-writes).
 //!   3. **read = reader / write = writer** — otherwise a read → reader pool, a write → writer pool

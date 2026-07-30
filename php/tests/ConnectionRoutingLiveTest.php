@@ -364,10 +364,11 @@ final class ConnectionRoutingLiveTest extends TestCase
         execute($ctx, 'SELECT 1', [], new StatementIntent(write: false, db: 'ghost'));
     }
 
-    public function testActiveTxPinWinsOverRouting(): void
+    public function testActiveTxPinTakesPrecedenceOverRouting(): void
     {
         // C2: a named-DB transaction runs ENTIRELY on ONE pinned writer connection — no routed acquire
-        // inside the tx (the tx-pin wins). Prove: a tx on DB B (MySQL) runs BOTH a write and a read on
+        // inside the tx for a statement of that database (the tx-pin is resolved first; one naming a
+        // DIFFERENT database is rejected there rather than routed). Prove: a tx on DB B (MySQL) runs BOTH a write and a read on
         // the SAME MySQL connection despite the read carrying no db tag (the pinned conn wins).
         $my = $this->connectOrFail([self::class, 'mysql'], 'mysql');
         self::resetMysqlTable($my);
@@ -388,8 +389,8 @@ final class ConnectionRoutingLiveTest extends TestCase
 
         // The in-tx write+read see the uncommitted row on the SAME connection (tx isolation) ⇒ the pin won.
         $this->assertSame('tx', $seen, 'the in-tx read sees the uncommitted write ⇒ same pinned connection');
-        // Routing was INERT inside the tx: the tx-pin (STEP 1) wins in connectionFor, so NEITHER the
-        // in-tx write NOR the untagged read went through the routing pool's acquire() — the whole
+        // NO routed acquire inside the tx: the tx-pin (STEP 1) is resolved first in connectionFor, so
+        // NEITHER the in-tx write NOR the untagged read went through the routing pool's acquire() — the whole
         // named-DB tx ran on ONE pinned writer connection (Phase B ownership preserved).
         $this->assertSame($countBeforeTx, count($log), 'the tx-pin serves every in-body statement of this db — no routed acquire per in-tx statement');
         // And the row committed (a real named-DB tx on the B connection).

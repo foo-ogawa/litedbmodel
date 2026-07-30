@@ -110,8 +110,9 @@ func gateShortCircuit(gate string, r execStatementResult) (ShortCircuitReason, e
 // returns rows (changes = row count); a non-returning write returns changes = affected. A driver
 // error is a mapped SqlFailure.
 //
-// Every statement runs through the CENTRAL SEAM on the tx-scoped ctx (§2/§3): the seam resolves the
-// tx's OWNED connection (per-execution ownership) and runs there — a SELECT/RETURNING via Execute, a
+// Every statement runs through the CENTRAL SEAM on the tx-scoped ctx (§2/§3): a write plan's statements
+// name no database, so the seam resolves the tx's OWNED connection for all of them (per-execution
+// ownership) and runs there — a SELECT/RETURNING via Execute, a
 // non-returning write via Run. No direct db.Query / db.Exec — the tx-owned *sql.Conn is the ONLY driver
 // contact (both carry WriteIntent: a tx statement always targets the writer / tx connection).
 func execTxStatement(ctx *ExecutionContext, op *bc.JObj, scope *bc.Obj, dialect Dialect) (execStatementResult, error) {
@@ -262,8 +263,8 @@ func ExecuteTransactionBundleCtx(bundle *SqlBundle, input *bc.Obj, ctx *Executio
 // executeTransactionCtx runs a plan as one transaction with **per-execution connection ownership**
 // (§3) + gate-first short-circuit (byte-true to write-runtime.ts executeTransaction). It hands the
 // whole plan to [TransactionDecided], which — outside a user Transaction() — checks out ONE owned
-// connection from the ctx, pins it into a tx-scoped ctx so every statement resolves THAT
-// connection via the seam, issues BEGIN / COMMIT / ROLLBACK as SQL THROUGH the seam (middleware-visible)
+// connection from the ctx, pins it into a tx-scoped ctx so every statement of the plan (none of which
+// names a database) resolves THAT connection via the seam, issues BEGIN / COMMIT / ROLLBACK as SQL THROUGH the seam (middleware-visible)
 // per the body's decision; inside one it JOINS the ambient tx (no new BEGIN/COMMIT). Statements run in
 // the plan's fixed order; a failing gate returns a ROLLBACK decision (committed:false — a legitimate
 // outcome, NOT an error) and the tail never executes; a driver error returns an error (⇒ rollback +

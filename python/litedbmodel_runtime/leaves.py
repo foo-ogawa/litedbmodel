@@ -232,8 +232,8 @@ def make_handlers(driver_or_ctx: Union[Driver, ExecutionContext], dialect: str) 
 
     def execute_sql(ports: Mapping[str, Any], _ctx: Mapping[str, Any]) -> Outcome:
         # Resolve the AMBIENT tx-scoped ctx when this leaf runs inside a `with_transaction` /
-        # `transaction` scope (`run_with_pinned_context` pins it), so every statement resolves the
-        # tx-OWNED connection — the tx boundary is the runtime's (BEGIN/COMMIT/ROLLBACK), not baked into
+        # `transaction` scope (`run_with_pinned_context` pins it), so every statement of the tx's own database (an unnamed one, or one naming that database) 
+        # resolves the tx-OWNED connection — the tx boundary is the runtime's (BEGIN/COMMIT/ROLLBACK), not baked into
         # the generated runner. Outside a tx, `current_context()` is None ⇒ the bound driver ctx (the
         # documented `current_context` contract — a raw-driver callee still resolves the pinned tx conn).
         active = current_context() or ctx

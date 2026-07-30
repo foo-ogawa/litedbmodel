@@ -320,7 +320,7 @@ func TestNamedDBTransactionOpensOnThatDBsWriter(t *testing.T) {
 	if _, err := Transaction(ctx.WithConnectionName("B"), "sqlite", DefaultTransactionOptions(), body); err != nil {
 		t.Fatal(err)
 	}
-	// ONE acquire, from B — and nothing more, because every statement of the body resolved that pin.
+	// ONE acquire, from B — and nothing more, because every statement of the body of the tx's own database (an unnamed one, or one naming that database) resolved that pin.
 	if !reflect.DeepEqual(log, []string{"B"}) {
 		t.Fatalf("named tx acquires = %v, want [B] (the tx opens on the NAMED db's writer)", log)
 	}

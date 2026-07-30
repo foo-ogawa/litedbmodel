@@ -383,8 +383,9 @@ func TestPhaseCRoutingMultiDBLive(t *testing.T) {
 
 // tx-pin precedence: a named-DB transaction runs ENTIRELY on ONE pinned writer connection — the
 // routing steps 2-4 do NOT re-resolve mid-tx (Phase B ownership is preserved). Proven by running a
-// multi-statement tx on DB B (MySQL) and confirming every statement hit the SAME pinned *sql.Tx (the
-// routing recording pool is NOT touched for in-tx statements — the pin wins in ConnectionFor).
+// multi-statement tx on DB B (MySQL) and confirming every statement of the tx's own database (an unnamed one, or one naming that database) hit the
+// SAME pinned *sql.Tx (the routing recording pool is NOT touched for such in-tx statements — the pin is
+// resolved first in ConnectionFor; one naming a DIFFERENT database is rejected there).
 func TestPhaseCRoutingTxPinPrecedenceLive(t *testing.T) {
 	phaseCGated(t)
 	pg := openPhaseCPG(t)

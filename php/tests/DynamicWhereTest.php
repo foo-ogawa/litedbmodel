@@ -737,6 +737,10 @@ final class DynamicWhereTest extends TestCase
                 );
             }, $tx);
         }, null, 'sqlite', 'B');
+        // ONE checkout for the whole transaction, on B — `RecordingPdoPool::backingDriver()` records the
+        // tx's own acquire and `acquire()` would record any per-statement one. So the derivation did not
+        // turn an in-body statement into a second connection, and nothing was taken from the default.
+        self::assertSame(['B:tx'], $log->getArrayCopy(), 'ONE checkout for the whole tx, on B');
     }
 }
 

@@ -548,7 +548,7 @@ def test_named_db_agreement_survives_the_read_only_derivation():
     the language that dropped it; python carries it in ``with_read_only`` — this pins that, because the R1
     gates only used the ctx the tx boundary hands the body DIRECTLY. Driven through the central seam, which
     is where ``connection_for`` is called."""
-    ctx, _log = _named_db_ctx()
+    ctx, log = _named_db_ctx()
     sql = "SELECT id, name FROM named_users ORDER BY id"
 
     def body(tx_ctx):
@@ -563,3 +563,6 @@ def test_named_db_agreement_survives_the_read_only_derivation():
         return commit(None)
 
     with_transaction_decided(ctx.with_connection_name("B"), body)
+    # ONE checkout for the whole transaction, on B (the pool records every acquire): the derivation did not
+    # turn an in-body statement into a second connection, and nothing was taken from the default.
+    assert log == ["B"], "ONE checkout for the whole tx, on B, got %r" % log

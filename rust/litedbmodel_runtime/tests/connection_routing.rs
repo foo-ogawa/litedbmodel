@@ -611,7 +611,8 @@ fn c2_unknown_name_loud() {
 /// tx-pin precedence: a named-DB transaction runs its WHOLE body on ONE pinned writer connection of
 /// that DB — the active-tx pin comes first for every in-body statement of that DB. Prove: inside a tx to "B",
 /// even a read-intent statement resolves the SAME pinned MySQL connection (label recorded ONCE at
-/// begin_tx, then the pinned conn serves every statement — no further checkouts on B's recording driver).
+/// begin_tx, then the pinned conn serves every statement of the tx's own database (an unnamed one, or one naming that database) — no further
+/// checkouts on B's recording driver).
 fn c2_tx_pin_precedence() {
     let l = log();
     let a = RecordingDriver::wrap(pg_driver(), "A", l.clone());

@@ -18,9 +18,10 @@ namespace LiteDbModel\Runtime;
  * ## The `connectionFor(intent)` resolution order (design §3, v1 `DBModel.ts:313` parity)
  *
  * A statement's connection is resolved in THIS priority (first match wins):
- *   1. **active tx connection** — inside a transaction, always the tx-owned connection (Phase A/B,
- *      resolved by the base {@see ExecutionContext} BEFORE routing, so a named-DB tx runs entirely on
- *      ONE pinned writer conn — Phase B is NOT broken).
+ *   1. **active tx connection** — inside a transaction, the tx-owned connection (Phase A/B, resolved by
+ *      the base {@see ExecutionContext} BEFORE routing, so a named-DB tx runs entirely on ONE pinned
+ *      writer conn). A statement naming a DIFFERENT database than the tx opened on is REJECTED there
+ *      rather than routed ({@see assertTxDbAgrees()}) — a transaction cannot span two databases.
  *   2. **writer scope / writer-sticky** — inside {@see withWriter}, or within `writerStickyDuration`
  *      after a transaction (read-your-writes), a READ goes to the WRITER pool (Phase C — here).
  *   3. **read=reader / write=writer** — otherwise a read goes to the reader pool, a write to the
@@ -748,8 +749,9 @@ function resolvePool(StatementIntent $intent, RoutingConfig $routing): PdoPool
 /**
  * A {@see ExecutionContext} that completes `connectionFor(intent)`'s steps 2-4 (reader/writer split,
  * writer-sticky/withWriter, named-DB routing) from a {@see RoutingConfig}. The tx-pin (step 1) is
- * inherited from the base {@see ExecutionContext}: a tx-scoped ctx's pinned connection STILL wins, so a
- * named-DB transaction runs entirely on ONE pinned writer conn (Phase B is NOT broken).
+ * inherited from the base {@see ExecutionContext}: a tx-scoped ctx's pinned connection is resolved
+ * FIRST, so a named-DB transaction runs entirely on ONE pinned writer conn — and a statement naming a
+ * DIFFERENT database is rejected there rather than routed.
  *
  * Because the base ctx resolves `$pinned` first, this subclass only reaches routing for a NON-tx
  * statement. It acquires the resolved pool's connection per statement (applying the session config) and

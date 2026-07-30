@@ -12,7 +12,7 @@ against REAL databases, with a faithful-mutation RED proof for every claim:
   C2 multi-DB connection registry + name→connection routing (PG = A, MySQL = B)
     - an untagged statement → DB A (default); a "B"-tagged statement → DB B — live cross-DB;
     - a missing connection name is a LOUD error;
-    - a NAMED-DB transaction runs entirely on ONE pinned writer connection (the tx-pin comes first for
+    - a NAMED-DB transaction runs entirely on ONE pinned writer connection (the tx-pin is resolved first for
       every in-body statement of that database).
   C3 set_config: queryTimeout fires a real SERVER statement timeout (PG statement_timeout + MySQL
     max_execution_time), pool sizing (max_pool is the SOLE cap, applied at construction — RED when
@@ -375,7 +375,7 @@ def test_c2_missing_name_is_loud():
         pg_raw.close()
 
 
-def test_c2_named_db_tx_pin_wins_over_routing():
+def test_c2_named_db_tx_pin_takes_precedence_over_routing():
     """A NAMED-DB transaction runs entirely on ONE pinned writer connection: every statement in the body
     that belongs to that database resolves the SAME tx-owned connection (the active-tx pin comes first) —
     Phase B unbroken; one naming a DIFFERENT database is rejected instead. A
@@ -412,7 +412,7 @@ def test_c2_named_db_tx_pin_wins_over_routing():
         # The tx acquired ONCE from the B WRITER pool (the pinned connection); the B READER saw ZERO
         # (the in-tx read did NOT route to the reader — the tx-pin won).
         assert wlog.count("B-writer") == 1, "the tx must acquire exactly ONE writer connection, got %r" % wlog
-        assert rlog == [], "the in-tx read must NOT fan out to the reader (tx-pin wins), got %r" % rlog
+        assert rlog == [], "the in-tx read must NOT fan out to the reader (the tx-pin is resolved first), got %r" % rlog
 
         # The committed row is really in B.
         rows = execute(ctx, "SELECT val FROM %s WHERE id = ?" % MY_TBL, [1], StatementIntent(write=False, db="B"))

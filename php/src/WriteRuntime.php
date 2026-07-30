@@ -219,8 +219,9 @@ final class WriteRuntime
         $executed[] = (string) ($stmt->id ?? '');
 
         // The central seam (§2): a returning statement rides the READ seam (rows), a plain write the
-        // WRITE seam (affected count) — BOTH resolve the pinned tx connection, so every statement runs
-        // on the tx's OWNED connection (never a fresh/autocommit one). `changes` mirrors the pre-seam
+        // WRITE seam (affected count) — BOTH resolve the pinned tx connection, so every statement of the
+        // plan (none of which names a database) runs on the tx's OWNED connection (never a
+        // fresh/autocommit one). `changes` mirrors the pre-seam
         // shape byte-for-byte: count($rows) for a returning statement, rowCount() for a plain write —
         // the gate rules (`insertedElseRollback`/`insertedElseNoop`) read this exact value.
         if ($hasReturn) {

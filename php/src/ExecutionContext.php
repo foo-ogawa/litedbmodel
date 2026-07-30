@@ -20,7 +20,8 @@ namespace LiteDbModel\Runtime;
  *   2. a **middleware chain** — {@see ExecutionContext::$middleware}, wrapping every SQL (empty in
  *      Phase A = passthrough; the registration API is Phase D — this is only the hook point);
  *   3. a **pinned tx connection** — a tx-scoped ctx pins ONE owned connection so every statement in a
- *      transaction body runs on it (per-execution connection ownership, §3).
+ *      transaction body of the tx's own database (an unnamed one, or one naming that database) runs on it (per-execution connection
+ *      ownership, §3).
  *
  * ## The central seam (§2) — ALL SQL funnels through here
  *
@@ -434,7 +435,8 @@ final class MiddlewareChain
 class ExecutionContext
 {
     /**
-     * @param Connection|null $pinned the pinned tx connection (present ⇒ tx-scoped ctx; every statement resolves it).
+     * @param Connection|null $pinned the pinned tx connection (present ⇒ tx-scoped ctx; every statement
+     *        of the tx's own database (an unnamed one, or one naming that database) resolves it).
      * @param bool $readOnly the READ-ONLY marker (Phase B / #85 write=tx guard — mirror v1 `withWriter` /
      *        the TS `withReadOnly` ALS marker / rust/go/py `read_only`): a write in a read-only-scoped ctx
      *        is REJECTED ({@see WriteInReadOnlyContextError}). Derived via {@see withReadOnly()}.
@@ -460,10 +462,11 @@ class ExecutionContext
     }
 
     /**
-     * The pinned tx connection (present ⇒ tx-scoped ctx; every statement resolves it), or `null`. The
-     * sanctioned accessor for the {@see connectionFor()} extension point (Phase C: the routing subclass
-     * {@see RoutingExecutionContext} reads it so STEP 1 — the tx pin — STILL wins before it applies
-     * reader/writer/named-DB routing; Phase B is not broken). Protected: only a ctx subclass resolving
+     * The pinned tx connection (present ⇒ tx-scoped ctx; every statement of the tx's own database (an unnamed one, or one naming that database) 
+     * resolves it), or `null`. The sanctioned accessor for the {@see connectionFor()} extension point
+     * (Phase C: the routing subclass {@see RoutingExecutionContext} reads it so STEP 1 — the tx pin — is
+     * resolved BEFORE reader/writer/named-DB routing, and a statement naming a DIFFERENT database than
+     * the transaction opened on is rejected there rather than routed). Protected: only a ctx subclass resolving
      * `connectionFor` needs it.
      */
     protected function pinnedConnection(): ?Connection
@@ -515,7 +518,8 @@ class ExecutionContext
     }
 
     /**
-     * Derive a tx-scoped ctx pinning `$conn` (every statement resolves it while `$tx` is true). The
+     * Derive a tx-scoped ctx pinning `$conn` (every statement of the tx's own database (an unnamed one, or one naming that database) 
+     * resolves it while `$tx` is true). The
      * derived ctx shares the primary driver + middleware chain. The PHP analogue of the TS
      * `withConnection(conn, tx)` / go `WithTxConnection` / rust `with_tx_connection` / python
      * `with_connection`.

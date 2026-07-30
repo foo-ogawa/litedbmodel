@@ -632,7 +632,7 @@ test('#217 — the writer/read-only SCOPE inside a named tx keeps the agreement 
   await withTransactionAsync(execAsync, async () => {
     // Inside a withWriter scope (which also enters the read-only scope — the two derivations php split):
     // the tx's OWN database still runs on the pin, an unnamed statement does too, and the OTHER database
-    // stays LOUD. `withWriter` cannot even divert the pool here — the pin wins first.
+    // stays LOUD. `withWriter` cannot even divert the pool here — the pin is resolved first.
     await withWriter(async () => {
       expect((await call('B')).ok).toEqual([{ who: 'B' }]);
       expect((await call(null)).ok).toEqual([{ who: 'B' }]);

@@ -11,7 +11,8 @@ resolution (steps 2-4).
 
 A statement's connection is resolved in THIS priority (first match wins):
 
-  1. **active tx connection** — inside a transaction, always the tx-owned connection (Phase A;
+  1. **active tx connection** — inside a transaction, the tx-owned connection — a statement naming a
+     DIFFERENT database than the tx opened on is REJECTED there rather than routed (Phase A;
      resolved by :class:`ExecutionContext` BEFORE the routing steps, since only it holds the pin).
   2. **writer scope / writer-sticky** — inside :func:`with_writer`, or within ``writer_sticky_duration``
      after a transaction (read-your-writes), a READ goes to the WRITER pool (Phase C — here).

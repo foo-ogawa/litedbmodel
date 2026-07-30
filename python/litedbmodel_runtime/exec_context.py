@@ -12,7 +12,7 @@ with an :class:`ExecutionContext` that carries:
   2. a **middleware chain** — :attr:`ExecutionContext.middleware`, wrapping every SQL (empty in
      Phase A = passthrough; the registration API is Phase D — this is only the hook point);
   3. a **pinned tx connection** — a tx-scoped ctx pins ONE owned connection so every statement in a
-     transaction body runs on it (per-execution connection ownership, §3).
+     transaction body of the tx's own database (an unnamed one, or one naming that database) runs on it (per-execution connection ownership, §3).
 
 ## The central seam (§2) — ALL SQL funnels through here
 
@@ -275,7 +275,8 @@ class ExecutionContext:
     ) -> None:
         self._driver = driver
         self.middleware = middleware
-        # The pinned tx connection (present ⇒ this is a tx-scoped ctx; every statement resolves it).
+        # The pinned tx connection (present ⇒ a tx-scoped ctx; every statement
+        # of the tx's own database (an unnamed one, or one naming that database) resolves it).
         self._pinned = pinned
         # The READ-ONLY marker (Phase B / #84 write=tx guard — mirror v1 `withWriter` / the TS
         # `withReadOnly` ALS marker / rust/go `read_only`): a write in a read-only-scoped ctx is
@@ -361,7 +362,7 @@ class ExecutionContext:
         return DriverConnection(self._driver)
 
     def with_connection(self, conn: Connection, tx: bool) -> "ExecutionContext":
-        """Derive a tx-scoped ctx pinning ``conn`` (every statement resolves it while ``tx`` is True).
+        """Derive a tx-scoped ctx pinning ``conn`` (every statement of the tx's own database (an unnamed one, or one naming that database) resolves it while ``tx`` is True).
         The derived ctx shares the primary driver + middleware chain + routing, and INHERITS the
         read-only marker (a tx opened inside a read-only scope stays read-only — v1 parity). This is the
         Python analogue of the TS ``withConnection(conn, tx)`` / go ``WithTxConnection`` / rust

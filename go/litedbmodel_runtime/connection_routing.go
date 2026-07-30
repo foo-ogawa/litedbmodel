@@ -10,7 +10,8 @@
 // # The connectionFor(intent) resolution order (design §3, v1 DBModel.ts:313 parity)
 //
 // A statement's connection is resolved in THIS priority (first match wins):
-//  1. active tx connection — inside a transaction, always the tx-owned connection (Phase A, resolved
+//  1. active tx connection — inside a transaction, the tx-owned connection (a statement naming a
+//     DIFFERENT database than the tx opened on is REJECTED there rather than routed; Phase A, resolved
 //     in exec_context.go BEFORE this module is consulted).
 //  2. writer scope / writer-sticky — inside [WithWriter], or within writerStickyDuration after a
 //     transaction (read-your-writes), a READ goes to the WRITER pool (Phase C — here).

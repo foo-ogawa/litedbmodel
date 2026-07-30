@@ -10,7 +10,8 @@
 //!   2. a **middleware chain** — [`ExecutionContext::middleware`], wrapping every SQL (empty in
 //!      Phase A = passthrough; the registration API is Phase D — this is only the hook point);
 //!   3. a **pinned tx connection** — a tx-scoped ctx pins ONE owned connection so every statement in
-//!      a transaction body runs on it (per-execution connection ownership, §3).
+//!      a transaction body of the tx's own database (an unnamed one, or one naming that database) runs on it (per-execution
+//!      connection ownership, §3).
 //!
 //! ## The central seam (§2) — ALL SQL funnels through here
 //!
@@ -42,8 +43,8 @@
 //!
 //! A transaction acquires ONE connection via [`Driver::begin_tx`] (a [`TxConnection`] owned handle —
 //! the rust analogue of v1 `litedbmodel.rs` `PoolTransaction`), pins it into a tx-scoped
-//! [`ExecutionContext`], runs its body (every statement resolves that connection via
-//! `connection_for`), COMMITs/ROLLBACKs on the SAME owned connection, and releases it (dropped/back to
+//! [`ExecutionContext`], runs its body (every statement of the tx's own database (an unnamed one, or one naming that database) resolves that
+//! connection via `connection_for`), COMMITs/ROLLBACKs on the SAME owned connection, and releases it (dropped/back to
 //! the pool). Concurrent transactions each own a DISTINCT pooled connection ⇒ isolated. There is NO
 //! driver-global single-slot writer (the removed `writer: Mutex<Option<...>>` on the PG/MySQL drivers
 //! was exactly the shared-slot model that corrupts concurrent transactions).
@@ -190,7 +191,8 @@ pub trait SessionConnection {
 pub type TxSlot<'t> = std::cell::RefCell<Option<Box<dyn TxConnection + 't>>>;
 
 /// A [`Connection`] view over the shared tx slot. The seam resolves this (via `connection_for`) for
-/// every statement inside a tx, so all of them run on the SAME owned connection. Interior mutability
+/// every statement inside a tx of the tx's own database (an unnamed one, or one naming that database) — so all of THOSE run on the SAME owned
+/// connection (one naming another database is rejected instead). Interior mutability
 /// (`RefCell`) is needed because `Connection::execute`/`run` take `&self` (the seam is shared over the
 /// ctx) while [`TxConnection`] takes `&mut self` (an owned connection is used exclusively — a tx body
 /// is not concurrent with itself).
@@ -330,7 +332,7 @@ pub struct ExecutionContext<'a, 't> {
     driver: &'a dyn Driver,
     /// The middleware chain wrapping every SQL (§4). Empty in Phase A.
     middleware: &'a MiddlewareChain,
-    /// The pinned tx connection slot (present ⇒ this is a tx-scoped ctx; every statement resolves it).
+    /// The pinned tx connection slot (present ⇒ a tx-scoped ctx; every statement of the tx's own database (an unnamed one, or one naming that database) resolves it).
     /// The slot's tx handle borrows the primary driver (`'a`); `'t` is the (shorter) borrow of the
     /// slot itself — keeping them distinct avoids the invariant-lifetime borrow conflict when
     /// [`with_transaction`] takes the handle back out.
@@ -592,7 +594,7 @@ impl<'a, 't> ExecutionContext<'a, 't> {
         Ok(Box::new(DriverConnection::new(self.driver)))
     }
 
-    /// Derive a tx-scoped ctx pinning `slot` (every statement resolves it while this ctx is used). The
+    /// Derive a tx-scoped ctx pinning `slot` (every statement of the tx's own database (an unnamed one, or one naming that database) resolves it while this ctx is used). The
     /// derived ctx shares the primary driver + middleware chain + routing; `connection_for` returns the
     /// pinned tx connection instead of the driver. `'x` is the borrow of the slot (shorter than `'a`,
     /// the driver borrow the tx handle inside the slot holds).
@@ -824,7 +826,7 @@ pub fn with_transaction_decided_isolated<'a, R>(
         return Err(e);
     }
 
-    // Run the body on the pinned tx ctx (every statement resolves the SAME owned connection).
+    // Run the body on the pinned tx ctx (every statement of the tx's own database (an unnamed one, or one naming that database) resolves the SAME owned connection).
     let result = body(&tx_ctx);
 
     // End the tx by seam-issuing COMMIT/ROLLBACK on the pinned connection (middleware-visible), THEN

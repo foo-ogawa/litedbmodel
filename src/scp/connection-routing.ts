@@ -11,7 +11,9 @@
  * ## The `connectionFor(intent)` resolution order (design §3, v1 `DBModel.ts:313` parity)
  *
  * A statement's connection is resolved in THIS priority (first match wins):
- *   1. **active tx connection** — inside a transaction, always the tx-owned connection (Phase A).
+ *   1. **active tx connection** — inside a transaction, the tx-owned connection (Phase A). A statement
+ *      naming a DIFFERENT database than the transaction opened on is REJECTED there rather than routed
+ *      ({@link assertTxDbAgrees}) — a transaction cannot span two databases.
  *   2. **writer scope / writer-sticky** — inside {@link withWriter}, or within `writerStickyDuration`
  *      after a transaction (read-your-writes), a READ goes to the WRITER pool (Phase C — here).
  *   3. **read=reader / write=writer** — otherwise a read goes to the reader pool, a write to the

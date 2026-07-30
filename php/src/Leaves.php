@@ -270,7 +270,8 @@ final class Leaves
 
         $executeSQL = static function (array $ports, array $_ctx) use ($ctx, $dialect): array {
             // Resolve the AMBIENT tx-scoped ctx when this leaf runs inside a `withTransaction` scope
-            // (the combinator pins it), so every statement resolves the tx-OWNED connection — the tx
+            // (the combinator pins it), so every statement of the tx's own database (an unnamed one, or one naming that database) resolves
+            // the tx-OWNED connection — the tx
             // boundary is the runtime's, not baked into the generated runner. Outside a tx,
             // `currentContext()` is null ⇒ the bound ctx.
             $active = currentContext() ?? $ctx;

@@ -1952,6 +1952,14 @@ mod tests {
             Ok(TxDecision::Commit(()))
         })
         .unwrap();
+        // Every statement of the whole transaction — the seam-issued BEGIN/COMMIT included — ran on B, and
+        // NOTHING on the default: the derivations did not divert an in-body statement to another
+        // connection. (`recording_stub` logs one entry per statement it serves, so this is the transcript.)
+        let seen = log.lock().unwrap().clone();
+        assert!(
+            seen.iter().all(|e| e.starts_with("B:")) && !seen.is_empty(),
+            "the whole tx must run on B: {seen:?}"
+        );
     }
 
     // #217 (the TRANSACTION half, the rust twin of go's #215) — WHICH database a COVERED transaction

@@ -8,6 +8,7 @@ package litedbmodel_runtime
 import (
 	"database/sql"
 	"errors"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -442,7 +443,26 @@ func TestExecuteSQL_MissingOrMistypedFieldOfAPresentStructIsLoud(t *testing.T) {
 // return the wrong rows — it cannot see a table at all. A single-DB fixture cannot tell a honored
 // connection name from a dropped one, which is exactly why the defect survived the single-DB
 // conformance and livedb suites (#217).
-func namedDBPools(t *testing.T) (*ExecutionContext, func()) {
+// countingPool wraps the PRODUCTION [SQLDBPool] and records its label on every Acquire, so a test can
+// assert HOW MANY connections a transaction checked out (and from which db) while the statements still run
+// against a real sqlite database. Wiring a log and never reading it is a gate that looks like one and
+// checks nothing, so `namedDBPools` hands the transcript back.
+type countingPool struct {
+	inner *SQLDBPool
+	label string
+	log   *[]string
+}
+
+func (p *countingPool) Acquire() (PooledConn, error) {
+	*p.log = append(*p.log, p.label)
+	return p.inner.Acquire()
+}
+
+func (p *countingPool) Release(conn PooledConn, destroy bool) error {
+	return p.inner.Release(conn, destroy)
+}
+
+func namedDBPools(t *testing.T) (*ExecutionContext, *[]string, func()) {
 	t.Helper()
 	open := func(seed ...string) *sql.DB {
 		db, err := sql.Open("sqlite", ":memory:")
@@ -462,16 +482,17 @@ func namedDBPools(t *testing.T) (*ExecutionContext, func()) {
 	a := open("CREATE TABLE only_in_a (id INTEGER PRIMARY KEY)")
 	b := open("CREATE TABLE named_users (id INTEGER PRIMARY KEY, name TEXT)",
 		"INSERT INTO named_users VALUES (1,'Ada'),(2,'Bob')")
+	log := &[]string{}
 	reg := NewConnectionRegistry(map[string]ReaderWriterPools{
-		DefaultConnection: SinglePoolPair(NewSQLDBPool(a)),
-		"B":               SinglePoolPair(NewSQLDBPool(b)),
+		DefaultConnection: SinglePoolPair(&countingPool{inner: NewSQLDBPool(a), label: "A", log: log}),
+		"B":               SinglePoolPair(&countingPool{inner: NewSQLDBPool(b), label: "B", log: log}),
 	})
 	ctx := ContextForRouting(RoutingConfig{
 		Registry: reg,
 		Sticky:   NewWriterStickyClock(StickyOptions{UseWriterAfterTransaction: boolPtr(false)}),
 	}, nil)
 	BindLeafTransport(ctx, "sqlite")
-	return ctx, func() {
+	return ctx, log, func() {
 		UnbindLeafTransport()
 		_ = a.Close()
 		_ = b.Close()
@@ -483,7 +504,7 @@ func namedDBPools(t *testing.T) (*ExecutionContext, func()) {
 // `leaves.test.ts` #217 tests, the rust `named_db_routes_the_statement`, the python
 // `test_named_db_routes_the_statement` and the php `NamedDbRoutingTest`.
 func TestExecuteSQL_NamedDBRoutesTheStatement(t *testing.T) {
-	_, done := namedDBPools(t)
+	_, _, done := namedDBPools(t)
 	defer done()
 
 	read := func(db wire.WireValue) (wire.WireValue, error) {
@@ -555,7 +576,7 @@ func TestExecuteSQL_NamedDBOnANonRoutedContextIsLoud(t *testing.T) {
 // The whole matrix is asserted, the NORMAL cases included: an unnamed in-body statement, and one naming
 // the tx's OWN database, must NOT become loud. The go leg; twins in TS / rust / python / php.
 func TestExecuteSQL_NamedDBInsideATransactionMustAgree(t *testing.T) {
-	ctx, done := namedDBPools(t)
+	ctx, _, done := namedDBPools(t)
 	defer done()
 
 	read := func(db wire.WireValue) (wire.WireValue, error) {
@@ -670,7 +691,7 @@ func TestExecuteSQL_NamedDBOnANonRoutedContextIsLoudInsideATransactionToo(t *tes
 //
 // Driven through the central seam ([Execute]), which is where ConnectionFor is called.
 func TestNamedDBAgreementSurvivesTheReadOnlyAndWriterDerivations(t *testing.T) {
-	ctx, done := namedDBPools(t)
+	ctx, log, done := namedDBPools(t)
 	defer done()
 	const sql = "SELECT id, name FROM named_users ORDER BY id"
 
@@ -707,5 +728,10 @@ func TestNamedDBAgreementSurvivesTheReadOnlyAndWriterDerivations(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("named tx: %v", err)
+	}
+	// ONE checkout for the whole transaction, on B: the derivations did not turn an in-body statement into
+	// a second connection, and nothing was taken from the default.
+	if !reflect.DeepEqual(*log, []string{"B"}) {
+		t.Fatalf("tx checkouts = %v, want [B] (ONE, on B)", *log)
 	}
 }
