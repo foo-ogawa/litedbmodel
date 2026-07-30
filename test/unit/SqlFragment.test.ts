@@ -16,9 +16,9 @@ import {
   isSqlRef,
 } from '../../src/SqlFragment';
 import { createColumn, condsToRecord, Conditions, SKIP } from '../../src/Column';
-import { DBParentRef, parentRef } from '../../src/DBValues';
+import { parentRef } from '../../src/DBValues';
 import { DBConditions } from '../../src/DBConditions';
-import { DBModel, model, column, type ColumnsOf } from '../../src';
+import { DBModel, model, column } from '../../src';
 
 // Test columns
 const UserAge = createColumn<number, { _brand: 'User' }>('age', 'users', 'User');
@@ -26,7 +26,6 @@ const UserName = createColumn<string, { _brand: 'User' }>('name', 'users', 'User
 const UserStatus = createColumn<string, { _brand: 'User' }>('status', 'users', 'User');
 const UserDeletedAt = createColumn<Date | null, { _brand: 'User' }>('deleted_at', 'users', 'User');
 const UserId = createColumn<number, { _brand: 'User' }>('id', 'users', 'User');
-const PostId = createColumn<number, { _brand: 'Post' }>('id', 'posts', 'Post');
 const PostUserId = createColumn<number, { _brand: 'Post' }>('user_id', 'posts', 'Post');
 const PostTitle = createColumn<string, { _brand: 'Post' }>('title', 'posts', 'Post');
 
@@ -448,7 +447,6 @@ describe('condsToRecord integration with sql tag', () => {
     });
 
     it('should handle SKIP with sql tag conditions', () => {
-      const query = { name: undefined as string | undefined };
       const conds = [
         [UserId, 1],
         SKIP,

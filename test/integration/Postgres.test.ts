@@ -10,7 +10,7 @@
 import 'reflect-metadata';
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { DBModel, dbIn, dbNull, model, column, ColumnsOf } from '../../src';
-import { User, Post, PostTag, testConfig, cleanup } from '../helpers/setup';
+import { User, PostTag, testConfig, cleanup } from '../helpers/setup';
 
 // Define a model for all types testing (outside describe block for decorator support)
 @model('all_types_test')

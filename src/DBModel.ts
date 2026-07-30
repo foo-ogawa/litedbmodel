@@ -11,7 +11,7 @@ import type { SelectOptions, InsertOptions, UpdateOptions, DeleteOptions, Update
 import { LimitExceededError, WriteOutsideTransactionError, WriteInReadOnlyContextError } from './types';
 import { type Column, type OrderSpec, type CVs, type Conds, type CondsOf, type OrCondOf, type ColumnsOf, createColumn, columnsToNames, pairsToRecord, condsToRecord, orderToString, createOrCond } from './Column';
 import { type SqlFragment, type SqlCondition, type SqlTypedFragment, isAnySqlFragment } from './SqlFragment';
-import { createMiddleware as createMiddlewareFn, type MiddlewareClass, type MiddlewareConfig, type CreatedMiddlewareClass, type ExecuteResult } from './Middleware';
+import { createMiddleware as createMiddlewareFn, type Middleware, type MiddlewareClass, type MiddlewareConfig, type CreatedMiddlewareClass, type ExecuteResult } from './Middleware';
 import { serializeRecord, getColumnMeta, getPrimaryKey, getSqlCastMap, type KeyPair, type CompositeKeyPairs } from './decorators';
 import { getTypeCast, getSqlBuilder } from './drivers';
 import { isConnectionError } from './connection-errors';
@@ -676,7 +676,10 @@ export abstract class DBModel {
     let next: (...a: Args) => Promise<R> = core;
     for (let i = this._middlewares.length - 1; i >= 0; i--) {
       const MWClass = this._middlewares[i];
-      const instance = MWClass.getCurrentContext();
+      // The per-request instance, as the registry sees it: a bag of OPTIONAL hooks. Which hooks a
+      // middleware implements is its own choice, so the lookup is by name — and a factory-built
+      // middleware's state may legitimately shadow a hook of the same name.
+      const instance = MWClass.getCurrentContext() as Partial<Middleware>;
       const method = instance[methodName] as ((...a: unknown[]) => Promise<R>) | undefined;
       if (method) {
         const currentNext = next;
@@ -703,7 +706,7 @@ export abstract class DBModel {
     let next = core;
     for (let i = this._middlewares.length - 1; i >= 0; i--) {
       const MWClass = this._middlewares[i];
-      const instance = MWClass.getCurrentContext();
+      const instance = MWClass.getCurrentContext() as Partial<Middleware>;
       if (instance.execute) {
         const currentNext = next;
         next = (s, p) => instance.execute!(currentNext, s, p);

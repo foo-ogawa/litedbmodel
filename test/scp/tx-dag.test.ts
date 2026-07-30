@@ -18,13 +18,12 @@
  *      mis-derivation / no guessed order).
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import Database from 'better-sqlite3';
 import {
   entityWrites,
   deriveTransactionPlan,
   compileCompositeWriteBundle,
-  executeTransactionBundle,
   executeTransaction,
   countingDriver,
   renderTxStatement,

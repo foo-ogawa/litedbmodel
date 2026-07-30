@@ -291,8 +291,23 @@ export abstract class Middleware {
   ): Promise<InstanceType<T>[]>;
 }
 
-/** Type for middleware class (not instance) */
-export type MiddlewareClass = typeof Middleware & (new () => Middleware);
+/**
+ * Type for middleware class (not instance) — what {@link DBModel.use} registers.
+ *
+ * The requirement is exactly what the registry's ONE consumer uses: a registered class is only ever
+ * constructed and asked for the current request's instance (`MWClass.getCurrentContext()`), whose hook
+ * is then looked up BY NAME and invoked (`DBModel._applyMiddleware` — the lookup is already a cast,
+ * because which hooks a middleware implements is its own choice).
+ *
+ * Naming `typeof Middleware` here instead demanded the whole static side — `_storage` / `getStorage`
+ * included — and a `getCurrentContext()` returning a full `Middleware`. The class produced by
+ * {@link createMiddleware} advertises neither: its state is its own shape, and a state key may
+ * deliberately SHADOW a hook of the same name (`state: { count: 0 }` vs. the `count` hook — at runtime
+ * the assigned own property wins over the prototype method). So the DOCUMENTED pairing
+ * (`DBModel.use(DBModel.createMiddleware(…))`, README) did not typecheck even though it is the
+ * runtime-correct call, and every stateful middleware in the README was affected.
+ */
+export type MiddlewareClass = { getCurrentContext(): object };
 
 // ===========================================
 // createMiddleware Factory Function
@@ -435,7 +450,7 @@ export interface CreatedMiddlewareClass<S extends object> {
   clearContext(): void;
   /** Constructor */
   new(): Middleware & S;
-}
+};
 
 /**
  * Create a middleware class from a configuration object.

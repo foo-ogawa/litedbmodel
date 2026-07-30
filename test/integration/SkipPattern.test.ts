@@ -849,7 +849,7 @@ class MysqlArrayTestModel extends DBModel {
   @column.json<string[]>() str_arr?: string[];
   @column.json<Record<string, unknown>>() json_data?: Record<string, unknown>;
 }
-let MysqlArrayTest: ReturnType<typeof MysqlArrayTestModel.asModel>;
+let MysqlArrayTest: typeof MysqlArrayTestModel & ColumnsOf<MysqlArrayTestModel>;
 
 describe.skipIf(skipIntegrationTests)('Array (JSON) Pattern - MySQL', () => {
   let MysqlBase: ReturnType<typeof DBModel.createDBBase>;
@@ -956,7 +956,7 @@ class SqliteArrayTestModel extends DBModel {
   @column.json<string[]>() str_arr?: string[];
   @column.json<Record<string, unknown>>() json_data?: Record<string, unknown>;
 }
-let SqliteArrayTest: ReturnType<typeof SqliteArrayTestModel.asModel>;
+let SqliteArrayTest: typeof SqliteArrayTestModel & ColumnsOf<SqliteArrayTestModel>;
 
 describe.skipIf(skipIntegrationTests)('Array (JSON) Pattern - SQLite', () => {
   let SqliteBase: ReturnType<typeof DBModel.createDBBase>;

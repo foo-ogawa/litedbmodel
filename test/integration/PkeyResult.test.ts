@@ -11,7 +11,7 @@
 
 import 'reflect-metadata';
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
-import { DBModel, model, column, PkeyResult, closeAllPools } from '../../src';
+import { DBModel, model, column, closeAllPools } from '../../src';
 import type { ColumnsOf } from '../../src';
 
 // ============================================

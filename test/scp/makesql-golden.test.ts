@@ -37,7 +37,6 @@ import {
   compileCompositeKeyStaticUnlimited,
   compileCompositeKeyLimited,
   compileCompositeKeyStaticLimited,
-  resolvePgArrayCast,
   compileWriteNode,
   buildMysqlReselect,
   renderTxStatement,

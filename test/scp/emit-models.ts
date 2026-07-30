@@ -11,6 +11,7 @@
  * decorator-adapter tests do.
  */
 
+import type { ColumnsOf } from '../../src';
 import 'reflect-metadata';
 import { model, column, hasMany, belongsTo } from '../../src/decorators';
 import type { DeriveColumnsOptions, ModelClassLike } from '../../src/scp/decorator-adapter';
@@ -18,6 +19,9 @@ import type { EndpointSet } from '../../src/scp';
 
 @model('e2e_users')
 export class User {
+  // `@column` installs a STATIC accessor per column at runtime; this names its TYPE so a
+  // static reference (User.id) is CHECKED instead of resolving to an implicit any.
+  declare static id: ColumnsOf<User>['id'];
   @column() id?: number;
   @column() name?: string;
 
@@ -27,6 +31,11 @@ export class User {
 
 @model('e2e_posts')
 export class Post {
+  // `@column` installs a STATIC accessor per column at runtime; this names its TYPE so a
+  // static reference (Post.id) is CHECKED instead of resolving to an implicit any.
+  declare static id: ColumnsOf<Post>['id'];
+  declare static author_id: ColumnsOf<Post>['author_id'];
+  declare static title: ColumnsOf<Post>['title'];
   @column() id?: number;
   @column() author_id?: number;
   @column() title?: string;
@@ -40,6 +49,11 @@ export class Post {
 
 @model('e2e_comments')
 export class Comment {
+  // `@column` installs a STATIC accessor per column at runtime; this names its TYPE so a
+  // static reference (Comment.id) is CHECKED instead of resolving to an implicit any.
+  declare static id: ColumnsOf<Comment>['id'];
+  declare static post_id: ColumnsOf<Comment>['post_id'];
+  declare static body: ColumnsOf<Comment>['body'];
   @column() id?: number;
   @column() post_id?: number;
   @column() body?: string;
@@ -48,6 +62,10 @@ export class Comment {
 /** Composite-key models — the two-column relation key path. */
 @model('e2e_tenant_users')
 export class TenantUser {
+  // `@column` installs a STATIC accessor per column at runtime; this names its TYPE so a
+  // static reference (TenantUser.tenant_id) is CHECKED instead of resolving to an implicit any.
+  declare static tenant_id: ColumnsOf<TenantUser>['tenant_id'];
+  declare static user_id: ColumnsOf<TenantUser>['user_id'];
   @column() tenant_id?: number;
   @column() user_id?: number;
   @column() name?: string;
@@ -64,6 +82,11 @@ export class TenantUser {
 
 @model('e2e_tenant_posts')
 export class TenantPost {
+  // `@column` installs a STATIC accessor per column at runtime; this names its TYPE so a
+  // static reference (TenantPost.tenant_id) is CHECKED instead of resolving to an implicit any.
+  declare static tenant_id: ColumnsOf<TenantPost>['tenant_id'];
+  declare static user_id: ColumnsOf<TenantPost>['user_id'];
+  declare static title: ColumnsOf<TenantPost>['title'];
   @column() tenant_id?: number;
   @column() user_id?: number;
   @column() title?: string;
@@ -86,12 +109,20 @@ export const NAMED_DB = 'analytics';
 
 @model('scp217_users', { connection: NAMED_DB })
 export class NamedUser {
+  // `@column` installs a STATIC accessor per column at runtime; this names its TYPE so a
+  // static reference (NamedUser.id) is CHECKED instead of resolving to an implicit any.
+  declare static id: ColumnsOf<NamedUser>['id'];
   @column() id?: number;
   @column() name?: string;
 }
 
 @model('scp217_posts')
 export class NamedPost {
+  // `@column` installs a STATIC accessor per column at runtime; this names its TYPE so a
+  // static reference (NamedPost.id) is CHECKED instead of resolving to an implicit any.
+  declare static id: ColumnsOf<NamedPost>['id'];
+  declare static author_id: ColumnsOf<NamedPost>['author_id'];
+  declare static title: ColumnsOf<NamedPost>['title'];
   @column() id?: number;
   @column() author_id?: number;
   @column() title?: string;

@@ -268,7 +268,7 @@ export function register(mw: MiddlewareDescriptor): () => void {
 }
 
 /** Register a {@link createMiddleware} handle (or a raw descriptor) — v1 `DBModel.use`. */
-export function use(mw: MiddlewareHandle | MiddlewareDescriptor): () => void {
+export function use<S extends object>(mw: MiddlewareHandle<S> | MiddlewareDescriptor): () => void {
   const descriptor = 'descriptor' in mw ? mw.descriptor : mw;
   return register(descriptor);
 }
