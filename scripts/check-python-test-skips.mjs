@@ -38,14 +38,16 @@
  *     a file renamed off `test_*.py`          collected by nothing; the walk here reads EVERY `.py`
  *                                             under tests/ for exactly this reason
  *
- * The scan is deliberately WIDER than pytest's own collection rules — every `test*` function in every
- * class, not only `Test*` classes — so a test pytest would not collect is RED here rather than
- * silently absent. It errs loud.
+ * The scan is deliberately WIDER than pytest's own collection rules — every function in every class,
+ * prefixed or not — so a test pytest would not collect is RED here rather than silently absent, and a
+ * method of a `Test*` class renamed OFF the `test` prefix is a public method that reported no verdict
+ * ({@link HELPERS}), which closes the hole php closes with `collectible`/PROVIDERS.
  *
- * NOT caught, and it falls GREEN: a function renamed OFF the `test` prefix. The walk selects on that
- * same prefix, so both sides go blind together — measured, `def test_tx_isolation_postgres` →
- * `def tx_isolation_postgres` took the walk from 167 to 166 and pytest's collection from 178 to 177,
- * each of them one smaller and neither of them surprised. php's gate has the identical hole.
+ * NOT caught, and it falls GREEN: a MODULE-LEVEL function renamed off the `test` prefix. pytest collects
+ * a module-level test by that prefix ALONE — there is no enclosing `Test*` class to mark it — so `def
+ * test_x` renamed to `def x` at module scope is indistinguishable from a helper, to this walk and to
+ * pytest alike. php does not share this hole because it has no module-level tests; here it is the residual
+ * (the class-method version above is closed), and LIVE_TESTS is the deletion backstop for the live legs.
  *
  * What a source scan structurally CANNOT catch is a test that has been DELETED: it is missing from the
  * scan too. That is what {@link LIVE_TESTS} is for, and only the live-DB legs are listed — a
@@ -154,24 +156,57 @@ const LIVE_TESTS = [
 ];
 
 /**
- * Every `def test*` the tree declares, as `<file relative to tests/>::<Class…>::<name>`, asked of
- * Python's own parser rather than of a regex.
+ * Public, non-fixture methods of a `Test*` class that pytest does NOT collect as tests, with what they
+ * are — the php gate's PROVIDERS, in python's clothes. Empty because every test in this tree is a
+ * module-level function (no `Test*` class holds a non-test public method), but the allowlist has to
+ * EXIST for the rename check to be absolute: a public method of a test class is a test or is named here.
  *
- * EVERY `.py` under tests/ is walked, and `test*` functions in ANY class are reported — both wider
- * than pytest's `python_files`/`python_classes` patterns, so a file or class that pytest has stopped
- * collecting is RED here instead of quietly absent.
+ * BIDIRECTIONAL: an entry that is now collected AS a test, or is no longer a public method of a `Test*`
+ * class, is stale and red — so it cannot go on excusing a method that stopped being a helper.
+ */
+const HELPERS = [];
+
+/**
+ * Every function/method the tree declares, as `[<file::Class…::name>, inTestClass, prefixed, excluded]`,
+ * asked of Python's own `ast` rather than of a regex — the php gate's shape, so both close the same hole.
+ *
+ * EVERY `.py` under tests/ is walked, and EVERY function/method is reported — prefixed or NOT, in a class
+ * or at module level. Reporting the prefix-LESS ones is what lets the rename hole close: a method of a
+ * `Test*` class renamed OFF the `test` prefix (so pytest stops collecting it) used to vanish from a walk
+ * that also selected on the prefix, both going blind together. Now such a method is a public method of a
+ * class pytest collects from that reported no verdict — RED — exactly as php flags a public method of a
+ * TestCase subclass that phpunit did not collect (`collectible`/PROVIDERS there, `collectible`/HELPERS here).
+ *
+ *   inTestClass  the enclosing class is named `Test*` — pytest's own `python_classes`, the marker that
+ *                a method here is a test unless it is plainly a fixture or helper (below). Module-level
+ *                functions carry `false`: pytest collects a module-level test by the `test_` prefix
+ *                ALONE, so a bare `def foo` there is indistinguishable from a helper — the one form
+ *                neither this nor pytest can tell from a renamed test (stated in the green line).
+ *   prefixed     the name starts with `test` — what pytest collects on, and what `declared` is built from.
+ *   excluded     a leading `_`, a dunder, or a `fixture`/`staticmethod`/`classmethod`/`property`
+ *                decorator: a member of a test class that is legitimately not one of its tests.
  */
 const AST_WALK = `
 import ast, json, os, sys
 root = sys.argv[1]
 out = []
 
-def walk(node, rel, prefix):
+def excluded(fn):
+    if fn.name.startswith("_"):
+        return True
+    for d in fn.decorator_list:
+        base = d.func if isinstance(d, ast.Call) else d
+        leaf = base.attr if isinstance(base, ast.Attribute) else getattr(base, "id", "")
+        if leaf in ("fixture", "staticmethod", "classmethod", "property"):
+            return True
+    return False
+
+def walk(node, rel, prefix, in_test_class):
     for child in node.body:
         if isinstance(child, ast.ClassDef):
-            walk(child, rel, prefix + [child.name])
-        elif isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) and child.name.startswith("test"):
-            out.append("::".join([rel] + prefix + [child.name]))
+            walk(child, rel, prefix + [child.name], child.name.startswith("Test"))
+        elif isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            out.append(["::".join([rel] + prefix + [child.name]), in_test_class, child.name.startswith("test"), excluded(child)])
 
 for dirpath, dirnames, filenames in os.walk(root):
     dirnames[:] = [d for d in dirnames if not d.startswith(".") and d != "__pycache__"]
@@ -182,7 +217,7 @@ for dirpath, dirnames, filenames in os.walk(root):
         with open(path, encoding="utf-8") as fh:
             source = fh.read()
         rel = os.path.relpath(path, root).replace(os.sep, "/")
-        walk(ast.parse(source, filename=path), rel, [])
+        walk(ast.parse(source, filename=path), rel, [], False)
 
 json.dump(out, sys.stdout)
 `;
@@ -195,8 +230,16 @@ if (enumeration.exit !== 0) {
   console.error(`\n❌ the \`ast\` walk of ${relative(ROOT, TESTS_DIR)} exited ${enumeration.exit} — nothing below can be checked against a tree it failed to read.`);
   process.exit(1);
 }
-/** `<file>::<Class…>::<name>` → the label, and the set of files that hold at least one test. */
-const declared = new Set(JSON.parse(enumeration.stdout));
+/**
+ * Every `[label, inTestClass, prefixed, excluded]` the walk found.
+ *   declared    the `test*`-prefixed ones — what pytest collects, checked for a verdict each (`neverRan`).
+ *   collectible the public, non-fixture methods of a `Test*` class, prefixed OR not — what CLOSES the
+ *               rename hole: each must be collected by pytest or named in {@link HELPERS}, exactly as
+ *               php requires a public method of a TestCase subclass to be collected or in PROVIDERS.
+ */
+const reflected = JSON.parse(enumeration.stdout);
+const declared = new Set(reflected.filter(([, , prefixed]) => prefixed).map(([label]) => label));
+const collectible = reflected.filter(([, inTestClass, , excluded]) => inTestClass && !excluded).map(([label]) => label);
 const files = new Set([...declared].map((l) => l.split('::')[0]));
 /** Live legs as the TREE has them now, for the bidirectional check against `LIVE_TESTS`. */
 const liveInTree = new Set(
@@ -275,6 +318,8 @@ const list = (names) => names.map((n) => `      ${n}`).join('\n');
 
 const neverRan = [...declared].filter((l) => !verdicts.has(l)).sort();
 const unscanned = [...verdicts.keys()].filter((l) => !declared.has(l)).sort();
+const uncollected = collectible.filter((l) => !verdicts.has(l) && !HELPERS.includes(l)).sort();
+const staleHelpers = HELPERS.filter((l) => !collectible.includes(l) || verdicts.has(l)).sort();
 const liveGone = LIVE_TESTS.filter((n) => !liveInTree.has(n));
 const liveUnlisted = [...liveInTree].filter((n) => !LIVE_TESTS.includes(n)).sort();
 
@@ -313,6 +358,22 @@ if (unscanned.length > 0) {
   problems.push(
     `${unscanned.length} python test(s) reported a verdict that the \`ast\` walk of ${relative(ROOT, TESTS_DIR)} never found. The walk is wrong — and the check above is only as strong as the walk, so a broken walk passes it vacuously:\n` +
       list(unscanned),
+  );
+}
+if (uncollected.length > 0) {
+  problems.push(
+    `${uncollected.length} public method(s) of a \`Test*\` class were NOT COLLECTED by pytest and are not named in HELPERS:\n` +
+      list(uncollected) +
+      `\n\n      A public, non-fixture method of a test class is a test pytest runs or a helper named in\n` +
+      `      HELPERS. This is what catches a method renamed OFF the \`test\` prefix inside a test class —\n` +
+      `      pytest stops collecting it and a prefix-based walk stops seeing it, both at once — exactly\n` +
+      `      the hole php's \`collectible\`/PROVIDERS check closes.`,
+  );
+}
+if (staleHelpers.length > 0) {
+  problems.push(
+    `${staleHelpers.length} entry/entries in HELPERS no longer describe a helper — the method is gone, is no longer a public method of a \`Test*\` class, or is now COLLECTED as a test:\n` +
+      list(staleHelpers),
   );
 }
 if (liveGone.length > 0) {
@@ -430,7 +491,8 @@ report(
   `✅ the live-DB gates ${GATES_ENV} declares were OPEN in this process before pytest started; each of the ` +
     `${declared.size} tests\n` +
     `   the tree declares (Python's own \`ast\`, every .py under python/tests, every \`test*\` in any class)\n` +
-    `   reported a verdict in pytest's own --junitxml report, and every one of the ${cases.length} testcases was a pass\n` +
+    `   reported a verdict in pytest's own --junitxml report — and every public method of a \`Test*\` class was\n` +
+    `   collected or named in HELPERS, so a method renamed off the \`test\` prefix is red — and every one of the ${cases.length} testcases was a pass\n` +
     `   (${skipped.length} skipped, budget ${SKIP_BUDGET}); all ${LIVE_TESTS.length} live-DB legs listed in LIVE_TESTS are still present in the tree.\n` +
     `   ${LIVE_TESTS.length - HANGS.length - OFFLINE_CHECKS.length} of those legs were then re-run against an UNREACHABLE database (${UNREACHABLE.TEST_DB_HOST}:${UNREACHABLE.TEST_DB_PORT}) and NONE passed —\n` +
     `   so each really dials a server rather than passing on an empty body. The ${OFFLINE_CHECKS.length} in OFFLINE_CHECKS were\n` +

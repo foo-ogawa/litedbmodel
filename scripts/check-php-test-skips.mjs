@@ -41,16 +41,15 @@
  *     a class that stops extending TestCase     phpunit collects nothing from it; reflection still
  *                                               sees its `test*` methods
  *
- * The walk is deliberately WIDER than phpunit's own collection rules — every `test*` public method of
- * every class, whether or not the class is a TestCase — so a test phpunit would not collect is RED
- * here rather than silently absent. It errs loud.
+ * The walk is deliberately WIDER than phpunit's own collection rules — EVERY public method of every
+ * class, prefixed or NOT — so a test phpunit would not collect is RED here rather than silently absent.
  *
- * NOT caught, and it falls GREEN: a method renamed OFF the `test` prefix. The walk selects methods by
- * that same prefix, so both sides go blind together — measured, `testRenderAllFragmentsPresent` →
- * `renderAllFragmentsPresent` took the run from `152 testcases from 134 declared tests` to `151 … from
- * 133` with no new problem reported. Enumerating `#[Test]`/`@test` as well (this suite uses neither)
- * would not change that: a method with neither the prefix nor the attribute is invisible to phpunit
- * and to reflection alike. python's gate has the identical hole for the same reason.
+ * That width is what closes the rename hole: a method renamed OFF the `test` prefix (so phpunit stops
+ * collecting it) is still a public method of a TestCase subclass with no verdict, which {@link
+ * collectible} flags unless it is named in {@link PROVIDERS} — measured, `testRenderAllFragmentsPresent`
+ * → `renderAllFragmentsPresent` is now RED, not a silent 152→151. A method with NEITHER the prefix nor
+ * the `#[Test]`/`@test` attribute is exactly what this catches; every php test here lives in a TestCase
+ * subclass, so there is no module-level equivalent to slip through (python's gate carries that residual).
  *
  * What a source walk structurally CANNOT catch is a test that has been DELETED: it is missing from the
  * walk too. That is what {@link LIVE_TESTS} is for, and only the live-DB legs are listed — a
