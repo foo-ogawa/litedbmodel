@@ -7,8 +7,8 @@ namespace LiteDbModel\Runtime;
 /**
  * litedbmodel v2 SCP — LIVE PostgreSQL / MySQL PDO drivers (WS7g, #36).
  *
- * The PHP leg of the coordinated cross-language live-DB validation pass. The {@see Runtime} /
- * {@see WriteRuntime} handler seam already takes ANY `\PDO`; this file supplies two live `\PDO`
+ * The PHP leg of the coordinated cross-language live-DB validation pass. The leaf transport
+ * ({@see Leaves::makeHandlers}) handler seam already takes ANY `\PDO`; this file supplies two live `\PDO`
  * SUBCLASSES that adapt the two dialect divergences a raw PDO can't absorb, so the runtime stays
  * UNCHANGED:
  *
@@ -22,8 +22,8 @@ namespace LiteDbModel\Runtime;
  *     statement subclass emulates it at the seam (strip RETURNING → run the INSERT → re-select the
  *     AUTO_INCREMENT PK's columns) — the dialect-behavior-by-convention the WS6 TS ScpDialect uses.
  *
- * Both run with PDO autocommit ON so the WriteRuntime's explicit `BEGIN`/`COMMIT`/`ROLLBACK`
- * envelope drives a REAL transaction on the live DB (the gate-first write-tx).
+ * Both run with PDO autocommit ON so the runtime's explicit `BEGIN`/`COMMIT`/`ROLLBACK` envelope
+ * (issued by the tx combinator through the seam) drives a REAL transaction on the live DB.
  */
 final class LiveDb
 {

@@ -11,8 +11,8 @@ namespace LiteDbModel\Runtime;
  * rust port `rust/litedbmodel_runtime/src/exec_context.rs` (#76), the go port
  * `go/litedbmodel_runtime/exec_context.go` (#77) and the python port
  * `python/litedbmodel_runtime/exec_context.py` (#78). It replaces the raw `\PDO $db` threaded
- * through `Runtime::executeBundle` / `StaticBundle::executeReadGraph` / the relation walker /
- * `WriteRuntime::executeTransaction` with an {@see ExecutionContext} that carries:
+ * through the leaf transport ({@see execute()} / {@see run()} / {@see runGuarded()})
+ * with an {@see ExecutionContext} that carries:
  *
  *   1. a **connection provider** — {@see ExecutionContext::connectionFor()} `(intent)` resolves WHICH
  *      connection a statement runs on (the tx-owned connection, else the primary PDO; Phase A wires
@@ -416,8 +416,8 @@ final class MiddlewareChain
 // ── The ExecutionContext (§2 / §5) — ONE interface ────────────────────────────
 
 /**
- * The execution context threaded through `Runtime::executeBundle` / `StaticBundle::executeReadGraph` /
- * the relation walker / `WriteRuntime::executeTransaction` in place of a raw `\PDO`. It carries the
+ * The execution context threaded through the leaf transport and the central execute/run/runGuarded
+ * seam in place of a raw `\PDO`. It carries the
  * connection provider (the primary driver + an optional pinned tx connection), the middleware chain,
  * and derives a tx-scoped ctx via {@see withConnection()}.
  *
@@ -482,7 +482,7 @@ class ExecutionContext
     /**
      * Derive a READ-ONLY-scoped ctx (mirror v1 `withWriter` / the TS `withReadOnly` / rust/go/py
      * `with_read_only`): reads are allowed, but ANY write funneled through the GUARDED write seam
-     * ({@see runGuarded()} / a guarded `executeTransactionBundle`) is rejected with
+     * ({@see runGuarded()}) is rejected with
      * {@see WriteInReadOnlyContextError}. A tx-scoped ctx INHERITS its pinned connection + driver +
      * middleware; a transaction() opened inside a read-only scope stays read-only (v1 parity).
      */
@@ -662,8 +662,8 @@ final class Context
 
     /**
      * Accept EITHER a raw `\PDO` (wrap it via {@see forPdo()} — the byte-identical backward-compat
-     * path) OR an already-built {@see ExecutionContext} (pass through). The public runtime entry
-     * points (`executeBundle` / `executeTransactionBundle`) take this
+     * path) OR an already-built {@see ExecutionContext} (pass through). The leaf transport
+     * ({@see Leaves::makeHandlers}) takes this
      * union so every existing raw-`\PDO` caller keeps working while the internals thread a ctx.
      */
     public static function of(\PDO|ExecutionContext $pdoOrCtx): ExecutionContext
@@ -725,8 +725,8 @@ function rollbackWith(mixed $value): TxDecision
  * Empty ⇒ a bare `BEGIN` (byte-identical to the Phase A path).
  *
  * The tx-scoped ctx is ALSO pinned as the AMBIENT context ({@see TxAmbient}) for the duration of
- * `$body` — so an operation issued INSIDE the body (a nested `executeTransactionBundle` whose caller
- * threads only the raw `\PDO`) still detects the tx via {@see currentContext()} and JOINs it. This
+ * `$body` — so an operation issued INSIDE the body (a nested guarded write {@see runGuarded()} whose
+ * caller threads only the raw `\PDO`) still detects the tx via {@see currentContext()} and JOINs it. This
  * is the PHP analogue of the TS `txContext.run` async-local / python's `run_with_pinned_context`
  * (PHP is 1-req-1-process, so a process-scoped holder is the honest single-threaded equivalent).
  *
@@ -914,8 +914,8 @@ function runGuarded(ExecutionContext $ctx, string $sql, array $params, string $o
  *
  * ```php
  * transaction($ctx, function () {
- *     Runtime::executeTransactionBundle($aBundle, $aInput, $aPdo);  // ← every op inside JOINS this
- *     Runtime::executeTransactionBundle($bBundle, $bInput, $bPdo);  //    ONE boundary: one conn,
+ *     runGuarded(currentContext(), $aSql, $aArgs, 'WRITE', $aModel);  // ← every op inside JOINS this
+ *     runGuarded(currentContext(), $bSql, $bArgs, 'WRITE', $bModel);  //    ONE boundary: one conn,
  * }, new TransactionOptions(isolation: IsolationLevel::Serializable));  //  one BEGIN…COMMIT, all-or-nothing
  * ```
  *
@@ -930,8 +930,8 @@ function runGuarded(ExecutionContext $ctx, string $sql, array $params, string $o
  * ## The ambient-tx JOIN — how operations participate (the core #86 fix; PHP = ambient holder)
  *
  * `$fn` takes NO connection argument. Instead the pinned tx ctx lives in the ambient holder
- * ({@see currentContext()}). Every operation `$fn` issues — a live-DB write via
- * `executeTransactionBundle`, a read via `executeBundle` — detects that ambient pinned ctx and runs
+ * ({@see currentContext()}). Every operation `$fn` issues — a write via the guarded write seam
+ * ({@see runGuarded()}), a read via the read seam — detects that ambient pinned ctx and runs
  * its statements on THAT connection **without opening its own BEGIN/COMMIT** (the nested-join). So N
  * operations inside one `transaction($fn)` produce exactly ONE BEGIN + ONE COMMIT on ONE connection.
  * Outside a `transaction($fn)` the ambient pin is absent, so a bare guarded write's guard fires
@@ -990,7 +990,7 @@ function transaction(
             // go/rust/py classify through. A live PG 40001 / MySQL 1213 (raised at COMMIT as a raw
             // \PDOException) thus flows through `SqlFailure::fromPdo` here, making the wrapped chain
             // genuinely load-bearing on the live retry path (neuter it → this classification goes RED).
-            // An already-mapped `SqlFailure` (e.g. from a nested executeTransactionBundle) is left as-is.
+            // An already-mapped `SqlFailure` (e.g. surfaced by the guarded write seam) is left as-is.
             $failure = $error;
             if (!($failure instanceof SqlFailure) && $error instanceof \PDOException) {
                 $failure = SqlFailure::fromPdo($error);

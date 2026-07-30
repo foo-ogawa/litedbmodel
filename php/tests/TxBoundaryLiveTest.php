@@ -5,11 +5,10 @@ declare(strict_types=1);
 namespace LiteDbModel\Runtime\Tests;
 
 use LiteDbModel\Runtime\Context;
-use LiteDbModel\Runtime\ExecutionContext;
 use LiteDbModel\Runtime\IsolationLevel;
 use LiteDbModel\Runtime\LiveDb;
 use LiteDbModel\Runtime\RetryClassifierFlags;
-use LiteDbModel\Runtime\Runtime;
+use LiteDbModel\Runtime\RunInfo;
 use LiteDbModel\Runtime\SqlFailure;
 use LiteDbModel\Runtime\TransactionOptions;
 use LiteDbModel\Runtime\WriteInReadOnlyContextError;
@@ -19,6 +18,7 @@ use PHPUnit\Framework\TestCase;
 use function LiteDbModel\Runtime\currentContext;
 use function LiteDbModel\Runtime\execute;
 use function LiteDbModel\Runtime\run as seamRun;
+use function LiteDbModel\Runtime\runGuarded;
 use function LiteDbModel\Runtime\runWithPinnedContext;
 use function LiteDbModel\Runtime\transaction;
 
@@ -30,9 +30,8 @@ use function LiteDbModel\Runtime\transaction;
  * withTransactionDecided on an OWNED connection, each op JOINing the ambient tx) against real engines:
  *
  *   (1) MULTI-OP ATOMICITY — transaction(fn: [opA_insert; opB_insert]) → both commit (ONE BEGIN + ONE
- *       COMMIT, captured live). opB PK-collides → opA's row ALSO rolls back. The FAITHFUL-MUTATION
- *       RED→GREEN proof (break the ambient JOIN so opA commits alone → atomicity goes RED; restore →
- *       GREEN) proves the join/atomicity is real, not vacuous.
+ *       COMMIT, captured live). opB PK-collides → opA's row ALSO rolls back — both ops JOIN the ONE
+ *       ambient tx through the guarded write seam on the pinned ctx.
  *   (2) GUARD (live) — write OUTSIDE transaction() → WriteOutsideTransactionError; read-only inside →
  *       WriteInReadOnlyContextError; inside → ok.
  *   (3) ISOLATION SQL EMISSION (live) — the ACTUAL per-dialect isolation statements are captured off the
@@ -55,7 +54,7 @@ use function LiteDbModel\Runtime\transaction;
  * no threads and no shared-runtime concurrency within a process, and each process holds exactly ONE
  * `\PDO` that can host exactly ONE live transaction. So an in-process concurrent-tx isolation test has
  * no meaning here and is NOT faked. What IS proven instead, faithfully: (a) live MULTI-OP ATOMICITY
- * with a RED→GREEN mutation of the join; (b) REAL cross-PROCESS contention (40001 / 1213) driving the
+ * (opB's collision rolls back opA); (b) REAL cross-PROCESS contention (40001 / 1213) driving the
  * retry loop — genuine OS-level concurrency, the honest PHP analogue of the go/py threaded contention.
  *
  * REAL DBs, no mock, NO silent skip: if PG/MySQL is unreachable the test ERRORS. Set
@@ -124,27 +123,23 @@ final class TxBoundaryLiveTest extends TestCase
         return $out;
     }
 
-    private static function insertBundle(string $dialect): \stdClass
+    /** The single-row INSERT with dialect-correct placeholders (PG `$N`, MySQL `?`; the LiveDb PDO
+     *  subclasses rewrite as needed). */
+    private static function insertSql(string $dialect): string
     {
-        return json_decode(json_encode([
-            'dialect' => $dialect,
-            'name' => 'InsertOne',
-            'transaction' => [
-                'phase' => 'create',
-                'entityFrom' => null,
-                'statements' => [
-                    ['id' => 'tx_body_0', 'role' => 'body', 'op' => [
-                        'sql' => 'INSERT INTO ' . self::TBL . ' (id, worker, seq) VALUES (?, ?, ?)',
-                        'params' => [['ref' => ['id']], ['ref' => ['worker']], ['ref' => ['seq']]],
-                    ]],
-                ],
-            ],
-        ]), false);
+        $ph = $dialect === 'postgres' ? '($1, $2, $3)' : '(?, ?, ?)';
+        return 'INSERT INTO ' . self::TBL . " (id, worker, seq) VALUES {$ph}";
     }
 
-    private static function op(\PDO $db, string $dialect, int $id, int $worker, int $seq): array
+    /**
+     * The op the boundary body issues — a PUBLIC guarded write through the production guarded write
+     * seam ({@see runGuarded()}) on the ambient pinned tx ctx, JOINing the ambient tx (the same seam a
+     * user-facing write inside transaction() rides). Called only INSIDE a boundary, where
+     * currentContext() is the pinned tx ctx.
+     */
+    private static function op(string $dialect, int $id, int $worker, int $seq): RunInfo
     {
-        return Runtime::executeTransactionBundle(self::insertBundle($dialect), ['id' => $id, 'worker' => $worker, 'seq' => $seq], $db);
+        return runGuarded(currentContext(), self::insertSql($dialect), [$id, $worker, $seq], 'WRITE', self::TBL);
     }
 
     private function connectOrFail(callable $connect, string $dialect): \PDO
@@ -156,7 +151,7 @@ final class TxBoundaryLiveTest extends TestCase
         }
     }
 
-    // ── (1) MULTI-OP ATOMICITY + RED→GREEN mutation proof ───────────────────────
+    // ── (1) MULTI-OP ATOMICITY ──────────────────────────────────────────────────
 
     /** @dataProvider dialects */
     public function testMultiOpAtomicityCommitsTogether(string $dialect, string $intType, callable $connect): void
@@ -165,50 +160,31 @@ final class TxBoundaryLiveTest extends TestCase
         self::reset($db, $intType);
         $ctx = Context::forPdo($db);
 
-        $r = transaction($ctx, fn () => [self::op($db, $dialect, 100, 1, 0), self::op($db, $dialect, 101, 1, 1)], new TransactionOptions(), $dialect);
-        $this->assertSame([true, true], array_map(fn ($x) => $x['committed'], $r));
+        $r = transaction($ctx, fn () => [self::op($dialect, 100, 1, 0), self::op($dialect, 101, 1, 1)], new TransactionOptions(), $dialect);
+        $this->assertSame([1, 1], array_map(fn ($x) => $x->changes, $r));
         // N ops in ONE boundary → both persisted on ONE connection (the ambient JOIN).
         $this->assertSame([[100, 1], [101, 1]], self::readRows($db), "[$dialect] both ops commit together");
     }
 
     /** @dataProvider dialects */
-    public function testMultiOpAtomicityRollsBackTogetherAndRedGreenMutation(string $dialect, string $intType, callable $connect): void
+    public function testMultiOpAtomicityRollsBackTogether(string $dialect, string $intType, callable $connect): void
     {
         $db = $this->connectOrFail($connect, $dialect);
 
-        // ── GREEN (join intact): opB PK-collides → opA ALSO rolls back (real cross-op atomicity). ──
+        // opB PK-collides → opA ALSO rolls back (real cross-op atomicity). Both ops JOIN the ONE ambient
+        // tx through the guarded write seam on the pinned ctx, so opB's collision rolls the whole
+        // boundary back.
         self::reset($db, $intType);
         $db->exec('INSERT INTO ' . self::TBL . ' (id, worker, seq) VALUES (201, 999, 9)'); // pre-seed collision
         $ctx = Context::forPdo($db);
         $raised = false;
         try {
-            transaction($ctx, fn () => [self::op($db, $dialect, 200, 2, 0), self::op($db, $dialect, 201, 2, 1)], new TransactionOptions(retryOnError: false), $dialect);
+            transaction($ctx, fn () => [self::op($dialect, 200, 2, 0), self::op($dialect, 201, 2, 1)], new TransactionOptions(retryOnError: false), $dialect);
         } catch (\Throwable) {
             $raised = true;
         }
         $this->assertTrue($raised, "[$dialect] opB collision must fail the whole boundary");
-        $this->assertSame([], self::readRows($db), "[$dialect] GREEN: opA (id=200) rolls back with opB (real atomicity)");
-
-        // ── RED (FAITHFUL MUTATION): break the ambient JOIN — run each op via the INTERNAL guard-off ──
-        // executor with NO transaction() wrapper, so opA opens + COMMITS its OWN auto-tx and SURVIVES
-        // opB's failure. The atomicity outcome (rows == []) is then BROKEN — proving the join is real.
-        self::reset($db, $intType);
-        $db->exec('INSERT INTO ' . self::TBL . ' (id, worker, seq) VALUES (201, 999, 9)');
-        $doOpNoJoin = fn (int $id, int $w, int $s) =>
-            Runtime::executeTransactionBundleInternal(self::insertBundle($dialect), ['id' => $id, 'worker' => $w, 'seq' => $s], $db);
-        try {
-            $doOpNoJoin(200, 2, 0); // commits alone (its own auto-tx)
-            $doOpNoJoin(201, 2, 1); // PK collision → fails, but opA already committed
-        } catch (\Throwable) {
-            // ignore
-        }
-        $this->assertGreaterThanOrEqual(
-            1,
-            count(self::readRows($db)),
-            "[$dialect] RED MUTATION PROOF: breaking the ambient JOIN MUST leak opA (id=200) past opB's "
-            . 'failure ⇒ the atomicity assertion has teeth.'
-        );
-        self::reset($db, $intType); // clean up the leaked row
+        $this->assertSame([], self::readRows($db), "[$dialect] opA (id=200) rolls back with opB (real atomicity)");
     }
 
     // ── (2) write=tx GUARD on the live path ─────────────────────────────────────
@@ -220,10 +196,11 @@ final class TxBoundaryLiveTest extends TestCase
         self::reset($db, $intType);
         $ctx = Context::forPdo($db);
 
-        // Outside any transaction() → WriteOutsideTransactionError.
+        // A bare guarded write OUTSIDE any transaction() (base ctx, no ambient pin) →
+        // WriteOutsideTransactionError.
         $threw = false;
         try {
-            self::op($db, $dialect, 300, 3, 0);
+            runGuarded($ctx, self::insertSql($dialect), [300, 3, 0], 'WRITE', self::TBL);
         } catch (WriteOutsideTransactionError) {
             $threw = true;
         }
@@ -234,7 +211,7 @@ final class TxBoundaryLiveTest extends TestCase
             $ro = currentContext()->withReadOnly();
             $roThrew = false;
             try {
-                runWithPinnedContext($ro, fn () => self::op($db, $dialect, 301, 3, 0));
+                runWithPinnedContext($ro, fn () => self::op($dialect, 301, 3, 0));
             } catch (WriteInReadOnlyContextError) {
                 $roThrew = true;
             }
@@ -243,7 +220,7 @@ final class TxBoundaryLiveTest extends TestCase
         }, new TransactionOptions(retryOnError: false), $dialect);
 
         // Inside a transaction() → succeeds.
-        transaction($ctx, fn () => self::op($db, $dialect, 302, 3, 0), new TransactionOptions(), $dialect);
+        transaction($ctx, fn () => self::op($dialect, 302, 3, 0), new TransactionOptions(), $dialect);
         $this->assertSame([[302, 3]], self::readRows($db), "[$dialect] only the in-boundary write (id=302) persisted");
     }
 
@@ -360,8 +337,8 @@ final class TxBoundaryLiveTest extends TestCase
 
         // Nested join: one physical tx, both rows persist.
         transaction($ctx, function () use ($db, $dialect, $ctx) {
-            self::op($db, $dialect, 500, 5, 0);
-            return transaction($ctx, fn () => self::op($db, $dialect, 501, 5, 1), new TransactionOptions(), $dialect);
+            self::op($dialect, 500, 5, 0);
+            return transaction($ctx, fn () => self::op($dialect, 501, 5, 1), new TransactionOptions(), $dialect);
         }, new TransactionOptions(), $dialect);
         $this->assertSame([[500, 5], [501, 5]], self::readRows($db), "[$dialect] nested join: both rows on one tx");
 
@@ -371,8 +348,8 @@ final class TxBoundaryLiveTest extends TestCase
         $raised = false;
         try {
             transaction($ctx, function () use ($db, $dialect, $ctx) {
-                self::op($db, $dialect, 600, 6, 0);
-                return transaction($ctx, fn () => self::op($db, $dialect, 601, 6, 1), new TransactionOptions(), $dialect);
+                self::op($dialect, 600, 6, 0);
+                return transaction($ctx, fn () => self::op($dialect, 601, 6, 1), new TransactionOptions(), $dialect);
             }, new TransactionOptions(retryOnError: false), $dialect);
         } catch (\Throwable) {
             $raised = true;
