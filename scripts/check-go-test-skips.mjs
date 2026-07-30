@@ -70,12 +70,11 @@
  *   - `go test` exiting non-zero for a reason none of the above explains, or putting anything on
  *     stdout that is not a `-json` event. Unmodelled ⇒ red, never green.
  */
-import { spawn } from 'node:child_process';
-import { createInterface } from 'node:readline';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { GATES_ENV, readGateDeclarations } from './livedb-gates.mjs';
+import { assertGatesOpen, runOwned, mustHaveStarted, exitProblem, report } from './run-gate.mjs';
+import { GATES_ENV, readsAGate } from './livedb-gates.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const GO_DIR = join(ROOT, 'go');
@@ -140,7 +139,7 @@ for (const file of goTestFiles(GO_DIR)) {
   const src = readFileSync(file, 'utf8');
   const rel = relative(GO_DIR, file);
   const pkg = dirname(rel) === '.' ? MODULE : `${MODULE}/${dirname(rel)}`;
-  const isLive = /LITEDBMODEL_[A-Z0-9_]+/.test(src);
+  const isLive = readsAGate(src);
   for (const [, name] of src.matchAll(/^func (Test[A-Za-z0-9_]*)\s*\(/gm)) {
     if (name === 'TestMain') continue; // the package entry point, not a test — it reports no verdict
     declared.set(`${pkg} ${name}`, relative(ROOT, file));
@@ -170,21 +169,7 @@ for (const file of goTestFiles(GO_DIR)) {
  * an emptied body passes too. That is what PHASE 2 at the bottom of this file is for: the same legs are
  * re-run against a database that is not there, and a leg that PASSES anyway never touched one.
  */
-const gateDeclarations = readGateDeclarations();
-const shut = [...gateDeclarations].filter(([name, value]) => process.env[name] !== value);
-if (shut.length > 0) {
-  console.error(
-    `\n❌ ${shut.length} of the ${gateDeclarations.size} live-DB gates \`${GATES_ENV}\` declares are not open in this ` +
-      `process, so the go suite would run with its live-DB legs disabled — and a leg that does not run reports nothing ` +
-      `this check could catch:\n` +
-      shut
-        .map(([n, v]) => `      ${n}: declared ${JSON.stringify(v)}, this environment has ${process.env[n] === undefined ? '(unset)' : JSON.stringify(process.env[n])}`)
-        .join('\n') +
-      `\n\n      npm run docker:livedb:up && set -a && . ./${GATES_ENV} && set +a\n` +
-      `      (CI opens them in conformance.yml, step "Open the live-DB test gates".)`,
-  );
-  process.exit(1);
-}
+const gateDeclarations = assertGatesOpen('go');
 
 /** Verdict actions. `start`/`run` carry none; everything else on an event is output. */
 const VERDICT = new Set(['pass', 'fail', 'skip', 'build-fail']);
@@ -198,21 +183,15 @@ const VERDICT = new Set(['pass', 'fail', 'skip', 'build-fail']);
  * and the exit code read the same way for each.
  */
 async function goTest(extraArgs, extraEnv) {
-  const go = spawn('go', ['test', './...', '-json', '-count=1', ...extraArgs], {
-    cwd: GO_DIR,
-    stdio: ['ignore', 'pipe', 'inherit'],
-    env: { ...process.env, ...extraEnv },
-  });
-  let spawnError = null;
-  go.on('error', (err) => {
-    spawnError = err;
-  });
-  const exited = new Promise((resolve) => go.on('close', (code, signal) => resolve({ code, signal })));
+  const run = mustHaveStarted(
+    await runOwned('go', ['test', './...', '-json', '-count=1', ...extraArgs], { cwd: GO_DIR, env: extraEnv }),
+    'go test',
+  );
   /** `kind\0label` → { kind, label, action, output[] } — one entry per build unit, package and test. */
   const seen = new Map();
   /** Lines that are not events. `go test -json` puts ONLY events on stdout; anything else is a hole. */
   const foreign = [];
-  for await (const line of createInterface({ input: go.stdout })) {
+  for (const line of run.stdout.split('\n')) {
     if (!line) continue;
     let e;
     try {
@@ -241,17 +220,11 @@ async function goTest(extraArgs, extraEnv) {
     if (VERDICT.has(e.Action)) s.action = e.Action;
     else if (e.Output !== undefined) s.output.push(e.Output);
   }
-  const { code, signal } = await exited;
-  return { seen, foreign, exit: code, signal, spawnError };
+  return { seen, foreign, run };
 }
 
 const phase1 = await goTest([], {});
 const { seen, foreign } = phase1;
-const { exit: goExit, signal: goSignal, spawnError } = phase1;
-if (spawnError) {
-  console.error(`\n❌ could not run \`go test\`: ${spawnError.message}`);
-  process.exit(1);
-}
 
 const of = (kind, action) => [...seen.values()].filter((s) => s.kind === kind && s.action === action);
 const [passed, failed, skipped] = [of('test', 'pass'), of('test', 'fail'), of('test', 'skip')];
@@ -336,15 +309,7 @@ if (foreign.length > 0) {
       foreign.map((l) => `      ${l}`).join('\n'),
   );
 }
-if (goSignal) {
-  problems.push(
-    `\`go test\` was KILLED by ${goSignal}. Its stream stops where the process died, so everything after that point was never reported — a partial stream is not a green run.`,
-  );
-} else if (goExit !== 0 && problems.length === 0) {
-  problems.push(
-    `\`go test\` exited ${goExit} while every event in its stream reported success — something failed that this check does not model. Do not read that as green.`,
-  );
-}
+exitProblem(phase1.run, 'go test', problems);
 
 // ── PHASE 2: the live legs really DIAL a database ───────────────────────────────────────────────────
 //
@@ -371,38 +336,31 @@ const UNREACHABLE = { TEST_DB_HOST: '127.0.0.1', TEST_DB_PORT: '1', TEST_MYSQL_H
 if (problems.length === 0) {
   const runFilter = `^(${LIVE_TESTS.join('|')})$`;
   const phase2 = await goTest([`-run=${runFilter}`], UNREACHABLE);
-  if (phase2.spawnError) {
-    problems.push(`could not re-run the live legs against an unreachable database: ${phase2.spawnError.message}`);
-  } else {
-    const verdict = new Map();
-    for (const s of phase2.seen.values()) {
-      if (s.kind === 'test' && s.action && !s.test.includes('/')) verdict.set(s.test, s.action);
-    }
-    const passedWithoutServer = LIVE_TESTS.filter((n) => verdict.get(n) === 'pass');
-    const noVerdict = LIVE_TESTS.filter((n) => !verdict.has(n));
-    if (passedWithoutServer.length > 0) {
-      problems.push(
-        `${passedWithoutServer.length} live-DB leg(s) PASSED with no database behind them (${UNREACHABLE.TEST_DB_HOST}:${UNREACHABLE.TEST_DB_PORT} refuses every connection). A leg that passes without a server never dialled one, so its green above says nothing about a live database:\n` +
-          passedWithoutServer.map((n) => `      ${n}`).join('\n') +
-          `\n\n      An emptied body, a removed assertion block, or a connect that is never made all look\n` +
-          `      exactly like this. The other ${LIVE_TESTS.length - passedWithoutServer.length} failed as they should.`,
-      );
-    }
-    if (noVerdict.length > 0) {
-      problems.push(
-        `${noVerdict.length} live-DB leg(s) reported NO verdict from the unreachable-database run, so nothing was learned about them — a \`-run\` filter that matches nothing passes this check vacuously:\n` +
-          noVerdict.map((n) => `      ${n}`).join('\n') +
-          `\n\n      Filter used: -run=${runFilter}`,
-      );
-    }
+  const verdict = new Map();
+  for (const s of phase2.seen.values()) {
+    if (s.kind === 'test' && s.action && !s.test.includes('/')) verdict.set(s.test, s.action);
+  }
+  const passedWithoutServer = LIVE_TESTS.filter((n) => verdict.get(n) === 'pass');
+  const noVerdict = LIVE_TESTS.filter((n) => !verdict.has(n));
+  if (passedWithoutServer.length > 0) {
+    problems.push(
+      `${passedWithoutServer.length} live-DB leg(s) PASSED with no database behind them (${UNREACHABLE.TEST_DB_HOST}:${UNREACHABLE.TEST_DB_PORT} refuses every connection). A leg that passes without a server never dialled one, so its green above says nothing about a live database:\n` +
+        passedWithoutServer.map((n) => `      ${n}`).join('\n') +
+        `\n\n      An emptied body, a removed assertion block, or a connect that is never made all look\n` +
+        `      exactly like this. The other ${LIVE_TESTS.length - passedWithoutServer.length} failed as they should.`,
+    );
+  }
+  if (noVerdict.length > 0) {
+    problems.push(
+      `${noVerdict.length} live-DB leg(s) reported NO verdict from the unreachable-database run, so nothing was learned about them — a \`-run\` filter that matches nothing passes this check vacuously:\n` +
+        noVerdict.map((n) => `      ${n}`).join('\n') +
+        `\n\n      Filter used: -run=${runFilter}`,
+    );
   }
 }
 
-if (problems.length > 0) {
-  console.error('\n' + problems.map((p) => `❌ ${p}`).join('\n\n'));
-  process.exit(1);
-}
-console.log(
+report(
+  problems,
   `✅ the ${gateDeclarations.size} live-DB gates ${GATES_ENV} declares were OPEN in this process before the suite started; ` +
     `every go package built; each of the ${declared.size} tests the tree declares reported a verdict from an UNCACHED ` +
     `(-count=1) run, and every verdict was a pass (${passed.length} incl. subtests, ${skipped.length} skipped, ` +
