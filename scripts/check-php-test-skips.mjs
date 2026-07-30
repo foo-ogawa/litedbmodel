@@ -75,11 +75,11 @@
  * unreachable database to close that; php has no equivalent yet.
  */
 import { readFileSync, mkdtempSync, existsSync } from 'node:fs';
-import { dirname, join, relative } from 'node:path';
+import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { assertGatesOpen, runOwned, mustHaveStarted, exitProblem, junitTestcases, report } from './run-gate.mjs';
-import { GATES_ENV } from './livedb-gates.mjs';
+import { GATES_ENV, readsAGate } from './livedb-gates.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const PHP_DIR = join(ROOT, 'php');
@@ -192,7 +192,7 @@ if (enumeration.exit !== 0) {
 const declared = new Map(JSON.parse(enumeration.stdout));
 /** Live legs as the TREE has them now, for the bidirectional check against `LIVE_TESTS`. */
 const liveInTree = new Set(
-  [...declared].filter(([, file]) => /LITEDBMODEL_[A-Z0-9_]+/.test(readFileSync(file, 'utf8'))).map(([label]) => label),
+  [...declared].filter(([, file]) => readsAGate(readFileSync(file, 'utf8'))).map(([label]) => label),
 );
 
 assertGatesOpen('php');

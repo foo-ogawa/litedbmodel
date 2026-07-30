@@ -75,7 +75,7 @@ import { dirname, join, relative } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { assertGatesOpen, runOwned, mustHaveStarted, exitProblem, junitTestcases, report } from './run-gate.mjs';
-import { GATES_ENV } from './livedb-gates.mjs';
+import { GATES_ENV, readsAGate } from './livedb-gates.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const PY_DIR = join(ROOT, 'python');
@@ -182,7 +182,7 @@ const declared = new Set(JSON.parse(enumeration.stdout));
 const files = new Set([...declared].map((l) => l.split('::')[0]));
 /** Live legs as the TREE has them now, for the bidirectional check against `LIVE_TESTS`. */
 const liveInTree = new Set(
-  [...declared].filter((l) => /LITEDBMODEL_[A-Z0-9_]+/.test(readFileSync(join(TESTS_DIR, l.split('::')[0]), 'utf8'))),
+  [...declared].filter((l) => readsAGate(readFileSync(join(TESTS_DIR, l.split('::')[0]), 'utf8'))),
 );
 
 assertGatesOpen('python');
