@@ -180,6 +180,7 @@ export type {
   SyncConnection,
   AsyncConnection,
   AsyncConnectionPool,
+  PinnedTx,
   Middleware,
   MiddlewareStackSource,
   SeamNext,

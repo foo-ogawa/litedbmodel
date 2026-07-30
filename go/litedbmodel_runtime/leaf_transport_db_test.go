@@ -545,3 +545,118 @@ func TestExecuteSQL_NamedDBOnANonRoutedContextIsLoud(t *testing.T) {
 		t.Fatalf("unnamed statement on the single-db ctx: %v", err)
 	}
 }
+
+// #217 R1 — INSIDE a transaction, a statement's named database must AGREE with the one the transaction
+// opened on, or be LOUD. The pin is resolved BEFORE routing (per-execution ownership depends on it), so
+// intent.DB used to be dropped unread: a `db:"B"` statement inside a tx on the DEFAULT connection ran on
+// the DEFAULT one, silently, and an UNREGISTERED name never surfaced at all. A transaction is ONE
+// connection on ONE database, so the two cannot both be honored.
+//
+// The whole matrix is asserted, the NORMAL cases included: an unnamed in-body statement, and one naming
+// the tx's OWN database, must NOT become loud. The go leg; twins in TS / rust / python / php.
+func TestExecuteSQL_NamedDBInsideATransactionMustAgree(t *testing.T) {
+	ctx, done := namedDBPools(t)
+	defer done()
+
+	read := func(db wire.WireValue) (wire.WireValue, error) {
+		return ExecuteSQL(leafPayload(
+			port("sql", wire.WireStr("SELECT id, name FROM named_users ORDER BY id")),
+			port("params", wire.WireListOf(nil)),
+			optsPort(db, wire.WireNull(), wire.WireNull(), wire.WireNull()),
+		))
+	}
+	// The DEFAULT db has no `named_users`, so a read that reaches it fails on the TABLE — which is how a
+	// silently-mis-routed statement is told apart from a LOUD refusal.
+	countOnA := func(db wire.WireValue) (wire.WireValue, error) {
+		return ExecuteSQL(leafPayload(
+			port("sql", wire.WireStr("SELECT count(*) AS n FROM only_in_a")),
+			port("params", wire.WireListOf(nil)),
+			optsPort(db, wire.WireNull(), wire.WireNull(), wire.WireNull()),
+		))
+	}
+
+	// A transaction on the DEFAULT connection (the ctx names none).
+	BindLeafTransport(ctx, "sqlite")
+	if err := WithAmbientTransaction(func() error {
+		// ORDINARY in-body statement (unnamed) → the pin. It must NOT be loud.
+		if _, err := countOnA(wire.WireNull()); err != nil {
+			t.Fatalf("an unnamed in-body statement must run on the pin: %v", err)
+		}
+		// A statement naming ANOTHER database is LOUD. Before this it returned B's rows' worth of nothing:
+		// it ran on the tx's own (DEFAULT) connection, silently.
+		if _, err := read(wire.WireStr("B")); err == nil ||
+			!strings.Contains(err.Error(), "transaction opened on 'default'") {
+			t.Fatalf(`db "B" inside a default tx = %v, want the LOUD disagreement`, err)
+		}
+		// An UNREGISTERED name is loud too (the pin used to swallow it whole).
+		if _, err := read(wire.WireStr("ghost")); err == nil ||
+			!strings.Contains(err.Error(), "names connection 'ghost'") {
+			t.Fatalf(`db "ghost" inside a tx = %v, want LOUD`, err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("default tx: %v", err)
+	}
+
+	// A transaction on "B": the statement naming "B" AGREES and runs on the pin — the rows are
+	// unforgeable (named_users exists in NO other registered db) — and "default" now disagrees.
+	BindLeafTransport(ctx.WithConnectionName("B"), "sqlite")
+	if err := WithAmbientTransaction(func() error {
+		got, err := read(wire.WireStr("B"))
+		if err != nil {
+			t.Fatalf(`db "B" inside a tx on B must run: %v`, err)
+		}
+		if l := got.AsList(); l.Kind != wireProbeGot || l.Got.Len() != 2 {
+			t.Fatalf(`db "B" inside a tx on B returned %v, want B's 2 rows`, got)
+		}
+		if _, err := read(wire.WireNull()); err != nil {
+			t.Fatalf("an unnamed in-body statement must run on the pin: %v", err)
+		}
+		if _, err := countOnA(wire.WireStr("default")); err == nil ||
+			!strings.Contains(err.Error(), "transaction opened on 'B'") {
+			t.Fatalf(`db "default" inside a tx on B = %v, want the LOUD disagreement`, err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("named tx: %v", err)
+	}
+}
+
+// #217 R2 — a NON-ROUTED ctx rejects a named statement IDENTICALLY inside a transaction and outside it.
+// The guard used to sit BEFORE the pin on the TS/php planes and AFTER it here, so "a named statement in a
+// non-routed tx" threw in two languages and ran silently in three.
+func TestExecuteSQL_NamedDBOnANonRoutedContextIsLoudInsideATransactionToo(t *testing.T) {
+	db := openBoundT(t)
+	defer func() {
+		UnbindLeafTransport()
+		_ = db.Close()
+	}()
+	named := func() error {
+		_, err := ExecuteSQL(leafPayload(
+			port("sql", wire.WireStr("SELECT id FROM t")),
+			port("params", wire.WireListOf(nil)),
+			optsPort(wire.WireStr("analytics"), wire.WireNull(), wire.WireNull(), wire.WireNull()),
+		))
+		return err
+	}
+	unnamed := func() error {
+		_, err := ExecuteSQL(leafPayload(
+			port("sql", wire.WireStr("SELECT id FROM t")),
+			port("params", wire.WireListOf(nil)),
+			optsPort(wire.WireNull(), wire.WireNull(), wire.WireNull(), wire.WireNull()),
+		))
+		return err
+	}
+	if err := named(); err == nil || !strings.Contains(err.Error(), "names connection 'analytics'") {
+		t.Fatalf("outside a tx = %v, want LOUD", err)
+	}
+	if err := WithAmbientTransaction(func() error {
+		if err := named(); err == nil || !strings.Contains(err.Error(), "names connection 'analytics'") {
+			t.Fatalf("inside a tx = %v, want the SAME loud outcome as outside it", err)
+		}
+		// …and the ordinary unnamed statement still runs on the pin.
+		return unnamed()
+	}); err != nil {
+		t.Fatalf("tx: %v", err)
+	}
+}

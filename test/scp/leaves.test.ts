@@ -235,6 +235,9 @@ test('a MISSING or MISTYPED field of a present struct is loud in every position 
   expect(() => run({ sql: SQL, opts: null })).toThrow(/payload is missing its 'params' field/);
 
   // Each field of a PRESENT control record — dropping one used to read as its default.
+  expect(() => run({ sql: SQL, params: [], opts: { write: null, whereDynamic: null, guard: null } })).toThrow(
+    /control record is missing its 'db' field/,
+  );
   expect(() => run({ sql: SQL, params: [], opts: { db: null, whereDynamic: null, guard: null } })).toThrow(
     /control record is missing its 'write' field/,
   );
@@ -276,6 +279,7 @@ test('a MISSING or MISTYPED field of a present struct is loud in every position 
   expect(() => run({ sql: SQL, params: 'x' })).toThrow(/payload's 'params' must be list/);
   expect(() => run({ sql: SQL, params: [], opts: 'nope' })).toThrow(/payload's 'opts' must be record\|null/);
   const badOpt = (kw: Record<string, unknown>): unknown => ({ sql: SQL, params: [], opts: { db: null, write: null, whereDynamic: null, guard: null, ...kw } });
+  expect(() => run(badOpt({ db: 42 }))).toThrow(/control record's 'db' must be string\|null/);
   expect(() => run(badOpt({ write: 'nope' }))).toThrow(/control record's 'write' must be record\|null/);
   expect(() => run(badOpt({ write: { returning: 'nope' } }))).toThrow(/'write' mode's 'returning' must be bool/);
   expect(() => run(badOpt({ write: { returning: 0 } }))).toThrow(/'write' mode's 'returning' must be bool/);
@@ -525,4 +529,73 @@ test('#217 — a NON-ROUTED (single-connection) context REJECTS a named statemen
   expect(calls).toEqual([]); // it never reached the database
   // The DEFAULT connection is the single-connection case itself and still runs.
   expect(executeSQL({ sql: 'SELECT id, name FROM users', params: [], write: null, db: null }, ctx).length).toBe(2);
+});
+
+// ── #217 R1/R2 — inside a transaction the named db must AGREE, or be LOUD ─────────────────────────
+
+test('#217 — a statement naming a DIFFERENT db than the tx opened on is LOUD; the tx\'s own db still runs', async () => {
+  // The pin is resolved BEFORE routing (per-execution ownership depends on it), so `intent.db` used to be
+  // dropped unread: a `db:"B"` statement inside a tx opened on the DEFAULT connection ran on the DEFAULT
+  // one, silently, and an UNREGISTERED name never surfaced at all. A transaction is ONE connection on ONE
+  // database, so the two cannot both be honored — the only honest outcomes are "runs on its own db" and
+  // "loud". The whole matrix is asserted here, INCLUDING the normal cases that must NOT become loud.
+  const served: string[] = [];
+  const poolFor = (label: string): AsyncConnectionPool => ({
+    async acquire(): Promise<AsyncConnection> {
+      served.push(label);
+      return {
+        execute: () => Promise.resolve([{ who: label }] as Rows),
+        run: () => Promise.resolve({ changes: 1, lastInsertRowid: 0 } as RunInfo),
+      };
+    },
+    release: () => Promise.resolve(),
+  });
+  const a = poolFor('A');
+  const b = poolFor('B');
+  const execAsync = new PooledAsyncContext({
+    registry: new ConnectionRegistry(new Map([['default', { reader: a, writer: a }], ['B', { reader: b, writer: b }]])),
+    sticky: new WriterStickyClock({ useWriterAfterTransaction: false }),
+  });
+  const handler = leafHandlersAsync({ execAsync, dialect: 'postgres' }).executeSQL;
+  const at = { nodeId: 'n0', component: 'executeSQL' };
+  const stmt = (db: string | null): Record<string, Value> =>
+    ({ sql: 'SELECT 1', params: [], opts: { db, write: null, whereDynamic: null, guard: null } }) as unknown as Record<string, Value>;
+  const call = (db: string | null): Promise<{ ok?: Value }> => handler(stmt(db), at) as Promise<{ ok?: Value }>;
+
+  // A transaction on the DEFAULT connection.
+  await withTransactionAsync(execAsync, async () => {
+    // The ORDINARY in-body statement (no name) resolves the pin — unchanged, and it must NOT be loud.
+    expect((await call(null)).ok).toEqual([{ who: 'A' }]);
+    // A statement naming ANOTHER database is LOUD. Before this it returned `[{who:'A'}]` — the tx's DB.
+    await expect(call('B')).rejects.toThrow(/names connection 'B'.*transaction opened on 'default'/s);
+    // An UNREGISTERED name is loud too (the pin used to swallow it whole).
+    await expect(call('ghost')).rejects.toThrow(/names connection 'ghost'.*transaction opened on 'default'/s);
+  });
+
+  // A transaction on 'B': the statement naming 'B' AGREES and runs on the pin; 'default' now disagrees.
+  served.length = 0;
+  await withTransactionAsync(execAsync, async () => {
+    expect((await call('B')).ok).toEqual([{ who: 'B' }]);
+    expect((await call(null)).ok).toEqual([{ who: 'B' }]);
+    await expect(call('default')).rejects.toThrow(/names connection 'default'.*transaction opened on 'B'/s);
+  }, {}, 'postgres', undefined, 'B');
+  // ONE acquire for the whole tx — the agreement check did not turn an in-body statement into a second
+  // pooled checkout (that would break per-execution ownership while looking green).
+  expect(served).toEqual(['B']);
+});
+
+test('#217 R2 — a NON-ROUTED context rejects a named statement identically inside a tx and outside it', () => {
+  // The parity half: this guard used to sit BEFORE the pin on the TS/php planes and AFTER it on
+  // go/py/rust, so "a named statement in a non-routed tx" threw in two languages and ran silently in
+  // three. Both states are now the same LOUD outcome, and the ordinary unnamed statement still runs.
+  const calls: Call[] = [];
+  const base = contextForConnection(recordingConn(calls));
+  const txCtx = base.withConnection(recordingConn(calls), true);
+  for (const ctx of [base, txCtx]) {
+    const leaf: LeafContext = { exec: ctx, dialect: 'sqlite' };
+    expect(() => executeSQL({ sql: 'SELECT id, name FROM users', params: [], write: null, db: 'analytics' }, leaf)).toThrow(
+      /names connection 'analytics'/,
+    );
+    expect(executeSQL({ sql: 'SELECT id, name FROM users', params: [], write: null, db: null }, leaf).length).toBe(2);
+  }
 });

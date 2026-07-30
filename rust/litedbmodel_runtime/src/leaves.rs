@@ -1750,6 +1750,130 @@ mod tests {
         );
     }
 
+    // #217 R1 — INSIDE a transaction, a statement's named database must AGREE with the one the
+    // transaction opened on, or be LOUD. The pin is resolved BEFORE routing (per-execution ownership
+    // depends on it), so `intent.db` used to be dropped unread: a `db:"B"` statement inside a tx on the
+    // DEFAULT connection ran on the DEFAULT one, silently, and an UNREGISTERED name never surfaced at all.
+    // A transaction is ONE connection on ONE database, so the two cannot both be honored.
+    //
+    // The whole matrix is asserted, the NORMAL cases included: an unnamed in-body statement, and one
+    // naming the tx's OWN database, must NOT become loud. The rust leg; twins in TS / go / python / php.
+    #[test]
+    fn named_db_inside_a_transaction_must_agree() {
+        use crate::connection_routing::test_support::{failing_stub, recording_stub, SeamLog};
+        use crate::connection_routing::{
+            ConnectionRegistry, ReaderWriterPools, RoutingConfig, StickyOptions, WriterStickyClock,
+        };
+        use std::sync::{Arc, Mutex};
+
+        // The DEFAULT connection's driver REFUSES this statement (the stand-in for "that table is not
+        // here"), B's serves it — so a silently mis-routed statement is told apart from a LOUD refusal.
+        const SQL: &str = "SELECT id, name FROM named_users ORDER BY id";
+        let log: SeamLog = Arc::new(Mutex::new(Vec::new()));
+        let routing = RoutingConfig {
+            registry: ConnectionRegistry::from_default(ReaderWriterPools::single(failing_stub(
+                "A", &log, SQL,
+            )))
+            .add("B", ReaderWriterPools::single(recording_stub("B", &log)))
+            .build()
+            .unwrap(),
+            sticky: WriterStickyClock::new(StickyOptions {
+                use_writer_after_transaction: false,
+                ..Default::default()
+            }),
+        };
+        let base = exec_context::for_routing(&routing).unwrap();
+        let read = |db: WireValue| {
+            execute_sql(payload(vec![
+                ("params", wlist(vec![])),
+                ("sql", WireValue::Str(SQL.into())),
+                opts(db, WireValue::Null, WireValue::Null, WireValue::Null),
+            ]))
+        };
+        let err_of = |r: Result<WireValue, BehaviorError>, what: &str| -> String {
+            match r {
+                Err(e) => e.message,
+                Ok(_) => panic!("{what} must FAIL"),
+            }
+        };
+
+        // A transaction on the DEFAULT connection (the ctx names none).
+        with_ambient_transaction(&base, || {
+            // A statement naming ANOTHER database is LOUD. Before this it ran on the tx's own (DEFAULT)
+            // connection — which is what `refuses` below would have said instead.
+            let e = err_of(
+                read(WireValue::Str("B".into())),
+                r#"db "B" inside a default tx"#,
+            );
+            assert!(
+                e.contains("transaction opened on 'default'"),
+                "a disagreeing name inside a tx must be loud about the tx: {e}"
+            );
+            // An UNREGISTERED name is loud too (the pin used to swallow it whole).
+            let g = err_of(
+                read(WireValue::Str("ghost".into())),
+                r#"db "ghost" inside a tx"#,
+            );
+            assert!(g.contains("names connection 'ghost'"), "{g}");
+            Ok(())
+        })
+        .unwrap();
+
+        // A transaction on "B": the statement naming "B" AGREES and runs on the pin, and the UNNAMED
+        // in-body statement does too — neither may become loud.
+        let on_b = base.with_connection_name(Some("B"));
+        with_ambient_transaction(&on_b, || {
+            read(WireValue::Str("B".into())).map(|_| ())?;
+            read(WireValue::Null).map(|_| ())?;
+            // …and 'default' now disagrees, in the other direction.
+            let e = err_of(
+                read(WireValue::Str("default".into())),
+                "db default in a B tx",
+            );
+            assert!(e.contains("transaction opened on 'B'"), "{e}");
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    // #217 R2 — a NON-ROUTED ctx rejects a named statement IDENTICALLY inside a transaction and outside
+    // it. The guard used to sit BEFORE the pin on the TS/php planes and AFTER it here, so "a named
+    // statement in a non-routed tx" threw in two languages and ran silently in three.
+    #[test]
+    fn named_db_on_a_non_routed_context_is_loud_inside_a_transaction_too() {
+        use crate::driver::SqliteDriver;
+        let d = SqliteDriver::in_memory(&["CREATE TABLE t (id INTEGER PRIMARY KEY)".to_string()])
+            .unwrap();
+        let ctx = exec_context::for_driver(&d);
+        let stmt = |db: WireValue| {
+            execute_sql(payload(vec![
+                ("params", wlist(vec![])),
+                ("sql", WireValue::Str("SELECT id FROM t".into())),
+                opts(db, WireValue::Null, WireValue::Null, WireValue::Null),
+            ]))
+        };
+        let loud = |r: Result<WireValue, BehaviorError>, what: &str| match r {
+            Err(e) => assert!(
+                e.message.contains("names connection 'analytics'"),
+                "{what}: {}",
+                e.message
+            ),
+            Ok(_) => panic!("{what} must be LOUD"),
+        };
+        with_ambient_context(&ctx, || {
+            loud(stmt(WireValue::Str("analytics".into())), "outside a tx")
+        });
+        with_ambient_transaction(&ctx, || {
+            loud(
+                stmt(WireValue::Str("analytics".into())),
+                "inside a tx (must match the outside outcome)",
+            );
+            // …and the ordinary unnamed statement still runs on the pin.
+            stmt(WireValue::Null).map(|_| ())
+        })
+        .unwrap();
+    }
+
     // #217 (the TRANSACTION half, the rust twin of go's #215) — WHICH database a COVERED transaction
     // opens on is the CTX's answer. A statement names its db in its own `StatementIntent`; a transaction
     // has no statement to carry one, and this boundary takes only a body — so the name rides on the ctx

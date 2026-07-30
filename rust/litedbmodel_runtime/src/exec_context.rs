@@ -456,12 +456,6 @@ impl<'a, 't> ExecutionContext<'a, 't> {
         }
     }
 
-    /// The NAMED connection this ctx's transactions open on (`None` ⇒ the default). See
-    /// [`ExecutionContext::with_connection_name`].
-    pub fn connection(&self) -> Option<&str> {
-        self.connection.as_deref()
-    }
-
     /// Derive a ctx whose TRANSACTIONS open on the NAMED connection `name` (Phase C-2 multi-DB):
     /// [`ExecutionContext::tx_driver`] then checks the tx's owned connection out of THAT connection's
     /// WRITER pool, and the pin makes every statement in the body run on it. `None` clears the name (the
@@ -568,8 +562,16 @@ impl<'a, 't> ExecutionContext<'a, 't> {
         &'s self,
         intent: &StatementIntent,
     ) -> Result<Box<dyn Connection + 's>, SqlFailure> {
-        // STEP 1: the tx pin wins (per-execution ownership — the concurrent-tx fix).
+        // STEP 1: the tx pin wins (per-execution ownership — the concurrent-tx fix). A statement that
+        // names a DIFFERENT database than the transaction opened on cannot be honored on it — a
+        // transaction is ONE connection on ONE database — so it is LOUD rather than silently executed
+        // against the transaction's database (#217). The name the tx opened on is this ctx's own
+        // ([`ExecutionContext::with_connection_name`], the same field `tx_driver` reads).
         if let Some(slot) = self.pinned {
+            crate::connection_routing::assert_tx_db_agrees(
+                intent.db.as_deref(),
+                self.connection.as_deref(),
+            )?;
             return Ok(Box::new(TxConnectionRef::new(slot)));
         }
         // STEPS 2-4: routed resolution (named-DB → reader/writer split → writer-sticky/with_writer).
@@ -577,8 +579,8 @@ impl<'a, 't> ExecutionContext<'a, 't> {
             let pool = resolve_pool(intent, routing, self.in_writer_scope)?;
             return Ok(Box::new(DriverConnection::new(pool.as_ref())));
         }
-        // Base ctx: the single primary driver (byte-identical Phase A/B single-DB path). A statement that
-        // NAMES a database has nowhere to go here — there is no registry to resolve the name against —
+        // Base ctx, no pin: the single primary driver (byte-identical Phase A/B single-DB path). A
+        // statement that NAMES a database has nowhere to go here — there is no registry to resolve it —
         // so it is LOUD, exactly as an unregistered name is on a routed ctx
         // ([`crate::connection_routing::ConnectionRegistry::pair_for`]). Running it on the primary driver
         // instead would execute it against a DIFFERENT database than its model declares, silently (#217).
@@ -769,8 +771,9 @@ pub fn with_transaction_decided<'a, R>(
 ///
 /// WHICH database it opens on is the CTX's ([`ExecutionContext::with_connection_name`] →
 /// [`ExecutionContext::tx_driver`]), so a named-DB transaction runs its whole BEGIN…COMMIT on ONE pinned
-/// writer connection of THAT database (the active-tx pin then wins over routing for every statement in
-/// the body — the Phase A per-execution ownership is unbroken). WITHOUT a routing config (base ctx) the
+/// writer connection of THAT database: every UNNAMED in-body statement resolves the pin (the Phase A
+/// per-execution ownership), one that names THAT database does too, and one naming a DIFFERENT database is
+/// rejected ([`crate::connection_routing::assert_tx_db_agrees`]) — a transaction cannot span two databases. WITHOUT a routing config (base ctx) the
 /// ctx names none and this is the byte-identical single-driver path. The name used to be a PARAMETER of
 /// a second `…_isolated_on` entry point, which the covered plane's boundary had no way to supply — it
 /// passed `None`, so every covered transaction opened on the default connection's writer (#217).

@@ -255,6 +255,42 @@ impl ReaderWriterPools {
 /// Mirrors the TS `DEFAULT_CONNECTION`.
 pub const DEFAULT_CONNECTION: &str = "default";
 
+/// A connection name reduced to its effective identity: unnamed ⇒ [`DEFAULT_CONNECTION`].
+fn effective_connection(db: Option<&str>) -> &str {
+    db.unwrap_or(DEFAULT_CONNECTION)
+}
+
+/// Reject a statement whose named database is NOT the one the active transaction opened on.
+///
+/// A transaction is ONE connection on ONE database: a statement that names a DIFFERENT database cannot
+/// be executed atomically with it, by any amount of routing. So there are exactly two possible behaviors
+/// and no third — run it on the transaction's database (silently the WRONG one) or refuse — and the first
+/// is the silent default the tx pin used to produce: the pin is resolved BEFORE routing (it must be —
+/// per-execution ownership depends on it), so `intent.db` was dropped unread and even an UNREGISTERED
+/// name never surfaced (#217).
+///
+/// `tx_db` is the transaction's own connection name
+/// ([`ExecutionContext::with_connection_name`](crate::exec_context::ExecutionContext::with_connection_name)).
+/// An UNNAMED statement agrees with any transaction — the ordinary in-body statement, which every
+/// named-DB tx gate pins — and one naming the SAME database agrees too. Mirrors the TS `assertTxDbAgrees`.
+pub fn assert_tx_db_agrees(db: Option<&str>, tx_db: Option<&str>) -> Result<(), SqlFailure> {
+    if db.is_none() {
+        return Ok(());
+    }
+    let (want, open) = (effective_connection(db), effective_connection(tx_db));
+    if want == open {
+        return Ok(());
+    }
+    Err(SqlFailure {
+        kind: "driver_error".into(),
+        policy: "fail".into(),
+        sqlite_code: None,
+        message: format!(
+            "scp connection routing: a statement names connection '{want}', but it is executing inside a              transaction opened on '{open}' — a transaction is ONE connection on ONE database, so the two              cannot both be honored. Open the transaction on '{want}', or issue the statement outside it."
+        ),
+    })
+}
+
 /// Reject a statement that NAMES a database on a context that holds NO connection registry (the base
 /// [`crate::exec_context::for_driver`] path). The companion of [`ConnectionRegistry::pair_for`]'s
 /// unknown-name failure, and for the same reason: an unresolvable name must be LOUD, because the
@@ -322,7 +358,7 @@ impl ConnectionRegistry {
     /// The reader/writer pair for `name` (or [`DEFAULT_CONNECTION`] when `None`). Loud on a missing
     /// name (mirrors the TS `pairFor`).
     pub fn pair_for(&self, name: Option<&str>) -> Result<&ReaderWriterPools, SqlFailure> {
-        let key = name.unwrap_or(DEFAULT_CONNECTION);
+        let key = effective_connection(name);
         self.connections.get(key).ok_or_else(|| {
             let known = self
                 .connections

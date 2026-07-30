@@ -26,7 +26,13 @@ from litedbmodel_runtime import (
 )
 from litedbmodel_runtime.connection_routing import ConnectionPool
 from litedbmodel_runtime.driver import SqliteDriver
-from litedbmodel_runtime.exec_context import ExecutionContext, MiddlewareChain
+from litedbmodel_runtime.exec_context import (
+    ExecutionContext,
+    MiddlewareChain,
+    as_context,
+    commit,
+    with_transaction_decided,
+)
 from litedbmodel_runtime.leaves import make_handlers
 
 CTX = {"nodeId": "n0", "component": "executeSQL"}
@@ -386,12 +392,16 @@ def test_a_covered_transaction_opens_on_the_writer_and_is_seam_visible():
 # ``named_db_routes_the_statement`` and the php ``NamedDbRoutingTest``.
 
 
-def _named_db_handler():
+def _named_db_ctx():
     a = sqlite3.connect(":memory:")
     a.execute("CREATE TABLE only_in_a (id INTEGER PRIMARY KEY)")
     b = sqlite3.connect(":memory:")
     b.execute("CREATE TABLE named_users (id INTEGER PRIMARY KEY, name TEXT)")
     b.executemany("INSERT INTO named_users VALUES (?, ?)", [(1, "Ada"), (2, "Bob")])
+    # Autocommit, exactly as `SqliteDriver` sets it (driver.py:167-174): the RUNTIME tx boundary issues
+    # BEGIN/COMMIT/ROLLBACK through the seam, so python's implicit transaction must be out of the way.
+    a.isolation_level = None
+    b.isolation_level = None
     log: list = []
     routing = RoutingConfig(
         ConnectionRegistry.from_default(single_pool_pair(_RecordingPool("A", a, log)))
@@ -399,7 +409,12 @@ def _named_db_handler():
         .build(),
         WriterStickyClock(use_writer_after_transaction=False),
     )
-    handler = make_handlers(ExecutionContext(None, MiddlewareChain(), routing=routing), "sqlite")["executeSQL"]
+    return ExecutionContext(None, MiddlewareChain(), routing=routing), log
+
+
+def _named_db_reader(ctx):
+    """The leaf's `executeSQL`, bound to `ctx`, reading the table that exists ONLY in "B"."""
+    handler = make_handlers(ctx, "sqlite")["executeSQL"]
 
     def read(db):
         return handler(
@@ -411,7 +426,12 @@ def _named_db_handler():
             CTX,
         )
 
-    return read, log
+    return read
+
+
+def _named_db_handler():
+    ctx, log = _named_db_ctx()
+    return _named_db_reader(ctx), log
 
 
 def test_named_db_routes_the_statement():
@@ -447,3 +467,70 @@ def test_named_db_on_a_non_routed_context_is_loud():
         handler(ports("analytics"), CTX)
     # The DEFAULT connection is the single-driver case itself and still runs.
     assert handler(ports(None), CTX)["ok"] == []
+
+
+# ── #217 R1/R2 — inside a transaction the named db must AGREE, or be LOUD ──────────────────────────
+
+
+def test_named_db_inside_a_transaction_must_agree():
+    """The pin is resolved BEFORE routing (per-execution ownership depends on it), so ``intent.db`` used to
+    be dropped unread: a ``db="B"`` statement inside a tx on the DEFAULT connection ran on the DEFAULT one,
+    silently, and an UNREGISTERED name never surfaced at all. A transaction is ONE connection on ONE
+    database, so the two cannot both be honored.
+
+    The whole matrix is asserted, the NORMAL cases included: an unnamed in-body statement, and one naming
+    the tx's OWN database, must NOT become loud. The python leg; twins in TS / go / rust / php."""
+    ctx, _log = _named_db_ctx()
+
+    # A transaction on the DEFAULT connection (the ctx names none).
+    def default_body(tx_ctx):
+        read = _named_db_reader(tx_ctx)
+        # A statement naming ANOTHER database is LOUD. Before this it ran on the tx's own (DEFAULT)
+        # connection, where `named_users` does not exist — a table error, not a routing one.
+        with pytest.raises(ValueError, match="transaction opened on 'default'"):
+            read("B")
+        # An UNREGISTERED name is loud too (the pin used to swallow it whole).
+        with pytest.raises(ValueError, match="names connection 'ghost'"):
+            read("ghost")
+        return commit(None)
+
+    with_transaction_decided(ctx, default_body)
+
+    # A transaction on "B": the statement naming "B" AGREES and runs on the pin — the rows are unforgeable
+    # (`named_users` exists in NO other registered db) — the UNNAMED one does too, and "default" now
+    # disagrees in the other direction.
+    def named_body(tx_ctx):
+        read = _named_db_reader(tx_ctx)
+        assert read("B")["ok"] == [{"id": 1, "name": "Ada"}, {"id": 2, "name": "Bob"}]
+        assert read(None)["ok"] == [{"id": 1, "name": "Ada"}, {"id": 2, "name": "Bob"}]
+        with pytest.raises(ValueError, match="transaction opened on 'B'"):
+            read("default")
+        return commit(None)
+
+    with_transaction_decided(ctx.with_connection_name("B"), named_body)
+
+
+def test_named_db_on_a_non_routed_context_is_loud_inside_a_transaction_too():
+    """A NON-ROUTED ctx rejects a named statement IDENTICALLY inside a transaction and outside it. The
+    guard used to sit BEFORE the pin on the TS/php planes and AFTER it here, so "a named statement in a
+    non-routed tx" threw in two languages and ran silently in three."""
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE t (id INTEGER PRIMARY KEY)")
+    ctx = as_context(SqliteDriver(conn))
+    ports = lambda db: {  # noqa: E731 — one expression, read twice
+        "sql": "SELECT id FROM t",
+        "params": [],
+        "opts": {"db": db, "write": None, "whereDynamic": None, "guard": None},
+    }
+    with pytest.raises(ValueError, match="names connection 'analytics'"):
+        make_handlers(ctx, "sqlite")["executeSQL"](ports("analytics"), CTX)
+
+    def body(tx_ctx):
+        handler = make_handlers(tx_ctx, "sqlite")["executeSQL"]
+        with pytest.raises(ValueError, match="names connection 'analytics'"):
+            handler(ports("analytics"), CTX)
+        # …and the ordinary unnamed statement still runs on the pin.
+        assert handler(ports(None), CTX)["ok"] == []
+        return commit(None)
+
+    with_transaction_decided(ctx, body)

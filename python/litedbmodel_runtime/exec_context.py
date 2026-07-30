@@ -255,9 +255,10 @@ class ExecutionContext:
     An OPTIONAL ``routing`` (a ``litedbmodel_runtime.connection_routing.RoutingConfig``) completes
     ``connection_for``'s resolution steps 2-4 (reader/writer split, named-DB, writer-sticky). Absent ⇒
     the byte-identical Phase A/B single-``driver`` path (``context_for_driver`` builds NO routing). The
-    active-tx pin STILL wins over routing (step 1) — a named-DB transaction runs entirely on ONE pinned
-    writer connection (Phase B unbroken). Only when routing IS present does ``connection_for`` consult
-    the registry; the driver-only ctors keep working unchanged.
+    active-tx pin STILL comes first (step 1) — a transaction runs entirely on ONE pinned writer
+    connection, so a statement naming a DIFFERENT database is rejected there rather than routed. Only when
+    routing IS present does ``connection_for`` consult the registry; the driver-only ctors keep working
+    unchanged.
     """
 
     __slots__ = ("_driver", "middleware", "_pinned", "_read_only", "_routing", "_connection")
@@ -325,14 +326,23 @@ class ExecutionContext:
     def connection_for(self, intent: StatementIntent = READ_INTENT) -> Connection:
         """Resolve WHICH connection a statement runs on (§3). Resolution order (first match wins):
 
-          1. the tx-owned (pinned) connection — inside a tx it ALWAYS wins (Phase A / B). A named-DB
-             transaction runs entirely on this ONE pinned writer connection (Phase B unbroken).
+          1. the tx-owned (pinned) connection — inside a tx it wins, because a transaction is ONE
+             connection. A statement naming a DIFFERENT database than the transaction opened on therefore
+             cannot be honored and is LOUD (:func:`~litedbmodel_runtime.connection_routing.assert_tx_db_agrees`);
+             an unnamed one, and one naming the SAME database, run on the pin.
           2-4. when Phase C routing is present: named-DB → reader/writer split → writer-sticky/withWriter
              (:func:`litedbmodel_runtime.connection_routing.resolve_pool`), running the statement on ONE
              pooled connection per statement (the read fan-out).
           otherwise (no routing): the primary driver — the byte-identical Phase A/B single-DB path.
         """
         if self._pinned is not None:
+            # A statement that names a DIFFERENT database than the transaction opened on cannot be honored
+            # on the pinned connection — a transaction is ONE connection on ONE database — so it is LOUD
+            # rather than silently executed against the transaction's database (#217). The name the tx
+            # opened on is this ctx's own (``with_connection_name``, the same attribute ``begin_tx`` reads).
+            from .connection_routing import assert_tx_db_agrees
+
+            assert_tx_db_agrees(intent.db, self._connection)
             return self._pinned
         if self._routing is not None:
             # Phase C (#90): named-DB → reader/writer → writer-sticky. Lazy import avoids the circular
@@ -340,8 +350,8 @@ class ExecutionContext:
             from .connection_routing import PoolConnection, resolve_pool
 
             return PoolConnection(resolve_pool(intent, self._routing))
-        # A statement that NAMES a database has nowhere to go on a single-driver ctx (there is no
-        # registry to resolve the name against), so it is LOUD — exactly as an unregistered name is on a
+        # No pin: a statement that NAMES a database has nowhere to go on a single-driver ctx either
+        # (there is no registry to resolve the name against), so it is LOUD — exactly as an unregistered name is on a
         # routed ctx (``ConnectionRegistry.pair_for``). Running it on the primary driver instead would
         # execute it against a DIFFERENT database than its model declares, silently (#217).
         from .connection_routing import assert_routable_named_db
@@ -382,8 +392,9 @@ class ExecutionContext:
         """Acquire + OWN the tx connection for THIS ctx (§3). On the single-driver Phase A/B path this
         delegates to ``driver.begin_tx``. When Phase C routing is present the tx acquires ONE connection
         from the target NAMED connection's WRITER pool (:attr:`_connection` → the writer pool of that
-        registry pair), so a named-DB transaction runs entirely on ONE pinned writer connection — the
-        active-tx pin then wins over routing for every statement in the body (Phase B unbroken).
+        registry pair), so a named-DB transaction runs entirely on ONE pinned writer connection: every
+        UNNAMED in-body statement resolves the pin, one that names THIS connection does too, and one naming
+        a DIFFERENT database is rejected (a transaction cannot span two databases).
 
         tx-control (the isolation SET / BEGIN / COMMIT / ROLLBACK) is issued THROUGH the seam on the
         pinned connection by :func:`with_transaction_decided` (Phase D / #95, middleware-visible), NOT

@@ -434,13 +434,15 @@ function relationGuardPort(port: unknown): RelationGuard | null {
 }
 
 /**
- * Read one DECLARED field of the control record — each of the three is a CONCRETE control struct or the
- * `null` that spells its absence. The name is `keyof ExecOptions`, so the reader is tied to the leaf
- * declaration at compile time: renaming a field there breaks HERE rather than silently reading a key the
- * generator no longer writes.
+ * Read one STRUCT field of the control record — a CONCRETE control struct or the `null` that spells its
+ * absence. The name is `keyof ExecOptions` MINUS the fields that are not structs, so the reader is tied
+ * to the leaf declaration at compile time in BOTH directions: renaming a field there breaks HERE rather
+ * than silently reading a key the generator no longer writes, and passing `'db'` — a nullable STRING —
+ * fails to compile rather than being confirmed against the wrong declared type.
  */
 const OPTS_AT = `the 'opts' control record`;
-function optsField(opts: Record<string, unknown>, name: keyof ExecOptions): unknown {
+type OptsStructField = Exclude<keyof ExecOptions, 'db'>;
+function optsField(opts: Record<string, unknown>, name: OptsStructField): unknown {
   return requiredField(opts, name, OPTS_AT, 'record|null');
 }
 

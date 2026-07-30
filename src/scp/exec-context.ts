@@ -68,6 +68,7 @@ import {
   ConnectionRegistry,
   WriterStickyClock,
   assertRoutableNamedDb,
+  assertTxDbAgrees,
   resolvePool,
 } from './connection-routing';
 import type { Dialect } from './makesql/handler';
@@ -321,15 +322,22 @@ class BasicContext implements ExecutionContext {
   }
 
   connectionFor(intent: StatementIntent): SyncConnection {
-    // A statement that NAMES a database has nowhere to go on a single-connection ctx — this one holds
-    // no registry — so it is LOUD, exactly as an unregistered name is on the routed ctx
+    // STEP 1: the tx-owned (pinned) connection wins — but a statement that names a DIFFERENT database
+    // than the transaction opened on cannot be honored on it, so it is LOUD rather than silently run
+    // there (`assertTxDbAgrees`). This ctx holds ONE connection and no registry, so the transaction
+    // opened on the default: every named statement disagrees.
+    if (this.pinned !== null) {
+      assertTxDbAgrees(intent.db, null);
+      return this.pinned;
+    }
+    // No pin: a statement that NAMES a database has nowhere to go here either — this ctx holds no
+    // registry — so it is LOUD, exactly as an unregistered name is on the routed ctx
     // (`ConnectionRegistry.pairFor`). Returning the base connection instead would run the statement
     // against a DIFFERENT database than the one its model declares, silently, which is the whole defect
     // named-DB lowering exists to close (#217): the wrong DB reads a missing table or, worse, a
     // same-named one.
     assertRoutableNamedDb(intent.db, 'a single-connection (non-routed) execution context');
-    // The tx-owned (pinned) connection wins; else the single base connection.
-    return this.pinned ?? this.base;
+    return this.base;
   }
 
   withConnection(conn: SyncConnection, tx: boolean): ExecutionContext {
@@ -374,8 +382,22 @@ export interface AsyncConnectionPool {
   release(conn: AsyncConnection, destroy?: boolean): Promise<void>;
 }
 
+/**
+ * What the ALS pin carries: the transaction's OWNED connection and the NAME of the database it opened
+ * on (`null` ⇒ the default connection). The name has to ride HERE and nowhere else on this plane,
+ * because {@link PooledAsyncContext.withConnection} returns `this` — the tx-scoped ctx is not a distinct
+ * object, so a per-scope fact cannot be a field on it. `connectionFor` reads both: the connection to run
+ * on, and the name a NAMED statement must agree with ({@link assertTxDbAgrees}). The four ports carry the
+ * same pair on their tx-scoped ctx (the go / python / rust `connection` field, php's).
+ */
+export interface PinnedTx {
+  readonly conn: AsyncConnection;
+  /** The connection NAME the transaction opened on (`null` ⇒ the default connection). */
+  readonly db: string | null;
+}
+
 /** Per-async-execution ambient ctx: the ALS slot carrying the tx-scoped connection (§3). */
-const asyncCtxStore = new AsyncLocalStorage<AsyncConnection>();
+const asyncCtxStore = new AsyncLocalStorage<PinnedTx>();
 
 /**
  * A pooled async {@link AsyncExecutionContext}. Outside a transaction, `connectionFor` acquires a
@@ -418,7 +440,14 @@ export class PooledAsyncContext implements AsyncExecutionContext {
     // conn (the per-execution ownership the concurrent-tx fix depends on). The tx pin is a per-scope
     // fact only the ctx's ALS holds, so it is resolved HERE, before the pool-selection steps.
     const pinned = asyncCtxStore.getStore();
-    if (pinned !== undefined) return pinned;
+    if (pinned !== undefined) {
+      // A statement that names a DIFFERENT database than the transaction opened on cannot be honored on
+      // the pinned connection — a transaction is ONE connection on ONE database — so it is LOUD rather
+      // than silently executed against the transaction's database (#217). An unnamed statement, and one
+      // naming the SAME database, run on the pin exactly as before.
+      assertTxDbAgrees(intent.db, pinned.db);
+      return pinned.conn;
+    }
     // STEPS 2-4 (§3): named-DB → reader/writer split → writer-sticky/withWriter. `resolvePool`
     // returns WHICH pool serves this intent; the returned wrapper acquires/runs/releases one owned
     // connection per statement (the read fan-out: each concurrent sibling on its own connection).
@@ -482,18 +511,20 @@ function isRoutingConfig(x: AsyncConnectionPool | RoutingConfig): x is RoutingCo
  * task-local (rust) / `context.Context` (go) / contextvars (py) / an explicit arg (php) for the
  * SAME effect.
  */
-export function runWithPinnedAsyncConnection<R>(conn: AsyncConnection, fn: () => Promise<R>): Promise<R> {
-  return asyncCtxStore.run(conn, fn);
+export function runWithPinnedAsyncConnection<R>(conn: AsyncConnection, db: string | null, fn: () => Promise<R>): Promise<R> {
+  return asyncCtxStore.run({ conn, db }, fn);
 }
 
 /**
- * The tx-owned connection pinned in the CURRENT async scope, or `undefined` if not inside a
- * transaction. {@link withTransactionAsync} reads this to detect a NESTED transaction (an inner
+ * The transaction pinned in the CURRENT async scope — its owned connection AND the connection NAME it
+ * opened on ({@link PinnedTx}) — or `undefined` if not inside a transaction.
+ * {@link withTransactionAsync} reads this to detect a NESTED transaction (an inner
  * `withTransactionAsync` running inside an outer's ALS scope joins the outer instead of opening a
- * new physical transaction). The native ports read their task-local / contextvar / `context.Context`
- * for the SAME nested detection.
+ * new physical transaction), and `connectionFor` reads the name to reject a statement that names a
+ * DIFFERENT database than the transaction opened on. The native ports read their task-local /
+ * contextvar / `context.Context` for the SAME nested detection.
  */
-export function currentPinnedAsyncConnection(): AsyncConnection | undefined {
+export function currentPinnedAsyncConnection(): PinnedTx | undefined {
   return asyncCtxStore.getStore();
 }
 
@@ -566,11 +597,11 @@ export async function withTransactionAsync<R>(
 ): Promise<R> {
   // NESTED-TX JOIN (§ mirror v1 :2794): already inside a tx on this async chain ⇒ join the outer.
   // No new connection, no BEGIN/COMMIT — the inner body is part of the outer physical transaction.
-  const outerConn = currentPinnedAsyncConnection();
-  if (outerConn !== undefined) {
+  const outer = currentPinnedAsyncConnection();
+  if (outer !== undefined) {
     // Reuse the outer's ctx (the pinned conn already wins in `connectionFor`). Isolation/retry/
     // rollbackOnly options on a NESTED call are ignored — the outer transaction owns them.
-    return fn(ctx.withConnection(outerConn, true));
+    return fn(ctx.withConnection(outer.conn, true));
   }
 
   const resolved = resolveTxOptions(opts);
@@ -589,7 +620,7 @@ export async function withTransactionAsync<R>(
     // or `{ ok:false, error }` on failure — so the release + retry decision happens OUTSIDE the ALS
     // run and the connection is released EXACTLY once per attempt.
     let poisoned = false;
-    const attemptResult = await runWithPinnedAsyncConnection(conn, async (): Promise<{ ok: true; value: R } | { ok: false; error: unknown }> => {
+    const attemptResult = await runWithPinnedAsyncConnection(conn, connection ?? null, async (): Promise<{ ok: true; value: R } | { ok: false; error: unknown }> => {
       for (const begin of begins) await runAsync(txCtx, begin, []);
       try {
         // Mark the body as "inside a transaction" so a nested write's guard (`checkWriteAllowed`)

@@ -6,6 +6,7 @@ namespace LiteDbModel\Runtime\Tests;
 
 use LiteDbModel\Runtime\Connection;
 use LiteDbModel\Runtime\ConnectionRegistry;
+use LiteDbModel\Runtime\ExecutionContext;
 use LiteDbModel\Runtime\Context;
 use LiteDbModel\Runtime\Leaves;
 use LiteDbModel\Runtime\MiddlewareChain;
@@ -18,7 +19,9 @@ use LiteDbModel\Runtime\WriterStickyClock;
 use PHPUnit\Framework\TestCase;
 
 use function LiteDbModel\Runtime\createMiddleware;
+use function LiteDbModel\Runtime\currentContext;
 use function LiteDbModel\Runtime\routedTransaction;
+use function LiteDbModel\Runtime\transaction;
 use function LiteDbModel\Runtime\use_;
 use function LiteDbModel\Runtime\withMiddlewareScope;
 
@@ -512,6 +515,134 @@ final class DynamicWhereTest extends TestCase
         $this->expectException(\RuntimeException::class);
         $this->expectExceptionMessageMatches("/a statement names connection 'analytics'/");
         $executeSQL($ports('analytics'), $at);
+    }
+
+    /**
+     * #217 R1 — INSIDE a transaction, a statement's named database must AGREE with the one the transaction
+     * opened on, or be LOUD. The pin is resolved BEFORE routing (per-execution ownership depends on it),
+     * so `intent->db` used to be dropped unread: a `db:"B"` statement inside a tx on the DEFAULT connection
+     * ran on the DEFAULT one, silently, and an UNREGISTERED name never surfaced at all. A transaction is
+     * ONE connection on ONE database, so the two cannot both be honored.
+     *
+     * The whole matrix is asserted, the NORMAL cases included: an unnamed in-body statement, and one naming
+     * the tx's OWN database, must NOT become loud. The PHP leg; twins in TS / go / rust / python.
+     */
+    public function testNamedDbInsideATransactionMustAgree(): void
+    {
+        $open = static function (array $seed): PdoDriver {
+            $pdo = new \PDO('sqlite::memory:', null, null, [\PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION]);
+            foreach ($seed as $sql) {
+                $pdo->exec($sql);
+            }
+            return new PdoDriver($pdo);
+        };
+        $a = $open(['CREATE TABLE only_in_a (id INTEGER PRIMARY KEY)']);
+        $b = $open([
+            'CREATE TABLE named_users (id INTEGER PRIMARY KEY, name TEXT)',
+            "INSERT INTO named_users VALUES (1,'Ada'),(2,'Bob')",
+        ]);
+        $log = new \ArrayObject();
+        $routing = new RoutingConfig(
+            ConnectionRegistry::fromDefault(ReaderWriterPools::single(new RecordingPdoPool('A', $a, $log)))
+                ->add('B', ReaderWriterPools::single(new RecordingPdoPool('B', $b, $log)))
+                ->build(),
+            new WriterStickyClock(useWriterAfterTransaction: false),
+        );
+        $at = ['nodeId' => 'n0', 'component' => 'executeSQL'];
+        $read = static fn (RoutingExecutionContext $ctx, ?string $db): array =>
+            Leaves::makeHandlers($ctx, 'sqlite')['executeSQL']([
+                'sql' => 'SELECT id, name FROM named_users ORDER BY id',
+                'params' => [],
+                'opts' => (object) ['db' => $db, 'write' => null, 'whereDynamic' => null, 'guard' => null],
+            ], $at);
+        $failure = static function (callable $fn): string {
+            try {
+                $fn();
+            } catch (\Throwable $e) {
+                return $e->getMessage();
+            }
+            return '';
+        };
+
+        // A transaction on the DEFAULT connection. `routedTransaction` PINS it and the body's statements
+        // resolve through the ambient tx ctx — the production covered-plane path.
+        $defaultCtx = new RoutingExecutionContext($a, new MiddlewareChain(), $routing);
+        routedTransaction($defaultCtx, function () use ($read, $defaultCtx, $failure): void {
+            $tx = currentContext();
+            self::assertInstanceOf(RoutingExecutionContext::class, $tx);
+            // A statement naming ANOTHER database is LOUD. Before this it ran on the tx's own (DEFAULT)
+            // connection, where `named_users` does not exist — a table error, not a routing one.
+            self::assertStringContainsString(
+                "transaction opened on 'default'",
+                $failure(static fn () => $read($tx, 'B')),
+            );
+            // An UNREGISTERED name is loud too (the pin used to swallow it whole).
+            self::assertStringContainsString(
+                "names connection 'ghost'",
+                $failure(static fn () => $read($tx, 'ghost')),
+            );
+        }, null, 'sqlite');
+
+        // A transaction on "B": the statement naming "B" AGREES and runs on the pin — the rows are
+        // unforgeable (`named_users` exists in NO other registered db) — the UNNAMED one does too, and
+        // "default" now disagrees in the other direction.
+        $bCtx = new RoutingExecutionContext($a, new MiddlewareChain(), $routing);
+        routedTransaction($bCtx, function () use ($read, $failure): void {
+            $tx = currentContext();
+            self::assertInstanceOf(RoutingExecutionContext::class, $tx);
+            self::assertSame(
+                [['id' => 1, 'name' => 'Ada'], ['id' => 2, 'name' => 'Bob']],
+                array_map(static fn ($r): array => (array) $r, $read($tx, 'B')['ok']),
+            );
+            self::assertCount(2, $read($tx, null)['ok']);
+            self::assertStringContainsString(
+                "transaction opened on 'B'",
+                $failure(static fn () => $read($tx, 'default')),
+            );
+        }, null, 'sqlite', 'B');
+    }
+
+    /**
+     * #217 R2 — a NON-ROUTED (single-connection) ctx rejects a named statement IDENTICALLY inside a
+     * transaction and outside it. The guard used to sit BEFORE the pin here and AFTER it on go/py/rust, so
+     * "a named statement in a non-routed tx" threw in two languages and ran silently in three.
+     */
+    public function testNamedDbOnANonRoutedContextIsLoudInsideATransactionToo(): void
+    {
+        $pdo = new \PDO('sqlite::memory:', null, null, [\PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION]);
+        $pdo->exec('CREATE TABLE t (id INTEGER PRIMARY KEY)');
+        $ctx = new ExecutionContext(new PdoDriver($pdo), new MiddlewareChain());
+        $ports = static fn (?string $db): array => [
+            'sql' => 'SELECT id FROM t',
+            'params' => [],
+            'opts' => (object) ['db' => $db, 'write' => null, 'whereDynamic' => null, 'guard' => null],
+        ];
+        $at = ['nodeId' => 'n0', 'component' => 'executeSQL'];
+        $failure = static function (callable $fn): string {
+            try {
+                $fn();
+            } catch (\Throwable $e) {
+                return $e->getMessage();
+            }
+            return '';
+        };
+        self::assertStringContainsString(
+            "names connection 'analytics'",
+            $failure(static fn () => Leaves::makeHandlers($ctx, 'sqlite')['executeSQL']($ports('analytics'), $at)),
+            'outside a tx',
+        );
+        transaction($ctx, function () use ($ports, $at, $failure): void {
+            $tx = currentContext();
+            self::assertNotNull($tx);
+            $handler = Leaves::makeHandlers($tx, 'sqlite')['executeSQL'];
+            self::assertStringContainsString(
+                "names connection 'analytics'",
+                $failure(static fn () => $handler($ports('analytics'), $at)),
+                'inside a tx (must match the outside outcome)',
+            );
+            // …and the ordinary unnamed statement still runs on the pin.
+            self::assertSame([], $handler($ports(null), $at)['ok']);
+        }, null, 'sqlite');
     }
 }
 

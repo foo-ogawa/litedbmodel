@@ -243,7 +243,7 @@ class EmitContext {
    * The NAMED connection every statement of an endpoint declared over `model` runs on — read from the
    * model, the ONE authority ({@link connectionOf}), and handed to {@link execOptions} as its `db`
    * field. `{}` ⇒ the DEFAULT connection, which leaves a bounded read's option record unspelled
-   * entirely (native-clean, and byte-unchanged for every single-DB module).
+   * entirely (native-clean).
    *
    * A RELATION's child fetch does NOT come through here: its connection is the TARGET model's, which
    * `relationDeclOf` already resolved onto the compiled op (`RelationOp.connection`) — the emitter
@@ -899,8 +899,12 @@ function isOptional(p: Predicate): p is OptionalPredicate {
  *
  * A statement that carries NO option at all (a bounded read of a DEFAULT-connection model, an uncapped
  * relation child of one) renders NOTHING: the port is omitted and the payload stays `sql` + `params`
- * (native-clean) — which is why a single-DB deployment's modules are byte-unchanged by named-DB
- * routing. Any other statement spells the WHOLE record — bc types a port by the literal wired into it
+ * (native-clean). ONLY those statements are unchanged by named-DB routing — every statement that ALREADY
+ * carried a record (a write, a SKIP read, a guarded relation child) now spells `db: null` in it too. The
+ * frozen conformance vectors are unaffected for a different reason: a vector carries the statements the
+ * transport handed the driver (`sql` + `params`) and no control record at all (`grep -c opts
+ * conformance/vectors/*.json` = 0). Any other statement spells the WHOLE record — bc types a port by the
+ * literal wired into it
  * and rejects a partial one — so each absent fact is the `null` VALUE of its own NAMED field. That is
  * what removed the positional filler #193 is about: nothing has to be passed to reach the field after it.
  *

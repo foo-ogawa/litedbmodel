@@ -426,13 +426,46 @@ def assert_routable_named_db(db: Optional[str], context_description: str) -> Non
     the context happens to hold — a DIFFERENT database than the statement's model declares (#217).
     ``None`` (the default connection) is the single-driver case itself and passes. Mirrors the TS
     ``assertRoutableNamedDb`` / go ``namedDBUnroutable`` / rust ``assert_routable_named_db``."""
-    if db is None or db == DEFAULT_CONNECTION:
+    if _effective_connection(db) == DEFAULT_CONNECTION:
         return
     raise ValueError(
         "scp connection routing: a statement names connection '%s', but it is executing on %s — there "
         "is no connection registry to resolve the name against. Build the context from a RoutingConfig "
         "(set_config/ConnectionRegistry), or drop the connection tag on the model."
         % (db, context_description)
+    )
+
+
+def _effective_connection(db: Optional[str]) -> str:
+    """A connection name reduced to its effective identity: unnamed ⇒ :data:`DEFAULT_CONNECTION`."""
+    return DEFAULT_CONNECTION if db is None else db
+
+
+def assert_tx_db_agrees(db: Optional[str], tx_db: Optional[str]) -> None:
+    """Reject a statement whose named database is NOT the one the active transaction opened on.
+
+    A transaction is ONE connection on ONE database: a statement that names a DIFFERENT database cannot be
+    executed atomically with it, by any amount of routing. So there are exactly two possible behaviors and
+    no third — run it on the transaction's database (silently the WRONG one) or refuse — and the first is
+    the silent default the tx pin used to produce: the pin is resolved BEFORE routing (it must be —
+    per-execution ownership depends on it), so ``intent.db`` was dropped unread and even an UNREGISTERED
+    name never surfaced (#217).
+
+    ``tx_db`` is the transaction's own connection name
+    (:meth:`~litedbmodel_runtime.exec_context.ExecutionContext.with_connection_name`, the same attribute
+    ``begin_tx`` reads). An UNNAMED statement agrees with any transaction — the ordinary in-body statement,
+    which every named-DB tx gate pins — and one naming the SAME database agrees too. Mirrors the TS
+    ``assertTxDbAgrees``."""
+    if db is None:
+        return
+    want, open_ = _effective_connection(db), _effective_connection(tx_db)
+    if want == open_:
+        return
+    raise ValueError(
+        "scp connection routing: a statement names connection '%s', but it is executing inside a "
+        "transaction opened on '%s' — a transaction is ONE connection on ONE database, so the two cannot "
+        "both be honored. Open the transaction on '%s', or issue the statement outside it."
+        % (want, open_, want)
     )
 
 
@@ -467,7 +500,7 @@ class ConnectionRegistry:
     def pair_for(self, name: Optional[str]) -> ReaderWriterPools:
         """The reader/writer pair for ``name`` (or :data:`DEFAULT_CONNECTION` when ``None``). LOUD on a
         missing name."""
-        key = name if name is not None else DEFAULT_CONNECTION
+        key = _effective_connection(name)
         pair = self._connections.get(key)
         if pair is None:
             known = ", ".join("'%s'" % k for k in self._connections.keys())
@@ -979,8 +1012,9 @@ def routed_begin_tx(
 ) -> TxConnection:
     """Acquire + OWN one :class:`litedbmodel_runtime.driver._PooledTxConnection` for a transaction on the
     NAMED connection ``connection``'s WRITER pool (Phase C-2; ``None`` ⇒ the default connection). The
-    tx runs entirely on this ONE connection — the active-tx pin then wins over routing for every
-    statement in the body (Phase B unbroken). tx-control (the isolation SET / BEGIN / COMMIT / ROLLBACK)
+    tx runs entirely on this ONE connection: every UNNAMED in-body statement resolves the pin, one that
+    names THIS connection does too, and one naming a DIFFERENT database is rejected
+    (:func:`assert_tx_db_agrees`) — a transaction cannot span two databases. tx-control (the isolation SET / BEGIN / COMMIT / ROLLBACK)
     is issued THROUGH the seam on this pinned connection by the combinator (Phase D / #95,
     middleware-visible), NOT here. The writer pool's ``xform`` (``$N``/``?`` → ``%s``) +
     ``emulate_returning`` flag drive the tx statements byte-identically to the Phase A

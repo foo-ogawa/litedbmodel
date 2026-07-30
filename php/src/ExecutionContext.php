@@ -494,15 +494,23 @@ class ExecutionContext
     /**
      * Resolve WHICH connection a statement runs on (§3): the tx-owned (pinned) connection wins; else the
      * primary driver's connection. The reader/writer split and the named-DB registry live on the ROUTED
-     * ctx ({@see RoutingExecutionContext}), so a statement that NAMES a database has nowhere to go here
-     * and is LOUD — exactly as an unregistered name is on the routed ctx
-     * ({@see ConnectionRegistry::pairFor()}). Running it on the primary connection instead would execute
-     * it against a DIFFERENT database than its model declares, silently (#217).
+     * ctx ({@see RoutingExecutionContext}), so a statement that NAMES a database has nowhere to go here —
+     * inside a transaction or out of it — and is LOUD, exactly as an unregistered name is on the routed
+     * ctx ({@see ConnectionRegistry::pairFor()}). Running it on the primary connection instead would
+     * execute it against a DIFFERENT database than its model declares, silently (#217).
      */
     public function connectionFor(StatementIntent $intent): Connection
     {
+        // STEP 1: the tx-owned (pinned) connection wins — but a statement that names a DIFFERENT database
+        // than the transaction opened on cannot be honored on it, so it is LOUD rather than silently run
+        // there ({@see assertTxDbAgrees()}). This ctx holds ONE connection and no registry, so the
+        // transaction opened on the default: every named statement disagrees.
+        if ($this->pinned !== null) {
+            assertTxDbAgrees($intent->db, null);
+            return $this->pinned;
+        }
         assertRoutableNamedDb($intent->db, 'a single-connection (non-routed) execution context');
-        return $this->pinned ?? $this->driver->connection();
+        return $this->driver->connection();
     }
 
     /**
