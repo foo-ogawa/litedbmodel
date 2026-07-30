@@ -38,7 +38,6 @@ from litedbmodel_runtime import (
     create_middleware,
     current_registry,
     execute as seam_execute,
-    execute_transaction_bundle,
     raw_execute,
     raw_query,
     register_middleware,
@@ -315,22 +314,13 @@ def test_native_register_middleware_appends():
 # ── D1 TX-CONTROL: runtime BEGIN/COMMIT/ROLLBACK are middleware-visible (owner decision A) ──
 
 
-def _tx_bundle():
-    """A minimal write bundle whose transaction plan inserts one row (gate-free single body op)."""
-    return {
-        "dialect": "sqlite",
-        "name": "InsertOne",
-        "transaction": {
-            "phase": "create",
-            "entityFrom": None,
-            "statements": [
-                {"id": "b0", "role": "body", "op": {
-                    "sql": "INSERT INTO t (id, name) VALUES (?, ?)",
-                    "params": [{"ref": ["id"]}, {"ref": ["name"]}],
-                }},
-            ],
-        },
-    }
+_INSERT_T = "INSERT INTO t (id, name) VALUES (?, ?)"
+
+
+def _tx_insert(id_, name):
+    """One guarded INSERT through the PRODUCTION guarded write seam (:func:`run_guarded`) on the ambient
+    pinned tx ctx — the same seam a user-facing write inside ``transaction()`` rides."""
+    return run_guarded(current_context(), _INSERT_T, [id_, name], "WRITE", "t")
 
 
 def test_runtime_begin_commit_are_middleware_visible():
@@ -343,7 +333,7 @@ def test_runtime_begin_commit_are_middleware_visible():
 
     def scope():
         use(create_middleware(execute=lambda st, nxt, sql, params: (seen.append(sql), nxt(sql, params))[1]))
-        transaction(ctx, lambda: execute_transaction_bundle(_tx_bundle(), {"id": 1, "name": "a"}, driver), None, "sqlite")
+        transaction(ctx, lambda: _tx_insert(1, "a"), None, "sqlite")
 
     with_middleware_scope(scope)
     assert "BEGIN" in seen, seen
@@ -366,7 +356,7 @@ def test_runtime_rollback_on_error_is_middleware_visible():
         use(create_middleware(execute=lambda st, nxt, sql, params: (seen.append(sql), nxt(sql, params))[1]))
 
         def body():
-            execute_transaction_bundle(_tx_bundle(), {"id": 5, "name": "x"}, driver)
+            _tx_insert(5, "x")
             raise RuntimeError("body boom")
 
         with pytest.raises(Exception):
@@ -426,7 +416,7 @@ def test_red_tx_control_direct_on_conn_is_not_observed():
     try:
         def scope():
             use(create_middleware(execute=lambda st, nxt, sql, params: (seen.append(sql), nxt(sql, params))[1]))
-            transaction(ctx, lambda: execute_transaction_bundle(_tx_bundle(), {"id": 2, "name": "b"}, driver), None, "sqlite")
+            transaction(ctx, lambda: _tx_insert(2, "b"), None, "sqlite")
 
         with_middleware_scope(scope)
     finally:
@@ -449,7 +439,7 @@ def test_tx_control_is_exempt_from_write_tx_guard():
     ctx = context_for_driver(driver)
 
     # tx-control runs fine inside transaction() (BEGIN/COMMIT are NOT guard-rejected).
-    transaction(ctx, lambda: execute_transaction_bundle(_tx_bundle(), {"id": 3, "name": "c"}, driver), None, "sqlite")
+    transaction(ctx, lambda: _tx_insert(3, "c"), None, "sqlite")
     assert conn.execute("SELECT name FROM t WHERE id = 3").fetchone()[0] == "c"
 
     # The guard is still intact for a real user write issued OUTSIDE a transaction boundary.

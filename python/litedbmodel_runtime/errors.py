@@ -67,12 +67,12 @@ class LimitExceededError(Exception):
     """The SHARED cross-language runaway-prevention error (Phase E-2, epic #74; Python port of the TS
     ``LimitExceededError`` reference in ``src/scp/errors.ts``, #99).
 
-    Raised by the native read / relation post-fetch guard when a read (``context='find'``) or a
-    ``hasMany`` relation batch (``context='relation'``) returns MORE rows than the cap BAKED onto the
-    portable artifact (``ReadGraph.findGuard.hardLimit`` / ``RelationOp.hardLimit``), so an accidental
-    missing-WHERE / N+1 pattern fails LOUD instead of loading an unbounded result. NOT a
+    Raised by the leaf transport's post-fetch guard (:func:`check_find_hard_limit`) when a read
+    (``context='find'``) or a ``hasMany`` relation batch (``context='relation'``) returns MORE rows than
+    the cap BAKED onto the portable artifact and carried in the leaf payload's guard record, so an
+    accidental missing-WHERE / N+1 pattern fails LOUD instead of loading an unbounded result. NOT a
     :class:`SqlFailure` (a runaway guard is a litedbmodel-level policy error, carrying no ``SQLITE_*``
-    code — so :func:`litedbmodel_runtime.static_bundle._re_error_to_sql_failure` propagates it
+    code — so the ``SQLITE_*``-keyed driver-error mapping (:func:`map_sqlite_error`) propagates it
     unchanged). Byte-for-byte with the TS reference:
 
       - fields: ``limit`` (the cap), ``count`` (rows fetched), ``context`` (``'find'`` | ``'relation'``),

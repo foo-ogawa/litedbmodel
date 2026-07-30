@@ -3,7 +3,7 @@
 The Python port of the TS contract-defining artifact ``src/scp/exec-context.ts`` (#75), mirroring the
 rust port ``rust/litedbmodel_runtime/src/exec_context.rs`` (#76) and the go port
 ``go/litedbmodel_runtime/exec_context.go`` (#77). It replaces the raw ``driver: Driver`` threaded
-through ``execute_bundle`` / ``execute_read_graph`` / the relation walker / ``execute_transaction_bundle``
+through the leaf transport (:func:`execute` / :func:`run` / :func:`run_guarded`)
 with an :class:`ExecutionContext` that carries:
 
   1. a **connection provider** — :meth:`ExecutionContext.connection_for` ``(intent)`` resolves WHICH
@@ -240,8 +240,8 @@ _EMPTY_CHAIN = MiddlewareChain()
 
 
 class ExecutionContext:
-    """The execution context threaded through ``execute_bundle`` / ``execute_read_graph`` / the
-    relation walker / ``execute_transaction_bundle`` in place of a raw :class:`Driver`. It carries the
+    """The execution context threaded through the leaf transport and the central execute/run/run_guarded
+    seam in place of a raw :class:`Driver`. It carries the
     connection provider (the primary driver + an optional pinned tx connection), the middleware chain,
     and derives a tx-scoped ctx via :meth:`with_connection`.
 
@@ -315,7 +315,7 @@ class ExecutionContext:
     def with_read_only(self) -> "ExecutionContext":
         """Derive a READ-ONLY-scoped ctx (mirror v1 ``withWriter`` / the TS ``withReadOnly`` / rust/go
         ``with_read_only``): reads are allowed, but ANY write funneled through the GUARDED write seam
-        (:func:`run_guarded` / a guarded ``execute_transaction_bundle``) is rejected with
+        (:func:`run_guarded`) is rejected with
         :class:`WriteInReadOnlyContextError`. A tx-scoped ctx INHERITS its pinned connection + driver +
         middleware; a Transaction() opened inside a read-only scope stays read-only (v1 parity)."""
         return ExecutionContext(
@@ -480,8 +480,8 @@ def context_for_driver(driver: Driver) -> ExecutionContext:
 
 def as_context(driver_or_ctx: Union[Driver, ExecutionContext]) -> ExecutionContext:
     """Accept EITHER a raw :class:`Driver` (wrap it via :func:`context_for_driver` — the byte-identical
-    backward-compat path) OR an already-built :class:`ExecutionContext` (pass through). The public
-    runtime entry points (``execute_bundle`` / ``execute_transaction_bundle``) take this union so every existing caller that threads a raw driver keeps working
+    backward-compat path) OR an already-built :class:`ExecutionContext` (pass through). The leaf
+    transport (:func:`make_handlers`) takes this union so a caller that threads a raw driver keeps working
     while the ctx-threaded internals funnel every SQL through the seam.
     """
     if isinstance(driver_or_ctx, ExecutionContext):
@@ -708,8 +708,8 @@ def transaction(
     ## The ambient-tx JOIN — how operations participate (the core #86 fix; python = contextvars)
 
     ``fn`` takes NO connection argument. Instead the pinned tx ctx lives in the ambient contextvar
-    (:func:`current_context`). Every operation ``fn`` issues — a live-DB write via
-    ``execute_transaction_bundle``, a read via ``execute_bundle`` — detects that ambient pinned ctx and
+    (:func:`current_context`). Every operation ``fn`` issues — a write via the guarded write seam
+    (:func:`run_guarded`), a read via the read seam — resolves that ambient pinned ctx and
     runs its statements on THAT connection **without opening its own BEGIN/COMMIT** (the nested-join,
     below). So N operations inside one ``transaction(fn)`` produce exactly ONE BEGIN + ONE COMMIT on
     ONE connection. Outside a ``transaction(fn)`` the ambient pin is absent, so a bare guarded write's
@@ -765,7 +765,7 @@ def transaction(
             # A live PG 40001 / MySQL 1213 (raised at COMMIT as a raw psycopg/PyMySQL error) thus flows
             # through `map_sqlite_error` here, making the `.wrapped` chain genuinely load-bearing on the
             # live retry path (neuter `.wrapped` → this classification goes RED). An already-mapped
-            # `SqlFailure` (e.g. from a nested `execute_transaction_bundle`) is left as-is (no re-map).
+            # `SqlFailure` (e.g. surfaced by the guarded write seam) is left as-is (no re-map).
             failure = error if isinstance(error, SqlFailure) else map_sqlite_error(error)
             if attempt < retry_limit and opts.retry_on_error and is_retryable_tx_error(failure):
                 # Exponential backoff before RETRYing the whole transaction on a fresh connection.
