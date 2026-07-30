@@ -51,9 +51,17 @@ export type HydrateFactory<R> = (raw: Record<string, unknown>) => R;
  *
  * ONE target, whatever a relation's DATABASE is: a CROSS-DB relation names its connection ON THE OP
  * ({@link RelationOp.connection}), and {@link runRelationOp} puts that name on the statement's
- * {@link import('./exec-context').StatementIntent} for the target's `connectionFor` to resolve
- * against the ONE registry ({@link import('./connection-routing').ConnectionRegistry}). So this
- * surface holds no connection registry of its own; a target that cannot resolve the name is LOUD.
+ * {@link import('./exec-context').StatementIntent} — the only input a target's `connectionFor` routes
+ * on. So this surface holds no connection registry of its own; it hands the name to the seam.
+ *
+ * WHICH targets can resolve one, on THIS plane: this surface is SYNCHRONOUS (better-sqlite3), and TS's
+ * {@link import('./connection-routing').ConnectionRegistry} maps a name to ASYNC pools
+ * ({@link import('./exec-context').AsyncConnectionPool}), so the registry-holding
+ * {@link import('./exec-context').PooledAsyncContext} is not even assignable here (its `connectionFor`
+ * yields an {@link import('./exec-context').AsyncConnection}). A named relation therefore resolves only
+ * against a CALLER-SUPPLIED {@link import('./exec-context').ExecutionContext} whose own `connectionFor`
+ * routes on `intent.db`. On a raw driver — or any other single-connection target — a named relation is
+ * LOUD (`assertRoutableNamedDb`), never silently run against the connection that target happens to hold.
  */
 export class RelationContext {
   private readonly siblings: Record<string, unknown>[];

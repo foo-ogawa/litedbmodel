@@ -124,13 +124,19 @@ the routing is SQL-independent plumbing:
 1. **The name comes from the MODEL** — `@model(table, { connection })` → `static CONNECTION` → `connectionOf`,
    the twin of `TABLE_NAME`. An endpoint's statements take their own model's connection; a relation's child
    fetch takes the TARGET model's, resolved once by `relationDeclOf` onto the compiled `RelationOp.connection`.
-2. **ONE channel, ONE registry.** The name reaches the router as `StatementIntent.db` — on the codegen surface
-   through the child fetch's `ExecOptions.db` control field the emitter bakes, on the typed-object/lazy surface
-   through `runRelationOp`. Resolving it is the execution context's job, against the single
-   `ConnectionRegistry` (name → reader/writer pools) each runtime already carries: the named connection's pair
-   is selected first, then the tx-pin / writer-sticky / reader-writer split applies within it. No read entry
-   point takes a connection registry of its own.
-3. **Fail-closed, all five.** An unregistered name (`ConnectionRegistry.pairFor`) and a named statement on a
+2. **ONE channel.** The name reaches the router as `StatementIntent.db` — on the codegen surface through the
+   child fetch's `ExecOptions.db` control field the emitter bakes, on the typed-object/lazy surface through
+   `runRelationOp`. Resolving it is the EXECUTION CONTEXT's job, never the read call's: no read entry point
+   takes a connection registry of its own.
+3. **What resolves it.** `ConnectionRegistry` (name → reader/writer pools) is the one registry, and the named
+   connection's pair is selected first — the tx-pin / writer-sticky / reader-writer split then applies within
+   it. go / python / php / rust hold SYNCHRONOUS pools (`Pool`, `ConnectionPool`, `PdoPool`,
+   `Arc<dyn Driver + Sync>`), so ONE registry-backed ctx serves both read surfaces. TS is asymmetric: its pair
+   is typed over `AsyncConnectionPool`, so the registry-backed `PooledAsyncContext` serves the codegen/async
+   surface, while the SYNCHRONOUS typed-object/lazy surface (better-sqlite3) cannot be handed that ctx at all —
+   it resolves a name against a caller-supplied `ExecutionContext` whose own `connectionFor` routes on
+   `intent.db`.
+4. **Fail-closed, all five.** An unregistered name (`ConnectionRegistry.pairFor`) and a named statement on a
    single-connection / non-routed context (`assertRoutableNamedDb`) are BOTH loud. Silently running on
    whatever one connection the context holds is the wrong-database execution the name exists to prevent, and a
    single-DB deployment is exactly where it would never be noticed.
