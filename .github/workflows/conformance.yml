@@ -39,11 +39,6 @@ jobs:
         run: npm run tracked:check
       - name: Every test gate is reachable from CI
         run: npm run gates:check
-      # The two hand-written live-DB runners (go, rust) dispatch on the vector's entry through a switch
-      # that ENDS IN A CATCH-ALL, so a missed entry compiles in both languages and fails as a vector —
-      # after docker is up and the other three legs have run (#201). Static, no toolchain, no DB.
-      - name: The live-DB runners dispatch every corpus entry
-        run: npm run conformance:dispatch:check
       - name: The published package actually loads (CJS + ESM, clean install)
         run: |
           npm run build
@@ -152,8 +147,10 @@ jobs:
           # The WS7c Go runtime consumes behavior-contracts + a pure-Go SQLite (modernc); the
           # dependency graph's `go` floors require a modern toolchain (mirrors graphddb's go leg).
           go-version: '1.25'
-      - name: Go — setup node (the gofmt gate is a node script; no npm install needed)
-        if: matrix.lang == 'go'
+      # go's gofmt gate is a node script, and both the go and rust legs invoke their dispatch-coverage
+      # gate through `npm run`. No `npm ci` — neither needs node_modules.
+      - name: Setup node (for the go/rust gates invoked via npm)
+        if: matrix.lang == 'go' || matrix.lang == 'rust'
         uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -187,9 +184,15 @@ jobs:
         # exemption BOTH WAYS against the files' own bc marker, so a hand-written file cannot hide in it
         # and a newly generated module cannot go unlisted. `gofmt -l` also exits 0 whatever it finds, so
         # a bare invocation would need `[ -z "$(...)" ]` and would call a gofmt CRASH clean.
+        #
+        # `go:dispatch:check` (#222): the runner's endpoint table must cover every entry the live-DB
+        # corpus uses. It asserts that from the REAL `dispatch` map, before opening a connection, so it
+        # needs no database — and it replaces a static scanner that read the source as text and was
+        # fooled twice by comment and string syntax it did not model (#201).
         run: |
           (cd go && go build ./... && go vet ./...)
           npm run go:fmt:check
+          npm run go:dispatch:check
       - name: Rust — check (--locked) + fmt + clippy (runtime AND the livedb runner)
         if: matrix.lang == 'rust'
         # No workflow ran `cargo fmt --check` or clippy, so both drifted unnoticed (#168). They gate
@@ -208,12 +211,19 @@ jobs:
         # --workspace --all-targets -- -D warnings` exit 0 (it compiles the crate WITHOUT the feature,
         # so the generated tree is not in the build at all), this line exit 101 with E0599 — in 51s,
         # no database.
+        #
+        # `rust:dispatch:check` (#222) rides here because this leg ALREADY builds livedb_runner with
+        # `--features livedb` for the clippy line above, so running it costs no extra compile. It asserts
+        # from the REAL `DISPATCH` table that the endpoint set covers the live-DB corpus, before any
+        # driver connects — no database — replacing a static scanner that read the source as text and was
+        # fooled twice by syntax it did not model (#201).
         run: |
           cd rust
           cargo fmt --all -- --check
           cargo check --locked
           cargo clippy -p litedbmodel_runtime --features livedb --all-targets -- -D warnings
           cargo clippy -p livedb_runner --features livedb --all-targets -- -D warnings
+          cd .. && npm run rust:dispatch:check
       - name: PHP — lint
         if: matrix.lang == 'php'
         run: |

@@ -396,240 +396,283 @@ mod imp {
     // array — the SAME split the generated signatures declare), so those arms branch on dialect. Every
     // other arm is the same signature-direct call for both dialects.
 
+    /// One endpoint of [`DISPATCH`]: the dialect flag and the vector's input, returning what the
+    /// generated method returned. Non-capturing, so each coerces to a plain `fn` pointer.
+    type EntryFn = fn(bool, &J) -> Result<J, BehaviorError>;
+
+    /// The conformance runner's endpoint TABLE — the sanctioned harness form (CLAUDE.md §3, the shape
+    /// python/php already have with `ops[vector["entry"]]`). Every body is a signature-direct call on
+    /// the dialect's generated module (§3.1); the table only decides WHICH one runs.
+    ///
+    /// A table and not a `match` for one reason: the set of entries this runner can dispatch is then a
+    /// VALUE, so [`entry_coverage`] can assert the corpus is covered before a single query runs. A
+    /// `match` ends in a catch-all, so a missed endpoint COMPILED and surfaced only as a failing
+    /// vector on a live database — and the static scanner that used to look for it was fooled twice by
+    /// comment and string syntax it did not model (#201, #222).
+    ///
+    /// The batch endpoints bind a per-dialect input shape (PG columnar arrays vs MySQL one record
+    /// array), so those bodies branch on `pg`. An endpoint that takes no input, or that is spelled the
+    /// same for both dialects, names the parameter it does not read with a leading underscore.
+    const DISPATCH: &[(&str, EntryFn)] = &[
+        ("posts", |pg, input| {
+            let a = in_i64(input, "authorId");
+            if pg {
+                pg::posts(a).map(|r| r.to_compare())
+            } else {
+                my::posts(a).map(|r| r.to_compare())
+            }
+        }),
+        ("postsTop", |pg, _input| {
+            if pg {
+                pg::postsTop().map(|r| r.to_compare())
+            } else {
+                my::postsTop().map(|r| r.to_compare())
+            }
+        }),
+        ("page", |pg, input| {
+            let (l, o) = (in_i64(input, "limit"), in_i64(input, "offset"));
+            if pg {
+                pg::page(l, o).map(|r| r.to_compare())
+            } else {
+                my::page(l, o).map(|r| r.to_compare())
+            }
+        }),
+        ("postsByIds", |pg, input| {
+            let ids = in_i64s(input, "ids");
+            if pg {
+                pg::postsByIds(ids).map(|r| r.to_compare())
+            } else {
+                my::postsByIds(ids).map(|r| r.to_compare())
+            }
+        }),
+        ("pagedFeed", |pg, input| {
+            let (a, m, s, l, o) = (
+                in_i64(input, "authorId"),
+                in_opt_i64(input, "minId"),
+                in_opt_str(input, "status"),
+                in_i64(input, "limit"),
+                in_i64(input, "offset"),
+            );
+            if pg {
+                pg::pagedFeed(a, m, s, l, o).map(|r| r.to_compare())
+            } else {
+                my::pagedFeed(a, m, s, l, o).map(|r| r.to_compare())
+            }
+        }),
+        ("feed", |pg, input| {
+            let (a, s, si) = (
+                in_i64(input, "authorId"),
+                in_opt_str(input, "status"),
+                in_opt_str(input, "since"),
+            );
+            if pg {
+                pg::feed(a, s, si).map(|r| r.to_compare())
+            } else {
+                my::feed(a, s, si).map(|r| r.to_compare())
+            }
+        }),
+        ("usersWithPosts", |pg, _input| {
+            if pg {
+                pg::usersWithPosts().map(|r| r.to_compare())
+            } else {
+                my::usersWithPosts().map(|r| r.to_compare())
+            }
+        }),
+        ("postsWithAuthor", |pg, _input| {
+            if pg {
+                pg::postsWithAuthor().map(|r| r.to_compare())
+            } else {
+                my::postsWithAuthor().map(|r| r.to_compare())
+            }
+        }),
+        ("createPost", |pg, input| {
+            let (id, a, t, s, c) = (
+                in_i64(input, "id"),
+                in_i64(input, "authorId"),
+                in_str(input, "title"),
+                in_str(input, "status"),
+                in_str(input, "createdAt"),
+            );
+            if pg {
+                pg::createPost(id, a, t, s, c).map(|r| r.to_compare())
+            } else {
+                my::createPost(id, a, t, s, c).map(|r| r.to_compare())
+            }
+        }),
+        ("renamePost", |pg, input| {
+            let (t, id) = (in_str(input, "title"), in_i64(input, "id"));
+            if pg {
+                pg::renamePost(t, id).map(|r| r.to_compare())
+            } else {
+                my::renamePost(t, id).map(|r| r.to_compare())
+            }
+        }),
+        ("removePost", |pg, input| {
+            let id = in_i64(input, "id");
+            if pg {
+                pg::removePost(id).map(|r| r.to_compare())
+            } else {
+                my::removePost(id).map(|r| r.to_compare())
+            }
+        }),
+        ("createPostReturning", |pg, input| {
+            let (id, a, t, s, c) = (
+                in_i64(input, "id"),
+                in_i64(input, "authorId"),
+                in_str(input, "title"),
+                in_str(input, "status"),
+                in_str(input, "createdAt"),
+            );
+            if pg {
+                pg::createPostReturning(id, a, t, s, c).map(|r| r.to_compare())
+            } else {
+                my::createPostReturning(id, a, t, s, c).map(|r| r.to_compare())
+            }
+        }),
+        ("renamePostReturning", |pg, input| {
+            let (t, id) = (in_str(input, "title"), in_i64(input, "id"));
+            if pg {
+                pg::renamePostReturning(t, id).map(|r| r.to_compare())
+            } else {
+                my::renamePostReturning(t, id).map(|r| r.to_compare())
+            }
+        }),
+        ("removePostReturning", |pg, input| {
+            let id = in_i64(input, "id");
+            if pg {
+                pg::removePostReturning(id).map(|r| r.to_compare())
+            } else {
+                my::removePostReturning(id).map(|r| r.to_compare())
+            }
+        }),
+        ("restatusPostsReturning", |pg, input| {
+            let (s, a) = (in_str(input, "status"), in_i64(input, "authorId"));
+            if pg {
+                pg::restatusPostsReturning(s, a).map(|r| r.to_compare())
+            } else {
+                my::restatusPostsReturning(s, a).map(|r| r.to_compare())
+            }
+        }),
+        ("removePostsByAuthorReturning", |pg, input| {
+            let a = in_i64(input, "authorId");
+            if pg {
+                pg::removePostsByAuthorReturning(a).map(|r| r.to_compare())
+            } else {
+                my::removePostsByAuthorReturning(a).map(|r| r.to_compare())
+            }
+        }),
+        ("typedRows", |pg, _input| {
+            if pg {
+                pg::typedRows().map(|r| r.to_compare())
+            } else {
+                my::typedRows().map(|r| r.to_compare())
+            }
+        }),
+        ("removeTags", |pg, input| {
+            let ids = in_i64s(input, "ids");
+            if pg {
+                pg::removeTags(ids).map(|r| r.to_compare())
+            } else {
+                my::removeTags(ids).map(|r| r.to_compare())
+            }
+        }),
+        ("removeTagsReturning", |pg, input| {
+            let ids = in_i64s(input, "ids");
+            if pg {
+                pg::removeTagsReturning(ids).map(|r| r.to_compare())
+            } else {
+                my::removeTagsReturning(ids).map(|r| r.to_compare())
+            }
+        }),
+        ("createTags", |pg, input| {
+            if pg {
+                pg::createTags(
+                    in_i64s(input, "rows_id"),
+                    in_i64s(input, "rows_post_id"),
+                    in_strs(input, "rows_label"),
+                )
+                .map(|r| r.to_compare())
+            } else {
+                let rows = in_records(input)
+                    .iter()
+                    .map(|r| my::CreateTagsRecord {
+                        id: in_i64(r, "id"),
+                        post_id: in_i64(r, "post_id"),
+                        label: in_str(r, "label"),
+                    })
+                    .collect();
+                my::createTags(rows).map(|r| r.to_compare())
+            }
+        }),
+        ("createTagsReturning", |pg, input| {
+            if pg {
+                pg::createTagsReturning(
+                    in_i64s(input, "rows_id"),
+                    in_i64s(input, "rows_post_id"),
+                    in_strs(input, "rows_label"),
+                )
+                .map(|r| r.to_compare())
+            } else {
+                let rows = in_records(input)
+                    .iter()
+                    .map(|r| my::CreateTagsReturningRecord {
+                        id: in_i64(r, "id"),
+                        post_id: in_i64(r, "post_id"),
+                        label: in_str(r, "label"),
+                    })
+                    .collect();
+                my::createTagsReturning(rows).map(|r| r.to_compare())
+            }
+        }),
+        ("relabelTagsReturning", |pg, input| {
+            if pg {
+                pg::relabelTagsReturning(in_i64s(input, "rows_id"), in_strs(input, "rows_label"))
+                    .map(|r| r.to_compare())
+            } else {
+                let rows = in_records(input)
+                    .iter()
+                    .map(|r| my::RelabelTagsReturningRecord {
+                        id: in_i64(r, "id"),
+                        label: in_str(r, "label"),
+                    })
+                    .collect();
+                my::relabelTagsReturning(rows).map(|r| r.to_compare())
+            }
+        }),
+    ];
+
+    /// Compares the corpus against [`DISPATCH`]: how many DISTINCT entries it uses, and which of them
+    /// have no arm (with the vector count each would have failed). One walk, and the only place that
+    /// comparison is made — `run` asserts it before connecting, and `--check-coverage` reports it.
+    fn entry_coverage(vectors: &[J]) -> (usize, Vec<(String, usize)>) {
+        let mut counts: Vec<(String, usize)> = Vec::new();
+        for v in vectors {
+            let Some(e) = v.get("entry").and_then(J::as_str) else {
+                continue;
+            };
+            match counts.iter_mut().find(|(name, _)| name == e) {
+                Some((_, n)) => *n += 1,
+                None => counts.push((e.to_string(), 1)),
+            }
+        }
+        counts.sort_by(|a, b| a.0.cmp(&b.0));
+        let missing = counts
+            .iter()
+            .filter(|(e, _)| !DISPATCH.iter().any(|(name, _)| name == e))
+            .cloned()
+            .collect();
+        (counts.len(), missing)
+    }
+
+    /// Runs one vector's endpoint. The catch-all is kept as a runtime guard, but it is no longer the
+    /// only thing between a missed endpoint and a live-DB failure: `run` asserts coverage from this
+    /// same table before connecting.
     fn call_entry(dialect: &str, entry: &str, input: &J) -> Result<J, BehaviorError> {
-        let pg = dialect == "postgres";
-        match entry {
-            "posts" => {
-                let a = in_i64(input, "authorId");
-                if pg {
-                    pg::posts(a).map(|r| r.to_compare())
-                } else {
-                    my::posts(a).map(|r| r.to_compare())
-                }
-            }
-            "postsTop" => {
-                if pg {
-                    pg::postsTop().map(|r| r.to_compare())
-                } else {
-                    my::postsTop().map(|r| r.to_compare())
-                }
-            }
-            "page" => {
-                let (l, o) = (in_i64(input, "limit"), in_i64(input, "offset"));
-                if pg {
-                    pg::page(l, o).map(|r| r.to_compare())
-                } else {
-                    my::page(l, o).map(|r| r.to_compare())
-                }
-            }
-            "postsByIds" => {
-                let ids = in_i64s(input, "ids");
-                if pg {
-                    pg::postsByIds(ids).map(|r| r.to_compare())
-                } else {
-                    my::postsByIds(ids).map(|r| r.to_compare())
-                }
-            }
-            "pagedFeed" => {
-                let (a, m, s, l, o) = (
-                    in_i64(input, "authorId"),
-                    in_opt_i64(input, "minId"),
-                    in_opt_str(input, "status"),
-                    in_i64(input, "limit"),
-                    in_i64(input, "offset"),
-                );
-                if pg {
-                    pg::pagedFeed(a, m, s, l, o).map(|r| r.to_compare())
-                } else {
-                    my::pagedFeed(a, m, s, l, o).map(|r| r.to_compare())
-                }
-            }
-            "feed" => {
-                let (a, s, si) = (
-                    in_i64(input, "authorId"),
-                    in_opt_str(input, "status"),
-                    in_opt_str(input, "since"),
-                );
-                if pg {
-                    pg::feed(a, s, si).map(|r| r.to_compare())
-                } else {
-                    my::feed(a, s, si).map(|r| r.to_compare())
-                }
-            }
-            "usersWithPosts" => {
-                if pg {
-                    pg::usersWithPosts().map(|r| r.to_compare())
-                } else {
-                    my::usersWithPosts().map(|r| r.to_compare())
-                }
-            }
-            "postsWithAuthor" => {
-                if pg {
-                    pg::postsWithAuthor().map(|r| r.to_compare())
-                } else {
-                    my::postsWithAuthor().map(|r| r.to_compare())
-                }
-            }
-            "createPost" => {
-                let (id, a, t, s, c) = (
-                    in_i64(input, "id"),
-                    in_i64(input, "authorId"),
-                    in_str(input, "title"),
-                    in_str(input, "status"),
-                    in_str(input, "createdAt"),
-                );
-                if pg {
-                    pg::createPost(id, a, t, s, c).map(|r| r.to_compare())
-                } else {
-                    my::createPost(id, a, t, s, c).map(|r| r.to_compare())
-                }
-            }
-            "renamePost" => {
-                let (t, id) = (in_str(input, "title"), in_i64(input, "id"));
-                if pg {
-                    pg::renamePost(t, id).map(|r| r.to_compare())
-                } else {
-                    my::renamePost(t, id).map(|r| r.to_compare())
-                }
-            }
-            "removePost" => {
-                let id = in_i64(input, "id");
-                if pg {
-                    pg::removePost(id).map(|r| r.to_compare())
-                } else {
-                    my::removePost(id).map(|r| r.to_compare())
-                }
-            }
-            "createPostReturning" => {
-                let (id, a, t, s, c) = (
-                    in_i64(input, "id"),
-                    in_i64(input, "authorId"),
-                    in_str(input, "title"),
-                    in_str(input, "status"),
-                    in_str(input, "createdAt"),
-                );
-                if pg {
-                    pg::createPostReturning(id, a, t, s, c).map(|r| r.to_compare())
-                } else {
-                    my::createPostReturning(id, a, t, s, c).map(|r| r.to_compare())
-                }
-            }
-            "renamePostReturning" => {
-                let (t, id) = (in_str(input, "title"), in_i64(input, "id"));
-                if pg {
-                    pg::renamePostReturning(t, id).map(|r| r.to_compare())
-                } else {
-                    my::renamePostReturning(t, id).map(|r| r.to_compare())
-                }
-            }
-            "removePostReturning" => {
-                let id = in_i64(input, "id");
-                if pg {
-                    pg::removePostReturning(id).map(|r| r.to_compare())
-                } else {
-                    my::removePostReturning(id).map(|r| r.to_compare())
-                }
-            }
-            "restatusPostsReturning" => {
-                let (s, a) = (in_str(input, "status"), in_i64(input, "authorId"));
-                if pg {
-                    pg::restatusPostsReturning(s, a).map(|r| r.to_compare())
-                } else {
-                    my::restatusPostsReturning(s, a).map(|r| r.to_compare())
-                }
-            }
-            "removePostsByAuthorReturning" => {
-                let a = in_i64(input, "authorId");
-                if pg {
-                    pg::removePostsByAuthorReturning(a).map(|r| r.to_compare())
-                } else {
-                    my::removePostsByAuthorReturning(a).map(|r| r.to_compare())
-                }
-            }
-            "typedRows" => {
-                if pg {
-                    pg::typedRows().map(|r| r.to_compare())
-                } else {
-                    my::typedRows().map(|r| r.to_compare())
-                }
-            }
-            "removeTags" => {
-                let ids = in_i64s(input, "ids");
-                if pg {
-                    pg::removeTags(ids).map(|r| r.to_compare())
-                } else {
-                    my::removeTags(ids).map(|r| r.to_compare())
-                }
-            }
-            "removeTagsReturning" => {
-                let ids = in_i64s(input, "ids");
-                if pg {
-                    pg::removeTagsReturning(ids).map(|r| r.to_compare())
-                } else {
-                    my::removeTagsReturning(ids).map(|r| r.to_compare())
-                }
-            }
-            "createTags" => {
-                if pg {
-                    pg::createTags(
-                        in_i64s(input, "rows_id"),
-                        in_i64s(input, "rows_post_id"),
-                        in_strs(input, "rows_label"),
-                    )
-                    .map(|r| r.to_compare())
-                } else {
-                    let rows = in_records(input)
-                        .iter()
-                        .map(|r| my::CreateTagsRecord {
-                            id: in_i64(r, "id"),
-                            post_id: in_i64(r, "post_id"),
-                            label: in_str(r, "label"),
-                        })
-                        .collect();
-                    my::createTags(rows).map(|r| r.to_compare())
-                }
-            }
-            "createTagsReturning" => {
-                if pg {
-                    pg::createTagsReturning(
-                        in_i64s(input, "rows_id"),
-                        in_i64s(input, "rows_post_id"),
-                        in_strs(input, "rows_label"),
-                    )
-                    .map(|r| r.to_compare())
-                } else {
-                    let rows = in_records(input)
-                        .iter()
-                        .map(|r| my::CreateTagsReturningRecord {
-                            id: in_i64(r, "id"),
-                            post_id: in_i64(r, "post_id"),
-                            label: in_str(r, "label"),
-                        })
-                        .collect();
-                    my::createTagsReturning(rows).map(|r| r.to_compare())
-                }
-            }
-            "relabelTagsReturning" => {
-                if pg {
-                    pg::relabelTagsReturning(
-                        in_i64s(input, "rows_id"),
-                        in_strs(input, "rows_label"),
-                    )
-                    .map(|r| r.to_compare())
-                } else {
-                    let rows = in_records(input)
-                        .iter()
-                        .map(|r| my::RelabelTagsReturningRecord {
-                            id: in_i64(r, "id"),
-                            label: in_str(r, "label"),
-                        })
-                        .collect();
-                    my::relabelTagsReturning(rows).map(|r| r.to_compare())
-                }
-            }
-            other => Err(BehaviorError::new(
+        match DISPATCH.iter().find(|(name, _)| *name == entry) {
+            Some((_, f)) => f(dialect == "postgres", input),
+            None => Err(BehaviorError::new(
                 "UNKNOWN_ENTRY",
-                format!("unknown entry {other:?}"),
+                format!("unknown entry {entry:?}"),
             )),
         }
     }
@@ -1001,6 +1044,39 @@ mod imp {
                 .filter(|v| v.get("dialect").and_then(J::as_str) == Some(d))
                 .collect()
         };
+
+        // Every entry the corpus uses has an arm — asserted HERE, with the corpus parsed and no driver
+        // connected yet, which is the only point where the question is both answerable and free. An
+        // endpoint added to conformance/harness.ts needs a new arm in `DISPATCH` AND an
+        // `impl_to_compare!` for its outType; without this the missing arm reached `call_entry`'s
+        // catch-all and surfaced as a failing VECTOR, after docker was up and the other three language
+        // legs had run. `--check-coverage` stops here, so the same assertion is a gate needing no server
+        // (#222). (The `impl_to_compare!` half is a trait-bound COMPILE error — `cargo clippy -p
+        // livedb_runner --features livedb --all-targets`.)
+        let (used, missing) = entry_coverage(all_vectors);
+        let check_only = std::env::args().nth(1).as_deref() == Some("--check-coverage");
+        if !missing.is_empty() {
+            eprintln!(
+                "FAIL-CLOSED: {} of the {used} entries this corpus uses have NO arm in DISPATCH:",
+                missing.len()
+            );
+            for (entry, n) in &missing {
+                eprintln!("    {entry}   ({n} vector(s))");
+            }
+            eprintln!("Add each to `DISPATCH` in rust/livedb_runner/src/main.rs.");
+            if !check_only {
+                print_summary((0, 0), (0, 0), true);
+            }
+            return 2;
+        }
+        if check_only {
+            println!(
+                "✅ rust livedb runner: every one of the {used} entries the {}-vector corpus uses has an arm in DISPATCH ({} arms declared)",
+                all_vectors.len(),
+                DISPATCH.len()
+            );
+            return 0;
+        }
 
         let pg_driver = match PostgresDriver::connect(&pg_conn()) {
             Ok(d) => d,

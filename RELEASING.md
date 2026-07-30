@@ -130,8 +130,10 @@ Run from the repo root.
 - [ ] `npm run lint`                 — eslint clean
 - [ ] `npm run gates:check`          — every test gate is reachable from a PR/push workflow
 - [ ] `npm run pkg:check`            — every published subpath loads (CJS + ESM) from a clean install
-- [ ] `npm run conformance:dispatch:check` — the go + rust live-DB runners dispatch every corpus entry
-      (their switch ends in a catch-all, so a missed entry compiles and fails only as a vector)
+- [ ] `npm run conformance:dispatch:check` — the go + rust live-DB runners' endpoint TABLES cover every
+      entry the corpus uses. Each runner asserts it from its own `dispatch`/`DISPATCH` before connecting,
+      so it needs no database; a missed entry otherwise reaches the catch-all and fails only as a vector.
+      Needs the go and rust toolchains (CI runs the two halves in the legs that have them)
 - [ ] `npm publish --dry-run`        — tarball has `dist/`, no `src/`/`../` leaks
 - [ ] `(cd python && python -m build && twine check dist/*)`
 - [ ] fresh-venv wheel smoke — `pip install` the built wheel + run a real vector

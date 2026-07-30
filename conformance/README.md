@@ -92,15 +92,21 @@ read as a full one.
 ### Adding an endpoint means hand-following two runners
 
 Python and PHP dispatch `ops[vector['entry']]` — a name lookup on the generated module's facade — so
-they need no edit. Go and Rust cannot look a method up by name, so each holds a signature-direct call
-table (the form CLAUDE.md §3.1 sanctions), and Rust additionally lowers each outType for comparison
-through `impl_to_compare!`. A new endpoint needs all three followed by hand, and **neither omission
-is a build failure**:
+they need no edit. Go and Rust cannot look a method up by name, so each holds an endpoint TABLE keyed by
+entry (`dispatch` / `DISPATCH`), whose bodies are signature-direct calls on the dialect's generated
+module (the form CLAUDE.md §3.1 sanctions), and Rust additionally lowers each outType for comparison
+through `impl_to_compare!`. A new endpoint needs both followed by hand, and **neither omission is a
+build failure**:
 
 | omission | what sees it |
 | --- | --- |
-| a missing `case "<entry>":` / `"<entry>" => {` | `npm run conformance:dispatch:check` — both tables end in a catch-all, so a missing arm compiles in both languages and would otherwise fail as a vector, with docker up |
+| an entry with no arm in the table | the runner itself. Each asserts, from its own table with the corpus parsed and before any connection, that every entry the corpus uses is covered — `npm run conformance:dispatch:check`, or one half at a time with `go:dispatch:check` / `rust:dispatch:check` |
 | a missing `impl_to_compare!` | `cargo clippy -p livedb_runner --features livedb --all-targets` — the runner is no default-member and its generated modules are behind that feature, so plain `cargo check` and `clippy --workspace` compile neither |
 
-Both are static and need no database. What still only the live run can tell you is whether a present
-arm calls the right generated entry with the right arguments.
+Both need no database. The coverage half is asserted from the table the runner really dispatches
+through, so it cannot be fooled by how the source reads — a static scanner used to do this job and was
+defeated twice by comment and string syntax it did not model (#201, #222).
+
+What still only the live run can tell you is whether a present arm calls the right generated entry with
+the right arguments — `npm run conformance:livedb` compares every vector's statements, full nested
+result and resulting DB state against the frozen corpus, so a wrong call fails there.

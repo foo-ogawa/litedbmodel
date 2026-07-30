@@ -286,108 +286,137 @@ func records(m map[string]any) []map[string]any {
 	return out
 }
 
-// callEntry is the sanctioned conformance switch (CLAUDE.md §3.1): one signature-direct call per
-// declared endpoint, selecting the dialect's generated package. The batch endpoints bind a per-dialect
-// input shape (PG columnar arrays vs MySQL/SQLite one record array), so those arms branch on dialect.
-func callEntry(dialect, entry string, in map[string]any) (any, error) {
-	postgres := dialect == "postgres"
-	switch entry {
-	case "posts":
+// entryFn is one endpoint of the dispatch TABLE below: the dialect flag and the vector's input,
+// returning what the generated method returned. Every body is a signature-direct call on the
+// dialect's generated package (CLAUDE.md §3.1) — the table only decides WHICH one runs.
+type entryFn func(postgres bool, in map[string]any) (any, error)
+
+// dispatch is the conformance runner's endpoint table — the sanctioned harness form (CLAUDE.md §3,
+// the same shape python/php already have with `ops[vector["entry"]]`). It is a TABLE and not a
+// `switch` for one reason: the set of entries this runner can dispatch is then a VALUE, so
+// `missingEntries` can assert the corpus is covered before a single query runs. A `switch` ends in
+// a catch-all, so a missed endpoint compiled and surfaced only as a failing vector on a live
+// database — and the static scanner that used to look for it was fooled twice by comment and
+// string syntax it did not model (#201, #222).
+//
+// The batch endpoints bind a per-dialect input shape (PG columnar arrays vs MySQL/SQLite one record
+// array), so those bodies branch on `postgres`.
+var dispatch = map[string]entryFn{
+	"posts": func(postgres bool, in map[string]any) (any, error) {
 		if postgres {
 			return pg.Posts(i64(in, "authorId"))
 		}
 		return my.Posts(i64(in, "authorId"))
-	case "postsTop":
+	},
+	"postsTop": func(postgres bool, in map[string]any) (any, error) {
 		if postgres {
 			return pg.PostsTop()
 		}
 		return my.PostsTop()
-	case "page":
+	},
+	"page": func(postgres bool, in map[string]any) (any, error) {
 		if postgres {
 			return pg.Page(i64(in, "limit"), i64(in, "offset"))
 		}
 		return my.Page(i64(in, "limit"), i64(in, "offset"))
-	case "postsByIds":
+	},
+	"postsByIds": func(postgres bool, in map[string]any) (any, error) {
 		if postgres {
 			return pg.PostsByIds(i64s(in, "ids"))
 		}
 		return my.PostsByIds(i64s(in, "ids"))
-	case "feed":
+	},
+	"feed": func(postgres bool, in map[string]any) (any, error) {
 		if postgres {
 			return pg.Feed(i64(in, "authorId"), optStr(in, "status"), optStr(in, "since"))
 		}
 		return my.Feed(i64(in, "authorId"), optStr(in, "status"), optStr(in, "since"))
-	case "pagedFeed":
+	},
+	"pagedFeed": func(postgres bool, in map[string]any) (any, error) {
 		if postgres {
 			return pg.PagedFeed(i64(in, "authorId"), optI64(in, "minId"), optStr(in, "status"), i64(in, "limit"), i64(in, "offset"))
 		}
 		return my.PagedFeed(i64(in, "authorId"), optI64(in, "minId"), optStr(in, "status"), i64(in, "limit"), i64(in, "offset"))
-	case "usersWithPosts":
+	},
+	"usersWithPosts": func(postgres bool, in map[string]any) (any, error) {
 		if postgres {
 			return pg.UsersWithPosts()
 		}
 		return my.UsersWithPosts()
-	case "postsWithAuthor":
+	},
+	"postsWithAuthor": func(postgres bool, in map[string]any) (any, error) {
 		if postgres {
 			return pg.PostsWithAuthor()
 		}
 		return my.PostsWithAuthor()
-	case "createPost":
+	},
+	"createPost": func(postgres bool, in map[string]any) (any, error) {
 		if postgres {
 			return pg.CreatePost(i64(in, "id"), i64(in, "authorId"), str(in, "title"), str(in, "status"), str(in, "createdAt"))
 		}
 		return my.CreatePost(i64(in, "id"), i64(in, "authorId"), str(in, "title"), str(in, "status"), str(in, "createdAt"))
-	case "renamePost":
+	},
+	"renamePost": func(postgres bool, in map[string]any) (any, error) {
 		if postgres {
 			return pg.RenamePost(str(in, "title"), i64(in, "id"))
 		}
 		return my.RenamePost(str(in, "title"), i64(in, "id"))
-	case "removePost":
+	},
+	"removePost": func(postgres bool, in map[string]any) (any, error) {
 		if postgres {
 			return pg.RemovePost(i64(in, "id"))
 		}
 		return my.RemovePost(i64(in, "id"))
-	case "createPostReturning":
+	},
+	"createPostReturning": func(postgres bool, in map[string]any) (any, error) {
 		if postgres {
 			return pg.CreatePostReturning(i64(in, "id"), i64(in, "authorId"), str(in, "title"), str(in, "status"), str(in, "createdAt"))
 		}
 		return my.CreatePostReturning(i64(in, "id"), i64(in, "authorId"), str(in, "title"), str(in, "status"), str(in, "createdAt"))
-	case "renamePostReturning":
+	},
+	"renamePostReturning": func(postgres bool, in map[string]any) (any, error) {
 		if postgres {
 			return pg.RenamePostReturning(str(in, "title"), i64(in, "id"))
 		}
 		return my.RenamePostReturning(str(in, "title"), i64(in, "id"))
-	case "removePostReturning":
+	},
+	"removePostReturning": func(postgres bool, in map[string]any) (any, error) {
 		if postgres {
 			return pg.RemovePostReturning(i64(in, "id"))
 		}
 		return my.RemovePostReturning(i64(in, "id"))
-	case "restatusPostsReturning":
+	},
+	"restatusPostsReturning": func(postgres bool, in map[string]any) (any, error) {
 		if postgres {
 			return pg.RestatusPostsReturning(str(in, "status"), i64(in, "authorId"))
 		}
 		return my.RestatusPostsReturning(str(in, "status"), i64(in, "authorId"))
-	case "removePostsByAuthorReturning":
+	},
+	"removePostsByAuthorReturning": func(postgres bool, in map[string]any) (any, error) {
 		if postgres {
 			return pg.RemovePostsByAuthorReturning(i64(in, "authorId"))
 		}
 		return my.RemovePostsByAuthorReturning(i64(in, "authorId"))
-	case "typedRows":
+	},
+	"typedRows": func(postgres bool, in map[string]any) (any, error) {
 		if postgres {
 			return pg.TypedRows()
 		}
 		return my.TypedRows()
-	case "removeTags":
+	},
+	"removeTags": func(postgres bool, in map[string]any) (any, error) {
 		if postgres {
 			return pg.RemoveTags(i64s(in, "ids"))
 		}
 		return my.RemoveTags(i64s(in, "ids"))
-	case "removeTagsReturning":
+	},
+	"removeTagsReturning": func(postgres bool, in map[string]any) (any, error) {
 		if postgres {
 			return pg.RemoveTagsReturning(i64s(in, "ids"))
 		}
 		return my.RemoveTagsReturning(i64s(in, "ids"))
-	case "createTags":
+	},
+	"createTags": func(postgres bool, in map[string]any) (any, error) {
 		if postgres {
 			return pg.CreateTags(i64s(in, "rows_id"), i64s(in, "rows_post_id"), strs(in, "rows_label"))
 		}
@@ -396,7 +425,8 @@ func callEntry(dialect, entry string, in map[string]any) (any, error) {
 			rows = append(rows, my.CreateTagsRecord{Id: i64(r, "id"), Post_id: i64(r, "post_id"), Label: str(r, "label")})
 		}
 		return my.CreateTags(rows)
-	case "createTagsReturning":
+	},
+	"createTagsReturning": func(postgres bool, in map[string]any) (any, error) {
 		if postgres {
 			return pg.CreateTagsReturning(i64s(in, "rows_id"), i64s(in, "rows_post_id"), strs(in, "rows_label"))
 		}
@@ -405,7 +435,8 @@ func callEntry(dialect, entry string, in map[string]any) (any, error) {
 			rows = append(rows, my.CreateTagsReturningRecord{Id: i64(r, "id"), Post_id: i64(r, "post_id"), Label: str(r, "label")})
 		}
 		return my.CreateTagsReturning(rows)
-	case "relabelTagsReturning":
+	},
+	"relabelTagsReturning": func(postgres bool, in map[string]any) (any, error) {
 		if postgres {
 			return pg.RelabelTagsReturning(i64s(in, "rows_id"), strs(in, "rows_label"))
 		}
@@ -414,9 +445,45 @@ func callEntry(dialect, entry string, in map[string]any) (any, error) {
 			rows = append(rows, my.RelabelTagsReturningRecord{Id: i64(r, "id"), Label: str(r, "label")})
 		}
 		return my.RelabelTagsReturning(rows)
-	default:
+	},
+}
+
+// callEntry runs one vector's endpoint. The catch-all is kept as a runtime guard, but it is no
+// longer the only thing standing between a missed endpoint and a live-DB failure: main asserts
+// coverage from the same table before connecting.
+func callEntry(dialect, entry string, in map[string]any) (any, error) {
+	fn, ok := dispatch[entry]
+	if !ok {
 		return nil, fmt.Errorf("unknown entry %q", entry)
 	}
+	return fn(dialect == "postgres", in)
+}
+
+// gap is one corpus entry the dispatch table cannot serve, with how many vectors would have failed.
+type gap struct {
+	entry   string
+	vectors int
+}
+
+// entryCoverage compares the corpus against `dispatch`: how many DISTINCT entries it uses, and which
+// of them have no arm. One walk, and the only place that comparison is made — main asserts it before
+// connecting, and `--check-coverage` reports it as a gate.
+func entryCoverage(corpus corpusT) (used int, missing []gap) {
+	counts := map[string]int{}
+	order := []string{}
+	for _, v := range corpus.Vectors {
+		if _, seen := counts[v.Entry]; !seen {
+			order = append(order, v.Entry)
+		}
+		counts[v.Entry]++
+	}
+	sort.Strings(order)
+	for _, e := range order {
+		if _, ok := dispatch[e]; !ok {
+			missing = append(missing, gap{entry: e, vectors: counts[e]})
+		}
+	}
+	return len(order), missing
 }
 
 // ── statement TAP: the SQL the leaf transport handed the driver, at the runtime SQL seam ───────────
@@ -649,6 +716,31 @@ func main() {
 		fmt.Fprintf(os.Stderr, "FAIL-CLOSED: corpusVersion %d != %d\n", corpus.CorpusVersion, SupportedCorpusVersion)
 		printSummary(map[string]tally{}, 0, 0, true)
 		os.Exit(2)
+	}
+
+	// Every entry the corpus uses has an arm — asserted HERE, with the corpus parsed and no database
+	// touched yet, which is the only point where the question is both answerable and free. An endpoint
+	// added to conformance/harness.ts needs a new arm in `dispatch`; without this the miss reached
+	// `callEntry`'s catch-all and surfaced as a failing VECTOR, after docker was up and the other three
+	// language legs had run. `--check-coverage` stops here, so the same assertion is a gate that needs
+	// no server (#222).
+	used, missing := entryCoverage(corpus)
+	checkOnly := len(os.Args) > 1 && os.Args[1] == "--check-coverage"
+	if len(missing) > 0 {
+		fmt.Fprintf(os.Stderr, "FAIL-CLOSED: %d of the %d entries this corpus uses have NO arm in the dispatch table:\n", len(missing), used)
+		for _, m := range missing {
+			fmt.Fprintf(os.Stderr, "    %s   (%d vector(s))\n", m.entry, m.vectors)
+		}
+		fmt.Fprintln(os.Stderr, "Add each to `dispatch` in go/conformance/livedb/livedb_runner.go.")
+		if !checkOnly {
+			printSummary(map[string]tally{}, 0, 0, true)
+		}
+		os.Exit(2)
+	}
+	if checkOnly {
+		fmt.Printf("✅ go livedb runner: every one of the %d entries the %d-vector corpus uses has an arm in the dispatch table (%d arms declared)\n",
+			used, len(corpus.Vectors), len(dispatch))
+		return
 	}
 
 	pgdb, err := rt.OpenPostgres(pgDSN())
