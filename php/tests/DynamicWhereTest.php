@@ -585,6 +585,9 @@ final class DynamicWhereTest extends TestCase
                 $failure(static fn () => $read($tx, 'ghost')),
             );
         }, null, 'sqlite');
+        // The transcript, READ rather than merely wired: the tx took ONE connection out of A (the default,
+        // which is what it opened on) and the two REJECTED statements reached no pool at all.
+        self::assertSame(['A:tx'], $log->getArrayCopy(), 'ONE checkout, on the default; the rejected statements reached no pool');
 
         // A transaction on "B": the statement naming "B" AGREES and runs on the pin — the rows are
         // unforgeable (`named_users` exists in NO other registered db) — the UNNAMED one does too, and
@@ -603,6 +606,9 @@ final class DynamicWhereTest extends TestCase
                 $failure(static fn () => $read($tx, 'default')),
             );
         }, null, 'sqlite', 'B');
+        // …and the B transaction added exactly ONE more checkout, on B: both AGREEING statements were
+        // served by that one pinned connection, and the rejected one reached no pool.
+        self::assertSame(['A:tx', 'B:tx'], $log->getArrayCopy(), 'ONE checkout per tx, each on its own db');
     }
 
     /**

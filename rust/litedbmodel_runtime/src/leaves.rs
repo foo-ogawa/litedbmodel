@@ -1822,6 +1822,7 @@ mod tests {
 
         // A transaction on "B": the statement naming "B" AGREES and runs on the pin, and the UNNAMED
         // in-body statement does too — neither may become loud.
+        log.lock().unwrap().clear();
         let on_b = base.with_connection_name(Some("B"));
         with_ambient_transaction(&on_b, || {
             read(WireValue::Str("B".into())).map(|_| ())?;
@@ -1835,6 +1836,21 @@ mod tests {
             Ok(())
         })
         .unwrap();
+        // The transcript, READ rather than merely wired: ONE checkout, on B, serving both AGREEING
+        // statements; the rejected one never reached a driver at all. (This log used to be threaded into
+        // both stubs and never read — an instrument that looks like a gate and checks nothing.)
+        let seen = log.lock().unwrap().clone();
+        assert_eq!(
+            seen,
+            vec![
+                "B:checkout".to_string(), // the tx's ONE connection
+                "B:run".to_string(),      // BEGIN
+                "B:all".to_string(),      // db="B" — agrees, served by the pin
+                "B:all".to_string(),      // unnamed — served by the pin
+                "B:run".to_string(),      // COMMIT
+            ],
+            "the agreeing statements ran on B's ONE checkout; the rejected one reached no driver: {seen:?}"
+        );
     }
 
     // #217 R2 — a NON-ROUTED ctx rejects a named statement IDENTICALLY inside a transaction and outside
@@ -1955,7 +1971,16 @@ mod tests {
         // Every statement of the whole transaction — the seam-issued BEGIN/COMMIT included — ran on B, and
         // NOTHING on the default: the derivations did not divert an in-body statement to another
         // connection. (`recording_stub` logs one entry per statement it serves, so this is the transcript.)
+        // ONE checkout for the whole transaction, on B — the derivations did not turn an in-body statement
+        // into a second connection. The COUNT is the load-bearing half: `all(starts_with("B:"))` alone stays
+        // green even when the pin is lost, because a statement that ROUTES still lands on B's driver.
+        // `:checkout` comes from the stub's `acquire_tx`/`begin_tx` hook, which is rust's checkout.
         let seen = log.lock().unwrap().clone();
+        assert_eq!(
+            seen.iter().filter(|e| e.ends_with(":checkout")).count(),
+            1,
+            "ONE checkout for the whole tx: {seen:?}"
+        );
         assert!(
             seen.iter().all(|e| e.starts_with("B:")) && !seen.is_empty(),
             "the whole tx must run on B: {seen:?}"
@@ -2016,9 +2041,14 @@ mod tests {
             "a named covered tx must run entirely on that db: {named:?}"
         );
         assert_eq!(
-            named.len(),
-            3,
-            "BEGIN + the body statement + COMMIT, all seam-issued: {named:?}"
+            named,
+            vec![
+                "B:checkout".to_string(), // the tx takes ONE connection out of B — and only one
+                "B:run".to_string(),      // BEGIN, seam-issued
+                "B:all".to_string(),      // the body's statement
+                "B:run".to_string(),      // COMMIT, seam-issued
+            ],
+            "ONE checkout on B, then BEGIN + the body statement + COMMIT on it: {named:?}"
         );
         // UNNAMED (the other side of the same rule) ⇒ the DEFAULT connection. A `B:` here would mean the
         // name leaked from somewhere other than the ctx.
@@ -2351,11 +2381,12 @@ mod tests {
         assert_eq!(
             pools.lock().unwrap().as_slice(),
             [
-                "reader:all", // the pre-tx read
-                "writer:run", // BEGIN, on the connection acquired from the WRITER pool
-                "writer:all", // the body's READ — the tx pin wins over its read intent
-                "writer:run", // the body's write
-                "writer:run", // COMMIT, on the same pinned connection
+                "reader:all",      // the pre-tx read
+                "writer:checkout", // the tx's ONE connection, taken out of the WRITER pool
+                "writer:run",      // BEGIN, on that connection
+                "writer:all",      // the body's READ — the tx pin wins over its read intent
+                "writer:run",      // the body's write
+                "writer:run",      // COMMIT, on the same pinned connection
             ]
         );
         // (3) the tx-control is SEAM-issued, so a registered middleware observes the whole envelope.
@@ -2398,6 +2429,9 @@ mod tests {
         assert_eq!(err.code, "BOOM", "the leaf surfaced {:?}", err.message);
         assert_eq!(err.message, "mid-tx failure");
         // The ROLLBACK really was attempted (and really did fail) — the transcript, not a claim.
-        assert_eq!(log.lock().unwrap().as_slice(), ["solo:run", "solo:run"]);
+        assert_eq!(
+            log.lock().unwrap().as_slice(),
+            ["solo:checkout", "solo:run", "solo:run"]
+        );
     }
 }

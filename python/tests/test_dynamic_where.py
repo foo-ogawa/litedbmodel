@@ -482,7 +482,7 @@ def test_named_db_inside_a_transaction_must_agree():
 
     The whole matrix is asserted, the NORMAL cases included: an unnamed in-body statement, and one naming
     the tx's OWN database, must NOT become loud. The python leg; twins in TS / go / rust / php."""
-    ctx, _log = _named_db_ctx()
+    ctx, log = _named_db_ctx()
 
     # A transaction on the DEFAULT connection (the ctx names none).
     def default_body(tx_ctx):
@@ -510,6 +510,9 @@ def test_named_db_inside_a_transaction_must_agree():
         return commit(None)
 
     with_transaction_decided(ctx.with_connection_name("B"), named_body)
+    # The transcript, READ rather than discarded (the php and rust twins assert theirs too): ONE checkout per
+    # transaction, each on its own database, and the REJECTED statements reached no pool at all.
+    assert log == ["A", "B"], "ONE checkout per tx, each on its own db, got %r" % log
 
 
 def test_named_db_on_a_non_routed_context_is_loud_inside_a_transaction_too():

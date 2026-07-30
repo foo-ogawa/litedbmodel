@@ -857,10 +857,25 @@ pub(crate) mod test_support {
             })
         }
         fn begin_tx(&self) -> Result<Box<dyn TxConnection + '_>, SqlFailure> {
+            self.record_checkout();
             crate::driver::forwarding_tx(self)
         }
         fn acquire_tx(&self) -> Result<Box<dyn TxConnection + '_>, SqlFailure> {
+            self.record_checkout();
             crate::driver::forwarding_tx_no_begin(self)
+        }
+    }
+
+    impl StubDriver {
+        /// Append `"<label>:checkout"` when a transaction takes a connection OUT of this driver. rust's
+        /// checkout IS `acquire_tx`/`begin_tx` (the registry holds drivers, not pools), and it had no
+        /// hook — so "ONE checkout for the whole tx" could be wired but never READ. Recorded on the same
+        /// [`SeamLog`] as the statements, because which driver served a statement and how many
+        /// connections it handed out are the same question about the same driver.
+        fn record_checkout(&self) {
+            if let Some(log) = &self.log {
+                log.lock().unwrap().push(format!("{}:checkout", self.label));
+            }
         }
     }
     pub(crate) fn stub(label: &'static str) -> Arc<dyn Driver + Send + Sync> {

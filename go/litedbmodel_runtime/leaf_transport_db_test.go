@@ -8,6 +8,7 @@ package litedbmodel_runtime
 import (
 	"database/sql"
 	"errors"
+	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
@@ -464,13 +465,18 @@ func (p *countingPool) Release(conn PooledConn, destroy bool) error {
 
 func namedDBPools(t *testing.T) (*ExecutionContext, *[]string, func()) {
 	t.Helper()
+	// A FILE, not `:memory:`, and a cap of TWO: with `:memory:` every checkout is its own database and a
+	// cap of one makes a SECOND checkout block forever instead of returning. That is what made the
+	// "ONE checkout for the whole tx" assertion below un-testable — the faithful mutation (an in-body
+	// statement bypassing the pin) HUNG rather than failing, so the assertion could not be shown to be
+	// load-bearing. On a file with room for two, a second checkout succeeds and the count catches it.
 	open := func(seed ...string) *sql.DB {
-		db, err := sql.Open("sqlite", ":memory:")
+		db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "db.sqlite"))
 		if err != nil {
 			t.Fatalf("open: %v", err)
 		}
-		db.SetMaxOpenConns(1)
-		db.SetMaxIdleConns(1)
+		db.SetMaxOpenConns(2)
+		db.SetMaxIdleConns(2)
 		for _, s := range seed {
 			if _, err := db.Exec(s); err != nil {
 				t.Fatalf("seed %q: %v", s, err)
@@ -576,7 +582,7 @@ func TestExecuteSQL_NamedDBOnANonRoutedContextIsLoud(t *testing.T) {
 // The whole matrix is asserted, the NORMAL cases included: an unnamed in-body statement, and one naming
 // the tx's OWN database, must NOT become loud. The go leg; twins in TS / rust / python / php.
 func TestExecuteSQL_NamedDBInsideATransactionMustAgree(t *testing.T) {
-	ctx, _, done := namedDBPools(t)
+	ctx, log, done := namedDBPools(t)
 	defer done()
 
 	read := func(db wire.WireValue) (wire.WireValue, error) {
@@ -640,6 +646,11 @@ func TestExecuteSQL_NamedDBInsideATransactionMustAgree(t *testing.T) {
 		return nil
 	}); err != nil {
 		t.Fatalf("named tx: %v", err)
+	}
+	// The transcript, READ rather than discarded (the php, rust and python twins assert theirs too): ONE
+	// checkout per transaction, each on its own database, and the REJECTED statements reached no pool.
+	if !reflect.DeepEqual(*log, []string{"A", "B"}) {
+		t.Fatalf("tx checkouts = %v, want [A B] (ONE per tx, each on its own db)", *log)
 	}
 }
 
