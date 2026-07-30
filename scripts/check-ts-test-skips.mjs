@@ -21,8 +21,9 @@
  *
  *   - the OUTCOMES come from `--reporter=json`, vitest's own machine-readable report: one entry per
  *     test FILE, each with its assertion results and their statuses.
- *   - the FILES come from the TREE, by globbing the pattern `vitest.config.ts` and this share
- *     (`scripts/test-include.mjs`). Deliberately the filesystem and NOT anything vitest reports — not
+ *   - the FILES come from the TREE, by globbing {@link INCLUDE} — this gate's OWN statement of what the
+ *     suite is, required to EQUAL `vitest.config.ts`'s `include` but never read from it. Deliberately
+ *     the filesystem and NOT anything vitest reports — not
  *     `vitest list`, not its module graph — because a narrowed `include` narrows what vitest would say
  *     exactly as much as it narrows the run, and the run cannot report a file it was never told about:
  *
@@ -60,9 +61,26 @@
  *   - no test at all: the suite never ran;
  *   - vitest exiting non-zero for a reason none of the above explains. Unmodelled ⇒ red.
  *
- * Not proven, and it falls GREEN: that a live leg TOUCHED a database. An outcome cannot tell a leg
- * that queried PG from one whose body is empty — both pass. The go and python gates re-run their live legs against an
- * unreachable database to close that; TypeScript has no equivalent yet.
+ * NOT done here, and it falls GREEN: PHASE 2 — re-running the live legs against a database that is not
+ * there, the way the go, python, php and rust gates do. Measured on this tree, `vitest run
+ * test/integration` against `127.0.0.1:1`: 66 failed, 291 skipped and **112 PASSED**. A flat "no live
+ * test may pass without a server" rule is therefore not writable yet, because those 112 are three
+ * different things:
+ *
+ *     Sqlite / SkipPattern / ReadmeConformance / MiddlewareHooks   legitimately OFFLINE — in-memory
+ *       (31 + 9 + 23 + 15)                                        SQLite or pure wiring assertions,
+ *                                                                 wrongly listed in LIVE_FILES below
+ *     MultiDB 5 of 12, Postgres 1 of 41                           offline assertions inside a live
+ *                                                                 file (class structure, an error path)
+ *     Mysql.test.ts, ALL 28                                       VACUOUS: `isMysqlAvailable()` fails
+ *                                                                 and every test then does
+ *                                                                 `if (!mysqlAvailable) return;`
+ *
+ * The third is a real defect of the same class as #219 — a leg that reports PASS having executed
+ * nothing, which no skip budget can see because it does not skip. Fixing it changes what those tests
+ * MEAN (they must fail when MySQL is absent, as go's `require_live_db` panics), so it is the owner's
+ * call, and phase 2 for TypeScript waits on it: until then this gate cannot tell that leg from one that
+ * queried a database.
  */
 import { readFileSync, globSync, mkdtempSync, existsSync } from 'node:fs';
 import { dirname, join, relative, sep } from 'node:path';
@@ -70,16 +88,32 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { assertGatesOpen, runOwned, mustHaveStarted, exitProblem, report } from './run-gate.mjs';
 import { GATES_ENV } from './livedb-gates.mjs';
-import { TEST_INCLUDE } from './test-include.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 /**
- * The suite's file pattern, from the module `vitest.config.ts` reads it from too — so the two cannot
- * drift — applied HERE to the filesystem rather than to anything vitest says. That is what makes it
- * independent: a narrowed `include`, a path argument or a `--testNamePattern` narrows vitest's answer
- * as much as it narrows the run, and leaves this glob unchanged, which is red.
+ * What the suite IS, stated here and glob-matched against the filesystem.
+ *
+ * Deliberately this gate's OWN statement, not a value shared with `vitest.config.ts`. Sharing it looked
+ * like removing a duplicate and was a net loss of detection: with one constant, narrowing it in one
+ * place narrowed the run AND the check together. Measured — narrowing the shared constant to
+ * `test/{unit,integration}/**` left `test/scp` (17 files) and `test/parity` (2) out of the run with the
+ * gate reporting "13 of the 13 test files the tree holds" and only the LIVE_FILES clause complaining,
+ * while the same narrowing applied to vitest.config.ts alone was `❌ 38 test file(s) the tree holds
+ * reported NO test`. Two statements that must AGREE is the mechanism; one statement is a single point
+ * of failure.
+ *
+ * Agreement in the other direction is asserted below: a config `include` WIDER than this would run
+ * files this gate never asks about.
  */
-const INCLUDE = TEST_INCLUDE;
+const INCLUDE = 'test/**/*.test.ts';
+
+/**
+ * `vitest.config.ts`'s own `include`, read as text — the only thing here that reads that file, and only
+ * to require it to be EXACTLY {@link INCLUDE}. Not an enumeration: if the pattern cannot be found the
+ * gate is red, and if it differs the gate is red, so the two statements cannot drift in either
+ * direction.
+ */
+const CONFIG_INCLUDE = /^\s*include:\s*\[([^\]]*)\]/m;
 
 /**
  * How many vitest tests may skip. ZERO: the only conditional in the suite is
@@ -120,6 +154,18 @@ const LIVE_FILES = [
   'test/integration/TxIsolation.test.ts',
   'test/integration/UuidPk.test.ts',
 ];
+
+const configText = readFileSync(join(ROOT, 'vitest.config.ts'), 'utf8');
+const configInclude = CONFIG_INCLUDE.exec(configText)?.[1]?.trim().replace(/^['"]|['"]$/g, '');
+if (configInclude !== INCLUDE) {
+  console.error(
+    `\n❌ vitest.config.ts's \`include\` is ${configInclude === undefined ? 'not where this gate looks for it' : JSON.stringify(configInclude)}, and this gate requires exactly ${JSON.stringify(INCLUDE)}.\n` +
+      `      The two are stated separately on purpose — this gate globs its own pattern against the\n` +
+      `      filesystem, so a narrowed config is caught by files reporting no test. They must still\n` +
+      `      AGREE: a config that runs MORE than this pattern runs files nothing here asks about.`,
+  );
+  process.exit(1);
+}
 
 /** Every test file the tree holds, as a repository-relative POSIX path. */
 const inTree = new Set(globSync(INCLUDE, { cwd: ROOT }).map((p) => p.split(sep).join('/')).sort());
@@ -213,7 +259,8 @@ report(
     `   and all ${results.length} of them passed (${skipped.length} skipped or todo, budget ${SKIP_BUDGET}) — so no inherited\n` +
     `   SKIP_INTEGRATION_TESTS=1 took the live-DB half out of the run, which vitest itself would have called\n` +
     `   \`success: true\`. All ${LIVE_FILES.length} live-DB files listed in LIVE_FILES are still present in the tree.\n` +
-    `   Not proven, and it falls GREEN: that a live leg TOUCHED a database. An emptied body passes an\n` +
-    `   outcome check the same way a real query does — the go and python gates re-run theirs against an unreachable\n` +
-    `   server to close that, and TypeScript has no equivalent yet.`,
+    `   NOT done, and it falls GREEN: phase 2. Measured against 127.0.0.1:1, 112 tests under\n` +
+    `   test/integration PASS with no server — most legitimately (in-memory SQLite, wiring assertions),\n` +
+    `   but all 28 in Mysql.test.ts VACUOUSLY: the availability probe fails and every test returns early.\n` +
+    `   Until that leg fails instead, no phase-2 rule here can tell it from one that queried a database.`,
 );

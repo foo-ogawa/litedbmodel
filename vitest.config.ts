@@ -1,14 +1,14 @@
 import { defineConfig } from 'vitest/config';
 import path from 'path';
-// The suite's file pattern is shared with scripts/check-ts-test-skips.mjs, which needs the same answer
-// from the FILESYSTEM to tell a narrowed run from a complete one (#220). One definition, two readers.
-import { TEST_INCLUDE } from './scripts/test-include.mjs';
 
 export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
-    include: [TEST_INCLUDE],
+    // scripts/check-ts-test-skips.mjs states this pattern INDEPENDENTLY and requires it to equal this
+    // line, then globs it against the filesystem. Two statements that must agree is the mechanism: a
+    // narrowing HERE leaves the gate finding files the run never reported (#220 C).
+    include: ['test/**/*.test.ts'],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'html'],

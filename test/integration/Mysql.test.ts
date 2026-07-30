@@ -8,6 +8,7 @@
 import 'reflect-metadata';
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { DBModel, model, column, ColumnsOf, closeAllPools } from '../../src';
+import { mysqlConfig } from '../helpers/setup';
 import type { DBConfig } from '../../src';
 
 // Define a model for all types testing (outside describe block for decorator support)
@@ -31,14 +32,12 @@ const AllTypes = AllTypesModel as typeof AllTypesModel & ColumnsOf<AllTypesModel
 // Test Configuration
 // ============================================
 
-const testConfig: DBConfig = {
-  host: 'localhost',
-  port: 3307,
-  database: 'testdb',
-  user: 'testuser',
-  password: 'testpass',
-  driver: 'mysql',
-};
+// From the ONE env-driven definition every other integration file uses (test/helpers/setup.ts). It was
+// a local literal with `host: 'localhost', port: 3307` hardcoded, so TEST_MYSQL_HOST/TEST_MYSQL_PORT
+// could not move this file: it connected to whatever was on 3307 no matter what the environment said.
+// That made it impossible to re-run the live suite against an unreachable server — which is how
+// scripts/check-ts-test-skips.mjs proves the live legs really dial one (#220 phase 2, #226).
+const testConfig: DBConfig = mysqlConfig;
 
 // Check if MySQL is available
 const isMysqlAvailable = async (): Promise<boolean> => {

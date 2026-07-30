@@ -32,7 +32,7 @@
  * #222 (A) is what a hand-written scanner was worth: fooled twice by comment and string syntax it did
  * not model, 361 lines deleted in favour of asking the runtime. Where a parser would add nothing the
  * instrument is the FILESYSTEM: go globs `go/**\/*_test.go` for its `func Test*`, TypeScript globs
- * `scripts/test-include.mjs`'s pattern for its test files. Neither of those is a toolchain and this
+ * its own `test/**\/*.test.ts` for its test files. Neither of those is a toolchain and this
  * comment used to claim otherwise for vitest, which has no such enumeration to give — asking vitest
  * would only have asked the narrowed side twice.
  */

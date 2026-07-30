@@ -205,14 +205,36 @@ const liveInTree = new Set(
 
 assertGatesOpen('python');
 
+/**
+ * How long the whole suite may take before this gate gives up on it.
+ *
+ * Not a formality: with the gates OPEN and no database reachable, `test_conformance_corpus.py` blocks
+ * FOREVER (#225 — the pool's acquire has no timeout), so `npm run py:test` never returned at all.
+ * A gate that hangs is worse than one that fails: CI waits out its own job timeout with no diagnosis.
+ * Ten minutes is far above the suite's real cost (~12s offline, minutes with the live stack).
+ */
+const PHASE1_TIMEOUT_MS = 10 * 60_000;
+
 const junit = join(mkdtempSync(join(tmpdir(), 'litedbmodel-pytest-')), 'junit.xml');
 const label = 'python3 -m pytest';
 const run = mustHaveStarted(
-  await runOwned('python3', ['-m', 'pytest', '-q', `--junitxml=${junit}`], { cwd: PY_DIR, stdout: 'inherit' }),
+  await runOwned('python3', ['-m', 'pytest', '-q', `--junitxml=${junit}`], {
+    cwd: PY_DIR,
+    stdout: 'inherit',
+    timeoutMs: PHASE1_TIMEOUT_MS,
+  }),
   label,
 );
 
 const problems = [];
+if (run.timedOut) {
+  problems.push(
+    `\`${label}\` was still running after ${PHASE1_TIMEOUT_MS / 60000} minutes and was killed, so the suite reported nothing to check. A leg that HANGS is not a leg that passed:\n` +
+      `      With the gates open and no database reachable, test_conformance_corpus.py blocks forever\n` +
+      `      (#225 — the pool's acquire has no timeout). Bring the stack up: npm run docker:livedb:up`,
+  );
+  report(problems, '');
+}
 if (!existsSync(junit)) {
   problems.push(
     `pytest wrote no ${relative(ROOT, junit)} — it never got as far as collecting, so the run reported nothing at all. (exit ${run.exit})`,
