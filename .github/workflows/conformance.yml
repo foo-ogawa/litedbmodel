@@ -285,7 +285,10 @@ jobs:
       - uses: shivammathur/setup-php@v2
         with:
           php-version: '8.2'
-          extensions: pdo, pdo_pgsql, pdo_mysql, mbstring
+          # pcntl (#220): TxBoundaryLiveTest's `setUp` calls `markTestSkipped` without `pcntl_fork`,
+          # which drops all fourteen of that class's live-DB tests. The php run gate holds the suite to
+          # a skip budget of 0, so the extension is required rather than budgeted for.
+          extensions: pdo, pdo_pgsql, pdo_mysql, mbstring, pcntl
       - name: Rust toolchain
         run: rustup toolchain install stable --profile minimal
       # `npm test` runs test/scp/native-closure.test.ts, which compiles a probe crate against
@@ -353,12 +356,19 @@ jobs:
       # collection dies with FileNotFoundError (#185).
       - name: Emit the cross-lang ORM-bench seed fixture (.setup/*.json) for the native conformance suites
         run: npx tsx benchmark/crosslang/emit-setup.ts
-      - name: TypeScript — full suite (unit + scp + parity + integration)
-        run: npm test
-      - name: Python — pytest
-        run: cd python && python3 -m pytest -q
-      - name: PHP — phpunit
-        run: cd php && ./vendor/bin/phpunit
+      # Each of these is a RUN GATE, not the bare runner (#220). Every runner in this repository
+      # reports a suite that did not run as a success — `pytest` 153 passed / 25 SKIPPED, `phpunit`
+      # `OK, but some tests were skipped!` with 45, `vitest` `success: true` with tests pending,
+      # `cargo test` three binaries of `0 tests` when `--features livedb` is dropped — so each gate
+      # asserts the live-DB gates are open in its own environment BEFORE starting the runner, owns the
+      # runner's argv (nothing here can narrow it), and checks the machine-readable report against
+      # what the tree declares: every test accounted for, skip budget 0, the live-DB legs still there.
+      - name: TypeScript — full suite (unit + scp + parity + integration), skip budget 0
+        run: npm run ts:test
+      - name: Python — pytest (every declared test RUNS; skip budget 0)
+        run: npm run py:test
+      - name: PHP — phpunit (every declared test RUNS; skip budget 0)
+        run: npm run php:test
       # A bare `go test ./...` cannot report that its suite ran. It calls a SKIPPED test a success, it
       # replays a whole CACHED run without starting the binary (cache keyed on source and env, never
       # on whether the DB is still up), it says nothing when the set of tests SHRANK, and it prints a
@@ -371,5 +381,12 @@ jobs:
       # one with `pipefail`).
       - name: Go — go test (uncached; every declared test RUNS, every package BUILDS; skip budget 0)
         run: npm run go:test
-      - name: Rust — cargo test (livedb)
-        run: cd rust && cargo test --locked -p litedbmodel_runtime --features livedb -- --test-threads=1
+      # `cargo test -p litedbmodel_runtime --features livedb` is what this used to be, and dropping the
+      # feature is invisible: both live files open with `#![cfg(feature = "livedb")]`, so without it the
+      # two test binaries compile to NOTHING and cargo prints `running 0 tests` and exits 0 — six live
+      # tests, no skip, no failure. `-p` was the other half: a package narrowing that no static check of
+      # this file could call complete. The gate takes the package AND target set from `cargo metadata`,
+      # runs each target separately (libtest's report never says which binary a count belongs to), and
+      # calls a target that ran 0 tests red unless it is named as legitimately empty (#220).
+      - name: Rust — cargo test (every workspace target RUNS, with the livedb feature; 0 ignored)
+        run: npm run rust:test

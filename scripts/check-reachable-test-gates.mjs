@@ -12,9 +12,10 @@
  *
  *   A. Every `LITEDBMODEL_*` gate a test reads is declared in `livedb-gates.env`, and every variable
  *      declared there gates some test (no undeclared gate, no dead declaration).
- *   B. A workflow that a pull_request/push can trigger loads `livedb-gates.env` into the job env —
+ *   B. A workflow a pull_request can trigger on any change loads `livedb-gates.env` into the job env —
  *      a declaration no workflow reads sets nothing.
- *   C. That same class of workflow EXECUTES each language's test runner.
+ *   C. That same class of workflow EXECUTES each language's RUN GATE (`scripts/check-*-test-skips.mjs`),
+ *      which is the only thing that can report that the suite then ran: see {@link RUNNERS}.
  *
  * Clauses B and C are about execution, and every weaker reading of them has been satisfied by text
  * no shell would ever run, or by a command whose failure nothing was watching. Six, each measured on
@@ -69,10 +70,10 @@
  * the suite fails, it drops for the same reason: a step, job or workflow carrying any of the keys
  * `notGatingKey` lists (none read positionally, so `if: false` or `continue-on-error: true` gates
  * wherever in the mapping it is written); a command an `||`, a `|`, a `&` or a `set +e` lets off; the
- * body of a shell compound or of a `( … )` / `{ …; }` group; and every workflow whose pull_request /
- * push trigger carries `paths:` / `paths-ignore:`, which gates only some changes. A workflow
- * triggered only by `release` / `workflow_dispatch` satisfies nothing either: publish-time execution
- * is not a gate on the change that broke it.
+ * body of a shell compound or of a `( … )` / `{ …; }` group; and every workflow whose pull_request
+ * trigger does not fire for every change ({@link gatesEveryChange}). A workflow triggered only by
+ * `release` / `workflow_dispatch` satisfies nothing either, and neither does a `push:` — publish-time
+ * or POST-MERGE execution is not a gate on the change that broke it.
  *
  * One thing it does NOT check, and it falls GREEN — the direction that matters, which is why it is
  * named: whether a job that fails BLOCKS anything. `if:` and `continue-on-error:` are in the file and
@@ -80,24 +81,29 @@
  * merge proceeds looks identical here to one that gates.
  *
  * Nor does it claim the suites then ran or passed: it reads workflows and `package.json`, nothing
- * else, so `cargo test --no-run` is INVOKED, binding, and runs no test. For Go that second half is
- * `scripts/check-go-test-skips.mjs`, which runs the suite with the gates asserted open.
+ * else. That second half is each language's run gate — `scripts/check-{ts,python,php,go,rust}-test-skips.mjs`
+ * — which runs the suite with the gates asserted open and checks the result against the tree, and which
+ * this script requires the workflow to invoke.
  *
  *   node scripts/check-reachable-test-gates.mjs
  */
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { GATES_ENV, readGateDeclarations } from './livedb-gates.mjs';
+import { GATES_ENV, GATE_PATTERN, NOT_A_GATE, readGateDeclarations } from './livedb-gates.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const WORKFLOWS = join(ROOT, '.github', 'workflows');
 /** Where a language's tests live. A gate read here is a gate CI must be able to open. */
 const TEST_DIRS = ['python/tests', 'php/tests', 'go', 'rust/litedbmodel_runtime/tests', 'test', 'conformance'];
 const TEST_FILE = /\.(py|php|go|rs|ts|mts)$/;
-const GATE = /LITEDBMODEL_[A-Z0-9_]+/g;
-/** Carries the corpus path into a runner (set by `conformance/livedb-run.ts`); not a skip gate. */
-const NOT_A_GATE = new Set(['LITEDBMODEL_LIVEDB_VECTORS']);
+/**
+ * The repository's default branch — the base every merge goes through, so a `pull_request` narrowed
+ * to it still gates every change. Also written in `release.yml`'s `push: branches:` trigger.
+ */
+const DEFAULT_BRANCH = 'main';
+/** The `pull_request` activity types GitHub triggers by default; a `types:` must keep all of them. */
+const PR_TYPES = ['opened', 'synchronize', 'reopened'];
 
 /**
  * The command that runs each language's WHOLE suite, as a predicate over one command's argv.
@@ -106,38 +112,47 @@ const NOT_A_GATE = new Set(['LITEDBMODEL_LIVEDB_VECTORS']);
  * runs and with which arguments — `echo scripts/check-go-test-skips.mjs` runs `echo`, and a path in
  * `paths-ignore:` runs nothing at all. Absent from CI ⇒ that language is untested.
  *
- * These match the unrestricted invocation on purpose. A path-narrowed run is the same bug one level
- * down: `test:ci` was `vitest run test/unit`, which left test/scp, test/parity and test/integration
- * — 1138 tests — out of CI while the job reported green. So TypeScript must resolve to a `vitest
- * run` whose remaining arguments are all flags (`vitest run test/unit` and `vitest run --config <a
- * narrower project>` both carry a non-flag argument and are rejected). `pytest`, `phpunit` and
- * `cargo test` already mean "everything" when invoked bare.
+ * Every one of them is now that language's RUN GATE, and never the bare runner. "The whole suite ran"
+ * is not a claim any of these runners makes:
  *
- * Go must resolve to `node scripts/check-go-test-skips.mjs` and NOT a bare `go test ./...`, because
- * for Go "everything ran" is a claim `go test` does not make: it reports a skipped test as a
- * success, serves a whole cached run without starting the binary, and reports a package that failed
- * to build only inside its -json stream. That script runs the `./...` suite uncached, with the
- * live-DB gates asserted open before it starts, and checks the result against the tree (#219); a
- * workflow — or an alias — that reverts to the bare command is back to green-by-default.
+ *     go test        counts a skipped test as a success, serves a whole CACHED run without starting
+ *                    the binary, says nothing when the test set SHRANK, and reports a package that
+ *                    failed to BUILD only inside its -json stream (#219)
+ *     pytest         153 passed, 25 SKIPPED, exit 0 (#220)
+ *     phpunit        `OK, but some tests were skipped!  Tests: 152, Skipped: 45`, exit 0 (#220)
+ *     cargo test     71 passed and three binaries of `0 tests` when `--features livedb` is dropped —
+ *                    the six live tests are not compiled, so there is nothing to skip (#220)
+ *     vitest         `success: true` with tests pending, and nothing read the count (#220)
+ *
+ * That is also why this table no longer tries to REJECT a narrowed invocation, which is what it used
+ * to do for TypeScript alone (`vitest run` with every remaining argument a flag) while its own
+ * comment claimed that "`pytest`, `phpunit` and `cargo test` already mean everything when invoked
+ * bare" — a claim no code here made, and a claim that was FALSE for the rust command this repository
+ * actually runs, `cargo test -p litedbmodel_runtime --features livedb`. Measured green on the version
+ * before this one: `python3 -m pytest -q tests/test_types.py`, `phpunit --filter NothingMatchesThis`,
+ * `cargo test --lib nothing_matches_this`, `npx vitest run --config=…`.
+ *
+ * A run gate owns the runner's argv in tracked source, so the narrowing cannot come from a workflow
+ * at all, and each gate then requires a verdict for every test the TREE declares — which catches the
+ * narrowings an argv predicate structurally cannot see: an ambient `GOFLAGS=-run=…`/`PYTEST_ADDOPTS`,
+ * a `testpaths` narrowed in pyproject.toml, a `<directory>` narrowed in phpunit.xml, a class renamed
+ * so the runner stops collecting it, a build tag, a `#![cfg(feature = …)]`. For rust it is what makes
+ * the invariant EXPRESSIBLE: the gate derives the package and target set from `cargo metadata`, so
+ * `-p litedbmodel_runtime` is no longer a narrowing anyone has to permit or forbid by hand.
+ *
+ * What is checked here stays exactly what this script can see: that a `run:` of a change-gating
+ * workflow INVOKES the gate, with npm aliases expanded — so rebinding `go:test` to a bare
+ * `cd go && go test ./...` is red, as it has been since #219.
  */
+const runGate = (script) => (a) =>
+  /(?:^|\/)node$/.test(a[0] ?? '') && (a[1] ?? '').replace(/^\.\//, '') === `scripts/${script}`;
+
 const RUNNERS = [
-  [
-    'TypeScript',
-    'vitest run   (every remaining argument a flag — a path- or config-narrowed run is not the suite)',
-    (a) => a[0] === 'vitest' && a[1] === 'run' && a.slice(2).every((w) => w.startsWith('-')),
-  ],
-  [
-    'Python',
-    'pytest   (or python3 -m pytest)',
-    (a) => /(?:^|\/)pytest$/.test(a[0] ?? '') || (/(?:^|\/)python[0-9.]*$/.test(a[0] ?? '') && a[1] === '-m' && a[2] === 'pytest'),
-  ],
-  ['PHP', 'phpunit', (a) => /(?:^|\/)phpunit$/.test(a[0] ?? '')],
-  [
-    'Go',
-    'node scripts/check-go-test-skips.mjs   (what `npm run go:test` must bind to)',
-    (a) => /(?:^|\/)node$/.test(a[0] ?? '') && (a[1] ?? '').replace(/^\.\//, '') === 'scripts/check-go-test-skips.mjs',
-  ],
-  ['Rust', 'cargo test', (a) => a[0] === 'cargo' && a[1] === 'test'],
+  ['TypeScript', 'node scripts/check-ts-test-skips.mjs   (what `npm run ts:test` must bind to)', runGate('check-ts-test-skips.mjs')],
+  ['Python', 'node scripts/check-python-test-skips.mjs   (what `npm run py:test` must bind to)', runGate('check-python-test-skips.mjs')],
+  ['PHP', 'node scripts/check-php-test-skips.mjs   (what `npm run php:test` must bind to)', runGate('check-php-test-skips.mjs')],
+  ['Go', 'node scripts/check-go-test-skips.mjs   (what `npm run go:test` must bind to)', runGate('check-go-test-skips.mjs')],
+  ['Rust', 'node scripts/check-rust-test-skips.mjs   (what `npm run rust:test` must bind to)', runGate('check-rust-test-skips.mjs')],
 ];
 
 /**
@@ -183,7 +198,7 @@ function walk(dir) {
 const gates = new Map();
 for (const d of TEST_DIRS) {
   for (const file of walk(join(ROOT, d))) {
-    for (const m of readFileSync(file, 'utf8').match(GATE) ?? []) {
+    for (const m of readFileSync(file, 'utf8').match(GATE_PATTERN) ?? []) {
       if (NOT_A_GATE.has(m)) continue;
       if (!gates.has(m)) gates.set(m, new Set());
       gates.get(m).add(relative(ROOT, file));
@@ -519,21 +534,89 @@ function commandsOf(text, where, chain = []) {
   return out;
 }
 
+/** A YAML scalar, inline sequence or block sequence, as the list of words it holds. */
+function yamlList(raw) {
+  return raw
+    .replace(/#.*$/gm, '')
+    .replace(/[[\]]/g, ' ')
+    .split(/[\n,]/)
+    .map((s) => s.trim().replace(/^-\s+/, '').replace(/^(['"])(.*)\1$/, '$2'))
+    .filter(Boolean);
+}
+
 /**
- * Workflows a pull_request/push can trigger on ANY change — the only ones that gate a change. A
- * trigger narrowed by `paths:` / `paths-ignore:` is excluded: it does not run for the changes it
- * filters out, which includes the change that breaks the suite it was supposed to be running.
+ * The `pull_request:` trigger's own filter keys, or null when the file has no pull_request trigger.
+ *
+ * Only `pull_request` is read, because only a pull_request runs BEFORE the change lands. A `push:`
+ * is post-merge: `release.yml` is `on: push: branches: [main]`, and it used to satisfy this script's
+ * every clause (#220) — a suite that runs after the merge did not gate the merge. Read by
+ * indentation, the same small total grammar `runBodies` uses: `on:` at indent 0, each trigger at
+ * indent 2, each of its filters at indent 4 with an inline or a block value.
+ *
+ * The three inline forms `on: pull_request` and `on: [push, pull_request]` carry no filters, so they
+ * yield `{}` — everything gated. Anything else this does not recognise yields null, and a workflow
+ * that yields null gates nothing here: RED, as everywhere in this file.
  */
+function pullRequestFilters(text) {
+  const lines = text.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const head = /^on:[^\S\n]*(.*)$/.exec(lines[i]);
+    if (!head) continue;
+    if (head[1].trim()) return yamlList(head[1]).includes('pull_request') ? {} : null;
+    for (let j = i + 1; j < lines.length; j++) {
+      if (lines[j].trim() === '') continue;
+      const indent = lines[j].length - lines[j].trimStart().length;
+      if (indent === 0) break; // out of the `on:` block
+      const trigger = /^\s{2}([A-Za-z_][\w-]*):[^\S\n]*(.*)$/.exec(lines[j]);
+      if (!trigger || trigger[1] !== 'pull_request') continue;
+      if (trigger[2].trim()) return {}; // `pull_request: {}` / a flow value — no filters
+      const filters = {};
+      for (let k = j + 1; k < lines.length; k++) {
+        if (lines[k].trim() === '') continue;
+        if (lines[k].length - lines[k].trimStart().length <= 2) break; // out of pull_request's block
+        const filter = /^\s{4}([A-Za-z_][\w-]*):[^\S\n]*(.*)$/.exec(lines[k]);
+        if (!filter) continue;
+        let value = filter[2];
+        while (!value.trim() && k + 1 < lines.length && lines[k + 1].length - lines[k + 1].trimStart().length > 4) {
+          value += `\n${lines[++k]}`;
+        }
+        filters[filter[1]] = yamlList(value);
+      }
+      return filters;
+    }
+    return null; // an `on:` whose block holds no pull_request
+  }
+  return null;
+}
+
+/**
+ * Whether a pull_request trigger runs for EVERY change — the only thing that gates one.
+ *
+ * `branches:` is the one filter that can narrow and still gate: `[main]` means "PRs targeting main",
+ * which every merge into main is. `[never-used-branch]` is not, and neither is a `branches-ignore:`
+ * naming the default branch — measured green on the version before this one, along with
+ * `types: [closed]`, a trigger that never fires while a PR is open (#220).
+ *
+ * `types:` must keep all three of GitHub's defaults; anything else runs on some PR events and not the
+ * ones that carry a change. Every OTHER filter — `paths:`, `paths-ignore:`, `branches-ignore:`, and
+ * any key added to GitHub's schema after this was written — disqualifies the workflow, which is the
+ * RED direction: it can only refuse to count a workflow that in fact gates.
+ */
+function gatesEveryChange(filters) {
+  if (filters === null) return false;
+  return Object.entries(filters).every(([key, values]) =>
+    key === 'branches' ? values.includes(DEFAULT_BRANCH) : key === 'types' ? PR_TYPES.every((t) => values.includes(t)) : false,
+  );
+}
+
+/** Workflows a pull_request triggers on ANY change — the only ones that gate a change. */
 const onChange = readdirSync(WORKFLOWS)
   .filter((f) => /\.ya?ml$/.test(f))
   .map((f) => {
     const text = readFileSync(join(WORKFLOWS, f), 'utf8');
     return { name: f, text, commands: runBodies(text).flatMap((b) => commandsOf(b, f)) };
   })
-  .filter((w) => {
-    const triggers = w.text.slice(0, w.text.search(/^jobs:/m) >>> 0);
-    return /^\s{2}(pull_request|push):/m.test(triggers) && !/^\s+paths(-ignore)?:/m.test(triggers);
-  });
+  .filter((w) => gatesEveryChange(pullRequestFilters(w.text.slice(0, w.text.search(/^jobs:/m) >>> 0))));
 
 const problems = [];
 
@@ -557,15 +640,18 @@ if (!onChange.some((w) => w.commands.some((c) => GATE_LOADER.is(argvOf(c))))) {
 for (const [lang, how, isRunner] of RUNNERS) {
   if (!onChange.some((w) => w.commands.some((c) => isRunner(argvOf(c))))) {
     problems.push(
-      `no pull_request/push workflow EXECUTES the ${lang} test suite — that language is untested on every PR.\n` +
+      `no pull_request workflow EXECUTES the ${lang} RUN GATE — that language's suite is not known to run on a PR.\n` +
         `      Expected, as a command in a \`run:\` step with npm aliases expanded: ${how}\n` +
-        `      (A step title, an \`env:\` value, a \`paths:\`/\`paths-ignore:\` entry, a \`#\` comment and\n` +
-        `      anything inside quotes are not commands. Nor does a command count that the shell would\n` +
-        `      not hold to account: after \`||\`, left of a \`|\`, \`&\`-backgrounded, after \`set +e\`, or in\n` +
-        `      the body of an \`if\`/\`for\`/\`while\`/\`case\` or a \`( … )\`/\`{ …; }\` group. Nor a step or job\n` +
-        `      carrying \`if:\`, \`continue-on-error:\` or a \`shell:\` other than bash/sh, nor a\n` +
-        `      pull_request/push trigger carrying \`paths:\`/\`paths-ignore:\` — none of those has to run\n` +
-        `      and pass on every change.)`,
+        `      (The bare runner does NOT count. \`go test\`, \`pytest\`, \`phpunit\`, \`cargo test\` and\n` +
+        `      \`vitest run\` each report a suite that skipped, shrank or was never compiled as a\n` +
+        `      success — see RUNNERS for the measured line from each. Nor is a step title, an \`env:\`\n` +
+        `      value, a \`#\` comment or anything inside quotes a command. Nor does a command count\n` +
+        `      that the shell would not hold to account: after \`||\`, left of a \`|\`, \`&\`-backgrounded,\n` +
+        `      after \`set +e\`, or in the body of an \`if\`/\`for\`/\`while\`/\`case\` or a \`( … )\`/\`{ …; }\`\n` +
+        `      group. Nor a step or job carrying \`if:\`, \`continue-on-error:\` or a \`shell:\` other than\n` +
+        `      bash/sh, nor a pull_request trigger that does not fire for every change — a \`paths:\`,\n` +
+        `      a \`paths-ignore:\`, a \`branches:\` without \`${DEFAULT_BRANCH}\`, a \`types:\` missing one of\n` +
+        `      ${PR_TYPES.join('/')}, or a \`push:\` trigger, which is POST-MERGE.)`,
     );
   }
 }
@@ -576,18 +662,21 @@ for (const u of [...unresolved].sort()) {
 if (problems.length === 0) {
   console.log(
     `✅ ${gates.size} test gates: each is declared in ${GATES_ENV}, and each declaration gates a test.\n` +
-      `   All ${RUNNERS.length} language test runners, and a command that LOADS ${GATES_ENV}, are INVOKED by a\n` +
-      `   \`run:\` of a pull_request/push workflow whose trigger carries no \`paths:\`/\`paths-ignore:\`, from a\n` +
-      `   step in a job in a workflow carrying no \`if:\`, no \`continue-on-error:\` other than false and no\n` +
-      `   \`shell:\` other than bash/sh — and INVOKED here means the shell would let the failure FAIL THE JOB:\n` +
-      `   not in an and-or list carrying \`||\`, not left of a \`|\`, not \`&\`-backgrounded, not after \`set +e\`,\n` +
-      `   not in the body of an \`if\`/\`for\`/\`while\`/\`case\` or of a \`( … )\`/\`{ …; }\` group. Each is matched as a\n` +
-      `   predicate over one command's argv, with npm aliases (argv[0] \`npm\`) expanded to their package.json\n` +
-      `   bodies, \`#\` comments dropped at every level, and the command boundaries found by a tokenizer that\n` +
-      `   reads quoting — an operator or \`#\` inside \`'\`/\`"\`/a backtick/\`$(\`/\`\${\` or behind a \`\\\` is text.\n` +
+      `   All ${RUNNERS.length} language RUN GATES (scripts/check-*-test-skips.mjs — never the bare runner, which\n` +
+      `   reports a skipped, shrunken or uncompiled suite as a success), and a command that LOADS ${GATES_ENV},\n` +
+      `   are INVOKED by a \`run:\` of a pull_request workflow that fires for EVERY change (no \`paths:\`/\n` +
+      `   \`paths-ignore:\`, a \`branches:\` including \`${DEFAULT_BRANCH}\` if present, a \`types:\` keeping ${PR_TYPES.join('/')};\n` +
+      `   a \`push:\` does not count, being post-merge), from a step in a job in a workflow carrying no \`if:\`,\n` +
+      `   no \`continue-on-error:\` other than false and no \`shell:\` other than bash/sh — and INVOKED here means\n` +
+      `   the shell would let the failure FAIL THE JOB: not in an and-or list carrying \`||\`, not left of a \`|\`,\n` +
+      `   not \`&\`-backgrounded, not after \`set +e\`, not in the body of an \`if\`/\`for\`/\`while\`/\`case\` or of a\n` +
+      `   \`( … )\`/\`{ …; }\` group. Each is matched as a predicate over one command's argv, with npm aliases\n` +
+      `   (argv[0] \`npm\`) expanded to their package.json bodies, \`#\` comments dropped at every level, and the\n` +
+      `   command boundaries found by a tokenizer that reads quoting — an operator or \`#\` inside\n` +
+      `   \`'\`/\`"\`/a backtick/\`$(\`/\`\${\` or behind a \`\\\` is text.\n` +
       `   Not checked, and it falls GREEN: whether a job that FAILS blocks anything — a required status\n` +
       `   check is branch protection, not a file this can read.\n` +
-      `   That the go suite then really ran is scripts/check-go-test-skips.mjs.`,
+      `   That each suite then really RAN is the run gate this required, not this script.`,
   );
   process.exit(0);
 }
