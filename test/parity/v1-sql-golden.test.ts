@@ -668,12 +668,17 @@ function dialectConfig(dialect: Dialect): DBConfig {
     return { database: ':memory:', driver: 'sqlite' } as DBConfig;
   }
   if (dialect === 'mysql') {
+    // TEST_MYSQL_* — the ONE mysql env convention every other file + CI + docker-compose use
+    // (test/helpers/setup.ts:mysqlConfig, test/scp/json-array-parity.test.ts). This file used to read
+    // MYSQL_HOST/MYSQL_PORT, so a bare `vitest run` in a worktree hit the DEFAULT 3307 — another
+    // worktree's MySQL — and this test DROP/CREATEs `benchmark_*` there (#226 unified Mysql.test.ts;
+    // this was the same class, missed).
     return {
-      host: process.env.MYSQL_HOST || 'localhost',
-      port: parseInt(process.env.MYSQL_PORT || '3307'),
-      database: process.env.MYSQL_DB || 'testdb',
-      user: process.env.MYSQL_USER || 'testuser',
-      password: process.env.MYSQL_PASSWORD || 'testpass',
+      host: process.env.TEST_MYSQL_HOST || 'localhost',
+      port: parseInt(process.env.TEST_MYSQL_PORT || '3307'),
+      database: process.env.TEST_MYSQL_DB || 'testdb',
+      user: process.env.TEST_MYSQL_USER || 'testuser',
+      password: process.env.TEST_MYSQL_PASSWORD || 'testpass',
       driver: 'mysql',
     };
   }
