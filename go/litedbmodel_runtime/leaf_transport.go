@@ -6,9 +6,9 @@
 // payload (the node's ports as named fields) and each node's result rides back as a BC-OWNED
 // `wire.WireValue`, so these three transports are the ONLY boundary between
 // the wire plane and the runtime: they convert `wire.WireValue` ↔ bc `Value`/`*Obj` and delegate the
-// relation shaping to the SHARED grouping CORE (grouping.go `DedupeKeyTuples`/`GroupByKey`/
-// `AttachToParent`). There is NO second grouping implementation here — that core is the single source
-// of truth (the runtime lazy path in relation.go consumes the SAME functions); this file only bridges
+// relation shaping to the SHARED grouping CORE (grouping.go `dedupeKeyTuplesG`/`groupByKeyG`/
+// `attachG`). There is NO second grouping implementation here — that core is the single source of
+// truth, and this file is its only consumer; this file only bridges
 // wire ↔ Value at the transport edge and issues SQL through the central [Execute]/[Run] seam. This is
 // the Go twin of the rust `execute_sql`/`pluck_keys`/`group_children` leaf (same op-agnostic wire
 // contract), NOT the py/php native-record method leaf.
@@ -571,7 +571,7 @@ func ExecuteSQL(payload wire.WireRow) (wire.WireValue, error) {
 	// The RELATION runaway guard, on the RAW child rows — the only point they are visible (past
 	// GroupChildren the graph is already nested) and the reason the cap rides on this transport at all.
 	// The comparison + error assembly are the shared [checkHardLimit] SSoT, so this path cannot drift
-	// from the runtime relation path (relation.go) or from the TS reference.
+	// from the TS reference.
 	if opts.guard != nil {
 		if err := checkHardLimit(opts.guard.limit, len(rows), LimitContextRelation, opts.guard.model, opts.guard.relation); err != nil {
 			return wire.WireNull(), err
@@ -614,7 +614,7 @@ func WithAmbientTransaction(body func() error) error {
 // `col` — the batch key set the relation child fetch binds (`WHERE fk IN (SELECT value FROM
 // json_each(?))` single-key, or the `$[i]` per-ordinal EXISTS form for a composite tuple). Dedupe runs
 // on the WIRE rows DIRECTLY via the shared grouping CORE ([dedupeKeyTuplesG] over [wireOps]) — the SAME
-// algorithm the runtime relation path consumes ([bcOps]); there is NO wire↔Value round-trip on the hot
+// algorithm, run directly on wire rows ([wireOps]); there is NO wire↔Value round-trip on the hot
 // read path. A single-key `col` emits a FLAT scalar key array (the deduped cell itself); a composite
 // `col` emits an array-of-tuples (each a wire list) — the SAME shape the child SQL's json_each param
 // expects. Go twin of the rust `pluck_keys` leaf. Ports ride in the payload as {col, rows}.
@@ -643,7 +643,7 @@ func PluckKeys(payload wire.WireRow) (wire.WireValue, error) {
 // parent `pk` tuple, nesting the result under `into`: single==true (belongsTo/hasOne) nests the one
 // matching child (or nil); otherwise (hasMany) nests the child list ([] when none). Grouping runs on
 // the WIRE rows DIRECTLY via the shared grouping CORE ([groupByKeyG]/[attachG] over [wireOps]) — the
-// SAME algorithm the runtime relation path uses ([bcOps]); NO wire↔Value round-trip. `pk`/`fk` are the
+// SAME algorithm, run directly on wire rows ([wireOps]); NO wire↔Value round-trip. `pk`/`fk` are the
 // ordered key-column TUPLES, so a composite relation nests by the WHOLE tuple identity (no
 // scalar-collapse cartesian). The parent-key columns are resolved ONCE (all parents share column
 // order). Each parent is shallow-copied before the own-key set (matching the TS `{...par, [into]: …}`
@@ -709,7 +709,7 @@ func withOwnKeyWire(row wire.WireValue, key string, v wire.WireValue) wire.WireV
 // ── The wire.WireValue instantiation of the shared grouping CORE (grouping.go) ──────────────────────
 //
 // The native leaf path groups over `wire.WireValue` rows DIRECTLY (the type the generated module
-// speaks) — the twin of the runtime path's `bcOps`. The SAME generic algorithm ([recordOps]) runs; only
+// speaks) — the ONE instantiation of [recordOps]. The SAME generic algorithm runs; only
 // the row/cell accessors differ, so there is ONE dedupe/group/attach implementation (SSoT).
 
 // wireProbeNull mirrors the BC-OWNED wire package's probe Kind for "present as the producer's null

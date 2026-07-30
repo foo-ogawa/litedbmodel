@@ -28,7 +28,7 @@ namespace LiteDbModel\Runtime;
  *     `[{changes, lastInsertRowid}]` summary so the leaf output shape is uniform (a list of rows).
  *   - `pluck` — rows + the ordered key-column TUPLE → the deduped, non-null batch key set (single-key →
  *     a flat scalar array; composite → an array-of-tuples). Delegates the dedupe to the shared grouping
- *     core ({@see Grouping::dedupeKeyTuples}) — the SAME SSoT the runtime relation path uses.
+ *     core ({@see Grouping::dedupeKeyTuples}) — the SAME SSoT every relation consumer uses.
  *   - `group` — parents + flat children → each parent with its children nested under `into` per
  *     cardinality. Delegates to the shared grouping core ({@see Grouping::groupByKey} /
  *     {@see Grouping::attachToParent}) — the SAME SSoT, no duplicated grouping.
@@ -333,7 +333,7 @@ final class Leaves
             // The RELATION runaway guard, on the RAW child rows — the only point they are visible (past
             // `group` the graph is already nested) and the reason the cap rides on this transport at
             // all. The comparison + error assembly are the shared {@see LimitExceededError::check} SSoT,
-            // so this path cannot drift from the runtime relation path ({@see Relation}) or from the TS
+            // so this path cannot drift from the TS
             // reference. It THROWS rather than returning `['error' => …]`: a runaway is a litedbmodel
             // policy error with typed fields, not a mapped transport failure (the TS leaf throws too).
             $guard = $opts === null ? null : self::required($opts, 'guard', self::RECORD, 'record|null');

@@ -23,8 +23,6 @@ bundles against real in-proc SQLite, and passes the full frozen conformance corp
   - `write.go` — `ExecuteTransactionBundle`: the gate-first transaction envelope (BEGIN → gates →
     body → derive/edges/emits → COMMIT, short-circuit + ROLLBACK on a failing gate), ported from
     `src/scp/write-runtime.ts`.
-  - `relation.go` — the staged-batch relation ops (belongsTo/hasMany, IN-list dedup, no N+1),
-    ported from `src/scp/relation.ts`.
   - `errors.go` / `sqldb.go` / `value.go` — SQLite→SqlFailure mapping, the `database/sql` seam +
     value marshalling, and the bigint-safe conformance value codec.
 - **`vectors_runner/`** — the conformance runner the cross-language orchestrator launches for the

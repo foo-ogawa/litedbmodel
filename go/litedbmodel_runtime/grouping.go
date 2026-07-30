@@ -17,11 +17,9 @@
 package litedbmodel_runtime
 
 import (
-	"math"
 	"strconv"
 	"strings"
 
-	bc "github.com/foo-ogawa/behavior-contracts/go"
 )
 
 // keySep separates the encoded cells of a 3+-column key. It is NUL, the same byte the TS `KEY_SEP` uses,
@@ -58,11 +56,11 @@ type keyID struct {
 // lookup then falls back to the linear name scan (matches the rust `usize::MAX` sentinel).
 const absentIdx = -1
 
-// recordOps abstracts the row/cell representation the shared grouping ALGORITHM runs over. ONE
-// algorithm, two instantiations ([wireOps] for the native leaf path; [bcOps] for the runtime bundle
-// path) — no duplicated dedupe/group/attach logic. A record is a column-ordered row; a cell is one
-// column's value; both are the SAME type R (a wire row and its cells are `wire.WireValue`; a bc row is
-// a `*bc.Obj` carried as `bc.Value`, its cells `bc.Value`).
+// recordOps abstracts the row/cell representation the shared grouping ALGORITHM runs over — ONE
+// algorithm, no duplicated dedupe/group/attach logic. Its instantiation is [wireOps], the native leaf
+// path (`pluck`/`group`), which is the only path production reaches a relation through. A record is a
+// column-ordered row and a cell is one column's value, both the SAME type R (a wire row and its cells
+// are `wire.WireValue`). The generic form is what keeps the algorithm independent of that choice.
 type recordOps[R any] struct {
 	// isRecord reports whether v is a column-ordered record row (a non-record row is passed through
 	// untouched by group, and yields no key by dedupe/attach).
@@ -221,58 +219,6 @@ func attachG[R any](ops recordOps[R], parent R, pkCols []string, pkIdx []int, by
 	return ops.nul
 }
 
-// ── The bc.Value instantiation — the runtime lazy/declarative path (relation.go) + the unit tests ────
-
-// bcOps is the [recordOps] over bc rows: a record is a `*bc.Obj` (insertion-ordered Keys + Vals map),
-// a cell is a `bc.Value` (a scanned column arrives as float64/string/bool/nil).
-var bcOps = recordOps[bc.Value]{
-	isRecord:  func(v bc.Value) bool { _, ok := v.(*bc.Obj); return ok },
-	numCols:   func(v bc.Value) int { return v.(*bc.Obj).Len() },
-	colNameAt: func(v bc.Value, i int) string { return v.(*bc.Obj).Keys[i] },
-	cellAt:    func(v bc.Value, i int) bc.Value { o := v.(*bc.Obj); return o.Vals[o.Keys[i]] },
-	field: func(v bc.Value, name string) (bc.Value, bool) {
-		o, ok := v.(*bc.Obj)
-		if !ok {
-			return nil, false
-		}
-		return o.Get(name) // ok=key present; a present-nil cell is dropped by isNull
-	},
-	isNull:    func(cell bc.Value) bool { return cell == nil },
-	keyCellOf: bcKeyCell,
-	makeList:  func(children []bc.Value) bc.Value { return bc.Value(children) },
-	nul:       nil,
-}
-
-// bcKeyCell projects a bc row cell to its comparable key value. An integer and the same whole float are
-// the SAME key (a parent read as 1 and a child FK read as 1.0 must land in one bucket), matching the
-// rendered form this replaces printed both as "1".
-func bcKeyCell(v bc.Value) keyCell {
-	switch t := v.(type) {
-	case nil:
-		return keyCell{}
-	case bool:
-		if t {
-			return keyCell{kind: 4, num: 1}
-		}
-		return keyCell{kind: 4}
-	case string:
-		return stringKeyCell(t)
-	case int64:
-		return keyCell{kind: 1, num: t}
-	case float64:
-		// The RANGE test, not a round-trip: converting an out-of-range float to int64 is IMPLEMENTATION
-		// DEFINED in Go, and a round-trip does not catch the boundary either — float64(math.MaxInt64)
-		// rounds UP to 2^63, so 2^63 would round-trip and collide with MaxInt64. Both bounds below are
-		// exactly representable in float64.
-		if t == math.Trunc(t) && t >= -9223372036854775808.0 && t < 9223372036854775808.0 {
-			return keyCell{kind: 1, num: int64(t)}
-		}
-		return keyCell{kind: 2, num: int64(math.Float64bits(t))}
-	default:
-		return keyCell{kind: 3, s: jsStringify(v)}
-	}
-}
-
 // stringKeyCell collapses a numeric string onto the int it renders as: `1` and `"1"` are ONE key. The
 // rendering this replaces collapsed them (both `String(v)` to "1"), and a driver may hand a numeric column
 // back as text, so the collapse is load-bearing. Only an EXACT round-trip collapses, so "01" and " 1" stay
@@ -284,30 +230,4 @@ func stringKeyCell(t string) keyCell {
 		}
 	}
 	return keyCell{kind: 3, s: t}
-}
-
-// KeyIdentity is the key identity of an already-extracted bc key tuple (the cells themselves for the 1-
-// and 2-column keys relations use; a wider tuple encodes the same cells into one string). Consumed by
-// relation.go + the unit tests.
-func KeyIdentity(values []bc.Value) keyID { return keyIdentityG(bcOps, values) }
-
-// DedupeKeyTuples returns the deduped, non-null bc key TUPLES of rows over keyCols (the runtime
-// relation path's parent-key dedupe). See [dedupeKeyTuplesG].
-func DedupeKeyTuples(rows []bc.Value, keyCols []string) [][]bc.Value {
-	return dedupeKeyTuplesG(bcOps, rows, keyCols)
-}
-
-// GroupByKey groups bc children by their fkCols tuple identity (the runtime relation path's child
-// grouping). See [groupByKeyG].
-func GroupByKey(children []bc.Value, fkCols []string) map[keyID][]bc.Value {
-	return groupByKeyG(bcOps, children, fkCols)
-}
-
-// AttachToParent distributes grouped bc children onto ONE parent per cardinality (the runtime relation
-// path's per-parent attach): single==false (hasMany) → the child list ([]bc.Value{} when none);
-// single==true (belongsTo/hasOne) → the single child (or nil). See [attachG].
-func AttachToParent(parent *bc.Obj, pkCols []string, byKey map[keyID][]bc.Value, single bool) bc.Value {
-	p := bc.Value(parent)
-	pkIdx := resolveKeyIndicesG(bcOps, []bc.Value{p}, pkCols)
-	return attachG(bcOps, p, pkCols, pkIdx, byKey, single)
 }

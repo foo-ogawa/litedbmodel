@@ -20,7 +20,7 @@ typed-native runners call positionally (``rust/litedbmodel_runtime/src/leaves.rs
     shape is uniform (a list of rows).
   - ``pluck`` — rows + the ordered key-column TUPLE → the deduped, non-null batch key set (single-key →
     a flat scalar array; composite → an array-of-tuples). Delegates the dedupe to the shared grouping
-    core (:func:`grouping.dedupe_key_tuples`) — the SAME SSoT the runtime relation path uses.
+    core (:func:`grouping.dedupe_key_tuples`) — the SAME SSoT every relation consumer uses.
   - ``group`` — parents + flat children → each parent with its children nested under ``into`` per
     cardinality. Delegates to the shared grouping core (:func:`grouping.group_by_key` /
     :func:`grouping.attach_to_parent`) — the SAME SSoT, no duplicated grouping.
@@ -289,7 +289,7 @@ def make_handlers(driver_or_ctx: Union[Driver, ExecutionContext], dialect: str) 
         # The RELATION runaway guard, on the RAW child rows — the only point they are visible (past
         # ``group`` the graph is already nested) and the reason the cap rides on this transport at all.
         # The comparison + error assembly are the shared :meth:`LimitExceededError.check` SSoT, so this
-        # path cannot drift from the runtime relation path (relation.py) or from the TS reference. It
+        # path cannot drift from the TS reference. It
         # RAISES rather than returning ``{"error": …}``: a runaway is a litedbmodel policy error with
         # typed fields, not a mapped transport failure (the TS leaf throws the same class).
         guard = None if opts is None else _required(opts, "guard", _RECORD, "record|null")
@@ -314,7 +314,7 @@ def make_handlers(driver_or_ctx: Union[Driver, ExecutionContext], dialect: str) 
         col: Sequence[str] = _required(ports, "col", _PLUCK, "string[]")
         tuples = dedupe_key_tuples(_required(ports, "rows", _PLUCK, "list"), col)
         # single-key → a flat scalar key array (json_each scalar ``value``); composite → an
-        # array-of-tuples (json_each per-ordinal ``$[i]``) — the SAME shape ``relation.py`` binds.
+        # array-of-tuples (json_each per-ordinal ``$[i]``) — the shape the batched child SELECT binds.
         keys = [t[0] for t in tuples] if len(col) == 1 else [list(t) for t in tuples]
         return {"ok": keys}
 
