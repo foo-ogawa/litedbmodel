@@ -46,7 +46,8 @@
  * ## Per-execution connection ownership (§3) — the concurrent-tx fix
  *
  * A transaction acquires ONE connection, scopes it into an {@link AsyncLocalStorage} ctx, runs its
- * body (every statement resolves that connection via `connectionFor`), COMMITs/ROLLBACKs, and
+ * body (every statement of the tx's own database resolves that connection via `connectionFor`, and a statement
+ * naming a DIFFERENT database is rejected), COMMITs/ROLLBACKs, and
  * releases it. Concurrent transactions each run in their own ALS ctx with their own connection —
  * **isolated**. There is NO driver-global single-slot writer (the shared-slot model — `pool.query`
  * per statement, or a `Mutex<Option<writer>>` — is what corrupts concurrent transactions; see the
@@ -322,9 +323,9 @@ class BasicContext implements ExecutionContext {
   }
 
   connectionFor(intent: StatementIntent): SyncConnection {
-    // STEP 1: the tx-owned (pinned) connection wins — but a statement that names a DIFFERENT database
-    // than the transaction opened on cannot be honored on it, so it is LOUD rather than silently run
-    // there (`assertTxDbAgrees`). This ctx holds ONE connection and no registry, so the transaction
+    // STEP 1: the tx-owned (pinned) connection, for every statement of the tx's own database — a statement
+    // naming a DIFFERENT database is rejected, because it cannot be honored on the pin, so it is LOUD rather
+    // than silently run there (`assertTxDbAgrees`). This ctx holds ONE connection and no registry, so the transaction
     // opened on the default: every named statement disagrees.
     if (this.pinned !== null) {
       assertTxDbAgrees(intent.db, null);
@@ -403,9 +404,9 @@ const asyncCtxStore = new AsyncLocalStorage<PinnedTx>();
  * A pooled async {@link AsyncExecutionContext}. Outside a transaction, `connectionFor` acquires a
  * fresh pooled connection per statement (the existing read fan-out model — each concurrent sibling
  * on its own connection). Inside a transaction, {@link withTransactionAsync} pins ONE acquired
- * connection into the ALS store; `connectionFor` returns THAT for every statement in the body that
- * belongs to the tx's own database (an unnamed one, or one naming that database — one naming ANOTHER is
- * rejected), so the whole tx runs on one owned connection — isolated from concurrent transactions.
+ * connection into the ALS store; `connectionFor` returns THAT for every statement in the body of the tx's own database
+ * (an unnamed one, or one naming that database — a statement naming a DIFFERENT database is rejected), so the
+ * whole tx runs on one owned connection — isolated from concurrent transactions.
  *
  * NB: outside a tx, `connectionFor` returns a **per-statement** owned connection wrapper that
  * acquires-runs-releases; the read walker issues one statement per `executeAsync`, matching the
@@ -477,7 +478,7 @@ export class PooledAsyncContext implements AsyncExecutionContext {
   withConnection(_conn: AsyncConnection, _tx: boolean): AsyncExecutionContext {
     // Deriving a tx-scoped ctx pins the connection via the ALS run in withTransactionAsync (not by
     // mutating this object); the derived ctx shares the routing + middleware and is never used to
-    // acquire (the ALS-pinned connection wins in `connectionFor`).
+    // acquire (the ALS-pinned connection is what `connectionFor` returns for every statement of the tx's own database).
     return this;
   }
 
@@ -571,7 +572,8 @@ function defaultIsConnectionError(err: Error): boolean {
  * **Per attempt** (up to `retryLimit`):
  *   1. acquire ONE fresh connection from the pool (a retry after a connection error thus RECONNECTS);
  *   2. pin it into the ALS ctx (`runWithPinnedAsyncConnection`) so EVERY statement `fn` issues
- *      resolves THAT connection — never a fresh pooled one;
+ *      of the tx's own database resolves THAT connection — never a fresh pooled one, and a statement
+ *      naming a DIFFERENT database is rejected instead;
  *   3. issue the isolation-aware BEGIN ({@link beginStatements}: PG `BEGIN ISOLATION LEVEL …`;
  *      MySQL a preceding `SET TRANSACTION ISOLATION LEVEL …` then `BEGIN`);
  *   4. run `fn(txCtx)` → `COMMIT` (or `ROLLBACK` if `rollbackOnly`, still returning the body result);
@@ -601,7 +603,8 @@ export async function withTransactionAsync<R>(
   // No new connection, no BEGIN/COMMIT — the inner body is part of the outer physical transaction.
   const outer = currentPinnedAsyncConnection();
   if (outer !== undefined) {
-    // Reuse the outer's ctx (the pinned conn already wins in `connectionFor`). Isolation/retry/
+    // Reuse the outer's ctx (`connectionFor` already returns the pinned conn for every statement
+    // of the tx's own database). Isolation/retry/
     // rollbackOnly options on a NESTED call are ignored — the outer transaction owns them.
     return fn(ctx.withConnection(outer.conn, true));
   }

@@ -128,7 +128,7 @@ impl Connection for DriverConnection<'_> {
 
 /// An OWNED transaction connection — the rust analogue of v1 `litedbmodel.rs` `PoolTransaction`
 /// (`handler.rs`). Acquired by [`Driver::acquire_tx`], it holds ONE connection for the transaction's
-/// whole duration: every statement in the tx body runs on it (`execute`/`run`), INCLUDING the tx's own
+/// whole duration: every statement in the tx body of the tx's own database runs on it (`execute`/`run`), INCLUDING the tx's own
 /// BEGIN/COMMIT/ROLLBACK + the isolation SET — which the Phase D tx runtime now issues THROUGH the
 /// central seam ([`crate::exec_context::run`]) so a registered middleware observes them (#93 / owner
 /// option A, full TS parity). The tx ends by RELEASING the handle via [`TxConnection::release`] (drop
@@ -554,7 +554,8 @@ impl<'a, 't> ExecutionContext<'a, 't> {
     }
 
     /// Resolve WHICH connection a statement runs on (§3). Resolution order:
-    ///   1. the tx-owned (pinned) connection wins (Phase A — only the ctx holds the pin);
+    ///   1. the tx-owned (pinned) connection, for every statement of the tx's own database (Phase A — only the
+    ///      ctx holds the pin; a statement naming a DIFFERENT database is rejected there rather than routed);
     ///   2. else, WITH a routing config (Phase C): [`resolve_pool`] selects the pool
     ///      (named-DB → reader/writer split → writer-sticky/with_writer);
     ///   3. else (base ctx, no routing): the single primary driver (byte-identical Phase A/B).
@@ -565,8 +566,8 @@ impl<'a, 't> ExecutionContext<'a, 't> {
         &'s self,
         intent: &StatementIntent,
     ) -> Result<Box<dyn Connection + 's>, SqlFailure> {
-        // STEP 1: the tx pin wins (per-execution ownership — the concurrent-tx fix). A statement that
-        // names a DIFFERENT database than the transaction opened on cannot be honored on it — a
+        // STEP 1: the tx pin comes first (per-execution ownership — the concurrent-tx fix), for every
+        // statement of the tx's own database. A statement that naming a DIFFERENT database is rejected: it cannot be honored — a
         // transaction is ONE connection on ONE database — so it is LOUD rather than silently executed
         // against the transaction's database (#217). The name the tx opened on is this ctx's own
         // ([`ExecutionContext::with_connection_name`], the same field `tx_driver` reads).
@@ -747,8 +748,9 @@ pub enum TxDecision<R> {
 ///
 ///   1. acquire ONE connection via [`Driver::begin_tx`] (the tx's exclusive connection; BEGIN issued
 ///      on it), the rust analogue of v1 `PoolTransaction`;
-///   2. pin it into a tx-scoped [`ExecutionContext`] so EVERY statement `body` issues resolves THAT
-///      connection via `connection_for` — never a fresh pooled one;
+///   2. pin it into a tx-scoped [`ExecutionContext`] so EVERY statement `body` issues of the tx's own database
+///      resolves THAT connection via `connection_for` — never a fresh pooled one, and a statement
+///      naming a DIFFERENT database is rejected instead;
 ///   3. run `body(&tx_ctx)` → COMMIT / ROLLBACK on the OWNED connection per the returned decision; on
 ///      any `Err` ROLLBACK (best-effort) and re-raise;
 ///   4. the owned connection is released (dropped / back to the pool) when the [`TxConnection`] is
@@ -802,7 +804,7 @@ pub fn with_transaction_decided_isolated<'a, R>(
 
     // Issue the isolation prelude + BEGIN THROUGH THE SEAM on the pinned owned connection (full TS
     // parity — TS `runAsync(txCtx, 'BEGIN')`). `run(tx_ctx, …)` resolves the pinned tx connection via
-    // `connection_for` (STEP 1 wins) and folds the ambient middleware, so a registered hook observes
+    // `connection_for` (STEP 1, for every statement of the tx's own database) and folds the ambient middleware, so a registered hook observes
     // the runtime BEGIN/SET. Plain `run` — NOT `run_guarded` — so tx-control is EXEMPT from the write=tx
     // guard (BEGIN/COMMIT/ROLLBACK/SET are not user writes; matches TS exec-context.ts:254). MySQL's
     // SET-before-BEGIN order is honored: `before_begin` (SET) is issued BEFORE `BEGIN`, `after_begin`

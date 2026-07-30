@@ -30,8 +30,8 @@ namespace LiteDbModel\Runtime;
  * The BEGIN/COMMIT/ROLLBACK envelope is no longer a raw `$db->exec('BEGIN')` on a threaded `\PDO`:
  * it is owned by the {@see withTransactionDecided()} combinator, which acquires ONE tx-owned
  * connection ({@see PdoTxConnection}), pins it into a tx-scoped {@see ExecutionContext}, and runs the
- * body on it. EVERY statement in the body funnels through the central WRITE/READ seam
- * ({@see run()}/{@see execute()}), which resolves the pinned tx connection — so a statement can never
+ * body on it. EVERY statement in the body — all of the tx's own database, since a write plan names none — funnels through
+ * the central WRITE/READ seam ({@see run()}/{@see execute()}), which resolves the pinned tx connection — so a statement can never
  * escape onto a different (autocommit) connection. A gate short-circuit is a non-error ROLLBACK
  * (returns `committed:false`); a driver failure throws (⇒ the combinator rolls back + re-raises). The
  * combinator releases the owned connection EXACTLY ONCE in a `finally` (the #78 leak-guard).
@@ -220,8 +220,8 @@ final class WriteRuntime
 
         // The central seam (§2): a returning statement rides the READ seam (rows), a plain write the
         // WRITE seam (affected count) — BOTH resolve the pinned tx connection, so every statement of the
-        // plan (none of which names a database) runs on the tx's OWNED connection (never a
-        // fresh/autocommit one). `changes` mirrors the pre-seam
+        // plan — all of the tx's own database, since a write plan names none — runs on the tx's OWNED
+        // connection (never a fresh/autocommit one). `changes` mirrors the pre-seam
         // shape byte-for-byte: count($rows) for a returning statement, rowCount() for a plain write —
         // the gate rules (`insertedElseRollback`/`insertedElseNoop`) read this exact value.
         if ($hasReturn) {

@@ -36,7 +36,8 @@ namespace LiteDbModel\Runtime;
  * The leaf is injected context-bound (a closure over the {@see ExecutionContext} + dialect) rather than
  * resolving an ambient driver: the bc PHP boundary is `bind($handlers)`, so the transport is handed in
  * directly. `executeSQL` resolves the AMBIENT tx-scoped ctx ({@see currentContext()}) first so every
- * statement inside a `withTransaction` scope runs on the tx-OWNED connection (the tx boundary is the
+ * statement inside a `withTransaction` scope of the tx's own database runs on the tx-OWNED connection (a statement
+ * naming a DIFFERENT database is rejected) (the tx boundary is the
  * runtime's BEGIN/COMMIT/ROLLBACK, never baked into the generated runner); outside a tx it falls back
  * to the bound ctx.
  */

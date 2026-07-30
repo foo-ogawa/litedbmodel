@@ -384,9 +384,8 @@ func (c *ExecutionContext) InWriterScope() bool { return c.writerScope }
 
 // WithConnectionName derives a ctx whose TRANSACTIONS open on the NAMED connection `name` (Phase C-2
 // multi-DB): [ExecutionContext.acquireTxConnection] then checks the tx's owned connection out of THAT
-// registry pair's WRITER pool, so the whole BEGIN…COMMIT — and every statement in the body that
-// belongs to that database, which resolves the pin — runs on it. A statement naming a DIFFERENT
-// database is rejected ([namedDBDisagreesWithTx]): a transaction cannot span two. "" ⇒ the default
+// registry pair's WRITER pool, so the whole BEGIN…COMMIT — and every statement in the body
+// of the tx's own database, which resolves the pin — runs on it. A statement naming a DIFFERENT database is rejected ([namedDBDisagreesWithTx]): a transaction cannot span two. "" ⇒ the default
 // connection; a no-op shape change on the single-db path (routing nil). Reads/writes OUTSIDE a transaction still name their DB per statement
 // ([StatementIntent.DB]) — this answers the one question a statement intent cannot reach, because a
 // transaction is opened by the boundary, not by a statement. Shares the primary db + middleware + Go
@@ -398,7 +397,8 @@ func (c *ExecutionContext) WithConnectionName(name string) *ExecutionContext {
 }
 
 // ConnectionFor resolves WHICH connection a statement runs on (§3). Resolution order:
-//  1. the tx-owned (pinned) connection wins (Phase A — only the ctx holds the pin);
+//  1. the tx-owned (pinned) connection, for every statement of the tx's own database (Phase A — only the ctx
+//     holds the pin; a statement naming a DIFFERENT database is rejected there rather than routed);
 //  2. else, if this ctx carries a Phase C [RoutingConfig], [resolvePool] picks the reader/writer pool
 //     of the named connection (steps 2-4) and the returned connection acquires/runs/releases one
 //     owned pooled connection per statement (the per-statement ownership the read fan-out uses);
@@ -636,8 +636,9 @@ func Rollback() TxDecision { return TxDecision{Rollback: true} }
 //
 //  1. check out ONE OWNED connection from the CTX ([ExecutionContext.acquireTxConnection] — the routed
 //     WRITER pool, or the primary db's *sql.Conn; NO BEGIN yet), the Go analogue of v1 PoolTransaction;
-//  2. pin it into a tx-scoped [ExecutionContext] so EVERY statement `body` issues resolves THAT
-//     connection via ConnectionFor — never a fresh pooled one;
+//  2. pin it into a tx-scoped [ExecutionContext] so EVERY statement `body` issues of the tx's own database
+//     resolves THAT connection via ConnectionFor — never a fresh pooled one, and a statement
+//     naming a DIFFERENT database is rejected instead;
 //  3. issue the isolation-aware BEGIN THROUGH the seam ([Run] on the pinned conn) so it is
 //     middleware-visible; run body(txCtx) → COMMIT / ROLLBACK THROUGH the seam per the returned
 //     decision; on any error ROLLBACK (best-effort) and re-raise;

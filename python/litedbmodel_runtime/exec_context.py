@@ -11,8 +11,9 @@ with an :class:`ExecutionContext` that carries:
      only the tx-owned + single-DB cases, reader/writer/named-DB are B/C/D on this seam);
   2. a **middleware chain** — :attr:`ExecutionContext.middleware`, wrapping every SQL (empty in
      Phase A = passthrough; the registration API is Phase D — this is only the hook point);
-  3. a **pinned tx connection** — a tx-scoped ctx pins ONE owned connection so every statement in a
-     transaction body of the tx's own database (an unnamed one, or one naming that database) runs on it (per-execution connection ownership, §3).
+  3. a **pinned tx connection** — a tx-scoped ctx pins ONE owned connection so every statement of the tx's own database
+     in a transaction body runs on it — a statement naming a DIFFERENT database is rejected
+     (per-execution connection ownership, §3).
 
 ## The central seam (§2) — ALL SQL funnels through here
 
@@ -150,9 +151,9 @@ class DriverConnection(Connection):
 
 class _TxConnectionAdapter(Connection):
     """A :class:`Connection` view over a tx's OWNED :class:`TxConnection` handle. The seam resolves
-    this (via ``connection_for``) for every statement inside a tx that belongs to the tx's own database —
-    an unnamed one, or one naming that database — so all of THOSE run on the SAME owned connection (one
-    naming another database is rejected instead). Concurrent transactions each hold a DISTINCT handle over a DISTINCT pooled
+    this (via ``connection_for``) for every statement inside a tx of the tx's own database — an unnamed one, or one naming
+    that database — so all of THOSE run on the SAME owned connection (a statement naming a DIFFERENT database is rejected
+    instead). Concurrent transactions each hold a DISTINCT handle over a DISTINCT pooled
     connection, so their writes never cross-talk — the isolation the removed driver-global ``_writer``
     slot violated.
     """
@@ -328,7 +329,8 @@ class ExecutionContext:
     def connection_for(self, intent: StatementIntent = READ_INTENT) -> Connection:
         """Resolve WHICH connection a statement runs on (§3). Resolution order (first match wins):
 
-          1. the tx-owned (pinned) connection — inside a tx it wins, because a transaction is ONE
+          1. the tx-owned (pinned) connection — inside a tx it serves every statement of the tx's own database,
+             because a transaction is ONE
              connection. A statement naming a DIFFERENT database than the transaction opened on therefore
              cannot be honored and is LOUD (:func:`~litedbmodel_runtime.connection_routing.assert_tx_db_agrees`);
              an unnamed one, and one naming the SAME database, run on the pin.
@@ -545,7 +547,8 @@ def with_transaction_decided(
          exclusive connection), the Python analogue of v1 ``PoolTransaction``. **No tx-control is issued
          at acquire** (Phase D / #95): the connection is only owned here.
       2. pin it into a tx-scoped :class:`ExecutionContext` (and the ambient contextvar) so EVERY
-         statement resolves THAT connection via the seam — never a fresh pooled one;
+         statement of the tx's own database resolves THAT connection via the seam — never a fresh
+         pooled one, and a statement naming a DIFFERENT database is rejected instead;
       3. issue the isolation SET + ``BEGIN`` (``before`` → BEGIN → ``after``) THROUGH the seam
          (:func:`run` on the PINNED ctx) — so a registered middleware OBSERVES the runtime BEGIN (full TS
          parity, Phase D / #95). tx-control goes through the UNGUARDED :func:`run` seam (never

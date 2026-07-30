@@ -269,8 +269,8 @@ interface PdoPool
     /**
      * The backing {@see PdoDriver} (the ONE `\PDO` this pool holds). A transaction acquires its OWNED
      * connection by calling {@see PdoDriver::beginTx()} on THIS — so a named-DB tx runs entirely on the
-     * target connection's writer `\PDO`: the tx-pin comes first in `connectionFor` for every statement of
-     * the body except one naming a DIFFERENT database, which is rejected rather than run on it.
+     * target connection's writer `\PDO`: the tx-pin comes first in `connectionFor` for every statement
+     * of the tx's own database, and a statement naming a DIFFERENT database is rejected rather than run on it.
      */
     public function backingDriver(): PdoDriver;
 }
@@ -759,8 +759,8 @@ function resolvePool(StatementIntent $intent, RoutingConfig $routing): PdoPool
  * PHP's release running SYNCHRONOUSLY after the statement via a {@see RoutedConnection} wrapper.
  *
  * `withConnection` (the tx pin) preserves the routing so a read issued AFTER the tx (writer-sticky)
- * still routes. Inside the tx the pinned connection serves every UNNAMED statement and every statement
- * naming the connection the tx opened on; one naming a DIFFERENT database is REJECTED
+ * still routes. Inside the tx the pinned connection serves every statement of the tx's own database — an unnamed one, or
+ * one naming the connection the tx opened on; a statement naming a DIFFERENT database is rejected
  * ({@see assertTxDbAgrees()}) — a transaction cannot span two databases.
  */
 final class RoutingExecutionContext extends ExecutionContext
@@ -798,14 +798,16 @@ final class RoutingExecutionContext extends ExecutionContext
 
     /**
      * Resolve WHICH connection a statement runs on (§3). STEP 1: the tx-owned (pinned) connection wins
-     * (the base ctx's `$pinned` — a named-DB tx runs entirely on it). STEPS 2-4: {@see resolvePool()}
+     * (the base ctx's `$pinned` — a named-DB tx runs entirely on it, for every statement of the tx's own database;
+     * a statement naming a DIFFERENT database is rejected there rather than routed). STEPS 2-4: {@see resolvePool()}
      * selects the pool by intent; the returned {@see RoutedConnection} acquires the pool's connection
      * (applying session config), runs the statement, and releases it (session reset) — one acquire per
      * statement, mirroring the TS per-statement owned-connection wrapper.
      */
     public function connectionFor(StatementIntent $intent): Connection
     {
-        // STEP 1 (§3): the tx-owned (pinned) connection wins. It may be pinned on THIS ctx (a tx-scoped
+        // STEP 1 (§3): the tx-owned (pinned) connection, for every statement of the tx's own database (a statement
+        // naming a DIFFERENT database is rejected). It may be pinned on THIS ctx (a tx-scoped
         // derivation) OR carried in the AMBIENT holder ({@see TxAmbient}) — the PHP analogue of the TS
         // ALS store: a statement issued via the OUTER routing ctx while a routedTransaction() body runs
         // still resolves the tx-owned connection.

@@ -263,8 +263,8 @@ func ExecuteTransactionBundleCtx(bundle *SqlBundle, input *bc.Obj, ctx *Executio
 // executeTransactionCtx runs a plan as one transaction with **per-execution connection ownership**
 // (§3) + gate-first short-circuit (byte-true to write-runtime.ts executeTransaction). It hands the
 // whole plan to [TransactionDecided], which — outside a user Transaction() — checks out ONE owned
-// connection from the ctx, pins it into a tx-scoped ctx so every statement of the plan (none of which
-// names a database) resolves THAT connection via the seam, issues BEGIN / COMMIT / ROLLBACK as SQL THROUGH the seam (middleware-visible)
+// connection from the ctx, pins it into a tx-scoped ctx so every statement of the plan — all of the tx's own database,
+// since a write plan names none — resolves THAT connection via the seam, issues BEGIN / COMMIT / ROLLBACK as SQL THROUGH the seam (middleware-visible)
 // per the body's decision; inside one it JOINS the ambient tx (no new BEGIN/COMMIT). Statements run in
 // the plan's fixed order; a failing gate returns a ROLLBACK decision (committed:false — a legitimate
 // outcome, NOT an error) and the tail never executes; a driver error returns an error (⇒ rollback +

@@ -627,8 +627,8 @@ fn c2_tx_pin_precedence() {
     let ctx = for_routing(&routing).unwrap();
 
     // A transaction routed to "B": one checkout on B's recording driver (begin_tx), and every statement
-    // in the body that belongs to that database — write AND read — runs on the pinned owned connection
-    // (NOT a fresh checkout); one naming a DIFFERENT database is rejected instead.
+    // in the body of the tx's own database — write AND read — runs on the pinned owned connection
+    // (NOT a fresh checkout); a statement naming a DIFFERENT database is rejected instead.
     transaction_on(&ctx, Some("B"), TxDialect::Mysql, &TransactionOptions::default(), |tx| {
         seam_run(
             tx,

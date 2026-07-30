@@ -369,7 +369,8 @@ final class ConnectionRoutingLiveTest extends TestCase
         // C2: a named-DB transaction runs ENTIRELY on ONE pinned writer connection — no routed acquire
         // inside the tx for a statement of that database (the tx-pin is resolved first; one naming a
         // DIFFERENT database is rejected there rather than routed). Prove: a tx on DB B (MySQL) runs BOTH a write and a read on
-        // the SAME MySQL connection despite the read carrying no db tag (the pinned conn wins).
+        // the SAME MySQL connection despite the read carrying no db tag (the pinned conn serves every
+        // statement of the tx's own database).
         $my = $this->connectOrFail([self::class, 'mysql'], 'mysql');
         self::resetMysqlTable($my);
 

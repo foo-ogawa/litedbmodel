@@ -286,7 +286,7 @@ impl Driver for ConfiguredDriver {
     }
 
     /// A tx on a configured driver acquires a session-configured owned connection (SET applied), issues
-    /// BEGIN on it, and delegates every statement + COMMIT/ROLLBACK to it. The isolation prelude is
+    /// BEGIN on it, and delegates every statement of the tx's own database + COMMIT/ROLLBACK to it. The isolation prelude is
     /// forwarded to the inner driver's `begin_tx_isolated`, and the SESSION setup/reset ride the owned
     /// connection around the whole tx (finish runs the resets after COMMIT/ROLLBACK).
     fn begin_tx(&self) -> Result<Box<dyn TxConnection + '_>, SqlFailure> {

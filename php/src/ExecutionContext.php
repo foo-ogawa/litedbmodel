@@ -54,8 +54,8 @@ namespace LiteDbModel\Runtime;
  * A transaction acquires ONE connection via {@see PdoDriver::beginTx()} (a {@see PdoTxConnection}
  * owned handle — the PHP analogue of v1 `PoolTransaction` / go's `*sql.Tx`), pins it into a tx-scoped
  * {@see ExecutionContext} **propagated as an EXPLICIT argument** (§3 table: PHP has no
- * AsyncLocalStorage / contextvars), runs its body (every statement resolves that connection via
- * `connectionFor`), COMMITs/ROLLBACKs on the SAME owned connection, and releases it EXACTLY ONCE.
+ * AsyncLocalStorage / contextvars), runs its body (every statement of the tx's own database resolves that connection via
+ * `connectionFor`, and a statement naming a DIFFERENT database is rejected), COMMITs/ROLLBACKs on the SAME owned connection, and releases it EXACTLY ONCE.
  *
  * PHP is 1-request-1-process, so there is exactly ONE `\PDO` (no pool) and it can hold exactly ONE
  * active transaction; the tx therefore OWNS that connection for its span (the single-connection
@@ -161,9 +161,8 @@ final class PdoConnection implements Connection
 
 /**
  * A {@see Connection} view over a tx's OWNED {@see PdoTxConnection} handle. The seam resolves this
- * (via `connectionFor`) for every statement inside a tx that belongs to the tx's own database — an
- * unnamed one, or one naming that database — so all of THOSE run on the SAME owned connection (one
- * naming another database is rejected instead). It funnels `execute`/`run` to the handle's PDO — the SAME single `\PDO` the tx issued
+ * (via `connectionFor`) for every statement inside a tx of the tx's own database — an unnamed one, or one naming that
+ * database — so all of THOSE run on the SAME owned connection (a statement naming a DIFFERENT database is rejected instead). It funnels `execute`/`run` to the handle's PDO — the SAME single `\PDO` the tx issued
  * its `BEGIN` on — so a statement mis-routed to a DIFFERENT (autocommit) connection would escape the
  * transaction (the mutation the atomicity "teeth" test exploits).
  */
@@ -244,7 +243,8 @@ final class PdoDriver
 /**
  * The OWNED tx handle over a `\PDO` (Phase A / #79) — the PHP analogue of v1 `PoolTransaction` /
  * go's `*sql.Tx` / python's `_SqliteTxConnection`. It holds ONE connection (PHP's single `\PDO`) for
- * the transaction's whole duration: every statement in the tx body runs on it (`all` / `run`), the
+ * the transaction's whole duration: every statement in the tx body of the tx's own database runs on it (`all` / `run`)
+ * — a statement naming a DIFFERENT database is rejected — the
  * tx ends by running {@see commit()} / {@see rollback()} on the SAME owned connection, and the
  * combinator then {@see release()}s it EXACTLY ONCE.
  *
@@ -496,8 +496,8 @@ class ExecutionContext
     }
 
     /**
-     * Resolve WHICH connection a statement runs on (§3): the tx-owned (pinned) connection wins; else the
-     * primary driver's connection. The reader/writer split and the named-DB registry live on the ROUTED
+     * Resolve WHICH connection a statement runs on (§3): the tx-owned (pinned) connection, for every
+     * statement of the tx's own database (a statement naming a DIFFERENT database is rejected); else the primary driver's connection. The reader/writer split and the named-DB registry live on the ROUTED
      * ctx ({@see RoutingExecutionContext}), so a statement that NAMES a database has nowhere to go here —
      * inside a transaction or out of it — and is LOUD, exactly as an unregistered name is on the routed
      * ctx ({@see ConnectionRegistry::pairFor()}). Running it on the primary connection instead would
@@ -505,9 +505,9 @@ class ExecutionContext
      */
     public function connectionFor(StatementIntent $intent): Connection
     {
-        // STEP 1: the tx-owned (pinned) connection wins — but a statement that names a DIFFERENT database
-        // than the transaction opened on cannot be honored on it, so it is LOUD rather than silently run
-        // there ({@see assertTxDbAgrees()}). This ctx holds ONE connection and no registry, so the
+        // STEP 1: the tx-owned (pinned) connection, for every statement of the tx's own database — a statement
+        // naming a DIFFERENT database is rejected, because it cannot be honored on the pin, so it is LOUD
+        // rather than silently run there ({@see assertTxDbAgrees()}). This ctx holds ONE connection and no registry, so the
         // transaction opened on the default: every named statement disagrees.
         if ($this->pinned !== null) {
             assertTxDbAgrees($intent->db, null);
@@ -547,8 +547,9 @@ final class StatementIntent
      * @param bool $control  the statement is tx-control (BEGIN/COMMIT/ROLLBACK/isolation-SET), NOT a data
      *        write (Phase D #96). A `connectionFor` resolver that mis-routes DATA writes (e.g. a
      *        reader/writer split, or the atomicity mutation fixture) can distinguish it: tx-control must
-     *        stay on the SAME owned tx connection that BEGAN the transaction (the pinned conn already
-     *        wins in the default resolver — this flag lets a custom resolver honor the same invariant).
+     *        stay on the SAME owned tx connection that BEGAN the transaction (the default resolver already
+     *        returns the pinned conn for every statement of the tx's own database — this flag lets a custom
+     *        resolver honor the same invariant).
      */
     public function __construct(
         public readonly bool $write = false,
@@ -724,7 +725,8 @@ function rollbackWith(mixed $value): TxDecision
  *   1. acquire ONE connection via {@see PdoDriver::beginTx()} — a {@see PdoTxConnection} (the tx's
  *      exclusive connection; BEGIN issued on it), the PHP analogue of v1 `PoolTransaction`;
  *   2. pin it into a tx-scoped {@see ExecutionContext} passed EXPLICITLY to `$body` so EVERY statement
- *      `$body` issues resolves THAT connection via the seam — never a fresh one;
+ *      `$body` issues of the tx's own database resolves THAT connection via the seam — never a fresh one,
+ *      and a statement naming a DIFFERENT database is rejected instead;
  *   3. run `$body($txCtx)` → COMMIT / ROLLBACK on the OWNED connection per the returned decision; on
  *      any thrown exception ROLLBACK (best-effort) and re-raise;
  *   4. **release the owned connection EXACTLY ONCE in a `finally`** (the SOLE releaser — the
