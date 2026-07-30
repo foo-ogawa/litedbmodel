@@ -293,8 +293,8 @@ describe('WS8a — compileCompositeWriteBundle → 1-tx execution (bundle is pur
     // The authored child placeholder used $.body for post_id; rewrite to the real parent ref so the
     // bundle exercises the genuine dependency (mirrors childBodyWithParentRef).
     const childStmt = bundle.transaction!.statements.find((s) => s.binds === 'comment')!;
-    (childStmt.op as { params: unknown[] }).params = [{ ref: ['post', 'id'] }, { ref: ['body'] }];
-    (childStmt.op as { sql: string }).sql = 'INSERT INTO comments (post_id, body) VALUES (?, ?) RETURNING id, post_id, body';
+    (childStmt.op as unknown as { params: unknown[] }).params = [{ ref: ['post', 'id'] }, { ref: ['body'] }];
+    (childStmt.op as unknown as { sql: string }).sql = 'INSERT INTO comments (post_id, body) VALUES (?, ?) RETURNING id, post_id, body';
 
     const json = JSON.stringify(bundle);
     const reparsed = JSON.parse(json) as SqlBundle;

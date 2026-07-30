@@ -112,7 +112,6 @@ const testDbPath = path.join(os.tmpdir(), 'litedbmodel-middleware-hooks-test.sql
 const testConfig: DBConfig = {
   database: testDbPath,
   driver: 'sqlite',
-  requireTransaction: false,  // Disable for tests
 };
 
 // ============================================

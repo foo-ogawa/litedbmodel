@@ -338,7 +338,7 @@ test('#207 — the RUN MODE, not the seam branch, picks the pool: a RETURNING wr
   };
   const handler = leafHandlersAsync({ execAsync: new PooledAsyncContext(routing), dialect: 'postgres' }).executeSQL;
   const ctx = { nodeId: 'n0', component: 'executeSQL' };
-  const call = (write: unknown): Promise<unknown> =>
+  const call = (write: unknown) =>
     handler({ sql: 'INSERT INTO users (name) VALUES (?) RETURNING id', params: ['A'], opts: { db: null, write, whereDynamic: null, guard: null } } as unknown as Record<string, Value>, ctx);
 
   // A plain READ (the bounded payload that omits `opts` entirely) → the READER.
@@ -390,8 +390,8 @@ test('#215 — a covered transaction opens on the WRITER, pins its body, and is 
   const ctx = new PooledAsyncContext(routing);
   const handler = leafHandlersAsync({ execAsync: ctx, dialect: 'postgres' }).executeSQL;
   const leafCtx = { nodeId: 'n0', component: 'executeSQL' };
-  const read = (): Promise<unknown> => handler({ sql: 'SELECT id FROM users', params: [] } as unknown as Record<string, Value>, leafCtx);
-  const write = (): Promise<unknown> =>
+  const read = () => handler({ sql: 'SELECT id FROM users', params: [] } as unknown as Record<string, Value>, leafCtx);
+  const write = () =>
     handler(
       { sql: 'INSERT INTO users (name) VALUES (?)', params: ['A'], opts: { db: null, write: { returning: false }, whereDynamic: null, guard: null } } as unknown as Record<string, Value>,
       leafCtx,

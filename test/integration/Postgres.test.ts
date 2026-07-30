@@ -224,7 +224,7 @@ describe.skipIf(skipIntegrationTests)('DBModel', () => {
   describe('transaction', () => {
     it('should commit on success', async () => {
       const initialCountRes = await DBModel.execute(`SELECT COUNT(*) as count FROM users`);
-      const initialCount = parseInt(initialCountRes.rows[0].count, 10);
+      const initialCount = parseInt(String(initialCountRes.rows[0].count), 10);
 
       await DBModel.transaction(async () => {
         await DBModel.execute(
@@ -234,7 +234,7 @@ describe.skipIf(skipIntegrationTests)('DBModel', () => {
       });
 
       const finalCountRes = await DBModel.execute(`SELECT COUNT(*) as count FROM users`);
-      const finalCount = parseInt(finalCountRes.rows[0].count, 10);
+      const finalCount = parseInt(String(finalCountRes.rows[0].count), 10);
       expect(finalCount).toBe(initialCount + 1);
 
       // Cleanup
@@ -243,7 +243,7 @@ describe.skipIf(skipIntegrationTests)('DBModel', () => {
 
     it('should rollback on error', async () => {
       const initialCountRes = await DBModel.execute(`SELECT COUNT(*) as count FROM users`);
-      const initialCount = parseInt(initialCountRes.rows[0].count, 10);
+      const initialCount = parseInt(String(initialCountRes.rows[0].count), 10);
 
       try {
         await DBModel.transaction(async () => {
@@ -258,7 +258,7 @@ describe.skipIf(skipIntegrationTests)('DBModel', () => {
       }
 
       const finalCountRes = await DBModel.execute(`SELECT COUNT(*) as count FROM users`);
-      const finalCount = parseInt(finalCountRes.rows[0].count, 10);
+      const finalCount = parseInt(String(finalCountRes.rows[0].count), 10);
       expect(finalCount).toBe(initialCount);
     });
   });
@@ -521,12 +521,16 @@ describe.skipIf(skipIntegrationTests)('DBModel advanced operations', () => {
 
   describe('Select specific columns', () => {
     it('should select only specified columns', async () => {
-      const users = await User.find([], { columns: ['id', 'name'] });
+      // The projection option is `select` (a column list) — `SelectOptions` has no `columns`, so the
+      // previous spelling was silently ignored and the assertions below could not have caught it.
+      const users = await User.find([], { select: 'id, name' });
 
       expect(users.length).toBeGreaterThan(0);
       expect(users[0].id).toBeDefined();
       expect(users[0].name).toBeDefined();
-      // email should not be loaded (but may be undefined)
+      // The projection is REAL: a column OUTSIDE it was never loaded. (`columns` could not have shown
+      // this — it was ignored, so every column came back.)
+      expect(users[0].email).toBeUndefined();
     });
   });
 

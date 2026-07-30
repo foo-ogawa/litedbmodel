@@ -13,6 +13,8 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- capturing-model harness needs casts */
 import { describe, it, expect } from 'vitest';
 import { DBModel } from '../../src/DBModel';
+import type { ConditionObject } from '../../src/DBConditions';
+import type { Scope } from 'behavior-contracts/runtime';
 import { LazyRelationContext } from '../../src/LazyRelation';
 import { DBConditions } from '../../src/DBConditions';
 import { dbNotNull, dbCast, dbCastIn, dbTupleIn, dbImmediate, dbDynamic, dbRaw, DBExists, DBSubquery, DBImmediateValue, parentRef } from '../../src/DBValues';
@@ -1323,7 +1325,7 @@ describe('C. Composite STATIC per-parent-LIMIT relation form (#47 last gap)', ()
 // ===========================================================================
 describe('D. compileSelect renders V1-SOURCED SQL for the WHERE primitives / SELECT_PORTS (V0 R2–R6, all dialects)', () => {
   /** v1 golden: a bare SELECT head + a DBConditions-built WHERE (the exact v1 assembly). */
-  function v1Where(cond: Record<string, unknown>, dialect: Dialect, table = 'posts', cols = 'id'): Rendered {
+  function v1Where(cond: ConditionObject, dialect: Dialect, table = 'posts', cols = 'id'): Rendered {
     const params: unknown[] = [];
     // The v1 dialect cast formatter: PG applies `?::type`; MySQL/SQLite drop the cast (identity) —
     // this is `formatterFor(dialect)`, the SAME gating the live compile passes. (`undefined` would
@@ -1333,7 +1335,7 @@ describe('D. compileSelect renders V1-SOURCED SQL for the WHERE primitives / SEL
     return { sql: renderPlaceholders(`SELECT ${cols} FROM ${table} WHERE ${where}`, dialect), params };
   }
   /** The `compileSelect` rendering for a bare `table`/`cols` projection + `conditions` WHERE. */
-  function selectWhere(conditions: Record<string, unknown>, dialect: Dialect, table = 'posts', cols = 'id'): Rendered {
+  function selectWhere(conditions: ConditionObject, dialect: Dialect, table = 'posts', cols = 'id'): Rendered {
     return render(compileSelect({ dialect, tableName: table, select: cols, conditions }), dialect);
   }
 
@@ -1487,7 +1489,7 @@ describe('H1. single-row tx-write per-column PG cast — byte-matches v1 (all 3 
         dialect
       );
       const op = compileWriteNode({ id: 'ins', component: 'Insert', ports: insertPorts } as never, dialect);
-      const got = renderTxStatement(op, insertRow, dialect);
+      const got = renderTxStatement(op, insertRow as Scope, dialect);
       // The tx-write compile serializes the payload object to JSON at the driver boundary; compare the
       // SQL TEXT byte-for-byte (the cast placeholders) — the SQL is where H1 diverged.
       expect(got.sql).toBe(golden.sql);

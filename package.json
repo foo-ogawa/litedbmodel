@@ -54,6 +54,7 @@
     "gates:check": "node scripts/check-reachable-test-gates.mjs",
     "go:test": "node scripts/check-go-test-skips.mjs",
     "pkg:check": "node scripts/check-package-entrypoints.mjs",
+    "types:check": "node scripts/check-test-types.mjs",
     "vendor:bc-php": "node scripts/vendor-behavior-contracts-php.mjs",
     "vendor:bc-php:check": "node scripts/vendor-behavior-contracts-php.mjs --check",
     "conformance:gen": "vitest run --config conformance/vitest.config.ts",

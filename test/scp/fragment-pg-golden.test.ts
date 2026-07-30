@@ -11,6 +11,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- capturing-model test harness needs casts */
 import { describe, it, expect } from 'vitest';
 import { DBModel } from '../../src/DBModel';
+import type { ConditionObject } from '../../src/DBConditions';
 import { LazyRelationContext } from '../../src/LazyRelation';
 import { DBConditions } from '../../src/DBConditions';
 import {
@@ -74,7 +75,7 @@ async function originalRelation(
 /** Drive the ORIGINAL DBConditions + buildSelectSQL-style prefix for a base SELECT. */
 function originalBaseSelect(
   table: string,
-  conds: Record<string, unknown>
+  conds: ConditionObject
 ): { sql: string; params: unknown[] } {
   const params: unknown[] = [];
   const where = new DBConditions(conds).compile(params);
@@ -311,7 +312,7 @@ describe('fragment model — PG byte parity vs ORIGINAL builders', () => {
     { column: 'author_id', inputPath: ['authorId'] },
   ];
 
-  const subsets: Array<{ name: string; input: Record<string, unknown>; origConds: Record<string, unknown> }> = [
+  const subsets: Array<{ name: string; input: Record<string, unknown>; origConds: ConditionObject }> = [
     { name: 'both present', input: { status: 'active', authorId: 7 }, origConds: { status: 'active', author_id: 7 } },
     { name: 'only status', input: { status: 'active' }, origConds: { status: 'active' } },
     { name: 'only author_id', input: { authorId: 7 }, origConds: { author_id: 7 } },

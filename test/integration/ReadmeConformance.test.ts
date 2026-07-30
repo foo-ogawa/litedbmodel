@@ -721,11 +721,11 @@ for (const d of dialects) {
       const c = await DBModel.transaction(async () =>
         User.create([[User.name, 'author'], [User.email, 'author@x.com']], { returning: true }),
       );
-      const uid = c!.values[0][0];
+      const uid = c!.values[0][0] as number;
       const p = await DBModel.transaction(async () =>
         Post.create([[Post.author_id, uid], [Post.title, 'Hello']], { returning: true }),
       );
-      const pid = p!.values[0][0];
+      const pid = p!.values[0][0] as number;
       await DBModel.transaction(async () => {
         await Comment.create([[Comment.post_id, pid], [Comment.body, 'c1']]);
         await Comment.create([[Comment.post_id, pid], [Comment.body, 'c2']]);
@@ -767,7 +767,7 @@ for (const d of dialects) {
           { returning: true },
         ),
       );
-      const [ua, ub] = c!.values.map((v) => v[0]);
+      const [ua, ub] = c!.values.map((v) => v[0] as number);
       await DBModel.transaction(async () => {
         for (let i = 0; i < 8; i++) await Post.create([[Post.author_id, ua], [Post.title, `a${i}`]]);
         for (let i = 0; i < 8; i++) await Post.create([[Post.author_id, ub], [Post.title, `b${i}`]]);
@@ -790,7 +790,7 @@ for (const d of dialects) {
           { returning: true },
         ),
       );
-      const uids = c!.values.map((v) => v[0]);
+      const uids = c!.values.map((v) => v[0] as number);
       await DBModel.transaction(async () => {
         for (const uid of uids) {
           await Post.create([[Post.author_id, uid], [Post.title, `post-${uid}`]]);
@@ -833,7 +833,7 @@ for (const d of dialects) {
       const c = await DBModel.transaction(async () =>
         User.create([[User.name, 'owner'], [User.email, 'owner@x.com']], { returning: true }),
       );
-      const uid = c!.values[0][0];
+      const uid = c!.values[0][0] as number;
       await DBModel.transaction(async () => {
         for (let i = 0; i < 20; i++) await Post.create([[Post.author_id, uid], [Post.title, `t${i}`]]);
       });
@@ -985,7 +985,7 @@ for (const d of dialects) {
           { returning: true },
         ),
       );
-      const [qa, qb] = c!.values.map((v) => v[0]);
+      const [qa, qb] = c!.values.map((v) => v[0] as number);
       await DBModel.transaction(async () => {
         for (let i = 0; i < 3; i++) await Post.create([[Post.author_id, qa], [Post.title, `qa${i}`]]);
         await Post.create([[Post.author_id, qb], [Post.title, 'qb0']]);

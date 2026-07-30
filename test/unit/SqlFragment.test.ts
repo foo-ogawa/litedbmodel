@@ -15,9 +15,9 @@ import {
   isSqlRaw,
   isSqlRef,
 } from '../../src/SqlFragment';
-import { createColumn, condsToRecord, Conditions, SKIP } from '../../src/Column';
+import { createColumn, condsToRecord, Conditions, SKIP, type OrCond } from '../../src/Column';
 import { parentRef } from '../../src/DBValues';
-import { DBConditions } from '../../src/DBConditions';
+import { DBConditions, type ConditionObject } from '../../src/DBConditions';
 import { DBModel, model, column } from '../../src';
 
 // Test columns
@@ -211,7 +211,7 @@ describe('sql tagged template', () => {
       const record = condsToRecord([frag] as any);
       expect(record).toEqual({ "updated_at >= NOW() - INTERVAL '180 days'": true });
 
-      const cond = new DBConditions(record);
+      const cond = new DBConditions(record as ConditionObject);
       const params: unknown[] = [];
       const compiled = cond.compile(params);
       expect(compiled).toBe("updated_at >= NOW() - INTERVAL '180 days'");
@@ -565,7 +565,7 @@ describe('Nested SqlCondition / SqlTypedFragment inside general template', () =>
 
 describe('OR conditions with sql tag', () => {
   it('should handle sql tag tuples inside OR conditions via condsToRecord', () => {
-    const orCond = {
+    const orCond: OrCond = {
       _type: 'or' as const,
       conditions: [
         [[sql`${UserAge} > ?`, 18]],
@@ -580,7 +580,7 @@ describe('OR conditions with sql tag', () => {
   });
 
   it('should handle SqlCondition (Pattern B) inside OR conditions', () => {
-    const orCond = {
+    const orCond: OrCond = {
       _type: 'or' as const,
       conditions: [
         [sql`${UserStatus} = ${'admin'}`],
@@ -594,7 +594,7 @@ describe('OR conditions with sql tag', () => {
   });
 
   it('should handle value-free SqlTypedFragment inside OR conditions', () => {
-    const orCond = {
+    const orCond: OrCond = {
       _type: 'or' as const,
       conditions: [
         [sql`${UserDeletedAt} IS NULL`],
