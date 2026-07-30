@@ -362,6 +362,16 @@ func callEntry(dialect, entry string, in map[string]any) (any, error) {
 			return pg.RemovePostReturning(i64(in, "id"))
 		}
 		return my.RemovePostReturning(i64(in, "id"))
+	case "createDoc":
+		if postgres {
+			return pg.CreateDoc(str(in, "docId"), str(in, "title"))
+		}
+		return my.CreateDoc(str(in, "docId"), str(in, "title"))
+	case "createLine":
+		if postgres {
+			return pg.CreateLine(i64(in, "orderId"), i64(in, "lineNo"), str(in, "sku"))
+		}
+		return my.CreateLine(i64(in, "orderId"), i64(in, "lineNo"), str(in, "sku"))
 	case "restatusPostsReturning":
 		if postgres {
 			return pg.RestatusPostsReturning(str(in, "status"), i64(in, "authorId"))

@@ -40,7 +40,6 @@ relation CONTENT contracts. It is part of `vitest run`.
 |-----------|-------------------------------------------------------------------------------------------|
 | `exec`    | one endpoint call on one dialect: the ordered `{sql, params}` the transport handed the driver, the FULL materialized result (nested relation children included), and — for a write — the resulting DB state |
 | `guard`   | a read whose baked runaway cap is exceeded, and the `LimitExceededError` it raises: `findHardLimit` bakes `LIMIT cap + 1` and the READ BOUNDARY throws; `hasManyHardLimit` (or a per-relation override) rides on the relation child fetch and the `executeSQL` TRANSPORT throws — the raw child rows exist nowhere else, so the vector's statements stop at the fetch that overran |
-| `tx`      | a write-time-relations bundle run as ONE gate-first transaction: result + post-tx DB state |
 | `dialect` | the `orderByNulls` dialect primitive                                                      |
 
 The SQL golden and the result golden come from the SAME execution, so a rendered statement in the

@@ -1,35 +1,27 @@
 /**
- * litedbmodel v2 SCP — write-time relations → ordered SQL transaction plan, re-expressed on
- * the `makeSQL` model (epic #43/#45 Phase B; spec §6 / §14). This REPLACES the reduced-spine
- * `../write-plan.ts` + `../write-runtime.ts` (`CompiledOperation` + `renderOperation` +
- * FragmentTree). No reduced IR is emitted anywhere: every statement's SQL is COMPLETE tuned
- * text (byte-identical to what the v1 write path sends — `SELECT 1 …`, `INSERT … ON CONFLICT
- * DO NOTHING`, `UPDATE … SET c = c + ?`, the outbox INSERT), and its `params` are closed-set
- * bc Expression IR refs resolved at execute time against the accumulated transaction scope.
+ * litedbmodel v2 SCP — the write descriptor → makeSQL statement compiler ({@link compileWriteNode}),
+ * the BATCH transaction-plan derivation ({@link deriveBatchPlan}), and the live async 1-tx runtime
+ * ({@link executeTransactionAsync}). No reduced IR is emitted anywhere: every statement's SQL is
+ * COMPLETE tuned text (byte-identical to what the v1 write path sends — `INSERT … ON CONFLICT DO
+ * NOTHING`, `UPDATE … SET c = ?`, `DELETE FROM … WHERE …`), and its `params` are closed-set bc
+ * Expression IR refs resolved at execute time against the transaction scope.
  *
  * A statement op is exactly a `makeSQL` template: `{ sql, params }` where `sql` carries `?`
  * placeholders and `params` are Expression IR (`{ref:[…]}` / a literal / a `{obj:{…}}` payload)
  * that bc evaluates per statement — then the concrete values assemble + render + bind through
  * the SAME `assembleMakeSQL` / `renderPlaceholders` the read path uses.
  *
- * ## Gate-first is a real execution behavior (spec §6 "Gate First")
+ * A BATCH write (createMany / updateMany / deleteMany) is ONE logical op that produces N grouped
+ * statements; {@link deriveBatchPlan} lowers those into a gate-free {@link TransactionPlan}
+ * (`entityFrom` null, every statement `role:'body'`), run in the declared order as ONE transaction.
+ * The single-row and read paths are lowered by `bc generate` into a native module per language and
+ * never reach this runtime; there is no runtime read-compile and no runtime single-write compile.
  *
- * Each gate statement carries a {@link GateRule} the runtime evaluates AFTER executing it: a
- * failing gate short-circuits — the remaining statements never execute and the tx ROLLBACKs.
+ * ## Gate short-circuit (still supported by the runtime)
  *
- * ## Path lowering (spec §6) — `$.input.*` / `$.entity.*` / `$.ref.<w>.*` → closed-set refs
- *
- *   `$.input.<f>`       → `{ref:['<f>']}`             (bc flat input scope)
- *   `$.entity.<f>`      → `{ref:['__entity','<f>']}`  (the sole body write's RETURNING row)
- *   `$.ref.<w>.<f>`     → `{ref:['<w>','<f>']}`        (a named upstream write's RETURNING row)
- *
- * ## tx-DAG derivation (spec §6 / §14) — gate-first + data-dependency topo order
- *
- * Statements form a data-dependency DAG (`$.ref.<w>.*` consumes an earlier write's RETURNING
- * row via `TxStatement.binds`) with a gate-first constraint. A deterministic Kahn topo sort
- * (stable ascending declaration `seq` tie-break) orders them into a single-transaction plan.
- * Underivable shapes (cycle, dangling `$.ref`, referenced write without RETURNING, duplicate
- * bind, composite `$.entity`) are LOUD rejects — never a silently mis-ordered plan.
+ * A statement MAY carry a {@link GateRule} the runtime evaluates AFTER executing it: a failing gate
+ * short-circuits — the remaining statements never execute and the tx ROLLBACKs. The batch plans
+ * derived here carry no gates; the rule survives for a caller that hands the runtime a gated plan.
  */
 
 import { evaluateExpression, type Scope, type Value } from 'behavior-contracts/runtime';
@@ -45,31 +37,14 @@ import { mapSqliteError } from '../errors';
 // runtime import closes no cycle.
 import { mysqlPkHint } from './mysql-returning';
 import {
-  type ExecutionContext,
   type AsyncExecutionContext,
   type PooledAsyncContext,
-  type SqliteDriver,
-  contextForDriver,
   withTransactionAsync,
-  withTransactionSync,
 } from '../exec-context';
-import { executeSQL, executeSQLAsync, type LeafContext, type AsyncLeafContext } from '../leaves';
+import { executeSQLAsync, type AsyncLeafContext } from '../leaves';
 import { type TransactionOptions, checkWriteAllowed } from '../tx-options';
 import { isConnectionError } from '../../connection-errors';
 import { DBConditions, type ConditionObject } from '../../DBConditions';
-import {
-  ENTITY_ROOT,
-  parseEffectPath,
-  type DeriveEffect,
-  type EdgeEffect,
-  type EmitEffect,
-  type IdempotencyEffect,
-  type LifecycleContract,
-  type LifecycleEffects,
-  type RequiresEffect,
-  type UniqueEffect,
-  type WriteLifecyclePhase,
-} from '../writes';
 
 // ── Expression IR alias (a statement param is a closed-set bc Expression node) ──
 
@@ -170,6 +145,19 @@ export type StatementRole =
   | 'edge'
   | 'emit';
 
+/**
+ * The write intent a {@link TransactionPlan} carries. It labels the plan the BATCH compilers derive
+ * (`createMany` ⇒ `create`, `updateMany` ⇒ `update`, `deleteMany` ⇒ `remove`) so a consumer can tell
+ * the three apart without re-reading the SQL.
+ */
+export type WriteLifecyclePhase = 'create' | 'update' | 'remove';
+
+/**
+ * The reserved scope key the tx runtime binds the plan's `entityFrom` row under, so a later statement
+ * that references the written row resolves against it. Reserved: no input field may use this name.
+ */
+export const ENTITY_ROOT = '__entity';
+
 /** The gate rule the runtime evaluates on a gate statement's result to decide short-circuit. */
 export type GateRule = 'existsElseRollback' | 'insertedElseRollback' | 'insertedElseNoop';
 
@@ -200,135 +188,6 @@ export interface TransactionPlan {
   readonly onIdempotentHit: IdempotentHitPolicy;
 }
 
-// ── Path → Expression IR ref (closed-set only) ────────────────────────────────
-
-function pathToRef(value: string): TxExpr {
-  const p = parseEffectPath(value);
-  if (p.root === 'input') return { ref: [p.field] };
-  if (p.root === 'entity') return { ref: [ENTITY_ROOT, p.field] };
-  return { ref: [p.writeName!, p.field] };
-}
-
-// ── Per-dialect guard INSERT text (the ON CONFLICT DO NOTHING / INSERT IGNORE SSoT) ──
-
-/**
- * The tuned guard INSERT text for a gate-first `idempotency`/`unique` statement — byte-identical
- * to the v1 write path: SQLite/Postgres emit `INSERT INTO … VALUES (…) ON CONFLICT DO NOTHING`;
- * MySQL emits `INSERT IGNORE INTO … VALUES (…)`.
- */
-function guardInsert(dialect: MakeSQLDialect, table: string, columns: readonly string[], placeholders: string): string {
-  const cols = `(${columns.join(', ')})`;
-  if (dialect === 'mysql') return `INSERT IGNORE INTO ${table} ${cols} VALUES (${placeholders})`;
-  return `INSERT INTO ${table} ${cols} VALUES (${placeholders}) ON CONFLICT DO NOTHING`;
-}
-
-// ── Per-effect statement compilers (all emit makeSQL TxOp shapes) ──────────────
-
-type IdGen = (role: string) => string;
-function makeIdGen(): IdGen {
-  let n = 0;
-  return (role: string) => `tx_${role}_${n++}`;
-}
-
-/** `requires` → a gate-first existence probe: `SELECT 1 FROM <table> WHERE k1 = ? AND …`. */
-function compileRequires(e: RequiresEffect, nextId: IdGen): TxStatement {
-  const cols = Object.keys(e.keys);
-  if (cols.length === 0) throw new Error(`write-plan: requires on '${e.table}' declares no keys`);
-  const whereSql = v1EqualityWhereText(cols);
-  const op: TxOp = {
-    sql: `SELECT 1 FROM ${e.table} WHERE ${whereSql}`,
-    params: cols.map((c) => pathToRef(e.keys[c])),
-  };
-  return { id: nextId('requires'), role: 'gate:requires', op, gate: 'existsElseRollback', label: `requires ${e.table}` };
-}
-
-/** `idempotency` → a gate-first token INSERT ON CONFLICT DO NOTHING (duplicate short-circuits). */
-function compileIdempotency(e: IdempotencyEffect, nextId: IdGen, dialect: MakeSQLDialect): TxStatement {
-  const op: TxOp = {
-    sql: guardInsert(dialect, e.table, [e.column], '?'),
-    params: [pathToRef(e.token)],
-  };
-  return { id: nextId('idem'), role: 'gate:idempotency', op, gate: 'insertedElseNoop', label: `idempotency ${e.table}` };
-}
-
-/** `unique` → a gate-first guard-row INSERT ON CONFLICT DO NOTHING (collision → ROLLBACK). */
-function compileUnique(e: UniqueEffect, nextId: IdGen, dialect: MakeSQLDialect): TxStatement {
-  const scopeCols = e.scope.map((_, i) => `s${i}`);
-  const fieldCols = e.fields.map((_, i) => `f${i}`);
-  const cols = ['name', ...scopeCols, ...fieldCols];
-  const placeholders = cols.map(() => '?').join(', ');
-  const params: TxExpr[] = [
-    e.name, // literal discriminator (a closed-set string literal)
-    ...e.scope.map(pathToRef),
-    ...e.fields.map(pathToRef),
-  ];
-  const op: TxOp = { sql: guardInsert(dialect, e.guardTable, cols, placeholders), params };
-  return { id: nextId('unique'), role: 'gate:unique', op, gate: 'insertedElseRollback', label: `unique ${e.name}` };
-}
-
-/** `derive` → a cascade counter update: `UPDATE <table> SET <attr> = <attr> + ? WHERE k = ?`. */
-function compileDerive(e: DeriveEffect, nextId: IdGen): TxStatement {
-  const keyCols = Object.keys(e.keys);
-  if (keyCols.length === 0) throw new Error(`write-plan: derive on '${e.table}' declares no keys`);
-  const whereSql = v1EqualityWhereText(keyCols);
-  const op: TxOp = {
-    sql: `UPDATE ${e.table} SET ${e.attribute} = ${e.attribute} + ? WHERE ${whereSql}`,
-    // SET amount is the first param (before the WHERE keys), matching the v1 param order.
-    params: [e.amount, ...keyCols.map((c) => pathToRef(e.keys[c]))],
-  };
-  return { id: nextId('derive'), role: 'derive', op, label: `derive ${e.table}.${e.attribute}` };
-}
-
-/** `edges` → M:N intermediate INSERT/DELETE or 1:N FK UPDATE (spec §6 table row `edges`). */
-function compileEdge(e: EdgeEffect, nextId: IdGen): TxStatement {
-  if (e.relation === 'm2m') {
-    const cols = Object.keys(e.columns);
-    if (e.action === 'set') {
-      const placeholders = cols.map(() => '?').join(', ');
-      const op: TxOp = {
-        sql: `INSERT INTO ${e.table} (${cols.join(', ')}) VALUES (${placeholders})`,
-        params: cols.map((c) => pathToRef(e.columns[c])),
-      };
-      return { id: nextId('edge'), role: 'edge', op, label: `edge m2m link ${e.table}` };
-    }
-    const whereSql = v1EqualityWhereText(cols);
-    const op: TxOp = {
-      sql: `DELETE FROM ${e.table} WHERE ${whereSql}`,
-      params: cols.map((c) => pathToRef(e.columns[c])),
-    };
-    return { id: nextId('edge'), role: 'edge', op, label: `edge m2m unlink ${e.table}` };
-  }
-  // fk: UPDATE <related> SET <fkCol> = ? (or NULL) WHERE <where keys…>
-  const setCols = Object.keys(e.columns);
-  const whereCols = Object.keys(e.where!);
-  const setClauses = setCols.map((c) => (e.action === 'set' ? `${c} = ?` : `${c} = NULL`));
-  const setParams: TxExpr[] = e.action === 'set' ? setCols.map((c) => pathToRef(e.columns[c])) : [];
-  const whereSql = v1EqualityWhereText(whereCols);
-  const op: TxOp = {
-    sql: `UPDATE ${e.table} SET ${setClauses.join(', ')} WHERE ${whereSql}`,
-    params: [...setParams, ...whereCols.map((c) => pathToRef(e.where![c]))],
-  };
-  return { id: nextId('edge'), role: 'edge', op, label: `edge fk ${e.action} ${e.table}` };
-}
-
-/** `emits` → an outbox INSERT (same tx): `INSERT INTO <outbox>(type, payload) VALUES(?, ?)`. */
-function compileEmit(e: EmitEffect, nextId: IdGen): TxStatement {
-  const payloadObj: Record<string, TxExpr> = {};
-  for (const [k, v] of Object.entries(e.payload)) payloadObj[k] = pathToRef(v);
-  const op: TxOp = {
-    sql: `INSERT INTO ${e.outboxTable} (type, payload) VALUES (?, ?)`,
-    params: [e.name, { obj: payloadObj }],
-  };
-  return { id: nextId('emit'), role: 'emit', op, label: `emit ${e.name}` };
-}
-
-// ============================================================================
-// Authored write node → makeSQL TxOp (the makeSQL re-expression of the bridge's
-// `compileNode` for the write path — reads ports STRUCTURALLY, emits complete SQL
-// text + DEFERRED Expression-IR params resolved at tx execute time).
-// ============================================================================
-
-/** The reserved column-ref path head that marks an IN-list membership (mirrors the bridge). */
 export const IN_SENTINEL = '@in';
 
 type WriteComponent = 'Insert' | 'Update' | 'Delete' | 'Select';
@@ -427,21 +286,6 @@ const PROBE = '__probe__';
 function v1ConditionText(conditions: ConditionObject): string {
   const probe: unknown[] = [];
   return new DBConditions(conditions).compile(probe);
-}
-
-/**
- * The tuned WHERE-body TEXT for a set of PK-equality columns (`k1 = ? AND k2 = ?`), produced by
- * driving the ORIGINAL v1 `DBConditions.compile()` (via {@link v1ConditionText}) — the SAME
- * builder the read path uses — so the write-tx predicate text is byte-identical to v1 by
- * construction (a v1 predicate regression now moves a tx golden). The throwaway probe params are
- * discarded; the real runtime values are the caller's deferred Expression-IR params, bound 1:1
- * with the `?` placeholders. `DBConditions.compile` iterates the condition object in insertion
- * order and joins with ` AND `, so the `?`/param order matches the caller's column order.
- */
-function v1EqualityWhereText(columns: readonly string[]): string {
-  const conditions: ConditionObject = {};
-  for (const c of columns) conditions[c] = PROBE;
-  return v1ConditionText(conditions);
 }
 
 /**
@@ -665,7 +509,7 @@ function compileWriteNodeSql(node: WriteNodeLike, dialect: MakeSQLDialect, resol
       // the parallel arrays at execute time (NOT literalized). One statement for N records.
       if (stringPort(ports, 'batch') === 'true') {
         if (dialect === 'postgres') {
-          if (resolveColumnType === undefined) throw new Error(`compileWriteNode: batch insert on postgres needs the column-type resolver (schema SoT) to derive the UNNEST element casts — pass it through compileCreateManyBundle/compileWriteBundle (the decorator-adapter write path).`);
+          if (resolveColumnType === undefined) throw new Error(`compileWriteNode: batch insert on postgres needs the column-type resolver (schema SoT) to derive the UNNEST element casts — pass it through compileCreateManyBundle (the decorator-adapter batch write path).`);
           return pgBatchInsert(table, sorted, values, ports, resolveColumnType, dialect);
         }
         const shapeOpts = { tableName: table, columns: sorted, records: [] as Record<string, unknown>[], ...onConflictJsonOpts(ports, sorted), ...(stringPort(ports, 'returning') !== undefined ? { returning: stringPort(ports, 'returning') } : {}) };
@@ -709,7 +553,7 @@ function compileWriteNodeSql(node: WriteNodeLike, dialect: MakeSQLDialect, resol
         if (keyCols.length === 0) throw new Error(`compileWriteNode: batch Update requires at least one 'key.<field>' port`);
         const updateCols = [...setCols].sort();
         if (dialect === 'postgres') {
-          if (resolveColumnType === undefined) throw new Error(`compileWriteNode: batch update on postgres needs the column-type resolver (schema SoT) to derive the UNNEST element casts — pass it through compileCreateManyBundle/compileWriteBundle (the decorator-adapter write path).`);
+          if (resolveColumnType === undefined) throw new Error(`compileWriteNode: batch update on postgres needs the column-type resolver (schema SoT) to derive the UNNEST element casts — pass it through compileCreateManyBundle (the decorator-adapter batch write path).`);
           return pgBatchUpdate(table, keyCols, updateCols, key, set, ports, resolveColumnType, dialect);
         }
         const shapeOpts = { tableName: table, keyColumns: keyCols, updateColumns: updateCols, records: [] as Record<string, unknown>[], ...(stringPort(ports, 'returning') !== undefined ? { returning: stringPort(ports, 'returning') } : {}) };
@@ -756,195 +600,10 @@ function compileWriteNodeSql(node: WriteNodeLike, dialect: MakeSQLDialect, resol
   }
 }
 
-// ── Derivation entrypoint ──────────────────────────────────────────────────────
-
-/** The base write op the Command declares (`Insert`/`Update`/`Delete` with `onWrite`). */
-export interface BaseWrite {
-  /** The compiled base write makeSQL op (complete `sql` + deferred Expression-IR `params`). */
-  readonly op: TxOp;
-  readonly label: string;
-  /** The write's stable NAME (composite scope) — referenced downstream as `$.ref.<name>.*`. */
-  readonly name?: string;
-  /** The write's OWN save-contract effects (composite scope). */
-  readonly effects?: LifecycleEffects;
-}
-
-interface DagNode {
-  readonly stmt: TxStatement;
-  readonly seq: number;
-  readonly consumes: readonly string[];
-  readonly produces: string | null;
-  readonly isGate: boolean;
-}
-
-function compileWriteGroup(
-  base: BaseWrite,
-  lifecycle: LifecycleContract,
-  nextId: IdGen,
-  dialect: MakeSQLDialect,
-  seqRef: { n: number },
-): { nodes: DagNode[]; bodyId: string } {
-  const e = lifecycle.effects;
-  const nodes: DagNode[] = [];
-  const mk = (stmt: TxStatement, isGate: boolean): DagNode => {
-    const consumes = refHeadsOf(stmt).filter((h) => h !== ENTITY_ROOT && !isInputHead(h, stmt));
-    return { stmt, seq: seqRef.n++, consumes, produces: stmt.binds ?? null, isGate };
-  };
-
-  for (const r of e.requires ?? []) nodes.push(mk(compileRequires(r, nextId), true));
-  if (e.idempotency !== undefined) nodes.push(mk(compileIdempotency(e.idempotency, nextId, dialect), true));
-  for (const u of e.unique ?? []) nodes.push(mk(compileUnique(u, nextId, dialect), true));
-
-  const bodyId = nextId('body');
-  const bodyStmt: TxStatement = {
-    id: bodyId,
-    role: 'body',
-    op: base.op,
-    label: base.label,
-    ...(base.name !== undefined ? { binds: base.name } : {}),
-  };
-  nodes.push(mk(bodyStmt, false));
-
-  for (const d of e.derive ?? []) nodes.push(mk(compileDerive(d, nextId), false));
-  for (const ed of e.edges ?? []) nodes.push(mk(compileEdge(ed, nextId), false));
-  for (const em of e.emits ?? []) nodes.push(mk(compileEmit(em, nextId), false));
-
-  return { nodes, bodyId };
-}
-
-function topoOrder(nodes: readonly DagNode[]): TxStatement[] {
-  const byName = new Map<string, DagNode>();
-  for (const n of nodes) {
-    if (n.produces !== null) {
-      if (byName.has(n.produces)) {
-        throw new Error(`write-plan: two writes both bind the name '${n.produces}' — write names must be unique in a composite Command.`);
-      }
-      byName.set(n.produces, n);
-    }
-  }
-
-  const succ = new Map<string, Set<string>>();
-  const indeg = new Map<string, number>();
-  const nodeById = new Map<string, DagNode>();
-  for (const n of nodes) {
-    nodeById.set(n.stmt.id, n);
-    succ.set(n.stmt.id, new Set());
-    indeg.set(n.stmt.id, 0);
-  }
-  const addEdge = (fromId: string, toId: string): void => {
-    if (fromId === toId) return;
-    const s = succ.get(fromId)!;
-    if (!s.has(toId)) {
-      s.add(toId);
-      indeg.set(toId, indeg.get(toId)! + 1);
-    }
-  };
-
-  for (const n of nodes) {
-    for (const dep of n.consumes) {
-      const producer = byName.get(dep);
-      if (producer === undefined) {
-        throw new Error(
-          `write-plan: statement '${n.stmt.label}' references '$.ref.${dep}.*' but no write in this ` +
-            `Command binds the name '${dep}' — a dangling write reference (fail-closed; no silent skip).`,
-        );
-      }
-      addEdge(producer.stmt.id, n.stmt.id);
-    }
-  }
-  const gates = nodes.filter((n) => n.isGate);
-  const nonGates = nodes.filter((n) => !n.isGate);
-  for (const g of gates) for (const b of nonGates) addEdge(g.stmt.id, b.stmt.id);
-
-  const ordered: TxStatement[] = [];
-  const ready: DagNode[] = nodes.filter((n) => indeg.get(n.stmt.id) === 0).sort((a, b) => a.seq - b.seq);
-  while (ready.length > 0) {
-    const n = ready.shift()!;
-    ordered.push(n.stmt);
-    for (const depId of succ.get(n.stmt.id)!) {
-      indeg.set(depId, indeg.get(depId)! - 1);
-      if (indeg.get(depId) === 0) {
-        const dn = nodeById.get(depId)!;
-        let lo = 0;
-        while (lo < ready.length && ready[lo].seq < dn.seq) lo++;
-        ready.splice(lo, 0, dn);
-      }
-    }
-  }
-
-  if (ordered.length !== nodes.length) {
-    const stuck = nodes.filter((n) => !ordered.includes(n.stmt)).map((n) => n.stmt.label);
-    throw new Error(
-      `write-plan: the write-time transaction DAG has a CYCLE (unresolvable ordering among ` +
-        `[${stuck.join(', ')}]). This is either a mutual '$.ref' data dependency or a gate that ` +
-        `depends on a body row (a gate cannot depend on a not-yet-written row). ESCALATE: the ` +
-        `Command's write dependencies are contradictory — no order satisfies both the data ` +
-        `dependencies and gate-first. (Fail-closed; the derivation never guesses an order.)`,
-    );
-  }
-  return ordered;
-}
-
-/**
- * Derive the ORDERED, gate-first {@link TransactionPlan} from a Command's base write(s) + its
- * lifecycle save contract (spec §6 / §14). Single base write = fixed §6 group; multiple named
- * base writes = a topologically-ordered gate-first tx DAG (`$.ref.<name>.*` data dependencies).
- */
-export function deriveTransactionPlan(
-  phase: WriteLifecyclePhase,
-  bases: readonly BaseWrite[],
-  lifecycle: LifecycleContract,
-  dialect: MakeSQLDialect = 'sqlite',
-): TransactionPlan {
-  if (bases.length === 0) {
-    throw new Error('write-plan: a Command must declare at least one base write (Insert/Update/Delete).');
-  }
-  const nextId = makeIdGen();
-  const seqRef = { n: 0 };
-  const composite = bases.length > 1;
-
-  const allNodes: DagNode[] = [];
-  const bodyIds: string[] = [];
-  bases.forEach((base, i) => {
-    const lc: LifecycleContract = base.effects !== undefined ? { effects: base.effects } : i === 0 ? lifecycle : { effects: {} };
-    const { nodes, bodyId } = compileWriteGroup(base, lc, nextId, dialect, seqRef);
-    allNodes.push(...nodes);
-    bodyIds.push(bodyId);
-  });
-
-  const statements = topoOrder(allNodes);
-
-  const soleBody = bases[0];
-  const soleBodyId = bodyIds[0];
-  const usesEntity = referencesHead(statements, ENTITY_ROOT);
-  const soleBodyReturns = /\breturning\b/i.test(soleBody.op.sql);
-  if (usesEntity && composite) {
-    throw new Error(
-      `write-plan: a composite (multi-write) Command uses '$.entity.*' — ambiguous which write it ` +
-        `denotes. Address each write's row by name via '$.ref.<writeName>.<field>' (fail-closed).`,
-    );
-  }
-  if (usesEntity && !soleBodyReturns) {
-    throw new Error(
-      `write-plan: a derive/edges/emits stage references '$.entity.*' but the body write ` +
-        `('${soleBody.label}') has no RETURNING clause — the written row cannot be exposed to later ` +
-        `stages. Add a RETURNING to the base write (fail-closed; no absent-entity default).`,
-    );
-  }
-  const entityFrom = usesEntity || (!composite && soleBodyReturns) ? soleBodyId : null;
-
-  for (const base of bases) {
-    if (base.name === undefined) continue;
-    if (referencesHead(statements, base.name) && !/\breturning\b/i.test(base.op.sql)) {
-      throw new Error(
-        `write-plan: write '${base.name}' is referenced as '$.ref.${base.name}.*' by a later ` +
-          `statement but its op has no RETURNING clause — its row cannot be bound for downstream ` +
-          `writes. Add a RETURNING to write '${base.name}' (fail-closed; no absent-row default).`,
-      );
-    }
-  }
-
-  return { phase, entityFrom, statements, onIdempotentHit: 'rollback' };
+type IdGen = (role: string) => string;
+function makeIdGen(): IdGen {
+  let n = 0;
+  return (role: string) => `tx_${role}_${n++}`;
 }
 
 /**
@@ -979,79 +638,6 @@ export function deriveBatchPlan(
   // rows into `TransactionResult.returnedRows` (ordered by group), reproducing v1 `createMany`'s
   // "all created rows" result while `expectedDbState` proves the persisted state.
   return { phase, entityFrom: null, statements, onIdempotentHit: 'rollback' };
-}
-
-/** Collect the ref-heads (`ref[0]`) a statement's params reference. */
-function refHeadsOf(stmt: TxStatement): string[] {
-  const heads = new Set<string>();
-  collectRefHeads(stmt.op.params, heads);
-  return [...heads];
-}
-
-/** True if a ref-head is an INPUT head (a bare `$.input.<f>` → 1-element `{ref:['<f>']}`). */
-function isInputHead(head: string, stmt: TxStatement): boolean {
-  return refPathLengthFor(stmt.op.params, head) === 1;
-}
-
-function refPathLengthFor(node: unknown, head: string): number {
-  let maxLen = 0;
-  const walk = (n: unknown): void => {
-    if (n === null || typeof n !== 'object') return;
-    if (Array.isArray(n)) {
-      for (const el of n) walk(el);
-      return;
-    }
-    const keys = Object.keys(n);
-    if (keys.length === 1 && keys[0] === 'ref') {
-      const path = (n as Record<string, unknown>).ref;
-      if (Array.isArray(path) && path[0] === head) maxLen = Math.max(maxLen, path.length);
-      return;
-    }
-    for (const k of keys) walk((n as Record<string, unknown>)[k]);
-  };
-  walk(node);
-  return maxLen;
-}
-
-function referencesHead(statements: readonly TxStatement[], head: string): boolean {
-  const heads = new Set<string>();
-  for (const s of statements) collectRefHeads(s.op.params, heads);
-  return heads.has(head);
-}
-
-function collectRefHeads(node: unknown, heads: Set<string>): void {
-  if (node === null || typeof node !== 'object') return;
-  if (Array.isArray(node)) {
-    for (const el of node) collectRefHeads(el, heads);
-    return;
-  }
-  const keys = Object.keys(node);
-  if (keys.length === 1 && keys[0] === 'ref') {
-    const path = (node as Record<string, unknown>).ref;
-    if (Array.isArray(path) && typeof path[0] === 'string') heads.add(path[0]);
-    return;
-  }
-  for (const k of keys) collectRefHeads((node as Record<string, unknown>)[k], heads);
-}
-
-// ============================================================================
-// Runtime — execute a TransactionPlan against real SQLite as ONE transaction.
-// ============================================================================
-
-/**
- * The minimal synchronous SQLite driver surface the tx runtime needs (better-sqlite3) — the
- * backward-compat public seam. Internally the tx runs through the {@link ExecutionContext} seam
- * (`../exec-context`); a raw driver passed here is wrapped via {@link contextForDriver}. Aliased to
- * {@link SqliteDriver}.
- */
-export type SqliteDb = SqliteDriver;
-
-/** A tx entry accepts either a raw {@link SqliteDb} or a full {@link ExecutionContext}. */
-export type DbOrContext = SqliteDb | ExecutionContext;
-
-/** Coerce a `SqliteDb | ExecutionContext` argument to a ctx (raw driver ⇒ backward-compat wrapper). */
-function asContext(dbOrCtx: DbOrContext): ExecutionContext {
-  return 'connectionFor' in dbOrCtx ? dbOrCtx : contextForDriver(dbOrCtx);
 }
 
 /** Why a transaction did not commit (a gate short-circuit outcome; not a driver error). */
@@ -1111,23 +697,6 @@ function renderStatement(op: TxOp, scope: Scope, dialect: MakeSQLDialect): { sql
   return { sql: renderPlaceholders(sql, dialect), params };
 }
 
-function execStatement(
-  ctx: ExecutionContext,
-  op: TxOp,
-  scope: Scope,
-  dialect: MakeSQLDialect,
-): { rows: Record<string, unknown>[]; changes: number } {
-  // A tx body statement rides the SAME op-independent transport as every read/write: the `executeSQL`
-  // leaf (placeholder render + param encode + central seam). The tx scope-eval/assemble/coerce is done
-  // first (`evalAssemble`); the leaf receives raw `?` SQL + concrete params. A `write` mode ⇒ the
-  // tx-owned connection resolves via `connectionFor` (§3); a SELECT/RETURNING statement reads rows
-  // (`returning` ⇒ the row-returning seam), a bare write runs (the `[{changes,…}]` summary).
-  const { sql, params } = evalAssemble(op, scope, dialect);
-  const hasReturn = /\bselect\b/i.test(sql.slice(0, 8)) || /\breturning\b/i.test(sql);
-  const out = executeSQL({ sql, params, write: { returning: hasReturn } }, { exec: ctx, dialect } satisfies LeafContext);
-  return hasReturn ? { rows: out, changes: out.length } : { rows: [], changes: Number(out[0]?.changes ?? 0) };
-}
-
 function gateShortCircuit(gate: GateRule, result: { rows: Record<string, unknown>[]; changes: number }): ShortCircuitReason | null {
   switch (gate) {
     case 'existsElseRollback':
@@ -1142,81 +711,6 @@ function gateShortCircuit(gate: GateRule, result: { rows: Record<string, unknown
       // be skipped and the write COMMIT). Throwing here aborts the tx (the caller's catch ROLLBACKs).
       throw new Error(`scp write: unknown gate rule '${String(gate)}'`);
   }
-}
-
-/**
- * Execute a derived {@link TransactionPlan} as ONE real SQLite transaction with gate-first
- * short-circuit. Accepts a raw {@link SqliteDb} (wrapped via {@link contextForDriver}) or a full
- * {@link ExecutionContext}. The transaction derives a tx-scoped ctx (`withConnection(conn, true)`)
- * that PINS one connection so BEGIN, every body statement, and COMMIT/ROLLBACK all run on the SAME
- * connection (§3, per-execution ownership). For the single-DB SQLite driver the pinned connection
- * is the sole connection; the ownership shows its teeth on the pooled async path
- * ({@link import('../exec-context').withTransactionAsync}), which this mirrors.
- */
-export function executeTransaction(db: DbOrContext, plan: TransactionPlan, input: Scope, dialect: MakeSQLDialect = 'sqlite'): TransactionResult {
-  const outer = asContext(db);
-  const executed: string[] = [];
-  const scope: Scope = { ...input };
-  let entity: Record<string, unknown> | null = null;
-  // Batch mode (createMany/updateMany/deleteMany): a gate-free, ref-free plan (no `$.entity`, no
-  // gates, no `$.ref` binds) — a pure list of body statements. Only THEN accumulate each body
-  // statement's RETURNING rows in order (a composite Command also has `entityFrom:null` but carries
-  // `binds`/gates and is NOT batch — its written rows flow via scope refs, not `returnedRows`).
-  const isBatch =
-    plan.entityFrom === null &&
-    plan.statements.every((s) => s.gate === undefined && s.binds === undefined && s.role === 'body');
-  const returnedRows: Record<string, unknown>[][] = [];
-
-  // The tx boundary is the sync `ctx.transaction` ({@link withTransactionSync}: pin conn → BEGIN →
-  // body → COMMIT/ROLLBACK, inside `runInTransactionScope`). The body runs the derived plan's
-  // statements in order via the `executeSQL` transport leaf ({@link execStatement}); a gate
-  // short-circuit signals `{commit:false}` so the boundary ROLLBACKs but still returns the reason.
-  try {
-    return withTransactionSync<TransactionResult>(
-      outer,
-      (ctx): { commit: boolean; value: TransactionResult } => {
-        for (const stmt of plan.statements) {
-          const result = execStatement(ctx, stmt.op, scope, dialect);
-          executed.push(stmt.id);
-
-          if (stmt.gate !== undefined) {
-            const reason = gateShortCircuit(stmt.gate, result);
-            if (reason !== null) {
-              return { commit: false, value: { committed: false, shortCircuit: { statementId: stmt.id, reason }, entity: null, executed } };
-            }
-          }
-
-          if (stmt.id === plan.entityFrom) {
-            entity = result.rows.length > 0 ? result.rows[0] : null;
-            if (entity !== null) scope[ENTITY_ROOT] = entity as unknown as Value;
-          }
-          if (stmt.binds !== undefined && result.rows.length > 0) {
-            scope[stmt.binds] = result.rows[0] as unknown as Value;
-          }
-          if (isBatch && stmt.role === 'body' && result.rows.length > 0) returnedRows.push(result.rows);
-        }
-        return { commit: true, value: { committed: true, entity, executed, ...(returnedRows.length > 0 ? { returnedRows } : {}) } };
-      },
-      dialect,
-    );
-  } catch (e) {
-    throw mapSqliteError(e);
-  }
-}
-
-/**
- * A counting {@link SqliteDb} wrapper: forwards every call to the wrapped driver but records
- * each PREPARED SQL string. Tests use it to PROVE gate-first short-circuit.
- */
-export function countingDriver(db: SqliteDb): { db: SqliteDb; prepared: string[] } {
-  const prepared: string[] = [];
-  const wrapped: SqliteDb = {
-    prepare(sql: string) {
-      prepared.push(sql);
-      return db.prepare(sql);
-    },
-  };
-  return { db: wrapped, prepared };
 }
 
 /** Render one statement op to its dialect SQL text + params (exposed for golden tests). */

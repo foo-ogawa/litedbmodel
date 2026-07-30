@@ -327,6 +327,18 @@ mod imp {
         label,
         ts
     });
+    impl_to_compare!(pg::CreateDocRow { doc_id, title });
+    impl_to_compare!(my::CreateDocRow { doc_id, title });
+    impl_to_compare!(pg::CreateLineRow {
+        line_no,
+        order_id,
+        sku
+    });
+    impl_to_compare!(my::CreateLineRow {
+        line_no,
+        order_id,
+        sku
+    });
     impl_to_compare!(pg::CreateTagsReturningRow { id, label });
     impl_to_compare!(my::CreateTagsReturningRow { id, label });
     impl_to_compare!(pg::RelabelTagsReturningRow { id, label });
@@ -528,6 +540,26 @@ mod imp {
                     pg::removePostReturning(id).map(|r| r.to_compare())
                 } else {
                     my::removePostReturning(id).map(|r| r.to_compare())
+                }
+            }
+            "createDoc" => {
+                let (d, t) = (in_str(input, "docId"), in_str(input, "title"));
+                if pg {
+                    pg::createDoc(d, t).map(|r| r.to_compare())
+                } else {
+                    my::createDoc(d, t).map(|r| r.to_compare())
+                }
+            }
+            "createLine" => {
+                let (o, l, s) = (
+                    in_i64(input, "orderId"),
+                    in_i64(input, "lineNo"),
+                    in_str(input, "sku"),
+                );
+                if pg {
+                    pg::createLine(o, l, s).map(|r| r.to_compare())
+                } else {
+                    my::createLine(o, l, s).map(|r| r.to_compare())
                 }
             }
             "restatusPostsReturning" => {

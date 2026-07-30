@@ -20,7 +20,7 @@
   1. **TS 直接利用（eager）** — 公開 API 呼び出しを**同一コンパイラで動的に内部 IR 化**（キャッシュ）→ 共通 Runtime で実行（別解釈系は持たない）。
   2. **SCP 宣言ブロック** — **`SemanticBehavior` クラスで Behavior を宣言**（effect 非依存。Query/Command は SCP の責務外で component graph から CQRS 層が導出）→ **ビルド時に事前コンパイル**して IR（dialect SQL + 動的 condition の fragment）/ 各言語コードへ変換。
   3. **多言語利用** — publish された IR を各言語 runtime から呼ぶ（同一 IR）。
-- **Relation は Read 系だけでなく Write 系（write-time relations）**を持つ（graphddb 同型）。書込時に関連エンティティの整合・cascade・edge・counter・outbox を**1つの SQL トランザクションに導出**する。
+- **Relation は Read 系**（宣言 select / lazy の staged batch）。書込は単文の宣言エンドポイント（create/update/delete）とバッチ（createMany/updateMany/deleteMany）で、複数文をまたぐ原子性は利用者の `DBModel.transaction(fn)` 手続き境界（read-your-writes + rollback）で表現する（§6）。
 - **多言語 CQRS 対応**: 公開境界は CQRS（Query/Command）契約のみ。TS/Python/Rust/Go/PHP の薄い runtime が**同一 IR から同一 SQL・同一結果**を出す（conformance）。
 - リファクタ後は **v2.0 系**（破壊的変更）。v1.x は別ブランチ（`v1.x`）で保全済み。
 
@@ -75,9 +75,9 @@ export class UserModel extends DBModel {
 export const User = UserModel.asModel();
 ```
 
-### 2.2 リレーション定義（Read 系 + Write 系）
+### 2.2 リレーション定義（Read 系）
 
-Read 系（従来の関連取得）に加え、**Write 系（write-time relations）をオプションで**持つ（graphddb 同型・§6）。
+Read 系（関連取得）は宣言 select（`with:{...}`）または lazy（アクセス時解決）で表現する（§5）。
 
 ```ts
 @model('posts')
@@ -88,20 +88,6 @@ export class PostModel extends DBModel {
 
   // ── Read-side（宣言 select または lazy）──
   @belongsTo(() => [Post.author_id, User.id]) declare author: User | null;
-
-  // ── Write-side（書込時リレーション・任意）──
-  static readonly writes = entityWrites<PostModel>((w) => ({
-    create: w.lifecycle({
-      requires:    [ w.exists(() => User, { id: '$.input.author_id' }) ], // 参照整合
-      unique:      [ w.unique({ name: 'title_per_author', scope: ['$.input.author_id'], fields: ['$.input.title'] }) ],
-      derive:      [ w.increment(() => User, { id: '$.input.author_id' }, 'post_count', +1) ], // cascade counter
-      emits:       [ w.event('PostCreated', { postId: '$.entity.id', userId: '$.input.author_id' }) ], // outbox
-      idempotency: w.idempotentBy('$.input.request_id'),
-    }),
-    remove: w.lifecycle({
-      derive: [ w.increment(() => User, { id: '$.entity.author_id' }, 'post_count', -1) ],
-    }),
-  }));
 }
 ```
 
@@ -111,16 +97,22 @@ export class PostModel extends DBModel {
 **必ず「Authoring Parse → 内部 IR」という単一のコンパイル経路**を通り（AOT と**同一ロジック**）、
 生成された内部 IR を**共通 Runtime**で即時実行する（結果はキャッシュ可）。
 「eager だけ別の解釈系（メタデータを直に解釈する経路）」は持たない — **内部 IR 以降は全モードで完全に共通**（§9）。
-書込は write-time relations があれば自動で1トランザクションに束ねられる（§6）。
+複数文をまたぐ書込の原子性は利用者が `DBModel.transaction(fn)` で明示的に束ねる（§6）。
 
 ```ts
 // Read（eager）
 const post = await Post.findById(1, { with: { author: true } }); // 宣言 select → staged batch + assembly
 const author = await post.author;                                // lazy（宣言しなければアクセス時解決・§9）
 
-// Write（write-time relations が自動導出 → 1 tx）
-await Post.create({ author_id: 7, title: 'Hello', request_id: 'r-123' });
-//   → BEGIN; (author 存在チェック); (unique guard); INSERT post; UPDATE users.post_count+1; INSERT outbox; (idempotency); COMMIT
+// Write（単文）
+await Post.create({ author_id: 7, title: 'Hello' });
+
+// Write（複数文を1トランザクションに束ねる = 利用者の手続き境界・§6）
+await DBModel.transaction(async () => {
+  const author = await User.findOne([[User.id, 7]]); // 前提の読み（read-your-writes 可）
+  if (!author) throw new Error('author not found');   // 短絡は throw で（tx 全体が rollback）
+  await Post.create({ author_id: author.id, title: 'Hello' });
+});
 ```
 
 ### 2.4 SCP 宣言ブロック（SCP 語彙で宣言 → ビルド時事前コンパイル → IR/TS コード）
@@ -154,9 +146,9 @@ class PostBehaviors extends SemanticBehavior {          // または: @behavior 
     return { posts, authors };                          // ← Output Port（ルートの出力）
   }
 
-  CreatePost($: In<{ authorId: number; title: string; requestId: string }>) {
+  CreatePost($: In<{ authorId: number; title: string }>) {
     return Insert(Post, { values: { author_id: $.in.authorId, title: $.in.title },
-                          onWrite: Post.writes.create, returning: ['id', 'title'] });
+                          returning: ['id', 'title'] });
   }
 
   private helper(rows: Post[]) { return rows.filter((r) => !r.deleted); } // private → publish されない
@@ -197,7 +189,7 @@ posts, _ := postQueries.Search(ctx, db, SearchInput{AuthorID: 7, Since: "2026-01
   ├─ TS 直接利用（eager）……… Authoring Parse → Component-graph IR → Handler（Native Interpret）
   └─ SCP 宣言ブロック（マーク付き関数）……… Component-graph IR（AOT）
         ↓ Backend Compile（litedbmodel）
-     SQL IR = dialect SQL テキスト + fragment 木 + param slots(Expression IR) + assembly + relation ops + transaction plan
+     SQL IR = dialect SQL テキスト + fragment 木 + param slots(Expression IR) + assembly + relation ops
         ↓
      薄い Runtime（TS/Python/Rust/Go）: validate → 断片選択(SKIP) → 配列展開 → Expression 評価 → bind → SQL 実行 → assembly
 ```
@@ -283,41 +275,22 @@ litedbmodel は SQL バックエンド consumer なので、**列型は SQL 型�
 - ホストオブジェクト化は graphddb と同形の `hydrate` factory（feasibility §9）。
 - JOIN は Backend Compile が特定形状に対して選ぶ**最適化**であって、意味論の既定ではない。
 
-## 6. Relation — Write 系（write-time relations）
+## 6. 書込 — 単文エンドポイント / バッチ / 手続きトランザクション
 
-書込時に関連エンティティへ波及する宣言。graphddb の `entityWrites`/`edgeWrites` を **SQL 慣用へ翻訳**し、**1つの SQL トランザクションに導出**する。
+書込は宣言エンドポイントとして表現する。ライブラリが**関連への波及を自動導出することはしない**（波及が要るなら利用者が書く）。
 
-| 語彙 | 意味 | SQL への導出 |
-|---|---|---|
-| `requires` | 参照整合（関連が存在すること） | 先行 `SELECT ... FOR SHARE` / 存在ガード（FK 制約があれば併用） |
-| `unique` | フィールド一意性 | `UNIQUE` 制約 or ガード行 `INSERT ... ON CONFLICT DO NOTHING`＋affected 検査 |
-| `edges` | 関連の書込側（多対多の中間表、1対多の FK 設定） | 中間表 `INSERT`/`DELETE`（M:N）/ FK 列 `UPDATE`（1:N） |
-| `derive` | 関連の派生値更新（counter 等） | cascade `UPDATE ... SET c = c ± n WHERE ...` |
-| `emits` | ドメインイベント | outbox テーブルへ `INSERT`（同一 tx） |
-| `idempotency` | クライアントトークン重複防止 | idempotency テーブルへ `INSERT`（`UNIQUE` 違反で重複検出） |
+- **単文書込** — `create` / `update` / `delete`（宣言エンドポイント）。方言別 SQL は makesql で焼き込まれ、`RETURNING` を宣言すれば書込んだ行を返す（MySQL は RETURNING 非対応のため接続アダプタが宣言 PK で再 SELECT する）。
+- **バッチ書込** — `createMany` / `updateMany` / `deleteMany`。1論理オペレーションが N 個のグループ文を生む。バッチ SQL は v1 ビルダから byte-copy し、gate-free の transaction plan（`entityFrom` null・全文 `body`）へ落として全言語 runtime が同一の per-statement tx ループで実行する。
+- **複数文をまたぐ原子性** — 利用者の `DBModel.transaction(fn)` 手続き境界で束ねる。境界内は read-your-writes（未コミット行が同一接続で見える）と rollback を保証するので、「前提の読み → その結果に依存する書込 → 例外での短絡」は**手で書く**（宣言的な gate-first / tx-DAG 導出は持たない）。
 
-**Command 導出（graphddb mutation-derivation 同型）:** `CreatePost($: Command<...>) { return Insert(Post, { onWrite: Post.writes.create, ... }) }`（§2.4）の宣言的 intent から、コンパイラが `Post.writes.create` を展開して**順序付き多文トランザクション**を導出:
-
+```ts
+await DBModel.transaction(async () => {
+  const author = await User.findOne([[User.email, 'a@x.com']]); // 前提の読み
+  if (!author) throw new Error('author not found');              // 短絡 = throw → 全体 rollback
+  const post = await Post.create({ author_id: author.id, title: 't' }, { returning: true });
+  await Comment.create({ post_id: post.id, body: 'c' });         // 直前の書込の id に依存
+});
 ```
-BEGIN;
-  -- Gate First（意味が変わらない限り早期に打ち切り。原案「Gate First」）
-  requires:    SELECT 1 FROM users WHERE id = :author_id;          -- 無ければ即 fail・ROLLBACK
-  idempotency: INSERT INTO idem(token) VALUES(:request_id);        -- 重複なら短絡
-  unique:      INSERT INTO uniq(...) ON CONFLICT DO NOTHING; ...   -- 衝突検査
-  -- 本体
-  INSERT INTO posts(author_id,title) VALUES(:author_id,:title) RETURNING id;
-  derive:  UPDATE users SET post_count = post_count + 1 WHERE id = :author_id;
-  emits:   INSERT INTO outbox(type,payload) VALUES('PostCreated', :payload);
-COMMIT;
-```
-
-- **Transaction は公開仕様にしない**（原案）。公開されるのは Access Pattern（Command）のみ。tx DAG / 実行順（gate-first）は**導出される**。
-- 実行順・gate-first・依存は Execution Plan に反映。多言語 runtime は同一計画を honor（再導出しない）。
-- 多対多や nested write（親作成と同時に子作成）は `edges`/追加 write で表現し、同一 tx にまとめる。
-
-> **難所（正直な評価・§13）:** SQL の tx 導出は DynamoDB の `TransactWriteItems`（≤25・read-your-writes 無し）と違い、対話的・ロック・read-after-write・gate-first 短絡を伴う。初期は「単文 Command + 明示 write-time relations（固定順）」に限定し、複雑な DAG 導出は後段（feasibility §7 と整合）。
->
-> **後段の状況（WS8a・#28・§14 GA）:** 複合 write（複数 base write / nested write）の **tx DAG 導出**を実装済み。各 write は名前を持ち、後続 write は先行 write の RETURNING 行を `$.ref.<writeName>.<field>` で参照する（例: 子 INSERT の `post_id` = 親の RETURNING id）。導出はデータ依存グラフ（statement → 参照する write）＋ gate-first 制約（全 gate は全 body/derive/edge/emit に先行）を構築し、**トポロジカルソート**（安定した宣言順タイブレーク → 同一入力で byte-identical な SQL 列）で 1 tx の順序付き計画へ落とす。依存サイクル / 宙ぶらりんの `$.ref` / RETURNING 欠落は loud-reject（暗黙のフォールバック無し）。導出された DAG は純 JSON として §8 bundle に載り、各 statement の `binds` 名で RETURNING 行を scope に束縛するだけで 5 言語 runtime がそのまま実行する（再導出しない）。gate-first は DAG 全体で有効（任意 gate の短絡が下流の body/derive/edge/emit をすべて打ち切る）。
 
 ## 7. SCP 宣言ブロック → IR コンパイル
 
@@ -347,7 +320,7 @@ Component-graph IR（bc 汎用構造）の **litedbmodel Catalog** ノードが�
 - **params 配列**（`?` と 1:1）: 各要素は ①入力参照 `prop.x` ②wire 参照 `{result.field}` ③**オペレータ IR** `{add:[prop.y,1]}`（bc Expression IR・閉集合）。
 - **assembly 仕様**: 行 → 論理モデル（relation items 付与位置含む）。
 - **relation ops**: モデル宣言から導出した全 relation バッチ SQL（方言別・§5）。
-- **transaction plan**: write-time relations の順序付き文 + gate-first + 依存（§6）。
+- **batch plan**: バッチ書込（createMany/updateMany/deleteMany）の gate-free な順序付き文（§6）。
 
 ```jsonc
 // 例: search クエリの Select ノード（Backend Compile 後）
@@ -413,17 +386,16 @@ feasibility §9 で確定済み。要点のみ:
 
 1. **SQL IR / lower 可能サブセットの線引き**（最重要・feasibility §4/§6）: SQL-first の自由度 と 多言語決定的 lower は部分対立。Raw SQL は「不透明だが契約付き（I/O・Effect 宣言、SQL 文字列は方言別同梱、コンパイルしない）」に隔離。
 2. **オペレータ/断片の決定性**: SKIP 合成順序・AND/OR 構造木・空 WHERE 縮退・`?`→`$N`・配列展開を多言語 byte 一致で仕様化（bc `expression-ir.md` の語彙を共有）。
-3. **write-time relations の tx 導出 + gate-first**（§6）: 研究的。初期は固定順・単文 Command 先行。
-4. **意味的等価の限界**: SQL テキスト一致でも DB 挙動差（NULL 順序・照合・timezone・浮動小数）。conformance は「同一 SQL + 同一 assembly」を保証し、DB 差は方言コンパイル時規約（`ORDER BY ... NULLS` 強制等）で潰せる範囲に線引き。
+3. **意味的等価の限界**: SQL テキスト一致でも DB 挙動差（NULL 順序・照合・timezone・浮動小数）。conformance は「同一 SQL + 同一 assembly」を保証し、DB 差は方言コンパイル時規約（`ORDER BY ... NULLS` 強制等）で潰せる範囲に線引き。
 
 ## 14. 段階化 / ロードマップ
 
 bc の migration（litedbmodel は Phase 4 = 統合 generator + C2 実証で参入）と bc issue #1（RDB PoC）に整合。
 
 1. **v2 α**: **SQLite + TS**・Query 契約のみで縦1本（公開 API/マーク付き関数 → Component-graph IR → Backend Compile → 薄い Runtime）。golden = 同一入力→同一 SQL + 同一結果。動的展開仕様（SKIP/fragment 木）を確定。← bc issue #1 の本体。
-2. **v2 β**: Postgres/MySQL 方言追加（SqlBuilder 資産を IR 消費型へ移植）。write-side（単文 Command + write-time relations）。typed-object + hydrate + lazy 確定。
+2. **v2 β**: Postgres/MySQL 方言追加（SqlBuilder 資産を IR 消費型へ移植）。write-side（単文 create/update/delete + バッチ）。typed-object + hydrate + lazy 確定。
 3. **v2 RC**: Python/Rust/Go/PHP runtime + conformance（言語軸）。Rust は現 `litedbmodel.rs` runtime を monorepo `rust/` へ移行。codegen（bc 共有 generator に SQL catalog 供給）。
-4. **v2.0 GA**: 多言語 CQRS 公開・**5レジストリ** publish 基盤（npm/crates.io/PyPI/Go-tag/Packagist、behavior-contracts 方式）。write-time tx DAG 導出・gate-first 最適化。
+4. **v2.0 GA**: 多言語 CQRS 公開・**5レジストリ** publish 基盤（npm/crates.io/PyPI/Go-tag/Packagist、behavior-contracts 方式）。
 
 ## 15. バージョニング / エコシステム位置づけ
 

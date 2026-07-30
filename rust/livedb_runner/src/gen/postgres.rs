@@ -371,6 +371,23 @@ pub struct TypedRowsRow {
 #[rustfmt::skip]
 #[derive(Clone, Default)]
 #[allow(dead_code)]
+pub struct CreateDocRow {
+    pub doc_id: Option<String>, // "doc_id"
+    pub title: Option<String>, // "title"
+}
+
+#[rustfmt::skip]
+#[derive(Clone, Default)]
+#[allow(dead_code)]
+pub struct CreateLineRow {
+    pub line_no: Option<f64>, // "line_no"
+    pub order_id: Option<f64>, // "order_id"
+    pub sku: Option<String>, // "sku"
+}
+
+#[rustfmt::skip]
+#[derive(Clone, Default)]
+#[allow(dead_code)]
 pub struct CreateTagsReturningRow {
     pub id: Option<f64>, // "id"
     pub label: Option<String>, // "label"
@@ -2333,6 +2350,130 @@ pub fn removeTags(
 }
 
 #[rustfmt::skip]
+// createDoc — the STRUCT-RETURNING combined read (bc#77/#87/#94): the fully
+// de-plumbed CONCRETE path. At each covered node's execution point it calls the op-agnostic leaf
+// TRANSPORT symbol DIRECTLY (the node's port fields spread — no per-node handler indirection) and
+// de-boxes the returned wire INLINE (match wire.as_*() { … } fully unrolled — no decode helper) into
+// the node's outType struct cell — no boxed handler result, no generic enum crossing, no dispatch on a dynamic value on the covered plane. Node
+// results are typed struct cells; a relation child reads the parent's REAL struct result via
+// direct field access (child-present decision from the real parent value — relation /
+// connection converge). A real-concurrency stage (bc#87) is static parallel orchestration —
+// scoped worker threads (bounded by the static plan.concurrency) call the transport; preflight +
+// interpret are committed in ascending index order so the value / op multiset / failure
+// precedence byte-match run_behavior. The output is a typed struct/value assembled by struct
+// literal + field access — the consumer keeps it native.
+pub fn createDoc(
+    docId: String,
+    title: String,
+) -> Result<Vec<CreateDocRow>, BehaviorError> {
+    let cell_n0: RefCell<Vec<CreateDocRow>> = RefCell::new(Default::default());
+    let produced_n0 = std::cell::Cell::new(false);
+    let _ = &produced_n0;
+    // ── op 'n0' (executeSQL) ──
+    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("opts"), match Some(ExecOptions { db: Option::<String>::None, guard: Option::<CapGuard>::None, whereDynamic: Option::<DynamicWherePlan>::None, write: Some(WriteMode { returning: true }) }) { Some(ov0) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("db"), match ov0.db { Some(ov1) => WireValue::Str(ov1.into()), _ => WireValue::Null }), (Cow::Borrowed("guard"), match ov0.guard { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("limit"), WireValue::Int(ov1.limit)), (Cow::Borrowed("model"), match ov1.model { Some(ov2) => WireValue::Str(ov2.into()), _ => WireValue::Null }), (Cow::Borrowed("relation"), WireValue::Str(ov1.relation.into()))] }), _ => WireValue::Null }), (Cow::Borrowed("whereDynamic"), match ov0.whereDynamic { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("frags"), WireValue::List(WireList { items: ov1.frags.into_iter().map(|e2| WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("params"), WireValue::List(WireList { items: e2.params.into_iter().map(|e4| match e4 { Some(ov5) => ov5, _ => WireValue::Null }).collect() })), (Cow::Borrowed("skipped"), WireValue::Bool(e2.skipped)), (Cow::Borrowed("sql"), WireValue::Str(e2.sql.into()))] })).collect() }))] }), _ => WireValue::Null }), (Cow::Borrowed("write"), match ov0.write { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("returning"), WireValue::Bool(ov1.returning))] }), _ => WireValue::Null })] }), _ => WireValue::Null }), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::Str(docId.into()), WireValue::Str(title.into())]; __v } })), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("INSERT INTO conf_docs (doc_id, title) VALUES (?, ?) RETURNING doc_id, title")))] };
+    let wire_n0 = match execute_sql(payload_n0) {
+        Ok(r) => r,
+        Err(e) => return Err(op_failed("n0", "fail", e)),
+    };
+    *cell_n0.borrow_mut() = match probe_list_at(Some(wire_n0)) {
+        Probe::Got(l0) => {
+            let mut acc0 = Vec::with_capacity(l0.items.len());
+            for e0 in l0.items {
+                acc0.push(match probe_row_at(Some(e0)) {
+                    Probe::Got(mut sub1) => CreateDocRow {
+                        doc_id: match probe_string_at(sub1.take("doc_id")) {
+                            Probe::Got(v) => Some(v.into_owned()),
+                            Probe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("CreateDocRow", "doc_id", "opt(string)", actual_wire_type, raw_value)),
+                            Probe::Null { .. } | Probe::Absent => None,
+                        },
+                        title: match probe_string_at(sub1.take("title")) {
+                            Probe::Got(v) => Some(v.into_owned()),
+                            Probe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("CreateDocRow", "title", "opt(string)", actual_wire_type, raw_value)),
+                            Probe::Null { .. } | Probe::Absent => None,
+                        },
+                    },
+                    Probe::Wrong { actual_wire_type, raw_value }
+                    | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n0", "n0", "obj{doc_id:opt(string),title:opt(string)}", actual_wire_type, raw_value)),
+                    Probe::Absent => return Err(de_missing_field("n0", "n0", "obj{doc_id:opt(string),title:opt(string)}")),
+                });
+            }
+            acc0
+        },
+        Probe::Wrong { actual_wire_type, raw_value }
+        | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n0", "n0", "arr(obj{doc_id:opt(string),title:opt(string)})", actual_wire_type, raw_value)),
+        Probe::Absent => return Err(de_missing_field("n0", "n0", "arr(obj{doc_id:opt(string),title:opt(string)})")),
+    };
+    produced_n0.set(true);
+    let __out = cell_n0.take();
+    Ok(__out)
+}
+
+#[rustfmt::skip]
+// createLine — the STRUCT-RETURNING combined read (bc#77/#87/#94): the fully
+// de-plumbed CONCRETE path. At each covered node's execution point it calls the op-agnostic leaf
+// TRANSPORT symbol DIRECTLY (the node's port fields spread — no per-node handler indirection) and
+// de-boxes the returned wire INLINE (match wire.as_*() { … } fully unrolled — no decode helper) into
+// the node's outType struct cell — no boxed handler result, no generic enum crossing, no dispatch on a dynamic value on the covered plane. Node
+// results are typed struct cells; a relation child reads the parent's REAL struct result via
+// direct field access (child-present decision from the real parent value — relation /
+// connection converge). A real-concurrency stage (bc#87) is static parallel orchestration —
+// scoped worker threads (bounded by the static plan.concurrency) call the transport; preflight +
+// interpret are committed in ascending index order so the value / op multiset / failure
+// precedence byte-match run_behavior. The output is a typed struct/value assembled by struct
+// literal + field access — the consumer keeps it native.
+pub fn createLine(
+    orderId: i64,
+    lineNo: i64,
+    sku: String,
+) -> Result<Vec<CreateLineRow>, BehaviorError> {
+    let cell_n0: RefCell<Vec<CreateLineRow>> = RefCell::new(Default::default());
+    let produced_n0 = std::cell::Cell::new(false);
+    let _ = &produced_n0;
+    // ── op 'n0' (executeSQL) ──
+    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("opts"), match Some(ExecOptions { db: Option::<String>::None, guard: Option::<CapGuard>::None, whereDynamic: Option::<DynamicWherePlan>::None, write: Some(WriteMode { returning: true }) }) { Some(ov0) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("db"), match ov0.db { Some(ov1) => WireValue::Str(ov1.into()), _ => WireValue::Null }), (Cow::Borrowed("guard"), match ov0.guard { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("limit"), WireValue::Int(ov1.limit)), (Cow::Borrowed("model"), match ov1.model { Some(ov2) => WireValue::Str(ov2.into()), _ => WireValue::Null }), (Cow::Borrowed("relation"), WireValue::Str(ov1.relation.into()))] }), _ => WireValue::Null }), (Cow::Borrowed("whereDynamic"), match ov0.whereDynamic { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("frags"), WireValue::List(WireList { items: ov1.frags.into_iter().map(|e2| WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("params"), WireValue::List(WireList { items: e2.params.into_iter().map(|e4| match e4 { Some(ov5) => ov5, _ => WireValue::Null }).collect() })), (Cow::Borrowed("skipped"), WireValue::Bool(e2.skipped)), (Cow::Borrowed("sql"), WireValue::Str(e2.sql.into()))] })).collect() }))] }), _ => WireValue::Null }), (Cow::Borrowed("write"), match ov0.write { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("returning"), WireValue::Bool(ov1.returning))] }), _ => WireValue::Null })] }), _ => WireValue::Null }), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::Int(lineNo), WireValue::Int(orderId), WireValue::Str(sku.into())]; __v } })), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("INSERT INTO conf_lines (line_no, order_id, sku) VALUES (?, ?, ?) RETURNING order_id, line_no, sku")))] };
+    let wire_n0 = match execute_sql(payload_n0) {
+        Ok(r) => r,
+        Err(e) => return Err(op_failed("n0", "fail", e)),
+    };
+    *cell_n0.borrow_mut() = match probe_list_at(Some(wire_n0)) {
+        Probe::Got(l0) => {
+            let mut acc0 = Vec::with_capacity(l0.items.len());
+            for e0 in l0.items {
+                acc0.push(match probe_row_at(Some(e0)) {
+                    Probe::Got(mut sub1) => CreateLineRow {
+                        line_no: match probe_float_at(sub1.take("line_no")) {
+                            Probe::Got(v) => Some(v),
+                            Probe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("CreateLineRow", "line_no", "opt(float)", actual_wire_type, raw_value)),
+                            Probe::Null { .. } | Probe::Absent => None,
+                        },
+                        order_id: match probe_float_at(sub1.take("order_id")) {
+                            Probe::Got(v) => Some(v),
+                            Probe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("CreateLineRow", "order_id", "opt(float)", actual_wire_type, raw_value)),
+                            Probe::Null { .. } | Probe::Absent => None,
+                        },
+                        sku: match probe_string_at(sub1.take("sku")) {
+                            Probe::Got(v) => Some(v.into_owned()),
+                            Probe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("CreateLineRow", "sku", "opt(string)", actual_wire_type, raw_value)),
+                            Probe::Null { .. } | Probe::Absent => None,
+                        },
+                    },
+                    Probe::Wrong { actual_wire_type, raw_value }
+                    | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n0", "n0", "obj{line_no:opt(float),order_id:opt(float),sku:opt(string)}", actual_wire_type, raw_value)),
+                    Probe::Absent => return Err(de_missing_field("n0", "n0", "obj{line_no:opt(float),order_id:opt(float),sku:opt(string)}")),
+                });
+            }
+            acc0
+        },
+        Probe::Wrong { actual_wire_type, raw_value }
+        | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n0", "n0", "arr(obj{line_no:opt(float),order_id:opt(float),sku:opt(string)})", actual_wire_type, raw_value)),
+        Probe::Absent => return Err(de_missing_field("n0", "n0", "arr(obj{line_no:opt(float),order_id:opt(float),sku:opt(string)})")),
+    };
+    produced_n0.set(true);
+    let __out = cell_n0.take();
+    Ok(__out)
+}
+
+#[rustfmt::skip]
 // createTagsReturning — the STRUCT-RETURNING combined read (bc#77/#87/#94): the fully
 // de-plumbed CONCRETE path. At each covered node's execution point it calls the op-agnostic leaf
 // TRANSPORT symbol DIRECTLY (the node's port fields spread — no per-node handler indirection) and
@@ -2514,4 +2655,4 @@ pub fn removeTagsReturning(
 // 1:1 entry <method>(<positional params>) -> Result<T, BehaviorError>: a STRUCT return (the consumer calls
 // it with the authored args + supplies the op-agnostic leaf transport symbols the entry calls).
 // See INTEGRATION.md §6.
-pub const COMPONENT_NAMES_NATIVE_RAW: [&str; 25] = ["posts", "postsTop", "page", "postsByIds", "feed", "pagedFeed", "usersWithPosts", "postsWithAuthor", "usersWithCappedPosts", "usersWithUncappedPosts", "usersWithTopPosts", "createPost", "renamePost", "removePost", "createPostReturning", "renamePostReturning", "removePostReturning", "restatusPostsReturning", "removePostsByAuthorReturning", "typedRows", "createTags", "removeTags", "createTagsReturning", "relabelTagsReturning", "removeTagsReturning"];
+pub const COMPONENT_NAMES_NATIVE_RAW: [&str; 27] = ["posts", "postsTop", "page", "postsByIds", "feed", "pagedFeed", "usersWithPosts", "postsWithAuthor", "usersWithCappedPosts", "usersWithUncappedPosts", "usersWithTopPosts", "createPost", "renamePost", "removePost", "createPostReturning", "renamePostReturning", "removePostReturning", "restatusPostsReturning", "removePostsByAuthorReturning", "typedRows", "createTags", "removeTags", "createDoc", "createLine", "createTagsReturning", "relabelTagsReturning", "removeTagsReturning"];

@@ -4,17 +4,17 @@
 # native dict literal and handed to the EXISTING runtime core (run_behavior) —
 # no execution logic is generated. Handlers are ALWAYS injected at the boundary
 # (IR + {effects,config,hooks}); they are never generated.
-# irFingerprint: fnv1a64:eb29aa8c79609e35
+# irFingerprint: fnv1a64:a7df419c2c670d5f
 from behavior_contracts import SPEC_VERSIONS, ProvenanceError, load_compiled_ir, run_behavior
 
 # Spec versions baked at generation time (fail-closed constant comparison at load).
 EXPECTED_SPEC_VERSIONS = {"behavior": 6, "expression": 2, "plan": 1}
 
 # FNV-1a 64 fingerprint of the source portable IR (canonical_json discipline, #208).
-IR_FINGERPRINT = "fnv1a64:eb29aa8c79609e35"
+IR_FINGERPRINT = "fnv1a64:a7df419c2c670d5f"
 
 # Component names exposed by bind(), in IR declaration order.
-COMPONENT_NAMES = ("posts", "postsTop", "page", "postsByIds", "feed", "pagedFeed", "usersWithPosts", "postsWithAuthor", "usersWithCappedPosts", "usersWithUncappedPosts", "usersWithTopPosts", "createPost", "renamePost", "removePost", "createPostReturning", "renamePostReturning", "removePostReturning", "restatusPostsReturning", "removePostsByAuthorReturning", "typedRows", "createTags", "removeTags", "createTagsReturning", "relabelTagsReturning", "removeTagsReturning")
+COMPONENT_NAMES = ("posts", "postsTop", "page", "postsByIds", "feed", "pagedFeed", "usersWithPosts", "postsWithAuthor", "usersWithCappedPosts", "usersWithUncappedPosts", "usersWithTopPosts", "createPost", "renamePost", "removePost", "createPostReturning", "renamePostReturning", "removePostReturning", "restatusPostsReturning", "removePostsByAuthorReturning", "typedRows", "createTags", "removeTags", "createDoc", "createLine", "createTagsReturning", "relabelTagsReturning", "removeTagsReturning")
 
 # The portable component-graph IR *document*, embedded as a native dict literal (no JSON parse at
 # runtime). It carries no provenance token — the load-time load_compiled_ir() below verifies the baked
@@ -3861,6 +3861,323 @@ IR_DOC = {
           "id": "n0",
           "outType": {
             "arr": {
+              "name": "CreateDocRow",
+              "obj": {
+                "doc_id": {
+                  "opt": "string"
+                },
+                "title": {
+                  "opt": "string"
+                }
+              }
+            }
+          },
+          "portSchemas": {
+            "opts": {
+              "elemType": {
+                "name": "ExecOptions",
+                "obj": {
+                  "db": {
+                    "opt": "string"
+                  },
+                  "guard": {
+                    "opt": {
+                      "name": "CapGuard",
+                      "obj": {
+                        "limit": "int",
+                        "model": {
+                          "opt": "string"
+                        },
+                        "relation": "string"
+                      }
+                    }
+                  },
+                  "whereDynamic": {
+                    "opt": {
+                      "name": "DynamicWherePlan",
+                      "obj": {
+                        "frags": {
+                          "arr": {
+                            "name": "DynamicWhereFrag",
+                            "obj": {
+                              "params": {
+                                "arr": {
+                                  "opt": "value"
+                                }
+                              },
+                              "skipped": "bool",
+                              "sql": "string"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "write": {
+                    "opt": {
+                      "name": "WriteMode",
+                      "obj": {
+                        "returning": "bool"
+                      }
+                    }
+                  }
+                }
+              },
+              "required": False,
+              "type": "object"
+            },
+            "params": {
+              "elemType": "value",
+              "required": True,
+              "type": "array"
+            },
+            "sql": {
+              "required": True,
+              "type": "string"
+            }
+          },
+          "ports": {
+            "opts": {
+              "obj": {
+                "db": None,
+                "guard": None,
+                "whereDynamic": None,
+                "write": {
+                  "obj": {
+                    "returning": True
+                  }
+                }
+              }
+            },
+            "params": {
+              "arr": [
+                {
+                  "ref": [
+                    "docId"
+                  ]
+                },
+                {
+                  "ref": [
+                    "title"
+                  ]
+                }
+              ]
+            },
+            "sql": "INSERT INTO conf_docs (doc_id, title) VALUES (?, ?) RETURNING doc_id, title /*scp:pk=doc_id;ai=*/"
+          }
+        }
+      ],
+      "inputPorts": {
+        "docId": {
+          "required": True,
+          "type": "string"
+        },
+        "title": {
+          "required": True,
+          "type": "string"
+        }
+      },
+      "name": "createDoc",
+      "output": {
+        "ref": [
+          "n0"
+        ]
+      },
+      "plan": {
+        "concurrency": 16,
+        "groups": [
+          [
+            0
+          ]
+        ]
+      },
+      "outputType": {
+        "arr": {
+          "obj": {
+            "doc_id": {
+              "opt": "string"
+            },
+            "title": {
+              "opt": "string"
+            }
+          },
+          "name": "CreateDocRow"
+        }
+      }
+    },
+    {
+      "body": [
+        {
+          "component": "executeSQL",
+          "id": "n0",
+          "outType": {
+            "arr": {
+              "name": "CreateLineRow",
+              "obj": {
+                "line_no": {
+                  "opt": "float"
+                },
+                "order_id": {
+                  "opt": "float"
+                },
+                "sku": {
+                  "opt": "string"
+                }
+              }
+            }
+          },
+          "portSchemas": {
+            "opts": {
+              "elemType": {
+                "name": "ExecOptions",
+                "obj": {
+                  "db": {
+                    "opt": "string"
+                  },
+                  "guard": {
+                    "opt": {
+                      "name": "CapGuard",
+                      "obj": {
+                        "limit": "int",
+                        "model": {
+                          "opt": "string"
+                        },
+                        "relation": "string"
+                      }
+                    }
+                  },
+                  "whereDynamic": {
+                    "opt": {
+                      "name": "DynamicWherePlan",
+                      "obj": {
+                        "frags": {
+                          "arr": {
+                            "name": "DynamicWhereFrag",
+                            "obj": {
+                              "params": {
+                                "arr": {
+                                  "opt": "value"
+                                }
+                              },
+                              "skipped": "bool",
+                              "sql": "string"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "write": {
+                    "opt": {
+                      "name": "WriteMode",
+                      "obj": {
+                        "returning": "bool"
+                      }
+                    }
+                  }
+                }
+              },
+              "required": False,
+              "type": "object"
+            },
+            "params": {
+              "elemType": "value",
+              "required": True,
+              "type": "array"
+            },
+            "sql": {
+              "required": True,
+              "type": "string"
+            }
+          },
+          "ports": {
+            "opts": {
+              "obj": {
+                "db": None,
+                "guard": None,
+                "whereDynamic": None,
+                "write": {
+                  "obj": {
+                    "returning": True
+                  }
+                }
+              }
+            },
+            "params": {
+              "arr": [
+                {
+                  "ref": [
+                    "lineNo"
+                  ]
+                },
+                {
+                  "ref": [
+                    "orderId"
+                  ]
+                },
+                {
+                  "ref": [
+                    "sku"
+                  ]
+                }
+              ]
+            },
+            "sql": "INSERT INTO conf_lines (line_no, order_id, sku) VALUES (?, ?, ?) RETURNING order_id, line_no, sku /*scp:pk=order_id,line_no;ai=*/"
+          }
+        }
+      ],
+      "inputPorts": {
+        "lineNo": {
+          "required": True,
+          "type": "int"
+        },
+        "orderId": {
+          "required": True,
+          "type": "int"
+        },
+        "sku": {
+          "required": True,
+          "type": "string"
+        }
+      },
+      "name": "createLine",
+      "output": {
+        "ref": [
+          "n0"
+        ]
+      },
+      "plan": {
+        "concurrency": 16,
+        "groups": [
+          [
+            0
+          ]
+        ]
+      },
+      "outputType": {
+        "arr": {
+          "obj": {
+            "line_no": {
+              "opt": "float"
+            },
+            "order_id": {
+              "opt": "float"
+            },
+            "sku": {
+              "opt": "string"
+            }
+          },
+          "name": "CreateLineRow"
+        }
+      }
+    },
+    {
+      "body": [
+        {
+          "component": "executeSQL",
+          "id": "n0",
+          "outType": {
+            "arr": {
               "name": "CreateTagsReturningRow",
               "obj": {
                 "id": {
@@ -4428,6 +4745,14 @@ class Conformance:
     @staticmethod
     def remove_tags(ids, handlers):
         return run_behavior(IR, handlers, {"ids": ids}, "removeTags")
+
+    @staticmethod
+    def create_doc(docId, title, handlers):
+        return run_behavior(IR, handlers, {"docId": docId, "title": title}, "createDoc")
+
+    @staticmethod
+    def create_line(orderId, lineNo, sku, handlers):
+        return run_behavior(IR, handlers, {"orderId": orderId, "lineNo": lineNo, "sku": sku}, "createLine")
 
     @staticmethod
     def create_tags_returning(rows, handlers):

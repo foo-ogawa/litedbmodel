@@ -2128,7 +2128,7 @@
             "$bigint": "1"
           },
           "lastInsertRowid": {
-            "$bigint": "3"
+            "$bigint": "1"
           }
         }
       ],
@@ -2339,7 +2339,7 @@
             "$bigint": "1"
           },
           "lastInsertRowid": {
-            "$bigint": "3"
+            "$bigint": "1"
           }
         }
       ],
@@ -2803,7 +2803,7 @@
             "$bigint": "2"
           },
           "lastInsertRowid": {
-            "$bigint": "3"
+            "$bigint": "1"
           }
         }
       ],
@@ -4189,6 +4189,297 @@
               "title": "b1",
               "status": "live",
               "created_at": "2026-01-15"
+            }
+          ]
+        }
+      ],
+      "expectedCap": null
+    },
+    {
+      "name": "createDoc: INSERT … RETURNING on a STRING primary key returns the written row [sqlite]",
+      "kind": "exec",
+      "dialect": "sqlite",
+      "entry": "createDoc",
+      "input": {
+        "docId": "22222222-2222-2222-2222-222222222222",
+        "title": "Doc"
+      },
+      "case": "createDoc: INSERT … RETURNING on a STRING primary key returns the written row",
+      "expectedStatements": [
+        {
+          "sql": "INSERT INTO conf_docs (doc_id, title) VALUES (?, ?) RETURNING doc_id, title",
+          "params": [
+            "22222222-2222-2222-2222-222222222222",
+            "Doc"
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "doc_id": "22222222-2222-2222-2222-222222222222",
+          "title": "Doc"
+        }
+      ],
+      "expectedDbState": [
+        {
+          "query": "SELECT doc_id, title FROM conf_docs ORDER BY doc_id",
+          "rows": [
+            {
+              "doc_id": "11111111-1111-1111-1111-111111111111",
+              "title": "seeded doc"
+            },
+            {
+              "doc_id": "22222222-2222-2222-2222-222222222222",
+              "title": "Doc"
+            }
+          ]
+        }
+      ],
+      "expectedCap": null
+    },
+    {
+      "name": "createDoc: INSERT … RETURNING on a STRING primary key returns the written row [postgres]",
+      "kind": "exec",
+      "dialect": "postgres",
+      "entry": "createDoc",
+      "input": {
+        "docId": "22222222-2222-2222-2222-222222222222",
+        "title": "Doc"
+      },
+      "case": "createDoc: INSERT … RETURNING on a STRING primary key returns the written row",
+      "expectedStatements": [
+        {
+          "sql": "INSERT INTO conf_docs (doc_id, title) VALUES ($1, $2) RETURNING doc_id, title",
+          "params": [
+            "22222222-2222-2222-2222-222222222222",
+            "Doc"
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "doc_id": "22222222-2222-2222-2222-222222222222",
+          "title": "Doc"
+        }
+      ],
+      "expectedDbState": [
+        {
+          "query": "SELECT doc_id, title FROM conf_docs ORDER BY doc_id",
+          "rows": [
+            {
+              "doc_id": "11111111-1111-1111-1111-111111111111",
+              "title": "seeded doc"
+            },
+            {
+              "doc_id": "22222222-2222-2222-2222-222222222222",
+              "title": "Doc"
+            }
+          ]
+        }
+      ],
+      "expectedCap": null
+    },
+    {
+      "name": "createDoc: INSERT … RETURNING on a STRING primary key returns the written row [mysql]",
+      "kind": "exec",
+      "dialect": "mysql",
+      "entry": "createDoc",
+      "input": {
+        "docId": "22222222-2222-2222-2222-222222222222",
+        "title": "Doc"
+      },
+      "case": "createDoc: INSERT … RETURNING on a STRING primary key returns the written row",
+      "expectedStatements": [
+        {
+          "sql": "INSERT INTO conf_docs (doc_id, title) VALUES (?, ?) RETURNING doc_id, title /*scp:pk=doc_id;ai=*/",
+          "params": [
+            "22222222-2222-2222-2222-222222222222",
+            "Doc"
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "doc_id": "22222222-2222-2222-2222-222222222222",
+          "title": "Doc"
+        }
+      ],
+      "expectedDbState": [
+        {
+          "query": "SELECT doc_id, title FROM conf_docs ORDER BY doc_id",
+          "rows": [
+            {
+              "doc_id": "11111111-1111-1111-1111-111111111111",
+              "title": "seeded doc"
+            },
+            {
+              "doc_id": "22222222-2222-2222-2222-222222222222",
+              "title": "Doc"
+            }
+          ]
+        }
+      ],
+      "expectedCap": null
+    },
+    {
+      "name": "createLine: INSERT … RETURNING on a COMPOSITE primary key returns the written row [sqlite]",
+      "kind": "exec",
+      "dialect": "sqlite",
+      "entry": "createLine",
+      "input": {
+        "orderId": 10,
+        "lineNo": 2,
+        "sku": "SKU-2"
+      },
+      "case": "createLine: INSERT … RETURNING on a COMPOSITE primary key returns the written row",
+      "expectedStatements": [
+        {
+          "sql": "INSERT INTO conf_lines (line_no, order_id, sku) VALUES (?, ?, ?) RETURNING order_id, line_no, sku",
+          "params": [
+            2,
+            10,
+            "SKU-2"
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "line_no": 2,
+          "order_id": 10,
+          "sku": "SKU-2"
+        }
+      ],
+      "expectedDbState": [
+        {
+          "query": "SELECT order_id, line_no, sku FROM conf_lines ORDER BY order_id, line_no",
+          "rows": [
+            {
+              "order_id": {
+                "$bigint": "10"
+              },
+              "line_no": {
+                "$bigint": "1"
+              },
+              "sku": "SKU-1"
+            },
+            {
+              "order_id": {
+                "$bigint": "10"
+              },
+              "line_no": {
+                "$bigint": "2"
+              },
+              "sku": "SKU-2"
+            }
+          ]
+        }
+      ],
+      "expectedCap": null
+    },
+    {
+      "name": "createLine: INSERT … RETURNING on a COMPOSITE primary key returns the written row [postgres]",
+      "kind": "exec",
+      "dialect": "postgres",
+      "entry": "createLine",
+      "input": {
+        "orderId": 10,
+        "lineNo": 2,
+        "sku": "SKU-2"
+      },
+      "case": "createLine: INSERT … RETURNING on a COMPOSITE primary key returns the written row",
+      "expectedStatements": [
+        {
+          "sql": "INSERT INTO conf_lines (line_no, order_id, sku) VALUES ($1, $2, $3) RETURNING order_id, line_no, sku",
+          "params": [
+            2,
+            10,
+            "SKU-2"
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "line_no": 2,
+          "order_id": 10,
+          "sku": "SKU-2"
+        }
+      ],
+      "expectedDbState": [
+        {
+          "query": "SELECT order_id, line_no, sku FROM conf_lines ORDER BY order_id, line_no",
+          "rows": [
+            {
+              "order_id": {
+                "$bigint": "10"
+              },
+              "line_no": {
+                "$bigint": "1"
+              },
+              "sku": "SKU-1"
+            },
+            {
+              "order_id": {
+                "$bigint": "10"
+              },
+              "line_no": {
+                "$bigint": "2"
+              },
+              "sku": "SKU-2"
+            }
+          ]
+        }
+      ],
+      "expectedCap": null
+    },
+    {
+      "name": "createLine: INSERT … RETURNING on a COMPOSITE primary key returns the written row [mysql]",
+      "kind": "exec",
+      "dialect": "mysql",
+      "entry": "createLine",
+      "input": {
+        "orderId": 10,
+        "lineNo": 2,
+        "sku": "SKU-2"
+      },
+      "case": "createLine: INSERT … RETURNING on a COMPOSITE primary key returns the written row",
+      "expectedStatements": [
+        {
+          "sql": "INSERT INTO conf_lines (line_no, order_id, sku) VALUES (?, ?, ?) RETURNING order_id, line_no, sku /*scp:pk=order_id,line_no;ai=*/",
+          "params": [
+            2,
+            10,
+            "SKU-2"
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "line_no": 2,
+          "order_id": 10,
+          "sku": "SKU-2"
+        }
+      ],
+      "expectedDbState": [
+        {
+          "query": "SELECT order_id, line_no, sku FROM conf_lines ORDER BY order_id, line_no",
+          "rows": [
+            {
+              "order_id": {
+                "$bigint": "10"
+              },
+              "line_no": {
+                "$bigint": "1"
+              },
+              "sku": "SKU-1"
+            },
+            {
+              "order_id": {
+                "$bigint": "10"
+              },
+              "line_no": {
+                "$bigint": "2"
+              },
+              "sku": "SKU-2"
             }
           ]
         }

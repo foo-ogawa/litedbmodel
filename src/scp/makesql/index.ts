@@ -81,17 +81,15 @@ export {
   rowsHaveDbToken,
 } from './json-batch';
 
-// Write-time relations → makeSQL transaction plan + 1-tx runtime (epic #43/#45 Phase B).
+// Write descriptor → makeSQL statement, batch plan derivation, and the live async 1-tx runtime.
 export {
-  deriveTransactionPlan,
   deriveBatchPlan,
   literalize,
-  executeTransaction,
   executeTransactionAsync,
-  countingDriver,
   renderTxStatement,
   compileWriteNode,
   pgTypeSpecimen,
+  ENTITY_ROOT,
   IN_SENTINEL,
 } from './tx';
 
@@ -107,8 +105,7 @@ export type {
   TxStatement,
   IdempotentHitPolicy,
   TransactionPlan,
-  BaseWrite,
-  SqliteDb,
+  WriteLifecyclePhase,
   ShortCircuitReason,
   TransactionResult,
   WriteExecOptions,

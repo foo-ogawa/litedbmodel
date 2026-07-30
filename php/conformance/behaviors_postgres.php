@@ -7,7 +7,7 @@
 // (Behavior::runBehavior) — no execution logic is generated. Handlers are ALWAYS
 // injected at the boundary (IR + {effects,config,hooks} — concept.md §4.4); they
 // are never generated.
-// irFingerprint: fnv1a64:77f2b7a729bb8f58
+// irFingerprint: fnv1a64:c1ea38b95f7193bc
 
 declare(strict_types=1);
 
@@ -15,10 +15,10 @@ declare(strict_types=1);
 $expectedSpecVersions = ['behavior' => 6, 'expression' => 2, 'plan' => 1];
 
 // FNV-1a 64 fingerprint of the source portable IR (canonical-json discipline, #208).
-$irFingerprint = 'fnv1a64:77f2b7a729bb8f58';
+$irFingerprint = 'fnv1a64:c1ea38b95f7193bc';
 
 // Component names exposed by bind(), in IR declaration order.
-$componentNames = ['posts', 'postsTop', 'page', 'postsByIds', 'feed', 'pagedFeed', 'usersWithPosts', 'postsWithAuthor', 'usersWithCappedPosts', 'usersWithUncappedPosts', 'usersWithTopPosts', 'createPost', 'renamePost', 'removePost', 'createPostReturning', 'renamePostReturning', 'removePostReturning', 'restatusPostsReturning', 'removePostsByAuthorReturning', 'typedRows', 'createTags', 'removeTags', 'createTagsReturning', 'relabelTagsReturning', 'removeTagsReturning'];
+$componentNames = ['posts', 'postsTop', 'page', 'postsByIds', 'feed', 'pagedFeed', 'usersWithPosts', 'postsWithAuthor', 'usersWithCappedPosts', 'usersWithUncappedPosts', 'usersWithTopPosts', 'createPost', 'renamePost', 'removePost', 'createPostReturning', 'renamePostReturning', 'removePostReturning', 'restatusPostsReturning', 'removePostsByAuthorReturning', 'typedRows', 'createTags', 'removeTags', 'createDoc', 'createLine', 'createTagsReturning', 'relabelTagsReturning', 'removeTagsReturning'];
 
 // The portable component-graph IR *document*, embedded as a native literal (no JSON parse at require).
 // It carries no provenance token — the require-time CompiledIr::load() below verifies the baked
@@ -3878,6 +3878,323 @@ $irDoc = (object) [
                     "id" => "n0",
                     "outType" => (object) [
                         "arr" => (object) [
+                            "name" => "CreateDocRow",
+                            "obj" => (object) [
+                                "doc_id" => (object) [
+                                    "opt" => "string",
+                                ],
+                                "title" => (object) [
+                                    "opt" => "string",
+                                ],
+                            ],
+                        ],
+                    ],
+                    "portSchemas" => (object) [
+                        "opts" => (object) [
+                            "elemType" => (object) [
+                                "name" => "ExecOptions",
+                                "obj" => (object) [
+                                    "db" => (object) [
+                                        "opt" => "string",
+                                    ],
+                                    "guard" => (object) [
+                                        "opt" => (object) [
+                                            "name" => "CapGuard",
+                                            "obj" => (object) [
+                                                "limit" => "int",
+                                                "model" => (object) [
+                                                    "opt" => "string",
+                                                ],
+                                                "relation" => "string",
+                                            ],
+                                        ],
+                                    ],
+                                    "whereDynamic" => (object) [
+                                        "opt" => (object) [
+                                            "name" => "DynamicWherePlan",
+                                            "obj" => (object) [
+                                                "frags" => (object) [
+                                                    "arr" => (object) [
+                                                        "name" => "DynamicWhereFrag",
+                                                        "obj" => (object) [
+                                                            "params" => (object) [
+                                                                "arr" => (object) [
+                                                                    "opt" => "value",
+                                                                ],
+                                                            ],
+                                                            "skipped" => "bool",
+                                                            "sql" => "string",
+                                                        ],
+                                                    ],
+                                                ],
+                                            ],
+                                        ],
+                                    ],
+                                    "write" => (object) [
+                                        "opt" => (object) [
+                                            "name" => "WriteMode",
+                                            "obj" => (object) [
+                                                "returning" => "bool",
+                                            ],
+                                        ],
+                                    ],
+                                ],
+                            ],
+                            "required" => false,
+                            "type" => "object",
+                        ],
+                        "params" => (object) [
+                            "elemType" => "value",
+                            "required" => true,
+                            "type" => "array",
+                        ],
+                        "sql" => (object) [
+                            "required" => true,
+                            "type" => "string",
+                        ],
+                    ],
+                    "ports" => (object) [
+                        "opts" => (object) [
+                            "obj" => (object) [
+                                "db" => null,
+                                "guard" => null,
+                                "whereDynamic" => null,
+                                "write" => (object) [
+                                    "obj" => (object) [
+                                        "returning" => true,
+                                    ],
+                                ],
+                            ],
+                        ],
+                        "params" => (object) [
+                            "arr" => [
+                                (object) [
+                                    "ref" => [
+                                        "docId",
+                                    ],
+                                ],
+                                (object) [
+                                    "ref" => [
+                                        "title",
+                                    ],
+                                ],
+                            ],
+                        ],
+                        "sql" => "INSERT INTO conf_docs (doc_id, title) VALUES (?, ?) RETURNING doc_id, title",
+                    ],
+                ],
+            ],
+            "inputPorts" => (object) [
+                "docId" => (object) [
+                    "required" => true,
+                    "type" => "string",
+                ],
+                "title" => (object) [
+                    "required" => true,
+                    "type" => "string",
+                ],
+            ],
+            "name" => "createDoc",
+            "output" => (object) [
+                "ref" => [
+                    "n0",
+                ],
+            ],
+            "plan" => (object) [
+                "concurrency" => 16,
+                "groups" => [
+                    [
+                        0,
+                    ],
+                ],
+            ],
+            "outputType" => (object) [
+                "arr" => (object) [
+                    "obj" => (object) [
+                        "doc_id" => (object) [
+                            "opt" => "string",
+                        ],
+                        "title" => (object) [
+                            "opt" => "string",
+                        ],
+                    ],
+                    "name" => "CreateDocRow",
+                ],
+            ],
+        ],
+        (object) [
+            "body" => [
+                (object) [
+                    "component" => "executeSQL",
+                    "id" => "n0",
+                    "outType" => (object) [
+                        "arr" => (object) [
+                            "name" => "CreateLineRow",
+                            "obj" => (object) [
+                                "line_no" => (object) [
+                                    "opt" => "float",
+                                ],
+                                "order_id" => (object) [
+                                    "opt" => "float",
+                                ],
+                                "sku" => (object) [
+                                    "opt" => "string",
+                                ],
+                            ],
+                        ],
+                    ],
+                    "portSchemas" => (object) [
+                        "opts" => (object) [
+                            "elemType" => (object) [
+                                "name" => "ExecOptions",
+                                "obj" => (object) [
+                                    "db" => (object) [
+                                        "opt" => "string",
+                                    ],
+                                    "guard" => (object) [
+                                        "opt" => (object) [
+                                            "name" => "CapGuard",
+                                            "obj" => (object) [
+                                                "limit" => "int",
+                                                "model" => (object) [
+                                                    "opt" => "string",
+                                                ],
+                                                "relation" => "string",
+                                            ],
+                                        ],
+                                    ],
+                                    "whereDynamic" => (object) [
+                                        "opt" => (object) [
+                                            "name" => "DynamicWherePlan",
+                                            "obj" => (object) [
+                                                "frags" => (object) [
+                                                    "arr" => (object) [
+                                                        "name" => "DynamicWhereFrag",
+                                                        "obj" => (object) [
+                                                            "params" => (object) [
+                                                                "arr" => (object) [
+                                                                    "opt" => "value",
+                                                                ],
+                                                            ],
+                                                            "skipped" => "bool",
+                                                            "sql" => "string",
+                                                        ],
+                                                    ],
+                                                ],
+                                            ],
+                                        ],
+                                    ],
+                                    "write" => (object) [
+                                        "opt" => (object) [
+                                            "name" => "WriteMode",
+                                            "obj" => (object) [
+                                                "returning" => "bool",
+                                            ],
+                                        ],
+                                    ],
+                                ],
+                            ],
+                            "required" => false,
+                            "type" => "object",
+                        ],
+                        "params" => (object) [
+                            "elemType" => "value",
+                            "required" => true,
+                            "type" => "array",
+                        ],
+                        "sql" => (object) [
+                            "required" => true,
+                            "type" => "string",
+                        ],
+                    ],
+                    "ports" => (object) [
+                        "opts" => (object) [
+                            "obj" => (object) [
+                                "db" => null,
+                                "guard" => null,
+                                "whereDynamic" => null,
+                                "write" => (object) [
+                                    "obj" => (object) [
+                                        "returning" => true,
+                                    ],
+                                ],
+                            ],
+                        ],
+                        "params" => (object) [
+                            "arr" => [
+                                (object) [
+                                    "ref" => [
+                                        "lineNo",
+                                    ],
+                                ],
+                                (object) [
+                                    "ref" => [
+                                        "orderId",
+                                    ],
+                                ],
+                                (object) [
+                                    "ref" => [
+                                        "sku",
+                                    ],
+                                ],
+                            ],
+                        ],
+                        "sql" => "INSERT INTO conf_lines (line_no, order_id, sku) VALUES (?, ?, ?) RETURNING order_id, line_no, sku",
+                    ],
+                ],
+            ],
+            "inputPorts" => (object) [
+                "lineNo" => (object) [
+                    "required" => true,
+                    "type" => "int",
+                ],
+                "orderId" => (object) [
+                    "required" => true,
+                    "type" => "int",
+                ],
+                "sku" => (object) [
+                    "required" => true,
+                    "type" => "string",
+                ],
+            ],
+            "name" => "createLine",
+            "output" => (object) [
+                "ref" => [
+                    "n0",
+                ],
+            ],
+            "plan" => (object) [
+                "concurrency" => 16,
+                "groups" => [
+                    [
+                        0,
+                    ],
+                ],
+            ],
+            "outputType" => (object) [
+                "arr" => (object) [
+                    "obj" => (object) [
+                        "line_no" => (object) [
+                            "opt" => "float",
+                        ],
+                        "order_id" => (object) [
+                            "opt" => "float",
+                        ],
+                        "sku" => (object) [
+                            "opt" => "string",
+                        ],
+                    ],
+                    "name" => "CreateLineRow",
+                ],
+            ],
+        ],
+        (object) [
+            "body" => [
+                (object) [
+                    "component" => "executeSQL",
+                    "id" => "n0",
+                    "outType" => (object) [
+                        "arr" => (object) [
                             "name" => "CreateTagsReturningRow",
                             "obj" => (object) [
                                 "id" => (object) [
@@ -4445,6 +4762,14 @@ if (!\class_exists('Conformance', false)) {
 
         public static function removeTags($ids, array $handlers): mixed {
             return \LiteDbModel\Runtime\BehaviorContracts\Behavior::runBehavior(self::$ir, $handlers, ['ids' => $ids], 'removeTags');
+        }
+
+        public static function createDoc($docId, $title, array $handlers): mixed {
+            return \LiteDbModel\Runtime\BehaviorContracts\Behavior::runBehavior(self::$ir, $handlers, ['docId' => $docId, 'title' => $title], 'createDoc');
+        }
+
+        public static function createLine($orderId, $lineNo, $sku, array $handlers): mixed {
+            return \LiteDbModel\Runtime\BehaviorContracts\Behavior::runBehavior(self::$ir, $handlers, ['orderId' => $orderId, 'lineNo' => $lineNo, 'sku' => $sku], 'createLine');
         }
 
         public static function createTagsReturning($rows_id, $rows_post_id, $rows_label, array $handlers): mixed {
