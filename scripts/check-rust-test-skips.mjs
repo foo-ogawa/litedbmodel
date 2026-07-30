@@ -36,24 +36,36 @@
  * is bidirectional in both directions: a listed target that grows tests must be removed from the list,
  * and a listed target that stops being RUN is stale. That is the check the missing feature runs into.
  *
- * What `cargo metadata` alone could NOT see is a narrowing of the manifest itself, because that is the
- * same file. Measured: one line, `[lib] test = false`, and this gate ran 3 targets instead of 5 with
- * NOTHING said — the lib's 71 unit tests and the doc-tests simply left the set, which on a tree with a
- * live database is a green run of a suite missing 71 tests; `[lib] doctest = false` did it to `--doc`.
- * Modelling cargo's LAYOUT was not enough either, because a `path` is configurable: `[lib] path` aimed
- * at a renamed file, a `[[bin]]` under `src/bin/`, and a `[[test]]` aimed at a STUB with the right
- * function names each walked past a layout model. So the requirement comes from the SOURCE FILES
- * ({@link treeTests}): every `#[test]` function the tree holds must be reported by a unit that ran.
- * That is the independent enumeration the other four run gates have — go walks `go/**\/*_test.go`,
- * python and php parse every source file, TypeScript globs the tree — and this one did not.
+ * What must RUN, and what the run is checked against, both come from cargo — not from a hand-written
+ * scan of the source, which #222 (A) is the standing lesson about: a regex over `.rs` UNDER-included
+ * (it read `#[cfg_attr(any(), test)]` and `#[ test ]` as non-tests, so the tree it enforced quietly
+ * dropped to 69 while 71 ran) and matched by the last `::` segment (so a test renamed onto a name that
+ * exists in another module was answered by that one's verdict). Both are gone:
+ *
+ *   - the SET OF TARGETS is every lib/bin/integration target `cargo metadata` reports, selected by
+ *     KIND rather than by the `test` flag — because `cargo test --lib` runs a target's tests even under
+ *     `[lib] test = false` (measured: 71 listed AND 71 run with that line present), so keying off
+ *     `t.test` was the one line that could drop a whole target's tests in SILENCE. Doc-tests are their
+ *     own target, kept when `[lib] doctest = false` is absent and caught by EXPECTED_EMPTY when present.
+ *   - the ROSTER each target must fully report is `cargo test <selector> -- --list`: rustc's own list
+ *     AFTER it expands `cfg_attr`, so what is listed is exactly what will run. The run is checked
+ *     against it by FULL PATH, both directions — a listed test with no verdict did not run, a verdict
+ *     for an unlisted test is an unmodelled roster and red.
+ *
+ * A `path` re-point or a member drop leaves the target present-but-empty or gone, which the ZERO-tests
+ * / EXPECTED_EMPTY checks and the LIVE_TESTS inventory (the only `tests/*.rs` here hold the live legs)
+ * catch. What NO enumeration downstream of the build can see is a non-live unit test DELETED from the
+ * source — it is gone from `--list` and the run alike; there are no such orphan files here (every unit
+ * test is a `src/` module compiled by `--lib`), and LIVE_TESTS is the deletion backstop for the legs.
  *
  * It is red when any of the following holds, and prints its green line only when none does:
  *
  *   - a gate `livedb-gates.env` declares is not open in this process — checked before anything runs;
- *   - `cargo metadata` or a `cargo test` could not be started, or was killed by a signal;
- *   - a `#[test]` function in the tree that NO unit which ran reported: a re-pointed `path`, a
- *     `test = false`, a dropped target, an `autotests = false`, a crate left out of `members`, or a
- *     target aimed at a stub — none of which changes the source files;
+ *   - `cargo metadata`, `cargo clean`, a `cargo test -- --list` or a `cargo test` could not be started,
+ *     or was killed by a signal;
+ *   - a test its target's `-- --list` roster names that reported NO verdict from the run — an ambient
+ *     filter, a `-- <name>`, or a panic between listing and running — or a verdict for a test the
+ *     roster did not name (a wrong roster passes vacuously);
  *   - a target that reported NO `test result:` line: it did not build, or it did not run. A crate that
  *     fails to compile prints its errors to stderr and runs no test, and `0 targets ran` would
  *     otherwise be as green as a clean suite;
@@ -79,7 +91,7 @@
  * Not proven, and it falls GREEN: that a leg asserted anything USEFUL about what it read. A body
  * reduced to a bare connect dials, so it satisfies both phases.
  */
-import { globSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { assertGatesOpen, runOwned, mustHaveStarted, exitProblem, report, UNREACHABLE } from './run-gate.mjs';
@@ -153,13 +165,14 @@ if (metadata.exit !== 0) {
  * One entry per thing to run: the package, the target selector cargo needs to run JUST that target, the
  * source root it compiles, and whether its sources read a gate.
  *
- * `test: true` / `doctest: true` are cargo's own flags for "this target is compiled as a test harness",
- * so this is what the MANIFEST says there is to run — and the manifest is the same file a narrowing
- * goes into. It is checked against {@link treeTests}, which reads the source files.
+ * The set is every lib/bin/integration target `cargo metadata` reports, by KIND — NOT gated on the
+ * `test` flag, because `cargo test --lib`/`--test`/`--bin` runs a target explicitly regardless of a
+ * `test = false` in its manifest, so keying off `t.test` was the one line that could drop a whole
+ * target in silence. Each unit's real roster is read from `-- --list` below.
  *
- * The doc-tests are pushed independently of `test`, because they are a separate question: `cargo test
- * --doc` runs a lib's doc examples even when `[lib] test = false` turns its unit tests off, so treating
- * `doctest` as reachable only through `test` modelled cargo wrongly and lost `--doc` along with `--lib`.
+ * The doc-tests are their own target: `cargo test --doc` runs a lib's doc examples even when
+ * `[lib] test = false` turns its unit tests off, and `[lib] doctest = false` drops the `--doc` unit,
+ * which EXPECTED_EMPTY's `didNotRun` check catches.
  */
 const packages = JSON.parse(metadata.stdout).packages;
 const units = [];
@@ -167,59 +180,42 @@ for (const pkg of packages) {
   const features = 'livedb' in pkg.features ? ['--features', 'livedb'] : [];
   for (const t of pkg.targets) {
     const isLib = t.kind.includes('lib');
+    const isBin = t.kind.includes('bin');
+    const isIntegration = t.kind.includes('test');
     const crateDir = relative(ROOT, dirname(pkg.manifest_path)).split(sep).join('/');
     const src = relative(ROOT, t.src_path).split(sep).join('/');
     const live = sources(dirname(t.src_path)).some((f) => readsAGate(readFileSync(f, 'utf8')));
-    if (t.test) {
-      const selector = isLib ? ['--lib'] : t.kind.includes('bin') ? ['--bin', t.name] : ['--test', t.name];
+    // Every lib/bin/integration-test target is run EXPLICITLY (`--lib`/`--bin`/`--test`), which cargo
+    // honours REGARDLESS of a `test = false` in the manifest — measured: `[lib] test = false` still
+    // lists AND runs all 71 lib unit tests under `cargo test --lib`. Deriving the set from `t.test`
+    // instead let that one line drop a whole target's tests SILENTLY; selecting by KIND neutralises it,
+    // and `-- --list` below reads the target's real (post-cfg_attr) roster to check the run against.
+    if (isLib || isBin || isIntegration) {
+      const selector = isLib ? ['--lib'] : isBin ? ['--bin', t.name] : ['--test', t.name];
       units.push({ pkg: pkg.name, selector, features, live, src, crateDir, isLib });
     }
+    // Doc-tests are a target of their own; `[lib] doctest = false` drops the `--doc` unit, which
+    // EXPECTED_EMPTY's bidirectional `didNotRun` check catches (the entry names a unit that did not run).
     if (isLib && t.doctest) units.push({ pkg: pkg.name, selector: ['--doc'], features, live: false, src, crateDir, isLib });
   }
 }
 
-/**
- * Every `#[test]` function the TREE holds, as file → the names in it. The independent enumeration, and
- * the thing the manifest is checked against.
- *
- * Modelling cargo's LAYOUT instead was not enough, because a path is configurable. Measured on the
- * version before this, each on its own:
- *
- *     [lib] test = false                      3 targets ran, not 5 — the lib's 71 unit tests and the
- *                                             doc-tests left the set in SILENCE
- *     [lib] path = "src/runtime.rs" + the     no requirement was even computed: the layout rule asked
- *       file renamed, test = false            whether `src/lib.rs` EXISTS, and it no longer did
- *     [[bin]] path = "src/bin/extra.rs"       `src/bin/*.rs` was not one of the four rules modelled,
- *       test = false                          and `--bin` matching accepted ANY bin, so a second bin
- *                                             losing its tests was invisible
- *     autotests = false + [[test]] pointed    the real live files were never compiled while stub files
- *       at stubs with the same fn names       carrying the same six names satisfied every name check
- *
- * All four are one hole: the set of things to run was derived from the manifest, and every one of those
- * lines is IN the manifest. So the requirement now comes from the source files themselves — a file
- * holding `#[test]` functions must be OWNED by a unit that ran, and that unit must have reported those
- * names. Renaming a path, dropping a target, or aiming one at a stub all leave the real file with no
- * unit that reported its tests.
- *
- * `#[test]` is matched only at the START of a line, then the first `fn <name>` after it. Not a count of
- * the attribute: `tests/connection_routing.rs:1128` is the comment "── The single #[test] entry", so
- * counting attributes says 2 where there is 1 — #222 (A)'s lesson in one line. Anchoring at line start
- * excludes `//`, `///` and `*` comment bodies. A line inside a raw string that begins with `#[test]`
- * would over-include, which demands a name that never reports: RED, the safe direction.
- */
-const TEST_FN = /^[^\S\n]*#\[test\][\s\S]*?\bfn\s+([A-Za-z0-9_]+)/gm;
-
 const problems = [];
-/** file (repository-relative) → the `#[test]` names it declares. */
-const treeTests = new Map();
-for (const file of globSync('rust/**/*.rs', { cwd: ROOT })) {
-  const rel = file.split(sep).join('/');
-  if (rel.includes('/target/')) continue;
-  const names = new Set([...readFileSync(join(ROOT, rel), 'utf8').matchAll(TEST_FN)].map(([, n]) => n));
-  if (names.size > 0) treeTests.set(rel, names);
-}
 
 assertGatesOpen('rust');
+
+// #222 (A): freshness. Unlike go's `-count=1`, cargo will REPLAY a test binary built from source that
+// has since changed — a `git status`-clean tree ran a stale binary and went green (binary 13:06 /
+// source 07:00). So force a rebuild of just OUR crates (deps stay cached, so this is not a full clean):
+// the very next `cargo test` compiles the current source before it can run anything.
+const cleaned = mustHaveStarted(
+  await runOwned('cargo', ['clean', '-p', 'litedbmodel_runtime', '-p', 'livedb_runner'], { cwd: RUST_DIR }),
+  'cargo clean -p litedbmodel_runtime -p livedb_runner',
+);
+if (cleaned.exit !== 0) {
+  console.error(`\n❌ \`cargo clean -p …\` exited ${cleaned.exit}, so a stale prebuilt test binary could still be run instead of the current source.`);
+  process.exit(1);
+}
 
 /**
  * libtest's own report, per target.
@@ -231,22 +227,28 @@ assertGatesOpen('rust');
  */
 const SUMMARY = /^test result: \w+\. (\d+) passed; (\d+) failed; (\d+) ignored; \d+ measured; (\d+) filtered out/gm;
 const VERDICT = /^test (\S+) \.\.\. (ok|FAILED|ignored)/gm;
+// `cargo test <selector> -- --list` prints one `<full::module::path>: test` line per test and
+// `<name>: benchmark` for benches. This is the target's roster AFTER rustc expands `cfg_attr`, so a
+// `#[cfg_attr(any(), test)]` or a `#[ test ]` (which the old source regex miscounted) is listed exactly
+// as it will run — measured: the roster falls 71→70 for one such edit. It is the independent
+// enumeration replacing the hand-written `#[test]` scanner (#222 A): the SAME full paths libtest's
+// VERDICT lines carry, so run and roster are matched EXACTLY, by full path — not by the last `::`
+// segment, which let a renamed test be answered by a same-named one in another module.
+const LIST = /^(\S.*): test$/gm;
 
 const ran = [];
 for (const unit of units) {
   const label = `cargo test -p ${unit.pkg} ${unit.selector.join(' ')}`;
-  const run = mustHaveStarted(
-    await runOwned(
-      'cargo',
-      ['test', '--locked', '-p', unit.pkg, ...unit.features, ...unit.selector, '--', '--test-threads=1'],
-      { cwd: RUST_DIR },
-    ),
-    label,
-  );
+  const args = ['--locked', '-p', unit.pkg, ...unit.features, ...unit.selector];
+  // The roster FIRST, from the same selector+features, so a target compiled out of existence lists
+  // nothing and the run below is checked against an empty roster rather than a guessed one.
+  const listRun = mustHaveStarted(await runOwned('cargo', ['test', ...args, '--', '--list'], { cwd: RUST_DIR }), `${label} -- --list`);
+  const listed = new Set([...listRun.stdout.matchAll(LIST)].map(([, name]) => name));
+  const run = mustHaveStarted(await runOwned('cargo', ['test', ...args, '--', '--test-threads=1'], { cwd: RUST_DIR }), label);
   process.stdout.write(run.stdout);
   const summaries = [...run.stdout.matchAll(SUMMARY)].map((m) => m.slice(1).map(Number));
   const verdicts = [...run.stdout.matchAll(VERDICT)].map(([, name, verdict]) => ({ name, verdict }));
-  ran.push({ ...unit, label, run, summaries, verdicts });
+  ran.push({ ...unit, label, run, listRun, listed, summaries, verdicts });
 }
 
 const named = (rows) => rows.map((r) => `      ${r}`).join('\n');
@@ -297,37 +299,26 @@ for (const unit of ran) {
       `${unit.label}'s summary counts ${passed} passed + ${failed} failed + ${ignored} ignored, but ${unit.verdicts.length} \`test … ok/FAILED/ignored\` line(s) were found beside it. This gate reads libtest's human report, and a report it only half-understands is red, not green.`,
     );
   }
-}
-
-// Every `#[test]` the TREE holds was reported by a unit that RAN. The manifest says what to run; this
-// says what there IS to run, and the two are only both wrong if someone edits the source too.
-//
-// A file's owner is the unit whose target source IS that file (a `tests/*.rs`, a `src/main.rs`, a
-// `src/bin/*.rs`, `src/lib.rs` itself) or — for the submodules a crate root pulls in with `mod`, which
-// is where 71 of this workspace's 76 tests live — any unit of the same crate rooted in the same
-// directory tree. So `src/tx_options.rs` is owned by `--lib`, and a `[lib] path` pointing elsewhere
-// does not change that: it is still the crate's only src-rooted unit.
-for (const [file, names] of [...treeTests].sort()) {
-  // A top-level `tests/*.rs` IS a target of its own by cargo's rules, so it must be owned EXACTLY —
-  // by a unit whose source is that very file. Directory ownership alone let a `[[test]]` re-pointed at
-  // a SIBLING stub carrying the same `fn` names answer for it, since both sit in `tests/`. Files in a
-  // subdirectory (`tests/common/mod.rs`) are modules of some target, and files under `src/` are modules
-  // of the crate root, so those are owned by any unit rooted above them.
-  const owners = /^rust\/[^/]+\/tests\/[^/]+\.rs$/.test(file)
-    ? ran.filter((u) => u.src === file)
-    : ran.filter((u) => u.src === file || file.startsWith(`${dirname(u.src)}/`));
-  // libtest reports a unit test by its MODULE PATH (`connection_routing::tests::resolve_defaults`) and
-  // an integration test by its bare name, so the tree's `fn` name is matched against the last segment.
-  const reported = new Set(owners.flatMap((u) => u.verdicts.map((v) => v.name.split('::').pop())));
-  const missing = [...names].filter((n) => !reported.has(n)).sort();
-  if (missing.length > 0) {
+  // The roster (`-- --list`) against what actually reported a verdict, matched by FULL PATH. libtest
+  // reports a unit test by its module path and an integration test by its bare name, and `--list`
+  // prints the SAME string, so a rename can no longer be answered by a same-named test elsewhere (the
+  // last-`::`-segment match did exactly that). Both directions:
+  const reported = new Set(unit.verdicts.map((v) => v.name));
+  const unrun = [...unit.listed].filter((n) => !reported.has(n)).sort();
+  const unlisted = [...reported].filter((n) => !unit.listed.has(n)).sort();
+  if (unrun.length > 0) {
     problems.push(
-      `${missing.length} \`#[test]\` function(s) in ${file} were reported by NO unit that ran, so nothing executed them:\n` +
-        missing.map((n) => `      ${n}`).join('\n') +
-        `\n\n      ${owners.length === 0 ? 'NO unit compiles that file at all' : `the unit(s) that compile it (${owners.map((u) => u.selector.join(' ')).join(', ')}) reported other names`}.\n` +
-        `      A \`test = false\`, a re-pointed \`path\`, a dropped \`[[test]]\`/\`[[bin]]\`, an \`autotests =\n` +
-        `      false\`, a crate left out of \`members\`, or a target aimed at a STUB carrying the same\n` +
-        `      function names all look exactly like this — and none of them changes the tree.`,
+      `${unrun.length} test(s) ${unit.label} LISTS were not reported by the run — listed, never executed:\n` +
+        named(unrun) +
+        `\n\n      \`cargo test ${unit.selector.join(' ')} -- --list\` names these, but the run's report has no\n` +
+        `      \`test <name> ... <verdict>\` for them, so an ambient filter (RUSTFLAGS/argv \`-- <name>\`) or a\n` +
+        `      panic between listing and running dropped them.`,
+    );
+  }
+  if (unlisted.length > 0) {
+    problems.push(
+      `${unlisted.length} test(s) reported a verdict from ${unit.label} that \`-- --list\` did not name. The roster is wrong, and a run checked against a wrong roster passes vacuously — unmodelled ⇒ red:\n` +
+        named(unlisted),
     );
   }
 }
@@ -408,17 +399,17 @@ if (problems.length === 0) {
 }
 
 const total = ran.reduce((n, u) => n + (u.summaries[0]?.[0] ?? 0), 0);
+const totalListed = ran.reduce((n, u) => n + u.listed.size, 0);
 report(
   problems,
-  `✅ the live-DB gates ${GATES_ENV} declares were OPEN in this process before cargo test started; every one of\n` +
-    `   the ${[...treeTests.values()].reduce((n, s) => n + s.size, 0)} \`#[test]\` functions in the ${treeTests.size} source files under rust/ that hold one was REPORTED by a\n` +
-    `   unit that ran (so no target was re-pointed, dropped, switched off or aimed at a stub), and each of the\n` +
-    `   ${units.length} test-carrying targets for the ${new Set(units.map((u) => u.pkg)).size} package(s) \`cargo metadata\`\n` +
-    `   reports — lib unit tests,\n` +
-    `   every tests/*.rs, every bin and the doc-tests — was run SEPARATELY, with \`--features livedb\` on every\n` +
-    `   package that declares it, and every one reported a \`test result:\` line whose counts match the verdict\n` +
-    `   lines beside it: ${total} passed, 0 failed, 0 ignored (budget ${IGNORE_BUDGET}), 0 filtered out, and no target ran 0 tests\n` +
-    `   except the ${EXPECTED_EMPTY.length} in EXPECTED_EMPTY. All ${LIVE_TESTS.length} live-DB legs in LIVE_TESTS were reported by a target whose\n` +
+  `✅ the live-DB gates ${GATES_ENV} declares were OPEN in this process before cargo test started; OUR crates were\n` +
+    `   force-rebuilt (\`cargo clean -p …\`) so no stale binary ran, and each of the ${units.length} lib/bin/integration/doc\n` +
+    `   targets for the ${new Set(units.map((u) => u.pkg)).size} package(s) \`cargo metadata\` reports — selected by KIND, so a \`test = false\`\n` +
+    `   cannot drop one — was run SEPARATELY with \`--features livedb\` on every package that declares it. Every one\n` +
+    `   of the ${totalListed} test(s) its \`-- --list\` roster names (rustc's own post-cfg_attr list) reported a verdict, matched\n` +
+    `   by FULL PATH so a rename cannot borrow a same-named test's verdict, and each target's \`test result:\` counts\n` +
+    `   match the verdict lines beside it: ${total} passed, 0 failed, 0 ignored (budget ${IGNORE_BUDGET}), 0 filtered out, and no target\n` +
+    `   ran 0 tests except the ${EXPECTED_EMPTY.length} in EXPECTED_EMPTY. All ${LIVE_TESTS.length} live-DB legs in LIVE_TESTS were reported by a target whose\n` +
     `   sources read a gate — so the \`#![cfg(feature = "livedb")]\` files were COMPILED, which is what a\n` +
     `   \`cargo test\` without the feature silently stops doing.\n` +
     `   Each of the ${LIVE_TESTS.length} live-DB legs was then re-run against an UNREACHABLE database (${UNREACHABLE.TEST_DB_HOST}:${UNREACHABLE.TEST_DB_PORT}) and NONE\n` +
