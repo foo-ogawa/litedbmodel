@@ -174,8 +174,9 @@ func RunRelationOp(op RelationOp, parents []bc.Value, db SQLDB) (RelationBatch, 
 }
 
 // runRelationOpCtx runs ONE relation batch op through the CENTRAL SEAM (§2): the batched child SELECT
-// funnels through Execute(ctx, …, ReadIntent) — the resolved connection is the tx-owned one when the
-// relation runs inside a tx-scoped ctx, else the primary db. This is the ctx-threaded core.
+// funnels through Execute(ctx, …, intent) — the resolved connection is the tx-owned one when the
+// relation runs inside a tx-scoped ctx, the op's NAMED database when it tags one, else the primary db.
+// This is the ctx-threaded core.
 func runRelationOpCtx(ctx *ExecutionContext, op RelationOp, parents []bc.Value) (RelationBatch, error) {
 	pCols := op.parentKeyCols()
 	keys := DedupeKeyTuples(parents, pCols)
@@ -196,7 +197,12 @@ func runRelationOpCtx(ctx *ExecutionContext, op RelationOp, parents []bc.Value) 
 		return batch, nil
 	}
 	tCols := op.targetKeyCols()
-	rows, err := Execute(ctx, sqlText, bindKeys(op, keys), ReadIntent())
+	// The batch's own DATABASE: the compiled op names it (RelationOp.Connection — the TARGET model's)
+	// and the ctx owns the registry that resolves the name. They meet HERE, on the StatementIntent —
+	// the only input ConnectionFor routes on, and the SAME channel the executeSQL leaf uses on the
+	// codegen surface (leaf_transport.go). An untagged (same-DB) relation leaves DB empty ⇒ the
+	// DEFAULT connection.
+	rows, err := Execute(ctx, sqlText, bindKeys(op, keys), StatementIntent{Write: false, DB: op.Connection})
 	if err != nil {
 		return nil, err
 	}
@@ -224,31 +230,6 @@ func DistributeToParent(op RelationOp, parent *bc.Obj, batch RelationBatch) bc.V
 	return AttachToParent(parent, op.parentKeyCols(), batch, op.Kind != "hasMany")
 }
 
-// driverForOp returns the driver a relation runs against: its tagged cross-DB connection, else the
-// primary db. CROSS-DB (V0 R1): a relation whose op carries a `Connection` tag (its target model
-// lives in a DIFFERENT DB — v1 LazyRelation.ts:236) routes to connections[tag]. Loud failure when
-// the tag has no registered driver (a real wiring bug — never a silent same-DB fallback that would
-// run the target's query on the wrong DB). Untagged relations use the primary db.
-func driverForOp(op RelationOp, db SQLDB, connections map[string]SQLDB) (SQLDB, error) {
-	if op.Connection == "" {
-		return db, nil
-	}
-	d, ok := connections[op.Connection]
-	if !ok || d == nil {
-		return nil, fmt.Errorf("cross-DB relation '%s': no driver registered for connection '%s' (pass it in ReadBundle connections)", op.Name, op.Connection)
-	}
-	return d, nil
-}
-
-// ReadBundle runs a READ bundle's primary row list, then batch-loads + hydrates the selected
-// relations onto each parent (port of the TS readBundle typed-object surface, declarative-select
-// path). The primary read output must be a bare row list; each named relation in withNames is
-// batch-prefetched ONCE over the whole page (staged, no N+1) via the SAME RunRelationOp and
-// attached onto each parent as an own key. `relations` is the bundle.relations JObj.
-//
-// CROSS-DB (V0 R1): a relation op carrying a `connection` tag is batched against connections[tag]
-// (its target model's DB) instead of the primary db; untagged relations ignore connections. Pass a
-// nil/empty map for a single-DB read.
 // StitchRelation batch-loads + hydrates ONE declared relation onto an ALREADY-FETCHED parent row
 // list, using the SAME RunRelationOp / DistributeToParent the runtime's own read path uses (no
 // reimplemented grouping — the semantics stay single-sourced here). `opJObj` is the relation op as
@@ -270,23 +251,32 @@ func StitchRelation(opJObj *bc.JObj, parents []bc.Value, db SQLDB) ([]bc.Value, 
 	return parents, nil
 }
 
-func ReadBundle(bundle *SqlBundle, relations *bc.JObj, input *bc.Obj, db SQLDB, withNames []string, connections map[string]SQLDB) (bc.Value, error) {
-	return ReadBundleCtx(context.Background(), bundle, relations, input, db, withNames, connections)
+// ReadBundle runs a READ bundle's primary row list, then batch-loads + hydrates the selected
+// relations onto each parent (port of the TS buildResultSet typed-object surface, declarative-select
+// path). The primary read output must be a bare row list; each named relation in withNames is
+// batch-prefetched ONCE over the whole page (staged, no N+1) via the SAME RunRelationOp and attached
+// onto each parent as an own key. `relations` is the bundle.relations JObj.
+func ReadBundle(bundle *SqlBundle, relations *bc.JObj, input *bc.Obj, db SQLDB, withNames []string) (bc.Value, error) {
+	return ReadBundleCtx(context.Background(), bundle, relations, input, db, withNames)
 }
 
 // ReadBundleCtx is [ReadBundle] riding a caller-supplied (Phase D scoped) context.Context: the primary
 // read AND every relation-batch SELECT funnel through an [ExecutionContext] whose middleware chain
 // resolves THAT context's scope registry ([ContextForDBCtx]). A middleware registered inside a
 // [WithMiddlewareScope] therefore observes BOTH the primary read and the relation-batch SQL (the
-// end-to-end relation coverage the #92 reference asserts). A cross-DB relation derives a distinct ctx
-// over its tagged connection but shares the SAME scoped Go context, so its batch is intercepted too.
-// With no middleware registered the chain is empty ⇒ byte-identical to [ReadBundle].
-func ReadBundleCtx(goCtx context.Context, bundle *SqlBundle, relations *bc.JObj, input *bc.Obj, db SQLDB, withNames []string, connections map[string]SQLDB) (bc.Value, error) {
+// end-to-end relation coverage the #92 reference asserts). With no middleware registered the chain is
+// empty ⇒ byte-identical to [ReadBundle].
+//
+// CROSS-DB (V0 R1): a relation op carrying a `Connection` tag names ITS OWN database; the name rides
+// the StatementIntent to ConnectionFor ([runRelationOpCtx]). Resolving it needs a ctx that HOLDS a
+// [ConnectionRegistry] — a raw SQLDB is a single-connection target, so a tagged relation on this entry
+// point is LOUD rather than silently run against the parent's database.
+func ReadBundleCtx(goCtx context.Context, bundle *SqlBundle, relations *bc.JObj, input *bc.Obj, db SQLDB, withNames []string) (bc.Value, error) {
 	if goCtx == nil {
 		goCtx = context.Background()
 	}
-	// One ExecutionContext for the primary read; a cross-DB relation derives a distinct ctx over its
-	// tagged connection (§6), sharing the scoped Go context so its batch is intercepted too.
+	// ONE ExecutionContext for the primary read AND every relation batch: a relation's database is named
+	// on its op and resolved by this ctx, so there is no per-relation ctx to derive.
 	primaryCtx := ContextForDBCtx(goCtx, db)
 	out, err := executeBundleCtx(primaryCtx, bundle, input)
 	if err != nil {
@@ -306,15 +296,7 @@ func ReadBundleCtx(goCtx context.Context, bundle *SqlBundle, relations *bc.JObj,
 			return nil, errRelationNotDeclared(name)
 		}
 		op := relationOpFromJObj(opObj)
-		relDB, err := driverForOp(op, db, connections)
-		if err != nil {
-			return nil, err
-		}
-		relCtx := primaryCtx
-		if relDB != db {
-			relCtx = ContextForDBCtx(goCtx, relDB)
-		}
-		batch, err := runRelationOpCtx(relCtx, op, rows)
+		batch, err := runRelationOpCtx(primaryCtx, op, rows)
 		if err != nil {
 			return nil, err
 		}

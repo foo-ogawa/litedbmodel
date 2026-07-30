@@ -13,11 +13,11 @@ TS eager path (``buildResultSet``) uses — the non-TS runtimes now reproduce it
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Union
+from typing import Any, Dict, List, Mapping, Sequence, Union
 
 from .driver import Driver
 from .errors import LimitExceededError
-from .exec_context import READ_INTENT, ExecutionContext, as_context, execute as seam_execute
+from .exec_context import READ_INTENT, ExecutionContext, StatementIntent, as_context, execute as seam_execute
 from .grouping import attach_to_parent, dedupe_key_tuples, group_by_key
 from .static_bundle import PG_ARRAY_CAST_TOKEN, render_placeholders, resolve_pg_array_cast
 
@@ -87,7 +87,14 @@ def run_relation_op(
     if len(keys) == 0:
         return {"sql": sql, "keys": keys, "batch": batch}
     t_cols = _target_key_cols(op)
-    rows = seam_execute(ctx, sql, _bind_keys(op, keys), READ_INTENT)
+    # The batch's own DATABASE: the compiled op names it (``op['connection']`` — the TARGET model's)
+    # and the ctx owns the registry that resolves the name. They meet HERE, on the
+    # :class:`StatementIntent` — the only input ``connection_for`` routes on, and the SAME channel the
+    # ``execute_sql`` leaf uses on the codegen surface. An untagged (same-DB) relation leaves ``db``
+    # unset ⇒ the DEFAULT connection (``READ_INTENT`` itself).
+    connection = op.get("connection")
+    intent = READ_INTENT if connection is None else StatementIntent(write=False, db=connection)
+    rows = seam_execute(ctx, sql, _bind_keys(op, keys), intent)
     # Hard-limit runaway guard (Phase E-2, epic #74; v1 ``_selectForRelation``; port of the TS
     # ``runRelationOp`` guard). POST-fetch, if the batch TOTAL exceeds the baked cap, raise with the
     # EXACT count (the batch is fetched in full, no N+1). ⚠️ field mapping: ``model`` = the relation
@@ -120,31 +127,10 @@ def distribute_to_parent(
     return attach_to_parent(parent, _parent_key_cols(op), batch, op["kind"] != "hasMany")
 
 
-def _driver_for_op(op: Mapping[str, Any], driver: Driver, connections: Optional[Mapping[str, Driver]]) -> Driver:
-    """The driver a relation runs against: its tagged cross-DB connection, else the primary ``driver``.
-
-    CROSS-DB (V0 R1): a relation whose op carries a ``connection`` tag (its target model lives in a
-    DIFFERENT DB — v1 ``LazyRelation.ts:236``) routes to ``connections[tag]``. Loud failure when the
-    tag has no registered driver (a real wiring bug — never a silent same-DB fallback that would run
-    the target's query on the wrong DB). Untagged (same-DB) relations use the primary ``driver``.
-    """
-    tag = op.get("connection")
-    if tag is None:
-        return driver
-    d = (connections or {}).get(tag)
-    if d is None:
-        raise ValueError(
-            f"cross-DB relation '{op.get('name')}': no driver registered for connection '{tag}' "
-            "(pass it in read_bundle connections)"
-        )
-    return d
-
-
 def _hydrate_relation(
     op: Mapping[str, Any],
     parents: Sequence[Dict[str, Any]],
-    driver: Driver,
-    connections: Optional[Mapping[str, Driver]],
+    ctx: ExecutionContext,
     attach_name: str,
 ) -> None:
     """Hydrate ONE relation edge over ``parents`` (ONE batched query, N+1-free), then RECURSE into
@@ -158,8 +144,7 @@ def _hydrate_relation(
     place (users→posts→comments = 3 queries, not 1 + N + N·M). No new mechanism: every level runs the
     SAME ``run_relation_op`` + grouping core.
     """
-    rel_driver = _driver_for_op(op, driver, connections)
-    batch = run_relation_op(op, parents, rel_driver)["batch"]
+    batch = run_relation_op(op, parents, ctx)["batch"]
     for p in parents:
         p[attach_name] = distribute_to_parent(op, p, batch)
     child_ops = op.get("childRelations")
@@ -169,32 +154,35 @@ def _hydrate_relation(
         child_rows = [c for children in batch.values() for c in children]
         if child_rows:
             for child_op in child_ops:
-                _hydrate_relation(child_op, child_rows, driver, connections, child_op["name"])
+                _hydrate_relation(child_op, child_rows, ctx, child_op["name"])
 
 
 def read_bundle(
     bundle: Mapping[str, Any],
     input_scope: Mapping[str, Any],
-    driver: Driver,
+    driver: Union[Driver, ExecutionContext],
     with_names: Sequence[str],
-    connections: Optional[Mapping[str, Driver]] = None,
 ) -> List[Dict[str, Any]]:
     """Run a READ bundle's primary row list, then batch-load + hydrate the selected relations.
 
-    Mirrors the TS ``readBundle`` typed-object surface restricted to the declarative-select path
+    Mirrors the TS ``buildResultSet`` typed-object surface restricted to the declarative-select path
     (``buildResultSet`` with ``with``): the primary read output must be a bare row list; each named
     relation in ``with_names`` is batch-prefetched ONCE over the whole page (staged, no N+1) via the
     SAME ``run_relation_op`` and attached onto each parent as an own key. Independent sibling
     relations are naturally free of ordering: the batch is grouped-then-distributed by key, so the
     hydrated result is deterministic regardless of query-completion order (#40 parallel-safe).
 
-    CROSS-DB (V0 R1): a relation op carrying a ``connection`` tag is batched against
-    ``connections[tag]`` (its target model's DB) instead of the primary ``driver``; untagged
-    relations ignore ``connections``. Omit ``connections`` for a single-DB read.
+    CROSS-DB (V0 R1): a relation op carrying a ``connection`` tag names ITS OWN database; the name
+    rides the :class:`StatementIntent` to ``connection_for`` (:func:`run_relation_op`). Resolving it
+    needs a ctx that HOLDS a :class:`ConnectionRegistry` — a raw :class:`Driver` is a single-connection
+    target, so a tagged relation on one is LOUD rather than silently run against the parent's database.
     """
     from .runtime import execute_bundle
 
-    out = execute_bundle(bundle, input_scope, driver)
+    # ONE ExecutionContext for the primary read AND every relation batch: a relation's database is
+    # named on its op and resolved by this ctx, so there is no per-relation target to derive.
+    ctx = as_context(driver)
+    out = execute_bundle(bundle, input_scope, ctx)
     if not isinstance(out, list):
         raise ValueError(
             "scp read: the read behavior output is not a row list "
@@ -207,5 +195,5 @@ def read_bundle(
         op = relations.get(name)
         if op is None:
             raise ValueError(f"declarative select: relation '{name}' is not declared on this model")
-        _hydrate_relation(op, rows, driver, connections, name)
+        _hydrate_relation(op, rows, ctx, name)
     return rows

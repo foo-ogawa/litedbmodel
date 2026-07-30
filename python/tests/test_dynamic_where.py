@@ -28,6 +28,7 @@ from litedbmodel_runtime.connection_routing import ConnectionPool
 from litedbmodel_runtime.driver import SqliteDriver
 from litedbmodel_runtime.exec_context import ExecutionContext, MiddlewareChain
 from litedbmodel_runtime.leaves import make_handlers
+from litedbmodel_runtime.relation import run_relation_op
 
 CTX = {"nodeId": "n0", "component": "executeSQL"}
 
@@ -386,7 +387,10 @@ def test_a_covered_transaction_opens_on_the_writer_and_is_seam_visible():
 # ``named_db_routes_the_statement`` and the php ``NamedDbRoutingTest``.
 
 
-def _named_db_handler():
+def _named_db_context():
+    """The TWO-database routed ctx both named-DB consumers resolve against: DB "A" (the default
+    connection) holds an UNRELATED table, DB "B" holds ``named_users``. Returns the ctx plus the log of
+    WHICH connection each acquire drew from."""
     a = sqlite3.connect(":memory:")
     a.execute("CREATE TABLE only_in_a (id INTEGER PRIMARY KEY)")
     b = sqlite3.connect(":memory:")
@@ -399,7 +403,12 @@ def _named_db_handler():
         .build(),
         WriterStickyClock(use_writer_after_transaction=False),
     )
-    handler = make_handlers(ExecutionContext(None, MiddlewareChain(), routing=routing), "sqlite")["executeSQL"]
+    return ExecutionContext(None, MiddlewareChain(), routing=routing), log
+
+
+def _named_db_handler():
+    ctx, log = _named_db_context()
+    handler = make_handlers(ctx, "sqlite")["executeSQL"]
 
     def read(db):
         return handler(
@@ -429,6 +438,40 @@ def test_named_db_routes_the_statement():
     # An UNREGISTERED name is LOUD, never a silent fall back to the default.
     with pytest.raises(ValueError, match="no connection registered under name 'ghost'"):
         read("ghost")
+
+
+def test_named_db_routes_the_relation_batch():
+    """The RELATION-BATCH consumer of the same channel: a relation names its own database on the compiled
+    op (``connection`` — the TARGET model's), and ``run_relation_op`` puts that name on the
+    StatementIntent for the SAME ``connection_for`` + ``ConnectionRegistry`` to resolve. There is no
+    second registry: the eager/lazy read surface hands the name to the seam exactly as the leaf does."""
+    ctx, log = _named_db_context()
+    parents = [{"id": 10, "author_id": 1}]
+
+    def op(connection):
+        return {
+            "name": "author",
+            "kind": "belongsTo",
+            "parentKey": "author_id",
+            "targetKey": "id",
+            "dialect": "sqlite",
+            "sql": "SELECT id, name FROM named_users WHERE id IN (SELECT value FROM json_each(?))",
+            **({"connection": connection} if connection is not None else {}),
+        }
+
+    # NAMED ⇒ B served the batch, and the child row proves it came from there.
+    batch = run_relation_op(op("B"), parents, ctx)["batch"]
+    assert list(batch.values()) == [[{"id": 1, "name": "Ada"}]]
+    assert log == ["B"]
+    # NEGATIVE CONTROL — the SAME batch with the op's name dropped lands on the parent's connection,
+    # where `named_users` does not exist.
+    with pytest.raises(Exception) as ei:
+        run_relation_op(op(None), parents, ctx)
+    assert "named_users" in str(ei.value)
+    assert log == ["B", "A"]
+    # An UNREGISTERED name is LOUD, never a silent fall back to the parent's database.
+    with pytest.raises(ValueError, match="no connection registered under name 'ghost'"):
+        run_relation_op(op("ghost"), parents, ctx)
 
 
 def test_named_db_on_a_non_routed_context_is_loud():

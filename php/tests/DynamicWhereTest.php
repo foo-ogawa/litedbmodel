@@ -12,6 +12,7 @@ use LiteDbModel\Runtime\MiddlewareChain;
 use LiteDbModel\Runtime\PdoDriver;
 use LiteDbModel\Runtime\PdoPool;
 use LiteDbModel\Runtime\ReaderWriterPools;
+use LiteDbModel\Runtime\Relation;
 use LiteDbModel\Runtime\RoutingConfig;
 use LiteDbModel\Runtime\RoutingExecutionContext;
 use LiteDbModel\Runtime\WriterStickyClock;
@@ -423,7 +424,14 @@ final class DynamicWhereTest extends TestCase
      * tests, the go `TestExecuteSQL_NamedDBRoutesTheStatement`, the rust `named_db_routes_the_statement`
      * and the python `test_named_db_routes_the_statement`.
      */
-    public function testNamedDbRoutesTheStatement(): void
+    /**
+     * The TWO-database routed context both named-DB consumers resolve against: DB "A" (the default
+     * connection) holds an UNRELATED table, DB "B" holds `named_users`. Returns the ctx plus the log of
+     * WHICH connection each acquire drew from.
+     *
+     * @return array{0: RoutingExecutionContext, 1: \ArrayObject<int,string>}
+     */
+    private static function namedDbContext(): array
     {
         $open = static function (array $seed): PdoDriver {
             $pdo = new \PDO('sqlite::memory:', null, null, [\PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION]);
@@ -432,7 +440,6 @@ final class DynamicWhereTest extends TestCase
             }
             return new PdoDriver($pdo);
         };
-        // DB "A" (the default connection) holds an UNRELATED table; DB "B" holds `named_users`.
         $a = $open(['CREATE TABLE only_in_a (id INTEGER PRIMARY KEY)']);
         $b = $open([
             'CREATE TABLE named_users (id INTEGER PRIMARY KEY, name TEXT)',
@@ -445,10 +452,24 @@ final class DynamicWhereTest extends TestCase
                 ->build(),
             new WriterStickyClock(useWriterAfterTransaction: false),
         );
-        $executeSQL = Leaves::makeHandlers(
-            new RoutingExecutionContext($a, new MiddlewareChain(), $routing),
-            'sqlite',
-        )['executeSQL'];
+        return [new RoutingExecutionContext($a, new MiddlewareChain(), $routing), $log];
+    }
+
+    /** Catch a failure's message so several negatives can be asserted in ONE run. */
+    private static function failureMessage(callable $fn): string
+    {
+        try {
+            $fn();
+        } catch (\Throwable $e) {
+            return $e->getMessage();
+        }
+        return '';
+    }
+
+    public function testNamedDbRoutesTheStatement(): void
+    {
+        [$ctx, $log] = self::namedDbContext();
+        $executeSQL = Leaves::makeHandlers($ctx, 'sqlite')['executeSQL'];
         $at = ['nodeId' => 'n0', 'component' => 'executeSQL'];
         $read = static fn (?string $db): array => $executeSQL([
             'sql' => 'SELECT id, name FROM named_users ORDER BY id',
@@ -468,17 +489,9 @@ final class DynamicWhereTest extends TestCase
         // reasoned: this is the failure a cross-DB relation produced before the emitter lowered the name.
         // Both negatives are caught rather than declared, so all three outcomes are asserted in ONE run
         // (an `expectException` would end the test at the first of them).
-        $failure = static function (callable $fn): string {
-            try {
-                $fn();
-            } catch (\Throwable $e) {
-                return $e->getMessage();
-            }
-            return '';
-        };
         self::assertStringContainsString(
             'named_users',
-            $failure(static fn () => $read(null)),
+            self::failureMessage(static fn () => $read(null)),
             'a dropped name must land on the DEFAULT connection, where the table does not exist',
         );
         self::assertSame(['B', 'A'], $log->getArrayCopy());
@@ -486,7 +499,50 @@ final class DynamicWhereTest extends TestCase
         // An UNREGISTERED name is LOUD, never a silent fall back to the default.
         self::assertStringContainsString(
             "no connection registered under name 'ghost'",
-            $failure(static fn () => $read('ghost')),
+            self::failureMessage(static fn () => $read('ghost')),
+        );
+    }
+
+    /**
+     * The RELATION-BATCH consumer of the same channel: a relation names its own database on the compiled
+     * op (`connection` — the TARGET model's), and `runRelationOp` puts that name on the StatementIntent
+     * for the SAME `connectionFor` + `ConnectionRegistry` to resolve. There is no second registry: the
+     * eager/lazy read surface hands the name to the seam exactly as the leaf does.
+     */
+    public function testNamedDbRoutesTheRelationBatch(): void
+    {
+        [$ctx, $log] = self::namedDbContext();
+        $parents = [(object) ['id' => 10, 'author_id' => 1]];
+        $op = static fn (?string $connection): \stdClass => (object) [
+            'name' => 'author',
+            'kind' => 'belongsTo',
+            'parentKey' => 'author_id',
+            'targetKey' => 'id',
+            'dialect' => 'sqlite',
+            'sql' => 'SELECT id, name FROM named_users WHERE id IN (SELECT value FROM json_each(?))',
+            ...($connection !== null ? ['connection' => $connection] : []),
+        ];
+
+        // NAMED ⇒ B served the batch, and the child row proves it came from there.
+        $batch = Relation::runRelationOp($op('B'), $parents, $ctx);
+        self::assertSame([['id' => 1, 'name' => 'Ada']], array_map(
+            static fn ($r): array => (array) $r,
+            $batch[array_key_first($batch)],
+        ));
+        self::assertSame(['B'], $log->getArrayCopy());
+
+        // NEGATIVE CONTROL — the SAME batch with the op's name dropped lands on the parent's connection,
+        // where `named_users` does not exist.
+        self::assertStringContainsString(
+            'named_users',
+            self::failureMessage(static fn () => Relation::runRelationOp($op(null), $parents, $ctx)),
+        );
+        self::assertSame(['B', 'A'], $log->getArrayCopy());
+
+        // An UNREGISTERED name is LOUD, never a silent fall back to the parent's database.
+        self::assertStringContainsString(
+            "no connection registered under name 'ghost'",
+            self::failureMessage(static fn () => Relation::runRelationOp($op('ghost'), $parents, $ctx)),
         );
     }
 

@@ -32,7 +32,7 @@ import {
   distributeToParent,
   type RelationOp,
   type RelationBatch,
-  type RelationDriver,
+  type RelationTarget,
 } from './relation';
 
 /** The non-enumerable Symbol under which the shared lazy batch context is stashed. */
@@ -42,39 +42,37 @@ export const RELATION_CONTEXT: unique symbol = Symbol('litedbmodel:relation-cont
 export type HydrateFactory<R> = (raw: Record<string, unknown>) => R;
 
 /**
- * The shared lazy batch context for one result set. Holds the sibling rows, the driver, the
- * compiled relation ops (keyed by name), the (optional) hydrate factory, and a per-relation
- * memo so a relation is batched at most ONCE across all siblings (structural no-N+1 for lazy).
- * Stored as a non-enumerable Symbol prop so spread/JSON/`Object.keys` never see it (a spread
- * or clone drops it — "designed degradation", feasibility §9).
+ * The shared lazy batch context for one result set. Holds the sibling rows, the batch TARGET (a raw
+ * driver or a full {@link import('./exec-context').ExecutionContext}), the compiled relation ops
+ * (keyed by name), the (optional) hydrate factory, and a per-relation memo so a relation is batched
+ * at most ONCE across all siblings (structural no-N+1 for lazy). Stored as a non-enumerable Symbol
+ * prop so spread/JSON/`Object.keys` never see it (a spread or clone drops it — "designed
+ * degradation", feasibility §9).
+ *
+ * ONE target, whatever a relation's DATABASE is: a CROSS-DB relation names its connection ON THE OP
+ * ({@link RelationOp.connection}), and {@link runRelationOp} puts that name on the statement's
+ * {@link import('./exec-context').StatementIntent} for the target's `connectionFor` to resolve
+ * against the ONE registry ({@link import('./connection-routing').ConnectionRegistry}). So this
+ * surface holds no connection registry of its own; a target that cannot resolve the name is LOUD.
  */
 export class RelationContext {
   private readonly siblings: Record<string, unknown>[];
   private readonly ops: Readonly<Record<string, RelationOp>>;
-  private readonly db: RelationDriver;
+  private readonly db: RelationTarget;
   private readonly hydrate?: HydrateFactory<unknown>;
-  /** CROSS-DB (V0 R1): name → driver registry; a tagged relation routes to `connections[tag]`. */
-  private readonly connections?: Readonly<Record<string, RelationDriver>>;
   /** Per-relation resolved batch (name → grouping), memoized: one batch query per relation. */
   private readonly resolved = new Map<string, RelationBatch>();
 
   constructor(
     siblings: Record<string, unknown>[],
     ops: Readonly<Record<string, RelationOp>>,
-    db: RelationDriver,
+    db: RelationTarget,
     hydrate?: HydrateFactory<unknown>,
-    connections?: Readonly<Record<string, RelationDriver>>,
   ) {
     this.siblings = siblings;
     this.ops = ops;
     this.db = db;
     this.hydrate = hydrate;
-    this.connections = connections;
-  }
-
-  /** The driver a relation runs against: its tagged cross-DB connection, else the primary `db`. */
-  private driverFor(op: RelationOp): RelationDriver {
-    return op.connection === undefined ? this.db : driverForOp(op, this.connections);
   }
 
   /**
@@ -89,24 +87,11 @@ export class RelationContext {
     }
     let batch = this.resolved.get(relationName);
     if (batch === undefined) {
-      batch = runRelationOp(op, this.siblings, this.driverFor(op)).batch;
+      batch = runRelationOp(op, this.siblings, this.db).batch;
       this.resolved.set(relationName, batch);
     }
     return applyHydrate(distributeToParent(op, parent, batch), this.hydrate);
   }
-}
-
-/**
- * The driver a CROSS-DB relation op (V0 R1) runs against: the registered `connections[tag]`. Loud
- * failure when the tag has no registered driver (a real wiring bug — never a silent same-DB
- * fallback, which would run the target's query on the wrong DB). Only called for a tagged op.
- */
-function driverForOp(op: RelationOp, connections: Readonly<Record<string, RelationDriver>> | undefined): RelationDriver {
-  const d = connections?.[op.connection as string];
-  if (d === undefined) {
-    throw new Error(`cross-DB relation '${op.name}': no driver registered for connection '${op.connection}' (pass it in ReadOptions.connections)`);
-  }
-  return d;
 }
 
 /** Read the non-enumerable batch context off a typed-object (undefined if spread/cloned away). */
@@ -136,13 +121,6 @@ export interface ReadOptions<R = Record<string, unknown>> {
   readonly with?: Readonly<Record<string, true>>;
   /** Host-object factory applied AFTER relation resolution (not applied to `null`). */
   readonly hydrate?: HydrateFactory<R>;
-  /**
-   * CROSS-DB relations (V0 R1): connection-name → driver registry. A relation whose compiled op
-   * carries a `connection` tag (its target model lives in a DIFFERENT DB — v1
-   * `TargetClass.getDriverType()`) is batch-loaded against `connections[tag]` instead of the
-   * primary `db`. Untagged (same-DB) relations ignore this. Omit for a single-DB read.
-   */
-  readonly connections?: Readonly<Record<string, RelationDriver>>;
 }
 
 /**
@@ -163,7 +141,7 @@ export interface ReadOptions<R = Record<string, unknown>> {
 export function buildResultSet<R = Record<string, unknown>>(
   rawRows: readonly Record<string, unknown>[],
   ops: Readonly<Record<string, RelationOp>>,
-  db: RelationDriver,
+  db: RelationTarget,
   options: ReadOptions<R> = {},
 ): R[] {
   const selected = options.with ?? {};
@@ -203,7 +181,7 @@ export function buildResultSet<R = Record<string, unknown>>(
   });
 
   // The shared lazy batch context (non-enumerable Symbol) — the whole page is the sibling set.
-  const ctx = new RelationContext(rows, ops, db, hydrate, options.connections);
+  const ctx = new RelationContext(rows, ops, db, hydrate);
   for (const o of rows) {
     Object.defineProperty(o, RELATION_CONTEXT, {
       value: ctx,
@@ -218,9 +196,7 @@ export function buildResultSet<R = Record<string, unknown>>(
   for (const name of Object.keys(selected)) {
     const op = ops[name];
     if (op === undefined) throw new Error(`declarative select: relation '${name}' is not declared on this model`);
-    // CROSS-DB (V0 R1): a tagged relation batches against its own connection; else the primary db.
-    const relDb = op.connection === undefined ? db : driverForOp(op, options.connections);
-    const { batch } = runRelationOp(op, rows, relDb);
+    const { batch } = runRelationOp(op, rows, db);
     for (const o of rows) {
       o[name] = applyHydrate(distributeToParent(op, o, batch), hydrate);
     }

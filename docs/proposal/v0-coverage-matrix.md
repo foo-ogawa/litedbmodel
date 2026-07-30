@@ -74,7 +74,7 @@ hand-roll).
 | composite-key belongsTo | ✅ (composite unnest) | ✅ (Docs owner) | **done** |
 | composite STATIC unnest form (PG) | ✅ P (byte + negative) | ✅ | **done** |
 | composite STATIC limited form (`compileCompositeKeyStaticLimited`) | ✅ P (byte-identical to v1) / M/S (window byte-identical, JSON key-set predicate) + negative | ✅ all 5 runtimes | **done** |
-| **cross-DB relations (target driver/connection)** | ✅ (SQL = target's dialect, byte-identical) | ✅ ALL 5 runtimes — TS two-DB (SQLite×2); py/php/go/rust live PG↔MySQL cross-DB vector | **done (R1 — per-statement `connection` tag + per-runtime routing; live cross-DB run across all 5 runtimes)** |
+| **cross-DB relations (target driver/connection)** | ✅ (SQL = target's dialect, byte-identical) | ✅ ALL 5 runtimes — live PG two-connection end-to-end; offline two-DB per language; TS two-DB (SQLite×2) | **done (R1 — the model names its DB, the name routes via `StatementIntent.db` against the one `ConnectionRegistry`)** |
 
 ## Matrix — WRITE surface
 
@@ -106,7 +106,7 @@ per-language LIVE cross-DB run is the one escalation.
 
 | Item | Final state | How |
 |---|---|---|
-| **R1** cross-DB relations | **done (byte + live, all 5 runtimes)** | `RelationDecl.connection?`/`RelationOp.connection?` (additive, untagged = byte-unchanged); the relation SQL compiles for the TARGET model's own `dialect` (byte-identical to v1). Each runtime's read path (`read_bundle`/`ReadBundle`/`readBundle`/`read_bundle_pooled`) takes a connection REGISTRY and routes a tagged relation to `registry[tag]` (untagged → primary; loud-fail on a missing tag). Live: a `kind:'crossdb'` corpus vector runs the parent on connection A and the tagged `author` batch on connection B — pg leg parent=PG + author→MySQL, mysql leg parent=MySQL + author→PG (the parent table lives ONLY on A, the target ONLY on B, so a mis-route fails loudly ⇒ a green hydrate is unforgeable). TS reference = two separate SQLite DBs (`cross-db-relation.test.ts`). |
+| **R1** cross-DB relations | **done (byte + live, all 5 runtimes)** | `RelationDecl.connection?`/`RelationOp.connection?` (additive, untagged = byte-unchanged), derived from the TARGET model's `CONNECTION`; the relation SQL compiles for that model's own `dialect` (byte-identical to v1). The name routes the statement via `StatementIntent.db` → the execution context's ONE `ConnectionRegistry` (untagged → the default connection; an unregistered name or a non-routed context is loud). Gated on two DISJOINT databases so a mis-route sees no table at all: live PG end-to-end (`NamedDbCodegen.test.ts`), offline per language through the production leaf + routing, and the typed-object surface over two SQLite DBs (`cross-db-relation.test.ts`). |
 | **R2** subquery / EXISTS / NOT IN / NOT EXISTS | **done (byte + live PG+MySQL)** | `whereInSubquery`(+NOT) / `whereExists`(+NOT) — subquery as a nested makeSQL Fragment in the param slot. Live: InSubquery/NotInSubquery/ExistsComment/NotExistsComment. |
 | **R3** GROUP BY / FOR UPDATE / BETWEEN / LIKE / tuple-IN / dbCast / dbImmediate | **done (byte + live)** | `group` (already) + new `forUpdate` port + `whereBetween`/`whereLike`/`whereTupleIn`/`whereCast`/`whereImmediate`. Live: GroupByAuthor/ForUpdate/IdBetween/TitleLike/TupleIn/DocByCast/ImmediateEq. ILIKE + dbDynamic(to_tsvector) are byte-done + PG-only-by-nature (see notes in the READ matrix — not live gaps). |
 | **R4** CTE / WITH | **done (byte + live)** | `cte`/`cteParams` ports added; `compileSelect` WITH-wrap is v1-sourced. Live: CteLive. |
@@ -115,29 +115,34 @@ per-language LIVE cross-DB run is the one escalation.
 | **R7** findById/findByPkeys | **done — DELETED** | `compileFindByPkeys` + `FindByPkeysOptions` import + 2 re-exports removed (dead SCP export, redundant with live IN-list/composite-relation reads). v1 `buildFindByPkeys` kept (DBModel.findById). |
 | **R8** FIND_FILTER | **done — no-op with evidence (variant b)** | v1 merges FIND_FILTER into the WHERE `DBConditions` BEFORE compiling (`DBModel.ts:596-604`/`:858-866`); the SCP compile reimplements the WHERE text from explicit `conditions` and never reads FIND_FILTER. `find-filter-noop.test.ts` proves (3 dialects) the merged filter == the authored WHERE byte-for-byte — folded upstream, a genuine no-op for makeSQL. |
 
-### R1 — per-language LIVE cross-DB relation run (LANDED)
+### R1 — cross-DB relation routing
 
-The escalated 5-runtime change was approved and landed as thin, SQL-independent routing plumbing (no SQL
-touched — the relation SQL is v1-identical, compiled for whichever dialect its target DB speaks):
+A relation whose TARGET model lives in another database runs its batched child SELECT on THAT database (v1
+`LazyRelation.ts:236` runs it on `TargetClass.getDriverType()`'s driver). The SQL is v1-identical either way —
+the routing is SQL-independent plumbing:
 
-1. **Corpus mode.** A `kind:'crossdb'` read vector (`conformance/gen-livedb.ts`) whose parent `posts` read runs
-   on the leg's PRIMARY DB and whose tagged `author` belongsTo runs on the SECONDARY (OTHER) live DB. Per leg
-   the tagged relation op is compiled for the SECONDARY dialect: pg leg parent=PG + author→MySQL-dialect batch
-   (routed to `my`); mysql leg parent=MySQL + author→PG-dialect batch (routed to `pg`). The parent table lives
-   ONLY on the primary and the target `users` table ONLY on the secondary, so a mis-route hits a MISSING table
-   (loud error) — a green hydrate is unforgeable proof the tag routed the batch to connection B. The reference
-   is captured on two separate SQLite DBs via the TS `buildResultSet` two-DB path (byte-true, in-generator).
-2. **Per-runtime routing.** Each runtime's read entry point now takes a connection REGISTRY (name→driver) and
-   routes a tagged relation to `registry[op.connection]`, untagged → primary, loud-fail on a missing tag:
-   TS `buildResultSet`/`readBundle` (`connections`), Python `read_bundle(…, connections)`, Go
-   `ReadBundle(…, connections map[string]SQLDB)`, Rust `read_bundle_pooled(…, connections)`, PHP
-   `Relation::readBundle(…, $connections)`. Each `livedb_runner` opens BOTH pools in `main()` already; the
-   crossdb leg resets the secondary DB with the vector's `secondarySchema*` and passes `{tag: otherDriver}`.
+1. **The name comes from the MODEL** — `@model(table, { connection })` → `static CONNECTION` → `connectionOf`,
+   the twin of `TABLE_NAME`. An endpoint's statements take their own model's connection; a relation's child
+   fetch takes the TARGET model's, resolved once by `relationDeclOf` onto the compiled `RelationOp.connection`.
+2. **ONE channel, ONE registry.** The name reaches the router as `StatementIntent.db` — on the codegen surface
+   through the child fetch's `ExecOptions.db` control field the emitter bakes, on the typed-object/lazy surface
+   through `runRelationOp`. Resolving it is the execution context's job, against the single
+   `ConnectionRegistry` (name → reader/writer pools) each runtime already carries: the named connection's pair
+   is selected first, then the tx-pin / writer-sticky / reader-writer split applies within it. No read entry
+   point takes a connection registry of its own.
+3. **Fail-closed, all five.** An unregistered name (`ConnectionRegistry.pairFor`) and a named statement on a
+   single-connection / non-routed context (`assertRoutableNamedDb`) are BOTH loud. Silently running on
+   whatever one connection the context holds is the wrong-database execution the name exists to prevent, and a
+   single-DB deployment is exactly where it would never be noticed.
 
-**Result:** `conformance:livedb` green on all 4 non-TS runtimes at 53/53 pg + 53/53 mysql INCLUDING the crossdb
-vector on BOTH legs; TS two-DB reference green (`test/scp/cross-db-relation.test.ts`). Untagged relations are
-byte- and behaviour-unchanged (the field is optional/additive; existing 52 relation+exec+tx vectors still
-green). eager path unchanged.
+**Gates** (two databases, tables DISJOINT, so a mis-routed statement cannot see a table at all): live PG
+end-to-end over two named connections incl. a cross-DB relation and an other-connection read AND write
+(`test/integration/NamedDbCodegen.test.ts`); offline through the production leaf + production routing per
+language (go `TestExecuteSQL_NamedDBRoutesTheStatement`, rust `named_db_routes_the_statement`, python
+`test_named_db_routes_the_statement`, php `testNamedDbRoutesTheStatement`, TS `leaves.test.ts`) plus the
+non-routed-context rejection in each; the typed-object/lazy surface over two SQLite DBs
+(`test/scp/cross-db-relation.test.ts`). The livedb corpus itself is single-DB, so it cannot tell a honored
+name from a dropped one — that is why every gate above is a two-database one.
 
 ## Net V0 outcome (final)
 
@@ -146,10 +151,11 @@ green). eager path unchanged.
   additive where-primitives + `SELECT_PORTS` ports (plan §2 補足), every construct's SQL still v1-sourced.
   Golden 139→176 (+37 authored-path byte-asserts, incl. a golden-from-originals negative). livedb 39→52 vectors
   (all 4 language legs 52/52 pg + 52/52 mysql).
-- **R1:** DONE. Per-statement `connection` tag + per-runtime connection-registry routing across ALL 5 runtimes;
-  a `kind:'crossdb'` live vector runs the parent on connection A and the tagged relation on connection B — green
-  on live PG↔MySQL in py/php/go/rust (53/53 both legs) + the TS two-DB reference. SQL v1-identical; untagged
-  relations byte/behaviour-unchanged; eager path unchanged.
+- **R1:** DONE. The MODEL names its database; the name rides `StatementIntent.db` to the ONE
+  `ConnectionRegistry` each runtime carries, on both read surfaces and in all 5 runtimes. Gated on two
+  DISJOINT databases: live PG end-to-end + offline per-language through the production leaf and routing + the
+  TS typed-object two-SQLite reference; an unregistered name and a non-routed context are both loud. SQL
+  v1-identical; untagged relations byte/behaviour-unchanged.
 - **R7:** dead `compileFindByPkeys` deleted (v1 `buildFindByPkeys` retained).
 - **R8:** FIND_FILTER proven a makeSQL no-op (variant b) with a 3-dialect byte test — not a waive.
 - **Byte-only-by-nature (not gaps):** ILIKE (v1 `ILIKE` keyword is PG-only; errors on MySQL/SQLite) and

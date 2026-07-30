@@ -111,9 +111,12 @@ final class Relation
             return $batch;
         }
         $tCols = self::targetKeyCols($op);
-        // The central READ seam (§2): the ONE driver contact for the relation batch. Byte-identical to
-        // the pre-seam `$db->prepare($sql)->execute(bindKeys)->fetchAll(OBJ)`.
-        $rows = execute($ctx, $sql, self::bindKeys($op, $keys));
+        // The central READ seam (§2): the ONE driver contact for the relation batch. The batch's own
+        // DATABASE rides the StatementIntent — the compiled op names it (`$op->connection`, the TARGET
+        // model's), the ctx owns the registry that resolves the name, and the intent is the only input
+        // `connectionFor` routes on (the SAME channel the executeSQL leaf uses on the codegen surface).
+        // An untagged (same-DB) relation leaves `db` null ⇒ the DEFAULT connection.
+        $rows = execute($ctx, $sql, self::bindKeys($op, $keys), new StatementIntent(false, $op->connection ?? null));
         // Hard-limit runaway guard (Phase E-2, epic #74; v1 `_selectForRelation`): POST-fetch, if the
         // batch TOTAL exceeds the baked cap, throw with the EXACT count (the batch is fetched in full,
         // no N+1). ⚠️ field mapping mirrors the TS reference: `model` = the relation TARGET TABLE,
@@ -155,49 +158,26 @@ final class Relation
     }
 
     /**
-     * The driver a relation runs against: its tagged cross-DB connection, else the primary $db.
-     * CROSS-DB (V0 R1): a relation whose op carries a `connection` tag (its target model lives in a
-     * DIFFERENT DB — v1 LazyRelation.ts:236) routes to $connections[tag]. Loud failure when the tag
-     * has no registered driver (a real wiring bug — never a silent same-DB fallback that would run
-     * the target's query on the wrong DB). Untagged relations use the primary $db.
-     *
-     * @param array<string,ExecutionContext> $connections
-     */
-    private static function driverForOp(\stdClass $op, ExecutionContext $ctx, array $connections): ExecutionContext
-    {
-        $tag = $op->connection ?? null;
-        if ($tag === null) {
-            return $ctx;
-        }
-        if (!isset($connections[$tag])) {
-            throw new \RuntimeException(
-                "cross-DB relation '" . ($op->name ?? '?') . "': no driver registered for connection "
-                . "'{$tag}' (pass it in readBundle connections)"
-            );
-        }
-        return $connections[$tag];
-    }
-
-    /**
      * Run a READ bundle's primary row list, then batch-load + hydrate the selected relations onto
-     * each parent (port of the TS readBundle typed-object surface, declarative-select path). The
+     * each parent (port of the TS buildResultSet typed-object surface, declarative-select path). The
      * primary read output must be a bare row list; each named relation in $withNames is batch-
      * prefetched ONCE over the whole page (staged, no N+1) via the SAME runRelationOp and attached
      * onto each parent as an own property.
      *
-     * CROSS-DB (V0 R1): a relation op carrying a `connection` tag is batched against
-     * $connections[tag] (its target model's DB) instead of the primary $db; untagged relations
-     * ignore $connections. Pass an empty array for a single-DB read.
+     * CROSS-DB (V0 R1): a relation op carrying a `connection` tag names ITS OWN database; the name
+     * rides the StatementIntent to `connectionFor` ({@see runRelationOp()}). Resolving it needs a ctx
+     * that HOLDS a ConnectionRegistry — a raw PDO is a single-connection target, so a tagged relation
+     * on one is LOUD rather than silently run against the parent's database.
      *
      * @param array<string,mixed> $input
      * @param list<string> $withNames
-     * @param array<string,\PDO|ExecutionContext> $connections
      * @return list<\stdClass>
      */
-    public static function readBundle(\stdClass $bundle, array $input, \PDO|ExecutionContext $db, array $withNames, array $connections = []): array
+    public static function readBundle(\stdClass $bundle, array $input, \PDO|ExecutionContext $db, array $withNames): array
     {
+        // ONE ExecutionContext for the primary read AND every relation batch: a relation's database is
+        // named on its op and resolved by this ctx, so there is no per-relation target to derive.
         $ctx = Context::of($db);
-        $connCtx = array_map(static fn (\PDO|ExecutionContext $c): ExecutionContext => Context::of($c), $connections);
         $out = Runtime::executeBundle($bundle, $input, $ctx);
         if (!is_array($out) || !array_is_list($out)) {
             throw new \RuntimeException(
@@ -212,7 +192,7 @@ final class Relation
             if (!($relations instanceof \stdClass) || !property_exists($relations, $name)) {
                 throw new \RuntimeException("declarative select: relation '{$name}' is not declared on this model");
             }
-            self::hydrateRelation($relations->{$name}, $rows, $ctx, $connCtx, $name);
+            self::hydrateRelation($relations->{$name}, $rows, $ctx, $name);
         }
         return $rows;
     }
@@ -229,13 +209,11 @@ final class Relation
      * (users→posts→comments = 3 queries, not 1 + N + N·M). No new mechanism: every level runs the SAME
      * runRelationOp + grouping core.
      *
-     * @param list<\stdClass>              $parents
-     * @param array<string,ExecutionContext> $connCtx
+     * @param list<\stdClass> $parents
      */
-    private static function hydrateRelation(\stdClass $op, array $parents, ExecutionContext $ctx, array $connCtx, string $attachName): void
+    private static function hydrateRelation(\stdClass $op, array $parents, ExecutionContext $ctx, string $attachName): void
     {
-        $relCtx = self::driverForOp($op, $ctx, $connCtx);
-        $batch = self::runRelationOp($op, $parents, $relCtx);
+        $batch = self::runRelationOp($op, $parents, $ctx);
         foreach ($parents as $p) {
             $p->{$attachName} = self::distributeToParent($op, $p, $batch);
         }
@@ -251,7 +229,7 @@ final class Relation
             }
             if ($childRows !== []) {
                 foreach ($childOps as $childOp) {
-                    self::hydrateRelation($childOp, $childRows, $ctx, $connCtx, (string) $childOp->name);
+                    self::hydrateRelation($childOp, $childRows, $ctx, (string) $childOp->name);
                 }
             }
         }

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	bc "github.com/foo-ogawa/behavior-contracts/go"
 	"github.com/foo-ogawa/litedbmodel/go/litedbmodel_runtime/wire"
 
 	_ "modernc.org/sqlite" // pure-go sqlite driver (registered as "sqlite")
@@ -515,6 +516,51 @@ func TestExecuteSQL_NamedDBRoutesTheStatement(t *testing.T) {
 	// An UNREGISTERED name is LOUD, never a silent fall back to the default.
 	if _, err := read(wire.WireStr("ghost")); err == nil || !strings.Contains(err.Error(), "no connection registered under name 'ghost'") {
 		t.Fatalf(`db "ghost" error = %v, want the loud unregistered-name failure`, err)
+	}
+}
+
+// The RELATION-BATCH consumer of the SAME channel: a relation names its own database on the compiled op
+// (Connection — the TARGET model's), and runRelationOpCtx puts that name on the StatementIntent for the
+// SAME ConnectionFor + [ConnectionRegistry] to resolve. There is no second registry: the eager/lazy read
+// surface hands the name to the seam exactly as the leaf does.
+func TestRunRelationOp_NamedDBRoutesTheBatch(t *testing.T) {
+	ctx, done := namedDBPools(t)
+	defer done()
+
+	parent := bc.NewObj()
+	parent.Set("id", float64(10))
+	parent.Set("author_id", float64(1))
+	op := func(connection string) RelationOp {
+		return RelationOp{
+			Name: "author", Kind: "belongsTo",
+			ParentKey: "author_id", TargetKey: "id", Dialect: "sqlite",
+			SQL:        "SELECT id, name FROM named_users WHERE id IN (SELECT value FROM json_each(?))",
+			Connection: connection,
+		}
+	}
+
+	// NAMED ⇒ B served the batch, and the child row proves it came from there.
+	batch, err := runRelationOpCtx(ctx, op("B"), []bc.Value{parent})
+	if err != nil {
+		t.Fatalf(`connection "B": %v`, err)
+	}
+	kids := batch[KeyIdentity([]bc.Value{float64(1)})]
+	if len(kids) != 1 {
+		t.Fatalf(`connection "B" batched %v, want the 1 child row of the named db`, batch)
+	}
+
+	// NEGATIVE CONTROL — the SAME batch with the op's name dropped lands on the parent's connection,
+	// where named_users does not exist. Measured, not reasoned.
+	if _, err := runRelationOpCtx(ctx, op(""), []bc.Value{parent}); err == nil {
+		t.Fatal("an untagged batch must hit the DEFAULT connection, where named_users does not exist — got no error")
+	} else if !strings.Contains(err.Error(), "named_users") {
+		t.Fatalf("untagged batch error = %v, want a missing-table failure naming named_users", err)
+	}
+
+	// An UNREGISTERED name is LOUD, never a silent fall back to the parent's database.
+	if _, err := runRelationOpCtx(ctx, op("ghost"), []bc.Value{parent}); err == nil ||
+		!strings.Contains(err.Error(), "no connection registered under name 'ghost'") {
+		t.Fatalf(`connection "ghost" error = %v, want the loud unregistered-name failure`, err)
 	}
 }
 

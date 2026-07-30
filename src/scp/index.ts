@@ -350,6 +350,7 @@ export type {
   RelationOp,
   RelationBatch,
   RelationDriver,
+  RelationTarget,
 } from './relation';
 
 // typed-object result + hydrate factory + lazy relation context (WS4, #24).

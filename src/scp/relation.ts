@@ -137,9 +137,13 @@ export interface RelationOp {
   /**
    * CROSS-DB relations (V0 R1): the connection NAME the batch executes against (the TARGET model's
    * DB — v1 `LazyRelation` parity). Present iff the target model declares one; absent ⇒ the DEFAULT
-   * connection. A per-language runtime routes the statement to the pooled driver of this name (the
-   * emitter bakes it into the child fetch's `db` control field, {@link import('./leaf-transport').ExecOptions});
-   * the SQL text and `dialect`-driven placeholder/bind are already correct for the target.
+   * connection. The SQL text and `dialect`-driven placeholder/bind are already correct for the target;
+   * the name only ROUTES the statement, and it reaches the router as the
+   * {@link import('./exec-context').StatementIntent}'s `db` on BOTH read surfaces — the codegen one
+   * through the child fetch's `db` control field ({@link import('./leaf-transport').ExecOptions}) the
+   * emitter bakes, the typed-object/lazy one through {@link runRelationOp}. The registry that resolves
+   * the name is the ctx's ({@link import('./connection-routing').ConnectionRegistry}); an unresolvable
+   * name is LOUD, never a silent same-DB fallback.
    */
   readonly connection?: string;
   /**
@@ -510,7 +514,15 @@ export function runRelationOp(
   // codegen, `1` through the lazy path. Exactness is not a per-endpoint choice; the DECLARED type
   // decides the consumer-facing shape, and that narrowing is `materializeCell`'s job below.
   const boundParams = bindKeys(op, keys);
-  const rawRows = seamExecuteSafe(ctx, sql, boundParams) as Record<string, unknown>[];
+  // The batch's own DATABASE: the compiled op names it ({@link RelationOp.connection} — the TARGET
+  // model's), and the ctx owns the registry that resolves the name. They meet HERE, on the
+  // {@link import('./exec-context').StatementIntent} — the only input `connectionFor` routes on, and
+  // the SAME channel the `executeSQL` leaf uses on the codegen surface (`leaves.ts` `prepareSql`).
+  // An untagged (same-DB) relation leaves `db` unspelled ⇒ the DEFAULT connection.
+  const rawRows = seamExecuteSafe(ctx, sql, boundParams, {
+    write: false,
+    ...(op.connection !== undefined ? { db: op.connection } : {}),
+  }) as Record<string, unknown>[];
   // Hard-limit runaway guard (Phase E-2, epic #74; v1 `_selectForRelation`): POST-fetch, if the batch
   // TOTAL exceeds the baked cap, throw with the EXACT count (the batch is fetched in full, no N+1).
   // The check itself is the SHARED relation primitive (`assertRelationHardLimit`) over the op's own
