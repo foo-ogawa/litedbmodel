@@ -39,7 +39,7 @@
  * the scan too. That is what `LIVE_TESTS` below is for, and only the live-DB legs are listed: a
  * whole-suite inventory would have to be edited every time anyone adds a test, and a count floor is
  * defeated by deleting one test and adding another. Its sibling gate does not cover this either —
- * all four live go files read the SAME `LITEDBMODEL_TX_ISOLATION`, so deleting one leaves
+ * the live go files read the SAME `LITEDBMODEL_TX_ISOLATION`, so deleting one leaves
  * `check-reachable-test-gates.mjs`'s dead-declaration clause green.
  *
  * All of that checks the OUTCOME. It did not check the PRECONDITION the outcome is read against —
@@ -114,8 +114,6 @@ const LIVE_TESTS = [
   'TestPhaseDLiveTxControlVisibleRollbackPG',
   'TestTxBoundaryMysql',
   'TestTxBoundaryPostgres',
-  'TestTxIsolationMysql',
-  'TestTxIsolationPostgres',
 ];
 
 /** Every `*_test.go` under `go/`. Build constraints are deliberately NOT honoured: a test the build

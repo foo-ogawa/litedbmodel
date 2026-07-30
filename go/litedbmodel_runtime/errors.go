@@ -74,7 +74,7 @@ const (
 //     exact `<count>`.
 //
 // NOT a SqlFailure: a runaway guard is a litedbmodel-level policy error, not a mapped driver failure,
-// and it carries no SQLITE_ code (so reErrorToSqlFailure propagates it unchanged).
+// and it carries no SQLITE_ code (so the SQLITE_-keyed driver-error mapping propagates it unchanged).
 type LimitExceededError struct {
 	Limit    int
 	Count    int

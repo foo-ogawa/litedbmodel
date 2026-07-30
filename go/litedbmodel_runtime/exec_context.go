@@ -2,8 +2,8 @@
 //
 // The Go port of the TS contract-defining artifact `src/scp/exec-context.ts` (#75), mirroring the
 // rust port `rust/litedbmodel_runtime/src/exec_context.rs` (#76). It replaces the raw `db SQLDB`
-// threaded through `ExecuteBundle` / `ExecuteReadGraph` / `ExecuteTransactionBundle` / the relation
-// walker with an [ExecutionContext] that carries:
+// threaded through the leaf transport ([Execute] / [Run] / [RunGuarded]) with an [ExecutionContext]
+// that carries:
 //
 //  1. a **connection provider** — [ExecutionContext.ConnectionFor](intent) resolves WHICH connection
 //     a statement runs on (the tx-owned connection, else the primary db; Phase A wires only the
@@ -210,7 +210,7 @@ func (m *MiddlewareChain) wrapWrite(sql string, args []any, next SeamNext[RunInf
 // ── The ExecutionContext (§2 / §5) — ONE interface ────────────────────────────
 
 // ExecutionContext is threaded (via context.Context, the Go-idiomatic decision — §3 table) through
-// ExecuteBundle / ExecuteReadGraph / ExecuteTransactionBundle / the relation walker in place of a
+// the leaf transport and the central Execute/Run/RunGuarded seam in place of a
 // raw `db SQLDB`. It carries the connection provider (the primary db + an optional pinned tx
 // connection), the middleware chain, and derives a tx-scoped ctx via [ExecutionContext.WithTxConnection].
 //
@@ -360,7 +360,7 @@ func (c *ExecutionContext) ReadOnly() bool { return c.readOnly }
 
 // WithReadOnly derives a READ-ONLY-scoped ctx (mirror v1 `withWriter` / the TS `withReadOnly` / rust
 // `with_read_only`): reads are allowed, but ANY write funneled through the GUARDED write seam
-// ([RunGuarded] / [ExecuteTransactionBundleCtx]) is rejected with [WriteInReadOnly]. Used for a
+// ([RunGuarded]) is rejected with [WriteInReadOnly]. Used for a
 // writer-pinned read scope that must never accidentally mutate. Shares the primary db + middleware +
 // Go context + pinned tx connection.
 func (c *ExecutionContext) WithReadOnly() *ExecutionContext {
@@ -370,7 +370,7 @@ func (c *ExecutionContext) WithReadOnly() *ExecutionContext {
 // WithWriter derives a WRITER-scoped ctx (Phase C / #89 — the go analogue of the TS `withWriter`):
 // every READ this ctx issues routes to the WRITER pool (read-your-writes without replication lag),
 // and — because it ALSO sets the read-only marker — ANY write funneled through the GUARDED write seam
-// ([RunGuarded] / [ExecuteTransactionBundleCtx]) is rejected with [WriteInReadOnly] (v1 parity —
+// ([RunGuarded]) is rejected with [WriteInReadOnly] (v1 parity —
 // withWriter reads never mutate). Inside a transaction the tx-owned connection already wins in
 // ConnectionFor, so WithWriter there is a no-op on routing (matches v1 :2941). Shares the primary db +
 // middleware + Go context + pinned tx connection + routing.
@@ -767,9 +767,9 @@ func WithTransaction[R any](ctx *ExecutionContext, body func(txCtx *ExecutionCon
 // arbitrary operations so they commit or roll back TOGETHER:
 //
 //	Transaction(ctx, "postgres", opts, func(txCtx *ExecutionContext) error {
-//	    _, err := ExecuteTransactionBundleCtx(aBundle, aInput, txCtx, true) // ← every op inside JOINS
-//	    if err != nil { return err }                                        //    this ONE boundary:
-//	    _, err = ExecuteTransactionBundleCtx(bBundle, bInput, txCtx, true)  //    one conn, one BEGIN…COMMIT
+//	    _, err := RunGuarded(txCtx, aSQL, aArgs, "WRITE", aModel) // ← every op inside JOINS
+//	    if err != nil { return err }                             //    this ONE boundary:
+//	    _, err = RunGuarded(txCtx, bSQL, bArgs, "WRITE", bModel)  //    one conn, one BEGIN…COMMIT
 //	    return err
 //	})
 //
@@ -790,7 +790,7 @@ func WithTransaction[R any](ctx *ExecutionContext, body func(txCtx *ExecutionCon
 //
 // `body` receives the tx-scoped ctx EXPLICITLY (the go-idiomatic decision — no task-local; the TS
 // pins it in an async-local, go/rust thread it by argument). Every operation `body` issues receives
-// THAT ctx: a write via [ExecuteTransactionBundleCtx], a read via the read seam. Because that ctx's
+// THAT ctx: a write via the guarded write seam [RunGuarded], a read via the read seam. Because that ctx's
 // InTransaction() is already true (a connection is pinned), the write's own tx-bracketing DETECTS
 // the ambient tx and JOINS it — running its statements on the pinned owned *sql.Conn WITHOUT opening
 // its own BEGIN/COMMIT (see [TransactionDecided]'s nested-join). So N operations inside one
@@ -809,9 +809,9 @@ func Transaction[R any](ctx *ExecutionContext, dialectName string, options Trans
 
 // TransactionDecided is the [TxDecision]-returning form of [Transaction] (Phase B / #83): `body`
 // decides COMMIT vs ROLLBACK (a gate short-circuit returns a [Rollback] decision with committed:false
-// — a legitimate non-error outcome), an error always rolls back + retries/re-raises. This is what the
-// write-tx plan executor ([ExecuteTransactionBundleCtx]) drives, so a gate-first plan run inside a
-// user Transaction() short-circuits correctly while still JOINING.
+// — a legitimate non-error outcome), an error always rolls back + retries/re-raises. A gate-first body
+// (one that returns a [Rollback] decision on a failed gate) short-circuits correctly while still
+// JOINING a user Transaction().
 //
 // Handles the three Phase B concerns the plain [WithTransactionDecided] does not:
 //  1. nested-join — if ctx.InTransaction() is already true (an outer Transaction() pinned a

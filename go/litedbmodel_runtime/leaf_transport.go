@@ -925,3 +925,114 @@ func wireElemToValue(l wire.WireList, i int) bc.Value {
 	}
 	return nil
 }
+
+// ── Render-layer placeholder resolution (spec §8) ──────────────────────────────
+//
+// The final render-layer steps that can only run once a statement's SQL text AND its bound params
+// are final: resolve each deferred PG array-cast token from the array param that fills it, then
+// rewrite `?` → the dialect placeholder form. The leaf transport ([ExecuteSQL]) is the SOLE caller —
+// the DYNAMIC (SKIP) WHERE is assembled FIRST (assembleDynamicWhere), so this placeholder render must
+// follow it (CLAUDE.md §2: `?`→`$N` after the final SQL is known).
+
+// pgArrayCastToken is the DEFERRED PG array-cast placeholder: emitted in the STATIC SQL where the
+// `= ANY(?::<T>[])` element type is unknown at symbolic compile (a schema-less `whereIn`). Resolved
+// at render from the BOUND array via inferPgArrayType — the same render-layer step as `?`→`$N`.
+const pgArrayCastToken = "@@PG_ARRAY_CAST@@"
+
+// inferPgArrayType ports the ORIGINAL inferPgArrayType (v1 LazyRelation): the element type inferred
+// from the sample values (no sqlCast at this schema-less surface). A bc integer arrives as int64;
+// a non-integer number as float64.
+func inferPgArrayType(values []bc.Value) string {
+	if len(values) == 0 {
+		return "text[]"
+	}
+	switch values[0].(type) {
+	case bool:
+		return "boolean[]"
+	case int64, int:
+		return "int[]"
+	case float64:
+		// A float64 whose every element is an exact integer is still an int key; only a genuine
+		// fractional value is numeric.
+		allInt := true
+		for _, v := range values {
+			if f, ok := v.(float64); !ok || f != float64(int64(f)) {
+				allInt = false
+				break
+			}
+		}
+		if allInt {
+			return "int[]"
+		}
+		return "numeric[]"
+	default:
+		return "text[]"
+	}
+}
+
+// resolvePgArrayCast resolves the FIRST unresolved cast token to the element type inferred from
+// values (mirrors TS resolvePgArrayCast). SQL with no token is unchanged.
+func resolvePgArrayCast(sql string, values []bc.Value) string {
+	at := strings.Index(sql, pgArrayCastToken)
+	if at < 0 {
+		return sql
+	}
+	return sql[:at] + inferPgArrayType(values) + sql[at+len(pgArrayCastToken):]
+}
+
+// arrayBinds picks the ARRAY-valued binds out of a driver param list, in order — the arrays that fill
+// the deferred cast tokens (each postgres __jsonArray param resolves exactly one token).
+func arrayBinds(params []bc.Value) [][]bc.Value {
+	var out [][]bc.Value
+	for _, p := range params {
+		if arr, ok := p.([]bc.Value); ok {
+			out = append(out, arr)
+		}
+	}
+	return out
+}
+
+// renderPlaceholders rewrites `?` → the dialect placeholder form: PG `$N` (quote-aware), MySQL/SQLite
+// keep `?`. Byte-for-byte port of the TS renderPlaceholders: a `?` inside a single-quoted string
+// literal is NOT a placeholder.
+func renderPlaceholders(sql, dialectName string) string {
+	if dialectName != "postgres" {
+		return sql
+	}
+	var out strings.Builder
+	index := 0
+	inString := false
+	for _, ch := range sql {
+		if inString {
+			out.WriteRune(ch)
+			if ch == '\'' {
+				inString = false
+			}
+		} else if ch == '\'' {
+			out.WriteRune(ch)
+			inString = true
+		} else if ch == '?' {
+			index++
+			fmt.Fprintf(&out, "$%d", index)
+		} else {
+			out.WriteRune(ch)
+		}
+	}
+	return out.String()
+}
+
+// finalizeSQL runs the render-layer steps that can only happen once a statement's SQL text AND its
+// bound params are final (spec §8): resolve each deferred PG array-cast token from the array param
+// that fills it, left-to-right, then rewrite `?` → `$N`. `arrays` is the ordered list of ARRAY-valued
+// binds — one per cast token, in the order the tokens appear; pass nil when a statement binds none.
+func finalizeSQL(sql string, arrays [][]bc.Value, dialectName string) string {
+	if dialectName == "postgres" {
+		for _, a := range arrays {
+			if !strings.Contains(sql, pgArrayCastToken) {
+				break
+			}
+			sql = resolvePgArrayCast(sql, a)
+		}
+	}
+	return renderPlaceholders(sql, dialectName)
+}
