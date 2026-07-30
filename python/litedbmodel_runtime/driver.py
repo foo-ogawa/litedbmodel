@@ -248,6 +248,16 @@ class _SqliteTxConnection:
 # relations can each hold a live connection without starving.
 DEFAULT_POOL_SIZE = 16
 
+# Bound EVERY acquire so an UNREACHABLE / non-responding DB fails in FINITE time instead of hanging
+# (#225). `acquire` has two sub-waits, both bounded to this budget: the factory's TCP connect
+# (`connect_timeout`, set in the pg/mysql factories) and the wait for a released connection when the
+# pool is at capacity (`_free.get(timeout=…)`). 30s matches the established codebase default — the v1
+# pg/mysql drivers' `config.timeout || 30` (src/drivers/postgres.ts, src/drivers/mysql.ts) — and the
+# other runtimes' pool-library connect/acquire timeouts (rust sqlx ~30s / deadpool wait, go database/sql
+# Ping, TS pg `connectionTimeoutMillis`). Only Python hand-rolls its pool, so it must supply the bound
+# those libraries give the other four legs for free.
+DEFAULT_ACQUIRE_TIMEOUT_SECONDS = 30.0
+
 
 class _ConnectionPool:
     """A minimal thread-safe, bounded pool of DB-API connections (dependency-free).
@@ -258,9 +268,9 @@ class _ConnectionPool:
     concurrent sibling its own connection.
     """
 
-    __slots__ = ("_factory", "_max", "_free", "_opened", "_lock", "_closed")
+    __slots__ = ("_factory", "_max", "_free", "_opened", "_lock", "_closed", "_acquire_timeout")
 
-    def __init__(self, factory, max_size: int) -> None:
+    def __init__(self, factory, max_size: int, acquire_timeout: float = DEFAULT_ACQUIRE_TIMEOUT_SECONDS) -> None:
         import queue as _queue
         import threading as _threading
 
@@ -269,6 +279,10 @@ class _ConnectionPool:
         self._free: "Any" = _queue.LifoQueue()
         self._opened = 0
         self._lock = _threading.Lock()
+        # The bound on the at-capacity wait for a released connection (see acquire). Finite so an
+        # exhausted pool that will never be replenished (e.g. every open failed) raises instead of
+        # blocking forever (#225).
+        self._acquire_timeout = acquire_timeout
         # Fail-fast after close(): a post-close acquire must RAISE, not block forever on `_free.get()`
         # (the pool is drained and nothing will be released). Additive — the Phase A/B paths never
         # acquire after close, so behavior there is unchanged; Phase C's close_all_pools relies on it so
@@ -285,14 +299,36 @@ class _ConnectionPool:
             return self._free.get_nowait()
         except _queue.Empty:
             pass
-        # Open a new one if below the ceiling; else wait for a release.
+        # Reserve a slot if below the ceiling, then open OUTSIDE the lock (a slow/blocked connect must
+        # not serialize every other acquire/release on this pool).
+        reserved = False
         with self._lock:
             if self._closed:
                 raise RuntimeError("scp connection pool: acquire after close (the pool has been closed)")
             if self._opened < self._max:
                 self._opened += 1
+                reserved = True
+        if reserved:
+            try:
                 return self._factory()
-        return self._free.get()  # block until a connection is released
+            except BaseException:
+                # The open FAILED — RELEASE the reserved slot (mirror `discard`'s decrement). Without
+                # this a failed connect permanently consumes capacity; once `_opened` hits the ceiling
+                # every later acquire falls through to the wait below with no connection ever coming, so
+                # an unreachable DB turns each fast connect-refused into an unbounded hang (#225).
+                with self._lock:
+                    self._opened -= 1
+                raise
+        # Pool at capacity: wait for a released connection, but BOUND the wait. An unbounded get() hangs
+        # forever when nothing will ever be released; on timeout raise a clear error instead (#225 — the
+        # parity target: the other runtimes' pool libraries bound this acquire wait).
+        try:
+            return self._free.get(timeout=self._acquire_timeout)
+        except _queue.Empty:
+            raise TimeoutError(
+                f"scp connection pool: acquire timed out after {self._acquire_timeout}s "
+                f"(pool at capacity {self._max}, no connection released)"
+            ) from None
 
     def release(self, conn: Any) -> None:
         self._free.put(conn)
@@ -730,8 +766,12 @@ class PostgresDriver(_PooledDriver):
         import psycopg  # imported lazily so the SQLite conformance never needs the driver installed
 
         def factory():
+            # connect_timeout bounds the TCP connect so an unreachable/non-responding host fails in
+            # finite time (psycopg has NO default connect timeout — a blackhole host would block the
+            # acquire forever, #225). Matches the v1 driver's 30s default and the other runtimes.
             return psycopg.connect(
-                host=host, port=port, user=user, password=password, dbname=dbname, autocommit=True
+                host=host, port=port, user=user, password=password, dbname=dbname, autocommit=True,
+                connect_timeout=int(DEFAULT_ACQUIRE_TIMEOUT_SECONDS),
             )
 
         pool = _ConnectionPool(factory, pool_size)
@@ -761,8 +801,11 @@ class MysqlDriver(_PooledDriver):
         import pymysql  # lazy import (conformance bar never needs it)
 
         def factory():
+            # connect_timeout bounds the TCP connect so an unreachable host fails in finite time (#225).
+            # PyMySQL defaults this to 10s; pin it to the shared budget so both live drivers agree.
             return pymysql.connect(
-                host=host, port=port, user=user, password=password, database=dbname, autocommit=True
+                host=host, port=port, user=user, password=password, database=dbname, autocommit=True,
+                connect_timeout=int(DEFAULT_ACQUIRE_TIMEOUT_SECONDS),
             )
 
         pool = _ConnectionPool(factory, pool_size)
