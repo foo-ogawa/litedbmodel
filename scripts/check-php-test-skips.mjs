@@ -75,15 +75,19 @@
  *   - no test reporting a verdict at all: the suite never ran;
  *   - phpunit exiting non-zero for a reason none of the above explains. Unmodelled ⇒ red.
  *
- * Not proven, and it falls GREEN: that a live leg TOUCHED a database. An outcome cannot tell a leg
- * that queried PG from one whose body is empty — both pass. The go and python gates re-run their live legs against an
- * unreachable database to close that; php has no equivalent yet.
+ * Then PHASE 2, at the bottom of this file: the suite is run AGAIN against a database that is NOT THERE,
+ * and a leg that PASSES anyway never dialled one. 30 of the 33 in LIVE_TESTS fail on a refused
+ * connection; the other three are `ConformanceCorpusTest`'s offline corpus checks, named in
+ * OFFLINE_CHECKS because they live in a gated FILE but read only the frozen corpus.
+ *
+ * Not proven, and it falls GREEN: that a leg asserted anything USEFUL about what it read. A body
+ * reduced to a bare connect dials, so it satisfies both phases.
  */
 import { readFileSync, mkdtempSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { assertGatesOpen, runOwned, mustHaveStarted, exitProblem, junitTestcases, report } from './run-gate.mjs';
+import { assertGatesOpen, runOwned, mustHaveStarted, exitProblem, junitTestcases, report, UNREACHABLE } from './run-gate.mjs';
 import { GATES_ENV, readsAGate } from './livedb-gates.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -100,6 +104,21 @@ const TESTS_DIR = 'tests';
  * platforms ship). Raising this is a decision about coverage, not a formality: name the tests and why.
  */
 const SKIP_BUDGET = 0;
+
+/**
+ * The public methods of a TestCase subclass that phpunit does NOT collect as tests, with what they are.
+ * All four are `#[DataProvider]`/`dataProvider` sources, which must be public for phpunit to call them.
+ *
+ * BIDIRECTIONAL: an entry whose method is gone, is no longer declared by a TestCase subclass, or is now
+ * collected AS a test is stale and red — otherwise it would go on excusing a method that stopped being
+ * a provider.
+ */
+const PROVIDERS = [
+  'LiteDbModel\\Runtime\\Tests\\MiddlewareLiveTest::liveDrivers',
+  'LiteDbModel\\Runtime\\Tests\\RenderTest::orderByNullsCases',
+  'LiteDbModel\\Runtime\\Tests\\TxAtomicityLiveTest::liveDrivers',
+  'LiteDbModel\\Runtime\\Tests\\TxBoundaryLiveTest::dialects',
+];
 
 /**
  * The live-DB legs, by `<Class>::<method>` — the tests that only mean anything with a real PG/MySQL
@@ -174,9 +193,16 @@ foreach ($files as $file) {
     foreach (array_diff(get_declared_classes(), $before) as $class) {
         $r = new ReflectionClass($class);
         if ($r->isAbstract()) { continue; }
+        $isTestCase = $r->isSubclassOf("PHPUnit\\\\Framework\\\\TestCase");
         foreach ($r->getMethods(ReflectionMethod::IS_PUBLIC) as $m) {
-            if (strncmp($m->getName(), "test", 4) !== 0) { continue; }
-            $out[] = [$class . "::" . $m->getName(), $m->getDeclaringClass()->getFileName()];
+            // DECLARED here, not inherited: TestCase's own public API is not this class's tests.
+            if ($m->getDeclaringClass()->getName() !== $class) { continue; }
+            $out[] = [
+                $class . "::" . $m->getName(),
+                $m->getDeclaringClass()->getFileName(),
+                $isTestCase,
+                strncmp($m->getName(), "test", 4) === 0,
+            ];
         }
     }
 }
@@ -193,8 +219,20 @@ if (enumeration.exit !== 0) {
   );
   process.exit(1);
 }
-/** `<Class>::<method>` → the file declaring it. */
-const declared = new Map(JSON.parse(enumeration.stdout));
+const reflected = JSON.parse(enumeration.stdout);
+/** `<Class>::<method>` → the file declaring it, for the `test*`-prefixed methods phpunit collects. */
+const declared = new Map(reflected.filter(([, , , prefixed]) => prefixed).map(([label, file]) => [label, file]));
+/**
+ * Every public method a TestCase SUBCLASS declares, prefixed or not — what closes the rename hole.
+ *
+ * A method renamed off the `test` prefix used to be invisible: the walk selected on that same prefix, so
+ * both sides went blind together. Reflection was never blind, though — measured, this tree declares 134
+ * `test*` methods and 37 non-prefixed public methods, of which 4 belong to TestCase subclasses and all
+ * four are data providers. So the rule is "a public method of a TestCase subclass is COLLECTED by
+ * phpunit or is named in {@link PROVIDERS}", and `testRenderAllFragmentsPresent` →
+ * `renderAllFragmentsPresent` becomes red instead of silent.
+ */
+const collectible = reflected.filter(([, , isTestCase]) => isTestCase).map(([label]) => label);
 /** Live legs as the TREE has them now, for the bidirectional check against `LIVE_TESTS`. */
 const liveInTree = new Set(
   [...declared].filter(([, file]) => readsAGate(readFileSync(file, 'utf8'))).map(([label]) => label),
@@ -270,6 +308,23 @@ if (neverRan.length > 0) {
       `      like this.`,
   );
 }
+const uncollected = collectible.filter((l) => !verdicts.has(l) && !PROVIDERS.includes(l));
+if (uncollected.length > 0) {
+  problems.push(
+    `${uncollected.length} public method(s) of a TestCase subclass were NOT COLLECTED by phpunit and are not named in PROVIDERS:\n` +
+      list(uncollected) +
+      `\n\n      A public method of a test class is a test phpunit runs, a data provider, or a mistake.\n` +
+      `      This is what catches a method renamed OFF the \`test\` prefix — phpunit stops collecting it\n` +
+      `      and a prefix-based walk stops seeing it, both at once, so nothing else says a word.`,
+  );
+}
+const staleProviders = PROVIDERS.filter((l) => !collectible.includes(l) || verdicts.has(l));
+if (staleProviders.length > 0) {
+  problems.push(
+    `${staleProviders.length} entry/entries in PROVIDERS no longer describe a data provider — the method is gone, is no longer declared by a TestCase subclass, or is now COLLECTED as a test:\n` +
+      list(staleProviders),
+  );
+}
 if (unscanned.length > 0) {
   problems.push(
     `${unscanned.length} php test(s) reported a verdict that the reflection walk of php/${TESTS_DIR} never found. The walk is wrong — and the check above is only as strong as the walk, so a broken walk passes it vacuously:\n` +
@@ -294,6 +349,69 @@ if (liveUnlisted.length > 0) {
 if (cases.length === 0) problems.push('phpunit reported no testcases at all — the suite never ran.');
 exitProblem(run, label, problems);
 
+// ── PHASE 2: the live legs really DIAL a database ───────────────────────────────────────────────────
+//
+// Everything above reads the OUTCOME of a run against a live server, and an outcome cannot distinguish a
+// leg that queried the database from a leg whose body is empty: both pass. So the suite is run again
+// against a database that is NOT THERE, with the gates still open, and a leg that PASSES anyway never
+// touched a server.
+//
+// Measured: 30 of the 33 in LIVE_TESTS fail on a refused connection. The other three are the corpus
+// checks below — they are in LIVE_TESTS because they live in a gated FILE (the same file-level
+// derivation go uses), but they read the frozen corpus and the generated module and touch no database at
+// all. They are named here rather than dropped from LIVE_TESTS, so that deleting one is still loud.
+const OFFLINE_CHECKS = [
+  'LiteDbModel\\Runtime\\Tests\\ConformanceCorpusTest::testCorpusCoversBothLiveDialectsWithTheSameCases',
+  'LiteDbModel\\Runtime\\Tests\\ConformanceCorpusTest::testCorpusIsTheSupportedVersion',
+  'LiteDbModel\\Runtime\\Tests\\ConformanceCorpusTest::testEveryVectorNamesAnEndpointTheGeneratedModuleExposes',
+];
+if (problems.length === 0) {
+  const out = join(mkdtempSync(join(tmpdir(), 'litedbmodel-phpunit-p2-')), 'junit.xml');
+  const p2 = mustHaveStarted(
+    await runOwned('./vendor/bin/phpunit', [`--log-junit=${out}`], { cwd: PHP_DIR, stdout: 'inherit', env: UNREACHABLE }),
+    `${label} (unreachable database)`,
+  );
+  const verdicts = new Map();
+  if (existsSync(out)) {
+    for (const { attributes, outcome } of junitTestcases(readFileSync(out, 'utf8'))) {
+      const l = `${attributes.class ?? ''}::${(attributes.name ?? '').replace(/ with data set .*$/, '')}`;
+      // A method expanded by a data provider reports several times; ONE passing testcase is enough to
+      // say the method can pass with no server behind it.
+      if (outcome === 'passed' || !verdicts.has(l)) verdicts.set(l, outcome);
+    }
+  }
+  const dialling = LIVE_TESTS.filter((l) => !OFFLINE_CHECKS.includes(l));
+  const passedWithoutServer = dialling.filter((l) => verdicts.get(l) === 'passed');
+  const noVerdict = LIVE_TESTS.filter((l) => !verdicts.has(l));
+  const misclassified = OFFLINE_CHECKS.filter((l) => verdicts.has(l) && verdicts.get(l) !== 'passed');
+  if (passedWithoutServer.length > 0) {
+    problems.push(
+      `${passedWithoutServer.length} live-DB leg(s) PASSED with no database behind them (${UNREACHABLE.TEST_DB_HOST}:${UNREACHABLE.TEST_DB_PORT} refuses every connection). A leg that passes without a server never dialled one, so its green above says nothing about a live database:\n` +
+        list(passedWithoutServer) +
+        `\n\n      An emptied body, a removed assertion block, or a connect that is never made all look\n` +
+        `      exactly like this. The other ${dialling.length - passedWithoutServer.length} failed as they should.`,
+    );
+  }
+  if (noVerdict.length > 0) {
+    problems.push(
+      `${noVerdict.length} live-DB leg(s) reported NO verdict from the unreachable-database run, so nothing was learned about them:\n` + list(noVerdict),
+    );
+  }
+  if (misclassified.length > 0) {
+    problems.push(
+      `${misclassified.length} test(s) named in OFFLINE_CHECKS did NOT pass against an unreachable database, so they are not offline checks after all:\n` +
+        list(misclassified) +
+        `\n\n      An entry there excuses a test from the "must not pass without a server" rule. One that\n` +
+        `      needs a server must be removed from the list, not excused by it.`,
+    );
+  }
+  const stale = OFFLINE_CHECKS.filter((l) => !LIVE_TESTS.includes(l));
+  if (stale.length > 0) {
+    problems.push(`${stale.length} entry/entries in OFFLINE_CHECKS are not in LIVE_TESTS, so they excuse nothing. Remove them:\n` + list(stale));
+  }
+  console.log(`phase 2: ${dialling.length} live leg(s) re-run against ${UNREACHABLE.TEST_DB_HOST}:${UNREACHABLE.TEST_DB_PORT}, none passed (${OFFLINE_CHECKS.length} offline checks excepted)`);
+}
+
 report(
   problems,
   `✅ the live-DB gates ${GATES_ENV} declares were OPEN in this process before phpunit started — including\n` +
@@ -302,7 +420,10 @@ report(
     `   php/${TESTS_DIR}, every \`test*\` method of every class) reported a verdict in phpunit's own --log-junit report,\n` +
     `   and every one of the ${cases.length} testcases was a pass (${skipped.length} skipped, budget ${SKIP_BUDGET}); all ${LIVE_TESTS.length} live-DB legs listed in\n` +
     `   LIVE_TESTS are still present in the tree.\n` +
-    `   Not proven, and it falls GREEN: that a live leg TOUCHED a database. An emptied body passes an\n` +
-    `   outcome check the same way a real query does — the go and python gates re-run theirs against an unreachable\n` +
-    `   server to close that, and php has no equivalent yet.`,
+    `   The suite was then run AGAIN against an UNREACHABLE database (${UNREACHABLE.TEST_DB_HOST}:${UNREACHABLE.TEST_DB_PORT}) and none of the\n` +
+    `   ${LIVE_TESTS.length - OFFLINE_CHECKS.length} live legs passed — so each really dials a server rather than passing on an empty body. The\n` +
+    `   ${OFFLINE_CHECKS.length} in OFFLINE_CHECKS are excepted BY NAME and were required to pass there instead, since a test that\n` +
+    `   needs no server must not be excused by an entry claiming it needs one.\n` +
+    `   Not proven, and it falls GREEN: that a leg ASSERTED anything useful about what it read. A body\n` +
+    `   reduced to a bare connect dials, so it satisfies both phases.`,
 );

@@ -72,9 +72,18 @@
  *
  * Then PHASE 2, at the bottom of this file: the live legs are re-run against a database that is NOT
  * THERE, and a leg that PASSES anyway never dialled one — an outcome cannot otherwise tell a real
- * query from an empty body, since both pass. 24 of the 29 take part today; the five in
- * `test_conformance_corpus.py` go through the corpus runner, whose pool blocks forever with no
- * connection to be had (#225), so they are probed under a TIMEOUT and answer the day that is fixed.
+ * query from an empty body, since both pass.
+ *
+ * 24 of the 29 must FAIL there. Four are `test_conformance_corpus.py`'s offline corpus checks, which
+ * read the frozen corpus and the generated module and touch no database: they are in LIVE_TESTS because
+ * they live in a gated FILE, and phase 2 requires them to PASS instead (OFFLINE_CHECKS). Exactly ONE —
+ * `test_live_db_conformance_all_vectors_pass`, the only test in that file carrying the `skipif` — goes
+ * through the corpus runner, whose pool blocks forever with no connection to be had (#225), so it alone
+ * is probed under a timeout (HANGS).
+ *
+ * That split matters: a single 20s allowance over the whole FILE hid the four that pass with no server,
+ * and following its own "remove the allowance" advice then produced four PASSED-without-a-server reds
+ * that were not regressions at all.
  *
  * Not proven, and it falls GREEN: that a leg asserted anything USEFUL about what it read. A body
  * reduced to a bare connect dials, so it satisfies both phases.
@@ -316,12 +325,17 @@ exitProblem(run, label, problems);
 // They are not excluded by name. They are run under a TIMEOUT, and a timeout is tolerated only for them
 // — so the day #225 is fixed and they answer instead of hanging, this gate says the allowance is stale
 // and the exclusion lifts itself. That is the difference between an exemption and a measurement.
-const BLOCKED_FILE = 'test_conformance_corpus.py';
-const BLOCKED_TIMEOUT_MS = 20_000;
+const HANGS = ['test_conformance_corpus.py::test_live_db_conformance_all_vectors_pass'];
+const HANG_TIMEOUT_MS = 20_000;
+const OFFLINE_CHECKS = [
+  'test_conformance_corpus.py::test_corpus_carries_a_seeded_schema',
+  'test_conformance_corpus.py::test_corpus_covers_both_live_dialects_with_the_same_cases',
+  'test_conformance_corpus.py::test_corpus_is_the_supported_version',
+  'test_conformance_corpus.py::test_every_vector_names_an_endpoint_the_generated_module_exposes',
+];
 const nodeId = (l) => `tests/${l}`;
 if (problems.length === 0) {
-  const dialling = LIVE_TESTS.filter((l) => !l.startsWith(`${BLOCKED_FILE}::`));
-  const blocked = LIVE_TESTS.filter((l) => l.startsWith(`${BLOCKED_FILE}::`));
+  const dialling = LIVE_TESTS.filter((l) => !HANGS.includes(l) && !OFFLINE_CHECKS.includes(l));
   /** One phase-2 run: the ids, the report it wrote, and whether our own timeout killed it. */
   const rerun = async (ids, timeoutMs) => {
     const out = join(mkdtempSync(join(tmpdir(), 'litedbmodel-pytest-p2-')), 'junit.xml');
@@ -339,9 +353,10 @@ if (problems.length === 0) {
     return { ...r, verdicts };
   };
 
-  const p2 = await rerun(dialling, undefined);
+  const p2 = await rerun([...dialling, ...OFFLINE_CHECKS], undefined);
   const passedWithoutServer = dialling.filter((l) => p2.verdicts.get(l) === 'passed');
-  const noVerdict = dialling.filter((l) => !p2.verdicts.has(l));
+  const noVerdict = [...dialling, ...OFFLINE_CHECKS].filter((l) => !p2.verdicts.has(l));
+  const misclassified = OFFLINE_CHECKS.filter((l) => p2.verdicts.has(l) && p2.verdicts.get(l) !== 'passed');
   if (passedWithoutServer.length > 0) {
     problems.push(
       `${passedWithoutServer.length} live-DB leg(s) PASSED with no database behind them (${UNREACHABLE.TEST_DB_HOST}:${UNREACHABLE.TEST_DB_PORT} refuses every connection). A leg that passes without a server never dialled one, so its green above says nothing about a live database:\n` +
@@ -357,23 +372,34 @@ if (problems.length === 0) {
     );
   }
 
-  const probe = await rerun(blocked, BLOCKED_TIMEOUT_MS);
-  const blockedPassed = blocked.filter((l) => probe.verdicts.get(l) === 'passed');
-  if (blockedPassed.length > 0) {
+  if (misclassified.length > 0) {
     problems.push(
-      `${blockedPassed.length} live-DB leg(s) PASSED with no database behind them:\n` + list(blockedPassed),
+      `${misclassified.length} test(s) named in OFFLINE_CHECKS did NOT pass against an unreachable database, so they are not offline checks after all:\n` +
+        list(misclassified) +
+        `\n\n      An entry there excuses a test from the "must not pass without a server" rule. One that\n` +
+        `      needs a server must be removed from the list, not excused by it.`,
     );
+  }
+  const stale = [...HANGS, ...OFFLINE_CHECKS].filter((l) => !LIVE_TESTS.includes(l));
+  if (stale.length > 0) {
+    problems.push(`${stale.length} entry/entries in HANGS/OFFLINE_CHECKS are not in LIVE_TESTS, so they excuse nothing. Remove them:\n` + list(stale));
+  }
+
+  const probe = await rerun(HANGS, HANG_TIMEOUT_MS);
+  const hangPassed = HANGS.filter((l) => probe.verdicts.get(l) === 'passed');
+  if (hangPassed.length > 0) {
+    problems.push(`${hangPassed.length} live-DB leg(s) PASSED with no database behind them:\n` + list(hangPassed));
   } else if (!probe.timedOut) {
     problems.push(
-      `the ${blocked.length} leg(s) in ${BLOCKED_FILE} answered the unreachable-database run in under ${BLOCKED_TIMEOUT_MS / 1000}s instead of hanging, so the timeout allowance for them is STALE — #225 (the python pool's acquire has no timeout) appears to be fixed.\n` +
-        `      Delete BLOCKED_FILE/BLOCKED_TIMEOUT_MS and let them run with the other ${dialling.length}. While the\n` +
-        `      allowance stands, a hang in these legs is tolerated, and a hang is not a verdict.`,
+      `${HANGS.join(', ')} answered the unreachable-database run in under ${HANG_TIMEOUT_MS / 1000}s instead of hanging, so its timeout allowance is STALE — #225 (the python pool's acquire has no timeout) appears to be fixed.\n` +
+        `      Delete HANGS/HANG_TIMEOUT_MS and let it run with the other ${dialling.length}. While the allowance\n` +
+        `      stands, a hang in that leg is tolerated, and a hang is not a verdict.`,
     );
   }
   console.log(
     probe.timedOut
-      ? `phase 2: ${dialling.length} live leg(s) re-run against ${UNREACHABLE.TEST_DB_HOST}:${UNREACHABLE.TEST_DB_PORT}, none passed; the ${blocked.length} in ${BLOCKED_FILE} still hang (#225) and were killed at ${BLOCKED_TIMEOUT_MS / 1000}s`
-      : `phase 2: all ${LIVE_TESTS.length} live leg(s) re-run against ${UNREACHABLE.TEST_DB_HOST}:${UNREACHABLE.TEST_DB_PORT}, none passed`,
+      ? `phase 2: ${dialling.length} live leg(s) re-run against ${UNREACHABLE.TEST_DB_HOST}:${UNREACHABLE.TEST_DB_PORT}, none passed; ${OFFLINE_CHECKS.length} offline checks passed there as they must; ${HANGS.length} still hangs (#225), killed at ${HANG_TIMEOUT_MS / 1000}s`
+      : `phase 2: ${dialling.length + HANGS.length} live leg(s) re-run against ${UNREACHABLE.TEST_DB_HOST}:${UNREACHABLE.TEST_DB_PORT}, none passed`,
   );
 }
 
@@ -384,10 +410,11 @@ report(
     `   the tree declares (Python's own \`ast\`, every .py under python/tests, every \`test*\` in any class)\n` +
     `   reported a verdict in pytest's own --junitxml report, and every one of the ${cases.length} testcases was a pass\n` +
     `   (${skipped.length} skipped, budget ${SKIP_BUDGET}); all ${LIVE_TESTS.length} live-DB legs listed in LIVE_TESTS are still present in the tree.\n` +
-    `   Those legs were then re-run against an UNREACHABLE database (${UNREACHABLE.TEST_DB_HOST}:${UNREACHABLE.TEST_DB_PORT}) and NONE of them passed — so\n` +
-    `   each really dials a server rather than passing on an empty body. The ${LIVE_TESTS.filter((l) => l.startsWith(`${BLOCKED_FILE}::`)).length} in ${BLOCKED_FILE}\n` +
-    `   are probed under a ${BLOCKED_TIMEOUT_MS / 1000}s timeout because they HANG against a dead server (#225), and this goes red\n` +
-    `   the day they stop hanging, so that allowance cannot outlive its reason.\n` +
+    `   ${LIVE_TESTS.length - HANGS.length - OFFLINE_CHECKS.length} of those legs were then re-run against an UNREACHABLE database (${UNREACHABLE.TEST_DB_HOST}:${UNREACHABLE.TEST_DB_PORT}) and NONE passed —\n` +
+    `   so each really dials a server rather than passing on an empty body. The ${OFFLINE_CHECKS.length} in OFFLINE_CHECKS were\n` +
+    `   required to PASS there instead (they read only the frozen corpus), and the ${HANGS.length} in HANGS is probed under a\n` +
+    `   ${HANG_TIMEOUT_MS / 1000}s timeout because it HANGS against a dead server (#225) — which goes red the day it stops\n` +
+    `   hanging, so that allowance cannot outlive its reason.\n` +
     `   Not proven, and it falls GREEN: that a leg ASSERTED anything useful about what it read. A body\n` +
     `   reduced to a bare connect dials, so it satisfies both phases.`,
 );

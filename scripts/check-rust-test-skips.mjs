@@ -40,16 +40,20 @@
  * same file. Measured: one line, `[lib] test = false`, and this gate ran 3 targets instead of 5 with
  * NOTHING said — the lib's 71 unit tests and the doc-tests simply left the set, which on a tree with a
  * live database is a green run of a suite missing 71 tests; `[lib] doctest = false` did it to `--doc`.
- * So the set to run is also derived from the TREE, by cargo's own layout rules ({@link requiredUnits}),
- * which is the independent enumeration the other four run gates have — go walks `go/**\/*_test.go`,
+ * Modelling cargo's LAYOUT was not enough either, because a `path` is configurable: `[lib] path` aimed
+ * at a renamed file, a `[[bin]]` under `src/bin/`, and a `[[test]]` aimed at a STUB with the right
+ * function names each walked past a layout model. So the requirement comes from the SOURCE FILES
+ * ({@link treeTests}): every `#[test]` function the tree holds must be reported by a unit that ran.
+ * That is the independent enumeration the other four run gates have — go walks `go/**\/*_test.go`,
  * python and php parse every source file, TypeScript globs the tree — and this one did not.
  *
  * It is red when any of the following holds, and prints its green line only when none does:
  *
  *   - a gate `livedb-gates.env` declares is not open in this process — checked before anything runs;
  *   - `cargo metadata` or a `cargo test` could not be started, or was killed by a signal;
- *   - a unit the TREE requires that the manifest does not report, or a crate under `rust/` that is not
- *     a workspace member and not named in {@link NOT_A_MEMBER} (nor the reverse of either);
+ *   - a `#[test]` function in the tree that NO unit which ran reported: a re-pointed `path`, a
+ *     `test = false`, a dropped target, an `autotests = false`, a crate left out of `members`, or a
+ *     target aimed at a stub — none of which changes the source files;
  *   - a target that reported NO `test result:` line: it did not build, or it did not run. A crate that
  *     fails to compile prints its errors to stderr and runs no test, and `0 targets ran` would
  *     otherwise be as green as a clean suite;
@@ -67,14 +71,18 @@
  *     or no longer in a target whose sources read a gate), or a new live leg not listed;
  *   - a `cargo test` exiting non-zero for a reason none of the above explains. Unmodelled ⇒ red.
  *
- * Not proven, and it falls GREEN: that a live leg TOUCHED a database. An outcome cannot tell a leg
- * that queried PG from one whose body is empty — both pass. The go and python gates re-run their live legs against an
- * unreachable database to close that; rust has no equivalent yet.
+ * Then PHASE 2, at the bottom of this file: every unit whose sources read a gate is re-run against a
+ * database that is NOT THERE, and a test that PASSES anyway never dialled one. rust needs no exceptions
+ * for it — all six live legs panic on a refused connection — and it is also the only thing that can
+ * catch a target aimed at a stub whose function NAMES match the real ones.
+ *
+ * Not proven, and it falls GREEN: that a leg asserted anything USEFUL about what it read. A body
+ * reduced to a bare connect dials, so it satisfies both phases.
  */
 import { globSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { assertGatesOpen, runOwned, mustHaveStarted, exitProblem, report } from './run-gate.mjs';
+import { assertGatesOpen, runOwned, mustHaveStarted, exitProblem, report, UNREACHABLE } from './run-gate.mjs';
 import { GATES_ENV, readsAGate } from './livedb-gates.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -362,6 +370,43 @@ if (liveUnlisted.length > 0) {
   );
 }
 
+// ── PHASE 2: the live legs really DIAL a database ───────────────────────────────────────────────────
+//
+// Everything above reads the OUTCOME of a run against a live server, and an outcome cannot distinguish a
+// leg that queried the database from a leg whose body is empty: both pass. So every unit whose sources
+// read a gate is re-run against a database that is NOT THERE. A leg that dials must FAIL; one that
+// PASSES never touched a server, whatever its body claims — which is also the only thing that can catch
+// a target aimed at a stub whose function names match the real ones.
+//
+// rust needs no exceptions here: all six live legs panic on a refused connection.
+if (problems.length === 0) {
+  for (const unit of ran.filter((u) => u.live && u.verdicts.length > 0)) {
+    const run = mustHaveStarted(
+      await runOwned('cargo', ['test', '--locked', '-p', unit.pkg, ...unit.features, ...unit.selector, '--', '--test-threads=1'], {
+        cwd: RUST_DIR,
+        env: UNREACHABLE,
+      }),
+      `${unit.label} (unreachable database)`,
+    );
+    const verdicts = [...run.stdout.matchAll(VERDICT)];
+    const passedWithoutServer = verdicts.filter(([, , v]) => v === 'ok').map(([, n]) => n);
+    const noVerdict = unit.verdicts.filter((v) => !verdicts.some(([, n]) => n === v.name)).map((v) => v.name);
+    if (passedWithoutServer.length > 0) {
+      problems.push(
+        `${passedWithoutServer.length} live-DB test(s) in ${unit.label} PASSED with no database behind them (${UNREACHABLE.TEST_DB_HOST}:${UNREACHABLE.TEST_DB_PORT} refuses every connection). A test that passes without a server never dialled one, so its green above says nothing about a live database:\n` +
+          named(passedWithoutServer) +
+          `\n\n      An emptied body, a removed assertion block, a connect that is never made, and a target\n` +
+          `      pointed at a STUB with the right function names all look exactly like this.`,
+      );
+    }
+    if (noVerdict.length > 0) {
+      problems.push(
+        `${noVerdict.length} live-DB test(s) reported no verdict from ${unit.label} against an unreachable database, so nothing was learned about them:\n` + named(noVerdict),
+      );
+    }
+  }
+}
+
 const total = ran.reduce((n, u) => n + (u.summaries[0]?.[0] ?? 0), 0);
 report(
   problems,
@@ -376,7 +421,9 @@ report(
     `   except the ${EXPECTED_EMPTY.length} in EXPECTED_EMPTY. All ${LIVE_TESTS.length} live-DB legs in LIVE_TESTS were reported by a target whose\n` +
     `   sources read a gate — so the \`#![cfg(feature = "livedb")]\` files were COMPILED, which is what a\n` +
     `   \`cargo test\` without the feature silently stops doing.\n` +
-    `   Not proven, and it falls GREEN: that a live leg TOUCHED a database. An emptied body passes an\n` +
-    `   outcome check the same way a real query does — the go and python gates re-run theirs against an unreachable\n` +
-    `   server to close that, and rust has no equivalent yet.`,
+    `   Each of the ${LIVE_TESTS.length} live-DB legs was then re-run against an UNREACHABLE database (${UNREACHABLE.TEST_DB_HOST}:${UNREACHABLE.TEST_DB_PORT}) and NONE\n` +
+    `   of them passed — so each really dials a server rather than passing on an empty body, and no target\n` +
+    `   was answering for one with a same-named stub.\n` +
+    `   Not proven, and it falls GREEN: that a leg ASSERTED anything useful about what it read. A body\n` +
+    `   reduced to a bare connect dials, so it satisfies both phases.`,
 );
