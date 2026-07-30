@@ -71,7 +71,7 @@
  * that queried PG from one whose body is empty — both pass. The go and python gates re-run their live legs against an
  * unreachable database to close that; rust has no equivalent yet.
  */
-import { existsSync, globSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { globSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { assertGatesOpen, runOwned, mustHaveStarted, exitProblem, report } from './run-gate.mjs';
@@ -142,102 +142,73 @@ if (metadata.exit !== 0) {
 }
 
 /**
- * One entry per thing to run: the package, the target selector cargo needs to run JUST that target,
- * and whether its sources read a gate.
+ * One entry per thing to run: the package, the target selector cargo needs to run JUST that target, the
+ * source root it compiles, and whether its sources read a gate.
  *
- * `test: true` / `doctest: true` are cargo's own flags for "this target is compiled as a test
- * harness", so this is what the MANIFEST says there is to run — and the manifest is the same file a
- * narrowing goes into. It is checked against {@link requiredUnits}, which reads the tree.
+ * `test: true` / `doctest: true` are cargo's own flags for "this target is compiled as a test harness",
+ * so this is what the MANIFEST says there is to run — and the manifest is the same file a narrowing
+ * goes into. It is checked against {@link treeTests}, which reads the source files.
+ *
+ * The doc-tests are pushed independently of `test`, because they are a separate question: `cargo test
+ * --doc` runs a lib's doc examples even when `[lib] test = false` turns its unit tests off, so treating
+ * `doctest` as reachable only through `test` modelled cargo wrongly and lost `--doc` along with `--lib`.
  */
 const packages = JSON.parse(metadata.stdout).packages;
 const units = [];
 for (const pkg of packages) {
   const features = 'livedb' in pkg.features ? ['--features', 'livedb'] : [];
   for (const t of pkg.targets) {
-    if (!t.test) continue;
-    const selector = t.kind.includes('lib') ? ['--lib'] : t.kind.includes('bin') ? ['--bin', t.name] : ['--test', t.name];
-    const tree = dirname(t.src_path);
-    const live = sources(tree).some((f) => readsAGate(readFileSync(f, 'utf8')));
-    units.push({ pkg: pkg.name, selector, features, live });
-    if (t.kind.includes('lib') && t.doctest) units.push({ pkg: pkg.name, selector: ['--doc'], features, live: false });
-  }
-}
-
-/**
- * Crates under `rust/` that are deliberately NOT workspace members, so no `cargo test` here runs
- * them. BIDIRECTIONAL: one that becomes a member must be removed from this list.
- *
- * The three `orm_bench*` crates are standalone bench consumers, built and run by
- * `benchmark/crosslang/` on their own; `rust/Cargo.toml` is the workspace manifest itself and has no
- * `[package]`.
- */
-const NOT_A_MEMBER = ['rust/Cargo.toml', 'rust/orm_bench/Cargo.toml', 'rust/orm_bench_common/Cargo.toml', 'rust/orm_bench_sdk/Cargo.toml'];
-
-/**
- * The units cargo's own LAYOUT rules require of a crate directory — read from the TREE, which is the
- * independent enumeration every other run gate in this repository has and this one did not.
- *
- * Deriving the set from `cargo metadata` alone made the manifest both the thing that says what to run
- * and the thing a narrowing goes into, so a narrowing was invisible. Measured on the version before
- * this: one line, `[lib] test = false`, and only 3 targets ran — the lib's 71 unit tests and the
- * doc-tests dropped out of the set with NOTHING said about them, and on a tree with a live database
- * (where the live legs pass) that is a GREEN run of a suite missing 71 tests. `doctest = false` did
- * the same to `--doc`. `autotests = false` and a deleted `[[test]]` are the same shape.
- *
- * Cargo's rules, so the tree alone decides: `src/lib.rs` is the lib (and its doc-tests), `src/main.rs`
- * is a bin, every top-level `tests/*.rs` and every `tests/<dir>/main.rs` is an integration test.
- * `tests/common/mod.rs` is NOT one — a subdirectory without `main.rs` is a module, which is why the
- * shared `require_live_db` helper lives there.
- *
- * A unit the manifest declares that the tree does not predict is NOT a problem — a `[[test]]` at a
- * custom path still has to run, and it does. Only the reverse direction is a hole.
- */
-function requiredUnits(crateDir) {
-  const required = [];
-  if (existsSync(join(crateDir, 'src', 'lib.rs'))) required.push('--lib', '--doc');
-  if (existsSync(join(crateDir, 'src', 'main.rs'))) required.push('--bin');
-  const testsDir = join(crateDir, 'tests');
-  if (existsSync(testsDir)) {
-    for (const e of readdirSync(testsDir)) {
-      if (e.endsWith('.rs')) required.push(`--test ${e.slice(0, -3)}`);
-      else if (statSync(join(testsDir, e)).isDirectory() && existsSync(join(testsDir, e, 'main.rs'))) required.push(`--test ${e}`);
+    const isLib = t.kind.includes('lib');
+    const crateDir = relative(ROOT, dirname(pkg.manifest_path)).split(sep).join('/');
+    const src = relative(ROOT, t.src_path).split(sep).join('/');
+    const live = sources(dirname(t.src_path)).some((f) => readsAGate(readFileSync(f, 'utf8')));
+    if (t.test) {
+      const selector = isLib ? ['--lib'] : t.kind.includes('bin') ? ['--bin', t.name] : ['--test', t.name];
+      units.push({ pkg: pkg.name, selector, features, live, src, crateDir, isLib });
     }
+    if (isLib && t.doctest) units.push({ pkg: pkg.name, selector: ['--doc'], features, live: false, src, crateDir, isLib });
   }
-  return required;
 }
+
+/**
+ * Every `#[test]` function the TREE holds, as file → the names in it. The independent enumeration, and
+ * the thing the manifest is checked against.
+ *
+ * Modelling cargo's LAYOUT instead was not enough, because a path is configurable. Measured on the
+ * version before this, each on its own:
+ *
+ *     [lib] test = false                      3 targets ran, not 5 — the lib's 71 unit tests and the
+ *                                             doc-tests left the set in SILENCE
+ *     [lib] path = "src/runtime.rs" + the     no requirement was even computed: the layout rule asked
+ *       file renamed, test = false            whether `src/lib.rs` EXISTS, and it no longer did
+ *     [[bin]] path = "src/bin/extra.rs"       `src/bin/*.rs` was not one of the four rules modelled,
+ *       test = false                          and `--bin` matching accepted ANY bin, so a second bin
+ *                                             losing its tests was invisible
+ *     autotests = false + [[test]] pointed    the real live files were never compiled while stub files
+ *       at stubs with the same fn names       carrying the same six names satisfied every name check
+ *
+ * All four are one hole: the set of things to run was derived from the manifest, and every one of those
+ * lines is IN the manifest. So the requirement now comes from the source files themselves — a file
+ * holding `#[test]` functions must be OWNED by a unit that ran, and that unit must have reported those
+ * names. Renaming a path, dropping a target, or aiming one at a stub all leave the real file with no
+ * unit that reported its tests.
+ *
+ * `#[test]` is matched only at the START of a line, then the first `fn <name>` after it. Not a count of
+ * the attribute: `tests/connection_routing.rs:1128` is the comment "── The single #[test] entry", so
+ * counting attributes says 2 where there is 1 — #222 (A)'s lesson in one line. Anchoring at line start
+ * excludes `//`, `///` and `*` comment bodies. A line inside a raw string that begins with `#[test]`
+ * would over-include, which demands a name that never reports: RED, the safe direction.
+ */
+const TEST_FN = /^[^\S\n]*#\[test\][\s\S]*?\bfn\s+([A-Za-z0-9_]+)/gm;
 
 const problems = [];
-/** Crate directory → the package `cargo metadata` reports for it, for the tree-vs-manifest check. */
-const crates = new Map(packages.map((p) => [dirname(p.manifest_path), p]));
-for (const manifest of globSync('rust/**/Cargo.toml', { cwd: ROOT }).sort()) {
-  const rel = manifest.split(sep).join('/');
+/** file (repository-relative) → the `#[test]` names it declares. */
+const treeTests = new Map();
+for (const file of globSync('rust/**/*.rs', { cwd: ROOT })) {
+  const rel = file.split(sep).join('/');
   if (rel.includes('/target/')) continue;
-  const isMember = crates.has(join(ROOT, dirname(rel)));
-  if (!isMember && !NOT_A_MEMBER.includes(rel)) {
-    problems.push(
-      `${rel} is a crate that \`cargo metadata\` does not report as a workspace member, so NO test of it runs here.\n` +
-        `      Add it to \`members\` in rust/Cargo.toml, or to NOT_A_MEMBER in this file with the reason\n` +
-        `      nothing needs to test it.`,
-    );
-  }
-  if (isMember && NOT_A_MEMBER.includes(rel)) {
-    problems.push(`${rel} is listed in NOT_A_MEMBER but IS a workspace member now. Remove it from that list — while it is there, dropping it from \`members\` again would be silent.`);
-  }
-}
-for (const [crateDir, pkg] of crates) {
-  const actual = units.filter((u) => u.pkg === pkg.name).map((u) => u.selector.join(' '));
-  const missing = requiredUnits(crateDir).filter((r) => (r === '--bin' ? !actual.some((a) => a.startsWith('--bin ')) : !actual.includes(r)));
-  if (missing.length > 0) {
-    problems.push(
-      `${missing.length} test unit(s) the TREE requires of ${relative(ROOT, crateDir)} are not in what \`cargo metadata\` reports, so nothing runs them:\n` +
-        missing.map((m) => `      cargo test -p ${pkg.name} ${m}`).join('\n') +
-        `\n\n      cargo's layout says these exist (src/lib.rs is the lib and its doc-tests, src/main.rs a\n` +
-        `      bin, every tests/*.rs an integration test). A \`[lib] test = false\`, a \`doctest = false\`,\n` +
-        `      an \`autotests = false\` or a deleted \`[[test]]\` removes one from the manifest's answer\n` +
-        `      while leaving the tests themselves in the tree — measured, \`[lib] test = false\` alone\n` +
-        `      dropped 71 unit tests from this gate's set in silence.`,
-    );
-  }
+  const names = new Set([...readFileSync(join(ROOT, rel), 'utf8').matchAll(TEST_FN)].map(([, n]) => n));
+  if (names.size > 0) treeTests.set(rel, names);
 }
 
 assertGatesOpen('rust');
@@ -320,6 +291,39 @@ for (const unit of ran) {
   }
 }
 
+// Every `#[test]` the TREE holds was reported by a unit that RAN. The manifest says what to run; this
+// says what there IS to run, and the two are only both wrong if someone edits the source too.
+//
+// A file's owner is the unit whose target source IS that file (a `tests/*.rs`, a `src/main.rs`, a
+// `src/bin/*.rs`, `src/lib.rs` itself) or — for the submodules a crate root pulls in with `mod`, which
+// is where 71 of this workspace's 76 tests live — any unit of the same crate rooted in the same
+// directory tree. So `src/tx_options.rs` is owned by `--lib`, and a `[lib] path` pointing elsewhere
+// does not change that: it is still the crate's only src-rooted unit.
+for (const [file, names] of [...treeTests].sort()) {
+  // A top-level `tests/*.rs` IS a target of its own by cargo's rules, so it must be owned EXACTLY —
+  // by a unit whose source is that very file. Directory ownership alone let a `[[test]]` re-pointed at
+  // a SIBLING stub carrying the same `fn` names answer for it, since both sit in `tests/`. Files in a
+  // subdirectory (`tests/common/mod.rs`) are modules of some target, and files under `src/` are modules
+  // of the crate root, so those are owned by any unit rooted above them.
+  const owners = /^rust\/[^/]+\/tests\/[^/]+\.rs$/.test(file)
+    ? ran.filter((u) => u.src === file)
+    : ran.filter((u) => u.src === file || file.startsWith(`${dirname(u.src)}/`));
+  // libtest reports a unit test by its MODULE PATH (`connection_routing::tests::resolve_defaults`) and
+  // an integration test by its bare name, so the tree's `fn` name is matched against the last segment.
+  const reported = new Set(owners.flatMap((u) => u.verdicts.map((v) => v.name.split('::').pop())));
+  const missing = [...names].filter((n) => !reported.has(n)).sort();
+  if (missing.length > 0) {
+    problems.push(
+      `${missing.length} \`#[test]\` function(s) in ${file} were reported by NO unit that ran, so nothing executed them:\n` +
+        missing.map((n) => `      ${n}`).join('\n') +
+        `\n\n      ${owners.length === 0 ? 'NO unit compiles that file at all' : `the unit(s) that compile it (${owners.map((u) => u.selector.join(' ')).join(', ')}) reported other names`}.\n` +
+        `      A \`test = false\`, a re-pointed \`path\`, a dropped \`[[test]]\`/\`[[bin]]\`, an \`autotests =\n` +
+        `      false\`, a crate left out of \`members\`, or a target aimed at a STUB carrying the same\n` +
+        `      function names all look exactly like this — and none of them changes the tree.`,
+    );
+  }
+}
+
 // The other half of EXPECTED_EMPTY's bidirectionality: an entry naming a unit that did not RUN is
 // stale, and it was silent. Measured on the version before this: `[lib] doctest = false` removed the
 // `--doc` unit from the set entirely, and the entry excusing its emptiness went on standing while the
@@ -361,10 +365,11 @@ if (liveUnlisted.length > 0) {
 const total = ran.reduce((n, u) => n + (u.summaries[0]?.[0] ?? 0), 0);
 report(
   problems,
-  `✅ the live-DB gates ${GATES_ENV} declares were OPEN in this process before cargo test started; every crate\n` +
-    `   under rust/ is a workspace member or named as deliberately outside it, every test unit cargo's LAYOUT\n` +
-    `   RULES require of each member's tree is one the manifest reports, and each of the ${units.length} test-carrying\n` +
-    `   targets for the ${new Set(units.map((u) => u.pkg)).size} package(s) — lib unit tests,\n` +
+  `✅ the live-DB gates ${GATES_ENV} declares were OPEN in this process before cargo test started; every one of\n` +
+    `   the ${[...treeTests.values()].reduce((n, s) => n + s.size, 0)} \`#[test]\` functions in the ${treeTests.size} source files under rust/ that hold one was REPORTED by a\n` +
+    `   unit that ran (so no target was re-pointed, dropped, switched off or aimed at a stub), and each of the\n` +
+    `   ${units.length} test-carrying targets for the ${new Set(units.map((u) => u.pkg)).size} package(s) \`cargo metadata\`\n` +
+    `   reports — lib unit tests,\n` +
     `   every tests/*.rs, every bin and the doc-tests — was run SEPARATELY, with \`--features livedb\` on every\n` +
     `   package that declares it, and every one reported a \`test result:\` line whose counts match the verdict\n` +
     `   lines beside it: ${total} passed, 0 failed, 0 ignored (budget ${IGNORE_BUDGET}), 0 filtered out, and no target ran 0 tests\n` +
