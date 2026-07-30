@@ -481,8 +481,8 @@ def context_for_driver(driver: Driver) -> ExecutionContext:
 def as_context(driver_or_ctx: Union[Driver, ExecutionContext]) -> ExecutionContext:
     """Accept EITHER a raw :class:`Driver` (wrap it via :func:`context_for_driver` — the byte-identical
     backward-compat path) OR an already-built :class:`ExecutionContext` (pass through). The public
-    runtime entry points (``execute_bundle`` / ``execute_transaction_bundle`` / ``run_relation_op`` /
-    ``read_bundle``) take this union so every existing caller that threads a raw driver keeps working
+    runtime entry points (``execute_bundle`` / ``execute_transaction_bundle`` / ``run_relation_op``)
+    take this union so every existing caller that threads a raw driver keeps working
     while the ctx-threaded internals funnel every SQL through the seam.
     """
     if isinstance(driver_or_ctx, ExecutionContext):

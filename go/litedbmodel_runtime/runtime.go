@@ -110,8 +110,7 @@ func ExecuteBundleCtx(goCtx context.Context, bundle *SqlBundle, input *bc.Obj, d
 
 // executeBundleCtx is the ctx-threaded core of ExecuteBundle: it drives the read graph over an
 // [ExecutionContext] so every SQL funnels through the central seam. ExecuteBundle is the
-// backward-compat wrapper (§6); ReadBundle threads the SAME ctx here so its primary read + relation
-// batches share one execution context.
+// backward-compat wrapper (§6).
 func executeBundleCtx(ctx *ExecutionContext, bundle *SqlBundle, input *bc.Obj) (bc.Value, error) {
 	if bundle.ReadGraph == nil {
 		return nil, fmt.Errorf("scp runtime: bundle '%s' carries no read graph (single-statement writes ride the write path)", bundle.Name)

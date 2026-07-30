@@ -15,23 +15,9 @@
 package litedbmodel_runtime
 
 import (
-	"context"
-	"fmt"
 
 	bc "github.com/foo-ogawa/behavior-contracts/go"
 )
-
-func errReadNotList(out bc.Value) error {
-	kind := "non-list"
-	if out == nil {
-		kind = "null"
-	}
-	return fmt.Errorf("scp read: the read behavior output is not a row list (got %s); the typed-object read surface expects a Select-shaped output", kind)
-}
-
-func errRelationNotDeclared(name string) error {
-	return fmt.Errorf("declarative select: relation '%s' is not declared on this model", name)
-}
 
 // RelationOp is the pre-compiled STATIC batch op read out of bundle.relations[name] (pure JSON).
 // Single-key relations carry ParentKey/TargetKey; composite (#47 item 1) carry ParentKeys/TargetKeys.
@@ -54,63 +40,12 @@ type RelationOp struct {
 	HardLimit *int
 }
 
-// relationOpFromJObj reads one bundle.relations entry into a RelationOp.
-func relationOpFromJObj(o *bc.JObj) RelationOp {
-	return RelationOp{
-		Name:        getStrJ(o, "name"),
-		Kind:        getStrJ(o, "kind"),
-		ParentKey:   getStrJ(o, "parentKey"),
-		TargetKey:   getStrJ(o, "targetKey"),
-		ParentKeys:  getStrArrJ(o, "parentKeys"),
-		TargetKeys:  getStrArrJ(o, "targetKeys"),
-		Dialect:     getStrJ(o, "dialect"),
-		Connection:  getStrJ(o, "connection"),
-		SQL:         getStrJ(o, "sql"),
-		TargetTable: getStrJ(o, "targetTable"),
-		HardLimit:   optIntJ(o, "hardLimit"),
-	}
-}
-
-// optIntJ reads an OPTIONAL integer field off a parsed JObj, returning nil when the key is absent (so
-// a present cap of 0 stays distinct from "no cap"). Used for the baked relation hard-limit (Phase E-2).
-func optIntJ(o *bc.JObj, k string) *int {
-	v, ok := o.Get(k)
-	if !ok {
-		return nil
-	}
-	if dv, err := bc.DecodeValue(v); err == nil {
-		if i, ok := dv.(int64); ok {
-			n := int(i)
-			return &n
-		}
-	}
-	return nil
-}
-
 func getStrJ(o *bc.JObj, k string) string {
 	if v, ok := o.Get(k); ok {
 		s, _ := v.(string)
 		return s
 	}
 	return ""
-}
-
-// getStrArrJ reads an optional string[] field (nil if absent) — the composite key column lists.
-func getStrArrJ(o *bc.JObj, k string) []string {
-	v, ok := o.Get(k)
-	if !ok {
-		return nil
-	}
-	arr, ok := v.([]bc.JNode)
-	if !ok {
-		return nil
-	}
-	out := make([]string, 0, len(arr))
-	for _, e := range arr {
-		s, _ := e.(string)
-		out = append(out, s)
-	}
-	return out
 }
 
 // parentKeyCols / targetKeyCols return the ordered key columns (single-key → 1-element).
@@ -210,7 +145,7 @@ func runRelationOpCtx(ctx *ExecutionContext, op RelationOp, parents []bc.Value) 
 	// cap, throw with the EXACT count (the batch is fetched in full, no N+1) BEFORE grouping/hydration
 	// so an over-cap read never assembles an unbounded result set. Field mapping: Model = the relation
 	// TARGET TABLE, Relation = the relation name. Absent op.HardLimit ⇒ disabled / intrinsic-limit
-	// relation ⇒ no check. One guard point → both eager (ReadBundle) and lazy (StitchRelation). The
+	// relation ⇒ no check. One guard point, shared by every caller of the batch. The
 	// SAME check the TS reference (runRelationOp) + the rust/py/php ports run off the same field.
 	if op.HardLimit != nil {
 		if err := checkHardLimit(*op.HardLimit, len(rows), LimitContextRelation, op.TargetTable, op.Name); err != nil {
@@ -228,83 +163,4 @@ func runRelationOpCtx(ctx *ExecutionContext, op RelationOp, parents []bc.Value) 
 // `single` = a non-hasMany cardinality (belongsTo/hasOne).
 func DistributeToParent(op RelationOp, parent *bc.Obj, batch RelationBatch) bc.Value {
 	return AttachToParent(parent, op.parentKeyCols(), batch, op.Kind != "hasMany")
-}
-
-// StitchRelation batch-loads + hydrates ONE declared relation onto an ALREADY-FETCHED parent row
-// list, using the SAME RunRelationOp / DistributeToParent the runtime's own read path uses (no
-// reimplemented grouping — the semantics stay single-sourced here). `opJObj` is the relation op as
-// it appears under bundle.relations[name] (pure JSON, bc-ordered). The public seam the codegen bench
-// cell uses: it runs the GENERATED de-interpreted module for the primary read (its own distinct code
-// entry — NOT ExecuteBundle), then hydrates the related rows through this shared stitch so the
-// hydrated result is byte-identical to ReadBundle's.
-func StitchRelation(opJObj *bc.JObj, parents []bc.Value, db SQLDB) ([]bc.Value, error) {
-	op := relationOpFromJObj(opJObj)
-	batch, err := runRelationOpCtx(ContextForDB(db), op, parents)
-	if err != nil {
-		return nil, err
-	}
-	for _, r := range parents {
-		if obj, ok := r.(*bc.Obj); ok {
-			obj.Set(op.Name, DistributeToParent(op, obj, batch))
-		}
-	}
-	return parents, nil
-}
-
-// ReadBundle runs a READ bundle's primary row list, then batch-loads + hydrates the selected
-// relations onto each parent (port of the TS buildResultSet typed-object surface, declarative-select
-// path). The primary read output must be a bare row list; each named relation in withNames is
-// batch-prefetched ONCE over the whole page (staged, no N+1) via the SAME RunRelationOp and attached
-// onto each parent as an own key. `relations` is the bundle.relations JObj.
-func ReadBundle(bundle *SqlBundle, relations *bc.JObj, input *bc.Obj, db SQLDB, withNames []string) (bc.Value, error) {
-	return ReadBundleCtx(context.Background(), bundle, relations, input, db, withNames)
-}
-
-// ReadBundleCtx is [ReadBundle] riding a caller-supplied (Phase D scoped) context.Context: the primary
-// read AND every relation-batch SELECT funnel through an [ExecutionContext] whose middleware chain
-// resolves THAT context's scope registry ([ContextForDBCtx]). A middleware registered inside a
-// [WithMiddlewareScope] therefore observes BOTH the primary read and the relation-batch SQL (the
-// end-to-end relation coverage the #92 reference asserts). With no middleware registered the chain is
-// empty ⇒ byte-identical to [ReadBundle].
-//
-// CROSS-DB (V0 R1): a relation op carrying a `Connection` tag names ITS OWN database; the name rides
-// the StatementIntent to ConnectionFor ([runRelationOpCtx]). Resolving it needs a ctx that HOLDS a
-// [ConnectionRegistry] — a raw SQLDB is a single-connection target, so a tagged relation on this entry
-// point is LOUD rather than silently run against the parent's database.
-func ReadBundleCtx(goCtx context.Context, bundle *SqlBundle, relations *bc.JObj, input *bc.Obj, db SQLDB, withNames []string) (bc.Value, error) {
-	if goCtx == nil {
-		goCtx = context.Background()
-	}
-	// ONE ExecutionContext for the primary read AND every relation batch: a relation's database is named
-	// on its op and resolved by this ctx, so there is no per-relation ctx to derive.
-	primaryCtx := ContextForDBCtx(goCtx, db)
-	out, err := executeBundleCtx(primaryCtx, bundle, input)
-	if err != nil {
-		return nil, err
-	}
-	rows, ok := out.([]bc.Value)
-	if !ok {
-		return nil, errReadNotList(out)
-	}
-	for _, name := range withNames {
-		opN, present := relations.Get(name)
-		if !present {
-			return nil, errRelationNotDeclared(name)
-		}
-		opObj, ok := opN.(*bc.JObj)
-		if !ok {
-			return nil, errRelationNotDeclared(name)
-		}
-		op := relationOpFromJObj(opObj)
-		batch, err := runRelationOpCtx(primaryCtx, op, rows)
-		if err != nil {
-			return nil, err
-		}
-		for _, r := range rows {
-			if obj, ok := r.(*bc.Obj); ok {
-				obj.Set(name, DistributeToParent(op, obj, batch))
-			}
-		}
-	}
-	return rows, nil
 }

@@ -7,7 +7,7 @@ the parent keys, resolves the deferred PG array cast from the REAL keys, renders
 short-circuits an empty key set (NO query), runs the batch, groups the child rows by target key,
 and distributes them onto the parents per cardinality (``hasMany`` → list, ``belongsTo``/``hasOne``
 → single or None). This is the SAME ``runRelationOp`` / ``distributeToParent`` / ``dedupeKeys`` the
-TS eager path (``buildResultSet``) uses — the non-TS runtimes now reproduce it.
+TS typed-object path (``buildResultSet``) uses.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from .exec_context import READ_INTENT, ExecutionContext, StatementIntent, as_con
 from .grouping import attach_to_parent, dedupe_key_tuples, group_by_key
 from .static_bundle import PG_ARRAY_CAST_TOKEN, render_placeholders, resolve_pg_array_cast
 
-__all__ = ["dedupe_keys", "run_relation_op", "distribute_to_parent", "read_bundle"]
+__all__ = ["dedupe_keys", "run_relation_op", "distribute_to_parent"]
 
 
 def _parent_key_cols(op: Mapping[str, Any]) -> List[str]:
@@ -101,7 +101,7 @@ def run_relation_op(
     # TARGET TABLE, ``relation`` = the relation NAME. Absent ``op['hardLimit']`` ⇒ disabled / an
     # intrinsic per-parent ``limit`` window ⇒ NO check. The native ports (#100-103) run the SAME check
     # off the same JSON field. Raised BEFORE grouping/hydration so an over-cap read never assembles an
-    # unbounded result set. ONE guard point → both the eager (``read_bundle``) and lazy surfaces.
+    # unbounded result set. ONE guard point, shared by every caller of the batch.
     hard_limit = op.get("hardLimit")
     if hard_limit is not None:
         # The relation-context arm of the shared runaway check (SSoT) — the SAME `count > limit ⇒ raise`
@@ -125,75 +125,3 @@ def distribute_to_parent(
     :func:`~litedbmodel_runtime.grouping.attach_to_parent` (SSoT — no local grouping copy).
     """
     return attach_to_parent(parent, _parent_key_cols(op), batch, op["kind"] != "hasMany")
-
-
-def _hydrate_relation(
-    op: Mapping[str, Any],
-    parents: Sequence[Dict[str, Any]],
-    ctx: ExecutionContext,
-    attach_name: str,
-) -> None:
-    """Hydrate ONE relation edge over ``parents`` (ONE batched query, N+1-free), then RECURSE into
-    ``op['childRelations']`` — the batched-map-over-batched-map chain the native codegen path lowers,
-    reproduced for the runtime/ir-exec path (py/php/ts).
-
-    One edge = one query, INDEPENDENT of the parent count: :func:`run_relation_op` dedupes the parent
-    keys and fetches ALL children with ONE ``WHERE fk IN (…)`` batch, then the grouping SSoT nests them
-    onto each parent via :func:`distribute_to_parent`. A nested level batches over the FLATTENED child
-    rows fetched here — the EXACT dict objects attached to the parents, so grandchildren hydrate in
-    place (users→posts→comments = 3 queries, not 1 + N + N·M). No new mechanism: every level runs the
-    SAME ``run_relation_op`` + grouping core.
-    """
-    batch = run_relation_op(op, parents, ctx)["batch"]
-    for p in parents:
-        p[attach_name] = distribute_to_parent(op, p, batch)
-    child_ops = op.get("childRelations")
-    if child_ops:
-        # The flattened child rows (each child appears ONCE, keyed by its target tuple) = the next
-        # level's parent set. Empty ⇒ no grandchild query (short-circuit, still N+1-free).
-        child_rows = [c for children in batch.values() for c in children]
-        if child_rows:
-            for child_op in child_ops:
-                _hydrate_relation(child_op, child_rows, ctx, child_op["name"])
-
-
-def read_bundle(
-    bundle: Mapping[str, Any],
-    input_scope: Mapping[str, Any],
-    driver: Union[Driver, ExecutionContext],
-    with_names: Sequence[str],
-) -> List[Dict[str, Any]]:
-    """Run a READ bundle's primary row list, then batch-load + hydrate the selected relations.
-
-    Mirrors the TS ``buildResultSet`` typed-object surface restricted to the declarative-select path
-    (``buildResultSet`` with ``with``): the primary read output must be a bare row list; each named
-    relation in ``with_names`` is batch-prefetched ONCE over the whole page (staged, no N+1) via the
-    SAME ``run_relation_op`` and attached onto each parent as an own key. Independent sibling
-    relations are naturally free of ordering: the batch is grouped-then-distributed by key, so the
-    hydrated result is deterministic regardless of query-completion order (#40 parallel-safe).
-
-    CROSS-DB (V0 R1): a relation op carrying a ``connection`` tag names ITS OWN database; the name
-    rides the :class:`StatementIntent` to ``connection_for`` (:func:`run_relation_op`). Resolving it
-    needs a ctx that HOLDS a :class:`ConnectionRegistry` — a raw :class:`Driver` is a single-connection
-    target, so a tagged relation on one is LOUD rather than silently run against the parent's database.
-    """
-    from .runtime import execute_bundle
-
-    # ONE ExecutionContext for the primary read AND every relation batch: a relation's database is
-    # named on its op and resolved by this ctx, so there is no per-relation target to derive.
-    ctx = as_context(driver)
-    out = execute_bundle(bundle, input_scope, ctx)
-    if not isinstance(out, list):
-        raise ValueError(
-            "scp read: the read behavior output is not a row list "
-            f"(got {'null' if out is None else type(out).__name__}); the typed-object read surface "
-            "expects a Select-shaped output"
-        )
-    rows: List[Dict[str, Any]] = [dict(r) for r in out]
-    relations: Mapping[str, Any] = bundle.get("relations") or {}
-    for name in with_names:
-        op = relations.get(name)
-        if op is None:
-            raise ValueError(f"declarative select: relation '{name}' is not declared on this model")
-        _hydrate_relation(op, rows, ctx, name)
-    return rows

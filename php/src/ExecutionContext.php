@@ -663,7 +663,7 @@ final class Context
     /**
      * Accept EITHER a raw `\PDO` (wrap it via {@see forPdo()} — the byte-identical backward-compat
      * path) OR an already-built {@see ExecutionContext} (pass through). The public runtime entry
-     * points (`executeBundle` / `executeTransactionBundle` / `runRelationOp` / `readBundle`) take this
+     * points (`executeBundle` / `executeTransactionBundle` / `runRelationOp`) take this
      * union so every existing raw-`\PDO` caller keeps working while the internals thread a ctx.
      */
     public static function of(\PDO|ExecutionContext $pdoOrCtx): ExecutionContext

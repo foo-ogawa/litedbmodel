@@ -119,7 +119,6 @@ from .runtime import (
 from .relation import (
     dedupe_keys,
     distribute_to_parent,
-    read_bundle,
     run_relation_op,
 )
 from .leaves import make_handlers
@@ -246,7 +245,6 @@ __all__ = [
     # read-relation batch execution + hydration (#43)
     "dedupe_keys",
     "distribute_to_parent",
-    "read_bundle",
     "run_relation_op",
     # op-agnostic leaf transport for the bc-generated native (ir-exec) modules (#141 / epic #123)
     "make_handlers",
