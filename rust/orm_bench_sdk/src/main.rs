@@ -523,12 +523,6 @@ fn reseed(db: &mut dyn Db, setup: &Setup) {
     }
 }
 
-// ── upsert bodies differ only in the conflict clause; the column list + VALUES are shared. ───────────
-/// One relation level's key set as the ONE param the captured SQL expects. The generated module binds a
-/// batched child read's key set as a single JSON array (`json_each(?)` / `JSON_TABLE(?)` /
-/// `UNNEST(?::t[])`), never as N placeholders — so the baseline binds it the same way, or it is running
-/// different SQL. A composite key is an array of tuples, a single key an array of scalars.
-
 /// True when the statement casts its param to a PostgreSQL array (`::int[]` / `::text[]`).
 fn is_pg_array_cast(sql: &str) -> bool {
     sql.split("::").skip(1).any(|tail| {
