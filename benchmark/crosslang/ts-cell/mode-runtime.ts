@@ -163,7 +163,7 @@ export async function openRuntime(dialect: Dialect): Promise<Cell> {
   for (const stmt of setup.schema) await raw(stmt);
 
   async function runOp(op: string, it: number): Promise<void> {
-    const input = resolveInput(setup, op, it) as Record<string, never>;
+    const input = resolveInput(setup.inputs, op, it) as Record<string, never>;
     switch (op) {
       case 'findAll':
         rows += (await User.find([], { limit: 100, order: User.id.asc() })).length;

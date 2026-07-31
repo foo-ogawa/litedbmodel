@@ -329,7 +329,7 @@ let sink: unknown;
  */
 async function runOp(db: Db, setup: Setup, op: string, it: number): Promise<void> {
   const sql = setup.ops[op];
-  const input = resolveInput(setup, op, it) as Record<string, never>;
+  const input = resolveInput(setup.inputs, op, it) as Record<string, never>;
   /** This statement's MySQL RETURNING recovery — null wherever the database executes RETURNING itself. */
   const recovery = (i: number): Recovery | null => setup.recover?.[op]?.[i] ?? null;
   /** The columns this batch statement reads, in its own order (PostgreSQL binds one array per column). */

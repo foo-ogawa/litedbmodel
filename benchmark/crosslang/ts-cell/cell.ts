@@ -120,7 +120,7 @@ export interface Setup {
 }
 
 /** One declared input value: a scalar, or a batch write's record set. */
-export type InputValue = string | number | Record<string, string | number>[];
+export type InputValue = string | number | readonly Record<string, string | number>[];
 
 /** How ONE `?` of a recovering SELECT is bound — the vocabulary of `ReselectBind`. */
 export type RecoveryBind = { kind: 'param'; index: number } | { kind: 'lastId' } | { kind: 'highId' };
@@ -142,9 +142,13 @@ export interface Recovery {
  * scalars stay numbers, which is what the typed ports take. The other four languages pass a native
  * int64 already.
  */
-export function resolveInput(setup: Setup, op: string, it: number): Record<string, unknown> {
-  const declared = setup.inputs[op];
-  if (declared === undefined) throw new Error(`.setup/${setup.dialect}.json declares no inputs for op ${op}`);
+export function resolveInput(
+  inputs: Record<string, Record<string, InputValue>>,
+  op: string,
+  it: number,
+): Record<string, unknown> {
+  const declared = inputs[op];
+  if (declared === undefined) throw new Error(`no declared inputs for op ${op}`);
   const text = (v: string): string => v.replace(/\{it\}/g, String(it));
   return Object.fromEntries(
     Object.entries(declared).map(([name, value]) => {

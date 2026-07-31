@@ -88,7 +88,7 @@ export async function openCodegen(dialect: Dialect): Promise<Cell> {
       for (const stmt of [...setup.delete, ...setup.insert]) await rawQuery(stmt);
     },
     run: async (op, it) => {
-      const input = resolveInput(setup, op, it);
+      const input = resolveInput(setup.inputs, op, it);
       if (!TX_OPS.has(op)) {
         await facade[op](input);
         return;

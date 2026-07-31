@@ -57,9 +57,12 @@ import { DBModel, model, column, ColumnsOf, closeAllPools, hasMany, belongsTo } 
 // of the go/rust/python/php native cells, and the path litedbmodel v2 ships. The `litedbmodel (codegen)`
 // row measures THIS; the `litedbmodel (runtime)` row measures the imperative DBModel path that builds its
 // SQL per call. Both are litedbmodel 2.1.0 — two execution modes, not two versions. Inputs come from the
-// ONE shared per-op input SSoT (inputs.ts), so this cell issues the same logical work as every other cell.
+// ONE shared per-op input SSoT (crosslang/contract.ts), so this cell issues the same logical work as
+// every other cell.
 import { leafHandlersAsync, pgConnectionPool, PooledAsyncContext, transaction, configurePgDeboxTypeParsers } from 'litedbmodel/scp';
-import { inputFor, TX_OPS } from './crosslang/ts-cell/inputs.js';
+import { ORM_OP_INPUT } from './crosslang/contract.js';
+import { resolveInput } from './crosslang/ts-cell/cell.js';
+import { TX_OPS } from './crosslang/ts-cell/expectations.js';
 import { bindTypedAsync } from './crosslang/ts-cell/behaviors_postgres.js';
 // Per-op DB reset (setup.ts is the seed SSoT). Every op is measured on the SAME clean general graph —
 // the crosslang cells reset per op too; without it, a write op's mutations to seed rows leak into later
@@ -605,7 +608,7 @@ async function main() {
   const codegenFacade = bindTypedAsync(leafHandlersAsync({ execAsync: codegenCtx, dialect: 'postgres' })) as unknown as Record<string, (input?: Record<string, unknown>) => Promise<unknown>>;
   let codegenWriteCounter = 1_000_000; // distinct email/id namespace from the runtime cell's counters
   const codegenFn = (op: string) => async (): Promise<unknown> => {
-    const input = inputFor(op, codegenWriteCounter++);
+    const input = resolveInput(ORM_OP_INPUT, op, codegenWriteCounter++);
     const result = TX_OPS.has(op)
       ? await transaction(codegenCtx, () => codegenFacade[op](input) as Promise<unknown>, {}, 'postgres')
       : await codegenFacade[op](input);
