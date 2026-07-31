@@ -27,6 +27,7 @@ import 'reflect-metadata';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
+import { LITEDBMODEL_RUNTIME, LITEDBMODEL_CODEGEN } from './orm-series.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -628,7 +629,7 @@ async function main() {
       name: 'Find all (limit 100)',
       tests: [
         { 
-          orm: 'litedbmodel (runtime)',
+          orm: LITEDBMODEL_RUNTIME,
           fn: () => LiteUser.find([], { limit: 100 }) 
         },
         { 
@@ -657,7 +658,7 @@ async function main() {
       name: 'Filter, paginate & sort',
       tests: [
         { 
-          orm: 'litedbmodel (runtime)',
+          orm: LITEDBMODEL_RUNTIME,
           fn: () => LitePost.find([[LitePost.published, 1]], {
             order: LitePost.created_at.desc(), 
             limit: 20, 
@@ -710,7 +711,7 @@ async function main() {
       name: 'Nested find all (include posts)',
       tests: [
         { 
-          orm: 'litedbmodel (runtime)',
+          orm: LITEDBMODEL_RUNTIME,
           fn: async () => {
             // Auto batch loading via relation
             const users = await LiteUser.find([], { limit: 100 });
@@ -773,7 +774,7 @@ async function main() {
       name: 'Find first',
       tests: [
         { 
-          orm: 'litedbmodel (runtime)',
+          orm: LITEDBMODEL_RUNTIME,
           fn: () => LiteUser.findOne([[`${LiteUser.name} LIKE ?`, 'User%']]) 
         },
         { 
@@ -813,7 +814,7 @@ async function main() {
       name: 'Nested find first (include posts)',
       tests: [
         { 
-          orm: 'litedbmodel (runtime)',
+          orm: LITEDBMODEL_RUNTIME,
           fn: async () => {
             const user = await LiteUser.findOne([[`${LiteUser.name} LIKE ?`, 'User%']]);
             if (user) {
@@ -877,7 +878,7 @@ async function main() {
       name: 'Find unique (by email)',
       tests: [
         { 
-          orm: 'litedbmodel (runtime)',
+          orm: LITEDBMODEL_RUNTIME,
           fn: () => LiteUser.findOne([[LiteUser.email, 'user500@example.com']]) 
         },
         { 
@@ -913,7 +914,7 @@ async function main() {
       name: 'Nested find unique (include posts)',
       tests: [
         { 
-          orm: 'litedbmodel (runtime)',
+          orm: LITEDBMODEL_RUNTIME,
           fn: async () => {
             const user = await LiteUser.findOne([[LiteUser.email, 'user500@example.com']]);
             if (user) {
@@ -975,7 +976,7 @@ async function main() {
       name: 'Create',
       tests: [
         { 
-          orm: 'litedbmodel (runtime)',
+          orm: LITEDBMODEL_RUNTIME,
           fn: () => LiteUser.transaction(async () => LiteUser.create([
             [LiteUser.email, `bench${createCounter++}@example.com`],
             [LiteUser.name, `Benchmark User`],
@@ -1033,7 +1034,7 @@ async function main() {
       name: 'Nested create (with post)',
       tests: [
         { 
-          orm: 'litedbmodel (runtime)',
+          orm: LITEDBMODEL_RUNTIME,
           fn: () => LiteUser.transaction(async () => {
             const result = await LiteUser.create([
               [LiteUser.email, `nested${createCounter++}@example.com`],
@@ -1124,7 +1125,7 @@ async function main() {
       name: 'Update',
       tests: [
         { 
-          orm: 'litedbmodel (runtime)',
+          orm: LITEDBMODEL_RUNTIME,
           fn: () => LiteUser.transaction(async () => LiteUser.update([[LiteUser.id, 100]], [[LiteUser.name, 'Updated User']])) 
         },
         { 
@@ -1167,7 +1168,7 @@ async function main() {
       name: 'Nested update (update user + post)',
       tests: [
         { 
-          orm: 'litedbmodel (runtime)',
+          orm: LITEDBMODEL_RUNTIME,
           fn: () => LiteUser.transaction(async () => {
             await LiteUser.update([[LiteUser.id, 100]], [[LiteUser.name, 'Nested Updated']]);
             await LitePost.update([[LitePost.author_id, 100]], [[LitePost.title, 'Updated Post']]);
@@ -1229,7 +1230,7 @@ async function main() {
       name: 'Upsert',
       tests: [
         { 
-          orm: 'litedbmodel (runtime)',
+          orm: LITEDBMODEL_RUNTIME,
           fn: () => LiteUser.transaction(async () => LiteUser.create(
             [
               [LiteUser.email, `upsert${upsertCounter++}@example.com`],
@@ -1291,7 +1292,7 @@ async function main() {
       name: 'Nested upsert (user + post)',
       tests: [
         { 
-          orm: 'litedbmodel (runtime)',
+          orm: LITEDBMODEL_RUNTIME,
           fn: () => LiteUser.transaction(async () => {
             const result = await LiteUser.create(
               [
@@ -1382,7 +1383,7 @@ async function main() {
       name: 'Delete',
       tests: [
         { 
-          orm: 'litedbmodel (runtime)',
+          orm: LITEDBMODEL_RUNTIME,
           fn: () => LiteUser.transaction(async () => {
             // First create then delete
             const result = await LiteUser.create([
@@ -1438,7 +1439,7 @@ async function main() {
       name: 'Create Many (10 records)',
       tests: [
         { 
-          orm: 'litedbmodel (runtime)',
+          orm: LITEDBMODEL_RUNTIME,
           fn: () => LiteUser.transaction(async () => {
             const records = Array.from({ length: 10 }, (_, i) => [
               [LiteUser.email, `bulk${createCounter++}@example.com`],
@@ -1498,7 +1499,7 @@ async function main() {
       name: 'Upsert Many (10 records)',
       tests: [
         { 
-          orm: 'litedbmodel (runtime)',
+          orm: LITEDBMODEL_RUNTIME,
           fn: () => LiteUser.transaction(async () => {
             const records = Array.from({ length: 10 }, (_, i) => [
               [LiteUser.email, `upsertbulk${upsertCounter++}@example.com`],
@@ -1573,7 +1574,7 @@ async function main() {
       name: 'Update Many (10 different values)',
       tests: [
         { 
-          orm: 'litedbmodel (runtime)',
+          orm: LITEDBMODEL_RUNTIME,
           fn: () => LiteUser.transaction(async () => {
             // Update 10 users with different names in a single query
             return LiteUser.updateMany(
@@ -1640,7 +1641,7 @@ async function main() {
       name: 'Nested relations (100→1000→10000)',
       tests: [
         { 
-          orm: 'litedbmodel (runtime)',
+          orm: LITEDBMODEL_RUNTIME,
           fn: async () => {
             // Fetch first 100 users by ID (they have 10 posts each = 1000 posts)
             const users = await LiteUser.find([], { limit: 100, order: LiteUser.id.asc() });
@@ -1800,7 +1801,7 @@ async function main() {
       name: 'Nested relations (composite key)',
       tests: [
         {
-          orm: 'litedbmodel (runtime)',
+          orm: LITEDBMODEL_RUNTIME,
           fn: async () => {
             // First 100 tenant_users by user_id (matches the crosslang composite op's selection).
             const users = await LiteTenantUser.find([], { limit: 100, order: LiteTenantUser.user_id.asc() });
@@ -1924,7 +1925,7 @@ async function main() {
   for (const category of testCategories) {
     const op = CATEGORY_TO_OP[category.name];
     if (!op) throw new Error(`benchmark: category '${category.name}' has no codegen op mapping`);
-    category.tests.push({ orm: 'litedbmodel (codegen)', fn: codegenFn(op) });
+    category.tests.push({ orm: LITEDBMODEL_CODEGEN, fn: codegenFn(op) });
   }
 
   // Store all results
@@ -2011,25 +2012,38 @@ async function main() {
   // Summary Table (Median comparison)
   // ============================================
   
+  // Column widths are this console table's own layout; the series names come from the SSoT, and the
+  // header and rule are rendered from the same list so they cannot disagree with the cells below them.
+  const operationWidth = 31;
+  const summaryColumns: readonly (readonly [string, number])[] = [
+    [LITEDBMODEL_RUNTIME, 21],
+    [LITEDBMODEL_CODEGEN, 21],
+    ['Prisma', 11],
+    ['Kysely', 11],
+    ['Drizzle', 11],
+    ['TypeORM', 11],
+  ];
+  const columnWidths = [operationWidth, ...summaryColumns.map(([, width]) => width)];
+
   console.log('\n' + '='.repeat(100));
   console.log('📋 SUMMARY - Median (ms)');
   console.log('='.repeat(100));
-  console.log('| Operation                       | litedbmodel (runtime) | litedbmodel (codegen) | Prisma      | Kysely      | Drizzle     | TypeORM     |');
-  console.log('|---------------------------------|-----------------------|-----------------------|-------------|-------------|-------------|-------------|');
-  
+  console.log(`| ${['Operation'.padEnd(operationWidth), ...summaryColumns.map(([orm, width]) => orm.padEnd(width))].join(' | ')} |`);
+  console.log(`|${columnWidths.map((width) => '-'.repeat(width + 2)).join('|')}|`);
+
   for (const category of testCategories) {
     const categoryResults = allResults.get(category.name)!;
-    const row: string[] = [category.name.padEnd(31)];
-    
+    const row: string[] = [category.name.padEnd(operationWidth)];
+
     const medians: { orm: string; median: number }[] = [];
     for (const [orm, times] of categoryResults) {
       const stats = computeStats(times);
       medians.push({ orm, median: stats.median });
     }
-    
+
     const fastest = Math.min(...medians.map(m => m.median));
-    
-    for (const [orm, width] of [['litedbmodel (runtime)', 21], ['litedbmodel (codegen)', 21], ['Prisma', 11], ['Kysely', 11], ['Drizzle', 11], ['TypeORM', 11]] as const) {
+
+    for (const [orm, width] of summaryColumns) {
       const entry = medians.find(m => m.orm === orm);
       if (entry) {
         const isFastest = entry.median === fastest;

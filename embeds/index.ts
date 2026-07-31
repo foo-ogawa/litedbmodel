@@ -1,21 +1,18 @@
 import type { DefineEmbedFn } from 'embedoc';
+import { ORM_SERIES, LITEDBMODEL_SERIES } from '../benchmark/orm-series.js';
 
-// NOTE: this embed is defined inline in index.ts (the embedoc entry file) and
-// declares its own `defineEmbed` helper on purpose:
+// NOTE: two things this directory needs to load at all, both load-bearing for the bench-docs drift gate:
 //
-//  1. Single file — embedoc loads embeds via tsx `tsImport`, and in this
-//     environment a transitively-imported `.ts` file (e.g.
-//     `import x from './benchmark_table.ts'`) is NOT transpiled by tsx on the
-//     ESM->CJS bridge path — node then parses the raw TypeScript and fails on
-//     TS-only syntax ("Unexpected strict mode reserved word" on `interface`).
-//     Keeping the single embed in the entry file (which tsx DOES transform)
-//     makes the drift gate load.
+//  1. `embeds/package.json` (`"type": "module"`) — embedoc loads embeds via tsx `tsImport`. Without the
+//     ESM marker tsx takes the ESM->CJS bridge, where a transitively-imported `.ts` file is resolved but
+//     NOT transpiled: node parses the raw TypeScript and dies on TS-only syntax ("Unexpected identifier
+//     'as'" on `as const`). On the ESM path tsx transpiles the whole graph, so `../benchmark/orm-series`
+//     — the series SSoT this file and the chart renderer both read — loads.
 //
-//  2. Local `defineEmbed` — importing the *value* `defineEmbed` from the
-//     `embedoc` package fails under tsx's resolver ("No exports main defined").
-//     `defineEmbed` is just an identity/typing helper (`(d) => d`), so we
-//     inline it and pull only the *type* from embedoc (type imports are erased,
-//     no runtime resolution).
+//  2. Local `defineEmbed` — importing the *value* `defineEmbed` from the `embedoc` package fails under
+//     tsx's resolver ("No exports main defined"). `defineEmbed` is just an identity/typing helper
+//     (`(d) => d`), so we inline it and pull only the *type* from embedoc (type imports are erased, no
+//     runtime resolution).
 
 const defineEmbed: DefineEmbedFn = (definition) => definition;
 
@@ -29,19 +26,6 @@ interface BenchmarkRow {
   Max: string;
   Iterations: string;
 }
-
-// The ORM columns, in display order. The CSV carries litedbmodel's two v2 execution modes as separate
-// series (runtime = the imperative DBModel path; codegen = the bc-generated static module), so BOTH are
-// shown — never collapsed to a hand-picked single number. Header labels are keyed to the CSV `ORM` values.
-const ORM_ORDER = [
-  'litedbmodel (runtime)',
-  'litedbmodel (codegen)',
-  'Kysely',
-  'Drizzle',
-  'TypeORM',
-  'Prisma',
-] as const;
-const LITEDBMODEL_ORMS = ['litedbmodel (runtime)', 'litedbmodel (codegen)'];
 
 /** Group the CSV rows by operation → (ORM → median ms). */
 function groupByOperation(rows: BenchmarkRow[]): Map<string, Map<string, number>> {
@@ -69,7 +53,7 @@ const benchmarkTable = defineEmbed({
     for (const [op, orms] of byOperation) {
       const min = fastestValue(orms);
       const row: string[] = [op];
-      for (const orm of ORM_ORDER) {
+      for (const orm of ORM_SERIES) {
         const val = orms.get(orm);
         if (val === undefined) {
           row.push('N/A');
@@ -82,7 +66,7 @@ const benchmarkTable = defineEmbed({
       tableRows.push(row);
     }
 
-    const markdown = ctx.markdown.table(['Operation', ...ORM_ORDER], tableRows);
+    const markdown = ctx.markdown.table(['Operation', ...ORM_SERIES], tableRows);
     return { content: markdown };
   },
 });
@@ -101,7 +85,7 @@ const benchmarkSummary = defineEmbed({
     const total = byOperation.size;
     for (const orms of byOperation.values()) {
       const min = fastestValue(orms);
-      const winsHere = LITEDBMODEL_ORMS.some((o) => {
+      const winsHere = LITEDBMODEL_SERIES.some((o) => {
         const v = orms.get(o);
         return v !== undefined && Math.abs(v - min) < 0.01;
       });

@@ -9,13 +9,15 @@
  */
 
 import * as fs from 'fs/promises';
+import { realpathSync } from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
+import { ORM_SERIES, BASELINE_SERIES, type OrmSeries } from './orm-series.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-interface BenchmarkRow {
+export interface BenchmarkRow {
   operation: string;
   orm: string;
   median: number;
@@ -26,11 +28,10 @@ interface BenchmarkRow {
   iterations: number;
 }
 
-// ORM order and colors. litedbmodel's two v2 execution modes (runtime = imperative DBModel; codegen =
-// bc-generated static module) are separate CSV series and both are charted — never collapsed to one
-// hand-picked number. Keys match the CSV `ORM` values.
-const ORM_ORDER = ['litedbmodel (runtime)', 'litedbmodel (codegen)', 'Kysely', 'Drizzle', 'TypeORM', 'Prisma'];
-const ORM_COLORS: Record<string, string> = {
+// Bar colour per series — the renderer's own concern. The series themselves (names, display order and
+// the baseline) come from the ORM_SERIES SSoT, so this map is exhaustive by type: adding a series there
+// fails to compile until it gets a colour here.
+const ORM_COLORS: Record<OrmSeries, string> = {
   'litedbmodel (runtime)': '#3b82f6',  // Blue
   'litedbmodel (codegen)': '#0ea5e9',  // Sky
   'Kysely': '#22c55e',                 // Green
@@ -42,7 +43,7 @@ const ORM_COLORS: Record<string, string> = {
 // Maximum relative value to show (bars exceeding this are truncated)
 const MAX_DISPLAY_RATIO = 5.0;
 
-async function parseCSV(csvPath: string): Promise<BenchmarkRow[]> {
+export async function parseCSV(csvPath: string): Promise<BenchmarkRow[]> {
   const content = await fs.readFile(csvPath, 'utf-8');
   const lines = content.trim().split('\n');
   const rows: BenchmarkRow[] = [];
@@ -79,27 +80,29 @@ function escapeXml(str: string): string {
     .replace(/'/g, '&apos;');
 }
 
-function generateSVG(rows: BenchmarkRow[]): string {
-  // Group by operation
-  const operations = [...new Set(rows.map(r => r.operation))];
-  
-  // Calculate litedbmodel baseline for relative comparison
-  const baselineByOperation = new Map<string, number>();
-  for (const op of operations) {
-    const liteRow = rows.find(r => r.operation === op && r.orm === 'litedbmodel');
-    if (liteRow) {
-      baselineByOperation.set(op, liteRow.median);
+export function generateSVG(rows: BenchmarkRow[]): string {
+  // One group per operation, carrying the median every bar in that group is divided by. The baseline is
+  // resolved ONCE here and a missing row is fatal: without it the bars would silently become raw
+  // milliseconds drawn on an axis labelled as a ratio, which is exactly what a default value hides.
+  const groups = [...new Set(rows.map(r => r.operation))].map(operation => {
+    const baselineRow = rows.find(r => r.operation === operation && r.orm === BASELINE_SERIES);
+    if (!baselineRow) {
+      throw new Error(
+        `No "${BASELINE_SERIES}" row for operation "${operation}" — every bar is drawn relative to it, ` +
+        `so the chart cannot be rendered. Re-run the benchmark or fix benchmark/results/benchmark-results.csv.`,
+      );
     }
-  }
-  
+    return { operation, baseline: baselineRow.median };
+  });
+
   // Chart dimensions
   const margin = { top: 60, right: 150, bottom: 80, left: 220 };
   const barHeight = 12;
   const barGap = 4;
   const groupGap = 25;  // Space between operation groups (reduced)
-  const ormCount = ORM_ORDER.length;
+  const ormCount = ORM_SERIES.length;
   const groupHeight = (barHeight + barGap) * ormCount;
-  const chartHeight = operations.length * (groupHeight + groupGap) - groupGap;
+  const chartHeight = groups.length * (groupHeight + groupGap) - groupGap;
   const chartWidth = 400;  // Fixed chart width
   const width = margin.left + chartWidth + margin.right;
   const height = margin.top + chartHeight + margin.bottom;
@@ -128,7 +131,7 @@ function generateSVG(rows: BenchmarkRow[]): string {
   
   <!-- Title -->
   <text x="${width / 2}" y="25" text-anchor="middle" class="title">ORM Benchmark Comparison</text>
-  <text x="${width / 2}" y="45" text-anchor="middle" class="subtitle">Relative speed (litedbmodel = 1.0, lower is faster)</text>
+  <text x="${width / 2}" y="45" text-anchor="middle" class="subtitle">Relative speed (${escapeXml(BASELINE_SERIES)} = 1.0, lower is faster)</text>
   
   <!-- Chart area -->
   <g transform="translate(${margin.left}, ${margin.top})">
@@ -153,17 +156,16 @@ function generateSVG(rows: BenchmarkRow[]): string {
   svg += `    <line x1="${baselineX}" y1="-5" x2="${baselineX}" y2="${chartHeight + 5}" class="baseline" />\n`;
   
   // Bars for each operation
-  for (let opIdx = 0; opIdx < operations.length; opIdx++) {
-    const op = operations[opIdx];
+  for (let opIdx = 0; opIdx < groups.length; opIdx++) {
+    const { operation: op, baseline } = groups[opIdx];
     const groupY = opIdx * (groupHeight + groupGap);
-    const baseline = baselineByOperation.get(op) || 1;
-    
+
     // Operation label
     svg += `    <text x="-10" y="${groupY + groupHeight / 2}" text-anchor="end" dominant-baseline="middle" class="op-label">${escapeXml(op)}</text>\n`;
-    
+
     // Bars for each ORM
-    for (let ormIdx = 0; ormIdx < ORM_ORDER.length; ormIdx++) {
-      const orm = ORM_ORDER[ormIdx];
+    for (let ormIdx = 0; ormIdx < ORM_SERIES.length; ormIdx++) {
+      const orm = ORM_SERIES[ormIdx];
       const y = groupY + ormIdx * (barHeight + barGap);
       const color = ORM_COLORS[orm];
       
@@ -203,16 +205,16 @@ function generateSVG(rows: BenchmarkRow[]): string {
   <g transform="translate(${margin.left + chartWidth + 20}, ${margin.top})">
 `;
   
-  for (let i = 0; i < ORM_ORDER.length; i++) {
-    const orm = ORM_ORDER[i];
+  for (let i = 0; i < ORM_SERIES.length; i++) {
+    const orm = ORM_SERIES[i];
     const y = i * 20;
     svg += `    <rect x="0" y="${y}" width="14" height="14" fill="${ORM_COLORS[orm]}" rx="2" />\n`;
     svg += `    <text x="20" y="${y + 11}" class="legend-text">${orm}</text>\n`;
   }
   
   // Overflow legend
-  svg += `    <line x1="0" y1="${ORM_ORDER.length * 20 + 10}" x2="14" y2="${ORM_ORDER.length * 20 + 10}" class="overflow-line" />\n`;
-  svg += `    <text x="20" y="${ORM_ORDER.length * 20 + 14}" class="legend-text" fill="#dc2626">&gt;5x (truncated)</text>\n`;
+  svg += `    <line x1="0" y1="${ORM_SERIES.length * 20 + 10}" x2="14" y2="${ORM_SERIES.length * 20 + 10}" class="overflow-line" />\n`;
+  svg += `    <text x="20" y="${ORM_SERIES.length * 20 + 14}" class="legend-text" fill="#dc2626">&gt;5x (truncated)</text>\n`;
   
   svg += `  </g>
 </svg>`;
@@ -239,13 +241,19 @@ async function main() {
     console.log(`✅ SVG chart saved to: ${svgPath}`);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      console.error('❌ No benchmark results found. Run the benchmark first:');
-      console.error('   npm run benchmark');
-    } else {
-      throw error;
+      throw new Error(`No benchmark results at ${csvPath}. Run the benchmark first: npm run benchmark`, { cause: error });
     }
+    throw error;
   }
 }
 
-main().catch(console.error);
+// Rendering runs only when this file IS the process entry point: importing it (the chart unit test does)
+// must not rewrite docs/benchmark-chart.svg. A render failure exits non-zero — the drift gate reads this
+// process's status, so a swallowed error would leave the committed chart stale and the gate green.
+if (process.argv[1] !== undefined && realpathSync(process.argv[1]) === realpathSync(__filename)) {
+  main().catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });
+}
 
