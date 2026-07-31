@@ -392,3 +392,45 @@ jobs:
       # calls a target that ran 0 tests red unless it is named as legitimately empty (#220).
       - name: Rust — cargo test (every workspace target RUNS, with the livedb feature; 0 ignored)
         run: npm run rust:test
+      # ── The ORM-bench NATIVE cells' `safety` proof, on BOTH live dialects (#241) ────────────────
+      # `safety` runs each of the 19 covered ops ONCE and asserts the statements it is allowed to
+      # issue at the runtime seam: a relation is 1 parent + 1 batched child PER LEVEL (N+1-free), a
+      # batch write is ONE statement for N records, a RETURNING-chained transaction is BEGIN + 2 body
+      # + COMMIT. NOTHING started it. No workflow named `orm_bench`, `run-cells` or `safety`, no npm
+      # script bound one, and its only caller — `benchmark/crosslang/run-cells.sh`, added in #172 —
+      # is an arm64-macOS MEASUREMENT harness that refuses a non-arm64 toolchain. So the path had
+      # never executed on a live dialect, and when #172 first required it, it was broken: the rust
+      # cell wrapped the POOLED live driver in a single-connection forwarding tx handle, leaving an
+      # uncommitted transaction on a connection it returned to the pool (#238). That is a MySQL
+      # `1205 Lock wait timeout` and nothing at all on SQLite — the only dialect the python/php
+      # cells' own safety tests cover (python/tests/test_orm_bench_native.py,
+      # php/tests/OrmBenchNativeTest.php).
+      #
+      # It rides THIS job because this is the one that already has real PG + MySQL, a rust toolchain
+      # and the warmed private go module graph; a job of its own would pay for all three again.
+      #
+      # Two cells, on the job that is the critical path:
+      #   go    `lm_orm_native sql` IS the proof pass — the same seed → op → count → assert loop,
+      #         exiting 1 on a mismatch — with the per-op SQL capture on top. That capture is a
+      #         PREREQUISITE either way (`orm_bench_common::load_setup` panics without `ops`), so
+      #         go's proof costs nothing beyond it.
+      #   rust  the cell #238 was found in, and the other one whose transaction owns a POOLED
+      #         connection. `--release` is deliberately absent: `orm_bench` is a standalone workspace
+      #         (its own `[workspace]`) with `lto = true`, which is link time for no signal here.
+      # python / php / ts are left out: each drives its cell through the same runtime seam its own
+      # SQLite suite already asserts, and three more cells × two dialects is minutes more re-seeding.
+      #
+      # The fixture is the one the emit-setup step above wrote. `derive-ops.ts` is NOT needed here —
+      # `recover`/`batchColumns` are read by the SDK cells only, and no SDK cell runs.
+      #
+      # Spelled out per dialect rather than looped: `check-reachable-test-gates.mjs` treats a command
+      # in the body of a `for` or of a `( … )` group as one whose failure it cannot see reaching the
+      # job, and a gate nobody can read as gating is what this step exists to stop shipping.
+      - name: ORM-bench native cells — the safety proof on live PG + MySQL (#241)
+        run: |
+          cd go
+          go run -tags bench_postgres ./lm_bench/lm_orm_native/ sql
+          go run -tags bench_mysql ./lm_bench/lm_orm_native/ sql
+          cd ../rust
+          cargo run --quiet --locked --manifest-path orm_bench/Cargo.toml --features livedb,target_postgres -- safety
+          cargo run --quiet --locked --manifest-path orm_bench/Cargo.toml --features livedb,target_mysql -- safety
