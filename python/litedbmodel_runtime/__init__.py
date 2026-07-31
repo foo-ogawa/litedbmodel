@@ -104,7 +104,7 @@ from .connection_routing import (
 )
 from .leaves import make_handlers, render_placeholders
 
-__version__ = "2.2.2"
+__version__ = "2.2.3"
 
 __all__ = [
     "__version__",
