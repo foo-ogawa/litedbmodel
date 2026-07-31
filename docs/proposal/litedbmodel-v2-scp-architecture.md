@@ -1,83 +1,74 @@
-# litedbmodel v2.0 アーキテクチャ仕様案 — SCP / 多言語 CQRS
+# litedbmodel v2 アーキテクチャ仕様 — SCP / 多言語 CQRS
 
-> **Status:** Draft（breaking / v2.0 系）。
-> 先行文書 [`contracts-architecture.md`](./contracts-architecture.md)（原案）と
-> [`contracts-architecture-feasibility.md`](./contracts-architecture-feasibility.md)（訂正第2版・実現可能性分析）を前提とする。
-> 本書はそれらを、**behavior-contracts の汎用 SCP レイヤを consume する SQL バックエンド**という形に確定させた v2.0 の仕様案。
+litedbmodel v2 は **behavior-contracts（bc）の汎用 SCP レイヤを consume する SQL バックエンド** である。
+graphddb（DynamoDB バックエンド）と同型で、差分は **SQL 方言のコンパイルと実行の層だけ**。本書はその
+確定アーキテクチャの正式仕様であり、記述はすべて `07679b2` 時点の実装に対して裏取りされている（節ごとに
+`` `symbol` (`file`) `` の形でコードを引用する）。コードが SoT であり、本書が食い違ったらコードを正とする。
 
-> **スコープ確定（2026-07-09 オーナー承認）:**
-> - **対象言語 = TS + Rust + Python + Go + PHP の5言語 parity**（graphddb と同一。PHP は本書中の「(PHP)」括弧つき任意扱いを撤廃し first-class 化）。リリースは **5レジストリ**（npm / crates.io / PyPI / Go-tag / Packagist）。
-> - **リポ構成 = モノレポ統合**。`litedbmodel.ts` を単一モノレポとし、graphddb と同形に `src/`(TS SSoT) + `python/ go/ php/ rust/` を同居。**現 `litedbmodel.rs` の runtime を monorepo `rust/` へ移行**、旧 `foo-ogawa/litedbmodel.rs` リポは archive/crate-mirror のみ。単一 `conformance/` + 単一 CI + 単一 `sync-versions.mjs` で C2 実証。
-> - **ブレッドス = 全 CRUD(Select/Insert/Update/Delete) × 全方言(PG/MySQL/SQLite)**。§14 の v2 α（SQLite+TS Query 縦1本 = bc#1）を基盤に横展開。
-> - **ブランチ = `litedbmodel-scp`**（全 issue 同一ブランチ・rebase 禁止・merge 統合、`gh pr merge --merge`）。
+対象言語は **TypeScript + Rust + Python + Go + PHP の5言語 parity**。方言は **PostgreSQL / MySQL / SQLite**。
+
+> **本書の節番号はコードから参照される。** `src/scp/**` の複数ファイルが `spec §1` / `spec §4.1` /
+> `spec §5` / `spec §6` / `spec §8` / `spec §10` / `spec §11` / `spec §13` を doc-comment とエラーメッセージ
+> で引用している（`` `scripts/check-spec-refs.mjs` `` がその整合を機械検証する — §10）。節を renumber しない。
 
 ---
 
 ## 0. 要約（TL;DR）
 
-- litedbmodel v2 は **新しい DSL を作らない**。**behavior-contracts の汎用 SCP レイヤ（Behavior/Component/Port/Wire + Expression IR + runtime-core）を consume する "SQL バックエンド consumer"** になる。graphddb（DynamoDB backend）と同型で、**差分は Catalog（SQL 操作群）と Backend Compile（IR→dialect SQL）と Handler（SQL 実行）だけ**（behavior-contracts の原則 **C2: difference is catalog only**）。
-- **コンパイル経路は1本、実行モードが3つ**（単一意味論、feasibility §2 / §9）。公開 API も SCP 宣言も**同一の Authoring Parse → 内部 IR** を通り、内部 IR 以降は全モード共通:
-  1. **TS 直接利用（eager）** — 公開 API 呼び出しを**同一コンパイラで動的に内部 IR 化**（キャッシュ）→ 共通 Runtime で実行（別解釈系は持たない）。
-  2. **SCP 宣言ブロック** — **`SemanticBehavior` クラスで Behavior を宣言**（effect 非依存。Query/Command は SCP の責務外で component graph から CQRS 層が導出）→ **ビルド時に事前コンパイル**して IR（dialect SQL + 動的 condition の fragment）/ 各言語コードへ変換。
-  3. **多言語利用** — publish された IR を各言語 runtime から呼ぶ（同一 IR）。
-- **Relation は Read 系**（宣言 select / lazy の staged batch）。書込は単文の宣言エンドポイント（create/update/delete）とバッチ（createMany/updateMany/deleteMany）で、複数文をまたぐ原子性は利用者の `DBModel.transaction(fn)` 手続き境界（read-your-writes + rollback）で表現する（§6）。
-- **多言語 CQRS 対応**: 公開境界は CQRS（Query/Command）契約のみ。TS/Python/Rust/Go/PHP の薄い runtime が**同一 IR から同一 SQL・同一結果**を出す（conformance）。
-- リファクタ後は **v2.0 系**（破壊的変更）。v1.x は別ブランチ（`v1.x`）で保全済み。
+- litedbmodel v2 は **新しい DSL を作らない**。bc の Behavior / Component / Port / Wire + Expression IR +
+  runtime-core を consume する **SQL バックエンド consumer** になる。
+- **コンパイル経路は1本**（§9）。ORM ユーザはデコレータでモデルと **宣言エンドポイント**（SQL を書かない）
+  を書き、`` `emitBehaviorModule` (`src/scp/emit/emitter.ts`) `` が **SCP 制限 TS**（`@behavior static`
+  メソッドが唯一のリーフカタログ `Db` を呼ぶ形）へ lowering し、`bc generate --from` がそれを読んで
+  go / rust / py / php / ts の native モジュールを生成する。リーフへの配線は bc が自動生成する。
+- **実行時のサーフェスは3本の op 非依存リーフだけ**: `` `Db.executeSQL` / `Db.pluck` / `Db.group`
+  (`src/scp/leaf-transport.ts`) ``。方言 SQL はこの3本が運ぶテキスト＋パラメータに閉じる。
+- 形が実行時にしか決まらない **真のアドホッククエリ**（`find({ where })`）は静的 SQL を持たないので、
+  codegen 経路ではなく **v1 命令パス**で走る（§9）。
+- litedbmodel は **可搬 IR ドキュメントを emit しない**（§8）。方言は TS 側で一度だけ解決され、方言別の
+  SQL が emit 時に SCP 制限 TS へ焼き込まれる。
+- **多言語 conformance** は「方言 3 × 言語 5」の格子を **3 + 5** に分解する（§10）。
+- v2.0 系は破壊的変更。v1.x はメンテブランチ `v1.x` で保全。
 
 ---
 
 ## 1. 位置づけ — litedbmodel は SCP の SQL バックエンド consumer
 
-behavior-contracts は SCP を**汎用化**し、consumer が差し込む拡張点を確定させている（bc `runtime-boundary.md` / `concept.md`）。litedbmodel v2 は graphddb と並ぶ **2番目の consumer**（bc issue #1 の RDB プロファイルの本体）。
+behavior-contracts は SCP を **汎用化**し、consumer が差し込む拡張点を確定させている。litedbmodel v2 は
+graphddb と並ぶ SQL backend の consumer である。`` `src/scp/index.ts` `` の先頭が公開サーフェスを4点に
+確定している（`litedbmodel supplies exactly four things and nothing else`）:
 
-```
-behavior-contracts（汎用 SCP レイヤ・DSL 非依存）
-  ├─ Behavior / Component / Port / Wire（意味の合成）
-  ├─ Expression IR（閉じたオペレータ集合）
-  ├─ Execution Plan（stage groups / skip 伝播 / Error Policy Kind）
-  └─ runtime-core（validateEnvelope / evaluateExpression / renderTemplate / runPlan / canonicalValue / …）を TS/Python/Rust/Go で提供
-        ▲ consume                         ▲ consume
-   graphddb（DynamoDB backend）      litedbmodel v2（SQL backend）  ← 本書
-   Catalog=GetItem/Query/…            Catalog=Select/Insert/Update/Delete/Fragment/Tx
-   Backend=DynamoDB API              Backend=dialect SQL（PG/MySQL/SQLite）
-```
+1. **リーフ転送宣言** — `Db`（`@leaf static executeSQL / pluck / group`）。`bc generate --from` が読む、
+   リポジトリで唯一のリーフカタログ（`src/scp/leaf-transport.ts`）。
+2. **リーフ転送実装** — `` `leafHandlers` / `leafHandlersAsync` (`src/scp/leaves.ts`) ``。bc 生成 TS
+   モジュールの `bind(handlers)` / `bindAsync(handlers)` が consume する TS 実行シーム。
+3. **チューニング済み SQL** — `src/scp/makesql` サブツリー（方言別 SELECT / INSERT / UPDATE / DELETE /
+   relation / batch ビルダ、v1 ビルダと byte 一致）と、その上の write bundle / transaction plan。
+4. **各言語ランタイム** — 実行コンテキスト（接続ルーティング・middleware・transaction）、relation grouping、
+   列型 de-box の SoT、typed-object 読み出しサーフェス。
 
-**litedbmodel v2 が実装する拡張点（これ以外は behavior-contracts から得る）:**
+**配線は自動**。behavior は TS で宣言され bc がコンパイルし、言語別の手配線は「ハーネスが生成メソッドを
+リーフハンドラ付きで呼ぶ」部分だけ。**ランタイム IR も、プログラム的コンパイルも、ランタイム behavior
+ディスパッチも、このパッケージには存在しない**（`src/scp/index.ts`）。
+
+**litedbmodel v2 が実装する拡張点（これ以外は bc から得る）:**
 
 | 拡張点 | litedbmodel v2 での中身 |
 |---|---|
-| **Catalog 定義** | `Select` / `Insert` / `Update` / `Delete` / `Fragment`（動的 WHERE/SET 断片木）/ `Tx`（多文トランザクション）。各に Port schema（table・where(ExprIR)・set・limit・order 等） |
-| **Authoring Parse** | 公開 API（`User.find(...)`）と SCP 宣言（`SemanticBehavior` クラスのメソッド）を **Component-graph IR** へ落とす |
-| **Backend Compile** | IR → **dialect SQL テキスト + `?` パラメータ + fragment 木**（動的部）。`?`→`$N`（PG のみ・最終1パス） |
-| **Handler 実装** | 各 Catalog 名 → 実行関数（driver で SQL 実行 + 行→論理モデル assembly） |
-| **Error Mapping** | driver エラー（UNIQUE 制約違反・FK 違反・deadlock 等）→ SCP Failure（`constraint_violation` / `retryable` 等） |
-
-**帰結:** litedbmodel v2 は「SQL に特化した薄い層」であり、意味論・IR 構造・多言語 conformance・codegen は behavior-contracts と共有する。
+| **Catalog leaf** | `makeSQL(sql, params, skip?)`（bc catalog leaf。`src/scp/makesql/makesql.ts`）と、codegen 経路の3本 op 非依存リーフ `Db`（§8/§11） |
+| **Authoring** | デコレータ付きモデル + 宣言エンドポイント（`src/scp/emit/endpoint.ts`）→ SCP 制限 TS |
+| **Backend Compile** | 宣言エンドポイント → 方言 SQL テキスト + `?` パラメータ（`src/scp/makesql`）。`?`→`$N` は runtime 最終1パス |
+| **Handler** | catalog leaf → driver 実行 + 行→論理モデル assembly（`src/scp/makesql/handler.ts`） |
+| **Error Mapping** | driver エラー → SCP Failure（`src/scp/errors.ts`） |
 
 ---
 
-## 2. 利用モード（本仕様の中核）
+## 2. 利用モード（authoring サーフェス）
 
-利用者が求める4つの姿を単一意味論（feasibility §2: 宣言→IR→Runtime が唯一の経路、消費モードが複数）で同居させる。
+### 2.1 モデル定義（デコレータ）
 
-### 2.1 モデル定義（TS・schema.sql から生成可）
-
-物理スキーマ（`schema.sql`）から **litedbmodel-gen** 等で TS のモデル定義（列 + 型 + 主キー）を生成する。手書き部（リレーション・メソッド・SCP ブロック）は保持（embedoc/gen のマーカー方式、v1 と同様）。
-
-```ts
-// gen 生成部（schema.sql 由来）
-@model('users')
-export class UserModel extends DBModel {
-  @column({ primaryKey: true }) id!: number;
-  @column() name!: string;
-  @column() post_count!: number;   // derive 対象の counter
-}
-export const User = UserModel.asModel();
-```
-
-### 2.2 リレーション定義（Read 系）
-
-Read 系（関連取得）は宣言 select（`with:{...}`）または lazy（アクセス時解決）で表現する（§5）。
+`@model(table)` / `@column(...)` で物理対応を宣言する（v1 継承）。結果は **typed-object**（DBModel
+インスタンスではない・§4 / §12）。列型は SQL 型を SoT とする（§4.1）。
 
 ```ts
 @model('posts')
@@ -86,98 +77,67 @@ export class PostModel extends DBModel {
   @column() author_id!: number;
   @column() title!: string;
 
-  // ── Read-side（宣言 select または lazy）──
   @belongsTo(() => [Post.author_id, User.id]) declare author: User | null;
 }
+export const Post = PostModel.asModel();
+```
+
+### 2.2 宣言エンドポイント（抽象 API・SQL を書かない）
+
+静的に形が決まるクエリは **宣言エンドポイント**として書く。エンドポイントの語彙は
+`` `Endpoint` (`src/scp/emit/endpoint.ts`) `` が確定させており、**SQL を一切含まない**: 述語はモデルの
+**列**と**パラメータ**を名指し、relation は `@hasMany`/`@belongsTo`/`@hasOne` プロパティを名指し、書込は
+束ねる列を名指す。方言 SQL は emitter が `makesql` ビルダから生成し、パラメータ型はモデルの `@column`
+メタから解決する（手書きしない）。
+
+宣言できるエンドポイント種別は **7つに閉じている**（`Endpoint` union）:
+`read` / `create` / `update` / `delete` / `createMany` / `updateMany` / `deleteMany`。
+
+述語（`Predicate` union）は列 op パラメータ比較（`ComparePredicate`）、IN リスト（`InPredicate`）、
+複合キー IN（`TupleInPredicate`）、NULL 判定（`NullPredicate`）、相関 EXISTS（`ExistsPredicate`）、
+型付きサブクエリ（`SubqueryPredicate`）。`ComparePredicate.optional` を立てた述語だけが **SKIP メンバー**
+になる（§8）。
+
+```ts
+// 宣言エンドポイントの集合 = 1つの emit された @behavior クラス（EndpointSet）
+const PostQueries: EndpointSet = {
+  search: {
+    kind: 'read',
+    model: Post,
+    where: [
+      { column: 'author_id', op: 'eq', param: 'authorId' },
+      { column: 'status', op: 'eq', param: 'status', optional: true }, // optional → SKIP メンバー
+      { column: 'created_at', op: 'ge', param: 'since' },
+    ],
+    order: 'created_at DESC',
+    limit: { param: 'limit' },
+    with: ['author'],           // relation は宣言 select（batch, N+1-free）
+  },
+  createPost: {
+    kind: 'create',
+    model: Post,
+    values: [{ column: 'author_id', param: 'authorId' }, { column: 'title', param: 'title' }],
+    returning: ['id', 'title'],
+  },
+};
 ```
 
 ### 2.3 TS 直接利用（公開 API・eager）
 
-従来どおり公開 API を**直接**呼ぶ。**経路は分岐させない**: 公開 API 呼び出しは
-**必ず「Authoring Parse → 内部 IR」という単一のコンパイル経路**を通り（AOT と**同一ロジック**）、
-生成された内部 IR を**共通 Runtime**で即時実行する（結果はキャッシュ可）。
-「eager だけ別の解釈系（メタデータを直に解釈する経路）」は持たない — **内部 IR 以降は全モードで完全に共通**（§9）。
-複数文をまたぐ書込の原子性は利用者が `DBModel.transaction(fn)` で明示的に束ねる（§6）。
+従来どおり公開 API を直接呼ぶ。静的に宣言したエンドポイントは codegen 経路（§9）に載るが、形が実行時に
+しか決まらない **真のアドホッククエリ**（`find({ where: { age: { gt: x } } })`）は静的 SQL を持たないので
+**v1 命令パス**で走る（`Endpoint` の doc-comment: `an ad-hoc find({ where }) has no static SQL and
+runs the v1 imperative path`）。複数文をまたぐ書込の原子性は利用者が `DBModel.transaction(fn)` で明示的に
+束ねる（§6）。
 
-```ts
-// Read（eager）
-const post = await Post.findById(1, { with: { author: true } }); // 宣言 select → staged batch + assembly
-const author = await post.author;                                // lazy（宣言しなければアクセス時解決・§9）
+### 2.4 多言語利用（生成物を各言語 runtime で）
 
-// Write（単文）
-await Post.create({ author_id: 7, title: 'Hello' });
+`bc generate` が publish した native モジュールを、各言語の薄い runtime（bc runtime-core + litedbmodel
+SQL runtime）が読み、**同一 SQL・同一結果**を実行する。生成エントリは authored メソッドの 1:1 写像で、
+宣言クラスが名前空間・引数がその順の位置引数（シグネチャ直呼び）:
 
-// Write（複数文を1トランザクションに束ねる = 利用者の手続き境界・§6）
-await DBModel.transaction(async () => {
-  const author = await User.findOne([[User.id, 7]]); // 前提の読み（read-your-writes 可）
-  if (!author) throw new Error('author not found');   // 短絡は throw で（tx 全体が rollback）
-  await Post.create({ author_id: author.id, title: 'Hello' });
-});
-```
-
-### 2.4 SCP 宣言ブロック（SCP 語彙で宣言 → ビルド時事前コンパイル → IR/TS コード）
-
-**litedbmodel 独自の宣言語彙（`defineQuery` 等）も、`query()`/`command()` のようなラッパも導入しない。**
-SCP の宣言が表すのは**「Component を合成して名前を与える＝Behavior」だけ**。litedbmodel が供給するのは
-**Catalog（leaf Component: `Select`/`Insert`/… §11）だけ**（C2: 差分は Catalog のみ）。
-**Query / Command（read-only か write か）は SCP の責務ではない。** これは Behavior の component graph
-（write-Catalog を含むか）から**導出される CQRS 層の分類**であり、**SCP 宣言・authoring には一切書かない**。
-
-> **ルート指定（「全 export／全メソッドを publish するのか？」への回答）:**
-> root Behavior は**クラス単位で指定**する。**`SemanticBehavior` を継承した（または `@behavior` を付けた）クラスの各 public メソッドが、そのまま root Behavior**。
-> publish しないヘルパは**そもそもこのクラスに入れない**（どうしても要るなら `private`/`#`）。**per-method のマーカーは不要**。
-> マーカーはクラスに1つ・effect 非依存（query/command を含まない）。builder（`behavior('name',{...})`）やメソッドごとのラッパ（`query(...)`）は採らない。
-
-```ts
-// behaviors/posts.ts — このクラスの public メソッド = root Behavior。
-class PostBehaviors extends SemanticBehavior {          // または: @behavior class PostBehaviors { … }
-  PostSearch($: In<{ authorId: number; status?: string; since: string; limit?: number }>) {
-    const posts = Select(Post, {                        // Catalog leaf component（litedbmodel 供給）
-      where: [
-        Post.author_id.eq($.in.authorId),
-        $.in.status ? Post.status.eq($.in.status) : SKIP, // SKIP → fragment の存在規則（§8）
-        Post.created_at.gte($.in.since),
-      ],
-      order: Post.created_at.desc(),
-      limit: $.in.limit ?? 20,
-    });
-    const authors = posts.map((p) =>                    // 構造化制御は SCP 共通（.map / ?: / &&）
-      Select(User, { where: [User.id.eq(p.author_id)], select: ['id', 'name'] }));
-    return { posts, authors };                          // ← Output Port（ルートの出力）
-  }
-
-  CreatePost($: In<{ authorId: number; title: string }>) {
-    return Insert(Post, { values: { author_id: $.in.authorId, title: $.in.title },
-                          returning: ['id', 'title'] });
-  }
-
-  private helper(rows: Post[]) { return rows.filter((r) => !r.deleted); } // private → publish されない
-}
-```
-
-**ルートの指定（直接回答）:**
-- **ルート = `SemanticBehavior` 継承（既定）または `@behavior` 付きクラスの、各 public メソッド**。`private`/`#` はヘルパ扱いで publish されない。→ **マーカーはクラスに1個**、メソッドには不要。「大量の export を全部 component 化」はしない。
-- **Behavior 名** = メソッド名。**Input Port** = `$` の型 `In<...>`。**Output Port** = 返り値。内部 DAG は `$` 参照・`.map`・`?:` の**配線から Compiler が導出**（`await`/実行順は書かない）。
-- **Effect（Query/Command）は authoring に書かない。** component graph に write-Catalog（`Insert`/`Update`/`Delete`/`Tx`）が含まれるかで litedbmodel の **CQRS 層が導出**（含まなければ Query=read-only、含めば Command）。read-only 保証が要る箇所は Catalog 側の型で担保。クラス名（`XxxQueries`/`XxxCommands`）は命名慣習にすぎず意味を持たない。
-- **`extends SemanticBehavior` を既定**とする（デコレータ設定に依存せず、litedbmodel の `DBModel` / graphddb の `DDBModel` 基底クラス方式と一貫）。`@behavior` クラスデコレータも同義（有効な TS・同一 IR）。
-- leaf（Specialty Component）は Catalog（`Select`/`Insert`…）のみ。**SCP 宣言に litedbmodel 独自語彙は無い**。graphddb の `$`-rooted 束縛（`from("$.field")`）が同モデルの具体形。
-
-**注（エコシステム・§11/§15）:** この authoring surface（`SemanticBehavior` 基底で root 指定・`$` 配線・structured control）は **effect 非依存で本来 behavior-contracts が持つべき SCP 層**。consumer は Catalog だけ供給し、Query/Command 分類は各 consumer の CQRS 層が graph から導出する（C2）。現状 bc 未実装・graphddb は独自 `publishQuery` のため、**共有 authoring（effect 非依存の `SemanticBehavior` 基底）を別 issue 化する**。
-
-- **公開されるのは Behavior 名**（`PostSearch` / `CreatePost`）のみ。SQL 種別（SELECT/INSERT）や effect 分類は runtime 不可視（分類は導出物）。
-- 入力の arity（単数/配列）・cardinality（one/many）は Catalog/Key から**導出され型で強制**（N+1 型安全）。
-- ビルド時に IR bundle（§8）へ落ち、`ir/` として publish される。
-
-### 2.5 多言語利用（publish された宣言ブロックを各言語 runtime で）
-
-publish された IR bundle を、言語別の薄い runtime（behavior-contracts runtime-core + litedbmodel SQL runtime）が読み、**同一 SQL・同一結果**を実行する。
-
-```python
-# Python（生成コード or IR dynamic）
-posts = PostQueries.search(db, author_id=7, since="2026-01-01", limit=10)
-```
 ```go
-posts, _ := postQueries.Search(ctx, db, SearchInput{AuthorID: 7, Since: "2026-01-01"})
+rows, _ := postQueries.Search(ctx, db, SearchInput{AuthorID: 7, Since: "2026-01-01"})
 ```
 
 ---
@@ -185,103 +145,128 @@ posts, _ := postQueries.Search(ctx, db, SearchInput{AuthorID: 7, Since: "2026-01
 ## 3. レイヤ構成
 
 ```
-公開境界        = CQRS Contract（Query / Command）※ 多言語で共有
-  ├─ TS 直接利用（eager）……… Authoring Parse → Component-graph IR → Handler（Native Interpret）
-  └─ SCP 宣言ブロック（マーク付き関数）……… Component-graph IR（AOT）
-        ↓ Backend Compile（litedbmodel）
-     SQL IR = dialect SQL テキスト + fragment 木 + param slots(Expression IR) + assembly + relation ops
-        ↓
-     薄い Runtime（TS/Python/Rust/Go）: validate → 断片選択(SKIP) → 配列展開 → Expression 評価 → bind → SQL 実行 → assembly
+デコレータ付きモデル + 宣言エンドポイント（SQL なし）        ← src/decorators.ts + src/scp/emit/endpoint.ts
+   ↓  emitBehaviorModule（lowering）                        ← src/scp/emit/emitter.ts
+SCP 制限 TS: @behavior static メソッド（方言 SQL は makesql で焼き込み済み）が唯一の @leaf カタログ Db を呼ぶ
+   ↓  bc generate --from
+go / rust / py / php / ts native モジュール（リーフ配線は bc が自動生成）
+   ↓  実行時
+薄い Runtime: 3本の op 非依存リーフ（executeSQL / pluck / group）— §8/§9
 ```
 
-**generic（behavior-contracts）と SQL backend（litedbmodel）の分界:**
+**汎用（behavior-contracts）と SQL backend（litedbmodel）の分界:**
 
 | 汎用（behavior-contracts） | SQL backend（litedbmodel v2） |
 |---|---|
-| Component-graph IR 構造 / Execution Plan（groups・concurrency・skip 伝播・Policy Kind） | Catalog（Select/Insert/…）と各 Port schema |
-| Expression IR 評価（`evaluateExpression`）・閉じたオペレータ集合 | 条件/値の SQL 断片への **Backend Compile**（dialect SQL + `?` + fragment 木） |
-| `renderTemplate` / `canonicalValue` / `pyFloatRepr` / `validateEnvelope` / `runPlan` | Handler（driver で SQL 実行）・行→論理モデル **assembly** |
-| conformance runner 基盤・codegen 基盤（bc issue #13） | dialect 別 SQL 生成（PG/MySQL/SQLite）・型 hydration・接続/プール/tx |
-| Portability Guard | Error Mapping（driver エラー → Failure）・Raw SQL escape hatch |
+| Component-graph IR 構造 / Execution Plan / Expression IR 評価 | 方言 SQL の Backend Compile（`src/scp/makesql`） |
+| `runBehavior` / `evaluateExpression` / `validateEnvelope` / codegen 基盤 | catalog leaf handler + 行→論理モデル assembly（`src/scp/makesql/handler.ts`） |
+| conformance runner 基盤（言語軸） | 方言別 SQL 生成（§13 の closeable convention 含む）・型 hydration・接続/プール/tx |
 
 ---
 
 ## 4. モデル定義
 
-- `@model(table)` / `@column(opts)` で物理対応（v1 継承・gen 生成）。結果は **typed-object**（DBModel インスタンスではない・feasibility §9）。
-- 論理モデル ↔ 物理配置（table/column/PK/index）はモデル定義が吸収（原案 contracts-architecture.md「モデル定義」）。
-- litedbmodel-gen は `schema.sql` から列定義を生成し、**マーカー内は再生成・手書き（リレーション/writes/SCP ブロック）は保持**。
+- `@model(table)` / `@column(...)` で物理対応（v1 継承）。読み出し結果は **typed-object**（own props は
+  データのみ・DBModel インスタンスではない。`src/scp/typed-object.ts`）。
+- 論理モデル ↔ 物理配置（table/column/PK/index）はモデル定義が吸収する。
 
 ### 4.1 型システム（SQL 型ベース・SSoT）
 
-litedbmodel は SQL バックエンド consumer なので、**列型は SQL 型を SoT とする**（TS の `number` は int/real を区別できないため型の権威にしない — v1 の TS-型ベース `@column`（`design:type=Number`）が INTEGER/REAL を潰していたのを是正）。型は `schema.sql`（DDL）から確定し、**typed codegen（bc typed-raw 脱box）の `outType` 注記**に使う。interpret 経路（動的 Value）では列型は不要だったため v2 は本節を欠いていた。typed codegen が SQL レベルの型精度を要求するため、ここで規定する。
+litedbmodel は SQL バックエンド consumer なので **列型は SQL 型を SoT とする**（TS の `number` は
+INTEGER/REAL を区別できないため型の権威にしない）。型は `schema.sql`（DDL）から確定し、typed codegen
+（bc typed-raw 脱 box）の `outType` 注記に使う。**曖昧/未知は error（no-assume・no-fallback）** — 既定値へ
+潰さない。変換は `` `sqlTypeToBcScalar` (`src/scp/coltype.ts`) `` が SSoT。
 
-**列型 → bc outType スカラ（正規対応表）**
+**SQL 型 → bc outType スカラ（正規対応表・`sqlTypeToBcScalar`）**
 
-| SQL 型 | litedbmodel 列型 | bc outType | 備考 |
-|---|---|---|---|
-| INTEGER / INT / BIGINT | `int` | `int` | int は既定 **64bit (i64)**。狭いサイズ制限はデコレータオプション（制約）で表現し、**別型にしない**（int と bigint を分けない） |
-| REAL / FLOAT / DOUBLE | `real` | `float` | int と real は**明確に分離**（普通の処理系どおり） |
-| DECIMAL / NUMERIC | `decimal` | `string` | 精度保持のため文字列表現 |
-| TEXT / VARCHAR / CHAR / UUID | `text` | `string` | |
-| BOOLEAN | `bool` | `bool` | |
-| DATE / TIMESTAMP / DATETIME | `date` | `string` | **一旦 string**（オーナー決定）。bc の `date` scalar 新設（behavior-contracts#84）は将来の最適化として **defer**。litedbmodel 列型は `date` のまま（SQL/意味は保持）だが bc 表現は string。**TS のみ利便で `Date` へ de/serialize 可、他言語（Rust/Go/Py/PHP）は string 扱い**（JSON 列と同じ構図）。DB は行ごとに別 TZ を保存しない |
-| JSON / JSONB | `json` | `string` | 表現は JSON テキスト＝**文字列**。TS のみ利便で object に de/serialize。列ごとに typed obj へ構造化しない |
+| SQL 型 | bc outType | 備考 |
+|---|---|---|
+| INTEGER / INT / BIGINT / SMALLINT / TINYINT / SERIAL 系 | `int` | int は既定 **64bit**。狭いサイズ制限は列制約で表現し別型にしない |
+| REAL / FLOAT / DOUBLE | `float` | int と real は明確に分離 |
+| DECIMAL / NUMERIC / MONEY | `string` | 精度保持のため文字列表現 |
+| TEXT / VARCHAR / CHAR / CHARACTER (VARYING) / CLOB / UUID | `string` | |
+| BOOLEAN / BOOL | `bool` | |
+| DATE / TIMESTAMP / TIMESTAMPTZ / DATETIME / TIME | `string` | 一旦 string（bc の date scalar は未導入）。DB は行ごとに別 TZ を保存しない |
+| JSON / JSONB | `string` | 表現は JSON テキスト＝文字列 |
 
-**構造型（クエリ由来。列型ではない）**
-- 行 = 列の **`obj{列: 型…}`**。
-- hasMany/list = **`arr<行obj>`**、belongsTo/hasOne = **`opt<行obj>`**、connection = `obj{items: arr<…>, cursor: opt<…>}`。
-- **object と array は明確に別**（一括の「json」型にしない）。JSON 列（上表）とは無関係。
+nullability は基底スカラと直交する（`` `sqlTypeIsNotNull` (`src/scp/coltype.ts`) ``）: `NOT NULL` 列は
+読みセルが非 null 確定なので `opt` ラップ無しの生スカラ、既定は nullable。
 
-**3層（デコレータ型 ↔ SQL 型 ↔ bc outType）**
+**TS 読み出しの materialization（`sqlTypeToMaterializeClass` / `materializeCell`）**
 
-型は3層で一意対応させる。デコレータが authoring 面で列型を宣言し、SQL 型（DDL）が物理 SoT、bc outType が codegen 面。
+bc outType（可搬型）に加え、TS/driver の読み経路では `int` スカラを SQL 幅で分割し、`date`/`bool` を
+正確な JS 形へ矯正する（JS `number` は i64 を保持できず、driver は `string` outType に反する `Date`/`0|1`
+を返し得るため）。クラスは `` `MaterializeClass` (`src/scp/coltype.ts`) ``:
 
-| litedbmodel 列型 | デコレータ | SQL 型 | bc outType |
-|---|---|---|---|
-| int | `@column.int()` | INTEGER/INT/BIGINT | `int` |
-| real | `@column.real()` | REAL/FLOAT/DOUBLE | `float` |
-| decimal | `@column.decimal()` | DECIMAL/NUMERIC | `string` |
-| text | `@column.text()`（既定）| TEXT/VARCHAR/CHAR/UUID | `string` |
-| bool | `@column.boolean()` | BOOLEAN | `bool` |
-| date | `@column.date()`/`.datetime()` | DATE/TIMESTAMP/DATETIME | `string`（一旦。bc date 型は #84 defer）|
-| json | `@column.json()` | JSON/JSONB | `string`（TS のみ object）|
+- `int32`（INT/INTEGER/SMALLINT/…）→ JS `number`（範囲が収まる）。
+- `int64`（BIGINT/INT8/BIGSERIAL）→ **値保存の10進文字列**（JS number は 2^53 超で丸む・JSON 安全）。
+- `date`（DATE/TIMESTAMP/…）→ **TZ 付き文字列**（`string` outType に整合。全言語同一、TS も Date にしない）。
+- `bool` → JS `boolean`。
+- `passthrough`（float / text / decimal→string / json / uuid / 配列列）→ 無変換。
 
-**デコレータ API 変更（v1 → v2 破壊的）**
-- **`@column.int()` / `@column.real()` を新設**。int は既定 **64bit(i64)**、狭いサイズ制限は `@column.int({ bits: 32 })` 等の**オプション制約**で表現（別型にしない）。
-- **`@column.bigint()` は廃止**（int が i64 なので冗長 → int に統合）。
-- **無印 `@column()`（`design:type=Number` 依存で int/real 曖昧）は禁止**。数値列は `.int()`/`.real()` を明示必須（未指定＝error、no-assume）。他の型（string/bool/date/json）は design:type から一意なので従来どおり推論可。
-- object と array は別（json 列＝string。行/リレーション構造の obj/arr とは無関係）。
+読み出しは fail-closed の resolver（`` `failClosedMaterializeResolverFromColumnMap` (`src/scp/coltype.ts`) ``）
+で常時 de-box され、宣言されていない列は throw する（未型付き列を silent に box しない）。
 
-**規律**
-- 型が曖昧/未指定なら **error（no-assume・no-fallback）**。
-- SoT は `schema.sql` の SQL 型。`@column.*` は列型を宣言（gen は schema.sql → デコレータ型を生成）、converter（`src/scp/coltype.ts`）が上表で bc outType 記法へ**一意**変換する。
+**脱 box は READ / WRITE 両方を覆う（codegen 面・§9）**
 
-**脱box は READ と WRITE の両方を覆う（§9 codegen 面）**
-- **READ**: SELECT projection を行 obj 型に型付け（`src/scp/makesql/outtype.ts`）→ bc typed-raw が具体的な行 struct を materialize。
-- **WRITE**: 書き込み出力＝`TransactionResult` の typed shape（`src/scp/makesql/writeouttype.ts`）:
-  `obj{ committed:bool, executed:arr<string>, shortCircuit:opt<obj{statementId:string, reason:string}>, entity:opt<ROW>, returnedRows:opt<arr<arr<ROW>>> }`。
-  `entity`/`returnedRows` の行（ROW）は、書き込み対象テーブル（tx plan の `body` statement の SQL から構造的に抽出）とその RETURNING 列を、**READ と同一の列型 resolver（本節の SoT）** で型付けする。脱box できない write shape（未知テーブル/列、`RETURNING *`、batch 群でテーブル/RETURNING が不一致 等）は **error（no-assume・no-fallback）** — 決してボックス化へ退避しない。READ の surrogate IR と同様、write bundle の `makeSqlComponentIR` の単一 node `outType` + component `outputType` に注記して bc typed-raw に渡す。
+- **READ**: SELECT projection を行 obj 型へ型付け（`` `deriveReadRow` (`src/scp/makesql/outtype.ts`) ``）→
+  bc typed-raw が具体的な行 struct を materialize。
+- **WRITE**: 書込出力＝`TransactionResult` の typed shape（`` `deriveWriteOutputType`
+  (`src/scp/makesql/writeouttype.ts`) ``）:
+  `obj{ committed:bool, executed:arr<string>, shortCircuit:opt<obj{statementId:string, reason:string}>,
+  entity:opt<ROW>, returnedRows:opt<arr<arr<ROW>>> }`。ROW は書込対象テーブルの RETURNING 列を **READ と
+  同一の列型 resolver**で型付けする。脱 box できない write shape は error（no-assume・no-fallback）。
+
+**規律**: 型が曖昧/未指定なら error。SoT は `schema.sql` の SQL 型（`` `parseSchemaColumnTypes`
+(`src/scp/coltype.ts`) `` が DDL を `table → (column → SQL 型)` へパース）。
+
+---
 
 ## 5. Relation — Read 系
 
-- Relation は SQL JOIN を**既定にしない**。graphddb / v1 LazyRelation と同型の **staged batch query-composition + object assembly**（feasibility §5・§9）。
-  - `hasMany` → 親キー集合で `IN (...)` / `= ANY(...)`、per-parent limit は `LATERAL` / `ROW_NUMBER()`。
-  - `belongsTo`/`hasOne` → 親から子キー収集 → 1回のバッチ SELECT。
-- Execution Plan は behavior-contracts の `deriveExecutionPlan`（result path → stage groups + concurrency）を流用。relation ops はモデル宣言から**方言別に事前コンパイル**して IR に同梱。
-- **宣言 select（推奨）** vs **lazy（fallback）** の2段（feasibility §9）:
-  - 宣言 select（`with:{...}`）… planner が兄弟をまとめて dedup 実行（先読み最適化）。
-  - lazy（`await post.author`）… prototype getter + 非列挙 Symbol の batch context。事前コンパイル済み relation op を**実行時タイミングで起動**（IR 化可能）。
-- ホストオブジェクト化は graphddb と同形の `hydrate` factory（feasibility §9）。
-- JOIN は Backend Compile が特定形状に対して選ぶ**最適化**であって、意味論の既定ではない。
+Relation は **SQL JOIN を既定にしない**（`src/scp/relation.ts` の doc-comment: `Relations are NOT SQL
+JOINs by default`）。v1 `LazyRelation` と同型の **staged batch query-composition + object assembly**:
+結果ページの親キー集合を集め、dedup した親キーで **ONE batched child SELECT** を撃ち、子行を親へ分配する
+（relation エッジごとに1クエリ・N+1 なし）。
+
+- `` `RelationOp` (`src/scp/relation.ts`) `` はモデル `RelationDecl` から **一度だけ**静的 `makeSQL` batch
+  SELECT へコンパイルされる（`` `compileRelationOp` (`src/scp/relation.ts`) ``）。PG は元 `LazyRelation` SQL
+  と byte 一致（`= ANY(?::type[])`, `CROSS JOIN LATERAL`, `UNNEST`）、MySQL/SQLite は単一 JSON パラメータの
+  サーバ側展開（`json_each` / `JSON_TABLE`）。dedup 済みキー配列は **ONE param・静的テキスト**で束ねる
+  （プレースホルダ件数展開なし）ので `op.sql` は値非依存で固定。
+- **2つの読みサーフェスが同一 op を撃つ**（`` `runRelationOp` (`src/scp/relation.ts`) ``）:
+  - **宣言 select**（`with: ['author']`）… ページ全体を batch 先読み。
+  - **lazy**（`await post.author`）… prototype getter が兄弟集合に同一 op を撃つ
+    （`src/scp/typed-object.ts` の非列挙 Symbol batch context）。
+- **暴走ガード**: guarded relation の子フェッチは runaway cap（`` `CapGuard` (`src/scp/leaf-transport.ts`) ``）
+  を運び、リーフが生の子行件数を cap に照合して超過時 `LimitExceededError` を投げる（RAW 子行が存在するのは
+  この場所だけ・SCP に throw が無いため）。
+- **cross-DB relation**: 文が属する DB 名（`ExecOptions.db`）は relation の **target モデル**から解決され
+  （`` `connectionOf` (`src/scp/decorator-adapter.ts`) ``）、接続ルーティング（`src/scp/connection-routing.ts`）
+  が named connection の reader/writer 対を選ぶ。未登録名は loud（silent に別 DB へ走らせない）。
+- ホストオブジェクト化は graphddb と同形の `` `hydrate` (`src/scp/typed-object.ts`) `` factory
+  （relation 解決の後・`null` には適用しない）。
+
+---
 
 ## 6. 書込 — 単文エンドポイント / バッチ / 手続きトランザクション
 
-書込は宣言エンドポイントとして表現する。ライブラリが**関連への波及を自動導出することはしない**（波及が要るなら利用者が書く）。
+書込は宣言エンドポイントとして表現する。ライブラリが関連への波及を自動導出することはしない（波及が要るなら
+利用者が書く）。
 
-- **単文書込** — `create` / `update` / `delete`（宣言エンドポイント）。方言別 SQL は makesql で焼き込まれ、`RETURNING` を宣言すれば書込んだ行を返す（MySQL は RETURNING 非対応のため接続アダプタが宣言 PK で再 SELECT する）。
-- **バッチ書込** — `createMany` / `updateMany` / `deleteMany`。1論理オペレーションが N 個のグループ文を生む。バッチ SQL は v1 ビルダから byte-copy し、gate-free の transaction plan（`entityFrom` null・全文 `body`）へ落として全言語 runtime が同一の per-statement tx ループで実行する。
-- **複数文をまたぐ原子性** — 利用者の `DBModel.transaction(fn)` 手続き境界で束ねる。境界内は read-your-writes（未コミット行が同一接続で見える）と rollback を保証するので、「前提の読み → その結果に依存する書込 → 例外での短絡」は**手で書く**（宣言的な gate-first / tx-DAG 導出は持たない）。
+- **単文書込** — `create` / `update` / `delete`。方言別 SQL は makesql で焼き込まれ、`RETURNING` を宣言
+  すれば書込んだ行を返す（MySQL は RETURNING 非対応のため接続アダプタが宣言 PK で再 SELECT する・
+  `src/scp/makesql/mysql-returning.ts`）。
+- **バッチ書込** — `createMany` / `updateMany` / `deleteMany`。1論理オペレーションが N 個のグループ文を
+  生む。バッチ SQL は v1 ビルダから byte-copy し、**gate-free** な transaction plan（`` `deriveBatchPlan`
+  (`src/scp/makesql/tx.ts`) ``。`entityFrom` null・全文 `role:'body'`）へ落として、全言語 runtime が同一の
+  per-statement tx ループで実行する。書込列順は **canonical（アルファベット）**に正規化される（v2 write 経路
+  の SSoT・命令 `DBModel._insert` と一致。`src/scp/makesql/compile-crud.ts` / `src/scp/makesql/tx.ts`）。
+- **複数文をまたぐ原子性** — 利用者の `DBModel.transaction(fn)` 手続き境界で束ねる。境界内は
+  read-your-writes（未コミット行が同一接続で見える）と rollback を保証するので、「前提の読み → その結果に
+  依存する書込 → 例外での短絡」は手で書く（宣言的な gate-first / tx-DAG 導出は持たない）。実行は
+  `` `executeTransactionAsync` (`src/scp/makesql/tx.ts`) `` — ランタイムは per-statement のゲート短絡
+  primitive（`GateRule`）を運べるが、宣言エンドポイントはゲートを一切 emit しない（batch plan は gate-free）。
 
 ```ts
 await DBModel.transaction(async () => {
@@ -292,114 +277,155 @@ await DBModel.transaction(async () => {
 });
 ```
 
-## 7. SCP 宣言ブロック → IR コンパイル
+---
 
-`SemanticBehavior` クラス（または `@behavior`）の各 public メソッド（§2.4）の本体は **SCP の Composite Component** として扱われ、bc のコンパイルパイプラインで Component-graph IR へ落ちる。メソッド名=Behavior 名（ルート）、`$` の型引数=Input Port、返り値=Output Port、内部 DAG は配線から導出。effect（Query/Command）は SCP でなく CQRS 層が graph から導出（§2.4）:
+## 7. 宣言 → SCP 制限 TS → 生成物
 
-```
-TS 宣言（AST）
-  → Authoring Parse（litedbmodel）: 操作・relation・条件・projection を抽出
-  → Component 化（Catalog 名 = Select/Insert/... + ports）
-  → Wire / 依存抽出 / Cycle Check
-  → 条件・値を **Expression IR** へ lower（bc `expression-ir.md`・閉集合・exprVersion 2）
-  → Execution Plan 導出（stage groups / concurrency）
-  → IR emit（portable JSON）or codegen（TS/他言語ソース）
-```
+宣言エンドポイント（§2.2）は `` `emitBehaviorModule` (`src/scp/emit/emitter.ts`) `` で **SCP 制限 TS** へ
+lowering される。emitter は **自分では何もコンパイルしない**: emit される全成果物は既存の集約点が生み、
+emitter はそれを TypeScript として **RENDER するだけ**である。
 
-- 条件 `Post.author_id.eq($.authorId)` → `{eq:[{ref:["author_id"]},{ref:["input","authorId"]}]}`。
-- **動的条件は Expression でなく「fragment の存在規則」へ**: `cond ? [...] : SKIP` は値ではなく**断片の採否**（feasibility §4 / bc の SKIP は Expression 語彙外）。
-- lower 可能サブセット外（任意の自由 SQL）は **Raw SQL escape hatch**（契約付き・不透明・方言別同梱・§13）。
-- 制御構造は bc 準拠のネイティブ TS（`?:` / `&&` / `.map`）を lower（新語彙を足さない）。
+| emit される物 | 由来 |
+|---|---|
+| read SQL + param 順 | `` `compileSelect` (`src/scp/makesql/compile-select.ts`) `` |
+| WHERE テキスト（全体/断片） | `` `compileWhere` (`src/scp/makesql/compile.ts`) `` |
+| 静的 IN リストの membership | `` `inListPredicate` (`src/scp/makesql/json-array.ts`) ``（PG `= ANY(?)`） |
+| write SQL + param 順 | `` `compileWriteNode` (`src/scp/makesql/tx.ts`) `` |
+| relation batch SQL + キー | `` `compileRelationOp` (`src/scp/relation.ts`) `` |
+| 行型 | `` `deriveReadRow` (`src/scp/makesql/outtype.ts`) `` |
+| 列 SQL 型 | `` `deriveModelColumns` (`src/scp/decorator-adapter.ts`) `` |
+| リーフカタログ | `` `Db` (`src/scp/leaf-transport.ts`) `` |
 
-## 8. IR の形（dialect 依存・feasibility §4 を確定）
+生成された SCP 制限 TS は `bc generate --from` が読み、go / rust / py / php / ts の native モジュールへ
+落ちる（リーフ配線は bc が自動生成）。**制御構造は bc 準拠のネイティブ TS**（`?:` / `&&` / `.map`）で、
+新語彙を足さない。lower 可能サブセット外の自由 SQL は **契約付き Raw SQL**（`QueryView` #98 の派生 CTE
+= `WITH <alias> AS (<query>) SELECT … FROM <alias>` を含む・`src/scp/emit/endpoint.ts` の `QueryView`）。
 
-Component-graph IR（bc 汎用構造）の **litedbmodel Catalog** ノードが、Backend Compile で以下の SQL IR を持つ:
+---
 
-- **dialect SQL テキスト**: 静的部は完全 flatten。動的部は **fragment 木**（事前コンパイル済み断片の順序木 + AND/OR 構造 + 各断片の存在規則）。
-- **placeholder は全方言 `?` 統一**（v1 内部表現と一致）。param 完全フラット化後に**最終1パスで `?`→`$N`**（PG のみ・左から機械変換）。番号振り直し問題は設計から消滅（feasibility §4）。
-- **params 配列**（`?` と 1:1）: 各要素は ①入力参照 `prop.x` ②wire 参照 `{result.field}` ③**オペレータ IR** `{add:[prop.y,1]}`（bc Expression IR・閉集合）。
-- **assembly 仕様**: 行 → 論理モデル（relation items 付与位置含む）。
-- **relation ops**: モデル宣言から導出した全 relation バッチ SQL（方言別・§5）。
-- **batch plan**: バッチ書込（createMany/updateMany/deleteMany）の gate-free な順序付き文（§6）。
+## 8. 生成物と実行時の断片モデル（可搬 IR は emit しない）
 
-```jsonc
-// 例: search クエリの Select ノード（Backend Compile 後）
-{
-  "component": "Select",
-  "sql": "SELECT id,author_id,title,created_at FROM posts WHERE author_id = ?{fragments}ORDER BY created_at DESC LIMIT ?",
-  "fragments": [                         // 動的 WHERE 断片（存在規則つき）
-    { "when": {"present":["input","status"]}, "sql": " AND status = ?", "params": [{"ref":["input","status"]}] },
-    { "always": true, "sql": " AND created_at >= ?", "params": [{"ref":["input","since"]}] }
-  ],
-  "params": [ {"ref":["input","authorId"]}, /* ...fragment 展開後... */ {"coalesce":[{"ref":["input","limit"]},20]} ],
-  "assembly": { "shape": "items", "relations": { "author": { "op": "author__batch", "attach": "author" } } }
-}
-```
+**litedbmodel は可搬 IR ドキュメントを emit しない**（`src/scp/index.ts`: `no runtime IR, no programmatic
+compile`）。「中間 IR の形」ではなく、次の2つが実体である:
 
-bundle 直列化は bc の envelope（`irVersion`/`exprVersion` + fail-closed）に従う（version skew は `validateEnvelope` で拒否）。
+1. **静的宣言エンドポイント**（read + 単文 write）は `emitBehaviorModule` が **方言 SQL を焼き込んだ SCP
+   制限 TS** へ落とし、`bc generate` が native 化する。component-graph IR は bc が所有し、litedbmodel は
+   SCP 制限 TS を生むだけ。方言は **TS 側で一度だけ**解決される（§10）。
+2. **ランタイム write/tx 経路**（`DBModel.transaction` と batch）は bc catalog leaf
+   `` `makeSQL` (`src/scp/makesql/makesql.ts`) `` を通る。`makeSQL(sql, params, skip?)` は **1つの** catalog
+   component で、`sql` はチューニング済み方言テキスト（`?` プレースホルダ、v1 と byte 一致）、`params` は
+   束ねる値または **ネストした `makeSQL`**（サブクエリ）、`skip?` は presence 条件。`= ANY` / `LATERAL` /
+   `UNNEST` / cast / batch は **全て `sql` 内のテキスト**でモデル化しない（`makesql.ts`: `never modeled`）。
 
-## 9. 実行経路 — コンパイル経路は1本、実行モードが3つ
+**動的 WHERE（SKIP）の断片語彙**（CLAUDE.md §2 準拠・`src/scp/leaf-transport.ts`）:
 
-**コンパイル経路は単一**: 公開 API 呼び出しも SCP 宣言も、**同一の Authoring Parse → 内部 IR** を通る（同一ロジック・分岐なし）。内部 IR 以降（Backend Compile → Runtime）は**全モードで完全に共通**。異なるのは「その同一 IR を**いつ・どう実行するか**」の3モードだけ:
+- 断片は **SQL テキスト + params + SKIP フラグ**だけ（中間 IR 語彙を作らない）。1断片 =
+  `` `DynamicWhereFrag` (`src/scp/leaf-transport.ts`) `` = `{ skipped, sql, params }` の均質な struct で、
+  `cond`→null のバリアント要素にしない（native-codegen エミッタが拒否する形）。
+- optional 述語を宣言した read だけが `` `DynamicWherePlan` (`src/scp/leaf-transport.ts`) `` を運ぶ。bounded
+  述語は emit 時に静的 WHERE へ lower される（native-clean）。plan は head / lead / tail / tailParams を持ち、
+  リーフ（`` `assembleDynamicWhere` (`src/scp/leaves.ts`) ``）が生存断片を連結する（文字列 scan はしない）。
+- **`?`→`$N` はプレースホルダ変換であって最終 SQL 確定後**（PG のみ・左から機械変換1パス）。SKIP で形が
+  変わるため生成段では確定できない。`` `toDollarPlaceholders` (`src/scp/dialect.ts`) `` が最終フラットテキストを
+  一度だけ走査する（番号振り直し問題は設計から消滅）。ランタイムの `` `renderPlaceholders`
+  (`src/scp/makesql/handler.ts`) `` は quote-aware（文字列リテラル内の `?` はプレースホルダにしない）。
+- **IN リストの件数展開もランタイム/ドライバ側**: 非空配列は方言のサーバ側展開（PG `= ANY(?)`・MySQL
+  `JSON_TABLE`・SQLite `json_each`）で **ONE param・静的テキスト**、**空配列は `1 = 0`**（param なし・v1 と一致。
+  `src/scp/makesql/json-array.ts`）。
 
-1. **動的コンパイル実行（TS・eager）** — 呼び出し時に**同じコンパイラで内部 IR を生成**（結果はキャッシュ）→ 共通 Runtime で in-process 実行。※ メタデータを直に解釈する別経路ではない（IR を必ず経由）。
-2. **IR 参照・動的（全言語）** — publish 済み IR(JSON) を薄い runtime が `runPlan`/`evaluateExpression` で実行。
-3. **Codegen・静的（全言語）** — IR → 各言語ソース生成（**ビルド時事前コンパイル**、runtime≈0）。litedbmodel の「ビルド時に TS コード/IR へ変換」はこれ（bc issue #13 の共有 generator に SQL catalog を供給）。
+---
 
-3モードとも**同一コンパイラ・同一内部 IR**を共有するため、経路差による意味論のズレは構造上生じない。eager で書いたロジックの SCP 化・多言語化は「配線を宣言に移す」リファクタで済む（feasibility §2）。
+## 9. 実行経路 — コンパイル経路は1本
+
+**コンパイル経路は1本**（CLAUDE.md §1）: デコレータ付きモデル + 宣言エンドポイント →
+`emitBehaviorModule` → SCP 制限 TS → `bc generate --from` → go / rust / py / php / ts native。リーフ配線は
+bc が自動生成する。実行時のサーフェスは **3本の op 非依存リーフ**（`src/scp/leaf-transport.ts` の
+`Db.executeSQL` / `Db.pluck` / `Db.group`）に閉じ、方言 SQL はこの3本が運ぶテキスト＋パラメータで表現する。
+
+- **`executeSQL`** — 唯一の SQL 転送。`sql` + `params` に加えて任意の1制御 struct `ExecOptions`（どの DB で
+  走るか・read/write モード・SKIP plan・relation ガード）を運ぶ。plain read は `opts` を省略（native-clean）。
+- **`pluck`** — relation キー抽出（dedup・非 null のキー集合）。
+- **`group`** — relation 整形（子を親の `into` にネスト・N+1 なしにする in-memory grouping）。
+
+**真のアドホッククエリ**（形が実行時にしか決まらない `find({ where })`）は静的 SQL を持たないので **v1
+命令パス**で走る（`src/scp/emit/endpoint.ts`）。SKIP は「動的だから v1」ではない — optional 述語は §8 の
+断片モデルで codegen 経路に載る。
+
+3言語グループの実行モデルは bc の native codegen が決める（go/rust は typed-native の直呼び、py/php は bc
+runtime-core `runBehavior` に生成モジュールの IR リテラルを渡す形）。いずれも **同一コンパイラ・同一 native
+モジュール**を共有するので、経路差による意味論のズレは構造上生じない。
+
+---
 
 ## 10. 多言語 Runtime と Conformance
 
-- 公開境界は CQRS のみ。各言語 runtime = **bc runtime-core（共有）+ litedbmodel SQL runtime（driver + assembly + dialect）**。
-- Conformance（bc の golden 方式）: **同一 Contract + 同一入力 → 同一 SQL テキスト + 同一 assembly 結果**。
-- 分解: **方言軸はコンパイル時に TS 側で1回検証**（既存 SqlBuilder 資産 + golden SQL）。**言語軸は「同一 IR+入力 → 同一 SQL + 同一結果」の機械検証**。→ conformance 行列が「方言 3 × 言語 N」から「3 + N」に分解（feasibility §4）。
-- runtime が読むのは IR bundle（manifest 相当のスキーマ + operations 相当の契約/クエリ/コマンド/トランザクション + executionPlan）。
+- 各言語 runtime = **bc runtime-core（共有）+ litedbmodel SQL runtime**（driver + assembly + dialect）。
+- Conformance（bc の golden 方式）: 同一エンドポイント + 同一入力 → **同一 SQL テキスト + 同一 assembly 結果**。
+- **分解**: 方言軸はコンパイル時に **TS 側で1回検証**（`src/scp/dialect.ts` の doc-comment: `方言軸は
+  コンパイル時に TS 側で1回検証`。既存 SqlBuilder 資産 + golden SQL）。言語軸は「同一入力 → 同一 SQL +
+  同一結果」の機械検証。→ conformance 行列が **「方言 3 × 言語 5」から「3 + 5」に分解**する。
+- 実 DB conformance は dockerized PostgreSQL + MySQL（SQLite はインプロセス参照）で、5言語 runtime が同一
+  ベクタを replay する。
+
+---
 
 ## 11. Consumer 実装点（litedbmodel が書くもの / bc から得るもの）
 
-**litedbmodel v2 が実装（§1 表の具体化）:**
-1. **Catalog**: `Select/Insert/Update/Delete/Fragment/Tx` の Port schema。
-2. **Authoring Parse**: 公開 API・SCP 宣言（`SemanticBehavior` クラスのメソッド）→ Component-graph IR。
-3. **Backend Compile**: IR → dialect SQL + fragment 木 + `?`→`$N`（既存 SqlBuilder を IR 消費型へ移植）。
-4. **Handlers**: Catalog 名 → driver 実行 + assembly。
-5. **Error Mapping**: driver エラー → SCP Failure（Policy Kind: fail/retry/continue）。
+**litedbmodel v2 が実装する（`src/scp/index.ts` の4点の具体化）:**
 
-**bc から得る（実装しない）:** IR 構造・Expression 評価・Execution Plan 実行（skip 伝播/concurrency/Policy Kind）・`renderTemplate`/`canonicalValue`/`validateEnvelope`・Portability Guard・codegen 基盤・conformance runner。
+1. **Catalog leaf**: ランタイム経路の `` `makeSQL` (`src/scp/makesql/makesql.ts`) ``（1 component）と、codegen
+   経路の3本 op 非依存リーフ `` `Db` (`src/scp/leaf-transport.ts`) ``。
+2. **Handler**: catalog leaf の唯一の consumer 実装点（`` `renderPlaceholders` を含む
+   `src/scp/makesql/handler.ts` ``）— bind params → SQL 実行 → 行→論理モデル assembly。副作用/driver/接続は
+   ここに閉じる（IR は実装を運ばない）。
+3. **Backend Compile**: 宣言エンドポイント → 方言 SQL + param 順（`src/scp/makesql` の `compile-*`）。
+4. **Error Mapping**: driver エラー → SCP Failure。`` `SqlFailure` (`src/scp/errors.ts`) `` は安定した `kind`
+   （`constraint_violation` / `foreign_key_violation` / `retryable` / `driver_error`）と bc の `PolicyKind`
+   （fail / retry / continue）を運ぶ。未知コードは loud（silent catch-all にしない）。
+5. **各言語ランタイム**: 実行コンテキスト・接続ルーティング・relation grouping・列型 de-box・typed-object。
+
+**bc から得る（実装しない）:** component-graph IR 構造・Expression 評価・Execution Plan 実行・
+`runBehavior` / `validateEnvelope`・codegen 基盤・conformance runner。
+
+---
 
 ## 12. TS 公開 API の v1 → v2 移行（破壊的）
 
-feasibility §9 で確定済み。要点のみ:
+| 面 | v1 | v2 |
+|---|---|---|
+| CRUD + condition タプル + SKIP | Active Record | ほぼ不変（内部が codegen/命令 経路に分かれる） |
+| `await post.author`（lazy） | prototype getter（Promise） | 残す（getter → 事前コンパイル relation op 起動・§5） |
+| 結果オブジェクト | DBModel インスタンス | **typed-object**（own props はデータのみ・§4） |
+| インスタンスメソッド | クラスメソッド | typed-object には無い → `hydrate: (raw)=>new Domain(raw)` で回復 |
+| 完全動的 Raw SQL | `execute`/`query` | 契約付き Raw SQL（`QueryView` / v1 命令パス） |
+| 書込列順 | 挿入順（v1.x で保全） | **canonical アルファベット順**（v2 write 経路の SSoT・§6） |
 
-| 面 | v1 | v2 | 破壊度 |
-|---|---|---|---|
-| CRUD + condition タプル + SKIP | Active Record | ほぼ不変（内部が IR 経路に） | 小 |
-| `await post.author`（lazy） | prototype getter（Promise） | 残す（getter → 事前コンパイル relation op 起動・§9） | 小 |
-| 結果オブジェクト | DBModel インスタンス | **typed-object**（own props はデータのみ） | **中〜大** |
-| インスタンスメソッド | クラスメソッド | typed-object には無い → `hydrate: (raw)=>new Domain(raw)` で回復 | 中 |
-| `sql`/dbDynamic/dbRaw | 実行時文字列 | Dynamic Slot 語彙（lower 可能サブセット内） | 小 |
-| 完全動的 Raw SQL | `execute`/`query` | 契約付き Raw SQL（方言別 SQL 同梱・IR 不透明） | 小 |
-| Middleware / TypeCast | 実行時 | Runtime 関心事として存続 | 小 |
+破壊の中心は「結果がインスタンス → typed-object」。メソッドは `hydrate` で回復。v1.x はメンテブランチ
+`v1.x` で保全する。
 
-破壊の中心は「結果がインスタンス → typed-object」。メソッドは `hydrate` で回復。**v1.x はメンテブランチ `v1.x` で保全**。
+---
 
-## 13. リスク / 難所
+## 13. DB 挙動差 — SQL テキストを超える差の closeable-by-convention 線
 
-1. **SQL IR / lower 可能サブセットの線引き**（最重要・feasibility §4/§6）: SQL-first の自由度 と 多言語決定的 lower は部分対立。Raw SQL は「不透明だが契約付き（I/O・Effect 宣言、SQL 文字列は方言別同梱、コンパイルしない）」に隔離。
-2. **オペレータ/断片の決定性**: SKIP 合成順序・AND/OR 構造木・空 WHERE 縮退・`?`→`$N`・配列展開を多言語 byte 一致で仕様化（bc `expression-ir.md` の語彙を共有）。
-3. **意味的等価の限界**: SQL テキスト一致でも DB 挙動差（NULL 順序・照合・timezone・浮動小数）。conformance は「同一 SQL + 同一 assembly」を保証し、DB 差は方言コンパイル時規約（`ORDER BY ... NULLS` 強制等）で潰せる範囲に線引き。
+SQL テキストが一致しても DB 挙動が一致するとは限らない（NULL 順序・照合・timezone・浮動小数）。これらは
+**「方言コンパイル時規約」で閉じられる線の内側だけ**を仕様が保証する（`src/scp/dialect.ts` の doc-comment:
+`spec §13 closeable-by-convention line`）。
 
-## 14. 段階化 / ロードマップ
+- **機械的に閉じる規約は NULL 順序の決定性1つ**: `` `orderByNulls` (`src/scp/dialect.ts`) `` が
+  `ORDER BY … NULLS FIRST/LAST` 要件を方言別にレンダーする。PostgreSQL / SQLite(3.30+) は native
+  `NULLS FIRST/LAST`、MySQL は先頭に `<expr> IS NULL` ソートキーを足して等価に emulate する。
+- **照合（collation）・timezone・浮動小数の意味は明示的にスコープ外**（silent に既定へ潰さず、規約の外だと
+  ドキュメントする）。
+- プレースホルダ・INSERT conflict 節・guard INSERT など、SQL テキストの方言差はすべて `Dialect` 戦略
+  （`src/scp/dialect.ts` の凍結レコード `SQLITE` / `POSTGRES` / `MYSQL`）に閉じ、エンジンコードに散在する
+  `?:` を置かない。
 
-bc の migration（litedbmodel は Phase 4 = 統合 generator + C2 実証で参入）と bc issue #1（RDB PoC）に整合。
+---
 
-1. **v2 α**: **SQLite + TS**・Query 契約のみで縦1本（公開 API/マーク付き関数 → Component-graph IR → Backend Compile → 薄い Runtime）。golden = 同一入力→同一 SQL + 同一結果。動的展開仕様（SKIP/fragment 木）を確定。← bc issue #1 の本体。
-2. **v2 β**: Postgres/MySQL 方言追加（SqlBuilder 資産を IR 消費型へ移植）。write-side（単文 create/update/delete + バッチ）。typed-object + hydrate + lazy 確定。
-3. **v2 RC**: Python/Rust/Go/PHP runtime + conformance（言語軸）。Rust は現 `litedbmodel.rs` runtime を monorepo `rust/` へ移行。codegen（bc 共有 generator に SQL catalog 供給）。
-4. **v2.0 GA**: 多言語 CQRS 公開・**5レジストリ** publish 基盤（npm/crates.io/PyPI/Go-tag/Packagist、behavior-contracts 方式）。
+## 14. バージョニング / エコシステム位置づけ
 
-## 15. バージョニング / エコシステム位置づけ
-
-- **v2.0 系（破壊的）**。v1.x はメンテブランチ `v1.x` で保全（別トラック）。
-- litedbmodel v2 = behavior-contracts の **SQL バックエンド consumer**（graphddb=DynamoDB と対）。IR/Expression/runtime-core/codegen/conformance を共有し、Catalog + Backend Compile + Handler + Error Mapping のみを供給。
-- litedbmodel-gen は SQL 側の Authoring 入口（`schema.sql` → モデル生成）として位置づけ。
-- 関連: behavior-contracts issue #1（RDB PoC）/ #13（共有 codegen）、[`contracts-architecture-feasibility.md`](./contracts-architecture-feasibility.md)（設計判断の根拠）。
+- **v2.0 系（破壊的）**。v1.x はメンテブランチ `v1.x` で保全（別トラック・v1 の SQL は byte 保全）。
+- litedbmodel v2 = behavior-contracts の **SQL バックエンド consumer**（graphddb=DynamoDB と対）。IR /
+  Expression / runtime-core / codegen / conformance を共有し、Backend Compile + Handler + Catalog leaf +
+  Error Mapping のみを供給する。
+- リリースは **5レジストリ**（npm / crates.io / PyPI / Go-tag / Packagist）。
