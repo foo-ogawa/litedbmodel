@@ -1,4 +1,4 @@
-[**litedbmodel v1.0.1**](../README.md)
+[**litedbmodel v2.2.3**](../README.md)
 
 ***
 
@@ -6,11 +6,11 @@
 
 # Interface: DeleteOptions
 
-Defined in: types.ts:198
+Defined in: types.ts:222
 
 ## Properties
 
 | Property | Type | Description | Defined in |
 | ------ | ------ | ------ | ------ |
-| <a id="tablename"></a> `tableName?` | `string` | - | types.ts:199 |
-| <a id="returning"></a> `returning?` | `boolean` | If true, return PkeyResult with affected primary keys. If false (default), return null for better performance. | types.ts:204 |
+| <a id="tablename"></a> `tableName?` | `string` | - | types.ts:223 |
+| <a id="returning"></a> `returning?` | `boolean` | If true, return PkeyResult with affected primary keys. If false (default), return null for better performance. | types.ts:228 |

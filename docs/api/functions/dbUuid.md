@@ -1,4 +1,4 @@
-[**litedbmodel v1.0.1**](../README.md)
+[**litedbmodel v2.2.3**](../README.md)
 
 ***
 
@@ -7,7 +7,7 @@
 # Function: dbUuid()
 
 ```ts
-function dbUuid(value: string, operator: string): DBCast;
+function dbUuid(value: string, operator?: string): DBCast;
 ```
 
 Defined in: DBValues.ts:519

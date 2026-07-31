@@ -1,4 +1,4 @@
-[**litedbmodel v1.0.1**](../README.md)
+[**litedbmodel v2.2.3**](../README.md)
 
 ***
 
@@ -24,3 +24,4 @@ All options use lazy evaluation (functions) to support forward references.
 | <a id="select"></a> `select?` | `string` | SELECT_COLUMN: Column selection string (default: '*') | types.ts:51 |
 | <a id="updatetable"></a> `updateTable?` | `string` | UPDATE_TABLE_NAME: Table name for INSERT/UPDATE operations | types.ts:54 |
 | <a id="group"></a> `group?` | () => \| `string` \| [`Column`](Column.md)\<`unknown`, `unknown`\> \| [`Column`](Column.md)\<`unknown`, `unknown`\>[] | DEFAULT_GROUP: Returns Column(s) or string for default grouping | types.ts:57 |
+| <a id="connection"></a> `connection?` | `string` | CONNECTION: the NAME of the database this model lives in (multi-DB). Absent ⇒ the default connection. This is the SAME authority v1 gives the model — a v1 model picks its database by extending a `DBModel.createDBBase(config)` base class, whose handler owns the connection, and a relation is batch-loaded on the TARGET model's (`LazyRelation.ts:236` `TargetClass.getDriverType()`). Naming it makes that authority READABLE at emit time, which is what the codegen path needs: the emitter bakes the name onto every statement of every endpoint declared over this model, and onto the child fetch of every relation whose TARGET is this model, so a per-language runtime routes the statement to the pooled driver registered under it (`ConnectionRegistry`). Unregistered ⇒ LOUD, never a silent run against the wrong database. | types.ts:70 |

@@ -1,4 +1,4 @@
-[**litedbmodel v1.0.1**](../README.md)
+[**litedbmodel v2.2.3**](../README.md)
 
 ***
 
@@ -10,7 +10,7 @@
 function isSqlCondition(value: unknown): value is SqlCondition<unknown>;
 ```
 
-Defined in: SqlFragment.ts:136
+Defined in: SqlFragment.ts:137
 
 ## Parameters
 

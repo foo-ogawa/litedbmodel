@@ -1,4 +1,4 @@
-[**litedbmodel v1.0.1**](../README.md)
+[**litedbmodel v2.2.3**](../README.md)
 
 ***
 
@@ -7,7 +7,7 @@
 # Function: dbDynamic()
 
 ```ts
-function dbDynamic(func: string, values: unknown[]): DBDynamicValue;
+function dbDynamic(func: string, values?: unknown[]): DBDynamicValue;
 ```
 
 Defined in: DBValues.ts:380

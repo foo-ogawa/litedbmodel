@@ -1,4 +1,4 @@
-[**litedbmodel v1.0.1**](../README.md)
+[**litedbmodel v2.2.3**](../README.md)
 
 ***
 
@@ -10,7 +10,7 @@
 function dbCast(
    value: unknown, 
    sqlType: string, 
-   operator: string): DBCast;
+   operator?: string): DBCast;
 ```
 
 Defined in: DBValues.ts:503

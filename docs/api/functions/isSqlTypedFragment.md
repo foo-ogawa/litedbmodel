@@ -1,4 +1,4 @@
-[**litedbmodel v1.0.1**](../README.md)
+[**litedbmodel v2.2.3**](../README.md)
 
 ***
 
@@ -10,7 +10,7 @@
 function isSqlTypedFragment(value: unknown): value is SqlTypedFragment<unknown, unknown>;
 ```
 
-Defined in: SqlFragment.ts:127
+Defined in: SqlFragment.ts:128
 
 ## Parameters
 

@@ -1,4 +1,4 @@
-[**litedbmodel v1.0.1**](../README.md)
+[**litedbmodel v2.2.3**](../README.md)
 
 ***
 
@@ -10,7 +10,7 @@
 function createSqliteDriver(options: DBDriverOptions): SqliteDriver;
 ```
 
-Defined in: drivers/sqlite.ts:218
+Defined in: drivers/sqlite.ts:263
 
 Create a SQLite driver instance
 

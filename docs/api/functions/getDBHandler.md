@@ -1,4 +1,4 @@
-[**litedbmodel v1.0.1**](../README.md)
+[**litedbmodel v2.2.3**](../README.md)
 
 ***
 
@@ -10,7 +10,7 @@
 function getDBHandler(): DBHandler;
 ```
 
-Defined in: DBHandler.ts:312
+Defined in: DBHandler.ts:317
 
 Get global handler
 

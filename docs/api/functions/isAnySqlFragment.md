@@ -1,4 +1,4 @@
-[**litedbmodel v1.0.1**](../README.md)
+[**litedbmodel v2.2.3**](../README.md)
 
 ***
 
@@ -10,7 +10,7 @@
 function isAnySqlFragment(value: unknown): value is SqlFragment | SqlTypedFragment<unknown, unknown> | SqlCondition<unknown>;
 ```
 
-Defined in: SqlFragment.ts:148
+Defined in: SqlFragment.ts:149
 
 Matches any of SqlFragment, SqlTypedFragment, or SqlCondition.
 

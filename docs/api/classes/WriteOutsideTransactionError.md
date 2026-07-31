@@ -1,4 +1,4 @@
-[**litedbmodel v1.0.1**](../README.md)
+[**litedbmodel v2.2.3**](../README.md)
 
 ***
 
@@ -6,7 +6,7 @@
 
 # Class: WriteOutsideTransactionError
 
-Defined in: types.ts:377
+Defined in: types.ts:401
 
 Error thrown when attempting write operations outside a transaction.
 
@@ -22,7 +22,7 @@ Error thrown when attempting write operations outside a transaction.
 new WriteOutsideTransactionError(operation: string, modelName?: string): WriteOutsideTransactionError;
 ```
 
-Defined in: types.ts:378
+Defined in: types.ts:402
 
 #### Parameters
 
@@ -45,5 +45,5 @@ Error.constructor
 
 | Property | Modifier | Type | Defined in |
 | ------ | ------ | ------ | ------ |
-| <a id="operation"></a> `operation` | `readonly` | `string` | types.ts:379 |
-| <a id="modelname"></a> `modelName?` | `readonly` | `string` | types.ts:380 |
+| <a id="operation"></a> `operation` | `readonly` | `string` | types.ts:403 |
+| <a id="modelname"></a> `modelName?` | `readonly` | `string` | types.ts:404 |

@@ -1,4 +1,4 @@
-[**litedbmodel v1.0.1**](../README.md)
+[**litedbmodel v2.2.3**](../README.md)
 
 ***
 
@@ -10,7 +10,7 @@
 function isSqlRef(value: unknown): value is SqlRef;
 ```
 
-Defined in: SqlFragment.ts:158
+Defined in: SqlFragment.ts:159
 
 ## Parameters
 

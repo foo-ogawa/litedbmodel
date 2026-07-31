@@ -1,4 +1,4 @@
-[**litedbmodel v1.0.1**](../README.md)
+[**litedbmodel v2.2.3**](../README.md)
 
 ***
 
@@ -6,7 +6,7 @@
 
 # Interface: CreatedMiddlewareClass\<S\>
 
-Defined in: Middleware.ts:427
+Defined in: Middleware.ts:442
 
 Type for the middleware class created by createMiddleware.
 Provides typed access to state via getCurrentContext().
@@ -25,7 +25,7 @@ Provides typed access to state via getCurrentContext().
 new CreatedMiddlewareClass(): Middleware & S;
 ```
 
-Defined in: Middleware.ts:437
+Defined in: Middleware.ts:452
 
 Constructor
 
@@ -41,7 +41,7 @@ Constructor
 getCurrentContext(): S;
 ```
 
-Defined in: Middleware.ts:429
+Defined in: Middleware.ts:444
 
 Get the current request's state (creates new instance if none exists)
 
@@ -57,7 +57,7 @@ Get the current request's state (creates new instance if none exists)
 run<R>(fn: () => R): R;
 ```
 
-Defined in: Middleware.ts:431
+Defined in: Middleware.ts:446
 
 Run a function with a fresh middleware context
 
@@ -85,7 +85,7 @@ Run a function with a fresh middleware context
 hasContext(): boolean;
 ```
 
-Defined in: Middleware.ts:433
+Defined in: Middleware.ts:448
 
 Check if a context exists for the current request
 
@@ -101,7 +101,7 @@ Check if a context exists for the current request
 clearContext(): void;
 ```
 
-Defined in: Middleware.ts:435
+Defined in: Middleware.ts:450
 
 Clear the current context (useful for testing)
 

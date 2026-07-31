@@ -1,4 +1,4 @@
-[**litedbmodel v1.0.1**](../README.md)
+[**litedbmodel v2.2.3**](../README.md)
 
 ***
 
@@ -6,7 +6,7 @@
 
 # Class: DBHandler
 
-Defined in: DBHandler.ts:174
+Defined in: DBHandler.ts:179
 
 Database handler - wraps a driver and provides a unified interface.
 
@@ -30,7 +30,7 @@ const result = await handler.execute('SELECT * FROM users WHERE id = $1', [1]);
 new DBHandler(config: DBConfig, options?: DBHandlerOptions): DBHandler;
 ```
 
-Defined in: DBHandler.ts:180
+Defined in: DBHandler.ts:185
 
 #### Parameters
 
@@ -51,7 +51,7 @@ Defined in: DBHandler.ts:180
 getDriverType(): "postgres" | "mysql" | "sqlite";
 ```
 
-Defined in: DBHandler.ts:198
+Defined in: DBHandler.ts:203
 
 Get the driver type
 
@@ -67,7 +67,7 @@ Get the driver type
 getDriver(): DBDriver;
 ```
 
-Defined in: DBHandler.ts:205
+Defined in: DBHandler.ts:210
 
 Get the underlying driver
 
@@ -80,10 +80,10 @@ Get the underlying driver
 ### execute()
 
 ```ts
-execute(sql: string, params: unknown[]): Promise<QueryResult>;
+execute(sql: string, params?: unknown[]): Promise<QueryResult>;
 ```
 
-Defined in: DBHandler.ts:212
+Defined in: DBHandler.ts:217
 
 Execute a SQL query
 
@@ -103,10 +103,10 @@ Execute a SQL query
 ### executeWrite()
 
 ```ts
-executeWrite(sql: string, params: unknown[]): Promise<QueryResult>;
+executeWrite(sql: string, params?: unknown[]): Promise<QueryResult>;
 ```
 
-Defined in: DBHandler.ts:222
+Defined in: DBHandler.ts:227
 
 Execute a write query (INSERT/UPDATE/DELETE)
 
@@ -126,10 +126,10 @@ Execute a write query (INSERT/UPDATE/DELETE)
 ### executeOnWriter()
 
 ```ts
-executeOnWriter(sql: string, params: unknown[]): Promise<QueryResult>;
+executeOnWriter(sql: string, params?: unknown[]): Promise<QueryResult>;
 ```
 
-Defined in: DBHandler.ts:232
+Defined in: DBHandler.ts:237
 
 Execute a query on writer pool (for withWriter context)
 
@@ -152,7 +152,7 @@ Execute a query on writer pool (for withWriter context)
 hasWriterPool(): boolean;
 ```
 
-Defined in: DBHandler.ts:242
+Defined in: DBHandler.ts:247
 
 Check if writer pool is configured
 
@@ -168,7 +168,7 @@ Check if writer pool is configured
 getConnection(): Promise<DBConnection>;
 ```
 
-Defined in: DBHandler.ts:249
+Defined in: DBHandler.ts:254
 
 Get a connection from the pool (for transactions)
 
@@ -184,7 +184,7 @@ Get a connection from the pool (for transactions)
 withConnection(connection: DBConnection): DBHandler;
 ```
 
-Defined in: DBHandler.ts:256
+Defined in: DBHandler.ts:261
 
 Create handler with specific connection (for transaction)
 
@@ -206,7 +206,7 @@ Create handler with specific connection (for transaction)
 close(): Promise<void>;
 ```
 
-Defined in: DBHandler.ts:268
+Defined in: DBHandler.ts:273
 
 Close all connections
 
@@ -222,7 +222,7 @@ Close all connections
 setLogger(logger: Logger): void;
 ```
 
-Defined in: DBHandler.ts:275
+Defined in: DBHandler.ts:280
 
 Set logger
 
@@ -244,7 +244,7 @@ Set logger
 getPool(): unknown;
 ```
 
-Defined in: DBHandler.ts:284
+Defined in: DBHandler.ts:289
 
 Get the underlying PostgreSQL pool (for backward compatibility)
 
