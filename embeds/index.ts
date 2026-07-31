@@ -154,11 +154,44 @@ const codeSnippet = defineEmbed({
   },
 });
 
+// ── package_version: the release the published numbers belong to ─────────────
+//
+// The benchmark pages declare their numbers machine-derived — and "which version was measured" is
+// just as much a factual claim about the data as the medians are. Hand-typed, it went stale silently
+// (the tables were re-run while the prose still said an older release), because the drift gate only
+// regenerates embed REGIONS and prose outside the markers is invisible to it. So the version is read
+// from package.json — the release SSoT that scripts/sync-versions.mjs propagates to every language
+// runtime — and rendered inside a region the gate covers.
+//
+// Only the version and package name are generated. The measurement ENVIRONMENT (DB version, CPU) is
+// recorded nowhere in the repo — not in the CSV, whose columns are Operation/ORM/Median/IQR/StdDev/
+// Min/Max/Iterations — so it stays hand-written prose outside the markers rather than being dressed
+// up as machine-derived by hard-coding it here.
+//
+// Params (marker attributes):
+//   label  lead-in shown before the version (default: `Version`)
+const packageVersion = defineEmbed({
+  async render(ctx) {
+    const params = ctx.params as Record<string, string | undefined>;
+    const label = params['label'] ?? 'Version';
+    const pkg: unknown = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8'));
+    const name = (pkg as { name?: unknown }).name;
+    const version = (pkg as { version?: unknown }).version;
+    // A missing/blank field must never render as `undefined` or an empty bold run that reads like a
+    // version — an unreadable SSoT is a build failure, not a plausible-looking string.
+    if (typeof name !== 'string' || name === '' || typeof version !== 'string' || version === '') {
+      throw new Error('package_version: package.json has no usable `name` / `version`');
+    }
+    return { content: `**${label}:** ${name} **${version}**` };
+  },
+});
+
 // embedoc expects `embeds` export
 export const embeds = {
   benchmark_table: benchmarkTable,
   benchmark_summary: benchmarkSummary,
   code_snippet: codeSnippet,
+  package_version: packageVersion,
 };
 
 // For direct import compatibility
