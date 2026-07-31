@@ -46,7 +46,7 @@
     "docker:up": "docker compose -f docker-compose.test.yml up -d",
     "docker:down": "docker compose -f docker-compose.test.yml down",
     "docker:reset": "docker compose -f docker-compose.test.yml down -v && docker compose -f docker-compose.test.yml up -d",
-    "test:integration:docker": "docker compose -f docker-compose.test.yml run --rm test-integration; e=$?; npm run docker:down; exit $e",
+    "test:integration:docker": "docker compose -f docker-compose.test.yml run --rm --build test-integration; e=$?; npm run docker:down; exit $e",
     "sync:versions": "node scripts/sync-versions.mjs",
     "sync:versions:check": "node scripts/sync-versions.mjs --check",
     "deps:check": "node scripts/check-no-local-deps.mjs",
