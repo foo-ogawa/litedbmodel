@@ -27,6 +27,7 @@ import os
 import sys
 import time
 from contextlib import contextmanager
+from functools import lru_cache
 from typing import Any, Callable, Dict, List
 
 # The shared seed-SSoT loader lives at the python/ root (one dir above this package) — anchor its import
@@ -57,7 +58,11 @@ _GENERATED = {"sqlite": behaviors_sqlite, "postgres": behaviors_postgres, "mysql
 #    the harness measures the GENERATED op callables, it does not hand-write the seed. ──
 # The seed SSoT is PER TARGET DB (#156): `benchmark/crosslang/.setup/<dialect>.json`, emitted from the
 # one `orm-domain.ts`. `setup_for` is the only reader; nothing here hand-writes a schema or a seed.
-def setup_for(dialect: str) -> Dict[str, List[str]]:
+@lru_cache(maxsize=None)
+def setup_for(dialect: str) -> Dict[str, Any]:
+    # Cached: the doc is immutable for the life of a run, and it is now read per OP (for `inputs`) as
+    # well as per re-seed, so re-parsing a fixture of ~260 literal INSERT statements each time would be
+    # measured as the cell's own cost.
     return lm_bench_setup.load(dialect)
 
 
@@ -88,46 +93,12 @@ BATCH_QUERY_COUNTS: Dict[str, int] = {"createMany": 1, "upsertMany": 1, "updateM
 TX_STMT_COUNTS: Dict[str, int] = {"nestedCreate": 4, "nestedUpsert": 4, "nestedUpdate": 4, "delete": 4}
 
 
-def _user_rows(it: int, stable: bool) -> List[Dict[str, Any]]:
-    """The 10-row batch record set for createMany/upsertMany (ONE opaque `rows` array — the
-    json_each/JSON_TABLE batch param). `stable` reuses fixed emails (upsertMany — conflict-updates);
-    else the email varies by iteration so a plain INSERT stays insertable under UNIQUE(email)."""
-    return [
-        {"email": (f"many{i}@bench.com" if stable else f"many{it}_{i}@bench.com"), "name": f"Many {i}"}
-        for i in range(10)
-    ]
-
-
-def op_input(op: str, it: int) -> Dict[str, Any]:
-    """The per-op input scope (the emitter-declared `value` input ports). Mutating ops vary their UNIQUE
-    column by iteration (matching the rust bench cell); a read with no input ports gets `{}`."""
-    if op == "filterPaginateSort":
-        return {"published": 1}
-    if op in ("findFirst", "nestedFindFirst"):
-        return {"name": "User%"}
-    if op in ("findUnique", "nestedFindUnique"):
-        return {"email": "user1@example.com"}
-    if op == "create":
-        return {"email": f"new{it}@bench.com", "name": "New"}
-    if op == "update":
-        return {"id": 1, "name": "Updated 1"}
-    if op == "upsert":
-        return {"email": "user1@example.com", "name": "Upserted One"}
-    if op == "createMany":
-        return {"rows": _user_rows(it, stable=False)}
-    if op == "upsertMany":
-        return {"rows": _user_rows(it, stable=True)}
-    if op == "updateMany":
-        return {"rows": [{"id": i, "name": f"Many {i}"} for i in range(1, 11)]}
-    if op == "nestedCreate":
-        return {"email": f"nc{it}@bench.com", "name": "NC", "title": "NC Post"}
-    if op == "nestedUpsert":
-        return {"email": "user1@example.com", "name": "NUp", "title": "NUp Post"}
-    if op == "nestedUpdate":
-        return {"id": 1, "name": "NU", "title": "NU Post"}
-    if op == "delete":
-        return {"email": f"del{it}@bench.com", "name": "Del"}
-    return {}
+def op_input(dialect: str, op: str, it: int) -> Dict[str, Any]:
+    """The per-op input scope (the emitter-declared `value` input ports), from the ONE artifact every
+    cell reads. Declared in benchmark/crosslang/contract.ts, so this cell and its SDK twin — and the
+    eight cells in the other four languages — bind the same values; a read with no input ports gets
+    `{}`. `{it}` resolution keeps an op with a UNIQUE column insertable across a timed loop."""
+    return lm_bench_setup.op_input(setup_for(dialect), op, it)
 
 
 def open_driver(dialect: str) -> Any:
@@ -180,11 +151,11 @@ def bound_ops(driver: Any, dialect: str) -> Dict[str, Callable[..., Any]]:
     return module.bind(make_handlers(driver, dialect))
 
 
-def run_op(fns: Dict[str, Callable[..., Any]], driver: Any, op: str, it: int) -> Any:
+def run_op(fns: Dict[str, Callable[..., Any]], driver: Any, dialect: str, op: str, it: int) -> Any:
     """Run ONE covered op through its generated callable. A RETURNING-chained tx op runs THROUGH the
     runtime tx boundary (with_transaction over the driver ctx) so BEGIN/COMMIT bracket the leaf's body
     statements on the tx-owned connection; every other op runs the bound callable directly."""
-    inp = op_input(op, it)
+    inp = op_input(dialect, op, it)
     if op in TX_OPS:
         return with_transaction(as_context(driver), lambda _tx_ctx: fns[op](inp))
     return fns[op](inp)
@@ -199,13 +170,13 @@ def _measure(dialect: str, reps: int, warmup: int) -> None:
         # denominator (#170). The counting middleware is unregistered before the timed loop.
         rows = probe(driver, fns, dialect, op)["rows"]
         for it in range(warmup):
-            run_op(fns, driver, op, it + 1)
+            run_op(fns, driver, dialect, op, it + 1)
         for it in range(reps):
             # Unique iteration id: the probe took 0, so warmup/timed start at 1 (a UNIQUE-email op must
             # never see an id twice).
             g = it + warmup + 1
             t = time.perf_counter_ns()
-            run_op(fns, driver, op, g)
+            run_op(fns, driver, dialect, op, g)
             us = (time.perf_counter_ns() - t) // 1000
             print(f"native,{dialect},{op},{it},{us},{rows}")
 
@@ -243,7 +214,7 @@ def probe(driver: Any, fns: Dict[str, Callable[..., Any]], dialect: str, op: str
     and the report's per-row denominator, measured in one place."""
     seed(driver, dialect)  # clean fixture; not counted (runs off-seam)
     with _counters() as tally:
-        run_op(fns, driver, op, 0)
+        run_op(fns, driver, dialect, op, 0)
         return dict(tally)
 
 
@@ -256,6 +227,7 @@ def _safety(dialect: str) -> None:
         got = probe(driver, fns, dialect, op)
         want = expected.get(op)
         mark = "ok" if want is None or got["stmts"] == want else f"STATEMENT-COUNT MISMATCH (want {want})"
+        print(f"proof,native,{dialect},{op},{got['stmts']},{got['rows']}")
         print(f"{op:<20}  {got['stmts']:<10}  {got['rows']:<6} {mark}")
         assert want is None or got["stmts"] == want, f"{op} statement-count regression: got {got['stmts']}, expect {want}"
 

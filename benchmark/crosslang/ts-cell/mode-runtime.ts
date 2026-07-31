@@ -13,9 +13,9 @@ import 'reflect-metadata';
 import { DBModel, closeAllPools, column, model, hasMany, belongsTo, type ColumnsOf } from '../../../dist/index.cjs';
 import { clearMiddlewares, createMiddleware, use } from '../../../dist/scp/index.mjs';
 
-import { EXPECTED_STATEMENTS, inputFor, userRows, updateManyRows } from './inputs.js';
+import { EXPECTED_STATEMENTS } from './expectations.js';
 import type { Cell, Dialect } from './cell.js';
-import { MYSQL_CONFIG, PG_CONFIG, SQLITE_CONFIG, setupFor } from './cell.js';
+import { MYSQL_CONFIG, PG_CONFIG, SQLITE_CONFIG, resolveInput, setupFor } from './cell.js';
 
 // The six benchmark models. Every relation property is `declare`: with `useDefineForClassFields` (the
 // default at target ES2022) a plain `posts?: Promise<Post[]>` emits a class FIELD, which defines an own
@@ -163,7 +163,7 @@ export async function openRuntime(dialect: Dialect): Promise<Cell> {
   for (const stmt of setup.schema) await raw(stmt);
 
   async function runOp(op: string, it: number): Promise<void> {
-    const input = inputFor(op, it) as Record<string, never>;
+    const input = resolveInput(setup, op, it) as Record<string, never>;
     switch (op) {
       case 'findAll':
         rows += (await User.find([], { limit: 100, order: User.id.asc() })).length;
@@ -272,7 +272,7 @@ export async function openRuntime(dialect: Dialect): Promise<Cell> {
       case 'upsertMany': {
         // `records`, not `rows`: a local named `rows` here SHADOWS this cell's row accumulator, so an
         // arm that later needs to tally would silently count nothing.
-        const records = userRows(it, op === 'upsertMany').map(
+        const records = (input.rows as { email: string; name: string }[]).map(
           (r) =>
             [
               [User.email, r.email],
@@ -287,7 +287,7 @@ export async function openRuntime(dialect: Dialect): Promise<Cell> {
         return;
       }
       case 'updateMany': {
-        const records = updateManyRows().map(
+        const records = (input.rows as { id: bigint; name: string }[]).map(
           (r) =>
             [
               [User.id, r.id],

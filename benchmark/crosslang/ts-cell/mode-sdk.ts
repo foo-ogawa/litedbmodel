@@ -16,11 +16,32 @@ import { Pool as PgPool } from 'pg';
 import mysql from 'mysql2/promise';
 import type { ResultSetHeader, RowDataPacket } from 'mysql2/promise';
 
-import { inputFor, userRows, updateManyRows } from './inputs.js';
-import type { Cell, Dialect } from './cell.js';
-import { MYSQL_CONFIG, PG_CONFIG, setupFor } from './cell.js';
+import type { Cell, Dialect, Recovery, RecoveryBind, Setup } from './cell.js';
+import { MYSQL_CONFIG, PG_CONFIG, resolveInput, setupFor } from './cell.js';
 
 type Row = Record<string, unknown>;
+
+/** What a driver reports about a write. `insertId` is MySQL's/SQLite's; PostgreSQL has no such thing. */
+interface WriteResult {
+  readonly insertId?: number;
+  readonly affected: number;
+}
+
+/**
+ * The recovering SELECT's params, resolved from the write's own params and what the driver reported —
+ * the `bindReselect` of `src/scp/makesql/mysql-returning.ts`, which is where these three kinds are
+ * defined. A kind whose input the driver did not supply is a HARD failure: recovering the wrong rows
+ * silently is the defect this whole path exists to remove.
+ */
+function bindRecovery(binds: readonly RecoveryBind[], params: readonly unknown[], wrote: WriteResult): unknown[] {
+  return binds.map((b) => {
+    if (b.kind === 'param') return params[b.index];
+    if (wrote.insertId === undefined) {
+      throw new Error(`the recovery binds '${b.kind}', but this driver reported no insert id for the write`);
+    }
+    return b.kind === 'lastId' ? wrote.insertId : wrote.insertId + Math.max(1, wrote.affected);
+  });
+}
 
 /**
  * The ONE exec seam. Every statement rides these methods, so the counter (the safety proof) and the
@@ -51,7 +72,7 @@ abstract class Db {
     return out;
   }
   protected abstract fetch(sql: string, params: readonly unknown[]): Promise<Row[]>;
-  abstract exec(sql: string, params?: readonly unknown[]): Promise<void>;
+  abstract exec(sql: string, params?: readonly unknown[]): Promise<WriteResult>;
   abstract close(): Promise<void>;
 
   /**
@@ -59,25 +80,21 @@ abstract class Db {
    * declares ` RETURNING id` — the baseline reads the same row back rather than taking a free
    * last-insert-id off the driver's result metadata.
    *
-   * MySQL cannot parse RETURNING: the runtime's mysql adapter strips the clause (and the
-   * `/*scp:pk=…*\/` hint that names the key) and recovers the written rows with a keyed SELECT on the
-   * same connection (src/scp/makesql/mysql-returning.ts). `recoverSql` is that same recovery, and it
-   * belongs to the SAME logical statement — the runtime's seam counts a MySQL RETURNING write as one (it
-   * issues the recovery below the seam) while counting the row it recovers — so its rows are tallied and
-   * the statement count is not bumped a second time.
+   * `recovery` is the artifact's entry for this statement: null wherever the database executes the
+   * RETURNING itself, and on MySQL — which cannot parse it — the write with the clause stripped plus
+   * the keyed SELECT that recovers the written rows. Both come from the library's own
+   * `buildMysqlReselect` (`derive-ops.ts`), so the baseline issues exactly what the runtime issues
+   * instead of a hand-copied guess at it. The recovery belongs to the SAME logical statement — the
+   * runtime's seam counts a MySQL RETURNING write as one and issues the recovery below itself — so its
+   * rows are tallied and the statement count is not bumped a second time.
    */
-  async writeReturningId(
-    sql: string,
-    params: readonly unknown[],
-    recoverSql: string,
-    recoverParams: readonly unknown[],
-  ): Promise<number> {
-    if (this.dialect !== 'mysql') {
+  async writeReturningId(sql: string, params: readonly unknown[], recovery: Recovery | null): Promise<number> {
+    if (recovery === null) {
       const rows = await this.query(sql, params);
       return Number(rows[0].id);
     }
-    await this.exec(sql.replace(/\s+RETURNING\s+[\s\S]*$/i, ''), params);
-    const rows = await this.recoverRows(recoverSql, recoverParams);
+    const wrote = await this.exec(recovery.writeSql, params);
+    const rows = await this.recoverRows(recovery.selectSql, bindRecovery(recovery.binds, params, wrote));
     return Number(rows[0].id);
   }
 
@@ -102,10 +119,14 @@ class SqliteDb extends Db {
   protected async fetch(sql: string, params: readonly unknown[]): Promise<Row[]> {
     return this.prep(sql).all(...(params as unknown[])) as Row[];
   }
-  async exec(sql: string, params: readonly unknown[] = []): Promise<void> {
+  async exec(sql: string, params: readonly unknown[] = []): Promise<WriteResult> {
     this.count++;
-    if (params.length === 0 && /^\s*(BEGIN|COMMIT|ROLLBACK)/i.test(sql)) this.db.exec(sql);
-    else this.prep(sql).run(...(params as unknown[]));
+    if (params.length === 0 && /^\s*(BEGIN|COMMIT|ROLLBACK)/i.test(sql)) {
+      this.db.exec(sql);
+      return { affected: 0 };
+    }
+    const info = this.prep(sql).run(...(params as unknown[]));
+    return { insertId: Number(info.lastInsertRowid), affected: info.changes };
   }
   async close(): Promise<void> {
     this.db.close();
@@ -122,9 +143,12 @@ class PgDb extends Db {
     const r = await this.pool.query({ text: this.render(sql), values: params as unknown[], name: cacheName(sql) });
     return r.rows as Row[];
   }
-  async exec(sql: string, params: readonly unknown[] = []): Promise<void> {
+  async exec(sql: string, params: readonly unknown[] = []): Promise<WriteResult> {
     this.count++;
-    await this.pool.query({ text: this.render(sql), values: params as unknown[], name: cacheName(sql) });
+    const r = await this.pool.query({ text: this.render(sql), values: params as unknown[], name: cacheName(sql) });
+    // No `insertId`: PostgreSQL has no last-insert-id, and it never needs one — it executes the
+    // declared RETURNING itself, so no statement of its artifact carries a recovery.
+    return { affected: r.rowCount ?? 0 };
   }
   async close(): Promise<void> {
     await this.pool.end();
@@ -139,10 +163,13 @@ class MysqlDb extends Db {
     const [rows] = await this.pool.execute<RowDataPacket[]>(sql, params as never[]); // `execute` = server-side prepared + cached
     return rows as Row[];
   }
-  async exec(sql: string, params: readonly unknown[] = []): Promise<void> {
+  async exec(sql: string, params: readonly unknown[] = []): Promise<WriteResult> {
     this.count++;
-    if (params.length === 0) await this.pool.query(sql);
-    else await this.pool.execute(sql, params as never[]);
+    const [header] =
+      params.length === 0
+        ? await this.pool.query<ResultSetHeader>(sql)
+        : await this.pool.execute<ResultSetHeader>(sql, params as never[]);
+    return { insertId: header.insertId, affected: header.affectedRows };
   }
   async close(): Promise<void> {
     await this.pool.end();
@@ -251,28 +278,19 @@ async function compositeGraph(db: Db, sql: readonly string[]): Promise<Row[]> {
  * `UNNEST(?::text[], ?::text[])` form takes column arrays rather than a record array. `updateMany` binds
  * the same payload once per `?` (its SET subquery and its WHERE each read it).
  */
-function batchParams(db: Db, rows: readonly object[], sqlForArity?: string): unknown[] {
-  const cols = Object.keys(rows[0]) as (keyof (typeof rows)[number])[];
+function batchParams(db: Db, rows: readonly Row[], sql: string, columns: readonly string[]): unknown[] {
   const one =
     db.dialect === 'postgres'
-      ? cols.map((c) => pgArrayLiteral(rows.map((r) => (r as Record<string, unknown>)[c])))
+      ? // One array per column, in the order the statement's own `UNNEST` alias list names them
+        // (`setup.batchColumns`, read off the statement by derive-ops.ts). Deriving the order from the
+        // record instead is what made go sort its keys and rust pin a tuple position.
+        columns.map((c) => pgArrayLiteral(rows.map((r) => r[c])))
       : // A bc `int` input is a BigInt, which `JSON.stringify` refuses; the JSON batch param carries it as
         // a number, exactly as the runtime's own encoder does (src/scp/makesql/json-array.ts).
         [JSON.stringify(rows, (_k, v: unknown) => (typeof v === 'bigint' ? Number(v) : v))];
-  const arity = sqlForArity === undefined ? 1 : (sqlForArity.match(/\?/g) ?? ['?']).length / one.length;
+  const arity = (sql.match(/\?/g) ?? ['?']).length / one.length;
   return Array.from({ length: Math.max(1, Math.round(arity)) }, () => one).flat();
 }
-
-/**
- * The keyed SELECTs the runtime's MySQL adapter recovers a RETURNING write's rows with
- * (src/scp/makesql/mysql-returning.ts): the conflict key for an upsert, the AUTO_INCREMENT range for an
- * insert, the write's own WHERE for an update. Only MySQL runs them — the other dialects have RETURNING.
- */
-const RECOVER = {
-  byEmail: 'SELECT id FROM benchmark_users WHERE email = ?',
-  byLastInsertId: 'SELECT id FROM benchmark_users WHERE id = LAST_INSERT_ID()',
-  byId: 'SELECT id FROM benchmark_users WHERE id = ?',
-} as const;
 
 /** `UserRow` — the row type the native module declares for the user projections. */
 function userRow(r: Row): { id: number; email: unknown; name: unknown } {
@@ -309,8 +327,17 @@ let sink: unknown;
  * What stays hand-written here is what a raw-driver user actually writes: the param binding, the decode,
  * the grouping of children into parents, and the transaction bracket.
  */
-async function runOp(db: Db, op: string, it: number, sql: readonly string[]): Promise<void> {
-  const input = inputFor(op, it) as Record<string, never>;
+async function runOp(db: Db, setup: Setup, op: string, it: number): Promise<void> {
+  const sql = setup.ops[op];
+  const input = resolveInput(setup, op, it) as Record<string, never>;
+  /** This statement's MySQL RETURNING recovery — null wherever the database executes RETURNING itself. */
+  const recovery = (i: number): Recovery | null => setup.recover?.[op]?.[i] ?? null;
+  /** The columns this batch statement reads, in its own order (PostgreSQL binds one array per column). */
+  const columns = (): readonly string[] => {
+    const cols = setup.batchColumns?.[op];
+    if (cols === undefined) throw new Error(`.setup/${setup.dialect}.json declares no batchColumns for ${op}`);
+    return cols;
+  };
   switch (op) {
     // A read is only usable as data once its columns are in typed fields, so the baseline materializes the
     // same row objects the native cell de-boxes into; stopping at the driver's row would compare a decode
@@ -350,27 +377,25 @@ async function runOp(db: Db, op: string, it: number, sql: readonly string[]): Pr
       return;
     case 'upsert':
       // The generated statement declares ` RETURNING id`, so the baseline reads the id back too.
-      sink = await db.writeReturningId(sql[0], [input.email, input.name], RECOVER.byEmail, [input.email]);
+      sink = await db.writeReturningId(sql[0], [input.email, input.name], recovery(0));
       return;
     case 'createMany':
     case 'upsertMany':
-      // ONE statement for the 10 records, the whole record set as ONE JSON param — the batch form the
-      // generated module uses (json_each / JSON_TABLE / UNNEST), not a multi-row VALUES list.
-      await db.exec(sql[0], batchParams(db, userRows(it, op === 'upsertMany')));
-      return;
     case 'updateMany':
-      await db.exec(sql[0], batchParams(db, updateManyRows(), sql[0]));
+      // ONE statement for the 10 records, the whole record set as ONE param set — the batch form the
+      // generated module uses (json_each / JSON_TABLE / UNNEST), not a multi-row VALUES list.
+      await db.exec(sql[0], batchParams(db, input.rows as readonly Row[], sql[0], columns()));
       return;
     case 'nestedCreate': {
       await db.exec('BEGIN');
-      const uid = await db.writeReturningId(sql[0], [input.email, input.name], RECOVER.byLastInsertId, []);
+      const uid = await db.writeReturningId(sql[0], [input.email, input.name], recovery(0));
       await db.exec(sql[1], [uid, input.title]);
       await db.exec('COMMIT');
       return;
     }
     case 'nestedUpsert': {
       await db.exec('BEGIN');
-      const uid = await db.writeReturningId(sql[0], [input.email, input.name], RECOVER.byEmail, [input.email]);
+      const uid = await db.writeReturningId(sql[0], [input.email, input.name], recovery(0));
       await db.exec(sql[1], [uid, input.title]);
       await db.exec('COMMIT');
       return;
@@ -379,14 +404,14 @@ async function runOp(db: Db, op: string, it: number, sql: readonly string[]): Pr
       await db.exec('BEGIN');
       // The generated runner chains the dependent UPDATE off the id the first UPDATE returned; taking the
       // id from the input instead would skip a statement's worth of work.
-      const uid = await db.writeReturningId(sql[0], [input.name, input.id], RECOVER.byId, [input.id]);
+      const uid = await db.writeReturningId(sql[0], [input.name, input.id], recovery(0));
       await db.exec(sql[1], [input.title, uid]);
       await db.exec('COMMIT');
       return;
     }
     case 'delete': {
       await db.exec('BEGIN');
-      const uid = await db.writeReturningId(sql[0], [input.email, input.name], RECOVER.byLastInsertId, []);
+      const uid = await db.writeReturningId(sql[0], [input.email, input.name], recovery(0));
       await db.exec(sql[1], [uid]);
       await db.exec('COMMIT');
       return;
@@ -438,7 +463,7 @@ export async function openSdk(dialect: Dialect): Promise<Cell> {
         else await (db as MysqlDb).pool.query(stmt);
       }
     },
-    run: (op, it) => runOp(db, op, it, setup.ops[op]),
+    run: (op, it) => runOp(db, setup, op, it),
     close: () => db.close(),
     statements: () => db.count,
     rows: () => db.rows,

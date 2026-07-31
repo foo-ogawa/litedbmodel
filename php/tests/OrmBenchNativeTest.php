@@ -67,7 +67,9 @@ final class OrmBenchNativeTest extends TestCase
         $this->assertCount(100, $this->op('findAll')); // the op's LIMIT 100 over the seed SSoT
         $unique = $this->op('findUnique');
         $this->assertCount(1, $unique);
-        $this->assertSame('user1@example.com', $unique[0]->email);
+        // The declared input for this op (benchmark/crosslang/contract.ts) — the row the fixture is
+        // built to answer and the row the ORM-vs-ORM column reads.
+        $this->assertSame('user500@example.com', $unique[0]->email);
         $this->assertCount(1, $this->op('findFirst'));
     }
 

@@ -46,7 +46,7 @@ export interface Cell {
   resetCounters(): void;
   /**
    * This mode's expected statement count per op, when it differs from the shared
-   * {@link import('./inputs.js').EXPECTED_STATEMENTS}. The runtime path refuses a write outside a
+   * {@link import('./expectations.js').EXPECTED_STATEMENTS}. The runtime path refuses a write outside a
    * transaction (WriteOutsideTransactionError — its safe-operation policy), so every single-row write
    * there really is BEGIN + statement + COMMIT. That is a property of the path, and the bench reports
    * it rather than hiding it behind a relaxed assertion.
@@ -94,6 +94,72 @@ export interface Setup {
    * statements. SQL is a property of the dialect, not of the language.
    */
   readonly ops: Record<string, string[]>;
+  /**
+   * The values each op binds, from the axis SSoT (`contract.ts` `ORM_OPS[].input`). Declared rather
+   * than captured — they are what the cells SUPPLY — and read here so no cell spells them out: two
+   * cells that bind different values are doing different work even when they issue the same SQL, and
+   * that is exactly what rows/op parity cannot see (#172).
+   *
+   * `{it}` inside a string is the iteration number ({@link resolveInput}).
+   */
+  readonly inputs: Record<string, Record<string, InputValue>>;
+  /**
+   * Per op, one entry per statement in {@link ops}: the MySQL RETURNING recovery, or null when the
+   * statement needs none. Absent for PostgreSQL and SQLite, which execute the declared `RETURNING id`
+   * as written. Derived from the captured write by the library's own `buildMysqlReselect`
+   * (`derive-ops.ts` → `src/scp/makesql/mysql-returning.ts`), never hand-copied.
+   */
+  readonly recover?: Record<string, (Recovery | null)[]>;
+  /**
+   * Per batch-write op, the columns its statement reads. PostgreSQL's `UNNEST` binds one array PER
+   * COLUMN, so the ORDER is the statement's; MySQL and SQLite read one JSON payload by name, so for
+   * them it is a set. Read off the statement (`derive-ops.ts`) — guessing it is what made go sort its
+   * record keys and rust rely on a tuple position.
+   */
+  readonly batchColumns?: Record<string, string[]>;
+}
+
+/** One declared input value: a scalar, or a batch write's record set. */
+export type InputValue = string | number | Record<string, string | number>[];
+
+/** How ONE `?` of a recovering SELECT is bound — the vocabulary of `ReselectBind`. */
+export type RecoveryBind = { kind: 'param'; index: number } | { kind: 'lastId' } | { kind: 'highId' };
+
+/** A write's MySQL RETURNING recovery: run `writeSql`, then fetch `selectSql` bound per `binds`. */
+export interface Recovery {
+  readonly writeSql: string;
+  readonly selectSql: string;
+  readonly binds: readonly RecoveryBind[];
+}
+
+/**
+ * One op's inputs with `{it}` resolved — the ONE substitution the artifact carries, so an op with a
+ * UNIQUE column stays insertable across a timed loop.
+ *
+ * A batch record's INTEGER column comes back as a JS `bigint`: the authored model declares those
+ * columns `Int`, and bc's `int` value model on the TypeScript plane is a BigInt — a JS number is
+ * classified as a FLOAT and the op fails its outType check (`expected int, got float`). Top-level
+ * scalars stay numbers, which is what the typed ports take. The other four languages pass a native
+ * int64 already.
+ */
+export function resolveInput(setup: Setup, op: string, it: number): Record<string, unknown> {
+  const declared = setup.inputs[op];
+  if (declared === undefined) throw new Error(`.setup/${setup.dialect}.json declares no inputs for op ${op}`);
+  const text = (v: string): string => v.replace(/\{it\}/g, String(it));
+  return Object.fromEntries(
+    Object.entries(declared).map(([name, value]) => {
+      if (typeof value === 'string') return [name, text(value)];
+      if (typeof value === 'number') return [name, value];
+      return [
+        name,
+        value.map((record) =>
+          Object.fromEntries(
+            Object.entries(record).map(([col, v]) => [col, typeof v === 'string' ? text(v) : BigInt(v)]),
+          ),
+        ),
+      ];
+    }),
+  );
 }
 
 const HERE = dirname(fileURLToPath(import.meta.url));

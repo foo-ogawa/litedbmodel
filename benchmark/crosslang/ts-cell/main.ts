@@ -12,7 +12,7 @@
 // TEST_* environment, like every other cell.
 
 import { ORM_OPS } from '../contract.js';
-import { EXPECTED_STATEMENTS, TX_OPS } from './inputs.js';
+import { EXPECTED_STATEMENTS, TX_OPS } from './expectations.js';
 import { DIALECTS, MODES, type Cell, type Dialect, type Mode } from './cell.js';
 import { openCodegen } from './mode-codegen.js';
 import { openSdk } from './mode-sdk.js';
@@ -56,6 +56,9 @@ async function safety(mode: Mode, dialect: Dialect): Promise<number> {
       const want = expected[op];
       const kind = TX_OPS.has(op) ? 'statements (BEGIN + body + COMMIT)' : 'statements';
       const rows = cell.rows();
+      // The machine-readable half, in the ONE format every cell prints, so `run-cells.sh` can hold the
+      // ten cells to the same statements and rows per op instead of ten human tables being eyeballed.
+      console.log(`proof,${CSV_CELL[mode]},${dialect},${op},${got},${rows ?? ''}`);
       const rowNote = `rows=${rows ?? '—'}`;
       if (got !== want) {
         console.log(`${op.padEnd(20)} ${kind}=${got} MISMATCH (expect ${want})  ${rowNote}`);
