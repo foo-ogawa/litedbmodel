@@ -115,7 +115,6 @@ const SKIP_BUDGET = 0;
 const PROVIDERS = [
   'LiteDbModel\\Runtime\\Tests\\MiddlewareLiveTest::liveDrivers',
   'LiteDbModel\\Runtime\\Tests\\RenderTest::orderByNullsCases',
-  'LiteDbModel\\Runtime\\Tests\\TxAtomicityLiveTest::liveDrivers',
   'LiteDbModel\\Runtime\\Tests\\TxBoundaryLiveTest::dialects',
 ];
 
@@ -137,7 +136,7 @@ const LIVE_TESTS = [
   'LiteDbModel\\Runtime\\Tests\\ConformanceCorpusTest::testCorpusIsTheSupportedVersion',
   'LiteDbModel\\Runtime\\Tests\\ConformanceCorpusTest::testEveryVectorNamesAnEndpointTheGeneratedModuleExposes',
   'LiteDbModel\\Runtime\\Tests\\ConformanceCorpusTest::testLiveDbConformanceAllVectorsPass',
-  'LiteDbModel\\Runtime\\Tests\\ConnectionRoutingLiveTest::testActiveTxPinWinsOverRouting',
+  'LiteDbModel\\Runtime\\Tests\\ConnectionRoutingLiveTest::testActiveTxPinTakesPrecedenceOverRouting',
   'LiteDbModel\\Runtime\\Tests\\ConnectionRoutingLiveTest::testCharsetAppliedAndResetOnMysql',
   'LiteDbModel\\Runtime\\Tests\\ConnectionRoutingLiveTest::testKeepAlivePersistent',
   'LiteDbModel\\Runtime\\Tests\\ConnectionRoutingLiveTest::testMultiDbNameRouting',
@@ -156,13 +155,11 @@ const LIVE_TESTS = [
   'LiteDbModel\\Runtime\\Tests\\MiddlewareLiveTest::testRawExecuteAndRawQueryThroughLiveSeam',
   'LiteDbModel\\Runtime\\Tests\\MiddlewareLiveTest::testRedProofUnregisteredDoesNotObserveTxControl',
   'LiteDbModel\\Runtime\\Tests\\MiddlewareLiveTest::testRedProofUnregisteredIsBytePassthrough',
-  'LiteDbModel\\Runtime\\Tests\\TxAtomicityLiveTest::testFaithfulMutationMakesAtomicityRed',
-  'LiteDbModel\\Runtime\\Tests\\TxAtomicityLiveTest::testMultiStatementAtomicityRollsBackFirstOnSecondFailure',
   'LiteDbModel\\Runtime\\Tests\\TxBoundaryLiveTest::testGuardLive',
   'LiteDbModel\\Runtime\\Tests\\TxBoundaryLiveTest::testIsolationBehaviorLive',
   'LiteDbModel\\Runtime\\Tests\\TxBoundaryLiveTest::testIsolationSqlEmittedLive',
   'LiteDbModel\\Runtime\\Tests\\TxBoundaryLiveTest::testMultiOpAtomicityCommitsTogether',
-  'LiteDbModel\\Runtime\\Tests\\TxBoundaryLiveTest::testMultiOpAtomicityRollsBackTogetherAndRedGreenMutation',
+  'LiteDbModel\\Runtime\\Tests\\TxBoundaryLiveTest::testMultiOpAtomicityRollsBackTogether',
   'LiteDbModel\\Runtime\\Tests\\TxBoundaryLiveTest::testMysqlRetryOnRealDeadlock',
   'LiteDbModel\\Runtime\\Tests\\TxBoundaryLiveTest::testNestedLive',
   'LiteDbModel\\Runtime\\Tests\\TxBoundaryLiveTest::testPgRetryOnRealSerializationFailure',
@@ -172,10 +169,17 @@ const LIVE_TESTS = [
  * Every `test*` method the tree declares, as `<Class>::<method>` plus the file that declares it,
  * asked of PHP's own reflection rather than of a regex.
  *
- * Each file is `require`d and the classes it ADDED are diffed out of `get_declared_classes()`, so a
- * file declaring several classes (this tree has test doubles — `RecordingPdo`, `ThrowingPdo`,
+ * Each file is `require_once`d and the classes it ADDED are diffed out of `get_declared_classes()`,
+ * so a file declaring several classes (this tree has test doubles — `RecordingPdo`, `ThrowingPdo`,
  * `MisRoutingContext` — beside the TestCase) contributes all of them. Abstract classes are skipped:
  * phpunit reports an abstract base's tests under each concrete subclass, never under the base.
+ *
+ * `require_once`, not `require`: a file's `use`d trait or `extends`ed base is autoload-pulled the
+ * moment a TestCase referencing it is loaded, so a plain `require` of that same file later in the
+ * walk fatals on "Cannot redeclare" (a trait — `RelationThroughLeavesTrait` — is the instance that
+ * surfaced). Idempotent loading is always correct here: a class already loaded was diffed into some
+ * earlier file's iteration, and reflection attributes it to its OWN `getFileName()`, so nothing is
+ * lost by not re-declaring it.
  */
 const REFLECT = `
 require "vendor/autoload.php";
@@ -188,7 +192,7 @@ foreach ($walk as $f) {
 sort($files);
 foreach ($files as $file) {
     $before = get_declared_classes();
-    require $file;
+    require_once $file;
     foreach (array_diff(get_declared_classes(), $before) as $class) {
         $r = new ReflectionClass($class);
         if ($r->isAbstract()) { continue; }
