@@ -43,5 +43,4 @@ futures-util = { version = "0.3", optional = true }
 
 [features]
 default = []
-native = []
 livedb = ["dep:tokio-postgres", "dep:deadpool-postgres", "dep:sqlx", "dep:tokio", "dep:futures-util", "dep:rust_decimal", "dep:chrono"]
