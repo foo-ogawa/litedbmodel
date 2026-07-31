@@ -7,7 +7,7 @@
 // (Behavior::runBehavior) — no execution logic is generated. Handlers are ALWAYS
 // injected at the boundary (IR + {effects,config,hooks} — concept.md §4.4); they
 // are never generated.
-// irFingerprint: fnv1a64:c1ea38b95f7193bc
+// irFingerprint: fnv1a64:1ab19d17f7309145
 
 declare(strict_types=1);
 
@@ -15,10 +15,10 @@ declare(strict_types=1);
 $expectedSpecVersions = ['behavior' => 6, 'expression' => 2, 'plan' => 1];
 
 // FNV-1a 64 fingerprint of the source portable IR (canonical-json discipline, #208).
-$irFingerprint = 'fnv1a64:c1ea38b95f7193bc';
+$irFingerprint = 'fnv1a64:1ab19d17f7309145';
 
 // Component names exposed by bind(), in IR declaration order.
-$componentNames = ['posts', 'postsTop', 'page', 'postsByIds', 'feed', 'pagedFeed', 'usersWithPosts', 'postsWithAuthor', 'usersWithCappedPosts', 'usersWithUncappedPosts', 'usersWithTopPosts', 'createPost', 'renamePost', 'removePost', 'createPostReturning', 'renamePostReturning', 'removePostReturning', 'restatusPostsReturning', 'removePostsByAuthorReturning', 'typedRows', 'createTags', 'removeTags', 'createDoc', 'createLine', 'createTagsReturning', 'relabelTagsReturning', 'removeTagsReturning'];
+$componentNames = ['posts', 'postsTop', 'page', 'postsByIds', 'feed', 'pagedFeed', 'optionalOnlyFeed', 'quotedOrderFeed', 'quotedWhereOrderFeed', 'viewFeed', 'usersWithPosts', 'postsWithAuthor', 'usersWithCappedPosts', 'usersWithUncappedPosts', 'usersWithTopPosts', 'createPost', 'renamePost', 'removePost', 'createPostReturning', 'renamePostReturning', 'removePostReturning', 'restatusPostsReturning', 'removePostsByAuthorReturning', 'typedRows', 'createTags', 'removeTags', 'createDoc', 'createLine', 'createTagsReturning', 'relabelTagsReturning', 'removeTagsReturning'];
 
 // The portable component-graph IR *document*, embedded as a native literal (no JSON parse at require).
 // It carries no provenance token — the require-time CompiledIr::load() below verifies the baked
@@ -433,6 +433,11 @@ $irDoc = (object) [
                                                         ],
                                                     ],
                                                 ],
+                                                "lead" => "string",
+                                                "tail" => "string",
+                                                "tailParams" => (object) [
+                                                    "arr" => "value",
+                                                ],
                                             ],
                                         ],
                                     ],
@@ -518,6 +523,11 @@ $irDoc = (object) [
                                                 ],
                                             ],
                                         ],
+                                        "lead" => "AND",
+                                        "tail" => " ORDER BY id ASC",
+                                        "tailParams" => (object) [
+                                            "arr" => [],
+                                        ],
                                     ],
                                 ],
                                 "write" => null,
@@ -532,7 +542,7 @@ $irDoc = (object) [
                                 ],
                             ],
                         ],
-                        "sql" => "SELECT id, author_id, title, status FROM conf_posts WHERE author_id = ? ORDER BY id ASC",
+                        "sql" => "SELECT id, author_id, title, status FROM conf_posts WHERE author_id = ?",
                     ],
                 ],
             ],
@@ -646,6 +656,11 @@ $irDoc = (object) [
                                                         ],
                                                     ],
                                                 ],
+                                                "lead" => "string",
+                                                "tail" => "string",
+                                                "tailParams" => (object) [
+                                                    "arr" => "value",
+                                                ],
                                             ],
                                         ],
                                     ],
@@ -731,6 +746,22 @@ $irDoc = (object) [
                                                 ],
                                             ],
                                         ],
+                                        "lead" => "AND",
+                                        "tail" => " ORDER BY id ASC LIMIT ? OFFSET ?",
+                                        "tailParams" => (object) [
+                                            "arr" => [
+                                                (object) [
+                                                    "ref" => [
+                                                        "limit",
+                                                    ],
+                                                ],
+                                                (object) [
+                                                    "ref" => [
+                                                        "offset",
+                                                    ],
+                                                ],
+                                            ],
+                                        ],
                                     ],
                                 ],
                                 "write" => null,
@@ -743,19 +774,9 @@ $irDoc = (object) [
                                         "authorId",
                                     ],
                                 ],
-                                (object) [
-                                    "ref" => [
-                                        "limit",
-                                    ],
-                                ],
-                                (object) [
-                                    "ref" => [
-                                        "offset",
-                                    ],
-                                ],
                             ],
                         ],
-                        "sql" => "SELECT id, author_id, title, status FROM conf_posts WHERE author_id = ? ORDER BY id ASC LIMIT ? OFFSET ?",
+                        "sql" => "SELECT id, author_id, title, status FROM conf_posts WHERE author_id = ?",
                     ],
                 ],
             ],
@@ -812,6 +833,782 @@ $irDoc = (object) [
                         ],
                     ],
                     "name" => "PagedFeedRow",
+                ],
+            ],
+        ],
+        (object) [
+            "body" => [
+                (object) [
+                    "component" => "executeSQL",
+                    "id" => "n0",
+                    "outType" => (object) [
+                        "arr" => (object) [
+                            "name" => "OptionalOnlyFeedRow",
+                            "obj" => (object) [
+                                "author_id" => (object) [
+                                    "opt" => "float",
+                                ],
+                                "id" => (object) [
+                                    "opt" => "float",
+                                ],
+                                "status" => (object) [
+                                    "opt" => "string",
+                                ],
+                            ],
+                        ],
+                    ],
+                    "portSchemas" => (object) [
+                        "opts" => (object) [
+                            "elemType" => (object) [
+                                "name" => "ExecOptions",
+                                "obj" => (object) [
+                                    "db" => (object) [
+                                        "opt" => "string",
+                                    ],
+                                    "guard" => (object) [
+                                        "opt" => (object) [
+                                            "name" => "CapGuard",
+                                            "obj" => (object) [
+                                                "limit" => "int",
+                                                "model" => (object) [
+                                                    "opt" => "string",
+                                                ],
+                                                "relation" => "string",
+                                            ],
+                                        ],
+                                    ],
+                                    "whereDynamic" => (object) [
+                                        "opt" => (object) [
+                                            "name" => "DynamicWherePlan",
+                                            "obj" => (object) [
+                                                "frags" => (object) [
+                                                    "arr" => (object) [
+                                                        "name" => "DynamicWhereFrag",
+                                                        "obj" => (object) [
+                                                            "params" => (object) [
+                                                                "arr" => (object) [
+                                                                    "opt" => "value",
+                                                                ],
+                                                            ],
+                                                            "skipped" => "bool",
+                                                            "sql" => "string",
+                                                        ],
+                                                    ],
+                                                ],
+                                                "lead" => "string",
+                                                "tail" => "string",
+                                                "tailParams" => (object) [
+                                                    "arr" => "value",
+                                                ],
+                                            ],
+                                        ],
+                                    ],
+                                    "write" => (object) [
+                                        "opt" => (object) [
+                                            "name" => "WriteMode",
+                                            "obj" => (object) [
+                                                "returning" => "bool",
+                                            ],
+                                        ],
+                                    ],
+                                ],
+                            ],
+                            "required" => false,
+                            "type" => "object",
+                        ],
+                        "params" => (object) [
+                            "elemType" => "value",
+                            "required" => true,
+                            "type" => "array",
+                        ],
+                        "sql" => (object) [
+                            "required" => true,
+                            "type" => "string",
+                        ],
+                    ],
+                    "ports" => (object) [
+                        "opts" => (object) [
+                            "obj" => (object) [
+                                "db" => null,
+                                "guard" => null,
+                                "whereDynamic" => (object) [
+                                    "obj" => (object) [
+                                        "frags" => (object) [
+                                            "arr" => [
+                                                (object) [
+                                                    "obj" => (object) [
+                                                        "params" => (object) [
+                                                            "arr" => [
+                                                                (object) [
+                                                                    "ref" => [
+                                                                        "authorId",
+                                                                    ],
+                                                                ],
+                                                            ],
+                                                        ],
+                                                        "skipped" => (object) [
+                                                            "eq" => [
+                                                                (object) [
+                                                                    "ref" => [
+                                                                        "authorId",
+                                                                    ],
+                                                                ],
+                                                                null,
+                                                            ],
+                                                        ],
+                                                        "sql" => "author_id = ?",
+                                                    ],
+                                                ],
+                                                (object) [
+                                                    "obj" => (object) [
+                                                        "params" => (object) [
+                                                            "arr" => [
+                                                                (object) [
+                                                                    "ref" => [
+                                                                        "status",
+                                                                    ],
+                                                                ],
+                                                            ],
+                                                        ],
+                                                        "skipped" => (object) [
+                                                            "eq" => [
+                                                                (object) [
+                                                                    "ref" => [
+                                                                        "status",
+                                                                    ],
+                                                                ],
+                                                                null,
+                                                            ],
+                                                        ],
+                                                        "sql" => "status = ?",
+                                                    ],
+                                                ],
+                                            ],
+                                        ],
+                                        "lead" => "WHERE",
+                                        "tail" => " ORDER BY id ASC",
+                                        "tailParams" => (object) [
+                                            "arr" => [],
+                                        ],
+                                    ],
+                                ],
+                                "write" => null,
+                            ],
+                        ],
+                        "params" => (object) [
+                            "arr" => [],
+                        ],
+                        "sql" => "SELECT id, author_id, status FROM conf_posts",
+                    ],
+                ],
+            ],
+            "inputPorts" => (object) [
+                "authorId" => (object) [
+                    "required" => false,
+                    "type" => "int",
+                ],
+                "status" => (object) [
+                    "required" => false,
+                    "type" => "string",
+                ],
+            ],
+            "name" => "optionalOnlyFeed",
+            "output" => (object) [
+                "ref" => [
+                    "n0",
+                ],
+            ],
+            "plan" => (object) [
+                "concurrency" => 16,
+                "groups" => [
+                    [
+                        0,
+                    ],
+                ],
+            ],
+            "outputType" => (object) [
+                "arr" => (object) [
+                    "obj" => (object) [
+                        "author_id" => (object) [
+                            "opt" => "float",
+                        ],
+                        "id" => (object) [
+                            "opt" => "float",
+                        ],
+                        "status" => (object) [
+                            "opt" => "string",
+                        ],
+                    ],
+                    "name" => "OptionalOnlyFeedRow",
+                ],
+            ],
+        ],
+        (object) [
+            "body" => [
+                (object) [
+                    "component" => "executeSQL",
+                    "id" => "n0",
+                    "outType" => (object) [
+                        "arr" => (object) [
+                            "name" => "QuotedOrderFeedRow",
+                            "obj" => (object) [
+                                "author_id" => (object) [
+                                    "opt" => "float",
+                                ],
+                                "id" => (object) [
+                                    "opt" => "float",
+                                ],
+                                "status" => (object) [
+                                    "opt" => "string",
+                                ],
+                                "title" => (object) [
+                                    "opt" => "string",
+                                ],
+                            ],
+                        ],
+                    ],
+                    "portSchemas" => (object) [
+                        "opts" => (object) [
+                            "elemType" => (object) [
+                                "name" => "ExecOptions",
+                                "obj" => (object) [
+                                    "db" => (object) [
+                                        "opt" => "string",
+                                    ],
+                                    "guard" => (object) [
+                                        "opt" => (object) [
+                                            "name" => "CapGuard",
+                                            "obj" => (object) [
+                                                "limit" => "int",
+                                                "model" => (object) [
+                                                    "opt" => "string",
+                                                ],
+                                                "relation" => "string",
+                                            ],
+                                        ],
+                                    ],
+                                    "whereDynamic" => (object) [
+                                        "opt" => (object) [
+                                            "name" => "DynamicWherePlan",
+                                            "obj" => (object) [
+                                                "frags" => (object) [
+                                                    "arr" => (object) [
+                                                        "name" => "DynamicWhereFrag",
+                                                        "obj" => (object) [
+                                                            "params" => (object) [
+                                                                "arr" => (object) [
+                                                                    "opt" => "value",
+                                                                ],
+                                                            ],
+                                                            "skipped" => "bool",
+                                                            "sql" => "string",
+                                                        ],
+                                                    ],
+                                                ],
+                                                "lead" => "string",
+                                                "tail" => "string",
+                                                "tailParams" => (object) [
+                                                    "arr" => "value",
+                                                ],
+                                            ],
+                                        ],
+                                    ],
+                                    "write" => (object) [
+                                        "opt" => (object) [
+                                            "name" => "WriteMode",
+                                            "obj" => (object) [
+                                                "returning" => "bool",
+                                            ],
+                                        ],
+                                    ],
+                                ],
+                            ],
+                            "required" => false,
+                            "type" => "object",
+                        ],
+                        "params" => (object) [
+                            "elemType" => "value",
+                            "required" => true,
+                            "type" => "array",
+                        ],
+                        "sql" => (object) [
+                            "required" => true,
+                            "type" => "string",
+                        ],
+                    ],
+                    "ports" => (object) [
+                        "opts" => (object) [
+                            "obj" => (object) [
+                                "db" => null,
+                                "guard" => null,
+                                "whereDynamic" => (object) [
+                                    "obj" => (object) [
+                                        "frags" => (object) [
+                                            "arr" => [
+                                                (object) [
+                                                    "obj" => (object) [
+                                                        "params" => (object) [
+                                                            "arr" => [
+                                                                (object) [
+                                                                    "ref" => [
+                                                                        "minId",
+                                                                    ],
+                                                                ],
+                                                            ],
+                                                        ],
+                                                        "skipped" => (object) [
+                                                            "eq" => [
+                                                                (object) [
+                                                                    "ref" => [
+                                                                        "minId",
+                                                                    ],
+                                                                ],
+                                                                null,
+                                                            ],
+                                                        ],
+                                                        "sql" => "id >= ?",
+                                                    ],
+                                                ],
+                                            ],
+                                        ],
+                                        "lead" => "AND",
+                                        "tail" => " ORDER BY CASE WHEN status = '?' THEN 0 ELSE 1 END, id ASC LIMIT ?",
+                                        "tailParams" => (object) [
+                                            "arr" => [
+                                                (object) [
+                                                    "ref" => [
+                                                        "limit",
+                                                    ],
+                                                ],
+                                            ],
+                                        ],
+                                    ],
+                                ],
+                                "write" => null,
+                            ],
+                        ],
+                        "params" => (object) [
+                            "arr" => [
+                                (object) [
+                                    "ref" => [
+                                        "authorId",
+                                    ],
+                                ],
+                            ],
+                        ],
+                        "sql" => "SELECT id, author_id, status, title FROM conf_posts WHERE author_id = ?",
+                    ],
+                ],
+            ],
+            "inputPorts" => (object) [
+                "authorId" => (object) [
+                    "required" => true,
+                    "type" => "int",
+                ],
+                "limit" => (object) [
+                    "required" => true,
+                    "type" => "int",
+                ],
+                "minId" => (object) [
+                    "required" => false,
+                    "type" => "int",
+                ],
+            ],
+            "name" => "quotedOrderFeed",
+            "output" => (object) [
+                "ref" => [
+                    "n0",
+                ],
+            ],
+            "plan" => (object) [
+                "concurrency" => 16,
+                "groups" => [
+                    [
+                        0,
+                    ],
+                ],
+            ],
+            "outputType" => (object) [
+                "arr" => (object) [
+                    "obj" => (object) [
+                        "author_id" => (object) [
+                            "opt" => "float",
+                        ],
+                        "id" => (object) [
+                            "opt" => "float",
+                        ],
+                        "status" => (object) [
+                            "opt" => "string",
+                        ],
+                        "title" => (object) [
+                            "opt" => "string",
+                        ],
+                    ],
+                    "name" => "QuotedOrderFeedRow",
+                ],
+            ],
+        ],
+        (object) [
+            "body" => [
+                (object) [
+                    "component" => "executeSQL",
+                    "id" => "n0",
+                    "outType" => (object) [
+                        "arr" => (object) [
+                            "name" => "QuotedWhereOrderFeedRow",
+                            "obj" => (object) [
+                                "id" => (object) [
+                                    "opt" => "float",
+                                ],
+                                "status" => (object) [
+                                    "opt" => "string",
+                                ],
+                                "title" => (object) [
+                                    "opt" => "string",
+                                ],
+                            ],
+                        ],
+                    ],
+                    "portSchemas" => (object) [
+                        "opts" => (object) [
+                            "elemType" => (object) [
+                                "name" => "ExecOptions",
+                                "obj" => (object) [
+                                    "db" => (object) [
+                                        "opt" => "string",
+                                    ],
+                                    "guard" => (object) [
+                                        "opt" => (object) [
+                                            "name" => "CapGuard",
+                                            "obj" => (object) [
+                                                "limit" => "int",
+                                                "model" => (object) [
+                                                    "opt" => "string",
+                                                ],
+                                                "relation" => "string",
+                                            ],
+                                        ],
+                                    ],
+                                    "whereDynamic" => (object) [
+                                        "opt" => (object) [
+                                            "name" => "DynamicWherePlan",
+                                            "obj" => (object) [
+                                                "frags" => (object) [
+                                                    "arr" => (object) [
+                                                        "name" => "DynamicWhereFrag",
+                                                        "obj" => (object) [
+                                                            "params" => (object) [
+                                                                "arr" => (object) [
+                                                                    "opt" => "value",
+                                                                ],
+                                                            ],
+                                                            "skipped" => "bool",
+                                                            "sql" => "string",
+                                                        ],
+                                                    ],
+                                                ],
+                                                "lead" => "string",
+                                                "tail" => "string",
+                                                "tailParams" => (object) [
+                                                    "arr" => "value",
+                                                ],
+                                            ],
+                                        ],
+                                    ],
+                                    "write" => (object) [
+                                        "opt" => (object) [
+                                            "name" => "WriteMode",
+                                            "obj" => (object) [
+                                                "returning" => "bool",
+                                            ],
+                                        ],
+                                    ],
+                                ],
+                            ],
+                            "required" => false,
+                            "type" => "object",
+                        ],
+                        "params" => (object) [
+                            "elemType" => "value",
+                            "required" => true,
+                            "type" => "array",
+                        ],
+                        "sql" => (object) [
+                            "required" => true,
+                            "type" => "string",
+                        ],
+                    ],
+                    "ports" => (object) [
+                        "opts" => (object) [
+                            "obj" => (object) [
+                                "db" => null,
+                                "guard" => null,
+                                "whereDynamic" => (object) [
+                                    "obj" => (object) [
+                                        "frags" => (object) [
+                                            "arr" => [
+                                                (object) [
+                                                    "obj" => (object) [
+                                                        "params" => (object) [
+                                                            "arr" => [
+                                                                (object) [
+                                                                    "ref" => [
+                                                                        "status",
+                                                                    ],
+                                                                ],
+                                                            ],
+                                                        ],
+                                                        "skipped" => (object) [
+                                                            "eq" => [
+                                                                (object) [
+                                                                    "ref" => [
+                                                                        "status",
+                                                                    ],
+                                                                ],
+                                                                null,
+                                                            ],
+                                                        ],
+                                                        "sql" => "status = ?",
+                                                    ],
+                                                ],
+                                            ],
+                                        ],
+                                        "lead" => "WHERE",
+                                        "tail" => " ORDER BY CASE WHEN title = ' WHERE ' THEN 0 ELSE 1 END, id ASC",
+                                        "tailParams" => (object) [
+                                            "arr" => [],
+                                        ],
+                                    ],
+                                ],
+                                "write" => null,
+                            ],
+                        ],
+                        "params" => (object) [
+                            "arr" => [],
+                        ],
+                        "sql" => "SELECT id, status, title FROM conf_posts",
+                    ],
+                ],
+            ],
+            "inputPorts" => (object) [
+                "status" => (object) [
+                    "required" => false,
+                    "type" => "string",
+                ],
+            ],
+            "name" => "quotedWhereOrderFeed",
+            "output" => (object) [
+                "ref" => [
+                    "n0",
+                ],
+            ],
+            "plan" => (object) [
+                "concurrency" => 16,
+                "groups" => [
+                    [
+                        0,
+                    ],
+                ],
+            ],
+            "outputType" => (object) [
+                "arr" => (object) [
+                    "obj" => (object) [
+                        "id" => (object) [
+                            "opt" => "float",
+                        ],
+                        "status" => (object) [
+                            "opt" => "string",
+                        ],
+                        "title" => (object) [
+                            "opt" => "string",
+                        ],
+                    ],
+                    "name" => "QuotedWhereOrderFeedRow",
+                ],
+            ],
+        ],
+        (object) [
+            "body" => [
+                (object) [
+                    "component" => "executeSQL",
+                    "id" => "n0",
+                    "outType" => (object) [
+                        "arr" => (object) [
+                            "name" => "ViewFeedRow",
+                            "obj" => (object) [
+                                "author_id" => (object) [
+                                    "opt" => "float",
+                                ],
+                                "id" => (object) [
+                                    "opt" => "float",
+                                ],
+                                "status" => (object) [
+                                    "opt" => "string",
+                                ],
+                                "title" => (object) [
+                                    "opt" => "string",
+                                ],
+                            ],
+                        ],
+                    ],
+                    "portSchemas" => (object) [
+                        "opts" => (object) [
+                            "elemType" => (object) [
+                                "name" => "ExecOptions",
+                                "obj" => (object) [
+                                    "db" => (object) [
+                                        "opt" => "string",
+                                    ],
+                                    "guard" => (object) [
+                                        "opt" => (object) [
+                                            "name" => "CapGuard",
+                                            "obj" => (object) [
+                                                "limit" => "int",
+                                                "model" => (object) [
+                                                    "opt" => "string",
+                                                ],
+                                                "relation" => "string",
+                                            ],
+                                        ],
+                                    ],
+                                    "whereDynamic" => (object) [
+                                        "opt" => (object) [
+                                            "name" => "DynamicWherePlan",
+                                            "obj" => (object) [
+                                                "frags" => (object) [
+                                                    "arr" => (object) [
+                                                        "name" => "DynamicWhereFrag",
+                                                        "obj" => (object) [
+                                                            "params" => (object) [
+                                                                "arr" => (object) [
+                                                                    "opt" => "value",
+                                                                ],
+                                                            ],
+                                                            "skipped" => "bool",
+                                                            "sql" => "string",
+                                                        ],
+                                                    ],
+                                                ],
+                                                "lead" => "string",
+                                                "tail" => "string",
+                                                "tailParams" => (object) [
+                                                    "arr" => "value",
+                                                ],
+                                            ],
+                                        ],
+                                    ],
+                                    "write" => (object) [
+                                        "opt" => (object) [
+                                            "name" => "WriteMode",
+                                            "obj" => (object) [
+                                                "returning" => "bool",
+                                            ],
+                                        ],
+                                    ],
+                                ],
+                            ],
+                            "required" => false,
+                            "type" => "object",
+                        ],
+                        "params" => (object) [
+                            "elemType" => "value",
+                            "required" => true,
+                            "type" => "array",
+                        ],
+                        "sql" => (object) [
+                            "required" => true,
+                            "type" => "string",
+                        ],
+                    ],
+                    "ports" => (object) [
+                        "opts" => (object) [
+                            "obj" => (object) [
+                                "db" => null,
+                                "guard" => null,
+                                "whereDynamic" => (object) [
+                                    "obj" => (object) [
+                                        "frags" => (object) [
+                                            "arr" => [
+                                                (object) [
+                                                    "obj" => (object) [
+                                                        "params" => (object) [
+                                                            "arr" => [
+                                                                (object) [
+                                                                    "ref" => [
+                                                                        "status",
+                                                                    ],
+                                                                ],
+                                                            ],
+                                                        ],
+                                                        "skipped" => (object) [
+                                                            "eq" => [
+                                                                (object) [
+                                                                    "ref" => [
+                                                                        "status",
+                                                                    ],
+                                                                ],
+                                                                null,
+                                                            ],
+                                                        ],
+                                                        "sql" => "status = ?",
+                                                    ],
+                                                ],
+                                            ],
+                                        ],
+                                        "lead" => "WHERE",
+                                        "tail" => " ORDER BY id ASC",
+                                        "tailParams" => (object) [
+                                            "arr" => [],
+                                        ],
+                                    ],
+                                ],
+                                "write" => null,
+                            ],
+                        ],
+                        "params" => (object) [
+                            "arr" => [],
+                        ],
+                        "sql" => "WITH derived AS (SELECT id, author_id, title, status, created_at FROM conf_posts WHERE title <> ' WHERE ' ORDER BY id ASC LIMIT 2) SELECT id, author_id, status, title FROM derived",
+                    ],
+                ],
+            ],
+            "inputPorts" => (object) [
+                "status" => (object) [
+                    "required" => false,
+                    "type" => "string",
+                ],
+            ],
+            "name" => "viewFeed",
+            "output" => (object) [
+                "ref" => [
+                    "n0",
+                ],
+            ],
+            "plan" => (object) [
+                "concurrency" => 16,
+                "groups" => [
+                    [
+                        0,
+                    ],
+                ],
+            ],
+            "outputType" => (object) [
+                "arr" => (object) [
+                    "obj" => (object) [
+                        "author_id" => (object) [
+                            "opt" => "float",
+                        ],
+                        "id" => (object) [
+                            "opt" => "float",
+                        ],
+                        "status" => (object) [
+                            "opt" => "string",
+                        ],
+                        "title" => (object) [
+                            "opt" => "string",
+                        ],
+                    ],
+                    "name" => "ViewFeedRow",
                 ],
             ],
         ],
@@ -1589,6 +2386,11 @@ $irDoc = (object) [
                                                         ],
                                                     ],
                                                 ],
+                                                "lead" => "string",
+                                                "tail" => "string",
+                                                "tailParams" => (object) [
+                                                    "arr" => "value",
+                                                ],
                                             ],
                                         ],
                                     ],
@@ -2344,6 +3146,11 @@ $irDoc = (object) [
                                                         ],
                                                     ],
                                                 ],
+                                                "lead" => "string",
+                                                "tail" => "string",
+                                                "tailParams" => (object) [
+                                                    "arr" => "value",
+                                                ],
                                             ],
                                         ],
                                     ],
@@ -2514,6 +3321,11 @@ $irDoc = (object) [
                                                         ],
                                                     ],
                                                 ],
+                                                "lead" => "string",
+                                                "tail" => "string",
+                                                "tailParams" => (object) [
+                                                    "arr" => "value",
+                                                ],
                                             ],
                                         ],
                                     ],
@@ -2657,6 +3469,11 @@ $irDoc = (object) [
                                                         ],
                                                     ],
                                                 ],
+                                                "lead" => "string",
+                                                "tail" => "string",
+                                                "tailParams" => (object) [
+                                                    "arr" => "value",
+                                                ],
                                             ],
                                         ],
                                     ],
@@ -2794,6 +3611,11 @@ $irDoc = (object) [
                                                             "sql" => "string",
                                                         ],
                                                     ],
+                                                ],
+                                                "lead" => "string",
+                                                "tail" => "string",
+                                                "tailParams" => (object) [
+                                                    "arr" => "value",
                                                 ],
                                             ],
                                         ],
@@ -2973,6 +3795,11 @@ $irDoc = (object) [
                                                         ],
                                                     ],
                                                 ],
+                                                "lead" => "string",
+                                                "tail" => "string",
+                                                "tailParams" => (object) [
+                                                    "arr" => "value",
+                                                ],
                                             ],
                                         ],
                                     ],
@@ -3124,6 +3951,11 @@ $irDoc = (object) [
                                                         ],
                                                     ],
                                                 ],
+                                                "lead" => "string",
+                                                "tail" => "string",
+                                                "tailParams" => (object) [
+                                                    "arr" => "value",
+                                                ],
                                             ],
                                         ],
                                     ],
@@ -3265,6 +4097,11 @@ $irDoc = (object) [
                                                             "sql" => "string",
                                                         ],
                                                     ],
+                                                ],
+                                                "lead" => "string",
+                                                "tail" => "string",
+                                                "tailParams" => (object) [
+                                                    "arr" => "value",
                                                 ],
                                             ],
                                         ],
@@ -3416,6 +4253,11 @@ $irDoc = (object) [
                                                             "sql" => "string",
                                                         ],
                                                     ],
+                                                ],
+                                                "lead" => "string",
+                                                "tail" => "string",
+                                                "tailParams" => (object) [
+                                                    "arr" => "value",
                                                 ],
                                             ],
                                         ],
@@ -3633,6 +4475,11 @@ $irDoc = (object) [
                                                         ],
                                                     ],
                                                 ],
+                                                "lead" => "string",
+                                                "tail" => "string",
+                                                "tailParams" => (object) [
+                                                    "arr" => "value",
+                                                ],
                                             ],
                                         ],
                                     ],
@@ -3788,6 +4635,11 @@ $irDoc = (object) [
                                                         ],
                                                     ],
                                                 ],
+                                                "lead" => "string",
+                                                "tail" => "string",
+                                                "tailParams" => (object) [
+                                                    "arr" => "value",
+                                                ],
                                             ],
                                         ],
                                     ],
@@ -3926,6 +4778,11 @@ $irDoc = (object) [
                                                             "sql" => "string",
                                                         ],
                                                     ],
+                                                ],
+                                                "lead" => "string",
+                                                "tail" => "string",
+                                                "tailParams" => (object) [
+                                                    "arr" => "value",
                                                 ],
                                             ],
                                         ],
@@ -4080,6 +4937,11 @@ $irDoc = (object) [
                                                             "sql" => "string",
                                                         ],
                                                     ],
+                                                ],
+                                                "lead" => "string",
+                                                "tail" => "string",
+                                                "tailParams" => (object) [
+                                                    "arr" => "value",
                                                 ],
                                             ],
                                         ],
@@ -4244,6 +5106,11 @@ $irDoc = (object) [
                                                         ],
                                                     ],
                                                 ],
+                                                "lead" => "string",
+                                                "tail" => "string",
+                                                "tailParams" => (object) [
+                                                    "arr" => "value",
+                                                ],
                                             ],
                                         ],
                                     ],
@@ -4407,6 +5274,11 @@ $irDoc = (object) [
                                                         ],
                                                     ],
                                                 ],
+                                                "lead" => "string",
+                                                "tail" => "string",
+                                                "tailParams" => (object) [
+                                                    "arr" => "value",
+                                                ],
                                             ],
                                         ],
                                     ],
@@ -4560,6 +5432,11 @@ $irDoc = (object) [
                                                         ],
                                                     ],
                                                 ],
+                                                "lead" => "string",
+                                                "tail" => "string",
+                                                "tailParams" => (object) [
+                                                    "arr" => "value",
+                                                ],
                                             ],
                                         ],
                                     ],
@@ -4698,6 +5575,22 @@ if (!\class_exists('Conformance', false)) {
 
         public static function pagedFeed($authorId, $minId, $status, $limit, $offset, array $handlers): mixed {
             return \LiteDbModel\Runtime\BehaviorContracts\Behavior::runBehavior(self::$ir, $handlers, ['authorId' => $authorId, 'minId' => $minId, 'status' => $status, 'limit' => $limit, 'offset' => $offset], 'pagedFeed');
+        }
+
+        public static function optionalOnlyFeed($authorId, $status, array $handlers): mixed {
+            return \LiteDbModel\Runtime\BehaviorContracts\Behavior::runBehavior(self::$ir, $handlers, ['authorId' => $authorId, 'status' => $status], 'optionalOnlyFeed');
+        }
+
+        public static function quotedOrderFeed($authorId, $minId, $limit, array $handlers): mixed {
+            return \LiteDbModel\Runtime\BehaviorContracts\Behavior::runBehavior(self::$ir, $handlers, ['authorId' => $authorId, 'minId' => $minId, 'limit' => $limit], 'quotedOrderFeed');
+        }
+
+        public static function quotedWhereOrderFeed($status, array $handlers): mixed {
+            return \LiteDbModel\Runtime\BehaviorContracts\Behavior::runBehavior(self::$ir, $handlers, ['status' => $status], 'quotedWhereOrderFeed');
+        }
+
+        public static function viewFeed($status, array $handlers): mixed {
+            return \LiteDbModel\Runtime\BehaviorContracts\Behavior::runBehavior(self::$ir, $handlers, ['status' => $status], 'viewFeed');
         }
 
         public static function usersWithPosts(array $handlers): mixed {

@@ -7,7 +7,7 @@
 // (Behavior::runBehavior) — no execution logic is generated. Handlers are ALWAYS
 // injected at the boundary (IR + {effects,config,hooks} — concept.md §4.4); they
 // are never generated.
-// irFingerprint: fnv1a64:9cc76749b5a52015
+// irFingerprint: fnv1a64:a9c03986174ca859
 
 declare(strict_types=1);
 
@@ -15,7 +15,7 @@ declare(strict_types=1);
 $expectedSpecVersions = ['behavior' => 6, 'expression' => 2, 'plan' => 1];
 
 // FNV-1a 64 fingerprint of the source portable IR (canonical-json discipline, #208).
-$irFingerprint = 'fnv1a64:9cc76749b5a52015';
+$irFingerprint = 'fnv1a64:a9c03986174ca859';
 
 // Component names exposed by bind(), in IR declaration order.
 $componentNames = ['findAll', 'filterPaginateSort', 'findFirst', 'findUnique', 'nestedFindAll', 'nestedFindFirst', 'nestedFindUnique', 'nestedRelations', 'compositeRelations', 'create', 'update', 'upsert', 'createMany', 'upsertMany', 'updateMany', 'nestedCreate', 'nestedUpsert', 'nestedUpdate', 'delete'];
@@ -1954,6 +1954,11 @@ $irDoc = (object) [
                                                         ],
                                                     ],
                                                 ],
+                                                "lead" => "string",
+                                                "tail" => "string",
+                                                "tailParams" => (object) [
+                                                    "arr" => "value",
+                                                ],
                                             ],
                                         ],
                                     ],
@@ -2097,6 +2102,11 @@ $irDoc = (object) [
                                                         ],
                                                     ],
                                                 ],
+                                                "lead" => "string",
+                                                "tail" => "string",
+                                                "tailParams" => (object) [
+                                                    "arr" => "value",
+                                                ],
                                             ],
                                         ],
                                     ],
@@ -2238,6 +2248,11 @@ $irDoc = (object) [
                                                             "sql" => "string",
                                                         ],
                                                     ],
+                                                ],
+                                                "lead" => "string",
+                                                "tail" => "string",
+                                                "tailParams" => (object) [
+                                                    "arr" => "value",
                                                 ],
                                             ],
                                         ],
@@ -2381,6 +2396,11 @@ $irDoc = (object) [
                                                         ],
                                                     ],
                                                 ],
+                                                "lead" => "string",
+                                                "tail" => "string",
+                                                "tailParams" => (object) [
+                                                    "arr" => "value",
+                                                ],
                                             ],
                                         ],
                                     ],
@@ -2522,6 +2542,11 @@ $irDoc = (object) [
                                                         ],
                                                     ],
                                                 ],
+                                                "lead" => "string",
+                                                "tail" => "string",
+                                                "tailParams" => (object) [
+                                                    "arr" => "value",
+                                                ],
                                             ],
                                         ],
                                     ],
@@ -2662,6 +2687,11 @@ $irDoc = (object) [
                                                             "sql" => "string",
                                                         ],
                                                     ],
+                                                ],
+                                                "lead" => "string",
+                                                "tail" => "string",
+                                                "tailParams" => (object) [
+                                                    "arr" => "value",
                                                 ],
                                             ],
                                         ],
@@ -2808,6 +2838,11 @@ $irDoc = (object) [
                                                         ],
                                                     ],
                                                 ],
+                                                "lead" => "string",
+                                                "tail" => "string",
+                                                "tailParams" => (object) [
+                                                    "arr" => "value",
+                                                ],
                                             ],
                                         ],
                                     ],
@@ -2912,6 +2947,11 @@ $irDoc = (object) [
                                                                 "sql" => "string",
                                                             ],
                                                         ],
+                                                    ],
+                                                    "lead" => "string",
+                                                    "tail" => "string",
+                                                    "tailParams" => (object) [
+                                                        "arr" => "value",
                                                     ],
                                                 ],
                                             ],
@@ -3075,6 +3115,11 @@ $irDoc = (object) [
                                                         ],
                                                     ],
                                                 ],
+                                                "lead" => "string",
+                                                "tail" => "string",
+                                                "tailParams" => (object) [
+                                                    "arr" => "value",
+                                                ],
                                             ],
                                         ],
                                     ],
@@ -3179,6 +3224,11 @@ $irDoc = (object) [
                                                                 "sql" => "string",
                                                             ],
                                                         ],
+                                                    ],
+                                                    "lead" => "string",
+                                                    "tail" => "string",
+                                                    "tailParams" => (object) [
+                                                        "arr" => "value",
                                                     ],
                                                 ],
                                             ],
@@ -3342,6 +3392,11 @@ $irDoc = (object) [
                                                         ],
                                                     ],
                                                 ],
+                                                "lead" => "string",
+                                                "tail" => "string",
+                                                "tailParams" => (object) [
+                                                    "arr" => "value",
+                                                ],
                                             ],
                                         ],
                                     ],
@@ -3446,6 +3501,11 @@ $irDoc = (object) [
                                                                 "sql" => "string",
                                                             ],
                                                         ],
+                                                    ],
+                                                    "lead" => "string",
+                                                    "tail" => "string",
+                                                    "tailParams" => (object) [
+                                                        "arr" => "value",
                                                     ],
                                                 ],
                                             ],
@@ -3609,6 +3669,11 @@ $irDoc = (object) [
                                                         ],
                                                     ],
                                                 ],
+                                                "lead" => "string",
+                                                "tail" => "string",
+                                                "tailParams" => (object) [
+                                                    "arr" => "value",
+                                                ],
                                             ],
                                         ],
                                     ],
@@ -3713,6 +3778,11 @@ $irDoc = (object) [
                                                                 "sql" => "string",
                                                             ],
                                                         ],
+                                                    ],
+                                                    "lead" => "string",
+                                                    "tail" => "string",
+                                                    "tailParams" => (object) [
+                                                        "arr" => "value",
                                                     ],
                                                 ],
                                             ],

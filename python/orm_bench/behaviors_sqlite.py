@@ -4,14 +4,14 @@
 # native dict literal and handed to the EXISTING runtime core (run_behavior) —
 # no execution logic is generated. Handlers are ALWAYS injected at the boundary
 # (IR + {effects,config,hooks}); they are never generated.
-# irFingerprint: fnv1a64:9cc76749b5a52015
+# irFingerprint: fnv1a64:a9c03986174ca859
 from behavior_contracts import SPEC_VERSIONS, ProvenanceError, load_compiled_ir, run_behavior
 
 # Spec versions baked at generation time (fail-closed constant comparison at load).
 EXPECTED_SPEC_VERSIONS = {"behavior": 6, "expression": 2, "plan": 1}
 
 # FNV-1a 64 fingerprint of the source portable IR (canonical_json discipline, #208).
-IR_FINGERPRINT = "fnv1a64:9cc76749b5a52015"
+IR_FINGERPRINT = "fnv1a64:a9c03986174ca859"
 
 # Component names exposed by bind(), in IR declaration order.
 COMPONENT_NAMES = ("findAll", "filterPaginateSort", "findFirst", "findUnique", "nestedFindAll", "nestedFindFirst", "nestedFindUnique", "nestedRelations", "compositeRelations", "create", "update", "upsert", "createMany", "upsertMany", "updateMany", "nestedCreate", "nestedUpsert", "nestedUpdate", "delete")
@@ -1949,6 +1949,11 @@ IR_DOC = {
                               "sql": "string"
                             }
                           }
+                        },
+                        "lead": "string",
+                        "tail": "string",
+                        "tailParams": {
+                          "arr": "value"
                         }
                       }
                     }
@@ -2092,6 +2097,11 @@ IR_DOC = {
                               "sql": "string"
                             }
                           }
+                        },
+                        "lead": "string",
+                        "tail": "string",
+                        "tailParams": {
+                          "arr": "value"
                         }
                       }
                     }
@@ -2234,6 +2244,11 @@ IR_DOC = {
                               "sql": "string"
                             }
                           }
+                        },
+                        "lead": "string",
+                        "tail": "string",
+                        "tailParams": {
+                          "arr": "value"
                         }
                       }
                     }
@@ -2376,6 +2391,11 @@ IR_DOC = {
                               "sql": "string"
                             }
                           }
+                        },
+                        "lead": "string",
+                        "tail": "string",
+                        "tailParams": {
+                          "arr": "value"
                         }
                       }
                     }
@@ -2517,6 +2537,11 @@ IR_DOC = {
                               "sql": "string"
                             }
                           }
+                        },
+                        "lead": "string",
+                        "tail": "string",
+                        "tailParams": {
+                          "arr": "value"
                         }
                       }
                     }
@@ -2658,6 +2683,11 @@ IR_DOC = {
                               "sql": "string"
                             }
                           }
+                        },
+                        "lead": "string",
+                        "tail": "string",
+                        "tailParams": {
+                          "arr": "value"
                         }
                       }
                     }
@@ -2803,6 +2833,11 @@ IR_DOC = {
                               "sql": "string"
                             }
                           }
+                        },
+                        "lead": "string",
+                        "tail": "string",
+                        "tailParams": {
+                          "arr": "value"
                         }
                       }
                     }
@@ -2908,6 +2943,11 @@ IR_DOC = {
                                 "sql": "string"
                               }
                             }
+                          },
+                          "lead": "string",
+                          "tail": "string",
+                          "tailParams": {
+                            "arr": "value"
                           }
                         }
                       }
@@ -3070,6 +3110,11 @@ IR_DOC = {
                               "sql": "string"
                             }
                           }
+                        },
+                        "lead": "string",
+                        "tail": "string",
+                        "tailParams": {
+                          "arr": "value"
                         }
                       }
                     }
@@ -3175,6 +3220,11 @@ IR_DOC = {
                                 "sql": "string"
                               }
                             }
+                          },
+                          "lead": "string",
+                          "tail": "string",
+                          "tailParams": {
+                            "arr": "value"
                           }
                         }
                       }
@@ -3337,6 +3387,11 @@ IR_DOC = {
                               "sql": "string"
                             }
                           }
+                        },
+                        "lead": "string",
+                        "tail": "string",
+                        "tailParams": {
+                          "arr": "value"
                         }
                       }
                     }
@@ -3442,6 +3497,11 @@ IR_DOC = {
                                 "sql": "string"
                               }
                             }
+                          },
+                          "lead": "string",
+                          "tail": "string",
+                          "tailParams": {
+                            "arr": "value"
                           }
                         }
                       }
@@ -3604,6 +3664,11 @@ IR_DOC = {
                               "sql": "string"
                             }
                           }
+                        },
+                        "lead": "string",
+                        "tail": "string",
+                        "tailParams": {
+                          "arr": "value"
                         }
                       }
                     }
@@ -3709,6 +3774,11 @@ IR_DOC = {
                                 "sql": "string"
                               }
                             }
+                          },
+                          "lead": "string",
+                          "tail": "string",
+                          "tailParams": {
+                            "arr": "value"
                           }
                         }
                       }

@@ -100,43 +100,74 @@ export interface SelectDesc extends RowLockOptions {
 }
 
 /**
+ * A compiled SELECT, SPLIT at the end of its WHERE region — a superset of the `makeSQL` bundle every
+ * caller already consumes (`sql` = `head + tail`, `params` = `headParams` then `tailParams`).
+ *
+ * The split exists because a DYNAMIC (SKIP) WHERE has to be spliced at exactly that boundary at RUN time
+ * (CLAUDE.md §2), and this function is where the boundary IS: the WHERE clause is appended here and the
+ * `GROUP BY` / `ORDER BY` / page / lock / append tail is appended right after it. Handing the two sides
+ * over as text is what lets the five leaf transports CONCATENATE instead of re-DISCOVERING the boundary
+ * by scanning the finished statement — a scan that cannot tell a nested statement's tail keyword from the
+ * outer one's (#198) and cannot count a quoted `?` the way the placeholder render does (#202).
+ */
+export interface SelectBundle extends MakeSQL {
+  /** The statement UP TO the end of its WHERE region — where a dynamic clause joins. */
+  readonly head: string;
+  /** The params bound by `head`'s placeholders (CTE → JOIN → WHERE). */
+  readonly headParams: unknown[];
+  /** The statement AFTER the WHERE region (`GROUP BY` / `ORDER BY` / page / lock / append), `''` if none. */
+  readonly tail: string;
+  /** The params bound by `tail`'s placeholders (a bound `LIMIT ?` then `OFFSET ?`). */
+  readonly tailParams: unknown[];
+  /**
+   * How a clause spliced at `head`'s end JOINS: `'AND'` when the statement already carries a static
+   * WHERE (the clause CONTINUES it), `'WHERE'` when it carries none (the clause OPENS one). Decided by
+   * the `if (whereClause)` guard below — the ONE place that knows whether this statement has a WHERE.
+   */
+  readonly lead: 'WHERE' | 'AND';
+}
+
+/**
  * Compile a SELECT to a `makeSQL` bundle, byte-identical to `_buildSelectSQL`.
  * Empty WHERE ⇒ no ` WHERE` (matches the original's `if (whereClause)` guard).
  */
-export function compileSelect(desc: SelectDesc): MakeSQL {
-  const params: unknown[] = [];
+export function compileSelect(desc: SelectDesc): SelectBundle {
+  const headParams: unknown[] = [];
   const selectCols = desc.select || (desc.selectColumn ?? '*');
   const formatter = formatterFor(desc.dialect);
 
   // Param order (matches SQL order): CTE params → JOIN params → WHERE params.
-  if (desc.cte?.params && desc.cte.params.length > 0) params.push(...desc.cte.params);
-  if (desc.joinParams && desc.joinParams.length > 0) params.push(...desc.joinParams);
+  if (desc.cte?.params && desc.cte.params.length > 0) headParams.push(...desc.cte.params);
+  if (desc.joinParams && desc.joinParams.length > 0) headParams.push(...desc.joinParams);
 
-  const whereClause = conditionsFor(desc.conditions ?? {}, desc.dialect).compile(params, formatter);
+  const whereClause = conditionsFor(desc.conditions ?? {}, desc.dialect).compile(headParams, formatter);
 
-  let sql = '';
-  if (desc.cte) sql = `WITH ${desc.cte.name} AS (${desc.cte.sql}) `;
+  let head = '';
+  if (desc.cte) head = `WITH ${desc.cte.name} AS (${desc.cte.sql}) `;
 
-  sql += `SELECT ${selectCols} FROM ${desc.tableName}`;
-  if (desc.join) sql += ` ${desc.join}`;
-  if (whereClause) sql += ` WHERE ${whereClause}`;
-  if (desc.group) sql += ` GROUP BY ${desc.group}`;
+  head += `SELECT ${selectCols} FROM ${desc.tableName}`;
+  if (desc.join) head += ` ${desc.join}`;
+  if (whereClause) head += ` WHERE ${whereClause}`;
+
+  let tail = '';
+  if (desc.group) tail += ` GROUP BY ${desc.group}`;
 
   const orderClause =
     typeof desc.order === 'string' ? desc.order : orderToString(desc.order);
-  if (orderClause) sql += ` ORDER BY ${orderClause}`;
+  if (orderClause) tail += ` ORDER BY ${orderClause}`;
 
   // The page tail: a static count is the original's inline literal; a bound one emits `?` and joins
   // the value list HERE, after the WHERE params — the order the `?`s occupy in the finished text.
+  const tailParams: unknown[] = [];
   const count = (c: number | BoundCount): string => {
     if (!isBoundCount(c)) return String(c);
-    params.push(c.bind);
+    tailParams.push(c.bind);
     return '?';
   };
-  if (desc.limit !== undefined) sql += ` LIMIT ${count(desc.limit)}`;
-  if (desc.offset !== undefined) sql += ` OFFSET ${count(desc.offset)}`;
-  sql += lockTail(desc);
-  if (desc.append) sql += ` ${desc.append}`;
+  if (desc.limit !== undefined) tail += ` LIMIT ${count(desc.limit)}`;
+  if (desc.offset !== undefined) tail += ` OFFSET ${count(desc.offset)}`;
+  tail += lockTail(desc);
+  if (desc.append) tail += ` ${desc.append}`;
 
-  return { sql, params };
+  return { sql: head + tail, params: [...headParams, ...tailParams], head, headParams, tail, tailParams, lead: whereClause ? 'AND' : 'WHERE' };
 }

@@ -28,7 +28,6 @@ import (
 	"fmt"
 	"github.com/foo-ogawa/litedbmodel/go/litedbmodel_runtime/wire"
 	"math"
-	"regexp"
 	"strconv"
 	"strings"
 
@@ -208,12 +207,28 @@ type dynamicWhereFrag struct {
 	params  []wire.WireValue
 }
 
-// portDynamicWhere reads the `whereDynamic` field of the control record — a wire row `{frags: [...]}`.
-// A wire NULL ⇒ nil ⇒ no dynamic WHERE (the statement passes through unchanged): only a read that
-// declares an OPTIONAL predicate carries a plan (CLAUDE.md §2). An ABSENT KEY is LOUD ([optRowField]),
-// because a plan read as "no plan" erases the call's SKIP predicates. PRESENT but wrong-variant, or a
-// malformed fragment, is equally loud.
-func portDynamicWhere(opts wire.WireRow) ([]dynamicWhereFrag, error) {
+// dynamicWherePlan is the unboxed `whereDynamic` plan: the fragments plus the three facts that FINISH
+// the statement. `lead` is the connector the first surviving fragment joins the head with ("AND" when
+// the head already ends in a static WHERE, "WHERE" when it does not); `tail` is the text that follows
+// the WHERE region (` ORDER BY …` / the page / the row lock, "" when the statement ends there) and
+// `tailParams` its own bound values. They come from the emitter's SELECT builder, which is what put the
+// WHERE in the statement — so assembly is a CONCATENATION and no scan of the base SQL is involved. Go
+// twin of the TS `DynamicWherePlan`.
+type dynamicWherePlan struct {
+	frags      []dynamicWhereFrag
+	lead       string
+	tail       string
+	tailParams []wire.WireValue
+}
+
+// portDynamicWhere reads the `whereDynamic` field of the control record — a wire row
+// `{frags, lead, tail, tailParams}`. A wire NULL ⇒ nil ⇒ no dynamic WHERE (the statement passes through
+// unchanged): only a read that declares an OPTIONAL predicate carries a plan (CLAUDE.md §2). An ABSENT
+// KEY is LOUD ([optRowField]), because a plan read as "no plan" erases the call's SKIP predicates.
+// PRESENT but wrong-variant, or a malformed fragment, is equally loud — and so is a missing `lead` /
+// `tail` / `tailParams`: defaulting `lead` opens a second WHERE (or continues an absent one), and
+// defaulting the tail DROPS the statement's ORDER BY and page while still returning rows.
+func portDynamicWhere(opts wire.WireRow) (*dynamicWherePlan, error) {
 	row, present, err := optRowField(opts, "whereDynamic")
 	if err != nil {
 		return nil, err
@@ -249,7 +264,23 @@ func portDynamicWhere(opts wire.WireRow) ([]dynamicWhereFrag, error) {
 		}
 		frags[i] = dynamicWhereFrag{skipped: skipped.Got, sql: sql.Got, params: items}
 	}
-	return frags, nil
+	lead := row.ProbeString("lead")
+	if lead.Kind != wireProbeGot {
+		return nil, portErr("whereDynamic.lead", "string", lead.Kind, lead.ActualWireType)
+	}
+	tail := row.ProbeString("tail")
+	if tail.Kind != wireProbeGot {
+		return nil, portErr("whereDynamic.tail", "string", tail.Kind, tail.ActualWireType)
+	}
+	tp := row.ProbeList("tailParams")
+	if tp.Kind != wireProbeGot {
+		return nil, portErr("whereDynamic.tailParams", "list", tp.Kind, tp.ActualWireType)
+	}
+	tailParams, err := wireItems(tp.Got, "whereDynamic.tailParams")
+	if err != nil {
+		return nil, err
+	}
+	return &dynamicWherePlan{frags: frags, lead: lead.Got, tail: tail.Got, tailParams: tailParams}, nil
 }
 
 // execOptions is the UNBOXED control record of one statement (the `opts` port — the TS `ExecOptions`):
@@ -259,10 +290,10 @@ type execOptions struct {
 	// db is the NAMED connection (database) the statement runs on — "" ⇒ the DEFAULT connection. Baked
 	// at emit from the statement's model (the litedbmodel `connectionOf`), or, for a relation child
 	// fetch, from the compiled op's TARGET model. It reaches the router as [StatementIntent.DB].
-	db         string
-	write      *writeMode
-	whereFrags []dynamicWhereFrag
-	guard      *relationGuard
+	db        string
+	write     *writeMode
+	wherePlan *dynamicWherePlan
+	guard     *relationGuard
 }
 
 // writeMode is the unboxed `write` field: nil ⇒ the statement is a READ, non-nil ⇒ a write carrying its
@@ -310,7 +341,7 @@ func portExecOptions(payload wire.WireRow) (execOptions, error) {
 	if err != nil {
 		return execOptions{}, err
 	}
-	frags, err := portDynamicWhere(p.Got)
+	plan, err := portDynamicWhere(p.Got)
 	if err != nil {
 		return execOptions{}, err
 	}
@@ -318,7 +349,7 @@ func portExecOptions(payload wire.WireRow) (execOptions, error) {
 	if err != nil {
 		return execOptions{}, err
 	}
-	return execOptions{db: db, write: write, whereFrags: frags, guard: guard}, nil
+	return execOptions{db: db, write: write, wherePlan: plan, guard: guard}, nil
 }
 
 // portNamedDB reads the `db` field of the control record — the NAMED connection the statement runs on.
@@ -438,69 +469,35 @@ func wireOfElem(l wire.WireList, i int) (wire.WireValue, error) {
 
 // ── the DYNAMIC (SKIP) WHERE: assembled by the transport, at execution time (leaves.ts) ─────────────
 
-// whereTailRe matches the SQL keywords that may follow a WHERE clause; the dynamic WHERE splices in
-// BEFORE the first of them, so it lands at exactly the position a bounded WHERE occupies. Port of the
-// TS `WHERE_TAIL_RE` (`/\s+(GROUP BY|ORDER BY|LIMIT|OFFSET|FOR UPDATE|RETURNING)\b/i`).
-var whereTailRe = regexp.MustCompile(`(?i)\s+(GROUP BY|ORDER BY|LIMIT|OFFSET|FOR UPDATE|RETURNING)\b`)
-
-// whereRe matches the WHERE keyword the SAME way whereTailRe matches a tail keyword (TS `WHERE_RE`), so
-// the five language ports share one lexical rule. A statement that carries it already has a (bounded)
-// WHERE, which a dynamic clause CONTINUES instead of opening a second one.
-var whereRe = regexp.MustCompile(`(?i)\s+WHERE\b`)
-
-// whereSplice reports where a dynamic WHERE clause joins baseSql (port of leaves.ts `whereSplice`) —
-// the ONE scan assembleDynamicWhere makes, and everything it needs to place both the text and the values:
-//   - at      — the end of the statement's WHERE region: before the first tail keyword, or the end of
-//     the statement. The exact position a bounded WHERE occupies.
-//   - keyword — how the clause joins: " AND " when the statement already carries a WHERE (its BOUNDED
-//     predicates, lowered at emit — CLAUDE.md §2), " WHERE " when it carries none.
-//   - tail    — how many base params bind AFTER the clause. Every `?` past `at` is a page-tail bound
-//     count (`LIMIT ?` / `OFFSET ?`) — the only placeholders the emitted SELECT carries after the
-//     WHERE — so the surviving fragments' params bind before exactly that many of the base params,
-//     which is the position their own `?`s occupy in the final statement. `tail` counts a SUBSTRING's
-//     placeholders and every placeholder binds one param, so it never exceeds len(params) for a
-//     statement that can be bound at all.
-func whereSplice(baseSql string) (at int, keyword string, tail int) {
-	at = len(baseSql)
-	if loc := whereTailRe.FindStringIndex(baseSql); loc != nil {
-		at = loc[0]
-	}
-	keyword = " WHERE "
-	if whereRe.MatchString(baseSql[:at]) {
-		keyword = " AND "
-	}
-	return at, keyword, strings.Count(baseSql[at:], "?")
-}
-
 // assembleDynamicWhere assembles the effective (sql, params) from the dynamic-WHERE plan: DROP the
-// skipped fragments, join the survivors with " AND ", splice the clause at the statement's WHERE
-// position — CONTINUING the bounded WHERE the emitter already lowered, or opening one when there is
-// none — and bind the survivors' params at the slot their `?`s occupy: after the base params the clause
-// follows, before the page tail's. Byte-for-byte port of leaves.ts `assembleDynamicWhere`; a plan whose
-// fragments are all skipped leaves the emitted statement exactly as it was compiled.
-func assembleDynamicWhere(baseSql string, baseParams []wire.WireValue, frags []dynamicWhereFrag) (string, []wire.WireValue) {
+// skipped fragments, join the survivors with " AND ", and CONCATENATE the three pieces already in hand —
+// the statement's HEAD (which ends at its WHERE region), the assembled clause, and the plan's tail. The
+// params follow the same order: the head's, the survivors', the tail's.
+//
+// Nothing is LOCATED here. The emitter's SELECT builder is what puts the WHERE in the statement, so it
+// hands the boundary over on the plan (`lead` says whether the head already ends in a WHERE, `tail` /
+// `tailParams` are what follows it) instead of leaving five transports to rediscover it by scanning: a
+// scan took a NESTED statement's tail keyword for the outer statement's (#198), counted a QUOTED `?` the
+// placeholder render skips (#202), and produced a byte offset that is not the same number in five
+// languages. Port of leaves.ts `assembleDynamicWhere`; a plan whose fragments are all skipped leaves the
+// emitted statement exactly as it was compiled (head + tail, no clause).
+func assembleDynamicWhere(head string, headParams []wire.WireValue, plan *dynamicWherePlan) (string, []wire.WireValue) {
 	clause := ""
-	var whereParams []wire.WireValue
-	for _, f := range frags {
+	params := make([]wire.WireValue, 0, len(headParams)+len(plan.tailParams))
+	params = append(params, headParams...)
+	for _, f := range plan.frags {
 		if f.skipped {
 			continue
 		}
-		if clause != "" {
+		if clause == "" {
+			clause = " " + plan.lead + " "
+		} else {
 			clause += " AND "
 		}
 		clause += f.sql
-		whereParams = append(whereParams, f.params...)
+		params = append(params, f.params...)
 	}
-	if clause == "" {
-		return baseSql, baseParams
-	}
-	at, keyword, tail := whereSplice(baseSql)
-	bind := len(baseParams) - tail
-	params := make([]wire.WireValue, 0, len(baseParams)+len(whereParams))
-	params = append(params, baseParams[:bind]...)
-	params = append(params, whereParams...)
-	params = append(params, baseParams[bind:]...)
-	return baseSql[:at] + keyword + clause + baseSql[at:], params
+	return head + clause + plan.tail, append(params, plan.tailParams...)
 }
 
 // ExecuteSQL runs ONE SQL node and returns its rows as a wire list of wire rows (empty list for a
@@ -530,10 +527,11 @@ func ExecuteSQL(payload wire.WireRow) (wire.WireValue, error) {
 		return wire.WireNull(), fmt.Errorf("leaf transport: no bound execution context (call BindLeafTransport before running the native module)")
 	}
 	// Assemble the DYNAMIC (SKIP) WHERE FIRST when a plan is present: the final statement shape is only
-	// known here, so the placeholder render (finalizeSQL, below) must follow it (CLAUDE.md §2). An
-	// ABSENT plan (whereFrags nil) leaves the bounded sql/params untouched (pass-through).
-	if opts.whereFrags != nil {
-		sql, params = assembleDynamicWhere(sql, params, opts.whereFrags)
+	// known here, so the placeholder render (finalizeSQL, below) must follow it (CLAUDE.md §2). With a
+	// plan the `sql` port is the statement's HEAD and the plan carries what finishes it; an ABSENT plan
+	// (wherePlan nil) means `sql`/`params` are the WHOLE statement and pass through untouched.
+	if opts.wherePlan != nil {
+		sql, params = assembleDynamicWhere(sql, params, opts.wherePlan)
 	}
 	args := make([]any, len(params))
 	values := make([]bc.Value, len(params))

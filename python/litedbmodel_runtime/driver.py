@@ -388,9 +388,42 @@ def _dollar_to_pyformat(sql: str) -> str:
     return _DOLLAR_RE.sub("%s", sql.replace("%", "%%"))
 
 
+def rewrite_unquoted_placeholders(sql: str, render: Callable[[int], str]) -> str:
+    """Rewrite every ``?`` that is NOT inside a single-quoted SQL string literal, in order, to
+    ``render(n)`` (``n`` = 1-based placeholder ordinal). A ``?`` inside a literal is TEXT, not a
+    placeholder, and is left exactly as it is.
+
+    The ONE quote-aware ``?`` walk on this plane: both the dialect placeholder render
+    (:func:`litedbmodel_runtime.leaves.render_placeholders` — PG ``$N``) and the DB-API
+    paramstyle conversion (:func:`_qmark_to_pyformat` — PyMySQL ``%s``) go through it, so the two
+    cannot disagree about which ``?`` is a placeholder. They did: a naive ``str.replace`` rewrote a
+    quoted ``?`` as a placeholder and bound a value into a string literal, while the render skipped
+    it (the same class of split #202 names).
+    """
+    out: List[str] = []
+    index = 0
+    in_string = False
+    for ch in sql:
+        if in_string:
+            out.append(ch)
+            if ch == "'":
+                in_string = False
+        elif ch == "'":
+            out.append(ch)
+            in_string = True
+        elif ch == "?":
+            index += 1
+            out.append(render(index))
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
 def _qmark_to_pyformat(sql: str) -> str:
-    """MySQL render keeps `?`; PyMySQL binds `%s`. Replace each `?` with `%s` (literal `%` doubled)."""
-    return sql.replace("%", "%%").replace("?", "%s")
+    """MySQL render keeps `?`; PyMySQL binds `%s`. Rewrite each PLACEHOLDER `?` to `%s` (literal `%`
+    doubled). A `?` inside a string literal is TEXT — PyMySQL substitutes positionally over the whole
+    text, so rewriting one would bind a value INSIDE the literal and shift every later value."""
+    return rewrite_unquoted_placeholders(sql.replace("%", "%%"), lambda _n: "%s")
 
 
 def _parse_pk_hint(hint_region: str):

@@ -819,6 +819,608 @@
       ]
     },
     {
+      "name": "optionalOnlyFeed: BOTH optional predicates absent (no WHERE at all) [postgres]",
+      "dialect": "postgres",
+      "entry": "optionalOnlyFeed",
+      "input": {},
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, author_id, status FROM conf_posts ORDER BY id ASC",
+          "params": []
+        }
+      ],
+      "expectedResult": [
+        {
+          "author_id": 1,
+          "id": 10,
+          "status": "live"
+        },
+        {
+          "author_id": 1,
+          "id": 11,
+          "status": "draft"
+        },
+        {
+          "author_id": 2,
+          "id": 12,
+          "status": "live"
+        }
+      ]
+    },
+    {
+      "name": "optionalOnlyFeed: BOTH optional predicates absent (no WHERE at all) [mysql]",
+      "dialect": "mysql",
+      "entry": "optionalOnlyFeed",
+      "input": {},
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, author_id, status FROM conf_posts ORDER BY id ASC",
+          "params": []
+        }
+      ],
+      "expectedResult": [
+        {
+          "author_id": 1,
+          "id": 10,
+          "status": "live"
+        },
+        {
+          "author_id": 1,
+          "id": 11,
+          "status": "draft"
+        },
+        {
+          "author_id": 2,
+          "id": 12,
+          "status": "live"
+        }
+      ]
+    },
+    {
+      "name": "optionalOnlyFeed: one surviving fragment OPENS the WHERE [postgres]",
+      "dialect": "postgres",
+      "entry": "optionalOnlyFeed",
+      "input": {
+        "authorId": 1
+      },
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, author_id, status FROM conf_posts WHERE author_id = $1 ORDER BY id ASC",
+          "params": [
+            1
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "author_id": 1,
+          "id": 10,
+          "status": "live"
+        },
+        {
+          "author_id": 1,
+          "id": 11,
+          "status": "draft"
+        }
+      ]
+    },
+    {
+      "name": "optionalOnlyFeed: one surviving fragment OPENS the WHERE [mysql]",
+      "dialect": "mysql",
+      "entry": "optionalOnlyFeed",
+      "input": {
+        "authorId": 1
+      },
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, author_id, status FROM conf_posts WHERE author_id = ? ORDER BY id ASC",
+          "params": [
+            1
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "author_id": 1,
+          "id": 10,
+          "status": "live"
+        },
+        {
+          "author_id": 1,
+          "id": 11,
+          "status": "draft"
+        }
+      ]
+    },
+    {
+      "name": "optionalOnlyFeed: two surviving fragments — the second joins with AND [postgres]",
+      "dialect": "postgres",
+      "entry": "optionalOnlyFeed",
+      "input": {
+        "authorId": 1,
+        "status": "live"
+      },
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, author_id, status FROM conf_posts WHERE author_id = $1 AND status = $2 ORDER BY id ASC",
+          "params": [
+            1,
+            "live"
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "author_id": 1,
+          "id": 10,
+          "status": "live"
+        }
+      ]
+    },
+    {
+      "name": "optionalOnlyFeed: two surviving fragments — the second joins with AND [mysql]",
+      "dialect": "mysql",
+      "entry": "optionalOnlyFeed",
+      "input": {
+        "authorId": 1,
+        "status": "live"
+      },
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, author_id, status FROM conf_posts WHERE author_id = ? AND status = ? ORDER BY id ASC",
+          "params": [
+            1,
+            "live"
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "author_id": 1,
+          "id": 10,
+          "status": "live"
+        }
+      ]
+    },
+    {
+      "name": "quotedOrderFeed: quoted `?` in ORDER BY, optional cursor absent [postgres]",
+      "dialect": "postgres",
+      "entry": "quotedOrderFeed",
+      "input": {
+        "authorId": 1,
+        "limit": 2
+      },
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, author_id, status, title FROM conf_posts WHERE author_id = $1 ORDER BY CASE WHEN status = '?' THEN 0 ELSE 1 END, id ASC LIMIT $2",
+          "params": [
+            1,
+            2
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "author_id": 1,
+          "id": 10,
+          "status": "live",
+          "title": "a1"
+        },
+        {
+          "author_id": 1,
+          "id": 11,
+          "status": "draft",
+          "title": "a2"
+        }
+      ]
+    },
+    {
+      "name": "quotedOrderFeed: quoted `?` in ORDER BY, optional cursor absent [mysql]",
+      "dialect": "mysql",
+      "entry": "quotedOrderFeed",
+      "input": {
+        "authorId": 1,
+        "limit": 2
+      },
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, author_id, status, title FROM conf_posts WHERE author_id = ? ORDER BY CASE WHEN status = '?' THEN 0 ELSE 1 END, id ASC LIMIT ?",
+          "params": [
+            1,
+            2
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "author_id": 1,
+          "id": 10,
+          "status": "live",
+          "title": "a1"
+        },
+        {
+          "author_id": 1,
+          "id": 11,
+          "status": "draft",
+          "title": "a2"
+        }
+      ]
+    },
+    {
+      "name": "quotedOrderFeed: quoted `?` in ORDER BY + a surviving INT cursor [postgres]",
+      "dialect": "postgres",
+      "entry": "quotedOrderFeed",
+      "input": {
+        "authorId": 1,
+        "minId": 11,
+        "limit": 2
+      },
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, author_id, status, title FROM conf_posts WHERE author_id = $1 AND id >= $2 ORDER BY CASE WHEN status = '?' THEN 0 ELSE 1 END, id ASC LIMIT $3",
+          "params": [
+            1,
+            11,
+            2
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "author_id": 1,
+          "id": 11,
+          "status": "draft",
+          "title": "a2"
+        }
+      ]
+    },
+    {
+      "name": "quotedOrderFeed: quoted `?` in ORDER BY + a surviving INT cursor [mysql]",
+      "dialect": "mysql",
+      "entry": "quotedOrderFeed",
+      "input": {
+        "authorId": 1,
+        "minId": 11,
+        "limit": 2
+      },
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, author_id, status, title FROM conf_posts WHERE author_id = ? AND id >= ? ORDER BY CASE WHEN status = '?' THEN 0 ELSE 1 END, id ASC LIMIT ?",
+          "params": [
+            1,
+            11,
+            2
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "author_id": 1,
+          "id": 11,
+          "status": "draft",
+          "title": "a2"
+        }
+      ]
+    },
+    {
+      "name": "quotedOrderFeed: same statement, LIMIT 1 (the page still binds LAST) [postgres]",
+      "dialect": "postgres",
+      "entry": "quotedOrderFeed",
+      "input": {
+        "authorId": 1,
+        "minId": 10,
+        "limit": 1
+      },
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, author_id, status, title FROM conf_posts WHERE author_id = $1 AND id >= $2 ORDER BY CASE WHEN status = '?' THEN 0 ELSE 1 END, id ASC LIMIT $3",
+          "params": [
+            1,
+            10,
+            1
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "author_id": 1,
+          "id": 10,
+          "status": "live",
+          "title": "a1"
+        }
+      ]
+    },
+    {
+      "name": "quotedOrderFeed: same statement, LIMIT 1 (the page still binds LAST) [mysql]",
+      "dialect": "mysql",
+      "entry": "quotedOrderFeed",
+      "input": {
+        "authorId": 1,
+        "minId": 10,
+        "limit": 1
+      },
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, author_id, status, title FROM conf_posts WHERE author_id = ? AND id >= ? ORDER BY CASE WHEN status = '?' THEN 0 ELSE 1 END, id ASC LIMIT ?",
+          "params": [
+            1,
+            10,
+            1
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "author_id": 1,
+          "id": 10,
+          "status": "live",
+          "title": "a1"
+        }
+      ]
+    },
+    {
+      "name": "quotedWhereOrderFeed: quoted ` WHERE ` in ORDER BY, fragment skipped [postgres]",
+      "dialect": "postgres",
+      "entry": "quotedWhereOrderFeed",
+      "input": {},
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, status, title FROM conf_posts ORDER BY CASE WHEN title = ' WHERE ' THEN 0 ELSE 1 END, id ASC",
+          "params": []
+        }
+      ],
+      "expectedResult": [
+        {
+          "id": 10,
+          "status": "live",
+          "title": "a1"
+        },
+        {
+          "id": 11,
+          "status": "draft",
+          "title": "a2"
+        },
+        {
+          "id": 12,
+          "status": "live",
+          "title": "b1"
+        }
+      ]
+    },
+    {
+      "name": "quotedWhereOrderFeed: quoted ` WHERE ` in ORDER BY, fragment skipped [mysql]",
+      "dialect": "mysql",
+      "entry": "quotedWhereOrderFeed",
+      "input": {},
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, status, title FROM conf_posts ORDER BY CASE WHEN title = ' WHERE ' THEN 0 ELSE 1 END, id ASC",
+          "params": []
+        }
+      ],
+      "expectedResult": [
+        {
+          "id": 10,
+          "status": "live",
+          "title": "a1"
+        },
+        {
+          "id": 11,
+          "status": "draft",
+          "title": "a2"
+        },
+        {
+          "id": 12,
+          "status": "live",
+          "title": "b1"
+        }
+      ]
+    },
+    {
+      "name": "quotedWhereOrderFeed: quoted ` WHERE ` in ORDER BY, fragment surviving [postgres]",
+      "dialect": "postgres",
+      "entry": "quotedWhereOrderFeed",
+      "input": {
+        "status": "live"
+      },
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, status, title FROM conf_posts WHERE status = $1 ORDER BY CASE WHEN title = ' WHERE ' THEN 0 ELSE 1 END, id ASC",
+          "params": [
+            "live"
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "id": 10,
+          "status": "live",
+          "title": "a1"
+        },
+        {
+          "id": 12,
+          "status": "live",
+          "title": "b1"
+        }
+      ]
+    },
+    {
+      "name": "quotedWhereOrderFeed: quoted ` WHERE ` in ORDER BY, fragment surviving [mysql]",
+      "dialect": "mysql",
+      "entry": "quotedWhereOrderFeed",
+      "input": {
+        "status": "live"
+      },
+      "expectedStatements": [
+        {
+          "sql": "SELECT id, status, title FROM conf_posts WHERE status = ? ORDER BY CASE WHEN title = ' WHERE ' THEN 0 ELSE 1 END, id ASC",
+          "params": [
+            "live"
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "id": 10,
+          "status": "live",
+          "title": "a1"
+        },
+        {
+          "id": 12,
+          "status": "live",
+          "title": "b1"
+        }
+      ]
+    },
+    {
+      "name": "viewFeed: SKIP × QUERY view, fragment skipped [postgres]",
+      "dialect": "postgres",
+      "entry": "viewFeed",
+      "input": {},
+      "expectedStatements": [
+        {
+          "sql": "WITH derived AS (SELECT id, author_id, title, status, created_at FROM conf_posts WHERE title <> ' WHERE ' ORDER BY id ASC LIMIT 2) SELECT id, author_id, status, title FROM derived ORDER BY id ASC",
+          "params": []
+        }
+      ],
+      "expectedResult": [
+        {
+          "author_id": 1,
+          "id": 10,
+          "status": "live",
+          "title": "a1"
+        },
+        {
+          "author_id": 1,
+          "id": 11,
+          "status": "draft",
+          "title": "a2"
+        }
+      ]
+    },
+    {
+      "name": "viewFeed: SKIP × QUERY view, fragment skipped [mysql]",
+      "dialect": "mysql",
+      "entry": "viewFeed",
+      "input": {},
+      "expectedStatements": [
+        {
+          "sql": "WITH derived AS (SELECT id, author_id, title, status, created_at FROM conf_posts WHERE title <> ' WHERE ' ORDER BY id ASC LIMIT 2) SELECT id, author_id, status, title FROM derived ORDER BY id ASC",
+          "params": []
+        }
+      ],
+      "expectedResult": [
+        {
+          "author_id": 1,
+          "id": 10,
+          "status": "live",
+          "title": "a1"
+        },
+        {
+          "author_id": 1,
+          "id": 11,
+          "status": "draft",
+          "title": "a2"
+        }
+      ]
+    },
+    {
+      "name": "viewFeed: SKIP × QUERY view, fragment surviving AFTER the CTE (not inside it) [postgres]",
+      "dialect": "postgres",
+      "entry": "viewFeed",
+      "input": {
+        "status": "live"
+      },
+      "expectedStatements": [
+        {
+          "sql": "WITH derived AS (SELECT id, author_id, title, status, created_at FROM conf_posts WHERE title <> ' WHERE ' ORDER BY id ASC LIMIT 2) SELECT id, author_id, status, title FROM derived WHERE status = $1 ORDER BY id ASC",
+          "params": [
+            "live"
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "author_id": 1,
+          "id": 10,
+          "status": "live",
+          "title": "a1"
+        }
+      ]
+    },
+    {
+      "name": "viewFeed: SKIP × QUERY view, fragment surviving AFTER the CTE (not inside it) [mysql]",
+      "dialect": "mysql",
+      "entry": "viewFeed",
+      "input": {
+        "status": "live"
+      },
+      "expectedStatements": [
+        {
+          "sql": "WITH derived AS (SELECT id, author_id, title, status, created_at FROM conf_posts WHERE title <> ' WHERE ' ORDER BY id ASC LIMIT 2) SELECT id, author_id, status, title FROM derived WHERE status = ? ORDER BY id ASC",
+          "params": [
+            "live"
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "author_id": 1,
+          "id": 10,
+          "status": "live",
+          "title": "a1"
+        }
+      ]
+    },
+    {
+      "name": "viewFeed: SKIP × QUERY view, the other status [postgres]",
+      "dialect": "postgres",
+      "entry": "viewFeed",
+      "input": {
+        "status": "draft"
+      },
+      "expectedStatements": [
+        {
+          "sql": "WITH derived AS (SELECT id, author_id, title, status, created_at FROM conf_posts WHERE title <> ' WHERE ' ORDER BY id ASC LIMIT 2) SELECT id, author_id, status, title FROM derived WHERE status = $1 ORDER BY id ASC",
+          "params": [
+            "draft"
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "author_id": 1,
+          "id": 11,
+          "status": "draft",
+          "title": "a2"
+        }
+      ]
+    },
+    {
+      "name": "viewFeed: SKIP × QUERY view, the other status [mysql]",
+      "dialect": "mysql",
+      "entry": "viewFeed",
+      "input": {
+        "status": "draft"
+      },
+      "expectedStatements": [
+        {
+          "sql": "WITH derived AS (SELECT id, author_id, title, status, created_at FROM conf_posts WHERE title <> ' WHERE ' ORDER BY id ASC LIMIT 2) SELECT id, author_id, status, title FROM derived WHERE status = ? ORDER BY id ASC",
+          "params": [
+            "draft"
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "author_id": 1,
+          "id": 11,
+          "status": "draft",
+          "title": "a2"
+        }
+      ]
+    },
+    {
       "name": "usersWithPosts: two relation levels materialize WITH THEIR FIELDS [postgres]",
       "dialect": "postgres",
       "entry": "usersWithPosts",

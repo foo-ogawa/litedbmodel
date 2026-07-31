@@ -56,12 +56,20 @@
  *
  * A read with NO optional predicate carries no plan at all. One statement, one plan holding exactly the
  * predicates that are optional.
+ *
+ * The plan also carries WHERE the clause goes, because the emitter is what put the WHERE there: a SKIP
+ * read's `sql` port is the statement's HEAD (up to the end of its WHERE region) and the plan carries the
+ * connector plus the `tail` text and its bound values, straight off the same
+ * {@link import('../makesql/compile-select').SelectBundle} this read compiled. The leaf concatenates the
+ * three pieces; it never scans the statement to find the boundary again — a scan that took a NESTED
+ * statement's tail keyword for the outer one's (#198) and counted a QUOTED `?` the placeholder render
+ * skips (#202).
  */
 
 import type { PortableType } from 'behavior-contracts/runtime';
 import { DBExists, DBSubquery, DBParentRef, type ColumnRef, type SubqueryCondition } from '../../DBValues';
 import type { ConditionObject, ConditionValue } from '../../DBConditions';
-import { compileSelect, type BoundCount, type SelectDesc } from '../makesql/compile-select';
+import { compileSelect, type BoundCount, type SelectBundle, type SelectDesc } from '../makesql/compile-select';
 import { compileWhere } from '../makesql/compile';
 import { inListPredicate, tupleInPredicate } from '../makesql/json-array';
 import { compileWriteNode, pgTypeSpecimen } from '../makesql/tx';
@@ -330,14 +338,6 @@ class EmitContext {
     // CLAUDE.md §2: the WHERE splits by ONE property — a BOUNDED predicate is lowered into the static
     // statement below, only an ACTUALLY-optional one accumulates a plan the leaf assembles per call.
     const optional = where.filter(isOptional);
-    if (optional.length > 0 && endpoint.view !== undefined) {
-      throw new Error(
-        `emit: endpoint '${name}': a QUERY view-model's CTE is a statement of its own, and the leaf locates ` +
-          `the dynamic WHERE by the FIRST tail keyword (GROUP BY / ORDER BY / LIMIT / …) — it cannot tell a ` +
-          `tail inside the CTE from the outer statement's. Declare the view's own predicate inside the view ` +
-          `query, or drop the optional predicate.`,
-      );
-    }
 
     const params: ParamDecl[] = [];
     for (const p of where) this.declareWhereParams(model, p, params);
@@ -360,9 +360,16 @@ class EmitContext {
       ...(endpoint.lock === 'update' ? { forUpdate: true } : endpoint.lock === 'share' ? { forShare: true } : {}),
     } satisfies SelectDesc);
 
-    const call = `${quote(compiled.sql)}, [${compiled.params.map(renderSlot).join(', ')}]${execOptions({
+    // A SKIP read hands the leaf the statement's HEAD (up to the end of its WHERE region) and puts the
+    // rest — the connector, the tail text and the tail's own bound values — in the plan, so the leaf
+    // CONCATENATES instead of scanning the finished statement for the boundary (#198 / #202). The split
+    // comes from the builder that created the boundary (`compileSelect`), never from re-reading its
+    // output. A read with no optional predicate carries no plan and therefore the WHOLE statement.
+    const plan = optional.length > 0 ? this.dynamicWherePlan(model, optional, compiled) : undefined;
+    const [sql, slots] = plan === undefined ? [compiled.sql, compiled.params] : [compiled.head, compiled.headParams];
+    const call = `${quote(sql)}, [${slots.map(renderSlot).join(', ')}]${execOptions({
       ...this.dbOf(model),
-      ...(optional.length > 0 ? { whereDynamic: this.dynamicWherePlan(model, optional) } : {}),
+      ...(plan !== undefined ? { whereDynamic: plan } : {}),
     })}`;
 
     const rowObj = objOf(deriveReadRow(table, projection, readResolve, `endpoint '${name}'`).outType, name);
@@ -402,13 +409,23 @@ class EmitContext {
    * element — so the go/rust native-codegen emitters resolve it (a variant/nullable array element is the
    * one shape they reject); the `executeSQL` leaf drops the `skipped` fragments at run and continues the
    * static WHERE with the survivors.
+   *
+   * The plan also carries what FINISHES the statement, taken straight off the bundle this same read
+   * compiled ({@link import('../makesql/compile-select').SelectBundle}): `lead` — the connector the first
+   * survivor joins with, which is `AND` exactly when the builder emitted a static WHERE — and `tail` /
+   * `tailParams`, the text and bound values that follow the WHERE region. The leaf then concatenates
+   * `head` + clause + `tail`; nothing on the run side has to find the boundary again, which is what a
+   * lexical scan got wrong on a nested statement (#198) and on a quoted `?` (#202).
    */
-  private dynamicWherePlan(model: ModelClassLike, optional: readonly OptionalPredicate[]): string {
+  private dynamicWherePlan(model: ModelClassLike, optional: readonly OptionalPredicate[], compiled: SelectBundle): string {
     const frags = optional.map((p) => {
       const w = compileWhere(this.conditions(model, [p]), this.spec.dialect);
       return `{ skipped: ${p.param} === null, sql: ${quote(w.sql)}, params: [${w.params.map(renderSlot).join(', ')}] }`;
     });
-    return `{ frags: [${frags.join(', ')}] }`;
+    return (
+      `{ frags: [${frags.join(', ')}], lead: ${quote(compiled.lead)}, tail: ${quote(compiled.tail)}, ` +
+      `tailParams: [${compiled.tailParams.map(renderSlot).join(', ')}] }`
+    );
   }
 
   /**

@@ -99,22 +99,59 @@ test('write routes through the run seam and returns the affected summary', () =>
 test('a SKIP plan assembles only the surviving fragments, at the WHERE position, before the tail', () => {
   const calls: Call[] = [];
   const ctx: LeafContext = { exec: contextForConnection(recordingConn(calls)), dialect: 'sqlite' };
-  const base = { sql: 'SELECT id, author_id FROM posts ORDER BY id ASC LIMIT 20', params: [], write: null };
+  // With a plan the `sql` port is the statement's HEAD (it ends at the WHERE region) and the plan carries
+  // what finishes it: `lead` (no static WHERE here ⇒ the clause OPENS one), the `tail` text and the
+  // tail's own bound values. Nothing scans the statement to find the boundary (#198 / #202).
+  const head = { sql: 'SELECT id, author_id FROM posts', params: [], write: null };
+  const tail = { lead: 'WHERE', tail: ' ORDER BY id ASC LIMIT 20', tailParams: [] };
 
   // The middle fragment is SKIPPED (`skipped: true`) — present with plausible sql/params, but dropped
   // by the leaf, so the surviving assembly is exactly `author_id = ? AND id >= ?`.
-  executeSQL({ ...base, whereDynamic: { frags: [{ skipped: false, sql: 'author_id = ?', params: [10] }, { skipped: true, sql: 'status = ?', params: ['draft'] }, { skipped: false, sql: 'id >= ?', params: [2] }] } }, ctx);
+  executeSQL({ ...head, whereDynamic: { frags: [{ skipped: false, sql: 'author_id = ?', params: [10] }, { skipped: true, sql: 'status = ?', params: ['draft'] }, { skipped: false, sql: 'id >= ?', params: [2] }], ...tail } }, ctx);
   expect(calls[0].sql).toBe('SELECT id, author_id FROM posts WHERE author_id = ? AND id >= ? ORDER BY id ASC LIMIT 20');
   expect(calls[0].params).toEqual([10, 2]);
 
-  // Every fragment skipped ⇒ no WHERE at all (the base statement is untouched).
-  executeSQL({ ...base, whereDynamic: { frags: [{ skipped: true, sql: 'status = ?', params: ['draft'] }, { skipped: true, sql: 'author_id = ?', params: [99] }] } }, ctx);
+  // Every fragment skipped ⇒ no WHERE at all (head + tail is the statement exactly as compiled).
+  executeSQL({ ...head, whereDynamic: { frags: [{ skipped: true, sql: 'status = ?', params: ['draft'] }, { skipped: true, sql: 'author_id = ?', params: [99] }], ...tail } }, ctx);
   expect(calls[1].sql).toBe('SELECT id, author_id FROM posts ORDER BY id ASC LIMIT 20');
   expect(calls[1].params).toEqual([]);
 
-  // No plan at all ⇒ the bounded statement passes through unchanged.
-  executeSQL(base, ctx);
+  // No plan at all ⇒ the `sql` port is the WHOLE statement and passes through unchanged.
+  executeSQL({ sql: 'SELECT id, author_id FROM posts ORDER BY id ASC LIMIT 20', params: [], write: null }, ctx);
   expect(calls[2].sql).toBe('SELECT id, author_id FROM posts ORDER BY id ASC LIMIT 20');
+});
+
+test('#198 / #202 — the tail is TEXT the leaf appends: a nested tail and a quoted `?` cannot move the splice', () => {
+  const calls: Call[] = [];
+  const ctx: LeafContext = { exec: contextForConnection(recordingConn(calls)), dialect: 'postgres' };
+  // A CTE that is a statement of its OWN — it carries a tail (` ORDER BY … LIMIT …`), a real WHERE and a
+  // QUOTED ` WHERE ` — is entirely inside the HEAD, and the head's own WHERE region is where it ends. The
+  // tail carries a QUOTED `?` beside the bound page. A lexical scan of the finished statement spliced
+  // inside the CTE, read the quoted ` WHERE ` as a real one, and counted the quoted `?` as a bound slot.
+  const head = {
+    sql: "WITH d AS (SELECT id, author_id FROM posts WHERE title <> ' WHERE ' ORDER BY id ASC LIMIT 5) SELECT id, author_id FROM d",
+    params: [],
+    write: null,
+  };
+  executeSQL(
+    {
+      ...head,
+      whereDynamic: {
+        frags: [{ skipped: false, sql: 'author_id = ?', params: [10] }],
+        lead: 'WHERE',
+        tail: " ORDER BY CASE WHEN status = '?' THEN 0 ELSE 1 END, id ASC LIMIT ?",
+        tailParams: [3],
+      },
+    },
+    ctx,
+  );
+  // The clause lands after the OUTER `FROM d` (the head's end) and OPENS a WHERE — the CTE's WHERE is
+  // not the outer statement's. `?`→`$N` numbers only the REAL placeholders, so the quoted one stays text.
+  expect(calls[0].sql).toBe(
+    "WITH d AS (SELECT id, author_id FROM posts WHERE title <> ' WHERE ' ORDER BY id ASC LIMIT 5) SELECT id, author_id FROM d WHERE author_id = $1 ORDER BY CASE WHEN status = '?' THEN 0 ELSE 1 END, id ASC LIMIT $2",
+  );
+  // The survivor binds BEFORE the tail's own value, and the quoted `?` binds nothing.
+  expect(calls[0].params).toEqual([10, 3]);
 });
 
 test('#192 — the survivors CONTINUE the statement\'s BOUNDED WHERE, binding between it and the page tail', () => {
@@ -123,39 +160,43 @@ test('#192 — the survivors CONTINUE the statement\'s BOUNDED WHERE, binding be
   // A MIXED read as the emitter now lowers it (CLAUDE.md §2): the bounded predicate IS the statement's
   // WHERE (static SQL + a main param), the page count binds after it, and ONLY the optional predicates
   // ride the plan.
-  const base = {
-    sql: 'SELECT id, author_id FROM posts WHERE author_id = ? ORDER BY id ASC LIMIT ?',
-    params: [10, 20],
+  const head = {
+    sql: 'SELECT id, author_id FROM posts WHERE author_id = ?',
+    params: [10],
     write: null,
   };
+  // `lead` is `AND` because the HEAD ends in a static WHERE — the emitter's SELECT builder decided that,
+  // being the code that put the WHERE there. The page rides the plan's tail with its own bound count.
+  const tail = { lead: 'AND', tail: ' ORDER BY id ASC LIMIT ?', tailParams: [20] };
 
-  executeSQL({ ...base, whereDynamic: { frags: [{ skipped: false, sql: 'status = ?', params: ['live'] }, { skipped: false, sql: 'id >= ?', params: [2] }] } }, ctx);
+  executeSQL({ ...head, whereDynamic: { frags: [{ skipped: false, sql: 'status = ?', params: ['live'] }, { skipped: false, sql: 'id >= ?', params: [2] }], ...tail } }, ctx);
   // ONE WHERE — the survivors continue the bounded one with ` AND `, at the position it ends…
   expect(calls[0].sql).toBe('SELECT id, author_id FROM posts WHERE author_id = ? AND status = ? AND id >= ? ORDER BY id ASC LIMIT ?');
   // …and their params bind at the slot their own `?`s occupy: after the bounded value, before the count.
   expect(calls[0].params).toEqual([10, 'live', 2, 20]);
 
   // A skipped fragment is dropped from BOTH the text and the binding.
-  executeSQL({ ...base, whereDynamic: { frags: [{ skipped: true, sql: 'status = ?', params: [null] }, { skipped: false, sql: 'id >= ?', params: [2] }] } }, ctx);
+  executeSQL({ ...head, whereDynamic: { frags: [{ skipped: true, sql: 'status = ?', params: [null] }, { skipped: false, sql: 'id >= ?', params: [2] }], ...tail } }, ctx);
   expect(calls[1].sql).toBe('SELECT id, author_id FROM posts WHERE author_id = ? AND id >= ? ORDER BY id ASC LIMIT ?');
   expect(calls[1].params).toEqual([10, 2, 20]);
 
   // EVERY fragment skipped ⇒ the emitted statement runs exactly as it was compiled (bounded WHERE and all).
-  executeSQL({ ...base, whereDynamic: { frags: [{ skipped: true, sql: 'status = ?', params: [null] }, { skipped: true, sql: 'id >= ?', params: [null] }] } }, ctx);
-  expect(calls[2].sql).toBe(base.sql);
+  executeSQL({ ...head, whereDynamic: { frags: [{ skipped: true, sql: 'status = ?', params: [null] }, { skipped: true, sql: 'id >= ?', params: [null] }], ...tail } }, ctx);
+  expect(calls[2].sql).toBe('SELECT id, author_id FROM posts WHERE author_id = ? ORDER BY id ASC LIMIT ?');
   expect(calls[2].params).toEqual([10, 20]);
 });
 
 test('`?`→`$N` is rendered AFTER the SKIP assembly, so the numbering follows the FINAL statement', () => {
   const calls: Call[] = [];
   const ctx: LeafContext = { exec: contextForConnection(recordingConn(calls)), dialect: 'postgres' };
-  const base = { sql: 'SELECT id, author_id FROM posts ORDER BY id ASC', params: [], write: null };
+  const head = { sql: 'SELECT id, author_id FROM posts', params: [], write: null };
+  const tail = { lead: 'WHERE', tail: ' ORDER BY id ASC', tailParams: [] };
 
-  executeSQL({ ...base, whereDynamic: { frags: [{ skipped: false, sql: 'author_id = ?', params: [10] }, { skipped: false, sql: 'id >= ?', params: [2] }] } }, ctx);
+  executeSQL({ ...head, whereDynamic: { frags: [{ skipped: false, sql: 'author_id = ?', params: [10] }, { skipped: false, sql: 'id >= ?', params: [2] }], ...tail } }, ctx);
   expect(calls[0].sql).toBe('SELECT id, author_id FROM posts WHERE author_id = $1 AND id >= $2 ORDER BY id ASC');
 
   // The SAME plan with the first fragment skipped renumbers — proof the render cannot happen earlier.
-  executeSQL({ ...base, whereDynamic: { frags: [{ skipped: true, sql: 'author_id = ?', params: [10] }, { skipped: false, sql: 'id >= ?', params: [2] }] } }, ctx);
+  executeSQL({ ...head, whereDynamic: { frags: [{ skipped: true, sql: 'author_id = ?', params: [10] }, { skipped: false, sql: 'id >= ?', params: [2] }], ...tail } }, ctx);
   expect(calls[1].sql).toBe('SELECT id, author_id FROM posts WHERE id >= $1 ORDER BY id ASC');
   expect(calls[1].params).toEqual([2]);
 });
@@ -260,9 +301,22 @@ test('a MISSING or MISTYPED field of a present struct is loud in every position 
   // like every other: without `skipped` the statement applies a predicate the call SKIPPED, without
   // `sql` the predicate is erased entirely, and without `params` a value binds where none belongs —
   // all three used to run SILENTLY and return DIFFERENT ROWS.
-  const plan = (frag: unknown): unknown => ({ sql: SQL, params: [], opts: { db: null, write: null, whereDynamic: { frags: [frag] }, guard: null } });
+  const PLAN_TAIL = { lead: 'WHERE', tail: '', tailParams: [] };
+  const plan = (frag: unknown): unknown => ({ sql: SQL, params: [], opts: { db: null, write: null, whereDynamic: { frags: [frag], ...PLAN_TAIL }, guard: null } });
   expect(() => run({ sql: SQL, params: [], opts: { db: null, write: null, whereDynamic: {}, guard: null } })).toThrow(
     /'whereDynamic' plan is missing its 'frags' field/,
+  );
+  // The plan's OWN three fields are read the same way: without `lead` the clause cannot know whether it
+  // OPENS a WHERE or CONTINUES one, and without `tail`/`tailParams` the statement loses its ORDER BY and
+  // its page — a different, unbounded row set that still looks like a successful read.
+  expect(() => run({ sql: SQL, params: [], opts: { db: null, write: null, whereDynamic: { frags: [], tail: '', tailParams: [] }, guard: null } })).toThrow(
+    /'whereDynamic' plan is missing its 'lead' field/,
+  );
+  expect(() => run({ sql: SQL, params: [], opts: { db: null, write: null, whereDynamic: { frags: [], lead: 'WHERE', tailParams: [] }, guard: null } })).toThrow(
+    /'whereDynamic' plan is missing its 'tail' field/,
+  );
+  expect(() => run({ sql: SQL, params: [], opts: { db: null, write: null, whereDynamic: { frags: [], lead: 'WHERE', tail: '' }, guard: null } })).toThrow(
+    /'whereDynamic' plan is missing its 'tailParams' field/,
   );
   expect(() => run(plan({ sql: 'v = ?', params: ['zzz'] }))).toThrow(/fragment is missing its 'skipped' field/);
   expect(() => run(plan({ skipped: false, params: ['zzz'] }))).toThrow(/fragment is missing its 'sql' field/);
@@ -284,7 +338,10 @@ test('a MISSING or MISTYPED field of a present struct is loud in every position 
   expect(() => run(badOpt({ write: { returning: 'nope' } }))).toThrow(/'write' mode's 'returning' must be bool/);
   expect(() => run(badOpt({ write: { returning: 0 } }))).toThrow(/'write' mode's 'returning' must be bool/);
   expect(() => run(badOpt({ whereDynamic: 'nope' }))).toThrow(/control record's 'whereDynamic' must be record\|null/);
-  expect(() => run(badOpt({ whereDynamic: { frags: 'nope' } }))).toThrow(/'whereDynamic' plan's 'frags' must be list/);
+  expect(() => run(badOpt({ whereDynamic: { frags: 'nope', ...PLAN_TAIL } }))).toThrow(/'whereDynamic' plan's 'frags' must be list/);
+  expect(() => run(badOpt({ whereDynamic: { frags: [], ...PLAN_TAIL, lead: 42 } }))).toThrow(/'whereDynamic' plan's 'lead' must be string/);
+  expect(() => run(badOpt({ whereDynamic: { frags: [], ...PLAN_TAIL, tail: 42 } }))).toThrow(/'whereDynamic' plan's 'tail' must be string/);
+  expect(() => run(badOpt({ whereDynamic: { frags: [], ...PLAN_TAIL, tailParams: 'z' } }))).toThrow(/'whereDynamic' plan's 'tailParams' must be list/);
   expect(() => run(badOpt({ guard: 'nope' }))).toThrow(/control record's 'guard' must be record\|null/);
   expect(() => run(badOpt({ guard: { limit: 'nope', model: 'posts', relation: 'posts' } }))).toThrow(/'guard' cap's 'limit' must be int/);
   expect(() => run(badOpt({ guard: { limit: 2.5, model: 'posts', relation: 'posts' } }))).toThrow(/'guard' cap's 'limit' must be int/);

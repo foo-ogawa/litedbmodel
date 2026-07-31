@@ -338,6 +338,30 @@ var dispatch = map[string]entryFn{
 		}
 		return my.PagedFeed(i64(in, "authorId"), optI64(in, "minId"), optStr(in, "status"), i64(in, "limit"), i64(in, "offset"))
 	},
+	"optionalOnlyFeed": func(postgres bool, in map[string]any) (any, error) {
+		if postgres {
+			return pg.OptionalOnlyFeed(optI64(in, "authorId"), optStr(in, "status"))
+		}
+		return my.OptionalOnlyFeed(optI64(in, "authorId"), optStr(in, "status"))
+	},
+	"quotedOrderFeed": func(postgres bool, in map[string]any) (any, error) {
+		if postgres {
+			return pg.QuotedOrderFeed(i64(in, "authorId"), optI64(in, "minId"), i64(in, "limit"))
+		}
+		return my.QuotedOrderFeed(i64(in, "authorId"), optI64(in, "minId"), i64(in, "limit"))
+	},
+	"quotedWhereOrderFeed": func(postgres bool, in map[string]any) (any, error) {
+		if postgres {
+			return pg.QuotedWhereOrderFeed(optStr(in, "status"))
+		}
+		return my.QuotedWhereOrderFeed(optStr(in, "status"))
+	},
+	"viewFeed": func(postgres bool, in map[string]any) (any, error) {
+		if postgres {
+			return pg.ViewFeed(optStr(in, "status"))
+		}
+		return my.ViewFeed(optStr(in, "status"))
+	},
 	"usersWithPosts": func(postgres bool, in map[string]any) (any, error) {
 		if postgres {
 			return pg.UsersWithPosts()

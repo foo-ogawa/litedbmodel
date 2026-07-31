@@ -34,10 +34,9 @@ code calls the leaf with no driver arg — the python ir-exec path injects it).
 from __future__ import annotations
 
 import json
-import re
 from typing import Any, Callable, Dict, List, Mapping, Sequence, Tuple, Union
 
-from .driver import Driver
+from .driver import Driver, rewrite_unquoted_placeholders
 from .errors import LimitExceededError, SqlFailure
 from .exec_context import (
     ExecutionContext,
@@ -59,39 +58,17 @@ Handler = Callable[[Mapping[str, Any], Mapping[str, Any]], Outcome]
 
 # ── the DYNAMIC (SKIP) WHERE: assembled by the transport, at execution time ────────────────────
 #
-# Port of ``src/scp/leaves.ts`` ``whereSplice``/``assembleDynamicWhere`` (the TS reference). A SKIP
-# predicate's presence is per-CALL, so the FINAL statement can only be determined here — which is
-# also why the placeholder render runs AFTER this. A statement with no optional predicate carries no
-# plan and never reaches this code.
-
-#: The SQL keywords that may follow a WHERE clause — the clause splices in BEFORE the first of them,
-#: at exactly the position a bounded WHERE occupies.
-_WHERE_TAIL_RE = re.compile(r"\s+(GROUP BY|ORDER BY|LIMIT|OFFSET|FOR UPDATE|RETURNING)\b", re.IGNORECASE)
-
-#: The WHERE keyword itself, matched the SAME way a tail keyword is, so the five language ports share
-#: one lexical rule. A statement that carries it already has a (bounded) WHERE, which a dynamic clause
-#: CONTINUES instead of opening a second one.
-_WHERE_RE = re.compile(r"\s+WHERE\b", re.IGNORECASE)
-
-
-def _where_splice(base_sql: str) -> Tuple[int, str, int]:
-    """Where a dynamic WHERE clause joins ``base_sql`` (port of leaves.ts ``whereSplice``) — the ONE scan
-    :func:`_effective_statement` makes, and everything it needs to place both the text and the values:
-
-    * ``at`` — the end of the statement's WHERE region: before the first tail keyword, or the end of the
-      statement. The exact position a bounded WHERE occupies.
-    * ``keyword`` — how the clause joins: ``' AND '`` when the statement already carries a WHERE (its
-      BOUNDED predicates, lowered at emit — CLAUDE.md §2), ``' WHERE '`` when it carries none.
-    * ``tail`` — how many base params bind AFTER the clause. Every ``?`` past ``at`` is a page-tail bound
-      count (``LIMIT ?`` / ``OFFSET ?``) — the only placeholders the emitted SELECT carries after the
-      WHERE — so the surviving fragments' params bind before exactly that many of the base params, which
-      is the position their own ``?``s occupy in the final statement. It counts a SUBSTRING's
-      placeholders and every placeholder binds one param, so it never exceeds ``len(params)`` for a
-      statement that can be bound at all."""
-    m = _WHERE_TAIL_RE.search(base_sql)
-    at = len(base_sql) if m is None else m.start()
-    keyword = " AND " if _WHERE_RE.search(base_sql[:at]) else " WHERE "
-    return at, keyword, base_sql[at:].count("?")
+# Port of ``src/scp/leaves.ts`` ``assembleDynamicWhere`` (the TS reference). A SKIP predicate's presence
+# is per-CALL, so the FINAL statement can only be determined here — which is also why the placeholder
+# render runs AFTER this. A statement with no optional predicate carries no plan and never reaches this
+# code.
+#
+# Assembly is a CONCATENATION: the emitter's SELECT builder is what puts the WHERE in the statement, so
+# it hands the boundary over on the plan — the ``sql`` port is the statement's HEAD, ``lead`` says
+# whether that head already ends in a WHERE, and ``tail`` / ``tailParams`` are what follows it. Nothing
+# here scans the base SQL. A scan took a NESTED statement's tail keyword for the outer statement's
+# (#198), counted a QUOTED ``?`` the placeholder render skips (#202), and derived a byte offset that is
+# not the same number in five languages.
 
 
 #: The six `at` labels the fail-closed field read names — one per leaf payload (``executeSQL`` /
@@ -165,9 +142,9 @@ def _effective_statement(ports: Mapping[str, Any], plan: Any) -> Tuple[str, List
     ``plan`` is the control record's ``whereDynamic`` field (None ⇒ no dynamic WHERE — only a read that
     declares an OPTIONAL predicate carries one; CLAUDE.md §2). bc carries each fragment's SKIP decision
     as DATA: a skipped fragment is PRESENT with ``skipped`` true (never omitted), so assembly DROPS the
-    ``skipped`` fragments. The survivors join with ``AND``, the clause CONTINUES the bounded WHERE the
-    emitter already lowered (or opens one when there is none), and their params bind at the slot their
-    ``?``s occupy: after the base params the clause follows, before the page tail's."""
+    ``skipped`` fragments. The survivors join with ``AND`` and the three pieces already in hand are
+    CONCATENATED — the statement's HEAD (the ``sql`` port when a plan is present), the clause, the plan's
+    ``tail`` — with the params in the same order: the head's, the survivors', the tail's."""
     params: List[Any] = list(_required(ports, "params", _PAYLOAD, "list"))
     sql_port: str = _required(ports, "sql", _PAYLOAD, "string")
     if plan is None:
@@ -176,7 +153,9 @@ def _effective_statement(ports: Mapping[str, Any], plan: Any) -> Tuple[str, List
     # included — a fragment is a PRESENT struct like every other and the generator spells it in full, so
     # a missing or mistyped field is an ABI break and NOT a default: without ``skipped`` the statement
     # applies a predicate the call SKIPPED, without ``sql`` the predicate is erased entirely, and without
-    # ``params`` a value binds where none belongs — each silently returning DIFFERENT ROWS (#209).
+    # ``params`` a value binds where none belongs — each silently returning DIFFERENT ROWS (#209). The
+    # plan's own three fields are read the same way: a defaulted ``lead`` opens a second WHERE (or
+    # continues an absent one) and a defaulted tail DROPS the ORDER BY and the page.
     unboxed = [
         (
             _required(f, "skipped", _FRAG, "bool"),
@@ -185,15 +164,13 @@ def _effective_statement(ports: Mapping[str, Any], plan: Any) -> Tuple[str, List
         )
         for f in (_typed(frag, _FRAG, "record") for frag in _required(plan, "frags", _PLAN, "list"))
     ]
+    lead: str = _required(plan, "lead", _PLAN, "string")
+    tail: str = _required(plan, "tail", _PLAN, "string")
+    tail_params: List[Any] = list(_required(plan, "tailParams", _PLAN, "list"))
     frags = [(frag_sql, frag_params) for skipped, frag_sql, frag_params in unboxed if not skipped]
-    if not frags:
-        return sql_port, params
-    sql: str = sql_port
-    at, keyword, tail = _where_splice(sql)
+    clause = "" if not frags else f" {lead} " + " AND ".join(frag_sql for frag_sql, _ in frags)
     where_params: List[Any] = [p for _, frag_params in frags for p in frag_params]
-    bind = len(params) - tail
-    clause = keyword + " AND ".join(frag_sql for frag_sql, _ in frags)
-    return sql[:at] + clause + sql[at:], params[:bind] + where_params + params[bind:]
+    return sql_port + clause + tail, params + where_params + tail_params
 
 
 def _is_tuple_set(param: Sequence[Any]) -> bool:
@@ -351,23 +328,7 @@ def render_placeholders(sql: str, dialect_name: str) -> str:
     """
     if dialect_name != "postgres":
         return sql
-    out: List[str] = []
-    index = 0
-    in_string = False
-    for ch in sql:
-        if in_string:
-            out.append(ch)
-            if ch == "'":
-                in_string = False
-        elif ch == "'":
-            out.append(ch)
-            in_string = True
-        elif ch == "?":
-            index += 1
-            out.append(f"${index}")
-        else:
-            out.append(ch)
-    return "".join(out)
+    return rewrite_unquoted_placeholders(sql, lambda n: f"${n}")
 
 
 # The DEFERRED PG array-cast token: a placeholder in the STATIC SQL where the ``= ANY(?::<T>[])``

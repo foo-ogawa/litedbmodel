@@ -45,10 +45,11 @@ final class DynamicWhereTest extends TestCase
     use RelationThroughLeavesTrait;
 
     /**
-     * A MIXED read exactly as the emitter now lowers it: the bounded `id > ?` IS the statement's WHERE
-     * and the page count binds after it.
+     * A MIXED read exactly as the emitter now lowers it: the bounded `id > ?` IS the statement's WHERE,
+     * so the `sql` port is the HEAD (up to that WHERE region) and the plan carries what finishes it —
+     * the connector `AND`, the ` ORDER BY … LIMIT ?` tail and the tail's own bound count.
      */
-    private const BASE_SQL = 'SELECT id FROM t WHERE id > ? ORDER BY id LIMIT ?';
+    private const BASE_HEAD = 'SELECT id FROM t WHERE id > ?';
 
     /** @var callable */
     private $executeSQL;
@@ -73,12 +74,13 @@ final class DynamicWhereTest extends TestCase
         // Everything besides the statement rides in the ONE `opts` control record (#193) — the object
         // the generated module builds (bc's php emitter renders a struct literal as a stdClass).
         $out = ($this->executeSQL)([
-            'sql' => self::BASE_SQL,
-            'params' => [1, 2],
+            'sql' => self::BASE_HEAD,
+            'params' => [1],
             'opts' => (object) [
                 'db' => null,
                 'write' => null,
-                'whereDynamic' => (object) ['frags' => $frags],
+                // The plan carries the frags AND the three facts that finish the statement.
+                'whereDynamic' => (object) ['frags' => $frags, 'lead' => 'AND', 'tail' => ' ORDER BY id LIMIT ?', 'tailParams' => [2]],
                 'guard' => null,
             ],
         ], ['nodeId' => 'n0', 'component' => 'executeSQL']);
@@ -121,10 +123,13 @@ final class DynamicWhereTest extends TestCase
         $sql = 'SELECT id, v FROM t ORDER BY id';
         $nulls = (object) ['db' => null, 'write' => null, 'whereDynamic' => null, 'guard' => null];
         // Ports whose control record carries a `whereDynamic` plan of ONE fragment (the #209 cases).
+        // The plan's own three fields are spelled valid so a fragment-field case reaches the FRAGMENT
+        // check; the head is the bare table read and the ` ORDER BY id` rides the tail (WHERE lead).
+        $planTail = ['lead' => 'WHERE', 'tail' => ' ORDER BY id', 'tailParams' => []];
         $plan = static fn (mixed $frag): array => [
-            'sql' => 'SELECT id, v FROM t ORDER BY id',
+            'sql' => 'SELECT id, v FROM t',
             'params' => [],
-            'opts' => (object) ['db' => null, 'write' => null, 'whereDynamic' => (object) ['frags' => [$frag]], 'guard' => null],
+            'opts' => (object) ['db' => null, 'write' => null, 'whereDynamic' => (object) (['frags' => [$frag]] + $planTail), 'guard' => null],
         ];
         // Ports whose control record has ONE field replaced (every other field spelled as its null).
         $opts = static fn (array $kw): array => [
@@ -173,6 +178,8 @@ final class DynamicWhereTest extends TestCase
             [$opts(['write' => (object) ['returning' => 0]]), "'write' mode's 'returning' must be bool"],
             [$opts(['whereDynamic' => 'nope']), "control record's 'whereDynamic' must be record|null"],
             [$opts(['whereDynamic' => (object) ['frags' => 'nope']]), "'whereDynamic' plan's 'frags' must be list"],
+            [$opts(['whereDynamic' => (object) ['frags' => [], 'lead' => 42, 'tail' => '', 'tailParams' => []]]), "'whereDynamic' plan's 'lead' must be string"],
+            [$opts(['whereDynamic' => (object) ['frags' => [], 'lead' => 'WHERE', 'tail' => '', 'tailParams' => 'z']]), "'whereDynamic' plan's 'tailParams' must be list"],
             [$opts(['guard' => 'nope']), "control record's 'guard' must be record|null"],
             [$opts(['guard' => (object) ['limit' => 'nope', 'model' => 't', 'relation' => 'things']]), "'guard' cap's 'limit' must be int"],
             [$opts(['guard' => (object) ['limit' => 2.5, 'model' => 't', 'relation' => 'things']]), "'guard' cap's 'limit' must be int"],

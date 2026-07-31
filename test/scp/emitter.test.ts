@@ -159,13 +159,88 @@ describe('emitter — SKIP / dynamic WHERE (assembled by the leaf at execution t
     const body = bodyOf(emit('sqlite').source, 'feed');
     const call = body.join(' ');
     // The BOUNDED predicate IS the emitted statement's WHERE — static SQL + a main param, exactly as it
-    // is on a read that declares no optional predicate at all (CLAUDE.md §2, native-clean).
-    expect(call).toContain('SELECT id, author_id, title FROM e2e_posts WHERE author_id = ? ORDER BY id ASC", [authorId]');
+    // is on a read that declares no optional predicate at all (CLAUDE.md §2, native-clean). With a plan
+    // the `sql` port is the statement's HEAD: it STOPS at the end of that WHERE, and the tail rides the
+    // plan (#198 / #202 — the leaf concatenates instead of scanning for the boundary).
+    expect(call).toContain('SELECT id, author_id, title FROM e2e_posts WHERE author_id = ?", [authorId]');
     // …so the plan holds the ACTUALLY-optional predicates and nothing else: no `skipped: false` frag,
-    // and `author_id` never appears in one.
-    expect(call).toContain('{ frags: [{ skipped: title === null, sql: "title LIKE ?", params: [title] }, { skipped: minId === null, sql: "id >= ?", params: [minId] }] }');
+    // and `author_id` never appears in one. `lead` is ` AND ` because the head ends in a WHERE; `tail`
+    // is the text that follows it and `tailParams` its own bound values (none here).
+    expect(call).toContain(
+      '{ frags: [{ skipped: title === null, sql: "title LIKE ?", params: [title] }, { skipped: minId === null, sql: "id >= ?", params: [minId] }], lead: "AND", tail: " ORDER BY id ASC", tailParams: [] }',
+    );
     expect(call).not.toContain('skipped: false');
     expect(call.slice(call.indexOf('frags'))).not.toContain('author_id');
+  });
+
+  it('a read with ONLY optional predicates leads with WHERE — the head carries none to continue', () => {
+    const r = emit('sqlite', {
+      optionalOnly: {
+        kind: 'read',
+        model: Post,
+        select: ['id', 'title'],
+        where: [
+          { column: 'author_id', op: 'eq', param: 'authorId', optional: true },
+          { column: 'title', op: 'eq', param: 'title', optional: true },
+        ],
+        order: 'id ASC',
+      },
+    });
+    const line = bodyOf(r.source, 'optionalOnly')[0];
+    // The head is the statement UP TO its (absent) WHERE — no ` WHERE` text at all — so the first
+    // survivor has to OPEN one. That is `lead`, decided by the builder that emitted the head.
+    expect(line).toContain('Db.executeSQL("SELECT id, title FROM e2e_posts", []');
+    expect(line).toContain('lead: "WHERE"');
+    expect(line).toContain('tail: " ORDER BY id ASC"');
+  });
+
+  it('#198 — a SKIP read on a QUERY view: the CTE\'s OWN tail is inside the head, not the splice point', () => {
+    const r = emit('sqlite', {
+      viewFeed: {
+        kind: 'read',
+        model: Post,
+        select: ['id', 'title'],
+        // The CTE is a statement of its OWN: it carries a tail (` ORDER BY … LIMIT …`) and a QUOTED
+        // ` WHERE `. A lexical scan of the finished statement took the CTE's ORDER BY for the outer
+        // one's and spliced the clause INSIDE the CTE, and read the quoted ` WHERE ` as a real one and
+        // continued it with ` AND ` (#198). Both are structurally impossible now: the whole CTE is part
+        // of the HEAD, which ends at the OUTER statement's WHERE region.
+        view: { query: "SELECT id, title FROM e2e_posts WHERE title <> ' WHERE ' ORDER BY id ASC LIMIT 2" },
+        where: [{ column: 'title', op: 'eq', param: 'title', optional: true }],
+        order: 'id ASC',
+      },
+    });
+    const line = bodyOf(r.source, 'viewFeed')[0];
+    expect(line).toContain(
+      'Db.executeSQL("WITH derived AS (SELECT id, title FROM e2e_posts WHERE title <> \' WHERE \' ORDER BY id ASC LIMIT 2) SELECT id, title FROM derived", []',
+    );
+    // The OUTER statement carries no WHERE, so the survivor OPENS one — the CTE's WHERE is not the
+    // outer statement's and does not make this an ` AND `.
+    expect(line).toContain('lead: "WHERE"');
+    expect(line).toContain('tail: " ORDER BY id ASC"');
+  });
+
+  it('#202 — a QUOTED `?` in the ORDER BY is TEXT: it rides the tail and binds nothing', () => {
+    const r = emit('postgres', {
+      quotedOrderFeed: {
+        kind: 'read',
+        model: Post,
+        select: ['id', 'title'],
+        where: [
+          { column: 'author_id', op: 'eq', param: 'authorId' },
+          { column: 'id', op: 'ge', param: 'minId', optional: true },
+        ],
+        // `order` is a free string on the PUBLIC `ReadEndpoint` type, so a quoted `?` reaches the tail.
+        // Counting the tail's `?`s to place the survivors' params mis-bound every value after it (#202).
+        order: "CASE WHEN title = '?' THEN 0 ELSE 1 END, id ASC",
+        limit: { param: 'limit' },
+      },
+    });
+    const line = bodyOf(r.source, 'quotedOrderFeed')[0];
+    expect(line).toContain('Db.executeSQL("SELECT id, title FROM e2e_posts WHERE author_id = ?", [authorId]');
+    // The tail carries the quoted `?` AND the bound page. `tailParams` is the page count ALONE — the
+    // quoted `?` binds nothing, and there is no count anywhere to get wrong.
+    expect(line).toContain('tail: " ORDER BY CASE WHEN title = \'?\' THEN 0 ELSE 1 END, id ASC LIMIT ?", tailParams: [limit]');
   });
 
   it('the optional parameters are declared nullable; the bounded one is not', () => {
@@ -392,8 +467,10 @@ describe('emitter — #161 paging (a page position may be an INPUT)', () => {
     // The bounded predicate is baked; the page tail binds after it. The leaf CONTINUES that WHERE with
     // the surviving fragment (`assembleDynamicWhere`) and binds its param between the two — the slot
     // the fragment's own `?` occupies — so `LIMIT ?` stays last however many fragments survive.
-    expect(line).toContain('Db.executeSQL("SELECT id, title FROM e2e_posts WHERE author_id = ? ORDER BY id ASC LIMIT ?", [authorId, limit]');
-    expect(line).toContain('{ frags: [{ skipped: title === null, sql: "title LIKE ?", params: [title] }] }');
+    expect(line).toContain('Db.executeSQL("SELECT id, title FROM e2e_posts WHERE author_id = ?", [authorId]');
+    expect(line).toContain(
+      '{ frags: [{ skipped: title === null, sql: "title LIKE ?", params: [title] }], lead: "AND", tail: " ORDER BY id ASC LIMIT ?", tailParams: [limit] }',
+    );
   });
 
   it('a BOUND limit is an authored LIMIT — it governs, so no find cap is baked (v1 skip rule)', () => {
@@ -456,19 +533,6 @@ describe('emitter — fail-closed', () => {
     );
   });
 
-  it('rejects a SKIP predicate on a QUERY view (a tail inside the CTE would take the splice position)', () => {
-    expect(() =>
-      emit('sqlite', {
-        bad: {
-          kind: 'read',
-          model: Post,
-          select: ['id', 'title'],
-          view: { query: 'SELECT id, title FROM e2e_posts' },
-          where: [{ column: 'title', op: 'like', param: 'title', optional: true }],
-        },
-      }),
-    ).toThrow(/cannot tell a tail inside the CTE from the outer statement's/);
-  });
 });
 
 // ════════════════════════════════════════════════════════════════════════════════
