@@ -293,6 +293,16 @@ jobs:
           extensions: pdo, pdo_pgsql, pdo_mysql, mbstring, pcntl
       - name: Rust toolchain
         run: rustup toolchain install stable --profile minimal
+      # The ORM-bench safety step at the bottom builds `rust/orm_bench`, which is a STANDALONE
+      # workspace (its own `[workspace]`) and so is not covered by anything the `rust` workspace
+      # compiles here. Cold, its dependency graph — the postgres + mysql crates behind
+      # `litedbmodel_runtime/livedb` — costs 1m37s, more than that step's DB work put together;
+      # restored, the same build is 12.6s (measured, both). Cache it the way publish-crates.yml
+      # already caches this repository's rust build. Must sit AFTER the toolchain install (the cache
+      # key carries the rustc version) and BEFORE the first cargo command below.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust/orm_bench
       # `npm test` runs test/scp/native-closure.test.ts, which compiles a probe crate against
       # rust/litedbmodel_runtime under `--offline`. That resolves behavior-contracts from the cargo
       # registry cache, which nothing in this job populates — so pre-fetch the rust workspace's deps
@@ -409,14 +419,20 @@ jobs:
       # It rides THIS job because this is the one that already has real PG + MySQL, a rust toolchain
       # and the warmed private go module graph; a job of its own would pay for all three again.
       #
-      # Two cells, on the job that is the critical path:
-      #   go    `lm_orm_native sql` IS the proof pass — the same seed → op → count → assert loop,
-      #         exiting 1 on a mismatch — with the per-op SQL capture on top. That capture is a
-      #         PREREQUISITE either way (`orm_bench_common::load_setup` panics without `ops`), so
-      #         go's proof costs nothing beyond it.
-      #   rust  the cell #238 was found in, and the other one whose transaction owns a POOLED
-      #         connection. `--release` is deliberately absent: `orm_bench` is a standalone workspace
-      #         (its own `[workspace]`) with `lto = true`, which is link time for no signal here.
+      # This job is the CRITICAL PATH, so the cell set is the smallest one that still catches the
+      # #238 class, not every cell run-cells.sh compares:
+      #   go     BOTH dialects. `lm_orm_native sql` IS the proof pass — the same seed → op → count →
+      #          assert loop, exiting 1 on a mismatch — with the per-op SQL capture on top, and the
+      #          mysql capture is a PREREQUISITE anyway (`orm_bench_common::load_setup` panics
+      #          without `ops`).
+      #   rust   MySQL ONLY, and the asymmetry is deliberate. It is the cell #238 was found in, and
+      #          the other one whose transaction owns a POOLED connection — but the defect is
+      #          MySQL-shaped: measured with the #238 decorator restored, the postgres leg ran all 19
+      #          ops GREEN while mysql died on `1205 Lock wait timeout` — #238 reports the same
+      #          ("sqlite / postgres unaffected"). A postgres leg here therefore costs 55s and
+      #          detects nothing the go postgres leg above does not, on a job already at ~8 minutes.
+      #          `--release` is deliberately absent: `orm_bench` is a standalone workspace (its own
+      #          `[workspace]`) with `lto = true`, which is link time for no signal here.
       # python / php / ts are left out: each drives its cell through the same runtime seam its own
       # SQLite suite already asserts, and three more cells × two dialects is minutes more re-seeding.
       #
@@ -432,5 +448,4 @@ jobs:
           go run -tags bench_postgres ./lm_bench/lm_orm_native/ sql
           go run -tags bench_mysql ./lm_bench/lm_orm_native/ sql
           cd ../rust
-          cargo run --quiet --locked --manifest-path orm_bench/Cargo.toml --features livedb,target_postgres -- safety
           cargo run --quiet --locked --manifest-path orm_bench/Cargo.toml --features livedb,target_mysql -- safety
