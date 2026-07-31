@@ -17,11 +17,10 @@
 #[path = "gen/mod.rs"]
 mod gen;
 
-use litedbmodel_runtime::driver::{forwarding_tx, forwarding_tx_no_begin, PreparedStatement};
-use litedbmodel_runtime::exec_context::TxConnection;
 use litedbmodel_runtime::{
-    clear_middlewares, for_driver, register_middleware, with_ambient_context, with_ambient_transaction,
-    Driver, ExecutionContext, MiddlewareDescriptor, SeamResult, SqlFailure, SqlHookFn, SqliteDriver,
+    clear_middlewares, for_driver, register_middleware, with_ambient_context,
+    with_ambient_transaction, Driver, ExecutionContext, MiddlewareDescriptor, SeamResult,
+    SqlHookFn, SqliteDriver,
 };
 #[cfg(feature = "livedb")]
 use litedbmodel_runtime::{MysqlDriver, PostgresDriver};
@@ -33,24 +32,33 @@ use std::time::Instant;
 
 use gen::active as bg;
 
-// ── query counter (consumer-side observability, N+1 proof) ──────────────────────────────────────
-// A `CountingDriver` decorator over the runtime Driver increments on each `prepare` (one per statement
-// the runtime issues). The N+1 proof: a batched relation runs 1 parent + 1 batched child per level =
-// 2 / 3 (not 1+N). The runtime + generated runner stay unchanged — the count rides the Driver seam.
-static QUERY_COUNT: AtomicUsize = AtomicUsize::new(0);
-
-// ── row counter (the report's per-row denominator, #170) ─────────────────────────────────────────
-// Rows are visible at the runtime's SQL seam, not at the Driver: `SqlNext` hands back the read result
-// (`SeamResult::Rows`), while a write's `Run` summary carries none. `probe_rows` registers the hook,
-// runs ONE un-timed iteration and unregisters — so the published latencies never pay to observe it.
+// ── the ONE observation seam: statements AND rows ────────────────────────────────────────────────
+// Both counters ride the runtime's SQL middleware seam — the SAME lens the go / python / php / ts cells
+// use. Every statement the runtime issues funnels through `exec_context::execute`/`run` → the hook,
+// including the tx runtime's OWN BEGIN/COMMIT/ROLLBACK, so a tx op is fully observed (BEGIN + body +
+// COMMIT). A read's `SeamResult::Rows` hands the row list back (a write's `Run` summary carries none),
+// so the same hook totals the rows the op moved — the report's per-row denominator (#170). The N+1
+// proof: a batched relation runs 1 parent + 1 batched child per level = 2 / 3 (not 1+N).
+//
+// Observing at the seam and NOT by decorating the Driver is load-bearing (#238): a Driver decorator can
+// only re-enter the runtime's own `prepare`, which on a POOLED live driver checks out a fresh connection
+// per statement — BEGIN would land on a connection that is then returned to the pool still holding an
+// open transaction. Connection ownership belongs to the driver (`MysqlDriver`/`PostgresDriver`
+// `acquire_tx` pin one connection for the whole tx); the bench only observes.
+static STMT_COUNT: AtomicUsize = AtomicUsize::new(0);
 static ROW_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-fn probe_rows(d: &dyn Driver, op: &str) -> usize {
+/// Run ONE op once, UN-TIMED, with the counting hook registered, and report its `(statements, rows)` —
+/// the safety assertion's input and the report's per-row denominator, measured in one place. The hook is
+/// unregistered on the way out, so the published latencies never pay to observe it. The caller seeds
+/// first; the seed runs on the driver directly (off-seam) and is never counted.
+fn probe(d: &dyn Driver, setup: &Setup, op: &str) -> (usize, usize) {
     clear_middlewares();
     register_middleware(MiddlewareDescriptor::sql_only(Box::new(SqlHookFn(
         |sql: &str,
          params: &[behavior_contracts::Value],
          next: &litedbmodel_runtime::middleware::SqlNext| {
+            STMT_COUNT.fetch_add(1, Ordering::Relaxed);
             let out = next(sql, params)?;
             if let SeamResult::Rows(rows) = &out {
                 ROW_COUNT.fetch_add(rows.len(), Ordering::Relaxed);
@@ -58,34 +66,16 @@ fn probe_rows(d: &dyn Driver, op: &str) -> usize {
             Ok(out)
         },
     ))));
+    STMT_COUNT.store(0, Ordering::SeqCst);
     ROW_COUNT.store(0, Ordering::SeqCst);
     let ctx = for_driver(d);
-    with_ambient_context(&ctx, || run_op(&ctx, op, 0));
-    let n = ROW_COUNT.load(Ordering::SeqCst);
+    with_ambient_context(&ctx, || run_op(&ctx, setup, op, 0));
+    let tally = (
+        STMT_COUNT.load(Ordering::SeqCst),
+        ROW_COUNT.load(Ordering::SeqCst),
+    );
     clear_middlewares();
-    n
-}
-
-struct CountingDriver {
-    inner: Box<dyn Driver>,
-}
-impl Driver for CountingDriver {
-    fn dialect(&self) -> &'static str {
-        self.inner.dialect()
-    }
-    fn prepare(&self, sql: &str) -> Box<dyn PreparedStatement + '_> {
-        QUERY_COUNT.fetch_add(1, Ordering::Relaxed);
-        self.inner.prepare(sql)
-    }
-    // Route the tx over a forwarding handle on `self` (not `inner`), so the tx-control BEGIN/COMMIT/
-    // ROLLBACK and every body statement run through THIS driver's counted `prepare` — the safety count
-    // of a tx op is then BEGIN + body statements + COMMIT (the whole transaction is observed).
-    fn begin_tx(&self) -> Result<Box<dyn TxConnection + '_>, SqlFailure> {
-        forwarding_tx(self)
-    }
-    fn acquire_tx(&self) -> Result<Box<dyn TxConnection + '_>, SqlFailure> {
-        forwarding_tx_no_begin(self)
-    }
+    tally
 }
 
 // The seed SSoT loader + connection targets are SHARED with the SDK cell (rust/orm_bench_common) —
@@ -137,29 +127,41 @@ fn seed(d: &dyn Driver, setup: &Setup) {
 //    RETURNING-chained TRANSACTIONS run through the runtime `with_ambient_transaction(ctx, …)` scope
 //    (begin_tx → runner → COMMIT on Ok / ROLLBACK on Err) — the consumer's tx-boundary responsibility;
 //    the generated runner emits NO BEGIN/COMMIT, so `ctx` is threaded here to open/close the tx. ──
-fn run_op(ctx: &ExecutionContext, op: &str, it: u64) {
+fn run_op(ctx: &ExecutionContext, setup: &Setup, op: &str, it: u64) {
+    let inp = setup.op_input(op, it);
+    let text = |k: &str| {
+        inp[k]
+            .as_str()
+            .unwrap_or_else(|| panic!("input {op}.{k} is not a string"))
+            .to_string()
+    };
+    let int = |k: &str| {
+        inp[k]
+            .as_i64()
+            .unwrap_or_else(|| panic!("input {op}.{k} is not a number"))
+    };
     match op {
         "findAll" => {
             bg::findAll().unwrap();
         }
         "filterPaginateSort" => {
             // `published` is INTEGER (native port `int`); the generated parameter is `i64`.
-            bg::filterPaginateSort(1).unwrap();
+            bg::filterPaginateSort(int("published")).unwrap();
         }
         "findFirst" => {
-            bg::findFirst("User%".to_string()).unwrap();
+            bg::findFirst(text("name")).unwrap();
         }
         "findUnique" => {
-            bg::findUnique("user1@example.com".to_string()).unwrap();
+            bg::findUnique(text("email")).unwrap();
         }
         "nestedFindAll" => {
             bg::nestedFindAll().unwrap();
         }
         "nestedFindFirst" => {
-            bg::nestedFindFirst("User%".to_string()).unwrap();
+            bg::nestedFindFirst(text("name")).unwrap();
         }
         "nestedFindUnique" => {
-            bg::nestedFindUnique("user1@example.com".to_string()).unwrap();
+            bg::nestedFindUnique(text("email")).unwrap();
         }
         "nestedRelations" => {
             bg::nestedRelations().unwrap();
@@ -168,31 +170,25 @@ fn run_op(ctx: &ExecutionContext, op: &str, it: u64) {
             bg::compositeRelations().unwrap();
         }
         "create" => {
-            bg::create(format!("new{it}@bench.com"), "New".to_string()).unwrap();
+            bg::create(text("email"), text("name")).unwrap();
         }
         "update" => {
-            bg::update(1, "Updated 1".to_string()).unwrap();
+            bg::update(int("id"), text("name")).unwrap();
         }
         "upsert" => {
-            bg::upsert("user1@example.com".to_string(), "Upserted One".to_string()).unwrap();
+            bg::upsert(text("email"), text("name")).unwrap();
         }
         "createMany" => {
             // 10 fresh rows — email is UNIQUE NOT NULL, so vary per iteration to stay insertable.
-            bg::createMany(user_rows(it, false)).unwrap();
+            bg::createMany(new_users(&inp)).unwrap();
         }
         "upsertMany" => {
             // 10 rows keyed on email (ON CONFLICT DO UPDATE) — idempotent across iterations.
-            bg::upsertMany(user_rows(it, true)).unwrap();
+            bg::upsertMany(new_users(&inp)).unwrap();
         }
         "updateMany" => {
             // 10 rows keyed on id (1..=10) — updates the seeded users, no-op for absent ids.
-            let rows: Vec<bg::UserPatch> = (1..=10)
-                .map(|id| bg::UserPatch {
-                    id,
-                    name: format!("Many {id}"),
-                })
-                .collect();
-            bg::updateMany(rows).unwrap();
+            bg::updateMany(user_patches(&inp)).unwrap();
         }
         // ── RETURNING-chained transactions (#142): each runs THROUGH the runtime tx scope. The runner
         //    executes its 2 body statements via `execute_sql`; `with_ambient_transaction` brackets them
@@ -201,61 +197,58 @@ fn run_op(ctx: &ExecutionContext, op: &str, it: u64) {
             // Fresh user per iteration (email is UNIQUE), then INSERT its post — INSERT user RETURNING id
             // → INSERT post (author_id = that id).
             with_ambient_transaction(ctx, || {
-                bg::nestedCreate(
-                    format!("nc{it}@bench.com"),
-                    "NC".to_string(),
-                    "NC Post".to_string(),
-                )
+                bg::nestedCreate(text("email"), text("name"), text("title"))
             })
             .unwrap();
         }
         "nestedUpsert" => {
             // Existing email (ON CONFLICT DO UPDATE) → INSERT post keyed on the upserted user's id.
             with_ambient_transaction(ctx, || {
-                bg::nestedUpsert(
-                    "user1@example.com".to_string(),
-                    "NUp".to_string(),
-                    "NUp Post".to_string(),
-                )
+                bg::nestedUpsert(text("email"), text("name"), text("title"))
             })
             .unwrap();
         }
         "nestedUpdate" => {
             // UPDATE seeded user 1 RETURNING id → UPDATE that user's posts (author_id = 1 exists in seed).
             with_ambient_transaction(ctx, || {
-                bg::nestedUpdate(1, "NU".to_string(), "NU Post".to_string())
+                bg::nestedUpdate(int("id"), text("name"), text("title"))
             })
             .unwrap();
         }
         "delete" => {
             // Create-then-delete: INSERT a fresh user RETURNING id → DELETE the exact created row
             // (its RETURNING id + inserted email). Fresh email per iteration (UNIQUE).
-            with_ambient_transaction(ctx, || {
-                bg::delete(format!("del{it}@bench.com"), "Del".to_string())
-            })
-            .unwrap();
+            with_ambient_transaction(ctx, || bg::delete(text("email"), text("name"))).unwrap();
         }
         other => panic!("unknown op '{other}'"),
     }
 }
 
-// Build the 10-row batch record set for createMany/upsertMany as a NATIVE `Vec<NewUser>` (bc boxes it to
-// the json_each/JSON_TABLE batch param at the leaf boundary). `stable` reuses fixed emails (upsertMany —
-// conflict-updates); else the email varies by iteration so a plain INSERT stays insertable under UNIQUE.
-fn user_rows(it: u64, stable: bool) -> Vec<bg::NewUser> {
-    (0..10)
-        .map(|i| {
-            let email = if stable {
-                format!("many{i}@bench.com")
-            } else {
-                format!("many{it}_{i}@bench.com")
-            };
-            bg::NewUser {
-                email,
-                name: format!("Many {i}"),
-            }
+/// `new_users` / `user_patches` map the DECLARED batch records (.setup/<dialect>.json `inputs`, from the
+/// axis SSoT) onto the record types the generated signatures take — the only thing this harness
+/// contributes. bc boxes them to the json_each/JSON_TABLE/UNNEST batch param at the leaf boundary.
+fn new_users(inp: &serde_json::Value) -> Vec<bg::NewUser> {
+    records(inp)
+        .iter()
+        .map(|r| bg::NewUser {
+            email: r["email"].as_str().expect("record.email").to_string(),
+            name: r["name"].as_str().expect("record.name").to_string(),
         })
         .collect()
+}
+
+fn user_patches(inp: &serde_json::Value) -> Vec<bg::UserPatch> {
+    records(inp)
+        .iter()
+        .map(|r| bg::UserPatch {
+            id: r["id"].as_i64().expect("record.id"),
+            name: r["name"].as_str().expect("record.name").to_string(),
+        })
+        .collect()
+}
+
+fn records(inp: &serde_json::Value) -> &Vec<serde_json::Value> {
+    inp["rows"].as_array().expect("`rows` is a record array")
 }
 
 // The covered ops exposed on the combined struct-native path (bg::COMPONENT_NAMES_NATIVE_RAW).
@@ -303,17 +296,17 @@ fn main() {
         // driver installed (the covered runner resolves it inside `execute_sql`).
         seed(d, &setup);
         // One UN-TIMED probe measures the rows this op moves — the report's per-row denominator (#170).
-        let rows = probe_rows(d, op);
+        let (_stmts, rows) = probe(d, &setup, op);
         let ctx = for_driver(d);
         with_ambient_context(&ctx, || {
             for it in 0..warmup {
-                run_op(&ctx, op, it + 1);
+                run_op(&ctx, &setup, op, it + 1);
             }
             for it in 0..reps {
                 // Unique iteration id: the probe took 0, so warmup/timed start at 1.
                 let g = it + warmup + 1;
                 let t = Instant::now();
-                run_op(&ctx, op, g);
+                run_op(&ctx, &setup, op, g);
                 let us = t.elapsed().as_micros();
                 println!("native,{dialect},{op},{it},{us},{rows}");
             }
@@ -322,16 +315,14 @@ fn main() {
 }
 
 // ── The safety + fairness proof: EVERY op's statement count AND the rows it moves. ────────────────
-// Statements ride the CountingDriver (it sees the tx-control BEGIN/COMMIT too); rows ride the runtime
-// SQL seam (`probe_rows`). Covering all 19 ops — not just the guarded ones — is what lets this cell's
-// row yield be compared against every other language's, the fairness check #170 had no surface for.
+// Both come from the ONE `probe` pass over the runtime SQL seam (which sees the tx-control BEGIN/COMMIT
+// too). Covering all 19 ops — not just the guarded ones — is what lets this cell's row yield be compared
+// against every other language's, the fairness check #170 had no surface for.
 fn run_safety() {
     let dialect = gen::TARGET;
     let setup = load_setup(dialect);
-    let counting = CountingDriver {
-        inner: open_driver(dialect, &setup),
-    };
-    let d: &dyn Driver = &counting;
+    let driver = open_driver(dialect, &setup);
+    let d: &dyn Driver = driver.as_ref();
     // The guarded expectations: a relation op is 1 parent + 1 batched child PER LEVEL (N+1-free,
     // independent of the row count); a batch write is ONE statement for N records (the whole record set
     // rides as one param); a RETURNING-chained tx is BEGIN + 2 body + COMMIT = 4.
@@ -352,12 +343,7 @@ fn run_safety() {
     println!("op                    statements  rows");
     for op in OPS {
         seed(d, &setup); // clean fixture per op; off-seam, never counted
-        let rows = probe_rows(d, op);
-        seed(d, &setup);
-        QUERY_COUNT.store(0, Ordering::SeqCst);
-        let ctx = for_driver(d);
-        with_ambient_context(&ctx, || run_op(&ctx, op, 0));
-        let stmts = QUERY_COUNT.load(Ordering::SeqCst);
+        let (stmts, rows) = probe(d, &setup, op);
         let want = expected
             .iter()
             .find(|(name, _)| name == op)
@@ -369,6 +355,9 @@ fn run_safety() {
             }
             _ => "ok",
         };
+        // The ONE format every cell prints, so `run-cells.sh` can hold the ten cells to the same
+        // statements and rows per op instead of ten human tables being eyeballed.
+        println!("proof,native,{dialect},{op},{stmts},{rows}");
         println!("{op:<20}  {stmts:<10}  {rows:<6} {mark}");
     }
 }

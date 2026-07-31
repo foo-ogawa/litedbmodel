@@ -15,7 +15,7 @@
 //! `<dialect>` is sqlite | postgres | mysql; postgres/mysql need `--features livedb` and take their
 //! connection from the TEST_* environment (orm_bench_common), never from a second argv knob.
 
-use orm_bench_common::{load_setup as load_setup_at, Setup};
+use orm_bench_common::{load_setup as load_setup_at, Bind, Recovery, Setup};
 #[cfg(feature = "livedb")]
 use orm_bench_common::{mysql_url, postgres_conn};
 use std::collections::HashMap;
@@ -87,6 +87,35 @@ fn cell_i64(c: &Cell) -> i64 {
 
 // ── the ONE exec seam. All DB access in this crate rides these three methods, so the query counter and
 //    the per-driver param/decode lowering each live in exactly one place per driver. ─────────────────
+/// What a driver reports about a write. `insert_id` is MySQL's and SQLite's; PostgreSQL has none.
+struct Wrote {
+    insert_id: Option<i64>,
+    affected: u64,
+}
+
+/// The recovering SELECT's params, from the write's own params and what the driver reported — the
+/// `bindReselect` of `src/scp/makesql/mysql-returning.ts`, where these kinds are defined. A kind the
+/// driver cannot answer is a HARD failure: recovering the wrong rows quietly is what this path removes.
+fn bind_recovery(binds: &[Bind], params: &[P], wrote: &Wrote) -> Vec<P> {
+    binds
+        .iter()
+        .map(|b| match b {
+            Bind::Param(i) => params[*i].clone(),
+            Bind::LastId => P::I(
+                wrote
+                    .insert_id
+                    .expect("driver reported no insert id for the write"),
+            ),
+            Bind::HighId => P::I(
+                wrote
+                    .insert_id
+                    .expect("driver reported no insert id for the write")
+                    + wrote.affected.max(1) as i64,
+            ),
+        })
+        .collect()
+}
+
 trait Db {
     fn dialect(&self) -> Dialect;
     /// The ONE counted read seam: every SELECT rides it, so the statement and row counters each live in
@@ -98,36 +127,26 @@ trait Db {
         out
     }
     fn fetch(&mut self, sql: &str, params: &[P]) -> Vec<Vec<Cell>>;
-    fn exec(&mut self, sql: &str, params: &[P]);
+    fn exec(&mut self, sql: &str, params: &[P]) -> Wrote;
 
     /// A write that hands back the id of the row it wrote — the ` RETURNING id` the authored native module
     /// declares for every id-chaining write (`benchmark/crosslang/native-model.ts`). The baseline issues the
     /// SAME statement and reads the SAME row back, so the two surfaces do equal work.
     ///
-    /// MySQL has no RETURNING: the runtime's mysql adapter strips the clause and recovers the written rows
-    /// with a keyed SELECT on the same connection (`src/scp/makesql/mysql-returning.ts`). `recover` is that
-    /// same recovery, and it belongs to the SAME logical statement — the runtime's seam counts a MySQL
-    /// RETURNING write as one (its recovery runs below the seam) while counting the row it recovers — so the
-    /// rows are tallied and the statement count is not bumped a second time.
-    fn write_returning_id(
-        &mut self,
-        sql: &str,
-        params: &[P],
-        recover: &str,
-        recover_params: &[P],
-    ) -> i64 {
-        if self.dialect() != Dialect::Mysql {
+    /// `recovery` is the artifact's entry for this statement: None wherever the database executes the
+    /// RETURNING itself, and on MySQL — which cannot parse it — the write with the clause stripped plus the
+    /// keyed SELECT that recovers the written rows, both from the library's own `buildMysqlReselect`
+    /// (`benchmark/crosslang/derive-ops.ts`). It belongs to the SAME logical statement — the runtime's seam
+    /// counts a MySQL RETURNING write as one (its recovery runs below the seam) while counting the row it
+    /// recovers — so the rows are tallied and the statement count is not bumped a second time.
+    fn write_returning_id(&mut self, sql: &str, params: &[P], recovery: Option<&Recovery>) -> i64 {
+        let Some(rec) = recovery else {
             let rows = self.query(sql, params);
             return cell_i64(&rows[0][0]);
-        }
-        // MySQL cannot parse RETURNING: strip the clause (and the /*scp:pk=…*/ hint naming the key) exactly
-        // as the runtime's mysql adapter does, then recover the written row with the keyed SELECT.
-        let stripped = match sql.to_uppercase().rfind(" RETURNING ") {
-            Some(at) => sql[..at].to_string(),
-            None => sql.to_string(),
         };
-        self.exec(&stripped, params);
-        let rows = self.recover_rows(recover, recover_params);
+        let wrote = self.exec(&rec.write_sql, params);
+        let bound = bind_recovery(&rec.binds, params, &wrote);
+        let rows = self.recover_rows(&rec.select_sql, &bound);
         cell_i64(&rows[0][0])
     }
 
@@ -183,18 +202,26 @@ impl Db for SqliteDb {
             .expect("query");
         rows.map(|r| r.unwrap()).collect()
     }
-    fn exec(&mut self, sql: &str, params: &[P]) {
+    fn exec(&mut self, sql: &str, params: &[P]) -> Wrote {
         QUERY_COUNT.fetch_add(1, Ordering::Relaxed);
         if params.is_empty() {
             self.conn
                 .execute_batch(sql)
                 .unwrap_or_else(|e| panic!("exec `{sql}`: {e}"));
-        } else {
-            self.conn
-                .prepare_cached(sql)
-                .expect("prepare")
-                .execute(rusqlite::params_from_iter(params.iter().map(sqlite_value)))
-                .unwrap_or_else(|e| panic!("exec `{sql}`: {e}"));
+            return Wrote {
+                insert_id: None,
+                affected: 0,
+            };
+        }
+        let affected = self
+            .conn
+            .prepare_cached(sql)
+            .expect("prepare")
+            .execute(rusqlite::params_from_iter(params.iter().map(sqlite_value)))
+            .unwrap_or_else(|e| panic!("exec `{sql}`: {e}"));
+        Wrote {
+            insert_id: Some(self.conn.last_insert_rowid()),
+            affected: affected as u64,
         }
     }
 }
@@ -353,21 +380,31 @@ impl Db for PgDb {
             .map(pg_decode)
             .collect()
     }
-    fn exec(&mut self, sql: &str, params: &[P]) {
+    fn exec(&mut self, sql: &str, params: &[P]) -> Wrote {
         QUERY_COUNT.fetch_add(1, Ordering::Relaxed);
         if params.is_empty() {
             // BEGIN/COMMIT + param-free seed statements: run outside the extended protocol.
             self.client
                 .batch_execute(sql)
                 .unwrap_or_else(|e| panic!("exec `{sql}`: {e}"));
-        } else {
-            let boxed = pg_params(params);
-            let refs: Vec<&(dyn postgres::types::ToSql + Sync)> =
-                boxed.iter().map(|b| b.as_ref()).collect();
-            let stmt = self.prep(sql);
-            self.client
-                .execute(&stmt, &refs)
-                .unwrap_or_else(|e| panic!("exec `{sql}`: {e}"));
+            return Wrote {
+                insert_id: None,
+                affected: 0,
+            };
+        }
+        let boxed = pg_params(params);
+        let refs: Vec<&(dyn postgres::types::ToSql + Sync)> =
+            boxed.iter().map(|b| b.as_ref()).collect();
+        let stmt = self.prep(sql);
+        let affected = self
+            .client
+            .execute(&stmt, &refs)
+            .unwrap_or_else(|e| panic!("exec `{sql}`: {e}"));
+        // No insert id: PostgreSQL has none, and never needs one — it executes RETURNING itself, so no
+        // statement of its artifact carries a recovery.
+        Wrote {
+            insert_id: None,
+            affected,
         }
     }
 }
@@ -416,7 +453,7 @@ impl Db for MyDb {
             .unwrap_or_else(|e| panic!("query `{sql}`: {e}"));
         rows.into_iter().map(my_decode).collect()
     }
-    fn exec(&mut self, sql: &str, params: &[P]) {
+    fn exec(&mut self, sql: &str, params: &[P]) -> Wrote {
         use mysql::prelude::Queryable;
         QUERY_COUNT.fetch_add(1, Ordering::Relaxed);
         if params.is_empty() {
@@ -427,6 +464,10 @@ impl Db for MyDb {
             self.conn
                 .exec_drop(sql, my_params(params))
                 .unwrap_or_else(|e| panic!("exec `{sql}`: {e}"));
+        }
+        Wrote {
+            insert_id: Some(self.conn.last_insert_id() as i64),
+            affected: self.conn.affected_rows(),
         }
     }
 }
@@ -482,45 +523,6 @@ fn reseed(db: &mut dyn Db, setup: &Setup) {
     }
 }
 
-// ── batch-write inputs (mirror ops.ts / the native cell) ──────────────────────────────────────────────
-/// The stable 10-record email set `upsertMany` conflicts on — the SAME records the native cell upserts.
-fn batch_emails_stable() -> Vec<String> {
-    (0..10).map(|k| format!("many{k}@bench.com")).collect()
-}
-
-fn batch_emails(it: u64) -> Vec<String> {
-    (0..10).map(|k| format!("many{it}_{k}@bench.com")).collect()
-}
-fn batch_names() -> Vec<String> {
-    (0..10).map(|k| format!("Many {k}")).collect()
-}
-
-// ── upsert bodies differ only in the conflict clause; the column list + VALUES are shared. ───────────
-/// One relation level's key set as the ONE param the captured SQL expects. The generated module binds a
-/// batched child read's key set as a single JSON array (`json_each(?)` / `JSON_TABLE(?)` /
-/// `UNNEST(?::t[])`), never as N placeholders — so the baseline binds it the same way, or it is running
-/// different SQL. A composite key is an array of tuples, a single key an array of scalars.
-/// The 10-row batch record set as (email, name) pairs — the same records the native cell passes.
-fn user_records(it: u64, stable: bool) -> Vec<(String, String)> {
-    let emails = if stable {
-        batch_emails_stable()
-    } else {
-        batch_emails(it)
-    };
-    let names = batch_names();
-    (0..10)
-        .map(|k| (emails[k].clone(), names[k].clone()))
-        .collect()
-}
-
-/// The id-keyed 10-row batch set `updateMany` binds.
-fn patch_records() -> Vec<(String, String)> {
-    let names = batch_names();
-    (0..10)
-        .map(|k| ((k + 1).to_string(), names[k].clone()))
-        .collect()
-}
-
 /// True when the statement casts its param to a PostgreSQL array (`::int[]` / `::text[]`).
 fn is_pg_array_cast(sql: &str) -> bool {
     sql.split("::").skip(1).any(|tail| {
@@ -574,48 +576,47 @@ fn json_key_set(tuples: &[Vec<i64>]) -> String {
 /// A batch write's record set as the param(s) the captured statement expects: ONE JSON array on
 /// MySQL/SQLite, one array PER COLUMN on PostgreSQL (its `UNNEST` form takes column arrays). The payload
 /// repeats once per `?` — updateMany's SET subquery and its WHERE each read it.
-fn batch_params(dialect: Dialect, sql: &str, records: &[(String, String)], keyed: bool) -> Vec<P> {
+///
+/// `columns` is the statement's OWN column list (`batchColumns`, read off the SQL by derive-ops.ts).
+/// PostgreSQL's `UNNEST(?::int[], ?::text[]) AS v(id, name)` binds the Nth array to the Nth alias, so the
+/// order is the statement's to choose; pinning it to a tuple position agreed with it only by accident.
+/// A column's TYPE comes from the declared value: an integer column binds an int array, a string column a
+/// text array — the same rule the `?::int[]` / `?::text[]` casts state.
+fn batch_params(
+    dialect: Dialect,
+    sql: &str,
+    records: &[serde_json::Value],
+    columns: &[String],
+) -> Vec<P> {
     let one: Vec<P> = if dialect == Dialect::Pg {
-        // `UNNEST(?::int[], ?::text[])` — one array PER COLUMN, bound as a real array (the `postgres` crate
-        // maps types strictly). A keyed batch's first column is the id.
-        let first = if keyed {
-            P::Ints(
-                records
-                    .iter()
-                    .map(|(a, _)| a.parse().expect("id"))
-                    .collect(),
-            )
-        } else {
-            P::Strs(records.iter().map(|(a, _)| a.clone()).collect())
-        };
-        vec![
-            first,
-            P::Strs(records.iter().map(|(_, b)| b.clone()).collect()),
-        ]
-    } else {
-        // MySQL/SQLite take the whole record set as ONE JSON array param.
-        let key = if keyed { "id" } else { "email" };
-        let quote = |v: &str| format!("\"{}\"", v.replace('\\', "\\\\").replace('"', "\\\""));
-        let objs: Vec<String> = records
+        // Bound as a real array — the `postgres` crate maps types strictly.
+        columns
             .iter()
-            .map(|(a, b)| {
-                let first = if keyed { a.clone() } else { quote(a) };
-                format!("{{\"{key}\":{first},\"name\":{}}}", quote(b))
+            .map(|col| {
+                if records[0][col].is_i64() {
+                    P::Ints(
+                        records
+                            .iter()
+                            .map(|r| r[col].as_i64().expect("int column"))
+                            .collect(),
+                    )
+                } else {
+                    P::Strs(
+                        records
+                            .iter()
+                            .map(|r| r[col].as_str().expect("text column").to_string())
+                            .collect(),
+                    )
+                }
             })
-            .collect();
-        vec![P::S(format!("[{}]", objs.join(",")))]
+            .collect()
+    } else {
+        // MySQL/SQLite take the whole record set as ONE JSON array param, read back BY NAME.
+        vec![P::S(serde_json::Value::Array(records.to_vec()).to_string())]
     };
     let reps = (sql.matches('?').count() / one.len()).max(1);
     (0..reps).flat_map(|_| one.clone()).collect()
 }
-
-/// The keyed SELECTs the runtime's MySQL adapter recovers a RETURNING write's rows with
-/// (src/scp/makesql/mysql-returning.ts): the conflict key for an upsert, the AUTO_INCREMENT range for an
-/// insert, the write's own WHERE for an update. Only MySQL runs them — the others have RETURNING.
-const RECOVER_BY_EMAIL: &str = "SELECT id FROM benchmark_users WHERE email = ?";
-const RECOVER_BY_LAST_INSERT_ID: &str =
-    "SELECT id FROM benchmark_users WHERE id = LAST_INSERT_ID()";
-const RECOVER_BY_ID: &str = "SELECT id FROM benchmark_users WHERE id = ?";
 
 // ── the 19 ORM ops (contract.ts order). Each runs ONE logical op for iteration `it`; mutating ops vary
 //    their UNIQUE column by `it`. Fixed inputs mirror ops.ts (the SCP SSoT). ──────────────────────────
@@ -624,8 +625,22 @@ const RECOVER_BY_ID: &str = "SELECT id FROM benchmark_users WHERE id = ?";
 /// native by sdk, which only isolates the runtime's cost if both send the DB the same statements. What
 /// stays hand-written is what a raw-driver user writes: param binding, decode, grouping children into
 /// parents, and the transaction bracket.
-fn run_op(op: &str, it: u64, db: &mut dyn Db, sql: &[String]) {
+fn run_op(op: &str, it: u64, db: &mut dyn Db, setup: &Setup) {
     let dialect = db.dialect();
+    let sql = &setup.ops[op];
+    let inp = setup.op_input(op, it);
+    let text = |k: &str| {
+        inp[k]
+            .as_str()
+            .unwrap_or_else(|| panic!("input {op}.{k} is not a string"))
+            .to_string()
+    };
+    let int = |k: &str| {
+        inp[k]
+            .as_i64()
+            .unwrap_or_else(|| panic!("input {op}.{k} is not a number"))
+    };
+    let rec = |i: usize| setup.recovery(op, i);
     match op {
         "findAll" => {
             let rows = decode_users(db.query(&sql[0], &[]));
@@ -634,15 +649,15 @@ fn run_op(op: &str, it: u64, db: &mut dyn Db, sql: &[String]) {
         "filterPaginateSort" => {
             // `published` is an integer column on every dialect (sqlite INTEGER / mysql TINYINT(1) /
             // pg SMALLINT — see orm-domain.ts `ddl`), and the seed binds 1/0 everywhere.
-            let rows = decode_posts_full(db.query(&sql[0], &[P::I(1)]));
+            let rows = decode_posts_full(db.query(&sql[0], &[P::I(int("published"))]));
             std::hint::black_box(&rows);
         }
         "findFirst" => {
-            let rows = decode_users(db.query(&sql[0], &[P::S("User%".into())]));
+            let rows = decode_users(db.query(&sql[0], &[P::S(text("name"))]));
             std::hint::black_box(&rows);
         }
         "findUnique" => {
-            let rows = decode_users(db.query(&sql[0], &[P::S("user500@example.com".into())]));
+            let rows = decode_users(db.query(&sql[0], &[P::S(text("email"))]));
             std::hint::black_box(&rows);
         }
         "nestedFindAll" => {
@@ -651,12 +666,12 @@ fn run_op(op: &str, it: u64, db: &mut dyn Db, sql: &[String]) {
             std::hint::black_box(&roots);
         }
         "nestedFindFirst" => {
-            let users = db.query(&sql[0], &[P::S("User%".into())]);
+            let users = db.query(&sql[0], &[P::S(text("name"))]);
             let roots = materialize_users_posts(db, users, &sql[1]);
             std::hint::black_box(&roots);
         }
         "nestedFindUnique" => {
-            let users = db.query(&sql[0], &[P::S("user1@example.com".into())]);
+            let users = db.query(&sql[0], &[P::S(text("email"))]);
             let roots = materialize_users_posts(db, users, &sql[1]);
             std::hint::black_box(&roots);
         }
@@ -670,59 +685,43 @@ fn run_op(op: &str, it: u64, db: &mut dyn Db, sql: &[String]) {
             std::hint::black_box(&roots);
         }
         "create" => {
-            db.exec(
-                &sql[0],
-                &[P::S(format!("new{it}@bench.com")), P::S("New".into())],
-            );
+            db.exec(&sql[0], &[P::S(text("email")), P::S(text("name"))]);
         }
         "update" => {
-            db.exec(&sql[0], &[P::S("Updated 1".into()), P::I(1)]);
+            db.exec(&sql[0], &[P::S(text("name")), P::I(int("id"))]);
         }
         "upsert" => {
             // The captured statement declares ` RETURNING id`, so the baseline reads the id back too.
             let _ = db.write_returning_id(
                 &sql[0],
-                &[
-                    P::S("user1@example.com".into()),
-                    P::S("Upserted One".into()),
-                ],
-                RECOVER_BY_EMAIL,
-                &[P::S("user1@example.com".into())],
+                &[P::S(text("email")), P::S(text("name"))],
+                rec(0).as_ref(),
             );
         }
-        "createMany" => {
-            let recs = user_records(it, false);
-            db.exec(&sql[0], &batch_params(dialect, &sql[0], &recs, false));
-        }
-        "upsertMany" => {
-            // The SAME 10 records the native module upserts.
-            let recs = user_records(it, true);
-            db.exec(&sql[0], &batch_params(dialect, &sql[0], &recs, false));
-        }
-        "updateMany" => {
-            let recs = patch_records();
-            db.exec(&sql[0], &batch_params(dialect, &sql[0], &recs, true));
+        "createMany" | "upsertMany" | "updateMany" => {
+            // The SAME 10 records the native module writes, bound the way the statement asks for them.
+            let recs = inp["rows"].as_array().expect("`rows` is a record array");
+            let cols = setup.batch_columns(op);
+            db.exec(&sql[0], &batch_params(dialect, &sql[0], recs, &cols));
         }
         "nestedCreate" => {
             db.exec("BEGIN", &[]);
             let uid = db.write_returning_id(
                 &sql[0],
-                &[P::S(format!("nc{it}@bench.com")), P::S("NC".into())],
-                RECOVER_BY_LAST_INSERT_ID,
-                &[],
+                &[P::S(text("email")), P::S(text("name"))],
+                rec(0).as_ref(),
             );
-            db.exec(&sql[1], &[P::I(uid), P::S("NC Post".into())]);
+            db.exec(&sql[1], &[P::I(uid), P::S(text("title"))]);
             db.exec("COMMIT", &[]);
         }
         "nestedUpsert" => {
             db.exec("BEGIN", &[]);
             let uid = db.write_returning_id(
                 &sql[0],
-                &[P::S("user1@example.com".into()), P::S("NUp".into())],
-                RECOVER_BY_EMAIL,
-                &[P::S("user1@example.com".into())],
+                &[P::S(text("email")), P::S(text("name"))],
+                rec(0).as_ref(),
             );
-            db.exec(&sql[1], &[P::I(uid), P::S("NUp Post".into())]);
+            db.exec(&sql[1], &[P::I(uid), P::S(text("title"))]);
             db.exec("COMMIT", &[]);
         }
         "nestedUpdate" => {
@@ -731,20 +730,18 @@ fn run_op(op: &str, it: u64, db: &mut dyn Db, sql: &[String]) {
             // taking the id from the input instead would skip a statement's worth of work.
             let uid = db.write_returning_id(
                 &sql[0],
-                &[P::S("NU".into()), P::I(1)],
-                RECOVER_BY_ID,
-                &[P::I(1)],
+                &[P::S(text("name")), P::I(int("id"))],
+                rec(0).as_ref(),
             );
-            db.exec(&sql[1], &[P::S("NU Post".into()), P::I(uid)]);
+            db.exec(&sql[1], &[P::S(text("title")), P::I(uid)]);
             db.exec("COMMIT", &[]);
         }
         "delete" => {
             db.exec("BEGIN", &[]);
             let uid = db.write_returning_id(
                 &sql[0],
-                &[P::S(format!("del{it}@bench.com")), P::S("Del".into())],
-                RECOVER_BY_LAST_INSERT_ID,
-                &[],
+                &[P::S(text("email")), P::S(text("name"))],
+                rec(0).as_ref(),
             );
             db.exec(&sql[1], &[P::I(uid)]);
             db.exec("COMMIT", &[]);
@@ -1076,7 +1073,6 @@ fn main() {
     let warmup: u64 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(30);
 
     let setup = load_setup(&dialect);
-    let ops = setup.ops.clone();
     let mut db = open_db(&dialect);
     apply_schema(db.as_mut(), &setup);
     println!("cell,dialect,op,iter,us,rows");
@@ -1085,16 +1081,16 @@ fn main() {
         reseed(db.as_mut(), &setup);
         // One UN-TIMED probe measures the rows this op moves — the per-row denominator (#170).
         ROW_COUNT.store(0, Ordering::SeqCst);
-        run_op(op, 0, db.as_mut(), &ops[*op]);
+        run_op(op, 0, db.as_mut(), &setup);
         let rows = ROW_COUNT.load(Ordering::SeqCst);
         for it in 0..warmup {
-            run_op(op, it + 1, db.as_mut(), &ops[*op]);
+            run_op(op, it + 1, db.as_mut(), &setup);
         }
         for it in 0..reps {
             // Unique iteration id: the probe took 0, so warmup/timed start at 1.
             let g = it + warmup + 1;
             let t = Instant::now();
-            run_op(op, g, db.as_mut(), &ops[*op]);
+            run_op(op, g, db.as_mut(), &setup);
             let us = t.elapsed().as_micros();
             println!("sdk,{dialect},{op},{it},{us},{rows}");
         }
@@ -1106,7 +1102,6 @@ fn main() {
 // baseline's row yield be compared against the native cell's — the check #170 had no surface for.
 fn run_safety(dialect: &str) {
     let setup = load_setup(dialect);
-    let ops = setup.ops.clone();
     let mut db = open_db(dialect);
     apply_schema(db.as_mut(), &setup);
     // A relation op is 1 parent + 1 batched child PER LEVEL (N+1-free, independent of the row count); a
@@ -1126,12 +1121,15 @@ fn run_safety(dialect: &str) {
         reseed(db.as_mut(), &setup); // clean fixture per op
         QUERY_COUNT.store(0, Ordering::SeqCst);
         ROW_COUNT.store(0, Ordering::SeqCst);
-        run_op(op, 0, db.as_mut(), &ops[*op]);
+        run_op(op, 0, db.as_mut(), &setup);
         let stmts = QUERY_COUNT.load(Ordering::SeqCst);
         let rows = ROW_COUNT.load(Ordering::SeqCst);
         if let Some((_, n)) = expected.iter().find(|(name, _)| name == op) {
             assert_eq!(stmts, *n, "{op} statement-count regression");
         }
+        // The ONE format every cell prints, so `run-cells.sh` can hold the ten cells to the same
+        // statements and rows per op instead of ten human tables being eyeballed.
+        println!("proof,sdk,{dialect},{op},{stmts},{rows}");
         println!("{op:<20}  {stmts:<10}  {rows:<6} ok");
     }
 }

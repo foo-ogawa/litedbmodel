@@ -85,7 +85,7 @@
  *
  * Then PHASE 2, at the bottom of this file: every unit whose sources read a gate is re-run against a
  * database that is NOT THERE, and a test that PASSES anyway never dialled one. rust needs no exceptions
- * for it — all six live legs panic on a refused connection — and it is also the only thing that can
+ * for it — every live leg panics on a refused connection — and it is also the only thing that can
  * catch a target aimed at a stub whose function NAMES match the real ones.
  *
  * Not proven, and it falls GREEN: that a leg asserted anything USEFUL about what it read. A body
@@ -137,7 +137,11 @@ const LIVE_TESTS = [
   'd1_live_runtime_tx_boundaries_are_middleware_visible',
   'd1_red_live_without_registration_nothing_observed',
   'd3_live_raw_execute_query_through_seam_and_logger',
+  'one_transaction_owns_one_connection_mysql',
+  'one_transaction_owns_one_connection_pg',
   'phase_c_connection_routing_and_config',
+  'tx_body_panic_leaves_no_open_transaction_mysql',
+  'tx_body_panic_leaves_no_open_transaction_pg',
 ];
 
 /** Every `.rs` under `dir` — a target is LIVE when any source in its own tree reads a gate. */
@@ -369,7 +373,7 @@ if (liveUnlisted.length > 0) {
 // PASSES never touched a server, whatever its body claims — which is also the only thing that can catch
 // a target aimed at a stub whose function names match the real ones.
 //
-// rust needs no exceptions here: all six live legs panic on a refused connection.
+// rust needs no exceptions here: every live leg panics on a refused connection.
 if (problems.length === 0) {
   for (const unit of ran.filter((u) => u.live && u.verdicts.length > 0)) {
     const run = mustHaveStarted(

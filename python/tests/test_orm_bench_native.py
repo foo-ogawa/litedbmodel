@@ -47,7 +47,7 @@ def test_every_op_executes(harness):
     assert len(OPS) == 19
     for op in OPS:
         seed(driver)  # clean fixture per op (writes mutate)
-        assert run_op(fns, driver, op, 0) is not None or op in ("delete",)  # every op runs, returns a value
+        assert run_op(fns, driver, "sqlite", op, 0) is not None or op in ("delete",)  # every op runs, returns a value
 
 
 # ── reads + relations ─────────────────────────────────────────────────────────
@@ -55,10 +55,12 @@ def test_every_op_executes(harness):
 
 def test_find_ops_return_expected_rows(harness):
     driver, fns = harness
-    assert len(run_op(fns, driver, "findAll", 0)) == 100  # the op's LIMIT 100 over the seed SSoT
-    unique = run_op(fns, driver, "findUnique", 0)
-    assert len(unique) == 1 and unique[0]["email"] == "user1@example.com"
-    assert len(run_op(fns, driver, "findFirst", 0)) == 1
+    assert len(run_op(fns, driver, "sqlite", "findAll", 0)) == 100  # the op's LIMIT 100 over the seed SSoT
+    unique = run_op(fns, driver, "sqlite", "findUnique", 0)
+    # The declared input for this op (benchmark/crosslang/contract.ts) — the row the fixture is built
+    # to answer and the row the ORM-vs-ORM column reads.
+    assert len(unique) == 1 and unique[0]["email"] == "user500@example.com"
+    assert len(run_op(fns, driver, "sqlite", "findFirst", 0)) == 1
 
 
 def test_nested_relations_hydrate_children(harness):
@@ -67,11 +69,11 @@ def test_nested_relations_hydrate_children(harness):
     # first contiguous run of posts, and that post's comments are the first contiguous run of comments.
     # The fan-out itself is the fixture's, which the scale knob varies (#170), so the assertion pins the
     # SHAPE — the empty-children bug (#150) still fails it, a re-scaled fixture does not.
-    users = run_op(fns, driver, "nestedFindAll", 0)
+    users = run_op(fns, driver, "sqlite", "nestedFindAll", 0)
     by_id = {u["id"]: u for u in users}
     posts = by_id[1]["posts"]
     assert posts and [p["title"] for p in posts] == [f"Post {i}" for i in range(1, len(posts) + 1)]
-    deep = run_op(fns, driver, "nestedRelations", 0)
+    deep = run_op(fns, driver, "sqlite", "nestedRelations", 0)
     u1 = next(u for u in deep if u["id"] == 1)
     comments = u1["posts"][0]["comments"]  # 3-level chain
     assert comments and [c["id"] for c in comments] == list(range(1, len(comments) + 1))
@@ -79,7 +81,7 @@ def test_nested_relations_hydrate_children(harness):
 
 def test_composite_relations_group_by_full_tuple(harness):
     driver, fns = harness
-    tenants = run_op(fns, driver, "compositeRelations", 0)
+    tenants = run_op(fns, driver, "sqlite", "compositeRelations", 0)
     tu1 = next(t for t in tenants if t["user_id"] == 1)
     posts = tu1["posts"]
     # post_id / comment_id RESTART per tenant, so tenant 1 user 1 owns post_ids 1..n and post 1 owns
@@ -95,14 +97,14 @@ def test_composite_relations_group_by_full_tuple(harness):
 def test_single_writes_persist(harness):
     driver, fns = harness
     # create: INSERT (write, no returning) → one-row summary; the row persists.
-    summary = run_op(fns, driver, "create", 7)
+    summary = run_op(fns, driver, "sqlite", "create", 7)
     assert summary[0]["changes"] == 1
     assert any(r["email"] == "new7@bench.com" for r in _users(driver))
     # update: SET name WHERE id=1 → summary; the row is updated.
-    run_op(fns, driver, "update", 0)
+    run_op(fns, driver, "sqlite", "update", 0)
     assert driver.prepare("SELECT name FROM benchmark_users WHERE id=1").all([])[0]["name"] == "Updated 1"
     # upsert: INSERT ... ON CONFLICT DO UPDATE RETURNING id (existing email) → the RETURNING row.
-    returning = run_op(fns, driver, "upsert", 0)
+    returning = run_op(fns, driver, "sqlite", "upsert", 0)
     assert returning[0]["id"] == 1  # user1 conflict-updated, RETURNING its id
     assert driver.prepare("SELECT name FROM benchmark_users WHERE id=1").all([])[0]["name"] == "Upserted One"
 
@@ -112,10 +114,10 @@ def test_single_writes_persist(harness):
 
 def test_batch_writes_apply_all_rows(harness):
     driver, fns = harness
-    run_op(fns, driver, "createMany", 0)  # 10 fresh rows
+    run_op(fns, driver, "sqlite", "createMany", 0)  # 10 fresh rows
     emails = {r["email"] for r in _users(driver)}
     assert all(f"many0_{i}@bench.com" in emails for i in range(10))
-    run_op(fns, driver, "updateMany", 0)  # keyed on id 1..10
+    run_op(fns, driver, "sqlite", "updateMany", 0)  # keyed on id 1..10
     assert driver.prepare("SELECT name FROM benchmark_users WHERE id=1").all([])[0]["name"] == "Many 1"
 
 
@@ -124,7 +126,7 @@ def test_batch_writes_apply_all_rows(harness):
 
 def test_nested_create_tx_persists_user_and_post(harness):
     driver, fns = harness
-    run_op(fns, driver, "nestedCreate", 3)  # INSERT user RETURNING id → INSERT post(author_id=id)
+    run_op(fns, driver, "sqlite", "nestedCreate", 3)  # INSERT user RETURNING id → INSERT post(author_id=id)
     user = driver.prepare("SELECT id FROM benchmark_users WHERE email='nc3@bench.com'").all([])
     assert len(user) == 1
     posts = driver.prepare("SELECT title FROM benchmark_posts WHERE author_id=?").all([user[0]["id"]])

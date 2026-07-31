@@ -66,7 +66,7 @@ pub trait Driver {
     /// Begin a transaction, returning an OWNED [`TxConnection`] handle (§3 per-execution connection
     /// ownership — the rust analogue of v1 `PoolTransaction`). BEGIN is issued when the handle is
     /// built. A single-connection driver (the in-proc `rusqlite` seam) forwards every tx statement +
-    /// the final COMMIT/ROLLBACK to its one connection ([`forwarding_tx`]). A POOLED live driver
+    /// the final COMMIT/ROLLBACK to its one connection (`forwarding_tx`). A POOLED live driver
     /// (PG/MySQL) checks out ONE pooled connection and pins it in the handle, so concurrent
     /// transactions each own a DISTINCT connection ⇒ isolated (the old driver-global `writer` slot is
     /// gone). Every implementor MUST issue BEGIN in this method so the returned handle is live.
@@ -84,7 +84,7 @@ pub trait Driver {
     /// robust default acquires the tx first (plain BEGIN), then runs BOTH slots on the OWNED handle.
     /// For MySQL this is WRONG (its SET must precede BEGIN), so [`crate::livedb::MysqlDriver`]
     /// OVERRIDES this to acquire → SET → BEGIN in the right order. The single-connection
-    /// [`forwarding_tx`] and Postgres use the default (PG's isolation SET is valid post-BEGIN).
+    /// `forwarding_tx` and Postgres use the default (PG's isolation SET is valid post-BEGIN).
     fn begin_tx_isolated(
         &self,
         before_begin: &[String],
@@ -155,7 +155,15 @@ pub trait Driver {
 /// driver. There is no per-execution ownership to enforce — a tx runs BEGIN…COMMIT on the one
 /// connection — but it satisfies the SAME [`TxConnection`] contract the seam threads. Shared by any
 /// `Driver::begin_tx` impl over a single-connection driver.
-pub fn forwarding_tx(driver: &dyn Driver) -> Result<Box<dyn TxConnection + '_>, SqlFailure> {
+///
+/// CRATE-PRIVATE on purpose (#238): applied to a POOLED driver it silently breaks the tx. It owns no
+/// connection, so each forwarded statement re-enters `Driver::prepare` and checks out a DIFFERENT
+/// pooled connection — BEGIN lands on one that then goes back to the pool holding an open transaction
+/// (blocking every later statement) while COMMIT lands on another. A pooled driver must pin ONE
+/// connection in its own `begin_tx`/`acquire_tx` instead ([`crate::livedb::MysqlDriver`] /
+/// [`crate::livedb::PostgresDriver`] do). Keeping this out of the public surface makes the mistake a
+/// compile error rather than a lock-wait timeout.
+pub(crate) fn forwarding_tx(driver: &dyn Driver) -> Result<Box<dyn TxConnection + '_>, SqlFailure> {
     driver.prepare("BEGIN").run(&[])?;
     Ok(Box::new(ForwardingTx { driver }))
 }
@@ -164,7 +172,7 @@ pub fn forwarding_tx(driver: &dyn Driver) -> Result<Box<dyn TxConnection + '_>, 
 /// tx runtime seam-issues BEGIN on the forwarded connection. The object-safe default `acquire_tx` for a
 /// single-connection [`Driver`] that has no override (it takes `&dyn Driver`, so a concrete impl calls
 /// `forwarding_tx_no_begin(self)`).
-pub fn forwarding_tx_no_begin(
+pub(crate) fn forwarding_tx_no_begin(
     driver: &dyn Driver,
 ) -> Result<Box<dyn TxConnection + '_>, SqlFailure> {
     Ok(Box::new(ForwardingTx { driver }))
@@ -172,7 +180,7 @@ pub fn forwarding_tx_no_begin(
 
 /// The single-connection [`TxConnection`]: forward every statement (and COMMIT/ROLLBACK) to the
 /// driver it borrows. Built via [`forwarding_tx`] (which issues BEGIN first).
-pub struct ForwardingTx<'a> {
+pub(crate) struct ForwardingTx<'a> {
     driver: &'a dyn Driver,
 }
 

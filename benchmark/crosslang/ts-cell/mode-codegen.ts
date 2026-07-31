@@ -23,9 +23,9 @@ import {
   use,
 } from '../../../dist/scp/index.mjs';
 
-import { inputFor, TX_OPS } from './inputs.js';
+import { TX_OPS } from './expectations.js';
 import type { Cell, Dialect } from './cell.js';
-import { MYSQL_CONFIG, PG_CONFIG, setupFor, tallyRows } from './cell.js';
+import { MYSQL_CONFIG, PG_CONFIG, resolveInput, setupFor, tallyRows } from './cell.js';
 
 /** The generated module's public surface, as much of it as the cell touches. */
 interface GeneratedModule {
@@ -88,11 +88,12 @@ export async function openCodegen(dialect: Dialect): Promise<Cell> {
       for (const stmt of [...setup.delete, ...setup.insert]) await rawQuery(stmt);
     },
     run: async (op, it) => {
+      const input = resolveInput(setup.inputs, op, it);
       if (!TX_OPS.has(op)) {
-        await facade[op](inputFor(op, it));
+        await facade[op](input);
         return;
       }
-      await transaction(ctx, () => facade[op](inputFor(op, it)) as Promise<unknown>, {}, dialect);
+      await transaction(ctx, () => facade[op](input) as Promise<unknown>, {}, dialect);
     },
     close: async () => {
       clearMiddlewares();

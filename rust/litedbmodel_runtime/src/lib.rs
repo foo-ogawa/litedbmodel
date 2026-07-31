@@ -34,10 +34,7 @@ pub use connection_routing::{
 #[cfg(feature = "livedb")]
 pub use connection_routing::{mysql_pool_factory, pg_pool_factory};
 pub use dialect::{dialect_for, to_dollar_placeholders, Dialect};
-pub use driver::{
-    forwarding_tx, forwarding_tx_no_begin, ConfiguredDriver, Driver, ForwardingTx,
-    PreparedStatement, RunInfo, SqliteDriver,
-};
+pub use driver::{ConfiguredDriver, Driver, PreparedStatement, RunInfo, SqliteDriver};
 pub use errors::{
     check_find_hard_limit, map_sqlite_error, re_error_to_sql_failure, LimitExceededError,
     RuntimeError, SqlFailure, LIMIT_CONTEXT_FIND, LIMIT_CONTEXT_RELATION,
