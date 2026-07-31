@@ -32,15 +32,26 @@ jobs:
         run: npm run lint --if-present
       - name: Build
         run: npm run build
+      # `tsconfig.json` covers src/** and `npm run lint` covers `eslint src`, so benchmark/ and embeds/
+      # were never type-checked: a bench series with no colour rendered `fill="undefined"` bars and an
+      # `orm:` label that matched no series wrote an unreadable row into the results CSV, both at exit 0.
+      # The bench deps live in benchmark/package.json and @prisma/client only has types once generated.
+      - name: Install benchmark deps
+        run: npm ci --ignore-scripts --prefix benchmark && npm run prisma:generate --prefix benchmark
+      - name: Typecheck tooling (benchmark + embeds)
+        run: npm run typecheck:tools
       - name: Test
         run: npm run test:ci
       - name: Verify package contents
         run: npm pack --dry-run
 
   # The benchmark docs are MACHINE-GENERATED from benchmark/results/benchmark-results.csv: the tables +
-  # win count in docs/*.md via embedoc, the chart via generate-chart.ts. Nothing gated that before, so the
-  # embed silently drifted from the CSV (the docs showed an older run's numbers). Regenerate and fail on any
-  # diff — the published numbers must always equal the measured data, never a hand-edited figure.
+  # win count in docs/*.md via embedoc, the chart via generate-chart.ts. Regenerate and fail on any diff —
+  # the published numbers must always equal the measured data, never a hand-edited figure.
+  #
+  # `embedoc build` reports a failed embed load as a warning and exits 0, leaving every marker untouched,
+  # so a plain regenerate-and-diff passes while the embeds never ran. check-bench-docs.mjs blanks the
+  # regions first, making an unrendered one fail loudly instead of surviving into a clean diff.
   bench-docs-drift:
     runs-on: ubuntu-latest
     steps:
@@ -52,9 +63,7 @@ jobs:
       - name: Install
         run: npm ci --ignore-scripts
       - name: Regenerate benchmark docs + chart from the CSV
-        run: |
-          npx embedoc build
-          npx tsx benchmark/generate-chart.ts
+        run: npm run docs:bench:check
       - name: Fail if docs/chart drifted from benchmark-results.csv
         run: |
           git diff --exit-code -- docs/ \

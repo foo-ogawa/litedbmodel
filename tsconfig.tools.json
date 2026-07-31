@@ -1,0 +1,13 @@
+// Type-checks the repo's TOOLING sources — the benchmark and the doc embeds. `tsconfig.json` covers
+// `src/**` only and `npm run lint` covers `eslint src`, so without this nothing checked these files:
+// a bench series with no colour, an `orm:` label that is not a real series, or an embed that cannot
+// resolve its import all compiled to exit 0 and failed silently at run time.
+//
+// Compiler options come from `benchmark/tsconfig.json` — the file set is the only thing decided here.
+{
+  "extends": "./benchmark/tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "include": ["benchmark/**/*.ts", "embeds/**/*.ts"]
+}

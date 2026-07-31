@@ -1,13 +1,14 @@
-import type { DefineEmbedFn } from 'embedoc';
+import type { DefineEmbedFn, QueryResult } from 'embedoc';
 import { ORM_SERIES, LITEDBMODEL_SERIES } from '../benchmark/orm-series.js';
 
 // NOTE: two things this directory needs to load at all, both load-bearing for the bench-docs drift gate:
 //
 //  1. `embeds/package.json` (`"type": "module"`) — embedoc loads embeds via tsx `tsImport`. Without the
-//     ESM marker tsx takes the ESM->CJS bridge, where a transitively-imported `.ts` file is resolved but
-//     NOT transpiled: node parses the raw TypeScript and dies on TS-only syntax ("Unexpected identifier
-//     'as'" on `as const`). On the ESM path tsx transpiles the whole graph, so `../benchmark/orm-series`
-//     — the series SSoT this file and the chart renderer both read — loads.
+//     ESM marker tsx takes the ESM->CJS bridge, which cannot reach `../benchmark/orm-series` — the series
+//     SSoT this file and the chart renderer both read. There the `.js` specifier fails to resolve at all
+//     ("Cannot find module '../benchmark/orm-series.js'", require stack embeds/index.ts), and dropping the
+//     extension resolves the `.ts` file but hands it to node untranspiled ("Unexpected identifier 'as'" on
+//     `as const`). On the ESM path tsx transpiles the whole graph and the import loads.
 //
 //  2. Local `defineEmbed` — importing the *value* `defineEmbed` from the `embedoc` package fails under
 //     tsx's resolver ("No exports main defined"). `defineEmbed` is just an identity/typing helper
@@ -16,24 +17,25 @@ import { ORM_SERIES, LITEDBMODEL_SERIES } from '../benchmark/orm-series.js';
 
 const defineEmbed: DefineEmbedFn = (definition) => definition;
 
-interface BenchmarkRow {
-  Operation: string;
-  ORM: string;
-  Median: string;
-  IQR: string;
-  StdDev: string;
-  Min: string;
-  Max: string;
-  Iterations: string;
-}
-
-/** Group the CSV rows by operation → (ORM → median ms). */
-function groupByOperation(rows: BenchmarkRow[]): Map<string, Map<string, number>> {
+/**
+ * The benchmark CSV, grouped by operation → (series → median ms). A datasource record is untyped, so
+ * every cell this reads is checked: a missing or unparseable Operation / ORM / Median is a broken CSV
+ * and stops the build. The published numbers are machine-derived, so an unreadable cell must never be
+ * allowed to become a plausible-looking zero.
+ */
+function groupByOperation(records: QueryResult): Map<string, Map<string, number>> {
   const byOperation = new Map<string, Map<string, number>>();
-  for (const row of rows) {
-    if (!byOperation.has(row.Operation)) byOperation.set(row.Operation, new Map());
-    byOperation.get(row.Operation)!.set(row.ORM, parseFloat(row.Median));
-  }
+  records.forEach((record, index) => {
+    const operation = record['Operation'];
+    const orm = record['ORM'];
+    const medianCell = record['Median'];
+    const median = typeof medianCell === 'string' && medianCell.trim() !== '' ? Number(medianCell) : NaN;
+    if (typeof operation !== 'string' || typeof orm !== 'string' || !Number.isFinite(median)) {
+      throw new Error(`benchmark_results row ${index + 1} is not a benchmark row: ${JSON.stringify(record)}`);
+    }
+    if (!byOperation.has(operation)) byOperation.set(operation, new Map());
+    byOperation.get(operation)!.set(orm, median);
+  });
   return byOperation;
 }
 
@@ -46,8 +48,7 @@ const benchmarkTable = defineEmbed({
   dependsOn: ['benchmark_results'],
 
   async render(ctx) {
-    const rows = await ctx.datasources['benchmark_results']!.query('') as BenchmarkRow[];
-    const byOperation = groupByOperation(rows);
+    const byOperation = groupByOperation(await ctx.datasources['benchmark_results']!.query(''));
 
     const tableRows: string[][] = [];
     for (const [op, orms] of byOperation) {
@@ -78,8 +79,7 @@ const benchmarkSummary = defineEmbed({
   // count drifts out of sync the moment the data is re-run). litedbmodel "wins" an op when either of its
   // two modes (runtime/codegen) has the fastest median (ties within 0.01ms count as a win).
   async render(ctx) {
-    const rows = await ctx.datasources['benchmark_results']!.query('') as BenchmarkRow[];
-    const byOperation = groupByOperation(rows);
+    const byOperation = groupByOperation(await ctx.datasources['benchmark_results']!.query(''));
 
     let wins = 0;
     const total = byOperation.size;

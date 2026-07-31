@@ -17,14 +17,20 @@ export const LITEDBMODEL_RUNTIME = 'litedbmodel (runtime)';
 /** litedbmodel v2's bc-generated static module: the same authored @behavior source, compiled. */
 export const LITEDBMODEL_CODEGEN = 'litedbmodel (codegen)';
 
+/** The ORMs litedbmodel is measured against. */
+export const KYSELY = 'Kysely';
+export const DRIZZLE = 'Drizzle';
+export const TYPEORM = 'TypeORM';
+export const PRISMA = 'Prisma';
+
 /** Every measured series, in the order the generated table and chart display them. */
 export const ORM_SERIES = [
   LITEDBMODEL_RUNTIME,
   LITEDBMODEL_CODEGEN,
-  'Kysely',
-  'Drizzle',
-  'TypeORM',
-  'Prisma',
+  KYSELY,
+  DRIZZLE,
+  TYPEORM,
+  PRISMA,
 ] as const;
 
 export type OrmSeries = (typeof ORM_SERIES)[number];
