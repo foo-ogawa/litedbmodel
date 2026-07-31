@@ -394,3 +394,72 @@ def test_pool_connection_acquire_release_per_statement():
     rows = conn.execute("SELECT v FROM t WHERE id = ?", [1])
     assert rows == [{"v": "a"}]
     raw.close()
+
+
+# ── #225: acquire is BOUNDED — an unreachable DB fails in finite time, never an indefinite hang ──
+
+
+def test_acquire_failed_open_releases_the_slot_no_capacity_shrink():
+    """A failed open (connection refused) must NOT consume a pool slot. This is the #225 hang trigger:
+    the old acquire incremented `_opened` BEFORE calling the factory and never rolled it back, so after
+    `max` connect-refused failures the pool believed it was full and the next acquire fell through to an
+    UNBOUNDED wait for a connection that would never come. Here every one of many failed opens raises the
+    factory error and leaves `_opened` at 0 — proving the slot is released, so an unreachable DB stays a
+    fast, repeatable failure (the run-gate phase-2 shape: N vectors, each a bounded FAIL, no hang).
+    """
+    from litedbmodel_runtime.driver import _ConnectionPool
+
+    def refusing_factory():
+        raise RuntimeError("connection refused")  # stands in for psycopg/pymysql OperationalError
+
+    # Tiny acquire_timeout so that IF the leak regressed the fall-through wait returns quickly (as a
+    # TimeoutError) instead of hanging the suite — the assertion below still distinguishes the two.
+    pool = _ConnectionPool(refusing_factory, max_size=3, acquire_timeout=0.2)
+    for _ in range(3 * 4):  # far more than max_size — a leak would exhaust capacity after `max` tries
+        with pytest.raises(RuntimeError, match="connection refused"):
+            pool.acquire()
+        assert pool._opened == 0  # the reserved slot was released on the failed open (no shrink)
+    # MUTATION (RED) — if the failed-open rollback were removed, `_opened` would climb to 3 and the 4th
+    # acquire would raise TimeoutError (not "connection refused"), so the `pytest.raises` above flips.
+
+
+def test_acquire_wait_is_bounded_raises_timeout_not_hang():
+    """When the pool is genuinely at capacity and no connection is ever released, acquire must raise a
+    clear TimeoutError in finite time — the old unbounded `_free.get()` blocked forever (#225)."""
+    import time
+
+    from litedbmodel_runtime.driver import _ConnectionPool
+
+    def ok_factory():
+        return object()  # a dummy "connection" — this test never uses it, only checks it out
+
+    pool = _ConnectionPool(ok_factory, max_size=2, acquire_timeout=0.3)
+    pool.acquire()
+    pool.acquire()  # both slots checked out and never released ⇒ genuine exhaustion
+    t0 = time.monotonic()
+    with pytest.raises(TimeoutError, match="acquire timed out after"):
+        pool.acquire()  # the old code hung here forever
+    elapsed = time.monotonic() - t0
+    assert 0.3 <= elapsed < 5.0  # bounded ≈ acquire_timeout (not instant, not a hang)
+
+
+def test_acquire_wait_succeeds_when_a_connection_is_released_in_time():
+    """The bound must NOT break legitimate waiting: a waiter blocked on a full pool still gets the
+    connection a concurrent release returns, as long as it arrives within the timeout budget."""
+    import threading
+    import time
+
+    from litedbmodel_runtime.driver import _ConnectionPool
+
+    def ok_factory():
+        return object()
+
+    pool = _ConnectionPool(ok_factory, max_size=1, acquire_timeout=5.0)
+    held = pool.acquire()  # the single slot is now checked out
+    releaser = threading.Timer(0.2, lambda: pool.release(held))
+    releaser.start()
+    t0 = time.monotonic()
+    got = pool.acquire()  # blocks until the timer releases, then succeeds (no timeout)
+    releaser.join()
+    assert got is held  # the SAME connection came back through the wait
+    assert time.monotonic() - t0 < 5.0
