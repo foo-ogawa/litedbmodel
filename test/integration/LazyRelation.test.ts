@@ -937,11 +937,6 @@ describe.skipIf(skipIntegrationTests)('LazyRelation', () => {
     // ============================================
 
     it('should use = ANY(?::type[]) for single key batch loading on PostgreSQL', async () => {
-      // Skip if not PostgreSQL
-      if (DBModel.getDriverType() !== 'postgres') {
-        return;
-      }
-
       // Create test data
       const user1 = await createTestUser('User 1', 'user1@anytest.com');
       const user2 = await createTestUser('User 2', 'user2@anytest.com');
@@ -973,11 +968,6 @@ describe.skipIf(skipIntegrationTests)('LazyRelation', () => {
     });
 
     it('should use unnest + JOIN for composite key batch loading on PostgreSQL', async () => {
-      // Skip if not PostgreSQL
-      if (DBModel.getDriverType() !== 'postgres') {
-        return;
-      }
-
       // Create multi-tenant test data
       await createTenantUserForN1(1, 100, 'Tenant1 User1');
       await createTenantUserForN1(1, 101, 'Tenant1 User2');
@@ -1041,11 +1031,6 @@ describe.skipIf(skipIntegrationTests)('LazyRelation', () => {
     });
 
     it('should correctly pass array parameter for ANY clause', async () => {
-      // Skip if not PostgreSQL
-      if (DBModel.getDriverType() !== 'postgres') {
-        return;
-      }
-
       // Create test data with specific IDs
       const user1 = await createTestUser('User 1', 'user1@param.com');
       const user2 = await createTestUser('User 2', 'user2@param.com');
@@ -1078,11 +1063,6 @@ describe.skipIf(skipIntegrationTests)('LazyRelation', () => {
     });
 
     it('should correctly pass multiple arrays for unnest composite key', async () => {
-      // Skip if not PostgreSQL
-      if (DBModel.getDriverType() !== 'postgres') {
-        return;
-      }
-
       // Create multi-tenant test data
       await createTenantUserForN1(10, 200, 'T10 User');
       await createTenantUserForN1(10, 201, 'T10 User2');

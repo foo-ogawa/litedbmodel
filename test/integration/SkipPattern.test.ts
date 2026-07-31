@@ -856,8 +856,6 @@ describe.skipIf(skipIntegrationTests)('Array (JSON) Pattern - MySQL', () => {
 
   beforeAll(async () => {
     MysqlBase = await getMysqlBase();
-    if (!MysqlBase) return;
-
     MysqlArrayTest = bindModelToBase(MysqlArrayTestModel.asModel(), MysqlBase);
 
     await MysqlBase.execute('DROP TABLE IF EXISTS mysql_array_test');
@@ -877,8 +875,6 @@ describe.skipIf(skipIntegrationTests)('Array (JSON) Pattern - MySQL', () => {
   });
 
   it('should create and retrieve array data stored as JSON', async () => {
-    if (!MysqlBase) return;
-
     await MysqlArrayTest.transaction(async () => {
       await MysqlArrayTest.create([
         [MysqlArrayTest.name, 'User1'],
@@ -897,8 +893,6 @@ describe.skipIf(skipIntegrationTests)('Array (JSON) Pattern - MySQL', () => {
   });
 
   it('should createMany with array data', async () => {
-    if (!MysqlBase) return;
-
     await MysqlArrayTest.transaction(async () => {
       await MysqlArrayTest.createMany([
         [[MysqlArrayTest.name, 'User1'], [MysqlArrayTest.int_arr, [10, 20]]],
@@ -916,8 +910,6 @@ describe.skipIf(skipIntegrationTests)('Array (JSON) Pattern - MySQL', () => {
   });
 
   it('should handle null arrays', async () => {
-    if (!MysqlBase) return;
-
     await MysqlArrayTest.transaction(async () => {
       await MysqlArrayTest.create([
         [MysqlArrayTest.name, 'NullArray'],
@@ -930,8 +922,6 @@ describe.skipIf(skipIntegrationTests)('Array (JSON) Pattern - MySQL', () => {
   });
 
   it('should handle empty arrays', async () => {
-    if (!MysqlBase) return;
-
     await MysqlArrayTest.transaction(async () => {
       await MysqlArrayTest.create([
         [MysqlArrayTest.name, 'EmptyArray'],
@@ -963,8 +953,6 @@ describe.skipIf(skipIntegrationTests)('Array (JSON) Pattern - SQLite', () => {
 
   beforeAll(async () => {
     SqliteBase = await getSqliteBase();
-    if (!SqliteBase) return;
-
     SqliteArrayTest = bindModelToBase(SqliteArrayTestModel.asModel(), SqliteBase);
 
     await SqliteBase.execute('DROP TABLE IF EXISTS lite_array_test');
@@ -984,8 +972,6 @@ describe.skipIf(skipIntegrationTests)('Array (JSON) Pattern - SQLite', () => {
   });
 
   it('should create and retrieve array data stored as JSON', async () => {
-    if (!SqliteBase) return;
-
     await SqliteArrayTest.transaction(async () => {
       await SqliteArrayTest.create([
         [SqliteArrayTest.name, 'User1'],
@@ -1004,8 +990,6 @@ describe.skipIf(skipIntegrationTests)('Array (JSON) Pattern - SQLite', () => {
   });
 
   it('should createMany with array data', async () => {
-    if (!SqliteBase) return;
-
     await SqliteArrayTest.transaction(async () => {
       await SqliteArrayTest.createMany([
         [[SqliteArrayTest.name, 'User1'], [SqliteArrayTest.int_arr, [10, 20]]],
@@ -1023,8 +1007,6 @@ describe.skipIf(skipIntegrationTests)('Array (JSON) Pattern - SQLite', () => {
   });
 
   it('should handle null arrays', async () => {
-    if (!SqliteBase) return;
-
     await SqliteArrayTest.transaction(async () => {
       await SqliteArrayTest.create([
         [SqliteArrayTest.name, 'NullArray'],
@@ -1037,8 +1019,6 @@ describe.skipIf(skipIntegrationTests)('Array (JSON) Pattern - SQLite', () => {
   });
 
   it('should handle empty arrays', async () => {
-    if (!SqliteBase) return;
-
     await SqliteArrayTest.transaction(async () => {
       await SqliteArrayTest.create([
         [SqliteArrayTest.name, 'EmptyArray'],

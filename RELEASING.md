@@ -120,18 +120,32 @@ Run from the repo root.
 
 ### Packaging and the static gates
 
-- [ ] `npm run sync:versions:check`  — every language target in lockstep at the SSoT version
+- [ ] `npm run sync:versions:check`  — every language target in lockstep at the SSoT version, **both
+      `Cargo.lock`s included** (a bump that rewrites only the manifests leaves the lock behind, and the
+      next cargo command repairs it silently — that is how 2.2.1 shipped a 2.2.0 lock)
 - [ ] `npm run deps:check`           — no `../`-escaping local deps in any manifest
+- [ ] `npm run tracked:check`        — the index holds only files someone meant to commit (a tracked
+      file shows up in neither `git status` nor `.gitignore`)
 - [ ] `npm run build`                — TS build + SCP bundle
 - [ ] `npm run lint`                 — eslint clean
 - [ ] `npm run gates:check`          — every test gate is reachable from a PR/push workflow
 - [ ] `npm run pkg:check`            — every published subpath loads (CJS + ESM) from a clean install
+- [ ] `npm run conformance:dispatch:check` — the go + rust live-DB runners' endpoint TABLES cover every
+      entry the corpus uses. Each runner asserts it from its own `dispatch`/`DISPATCH` before connecting,
+      so it needs no database; a missed entry otherwise reaches the catch-all and fails only as a vector.
+      Needs the go and rust toolchains (CI runs the two halves in the legs that have them)
 - [ ] `npm publish --dry-run`        — tarball has `dist/`, no `src/`/`../` leaks
 - [ ] `(cd python && python -m build && twine check dist/*)`
 - [ ] fresh-venv wheel smoke — `pip install` the built wheel + run a real vector
 - [ ] `(cd php && composer validate)`
-- [ ] `(cd rust && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo publish -p litedbmodel_runtime --dry-run)`
-- [ ] `(cd go && gofmt -l . ; go vet ./...)` — module path `.../litedbmodel/go`
+- [ ] `(cd rust && cargo fmt --check && cargo check --locked && cargo clippy --all-targets -- -D warnings && cargo clippy -p livedb_runner --features livedb --all-targets -- -D warnings && cargo publish -p litedbmodel_runtime --dry-run)`
+      — `--locked` makes cargo ACCEPT the committed lock instead of rewriting it under you.
+      **`-p livedb_runner --features livedb` is not optional**: the runner is no default-member and its
+      generated modules are behind that feature, so neither `cargo check` nor `clippy --workspace`
+      compiles them, and a missing `impl_to_compare!` surfaces only in the live-DB leg
+- [ ] `(cd go && go vet ./...) && npm run go:fmt:check` — module path `.../litedbmodel/go`.
+      `gofmt -l` alone is not a gate: it exits 0 whatever it prints, and the bc-generated modules are
+      legitimately unformatted (gofmt-ing them is a `bc check` drift), so they would always be listed
 
 ### The five test suites — WITH THE LIVE-DB GATES OPEN (needs docker)
 
@@ -139,25 +153,65 @@ Every live-DB test in every language gates itself on a `LITEDBMODEL_*` variable 
 `livedb-gates.env`. CI opens all of them from that one file before it runs any suite
 (`conformance.yml`, step "Open the live-DB test gates"), so a local run that does not open them is
 **not running what CI runs** — it runs less and reports green for the difference. Measured, running
-these same commands with the gates closed: python skips 25, go skips 16, php skips 1, and rust does
-not even COMPILE its 6 live tests. Reading that as a pass is how the #215 regression reached a
-commit (#219).
+the BARE runners with the gates closed, every one of them exiting 0: python 153 passed / **25
+skipped**, php `OK, but some tests were skipped!` / **45 skipped** (its gate is inverted — an
+inherited `LITEDBMODEL_SKIP_LIVE=1` is what closes it), go 106 passed / **16 skipped**, and rust does
+not even COMPILE its 6 live tests — `71 passed` plus three binaries of `0 tests`. Reading that as a
+pass is how the #215 regression reached a commit (#219).
 
-So open them once, and run this whole section in that shell:
+So each suite now runs through its own RUN GATE (#219 go, #220 the rest). Each one **refuses to
+start unless every gate `livedb-gates.env` declares is open in this shell**, then owns the runner's
+argv and checks the runner's own machine-readable report against what the tree declares: every test
+accounted for, **skip budget 0**, the live-DB legs still present. None of the five bare runners can
+report any of that — each calls a suite that skipped, shrank or was never compiled a success.
+
+Open the gates once, and run this whole section in that shell:
 
 ```bash
 npm run docker:livedb:up && sleep 5
 set -a && . ./livedb-gates.env && set +a && export TEST_DB_HOST=localhost
 ```
 
-- [ ] `npm test`                             — the whole vitest suite (unit + scp + parity + integration)
-- [ ] `(cd python && python3 -m pytest -q)`  — **0 skipped**; with the gates closed 25 of these skip
-- [ ] `(cd php && ./vendor/bin/phpunit)`     — **0 skipped**; a skip shows up only as a trailing "but some tests were skipped!"
-- [ ] `npm run go:test`                      — refuses to start unless **every gate `livedb-gates.env` declares is open in this shell** (so it cannot be run and read with the legs disabled, whatever way they bail out), then `go test ./... -count=1`, read from its whole `-json` stream and checked against the source tree: **every top-level `func Test*` under `go/` reported a verdict**, **skip budget 0**, no unbuilt package, the live-DB legs still present, go's own exit code. A bare `go test ./...` reports none of those — it calls a skip a success, replays a cached run with the DB down, and stays green when the test set shrinks (#219)
-- [ ] `(cd rust && cargo test -p litedbmodel_runtime --features livedb -- --test-threads=1)` — **`--features livedb` is not optional**: without it the 6 live tests are not compiled at all, and 71 tests run where 77 should
+- [ ] `npm run ts:test`   — the whole vitest suite (unit + scp + parity + integration) through vitest's
+      `--reporter=json`: **every one of the 51 `test/**/*.test.ts` files reported at least one test**, 0
+      skipped, 0 todo. A path argument, a narrowed `include`, a `--testNamePattern` or a file that fails
+      to LOAD each leaves a file reporting nothing while vitest still says `success: true` — and an
+      inherited `SKIP_INTEGRATION_TESTS=1` silently drops all 19 live-DB files
+- [ ] `npm run py:test`   — pytest's own `--junitxml`, checked against **every `def test*` Python's `ast`
+      finds under `python/tests`** (every `.py`, every class — wider than pytest's own collection rules, so
+      a file renamed off `test_*.py` or a `Test*` class renamed is red rather than absent). Then PHASE 2:
+      the live legs are re-run against an UNREACHABLE database and one that PASSES anyway never dialled a
+      server. 24 of the 29 must FAIL there; 4 are `test_conformance_corpus.py`'s offline corpus checks and
+      must PASS instead; exactly 1 — `test_live_db_conformance_all_vectors_pass` — HANGS against a dead
+      server (`#225` — the pool's acquire has no timeout), so it alone is probed under a 20s timeout and
+      that allowance goes red the day it stops hanging
+- [ ] `npm run php:test`  — phpunit's own `--log-junit`, checked against **every `test*` method
+      `ReflectionClass` finds** in every class declared under `php/tests`. The precondition covers the
+      INVERTED gate: `LITEDBMODEL_SKIP_LIVE=1` in the environment is red before phpunit starts. Needs
+      `pcntl` (without it `TxBoundaryLiveTest::setUp` skips that whole class)
+- [ ] `npm run go:test`   — `go test ./... -count=1` read from its whole `-json` stream: **every top-level
+      `func Test*` under `go/` reported a verdict**, no unbuilt package, the live-DB legs still present,
+      go's own exit code. Then PHASE 2: the 16 live legs are re-run against an UNREACHABLE database, and
+      one that PASSES anyway never dialled a server
+- [ ] `npm run rust:test` — the package AND target set from `cargo metadata`, each target run separately
+      with `--features livedb` on every package that declares it: **no target may report `0 tests`**
+      unless it is named as legitimately empty, 0 ignored, 0 filtered out. `cargo test -p
+      litedbmodel_runtime` without the feature is what this catches — the live files are
+      `#![cfg(feature = "livedb")]`, so they compile to nothing and cargo exits 0
 - [ ] live-DB corpus: `npm run conformance:livedb:docker` — the corpus on real PG + MySQL; the run names how many of the four language legs ran (go/rust: #163). Run it LAST — it takes the stack down afterwards
 
-A skip line in any of these is a coverage report, not a pass. Read them.
+A skip line in any of these is a coverage report, not a pass — and each gate now names the tests
+instead of leaving you to read a count.
+
+All five gates then re-run their live legs against an UNREACHABLE server, so a leg whose body is empty
+— which passes an outcome check exactly as a real query does — is caught. `php:test` and `py:test`
+except their offline corpus checks BY NAME and require those to pass instead; `ts:test` does the same
+for the 38 offline tests inside its live files.
+
+What is still **not** proven, and it falls GREEN everywhere: that a leg ASSERTED anything useful about
+what it read. A body reduced to a bare connect dials, so it satisfies both phases. For TypeScript,
+phase 2 also learns nothing about a file whose HOOKS fail without a server (`PkeyResult`, and every file
+that skips itself): its tests never run, so none of them can pass either way.
 
 ---
 

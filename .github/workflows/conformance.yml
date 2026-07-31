@@ -32,6 +32,11 @@ jobs:
         run: npm run sync:versions:check
       - name: No local (../-escaping) dependencies
         run: npm run deps:check
+      # A TRACKED file is invisible to BOTH `git status` and .gitignore, which is how a 0-byte file whose
+      # name was a psql connection string, 27 MB of cargo build cache and two 20 MB Mach-O binaries all
+      # sat in the index unnoticed (#203).
+      - name: The index holds only files someone meant to commit
+        run: npm run tracked:check
       - name: Every test gate is reachable from CI
         run: npm run gates:check
       - name: The test tree typechecks (a stale test double fails HERE, not silently)
@@ -144,6 +149,13 @@ jobs:
           # The WS7c Go runtime consumes behavior-contracts + a pure-Go SQLite (modernc); the
           # dependency graph's `go` floors require a modern toolchain (mirrors graphddb's go leg).
           go-version: '1.25'
+      # go's gofmt gate is a node script, and both the go and rust legs invoke their dispatch-coverage
+      # gate through `npm run`. No `npm ci` — neither needs node_modules.
+      - name: Setup node (for the go/rust gates invoked via npm)
+        if: matrix.lang == 'go' || matrix.lang == 'rust'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
       - name: Go — auth for the private behavior-contracts VCS-tag dependency
         if: matrix.lang == 'go'
         env:
@@ -159,22 +171,61 @@ jobs:
       - name: Go — warm private module graph (retry transient auth)
         if: matrix.lang == 'go'
         uses: ./.github/actions/warm-go-module
-      - name: Go — build + vet (all packages)
+      - name: Go — build + vet + gofmt (all packages)
         if: matrix.lang == 'go'
         # #63 cleanup: the retired codegen bench (go/lm_bench cgcell·cgplans + go/lm_codegen, which
         # imported the GITIGNORED generated cgmods/**) is DELETED, so `go build ./...` / `go vet ./...`
         # now walk every committed package cleanly — including the #63 ORM-plan executor
         # (go/lm_bench/lm_orm), a self-contained package with no generated-artifact dependency.
-        run: cd go && go build ./... && go vet ./...
-      - name: Rust — check + fmt + clippy
+        #
+        # gofmt (#204): rust has had `cargo fmt --check` since #168; go had nothing, and gofmt affects
+        # neither the build nor vet nor the tests, so four hand-written files stayed unformatted with no
+        # symptom at all. The gate is a script rather than a bare `gofmt -l` because the bc-GENERATED
+        # modules must be EXEMPT — bc's go output is not gofmt-clean and is byte-compared against a
+        # fresh generation, so `gofmt -w` on one produces `bc: DRIFT` (measured). It checks that
+        # exemption BOTH WAYS against the files' own bc marker, so a hand-written file cannot hide in it
+        # and a newly generated module cannot go unlisted. `gofmt -l` also exits 0 whatever it finds, so
+        # a bare invocation would need `[ -z "$(...)" ]` and would call a gofmt CRASH clean.
+        #
+        # `go:dispatch:check` (#222): the runner's endpoint table must cover every entry the live-DB
+        # corpus uses. It asserts that from the REAL `dispatch` map, before opening a connection, so it
+        # needs no database — and it replaces a static scanner that read the source as text and was
+        # fooled twice by comment and string syntax it did not model (#201).
+        run: |
+          (cd go && go build ./... && go vet ./...)
+          npm run go:fmt:check
+          npm run go:dispatch:check
+      - name: Rust — check (--locked) + fmt + clippy (runtime AND the livedb runner)
         if: matrix.lang == 'rust'
         # No workflow ran `cargo fmt --check` or clippy, so both drifted unnoticed (#168). They gate
         # here, on the leg that already owns "the rust scaffold stays buildable".
+        #
+        # `--locked` (#197): without it cargo SILENTLY rewrites a stale Cargo.lock and goes green, so a
+        # version bump that missed the lock — 2.2.1 — was invisible until a clean tree came back dirty
+        # from running the suite. Now the stale lock fails the job instead of being repaired in place.
+        #
+        # `-p livedb_runner --features livedb` (#201): the runner is NOT a default-member and its
+        # bc-generated modules are behind that feature, so NOTHING here compiled them. Adding a
+        # conformance endpoint means hand-following the entry switch AND an `impl_to_compare!` per
+        # outType in both dialect modules; a missed one is a trait-bound error that used to appear only
+        # in the live-DB leg, after docker was up and py/php/go had run. Measured with one
+        # `impl_to_compare!(pg::PagedFeedRow …)` removed: `cargo check` exit 0, `cargo clippy
+        # --workspace --all-targets -- -D warnings` exit 0 (it compiles the crate WITHOUT the feature,
+        # so the generated tree is not in the build at all), this line exit 101 with E0599 — in 51s,
+        # no database.
+        #
+        # `rust:dispatch:check` (#222) rides here because this leg ALREADY builds livedb_runner with
+        # `--features livedb` for the clippy line above, so running it costs no extra compile. It asserts
+        # from the REAL `DISPATCH` table that the endpoint set covers the live-DB corpus, before any
+        # driver connects — no database — replacing a static scanner that read the source as text and was
+        # fooled twice by syntax it did not model (#201).
         run: |
           cd rust
           cargo fmt --all -- --check
-          cargo check
+          cargo check --locked
           cargo clippy -p litedbmodel_runtime --features livedb --all-targets -- -D warnings
+          cargo clippy -p livedb_runner --features livedb --all-targets -- -D warnings
+          npm run rust:dispatch:check
       - name: PHP — lint
         if: matrix.lang == 'php'
         run: |
@@ -236,15 +287,20 @@ jobs:
       - uses: shivammathur/setup-php@v2
         with:
           php-version: '8.2'
-          extensions: pdo, pdo_pgsql, pdo_mysql, mbstring
+          # pcntl (#220): TxBoundaryLiveTest's `setUp` calls `markTestSkipped` without `pcntl_fork`,
+          # which drops all fourteen of that class's live-DB tests. The php run gate holds the suite to
+          # a skip budget of 0, so the extension is required rather than budgeted for.
+          extensions: pdo, pdo_pgsql, pdo_mysql, mbstring, pcntl
       - name: Rust toolchain
         run: rustup toolchain install stable --profile minimal
       # `npm test` runs test/scp/native-closure.test.ts, which compiles a probe crate against
       # rust/litedbmodel_runtime under `--offline`. That resolves behavior-contracts from the cargo
       # registry cache, which nothing in this job populates — so pre-fetch the rust workspace's deps
       # (incl. the pinned behavior-contracts) ONLINE here, before the offline probe (#183).
+      # `--locked` because this is the FIRST cargo command in the job: a fetch that re-resolves would
+      # rewrite a stale lock in place and every later `--locked` command would then agree with it (#197).
       - name: Warm the cargo registry cache for the offline native-closure probe (#183)
-        run: cargo fetch --manifest-path rust/Cargo.toml
+        run: cargo fetch --locked --manifest-path rust/Cargo.toml
       # Create + grant the per-language `scp_%` MySQL databases from the SSoT the docker stack mounts
       # (test/fixtures/livedb-grants.sql) — the inline `services:` don't mount it, and the rust/go/py/php
       # livedb suites connect straight to scp_<lang> (which must already exist) instead of CREATE-ing it.
@@ -302,12 +358,19 @@ jobs:
       # collection dies with FileNotFoundError (#185).
       - name: Emit the cross-lang ORM-bench seed fixture (.setup/*.json) for the native conformance suites
         run: npx tsx benchmark/crosslang/emit-setup.ts
-      - name: TypeScript — full suite (unit + scp + parity + integration)
-        run: npm test
-      - name: Python — pytest
-        run: cd python && python3 -m pytest -q
-      - name: PHP — phpunit
-        run: cd php && ./vendor/bin/phpunit
+      # Each of these is a RUN GATE, not the bare runner (#220). Every runner in this repository
+      # reports a suite that did not run as a success — `pytest` 153 passed / 25 SKIPPED, `phpunit`
+      # `OK, but some tests were skipped!` with 45, `vitest` `success: true` with tests pending,
+      # `cargo test` three binaries of `0 tests` when `--features livedb` is dropped — so each gate
+      # asserts the live-DB gates are open in its own environment BEFORE starting the runner, owns the
+      # runner's argv (nothing here can narrow it), and checks the machine-readable report against
+      # what the tree declares: every test accounted for, skip budget 0, the live-DB legs still there.
+      - name: TypeScript — full suite (unit + scp + parity + integration), skip budget 0
+        run: npm run ts:test
+      - name: Python — pytest (every declared test RUNS; skip budget 0)
+        run: npm run py:test
+      - name: PHP — phpunit (every declared test RUNS; skip budget 0)
+        run: npm run php:test
       # A bare `go test ./...` cannot report that its suite ran. It calls a SKIPPED test a success, it
       # replays a whole CACHED run without starting the binary (cache keyed on source and env, never
       # on whether the DB is still up), it says nothing when the set of tests SHRANK, and it prints a
@@ -320,5 +383,12 @@ jobs:
       # one with `pipefail`).
       - name: Go — go test (uncached; every declared test RUNS, every package BUILDS; skip budget 0)
         run: npm run go:test
-      - name: Rust — cargo test (livedb)
-        run: cd rust && cargo test -p litedbmodel_runtime --features livedb -- --test-threads=1
+      # `cargo test -p litedbmodel_runtime --features livedb` is what this used to be, and dropping the
+      # feature is invisible: both live files open with `#![cfg(feature = "livedb")]`, so without it the
+      # two test binaries compile to NOTHING and cargo prints `running 0 tests` and exits 0 — six live
+      # tests, no skip, no failure. `-p` was the other half: a package narrowing that no static check of
+      # this file could call complete. The gate takes the package AND target set from `cargo metadata`,
+      # runs each target separately (libtest's report never says which binary a count belongs to), and
+      # calls a target that ran 0 tests red unless it is named as legitimately empty (#220).
+      - name: Rust — cargo test (every workspace target RUNS, with the livedb feature; 0 ignored)
+        run: npm run rust:test

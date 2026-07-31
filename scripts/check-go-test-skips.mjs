@@ -70,12 +70,11 @@
  *   - `go test` exiting non-zero for a reason none of the above explains, or putting anything on
  *     stdout that is not a `-json` event. Unmodelled ⇒ red, never green.
  */
-import { spawn } from 'node:child_process';
-import { createInterface } from 'node:readline';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { GATES_ENV, readGateDeclarations } from './livedb-gates.mjs';
+import { assertGatesOpen, runOwned, mustHaveStarted, exitProblem, report, UNREACHABLE } from './run-gate.mjs';
+import { GATES_ENV, readsAGate } from './livedb-gates.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const GO_DIR = join(ROOT, 'go');
@@ -138,7 +137,7 @@ for (const file of goTestFiles(GO_DIR)) {
   const src = readFileSync(file, 'utf8');
   const rel = relative(GO_DIR, file);
   const pkg = dirname(rel) === '.' ? MODULE : `${MODULE}/${dirname(rel)}`;
-  const isLive = /LITEDBMODEL_[A-Z0-9_]+/.test(src);
+  const isLive = readsAGate(src);
   for (const [, name] of src.matchAll(/^func (Test[A-Za-z0-9_]*)\s*\(/gm)) {
     if (name === 'TestMain') continue; // the package entry point, not a test — it reports no verdict
     declared.set(`${pkg} ${name}`, relative(ROOT, file));
@@ -163,78 +162,67 @@ for (const file of goTestFiles(GO_DIR)) {
  * `LITEDBMODEL_SKIP_LIVE` has INVERTED polarity and is pinned to `0`, so merely being "set" is
  * satisfied by the value that CLOSES it.
  *
- * What this does NOT prove, and it falls GREEN: with the gates open, a live leg whose body has been
- * emptied still passes. This establishes that the legs were enabled and that every declared test
- * reported a verdict from an uncached run — not that a given test dialled the database.
+ * On its own this establishes that the legs were ENABLED and that every declared test reported a verdict
+ * from an uncached run — not that any of them dialled a database, which an outcome cannot show because
+ * an emptied body passes too. That is what PHASE 2 at the bottom of this file is for: the same legs are
+ * re-run against a database that is not there, and a leg that PASSES anyway never touched one.
  */
-const gateDeclarations = readGateDeclarations();
-const shut = [...gateDeclarations].filter(([name, value]) => process.env[name] !== value);
-if (shut.length > 0) {
-  console.error(
-    `\n❌ ${shut.length} of the ${gateDeclarations.size} live-DB gates \`${GATES_ENV}\` declares are not open in this ` +
-      `process, so the go suite would run with its live-DB legs disabled — and a leg that does not run reports nothing ` +
-      `this check could catch:\n` +
-      shut
-        .map(([n, v]) => `      ${n}: declared ${JSON.stringify(v)}, this environment has ${process.env[n] === undefined ? '(unset)' : JSON.stringify(process.env[n])}`)
-        .join('\n') +
-      `\n\n      npm run docker:livedb:up && set -a && . ./${GATES_ENV} && set +a\n` +
-      `      (CI opens them in conformance.yml, step "Open the live-DB test gates".)`,
-  );
-  process.exit(1);
-}
-
-const go = spawn('go', ['test', './...', '-json', '-count=1'], {
-  cwd: GO_DIR,
-  stdio: ['ignore', 'pipe', 'inherit'],
-});
-let spawnError = null;
-go.on('error', (err) => {
-  spawnError = err;
-});
-const exited = new Promise((resolve) => go.on('close', (code, signal) => resolve({ code, signal })));
+const gateDeclarations = assertGatesOpen('go');
 
 /** Verdict actions. `start`/`run` carry none; everything else on an event is output. */
 const VERDICT = new Set(['pass', 'fail', 'skip', 'build-fail']);
-/** `kind\0label` → { kind, label, action, output[] } — one entry per build unit, package and test. */
-const seen = new Map();
-/** Lines that are not events. `go test -json` puts ONLY events on stdout; anything else is a hole. */
-const foreign = [];
 
-for await (const line of createInterface({ input: go.stdout })) {
-  if (!line) continue;
-  let e;
-  try {
-    e = JSON.parse(line);
-  } catch {
-    foreign.push(line);
-    continue;
+/**
+ * One `go test -json` run, owned rather than piped — a pipe loses go's exit code unless the caller
+ * remembers `set -o pipefail`, and a gate whose redness depends on the shell it was invoked from is the
+ * same class of hole it exists to close.
+ *
+ * The ONE place this script starts `go test`. Both phases below go through it, so the stream is parsed
+ * and the exit code read the same way for each.
+ */
+async function goTest(extraArgs, extraEnv) {
+  const run = mustHaveStarted(
+    await runOwned('go', ['test', './...', '-json', '-count=1', ...extraArgs], { cwd: GO_DIR, env: extraEnv }),
+    'go test',
+  );
+  /** `kind\0label` → { kind, label, action, output[] } — one entry per build unit, package and test. */
+  const seen = new Map();
+  /** Lines that are not events. `go test -json` puts ONLY events on stdout; anything else is a hole. */
+  const foreign = [];
+  for (const line of run.stdout.split('\n')) {
+    if (!line) continue;
+    let e;
+    try {
+      e = JSON.parse(line);
+    } catch {
+      foreign.push(line);
+      continue;
+    }
+    if (typeof e !== 'object' || e === null || !e.Action) {
+      foreign.push(line);
+      continue;
+    }
+    // A build event names an ImportPath and no Package; a test event names both; a package event
+    // names only the Package. All three matter — dropping the first two is how a build failure read
+    // as a clean green run.
+    const [kind, label] = e.ImportPath
+      ? ['build', e.ImportPath]
+      : e.Test
+        ? ['test', `${e.Package} ${e.Test}`]
+        : ['package', e.Package];
+    const k = `${kind}\0${label}`;
+    // `Test` is kept apart from `label` because a subtest is spelled `Parent/Sub` while the import
+    // path in `label` is full of slashes too — only the tree's top-level `func Test*` can be matched.
+    if (!seen.has(k)) seen.set(k, { kind, label, test: e.Test ?? null, action: null, output: [] });
+    const s = seen.get(k);
+    if (VERDICT.has(e.Action)) s.action = e.Action;
+    else if (e.Output !== undefined) s.output.push(e.Output);
   }
-  if (typeof e !== 'object' || e === null || !e.Action) {
-    foreign.push(line);
-    continue;
-  }
-  // A build event names an ImportPath and no Package; a test event names both; a package event
-  // names only the Package. All three matter — dropping the first two is how a build failure read
-  // as a clean green run.
-  const [kind, label] = e.ImportPath
-    ? ['build', e.ImportPath]
-    : e.Test
-      ? ['test', `${e.Package} ${e.Test}`]
-      : ['package', e.Package];
-  const k = `${kind}\0${label}`;
-  // `Test` is kept apart from `label` because a subtest is spelled `Parent/Sub` while the import
-  // path in `label` is full of slashes too — only the tree's top-level `func Test*` can be matched.
-  if (!seen.has(k)) seen.set(k, { kind, label, test: e.Test ?? null, action: null, output: [] });
-  const s = seen.get(k);
-  if (VERDICT.has(e.Action)) s.action = e.Action;
-  else if (e.Output !== undefined) s.output.push(e.Output);
+  return { seen, foreign, run };
 }
 
-const { code: goExit, signal: goSignal } = await exited;
-if (spawnError) {
-  console.error(`\n❌ could not run \`go test\`: ${spawnError.message}`);
-  process.exit(1);
-}
+const phase1 = await goTest([], {});
+const { seen, foreign } = phase1;
 
 const of = (kind, action) => [...seen.values()].filter((s) => s.kind === kind && s.action === action);
 const [passed, failed, skipped] = [of('test', 'pass'), of('test', 'fail'), of('test', 'skip')];
@@ -319,23 +307,60 @@ if (foreign.length > 0) {
       foreign.map((l) => `      ${l}`).join('\n'),
   );
 }
-if (goSignal) {
-  problems.push(
-    `\`go test\` was KILLED by ${goSignal}. Its stream stops where the process died, so everything after that point was never reported — a partial stream is not a green run.`,
-  );
-} else if (goExit !== 0 && problems.length === 0) {
-  problems.push(
-    `\`go test\` exited ${goExit} while every event in its stream reported success — something failed that this check does not model. Do not read that as green.`,
-  );
+exitProblem(phase1.run, 'go test', problems);
+
+// ── PHASE 2: the live legs really DIAL a database ───────────────────────────────────────────────────
+//
+// Everything above reads the OUTCOME of a run against a live server, and an outcome cannot distinguish
+// a leg that queried the database from a leg whose body is empty: both pass. That was this script's own
+// stated green-falling hole, and "stated" is not "closed" — while ✅ prints, the next reader takes it to
+// mean the live legs ran.
+//
+// So the legs are re-run against a DATABASE THAT IS NOT THERE (`127.0.0.1:1`, which refuses instantly),
+// with the gates still open. A leg that dials must FAIL or SKIP; a leg that PASSES without a server did
+// not touch one, whatever its body claims. Measured: all sixteen fail in ~2s against port 1 ("dial tcp
+// 127.0.0.1:1: connect: connection refused"), and with one body emptied that leg passes — which is the
+// detection.
+//
+// The `UNREACHABLE` environment it runs under is shared with the other gates' phase 2 (run-gate.mjs).
+//
+// What it does NOT prove: that a leg asserted anything USEFUL about what it read. A body reduced to a
+// single connect-and-close dials, so it passes this and would pass with an empty assertion set. That is
+// the residual, and it is much narrower than "the body may be empty".
+if (problems.length === 0) {
+  const runFilter = `^(${LIVE_TESTS.join('|')})$`;
+  const phase2 = await goTest([`-run=${runFilter}`], UNREACHABLE);
+  const verdict = new Map();
+  for (const s of phase2.seen.values()) {
+    if (s.kind === 'test' && s.action && !s.test.includes('/')) verdict.set(s.test, s.action);
+  }
+  const passedWithoutServer = LIVE_TESTS.filter((n) => verdict.get(n) === 'pass');
+  const noVerdict = LIVE_TESTS.filter((n) => !verdict.has(n));
+  if (passedWithoutServer.length > 0) {
+    problems.push(
+      `${passedWithoutServer.length} live-DB leg(s) PASSED with no database behind them (${UNREACHABLE.TEST_DB_HOST}:${UNREACHABLE.TEST_DB_PORT} refuses every connection). A leg that passes without a server never dialled one, so its green above says nothing about a live database:\n` +
+        passedWithoutServer.map((n) => `      ${n}`).join('\n') +
+        `\n\n      An emptied body, a removed assertion block, or a connect that is never made all look\n` +
+        `      exactly like this. The other ${LIVE_TESTS.length - passedWithoutServer.length} failed as they should.`,
+    );
+  }
+  if (noVerdict.length > 0) {
+    problems.push(
+      `${noVerdict.length} live-DB leg(s) reported NO verdict from the unreachable-database run, so nothing was learned about them — a \`-run\` filter that matches nothing passes this check vacuously:\n` +
+        noVerdict.map((n) => `      ${n}`).join('\n') +
+        `\n\n      Filter used: -run=${runFilter}`,
+    );
+  }
 }
 
-if (problems.length > 0) {
-  console.error('\n' + problems.map((p) => `❌ ${p}`).join('\n\n'));
-  process.exit(1);
-}
-console.log(
+report(
+  problems,
   `✅ the ${gateDeclarations.size} live-DB gates ${GATES_ENV} declares were OPEN in this process before the suite started; ` +
     `every go package built; each of the ${declared.size} tests the tree declares reported a verdict from an UNCACHED ` +
     `(-count=1) run, and every verdict was a pass (${passed.length} incl. subtests, ${skipped.length} skipped, ` +
-    `budget ${SKIP_BUDGET}); all ${LIVE_TESTS.length} live-DB legs listed in LIVE_TESTS are still present in the tree`,
+    `budget ${SKIP_BUDGET}); all ${LIVE_TESTS.length} live-DB legs listed in LIVE_TESTS are still present in the tree.\n` +
+    `   Each of those ${LIVE_TESTS.length} legs was then re-run against an UNREACHABLE database (${UNREACHABLE.TEST_DB_HOST}:${UNREACHABLE.TEST_DB_PORT}) and NONE of them\n` +
+    `   passed — so each really dials a server rather than passing on an empty body.\n` +
+    `   Not proven, and it falls GREEN: that a leg ASSERTED anything useful about what it read. A body\n` +
+    `   reduced to a bare connect dials, so it satisfies both phases.`,
 );

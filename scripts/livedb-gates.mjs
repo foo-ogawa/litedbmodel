@@ -31,6 +31,28 @@ export const GATES_ENV = 'livedb-gates.env';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 
+/** How a gate is spelled wherever a test reads one. */
+export const GATE_PATTERN = /LITEDBMODEL_[A-Z0-9_]+/g;
+
+/**
+ * `LITEDBMODEL_*` variables that are NOT skip gates, so naming one does not make a file a live-DB
+ * leg and declaring one is not required. `LITEDBMODEL_LIVEDB_VECTORS` carries the corpus PATH into a
+ * runner (set by `conformance/livedb-run.ts`, read by `rust/livedb_runner/src/main.rs` and its go
+ * twin); nothing skips on it.
+ */
+export const NOT_A_GATE = new Set(['LITEDBMODEL_LIVEDB_VECTORS']);
+
+/**
+ * Whether `text` reads a live-DB gate — the ONE test for "this file holds live-DB legs", used by
+ * every run gate to derive its live inventory from the tree and by `check-reachable-test-gates.mjs`
+ * to decide which files a declaration must cover. Kept here with the pattern it applies, because a
+ * second copy would be free to disagree about `LITEDBMODEL_LIVEDB_VECTORS` and the copy that is
+ * wrong is the one nobody looks at.
+ */
+export function readsAGate(text) {
+  return (text.match(GATE_PATTERN) ?? []).some((name) => !NOT_A_GATE.has(name));
+}
+
 /** Declared gate name → declared value, in file order. */
 export function readGateDeclarations() {
   const declared = new Map();
