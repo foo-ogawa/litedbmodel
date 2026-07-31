@@ -17,12 +17,10 @@
 #[path = "gen/mod.rs"]
 mod gen;
 
-use litedbmodel_runtime::driver::{forwarding_tx, forwarding_tx_no_begin, PreparedStatement};
-use litedbmodel_runtime::exec_context::TxConnection;
 use litedbmodel_runtime::{
     clear_middlewares, for_driver, register_middleware, with_ambient_context,
     with_ambient_transaction, Driver, ExecutionContext, MiddlewareDescriptor, SeamResult,
-    SqlFailure, SqlHookFn, SqliteDriver,
+    SqlHookFn, SqliteDriver,
 };
 #[cfg(feature = "livedb")]
 use litedbmodel_runtime::{MysqlDriver, PostgresDriver};
@@ -34,24 +32,33 @@ use std::time::Instant;
 
 use gen::active as bg;
 
-// ── query counter (consumer-side observability, N+1 proof) ──────────────────────────────────────
-// A `CountingDriver` decorator over the runtime Driver increments on each `prepare` (one per statement
-// the runtime issues). The N+1 proof: a batched relation runs 1 parent + 1 batched child per level =
-// 2 / 3 (not 1+N). The runtime + generated runner stay unchanged — the count rides the Driver seam.
-static QUERY_COUNT: AtomicUsize = AtomicUsize::new(0);
-
-// ── row counter (the report's per-row denominator, #170) ─────────────────────────────────────────
-// Rows are visible at the runtime's SQL seam, not at the Driver: `SqlNext` hands back the read result
-// (`SeamResult::Rows`), while a write's `Run` summary carries none. `probe_rows` registers the hook,
-// runs ONE un-timed iteration and unregisters — so the published latencies never pay to observe it.
+// ── the ONE observation seam: statements AND rows ────────────────────────────────────────────────
+// Both counters ride the runtime's SQL middleware seam — the SAME lens the go / python / php / ts cells
+// use. Every statement the runtime issues funnels through `exec_context::execute`/`run` → the hook,
+// including the tx runtime's OWN BEGIN/COMMIT/ROLLBACK, so a tx op is fully observed (BEGIN + body +
+// COMMIT). A read's `SeamResult::Rows` hands the row list back (a write's `Run` summary carries none),
+// so the same hook totals the rows the op moved — the report's per-row denominator (#170). The N+1
+// proof: a batched relation runs 1 parent + 1 batched child per level = 2 / 3 (not 1+N).
+//
+// Observing at the seam and NOT by decorating the Driver is load-bearing (#238): a Driver decorator can
+// only re-enter the runtime's own `prepare`, which on a POOLED live driver checks out a fresh connection
+// per statement — BEGIN would land on a connection that is then returned to the pool still holding an
+// open transaction. Connection ownership belongs to the driver (`MysqlDriver`/`PostgresDriver`
+// `acquire_tx` pin one connection for the whole tx); the bench only observes.
+static STMT_COUNT: AtomicUsize = AtomicUsize::new(0);
 static ROW_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-fn probe_rows(d: &dyn Driver, setup: &Setup, op: &str) -> usize {
+/// Run ONE op once, UN-TIMED, with the counting hook registered, and report its `(statements, rows)` —
+/// the safety assertion's input and the report's per-row denominator, measured in one place. The hook is
+/// unregistered on the way out, so the published latencies never pay to observe it. The caller seeds
+/// first; the seed runs on the driver directly (off-seam) and is never counted.
+fn probe(d: &dyn Driver, setup: &Setup, op: &str) -> (usize, usize) {
     clear_middlewares();
     register_middleware(MiddlewareDescriptor::sql_only(Box::new(SqlHookFn(
         |sql: &str,
          params: &[behavior_contracts::Value],
          next: &litedbmodel_runtime::middleware::SqlNext| {
+            STMT_COUNT.fetch_add(1, Ordering::Relaxed);
             let out = next(sql, params)?;
             if let SeamResult::Rows(rows) = &out {
                 ROW_COUNT.fetch_add(rows.len(), Ordering::Relaxed);
@@ -59,34 +66,16 @@ fn probe_rows(d: &dyn Driver, setup: &Setup, op: &str) -> usize {
             Ok(out)
         },
     ))));
+    STMT_COUNT.store(0, Ordering::SeqCst);
     ROW_COUNT.store(0, Ordering::SeqCst);
     let ctx = for_driver(d);
     with_ambient_context(&ctx, || run_op(&ctx, setup, op, 0));
-    let n = ROW_COUNT.load(Ordering::SeqCst);
+    let tally = (
+        STMT_COUNT.load(Ordering::SeqCst),
+        ROW_COUNT.load(Ordering::SeqCst),
+    );
     clear_middlewares();
-    n
-}
-
-struct CountingDriver {
-    inner: Box<dyn Driver>,
-}
-impl Driver for CountingDriver {
-    fn dialect(&self) -> &'static str {
-        self.inner.dialect()
-    }
-    fn prepare(&self, sql: &str) -> Box<dyn PreparedStatement + '_> {
-        QUERY_COUNT.fetch_add(1, Ordering::Relaxed);
-        self.inner.prepare(sql)
-    }
-    // Route the tx over a forwarding handle on `self` (not `inner`), so the tx-control BEGIN/COMMIT/
-    // ROLLBACK and every body statement run through THIS driver's counted `prepare` — the safety count
-    // of a tx op is then BEGIN + body statements + COMMIT (the whole transaction is observed).
-    fn begin_tx(&self) -> Result<Box<dyn TxConnection + '_>, SqlFailure> {
-        forwarding_tx(self)
-    }
-    fn acquire_tx(&self) -> Result<Box<dyn TxConnection + '_>, SqlFailure> {
-        forwarding_tx_no_begin(self)
-    }
+    tally
 }
 
 // The seed SSoT loader + connection targets are SHARED with the SDK cell (rust/orm_bench_common) —
@@ -307,7 +296,7 @@ fn main() {
         // driver installed (the covered runner resolves it inside `execute_sql`).
         seed(d, &setup);
         // One UN-TIMED probe measures the rows this op moves — the report's per-row denominator (#170).
-        let rows = probe_rows(d, &setup, op);
+        let (_stmts, rows) = probe(d, &setup, op);
         let ctx = for_driver(d);
         with_ambient_context(&ctx, || {
             for it in 0..warmup {
@@ -326,16 +315,14 @@ fn main() {
 }
 
 // ── The safety + fairness proof: EVERY op's statement count AND the rows it moves. ────────────────
-// Statements ride the CountingDriver (it sees the tx-control BEGIN/COMMIT too); rows ride the runtime
-// SQL seam (`probe_rows`). Covering all 19 ops — not just the guarded ones — is what lets this cell's
-// row yield be compared against every other language's, the fairness check #170 had no surface for.
+// Both come from the ONE `probe` pass over the runtime SQL seam (which sees the tx-control BEGIN/COMMIT
+// too). Covering all 19 ops — not just the guarded ones — is what lets this cell's row yield be compared
+// against every other language's, the fairness check #170 had no surface for.
 fn run_safety() {
     let dialect = gen::TARGET;
     let setup = load_setup(dialect);
-    let counting = CountingDriver {
-        inner: open_driver(dialect, &setup),
-    };
-    let d: &dyn Driver = &counting;
+    let driver = open_driver(dialect, &setup);
+    let d: &dyn Driver = driver.as_ref();
     // The guarded expectations: a relation op is 1 parent + 1 batched child PER LEVEL (N+1-free,
     // independent of the row count); a batch write is ONE statement for N records (the whole record set
     // rides as one param); a RETURNING-chained tx is BEGIN + 2 body + COMMIT = 4.
@@ -356,12 +343,7 @@ fn run_safety() {
     println!("op                    statements  rows");
     for op in OPS {
         seed(d, &setup); // clean fixture per op; off-seam, never counted
-        let rows = probe_rows(d, &setup, op);
-        seed(d, &setup);
-        QUERY_COUNT.store(0, Ordering::SeqCst);
-        let ctx = for_driver(d);
-        with_ambient_context(&ctx, || run_op(&ctx, &setup, op, 0));
-        let stmts = QUERY_COUNT.load(Ordering::SeqCst);
+        let (stmts, rows) = probe(d, &setup, op);
         let want = expected
             .iter()
             .find(|(name, _)| name == op)
