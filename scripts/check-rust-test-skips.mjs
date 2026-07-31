@@ -138,6 +138,8 @@ const LIVE_TESTS = [
   'd1_red_live_without_registration_nothing_observed',
   'd3_live_raw_execute_query_through_seam_and_logger',
   'phase_c_connection_routing_and_config',
+  'tx_body_panic_leaves_no_open_transaction_mysql',
+  'tx_body_panic_leaves_no_open_transaction_pg',
 ];
 
 /** Every `.rs` under `dir` — a target is LIVE when any source in its own tree reads a gate. */
