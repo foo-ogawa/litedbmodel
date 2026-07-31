@@ -17,7 +17,8 @@ pub struct Setup {
 /// Read one dialect's setup. Anchored on the CALLER's manifest dir, which is `rust/<cell>/`.
 pub fn load_setup(dialect: &str, manifest_dir: &str) -> Setup {
     let path = format!("{manifest_dir}/../../benchmark/crosslang/.setup/{dialect}.json");
-    let txt = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read seed SSoT {path}: {e}"));
+    let txt =
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read seed SSoT {path}: {e}"));
     let v: serde_json::Value =
         serde_json::from_str(&txt).unwrap_or_else(|e| panic!("parse {path}: {e}"));
     let arr = |k: &str| {
@@ -43,11 +44,19 @@ pub fn load_setup(dialect: &str, manifest_dir: &str) -> Setup {
                 .collect()
         })
         .unwrap_or_else(|| panic!("{path}: no `ops` — run `lm_orm_native sql` for this dialect"));
-    Setup { schema: arr("schema"), delete: arr("delete"), insert: arr("insert"), ops }
+    Setup {
+        schema: arr("schema"),
+        delete: arr("delete"),
+        insert: arr("insert"),
+        ops,
+    }
 }
 
 fn env_or(k: &str, def: &str) -> String {
-    std::env::var(k).ok().filter(|s| !s.is_empty()).unwrap_or_else(|| def.to_string())
+    std::env::var(k)
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| def.to_string())
 }
 
 /// The libpq connection string for the bench Postgres, from the same `TEST_DB_*` environment the
