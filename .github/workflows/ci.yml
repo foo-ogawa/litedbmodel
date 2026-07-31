@@ -39,14 +39,17 @@ jobs:
       - name: Verify package contents
         run: npm pack --dry-run
 
-  # The benchmark docs are MACHINE-GENERATED from benchmark/results/benchmark-results.csv: the tables +
-  # win count in docs/*.md via embedoc, the chart via generate-chart.ts. Regenerate and fail on any diff —
-  # the published numbers must always equal the measured data, never a hand-edited figure.
+  # Everything under docs/ that a generator owns is regenerated here and diffed, so the published files
+  # always equal what their sources regenerate to: the benchmark tables + win count in docs/*.md via
+  # embedoc and the chart via generate-chart.ts (both from benchmark/results/benchmark-results.csv), and
+  # the API reference under docs/api/ via typedoc (from src/). Neither a hand-edited figure nor a
+  # snapshot of an older release survives — docs/api/ was generated once under 1.0.1 and, with nothing
+  # regenerating it, shipped v1's API reference through every v2 release (#251).
   #
   # `embedoc build` reports a failed embed load as a warning and exits 0, leaving every marker untouched,
   # so a plain regenerate-and-diff passes while the embeds never ran. check-bench-docs.mjs blanks the
   # regions first, making an unrendered one fail loudly instead of surviving into a clean diff.
-  bench-docs-drift:
+  docs-drift:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -58,7 +61,15 @@ jobs:
         run: npm ci --ignore-scripts
       - name: Regenerate benchmark docs + chart from the CSV
         run: npm run docs:bench:check
-      - name: Fail if docs/chart drifted from benchmark-results.csv
+      # After embedoc, not before: docs/api/README.md is a COPY of docs/api-guide.md (typedoc.json
+      # `readme`), so an embed region there has to be rendered before the copy is taken.
+      - name: Regenerate the API reference from src/
+        run: npm run docs
+      - name: Fail if docs/ drifted from their sources
         run: |
+          # git diff is blind to a file a generator NEWLY created, and typedoc adds a page per new
+          # export — three were untracked when #251 was found, and a diff-only check would have called
+          # that tree clean. Intent-to-add puts them in the diff.
+          git add --intent-to-add -- docs/
           git diff --exit-code -- docs/ \
-            || { echo "::error::Benchmark docs/chart are out of sync with benchmark/results/benchmark-results.csv. Run 'npm run docs:bench:check' and commit the result."; exit 1; }
+            || { echo "::error::docs/ is out of sync with its sources (benchmark-results.csv / src). Run 'npm run docs:bench:check && npm run docs' and commit the result."; exit 1; }
