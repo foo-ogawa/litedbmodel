@@ -119,7 +119,7 @@ final class ExecutionContextSeamTest extends TestCase
         $this->assertSame(101, (int) $rows[0]->id); // 1 + 100 via the middleware
     }
 
-    // ── connectionFor resolution: tx-owned pinned connection wins ──────────────
+    // ── connectionFor resolution: tx-owned pinned conn serves a statement of the tx's own database ──────────────
 
     public function testConnectionForResolvesPinnedInTx(): void
     {

@@ -11,7 +11,8 @@
 //  2. a **middleware chain** — [ExecutionContext.Middleware], wrapping every SQL (empty in Phase A =
 //     passthrough; the registration API is Phase D — this is only the hook point);
 //  3. a **pinned tx connection** — a tx-scoped ctx pins ONE owned connection so every statement in a
-//     transaction body runs on it (per-execution connection ownership, §3).
+//     transaction body of the tx's own database (an unnamed one, or one naming that database) runs on it (per-execution connection
+//     ownership, §3).
 //
 // # The central seam (§2) — ALL SQL funnels through here
 //
@@ -45,7 +46,7 @@
 // lifetime, the analogue of v1 `PoolTransaction`), pins it into a tx-scoped [ExecutionContext] threaded
 // on a context.Context, then issues its OWN tx-control (SET/BEGIN/COMMIT/ROLLBACK) as REAL SQL THROUGH
 // the seam ([Run] on the pinned conn) so a middleware OBSERVES it — full TS parity (Phase D / #94). The
-// body's every statement resolves that *sql.Conn via ConnectionFor; a poisoned conn (a failed
+// body's every statement of the tx's own database (an unnamed one, or one naming that database) resolves that *sql.Conn via ConnectionFor; a poisoned conn (a failed
 // ROLLBACK/COMMIT) is DESTROYED on release (see [releaseTxConn]). Concurrent transactions each own a
 // DISTINCT *sql.Conn over a DISTINCT pooled connection ⇒ isolated. There is NO driver-global tx slot,
 // and no *sql.Tx (whose BEGIN/Commit/Rollback are opaque method calls the seam can't observe); this
@@ -228,8 +229,8 @@ type ExecutionContext struct {
 	db SQLDB
 	// middleware is the chain wrapping every SQL (§4). Empty in Phase A.
 	middleware *MiddlewareChain
-	// pinned is the tx-owned connection (present ⇒ this is a tx-scoped ctx; every statement resolves
-	// it). nil outside a transaction.
+	// pinned is the tx-owned connection (present ⇒ this is a tx-scoped ctx; every statement
+	// of the tx's own database (an unnamed one, or one naming that database) resolves it). nil outside a transaction.
 	pinned Connection
 	// readOnly is the READ-ONLY marker (Phase B / #83 write=tx guard — mirror v1 `withWriter` / the
 	// TS `withReadOnly` ALS marker / rust `read_only`): a write in a read-only-scoped ctx is REJECTED
@@ -383,9 +384,9 @@ func (c *ExecutionContext) InWriterScope() bool { return c.writerScope }
 
 // WithConnectionName derives a ctx whose TRANSACTIONS open on the NAMED connection `name` (Phase C-2
 // multi-DB): [ExecutionContext.acquireTxConnection] then checks the tx's owned connection out of THAT
-// registry pair's WRITER pool, so the whole BEGIN…COMMIT — and every statement in the body, which
-// resolves the pin — runs on that database. "" ⇒ the default connection; a no-op shape change on the
-// single-db path (routing nil). Reads/writes OUTSIDE a transaction still name their DB per statement
+// registry pair's WRITER pool, so the whole BEGIN…COMMIT — and every statement in the body
+// of the tx's own database, which resolves the pin — runs on it. A statement naming a DIFFERENT database is rejected ([namedDBDisagreesWithTx]): a transaction cannot span two. "" ⇒ the default
+// connection; a no-op shape change on the single-db path (routing nil). Reads/writes OUTSIDE a transaction still name their DB per statement
 // ([StatementIntent.DB]) — this answers the one question a statement intent cannot reach, because a
 // transaction is opened by the boundary, not by a statement. Shares the primary db + middleware + Go
 // context + pinned tx connection + routing + writer/read-only markers. Go analogue of python
@@ -396,7 +397,8 @@ func (c *ExecutionContext) WithConnectionName(name string) *ExecutionContext {
 }
 
 // ConnectionFor resolves WHICH connection a statement runs on (§3). Resolution order:
-//  1. the tx-owned (pinned) connection wins (Phase A — only the ctx holds the pin);
+//  1. the tx-owned (pinned) connection, for every statement of the tx's own database (Phase A — only the ctx
+//     holds the pin; a statement naming a DIFFERENT database is rejected there rather than routed);
 //  2. else, if this ctx carries a Phase C [RoutingConfig], [resolvePool] picks the reader/writer pool
 //     of the named connection (steps 2-4) and the returned connection acquires/runs/releases one
 //     owned pooled connection per statement (the per-statement ownership the read fan-out uses);
@@ -412,6 +414,13 @@ func (c *ExecutionContext) WithConnectionName(name string) *ExecutionContext {
 // it (#216).
 func (c *ExecutionContext) ConnectionFor(intent StatementIntent) Connection {
 	if c.pinned != nil {
+		// A statement that names a DIFFERENT database than the transaction opened on cannot be honored on
+		// the pinned connection — a transaction is ONE connection on ONE database — so it is LOUD rather
+		// than silently executed against the transaction's database (#217). The name the tx opened on is
+		// this ctx's own ([ExecutionContext.WithConnectionName], the same field acquireTxConnection reads).
+		if err := namedDBDisagreesWithTx(intent.DB, c.connection); err != nil {
+			return failingConnection{err: err}
+		}
 		return c.pinned
 	}
 	if c.routing != nil {
@@ -426,17 +435,17 @@ func (c *ExecutionContext) ConnectionFor(intent StatementIntent) Connection {
 			Msg: "scp exec-context: this context has no connection to run a statement on — it carries " +
 				"neither a routing config nor a primary db. Build it with ContextForDB/ContextForRouting."}}
 	}
-	// A statement that NAMES a database has nowhere to go on a single-primary-db ctx (there is no
-	// registry to resolve the name against), so it is LOUD — exactly as an unregistered name is on a
-	// routed ctx ([ConnectionRegistry.PairFor]). Running it on the primary db instead would execute it
-	// against a DIFFERENT database than its model declares, silently (#217).
+	// No pin: a statement that NAMES a database has nowhere to go on a single-primary-db ctx either
+	// (there is no registry to resolve the name against), so it is LOUD — exactly as an unregistered name
+	// is on a routed ctx ([ConnectionRegistry.PairFor]). Running it on the primary db instead would
+	// execute it against a DIFFERENT database than its model declares, silently (#217).
 	if err := namedDBUnroutable(intent.DB, "a single-primary-db (non-routed) execution context"); err != nil {
 		return failingConnection{err: err}
 	}
 	return dbConnection{db: c.db}
 }
 
-// WithTxConnection derives a tx-scoped ctx pinning `conn` (every statement resolves it while this ctx
+// WithTxConnection derives a tx-scoped ctx pinning `conn` (every statement of the tx's own database (an unnamed one, or one naming that database) resolves it while this ctx
 // is used). The derived ctx shares the primary db + middleware chain + Go context + routing;
 // ConnectionFor returns the pinned tx connection instead of the db. This is the Go analogue of the TS
 // withConnection(conn, true) / rust with_tx_connection.
@@ -453,8 +462,9 @@ func (c *ExecutionContext) WithTxConnection(conn Connection) *ExecutionContext {
 //  1. WITH a Phase C [RoutingConfig]: a transaction is a WRITE on the ctx's NAMED db ⇒ [resolvePool]
 //     on that intent picks the WRITER pool OF THAT DB ([ExecutionContext.WithConnectionName]; "" ⇒ the
 //     default connection), which hands out one owned connection ([Pool.Acquire]); the hook returns it
-//     to THAT pool (destroyed when poisoned). Every statement of the body then resolves the pin
-//     (ConnectionFor step 1), so the whole BEGIN…COMMIT runs on that one writer connection.
+//     to THAT pool (destroyed when poisoned). Every statement of the body of the tx's own database (an unnamed one, or one naming that database)
+//     then resolves the pin (ConnectionFor step 1), so the whole BEGIN…COMMIT runs on that one writer
+//     connection; one naming a DIFFERENT database is rejected there rather than routed.
 //  2. else (Phase A/B single-primary-db path): the ctx's primary db checks out one *sql.Conn (db.Conn
 //     — Go's connection-owning primitive), carrying the tx's prepared-statement cache; the hook closes
 //     the cache and returns/destroys the connection ([releaseTxConn]). Byte-identical to Phase A/B.
@@ -584,9 +594,9 @@ func RunGuarded(ctx *ExecutionContext, sql string, args []any, operation string,
 // checks out exactly one pooled connection held for the whole transaction; the runtime issues its OWN
 // BEGIN/COMMIT/ROLLBACK/SET on it as REAL SQL strings THROUGH the seam — middleware-visible — unlike a
 // *sql.Tx whose BEGIN/Commit/Rollback are opaque method calls). Because the *sql.Conn satisfies SQLDB
-// (via connSQLDB) every statement in the tx body — data writes AND tx-control — runs on it through the
-// SAME queryRows / execWrite as the non-tx path, but pinned so ConnectionFor always returns THIS
-// connection. Concurrent transactions each own a DISTINCT *sql.Conn over a DISTINCT pooled connection,
+// (via connSQLDB) every statement in the tx body of the tx's own database (an unnamed one, or one naming that database) — data writes AND
+// tx-control — runs on it through the SAME queryRows / execWrite as the non-tx path, but pinned so
+// ConnectionFor returns THIS connection. Concurrent transactions each own a DISTINCT *sql.Conn over a DISTINCT pooled connection,
 // so their writes never cross-talk (the isolation the shared-slot model would violate).
 type txConnection struct {
 	sqldb connSQLDB
@@ -626,8 +636,9 @@ func Rollback() TxDecision { return TxDecision{Rollback: true} }
 //
 //  1. check out ONE OWNED connection from the CTX ([ExecutionContext.acquireTxConnection] — the routed
 //     WRITER pool, or the primary db's *sql.Conn; NO BEGIN yet), the Go analogue of v1 PoolTransaction;
-//  2. pin it into a tx-scoped [ExecutionContext] so EVERY statement `body` issues resolves THAT
-//     connection via ConnectionFor — never a fresh pooled one;
+//  2. pin it into a tx-scoped [ExecutionContext] so EVERY statement `body` issues of the tx's own database
+//     resolves THAT connection via ConnectionFor — never a fresh pooled one, and a statement
+//     naming a DIFFERENT database is rejected instead;
 //  3. issue the isolation-aware BEGIN THROUGH the seam ([Run] on the pinned conn) so it is
 //     middleware-visible; run body(txCtx) → COMMIT / ROLLBACK THROUGH the seam per the returned
 //     decision; on any error ROLLBACK (best-effort) and re-raise;
@@ -647,7 +658,7 @@ func WithTransactionDecided[R any](ctx *ExecutionContext, body func(txCtx *Execu
 //
 //  1. checks out ONE OWNED connection FROM THE CTX ([ExecutionContext.acquireTxConnection]: the routed
 //     WRITER pool, else the primary db's *sql.Conn; NO BEGIN yet), pins it into a tx-scoped ctx so
-//     every statement resolves THIS connection;
+//     every statement of the tx's own database (an unnamed one, or one naming that database) resolves THIS connection;
 //  2. issues the isolation-aware BEGIN ([BeginStatements]: PG `BEGIN ISOLATION LEVEL …`; MySQL a
 //     preceding `SET TRANSACTION ISOLATION LEVEL …` then `BEGIN`) THROUGH the seam ([Run] on the
 //     pinned conn) — so a registered SQL-level middleware OBSERVES the BEGIN (+ SET);
@@ -687,8 +698,8 @@ func WithTransactionDecidedIsolated[R any](ctx *ExecutionContext, isolation Isol
 		return zero, err
 	}
 	// Pin the OWNED connection into a tx-scoped ctx: every statement (data + tx-control) the
-	// body/runtime issues resolves THIS connection through the SAME seam — so tx-control is
-	// middleware-visible.
+	// body/runtime issues of the tx's own database (an unnamed one, or one naming that database) resolves THIS connection through the
+	// SAME seam — so tx-control is middleware-visible.
 	txCtx := ctx.WithTxConnection(conn)
 	// poisoned ⇒ the connection is in an unknown state (a failed ROLLBACK); DESTROY it on release so a
 	// fired statement_timeout / aborted session never re-enters the pool.

@@ -8,6 +8,8 @@ package litedbmodel_runtime
 import (
 	"database/sql"
 	"errors"
+	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -502,15 +504,39 @@ func childrenUnder(t *testing.T, grouped wire.WireValue, i int, into string) int
 // return the wrong rows — it cannot see a table at all. A single-DB fixture cannot tell a honored
 // connection name from a dropped one, which is exactly why the defect survived the single-DB
 // conformance and livedb suites (#217).
-func namedDBPools(t *testing.T) (*ExecutionContext, func()) {
+// countingPool wraps the PRODUCTION [SQLDBPool] and records its label on every Acquire, so a test can
+// assert HOW MANY connections a transaction checked out (and from which db) while the statements still run
+// against a real sqlite database. Wiring a log and never reading it is a gate that looks like one and
+// checks nothing, so `namedDBPools` hands the transcript back.
+type countingPool struct {
+	inner *SQLDBPool
+	label string
+	log   *[]string
+}
+
+func (p *countingPool) Acquire() (PooledConn, error) {
+	*p.log = append(*p.log, p.label)
+	return p.inner.Acquire()
+}
+
+func (p *countingPool) Release(conn PooledConn, destroy bool) error {
+	return p.inner.Release(conn, destroy)
+}
+
+func namedDBPools(t *testing.T) (*ExecutionContext, *[]string, func()) {
 	t.Helper()
+	// A FILE, not `:memory:`, and a cap of TWO: with `:memory:` every checkout is its own database and a
+	// cap of one makes a SECOND checkout block forever instead of returning. That is what made the
+	// "ONE checkout for the whole tx" assertion below un-testable — the faithful mutation (an in-body
+	// statement bypassing the pin) HUNG rather than failing, so the assertion could not be shown to be
+	// load-bearing. On a file with room for two, a second checkout succeeds and the count catches it.
 	open := func(seed ...string) *sql.DB {
-		db, err := sql.Open("sqlite", ":memory:")
+		db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "db.sqlite"))
 		if err != nil {
 			t.Fatalf("open: %v", err)
 		}
-		db.SetMaxOpenConns(1)
-		db.SetMaxIdleConns(1)
+		db.SetMaxOpenConns(2)
+		db.SetMaxIdleConns(2)
 		for _, s := range seed {
 			if _, err := db.Exec(s); err != nil {
 				t.Fatalf("seed %q: %v", s, err)
@@ -524,16 +550,17 @@ func namedDBPools(t *testing.T) (*ExecutionContext, func()) {
 	a := open("CREATE TABLE only_in_a (id INTEGER PRIMARY KEY)", "INSERT INTO only_in_a VALUES (1),(2)")
 	b := open("CREATE TABLE named_users (id INTEGER PRIMARY KEY, name TEXT)",
 		"INSERT INTO named_users VALUES (1,'Ada'),(2,'Bob')")
+	log := &[]string{}
 	reg := NewConnectionRegistry(map[string]ReaderWriterPools{
-		DefaultConnection: SinglePoolPair(NewSQLDBPool(a)),
-		"B":               SinglePoolPair(NewSQLDBPool(b)),
+		DefaultConnection: SinglePoolPair(&countingPool{inner: NewSQLDBPool(a), label: "A", log: log}),
+		"B":               SinglePoolPair(&countingPool{inner: NewSQLDBPool(b), label: "B", log: log}),
 	})
 	ctx := ContextForRouting(RoutingConfig{
 		Registry: reg,
 		Sticky:   NewWriterStickyClock(StickyOptions{UseWriterAfterTransaction: boolPtr(false)}),
 	}, nil)
 	BindLeafTransport(ctx, "sqlite")
-	return ctx, func() {
+	return ctx, log, func() {
 		UnbindLeafTransport()
 		_ = a.Close()
 		_ = b.Close()
@@ -545,7 +572,7 @@ func namedDBPools(t *testing.T) (*ExecutionContext, func()) {
 // `leaves.test.ts` #217 tests, the rust `named_db_routes_the_statement`, the python
 // `test_named_db_routes_the_statement` and the php `NamedDbRoutingTest`.
 func TestExecuteSQL_NamedDBRoutesTheStatement(t *testing.T) {
-	_, done := namedDBPools(t)
+	_, _, done := namedDBPools(t)
 	defer done()
 
 	read := func(db wire.WireValue) (wire.WireValue, error) {
@@ -586,7 +613,7 @@ func TestExecuteSQL_NamedDBRoutesTheStatement(t *testing.T) {
 // (`test/scp/emitter.test.ts` gates the lowering); here the leaf carries it to ConnectionFor and the ONE
 // [ConnectionRegistry] resolves it. The tables are DISJOINT, so a mis-routed half sees no table at all.
 func TestRelationThroughLeaves_NamedDBRoutesTheChildFetch(t *testing.T) {
-	_, done := namedDBPools(t)
+	_, _, done := namedDBPools(t)
 	defer done()
 
 	const parentSQL = "SELECT id FROM only_in_a ORDER BY id"
@@ -643,5 +670,179 @@ func TestExecuteSQL_NamedDBOnANonRoutedContextIsLoud(t *testing.T) {
 		optsPort(wire.WireNull(), wire.WireNull(), wire.WireNull(), wire.WireNull()),
 	)); err != nil {
 		t.Fatalf("unnamed statement on the single-db ctx: %v", err)
+	}
+}
+
+// #217 R1 — INSIDE a transaction, a statement's named database must AGREE with the one the transaction
+// opened on, or be LOUD. The pin is resolved BEFORE routing (per-execution ownership depends on it), so
+// intent.DB used to be dropped unread: a `db:"B"` statement inside a tx on the DEFAULT connection ran on
+// the DEFAULT one, silently, and an UNREGISTERED name never surfaced at all. A transaction is ONE
+// connection on ONE database, so the two cannot both be honored.
+//
+// The whole matrix is asserted, the NORMAL cases included: an unnamed in-body statement, and one naming
+// the tx's OWN database, must NOT become loud. The go leg; twins in TS / rust / python / php.
+func TestExecuteSQL_NamedDBInsideATransactionMustAgree(t *testing.T) {
+	ctx, log, done := namedDBPools(t)
+	defer done()
+
+	read := func(db wire.WireValue) (wire.WireValue, error) {
+		return ExecuteSQL(leafPayload(
+			port("sql", wire.WireStr("SELECT id, name FROM named_users ORDER BY id")),
+			port("params", wire.WireListOf(nil)),
+			optsPort(db, wire.WireNull(), wire.WireNull(), wire.WireNull()),
+		))
+	}
+	// The DEFAULT db has no `named_users`, so a read that reaches it fails on the TABLE — which is how a
+	// silently-mis-routed statement is told apart from a LOUD refusal.
+	countOnA := func(db wire.WireValue) (wire.WireValue, error) {
+		return ExecuteSQL(leafPayload(
+			port("sql", wire.WireStr("SELECT count(*) AS n FROM only_in_a")),
+			port("params", wire.WireListOf(nil)),
+			optsPort(db, wire.WireNull(), wire.WireNull(), wire.WireNull()),
+		))
+	}
+
+	// A transaction on the DEFAULT connection (the ctx names none).
+	BindLeafTransport(ctx, "sqlite")
+	if err := WithAmbientTransaction(func() error {
+		// ORDINARY in-body statement (unnamed) → the pin. It must NOT be loud.
+		if _, err := countOnA(wire.WireNull()); err != nil {
+			t.Fatalf("an unnamed in-body statement must run on the pin: %v", err)
+		}
+		// A statement naming ANOTHER database is LOUD. Before this it returned B's rows' worth of nothing:
+		// it ran on the tx's own (DEFAULT) connection, silently.
+		if _, err := read(wire.WireStr("B")); err == nil ||
+			!strings.Contains(err.Error(), "transaction opened on 'default'") {
+			t.Fatalf(`db "B" inside a default tx = %v, want the LOUD disagreement`, err)
+		}
+		// An UNREGISTERED name is loud too (the pin used to swallow it whole).
+		if _, err := read(wire.WireStr("ghost")); err == nil ||
+			!strings.Contains(err.Error(), "names connection 'ghost'") {
+			t.Fatalf(`db "ghost" inside a tx = %v, want LOUD`, err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("default tx: %v", err)
+	}
+
+	// A transaction on "B": the statement naming "B" AGREES and runs on the pin — the rows are
+	// unforgeable (named_users exists in NO other registered db) — and "default" now disagrees.
+	BindLeafTransport(ctx.WithConnectionName("B"), "sqlite")
+	if err := WithAmbientTransaction(func() error {
+		got, err := read(wire.WireStr("B"))
+		if err != nil {
+			t.Fatalf(`db "B" inside a tx on B must run: %v`, err)
+		}
+		if l := got.AsList(); l.Kind != wireProbeGot || l.Got.Len() != 2 {
+			t.Fatalf(`db "B" inside a tx on B returned %v, want B's 2 rows`, got)
+		}
+		if _, err := read(wire.WireNull()); err != nil {
+			t.Fatalf("an unnamed in-body statement must run on the pin: %v", err)
+		}
+		if _, err := countOnA(wire.WireStr("default")); err == nil ||
+			!strings.Contains(err.Error(), "transaction opened on 'B'") {
+			t.Fatalf(`db "default" inside a tx on B = %v, want the LOUD disagreement`, err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("named tx: %v", err)
+	}
+	// The transcript, READ rather than discarded (the php, rust and python twins assert theirs too): ONE
+	// checkout per transaction, each on its own database, and the REJECTED statements reached no pool.
+	if !reflect.DeepEqual(*log, []string{"A", "B"}) {
+		t.Fatalf("tx checkouts = %v, want [A B] (ONE per tx, each on its own db)", *log)
+	}
+}
+
+// #217 R2 — a NON-ROUTED ctx rejects a named statement IDENTICALLY inside a transaction and outside it.
+// The guard used to sit BEFORE the pin on the TS/php planes and AFTER it here, so "a named statement in a
+// non-routed tx" threw in two languages and ran silently in three.
+func TestExecuteSQL_NamedDBOnANonRoutedContextIsLoudInsideATransactionToo(t *testing.T) {
+	db := openBoundT(t)
+	defer func() {
+		UnbindLeafTransport()
+		_ = db.Close()
+	}()
+	named := func() error {
+		_, err := ExecuteSQL(leafPayload(
+			port("sql", wire.WireStr("SELECT id FROM t")),
+			port("params", wire.WireListOf(nil)),
+			optsPort(wire.WireStr("analytics"), wire.WireNull(), wire.WireNull(), wire.WireNull()),
+		))
+		return err
+	}
+	unnamed := func() error {
+		_, err := ExecuteSQL(leafPayload(
+			port("sql", wire.WireStr("SELECT id FROM t")),
+			port("params", wire.WireListOf(nil)),
+			optsPort(wire.WireNull(), wire.WireNull(), wire.WireNull(), wire.WireNull()),
+		))
+		return err
+	}
+	if err := named(); err == nil || !strings.Contains(err.Error(), "names connection 'analytics'") {
+		t.Fatalf("outside a tx = %v, want LOUD", err)
+	}
+	if err := WithAmbientTransaction(func() error {
+		if err := named(); err == nil || !strings.Contains(err.Error(), "names connection 'analytics'") {
+			t.Fatalf("inside a tx = %v, want the SAME loud outcome as outside it", err)
+		}
+		// …and the ordinary unnamed statement still runs on the pin.
+		return unnamed()
+	}); err != nil {
+		t.Fatalf("tx: %v", err)
+	}
+}
+
+// #217 (2nd remand) — the READ-ONLY / WRITER DERIVATION of a tx-scoped ctx must carry the transaction's
+// connection NAME. Such a derivation keeps the PIN, so dropping the name leaves a ctx that still resolves
+// the transaction's connection while claiming to be on another database: a statement naming the tx's OWN
+// database gets a FALSE LOUD, and one naming the other database RUNS on the pinned connection. php was
+// the language that dropped it; go carries it at [ExecutionContext.WithReadOnly] / [WithWriter] — this
+// pins that, because the R1 gates only used the ctx the tx boundary hands the body DIRECTLY.
+//
+// Driven through the central seam ([Execute]), which is where ConnectionFor is called.
+func TestNamedDBAgreementSurvivesTheReadOnlyAndWriterDerivations(t *testing.T) {
+	ctx, log, done := namedDBPools(t)
+	defer done()
+	const sql = "SELECT id, name FROM named_users ORDER BY id"
+
+	_, err := WithTransaction(ctx.WithConnectionName("B"), func(txCtx *ExecutionContext) (struct{}, error) {
+		for _, d := range []struct {
+			what string
+			ctx  *ExecutionContext
+		}{
+			{"the tx ctx itself", txCtx},
+			{"WithReadOnly()", txCtx.WithReadOnly()},
+			{"WithWriter()", txCtx.WithWriter()},
+			{"WithReadOnly().WithWriter()", txCtx.WithReadOnly().WithWriter()},
+		} {
+			// NO FALSE LOUD: the tx's OWN database still runs, on the pinned connection. The rows are
+			// unforgeable — named_users exists in NO other registered db.
+			rows, err := Execute(d.ctx, sql, nil, StatementIntent{DB: "B"})
+			if err != nil {
+				t.Fatalf("%s: the tx's own db must NOT be falsely rejected: %v", d.what, err)
+			}
+			if len(rows) != 2 {
+				t.Fatalf("%s: got %d rows, want B's 2", d.what, len(rows))
+			}
+			// An UNNAMED statement runs too (the ordinary in-body statement).
+			if _, err := Execute(d.ctx, sql, nil, ReadIntent()); err != nil {
+				t.Fatalf("%s: an unnamed in-body statement must run: %v", d.what, err)
+			}
+			// …and a DIFFERENT database is still LOUD (it would otherwise run on B's pinned conn).
+			if _, err := Execute(d.ctx, sql, nil, StatementIntent{DB: DefaultConnection}); err == nil ||
+				!strings.Contains(err.Error(), "transaction opened on 'B'") {
+				t.Fatalf("%s: a different db must stay rejected, got %v", d.what, err)
+			}
+		}
+		return struct{}{}, nil
+	})
+	if err != nil {
+		t.Fatalf("named tx: %v", err)
+	}
+	// ONE checkout for the whole transaction, on B: the derivations did not turn an in-body statement into
+	// a second connection, and nothing was taken from the default.
+	if !reflect.DeepEqual(*log, []string{"B"}) {
+		t.Fatalf("tx checkouts = %v, want [B] (ONE, on B)", *log)
 	}
 }

@@ -10,7 +10,8 @@
 //!   2. a **middleware chain** — [`ExecutionContext::middleware`], wrapping every SQL (empty in
 //!      Phase A = passthrough; the registration API is Phase D — this is only the hook point);
 //!   3. a **pinned tx connection** — a tx-scoped ctx pins ONE owned connection so every statement in
-//!      a transaction body runs on it (per-execution connection ownership, §3).
+//!      a transaction body of the tx's own database (an unnamed one, or one naming that database) runs on it (per-execution
+//!      connection ownership, §3).
 //!
 //! ## The central seam (§2) — ALL SQL funnels through here
 //!
@@ -42,8 +43,8 @@
 //!
 //! A transaction acquires ONE connection via [`Driver::begin_tx`] (a [`TxConnection`] owned handle —
 //! the rust analogue of v1 `litedbmodel.rs` `PoolTransaction`), pins it into a tx-scoped
-//! [`ExecutionContext`], runs its body (every statement resolves that connection via
-//! `connection_for`), COMMITs/ROLLBACKs on the SAME owned connection, and releases it (dropped/back to
+//! [`ExecutionContext`], runs its body (every statement of the tx's own database (an unnamed one, or one naming that database) resolves that
+//! connection via `connection_for`), COMMITs/ROLLBACKs on the SAME owned connection, and releases it (dropped/back to
 //! the pool). Concurrent transactions each own a DISTINCT pooled connection ⇒ isolated. There is NO
 //! driver-global single-slot writer (the removed `writer: Mutex<Option<...>>` on the PG/MySQL drivers
 //! was exactly the shared-slot model that corrupts concurrent transactions).
@@ -127,7 +128,7 @@ impl Connection for DriverConnection<'_> {
 
 /// An OWNED transaction connection — the rust analogue of v1 `litedbmodel.rs` `PoolTransaction`
 /// (`handler.rs`). Acquired by [`Driver::acquire_tx`], it holds ONE connection for the transaction's
-/// whole duration: every statement in the tx body runs on it (`execute`/`run`), INCLUDING the tx's own
+/// whole duration: every statement in the tx body of the tx's own database runs on it (`execute`/`run`), INCLUDING the tx's own
 /// BEGIN/COMMIT/ROLLBACK + the isolation SET — which the Phase D tx runtime now issues THROUGH the
 /// central seam ([`crate::exec_context::run`]) so a registered middleware observes them (#93 / owner
 /// option A, full TS parity). The tx ends by RELEASING the handle via [`TxConnection::release`] (drop
@@ -190,7 +191,8 @@ pub trait SessionConnection {
 pub type TxSlot<'t> = std::cell::RefCell<Option<Box<dyn TxConnection + 't>>>;
 
 /// A [`Connection`] view over the shared tx slot. The seam resolves this (via `connection_for`) for
-/// every statement inside a tx, so all of them run on the SAME owned connection. Interior mutability
+/// every statement inside a tx of the tx's own database (an unnamed one, or one naming that database) — so all of THOSE run on the SAME owned
+/// connection (one naming another database is rejected instead). Interior mutability
 /// (`RefCell`) is needed because `Connection::execute`/`run` take `&self` (the seam is shared over the
 /// ctx) while [`TxConnection`] takes `&mut self` (an owned connection is used exclusively — a tx body
 /// is not concurrent with itself).
@@ -330,7 +332,7 @@ pub struct ExecutionContext<'a, 't> {
     driver: &'a dyn Driver,
     /// The middleware chain wrapping every SQL (§4). Empty in Phase A.
     middleware: &'a MiddlewareChain,
-    /// The pinned tx connection slot (present ⇒ this is a tx-scoped ctx; every statement resolves it).
+    /// The pinned tx connection slot (present ⇒ a tx-scoped ctx; every statement of the tx's own database (an unnamed one, or one naming that database) resolves it).
     /// The slot's tx handle borrows the primary driver (`'a`); `'t` is the (shorter) borrow of the
     /// slot itself — keeping them distinct avoids the invariant-lifetime borrow conflict when
     /// [`with_transaction`] takes the handle back out.
@@ -456,16 +458,11 @@ impl<'a, 't> ExecutionContext<'a, 't> {
         }
     }
 
-    /// The NAMED connection this ctx's transactions open on (`None` ⇒ the default). See
-    /// [`ExecutionContext::with_connection_name`].
-    pub fn connection(&self) -> Option<&str> {
-        self.connection.as_deref()
-    }
-
     /// Derive a ctx whose TRANSACTIONS open on the NAMED connection `name` (Phase C-2 multi-DB):
     /// [`ExecutionContext::tx_driver`] then checks the tx's owned connection out of THAT connection's
-    /// WRITER pool, and the pin makes every statement in the body run on it. `None` clears the name (the
-    /// default connection). The derived ctx shares everything else — driver, middleware, routing, pin,
+    /// WRITER pool, and the pin makes every statement in the body that belongs to that database run on it
+    /// (one naming a DIFFERENT database is rejected — a transaction cannot span two). `None` clears the
+    /// name (the default connection). The derived ctx shares everything else — driver, middleware, routing, pin,
     /// writer/read-only markers.
     ///
     /// This is the channel a transaction's target rides on, because a transaction has no statement to
@@ -557,7 +554,8 @@ impl<'a, 't> ExecutionContext<'a, 't> {
     }
 
     /// Resolve WHICH connection a statement runs on (§3). Resolution order:
-    ///   1. the tx-owned (pinned) connection wins (Phase A — only the ctx holds the pin);
+    ///   1. the tx-owned (pinned) connection, for every statement of the tx's own database (Phase A — only the
+    ///      ctx holds the pin; a statement naming a DIFFERENT database is rejected there rather than routed);
     ///   2. else, WITH a routing config (Phase C): [`resolve_pool`] selects the pool
     ///      (named-DB → reader/writer split → writer-sticky/with_writer);
     ///   3. else (base ctx, no routing): the single primary driver (byte-identical Phase A/B).
@@ -568,8 +566,16 @@ impl<'a, 't> ExecutionContext<'a, 't> {
         &'s self,
         intent: &StatementIntent,
     ) -> Result<Box<dyn Connection + 's>, SqlFailure> {
-        // STEP 1: the tx pin wins (per-execution ownership — the concurrent-tx fix).
+        // STEP 1: the tx pin comes first (per-execution ownership — the concurrent-tx fix), for every
+        // statement of the tx's own database. A statement that naming a DIFFERENT database is rejected: it cannot be honored — a
+        // transaction is ONE connection on ONE database — so it is LOUD rather than silently executed
+        // against the transaction's database (#217). The name the tx opened on is this ctx's own
+        // ([`ExecutionContext::with_connection_name`], the same field `tx_driver` reads).
         if let Some(slot) = self.pinned {
+            crate::connection_routing::assert_tx_db_agrees(
+                intent.db.as_deref(),
+                self.connection.as_deref(),
+            )?;
             return Ok(Box::new(TxConnectionRef::new(slot)));
         }
         // STEPS 2-4: routed resolution (named-DB → reader/writer split → writer-sticky/with_writer).
@@ -577,8 +583,8 @@ impl<'a, 't> ExecutionContext<'a, 't> {
             let pool = resolve_pool(intent, routing, self.in_writer_scope)?;
             return Ok(Box::new(DriverConnection::new(pool.as_ref())));
         }
-        // Base ctx: the single primary driver (byte-identical Phase A/B single-DB path). A statement that
-        // NAMES a database has nowhere to go here — there is no registry to resolve the name against —
+        // Base ctx, no pin: the single primary driver (byte-identical Phase A/B single-DB path). A
+        // statement that NAMES a database has nowhere to go here — there is no registry to resolve it —
         // so it is LOUD, exactly as an unregistered name is on a routed ctx
         // ([`crate::connection_routing::ConnectionRegistry::pair_for`]). Running it on the primary driver
         // instead would execute it against a DIFFERENT database than its model declares, silently (#217).
@@ -589,7 +595,7 @@ impl<'a, 't> ExecutionContext<'a, 't> {
         Ok(Box::new(DriverConnection::new(self.driver)))
     }
 
-    /// Derive a tx-scoped ctx pinning `slot` (every statement resolves it while this ctx is used). The
+    /// Derive a tx-scoped ctx pinning `slot` (every statement of the tx's own database (an unnamed one, or one naming that database) resolves it while this ctx is used). The
     /// derived ctx shares the primary driver + middleware chain + routing; `connection_for` returns the
     /// pinned tx connection instead of the driver. `'x` is the borrow of the slot (shorter than `'a`,
     /// the driver borrow the tx handle inside the slot holds).
@@ -742,8 +748,9 @@ pub enum TxDecision<R> {
 ///
 ///   1. acquire ONE connection via [`Driver::begin_tx`] (the tx's exclusive connection; BEGIN issued
 ///      on it), the rust analogue of v1 `PoolTransaction`;
-///   2. pin it into a tx-scoped [`ExecutionContext`] so EVERY statement `body` issues resolves THAT
-///      connection via `connection_for` — never a fresh pooled one;
+///   2. pin it into a tx-scoped [`ExecutionContext`] so EVERY statement `body` issues of the tx's own database
+///      resolves THAT connection via `connection_for` — never a fresh pooled one, and a statement
+///      naming a DIFFERENT database is rejected instead;
 ///   3. run `body(&tx_ctx)` → COMMIT / ROLLBACK on the OWNED connection per the returned decision; on
 ///      any `Err` ROLLBACK (best-effort) and re-raise;
 ///   4. the owned connection is released (dropped / back to the pool) when the [`TxConnection`] is
@@ -769,8 +776,9 @@ pub fn with_transaction_decided<'a, R>(
 ///
 /// WHICH database it opens on is the CTX's ([`ExecutionContext::with_connection_name`] →
 /// [`ExecutionContext::tx_driver`]), so a named-DB transaction runs its whole BEGIN…COMMIT on ONE pinned
-/// writer connection of THAT database (the active-tx pin then wins over routing for every statement in
-/// the body — the Phase A per-execution ownership is unbroken). WITHOUT a routing config (base ctx) the
+/// writer connection of THAT database: every UNNAMED in-body statement resolves the pin (the Phase A
+/// per-execution ownership), one that names THAT database does too, and one naming a DIFFERENT database is
+/// rejected ([`crate::connection_routing::assert_tx_db_agrees`]) — a transaction cannot span two databases. WITHOUT a routing config (base ctx) the
 /// ctx names none and this is the byte-identical single-driver path. The name used to be a PARAMETER of
 /// a second `…_isolated_on` entry point, which the covered plane's boundary had no way to supply — it
 /// passed `None`, so every covered transaction opened on the default connection's writer (#217).
@@ -796,7 +804,7 @@ pub fn with_transaction_decided_isolated<'a, R>(
 
     // Issue the isolation prelude + BEGIN THROUGH THE SEAM on the pinned owned connection (full TS
     // parity — TS `runAsync(txCtx, 'BEGIN')`). `run(tx_ctx, …)` resolves the pinned tx connection via
-    // `connection_for` (STEP 1 wins) and folds the ambient middleware, so a registered hook observes
+    // `connection_for` (STEP 1, for every statement of the tx's own database) and folds the ambient middleware, so a registered hook observes
     // the runtime BEGIN/SET. Plain `run` — NOT `run_guarded` — so tx-control is EXEMPT from the write=tx
     // guard (BEGIN/COMMIT/ROLLBACK/SET are not user writes; matches TS exec-context.ts:254). MySQL's
     // SET-before-BEGIN order is honored: `before_begin` (SET) is issued BEFORE `BEGIN`, `after_begin`
@@ -820,7 +828,7 @@ pub fn with_transaction_decided_isolated<'a, R>(
         return Err(e);
     }
 
-    // Run the body on the pinned tx ctx (every statement resolves the SAME owned connection).
+    // Run the body on the pinned tx ctx (every statement of the tx's own database (an unnamed one, or one naming that database) resolves the SAME owned connection).
     let result = body(&tx_ctx);
 
     // End the tx by seam-issuing COMMIT/ROLLBACK on the pinned connection (middleware-visible), THEN

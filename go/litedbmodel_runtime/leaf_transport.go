@@ -586,7 +586,7 @@ func ExecuteSQL(payload wire.WireRow) (wire.WireValue, error) {
 
 // WithAmbientTransaction runs `body` inside ONE transaction on the BOUND context, threading the
 // tx-owned connection as the AMBIENT the free-function [ExecuteSQL] resolves — so a bc-generated tx
-// runner (which calls ExecuteSQL directly, taking no db handle) executes every statement ON the
+// runner (which calls ExecuteSQL directly, taking no db handle) executes every statement of the tx's own database (an unnamed one, or one naming that database) ON the
 // transaction. BEGIN → run body under the tx-pinned ambient → COMMIT on ok / ROLLBACK on a body error
 // (atomicity). This is the CONSUMER's tx-boundary responsibility (NOT a bc feature, NOT emitted into
 // the generated runner); it adds NO tx engine — it reuses the existing tx combinator

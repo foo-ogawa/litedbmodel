@@ -10,7 +10,8 @@
  *     `pgPoolFactory` / `mysqlPoolFactory` + `buildRoutingConfig`) and a `close()`. This is the C3
  *     `setConfig → ConnectionRegistry → pool` path. Every statement DBModel issues — a v1-built SELECT
  *     as much as a compiled write bundle — goes through this ONE ctx, so routing, middleware and an
- *     ambient transaction pin apply uniformly.
+ *     ambient transaction pin apply uniformly (the pin serves every statement of the tx's own database; a statement
+ *     naming a DIFFERENT database is rejected).
  *
  *  2. **Write execution** ({@link executeWriteAsync}) — run a compiled write bundle's transaction plan
  *     on the writer through the SCP tx runtime (write=tx guard).

@@ -18,9 +18,10 @@ namespace LiteDbModel\Runtime;
  * ## The `connectionFor(intent)` resolution order (design §3, v1 `DBModel.ts:313` parity)
  *
  * A statement's connection is resolved in THIS priority (first match wins):
- *   1. **active tx connection** — inside a transaction, always the tx-owned connection (Phase A/B,
- *      resolved by the base {@see ExecutionContext} BEFORE routing, so a named-DB tx runs entirely on
- *      ONE pinned writer conn — Phase B is NOT broken).
+ *   1. **active tx connection** — inside a transaction, the tx-owned connection (Phase A/B, resolved by
+ *      the base {@see ExecutionContext} BEFORE routing, so a named-DB tx runs entirely on ONE pinned
+ *      writer conn). A statement naming a DIFFERENT database than the tx opened on is REJECTED there
+ *      rather than routed ({@see assertTxDbAgrees()}) — a transaction cannot span two databases.
  *   2. **writer scope / writer-sticky** — inside {@see withWriter}, or within `writerStickyDuration`
  *      after a transaction (read-your-writes), a READ goes to the WRITER pool (Phase C — here).
  *   3. **read=reader / write=writer** — otherwise a read goes to the reader pool, a write to the
@@ -268,7 +269,8 @@ interface PdoPool
     /**
      * The backing {@see PdoDriver} (the ONE `\PDO` this pool holds). A transaction acquires its OWNED
      * connection by calling {@see PdoDriver::beginTx()} on THIS — so a named-DB tx runs entirely on the
-     * target connection's writer `\PDO` (the tx-pin STILL wins over routing; Phase B is not broken).
+     * target connection's writer `\PDO`: the tx-pin comes first in `connectionFor` for every statement
+     * of the tx's own database, and a statement naming a DIFFERENT database is rejected rather than run on it.
      */
     public function backingDriver(): PdoDriver;
 }
@@ -417,9 +419,45 @@ const DEFAULT_CONNECTION = 'default';
  * the single-connection case itself and passes. Mirrors the TS `assertRoutableNamedDb` / go
  * `namedDBUnroutable` / rust + python `assert_routable_named_db`.
  */
+function effectiveConnection(?string $db): string
+{
+    return $db ?? DEFAULT_CONNECTION;
+}
+
+/**
+ * Reject a statement whose named database is NOT the one the active transaction opened on.
+ *
+ * A transaction is ONE connection on ONE database: a statement that names a DIFFERENT database cannot be
+ * executed atomically with it, by any amount of routing. So there are exactly two possible behaviors and
+ * no third — run it on the transaction's database (silently the WRONG one) or refuse — and the first is
+ * the silent default the tx pin used to produce: the pin is resolved BEFORE routing (it must be —
+ * per-execution ownership depends on it), so `intent->db` was dropped unread and even an UNREGISTERED name
+ * never surfaced (#217).
+ *
+ * `$txDb` is the transaction's own connection name ({@see RoutingExecutionContext::connectionName()}). An
+ * UNNAMED statement agrees with any transaction — the ordinary in-body statement, which every named-DB tx
+ * gate pins — and one naming the SAME database agrees too. Mirrors the TS `assertTxDbAgrees`.
+ */
+function assertTxDbAgrees(?string $db, ?string $txDb): void
+{
+    if ($db === null) {
+        return;
+    }
+    $want = effectiveConnection($db);
+    $open = effectiveConnection($txDb);
+    if ($want === $open) {
+        return;
+    }
+    throw new \RuntimeException(
+        "scp connection routing: a statement names connection '$want', but it is executing inside a "
+        . "transaction opened on '$open' — a transaction is ONE connection on ONE database, so the two "
+        . "cannot both be honored. Open the transaction on '$want', or issue the statement outside it."
+    );
+}
+
 function assertRoutableNamedDb(?string $db, string $contextDescription): void
 {
-    if ($db === null || $db === DEFAULT_CONNECTION) {
+    if (effectiveConnection($db) === DEFAULT_CONNECTION) {
         return;
     }
     throw new \RuntimeException(
@@ -472,7 +510,7 @@ final class ConnectionRegistry
     /** The reader/writer pair for `$name` (or {@see DEFAULT_CONNECTION} when `null`). Loud on a missing name. */
     public function pairFor(?string $name): ReaderWriterPools
     {
-        $key = $name ?? DEFAULT_CONNECTION;
+        $key = effectiveConnection($name);
         $pair = $this->connections[$key] ?? null;
         if ($pair === null) {
             $known = implode(', ', array_map(static fn (string $k): string => "'{$k}'", array_keys($this->connections)));
@@ -717,8 +755,9 @@ function resolvePool(StatementIntent $intent, RoutingConfig $routing): PdoPool
 /**
  * A {@see ExecutionContext} that completes `connectionFor(intent)`'s steps 2-4 (reader/writer split,
  * writer-sticky/withWriter, named-DB routing) from a {@see RoutingConfig}. The tx-pin (step 1) is
- * inherited from the base {@see ExecutionContext}: a tx-scoped ctx's pinned connection STILL wins, so a
- * named-DB transaction runs entirely on ONE pinned writer conn (Phase B is NOT broken).
+ * inherited from the base {@see ExecutionContext}: a tx-scoped ctx's pinned connection is resolved
+ * FIRST, so a named-DB transaction runs entirely on ONE pinned writer conn — and a statement naming a
+ * DIFFERENT database is rejected there rather than routed.
  *
  * Because the base ctx resolves `$pinned` first, this subclass only reaches routing for a NON-tx
  * statement. It acquires the resolved pool's connection per statement (applying the session config) and
@@ -726,16 +765,27 @@ function resolvePool(StatementIntent $intent, RoutingConfig $routing): PdoPool
  * PHP's release running SYNCHRONOUSLY after the statement via a {@see RoutedConnection} wrapper.
  *
  * `withConnection` (the tx pin) preserves the routing so a read issued AFTER the tx (writer-sticky)
- * still routes; but inside the tx the pinned connection wins, so routing is inert there.
+ * still routes. Inside the tx the pinned connection serves every statement of the tx's own database — an unnamed one, or
+ * one naming the connection the tx opened on; a statement naming a DIFFERENT database is rejected
+ * ({@see assertTxDbAgrees()}) — a transaction cannot span two databases.
  */
 final class RoutingExecutionContext extends ExecutionContext
 {
+    /**
+     * @param string|null $connection the NAMED database this ctx's TRANSACTION opened on (`null` ⇒ the
+     *        default connection). Set by {@see routedTransaction()} when it pins the writer, and inherited
+     *        by {@see withConnection()} / {@see withReadOnly()}. A STATEMENT names its DB per call
+     *        ({@see StatementIntent::$db}); a transaction has no statement to carry one, so its target
+     *        rides here — the php analogue of the go / python / rust ctx `connection` field and of the TS
+     *        ALS pin's own name. {@see connectionFor()} compares the two.
+     */
     public function __construct(
         PdoDriver $driver,
         MiddlewareChain $middleware,
         private readonly RoutingConfig $routing,
         ?Connection $pinned = null,
         bool $readOnly = false,
+        private readonly ?string $connection = null,
     ) {
         parent::__construct($driver, $middleware, $pinned, $readOnly);
     }
@@ -746,22 +796,34 @@ final class RoutingExecutionContext extends ExecutionContext
         return $this->routing;
     }
 
+    /** The NAMED database this ctx's transaction opened on (`null` ⇒ the default connection). */
+    public function connectionName(): ?string
+    {
+        return $this->connection;
+    }
+
     /**
      * Resolve WHICH connection a statement runs on (§3). STEP 1: the tx-owned (pinned) connection wins
-     * (the base ctx's `$pinned` — a named-DB tx runs entirely on it). STEPS 2-4: {@see resolvePool()}
+     * (the base ctx's `$pinned` — a named-DB tx runs entirely on it, for every statement of the tx's own database;
+     * a statement naming a DIFFERENT database is rejected there rather than routed). STEPS 2-4: {@see resolvePool()}
      * selects the pool by intent; the returned {@see RoutedConnection} acquires the pool's connection
      * (applying session config), runs the statement, and releases it (session reset) — one acquire per
      * statement, mirroring the TS per-statement owned-connection wrapper.
      */
     public function connectionFor(StatementIntent $intent): Connection
     {
-        // STEP 1 (§3): the tx-owned (pinned) connection wins. It may be pinned on THIS ctx (a tx-scoped
+        // STEP 1 (§3): the tx-owned (pinned) connection, for every statement of the tx's own database (a statement
+        // naming a DIFFERENT database is rejected). It may be pinned on THIS ctx (a tx-scoped
         // derivation) OR carried in the AMBIENT holder ({@see TxAmbient}) — the PHP analogue of the TS
         // ALS store: a statement issued via the OUTER routing ctx while a routedTransaction() body runs
-        // still resolves the tx-owned connection (so a named-DB tx runs entirely on ONE pinned conn —
-        // routing is inert inside the tx; Phase B ownership is NOT broken).
+        // still resolves the tx-owned connection.
+        //
+        // A statement that names a DIFFERENT database than the transaction opened on cannot be honored on
+        // that connection — a transaction is ONE connection on ONE database — so it is LOUD rather than
+        // silently executed against the transaction's database (#217).
         $pinned = $this->pinnedConnection();
         if ($pinned !== null) {
+            assertTxDbAgrees($intent->db, $this->connection);
             return $pinned;
         }
         $ambient = currentContext();
@@ -788,10 +850,18 @@ final class RoutingExecutionContext extends ExecutionContext
             $this->routing,
             $tx ? $conn : null,
             $this->readOnly(),
+            $this->connection,
         );
     }
 
-    /** Derive a read-only-scoped routing ctx (write-reject). Overrides the base to keep routing. */
+    /**
+     * Derive a read-only-scoped routing ctx (write-reject). Overrides the base to keep routing — AND the
+     * transaction's connection NAME, which this derivation must carry for the same reason it carries the
+     * pin: it keeps the pinned connection, so dropping the name left a tx-scoped ctx that still resolved
+     * B's connection while claiming to be on the default. A statement naming the tx's OWN database then
+     * failed the agreement check ({@see assertTxDbAgrees()}) and one naming the DEFAULT ran on B — both
+     * halves of #217 reopened, reachable from {@see withWriter()} (which derives exactly this ctx).
+     */
     public function withReadOnly(): ExecutionContext
     {
         return new RoutingExecutionContext(
@@ -800,6 +870,7 @@ final class RoutingExecutionContext extends ExecutionContext
             $this->routing,
             $this->pinnedConnection(),
             true,
+            $this->connection,
         );
     }
 }
@@ -1121,9 +1192,10 @@ function routingContext(RoutingConfig $routing, ?MiddlewareChain $middleware = n
  *
  *   - **C2 named-DB tx pin**: it acquires the tx's OWNED connection from the WRITER pool of the target
  *     connection (`$connection` name, or the default) — so a named-DB transaction runs ENTIRELY on that
- *     ONE pinned writer `\PDO`. The active-tx pin STILL wins over routing (the base ctx resolves the
- *     pinned connection FIRST in `connectionFor`), so every statement in the body — read or write, any
- *     `intent.db` — runs on that ONE connection (Phase B ownership is NOT broken).
+ *     ONE pinned writer `\PDO`. The active-tx pin comes FIRST in `connectionFor`, so every UNNAMED
+ *     in-body statement — read or write — runs on that ONE connection, and so does one naming THAT
+ *     connection. One naming a DIFFERENT database is REJECTED ({@see assertTxDbAgrees()}): a transaction
+ *     cannot span two databases, so running it on this one would be the wrong database, silently (#217).
  *   - **C1 writer-sticky mark**: on a SUCCESSFUL commit it `mark()`s the {@see WriterStickyClock}, so
  *     reads issued AFTER the tx (within `writerStickyDuration`) route to the writer pool
  *     (read-your-writes). A `rollbackOnly` (dry-run) tx committed NOTHING ⇒ it does NOT arm stickiness.
@@ -1147,14 +1219,18 @@ function routedTransaction(
     }
 
     $opts = $options ?? new TransactionOptions();
-    // C2: the tx BEGINs on the target connection's WRITER pool's backing driver (named-DB pin). Every
-    // in-body statement then resolves the pinned connection (base ctx STEP 1), so routing is inert
-    // inside the tx — the whole named-DB tx runs on ONE writer \PDO (Phase B ownership preserved).
+    // C2: the tx BEGINs on the target connection's WRITER pool's backing driver (named-DB pin). The whole
+    // named-DB tx runs on ONE writer \PDO: every UNNAMED in-body statement resolves the pinned connection
+    // (STEP 1), one naming THIS connection does too, and one naming a DIFFERENT database is REJECTED — a
+    // transaction cannot span two databases. The name rides on the tx ctx so STEP 1 can tell them apart.
     $writerPool = $ctx->routing()->registry->pairFor($connection)->writer;
     $txCtx = new RoutingExecutionContext(
         $writerPool->backingDriver(),
         $ctx->middleware,
         $ctx->routing(),
+        null,
+        false,
+        $connection,
     );
 
     $result = transaction($txCtx, $fn, $opts, $dialectName);

@@ -129,7 +129,8 @@ pub fn with_ambient_transaction<R>(
     let mut rolled_back_for: Option<BehaviorError> = None;
     let outcome = exec_context::with_transaction_decided(ctx, |tx_ctx| {
         // The tx-scoped ctx is the ambient: `connection_for` resolves its pinned owned connection
-        // (STEP 1) for every statement the body issues through `execute_sql`.
+        // (STEP 1) for every statement the body issues through `execute_sql` that belongs to the tx's own
+        // database — one naming a DIFFERENT database is rejected rather than run on the pin.
         Ok(match with_ambient_context(tx_ctx, body) {
             Ok(r) => TxDecision::Commit(Ok(r)),
             Err(e) => {
@@ -1750,6 +1751,245 @@ mod tests {
         );
     }
 
+    // #217 R1 — INSIDE a transaction, a statement's named database must AGREE with the one the
+    // transaction opened on, or be LOUD. The pin is resolved BEFORE routing (per-execution ownership
+    // depends on it), so `intent.db` used to be dropped unread: a `db:"B"` statement inside a tx on the
+    // DEFAULT connection ran on the DEFAULT one, silently, and an UNREGISTERED name never surfaced at all.
+    // A transaction is ONE connection on ONE database, so the two cannot both be honored.
+    //
+    // The whole matrix is asserted, the NORMAL cases included: an unnamed in-body statement, and one
+    // naming the tx's OWN database, must NOT become loud. The rust leg; twins in TS / go / python / php.
+    #[test]
+    fn named_db_inside_a_transaction_must_agree() {
+        use crate::connection_routing::test_support::{failing_stub, recording_stub, SeamLog};
+        use crate::connection_routing::{
+            ConnectionRegistry, ReaderWriterPools, RoutingConfig, StickyOptions, WriterStickyClock,
+        };
+        use std::sync::{Arc, Mutex};
+
+        // The DEFAULT connection's driver REFUSES this statement (the stand-in for "that table is not
+        // here"), B's serves it — so a silently mis-routed statement is told apart from a LOUD refusal.
+        const SQL: &str = "SELECT id, name FROM named_users ORDER BY id";
+        let log: SeamLog = Arc::new(Mutex::new(Vec::new()));
+        let routing = RoutingConfig {
+            registry: ConnectionRegistry::from_default(ReaderWriterPools::single(failing_stub(
+                "A", &log, SQL,
+            )))
+            .add("B", ReaderWriterPools::single(recording_stub("B", &log)))
+            .build()
+            .unwrap(),
+            sticky: WriterStickyClock::new(StickyOptions {
+                use_writer_after_transaction: false,
+                ..Default::default()
+            }),
+        };
+        let base = exec_context::for_routing(&routing).unwrap();
+        let read = |db: WireValue| {
+            execute_sql(payload(vec![
+                ("params", wlist(vec![])),
+                ("sql", WireValue::Str(SQL.into())),
+                opts(db, WireValue::Null, WireValue::Null, WireValue::Null),
+            ]))
+        };
+        let err_of = |r: Result<WireValue, BehaviorError>, what: &str| -> String {
+            match r {
+                Err(e) => e.message,
+                Ok(_) => panic!("{what} must FAIL"),
+            }
+        };
+
+        // A transaction on the DEFAULT connection (the ctx names none).
+        with_ambient_transaction(&base, || {
+            // A statement naming ANOTHER database is LOUD. Before this it ran on the tx's own (DEFAULT)
+            // connection — which is what `refuses` below would have said instead.
+            let e = err_of(
+                read(WireValue::Str("B".into())),
+                r#"db "B" inside a default tx"#,
+            );
+            assert!(
+                e.contains("transaction opened on 'default'"),
+                "a disagreeing name inside a tx must be loud about the tx: {e}"
+            );
+            // An UNREGISTERED name is loud too (the pin used to swallow it whole).
+            let g = err_of(
+                read(WireValue::Str("ghost".into())),
+                r#"db "ghost" inside a tx"#,
+            );
+            assert!(g.contains("names connection 'ghost'"), "{g}");
+            Ok(())
+        })
+        .unwrap();
+
+        // A transaction on "B": the statement naming "B" AGREES and runs on the pin, and the UNNAMED
+        // in-body statement does too — neither may become loud.
+        log.lock().unwrap().clear();
+        let on_b = base.with_connection_name(Some("B"));
+        with_ambient_transaction(&on_b, || {
+            read(WireValue::Str("B".into())).map(|_| ())?;
+            read(WireValue::Null).map(|_| ())?;
+            // …and 'default' now disagrees, in the other direction.
+            let e = err_of(
+                read(WireValue::Str("default".into())),
+                "db default in a B tx",
+            );
+            assert!(e.contains("transaction opened on 'B'"), "{e}");
+            Ok(())
+        })
+        .unwrap();
+        // The transcript, READ rather than merely wired: ONE checkout, on B, serving both AGREEING
+        // statements; the rejected one never reached a driver at all. (This log used to be threaded into
+        // both stubs and never read — an instrument that looks like a gate and checks nothing.)
+        let seen = log.lock().unwrap().clone();
+        assert_eq!(
+            seen,
+            vec![
+                "B:checkout".to_string(), // the tx's ONE connection
+                "B:run".to_string(),      // BEGIN
+                "B:all".to_string(),      // db="B" — agrees, served by the pin
+                "B:all".to_string(),      // unnamed — served by the pin
+                "B:run".to_string(),      // COMMIT
+            ],
+            "the agreeing statements ran on B's ONE checkout; the rejected one reached no driver: {seen:?}"
+        );
+    }
+
+    // #217 R2 — a NON-ROUTED ctx rejects a named statement IDENTICALLY inside a transaction and outside
+    // it. The guard used to sit BEFORE the pin on the TS/php planes and AFTER it here, so "a named
+    // statement in a non-routed tx" threw in two languages and ran silently in three.
+    #[test]
+    fn named_db_on_a_non_routed_context_is_loud_inside_a_transaction_too() {
+        use crate::driver::SqliteDriver;
+        let d = SqliteDriver::in_memory(&["CREATE TABLE t (id INTEGER PRIMARY KEY)".to_string()])
+            .unwrap();
+        let ctx = exec_context::for_driver(&d);
+        let stmt = |db: WireValue| {
+            execute_sql(payload(vec![
+                ("params", wlist(vec![])),
+                ("sql", WireValue::Str("SELECT id FROM t".into())),
+                opts(db, WireValue::Null, WireValue::Null, WireValue::Null),
+            ]))
+        };
+        let loud = |r: Result<WireValue, BehaviorError>, what: &str| match r {
+            Err(e) => assert!(
+                e.message.contains("names connection 'analytics'"),
+                "{what}: {}",
+                e.message
+            ),
+            Ok(_) => panic!("{what} must be LOUD"),
+        };
+        with_ambient_context(&ctx, || {
+            loud(stmt(WireValue::Str("analytics".into())), "outside a tx")
+        });
+        with_ambient_transaction(&ctx, || {
+            loud(
+                stmt(WireValue::Str("analytics".into())),
+                "inside a tx (must match the outside outcome)",
+            );
+            // …and the ordinary unnamed statement still runs on the pin.
+            stmt(WireValue::Null).map(|_| ())
+        })
+        .unwrap();
+    }
+
+    // #217 (2nd remand) — the READ-ONLY / WRITER DERIVATION of a tx-scoped ctx must carry the
+    // transaction's connection NAME. Such a derivation keeps the PIN, so dropping the name leaves a ctx
+    // that still resolves the transaction's connection while claiming to be on another database: a
+    // statement naming the tx's OWN database gets a FALSE LOUD, and one naming the other database RUNS on
+    // the pinned connection. php was the language that dropped it; rust carries it in `with_read_only` /
+    // `with_writer` — this pins that, because the R1 gates only used the ctx the tx boundary hands the
+    // body DIRECTLY. Driven through the central seam, which is where `connection_for` is called.
+    #[test]
+    fn named_db_agreement_survives_the_read_only_and_writer_derivations() {
+        use crate::connection_routing::test_support::{recording_stub, SeamLog};
+        use crate::connection_routing::{
+            ConnectionRegistry, ReaderWriterPools, RoutingConfig, StickyOptions, WriterStickyClock,
+        };
+        use crate::exec_context::{execute, StatementIntent, TxDecision};
+        use std::sync::{Arc, Mutex};
+
+        let log: SeamLog = Arc::new(Mutex::new(Vec::new()));
+        let routing = RoutingConfig {
+            registry: ConnectionRegistry::from_default(ReaderWriterPools::single(recording_stub(
+                "A", &log,
+            )))
+            .add("B", ReaderWriterPools::single(recording_stub("B", &log)))
+            .build()
+            .unwrap(),
+            sticky: WriterStickyClock::new(StickyOptions {
+                use_writer_after_transaction: false,
+                ..Default::default()
+            }),
+        };
+        let base = exec_context::for_routing(&routing).unwrap();
+        let on_b = base.with_connection_name(Some("B"));
+        exec_context::with_transaction_decided(&on_b, |tx_ctx| {
+            let ro = tx_ctx.with_read_only();
+            let wr = tx_ctx.with_writer();
+            let both = ro.with_writer();
+            for (what, ctx) in [
+                ("the tx ctx itself", tx_ctx),
+                ("with_read_only()", &ro),
+                ("with_writer()", &wr),
+                ("with_read_only().with_writer()", &both),
+            ] {
+                // NO FALSE LOUD: the tx's OWN database still runs on the pinned connection, and so does an
+                // UNNAMED statement (the ordinary in-body one).
+                for intent in [
+                    StatementIntent {
+                        write: false,
+                        db: Some("B".to_string()),
+                    },
+                    StatementIntent::read(),
+                ] {
+                    assert!(
+                        execute(ctx, "SELECT 1", &[], &intent).is_ok(),
+                        "{what}: a statement of the tx's own db must NOT be rejected"
+                    );
+                }
+                // …and a DIFFERENT database is still LOUD (it would otherwise run on B's pinned conn).
+                let e = match execute(
+                    ctx,
+                    "SELECT 1",
+                    &[],
+                    &StatementIntent {
+                        write: false,
+                        db: Some("default".to_string()),
+                    },
+                ) {
+                    Err(e) => e,
+                    Ok(_) => panic!("{what}: a different db must stay rejected"),
+                };
+                assert!(
+                    e.message.contains("transaction opened on 'B'"),
+                    "{what}: {}",
+                    e.message
+                );
+            }
+            Ok(TxDecision::Commit(()))
+        })
+        .unwrap();
+        // Every statement of the whole transaction — the seam-issued BEGIN/COMMIT included — ran on B, and
+        // NOTHING on the default: the derivations did not divert an in-body statement to another
+        // connection. (`recording_stub` logs one entry per statement it serves, so this is the transcript.)
+        //
+        // This is the ONE assertion here, and a `.filter(ends_with(":checkout")).count() == 1` next to it
+        // was deleted rather than kept: in rust it cannot fail. `ConnectionRegistry` holds
+        // `Arc<dyn Driver>`, not pools (`connection_routing.rs` `ReaderWriterPools`), `resolve_pool`
+        // returns a BORROW of the very same `Arc`, and `ReaderWriterPools::single` puts one allocation in
+        // both roles — so an in-body statement that resolved by ROUTING instead of by the pin would reach
+        // the SAME stub and log the SAME `B:all`, via `prepare()`, which is not a checkout
+        // (`:checkout` comes only from the stub's `acquire_tx`/`begin_tx` hook). The count is 1 whether the
+        // pin holds or not; an assertion that cannot go red is not a gate. What DOES fire is this
+        // transcript, when the tx opens on the wrong driver (`["A:checkout", "A:run", …]`), and — measured —
+        // the in-body "a different db must stay rejected" assertions above, which fail the moment the
+        // disagreement guard stops rejecting.
+        let seen = log.lock().unwrap().clone();
+        assert!(
+            seen.iter().all(|e| e.starts_with("B:")) && !seen.is_empty(),
+            "the whole tx must run on B: {seen:?}"
+        );
+    }
+
     // #217 (the TRANSACTION half, the rust twin of go's #215) — WHICH database a COVERED transaction
     // opens on is the CTX's answer. A statement names its db in its own `StatementIntent`; a transaction
     // has no statement to carry one, and this boundary takes only a body — so the name rides on the ctx
@@ -1804,9 +2044,14 @@ mod tests {
             "a named covered tx must run entirely on that db: {named:?}"
         );
         assert_eq!(
-            named.len(),
-            3,
-            "BEGIN + the body statement + COMMIT, all seam-issued: {named:?}"
+            named,
+            vec![
+                "B:checkout".to_string(), // the tx takes ONE connection out of B — and only one
+                "B:run".to_string(),      // BEGIN, seam-issued
+                "B:all".to_string(),      // the body's statement
+                "B:run".to_string(),      // COMMIT, seam-issued
+            ],
+            "ONE checkout on B, then BEGIN + the body statement + COMMIT on it: {named:?}"
         );
         // UNNAMED (the other side of the same rule) ⇒ the DEFAULT connection. A `B:` here would mean the
         // name leaked from somewhere other than the ctx.
@@ -2139,11 +2384,12 @@ mod tests {
         assert_eq!(
             pools.lock().unwrap().as_slice(),
             [
-                "reader:all", // the pre-tx read
-                "writer:run", // BEGIN, on the connection acquired from the WRITER pool
-                "writer:all", // the body's READ — the tx pin wins over its read intent
-                "writer:run", // the body's write
-                "writer:run", // COMMIT, on the same pinned connection
+                "reader:all",      // the pre-tx read
+                "writer:checkout", // the tx's ONE connection, taken out of the WRITER pool
+                "writer:run",      // BEGIN, on that connection
+                "writer:all",      // the body's READ — the tx pin wins over its read intent
+                "writer:run",      // the body's write
+                "writer:run",      // COMMIT, on the same pinned connection
             ]
         );
         // (3) the tx-control is SEAM-issued, so a registered middleware observes the whole envelope.
@@ -2186,6 +2432,9 @@ mod tests {
         assert_eq!(err.code, "BOOM", "the leaf surfaced {:?}", err.message);
         assert_eq!(err.message, "mid-tx failure");
         // The ROLLBACK really was attempted (and really did fail) — the transcript, not a claim.
-        assert_eq!(log.lock().unwrap().as_slice(), ["solo:run", "solo:run"]);
+        assert_eq!(
+            log.lock().unwrap().as_slice(),
+            ["solo:checkout", "solo:run", "solo:run"]
+        );
     }
 }

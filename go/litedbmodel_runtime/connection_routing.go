@@ -10,7 +10,8 @@
 // # The connectionFor(intent) resolution order (design §3, v1 DBModel.ts:313 parity)
 //
 // A statement's connection is resolved in THIS priority (first match wins):
-//  1. active tx connection — inside a transaction, always the tx-owned connection (Phase A, resolved
+//  1. active tx connection — inside a transaction, the tx-owned connection (a statement naming a
+//     DIFFERENT database than the tx opened on is REJECTED there rather than routed; Phase A, resolved
 //     in exec_context.go BEFORE this module is consulted).
 //  2. writer scope / writer-sticky — inside [WithWriter], or within writerStickyDuration after a
 //     transaction (read-your-writes), a READ goes to the WRITER pool (Phase C — here).
@@ -415,7 +416,7 @@ const DefaultConnection = "default"
 // DIFFERENT database than the statement's model declares (#217). "" (the default connection) is the
 // single-db case itself and passes. Mirrors the TS assertRoutableNamedDb.
 func namedDBUnroutable(db string, contextDescription string) error {
-	if db == "" || db == DefaultConnection {
+	if effectiveConnection(db) == DefaultConnection {
 		return nil
 	}
 	return &SqlFailure{
@@ -425,6 +426,43 @@ func namedDBUnroutable(db string, contextDescription string) error {
 			"on %s — there is no connection registry to resolve the name against. Build the context from a "+
 			"RoutingConfig (SetConfig/ConnectionRegistry), or drop the connection tag on the model.",
 			db, contextDescription),
+	}
+}
+
+// effectiveConnection reduces a connection name to its identity: "" ⇒ [DefaultConnection].
+func effectiveConnection(db string) string {
+	if db == "" {
+		return DefaultConnection
+	}
+	return db
+}
+
+// namedDBDisagreesWithTx rejects a statement whose named database is NOT the one the active transaction
+// opened on. A transaction is ONE connection on ONE database: a statement naming a DIFFERENT database
+// cannot be executed atomically with it, by any amount of routing. So there are exactly two possible
+// behaviors and no third — run it on the transaction's database (silently the WRONG one) or refuse — and
+// the first is the silent default the tx pin used to produce: the pin is resolved BEFORE routing (it must
+// be — per-execution ownership depends on it), so intent.DB was dropped unread and even an UNREGISTERED
+// name never surfaced (#217).
+//
+// txDB is the transaction's own connection name ([ExecutionContext.connection]). An UNNAMED statement
+// agrees with any transaction — the ordinary in-body statement, which every named-DB tx gate pins — and
+// one naming the SAME database agrees too. Mirrors the TS assertTxDbAgrees.
+func namedDBDisagreesWithTx(db string, txDB string) error {
+	if db == "" {
+		return nil
+	}
+	want, open := effectiveConnection(db), effectiveConnection(txDB)
+	if want == open {
+		return nil
+	}
+	return &SqlFailure{
+		Kind:   KindDriverError,
+		Policy: "fail",
+		Msg: fmt.Sprintf("scp connection routing: a statement names connection '%s', but it is executing "+
+			"inside a transaction opened on '%s' — a transaction is ONE connection on ONE database, so the "+
+			"two cannot both be honored. Open the transaction on '%s', or issue the statement outside it.",
+			want, open, want),
 	}
 }
 
@@ -461,10 +499,7 @@ func SingleDefaultRegistry(pool Pool) *ConnectionRegistry {
 // PairFor returns the reader/writer pair for name (or [DefaultConnection] when ""). Loud on a
 // missing name (never a silent default fallback). Mirrors the TS ConnectionRegistry.pairFor.
 func (r *ConnectionRegistry) PairFor(name string) (ReaderWriterPools, error) {
-	key := name
-	if key == "" {
-		key = DefaultConnection
-	}
+	key := effectiveConnection(name)
 	pair, ok := r.connections[key]
 	if !ok {
 		known := make([]string, 0, len(r.connections))

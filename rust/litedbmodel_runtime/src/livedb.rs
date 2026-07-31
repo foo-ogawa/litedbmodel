@@ -26,7 +26,7 @@
 //! the [`ExecutionContext`](crate::exec_context) seam's `with_transaction`. The seam calls
 //! [`Driver::begin_tx`], which checks out ONE pooled connection, issues `BEGIN` on it, and returns an
 //! OWNED [`TxConnection`] handle (the rust analogue of v1 `litedbmodel.rs` `PoolTransaction`). Every
-//! statement in the tx body resolves THAT owned connection (tx-DAG topological order, gate-first
+//! statement in the tx body of the tx's own database resolves THAT owned connection (tx-DAG topological order, gate-first
 //! short-circuit); the handle's `commit`/`rollback` runs `COMMIT`/`ROLLBACK` on it and releases it.
 //!
 //! There is NO driver-global single-slot writer any more — the removed `writer: Mutex<Option<...>>`

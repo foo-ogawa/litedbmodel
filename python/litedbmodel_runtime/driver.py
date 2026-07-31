@@ -112,7 +112,7 @@ class Driver(Protocol):
 
     def begin_tx(self) -> TxConnection:
         """Acquire + OWN a :class:`TxConnection` for a transaction (per-execution connection ownership,
-        §3). The central seam's ``with_transaction`` pins the returned handle so every statement in the
+        §3). The central seam's ``with_transaction`` pins the returned handle so every statement of the tx's own database in the
         tx body runs on it, and issues the isolation SET + BEGIN/COMMIT/ROLLBACK THROUGH the seam on this
         connection (Phase D / #95, middleware-visible) — this method only acquires the owned connection.
         Empty prelude ⇒ a bare ``BEGIN`` (the Phase A behavior, byte-identical statements + connection)."""
