@@ -28,6 +28,12 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci --ignore-scripts
+      # `npm ci` exits 0 having silently dropped an optional dependency (#245). The install above is a
+      # DIFFERENT tree from the test container's — this runner is glibc, `Dockerfile.test` is alpine/musl,
+      # and the platform decides which optional packages there are — so the same gate has to run on both.
+      # Everything below this line reads THIS tree.
+      - name: node_modules holds exactly what package-lock.json resolves
+        run: npm run deps:installed
       - name: Version SSoT in lockstep (npm → PyPI/crates/Go-tag/Packagist)
         run: npm run sync:versions:check
       - name: No local (../-escaping) dependencies
