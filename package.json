@@ -60,6 +60,7 @@
     "pkg:check": "node scripts/check-package-entrypoints.mjs",
     "types:check": "node scripts/check-test-types.mjs",
     "tracked:check": "node scripts/check-tracked-files.mjs",
+    "spec:check": "node scripts/check-spec-refs.mjs",
     "vendor:bc-php": "node scripts/vendor-behavior-contracts-php.mjs",
     "vendor:bc-php:check": "node scripts/vendor-behavior-contracts-php.mjs --check",
     "go:dispatch:check": "LITEDBMODEL_LIVEDB_VECTORS=\"$PWD/conformance/vectors-livedb/livedb.json\" sh -c 'cd go && exec go run ./conformance/livedb --check-coverage'",
