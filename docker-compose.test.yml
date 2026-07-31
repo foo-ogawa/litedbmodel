@@ -74,7 +74,10 @@ services:
       interval: 2s
       timeout: 5s
       retries: 10
-    command: --default-authentication-plugin=mysql_native_password
+    # --skip-log-bin: the datadir above is tmpfs (RAM). Binlog is pure overhead for a throwaway test
+    # DB (no replication, no PITR) and grows ~1x the written bytes, so a bench run fills the tmpfs
+    # and stalls writes instead of failing — silently contaminating the measurements.
+    command: --default-authentication-plugin=mysql_native_password --skip-log-bin
     networks:
       - test-internal
 
