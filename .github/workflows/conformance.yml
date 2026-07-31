@@ -28,6 +28,12 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci --ignore-scripts
+      # `npm ci` exits 0 having silently dropped an optional dependency (#245). The install above is a
+      # DIFFERENT tree from the test container's — this runner is glibc, `Dockerfile.test` is alpine/musl,
+      # and the platform decides which optional packages there are — so the same gate has to run on both.
+      # Everything below this line reads THIS tree.
+      - name: node_modules holds exactly what package-lock.json resolves
+        run: npm run deps:installed
       - name: Version SSoT in lockstep (npm → PyPI/crates/Go-tag/Packagist)
         run: npm run sync:versions:check
       - name: No local (../-escaping) dependencies
@@ -204,7 +210,7 @@ jobs:
           (cd go && go build ./... && go vet ./...)
           npm run go:fmt:check
           npm run go:dispatch:check
-      - name: Rust — check (--locked) + fmt + clippy (runtime AND the livedb runner)
+      - name: Rust — check (--locked) + fmt + clippy (EVERY crate under rust/, member or not)
         if: matrix.lang == 'rust'
         # No workflow ran `cargo fmt --check` or clippy, so both drifted unnoticed (#168). They gate
         # here, on the leg that already owns "the rust scaffold stays buildable".
@@ -228,12 +234,30 @@ jobs:
         # from the REAL `DISPATCH` table that the endpoint set covers the live-DB corpus, before any
         # driver connects — no database — replacing a static scanner that read the source as text and was
         # fooled twice by syntax it did not model (#201).
+        #
+        # The three ORM-bench cells (#242): each declares its own `[workspace]`, so it is NOT a member of
+        # rust/Cargo.toml and NOTHING above reaches it — `--all`/`--workspace` mean "this workspace", and
+        # `-p` can only name a member. All three had therefore never been formatted, linted or compiled by
+        # any workflow since they were written; `cargo fmt --check` was red on two of them the first time
+        # it ran here. They are named by `--manifest-path`, which is the only way to cross a workspace
+        # boundary, and `npm run gates:check` asserts that this list covers every Cargo.toml under rust/,
+        # so a fourth cell cannot repeat it.
+        # `--features livedb` for the two cells for the same reason livedb_runner has it above: their
+        # live-DB code is entirely behind that feature (5 `#[cfg(feature = "livedb")]` blocks in orm_bench,
+        # 17 in orm_bench_sdk), so a default-feature lint would compile none of it. NO `--release`: both
+        # cells set `lto = true`, which costs minutes and shows a check-level lint nothing extra.
         run: |
           cd rust
           cargo fmt --all -- --check
           cargo check --locked
           cargo clippy -p litedbmodel_runtime --features livedb --all-targets -- -D warnings
           cargo clippy -p livedb_runner --features livedb --all-targets -- -D warnings
+          cargo fmt --manifest-path orm_bench_common/Cargo.toml --all -- --check
+          cargo clippy --manifest-path orm_bench_common/Cargo.toml --all-targets -- -D warnings
+          cargo fmt --manifest-path orm_bench/Cargo.toml --all -- --check
+          cargo clippy --manifest-path orm_bench/Cargo.toml --features livedb --all-targets -- -D warnings
+          cargo fmt --manifest-path orm_bench_sdk/Cargo.toml --all -- --check
+          cargo clippy --manifest-path orm_bench_sdk/Cargo.toml --features livedb --all-targets -- -D warnings
           npm run rust:dispatch:check
       - name: PHP — lint
         if: matrix.lang == 'php'

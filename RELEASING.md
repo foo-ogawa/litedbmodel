@@ -124,6 +124,8 @@ Run from the repo root.
       `Cargo.lock`s included** (a bump that rewrites only the manifests leaves the lock behind, and the
       next cargo command repairs it silently — that is how 2.2.1 shipped a 2.2.0 lock)
 - [ ] `npm run deps:check`           — no `../`-escaping local deps in any manifest
+- [ ] `npm run deps:installed`       — `node_modules` holds exactly what `package-lock.json` resolves for
+      this platform (`npm ci` can drop an optional package and still exit 0, and nothing else looks)
 - [ ] `npm run tracked:check`        — the index holds only files someone meant to commit (a tracked
       file shows up in neither `git status` nor `.gitignore`)
 - [ ] `npm run build`                — TS build + SCP bundle

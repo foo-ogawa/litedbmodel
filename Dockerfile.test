@@ -3,7 +3,12 @@ FROM node:${NODE_VERSION}-alpine
 RUN apk add --no-cache python3 make gcc g++ musl-dev
 WORKDIR /app
 COPY package.json package-lock.json .npmrc ./
-RUN npm ci
+# The gate travels with the manifests, and runs in the SAME `RUN` as the install (#245). `npm ci` is
+# not deterministic: one build's dropped `@esbuild/linux-arm64` and exited 0, and BuildKit cached
+# that incomplete layer for every build after it. A failure inside this RUN commits no layer at all,
+# so the next build re-runs the install instead of inheriting an incomplete tree.
+COPY scripts/check-installed-deps.mjs ./scripts/
+RUN npm ci && npm run deps:installed
 RUN npm_config_ignore_scripts=false npm rebuild better-sqlite3
 COPY . .
 RUN npm run build
