@@ -175,7 +175,9 @@ node -e '
   const fs = require("fs");
   // cell,surface,dialect,op,statements,rows — one line per op per cell, from each cell own proof pass.
   const rows = fs.readFileSync(process.argv[1], "utf8").trim().split("\n").map((l) => l.split(","));
+  import(process.argv[2]).then(({ ORM_OP_IDS }) => {
   const by = new Map();
+  const byCell = new Map();
   for (const line of rows) {
     // `<cell>,proof,<surface>,<dialect>,<op>,<statements>,<rows>` — the cell name is prefixed by `prove`.
     const [cell, , surface, dialect, op, stmts, rowCount] = line;
@@ -186,11 +188,28 @@ node -e '
     const value = `${stmts} statements / ${rowCount} rows`;
     if (!seen.has(value)) seen.set(value, []);
     seen.get(value).push(cell);
+    if (!byCell.has(cell)) byCell.set(cell, new Set());
+    byCell.get(cell).add(op);
+  }
+  // COVERAGE, checked FIRST: single-valued only means "nobody disagreed", and an op a cell never reported
+  // has nobody to disagree with. Two cells reporting disjoint halves compared nothing and still printed a
+  // count that reads like a full matrix (#243). So each cells op set must BE the contract axis.
+  const short = [...byCell]
+    .map(([cell, ops]) => [cell, ORM_OP_IDS.filter((op) => !ops.has(op)), [...ops].filter((op) => !ORM_OP_IDS.includes(op))])
+    .filter(([, missing, extra]) => missing.length > 0 || extra.length > 0);
+  if (short.length > 0) {
+    console.error(`\n✗ cell(s) did not report all ${ORM_OP_IDS.length} ops of contract.ts — the rest is compared against nothing, so nothing is measured:\n`);
+    for (const [cell, missing, extra] of short) {
+      if (missing.length) console.error(`  ${cell}  missing ${missing.length}/${ORM_OP_IDS.length}: ${missing.join(", ")}`);
+      if (extra.length) console.error(`  ${cell}  not in contract.ts: ${extra.join(", ")}`);
+    }
+    console.error("\nORM_OP_IDS (contract.ts) is the op axis every cell runs — a cell that reports a subset is");
+    console.error("not the comparison this harness claims to make.");
+    process.exit(1);
   }
   const bad = [...by].filter(([, seen]) => seen.size > 1);
-  const cells = new Set(rows.map((l) => l[0]));
   if (bad.length === 0) {
-    console.log(`   ✓ ${by.size} op(s) × ${cells.size} cell(s): every native and sdk cell issues the same statements and moves the same rows.`);
+    console.log(`   ✓ ${byCell.size} cell(s) × all ${ORM_OP_IDS.length} contract op(s): every native and sdk cell issues the same statements and moves the same rows.`);
     process.exit(0);
   }
   console.error("\n✗ cells disagree on the work an op does — they are not comparable, so nothing is measured:\n");
@@ -201,7 +220,8 @@ node -e '
   console.error("\nEvery statement, value and RETURNING recovery comes from .setup/<dialect>.json. A cell that");
   console.error("disagrees is reading something else, or binding it differently.");
   process.exit(1);
-' "$PROOF" || exit 1
+  }).catch((e) => { console.error(`✗ cannot read the op axis from contract.ts: ${e.message}`); process.exit(1); });
+' "$PROOF" "$ROOT/benchmark/crosslang-build/contract.js" || exit 1
 echo
 
 fail=0
