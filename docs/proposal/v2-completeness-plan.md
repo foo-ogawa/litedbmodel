@@ -33,9 +33,9 @@ DSL contract
 - `src/scp/makesql/compile-relation.ts`: `compileSingleKeyUnlimited` / `compileSingleKeyLimited` / `compileCompositeKeyStaticUnlimited` / `compileCompositeKeyUnlimited` / `compileCompositeKeyLimited` / `inferPgArrayType` / `resolvePgArrayCast` / `PG_ARRAY_CAST_TOKEN` / `RelationCompileBase`。
 - `src/scp/relation.ts`: `RelationOp` / `RelationDecl` / `compileRelationOp`（compile 入口）/ `runRelationOp` / `distributeToParent`（single+composite 対応済）。
 - `src/scp/makesql/compile-select.ts`: `compileSelect` / `SelectDesc`（head/GROUP BY/ORDER BY/LIMIT/OFFSET/FOR UPDATE/join/cte/append/HAVING を担う）。
-- `src/scp/makesql/tx.ts`: `TxOp`/`TxStatement`/`TransactionPlan`/`GateRule`/`StatementRole`/`compileWriteNode`/`deriveTransactionPlan`/`deriveBatchPlan`/`executeTransaction`/`renderTxStatement`/`mysqlPkHint`/`stripMysqlPkHint`/`literalize`。
+- `src/scp/makesql/tx.ts`: `TxOp`/`TxStatement`/`TransactionPlan`/`GateRule`/`StatementRole`/`compileWriteNode`/`deriveBatchPlan`/`renderTxStatement`/`stripMysqlPkHint`/`literalize`（batch write compile）。**#227 で削除**: 自前の write-time-relations 導出 `deriveTransactionPlan` ＋ SYNC executor `executeTransaction`（＋ `mysqlPkHint`）は全言語の自前 tx 実行系ごと撤去。write/tx の execute は BC 生成 native ＋ leaf transport が唯一の経路。
 - `src/scp/catalog.ts`: `CatalogName = Select | Count | Insert | Update | Delete | Fragment | Tx`、`LITEDBMODEL_CATALOG`。（**relations は catalog entry でなく `compileRelationOp`。makeSQL は bundle 成果物で catalog 名ではない。**）
-- `src/scp/makesql/static-bundle.ts`: `compileStaticBundle` / `compileReadGraph` / `compileSelectNode` / `executeReadGraph` / `executeReadGraphAsync` / `executeStaticBundle` / `executeStaticWrite` / `renderReadPrimary`。
+- ~~`src/scp/makesql/static-bundle.ts`: `compileStaticBundle` / `compileReadGraph` / `compileSelectNode` / `executeReadGraph` / `executeReadGraphAsync` / `executeStaticBundle` / `executeStaticWrite` / `renderReadPrimary`。~~ **削除済み（#227）**: 自前の SqlBundle/ReadGraph 実行系（`executeReadGraph`/`executeStaticWrite`/`renderReadPrimary` 等）は全言語で撤去。read/write の render・execute は BC 生成 native ＋ leaf transport（`executeSQL`）が唯一の経路。
 - **bundle JSON shape**: `{ readGraph, statementsById, relations, transaction, optionalHeads }`（方言別）。新「kind」を勝手に増やさない（増やすならエスカレーション）。
 - **runtime handler seam**（全言語）: bundle replay のみ。SQL 生成禁止。言語差は param bind のみ。
 

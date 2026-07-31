@@ -1,15 +1,16 @@
 # litedbmodel/runtime (PHP)
 
-The PHP leg of the litedbmodel v2 SCP multi-language runtime. Interprets the language-neutral §8
-published bundle (`SqlBundle`) and executes it against a PDO SQL driver, semantics-identical to
-the TS reference (`src/scp`).
+The PHP leg of the litedbmodel v2 SCP multi-language runtime. It is the shared runtime a
+`bc generate`d native module binds to: the leaf transport (`Leaves::makeHandlers` →
+`executeSQL`/`pluck`/`group`) wired to the central execute/run seam, connection routing, and the
+render-layer placeholder resolution — semantics-identical to the TS reference (`src/scp`).
 
-**Status: implemented (WS7d, #33).** The §8 bundle interpreter (`renderOperation` /
-`executeBundle` / `executeTransactionBundle` / `orderByNulls`), the SQL handlers (PDO), the
-gate-first write transaction, and the conformance vector runner are live. The PHP runtime
-reproduces the frozen corpus (`conformance/vectors/*.json`) byte-for-byte: same SQL across all
-three dialects + same PDO-SQLite execution results. Live Postgres/MySQL PDO execution is deferred
-to a coordinated cross-language docker pass; the SQL-handler seam takes any PDO connection.
+**Status: implemented (WS7d, #33).** There is no litedbmodel-owned bundle/read-graph/tx-plan
+execution (the self-built `SqlBundle`/`ReadGraph` surface was removed in #227): a BC-generated PHP
+module drives the closed-set orchestration and calls the leaf handlers by boundary injection. The
+runtime reproduces the frozen corpus byte-for-byte: same SQL across all three dialects, executed on
+real PDO SQLite + the live PG/MySQL cross-language pass (the SQL-handler seam takes any PDO
+connection).
 
 ## behavior-contracts dependency — VENDORED (not a registry dep)
 
@@ -36,10 +37,11 @@ autoload under the package's own PSR-4 root (`LiteDbModel\Runtime\` → `src/`, 
 ```
 php/
   composer.json                       # package litedbmodel/runtime (no bc dep — bc is vendored)
-  src/Runtime.php                     # the §8 bundle interpreter surface (render/exec/tx/orderByNulls)
-  src/StaticBundle.php                # static makeSQL render/execute (port of src/scp/makesql/*)
+  src/Leaves.php                      # the op-agnostic leaf transport (executeSQL/pluck/group) — the execution surface
+  src/ExecutionContext.php            # the ExecutionContext + central execute/run/runGuarded seam + transaction()
+  src/Runtime.php                     # the in-source version mirror (scripts/sync-versions.mjs SSoT)
+  src/StaticBundle.php                # the render-layer placeholder resolution (?→$N, PG array-cast)
   src/Dialect.php                     # dialect strategy (finalizePlaceholders / orderByNulls)
-  src/WriteRuntime.php                # gate-first write transaction (port of src/scp/write-runtime.ts)
   src/SqlFailure.php                  # PDO error → SCP failure mapping (port of src/scp/errors.ts)
   src/BehaviorContracts/              # vendored bc PHP port (drift-gated), NOT hand-edited
   conformance/vectors_runner.php      # conformance runner entry (loads conformance/vectors/*.json)
