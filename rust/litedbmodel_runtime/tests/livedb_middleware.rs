@@ -27,8 +27,8 @@ use std::sync::{Arc, Mutex};
 use behavior_contracts::Value;
 use litedbmodel_runtime::{
     create_middleware, for_driver, logger, raw_execute, raw_query, seam_execute, seam_run,
-    transaction, use_middleware, with_middleware_scope, PostgresDriver, SeamResult, SqlFailure,
-    SqlHookFn, SqlNext, StatementIntent, TransactionOptions, TxDialect, WireValue,
+    transaction, use_middleware, with_middleware_scope, PostgresDriver, SqlHookFn, SqlNext,
+    StatementIntent, TransactionOptions, TxDialect, WireValue,
 };
 
 /// Does any scalar cell (recursively) in these wire rows carry `needle`? The read result is now
@@ -53,6 +53,8 @@ fn wire_has(rows: &[WireValue], needle: &str) -> bool {
 // table.
 
 mod common;
+
+use common::observer;
 
 /// The gate this suite runs behind (declared in `livedb-gates.env`).
 const GATE: &str = "LITEDBMODEL_LIVEDB_PARALLEL";
@@ -94,15 +96,6 @@ fn reset(db: &PostgresDriver, tbl: &str) {
         &StatementIntent::write(),
     )
     .unwrap();
-}
-
-fn observer(
-    log: Arc<Mutex<Vec<String>>>,
-) -> SqlHookFn<impl Fn(&str, &[Value], &SqlNext) -> Result<SeamResult, SqlFailure> + Send + Sync> {
-    SqlHookFn(move |sql: &str, params: &[Value], next: &SqlNext| {
-        log.lock().unwrap().push(sql.to_string());
-        next(sql, params)
-    })
 }
 
 #[test]
