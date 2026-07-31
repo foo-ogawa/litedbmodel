@@ -93,6 +93,19 @@ export const Post = PostModel.asModel();
 宣言できるエンドポイント種別は **7つに閉じている**（`Endpoint` union）:
 `read` / `create` / `update` / `delete` / `createMany` / `updateMany` / `deleteMany`。
 
+<!--@embedoc:code_snippet file="src/scp/emit/endpoint.ts" block_start="export type Endpoint =" block_end="DeleteManyEndpoint;"-->
+```ts
+export type Endpoint =
+  | ReadEndpoint
+  | CreateEndpoint
+  | UpdateEndpoint
+  | DeleteEndpoint
+  | CreateManyEndpoint
+  | UpdateManyEndpoint
+  | DeleteManyEndpoint;
+```
+<!--@embedoc:end-->
+
 述語（`Predicate` union）は列 op パラメータ比較（`ComparePredicate`）、IN リスト（`InPredicate`）、
 複合キー IN（`TupleInPredicate`）、NULL 判定（`NullPredicate`）、相関 EXISTS（`ExistsPredicate`）、
 型付きサブクエリ（`SubqueryPredicate`）。`ComparePredicate.optional` を立てた述語だけが **SKIP メンバー**
@@ -341,6 +354,14 @@ compile`）。「中間 IR の形」ではなく、次の2つが実体である:
 `emitBehaviorModule` → SCP 制限 TS → `bc generate --from` → go / rust / py / php / ts native。リーフ配線は
 bc が自動生成する。実行時のサーフェスは **3本の op 非依存リーフ**（`src/scp/leaf-transport.ts` の
 `Db.executeSQL` / `Db.pluck` / `Db.group`）に閉じ、方言 SQL はこの3本が運ぶテキスト＋パラメータで表現する。
+
+<!--@embedoc:code_snippet file="src/scp/leaf-transport.ts" grep="^  @leaf static"-->
+```ts
+@leaf static executeSQL(sql: string, params: WireValue[], opts?: ExecOptions | null): WireValue[] { return declarationStub('executeSQL', [sql, params, opts]); }
+@leaf static pluck(rows: WireValue[], col: string[]): WireValue[] { return declarationStub('pluck', [rows, col]); }
+@leaf static group(parents: WireValue[], children: WireValue[], pk: string[], fk: string[], into: string, single: boolean): WireValue[] { return declarationStub('group', [parents, children, pk, fk, into, single]); }
+```
+<!--@embedoc:end-->
 
 - **`executeSQL`** — 唯一の SQL 転送。`sql` + `params` に加えて任意の1制御 struct `ExecOptions`（どの DB で
   走るか・read/write モード・SKIP plan・relation ガード）を運ぶ。plain read は `opts` を省略（native-clean）。

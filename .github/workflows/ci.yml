@@ -30,6 +30,10 @@ jobs:
         run: npm audit signatures
       - name: Lint
         run: npm run lint --if-present
+      - name: Spec references resolve
+        # docs/architecture.md is the formal spec; fail if any `symbol`/`file` it cites is gone,
+        # or if a `spec §N` cited in src/** points at a section that no longer exists (#229).
+        run: npm run spec:check
       - name: Build
         run: npm run build
       - name: Verify package contents
