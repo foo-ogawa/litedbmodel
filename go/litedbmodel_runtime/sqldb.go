@@ -74,6 +74,17 @@ type SQLDB interface {
 	Exec(query string, args ...any) (sql.Result, error)
 }
 
+// TxDB is the transaction-capable database/sql surface (a *sql.DB satisfies all). Conn checks out ONE
+// OWNED pooled connection (Phase D / #94 — the tx restructure: the runtime issues its OWN
+// BEGIN/COMMIT/ROLLBACK/SET tx-control as REAL SQL strings THROUGH the seam on this one owned
+// connection, so a registered middleware OBSERVES them). The tx machinery ([ExecutionContext]'s
+// ConnectionFor) asserts this surface off the base db to check out the tx-owned *sql.Conn.
+type TxDB interface {
+	Conn(ctx context.Context) (*sql.Conn, error)
+	Begin() (*sql.Tx, error)
+	BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error)
+}
+
 // connSQLDB adapts an OWNED *sql.Conn to the [SQLDB] surface (Phase D / #94 tx restructure): every
 // statement — including the runtime's OWN BEGIN/COMMIT/ROLLBACK/SET tx-control — runs on the SAME one
 // owned pooled connection via the connection-bound ExecContext/QueryContext. This is what lets the
@@ -163,8 +174,8 @@ func toDriverParam(v bc.Value) any {
 	case *bc.Obj:
 		return jsStringify(t) // JSON text for the outbox payload column (JS JSON.stringify parity)
 	case float64:
-		// A rendered whole number arrives as float64 (toRenderParam collapses a bc int64 to a JS
-		// number). go-sql-driver's binary prepared-statement protocol sends a float64 as DOUBLE,
+		// A rendered whole number may arrive as float64 (a JS-number-valued param). go-sql-driver's
+		// binary prepared-statement protocol sends a float64 as DOUBLE,
 		// which MySQL rejects for an integer slot such as `LIMIT ?` (Error 1210). Bind an integral
 		// value as int64 so it lands in the integer slot; both drivers coerce int↔numeric otherwise.
 		if t == math.Trunc(t) && !math.IsInf(t, 0) {

@@ -5,6 +5,9 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
+    // scripts/check-ts-test-skips.mjs states this pattern INDEPENDENTLY and requires it to equal this
+    // line, then globs it against the filesystem. Two statements that must agree is the mechanism: a
+    // narrowing HERE leaves the gate finding files the run never reported (#220 C).
     include: ['test/**/*.test.ts'],
     coverage: {
       provider: 'v8',

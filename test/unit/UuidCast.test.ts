@@ -8,7 +8,7 @@ import 'reflect-metadata';
 import { describe, it, expect } from 'vitest';
 import { DBCast, DBCastArray, type SqlCastFormatter } from '../../src/DBValues';
 import { DBConditions } from '../../src/DBConditions';
-import { formatSqlCast, needsSqlCast, getSqlCastFormatter, type DriverType } from '../../src/drivers';
+import { formatSqlCast, needsSqlCast, getSqlCastFormatter } from '../../src/drivers';
 import { DBModel, model, column } from '../../src/index';
 import { getSqlCastMap, getColumnMeta } from '../../src/decorators';
 

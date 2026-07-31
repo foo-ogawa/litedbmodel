@@ -104,7 +104,8 @@ pub trait Driver {
     /// runtime pins THIS connection, then issues the isolation SET + `BEGIN` + `COMMIT`/`ROLLBACK`
     /// THROUGH the central seam (`run(txctx, …)`), so a registered middleware observes the tx-control —
     /// full TS parity (TS issues `runAsync(txCtx, 'BEGIN'/'COMMIT'/…)`). The connection is the SAME one
-    /// every body statement (and the seam-issued tx-control) resolves via `connection_for`, so
+    /// every body statement of the tx's own database (and the seam-issued tx-control) resolves via
+    /// `connection_for` — one naming a DIFFERENT database is rejected there instead — so
     /// per-execution ownership + the concurrent-tx isolation are UNCHANGED — only WHERE the BEGIN/COMMIT
     /// text is issued from moved (into the seam), not which connection runs it.
     ///
@@ -286,7 +287,7 @@ impl Driver for ConfiguredDriver {
     }
 
     /// A tx on a configured driver acquires a session-configured owned connection (SET applied), issues
-    /// BEGIN on it, and delegates every statement + COMMIT/ROLLBACK to it. The isolation prelude is
+    /// BEGIN on it, and delegates every statement of the tx's own database + COMMIT/ROLLBACK to it. The isolation prelude is
     /// forwarded to the inner driver's `begin_tx_isolated`, and the SESSION setup/reset ride the owned
     /// connection around the whole tx (finish runs the resets after COMMIT/ROLLBACK).
     fn begin_tx(&self) -> Result<Box<dyn TxConnection + '_>, SqlFailure> {

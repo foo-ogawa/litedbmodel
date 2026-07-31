@@ -721,11 +721,11 @@ for (const d of dialects) {
       const c = await DBModel.transaction(async () =>
         User.create([[User.name, 'author'], [User.email, 'author@x.com']], { returning: true }),
       );
-      const uid = c!.values[0][0];
+      const uid = c!.values[0][0] as number;
       const p = await DBModel.transaction(async () =>
         Post.create([[Post.author_id, uid], [Post.title, 'Hello']], { returning: true }),
       );
-      const pid = p!.values[0][0];
+      const pid = p!.values[0][0] as number;
       await DBModel.transaction(async () => {
         await Comment.create([[Comment.post_id, pid], [Comment.body, 'c1']]);
         await Comment.create([[Comment.post_id, pid], [Comment.body, 'c2']]);
@@ -767,7 +767,7 @@ for (const d of dialects) {
           { returning: true },
         ),
       );
-      const [ua, ub] = c!.values.map((v) => v[0]);
+      const [ua, ub] = c!.values.map((v) => v[0] as number);
       await DBModel.transaction(async () => {
         for (let i = 0; i < 8; i++) await Post.create([[Post.author_id, ua], [Post.title, `a${i}`]]);
         for (let i = 0; i < 8; i++) await Post.create([[Post.author_id, ub], [Post.title, `b${i}`]]);
@@ -790,7 +790,7 @@ for (const d of dialects) {
           { returning: true },
         ),
       );
-      const uids = c!.values.map((v) => v[0]);
+      const uids = c!.values.map((v) => v[0] as number);
       await DBModel.transaction(async () => {
         for (const uid of uids) {
           await Post.create([[Post.author_id, uid], [Post.title, `post-${uid}`]]);
@@ -833,7 +833,7 @@ for (const d of dialects) {
       const c = await DBModel.transaction(async () =>
         User.create([[User.name, 'owner'], [User.email, 'owner@x.com']], { returning: true }),
       );
-      const uid = c!.values[0][0];
+      const uid = c!.values[0][0] as number;
       await DBModel.transaction(async () => {
         for (let i = 0; i < 20; i++) await Post.create([[Post.author_id, uid], [Post.title, `t${i}`]]);
       });
@@ -926,6 +926,67 @@ for (const d of dialects) {
       expect((await User.find([[sql`${User.name} LIKE ?`, 'atom%']])).length).toBe(0);
     });
 
+    it('README §Transactions — the body READS ITS OWN WRITES, so a dependent write can use that id (the procedural shape: precondition, parent→child ref and short-circuit written BY HAND)', async () => {
+      // The whole point: everything a declarative gate-first/DAG writer would do for you is writable
+      // BY HAND inside one `DBModel.transaction` — a precondition read, a short-circuit `throw`, and a
+      // child whose FK comes from the parent's just-created id. The two properties that make it work
+      // are read-your-writes inside the boundary and atomic rollback, both asserted here.
+      const seen: string[] = [];
+      const un = DBModel.use(recordingMiddleware(seen));
+
+      const ids = await DBModel.transaction(async () => {
+        // parent
+        const created = await User.create([[User.name, 'proc'], [User.email, 'proc@x.com']], { returning: true });
+        expect(created!.values.length).toBe(1);
+
+        // (1) READ-YOUR-WRITES: the row is UNCOMMITTED, so seeing it here is only possible on the tx's
+        // own connection. This is what a hand-written `requires` precondition reads.
+        const author = await User.findOne([[User.email, 'proc@x.com']]);
+        expect(author).not.toBeNull();
+        expect(author!.name).toBe('proc');
+
+        // (2) DEPENDENT WRITE: the child's FK is the parent's id, read back above — the hand-written
+        // equivalent of a `$.ref` into the parent statement.
+        const post = await Post.create([[Post.author_id, author!.id!], [Post.title, 'procedural']], { returning: true });
+        const postId = post!.values[0][0] as number;
+        await Comment.create([[Comment.post_id, postId], [Comment.body, 'child of a read-back parent']]);
+        return { authorId: author!.id! as number, postId };
+      });
+      un();
+
+      // (2, after COMMIT) every level persisted, and the child really points at the parent.
+      const post = await Post.findOne([[Post.id, ids.postId]]);
+      expect(post).not.toBeNull();
+      expect(post!.author_id).toBe(ids.authorId);
+      const comments = await Comment.find([[Comment.post_id, ids.postId]]);
+      expect(comments.length).toBe(1);
+      expect(comments[0].body).toBe('child of a read-back parent');
+
+      // (4) ORDER: the precondition SELECT ran BETWEEN the two writes, all through the one execute seam.
+      // NOT a distinct-connection proof: statements here are sequential, so a pool hands the same idle
+      // client back either way — ignoring the tx pin in `PooledAsyncContext.connectionFor` leaves this
+      // test GREEN (measured). The distinct-connection guarantee is pinned where it is observable, by
+      // the tx-boundary suites that COUNT connections with a recording driver.
+      const trace = seen.filter((s) => /INSERT INTO rc_users|SELECT .* FROM rc_users|INSERT INTO rc_posts|INSERT INTO rc_comments/i.test(s));
+      expect(trace.length).toBeGreaterThanOrEqual(4);
+      expect(/INSERT INTO rc_users/i.test(trace[0])).toBe(true);
+      expect(/FROM rc_users/i.test(trace[1])).toBe(true);
+      expect(/INSERT INTO rc_posts/i.test(trace[2])).toBe(true);
+      expect(/INSERT INTO rc_comments/i.test(trace[3])).toBe(true);
+
+      // (3) HAND-WRITTEN SHORT-CIRCUIT: a row written BEFORE the failing precondition must not survive.
+      await expect(
+        DBModel.transaction(async () => {
+          await User.create([[User.name, 'sc'], [User.email, 'sc@x.com']]);
+          const missing = await User.findOne([[User.email, 'nobody@x.com']]);
+          if (!missing) throw new Error('author not found'); // the precondition, written by hand
+          await Post.create([[Post.author_id, missing.id!], [Post.title, 'never']]);
+        }),
+      ).rejects.toThrow('author not found');
+      expect(await User.findOne([[User.email, 'sc@x.com']])).toBeNull();
+      expect((await Post.find([[Post.title, 'never']])).length).toBe(0);
+    });
+
     // ---------------------------------------------------------------- Middleware
     it('README §Middleware — execute middleware sees EVERY SQL statement through the decorator API', async () => {
       const seen: string[] = [];
@@ -985,7 +1046,7 @@ for (const d of dialects) {
           { returning: true },
         ),
       );
-      const [qa, qb] = c!.values.map((v) => v[0]);
+      const [qa, qb] = c!.values.map((v) => v[0] as number);
       await DBModel.transaction(async () => {
         for (let i = 0; i < 3; i++) await Post.create([[Post.author_id, qa], [Post.title, `qa${i}`]]);
         await Post.create([[Post.author_id, qb], [Post.title, 'qb0']]);

@@ -7,7 +7,8 @@ via the contextvar) against real engines:
   (1) MULTI-OP ATOMICITY — transaction(lambda: [opA_insert; opB_insert]) → both commit; a RECORDING
       connection asserts EXACTLY ONE BEGIN / ONE COMMIT / ONE connection for the whole boundary. opB
       PK-collides → opA's row ALSO rolled back (ONE BEGIN + ONE ROLLBACK, zero COMMIT), read from real
-      rows. (The teeth: the disable-join RED is proven portably in test_transaction_boundary.py.)
+      rows. (The teeth: opB's PK collision rolling back opA is the atomicity proof; each op JOINs the
+      ONE ambient tx through the guarded write seam on the pinned ctx.)
   (2) GUARD — write OUTSIDE transaction() → WriteOutsideTransactionError; read-only → WriteInReadOnly;
       inside → ok. All on the live path.
   (3) ISOLATION — REPEATABLE READ holds the snapshot vs READ COMMITTED sees the concurrent commit
@@ -18,7 +19,7 @@ via the contextvar) against real engines:
       the mapped SqlFailure's wrapped chain) is shown genuinely load-bearing (the go #83 audit lesson).
   (5) NESTED — one BEGIN/COMMIT; an inner error rolls back the whole tx.
 
-Gated behind LITEDBMODEL_TX_ISOLATION=1 (same gate as test_tx_isolation.py). Requires the dockerized
+Gated behind LITEDBMODEL_TX_ISOLATION=1 (the shared live-DB gate). Requires the dockerized
 PG (:5433) + MySQL (:3307):
 
     docker compose -f docker-compose.test.yml -f docker-compose.livedb.yml up -d postgres mysql
@@ -42,7 +43,7 @@ from litedbmodel_runtime import (
     WriteOutsideTransactionError,
     context_for_driver,
     execute,
-    execute_transaction_bundle,
+    run_guarded,
     transaction,
 )
 from litedbmodel_runtime import tx_options as T
@@ -166,24 +167,7 @@ def _rec_mysql_driver(sink, pool_size):
     return MysqlDriver(pool, _qmark_to_pyformat, emulate_returning=True)
 
 
-# ── bundle authoring + read-back ────────────────────────────────────────────────
-
-
-def _insert_bundle(dialect, id_, worker, seq):
-    # The makeSQL-neutral op carries `?` placeholders; render_placeholders converts to the dialect
-    # (postgres → $N, mysql → ?), and each live driver rewrites to %s at the seam.
-    sql = f"INSERT INTO {ISO_TBL} (id, worker, seq) VALUES (?, ?, ?)"
-    return {
-        "dialect": dialect,
-        "name": "InsertOne",
-        "transaction": {
-            "phase": "create",
-            "entityFrom": None,
-            "statements": [
-                {"id": "tx_body_0", "role": "body", "op": {"sql": sql, "params": [{"ref": ["id"]}, {"ref": ["worker"]}, {"ref": ["seq"]}]}},
-            ],
-        },
-    }
+# ── write op (production guarded seam) + read-back ──────────────────────────────
 
 
 def _reset(driver, int_type):
@@ -197,7 +181,13 @@ def _read_rows(driver):
 
 
 def _op(driver, dialect, id_, worker, seq):
-    return execute_transaction_bundle(_insert_bundle(dialect, id_, worker, seq), {"id": id_, "worker": worker, "seq": seq}, driver)
+    # One guarded INSERT through the PRODUCTION guarded write seam (:func:`run_guarded`) on the ambient
+    # pinned tx ctx — the same seam a user-facing write inside ``transaction()`` rides. Live drivers
+    # expect dialect placeholders (PG $N, MySQL ?), which each rewrites to %s at the seam. Outside a
+    # boundary the ambient pin is absent (current_context() is None) so the guard fires.
+    ph = "($1, $2, $3)" if dialect == "postgres" else "(?, ?, ?)"
+    sql = f"INSERT INTO {ISO_TBL} (id, worker, seq) VALUES {ph}"
+    return run_guarded(current_context(), sql, [id_, worker, seq], "WRITE", ISO_TBL)
 
 
 # ── (1) MULTI-OP ATOMICITY ──────────────────────────────────────────────────────
@@ -207,7 +197,7 @@ def _multi_op_commit(driver, sink, dialect):
     sink.reset()
     ctx = context_for_driver(driver)
     r = transaction(ctx, lambda: [_op(driver, dialect, 100, 1, 0), _op(driver, dialect, 101, 1, 1)], TransactionOptions(), dialect)
-    assert [x["committed"] for x in r] == [True, True]
+    assert [x.changes for x in r] == [1, 1]
     assert sink.begins == 1, f"{dialect}: N ops in one boundary ⇒ ONE BEGIN, got {sink.begins}"
     assert sink.commits == 1, f"{dialect}: ONE COMMIT, got {sink.commits}"
     assert sink.rolls == 0

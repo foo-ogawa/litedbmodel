@@ -280,7 +280,7 @@ fn d1_live_runtime_tx_boundaries_are_middleware_visible() {
     // POSITIVE GUARANTEE (#93 / owner option A) on LIVE PG: a registered middleware OBSERVES the tx
     // runtime's OWN BEGIN + COMMIT of a REAL `transaction()` (and BEGIN + ROLLBACK on a body error) —
     // full TS parity, issued through the seam on the SAME pinned owned connection. RED proof:
-    // reverting the seam-routing of tx-control (see `with_transaction_decided_isolated_on`) makes the
+    // reverting the seam-routing of tx-control (see `with_transaction_decided_isolated`) makes the
     // tx-boundary observation go empty of BEGIN/COMMIT.
     common::require_live_db(GATE);
     const TBL: &str = "scp_mw_rust_txb";

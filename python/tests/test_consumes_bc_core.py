@@ -1,11 +1,12 @@
 """Guardrail test (WS7b, #31): bc runtime-core is CONSUMED, not reimplemented.
 
-The hard rule: the Python runtime delegates the CLOSED Expression-IR evaluation to
-behavior-contracts (the published PyPI package), exactly like the TS reference imports
-`behavior-contracts` from npm — no local generic expression evaluator. (#12: the read-graph
-plan/map/wire/output orchestration is now the crate's OWN NATIVE walker, not bc `run_behavior` —
-mirroring the rust/go native walkers.) This asserts the runtime consumes bc's `evaluate_expression`,
-does NOT call `run_behavior` on the exec path, and pins the PyPI dep with NO local `../` path.
+The hard rule: litedbmodel's Python leg delegates the CLOSED Expression-IR evaluation AND the
+plan/map/wire/output orchestration to behavior-contracts — the bc-GENERATED native module evaluates
+the IR and calls the leaf transport (:func:`litedbmodel_runtime.leaves.make_handlers`) by boundary
+injection (``bind(handlers)``). Since the self-built ``SqlBundle``/``ReadGraph`` execution was deleted
+(#227) there is no litedbmodel-owned bundle/read-graph runner, so the package defines NO generic
+expression evaluator and calls bc ``run_behavior`` NOWHERE on the exec path. This pins that invariant
++ the exactly-pinned PyPI dep (the runtime + the generated §8 bundle must stay in lockstep).
 """
 
 from __future__ import annotations
@@ -19,32 +20,35 @@ PKG = Path(__file__).resolve().parent.parent / "litedbmodel_runtime"
 PYPROJECT = Path(__file__).resolve().parent.parent / "pyproject.toml"
 
 
-def _imports_from(module: str) -> set[str]:
+def _package_sources() -> "dict[str, str]":
+    """Every module of the runtime package, name → source."""
+    return {p.name: p.read_text(encoding="utf-8") for p in sorted(PKG.glob("*.py"))}
+
+
+def _bc_imports(src: str) -> "set[str]":
     names: set[str] = set()
-    for node in ast.walk(ast.parse((PKG / module).read_text(encoding="utf-8"))):
+    for node in ast.walk(ast.parse(src)):
         if isinstance(node, ast.ImportFrom) and node.module and node.module.startswith("behavior_contracts"):
             names.update(a.name for a in node.names)
     return names
 
 
-def test_static_bundle_consumes_bc_evaluate_expression():
-    names = _imports_from("static_bundle.py")
-    assert "evaluate_expression" in names
-
-
-def test_static_bundle_does_not_call_run_behavior_on_exec_path():
-    # #12: the native read-graph walker replaced bc `run_behavior` on EVERY exec path — the runtime
-    # neither imports nor calls it (the CLOSED expression eval still rides bc `evaluate_expression`).
-    src = (PKG / "static_bundle.py").read_text(encoding="utf-8") + (PKG / "runtime.py").read_text(encoding="utf-8")
-    assert "run_behavior(" not in src, "runtime must not call bc run_behavior on the exec path (#12)"
-    assert "run_behavior" not in _imports_from("static_bundle.py")
+def test_no_module_calls_run_behavior_on_exec_path():
+    # The self-built read-graph/tx execution that once drove bc `run_behavior` is deleted (#227): the
+    # bc-GENERATED native module drives execution and calls the leaf transport by injection. No
+    # litedbmodel module calls or imports `run_behavior` (a docstring may name it — the call form is
+    # `run_behavior(`, which never appears in prose).
+    for name, src in _package_sources().items():
+        assert "run_behavior(" not in src, f"{name} must not call bc run_behavior on the exec path (#227)"
+        assert "run_behavior" not in _bc_imports(src), f"{name} must not import bc run_behavior"
 
 
 def test_no_local_generic_evaluator_reimplemented():
-    # The runtime must not define its own expression evaluator (that would reimplement bc-core).
-    src = (PKG / "static_bundle.py").read_text(encoding="utf-8") + (PKG / "runtime.py").read_text(encoding="utf-8")
-    for banned in ("def evaluate_expression", "def evaluate(", "def _eval_expr", "def run_behavior"):
-        assert banned not in src, f"runtime reimplements bc-core: found '{banned}'"
+    # The runtime must not define its own expression evaluator / behavior runner (that would
+    # reimplement bc-core instead of consuming it).
+    for name, src in _package_sources().items():
+        for banned in ("def evaluate_expression", "def evaluate(", "def _eval_expr", "def run_behavior"):
+            assert banned not in src, f"{name} reimplements bc-core: found '{banned}'"
 
 
 def test_pyproject_declares_bc_as_pypi_dep_no_local_path():

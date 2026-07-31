@@ -3,6 +3,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import { DBImmediateValue } from '../../src/DBValues';
 import {
   castToDatetime,
   castToBoolean,
@@ -257,13 +258,17 @@ describe('SqliteHelper', () => {
 
   describe('empty2null', () => {
     it('should convert empty string to NULL', () => {
+      // `empty2null` returns its input OR a DBImmediateValue, so the branch is asserted before its value
+      // (the old spelling read `.value` off the union — which the collapsed `unknown` return type hid).
       const result = empty2null('');
-      expect(result.value).toBe('NULL');
+      expect(result).toBeInstanceOf(DBImmediateValue);
+      expect((result as DBImmediateValue).value).toBe('NULL');
     });
 
     it('should convert undefined to NULL', () => {
       const result = empty2null(undefined);
-      expect(result.value).toBe('NULL');
+      expect(result).toBeInstanceOf(DBImmediateValue);
+      expect((result as DBImmediateValue).value).toBe('NULL');
     });
 
     it('should pass through non-empty values', () => {

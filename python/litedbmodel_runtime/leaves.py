@@ -12,14 +12,15 @@ typed-native runners call positionally (``rust/litedbmodel_runtime/src/leaves.rs
     param — a relation key set from ``pluck`` or a batch record set — rides per dialect: sqlite/mysql
     JSON-encode it for ``json_each``/``JSON_TABLE``, postgres binds the array as-is), and run it through
     the runtime's central execute/run seam (:func:`exec_context.execute` / :func:`exec_context.run`) on
-    the bound driver — the ONLY driver contact. The OPTIONAL ``guard`` port is the RELATION runaway cap
-    of a guarded relation child fetch (absent/None ⇒ uncapped): the raw rows are asserted against it HERE
+    the bound driver — the ONLY driver contact. Everything besides the statement rides in the OPTIONAL
+    ``opts`` control record (absent ⇒ a plain read): ``opts["guard"]`` is the RELATION runaway cap of a
+    guarded relation child fetch (absent/None ⇒ uncapped), asserted against the raw rows HERE
     (:meth:`errors.LimitExceededError.check`) because past ``group`` the graph is already nested. A
     non-returning write returns a one-row ``[{changes, lastInsertRowid}]`` summary so the leaf output
     shape is uniform (a list of rows).
   - ``pluck`` — rows + the ordered key-column TUPLE → the deduped, non-null batch key set (single-key →
     a flat scalar array; composite → an array-of-tuples). Delegates the dedupe to the shared grouping
-    core (:func:`grouping.dedupe_key_tuples`) — the SAME SSoT the runtime relation path uses.
+    core (:func:`grouping.dedupe_key_tuples`) — the SAME SSoT every relation consumer uses.
   - ``group`` — parents + flat children → each parent with its children nested under ``into`` per
     cardinality. Delegates to the shared grouping core (:func:`grouping.group_by_key` /
     :func:`grouping.attach_to_parent`) — the SAME SSoT, no duplicated grouping.
@@ -33,24 +34,21 @@ code calls the leaf with no driver arg — the python ir-exec path injects it).
 from __future__ import annotations
 
 import json
-import re
 from typing import Any, Callable, Dict, List, Mapping, Sequence, Tuple, Union
 
-from .driver import Driver
+from .driver import Driver, rewrite_unquoted_placeholders
 from .errors import LimitExceededError, SqlFailure
 from .exec_context import (
-    READ_INTENT,
-    WRITE_INTENT,
     ExecutionContext,
+    StatementIntent,
     as_context,
     current_context,
 )
 from .exec_context import execute as seam_execute
 from .exec_context import run as seam_run
 from .grouping import attach_to_parent, dedupe_key_tuples, group_by_key
-from .static_bundle import render_placeholders, resolve_pg_array_cast
 
-__all__ = ["make_handlers"]
+__all__ = ["make_handlers", "render_placeholders"]
 
 # The bc handler outcome contract (behavior.py): a handler returns ``{"ok": value}`` on success or
 # ``{"error": message}`` on a fail-closed transport failure (``run_behavior`` propagates it).
@@ -60,45 +58,119 @@ Handler = Callable[[Mapping[str, Any], Mapping[str, Any]], Outcome]
 
 # ── the DYNAMIC (SKIP) WHERE: assembled by the transport, at execution time ────────────────────
 #
-# Port of ``src/scp/leaves.ts`` ``spliceWhere``/``assembleDynamicWhere`` (the TS reference). A SKIP
-# predicate's presence is per-CALL, so the FINAL statement can only be determined here — which is
-# also why the placeholder render runs AFTER this. A statement with no optional predicate carries no
-# plan and never reaches this code.
-
-#: The SQL keywords that may follow a WHERE clause — the clause splices in BEFORE the first of them,
-#: at exactly the position a bounded WHERE occupies.
-_WHERE_TAIL_RE = re.compile(r"\s+(GROUP BY|ORDER BY|LIMIT|OFFSET|FOR UPDATE|RETURNING)\b", re.IGNORECASE)
-
-
-def _splice_where(base_sql: str, where_sql: str) -> str:
-    """Splice a ``` WHERE …``` clause (leading space included, or ``''``) before the first tail keyword."""
-    if where_sql == "":
-        return base_sql
-    tail = _WHERE_TAIL_RE.search(base_sql)
-    if tail is None:
-        return base_sql + where_sql
-    return base_sql[: tail.start()] + where_sql + base_sql[tail.start() :]
+# Port of ``src/scp/leaves.ts`` ``assembleDynamicWhere`` (the TS reference). A SKIP predicate's presence
+# is per-CALL, so the FINAL statement can only be determined here — which is also why the placeholder
+# render runs AFTER this. A statement with no optional predicate carries no plan and never reaches this
+# code.
+#
+# Assembly is a CONCATENATION: the emitter's SELECT builder is what puts the WHERE in the statement, so
+# it hands the boundary over on the plan — the ``sql`` port is the statement's HEAD, ``lead`` says
+# whether that head already ends in a WHERE, and ``tail`` / ``tailParams`` are what follows it. Nothing
+# here scans the base SQL. A scan took a NESTED statement's tail keyword for the outer statement's
+# (#198), counted a QUOTED ``?`` the placeholder render skips (#202), and derived a byte offset that is
+# not the same number in five languages.
 
 
-def _effective_statement(ports: Mapping[str, Any]) -> Tuple[str, List[Any]]:
+#: The six `at` labels the fail-closed field read names — one per leaf payload (``executeSQL`` /
+#: ``pluck`` / ``group``), plus the control record, the dynamic-WHERE plan and one of its fragments.
+_PAYLOAD = "the executeSQL payload"
+_PLUCK = "the pluck payload"
+_GROUP = "the group payload"
+_RECORD = "the 'opts' control record"
+_PLAN = "the 'whereDynamic' plan"
+_FRAG = "a 'whereDynamic' fragment"
+
+#: The DECLARED type of every leaf PORT and every field of every leaf struct, exactly as the catalog
+#: spells it (``src/scp/leaf-transport.ts``) — the predicate :func:`_typed` confirms. ``int`` excludes
+#: ``bool`` (a python bool IS an int) for the same reason bc's own value model does. ``string[]`` is the
+#: ordered key-column TUPLE (``col`` / ``pk`` / ``fk``): every element must be a column NAME, the same
+#: element check the go ``portStrings`` / rust ``port_strings`` probes make.
+_PORT_TYPES: Dict[str, Callable[[Any], bool]] = {
+    "bool": lambda v: isinstance(v, bool),
+    "int": lambda v: isinstance(v, int) and not isinstance(v, bool),
+    "string": lambda v: isinstance(v, str),
+    "list": lambda v: isinstance(v, list),
+    "string[]": lambda v: isinstance(v, list) and all(isinstance(e, str) for e in v),
+    "record": lambda v: isinstance(v, Mapping),
+}
+
+
+def _typed(value: Any, what: str, declared: str) -> Any:
+    """Confirm ONE unboxed value against its DECLARED type — the python leg's ONE wrong-type failure, and
+    the twin of the go ``portErr`` wrong-variant half / rust ``port_mismatch``.
+
+    A ``|null`` suffix marks a NULLABLE field, whose ``None`` is the declared absence. A field of the
+    wrong type is the same ABI break as a missing one, for the same reason: the generator emits the
+    literal the port's type says, so nothing else can arrive from a generated module. Coercing it instead
+    ran an INSERT on the read seam (``returning`` not a bool), applied a predicate the call SKIPPED
+    (``skipped`` not a bool), bound a value where none belongs (``params`` not a list), or FLIPPED a
+    relation's cardinality — ``single`` coerced to a bool turned a ``hasMany`` into ONE nested child
+    (#213)."""
+    kind = declared[: -len("|null")] if declared.endswith("|null") else declared
+    if kind != declared and value is None:
+        return None
+    if not _PORT_TYPES[kind](value):
+        raise ValueError(f"scp leaf: {what} must be {declared}, got {value!r}")
+    return value
+
+
+def _required(record: Mapping[str, Any], name: str, at: str, declared: str) -> Any:
+    """Read ONE DECLARED field out of a struct that IS present — the python leg's ONE fail-closed field
+    read, for all THREE leaves (the twin of the go ``optRowField`` / rust ``take_opt_row`` discipline).
+    Presence and the DECLARED type (:func:`_typed`) are confirmed at the SAME read, exactly as go's and
+    rust's typed probes confirm both.
+
+    ``None`` is a VALUE (the declared absence of a write mode / a plan / a cap / a model); a MISSING KEY
+    is an ABI BREAK, and the two must not collapse: bc types a port by the literal wired into it and
+    REJECTS a partial struct, so a generated module ALWAYS spells every field of every struct it wires.
+    A key that is not there did not come from one, and defaulting it would silently downgrade a write to
+    a read, drop a relation cap, erase a SKIP predicate (#205), or — on ``group`` — raise a bare
+    ``KeyError`` that names no port at all (#213)."""
+    if name not in record:
+        raise ValueError(
+            f"scp leaf: {at} is missing its '{name}' field — a generated module spells every "
+            f"field of every struct it wires, so an ABSENT key is an ABI break (a null VALUE is how an "
+            f"absent write mode / plan / cap is spelled)"
+        )
+    return _typed(record[name], f"{at}'s '{name}'", declared)
+
+
+def _effective_statement(ports: Mapping[str, Any], plan: Any) -> Tuple[str, List[Any]]:
     """The ``(sql, params)`` a statement actually executes: the dynamic-WHERE plan assembled when one is
     present, the ports verbatim otherwise.
 
-    ``whereDynamic`` is OPTIONAL (absent/None ⇒ no dynamic WHERE — a bounded read, a write, and an
-    uncapped fetch omit it; CLAUDE.md §2). bc carries each fragment's SKIP decision as DATA: a skipped
-    fragment is PRESENT with ``skipped`` true (never omitted), so assembly DROPS the ``skipped``
-    fragments. The survivors join with ``WHERE``/``AND`` and their params bind BEFORE the base params
-    (the WHERE ``?``s precede the tail's)."""
-    params: List[Any] = list(ports["params"])
-    plan = ports.get("whereDynamic")
+    ``plan`` is the control record's ``whereDynamic`` field (None ⇒ no dynamic WHERE — only a read that
+    declares an OPTIONAL predicate carries one; CLAUDE.md §2). bc carries each fragment's SKIP decision
+    as DATA: a skipped fragment is PRESENT with ``skipped`` true (never omitted), so assembly DROPS the
+    ``skipped`` fragments. The survivors join with ``AND`` and the three pieces already in hand are
+    CONCATENATED — the statement's HEAD (the ``sql`` port when a plan is present), the clause, the plan's
+    ``tail`` — with the params in the same order: the head's, the survivors', the tail's."""
+    params: List[Any] = list(_required(ports, "params", _PAYLOAD, "list"))
+    sql_port: str = _required(ports, "sql", _PAYLOAD, "string")
     if plan is None:
-        return ports["sql"], params
-    where_sql = ""
-    where_params: List[Any] = []
-    for frag in (f for f in plan["frags"] if not f["skipped"]):
-        where_sql += (" WHERE " if where_sql == "" else " AND ") + frag["sql"]
-        where_params.extend(frag["params"])
-    return _splice_where(ports["sql"], where_sql), where_params + params
+        return sql_port, params
+    # EVERY field of EVERY fragment is unboxed fail-closed BEFORE any of them is used, skipped ones
+    # included — a fragment is a PRESENT struct like every other and the generator spells it in full, so
+    # a missing or mistyped field is an ABI break and NOT a default: without ``skipped`` the statement
+    # applies a predicate the call SKIPPED, without ``sql`` the predicate is erased entirely, and without
+    # ``params`` a value binds where none belongs — each silently returning DIFFERENT ROWS (#209). The
+    # plan's own three fields are read the same way: a defaulted ``lead`` opens a second WHERE (or
+    # continues an absent one) and a defaulted tail DROPS the ORDER BY and the page.
+    unboxed = [
+        (
+            _required(f, "skipped", _FRAG, "bool"),
+            _required(f, "sql", _FRAG, "string"),
+            _required(f, "params", _FRAG, "list"),
+        )
+        for f in (_typed(frag, _FRAG, "record") for frag in _required(plan, "frags", _PLAN, "list"))
+    ]
+    lead: str = _required(plan, "lead", _PLAN, "string")
+    tail: str = _required(plan, "tail", _PLAN, "string")
+    tail_params: List[Any] = list(_required(plan, "tailParams", _PLAN, "list"))
+    frags = [(frag_sql, frag_params) for skipped, frag_sql, frag_params in unboxed if not skipped]
+    clause = "" if not frags else f" {lead} " + " AND ".join(frag_sql for frag_sql, _ in frags)
+    where_params: List[Any] = [p for _, frag_params in frags for p in frag_params]
+    return sql_port + clause + tail, params + where_params + tail_params
 
 
 def _is_tuple_set(param: Sequence[Any]) -> bool:
@@ -136,14 +208,28 @@ def make_handlers(driver_or_ctx: Union[Driver, ExecutionContext], dialect: str) 
 
     def execute_sql(ports: Mapping[str, Any], _ctx: Mapping[str, Any]) -> Outcome:
         # Resolve the AMBIENT tx-scoped ctx when this leaf runs inside a `with_transaction` /
-        # `transaction` scope (`run_with_pinned_context` pins it), so every statement resolves the
-        # tx-OWNED connection — the tx boundary is the runtime's (BEGIN/COMMIT/ROLLBACK), not baked into
+        # `transaction` scope (`run_with_pinned_context` pins it), so every statement of the tx's own database (an unnamed one, or one naming that database) 
+        # resolves the tx-OWNED connection — the tx boundary is the runtime's (BEGIN/COMMIT/ROLLBACK), not baked into
         # the generated runner. Outside a tx, `current_context()` is None ⇒ the bound driver ctx (the
         # documented `current_context` contract — a raw-driver callee still resolves the pinned tx conn).
         active = current_context() or ctx
+        # The OPTIONAL ``opts`` control record — how to run the statement plus the two optional control
+        # structs. An OMITTED port is the ONE legitimate absence: a plain READ with no dynamic WHERE and
+        # no cap (the ONE statement shape that omits it, so its payload is ``sql`` + ``params`` and
+        # nothing else). Once the port IS there it is read exactly like every field below — its own
+        # ``None`` is the same plain read, anything that is not the control record is an ABI break.
+        opts = _required(ports, "opts", _PAYLOAD, "record|null") if "opts" in ports else None
+        # The NAMED connection (database) this statement runs on — the only control field that is a bare
+        # nullable STRING rather than a struct. ``None`` ⇒ the DEFAULT connection; an ABSENT KEY is LOUD
+        # like every other field of a record that IS present, because a name read as "no name" runs the
+        # statement against a DIFFERENT database than its model declares (#217).
+        db = None if opts is None else _required(opts, "db", _RECORD, "string|null")
         # The DYNAMIC (SKIP) WHERE is assembled FIRST: the final statement shape is only known here,
         # so the placeholder render must follow it (CLAUDE.md §2).
-        effective_sql, effective_params = _effective_statement(ports)
+        # Every FIELD of a record that IS present is required — a missing or mistyped key is an ABI
+        # break, not an absent value.
+        plan = None if opts is None else _required(opts, "whereDynamic", _RECORD, "record|null")
+        effective_sql, effective_params = _effective_statement(ports, plan)
         if dialect == "postgres":
             # The DEFERRED `?::<T>[]` element type (#46) is resolved from the REAL bound key set —
             # the same render-layer step, and the same SSoT, the imperative relation path uses.
@@ -153,41 +239,126 @@ def make_handlers(driver_or_ctx: Union[Driver, ExecutionContext], dialect: str) 
         sql = render_placeholders(effective_sql, dialect)
         params = _bind_params(effective_params, dialect)
         try:
-            if ports.get("write") and not ports.get("returning"):
-                info = seam_run(active, sql, params, WRITE_INTENT)
+            # ``write`` is the statement's RUN MODE: None ⇒ a read; a mapping ⇒ a write carrying its
+            # OWN ``returning`` (ONE field, three values — "returns rows but is not a write" is not a
+            # state the ABI can hold, #206).
+            write = None if opts is None else _required(opts, "write", _RECORD, "record|null")
+            # The seam INTENT the RUN MODE reduces to: a write mode PRESENT ⇒ a WRITE (the writer / tx
+            # connection), absent ⇒ a READ. Derived BEFORE the branch, because the branch selects the
+            # SEAM (``returning`` ⇒ the row seam) while the intent selects the CONNECTION
+            # (:func:`~litedbmodel_runtime.connection_routing.resolve_pool`): a RETURNING write runs on
+            # ``seam_execute`` and still belongs on the WRITER. Reading ``returning`` as the intent sent
+            # ``INSERT … RETURNING`` to the READ REPLICA (#207).
+            #
+            # The NAMED database rides on the SAME intent, because ``resolve_pool`` resolves both
+            # together: it picks the named connection's reader/writer PAIR first, then the write/sticky
+            # split within it. ``None`` ⇒ the default connection, i.e. the intent every single-DB
+            # statement has always carried.
+            intent = StatementIntent(write is not None, db)
+            if write is not None and not _required(write, "returning", "the 'write' mode", "bool"):
+                info = seam_run(active, sql, params, intent)
                 # The affected-write summary row (uniform ``items`` output shape — TS ``writeSummary``).
                 return {"ok": [{"changes": info.changes, "lastInsertRowid": info.last_insert_rowid}]}
-            rows = seam_execute(active, sql, params, READ_INTENT)
+            rows = seam_execute(active, sql, params, intent)
         except SqlFailure as e:
             return {"error": e.message}
         # The RELATION runaway guard, on the RAW child rows — the only point they are visible (past
         # ``group`` the graph is already nested) and the reason the cap rides on this transport at all.
         # The comparison + error assembly are the shared :meth:`LimitExceededError.check` SSoT, so this
-        # path cannot drift from the runtime relation path (relation.py) or from the TS reference. It
+        # path cannot drift from the TS reference. It
         # RAISES rather than returning ``{"error": …}``: a runaway is a litedbmodel policy error with
         # typed fields, not a mapped transport failure (the TS leaf throws the same class).
-        guard = ports.get("guard")
+        guard = None if opts is None else _required(opts, "guard", _RECORD, "record|null")
         if guard is not None:
+            at = "the 'guard' cap"
             LimitExceededError.check(
-                int(guard["limit"]), len(rows), "relation", guard.get("model"), guard["relation"]
+                _required(guard, "limit", at, "int"),
+                len(rows),
+                "relation",
+                _required(guard, "model", at, "string|null"),
+                _required(guard, "relation", at, "string"),
             )
         return {"ok": rows}
 
+    # ``pluck`` / ``group`` read their ports through the SAME fail-closed reader the SQL transport uses
+    # (:func:`_required`) — a FLAT port shape is not a reason to trust it. A raw index turned a MISTYPED
+    # ``single`` into a silently flipped relation CARDINALITY (a ``hasMany`` nesting ONE child), a
+    # mistyped ``into`` into a relation nested under a stringified number, and an absent ``pk`` / ``col``
+    # into a bare ``KeyError`` that names no port at all (#213).
+
     def pluck(ports: Mapping[str, Any], _ctx: Mapping[str, Any]) -> Outcome:
-        col: Sequence[str] = ports["col"]
-        tuples = dedupe_key_tuples(ports["rows"], col)
+        col: Sequence[str] = _required(ports, "col", _PLUCK, "string[]")
+        tuples = dedupe_key_tuples(_required(ports, "rows", _PLUCK, "list"), col)
         # single-key → a flat scalar key array (json_each scalar ``value``); composite → an
-        # array-of-tuples (json_each per-ordinal ``$[i]``) — the SAME shape ``relation.py`` binds.
+        # array-of-tuples (json_each per-ordinal ``$[i]``) — the shape the batched child SELECT binds.
         keys = [t[0] for t in tuples] if len(col) == 1 else [list(t) for t in tuples]
         return {"ok": keys}
 
     def group(ports: Mapping[str, Any], _ctx: Mapping[str, Any]) -> Outcome:
-        into = ports["into"]
-        single = ports["single"]
-        pk: Sequence[str] = ports["pk"]
-        by_key = group_by_key(ports["children"], ports["fk"])
+        into = _required(ports, "into", _GROUP, "string")
+        single = _required(ports, "single", _GROUP, "bool")
+        pk: Sequence[str] = _required(ports, "pk", _GROUP, "string[]")
+        by_key = group_by_key(
+            _required(ports, "children", _GROUP, "list"), _required(ports, "fk", _GROUP, "string[]")
+        )
         # {...par, [into]: nested}: shallow-copy each parent (the input is not mutated — TS spread).
-        out = [{**par, into: attach_to_parent(par, pk, by_key, single)} for par in ports["parents"]]
+        out = [
+            {**par, into: attach_to_parent(par, pk, by_key, single)}
+            for par in _required(ports, "parents", _GROUP, "list")
+        ]
         return {"ok": out}
 
     return {"executeSQL": execute_sql, "pluck": pluck, "group": group}
+
+
+# ── Render-layer placeholder resolution (spec §8) ──────────────────────────────
+#
+# The final render-layer steps that can only run once a statement's SQL text AND its bound params are
+# final: resolve each deferred PG array-cast token from the array param that fills it, then rewrite
+# ``?`` → the dialect placeholder form. ``execute_sql`` above is the SOLE caller — the dynamic (SKIP)
+# WHERE is assembled first, so this placeholder render must follow it (CLAUDE.md §2).
+
+
+def render_placeholders(sql: str, dialect_name: str) -> str:
+    """Render ``?`` → the dialect placeholder form: PG ``$N`` (quote-aware), MySQL/SQLite keep ``?``.
+
+    Byte-for-byte port of the TS ``renderPlaceholders``: PostgreSQL rewrites each ``?`` to ``$1,
+    $2, …`` left-to-right, skipping any ``?`` inside a single-quoted string literal. MySQL/SQLite
+    leave the text unchanged.
+    """
+    if dialect_name != "postgres":
+        return sql
+    return rewrite_unquoted_placeholders(sql, lambda n: f"${n}")
+
+
+# The DEFERRED PG array-cast token: a placeholder in the STATIC SQL where the ``= ANY(?::<T>[])``
+# element type is unknown at symbolic compile (a schema-less ``whereIn``). Resolved at render from
+# the BOUND array via infer_pg_array_type — the same render-layer step as ``?``→``$N``.
+PG_ARRAY_CAST_TOKEN = "@@PG_ARRAY_CAST@@"
+
+
+def infer_pg_array_type(values: Sequence[Any], sql_cast: Any = None) -> str:
+    """Port of the ORIGINAL ``inferPgArrayType`` (v1 ``LazyRelation``): sql_cast wins, else the
+    element type is inferred from the sample values. ``bool`` is checked before ``int`` because
+    ``bool`` is an ``int`` subclass in Python."""
+    if sql_cast:
+        return f"{sql_cast}[]"
+    if len(values) == 0:
+        return "text[]"
+    sample = values[0]
+    if isinstance(sample, bool):
+        return "boolean[]"
+    if isinstance(sample, int):
+        return "int[]"
+    if isinstance(sample, float):
+        return "numeric[]"
+    return "text[]"
+
+
+def resolve_pg_array_cast(sql: str, values: Sequence[Any]) -> str:
+    """Resolve the FIRST unresolved PG array-cast token to the element type inferred from
+    ``values`` (mirrors TS ``resolvePgArrayCast``). SQL with no token is unchanged."""
+    at = sql.find(PG_ARRAY_CAST_TOKEN)
+    if at < 0:
+        return sql
+    return sql[:at] + infer_pg_array_type(values) + sql[at + len(PG_ARRAY_CAST_TOKEN):]

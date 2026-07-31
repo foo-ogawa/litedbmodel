@@ -30,18 +30,19 @@ final class RelationGuardTest extends TestCase
         $this->executeSQL = Leaves::makeHandlers($pdo, 'sqlite')['executeSQL'];
     }
 
-    /** Run the read with (or without) the optional `guard` port the emitter bakes onto a capped fetch. */
+    /**
+     * Run the read with (or without) the cap the emitter bakes onto a guarded fetch: it is the `guard`
+     * FIELD of the control record, and an UNCAPPED read carries no record at all (the emitter omits
+     * the port entirely on a bounded, uncapped statement).
+     */
     private function read(?\stdClass $guard): array
     {
         $ports = [
             'sql' => 'SELECT id, v FROM t ORDER BY id',
             'params' => [],
-            'write' => false,
-            'returning' => false,
-            'bigint' => false,
         ];
         if ($guard !== null) {
-            $ports['guard'] = $guard;
+            $ports['opts'] = (object) ['db' => null, 'write' => null, 'whereDynamic' => null, 'guard' => $guard];
         }
         return ($this->executeSQL)($ports, ['nodeId' => 'n0', 'component' => 'executeSQL']);
     }

@@ -104,9 +104,11 @@ export interface RelationDecl {
   /**
    * CROSS-DB relations (V0 R1): the NAME of the connection the batch SELECT must execute against —
    * the TARGET model's DB, which may differ from the parent's (v1 `LazyRelation.ts:236` runs a
-   * relation on `TargetClass.getDriverType()`'s driver/connection). Absent ⇒ the parent's own
-   * connection (the same-DB default). The SQL is v1-identical either way; the tag only ROUTES the
-   * statement — a per-language runtime with a connection registry picks the pooled driver by name.
+   * relation on `TargetClass.getDriverType()`'s driver/connection). Derived from the target model by
+   * {@link import('./decorator-adapter').relationDeclOf}. Absent ⇒ the DEFAULT connection (the
+   * same-DB case, which is every single-DB deployment). The SQL is v1-identical either way; the tag
+   * only ROUTES the statement — a per-language runtime with a connection registry picks the pooled
+   * driver by name.
    */
   readonly connection?: string;
 }
@@ -133,10 +135,15 @@ export interface RelationOp {
   /** The target SQL dialect the batch SELECT text is compiled for. */
   readonly dialect: Dialect;
   /**
-   * CROSS-DB relations (V0 R1): the connection NAME the batch executes against (the target model's
-   * DB). Present ONLY when it differs from the parent's connection (a same-DB relation omits it).
-   * A per-language runtime routes the statement to the pooled driver of this name; the SQL text and
-   * `dialect`-driven placeholder/bind are already correct for the target (v1 `LazyRelation` parity).
+   * CROSS-DB relations (V0 R1): the connection NAME the batch executes against (the TARGET model's
+   * DB — v1 `LazyRelation` parity). Present iff the target model declares one; absent ⇒ the DEFAULT
+   * connection. The SQL text and `dialect`-driven placeholder/bind are already correct for the target;
+   * the name only ROUTES the statement, and it reaches the router as the
+   * {@link import('./exec-context').StatementIntent}'s `db` on BOTH read surfaces — the codegen one
+   * through the child fetch's `db` control field ({@link import('./leaf-transport').ExecOptions}) the
+   * emitter bakes, the typed-object/lazy one through {@link runRelationOp}. The registry that resolves
+   * the name is the ctx's ({@link import('./connection-routing').ConnectionRegistry}); an unresolvable
+   * name is LOUD, never a silent same-DB fallback.
    */
   readonly connection?: string;
   /**
@@ -148,11 +155,15 @@ export interface RelationOp {
    */
   readonly sql: string;
   /**
-   * The child (target) table + projected columns (issue #59) — carried for diagnostics + as the
-   * basis of the baked `materializers` map. Additive/optional.
+   * The child (target) table + projected columns (issue #59) — carried for diagnostics, as the basis
+   * of the baked `materializers` map, and as the capped relation's IDENTITY in {@link relationGuard}.
+   * Both are ALWAYS set: {@link compileRelationOp} is the only constructor of a `RelationOp` and it
+   * copies them from the decl's own required fields. They were once typed optional, which is what let
+   * the emitter grow a "no target table ⇒ omit `model`" branch that could not run — and would have
+   * emitted a module `bc generate` rejects if it had (#208).
    */
-  readonly targetTable?: string;
-  readonly select?: readonly string[];
+  readonly targetTable: string;
+  readonly select: readonly string[];
   /**
    * CHAINED relations (nested `with`): the COMPILED grandchild relation ops keyed off THIS relation's
    * child rows (level ≥ 3). Present iff the decl carried {@link RelationDecl.childRelations}. A codegen
@@ -432,14 +443,16 @@ export function targetKeyCols(op: RelationOp): readonly string[] {
  * {@link RelationGuard} record — read by BOTH consumers of the cap: {@link runRelationOp} (the
  * typed-object / lazy batch) and the emitter, which bakes this record into the generated child fetch's
  * `guard` port so the leaf enforces the SAME resolved cap. Nothing downstream re-derives it.
+ *
+ * TOTAL in `model`: a compiled op always carries its {@link RelationOp.targetTable}, so this side of
+ * the cap never produces the "unknown model" case. Only the WIRE side does — the port is `opt(string)`
+ * and {@link import('./leaves').leafHandlers}' reader still has to accept a `null` — which is why the
+ * return type is narrower than {@link RelationGuard} itself: the emitter must be able to spell `model`
+ * with NO branch (a branch that omits the key emits a module `bc generate` rejects, #208).
  */
-export function relationGuard(op: RelationOp): RelationGuard | null {
+export function relationGuard(op: RelationOp): (RelationGuard & { readonly model: string }) | null {
   if (op.hardLimit === undefined) return null;
-  return {
-    limit: op.hardLimit,
-    ...(op.targetTable !== undefined ? { model: op.targetTable } : {}),
-    relation: op.name,
-  };
+  return { limit: op.hardLimit, model: op.targetTable, relation: op.name };
 }
 
 /**
@@ -501,7 +514,15 @@ export function runRelationOp(
   // codegen, `1` through the lazy path. Exactness is not a per-endpoint choice; the DECLARED type
   // decides the consumer-facing shape, and that narrowing is `materializeCell`'s job below.
   const boundParams = bindKeys(op, keys);
-  const rawRows = seamExecuteSafe(ctx, sql, boundParams) as Record<string, unknown>[];
+  // The batch's own DATABASE: the compiled op names it ({@link RelationOp.connection} — the TARGET
+  // model's), and the ctx owns the registry that resolves the name. They meet HERE, on the
+  // {@link import('./exec-context').StatementIntent} — the only input `connectionFor` routes on, and
+  // the SAME channel the `executeSQL` leaf uses on the codegen surface (`leaves.ts` `prepareSql`).
+  // An untagged (same-DB) relation leaves `db` unspelled ⇒ the DEFAULT connection.
+  const rawRows = seamExecuteSafe(ctx, sql, boundParams, {
+    write: false,
+    ...(op.connection !== undefined ? { db: op.connection } : {}),
+  }) as Record<string, unknown>[];
   // Hard-limit runaway guard (Phase E-2, epic #74; v1 `_selectForRelation`): POST-fetch, if the batch
   // TOTAL exceeds the baked cap, throw with the EXACT count (the batch is fetched in full, no N+1).
   // The check itself is the SHARED relation primitive (`assertRelationHardLimit`) over the op's own

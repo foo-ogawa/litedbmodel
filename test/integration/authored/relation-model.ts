@@ -8,9 +8,9 @@ interface UserWithPosts { id: Float; name: string | null; posts: PostRow[] }
 
 export class Rel {
   @behavior static usersWithPosts(): UserWithPosts[] {
-    const users: WireValue[] = Db.executeSQL("SELECT id, name FROM p150_users ORDER BY id ASC", [], false, false, false);
+    const users: WireValue[] = Db.executeSQL("SELECT id, name FROM p150_users ORDER BY id ASC", []);
     const userKeys: WireValue[] = Db.pluck(users, ["id"]);
-    const posts: WireValue[] = Db.executeSQL("SELECT id, title, author_id FROM p150_posts WHERE author_id = ANY(?::@@PG_ARRAY_CAST@@) ORDER BY id ASC", [userKeys], false, false, false);
+    const posts: WireValue[] = Db.executeSQL("SELECT id, title, author_id FROM p150_posts WHERE author_id = ANY(?::@@PG_ARRAY_CAST@@) ORDER BY id ASC", [userKeys]);
     const out: UserWithPosts[] = Db.group(users, posts, ["id"], ["author_id"], "posts", false) as UserWithPosts[];
     return out;
   }

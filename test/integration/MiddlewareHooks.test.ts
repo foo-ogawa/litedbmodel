@@ -21,7 +21,7 @@
  */
 
 import 'reflect-metadata';
-import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import {
   DBModel,
   model,
@@ -29,7 +29,6 @@ import {
   hasMany,
   belongsTo,
   hasOne,
-  createMiddleware,
   createRelationContext,
   closeAllPools,
   type ColumnsOf,
@@ -48,52 +47,52 @@ const HookTracker = DBModel.createMiddleware({
     calls: [] as string[],
   },
 
-  find: async function(model, next, conditions, options) {
+  find: async function(_model, next, conditions, options) {
     this.calls.push('find');
     return next(conditions, options);
   },
 
-  findOne: async function(model, next, conditions, options) {
+  findOne: async function(_model, next, conditions, options) {
     this.calls.push('findOne');
     return next(conditions, options);
   },
 
-  findById: async function(model, next, id, options) {
+  findById: async function(_model, next, id, options) {
     this.calls.push('findById');
     return next(id, options);
   },
 
-  count: async function(model, next, conditions) {
+  count: async function(_model, next, conditions) {
     this.calls.push('count');
     return next(conditions);
   },
 
-  create: async function(model, next, pairs, options) {
+  create: async function(_model, next, pairs, options) {
     this.calls.push('create');
     return next(pairs, options);
   },
 
-  createMany: async function(model, next, pairsArray, options) {
+  createMany: async function(_model, next, pairsArray, options) {
     this.calls.push('createMany');
     return next(pairsArray, options);
   },
 
-  update: async function(model, next, conditions, values, options) {
+  update: async function(_model, next, conditions, values, options) {
     this.calls.push('update');
     return next(conditions, values, options);
   },
 
-  updateMany: async function(model, next, records, options) {
+  updateMany: async function(_model, next, records, options) {
     this.calls.push('updateMany');
     return next(records, options);
   },
 
-  delete: async function(model, next, conditions, options) {
+  delete: async function(_model, next, conditions, options) {
     this.calls.push('delete');
     return next(conditions, options);
   },
 
-  query: async function(model, next, sql, params) {
+  query: async function(_model, next, sql, params) {
     this.calls.push('query');
     return next(sql, params);
   },
@@ -113,7 +112,6 @@ const testDbPath = path.join(os.tmpdir(), 'litedbmodel-middleware-hooks-test.sql
 const testConfig: DBConfig = {
   database: testDbPath,
   driver: 'sqlite',
-  requireTransaction: false,  // Disable for tests
 };
 
 // ============================================

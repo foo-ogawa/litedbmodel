@@ -252,7 +252,7 @@ describe('JSON-form == v1-form RESULT PARITY on real MySQL 8 + SQLite (epic #43/
       // Group by sorted-column-set (mirrors compileInsertMany / DBModel._insert grouping).
       const groups = new Map<string, { cols: string[]; rows: Record<string, unknown>[] }>();
       for (const r of records) {
-        const cols = Object.keys(r).filter((k) => r[k] !== undefined).sort();
+        const cols = Object.keys(r).filter((k) => (r as Record<string, unknown>)[k] !== undefined).sort();
         const key = cols.join(',');
         if (!groups.has(key)) groups.set(key, { cols, rows: [] });
         groups.get(key)!.rows.push(r);

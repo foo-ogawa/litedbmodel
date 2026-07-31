@@ -21,7 +21,7 @@ pub mod wire;
 pub mod livedb;
 
 /// Version mirrored from package.json by scripts/sync-versions.mjs (SSoT).
-pub const VERSION: &str = "2.2.2";
+pub const VERSION: &str = "2.2.3";
 
 // ── public surface (mirrors the Python `__all__`) ──────────────────────────────
 pub use connection_routing::{
@@ -45,10 +45,9 @@ pub use errors::{
 pub use exec_context::{
     execute as seam_execute, for_driver, for_routing, run as seam_run, run_guarded, transaction,
     transaction_decided, transaction_decided_on, transaction_on, with_transaction,
-    with_transaction_decided, with_transaction_decided_isolated,
-    with_transaction_decided_isolated_on, Connection, DriverConnection, Dyn, ExecutionContext,
-    Middleware, MiddlewareChain, SeamResult, SessionConnection, StatementIntent, TxConnection,
-    TxConnectionRef, TxDecision,
+    with_transaction_decided, with_transaction_decided_isolated, Connection, DriverConnection, Dyn,
+    ExecutionContext, Middleware, MiddlewareChain, SeamResult, SessionConnection, StatementIntent,
+    TxConnection, TxConnectionRef, TxDecision,
 };
 // Phase D (#93) — the middleware layer (SQL-level `execute` hook + method-level hooks + Logger +
 // raw execute/query), mirroring the TS `src/scp/middleware.ts` API reference.
@@ -66,9 +65,10 @@ pub use middleware::{
 pub use grouping::{attach_to_parent, dedupe_key_tuples, group_by_key, key_identity};
 // The op-agnostic wire LEAVES (#141/#164) — the THREE transport symbols the native codegen calls
 // directly (`execute_sql`/`pluck_keys`/`group_children`, leaves.ts `LEAF_TRANSPORT_SYMBOLS`), plus
-// the ambient-driver scope the covered runner resolves them against. They consume the grouping CORE.
+// the ambient-CONTEXT scope the covered runner resolves them against (the ctx is what carries the
+// connection routing into the leaf). They consume the grouping CORE.
 pub use leaves::{
-    execute_sql, group_children, pluck_keys, with_ambient_driver, with_ambient_transaction,
+    execute_sql, group_children, pluck_keys, with_ambient_context, with_ambient_transaction,
 };
 // The BC-OWNED shared wire + error-value types (#164/#165 `--shared-types-import`) the leaves BUILD
 // and the generated covered runners de-box (stand-in for post-#165 bc regen — see `wire.rs`).

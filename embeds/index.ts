@@ -1,4 +1,7 @@
 import type { DefineEmbedFn } from 'embedoc';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 // NOTE: this embed is defined inline in index.ts (the embedoc entry file) and
 // declares its own `defineEmbed` helper on purpose:
@@ -112,10 +115,66 @@ const benchmarkSummary = defineEmbed({
   },
 });
 
+// ── code_snippet: embed a live region of a source file into the docs ──────────
+//
+// The formal spec (docs/architecture.md) QUOTES load-bearing signatures (the leaf
+// transport, the Endpoint union). Those must never be hand-copied — they drift the
+// moment the code changes. This embed reads the ACTUAL source and splices the region
+// verbatim, so `npx embedoc build` (the bench-docs-drift CI job) regenerates it and
+// fails on any divergence from the source. It THROWS when the file or the requested
+// region is gone — so renaming/removing an embedded symbol is a loud build failure,
+// a second line of defense alongside scripts/check-spec-refs.mjs.
+//
+// Params (marker attributes):
+//   file        repo-relative source path (required)
+//   grep        emit every line matching this regex (e.g. `@leaf static`)
+//   block_start emit from the first line matching this regex …
+//   block_end   … through the first subsequent line matching this regex (inclusive)
+//   lang        fence language (default: ts)
+const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+
+/** Strip the common leading indentation from a set of lines (readability; drift-neutral). */
+function dedent(lines: string[]): string[] {
+  const indents = lines.filter((l) => l.trim().length > 0).map((l) => l.match(/^\s*/)![0].length);
+  const min = indents.length > 0 ? Math.min(...indents) : 0;
+  return lines.map((l) => l.slice(min));
+}
+
+const codeSnippet = defineEmbed({
+  async render(ctx) {
+    const params = ctx.params as Record<string, string | undefined>;
+    const file = params['file'];
+    if (!file) throw new Error('code_snippet: `file` param is required');
+    const lang = params['lang'] ?? 'ts';
+    const abs = join(REPO_ROOT, file);
+    const allLines = readFileSync(abs, 'utf8').split('\n'); // throws if the file is gone (loud)
+
+    let selected: string[];
+    if (params['grep']) {
+      const re = new RegExp(params['grep']);
+      selected = allLines.filter((l) => re.test(l));
+      if (selected.length === 0) throw new Error(`code_snippet: /${params['grep']}/ matched no line in ${file}`);
+    } else if (params['block_start']) {
+      const startRe = new RegExp(params['block_start']);
+      const endRe = new RegExp(params['block_end'] ?? params['block_start']);
+      const start = allLines.findIndex((l) => startRe.test(l));
+      if (start < 0) throw new Error(`code_snippet: block_start /${params['block_start']}/ not found in ${file}`);
+      const end = allLines.findIndex((l, i) => i >= start && endRe.test(l));
+      if (end < 0) throw new Error(`code_snippet: block_end /${params['block_end']}/ not found after block_start in ${file}`);
+      selected = allLines.slice(start, end + 1);
+    } else {
+      throw new Error('code_snippet: one of `grep` / `block_start` is required');
+    }
+
+    return { content: ['```' + lang, ...dedent(selected), '```'].join('\n') };
+  },
+});
+
 // embedoc expects `embeds` export
 export const embeds = {
   benchmark_table: benchmarkTable,
   benchmark_summary: benchmarkSummary,
+  code_snippet: codeSnippet,
 };
 
 // For direct import compatibility

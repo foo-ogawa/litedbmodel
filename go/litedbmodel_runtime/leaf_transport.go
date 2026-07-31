@@ -6,16 +6,21 @@
 // payload (the node's ports as named fields) and each node's result rides back as a BC-OWNED
 // `wire.WireValue`, so these three transports are the ONLY boundary between
 // the wire plane and the runtime: they convert `wire.WireValue` ↔ bc `Value`/`*Obj` and delegate the
-// relation shaping to the SHARED grouping CORE (grouping.go `DedupeKeyTuples`/`GroupByKey`/
-// `AttachToParent`). There is NO second grouping implementation here — that core is the single source
-// of truth (the runtime lazy path in relation.go consumes the SAME functions); this file only bridges
+// relation shaping to the SHARED grouping CORE (grouping.go `dedupeKeyTuplesG`/`groupByKeyG`/
+// `attachG`). There is NO second grouping implementation here — that core is the single source of
+// truth, and this file is its only consumer; this file only bridges
 // wire ↔ Value at the transport edge and issues SQL through the central [Execute]/[Run] seam. This is
 // the Go twin of the rust `execute_sql`/`pluck_keys`/`group_children` leaf (same op-agnostic wire
 // contract), NOT the py/php native-record method leaf.
 //
 // CONNECTION: the covered module calls these as free functions (bc's transport contract carries no db
-// handle), so the consumer BINDS the target connection once via [BindLeafTransport] before driving the
-// generated runners. This is the leaf transport's single bound connection — not a fallback path.
+// handle), so the consumer BINDS the target [ExecutionContext] once via [BindLeafTransport] before
+// driving the generated runners. This is the leaf transport's single bound context — not a fallback
+// path. It is the CONTEXT that is bound, not a raw db: the ctx is what carries the connection ROUTING
+// (reader/writer split, named DB, writer-sticky), and this is the only path a bc typed-native module
+// reaches a connection by, so a routed consumer configuration has to arrive HERE. Wrapping the db in
+// [ContextForDB] inside the binder instead — which never sets `routing` — left every routed setup
+// inert (#214).
 
 package litedbmodel_runtime
 
@@ -23,8 +28,8 @@ import (
 	"fmt"
 	"github.com/foo-ogawa/litedbmodel/go/litedbmodel_runtime/wire"
 	"math"
-	"regexp"
 	"strconv"
+	"strings"
 
 	bc "github.com/foo-ogawa/behavior-contracts/go"
 )
@@ -35,20 +40,24 @@ import (
 const wireProbeGot uint8 = 0
 
 // leaf transport bound state (set by BindLeafTransport). The bench/consumer drives the generated
-// runners sequentially against ONE bound connection; ExecuteSQL funnels every SQL node through it.
+// runners sequentially against ONE bound context; ExecuteSQL funnels every SQL node through it.
 var (
 	leafExecCtx *ExecutionContext
 	leafDialect = "sqlite"
 )
 
-// BindLeafTransport binds the connection (+ dialect for placeholder rendering) the free-function leaf
-// transport issues SQL against. Call ONCE before driving RunNativeRawStruct_<comp>.
-func BindLeafTransport(db SQLDB, dialect string) {
-	leafExecCtx = ContextForDB(db)
+// BindLeafTransport binds the [ExecutionContext] (+ dialect for placeholder rendering) the
+// free-function leaf transport issues SQL against. Call ONCE before driving
+// RunNativeRawStruct_<comp>. A single-DB consumer passes [ContextForDB]; a routed one passes
+// [ContextForRouting], and its reader/writer split, named-DB registry and writer-sticky clock then
+// resolve per statement inside [ExecutionContext.ConnectionFor] — the leaf issues an INTENT, the ctx
+// picks the connection.
+func BindLeafTransport(ctx *ExecutionContext, dialect string) {
+	leafExecCtx = ctx
 	leafDialect = dialect
 }
 
-// UnbindLeafTransport clears the bound connection (leaves ExecuteSQL fail-closed until re-bound).
+// UnbindLeafTransport clears the bound CONTEXT (leaves ExecuteSQL fail-closed until re-bound).
 func UnbindLeafTransport() { leafExecCtx = nil }
 
 // ── Port unbox — the generic-wire payload → the leaf's declared ports ───────────────────────────────
@@ -78,7 +87,7 @@ func portErr(name, expected string, kind uint8, actual string) error {
 	return fmt.Errorf("leaf transport: port %q expected a wire %s, got %s", name, expected, actual)
 }
 
-// portBool reads a bool port (write / returning / bigint / single).
+// portBool reads a bool port (the control record's write / returning, or group's single).
 func portBool(payload wire.WireRow, name string) (bool, error) {
 	p := payload.ProbeBool(name)
 	if p.Kind != wireProbeGot {
@@ -125,38 +134,65 @@ func portStrings(payload wire.WireRow, name string) ([]string, error) {
 	return out, nil
 }
 
+// optRowField reads a NULLABLE STRUCT field of a struct that IS present. A wire NULL is the declared
+// ABSENCE (no cap / no plan / a read); an ABSENT KEY is an ABI BREAK, and the two must not collapse:
+// bc types a port by the literal wired into it and REJECTS a partial struct, so a generated module
+// ALWAYS spells every field (`null` is how absence is spelled). A key that is not there did not come
+// from one, and reading it as null would silently drop a relation cap, erase a SKIP predicate, or run a
+// write as a read (#205).
+func optRowField(row wire.WireRow, name string) (wire.WireRow, bool, error) {
+	p := row.ProbeRow(name)
+	switch p.Kind {
+	case wireProbeGot:
+		return p.Got, true, nil
+	case wireProbeNull:
+		return wire.WireRow{}, false, nil
+	default:
+		return wire.WireRow{}, false, portErr(name, "row", p.Kind, p.ActualWireType)
+	}
+}
+
 // relationGuard is the unboxed `guard` port: the relation runaway cap the emitter baked onto a guarded
 // relation child fetch, together with the identity the raised error reports (Go twin of the litedbmodel
-// `RelationGuard` record). Model is optional exactly as LimitExceededError.Model is ("" ⇒ "unknown").
+// `RelationGuard` record). On the WIRE `model`'s key is always spelled — bc types a port by the literal
+// wired into it and rejects a partial struct — so "no model" rides as a wire null ("" ⇒ "unknown" in the
+// error), and the key itself is read fail-closed rather than defaulted when absent.
 type relationGuard struct {
 	limit    int
 	model    string
 	relation string
 }
 
-// portRelationGuard reads the OPTIONAL `guard` port. ABSENT (or an explicit null) ⇒ nil ⇒ the statement
-// is uncapped and NO check runs. PRESENT but malformed is a LOUD port error, never a silently dropped
+// portRelationGuard reads the `guard` field of the control record. A wire NULL ⇒ nil ⇒ the statement is
+// uncapped and NO check runs; an ABSENT KEY is LOUD ([optRowField]), because a guard read as "no cap" is
+// the runaway the cap exists to stop. PRESENT but malformed is equally loud, never a silently dropped
 // guard — a guard that fails to unbox is a runaway that would otherwise sail through.
-func portRelationGuard(payload wire.WireRow) (*relationGuard, error) {
-	p := payload.ProbeRow("guard")
-	if p.Kind == wireProbeAbsent || p.Kind == wireProbeNull {
+func portRelationGuard(opts wire.WireRow) (*relationGuard, error) {
+	row, present, err := optRowField(opts, "guard")
+	if err != nil {
+		return nil, err
+	}
+	if !present {
 		return nil, nil
 	}
-	if p.Kind != wireProbeGot {
-		return nil, portErr("guard", "row", p.Kind, p.ActualWireType)
-	}
-	n := p.Got.ProbeInt("limit")
+	n := row.ProbeInt("limit")
 	if n.Kind != wireProbeGot {
 		return nil, portErr("guard.limit", "int", n.Kind, n.ActualWireType)
 	}
 	limit := int(n.Got)
-	rel := p.Got.ProbeString("relation")
+	rel := row.ProbeString("relation")
 	if rel.Kind != wireProbeGot {
 		return nil, portErr("guard.relation", "string", rel.Kind, rel.ActualWireType)
 	}
 	g := &relationGuard{limit: limit, relation: rel.Got}
-	if model := p.Got.ProbeString("model"); model.Kind == wireProbeGot {
+	// `model` is a NULLABLE field, so a wire null is its declared absence ("" ⇒ "unknown" in the error)
+	// — but the KEY must be there, exactly like every other field of a struct the generator wrote.
+	switch model := row.ProbeString("model"); model.Kind {
+	case wireProbeGot:
 		g.model = model.Got
+	case wireProbeNull:
+	default:
+		return nil, portErr("guard.model", "string", model.Kind, model.ActualWireType)
 	}
 	return g, nil
 }
@@ -171,19 +207,36 @@ type dynamicWhereFrag struct {
 	params  []wire.WireValue
 }
 
-// portDynamicWhere reads the OPTIONAL `whereDynamic` plan port — a wire row `{frags: [...]}`. ABSENT (or
-// an explicit null) ⇒ nil ⇒ no dynamic WHERE (the statement passes through unchanged): a bounded read, a
-// write, and an uncapped fetch OMIT it (CLAUDE.md §2). PRESENT but wrong-variant, or a malformed
-// fragment, is a LOUD error.
-func portDynamicWhere(payload wire.WireRow) ([]dynamicWhereFrag, error) {
-	p := payload.ProbeRow("whereDynamic")
-	if p.Kind == wireProbeAbsent || p.Kind == wireProbeNull {
+// dynamicWherePlan is the unboxed `whereDynamic` plan: the fragments plus the three facts that FINISH
+// the statement. `lead` is the connector the first surviving fragment joins the head with ("AND" when
+// the head already ends in a static WHERE, "WHERE" when it does not); `tail` is the text that follows
+// the WHERE region (` ORDER BY …` / the page / the row lock, "" when the statement ends there) and
+// `tailParams` its own bound values. They come from the emitter's SELECT builder, which is what put the
+// WHERE in the statement — so assembly is a CONCATENATION and no scan of the base SQL is involved. Go
+// twin of the TS `DynamicWherePlan`.
+type dynamicWherePlan struct {
+	frags      []dynamicWhereFrag
+	lead       string
+	tail       string
+	tailParams []wire.WireValue
+}
+
+// portDynamicWhere reads the `whereDynamic` field of the control record — a wire row
+// `{frags, lead, tail, tailParams}`. A wire NULL ⇒ nil ⇒ no dynamic WHERE (the statement passes through
+// unchanged): only a read that declares an OPTIONAL predicate carries a plan (CLAUDE.md §2). An ABSENT
+// KEY is LOUD ([optRowField]), because a plan read as "no plan" erases the call's SKIP predicates.
+// PRESENT but wrong-variant, or a malformed fragment, is equally loud — and so is a missing `lead` /
+// `tail` / `tailParams`: defaulting `lead` opens a second WHERE (or continues an absent one), and
+// defaulting the tail DROPS the statement's ORDER BY and page while still returning rows.
+func portDynamicWhere(opts wire.WireRow) (*dynamicWherePlan, error) {
+	row, present, err := optRowField(opts, "whereDynamic")
+	if err != nil {
+		return nil, err
+	}
+	if !present {
 		return nil, nil
 	}
-	if p.Kind != wireProbeGot {
-		return nil, portErr("whereDynamic", "row", p.Kind, p.ActualWireType)
-	}
-	fl := p.Got.ProbeList("frags")
+	fl := row.ProbeList("frags")
 	if fl.Kind != wireProbeGot {
 		return nil, portErr("whereDynamic.frags", "list", fl.Kind, fl.ActualWireType)
 	}
@@ -211,7 +264,108 @@ func portDynamicWhere(payload wire.WireRow) ([]dynamicWhereFrag, error) {
 		}
 		frags[i] = dynamicWhereFrag{skipped: skipped.Got, sql: sql.Got, params: items}
 	}
-	return frags, nil
+	lead := row.ProbeString("lead")
+	if lead.Kind != wireProbeGot {
+		return nil, portErr("whereDynamic.lead", "string", lead.Kind, lead.ActualWireType)
+	}
+	tail := row.ProbeString("tail")
+	if tail.Kind != wireProbeGot {
+		return nil, portErr("whereDynamic.tail", "string", tail.Kind, tail.ActualWireType)
+	}
+	tp := row.ProbeList("tailParams")
+	if tp.Kind != wireProbeGot {
+		return nil, portErr("whereDynamic.tailParams", "list", tp.Kind, tp.ActualWireType)
+	}
+	tailParams, err := wireItems(tp.Got, "whereDynamic.tailParams")
+	if err != nil {
+		return nil, err
+	}
+	return &dynamicWherePlan{frags: frags, lead: lead.Got, tail: tail.Got, tailParams: tailParams}, nil
+}
+
+// execOptions is the UNBOXED control record of one statement (the `opts` port — the TS `ExecOptions`):
+// how to run it plus the two optional control structs. Everything the transport branches on besides the
+// statement itself lives here, so a new fact is a new FIELD and no call site's arguments shift (#193).
+type execOptions struct {
+	// db is the NAMED connection (database) the statement runs on — "" ⇒ the DEFAULT connection. Baked
+	// at emit from the statement's model (the litedbmodel `connectionOf`), or, for a relation child
+	// fetch, from the compiled op's TARGET model. It reaches the router as [StatementIntent.DB].
+	db        string
+	write     *writeMode
+	wherePlan *dynamicWherePlan
+	guard     *relationGuard
+}
+
+// writeMode is the unboxed `write` field: nil ⇒ the statement is a READ, non-nil ⇒ a write carrying its
+// OWN `returning`. ONE field with three values, so "returns rows but is not a write" is not a state
+// this transport can be handed (#206) — there is nothing to reject at run time because it cannot exist.
+type writeMode struct {
+	returning bool
+}
+
+// portWriteMode reads the `write` field of the control record. A wire NULL ⇒ nil ⇒ a READ; an ABSENT KEY
+// is LOUD ([optRowField]), and PRESENT but malformed is equally loud — a write read as a read runs an
+// INSERT on the read seam.
+func portWriteMode(opts wire.WireRow) (*writeMode, error) {
+	row, present, err := optRowField(opts, "write")
+	if err != nil {
+		return nil, err
+	}
+	if !present {
+		return nil, nil
+	}
+	returning, err := portBool(row, "returning")
+	if err != nil {
+		return nil, err
+	}
+	return &writeMode{returning: returning}, nil
+}
+
+// portExecOptions reads the OPTIONAL `opts` control record. ABSENT (or null) ⇒ the ZERO record — a plain
+// READ with no dynamic WHERE and no cap, which is the ONE statement shape that omits the port (its
+// payload is `sql` + `params` and nothing else). PRESENT ⇒ every field is read FAIL-CLOSED: the record
+// is what says whether the statement writes, so a missing field is an ABI break, never a default.
+func portExecOptions(payload wire.WireRow) (execOptions, error) {
+	p := payload.ProbeRow("opts")
+	if p.Kind == wireProbeAbsent || p.Kind == wireProbeNull {
+		return execOptions{}, nil
+	}
+	if p.Kind != wireProbeGot {
+		return execOptions{}, portErr("opts", "row", p.Kind, p.ActualWireType)
+	}
+	db, err := portNamedDB(p.Got)
+	if err != nil {
+		return execOptions{}, err
+	}
+	write, err := portWriteMode(p.Got)
+	if err != nil {
+		return execOptions{}, err
+	}
+	plan, err := portDynamicWhere(p.Got)
+	if err != nil {
+		return execOptions{}, err
+	}
+	guard, err := portRelationGuard(p.Got)
+	if err != nil {
+		return execOptions{}, err
+	}
+	return execOptions{db: db, write: write, wherePlan: plan, guard: guard}, nil
+}
+
+// portNamedDB reads the `db` field of the control record — the NAMED connection the statement runs on.
+// A wire NULL ⇒ "" ⇒ the DEFAULT connection; an ABSENT KEY is LOUD, exactly like every other field of a
+// struct the generator wrote, because a name read as "no name" runs the statement against a DIFFERENT
+// database than its model declares (#217). It is the only control field that is a bare nullable STRING
+// rather than a struct, so it reads off the string probe instead of [optRowField].
+func portNamedDB(opts wire.WireRow) (string, error) {
+	switch db := opts.ProbeString("db"); db.Kind {
+	case wireProbeGot:
+		return db.Got, nil
+	case wireProbeNull:
+		return "", nil
+	default:
+		return "", portErr("db", "string", db.Kind, db.ActualWireType)
+	}
 }
 
 // ── Payload materialization (wire → wire; the go wire type's slices are unexported) ─────────────────
@@ -315,47 +469,35 @@ func wireOfElem(l wire.WireList, i int) (wire.WireValue, error) {
 
 // ── the DYNAMIC (SKIP) WHERE: assembled by the transport, at execution time (leaves.ts) ─────────────
 
-// whereTailRe matches the SQL keywords that may follow a WHERE clause; the dynamic WHERE splices in
-// BEFORE the first of them, so it lands at exactly the position a bounded WHERE occupies. Port of the
-// TS `WHERE_TAIL_RE` (`/\s+(GROUP BY|ORDER BY|LIMIT|OFFSET|FOR UPDATE|RETURNING)\b/i`).
-var whereTailRe = regexp.MustCompile(`(?i)\s+(GROUP BY|ORDER BY|LIMIT|OFFSET|FOR UPDATE|RETURNING)\b`)
-
-// spliceWhere splices a ` WHERE …` clause (leading space included, or "") into baseSql before its first
-// tail keyword. Byte-for-byte port of leaves.ts `spliceWhere`.
-func spliceWhere(baseSql, whereSql string) string {
-	if whereSql == "" {
-		return baseSql
-	}
-	loc := whereTailRe.FindStringIndex(baseSql)
-	if loc == nil {
-		return baseSql + whereSql
-	}
-	return baseSql[:loc[0]] + whereSql + baseSql[loc[0]:]
-}
-
 // assembleDynamicWhere assembles the effective (sql, params) from the dynamic-WHERE plan: DROP the
-// skipped fragments, join the survivors with ` WHERE `(first)/` AND `(rest) + the fragment SQL, splice
-// the clause before the first tail keyword (spliceWhere), and bind the surviving fragments' params
-// BEFORE the base params (the WHERE `?`s precede the tail's). Byte-for-byte port of leaves.ts
-// `assembleDynamicWhere`; a plan with no surviving fragment leaves the statement unchanged.
-func assembleDynamicWhere(baseSql string, baseParams []wire.WireValue, frags []dynamicWhereFrag) (string, []wire.WireValue) {
-	whereSql := ""
-	var whereParams []wire.WireValue
-	for _, f := range frags {
+// skipped fragments, join the survivors with " AND ", and CONCATENATE the three pieces already in hand —
+// the statement's HEAD (which ends at its WHERE region), the assembled clause, and the plan's tail. The
+// params follow the same order: the head's, the survivors', the tail's.
+//
+// Nothing is LOCATED here. The emitter's SELECT builder is what puts the WHERE in the statement, so it
+// hands the boundary over on the plan (`lead` says whether the head already ends in a WHERE, `tail` /
+// `tailParams` are what follows it) instead of leaving five transports to rediscover it by scanning: a
+// scan took a NESTED statement's tail keyword for the outer statement's (#198), counted a QUOTED `?` the
+// placeholder render skips (#202), and produced a byte offset that is not the same number in five
+// languages. Port of leaves.ts `assembleDynamicWhere`; a plan whose fragments are all skipped leaves the
+// emitted statement exactly as it was compiled (head + tail, no clause).
+func assembleDynamicWhere(head string, headParams []wire.WireValue, plan *dynamicWherePlan) (string, []wire.WireValue) {
+	clause := ""
+	params := make([]wire.WireValue, 0, len(headParams)+len(plan.tailParams))
+	params = append(params, headParams...)
+	for _, f := range plan.frags {
 		if f.skipped {
 			continue
 		}
-		if whereSql == "" {
-			whereSql += " WHERE " + f.sql
+		if clause == "" {
+			clause = " " + plan.lead + " "
 		} else {
-			whereSql += " AND " + f.sql
+			clause += " AND "
 		}
-		whereParams = append(whereParams, f.params...)
+		clause += f.sql
+		params = append(params, f.params...)
 	}
-	params := make([]wire.WireValue, 0, len(whereParams)+len(baseParams))
-	params = append(params, whereParams...)
-	params = append(params, baseParams...)
-	return spliceWhere(baseSql, whereSql), params
+	return head + clause + plan.tail, append(params, plan.tailParams...)
 }
 
 // ExecuteSQL runs ONE SQL node and returns its rows as a wire list of wire rows (empty list for a
@@ -363,21 +505,13 @@ func assembleDynamicWhere(baseSql string, baseParams []wire.WireValue, frags []d
 // (assembleDynamicWhere): the final statement shape is only known here, so the placeholder render
 // (finalizeSQL) must follow it (CLAUDE.md §2). Params ride as wire values: a scalar binds directly
 // (toDriverParam); a wire LIST param binds as ONE JSON array string (the `json_each(?)` batch-key
-// contract — SAME rendering as the runtime relation bindKeys). bigint is a render hint the native path
-// does not need here. The OPTIONAL `guard` port is the RELATION runaway cap of a guarded relation child
-// fetch (absent/null ⇒ uncapped): the raw rows are asserted against it HERE (the shared checkHardLimit
-// SSoT) because past [GroupChildren] the graph is already nested. Both control ports are OPTIONAL, so
-// ports ride in the payload as {bigint, guard?, params, returning, sql, whereDynamic?, write}.
+// contract — SAME rendering as the runtime relation bindKeys). `opts.guard` is the RELATION runaway cap
+// of a guarded relation child fetch (absent ⇒ uncapped): the raw rows are asserted against it HERE (the
+// shared checkHardLimit SSoT) because past [GroupChildren] the graph is already nested. The whole
+// control surface is ONE optional record, so ports ride in the payload as {opts?, params, sql} — a
+// bounded read carries `sql` and `params` alone.
 func ExecuteSQL(payload wire.WireRow) (wire.WireValue, error) {
-	bigint, err := portBool(payload, "bigint")
-	if err != nil {
-		return wire.WireNull(), err
-	}
 	params, err := portList(payload, "params")
-	if err != nil {
-		return wire.WireNull(), err
-	}
-	returning, err := portBool(payload, "returning")
 	if err != nil {
 		return wire.WireNull(), err
 	}
@@ -385,27 +519,19 @@ func ExecuteSQL(payload wire.WireRow) (wire.WireValue, error) {
 	if err != nil {
 		return wire.WireNull(), err
 	}
-	write, err := portBool(payload, "write")
+	opts, err := portExecOptions(payload)
 	if err != nil {
 		return wire.WireNull(), err
 	}
-	whereFrags, err := portDynamicWhere(payload)
-	if err != nil {
-		return wire.WireNull(), err
-	}
-	guard, err := portRelationGuard(payload)
-	if err != nil {
-		return wire.WireNull(), err
-	}
-	_ = bigint
 	if leafExecCtx == nil {
-		return wire.WireNull(), fmt.Errorf("leaf transport: no bound connection (call BindLeafTransport before running the native module)")
+		return wire.WireNull(), fmt.Errorf("leaf transport: no bound execution context (call BindLeafTransport before running the native module)")
 	}
 	// Assemble the DYNAMIC (SKIP) WHERE FIRST when a plan is present: the final statement shape is only
-	// known here, so the placeholder render (finalizeSQL, below) must follow it (CLAUDE.md §2). An
-	// ABSENT plan (whereFrags nil) leaves the bounded sql/params untouched (pass-through).
-	if whereFrags != nil {
-		sql, params = assembleDynamicWhere(sql, params, whereFrags)
+	// known here, so the placeholder render (finalizeSQL, below) must follow it (CLAUDE.md §2). With a
+	// plan the `sql` port is the statement's HEAD and the plan carries what finishes it; an ABSENT plan
+	// (wherePlan nil) means `sql`/`params` are the WHOLE statement and pass through untouched.
+	if opts.wherePlan != nil {
+		sql, params = assembleDynamicWhere(sql, params, opts.wherePlan)
 	}
 	args := make([]any, len(params))
 	values := make([]bc.Value, len(params))
@@ -414,8 +540,17 @@ func ExecuteSQL(payload wire.WireRow) (wire.WireValue, error) {
 		args[i] = leafParam(p, leafDialect)
 	}
 	text := finalizeSQL(sql, arrayBinds(values), leafDialect)
-	if write && !returning {
-		info, err := Run(leafExecCtx, text, args, WriteIntent())
+	// The seam INTENT the statement's RUN MODE reduces to: a write mode PRESENT ⇒ a WRITE (the writer /
+	// tx connection), absent ⇒ a READ. Derived ONCE, BEFORE the branch, because the branch selects the
+	// SEAM (`returning` ⇒ the row seam) while the intent selects the CONNECTION: a RETURNING write runs
+	// on [Execute] and still belongs on the WRITER. Reading `returning` as the intent sent
+	// `INSERT … RETURNING` to the READ REPLICA (#207). Same rule in all five languages (TS `prepareSql`).
+	// The NAMED database rides on the SAME intent, because [resolvePool] resolves both together: it picks
+	// the named connection's reader/writer PAIR first, then the write/sticky split within it. "" ⇒ the
+	// default connection, i.e. the intent every single-DB statement has always carried.
+	intent := StatementIntent{Write: opts.write != nil, DB: opts.db}
+	if opts.write != nil && !opts.write.returning {
+		info, err := Run(leafExecCtx, text, args, intent)
 		if err != nil {
 			return wire.WireNull(), err
 		}
@@ -427,16 +562,16 @@ func ExecuteSQL(payload wire.WireRow) (wire.WireValue, error) {
 		})
 		return wire.WireListOf([]wire.WireValue{summary}), nil
 	}
-	rows, err := Execute(leafExecCtx, text, args, ReadIntent())
+	rows, err := Execute(leafExecCtx, text, args, intent)
 	if err != nil {
 		return wire.WireNull(), err
 	}
 	// The RELATION runaway guard, on the RAW child rows — the only point they are visible (past
 	// GroupChildren the graph is already nested) and the reason the cap rides on this transport at all.
 	// The comparison + error assembly are the shared [checkHardLimit] SSoT, so this path cannot drift
-	// from the runtime relation path (relation.go) or from the TS reference.
-	if guard != nil {
-		if err := checkHardLimit(guard.limit, len(rows), LimitContextRelation, guard.model, guard.relation); err != nil {
+	// from the TS reference.
+	if opts.guard != nil {
+		if err := checkHardLimit(opts.guard.limit, len(rows), LimitContextRelation, opts.guard.model, opts.guard.relation); err != nil {
 			return wire.WireNull(), err
 		}
 	}
@@ -447,21 +582,25 @@ func ExecuteSQL(payload wire.WireRow) (wire.WireValue, error) {
 	return wire.WireListOf(items), nil
 }
 
-// WithAmbientTransaction runs `body` inside ONE transaction on `db`, threading the tx-owned connection
-// as the AMBIENT the free-function [ExecuteSQL] resolves — so a bc-generated tx runner (which calls
-// ExecuteSQL directly, taking no db handle) executes every statement ON the transaction. BEGIN →
-// run body under the tx-pinned ambient → COMMIT on ok / ROLLBACK on a body error (atomicity). This is
-// the CONSUMER's tx-boundary responsibility (NOT a bc feature, NOT emitted into the generated runner);
-// it adds NO tx engine — it reuses the existing tx combinator ([WithTransaction], which owns BEGIN/
-// COMMIT/ROLLBACK through the central seam) and only swaps the ambient leaf ctx for the body span.
-// Go twin of the rust `with_ambient_transaction` leaf. Requires a bound transport ([BindLeafTransport]).
-func WithAmbientTransaction(db TxDB, body func() error) error {
+// WithAmbientTransaction runs `body` inside ONE transaction on the BOUND context, threading the
+// tx-owned connection as the AMBIENT the free-function [ExecuteSQL] resolves — so a bc-generated tx
+// runner (which calls ExecuteSQL directly, taking no db handle) executes every statement of the tx's own database (an unnamed one, or one naming that database) ON the
+// transaction. BEGIN → run body under the tx-pinned ambient → COMMIT on ok / ROLLBACK on a body error
+// (atomicity). This is the CONSUMER's tx-boundary responsibility (NOT a bc feature, NOT emitted into
+// the generated runner); it adds NO tx engine — it reuses the existing tx combinator
+// ([WithTransaction], which owns BEGIN/COMMIT/ROLLBACK through the central seam, acquires the tx's
+// owned connection from the ctx's WRITER pool and arms writer-sticky on COMMIT) and only swaps the
+// ambient leaf ctx for the body span. WHICH connection the transaction opens on is therefore the same
+// question the bound ctx already answers for every statement — taking a `db` here instead let a routed
+// covered plane BEGIN outside its own routing (#215). Go twin of the rust `with_ambient_transaction`
+// leaf. Requires a bound transport ([BindLeafTransport]).
+func WithAmbientTransaction(body func() error) error {
 	base := leafExecCtx
 	if base == nil {
 		return fmt.Errorf("leaf transport: WithAmbientTransaction needs a bound transport (call BindLeafTransport first)")
 	}
 	prev := leafExecCtx
-	_, err := WithTransaction(base, db, func(txCtx *ExecutionContext) (struct{}, error) {
+	_, err := WithTransaction(base, func(txCtx *ExecutionContext) (struct{}, error) {
 		leafExecCtx = txCtx                   // the tx-owned ctx is the ambient the covered runner's ExecuteSQL resolves…
 		defer func() { leafExecCtx = prev }() // …restored on COMMIT / ROLLBACK / panic (scopes restore)
 		return struct{}{}, body()
@@ -473,7 +612,7 @@ func WithAmbientTransaction(db TxDB, body func() error) error {
 // `col` — the batch key set the relation child fetch binds (`WHERE fk IN (SELECT value FROM
 // json_each(?))` single-key, or the `$[i]` per-ordinal EXISTS form for a composite tuple). Dedupe runs
 // on the WIRE rows DIRECTLY via the shared grouping CORE ([dedupeKeyTuplesG] over [wireOps]) — the SAME
-// algorithm the runtime relation path consumes ([bcOps]); there is NO wire↔Value round-trip on the hot
+// algorithm, run directly on wire rows ([wireOps]); there is NO wire↔Value round-trip on the hot
 // read path. A single-key `col` emits a FLAT scalar key array (the deduped cell itself); a composite
 // `col` emits an array-of-tuples (each a wire list) — the SAME shape the child SQL's json_each param
 // expects. Go twin of the rust `pluck_keys` leaf. Ports ride in the payload as {col, rows}.
@@ -502,7 +641,7 @@ func PluckKeys(payload wire.WireRow) (wire.WireValue, error) {
 // parent `pk` tuple, nesting the result under `into`: single==true (belongsTo/hasOne) nests the one
 // matching child (or nil); otherwise (hasMany) nests the child list ([] when none). Grouping runs on
 // the WIRE rows DIRECTLY via the shared grouping CORE ([groupByKeyG]/[attachG] over [wireOps]) — the
-// SAME algorithm the runtime relation path uses ([bcOps]); NO wire↔Value round-trip. `pk`/`fk` are the
+// SAME algorithm, run directly on wire rows ([wireOps]); NO wire↔Value round-trip. `pk`/`fk` are the
 // ordered key-column TUPLES, so a composite relation nests by the WHOLE tuple identity (no
 // scalar-collapse cartesian). The parent-key columns are resolved ONCE (all parents share column
 // order). Each parent is shallow-copied before the own-key set (matching the TS `{...par, [into]: …}`
@@ -568,7 +707,7 @@ func withOwnKeyWire(row wire.WireValue, key string, v wire.WireValue) wire.WireV
 // ── The wire.WireValue instantiation of the shared grouping CORE (grouping.go) ──────────────────────
 //
 // The native leaf path groups over `wire.WireValue` rows DIRECTLY (the type the generated module
-// speaks) — the twin of the runtime path's `bcOps`. The SAME generic algorithm ([recordOps]) runs; only
+// speaks) — the ONE instantiation of [recordOps]. The SAME generic algorithm runs; only
 // the row/cell accessors differ, so there is ONE dedupe/group/attach implementation (SSoT).
 
 // wireProbeNull mirrors the BC-OWNED wire package's probe Kind for "present as the producer's null
@@ -783,4 +922,115 @@ func wireElemToValue(l wire.WireList, i int) bc.Value {
 		return out
 	}
 	return nil
+}
+
+// ── Render-layer placeholder resolution (spec §8) ──────────────────────────────
+//
+// The final render-layer steps that can only run once a statement's SQL text AND its bound params
+// are final: resolve each deferred PG array-cast token from the array param that fills it, then
+// rewrite `?` → the dialect placeholder form. The leaf transport ([ExecuteSQL]) is the SOLE caller —
+// the DYNAMIC (SKIP) WHERE is assembled FIRST (assembleDynamicWhere), so this placeholder render must
+// follow it (CLAUDE.md §2: `?`→`$N` after the final SQL is known).
+
+// pgArrayCastToken is the DEFERRED PG array-cast placeholder: emitted in the STATIC SQL where the
+// `= ANY(?::<T>[])` element type is unknown at symbolic compile (a schema-less `whereIn`). Resolved
+// at render from the BOUND array via inferPgArrayType — the same render-layer step as `?`→`$N`.
+const pgArrayCastToken = "@@PG_ARRAY_CAST@@"
+
+// inferPgArrayType ports the ORIGINAL inferPgArrayType (v1 LazyRelation): the element type inferred
+// from the sample values (no sqlCast at this schema-less surface). A bc integer arrives as int64;
+// a non-integer number as float64.
+func inferPgArrayType(values []bc.Value) string {
+	if len(values) == 0 {
+		return "text[]"
+	}
+	switch values[0].(type) {
+	case bool:
+		return "boolean[]"
+	case int64, int:
+		return "int[]"
+	case float64:
+		// A float64 whose every element is an exact integer is still an int key; only a genuine
+		// fractional value is numeric.
+		allInt := true
+		for _, v := range values {
+			if f, ok := v.(float64); !ok || f != float64(int64(f)) {
+				allInt = false
+				break
+			}
+		}
+		if allInt {
+			return "int[]"
+		}
+		return "numeric[]"
+	default:
+		return "text[]"
+	}
+}
+
+// resolvePgArrayCast resolves the FIRST unresolved cast token to the element type inferred from
+// values (mirrors TS resolvePgArrayCast). SQL with no token is unchanged.
+func resolvePgArrayCast(sql string, values []bc.Value) string {
+	at := strings.Index(sql, pgArrayCastToken)
+	if at < 0 {
+		return sql
+	}
+	return sql[:at] + inferPgArrayType(values) + sql[at+len(pgArrayCastToken):]
+}
+
+// arrayBinds picks the ARRAY-valued binds out of a driver param list, in order — the arrays that fill
+// the deferred cast tokens (each postgres __jsonArray param resolves exactly one token).
+func arrayBinds(params []bc.Value) [][]bc.Value {
+	var out [][]bc.Value
+	for _, p := range params {
+		if arr, ok := p.([]bc.Value); ok {
+			out = append(out, arr)
+		}
+	}
+	return out
+}
+
+// renderPlaceholders rewrites `?` → the dialect placeholder form: PG `$N` (quote-aware), MySQL/SQLite
+// keep `?`. Byte-for-byte port of the TS renderPlaceholders: a `?` inside a single-quoted string
+// literal is NOT a placeholder.
+func renderPlaceholders(sql, dialectName string) string {
+	if dialectName != "postgres" {
+		return sql
+	}
+	var out strings.Builder
+	index := 0
+	inString := false
+	for _, ch := range sql {
+		if inString {
+			out.WriteRune(ch)
+			if ch == '\'' {
+				inString = false
+			}
+		} else if ch == '\'' {
+			out.WriteRune(ch)
+			inString = true
+		} else if ch == '?' {
+			index++
+			fmt.Fprintf(&out, "$%d", index)
+		} else {
+			out.WriteRune(ch)
+		}
+	}
+	return out.String()
+}
+
+// finalizeSQL runs the render-layer steps that can only happen once a statement's SQL text AND its
+// bound params are final (spec §8): resolve each deferred PG array-cast token from the array param
+// that fills it, left-to-right, then rewrite `?` → `$N`. `arrays` is the ordered list of ARRAY-valued
+// binds — one per cast token, in the order the tokens appear; pass nil when a statement binds none.
+func finalizeSQL(sql string, arrays [][]bc.Value, dialectName string) string {
+	if dialectName == "postgres" {
+		for _, a := range arrays {
+			if !strings.Contains(sql, pgArrayCastToken) {
+				break
+			}
+			sql = resolvePgArrayCast(sql, a)
+		}
+	}
+	return renderPlaceholders(sql, dialectName)
 }

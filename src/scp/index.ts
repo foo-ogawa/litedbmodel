@@ -81,9 +81,10 @@ export type {
 // its executable bodies, injected into a generated module's `bind`/`bindAsync`.
 export { Db } from './leaf-transport';
 // The two dynamic-WHERE control-port types live WITH the leaf catalog (the `--from` SSoT), not the
-// runtime bodies; `CapGuard` (the `guard` port's bc struct) is emitter-internal and not re-exported.
+// runtime bodies; `ExecOptions` (the `opts` control record) and `CapGuard` (its `guard` struct) are
+// emitter-internal — the emitted module writes the literal, so nothing downstream names the type.
 export type { DynamicWhereFrag, DynamicWherePlan } from './leaf-transport';
-export { executeSQL, executeSQLAsync, pluck, group, leafHandlers, leafHandlersAsync, LEAF_TRANSPORT_SYMBOLS, prepareSql, spliceWhere, assembleDynamicWhere } from './leaves';
+export { executeSQL, executeSQLAsync, pluck, group, leafHandlers, leafHandlersAsync, LEAF_TRANSPORT_SYMBOLS, prepareSql, assembleDynamicWhere } from './leaves';
 export type { LeafContext, AsyncLeafContext } from './leaves';
 
 // ── The decorator → SCP LOWERING (CLAUDE.md §1): declared endpoints + `@column`/`@hasMany` metadata
@@ -144,9 +145,9 @@ export type { LimitConfig } from './limit-config';
 export { sqlTypeToBcScalar, sqlTypeToMaterializeClass, materializeCell, materializeClassOrUndefined, parseSchemaColumnTypes, schemaColumnTypeResolver, materializeResolverFromColumnMap, failClosedMaterializeResolverFromColumnMap, columnTypeResolverFromColumnMap } from './coltype';
 export type { BcScalar, MaterializeClass, ColumnTypeResolver, MaterializeResolver } from './coltype';
 
-// The write bundle surface: a compiled write + its derived, gate-first transaction plan (pure JSON,
-// executed identically by all five language runtimes).
-export type { SqliteDb, ExecuteOptions, SqlBundle } from './write-bundle';
+// The batch write bundle surface: a compiled createMany/updateMany/deleteMany + its derived,
+// gate-free transaction plan (pure JSON, executed identically by all five language runtimes).
+export type { SqlBundle } from './write-bundle';
 
 // ── Phase A (#75): the ExecutionContext + central execute/run seam + per-execution connection
 // ownership. The CONTRACT-DEFINING artifact the native ports (#76-79) follow. All runtime SQL
@@ -179,6 +180,7 @@ export type {
   SyncConnection,
   AsyncConnection,
   AsyncConnectionPool,
+  PinnedTx,
   Middleware,
   MiddlewareStackSource,
   SeamNext,
@@ -276,33 +278,9 @@ export {
 export type { IsolationLevel, TransactionOptions, ResolvedTxOptions } from './tx-options';
 
 
-// Write-time relations (WS5, #25 — spec §6): entityWrites/edgeWrites declaration vocabulary,
-// the gate-first transaction-plan derivation, and the 1-tx real-SQLite runtime.
-export {
-  entityWrites,
-  edgeWrites,
-  lifecycleFor,
-  parseEffectPath,
-  ENTITY_ROOT,
-} from './writes';
-export type {
-  PathRoot,
-  EffectPath,
-  RequiresEffect,
-  UniqueEffect,
-  DeriveEffect,
-  EdgeEffect,
-  EmitEffect,
-  IdempotencyEffect,
-  LifecycleEffects,
-  LifecycleContract,
-  WriteLifecyclePhase,
-  EntityWritesDefinition,
-  EntityWritesShape,
-  WriteRecorder,
-} from './writes';
-
-export { deriveTransactionPlan, executeTransaction, executeTransactionAsync, countingDriver, renderTxStatement, compileWriteNode, mysqlPkHint, stripMysqlPkHint } from './makesql';
+// The write descriptor → makeSQL statement compiler, the batch tx-plan derivation, and the live
+// async 1-tx runtime.
+export { executeTransactionAsync, renderTxStatement, compileWriteNode, mysqlPkHint, stripMysqlPkHint } from './makesql';
 export type {
   TxExpr,
   TxOp,
@@ -310,20 +288,12 @@ export type {
   GateRule,
   TxStatement,
   TransactionPlan,
+  WriteLifecyclePhase,
   IdempotentHitPolicy,
-  BaseWrite,
   TransactionResult,
   ShortCircuitReason,
   WriteExecOptions,
 } from './makesql';
-
-// The Command bundle + 1-tx execution surface (WS5 — the write path of §2.3 / §6).
-export { compileWriteBundle, executeTransactionBundle } from './write-bundle';
-
-// Composite (multi-write) Command surface (WS8a, #28 — spec §6 nested write / §14 tx-DAG derivation):
-// several named base writes with data dependencies → ONE topologically-ordered gate-first tx plan.
-export { compileCompositeWriteBundle } from './write-bundle';
-export type { CompositeWriteEntry } from './write-bundle';
 
 // Batch writes (createMany / updateMany / deleteMany): ONE logical op → N grouped statements lowered
 // to a gate-free tx plan (executed by the SAME multi-statement tx loop in all 5 runtimes). The
@@ -349,6 +319,7 @@ export type {
   RelationOp,
   RelationBatch,
   RelationDriver,
+  RelationTarget,
 } from './relation';
 
 // typed-object result + hydrate factory + lazy relation context (WS4, #24).

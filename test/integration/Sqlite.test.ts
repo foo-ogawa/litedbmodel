@@ -780,7 +780,7 @@ describe('SQLite Driver', () => {
 
     it('should batch load with limit for multiple parents (single key)', async () => {
       // Create users and posts
-      const { user1Id, user2Id } = await DBModel.transaction(async () => {
+      await DBModel.transaction(async () => {
         const u1Result = await UserModel.create([
           [UserModel.name, 'User 1'],
           [UserModel.email, 'batch1@test.com'],

@@ -66,7 +66,7 @@ describe('Query-Based Models', () => {
       const UserStats = UserStatsModel as typeof UserStatsModel & ColumnsOf<UserStatsModel>;
 
       // Access protected method via any for testing
-      const { sql, params } = (UserStats as any)._buildSelectSQL({ post_count: 10 });
+      const { sql } = (UserStats as any)._buildSelectSQL({ post_count: 10 });
       
       // Should use CTE (WITH clause)
       expect(sql).toContain('WITH user_stats AS');

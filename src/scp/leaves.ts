@@ -10,10 +10,11 @@
  *
  *   - {@link executeSQL} — the SOLE SQL transport. Binds params and runs one statement through the
  *     central {@link import('./exec-context') execute/run seam} (the ONLY driver contact). Read
- *     (`write:false`) → rows; write (`write:true`) → a one-row `[{changes,lastInsertRowid}]` summary
- *     (RETURNING writes return their rows via `execute`). It owns the transport-level param shaping a
- *     relation key-set needs — the dialect array encoding + deferred PG cast resolution + `?`→`$N`
- *     render — and, when the statement is a GUARDED relation child fetch, the runaway check on its raw
+ *     (`write:null`) → rows; write (`write:{returning}`) → a one-row `[{changes,lastInsertRowid}]`
+ *     summary (a RETURNING write returns its rows via `execute` instead). It owns the transport-level
+ *     param shaping a relation key-set needs — the dialect array encoding + deferred PG cast
+ *     resolution + `?`→`$N` render — and, when the statement is a GUARDED relation child fetch, the
+ *     runaway check on its raw
  *     rows ({@link import('./limit-config').assertRelationHardLimit}): the RAW child rows exist only
  *     here, since `group` already sees a nested graph and SCP itself has no throw.
  *   - {@link pluck} — rows + the ordered key-column tuple → the deduped, non-null key array (the
@@ -26,6 +27,11 @@
  * the IR (C4): {@link leafHandlers} closes over a sync {@link LeafContext} and {@link
  * leafHandlersAsync} over an {@link AsyncLeafContext}. The same three symbols are what the native
  * codegen calls directly ({@link LEAF_TRANSPORT_SYMBOLS}).
+ *
+ * What the statement DOES carry is the NAME of its database (`opts.db`) — a static property of its
+ * model, not an environment fact: the factory owns the connection REGISTRY, the statement owns which
+ * entry of it it belongs to. The two meet on the {@link StatementIntent} ({@link prepareSql}), which is
+ * the only input `connectionFor` routes on.
  */
 
 import type { Handlers, AsyncHandlers, Value, ExecOutcome } from 'behavior-contracts/runtime';
@@ -40,7 +46,7 @@ import {
   type RunInfo,
 } from './exec-context';
 import { assertRelationHardLimit, type RelationGuard } from './limit-config';
-import type { DynamicWherePlan } from './leaf-transport';
+import type { DynamicWhereFrag, DynamicWherePlan, ExecOptions, WriteMode } from './leaf-transport';
 import { renderPlaceholders, type Dialect } from './makesql/handler';
 import { encodeJsonArrayParam } from './makesql/json-array';
 import { resolvePgArrayCast } from './makesql/compile-relation';
@@ -69,13 +75,28 @@ export interface AsyncLeafContext {
   readonly dialect: Dialect;
 }
 
-/** The evaluated `executeSQL` ports a generated module hands the transport. */
+/**
+ * The UNBOXED `executeSQL` ports the transport body runs on: the statement plus the facts its ONE
+ * optional control record ({@link import('./leaf-transport').ExecOptions}) carries, already read out
+ * ({@link executeSqlPorts}) — the same flattening the rust / go / python / php transports do after
+ * probing the payload. The imperative tx runner ({@link import('./makesql/tx')}) hands this record
+ * directly, since it holds the statement facts already and has no wire payload to decode.
+ */
 interface ExecuteSqlPorts {
   readonly sql: string;
   readonly params: unknown[];
-  readonly write: boolean;
-  readonly returning: boolean;
-  readonly bigint: boolean;
+  /**
+   * The NAMED connection (database) this statement runs on — `null`/absent ⇒ the DEFAULT connection.
+   * Baked at emit from the statement's model ({@link import('./decorator-adapter').connectionOf}) or, for
+   * a relation child fetch, from the compiled op's target ({@link import('./relation').RelationOp.connection}).
+   * It reaches the router as the {@link StatementIntent}'s `db` ({@link prepareSql}).
+   */
+  readonly db?: string | null;
+  /**
+   * How the statement RUNS: `null` ⇒ a READ; a {@link WriteMode} ⇒ a write carrying its OWN
+   * `returning`. ONE field, three values — "returns rows but is not a write" is not representable.
+   */
+  readonly write: WriteMode | null;
   /** The DYNAMIC WHERE plan (absent on a fully-bounded statement — CLAUDE.md §2). See {@link assembleDynamicWhere}. */
   readonly whereDynamic?: DynamicWherePlan | null;
   /**
@@ -88,48 +109,48 @@ interface ExecuteSqlPorts {
 // ── the DYNAMIC (SKIP) WHERE: assembled by the transport, at execution time ────────────────────
 
 /**
- * The SQL keywords that may follow a WHERE clause. The WHERE must be spliced BEFORE the first of
- * them, so a dynamic WHERE lands at exactly the position a bounded one occupies.
- */
-const WHERE_TAIL_RE = /\s+(GROUP BY|ORDER BY|LIMIT|OFFSET|FOR UPDATE|RETURNING)\b/i;
-
-/** Splice a ` WHERE …` clause (leading space included, or `''`) into `baseSql` before its first tail keyword. */
-export function spliceWhere(baseSql: string, whereSql: string): string {
-  if (whereSql === '') return baseSql;
-  const tail = WHERE_TAIL_RE.exec(baseSql);
-  return tail === null ? baseSql + whereSql : baseSql.slice(0, tail.index) + whereSql + baseSql.slice(tail.index);
-}
-
-/**
  * Assemble the effective statement from a DYNAMIC WHERE plan: drop the SKIPPED fragments (`skipped`
- * true — the per-call SKIP decision the emitter carried as DATA), join the survivors with ` WHERE ` /
- * ` AND `, splice the clause into the base `sql` before its first tail keyword ({@link spliceWhere}) —
- * the exact position a bounded WHERE occupies — and bind the surviving fragments' params BEFORE the
- * base params (the WHERE `?`s precede the tail's).
+ * true — the per-call SKIP decision the emitter carried as DATA), join the survivors with ` AND `, and
+ * CONCATENATE the three pieces the plan and the ports already hold — the statement's HEAD (`sql`, which
+ * ends at its WHERE region), the assembled clause, and the plan's `tail`. The params follow the same
+ * three-way order: the head's, the survivors', the tail's.
+ *
+ * There is nothing to LOCATE here. The emitter's SELECT builder is what puts the WHERE in the statement,
+ * so it hands the boundary over ({@link import('./makesql/compile-select').SelectBundle}) instead of
+ * leaving the transport to rediscover it: `plan.lead` says whether the head already ends in a WHERE (so
+ * the clause CONTINUES it) or not (so it OPENS one), and `plan.tailParams` are the tail's own bound
+ * values. That is what removed a lexical scan the five transports each carried a copy of — one that
+ * took a NESTED statement's tail keyword for the outer statement's (#198), counted a QUOTED `?` the
+ * placeholder render skips (#202), and derived a byte offset that is not the same number in five
+ * languages.
  *
  * A SKIP predicate's presence is per-CALL, so the FINAL statement can only be determined here, at
  * execution time — which is also why `?`→`$N` is rendered after this ({@link prepareSql}), never at
- * emit time. A statement with NO optional predicate carries no plan at all: its WHERE is spliced into
- * the static `sql` at emit time and it never reaches this function.
+ * emit time. Only the ACTUALLY-optional predicates are in the plan (CLAUDE.md §2): a read with none
+ * carries no plan at all and never reaches this function, and one whose fragments are all skipped
+ * leaves the emitted statement exactly as it was compiled (head + tail, no clause).
  */
 export function assembleDynamicWhere(p: { sql: string; params: unknown[]; whereDynamic: DynamicWherePlan }): { sql: string; params: unknown[] } {
-  const frags = p.whereDynamic.frags.filter((f) => !f.skipped);
-  let whereSql = '';
-  const whereParams: unknown[] = [];
-  frags.forEach((f, i) => {
-    whereSql += (i === 0 ? ' WHERE ' : ' AND ') + f.sql;
-    whereParams.push(...f.params);
-  });
-  return { sql: spliceWhere(p.sql, whereSql), params: [...whereParams, ...p.params] };
+  const plan = dynamicWherePlan(p.whereDynamic);
+  const frags = plan.frags.filter((f) => !f.skipped);
+  const clause = frags.length === 0 ? '' : ` ${plan.lead} ${frags.map((f) => f.sql).join(' AND ')}`;
+  return {
+    sql: p.sql + clause + plan.tail,
+    params: [...p.params, ...frags.flatMap((f) => f.params), ...plan.tailParams],
+  };
 }
 
 /**
  * The effective `{sql, params}` a statement executes: the dynamic plan assembled when one is present,
  * the ports verbatim otherwise. The ONE place the two shapes converge — both transports consume it.
  */
-function effectiveStatement(p: ExecuteSqlPorts): { sql: string; params: unknown[]; write: boolean } {
-  if (p.whereDynamic == null) return p;
-  return { ...assembleDynamicWhere({ sql: p.sql, params: p.params, whereDynamic: p.whereDynamic }), write: p.write };
+function effectiveStatement(p: ExecuteSqlPorts): { sql: string; params: unknown[]; write: boolean; db: string | null } {
+  // The seam's INTENT is the one boolean the statement's `write` mode reduces to (present ⇒ a write),
+  // plus the NAMED database it belongs to (absent ⇒ the default connection).
+  const write = p.write !== null;
+  const db = p.db ?? null;
+  if (p.whereDynamic == null) return { sql: p.sql, params: p.params, write, db };
+  return { ...assembleDynamicWhere({ sql: p.sql, params: p.params, whereDynamic: p.whereDynamic }), write, db };
 }
 
 /** Normalize a driver integer (number|bigint) to bc's `int` value model (BigInt). */
@@ -172,15 +193,26 @@ function isTupleSet(param: readonly unknown[]): boolean {
   return param.length > 0 && Array.isArray(param[0]);
 }
 
-/** Prepare a statement for the seam: resolve deferred PG cast(s), render `?`→`$N`, encode params. */
-export function prepareSql(p: { sql: string; params: unknown[]; write: boolean }, dialect: Dialect): { sql: string; bound: unknown[]; intent: StatementIntent } {
+/**
+ * Prepare a statement for the seam: resolve deferred PG cast(s), render `?`→`$N`, encode params, and
+ * carry the ONE {@link StatementIntent} both seams take. The intent is the statement's RUN MODE
+ * ({@link effectiveStatement} — a write mode present ⇒ a write), NOT the branch: the branch picks the
+ * SEAM (`returning` ⇒ the row seam), the intent picks the CONNECTION
+ * ({@link import('./connection-routing').resolvePool}), so a RETURNING write runs on `execute` and
+ * still routes to the WRITER. The four native transports derive it the same way (#207).
+ */
+export function prepareSql(p: { sql: string; params: unknown[]; write: boolean; db?: string | null }, dialect: Dialect): { sql: string; bound: unknown[]; intent: StatementIntent } {
   let sql = p.sql;
   if (dialect === 'postgres') {
     for (const param of p.params) if (Array.isArray(param)) sql = resolvePgArrayCast(sql, param);
   }
   sql = renderPlaceholders(sql, dialect);
   const bound = encodeParams(p.params, dialect);
-  const intent: StatementIntent = { write: p.write === true };
+  // The NAMED database rides on the SAME intent as the write mode, because it is resolved by the same
+  // function: `resolvePool` picks the named connection's reader/writer PAIR first, then applies the
+  // write/sticky split within it. Absent ⇒ the key is omitted (the default connection), which keeps a
+  // single-DB intent identical to the one this seam has always built.
+  const intent: StatementIntent = { write: p.write, ...(p.db != null ? { db: p.db } : {}) };
   return { sql, bound, intent };
 }
 
@@ -206,12 +238,12 @@ function writeSummary(info: RunInfo): Array<Record<string, unknown>> {
  * int and float as DISTINCT kinds, so a column declared `Int` cannot be satisfied by a JS number on any
  * dialect, and gating exactness per endpoint made SQLite disagree with PostgreSQL and MySQL (whose
  * integer type parsers are unconditional — `configurePgDeboxTypeParsers`, `mysqlDeboxPoolOptions`),
- * which the conformance corpus rejects as dialect-variant. `bigint` is retained as a port because the
- * generated modules declare it, but it no longer selects the seam.
+ * which the conformance corpus rejects as dialect-variant. There is therefore no exactness port at all
+ * (#193 deleted the `bigint` one, which no language read).
  */
 export function executeSQL(p: ExecuteSqlPorts, ctx: LeafContext): Array<Record<string, unknown>> {
   const prepared = prepareSql(effectiveStatement(p), ctx.dialect);
-  if (p.write === true && p.returning !== true) return writeSummary(seamRun(ctx.exec, prepared.sql, prepared.bound, prepared.intent));
+  if (p.write !== null && !p.write.returning) return writeSummary(seamRun(ctx.exec, prepared.sql, prepared.bound, prepared.intent));
   const rows = seamExecuteSafe(ctx.exec, prepared.sql, prepared.bound, prepared.intent) as Array<Record<string, unknown>>;
   assertRelationHardLimit(rows, p.guard);
   return rows;
@@ -220,7 +252,7 @@ export function executeSQL(p: ExecuteSqlPorts, ctx: LeafContext): Array<Record<s
 /** The ASYNC (live PG / MySQL) `executeSQL` body — the twin of {@link executeSQL} over the async seam. */
 export async function executeSQLAsync(p: ExecuteSqlPorts, ctx: AsyncLeafContext): Promise<Array<Record<string, unknown>>> {
   const prepared = prepareSql(effectiveStatement(p), ctx.dialect);
-  if (p.write === true && p.returning !== true) return writeSummary(await seamRunAsync(ctx.execAsync, prepared.sql, prepared.bound, prepared.intent));
+  if (p.write !== null && !p.write.returning) return writeSummary(await seamRunAsync(ctx.execAsync, prepared.sql, prepared.bound, prepared.intent));
   const rows = (await seamExecuteAsync(ctx.execAsync, prepared.sql, prepared.bound, prepared.intent)) as Array<Record<string, unknown>>;
   assertRelationHardLimit(rows, p.guard);
   return rows;
@@ -251,59 +283,212 @@ export function pluck(p: { rows: Array<Record<string, unknown>>; col: string[] }
  */
 export function group(p: { parents: Array<Record<string, unknown>>; children: Array<Record<string, unknown>>; pk: string[]; fk: string[]; into: string; single: boolean }): Array<Record<string, unknown>> {
   const byKey = groupByKey(p.children, p.fk);
-  return p.parents.map((par) => ({ ...par, [p.into]: attachToParent(par, p.pk, byKey, p.single === true) }));
+  return p.parents.map((par) => ({ ...par, [p.into]: attachToParent(par, p.pk, byKey, p.single) }));
 }
 
 // ── handler maps: the boundary injection a generated module's bind()/bindAsync() consumes ──
 
 /**
- * Read the OPTIONAL relation `guard` port. Absent (or null) ⇒ the statement is uncapped. The cap
- * arrives in bc's `int` value model, which on the TS plane is a BigInt, so it is normalized to the
- * `number` {@link RelationGuard} (and {@link import('./errors').LimitExceededError}) declare — the
- * SAME numeric type the rust/go/python/php transports hand their own check. A guard that is present
- * but not a `{limit, relation}` record is a LOUD port failure, never a silently dropped cap: a guard
- * that fails to unbox is a runaway that would otherwise sail through.
+ * The DECLARED type of every leaf PORT and every field of every leaf struct, exactly as the catalog
+ * spells it ({@link import('./leaf-transport')}) — the predicate {@link portTyped} confirms. A `|null`
+ * suffix marks a NULLABLE field, whose `null` is the declared absence (no write mode / plan / cap /
+ * model). `int` is bc's `int` value model, which on this plane is a BigInt and nothing else.
+ * `string[]` is the ordered key-column TUPLE (`col` / `pk` / `fk`): every element must be a column
+ * NAME, the same element check the go `portStrings` / rust `port_strings` probes make.
  */
-function relationGuardPort(port: Value | undefined): RelationGuard | null {
-  if (port === undefined || port === null) return null;
-  const g = port as unknown as { limit?: unknown; model?: unknown; relation?: unknown };
-  const limit = typeof g.limit === 'bigint' ? Number(g.limit) : g.limit;
-  if (typeof limit !== 'number' || !Number.isInteger(limit) || typeof g.relation !== 'string') {
+const PORT_TYPES = {
+  bool: (v: unknown) => typeof v === 'boolean',
+  int: (v: unknown) => typeof v === 'bigint',
+  string: (v: unknown) => typeof v === 'string',
+  list: (v: unknown) => Array.isArray(v),
+  'string[]': (v: unknown) => Array.isArray(v) && v.every((e) => typeof e === 'string'),
+  record: (v: unknown) => typeof v === 'object' && v !== null && !Array.isArray(v),
+};
+
+/**
+ * A field's declared type as a reader spells it — one of {@link PORT_TYPES}, optionally `|null`. It is a
+ * UNION rather than a `string` so a reader that names a type the catalog does not have fails to COMPILE,
+ * which is the nearest this plane gets to go's and rust's typed probes.
+ */
+type Declared = keyof typeof PORT_TYPES | `${keyof typeof PORT_TYPES}|null`;
+
+/**
+ * Confirm ONE unboxed value against its DECLARED type — the ONE wrong-type failure on the TS plane, and
+ * the twin of the go `portErr` wrong-variant half / rust `port_mismatch`. A field of the wrong type is
+ * the same ABI break as a missing one, for the same reason: the generator emits the literal the port's
+ * type says, so nothing else can arrive from a generated module. Coercing it instead ran an INSERT on
+ * the read seam (`returning` not a bool), applied a predicate the call SKIPPED (`skipped` not a bool),
+ * erased one entirely (`sql` not a string), or FLIPPED a relation's cardinality — `single` cast to a
+ * bool turned the one nested child into a LIST, and `into` cast to a string nested it under `"42"`
+ * (#213).
+ */
+function portTyped(value: unknown, what: string, declared: Declared): unknown {
+  const kind = (declared.endsWith('|null') ? declared.slice(0, -'|null'.length) : declared) as keyof typeof PORT_TYPES;
+  if (kind !== declared && value === null) return null;
+  if (!PORT_TYPES[kind](value)) {
+    // bc's `int` value model is a BigInt on this plane, so the rendering has to survive one appearing
+    // where another type was declared — a bare JSON.stringify throws on it and would replace the port
+    // failure with a serializer failure.
+    const got = JSON.stringify(value, (_k, v: unknown) => (typeof v === 'bigint' ? `${v}n` : v));
+    throw new Error(`scp leaf: ${what} must be ${declared}, got ${got}`);
+  }
+  return value;
+}
+
+/**
+ * Read ONE DECLARED field out of a payload / struct that is PRESENT — the ONE fail-closed field read on
+ * the TS plane, for all THREE leaves, and the twin of the go `optRowField` / rust `take_opt_row`
+ * discipline. Presence and the DECLARED type are confirmed at the SAME read, exactly as go's and rust's
+ * typed probes confirm both.
+ *
+ * `null` is a VALUE (the declared absence of a write mode / a plan / a cap / a model); a MISSING KEY is
+ * an ABI BREAK. The two are not the same thing and must not collapse: bc types a port by the literal
+ * wired into it and REJECTS a partial struct (an omitted field is a different type, not a default —
+ * `bc: … the value wired into it has type obj{…}`), so a generated module ALWAYS spells every field of
+ * every struct it wires. A key that is not there did not come from one, and reading it as its default
+ * would silently downgrade a write to a read, drop a relation cap, erase a SKIP predicate (#205), or —
+ * on `group` — nest the children under `"undefined"` so the relation vanishes from the graph (#213).
+ */
+function requiredField(record: Record<string, unknown>, name: string, at: string, declared: Declared): unknown {
+  if (!(name in record)) {
     throw new Error(
-      `scp leaf executeSQL: the 'guard' port must be a {limit:int, model?:string, relation:string} ` +
-        `relation cap, got ${JSON.stringify(port)}`,
+      `scp leaf: ${at} is missing its '${name}' field — a generated module spells every ` +
+        `field of every struct it wires, so an ABSENT key is an ABI break (a null VALUE is how an ` +
+        `absent write mode / plan / cap is spelled)`,
     );
   }
-  return { limit, ...(typeof g.model === 'string' ? { model: g.model } : {}), relation: g.relation };
+  return portTyped(record[name], `${at}'s '${name}'`, declared);
+}
+
+/**
+ * Unbox the WHOLE plan — its FRAGMENTS (every field of every one, skipped included) and the three facts
+ * that finish the statement (`lead` / `tail` / `tailParams`) — fail-closed ({@link requiredField}),
+ * before any of them is used.
+ *
+ * A fragment is a PRESENT struct like every other, and the generator spells it in full, so a missing
+ * field is an ABI break and NOT a default: without `skipped` the statement applies a predicate the call
+ * SKIPPED, without `sql` the predicate is erased entirely, and without `params` a value binds where none
+ * belongs — each of them silently returning DIFFERENT ROWS (#209). The plan's own three fields are read
+ * the same way and for the same reason: a defaulted `lead` opens a SECOND WHERE on a statement that has
+ * one (a syntax error) or continues one that does not (also a syntax error), and a defaulted `tail` /
+ * `tailParams` DROPS the statement's ORDER BY and page — returning a different, unbounded row set that
+ * still looks like a successful read.
+ */
+const PLAN_AT = `the 'whereDynamic' plan`;
+function dynamicWherePlan(port: DynamicWherePlan): { frags: DynamicWhereFrag[]; lead: string; tail: string; tailParams: unknown[] } {
+  const plan = port as unknown as Record<string, unknown>;
+  const at = `a 'whereDynamic' fragment`;
+  const frags = (requiredField(plan, 'frags', PLAN_AT, 'list') as unknown[]).map((frag) => {
+    const f = portTyped(frag, at, 'record') as Record<string, unknown>;
+    return {
+      skipped: requiredField(f, 'skipped', at, 'bool') as boolean,
+      sql: requiredField(f, 'sql', at, 'string') as string,
+      params: requiredField(f, 'params', at, 'list') as DynamicWhereFrag['params'],
+    };
+  });
+  return {
+    frags,
+    lead: requiredField(plan, 'lead', PLAN_AT, 'string') as string,
+    tail: requiredField(plan, 'tail', PLAN_AT, 'string') as string,
+    tailParams: requiredField(plan, 'tailParams', PLAN_AT, 'list') as unknown[],
+  };
+}
+
+/**
+ * Read the relation `guard` field of the control record. `null` ⇒ the statement is uncapped. The cap
+ * arrives in bc's `int` value model, which on the TS plane is a BigInt, so it is normalized to the
+ * `number` {@link RelationGuard} (and {@link import('./errors').LimitExceededError}) declare — the
+ * SAME numeric type the rust/go/python/php transports hand their own check. `model` is the one NULLABLE
+ * field: its key is always spelled and "no model" rides as `null`, which the error reports as "unknown".
+ * A field that is missing or not the declared type is a LOUD port failure, never a silently dropped cap:
+ * a guard that fails to unbox is a runaway that would otherwise sail through.
+ */
+function relationGuardPort(port: unknown): RelationGuard | null {
+  if (port === null) return null;
+  const g = port as Record<string, unknown>;
+  const at = `the 'guard' cap`;
+  const raw = requiredField(g, 'limit', at, 'int') as bigint;
+  const model = requiredField(g, 'model', at, 'string|null') as string | null;
+  return {
+    limit: Number(raw),
+    ...(model === null ? {} : { model }),
+    relation: requiredField(g, 'relation', at, 'string') as string,
+  };
+}
+
+/**
+ * Read one STRUCT field of the control record — a CONCRETE control struct or the `null` that spells its
+ * absence. The name is `keyof ExecOptions` MINUS the fields that are not structs, so the reader is tied
+ * to the leaf declaration at compile time in BOTH directions: renaming a field there breaks HERE rather
+ * than silently reading a key the generator no longer writes, and passing `'db'` — a nullable STRING —
+ * fails to compile rather than being confirmed against the wrong declared type.
+ */
+const OPTS_AT = `the 'opts' control record`;
+type OptsStructField = Exclude<keyof ExecOptions, 'db'>;
+function optsField(opts: Record<string, unknown>, name: OptsStructField): unknown {
+  return requiredField(opts, name, OPTS_AT, 'record|null');
+}
+
+/**
+ * Read the `write` field of the control record — the statement's RUN MODE. `null` ⇒ a READ; a
+ * {@link WriteMode} ⇒ a write, carrying its own `returning`. The nesting is what makes "returns rows
+ * but is not a write" unrepresentable, so this reader has three outcomes, not four.
+ */
+function writeModePort(port: unknown): WriteMode | null {
+  if (port === null) return null;
+  return { returning: requiredField(port as Record<string, unknown>, 'returning', `the 'write' mode`, 'bool') as boolean };
 }
 
 /** Read the declared `executeSQL` ports off the evaluated port record (the generated module's Values). */
 function executeSqlPorts(ports: Record<string, Value>): ExecuteSqlPorts {
+  const at = 'the executeSQL payload';
+  const sql = requiredField(ports, 'sql', at, 'string') as string;
+  const params = requiredField(ports, 'params', at, 'list') as unknown[];
+  // The ONE legitimate absence: no control record at all ⇒ the plain READ a bounded statement declares
+  // by OMITTING the port, so its payload is `sql` + `params` and nothing else. Once the port IS there it
+  // is read exactly like every field below — its own `null` is the same plain read, anything that is not
+  // an {@link ExecOptions} record is an ABI break.
+  const opts = 'opts' in ports ? (requiredField(ports, 'opts', at, 'record|null') as Record<string, unknown> | null) : null;
+  if (opts === null) return { sql, params, write: null };
   return {
-    sql: ports.sql as unknown as string,
-    params: ports.params as unknown as unknown[],
-    write: ports.write === true,
-    returning: ports.returning === true,
-    bigint: ports.bigint === true,
-    whereDynamic: (ports.whereDynamic ?? null) as unknown as DynamicWherePlan | null,
-    guard: relationGuardPort(ports.guard),
+    sql,
+    params,
+    // The NAMED database — the one control field that is a bare `string|null` rather than a struct, so
+    // it is read against its own declared type instead of through `optsField`'s `record|null`.
+    db: requiredField(opts, 'db', OPTS_AT, 'string|null') as string | null,
+    write: writeModePort(optsField(opts, 'write')),
+    whereDynamic: optsField(opts, 'whereDynamic') as DynamicWherePlan | null,
+    guard: relationGuardPort(optsField(opts, 'guard')),
   };
 }
 
 /**
  * The two ENVIRONMENT-FREE relation handlers. `pluck`/`group` are pure in-memory shaping, so the sync
  * and async maps share this ONE definition (never a second copy per environment).
+ *
+ * Their ports are read through the SAME fail-closed reader the SQL transport uses
+ * ({@link requiredField}) — the flat shape is not a reason to trust it. A raw index + cast turned a
+ * MISTYPED `single` into a silently flipped relation CARDINALITY (a `hasOne` nesting a LIST, a `hasMany`
+ * nesting one child), a mistyped `into` into a relation nested under `"42"`, and an absent `pk`/`col`
+ * into a bare `Cannot read properties of undefined` that names no port at all (#213).
  */
+const PLUCK_AT = 'the pluck payload';
+const GROUP_AT = 'the group payload';
 const shapingHandlers: Handlers = {
-  pluck: (ports): ExecOutcome => ({ ok: pluck({ rows: ports.rows as unknown as Array<Record<string, unknown>>, col: ports.col as unknown as string[] }) as unknown as Value }),
+  pluck: (ports): ExecOutcome => ({
+    ok: pluck({
+      rows: requiredField(ports, 'rows', PLUCK_AT, 'list') as Array<Record<string, unknown>>,
+      col: requiredField(ports, 'col', PLUCK_AT, 'string[]') as string[],
+    }) as unknown as Value,
+  }),
   group: (ports): ExecOutcome => ({
     ok: group({
-      parents: ports.parents as unknown as Array<Record<string, unknown>>,
-      children: ports.children as unknown as Array<Record<string, unknown>>,
-      pk: ports.pk as unknown as string[],
-      fk: ports.fk as unknown as string[],
-      into: ports.into as unknown as string,
-      single: ports.single === true,
+      parents: requiredField(ports, 'parents', GROUP_AT, 'list') as Array<Record<string, unknown>>,
+      children: requiredField(ports, 'children', GROUP_AT, 'list') as Array<Record<string, unknown>>,
+      pk: requiredField(ports, 'pk', GROUP_AT, 'string[]') as string[],
+      fk: requiredField(ports, 'fk', GROUP_AT, 'string[]') as string[],
+      into: requiredField(ports, 'into', GROUP_AT, 'string') as string,
+      single: requiredField(ports, 'single', GROUP_AT, 'bool') as boolean,
     }) as unknown as Value,
   }),
 };

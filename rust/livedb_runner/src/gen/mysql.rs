@@ -150,8 +150,30 @@ pub struct FeedRow {
 #[rustfmt::skip]
 #[derive(Clone, Default)]
 #[allow(dead_code)]
+pub struct ExecOptions {
+    pub db: Option<String>, // "db"
+    pub guard: Option<CapGuard>, // "guard"
+    pub whereDynamic: Option<DynamicWherePlan>, // "whereDynamic"
+    pub write: Option<WriteMode>, // "write"
+}
+
+#[rustfmt::skip]
+#[derive(Clone, Default)]
+#[allow(dead_code)]
+pub struct CapGuard {
+    pub limit: i64, // "limit"
+    pub model: Option<String>, // "model"
+    pub relation: String, // "relation"
+}
+
+#[rustfmt::skip]
+#[derive(Clone, Default)]
+#[allow(dead_code)]
 pub struct DynamicWherePlan {
     pub frags: Vec<DynamicWhereFrag>, // "frags"
+    pub lead: String, // "lead"
+    pub tail: String, // "tail"
+    pub tailParams: Vec<WireValue>, // "tailParams"
 }
 
 #[rustfmt::skip]
@@ -161,6 +183,61 @@ pub struct DynamicWhereFrag {
     pub params: Vec<Option<WireValue>>, // "params"
     pub skipped: bool, // "skipped"
     pub sql: String, // "sql"
+}
+
+#[rustfmt::skip]
+#[derive(Clone, Default)]
+#[allow(dead_code)]
+pub struct WriteMode {
+    pub returning: bool, // "returning"
+}
+
+#[rustfmt::skip]
+#[derive(Clone, Default)]
+#[allow(dead_code)]
+pub struct PagedFeedRow {
+    pub author_id: Option<f64>, // "author_id"
+    pub id: Option<f64>, // "id"
+    pub status: Option<String>, // "status"
+    pub title: Option<String>, // "title"
+}
+
+#[rustfmt::skip]
+#[derive(Clone, Default)]
+#[allow(dead_code)]
+pub struct OptionalOnlyFeedRow {
+    pub author_id: Option<f64>, // "author_id"
+    pub id: Option<f64>, // "id"
+    pub status: Option<String>, // "status"
+}
+
+#[rustfmt::skip]
+#[derive(Clone, Default)]
+#[allow(dead_code)]
+pub struct QuotedOrderFeedRow {
+    pub author_id: Option<f64>, // "author_id"
+    pub id: Option<f64>, // "id"
+    pub status: Option<String>, // "status"
+    pub title: Option<String>, // "title"
+}
+
+#[rustfmt::skip]
+#[derive(Clone, Default)]
+#[allow(dead_code)]
+pub struct QuotedWhereOrderFeedRow {
+    pub id: Option<f64>, // "id"
+    pub status: Option<String>, // "status"
+    pub title: Option<String>, // "title"
+}
+
+#[rustfmt::skip]
+#[derive(Clone, Default)]
+#[allow(dead_code)]
+pub struct ViewFeedRow {
+    pub author_id: Option<f64>, // "author_id"
+    pub id: Option<f64>, // "id"
+    pub status: Option<String>, // "status"
+    pub title: Option<String>, // "title"
 }
 
 #[rustfmt::skip]
@@ -212,15 +289,6 @@ pub struct PostsWithAuthorRow_author {
     pub id: Option<f64>, // "id"
     pub name: Option<String>, // "name"
     pub post_count: Option<f64>, // "post_count"
-}
-
-#[rustfmt::skip]
-#[derive(Clone, Default)]
-#[allow(dead_code)]
-pub struct CapGuard {
-    pub limit: i64, // "limit"
-    pub model: Option<String>, // "model"
-    pub relation: String, // "relation"
 }
 
 #[rustfmt::skip]
@@ -353,6 +421,23 @@ pub struct CreateTagsRecord {
 #[rustfmt::skip]
 #[derive(Clone, Default)]
 #[allow(dead_code)]
+pub struct CreateDocRow {
+    pub doc_id: Option<String>, // "doc_id"
+    pub title: Option<String>, // "title"
+}
+
+#[rustfmt::skip]
+#[derive(Clone, Default)]
+#[allow(dead_code)]
+pub struct CreateLineRow {
+    pub line_no: Option<f64>, // "line_no"
+    pub order_id: Option<f64>, // "order_id"
+    pub sku: Option<String>, // "sku"
+}
+
+#[rustfmt::skip]
+#[derive(Clone, Default)]
+#[allow(dead_code)]
 pub struct CreateTagsReturningRow {
     pub id: Option<f64>, // "id"
     pub label: Option<String>, // "label"
@@ -427,7 +512,7 @@ pub fn posts(
     let produced_n0 = std::cell::Cell::new(false);
     let _ = &produced_n0;
     // ── op 'n0' (executeSQL) ──
-    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("bigint"), WireValue::Bool(false)), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::Int(authorId)]; __v } })), (Cow::Borrowed("returning"), WireValue::Bool(false)), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("SELECT id, author_id, title, status, created_at FROM conf_posts WHERE author_id = ? ORDER BY id ASC"))), (Cow::Borrowed("write"), WireValue::Bool(false))] };
+    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::Int(authorId)]; __v } })), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("SELECT id, author_id, title, status, created_at FROM conf_posts WHERE author_id = ? ORDER BY id ASC")))] };
     let wire_n0 = match execute_sql(payload_n0) {
         Ok(r) => r,
         Err(e) => return Err(op_failed("n0", "fail", e)),
@@ -499,7 +584,7 @@ pub fn postsTop(
     let produced_n0 = std::cell::Cell::new(false);
     let _ = &produced_n0;
     // ── op 'n0' (executeSQL) ──
-    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("bigint"), WireValue::Bool(false)), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![]; __v } })), (Cow::Borrowed("returning"), WireValue::Bool(false)), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("SELECT id, author_id, title, status, created_at FROM conf_posts ORDER BY id ASC LIMIT 2"))), (Cow::Borrowed("write"), WireValue::Bool(false))] };
+    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![]; __v } })), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("SELECT id, author_id, title, status, created_at FROM conf_posts ORDER BY id ASC LIMIT 2")))] };
     let wire_n0 = match execute_sql(payload_n0) {
         Ok(r) => r,
         Err(e) => return Err(op_failed("n0", "fail", e)),
@@ -573,7 +658,7 @@ pub fn page(
     let produced_n0 = std::cell::Cell::new(false);
     let _ = &produced_n0;
     // ── op 'n0' (executeSQL) ──
-    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("bigint"), WireValue::Bool(false)), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::Int(limit), WireValue::Int(offset)]; __v } })), (Cow::Borrowed("returning"), WireValue::Bool(false)), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("SELECT id, title FROM conf_posts ORDER BY id ASC LIMIT ? OFFSET ?"))), (Cow::Borrowed("write"), WireValue::Bool(false))] };
+    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::Int(limit), WireValue::Int(offset)]; __v } })), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("SELECT id, title FROM conf_posts ORDER BY id ASC LIMIT ? OFFSET ?")))] };
     let wire_n0 = match execute_sql(payload_n0) {
         Ok(r) => r,
         Err(e) => return Err(op_failed("n0", "fail", e)),
@@ -631,7 +716,7 @@ pub fn postsByIds(
     let produced_n0 = std::cell::Cell::new(false);
     let _ = &produced_n0;
     // ── op 'n0' (executeSQL) ──
-    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("bigint"), WireValue::Bool(false)), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::List(WireList { items: ids.into_iter().map(WireValue::Int).collect() })]; __v } })), (Cow::Borrowed("returning"), WireValue::Bool(false)), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("SELECT id, title FROM conf_posts WHERE id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) ORDER BY id ASC"))), (Cow::Borrowed("write"), WireValue::Bool(false))] };
+    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::List(WireList { items: ids.into_iter().map(WireValue::Int).collect() })]; __v } })), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("SELECT id, title FROM conf_posts WHERE id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) ORDER BY id ASC")))] };
     let wire_n0 = match execute_sql(payload_n0) {
         Ok(r) => r,
         Err(e) => return Err(op_failed("n0", "fail", e)),
@@ -691,7 +776,7 @@ pub fn feed(
     let produced_n0 = std::cell::Cell::new(false);
     let _ = &produced_n0;
     // ── op 'n0' (executeSQL) ──
-    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("bigint"), WireValue::Bool(false)), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![]; __v } })), (Cow::Borrowed("returning"), WireValue::Bool(false)), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("SELECT id, author_id, title, status FROM conf_posts ORDER BY id ASC"))), (Cow::Borrowed("whereDynamic"), match Some(DynamicWherePlan { frags: { let __v: Vec<DynamicWhereFrag> = vec![DynamicWhereFrag { params: { let __v: Vec<Option<WireValue>> = vec![Some(WireValue::Int(authorId))]; __v }, skipped: false, sql: "author_id = ?".to_string() }, DynamicWhereFrag { params: { let __v: Vec<Option<WireValue>> = vec![status.clone().map(|__ov| WireValue::Str(__ov.into()))]; __v }, skipped: status.is_none(), sql: "status = ?".to_string() }, DynamicWhereFrag { params: { let __v: Vec<Option<WireValue>> = vec![since.clone().map(|__ov| WireValue::Str(__ov.into()))]; __v }, skipped: since.is_none(), sql: "created_at >= ?".to_string() }]; __v } }) { Some(ov0) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("frags"), WireValue::List(WireList { items: ov0.frags.into_iter().map(|e1| WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("params"), WireValue::List(WireList { items: e1.params.into_iter().map(|e3| match e3 { Some(ov4) => ov4, _ => WireValue::Null }).collect() })), (Cow::Borrowed("skipped"), WireValue::Bool(e1.skipped)), (Cow::Borrowed("sql"), WireValue::Str(e1.sql.into()))] })).collect() }))] }), _ => WireValue::Null }), (Cow::Borrowed("write"), WireValue::Bool(false))] };
+    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("opts"), match Some(ExecOptions { db: Option::<String>::None, guard: Option::<CapGuard>::None, whereDynamic: Some(DynamicWherePlan { frags: { let __v: Vec<DynamicWhereFrag> = vec![DynamicWhereFrag { params: { let __v: Vec<Option<WireValue>> = vec![status.clone().map(|__ov| WireValue::Str(__ov.into()))]; __v }, skipped: status.is_none(), sql: "status = ?".to_string() }, DynamicWhereFrag { params: { let __v: Vec<Option<WireValue>> = vec![since.clone().map(|__ov| WireValue::Str(__ov.into()))]; __v }, skipped: since.is_none(), sql: "created_at >= ?".to_string() }]; __v }, lead: "AND".to_string(), tail: " ORDER BY id ASC".to_string(), tailParams: { let __v: Vec<WireValue> = vec![]; __v } }), write: Option::<WriteMode>::None }) { Some(ov0) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("db"), match ov0.db { Some(ov1) => WireValue::Str(ov1.into()), _ => WireValue::Null }), (Cow::Borrowed("guard"), match ov0.guard { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("limit"), WireValue::Int(ov1.limit)), (Cow::Borrowed("model"), match ov1.model { Some(ov2) => WireValue::Str(ov2.into()), _ => WireValue::Null }), (Cow::Borrowed("relation"), WireValue::Str(ov1.relation.into()))] }), _ => WireValue::Null }), (Cow::Borrowed("whereDynamic"), match ov0.whereDynamic { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("frags"), WireValue::List(WireList { items: ov1.frags.into_iter().map(|e2| WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("params"), WireValue::List(WireList { items: e2.params.into_iter().map(|e4| match e4 { Some(ov5) => ov5, _ => WireValue::Null }).collect() })), (Cow::Borrowed("skipped"), WireValue::Bool(e2.skipped)), (Cow::Borrowed("sql"), WireValue::Str(e2.sql.into()))] })).collect() })), (Cow::Borrowed("lead"), WireValue::Str(ov1.lead.into())), (Cow::Borrowed("tail"), WireValue::Str(ov1.tail.into())), (Cow::Borrowed("tailParams"), WireValue::List(WireList { items: ov1.tailParams }))] }), _ => WireValue::Null }), (Cow::Borrowed("write"), match ov0.write { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("returning"), WireValue::Bool(ov1.returning))] }), _ => WireValue::Null })] }), _ => WireValue::Null }), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::Int(authorId)]; __v } })), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("SELECT id, author_id, title, status FROM conf_posts WHERE author_id = ?")))] };
     let wire_n0 = match execute_sql(payload_n0) {
         Ok(r) => r,
         Err(e) => return Err(op_failed("n0", "fail", e)),
@@ -720,6 +805,343 @@ pub fn feed(
                         title: match probe_string_at(sub1.take("title")) {
                             Probe::Got(v) => Some(v.into_owned()),
                             Probe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("FeedRow", "title", "opt(string)", actual_wire_type, raw_value)),
+                            Probe::Null { .. } | Probe::Absent => None,
+                        },
+                    },
+                    Probe::Wrong { actual_wire_type, raw_value }
+                    | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n0", "n0", "obj{author_id:opt(float),id:opt(float),status:opt(string),title:opt(string)}", actual_wire_type, raw_value)),
+                    Probe::Absent => return Err(de_missing_field("n0", "n0", "obj{author_id:opt(float),id:opt(float),status:opt(string),title:opt(string)}")),
+                });
+            }
+            acc0
+        },
+        Probe::Wrong { actual_wire_type, raw_value }
+        | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n0", "n0", "arr(obj{author_id:opt(float),id:opt(float),status:opt(string),title:opt(string)})", actual_wire_type, raw_value)),
+        Probe::Absent => return Err(de_missing_field("n0", "n0", "arr(obj{author_id:opt(float),id:opt(float),status:opt(string),title:opt(string)})")),
+    };
+    produced_n0.set(true);
+    let __out = cell_n0.take();
+    Ok(__out)
+}
+
+#[rustfmt::skip]
+// pagedFeed — the STRUCT-RETURNING combined read (bc#77/#87/#94): the fully
+// de-plumbed CONCRETE path. At each covered node's execution point it calls the op-agnostic leaf
+// TRANSPORT symbol DIRECTLY (the node's port fields spread — no per-node handler indirection) and
+// de-boxes the returned wire INLINE (match wire.as_*() { … } fully unrolled — no decode helper) into
+// the node's outType struct cell — no boxed handler result, no generic enum crossing, no dispatch on a dynamic value on the covered plane. Node
+// results are typed struct cells; a relation child reads the parent's REAL struct result via
+// direct field access (child-present decision from the real parent value — relation /
+// connection converge). A real-concurrency stage (bc#87) is static parallel orchestration —
+// scoped worker threads (bounded by the static plan.concurrency) call the transport; preflight +
+// interpret are committed in ascending index order so the value / op multiset / failure
+// precedence byte-match run_behavior. The output is a typed struct/value assembled by struct
+// literal + field access — the consumer keeps it native.
+pub fn pagedFeed(
+    authorId: i64,
+    minId: Option<i64>,
+    status: Option<String>,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<PagedFeedRow>, BehaviorError> {
+    let cell_n0: RefCell<Vec<PagedFeedRow>> = RefCell::new(Default::default());
+    let produced_n0 = std::cell::Cell::new(false);
+    let _ = &produced_n0;
+    // ── op 'n0' (executeSQL) ──
+    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("opts"), match Some(ExecOptions { db: Option::<String>::None, guard: Option::<CapGuard>::None, whereDynamic: Some(DynamicWherePlan { frags: { let __v: Vec<DynamicWhereFrag> = vec![DynamicWhereFrag { params: { let __v: Vec<Option<WireValue>> = vec![minId.map(|__ov| WireValue::Int(__ov))]; __v }, skipped: minId.is_none(), sql: "id >= ?".to_string() }, DynamicWhereFrag { params: { let __v: Vec<Option<WireValue>> = vec![status.clone().map(|__ov| WireValue::Str(__ov.into()))]; __v }, skipped: status.is_none(), sql: "status = ?".to_string() }]; __v }, lead: "AND".to_string(), tail: " ORDER BY id ASC LIMIT ? OFFSET ?".to_string(), tailParams: { let __v: Vec<WireValue> = vec![WireValue::Int(limit), WireValue::Int(offset)]; __v } }), write: Option::<WriteMode>::None }) { Some(ov0) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("db"), match ov0.db { Some(ov1) => WireValue::Str(ov1.into()), _ => WireValue::Null }), (Cow::Borrowed("guard"), match ov0.guard { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("limit"), WireValue::Int(ov1.limit)), (Cow::Borrowed("model"), match ov1.model { Some(ov2) => WireValue::Str(ov2.into()), _ => WireValue::Null }), (Cow::Borrowed("relation"), WireValue::Str(ov1.relation.into()))] }), _ => WireValue::Null }), (Cow::Borrowed("whereDynamic"), match ov0.whereDynamic { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("frags"), WireValue::List(WireList { items: ov1.frags.into_iter().map(|e2| WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("params"), WireValue::List(WireList { items: e2.params.into_iter().map(|e4| match e4 { Some(ov5) => ov5, _ => WireValue::Null }).collect() })), (Cow::Borrowed("skipped"), WireValue::Bool(e2.skipped)), (Cow::Borrowed("sql"), WireValue::Str(e2.sql.into()))] })).collect() })), (Cow::Borrowed("lead"), WireValue::Str(ov1.lead.into())), (Cow::Borrowed("tail"), WireValue::Str(ov1.tail.into())), (Cow::Borrowed("tailParams"), WireValue::List(WireList { items: ov1.tailParams }))] }), _ => WireValue::Null }), (Cow::Borrowed("write"), match ov0.write { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("returning"), WireValue::Bool(ov1.returning))] }), _ => WireValue::Null })] }), _ => WireValue::Null }), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::Int(authorId)]; __v } })), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("SELECT id, author_id, title, status FROM conf_posts WHERE author_id = ?")))] };
+    let wire_n0 = match execute_sql(payload_n0) {
+        Ok(r) => r,
+        Err(e) => return Err(op_failed("n0", "fail", e)),
+    };
+    *cell_n0.borrow_mut() = match probe_list_at(Some(wire_n0)) {
+        Probe::Got(l0) => {
+            let mut acc0 = Vec::with_capacity(l0.items.len());
+            for e0 in l0.items {
+                acc0.push(match probe_row_at(Some(e0)) {
+                    Probe::Got(mut sub1) => PagedFeedRow {
+                        author_id: match probe_float_at(sub1.take("author_id")) {
+                            Probe::Got(v) => Some(v),
+                            Probe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("PagedFeedRow", "author_id", "opt(float)", actual_wire_type, raw_value)),
+                            Probe::Null { .. } | Probe::Absent => None,
+                        },
+                        id: match probe_float_at(sub1.take("id")) {
+                            Probe::Got(v) => Some(v),
+                            Probe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("PagedFeedRow", "id", "opt(float)", actual_wire_type, raw_value)),
+                            Probe::Null { .. } | Probe::Absent => None,
+                        },
+                        status: match probe_string_at(sub1.take("status")) {
+                            Probe::Got(v) => Some(v.into_owned()),
+                            Probe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("PagedFeedRow", "status", "opt(string)", actual_wire_type, raw_value)),
+                            Probe::Null { .. } | Probe::Absent => None,
+                        },
+                        title: match probe_string_at(sub1.take("title")) {
+                            Probe::Got(v) => Some(v.into_owned()),
+                            Probe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("PagedFeedRow", "title", "opt(string)", actual_wire_type, raw_value)),
+                            Probe::Null { .. } | Probe::Absent => None,
+                        },
+                    },
+                    Probe::Wrong { actual_wire_type, raw_value }
+                    | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n0", "n0", "obj{author_id:opt(float),id:opt(float),status:opt(string),title:opt(string)}", actual_wire_type, raw_value)),
+                    Probe::Absent => return Err(de_missing_field("n0", "n0", "obj{author_id:opt(float),id:opt(float),status:opt(string),title:opt(string)}")),
+                });
+            }
+            acc0
+        },
+        Probe::Wrong { actual_wire_type, raw_value }
+        | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n0", "n0", "arr(obj{author_id:opt(float),id:opt(float),status:opt(string),title:opt(string)})", actual_wire_type, raw_value)),
+        Probe::Absent => return Err(de_missing_field("n0", "n0", "arr(obj{author_id:opt(float),id:opt(float),status:opt(string),title:opt(string)})")),
+    };
+    produced_n0.set(true);
+    let __out = cell_n0.take();
+    Ok(__out)
+}
+
+#[rustfmt::skip]
+// optionalOnlyFeed — the STRUCT-RETURNING combined read (bc#77/#87/#94): the fully
+// de-plumbed CONCRETE path. At each covered node's execution point it calls the op-agnostic leaf
+// TRANSPORT symbol DIRECTLY (the node's port fields spread — no per-node handler indirection) and
+// de-boxes the returned wire INLINE (match wire.as_*() { … } fully unrolled — no decode helper) into
+// the node's outType struct cell — no boxed handler result, no generic enum crossing, no dispatch on a dynamic value on the covered plane. Node
+// results are typed struct cells; a relation child reads the parent's REAL struct result via
+// direct field access (child-present decision from the real parent value — relation /
+// connection converge). A real-concurrency stage (bc#87) is static parallel orchestration —
+// scoped worker threads (bounded by the static plan.concurrency) call the transport; preflight +
+// interpret are committed in ascending index order so the value / op multiset / failure
+// precedence byte-match run_behavior. The output is a typed struct/value assembled by struct
+// literal + field access — the consumer keeps it native.
+pub fn optionalOnlyFeed(
+    authorId: Option<i64>,
+    status: Option<String>,
+) -> Result<Vec<OptionalOnlyFeedRow>, BehaviorError> {
+    let cell_n0: RefCell<Vec<OptionalOnlyFeedRow>> = RefCell::new(Default::default());
+    let produced_n0 = std::cell::Cell::new(false);
+    let _ = &produced_n0;
+    // ── op 'n0' (executeSQL) ──
+    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("opts"), match Some(ExecOptions { db: Option::<String>::None, guard: Option::<CapGuard>::None, whereDynamic: Some(DynamicWherePlan { frags: { let __v: Vec<DynamicWhereFrag> = vec![DynamicWhereFrag { params: { let __v: Vec<Option<WireValue>> = vec![authorId.map(|__ov| WireValue::Int(__ov))]; __v }, skipped: authorId.is_none(), sql: "author_id = ?".to_string() }, DynamicWhereFrag { params: { let __v: Vec<Option<WireValue>> = vec![status.clone().map(|__ov| WireValue::Str(__ov.into()))]; __v }, skipped: status.is_none(), sql: "status = ?".to_string() }]; __v }, lead: "WHERE".to_string(), tail: " ORDER BY id ASC".to_string(), tailParams: { let __v: Vec<WireValue> = vec![]; __v } }), write: Option::<WriteMode>::None }) { Some(ov0) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("db"), match ov0.db { Some(ov1) => WireValue::Str(ov1.into()), _ => WireValue::Null }), (Cow::Borrowed("guard"), match ov0.guard { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("limit"), WireValue::Int(ov1.limit)), (Cow::Borrowed("model"), match ov1.model { Some(ov2) => WireValue::Str(ov2.into()), _ => WireValue::Null }), (Cow::Borrowed("relation"), WireValue::Str(ov1.relation.into()))] }), _ => WireValue::Null }), (Cow::Borrowed("whereDynamic"), match ov0.whereDynamic { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("frags"), WireValue::List(WireList { items: ov1.frags.into_iter().map(|e2| WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("params"), WireValue::List(WireList { items: e2.params.into_iter().map(|e4| match e4 { Some(ov5) => ov5, _ => WireValue::Null }).collect() })), (Cow::Borrowed("skipped"), WireValue::Bool(e2.skipped)), (Cow::Borrowed("sql"), WireValue::Str(e2.sql.into()))] })).collect() })), (Cow::Borrowed("lead"), WireValue::Str(ov1.lead.into())), (Cow::Borrowed("tail"), WireValue::Str(ov1.tail.into())), (Cow::Borrowed("tailParams"), WireValue::List(WireList { items: ov1.tailParams }))] }), _ => WireValue::Null }), (Cow::Borrowed("write"), match ov0.write { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("returning"), WireValue::Bool(ov1.returning))] }), _ => WireValue::Null })] }), _ => WireValue::Null }), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![]; __v } })), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("SELECT id, author_id, status FROM conf_posts")))] };
+    let wire_n0 = match execute_sql(payload_n0) {
+        Ok(r) => r,
+        Err(e) => return Err(op_failed("n0", "fail", e)),
+    };
+    *cell_n0.borrow_mut() = match probe_list_at(Some(wire_n0)) {
+        Probe::Got(l0) => {
+            let mut acc0 = Vec::with_capacity(l0.items.len());
+            for e0 in l0.items {
+                acc0.push(match probe_row_at(Some(e0)) {
+                    Probe::Got(mut sub1) => OptionalOnlyFeedRow {
+                        author_id: match probe_float_at(sub1.take("author_id")) {
+                            Probe::Got(v) => Some(v),
+                            Probe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("OptionalOnlyFeedRow", "author_id", "opt(float)", actual_wire_type, raw_value)),
+                            Probe::Null { .. } | Probe::Absent => None,
+                        },
+                        id: match probe_float_at(sub1.take("id")) {
+                            Probe::Got(v) => Some(v),
+                            Probe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("OptionalOnlyFeedRow", "id", "opt(float)", actual_wire_type, raw_value)),
+                            Probe::Null { .. } | Probe::Absent => None,
+                        },
+                        status: match probe_string_at(sub1.take("status")) {
+                            Probe::Got(v) => Some(v.into_owned()),
+                            Probe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("OptionalOnlyFeedRow", "status", "opt(string)", actual_wire_type, raw_value)),
+                            Probe::Null { .. } | Probe::Absent => None,
+                        },
+                    },
+                    Probe::Wrong { actual_wire_type, raw_value }
+                    | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n0", "n0", "obj{author_id:opt(float),id:opt(float),status:opt(string)}", actual_wire_type, raw_value)),
+                    Probe::Absent => return Err(de_missing_field("n0", "n0", "obj{author_id:opt(float),id:opt(float),status:opt(string)}")),
+                });
+            }
+            acc0
+        },
+        Probe::Wrong { actual_wire_type, raw_value }
+        | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n0", "n0", "arr(obj{author_id:opt(float),id:opt(float),status:opt(string)})", actual_wire_type, raw_value)),
+        Probe::Absent => return Err(de_missing_field("n0", "n0", "arr(obj{author_id:opt(float),id:opt(float),status:opt(string)})")),
+    };
+    produced_n0.set(true);
+    let __out = cell_n0.take();
+    Ok(__out)
+}
+
+#[rustfmt::skip]
+// quotedOrderFeed — the STRUCT-RETURNING combined read (bc#77/#87/#94): the fully
+// de-plumbed CONCRETE path. At each covered node's execution point it calls the op-agnostic leaf
+// TRANSPORT symbol DIRECTLY (the node's port fields spread — no per-node handler indirection) and
+// de-boxes the returned wire INLINE (match wire.as_*() { … } fully unrolled — no decode helper) into
+// the node's outType struct cell — no boxed handler result, no generic enum crossing, no dispatch on a dynamic value on the covered plane. Node
+// results are typed struct cells; a relation child reads the parent's REAL struct result via
+// direct field access (child-present decision from the real parent value — relation /
+// connection converge). A real-concurrency stage (bc#87) is static parallel orchestration —
+// scoped worker threads (bounded by the static plan.concurrency) call the transport; preflight +
+// interpret are committed in ascending index order so the value / op multiset / failure
+// precedence byte-match run_behavior. The output is a typed struct/value assembled by struct
+// literal + field access — the consumer keeps it native.
+pub fn quotedOrderFeed(
+    authorId: i64,
+    minId: Option<i64>,
+    limit: i64,
+) -> Result<Vec<QuotedOrderFeedRow>, BehaviorError> {
+    let cell_n0: RefCell<Vec<QuotedOrderFeedRow>> = RefCell::new(Default::default());
+    let produced_n0 = std::cell::Cell::new(false);
+    let _ = &produced_n0;
+    // ── op 'n0' (executeSQL) ──
+    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("opts"), match Some(ExecOptions { db: Option::<String>::None, guard: Option::<CapGuard>::None, whereDynamic: Some(DynamicWherePlan { frags: { let __v: Vec<DynamicWhereFrag> = vec![DynamicWhereFrag { params: { let __v: Vec<Option<WireValue>> = vec![minId.map(|__ov| WireValue::Int(__ov))]; __v }, skipped: minId.is_none(), sql: "id >= ?".to_string() }]; __v }, lead: "AND".to_string(), tail: " ORDER BY CASE WHEN status = '?' THEN 0 ELSE 1 END, id ASC LIMIT ?".to_string(), tailParams: { let __v: Vec<WireValue> = vec![WireValue::Int(limit)]; __v } }), write: Option::<WriteMode>::None }) { Some(ov0) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("db"), match ov0.db { Some(ov1) => WireValue::Str(ov1.into()), _ => WireValue::Null }), (Cow::Borrowed("guard"), match ov0.guard { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("limit"), WireValue::Int(ov1.limit)), (Cow::Borrowed("model"), match ov1.model { Some(ov2) => WireValue::Str(ov2.into()), _ => WireValue::Null }), (Cow::Borrowed("relation"), WireValue::Str(ov1.relation.into()))] }), _ => WireValue::Null }), (Cow::Borrowed("whereDynamic"), match ov0.whereDynamic { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("frags"), WireValue::List(WireList { items: ov1.frags.into_iter().map(|e2| WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("params"), WireValue::List(WireList { items: e2.params.into_iter().map(|e4| match e4 { Some(ov5) => ov5, _ => WireValue::Null }).collect() })), (Cow::Borrowed("skipped"), WireValue::Bool(e2.skipped)), (Cow::Borrowed("sql"), WireValue::Str(e2.sql.into()))] })).collect() })), (Cow::Borrowed("lead"), WireValue::Str(ov1.lead.into())), (Cow::Borrowed("tail"), WireValue::Str(ov1.tail.into())), (Cow::Borrowed("tailParams"), WireValue::List(WireList { items: ov1.tailParams }))] }), _ => WireValue::Null }), (Cow::Borrowed("write"), match ov0.write { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("returning"), WireValue::Bool(ov1.returning))] }), _ => WireValue::Null })] }), _ => WireValue::Null }), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::Int(authorId)]; __v } })), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("SELECT id, author_id, status, title FROM conf_posts WHERE author_id = ?")))] };
+    let wire_n0 = match execute_sql(payload_n0) {
+        Ok(r) => r,
+        Err(e) => return Err(op_failed("n0", "fail", e)),
+    };
+    *cell_n0.borrow_mut() = match probe_list_at(Some(wire_n0)) {
+        Probe::Got(l0) => {
+            let mut acc0 = Vec::with_capacity(l0.items.len());
+            for e0 in l0.items {
+                acc0.push(match probe_row_at(Some(e0)) {
+                    Probe::Got(mut sub1) => QuotedOrderFeedRow {
+                        author_id: match probe_float_at(sub1.take("author_id")) {
+                            Probe::Got(v) => Some(v),
+                            Probe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("QuotedOrderFeedRow", "author_id", "opt(float)", actual_wire_type, raw_value)),
+                            Probe::Null { .. } | Probe::Absent => None,
+                        },
+                        id: match probe_float_at(sub1.take("id")) {
+                            Probe::Got(v) => Some(v),
+                            Probe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("QuotedOrderFeedRow", "id", "opt(float)", actual_wire_type, raw_value)),
+                            Probe::Null { .. } | Probe::Absent => None,
+                        },
+                        status: match probe_string_at(sub1.take("status")) {
+                            Probe::Got(v) => Some(v.into_owned()),
+                            Probe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("QuotedOrderFeedRow", "status", "opt(string)", actual_wire_type, raw_value)),
+                            Probe::Null { .. } | Probe::Absent => None,
+                        },
+                        title: match probe_string_at(sub1.take("title")) {
+                            Probe::Got(v) => Some(v.into_owned()),
+                            Probe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("QuotedOrderFeedRow", "title", "opt(string)", actual_wire_type, raw_value)),
+                            Probe::Null { .. } | Probe::Absent => None,
+                        },
+                    },
+                    Probe::Wrong { actual_wire_type, raw_value }
+                    | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n0", "n0", "obj{author_id:opt(float),id:opt(float),status:opt(string),title:opt(string)}", actual_wire_type, raw_value)),
+                    Probe::Absent => return Err(de_missing_field("n0", "n0", "obj{author_id:opt(float),id:opt(float),status:opt(string),title:opt(string)}")),
+                });
+            }
+            acc0
+        },
+        Probe::Wrong { actual_wire_type, raw_value }
+        | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n0", "n0", "arr(obj{author_id:opt(float),id:opt(float),status:opt(string),title:opt(string)})", actual_wire_type, raw_value)),
+        Probe::Absent => return Err(de_missing_field("n0", "n0", "arr(obj{author_id:opt(float),id:opt(float),status:opt(string),title:opt(string)})")),
+    };
+    produced_n0.set(true);
+    let __out = cell_n0.take();
+    Ok(__out)
+}
+
+#[rustfmt::skip]
+// quotedWhereOrderFeed — the STRUCT-RETURNING combined read (bc#77/#87/#94): the fully
+// de-plumbed CONCRETE path. At each covered node's execution point it calls the op-agnostic leaf
+// TRANSPORT symbol DIRECTLY (the node's port fields spread — no per-node handler indirection) and
+// de-boxes the returned wire INLINE (match wire.as_*() { … } fully unrolled — no decode helper) into
+// the node's outType struct cell — no boxed handler result, no generic enum crossing, no dispatch on a dynamic value on the covered plane. Node
+// results are typed struct cells; a relation child reads the parent's REAL struct result via
+// direct field access (child-present decision from the real parent value — relation /
+// connection converge). A real-concurrency stage (bc#87) is static parallel orchestration —
+// scoped worker threads (bounded by the static plan.concurrency) call the transport; preflight +
+// interpret are committed in ascending index order so the value / op multiset / failure
+// precedence byte-match run_behavior. The output is a typed struct/value assembled by struct
+// literal + field access — the consumer keeps it native.
+pub fn quotedWhereOrderFeed(
+    status: Option<String>,
+) -> Result<Vec<QuotedWhereOrderFeedRow>, BehaviorError> {
+    let cell_n0: RefCell<Vec<QuotedWhereOrderFeedRow>> = RefCell::new(Default::default());
+    let produced_n0 = std::cell::Cell::new(false);
+    let _ = &produced_n0;
+    // ── op 'n0' (executeSQL) ──
+    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("opts"), match Some(ExecOptions { db: Option::<String>::None, guard: Option::<CapGuard>::None, whereDynamic: Some(DynamicWherePlan { frags: { let __v: Vec<DynamicWhereFrag> = vec![DynamicWhereFrag { params: { let __v: Vec<Option<WireValue>> = vec![status.clone().map(|__ov| WireValue::Str(__ov.into()))]; __v }, skipped: status.is_none(), sql: "status = ?".to_string() }]; __v }, lead: "WHERE".to_string(), tail: " ORDER BY CASE WHEN title = ' WHERE ' THEN 0 ELSE 1 END, id ASC".to_string(), tailParams: { let __v: Vec<WireValue> = vec![]; __v } }), write: Option::<WriteMode>::None }) { Some(ov0) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("db"), match ov0.db { Some(ov1) => WireValue::Str(ov1.into()), _ => WireValue::Null }), (Cow::Borrowed("guard"), match ov0.guard { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("limit"), WireValue::Int(ov1.limit)), (Cow::Borrowed("model"), match ov1.model { Some(ov2) => WireValue::Str(ov2.into()), _ => WireValue::Null }), (Cow::Borrowed("relation"), WireValue::Str(ov1.relation.into()))] }), _ => WireValue::Null }), (Cow::Borrowed("whereDynamic"), match ov0.whereDynamic { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("frags"), WireValue::List(WireList { items: ov1.frags.into_iter().map(|e2| WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("params"), WireValue::List(WireList { items: e2.params.into_iter().map(|e4| match e4 { Some(ov5) => ov5, _ => WireValue::Null }).collect() })), (Cow::Borrowed("skipped"), WireValue::Bool(e2.skipped)), (Cow::Borrowed("sql"), WireValue::Str(e2.sql.into()))] })).collect() })), (Cow::Borrowed("lead"), WireValue::Str(ov1.lead.into())), (Cow::Borrowed("tail"), WireValue::Str(ov1.tail.into())), (Cow::Borrowed("tailParams"), WireValue::List(WireList { items: ov1.tailParams }))] }), _ => WireValue::Null }), (Cow::Borrowed("write"), match ov0.write { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("returning"), WireValue::Bool(ov1.returning))] }), _ => WireValue::Null })] }), _ => WireValue::Null }), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![]; __v } })), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("SELECT id, status, title FROM conf_posts")))] };
+    let wire_n0 = match execute_sql(payload_n0) {
+        Ok(r) => r,
+        Err(e) => return Err(op_failed("n0", "fail", e)),
+    };
+    *cell_n0.borrow_mut() = match probe_list_at(Some(wire_n0)) {
+        Probe::Got(l0) => {
+            let mut acc0 = Vec::with_capacity(l0.items.len());
+            for e0 in l0.items {
+                acc0.push(match probe_row_at(Some(e0)) {
+                    Probe::Got(mut sub1) => QuotedWhereOrderFeedRow {
+                        id: match probe_float_at(sub1.take("id")) {
+                            Probe::Got(v) => Some(v),
+                            Probe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("QuotedWhereOrderFeedRow", "id", "opt(float)", actual_wire_type, raw_value)),
+                            Probe::Null { .. } | Probe::Absent => None,
+                        },
+                        status: match probe_string_at(sub1.take("status")) {
+                            Probe::Got(v) => Some(v.into_owned()),
+                            Probe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("QuotedWhereOrderFeedRow", "status", "opt(string)", actual_wire_type, raw_value)),
+                            Probe::Null { .. } | Probe::Absent => None,
+                        },
+                        title: match probe_string_at(sub1.take("title")) {
+                            Probe::Got(v) => Some(v.into_owned()),
+                            Probe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("QuotedWhereOrderFeedRow", "title", "opt(string)", actual_wire_type, raw_value)),
+                            Probe::Null { .. } | Probe::Absent => None,
+                        },
+                    },
+                    Probe::Wrong { actual_wire_type, raw_value }
+                    | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n0", "n0", "obj{id:opt(float),status:opt(string),title:opt(string)}", actual_wire_type, raw_value)),
+                    Probe::Absent => return Err(de_missing_field("n0", "n0", "obj{id:opt(float),status:opt(string),title:opt(string)}")),
+                });
+            }
+            acc0
+        },
+        Probe::Wrong { actual_wire_type, raw_value }
+        | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n0", "n0", "arr(obj{id:opt(float),status:opt(string),title:opt(string)})", actual_wire_type, raw_value)),
+        Probe::Absent => return Err(de_missing_field("n0", "n0", "arr(obj{id:opt(float),status:opt(string),title:opt(string)})")),
+    };
+    produced_n0.set(true);
+    let __out = cell_n0.take();
+    Ok(__out)
+}
+
+#[rustfmt::skip]
+// viewFeed — the STRUCT-RETURNING combined read (bc#77/#87/#94): the fully
+// de-plumbed CONCRETE path. At each covered node's execution point it calls the op-agnostic leaf
+// TRANSPORT symbol DIRECTLY (the node's port fields spread — no per-node handler indirection) and
+// de-boxes the returned wire INLINE (match wire.as_*() { … } fully unrolled — no decode helper) into
+// the node's outType struct cell — no boxed handler result, no generic enum crossing, no dispatch on a dynamic value on the covered plane. Node
+// results are typed struct cells; a relation child reads the parent's REAL struct result via
+// direct field access (child-present decision from the real parent value — relation /
+// connection converge). A real-concurrency stage (bc#87) is static parallel orchestration —
+// scoped worker threads (bounded by the static plan.concurrency) call the transport; preflight +
+// interpret are committed in ascending index order so the value / op multiset / failure
+// precedence byte-match run_behavior. The output is a typed struct/value assembled by struct
+// literal + field access — the consumer keeps it native.
+pub fn viewFeed(
+    status: Option<String>,
+) -> Result<Vec<ViewFeedRow>, BehaviorError> {
+    let cell_n0: RefCell<Vec<ViewFeedRow>> = RefCell::new(Default::default());
+    let produced_n0 = std::cell::Cell::new(false);
+    let _ = &produced_n0;
+    // ── op 'n0' (executeSQL) ──
+    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("opts"), match Some(ExecOptions { db: Option::<String>::None, guard: Option::<CapGuard>::None, whereDynamic: Some(DynamicWherePlan { frags: { let __v: Vec<DynamicWhereFrag> = vec![DynamicWhereFrag { params: { let __v: Vec<Option<WireValue>> = vec![status.clone().map(|__ov| WireValue::Str(__ov.into()))]; __v }, skipped: status.is_none(), sql: "status = ?".to_string() }]; __v }, lead: "WHERE".to_string(), tail: " ORDER BY id ASC".to_string(), tailParams: { let __v: Vec<WireValue> = vec![]; __v } }), write: Option::<WriteMode>::None }) { Some(ov0) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("db"), match ov0.db { Some(ov1) => WireValue::Str(ov1.into()), _ => WireValue::Null }), (Cow::Borrowed("guard"), match ov0.guard { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("limit"), WireValue::Int(ov1.limit)), (Cow::Borrowed("model"), match ov1.model { Some(ov2) => WireValue::Str(ov2.into()), _ => WireValue::Null }), (Cow::Borrowed("relation"), WireValue::Str(ov1.relation.into()))] }), _ => WireValue::Null }), (Cow::Borrowed("whereDynamic"), match ov0.whereDynamic { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("frags"), WireValue::List(WireList { items: ov1.frags.into_iter().map(|e2| WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("params"), WireValue::List(WireList { items: e2.params.into_iter().map(|e4| match e4 { Some(ov5) => ov5, _ => WireValue::Null }).collect() })), (Cow::Borrowed("skipped"), WireValue::Bool(e2.skipped)), (Cow::Borrowed("sql"), WireValue::Str(e2.sql.into()))] })).collect() })), (Cow::Borrowed("lead"), WireValue::Str(ov1.lead.into())), (Cow::Borrowed("tail"), WireValue::Str(ov1.tail.into())), (Cow::Borrowed("tailParams"), WireValue::List(WireList { items: ov1.tailParams }))] }), _ => WireValue::Null }), (Cow::Borrowed("write"), match ov0.write { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("returning"), WireValue::Bool(ov1.returning))] }), _ => WireValue::Null })] }), _ => WireValue::Null }), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![]; __v } })), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("WITH derived AS (SELECT id, author_id, title, status, created_at FROM conf_posts WHERE title <> ' WHERE ' ORDER BY id ASC LIMIT 2) SELECT id, author_id, status, title FROM derived")))] };
+    let wire_n0 = match execute_sql(payload_n0) {
+        Ok(r) => r,
+        Err(e) => return Err(op_failed("n0", "fail", e)),
+    };
+    *cell_n0.borrow_mut() = match probe_list_at(Some(wire_n0)) {
+        Probe::Got(l0) => {
+            let mut acc0 = Vec::with_capacity(l0.items.len());
+            for e0 in l0.items {
+                acc0.push(match probe_row_at(Some(e0)) {
+                    Probe::Got(mut sub1) => ViewFeedRow {
+                        author_id: match probe_float_at(sub1.take("author_id")) {
+                            Probe::Got(v) => Some(v),
+                            Probe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("ViewFeedRow", "author_id", "opt(float)", actual_wire_type, raw_value)),
+                            Probe::Null { .. } | Probe::Absent => None,
+                        },
+                        id: match probe_float_at(sub1.take("id")) {
+                            Probe::Got(v) => Some(v),
+                            Probe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("ViewFeedRow", "id", "opt(float)", actual_wire_type, raw_value)),
+                            Probe::Null { .. } | Probe::Absent => None,
+                        },
+                        status: match probe_string_at(sub1.take("status")) {
+                            Probe::Got(v) => Some(v.into_owned()),
+                            Probe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("ViewFeedRow", "status", "opt(string)", actual_wire_type, raw_value)),
+                            Probe::Null { .. } | Probe::Absent => None,
+                        },
+                        title: match probe_string_at(sub1.take("title")) {
+                            Probe::Got(v) => Some(v.into_owned()),
+                            Probe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("ViewFeedRow", "title", "opt(string)", actual_wire_type, raw_value)),
                             Probe::Null { .. } | Probe::Absent => None,
                         },
                     },
@@ -776,7 +1198,7 @@ pub fn usersWithPosts(
     let produced_n6 = std::cell::Cell::new(false);
     let _ = &produced_n6;
     // ── op 'n0' (executeSQL) ──
-    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("bigint"), WireValue::Bool(false)), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![]; __v } })), (Cow::Borrowed("returning"), WireValue::Bool(false)), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("SELECT id, name FROM conf_users ORDER BY id ASC"))), (Cow::Borrowed("write"), WireValue::Bool(false))] };
+    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![]; __v } })), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("SELECT id, name FROM conf_users ORDER BY id ASC")))] };
     let wire_n0 = match execute_sql(payload_n0) {
         Ok(r) => r,
         Err(e) => return Err(op_failed("n0", "fail", e)),
@@ -805,7 +1227,7 @@ pub fn usersWithPosts(
     }
     // ── op 'n2' (executeSQL, parent:n1) ──
     if produced_n1.get() {
-        let payload_n2 = WireRow { entries: vec![(Cow::Borrowed("bigint"), WireValue::Bool(false)), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::List(WireList { items: cell_n1.take() })]; __v } })), (Cow::Borrowed("returning"), WireValue::Bool(false)), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("SELECT id, author_id, title, status, created_at FROM conf_posts WHERE author_id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) ORDER BY id ASC"))), (Cow::Borrowed("write"), WireValue::Bool(false))] };
+        let payload_n2 = WireRow { entries: vec![(Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::List(WireList { items: cell_n1.take() })]; __v } })), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("SELECT id, author_id, title, status, created_at FROM conf_posts WHERE author_id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) ORDER BY id ASC")))] };
         let wire_n2 = match execute_sql(payload_n2) {
             Ok(r) => r,
             Err(e) => return Err(op_failed("n2", "fail", e)),
@@ -835,7 +1257,7 @@ pub fn usersWithPosts(
     }
     // ── op 'n4' (executeSQL, parent:n3) ──
     if produced_n3.get() {
-        let payload_n4 = WireRow { entries: vec![(Cow::Borrowed("bigint"), WireValue::Bool(false)), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::List(WireList { items: cell_n3.take() })]; __v } })), (Cow::Borrowed("returning"), WireValue::Bool(false)), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("SELECT id, post_id, label FROM conf_tags WHERE post_id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) ORDER BY id ASC"))), (Cow::Borrowed("write"), WireValue::Bool(false))] };
+        let payload_n4 = WireRow { entries: vec![(Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::List(WireList { items: cell_n3.take() })]; __v } })), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("SELECT id, post_id, label FROM conf_tags WHERE post_id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) ORDER BY id ASC")))] };
         let wire_n4 = match execute_sql(payload_n4) {
             Ok(r) => r,
             Err(e) => return Err(op_failed("n4", "fail", e)),
@@ -1008,7 +1430,7 @@ pub fn postsWithAuthor(
     let produced_n3 = std::cell::Cell::new(false);
     let _ = &produced_n3;
     // ── op 'n0' (executeSQL) ──
-    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("bigint"), WireValue::Bool(false)), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![]; __v } })), (Cow::Borrowed("returning"), WireValue::Bool(false)), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("SELECT id, author_id, title, status, created_at FROM conf_posts ORDER BY id ASC"))), (Cow::Borrowed("write"), WireValue::Bool(false))] };
+    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![]; __v } })), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("SELECT id, author_id, title, status, created_at FROM conf_posts ORDER BY id ASC")))] };
     let wire_n0 = match execute_sql(payload_n0) {
         Ok(r) => r,
         Err(e) => return Err(op_failed("n0", "fail", e)),
@@ -1037,7 +1459,7 @@ pub fn postsWithAuthor(
     }
     // ── op 'n2' (executeSQL, parent:n1) ──
     if produced_n1.get() {
-        let payload_n2 = WireRow { entries: vec![(Cow::Borrowed("bigint"), WireValue::Bool(false)), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::List(WireList { items: cell_n1.take() })]; __v } })), (Cow::Borrowed("returning"), WireValue::Bool(false)), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("SELECT id, name, post_count FROM conf_users WHERE id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt)"))), (Cow::Borrowed("write"), WireValue::Bool(false))] };
+        let payload_n2 = WireRow { entries: vec![(Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::List(WireList { items: cell_n1.take() })]; __v } })), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("SELECT id, name, post_count FROM conf_users WHERE id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt)")))] };
         let wire_n2 = match execute_sql(payload_n2) {
             Ok(r) => r,
             Err(e) => return Err(op_failed("n2", "fail", e)),
@@ -1155,7 +1577,7 @@ pub fn usersWithCappedPosts(
     let produced_n3 = std::cell::Cell::new(false);
     let _ = &produced_n3;
     // ── op 'n0' (executeSQL) ──
-    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("bigint"), WireValue::Bool(false)), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![]; __v } })), (Cow::Borrowed("returning"), WireValue::Bool(false)), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("SELECT id, name FROM conf_users ORDER BY id ASC"))), (Cow::Borrowed("write"), WireValue::Bool(false))] };
+    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![]; __v } })), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("SELECT id, name FROM conf_users ORDER BY id ASC")))] };
     let wire_n0 = match execute_sql(payload_n0) {
         Ok(r) => r,
         Err(e) => return Err(op_failed("n0", "fail", e)),
@@ -1184,7 +1606,7 @@ pub fn usersWithCappedPosts(
     }
     // ── op 'n2' (executeSQL, parent:n1) ──
     if produced_n1.get() {
-        let payload_n2 = WireRow { entries: vec![(Cow::Borrowed("bigint"), WireValue::Bool(false)), (Cow::Borrowed("guard"), match Some(CapGuard { limit: 2i64, model: Some("conf_posts".to_string()), relation: "cappedPosts".to_string() }) { Some(ov0) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("limit"), WireValue::Int(ov0.limit)), (Cow::Borrowed("model"), match ov0.model { Some(ov1) => WireValue::Str(ov1.into()), _ => WireValue::Null }), (Cow::Borrowed("relation"), WireValue::Str(ov0.relation.into()))] }), _ => WireValue::Null }), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::List(WireList { items: cell_n1.take() })]; __v } })), (Cow::Borrowed("returning"), WireValue::Bool(false)), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("SELECT id, author_id, title, status, created_at FROM conf_posts WHERE author_id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) ORDER BY id ASC"))), (Cow::Borrowed("whereDynamic"), match Some(DynamicWherePlan { frags: { let __v: Vec<DynamicWhereFrag> = vec![]; __v } }) { Some(ov0) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("frags"), WireValue::List(WireList { items: ov0.frags.into_iter().map(|e1| WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("params"), WireValue::List(WireList { items: e1.params.into_iter().map(|e3| match e3 { Some(ov4) => ov4, _ => WireValue::Null }).collect() })), (Cow::Borrowed("skipped"), WireValue::Bool(e1.skipped)), (Cow::Borrowed("sql"), WireValue::Str(e1.sql.into()))] })).collect() }))] }), _ => WireValue::Null }), (Cow::Borrowed("write"), WireValue::Bool(false))] };
+        let payload_n2 = WireRow { entries: vec![(Cow::Borrowed("opts"), match Some(ExecOptions { db: Option::<String>::None, guard: Some(CapGuard { limit: 2i64, model: Some("conf_posts".to_string()), relation: "cappedPosts".to_string() }), whereDynamic: Option::<DynamicWherePlan>::None, write: Option::<WriteMode>::None }) { Some(ov0) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("db"), match ov0.db { Some(ov1) => WireValue::Str(ov1.into()), _ => WireValue::Null }), (Cow::Borrowed("guard"), match ov0.guard { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("limit"), WireValue::Int(ov1.limit)), (Cow::Borrowed("model"), match ov1.model { Some(ov2) => WireValue::Str(ov2.into()), _ => WireValue::Null }), (Cow::Borrowed("relation"), WireValue::Str(ov1.relation.into()))] }), _ => WireValue::Null }), (Cow::Borrowed("whereDynamic"), match ov0.whereDynamic { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("frags"), WireValue::List(WireList { items: ov1.frags.into_iter().map(|e2| WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("params"), WireValue::List(WireList { items: e2.params.into_iter().map(|e4| match e4 { Some(ov5) => ov5, _ => WireValue::Null }).collect() })), (Cow::Borrowed("skipped"), WireValue::Bool(e2.skipped)), (Cow::Borrowed("sql"), WireValue::Str(e2.sql.into()))] })).collect() })), (Cow::Borrowed("lead"), WireValue::Str(ov1.lead.into())), (Cow::Borrowed("tail"), WireValue::Str(ov1.tail.into())), (Cow::Borrowed("tailParams"), WireValue::List(WireList { items: ov1.tailParams }))] }), _ => WireValue::Null }), (Cow::Borrowed("write"), match ov0.write { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("returning"), WireValue::Bool(ov1.returning))] }), _ => WireValue::Null })] }), _ => WireValue::Null }), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::List(WireList { items: cell_n1.take() })]; __v } })), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("SELECT id, author_id, title, status, created_at FROM conf_posts WHERE author_id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) ORDER BY id ASC")))] };
         let wire_n2 = match execute_sql(payload_n2) {
             Ok(r) => r,
             Err(e) => return Err(op_failed("n2", "fail", e)),
@@ -1309,7 +1731,7 @@ pub fn usersWithUncappedPosts(
     let produced_n3 = std::cell::Cell::new(false);
     let _ = &produced_n3;
     // ── op 'n0' (executeSQL) ──
-    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("bigint"), WireValue::Bool(false)), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![]; __v } })), (Cow::Borrowed("returning"), WireValue::Bool(false)), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("SELECT id, name FROM conf_users ORDER BY id ASC"))), (Cow::Borrowed("write"), WireValue::Bool(false))] };
+    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![]; __v } })), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("SELECT id, name FROM conf_users ORDER BY id ASC")))] };
     let wire_n0 = match execute_sql(payload_n0) {
         Ok(r) => r,
         Err(e) => return Err(op_failed("n0", "fail", e)),
@@ -1338,7 +1760,7 @@ pub fn usersWithUncappedPosts(
     }
     // ── op 'n2' (executeSQL, parent:n1) ──
     if produced_n1.get() {
-        let payload_n2 = WireRow { entries: vec![(Cow::Borrowed("bigint"), WireValue::Bool(false)), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::List(WireList { items: cell_n1.take() })]; __v } })), (Cow::Borrowed("returning"), WireValue::Bool(false)), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("SELECT id, author_id, title, status, created_at FROM conf_posts WHERE author_id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) ORDER BY id ASC"))), (Cow::Borrowed("write"), WireValue::Bool(false))] };
+        let payload_n2 = WireRow { entries: vec![(Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::List(WireList { items: cell_n1.take() })]; __v } })), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("SELECT id, author_id, title, status, created_at FROM conf_posts WHERE author_id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) ORDER BY id ASC")))] };
         let wire_n2 = match execute_sql(payload_n2) {
             Ok(r) => r,
             Err(e) => return Err(op_failed("n2", "fail", e)),
@@ -1463,7 +1885,7 @@ pub fn usersWithTopPosts(
     let produced_n3 = std::cell::Cell::new(false);
     let _ = &produced_n3;
     // ── op 'n0' (executeSQL) ──
-    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("bigint"), WireValue::Bool(false)), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![]; __v } })), (Cow::Borrowed("returning"), WireValue::Bool(false)), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("SELECT id, name FROM conf_users ORDER BY id ASC"))), (Cow::Borrowed("write"), WireValue::Bool(false))] };
+    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![]; __v } })), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("SELECT id, name FROM conf_users ORDER BY id ASC")))] };
     let wire_n0 = match execute_sql(payload_n0) {
         Ok(r) => r,
         Err(e) => return Err(op_failed("n0", "fail", e)),
@@ -1492,7 +1914,7 @@ pub fn usersWithTopPosts(
     }
     // ── op 'n2' (executeSQL, parent:n1) ──
     if produced_n1.get() {
-        let payload_n2 = WireRow { entries: vec![(Cow::Borrowed("bigint"), WireValue::Bool(false)), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::List(WireList { items: cell_n1.take() })]; __v } })), (Cow::Borrowed("returning"), WireValue::Bool(false)), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("WITH ranked AS (SELECT *, ROW_NUMBER() OVER (PARTITION BY author_id ORDER BY id ASC) AS _rn FROM conf_posts WHERE author_id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt)) SELECT * FROM ranked WHERE _rn <= 1"))), (Cow::Borrowed("write"), WireValue::Bool(false))] };
+        let payload_n2 = WireRow { entries: vec![(Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::List(WireList { items: cell_n1.take() })]; __v } })), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("WITH ranked AS (SELECT *, ROW_NUMBER() OVER (PARTITION BY author_id ORDER BY id ASC) AS _rn FROM conf_posts WHERE author_id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt)) SELECT * FROM ranked WHERE _rn <= 1")))] };
         let wire_n2 = match execute_sql(payload_n2) {
             Ok(r) => r,
             Err(e) => return Err(op_failed("n2", "fail", e)),
@@ -1613,7 +2035,7 @@ pub fn createPost(
     let produced_n0 = std::cell::Cell::new(false);
     let _ = &produced_n0;
     // ── op 'n0' (executeSQL) ──
-    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("bigint"), WireValue::Bool(false)), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::Int(authorId), WireValue::Str(createdAt.into()), WireValue::Int(id), WireValue::Str(status.into()), WireValue::Str(title.into())]; __v } })), (Cow::Borrowed("returning"), WireValue::Bool(false)), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("INSERT INTO conf_posts (author_id, created_at, id, status, title) VALUES (?, ?, ?, ?, ?)"))), (Cow::Borrowed("write"), WireValue::Bool(true))] };
+    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("opts"), match Some(ExecOptions { db: Option::<String>::None, guard: Option::<CapGuard>::None, whereDynamic: Option::<DynamicWherePlan>::None, write: Some(WriteMode { returning: false }) }) { Some(ov0) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("db"), match ov0.db { Some(ov1) => WireValue::Str(ov1.into()), _ => WireValue::Null }), (Cow::Borrowed("guard"), match ov0.guard { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("limit"), WireValue::Int(ov1.limit)), (Cow::Borrowed("model"), match ov1.model { Some(ov2) => WireValue::Str(ov2.into()), _ => WireValue::Null }), (Cow::Borrowed("relation"), WireValue::Str(ov1.relation.into()))] }), _ => WireValue::Null }), (Cow::Borrowed("whereDynamic"), match ov0.whereDynamic { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("frags"), WireValue::List(WireList { items: ov1.frags.into_iter().map(|e2| WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("params"), WireValue::List(WireList { items: e2.params.into_iter().map(|e4| match e4 { Some(ov5) => ov5, _ => WireValue::Null }).collect() })), (Cow::Borrowed("skipped"), WireValue::Bool(e2.skipped)), (Cow::Borrowed("sql"), WireValue::Str(e2.sql.into()))] })).collect() })), (Cow::Borrowed("lead"), WireValue::Str(ov1.lead.into())), (Cow::Borrowed("tail"), WireValue::Str(ov1.tail.into())), (Cow::Borrowed("tailParams"), WireValue::List(WireList { items: ov1.tailParams }))] }), _ => WireValue::Null }), (Cow::Borrowed("write"), match ov0.write { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("returning"), WireValue::Bool(ov1.returning))] }), _ => WireValue::Null })] }), _ => WireValue::Null }), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::Int(authorId), WireValue::Str(createdAt.into()), WireValue::Int(id), WireValue::Str(status.into()), WireValue::Str(title.into())]; __v } })), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("INSERT INTO conf_posts (author_id, created_at, id, status, title) VALUES (?, ?, ?, ?, ?)")))] };
     let wire_n0 = match execute_sql(payload_n0) {
         Ok(r) => r,
         Err(e) => return Err(op_failed("n0", "fail", e)),
@@ -1674,7 +2096,7 @@ pub fn renamePost(
     let produced_n0 = std::cell::Cell::new(false);
     let _ = &produced_n0;
     // ── op 'n0' (executeSQL) ──
-    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("bigint"), WireValue::Bool(false)), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::Str(title.into()), WireValue::Int(id)]; __v } })), (Cow::Borrowed("returning"), WireValue::Bool(false)), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("UPDATE conf_posts SET title = ? WHERE id = ?"))), (Cow::Borrowed("write"), WireValue::Bool(true))] };
+    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("opts"), match Some(ExecOptions { db: Option::<String>::None, guard: Option::<CapGuard>::None, whereDynamic: Option::<DynamicWherePlan>::None, write: Some(WriteMode { returning: false }) }) { Some(ov0) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("db"), match ov0.db { Some(ov1) => WireValue::Str(ov1.into()), _ => WireValue::Null }), (Cow::Borrowed("guard"), match ov0.guard { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("limit"), WireValue::Int(ov1.limit)), (Cow::Borrowed("model"), match ov1.model { Some(ov2) => WireValue::Str(ov2.into()), _ => WireValue::Null }), (Cow::Borrowed("relation"), WireValue::Str(ov1.relation.into()))] }), _ => WireValue::Null }), (Cow::Borrowed("whereDynamic"), match ov0.whereDynamic { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("frags"), WireValue::List(WireList { items: ov1.frags.into_iter().map(|e2| WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("params"), WireValue::List(WireList { items: e2.params.into_iter().map(|e4| match e4 { Some(ov5) => ov5, _ => WireValue::Null }).collect() })), (Cow::Borrowed("skipped"), WireValue::Bool(e2.skipped)), (Cow::Borrowed("sql"), WireValue::Str(e2.sql.into()))] })).collect() })), (Cow::Borrowed("lead"), WireValue::Str(ov1.lead.into())), (Cow::Borrowed("tail"), WireValue::Str(ov1.tail.into())), (Cow::Borrowed("tailParams"), WireValue::List(WireList { items: ov1.tailParams }))] }), _ => WireValue::Null }), (Cow::Borrowed("write"), match ov0.write { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("returning"), WireValue::Bool(ov1.returning))] }), _ => WireValue::Null })] }), _ => WireValue::Null }), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::Str(title.into()), WireValue::Int(id)]; __v } })), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("UPDATE conf_posts SET title = ? WHERE id = ?")))] };
     let wire_n0 = match execute_sql(payload_n0) {
         Ok(r) => r,
         Err(e) => return Err(op_failed("n0", "fail", e)),
@@ -1734,7 +2156,7 @@ pub fn removePost(
     let produced_n0 = std::cell::Cell::new(false);
     let _ = &produced_n0;
     // ── op 'n0' (executeSQL) ──
-    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("bigint"), WireValue::Bool(false)), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::Int(id)]; __v } })), (Cow::Borrowed("returning"), WireValue::Bool(false)), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("DELETE FROM conf_posts WHERE id = ?"))), (Cow::Borrowed("write"), WireValue::Bool(true))] };
+    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("opts"), match Some(ExecOptions { db: Option::<String>::None, guard: Option::<CapGuard>::None, whereDynamic: Option::<DynamicWherePlan>::None, write: Some(WriteMode { returning: false }) }) { Some(ov0) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("db"), match ov0.db { Some(ov1) => WireValue::Str(ov1.into()), _ => WireValue::Null }), (Cow::Borrowed("guard"), match ov0.guard { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("limit"), WireValue::Int(ov1.limit)), (Cow::Borrowed("model"), match ov1.model { Some(ov2) => WireValue::Str(ov2.into()), _ => WireValue::Null }), (Cow::Borrowed("relation"), WireValue::Str(ov1.relation.into()))] }), _ => WireValue::Null }), (Cow::Borrowed("whereDynamic"), match ov0.whereDynamic { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("frags"), WireValue::List(WireList { items: ov1.frags.into_iter().map(|e2| WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("params"), WireValue::List(WireList { items: e2.params.into_iter().map(|e4| match e4 { Some(ov5) => ov5, _ => WireValue::Null }).collect() })), (Cow::Borrowed("skipped"), WireValue::Bool(e2.skipped)), (Cow::Borrowed("sql"), WireValue::Str(e2.sql.into()))] })).collect() })), (Cow::Borrowed("lead"), WireValue::Str(ov1.lead.into())), (Cow::Borrowed("tail"), WireValue::Str(ov1.tail.into())), (Cow::Borrowed("tailParams"), WireValue::List(WireList { items: ov1.tailParams }))] }), _ => WireValue::Null }), (Cow::Borrowed("write"), match ov0.write { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("returning"), WireValue::Bool(ov1.returning))] }), _ => WireValue::Null })] }), _ => WireValue::Null }), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::Int(id)]; __v } })), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("DELETE FROM conf_posts WHERE id = ?")))] };
     let wire_n0 = match execute_sql(payload_n0) {
         Ok(r) => r,
         Err(e) => return Err(op_failed("n0", "fail", e)),
@@ -1798,7 +2220,7 @@ pub fn createPostReturning(
     let produced_n0 = std::cell::Cell::new(false);
     let _ = &produced_n0;
     // ── op 'n0' (executeSQL) ──
-    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("bigint"), WireValue::Bool(false)), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::Int(authorId), WireValue::Str(createdAt.into()), WireValue::Int(id), WireValue::Str(status.into()), WireValue::Str(title.into())]; __v } })), (Cow::Borrowed("returning"), WireValue::Bool(true)), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("INSERT INTO conf_posts (author_id, created_at, id, status, title) VALUES (?, ?, ?, ?, ?) RETURNING id, title /*scp:pk=id;ai=*/"))), (Cow::Borrowed("write"), WireValue::Bool(true))] };
+    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("opts"), match Some(ExecOptions { db: Option::<String>::None, guard: Option::<CapGuard>::None, whereDynamic: Option::<DynamicWherePlan>::None, write: Some(WriteMode { returning: true }) }) { Some(ov0) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("db"), match ov0.db { Some(ov1) => WireValue::Str(ov1.into()), _ => WireValue::Null }), (Cow::Borrowed("guard"), match ov0.guard { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("limit"), WireValue::Int(ov1.limit)), (Cow::Borrowed("model"), match ov1.model { Some(ov2) => WireValue::Str(ov2.into()), _ => WireValue::Null }), (Cow::Borrowed("relation"), WireValue::Str(ov1.relation.into()))] }), _ => WireValue::Null }), (Cow::Borrowed("whereDynamic"), match ov0.whereDynamic { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("frags"), WireValue::List(WireList { items: ov1.frags.into_iter().map(|e2| WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("params"), WireValue::List(WireList { items: e2.params.into_iter().map(|e4| match e4 { Some(ov5) => ov5, _ => WireValue::Null }).collect() })), (Cow::Borrowed("skipped"), WireValue::Bool(e2.skipped)), (Cow::Borrowed("sql"), WireValue::Str(e2.sql.into()))] })).collect() })), (Cow::Borrowed("lead"), WireValue::Str(ov1.lead.into())), (Cow::Borrowed("tail"), WireValue::Str(ov1.tail.into())), (Cow::Borrowed("tailParams"), WireValue::List(WireList { items: ov1.tailParams }))] }), _ => WireValue::Null }), (Cow::Borrowed("write"), match ov0.write { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("returning"), WireValue::Bool(ov1.returning))] }), _ => WireValue::Null })] }), _ => WireValue::Null }), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::Int(authorId), WireValue::Str(createdAt.into()), WireValue::Int(id), WireValue::Str(status.into()), WireValue::Str(title.into())]; __v } })), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("INSERT INTO conf_posts (author_id, created_at, id, status, title) VALUES (?, ?, ?, ?, ?) RETURNING id, title /*scp:pk=id;ai=*/")))] };
     let wire_n0 = match execute_sql(payload_n0) {
         Ok(r) => r,
         Err(e) => return Err(op_failed("n0", "fail", e)),
@@ -1857,7 +2279,7 @@ pub fn renamePostReturning(
     let produced_n0 = std::cell::Cell::new(false);
     let _ = &produced_n0;
     // ── op 'n0' (executeSQL) ──
-    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("bigint"), WireValue::Bool(false)), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::Str(title.into()), WireValue::Int(id)]; __v } })), (Cow::Borrowed("returning"), WireValue::Bool(true)), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("UPDATE conf_posts SET title = ? WHERE id = ? RETURNING id, title /*scp:pk=id;ai=*/"))), (Cow::Borrowed("write"), WireValue::Bool(true))] };
+    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("opts"), match Some(ExecOptions { db: Option::<String>::None, guard: Option::<CapGuard>::None, whereDynamic: Option::<DynamicWherePlan>::None, write: Some(WriteMode { returning: true }) }) { Some(ov0) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("db"), match ov0.db { Some(ov1) => WireValue::Str(ov1.into()), _ => WireValue::Null }), (Cow::Borrowed("guard"), match ov0.guard { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("limit"), WireValue::Int(ov1.limit)), (Cow::Borrowed("model"), match ov1.model { Some(ov2) => WireValue::Str(ov2.into()), _ => WireValue::Null }), (Cow::Borrowed("relation"), WireValue::Str(ov1.relation.into()))] }), _ => WireValue::Null }), (Cow::Borrowed("whereDynamic"), match ov0.whereDynamic { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("frags"), WireValue::List(WireList { items: ov1.frags.into_iter().map(|e2| WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("params"), WireValue::List(WireList { items: e2.params.into_iter().map(|e4| match e4 { Some(ov5) => ov5, _ => WireValue::Null }).collect() })), (Cow::Borrowed("skipped"), WireValue::Bool(e2.skipped)), (Cow::Borrowed("sql"), WireValue::Str(e2.sql.into()))] })).collect() })), (Cow::Borrowed("lead"), WireValue::Str(ov1.lead.into())), (Cow::Borrowed("tail"), WireValue::Str(ov1.tail.into())), (Cow::Borrowed("tailParams"), WireValue::List(WireList { items: ov1.tailParams }))] }), _ => WireValue::Null }), (Cow::Borrowed("write"), match ov0.write { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("returning"), WireValue::Bool(ov1.returning))] }), _ => WireValue::Null })] }), _ => WireValue::Null }), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::Str(title.into()), WireValue::Int(id)]; __v } })), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("UPDATE conf_posts SET title = ? WHERE id = ? RETURNING id, title /*scp:pk=id;ai=*/")))] };
     let wire_n0 = match execute_sql(payload_n0) {
         Ok(r) => r,
         Err(e) => return Err(op_failed("n0", "fail", e)),
@@ -1915,7 +2337,7 @@ pub fn removePostReturning(
     let produced_n0 = std::cell::Cell::new(false);
     let _ = &produced_n0;
     // ── op 'n0' (executeSQL) ──
-    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("bigint"), WireValue::Bool(false)), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::Int(id)]; __v } })), (Cow::Borrowed("returning"), WireValue::Bool(true)), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("DELETE FROM conf_posts WHERE id = ? RETURNING id, title /*scp:pk=id;ai=*/"))), (Cow::Borrowed("write"), WireValue::Bool(true))] };
+    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("opts"), match Some(ExecOptions { db: Option::<String>::None, guard: Option::<CapGuard>::None, whereDynamic: Option::<DynamicWherePlan>::None, write: Some(WriteMode { returning: true }) }) { Some(ov0) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("db"), match ov0.db { Some(ov1) => WireValue::Str(ov1.into()), _ => WireValue::Null }), (Cow::Borrowed("guard"), match ov0.guard { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("limit"), WireValue::Int(ov1.limit)), (Cow::Borrowed("model"), match ov1.model { Some(ov2) => WireValue::Str(ov2.into()), _ => WireValue::Null }), (Cow::Borrowed("relation"), WireValue::Str(ov1.relation.into()))] }), _ => WireValue::Null }), (Cow::Borrowed("whereDynamic"), match ov0.whereDynamic { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("frags"), WireValue::List(WireList { items: ov1.frags.into_iter().map(|e2| WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("params"), WireValue::List(WireList { items: e2.params.into_iter().map(|e4| match e4 { Some(ov5) => ov5, _ => WireValue::Null }).collect() })), (Cow::Borrowed("skipped"), WireValue::Bool(e2.skipped)), (Cow::Borrowed("sql"), WireValue::Str(e2.sql.into()))] })).collect() })), (Cow::Borrowed("lead"), WireValue::Str(ov1.lead.into())), (Cow::Borrowed("tail"), WireValue::Str(ov1.tail.into())), (Cow::Borrowed("tailParams"), WireValue::List(WireList { items: ov1.tailParams }))] }), _ => WireValue::Null }), (Cow::Borrowed("write"), match ov0.write { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("returning"), WireValue::Bool(ov1.returning))] }), _ => WireValue::Null })] }), _ => WireValue::Null }), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::Int(id)]; __v } })), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("DELETE FROM conf_posts WHERE id = ? RETURNING id, title /*scp:pk=id;ai=*/")))] };
     let wire_n0 = match execute_sql(payload_n0) {
         Ok(r) => r,
         Err(e) => return Err(op_failed("n0", "fail", e)),
@@ -1974,7 +2396,7 @@ pub fn restatusPostsReturning(
     let produced_n0 = std::cell::Cell::new(false);
     let _ = &produced_n0;
     // ── op 'n0' (executeSQL) ──
-    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("bigint"), WireValue::Bool(false)), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::Str(status.into()), WireValue::Int(authorId)]; __v } })), (Cow::Borrowed("returning"), WireValue::Bool(true)), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("UPDATE conf_posts SET status = ? WHERE author_id = ? RETURNING id, status /*scp:pk=id;ai=*/"))), (Cow::Borrowed("write"), WireValue::Bool(true))] };
+    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("opts"), match Some(ExecOptions { db: Option::<String>::None, guard: Option::<CapGuard>::None, whereDynamic: Option::<DynamicWherePlan>::None, write: Some(WriteMode { returning: true }) }) { Some(ov0) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("db"), match ov0.db { Some(ov1) => WireValue::Str(ov1.into()), _ => WireValue::Null }), (Cow::Borrowed("guard"), match ov0.guard { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("limit"), WireValue::Int(ov1.limit)), (Cow::Borrowed("model"), match ov1.model { Some(ov2) => WireValue::Str(ov2.into()), _ => WireValue::Null }), (Cow::Borrowed("relation"), WireValue::Str(ov1.relation.into()))] }), _ => WireValue::Null }), (Cow::Borrowed("whereDynamic"), match ov0.whereDynamic { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("frags"), WireValue::List(WireList { items: ov1.frags.into_iter().map(|e2| WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("params"), WireValue::List(WireList { items: e2.params.into_iter().map(|e4| match e4 { Some(ov5) => ov5, _ => WireValue::Null }).collect() })), (Cow::Borrowed("skipped"), WireValue::Bool(e2.skipped)), (Cow::Borrowed("sql"), WireValue::Str(e2.sql.into()))] })).collect() })), (Cow::Borrowed("lead"), WireValue::Str(ov1.lead.into())), (Cow::Borrowed("tail"), WireValue::Str(ov1.tail.into())), (Cow::Borrowed("tailParams"), WireValue::List(WireList { items: ov1.tailParams }))] }), _ => WireValue::Null }), (Cow::Borrowed("write"), match ov0.write { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("returning"), WireValue::Bool(ov1.returning))] }), _ => WireValue::Null })] }), _ => WireValue::Null }), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::Str(status.into()), WireValue::Int(authorId)]; __v } })), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("UPDATE conf_posts SET status = ? WHERE author_id = ? RETURNING id, status /*scp:pk=id;ai=*/")))] };
     let wire_n0 = match execute_sql(payload_n0) {
         Ok(r) => r,
         Err(e) => return Err(op_failed("n0", "fail", e)),
@@ -2032,7 +2454,7 @@ pub fn removePostsByAuthorReturning(
     let produced_n0 = std::cell::Cell::new(false);
     let _ = &produced_n0;
     // ── op 'n0' (executeSQL) ──
-    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("bigint"), WireValue::Bool(false)), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::Int(authorId)]; __v } })), (Cow::Borrowed("returning"), WireValue::Bool(true)), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("DELETE FROM conf_posts WHERE author_id = ? RETURNING id, title /*scp:pk=id;ai=*/"))), (Cow::Borrowed("write"), WireValue::Bool(true))] };
+    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("opts"), match Some(ExecOptions { db: Option::<String>::None, guard: Option::<CapGuard>::None, whereDynamic: Option::<DynamicWherePlan>::None, write: Some(WriteMode { returning: true }) }) { Some(ov0) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("db"), match ov0.db { Some(ov1) => WireValue::Str(ov1.into()), _ => WireValue::Null }), (Cow::Borrowed("guard"), match ov0.guard { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("limit"), WireValue::Int(ov1.limit)), (Cow::Borrowed("model"), match ov1.model { Some(ov2) => WireValue::Str(ov2.into()), _ => WireValue::Null }), (Cow::Borrowed("relation"), WireValue::Str(ov1.relation.into()))] }), _ => WireValue::Null }), (Cow::Borrowed("whereDynamic"), match ov0.whereDynamic { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("frags"), WireValue::List(WireList { items: ov1.frags.into_iter().map(|e2| WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("params"), WireValue::List(WireList { items: e2.params.into_iter().map(|e4| match e4 { Some(ov5) => ov5, _ => WireValue::Null }).collect() })), (Cow::Borrowed("skipped"), WireValue::Bool(e2.skipped)), (Cow::Borrowed("sql"), WireValue::Str(e2.sql.into()))] })).collect() })), (Cow::Borrowed("lead"), WireValue::Str(ov1.lead.into())), (Cow::Borrowed("tail"), WireValue::Str(ov1.tail.into())), (Cow::Borrowed("tailParams"), WireValue::List(WireList { items: ov1.tailParams }))] }), _ => WireValue::Null }), (Cow::Borrowed("write"), match ov0.write { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("returning"), WireValue::Bool(ov1.returning))] }), _ => WireValue::Null })] }), _ => WireValue::Null }), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::Int(authorId)]; __v } })), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("DELETE FROM conf_posts WHERE author_id = ? RETURNING id, title /*scp:pk=id;ai=*/")))] };
     let wire_n0 = match execute_sql(payload_n0) {
         Ok(r) => r,
         Err(e) => return Err(op_failed("n0", "fail", e)),
@@ -2089,7 +2511,7 @@ pub fn typedRows(
     let produced_n0 = std::cell::Cell::new(false);
     let _ = &produced_n0;
     // ── op 'n0' (executeSQL) ──
-    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("bigint"), WireValue::Bool(false)), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![]; __v } })), (Cow::Borrowed("returning"), WireValue::Bool(false)), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("SELECT id, ts, flag, label FROM conf_typed ORDER BY id ASC"))), (Cow::Borrowed("write"), WireValue::Bool(false))] };
+    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![]; __v } })), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("SELECT id, ts, flag, label FROM conf_typed ORDER BY id ASC")))] };
     let wire_n0 = match execute_sql(payload_n0) {
         Ok(r) => r,
         Err(e) => return Err(op_failed("n0", "fail", e)),
@@ -2157,7 +2579,7 @@ pub fn createTags(
     let produced_n0 = std::cell::Cell::new(false);
     let _ = &produced_n0;
     // ── op 'n0' (executeSQL) ──
-    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("bigint"), WireValue::Bool(false)), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::List(WireList { items: rows.into_iter().map(|e0| WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("id"), WireValue::Int(e0.id)), (Cow::Borrowed("label"), WireValue::Str(e0.label.into())), (Cow::Borrowed("post_id"), WireValue::Int(e0.post_id))] })).collect() })]; __v } })), (Cow::Borrowed("returning"), WireValue::Bool(false)), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("INSERT INTO conf_tags (id, label, post_id) SELECT JSON_UNQUOTE(jt.id), JSON_UNQUOTE(jt.label), JSON_UNQUOTE(jt.post_id) FROM JSON_TABLE(?, '$[*]' COLUMNS(id JSON PATH '$.id', label JSON PATH '$.label', post_id JSON PATH '$.post_id')) jt"))), (Cow::Borrowed("write"), WireValue::Bool(true))] };
+    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("opts"), match Some(ExecOptions { db: Option::<String>::None, guard: Option::<CapGuard>::None, whereDynamic: Option::<DynamicWherePlan>::None, write: Some(WriteMode { returning: false }) }) { Some(ov0) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("db"), match ov0.db { Some(ov1) => WireValue::Str(ov1.into()), _ => WireValue::Null }), (Cow::Borrowed("guard"), match ov0.guard { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("limit"), WireValue::Int(ov1.limit)), (Cow::Borrowed("model"), match ov1.model { Some(ov2) => WireValue::Str(ov2.into()), _ => WireValue::Null }), (Cow::Borrowed("relation"), WireValue::Str(ov1.relation.into()))] }), _ => WireValue::Null }), (Cow::Borrowed("whereDynamic"), match ov0.whereDynamic { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("frags"), WireValue::List(WireList { items: ov1.frags.into_iter().map(|e2| WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("params"), WireValue::List(WireList { items: e2.params.into_iter().map(|e4| match e4 { Some(ov5) => ov5, _ => WireValue::Null }).collect() })), (Cow::Borrowed("skipped"), WireValue::Bool(e2.skipped)), (Cow::Borrowed("sql"), WireValue::Str(e2.sql.into()))] })).collect() })), (Cow::Borrowed("lead"), WireValue::Str(ov1.lead.into())), (Cow::Borrowed("tail"), WireValue::Str(ov1.tail.into())), (Cow::Borrowed("tailParams"), WireValue::List(WireList { items: ov1.tailParams }))] }), _ => WireValue::Null }), (Cow::Borrowed("write"), match ov0.write { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("returning"), WireValue::Bool(ov1.returning))] }), _ => WireValue::Null })] }), _ => WireValue::Null }), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::List(WireList { items: rows.into_iter().map(|e0| WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("id"), WireValue::Int(e0.id)), (Cow::Borrowed("label"), WireValue::Str(e0.label.into())), (Cow::Borrowed("post_id"), WireValue::Int(e0.post_id))] })).collect() })]; __v } })), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("INSERT INTO conf_tags (id, label, post_id) SELECT JSON_UNQUOTE(jt.id), JSON_UNQUOTE(jt.label), JSON_UNQUOTE(jt.post_id) FROM JSON_TABLE(?, '$[*]' COLUMNS(id JSON PATH '$.id', label JSON PATH '$.label', post_id JSON PATH '$.post_id')) jt")))] };
     let wire_n0 = match execute_sql(payload_n0) {
         Ok(r) => r,
         Err(e) => return Err(op_failed("n0", "fail", e)),
@@ -2217,7 +2639,7 @@ pub fn removeTags(
     let produced_n0 = std::cell::Cell::new(false);
     let _ = &produced_n0;
     // ── op 'n0' (executeSQL) ──
-    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("bigint"), WireValue::Bool(false)), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::List(WireList { items: ids.into_iter().map(WireValue::Int).collect() })]; __v } })), (Cow::Borrowed("returning"), WireValue::Bool(false)), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("DELETE FROM conf_tags WHERE id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt)"))), (Cow::Borrowed("write"), WireValue::Bool(true))] };
+    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("opts"), match Some(ExecOptions { db: Option::<String>::None, guard: Option::<CapGuard>::None, whereDynamic: Option::<DynamicWherePlan>::None, write: Some(WriteMode { returning: false }) }) { Some(ov0) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("db"), match ov0.db { Some(ov1) => WireValue::Str(ov1.into()), _ => WireValue::Null }), (Cow::Borrowed("guard"), match ov0.guard { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("limit"), WireValue::Int(ov1.limit)), (Cow::Borrowed("model"), match ov1.model { Some(ov2) => WireValue::Str(ov2.into()), _ => WireValue::Null }), (Cow::Borrowed("relation"), WireValue::Str(ov1.relation.into()))] }), _ => WireValue::Null }), (Cow::Borrowed("whereDynamic"), match ov0.whereDynamic { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("frags"), WireValue::List(WireList { items: ov1.frags.into_iter().map(|e2| WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("params"), WireValue::List(WireList { items: e2.params.into_iter().map(|e4| match e4 { Some(ov5) => ov5, _ => WireValue::Null }).collect() })), (Cow::Borrowed("skipped"), WireValue::Bool(e2.skipped)), (Cow::Borrowed("sql"), WireValue::Str(e2.sql.into()))] })).collect() })), (Cow::Borrowed("lead"), WireValue::Str(ov1.lead.into())), (Cow::Borrowed("tail"), WireValue::Str(ov1.tail.into())), (Cow::Borrowed("tailParams"), WireValue::List(WireList { items: ov1.tailParams }))] }), _ => WireValue::Null }), (Cow::Borrowed("write"), match ov0.write { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("returning"), WireValue::Bool(ov1.returning))] }), _ => WireValue::Null })] }), _ => WireValue::Null }), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::List(WireList { items: ids.into_iter().map(WireValue::Int).collect() })]; __v } })), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("DELETE FROM conf_tags WHERE id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt)")))] };
     let wire_n0 = match execute_sql(payload_n0) {
         Ok(r) => r,
         Err(e) => return Err(op_failed("n0", "fail", e)),
@@ -2258,6 +2680,130 @@ pub fn removeTags(
 }
 
 #[rustfmt::skip]
+// createDoc — the STRUCT-RETURNING combined read (bc#77/#87/#94): the fully
+// de-plumbed CONCRETE path. At each covered node's execution point it calls the op-agnostic leaf
+// TRANSPORT symbol DIRECTLY (the node's port fields spread — no per-node handler indirection) and
+// de-boxes the returned wire INLINE (match wire.as_*() { … } fully unrolled — no decode helper) into
+// the node's outType struct cell — no boxed handler result, no generic enum crossing, no dispatch on a dynamic value on the covered plane. Node
+// results are typed struct cells; a relation child reads the parent's REAL struct result via
+// direct field access (child-present decision from the real parent value — relation /
+// connection converge). A real-concurrency stage (bc#87) is static parallel orchestration —
+// scoped worker threads (bounded by the static plan.concurrency) call the transport; preflight +
+// interpret are committed in ascending index order so the value / op multiset / failure
+// precedence byte-match run_behavior. The output is a typed struct/value assembled by struct
+// literal + field access — the consumer keeps it native.
+pub fn createDoc(
+    docId: String,
+    title: String,
+) -> Result<Vec<CreateDocRow>, BehaviorError> {
+    let cell_n0: RefCell<Vec<CreateDocRow>> = RefCell::new(Default::default());
+    let produced_n0 = std::cell::Cell::new(false);
+    let _ = &produced_n0;
+    // ── op 'n0' (executeSQL) ──
+    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("opts"), match Some(ExecOptions { db: Option::<String>::None, guard: Option::<CapGuard>::None, whereDynamic: Option::<DynamicWherePlan>::None, write: Some(WriteMode { returning: true }) }) { Some(ov0) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("db"), match ov0.db { Some(ov1) => WireValue::Str(ov1.into()), _ => WireValue::Null }), (Cow::Borrowed("guard"), match ov0.guard { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("limit"), WireValue::Int(ov1.limit)), (Cow::Borrowed("model"), match ov1.model { Some(ov2) => WireValue::Str(ov2.into()), _ => WireValue::Null }), (Cow::Borrowed("relation"), WireValue::Str(ov1.relation.into()))] }), _ => WireValue::Null }), (Cow::Borrowed("whereDynamic"), match ov0.whereDynamic { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("frags"), WireValue::List(WireList { items: ov1.frags.into_iter().map(|e2| WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("params"), WireValue::List(WireList { items: e2.params.into_iter().map(|e4| match e4 { Some(ov5) => ov5, _ => WireValue::Null }).collect() })), (Cow::Borrowed("skipped"), WireValue::Bool(e2.skipped)), (Cow::Borrowed("sql"), WireValue::Str(e2.sql.into()))] })).collect() })), (Cow::Borrowed("lead"), WireValue::Str(ov1.lead.into())), (Cow::Borrowed("tail"), WireValue::Str(ov1.tail.into())), (Cow::Borrowed("tailParams"), WireValue::List(WireList { items: ov1.tailParams }))] }), _ => WireValue::Null }), (Cow::Borrowed("write"), match ov0.write { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("returning"), WireValue::Bool(ov1.returning))] }), _ => WireValue::Null })] }), _ => WireValue::Null }), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::Str(docId.into()), WireValue::Str(title.into())]; __v } })), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("INSERT INTO conf_docs (doc_id, title) VALUES (?, ?) RETURNING doc_id, title /*scp:pk=doc_id;ai=*/")))] };
+    let wire_n0 = match execute_sql(payload_n0) {
+        Ok(r) => r,
+        Err(e) => return Err(op_failed("n0", "fail", e)),
+    };
+    *cell_n0.borrow_mut() = match probe_list_at(Some(wire_n0)) {
+        Probe::Got(l0) => {
+            let mut acc0 = Vec::with_capacity(l0.items.len());
+            for e0 in l0.items {
+                acc0.push(match probe_row_at(Some(e0)) {
+                    Probe::Got(mut sub1) => CreateDocRow {
+                        doc_id: match probe_string_at(sub1.take("doc_id")) {
+                            Probe::Got(v) => Some(v.into_owned()),
+                            Probe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("CreateDocRow", "doc_id", "opt(string)", actual_wire_type, raw_value)),
+                            Probe::Null { .. } | Probe::Absent => None,
+                        },
+                        title: match probe_string_at(sub1.take("title")) {
+                            Probe::Got(v) => Some(v.into_owned()),
+                            Probe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("CreateDocRow", "title", "opt(string)", actual_wire_type, raw_value)),
+                            Probe::Null { .. } | Probe::Absent => None,
+                        },
+                    },
+                    Probe::Wrong { actual_wire_type, raw_value }
+                    | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n0", "n0", "obj{doc_id:opt(string),title:opt(string)}", actual_wire_type, raw_value)),
+                    Probe::Absent => return Err(de_missing_field("n0", "n0", "obj{doc_id:opt(string),title:opt(string)}")),
+                });
+            }
+            acc0
+        },
+        Probe::Wrong { actual_wire_type, raw_value }
+        | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n0", "n0", "arr(obj{doc_id:opt(string),title:opt(string)})", actual_wire_type, raw_value)),
+        Probe::Absent => return Err(de_missing_field("n0", "n0", "arr(obj{doc_id:opt(string),title:opt(string)})")),
+    };
+    produced_n0.set(true);
+    let __out = cell_n0.take();
+    Ok(__out)
+}
+
+#[rustfmt::skip]
+// createLine — the STRUCT-RETURNING combined read (bc#77/#87/#94): the fully
+// de-plumbed CONCRETE path. At each covered node's execution point it calls the op-agnostic leaf
+// TRANSPORT symbol DIRECTLY (the node's port fields spread — no per-node handler indirection) and
+// de-boxes the returned wire INLINE (match wire.as_*() { … } fully unrolled — no decode helper) into
+// the node's outType struct cell — no boxed handler result, no generic enum crossing, no dispatch on a dynamic value on the covered plane. Node
+// results are typed struct cells; a relation child reads the parent's REAL struct result via
+// direct field access (child-present decision from the real parent value — relation /
+// connection converge). A real-concurrency stage (bc#87) is static parallel orchestration —
+// scoped worker threads (bounded by the static plan.concurrency) call the transport; preflight +
+// interpret are committed in ascending index order so the value / op multiset / failure
+// precedence byte-match run_behavior. The output is a typed struct/value assembled by struct
+// literal + field access — the consumer keeps it native.
+pub fn createLine(
+    orderId: i64,
+    lineNo: i64,
+    sku: String,
+) -> Result<Vec<CreateLineRow>, BehaviorError> {
+    let cell_n0: RefCell<Vec<CreateLineRow>> = RefCell::new(Default::default());
+    let produced_n0 = std::cell::Cell::new(false);
+    let _ = &produced_n0;
+    // ── op 'n0' (executeSQL) ──
+    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("opts"), match Some(ExecOptions { db: Option::<String>::None, guard: Option::<CapGuard>::None, whereDynamic: Option::<DynamicWherePlan>::None, write: Some(WriteMode { returning: true }) }) { Some(ov0) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("db"), match ov0.db { Some(ov1) => WireValue::Str(ov1.into()), _ => WireValue::Null }), (Cow::Borrowed("guard"), match ov0.guard { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("limit"), WireValue::Int(ov1.limit)), (Cow::Borrowed("model"), match ov1.model { Some(ov2) => WireValue::Str(ov2.into()), _ => WireValue::Null }), (Cow::Borrowed("relation"), WireValue::Str(ov1.relation.into()))] }), _ => WireValue::Null }), (Cow::Borrowed("whereDynamic"), match ov0.whereDynamic { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("frags"), WireValue::List(WireList { items: ov1.frags.into_iter().map(|e2| WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("params"), WireValue::List(WireList { items: e2.params.into_iter().map(|e4| match e4 { Some(ov5) => ov5, _ => WireValue::Null }).collect() })), (Cow::Borrowed("skipped"), WireValue::Bool(e2.skipped)), (Cow::Borrowed("sql"), WireValue::Str(e2.sql.into()))] })).collect() })), (Cow::Borrowed("lead"), WireValue::Str(ov1.lead.into())), (Cow::Borrowed("tail"), WireValue::Str(ov1.tail.into())), (Cow::Borrowed("tailParams"), WireValue::List(WireList { items: ov1.tailParams }))] }), _ => WireValue::Null }), (Cow::Borrowed("write"), match ov0.write { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("returning"), WireValue::Bool(ov1.returning))] }), _ => WireValue::Null })] }), _ => WireValue::Null }), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::Int(lineNo), WireValue::Int(orderId), WireValue::Str(sku.into())]; __v } })), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("INSERT INTO conf_lines (line_no, order_id, sku) VALUES (?, ?, ?) RETURNING order_id, line_no, sku /*scp:pk=order_id,line_no;ai=*/")))] };
+    let wire_n0 = match execute_sql(payload_n0) {
+        Ok(r) => r,
+        Err(e) => return Err(op_failed("n0", "fail", e)),
+    };
+    *cell_n0.borrow_mut() = match probe_list_at(Some(wire_n0)) {
+        Probe::Got(l0) => {
+            let mut acc0 = Vec::with_capacity(l0.items.len());
+            for e0 in l0.items {
+                acc0.push(match probe_row_at(Some(e0)) {
+                    Probe::Got(mut sub1) => CreateLineRow {
+                        line_no: match probe_float_at(sub1.take("line_no")) {
+                            Probe::Got(v) => Some(v),
+                            Probe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("CreateLineRow", "line_no", "opt(float)", actual_wire_type, raw_value)),
+                            Probe::Null { .. } | Probe::Absent => None,
+                        },
+                        order_id: match probe_float_at(sub1.take("order_id")) {
+                            Probe::Got(v) => Some(v),
+                            Probe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("CreateLineRow", "order_id", "opt(float)", actual_wire_type, raw_value)),
+                            Probe::Null { .. } | Probe::Absent => None,
+                        },
+                        sku: match probe_string_at(sub1.take("sku")) {
+                            Probe::Got(v) => Some(v.into_owned()),
+                            Probe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("CreateLineRow", "sku", "opt(string)", actual_wire_type, raw_value)),
+                            Probe::Null { .. } | Probe::Absent => None,
+                        },
+                    },
+                    Probe::Wrong { actual_wire_type, raw_value }
+                    | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n0", "n0", "obj{line_no:opt(float),order_id:opt(float),sku:opt(string)}", actual_wire_type, raw_value)),
+                    Probe::Absent => return Err(de_missing_field("n0", "n0", "obj{line_no:opt(float),order_id:opt(float),sku:opt(string)}")),
+                });
+            }
+            acc0
+        },
+        Probe::Wrong { actual_wire_type, raw_value }
+        | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n0", "n0", "arr(obj{line_no:opt(float),order_id:opt(float),sku:opt(string)})", actual_wire_type, raw_value)),
+        Probe::Absent => return Err(de_missing_field("n0", "n0", "arr(obj{line_no:opt(float),order_id:opt(float),sku:opt(string)})")),
+    };
+    produced_n0.set(true);
+    let __out = cell_n0.take();
+    Ok(__out)
+}
+
+#[rustfmt::skip]
 // createTagsReturning — the STRUCT-RETURNING combined read (bc#77/#87/#94): the fully
 // de-plumbed CONCRETE path. At each covered node's execution point it calls the op-agnostic leaf
 // TRANSPORT symbol DIRECTLY (the node's port fields spread — no per-node handler indirection) and
@@ -2277,7 +2823,7 @@ pub fn createTagsReturning(
     let produced_n0 = std::cell::Cell::new(false);
     let _ = &produced_n0;
     // ── op 'n0' (executeSQL) ──
-    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("bigint"), WireValue::Bool(false)), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::List(WireList { items: rows.into_iter().map(|e0| WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("id"), WireValue::Int(e0.id)), (Cow::Borrowed("label"), WireValue::Str(e0.label.into())), (Cow::Borrowed("post_id"), WireValue::Int(e0.post_id))] })).collect() })]; __v } })), (Cow::Borrowed("returning"), WireValue::Bool(true)), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("INSERT INTO conf_tags (id, label, post_id) SELECT JSON_UNQUOTE(jt.id), JSON_UNQUOTE(jt.label), JSON_UNQUOTE(jt.post_id) FROM JSON_TABLE(?, '$[*]' COLUMNS(id JSON PATH '$.id', label JSON PATH '$.label', post_id JSON PATH '$.post_id')) jt RETURNING id, label /*scp:pk=id;ai=*/"))), (Cow::Borrowed("write"), WireValue::Bool(true))] };
+    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("opts"), match Some(ExecOptions { db: Option::<String>::None, guard: Option::<CapGuard>::None, whereDynamic: Option::<DynamicWherePlan>::None, write: Some(WriteMode { returning: true }) }) { Some(ov0) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("db"), match ov0.db { Some(ov1) => WireValue::Str(ov1.into()), _ => WireValue::Null }), (Cow::Borrowed("guard"), match ov0.guard { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("limit"), WireValue::Int(ov1.limit)), (Cow::Borrowed("model"), match ov1.model { Some(ov2) => WireValue::Str(ov2.into()), _ => WireValue::Null }), (Cow::Borrowed("relation"), WireValue::Str(ov1.relation.into()))] }), _ => WireValue::Null }), (Cow::Borrowed("whereDynamic"), match ov0.whereDynamic { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("frags"), WireValue::List(WireList { items: ov1.frags.into_iter().map(|e2| WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("params"), WireValue::List(WireList { items: e2.params.into_iter().map(|e4| match e4 { Some(ov5) => ov5, _ => WireValue::Null }).collect() })), (Cow::Borrowed("skipped"), WireValue::Bool(e2.skipped)), (Cow::Borrowed("sql"), WireValue::Str(e2.sql.into()))] })).collect() })), (Cow::Borrowed("lead"), WireValue::Str(ov1.lead.into())), (Cow::Borrowed("tail"), WireValue::Str(ov1.tail.into())), (Cow::Borrowed("tailParams"), WireValue::List(WireList { items: ov1.tailParams }))] }), _ => WireValue::Null }), (Cow::Borrowed("write"), match ov0.write { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("returning"), WireValue::Bool(ov1.returning))] }), _ => WireValue::Null })] }), _ => WireValue::Null }), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::List(WireList { items: rows.into_iter().map(|e0| WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("id"), WireValue::Int(e0.id)), (Cow::Borrowed("label"), WireValue::Str(e0.label.into())), (Cow::Borrowed("post_id"), WireValue::Int(e0.post_id))] })).collect() })]; __v } })), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("INSERT INTO conf_tags (id, label, post_id) SELECT JSON_UNQUOTE(jt.id), JSON_UNQUOTE(jt.label), JSON_UNQUOTE(jt.post_id) FROM JSON_TABLE(?, '$[*]' COLUMNS(id JSON PATH '$.id', label JSON PATH '$.label', post_id JSON PATH '$.post_id')) jt RETURNING id, label /*scp:pk=id;ai=*/")))] };
     let wire_n0 = match execute_sql(payload_n0) {
         Ok(r) => r,
         Err(e) => return Err(op_failed("n0", "fail", e)),
@@ -2335,7 +2881,7 @@ pub fn relabelTagsReturning(
     let produced_n0 = std::cell::Cell::new(false);
     let _ = &produced_n0;
     // ── op 'n0' (executeSQL) ──
-    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("bigint"), WireValue::Bool(false)), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::List(WireList { items: rows.into_iter().map(|e0| WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("id"), WireValue::Int(e0.id)), (Cow::Borrowed("label"), WireValue::Str(e0.label.into()))] })).collect() })]; __v } })), (Cow::Borrowed("returning"), WireValue::Bool(true)), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("UPDATE conf_tags AS u JOIN JSON_TABLE(?, '$[*]' COLUMNS(id JSON PATH '$.id', label JSON PATH '$.label')) AS v ON u.id = JSON_UNQUOTE(v.id) SET u.label = JSON_UNQUOTE(v.label) RETURNING id, label /*scp:pk=id;ai=*/"))), (Cow::Borrowed("write"), WireValue::Bool(true))] };
+    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("opts"), match Some(ExecOptions { db: Option::<String>::None, guard: Option::<CapGuard>::None, whereDynamic: Option::<DynamicWherePlan>::None, write: Some(WriteMode { returning: true }) }) { Some(ov0) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("db"), match ov0.db { Some(ov1) => WireValue::Str(ov1.into()), _ => WireValue::Null }), (Cow::Borrowed("guard"), match ov0.guard { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("limit"), WireValue::Int(ov1.limit)), (Cow::Borrowed("model"), match ov1.model { Some(ov2) => WireValue::Str(ov2.into()), _ => WireValue::Null }), (Cow::Borrowed("relation"), WireValue::Str(ov1.relation.into()))] }), _ => WireValue::Null }), (Cow::Borrowed("whereDynamic"), match ov0.whereDynamic { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("frags"), WireValue::List(WireList { items: ov1.frags.into_iter().map(|e2| WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("params"), WireValue::List(WireList { items: e2.params.into_iter().map(|e4| match e4 { Some(ov5) => ov5, _ => WireValue::Null }).collect() })), (Cow::Borrowed("skipped"), WireValue::Bool(e2.skipped)), (Cow::Borrowed("sql"), WireValue::Str(e2.sql.into()))] })).collect() })), (Cow::Borrowed("lead"), WireValue::Str(ov1.lead.into())), (Cow::Borrowed("tail"), WireValue::Str(ov1.tail.into())), (Cow::Borrowed("tailParams"), WireValue::List(WireList { items: ov1.tailParams }))] }), _ => WireValue::Null }), (Cow::Borrowed("write"), match ov0.write { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("returning"), WireValue::Bool(ov1.returning))] }), _ => WireValue::Null })] }), _ => WireValue::Null }), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::List(WireList { items: rows.into_iter().map(|e0| WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("id"), WireValue::Int(e0.id)), (Cow::Borrowed("label"), WireValue::Str(e0.label.into()))] })).collect() })]; __v } })), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("UPDATE conf_tags AS u JOIN JSON_TABLE(?, '$[*]' COLUMNS(id JSON PATH '$.id', label JSON PATH '$.label')) AS v ON u.id = JSON_UNQUOTE(v.id) SET u.label = JSON_UNQUOTE(v.label) RETURNING id, label /*scp:pk=id;ai=*/")))] };
     let wire_n0 = match execute_sql(payload_n0) {
         Ok(r) => r,
         Err(e) => return Err(op_failed("n0", "fail", e)),
@@ -2393,7 +2939,7 @@ pub fn removeTagsReturning(
     let produced_n0 = std::cell::Cell::new(false);
     let _ = &produced_n0;
     // ── op 'n0' (executeSQL) ──
-    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("bigint"), WireValue::Bool(false)), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::List(WireList { items: ids.into_iter().map(WireValue::Int).collect() })]; __v } })), (Cow::Borrowed("returning"), WireValue::Bool(true)), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("DELETE FROM conf_tags WHERE id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) RETURNING id, label /*scp:pk=id;ai=*/"))), (Cow::Borrowed("write"), WireValue::Bool(true))] };
+    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("opts"), match Some(ExecOptions { db: Option::<String>::None, guard: Option::<CapGuard>::None, whereDynamic: Option::<DynamicWherePlan>::None, write: Some(WriteMode { returning: true }) }) { Some(ov0) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("db"), match ov0.db { Some(ov1) => WireValue::Str(ov1.into()), _ => WireValue::Null }), (Cow::Borrowed("guard"), match ov0.guard { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("limit"), WireValue::Int(ov1.limit)), (Cow::Borrowed("model"), match ov1.model { Some(ov2) => WireValue::Str(ov2.into()), _ => WireValue::Null }), (Cow::Borrowed("relation"), WireValue::Str(ov1.relation.into()))] }), _ => WireValue::Null }), (Cow::Borrowed("whereDynamic"), match ov0.whereDynamic { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("frags"), WireValue::List(WireList { items: ov1.frags.into_iter().map(|e2| WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("params"), WireValue::List(WireList { items: e2.params.into_iter().map(|e4| match e4 { Some(ov5) => ov5, _ => WireValue::Null }).collect() })), (Cow::Borrowed("skipped"), WireValue::Bool(e2.skipped)), (Cow::Borrowed("sql"), WireValue::Str(e2.sql.into()))] })).collect() })), (Cow::Borrowed("lead"), WireValue::Str(ov1.lead.into())), (Cow::Borrowed("tail"), WireValue::Str(ov1.tail.into())), (Cow::Borrowed("tailParams"), WireValue::List(WireList { items: ov1.tailParams }))] }), _ => WireValue::Null }), (Cow::Borrowed("write"), match ov0.write { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("returning"), WireValue::Bool(ov1.returning))] }), _ => WireValue::Null })] }), _ => WireValue::Null }), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::List(WireList { items: ids.into_iter().map(WireValue::Int).collect() })]; __v } })), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("DELETE FROM conf_tags WHERE id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) RETURNING id, label /*scp:pk=id;ai=*/")))] };
     let wire_n0 = match execute_sql(payload_n0) {
         Ok(r) => r,
         Err(e) => return Err(op_failed("n0", "fail", e)),
@@ -2436,4 +2982,4 @@ pub fn removeTagsReturning(
 // 1:1 entry <method>(<positional params>) -> Result<T, BehaviorError>: a STRUCT return (the consumer calls
 // it with the authored args + supplies the op-agnostic leaf transport symbols the entry calls).
 // See INTEGRATION.md §6.
-pub const COMPONENT_NAMES_NATIVE_RAW: [&str; 24] = ["posts", "postsTop", "page", "postsByIds", "feed", "usersWithPosts", "postsWithAuthor", "usersWithCappedPosts", "usersWithUncappedPosts", "usersWithTopPosts", "createPost", "renamePost", "removePost", "createPostReturning", "renamePostReturning", "removePostReturning", "restatusPostsReturning", "removePostsByAuthorReturning", "typedRows", "createTags", "removeTags", "createTagsReturning", "relabelTagsReturning", "removeTagsReturning"];
+pub const COMPONENT_NAMES_NATIVE_RAW: [&str; 31] = ["posts", "postsTop", "page", "postsByIds", "feed", "pagedFeed", "optionalOnlyFeed", "quotedOrderFeed", "quotedWhereOrderFeed", "viewFeed", "usersWithPosts", "postsWithAuthor", "usersWithCappedPosts", "usersWithUncappedPosts", "usersWithTopPosts", "createPost", "renamePost", "removePost", "createPostReturning", "renamePostReturning", "removePostReturning", "restatusPostsReturning", "removePostsByAuthorReturning", "typedRows", "createTags", "removeTags", "createDoc", "createLine", "createTagsReturning", "relabelTagsReturning", "removeTagsReturning"];

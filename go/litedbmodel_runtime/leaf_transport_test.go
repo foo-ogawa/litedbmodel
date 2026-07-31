@@ -5,8 +5,11 @@
 package litedbmodel_runtime
 
 import (
+	"context"
 	"errors"
+	"reflect"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/foo-ogawa/litedbmodel/go/litedbmodel_runtime/wire"
@@ -222,6 +225,67 @@ func TestPortUnboxIsFailClosed(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), `"col"`) || !strings.Contains(err.Error(), "string element") {
 		t.Fatalf("a key-column tuple element must be a column name, got %v", err)
 	}
+	// The SAME two failures on the OTHER pluck port, so both are pinned on both — the TS / python / php
+	// legs pin all four, and a parity that holds on 6 of 8 is a parity nobody is watching.
+	_, err = PluckKeys(leafPayload(port("rows", wire.WireListOf(nil))))
+	if err == nil || !strings.Contains(err.Error(), `"col"`) || !strings.Contains(err.Error(), "absent") {
+		t.Fatalf("an absent %q port must fail loudly and name itself, got %v", "col", err)
+	}
+	_, err = PluckKeys(leafPayload(port("col", wire.WireStr("id")), port("rows", wire.WireListOf(nil))))
+	if err == nil || !strings.Contains(err.Error(), `"col"`) || !strings.Contains(err.Error(), "list") {
+		t.Fatalf("a key-column TUPLE that is one bare column name must be loud, got %v", err)
+	}
+
+	// #213 — the SAME discipline on GroupChildren's six ports. A silent default here does not corrupt a
+	// value, it changes the SHAPE of the graph: `single` read loosely flips the relation's CARDINALITY
+	// (a hasMany nesting ONE child), `into` read loosely nests the children under a stringified number.
+	// go was already loud on all six; this pins it against the TS / python / php legs that were not.
+	groupPorts := func(skip string, override ...wire.WireField) wire.WireRow {
+		base := []wire.WireField{
+			port("children", wire.WireListOf(nil)),
+			port("fk", wireStrings("post_id")),
+			port("into", wire.WireStr("kids")),
+			port("parents", wire.WireListOf(nil)),
+			port("pk", wireStrings("id")),
+			port("single", wire.WireBool(false)),
+		}
+		out := make([]wire.WireField, 0, len(base)+len(override))
+		for _, f := range base {
+			if f.Key == skip {
+				continue
+			}
+			out = append(out, f)
+		}
+		return leafPayload(append(out, override...)...)
+	}
+	for _, name := range []string{"children", "fk", "into", "parents", "pk", "single"} {
+		if _, err := GroupChildren(groupPorts(name)); err == nil ||
+			!strings.Contains(err.Error(), `"`+name+`"`) || !strings.Contains(err.Error(), "absent") {
+			t.Fatalf("an absent %q port must fail loudly and name itself, got %v", name, err)
+		}
+	}
+	for _, c := range []struct {
+		name string
+		val  wire.WireValue
+		want string
+	}{
+		{"single", wire.WireStr("yes"), "bool"},                                      // the CARDINALITY flip
+		{"into", wire.WireInt(42), "string"},                                         // the nest key
+		{"pk", wire.WireListOf([]wire.WireValue{wire.WireInt(1)}), "string element"}, // a key column that is not a NAME
+		{"fk", wire.WireStr("post_id"), "list"},                                      // the tuple, not one column
+		{"parents", wire.WireInt(7), "list"},
+		{"children", wire.WireStr("x"), "list"},
+	} {
+		if _, err := GroupChildren(groupPorts(c.name, port(c.name, c.val))); err == nil ||
+			!strings.Contains(err.Error(), `"`+c.name+`"`) || !strings.Contains(err.Error(), c.want) {
+			t.Fatalf("a mistyped %q port must name the port and its declared wire kind, got %v", c.name, err)
+		}
+	}
+
+	// The LEGAL shape stays silent, and the CARDINALITY the ports declare is the one that comes out.
+	if _, err := GroupChildren(groupPorts("")); err != nil {
+		t.Fatalf("a well-formed group payload must pass, got %v", err)
+	}
 }
 
 // A batch write's opaque `rows` array param (createMany/upsertMany/updateMany) rides as ONE JSON array
@@ -281,5 +345,140 @@ func TestCheckFindHardLimit(t *testing.T) {
 		"Set a higher limit or use pagination."
 	if lim.Error() != want {
 		t.Fatalf("find-context message mismatch:\n got: %s\nwant: %s", lim.Error(), want)
+	}
+}
+
+// #207 — the leaf hands the central seam ONE StatementIntent, derived from the statement's RUN MODE,
+// and [ExecutionContext.ConnectionFor] resolves the CONNECTION from it ([resolvePool]: write ⇒ the
+// writer pool). The branch that selects the SEAM is a DIFFERENT question: a RETURNING write runs on the
+// ROW seam ([Execute]) and is still a write. Deriving the intent from the branch — which is what this
+// transport did — sent `INSERT … RETURNING` to the READ REPLICA.
+//
+// The conformance/livedb setups run reader === writer (every intent returns the same pool), which is
+// why no cross-language leg saw this; the gate therefore SPLITS the pair and records which pool served
+// each statement.
+//
+// It drives the PRODUCTION wiring end to end: the routed ctx goes in through the PUBLIC binder
+// ([BindLeafTransport]), which is the only way a consumer installs one, and comes back out as the pool
+// [ExecuteSQL] actually acquired. Binding a raw db instead — the shape that wrapped it in
+// [ContextForDB], whose `routing` is nil — made every routed setup inert in this leg (#214), so both
+// halves are load-bearing here: break the binder and the routing observation dies, break the intent
+// derivation and the RETURNING write lands on the reader.
+func TestExecuteSQL_RunModePicksThePool(t *testing.T) {
+	var log []string
+	reader := newRecordPool("reader", &log)
+	writer := newRecordPool("writer", &log)
+	BindLeafTransport(
+		ContextForRouting(routingWithPools(reader, writer, NewWriterStickyClock(StickyOptions{UseWriterAfterTransaction: boolPtr(false)})), nil),
+		"sqlite",
+	)
+	defer UnbindLeafTransport()
+
+	// A plain READ — the bounded payload that omits the control record entirely → the READER.
+	if _, err := ExecuteSQL(sqlPayload(nil, "SELECT id FROM users", false)); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	// A RETURNING write → the WRITER, even though it runs on the ROW seam.
+	returning, err := ExecuteSQL(leafPayload(
+		optsPort(wire.WireNull(), writeModeRow(true), wire.WireNull(), wire.WireNull()),
+		port("params", wire.WireListOf(nil)),
+		port("sql", wire.WireStr("INSERT INTO users (name) VALUES (?) RETURNING id")),
+	))
+	if err != nil {
+		t.Fatalf("returning write: %v", err)
+	}
+	// A NON-returning write → the WRITER too (the half that was already right stays right).
+	summary, err := ExecuteSQL(sqlPayload(nil, "INSERT INTO users (name) VALUES (?)", true))
+	if err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	if !reflect.DeepEqual(log, []string{"reader", "writer", "writer"}) {
+		t.Fatalf("leaf routing = %v, want [reader writer writer]", log)
+	}
+	// …and the two decisions are INDEPENDENT, not accidentally aligned: the RETURNING write really did
+	// take the ROW seam (its rows come back), the non-returning one the affected-rows summary.
+	if ch := returning.AsList().Got.ElemRow(0).Got.ProbeInt("changes"); ch.Kind != wireProbeAbsent {
+		t.Fatalf("a RETURNING write must return ROWS, not the write summary (kind=%d)", ch.Kind)
+	}
+	if ch := summary.AsList().Got.ElemRow(0).Got.ProbeInt("changes"); ch.Kind != wireProbeGot {
+		t.Fatalf("a non-returning write must return the [{changes,lastInsertRowid}] summary (kind=%d)", ch.Kind)
+	}
+}
+
+// #215 — a covered-plane transaction is the runtime's ONE transaction, on the connection the BOUND
+// context resolves. [WithAmbientTransaction] took the tx's db as an ARGUMENT and BEGAN on it, so a
+// routed covered plane opened its transaction outside its own routing — and it could not do otherwise,
+// because a [Pool] hands out owned connections and the tx path only knew how to ask a [TxDB]. The
+// single-pool conformance/livedb setups cannot see any of this: reader IS writer there.
+//
+// The gate runs a covered tx on a routed ctx over a SPLIT pair and reads back three transcripts —
+// WHICH pool each acquire came from, WHAT a registered middleware saw, and where the read AFTER the tx
+// landed — all from the PRODUCTION wiring: the ctx goes in through the PUBLIC binder
+// ([BindLeafTransport]), the statements through [ExecuteSQL], the boundary through
+// [WithAmbientTransaction]. Nothing here re-derives a rule.
+func TestWithAmbientTransaction_OpensOnTheWriterAndIsSeamVisible(t *testing.T) {
+	var pools []string
+	reader := newRecordPool("reader", &pools)
+	writer := newRecordPool("writer", &pools)
+	clock := int64(1_000_000)
+	sticky := NewWriterStickyClock(StickyOptions{
+		UseWriterAfterTransaction: boolPtr(true),
+		WriterStickyDuration:      intPtr(5000),
+		Now:                       func() int64 { return clock },
+	})
+	read := func() error {
+		_, err := ExecuteSQL(sqlPayload(nil, "SELECT id FROM users", false))
+		return err
+	}
+
+	var seen []string
+	var mu sync.Mutex
+	if _, err := WithMiddlewareScope(context.Background(), func(scopeCtx context.Context) (struct{}, error) {
+		RegisterMiddleware(scopeCtx, observeMiddleware(&seen, &mu).Descriptor())
+		BindLeafTransport(ContextForRoutingCtx(scopeCtx, routingWithPools(reader, writer, sticky)), "sqlite")
+		defer UnbindLeafTransport()
+
+		// Before any transaction: a read is a plain read ⇒ the READER (the sticky clock is unarmed).
+		if err := read(); err != nil {
+			return struct{}{}, err
+		}
+		if err := WithAmbientTransaction(func() error {
+			// A READ inside the tx: its intent says READER, but the tx PIN wins — this is the "a read in
+			// a transaction sticks to the tx connection" half, and it acquires NO further connection.
+			if err := read(); err != nil {
+				return err
+			}
+			_, err := ExecuteSQL(sqlPayload(nil, "INSERT INTO users (name) VALUES (?)", true))
+			return err
+		}); err != nil {
+			return struct{}{}, err
+		}
+		// The COMMIT armed the writer-sticky clock: the SAME plain read that opened this test on the
+		// reader now routes to the WRITER (read-your-writes).
+		clock += 100
+		return struct{}{}, read()
+	}); err != nil {
+		t.Fatalf("covered tx: %v", err)
+	}
+
+	// (1) the BEGIN is drawn from the WRITER pool, and (2) it is the tx's ONLY acquire — both body
+	// statements, the READ included, ran on that pinned connection. The trailing writer is the post-tx
+	// read: sticky armed.
+	if !reflect.DeepEqual(pools, []string{"reader", "writer", "writer"}) {
+		t.Fatalf("pool acquires = %v, want [reader writer writer] (pre-tx read, the tx's ONE writer "+
+			"connection, the sticky post-tx read)", pools)
+	}
+	// (3) the tx-control is SEAM-issued, so a registered middleware observes the whole envelope.
+	want := []string{
+		"SELECT id FROM users",
+		"BEGIN",
+		"SELECT id FROM users",
+		"INSERT INTO users (name) VALUES (?)",
+		"COMMIT",
+		"SELECT id FROM users",
+	}
+	if !reflect.DeepEqual(seen, want) {
+		t.Fatalf("middleware saw %v, want %v", seen, want)
 	}
 }

@@ -2,6 +2,8 @@
 
 **対象**: litedbmodel v2 → beta（v1 parity）Epic #74 の基盤フェーズ。tx(#69)・middleware(#70)・reader/writer/複数DB(#72)・config(#72) の全てがこの上に載る。**5 native 言語（TS/rust/go/py/php）共通契約**。設計参照: v1 TS(`AsyncLocalStorage`)・v1 rust(`litedbmodel.rs` `PoolTransaction`)・graphddb。
 
+> **現況注記（#227 後）**: 本節 §1/§2 が「ctx を通す入口」として挙げる `executeBundle` / `executeTransactionBundle` / `executeReadGraph`（自前の SqlBundle/ReadGraph 実行系）は **#227 で全削除された**。ctx が通る唯一の実行経路は BC 生成 native がバインドする **leaf transport（`executeSQL`/`pluck`/`group`）＋中央 execute/run/runGuarded seam** に一本化されている。以下の記述は Phase A 設計当時の出発点（seam 導入前）として読むこと。seam 自体（ExecutionContext / execute / run / withTransaction）は現行のまま。
+
 ---
 
 ## 1. 現状（seam の素地と欠落）

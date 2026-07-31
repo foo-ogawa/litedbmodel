@@ -165,15 +165,20 @@ final class OrmBenchNativeTest extends TestCase
         $before = count($this->users());
         $fns = $this->fns;
 
+        // The assertions live OUTSIDE the catch on purpose: PHPUnit's own AssertionFailedError extends
+        // \RuntimeException, so a `fail()` inside the try would be swallowed by the catch below — the
+        // gate would go green (or fail for the wrong reason) while the tx silently committed.
+        $caught = null;
         try {
             withTransaction(Context::of($this->driver), static function () use ($fns): void {
                 $fns['create'](['email' => 'rollback@bench.com', 'name' => 'RB']); // insert on the pinned tx conn
                 throw new \RuntimeException('boom'); // mid-tx failure → ROLLBACK
             });
-            $this->fail('expected the mid-tx throw to propagate');
         } catch (\RuntimeException $e) {
-            $this->assertSame('boom', $e->getMessage());
+            $caught = $e;
         }
+        $this->assertNotNull($caught, 'expected the mid-tx throw to propagate');
+        $this->assertSame('boom', $caught->getMessage());
 
         $this->assertCount($before, $this->users()); // nothing committed
         $this->assertFalse($this->anyEmail('rollback@bench.com')); // the insert was rolled back

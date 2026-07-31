@@ -9,7 +9,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { emitBehaviorModule, resetLimitConfig, setLimitConfig, type EndpointSet } from '../../src/scp';
-import { EMIT_COLUMN_OPTIONS, EMIT_ENDPOINTS, emitModels, Post, TenantUser, User } from './emit-models';
+import { EMIT_COLUMN_OPTIONS, EMIT_ENDPOINTS, NAMED_DB, NAMED_DB_ENDPOINTS, emitModels, Post, TenantUser, User } from './emit-models';
 
 const LEAF = '../../src/scp/leaf-transport.js';
 
@@ -158,13 +158,89 @@ describe('emitter — SKIP / dynamic WHERE (assembled by the leaf at execution t
   it('bakes the BOUNDED predicate statically and passes only the optional ones as fragments', () => {
     const body = bodyOf(emit('sqlite').source, 'feed');
     const call = body.join(' ');
-    // The base statement carries the head + tail only — the WHERE is assembled at execution time.
-    expect(call).toContain('SELECT id, author_id, title FROM e2e_posts ORDER BY id ASC", []');
-    // Every fragment is literal SQL text + params (the whole vocabulary); the BOUNDED one is
-    // unguarded, so it is a constant in the generated native code too.
-    expect(call).toContain('frags: [{ skipped: false, sql: "author_id = ?", params: [authorId] }');
-    expect(call).toContain('{ skipped: title === null, sql: "title LIKE ?", params: [title] }');
-    expect(call).toContain('{ skipped: minId === null, sql: "id >= ?", params: [minId] }');
+    // The BOUNDED predicate IS the emitted statement's WHERE — static SQL + a main param, exactly as it
+    // is on a read that declares no optional predicate at all (CLAUDE.md §2, native-clean). With a plan
+    // the `sql` port is the statement's HEAD: it STOPS at the end of that WHERE, and the tail rides the
+    // plan (#198 / #202 — the leaf concatenates instead of scanning for the boundary).
+    expect(call).toContain('SELECT id, author_id, title FROM e2e_posts WHERE author_id = ?", [authorId]');
+    // …so the plan holds the ACTUALLY-optional predicates and nothing else: no `skipped: false` frag,
+    // and `author_id` never appears in one. `lead` is ` AND ` because the head ends in a WHERE; `tail`
+    // is the text that follows it and `tailParams` its own bound values (none here).
+    expect(call).toContain(
+      '{ frags: [{ skipped: title === null, sql: "title LIKE ?", params: [title] }, { skipped: minId === null, sql: "id >= ?", params: [minId] }], lead: "AND", tail: " ORDER BY id ASC", tailParams: [] }',
+    );
+    expect(call).not.toContain('skipped: false');
+    expect(call.slice(call.indexOf('frags'))).not.toContain('author_id');
+  });
+
+  it('a read with ONLY optional predicates leads with WHERE — the head carries none to continue', () => {
+    const r = emit('sqlite', {
+      optionalOnly: {
+        kind: 'read',
+        model: Post,
+        select: ['id', 'title'],
+        where: [
+          { column: 'author_id', op: 'eq', param: 'authorId', optional: true },
+          { column: 'title', op: 'eq', param: 'title', optional: true },
+        ],
+        order: 'id ASC',
+      },
+    });
+    const line = bodyOf(r.source, 'optionalOnly')[0];
+    // The head is the statement UP TO its (absent) WHERE — no ` WHERE` text at all — so the first
+    // survivor has to OPEN one. That is `lead`, decided by the builder that emitted the head.
+    expect(line).toContain('Db.executeSQL("SELECT id, title FROM e2e_posts", []');
+    expect(line).toContain('lead: "WHERE"');
+    expect(line).toContain('tail: " ORDER BY id ASC"');
+  });
+
+  it('#198 — a SKIP read on a QUERY view: the CTE\'s OWN tail is inside the head, not the splice point', () => {
+    const r = emit('sqlite', {
+      viewFeed: {
+        kind: 'read',
+        model: Post,
+        select: ['id', 'title'],
+        // The CTE is a statement of its OWN: it carries a tail (` ORDER BY … LIMIT …`) and a QUOTED
+        // ` WHERE `. A lexical scan of the finished statement took the CTE's ORDER BY for the outer
+        // one's and spliced the clause INSIDE the CTE, and read the quoted ` WHERE ` as a real one and
+        // continued it with ` AND ` (#198). Both are structurally impossible now: the whole CTE is part
+        // of the HEAD, which ends at the OUTER statement's WHERE region.
+        view: { query: "SELECT id, title FROM e2e_posts WHERE title <> ' WHERE ' ORDER BY id ASC LIMIT 2" },
+        where: [{ column: 'title', op: 'eq', param: 'title', optional: true }],
+        order: 'id ASC',
+      },
+    });
+    const line = bodyOf(r.source, 'viewFeed')[0];
+    expect(line).toContain(
+      'Db.executeSQL("WITH derived AS (SELECT id, title FROM e2e_posts WHERE title <> \' WHERE \' ORDER BY id ASC LIMIT 2) SELECT id, title FROM derived", []',
+    );
+    // The OUTER statement carries no WHERE, so the survivor OPENS one — the CTE's WHERE is not the
+    // outer statement's and does not make this an ` AND `.
+    expect(line).toContain('lead: "WHERE"');
+    expect(line).toContain('tail: " ORDER BY id ASC"');
+  });
+
+  it('#202 — a QUOTED `?` in the ORDER BY is TEXT: it rides the tail and binds nothing', () => {
+    const r = emit('postgres', {
+      quotedOrderFeed: {
+        kind: 'read',
+        model: Post,
+        select: ['id', 'title'],
+        where: [
+          { column: 'author_id', op: 'eq', param: 'authorId' },
+          { column: 'id', op: 'ge', param: 'minId', optional: true },
+        ],
+        // `order` is a free string on the PUBLIC `ReadEndpoint` type, so a quoted `?` reaches the tail.
+        // Counting the tail's `?`s to place the survivors' params mis-bound every value after it (#202).
+        order: "CASE WHEN title = '?' THEN 0 ELSE 1 END, id ASC",
+        limit: { param: 'limit' },
+      },
+    });
+    const line = bodyOf(r.source, 'quotedOrderFeed')[0];
+    expect(line).toContain('Db.executeSQL("SELECT id, title FROM e2e_posts WHERE author_id = ?", [authorId]');
+    // The tail carries the quoted `?` AND the bound page. `tailParams` is the page count ALONE — the
+    // quoted `?` binds nothing, and there is no count anywhere to get wrong.
+    expect(line).toContain('tail: " ORDER BY CASE WHEN title = \'?\' THEN 0 ELSE 1 END, id ASC LIMIT ?", tailParams: [limit]');
   });
 
   it('the optional parameters are declared nullable; the bounded one is not', () => {
@@ -201,6 +277,26 @@ describe('emitter — RELATIONS (one query per level, N+1-free)', () => {
     expect(body[6]).toContain('Db.group(rows, commentsGraph, ["id"], ["author_id"], "posts", false)');
   });
 
+  it('a GUARDED relation child carries the cap as a NAMED field — no empty-plan filler (#193)', () => {
+    try {
+      setLimitConfig({ hasManyHardLimit: 7 });
+      const body = bodyOf(emit('sqlite').source, 'usersWithPosts');
+      // The child fetch's whole control surface is ONE record: the cap under its own `guard` field,
+      // and "no dynamic WHERE" spelled as `whereDynamic: null`. Before #193 the guard could only be
+      // reached POSITIONALLY, so the emitter passed an EMPTY plan (`{ frags: [] }`) to get past the
+      // `whereDynamic` slot — a value that claimed a plan the statement does not have.
+      expect(body[2]).toContain(
+        ', { db: null, write: null, whereDynamic: null, guard: { limit: 7 as Int, model: "e2e_posts", relation: "posts" } });',
+      );
+      expect(body[2]).not.toContain('frags');
+      // The relation batch is a READ — `write: null` is how the record says so (#206: one field,
+      // three values, so a read cannot accidentally claim to return rows without being a write).
+      expect(body[4]).toContain('guard: { limit: 7 as Int,');
+    } finally {
+      resetLimitConfig();
+    }
+  });
+
   it('the SINGLE de-box is the terminal group; every intermediate stays opaque WireValue[]', () => {
     const body = bodyOf(emit('sqlite').source, 'usersWithPosts');
     expect(body.filter((l) => l.includes(' as ')).length).toBe(1);
@@ -230,7 +326,9 @@ describe('emitter — RELATIONS (one query per level, N+1-free)', () => {
         'ON e2e_tenant_posts.tenant_id = _keys.key0 AND e2e_tenant_posts.user_id = _keys.key1',
     );
     expect(body[2]).toContain('Db.executeSQL(');
-    expect(body[2]).toContain(', [postsKeys], false, false, false)');
+    // An UNCAPPED relation child carries NO control record at all — the statement is `sql` + `params`
+    // and nothing else (#193: there is no trailing port left to reach, so no filler is emitted).
+    expect(body[2]).toContain(', [postsKeys]);');
     expect(body[2].match(/\?/g)).toHaveLength(1); // ONE placeholder ⇒ ONE bound param
   });
 });
@@ -257,7 +355,7 @@ describe('emitter — WRITES', () => {
     // the adapter strips it and re-selects. Emitting the mysql module must therefore NOT throw.
     const { source } = emit('mysql', { createUser: EMIT_ENDPOINTS.createUser });
     expect(bodyOf(source, 'createUser')[0]).toContain('INSERT INTO e2e_users (name) VALUES (?) RETURNING id, name');
-    expect(bodyOf(source, 'createUser')[0]).toContain('true, true'); // write=true, returning=true
+    expect(bodyOf(source, 'createUser')[0]).toContain('{ db: null, write: { returning: true }, whereDynamic: null, guard: null }');
   });
 
   it('batch writes bind ONE record-array JSON param on mysql/sqlite', () => {
@@ -354,7 +452,7 @@ describe('emitter — #161 paging (a page position may be an INPUT)', () => {
     );
   });
 
-  it('a SKIP read pages too — the base params stay [limit, offset] behind the runtime-assembled WHERE', () => {
+  it('a SKIP read pages too — the bounded value and the page count keep their static slots', () => {
     const r = emit('postgres', {
       pagedFeed: {
         kind: 'read',
@@ -366,10 +464,13 @@ describe('emitter — #161 paging (a page position may be an INPUT)', () => {
       },
     });
     const line = bodyOf(r.source, 'pagedFeed')[0];
-    // The leaf splices the surviving WHERE before ` ORDER BY` and binds its params BEFORE these two
-    // (`assembleDynamicWhere`), so the tail's `?` stays last however many fragments survive.
-    expect(line).toContain('Db.executeSQL("SELECT id, title FROM e2e_posts ORDER BY id ASC LIMIT ?", [limit]');
-    expect(line).toContain('{ frags: [{ skipped: false, sql: "author_id = ?", params: [authorId] }, { skipped: title === null, sql: "title LIKE ?", params: [title] }] }');
+    // The bounded predicate is baked; the page tail binds after it. The leaf CONTINUES that WHERE with
+    // the surviving fragment (`assembleDynamicWhere`) and binds its param between the two — the slot
+    // the fragment's own `?` occupies — so `LIMIT ?` stays last however many fragments survive.
+    expect(line).toContain('Db.executeSQL("SELECT id, title FROM e2e_posts WHERE author_id = ?", [authorId]');
+    expect(line).toContain(
+      '{ frags: [{ skipped: title === null, sql: "title LIKE ?", params: [title] }], lead: "AND", tail: " ORDER BY id ASC LIMIT ?", tailParams: [limit] }',
+    );
   });
 
   it('a BOUND limit is an authored LIMIT — it governs, so no find cap is baked (v1 skip rule)', () => {
@@ -432,17 +533,48 @@ describe('emitter — fail-closed', () => {
     );
   });
 
-  it('rejects a SKIP predicate on a QUERY view (the CTE and the plan cannot share one param order)', () => {
-    expect(() =>
-      emit('sqlite', {
-        bad: {
-          kind: 'read',
-          model: Post,
-          select: ['id', 'title'],
-          view: { query: 'SELECT id, title FROM e2e_posts' },
-          where: [{ column: 'title', op: 'like', param: 'title', optional: true }],
-        },
-      }),
-    ).toThrow(/cannot share one param order/);
+});
+
+// ════════════════════════════════════════════════════════════════════════════════
+// #217 — named-DB routing: the emitter LOWERS the connection name onto the statement
+// ════════════════════════════════════════════════════════════════════════════════
+
+describe('emitter — named-DB (#217): the model names the database, the emitter bakes it in', () => {
+  const named = (dialect: 'sqlite' | 'postgres' | 'mysql' = 'sqlite') =>
+    emit(dialect, NAMED_DB_ENDPOINTS).source;
+
+  it('a CROSS-DB relation batches on the TARGET model\'s connection, not the parent\'s (v1 LazyRelation.ts:236)', () => {
+    const body = bodyOf(named(), 'postsWithAuthor');
+    // The PARENT read is on the DEFAULT connection, so it carries NO control record at all — the
+    // native-clean payload (`sql` + `params`). This is why a single-DB module is byte-unchanged.
+    expect(body[0]).toContain('Db.executeSQL("SELECT id, author_id, title FROM scp217_posts ORDER BY id ASC", [])');
+    expect(body[0]).not.toContain('db:');
+    // The CHILD fetch names `analytics` — the target model's database. Dropping this field is exactly
+    // the defect: the batch would run against the parent's DB, where scp217_users does not exist.
+    expect(body[2]).toContain(`, { db: "${NAMED_DB}", write: null, whereDynamic: null, guard: null });`);
+  });
+
+  it('an ENDPOINT whose own model is on another connection runs EVERY statement there (read and write)', () => {
+    const source = named();
+    expect(bodyOf(source, 'usersOnB')[0]).toContain(`, { db: "${NAMED_DB}", write: null, whereDynamic: null, guard: null })`);
+    // A WRITE names it too — the `db` field and the `write` field are independent facts of ONE record.
+    expect(bodyOf(source, 'renameUserOnB')[0]).toContain(
+      `, { db: "${NAMED_DB}", write: { returning: false }, whereDynamic: null, guard: null })`,
+    );
+  });
+
+  it('the name is DIALECT-INDEPENDENT — it routes the statement, it does not shape the SQL', () => {
+    // Same connection name on all three dialects: `db` is a routing tag, so only the SQL text differs.
+    for (const dialect of ['sqlite', 'postgres', 'mysql'] as const) {
+      expect(bodyOf(named(dialect), 'usersOnB')[0]).toContain(`{ db: "${NAMED_DB}",`);
+    }
+  });
+
+  it('a DEFAULT-connection model names nothing — the whole option record stays unspelled', () => {
+    // The negative half of the same rule: `EMIT_ENDPOINTS`' models declare no connection, so no `db`
+    // appears anywhere in that module. A `db: null` leaking into a bounded read would un-do the
+    // native-clean payload for every single-DB consumer.
+    const body = bodyOf(emit('sqlite').source, 'usersByIds');
+    expect(body[0]).not.toContain('db:');
   });
 });

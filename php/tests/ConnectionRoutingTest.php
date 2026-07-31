@@ -235,6 +235,26 @@ final class ConnectionRoutingTest extends TestCase
         $clock->mark();
         $this->assertFalse($clock->isSticky());
     }
+
+    /**
+     * #218 t=0 REGRESSION: a mark() when the clock reads 0 MUST arm stickiness, so the read right after
+     * the commit routes to the WRITER (read-your-writes). The old code stored 0.0 as "never marked" (a
+     * value sentinel) → the commit failed to stick and the read leaked to the reader replica. Revert
+     * $lastWriteAt to 0.0 + `=== 0.0` ⇒ both asserts below go RED. Every OTHER sticky test marks at a
+     * non-zero clock, so this t=0 case was previously unproven.
+     */
+    public function testWriterStickyArmedAtClockZero(): void
+    {
+        $reader = new FakePool('reader');
+        $writer = new FakePool('writer');
+        $sticky = new WriterStickyClock(useWriterAfterTransaction: true, writerStickyDuration: 5000, now: static fn (): float => 0.0);
+        $routing = new RoutingConfig(ConnectionRegistry::fromDefault(new ReaderWriterPools($reader, $writer))->build(), $sticky);
+        // Before any mark ⇒ reader (absence, not sticky), even at t=0.
+        $this->assertSame($reader, resolvePool(new StatementIntent(write: false), $routing));
+        // A commit at clock t=0 arms the sticky clock.
+        $sticky->mark();
+        $this->assertSame($writer, resolvePool(new StatementIntent(write: false), $routing));
+    }
 }
 
 /**

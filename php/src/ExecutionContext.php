@@ -11,8 +11,8 @@ namespace LiteDbModel\Runtime;
  * rust port `rust/litedbmodel_runtime/src/exec_context.rs` (#76), the go port
  * `go/litedbmodel_runtime/exec_context.go` (#77) and the python port
  * `python/litedbmodel_runtime/exec_context.py` (#78). It replaces the raw `\PDO $db` threaded
- * through `Runtime::executeBundle` / `StaticBundle::executeReadGraph` / the relation walker /
- * `WriteRuntime::executeTransaction` with an {@see ExecutionContext} that carries:
+ * through the leaf transport ({@see execute()} / {@see run()} / {@see runGuarded()})
+ * with an {@see ExecutionContext} that carries:
  *
  *   1. a **connection provider** — {@see ExecutionContext::connectionFor()} `(intent)` resolves WHICH
  *      connection a statement runs on (the tx-owned connection, else the primary PDO; Phase A wires
@@ -20,7 +20,8 @@ namespace LiteDbModel\Runtime;
  *   2. a **middleware chain** — {@see ExecutionContext::$middleware}, wrapping every SQL (empty in
  *      Phase A = passthrough; the registration API is Phase D — this is only the hook point);
  *   3. a **pinned tx connection** — a tx-scoped ctx pins ONE owned connection so every statement in a
- *      transaction body runs on it (per-execution connection ownership, §3).
+ *      transaction body of the tx's own database (an unnamed one, or one naming that database) runs on it (per-execution connection
+ *      ownership, §3).
  *
  * ## The central seam (§2) — ALL SQL funnels through here
  *
@@ -53,8 +54,8 @@ namespace LiteDbModel\Runtime;
  * A transaction acquires ONE connection via {@see PdoDriver::beginTx()} (a {@see PdoTxConnection}
  * owned handle — the PHP analogue of v1 `PoolTransaction` / go's `*sql.Tx`), pins it into a tx-scoped
  * {@see ExecutionContext} **propagated as an EXPLICIT argument** (§3 table: PHP has no
- * AsyncLocalStorage / contextvars), runs its body (every statement resolves that connection via
- * `connectionFor`), COMMITs/ROLLBACKs on the SAME owned connection, and releases it EXACTLY ONCE.
+ * AsyncLocalStorage / contextvars), runs its body (every statement of the tx's own database resolves that connection via
+ * `connectionFor`, and a statement naming a DIFFERENT database is rejected), COMMITs/ROLLBACKs on the SAME owned connection, and releases it EXACTLY ONCE.
  *
  * PHP is 1-request-1-process, so there is exactly ONE `\PDO` (no pool) and it can hold exactly ONE
  * active transaction; the tx therefore OWNS that connection for its span (the single-connection
@@ -160,8 +161,8 @@ final class PdoConnection implements Connection
 
 /**
  * A {@see Connection} view over a tx's OWNED {@see PdoTxConnection} handle. The seam resolves this
- * (via `connectionFor`) for every statement inside a tx, so all of them run on the SAME owned
- * connection. It funnels `execute`/`run` to the handle's PDO — the SAME single `\PDO` the tx issued
+ * (via `connectionFor`) for every statement inside a tx of the tx's own database — an unnamed one, or one naming that
+ * database — so all of THOSE run on the SAME owned connection (a statement naming a DIFFERENT database is rejected instead). It funnels `execute`/`run` to the handle's PDO — the SAME single `\PDO` the tx issued
  * its `BEGIN` on — so a statement mis-routed to a DIFFERENT (autocommit) connection would escape the
  * transaction (the mutation the atomicity "teeth" test exploits).
  */
@@ -242,7 +243,8 @@ final class PdoDriver
 /**
  * The OWNED tx handle over a `\PDO` (Phase A / #79) — the PHP analogue of v1 `PoolTransaction` /
  * go's `*sql.Tx` / python's `_SqliteTxConnection`. It holds ONE connection (PHP's single `\PDO`) for
- * the transaction's whole duration: every statement in the tx body runs on it (`all` / `run`), the
+ * the transaction's whole duration: every statement in the tx body of the tx's own database runs on it (`all` / `run`)
+ * — a statement naming a DIFFERENT database is rejected — the
  * tx ends by running {@see commit()} / {@see rollback()} on the SAME owned connection, and the
  * combinator then {@see release()}s it EXACTLY ONCE.
  *
@@ -416,8 +418,8 @@ final class MiddlewareChain
 // ── The ExecutionContext (§2 / §5) — ONE interface ────────────────────────────
 
 /**
- * The execution context threaded through `Runtime::executeBundle` / `StaticBundle::executeReadGraph` /
- * the relation walker / `WriteRuntime::executeTransaction` in place of a raw `\PDO`. It carries the
+ * The execution context threaded through the leaf transport and the central execute/run/runGuarded
+ * seam in place of a raw `\PDO`. It carries the
  * connection provider (the primary driver + an optional pinned tx connection), the middleware chain,
  * and derives a tx-scoped ctx via {@see withConnection()}.
  *
@@ -433,7 +435,8 @@ final class MiddlewareChain
 class ExecutionContext
 {
     /**
-     * @param Connection|null $pinned the pinned tx connection (present ⇒ tx-scoped ctx; every statement resolves it).
+     * @param Connection|null $pinned the pinned tx connection (present ⇒ tx-scoped ctx; every statement
+     *        of the tx's own database (an unnamed one, or one naming that database) resolves it).
      * @param bool $readOnly the READ-ONLY marker (Phase B / #85 write=tx guard — mirror v1 `withWriter` /
      *        the TS `withReadOnly` ALS marker / rust/go/py `read_only`): a write in a read-only-scoped ctx
      *        is REJECTED ({@see WriteInReadOnlyContextError}). Derived via {@see withReadOnly()}.
@@ -459,10 +462,11 @@ class ExecutionContext
     }
 
     /**
-     * The pinned tx connection (present ⇒ tx-scoped ctx; every statement resolves it), or `null`. The
-     * sanctioned accessor for the {@see connectionFor()} extension point (Phase C: the routing subclass
-     * {@see RoutingExecutionContext} reads it so STEP 1 — the tx pin — STILL wins before it applies
-     * reader/writer/named-DB routing; Phase B is not broken). Protected: only a ctx subclass resolving
+     * The pinned tx connection (present ⇒ tx-scoped ctx; every statement of the tx's own database (an unnamed one, or one naming that database) 
+     * resolves it), or `null`. The sanctioned accessor for the {@see connectionFor()} extension point
+     * (Phase C: the routing subclass {@see RoutingExecutionContext} reads it so STEP 1 — the tx pin — is
+     * resolved BEFORE reader/writer/named-DB routing, and a statement naming a DIFFERENT database than
+     * the transaction opened on is rejected there rather than routed). Protected: only a ctx subclass resolving
      * `connectionFor` needs it.
      */
     protected function pinnedConnection(): ?Connection
@@ -482,7 +486,7 @@ class ExecutionContext
     /**
      * Derive a READ-ONLY-scoped ctx (mirror v1 `withWriter` / the TS `withReadOnly` / rust/go/py
      * `with_read_only`): reads are allowed, but ANY write funneled through the GUARDED write seam
-     * ({@see runGuarded()} / a guarded `executeTransactionBundle`) is rejected with
+     * ({@see runGuarded()}) is rejected with
      * {@see WriteInReadOnlyContextError}. A tx-scoped ctx INHERITS its pinned connection + driver +
      * middleware; a transaction() opened inside a read-only scope stays read-only (v1 parity).
      */
@@ -492,17 +496,30 @@ class ExecutionContext
     }
 
     /**
-     * Resolve WHICH connection a statement runs on (§3). Phase A resolution: the tx-owned (pinned)
-     * connection wins; else the primary driver's connection. Reader/writer split (§3-2/3) + named-DB
-     * routing (§3-4) extend HERE in B/C/D — the seam does not change.
+     * Resolve WHICH connection a statement runs on (§3): the tx-owned (pinned) connection, for every
+     * statement of the tx's own database (a statement naming a DIFFERENT database is rejected); else the primary driver's connection. The reader/writer split and the named-DB registry live on the ROUTED
+     * ctx ({@see RoutingExecutionContext}), so a statement that NAMES a database has nowhere to go here —
+     * inside a transaction or out of it — and is LOUD, exactly as an unregistered name is on the routed
+     * ctx ({@see ConnectionRegistry::pairFor()}). Running it on the primary connection instead would
+     * execute it against a DIFFERENT database than its model declares, silently (#217).
      */
     public function connectionFor(StatementIntent $intent): Connection
     {
-        return $this->pinned ?? $this->driver->connection();
+        // STEP 1: the tx-owned (pinned) connection, for every statement of the tx's own database — a statement
+        // naming a DIFFERENT database is rejected, because it cannot be honored on the pin, so it is LOUD
+        // rather than silently run there ({@see assertTxDbAgrees()}). This ctx holds ONE connection and no registry, so the
+        // transaction opened on the default: every named statement disagrees.
+        if ($this->pinned !== null) {
+            assertTxDbAgrees($intent->db, null);
+            return $this->pinned;
+        }
+        assertRoutableNamedDb($intent->db, 'a single-connection (non-routed) execution context');
+        return $this->driver->connection();
     }
 
     /**
-     * Derive a tx-scoped ctx pinning `$conn` (every statement resolves it while `$tx` is true). The
+     * Derive a tx-scoped ctx pinning `$conn` (every statement of the tx's own database (an unnamed one, or one naming that database) 
+     * resolves it while `$tx` is true). The
      * derived ctx shares the primary driver + middleware chain. The PHP analogue of the TS
      * `withConnection(conn, tx)` / go `WithTxConnection` / rust `with_tx_connection` / python
      * `with_connection`.
@@ -530,8 +547,9 @@ final class StatementIntent
      * @param bool $control  the statement is tx-control (BEGIN/COMMIT/ROLLBACK/isolation-SET), NOT a data
      *        write (Phase D #96). A `connectionFor` resolver that mis-routes DATA writes (e.g. a
      *        reader/writer split, or the atomicity mutation fixture) can distinguish it: tx-control must
-     *        stay on the SAME owned tx connection that BEGAN the transaction (the pinned conn already
-     *        wins in the default resolver — this flag lets a custom resolver honor the same invariant).
+     *        stay on the SAME owned tx connection that BEGAN the transaction (the default resolver already
+     *        returns the pinned conn for every statement of the tx's own database — this flag lets a custom
+     *        resolver honor the same invariant).
      */
     public function __construct(
         public readonly bool $write = false,
@@ -658,8 +676,8 @@ final class Context
 
     /**
      * Accept EITHER a raw `\PDO` (wrap it via {@see forPdo()} — the byte-identical backward-compat
-     * path) OR an already-built {@see ExecutionContext} (pass through). The public runtime entry
-     * points (`executeBundle` / `executeTransactionBundle` / `runRelationOp` / `readBundle`) take this
+     * path) OR an already-built {@see ExecutionContext} (pass through). The leaf transport
+     * ({@see Leaves::makeHandlers}) takes this
      * union so every existing raw-`\PDO` caller keeps working while the internals thread a ctx.
      */
     public static function of(\PDO|ExecutionContext $pdoOrCtx): ExecutionContext
@@ -707,7 +725,8 @@ function rollbackWith(mixed $value): TxDecision
  *   1. acquire ONE connection via {@see PdoDriver::beginTx()} — a {@see PdoTxConnection} (the tx's
  *      exclusive connection; BEGIN issued on it), the PHP analogue of v1 `PoolTransaction`;
  *   2. pin it into a tx-scoped {@see ExecutionContext} passed EXPLICITLY to `$body` so EVERY statement
- *      `$body` issues resolves THAT connection via the seam — never a fresh one;
+ *      `$body` issues of the tx's own database resolves THAT connection via the seam — never a fresh one,
+ *      and a statement naming a DIFFERENT database is rejected instead;
  *   3. run `$body($txCtx)` → COMMIT / ROLLBACK on the OWNED connection per the returned decision; on
  *      any thrown exception ROLLBACK (best-effort) and re-raise;
  *   4. **release the owned connection EXACTLY ONCE in a `finally`** (the SOLE releaser — the
@@ -721,8 +740,8 @@ function rollbackWith(mixed $value): TxDecision
  * Empty ⇒ a bare `BEGIN` (byte-identical to the Phase A path).
  *
  * The tx-scoped ctx is ALSO pinned as the AMBIENT context ({@see TxAmbient}) for the duration of
- * `$body` — so an operation issued INSIDE the body (a nested `executeTransactionBundle` whose caller
- * threads only the raw `\PDO`) still detects the tx via {@see currentContext()} and JOINs it. This
+ * `$body` — so an operation issued INSIDE the body (a nested guarded write {@see runGuarded()} whose
+ * caller threads only the raw `\PDO`) still detects the tx via {@see currentContext()} and JOINs it. This
  * is the PHP analogue of the TS `txContext.run` async-local / python's `run_with_pinned_context`
  * (PHP is 1-req-1-process, so a process-scoped holder is the honest single-threaded equivalent).
  *
@@ -910,8 +929,8 @@ function runGuarded(ExecutionContext $ctx, string $sql, array $params, string $o
  *
  * ```php
  * transaction($ctx, function () {
- *     Runtime::executeTransactionBundle($aBundle, $aInput, $aPdo);  // ← every op inside JOINS this
- *     Runtime::executeTransactionBundle($bBundle, $bInput, $bPdo);  //    ONE boundary: one conn,
+ *     runGuarded(currentContext(), $aSql, $aArgs, 'WRITE', $aModel);  // ← every op inside JOINS this
+ *     runGuarded(currentContext(), $bSql, $bArgs, 'WRITE', $bModel);  //    ONE boundary: one conn,
  * }, new TransactionOptions(isolation: IsolationLevel::Serializable));  //  one BEGIN…COMMIT, all-or-nothing
  * ```
  *
@@ -926,8 +945,8 @@ function runGuarded(ExecutionContext $ctx, string $sql, array $params, string $o
  * ## The ambient-tx JOIN — how operations participate (the core #86 fix; PHP = ambient holder)
  *
  * `$fn` takes NO connection argument. Instead the pinned tx ctx lives in the ambient holder
- * ({@see currentContext()}). Every operation `$fn` issues — a live-DB write via
- * `executeTransactionBundle`, a read via `executeBundle` — detects that ambient pinned ctx and runs
+ * ({@see currentContext()}). Every operation `$fn` issues — a write via the guarded write seam
+ * ({@see runGuarded()}), a read via the read seam — detects that ambient pinned ctx and runs
  * its statements on THAT connection **without opening its own BEGIN/COMMIT** (the nested-join). So N
  * operations inside one `transaction($fn)` produce exactly ONE BEGIN + ONE COMMIT on ONE connection.
  * Outside a `transaction($fn)` the ambient pin is absent, so a bare guarded write's guard fires
@@ -986,7 +1005,7 @@ function transaction(
             // go/rust/py classify through. A live PG 40001 / MySQL 1213 (raised at COMMIT as a raw
             // \PDOException) thus flows through `SqlFailure::fromPdo` here, making the wrapped chain
             // genuinely load-bearing on the live retry path (neuter it → this classification goes RED).
-            // An already-mapped `SqlFailure` (e.g. from a nested executeTransactionBundle) is left as-is.
+            // An already-mapped `SqlFailure` (e.g. surfaced by the guarded write seam) is left as-is.
             $failure = $error;
             if (!($failure instanceof SqlFailure) && $error instanceof \PDOException) {
                 $failure = SqlFailure::fromPdo($error);

@@ -1136,6 +1136,14 @@ function applyModelDecorator<T extends { new (...args: unknown[]): object }>(
         configurable: false,
       });
     }
+    if (options.connection !== undefined) {
+      Object.defineProperty(constructor, 'CONNECTION', {
+        value: options.connection,
+        writable: false,
+        enumerable: true,
+        configurable: false,
+      });
+    }
   }
 
   // 1. Add static Column properties (callable functions)

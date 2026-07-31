@@ -21,6 +21,10 @@
  *   - Transaction BEGIN/COMMIT are raw connection.query() below the middleware and
  *     are therefore NOT captured here (they are dialect-standard and identical).
  *
+ * By default this only COMPARES the live capture against the committed golden and FAILS on drift; it
+ * REWRITES the golden only under `npm run parity:capture` (which sets PARITY_CAPTURE_WRITE=1), so a
+ * plain `vitest run` never leaves a tracked file dirty.
+ *
  * Run:  see benchmark/parity/README (regeneration) or the npm script `parity:capture`.
  */
 import 'reflect-metadata';
@@ -45,6 +49,12 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 // Golden files live under benchmark/parity/ (repo-root relative).
 const OUT_DIR = path.resolve(__dirname, '..', '..', 'benchmark', 'parity');
+
+// By default this test only COMPARES the live capture against the committed golden and FAILS on drift
+// — a plain `vitest run` (the ts:test phase-1 suite) must not rewrite a TRACKED file, or every run
+// leaves `git status` dirty and hides real drift in the noise. Regeneration is the one command that
+// sets this: `npm run parity:capture`.
+const WRITE = process.env.PARITY_CAPTURE_WRITE === '1';
 
 // ============================================
 // SQL Logger Middleware (driver-reach capture)
@@ -658,12 +668,17 @@ function dialectConfig(dialect: Dialect): DBConfig {
     return { database: ':memory:', driver: 'sqlite' } as DBConfig;
   }
   if (dialect === 'mysql') {
+    // TEST_MYSQL_* — the ONE mysql env convention every other file + CI + docker-compose use
+    // (test/helpers/setup.ts:mysqlConfig, test/scp/json-array-parity.test.ts). This file used to read
+    // MYSQL_HOST/MYSQL_PORT, so a bare `vitest run` in a worktree hit the DEFAULT 3307 — another
+    // worktree's MySQL — and this test DROP/CREATEs `benchmark_*` there (#226 unified Mysql.test.ts;
+    // this was the same class, missed).
     return {
-      host: process.env.MYSQL_HOST || 'localhost',
-      port: parseInt(process.env.MYSQL_PORT || '3307'),
-      database: process.env.MYSQL_DB || 'testdb',
-      user: process.env.MYSQL_USER || 'testuser',
-      password: process.env.MYSQL_PASSWORD || 'testpass',
+      host: process.env.TEST_MYSQL_HOST || 'localhost',
+      port: parseInt(process.env.TEST_MYSQL_PORT || '3307'),
+      database: process.env.TEST_MYSQL_DB || 'testdb',
+      user: process.env.TEST_MYSQL_USER || 'testuser',
+      password: process.env.TEST_MYSQL_PASSWORD || 'testpass',
       driver: 'mysql',
     };
   }
@@ -756,11 +771,8 @@ async function main(): Promise<void> {
     ops: golden,
   };
 
-  const outDir = OUT_DIR;
-  await fs.mkdir(outDir, { recursive: true });
-  const jsonPath = path.join(outDir, 'v1-sql.golden.json');
-  await fs.writeFile(jsonPath, JSON.stringify(doc, null, 2) + '\n');
-  process.stderr.write(`\nWrote ${jsonPath}\n`);
+  const jsonPath = path.join(OUT_DIR, 'v1-sql.golden.json');
+  const jsonStr = JSON.stringify(doc, null, 2) + '\n';
 
   // Human-readable markdown
   const md: string[] = [];
@@ -819,9 +831,35 @@ async function main(): Promise<void> {
       md.push('');
     }
   }
-  const mdPath = path.join(outDir, 'v1-sql.golden.md');
-  await fs.writeFile(mdPath, md.join('\n') + '\n');
-  process.stderr.write(`Wrote ${mdPath}\n`);
+  const mdPath = path.join(OUT_DIR, 'v1-sql.golden.md');
+  const mdStr = md.join('\n') + '\n';
+
+  if (WRITE) {
+    await fs.mkdir(OUT_DIR, { recursive: true });
+    await fs.writeFile(jsonPath, jsonStr);
+    await fs.writeFile(mdPath, mdStr);
+    process.stderr.write(`\nWrote ${jsonPath}\n${mdPath}\n`);
+    return;
+  }
+
+  // Compare-only (default): the live capture must MATCH the committed golden, byte for byte, without
+  // touching it. A missing golden is drift too — there is nothing to compare against.
+  const drift: string[] = [];
+  for (const [file, got] of [
+    [jsonPath, jsonStr],
+    [mdPath, mdStr],
+  ] as const) {
+    const want = await fs.readFile(file, 'utf8').catch(() => null);
+    if (want !== got) drift.push(path.basename(file));
+  }
+  if (drift.length > 0) {
+    throw new Error(
+      `v1 SQL parity golden DRIFT in ${drift.join(', ')}: the live capture no longer matches the committed ` +
+        `benchmark/parity/ golden. If the change is intended, regenerate it with the dedicated command:\n` +
+        `      npm run parity:capture\n` +
+        `(A plain \`vitest run\` only compares — it must not rewrite a tracked file.)`,
+    );
+  }
 }
 
 // Run as a vitest test so it inherits the working experimentalDecorators transform

@@ -2,7 +2,7 @@
 // tx-completeness primitives on REAL Postgres (:5433) + MySQL (:3307). The go mirror of rust's
 // tests/tx_boundary.rs + the tx_isolation live proof. These exercise the UNMODIFIED production path
 // (Transaction → TransactionDecided → WithTransactionDecidedIsolated on an OWNED *sql.Tx, each op
-// JOINing via ExecuteTransactionBundleCtx) against real engines:
+// JOINing via the guarded write seam RunGuarded) against real engines:
 //
 //	(1) MULTI-OP ATOMICITY — Transaction(func(){ opA-insert; opB-insert }) → both commit; a recording
 //	    driver asserts EXACTLY ONE BeginTx / ONE COMMIT / ONE *sql.Tx for the whole boundary. opB
@@ -28,6 +28,8 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"fmt"
+	"os"
+	"sort"
 	"sync"
 	"testing"
 
@@ -101,12 +103,106 @@ func openMysqlRec(t *testing.T) (*sql.DB, *recSink) {
 	return db, liveRecSinkFor(dsn)
 }
 
+// ── Shared live-DB fixtures (the isoTbl table + env / reset / read helpers) ─────
+//
+// Relocated here from the deleted tx_isolation_test.go: this file and the sibling live suites
+// (connection_routing_livedb, middleware_livedb) share them through the package test scope.
+
+const isoTbl = "scp_tx_iso"
+
+func txIsoEnabled() bool { return os.Getenv("LITEDBMODEL_TX_ISOLATION") == "1" }
+
+func envOr(k, d string) string {
+	if v := os.Getenv(k); v != "" {
+		return v
+	}
+	return d
+}
+
+// openPgIso opens a plain live-PG *sql.DB from the TEST_DB_* env (the non-recording connector the
+// live suites share for setup + assertions).
+func openPgIso(t *testing.T) *sql.DB {
+	t.Helper()
+	dsn := fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable",
+		envOr("TEST_DB_USER", "testuser"), envOr("TEST_DB_PASSWORD", "testpass"),
+		envOr("TEST_DB_HOST", "localhost"), envOr("TEST_DB_PORT", "5433"), envOr("TEST_DB_NAME", "testdb"))
+	db, err := OpenPostgres(dsn)
+	if err != nil {
+		t.Fatalf("pg connect: %v", err)
+	}
+	return db
+}
+
+// resetIso drops + recreates the isoTbl table (id PK, worker, seq) at the dialect's integer type.
+func resetIso(t *testing.T, db *sql.DB, intType string) {
+	t.Helper()
+	if _, err := db.Exec("DROP TABLE IF EXISTS " + isoTbl); err != nil {
+		t.Fatalf("drop: %v", err)
+	}
+	ddl := fmt.Sprintf("CREATE TABLE %s (id %s PRIMARY KEY, worker %s NOT NULL, seq %s NOT NULL)", isoTbl, intType, intType, intType)
+	if _, err := db.Exec(ddl); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+}
+
+// readIsoRows reads (id, worker) rows sorted by id (worker != 999, filtering any pre-seed).
+func readIsoRows(t *testing.T, db SQLDB) [][2]int64 {
+	t.Helper()
+	rows, err := queryRows(db, fmt.Sprintf("SELECT id, worker FROM %s WHERE worker <> 999", isoTbl), nil)
+	if err != nil {
+		t.Fatalf("read rows: %v", err)
+	}
+	out := make([][2]int64, 0, len(rows))
+	for _, r := range rows {
+		obj, ok := r.(*bc.Obj)
+		if !ok {
+			continue
+		}
+		out = append(out, [2]int64{cellInt(obj, "id"), cellInt(obj, "worker")})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i][0] != out[j][0] {
+			return out[i][0] < out[j][0]
+		}
+		return out[i][1] < out[j][1]
+	})
+	return out
+}
+
+// cellInt coerces a scanned column (float64 per scanValue, or int64 / string from PG/MySQL) to int64.
+func cellInt(o *bc.Obj, k string) int64 {
+	v, _ := o.Get(k)
+	switch t := v.(type) {
+	case int64:
+		return t
+	case float64:
+		return int64(t)
+	case string:
+		var n int64
+		fmt.Sscan(t, &n)
+		return n
+	default:
+		return -1
+	}
+}
+
 // ── (1) MULTI-OP ATOMICITY through the REAL Transaction() boundary ─────────────
 
-// boundaryInsert runs a single-INSERT bundle as ONE op JOINing the ambient tx (guard ON).
-func boundaryInsert(t *testing.T, txCtx *ExecutionContext, db TxDB, dialect string, id, worker, seq int64) error {
+// insertRowSQL is the single-row INSERT into isoTbl with dialect-correct placeholders (pg $N, else ?).
+func insertRowSQL(dialect string) string {
+	if dialect == "postgres" {
+		return fmt.Sprintf("INSERT INTO %s (id, worker, seq) VALUES ($1, $2, $3)", isoTbl)
+	}
+	return fmt.Sprintf("INSERT INTO %s (id, worker, seq) VALUES (?, ?, ?)", isoTbl)
+}
+
+// boundaryInsert runs ONE guarded INSERT through the PRODUCTION guarded write seam ([RunGuarded]),
+// JOINing the ambient tx (the guard passes inside a Transaction()) — the same seam a user-facing write
+// rides. The insert runs on the outer Transaction()'s owned connection (no new BEGIN), so N of them in
+// one boundary are ONE physical transaction (one BEGIN, one COMMIT, one owned conn).
+func boundaryInsert(t *testing.T, txCtx *ExecutionContext, dialect string, id, worker, seq int64) error {
 	t.Helper()
-	_, err := ExecuteTransactionBundleCtx(insertBundle(t, dialect), txInput(id, worker, seq), txCtx, db, true)
+	_, err := RunGuarded(txCtx, insertRowSQL(dialect), []any{id, worker, seq}, "WRITE", isoTbl)
 	return err
 }
 
@@ -117,11 +213,11 @@ func multiOpAtomicityCommit(t *testing.T, db *sql.DB, sink *recSink, dialect str
 	sink.reset()
 
 	ctx := ContextForDB(db)
-	_, err := Transaction(ctx, db, dialect, DefaultTransactionOptions(), func(txCtx *ExecutionContext) (int, error) {
-		if err := boundaryInsert(t, txCtx, db, dialect, 100, 1, 0); err != nil { // opA
+	_, err := Transaction(ctx, dialect, DefaultTransactionOptions(), func(txCtx *ExecutionContext) (int, error) {
+		if err := boundaryInsert(t, txCtx, dialect, 100, 1, 0); err != nil { // opA
 			return 0, err
 		}
-		if err := boundaryInsert(t, txCtx, db, dialect, 101, 1, 1); err != nil { // opB — JOINs opA
+		if err := boundaryInsert(t, txCtx, dialect, 101, 1, 1); err != nil { // opB — JOINs opA
 			return 0, err
 		}
 		return 0, nil
@@ -151,11 +247,11 @@ func multiOpAtomicityRollback(t *testing.T, db *sql.DB, sink *recSink, dialect s
 	sink.reset()
 
 	ctx := ContextForDB(db)
-	_, err := Transaction(ctx, db, dialect, DefaultTransactionOptions(), func(txCtx *ExecutionContext) (int, error) {
-		if err := boundaryInsert(t, txCtx, db, dialect, 200, 2, 0); err != nil { // opA — valid
+	_, err := Transaction(ctx, dialect, DefaultTransactionOptions(), func(txCtx *ExecutionContext) (int, error) {
+		if err := boundaryInsert(t, txCtx, dialect, 200, 2, 0); err != nil { // opA — valid
 			return 0, err
 		}
-		if err := boundaryInsert(t, txCtx, db, dialect, 201, 2, 1); err != nil { // opB — PK collision
+		if err := boundaryInsert(t, txCtx, dialect, 201, 2, 1); err != nil { // opB — PK collision
 			return 0, err
 		}
 		return 0, nil
@@ -179,22 +275,22 @@ func multiOpAtomicityRollback(t *testing.T, db *sql.DB, sink *recSink, dialect s
 func guardLive(t *testing.T, db *sql.DB, dialect string) {
 	ctx := ContextForDB(db)
 	// Outside any Transaction() → WriteOutsideTransactionError, no row written.
-	_, err := ExecuteTransactionBundleCtx(insertBundle(t, dialect), txInput(300, 3, 0), ctx, db, true)
+	_, err := RunGuarded(ctx, insertRowSQL(dialect), []any{int64(300), int64(3), int64(0)}, "WRITE", isoTbl)
 	if f, ok := err.(*SqlFailure); !ok || f.Kind != "write_outside_transaction" {
 		t.Errorf("%s: bare write must be WriteOutsideTransactionError, got %v", dialect, err)
 	}
 	// Read-only-scoped write inside a Transaction() → WriteInReadOnly (read-only first).
-	_, _ = Transaction(ctx, db, dialect, DefaultTransactionOptions(), func(txCtx *ExecutionContext) (int, error) {
+	_, _ = Transaction(ctx, dialect, DefaultTransactionOptions(), func(txCtx *ExecutionContext) (int, error) {
 		ro := txCtx.WithReadOnly()
-		_, e := ExecuteTransactionBundleCtx(insertBundle(t, dialect), txInput(301, 3, 0), ro, db, true)
+		_, e := RunGuarded(ro, insertRowSQL(dialect), []any{int64(301), int64(3), int64(0)}, "WRITE", isoTbl)
 		if f, ok := e.(*SqlFailure); !ok || f.Kind != "write_in_read_only_context" {
 			t.Errorf("%s: read-only write must be WriteInReadOnly, got %v", dialect, e)
 		}
 		return 0, nil
 	})
 	// Inside a Transaction() → succeeds.
-	_, err = Transaction(ctx, db, dialect, DefaultTransactionOptions(), func(txCtx *ExecutionContext) (int, error) {
-		return 0, boundaryInsert(t, txCtx, db, dialect, 302, 3, 0)
+	_, err = Transaction(ctx, dialect, DefaultTransactionOptions(), func(txCtx *ExecutionContext) (int, error) {
+		return 0, boundaryInsert(t, txCtx, dialect, 302, 3, 0)
 	})
 	if err != nil {
 		t.Errorf("%s: guarded write inside a Transaction() must succeed: %v", dialect, err)
@@ -239,7 +335,7 @@ func isolationBehavior(t *testing.T, db *sql.DB, dialect string) {
 	o := DefaultTransactionOptions()
 	o.Isolation = IsolationRepeatableRead
 	ctx := ContextForDB(db)
-	_, err := Transaction(ctx, db, dialect, o, func(txCtx *ExecutionContext) (int, error) {
+	_, err := Transaction(ctx, dialect, o, func(txCtx *ExecutionContext) (int, error) {
 		first := readSeqDirect(txCtx)
 		// A concurrent committed UPDATE (its own connection) between the two reads.
 		if _, e := db.Exec(fmt.Sprintf("UPDATE %s SET seq = 99 WHERE id = 1", isoTbl)); e != nil {
@@ -259,7 +355,7 @@ func isolationBehavior(t *testing.T, db *sql.DB, dialect string) {
 	reset()
 	o2 := DefaultTransactionOptions()
 	o2.Isolation = IsolationReadCommitted
-	_, err = Transaction(ctx, db, dialect, o2, func(txCtx *ExecutionContext) (int, error) {
+	_, err = Transaction(ctx, dialect, o2, func(txCtx *ExecutionContext) (int, error) {
 		first := readSeqDirect(txCtx)
 		if _, e := db.Exec(fmt.Sprintf("UPDATE %s SET seq = 77 WHERE id = 1", isoTbl)); e != nil {
 			t.Fatalf("concurrent update: %v", e)
@@ -309,7 +405,7 @@ func retryPgWriteSkew(t *testing.T, db *sql.DB, sink *recSink, typedOnly bool) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			_, e := Transaction(ctx, db, "postgres", o, func(txCtx *ExecutionContext) (int, error) {
+			_, e := Transaction(ctx, "postgres", o, func(txCtx *ExecutionContext) (int, error) {
 				// Read the sum of both rows (the write-skew read set).
 				rows, err := Execute(txCtx, fmt.Sprintf("SELECT COALESCE(SUM(seq),0) AS s FROM %s", isoTbl), nil, ReadIntent())
 				if err != nil {
@@ -384,7 +480,7 @@ func retryMysqlDeadlock(t *testing.T, db *sql.DB, sink *recSink, typedOnly bool)
 					first, second = 2, 1 // opposite lock order → deadlock
 				}
 				done := false
-				_, e := Transaction(ctx, db, "mysql", o, func(txCtx *ExecutionContext) (int, error) {
+				_, e := Transaction(ctx, "mysql", o, func(txCtx *ExecutionContext) (int, error) {
 					if _, err := Run(txCtx, fmt.Sprintf("UPDATE %s SET seq = seq + 1 WHERE id = ?", isoTbl), []any{first}, WriteIntent()); err != nil {
 						return 0, err
 					}
@@ -436,8 +532,8 @@ func nonRetryableDoesNotRetry(t *testing.T, db *sql.DB, sink *recSink, dialect s
 	ctx := ContextForDB(db)
 	o := DefaultTransactionOptions() // retry ON
 	o.RetryDurationMs = 5
-	_, err := Transaction(ctx, db, dialect, o, func(txCtx *ExecutionContext) (int, error) {
-		return 0, boundaryInsert(t, txCtx, db, dialect, 400, 4, 0) // PK collision — non-retryable
+	_, err := Transaction(ctx, dialect, o, func(txCtx *ExecutionContext) (int, error) {
+		return 0, boundaryInsert(t, txCtx, dialect, 400, 4, 0) // PK collision — non-retryable
 	})
 	if err == nil {
 		t.Fatalf("%s: a unique collision must fail the boundary", dialect)
@@ -457,13 +553,13 @@ func nestedOneBeginCommit(t *testing.T, db *sql.DB, sink *recSink, dialect strin
 	}
 	sink.reset()
 	ctx := ContextForDB(db)
-	_, err := Transaction(ctx, db, dialect, DefaultTransactionOptions(), func(outer *ExecutionContext) (int, error) {
-		if err := boundaryInsert(t, outer, db, dialect, 500, 5, 0); err != nil {
+	_, err := Transaction(ctx, dialect, DefaultTransactionOptions(), func(outer *ExecutionContext) (int, error) {
+		if err := boundaryInsert(t, outer, dialect, 500, 5, 0); err != nil {
 			return 0, err
 		}
 		// A nested Transaction() JOINs the outer — no new BEGIN/COMMIT.
-		return Transaction(outer, db, dialect, DefaultTransactionOptions(), func(inner *ExecutionContext) (int, error) {
-			return 0, boundaryInsert(t, inner, db, dialect, 501, 5, 1)
+		return Transaction(outer, dialect, DefaultTransactionOptions(), func(inner *ExecutionContext) (int, error) {
+			return 0, boundaryInsert(t, inner, dialect, 501, 5, 1)
 		})
 	})
 	if err != nil {
@@ -482,12 +578,12 @@ func nestedOneBeginCommit(t *testing.T, db *sql.DB, sink *recSink, dialect strin
 	if _, e := db.Exec(fmt.Sprintf("INSERT INTO %s (id, worker, seq) VALUES (601, 999, 9)", isoTbl)); e != nil {
 		t.Fatalf("preseed 601: %v", e)
 	}
-	_, err = Transaction(ctx, db, dialect, DefaultTransactionOptions(), func(outer *ExecutionContext) (int, error) {
-		if err := boundaryInsert(t, outer, db, dialect, 600, 6, 0); err != nil {
+	_, err = Transaction(ctx, dialect, DefaultTransactionOptions(), func(outer *ExecutionContext) (int, error) {
+		if err := boundaryInsert(t, outer, dialect, 600, 6, 0); err != nil {
 			return 0, err
 		}
-		return Transaction(outer, db, dialect, DefaultTransactionOptions(), func(inner *ExecutionContext) (int, error) {
-			return 0, boundaryInsert(t, inner, db, dialect, 601, 6, 1) // inner PK collision
+		return Transaction(outer, dialect, DefaultTransactionOptions(), func(inner *ExecutionContext) (int, error) {
+			return 0, boundaryInsert(t, inner, dialect, 601, 6, 1) // inner PK collision
 		})
 	})
 	if err == nil {

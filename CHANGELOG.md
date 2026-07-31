@@ -113,7 +113,7 @@ v1.x はメンテナンスブランチ `v1.x` で保全（別トラック）。�
 
 ### Migration: v1 → v2
 
-詳細は仕様書 [`docs/proposal/litedbmodel-v2-scp-architecture.md`](docs/proposal/litedbmodel-v2-scp-architecture.md)
+詳細は仕様書 [`docs/architecture.md`](docs/architecture.md)
 §12（TS 公開 API の v1 → v2 移行）を参照。要点:
 
 1. **結果はインスタンスではない。** `row instanceof MyModel` は成立しない。`row.someMethod()` は

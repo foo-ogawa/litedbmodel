@@ -102,29 +102,9 @@ from .connection_routing import (
     single_pool_pair,
     with_writer,
 )
-from .static_bundle import (
-    assemble_make_sql,
-    compose_make_sql,
-    execute_read_graph,
-    render_placeholders,
-    render_read_primary,
-    render_statements,
-)
-from .runtime import (
-    ENTITY_ROOT,
-    execute_bundle,
-    execute_transaction_bundle,
-    order_by_nulls,
-)
-from .relation import (
-    dedupe_keys,
-    distribute_to_parent,
-    read_bundle,
-    run_relation_op,
-)
-from .leaves import make_handlers
+from .leaves import make_handlers, render_placeholders
 
-__version__ = "2.2.2"
+__version__ = "2.2.3"
 
 __all__ = [
     "__version__",
@@ -231,23 +211,8 @@ __all__ = [
     "session_statements",
     "single_pool_pair",
     "with_writer",
-    # static makeSQL bundle runtime (the sole read/render path)
-    "assemble_make_sql",
-    "compose_make_sql",
-    "execute_read_graph",
-    "render_placeholders",
-    "render_read_primary",
-    "render_statements",
-    # runtime
-    "ENTITY_ROOT",
-    "execute_bundle",
-    "execute_transaction_bundle",
-    "order_by_nulls",
-    # read-relation batch execution + hydration (#43)
-    "dedupe_keys",
-    "distribute_to_parent",
-    "read_bundle",
-    "run_relation_op",
     # op-agnostic leaf transport for the bc-generated native (ir-exec) modules (#141 / epic #123)
+    # + the render-layer placeholder resolution (`?`→`$N`) the leaf transport applies
     "make_handlers",
+    "render_placeholders",
 ]

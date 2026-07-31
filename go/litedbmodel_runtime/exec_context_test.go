@@ -7,7 +7,9 @@
 package litedbmodel_runtime
 
 import (
+	"context"
 	"database/sql"
+	"strings"
 	"testing"
 
 	bc "github.com/foo-ogawa/behavior-contracts/go"
@@ -111,7 +113,7 @@ func TestWithTransactionCommitsOnOk(t *testing.T) {
 	db := seedSeed(t)
 	defer db.Close()
 	ctx := ContextForDB(db)
-	out, err := WithTransaction(ctx, db, func(txCtx *ExecutionContext) (int, error) {
+	out, err := WithTransaction(ctx, func(txCtx *ExecutionContext) (int, error) {
 		if !txCtx.InTransaction() {
 			t.Errorf("txCtx must report InTransaction() true")
 		}
@@ -134,7 +136,7 @@ func TestWithTransactionRollsBackOnErr(t *testing.T) {
 	db := seedSeed(t)
 	defer db.Close()
 	ctx := ContextForDB(db)
-	_, err := WithTransaction(ctx, db, func(txCtx *ExecutionContext) (int, error) {
+	_, err := WithTransaction(ctx, func(txCtx *ExecutionContext) (int, error) {
 		if _, err := Run(txCtx, "INSERT INTO t (id, v) VALUES (?, ?)", []any{int64(2), "b"}, WriteIntent()); err != nil {
 			return 0, err
 		}
@@ -160,7 +162,7 @@ func TestWithTransactionDecidedRollbackReturnsValue(t *testing.T) {
 	db := seedSeed(t)
 	defer db.Close()
 	ctx := ContextForDB(db)
-	out, err := WithTransactionDecided(ctx, db, func(txCtx *ExecutionContext) (string, TxDecision, error) {
+	out, err := WithTransactionDecided(ctx, func(txCtx *ExecutionContext) (string, TxDecision, error) {
 		if _, err := Run(txCtx, "INSERT INTO t (id, v) VALUES (?, ?)", []any{int64(2), "b"}, WriteIntent()); err != nil {
 			return "", Commit(), err
 		}
@@ -176,6 +178,36 @@ func TestWithTransactionDecidedRollbackReturnsValue(t *testing.T) {
 	}
 }
 
+// #216 — a ctx that reaches ConnectionFor's LAST step with no primary db is a WIRING bug, and it fails
+// closed like every other resolution failure in this seam: the [failingConnection] the function already
+// carries an unknown-named-DB error on. Handing back a dbConnection over a nil db instead deferred the
+// bug to a nil-pointer dereference inside queryRows — a SIGSEGV that names neither the ctx nor the
+// reason and, being a panic, takes the whole test binary down with it, so every gate after it stops
+// reporting. This drives the PRODUCTION seam ([Execute] / [Run] → ConnectionFor), not the resolver in
+// isolation, because the surfacing is what the fix is about: the error must arrive as a return value.
+func TestConnectionForNilDbFailsClosed(t *testing.T) {
+	// The shape that produced it: a routed ctx (ContextForRouting takes no db) whose routing is absent.
+	ctx := &ExecutionContext{middleware: registryChainFor(context.Background())}
+	if _, ok := ctx.ConnectionFor(ReadIntent()).(failingConnection); !ok {
+		t.Fatalf("a ctx with no routing and no db must resolve to a failingConnection")
+	}
+	for _, tc := range []struct {
+		name string
+		run  func() error
+	}{
+		{"read", func() error { _, err := Execute(ctx, "SELECT 1", nil, ReadIntent()); return err }},
+		{"write", func() error { _, err := Run(ctx, "INSERT INTO t (id) VALUES (1)", nil, WriteIntent()); return err }},
+	} {
+		err := tc.run()
+		if err == nil {
+			t.Fatalf("%s on a db-less ctx must fail loudly, got nil", tc.name)
+		}
+		if !strings.Contains(err.Error(), "no connection to run a statement on") {
+			t.Fatalf("%s error must name the missing connection, got: %v", tc.name, err)
+		}
+	}
+}
+
 // Outside a tx, ConnectionFor resolves the primary db; inside, the pinned tx connection.
 func TestConnectionForResolution(t *testing.T) {
 	db := seedSeed(t)
@@ -187,7 +219,7 @@ func TestConnectionForResolution(t *testing.T) {
 	if _, ok := ctx.ConnectionFor(ReadIntent()).(dbConnection); !ok {
 		t.Errorf("base ctx ConnectionFor must be a dbConnection")
 	}
-	_, _ = WithTransaction(ctx, db, func(txCtx *ExecutionContext) (int, error) {
+	_, _ = WithTransaction(ctx, func(txCtx *ExecutionContext) (int, error) {
 		if !txCtx.InTransaction() {
 			t.Errorf("tx ctx must report InTransaction() true")
 		}

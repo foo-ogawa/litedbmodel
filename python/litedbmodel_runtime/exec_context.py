@@ -3,7 +3,7 @@
 The Python port of the TS contract-defining artifact ``src/scp/exec-context.ts`` (#75), mirroring the
 rust port ``rust/litedbmodel_runtime/src/exec_context.rs`` (#76) and the go port
 ``go/litedbmodel_runtime/exec_context.go`` (#77). It replaces the raw ``driver: Driver`` threaded
-through ``execute_bundle`` / ``execute_read_graph`` / the relation walker / ``execute_transaction_bundle``
+through the leaf transport (:func:`execute` / :func:`run` / :func:`run_guarded`)
 with an :class:`ExecutionContext` that carries:
 
   1. a **connection provider** — :meth:`ExecutionContext.connection_for` ``(intent)`` resolves WHICH
@@ -11,8 +11,9 @@ with an :class:`ExecutionContext` that carries:
      only the tx-owned + single-DB cases, reader/writer/named-DB are B/C/D on this seam);
   2. a **middleware chain** — :attr:`ExecutionContext.middleware`, wrapping every SQL (empty in
      Phase A = passthrough; the registration API is Phase D — this is only the hook point);
-  3. a **pinned tx connection** — a tx-scoped ctx pins ONE owned connection so every statement in a
-     transaction body runs on it (per-execution connection ownership, §3).
+  3. a **pinned tx connection** — a tx-scoped ctx pins ONE owned connection so every statement of the tx's own database
+     in a transaction body runs on it — a statement naming a DIFFERENT database is rejected
+     (per-execution connection ownership, §3).
 
 ## The central seam (§2) — ALL SQL funnels through here
 
@@ -150,8 +151,9 @@ class DriverConnection(Connection):
 
 class _TxConnectionAdapter(Connection):
     """A :class:`Connection` view over a tx's OWNED :class:`TxConnection` handle. The seam resolves
-    this (via ``connection_for``) for every statement inside a tx, so all of them run on the SAME
-    owned connection. Concurrent transactions each hold a DISTINCT handle over a DISTINCT pooled
+    this (via ``connection_for``) for every statement inside a tx of the tx's own database — an unnamed one, or one naming
+    that database — so all of THOSE run on the SAME owned connection (a statement naming a DIFFERENT database is rejected
+    instead). Concurrent transactions each hold a DISTINCT handle over a DISTINCT pooled
     connection, so their writes never cross-talk — the isolation the removed driver-global ``_writer``
     slot violated.
     """
@@ -240,8 +242,8 @@ _EMPTY_CHAIN = MiddlewareChain()
 
 
 class ExecutionContext:
-    """The execution context threaded through ``execute_bundle`` / ``execute_read_graph`` / the
-    relation walker / ``execute_transaction_bundle`` in place of a raw :class:`Driver`. It carries the
+    """The execution context threaded through the leaf transport and the central execute/run/run_guarded
+    seam in place of a raw :class:`Driver`. It carries the
     connection provider (the primary driver + an optional pinned tx connection), the middleware chain,
     and derives a tx-scoped ctx via :meth:`with_connection`.
 
@@ -255,9 +257,10 @@ class ExecutionContext:
     An OPTIONAL ``routing`` (a ``litedbmodel_runtime.connection_routing.RoutingConfig``) completes
     ``connection_for``'s resolution steps 2-4 (reader/writer split, named-DB, writer-sticky). Absent ⇒
     the byte-identical Phase A/B single-``driver`` path (``context_for_driver`` builds NO routing). The
-    active-tx pin STILL wins over routing (step 1) — a named-DB transaction runs entirely on ONE pinned
-    writer connection (Phase B unbroken). Only when routing IS present does ``connection_for`` consult
-    the registry; the driver-only ctors keep working unchanged.
+    active-tx pin STILL comes first (step 1) — a transaction runs entirely on ONE pinned writer
+    connection, so a statement naming a DIFFERENT database is rejected there rather than routed. Only when
+    routing IS present does ``connection_for`` consult the registry; the driver-only ctors keep working
+    unchanged.
     """
 
     __slots__ = ("_driver", "middleware", "_pinned", "_read_only", "_routing", "_connection")
@@ -273,7 +276,8 @@ class ExecutionContext:
     ) -> None:
         self._driver = driver
         self.middleware = middleware
-        # The pinned tx connection (present ⇒ this is a tx-scoped ctx; every statement resolves it).
+        # The pinned tx connection (present ⇒ a tx-scoped ctx; every statement
+        # of the tx's own database (an unnamed one, or one naming that database) resolves it).
         self._pinned = pinned
         # The READ-ONLY marker (Phase B / #84 write=tx guard — mirror v1 `withWriter` / the TS
         # `withReadOnly` ALS marker / rust/go `read_only`): a write in a read-only-scoped ctx is
@@ -315,7 +319,7 @@ class ExecutionContext:
     def with_read_only(self) -> "ExecutionContext":
         """Derive a READ-ONLY-scoped ctx (mirror v1 ``withWriter`` / the TS ``withReadOnly`` / rust/go
         ``with_read_only``): reads are allowed, but ANY write funneled through the GUARDED write seam
-        (:func:`run_guarded` / a guarded ``execute_transaction_bundle``) is rejected with
+        (:func:`run_guarded`) is rejected with
         :class:`WriteInReadOnlyContextError`. A tx-scoped ctx INHERITS its pinned connection + driver +
         middleware; a Transaction() opened inside a read-only scope stays read-only (v1 parity)."""
         return ExecutionContext(
@@ -325,14 +329,24 @@ class ExecutionContext:
     def connection_for(self, intent: StatementIntent = READ_INTENT) -> Connection:
         """Resolve WHICH connection a statement runs on (§3). Resolution order (first match wins):
 
-          1. the tx-owned (pinned) connection — inside a tx it ALWAYS wins (Phase A / B). A named-DB
-             transaction runs entirely on this ONE pinned writer connection (Phase B unbroken).
+          1. the tx-owned (pinned) connection — inside a tx it serves every statement of the tx's own database,
+             because a transaction is ONE
+             connection. A statement naming a DIFFERENT database than the transaction opened on therefore
+             cannot be honored and is LOUD (:func:`~litedbmodel_runtime.connection_routing.assert_tx_db_agrees`);
+             an unnamed one, and one naming the SAME database, run on the pin.
           2-4. when Phase C routing is present: named-DB → reader/writer split → writer-sticky/withWriter
              (:func:`litedbmodel_runtime.connection_routing.resolve_pool`), running the statement on ONE
              pooled connection per statement (the read fan-out).
           otherwise (no routing): the primary driver — the byte-identical Phase A/B single-DB path.
         """
         if self._pinned is not None:
+            # A statement that names a DIFFERENT database than the transaction opened on cannot be honored
+            # on the pinned connection — a transaction is ONE connection on ONE database — so it is LOUD
+            # rather than silently executed against the transaction's database (#217). The name the tx
+            # opened on is this ctx's own (``with_connection_name``, the same attribute ``begin_tx`` reads).
+            from .connection_routing import assert_tx_db_agrees
+
+            assert_tx_db_agrees(intent.db, self._connection)
             return self._pinned
         if self._routing is not None:
             # Phase C (#90): named-DB → reader/writer → writer-sticky. Lazy import avoids the circular
@@ -340,10 +354,17 @@ class ExecutionContext:
             from .connection_routing import PoolConnection, resolve_pool
 
             return PoolConnection(resolve_pool(intent, self._routing))
+        # No pin: a statement that NAMES a database has nowhere to go on a single-driver ctx either
+        # (there is no registry to resolve the name against), so it is LOUD — exactly as an unregistered name is on a
+        # routed ctx (``ConnectionRegistry.pair_for``). Running it on the primary driver instead would
+        # execute it against a DIFFERENT database than its model declares, silently (#217).
+        from .connection_routing import assert_routable_named_db
+
+        assert_routable_named_db(intent.db, "a single-driver (non-routed) execution context")
         return DriverConnection(self._driver)
 
     def with_connection(self, conn: Connection, tx: bool) -> "ExecutionContext":
-        """Derive a tx-scoped ctx pinning ``conn`` (every statement resolves it while ``tx`` is True).
+        """Derive a tx-scoped ctx pinning ``conn`` (every statement of the tx's own database (an unnamed one, or one naming that database) resolves it while ``tx`` is True).
         The derived ctx shares the primary driver + middleware chain + routing, and INHERITS the
         read-only marker (a tx opened inside a read-only scope stays read-only — v1 parity). This is the
         Python analogue of the TS ``withConnection(conn, tx)`` / go ``WithTxConnection`` / rust
@@ -375,8 +396,9 @@ class ExecutionContext:
         """Acquire + OWN the tx connection for THIS ctx (§3). On the single-driver Phase A/B path this
         delegates to ``driver.begin_tx``. When Phase C routing is present the tx acquires ONE connection
         from the target NAMED connection's WRITER pool (:attr:`_connection` → the writer pool of that
-        registry pair), so a named-DB transaction runs entirely on ONE pinned writer connection — the
-        active-tx pin then wins over routing for every statement in the body (Phase B unbroken).
+        registry pair), so a named-DB transaction runs entirely on ONE pinned writer connection: every
+        UNNAMED in-body statement resolves the pin, one that names THIS connection does too, and one naming
+        a DIFFERENT database is rejected (a transaction cannot span two databases).
 
         tx-control (the isolation SET / BEGIN / COMMIT / ROLLBACK) is issued THROUGH the seam on the
         pinned connection by :func:`with_transaction_decided` (Phase D / #95, middleware-visible), NOT
@@ -473,9 +495,8 @@ def context_for_driver(driver: Driver) -> ExecutionContext:
 
 def as_context(driver_or_ctx: Union[Driver, ExecutionContext]) -> ExecutionContext:
     """Accept EITHER a raw :class:`Driver` (wrap it via :func:`context_for_driver` — the byte-identical
-    backward-compat path) OR an already-built :class:`ExecutionContext` (pass through). The public
-    runtime entry points (``execute_bundle`` / ``execute_transaction_bundle`` / ``run_relation_op`` /
-    ``read_bundle``) take this union so every existing caller that threads a raw driver keeps working
+    backward-compat path) OR an already-built :class:`ExecutionContext` (pass through). The leaf
+    transport (:func:`make_handlers`) takes this union so a caller that threads a raw driver keeps working
     while the ctx-threaded internals funnel every SQL through the seam.
     """
     if isinstance(driver_or_ctx, ExecutionContext):
@@ -525,7 +546,8 @@ def with_transaction_decided(
          exclusive connection), the Python analogue of v1 ``PoolTransaction``. **No tx-control is issued
          at acquire** (Phase D / #95): the connection is only owned here.
       2. pin it into a tx-scoped :class:`ExecutionContext` (and the ambient contextvar) so EVERY
-         statement resolves THAT connection via the seam — never a fresh pooled one;
+         statement of the tx's own database resolves THAT connection via the seam — never a fresh
+         pooled one, and a statement naming a DIFFERENT database is rejected instead;
       3. issue the isolation SET + ``BEGIN`` (``before`` → BEGIN → ``after``) THROUGH the seam
          (:func:`run` on the PINNED ctx) — so a registered middleware OBSERVES the runtime BEGIN (full TS
          parity, Phase D / #95). tx-control goes through the UNGUARDED :func:`run` seam (never
@@ -702,8 +724,8 @@ def transaction(
     ## The ambient-tx JOIN — how operations participate (the core #86 fix; python = contextvars)
 
     ``fn`` takes NO connection argument. Instead the pinned tx ctx lives in the ambient contextvar
-    (:func:`current_context`). Every operation ``fn`` issues — a live-DB write via
-    ``execute_transaction_bundle``, a read via ``execute_bundle`` — detects that ambient pinned ctx and
+    (:func:`current_context`). Every operation ``fn`` issues — a write via the guarded write seam
+    (:func:`run_guarded`), a read via the read seam — resolves that ambient pinned ctx and
     runs its statements on THAT connection **without opening its own BEGIN/COMMIT** (the nested-join,
     below). So N operations inside one ``transaction(fn)`` produce exactly ONE BEGIN + ONE COMMIT on
     ONE connection. Outside a ``transaction(fn)`` the ambient pin is absent, so a bare guarded write's
@@ -759,7 +781,7 @@ def transaction(
             # A live PG 40001 / MySQL 1213 (raised at COMMIT as a raw psycopg/PyMySQL error) thus flows
             # through `map_sqlite_error` here, making the `.wrapped` chain genuinely load-bearing on the
             # live retry path (neuter `.wrapped` → this classification goes RED). An already-mapped
-            # `SqlFailure` (e.g. from a nested `execute_transaction_bundle`) is left as-is (no re-map).
+            # `SqlFailure` (e.g. surfaced by the guarded write seam) is left as-is (no re-map).
             failure = error if isinstance(error, SqlFailure) else map_sqlite_error(error)
             if attempt < retry_limit and opts.retry_on_error and is_retryable_tx_error(failure):
                 # Exponential backoff before RETRYing the whole transaction on a fresh connection.

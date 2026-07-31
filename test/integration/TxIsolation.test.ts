@@ -31,8 +31,6 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { Pool } from 'pg';
 import mysql from 'mysql2/promise';
 import {
-  entityWrites,
-  compileWriteBundle,
   compileWriteNode,
   compileCreateManyBundle,
   executeTransactionAsync,
@@ -41,7 +39,7 @@ import {
   mysqlConnectionPool,
   type AsyncConnection,
   type AsyncConnectionPool,
-  type EntityWritesDefinition,
+  type TransactionPlan,
   type TxOp,
 } from '../../src/scp';
 
@@ -96,7 +94,21 @@ function insertOp(dialect: 'postgres' | 'mysql'): TxOp {
     dialect,
   );
 }
-const insertWrites: EntityWritesDefinition = entityWrites((w) => ({ create: w.lifecycle({}) }));
+/**
+ * The single-statement {@link TransactionPlan} the tx runtime consumes for that write. The plan IS the
+ * runtime's input — declaring it here is the harness handing `executeTransactionAsync` its argument,
+ * not a second compiler: the statement's SQL still comes from the SSoT write compiler
+ * (`compileWriteNode`) and every assertion below is about the BOUNDARY (one connection, one
+ * BEGIN/COMMIT, the guards), never about how a statement list is derived.
+ */
+function insertPlan(dialect: 'postgres' | 'mysql'): TransactionPlan {
+  return {
+    phase: 'create',
+    entityFrom: 'tx_body_0',
+    statements: [{ id: 'tx_body_0', role: 'body', op: insertOp(dialect), label: 'Insert' }],
+    onIdempotentHit: 'rollback',
+  };
+}
 
 let pgPool: Pool | undefined;
 let myPool: mysql.Pool | undefined;
@@ -214,21 +226,21 @@ async function runConcurrentTxs(
   n: number,
   readAll: () => Promise<{ id: number; worker: number; seq: number }[]>,
 ): Promise<{ id: number; worker: number; seq: number }[]> {
-  const bundle0 = compileWriteBundle('Insert', insertOp(dialect), insertWrites, 'create', dialect);
+  const plan0 = insertPlan(dialect);
   await Promise.all(
     Array.from({ length: n }, (_, k) =>
-      // Each worker is its OWN logical transaction. Two statements per tx would need a multi-write
-      // bundle; here we run TWO single-statement txs per worker back-to-back with a yield between —
+      // Each worker is its OWN logical transaction. Two statements per tx would need a two-statement
+      // plan; here we run TWO single-statement txs per worker back-to-back with a yield between —
       // that still exercises concurrent overlap of N·2 transactions on the shared runtime/pool, and
       // the per-tx ownership must keep each BEGIN…COMMIT on its own connection.
       (async () => {
         // Phase A ownership plane: drive the plan executor as its OWN auto-tx (no user
         // `transaction(fn)` boundary) — `guard:false` opts out of the #86 write=tx guard, which is a
         // policy of the public write entry, not this internal per-execution-ownership proof.
-        const r0 = await executeTransactionAsync(ctx, bundle0.transaction!, { id: 2 * k, worker: k, seq: 0 }, dialect, { guard: false });
+        const r0 = await executeTransactionAsync(ctx, plan0, { id: 2 * k, worker: k, seq: 0 }, dialect, { guard: false });
         expect(r0.committed).toBe(true);
         await new Promise((res) => setTimeout(res, 1)); // force interleave across workers
-        const r1 = await executeTransactionAsync(ctx, bundle0.transaction!, { id: 2 * k + 1, worker: k, seq: 1 }, dialect, { guard: false });
+        const r1 = await executeTransactionAsync(ctx, plan0, { id: 2 * k + 1, worker: k, seq: 1 }, dialect, { guard: false });
         expect(r1.committed).toBe(true);
       })(),
     ),
@@ -273,12 +285,12 @@ describe('Phase A #75 — concurrent-transaction isolation (per-execution connec
     // Pre-seed the row that makes ONE worker's UNIQUE INSERT collide → its whole tx must ROLLBACK.
     await pgPool!.query(`INSERT INTO ${ISO_TBL} (id, worker, seq) VALUES (0, 999, 9)`);
     const ctx = new PooledAsyncContext(pgConnectionPool(pgPool as never));
-    const bundle = compileWriteBundle('Insert', insertOp('postgres'), insertWrites, 'create', 'postgres');
+    const plan = insertPlan('postgres');
 
     const outcomes = await Promise.all(
       Array.from({ length: N }, (_, k) =>
         // worker 0 collides on id=0 (pre-seeded) → PK violation → whole tx ROLLBACK + error.
-        executeTransactionAsync(ctx, bundle.transaction!, { id: k, worker: k, seq: 0 }, 'postgres', { guard: false })
+        executeTransactionAsync(ctx, plan, { id: k, worker: k, seq: 0 }, 'postgres', { guard: false })
           .then((r) => ({ ok: true as const, r }))
           .catch((e) => ({ ok: false as const, e })),
       ),
@@ -328,11 +340,11 @@ describe('Phase A #75 — concurrent-transaction isolation (per-execution connec
       dialect,
     );
     // The concurrent committing tx: a plain single INSERT (id 30) that MUST be unaffected.
-    const okBundle = compileWriteBundle('Insert', insertOp(dialect), insertWrites, 'create', dialect);
+    const okPlan = insertPlan(dialect);
 
     const [failOutcome, okOutcome] = await Promise.allSettled([
       executeTransactionAsync(ctx, failing.transaction!, {}, dialect, { guard: false }),
-      executeTransactionAsync(ctx, okBundle.transaction!, { id: 30, worker: 2, seq: 0 }, dialect, { guard: false }),
+      executeTransactionAsync(ctx, okPlan, { id: 30, worker: 2, seq: 0 }, dialect, { guard: false }),
     ]);
 
     // The failing tx must have thrown (PK collision on its 2nd statement) — NOT a silent partial commit.
@@ -390,13 +402,13 @@ describe('Phase A #75 — concurrent-transaction isolation (per-execution connec
       release?: () => void,
     ): Promise<{ committedA: boolean; committedB: boolean }> {
       const ctx = new PooledAsyncContext(pool);
-      const bundle = compileWriteBundle('Insert', insertOp('postgres'), insertWrites, 'create', 'postgres');
+      const plan = insertPlan('postgres');
 
       // Launch BOTH transactions concurrently. Under the owned pool each holds its OWN connection ⇒
       // both COMMIT. Under the shared slot the barrier holds tx-A open at its INSERT while tx-B's
       // BEGIN arrives ⇒ tx-B collides with the held slot (the shared-writer bug).
-      const txA = executeTransactionAsync(ctx, bundle.transaction!, { id: 100, worker: 1, seq: 0 }, 'postgres', { guard: false });
-      const txB = executeTransactionAsync(ctx, bundle.transaction!, { id: 200, worker: 2, seq: 0 }, 'postgres', { guard: false });
+      const txA = executeTransactionAsync(ctx, plan, { id: 100, worker: 1, seq: 0 }, 'postgres', { guard: false });
+      const txB = executeTransactionAsync(ctx, plan, { id: 200, worker: 2, seq: 0 }, 'postgres', { guard: false });
       // Once both are in flight, release the barrier so tx-A can finish (only matters for the slot).
       if (release !== undefined) setTimeout(release, 50);
 

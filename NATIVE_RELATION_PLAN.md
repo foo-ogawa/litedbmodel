@@ -85,8 +85,10 @@ grounded type check of bc 0.8.15's actual rust output.
      RETURNING-write source node must carry a typed outType so the `.map` is covered (the reproduced
      `non-covered map shape` error is because it was NOT authored as a covered typed-source node, not a bc
      gap). bc#169 (which framed DB-tx as a bc feature) was closed as a responsibility violation.
-  Until authored, these 4 ops still run via the TS interpreter (`deriveTransactionPlan`/`executeTransactionBundle`),
-  outside `generateModule`. NOT faked/stubbed on the native plane.
+  The self-built TS interpreter fallback (`deriveTransactionPlan`/`executeTransactionBundle`) that once
+  ran these 4 ops outside `generateModule` was REMOVED in #227 — there is no litedbmodel-owned tx
+  execution left in any language. The write/tx path is the declared endpoint → emitter → the leaf
+  transport (`executeSQL`) on the tx connection, the SAME path every other op rides. NOT faked/stubbed.
 
 ---
 

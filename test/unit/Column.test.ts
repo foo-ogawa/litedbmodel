@@ -17,6 +17,7 @@ import {
   condsToRecord,
   isOrCond,
   createOrCond,
+  type Conds,
 } from '../../src/Column';
 import { DBNotNullValue, DBCast, DBCastArray } from '../../src/DBValues';
 
@@ -427,9 +428,11 @@ describe('condsToRecord', () => {
   it('should handle composite key IN condition', () => {
     const tenantCol = createColumn<number, unknown>('tenant_id', 'users', 'User');
     const idCol = createColumn<number, unknown>('id', 'users', 'User');
-    const conds = [
-      [[tenantCol, idCol], [[1, 10], [1, 20], [2, 30]]] as const,
-    ] as const;
+    // Typed as `Conds` so the composite tuple-IN arm (`[Column[], unknown[][]]`, Column.ts:811) is
+    // FIXED as a 2-tuple; a bare literal widens to a union array and matches no arm.
+    const conds: Conds = [
+      [[tenantCol, idCol], [[1, 10], [1, 20], [2, 30]]],
+    ];
     const result = condsToRecord(conds);
     
     // Should create __tuple__ key with DBTupleIn instance
@@ -455,8 +458,13 @@ describe('isOrCond', () => {
   });
 
   it('should return false for non-objects', () => {
+    // These are DELIBERATELY ill-typed: the test asserts the runtime guard rejects them, so the type
+    // error is part of the expectation (a caller cannot reach here without ignoring the compiler).
+    // @ts-expect-error - null is not a condition
     expect(isOrCond(null)).toBe(false);
+    // @ts-expect-error - undefined is not a condition
     expect(isOrCond(undefined)).toBe(false);
+    // @ts-expect-error - a bare string is not a condition
     expect(isOrCond('string')).toBe(false);
   });
 });

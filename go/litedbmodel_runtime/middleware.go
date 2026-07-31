@@ -574,6 +574,10 @@ func Logger(opts LoggerOptions) *MiddlewareHandle {
 // EXPLAIN / TABLE) — byte-true to the TS returnsRows leading-keyword test.
 var rawLeadingRe = regexp.MustCompile(`(?i)^\s*(select|with|show|pragma|values|explain|table)\b`)
 
+// returningRe matches a RETURNING clause anywhere in the statement — a write with RETURNING returns
+// rows, so returnsRows picks Execute over Run for it (byte-true to the TS middleware.ts).
+var returningRe = regexp.MustCompile(`(?i)\breturning\b`)
+
 // returnsRows reports whether `sql` returns rows (a SELECT-family leading keyword, or a RETURNING
 // clause). Mirrors the TS middleware.ts returnsRows so RawExecute picks Execute vs. Run identically.
 func returnsRows(sql string) bool {

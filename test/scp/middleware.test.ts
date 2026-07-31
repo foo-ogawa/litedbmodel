@@ -201,7 +201,7 @@ function relDb(): Database.Database {
  * keys → batch SELECT over those keys → group children onto their parent). */
 function readParentsWithKids(ctx: ExecutionContext): Record<string, unknown>[] {
   const parents = executeSQL(
-    { sql: 'SELECT id, name FROM parent WHERE id = ? ORDER BY id ASC', params: [1], write: false, returning: false, bigint: false },
+    { sql: 'SELECT id, name FROM parent WHERE id = ? ORDER BY id ASC', params: [1], write: null },
     { exec: ctx, dialect: 'sqlite' },
   );
   const keys = pluck({ rows: parents, col: ['id'] }) as number[];
@@ -209,9 +209,7 @@ function readParentsWithKids(ctx: ExecutionContext): Record<string, unknown>[] {
     {
       sql: `SELECT id, parent_id, label FROM child WHERE parent_id IN (${keys.map(() => '?').join(', ')}) ORDER BY id ASC`,
       params: keys,
-      write: false,
-      returning: false,
-      bigint: false,
+      write: null,
     },
     { exec: ctx, dialect: 'sqlite' },
   );
