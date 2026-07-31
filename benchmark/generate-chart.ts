@@ -30,7 +30,7 @@ export interface BenchmarkRow {
 
 // Bar colour per series — the renderer's own concern. The series themselves (names, display order and
 // the baseline) come from the ORM_SERIES SSoT, so this map is exhaustive by type: adding a series there
-// without a colour here is a compile error, enforced by `npm run typecheck:tools` (a colourless series
+// without a colour here is a compile error, enforced by `npm run types:check` (a colourless series
 // otherwise renders `fill="undefined"` bars, which nothing else in the repo would catch).
 const ORM_COLORS: Record<OrmSeries, string> = {
   'litedbmodel (runtime)': '#3b82f6',  // Blue

@@ -6,8 +6,8 @@
  * and re-runs the live pipeline — decorated models + declared endpoints → `emitBehaviorModule` →
  * `bc generate` → `bindTyped(leafHandlers(ctx))` → SQLite / live PostgreSQL / live MySQL — against
  * every vector, asserting the identical statements (render axis), the identical materialized result
- * and DB state (exec axis), the identical typed throw (guard axis), the identical transaction
- * outcome (tx axis) and the identical dialect primitive (dialect axis).
+ * and DB state (exec axis), the identical typed throw (guard axis) and the identical dialect
+ * primitive (dialect axis).
  *
  * ## Not faked
  *

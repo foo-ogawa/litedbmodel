@@ -119,7 +119,7 @@ final class ExecutionContextSeamTest extends TestCase
         $this->assertSame(101, (int) $rows[0]->id); // 1 + 100 via the middleware
     }
 
-    // ── connectionFor resolution: tx-owned pinned connection wins ──────────────
+    // ── connectionFor resolution: tx-owned pinned conn serves a statement of the tx's own database ──────────────
 
     public function testConnectionForResolvesPinnedInTx(): void
     {
@@ -173,15 +173,20 @@ final class ExecutionContextSeamTest extends TestCase
     {
         $db = self::seed();
         $ctx = Context::forPdo($db);
+        // The assertions live OUTSIDE the catch on purpose: PHPUnit's own AssertionFailedError extends
+        // \RuntimeException, so a `fail()` inside the try would be swallowed by the catch below — the
+        // gate would go green (or fail for the wrong reason) while the body exception was swallowed.
+        $caught = null;
         try {
             withTransaction($ctx, function (ExecutionContext $txCtx): void {
                 run($txCtx, 'INSERT INTO t (id, v) VALUES (?, ?)', [1, 'doomed']);
                 throw new \RuntimeException('boom');
             });
-            $this->fail('expected the body exception to propagate');
         } catch (\RuntimeException $e) {
-            $this->assertSame('boom', $e->getMessage());
+            $caught = $e;
         }
+        $this->assertNotNull($caught, 'expected the body exception to propagate');
+        $this->assertSame('boom', $caught->getMessage());
         // The insert must have been rolled back — no rows.
         $rows = execute($ctx, 'SELECT COUNT(*) AS n FROM t', []);
         $this->assertSame(0, (int) $rows[0]->n);
@@ -227,15 +232,20 @@ final class ExecutionContextSeamTest extends TestCase
         $db->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
         $db->exec('CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)');
         $ctx = Context::forPdo($db);
+        // The assertions live OUTSIDE the catch on purpose: PHPUnit's own AssertionFailedError is a
+        // \Throwable like any other, so a `fail()` inside the try would be swallowed by the catch below —
+        // the gate would go green (or fail for the wrong reason) while the throwing COMMIT was absorbed.
+        $caught = null;
         try {
             withTransactionDecided($ctx, function (ExecutionContext $txCtx): \LiteDbModel\Runtime\TxDecision {
                 run($txCtx, 'INSERT INTO t (id, v) VALUES (?, ?)', [1, 'x']);
                 return commit(null);
             });
-            $this->fail('expected the throwing COMMIT to propagate');
         } catch (\Throwable $e) {
-            $this->assertStringContainsString('boom-COMMIT', $e->getMessage());
+            $caught = $e;
         }
+        $this->assertNotNull($caught, 'expected the throwing COMMIT to propagate');
+        $this->assertStringContainsString('boom-COMMIT', $caught->getMessage());
         // The #78 leak: without the finally's release (which best-effort ROLLBACKs the poisoned
         // connection), the \PDO would still be inside an open transaction and a fresh BEGIN would
         // throw. Prove the connection is clean by starting + committing a new tx on it.

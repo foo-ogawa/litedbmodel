@@ -12,7 +12,7 @@
  *
  * The SCP path renders + executes through the CURRENT shipped makeSQL runtime — reads via
  * `compileSelect` + `executeSQLAsync` (the op-independent leaf transport), writes/tx via
- * `compileWriteNode` + `compileWriteBundle`'s derived `TransactionPlan` + `renderTxStatement`,
+ * `compileWriteNode` + the batch bundles' derived `TransactionPlan` + `renderTxStatement`,
  * relation batches via `compileRelationOp` + its render (resolving the #46 deferred PG array cast
  * from the real keys). No mock, no hand-written SQL for the SCP side. The v1 side calls the REAL v1
  * SqlBuilders / DBConditions / `inferPgArrayType` (not hand-written expectations — avoids the WS3
@@ -33,7 +33,6 @@ import { DBConditions } from '../../src/DBConditions';
 import { postgresSqlBuilder } from '../../src/drivers/PostgresSqlBuilder';
 import { mysqlSqlBuilder } from '../../src/drivers/MysqlSqlBuilder';
 import {
-  compileWriteBundle,
   compileWriteNode,
   compileCreateManyBundle,
   compileUpdateManyBundle,
@@ -45,13 +44,11 @@ import {
   resolvePgArrayCast,
   inferPgArrayType,
   mysqlConnectionPool,
-  entityWrites,
   MiddlewareChain,
   type SqlBundle,
   type TxOp,
   type AsyncExecutionContext,
   type AsyncConnection,
-  type EntityWritesDefinition,
   type RelationOp,
 } from '../../src/scp';
 import { compileSelect, type SelectDesc, type Dialect as MakeSQLDialect } from '../../src/scp/makesql';
@@ -228,31 +225,6 @@ function createPostOp(dialect: MakeSQLDialect): TxOp {
   );
 }
 
-// A write-time-relations Command's base write: Insert a post + derive the author's post count in
-// ONE tx (`postCountWrites` below carries the derive effect).
-function createPostWithCountOp(dialect: MakeSQLDialect): TxOp {
-  return compileWriteNode(
-    {
-      component: 'Insert',
-      ports: {
-        table: T_POSTS,
-        'values.user_id': { ref: ['user_id'] },
-        'values.title': { ref: ['title'] },
-        'values.content': { ref: ['content'] },
-        returning: 'id, user_id, title',
-      },
-    } as never,
-    dialect,
-  );
-}
-
-const postCountWrites: EntityWritesDefinition = entityWrites((w) => ({
-  create: w.lifecycle({
-    requires: [w.exists(T_USERS, { id: '$.input.user_id' })],
-    derive: [w.increment(T_USERS, { id: '$.input.user_id' }, 'post_count_scp', +1)],
-  }),
-}));
-
 // ── Async driver seams: render a compiled op (with dialect) + execute on the real DB ──
 
 type Row = Record<string, unknown>;
@@ -300,7 +272,7 @@ function asyncCtx(queryFn: (sql: string, params: unknown[]) => Promise<Row[]>): 
 async function scpSelect(desc: SelectDesc, execAsync: AsyncExecutionContext): Promise<{ rows: Row[]; renderedSql: string }> {
   const compiled = compileSelect(desc);
   const rows = (await executeSQLAsync(
-    { sql: compiled.sql, params: compiled.params, write: false, returning: false, bigint: false },
+    { sql: compiled.sql, params: compiled.params, write: null },
     { execAsync, dialect: desc.dialect },
   )) as Row[];
   return { rows, renderedSql: renderPlaceholders(compiled.sql, desc.dialect) };
@@ -350,14 +322,12 @@ beforeAll(async () => {
     await pgPool.query('SELECT 1');
     // Own, isolated tables (fix #37) — drop-then-create so the seed is deterministic
     // regardless of what other integration files did to the shared `posts`/`users`.
-    // `post_count_scp` on scp_users is the write-tx derive target.
     await pgPool.query(`DROP TABLE IF EXISTS ${T_POSTS} CASCADE`);
     await pgPool.query(`DROP TABLE IF EXISTS ${T_USERS} CASCADE`);
     await pgPool.query(`
       CREATE TABLE ${T_USERS} (
         id SERIAL PRIMARY KEY,
-        name VARCHAR(255) NOT NULL,
-        post_count_scp INTEGER NOT NULL DEFAULT 0
+        name VARCHAR(255) NOT NULL
       )`);
     await pgPool.query(`
       CREATE TABLE ${T_POSTS} (
@@ -410,8 +380,7 @@ beforeAll(async () => {
     await myConn.query(`
       CREATE TABLE ${T_USERS} (
         id INT AUTO_INCREMENT PRIMARY KEY,
-        name VARCHAR(255) NOT NULL,
-        post_count_scp INT NOT NULL DEFAULT 0
+        name VARCHAR(255) NOT NULL
       )`);
     await myConn.query(`
       CREATE TABLE ${T_POSTS} (
@@ -761,52 +730,6 @@ describe('WS6 integration — Postgres: SCP-compiled SQL executes + parity with 
     expect(got).toEqual(['1/10=r2', '1/11=r3', '2/10=r9']);
   });
 
-  it('write-tx Command (Insert + derive counter) commits atomically as ONE tx on real PG', async () => {
-    const bundle = compileWriteBundle('Create', createPostWithCountOp('postgres'), postCountWrites, 'create', 'postgres');
-    expect(bundle.dialect).toBe('postgres');
-    const plan = bundle.transaction!;
-    const input = { user_id: 1, title: 'TX PG', content: 'c' };
-
-    const before = await pgQuery(pgPool!, `SELECT post_count_scp FROM ${T_USERS} WHERE id = $1`, [1]);
-    const beforeCount = Number(before[0].post_count_scp);
-
-    // Execute the derived plan's statements in ONE real transaction, rendering each with PG.
-    const client = await pgPool!.connect();
-    let entityId: number | null = null;
-    try {
-      await client.query('BEGIN');
-      const scope: Record<string, unknown> = { ...input };
-      for (const stmt of plan.statements) {
-        const r = renderTxStatement(stmt.op, scope as never, 'postgres');
-        const res = await client.query(r.sql, r.params.map(toPlain));
-        const rows = res.rows as Row[];
-        // Gate-first: a `requires` existence probe returning zero rows would ROLLBACK.
-        if (stmt.gate === 'existsElseRollback' && rows.length === 0) {
-          throw new Error('gate requires failed');
-        }
-        if (stmt.id === plan.entityFrom && rows.length > 0) {
-          scope.__entity = rows[0];
-          entityId = Number(rows[0].id);
-        }
-      }
-      await client.query('COMMIT');
-    } catch (e) {
-      await client.query('ROLLBACK');
-      throw e;
-    } finally {
-      client.release();
-    }
-
-    // The post was inserted and the counter derived (+1) in the SAME tx.
-    const after = await pgQuery(pgPool!, `SELECT post_count_scp FROM ${T_USERS} WHERE id = $1`, [1]);
-    expect(Number(after[0].post_count_scp)).toBe(beforeCount + 1);
-    const post = await pgQuery(pgPool!, `SELECT id, user_id, title FROM ${T_POSTS} WHERE id = $1`, [entityId]);
-    expect(post[0]).toMatchObject({ user_id: 1, title: 'TX PG' });
-
-    // Cleanup.
-    await pgPool!.query(`DELETE FROM ${T_POSTS} WHERE id = $1`, [entityId]);
-    await pgPool!.query(`UPDATE ${T_USERS} SET post_count_scp = $1 WHERE id = $2`, [beforeCount, 1]);
-  });
 });
 
 // ── MySQL ───────────────────────────────────────────────────────────────────────
@@ -991,116 +914,25 @@ describe('WS6 integration — MySQL: SCP-compiled SQL executes + parity with v1 
     expect(got).toEqual(['1/10=r2', '1/11=r3', '2/10=r9']);
   });
 
-  it('write-tx Command (Insert + derive counter) commits atomically as ONE tx on real MySQL', async () => {
-    const bundle = compileWriteBundle('Create', createPostWithCountOp('mysql'), postCountWrites, 'create', 'mysql');
-    expect(bundle.dialect).toBe('mysql');
-    const plan = bundle.transaction!;
-    const input = { user_id: 1, title: 'TX MY', content: 'c' };
-
-    const before = await myQuery(myConn!, `SELECT post_count_scp FROM ${T_USERS} WHERE id = ?`, [1]);
-    const beforeCount = Number(before[0].post_count_scp);
-
-    await myConn!.beginTransaction();
-    let entityId: number | null = null;
-    try {
-      const scope: Record<string, unknown> = { ...input };
-      for (const stmt of plan.statements) {
-        const r = renderTxStatement(stmt.op, scope as never, 'mysql');
-        // MySQL has no RETURNING: for the body Insert, strip RETURNING, run, then re-select the PK.
-        const isBody = stmt.id === plan.entityFrom;
-        if (isBody && /\bRETURNING\b/i.test(r.sql)) {
-          const insertSql = r.sql.replace(/\s+RETURNING\s+.+$/i, '');
-          const res = await myConn!.query(insertSql, r.params.map(toPlain));
-          entityId = (res[0] as mysql.ResultSetHeader).insertId;
-          const sel = await myQuery(myConn!, `SELECT id, user_id, title FROM ${T_POSTS} WHERE id = ?`, [entityId]);
-          scope.__entity = sel[0];
-        } else {
-          const res = await myConn!.query(r.sql, r.params.map(toPlain));
-          const rows = Array.isArray(res[0]) ? (res[0] as Row[]) : [];
-          if (stmt.gate === 'existsElseRollback' && rows.length === 0) throw new Error('gate requires failed');
-        }
-      }
-      await myConn!.commit();
-    } catch (e) {
-      await myConn!.rollback();
-      throw e;
-    }
-
-    const after = await myQuery(myConn!, `SELECT post_count_scp FROM ${T_USERS} WHERE id = ?`, [1]);
-    expect(Number(after[0].post_count_scp)).toBe(beforeCount + 1);
-    const post = await myQuery(myConn!, `SELECT id, user_id, title FROM ${T_POSTS} WHERE id = ?`, [entityId]);
-    expect(post[0]).toMatchObject({ user_id: 1, title: 'TX MY' });
-
-    await myConn!.query(`DELETE FROM ${T_POSTS} WHERE id = ?`, [entityId]);
-    await myConn!.query(`UPDATE ${T_USERS} SET post_count_scp = ? WHERE id = ?`, [beforeCount, 1]);
-  });
 });
 
 // ── Write-path completeness (#47 write side): the TS 5th-language live leg ─────
 //
-// createMany / updateMany / deleteMany / bare UPDATE·DELETE / UUID-PK + composite-PK INSERT
-// RETURNING — the SAME batch/write bundles the corpus ships, executed live on PG + MySQL through the
-// TS runtime's tx path (`renderTxStatement`). MySQL has no native RETURNING, so EVERY write that
-// declares one — INSERT, upsert, UPDATE, DELETE — is run stripped and its written rows recovered by
-// the SELECT the connection adapter derives, which is why both dialects return the written rows here.
-// Dedicated `wc_*` tables keep this isolated from the seed above.
+// createMany / updateMany / deleteMany — the SAME batch write bundles the decorator write path ships
+// (`compileCreateManyBundle` / `compileUpdateManyBundle` / `compileDeleteManyBundle`, called from
+// `decorator-adapter.ts`), executed live on PG + MySQL through the TS runtime's tx render
+// (`renderTxStatement`). MySQL has no native RETURNING, so a batch INSERT that declares one is run
+// stripped and its written rows recovered by the SELECT the connection adapter derives, which is why
+// both dialects return the created rows here. A dedicated `wc_posts` table keeps this isolated from
+// the seed above.
+//
+// The SINGLE-row writes (bare UPDATE/DELETE, UPDATE/DELETE … RETURNING, and the client-supplied
+// STRING / COMPOSITE primary-key INSERT … RETURNING) are NOT here: they are declared endpoints in the
+// conformance corpus (`renamePost` / `removePost` / `renamePostReturning` / `removePostReturning` /
+// `removePostsByAuthorReturning` / `createDoc` / `createLine`), captured per dialect from the emitted
+// + bc-generated module and executed live by `conformance:livedb` in all five languages.
 
 const WC_POSTS = 'scp_wc_posts';
-const WC_DOCS = 'scp_wc_docs';
-const WC_LINES = 'scp_wc_lines';
-const WC_UUID = '44444444-4444-4444-4444-444444444444';
-
-// The where-member shape (`{arr:[{eq:[{ref:[…]},{ref:[…]}]}]}`) is `compileWriteNode`'s SSoT
-// structural WHERE — the SAME shape the removed `whereEq($.id, $.id)` recorder sugar lowered to.
-function idEqWhere(): { arr: [{ eq: [{ ref: string[] }, { ref: string[] }] }] } {
-  return { arr: [{ eq: [{ ref: ['id'] }, { ref: ['id'] }] }] };
-}
-function renameOp(dialect: MakeSQLDialect): TxOp {
-  return compileWriteNode({ component: 'Update', ports: { table: WC_POSTS, 'set.title': { ref: ['title'] }, where: idEqWhere() } } as never, dialect);
-}
-function removeOp(dialect: MakeSQLDialect): TxOp {
-  return compileWriteNode({ component: 'Delete', ports: { table: WC_POSTS, where: idEqWhere() } } as never, dialect);
-}
-// The RETURNING twins (#130). MySQL parses no RETURNING, so an UPDATE is recovered by re-running the
-// write's OWN WHERE after it (the row carries the new value) and a DELETE by that same WHERE BEFORE
-// it (afterwards there is nothing left to describe) — both keyed off the `pk` hint for row order.
-function renameReturningOp(dialect: MakeSQLDialect): TxOp {
-  return compileWriteNode(
-    { component: 'Update', ports: { table: WC_POSTS, 'set.title': { ref: ['title'] }, where: idEqWhere(), returning: 'id, title', pk: 'id' } } as never,
-    dialect,
-  );
-}
-function removeReturningOp(dialect: MakeSQLDialect): TxOp {
-  return compileWriteNode(
-    { component: 'Delete', ports: { table: WC_POSTS, where: idEqWhere(), returning: 'id, title', pk: 'id' } } as never,
-    dialect,
-  );
-}
-// `pk` is client-supplied (UUID / composite — no AUTO_INCREMENT), so on MySQL the written row is
-// recovered by the PK VALUES the INSERT itself bound, never by an id range. `compileWriteNode` bakes
-// the hint that carries the key; PG keeps native RETURNING and never reads it.
-function createDocOp(dialect: MakeSQLDialect): TxOp {
-  return compileWriteNode(
-    { component: 'Insert', ports: { table: WC_DOCS, 'values.doc_id': { ref: ['doc_id'] }, 'values.title': { ref: ['title'] }, returning: 'doc_id, title', pk: 'doc_id' } } as never,
-    dialect,
-  );
-}
-function createLineOp(dialect: MakeSQLDialect): TxOp {
-  return compileWriteNode(
-    {
-      component: 'Insert',
-      ports: {
-        table: WC_LINES,
-        'values.order_id': { ref: ['order_id'] },
-        'values.line_no': { ref: ['line_no'] },
-        'values.sku': { ref: ['sku'] },
-        returning: 'order_id, line_no, sku',
-        pk: 'order_id,line_no',
-      },
-    } as never,
-    dialect,
-  );
-}
 
 /** A minimal per-dialect live client seam (parameterized query → rows / affected count). */
 interface LiveClient {
@@ -1184,22 +1016,14 @@ async function execTxLive(bundle: SqlBundle, input: Record<string, unknown>, cli
   return returned;
 }
 
-describe('WS#47 write-path completeness — batch + bare + PK RETURNING execute live (TS leg, PG + MySQL)', () => {
+describe('WS#47 write-path completeness — the BATCH write bundles execute live (TS leg, PG + MySQL)', () => {
   async function setupPg(): Promise<void> {
     await pgPool!.query(`DROP TABLE IF EXISTS ${WC_POSTS}`);
-    await pgPool!.query(`DROP TABLE IF EXISTS ${WC_DOCS}`);
-    await pgPool!.query(`DROP TABLE IF EXISTS ${WC_LINES}`);
     await pgPool!.query(`CREATE TABLE ${WC_POSTS} (id SERIAL PRIMARY KEY, author_id INTEGER NOT NULL, title TEXT NOT NULL, subtitle TEXT)`);
-    await pgPool!.query(`CREATE TABLE ${WC_DOCS} (doc_id UUID PRIMARY KEY, title TEXT NOT NULL)`);
-    await pgPool!.query(`CREATE TABLE ${WC_LINES} (order_id INTEGER NOT NULL, line_no INTEGER NOT NULL, sku TEXT NOT NULL, PRIMARY KEY (order_id, line_no))`);
   }
   async function setupMy(): Promise<void> {
     await myConn!.query(`DROP TABLE IF EXISTS ${WC_POSTS}`);
-    await myConn!.query(`DROP TABLE IF EXISTS ${WC_DOCS}`);
-    await myConn!.query(`DROP TABLE IF EXISTS ${WC_LINES}`);
     await myConn!.query(`CREATE TABLE ${WC_POSTS} (id INT AUTO_INCREMENT PRIMARY KEY, author_id INT NOT NULL, title VARCHAR(255) NOT NULL, subtitle VARCHAR(255))`);
-    await myConn!.query(`CREATE TABLE ${WC_DOCS} (doc_id CHAR(36) PRIMARY KEY, title VARCHAR(255) NOT NULL)`);
-    await myConn!.query(`CREATE TABLE ${WC_LINES} (order_id INT NOT NULL, line_no INT NOT NULL, sku VARCHAR(255) NOT NULL, PRIMARY KEY (order_id, line_no))`);
   }
 
   it('createMany (homogeneous, RETURNING) + updateMany + deleteMany execute on PG and MySQL', async () => {
@@ -1235,80 +1059,10 @@ describe('WS#47 write-path completeness — batch + bare + PK RETURNING execute 
     expect(afterDmMy.map((r) => Number(r.id))).toEqual([2]);
   });
 
-  it('bare UPDATE + bare DELETE execute on PG and MySQL', async () => {
-    const upd: EntityWritesDefinition = { update: { effects: {} } };
-    const rem: EntityWritesDefinition = { remove: { effects: {} } };
-
-    await setupPg();
-    await pgPool!.query(`INSERT INTO ${WC_POSTS} (id, author_id, title) VALUES (1,7,'One'),(2,7,'Two')`);
-    await execTxLive(compileWriteBundle('Rename', renameOp('postgres'), upd, 'update', 'postgres'), { id: 2, title: 'Two-x' }, pgClient(pgPool!));
-    expect((await pgQuery(pgPool!, `SELECT title FROM ${WC_POSTS} WHERE id=2`, []))[0].title).toBe('Two-x');
-    await execTxLive(compileWriteBundle('Remove', removeOp('postgres'), rem, 'remove', 'postgres'), { id: 1 }, pgClient(pgPool!));
-    expect((await pgQuery(pgPool!, `SELECT id FROM ${WC_POSTS} ORDER BY id`, [])).map((r) => Number(r.id))).toEqual([2]);
-
-    await setupMy();
-    await myConn!.query(`INSERT INTO ${WC_POSTS} (id, author_id, title) VALUES (1,7,'One'),(2,7,'Two')`);
-    await execTxLive(compileWriteBundle('Rename', renameOp('mysql'), upd, 'update', 'mysql'), { id: 2, title: 'Two-x' }, myClient(myConn!));
-    expect((await myQuery(myConn!, `SELECT title FROM ${WC_POSTS} WHERE id=2`, []))[0].title).toBe('Two-x');
-    await execTxLive(compileWriteBundle('Remove', removeOp('mysql'), rem, 'remove', 'mysql'), { id: 1 }, myClient(myConn!));
-    expect((await myQuery(myConn!, `SELECT id FROM ${WC_POSTS} ORDER BY id`, [])).map((r) => Number(r.id))).toEqual([2]);
-  });
-
-  it('#130 UPDATE + DELETE … RETURNING return the WRITTEN rows, identically on PG and MySQL', async () => {
-    const upd: EntityWritesDefinition = { update: { effects: {} } };
-    const rem: EntityWritesDefinition = { remove: { effects: {} } };
-    const seed = `INSERT INTO ${WC_POSTS} (id, author_id, title) VALUES (1,7,'One'),(2,7,'Two')`;
-    const norm = (rows: Row[][]): unknown[] => rows.flat().map((r) => ({ id: Number(r.id), title: String(r.title) }));
-
-    // An UPDATE describes its rows AFTER the write — the new title, not the pre-image.
-    await setupPg();
-    await pgPool!.query(seed);
-    const updPg = await execTxLive(compileWriteBundle('Rename', renameReturningOp('postgres'), upd, 'update', 'postgres'), { id: 2, title: 'Two-x' }, pgClient(pgPool!));
-    await setupMy();
-    await myConn!.query(seed);
-    const updMy = await execTxLive(compileWriteBundle('Rename', renameReturningOp('mysql'), upd, 'update', 'mysql'), { id: 2, title: 'Two-x' }, myClient(myConn!));
-    expect(norm(updPg)).toEqual([{ id: 2, title: 'Two-x' }]);
-    expect(norm(updMy)).toEqual(norm(updPg)); // §10 all-dialect parity — NOT [] on MySQL any more
-
-    // A DELETE describes the rows it removed — the pre-image, captured before the write.
-    await setupPg();
-    await pgPool!.query(seed);
-    const remPg = await execTxLive(compileWriteBundle('Remove', removeReturningOp('postgres'), rem, 'remove', 'postgres'), { id: 1 }, pgClient(pgPool!));
-    expect((await pgQuery(pgPool!, `SELECT id FROM ${WC_POSTS} ORDER BY id`, [])).map((r) => Number(r.id))).toEqual([2]);
-    await setupMy();
-    await myConn!.query(seed);
-    const remMy = await execTxLive(compileWriteBundle('Remove', removeReturningOp('mysql'), rem, 'remove', 'mysql'), { id: 1 }, myClient(myConn!));
-    expect((await myQuery(myConn!, `SELECT id FROM ${WC_POSTS} ORDER BY id`, [])).map((r) => Number(r.id))).toEqual([2]);
-    expect(norm(remPg)).toEqual([{ id: 1, title: 'One' }]);
-    expect(norm(remMy)).toEqual(norm(remPg)); // the delete still happened AND its rows came back
-  });
-
-  it('UUID-PK + composite-PK INSERT RETURNING: MySQL emul re-selects by the REAL PK (#4)', async () => {
-    const cr: EntityWritesDefinition = { create: { effects: {} } };
-
-    // ── UUID PK ──
-    await setupPg();
-    const docPg = await execTxLive(compileWriteBundle('CreateDoc', createDocOp('postgres'), cr, 'create', 'postgres'), { doc_id: WC_UUID, title: 'Doc' }, pgClient(pgPool!));
-    expect(String(docPg[0][0].doc_id)).toBe(WC_UUID);
-    await setupMy();
-    const docMy = await execTxLive(compileWriteBundle('CreateDoc', createDocOp('mysql'), cr, 'create', 'mysql'), { doc_id: WC_UUID, title: 'Doc' }, myClient(myConn!));
-    expect(String(docMy[0][0].doc_id)).toBe(WC_UUID); // re-selected by doc_id, NOT id
-    expect(docMy[0][0].title).toBe('Doc');
-
-    // ── Composite PK ──
-    await setupPg();
-    const linePg = await execTxLive(compileWriteBundle('CreateLine', createLineOp('postgres'), cr, 'create', 'postgres'), { order_id: 10, line_no: 2, sku: 'SKU-2' }, pgClient(pgPool!));
-    expect(linePg[0][0]).toMatchObject({ order_id: 10, line_no: 2, sku: 'SKU-2' });
-    await setupMy();
-    const lineMy = await execTxLive(compileWriteBundle('CreateLine', createLineOp('mysql'), cr, 'create', 'mysql'), { order_id: 10, line_no: 2, sku: 'SKU-2' }, myClient(myConn!));
-    expect(lineMy[0][0]).toMatchObject({ order_id: 10, line_no: 2, sku: 'SKU-2' }); // re-selected by (order_id, line_no)
-
-    // cleanup
-    await pgPool!.query(`DROP TABLE IF EXISTS ${WC_POSTS}`);
-    await pgPool!.query(`DROP TABLE IF EXISTS ${WC_DOCS}`);
-    await pgPool!.query(`DROP TABLE IF EXISTS ${WC_LINES}`);
-    await myConn!.query(`DROP TABLE IF EXISTS ${WC_POSTS}`);
-    await myConn!.query(`DROP TABLE IF EXISTS ${WC_DOCS}`);
-    await myConn!.query(`DROP TABLE IF EXISTS ${WC_LINES}`);
+  // The batch tables are this describe's own; drop them once the block is done (the deleted
+  // single-write cases used to carry this teardown).
+  afterAll(async () => {
+    await pgPool?.query(`DROP TABLE IF EXISTS ${WC_POSTS}`).catch(() => undefined);
+    await myConn?.query(`DROP TABLE IF EXISTS ${WC_POSTS}`).catch(() => undefined);
   });
 });

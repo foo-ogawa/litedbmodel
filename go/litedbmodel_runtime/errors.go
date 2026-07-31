@@ -74,7 +74,7 @@ const (
 //     exact `<count>`.
 //
 // NOT a SqlFailure: a runaway guard is a litedbmodel-level policy error, not a mapped driver failure,
-// and it carries no SQLITE_ code (so reErrorToSqlFailure propagates it unchanged).
+// and it carries no SQLITE_ code (so the SQLITE_-keyed driver-error mapping propagates it unchanged).
 type LimitExceededError struct {
 	Limit    int
 	Count    int
@@ -113,7 +113,7 @@ func (e *LimitExceededError) Error() string {
 
 // checkHardLimit is the SHARED post-fetch runaway check (SSoT, spec §E-2 / epic #74) — the ONE
 // `count > limit ⇒ *LimitExceededError` primitive BOTH the native-read find guard ([CheckFindHardLimit])
-// and the relation-batch guard (relation.go `runRelationOpCtx`, `op.HardLimit`) call, so no path
+// and the relation child-fetch guard (the `guard` control field the emitter bakes) call, so no path
 // re-implements the comparison or the error assembly (the message is rendered by `Error()`). The caller
 // supplies the resolved `limit` (the cap baked on the compiled artifact), the fetched `count`, and the
 // context/model/relation identity. nil when within the cap. Go twin of rust `LimitExceededError::check`.

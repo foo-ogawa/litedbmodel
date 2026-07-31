@@ -5,6 +5,32 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.2.2] - 2026-07-29
+
+typed-native（go/rust）が **SKIP 動的 WHERE** と **relation runaway cap** を codegen できるようになり、
+cross-language livedb conformance が **4 言語（py/php/go/rust）** に復帰。`behavior-contracts` を **0.11.18**
+（typed-native opt-value lowering）へ。外向き ORM API・挙動は不変（TS consumer への影響なし）。Closes #163, #191。
+
+### Changed
+
+- **behavior-contracts 0.11.18**: typed-native が `opt<T>` port へ非 null / nullable 値を lower 可能に
+  （`optSome` / `optMapWireBox`）。これにより SKIP / guard の制御ポートを **optional な具体 struct**
+  （`whereDynamic?: DynamicWherePlan | null`, `guard?: CapGuard | null`）で go/rust typed-native codegen
+  （§2: bounded read / write は port 省略＝native-clean、SKIP read だけ plan、guarded child だけ cap）。
+  断片は §2 の `{skipped, sql, params}` 固定 struct（cond-to-null variant を廃止）。
+- **ランタイム leaf（go/rust/py/php）**: `assembleDynamicWhere`（skipped 断片を落とし、WHERE を最初の
+  tail keyword の前に splice、WHERE params を base params の前に bind）+ single optional guard。4 言語 byte-parity。
+
+### Fixed
+
+- **go/rust livedb conformance runner を復活**（#163 で削除放置されていた）。`conformance:livedb:docker` が
+  実 PostgreSQL + MySQL で 4/4 green（各 52 ベクタ、#130 の RETURNING ベクタ含む）。
+- **go PG TIMESTAMP**（#195）: 列スキャン SSoT `scanValue` に `time.Time` ケースが無く pgx の TIMESTAMP が
+  Go 既定表記になっていたのを canonical `%Y-%m-%d %H:%M:%S`（rust と一致）に。go leg が未実行で見逃していた。
+
+Follow-ups: #192（§2: 境界のある述語を静的 SQL へ焼く native-clean 精緻化）, #193（executeSQL 位置固定引数 →
+options / mode 構造化 + dead `bigint` port 削除）。
+
 ## [2.2.0] - 2026-07-28
 
 **初の安定版 v2。** 2.0.x / 2.1.0 の alpha 線を安定版へ昇格し、npm `latest` を v2 に切り替える
@@ -87,7 +113,7 @@ v1.x はメンテナンスブランチ `v1.x` で保全（別トラック）。�
 
 ### Migration: v1 → v2
 
-詳細は仕様書 [`docs/proposal/litedbmodel-v2-scp-architecture.md`](docs/proposal/litedbmodel-v2-scp-architecture.md)
+詳細は仕様書 [`docs/architecture.md`](docs/architecture.md)
 §12（TS 公開 API の v1 → v2 移行）を参照。要点:
 
 1. **結果はインスタンスではない。** `row instanceof MyModel` は成立しない。`row.someMethod()` は

@@ -200,6 +200,29 @@ func TestWriterStickyClockExpiry(t *testing.T) {
 	}
 }
 
+// TestWriterStickyArmedAtClockZero pins #218: a Mark() when the clock reads 0 MUST arm stickiness, so
+// the read right after the commit routes to the WRITER (read-your-writes). A time.Now-based clock can
+// return 0 (and rust's Instant-based SystemClock does right after process start). The old code stored
+// 0 as "never marked" (a value sentinel) → the commit failed to stick and the read leaked to the
+// reader replica. Revert lastWriteAtMs to `int64` + `== 0` ⇒ this goes RED. Every OTHER sticky test
+// marks at a non-zero clock, so this t=0 case was previously unproven.
+func TestWriterStickyArmedAtClockZero(t *testing.T) {
+	var log []string
+	reader := newRecordPool("reader", &log)
+	writer := newRecordPool("writer", &log)
+	sticky := NewWriterStickyClock(StickyOptions{UseWriterAfterTransaction: boolPtr(true), WriterStickyDuration: intPtr(5000), Now: func() int64 { return 0 }})
+	if sticky.IsSticky() {
+		t.Fatal("before any mark, sticky must be false even at t=0 (absence, not the value 0)")
+	}
+	ctx := ContextForRouting(routingWithPools(reader, writer, sticky), nil)
+	// A commit at clock t=0 arms the sticky clock.
+	sticky.Mark()
+	_, _ = Execute(ctx, "SELECT 1", nil, ReadIntent())
+	if got := log[len(log)-1]; got != "writer" {
+		t.Fatalf("read right after a t=0 commit = %v, want writer (read-your-writes)", got)
+	}
+}
+
 func TestWriterStickyRoutesReadToWriter(t *testing.T) {
 	var log []string
 	clock := int64(1_000_000)
@@ -290,6 +313,57 @@ func TestNamedDBRouting(t *testing.T) {
 	_, _ = Execute(mctx, "SELECT 7", nil, StatementIntent{Write: false}) // DB:"" ⇒ tag ignored ⇒ A
 	if !reflect.DeepEqual(mlog, []string{"A"}) {
 		t.Fatalf("ignore-tag mutation = %v, want [A] (routing IS reading intent.DB)", mlog)
+	}
+}
+
+// C2, the TRANSACTION half of named-DB routing (#215): WHICH db a transaction opens on is the ctx's
+// answer ([ExecutionContext.WithConnectionName]), not the caller's. A statement carries its db in its
+// own [StatementIntent]; a transaction has no statement to carry it — and the covered plane's boundary
+// ([WithAmbientTransaction]) takes no argument at all — so the name rides on the ctx and
+// [ExecutionContext.acquireTxConnection] resolves the WRITER pool of THAT db.
+//
+// This is the OFFLINE twin of TestPhaseCRoutingTxPinPrecedenceLive: the live one proves it against a
+// real PG (A) + MySQL (B) pair, this one proves it in the default `go test ./...`, where no
+// environment gate can hide it.
+func TestNamedDBTransactionOpensOnThatDBsWriter(t *testing.T) {
+	newCtx := func(log *[]string) (*ExecutionContext, *recordPool, *recordPool) {
+		a := newRecordPool("A", log)
+		b := newRecordPool("B", log)
+		reg := NewConnectionRegistry(map[string]ReaderWriterPools{"default": SinglePoolPair(a), "B": SinglePoolPair(b)})
+		return ContextForRouting(RoutingConfig{Registry: reg, Sticky: NewWriterStickyClock(StickyOptions{UseWriterAfterTransaction: boolPtr(false)})}, nil), a, b
+	}
+	// One read inside the boundary, so the transcript also shows the tx PIN winning over routing.
+	body := func(txCtx *ExecutionContext) (int, error) {
+		_, err := Execute(txCtx, "SELECT 1", nil, StatementIntent{Write: false})
+		return 0, err
+	}
+
+	var log []string
+	ctx, a, b := newCtx(&log)
+	if _, err := Transaction(ctx.WithConnectionName("B"), "sqlite", DefaultTransactionOptions(), body); err != nil {
+		t.Fatal(err)
+	}
+	// ONE acquire, from B — and nothing more, because every statement of the body of the tx's own database (an unnamed one, or one naming that database) resolved that pin.
+	if !reflect.DeepEqual(log, []string{"B"}) {
+		t.Fatalf("named tx acquires = %v, want [B] (the tx opens on the NAMED db's writer)", log)
+	}
+	// The WHOLE envelope — the seam-issued BEGIN/COMMIT included — ran on B's connection; A saw nothing.
+	if !reflect.DeepEqual(b.stmts, []string{"BEGIN", "SELECT 1", "COMMIT"}) {
+		t.Fatalf("B ran %v, want [BEGIN SELECT 1 COMMIT] (the whole tx on the named db)", b.stmts)
+	}
+	if len(a.stmts) != 0 {
+		t.Fatalf("the default db ran %v, want nothing (the tx was named B)", a.stmts)
+	}
+
+	// UNNAMED (the other side of the same rule): no name ⇒ the DEFAULT connection's writer. A `[B]` here
+	// would mean the name leaked from somewhere other than the ctx.
+	var dlog []string
+	dctx, _, _ := newCtx(&dlog)
+	if _, err := Transaction(dctx, "sqlite", DefaultTransactionOptions(), body); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(dlog, []string{"A"}) {
+		t.Fatalf("unnamed tx acquires = %v, want [A] (the default connection)", dlog)
 	}
 }
 

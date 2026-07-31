@@ -72,8 +72,6 @@ const golden: Golden = JSON.parse(
   fs.readFileSync(path.resolve(__dirname, '..', '..', 'benchmark', 'parity', 'v1-sql.golden.json'), 'utf8')
 );
 
-const dialects: Dialect[] = ['postgres', 'mysql', 'sqlite'];
-
 // ── SCP render helpers ────────────────────────────────────────────────────────
 
 interface Rendered {

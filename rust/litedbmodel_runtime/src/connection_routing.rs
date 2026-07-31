@@ -21,9 +21,10 @@
 //!
 //! ## The `connection_for(intent)` resolution order (design §3, v1 `DBModel.ts:313` parity)
 //!
-//!   1. **active tx connection** — inside a transaction, always the tx-owned connection (Phase A,
-//!      resolved in [`ExecutionContext`](crate::exec_context) BEFORE this module, since only the ctx
-//!      holds the tx pin).
+//!   1. **active tx connection** — inside a transaction, the tx-owned connection — a statement naming a
+//!      DIFFERENT database than the tx opened on is REJECTED there rather than routed
+//!      ([`assert_tx_db_agrees`]) (Phase A, resolved in [`ExecutionContext`](crate::exec_context) BEFORE
+//!      this module, since only the ctx holds the tx pin).
 //!   2. **writer scope / writer-sticky** — inside [`with_writer`](crate::exec_context) or within
 //!      `writer_sticky_duration` after a committed tx, a READ goes to the WRITER pool (read-your-writes).
 //!   3. **read = reader / write = writer** — otherwise a read → reader pool, a write → writer pool
@@ -255,6 +256,72 @@ impl ReaderWriterPools {
 /// Mirrors the TS `DEFAULT_CONNECTION`.
 pub const DEFAULT_CONNECTION: &str = "default";
 
+/// A connection name reduced to its effective identity: unnamed ⇒ [`DEFAULT_CONNECTION`].
+fn effective_connection(db: Option<&str>) -> &str {
+    db.unwrap_or(DEFAULT_CONNECTION)
+}
+
+/// Reject a statement whose named database is NOT the one the active transaction opened on.
+///
+/// A transaction is ONE connection on ONE database: a statement that names a DIFFERENT database cannot
+/// be executed atomically with it, by any amount of routing. So there are exactly two possible behaviors
+/// and no third — run it on the transaction's database (silently the WRONG one) or refuse — and the first
+/// is the silent default the tx pin used to produce: the pin is resolved BEFORE routing (it must be —
+/// per-execution ownership depends on it), so `intent.db` was dropped unread and even an UNREGISTERED
+/// name never surfaced (#217).
+///
+/// `tx_db` is the transaction's own connection name
+/// ([`ExecutionContext::with_connection_name`](crate::exec_context::ExecutionContext::with_connection_name)).
+/// An UNNAMED statement agrees with any transaction — the ordinary in-body statement, which every
+/// named-DB tx gate pins — and one naming the SAME database agrees too. Mirrors the TS `assertTxDbAgrees`.
+pub fn assert_tx_db_agrees(db: Option<&str>, tx_db: Option<&str>) -> Result<(), SqlFailure> {
+    if db.is_none() {
+        return Ok(());
+    }
+    let (want, open) = (effective_connection(db), effective_connection(tx_db));
+    if want == open {
+        return Ok(());
+    }
+    Err(SqlFailure {
+        kind: "driver_error".into(),
+        policy: "fail".into(),
+        sqlite_code: None,
+        message: format!(
+            "scp connection routing: a statement names connection '{want}', but it is executing \
+             inside a transaction opened on '{open}' — a transaction is ONE connection on ONE \
+             database, so the two cannot both be honored. Open the transaction on '{want}', or \
+             issue the statement outside it."
+        ),
+    })
+}
+
+/// Reject a statement that NAMES a database on a context that holds NO connection registry (the base
+/// [`crate::exec_context::for_driver`] path). The companion of [`ConnectionRegistry::pair_for`]'s
+/// unknown-name failure, and for the same reason: an unresolvable name must be LOUD, because the
+/// alternative is running the statement against whatever single driver the context happens to hold — a
+/// DIFFERENT database than the statement's model declares (#217). `None` (the default connection) is the
+/// single-driver case itself and passes. Mirrors the TS `assertRoutableNamedDb` / go `namedDBUnroutable`.
+pub fn assert_routable_named_db(
+    db: Option<&str>,
+    context_description: &str,
+) -> Result<(), SqlFailure> {
+    match db {
+        None => Ok(()),
+        Some(DEFAULT_CONNECTION) => Ok(()),
+        Some(name) => Err(SqlFailure {
+            kind: "driver_error".into(),
+            policy: "fail".into(),
+            sqlite_code: None,
+            message: format!(
+                "scp connection routing: a statement names connection '{name}', but it is executing on \
+                 {context_description} — there is no connection registry to resolve the name against. \
+                 Build the context from a RoutingConfig (set_config/ConnectionRegistry), or drop the \
+                 connection tag on the model."
+            ),
+        }),
+    }
+}
+
 /// The multi-DB connection registry (C2): a map from a connection NAME → its [`ReaderWriterPools`].
 /// [`resolve_pool`] selects the pair by `intent.db` (the connection name the bundle/model metadata
 /// carries), falling back to [`DEFAULT_CONNECTION`] when unnamed. Selecting a name that was never
@@ -295,7 +362,7 @@ impl ConnectionRegistry {
     /// The reader/writer pair for `name` (or [`DEFAULT_CONNECTION`] when `None`). Loud on a missing
     /// name (mirrors the TS `pairFor`).
     pub fn pair_for(&self, name: Option<&str>) -> Result<&ReaderWriterPools, SqlFailure> {
-        let key = name.unwrap_or(DEFAULT_CONNECTION);
+        let key = effective_connection(name);
         self.connections.get(key).ok_or_else(|| {
             let known = self
                 .connections
@@ -421,9 +488,13 @@ impl Clock for ManualClock {
 ///
 /// `use_writer_after_transaction=false` disables it entirely (`.is_sticky()` always false). A
 /// single-pool deployment (reader === writer) is unaffected by stickiness — the diverted pool is the
-/// SAME `Arc`. Interior-mutable (`AtomicU64`) so the shared ctx (`&self`) can `mark()` it.
+/// SAME `Arc`. Interior-mutable (`Mutex`) so the shared ctx (`&self`) can `mark()` it.
 pub struct WriterStickyClock {
-    last_write_at: std::sync::atomic::AtomicU64,
+    /// `None` until the first `mark()` — absence, NOT a value sentinel. `now_ms()` legitimately returns
+    /// 0 — `SystemClock` (`Instant::elapsed`) does right after process start — so encoding "never
+    /// marked" as the value 0 would mis-classify a `mark()` at clock t=0 as unmarked and leak the
+    /// read-your-writes read to the reader replica. Absence must be distinct from the value 0.
+    last_write_at: std::sync::Mutex<Option<u64>>,
     enabled: bool,
     sticky_duration_ms: u64,
     clock: Arc<dyn Clock>,
@@ -453,7 +524,7 @@ impl WriterStickyClock {
     /// Build from [`StickyOptions`] (mirror the TS `new WriterStickyClock(opts)`).
     pub fn new(opts: StickyOptions) -> Self {
         WriterStickyClock {
-            last_write_at: std::sync::atomic::AtomicU64::new(0),
+            last_write_at: std::sync::Mutex::new(None),
             enabled: opts.use_writer_after_transaction,
             sticky_duration_ms: opts.writer_sticky_duration,
             clock: opts.clock,
@@ -472,8 +543,7 @@ impl WriterStickyClock {
     /// Record that a write/commit just happened (the tx runtime calls this on success).
     pub fn mark(&self) {
         if self.enabled {
-            self.last_write_at
-                .store(self.clock.now_ms(), std::sync::atomic::Ordering::SeqCst);
+            *self.last_write_at.lock().unwrap() = Some(self.clock.now_ms());
         }
     }
 
@@ -482,17 +552,15 @@ impl WriterStickyClock {
         if !self.enabled {
             return false;
         }
-        let last = self.last_write_at.load(std::sync::atomic::Ordering::SeqCst);
-        if last == 0 {
+        let Some(last) = *self.last_write_at.lock().unwrap() else {
             return false;
-        }
+        };
         self.clock.now_ms().saturating_sub(last) < self.sticky_duration_ms
     }
 
     /// Reset the clock (e.g. between tests / on close).
     pub fn reset(&self) {
-        self.last_write_at
-            .store(0, std::sync::atomic::Ordering::SeqCst);
+        *self.last_write_at.lock().unwrap() = None;
     }
 }
 
@@ -718,22 +786,62 @@ pub fn mysql_pool_factory(
 
 // ── Unit tests (no DB) — the pure routing / config surface ─────────────────────
 
+/// The no-DB pool stand-in the routing tests resolve against, shared with the leaf-transport tests
+/// (`crate::leaves`) so there is ONE stub driver in the crate rather than a copy per test module.
 #[cfg(test)]
-mod tests {
+pub(crate) mod test_support {
     use super::*;
     use crate::driver::{PreparedStatement, RunInfo};
     use crate::exec_context::TxConnection;
+    use crate::wire::WireValue;
     use behavior_contracts::Value;
+    use std::sync::Mutex;
 
-    /// A stub driver whose ONLY use is `Arc`-identity (a test asserts WHICH driver a resolution returns
-    /// via `Arc::ptr_eq`). It never actually executes SQL in these no-DB unit tests.
-    struct StubDriver;
-    struct StubStmt;
+    /// The ordered `"<pool>:<seam>"` stream the pools of ONE routing config append to: which pool
+    /// served each statement and which driver seam (`all` = rows, `run` = the write summary) it took.
+    /// It is how a test observes WHERE a statement went with no DB in the picture.
+    pub(crate) type SeamLog = Arc<Mutex<Vec<String>>>;
+
+    /// A stub driver. For the routing tests its only use is `Arc`-identity (they assert WHICH driver a
+    /// resolution returns via `Arc::ptr_eq`) and it is built without a log; built WITH one
+    /// ([`recording_stub`]) it records every statement it serves, which is what lets a test drive the
+    /// real leaf transport and read back the pool that answered.
+    struct StubDriver {
+        label: &'static str,
+        log: Option<SeamLog>,
+        /// The SQL this driver REFUSES to serve (a loud [`SqlFailure`] from both seams) — how a test
+        /// makes one specific statement, e.g. the runtime's own `ROLLBACK`, fail.
+        fail_on: Option<&'static str>,
+    }
+    struct StubStmt {
+        label: &'static str,
+        log: Option<SeamLog>,
+        sql: String,
+        fail_on: Option<&'static str>,
+    }
+    impl StubStmt {
+        fn record(&self, seam: &str) -> Result<(), SqlFailure> {
+            if let Some(log) = &self.log {
+                log.lock().unwrap().push(format!("{}:{}", self.label, seam));
+            }
+            if self.fail_on == Some(self.sql.as_str()) {
+                return Err(SqlFailure {
+                    kind: "driver_error".into(),
+                    policy: "fail".into(),
+                    sqlite_code: None,
+                    message: format!("stub driver refuses `{}`", self.sql),
+                });
+            }
+            Ok(())
+        }
+    }
     impl PreparedStatement for StubStmt {
-        fn all(&mut self, _p: &[Value]) -> Result<Vec<crate::wire::WireValue>, SqlFailure> {
+        fn all(&mut self, _p: &[Value]) -> Result<Vec<WireValue>, SqlFailure> {
+            self.record("all")?;
             Ok(Vec::new())
         }
         fn run(&mut self, _p: &[Value]) -> Result<RunInfo, SqlFailure> {
+            self.record("run")?;
             Ok(RunInfo {
                 changes: 0,
                 last_insert_rowid: 0,
@@ -741,19 +849,75 @@ mod tests {
         }
     }
     impl Driver for StubDriver {
-        fn prepare(&self, _sql: &str) -> Box<dyn PreparedStatement + '_> {
-            Box::new(StubStmt)
+        fn prepare(&self, sql: &str) -> Box<dyn PreparedStatement + '_> {
+            Box::new(StubStmt {
+                label: self.label,
+                log: self.log.clone(),
+                sql: sql.to_string(),
+                fail_on: self.fail_on,
+            })
         }
         fn begin_tx(&self) -> Result<Box<dyn TxConnection + '_>, SqlFailure> {
+            self.record_checkout();
             crate::driver::forwarding_tx(self)
         }
         fn acquire_tx(&self) -> Result<Box<dyn TxConnection + '_>, SqlFailure> {
+            self.record_checkout();
             crate::driver::forwarding_tx_no_begin(self)
         }
     }
-    fn stub(_label: &'static str) -> Arc<dyn Driver + Send + Sync> {
-        Arc::new(StubDriver)
+
+    impl StubDriver {
+        /// Append `"<label>:checkout"` when a transaction takes a connection OUT of this driver. rust's
+        /// checkout IS `acquire_tx`/`begin_tx` (the registry holds drivers, not pools), and it had no
+        /// hook — so "ONE checkout for the whole tx" could be wired but never READ. Recorded on the same
+        /// [`SeamLog`] as the statements, because which driver served a statement and how many
+        /// connections it handed out are the same question about the same driver.
+        fn record_checkout(&self) {
+            if let Some(log) = &self.log {
+                log.lock().unwrap().push(format!("{}:checkout", self.label));
+            }
+        }
     }
+    pub(crate) fn stub(label: &'static str) -> Arc<dyn Driver + Send + Sync> {
+        Arc::new(StubDriver {
+            label,
+            log: None,
+            fail_on: None,
+        })
+    }
+    /// A [`stub`] that appends `"<label>:<seam>"` to `log` for every statement it serves.
+    pub(crate) fn recording_stub(
+        label: &'static str,
+        log: &SeamLog,
+    ) -> Arc<dyn Driver + Send + Sync> {
+        Arc::new(StubDriver {
+            label,
+            log: Some(Arc::clone(log)),
+            fail_on: None,
+        })
+    }
+    /// A [`recording_stub`] that FAILS `fail_on` — a broken connection, modelled: it still records the
+    /// statement, then refuses it. Lets a test drive the runtime's error paths (a failing `ROLLBACK`,
+    /// `COMMIT` or `BEGIN`) through the production seam with no DB in the picture.
+    pub(crate) fn failing_stub(
+        label: &'static str,
+        log: &SeamLog,
+        fail_on: &'static str,
+    ) -> Arc<dyn Driver + Send + Sync> {
+        Arc::new(StubDriver {
+            label,
+            log: Some(Arc::clone(log)),
+            fail_on: Some(fail_on),
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::test_support::stub;
+    use super::*;
+
     fn label_of(
         d: &Arc<dyn Driver + Send + Sync>,
         candidates: &[(&'static str, &Arc<dyn Driver + Send + Sync>)],
@@ -951,6 +1115,46 @@ mod tests {
         let sticky = WriterStickyClock::disabled();
         sticky.mark();
         assert!(!sticky.is_sticky());
+    }
+
+    #[test]
+    fn writer_sticky_armed_at_clock_zero_routes_read_to_writer() {
+        // t=0 REGRESSION (#218): a `mark()` when the clock reads 0 MUST arm stickiness, so the read
+        // right after the commit routes to the WRITER (read-your-writes). `SystemClock`
+        // (`Instant::elapsed`) returns 0 right after process start, so this is a real production case.
+        // The old code stored 0 as "never marked" (a value sentinel) → the commit failed to stick and
+        // the read leaked to the reader replica. Revert `last_write_at` to `AtomicU64` + `last == 0`
+        // ⇒ both asserts below go RED. Every OTHER sticky test marks at a non-zero clock, so this t=0
+        // case was previously unproven.
+        let clock = Arc::new(ManualClock::new(0));
+        let reader = stub("reader");
+        let writer = stub("writer");
+        let reg = ConnectionRegistry::from_default(ReaderWriterPools::split(
+            reader.clone(),
+            writer.clone(),
+        ))
+        .build()
+        .unwrap();
+        let routing = RoutingConfig {
+            registry: reg,
+            sticky: WriterStickyClock::new(StickyOptions {
+                use_writer_after_transaction: true,
+                writer_sticky_duration: 5000,
+                clock: clock.clone(),
+            }),
+        };
+        let cands = [("reader", &reader), ("writer", &writer)];
+        // Before any mark → reader (absence, not sticky), even at t=0.
+        let pre = resolve_pool(&StatementIntent::read(), &routing, false).unwrap();
+        assert_eq!(label_of(pre, &cands), "reader");
+        // A commit at clock t=0 arms the sticky clock.
+        routing.sticky.mark();
+        let post = resolve_pool(&StatementIntent::read(), &routing, false).unwrap();
+        assert_eq!(
+            label_of(post, &cands),
+            "writer",
+            "a read right after a t=0 commit must route to the writer (read-your-writes)"
+        );
     }
 
     #[test]

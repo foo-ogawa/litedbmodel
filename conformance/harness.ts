@@ -27,7 +27,6 @@
  *                      golden is therefore always a statement a real database answered.
  *   - `expect-error` — a read whose baked `findHardLimit` cap is exceeded: the read boundary throws
  *                      {@link LimitExceededError} with the exact fields.
- *   - `tx`           — a write-time-relations {@link SqlBundle} run as ONE gate-first transaction.
  *   - `dialect`      — the `orderByNulls` dialect primitive.
  *
  * ## Dialect invariance (§10) is enforced at CAPTURE
@@ -59,20 +58,13 @@ import type { Column } from '../src/Column';
 import { belongsTo, column, hasMany, model } from '../src/decorators';
 import {
   assertFindHardLimit,
-  columnTypeResolverFromColumnMap,
   configurePgDeboxTypeParsers,
   connectionForDriver,
-  compileCompositeWriteBundle,
-  compileWriteBundle,
-  compileWriteNode,
   contextForConnection,
   dialectFor,
   emitBehaviorModule,
-  entityWrites,
   executeAsync,
-  execute,
   executeSafe,
-  executeTransactionBundle,
   leafHandlers,
   leafHandlersAsync,
   LimitExceededError,
@@ -91,9 +83,7 @@ import {
   type EmitSpec,
   type EndpointSet,
   type ModelClassLike,
-  type SqlBundle,
   type SyncConnection,
-  type TxOp,
 } from '../src/scp/index';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -241,7 +231,37 @@ class ConfTyped {
   @column() label?: string;
 }
 
-const MODEL_REGISTRY: Record<string, unknown> = { ConfUser, ConfPost, ConfTag, ConfTyped };
+/**
+ * The STRING-PK write fixture. `conf_posts` already covers a client-supplied INT key, but a key whose
+ * bound value is a STRING (a UUID) is a different arm of the same recovery: MySQL re-selects the
+ * written row by the value the INSERT itself bound, so the predicate has to carry a string, and the
+ * declared column type is what makes it one. `VARCHAR(36)` rather than `TEXT`/`UUID` because the DDL
+ * below is ONE portable schema and MySQL rejects a `TEXT` primary key without a key length.
+ */
+@model('conf_docs')
+class ConfDoc {
+  declare static doc_id: Column<string, ConfDoc>;
+
+  @column({ primaryKey: true }) doc_id?: string;
+  @column() title?: string;
+}
+
+/**
+ * The COMPOSITE-PK write fixture — the only model here whose key is two columns. A single-column key
+ * cannot tell whether the recovery predicate carries the WHOLE key: the seed below shares `order_id`
+ * across two lines on purpose, so a recovery keyed on `order_id` alone describes the wrong row set.
+ */
+@model('conf_lines')
+class ConfLine {
+  declare static order_id: Column<number, ConfLine>;
+  declare static line_no: Column<number, ConfLine>;
+
+  @column({ primaryKey: true }) order_id?: number;
+  @column({ primaryKey: true }) line_no?: number;
+  @column() sku?: string;
+}
+
+const MODEL_REGISTRY: Record<string, unknown> = { ConfUser, ConfPost, ConfTag, ConfTyped, ConfDoc, ConfLine };
 
 /** Model NAME → class, as `relationDeclOf` resolves a relation's target model. */
 const conformanceModels = (name: string): ModelClassLike => MODEL_REGISTRY[name] as ModelClassLike;
@@ -254,7 +274,8 @@ const conformanceModels = (name: string): ModelClassLike => MODEL_REGISTRY[name]
 const COLUMN_OPTIONS: DeriveColumnsOptions = {
   // `ts`/`flag` (#137) are pinned for the same reason: the read-decode class is the COLUMN's SQL
   // type, so TIMESTAMP → the canonical date string and SMALLINT → Int come from here, not a guess.
-  columnTypes: { name: 'TEXT', title: 'TEXT', status: 'TEXT', created_at: 'TEXT', label: 'TEXT', ts: 'TIMESTAMP', flag: 'SMALLINT' },
+  // `doc_id` is the STRING primary key of `conf_docs` and `sku` a plain text column of `conf_lines`.
+  columnTypes: { name: 'TEXT', title: 'TEXT', status: 'TEXT', created_at: 'TEXT', label: 'TEXT', ts: 'TIMESTAMP', flag: 'SMALLINT', doc_id: 'VARCHAR', sku: 'TEXT' },
 };
 
 /** The emitted `@behavior` class name (the `bc generate --behavior` argument). */
@@ -306,6 +327,91 @@ const ENDPOINTS: EndpointSet = {
       { column: 'status', op: 'eq', param: 'status', optional: true },
       { column: 'created_at', op: 'ge', param: 'since', optional: true },
     ],
+    order: 'id ASC',
+  },
+  /**
+   * SKIP **×** a BOUND page — the combination that puts base params on BOTH sides of the dynamic
+   * clause (#200). The bounded `author_id` binds before it and the page counts bind after it, so the
+   * leaf must splice the surviving fragments' params into the MIDDLE of the base params
+   * (`assembleDynamicWhere`), not at either end. `minId` is an INT cursor on purpose: it is
+   * type-compatible with the three base params, so a mis-placed slot produces a different ROW SET
+   * rather than a bind error — the only shape that catches this on every dialect (PostgreSQL renders
+   * `?`→`$N` AFTER assembly, so a swapped binding still LOOKS like correct SQL).
+   */
+  pagedFeed: {
+    kind: 'read',
+    model: ConfPost,
+    select: ['id', 'author_id', 'title', 'status'],
+    where: [
+      { column: 'author_id', op: 'eq', param: 'authorId' },
+      { column: 'id', op: 'ge', param: 'minId', optional: true },
+      { column: 'status', op: 'eq', param: 'status', optional: true },
+    ],
+    order: 'id ASC',
+    limit: { param: 'limit' },
+    offset: { param: 'offset' },
+  },
+  /**
+   * SKIP with NO bounded predicate — the statement's HEAD ends with no WHERE at all, so the first
+   * surviving fragment must OPEN one (`lead: 'WHERE'`) instead of continuing one. The three arms (all
+   * skipped / one surviving / both surviving) are the whole `lead` contract on this side; `feed` and
+   * `pagedFeed` above are the other side (a head that ends IN a WHERE ⇒ `lead: 'AND'`).
+   */
+  optionalOnlyFeed: {
+    kind: 'read',
+    model: ConfPost,
+    select: ['id', 'author_id', 'status'],
+    where: [
+      { column: 'author_id', op: 'eq', param: 'authorId', optional: true },
+      { column: 'status', op: 'eq', param: 'status', optional: true },
+    ],
+    order: 'id ASC',
+  },
+  /**
+   * #202 — a QUOTED `?` in the ORDER BY. `order` is a free string on the PUBLIC `ReadEndpoint` type and
+   * reaches the statement's tail verbatim, so a `?` inside a string literal is TEXT that binds nothing.
+   * The tail here holds that quoted `?` AND a real bound `LIMIT ?`, with base params on BOTH sides of
+   * the dynamic clause — every value is an INT, so a mis-bound slot returns a DIFFERENT ROW SET rather
+   * than a type error (PostgreSQL renumbers `?`→`$N` after assembly, so the text looks right either way).
+   */
+  quotedOrderFeed: {
+    kind: 'read',
+    model: ConfPost,
+    select: ['id', 'author_id', 'status', 'title'],
+    where: [
+      { column: 'author_id', op: 'eq', param: 'authorId' },
+      { column: 'id', op: 'ge', param: 'minId', optional: true },
+    ],
+    order: "CASE WHEN status = '?' THEN 0 ELSE 1 END, id ASC",
+    limit: { param: 'limit' },
+  },
+  /**
+   * #202 — a QUOTED ` WHERE ` in the ORDER BY, on a read whose head carries NO WHERE: the clause still
+   * has to OPEN one. The tail is text the transport appends, never text it interprets.
+   */
+  quotedWhereOrderFeed: {
+    kind: 'read',
+    model: ConfPost,
+    select: ['id', 'status', 'title'],
+    where: [{ column: 'status', op: 'eq', param: 'status', optional: true }],
+    order: "CASE WHEN title = ' WHERE ' THEN 0 ELSE 1 END, id ASC",
+  },
+  /**
+   * #198 — SKIP × a QUERY view (#98). The CTE is a statement of its OWN: it carries its own tail
+   * (` ORDER BY … LIMIT 2`), its own WHERE and a QUOTED ` WHERE `. All of it is part of the HEAD, whose
+   * end is the OUTER statement's WHERE region — so the clause lands after `FROM derived` and OPENS a
+   * WHERE. The CTE's `LIMIT 2` is what makes the placement OBSERVABLE: filtering inside the CTE picks
+   * the first 2 MATCHING rows, filtering outside it picks the matching rows among the first 2.
+   */
+  viewFeed: {
+    kind: 'read',
+    model: ConfPost,
+    select: ['id', 'author_id', 'status', 'title'],
+    view: {
+      query:
+        "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE title <> ' WHERE ' ORDER BY id ASC LIMIT 2",
+    },
+    where: [{ column: 'status', op: 'eq', param: 'status', optional: true }],
     order: 'id ASC',
   },
   /** Two relation levels off ONE parent read: users → posts → tags (3 queries, N+1-free). */
@@ -417,6 +523,37 @@ const ENDPOINTS: EndpointSet = {
    * derivation covered all three from the start; until now nothing could DECLARE them, so none was
    * gated. The non-RETURNING twins above stay byte-unchanged.
    */
+  /**
+   * The two remaining PRIMARY-KEY shapes a RETURNING create has to recover its row by. `conf_posts`
+   * covers a client-supplied INT; these cover the ones whose recovery predicate differs in kind:
+   *
+   *   - `createDoc`  — a STRING key. The recovery binds the VARCHAR value the INSERT bound, so the
+   *                    emitted pk hint must name `doc_id` with an EMPTY `ai=` (no AUTO_INCREMENT);
+   *                    a hint that claims one sends MySQL to the `LAST_INSERT_ID()` range instead,
+   *                    which for such a write is 0 and describes nothing.
+   *   - `createLine` — a COMPOSITE key. `conf_lines` seeds two lines sharing `order_id`, so a
+   *                    recovery keyed on the first column alone answers with BOTH rows and the §10
+   *                    cross-check against PostgreSQL's native RETURNING fails.
+   */
+  createDoc: {
+    kind: 'create',
+    model: ConfDoc,
+    values: [
+      { column: 'doc_id', param: 'docId' },
+      { column: 'title', param: 'title' },
+    ],
+    returning: ['doc_id', 'title'],
+  },
+  createLine: {
+    kind: 'create',
+    model: ConfLine,
+    values: [
+      { column: 'order_id', param: 'orderId' },
+      { column: 'line_no', param: 'lineNo' },
+      { column: 'sku', param: 'sku' },
+    ],
+    returning: ['order_id', 'line_no', 'sku'],
+  },
   createTagsReturning: { kind: 'createMany', model: ConfTag, columns: ['id', 'post_id', 'label'], param: 'rows', returning: ['id', 'label'] },
   relabelTagsReturning: { kind: 'updateMany', model: ConfTag, keyColumns: ['id'], columns: ['label'], param: 'rows', returning: ['id', 'label'] },
   removeTagsReturning: { kind: 'deleteMany', model: ConfTag, keyColumn: 'id', param: 'ids', returning: ['id', 'label'] },
@@ -427,6 +564,8 @@ const ENDPOINTS: EndpointSet = {
  * the evidence that a divergent result is the dialect SQL diverging, never the fixture.
  */
 export const SCHEMA: readonly string[] = [
+  'DROP TABLE IF EXISTS conf_lines',
+  'DROP TABLE IF EXISTS conf_docs',
   'DROP TABLE IF EXISTS conf_typed',
   'DROP TABLE IF EXISTS conf_tags',
   'DROP TABLE IF EXISTS conf_posts',
@@ -449,6 +588,15 @@ export const SCHEMA: readonly string[] = [
   "INSERT INTO conf_typed (id, ts, flag, label) VALUES (1, '2026-01-01 00:00:00', 1, 'alpha')",
   "INSERT INTO conf_typed (id, ts, flag, label) VALUES (2, '2026-02-01 12:34:56', 0, 'beta')",
   "INSERT INTO conf_typed (id, ts, flag, label) VALUES (3, '2026-03-15 23:59:59', 1, 'gamma')",
+  // The two RETURNING-create key shapes. `VARCHAR(36)` (not TEXT/UUID) is the portable spelling of a
+  // string primary key: MySQL rejects a TEXT key without a length, PostgreSQL has no MySQL `CHAR(36)`
+  // padding surprise on VARCHAR, and SQLite takes either.
+  'CREATE TABLE conf_docs (doc_id VARCHAR(36) PRIMARY KEY, title TEXT NOT NULL)',
+  "INSERT INTO conf_docs (doc_id, title) VALUES ('11111111-1111-1111-1111-111111111111', 'seeded doc')",
+  // BOTH seeded lines share `order_id = 10`: that is what makes a recovery keyed on the first PK
+  // column alone observable (it would answer with the seeded line too).
+  'CREATE TABLE conf_lines (order_id INT NOT NULL, line_no INT NOT NULL, sku TEXT NOT NULL, PRIMARY KEY (order_id, line_no))',
+  "INSERT INTO conf_lines (order_id, line_no, sku) VALUES (10, 1, 'SKU-1')",
 ];
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -889,18 +1037,6 @@ export interface ExpectErrorVector {
   };
 }
 
-/** A write-transaction vector: a {@link SqlBundle} with a transaction plan run as ONE tx. */
-export interface TxVector {
-  readonly name: string;
-  readonly kind: 'tx';
-  readonly dialect: DialectName;
-  readonly bundle: SqlBundle;
-  readonly input: EncodedValue;
-  readonly schema: readonly string[];
-  readonly expectedResult: EncodedValue;
-  readonly expectedDbState?: readonly { readonly query: string; readonly rows: EncodedValue }[];
-}
-
 /** A dialect-primitive vector: the `orderByNulls` NULLS-ordering emulation. */
 export interface DialectVector {
   readonly name: string;
@@ -911,7 +1047,7 @@ export interface DialectVector {
   readonly expected: string;
 }
 
-export type Vector = ExecVector | ExpectErrorVector | TxVector | DialectVector;
+export type Vector = ExecVector | ExpectErrorVector | DialectVector;
 
 /** A named suite file of vectors (one JSON per file). */
 export interface Suite {
@@ -945,6 +1081,8 @@ interface ExecCase {
 
 const POSTS_STATE = 'SELECT id, author_id, title, status, created_at FROM conf_posts ORDER BY id';
 const TAGS_STATE = 'SELECT id, post_id, label FROM conf_tags ORDER BY id';
+const DOCS_STATE = 'SELECT doc_id, title FROM conf_docs ORDER BY doc_id';
+const LINES_STATE = 'SELECT order_id, line_no, sku FROM conf_lines ORDER BY order_id, line_no';
 
 const EXEC_CASES: readonly ExecCase[] = [
   { id: 'posts: author page', entry: 'posts', input: { authorId: 1 } },
@@ -958,6 +1096,43 @@ const EXEC_CASES: readonly ExecCase[] = [
   { id: 'feed: status present, since absent', entry: 'feed', input: { authorId: 1, status: 'draft' } },
   { id: 'feed: since present, status absent', entry: 'feed', input: { authorId: 1, since: '2026-03-01' } },
   { id: 'feed: both present', entry: 'feed', input: { authorId: 1, status: 'live', since: '2026-01-01' } },
+  // #200 — SKIP × a BOUND page: the survivors' params splice into the MIDDLE of the base params
+  // (`author_id` binds before the clause, `LIMIT`/`OFFSET` after it). `minId` is an INT, so every
+  // mis-placement stays type-valid and shows up as a DIFFERENT ROW SET — the only thing that catches
+  // it, since PostgreSQL renumbers `?`→`$N` after assembly and the statement TEXT looks right either
+  // way. With authorId=1, minId=2, limit=1, offset=0 the correct binding yields post 10, while
+  // binding the fragment first yields post 12 (author 2), binding it last yields nothing (LIMIT 0
+  // OFFSET 2), and counting one page param instead of two yields both posts.
+  { id: 'pagedFeed: bound page, both optional predicates absent (SKIP drop)', entry: 'pagedFeed', input: { authorId: 1, limit: 1, offset: 1 } },
+  { id: 'pagedFeed: bound page + an INT optional cursor (params splice mid-list)', entry: 'pagedFeed', input: { authorId: 1, minId: 2, limit: 1, offset: 0 } },
+  { id: 'pagedFeed: same statement, second window (the page still moves under a surviving fragment)', entry: 'pagedFeed', input: { authorId: 1, minId: 2, limit: 1, offset: 1 } },
+  { id: 'pagedFeed: bound page + both optional predicates', entry: 'pagedFeed', input: { authorId: 1, minId: 2, status: 'draft', limit: 1, offset: 0 } },
+  // #198 / #202 — the statement's HEAD / TAIL split is DECLARED by the builder that emitted it, so the
+  // transport concatenates instead of scanning the finished text for the WHERE boundary. These four
+  // endpoints are the shapes a scan got wrong, and none of them could be DECLARED before: `order` never
+  // carried a quoted `?` or ` WHERE ` in this corpus, a read with only optional predicates never existed,
+  // and SKIP × a QUERY view was a hard emitter REJECT (its CTE's own tail took the splice position).
+  //
+  // `optionalOnlyFeed` — a head with NO WHERE: the first survivor OPENS one. All three arms.
+  { id: 'optionalOnlyFeed: BOTH optional predicates absent (no WHERE at all)', entry: 'optionalOnlyFeed', input: {} },
+  { id: 'optionalOnlyFeed: one surviving fragment OPENS the WHERE', entry: 'optionalOnlyFeed', input: { authorId: 1 } },
+  { id: 'optionalOnlyFeed: two surviving fragments — the second joins with AND', entry: 'optionalOnlyFeed', input: { authorId: 1, status: 'live' } },
+  // `quotedOrderFeed` — a quoted `?` in the tail beside a real bound `LIMIT ?`, base params on BOTH
+  // sides of the clause. With authorId=1, minId=11, limit=2 the correct binding yields post 11; counting
+  // the tail's `?`s (2 of them, one of which binds nothing) bound `minId` into `author_id` and returned
+  // NOTHING, in the three languages that did not panic on the negative index instead (#199 / #202).
+  { id: 'quotedOrderFeed: quoted `?` in ORDER BY, optional cursor absent', entry: 'quotedOrderFeed', input: { authorId: 1, limit: 2 } },
+  { id: 'quotedOrderFeed: quoted `?` in ORDER BY + a surviving INT cursor', entry: 'quotedOrderFeed', input: { authorId: 1, minId: 11, limit: 2 } },
+  { id: 'quotedOrderFeed: same statement, LIMIT 1 (the page still binds LAST)', entry: 'quotedOrderFeed', input: { authorId: 1, minId: 10, limit: 1 } },
+  // `quotedWhereOrderFeed` — a quoted ` WHERE ` in the tail: still an OPENED WHERE, never a continued one.
+  { id: 'quotedWhereOrderFeed: quoted ` WHERE ` in ORDER BY, fragment skipped', entry: 'quotedWhereOrderFeed', input: {} },
+  { id: 'quotedWhereOrderFeed: quoted ` WHERE ` in ORDER BY, fragment surviving', entry: 'quotedWhereOrderFeed', input: { status: 'live' } },
+  // `viewFeed` — the CTE (own WHERE, own quoted ` WHERE `, own ORDER BY + LIMIT 2) is inside the HEAD.
+  // The CTE yields posts 10 and 11; the clause filters them AFTER it, so `status: 'live'` yields post 10
+  // alone. Splicing inside the CTE would have filtered FIRST and yielded posts 10 and 12.
+  { id: 'viewFeed: SKIP × QUERY view, fragment skipped', entry: 'viewFeed', input: {} },
+  { id: 'viewFeed: SKIP × QUERY view, fragment surviving AFTER the CTE (not inside it)', entry: 'viewFeed', input: { status: 'live' } },
+  { id: 'viewFeed: SKIP × QUERY view, the other status', entry: 'viewFeed', input: { status: 'draft' } },
   {
     id: 'usersWithPosts: two relation levels materialize WITH THEIR FIELDS',
     entry: 'usersWithPosts',
@@ -1021,6 +1196,11 @@ const EXEC_CASES: readonly ExecCase[] = [
   { id: 'createPostReturning: INSERT … RETURNING returns the written row (client-supplied PK)', entry: 'createPostReturning', input: { id: 14, authorId: 2, title: 'c2', status: 'live', createdAt: '2026-05-01' }, writes: true, dbState: [POSTS_STATE] },
   { id: 'renamePostReturning: UPDATE … RETURNING returns the written row', entry: 'renamePostReturning', input: { title: 'a1-returned', id: 10 }, writes: true, dbState: [POSTS_STATE] },
   { id: 'removePostReturning: DELETE … RETURNING returns the removed row', entry: 'removePostReturning', input: { id: 11 }, writes: true, dbState: [POSTS_STATE] },
+  // The remaining two PRIMARY-KEY shapes a RETURNING create is recovered by (see `createDoc` /
+  // `createLine` above): a STRING key and a COMPOSITE key. Both persist ONE new row next to a seeded
+  // one, so the result and the DB state disagree if the recovery describes the wrong row set.
+  { id: 'createDoc: INSERT … RETURNING on a STRING primary key returns the written row', entry: 'createDoc', input: { docId: '22222222-2222-2222-2222-222222222222', title: 'Doc' }, writes: true, dbState: [DOCS_STATE] },
+  { id: 'createLine: INSERT … RETURNING on a COMPOSITE primary key returns the written row', entry: 'createLine', input: { orderId: 10, lineNo: 2, sku: 'SKU-2' }, writes: true, dbState: [LINES_STATE] },
   // #166 — MULTI-ROW: author 1 owns posts 10 and 11. The §10 cross-check compares the three dialects
   // row-for-row IN ORDER, so it is the ordering assertion a single-row vector cannot make.
   { id: 'restatusPostsReturning: multi-row UPDATE … RETURNING returns every written row, in key order', entry: 'restatusPostsReturning', input: { status: 'archived', authorId: 1 }, writes: true, dbState: [POSTS_STATE] },
@@ -1089,84 +1269,6 @@ const GUARD_CASES: readonly GuardCase[] = [
     config: {},
   },
 ];
-
-// ══════════════════════════════════════════════════════════════════════════════
-// tx fixtures (write-time relations — the gate-first transaction surface)
-// ══════════════════════════════════════════════════════════════════════════════
-
-const TX_SCHEMA: readonly string[] = [
-  'CREATE TABLE tx_users (id INTEGER PRIMARY KEY, name TEXT, post_count INTEGER NOT NULL DEFAULT 0)',
-  'CREATE TABLE tx_posts (id INTEGER PRIMARY KEY AUTOINCREMENT, author_id INTEGER NOT NULL REFERENCES tx_users(id), title TEXT NOT NULL)',
-  'CREATE TABLE tx_idem (token TEXT PRIMARY KEY)',
-  'CREATE TABLE tx_uniq (name TEXT NOT NULL, s0 INTEGER NOT NULL, f0 TEXT NOT NULL, PRIMARY KEY (name, s0, f0))',
-  'CREATE TABLE tx_outbox (id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT NOT NULL, payload TEXT NOT NULL)',
-  "INSERT INTO tx_users (id, name, post_count) VALUES (7, 'Ada', 2)",
-  "INSERT INTO tx_users (id, name, post_count) VALUES (8, 'Alan', 0)",
-];
-
-const TX_COMPOSITE_SCHEMA: readonly string[] = [
-  'CREATE TABLE tx_users (id INTEGER PRIMARY KEY, name TEXT, post_count INTEGER NOT NULL DEFAULT 0)',
-  'CREATE TABLE tx_posts (id INTEGER PRIMARY KEY AUTOINCREMENT, author_id INTEGER NOT NULL REFERENCES tx_users(id), title TEXT NOT NULL)',
-  'CREATE TABLE tx_comments (id INTEGER PRIMARY KEY AUTOINCREMENT, post_id INTEGER NOT NULL REFERENCES tx_posts(id), body TEXT NOT NULL)',
-  "INSERT INTO tx_users (id, name, post_count) VALUES (7, 'Ada', 0)",
-];
-
-/** The base writes, built by the SSoT write-descriptor → TxOp compiler (`compileWriteNode`). */
-function txCreatePostOp(): TxOp {
-  return compileWriteNode({
-    component: 'Insert',
-    ports: {
-      table: 'tx_posts',
-      'values.author_id': { ref: ['author_id'] },
-      'values.title': { ref: ['title'] },
-      returning: 'id, author_id, title',
-    },
-  } as never);
-}
-
-/** The child write's `post_id` binds the PARENT's RETURNING id directly — no post-compile surgery. */
-function txCreateCommentOp(): TxOp {
-  return compileWriteNode({
-    component: 'Insert',
-    ports: {
-      table: 'tx_comments',
-      'values.post_id': { ref: ['post', 'id'] },
-      'values.body': { ref: ['body'] },
-      returning: 'id, post_id, body',
-    },
-  } as never);
-}
-
-/** The gate-first save contract of the single-write Command (spec §2.2). */
-const txPostWrites = entityWrites((w) => ({
-  create: w.lifecycle({
-    requires: [w.exists('tx_users', { id: '$.input.author_id' })],
-    idempotency: w.idempotentBy('tx_idem', 'token', '$.input.request_id'),
-    unique: [w.unique({ name: 'title_per_author', guardTable: 'tx_uniq', scope: ['$.input.author_id'], fields: ['$.input.title'] })],
-    derive: [w.increment('tx_users', { id: '$.input.author_id' }, 'post_count', +1)],
-    emits: [w.event('PostCreated', 'tx_outbox', { postId: '$.entity.id', userId: '$.input.author_id' })],
-  }),
-}));
-
-/** The composite (nested write) members: parent post → child comment, linked by `$.ref.post.id`. */
-const txCompositeEntries = [
-  {
-    name: 'post',
-    base: txCreatePostOp(),
-    lifecycle: entityWrites((w) => ({
-      create: w.lifecycle({
-        requires: [w.exists('tx_users', { id: '$.input.author_id' })],
-        derive: [w.increment('tx_users', { id: '$.input.author_id' }, 'post_count', +1)],
-      }),
-    })).create!,
-  },
-  { name: 'comment', base: txCreateCommentOp(), lifecycle: entityWrites(() => ({ create: { effects: {} } })).create! },
-] as const;
-
-/** The column-type SoT that types the write's `TransactionResult` for the typed-de-box emitters. */
-const TX_COLUMN_TYPES = columnTypeResolverFromColumnMap(
-  new Map([['tx_posts', new Map([['id', 'INTEGER'], ['author_id', 'INTEGER'], ['title', 'TEXT']])]]),
-);
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Corpus generation — every expected field is CAPTURED from the pipeline.
@@ -1300,30 +1402,6 @@ async function guardVector(c: GuardCase, dialect: DialectName): Promise<ExpectEr
  * PostgreSQL and MySQL legs report bc's `int` (their integer type parsers are unconditional), and §10
  * rejected the vector as dialect-variant — the assertion, not the behaviour, was the thing that differed.
  */
-function stateRows(db: InstanceType<typeof Database>, query: string): Record<string, unknown>[] {
-  const stmt = db.prepare(query) as { safeIntegers?(v: boolean): unknown; all(): unknown };
-  stmt.safeIntegers?.(true);
-  return stmt.all() as Record<string, unknown>[];
-}
-
-/** Build a tx vector by running the reference transaction bundle against a freshly seeded DB. */
-function txVector(name: string, bundle: SqlBundle, input: Record<string, unknown>, schema: readonly string[], dbQueries: readonly string[]): TxVector {
-  const db = seedDb(schema);
-  const result = executeTransactionBundle(bundle, input as never, { db });
-  const dbState = dbQueries.map((query) => ({ query, rows: encodeValue(stateRows(db, query)) }));
-  db.close();
-  return {
-    name,
-    kind: 'tx',
-    dialect: bundle.dialect,
-    bundle: JSON.parse(JSON.stringify(bundle)) as SqlBundle,
-    input: encodeValue(input),
-    schema,
-    expectedResult: encodeValue(result),
-    expectedDbState: dbState,
-  };
-}
-
 /** Build a dialect-primitive vector capturing the reference `orderByNulls` output. */
 function orderByNullsVector(dialect: DialectName, dir: 'ASC' | 'DESC', nulls: 'FIRST' | 'LAST'): DialectVector {
   const expr = 'created_at';
@@ -1355,26 +1433,6 @@ export async function generateCorpus(): Promise<Suite[]> {
     for (const dialect of ALL_DIALECTS) guard.push(await guardVector(c, dialect));
   }
 
-  // ── tx: write-time relations (gate-first) + the composite tx-DAG ───────────────────────────
-  const txAsserts = [
-    'SELECT id, author_id, title FROM tx_posts ORDER BY id',
-    'SELECT id, post_count FROM tx_users ORDER BY id',
-    'SELECT type, payload FROM tx_outbox ORDER BY id',
-  ];
-  const bundle = compileWriteBundle('Create', txCreatePostOp(), txPostWrites, 'create', 'sqlite', TX_COLUMN_TYPES);
-  const compositeBundle = compileCompositeWriteBundle(txCompositeEntries, 'create', 'sqlite');
-  const compositeAsserts = [
-    'SELECT id, author_id, title FROM tx_posts ORDER BY id',
-    'SELECT id, post_id, body FROM tx_comments ORDER BY id',
-    'SELECT id, post_count FROM tx_users ORDER BY id',
-  ];
-  const tx: TxVector[] = [
-    txVector('create: gate-first tx commits (author exists, unique, idempotent)', bundle, { author_id: 7, title: 'New Post', request_id: 'req-1' }, TX_SCHEMA, txAsserts),
-    txVector('create: gate short-circuits on missing author (ROLLBACK, no body write)', bundle, { author_id: 999, title: 'Orphan', request_id: 'req-2' }, TX_SCHEMA, txAsserts),
-    txVector('composite: nested write commits parent+child in one tx-DAG (child.post_id = $.ref.post.id)', compositeBundle, { author_id: 7, title: 'Nested', body: 'First comment' }, TX_COMPOSITE_SCHEMA, compositeAsserts),
-    txVector('composite: gate-first across the DAG short-circuits before parent AND child (ROLLBACK)', compositeBundle, { author_id: 999, title: 'Ghost', body: 'never' }, TX_COMPOSITE_SCHEMA, compositeAsserts),
-  ];
-
   // ── dialect: orderByNulls ──────────────────────────────────────────────────────────────────
   const dialect: DialectVector[] = [];
   for (const d of ALL_DIALECTS) {
@@ -1386,7 +1444,6 @@ export async function generateCorpus(): Promise<Suite[]> {
   return [
     { suite: 'exec', corpusVersion: CORPUS_VERSION, note: 'The declared endpoints executed end-to-end on SQLite + live PostgreSQL + live MySQL. Each vector pins the statements the transport handed the driver AND what came back: reads are asserted dialect-invariant (§10); writes are asserted on their changes count + resulting DB state; relation vectors carry a field-level content contract (#150).', vectors: exec },
     { suite: 'guard', corpusVersion: CORPUS_VERSION, note: 'The find hard-limit: the emitter bakes LIMIT cap + 1 (visible in the vector statements) and the read boundary throws LimitExceededError post-fetch (assertFindHardLimit). The null-disable and explicit-LIMIT SKIP paths are exec vectors that must NOT throw.', vectors: guard },
-    { suite: 'tx', corpusVersion: CORPUS_VERSION, note: 'Write-time-relations gate-first transaction bundles: commit + gate short-circuit + composite tx-DAG.', vectors: tx },
     { suite: 'dialect', corpusVersion: CORPUS_VERSION, note: 'Dialect primitive orderByNulls: PG/SQLite native NULLS, MySQL IS NULL emulation.', vectors: dialect },
   ];
 }
@@ -1466,14 +1523,6 @@ export async function runVector(v: Vector): Promise<VectorResult> {
       if (!eq(statements, v.expectedStatements)) problems.push(`statements ${JSON.stringify(statements)} != ${JSON.stringify(v.expectedStatements)}`);
       if ((cap ?? null) !== v.expectedCap) problems.push(`baked find cap ${String(cap ?? null)} != ${String(v.expectedCap)}`);
       return { ...base, ok: problems.length === 0, detail: problems.length === 0 ? undefined : problems.join('; ') };
-    }
-    if (v.kind === 'tx') {
-      const db = seedDb(v.schema);
-      const result = encodeValue(executeTransactionBundle(v.bundle, decodeValue(v.input) as never, { db }));
-      const stateOk = (v.expectedDbState ?? []).every((s) => eq(encodeValue(stateRows(db, s.query)), s.rows));
-      db.close();
-      const ok = eq(result, v.expectedResult) && stateOk;
-      return { ...base, ok, detail: ok ? undefined : `result ${JSON.stringify(result)} != ${JSON.stringify(v.expectedResult)} (or db-state mismatch)` };
     }
     const got = dialectFor(v.dialect).orderByNulls(v.args.expr, v.args.dir, v.args.nulls);
     const ok = got === v.expected;

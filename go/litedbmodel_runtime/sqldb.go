@@ -22,6 +22,7 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"time"
 
 	bc "github.com/foo-ogawa/behavior-contracts/go"
 )
@@ -71,6 +72,17 @@ func jsonEscapeString(s string) string {
 type SQLDB interface {
 	Query(query string, args ...any) (*sql.Rows, error)
 	Exec(query string, args ...any) (sql.Result, error)
+}
+
+// TxDB is the transaction-capable database/sql surface (a *sql.DB satisfies all). Conn checks out ONE
+// OWNED pooled connection (Phase D / #94 — the tx restructure: the runtime issues its OWN
+// BEGIN/COMMIT/ROLLBACK/SET tx-control as REAL SQL strings THROUGH the seam on this one owned
+// connection, so a registered middleware OBSERVES them). The tx machinery ([ExecutionContext]'s
+// ConnectionFor) asserts this surface off the base db to check out the tx-owned *sql.Conn.
+type TxDB interface {
+	Conn(ctx context.Context) (*sql.Conn, error)
+	Begin() (*sql.Tx, error)
+	BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error)
 }
 
 // connSQLDB adapts an OWNED *sql.Conn to the [SQLDB] surface (Phase D / #94 tx restructure): every
@@ -162,8 +174,8 @@ func toDriverParam(v bc.Value) any {
 	case *bc.Obj:
 		return jsStringify(t) // JSON text for the outbox payload column (JS JSON.stringify parity)
 	case float64:
-		// A rendered whole number arrives as float64 (toRenderParam collapses a bc int64 to a JS
-		// number). go-sql-driver's binary prepared-statement protocol sends a float64 as DOUBLE,
+		// A rendered whole number may arrive as float64 (a JS-number-valued param). go-sql-driver's
+		// binary prepared-statement protocol sends a float64 as DOUBLE,
 		// which MySQL rejects for an integer slot such as `LIMIT ?` (Error 1210). Bind an integral
 		// value as int64 so it lands in the integer slot; both drivers coerce int↔numeric otherwise.
 		if t == math.Trunc(t) && !math.IsInf(t, 0) {
@@ -236,6 +248,13 @@ func scanValue(v any) bc.Value {
 		return string(t)
 	case string:
 		return t
+	case time.Time:
+		// A TIMESTAMP/DATE column the pgx stdlib driver scans as a native time.Time (MySQL/SQLite return
+		// these as text and land in the string/[]byte arms). Canonicalize to the SAME `YYYY-MM-DD
+		// HH:MM:SS` wall-clock text the seed uses and the rust driver's pg_cell_to_wire emits, so a
+		// TIMESTAMP column reads identically across dialects — NOT Go's default `%v` (`… +0000 UTC`),
+		// which is a driver-native rendering below the v2 date→canonical-string read contract.
+		return t.UTC().Format("2006-01-02 15:04:05")
 	default:
 		return fmt.Sprintf("%v", t)
 	}

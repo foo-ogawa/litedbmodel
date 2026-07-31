@@ -11,7 +11,7 @@ import { describe, it, expect } from 'vitest';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 import { parseCSV, generateSVG, type BenchmarkRow } from '../../benchmark/generate-chart.js';
-import { ORM_SERIES, BASELINE_SERIES, LITEDBMODEL_SERIES } from '../../benchmark/orm-series.js';
+import { ORM_SERIES, BASELINE_SERIES, SUBJECT_SERIES, type OrmSeries } from '../../benchmark/orm-series.js';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const CSV_PATH = path.join(REPO_ROOT, 'benchmark', 'results', 'benchmark-results.csv');
@@ -36,7 +36,8 @@ function readBarLabels(svg: string): Map<string, string[]> {
   return groups;
 }
 
-function row(operation: string, orm: string, median: number): BenchmarkRow {
+/** A CSV row. `orm` is an OrmSeries here — a fixture naming a series that does not exist proves nothing. */
+function row(operation: string, orm: OrmSeries, median: number): BenchmarkRow {
   return { operation, orm, median, iqr: 0, stdDev: 0, min: median, max: median, iterations: 250 };
 }
 
@@ -79,6 +80,6 @@ describe('benchmark chart normalisation', () => {
 
     expect([...new Set(rows.map((r) => r.orm))].sort()).toEqual([...ORM_SERIES].sort());
     expect(ORM_SERIES).toContain(BASELINE_SERIES);
-    expect(LITEDBMODEL_SERIES).toContain(BASELINE_SERIES);
+    expect(SUBJECT_SERIES).toContain(BASELINE_SERIES);
   });
 });

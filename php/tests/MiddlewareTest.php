@@ -6,6 +6,7 @@ namespace LiteDbModel\Runtime\Tests;
 
 use LiteDbModel\Runtime\Context;
 use LiteDbModel\Runtime\ExecutionContext;
+use LiteDbModel\Runtime\Leaves;
 use LiteDbModel\Runtime\LogEntry;
 use LiteDbModel\Runtime\MethodKind;
 use LiteDbModel\Runtime\Registry;
@@ -45,6 +46,8 @@ use function LiteDbModel\Runtime\withMiddlewareScope;
  */
 final class MiddlewareTest extends TestCase
 {
+    use RelationThroughLeavesTrait;
+
     protected function setUp(): void
     {
         clearMiddlewares();
@@ -242,47 +245,51 @@ final class MiddlewareTest extends TestCase
 
     /**
      * A registered middleware observes the relation-BATCH SELECT of a real multi-node relation read.
-     * `Relation::runRelationOp` runs the hasMany child batch through the SAME read seam
+     * The batched child fetch runs through the SAME read seam
      * ({@see execute()}) the primary read uses — so a registered SQL middleware sees the child SELECT.
      * This is the reference relation-coverage proof the ports copy. RED: unregistered ⇒ NOT observed.
      */
     public function testMiddlewareObservesRelationBatchSql(): void
     {
         $db = self::relDb();
-        $op = self::relOp();
-        $parents = [(object) ['id' => 1]];
-
         $seen = [];
-        $batch = withMiddlewareScope(function () use ($db, $op, $parents, &$seen) {
+        $grouped = withMiddlewareScope(function () use ($db, &$seen) {
             use_(createMiddleware(['execute' => function (callable $next, string $sql, array $params) use (&$seen) {
                 $seen[] = $sql;
                 return $next($sql, $params);
             }]));
-            // The hasMany batch SELECT on `child` (fan-out over the parent keys) funnels through the seam.
-            return \LiteDbModel\Runtime\Relation::runRelationOp($op, $parents, $db);
+            // Both statements of the relation, as the codegen path issues them: the three leaves.
+            $handlers = Leaves::makeHandlers($db, 'sqlite');
+            return self::relationThroughLeaves($handlers, self::REL_PARENT_SQL, self::REL_CHILD_SQL, 'id', 'parent_id', 'kids');
         });
 
-        // The relation actually loaded (2 children under parent 1) — a genuine multi-node batch read.
-        $childLabels = array_map(static fn (\stdClass $r) => $r->label, $batch['1'] ?? []);
-        $this->assertSame(['a', 'b'], $childLabels);
-        // The middleware saw the relation-batch SELECT (querying the child table).
-        $relBatchSql = array_filter($seen, static fn (string $s) => preg_match('/from\s+child/i', $s) === 1);
-        $this->assertNotEmpty($relBatchSql, 'middleware must observe the relation-batch SELECT on child');
+        // The relation actually loaded (2 children under parent 1) — a genuine two-statement read, not a
+        // middleware fixture that observed an empty result.
+        $labels = array_map(static fn (\stdClass $r) => $r->label, $grouped[0]->kids);
+        $this->assertSame(['a', 'b'], $labels);
+        // The middleware saw the batched child fetch AND the parent read.
+        $this->assertNotEmpty(
+            array_filter($seen, static fn (string $s) => preg_match('/from\s+child/i', $s) === 1),
+            'middleware must observe the batched child fetch',
+        );
+        $this->assertNotEmpty(array_filter($seen, static fn (string $s) => preg_match('/from\s+parent/i', $s) === 1));
     }
 
     public function testRedProofRelationBatchNotObservedWithoutRegistration(): void
     {
         $db = self::relDb();
-        $op = self::relOp();
-        $parents = [(object) ['id' => 1]];
         $seen = [];
-        // No middleware registered → the relation batch runs as a byte-identical passthrough.
-        $batch = \LiteDbModel\Runtime\Relation::runRelationOp($op, $parents, $db);
+        // No middleware registered → both statements run as a byte-identical passthrough.
+        $handlers = Leaves::makeHandlers($db, 'sqlite');
+        $grouped = self::relationThroughLeaves($handlers, self::REL_PARENT_SQL, self::REL_CHILD_SQL, 'id', 'parent_id', 'kids');
         // The read still WORKS (byte-identical) — 2 children loaded — but nothing was observed.
-        $this->assertCount(2, $batch['1'] ?? []);
-        $relBatchSql = array_filter($seen, static fn (string $s) => preg_match('/from\s+child/i', $s) === 1);
-        $this->assertEmpty($relBatchSql);
+        $this->assertCount(2, $grouped[0]->kids);
+        $this->assertEmpty(array_filter($seen, static fn (string $s) => preg_match('/from\s+child/i', $s) === 1));
     }
+
+    /** The two statements a relation issues, as the codegen path issues them. */
+    private const REL_PARENT_SQL = 'SELECT id, name FROM parent WHERE id = 1';
+    private const REL_CHILD_SQL = 'SELECT id, parent_id, label FROM child WHERE parent_id IN (SELECT value FROM json_each(?))';
 
     private static function relDb(): \PDO
     {
@@ -295,21 +302,6 @@ final class MiddlewareTest extends TestCase
         return $db;
     }
 
-    /** A hasMany relation op (child.parent_id IN parent.id), sqlite dialect — the batch SELECT shape. */
-    private static function relOp(): \stdClass
-    {
-        return (object) [
-            'name' => 'kids',
-            'kind' => 'hasMany',
-            'targetTable' => 'child',
-            // sqlite binds the deduped keys as ONE JSON array string; the batch selects rows whose
-            // parent_id is in that array (json_each unpacks it) — a real child-table SELECT.
-            'sql' => 'SELECT id, parent_id, label FROM child WHERE parent_id IN (SELECT value FROM json_each(?))',
-            'parentKey' => 'id',
-            'targetKey' => 'parent_id',
-            'dialect' => 'sqlite',
-        ];
-    }
 
     // ── D2: method-level hooks ────────────────────────────────────────────────
 

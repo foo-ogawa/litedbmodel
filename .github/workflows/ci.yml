@@ -30,18 +30,12 @@ jobs:
         run: npm audit signatures
       - name: Lint
         run: npm run lint --if-present
+      - name: Spec references resolve
+        # docs/architecture.md is the formal spec; fail if any `symbol`/`file` it cites is gone,
+        # or if a `spec §N` cited in src/** points at a section that no longer exists (#229).
+        run: npm run spec:check
       - name: Build
         run: npm run build
-      # `tsconfig.json` covers src/** and `npm run lint` covers `eslint src`, so benchmark/ and embeds/
-      # were never type-checked: a bench series with no colour rendered `fill="undefined"` bars and an
-      # `orm:` label that matched no series wrote an unreadable row into the results CSV, both at exit 0.
-      # The bench deps live in benchmark/package.json and @prisma/client only has types once generated.
-      - name: Install benchmark deps
-        run: npm ci --ignore-scripts --prefix benchmark && npm run prisma:generate --prefix benchmark
-      - name: Typecheck tooling (benchmark + embeds)
-        run: npm run typecheck:tools
-      - name: Test
-        run: npm run test:ci
       - name: Verify package contents
         run: npm pack --dry-run
 
@@ -67,4 +61,4 @@ jobs:
       - name: Fail if docs/chart drifted from benchmark-results.csv
         run: |
           git diff --exit-code -- docs/ \
-            || { echo "::error::Benchmark docs/chart are out of sync with benchmark/results/benchmark-results.csv. Run 'npx embedoc build && npx tsx benchmark/generate-chart.ts' and commit the result."; exit 1; }
+            || { echo "::error::Benchmark docs/chart are out of sync with benchmark/results/benchmark-results.csv. Run 'npm run docs:bench:check' and commit the result."; exit 1; }

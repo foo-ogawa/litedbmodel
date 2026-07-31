@@ -5,9 +5,8 @@ declare(strict_types=1);
 namespace LiteDbModel\Runtime\Tests;
 
 use LiteDbModel\Runtime\Context;
-use LiteDbModel\Runtime\ExecutionContext;
 use LiteDbModel\Runtime\IsolationLevel;
-use LiteDbModel\Runtime\Runtime;
+use LiteDbModel\Runtime\RunInfo;
 use LiteDbModel\Runtime\SqlFailure;
 use LiteDbModel\Runtime\TransactionOptions;
 use LiteDbModel\Runtime\WriteInReadOnlyContextError;
@@ -18,6 +17,7 @@ use function LiteDbModel\Runtime\currentContext;
 use function LiteDbModel\Runtime\isolationPrelude;
 use function LiteDbModel\Runtime\isRetryableTxError;
 use function LiteDbModel\Runtime\retryableByTypedCode;
+use function LiteDbModel\Runtime\runGuarded;
 use function LiteDbModel\Runtime\runWithPinnedContext;
 use function LiteDbModel\Runtime\transaction;
 
@@ -34,10 +34,7 @@ use function LiteDbModel\Runtime\transaction;
  *       PDO asserts EXACTLY ONE BEGIN / ONE COMMIT for the whole boundary (the ambient JOIN — opB
  *       opens no second BEGIN). opB PK-collides → opA's row ALSO rolls back (ONE BEGIN + ONE ROLLBACK,
  *       zero COMMIT), verified by reading real rows.
- *   (2) MUTATION RED (teeth) — disabling the ambient-JOIN (opB opens its own auto-tx via the INTERNAL
- *       guard-off executor) makes the A-rolls-back-when-B-fails assertion go RED, proving the join is
- *       load-bearing.
- *   (3) GUARD — a write OUTSIDE transaction() → WriteOutsideTransactionError; a read-only write inside
+ *   (2) GUARD — a write OUTSIDE transaction() → WriteOutsideTransactionError; a read-only write inside
  *       → WriteInReadOnlyContextError; inside a boundary → ok.
  *   (4) NESTED — one BEGIN/COMMIT; an inner error rolls back the whole tx.
  *   (5) rollback_only — the body runs + returns its value, but NOTHING commits (dry-run).
@@ -60,24 +57,8 @@ final class TxBoundaryTest extends TestCase
         return $db;
     }
 
-    /** A single-INSERT (no gate) tx bundle whose values come from the input scope. */
-    private static function insertBundle(): \stdClass
-    {
-        return json_decode(json_encode([
-            'dialect' => 'sqlite',
-            'name' => 'InsertOne',
-            'transaction' => [
-                'phase' => 'create',
-                'entityFrom' => null,
-                'statements' => [
-                    ['id' => 'tx_body_0', 'role' => 'body', 'op' => [
-                        'sql' => 'INSERT INTO ' . self::TBL . ' (id, worker, seq) VALUES (?, ?, ?)',
-                        'params' => [['ref' => ['id']], ['ref' => ['worker']], ['ref' => ['seq']]],
-                    ]],
-                ],
-            ],
-        ]), false);
-    }
+    /** The single-row INSERT into TBL (sqlite `?` placeholders). */
+    private const INSERT_SQL = 'INSERT INTO ' . self::TBL . ' (id, worker, seq) VALUES (?, ?, ?)';
 
     /** @return list<array{0:int,1:int}> sorted (id, worker) rows (worker != 999 filters pre-seeds). */
     private static function readRows(\PDO $db): array
@@ -88,10 +69,15 @@ final class TxBoundaryTest extends TestCase
         return $out;
     }
 
-    /** The op the boundary body issues — a PUBLIC guarded write that JOINs the ambient tx. */
-    private static function op(\PDO $db, int $id, int $worker, int $seq): array
+    /**
+     * The op the boundary body issues — a PUBLIC guarded write through the production guarded write
+     * seam ({@see runGuarded()}) on the ambient pinned tx ctx, JOINing the ambient tx (the same seam a
+     * user-facing write inside transaction() rides). Outside a boundary the ambient pin is absent, so
+     * the guard fires (WriteOutsideTransactionError).
+     */
+    private static function op(int $id, int $worker, int $seq): RunInfo
     {
-        return Runtime::executeTransactionBundle(self::insertBundle(), ['id' => $id, 'worker' => $worker, 'seq' => $seq], $db);
+        return runGuarded(currentContext(), self::INSERT_SQL, [$id, $worker, $seq], 'WRITE', self::TBL);
     }
 
     // ── (1) MULTI-OP ATOMICITY — commit path ────────────────────────────────────
@@ -102,9 +88,9 @@ final class TxBoundaryTest extends TestCase
         $db = self::makeDriver($sink);
         $ctx = Context::forPdo($db);
 
-        $result = transaction($ctx, fn () => [self::op($db, 100, 1, 0), self::op($db, 101, 1, 1)], new TransactionOptions(), 'sqlite');
+        $result = transaction($ctx, fn () => [self::op(100, 1, 0), self::op(101, 1, 1)], new TransactionOptions(), 'sqlite');
 
-        $this->assertSame([true, true], array_map(fn ($r) => $r['committed'], $result));
+        $this->assertSame([1, 1], array_map(fn ($r) => $r->changes, $result));
         // N ops in one boundary ⇒ ONE BEGIN + ONE COMMIT (the ambient JOIN — opB opens no 2nd BEGIN).
         $this->assertSame(1, $sink->begins, 'expected 1 BEGIN');
         $this->assertSame(1, $sink->commits, 'expected 1 COMMIT');
@@ -124,7 +110,7 @@ final class TxBoundaryTest extends TestCase
 
         $raised = false;
         try {
-            transaction($ctx, fn () => [self::op($db, 200, 2, 0), self::op($db, 201, 2, 1)], new TransactionOptions(retryOnError: false), 'sqlite');
+            transaction($ctx, fn () => [self::op(200, 2, 0), self::op(201, 2, 1)], new TransactionOptions(retryOnError: false), 'sqlite');
         } catch (\Throwable) {
             $raised = true;
         }
@@ -136,53 +122,18 @@ final class TxBoundaryTest extends TestCase
         $this->assertSame([], self::readRows($db), 'opA must roll back when opB fails (cross-op atomicity)');
     }
 
-    // ── (2) MUTATION RED — disabling the ambient JOIN breaks the atomic outcome ──
-
-    public function testDisablingAmbientJoinGoesRed(): void
-    {
-        // Baseline GREEN (join intact) as reference is proven by the test above. Here we FAITHFULLY
-        // DISABLE the join: each op runs through the INTERNAL guard-off executor, which — because it is
-        // NOT inside a transaction() (we call it directly, no ambient pin) — opens its OWN auto-tx. So
-        // opA commits on its own connection tx and SURVIVES opB's failure ⇒ the atomic green outcome no
-        // longer holds. Proves the ambient JOIN is load-bearing (mirror py test_disabling_ambient_join).
-        $sink = new RecordingSink();
-        $db = self::makeDriver($sink);
-        $db->exec('INSERT INTO ' . self::TBL . ' (id, worker, seq) VALUES (201, 999, 9)');
-        $sink->reset();
-
-        $doOpNoJoin = fn (int $id, int $w, int $s) =>
-            Runtime::executeTransactionBundleInternal(self::insertBundle(), ['id' => $id, 'worker' => $w, 'seq' => $s], $db);
-
-        try {
-            // No transaction() wrapper → each internal call is its OWN auto-tx (BEGIN…COMMIT per op).
-            $doOpNoJoin(200, 2, 0); // commits alone
-            $doOpNoJoin(201, 2, 1); // PK collision → fails, but opA already committed
-        } catch (\Throwable) {
-            // ignore — we only care that opA leaked past.
-        }
-
-        // Under the disabled join, opA (id=200) COMMITTED independently ⇒ the atomic "rows == []"
-        // outcome is BROKEN. Assert the mutation actually breaks atomicity (teeth).
-        $this->assertGreaterThanOrEqual(
-            1,
-            count(self::readRows($db)),
-            'MUTATION PROOF: disabling the ambient JOIN (each op = its own auto-tx) MUST leak opA past '
-            . 'the failure ⇒ the atomicity test has teeth. It did not.'
-        );
-        // Two independent auto-txs ⇒ more than one BEGIN (each op opened its own), unlike the joined path.
-        $this->assertGreaterThan(1, $sink->begins, 'disabled join ⇒ each op opens its own BEGIN (>1)');
-    }
-
-    // ── (3) write=tx GUARD ──────────────────────────────────────────────────────
+    // ── (2) write=tx GUARD ──────────────────────────────────────────────────────
 
     public function testGuardOutsideBoundaryRejectsWrite(): void
     {
         $sink = new RecordingSink();
         $db = self::makeDriver($sink);
-        // A bare write OUTSIDE any transaction() → WriteOutsideTransactionError, nothing written.
+        $ctx = Context::forPdo($db);
+        // A bare guarded write OUTSIDE any transaction() (base ctx, no ambient pin; the guard fires
+        // before the ctx is reached) → WriteOutsideTransactionError, nothing written.
         $this->expectException(WriteOutsideTransactionError::class);
         try {
-            self::op($db, 300, 3, 0);
+            runGuarded($ctx, self::INSERT_SQL, [300, 3, 0], 'WRITE', self::TBL);
         } finally {
             $this->assertSame([], self::readRows($db));
         }
@@ -199,7 +150,7 @@ final class TxBoundaryTest extends TestCase
             $ro = currentContext()->withReadOnly(); // the pinned tx ctx, derived read-only
             $threw = false;
             try {
-                runWithPinnedContext($ro, fn () => self::op($db, 301, 3, 0));
+                runWithPinnedContext($ro, fn () => self::op(301, 3, 0));
             } catch (WriteInReadOnlyContextError) {
                 $threw = true;
             }
@@ -214,8 +165,8 @@ final class TxBoundaryTest extends TestCase
         $sink = new RecordingSink();
         $db = self::makeDriver($sink);
         $ctx = Context::forPdo($db);
-        $r = transaction($ctx, fn () => self::op($db, 302, 3, 0), new TransactionOptions(), 'sqlite');
-        $this->assertTrue($r['committed']);
+        $r = transaction($ctx, fn () => self::op(302, 3, 0), new TransactionOptions(), 'sqlite');
+        $this->assertSame(1, $r->changes);
         $this->assertSame([[302, 3]], self::readRows($db));
     }
 
@@ -228,9 +179,9 @@ final class TxBoundaryTest extends TestCase
         $ctx = Context::forPdo($db);
 
         $outer = function () use ($db, $ctx) {
-            self::op($db, 500, 5, 0);
+            self::op(500, 5, 0);
             // A NESTED transaction() JOINs the outer — no new BEGIN/COMMIT.
-            return transaction($ctx, fn () => self::op($db, 501, 5, 1), new TransactionOptions(), 'sqlite');
+            return transaction($ctx, fn () => self::op(501, 5, 1), new TransactionOptions(), 'sqlite');
         };
         transaction($ctx, $outer, new TransactionOptions(), 'sqlite');
 
@@ -249,8 +200,8 @@ final class TxBoundaryTest extends TestCase
         $ctx = Context::forPdo($db);
 
         $outer = function () use ($db, $ctx) {
-            self::op($db, 600, 6, 0);
-            return transaction($ctx, fn () => self::op($db, 601, 6, 1), new TransactionOptions(), 'sqlite');
+            self::op(600, 6, 0);
+            return transaction($ctx, fn () => self::op(601, 6, 1), new TransactionOptions(), 'sqlite');
         };
         $raised = false;
         try {
@@ -271,8 +222,8 @@ final class TxBoundaryTest extends TestCase
         $sink = new RecordingSink();
         $db = self::makeDriver($sink);
         $ctx = Context::forPdo($db);
-        $r = transaction($ctx, fn () => self::op($db, 700, 7, 0), new TransactionOptions(rollbackOnly: true), 'sqlite');
-        $this->assertTrue($r['committed']); // the body's own view: its statement ran + returned
+        $r = transaction($ctx, fn () => self::op(700, 7, 0), new TransactionOptions(rollbackOnly: true), 'sqlite');
+        $this->assertSame(1, $r->changes); // the body's own view: its statement ran (before the boundary rolled back)
         // …but the boundary ROLLED BACK, so nothing persisted.
         $this->assertSame(1, $sink->begins);
         $this->assertSame(0, $sink->commits);

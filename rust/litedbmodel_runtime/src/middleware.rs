@@ -14,7 +14,7 @@
 //!
 //! ## Runtime-issued tx-control IS middleware-visible (#93 / owner option A — full TS parity)
 //!
-//! The tx runtime ([`crate::exec_context::with_transaction_decided_isolated_on`]) issues its OWN
+//! The tx runtime ([`crate::exec_context::with_transaction_decided_isolated`]) issues its OWN
 //! BEGIN/COMMIT/ROLLBACK + the isolation SET THROUGH the seam (`run(txctx, "BEGIN"/"COMMIT"/…)`) on the
 //! SAME pinned owned connection — so a registered middleware OBSERVES them, exactly like the TS
 //! reference (`runAsync(txCtx, 'BEGIN'/'COMMIT'/'ROLLBACK')`). The owned connection is acquired via

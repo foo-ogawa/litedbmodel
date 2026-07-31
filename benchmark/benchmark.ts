@@ -27,7 +27,7 @@ import 'reflect-metadata';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
-import { ORM_SERIES, LITEDBMODEL_RUNTIME, LITEDBMODEL_CODEGEN, KYSELY, DRIZZLE, TYPEORM, PRISMA, type OrmSeries } from './orm-series.js';
+import { ORM_SERIES, RUNTIME_SERIES, CODEGEN_SERIES, KYSELY, DRIZZLE, TYPEORM, PRISMA, type OrmSeries } from './orm-series.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -629,7 +629,7 @@ async function main() {
       name: 'Find all (limit 100)',
       tests: [
         { 
-          orm: LITEDBMODEL_RUNTIME,
+          orm: RUNTIME_SERIES,
           fn: () => LiteUser.find([], { limit: 100 }) 
         },
         { 
@@ -658,7 +658,7 @@ async function main() {
       name: 'Filter, paginate & sort',
       tests: [
         { 
-          orm: LITEDBMODEL_RUNTIME,
+          orm: RUNTIME_SERIES,
           fn: () => LitePost.find([[LitePost.published, 1]], {
             order: LitePost.created_at.desc(), 
             limit: 20, 
@@ -711,7 +711,7 @@ async function main() {
       name: 'Nested find all (include posts)',
       tests: [
         { 
-          orm: LITEDBMODEL_RUNTIME,
+          orm: RUNTIME_SERIES,
           fn: async () => {
             // Auto batch loading via relation
             const users = await LiteUser.find([], { limit: 100 });
@@ -774,7 +774,7 @@ async function main() {
       name: 'Find first',
       tests: [
         { 
-          orm: LITEDBMODEL_RUNTIME,
+          orm: RUNTIME_SERIES,
           fn: () => LiteUser.findOne([[`${LiteUser.name} LIKE ?`, 'User%']]) 
         },
         { 
@@ -814,7 +814,7 @@ async function main() {
       name: 'Nested find first (include posts)',
       tests: [
         { 
-          orm: LITEDBMODEL_RUNTIME,
+          orm: RUNTIME_SERIES,
           fn: async () => {
             const user = await LiteUser.findOne([[`${LiteUser.name} LIKE ?`, 'User%']]);
             if (user) {
@@ -878,7 +878,7 @@ async function main() {
       name: 'Find unique (by email)',
       tests: [
         { 
-          orm: LITEDBMODEL_RUNTIME,
+          orm: RUNTIME_SERIES,
           fn: () => LiteUser.findOne([[LiteUser.email, 'user500@example.com']]) 
         },
         { 
@@ -914,7 +914,7 @@ async function main() {
       name: 'Nested find unique (include posts)',
       tests: [
         { 
-          orm: LITEDBMODEL_RUNTIME,
+          orm: RUNTIME_SERIES,
           fn: async () => {
             const user = await LiteUser.findOne([[LiteUser.email, 'user500@example.com']]);
             if (user) {
@@ -976,7 +976,7 @@ async function main() {
       name: 'Create',
       tests: [
         { 
-          orm: LITEDBMODEL_RUNTIME,
+          orm: RUNTIME_SERIES,
           fn: () => LiteUser.transaction(async () => LiteUser.create([
             [LiteUser.email, `bench${createCounter++}@example.com`],
             [LiteUser.name, `Benchmark User`],
@@ -1034,7 +1034,7 @@ async function main() {
       name: 'Nested create (with post)',
       tests: [
         { 
-          orm: LITEDBMODEL_RUNTIME,
+          orm: RUNTIME_SERIES,
           fn: () => LiteUser.transaction(async () => {
             const result = await LiteUser.create([
               [LiteUser.email, `nested${createCounter++}@example.com`],
@@ -1125,7 +1125,7 @@ async function main() {
       name: 'Update',
       tests: [
         { 
-          orm: LITEDBMODEL_RUNTIME,
+          orm: RUNTIME_SERIES,
           fn: () => LiteUser.transaction(async () => LiteUser.update([[LiteUser.id, 100]], [[LiteUser.name, 'Updated User']])) 
         },
         { 
@@ -1168,7 +1168,7 @@ async function main() {
       name: 'Nested update (update user + post)',
       tests: [
         { 
-          orm: LITEDBMODEL_RUNTIME,
+          orm: RUNTIME_SERIES,
           fn: () => LiteUser.transaction(async () => {
             await LiteUser.update([[LiteUser.id, 100]], [[LiteUser.name, 'Nested Updated']]);
             await LitePost.update([[LitePost.author_id, 100]], [[LitePost.title, 'Updated Post']]);
@@ -1230,7 +1230,7 @@ async function main() {
       name: 'Upsert',
       tests: [
         { 
-          orm: LITEDBMODEL_RUNTIME,
+          orm: RUNTIME_SERIES,
           fn: () => LiteUser.transaction(async () => LiteUser.create(
             [
               [LiteUser.email, `upsert${upsertCounter++}@example.com`],
@@ -1292,7 +1292,7 @@ async function main() {
       name: 'Nested upsert (user + post)',
       tests: [
         { 
-          orm: LITEDBMODEL_RUNTIME,
+          orm: RUNTIME_SERIES,
           fn: () => LiteUser.transaction(async () => {
             const result = await LiteUser.create(
               [
@@ -1383,7 +1383,7 @@ async function main() {
       name: 'Delete',
       tests: [
         { 
-          orm: LITEDBMODEL_RUNTIME,
+          orm: RUNTIME_SERIES,
           fn: () => LiteUser.transaction(async () => {
             // First create then delete
             const result = await LiteUser.create([
@@ -1439,7 +1439,7 @@ async function main() {
       name: 'Create Many (10 records)',
       tests: [
         { 
-          orm: LITEDBMODEL_RUNTIME,
+          orm: RUNTIME_SERIES,
           fn: () => LiteUser.transaction(async () => {
             const records = Array.from({ length: 10 }, (_, i) => [
               [LiteUser.email, `bulk${createCounter++}@example.com`],
@@ -1499,7 +1499,7 @@ async function main() {
       name: 'Upsert Many (10 records)',
       tests: [
         { 
-          orm: LITEDBMODEL_RUNTIME,
+          orm: RUNTIME_SERIES,
           fn: () => LiteUser.transaction(async () => {
             const records = Array.from({ length: 10 }, (_, i) => [
               [LiteUser.email, `upsertbulk${upsertCounter++}@example.com`],
@@ -1574,7 +1574,7 @@ async function main() {
       name: 'Update Many (10 different values)',
       tests: [
         { 
-          orm: LITEDBMODEL_RUNTIME,
+          orm: RUNTIME_SERIES,
           fn: () => LiteUser.transaction(async () => {
             // Update 10 users with different names in a single query
             return LiteUser.updateMany(
@@ -1641,7 +1641,7 @@ async function main() {
       name: 'Nested relations (100→1000→10000)',
       tests: [
         { 
-          orm: LITEDBMODEL_RUNTIME,
+          orm: RUNTIME_SERIES,
           fn: async () => {
             // Fetch first 100 users by ID (they have 10 posts each = 1000 posts)
             const users = await LiteUser.find([], { limit: 100, order: LiteUser.id.asc() });
@@ -1801,7 +1801,7 @@ async function main() {
       name: 'Nested relations (composite key)',
       tests: [
         {
-          orm: LITEDBMODEL_RUNTIME,
+          orm: RUNTIME_SERIES,
           fn: async () => {
             // First 100 tenant_users by user_id (matches the crosslang composite op's selection).
             const users = await LiteTenantUser.find([], { limit: 100, order: LiteTenantUser.user_id.asc() });
@@ -1925,7 +1925,7 @@ async function main() {
   for (const category of testCategories) {
     const op = CATEGORY_TO_OP[category.name];
     if (!op) throw new Error(`benchmark: category '${category.name}' has no codegen op mapping`);
-    category.tests.push({ orm: LITEDBMODEL_CODEGEN, fn: codegenFn(op) });
+    category.tests.push({ orm: CODEGEN_SERIES, fn: codegenFn(op) });
   }
 
   // Store all results

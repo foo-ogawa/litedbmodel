@@ -28,6 +28,7 @@
  *  | row types                    | `makesql/outtype.deriveReadRow` over the model's `@column` SoT   |
  *  | column SQL types             | `decorator-adapter.deriveModelColumns` / `modelColumnResolver`   |
  *  | relation declarations        | `decorator-adapter.relationDeclOf`                               |
+ *  | the statement's NAMED db     | `decorator-adapter.connectionOf` (a relation's: the op's own)     |
  *  | find hard-limit cap          | `limit-config.resolveFindHardLimit`                              |
  *  | the leaf catalog             | `leaf-transport.Db` (imported by the emitted module)             |
  *
@@ -42,21 +43,33 @@
  * ## SKIP / dynamic WHERE (CLAUDE.md §2 — settled)
  *
  * A predicate declared `optional` is present-or-absent PER CALL, so the final SQL can only be
- * determined at execution time. The emitter therefore does NOT bake it: it passes the WHERE as
- * FRAGMENTS — SQL text + params, and a skipped fragment is simply omitted — and the `executeSQL`
- * leaf assembles the survivors when it runs ({@link import('../leaves').assembleDynamicWhere}); the
- * `?`→`$N` render happens after that, on the final SQL. There is no intermediate IR vocabulary: a
- * fragment is `{sql, params}` and nothing else, and a skipped one evaluates to `null` (bc's `cond` is
- * lazy, so a dropped fragment's params are never evaluated).
+ * determined at execution time. A BOUNDED predicate is not — it is the same on every call — so it is
+ * lowered into the static `sql` HERE, at emit time (native-clean), exactly as it is on a read that
+ * declares no optional predicate at all. A read's WHERE therefore splits by that ONE property: the
+ * bounded predicates ARE the emitted statement's WHERE, and only the ACTUALLY-optional ones accumulate
+ * a plan — one `{skipped, sql, params}` FRAGMENT each, which the `executeSQL` leaf continues the static
+ * WHERE with when it runs ({@link import('../leaves').assembleDynamicWhere}); the `?`→`$N` render
+ * happens after that, on the final SQL. There is no intermediate IR vocabulary: a fragment is SQL text
+ * + params + a SKIP FLAG (`skipped` = `param === null`). Every fragment is the SAME struct — never a
+ * `cond`-to-null element — so the go/rust native-codegen emitters resolve the plan (a variant/nullable
+ * array element is the one shape they reject).
  *
- * A statement with NO optional predicate carries no plan at all — its WHERE is lowered into the
- * static `sql` at emit time (native-clean). One path, chosen per statement.
+ * A read with NO optional predicate carries no plan at all. One statement, one plan holding exactly the
+ * predicates that are optional.
+ *
+ * The plan also carries WHERE the clause goes, because the emitter is what put the WHERE there: a SKIP
+ * read's `sql` port is the statement's HEAD (up to the end of its WHERE region) and the plan carries the
+ * connector plus the `tail` text and its bound values, straight off the same
+ * {@link import('../makesql/compile-select').SelectBundle} this read compiled. The leaf concatenates the
+ * three pieces; it never scans the statement to find the boundary again — a scan that took a NESTED
+ * statement's tail keyword for the outer one's (#198) and counted a QUOTED `?` the placeholder render
+ * skips (#202).
  */
 
 import type { PortableType } from 'behavior-contracts/runtime';
 import { DBExists, DBSubquery, DBParentRef, type ColumnRef, type SubqueryCondition } from '../../DBValues';
 import type { ConditionObject, ConditionValue } from '../../DBConditions';
-import { compileSelect, type BoundCount, type SelectDesc } from '../makesql/compile-select';
+import { compileSelect, type BoundCount, type SelectBundle, type SelectDesc } from '../makesql/compile-select';
 import { compileWhere } from '../makesql/compile';
 import { inListPredicate, tupleInPredicate } from '../makesql/json-array';
 import { compileWriteNode, pgTypeSpecimen } from '../makesql/tx';
@@ -66,6 +79,7 @@ import { inferPgArrayType } from '../makesql/compile-relation';
 import { compileRelationOp, parentKeyCols, relationGuard, targetKeyCols, type RelationDecl } from '../relation';
 import { resolveFindHardLimit } from '../limit-config';
 import {
+  connectionOf,
   deriveModelColumns,
   modelColumnResolver,
   relationDeclOf,
@@ -233,6 +247,21 @@ class EmitContext {
     return tsScalar(sqlTypeToBcScalar(this.sqlTypeOf(model, column)));
   }
 
+  /**
+   * The NAMED connection every statement of an endpoint declared over `model` runs on — read from the
+   * model, the ONE authority ({@link connectionOf}), and handed to {@link execOptions} as its `db`
+   * field. `{}` ⇒ the DEFAULT connection, which leaves a bounded read's option record unspelled
+   * entirely (native-clean).
+   *
+   * A RELATION's child fetch does NOT come through here: its connection is the TARGET model's, which
+   * `relationDeclOf` already resolved onto the compiled op (`RelationOp.connection`) — the emitter
+   * consumes that rather than re-deriving it from a second model handle.
+   */
+  private dbOf(model: ModelClassLike): { readonly db?: string } {
+    const db = connectionOf(model);
+    return db !== undefined ? { db } : {};
+  }
+
   // ── methods ────────────────────────────────────────────────────────────────────────────────
 
   method(name: string, endpoint: Endpoint): Method {
@@ -306,14 +335,9 @@ class EmitContext {
 
     const cap = this.bakedFindCap(endpoint);
     const where = endpoint.where ?? [];
-    const dynamic = where.some(isOptional);
-    if (dynamic && endpoint.view !== undefined) {
-      throw new Error(
-        `emit: endpoint '${name}': a QUERY view-model binds its own CTE params BEFORE the WHERE, and a ` +
-          `dynamic (SKIP) WHERE is assembled at execution time — the two cannot share one param order. ` +
-          `Declare the view's own predicate inside the view query, or drop the optional predicate.`,
-      );
-    }
+    // CLAUDE.md §2: the WHERE splits by ONE property — a BOUNDED predicate is lowered into the static
+    // statement below, only an ACTUALLY-optional one accumulates a plan the leaf assembles per call.
+    const optional = where.filter(isOptional);
 
     const params: ParamDecl[] = [];
     for (const p of where) this.declareWhereParams(model, p, params);
@@ -322,13 +346,13 @@ class EmitContext {
     const limit = this.page(endpoint.limit ?? (cap !== null ? cap + 1 : undefined), params);
     const offset = this.page(endpoint.offset, params);
 
-    // A read with ANY optional predicate carries its WHOLE WHERE as fragments (the leaf assembles the
-    // survivors at execution time); a fully-bounded read lowers its WHERE into the static `sql` here.
     const compiled = compileSelect({
       dialect: this.spec.dialect,
       tableName: table,
       select: projection.join(', '),
-      ...(dynamic ? {} : { conditions: this.conditions(model, where) }),
+      // The BOUNDED predicates — this read's static WHERE, whatever else it declares. (An all-optional
+      // read compiles an EMPTY condition set, which is the same no-WHERE statement it always was.)
+      conditions: this.conditions(model, where.filter((p) => !isOptional(p))),
       ...(endpoint.view !== undefined ? { cte: cteOf(endpoint.view) } : {}),
       ...(endpoint.order !== undefined ? { order: endpoint.order } : {}),
       ...(limit !== undefined ? { limit } : {}),
@@ -336,10 +360,17 @@ class EmitContext {
       ...(endpoint.lock === 'update' ? { forUpdate: true } : endpoint.lock === 'share' ? { forShare: true } : {}),
     } satisfies SelectDesc);
 
-    const bigint = endpoint.bigint === true;
-    const call = `${quote(compiled.sql)}, [${compiled.params.map(renderSlot).join(', ')}], false, false, ${bigint}${
-      dynamic ? `, ${this.dynamicWherePlan(model, where)}` : ''
-    }`;
+    // A SKIP read hands the leaf the statement's HEAD (up to the end of its WHERE region) and puts the
+    // rest — the connector, the tail text and the tail's own bound values — in the plan, so the leaf
+    // CONCATENATES instead of scanning the finished statement for the boundary (#198 / #202). The split
+    // comes from the builder that created the boundary (`compileSelect`), never from re-reading its
+    // output. A read with no optional predicate carries no plan and therefore the WHOLE statement.
+    const plan = optional.length > 0 ? this.dynamicWherePlan(model, optional, compiled) : undefined;
+    const [sql, slots] = plan === undefined ? [compiled.sql, compiled.params] : [compiled.head, compiled.headParams];
+    const call = `${quote(sql)}, [${slots.map(renderSlot).join(', ')}]${execOptions({
+      ...this.dbOf(model),
+      ...(plan !== undefined ? { whereDynamic: plan } : {}),
+    })}`;
 
     const rowObj = objOf(deriveReadRow(table, projection, readResolve, `endpoint '${name}'`).outType, name);
     const selections = normalizeSelections(endpoint.with ?? []);
@@ -360,7 +391,7 @@ class EmitContext {
     const lines: string[] = [];
     const parentVar = fresh('rows');
     lines.push(`const ${parentVar}: WireValue[] = Db.executeSQL(${call});`);
-    const graph = this.relations(model, parentVar, rowObj, selections, lines, fresh, bigint, `endpoint '${name}'`);
+    const graph = this.relations(model, parentVar, rowObj, selections, lines, fresh, `endpoint '${name}'`);
     const rowType = this.declareInterface(`${cap1(name)}Row`, graph.obj);
     // The terminal binding is the SINGLE de-box point: the annotation is what bc reads, the one
     // assertion is what narrows the opaque wire value for tsc.
@@ -370,17 +401,31 @@ class EmitContext {
   }
 
   /**
-   * The DYNAMIC WHERE plan expression: one fragment per declared predicate — `{sql, params}` from the
-   * SAME `compileWhere` that produces a bounded WHERE — with an optional one wrapped in a conditional
-   * that yields `null` when its parameter is absent. That is the whole fragment vocabulary.
+   * The DYNAMIC WHERE plan expression: ONE fragment per OPTIONAL predicate — never a bounded one, which
+   * is already in the static statement (CLAUDE.md §2) — every fragment the SAME struct
+   * `{skipped, sql, params}`, with `sql`/`params` from the SAME `compileWhere` that produces a bounded
+   * WHERE and `skipped` the per-call SKIP decision carried as DATA (`param === null`). That is the whole
+   * fragment vocabulary (SQL + params + a SKIP flag). The array is HOMOGENEOUS — never a `cond`-to-null
+   * element — so the go/rust native-codegen emitters resolve it (a variant/nullable array element is the
+   * one shape they reject); the `executeSQL` leaf drops the `skipped` fragments at run and continues the
+   * static WHERE with the survivors.
+   *
+   * The plan also carries what FINISHES the statement, taken straight off the bundle this same read
+   * compiled ({@link import('../makesql/compile-select').SelectBundle}): `lead` — the connector the first
+   * survivor joins with, which is `AND` exactly when the builder emitted a static WHERE — and `tail` /
+   * `tailParams`, the text and bound values that follow the WHERE region. The leaf then concatenates
+   * `head` + clause + `tail`; nothing on the run side has to find the boundary again, which is what a
+   * lexical scan got wrong on a nested statement (#198) and on a quoted `?` (#202).
    */
-  private dynamicWherePlan(model: ModelClassLike, where: readonly Predicate[]): string {
-    const frags = where.map((p) => {
+  private dynamicWherePlan(model: ModelClassLike, optional: readonly OptionalPredicate[], compiled: SelectBundle): string {
+    const frags = optional.map((p) => {
       const w = compileWhere(this.conditions(model, [p]), this.spec.dialect);
-      const frag = `{ sql: ${quote(w.sql)}, params: [${w.params.map(renderSlot).join(', ')}] }`;
-      return isParameterised(p) && p.optional === true ? `${p.param} !== null ? ${frag} : null` : frag;
+      return `{ skipped: ${p.param} === null, sql: ${quote(w.sql)}, params: [${w.params.map(renderSlot).join(', ')}] }`;
     });
-    return `{ frags: [${frags.join(', ')}] }`;
+    return (
+      `{ frags: [${frags.join(', ')}], lead: ${quote(compiled.lead)}, tail: ${quote(compiled.tail)}, ` +
+      `tailParams: [${compiled.tailParams.map(renderSlot).join(', ')}] }`
+    );
   }
 
   /**
@@ -396,7 +441,6 @@ class EmitContext {
     selections: readonly { name: string; with: readonly RelationSelection[] }[],
     lines: string[],
     fresh: (base: string) => string,
-    bigint: boolean,
     at: string,
   ): { obj: Record<string, PortableType>; terminalCall: string; terminalVar: string } {
     let acc = parentVar;
@@ -410,20 +454,36 @@ class EmitContext {
       lines.push(`const ${keysVar}: WireValue[] = Db.pluck(${acc}, ${jsonArray(parentKeyCols(op))});`);
       const childVar = fresh(sel.name);
       // The runaway guard the compiled op resolved (`hasManyHardLimit` / the per-relation override):
-      // baked onto the child fetch so the `executeSQL` transport asserts the RAW child row count —
-      // the only point they are visible, since `group` receives an already-nested graph. A relation
-      // batch never carries a dynamic WHERE (its SQL is fully static), so the `whereDynamic` slot is
-      // an honest `null`. Uncapped ⇒ the ports stop at `bigint` and the call is byte-unchanged.
+      // baked onto the child fetch so the `executeSQL` transport asserts the RAW child row count — the
+      // only point they are visible, since `group` receives an already-nested graph. A relation batch
+      // never carries a dynamic WHERE (its SQL is fully static), and it says so with the `whereDynamic:
+      // null` FIELD of the option record — an uncapped batch on the DEFAULT connection carries no
+      // record at all.
       const guard = relationGuard(op);
-      const guardPorts = guard !== null ? `, null, ${JSON.stringify(guard)}` : '';
-      lines.push(`const ${childVar}: WireValue[] = Db.executeSQL(${quote(op.sql)}, [${keysVar}], false, false, ${bigint}${guardPorts});`);
+      // The guard rides as a CONCRETE `CapGuard` struct (leaf-transport), so the native emitters build
+      // it directly: `limit` is an `Int` LITERAL (a plain `number` would emit as a float and the wire
+      // int-probe would miss the cap). EVERY field is spelled — bc types a port by the literal wired
+      // into it, so a struct with a field left out is a DIFFERENT type and `bc generate` rejects the
+      // module (#208); `relationGuard` is total in `model` so there is nothing to branch on.
+      const guardExpr =
+        guard !== null ? `{ limit: ${guard.limit} as Int, model: ${quote(guard.model)}, relation: ${quote(guard.relation)} }` : undefined;
+      // CROSS-DB (V0 R1): the batch runs on the TARGET model's connection, which `relationDeclOf`
+      // already resolved onto the compiled op — v1 `LazyRelation.ts:236` runs a relation on
+      // `TargetClass.getDriverType()`'s driver, so a relation whose target lives in another database is
+      // fetched THERE and not against the parent's (which would read a missing / same-named table).
+      lines.push(
+        `const ${childVar}: WireValue[] = Db.executeSQL(${quote(op.sql)}, [${keysVar}]${execOptions({
+          ...(op.connection !== undefined ? { db: op.connection } : {}),
+          ...(guardExpr !== undefined ? { guard: guardExpr } : {}),
+        })});`,
+      );
       let childRows = childVar;
       let childObj = objOf(
         deriveReadRow(decl.targetTable, decl.select, this.resolver(targetModel), `${at} relation '${sel.name}'`).outType,
         `${at} relation '${sel.name}'`,
       );
       if (sel.with.length > 0) {
-        const nested = this.relations(targetModel, childVar, childObj, normalizeSelections(sel.with), lines, fresh, bigint, `${at}.${sel.name}`);
+        const nested = this.relations(targetModel, childVar, childObj, normalizeSelections(sel.with), lines, fresh, `${at}.${sel.name}`);
         childObj = nested.obj;
         childRows = nested.terminalVar;
       }
@@ -485,7 +545,7 @@ class EmitContext {
       params,
       returnType: `${rowType}[]`,
       lines: [
-        `const ${out}: ${rowType}[] = Db.executeSQL(${quote(op.sql)}, [${op.params.map(renderSlot).join(', ')}], true, ${returning !== undefined}, false) as ${rowType}[];`,
+        `const ${out}: ${rowType}[] = Db.executeSQL(${quote(op.sql)}, [${op.params.map(renderSlot).join(', ')}]${execOptions({ ...this.dbOf(model), write: { returning: returning !== undefined } })}) as ${rowType}[];`,
         `return ${out};`,
       ],
     };
@@ -578,7 +638,7 @@ class EmitContext {
       params,
       returnType: `${rowType}[]`,
       lines: [
-        `const ${out}: ${rowType}[] = Db.executeSQL(${quote(op.sql)}, [${slots.join(', ')}], true, ${endpoint.returning !== undefined}, false) as ${rowType}[];`,
+        `const ${out}: ${rowType}[] = Db.executeSQL(${quote(op.sql)}, [${slots.join(', ')}]${execOptions({ ...this.dbOf(model), write: { returning: endpoint.returning !== undefined } })}) as ${rowType}[];`,
         `return ${out};`,
       ],
     };
@@ -607,7 +667,7 @@ class EmitContext {
       params,
       returnType: `${rowType}[]`,
       lines: [
-        `const ${out}: ${rowType}[] = Db.executeSQL(${quote(op.sql)}, [${op.params.map(renderSlot).join(', ')}], true, ${endpoint.returning !== undefined}, false) as ${rowType}[];`,
+        `const ${out}: ${rowType}[] = Db.executeSQL(${quote(op.sql)}, [${op.params.map(renderSlot).join(', ')}]${execOptions({ ...this.dbOf(model), write: { returning: endpoint.returning !== undefined } })}) as ${rowType}[];`,
         `return ${out};`,
       ],
     };
@@ -842,9 +902,45 @@ function isParameterised(p: Predicate): p is ComparePredicate | InPredicate {
   return p.kind === undefined || p.kind === 'compare' || p.kind === 'in';
 }
 
+/** A SKIP member: a parameterised predicate declared `optional` — present-or-absent PER CALL. */
+type OptionalPredicate = (ComparePredicate | InPredicate) & { readonly optional: true };
+
 /** A predicate is a SKIP member when it declares `optional` (only a parameterised member can be one). */
-function isOptional(p: Predicate): boolean {
+function isOptional(p: Predicate): p is OptionalPredicate {
   return isParameterised(p) && p.optional === true;
+}
+
+/**
+ * Render the OPTIONAL `opts` argument of `Db.executeSQL` — the ONE place the option record
+ * ({@link import('../leaf-transport').ExecOptions}) is spelled, for every emitted statement of every op.
+ *
+ * A statement that carries NO option at all (a bounded read of a DEFAULT-connection model, an uncapped
+ * relation child of one) renders NOTHING: the port is omitted and the payload stays `sql` + `params`
+ * (native-clean). ONLY those statements are unchanged by named-DB routing — every statement that ALREADY
+ * carried a record (a write, a SKIP read, a guarded relation child) now spells `db: null` in it too. The
+ * frozen conformance vectors are unaffected for a different reason: a vector carries the statements the
+ * transport handed the driver (`sql` + `params`) and no control record at all (`grep -c opts
+ * conformance/vectors/*.json` = 0). Any other statement spells the WHOLE record — bc types a port by the
+ * literal wired into it
+ * and rejects a partial one — so each absent fact is the `null` VALUE of its own NAMED field. That is
+ * what removed the positional filler #193 is about: nothing has to be passed to reach the field after it.
+ *
+ * `write` is ONE field carrying the write's own `returning` (the `WriteMode` struct), so "returns rows
+ * but is not a write" is not a state the ABI can hold — three statement shapes, three values.
+ */
+function execOptions(o: {
+  /** The NAMED connection the statement runs on (absent ⇒ the DEFAULT connection). */
+  readonly db?: string;
+  /** The statement WRITES, and whether that write yields ROWS (absent ⇒ a read). */
+  readonly write?: { readonly returning: boolean };
+  /** The rendered DYNAMIC (SKIP) plan expression (absent ⇒ the read declares no optional predicate). */
+  readonly whereDynamic?: string;
+  /** The rendered relation cap expression (absent ⇒ the fetch is uncapped). */
+  readonly guard?: string;
+}): string {
+  if (o.db === undefined && o.write === undefined && o.whereDynamic === undefined && o.guard === undefined) return '';
+  const write = o.write === undefined ? 'null' : `{ returning: ${o.write.returning} }`;
+  return `, { db: ${o.db === undefined ? 'null' : quote(o.db)}, write: ${write}, whereDynamic: ${o.whereDynamic ?? 'null'}, guard: ${o.guard ?? 'null'} }`;
 }
 
 /**

@@ -590,7 +590,7 @@ describe.skipIf(skipIntegrationTests)('LazyRelation', () => {
       const users = await TestUser.find([], { order: 'id' });
 
       // Create a context and preload relations
-      const _context = createRelationContext(TestUserModel, users as TestUser[]);
+      createRelationContext(TestUserModel, users as TestUser[]);
 
       // Preload posts using accessor function
       await preloadRelations(users as TestUser[], (user) => user.posts);
@@ -605,15 +605,15 @@ describe.skipIf(skipIntegrationTests)('LazyRelation', () => {
       const user1 = await createTestUser('User 1', 'user1@test.com');
       const user2 = await createTestUser('User 2', 'user2@test.com');
 
-      const _post1 = await createTestPost(user1.id!, 'Post 1', 'Content');
-      const _post2 = await createTestPost(user1.id!, 'Post 2', 'Content');
-      const _post3 = await createTestPost(user2.id!, 'Post 3', 'Content');
+      await createTestPost(user1.id!, 'Post 1', 'Content');
+      await createTestPost(user1.id!, 'Post 2', 'Content');
+      await createTestPost(user2.id!, 'Post 3', 'Content');
 
       // Load posts
       const posts = await TestPost.find([], { order: 'id' });
 
       // Create a context and preload relations
-      const _context = createRelationContext(TestPostModel, posts as TestPost[]);
+      createRelationContext(TestPostModel, posts as TestPost[]);
 
       // Preload authors using accessor function
       await preloadRelations(posts as TestPost[], (post) => post.author);
@@ -636,14 +636,14 @@ describe.skipIf(skipIntegrationTests)('LazyRelation', () => {
   describe('LazyRelationContext', () => {
     it('should share cache between records in same context', async () => {
       const user = await createTestUser('User', 'user@test.com');
-      const _post1 = await createTestPost(user.id!, 'Post 1', 'Content');
-      const _post2 = await createTestPost(user.id!, 'Post 2', 'Content');
+      await createTestPost(user.id!, 'Post 1', 'Content');
+      await createTestPost(user.id!, 'Post 2', 'Content');
 
       // Load posts in same context
       const posts = await TestPost.find([], { order: 'id' });
 
       // Create context and set it for all posts
-      const _context = createRelationContext(TestPostModel, posts as TestPost[]);
+      createRelationContext(TestPostModel, posts as TestPost[]);
 
       // Access author for first post - loads from DB
       const author1 = await (posts[0] as TestPost).author;
@@ -777,7 +777,7 @@ describe.skipIf(skipIntegrationTests)('LazyRelation', () => {
 
     it('should handle belongsTo with composite key', async () => {
       // Create user in tenant 1
-      const _user = await createTenantUser(1, 100, 'Tenant1 User');
+      await createTenantUser(1, 100, 'Tenant1 User');
       
       // Create post by this user
       const post = await createTenantPost(1, 1, 100, 'Test Post');
@@ -833,9 +833,9 @@ describe.skipIf(skipIntegrationTests)('LazyRelation', () => {
 
     it('should batch load composite key relations efficiently', async () => {
       // Create multiple users across tenants
-      const _user1 = await createTenantUser(1, 100, 'User 1');
-      const _user2 = await createTenantUser(1, 101, 'User 2');
-      const _user3 = await createTenantUser(2, 100, 'User 3');
+      await createTenantUser(1, 100, 'User 1');
+      await createTenantUser(1, 101, 'User 2');
+      await createTenantUser(2, 100, 'User 3');
 
       // Create posts for each user
       await createTenantPost(1, 1, 100, 'User1 Post 1');
@@ -937,11 +937,6 @@ describe.skipIf(skipIntegrationTests)('LazyRelation', () => {
     // ============================================
 
     it('should use = ANY(?::type[]) for single key batch loading on PostgreSQL', async () => {
-      // Skip if not PostgreSQL
-      if (DBModel.getDriverType() !== 'postgres') {
-        return;
-      }
-
       // Create test data
       const user1 = await createTestUser('User 1', 'user1@anytest.com');
       const user2 = await createTestUser('User 2', 'user2@anytest.com');
@@ -973,15 +968,10 @@ describe.skipIf(skipIntegrationTests)('LazyRelation', () => {
     });
 
     it('should use unnest + JOIN for composite key batch loading on PostgreSQL', async () => {
-      // Skip if not PostgreSQL
-      if (DBModel.getDriverType() !== 'postgres') {
-        return;
-      }
-
       // Create multi-tenant test data
-      const _user1 = await createTenantUserForN1(1, 100, 'Tenant1 User1');
-      const _user2 = await createTenantUserForN1(1, 101, 'Tenant1 User2');
-      const _user3 = await createTenantUserForN1(2, 100, 'Tenant2 User1');
+      await createTenantUserForN1(1, 100, 'Tenant1 User1');
+      await createTenantUserForN1(1, 101, 'Tenant1 User2');
+      await createTenantUserForN1(2, 100, 'Tenant2 User1');
 
       await createTenantPostForN1(1, 1, 100, 'T1U1 Post');
       await createTenantPostForN1(1, 2, 101, 'T1U2 Post');
@@ -1041,11 +1031,6 @@ describe.skipIf(skipIntegrationTests)('LazyRelation', () => {
     });
 
     it('should correctly pass array parameter for ANY clause', async () => {
-      // Skip if not PostgreSQL
-      if (DBModel.getDriverType() !== 'postgres') {
-        return;
-      }
-
       // Create test data with specific IDs
       const user1 = await createTestUser('User 1', 'user1@param.com');
       const user2 = await createTestUser('User 2', 'user2@param.com');
@@ -1078,15 +1063,10 @@ describe.skipIf(skipIntegrationTests)('LazyRelation', () => {
     });
 
     it('should correctly pass multiple arrays for unnest composite key', async () => {
-      // Skip if not PostgreSQL
-      if (DBModel.getDriverType() !== 'postgres') {
-        return;
-      }
-
       // Create multi-tenant test data
-      const _user1 = await createTenantUserForN1(10, 200, 'T10 User');
-      const _user2 = await createTenantUserForN1(10, 201, 'T10 User2');
-      const _user3 = await createTenantUserForN1(20, 200, 'T20 User');
+      await createTenantUserForN1(10, 200, 'T10 User');
+      await createTenantUserForN1(10, 201, 'T10 User2');
+      await createTenantUserForN1(20, 200, 'T20 User');
 
       await createTenantPostForN1(10, 1, 200, 'Post');
       await createTenantPostForN1(10, 2, 201, 'Post');
@@ -1224,9 +1204,9 @@ describe.skipIf(skipIntegrationTests)('LazyRelation', () => {
 
     it('should use composite key batch loading', async () => {
       // Create multi-tenant test data
-      const _user1 = await createTenantUserForN1(1, 100, 'Tenant1 User1');
-      const _user2 = await createTenantUserForN1(1, 101, 'Tenant1 User2');
-      const _user3 = await createTenantUserForN1(2, 100, 'Tenant2 User1');
+      await createTenantUserForN1(1, 100, 'Tenant1 User1');
+      await createTenantUserForN1(1, 101, 'Tenant1 User2');
+      await createTenantUserForN1(2, 100, 'Tenant2 User1');
 
       await createTenantPostForN1(1, 1, 100, 'T1U1 Post 1');
       await createTenantPostForN1(1, 2, 100, 'T1U1 Post 2');

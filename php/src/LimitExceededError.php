@@ -64,7 +64,7 @@ final class LimitExceededError extends \RuntimeException
 
     /**
      * The SHARED post-fetch runaway check (SSoT) — the ONE `count > limit ⇒ throw` primitive the
-     * relation-context guard ({@see Relation::runRelationOp}) calls, so no path re-implements the
+     * relation-context guard (the `guard` control field the emitter bakes) calls, so no path re-implements the
      * comparison or the error assembly (PHP port of the python `LimitExceededError.check` / rust
      * `LimitExceededError::check` / go `CheckLimit` SSoT). Returns (no-op) when within the cap;
      * throws otherwise. `find`-context reads run their own node-matching guard inline

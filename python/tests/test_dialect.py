@@ -8,14 +8,14 @@ from __future__ import annotations
 
 import pytest
 
-from litedbmodel_runtime import order_by_nulls
+from litedbmodel_runtime import dialect_for
 
 
 @pytest.mark.parametrize("dialect", ["sqlite", "postgres"])
 @pytest.mark.parametrize("direction", ["ASC", "DESC"])
 @pytest.mark.parametrize("nulls", ["FIRST", "LAST"])
 def test_native_nulls_ordering(dialect, direction, nulls):
-    assert order_by_nulls("created_at", direction, nulls, dialect) == f"created_at {direction} NULLS {nulls}"
+    assert dialect_for(dialect).order_by_nulls("created_at", direction, nulls) == f"created_at {direction} NULLS {nulls}"
 
 
 @pytest.mark.parametrize(
@@ -28,4 +28,4 @@ def test_native_nulls_ordering(dialect, direction, nulls):
     ],
 )
 def test_mysql_is_null_emulation(direction, nulls, expected):
-    assert order_by_nulls("created_at", direction, nulls, "mysql") == expected
+    assert dialect_for("mysql").order_by_nulls("created_at", direction, nulls) == expected

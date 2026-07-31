@@ -1,0 +1,31 @@
+# litedbmodel SCP LIVE-DB conformance — the Rust leg (#36 WS7g; leaf/emitter cutover #141, #163).
+#
+# A litedbmodel-CONSUMER + conformance harness: it drives the bc-GENERATED covered modules
+# (src/gen/<dialect>.rs, written by conformance/gen-livedb.ts) against live docker Postgres + MySQL
+# through litedbmodel_runtime's op-agnostic leaves, and byte-compares each vector against the frozen
+# corpus. A workspace MEMBER (so `cargo run -p livedb_runner` resolves it) but NOT a default-member —
+# the SQLite conformance bar (`cargo build`/`cargo test` with no -p) stays lean and pulls neither the
+# postgres nor mysql crate; the live drivers arrive only with `--features livedb`.
+[package]
+name = "livedb_runner"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "livedb_runner"
+path = "src/main.rs"
+
+[dependencies]
+# The op-agnostic leaves + live drivers the generated modules call. `livedb` pulls the postgres/mysql
+# drivers; without it the crate still compiles (the connection code is feature-gated), matching orm_bench.
+litedbmodel_runtime = { path = "../litedbmodel_runtime", default-features = false }
+# Pin the transitive behavior-contracts to the EXACT version the rust/ workspace lock uses (the runtime
+# is written against that crate API). Not used directly except for the shared BehaviorError type.
+behavior-contracts = { version = "=0.11.17", default-features = false }
+# Parse the pure-JSON corpus + build the machine-comparable result/summary (a runner-only dep).
+serde_json = { version = "1", features = ["preserve_order"] }
+
+[features]
+default = []
+livedb = ["litedbmodel_runtime/livedb"]

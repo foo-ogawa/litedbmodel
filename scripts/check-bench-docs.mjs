@@ -55,18 +55,36 @@ if (withRegions.length === 0) {
 const expected = withRegions.flatMap((file) => regionsOf(readFileSync(file, 'utf8')).map((r) => `${relative(ROOT, file)}:${r.marker}`));
 console.log(`🧹 Blanking ${expected.length} embed region(s) so an unrendered one cannot pass unnoticed:`);
 for (const id of expected) console.log(`   ${id}`);
-for (const file of withRegions) {
-  writeFileSync(file, readFileSync(file, 'utf8').replace(REGION, '$1$4'));
+
+// Blanking is destructive to TRACKED files, so the pre-blank text is held and written back on any
+// failure: a developer whose run fails locally gets the diagnosis, not a gutted working tree. Nothing
+// calls `process.exit` inside the `try` — that skips `finally` and would leave the files blanked.
+const original = new Map(withRegions.map((file) => [file, readFileSync(file, 'utf8')]));
+let empty = [];
+let rendered = false;
+try {
+  for (const [file, text] of original) writeFileSync(file, text.replace(REGION, '$1$4'));
+
+  execFileSync('npx', ['embedoc', 'build'], { cwd: ROOT, stdio: 'inherit' });
+  execFileSync('npx', ['tsx', 'benchmark/generate-chart.ts'], { cwd: ROOT, stdio: 'inherit' });
+
+  empty = withRegions.flatMap((file) =>
+    regionsOf(readFileSync(file, 'utf8'))
+      .filter((r) => r.body.trim() === '')
+      .map((r) => `${relative(ROOT, file)}:${r.marker}`),
+  );
+  rendered = empty.length === 0;
+} finally {
+  if (!rendered) {
+    // Only files that actually changed are written back. Writing every one would re-raise the very
+    // error that aborted the run (an unwritable target), and a throw from `finally` replaces the
+    // diagnosis with itself.
+    const restored = [...original].filter(([file, text]) => readFileSync(file, 'utf8') !== text);
+    for (const [file, text] of restored) writeFileSync(file, text);
+    console.error(`\n   (restored ${restored.length} of ${original.size} file(s) to their pre-run content)`);
+  }
 }
 
-execFileSync('npx', ['embedoc', 'build'], { cwd: ROOT, stdio: 'inherit' });
-execFileSync('npx', ['tsx', 'benchmark/generate-chart.ts'], { cwd: ROOT, stdio: 'inherit' });
-
-const empty = withRegions.flatMap((file) =>
-  regionsOf(readFileSync(file, 'utf8'))
-    .filter((r) => r.body.trim() === '')
-    .map((r) => `${relative(ROOT, file)}:${r.marker}`),
-);
 if (empty.length > 0) {
   console.error(`\n❌ ${empty.length} embed region(s) were not rendered — embedoc reported success without running them:`);
   for (const id of empty) console.error(`   ${id}`);

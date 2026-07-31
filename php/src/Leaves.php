@@ -20,13 +20,15 @@ namespace LiteDbModel\Runtime;
  *     param — a relation key set from `pluck` or a batch record set — rides per dialect: sqlite/mysql
  *     JSON-encode it for `json_each`/`JSON_TABLE`, postgres binds the array as-is), and run it through
  *     the runtime's central {@see execute()} / {@see run()} seam on the bound context — the ONLY driver
- *     contact. The OPTIONAL `guard` port is the RELATION runaway cap of a guarded relation child fetch:
- *     the raw rows are asserted against it HERE ({@see LimitExceededError::check}) because past `group`
- *     the graph is already nested. A non-returning write returns a one-row
+ *     contact. Everything besides the statement rides in the OPTIONAL `opts` control record (absent ⇒ a
+ *     plain read): `opts->guard` is the RELATION runaway cap of a guarded relation child fetch
+ *     (absent/null ⇒ uncapped), asserted against the raw rows HERE
+ *     ({@see LimitExceededError::check}) because past `group` the graph is already nested. A
+ *     non-returning write returns a one-row
  *     `[{changes, lastInsertRowid}]` summary so the leaf output shape is uniform (a list of rows).
  *   - `pluck` — rows + the ordered key-column TUPLE → the deduped, non-null batch key set (single-key →
  *     a flat scalar array; composite → an array-of-tuples). Delegates the dedupe to the shared grouping
- *     core ({@see Grouping::dedupeKeyTuples}) — the SAME SSoT the runtime relation path uses.
+ *     core ({@see Grouping::dedupeKeyTuples}) — the SAME SSoT every relation consumer uses.
  *   - `group` — parents + flat children → each parent with its children nested under `into` per
  *     cardinality. Delegates to the shared grouping core ({@see Grouping::groupByKey} /
  *     {@see Grouping::attachToParent}) — the SAME SSoT, no duplicated grouping.
@@ -34,64 +36,153 @@ namespace LiteDbModel\Runtime;
  * The leaf is injected context-bound (a closure over the {@see ExecutionContext} + dialect) rather than
  * resolving an ambient driver: the bc PHP boundary is `bind($handlers)`, so the transport is handed in
  * directly. `executeSQL` resolves the AMBIENT tx-scoped ctx ({@see currentContext()}) first so every
- * statement inside a `withTransaction` scope runs on the tx-OWNED connection (the tx boundary is the
+ * statement inside a `withTransaction` scope of the tx's own database runs on the tx-OWNED connection (a statement
+ * naming a DIFFERENT database is rejected) (the tx boundary is the
  * runtime's BEGIN/COMMIT/ROLLBACK, never baked into the generated runner); outside a tx it falls back
  * to the bound ctx.
  */
 final class Leaves
 {
     /**
-     * The SQL keywords that may follow a WHERE clause — a dynamic WHERE splices in BEFORE the first
-     * of them, at exactly the position a bounded WHERE occupies.
+     * The six `at` labels the fail-closed field read names — one per leaf payload (`executeSQL` /
+     * `pluck` / `group`), plus the control record, the dynamic-WHERE plan and one of its fragments.
      */
-    private const WHERE_TAIL_RE = '/\s+(GROUP BY|ORDER BY|LIMIT|OFFSET|FOR UPDATE|RETURNING)\b/i';
+    private const PAYLOAD = 'the executeSQL payload';
+    private const PLUCK = 'the pluck payload';
+    private const GROUP = 'the group payload';
+    private const RECORD = "the 'opts' control record";
+    private const PLAN = "the 'whereDynamic' plan";
+    private const FRAG = "a 'whereDynamic' fragment";
 
-    /** Splice a ` WHERE …` clause (leading space included, or '') before the first tail keyword. */
-    private static function spliceWhere(string $baseSql, string $whereSql): string
+    /**
+     * Confirm ONE unboxed value against its DECLARED type, exactly as the catalog spells it
+     * (`src/scp/leaf-transport.ts`) — the php leg's ONE wrong-type failure, and the twin of the go
+     * `portErr` wrong-variant half / rust `port_mismatch`. A `|null` suffix marks a NULLABLE field,
+     * whose `null` is the declared absence.
+     *
+     * A field of the wrong type is the same ABI break as a missing one, for the same reason: the
+     * generator emits the literal the port's type says, so nothing else can arrive from a generated
+     * module. Coercing it instead ran an INSERT on the read seam (`returning` not a bool), applied a
+     * predicate the call SKIPPED (`skipped` not a bool) or spliced a cast number in place of a
+     * predicate (`sql` not a string). A leaf STRUCT is a `\stdClass` on this plane and a leaf LIST is a
+     * PHP array — the bc php value model (`ExprEval` renders `{obj:…}` / `{arr:…}` as exactly those).
+     */
+    private static function typed(mixed $value, string $what, string $declared): mixed
     {
-        if ($whereSql === '') {
-            return $baseSql;
+        $kind = str_ends_with($declared, '|null') ? substr($declared, 0, -5) : $declared;
+        if ($kind !== $declared && $value === null) {
+            return null;
         }
-        if (preg_match(self::WHERE_TAIL_RE, $baseSql, $m, PREG_OFFSET_CAPTURE) !== 1) {
-            return $baseSql . $whereSql;
+        $ok = match ($kind) {
+            'bool' => is_bool($value),
+            'int' => is_int($value),
+            'string' => is_string($value),
+            // A leaf LIST is a php array with the keys 0..n-1. `array_is_list` is what makes that the
+            // SAME predicate the other four legs apply (TS `Array.isArray`, python `isinstance(v, list)`,
+            // the go / rust `list` wire variant): php's `is_array` alone also accepts a string-keyed MAP,
+            // which is a `record` on this plane and never a list.
+            'list' => is_array($value) && array_is_list($value),
+            // The ordered key-column TUPLE (`col` / `pk` / `fk`): a list whose every element is a column
+            // NAME — the same element check the go `portStrings` / rust `port_strings` probes make.
+            'string[]' => is_array($value) && array_is_list($value)
+                && $value === array_filter($value, 'is_string'),
+            'record' => is_object($value),
+        };
+        if (!$ok) {
+            throw new \RuntimeException(
+                "scp leaf: {$what} must be {$declared}, got " . json_encode($value),
+            );
         }
-        $at = $m[0][1];
-        return substr($baseSql, 0, $at) . $whereSql . substr($baseSql, $at);
+        return $value;
     }
 
     /**
-     * The `[sql, params]` a statement actually executes: the DYNAMIC (SKIP) WHERE plan assembled when
-     * one is present, the ports verbatim otherwise. Port of `src/scp/leaves.ts` `assembleDynamicWhere`.
+     * Read ONE DECLARED field out of a payload / struct that IS present — the php leg's ONE fail-closed
+     * field read (the twin of the go `optRowField` / rust `take_opt_row` discipline). Presence and the
+     * DECLARED type ({@see typed()}) are confirmed at the SAME read, exactly as go's and rust's typed
+     * probes confirm both.
      *
-     * A SKIP predicate's presence is per-CALL, so the FINAL statement can only be determined here, at
-     * execution time — which is why the placeholder render runs AFTER this (CLAUDE.md §2). bc has
-     * ALREADY evaluated each fragment's params and its SKIP guard, so a dropped fragment arrives as
-     * null; the survivors join with ` WHERE `/` AND ` and their params bind BEFORE the base params.
+     * `null` is a VALUE (the declared absence of a write mode / a plan / a cap / a model); a MISSING KEY
+     * is an ABI BREAK, and the two must not collapse: bc types a port by the literal wired into it and
+     * REJECTS a partial struct, so a generated module ALWAYS spells every field of every struct it
+     * wires. A key that is not there did not come from one, and defaulting it would silently downgrade a
+     * write to a read, drop a relation cap, or erase a SKIP predicate (#205).
+     *
+     * @param array<string, mixed>|object $record
+     */
+    private static function required(array|object $record, string $name, string $at, string $declared): mixed
+    {
+        $present = is_array($record) ? array_key_exists($name, $record) : property_exists($record, $name);
+        if (!$present) {
+            throw new \RuntimeException(
+                "scp leaf: {$at} is missing its '{$name}' field — a generated module spells "
+                . 'every field of every struct it wires, so an ABSENT key is an ABI break (a null VALUE '
+                . 'is how an absent write mode / plan / cap is spelled)',
+            );
+        }
+        return self::typed(is_array($record) ? $record[$name] : $record->{$name}, "{$at}'s '{$name}'", $declared);
+    }
+
+    /**
+     * The `[sql, params]` a statement actually executes: the DYNAMIC (SKIP) WHERE plan assembled when it
+     * has surviving fragments, the ports verbatim otherwise. Port of `src/scp/leaves.ts`
+     * `assembleDynamicWhere`.
+     *
+     * `$plan` is the control record's `whereDynamic` field (null ⇒ no dynamic WHERE — only a read that
+     * declares an OPTIONAL predicate carries one; CLAUDE.md §2). A SKIP predicate's presence is
+     * per-CALL, so the FINAL statement can only be determined here, at execution time — which is why the
+     * placeholder render runs AFTER this. bc carries each fragment's SKIP decision as DATA: a skipped
+     * fragment is PRESENT with `skipped` true (never omitted), so assembly DROPS the `skipped`
+     * fragments; the survivors join with ` AND ` and the three pieces already in hand are CONCATENATED —
+     * the statement's HEAD (the `sql` port when a plan is present), the clause, the plan's `tail` — with
+     * the params in the same order: the head's, the survivors', the tail's.
+     *
+     * Nothing is LOCATED here: the emitter's SELECT builder is what put the WHERE in the statement, so
+     * `lead` / `tail` / `tailParams` arrive on the plan. A scan of the finished statement took a NESTED
+     * statement's tail keyword for the outer one's (#198) and counted a QUOTED `?` the placeholder render
+     * skips (#202).
      *
      * @param array<string, mixed> $ports
      * @return array{0: string, 1: list<mixed>}
      */
-    private static function effectiveStatement(array $ports): array
+    private static function effectiveStatement(array $ports, mixed $plan): array
     {
         /** @var list<mixed> $params */
-        $params = array_values($ports['params']);
-        $plan = $ports['whereDynamic'] ?? null;
+        $params = array_values(self::required($ports, 'params', self::PAYLOAD, 'list'));
+        $sql = self::required($ports, 'sql', self::PAYLOAD, 'string');
         if ($plan === null) {
-            return [(string) $ports['sql'], $params];
+            return [$sql, $params];
         }
-        $whereSql = '';
+        $clause = '';
         $whereParams = [];
-        foreach (((array) $plan)['frags'] ?? [] as $frag) {
-            if ($frag === null) {
+        // EVERY field of EVERY fragment is unboxed fail-closed BEFORE any of them is used, skipped ones
+        // included — a fragment is a PRESENT struct like every other and the generator spells it in
+        // full, so a missing or mistyped field is an ABI break and NOT a default: without `skipped` the
+        // statement applies a predicate the call SKIPPED, without `sql` the predicate is erased
+        // entirely, and without `params` a value binds where none belongs — each silently returning
+        // DIFFERENT ROWS (#209). The go / rust transports unbox the same three fields the same way. The
+        // plan's own three fields are read the same way: a defaulted `lead` opens a second WHERE (or
+        // continues an absent one) and a defaulted tail DROPS the ORDER BY and the page.
+        foreach (self::required($plan, 'frags', self::PLAN, 'list') as $frag) {
+            $frag = self::typed($frag, self::FRAG, 'record');
+            $skipped = self::required($frag, 'skipped', self::FRAG, 'bool');
+            $fragSql = self::required($frag, 'sql', self::FRAG, 'string');
+            $fragParams = self::required($frag, 'params', self::FRAG, 'list');
+            if ($skipped) {
                 continue;
             }
-            $f = (array) $frag;
-            $whereSql .= ($whereSql === '' ? ' WHERE ' : ' AND ') . (string) $f['sql'];
-            foreach ($f['params'] as $p) {
+            $clause .= ($clause === '' ? '' : ' AND ') . $fragSql;
+            foreach ($fragParams as $p) {
                 $whereParams[] = $p;
             }
         }
-        return [self::spliceWhere((string) $ports['sql'], $whereSql), array_merge($whereParams, $params)];
+        $lead = self::required($plan, 'lead', self::PLAN, 'string');
+        $tail = self::required($plan, 'tail', self::PLAN, 'string');
+        $tailParams = array_values(self::required($plan, 'tailParams', self::PLAN, 'list'));
+        return [
+            $sql . ($clause === '' ? '' : " {$lead} {$clause}") . $tail,
+            array_merge($params, $whereParams, $tailParams),
+        ];
     }
 
     /**
@@ -145,13 +236,30 @@ final class Leaves
 
         $executeSQL = static function (array $ports, array $_ctx) use ($ctx, $dialect): array {
             // Resolve the AMBIENT tx-scoped ctx when this leaf runs inside a `withTransaction` scope
-            // (the combinator pins it), so every statement resolves the tx-OWNED connection — the tx
+            // (the combinator pins it), so every statement of the tx's own database (an unnamed one, or one naming that database) resolves
+            // the tx-OWNED connection — the tx
             // boundary is the runtime's, not baked into the generated runner. Outside a tx,
             // `currentContext()` is null ⇒ the bound ctx.
             $active = currentContext() ?? $ctx;
+            // The OPTIONAL `opts` control record — how to run the statement plus the two optional control
+            // structs. An OMITTED port is the ONE legitimate absence: a plain READ with no dynamic WHERE
+            // and no cap (the ONE statement shape that omits it, so its payload is `sql` + `params` and
+            // nothing else). Once the port IS there it is read exactly like every field below — its own
+            // `null` is the same plain read, anything that is not the control record is an ABI break.
+            $opts = array_key_exists('opts', $ports)
+                ? self::required($ports, 'opts', self::PAYLOAD, 'record|null')
+                : null;
+            // Every FIELD of a record that IS present is required — a missing or mistyped key is an ABI
+            // break, not an absent value.
+            $plan = $opts === null ? null : self::required($opts, 'whereDynamic', self::RECORD, 'record|null');
+            // The NAMED connection (database) this statement runs on — the only control field that is a
+            // bare nullable STRING rather than a struct. `null` ⇒ the DEFAULT connection; an ABSENT KEY is
+            // LOUD like every other field of a record that IS present, because a name read as "no name"
+            // runs the statement against a DIFFERENT database than its model declares (#217).
+            $db = $opts === null ? null : self::required($opts, 'db', self::RECORD, 'string|null');
             // The DYNAMIC (SKIP) WHERE is assembled FIRST: the final statement shape is only known
             // here, so the placeholder render must follow it (CLAUDE.md §2).
-            [$effectiveSql, $effectiveParams] = self::effectiveStatement($ports);
+            [$effectiveSql, $effectiveParams] = self::effectiveStatement($ports, $plan);
             if ($dialect === 'postgres') {
                 // The DEFERRED `?::<T>[]` element type (#46) resolves from the REAL bound key set —
                 // the same render-layer step, and the same SSoT, the imperative relation path uses.
@@ -164,38 +272,60 @@ final class Leaves
             $sql = StaticBundle::renderPlaceholders($effectiveSql, $dialect);
             $params = self::bindParams($effectiveParams, $dialect);
             try {
-                if (($ports['write'] ?? false) && !($ports['returning'] ?? false)) {
-                    $info = run($active, $sql, $params, StatementIntent::write());
+                // `write` is the statement's RUN MODE: null ⇒ a read; an object ⇒ a write carrying
+                // its OWN `returning` (ONE field, three values — "returns rows but is not a write" is
+                // not a state the ABI can hold, #206).
+                $write = $opts === null ? null : self::required($opts, 'write', self::RECORD, 'record|null');
+                // The seam INTENT the RUN MODE reduces to: a write mode PRESENT ⇒ a WRITE (the writer /
+                // tx connection), absent ⇒ a READ. Derived BEFORE the branch, because the branch selects
+                // the SEAM (`returning` ⇒ the row seam) while the intent selects the CONNECTION
+                // ({@see resolvePool()}): a RETURNING write runs on {@see execute()} and still belongs on
+                // the WRITER. Reading `returning` as the intent sent `INSERT … RETURNING` to the READ
+                // REPLICA (#207).
+                //
+                // The NAMED database rides on the SAME intent, because {@see resolvePool()} resolves both
+                // together: it picks the named connection's reader/writer PAIR first, then the
+                // write/sticky split within it. `null` ⇒ the default connection, i.e. the intent every
+                // single-DB statement has always carried.
+                $intent = new StatementIntent($write !== null, $db);
+                if ($write !== null && !self::required($write, 'returning', "the 'write' mode", 'bool')) {
+                    $info = run($active, $sql, $params, $intent);
                     // The affected-write summary row (uniform list output shape — TS `writeSummary`).
                     return ['ok' => [(object) ['changes' => $info->changes, 'lastInsertRowid' => $info->lastInsertRowid]]];
                 }
-                $rows = execute($active, $sql, $params, StatementIntent::read());
+                $rows = execute($active, $sql, $params, $intent);
             } catch (SqlFailure $e) {
                 return ['error' => $e->getMessage()];
             }
             // The RELATION runaway guard, on the RAW child rows — the only point they are visible (past
             // `group` the graph is already nested) and the reason the cap rides on this transport at
             // all. The comparison + error assembly are the shared {@see LimitExceededError::check} SSoT,
-            // so this path cannot drift from the runtime relation path ({@see Relation}) or from the TS
+            // so this path cannot drift from the TS
             // reference. It THROWS rather than returning `['error' => …]`: a runaway is a litedbmodel
             // policy error with typed fields, not a mapped transport failure (the TS leaf throws too).
-            $guard = $ports['guard'] ?? null;
+            $guard = $opts === null ? null : self::required($opts, 'guard', self::RECORD, 'record|null');
             if ($guard !== null) {
+                $at = "the 'guard' cap";
                 LimitExceededError::check(
-                    (int) $guard->limit,
+                    self::required($guard, 'limit', $at, 'int'),
                     count($rows),
                     'relation',
-                    isset($guard->model) ? (string) $guard->model : null,
-                    (string) $guard->relation,
+                    self::required($guard, 'model', $at, 'string|null'),
+                    self::required($guard, 'relation', $at, 'string'),
                 );
             }
             return ['ok' => $rows];
         };
 
+        // `pluck` / `group` read their ports through the SAME fail-closed reader the SQL transport uses
+        // ({@see required()}) — a FLAT port shape is not a reason to trust it. The `(string)` / `(bool)`
+        // casts below WERE the silent path: a mistyped `single` flipped the relation's CARDINALITY (a
+        // `hasMany` nesting ONE child), `into` = 42 nested the relation under `"42"`, and an absent
+        // `pk` / `col` raised an E_WARNING-shaped failure that named no port at all (#213).
         $pluck = static function (array $ports, array $_ctx): array {
             /** @var list<string> $col */
-            $col = $ports['col'];
-            $tuples = Grouping::dedupeKeyTuples($ports['rows'], $col);
+            $col = self::required($ports, 'col', self::PLUCK, 'string[]');
+            $tuples = Grouping::dedupeKeyTuples(self::required($ports, 'rows', self::PLUCK, 'list'), $col);
             // single-key → a flat scalar key array (json_each scalar `value`); composite → an
             // array-of-tuples (json_each per-ordinal `$[i]`) — the SAME shape `Relation` binds.
             $keys = count($col) === 1
@@ -205,17 +335,20 @@ final class Leaves
         };
 
         $group = static function (array $ports, array $_ctx): array {
-            $into = (string) $ports['into'];
-            $single = (bool) $ports['single'];
+            $into = self::required($ports, 'into', self::GROUP, 'string');
+            $single = self::required($ports, 'single', self::GROUP, 'bool');
             /** @var list<string> $pk */
-            $pk = $ports['pk'];
-            $byKey = Grouping::groupByKey($ports['children'], $ports['fk']);
+            $pk = self::required($ports, 'pk', self::GROUP, 'string[]');
+            $byKey = Grouping::groupByKey(
+                self::required($ports, 'children', self::GROUP, 'list'),
+                self::required($ports, 'fk', self::GROUP, 'string[]'),
+            );
             // {...par, [into]: nested}: shallow-clone each parent (the input is not mutated — TS spread).
             $out = array_map(static function (\stdClass $par) use ($pk, $into, $byKey, $single): \stdClass {
                 $o = clone $par;
                 $o->{$into} = Grouping::attachToParent($par, $pk, $byKey, $single);
                 return $o;
-            }, $ports['parents']);
+            }, self::required($ports, 'parents', self::GROUP, 'list'));
             return ['ok' => $out];
         };
 

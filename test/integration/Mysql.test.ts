@@ -8,6 +8,7 @@
 import 'reflect-metadata';
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { DBModel, model, column, ColumnsOf, closeAllPools } from '../../src';
+import { mysqlConfig } from '../helpers/setup';
 import type { DBConfig } from '../../src';
 
 // Define a model for all types testing (outside describe block for decorator support)
@@ -31,23 +32,39 @@ const AllTypes = AllTypesModel as typeof AllTypesModel & ColumnsOf<AllTypesModel
 // Test Configuration
 // ============================================
 
-const testConfig: DBConfig = {
-  host: 'localhost',
-  port: 3307,
-  database: 'testdb',
-  user: 'testuser',
-  password: 'testpass',
-  driver: 'mysql',
-};
+// From the ONE env-driven definition every other integration file uses (test/helpers/setup.ts). It was
+// a local literal with `host: 'localhost', port: 3307` hardcoded, so TEST_MYSQL_HOST/TEST_MYSQL_PORT
+// could not move this file: it connected to whatever was on 3307 no matter what the environment said.
+// That made it impossible to re-run the live suite against an unreachable server — which is how
+// scripts/check-ts-test-skips.mjs proves the live legs really dial one (#220 phase 2, #226).
+const testConfig: DBConfig = mysqlConfig;
 
-// Check if MySQL is available
-const isMysqlAvailable = async (): Promise<boolean> => {
+/**
+ * Assert MySQL is REACHABLE, failing loudly if it is not (#230).
+ *
+ * This used to be `isMysqlAvailable(): Promise<boolean>` and every one of the 30 tests below opened
+ * with `if (!mysqlAvailable) return;`. A `return` is a PASS: with no MySQL the file reported
+ * `28 passed` having executed nothing, and the output is IDENTICAL to a run against a real server —
+ * so nothing, including the skip budget in scripts/check-ts-test-skips.mjs, could tell them apart.
+ * That is #219 (go's live legs skipping) in a worse form, because a skip at least shows up in a count.
+ *
+ * Fail-closed is this repository's established rule, not a new decision: rust's
+ * `tests/common/mod.rs:require_live_db` PANICS, and the cross-language conformance runner's contract is
+ * "NO mock, NO silent skip". To run the rest of the suite without MySQL, close the live-DB gates
+ * explicitly (`livedb-gates.env`) — the run gate asserts they are OPEN before it starts, so a closed
+ * gate is RED there and cannot be mistaken for coverage.
+ */
+const requireMysql = async (): Promise<void> => {
+  DBModel.setConfig(testConfig);
   try {
-    DBModel.setConfig(testConfig);
     await DBModel.execute('SELECT 1');
-    return true;
-  } catch {
-    return false;
+  } catch (cause) {
+    throw new Error(
+      `this suite requires a real MySQL at ${testConfig.host}:${testConfig.port} and could not reach it. ` +
+        `Bring the stack up (\`npm run docker:livedb:up\`) or point TEST_MYSQL_HOST/TEST_MYSQL_PORT at one. ` +
+        `Returning early here would report PASS for tests that never ran (#230).`,
+      { cause },
+    );
   }
 };
 
@@ -85,28 +102,17 @@ const PostModel = Post as typeof Post & ColumnsOf<Post>;
 // ============================================
 
 describe('MySQL Driver', () => {
-  let mysqlAvailable = false;
-
   beforeAll(async () => {
-    mysqlAvailable = await isMysqlAvailable();
-    if (!mysqlAvailable) {
-      console.log('MySQL not available, skipping tests. Run: docker-compose -f docker-compose.test.yml up -d mysql');
-      return;
-    }
-
-    // Initialize DBModel with MySQL config
-    DBModel.setConfig(testConfig);
+    // Throws if MySQL is unreachable, which fails every test in this file. The `mysqlAvailable` flag
+    // and the 30 `if (!mysqlAvailable) return;` guards it fed are GONE: each was a silent PASS (#230).
+    await requireMysql();
   });
 
   afterAll(async () => {
-    if (mysqlAvailable) {
-      await closeAllPools();
-    }
+    await closeAllPools();
   });
 
   beforeEach(async () => {
-    if (!mysqlAvailable) return;
-
     // Clear test data (respect foreign key order)
     await DBModel.execute('DELETE FROM post_tags');
     await DBModel.execute('DELETE FROM posts');
@@ -119,8 +125,6 @@ describe('MySQL Driver', () => {
 
   describe('Basic CRUD Operations', () => {
     it('should create a record', async () => {
-      if (!mysqlAvailable) return;
-
       const result = await DBModel.transaction(async () => {
         return await UserModel.create([
           [UserModel.name, 'Alice'],
@@ -137,8 +141,6 @@ describe('MySQL Driver', () => {
     });
 
     it('should find records', async () => {
-      if (!mysqlAvailable) return;
-
       await DBModel.transaction(async () => {
         await UserModel.create([
           [UserModel.name, 'Bob'],
@@ -155,8 +157,6 @@ describe('MySQL Driver', () => {
     });
 
     it('should find with conditions', async () => {
-      if (!mysqlAvailable) return;
-
       await DBModel.transaction(async () => {
         await UserModel.create([
           [UserModel.name, 'David'],
@@ -176,8 +176,6 @@ describe('MySQL Driver', () => {
     });
 
     it('should find one record', async () => {
-      if (!mysqlAvailable) return;
-
       await DBModel.transaction(async () => {
         await UserModel.create([
           [UserModel.name, 'Frank'],
@@ -191,8 +189,6 @@ describe('MySQL Driver', () => {
     });
 
     it('should update a record', async () => {
-      if (!mysqlAvailable) return;
-
       const result = await DBModel.transaction(async () => {
         return await UserModel.create([
           [UserModel.name, 'Grace'],
@@ -213,8 +209,6 @@ describe('MySQL Driver', () => {
     });
 
     it('should delete a record', async () => {
-      if (!mysqlAvailable) return;
-
       const result = await DBModel.transaction(async () => {
         return await UserModel.create([
           [UserModel.name, 'Henry'],
@@ -234,8 +228,6 @@ describe('MySQL Driver', () => {
 
   describe('Instance Methods', () => {
     it('should create a new record using static create()', async () => {
-      if (!mysqlAvailable) return;
-
       await DBModel.transaction(async () => {
         const result = await UserModel.create([
           [UserModel.name, 'Ivan'],
@@ -251,8 +243,6 @@ describe('MySQL Driver', () => {
     });
 
     it('should update an existing record using static update()', async () => {
-      if (!mysqlAvailable) return;
-
       const createResult = await DBModel.transaction(async () => {
         return await UserModel.create([
           [UserModel.name, 'Jane'],
@@ -274,8 +264,6 @@ describe('MySQL Driver', () => {
     });
 
     it('should delete a record using static delete()', async () => {
-      if (!mysqlAvailable) return;
-
       const createResult = await DBModel.transaction(async () => {
         return await UserModel.create([
           [UserModel.name, 'Kevin'],
@@ -294,8 +282,6 @@ describe('MySQL Driver', () => {
     });
 
     it('should reload a record', async () => {
-      if (!mysqlAvailable) return;
-
       const createResult = await DBModel.transaction(async () => {
         return await UserModel.create([
           [UserModel.name, 'Lisa'],
@@ -322,8 +308,6 @@ describe('MySQL Driver', () => {
 
   describe('Relations', () => {
     it('should handle foreign key relationships', async () => {
-      if (!mysqlAvailable) return;
-
       const { userId, postId } = await DBModel.transaction(async () => {
         const userResult = await UserModel.create([
           [UserModel.name, 'Author'],
@@ -351,8 +335,6 @@ describe('MySQL Driver', () => {
 
   describe('Count and Aggregation', () => {
     it('should count records', async () => {
-      if (!mysqlAvailable) return;
-
       await DBModel.transaction(async () => {
         await UserModel.create([
           [UserModel.name, 'Count1'],
@@ -373,8 +355,6 @@ describe('MySQL Driver', () => {
     });
 
     it('should count with conditions', async () => {
-      if (!mysqlAvailable) return;
-
       await DBModel.transaction(async () => {
         await UserModel.create([
           [UserModel.name, 'Active1'],
@@ -400,8 +380,6 @@ describe('MySQL Driver', () => {
 
   describe('Order and Limit', () => {
     it('should order results', async () => {
-      if (!mysqlAvailable) return;
-
       await DBModel.transaction(async () => {
         await UserModel.create([
           [UserModel.name, 'Zeta'],
@@ -424,8 +402,6 @@ describe('MySQL Driver', () => {
     });
 
     it('should limit results', async () => {
-      if (!mysqlAvailable) return;
-
       await DBModel.transaction(async () => {
         for (let i = 0; i < 5; i++) {
           await UserModel.create([
@@ -440,8 +416,6 @@ describe('MySQL Driver', () => {
     });
 
     it('should handle offset', async () => {
-      if (!mysqlAvailable) return;
-
       await DBModel.transaction(async () => {
         for (let i = 0; i < 5; i++) {
           await UserModel.create([
@@ -459,8 +433,6 @@ describe('MySQL Driver', () => {
 
   describe('Transactions', () => {
     it('should commit transaction', async () => {
-      if (!mysqlAvailable) return;
-
       await DBModel.transaction(async () => {
         await UserModel.create([
           [UserModel.name, 'TxCommit'],
@@ -473,8 +445,6 @@ describe('MySQL Driver', () => {
     });
 
     it('should rollback transaction on error', async () => {
-      if (!mysqlAvailable) return;
-
       try {
         await DBModel.transaction(async () => {
           await UserModel.create([
@@ -494,8 +464,6 @@ describe('MySQL Driver', () => {
 
   describe('ON CONFLICT (UPSERT)', () => {
     it('should handle ON DUPLICATE KEY IGNORE', async () => {
-      if (!mysqlAvailable) return;
-
       // Create initial user
       await DBModel.transaction(async () => {
         await UserModel.create([
@@ -523,8 +491,6 @@ describe('MySQL Driver', () => {
     });
 
     it('should handle ON DUPLICATE KEY UPDATE', async () => {
-      if (!mysqlAvailable) return;
-
       // Create initial user
       await DBModel.transaction(async () => {
         await UserModel.create([
@@ -557,8 +523,6 @@ describe('MySQL Driver', () => {
 
   describe('IN Conditions', () => {
     it('should handle IN conditions', async () => {
-      if (!mysqlAvailable) return;
-
       await DBModel.transaction(async () => {
         await UserModel.create([
           [UserModel.name, 'In1'],
@@ -591,13 +555,10 @@ describe('MySQL Driver', () => {
 
   describe('Data Type Persistence', () => {
     beforeEach(async () => {
-      if (!mysqlAvailable) return;
       await DBModel.execute('DELETE FROM all_types_test');
     });
 
     it('should persist and retrieve all basic types correctly via create/find', async () => {
-      if (!mysqlAvailable) return;
-
       const testDate = new Date('2024-06-15T10:30:00.000Z');
       
       // Create via high-level API
@@ -638,8 +599,6 @@ describe('MySQL Driver', () => {
     });
 
     it('should persist and retrieve JSON types correctly via create/find', async () => {
-      if (!mysqlAvailable) return;
-
       const jsonObj = { name: 'test', count: 42, nested: { key: 'value' } };
       const jsonArray = [1, 'two', { three: 3 }];
       
@@ -663,8 +622,6 @@ describe('MySQL Driver', () => {
     });
 
     it('should persist and retrieve NULL values correctly via create/find', async () => {
-      if (!mysqlAvailable) return;
-
       // Create with NULL values via high-level API
       const result = await DBModel.transaction(async () => {
         return await AllTypes.create([
@@ -699,8 +656,6 @@ describe('MySQL Driver', () => {
     });
 
     it('should update and retrieve all types correctly via update/find', async () => {
-      if (!mysqlAvailable) return;
-
       const initialDate = new Date('2024-01-01T00:00:00.000Z');
       const updatedDate = new Date('2024-12-31T23:59:59.000Z');
       
@@ -749,8 +704,6 @@ describe('MySQL Driver', () => {
     });
 
     it('should handle edge case values correctly via create/find', async () => {
-      if (!mysqlAvailable) return;
-
       // Edge cases: zero, false, empty strings, empty JSON
       const result = await DBModel.transaction(async () => {
         return await AllTypes.create([
@@ -783,8 +736,6 @@ describe('MySQL Driver', () => {
     });
 
     it('should handle boolean edge cases correctly', async () => {
-      if (!mysqlAvailable) return;
-
       // Test explicit true
       const trueResult = await DBModel.transaction(async () => {
         return await AllTypes.create([[AllTypes.bool_val, true]], { returning: true });
@@ -811,8 +762,6 @@ describe('MySQL Driver', () => {
     });
 
     it('should handle datetime edge cases correctly', async () => {
-      if (!mysqlAvailable) return;
-
       // Test specific datetime
       const specificDate = new Date('2024-06-15T14:30:45.000Z'); // MySQL doesn't store ms
       const result1 = await DBModel.transaction(async () => {

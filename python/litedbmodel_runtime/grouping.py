@@ -7,7 +7,7 @@ a single source of truth (no duplicated grouping logic):
 
   - the op-INDEPENDENT ``pluck`` / ``group`` leaves (``./leaves``) — the eager N+1-free graph
     (``parents → pluck → executeSQL(WHERE fk = ANY(?)) → group``);
-  - the RUNTIME batch relation path (``./relation`` ``run_relation_op`` / ``distribute_to_parent``),
+  - already-fetched rows, grouped over the SAME algorithm,
     which groups already-fetched rows over the SAME core.
 
 Nothing here touches SQL or a driver: it is pure in-memory grouping over already-fetched rows

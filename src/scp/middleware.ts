@@ -20,7 +20,7 @@
  *      around the connection-resolve terminal.
  *   2. **method-level hook** — at the ORM operation boundary, keyed by the operation KIND
  *      (`find`/`findOne`/`findById`/`count`/`create`/`createMany`/`update`/`updateMany`/`delete`/
- *      `query`). In v2 the "methods" map onto the read (`executeBundle`) / write (`executeTransactionBundle`)
+ *      `query`). In v2 the "methods" map onto the read (leaf `executeSQL`) / write (`executeTransactionAsync`)
  *      operations tagged with their {@link MethodKind}; {@link runMethod} folds the matching method
  *      hooks around the operation. A method hook runs before/after (around) the whole operation and
  *      can rewrite its args / short-circuit its result.
@@ -75,7 +75,7 @@ export type SqlHook = SqlMiddleware<unknown>;
 /**
  * The ORM operation KIND a method hook keys on (v2 maps the v1 method names onto the read/write
  * operations). A read operation (`executeBundle`) is tagged `find`/`findOne`/`findById`/`count`/
- * `query`; a write operation (`executeTransactionBundle`) is tagged `create`/`createMany`/`update`/
+ * `query`; a write operation (`executeTransactionAsync`) is tagged `create`/`createMany`/`update`/
  * `updateMany`/`delete`. {@link runMethod} dispatches to the hook of the matching kind — this is how a
  * method hook DISTINGUISHES the op kind (the tag the operation boundary supplies, NOT a guess from the
  * SQL text).
@@ -268,7 +268,7 @@ export function register(mw: MiddlewareDescriptor): () => void {
 }
 
 /** Register a {@link createMiddleware} handle (or a raw descriptor) — v1 `DBModel.use`. */
-export function use(mw: MiddlewareHandle | MiddlewareDescriptor): () => void {
+export function use<S extends object>(mw: MiddlewareHandle<S> | MiddlewareDescriptor): () => void {
   const descriptor = 'descriptor' in mw ? mw.descriptor : mw;
   return register(descriptor);
 }
@@ -359,7 +359,7 @@ export function createMiddleware<S extends object = Record<string, never>>(
  * rewrite `args`, time `next`, or short-circuit. Empty hooks for this kind ⇒ `core(...args)` verbatim
  * (byte-identical — no method registered = the operation runs untouched). This is the v2 equivalent of
  * v1 `DBModel._applyMiddleware`: the runtime calls it at the read (`executeBundle`) / write
- * (`executeTransactionBundle`) boundary with the op tagged by its {@link MethodKind}.
+ * (`executeTransactionAsync`) boundary with the op tagged by its {@link MethodKind}.
  *
  * @param kind the operation kind (how a method hook distinguishes read vs. write vs. find/create/…).
  * @param model the operation's model/target descriptor (opaque; passed to each hook).

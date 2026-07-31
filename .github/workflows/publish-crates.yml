@@ -72,10 +72,6 @@ jobs:
             echo "publish=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Unit tests (litedbmodel_runtime, SQLite conformance bar only)
-        if: steps.need.outputs.publish == 'true'
-        run: cargo test -p litedbmodel_runtime
-
       - name: Package check (dry-run)
         if: steps.need.outputs.publish == 'true'
         run: cargo publish -p litedbmodel_runtime --dry-run

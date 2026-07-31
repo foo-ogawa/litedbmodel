@@ -11,7 +11,9 @@
  * ## The `connectionFor(intent)` resolution order (design §3, v1 `DBModel.ts:313` parity)
  *
  * A statement's connection is resolved in THIS priority (first match wins):
- *   1. **active tx connection** — inside a transaction, always the tx-owned connection (Phase A).
+ *   1. **active tx connection** — inside a transaction, the tx-owned connection (Phase A). A statement
+ *      naming a DIFFERENT database than the transaction opened on is REJECTED there rather than routed
+ *      ({@link assertTxDbAgrees}) — a transaction cannot span two databases.
  *   2. **writer scope / writer-sticky** — inside {@link withWriter}, or within `writerStickyDuration`
  *      after a transaction (read-your-writes), a READ goes to the WRITER pool (Phase C — here).
  *   3. **read=reader / write=writer** — otherwise a read goes to the reader pool, a write to the
@@ -177,6 +179,59 @@ export function readerWriterPair(reader: AsyncConnectionPool, writer: AsyncConne
 export const DEFAULT_CONNECTION = 'default';
 
 /**
+ * Reject a statement that NAMES a database on a context that holds NO connection registry (the single
+ * -connection / non-routed contexts: the TS `BasicContext`, and each language's `for_driver` twin). The
+ * companion of {@link ConnectionRegistry.pairFor}'s unknown-name throw, and for the same reason: a name
+ * that cannot be resolved must be LOUD, because the alternative is running the statement against
+ * whatever single connection the context happens to hold — a DIFFERENT database than the statement's
+ * model declares. That silent substitution is the defect named-DB lowering closes (#217), and a
+ * single-DB deployment is exactly where it would go unnoticed.
+ *
+ * `undefined`/`null` (the default connection) passes — that IS the single-connection case.
+ */
+export function assertRoutableNamedDb(db: string | undefined | null, contextDescription: string): void {
+  if (effectiveConnection(db) === DEFAULT_CONNECTION) return;
+  throw new Error(
+    `scp connection routing: a statement names connection '${db}', but it is executing on ` +
+      `${contextDescription} — there is no connection registry to resolve the name against. Build the ` +
+      `context from a RoutingConfig (setConfig/ConnectionRegistry), or drop the connection tag on the model.`,
+  );
+}
+
+/** A connection name reduced to its effective identity: unnamed ⇒ {@link DEFAULT_CONNECTION}. */
+function effectiveConnection(db: string | undefined | null): string {
+  return db === undefined || db === null ? DEFAULT_CONNECTION : db;
+}
+
+/**
+ * Reject a statement whose named database is NOT the one the active transaction opened on.
+ *
+ * A transaction is ONE connection on ONE database: a statement that names a DIFFERENT database cannot
+ * be executed atomically with it, in any language, by any amount of routing. So there are exactly two
+ * possible behaviors and no third — run it on the transaction's database (silently the WRONG one), or
+ * refuse. The first is the silent default §7 forbids, and it is what the tx pin did: the pin is resolved
+ * BEFORE routing (it must be — per-execution ownership depends on it), so `intent.db` was dropped
+ * unread and even an UNREGISTERED name never surfaced.
+ *
+ * `txDb` is the transaction's own connection name, which every language's tx-scoped ctx carries (the go /
+ * python / rust `connection` field, the php `RoutingExecutionContext`'s, the TS ALS pin's). An UNNAMED
+ * statement agrees with any transaction — that is the ordinary in-body statement, and it is the shape
+ * every named-DB tx gate pins (a tx on `B` runs its body on `B`). A statement naming the SAME database
+ * agrees too, and runs on the pin.
+ */
+export function assertTxDbAgrees(db: string | undefined | null, txDb: string | undefined | null): void {
+  if (db === undefined || db === null) return; // an unnamed statement belongs to whatever the tx pinned
+  const want = effectiveConnection(db);
+  const open = effectiveConnection(txDb);
+  if (want === open) return;
+  throw new Error(
+    `scp connection routing: a statement names connection '${want}', but it is executing inside a ` +
+      `transaction opened on '${open}' — a transaction is ONE connection on ONE database, so the two ` +
+      `cannot both be honored. Open the transaction on '${want}', or issue the statement outside it.`,
+  );
+}
+
+/**
  * The multi-DB connection registry (C2): a map from a connection NAME → its {@link ReaderWriterPools}.
  * `connectionFor(intent)` selects the pair by `intent.db` (the connection name the bundle/model
  * metadata carries — decorator-free, from config + metadata; decorator wiring is Phase F), falling
@@ -211,7 +266,7 @@ export class ConnectionRegistry {
 
   /** The reader/writer pair for `name` (or {@link DEFAULT_CONNECTION} when `undefined`). Loud on a missing name. */
   pairFor(name: string | undefined): ReaderWriterPools {
-    const key = name ?? DEFAULT_CONNECTION;
+    const key = effectiveConnection(name);
     const pair = this.connections.get(key);
     if (pair === undefined) {
       const known = [...this.connections.keys()].map((k) => `'${k}'`).join(', ');
@@ -298,7 +353,13 @@ export function withWriter<R>(fn: () => Promise<R>): Promise<R> {
  * deployment (reader === writer) is unaffected by stickiness — the diverted pool is the same object.
  */
 export class WriterStickyClock {
-  private lastWriteAt = 0;
+  /**
+   * `null` until the first `mark()` — absence, NOT a value sentinel. The injectable clocks legitimately
+   * return 0 (a monotonic clock right after process start; rust's `SystemClock` does), so encoding
+   * "never marked" as the value 0 would mis-classify a `mark()` at clock t=0 as unmarked and leak the
+   * read-your-writes read to the reader replica. Absence must be distinct from the value 0.
+   */
+  private lastWriteAt: number | null = null;
   private readonly enabled: boolean;
   private readonly stickyDurationMs: number;
   /** Injectable clock (tests advance it); defaults to `Date.now`. */
@@ -317,13 +378,13 @@ export class WriterStickyClock {
 
   /** Is a read currently sticky-to-writer (within `writerStickyDuration` of the last write)? */
   isSticky(): boolean {
-    if (!this.enabled || this.lastWriteAt === 0) return false;
+    if (!this.enabled || this.lastWriteAt === null) return false;
     return this.now() - this.lastWriteAt < this.stickyDurationMs;
   }
 
   /** Reset the clock (e.g. between tests / on `closeAllPools`). */
   reset(): void {
-    this.lastWriteAt = 0;
+    this.lastWriteAt = null;
   }
 }
 

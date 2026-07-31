@@ -192,7 +192,7 @@ func TestPhaseCRoutingWriterStickyLive(t *testing.T) {
 
 	// A committed transaction on the writer db ARMS the sticky clock (WithTransactionDecidedIsolated
 	// .Mark()s on a successful commit because the ctx carries routing).
-	_, err := Transaction(ctx, db, "postgres", DefaultTransactionOptions(), func(txCtx *ExecutionContext) (int, error) {
+	_, err := Transaction(ctx, "postgres", DefaultTransactionOptions(), func(txCtx *ExecutionContext) (int, error) {
 		_, e := RunGuarded(txCtx, fmt.Sprintf("INSERT INTO %s (id, val) VALUES ($1,$2) ON CONFLICT (id) DO NOTHING", tbl), []any{int64(2), "b"}, "INSERT", "M")
 		return 0, e
 	})
@@ -218,7 +218,7 @@ func TestPhaseCRoutingWriterStickyLive(t *testing.T) {
 	// The very next tx, with the option left unset, DOES arm it — proving the suppression is per-tx.
 	optOut := DefaultTransactionOptions()
 	optOut.UseWriterAfterTransaction = boolPtr(false)
-	_, err = Transaction(ctx, db, "postgres", optOut, func(txCtx *ExecutionContext) (int, error) {
+	_, err = Transaction(ctx, "postgres", optOut, func(txCtx *ExecutionContext) (int, error) {
 		_, e := RunGuarded(txCtx, fmt.Sprintf("INSERT INTO %s (id, val) VALUES ($1,$2) ON CONFLICT (id) DO NOTHING", tbl), []any{int64(4), "d"}, "INSERT", "M")
 		return 0, e
 	})
@@ -230,7 +230,7 @@ func TestPhaseCRoutingWriterStickyLive(t *testing.T) {
 	if log[len(log)-1] != "reader" {
 		t.Fatalf("per-tx UseWriterAfterTransaction=false: in-window read = %v, want reader (sticky NOT armed)", log[len(log)-1])
 	}
-	_, err = Transaction(ctx, db, "postgres", DefaultTransactionOptions(), func(txCtx *ExecutionContext) (int, error) {
+	_, err = Transaction(ctx, "postgres", DefaultTransactionOptions(), func(txCtx *ExecutionContext) (int, error) {
 		_, e := RunGuarded(txCtx, fmt.Sprintf("INSERT INTO %s (id, val) VALUES ($1,$2) ON CONFLICT (id) DO NOTHING", tbl), []any{int64(5), "e"}, "INSERT", "M")
 		return 0, e
 	})
@@ -252,7 +252,7 @@ func TestPhaseCRoutingWriterStickyLive(t *testing.T) {
 	mwriter := newLivePool("writer", db, &mlog, &mu)
 	mreg, _ := RegistryFromDefault(ReaderWriterPools{Reader: mreader, Writer: mwriter}).Build()
 	mctx := ContextForRouting(RoutingConfig{Registry: mreg, Sticky: NewWriterStickyClock(StickyOptions{UseWriterAfterTransaction: boolPtr(false), Now: func() int64 { return mclock }})}, nil)
-	_, err = Transaction(mctx, db, "postgres", DefaultTransactionOptions(), func(txCtx *ExecutionContext) (int, error) {
+	_, err = Transaction(mctx, "postgres", DefaultTransactionOptions(), func(txCtx *ExecutionContext) (int, error) {
 		_, e := RunGuarded(txCtx, fmt.Sprintf("INSERT INTO %s (id, val) VALUES ($1,$2) ON CONFLICT (id) DO NOTHING", tbl), []any{int64(3), "c"}, "INSERT", "M")
 		return 0, e
 	})
@@ -381,10 +381,12 @@ func TestPhaseCRoutingMultiDBLive(t *testing.T) {
 	}
 }
 
-// tx-pin precedence: a named-DB transaction runs ENTIRELY on ONE pinned writer connection — the
-// routing steps 2-4 do NOT re-resolve mid-tx (Phase B ownership is preserved). Proven by running a
-// multi-statement tx on DB B (MySQL) and confirming every statement hit the SAME pinned *sql.Tx (the
-// routing recording pool is NOT touched for in-tx statements — the pin wins in ConnectionFor).
+// tx-pin precedence: a named-DB transaction runs its statements of the tx's own database on ONE
+// pinned writer connection of that DB — the routing steps 2-4 do NOT re-resolve mid-tx for them
+// (Phase B ownership is preserved). Proven by running a
+// multi-statement tx on DB B (MySQL) and confirming every statement of the tx's own database (an unnamed one, or one naming that database) hit the
+// SAME pinned *sql.Tx (the routing recording pool is NOT touched for such in-tx statements — the pin is
+// resolved first in ConnectionFor; one naming a DIFFERENT database is rejected there).
 func TestPhaseCRoutingTxPinPrecedenceLive(t *testing.T) {
 	phaseCGated(t)
 	pg := openPhaseCPG(t)
@@ -401,11 +403,11 @@ func TestPhaseCRoutingTxPinPrecedenceLive(t *testing.T) {
 	reg := NewConnectionRegistry(map[string]ReaderWriterPools{"default": SinglePoolPair(aPool), "B": SinglePoolPair(bPool)})
 	ctx := ContextForRouting(RoutingConfig{Registry: reg, Sticky: NewWriterStickyClock(StickyOptions{UseWriterAfterTransaction: boolPtr(false)})}, nil)
 
-	// Run a tx on DB B (MySQL): the tx is opened on `my` (the writer of DB B) and pins ONE *sql.Tx.
-	// Every statement inside resolves the PINNED connection (step 1 wins) — the recording pools are
-	// NOT re-acquired mid-tx.
+	// Run a tx on DB B (MySQL): the ctx NAMES B ([ExecutionContext.WithConnectionName]), so the tx is
+	// opened on B's WRITER pool and pins that ONE connection. Every statement inside resolves the PINNED
+	// connection (step 1 wins) — the recording pools are NOT re-acquired mid-tx.
 	log = log[:0]
-	_, err := Transaction(ctx, my, "mysql", DefaultTransactionOptions(), func(txCtx *ExecutionContext) (int, error) {
+	_, err := Transaction(ctx.WithConnectionName("B"), "mysql", DefaultTransactionOptions(), func(txCtx *ExecutionContext) (int, error) {
 		if _, e := RunGuarded(txCtx, fmt.Sprintf("INSERT INTO %s (id, val) VALUES (?,?)", goRouteTable), []any{int64(300), "tx1"}, "INSERT", "M"); e != nil {
 			return 0, e
 		}
@@ -425,10 +427,14 @@ func TestPhaseCRoutingTxPinPrecedenceLive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The routing recording pools saw ZERO acquisitions for the in-tx statements (the pin won every
-	// time). This is the tx-pin-precedence proof: Phase C routing did NOT break Phase B ownership.
-	if len(log) != 0 {
-		t.Fatalf("in-tx statements must resolve the PINNED conn, not the routing pool; got acquisitions %v", log)
+	// EXACTLY ONE acquisition, and it came from DB B: the tx's OWN connection, checked out of the named
+	// db's WRITER pool (#215 — the ctx, not the caller, answers WHICH db a transaction opens on). The
+	// in-tx statements added NOTHING to the log, so every one of them resolved that pin — the
+	// tx-pin-precedence proof that Phase C routing did not break Phase B ownership. `[A]` would mean the
+	// tx ignored the name (the #215 regression: a `?`-placeholder MySQL statement sent to PG); `[B B B B]`
+	// would mean the pin lost and each statement re-acquired.
+	if !equalStrings(log, []string{"B"}) {
+		t.Fatalf("tx acquisitions = %v, want [B] (ONE acquire on DB B's writer, then the pin serves every in-body statement of that db)", log)
 	}
 	// Both rows committed on the ONE pinned connection.
 	var c int

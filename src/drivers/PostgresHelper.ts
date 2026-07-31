@@ -362,7 +362,7 @@ export function DayAfter(val: number, interval: string = 'day'): DBImmediateValu
 /**
  * Convert empty string to NULL
  */
-export function empty2null(val: unknown): unknown | DBImmediateValue {
+export function empty2null<T>(val: T): T | DBImmediateValue {
   if (val === '' || val === undefined) {
     return new DBImmediateValue('NULL');
   }

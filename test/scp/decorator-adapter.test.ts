@@ -10,6 +10,7 @@
  * `columnTypes` pin — exactly the adapter's column-type mapping under test.
  */
 
+import type { ColumnsOf } from '../../src';
 import 'reflect-metadata';
 import { describe, it, expect } from 'vitest';
 import { model, column, hasMany, belongsTo, hasOne } from '../../src/decorators';
@@ -33,6 +34,16 @@ import {
 
 @model('users')
 class User {
+  // `@column` installs a STATIC accessor per column at runtime; this names its TYPE so a
+  // static reference (User.id) is CHECKED instead of resolving to an implicit any.
+  declare static id: ColumnsOf<User>['id'];
+  declare static is_active: ColumnsOf<User>['is_active'];
+  declare static created_at: ColumnsOf<User>['created_at'];
+  declare static big_id: ColumnsOf<User>['big_id'];
+  declare static ext_id: ColumnsOf<User>['ext_id'];
+  declare static metadata: ColumnsOf<User>['metadata'];
+  declare static birth_date: ColumnsOf<User>['birth_date'];
+  declare static tags: ColumnsOf<User>['tags'];
   @column() id?: number;
   @column() name?: string;
   @column.boolean() is_active?: boolean;
@@ -56,6 +67,12 @@ class User {
 
 @model('posts')
 class Post {
+  // `@column` installs a STATIC accessor per column at runtime; this names its TYPE so a
+  // static reference (Post.id) is CHECKED instead of resolving to an implicit any.
+  declare static id: ColumnsOf<Post>['id'];
+  declare static author_id: ColumnsOf<Post>['author_id'];
+  declare static title: ColumnsOf<Post>['title'];
+  declare static created_at: ColumnsOf<Post>['created_at'];
   @column() id?: number;
   @column() author_id?: number;
   @column() title?: string;
@@ -67,6 +84,11 @@ class Post {
 
 @model('profiles')
 class Profile {
+  // `@column` installs a STATIC accessor per column at runtime; this names its TYPE so a
+  // static reference (Profile.id) is CHECKED instead of resolving to an implicit any.
+  declare static id: ColumnsOf<Profile>['id'];
+  declare static user_id: ColumnsOf<Profile>['user_id'];
+  declare static bio: ColumnsOf<Profile>['bio'];
   @column() id?: number;
   @column() user_id?: number;
   @column() bio?: string;
@@ -75,6 +97,10 @@ class Profile {
 // Composite-key tenant models
 @model('tenant_users')
 class TenantUser {
+  // `@column` installs a STATIC accessor per column at runtime; this names its TYPE so a
+  // static reference (TenantUser.tenant_id) is CHECKED instead of resolving to an implicit any.
+  declare static tenant_id: ColumnsOf<TenantUser>['tenant_id'];
+  declare static id: ColumnsOf<TenantUser>['id'];
   @column() tenant_id?: number;
   @column() id?: number;
   @column() name?: string;
@@ -88,6 +114,11 @@ class TenantUser {
 
 @model('tenant_posts')
 class TenantPost {
+  // `@column` installs a STATIC accessor per column at runtime; this names its TYPE so a
+  // static reference (TenantPost.tenant_id) is CHECKED instead of resolving to an implicit any.
+  declare static tenant_id: ColumnsOf<TenantPost>['tenant_id'];
+  declare static author_id: ColumnsOf<TenantPost>['author_id'];
+  declare static title: ColumnsOf<TenantPost>['title'];
   @column() tenant_id?: number;
   @column() author_id?: number;
   @column() title?: string;
