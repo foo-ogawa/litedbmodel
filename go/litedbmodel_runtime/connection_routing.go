@@ -543,8 +543,12 @@ func (b *ConnectionRegistryBuilder) Build() (*ConnectionRegistry, error) {
 // Access is mutex-guarded so a concurrent tx (which .Mark()s) and a concurrent read (which
 // .IsSticky()) do not race.
 type WriterStickyClock struct {
-	mu               sync.Mutex
-	lastWriteAtMs    int64
+	mu sync.Mutex
+	// nil until the first Mark() — absence, NOT a value sentinel. The injectable clock legitimately
+	// returns 0 (rust's SystemClock does right after process start), so encoding "never marked" as the
+	// value 0 would mis-classify a Mark() at clock t=0 as unmarked and leak the read-your-writes read
+	// to the reader replica. Absence must be distinct from the value 0.
+	lastWriteAtMs    *int64
 	enabled          bool
 	stickyDurationMs int64
 	now              func() int64
@@ -584,7 +588,8 @@ func (c *WriterStickyClock) Mark() {
 		return
 	}
 	c.mu.Lock()
-	c.lastWriteAtMs = c.now()
+	now := c.now()
+	c.lastWriteAtMs = &now
 	c.mu.Unlock()
 }
 
@@ -596,16 +601,16 @@ func (c *WriterStickyClock) IsSticky() bool {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.lastWriteAtMs == 0 {
+	if c.lastWriteAtMs == nil {
 		return false
 	}
-	return c.now()-c.lastWriteAtMs < c.stickyDurationMs
+	return c.now()-*c.lastWriteAtMs < c.stickyDurationMs
 }
 
 // Reset resets the clock (e.g. between tests / on CloseAllPools).
 func (c *WriterStickyClock) Reset() {
 	c.mu.Lock()
-	c.lastWriteAtMs = 0
+	c.lastWriteAtMs = nil
 	c.mu.Unlock()
 }
 

@@ -318,7 +318,13 @@ export function withWriter<R>(fn: () => Promise<R>): Promise<R> {
  * deployment (reader === writer) is unaffected by stickiness — the diverted pool is the same object.
  */
 export class WriterStickyClock {
-  private lastWriteAt = 0;
+  /**
+   * `null` until the first `mark()` — absence, NOT a value sentinel. The injectable clocks legitimately
+   * return 0 (a monotonic clock right after process start; rust's `SystemClock` does), so encoding
+   * "never marked" as the value 0 would mis-classify a `mark()` at clock t=0 as unmarked and leak the
+   * read-your-writes read to the reader replica. Absence must be distinct from the value 0.
+   */
+  private lastWriteAt: number | null = null;
   private readonly enabled: boolean;
   private readonly stickyDurationMs: number;
   /** Injectable clock (tests advance it); defaults to `Date.now`. */
@@ -337,13 +343,13 @@ export class WriterStickyClock {
 
   /** Is a read currently sticky-to-writer (within `writerStickyDuration` of the last write)? */
   isSticky(): boolean {
-    if (!this.enabled || this.lastWriteAt === 0) return false;
+    if (!this.enabled || this.lastWriteAt === null) return false;
     return this.now() - this.lastWriteAt < this.stickyDurationMs;
   }
 
   /** Reset the clock (e.g. between tests / on `closeAllPools`). */
   reset(): void {
-    this.lastWriteAt = 0;
+    this.lastWriteAt = null;
   }
 }
 

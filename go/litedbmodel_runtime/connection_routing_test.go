@@ -200,6 +200,29 @@ func TestWriterStickyClockExpiry(t *testing.T) {
 	}
 }
 
+// TestWriterStickyArmedAtClockZero pins #218: a Mark() when the clock reads 0 MUST arm stickiness, so
+// the read right after the commit routes to the WRITER (read-your-writes). A time.Now-based clock can
+// return 0 (and rust's Instant-based SystemClock does right after process start). The old code stored
+// 0 as "never marked" (a value sentinel) → the commit failed to stick and the read leaked to the
+// reader replica. Revert lastWriteAtMs to `int64` + `== 0` ⇒ this goes RED. Every OTHER sticky test
+// marks at a non-zero clock, so this t=0 case was previously unproven.
+func TestWriterStickyArmedAtClockZero(t *testing.T) {
+	var log []string
+	reader := newRecordPool("reader", &log)
+	writer := newRecordPool("writer", &log)
+	sticky := NewWriterStickyClock(StickyOptions{UseWriterAfterTransaction: boolPtr(true), WriterStickyDuration: intPtr(5000), Now: func() int64 { return 0 }})
+	if sticky.IsSticky() {
+		t.Fatal("before any mark, sticky must be false even at t=0 (absence, not the value 0)")
+	}
+	ctx := ContextForRouting(routingWithPools(reader, writer, sticky), nil)
+	// A commit at clock t=0 arms the sticky clock.
+	sticky.Mark()
+	_, _ = Execute(ctx, "SELECT 1", nil, ReadIntent())
+	if got := log[len(log)-1]; got != "writer" {
+		t.Fatalf("read right after a t=0 commit = %v, want writer (read-your-writes)", got)
+	}
+}
+
 func TestWriterStickyRoutesReadToWriter(t *testing.T) {
 	var log []string
 	clock := int64(1_000_000)
