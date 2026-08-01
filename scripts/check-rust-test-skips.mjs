@@ -85,7 +85,7 @@
  *
  * Then PHASE 2, at the bottom of this file: every unit whose sources read a gate is re-run against a
  * database that is NOT THERE, and a test that PASSES anyway never dialled one. rust needs no exceptions
- * for it — all six live legs panic on a refused connection — and it is also the only thing that can
+ * for it — every live leg panics on a refused connection — and it is also the only thing that can
  * catch a target aimed at a stub whose function NAMES match the real ones.
  *
  * Not proven, and it falls GREEN: that a leg asserted anything USEFUL about what it read. A body
@@ -137,7 +137,13 @@ const LIVE_TESTS = [
   'd1_live_runtime_tx_boundaries_are_middleware_visible',
   'd1_red_live_without_registration_nothing_observed',
   'd3_live_raw_execute_query_through_seam_and_logger',
+  'isolation_retry_guard_and_nesting_mysql',
+  'isolation_retry_guard_and_nesting_pg',
+  'one_transaction_owns_one_connection_mysql',
+  'one_transaction_owns_one_connection_pg',
   'phase_c_connection_routing_and_config',
+  'tx_body_panic_leaves_no_open_transaction_mysql',
+  'tx_body_panic_leaves_no_open_transaction_pg',
 ];
 
 /** Every `.rs` under `dir` — a target is LIVE when any source in its own tree reads a gate. */
@@ -178,13 +184,28 @@ const packages = JSON.parse(metadata.stdout).packages;
 const units = [];
 for (const pkg of packages) {
   const features = 'livedb' in pkg.features ? ['--features', 'livedb'] : [];
+  // Every integration target's OWN root, so one target's tree can exclude the others'. In Rust each
+  // `tests/*.rs` is a SEPARATE binary, so `dirname` is shared by all of them: scanning it whole made a
+  // target LIVE because a SIBLING read a gate. That mislabelled the one integration test here that
+  // touches no database (#138's alloc counter) as a live-DB leg, and no LIVE_TESTS entry could fix it —
+  // listing it just moves the failure to phase 2, which then reports it "PASSED with no database behind
+  // them", correctly, because it never had one (#261). Taken from `cargo metadata`, so the exclusion is
+  // enumerated rather than pattern-matched.
+  const integrationRoots = new Set(pkg.targets.filter((x) => x.kind.includes('test')).map((x) => x.src_path));
   for (const t of pkg.targets) {
     const isLib = t.kind.includes('lib');
     const isBin = t.kind.includes('bin');
     const isIntegration = t.kind.includes('test');
     const crateDir = relative(ROOT, dirname(pkg.manifest_path)).split(sep).join('/');
     const src = relative(ROOT, t.src_path).split(sep).join('/');
-    const live = sources(dirname(t.src_path)).some((f) => readsAGate(readFileSync(f, 'utf8')));
+    // A target's own tree: for lib/bin the whole source directory (their tests live in `src/` modules);
+    // for an integration test its own file plus the HELPER modules beside it (`tests/common/**` — which
+    // `mod common;` pulls in), minus the sibling test roots. So a shared helper that reads a gate still
+    // makes every target that includes it live, and a sibling that reads one no longer does.
+    const own = isIntegration
+      ? sources(dirname(t.src_path)).filter((f) => f === t.src_path || !integrationRoots.has(f))
+      : sources(dirname(t.src_path));
+    const live = own.some((f) => readsAGate(readFileSync(f, 'utf8')));
     // Every lib/bin/integration-test target is run EXPLICITLY (`--lib`/`--bin`/`--test`), which cargo
     // honours REGARDLESS of a `test = false` in the manifest — measured: `[lib] test = false` still
     // lists AND runs all 71 lib unit tests under `cargo test --lib`. Deriving the set from `t.test`
@@ -369,7 +390,7 @@ if (liveUnlisted.length > 0) {
 // PASSES never touched a server, whatever its body claims — which is also the only thing that can catch
 // a target aimed at a stub whose function names match the real ones.
 //
-// rust needs no exceptions here: all six live legs panic on a refused connection.
+// rust needs no exceptions here: every live leg panics on a refused connection.
 if (problems.length === 0) {
   for (const unit of ran.filter((u) => u.live && u.verdicts.length > 0)) {
     const run = mustHaveStarted(

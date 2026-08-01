@@ -10,7 +10,6 @@
  * `executeTransaction` returns:
  * ```
  * { committed: boolean
- *   shortCircuit?: { statementId: string; reason: ShortCircuitReason }   // reason is a string enum
  *   entity: Record<string,unknown> | null      // the written entity ROW (RETURNING row)
  *   executed: readonly string[]
  *   returnedRows?: readonly (readonly Record<string,unknown>[])[]  // batch RETURNING rows }
@@ -18,7 +17,6 @@
  * which de-boxes to the bc portable type
  * ```
  * obj{ committed:bool, executed:arr<string>,
- *      shortCircuit:opt<obj{statementId:string, reason:string}>,
  *      entity:opt<ROW>, returnedRows:opt<arr<arr<ROW>>> }
  * ```
  * where ROW is the written table's RETURNING columns typed via the SAME
@@ -39,15 +37,12 @@
 import type { PortableType, PortableScalarType } from 'behavior-contracts/runtime';
 import { sqlTypeToBcScalar, type BcScalar, type ColumnTypeResolver } from '../coltype';
 import type { SqlBundle } from '../write-bundle';
-import type { TransactionPlan, TxStatement } from './tx';
+import { isBatchPlan, type TransactionPlan, type TxStatement } from './tx';
 
 /** Identity narrow (BcScalar is exactly bc's PortableScalarType); DATE→string happens in coltype. */
 function toPortableScalar(scalar: BcScalar): PortableScalarType {
   return scalar;
 }
-
-/** The reserved ShortCircuit sub-object type — reason is a string enum, statementId a string. */
-const SHORT_CIRCUIT_TYPE: PortableType = { obj: { statementId: 'string', reason: 'string' } };
 
 /**
  * The target table + RETURNING columns of ONE `body`-role write statement, extracted STRUCTURALLY
@@ -106,18 +101,14 @@ function bodyStatements(plan: TransactionPlan): readonly TxStatement[] {
 }
 
 /**
- * Is this plan a BATCH (createMany/updateMany/deleteMany)? Mirrors the runtime's batch test
- * (`executeTransaction`): a gate-free, ref-free plan (`entityFrom` null, every statement a plain
- * `body` with no gate / no `binds`). A batch is the ONLY shape that populates `returnedRows`; a
- * gate-first single/composite Command exposes its written row via `entity` instead.
+/**
+ * The empty-plan guard this module used to carry INSIDE its own copy of the batch test, as a
+ * `statements.length > 0` term the runtime's copy did not have (#259). It was unreachable there:
+ * {@link writeTargetReturning} runs FIRST in {@link deriveWriteOutputType} and throws on a plan with no
+ * `body` statement, so `isBatchPlan` never sees one. Both copies are now the ONE
+ * {@link import('./tx').isBatchPlan}, and the typing precondition stays where it belongs — in the
+ * function that cannot proceed without a body statement.
  */
-function isBatchPlan(plan: TransactionPlan): boolean {
-  return (
-    plan.entityFrom === null &&
-    plan.statements.length > 0 &&
-    plan.statements.every((s) => s.gate === undefined && s.binds === undefined && s.role === 'body')
-  );
-}
 
 /**
  * The write's `(table, RETURNING)` — every `body`-role statement must agree (a batch's groups all
@@ -159,11 +150,11 @@ function writeTargetReturning(plan: TransactionPlan): { table: string; returning
 }
 
 /**
- * The full write-bundle output type: the {@link TransactionResult} typed shape. `committed`,
- * `executed`, `shortCircuit` are always present. `entity` and `returnedRows` are included ONLY when
+ * The full write-bundle output type: the {@link TransactionResult} typed shape. `committed` and
+ * `executed` are always present. `entity` and `returnedRows` are included ONLY when
  * the plan shape can actually POPULATE them — precise typing, not a fallback:
- *  - `entity` (`opt<ROW>`) — present when the body write RETURNs (a gate-first single Command exposes
- *    its written row here). A no-RETURNING write leaves `entity` always null → typed `opt<obj{}>`.
+ *  - `entity` (`opt<ROW>`) — present when the body write RETURNs (a single Command exposes its
+ *    written row here). A no-RETURNING write leaves `entity` always null → typed `opt<obj{}>`.
  *  - `returnedRows` (`opt<arr<arr<ROW>>>`) — present ONLY for a BATCH plan whose body RETURNs (the
  *    sole shape the runtime accumulates it in: `executeTransaction` pushes a body's RETURNING rows to
  *    `returnedRows` iff batch mode AND the statement returned rows). A non-batch Command, or a batch
@@ -187,7 +178,6 @@ export function deriveWriteOutputType(plan: TransactionPlan, resolve: ColumnType
   const fields: Record<string, PortableType> = {
     committed: 'bool',
     executed: { arr: 'string' },
-    shortCircuit: { opt: SHORT_CIRCUIT_TYPE },
     entity: { opt: row },
   };
   // returnedRows is populated ONLY by a batch plan whose body RETURNs rows; include it in the type

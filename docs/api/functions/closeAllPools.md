@@ -1,4 +1,4 @@
-[**litedbmodel v1.0.1**](../README.md)
+[**litedbmodel v2.2.4**](../README.md)
 
 ***
 
@@ -10,7 +10,7 @@
 function closeAllPools(): Promise<void>;
 ```
 
-Defined in: DBHandler.ts:340
+Defined in: [DBHandler.ts:345](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBHandler.ts#L345)
 
 Close all connection pools
 

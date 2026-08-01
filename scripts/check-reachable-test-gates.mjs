@@ -8,7 +8,7 @@
  * go test or cargo test — so the tx isolation, tx boundary, connection routing and middleware suites
  * in four languages reported green while never executing.
  *
- * The invariant, in four clauses:
+ * The invariant, in five clauses:
  *
  *   A. Every `LITEDBMODEL_*` gate a test reads is declared in `livedb-gates.env`, and every variable
  *      declared there gates some test (no undeclared gate, no dead declaration).
@@ -20,6 +20,11 @@
  *      and so look only at pull_request workflows; that left every other workflow free to run a
  *      command whose green means nothing, and two were — one of them gating the crates.io publish.
  *      See {@link RUNNERS} and {@link NOT_A_SUITE_RUN}.
+ *   E. EVERY crate under `rust/` — workspace member or not — is `cargo fmt --check`ed and
+ *      `cargo clippy`ed with `-D warnings` by a change-gating workflow. `--workspace`/`--all`/`-p`
+ *      all mean "this workspace", so the three ORM-bench cells, each declaring its own
+ *      `[workspace]`, were reached by NOTHING and had never been formatted, linted or compiled by
+ *      any workflow since they were written (#242). See {@link rustCrates}.
  *
  * Clauses B and C are about execution, and every weaker reading of them has been satisfied by text
  * no shell would ever run, or by a command whose failure nothing was watching. Six, each measured on
@@ -91,8 +96,8 @@
  *
  *   node scripts/check-reachable-test-gates.mjs
  */
-import { readdirSync, readFileSync, statSync } from 'node:fs';
-import { join, relative, dirname } from 'node:path';
+import { readdirSync, readFileSync, statSync, globSync } from 'node:fs';
+import { join, relative, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { GATES_ENV, GATE_PATTERN, NOT_A_GATE, readGateDeclarations } from './livedb-gates.mjs';
 
@@ -684,21 +689,156 @@ function gatesEveryChange(filters) {
  * workflow a key disowns is dropped), `allCommands` as everything it runs whatever the trigger and
  * whatever guards it. The bare-runner clause needs the second: a lying test step is a lying test step
  * behind an `if:`, on a `release:` trigger, in a scheduled job.
+ *
+ * `allBodies` keeps the same commands GROUPED BY the `run:` they came from, which is the unit a `cd`
+ * is scoped to — clause E has to know which directory `cargo fmt --manifest-path orm_bench/…` names,
+ * and that is the body's `cd rust`, not the file's.
  */
 const workflows = readdirSync(WORKFLOWS)
   .filter((f) => /\.ya?ml$/.test(f))
   .map((f) => {
     const text = readFileSync(join(WORKFLOWS, f), 'utf8');
+    const allBodies = runBodies(text, { gatingOnly: false }).map((b) => commandsOf(b, f));
     return {
       name: f,
       text,
       commands: runBodies(text).flatMap((b) => commandsOf(b, f)),
-      allCommands: runBodies(text, { gatingOnly: false }).flatMap((b) => commandsOf(b, f)),
+      allCommands: allBodies.flat(),
+      allBodies,
     };
   });
 
 /** Workflows a pull_request triggers on ANY change — the only ones that gate a change. */
 const onChange = workflows.filter((w) => gatesEveryChange(pullRequestFilters(w.text.slice(0, w.text.search(/^jobs:/m) >>> 0))));
+
+/**
+ * `Cargo.toml`, reduced to the three facts that decide which cargo commands reach a crate: the
+ * package it defines, whether it opens a workspace, and that workspace's DECLARED members.
+ *
+ * Read line-wise — a `#` comment dropped, a `[table]` header switching section — rather than through
+ * a TOML parser, because the grammar needed is three keys and this repository has no TOML dependency.
+ * `members` is the only array read, and only under `[workspace]`, so `[workspace.dependencies]` and
+ * `default-members` (a NARROWING of members, never a widening) cannot be mistaken for it.
+ *
+ * A `[workspace]` with no `members` is cargo's "every path dependency is a member" — inferred, not
+ * declared, so nothing is claimed for it here and a crate that is only reachable that way is reported
+ * as uncovered. RED, as everywhere in this file.
+ */
+function manifestFacts(text) {
+  let section = '';
+  let pkg;
+  let workspace = false;
+  const members = [];
+  let array = null;
+  for (const raw of text.split('\n')) {
+    const line = raw.replace(/(^|\s)#.*$/, '').trim();
+    if (array !== null) {
+      array += ` ${line}`;
+      if (!line.includes(']')) continue;
+      for (const [, m] of array.matchAll(/"([^"]+)"/g)) members.push(m);
+      array = null;
+      continue;
+    }
+    const header = /^\[([^\]]+)\]$/.exec(line);
+    if (header) {
+      section = header[1];
+      if (section === 'workspace') workspace = true;
+      continue;
+    }
+    const kv = /^([A-Za-z_-]+)\s*=\s*(.*)$/.exec(line);
+    if (!kv) continue;
+    if (section === 'package' && kv[1] === 'name') pkg = /^"([^"]*)"/.exec(kv[2])?.[1];
+    if (section === 'workspace' && kv[1] === 'members') {
+      if (kv[2].includes(']')) for (const [, m] of kv[2].matchAll(/"([^"]+)"/g)) members.push(m);
+      else array = kv[2];
+    }
+  }
+  return { pkg, workspace, members };
+}
+
+/**
+ * Every crate under `rust/`, keyed by the ABSOLUTE directory holding its `Cargo.toml` — the unit
+ * clause E asks about. A `target/` is skipped for the reason `check-no-local-deps.mjs` skips it
+ * (a build directory holds manifests nobody wrote), and it is the same glob, because "the crates
+ * this repository has" is one question.
+ *
+ * A manifest with no `[package]` is a virtual workspace root (rust/Cargo.toml is one): it is a
+ * WORKSPACE and not a crate, so it is something a command can be aimed AT but never something that
+ * needs covering.
+ */
+const rustCrates = new Map(
+  globSync('rust/**/Cargo.toml', { cwd: ROOT })
+    .filter((p) => !p.split(/[/\\]/).includes('target'))
+    .map((p) => [
+      dirname(join(ROOT, p)),
+      { dir: dirname(p), abs: dirname(join(ROOT, p)), ...manifestFacts(readFileSync(join(ROOT, p), 'utf8')) },
+    ]),
+);
+/** package name → its crate, for the `-p <name>` that is how a workspace member is named. */
+const rustByName = new Map([...rustCrates.values()].filter((c) => c.pkg).map((c) => [c.pkg, c]));
+
+/**
+ * Which crates each `cargo fmt` / `cargo clippy` of a change-gating workflow reaches: crate dir →
+ * the subcommands that reached it.
+ *
+ * Taken from `allBodies` — the steps a key would DISOWN included — because the rust leg is a matrix
+ * shard selected by `if: matrix.lang == 'rust'`, so the gating reading drops the whole leg and would
+ * make this clause unsatisfiable without restructuring the job. What is asked here is therefore
+ * which crates CI NAMES, not that the step is unconditional; the "its failure fails the step"
+ * judgement of `shellCommands` still applies, so a `… || true` reaches nothing.
+ *
+ * A command is read exactly as cargo would read it:
+ *
+ *   the manifest    `--manifest-path <p>` (or `=<p>`) resolved against the CWD the body's `cd`s have
+ *                   reached, else that CWD's own `Cargo.toml`. A path this cannot resolve to a
+ *                   manifest in `rustCrates` reaches nothing.
+ *   the packages    `-p`/`--package <name>`, else `--workspace`/`--all` = the manifest's own package
+ *                   plus its DECLARED members, else the manifest's own package alone.
+ *   and only if it can fail: `cargo fmt` without `--check` REWRITES the tree and exits 0, and
+ *                   `cargo clippy` without `-D warnings` prints its lints and exits 0. Neither is a
+ *                   check, so neither counts as one.
+ */
+function rustLintCoverage() {
+  const reached = new Map();
+  const cover = (crate, sub) => {
+    if (!crate) return;
+    if (!reached.has(crate.dir)) reached.set(crate.dir, new Set());
+    reached.get(crate.dir).add(sub);
+  };
+  for (const w of onChange) {
+    for (const body of w.allBodies) {
+      let cwd = ROOT;
+      for (const cmd of body) {
+        const argv = argvOf(cmd);
+        if (argv[0] === 'cd') {
+          cwd = resolve(cwd, argv[1] ?? '.');
+          continue;
+        }
+        const sub = argv[0] === 'cargo' ? argv[1] : undefined;
+        if (sub !== 'fmt' && sub !== 'clippy') continue;
+        const checks =
+          sub === 'fmt'
+            ? argv.includes('--check')
+            : argv.some((a, i) => a === '-Dwarnings' || (a === '-D' && argv[i + 1] === 'warnings'));
+        if (!checks) continue;
+        const flag = argv.findIndex((a) => a === '--manifest-path' || a.startsWith('--manifest-path='));
+        const path = flag === -1 ? undefined : argv[flag].includes('=') ? argv[flag].split('=')[1] : argv[flag + 1];
+        const at = rustCrates.get(path === undefined ? cwd : dirname(resolve(cwd, path)));
+        if (!at) continue;
+        const named = argv.filter((a, i) => argv[i - 1] === '-p' || argv[i - 1] === '--package');
+        if (named.length > 0) {
+          for (const n of named) cover(rustByName.get(n), sub);
+          continue;
+        }
+        cover(at.pkg ? at : undefined, sub);
+        if (argv.includes('--workspace') || argv.includes('--all')) {
+          for (const m of at.members) cover(rustCrates.get(resolve(at.abs, m)), sub);
+        }
+      }
+    }
+  }
+  return reached;
+}
 
 const problems = [];
 
@@ -771,6 +911,29 @@ for (const a of NOT_A_SUITE_RUN) {
     );
   }
 }
+// Clause E: every crate under rust/ is fmt-checked AND clippy'd by a change-gating workflow. The
+// three ORM-bench cells each declare their own `[workspace]`, so `--all` / `--workspace` / `-p` at
+// rust/Cargo.toml never reached one, and nothing else in any workflow named them: from the day they
+// were written to #242 they were never formatted, linted or compiled by CI, and `cargo fmt --check`
+// was red on two of them the first time it ran. Nothing made that visible — a workflow that says
+// `--workspace` READS as if it covered everything, and the crates it silently excludes are named
+// nowhere.
+const reachedByLint = rustLintCoverage();
+for (const crate of [...rustCrates.values()].filter((c) => c.pkg).sort((a, b) => a.dir.localeCompare(b.dir))) {
+  const reached = reachedByLint.get(crate.dir) ?? new Set();
+  const missing = ['fmt', 'clippy'].filter((s) => !reached.has(s));
+  if (missing.length === 0) continue;
+  problems.push(
+    `no pull_request workflow runs \`cargo ${missing.join('` / `cargo ')}\` over \`${crate.dir}\`\n` +
+      `      (package \`${crate.pkg}\`) — CI does not check that crate at all.\n` +
+      `      Add it to the rust leg of conformance.yml. A crate outside rust/Cargo.toml's \`members\` is\n` +
+      `      reachable ONLY through \`--manifest-path ${relative('rust', crate.dir)}/Cargo.toml\` — \`--workspace\`, \`--all\` and\n` +
+      `      \`-p\` all mean "this workspace" and stop at its boundary.\n` +
+      `      (\`cargo fmt\` without \`--check\` REWRITES the tree and exits 0, and \`cargo clippy\` without\n` +
+      `      \`-D warnings\` prints its lints and exits 0 — neither counts. Nor does a command the shell\n` +
+      `      would not hold to account: see the RUN GATE clause for the full list.)`,
+  );
+}
 for (const u of [...unresolved].sort()) {
   problems.push(`${u} — package.json declares no such script, so that step cannot run at all.`);
 }
@@ -790,13 +953,17 @@ if (problems.length === 0) {
       `   (argv[0] \`npm\`) expanded to their package.json bodies, \`#\` comments dropped at every level, and the\n` +
       `   command boundaries found by a tokenizer that reads quoting — an operator or \`#\` inside\n` +
       `   \`'\`/\`"\`/a backtick/\`$(\`/\`\${\` or behind a \`\\\` is text.\n` +
+      `   All ${rustByName.size} crates under rust/ — the ${[...rustCrates.values()].filter((c) => c.pkg && c.workspace).length} that declare their OWN \`[workspace]\` included, which\n` +
+      `   \`--workspace\`/\`--all\`/\`-p\` at rust/Cargo.toml cannot reach — are \`cargo fmt\`ed with \`--check\` and\n` +
+      `   \`cargo clippy\`ed with \`-D warnings\` by such a workflow, each command resolved to the manifest and\n` +
+      `   package set cargo itself would read (the body's \`cd\`s, \`--manifest-path\`, \`-p\`, declared members).\n` +
       `   Not checked, and it falls GREEN: whether a job that FAILS blocks anything — a required status\n` +
       `   check is branch protection, not a file this can read.\n` +
       `   That each suite then really RAN is the run gate this required, not this script.`,
   );
   process.exit(0);
 }
-console.error('❌ tests that CI cannot reach:\n');
+console.error('❌ what CI cannot reach:\n');
 for (const p of problems) console.error(`  ${p}`);
-console.error(`\n${problems.length} problem(s). A test CI never runs is not a test.`);
+console.error(`\n${problems.length} problem(s). A test CI never runs is not a test, and a crate CI never lints is not linted.`);
 process.exit(1);

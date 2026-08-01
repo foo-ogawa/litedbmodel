@@ -15,7 +15,10 @@ declare(strict_types=1);
  *   - SAME storage: in-memory sqlite (no file → no fsync/WAL the native in-memory cell never pays).
  *   - Prepared-statement REUSE: each op's SQL is prepared once and the PDOStatement cached by SQL text
  *     ($stmts), re-executed with fresh params across iterations — matching the native runtime's
- *     prepared-statement cache, not a re-parse-per-call strawman.
+ *     prepared-statement cache (`PreparedStatements` in `php/src/ExecutionContext.php`, keyed on the
+ *     same SQL text and shared by its non-tx and tx connections), not a re-parse-per-call strawman.
+ *     Until #257 that parity was claimed here and did NOT hold: the native runtime re-prepared on
+ *     every call while this cell did not, so php's native÷sdk ratio was reported worse than it was.
  *   - N+1-FREE relations: parent read → pluck keys → ONE batched child read (WHERE fk IN (…)) → group
  *     in memory, the SAME query counts the native cell proves (nestedFindAll=2, nestedRelations=3,
  *     compositeRelations=3, batch write=1, RETURNING-chained tx = BEGIN + body + COMMIT).
@@ -112,12 +115,22 @@ final class Db
     }
 
     /** @param list<mixed> $params */
-    public function exec(string $sql, array $params = []): void
+    /**
+     * Run a write and report what the driver says about it: the last insert id (MySQL's and SQLite's;
+     * PostgreSQL has none of its own here — it executes RETURNING itself and so never needs one) and the
+     * affected-row count.
+     *
+     * @param list<mixed> $params
+     * @return array{insertId:?int,affected:int}
+     */
+    public function exec(string $sql, array $params = []): array
     {
         $this->count++;
         $stmt = $this->prep($sql);
         $this->bindAll($stmt, $params);
         $stmt->execute();
+        $insertId = $this->dialect === 'postgres' ? null : (int) $this->pdo->lastInsertId();
+        return ['insertId' => $insertId, 'affected' => $stmt->rowCount()];
     }
 
     /** param-free control statement (BEGIN / COMMIT). */
@@ -132,24 +145,24 @@ final class Db
      * declares for every id-chaining write (benchmark/crosslang/native-model.ts). The baseline issues the
      * SAME statement and reads the SAME row back, so the two surfaces do equal work.
      *
-     * MySQL has no RETURNING: the runtime's mysql adapter strips the clause and recovers the written rows
-     * with a keyed SELECT on the same connection (src/scp/makesql/mysql-returning.ts). $recoverSql is that
-     * same recovery, and it belongs to the SAME logical statement — the runtime's seam counts a MySQL
-     * RETURNING write as one (its recovery runs below the seam) while counting the row it recovers — so the
-     * rows are tallied and the statement count is not bumped a second time.
+     * $recovery is the artifact's entry for this statement: null wherever the database executes the
+     * RETURNING itself, and on MySQL — which cannot parse it — the write with the clause stripped plus the
+     * keyed SELECT that recovers the written rows, both from the library's own buildMysqlReselect
+     * (benchmark/crosslang/derive-ops.ts). It belongs to the SAME logical statement — the runtime's seam
+     * counts a MySQL RETURNING write as one (its recovery runs below the seam) while counting the row it
+     * recovers — so the rows are tallied and the statement count is not bumped a second time.
      *
      * @param list<mixed> $params
-     * @param list<mixed> $recoverParams
+     * @param array{writeSql:string,selectSql:string,binds:list<array{kind:string,index?:int}>}|null $recovery
      */
-    public function writeReturningId(string $sql, array $params, string $recoverSql, array $recoverParams = []): int
+    public function writeReturningId(string $sql, array $params, ?array $recovery): int
     {
-        if ($this->dialect !== 'mysql') {
+        if ($recovery === null) {
             return (int) $this->query($sql, $params)[0][0];
         }
-        // MySQL cannot parse RETURNING: strip the clause (and the /*scp:pk=…*/ hint naming the key) exactly
-        // as the runtime's mysql adapter does, then recover the written row with the keyed SELECT.
-        $this->exec((string) preg_replace('/\s+RETURNING\s+.*$/is', '', $sql), $params);
-        return (int) $this->recoverRows($recoverSql, $recoverParams)[0][0];
+        $wrote = $this->exec($recovery['writeSql'], $params);
+        $bound = bindRecovery($recovery['binds'], $params, $wrote);
+        return (int) $this->recoverRows($recovery['selectSql'], $bound)[0][0];
     }
 
     /**
@@ -204,18 +217,6 @@ function seed(Db $db): void
     }
 }
 
-/** @return array{0:list<string>,1:list<string>} */
-function batchRows(int $it, bool $stable): array
-{
-    $emails = [];
-    $names = [];
-    for ($i = 0; $i < 10; $i++) {
-        $emails[] = $stable ? "many{$i}@bench.com" : "many{$it}_{$i}@bench.com";
-        $names[] = "Many {$i}";
-    }
-    return [$emails, $names];
-}
-
 /**
  * One relation level's key set as the ONE param the captured SQL expects. The generated module binds a
  * batched child read's key set as a single JSON array (json_each(?) / JSON_TABLE(?) / UNNEST(?::t[])),
@@ -254,19 +255,51 @@ function pgArrayLiteral(array $values): string
 }
 
 /**
+ * The recovering SELECT's params, from the write's own params and what the driver reported — the
+ * `bindReselect` of src/scp/makesql/mysql-returning.ts, where these kinds are defined. A kind the driver
+ * cannot answer is a HARD failure: recovering the wrong rows quietly is what this path removes.
+ *
+ * @param list<array{kind:string,index?:int}> $binds
+ * @param list<mixed> $params
+ * @param array{insertId:?int,affected:int} $wrote
+ * @return list<mixed>
+ */
+function bindRecovery(array $binds, array $params, array $wrote): array
+{
+    $out = [];
+    foreach ($binds as $b) {
+        if ($b['kind'] === 'param') {
+            $out[] = $params[$b['index']];
+            continue;
+        }
+        if ($wrote['insertId'] === null) {
+            throw new \RuntimeException("recovery binds '{$b['kind']}', but this driver reported no insert id");
+        }
+        $out[] = match ($b['kind']) {
+            'lastId' => $wrote['insertId'],
+            'highId' => $wrote['insertId'] + max(1, $wrote['affected']),
+            default => throw new \RuntimeException("unknown recovery bind kind '{$b['kind']}'"),
+        };
+    }
+    return $out;
+}
+
+/**
  * A batch write's record set as the param(s) the captured statement expects: ONE JSON array on
  * MySQL/SQLite, one array PER COLUMN on PostgreSQL (its UNNEST form takes column arrays). The payload
  * repeats once per `?` — updateMany's SET subquery and its WHERE each read it.
  *
  * @param list<array<string,mixed>> $records
+ * @param list<string> $columns
  * @return list<string>
  */
-function batchParams(Db $db, array $records, string $sql): array
+function batchParams(Db $db, array $records, string $sql, array $columns): array
 {
     if ($db->dialect === 'postgres') {
-        $cols = array_keys($records[0]);
-        sort($cols);
-        $one = array_map(static fn (string $c) => pgArrayLiteral(array_column($records, $c)), $cols);
+        // One array per column, in the order the statement's own UNNEST alias list names them
+        // (`batchColumns`, read off the SQL by derive-ops.ts). Sorting the record's keys agreed with the
+        // statement only by accident.
+        $one = array_map(static fn (string $c) => pgArrayLiteral(array_column($records, $c)), $columns);
     } else {
         $one = [json_encode($records, JSON_THROW_ON_ERROR)];
     }
@@ -274,37 +307,6 @@ function batchParams(Db $db, array $records, string $sql): array
     $out = [];
     for ($i = 0; $i < $reps; $i++) {
         $out = array_merge($out, $one);
-    }
-    return $out;
-}
-
-/**
- * The keyed SELECTs the runtime's MySQL adapter recovers a RETURNING write's rows with
- * (src/scp/makesql/mysql-returning.ts): the conflict key for an upsert, the AUTO_INCREMENT range for an
- * insert, the write's own WHERE for an update. Only MySQL runs them — the others have RETURNING.
- */
-const RECOVER_BY_EMAIL = 'SELECT id FROM benchmark_users WHERE email = ?';
-const RECOVER_BY_LAST_INSERT_ID = 'SELECT id FROM benchmark_users WHERE id = LAST_INSERT_ID()';
-const RECOVER_BY_ID = 'SELECT id FROM benchmark_users WHERE id = ?';
-
-/** @return list<array<string,mixed>> */
-function userRecords(int $it, bool $stable): array
-{
-    [$emails, $names] = batchRows($it, $stable);
-    $out = [];
-    for ($k = 0; $k < 10; $k++) {
-        $out[] = ['email' => $emails[$k], 'name' => $names[$k]];
-    }
-    return $out;
-}
-
-/** @return list<array<string,mixed>> */
-function patchRecords(): array
-{
-    [, $names] = batchRows(0, false);
-    $out = [];
-    for ($k = 0; $k < 10; $k++) {
-        $out[] = ['id' => $k + 1, 'name' => $names[$k]];
     }
     return $out;
 }
@@ -494,8 +496,11 @@ function materializeComposite(Db $db, array $sqlList): array
  *
  * @param list<string> $sqlList
  */
-function runOp(Db $db, string $op, int $it, array $sqlList): void
+function runOp(Db $db, array $doc, string $op, int $it): void
 {
+    $sqlList = $doc['ops'][$op];
+    $inp = \lm_bench_op_input($doc, $op, $it);
+    $rec = static fn (int $i): ?array => \lm_bench_recovery($doc, $op, $i);
     switch ($op) {
         case 'findAll':
             $GLOBALS['benchSink'] = array_map(
@@ -506,29 +511,29 @@ function runOp(Db $db, string $op, int $it, array $sqlList): void
         case 'filterPaginateSort':
             $GLOBALS['benchSink'] = array_map(
                 static fn (array $r) => new SdkPostFull((int) $r[0], $r[1], $r[2], (int) $r[3], (int) $r[4], $r[5]),
-                $db->query($sqlList[0], [1]),
+                $db->query($sqlList[0], [$inp['published']]),
             );
             break;
         case 'findFirst':
             $GLOBALS['benchSink'] = array_map(
                 static fn (array $r) => new SdkUser((int) $r[0], $r[1], $r[2]),
-                $db->query($sqlList[0], ['User%']),
+                $db->query($sqlList[0], [$inp['name']]),
             );
             break;
         case 'findUnique':
             $GLOBALS['benchSink'] = array_map(
                 static fn (array $r) => new SdkUser((int) $r[0], $r[1], $r[2]),
-                $db->query($sqlList[0], ['user1@example.com']),
+                $db->query($sqlList[0], [$inp['email']]),
             );
             break;
         case 'nestedFindAll':
             $GLOBALS['benchSink'] = materializeUsersPosts($db, $db->query($sqlList[0]), $sqlList[1]);
             break;
         case 'nestedFindFirst':
-            $GLOBALS['benchSink'] = materializeUsersPosts($db, $db->query($sqlList[0], ['User%']), $sqlList[1]);
+            $GLOBALS['benchSink'] = materializeUsersPosts($db, $db->query($sqlList[0], [$inp['name']]), $sqlList[1]);
             break;
         case 'nestedFindUnique':
-            $GLOBALS['benchSink'] = materializeUsersPosts($db, $db->query($sqlList[0], ['user1@example.com']), $sqlList[1]);
+            $GLOBALS['benchSink'] = materializeUsersPosts($db, $db->query($sqlList[0], [$inp['email']]), $sqlList[1]);
             break;
         case 'nestedRelations':
             $GLOBALS['benchSink'] = materializeUsersPostsComments($db, $db->query($sqlList[0]), $sqlList[1], $sqlList[2]);
@@ -537,49 +542,45 @@ function runOp(Db $db, string $op, int $it, array $sqlList): void
             $GLOBALS['benchSink'] = materializeComposite($db, $sqlList);
             break;
         case 'create':
-            $db->exec($sqlList[0], ["new{$it}@bench.com", 'New']);
+            $db->exec($sqlList[0], [$inp['email'], $inp['name']]);
             break;
         case 'update':
-            $db->exec($sqlList[0], ['Updated 1', 1]);
+            $db->exec($sqlList[0], [$inp['name'], $inp['id']]);
             break;
         case 'upsert':
             // The captured statement declares ` RETURNING id`, so the baseline reads the id back too.
-            $sink = $db->writeReturningId($sqlList[0], ['user1@example.com', 'Upserted One'], RECOVER_BY_EMAIL, ['user1@example.com']);
+            $sink = $db->writeReturningId($sqlList[0], [$inp['email'], $inp['name']], $rec(0));
             unset($sink);
             break;
         case 'createMany':
-            $db->exec($sqlList[0], batchParams($db, userRecords($it, false), $sqlList[0]));
-            break;
         case 'upsertMany':
-            // The SAME 10 records the native module upserts.
-            $db->exec($sqlList[0], batchParams($db, userRecords($it, true), $sqlList[0]));
-            break;
         case 'updateMany':
-            $db->exec($sqlList[0], batchParams($db, patchRecords(), $sqlList[0]));
+            // The SAME 10 records the native module writes, bound the way the statement asks for them.
+            $db->exec($sqlList[0], batchParams($db, $inp['rows'], $sqlList[0], \lm_bench_batch_columns($doc, $op)));
             break;
         case 'nestedCreate':
             $db->execRaw('BEGIN');
-            $uid = $db->writeReturningId($sqlList[0], ["nc{$it}@bench.com", 'NC'], RECOVER_BY_LAST_INSERT_ID);
-            $db->exec($sqlList[1], [$uid, 'NC Post']);
+            $uid = $db->writeReturningId($sqlList[0], [$inp['email'], $inp['name']], $rec(0));
+            $db->exec($sqlList[1], [$uid, $inp['title']]);
             $db->execRaw('COMMIT');
             break;
         case 'nestedUpsert':
             $db->execRaw('BEGIN');
-            $uid = $db->writeReturningId($sqlList[0], ['user1@example.com', 'NUp'], RECOVER_BY_EMAIL, ['user1@example.com']);
-            $db->exec($sqlList[1], [$uid, 'NUp Post']);
+            $uid = $db->writeReturningId($sqlList[0], [$inp['email'], $inp['name']], $rec(0));
+            $db->exec($sqlList[1], [$uid, $inp['title']]);
             $db->execRaw('COMMIT');
             break;
         case 'nestedUpdate':
             $db->execRaw('BEGIN');
             // The generated runner chains the dependent UPDATE off the id the first UPDATE returned; taking
             // the id from the input instead would skip a statement's worth of work.
-            $uid = $db->writeReturningId($sqlList[0], ['NU', 1], RECOVER_BY_ID, [1]);
-            $db->exec($sqlList[1], ['NU Post', $uid]);
+            $uid = $db->writeReturningId($sqlList[0], [$inp['name'], $inp['id']], $rec(0));
+            $db->exec($sqlList[1], [$inp['title'], $uid]);
             $db->execRaw('COMMIT');
             break;
         case 'delete':
             $db->execRaw('BEGIN');
-            $uid = $db->writeReturningId($sqlList[0], ["del{$it}@bench.com", 'Del'], RECOVER_BY_LAST_INSERT_ID);
+            $uid = $db->writeReturningId($sqlList[0], [$inp['email'], $inp['name']], $rec(0));
             $db->exec($sqlList[1], [$uid]);
             $db->execRaw('COMMIT');
             break;
@@ -591,22 +592,22 @@ function runOp(Db $db, string $op, int $it, array $sqlList): void
 function measure(string $dialect, int $reps, int $warmup): void
 {
     $db = openDb($dialect);
-    $ops = benchSetup($dialect)['ops'];
+    $doc = benchSetup($dialect);
     echo "cell,dialect,op,iter,us,rows\n";
     foreach (OPS as $op) {
         seed($db); // re-seed before each op (matches the native cell)
         // One UN-TIMED probe measures the rows this op moves — the per-row denominator (#170).
         $db->rows = 0;
-        runOp($db, $op, 0, $ops[$op]);
+        runOp($db, $doc, $op, 0);
         $rows = $db->rows;
         for ($it = 0; $it < $warmup; $it++) {
-            runOp($db, $op, $it + 1, $ops[$op]);
+            runOp($db, $doc, $op, $it + 1);
         }
         for ($it = 0; $it < $reps; $it++) {
             // Unique iteration id: the probe took 0, so warmup/timed start at 1.
             $g = $it + $warmup + 1;
             $t = hrtime(true);
-            runOp($db, $op, $g, $ops[$op]);
+            runOp($db, $doc, $op, $g);
             $us = intdiv(hrtime(true) - $t, 1000);
             echo "sdk,{$dialect},{$op},{$it},{$us},{$rows}\n";
         }
@@ -616,7 +617,7 @@ function measure(string $dialect, int $reps, int $warmup): void
 function safety(string $dialect): void
 {
     $db = openDb($dialect);
-    $ops = benchSetup($dialect)['ops'];
+    $doc = benchSetup($dialect);
     $expected = RELATION_QUERY_COUNTS + BATCH_QUERY_COUNTS + TX_STMT_COUNTS;
     // EVERY op, with the rows it moves — the surface that lets this baseline's row yield be compared
     // against the native cell's (#170), not just the guarded statement counts.
@@ -625,12 +626,15 @@ function safety(string $dialect): void
         seed($db);
         $db->count = 0;
         $db->rows = 0;
-        runOp($db, $op, 0, $ops[$op]);
+        runOp($db, $doc, $op, 0);
         $got = $db->count;
         $want = $expected[$op] ?? null;
         if ($want !== null && $got !== $want) {
             throw new \RuntimeException("{$op} statement-count regression: got {$got}, expect {$want}");
         }
+        // The machine-readable half, in the ONE format every cell prints, so `run-cells.sh` can hold the
+        // ten cells to the same statements and rows per op instead of eyeballing ten tables.
+        echo "proof,sdk,{$dialect},{$op},{$got},{$db->rows}\n";
         echo str_pad($op, 22) . str_pad((string) $got, 12) . $db->rows . "\n";
     }
 }

@@ -65,7 +65,34 @@ guard_arch NODE "$("$NODE" -p process.arch 2>/dev/null)"
 guard_arch GO   "$("$GO" env GOARCH 2>/dev/null)"
 guard_arch PHP  "$("$PHP" -r 'echo php_uname("m");' 2>/dev/null)"
 guard_arch PYTHON "$($PY_LAUNCH -c 'import platform;print(platform.machine())' 2>/dev/null)"
-echo "arch: node/go/php/python all arm64; rust → $RUST_TARGET"
+
+# The guards above prove the INTERPRETERS are arm64. They say nothing about the NATIVE MODULES those
+# interpreters load, and `node_modules` carries per-platform ones: `npm ci` run from an x86 shell installs
+# `@esbuild/darwin-x64` and builds better-sqlite3 for x64, and the arm64 node this script correctly pinned
+# then cannot load either. That combination fails LATE and in a voice that sounds like a bench problem —
+# "op-SQL derivation failed on <dialect> — the SDK cells cannot bind the captured statements", with
+# esbuild's own "installed for another platform" three frames down — and it took all three dialects with
+# it, zero cells run (#252). The arch of a tree is not visible in `process.arch`, so it is asked the only
+# way that cannot be wrong: LOAD the module, with the node that will do the loading.
+#
+# Not `check-installed-deps.mjs` (#245), which answers a different question — tree ↔ lockfile — and whose
+# UNEXPECTED half would refuse a tree these cells run perfectly well on. `require()` alone is not enough
+# either: better-sqlite3 resolves its binding lazily, inside `new Database()`.
+guard_node_module() { # label  probe  fix
+  if ! (cd "$ROOT" && "$NODE" -e "$2") >/dev/null 2>&1; then
+    echo "✗ $1 cannot be loaded by $NODE (process.arch = $("$NODE" -p process.arch))."
+    (cd "$ROOT" && "$NODE" -e "$2") 2>&1 | grep -v '^\s*$' | head -4 | sed 's/^/    /'
+    echo "  $3"
+    exit 1
+  fi
+}
+guard_node_module esbuild "require('esbuild').transformSync('1')" \
+  "Reinstall with THIS node: rm -rf node_modules && npm ci (from a shell where \`node -p process.arch\` is arm64)."
+if [ "$DIALECT" = sqlite ]; then
+  guard_node_module better-sqlite3 "new (require('better-sqlite3'))(':memory:').close()" \
+    "Rebuild it for THIS node: npm rebuild better-sqlite3 (or rm -rf node_modules && npm ci from an arm64 shell)."
+fi
+echo "arch: node/go/php/python all arm64; rust → $RUST_TARGET; node_modules loadable by $("$NODE" -p process.arch) node"
 
 # ── EXCLUSIVE. One run of this harness at a time, machine-wide — not per dialect. Two reasons, and both
 # produce numbers that look plausible and are wrong:
@@ -87,11 +114,20 @@ fi
 echo $$ > "$LOCK/pid"
 trap 'rm -rf "$LOCK"' EXIT INT TERM
 
-# Capture the per-op SQL from the GENERATED module for this dialect into the artifact, so every SDK cell
-# executes the statements its native twin executes (#172). Runs before the fixture check so the check sees
-# the merged artifact.
+# Complete the artifact for this dialect, so every cell runs the SAME work rather than its own idea of it
+# (#172). Two steps, in this order, and both before the fixture check so the check sees the merged file:
+#
+#   1. CAPTURE the per-op SQL from the GENERATED module at the runtime seam. It has to be a capture and
+#      not a copy — PostgreSQL's relation predicates carry a cast token the runtime resolves from the key
+#      param's element type, so the final text is only knowable by running it.
+#   2. DERIVE what the statements imply but do not say: the MySQL RETURNING recovery (which the runtime
+#      issues BELOW the seam, so it cannot be captured) and each batch write's own column order. Both
+#      come from the library's own code, never from a cell's guess.
 (cd "$ROOT/go" && "$GO" run -tags "bench_$DIALECT" ./lm_bench/lm_orm_native/ sql >/dev/null) || {
   echo "✗ op-SQL capture failed on $DIALECT — the SDK cells have no statements to run"; exit 1
+}
+npx tsx "$HERE/derive-ops.ts" "$DIALECT" || {
+  echo "✗ op-SQL derivation failed on $DIALECT — the SDK cells cannot bind the captured statements"; exit 1
 }
 
 # The fixture must already be the one this run claims to measure.
@@ -105,6 +141,115 @@ node -e "
   }
   console.error(\`fixture: scale \${d.scale}, \${Object.values(d.counts).reduce((a,b)=>a+b,0)} rows\`);
 " || exit 1
+
+# ── VERIFY: every cell issues the SAME work, checked BEFORE anything is timed. ───────────────────────
+# Each cell's proof pass prints one `proof,<surface>,<dialect>,<op>,<statements>,<rows>` line per op — the
+# ONE machine-readable format all ten share. This collects them and fails the run if any (op) is not
+# single-valued across the native and sdk cells.
+#
+# It is a phase of its own, ahead of the measurement, because the point is to refuse to PRODUCE numbers
+# that are not comparable rather than to publish them and note a disagreement underneath. `aggregate.mjs`
+# already compares rows/op after the fact, and #172 is the case that slipped through it: two cells issuing
+# different SQL for `compositeRelations` moved the same 11,100 rows by coincidence. Statements are checked
+# here as well as rows, and the run stops on the spot.
+#
+# `typescript.runtime` is not in this comparison and prints `runtime`: the imperative path wraps every
+# single-row write in its own transaction (its own `Cell.expectedStatements`) and cannot express `upsert`
+# at all, so it is a different amount of work by design — the report divides native by SDK, not by it.
+PROOF="$(mktemp)"
+trap 'rm -rf "$LOCK"; rm -f "$PROOF"' EXIT INT TERM
+verify_fail=0
+prove() { # <name> <working-dir> <command…>
+  local name="$1" dir="$2"; shift 2
+  local out
+  if ! out="$( (cd "$dir" && "$@") 2>&1 )"; then
+    echo "   ✗ $name did not complete its proof pass on $DIALECT"
+    echo "$out" | tail -20
+    verify_fail=$((verify_fail + 1))
+    return
+  fi
+  local n
+  n="$(printf '%s\n' "$out" | grep -c '^proof,' || true)"
+  if [ "$n" -eq 0 ]; then
+    echo "   ✗ $name printed no proof lines — it cannot be checked against the other cells"
+    verify_fail=$((verify_fail + 1))
+    return
+  fi
+  printf '%s\n' "$out" | grep '^proof,' | sed "s|^|$name,|" >> "$PROOF"
+  echo "   ✓ $name ($n ops)"
+}
+
+echo "── verify: every cell issues the same statements and moves the same rows ($DIALECT)"
+npx tsc -p "$HERE/ts-cell/tsconfig.json" || exit 1
+TS_MAIN="$ROOT/benchmark/crosslang-build/ts-cell/main.js"
+[ "$DIALECT" = "sqlite" ] || prove typescript.native "$ROOT" "$NODE" "$TS_MAIN" safety codegen "$DIALECT"
+prove typescript.sdk "$ROOT" "$NODE" "$TS_MAIN" safety sdk "$DIALECT"
+prove go.native "$ROOT/go" "$GO" run -tags "bench_$DIALECT" ./lm_bench/lm_orm_native/
+prove go.sdk    "$ROOT/go" "$GO" run ./lm_bench/lm_orm/ "$DIALECT"
+RUST_FEATURES=""
+[ "$DIALECT" = "sqlite" ] || RUST_FEATURES="--features livedb,target_$DIALECT"
+prove rust.native "$ROOT/rust" cargo run --quiet --release --target "$RUST_TARGET" --manifest-path orm_bench/Cargo.toml $RUST_FEATURES -- safety
+RUST_SDK_FEATURES=""
+[ "$DIALECT" = "sqlite" ] || RUST_SDK_FEATURES="--features livedb"
+prove rust.sdk "$ROOT/rust" cargo run --quiet --release --target "$RUST_TARGET" --manifest-path orm_bench_sdk/Cargo.toml $RUST_SDK_FEATURES -- safety "$DIALECT"
+prove python.native "$ROOT/python" $PY_LAUNCH -m orm_bench.main safety "$DIALECT"
+prove python.sdk    "$ROOT/python" $PY_LAUNCH -m orm_bench_sdk.main safety "$DIALECT"
+prove php.native "$ROOT/php" "$PHP" orm_bench/main.php safety "$DIALECT"
+prove php.sdk    "$ROOT/php" "$PHP" orm_bench_sdk/main.php safety "$DIALECT"
+
+[ "$verify_fail" -gt 0 ] && { echo "✗ $verify_fail cell(s) could not be verified on $DIALECT — refusing to measure."; exit 1; }
+node -e '
+  const fs = require("fs");
+  // cell,surface,dialect,op,statements,rows — one line per op per cell, from each cell own proof pass.
+  const rows = fs.readFileSync(process.argv[1], "utf8").trim().split("\n").map((l) => l.split(","));
+  import(process.argv[2]).then(({ ORM_OP_IDS }) => {
+  const by = new Map();
+  const byCell = new Map();
+  for (const line of rows) {
+    // `<cell>,proof,<surface>,<dialect>,<op>,<statements>,<rows>` — the cell name is prefixed by `prove`.
+    const [cell, , surface, dialect, op, stmts, rowCount] = line;
+    if (surface !== "native" && surface !== "sdk") continue;
+    const key = `${dialect}|${op}`;
+    if (!by.has(key)) by.set(key, new Map());
+    const seen = by.get(key);
+    const value = `${stmts} statements / ${rowCount} rows`;
+    if (!seen.has(value)) seen.set(value, []);
+    seen.get(value).push(cell);
+    if (!byCell.has(cell)) byCell.set(cell, new Set());
+    byCell.get(cell).add(op);
+  }
+  // COVERAGE, checked FIRST: single-valued only means "nobody disagreed", and an op a cell never reported
+  // has nobody to disagree with. Two cells reporting disjoint halves compared nothing and still printed a
+  // count that reads like a full matrix (#243). So each cells op set must BE the contract axis.
+  const short = [...byCell]
+    .map(([cell, ops]) => [cell, ORM_OP_IDS.filter((op) => !ops.has(op)), [...ops].filter((op) => !ORM_OP_IDS.includes(op))])
+    .filter(([, missing, extra]) => missing.length > 0 || extra.length > 0);
+  if (short.length > 0) {
+    console.error(`\n✗ cell(s) did not report all ${ORM_OP_IDS.length} ops of contract.ts — the rest is compared against nothing, so nothing is measured:\n`);
+    for (const [cell, missing, extra] of short) {
+      if (missing.length) console.error(`  ${cell}  missing ${missing.length}/${ORM_OP_IDS.length}: ${missing.join(", ")}`);
+      if (extra.length) console.error(`  ${cell}  not in contract.ts: ${extra.join(", ")}`);
+    }
+    console.error("\nORM_OP_IDS (contract.ts) is the op axis every cell runs — a cell that reports a subset is");
+    console.error("not the comparison this harness claims to make.");
+    process.exit(1);
+  }
+  const bad = [...by].filter(([, seen]) => seen.size > 1);
+  if (bad.length === 0) {
+    console.log(`   ✓ ${byCell.size} cell(s) × all ${ORM_OP_IDS.length} contract op(s): every native and sdk cell issues the same statements and moves the same rows.`);
+    process.exit(0);
+  }
+  console.error("\n✗ cells disagree on the work an op does — they are not comparable, so nothing is measured:\n");
+  for (const [key, seen] of bad) {
+    console.error(`  ${key.replace("|", "  ")}`);
+    for (const [value, list] of seen) console.error(`      ${value}  ←  ${list.join(", ")}`);
+  }
+  console.error("\nEvery statement, value and RETURNING recovery comes from .setup/<dialect>.json. A cell that");
+  console.error("disagrees is reading something else, or binding it differently.");
+  process.exit(1);
+  }).catch((e) => { console.error(`✗ cannot read the op axis from contract.ts: ${e.message}`); process.exit(1); });
+' "$PROOF" "$ROOT/benchmark/crosslang-build/contract.js" || exit 1
+echo
 
 fail=0
 # run <lang>.<surface> <working-dir> <command…> — keeps only the CSV body, and reports a dead cell loudly.
@@ -122,8 +267,6 @@ run() {
 }
 
 # TypeScript — three modes (codegen is labelled `native`, the twin of the other languages' native cells).
-npx tsc -p "$HERE/ts-cell/tsconfig.json" || exit 1
-TS_MAIN="$ROOT/benchmark/crosslang-build/ts-cell/main.js"
 if [ "$DIALECT" = "sqlite" ]; then
   # A LOUD skip, per this script's own contract. litedbmodel routes SQLite through the runtime in-proc path,
   # so `pool-executor.ts` exports no `sqliteConnectionPool` and `dbmodel-runtime.ts` throws for it — there
@@ -144,12 +287,8 @@ run typescript.sdk "$ROOT" "$NODE" "$TS_MAIN" sdk "$DIALECT" "$REPS" "$WARMUP"
 run go.native "$ROOT/go" "$GO" run -tags "bench_$DIALECT" ./lm_bench/lm_orm_native/ bench "$REPS" "$WARMUP"
 run go.sdk    "$ROOT/go" "$GO" run ./lm_bench/lm_orm/ "$DIALECT" bench "$REPS" "$WARMUP"
 
-# Rust — the dialect is a cargo FEATURE on the native cell, an argv on the SDK cell.
-RUST_FEATURES=""
-[ "$DIALECT" = "sqlite" ] || RUST_FEATURES="--features livedb,target_$DIALECT"
+# Rust — the dialect is a cargo FEATURE on the native cell, an argv on the SDK cell (both settled above).
 run rust.native "$ROOT/rust" cargo run --quiet --release --target "$RUST_TARGET" --manifest-path orm_bench/Cargo.toml $RUST_FEATURES -- "$REPS" "$WARMUP"
-RUST_SDK_FEATURES=""
-[ "$DIALECT" = "sqlite" ] || RUST_SDK_FEATURES="--features livedb"
 run rust.sdk "$ROOT/rust" cargo run --quiet --release --target "$RUST_TARGET" --manifest-path orm_bench_sdk/Cargo.toml $RUST_SDK_FEATURES -- "$DIALECT" "$REPS" "$WARMUP"
 
 run python.native "$ROOT/python" $PY_LAUNCH -m orm_bench.main "$DIALECT" "$REPS" "$WARMUP"

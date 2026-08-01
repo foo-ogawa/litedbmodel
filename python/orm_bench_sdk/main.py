@@ -16,7 +16,7 @@ Fairness (a strawman SDK invalidates the comparison):
     compositeRelations=3, batch write=1, RETURNING-chained tx = BEGIN + body + COMMIT).
   - SAME seed + inputs as the native twin: the small canonical nested fixture (mirrored from
     ``orm_bench.main`` — the fixture each isolated cell carries), re-seeded before each op, and the SAME
-    per-op inputs (findUnique=user1, update id=1, …).
+    per-op inputs, statements and RETURNING recoveries — all read from the ONE artifact every cell loads.
 
 Usage: ``python -m orm_bench_sdk.main <dialect> [reps] [warmup]`` or
 ``python -m orm_bench_sdk.main safety <dialect>``.
@@ -30,7 +30,7 @@ import re
 import sqlite3
 import sys
 import time
-from typing import Any, List
+from typing import Any, Dict, List, Optional
 
 # The shared seed-SSoT loader lives at the python/ root (one dir above this package) — anchor its import
 # to this file so it resolves regardless of cwd.
@@ -89,27 +89,33 @@ class Db:
         self.rows += len(rows)
         return [tuple(r) for r in rows]
 
-    def exec(self, sql: str, params: tuple = ()) -> None:
+    def exec(self, sql: str, params: tuple = ()) -> Dict[str, Any]:
+        """Run a write and report what the driver says about it: the last insert id (sqlite3's
+        ``lastrowid``, PyMySQL's; psycopg has none — PostgreSQL executes RETURNING itself and so never
+        needs one) and the affected-row count."""
         self.count += 1
-        self._cursor(sql, params)
+        cur = self._cursor(sql, params)
+        insert_id = getattr(cur, "lastrowid", None)
+        return {"insert_id": insert_id, "affected": cur.rowcount if cur.rowcount is not None else 0}
 
-    def write_returning_id(self, sql: str, params: tuple, recover_sql: str, recover_params: tuple = ()) -> int:
+    def write_returning_id(self, sql: str, params: tuple, recovery: Optional[Dict[str, Any]]) -> int:
         """A write that hands back the id of the row it wrote — the `` RETURNING id`` the authored native
         module declares for every id-chaining write (``benchmark/crosslang/native-model.ts``). The baseline
         issues the SAME statement and reads the SAME row back, so the two surfaces do equal work.
 
-        MySQL has no RETURNING: the runtime's mysql adapter strips the clause and recovers the written rows
-        with a keyed SELECT on the same connection (``src/scp/makesql/mysql-returning.ts``). ``recover_sql``
-        is that same recovery. It belongs to the SAME logical statement — the runtime's seam counts a MySQL
-        RETURNING write as one (its recovery runs below the seam) while counting the row it recovers — so
-        the rows are tallied here and the statement count is not bumped a second time.
+        ``recovery`` is the artifact's entry for this statement: None wherever the database executes the
+        RETURNING itself, and on MySQL — which cannot parse it — the write with the clause stripped plus
+        the keyed SELECT that recovers the written rows, both from the library's own
+        ``buildMysqlReselect`` (``benchmark/crosslang/derive-ops.ts``). It belongs to the SAME logical
+        statement — the runtime's seam counts a MySQL RETURNING write as one (its recovery runs below the
+        seam) while counting the row it recovers — so the rows are tallied here and the statement count is
+        not bumped a second time.
         """
-        if self.dialect != "mysql":
+        if recovery is None:
             return int(self.query(sql, params)[0][0])
-        # MySQL cannot parse RETURNING: strip the clause (and the /*scp:pk=…*/ hint naming the key) exactly
-        # as the runtime's mysql adapter does, then recover the written row with the keyed SELECT.
-        self.exec(re.sub(r"\s+RETURNING\s+.*$", "", sql, flags=re.S | re.I), params)
-        return int(self._recover_rows(recover_sql, recover_params)[0][0])
+        wrote = self.exec(recovery["writeSql"], params)
+        bound = _bind_recovery(recovery["binds"], params, wrote)
+        return int(self._recover_rows(recovery["selectSql"], bound)[0][0])
 
     def _recover_rows(self, sql: str, params: tuple) -> List[tuple]:
         """Fetch belonging to the logical statement just issued: rows tallied, statement count not bumped."""
@@ -122,6 +128,27 @@ class Db:
         # param-free control statement (BEGIN / COMMIT)
         self.count += 1
         self._cursor(sql, ())
+
+
+def _bind_recovery(binds: List[Dict[str, Any]], params: tuple, wrote: Dict[str, Any]) -> tuple:
+    """The recovering SELECT's params, from the write's own params and what the driver reported — the
+    ``bindReselect`` of ``src/scp/makesql/mysql-returning.ts``, where these kinds are defined. A kind the
+    driver cannot answer is a HARD failure: recovering the wrong rows quietly is what this path removes."""
+    out = []
+    for b in binds:
+        kind = b["kind"]
+        if kind == "param":
+            out.append(params[b["index"]])
+            continue
+        if wrote["insert_id"] is None:
+            raise RuntimeError(f"recovery binds {kind!r}, but this driver reported no insert id for the write")
+        if kind == "lastId":
+            out.append(wrote["insert_id"])
+        elif kind == "highId":
+            out.append(wrote["insert_id"] + max(1, wrote["affected"]))
+        else:
+            raise RuntimeError(f"unknown recovery bind kind {kind!r}")
+    return tuple(out)
 
 
 def open_db(dialect: str = "sqlite") -> Db:
@@ -172,13 +199,6 @@ def seed(db: Db) -> None:
             db.conn.execute(stmt)
         else:
             db.conn.cursor().execute(stmt)
-
-
-# ── batch-write inputs (mirror ops.ts / the native cell) ───────────────────────────────────────────
-def batch_rows(it: int, stable: bool) -> tuple:
-    emails = [(f"many{i}@bench.com" if stable else f"many{it}_{i}@bench.com") for i in range(10)]
-    names = [f"Many {i}" for i in range(10)]
-    return emails, names
 
 
 # ── nested materialization (fair vs the native cell) ───────────────────────────────────────────────
@@ -297,34 +317,20 @@ def _key_param(tuples: List[tuple], sql: str) -> str:
     return _pg_array_literal(keys) if _PG_ARRAY_CAST.search(sql) else json.dumps(keys)
 
 
-def _batch_params(db: Db, records: List[dict], sql: str) -> tuple:
+def _batch_params(db: Db, records: List[dict], sql: str, columns: List[str]) -> tuple:
     """A batch write's record set as the param(s) the captured statement expects: ONE JSON array on
     MySQL/SQLite, one array PER COLUMN on PostgreSQL (its ``UNNEST`` form takes column arrays). The payload
-    repeats once per ``?`` — updateMany's SET subquery and its WHERE each read it."""
+    repeats once per ``?`` — updateMany's SET subquery and its WHERE each read it.
+
+    ``columns`` is the statement's OWN column list (``batchColumns``, read off the SQL by derive-ops.ts).
+    PostgreSQL's ``UNNEST(?::int[], ?::text[]) AS v(id, name)`` binds the Nth array to the Nth alias, so
+    the order is the statement's to choose; sorting the record's keys agreed with it only by accident."""
     if db.dialect == "postgres":
-        one = [_pg_array_literal([r[c] for r in records]) for c in sorted(records[0])]
+        one = [_pg_array_literal([r[c] for r in records]) for c in columns]
     else:
         one = [json.dumps(records)]
     reps = max(1, round(sql.count("?") / len(one)))
     return tuple(one * reps)
-
-
-# The keyed SELECTs the runtime's MySQL adapter recovers a RETURNING write's rows with
-# (src/scp/makesql/mysql-returning.ts): the conflict key for an upsert, the AUTO_INCREMENT range for an
-# insert, the write's own WHERE for an update. Only MySQL runs them — the others have RETURNING.
-RECOVER_BY_EMAIL = "SELECT id FROM benchmark_users WHERE email = ?"
-RECOVER_BY_LAST_INSERT_ID = "SELECT id FROM benchmark_users WHERE id = LAST_INSERT_ID()"
-RECOVER_BY_ID = "SELECT id FROM benchmark_users WHERE id = ?"
-
-
-def _user_records(it: int, stable: bool) -> List[dict]:
-    emails, names = batch_rows(it, stable)
-    return [{"email": emails[i], "name": names[i]} for i in range(10)]
-
-
-def _patch_records() -> List[dict]:
-    _, names = batch_rows(0, False)
-    return [{"id": i + 1, "name": names[i]} for i in range(10)]
 
 
 def _materialize_users_posts(db: Db, user_rows: List[tuple], child_sql: str) -> List[User]:
@@ -384,65 +390,65 @@ def _materialize_composite(db: Db, sql: List[str]) -> List[TenantUser]:
 
 # ── the 19 ops (native-cell order). Fixed inputs mirror the python native cell; mutating ops vary their
 #    UNIQUE column by it. Read LIMIT/ORDER shapes match the ops SSoT (== the native generated SQL). ────
-def run_op(db: Db, op: str, it: int, sql: List[str]) -> None:
-    """Run ONE op, issuing the statements the GENERATED module issues for this dialect (``sql`` =
-    ``setup["ops"][op]``, captured at the runtime seam). The baseline hand-writes no SQL: the report
-    divides native by sdk, which only isolates the runtime's cost if both send the DB the same statements.
-    What stays hand-written is what a raw-driver user writes: param binding, decode, grouping children into
-    parents, and the transaction bracket."""
+def run_op(db: Db, doc: Dict[str, Any], op: str, it: int) -> None:
+    """Run ONE op, issuing the statements the GENERATED module issues for this dialect (``doc["ops"][op]``,
+    captured at the runtime seam), binding the values the axis SSoT declares (``doc["inputs"][op]``) and
+    recovering a MySQL RETURNING write exactly as the runtime does (``doc["recover"]``, derived from the
+    captured write by the library's own ``buildMysqlReselect``). The baseline hand-writes no SQL and no
+    value: the report divides native by sdk, which only isolates the runtime's cost if both send the DB the
+    same statements with the same params. What stays hand-written is what a raw-driver user writes: param
+    binding, decode, grouping children into parents, and the transaction bracket."""
+    sql = doc["ops"][op]
+    inp = lm_bench_setup.op_input(doc, op, it)
+    rec = lambda i: lm_bench_setup.recovery(doc, op, i)  # noqa: E731
     if op == "findAll":
         _SINK[0] = [User(r[0], r[1], r[2]) for r in db.query(sql[0])]
     elif op == "filterPaginateSort":
-        _SINK[0] = [PostFull(*r) for r in db.query(sql[0], (1,))]
+        _SINK[0] = [PostFull(*r) for r in db.query(sql[0], (inp["published"],))]
     elif op == "findFirst":
-        _SINK[0] = [User(r[0], r[1], r[2]) for r in db.query(sql[0], ("User%",))]
+        _SINK[0] = [User(r[0], r[1], r[2]) for r in db.query(sql[0], (inp["name"],))]
     elif op == "findUnique":
-        _SINK[0] = [User(r[0], r[1], r[2]) for r in db.query(sql[0], ("user1@example.com",))]
+        _SINK[0] = [User(r[0], r[1], r[2]) for r in db.query(sql[0], (inp["email"],))]
     elif op == "nestedFindAll":
         _SINK[0] = _materialize_users_posts(db, db.query(sql[0]), sql[1])
     elif op == "nestedFindFirst":
-        _SINK[0] = _materialize_users_posts(db, db.query(sql[0], ("User%",)), sql[1])
+        _SINK[0] = _materialize_users_posts(db, db.query(sql[0], (inp["name"],)), sql[1])
     elif op == "nestedFindUnique":
-        _SINK[0] = _materialize_users_posts(db, db.query(sql[0], ("user1@example.com",)), sql[1])
+        _SINK[0] = _materialize_users_posts(db, db.query(sql[0], (inp["email"],)), sql[1])
     elif op == "nestedRelations":
         _SINK[0] = _materialize_users_posts_comments(db, db.query(sql[0]), sql[1], sql[2])
     elif op == "compositeRelations":
         _SINK[0] = _materialize_composite(db, sql)
     elif op == "create":
-        db.exec(sql[0], (f"new{it}@bench.com", "New"))
+        db.exec(sql[0], (inp["email"], inp["name"]))
     elif op == "update":
-        db.exec(sql[0], ("Updated 1", 1))
+        db.exec(sql[0], (inp["name"], inp["id"]))
     elif op == "upsert":
         # The captured statement declares ` RETURNING id`, so the baseline reads the id back too.
-        _SINK[0] = db.write_returning_id(sql[0], ("user1@example.com", "Upserted One"),
-                                        RECOVER_BY_EMAIL, ("user1@example.com",))
-    elif op == "createMany":
-        db.exec(sql[0], _batch_params(db, _user_records(it, False), sql[0]))
-    elif op == "upsertMany":
-        # The SAME 10 records the native module upserts.
-        db.exec(sql[0], _batch_params(db, _user_records(it, True), sql[0]))
-    elif op == "updateMany":
-        db.exec(sql[0], _batch_params(db, _patch_records(), sql[0]))
+        _SINK[0] = db.write_returning_id(sql[0], (inp["email"], inp["name"]), rec(0))
+    elif op in ("createMany", "upsertMany", "updateMany"):
+        # The SAME 10 records the native module writes, bound the way the statement asks for them.
+        db.exec(sql[0], _batch_params(db, inp["rows"], sql[0], lm_bench_setup.batch_columns(doc, op)))
     elif op == "nestedCreate":
         db.exec_script("BEGIN")
-        uid = db.write_returning_id(sql[0], (f"nc{it}@bench.com", "NC"), RECOVER_BY_LAST_INSERT_ID)
-        db.exec(sql[1], (uid, "NC Post"))
+        uid = db.write_returning_id(sql[0], (inp["email"], inp["name"]), rec(0))
+        db.exec(sql[1], (uid, inp["title"]))
         db.exec_script("COMMIT")
     elif op == "nestedUpsert":
         db.exec_script("BEGIN")
-        uid = db.write_returning_id(sql[0], ("user1@example.com", "NUp"), RECOVER_BY_EMAIL, ("user1@example.com",))
-        db.exec(sql[1], (uid, "NUp Post"))
+        uid = db.write_returning_id(sql[0], (inp["email"], inp["name"]), rec(0))
+        db.exec(sql[1], (uid, inp["title"]))
         db.exec_script("COMMIT")
     elif op == "nestedUpdate":
         db.exec_script("BEGIN")
         # The generated runner chains the dependent UPDATE off the id the first UPDATE returned; taking the
         # id from the input instead would skip a statement's worth of work.
-        uid = db.write_returning_id(sql[0], ("NU", 1), RECOVER_BY_ID, (1,))
-        db.exec(sql[1], ("NU Post", uid))
+        uid = db.write_returning_id(sql[0], (inp["name"], inp["id"]), rec(0))
+        db.exec(sql[1], (inp["title"], uid))
         db.exec_script("COMMIT")
     elif op == "delete":
         db.exec_script("BEGIN")
-        uid = db.write_returning_id(sql[0], (f"del{it}@bench.com", "Del"), RECOVER_BY_LAST_INSERT_ID)
+        uid = db.write_returning_id(sql[0], (inp["email"], inp["name"]), rec(0))
         db.exec(sql[1], (uid,))
         db.exec_script("COMMIT")
     else:
@@ -460,38 +466,41 @@ TX_STMT_COUNTS = {"nestedCreate": 4, "nestedUpsert": 4, "nestedUpdate": 4, "dele
 
 def _measure(dialect: str, reps: int, warmup: int) -> None:
     db = open_db(dialect)
-    ops = lm_bench_setup.load(dialect)["ops"]
+    doc = lm_bench_setup.load(dialect)
     print("cell,dialect,op,iter,us,rows")
     for op in OPS:
         seed(db)  # re-seed before each op (matches the native cell)
         # One UN-TIMED probe per op measures the rows it moves — the report's per-row denominator (#170).
         db.rows = 0
-        run_op(db, op, 0, ops[op])
+        run_op(db, doc, op, 0)
         rows = db.rows
         for it in range(warmup):
-            run_op(db, op, it + 1, ops[op])
+            run_op(db, doc, op, it + 1)
         for it in range(reps):
             # Unique iteration id: the probe took 0, so warmup/timed start at 1.
             g = it + warmup + 1
             t = time.perf_counter_ns()
-            run_op(db, op, g, ops[op])
+            run_op(db, doc, op, g)
             us = (time.perf_counter_ns() - t) // 1000
             print(f"sdk,{dialect},{op},{it},{us},{rows}")
 
 
 def _safety(dialect: str) -> None:
     db = open_db(dialect)
-    ops = lm_bench_setup.load(dialect)["ops"]
+    doc = lm_bench_setup.load(dialect)
     expected = {**RELATION_QUERY_COUNTS, **BATCH_QUERY_COUNTS, **TX_STMT_COUNTS}
     print("op                    statements  rows")
     for op in OPS:
         seed(db)
         db.count = 0
         db.rows = 0
-        run_op(db, op, 0, ops[op])
+        run_op(db, doc, op, 0)
         got, rows = db.count, db.rows
         want = expected.get(op)
         mark = "ok" if want is None or got == want else f"STATEMENT-COUNT MISMATCH (want {want})"
+        # The machine-readable half, in the ONE format every cell prints, so `run-cells.sh` can hold the
+        # ten cells to the same statements and rows per op instead of ten human tables being eyeballed.
+        print(f"proof,sdk,{dialect},{op},{got},{rows}")
         print(f"{op:<20}  {got:<10}  {rows:<6} {mark}")
         assert want is None or got == want, f"{op} statement-count regression: got {got}, expect {want}"
 

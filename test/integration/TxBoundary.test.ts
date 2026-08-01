@@ -91,7 +91,6 @@ function insertPlan(dialect: 'postgres' | 'mysql'): TransactionPlan {
     phase: 'create',
     entityFrom: 'tx_body_0',
     statements: [{ id: 'tx_body_0', role: 'body', op: insertOp(dialect), label: 'Insert' }],
-    onIdempotentHit: 'rollback',
   };
 }
 

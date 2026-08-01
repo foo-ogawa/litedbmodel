@@ -1,9 +1,10 @@
 // Command lm_orm — the raw-driver SDK-baseline ORM-bench cell (Go), twin of go/lm_bench/lm_orm_native.
 //
 // The apples-to-apples SDK comparison for the go native cell: it runs the SAME 19 ORM ops over the SAME
-// canonical fixture (.setup/<dialect>.json, from orm-domain.ts — reused as FIXTURE setup, never for op
-// execution), against the SAME database the native cell of that dialect drives — but every op is
-// HAND-WRITTEN SQL issued straight at database/sql. litedbmodel_runtime and the bc-generated
+// canonical fixture, with the SAME statements, values and RETURNING recoveries — all four from the ONE
+// artifact every cell reads (.setup/<dialect>.json: `schema`/`delete`/`insert`, `ops`, `inputs`,
+// `recover`/`batchColumns`) — against the SAME database the native cell of that dialect drives, but
+// issued straight at database/sql. litedbmodel_runtime and the bc-generated
 // RunNativeRawStruct_* runners are NOT in the path (#157 invariant 6): in particular MySQL is opened
 // with the PLAIN go-sql-driver, never the runtime's RETURNING-emulating "mysql-scp" wrapper, which
 // would hand the raw baseline a feature a raw driver does not have.
@@ -34,7 +35,6 @@ import (
 	"github.com/foo-ogawa/litedbmodel/go/lm_bench/setup"
 	"os"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -173,37 +173,79 @@ func (c *cell) recoverRows(sqlText string, args ...any) [][]any {
 	return out
 }
 
+// writeResult is what a driver reports about a write. `hasID` is false where the driver has no
+// last-insert-id to give (pgx) — PostgreSQL never needs one, since it executes RETURNING itself.
+type writeResult struct {
+	insertID int64
+	affected int64
+	hasID    bool
+}
+
 // exec runs a prepared, parameterised write on the current scope (the open transaction, or the pool).
-func (c *cell) exec(sqlText string, args ...any) {
+func (c *cell) exec(sqlText string, args ...any) writeResult {
 	c.count++
-	if _, err := c.stmt(sqlText).Exec(args...); err != nil {
+	res, err := c.stmt(sqlText).Exec(args...)
+	if err != nil {
 		panic(fmt.Sprintf("exec %q: %v", sqlText, err))
 	}
+	out := writeResult{}
+	if n, e := res.RowsAffected(); e == nil {
+		out.affected = n
+	}
+	if id, e := res.LastInsertId(); e == nil {
+		out.insertID, out.hasID = id, true
+	}
+	return out
+}
+
+// bindRecovery resolves the recovering SELECT's params from the write's own params and what the driver
+// reported — the `bindReselect` of src/scp/makesql/mysql-returning.ts, which is where these kinds are
+// defined. A kind the driver cannot answer is a HARD failure: recovering the wrong rows quietly is the
+// defect this path exists to remove.
+func bindRecovery(binds []setup.Bind, params []any, wrote writeResult) []any {
+	out := make([]any, len(binds))
+	for i, b := range binds {
+		if b.Kind == "param" {
+			out[i] = params[b.Index]
+			continue
+		}
+		if !wrote.hasID {
+			panic(fmt.Sprintf("recovery binds %q, but this driver reported no insert id for the write", b.Kind))
+		}
+		switch b.Kind {
+		case "lastId":
+			out[i] = wrote.insertID
+		case "highId":
+			n := wrote.affected
+			if n < 1 {
+				n = 1
+			}
+			out[i] = wrote.insertID + n
+		default:
+			panic(fmt.Sprintf("unknown recovery bind kind %q", b.Kind))
+		}
+	}
+	return out
 }
 
 // writeReturningID runs a write that hands back the id of the row it wrote — the ` RETURNING id` the
 // authored native module declares for every id-chaining write (benchmark/crosslang/native-model.ts).
 // The baseline issues the SAME statement and reads the SAME row back, so the two surfaces do equal work.
 //
-// MySQL has no RETURNING: the runtime's mysql adapter strips the clause and recovers the written rows
-// with a keyed SELECT on the same connection (src/scp/makesql/mysql-returning.ts). `recoverSQL` is that
-// same recovery, so the baseline pays it too rather than reading a free last-insert-id off the driver.
-// returningTail matches the ` RETURNING …` tail (plus any trailing PK hint comment) MySQL cannot parse.
-var returningTail = regexp.MustCompile(`(?is)\s+RETURNING\s+.*$`)
-
-func (c *cell) writeReturningID(sqlText string, recoverSQL string, recoverArgs []any, args ...any) int64 {
-	if c.dialect != "mysql" {
+// `rec` is the artifact's recovery for this statement: nil wherever the database executes the RETURNING
+// itself, and on MySQL — which cannot parse it — the write with the clause stripped plus the keyed
+// SELECT that recovers the written rows. Both come from the library's own `buildMysqlReselect`
+// (benchmark/crosslang/derive-ops.ts), so the baseline issues exactly what the runtime issues instead of
+// a hand-copied guess at it. The recovery is part of the SAME logical statement: the runtime's own seam
+// counts a MySQL RETURNING write as ONE (it issues the recovery below the seam) while counting the row
+// it recovers, so this tallies the rows without bumping the statement count a second time.
+func (c *cell) writeReturningID(sqlText string, rec *setup.Recovery, args ...any) int64 {
+	if rec == nil {
 		rows := c.query(sqlText, args...)
 		return asInt(rows[0][0])
 	}
-	// MySQL cannot parse RETURNING: strip the clause (and the /*scp:pk=…*/ hint naming the key) exactly as
-	// the runtime's mysql adapter does, then recover the written row with the keyed SELECT.
-	c.exec(returningTail.ReplaceAllString(sqlText, ""), args...)
-	// The recovery is part of the SAME logical statement: the runtime's own seam counts a MySQL RETURNING
-	// write as ONE statement (it issues the recovery below the seam) while counting the row it recovers.
-	// Counting it as a second statement here would make the baseline look like it issued more work than it
-	// does - both surfaces send MySQL the same two SQL statements.
-	rows := c.recoverRows(recoverSQL, recoverArgs...)
+	wrote := c.exec(rec.WriteSQL, args...)
+	rows := c.recoverRows(rec.SelectSQL, bindRecovery(rec.Binds, args, wrote)...)
 	return asInt(rows[0][0])
 }
 
@@ -280,21 +322,6 @@ func (c *cell) seed(doc setup.Doc) {
 			}
 		}
 	}
-}
-
-// ── batch-write inputs (mirror the native cell's userRows / the ops SSoT) ────────────────────────────
-func batchRows(it int, stable bool) (emails, names []string) {
-	emails = make([]string, 10)
-	names = make([]string, 10)
-	for i := 0; i < 10; i++ {
-		if stable {
-			emails[i] = fmt.Sprintf("many%d@bench.com", i)
-		} else {
-			emails[i] = fmt.Sprintf("many%d_%d@bench.com", it, i)
-		}
-		names[i] = fmt.Sprintf("Many %d", i)
-	}
-	return
 }
 
 // ── nested materialization (fair vs the native cell) ─────────────────────────────────────────────────
@@ -558,32 +585,24 @@ func flattenSingles(tuples [][]int64) any {
 	return tuples
 }
 
-// The keyed SELECTs the runtime's MySQL adapter recovers a RETURNING write's rows with
-// (src/scp/makesql/mysql-returning.ts): the conflict key for an upsert, the AUTO_INCREMENT range for an
-// insert, the write's own WHERE for an update. Only MySQL runs them — the others have RETURNING.
-const (
-	recoverByEmail        = "SELECT id FROM benchmark_users WHERE email = ?"
-	recoverByLastInsertID = "SELECT id FROM benchmark_users WHERE id = LAST_INSERT_ID()"
-	recoverByID           = "SELECT id FROM benchmark_users WHERE id = ?"
-)
-
 // batchParams renders a batch write's record set as the param(s) the captured statement expects: ONE JSON
 // array on MySQL/SQLite, one array PER COLUMN on PostgreSQL (its UNNEST form takes column arrays). The
 // payload repeats once per `?` — updateMany's SET subquery and its WHERE each read it.
-func (c *cell) batchParams(sqlText string, records []map[string]any) []any {
+//
+// `columns` is the statement's OWN column list (.setup/<dialect>.json `batchColumns`, read off the SQL
+// by derive-ops.ts). PostgreSQL's `UNNEST(?::int[], ?::text[]) AS v(id, name)` binds the Nth array to
+// the Nth alias, so the order is the statement's to choose; sorting the record's keys here agreed with
+// it only by coincidence.
+func (c *cell) batchParams(sqlText string, columns []string, records []setup.Values) []any {
 	var one []any
 	if c.dialect == "postgres" {
-		cols := make([]string, 0, len(records[0]))
-		for k := range records[0] {
-			cols = append(cols, k)
-		}
-		sort.Strings(cols)
-		for _, col := range cols {
+		for _, col := range columns {
 			vals := make([]string, len(records))
 			numeric := true
 			for i, r := range records {
-				if n, ok := r[col].(int64); ok {
-					vals[i] = strconv.FormatInt(n, 10)
+				// JSON decodes every number to float64; a declared `id` column is an integer.
+				if n, ok := r[col].(float64); ok {
+					vals[i] = strconv.FormatInt(int64(n), 10)
 				} else {
 					vals[i] = fmt.Sprint(r[col])
 					numeric = false
@@ -592,7 +611,10 @@ func (c *cell) batchParams(sqlText string, records []map[string]any) []any {
 			one = append(one, pgArrayLiteral(vals, !numeric))
 		}
 	} else {
-		enc, _ := json.Marshal(records)
+		enc, err := json.Marshal(records)
+		if err != nil {
+			panic(fmt.Sprintf("encode batch records: %v", err))
+		}
 		one = []any{string(enc)}
 	}
 	n := strings.Count(sqlText, "?") / len(one)
@@ -606,26 +628,6 @@ func (c *cell) batchParams(sqlText string, records []map[string]any) []any {
 	return out
 }
 
-// userRecords is the 10-row batch record set (the same one the native cell passes).
-func userRecords(it int, stable bool) []map[string]any {
-	emails, names := batchRows(it, stable)
-	out := make([]map[string]any, 10)
-	for i := 0; i < 10; i++ {
-		out[i] = map[string]any{"email": emails[i], "name": names[i]}
-	}
-	return out
-}
-
-// patchRecords is the id-keyed 10-row batch set updateMany binds.
-func patchRecords() []map[string]any {
-	_, names := batchRows(0, false)
-	out := make([]map[string]any, 10)
-	for i := 0; i < 10; i++ {
-		out[i] = map[string]any{"id": int64(i + 1), "name": names[i]}
-	}
-	return out
-}
-
 // ── the 19 ops (native-cell order). Fixed inputs mirror the go native cell; mutating ops vary their
 //
 //	UNIQUE column by it. Reads: LIMIT/ORDER shapes match the ops SSoT (== the native generated SQL). ──
@@ -635,65 +637,59 @@ func patchRecords() []map[string]any {
 // divides native by sdk, which only isolates the runtime's cost if both send the DB the same statements.
 // What stays hand-written is what a raw-driver user writes: param binding, decode, grouping children into
 // parents, and the transaction bracket.
-func (c *cell) op(name string, it int, sqlList []string) {
+func (c *cell) op(doc setup.Doc, name string, it int) {
+	sqlList := doc.Ops[name]
+	in := doc.Input(name, it)
+	rec := func(i int) *setup.Recovery { return doc.Recovery(name, i) }
 	switch name {
 	case "findAll":
 		benchSink = decodeUsers(c.query(sqlList[0]))
 	case "filterPaginateSort":
-		benchSink = decodePostsFull(c.query(sqlList[0], 1))
+		benchSink = decodePostsFull(c.query(sqlList[0], in.Int("published")))
 	case "findFirst":
-		benchSink = decodeUsers(c.query(sqlList[0], "User%"))
+		benchSink = decodeUsers(c.query(sqlList[0], in.Str("name")))
 	case "findUnique":
-		benchSink = decodeUsers(c.query(sqlList[0], "user500@example.com"))
+		benchSink = decodeUsers(c.query(sqlList[0], in.Str("email")))
 	case "nestedFindAll":
 		benchSink = c.materializeUsersPosts(c.query(sqlList[0]), sqlList[1])
 	case "nestedFindFirst":
-		benchSink = c.materializeUsersPosts(c.query(sqlList[0], "User%"), sqlList[1])
+		benchSink = c.materializeUsersPosts(c.query(sqlList[0], in.Str("name")), sqlList[1])
 	case "nestedFindUnique":
-		benchSink = c.materializeUsersPosts(c.query(sqlList[0], "user1@example.com"), sqlList[1])
+		benchSink = c.materializeUsersPosts(c.query(sqlList[0], in.Str("email")), sqlList[1])
 	case "nestedRelations":
 		benchSink = c.materializeUsersPostsComments(c.query(sqlList[0]), sqlList[1], sqlList[2])
 	case "compositeRelations":
 		benchSink = c.materializeComposite(sqlList)
 	case "create":
-		c.exec(sqlList[0], fmt.Sprintf("new%d@bench.com", it), "New")
+		c.exec(sqlList[0], in.Str("email"), in.Str("name"))
 	case "update":
-		c.exec(sqlList[0], "Updated 1", 1)
+		c.exec(sqlList[0], in.Str("name"), in.Int("id"))
 	case "upsert":
 		// The captured statement declares ` RETURNING id`, so the baseline reads the id back too.
-		benchSink = c.writeReturningID(sqlList[0], recoverByEmail, []any{"user1@example.com"},
-			"user1@example.com", "Upserted One")
-	case "createMany":
-		c.exec(sqlList[0], c.batchParams(sqlList[0], userRecords(it, false))...)
-	case "upsertMany":
-		// The SAME 10 records the native module upserts: conflicting on a different record set is a
-		// different amount of work.
-		c.exec(sqlList[0], c.batchParams(sqlList[0], userRecords(it, true))...)
-	case "updateMany":
-		c.exec(sqlList[0], c.batchParams(sqlList[0], patchRecords())...)
+		benchSink = c.writeReturningID(sqlList[0], rec(0), in.Str("email"), in.Str("name"))
+	case "createMany", "upsertMany", "updateMany":
+		// The SAME 10 records the native module writes, bound the way the statement asks for them.
+		c.exec(sqlList[0], c.batchParams(sqlList[0], doc.Columns(name), in.Records("rows"))...)
 	case "nestedCreate":
 		c.begin()
-		uid := c.writeReturningID(sqlList[0], recoverByLastInsertID, nil,
-			fmt.Sprintf("nc%d@bench.com", it), "NC")
-		c.exec(sqlList[1], uid, "NC Post")
+		uid := c.writeReturningID(sqlList[0], rec(0), in.Str("email"), in.Str("name"))
+		c.exec(sqlList[1], uid, in.Str("title"))
 		c.commit()
 	case "nestedUpsert":
 		c.begin()
-		uid := c.writeReturningID(sqlList[0], recoverByEmail, []any{"user1@example.com"},
-			"user1@example.com", "NUp")
-		c.exec(sqlList[1], uid, "NUp Post")
+		uid := c.writeReturningID(sqlList[0], rec(0), in.Str("email"), in.Str("name"))
+		c.exec(sqlList[1], uid, in.Str("title"))
 		c.commit()
 	case "nestedUpdate":
 		c.begin()
 		// The generated runner chains the dependent UPDATE off the id the first UPDATE returned; taking
 		// the id from the input instead would skip a statement's worth of work.
-		uid := c.writeReturningID(sqlList[0], recoverByID, []any{1}, "NU", 1)
-		c.exec(sqlList[1], "NU Post", uid)
+		uid := c.writeReturningID(sqlList[0], rec(0), in.Str("name"), in.Int("id"))
+		c.exec(sqlList[1], in.Str("title"), uid)
 		c.commit()
 	case "delete":
 		c.begin()
-		uid := c.writeReturningID(sqlList[0], recoverByLastInsertID, nil,
-			fmt.Sprintf("del%d@bench.com", it), "Del")
+		uid := c.writeReturningID(sqlList[0], rec(0), in.Str("email"), in.Str("name"))
 		c.exec(sqlList[1], uid)
 		c.commit()
 	default:
@@ -748,7 +744,7 @@ func main() {
 		c.seed(doc) // clean fixture per op (matches the python/php/rust cells); off-seam, never counted
 		c.count = 0
 		c.rows = 0
-		c.op(name, 0, doc.Ops[name])
+		c.op(doc, name, 0)
 		q := int(c.count)
 		mark := "ok"
 		if exp, okk := expectedStatements[name]; okk && exp != q {
@@ -760,6 +756,9 @@ func main() {
 			kind = " (BEGIN + body + COMMIT)"
 		}
 		rowsByOp[name] = c.rows
+		// The machine-readable half, in the ONE format every cell prints, so `run-cells.sh` can hold the
+		// ten cells to the same statements and rows per op instead of ten human tables being eyeballed.
+		fmt.Printf("proof,sdk,%s,%s,%d,%d\n", c.dialect, name, q, c.rows)
 		fmt.Printf("%-20s  %-10d  %-5d %s%s\n", name, q, c.rows, mark, kind)
 	}
 
@@ -780,12 +779,12 @@ func main() {
 		for _, name := range ops {
 			c.seed(doc) // clean fixture per op, as in the safety pass above
 			for it := 0; it < warmup; it++ {
-				c.op(name, it+1, doc.Ops[name])
+				c.op(doc, name, it+1)
 			}
 			for it := 0; it < reps; it++ {
 				g := it + warmup + 1
 				t := time.Now()
-				c.op(name, g, doc.Ops[name])
+				c.op(doc, name, g)
 				fmt.Printf("sdk,%s,%s,%d,%d,%d\n", c.dialect, name, it, time.Since(t).Microseconds(), rowsByOp[name])
 			}
 		}

@@ -749,7 +749,20 @@ func wireKeyCell(cell wire.WireValue) keyCell {
 		return keyCell{kind: 1, num: p.Got}
 	}
 	if p := cell.AsFloat(); p.Kind == wireProbeGot {
-		if p.Got == float64(int64(p.Got)) {
+		// A whole float folds onto the integer key, but ONLY from inside int64's range — tested
+		// DIRECTLY, never by round-tripping through `int64(f)`. That conversion is
+		// implementation-defined out of range, and the two implementations disagree in a way that
+		// decides this: arm64's `fcvtzs` SATURATES to MaxInt64, whose float64 rounds back up to 2^63,
+		// so `f == float64(int64(f))` held for f = 2^63 and put it in MaxInt64's bucket — a child keyed
+		// 2^63 nested under the parent keyed MaxInt64. x86-64's `cvttsd2si` yields MinInt64 instead, so
+		// the same code was correct there and CI (x86) could never see it (#262).
+		// Both bounds are exactly representable as a float64; the upper one is EXCLUSIVE because
+		// `float64(MaxInt64)` rounds up to 2^63. The range test also excludes ±Inf and NaN, which fall
+		// through to the bits branch. Same rule, same constants as rust `grouping.rs` and php
+		// `Grouping.php` — this was the one of the four runtimes still spelling it as a round-trip.
+		const i64MinF = -9223372036854775808.0 // MinInt64, exact
+		const i64SupF = 9223372036854775808.0  // 2^63, the first float64 past MaxInt64
+		if p.Got == math.Trunc(p.Got) && p.Got >= i64MinF && p.Got < i64SupF {
 			return keyCell{kind: 1, num: int64(p.Got)}
 		}
 		return keyCell{kind: 2, num: int64(math.Float64bits(p.Got))}

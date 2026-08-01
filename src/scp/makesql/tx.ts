@@ -17,11 +17,9 @@
  * The single-row and read paths are lowered by `bc generate` into a native module per language and
  * never reach this runtime; there is no runtime read-compile and no runtime single-write compile.
  *
- * ## Gate short-circuit (still supported by the runtime)
- *
- * A statement MAY carry a {@link GateRule} the runtime evaluates AFTER executing it: a failing gate
- * short-circuits — the remaining statements never execute and the tx ROLLBACKs. The batch plans
- * derived here carry no gates; the rule survives for a caller that hands the runtime a gated plan.
+ * Every statement executes: a plan either commits or raises. There is no gate that inspects a
+ * statement's result and short-circuits the rest — no plan in this repository ever carried one, so
+ * the interpretation was removed rather than kept as a path nothing reaches (#256).
  */
 
 import { evaluateExpression, type Scope, type Value } from 'behavior-contracts/runtime';
@@ -135,11 +133,8 @@ export interface TxOp {
   };
 }
 
-/** The role a transaction statement plays (drives the runtime's gate-first interpretation). */
+/** The role a transaction statement plays (drives the runtime's §6 derivation order). */
 export type StatementRole =
-  | 'gate:requires'
-  | 'gate:idempotency'
-  | 'gate:unique'
   | 'body'
   | 'derive'
   | 'edge'
@@ -158,9 +153,6 @@ export type WriteLifecyclePhase = 'create' | 'update' | 'remove';
  */
 export const ENTITY_ROOT = '__entity';
 
-/** The gate rule the runtime evaluates on a gate statement's result to decide short-circuit. */
-export type GateRule = 'existsElseRollback' | 'insertedElseRollback' | 'insertedElseNoop';
-
 /** One ordered statement of a transaction plan (pure JSON — a makeSQL template + its role). */
 export interface TxStatement {
   /** Stable statement id (ordering key + diagnostics). */
@@ -169,23 +161,31 @@ export interface TxStatement {
   readonly role: StatementRole;
   /** The compiled makeSQL op (complete `sql` + deferred Expression-IR `params`). */
   readonly op: TxOp;
-  /** For a gate statement: the short-circuit rule. Absent for body/derive/edge/emit. */
-  readonly gate?: GateRule;
   /** For a composite body statement: the name under which this RETURNING row is exposed. */
   readonly binds?: string;
   /** Human label (diagnostics; e.g. `requires users`, `derive users.post_count`). */
   readonly label: string;
 }
 
-/** How the runtime resolves an idempotency short-circuit hit (a duplicate request). */
-export type IdempotentHitPolicy = 'rollback';
-
-/** A derived write-time-relations transaction plan (pure JSON — ordered gate-first statements). */
+/** A derived write-time-relations transaction plan (pure JSON — ordered statements). */
 export interface TransactionPlan {
   readonly phase: WriteLifecyclePhase;
   readonly entityFrom: string | null;
   readonly statements: readonly TxStatement[];
-  readonly onIdempotentHit: IdempotentHitPolicy;
+}
+
+/**
+ * Is this plan a BATCH (createMany / updateMany / deleteMany) rather than a single/composite Command?
+ * A batch is ref-free: nothing exposes a row for a later statement to read, so `entityFrom` is null and
+ * every statement is a plain `body` with no `binds`.
+ *
+ * It decides two things that MUST agree, which is why it is ONE function and not a test each side
+ * spells for itself: the runtime accumulates `returnedRows` only for a batch, and the codegen out-type
+ * ({@link ./writeouttype}) includes the `returnedRows` field only for a batch. Two spellings that drift
+ * would type a field the runtime does not fill, or drop one it does (#259).
+ */
+export function isBatchPlan(plan: TransactionPlan): boolean {
+  return plan.entityFrom === null && plan.statements.every((s) => s.binds === undefined && s.role === 'body');
 }
 
 export const IN_SENTINEL = '@in';
@@ -637,22 +637,18 @@ export function deriveBatchPlan(
   // its own rows. `entityFrom` stays null; the runtime accumulates EVERY body statement's RETURNING
   // rows into `TransactionResult.returnedRows` (ordered by group), reproducing v1 `createMany`'s
   // "all created rows" result while `expectedDbState` proves the persisted state.
-  return { phase, entityFrom: null, statements, onIdempotentHit: 'rollback' };
+  return { phase, entityFrom: null, statements };
 }
-
-/** Why a transaction did not commit (a gate short-circuit outcome; not a driver error). */
-export type ShortCircuitReason = 'requires_absent' | 'unique_collision' | 'idempotent_duplicate';
 
 /** The structured outcome of executing a {@link TransactionPlan}. */
 export interface TransactionResult {
   readonly committed: boolean;
-  readonly shortCircuit?: { readonly statementId: string; readonly reason: ShortCircuitReason };
   readonly entity: Record<string, unknown> | null;
   readonly executed: readonly string[];
   /**
    * For a BATCH write (createMany/updateMany/deleteMany — a gate-free plan with `entityFrom:null`):
    * the RETURNING rows of every body statement, ordered by statement. Present ONLY when a body
-   * statement RETURNED rows and the plan has no `$.entity` (batch mode); absent for a gate-first
+   * statement RETURNED rows and the plan has no `$.entity` (batch mode); absent for a
    * single/composite Command (which exposes its written row via `entity`). This carries v1
    * `createMany`'s "all created rows" result across the multi-statement batch.
    */
@@ -695,22 +691,6 @@ function evalAssemble(op: TxOp, scope: Scope, dialect: MakeSQLDialect): { sql: s
 function renderStatement(op: TxOp, scope: Scope, dialect: MakeSQLDialect): { sql: string; params: unknown[] } {
   const { sql, params } = evalAssemble(op, scope, dialect);
   return { sql: renderPlaceholders(sql, dialect), params };
-}
-
-function gateShortCircuit(gate: GateRule, result: { rows: Record<string, unknown>[]; changes: number }): ShortCircuitReason | null {
-  switch (gate) {
-    case 'existsElseRollback':
-      return result.rows.length === 0 ? 'requires_absent' : null;
-    case 'insertedElseRollback':
-      return result.changes === 0 ? 'unique_collision' : null;
-    case 'insertedElseNoop':
-      return result.changes === 0 ? 'idempotent_duplicate' : null;
-    default:
-      // Fail-CLOSED on an unknown / forward-incompatible gate rule (aligned with Python + Rust): a
-      // corrupt or unrecognized gate MUST NOT silently continue (fail-open would let a malformed gate
-      // be skipped and the write COMMIT). Throwing here aborts the tx (the caller's catch ROLLBACKs).
-      throw new Error(`scp write: unknown gate rule '${String(gate)}'`);
-  }
 }
 
 /** Render one statement op to its dialect SQL text + params (exposed for golden tests). */
@@ -769,8 +749,8 @@ export interface WriteExecOptions extends TransactionOptions {
 }
 
 /**
- * Execute a derived {@link TransactionPlan} on a live PG / MySQL connection with gate-first
- * short-circuit and **per-execution connection ownership** (§3). The live-DB WRITE entry (#86).
+ * Execute a derived {@link TransactionPlan} on a live PG / MySQL connection with **per-execution
+ * connection ownership** (§3). The live-DB WRITE entry (#86).
  *
  * ## Ambient-tx JOIN vs. its own envelope (the #86 core)
  *
@@ -826,9 +806,7 @@ function runTransactionPlanAsync(
   dialect: MakeSQLDialect,
   options: TransactionOptions,
 ): Promise<TransactionResult> {
-  const isBatch =
-    plan.entityFrom === null &&
-    plan.statements.every((s) => s.gate === undefined && s.binds === undefined && s.role === 'body');
+  const batch = isBatchPlan(plan);
 
   return withTransactionAsync(ctx, async (txCtx) => {
     const executed: string[] = [];
@@ -840,16 +818,6 @@ function runTransactionPlanAsync(
       const result = await execStatementAsync(txCtx, stmt.op, scope, dialect);
       executed.push(stmt.id);
 
-      if (stmt.gate !== undefined) {
-        const reason = gateShortCircuit(stmt.gate, result);
-        if (reason !== null) {
-          // A gate short-circuit ROLLBACKs the whole tx (atomicity): throw the sentinel so
-          // `withTransactionAsync` runs ROLLBACK on the owned connection, then translate to the
-          // structured non-committed result at the boundary.
-          throw new GateShortCircuit(stmt.id, reason, executed);
-        }
-      }
-
       if (stmt.id === plan.entityFrom) {
         entity = result.rows.length > 0 ? result.rows[0] : null;
         if (entity !== null) scope[ENTITY_ROOT] = entity as unknown as Value;
@@ -857,27 +825,12 @@ function runTransactionPlanAsync(
       if (stmt.binds !== undefined && result.rows.length > 0) {
         scope[stmt.binds] = result.rows[0] as unknown as Value;
       }
-      if (isBatch && stmt.role === 'body' && result.rows.length > 0) returnedRows.push(result.rows);
+      if (batch && stmt.role === 'body' && result.rows.length > 0) returnedRows.push(result.rows);
     }
     return { committed: true, entity, executed, ...(returnedRows.length > 0 ? { returnedRows } : {}) } as TransactionResult;
   }, options, dialect === 'sqlite' ? 'postgres' : dialect, isConnectionError).catch((e: unknown) => {
-    // A gate short-circuit is NOT a failure — it ROLLBACKs and reports `committed:false`. Any other
-    // error is a real driver failure (already rolled back by withTransactionAsync) → re-surface.
-    if (e instanceof GateShortCircuit) {
-      return { committed: false, shortCircuit: { statementId: e.statementId, reason: e.reason }, entity: null, executed: e.executed };
-    }
+    // Every error here is a real driver failure (already rolled back by withTransactionAsync) — a plan
+    // has no non-error way to not commit, so there is nothing to translate before re-surfacing.
     throw mapSqliteError(e);
   });
-}
-
-/** Internal sentinel: a gate short-circuit inside an async tx (ROLLBACK, then report non-committed). */
-class GateShortCircuit extends Error {
-  constructor(
-    readonly statementId: string,
-    readonly reason: ShortCircuitReason,
-    readonly executed: readonly string[],
-  ) {
-    super(`scp write: gate short-circuit at '${statementId}' (${reason})`);
-    this.name = 'GateShortCircuit';
-  }
 }

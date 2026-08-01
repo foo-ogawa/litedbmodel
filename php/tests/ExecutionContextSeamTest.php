@@ -262,7 +262,10 @@ final class ExecutionContextSeamTest extends TestCase
     public function testReleaseIsIdempotentAndCountsExactlyOnce(): void
     {
         $db = self::seed();
-        $tx = new \LiteDbModel\Runtime\PdoTxConnection($db);
+        // Through `beginTx()`, the sanctioned way to get a handle — it hands one out without issuing any
+        // SQL, and it is what wires the per-\PDO prepared-statement cache in (#257), so this unit does not
+        // have to know that collaborator exists.
+        $tx = (new \LiteDbModel\Runtime\PdoDriver($db))->beginTx();
         $this->assertSame(0, $tx->releaseCount());
         $this->assertNull($tx->releasedDestroy());
         $tx->release(false);

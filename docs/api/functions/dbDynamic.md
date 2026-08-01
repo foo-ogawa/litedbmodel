@@ -1,4 +1,4 @@
-[**litedbmodel v1.0.1**](../README.md)
+[**litedbmodel v2.2.4**](../README.md)
 
 ***
 
@@ -7,10 +7,10 @@
 # Function: dbDynamic()
 
 ```ts
-function dbDynamic(func: string, values: unknown[]): DBDynamicValue;
+function dbDynamic(func: string, values?: unknown[]): DBDynamicValue;
 ```
 
-Defined in: DBValues.ts:380
+Defined in: [DBValues.ts:380](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBValues.ts#L380)
 
 Create a dynamic value (function call with parameters)
 

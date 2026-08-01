@@ -1,4 +1,4 @@
-[**litedbmodel v1.0.1**](../README.md)
+[**litedbmodel v2.2.4**](../README.md)
 
 ***
 
@@ -10,7 +10,7 @@
 function dbRaw(sql: string): DBRawValue;
 ```
 
-Defined in: DBValues.ts:387
+Defined in: [DBValues.ts:387](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBValues.ts#L387)
 
 Create a raw SQL expression
 

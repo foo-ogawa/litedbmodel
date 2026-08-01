@@ -1,58 +1,44 @@
-import type { DefineEmbedFn } from 'embedoc';
+import type { DefineEmbedFn, QueryResult } from 'embedoc';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { ORM_SERIES, SUBJECT_SERIES } from '../benchmark/orm-series.js';
 
-// NOTE: this embed is defined inline in index.ts (the embedoc entry file) and
-// declares its own `defineEmbed` helper on purpose:
+// NOTE: two things this directory needs to load at all, both load-bearing for the bench-docs drift gate:
 //
-//  1. Single file — embedoc loads embeds via tsx `tsImport`, and in this
-//     environment a transitively-imported `.ts` file (e.g.
-//     `import x from './benchmark_table.ts'`) is NOT transpiled by tsx on the
-//     ESM->CJS bridge path — node then parses the raw TypeScript and fails on
-//     TS-only syntax ("Unexpected strict mode reserved word" on `interface`).
-//     Keeping the single embed in the entry file (which tsx DOES transform)
-//     makes the drift gate load.
+//  1. `embeds/package.json` (`"type": "module"`) — embedoc loads embeds via tsx `tsImport`. Without the
+//     ESM marker tsx takes the ESM->CJS bridge, which cannot reach `../benchmark/orm-series` — the series
+//     SSoT this file and the chart renderer both read. There the `.js` specifier fails to resolve at all
+//     ("Cannot find module '../benchmark/orm-series.js'", require stack embeds/index.ts), and dropping the
+//     extension resolves the `.ts` file but hands it to node untranspiled ("Unexpected identifier 'as'" on
+//     `as const`). On the ESM path tsx transpiles the whole graph and the import loads.
 //
-//  2. Local `defineEmbed` — importing the *value* `defineEmbed` from the
-//     `embedoc` package fails under tsx's resolver ("No exports main defined").
-//     `defineEmbed` is just an identity/typing helper (`(d) => d`), so we
-//     inline it and pull only the *type* from embedoc (type imports are erased,
-//     no runtime resolution).
+//  2. Local `defineEmbed` — importing the *value* `defineEmbed` from the `embedoc` package fails under
+//     tsx's resolver ("No exports main defined"). `defineEmbed` is just an identity/typing helper
+//     (`(d) => d`), so we inline it and pull only the *type* from embedoc (type imports are erased, no
+//     runtime resolution).
 
 const defineEmbed: DefineEmbedFn = (definition) => definition;
 
-interface BenchmarkRow {
-  Operation: string;
-  ORM: string;
-  Median: string;
-  IQR: string;
-  StdDev: string;
-  Min: string;
-  Max: string;
-  Iterations: string;
-}
-
-// The ORM columns, in display order. The CSV carries litedbmodel's two v2 execution modes as separate
-// series (runtime = the imperative DBModel path; codegen = the bc-generated static module), so BOTH are
-// shown — never collapsed to a hand-picked single number. Header labels are keyed to the CSV `ORM` values.
-const ORM_ORDER = [
-  'litedbmodel (runtime)',
-  'litedbmodel (codegen)',
-  'Kysely',
-  'Drizzle',
-  'TypeORM',
-  'Prisma',
-] as const;
-const LITEDBMODEL_ORMS = ['litedbmodel (runtime)', 'litedbmodel (codegen)'];
-
-/** Group the CSV rows by operation → (ORM → median ms). */
-function groupByOperation(rows: BenchmarkRow[]): Map<string, Map<string, number>> {
+/**
+ * The benchmark CSV, grouped by operation → (series → median ms). A datasource record is untyped, so
+ * every cell this reads is checked: a missing or unparseable Operation / ORM / Median is a broken CSV
+ * and stops the build. The published numbers are machine-derived, so an unreadable cell must never be
+ * allowed to become a plausible-looking zero.
+ */
+function groupByOperation(records: QueryResult): Map<string, Map<string, number>> {
   const byOperation = new Map<string, Map<string, number>>();
-  for (const row of rows) {
-    if (!byOperation.has(row.Operation)) byOperation.set(row.Operation, new Map());
-    byOperation.get(row.Operation)!.set(row.ORM, parseFloat(row.Median));
-  }
+  records.forEach((record, index) => {
+    const operation = record['Operation'];
+    const orm = record['ORM'];
+    const medianCell = record['Median'];
+    const median = typeof medianCell === 'string' && medianCell.trim() !== '' ? Number(medianCell) : NaN;
+    if (typeof operation !== 'string' || typeof orm !== 'string' || !Number.isFinite(median)) {
+      throw new Error(`benchmark_results row ${index + 1} is not a benchmark row: ${JSON.stringify(record)}`);
+    }
+    if (!byOperation.has(operation)) byOperation.set(operation, new Map());
+    byOperation.get(operation)!.set(orm, median);
+  });
   return byOperation;
 }
 
@@ -65,14 +51,13 @@ const benchmarkTable = defineEmbed({
   dependsOn: ['benchmark_results'],
 
   async render(ctx) {
-    const rows = await ctx.datasources['benchmark_results']!.query('') as BenchmarkRow[];
-    const byOperation = groupByOperation(rows);
+    const byOperation = groupByOperation(await ctx.datasources['benchmark_results']!.query(''));
 
     const tableRows: string[][] = [];
     for (const [op, orms] of byOperation) {
       const min = fastestValue(orms);
       const row: string[] = [op];
-      for (const orm of ORM_ORDER) {
+      for (const orm of ORM_SERIES) {
         const val = orms.get(orm);
         if (val === undefined) {
           row.push('N/A');
@@ -85,7 +70,7 @@ const benchmarkTable = defineEmbed({
       tableRows.push(row);
     }
 
-    const markdown = ctx.markdown.table(['Operation', ...ORM_ORDER], tableRows);
+    const markdown = ctx.markdown.table(['Operation', ...ORM_SERIES], tableRows);
     return { content: markdown };
   },
 });
@@ -97,14 +82,13 @@ const benchmarkSummary = defineEmbed({
   // count drifts out of sync the moment the data is re-run). litedbmodel "wins" an op when either of its
   // two modes (runtime/codegen) has the fastest median (ties within 0.01ms count as a win).
   async render(ctx) {
-    const rows = await ctx.datasources['benchmark_results']!.query('') as BenchmarkRow[];
-    const byOperation = groupByOperation(rows);
+    const byOperation = groupByOperation(await ctx.datasources['benchmark_results']!.query(''));
 
     let wins = 0;
     const total = byOperation.size;
     for (const orms of byOperation.values()) {
       const min = fastestValue(orms);
-      const winsHere = LITEDBMODEL_ORMS.some((o) => {
+      const winsHere = SUBJECT_SERIES.some((o) => {
         const v = orms.get(o);
         return v !== undefined && Math.abs(v - min) < 0.01;
       });
@@ -170,11 +154,44 @@ const codeSnippet = defineEmbed({
   },
 });
 
+// ── package_version: the release the published numbers belong to ─────────────
+//
+// The benchmark pages declare their numbers machine-derived — and "which version was measured" is
+// just as much a factual claim about the data as the medians are. Hand-typed, it went stale silently
+// (the tables were re-run while the prose still said an older release), because the drift gate only
+// regenerates embed REGIONS and prose outside the markers is invisible to it. So the version is read
+// from package.json — the release SSoT that scripts/sync-versions.mjs propagates to every language
+// runtime — and rendered inside a region the gate covers.
+//
+// Only the version and package name are generated. The measurement ENVIRONMENT (DB version, CPU) is
+// recorded nowhere in the repo — not in the CSV, whose columns are Operation/ORM/Median/IQR/StdDev/
+// Min/Max/Iterations — so it stays hand-written prose outside the markers rather than being dressed
+// up as machine-derived by hard-coding it here.
+//
+// Params (marker attributes):
+//   label  lead-in shown before the version (default: `Version`)
+const packageVersion = defineEmbed({
+  async render(ctx) {
+    const params = ctx.params as Record<string, string | undefined>;
+    const label = params['label'] ?? 'Version';
+    const pkg: unknown = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8'));
+    const name = (pkg as { name?: unknown }).name;
+    const version = (pkg as { version?: unknown }).version;
+    // A missing/blank field must never render as `undefined` or an empty bold run that reads like a
+    // version — an unreadable SSoT is a build failure, not a plausible-looking string.
+    if (typeof name !== 'string' || name === '' || typeof version !== 'string' || version === '') {
+      throw new Error('package_version: package.json has no usable `name` / `version`');
+    }
+    return { content: `**${label}:** ${name} **${version}**` };
+  },
+});
+
 // embedoc expects `embeds` export
 export const embeds = {
   benchmark_table: benchmarkTable,
   benchmark_summary: benchmarkSummary,
   code_snippet: codeSnippet,
+  package_version: packageVersion,
 };
 
 // For direct import compatibility

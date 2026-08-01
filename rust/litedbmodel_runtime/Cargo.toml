@@ -1,6 +1,6 @@
 [package]
 name = "litedbmodel_runtime"
-version = "2.2.3"
+version = "2.2.4"
 edition.workspace = true
 license.workspace = true
 description = "Native SQL execution core shared by generated litedbmodel Rust modules."
@@ -43,5 +43,4 @@ futures-util = { version = "0.3", optional = true }
 
 [features]
 default = []
-native = []
 livedb = ["dep:tokio-postgres", "dep:deadpool-postgres", "dep:sqlx", "dep:tokio", "dep:futures-util", "dep:rust_decimal", "dep:chrono"]

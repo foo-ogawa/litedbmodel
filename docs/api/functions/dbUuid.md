@@ -1,4 +1,4 @@
-[**litedbmodel v1.0.1**](../README.md)
+[**litedbmodel v2.2.4**](../README.md)
 
 ***
 
@@ -7,10 +7,10 @@
 # Function: dbUuid()
 
 ```ts
-function dbUuid(value: string, operator: string): DBCast;
+function dbUuid(value: string, operator?: string): DBCast;
 ```
 
-Defined in: DBValues.ts:519
+Defined in: [DBValues.ts:519](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBValues.ts#L519)
 
 Create a type-cast UUID value
 

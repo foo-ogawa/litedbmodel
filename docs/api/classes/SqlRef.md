@@ -1,4 +1,4 @@
-[**litedbmodel v1.0.1**](../README.md)
+[**litedbmodel v2.2.4**](../README.md)
 
 ***
 
@@ -6,7 +6,7 @@
 
 # Class: SqlRef
 
-Defined in: SqlFragment.ts:71
+Defined in: [SqlFragment.ts:71](https://github.com/foo-ogawa/litedbmodel/blob/main/src/SqlFragment.ts#L71)
 
 Table-qualified column reference (e.g., `users.id`).
 Created via `sql.ref()`. Only usable inside `sql` tagged templates.
@@ -22,7 +22,7 @@ new SqlRef(column: {
 }): SqlRef;
 ```
 
-Defined in: SqlFragment.ts:76
+Defined in: [SqlFragment.ts:76](https://github.com/foo-ogawa/litedbmodel/blob/main/src/SqlFragment.ts#L76)
 
 #### Parameters
 
@@ -40,9 +40,9 @@ Defined in: SqlFragment.ts:76
 
 | Property | Modifier | Type | Defined in |
 | ------ | ------ | ------ | ------ |
-| <a id="_tag"></a> `_tag` | `readonly` | `"SqlRef"` | SqlFragment.ts:72 |
-| <a id="tablename"></a> `tableName` | `readonly` | `string` | SqlFragment.ts:73 |
-| <a id="columnname"></a> `columnName` | `readonly` | `string` | SqlFragment.ts:74 |
+| <a id="_tag"></a> `_tag` | `readonly` | `"SqlRef"` | [SqlFragment.ts:72](https://github.com/foo-ogawa/litedbmodel/blob/main/src/SqlFragment.ts#L72) |
+| <a id="tablename"></a> `tableName` | `readonly` | `string` | [SqlFragment.ts:73](https://github.com/foo-ogawa/litedbmodel/blob/main/src/SqlFragment.ts#L73) |
+| <a id="columnname"></a> `columnName` | `readonly` | `string` | [SqlFragment.ts:74](https://github.com/foo-ogawa/litedbmodel/blob/main/src/SqlFragment.ts#L74) |
 
 ## Methods
 
@@ -52,7 +52,7 @@ Defined in: SqlFragment.ts:76
 toString(): string;
 ```
 
-Defined in: SqlFragment.ts:81
+Defined in: [SqlFragment.ts:81](https://github.com/foo-ogawa/litedbmodel/blob/main/src/SqlFragment.ts#L81)
 
 #### Returns
 

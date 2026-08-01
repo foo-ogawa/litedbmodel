@@ -1,4 +1,4 @@
-[**litedbmodel v1.0.1**](../README.md)
+[**litedbmodel v2.2.4**](../README.md)
 
 ***
 
@@ -10,7 +10,7 @@
 function dbImmediate(value: string): DBImmediateValue;
 ```
 
-Defined in: DBValues.ts:394
+Defined in: [DBValues.ts:394](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBValues.ts#L394)
 
 Create an immediate value (literal, no binding)
 

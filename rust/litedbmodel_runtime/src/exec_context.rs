@@ -753,8 +753,8 @@ pub enum TxDecision<R> {
 ///      naming a DIFFERENT database is rejected instead;
 ///   3. run `body(&tx_ctx)` → COMMIT / ROLLBACK on the OWNED connection per the returned decision; on
 ///      any `Err` ROLLBACK (best-effort) and re-raise;
-///   4. the owned connection is released (dropped / back to the pool) when the [`TxConnection`] is
-///      consumed by commit/rollback.
+///   4. the owned connection is released — back to the pool, or destroyed when it was never proven
+///      clean — from the ONE release point ([`TxGuard`]), on every path out INCLUDING a panicking body.
 ///
 /// Concurrent calls each acquire a DISTINCT connection, so their writes never cross-talk — the
 /// isolation the shared-slot model (a driver-global `Mutex<Option<writer>>`) violated. This mirrors
@@ -799,8 +799,8 @@ pub fn with_transaction_decided_isolated<'a, R>(
     // seam-issued so a registered middleware observes it). The handle borrows the routing/driver (`'a`);
     // the slot holds it for the body AND for the seam-issued BEGIN/COMMIT/ROLLBACK on the SAME conn.
     let tx: Box<dyn TxConnection + 'a> = ctx.tx_driver()?.acquire_tx()?;
-    let slot: TxSlot<'a> = std::cell::RefCell::new(Some(tx));
-    let tx_ctx = ctx.with_tx_connection(&slot);
+    let guard = TxGuard::new(tx);
+    let tx_ctx = ctx.with_tx_connection(&guard.slot);
 
     // Issue the isolation prelude + BEGIN THROUGH THE SEAM on the pinned owned connection (full TS
     // parity — TS `runAsync(txCtx, 'BEGIN')`). `run(tx_ctx, …)` resolves the pinned tx connection via
@@ -808,7 +808,9 @@ pub fn with_transaction_decided_isolated<'a, R>(
     // the runtime BEGIN/SET. Plain `run` — NOT `run_guarded` — so tx-control is EXEMPT from the write=tx
     // guard (BEGIN/COMMIT/ROLLBACK/SET are not user writes; matches TS exec-context.ts:254). MySQL's
     // SET-before-BEGIN order is honored: `before_begin` (SET) is issued BEFORE `BEGIN`, `after_begin`
-    // (PG SET) after. If BEGIN/prelude fails, the (poisoned) connection is released+destroyed below.
+    // (PG SET) after. A BEGIN/prelude failure means the tx never opened, and the guard then
+    // releases+destroys the connection (poisoned — its state after a failed BEGIN is undefined) while
+    // the error surfaces (retryable errors retry above).
     let began: Result<(), SqlFailure> = (|| {
         for sql in before_begin {
             run(&tx_ctx, sql, &[], &StatementIntent::write())?;
@@ -819,25 +821,31 @@ pub fn with_transaction_decided_isolated<'a, R>(
         }
         Ok(())
     })();
-    if let Err(e) = began {
-        // A BEGIN/prelude failure: the tx never opened. Release+destroy the connection (poisoned — its
-        // state after a failed BEGIN is undefined) and surface the error (retryable errors retry above).
-        if let Some(tx) = slot.borrow_mut().take() {
-            let _ = tx.release(true);
-        }
-        return Err(e);
-    }
+    began?;
 
     // Run the body on the pinned tx ctx (every statement of the tx's own database (an unnamed one, or one naming that database) resolves the SAME owned connection).
-    let result = body(&tx_ctx);
+    // A PANICKING body is the same UNSUCCESSFUL end as a returning-`Err` one — python's
+    // `except BaseException: ROLLBACK; raise` (#239): roll the transaction back through the seam here,
+    // then let the panic resume (the guard releases the connection as the stack unwinds through it).
+    // Without this the panic carried the open transaction back to the pool with it. `AssertUnwindSafe`
+    // is sound here because the only state a caught panic can leave half-updated is the tx connection,
+    // which is precisely what the ROLLBACK and the guard's release settle before the panic resumes.
+    let result = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| body(&tx_ctx))) {
+        Ok(result) => result,
+        Err(payload) => {
+            rollback_or_poison(&tx_ctx, &guard);
+            std::panic::resume_unwind(payload);
+        }
+    };
 
-    // End the tx by seam-issuing COMMIT/ROLLBACK on the pinned connection (middleware-visible), THEN
-    // releasing the handle (drop the owned connection — the SQL is done). `poison` on a ROLLBACK
-    // failure / a body error whose ROLLBACK failed ⇒ the connection is destroyed, never recycled.
+    // End the tx by seam-issuing COMMIT/ROLLBACK on the pinned connection (middleware-visible). The
+    // handle itself is released by the guard, once, on the way out — what these arms decide is whether
+    // the connection is PROVEN clean ([`TxGuard::keep`]) or stays poisoned (a failed ROLLBACK / a body
+    // error whose ROLLBACK failed ⇒ destroyed, never recycled).
     let end: Result<R, SqlFailure> = match result {
         Ok(TxDecision::Commit(r)) => match run(&tx_ctx, "COMMIT", &[], &StatementIntent::write()) {
             Ok(_) => {
-                release_tx(&slot, false);
+                guard.keep();
                 // WRITER-STICKY (Phase C / #88 read-your-writes): a committed write marks the sticky
                 // clock so subsequent reads within the window route to the writer. No-op w/o routing,
                 // and skipped entirely when this tx opted out per-transaction (#134). The GLOBAL
@@ -850,9 +858,7 @@ pub fn with_transaction_decided_isolated<'a, R>(
             Err(e) => {
                 // COMMIT failed (e.g. a serialization failure surfaced at COMMIT — the 40001 the retry
                 // loop must see): best-effort ROLLBACK, destroy the connection, surface the error.
-                let rolled = run(&tx_ctx, "ROLLBACK", &[], &StatementIntent::write());
-                release_tx(&slot, true);
-                let _ = rolled;
+                let _ = run(&tx_ctx, "ROLLBACK", &[], &StatementIntent::write());
                 Err(e)
             }
         },
@@ -861,32 +867,75 @@ pub fn with_transaction_decided_isolated<'a, R>(
             // the value. Committed NOTHING ⇒ does NOT arm stickiness. A ROLLBACK failure IS surfaced.
             match run(&tx_ctx, "ROLLBACK", &[], &StatementIntent::write()) {
                 Ok(_) => {
-                    release_tx(&slot, false);
+                    guard.keep();
                     Ok(r)
                 }
-                Err(e) => {
-                    release_tx(&slot, true);
-                    Err(e)
-                }
+                Err(e) => Err(e),
             }
         }
         Err(e) => {
-            // A body error: ROLLBACK (best-effort, through the seam), destroy the connection, surface
-            // the ORIGINAL error (the ROLLBACK outcome does not mask it).
-            let rolled = run(&tx_ctx, "ROLLBACK", &[], &StatementIntent::write());
-            release_tx(&slot, rolled.is_err());
+            // A body error: ROLLBACK (best-effort, through the seam), then surface the ORIGINAL error
+            // (the ROLLBACK outcome does not mask it).
+            rollback_or_poison(&tx_ctx, &guard);
             Err(e)
         }
     };
     end
 }
 
-/// Take the owned tx handle out of the slot and RELEASE it exactly once (drop the connection — back to
-/// the pool, or destroyed on `poison`). The COMMIT/ROLLBACK was already seam-issued; `release` runs no
-/// SQL. A `None` slot (already released) is a no-op — the runtime never releases twice.
-fn release_tx(slot: &TxSlot<'_>, poison: bool) {
-    if let Some(tx) = slot.borrow_mut().take() {
-        let _ = tx.release(poison);
+/// End an UNSUCCESSFUL transaction: ROLLBACK through the seam (best-effort, so a registered middleware
+/// still observes it) and record whether it left the connection clean — `keep` on a clean ROLLBACK,
+/// still poisoned (⇒ destroyed on release) when the ROLLBACK itself failed. The ONE way a transaction
+/// whose body did not succeed ends, whether that body returned `Err` or PANICKED.
+fn rollback_or_poison(tx_ctx: &ExecutionContext, guard: &TxGuard<'_>) {
+    if run(tx_ctx, "ROLLBACK", &[], &StatementIntent::write()).is_ok() {
+        guard.keep();
+    }
+}
+
+/// The tx's owned connection AND the runtime's SINGLE release point — the rust spelling of the
+/// `finally` the other four ports release in (python `exec_context.py` "The SINGLE release point", php
+/// `finally` + its EXACTLY-1 leak guard, TS "released EXACTLY once per attempt", go `defer`). The
+/// handle is released exactly once, when this guard drops: on the success path, on every `Err` path,
+/// AND when `body` PANICS and the stack unwinds past it (#239 — an unwinding body used to drop a bare
+/// [`TxSlot`], which runs no ROLLBACK, no `release`, and hands a pooled connection back to the pool
+/// still INSIDE an open transaction; a sqlx `PoolConnection` dropped that way also panics for want of
+/// the tokio context its own `Drop` requires).
+///
+/// `poison` starts TRUE (python's `destroy = True`): the connection is only PROVEN clean once a
+/// COMMIT/ROLLBACK has completed without failing, which is what [`TxGuard::keep`] records. So an
+/// unwound — or otherwise unfinished — transaction DESTROYS its connection instead of recycling it
+/// dirty; closing it rolls the open transaction back server-side.
+struct TxGuard<'a> {
+    /// The slot the tx-scoped ctx pins ([`ExecutionContext::with_tx_connection`]); `None` once released.
+    slot: TxSlot<'a>,
+    poison: std::cell::Cell<bool>,
+}
+
+impl<'a> TxGuard<'a> {
+    fn new(tx: Box<dyn TxConnection + 'a>) -> Self {
+        TxGuard {
+            slot: std::cell::RefCell::new(Some(tx)),
+            poison: std::cell::Cell::new(true),
+        }
+    }
+
+    /// The COMMIT/ROLLBACK completed cleanly ⇒ the connection goes back to the POOL on release
+    /// instead of being destroyed.
+    fn keep(&self) {
+        self.poison.set(false);
+    }
+}
+
+impl Drop for TxGuard<'_> {
+    fn drop(&mut self) {
+        if let Some(tx) = self.slot.get_mut().take() {
+            // `release` runs no SQL — the COMMIT/ROLLBACK was already seam-issued. It drops the owned
+            // connection (back to the pool, or destroyed when poisoned) INSIDE the driver's runtime,
+            // which is the context a sqlx `PoolConnection`'s own `Drop` requires
+            // ([`crate::livedb`] `MyTx::release`).
+            let _ = tx.release(self.poison.get());
+        }
     }
 }
 

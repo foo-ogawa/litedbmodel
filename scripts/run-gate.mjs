@@ -91,8 +91,25 @@ export function assertGatesOpen(suite) {
  * four variables (the 5433/3307 literals in those files are defaults), and all four are overridden.
  * Shared because it is one idea; two copies could drift into one gate pointing at a port something
  * actually listens on, which would make its phase 2 pass for the wrong reason.
+ *
+ * `LITEDBMODEL_ACQUIRE_TIMEOUT_SECS` is here for the same reason the ports are. "Refuses instantly" is
+ * true of the SOCKET, not of every pool on top of it: `sqlx` RETRIES a refused connection until its
+ * acquire budget expires, and that budget is the 30s cross-language default (#225), so each
+ * MySQL-touching rust suite spent ~30s re-dialling a port it had already been refused by — ~90s of the
+ * rust gate's ~165s (#255). Two seconds is far more than a loopback RST needs and still leaves the
+ * refusal as the thing that fails the leg. It is an override of the runtime's default, not a second
+ * default: production keeps 30s, which is what absorbs a database restart.
+ *
+ * Postgres needs no entry — `deadpool`/`tokio-postgres` surfaces the refusal in ~1.5s instead of
+ * retrying — and python bounds its hand-rolled pool itself (#225).
  */
-export const UNREACHABLE = { TEST_DB_HOST: '127.0.0.1', TEST_DB_PORT: '1', TEST_MYSQL_HOST: '127.0.0.1', TEST_MYSQL_PORT: '1' };
+export const UNREACHABLE = {
+  TEST_DB_HOST: '127.0.0.1',
+  TEST_DB_PORT: '1',
+  TEST_MYSQL_HOST: '127.0.0.1',
+  TEST_MYSQL_PORT: '1',
+  LITEDBMODEL_ACQUIRE_TIMEOUT_SECS: '2',
+};
 
 /**
  * One child process, OWNED rather than piped — a pipe loses the runner's exit code unless the caller

@@ -157,45 +157,17 @@ final class OrmBench
      *
      * @return array<string,mixed>
      */
-    public static function opInput(string $op, int $it): array
+    public static function opInput(string $dialect, string $op, int $it): array
     {
-        return match ($op) {
-            'filterPaginateSort' => ['published' => 1],
-            'findFirst', 'nestedFindFirst' => ['name' => 'User%'],
-            'findUnique', 'nestedFindUnique' => ['email' => 'user1@example.com'],
-            'create' => ['email' => "new{$it}@bench.com", 'name' => 'New'],
-            'update' => ['id' => 1, 'name' => 'Updated 1'],
-            'upsert' => ['email' => 'user1@example.com', 'name' => 'Upserted One'],
-            'createMany' => ['rows' => self::userRows($it, false)],
-            'upsertMany' => ['rows' => self::userRows($it, true)],
-            'updateMany' => ['rows' => array_map(static fn (int $i) => (object) ['id' => $i, 'name' => "Many {$i}"], range(1, 10))],
-            'nestedCreate' => ['email' => "nc{$it}@bench.com", 'name' => 'NC', 'title' => 'NC Post'],
-            'nestedUpsert' => ['email' => 'user1@example.com', 'name' => 'NUp', 'title' => 'NUp Post'],
-            'nestedUpdate' => ['id' => 1, 'name' => 'NU', 'title' => 'NU Post'],
-            'delete' => ['email' => "del{$it}@bench.com", 'name' => 'Del'],
-            default => [],
-        };
-    }
-
-    /**
-     * The 10-row batch record set for createMany/upsertMany (ONE opaque `rows` array — the json_each
-     * batch param). `$stable` reuses fixed emails (upsertMany — conflict-updates); else the email
-     * varies by iteration so a plain INSERT stays insertable under UNIQUE(email).
-     *
-     * @return list<array<string,string>>
-     */
-    private static function userRows(int $it, bool $stable): array
-    {
-        // A RECORD, not a map: the vendored bc runtime types every PHP array as `arr` and only a
-        // stdClass as `object` (ExprEval::typeName), so a batch row built as an associative array
-        // cannot answer `.email` — which is exactly what the PostgreSQL UNNEST transpose reads.
-        return array_map(
-            static fn (int $i) => (object) [
-                'email' => $stable ? "many{$i}@bench.com" : "many{$it}_{$i}@bench.com",
-                'name' => "Many {$i}",
-            ],
-            range(0, 9),
-        );
+        require_once __DIR__ . '/../lm_bench_setup.php';
+        $inp = \lm_bench_op_input(self::setup($dialect), $op, $it);
+        // A batch row must be a RECORD, not a map: the vendored bc runtime types every PHP array as
+        // `arr` and only a stdClass as `object` (ExprEval::typeName), so a row decoded from JSON as an
+        // associative array cannot answer `.email` — which is what the PostgreSQL UNNEST transpose reads.
+        if (isset($inp['rows']) && is_array($inp['rows'])) {
+            $inp['rows'] = array_map(static fn (array $r) => (object) $r, $inp['rows']);
+        }
+        return $inp;
     }
 
     /**
@@ -206,9 +178,9 @@ final class OrmBench
      *
      * @param array<string,callable> $fns
      */
-    public static function runOp(array $fns, \PDO|ExecutionContext $driver, string $op, int $it): mixed
+    public static function runOp(array $fns, \PDO|ExecutionContext $driver, string $op, int $it, string $dialect = 'sqlite'): mixed
     {
-        $inp = self::opInput($op, $it);
+        $inp = self::opInput($dialect, $op, $it);
         if (in_array($op, self::TX_OPS, true)) {
             return withTransaction(Context::of($driver), static fn (ExecutionContext $_tx): mixed => $fns[$op]($inp));
         }
@@ -247,7 +219,7 @@ final class OrmBench
         clearMiddlewares();
         $unregister = registerMiddleware($mw);
         try {
-            self::runOp($fns, $driver, $op, 0);
+            self::runOp($fns, $driver, $op, 0, $dialect);
         } finally {
             $unregister();
             clearMiddlewares();
@@ -266,14 +238,14 @@ final class OrmBench
             // denominator (#170); the counting middleware is gone before the timed loop starts.
             $rows = self::probe($driver, $fns, $dialect, $op)['rows'];
             for ($it = 0; $it < $warmup; $it++) {
-                self::runOp($fns, $driver, $op, $it + 1);
+                self::runOp($fns, $driver, $op, $it + 1, $dialect);
             }
             for ($it = 0; $it < $reps; $it++) {
                 // Unique iteration id: the probe took 0, so warmup/timed start at 1 (a UNIQUE-email op
                 // must never see an id twice).
                 $g = $it + $warmup + 1;
                 $t = hrtime(true);
-                self::runOp($fns, $driver, $op, $g);
+                self::runOp($fns, $driver, $op, $g, $dialect);
                 $us = intdiv(hrtime(true) - $t, 1000);
                 echo "native,{$dialect},{$op},{$it},{$us},{$rows}\n";
             }
@@ -297,6 +269,9 @@ final class OrmBench
             if ($want !== null && $got['stmts'] !== $want) {
                 throw new \RuntimeException("{$op} statement-count regression: got {$got['stmts']}, expect {$want}");
             }
+            // The machine-readable half, in the ONE format every cell prints, so `run-cells.sh` can hold
+            // the ten cells to the same statements and rows per op instead of eyeballing ten tables.
+            echo "proof,native,{$dialect},{$op},{$got['stmts']},{$got['rows']}\n";
             echo str_pad($op, 22) . str_pad((string) $got['stmts'], 12) . $got['rows'] . "\n";
         }
     }

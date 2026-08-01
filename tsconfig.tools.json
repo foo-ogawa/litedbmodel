@@ -1,0 +1,13 @@
+// The repo's TOOLING sources — the benchmark and the doc embeds. Sibling of `tsconfig.test.json`:
+// both name a tree that `tsconfig.json` (which emits from `src`) does not compile, and both are run
+// by `scripts/check-typechecked-trees.mjs`, which additionally proves the tree is fully covered.
+//
+// Compiler options come from `benchmark/tsconfig.json`, the config tsx already runs the benchmark
+// under — the file set is the only thing decided here.
+{
+  "extends": "./benchmark/tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "include": ["benchmark/**/*.ts", "embeds/**/*.ts"]
+}

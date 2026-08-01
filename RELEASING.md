@@ -38,26 +38,43 @@ The chain is **merge-to-`main` → GitHub Release → publish workflows**, mirro
 4. **Go** needs no upload — `go get .../litedbmodel/go@vX.Y.Z` resolves the `go/vX.Y.Z` tag that
    `release.yml` pushed.
 
+### Where the owner signs off: the PULL REQUEST
+
+**Approving the PR into `main` IS the release gate**, and it is the only one. `main` requires a pull
+request review, and on this repository only the owner can give it — so nothing reaches a registry that
+the owner did not approve, and the approval happens where the diff is readable rather than in a
+deployment prompt with no context.
+
+Once that PR merges, the chain above runs to completion on its own: the `release` GitHub Environment
+the three publish jobs declare carries **no protection rules, deliberately**. A second gate there would
+ask the owner to approve the same release twice, the second time with nothing new to look at.
+
+So the sequence is: bump the version in the PR → CI green → **owner approves** → merge → published.
+A merge with the version left unchanged publishes nothing (`release.yml` stops on the existing tag),
+which is what makes an ordinary non-release PR safe.
+
 ### One-time prerequisites — MUST be configured before the release sequence
 
-Status verified **2026-07-10** against `foo-ogawa/litedbmodel`. None of the ❌ items are done yet;
-each blocks the step noted.
+Status verified **2026-08-01** against `foo-ogawa/litedbmodel` and the registries themselves. All four
+secrets are present and four of the five registries are live — npm `2.2.3`, PyPI present, crates.io
+`2.2.3`, and the Go tag needs no registry. **Packagist is the one ❌ left**, and it blocks only the PHP
+package: `litedbmodel/runtime` is still a 404 there, so a tag push syncs nothing until the repo is
+submitted once at packagist.org. Everything else below is background for the next reader.
 
 **A. Repo secrets** (`gh secret set <NAME> --repo foo-ogawa/litedbmodel`)
 
 | Secret | Purpose | Status |
 |---|---|---|
 | `NPM_TOKEN` | npm publish (`litedbmodel`) | ✅ present — **verify it is an *automation* token** with publish rights (bypasses 2FA) |
-| `PYPI_API_TOKEN` | PyPI publish (`litedbmodel-runtime`) | ❌ missing — see PyPI note below |
-| `CARGO_REGISTRY_TOKEN` | crates.io publish (`litedbmodel_runtime`) | ❌ missing — publishing account must have a verified email |
-| `BEHAVIOR_CONTRACTS_PAT` | private `behavior-contracts` **Go** module fetch (CI + go build) | ❌ missing — fine-grained PAT, **Contents: Read on `foo-ogawa/behavior-contracts`** (same name graphddb uses). Currently blocks the 3 CI jobs `conformance-ts` / `conformance-livedb` / `scaffold-build (go)` |
+| `PYPI_API_TOKEN` | PyPI publish (`litedbmodel-runtime`) | ✅ present |
+| `CARGO_REGISTRY_TOKEN` | crates.io publish (`litedbmodel_runtime`) | ✅ present — the publishing account needs a verified email |
+| `BEHAVIOR_CONTRACTS_PAT` | private `behavior-contracts` **Go** module fetch (CI + go build) | ✅ present — fine-grained PAT, **Contents: Read on `foo-ogawa/behavior-contracts`** (same name graphddb uses) |
 
-**B. `release` GitHub Environment — NOT YET CREATED (currently 0 environments).** The three registry
-publish jobs declare `environment: release`. If the environment does not exist, GitHub auto-creates
-it **with no protection rules on first run → publish would proceed WITHOUT approval**. You MUST
-create it first: repo Settings → Environments → `release` → **Required reviewers = the owner**. Then
-every registry upload pauses for explicit owner approval in the Actions UI — the single sign-off
-point for npm + PyPI + crates.io. Publish is never automatic on merge.
+**B. `release` GitHub Environment — exists, and carries NO protection rules ON PURPOSE.** The three
+registry publish jobs declare `environment: release` so the uploads are grouped and auditable, not so
+they pause. The sign-off is the PR approval into `main` (see "Where the owner signs off" above), which
+only the owner can give; required reviewers here would ask for that same approval a second time, in a
+prompt that shows none of the diff it is approving.
 
 **C. Registry account setup**
 
@@ -124,6 +141,8 @@ Run from the repo root.
       `Cargo.lock`s included** (a bump that rewrites only the manifests leaves the lock behind, and the
       next cargo command repairs it silently — that is how 2.2.1 shipped a 2.2.0 lock)
 - [ ] `npm run deps:check`           — no `../`-escaping local deps in any manifest
+- [ ] `npm run deps:installed`       — `node_modules` holds exactly what `package-lock.json` resolves for
+      this platform (`npm ci` can drop an optional package and still exit 0, and nothing else looks)
 - [ ] `npm run tracked:check`        — the index holds only files someone meant to commit (a tracked
       file shows up in neither `git status` nor `.gitignore`)
 - [ ] `npm run build`                — TS build + SCP bundle

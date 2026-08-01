@@ -101,12 +101,9 @@ export type {
   TxExpr,
   TxOp,
   StatementRole,
-  GateRule,
   TxStatement,
-  IdempotentHitPolicy,
   TransactionPlan,
   WriteLifecyclePhase,
-  ShortCircuitReason,
   TransactionResult,
   WriteExecOptions,
 } from './tx';

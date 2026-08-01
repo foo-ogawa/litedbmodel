@@ -29,7 +29,9 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"runtime/pprof"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -114,27 +116,24 @@ func reseed(db *sql.DB, doc setup.Doc) error {
 	return nil
 }
 
-// userRows builds the 10-row batch record set for createMany/upsertMany as ONE opaque `rows` wire array
-// (the json_each/JSON_TABLE batch param). `stable` reuses fixed emails (upsertMany — conflict-updates);
-// else the email varies by iteration so a plain INSERT stays insertable under the UNIQUE(email)
-// constraint. Mirrors the rust `user_rows` / python `_user_rows` batch shape.
-func userRows(it int, stable bool) []NewUser {
-	rows := make([]NewUser, 10)
-	for i := 0; i < 10; i++ {
-		email := fmt.Sprintf("many%d_%d@bench.com", it, i)
-		if stable {
-			email = fmt.Sprintf("many%d@bench.com", i)
-		}
-		rows[i] = NewUser{Email: email, Name: fmt.Sprintf("Many %d", i)}
+// newUsers / userPatches map the DECLARED batch records (.setup/<dialect>.json `inputs`, from the axis
+// SSoT) onto the record types the generated signatures take. This mapping is the only thing the go
+// harness contributes: the values themselves come from the artifact every cell reads, so the go native
+// cell and its SDK twin write the same ten records.
+func newUsers(in setup.Values) []NewUser {
+	records := in.Records("rows")
+	rows := make([]NewUser, len(records))
+	for i, r := range records {
+		rows[i] = NewUser{Email: r.Str("email"), Name: r.Str("name")}
 	}
 	return rows
 }
 
-// updateManyRows builds the id-keyed 10-row batch set for updateMany (updates the seeded users 1..10).
-func updateManyRows() []UserPatch {
-	rows := make([]UserPatch, 10)
-	for i := 1; i <= 10; i++ {
-		rows[i-1] = UserPatch{Id: int64(i), Name: fmt.Sprintf("Many %d", i)}
+func userPatches(in setup.Values) []UserPatch {
+	records := in.Records("rows")
+	rows := make([]UserPatch, len(records))
+	for i, r := range records {
+		rows[i] = UserPatch{Id: r.Int("id"), Name: r.Str("name")}
 	}
 	return rows
 }
@@ -145,28 +144,29 @@ func updateManyRows() []UserPatch {
 // UNIQUE column by it so a timed loop does not collide. A RETURNING-chained tx op runs THROUGH the
 // runtime tx boundary (WithAmbientTransaction on the BOUND ctx) so BEGIN/COMMIT bracket the leaf's 2
 // body statements on the tx-owned connection; the generated runner emits no BEGIN/COMMIT.
-func op(name string, it int) error {
+func op(doc setup.Doc, name string, it int) error {
+	in := doc.Input(name, it)
 	switch name {
 	case "findAll":
 		_, err := findAll()
 		return err
 	case "filterPaginateSort":
-		_, err := filterPaginateSort(1)
+		_, err := filterPaginateSort(in.Int("published"))
 		return err
 	case "findFirst":
-		_, err := findFirst("User%")
+		_, err := findFirst(in.Str("name"))
 		return err
 	case "findUnique":
-		_, err := findUnique("user500@example.com")
+		_, err := findUnique(in.Str("email"))
 		return err
 	case "nestedFindAll":
 		_, err := nestedFindAll()
 		return err
 	case "nestedFindFirst":
-		_, err := nestedFindFirst("User%")
+		_, err := nestedFindFirst(in.Str("name"))
 		return err
 	case "nestedFindUnique":
-		_, err := nestedFindUnique("user1@example.com")
+		_, err := nestedFindUnique(in.Str("email"))
 		return err
 	case "nestedRelations":
 		_, err := nestedRelations()
@@ -175,51 +175,51 @@ func op(name string, it int) error {
 		_, err := compositeRelations()
 		return err
 	case "create":
-		_, err := create(fmt.Sprintf("new%d@bench.com", it), "New")
+		_, err := create(in.Str("email"), in.Str("name"))
 		return err
 	case "update":
-		_, err := update(1, "Updated 1")
+		_, err := update(in.Int("id"), in.Str("name"))
 		return err
 	case "upsert":
-		_, err := upsert("user1@example.com", "Upserted One")
+		_, err := upsert(in.Str("email"), in.Str("name"))
 		return err
 	case "createMany":
-		// 10 fresh rows — email is UNIQUE NOT NULL, so vary per iteration to stay insertable.
-		_, err := createMany(userRows(it, false))
+		// 10 fresh rows — email is UNIQUE NOT NULL, so the declared email varies by iteration.
+		_, err := createMany(newUsers(in))
 		return err
 	case "upsertMany":
 		// 10 rows keyed on email (ON CONFLICT DO UPDATE) — idempotent across iterations.
-		_, err := upsertMany(userRows(it, true))
+		_, err := upsertMany(newUsers(in))
 		return err
 	case "updateMany":
 		// 10 rows keyed on id (1..10) — updates the seeded users.
-		_, err := updateMany(updateManyRows())
+		_, err := updateMany(userPatches(in))
 		return err
 	case "nestedCreate":
 		// Fresh user per iteration (email is UNIQUE) → INSERT user RETURNING id → INSERT post (author_id).
 		err := rt.WithAmbientTransaction(func() error {
-			_, e := nestedCreate(fmt.Sprintf("nc%d@bench.com", it), "NC", "NC Post")
+			_, e := nestedCreate(in.Str("email"), in.Str("name"), in.Str("title"))
 			return e
 		})
 		return err
 	case "nestedUpsert":
 		// Existing email (ON CONFLICT DO UPDATE) → INSERT post keyed on the upserted user's id.
 		err := rt.WithAmbientTransaction(func() error {
-			_, e := nestedUpsert("user1@example.com", "NUp", "NUp Post")
+			_, e := nestedUpsert(in.Str("email"), in.Str("name"), in.Str("title"))
 			return e
 		})
 		return err
 	case "nestedUpdate":
-		// UPDATE seeded user 1 RETURNING id → UPDATE that user's posts.
+		// UPDATE the seeded user RETURNING id → UPDATE that user's posts.
 		err := rt.WithAmbientTransaction(func() error {
-			_, e := nestedUpdate(1, "NU", "NU Post")
+			_, e := nestedUpdate(in.Int("id"), in.Str("name"), in.Str("title"))
 			return e
 		})
 		return err
 	case "delete":
 		// Create-then-delete: INSERT a fresh user RETURNING id → DELETE the exact created row by id.
 		err := rt.WithAmbientTransaction(func() error {
-			_, e := delete(fmt.Sprintf("del%d@bench.com", it), "Del")
+			_, e := delete(in.Str("email"), in.Str("name"))
 			return e
 		})
 		return err
@@ -315,7 +315,7 @@ func main() {
 		atomic.StoreInt64(&stmtCount, 0)
 		atomic.StoreInt64(&rowCount, 0)
 		seenSQL = nil
-		if err := op(name, 0); err != nil {
+		if err := op(doc, name, 0); err != nil {
 			fmt.Printf("%-20s  ERR: %v\n", name, err)
 			fail++
 			continue
@@ -335,6 +335,9 @@ func main() {
 		if txOps[name] {
 			kind = " (BEGIN + 2 body + COMMIT)"
 		}
+		// The machine-readable half, in the ONE format every cell prints, so `run-cells.sh` can hold the
+		// ten cells to the same statements and rows per op instead of ten human tables being eyeballed.
+		fmt.Printf("proof,native,%s,%s,%d,%d\n", benchDialect, name, q, rows)
 		fmt.Printf("%-20s  %-10d  %-5d %s%s\n", name, q, rows, mark, kind)
 	}
 
@@ -360,6 +363,44 @@ func main() {
 				warmup = n
 			}
 		}
+		// Profiling + op selection, for asking WHERE the time goes rather than guessing (#258 asks for a
+		// profile and says not to optimise on a hunch). Both are env-only so the positional argv the
+		// harness passes (`bench <reps> <warmup>`) is untouched, and both are inert when unset — the CSV
+		// this prints is byte-identical without them.
+		//   LM_CPUPROFILE=<path>   write a pprof CPU profile over the whole timed loop
+		//   LM_ONLY_OP=<name>[,…]  time only these ops, so a profile is not diluted by the other 18
+		if path := os.Getenv("LM_CPUPROFILE"); path != "" {
+			f, err := os.Create(path)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "FATAL: cpuprofile: %v\n", err)
+				os.Exit(1)
+			}
+			defer f.Close()
+			if err := pprof.StartCPUProfile(f); err != nil {
+				fmt.Fprintf(os.Stderr, "FATAL: cpuprofile: %v\n", err)
+				os.Exit(1)
+			}
+			defer pprof.StopCPUProfile()
+			fmt.Fprintf(os.Stderr, "  cpu profile → %s\n", path)
+		}
+		if only := os.Getenv("LM_ONLY_OP"); only != "" {
+			want := map[string]bool{}
+			for _, n := range strings.Split(only, ",") {
+				want[strings.TrimSpace(n)] = true
+			}
+			kept := ops[:0:0]
+			for _, n := range ops {
+				if want[n] {
+					kept = append(kept, n)
+				}
+			}
+			if len(kept) == 0 {
+				fmt.Fprintf(os.Stderr, "FATAL: LM_ONLY_OP=%q matched none of the %d covered ops\n", only, len(ops))
+				os.Exit(1)
+			}
+			ops = kept
+			fmt.Fprintf(os.Stderr, "  timing %d of the covered op(s): %s\n", len(ops), strings.Join(ops, ", "))
+		}
 		fmt.Println("\ncell,dialect,op,iter,us,rows")
 		for _, name := range ops {
 			if err := reseed(db, doc); err != nil {
@@ -367,7 +408,7 @@ func main() {
 				os.Exit(1)
 			}
 			for it := 0; it < warmup; it++ {
-				if err := op(name, it+1); err != nil {
+				if err := op(doc, name, it+1); err != nil {
 					fmt.Fprintf(os.Stderr, "warmup %s: %v\n", name, err)
 					os.Exit(1)
 				}
@@ -375,7 +416,7 @@ func main() {
 			for it := 0; it < reps; it++ {
 				g := it + warmup + 1
 				t := time.Now()
-				if err := op(name, g); err != nil {
+				if err := op(doc, name, g); err != nil {
 					fmt.Fprintf(os.Stderr, "bench %s: %v\n", name, err)
 					os.Exit(1)
 				}

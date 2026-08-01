@@ -1,4 +1,4 @@
-[**litedbmodel v1.0.1**](../README.md)
+[**litedbmodel v2.2.4**](../README.md)
 
 ***
 
@@ -6,7 +6,7 @@
 
 # Interface: SqlTypedFragment\<V, M\>
 
-Defined in: SqlFragment.ts:34
+Defined in: [SqlFragment.ts:34](https://github.com/foo-ogawa/litedbmodel/blob/main/src/SqlFragment.ts#L34)
 
 A typed SQL fragment that preserves the Column's value type.
 Used as the first element of a condition tuple (Pattern A).
@@ -22,8 +22,8 @@ Used as the first element of a condition tuple (Pattern A).
 
 | Property | Modifier | Type | Defined in |
 | ------ | ------ | ------ | ------ |
-| <a id="_tag"></a> `_tag` | `readonly` | `"SqlTypedFragment"` | SqlFragment.ts:35 |
-| <a id="sql"></a> `sql` | `readonly` | `string` | SqlFragment.ts:36 |
-| <a id="params"></a> `params` | `readonly` | readonly `unknown`[] | SqlFragment.ts:37 |
-| <a id="__valuetype"></a> `__valueType?` | `readonly` | `V` | SqlFragment.ts:38 |
-| <a id="__modeltype"></a> `__modelType?` | `readonly` | `M` | SqlFragment.ts:39 |
+| <a id="_tag"></a> `_tag` | `readonly` | `"SqlTypedFragment"` | [SqlFragment.ts:35](https://github.com/foo-ogawa/litedbmodel/blob/main/src/SqlFragment.ts#L35) |
+| <a id="sql"></a> `sql` | `readonly` | `string` | [SqlFragment.ts:36](https://github.com/foo-ogawa/litedbmodel/blob/main/src/SqlFragment.ts#L36) |
+| <a id="params"></a> `params` | `readonly` | readonly `unknown`[] | [SqlFragment.ts:37](https://github.com/foo-ogawa/litedbmodel/blob/main/src/SqlFragment.ts#L37) |
+| <a id="__valuetype"></a> `__valueType?` | `readonly` | `V` | [SqlFragment.ts:38](https://github.com/foo-ogawa/litedbmodel/blob/main/src/SqlFragment.ts#L38) |
+| <a id="__modeltype"></a> `__modelType?` | `readonly` | `M` | [SqlFragment.ts:39](https://github.com/foo-ogawa/litedbmodel/blob/main/src/SqlFragment.ts#L39) |

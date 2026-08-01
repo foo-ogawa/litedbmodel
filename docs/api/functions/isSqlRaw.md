@@ -1,4 +1,4 @@
-[**litedbmodel v1.0.1**](../README.md)
+[**litedbmodel v2.2.4**](../README.md)
 
 ***
 
@@ -10,7 +10,7 @@
 function isSqlRaw(value: unknown): value is SqlRaw;
 ```
 
-Defined in: SqlFragment.ts:154
+Defined in: [SqlFragment.ts:155](https://github.com/foo-ogawa/litedbmodel/blob/main/src/SqlFragment.ts#L155)
 
 ## Parameters
 

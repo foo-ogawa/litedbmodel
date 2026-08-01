@@ -145,6 +145,7 @@ const ROOT_FILES = [
   'package.json',
   'tsconfig.json',
   'tsconfig.test.json',
+  'tsconfig.tools.json',
   'typedoc.json',
   'vitest.config.ts',
 ];

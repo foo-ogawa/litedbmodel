@@ -66,7 +66,7 @@ pub trait Driver {
     /// Begin a transaction, returning an OWNED [`TxConnection`] handle (§3 per-execution connection
     /// ownership — the rust analogue of v1 `PoolTransaction`). BEGIN is issued when the handle is
     /// built. A single-connection driver (the in-proc `rusqlite` seam) forwards every tx statement +
-    /// the final COMMIT/ROLLBACK to its one connection ([`forwarding_tx`]). A POOLED live driver
+    /// the final COMMIT/ROLLBACK to its one connection (`forwarding_tx`). A POOLED live driver
     /// (PG/MySQL) checks out ONE pooled connection and pins it in the handle, so concurrent
     /// transactions each own a DISTINCT connection ⇒ isolated (the old driver-global `writer` slot is
     /// gone). Every implementor MUST issue BEGIN in this method so the returned handle is live.
@@ -84,7 +84,7 @@ pub trait Driver {
     /// robust default acquires the tx first (plain BEGIN), then runs BOTH slots on the OWNED handle.
     /// For MySQL this is WRONG (its SET must precede BEGIN), so [`crate::livedb::MysqlDriver`]
     /// OVERRIDES this to acquire → SET → BEGIN in the right order. The single-connection
-    /// [`forwarding_tx`] and Postgres use the default (PG's isolation SET is valid post-BEGIN).
+    /// `forwarding_tx` and Postgres use the default (PG's isolation SET is valid post-BEGIN).
     fn begin_tx_isolated(
         &self,
         before_begin: &[String],
@@ -155,7 +155,15 @@ pub trait Driver {
 /// driver. There is no per-execution ownership to enforce — a tx runs BEGIN…COMMIT on the one
 /// connection — but it satisfies the SAME [`TxConnection`] contract the seam threads. Shared by any
 /// `Driver::begin_tx` impl over a single-connection driver.
-pub fn forwarding_tx(driver: &dyn Driver) -> Result<Box<dyn TxConnection + '_>, SqlFailure> {
+///
+/// CRATE-PRIVATE on purpose (#238): applied to a POOLED driver it silently breaks the tx. It owns no
+/// connection, so each forwarded statement re-enters `Driver::prepare` and checks out a DIFFERENT
+/// pooled connection — BEGIN lands on one that then goes back to the pool holding an open transaction
+/// (blocking every later statement) while COMMIT lands on another. A pooled driver must pin ONE
+/// connection in its own `begin_tx`/`acquire_tx` instead ([`crate::livedb::MysqlDriver`] /
+/// [`crate::livedb::PostgresDriver`] do). Keeping this out of the public surface makes the mistake a
+/// compile error rather than a lock-wait timeout.
+pub(crate) fn forwarding_tx(driver: &dyn Driver) -> Result<Box<dyn TxConnection + '_>, SqlFailure> {
     driver.prepare("BEGIN").run(&[])?;
     Ok(Box::new(ForwardingTx { driver }))
 }
@@ -164,7 +172,7 @@ pub fn forwarding_tx(driver: &dyn Driver) -> Result<Box<dyn TxConnection + '_>, 
 /// tx runtime seam-issues BEGIN on the forwarded connection. The object-safe default `acquire_tx` for a
 /// single-connection [`Driver`] that has no override (it takes `&dyn Driver`, so a concrete impl calls
 /// `forwarding_tx_no_begin(self)`).
-pub fn forwarding_tx_no_begin(
+pub(crate) fn forwarding_tx_no_begin(
     driver: &dyn Driver,
 ) -> Result<Box<dyn TxConnection + '_>, SqlFailure> {
     Ok(Box::new(ForwardingTx { driver }))
@@ -172,7 +180,7 @@ pub fn forwarding_tx_no_begin(
 
 /// The single-connection [`TxConnection`]: forward every statement (and COMMIT/ROLLBACK) to the
 /// driver it borrows. Built via [`forwarding_tx`] (which issues BEGIN first).
-pub struct ForwardingTx<'a> {
+pub(crate) struct ForwardingTx<'a> {
     driver: &'a dyn Driver,
 }
 
@@ -478,16 +486,20 @@ fn from_sql_ref(r: ValueRef<'_>) -> WireValue {
     }
 }
 
-/// Intern a column name to a `&'static str`.
+/// Intern a wire ROW KEY to a `&'static str` — the ONE interner in this crate.
 ///
-/// The wire's keys are `Cow<'static, str>`, so a name read at run time can only ride as `Cow::Owned` —
-/// one `String` allocation PER CELL, i.e. rows × columns of them (33,300 for one 11,100-row relation op),
-/// for a name that is identical on every row of the result set. Interning makes it `Cow::Borrowed`:
-/// allocation-free from the second row on, and free across statements since result sets reuse names.
+/// A [`WireRow`] key is `Cow<'static, str>`, so a name known only at run time can only ride as
+/// `Cow::Owned` — one `String` allocation per key WRITTEN, for a name that repeats on every row of a
+/// result set (rows × columns of them: 33,300 for one 11,100-row relation op) or on every parent of a
+/// relation level. Interning makes it `Cow::Borrowed`: allocation-free from the second use on, and free
+/// across statements and ops since the same names recur.
 ///
-/// The set of column names an application selects is finite and small, so the leak is bounded — it is the
-/// standard interning trade, not an unbounded one.
-fn intern_column(name: &str) -> &'static str {
+/// Both writers of a wire key reach it here: the driver's result-set column names ([`SqlitePrepared`])
+/// and the relation leaf's nesting key (`crate::leaves::group_children`'s `into`).
+///
+/// The set of column and relation names an application declares is finite and small, so the leak is
+/// bounded — it is the standard interning trade, not an unbounded one.
+pub(crate) fn intern_wire_key(name: &str) -> &'static str {
     use std::collections::HashSet;
     use std::sync::{Mutex, OnceLock};
     static NAMES: OnceLock<Mutex<HashSet<&'static str>>> = OnceLock::new();
@@ -512,16 +524,62 @@ pub struct SqliteDriver {
     conn: Connection,
 }
 
+/// How many distinct prepared statements ONE connection keeps compiled ([`SqliteDriver::configured`]).
+///
+/// A declared-endpoint ORM issues a BOUNDED set of statement texts — one per endpoint, plus the
+/// seam-issued tx control — so the whole working set fits in the cache and every statement is parsed
+/// ONCE per connection. `rusqlite`'s own default is 16, which a model of even modest size evicts on
+/// every pass (the ORM-comparison bench alone declares 20 distinct statements), turning the cache into
+/// pure thrash. 128 is the SAME capacity the python leg gets for free from the stdlib `sqlite3`
+/// (`cached_statements=128`), so the two in-proc SQLite runtimes compile each statement the same
+/// number of times.
+///
+/// ## One op is SLOWER for it, measured — and the reuse is still right
+///
+/// Median µs/call, rust native cell, in-memory SQLite, 800 reps
+/// (`LM_ONLY_OP=findFirst,findUnique cargo run … -- 800 100`):
+///
+/// | op         | SQL                                    | plain `prepare` | cached, 128 | cached, cap 0 |
+/// |------------|----------------------------------------|-----------------|-------------|---------------|
+/// | findUnique | `WHERE email = ? LIMIT 1`              | 3               | **2**       | 7             |
+/// | findFirst  | `WHERE name LIKE ? ORDER BY id LIMIT 1`| 6               | **8**       | 14            |
+///
+/// `findFirst` costs 2µs MORE reused than freshly prepared, and it is the only op that does. The
+/// correlation is the predicate: every `=`/`IN` op gets faster, the one `LIKE ?` op gets slower.
+/// SQLite's LIKE optimisation rewrites `x LIKE 'prefix%'` into a range scan, and when the pattern is a
+/// BOUND PARAMETER that plan is only valid for the value bound — so the statement carries a
+/// parameter-dependent plan that a reset-and-rebind has to re-derive, which a fresh
+/// `sqlite3_prepare_v2` was doing anyway. Reuse therefore buys nothing there and pays the recheck.
+///
+/// It is kept because the trade is not close: seven ops are claimably faster (findUnique −67%, upsert
+/// −55%, update −50%, nestedFindUnique −47%, delete −47%, nestedUpsert −25%, updateMany −22%, all
+/// non-overlapping against a control that moved ≤14%), one is 2µs slower, and the cap-0 column shows
+/// what removing the cache actually costs. Not special-cased on the predicate: a second path that
+/// inspected the SQL to decide whether to cache would be a fallback branch for 2µs on one op.
+const SQLITE_STATEMENT_CACHE_CAPACITY: usize = 128;
+
 impl SqliteDriver {
-    /// Open an in-memory database with foreign keys enforced and the given schema applied.
-    pub fn in_memory(schema: &[String]) -> Result<Self, SqlFailure> {
-        let conn = Connection::open_in_memory().map_err(|e| map_sqlite_error(&e))?;
+    /// The ONE place a `rusqlite` connection this seam owns is configured: foreign keys enforced and
+    /// the prepared-statement cache sized. Both constructors funnel through it, so an in-memory and an
+    /// on-disk connection can never drift apart on connection-level settings.
+    fn configured(conn: Connection) -> Result<Self, SqlFailure> {
         conn.execute_batch("PRAGMA foreign_keys = ON;")
             .map_err(|e| map_sqlite_error(&e))?;
-        for stmt in schema {
-            conn.execute_batch(stmt).map_err(|e| map_sqlite_error(&e))?;
-        }
+        conn.set_prepared_statement_cache_capacity(SQLITE_STATEMENT_CACHE_CAPACITY);
         Ok(SqliteDriver { conn })
+    }
+
+    /// Open an in-memory database with foreign keys enforced and the given schema applied.
+    pub fn in_memory(schema: &[String]) -> Result<Self, SqlFailure> {
+        let driver =
+            Self::configured(Connection::open_in_memory().map_err(|e| map_sqlite_error(&e))?)?;
+        for stmt in schema {
+            driver
+                .conn
+                .execute_batch(stmt)
+                .map_err(|e| map_sqlite_error(&e))?;
+        }
+        Ok(driver)
     }
 
     /// Open an on-disk database FILE with foreign keys enforced (the schema is already present — an
@@ -529,10 +587,7 @@ impl SqliteDriver {
     /// native-codegen proof cell, which reads/mutates a seeded file to compare byte-for-byte with the
     /// mode-2 oracle over the SAME file).
     pub fn open(path: &str) -> Result<Self, SqlFailure> {
-        let conn = Connection::open(path).map_err(|e| map_sqlite_error(&e))?;
-        conn.execute_batch("PRAGMA foreign_keys = ON;")
-            .map_err(|e| map_sqlite_error(&e))?;
-        Ok(SqliteDriver { conn })
+        Self::configured(Connection::open(path).map_err(|e| map_sqlite_error(&e))?)
     }
 }
 
@@ -574,13 +629,13 @@ impl PreparedStatement for SqlitePrepared<'_> {
         let bound = self.bind(params)?;
         let mut stmt = self
             .conn
-            .prepare(&self.sql)
+            .prepare_cached(&self.sql)
             .map_err(|e| map_sqlite_error(&e))?;
         // Interned ONCE per statement: the per-cell key is then a borrow, not an allocation.
         let col_names: Vec<&'static str> = stmt
             .column_names()
             .iter()
-            .map(|c| intern_column(c))
+            .map(|c| intern_wire_key(c))
             .collect();
         let param_refs: Vec<&dyn rusqlite::ToSql> =
             bound.iter().map(|v| v as &dyn rusqlite::ToSql).collect();
@@ -614,7 +669,7 @@ impl PreparedStatement for SqlitePrepared<'_> {
             bound.iter().map(|v| v as &dyn rusqlite::ToSql).collect();
         let mut stmt = self
             .conn
-            .prepare(&self.sql)
+            .prepare_cached(&self.sql)
             .map_err(|e| map_sqlite_error(&e))?;
         let changes = stmt
             .execute(param_refs.as_slice())

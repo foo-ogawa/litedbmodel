@@ -1,4 +1,4 @@
-[**litedbmodel v1.0.1**](../README.md)
+[**litedbmodel v2.2.4**](../README.md)
 
 ***
 
@@ -6,7 +6,7 @@
 
 # Class: SqlRaw
 
-Defined in: SqlFragment.ts:59
+Defined in: [SqlFragment.ts:59](https://github.com/foo-ogawa/litedbmodel/blob/main/src/SqlFragment.ts#L59)
 
 Raw SQL string that bypasses parameterization.
 Created via `sql.raw()`. Only usable inside `sql` tagged templates.
@@ -19,7 +19,7 @@ Created via `sql.raw()`. Only usable inside `sql` tagged templates.
 new SqlRaw(value: string): SqlRaw;
 ```
 
-Defined in: SqlFragment.ts:61
+Defined in: [SqlFragment.ts:61](https://github.com/foo-ogawa/litedbmodel/blob/main/src/SqlFragment.ts#L61)
 
 #### Parameters
 
@@ -35,8 +35,8 @@ Defined in: SqlFragment.ts:61
 
 | Property | Modifier | Type | Defined in |
 | ------ | ------ | ------ | ------ |
-| <a id="_tag"></a> `_tag` | `readonly` | `"SqlRaw"` | SqlFragment.ts:60 |
-| <a id="value"></a> `value` | `readonly` | `string` | SqlFragment.ts:61 |
+| <a id="_tag"></a> `_tag` | `readonly` | `"SqlRaw"` | [SqlFragment.ts:60](https://github.com/foo-ogawa/litedbmodel/blob/main/src/SqlFragment.ts#L60) |
+| <a id="value"></a> `value` | `readonly` | `string` | [SqlFragment.ts:61](https://github.com/foo-ogawa/litedbmodel/blob/main/src/SqlFragment.ts#L61) |
 
 ## Methods
 
@@ -46,7 +46,7 @@ Defined in: SqlFragment.ts:61
 toString(): string;
 ```
 
-Defined in: SqlFragment.ts:62
+Defined in: [SqlFragment.ts:62](https://github.com/foo-ogawa/litedbmodel/blob/main/src/SqlFragment.ts#L62)
 
 #### Returns
 

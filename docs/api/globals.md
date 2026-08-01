@@ -1,8 +1,8 @@
-[**litedbmodel v1.0.1**](README.md)
+[**litedbmodel v2.2.4**](README.md)
 
 ***
 
-# litedbmodel v1.0.1
+# litedbmodel v2.2.4
 
 litedbmodel - A lightweight TypeScript data access layer
 
@@ -69,19 +69,48 @@ Supports PostgreSQL and SQLite databases.
 type SkipType = typeof SKIP;
 ```
 
-Defined in: Column.ts:780
+Defined in: [Column.ts:780](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L780)
 
 ***
 
 ### MiddlewareClass
 
 ```ts
-type MiddlewareClass = typeof Middleware & () => Middleware;
+type MiddlewareClass = {
+  getCurrentContext: object;
+};
 ```
 
-Defined in: Middleware.ts:295
+Defined in: [Middleware.ts:310](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Middleware.ts#L310)
 
-Type for middleware class (not instance)
+Type for middleware class (not instance) — what [DBModel.use](classes/DBModel.md#use) registers.
+
+The requirement is exactly what the registry's ONE consumer uses: a registered class is only ever
+constructed and asked for the current request's instance (`MWClass.getCurrentContext()`), whose hook
+is then looked up BY NAME and invoked (`DBModel._applyMiddleware` — the lookup is already a cast,
+because which hooks a middleware implements is its own choice).
+
+Naming `typeof Middleware` here instead demanded the whole static side — `_storage` / `getStorage`
+included — and a `getCurrentContext()` returning a full `Middleware`. The class produced by
+[createMiddleware](functions/createMiddleware.md) advertises neither: its state is its own shape, and a state key may
+deliberately SHADOW a hook of the same name (`state: { count: 0 }` vs. the `count` hook — at runtime
+the assigned own property wins over the prototype method). So the DOCUMENTED pairing
+(`DBModel.use(DBModel.createMiddleware(…))`, README) did not typecheck even though it is the
+runtime-correct call, and every stateful middleware in the README was affected.
+
+#### Methods
+
+##### getCurrentContext()
+
+```ts
+getCurrentContext(): object;
+```
+
+Defined in: [Middleware.ts:310](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Middleware.ts#L310)
+
+###### Returns
+
+`object`
 
 ***
 
@@ -109,10 +138,13 @@ type SqlInterpolation =
   | readonly Date[]
   | {
   TABLE_NAME: string;
+}
+  | {
+  getTableName: string;
 };
 ```
 
-Defined in: SqlFragment.ts:93
+Defined in: [SqlFragment.ts:93](https://github.com/foo-ogawa/litedbmodel/blob/main/src/SqlFragment.ts#L93)
 
 Union of all types allowed as interpolated values in `sql` tagged templates.
 
@@ -140,7 +172,7 @@ const column: (columnNameOrOptions?: string | ColumnOptions) => PropertyDecorato
 };
 ```
 
-Defined in: decorators.ts:427
+Defined in: [decorators.ts:516](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L516)
 
 Column decorator for defining model properties.
 
@@ -173,19 +205,19 @@ still work and can be used when you want to be explicit about the conversion.
 
 | Name | Type | Description | Defined in |
 | ------ | ------ | ------ | ------ |
-| `boolean()` | (`columnName?`: `string`) => `PropertyDecorator` | Boolean type conversion Converts 't'/'f', 'true'/'false', 1/0 to boolean Preserves null for nullable columns, undefined stays undefined **Example** `@column.boolean() is_active?: boolean;` | decorators.ts:441 |
-| `number()` | (`columnName?`: `string`) => `PropertyDecorator` | Number type conversion (from string) Preserves null for nullable columns, undefined stays undefined **Example** `@column.number() amount?: number;` | decorators.ts:457 |
-| `bigint()` | (`columnName?`: `string`) => `PropertyDecorator` | BigInt type conversion Preserves null for nullable columns, undefined stays undefined **Example** `@column.bigint() large_id?: bigint;` | decorators.ts:470 |
-| `datetime()` | (`columnName?`: `string`) => `PropertyDecorator` | DateTime type conversion (timestamp, timestamptz) Preserves null for nullable columns, undefined stays undefined Timezone handling: - PostgreSQL: Serializes to ISO 8601 UTC string with 'Z' suffix for explicit timezone - MySQL/SQLite: Passes Date object to driver (driver-dependent timezone handling) **Example** `@column.datetime() created_at?: Date;` | decorators.ts:500 |
-| `date()` | (`columnName?`: `string`) => `PropertyDecorator` | Date type conversion — returns YYYY-MM-DD string. Preserves null for nullable columns, undefined stays undefined. DB values (Date object or string) are normalized to 'YYYY-MM-DD' string. On write, string values are passed through; Date objects are formatted as 'YYYY-MM-DD'. **Example** `@column.date() birth_date?: string;` | decorators.ts:527 |
-| `stringArray()` | (`columnName?`: `string`) => `PropertyDecorator` | String array type conversion (text[]) Preserves null for nullable columns, undefined stays undefined **Example** `@column.stringArray() tags?: string[];` | decorators.ts:578 |
-| `intArray()` | (`columnName?`: `string`) => `PropertyDecorator` | Integer array type conversion (integer[]) Preserves null for nullable columns, undefined stays undefined **Example** `@column.intArray() scores?: number[];` | decorators.ts:595 |
-| `numericArray()` | (`columnName?`: `string`) => `PropertyDecorator` | Numeric array type conversion (numeric[], allows null elements) Preserves null for nullable columns, undefined stays undefined **Example** `@column.numericArray() values?: (number | null)[];` | decorators.ts:612 |
-| `booleanArray()` | (`columnName?`: `string`) => `PropertyDecorator` | Boolean array type conversion (boolean[]) Preserves null for nullable columns, undefined stays undefined **Example** `@column.booleanArray() flags?: (boolean | null)[];` | decorators.ts:629 |
-| `datetimeArray()` | (`columnName?`: `string`) => `PropertyDecorator` | DateTime array type conversion (timestamp[]) Preserves null for nullable columns, undefined stays undefined **Example** `@column.datetimeArray() event_dates?: (Date | null)[];` | decorators.ts:646 |
-| `json()` | \<`T`\>(`columnName?`: `string`) => `PropertyDecorator` | JSON/JSONB type conversion Preserves null for nullable columns, undefined stays undefined **Examples** `@column.json() metadata?: Record<string, unknown>;` `@column.json<UserSettings>() settings?: UserSettings;` | decorators.ts:672 |
-| `uuid()` | (`columnNameOrOptions?`: `string` \| [`ColumnOptions`](interfaces/ColumnOptions.md)) => `PropertyDecorator` | UUID type with automatic casting for PostgreSQL. Automatically adds ::uuid cast to conditions and INSERT/UPDATE values. Preserves null for nullable columns, undefined stays undefined. **Example** `@column.uuid() id?: string; @column.uuid({ primaryKey: true }) id?: string; // Conditions automatically cast to UUID: await User.find([[User.id, 'uuid-string']]); // → WHERE id = ?::uuid // IN clauses also cast: await User.find([[User.id, ['uuid1', 'uuid2']]]); // → WHERE id IN (?::uuid, ?::uuid)` | decorators.ts:707 |
-| `custom()` | \<`T`\>(`castFn`: (`value`: `unknown`) => `T`, `serializeFn?`: `SerializeFn`, `columnName?`: `string`) => `PropertyDecorator` | Custom type conversion with user-provided function **Examples** `@column.custom((v) => String(v).toUpperCase()) status?: string;` `@column.custom((v) => v, (v) => JSON.stringify(v)) data?: MyType; // with serializer` | decorators.ts:729 |
+| `boolean()` | (`columnName?`: `string`) => `PropertyDecorator` | Boolean type conversion Converts 't'/'f', 'true'/'false', 1/0 to boolean Preserves null for nullable columns, undefined stays undefined **Example** `@column.boolean() is_active?: boolean;` | [decorators.ts:530](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L530) |
+| `number()` | (`columnName?`: `string`) => `PropertyDecorator` | Number type conversion (from string) Preserves null for nullable columns, undefined stays undefined **Example** `@column.number() amount?: number;` | [decorators.ts:547](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L547) |
+| `bigint()` | (`columnName?`: `string`) => `PropertyDecorator` | BigInt type conversion Preserves null for nullable columns, undefined stays undefined **Example** `@column.bigint() large_id?: bigint;` | [decorators.ts:560](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L560) |
+| `datetime()` | (`columnName?`: `string`) => `PropertyDecorator` | DateTime type conversion (timestamp, timestamptz) Preserves null for nullable columns, undefined stays undefined Timezone handling: - PostgreSQL: Serializes to ISO 8601 UTC string with 'Z' suffix for explicit timezone - MySQL/SQLite: Passes Date object to driver (driver-dependent timezone handling) **Example** `@column.datetime() created_at?: Date;` | [decorators.ts:588](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L588) |
+| `date()` | (`columnName?`: `string`) => `PropertyDecorator` | Date type conversion — returns YYYY-MM-DD string. Preserves null for nullable columns, undefined stays undefined. DB values (Date object or string) are normalized to 'YYYY-MM-DD' string. On write, string values are passed through; Date objects are formatted as 'YYYY-MM-DD'. **Example** `@column.date() birth_date?: string;` | [decorators.ts:618](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L618) |
+| `stringArray()` | (`columnName?`: `string`) => `PropertyDecorator` | String array type conversion (text[]) Preserves null for nullable columns, undefined stays undefined **Example** `@column.stringArray() tags?: string[];` | [decorators.ts:657](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L657) |
+| `intArray()` | (`columnName?`: `string`) => `PropertyDecorator` | Integer array type conversion (integer[]) Preserves null for nullable columns, undefined stays undefined **Example** `@column.intArray() scores?: number[];` | [decorators.ts:674](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L674) |
+| `numericArray()` | (`columnName?`: `string`) => `PropertyDecorator` | Numeric array type conversion (numeric[], allows null elements) Preserves null for nullable columns, undefined stays undefined **Example** `@column.numericArray() values?: (number | null)[];` | [decorators.ts:691](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L691) |
+| `booleanArray()` | (`columnName?`: `string`) => `PropertyDecorator` | Boolean array type conversion (boolean[]) Preserves null for nullable columns, undefined stays undefined **Example** `@column.booleanArray() flags?: (boolean | null)[];` | [decorators.ts:708](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L708) |
+| `datetimeArray()` | (`columnName?`: `string`) => `PropertyDecorator` | DateTime array type conversion (timestamp[]) Preserves null for nullable columns, undefined stays undefined **Example** `@column.datetimeArray() event_dates?: (Date | null)[];` | [decorators.ts:725](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L725) |
+| `json()` | \<`T`\>(`columnName?`: `string`) => `PropertyDecorator` | JSON/JSONB type conversion Preserves null for nullable columns, undefined stays undefined **Examples** `@column.json() metadata?: Record<string, unknown>;` `@column.json<UserSettings>() settings?: UserSettings;` | [decorators.ts:751](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L751) |
+| `uuid()` | (`columnNameOrOptions?`: `string` \| [`ColumnOptions`](interfaces/ColumnOptions.md)) => `PropertyDecorator` | UUID type with automatic casting for PostgreSQL. Automatically adds ::uuid cast to conditions and INSERT/UPDATE values. Preserves null for nullable columns, undefined stays undefined. **Example** `@column.uuid() id?: string; @column.uuid({ primaryKey: true }) id?: string; // Conditions automatically cast to UUID: await User.find([[User.id, 'uuid-string']]); // → WHERE id = ?::uuid // IN clauses also cast: await User.find([[User.id, ['uuid1', 'uuid2']]]); // → WHERE id IN (?::uuid, ?::uuid)` | [decorators.ts:786](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L786) |
+| `custom()` | \<`T`\>(`castFn`: (`value`: `unknown`) => `T`, `serializeFn?`: `SerializeFn`, `columnName?`: `string`) => `PropertyDecorator` | Custom type conversion with user-provided function **Examples** `@column.custom((v) => String(v).toUpperCase()) status?: string;` `@column.custom((v) => v, (v) => JSON.stringify(v)) data?: MyType; // with serializer` | [decorators.ts:808](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L808) |
 
 ### Other
 
@@ -195,7 +227,7 @@ still work and can be used when you want to be explicit about the conversion.
 const SKIP: typeof SKIP;
 ```
 
-Defined in: Column.ts:779
+Defined in: [Column.ts:779](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L779)
 
 Sentinel value to skip a field in create/update operations.
 Use with conditional expressions to keep code as expressions instead of statements.
@@ -258,6 +290,9 @@ await User.update(conds, [
 - [isSqlRaw](functions/isSqlRaw.md)
 - [isSqlRef](functions/isSqlRef.md)
 - [sql](functions/sql.md)
+- [formatLocalDate](functions/formatLocalDate.md)
+- [formatUTCDate](functions/formatUTCDate.md)
+- [isConnectionError](functions/isConnectionError.md)
 - [createPostgresDriver](functions/createPostgresDriver.md)
 - [createSqliteDriver](functions/createSqliteDriver.md)
 

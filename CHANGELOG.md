@@ -5,6 +5,61 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.2.4] - 2026-08-01
+
+ベンチ再計測（#232 / #233 / #234 / #172）の過程で露出した欠陥をまとめて修正。出荷物に影響する実バグ4件を含む。
+公表ベンチ（`benchmark/CROSS-LANG.md` / `docs/`）は全3方言・5言語で再計測した値に更新。
+Closes #138, #249, #252, #254, #255, #256, #257, #258, #259, #260, #261, #262, #264。
+
+### Fixed
+
+- **[go] grouping キーが 2^63 の float と `MaxInt64` を同一バケットに入れる（#262）** — 整数値 float を
+  整数キーへ畳む判定を `f == float64(int64(f))` の round-trip で書いており、`int64(f)` の範囲外変換が
+  Go では実装定義。**arm64 は `MaxInt64` に飽和**し、`float64(MaxInt64)` が 2^63 に丸まるため一致してしまう
+  （x86-64 は `MinInt64` になるので一致しない）。relation の子が 2^63 のキーで来ると `MaxInt64` の親にぶら下がっていた。
+  rust / php と同じ明示的な範囲テストへ統一。**CI は x86-64 なので検出できず、2.2.3 まで出荷されていた。**
+- **[php] native ランタイムに prepared statement キャッシュが無い（#257）** — 4 つの seam すべてが毎回
+  `prepare()` を発行しており、PDO の `prepare` は PostgreSQL / MySQL で**サーバ往復1回**。`PdoDriver` が所有する
+  単一の `PreparedStatements` に集約（`beginTx()` は tx ごとに新ハンドルを返すので tx 側に置くと機能しない）。
+  `LiveDb.php` の mysql RETURNING 再 SELECT も statement ごとに1回だけ prepare するように。
+  native÷sdk 比が **PostgreSQL 17/19 op・MySQL 17/19 op** で改善（pg `updateMany` 10.98× → 1.25×）。
+- **[php] `SplObjectStorage::contains()` / `attach()` が PHP 8.5 で deprecated（#260）** — PHP 9 でエラー化する。
+  `offsetExists()` / `offsetSet()`（同一操作の別名）へ。
+- **[tooling] `devEngines` がリポジトリ全体を起動不能にしていた（#253）** — npm は `devEngines` を
+  install だけでなく `npm run` / `npx` にも適用するため、拒否範囲に入れた npm 11.6.2（このリポジトリが要求する
+  Node 24.13 の同梱版）ではすべてのゲートが起動しなかった。判定は既存の `deps:installed` 1 本へ戻した。
+- **[ci] `docs-drift` が構造的に充足不能（#264）** — typedoc の source link が git remote と HEAD SHA に依存し、
+  ローカル（SSH ホストエイリアス）と CI（`https://`）で必ず異なり、かつ CI 出力は SHA を埋め込むので次のコミットで
+  陳腐化していた。`sourceLinkTemplate` と `gitRevision` を pin。
+- **[gate][rust] run gate が live-DB でない integration テストを live と誤分類（#261）** — Rust では
+  `tests/*.rs` が別ターゲットなのに live 判定をディレクトリ単位で行っていた。
+
+### Removed
+
+- **gate-first トランザクション解釈（#256）** — `GateRule` / `gateShortCircuit` / `ShortCircuitReason` /
+  `TransactionResult.shortCircuit` / `TransactionPlan.onIdempotentHit` / `IdempotentHitPolicy`。
+  5 言語のどこからも到達せず、「未知の gate は fail-closed」という安全側の主張が一度も実行されていなかった。
+  `writeouttype` が全言語の write out 型へ注いでいた `shortCircuit` フィールドも除去。
+  **公開型 `GateRule` / `IdempotentHitPolicy` / `ShortCircuitReason` の re-export がなくなる**が、
+  これらを生成できる経路は存在しなかった。
+
+### Changed
+
+- **[perf][rust] SQLite seam が prepared statement を再利用（#138）** — 容量 128。sqlite の中央値で
+  `findUnique` −67% / `upsert` −55% / `update` −50% / `nestedFindUnique` −47% / `delete` −47%。
+  `findFirst`（唯一の `LIKE ?` op）だけ 2µs 遅くなる — SQLite の LIKE 最適化がバインド値依存の plan を持つため。
+  実測表と機構は `SQLITE_STATEMENT_CACHE_CAPACITY` の docstring に記載。
+- **[perf][rust] relation の親行を move（#138）** — 各レベルで行もセルも複製しない。
+- 内部述語 `isBatchPlan` を 1 箇所へ統合（#259）。
+
+### Added
+
+- **`npm run verify`** — CI がゲートする 27 ステップを 1 コマンドで実行。一覧が CI の呼ぶ npm script を
+  網羅していることを集合差で自己検査し、非 arm64 ツールチェーンを拒否する（CI は x86-64、これが arm64 側。
+  #262 はその分担が必要である実証）。
+- `run-cells.sh` が pinned node のネイティブモジュール load 可否を検査（#252）。
+- ORM-bench セルの `LM_CPUPROFILE` / `LM_ONLY_OP`（go / rust）。
+
 ## [2.2.2] - 2026-07-29
 
 typed-native（go/rust）が **SKIP 動的 WHERE** と **relation runaway cap** を codegen できるようになり、

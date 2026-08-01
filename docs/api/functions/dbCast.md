@@ -1,4 +1,4 @@
-[**litedbmodel v1.0.1**](../README.md)
+[**litedbmodel v2.2.4**](../README.md)
 
 ***
 
@@ -10,10 +10,10 @@
 function dbCast(
    value: unknown, 
    sqlType: string, 
-   operator: string): DBCast;
+   operator?: string): DBCast;
 ```
 
-Defined in: DBValues.ts:503
+Defined in: [DBValues.ts:503](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBValues.ts#L503)
 
 Create a type-cast value
 

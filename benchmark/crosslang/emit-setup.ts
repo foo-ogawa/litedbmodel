@@ -10,6 +10,11 @@
 // each execs the identical `schema` (once, at open) + `delete`+`insert` (the canonical fixture,
 // re-applied per op). This is data, not codegen — one artifact, every language reads it.
 //
+// It also carries `inputs`: the per-op values every cell binds, from the axis SSoT (`contract.ts`).
+// The per-op SQL is merged in later by `lm_orm_native sql` (the `ops` field, captured from the
+// generated module) and `derive-ops.ts`; between them a cell holds neither the statements nor the
+// values, so two cells cannot be running different work (#172).
+//
 // `scale` (default 1) multiplies the child fan-outs via `scaleSeed`: scale 1 is the ORM-vs-ORM bench's
 // own fixture, and a smaller scale re-runs the SAME ops over fewer rows so the report can separate the
 // fixed per-call overhead from the per-row cost (#170).
@@ -27,6 +32,7 @@ import {
   ddl, deleteStatements, analyzeStatements, seedTables, dropStatements, pgSeqResetStatements, scaleSeed, ORM_SEED,
   type OrmDialect, type SeedTable,
 } from './orm-domain';
+import { ORM_OP_INPUT, type OrmOpInput } from './contract';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const OUT_DIR = join(HERE, '.setup');
@@ -65,6 +71,13 @@ interface SetupDoc {
   readonly users: number;
   /** Seeded rows per table — what the fixture HOLDS (what each op READS is measured per cell). */
   readonly counts: Record<string, number>;
+  /**
+   * The values every cell binds, per op, from the axis SSoT (`contract.ts` `ORM_OPS[].input`). SQL
+   * comes from the generated module (`ops`, merged in by `lm_orm_native sql`); this is the other half
+   * of "the same work", and it is DECLARED rather than captured because it is what the cells supply.
+   * `{it}` inside a string is the iteration number, the one substitution a cell makes.
+   */
+  readonly inputs: Record<string, OrmOpInput>;
   readonly schema: string[]; // drop + create, applied ONCE at open.
   readonly delete: string[]; // empty every table (child→parent), applied before each re-seed.
   readonly insert: string[]; // the canonical fixture as literal INSERTs (+ pg SERIAL fixups).
@@ -89,6 +102,7 @@ for (const dialect of DIALECTS) {
     scale,
     users: shape.users,
     counts: Object.fromEntries(tables.map((t) => [t.table, t.rows.length])),
+    inputs: ORM_OP_INPUT,
     schema: [...dropStatements(dialect), ...ddl(dialect)],
     delete: deleteStatements(dialect),
     insert: inserts,

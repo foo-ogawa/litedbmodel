@@ -2,7 +2,11 @@
 
 Benchmark comparing litedbmodel with Prisma, Kysely, Drizzle, and TypeORM on PostgreSQL.
 
-> **Version:** litedbmodel **2.2.0** · PostgreSQL 16 · Apple Silicon (arm64).
+<!--@embedoc:package_version-->
+**Version:** litedbmodel **2.2.4**
+<!--@embedoc:end-->
+
+> Measured on PostgreSQL 16 · Apple Silicon (arm64).
 > Every table and the chart on this page are **regenerated from `benchmark/results/benchmark-results.csv`**
 > (`npx embedoc build` for the tables, `npm run chart` for the SVG) — the numbers here are machine-derived,
 > never hand-edited. litedbmodel's two v2 execution modes (`runtime`, `codegen`) are shown as separate series.
@@ -32,25 +36,25 @@ Reference: [Kysely performance comparison article](https://izanami.dev/post/1e3f
 <!--@embedoc:benchmark_table-->
 | Operation | litedbmodel (runtime) | litedbmodel (codegen) | Kysely | Drizzle | TypeORM | Prisma |
 | --- | --- | --- | --- | --- | --- | --- |
-| Find all (limit 100) | **0.42ms** 🏆 | 0.63ms | 0.58ms | 0.55ms | 0.66ms | 1.13ms |
-| Filter, paginate & sort | 0.65ms | **0.57ms** 🏆 | **0.57ms** 🏆 | 0.82ms | 0.90ms | 0.86ms |
-| Nested find all (include posts) | 2.39ms | **2.22ms** 🏆 | 3.10ms | 2.98ms | 6.28ms | 9.62ms |
-| Find first | 0.35ms | 0.33ms | **0.30ms** 🏆 | 0.37ms | 0.36ms | 0.52ms |
-| Nested find first (include posts) | 0.61ms | 0.69ms | 0.62ms | 0.70ms | **0.51ms** 🏆 | 1.00ms |
-| Find unique (by email) | 0.52ms | 0.33ms | **0.29ms** 🏆 | 0.40ms | 0.44ms | 0.51ms |
-| Nested find unique (include posts) | 0.76ms | 0.81ms | **0.68ms** 🏆 | 1.07ms | 1.04ms | 0.94ms |
-| Create | 0.77ms | **0.39ms** 🏆 | 0.80ms | 0.93ms | 0.85ms | 1.14ms |
-| Nested create (with post) | 1.09ms | **0.98ms** 🏆 | 1.04ms | 1.17ms | 1.26ms | 1.70ms |
-| Update | 0.82ms | **0.52ms** 🏆 | 0.67ms | 0.73ms | 0.73ms | 1.15ms |
-| Nested update (update user + post) | 0.95ms | 0.96ms | **0.90ms** 🏆 | 1.05ms | 0.99ms | 2.15ms |
-| Upsert | 0.76ms | **0.44ms** 🏆 | 0.72ms | 0.74ms | 0.93ms | 1.75ms |
-| Nested upsert (user + post) | 1.29ms | **0.99ms** 🏆 | 1.12ms | 1.24ms | 1.32ms | 2.02ms |
-| Delete | 1.04ms | **1.01ms** 🏆 | 1.04ms | 1.09ms | 1.29ms | 1.52ms |
-| Create Many (10 records) | 0.85ms | **0.41ms** 🏆 | 0.88ms | 1.20ms | 1.02ms | 1.20ms |
-| Upsert Many (10 records) | 1.28ms | **0.46ms** 🏆 | 0.77ms | 1.38ms | 1.10ms | 9.75ms |
-| Update Many (10 different values) | 1.12ms | **0.47ms** 🏆 | 2.42ms | 2.42ms | 2.49ms | 4.91ms |
-| Nested relations (100→1000→10000) | **14.43ms** 🏆 | 18.46ms | 21.11ms | 20.33ms | 74.04ms | 79.61ms |
-| Nested relations (composite key) | 27.52ms | **23.97ms** 🏆 | N/A | 74.39ms | 57.46ms | 83.78ms |
+| Find all (limit 100) | **0.48ms** 🏆 | 0.69ms | 0.92ms | 0.58ms | 0.74ms | 1.16ms |
+| Filter, paginate & sort | **0.68ms** 🏆 | **0.69ms** 🏆 | 0.75ms | 0.93ms | 1.00ms | 0.97ms |
+| Nested find all (include posts) | 2.39ms | **2.25ms** 🏆 | 3.09ms | 3.01ms | 6.41ms | 9.61ms |
+| Find first | 0.38ms | 0.39ms | **0.33ms** 🏆 | 0.52ms | 0.52ms | 0.53ms |
+| Nested find first (include posts) | **0.68ms** 🏆 | 0.88ms | 0.86ms | 0.85ms | 0.80ms | 0.98ms |
+| Find unique (by email) | 0.41ms | **0.35ms** 🏆 | 0.43ms | 0.47ms | 0.58ms | 0.61ms |
+| Nested find unique (include posts) | 0.89ms | 0.92ms | **0.81ms** 🏆 | 0.85ms | 1.36ms | 0.92ms |
+| Create | 0.80ms | **0.40ms** 🏆 | 0.89ms | 1.07ms | 0.84ms | 1.03ms |
+| Nested create (with post) | **1.00ms** 🏆 | 1.17ms | 1.01ms | 1.22ms | 1.40ms | 1.77ms |
+| Update | 0.84ms | **0.40ms** 🏆 | 0.89ms | 0.76ms | 0.75ms | 1.20ms |
+| Nested update (update user + post) | 1.22ms | 1.21ms | 1.22ms | 1.16ms | **1.14ms** 🏆 | 2.26ms |
+| Upsert | 1.03ms | **0.42ms** 🏆 | 0.84ms | 1.05ms | 1.15ms | 1.92ms |
+| Nested upsert (user + post) | 1.49ms | 1.23ms | **1.10ms** 🏆 | 1.39ms | 1.29ms | 2.09ms |
+| Delete | 1.24ms | **1.06ms** 🏆 | 1.22ms | 1.28ms | 1.27ms | 1.49ms |
+| Create Many (10 records) | 1.10ms | **0.57ms** 🏆 | 0.94ms | 1.03ms | 1.36ms | 1.19ms |
+| Upsert Many (10 records) | 1.45ms | **0.66ms** 🏆 | 1.07ms | 1.51ms | 1.57ms | 9.64ms |
+| Update Many (10 different values) | 1.20ms | **0.44ms** 🏆 | 2.42ms | 2.42ms | 2.60ms | 4.83ms |
+| Nested relations (100→1000→10000) | **14.83ms** 🏆 | 18.11ms | 20.86ms | 20.51ms | 72.09ms | 82.82ms |
+| Nested relations (composite key) | 29.00ms | **23.26ms** 🏆 | N/A | 78.53ms | 58.94ms | 82.63ms |
 <!--@embedoc:end-->
 
 *All write operations wrapped in transactions for fair comparison across all ORMs.*
@@ -58,7 +62,7 @@ Reference: [Kysely performance comparison article](https://izanami.dev/post/1e3f
 ### Analysis
 
 <!--@embedoc:benchmark_summary-->
-litedbmodel is the fastest ORM in **14 of 19** benchmarked operations.
+litedbmodel is the fastest ORM in **15 of 19** benchmarked operations.
 <!--@embedoc:end-->
 
 Every number below comes from the machine-generated table above (regenerated from
@@ -528,6 +532,6 @@ WHERE (tenant_id, user_id) IN (($1,$2),($3,$4),...,($1999,$2000))
 
 ---
 
-*Last updated: July 2026 (litedbmodel v2.0.2)*  
+*Last updated: July 2026*  
 *Benchmark methodology: Based on [Prisma orm-benchmarks](https://github.com/prisma/orm-benchmarks)*
 
