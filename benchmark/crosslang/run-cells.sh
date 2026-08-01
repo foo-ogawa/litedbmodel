@@ -65,7 +65,34 @@ guard_arch NODE "$("$NODE" -p process.arch 2>/dev/null)"
 guard_arch GO   "$("$GO" env GOARCH 2>/dev/null)"
 guard_arch PHP  "$("$PHP" -r 'echo php_uname("m");' 2>/dev/null)"
 guard_arch PYTHON "$($PY_LAUNCH -c 'import platform;print(platform.machine())' 2>/dev/null)"
-echo "arch: node/go/php/python all arm64; rust → $RUST_TARGET"
+
+# The guards above prove the INTERPRETERS are arm64. They say nothing about the NATIVE MODULES those
+# interpreters load, and `node_modules` carries per-platform ones: `npm ci` run from an x86 shell installs
+# `@esbuild/darwin-x64` and builds better-sqlite3 for x64, and the arm64 node this script correctly pinned
+# then cannot load either. That combination fails LATE and in a voice that sounds like a bench problem —
+# "op-SQL derivation failed on <dialect> — the SDK cells cannot bind the captured statements", with
+# esbuild's own "installed for another platform" three frames down — and it took all three dialects with
+# it, zero cells run (#252). The arch of a tree is not visible in `process.arch`, so it is asked the only
+# way that cannot be wrong: LOAD the module, with the node that will do the loading.
+#
+# Not `check-installed-deps.mjs` (#245), which answers a different question — tree ↔ lockfile — and whose
+# UNEXPECTED half would refuse a tree these cells run perfectly well on. `require()` alone is not enough
+# either: better-sqlite3 resolves its binding lazily, inside `new Database()`.
+guard_node_module() { # label  probe  fix
+  if ! (cd "$ROOT" && "$NODE" -e "$2") >/dev/null 2>&1; then
+    echo "✗ $1 cannot be loaded by $NODE (process.arch = $("$NODE" -p process.arch))."
+    (cd "$ROOT" && "$NODE" -e "$2") 2>&1 | grep -v '^\s*$' | head -4 | sed 's/^/    /'
+    echo "  $3"
+    exit 1
+  fi
+}
+guard_node_module esbuild "require('esbuild').transformSync('1')" \
+  "Reinstall with THIS node: rm -rf node_modules && npm ci (from a shell where \`node -p process.arch\` is arm64)."
+if [ "$DIALECT" = sqlite ]; then
+  guard_node_module better-sqlite3 "new (require('better-sqlite3'))(':memory:').close()" \
+    "Rebuild it for THIS node: npm rebuild better-sqlite3 (or rm -rf node_modules && npm ci from an arm64 shell)."
+fi
+echo "arch: node/go/php/python all arm64; rust → $RUST_TARGET; node_modules loadable by $("$NODE" -p process.arch) node"
 
 # ── EXCLUSIVE. One run of this harness at a time, machine-wide — not per dialect. Two reasons, and both
 # produce numbers that look plausible and are wrong:
