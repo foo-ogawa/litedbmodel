@@ -55,8 +55,11 @@ which is what makes an ordinary non-release PR safe.
 
 ### One-time prerequisites — MUST be configured before the release sequence
 
-Status verified **2026-07-10** against `foo-ogawa/litedbmodel`. None of the ❌ items are done yet;
-each blocks the step noted.
+Status verified **2026-08-01** against `foo-ogawa/litedbmodel` and the registries themselves. All four
+secrets are present and four of the five registries are live — npm `2.2.3`, PyPI present, crates.io
+`2.2.3`, and the Go tag needs no registry. **Packagist is the one ❌ left**, and it blocks only the PHP
+package: `litedbmodel/runtime` is still a 404 there, so a tag push syncs nothing until the repo is
+submitted once at packagist.org. Everything else below is background for the next reader.
 
 **A. Repo secrets** (`gh secret set <NAME> --repo foo-ogawa/litedbmodel`)
 
