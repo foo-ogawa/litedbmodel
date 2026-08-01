@@ -137,6 +137,8 @@ const LIVE_TESTS = [
   'd1_live_runtime_tx_boundaries_are_middleware_visible',
   'd1_red_live_without_registration_nothing_observed',
   'd3_live_raw_execute_query_through_seam_and_logger',
+  'isolation_retry_guard_and_nesting_mysql',
+  'isolation_retry_guard_and_nesting_pg',
   'one_transaction_owns_one_connection_mysql',
   'one_transaction_owns_one_connection_pg',
   'phase_c_connection_routing_and_config',
