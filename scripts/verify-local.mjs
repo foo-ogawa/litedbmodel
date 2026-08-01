@@ -126,11 +126,72 @@ const out = (cmd, args) => spawnSync(cmd, args, { encoding: 'utf8' }).stdout?.tr
 need('node process.arch', process.arch, 'arm64');
 need('go GOARCH', out('go', ['env', 'GOARCH']), 'arm64');
 need('php php_uname("m")', out('php', ['-r', 'echo php_uname("m");']), 'arm64');
-need('python platform.machine()', out('python3', ['-c', 'import platform;print(platform.machine())']), 'arm64');
+// node / go / php resolve to THIN arm64 binaries and stay arm64 whatever launched them. python3 is a
+// UNIVERSAL binary, and macOS does not carry an arm64 preference down to a grandchild — so the same
+// `python3` reports arm64 when this script is run straight from the shell and x86_64 when something
+// (a `timeout`, a wrapper, an x86 login shell) sits in between, and the guard would refuse a machine
+// that is perfectly fine. `arch -arm64` IS honoured as a direct parent, which is the fix
+// `benchmark/crosslang/run-cells.sh` already applies for the same reason; it is only reached when the
+// plain invocation is not already arm64, so a real x86 python still fails.
+const pyArch = out('python3', ['-c', 'import platform;print(platform.machine())']);
+need(
+  'python platform.machine()',
+  pyArch === 'arm64' ? pyArch : out('arch', ['-arm64', 'python3', '-c', 'import platform;print(platform.machine())']),
+  'arm64',
+);
 
 if (LIST_ONLY) {
   for (const s of STEPS) console.log(`${s.db ? 'db  ' : '    '}${s.npm ? `npm run ${s.npm}` : s.cmd.join(' ')}`);
   process.exit(0);
+}
+
+// ── is this tree PROVISIONED, or merely checked out? ────────────────────────────────────────────
+//
+// "The code is broken" and "this worktree was never set up" are different facts, and reported the same
+// way they cost an afternoon: a fresh worktree runs six gates red — pkg:check, types:check,
+// conformance:gen, ts:test, py:test, php:test — none of which is a defect. So the preconditions are
+// asked FIRST, and a missing one names the command that fixes it instead of failing a gate downstream.
+//
+// The native build is the trap worth spelling out. This repository sets `ignore-scripts=true` in
+// `.npmrc` — correct, it is how a lockfile stops running arbitrary install hooks — which also means
+// `npm ci` never builds better-sqlite3, and `npm rebuild better-sqlite3` prints "rebuilt dependencies
+// successfully" and exits 0 having built nothing. The binding only appears with an explicit
+// `--ignore-scripts=false` (#267).
+//
+// Each probe is a two-valued question — the module loads or it does not, the directory is there or it
+// is not — which is what makes them gateable rather than guesswork. `require('better-sqlite3')` alone
+// is NOT such a question: it succeeds without a binding, because the binding is resolved inside
+// `new Database()`.
+const PROVISIONING = [
+  {
+    what: 'better-sqlite3 (root node_modules) can open a database',
+    ok: () => spawnSync(process.execPath, ['-e', "new (require('better-sqlite3'))(':memory:').close()"], { cwd: ROOT }).status === 0,
+    fix: 'npm rebuild better-sqlite3 --ignore-scripts=false   # .npmrc sets ignore-scripts=true, so a plain rebuild is a silent no-op',
+    needs: 'conformance:gen, ts:test, and every sqlite-backed gate',
+  },
+  {
+    what: 'benchmark/node_modules (the other ORMs and their types)',
+    ok: () => existsSync(join(ROOT, 'benchmark', 'node_modules')),
+    fix: '(cd benchmark && npm install)',
+    needs: 'types:check, pkg:check',
+  },
+  {
+    what: 'php/vendor (composer)',
+    ok: () => existsSync(join(ROOT, 'php', 'vendor', 'autoload.php')),
+    fix: '(cd php && composer install)',
+    needs: 'php:test',
+  },
+];
+const unprovisioned = PROVISIONING.filter((p) => !p.ok());
+if (unprovisioned.length > 0) {
+  console.error(
+    `❌ verify: this tree is not provisioned — ${unprovisioned.length} precondition(s) missing. These are NOT\n` +
+      `   gate failures; running the gates now would report them as broken code.\n`,
+  );
+  for (const p of unprovisioned) {
+    console.error(`   ✗ ${p.what}\n       needed by: ${p.needs}\n       fix:       ${p.fix}\n`);
+  }
+  process.exit(1);
 }
 
 // The live-DB gates each suite reads (`livedb-gates.env` is the SSoT) must be OPEN in this process, or
