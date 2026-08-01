@@ -131,7 +131,7 @@ export function compileDeleteManyBundle(
   const components = compileDeleteMany({ dialect: dialectName, ...options });
   const ops = components.map((c, i) => flattenBatchOp(c, `deleteMany group ${i}`));
   if (ops.length === 0) {
-    return { dialect: dialectName, name, statement: { sql: '', params: [] }, transaction: { phase: 'remove', entityFrom: null, statements: [], onIdempotentHit: 'rollback' } };
+    return { dialect: dialectName, name, statement: { sql: '', params: [] }, transaction: { phase: 'remove', entityFrom: null, statements: [] } };
   }
   const plan = deriveBatchPlan('remove', ops);
   return { dialect: dialectName, name, statement: { sql: ops[0].sql, params: ops[0].params }, transaction: plan };

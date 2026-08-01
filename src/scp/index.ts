@@ -285,13 +285,10 @@ export type {
   TxExpr,
   TxOp,
   StatementRole,
-  GateRule,
   TxStatement,
   TransactionPlan,
   WriteLifecyclePhase,
-  IdempotentHitPolicy,
   TransactionResult,
-  ShortCircuitReason,
   WriteExecOptions,
 } from './makesql';
 
