@@ -38,9 +38,12 @@ export const GATE_PATTERN = /LITEDBMODEL_[A-Z0-9_]+/g;
  * `LITEDBMODEL_*` variables that are NOT skip gates, so naming one does not make a file a live-DB
  * leg and declaring one is not required. `LITEDBMODEL_LIVEDB_VECTORS` carries the corpus PATH into a
  * runner (set by `conformance/livedb-run.ts`, read by `rust/livedb_runner/src/main.rs` and its go
- * twin); nothing skips on it.
+ * twin); nothing skips on it. `LITEDBMODEL_ACQUIRE_TIMEOUT_SECS` shortens the rust MySQL pool's
+ * acquire budget for phase 2 only (set in `UNREACHABLE`, read by
+ * `rust/litedbmodel_runtime/src/livedb.rs`); nothing skips on it either, and declaring it in
+ * `livedb-gates.env` would tell CI to open a gate that does not exist (#255).
  */
-export const NOT_A_GATE = new Set(['LITEDBMODEL_LIVEDB_VECTORS']);
+export const NOT_A_GATE = new Set(['LITEDBMODEL_LIVEDB_VECTORS', 'LITEDBMODEL_ACQUIRE_TIMEOUT_SECS']);
 
 /**
  * Whether `text` reads a live-DB gate — the ONE test for "this file holds live-DB legs", used by

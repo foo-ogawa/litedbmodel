@@ -399,8 +399,27 @@ jobs:
       # The python/php *_native suites import the ORM-bench cell, which reads benchmark/crosslang/.setup/
       # <dialect>.json at import — a GENERATED (gitignored) seed fixture. Emit it once here, or pytest
       # collection dies with FileNotFoundError (#185).
+      #
+      # At `scale 0.2`, NOT the measurement fixture's `scale 1` (#249). Everything downstream of this
+      # step is a PROOF — the native suites assert shapes and the #241 step asserts per-op STATEMENT
+      # counts — and nothing here is a measurement, so it pays for rows it does not read: 127,510 of
+      # them, re-seeded per op across three legs, which was ~1m35s of a ~9m35s job against this
+      # repository's own "fix a CI over 5 minutes" rule.
+      #
+      # 0.2 rather than lower because of what `scaleSeed` does and does not scale:
+      #   - The PARENT counts are fixed at every scale by design (`orm-domain.ts` — every op reads a
+      #     LIMIT-100 parent window). So N+1 still shows as ~100 statements against a batch's 1, and
+      #     `expectedStatements` (go `lm_orm_native`) keeps its full detection at any scale.
+      #   - The child FAN-OUTS scale, each floored at 1 — and at 0.1 or below every floor is hit, so a
+      #     parent holds exactly ONE child. That would let a grouping bug that keeps only the first
+      #     child pass the shape assertions (the #150 class). 0.2 keeps 2 posts/user and 2
+      #     comments/post, so both nesting levels still group more than one row.
+      # 127,510 rows → 9,510. The suites need no change: they were already written scale-independent
+      # (`python/tests/test_orm_bench_native.py`, `php/tests/OrmBenchNativeTest.php` — "the scale knob
+      # varies (#170), so the assertion pins the SHAPE"), asserting only the unscaled LIMIT-100 window
+      # absolutely and the children by shape.
       - name: Emit the cross-lang ORM-bench seed fixture (.setup/*.json) for the native conformance suites
-        run: npx tsx benchmark/crosslang/emit-setup.ts
+        run: npx tsx benchmark/crosslang/emit-setup.ts 0.2
       # Each of these is a RUN GATE, not the bare runner (#220). Every runner in this repository
       # reports a suite that did not run as a success — `pytest` 153 passed / 25 SKIPPED, `phpunit`
       # `OK, but some tests were skipped!` with 45, `vitest` `success: true` with tests pending,
