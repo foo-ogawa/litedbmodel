@@ -676,8 +676,9 @@ pub fn pluck_keys(mut payload: WireRow) -> Result<WireValue, BehaviorError> {
 /// runtime relation path uses (no duplicated grouping). `pk`/`fk` are the ordered parent/child key-
 /// column TUPLES (single-key → 1 column; composite → the tuple) — the core keys on the WHOLE tuple
 /// identity, so a composite relation nests by the full key (no scalar-collapse cartesian). Each parent
-/// is shallow-copied before the own-key set (matching the TS `{...par, [into]: …}` spread — the input
-/// is not mutated). Ports ride in the payload as `{children, fk, into, parents, pk, single}`.
+/// is MOVED through: the transport owns its payload, so the nesting key is written onto the parent row
+/// itself and that row IS the output element — no row, and no cell, is copied at any level. Ports ride
+/// in the payload as `{children, fk, into, parents, pk, single}`.
 pub fn group_children(mut payload: WireRow) -> Result<WireValue, BehaviorError> {
     let children_port = port_list(&mut payload, "children")?;
     let fk_port = port_strings(&mut payload, "fk")?;
@@ -685,8 +686,7 @@ pub fn group_children(mut payload: WireRow) -> Result<WireValue, BehaviorError> 
     let parents_port = port_list(&mut payload, "parents")?;
     let pk_port = port_strings(&mut payload, "pk")?;
     let single = port_bool(&mut payload, "single")?;
-    let (fk, into, parents, pk): (&[String], &str, &[WireValue], &[String]) =
-        (&fk_port, &into_port, &parents_port, &pk_port);
+    let (fk, into, pk): (&[String], &str, &[String]) = (&fk_port, &into_port, &pk_port);
     // The grouping core keys DIRECTLY on `WireValue` (no `WireValue`↔`Value` conversion) and OWNS the
     // children: each is moved into its bucket, and the bucket is moved into the parent it belongs to. No
     // row is copied.
@@ -694,19 +694,26 @@ pub fn group_children(mut payload: WireRow) -> Result<WireValue, BehaviorError> 
     // Resolve the parent `pk` indices + the `into` insert position ONCE (all parents share column
     // order) — the per-parent path then carries NO index scan, even when `parents` is a large nested
     // relation level (a 3-level chain groups the middle level as parents too).
-    let pk_idx = crate::grouping::resolve_key_indices(parents, pk);
+    let pk_idx = crate::grouping::resolve_key_indices(&parents_port, pk);
     // How many parents claim each key: the last claimant MOVES its bucket, an earlier one clones (so
     // parents sharing a key all still get the children).
-    let mut remaining = crate::grouping::count_parent_keys(parents, pk, &pk_idx);
-    let into_pos = parents.iter().find_map(|p| match p {
+    let mut remaining = crate::grouping::count_parent_keys(&parents_port, pk, &pk_idx);
+    let into_pos = parents_port.iter().find_map(|p| match p {
         WireValue::Row(r) => r.entries.iter().position(|(k, _)| k == into),
         _ => None,
     });
-    let out: Vec<WireValue> = parents
-        .iter()
+    // The nesting key is the SAME for every parent, so it is interned ONCE per call and every parent
+    // takes a `Cow::Borrowed` copy of it. Spelling it `into.to_string()` per parent allocated a String
+    // per parent PER LEVEL — the last per-parent allocation left once the row itself stopped being
+    // copied. Interning is also why this is hoisted: the interner takes a lock, so calling it per
+    // parent would cost more than the String it saves.
+    let into_key: std::borrow::Cow<'static, str> =
+        std::borrow::Cow::Borrowed(crate::driver::intern_wire_key(into));
+    let out: Vec<WireValue> = parents_port
+        .into_iter()
         .map(|p| {
             let nested = crate::grouping::attach_to_parent(
-                p,
+                &p,
                 pk,
                 &pk_idx,
                 &mut by_key,
@@ -714,20 +721,27 @@ pub fn group_children(mut payload: WireRow) -> Result<WireValue, BehaviorError> 
                 single,
             );
             match p {
-                // {...p, [into]: nested}: shallow-copy the parent's entries, then set an existing `into`
-                // in place (keeps its position) or append a new one — the TS `{...par, [into]: …}` spread.
-                WireValue::Row(r) => {
-                    let mut entries = r.entries.clone();
+                // {...p, [into]: nested}: the parent is MOVED — set an existing `into` in place (keeps
+                // its position) or append a new one, then hand the SAME row back out.
+                //
+                // Copying it is what the other four languages never did: go's `withOwnKeyWire` copies a
+                // field slice whose cells are references, TS/python spread object references, and php
+                // `clone` is shallow — only rust's `Vec<(Cow, WireValue)>::clone()` is RECURSIVE, so
+                // "the TS spread" deep-copied every cell (a heap copy per string) of every parent, at
+                // every relation level. It is not needed to keep the input unmutated either: `port_list`
+                // MOVED the parents out of a payload this transport owns by value, so no caller can
+                // observe them again.
+                WireValue::Row(mut r) => {
                     match into_pos {
-                        Some(i) if entries.get(i).is_some_and(|(k, _)| k == into) => {
-                            entries[i].1 = nested
+                        Some(i) if r.entries.get(i).is_some_and(|(k, _)| k == into) => {
+                            r.entries[i].1 = nested
                         }
-                        _ => entries.push((into.to_string().into(), nested)),
+                        _ => r.entries.push((into_key.clone(), nested)),
                     }
-                    WireValue::Row(WireRow { entries })
+                    WireValue::Row(r)
                 }
                 // Records are rows by contract (SQL rows); a non-row passes through untouched.
-                _ => p.clone(),
+                other => other,
             }
         })
         .collect();

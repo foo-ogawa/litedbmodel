@@ -486,16 +486,20 @@ fn from_sql_ref(r: ValueRef<'_>) -> WireValue {
     }
 }
 
-/// Intern a column name to a `&'static str`.
+/// Intern a wire ROW KEY to a `&'static str` — the ONE interner in this crate.
 ///
-/// The wire's keys are `Cow<'static, str>`, so a name read at run time can only ride as `Cow::Owned` —
-/// one `String` allocation PER CELL, i.e. rows × columns of them (33,300 for one 11,100-row relation op),
-/// for a name that is identical on every row of the result set. Interning makes it `Cow::Borrowed`:
-/// allocation-free from the second row on, and free across statements since result sets reuse names.
+/// A [`WireRow`] key is `Cow<'static, str>`, so a name known only at run time can only ride as
+/// `Cow::Owned` — one `String` allocation per key WRITTEN, for a name that repeats on every row of a
+/// result set (rows × columns of them: 33,300 for one 11,100-row relation op) or on every parent of a
+/// relation level. Interning makes it `Cow::Borrowed`: allocation-free from the second use on, and free
+/// across statements and ops since the same names recur.
 ///
-/// The set of column names an application selects is finite and small, so the leak is bounded — it is the
-/// standard interning trade, not an unbounded one.
-fn intern_column(name: &str) -> &'static str {
+/// Both writers of a wire key reach it here: the driver's result-set column names ([`SqlitePrepared`])
+/// and the relation leaf's nesting key (`crate::leaves::group_children`'s `into`).
+///
+/// The set of column and relation names an application declares is finite and small, so the leak is
+/// bounded — it is the standard interning trade, not an unbounded one.
+pub(crate) fn intern_wire_key(name: &str) -> &'static str {
     use std::collections::HashSet;
     use std::sync::{Mutex, OnceLock};
     static NAMES: OnceLock<Mutex<HashSet<&'static str>>> = OnceLock::new();
@@ -520,16 +524,39 @@ pub struct SqliteDriver {
     conn: Connection,
 }
 
+/// How many distinct prepared statements ONE connection keeps compiled ([`SqliteDriver::configured`]).
+///
+/// A declared-endpoint ORM issues a BOUNDED set of statement texts — one per endpoint, plus the
+/// seam-issued tx control — so the whole working set fits in the cache and every statement is parsed
+/// ONCE per connection. `rusqlite`'s own default is 16, which a model of even modest size evicts on
+/// every pass (the ORM-comparison bench alone declares 20 distinct statements), turning the cache into
+/// pure thrash. 128 is the SAME capacity the python leg gets for free from the stdlib `sqlite3`
+/// (`cached_statements=128`), so the two in-proc SQLite runtimes compile each statement the same
+/// number of times.
+const SQLITE_STATEMENT_CACHE_CAPACITY: usize = 128;
+
 impl SqliteDriver {
-    /// Open an in-memory database with foreign keys enforced and the given schema applied.
-    pub fn in_memory(schema: &[String]) -> Result<Self, SqlFailure> {
-        let conn = Connection::open_in_memory().map_err(|e| map_sqlite_error(&e))?;
+    /// The ONE place a `rusqlite` connection this seam owns is configured: foreign keys enforced and
+    /// the prepared-statement cache sized. Both constructors funnel through it, so an in-memory and an
+    /// on-disk connection can never drift apart on connection-level settings.
+    fn configured(conn: Connection) -> Result<Self, SqlFailure> {
         conn.execute_batch("PRAGMA foreign_keys = ON;")
             .map_err(|e| map_sqlite_error(&e))?;
-        for stmt in schema {
-            conn.execute_batch(stmt).map_err(|e| map_sqlite_error(&e))?;
-        }
+        conn.set_prepared_statement_cache_capacity(SQLITE_STATEMENT_CACHE_CAPACITY);
         Ok(SqliteDriver { conn })
+    }
+
+    /// Open an in-memory database with foreign keys enforced and the given schema applied.
+    pub fn in_memory(schema: &[String]) -> Result<Self, SqlFailure> {
+        let driver =
+            Self::configured(Connection::open_in_memory().map_err(|e| map_sqlite_error(&e))?)?;
+        for stmt in schema {
+            driver
+                .conn
+                .execute_batch(stmt)
+                .map_err(|e| map_sqlite_error(&e))?;
+        }
+        Ok(driver)
     }
 
     /// Open an on-disk database FILE with foreign keys enforced (the schema is already present — an
@@ -537,10 +564,7 @@ impl SqliteDriver {
     /// native-codegen proof cell, which reads/mutates a seeded file to compare byte-for-byte with the
     /// mode-2 oracle over the SAME file).
     pub fn open(path: &str) -> Result<Self, SqlFailure> {
-        let conn = Connection::open(path).map_err(|e| map_sqlite_error(&e))?;
-        conn.execute_batch("PRAGMA foreign_keys = ON;")
-            .map_err(|e| map_sqlite_error(&e))?;
-        Ok(SqliteDriver { conn })
+        Self::configured(Connection::open(path).map_err(|e| map_sqlite_error(&e))?)
     }
 }
 
@@ -582,13 +606,13 @@ impl PreparedStatement for SqlitePrepared<'_> {
         let bound = self.bind(params)?;
         let mut stmt = self
             .conn
-            .prepare(&self.sql)
+            .prepare_cached(&self.sql)
             .map_err(|e| map_sqlite_error(&e))?;
         // Interned ONCE per statement: the per-cell key is then a borrow, not an allocation.
         let col_names: Vec<&'static str> = stmt
             .column_names()
             .iter()
-            .map(|c| intern_column(c))
+            .map(|c| intern_wire_key(c))
             .collect();
         let param_refs: Vec<&dyn rusqlite::ToSql> =
             bound.iter().map(|v| v as &dyn rusqlite::ToSql).collect();
@@ -622,7 +646,7 @@ impl PreparedStatement for SqlitePrepared<'_> {
             bound.iter().map(|v| v as &dyn rusqlite::ToSql).collect();
         let mut stmt = self
             .conn
-            .prepare(&self.sql)
+            .prepare_cached(&self.sql)
             .map_err(|e| map_sqlite_error(&e))?;
         let changes = stmt
             .execute(param_refs.as_slice())

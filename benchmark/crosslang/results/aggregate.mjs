@@ -89,8 +89,10 @@ const PREAMBLE = `# Cross-language ORM benchmark
 
 Each language runs the SAME 19 ORM-comparison ops through TWO surfaces against the same database:
 **native** = the litedbmodel-generated module over the shipped runtime; **sdk** = the same logical
-operation hand-written against the raw driver, litedbmodel not in the path. Both reuse prepared
-statements and bind params for reads and writes alike.
+operation hand-written against the raw driver, litedbmodel not in the path. Both bind params for reads
+and writes alike, and every SDK cell reuses its prepared statements — so does every native runtime
+EXCEPT php, which prepares each statement afresh. Read the php native column knowing it pays a parse
+its own SDK column does not.
 
 What the codegen buys is **cross-language**: ONE TypeScript model declaration generates the native module
 for go, rust, python and php too — that is the differentiator this table exists to measure. Within
