@@ -15,7 +15,10 @@ declare(strict_types=1);
  *   - SAME storage: in-memory sqlite (no file → no fsync/WAL the native in-memory cell never pays).
  *   - Prepared-statement REUSE: each op's SQL is prepared once and the PDOStatement cached by SQL text
  *     ($stmts), re-executed with fresh params across iterations — matching the native runtime's
- *     prepared-statement cache, not a re-parse-per-call strawman.
+ *     prepared-statement cache (`PreparedStatements` in `php/src/ExecutionContext.php`, keyed on the
+ *     same SQL text and shared by its non-tx and tx connections), not a re-parse-per-call strawman.
+ *     Until #257 that parity was claimed here and did NOT hold: the native runtime re-prepared on
+ *     every call while this cell did not, so php's native÷sdk ratio was reported worse than it was.
  *   - N+1-FREE relations: parent read → pluck keys → ONE batched child read (WHERE fk IN (…)) → group
  *     in memory, the SAME query counts the native cell proves (nestedFindAll=2, nestedRelations=3,
  *     compositeRelations=3, batch write=1, RETURNING-chained tx = BEGIN + body + COMMIT).

@@ -115,14 +115,75 @@ final class RunInfo
 }
 
 /**
+ * The per-`\PDO` prepared-statement cache — the ONE place this runtime calls `\PDO::prepare()` (#257).
+ *
+ * Without it every seam call re-prepared its SQL, so the server re-parsed and re-planned the same
+ * statement on every iteration while the PHP *SDK* bench cell cached its `\PDOStatement` by SQL text
+ * (`php/orm_bench_sdk/main.php:83-85`) and its own comment claimed to be "matching the native
+ * runtime's prepared-statement cache". It was not: this was the same native-vs-SDK asymmetry #138
+ * found and fixed in rust/sqlite, left standing in PHP on all three dialects, and it made the
+ * published php native÷sdk ratio worse than the runtime actually is.
+ *
+ * It lives on {@see PdoDriver} — which owns the single `\PDO` and is the sole constructor of both
+ * connection classes — because a `\PDOStatement`'s lifetime is its CONNECTION's. {@see
+ * PdoDriver::beginTx()} hands out a FRESH {@see PdoTxConnection} per transaction, so a cache held by
+ * the tx handle would be thrown away on every tx and cache nothing.
+ *
+ * Two things this has to get right, both with a finite failure mode:
+ *
+ *  - **The cursor.** A reused `\PDOStatement` must not be re-executed with rows still pending. `all`
+ *    exhausts via `fetchAll`, but `run` reads only `rowCount()` — so a RETURNING write (PG) leaves its
+ *    rows unfetched and the NEXT execute of that same statement would fail. {@see for()} closes the
+ *    cursor on every hand-out, which is a no-op on a statement that has none.
+ *  - **The size.** The key is the SQL TEXT, and this runtime expands IN-lists and multi-row VALUES by
+ *    COUNT (driver-side, by design), so the set of distinct statements is NOT bounded by the declared
+ *    endpoints — a long-lived connection would grow one entry per distinct list length. Past
+ *    {@see MAX} entries the map is dropped whole rather than grown (the same 128 bound rust's
+ *    `prepare_cached` uses; the hot set is the ~19 declared endpoints, far under it).
+ *
+ * The key is the SQL as the caller passes it, NOT as `prepare()` receives it: the LiveDb `\PDO`
+ * subclasses rewrite placeholders / RETURNING at prepare time, and that rewrite is deterministic, so
+ * caching on the input text hands back the statement built from the identical rewrite.
+ */
+final class PreparedStatements
+{
+    /** The bound on distinct cached statements (rust `prepare_cached` capacity, #138 案A). */
+    private const MAX = 128;
+
+    /** @var array<string, \PDOStatement> keyed by the SQL text as handed to {@see for()}. */
+    private array $stmts = [];
+
+    public function __construct(private readonly \PDO $pdo)
+    {
+    }
+
+    /** The prepared statement for `$sql` on this connection, ready to execute. */
+    public function for(string $sql): \PDOStatement
+    {
+        $stmt = $this->stmts[$sql] ?? null;
+        if ($stmt !== null) {
+            // Pending rows from the previous execute (a `run` on a RETURNING write never fetched them)
+            // would make this execute fail; closing is a no-op when there is no open cursor.
+            $stmt->closeCursor();
+            return $stmt;
+        }
+        if (count($this->stmts) >= self::MAX) {
+            $this->stmts = [];
+        }
+        return $this->stmts[$sql] = $this->pdo->prepare($sql);
+    }
+}
+
+/**
  * Adapt a raw `\PDO` to the {@see Connection} seam (the ONE driver contact for the non-tx path).
- * `execute`/`run` issue the SAME `$pdo->prepare($sql)->execute()` the runtime used directly before the
- * seam — so a ctx built via {@see Context::forPdo()} is byte-identical to the old raw-`\PDO` path (the
- * backward-compat wrapper, §6). It is the ONE place a `$pdo->prepare()` is issued on the non-tx path.
+ * `execute`/`run` issue the SAME statement the runtime used directly before the seam — reused from
+ * {@see PreparedStatements} rather than re-prepared (#257) — so a ctx built via
+ * {@see Context::forPdo()} sends byte-identical SQL to the old raw-`\PDO` path (the backward-compat
+ * wrapper, §6). It is the ONE place a statement is issued on the non-tx path.
  */
 final class PdoConnection implements Connection
 {
-    public function __construct(private readonly \PDO $pdo)
+    public function __construct(private readonly \PDO $pdo, private readonly PreparedStatements $stmts)
     {
     }
 
@@ -134,7 +195,7 @@ final class PdoConnection implements Connection
 
     public function execute(string $sql, array $params): array
     {
-        $stmt = $this->pdo->prepare($sql);
+        $stmt = $this->stmts->for($sql);
         $stmt->execute(array_values($params));
         $rows = $stmt->fetchAll(\PDO::FETCH_OBJ);
         return is_array($rows) ? array_values($rows) : [];
@@ -142,7 +203,7 @@ final class PdoConnection implements Connection
 
     public function run(string $sql, array $params): RunInfo
     {
-        $stmt = $this->pdo->prepare($sql);
+        $stmt = $this->stmts->for($sql);
         $stmt->execute(array_values($params));
         // NB: lastInsertRowid is NOT eagerly resolved. The PHP runtime never consumes it (only
         // `changes` is read), and PDO::lastInsertId() on Postgres calls lastval() — which RAISES
@@ -200,10 +261,17 @@ final class TxConnectionAdapter implements Connection
 final class PdoDriver
 {
     private readonly PdoConnection $conn;
+    /**
+     * ONE prepared-statement cache per `\PDO` (#257) — shared by the non-tx {@see PdoConnection} and
+     * every {@see beginTx()} handle, because they all issue their SQL on this ONE connection and a
+     * `\PDOStatement` belongs to the connection that prepared it.
+     */
+    private readonly PreparedStatements $stmts;
 
     public function __construct(private readonly \PDO $pdo)
     {
-        $this->conn = new PdoConnection($pdo);
+        $this->stmts = new PreparedStatements($pdo);
+        $this->conn = new PdoConnection($pdo, $this->stmts);
     }
 
     /** The raw PDO (so callers that must reach the driver — LiveDb resets — still can). */
@@ -236,7 +304,7 @@ final class PdoDriver
      */
     public function beginTx(): PdoTxConnection
     {
-        return new PdoTxConnection($this->pdo);
+        return new PdoTxConnection($this->pdo, $this->stmts);
     }
 }
 
@@ -262,7 +330,7 @@ final class PdoTxConnection
     /** The `destroy` flag of the effective release (null until released) — true ⇒ the poisoned path. */
     private ?bool $releasedDestroy = null;
 
-    public function __construct(private readonly \PDO $pdo)
+    public function __construct(private readonly \PDO $pdo, private readonly PreparedStatements $stmts)
     {
     }
 
@@ -284,7 +352,7 @@ final class PdoTxConnection
      */
     public function all(string $sql, array $params): array
     {
-        $stmt = $this->pdo->prepare($sql);
+        $stmt = $this->stmts->for($sql);
         $stmt->execute(array_values($params));
         $rows = $stmt->fetchAll(\PDO::FETCH_OBJ);
         return is_array($rows) ? array_values($rows) : [];
@@ -295,7 +363,7 @@ final class PdoTxConnection
      */
     public function run(string $sql, array $params): RunInfo
     {
-        $stmt = $this->pdo->prepare($sql);
+        $stmt = $this->stmts->for($sql);
         $stmt->execute(array_values($params));
         // lastInsertRowid left at 0 — see PdoConnection::run (never consumed; lastval() poisons a PG tx).
         return new RunInfo($stmt->rowCount(), 0);

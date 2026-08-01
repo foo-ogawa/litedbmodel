@@ -336,6 +336,13 @@ final class MysqlReturningStatement extends \PDOStatement
     private ?array $returningRows = null;
     /** Captured at construction from the PDO's slot. */
     private ?MysqlReselect $returning;
+    /**
+     * The recovering SELECT, prepared ONCE for this statement's lifetime (#257). `$returning` is fixed
+     * at construction, so `$returning->selectSql` never varies here — re-preparing it per execute made
+     * every mysql RETURNING write pay a second parse on top of the write's own, which is the same cost
+     * the prepared-statement cache removes for the write itself.
+     */
+    private ?\PDOStatement $reselectStmt = null;
 
     protected function __construct(MysqlLivePdo $pdo)
     {
@@ -371,7 +378,8 @@ final class MysqlReturningStatement extends \PDOStatement
      */
     private function reselect(array $bound, int $lastInsertId, int $affected): array
     {
-        $sel = $this->pdo->prepare($this->returning->selectSql);
+        $sel = $this->reselectStmt ??= $this->pdo->prepare($this->returning->selectSql);
+        $sel->closeCursor(); // a reused statement must not re-execute with rows still pending
         $sel->execute(MysqlReturning::bind($this->returning->binds, $bound, $lastInsertId, $affected));
         $rows = $sel->fetchAll(\PDO::FETCH_OBJ);
         return is_array($rows) ? array_values($rows) : [];
