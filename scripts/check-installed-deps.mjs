@@ -47,6 +47,16 @@
  * `.github/workflows/`, `Dockerfile.test` or `package.json`. An omitted-dev install would be red
  * here, loudly and with the reason named, rather than quietly narrowing what the gate covers.
  *
+ * AND an installer that prunes. npm 11.6.1 and 11.6.2 (arborist 9.1.5 / 9.1.6) drop a
+ * platform-excluded optional package without dropping the subtree BELOW it: on every platform they
+ * leave `@emnapi/wasi-threads` and `tslib` on disk, whose only route from the root is
+ * `@rolldown/binding-wasm32-wasi` (`cpu: ["wasm32"]`). Those two releases disagree with themselves,
+ * not with this gate — their own `npm ls` calls both packages `extraneous`, and their own
+ * `npm install --package-lock-only` rewrites the lockfile to delete `@emnapi/core` while keeping
+ * `@emnapi/core`'s now-parentless child. Every other npm sampled from 10.9.8 to 11.11.0 installs
+ * exactly the 285 packages this lockfile resolves. `devEngines.packageManager` in `package.json`
+ * refuses those two releases before they can build a tree — that is where its range comes from (#253).
+ *
  *   node scripts/check-installed-deps.mjs
  */
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
@@ -98,6 +108,13 @@ function allows(list, value) {
  * its process report; a musl build has no such field. Only linux has the distinction.
  */
 const LIBC = process.platform !== 'linux' ? null : process.report?.getReport?.()?.header?.glibcVersionRuntime ? 'glibc' : 'musl';
+
+/**
+ * Which npm built the tree — the first thing to know when it does not match, and the thing whose
+ * absence sent #253 chasing the platform instead. npm exports it in the user agent to every script it
+ * runs, which is how both wired call sites reach this gate (`npm run deps:installed`).
+ */
+const NPM_VERSION = /\bnpm\/(\S+)/.exec(process.env.npm_config_user_agent ?? '')?.[1] ?? '(unknown — not run through npm)';
 
 function installable(node) {
   return (
@@ -190,10 +207,12 @@ const show = (label, keys, why) => {
   console.error('');
 };
 show('MISSING', missing, 'the lockfile resolves it for this platform and it is not installed');
-show('UNEXPECTED', unexpected, 'installed but not reachable from the lockfile — a stale tree `npm ci` did not clear');
+show('UNEXPECTED', unexpected, 'installed but not reachable from the lockfile — a tree the lockfile does not describe');
 console.error(
   'An `npm ci` that exits 0 with a tree like this is the defect: whatever runs next runs short, and a\n' +
     'cached image layer makes that permanent. Reinstall from scratch (`rm -rf node_modules && npm ci`,\n' +
-    'or `docker compose … build --no-cache`) and check again before trusting any result from this tree.',
+    'or `docker compose … build --no-cache`) and check again before trusting any result from this tree.\n' +
+    'If a from-scratch install lands here anyway, the installer is the suspect, not the lockfile: ask npm\n' +
+    `(\`npm ls\`) whether it can explain the UNEXPECTED packages itself. This ran under npm ${NPM_VERSION}.`,
 );
 process.exit(1);
