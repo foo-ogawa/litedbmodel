@@ -54,8 +54,16 @@
  * not with this gate — their own `npm ls` calls both packages `extraneous`, and their own
  * `npm install --package-lock-only` rewrites the lockfile to delete `@emnapi/core` while keeping
  * `@emnapi/core`'s now-parentless child. Every other npm sampled from 10.9.8 to 11.11.0 installs
- * exactly the 285 packages this lockfile resolves. `devEngines.packageManager` in `package.json`
- * refuses those two releases before they can build a tree — that is where its range comes from (#253).
+ * exactly the 285 packages this lockfile resolves. So when UNEXPECTED names those packages, read the
+ * npm version this gate reports before suspecting the lockfile: reinstalling under any other npm is
+ * the fix, and no edit to the lockfile is (#253).
+ *
+ * That range is NOT declared as `devEngines.packageManager`. npm enforces `devEngines` on every
+ * command that reads this manifest — `npm run`, `npx`, not just installs — and the npm bundled with
+ * the Node this repository's benchmarks require (24.13) IS 11.6.2, so declaring it made every gate,
+ * benchmark and conformance run in the tree refuse to start, including this one. Detecting the tree
+ * that npm actually built is this gate's job and is finite; refusing the installer up front belongs
+ * to no second mechanism (#253).
  *
  *   node scripts/check-installed-deps.mjs
  */
