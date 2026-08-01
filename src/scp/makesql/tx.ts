@@ -634,7 +634,7 @@ export interface TransactionResult {
   /**
    * For a BATCH write (createMany/updateMany/deleteMany — a gate-free plan with `entityFrom:null`):
    * the RETURNING rows of every body statement, ordered by statement. Present ONLY when a body
-   * statement RETURNED rows and the plan has no `$.entity` (batch mode); absent for a gate-first
+   * statement RETURNED rows and the plan has no `$.entity` (batch mode); absent for a
    * single/composite Command (which exposes its written row via `entity`). This carries v1
    * `createMany`'s "all created rows" result across the multi-statement batch.
    */
@@ -735,8 +735,8 @@ export interface WriteExecOptions extends TransactionOptions {
 }
 
 /**
- * Execute a derived {@link TransactionPlan} on a live PG / MySQL connection with gate-first
- * short-circuit and **per-execution connection ownership** (§3). The live-DB WRITE entry (#86).
+ * Execute a derived {@link TransactionPlan} on a live PG / MySQL connection with **per-execution
+ * connection ownership** (§3). The live-DB WRITE entry (#86).
  *
  * ## Ambient-tx JOIN vs. its own envelope (the #86 core)
  *
