@@ -184,13 +184,28 @@ const packages = JSON.parse(metadata.stdout).packages;
 const units = [];
 for (const pkg of packages) {
   const features = 'livedb' in pkg.features ? ['--features', 'livedb'] : [];
+  // Every integration target's OWN root, so one target's tree can exclude the others'. In Rust each
+  // `tests/*.rs` is a SEPARATE binary, so `dirname` is shared by all of them: scanning it whole made a
+  // target LIVE because a SIBLING read a gate. That mislabelled the one integration test here that
+  // touches no database (#138's alloc counter) as a live-DB leg, and no LIVE_TESTS entry could fix it —
+  // listing it just moves the failure to phase 2, which then reports it "PASSED with no database behind
+  // them", correctly, because it never had one (#261). Taken from `cargo metadata`, so the exclusion is
+  // enumerated rather than pattern-matched.
+  const integrationRoots = new Set(pkg.targets.filter((x) => x.kind.includes('test')).map((x) => x.src_path));
   for (const t of pkg.targets) {
     const isLib = t.kind.includes('lib');
     const isBin = t.kind.includes('bin');
     const isIntegration = t.kind.includes('test');
     const crateDir = relative(ROOT, dirname(pkg.manifest_path)).split(sep).join('/');
     const src = relative(ROOT, t.src_path).split(sep).join('/');
-    const live = sources(dirname(t.src_path)).some((f) => readsAGate(readFileSync(f, 'utf8')));
+    // A target's own tree: for lib/bin the whole source directory (their tests live in `src/` modules);
+    // for an integration test its own file plus the HELPER modules beside it (`tests/common/**` — which
+    // `mod common;` pulls in), minus the sibling test roots. So a shared helper that reads a gate still
+    // makes every target that includes it live, and a sibling that reads one no longer does.
+    const own = isIntegration
+      ? sources(dirname(t.src_path)).filter((f) => f === t.src_path || !integrationRoots.has(f))
+      : sources(dirname(t.src_path));
+    const live = own.some((f) => readsAGate(readFileSync(f, 'utf8')));
     // Every lib/bin/integration-test target is run EXPLICITLY (`--lib`/`--bin`/`--test`), which cargo
     // honours REGARDLESS of a `test = false` in the manifest — measured: `[lib] test = false` still
     // lists AND runs all 71 lib unit tests under `cargo test --lib`. Deriving the set from `t.test`

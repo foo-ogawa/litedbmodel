@@ -76,7 +76,8 @@
     "docker:livedb:down": "docker compose -f docker-compose.test.yml -f docker-compose.livedb.yml down -v",
     "conformance:livedb:docker": "npm run docker:livedb:up && sleep 5 && npm run conformance:gen:livedb && npm run conformance:livedb; e=$?; npm run docker:livedb:down; exit $e",
     "native:gen": "bash benchmark/crosslang/gen-native.sh generate",
-    "bench:codegen:drift": "bash benchmark/crosslang/gen-native.sh check"
+    "bench:codegen:drift": "bash benchmark/crosslang/gen-native.sh check",
+    "verify": "node scripts/verify-local.mjs"
   },
   "keywords": [
     "orm",
