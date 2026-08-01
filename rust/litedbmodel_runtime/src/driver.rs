@@ -533,6 +533,29 @@ pub struct SqliteDriver {
 /// pure thrash. 128 is the SAME capacity the python leg gets for free from the stdlib `sqlite3`
 /// (`cached_statements=128`), so the two in-proc SQLite runtimes compile each statement the same
 /// number of times.
+///
+/// ## One op is SLOWER for it, measured — and the reuse is still right
+///
+/// Median µs/call, rust native cell, in-memory SQLite, 800 reps
+/// (`LM_ONLY_OP=findFirst,findUnique cargo run … -- 800 100`):
+///
+/// | op         | SQL                                    | plain `prepare` | cached, 128 | cached, cap 0 |
+/// |------------|----------------------------------------|-----------------|-------------|---------------|
+/// | findUnique | `WHERE email = ? LIMIT 1`              | 3               | **2**       | 7             |
+/// | findFirst  | `WHERE name LIKE ? ORDER BY id LIMIT 1`| 6               | **8**       | 14            |
+///
+/// `findFirst` costs 2µs MORE reused than freshly prepared, and it is the only op that does. The
+/// correlation is the predicate: every `=`/`IN` op gets faster, the one `LIKE ?` op gets slower.
+/// SQLite's LIKE optimisation rewrites `x LIKE 'prefix%'` into a range scan, and when the pattern is a
+/// BOUND PARAMETER that plan is only valid for the value bound — so the statement carries a
+/// parameter-dependent plan that a reset-and-rebind has to re-derive, which a fresh
+/// `sqlite3_prepare_v2` was doing anyway. Reuse therefore buys nothing there and pays the recheck.
+///
+/// It is kept because the trade is not close: seven ops are claimably faster (findUnique −67%, upsert
+/// −55%, update −50%, nestedFindUnique −47%, delete −47%, nestedUpsert −25%, updateMany −22%, all
+/// non-overlapping against a control that moved ≤14%), one is 2µs slower, and the cap-0 column shows
+/// what removing the cache actually costs. Not special-cased on the predicate: a second path that
+/// inspected the SQL to decide whether to cache would be a fallback branch for 2µs on one op.
 const SQLITE_STATEMENT_CACHE_CAPACITY: usize = 128;
 
 impl SqliteDriver {
