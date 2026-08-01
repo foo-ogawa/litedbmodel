@@ -217,8 +217,10 @@ final class Registry
     /** This scope's state for `$token`, lazily created via `$fresh` on first access (v1 getCurrentContext). */
     public function stateFor(object $token, callable $fresh): object
     {
-        if (!$this->states->contains($token)) {
-            $this->states->attach($token, $fresh());
+        // offsetExists / offsetSet, not contains / attach: PHP 8.5 deprecates the latter two, and this
+        // runs on every scope's first state access — loud on stderr under 8.5, an error under 9 (#260).
+        if (!$this->states->offsetExists($token)) {
+            $this->states->offsetSet($token, $fresh());
         }
         return $this->states[$token];
     }
