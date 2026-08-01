@@ -76,6 +76,40 @@ fn pg_err(context: &str, e: &tokio_postgres::Error) -> SqlFailure {
 /// relations can each hold a live connection without starving.
 pub const DEFAULT_POOL_SIZE: usize = 16;
 
+/// The acquire budget, in seconds. 30 is this codebase's established cross-language default, settled
+/// in #225: the v1 pg/mysql drivers' `config.timeout || 30`, python's
+/// `DEFAULT_ACQUIRE_TIMEOUT_SECONDS = 30.0`, and the pool libraries the other legs inherit it from.
+/// `sqlx`'s own default is the same 30s, so naming it here changes no behaviour — it makes the shared
+/// value VISIBLE instead of arriving by coincidence, and gives it one place to be read from.
+pub const DEFAULT_ACQUIRE_TIMEOUT_SECONDS: u64 = 30;
+
+/// The env var that overrides [`DEFAULT_ACQUIRE_TIMEOUT_SECONDS`] — the run gate's channel, and the
+/// only one it has (phase 2 drives `cargo test`, so it cannot pass an argument).
+pub const ACQUIRE_TIMEOUT_ENV: &str = "LITEDBMODEL_ACQUIRE_TIMEOUT_SECS";
+
+/// How long an acquire may take before it fails.
+///
+/// Production keeps the full 30s budget: `sqlx`'s `connect()` RETRIES a connection error until this
+/// expires, which is what absorbs a database restart, so shortening it in production would trade that
+/// away and break the parity #225 established across the five runtimes.
+///
+/// The run gate's phase 2 is the one caller that wants it short. It points every leg at a port that
+/// REFUSES every connection (`127.0.0.1:1`) to prove a test really dials a server — and against a hard
+/// refusal the retry loop is pure waiting, ~30s per MySQL-touching suite, ~90s of the gate's ~165s
+/// (#255). Postgres is unaffected: `deadpool`/`tokio-postgres` surfaces the refusal in ~1.5s rather than
+/// retrying, so it needs no knob and does not get one.
+///
+/// An unparseable or zero value falls back to the default rather than being honoured — a typo in the
+/// override must not silently install a 0s budget that fails every acquire on a live database.
+fn acquire_timeout() -> std::time::Duration {
+    let secs = std::env::var(ACQUIRE_TIMEOUT_ENV)
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|s| *s > 0)
+        .unwrap_or(DEFAULT_ACQUIRE_TIMEOUT_SECONDS);
+    std::time::Duration::from_secs(secs)
+}
+
 // ── Postgres (tokio-postgres + deadpool-postgres) ──────────────────────────────
 
 /// A live Postgres driver: a `deadpool-postgres` pool over `tokio-postgres`, on a shared tokio
@@ -805,6 +839,7 @@ impl MysqlDriver {
         let pool = rt.block_on(async {
             MySqlPoolOptions::new()
                 .max_connections(DEFAULT_POOL_SIZE as u32)
+                .acquire_timeout(acquire_timeout())
                 .connect(url)
                 .await
                 .map_err(|e| driver_failure(format!("mysql connect: {e}")))
@@ -852,6 +887,7 @@ impl MysqlDriver {
             MySqlPoolOptions::new()
                 .min_connections(min)
                 .max_connections(max)
+                .acquire_timeout(acquire_timeout())
                 .connect(&url)
                 .await
                 .map_err(|e| driver_failure(format!("mysql connect: {e}")))
