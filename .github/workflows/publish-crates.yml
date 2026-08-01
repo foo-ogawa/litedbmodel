@@ -8,10 +8,10 @@ name: Publish Runtime to crates.io
 # npm package.json SSoT by scripts/sync-versions.mjs. This job is idempotent: if that exact version
 # is already on crates.io it skips (a release that didn't touch the crate must not fail here).
 #
-# OWNER GATE: this job targets the `release` GitHub Environment — configure required reviewers on it
-# so the publish waits for an explicit owner approval. Requires the repo secret
-# CARGO_REGISTRY_TOKEN (crates.io → Account Settings → API Tokens; scope: publish-update, and
-# publish-new for the first upload).
+# The owner gate is the PR approval into `main`, which only the owner can give — not the `release`
+# Environment this job targets, which carries no protection rules on purpose (RELEASING.md, "Where the
+# owner signs off"). Requires the repo secret CARGO_REGISTRY_TOKEN (crates.io → Account Settings → API
+# Tokens; scope: publish-update, and publish-new for the first upload).
 
 on:
   # The GitHub Release is created by the "GitHub Release" workflow using the default GITHUB_TOKEN,

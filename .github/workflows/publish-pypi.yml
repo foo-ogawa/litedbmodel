@@ -6,9 +6,9 @@ name: Publish Runtime to PyPI
 # exact version is already on PyPI it skips (so a release that didn't touch the runtime never
 # double-publishes).
 #
-# OWNER GATE: this job targets the `release` GitHub Environment. Configure that Environment with
-# required reviewers (Settings → Environments → release) so the publish waits for an explicit
-# owner approval — publish is NOT automatic on merge. Requires the repo secret PYPI_API_TOKEN.
+# The owner gate is the PR approval into `main`, which only the owner can give — not the `release`
+# Environment this job targets, which carries no protection rules on purpose (RELEASING.md, "Where the
+# owner signs off"). Requires the repo secret PYPI_API_TOKEN.
 
 on:
   # The GitHub Release is created by the "GitHub Release" workflow using the default GITHUB_TOKEN,

@@ -14,4 +14,4 @@ package litedbmodel_runtime
 
 // Version is synced from package.json by scripts/sync-versions.mjs (Go = VCS tag, not a manifest
 // field, so this constant is the in-source mirror the CI tag check compares against).
-const Version = "2.2.3"
+const Version = "2.2.4"

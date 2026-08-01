@@ -3,7 +3,7 @@
 A detailed comparison of litedbmodel with popular TypeScript/JavaScript ORMs.
 
 <!--@embedoc:package_version label="Benchmark figures"-->
-**Benchmark figures:** litedbmodel **2.2.3**
+**Benchmark figures:** litedbmodel **2.2.4**
 <!--@embedoc:end-->
 
 > The only performance number on this page is the machine-computed win count below; the full

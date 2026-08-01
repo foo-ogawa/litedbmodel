@@ -16,9 +16,10 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-latest
-    # OWNER GATE: target the `release` GitHub Environment (Settings → Environments → release) with
-    # required reviewers so the publish waits for an explicit owner approval — publish is NOT
-    # automatic on merge. Same gate as publish-pypi.yml / publish-crates.yml.
+    # The owner gate is the PR approval into `main`, which only the owner can give — not this
+    # Environment, which carries no protection rules on purpose (RELEASING.md, "Where the owner signs
+    # off"). It is declared so the three registry uploads are grouped and auditable. Same for
+    # publish-pypi.yml / publish-crates.yml.
     environment: release
     permissions:
       contents: read
