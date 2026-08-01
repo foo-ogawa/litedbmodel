@@ -10,7 +10,7 @@
 function isSqlRaw(value: unknown): value is SqlRaw;
 ```
 
-Defined in: SqlFragment.ts:155
+Defined in: [SqlFragment.ts:155](https://github.com/foo-ogawa/litedbmodel/blob/main/src/SqlFragment.ts#L155)
 
 ## Parameters
 

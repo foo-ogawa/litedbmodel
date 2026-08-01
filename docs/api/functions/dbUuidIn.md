@@ -10,7 +10,7 @@
 function dbUuidIn(values: string[]): DBCastArray;
 ```
 
-Defined in: DBValues.ts:544
+Defined in: [DBValues.ts:544](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBValues.ts#L544)
 
 Create a type-cast UUID array for IN clause
 

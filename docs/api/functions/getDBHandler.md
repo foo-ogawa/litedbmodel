@@ -10,7 +10,7 @@
 function getDBHandler(): DBHandler;
 ```
 
-Defined in: DBHandler.ts:317
+Defined in: [DBHandler.ts:317](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBHandler.ts#L317)
 
 Get global handler
 

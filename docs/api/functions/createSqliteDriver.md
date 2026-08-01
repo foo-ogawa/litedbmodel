@@ -10,7 +10,7 @@
 function createSqliteDriver(options: DBDriverOptions): SqliteDriver;
 ```
 
-Defined in: drivers/sqlite.ts:263
+Defined in: [drivers/sqlite.ts:263](https://github.com/foo-ogawa/litedbmodel/blob/main/src/drivers/sqlite.ts#L263)
 
 Create a SQLite driver instance
 

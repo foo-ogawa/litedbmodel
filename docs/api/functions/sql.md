@@ -12,7 +12,7 @@
 function sql<V, M>(strings: TemplateStringsArray, col: Column<V, M>): SqlTypedFragment<V, M>;
 ```
 
-Defined in: SqlFragment.ts:235
+Defined in: [SqlFragment.ts:235](https://github.com/foo-ogawa/litedbmodel/blob/main/src/SqlFragment.ts#L235)
 
 Single Column interpolation → SqlTypedFragment (for Pattern A tuples or IS NULL conditions).
 
@@ -43,7 +43,7 @@ function sql<V, M>(
 value: V): SqlCondition<M>;
 ```
 
-Defined in: SqlFragment.ts:243
+Defined in: [SqlFragment.ts:243](https://github.com/foo-ogawa/litedbmodel/blob/main/src/SqlFragment.ts#L243)
 
 Single Column + 1 value → SqlCondition (Pattern B: `sql\`${Col} > ${value}\``).
 
@@ -76,7 +76,7 @@ function sql<V, M>(
 v2: V): SqlCondition<M>;
 ```
 
-Defined in: SqlFragment.ts:252
+Defined in: [SqlFragment.ts:252](https://github.com/foo-ogawa/litedbmodel/blob/main/src/SqlFragment.ts#L252)
 
 Single Column + 2 values → SqlCondition (Pattern B: BETWEEN).
 
@@ -109,7 +109,7 @@ function sql<V, M>(
 values: readonly V[]): SqlCondition<M>;
 ```
 
-Defined in: SqlFragment.ts:262
+Defined in: [SqlFragment.ts:262](https://github.com/foo-ogawa/litedbmodel/blob/main/src/SqlFragment.ts#L262)
 
 Single Column + array → SqlCondition (Pattern B: IN).
 
@@ -145,7 +145,7 @@ function sql(strings: TemplateStringsArray, ...values: (
 })[]): SqlFragment;
 ```
 
-Defined in: SqlFragment.ts:271
+Defined in: [SqlFragment.ts:271](https://github.com/foo-ogawa/litedbmodel/blob/main/src/SqlFragment.ts#L271)
 
 Multiple Columns / TABLE_NAME only → SqlFragment (for QUERY).
 
@@ -166,7 +166,7 @@ Multiple Columns / TABLE_NAME only → SqlFragment (for QUERY).
 function sql(strings: TemplateStringsArray, ...values: SqlInterpolation[]): SqlFragment;
 ```
 
-Defined in: SqlFragment.ts:279
+Defined in: [SqlFragment.ts:279](https://github.com/foo-ogawa/litedbmodel/blob/main/src/SqlFragment.ts#L279)
 
 General: mixed interpolation → SqlFragment (for withQuery / execute).
 

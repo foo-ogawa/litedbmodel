@@ -12,7 +12,7 @@
 function model<T>(constructor: T): T;
 ```
 
-Defined in: decorators.ts:1006
+Defined in: [decorators.ts:1006](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L1006)
 
 Model class decorator.
 
@@ -85,7 +85,7 @@ const posts = await user.posts;  // Batch loads with other users in context
 function model(tableName: string): <T>(constructor: T) => T;
 ```
 
-Defined in: decorators.ts:1010
+Defined in: [decorators.ts:1010](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L1010)
 
 Model class decorator.
 
@@ -152,7 +152,7 @@ const posts = await user.posts;  // Batch loads with other users in context
 function model(tableName: string, options: ModelOptions): <T>(constructor: T) => T;
 ```
 
-Defined in: decorators.ts:1014
+Defined in: [decorators.ts:1014](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L1014)
 
 Model class decorator.
 

@@ -10,7 +10,7 @@
 function belongsTo(keys: KeysFactory, options?: RelationDecoratorOptions): PropertyDecorator;
 ```
 
-Defined in: decorators.ts:909
+Defined in: [decorators.ts:909](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L909)
 
 BelongsTo relation decorator (N:1).
 Defines a many-to-one relationship where this model belongs to a parent record.

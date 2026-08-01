@@ -10,7 +10,7 @@
 function getTransactionContext(): TransactionContext | undefined;
 ```
 
-Defined in: DBModel.ts:67
+Defined in: [DBModel.ts:67](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L67)
 
 Get current transaction context (if in a transaction)
 

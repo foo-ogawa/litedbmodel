@@ -10,7 +10,7 @@
 function createMiddleware<S>(config: MiddlewareConfig<S>): CreatedMiddlewareClass<S>;
 ```
 
-Defined in: Middleware.ts:497
+Defined in: [Middleware.ts:497](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Middleware.ts#L497)
 
 Create a middleware class from a configuration object.
 

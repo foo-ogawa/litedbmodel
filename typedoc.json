@@ -8,6 +8,18 @@
   "excludeInternal": true,
   "excludeExternals": true,
   "includeVersion": true,
+  // Both of these are pinned so `npm run docs` produces the SAME bytes everywhere, which the docs-drift
+  // job requires and could not previously get. Left to itself typedoc derives the source link from the
+  // git REMOTE and the HEAD revision, and both vary:
+  //   - the remote decides whether there is a link AT ALL. A checkout whose origin is an SSH host ALIAS
+  //     (`git@github-fooogawa:foo-ogawa/litedbmodel.git`, which is how it is cloned here) is not parsed
+  //     into a GitHub URL, so typedoc emits a bare `types.ts:213`, while CI's `https://github.com/…`
+  //     remote emits a full blob link. Local and CI could never agree, whoever ran it last.
+  //   - the revision put the CURRENT COMMIT SHA in every link, so output that matched once was stale at
+  //     the next commit — the gate asked for a regeneration that its own result invalidated.
+  // `gitRevision: main` keeps the links on a branch, which does not churn per commit.
+  "sourceLinkTemplate": "https://github.com/foo-ogawa/litedbmodel/blob/{gitRevision}/{path}#L{line}",
+  "gitRevision": "main",
   "categorizeByGroup": true,
   "categoryOrder": [
     "Core",

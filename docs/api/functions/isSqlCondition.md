@@ -10,7 +10,7 @@
 function isSqlCondition(value: unknown): value is SqlCondition<unknown>;
 ```
 
-Defined in: SqlFragment.ts:137
+Defined in: [SqlFragment.ts:137](https://github.com/foo-ogawa/litedbmodel/blob/main/src/SqlFragment.ts#L137)
 
 ## Parameters
 

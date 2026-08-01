@@ -10,7 +10,7 @@
 function getTransactionConnection(): DBConnection | undefined;
 ```
 
-Defined in: DBModel.ts:74
+Defined in: [DBModel.ts:74](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L74)
 
 Get current transaction connection (if in a transaction)
 

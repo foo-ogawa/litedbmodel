@@ -10,7 +10,7 @@
 function isSqlTypedFragment(value: unknown): value is SqlTypedFragment<unknown, unknown>;
 ```
 
-Defined in: SqlFragment.ts:128
+Defined in: [SqlFragment.ts:128](https://github.com/foo-ogawa/litedbmodel/blob/main/src/SqlFragment.ts#L128)
 
 ## Parameters
 

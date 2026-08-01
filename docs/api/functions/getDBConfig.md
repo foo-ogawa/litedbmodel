@@ -10,7 +10,7 @@
 function getDBConfig(): DBConfig | null;
 ```
 
-Defined in: DBHandler.ts:327
+Defined in: [DBHandler.ts:327](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBHandler.ts#L327)
 
 Get global config
 

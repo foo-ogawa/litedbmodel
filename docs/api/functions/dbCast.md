@@ -13,7 +13,7 @@ function dbCast(
    operator?: string): DBCast;
 ```
 
-Defined in: DBValues.ts:503
+Defined in: [DBValues.ts:503](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBValues.ts#L503)
 
 Create a type-cast value
 

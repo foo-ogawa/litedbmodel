@@ -10,7 +10,7 @@
 function dbNow(): DBImmediateValue;
 ```
 
-Defined in: DBValues.ts:366
+Defined in: [DBValues.ts:366](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBValues.ts#L366)
 
 Create a NOW() value
 
