@@ -29,7 +29,9 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"runtime/pprof"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -360,6 +362,44 @@ func main() {
 			if n, e := strconv.Atoi(os.Args[3]); e == nil {
 				warmup = n
 			}
+		}
+		// Profiling + op selection, for asking WHERE the time goes rather than guessing (#258 asks for a
+		// profile and says not to optimise on a hunch). Both are env-only so the positional argv the
+		// harness passes (`bench <reps> <warmup>`) is untouched, and both are inert when unset — the CSV
+		// this prints is byte-identical without them.
+		//   LM_CPUPROFILE=<path>   write a pprof CPU profile over the whole timed loop
+		//   LM_ONLY_OP=<name>[,…]  time only these ops, so a profile is not diluted by the other 18
+		if path := os.Getenv("LM_CPUPROFILE"); path != "" {
+			f, err := os.Create(path)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "FATAL: cpuprofile: %v\n", err)
+				os.Exit(1)
+			}
+			defer f.Close()
+			if err := pprof.StartCPUProfile(f); err != nil {
+				fmt.Fprintf(os.Stderr, "FATAL: cpuprofile: %v\n", err)
+				os.Exit(1)
+			}
+			defer pprof.StopCPUProfile()
+			fmt.Fprintf(os.Stderr, "  cpu profile → %s\n", path)
+		}
+		if only := os.Getenv("LM_ONLY_OP"); only != "" {
+			want := map[string]bool{}
+			for _, n := range strings.Split(only, ",") {
+				want[strings.TrimSpace(n)] = true
+			}
+			kept := ops[:0:0]
+			for _, n := range ops {
+				if want[n] {
+					kept = append(kept, n)
+				}
+			}
+			if len(kept) == 0 {
+				fmt.Fprintf(os.Stderr, "FATAL: LM_ONLY_OP=%q matched none of the %d covered ops\n", only, len(ops))
+				os.Exit(1)
+			}
+			ops = kept
+			fmt.Fprintf(os.Stderr, "  timing %d of the covered op(s): %s\n", len(ops), strings.Join(ops, ", "))
 		}
 		fmt.Println("\ncell,dialect,op,iter,us,rows")
 		for _, name := range ops {
