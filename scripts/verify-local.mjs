@@ -64,6 +64,17 @@ const STEPS = [
   { npm: 'bench:codegen:drift', db: false },
   { cmd: ['bash', 'scripts/verify-rust-lints.sh'], label: 'rust fmt + clippy (all 5 crates, as CI runs them)', db: false },
   { npm: 'conformance:gen', db: false },
+  // The python/php *_native suites import the ORM-bench cell, which reads
+  // benchmark/crosslang/.setup/<dialect>.json at IMPORT time — a generated, gitignored fixture, so a
+  // fresh worktree has none and both suites die in collection with FileNotFoundError (#185). CI emits
+  // it as its own step in conformance.yml; verify has to as well, or it reports a provisioning gap as
+  // a code failure. Same `scale 0.2` CI uses (#249) — every assertion downstream is a shape or a
+  // statement count, never a row count.
+  {
+    cmd: ['npx', 'tsx', 'benchmark/crosslang/emit-setup.ts', '0.2'],
+    label: 'emit the ORM-bench seed fixture (.setup/*.json) the native suites import',
+    db: false,
+  },
   { npm: 'go:test', db: false },
   { npm: 'rust:test', db: true },
   { npm: 'ts:test', db: true },

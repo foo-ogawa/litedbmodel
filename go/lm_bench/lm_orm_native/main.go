@@ -36,8 +36,8 @@ import (
 	"time"
 
 	bc "github.com/foo-ogawa/behavior-contracts/go"
-	rt "github.com/foo-ogawa/litedbmodel/go/litedbmodel_runtime"
-	"github.com/foo-ogawa/litedbmodel/go/lm_bench/setup"
+	rt "github.com/foo-ogawa/litedbmodel/go/v2/litedbmodel_runtime"
+	"github.com/foo-ogawa/litedbmodel/go/v2/lm_bench/setup"
 
 	_ "modernc.org/sqlite" // PURE-GO sqlite driver (registered as "sqlite")
 )

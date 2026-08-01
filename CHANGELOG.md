@@ -5,6 +5,35 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.2.5] - 2026-08-01
+
+**Go モジュールが v2 系で初めて `go get` 可能になる。** Closes #265。
+
+### Fixed
+
+- **[go] モジュールパスが `/v2` で終わっておらず、v2 のタグを1つも解決できなかった（#265）** — Go は
+  major 2 以上でモジュールパスが `/vN` で終わることを要求する。`go/go.mod` は
+  `github.com/foo-ogawa/litedbmodel/go` を宣言したままタグだけ v2 だったため、proxy は
+  `invalid version: module contains a go.mod file, so module path must match major version` を返し、
+  **v2.0.0 / v2.2.0 / v2.2.3 / v2.2.4 のすべてが 404**、`@v/list` も空だった。
+  5リリース連続で、誰も取得できない Go ターゲットを宣伝していたことになる。
+
+### Changed
+
+- **[breaking][go] import パスが `github.com/foo-ogawa/litedbmodel/go/v2` になる。**
+  実害は無い — 旧パスは v2 のどのバージョンでも解決できなかったので、壊れる利用者が存在しない。
+- モジュールパスを生成器が `go/go.mod` から読むようになった（`benchmark/crosslang/gen-native.sh` /
+  `conformance/gen-livedb.ts`）。同じ値が3箇所にリテラルで書かれていたのが食い違いの原因だったので、
+  次のメジャー更新は1行で済む。
+
+### Added
+
+- **`release.yml` がタグを push したあと proxy.golang.org に解決可否を問い合わせ、解決できなければ
+  リリースを落とす。** これが無かったことが5回見逃した理由 — Go だけアップロード step が無いので
+  **赤を出す場所が存在せず**、CI の go テストはリポジトリ内で動くのでモジュールパスを解決しない。
+- `npm run verify` が python/php の native suite が import する ORM-bench seed fixture を emit する
+  （CI は専用 step で実行している・#185）。新規 worktree で環境未整備をテスト失敗として報告していた。
+
 ## [2.2.4] - 2026-08-01
 
 ベンチ再計測（#232 / #233 / #234 / #172）の過程で露出した欠陥をまとめて修正。出荷物に影響する実バグ4件を含む。

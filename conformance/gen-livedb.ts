@@ -91,8 +91,22 @@ interface LangTarget {
   readonly flags: readonly string[];
 }
 
-/** The go runtime module path (the `--runtime-import` / `--leaf-transport-import` base). */
-const GO_RT = 'github.com/foo-ogawa/litedbmodel/go/litedbmodel_runtime';
+/**
+ * The go runtime module path (the `--runtime-import` / `--leaf-transport-import` base), read from
+ * `go/go.mod` rather than spelled again here.
+ *
+ * It has to agree in three places — the manifest that defines it and the two generators that bake it
+ * into their output — and it used to be written out in all three. Go requires a `/vN` suffix from major
+ * 2 on, this repository shipped v2 without one, and `go get` could not resolve a single v2 tag from
+ * 2.0.0 to 2.2.4 (#265). Deriving it means the next major bump edits one line.
+ */
+const GO_MODULE = (() => {
+  const modPath = join(ROOT, 'go', 'go.mod');
+  const m = /^module\s+(\S+)/m.exec(readFileSync(modPath, 'utf8'));
+  if (!m) throw new Error(`gen-livedb: no module path in ${modPath}`);
+  return m[1];
+})();
+const GO_RT = `${GO_MODULE}/litedbmodel_runtime`;
 
 const LANG_TARGETS: readonly LangTarget[] = [
   {

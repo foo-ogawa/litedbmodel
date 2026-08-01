@@ -1,4 +1,4 @@
-module github.com/foo-ogawa/litedbmodel/go
+module github.com/foo-ogawa/litedbmodel/go/v2
 
 go 1.25.0
 

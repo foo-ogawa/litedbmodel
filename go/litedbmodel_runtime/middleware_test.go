@@ -28,7 +28,7 @@ import (
 	"time"
 
 	bc "github.com/foo-ogawa/behavior-contracts/go"
-	"github.com/foo-ogawa/litedbmodel/go/litedbmodel_runtime/wire"
+	"github.com/foo-ogawa/litedbmodel/go/v2/litedbmodel_runtime/wire"
 
 	_ "modernc.org/sqlite"
 )
