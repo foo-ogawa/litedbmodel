@@ -290,8 +290,38 @@ fn main() {
     let setup = load_setup(dialect);
     let driver = open_driver(dialect, &setup);
     let d: &dyn Driver = driver.as_ref();
+    // `LM_ONLY_OP=<name>[,…]` times only these ops — the rust twin of the go cell's knob, for isolating
+    // ONE op at high reps when a per-op result has to be pinned down rather than surveyed (the #138
+    // `findFirst` regression is 3µs on a 5µs op: 19 ops of noise around it hides it). Unset ⇒ every op,
+    // and the CSV is byte-identical.
+    let only: Option<Vec<String>> = std::env::var("LM_ONLY_OP")
+        .ok()
+        .map(|s| s.split(',').map(|n| n.trim().to_string()).collect());
+    let selected: Vec<&str> = match &only {
+        None => OPS.to_vec(),
+        Some(names) => {
+            let kept: Vec<&str> = OPS
+                .iter()
+                .copied()
+                .filter(|o| names.iter().any(|n| n == o))
+                .collect();
+            if kept.is_empty() {
+                eprintln!(
+                    "FATAL: LM_ONLY_OP matched none of the {} covered ops",
+                    OPS.len()
+                );
+                std::process::exit(1);
+            }
+            eprintln!(
+                "  timing {} of the covered op(s): {}",
+                kept.len(),
+                kept.join(", ")
+            );
+            kept
+        }
+    };
     println!("cell,dialect,op,iter,us,rows");
-    for op in OPS {
+    for op in selected {
         // Re-seed the fixture before each op, then run the whole warmup+timed loop with the ambient
         // driver installed (the covered runner resolves it inside `execute_sql`).
         seed(d, &setup);
