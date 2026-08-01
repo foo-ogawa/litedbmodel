@@ -47,7 +47,14 @@ behavior_of() {
 # The BC-OWNED shared wire modules are dialect-INDEPENDENT (the wire vocabulary does not vary with the
 # SQL), so they are emitted once, from the sqlite generation, and the other two dialects reuse them.
 RUST_WIRE="$ROOT/rust/litedbmodel_runtime/src/wire.rs"
-GO_RT="github.com/foo-ogawa/litedbmodel/go/litedbmodel_runtime"
+# Read from go/go.mod, not spelled again here. The module path is a value that MUST agree in three
+# places — the manifest that defines it and the two generators that bake it into their output — and it
+# was spelled out in all three. Go requires a `/vN` suffix from major 2 on, this repository shipped v2
+# without one, and `go get` could not resolve a single v2 tag from 2.0.0 to 2.2.4 (#265). Deriving it
+# means the next major bump edits one line.
+GO_MODULE="$(awk '$1 == "module" { print $2; exit }' "$ROOT/go/go.mod")"
+[ -n "$GO_MODULE" ] || { echo "✗ could not read the module path from go/go.mod"; exit 1; }
+GO_RT="$GO_MODULE/litedbmodel_runtime"
 GO_WIRE_PKG="$GO_RT/wire"
 GO_WIRE="$ROOT/go/litedbmodel_runtime/wire/wire.go"
 

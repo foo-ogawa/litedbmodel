@@ -93,3 +93,31 @@ jobs:
           echo "Go tag ${{ steps.pkg.outputs.gotag }} missing on origin — creating on ${{ github.sha }} and pushing."
           git tag "${{ steps.pkg.outputs.gotag }}" "${{ github.sha }}"
           git push origin "${{ steps.pkg.outputs.gotag }}"
+
+      # Pushing the tag is not the same as shipping the module, and for five releases it was not the
+      # same thing at all: `go/go.mod` declared `…/litedbmodel/go` while the tags said v2, and Go
+      # requires the module path to end in `/vN` from major 2 on, so `go get` answered
+      # "invalid version: module contains a go.mod file, so module path must match major version" for
+      # every one of v2.0.0 … v2.2.4 (#265). Nothing noticed, because Go is the one target with no
+      # upload step — there was no job whose red would say the module is unusable, and CI's own go
+      # tests run from inside the repo, where the module path is never resolved.
+      #
+      # So ASK THE PROXY. `@v/<version>.info` is 200 only when the module actually resolves at that
+      # version; the failure mode is that one status code, which is why this can be a gate at all.
+      # `GOPROXY=proxy.golang.org` + `GOFLAGS=-mod=mod` are not needed — this is a plain fetch, and the
+      # request itself is what makes the proxy index the new tag.
+      - name: The Go module actually resolves at this version
+        run: |
+          MODULE=$(awk '$1 == "module" { print $2; exit }' go/go.mod)
+          URL="https://proxy.golang.org/${MODULE}/@v/v${{ steps.pkg.outputs.version }}.info"
+          echo "asking the proxy: $URL"
+          for attempt in 1 2 3 4 5 6; do
+            code=$(curl -s -o /tmp/goproxy.out -w '%{http_code}' "$URL")
+            [ "$code" = "200" ] && { echo "✓ resolves: $(cat /tmp/goproxy.out)"; exit 0; }
+            echo "  attempt $attempt: HTTP $code — $(head -c 300 /tmp/goproxy.out)"
+            sleep 20
+          done
+          echo "✗ ${MODULE}@v${{ steps.pkg.outputs.version }} does not resolve on proxy.golang.org."
+          echo "  The tag is pushed but consumers cannot 'go get' it. Most likely the module path in"
+          echo "  go/go.mod does not carry the /vN suffix Go requires from major 2 on (#265)."
+          exit 1

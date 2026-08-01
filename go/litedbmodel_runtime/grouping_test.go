@@ -13,7 +13,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/foo-ogawa/litedbmodel/go/litedbmodel_runtime/wire"
+	"github.com/foo-ogawa/litedbmodel/go/v2/litedbmodel_runtime/wire"
 )
 
 // row builds a column-ordered wire record from key/value pairs — the shape a SQL row arrives in.

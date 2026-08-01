@@ -6,7 +6,7 @@
 // direct function values: the call in `op()` resolves statically, with no lookup at run time.
 package main
 
-import g "github.com/foo-ogawa/litedbmodel/go/lm_bench/lm_orm_native/gen/benchmysql"
+import g "github.com/foo-ogawa/litedbmodel/go/v2/lm_bench/lm_orm_native/gen/benchmysql"
 
 const benchDialect = "mysql"
 

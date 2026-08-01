@@ -26,7 +26,7 @@ package litedbmodel_runtime
 
 import (
 	"fmt"
-	"github.com/foo-ogawa/litedbmodel/go/litedbmodel_runtime/wire"
+	"github.com/foo-ogawa/litedbmodel/go/v2/litedbmodel_runtime/wire"
 	"math"
 	"strconv"
 	"strings"

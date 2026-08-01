@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	bc "github.com/foo-ogawa/behavior-contracts/go"
-	conf "github.com/foo-ogawa/litedbmodel/go/conformance"
+	conf "github.com/foo-ogawa/litedbmodel/go/v2/conformance"
 )
 
 // ── render-layer placeholder resolution (the leaf transport's `?`→`$N` step) ────
