@@ -63,9 +63,9 @@ each blocks the step noted.
 | Secret | Purpose | Status |
 |---|---|---|
 | `NPM_TOKEN` | npm publish (`litedbmodel`) | ✅ present — **verify it is an *automation* token** with publish rights (bypasses 2FA) |
-| `PYPI_API_TOKEN` | PyPI publish (`litedbmodel-runtime`) | ❌ missing — see PyPI note below |
-| `CARGO_REGISTRY_TOKEN` | crates.io publish (`litedbmodel_runtime`) | ❌ missing — publishing account must have a verified email |
-| `BEHAVIOR_CONTRACTS_PAT` | private `behavior-contracts` **Go** module fetch (CI + go build) | ❌ missing — fine-grained PAT, **Contents: Read on `foo-ogawa/behavior-contracts`** (same name graphddb uses). Currently blocks the 3 CI jobs `conformance-ts` / `conformance-livedb` / `scaffold-build (go)` |
+| `PYPI_API_TOKEN` | PyPI publish (`litedbmodel-runtime`) | ✅ present |
+| `CARGO_REGISTRY_TOKEN` | crates.io publish (`litedbmodel_runtime`) | ✅ present — the publishing account needs a verified email |
+| `BEHAVIOR_CONTRACTS_PAT` | private `behavior-contracts` **Go** module fetch (CI + go build) | ✅ present — fine-grained PAT, **Contents: Read on `foo-ogawa/behavior-contracts`** (same name graphddb uses) |
 
 **B. `release` GitHub Environment — exists, and carries NO protection rules ON PURPOSE.** The three
 registry publish jobs declare `environment: release` so the uploads are grouped and auditable, not so
