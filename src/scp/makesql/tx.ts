@@ -174,6 +174,20 @@ export interface TransactionPlan {
   readonly statements: readonly TxStatement[];
 }
 
+/**
+ * Is this plan a BATCH (createMany / updateMany / deleteMany) rather than a single/composite Command?
+ * A batch is ref-free: nothing exposes a row for a later statement to read, so `entityFrom` is null and
+ * every statement is a plain `body` with no `binds`.
+ *
+ * It decides two things that MUST agree, which is why it is ONE function and not a test each side
+ * spells for itself: the runtime accumulates `returnedRows` only for a batch, and the codegen out-type
+ * ({@link ./writeouttype}) includes the `returnedRows` field only for a batch. Two spellings that drift
+ * would type a field the runtime does not fill, or drop one it does (#259).
+ */
+export function isBatchPlan(plan: TransactionPlan): boolean {
+  return plan.entityFrom === null && plan.statements.every((s) => s.binds === undefined && s.role === 'body');
+}
+
 export const IN_SENTINEL = '@in';
 
 type WriteComponent = 'Insert' | 'Update' | 'Delete' | 'Select';
@@ -792,8 +806,7 @@ function runTransactionPlanAsync(
   dialect: MakeSQLDialect,
   options: TransactionOptions,
 ): Promise<TransactionResult> {
-  const isBatch =
-    plan.entityFrom === null && plan.statements.every((s) => s.binds === undefined && s.role === 'body');
+  const batch = isBatchPlan(plan);
 
   return withTransactionAsync(ctx, async (txCtx) => {
     const executed: string[] = [];
@@ -812,7 +825,7 @@ function runTransactionPlanAsync(
       if (stmt.binds !== undefined && result.rows.length > 0) {
         scope[stmt.binds] = result.rows[0] as unknown as Value;
       }
-      if (isBatch && stmt.role === 'body' && result.rows.length > 0) returnedRows.push(result.rows);
+      if (batch && stmt.role === 'body' && result.rows.length > 0) returnedRows.push(result.rows);
     }
     return { committed: true, entity, executed, ...(returnedRows.length > 0 ? { returnedRows } : {}) } as TransactionResult;
   }, options, dialect === 'sqlite' ? 'postgres' : dialect, isConnectionError).catch((e: unknown) => {

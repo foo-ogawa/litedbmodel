@@ -37,7 +37,7 @@
 import type { PortableType, PortableScalarType } from 'behavior-contracts/runtime';
 import { sqlTypeToBcScalar, type BcScalar, type ColumnTypeResolver } from '../coltype';
 import type { SqlBundle } from '../write-bundle';
-import type { TransactionPlan, TxStatement } from './tx';
+import { isBatchPlan, type TransactionPlan, type TxStatement } from './tx';
 
 /** Identity narrow (BcScalar is exactly bc's PortableScalarType); DATE→string happens in coltype. */
 function toPortableScalar(scalar: BcScalar): PortableScalarType {
@@ -101,19 +101,14 @@ function bodyStatements(plan: TransactionPlan): readonly TxStatement[] {
 }
 
 /**
- * Is this plan a BATCH (createMany/updateMany/deleteMany)? Mirrors the runtime's batch test
- * (`executeTransaction`): a ref-free plan (`entityFrom` null, every statement a plain `body` with no
- * `binds`), and here additionally a NON-EMPTY one — an empty plan has no body statement to read a
- * table or a RETURNING projection off, so it types nothing. A batch is the ONLY shape that populates
- * `returnedRows`; a single/composite Command exposes its written row via `entity` instead.
+/**
+ * The empty-plan guard this module used to carry INSIDE its own copy of the batch test, as a
+ * `statements.length > 0` term the runtime's copy did not have (#259). It was unreachable there:
+ * {@link writeTargetReturning} runs FIRST in {@link deriveWriteOutputType} and throws on a plan with no
+ * `body` statement, so `isBatchPlan` never sees one. Both copies are now the ONE
+ * {@link import('./tx').isBatchPlan}, and the typing precondition stays where it belongs — in the
+ * function that cannot proceed without a body statement.
  */
-function isBatchPlan(plan: TransactionPlan): boolean {
-  return (
-    plan.entityFrom === null &&
-    plan.statements.length > 0 &&
-    plan.statements.every((s) => s.binds === undefined && s.role === 'body')
-  );
-}
 
 /**
  * The write's `(table, RETURNING)` — every `body`-role statement must agree (a batch's groups all
