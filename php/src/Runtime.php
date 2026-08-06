@@ -16,5 +16,5 @@ namespace LiteDbModel\Runtime;
 final class Runtime
 {
     /** Version mirrored from package.json by scripts/sync-versions.mjs (SSoT). */
-    public const VERSION = '2.2.5';
+    public const VERSION = '2.2.6';
 }
