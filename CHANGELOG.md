@@ -5,6 +5,24 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.2.6] - 2026-08-06
+
+**依存の脆弱性を塞ぐ。出荷コードの変更は無い。**
+
+### Fixed
+
+- **`overrides` の完全固定ピンが `npm audit remediate` を恒久的に赤にしていた（#269）** — ピンは
+  「安全な最低バージョン」の意図で入れられたが、キャレットが無いため天井として働き、
+  `brace-expansion@5.0.8` に GHSA-rgw5-rvv9-x895 (high) が出た時点で修正版 5.0.9 へ上げられなくなった。
+  workflow は `package.json` の変更を拒否する設計なので、この形のピンがある限り自力で緑にできない。
+  キャレット範囲へ戻し、`brace-expansion` の床は脆弱版 5.0.8 ではなく修正版 5.0.9 にした。
+  再現バージョンの固定は lockfile が担う。
+- **`benchmark/package-lock.json` に high 8 / moderate 2 が残っていた（#273）** — `conformance.yml` は
+  `benchmark` で `npm ci` を実行するが `npm audit` を走らせるステップが無く、両 audit ゲートは
+  リポジトリ直下の lockfile しか読まない。**インストールはするが監査はしない**状態だった。
+  `drizzle-orm` を 0.45.2、`kysely` を 0.29.4 へ上げて解消（どちらも修正版が宣言レンジの外にあり
+  lockfile だけでは届かない）。ベンチ実測値は再計測していないので `benchmark-results.csv` は据え置き。
+
 ## [2.2.5] - 2026-08-01
 
 **Go モジュールが v2 系で初めて `go get` 可能になる。** Closes #265。
