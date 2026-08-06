@@ -26,10 +26,20 @@ jobs:
           cache: npm
       - name: Install current lockfile
         run: npm ci --ignore-scripts
-      - name: Audit current dependency graph
+      - name: Audit every dependency graph in the repository
         id: audit
         continue-on-error: true
-        run: npm audit --audit-level=moderate --json > audit-before.json
+        # The root lockfile is audited as installed; the rest are read from disk, since a
+        # tooling or example tree is not worth an install to look at. `git ls-files` keeps the
+        # set in step with the repository — a hand-written list goes stale the day someone adds
+        # a lockfile, which is exactly how these trees went unaudited in the first place.
+        run: |
+          status=0
+          npm audit --audit-level=moderate || status=1
+          for lock in $(git ls-files '*/package-lock.json'); do
+            ( cd "$(dirname "$lock")" && npm audit --package-lock-only --audit-level=moderate ) || status=1
+          done
+          exit $status
       - name: Stop if clean
         if: steps.audit.outcome == 'success'
         run: echo "npm audit passed. No remediation PR needed."
@@ -38,17 +48,32 @@ jobs:
         # `npm audit fix` exits 1 whenever any vulnerability remains, at any
         # severity, so its exit code carries a stricter threshold than this
         # workflow's gate. The updated lockfile is judged by the gate threshold.
+        #
+        # One pass does not converge — five advisories survived the first call and cleared on
+        # the second — so run to a fixed point. The audit after it is the gate, and it is not
+        # allowed to fail: a tree that cannot be fixed lockfile-only stops the workflow here
+        # rather than reaching the branch half-remediated.
         run: |
-          npm audit fix --package-lock-only --ignore-scripts || true
+          fix_here() {
+            for _ in 1 2 3 4 5; do
+              before=$(git hash-object package-lock.json)
+              npm audit fix --package-lock-only --ignore-scripts || true
+              [ "$(git hash-object package-lock.json)" = "$before" ] && break
+            done
+          }
+          fix_here
           npm audit --package-lock-only --audit-level=moderate
+          for lock in $(git ls-files '*/package-lock.json'); do
+            ( cd "$(dirname "$lock")" && fix_here && npm audit --package-lock-only --audit-level=moderate )
+          done
       - name: Reject package.json changes
         if: steps.audit.outcome == 'failure'
-        run: git diff --exit-code -- package.json
+        run: git diff --exit-code -- '*package.json'
       - name: Stop if lockfile did not change
         if: steps.audit.outcome == 'failure'
         id: diff
         continue-on-error: true
-        run: git diff --exit-code -- package-lock.json
+        run: git diff --exit-code -- '*package-lock.json'
       - name: Install updated lockfile
         if: steps.audit.outcome == 'failure' && steps.diff.outcome == 'failure'
         run: npm ci --ignore-scripts
@@ -95,7 +120,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -b "$BRANCH"
-          git add package-lock.json
+          git add -- '*package-lock.json'
           git commit -m "security: apply npm audit lockfile fix"
           git push --force-with-lease origin "$BRANCH"
 
