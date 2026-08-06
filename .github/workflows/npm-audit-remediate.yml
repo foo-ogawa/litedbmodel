@@ -58,7 +58,7 @@ jobs:
             for _ in 1 2 3 4 5; do
               before=$(git hash-object package-lock.json)
               npm audit fix --package-lock-only --ignore-scripts || true
-              [ "$(git hash-object package-lock.json)" = "$before" ] && break
+              if [ "$(git hash-object package-lock.json)" = "$before" ]; then break; fi
             done
           }
           fix_here
