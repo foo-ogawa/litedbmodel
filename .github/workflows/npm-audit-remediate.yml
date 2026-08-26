@@ -50,10 +50,16 @@ jobs:
         # workflow's gate. The updated lockfile is judged by the gate threshold.
         #
         # One pass does not converge — five advisories survived the first call and cleared on
-        # the second — so run to a fixed point. The audit after it is the gate, and it is not
-        # allowed to fail: a tree that cannot be fixed lockfile-only stops the workflow here
-        # rather than reaching the branch half-remediated.
+        # the second — so run to a fixed point.
+        #
+        # What the fix cannot reach is reported, not fatal. An exact pin, a fix that needs a
+        # semver-major, an advisory with no upstream fix at all: none of those move for a
+        # lockfile, and failing the job on them holds the workflow permanently red and buries
+        # the part it did fix. The gate that is enforced is the one that carries the risk — the
+        # fix may leave an advisory behind, but it may never bring one in.
         run: |
+          node .github/scripts/npm-audit-advisories.mjs --level moderate > "$RUNNER_TEMP/advisories-before.txt"
+
           fix_here() {
             for _ in 1 2 3 4 5; do
               before=$(git hash-object package-lock.json)
@@ -62,10 +68,13 @@ jobs:
             done
           }
           fix_here
-          npm audit --package-lock-only --audit-level=moderate
           for lock in $(git ls-files '*/package-lock.json'); do
-            ( cd "$(dirname "$lock")" && fix_here && npm audit --package-lock-only --audit-level=moderate )
+            ( cd "$(dirname "$lock")" && fix_here )
           done
+
+          node .github/scripts/npm-audit-advisories.mjs --level moderate \
+            --against "$RUNNER_TEMP/advisories-before.txt" \
+            --residual "$RUNNER_TEMP/residual.md"
       - name: Reject package.json changes
         if: steps.audit.outcome == 'failure'
         run: git diff --exit-code -- '*package.json'
@@ -74,12 +83,32 @@ jobs:
         id: diff
         continue-on-error: true
         run: git diff --exit-code -- '*package-lock.json'
+      - name: Report advisories that no lockfile change can reach
+        if: steps.audit.outcome == 'failure' && steps.diff.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_TITLE: "security: npm audit findings that a lockfile fix cannot reach"
+        # The audit crossed the threshold and the fix moved nothing, so there is no branch and
+        # no pull request to open. Staying quiet here would leave a known vulnerability with no
+        # trace anywhere; one issue, filed once, keeps it visible without a daily notification.
+        run: |
+          if ! [ -s "$RUNNER_TEMP/residual.md" ]; then
+            echo "Nothing survived the fix. No report needed."
+            exit 0
+          fi
+          if gh issue list --state open --search "\"$ISSUE_TITLE\" in:title" --json number --jq '.[0].number' | grep -q '[0-9]'; then
+            echo "An open issue already carries these findings."
+            exit 0
+          fi
+          {
+            echo "\`npm audit\` reports findings that \`npm audit fix --package-lock-only\` cannot move. Each one needs a change a lockfile cannot express: raising a pin, accepting a semver-major, or waiting on an upstream release."
+            cat "$RUNNER_TEMP/residual.md"
+            printf 'Run: %s/%s/actions/runs/%s\n' "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID"
+          } > "$RUNNER_TEMP/unfixable-body.md"
+          gh issue create --title "$ISSUE_TITLE" --body-file "$RUNNER_TEMP/unfixable-body.md"
       - name: Install updated lockfile
         if: steps.audit.outcome == 'failure' && steps.diff.outcome == 'failure'
         run: npm ci --ignore-scripts
-      - name: Verify audit is clean
-        if: steps.audit.outcome == 'failure' && steps.diff.outcome == 'failure'
-        run: npm audit --audit-level=moderate
       - name: Verify npm signatures
         if: steps.audit.outcome == 'failure' && steps.diff.outcome == 'failure'
         run: npm audit signatures
@@ -110,7 +139,8 @@ jobs:
             - Updated package-lock.json only
             - package.json changes are rejected
             - npm install scripts are disabled
-            - npm audit, npm audit signatures, lint, build, test, and npm pack --dry-run passed
+            - The fix brought in no advisory that was not already there
+            - npm audit signatures, lint, build, test, and npm pack --dry-run passed
 
             Policy:
             - Dependabot version updates are not used
@@ -119,10 +149,25 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git checkout -b "$BRANCH"
+          git checkout -B "$BRANCH"
           git add -- '*package-lock.json'
           git commit -m "security: apply npm audit lockfile fix"
-          git push --force-with-lease origin "$BRANCH"
+
+          # Never rewrite the branch. A pull request may already be open on it, and a force
+          # push swaps the commit out from under the review. Recording the previous tip as a
+          # second parent keeps today's fix as the branch content while leaving the push a
+          # fast-forward.
+          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
+            git fetch --no-tags origin "$BRANCH"
+            if [ "$(git rev-parse 'HEAD^{tree}')" = "$(git rev-parse 'FETCH_HEAD^{tree}')" ]; then
+              echo "$BRANCH already holds exactly this fix."
+            else
+              git merge -s ours --no-edit FETCH_HEAD
+              git push origin "$BRANCH"
+            fi
+          else
+            git push origin "$BRANCH"
+          fi
 
           # github.token cannot open a pull request. That requires "Allow GitHub
           # Actions to create and approve pull requests", which would also let a
@@ -132,6 +177,9 @@ jobs:
             echo "An open issue already points at $BRANCH, which now holds the current fix."
             exit 0
           fi
-          printf '%s\nRun: %s/%s/actions/runs/%s\n' \
-            "$ISSUE_BODY" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" > "$RUNNER_TEMP/issue-body.md"
+          {
+            printf '%s\n' "$ISSUE_BODY"
+            cat "$RUNNER_TEMP/residual.md"
+            printf 'Run: %s/%s/actions/runs/%s\n' "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID"
+          } > "$RUNNER_TEMP/issue-body.md"
           gh issue create --title "$ISSUE_TITLE" --body-file "$RUNNER_TEMP/issue-body.md"
