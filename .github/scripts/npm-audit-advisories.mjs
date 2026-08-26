@@ -17,6 +17,7 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
+import process from "node:process";
 
 const RANK = ["info", "low", "moderate", "high", "critical"];
 
@@ -93,8 +94,8 @@ const residual = option("--residual");
 if (residual) writeFileSync(residual, surviving.length ? asMarkdown(surviving) : "");
 
 if (introduced.length) {
-  console.log("::error::the lockfile fix pulled in advisories that were not there before it ran");
-  for (const line of introduced.sort()) console.log(line);
+  const report = ["::error::the lockfile fix pulled in advisories that were not there before it ran", ...introduced.sort()];
+  process.stdout.write(report.map((line) => `${line}\n`).join(""));
   process.exit(1);
 }
 
