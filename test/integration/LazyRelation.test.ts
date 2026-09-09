@@ -108,10 +108,10 @@ let TestUserProfile: typeof TestUserProfileModel & ColumnsOf<TestUserProfileMode
 
 @model('test_users')
 class TestUserModel extends DBModel {
-  @column() id?: number;
-  @column() name?: string;
-  @column() email?: string;
-  @column() created_at?: Date;
+  @column.number() id?: number;
+  @column.text() name?: string;
+  @column.text() email?: string;
+  @column.datetime() created_at?: string;
 
   // Relations - accessed with await
   // Use 'declare' to avoid creating instance property that shadows the getter
@@ -134,12 +134,12 @@ type TestUser = TestUserModel;
 
 @model('test_posts')
 class TestPostModel extends DBModel {
-  @column() id?: number;
-  @column() user_id?: number;
-  @column() title?: string;
-  @column() content?: string;
-  @column() published?: boolean;
-  @column() created_at?: Date;
+  @column.number() id?: number;
+  @column.number() user_id?: number;
+  @column.text() title?: string;
+  @column.text() content?: string;
+  @column.boolean() published?: boolean;
+  @column.datetime() created_at?: string;
 
   // Relations - accessed with await
   // Use 'declare' to avoid creating instance property that shadows the getter
@@ -168,12 +168,12 @@ type TestPost = TestPostModel;
 
 @model('test_post_comments')
 class TestPostCommentModel extends DBModel {
-  @column() id?: number;
-  @column() post_id?: number;
-  @column() user_id?: number;
-  @column() content?: string;
-  @column() published?: boolean;
-  @column() created_at?: Date;
+  @column.number() id?: number;
+  @column.number() post_id?: number;
+  @column.number() user_id?: number;
+  @column.text() content?: string;
+  @column.boolean() published?: boolean;
+  @column.datetime() created_at?: string;
 
   // Relations
   @belongsTo(() => [TestPostComment.post_id, TestPost.id])
@@ -187,11 +187,11 @@ type TestPostComment = TestPostCommentModel;
 
 @model('test_user_profiles')
 class TestUserProfileModel extends DBModel {
-  @column() id?: number;
-  @column() user_id?: number;
-  @column() bio?: string;
-  @column() website?: string;
-  @column() created_at?: Date;
+  @column.number() id?: number;
+  @column.number() user_id?: number;
+  @column.text() bio?: string;
+  @column.text() website?: string;
+  @column.datetime() created_at?: string;
 
   // Relations
   @belongsTo(() => [TestUserProfile.user_id, TestUser.id])
@@ -211,10 +211,10 @@ let TenantPost: typeof TenantPostModel & ColumnsOf<TenantPostModel>;
 
 @model('test_tenant_users')
 class TenantUserModel extends DBModel {
-  @column() tenant_id?: number;
-  @column() id?: number;
-  @column() name?: string;
-  @column() created_at?: Date;
+  @column.number() tenant_id?: number;
+  @column.number() id?: number;
+  @column.text() name?: string;
+  @column.datetime() created_at?: string;
 
   // Composite primary key
   static getPkeyColumns() {
@@ -235,12 +235,12 @@ type TenantUser = TenantUserModel;
 
 @model('test_tenant_posts')
 class TenantPostModel extends DBModel {
-  @column() tenant_id?: number;
-  @column() id?: number;
-  @column() user_id?: number;
-  @column() title?: string;
-  @column() content?: string;
-  @column() created_at?: Date;
+  @column.number() tenant_id?: number;
+  @column.number() id?: number;
+  @column.number() user_id?: number;
+  @column.text() title?: string;
+  @column.text() content?: string;
+  @column.datetime() created_at?: string;
 
   // Composite primary key
   static getPkeyColumns() {
@@ -1419,9 +1419,9 @@ describe.skipIf(skipIntegrationTests)('LazyRelation', () => {
 
     @model('test_users')
     class LimitedUserModel extends DBModel {
-      @column() id?: number;
-      @column() name?: string;
-      @column() email?: string;
+      @column.number() id?: number;
+      @column.text() name?: string;
+      @column.text() email?: string;
 
       // Limited relation - only 2 posts per user
       @hasMany(() => [LimitedUser.id, TestPost.user_id], {
@@ -1534,9 +1534,9 @@ describe.skipIf(skipIntegrationTests)('LazyRelation', () => {
       // Define model with composite key limit
       @model('test_tenant_users')
       class LimitedTenantUserModel extends DBModel {
-        @column() tenant_id?: number;
-        @column() id?: number;
-        @column() name?: string;
+        @column.number() tenant_id?: number;
+        @column.number() id?: number;
+        @column.text() name?: string;
 
         // Composite key: [sourceKey, targetKey] pairs
         // Source: (tenant_id, id), Target: (tenant_id, user_id)
@@ -1583,9 +1583,9 @@ describe.skipIf(skipIntegrationTests)('LazyRelation', () => {
 
     @model('test_users')
     class HardLimitUserModel extends DBModel {
-      @column() id?: number;
-      @column() name?: string;
-      @column() email?: string;
+      @column.number() id?: number;
+      @column.text() name?: string;
+      @column.text() email?: string;
 
       // Relation with custom hardLimit (overrides global)
       @hasMany(() => [HardLimitUser.id, TestPost.user_id], {

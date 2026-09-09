@@ -20,8 +20,8 @@ describe('decorators', () => {
   describe('@column', () => {
     it('should register column with same name as property', () => {
       class TestModel extends DBModel {
-        @column() id?: number;
-        @column() name?: string;
+        @column.number() id?: number;
+        @column.text() name?: string;
       }
 
       const meta = getColumnMeta(TestModel);
@@ -32,8 +32,8 @@ describe('decorators', () => {
 
     it('should register column with custom name', () => {
       class TestModel extends DBModel {
-        @column('user_id') id?: number;
-        @column('user_name') name?: string;
+        @column.number('user_id') id?: number;
+        @column.text('user_name') name?: string;
       }
 
       const meta = getColumnMeta(TestModel);
@@ -73,7 +73,7 @@ describe('decorators', () => {
       // / better-sqlite3 safeIntegers→bigint→string); the materializer keeps it exact.
       @model('test')
       class TestModel extends DBModel {
-        @column.bigint() large_id?: bigint;
+        @column.bigint() large_id?: string;
       }
 
       const instance = new TestModel();
@@ -95,7 +95,7 @@ describe('decorators', () => {
       // NOT a TZ-shifted JS Date. A driver already returning the native textual form passes through.
       @model('test')
       class TestModel extends DBModel {
-        @column.datetime() created_at?: Date;
+        @column.datetime() created_at?: string;
       }
 
       const instance = new TestModel();
@@ -238,11 +238,40 @@ describe('decorators', () => {
     });
   });
 
-  describe('@column type auto-inference', () => {
-    // Note: Auto-inference requires emitDecoratorMetadata which esbuild (used by vitest) doesn't support.
-    // These tests verify that explicit type decorators work when auto-inference is not available.
-    
-    it('should work with explicit @column.boolean when auto-inference unavailable', () => {
+  describe('the bare @column() is rejected (#286)', () => {
+    // It declared no type: it read `design:type`, which needs legacy decorators AND
+    // `emitDecoratorMetadata`. Where that was absent the column got NO cast and the raw driver value
+    // reached the caller — an `integer` as a `bigint`, a `numeric` as a `string`. It now says so.
+
+    it('throws, naming the families that replace it', () => {
+      expect(() => column()).toThrow(/must state its type with a family/);
+      expect(() => column()).toThrow(/@column\.text\(\)/);
+    });
+
+    it('throws before any column is registered, whatever argument it was given', () => {
+      expect(() => column('db_name')).toThrow(/family/);
+      expect(() => column({ primaryKey: true })).toThrow(/family/);
+    });
+
+    it('every family accepts what the bare form accepted (a name, or ColumnOptions)', () => {
+      @model('opts')
+      class OptsModel extends DBModel {
+        @column.number({ primaryKey: true, autoIncrement: true }) id?: number;
+        @column.text('mail_addr') email?: string;
+        @column.datetime({ columnName: 'ts' }) at?: string;
+      }
+      const meta = getColumnMeta(OptsModel)!;
+      expect(meta.get('id')).toMatchObject({ primaryKey: true, autoIncrement: true });
+      expect(meta.get('email')!.columnName).toBe('mail_addr');
+      expect(meta.get('at')!.columnName).toBe('ts');
+    });
+  });
+
+  describe('@column family declarations', () => {
+    // A column's type comes from the family it declares, on every toolchain — nothing is read back
+    // from the compiler, so these hold under tsc, esbuild/tsx and standard decorators alike.
+
+    it('@column.boolean() declares its sqlCast + cast', () => {
       @model('test')
       class TestModel extends DBModel {
         @column.boolean() is_active?: boolean;
@@ -254,7 +283,7 @@ describe('decorators', () => {
       expect(instance.is_active).toBe(true);
     });
 
-    it('should work with explicit @column.number when auto-inference unavailable', () => {
+    it('@column.number() declares its cast', () => {
       @model('test')
       class TestModel extends DBModel {
         @column.number() count?: number;
@@ -266,10 +295,10 @@ describe('decorators', () => {
       expect(instance.count).toBe(42);
     });
 
-    it('should work with explicit @column.datetime when auto-inference unavailable', () => {
+    it('@column.datetime() declares its sqlCast + cast', () => {
       @model('test')
       class TestModel extends DBModel {
-        @column.datetime() created_at?: Date;
+        @column.datetime() created_at?: string;
       }
 
       const instance = new TestModel();
@@ -301,7 +330,7 @@ describe('decorators', () => {
     it('should handle undefined values', () => {
       @model('test')
       class TestModel extends DBModel {
-        @column.datetime() dt?: Date;
+        @column.datetime() dt?: string;
       }
 
       const instance = new TestModel();
@@ -329,7 +358,7 @@ describe('decorators', () => {
       // violation — a hard error, NOT a silently-nulled value (which would mask precision loss).
       @model('test')
       class TestModel extends DBModel {
-        @column.bigint() big?: bigint;
+        @column.bigint() big?: string;
       }
 
       const instance = new TestModel();
@@ -342,7 +371,7 @@ describe('decorators', () => {
     it('should set TABLE_NAME', () => {
       @model('users')
       class User extends DBModel {
-        @column() id?: number;
+        @column.number() id?: number;
       }
 
       expect(User.getTableName()).toBe('users');
@@ -351,7 +380,7 @@ describe('decorators', () => {
     it('should work without table name argument', () => {
       @model
       class TestModelWithoutName extends DBModel {
-        @column() id?: number;
+        @column.number() id?: number;
       }
 
       const tableName = TestModelWithoutName.getTableName();
@@ -361,8 +390,8 @@ describe('decorators', () => {
     it('should create static Column properties', () => {
       @model('test')
       class TestModel extends DBModel {
-        @column() id?: number;
-        @column() name?: string;
+        @column.number() id?: number;
+        @column.text() name?: string;
       }
 
       // Check that static properties exist and are Column instances
@@ -375,8 +404,8 @@ describe('decorators', () => {
     it('should create callable Column properties', () => {
       @model('test')
       class TestModel extends DBModel {
-        @column() id?: number;
-        @column('user_name') name?: string;
+        @column.number() id?: number;
+        @column.text('user_name') name?: string;
       }
 
       // Column should be callable and return column name
@@ -387,8 +416,8 @@ describe('decorators', () => {
     it('should create Column properties with condition builders', () => {
       @model('test')
       class TestModel extends DBModel {
-        @column() id?: number;
-        @column() is_active?: boolean;
+        @column.number() id?: number;
+        @column.boolean() is_active?: boolean;
       }
 
       expect((TestModel as any).id.eq(1)).toEqual({ id: 1 });
@@ -399,7 +428,7 @@ describe('decorators', () => {
     it('should preserve existing typeCastFromDB', () => {
       @model('test')
       class TestModel extends DBModel {
-        @column() id?: number;
+        @column.number() id?: number;
         customCalled = false;
 
         typeCastFromDB() {
@@ -415,8 +444,8 @@ describe('decorators', () => {
     it('should store _columnMeta', () => {
       @model('test')
       class TestModel extends DBModel {
-        @column() id?: number;
-        @column('custom_name') custom?: string;
+        @column.number() id?: number;
+        @column.text('custom_name') custom?: string;
       }
 
       const meta = (TestModel as any)._columnMeta;
@@ -430,7 +459,7 @@ describe('decorators', () => {
     it('should return column metadata map', () => {
       @model('test')
       class TestModel extends DBModel {
-        @column() id?: number;
+        @column.number() id?: number;
         @column.boolean() flag?: boolean;
       }
 
@@ -453,9 +482,9 @@ describe('decorators', () => {
     it('should return array of column names', () => {
       @model('test')
       class TestModel extends DBModel {
-        @column() id?: number;
-        @column('user_name') name?: string;
-        @column() email?: string;
+        @column.number() id?: number;
+        @column.text('user_name') name?: string;
+        @column.text() email?: string;
       }
 
       const names = getModelColumnNames(TestModel);
@@ -476,9 +505,9 @@ describe('decorators', () => {
     it('should return array of property names', () => {
       @model('test')
       class TestModel extends DBModel {
-        @column() id?: number;
-        @column('user_name') name?: string;
-        @column() email?: string;
+        @column.number() id?: number;
+        @column.text('user_name') name?: string;
+        @column.text() email?: string;
       }
 
       const props = getModelPropertyNames(TestModel);
@@ -526,8 +555,8 @@ describe('decorators', () => {
     it('should detect single primary key from decorator', () => {
       @model('single_pk_test')
       class SinglePkModel extends DBModel {
-        @column({ primaryKey: true }) id?: number;
-        @column() name?: string;
+        @column.number({ primaryKey: true }) id?: number;
+        @column.text() name?: string;
       }
 
       const meta = getColumnMeta(SinglePkModel);
@@ -545,9 +574,9 @@ describe('decorators', () => {
     it('should detect composite primary key from decorators', () => {
       @model('composite_pk_test')
       class CompositePkModel extends DBModel {
-        @column({ primaryKey: true }) post_id?: number;
-        @column({ primaryKey: true }) tag_id?: number;
-        @column.datetime() created_at?: Date;
+        @column.number({ primaryKey: true }) post_id?: number;
+        @column.number({ primaryKey: true }) tag_id?: number;
+        @column.datetime() created_at?: string;
       }
 
       const meta = getColumnMeta(CompositePkModel);
@@ -566,8 +595,8 @@ describe('decorators', () => {
     it('should support primaryKey with custom column name', () => {
       @model('custom_name_pk_test')
       class CustomNamePkModel extends DBModel {
-        @column({ primaryKey: true, columnName: 'user_id' }) id?: number;
-        @column() name?: string;
+        @column.number({ primaryKey: true, columnName: 'user_id' }) id?: number;
+        @column.text() name?: string;
       }
 
       const meta = getColumnMeta(CustomNamePkModel);
@@ -584,8 +613,8 @@ describe('decorators', () => {
     it('should fall back to id when no primaryKey specified', () => {
       @model('no_pk_test')
       class NoPkModel extends DBModel {
-        @column() id?: number;
-        @column() name?: string;
+        @column.number() id?: number;
+        @column.text() name?: string;
       }
 
       // No primaryKey specified, should use 'id' as default
@@ -601,8 +630,8 @@ describe('decorators', () => {
     it('should set DEFAULT_ORDER from options.order', () => {
       @model('options_test')
       class OptionsModelClass extends DBModel {
-        @column() id?: number;
-        @column() created_at?: Date;
+        @column.number() id?: number;
+        @column.datetime() created_at?: string;
       }
       const OptionsModel = OptionsModelClass as typeof OptionsModelClass & {
         id: import('../../src/Column').Column;
@@ -614,8 +643,8 @@ describe('decorators', () => {
         order: () => OptionsModel.created_at.desc(),
       })
       class OptionsModel2Class extends DBModel {
-        @column() id?: number;
-        @column() created_at?: Date;
+        @column.number() id?: number;
+        @column.datetime() created_at?: string;
       }
 
       const order = (OptionsModel2Class as unknown as { DEFAULT_ORDER: import('../../src/Column').OrderColumn }).DEFAULT_ORDER;
@@ -627,7 +656,7 @@ describe('decorators', () => {
     it('should set FIND_FILTER from options.filter', () => {
       @model('filter_base')
       class FilterBaseClass extends DBModel {
-        @column() id?: number;
+        @column.number() id?: number;
         @column.boolean() is_deleted?: boolean;
       }
       const FilterBase = FilterBaseClass as typeof FilterBaseClass & {
@@ -639,7 +668,7 @@ describe('decorators', () => {
         filter: () => [[FilterBase.is_deleted, false]],
       })
       class FilterModel extends DBModel {
-        @column() id?: number;
+        @column.number() id?: number;
         @column.boolean() is_deleted?: boolean;
       }
 
@@ -653,8 +682,8 @@ describe('decorators', () => {
         select: 'id, name',
       })
       class SelectModel extends DBModel {
-        @column() id?: number;
-        @column() name?: string;
+        @column.number() id?: number;
+        @column.text() name?: string;
       }
 
       expect((SelectModel as unknown as { SELECT_COLUMN: string }).SELECT_COLUMN).toBe('id, name');
@@ -665,7 +694,7 @@ describe('decorators', () => {
         updateTable: 'real_table',
       })
       class ViewBacked extends DBModel {
-        @column() id?: number;
+        @column.number() id?: number;
       }
 
       expect((ViewBacked as unknown as { UPDATE_TABLE_NAME: string }).UPDATE_TABLE_NAME).toBe('real_table');
@@ -677,8 +706,8 @@ describe('decorators', () => {
     it('@column.date() should have sqlCast: date', () => {
       @model('test_date_sqlcast')
       class TestModel extends DBModel {
-        @column() id?: number;
-        @column.date() birth_date?: Date;
+        @column.number() id?: number;
+        @column.date() birth_date?: string;
       }
 
       const sqlCastMap = getSqlCastMap(TestModel);
@@ -689,8 +718,8 @@ describe('decorators', () => {
     it('@column.datetime() should have sqlCast: timestamp', () => {
       @model('test_datetime_sqlcast')
       class TestModel extends DBModel {
-        @column() id?: number;
-        @column.datetime() created_at?: Date;
+        @column.number() id?: number;
+        @column.datetime() created_at?: string;
       }
 
       const sqlCastMap = getSqlCastMap(TestModel);
@@ -701,7 +730,7 @@ describe('decorators', () => {
     it('@column.boolean() should have sqlCast: boolean', () => {
       @model('test_boolean_sqlcast')
       class TestModel extends DBModel {
-        @column() id?: number;
+        @column.number() id?: number;
         @column.boolean() is_active?: boolean;
       }
 
@@ -713,8 +742,8 @@ describe('decorators', () => {
     it('@column.bigint() should have sqlCast: bigint', () => {
       @model('test_bigint_sqlcast')
       class TestModel extends DBModel {
-        @column() id?: number;
-        @column.bigint() large_id?: bigint;
+        @column.number() id?: number;
+        @column.bigint() large_id?: string;
       }
 
       const sqlCastMap = getSqlCastMap(TestModel);
@@ -722,10 +751,6 @@ describe('decorators', () => {
       expect(sqlCastMap.get('id')).toBeUndefined();
     });
 
-    // Note: Auto-inference tests are limited in vitest because esbuild doesn't fully support
-    // emitDecoratorMetadata. Auto-inference is verified in integration tests instead.
-    // When design:type metadata is available, @column() with Date/boolean/bigint types will
-    // automatically get sqlCast and serialize functions.
   });
 });
 

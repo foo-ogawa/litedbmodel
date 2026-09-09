@@ -52,16 +52,16 @@ import { DBModel, model, column, hasMany, belongsTo, hasOne } from 'litedbmodel'
 @model('users')
 class UserModel extends DBModel {
   // Primary key (auto-increment)
-  @column({ primaryKey: true }) id?: number;
+  @column.number({ primaryKey: true }) id?: number;
   
   // UUID primary key (PostgreSQL: auto-casts to ::uuid)
   // @column.uuid({ primaryKey: true }) id?: string;
 
   // Basic columns (types auto-inferred)
-  @column() name?: string;
-  @column() email?: string;
-  @column() is_active?: boolean;
-  @column() created_at?: Date;
+  @column.text() name?: string;
+  @column.text() email?: string;
+  @column.boolean() is_active?: boolean;
+  @column.datetime() created_at?: string;
 
   // Array and JSON columns (explicit type required)
   @column.stringArray() tags?: string[];
@@ -85,11 +85,11 @@ export type User = UserModel;
 
 @model('posts')
 class PostModel extends DBModel {
-  @column({ primaryKey: true }) id?: number;
-  @column() author_id?: number;
-  @column() title?: string;
-  @column() content?: string;
-  @column() published_at?: Date;
+  @column.number({ primaryKey: true }) id?: number;
+  @column.number() author_id?: number;
+  @column.text() title?: string;
+  @column.text() content?: string;
+  @column.datetime() published_at?: string;
 
   @belongsTo(() => [Post.author_id, User.id])
   declare author: Promise<User | null>;
@@ -99,9 +99,9 @@ export type Post = PostModel;
 
 @model('profiles')
 class ProfileModel extends DBModel {
-  @column({ primaryKey: true }) id?: number;
-  @column() user_id?: number;
-  @column() bio?: string;
+  @column.number({ primaryKey: true }) id?: number;
+  @column.number() user_id?: number;
+  @column.text() bio?: string;
 }
 export const Profile = ProfileModel.asModel();
 export type Profile = ProfileModel;
@@ -341,7 +341,7 @@ See: [DBModel.execute](classes/DBModel.md#execute), [DBModel.query](classes/DBMo
 ```typescript
 @model('users')
 class User extends DBModel {
-  @column({ primaryKey: true }) id?: number;
+  @column.number({ primaryKey: true }) id?: number;
 
   // One-to-Many: User has many Posts
   @hasMany(() => [User.id, Post.author_id])
@@ -354,8 +354,8 @@ class User extends DBModel {
 
 @model('posts')
 class Post extends DBModel {
-  @column({ primaryKey: true }) id?: number;
-  @column() author_id?: number;
+  @column.number({ primaryKey: true }) id?: number;
+  @column.number() author_id?: number;
 
   // Many-to-One: Post belongs to User
   @belongsTo(() => [Post.author_id, User.id])

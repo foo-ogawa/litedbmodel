@@ -1,4 +1,4 @@
-[**litedbmodel v2.2.6**](../README.md)
+[**litedbmodel v2.2.7**](../README.md)
 
 ***
 
@@ -12,17 +12,7 @@
 function model<T>(constructor: T): T;
 ```
 
-Defined in: [decorators.ts:1006](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L1006)
-
-Model class decorator.
-
-Can be used with or without table name:
-- `@model` - uses class name as table name (via TABLE_NAME)
-- `@model('users')` - sets TABLE_NAME to 'users'
-
-Automatically:
-1. Sets static TABLE_NAME property (if table name provided)
-2. Creates static Column properties for each
+Defined in: [decorators.ts:1065](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L1065)
 
 ### Type Parameters
 
@@ -40,62 +30,13 @@ Automatically:
 
 `T`
 
-### Column
-
-decorated property
-3. Generates typeCastFromDB() method from
-
-### Column
-
-type conversion settings
-4. Creates relation getters from @hasMany, @belongsTo,
-
-### Has One
-
-decorators
-
-### Example
-
-```typescript
-@model('users')
-class User extends DBModel {
-  @column() id?: number;
-  @column() name?: string;
-  @column.boolean() is_active?: boolean;
-  @column.datetime() created_at?: Date;
-
-  @hasMany(() => [User.id, Post.author_id])
-  declare posts: Promise<Post[]>;
-}
-
-// Usage - call column to get name as string for computed property key
-await User.findAll({ [User.id()]: 1 });
-
-// Or use condition builders with spread
-await User.findAll({ ...User.is_active.eq(true) });
-
-// Access relations
-const user = await User.findOne([[User.id, 1]]);
-const posts = await user.posts;  // Batch loads with other users in context
-```
-
 ## Call Signature
 
 ```ts
-function model(tableName: string): <T>(constructor: T) => T;
+function model(tableName: string): ModelClassDecorator;
 ```
 
-Defined in: [decorators.ts:1010](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L1010)
-
-Model class decorator.
-
-Can be used with or without table name:
-- `@model` - uses class name as table name (via TABLE_NAME)
-- `@model('users')` - sets TABLE_NAME to 'users'
-
-Automatically:
-1. Sets static TABLE_NAME property (if table name provided)
-2. Creates static Column properties for each
+Defined in: [decorators.ts:1069](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L1069)
 
 ### Parameters
 
@@ -105,64 +46,15 @@ Automatically:
 
 ### Returns
 
-\<`T`\>(`constructor`: `T`) => `T`
-
-### Column
-
-decorated property
-3. Generates typeCastFromDB() method from
-
-### Column
-
-type conversion settings
-4. Creates relation getters from @hasMany, @belongsTo,
-
-### Has One
-
-decorators
-
-### Example
-
-```typescript
-@model('users')
-class User extends DBModel {
-  @column() id?: number;
-  @column() name?: string;
-  @column.boolean() is_active?: boolean;
-  @column.datetime() created_at?: Date;
-
-  @hasMany(() => [User.id, Post.author_id])
-  declare posts: Promise<Post[]>;
-}
-
-// Usage - call column to get name as string for computed property key
-await User.findAll({ [User.id()]: 1 });
-
-// Or use condition builders with spread
-await User.findAll({ ...User.is_active.eq(true) });
-
-// Access relations
-const user = await User.findOne([[User.id, 1]]);
-const posts = await user.posts;  // Batch loads with other users in context
-```
+[`ModelClassDecorator`](../interfaces/ModelClassDecorator.md)
 
 ## Call Signature
 
 ```ts
-function model(tableName: string, options: ModelOptions): <T>(constructor: T) => T;
+function model(tableName: string, options: ModelOptions): ModelClassDecorator;
 ```
 
-Defined in: [decorators.ts:1014](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L1014)
-
-Model class decorator.
-
-Can be used with or without table name:
-- `@model` - uses class name as table name (via TABLE_NAME)
-- `@model('users')` - sets TABLE_NAME to 'users'
-
-Automatically:
-1. Sets static TABLE_NAME property (if table name provided)
-2. Creates static Column properties for each
+Defined in: [decorators.ts:1071](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L1071)
 
 ### Parameters
 
@@ -173,43 +65,4 @@ Automatically:
 
 ### Returns
 
-\<`T`\>(`constructor`: `T`) => `T`
-
-### Column
-
-decorated property
-3. Generates typeCastFromDB() method from
-
-### Column
-
-type conversion settings
-4. Creates relation getters from @hasMany, @belongsTo,
-
-### Has One
-
-decorators
-
-### Example
-
-```typescript
-@model('users')
-class User extends DBModel {
-  @column() id?: number;
-  @column() name?: string;
-  @column.boolean() is_active?: boolean;
-  @column.datetime() created_at?: Date;
-
-  @hasMany(() => [User.id, Post.author_id])
-  declare posts: Promise<Post[]>;
-}
-
-// Usage - call column to get name as string for computed property key
-await User.findAll({ [User.id()]: 1 });
-
-// Or use condition builders with spread
-await User.findAll({ ...User.is_active.eq(true) });
-
-// Access relations
-const user = await User.findOne([[User.id, 1]]);
-const posts = await user.posts;  // Batch loads with other users in context
-```
+[`ModelClassDecorator`](../interfaces/ModelClassDecorator.md)

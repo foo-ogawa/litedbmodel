@@ -58,23 +58,21 @@ import { skipIntegrationTests, pgConfig, mysqlConfig, sqliteConfig } from '../he
 // Quick Start / CRUD / Conditions / Middleware model (README §Quick Start, §CRUD, §Conditions)
 @model('rc_users')
 class UserModel extends DBModel {
-  @column() id?: number;
-  @column() name?: string;
-  @column() email?: string;
-  @column() is_active?: boolean;
-  @column() created_at?: Date;
-  @column() updated_at?: Date;
+  @column.number() id?: number;
+  @column.text() name?: string;
+  @column.text() email?: string;
+  @column.boolean() is_active?: boolean;
+  @column.datetime() created_at?: string;
+  @column.datetime() updated_at?: string;
   // extra columns exercised by README condition/subquery/upsert examples
-  @column() status?: string;
-  @column() role?: string;
-  @column() age?: number;
-  @column() tenant_id?: number;
-  @column() group_id?: number;
-  // README §Date vs DateTime: a NULLABLE timestamp uses an EXPLICIT decorator — the `Date | null`
-  // union defeats reflect-metadata's design:type inference (it emits Object, not Date), so a bare
-  // `@column()` cannot type it. `@column.datetime()` is the documented decorator for this (mirrors
-  // the repo's own test helper). Non-null `Date` columns (created_at/updated_at) reflect fine as bare.
-  @column.datetime() deleted_at?: Date | null;
+  @column.text() status?: string;
+  @column.text() role?: string;
+  @column.number() age?: number;
+  @column.number() tenant_id?: number;
+  @column.number() group_id?: number;
+  // README §Date vs DateTime: every column states its family, and `@column.datetime()` reads back a
+  // TZ-attached STRING (not a JS Date) — the declared type says so.
+  @column.datetime() deleted_at?: string | null;
 
   // README §Relations
   @hasMany(() => [User.id, Post.author_id])
@@ -106,9 +104,9 @@ type User = UserModel;
 
 @model('rc_posts')
 class PostModel extends DBModel {
-  @column() id?: number;
-  @column() author_id?: number;
-  @column() title?: string;
+  @column.number() id?: number;
+  @column.number() author_id?: number;
+  @column.text() title?: string;
 
   @belongsTo(() => [Post.author_id, User.id])
   declare author: Promise<User | null>;
@@ -121,18 +119,18 @@ type Post = PostModel;
 
 @model('rc_comments')
 class CommentModel extends DBModel {
-  @column() id?: number;
-  @column() post_id?: number;
-  @column() body?: string;
+  @column.number() id?: number;
+  @column.number() post_id?: number;
+  @column.text() body?: string;
 }
 const Comment = CommentModel as typeof CommentModel & ColumnsOf<CommentModel>;
 type Comment = CommentModel;
 
 @model('rc_user_profiles')
 class UserProfileModel extends DBModel {
-  @column() id?: number;
-  @column() user_id?: number;
-  @column() bio?: string;
+  @column.number() id?: number;
+  @column.number() user_id?: number;
+  @column.text() bio?: string;
 }
 const UserProfile = UserProfileModel as typeof UserProfileModel & ColumnsOf<UserProfileModel>;
 type UserProfile = UserProfileModel;
@@ -140,23 +138,23 @@ type UserProfile = UserProfileModel;
 // README §Subqueries target tables
 @model('rc_orders')
 class OrderModel extends DBModel {
-  @column() id?: number;
-  @column() user_id?: number;
-  @column() group_id?: number;
-  @column() tenant_id?: number;
-  @column() status?: string;
+  @column.number() id?: number;
+  @column.number() user_id?: number;
+  @column.number() group_id?: number;
+  @column.number() tenant_id?: number;
+  @column.text() status?: string;
 }
 const Order = OrderModel as typeof OrderModel & ColumnsOf<OrderModel>;
 
 @model('rc_banned_users')
 class BannedUserModel extends DBModel {
-  @column() user_id?: number;
+  @column.number() user_id?: number;
 }
 const BannedUser = BannedUserModel as typeof BannedUserModel & ColumnsOf<BannedUserModel>;
 
 @model('rc_complaints')
 class ComplaintModel extends DBModel {
-  @column() user_id?: number;
+  @column.number() user_id?: number;
 }
 const Complaint = ComplaintModel as typeof ComplaintModel & ColumnsOf<ComplaintModel>;
 
@@ -166,9 +164,9 @@ const Complaint = ComplaintModel as typeof ComplaintModel & ColumnsOf<ComplaintM
 // to MySQL. We keep the README's INTENT (composite-unique-key upsert) with a portable column name.
 @model('rc_user_prefs')
 class UserPrefModel extends DBModel {
-  @column() user_id?: number;
-  @column() pref_key?: string;
-  @column() value?: string;
+  @column.number() user_id?: number;
+  @column.text() pref_key?: string;
+  @column.text() value?: string;
 }
 const UserPref = UserPrefModel as typeof UserPrefModel & ColumnsOf<UserPrefModel>;
 
@@ -179,9 +177,9 @@ const UserPref = UserPrefModel as typeof UserPrefModel & ColumnsOf<UserPrefModel
   select: 'id, title, created_at',
 })
 class EntryModel extends DBModel {
-  @column() id?: number;
-  @column() title?: string;
-  @column() created_at?: Date;
+  @column.number() id?: number;
+  @column.text() title?: string;
+  @column.datetime() created_at?: string;
   @column.boolean() is_deleted?: boolean;
 }
 const Entry = EntryModel as typeof EntryModel & ColumnsOf<EntryModel>;
@@ -189,27 +187,27 @@ const Entry = EntryModel as typeof EntryModel & ColumnsOf<EntryModel>;
 // README §Column Decorators — the Date vs DateTime distinction
 @model('rc_events')
 class EventModel extends DBModel {
-  @column() id?: number;
+  @column.number() id?: number;
   @column.date() birth_date?: string; // DATE → 'YYYY-MM-DD' string
-  @column.datetime() updated_at?: Date; // TIMESTAMP → Date/string
+  @column.datetime() updated_at?: string; // TIMESTAMP → Date/string
 }
 const Event = EventModel as typeof EventModel & ColumnsOf<EventModel>;
 
 // README §Composite Key Relations
 @model('rc_tenant_users')
 class TenantUserModel extends DBModel {
-  @column({ primaryKey: true }) tenant_id?: number;
-  @column({ primaryKey: true }) id?: number;
-  @column() name?: string;
+  @column.number({ primaryKey: true }) tenant_id?: number;
+  @column.number({ primaryKey: true }) id?: number;
+  @column.text() name?: string;
 }
 const TenantUser = TenantUserModel as typeof TenantUserModel & ColumnsOf<TenantUserModel>;
 type TenantUser = TenantUserModel;
 
 @model('rc_tenant_posts')
 class TenantPostModel extends DBModel {
-  @column({ primaryKey: true }) tenant_id?: number;
-  @column({ primaryKey: true }) id?: number;
-  @column() author_id?: number;
+  @column.number({ primaryKey: true }) tenant_id?: number;
+  @column.number({ primaryKey: true }) id?: number;
+  @column.number() author_id?: number;
 
   @belongsTo(() => [
     [TenantPost.tenant_id, TenantUser.tenant_id],
@@ -222,9 +220,9 @@ const TenantPost = TenantPostModel as typeof TenantPostModel & ColumnsOf<TenantP
 // README §Query-Based Models
 @model('rc_user_stats')
 class UserStatsModel extends DBModel {
-  @column() id?: number;
-  @column() name?: string;
-  @column() post_count?: number;
+  @column.number() id?: number;
+  @column.text() name?: string;
+  @column.number() post_count?: number;
 
   static QUERY = `
     SELECT
@@ -388,8 +386,8 @@ for (const d of dialects) {
       expect(remaining.length).toBe(2);
     });
 
-    // ---------------------------------------------------------------- bare @column() read contract
-    it('README §Column Decorators — the BARE @column() read contract holds live (string→string, number→number, boolean→boolean, Date column)', async () => {
+    // ------------------------------------------------------------ the declared read contract
+    it('README §Column Decorators — the declared read contract holds live (string→string, number→number, boolean→boolean, datetime column)', async () => {
       await DBModel.transaction(async () =>
         User.create(
           [[User.name, 'Alice'], [User.email, 'alice@example.com'], [User.is_active, true]],
@@ -397,7 +395,7 @@ for (const d of dialects) {
         ),
       );
       const [u] = await User.find([[User.email, 'alice@example.com']]);
-      // README auto-inferred types: name/email string, id number, is_active boolean
+      // README declared types: name/email text, id number, is_active boolean
       expect(typeof u.id).toBe('number');
       expect(typeof u.name).toBe('string');
       expect(u.name).toBe('Alice');
@@ -418,8 +416,16 @@ for (const d of dialects) {
       // README: @column.date() returns a string 'YYYY-MM-DD'
       expect(typeof e.birth_date).toBe('string');
       expect(e.birth_date).toBe('1990-06-15');
-      // README: @column.datetime() is a datetime column (v2 read materializes to a TZ-attached string)
-      expect(String(e.updated_at)).toMatch(/^\d{4}-\d{2}-\d{2}/);
+      // README: @column.datetime() reads back a TZ-attached STRING, not a Date. Assert the TYPE, not
+      // just its rendering — `String(aDate)` also starts with a date, which is how a `Date` return
+      // slipped past this gate while the README promised one.
+      expect(typeof e.updated_at).toBe('string');
+      expect(e.updated_at).not.toBeInstanceOf(Date);
+      // README: the string is the COLUMN's own textual form. `rc_events.updated_at` is declared
+      // `TIMESTAMP` (no time zone) on every dialect here, so it carries no offset — which is exactly
+      // why the README tells you to declare `timestamptz` when the value is an instant.
+      expect(e.updated_at).toMatch(/^2024-06-15[ T]\d{2}:30:00/);
+      expect(e.updated_at).not.toMatch(/[+-]\d{2}(:?\d{2})?$/);
     });
 
     it('README §Date Utility Functions — formatLocalDate / formatUTCDate return YYYY-MM-DD', () => {

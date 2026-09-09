@@ -5,10 +5,8 @@
  * the endpoints name model columns, relations and parameters. Everything the generated modules execute
  * is derived from exactly this by `emitBehaviorModule`.
  *
- * Note: vitest (esbuild) does not support `emitDecoratorMetadata`, so a bare `@column()` carries no
- * `design:type` and takes the documented `DEFAULT_UNCAST_SQL_TYPE` (INTEGER); the text columns are
- * pinned through the adapter's `columnTypes` escape hatch ({@link EMIT_COLUMN_OPTIONS}) exactly as the
- * decorator-adapter tests do.
+ * Every column DECLARES its type with a `@column.*` family, so these models lower identically under
+ * every toolchain — nothing here depends on compiler-emitted metadata.
  */
 
 import type { ColumnsOf } from '../../src';
@@ -22,8 +20,8 @@ export class User {
   // `@column` installs a STATIC accessor per column at runtime; this names its TYPE so a
   // static reference (User.id) is CHECKED instead of resolving to an implicit any.
   declare static id: ColumnsOf<User>['id'];
-  @column() id?: number;
-  @column() name?: string;
+  @column.number() id?: number;
+  @column.text() name?: string;
 
   @hasMany(() => [User.id, Post.author_id], { order: () => Post.id.asc() })
   declare posts: Promise<Post[]>;
@@ -36,9 +34,9 @@ export class Post {
   declare static id: ColumnsOf<Post>['id'];
   declare static author_id: ColumnsOf<Post>['author_id'];
   declare static title: ColumnsOf<Post>['title'];
-  @column() id?: number;
-  @column() author_id?: number;
-  @column() title?: string;
+  @column.number() id?: number;
+  @column.number() author_id?: number;
+  @column.text() title?: string;
 
   @hasMany(() => [Post.id, Comment.post_id], { order: () => Comment.id.asc() })
   declare comments: Promise<Comment[]>;
@@ -54,9 +52,9 @@ export class Comment {
   declare static id: ColumnsOf<Comment>['id'];
   declare static post_id: ColumnsOf<Comment>['post_id'];
   declare static body: ColumnsOf<Comment>['body'];
-  @column() id?: number;
-  @column() post_id?: number;
-  @column() body?: string;
+  @column.number() id?: number;
+  @column.number() post_id?: number;
+  @column.text() body?: string;
 }
 
 /** Composite-key models — the two-column relation key path. */
@@ -66,9 +64,9 @@ export class TenantUser {
   // static reference (TenantUser.tenant_id) is CHECKED instead of resolving to an implicit any.
   declare static tenant_id: ColumnsOf<TenantUser>['tenant_id'];
   declare static user_id: ColumnsOf<TenantUser>['user_id'];
-  @column() tenant_id?: number;
-  @column() user_id?: number;
-  @column() name?: string;
+  @column.number() tenant_id?: number;
+  @column.number() user_id?: number;
+  @column.text() name?: string;
 
   @hasMany(
     () => [
@@ -87,9 +85,9 @@ export class TenantPost {
   declare static tenant_id: ColumnsOf<TenantPost>['tenant_id'];
   declare static user_id: ColumnsOf<TenantPost>['user_id'];
   declare static title: ColumnsOf<TenantPost>['title'];
-  @column() tenant_id?: number;
-  @column() user_id?: number;
-  @column() title?: string;
+  @column.number() tenant_id?: number;
+  @column.number() user_id?: number;
+  @column.text() title?: string;
 }
 
 // ── The TWO-CONNECTION model set (#217 named-DB routing) ────────────────────────────────────────
@@ -112,8 +110,8 @@ export class NamedUser {
   // `@column` installs a STATIC accessor per column at runtime; this names its TYPE so a
   // static reference (NamedUser.id) is CHECKED instead of resolving to an implicit any.
   declare static id: ColumnsOf<NamedUser>['id'];
-  @column() id?: number;
-  @column() name?: string;
+  @column.number() id?: number;
+  @column.text() name?: string;
 }
 
 @model('scp217_posts')
@@ -123,9 +121,9 @@ export class NamedPost {
   declare static id: ColumnsOf<NamedPost>['id'];
   declare static author_id: ColumnsOf<NamedPost>['author_id'];
   declare static title: ColumnsOf<NamedPost>['title'];
-  @column() id?: number;
-  @column() author_id?: number;
-  @column() title?: string;
+  @column.number() id?: number;
+  @column.number() author_id?: number;
+  @column.text() title?: string;
 
   /** CROSS-DB: the target model lives in `analytics`, this one in the default connection. */
   @belongsTo(() => [NamedPost.author_id, NamedUser.id])
@@ -157,8 +155,8 @@ const REGISTRY: Record<string, unknown> = { User, Post, Comment, TenantUser, Ten
 /** Model NAME → class, as `relationDeclOf` resolves a relation's target. */
 export const emitModels = (name: string): ModelClassLike => REGISTRY[name] as ModelClassLike;
 
-/** The TEXT columns, pinned (no `emitDecoratorMetadata` under vitest — see the module note). */
-export const EMIT_COLUMN_OPTIONS: DeriveColumnsOptions = { columnTypes: { name: 'TEXT', title: 'TEXT', body: 'TEXT' } };
+/** No column needs pinning: every one declares its SQL type through its `@column.*` family. */
+export const EMIT_COLUMN_OPTIONS: DeriveColumnsOptions = { columnTypes: {} };
 
 /**
  * The declared endpoints. Read / relation graph / IN-list / SKIP / EXISTS+parentRef / QUERY view /

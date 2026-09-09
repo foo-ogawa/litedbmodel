@@ -3,7 +3,7 @@
 A detailed comparison of litedbmodel with popular TypeScript/JavaScript ORMs.
 
 <!--@embedoc:package_version label="Benchmark figures"-->
-**Benchmark figures:** litedbmodel **2.2.6**
+**Benchmark figures:** litedbmodel **2.2.7**
 <!--@embedoc:end-->
 
 > The only performance number on this page is the machine-computed win count below; the full
@@ -109,9 +109,9 @@ const stats = await User.query(`
 // Schema: TypeScript decorators
 @model('users')
 class UserModel extends DBModel {
-  @column() id?: number;
-  @column() name?: string;
-  @column() created_at?: Date;  // Auto-inferred from Date type
+  @column.number() id?: number;
+  @column.text() name?: string;
+  @column.datetime() created_at?: string;  // Auto-inferred from Date type
 }
 
 // Migrations: Manual SQL files
@@ -632,8 +632,8 @@ await userRepository.save(user);
 ```typescript
 @model('posts')
 class PostModel extends DBModel {
-  @column() id?: number;
-  @column() author_id?: number;
+  @column.number() id?: number;
+  @column.number() author_id?: number;
 
   @belongsTo(() => [Post.author_id, User.id])
   declare author: Promise<User | null>;

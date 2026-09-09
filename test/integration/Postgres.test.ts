@@ -15,14 +15,14 @@ import { User, PostTag, testConfig, cleanup } from '../helpers/setup';
 // Define a model for all types testing (outside describe block for decorator support)
 @model('all_types_test')
 class AllTypesModel extends DBModel {
-  @column() id?: number;
-  @column() int_val?: number | null;
-  @column() float_val?: number | null;
+  @column.number() id?: number;
+  @column.number() int_val?: number | null;
+  @column.number() float_val?: number | null;
   @column.boolean() bool_val?: boolean | null;
-  @column() text_val?: string | null;
-  @column() varchar_val?: string | null;
-  @column.datetime() timestamp_val?: Date | null;
-  @column.date() date_val?: Date | null;  // Changed to use @column.date() for proper type casting
+  @column.text() text_val?: string | null;
+  @column.text() varchar_val?: string | null;
+  @column.datetime() timestamp_val?: string | null;
+  @column.date() date_val?: string | null;  // Changed to use @column.date() for proper type casting
   @column.intArray() int_array?: number[];
   @column.stringArray() text_array?: string[];
   @column.booleanArray() bool_array?: (boolean | null)[];
@@ -31,13 +31,11 @@ class AllTypesModel extends DBModel {
 }
 const AllTypes = AllTypesModel as typeof AllTypesModel & ColumnsOf<AllTypesModel>;
 
-// Model for testing @column() with Date auto-inference
-// Note: Uses @column.datetime() explicitly because esbuild/vitest doesn't support emitDecoratorMetadata
-// In production with tsc, plain @column() would work via auto-inference
+// Model for testing the @column.datetime() read contract
 @model('auto_date_test')
 class AutoDateModel extends DBModel {
-  @column() id?: number;
-  @column.datetime() created_at?: Date | null;  // Use explicit decorator for test compatibility
+  @column.number() id?: number;
+  @column.datetime() created_at?: string | null;  // Use explicit decorator for test compatibility
 }
 const AutoDate = AutoDateModel as typeof AutoDateModel & ColumnsOf<AutoDateModel>;
 
@@ -650,7 +648,7 @@ describe.skipIf(skipIntegrationTests)('DBModel advanced operations', () => {
       const found = await AllTypes.findOne([[AllTypes.id, createdId]]);
       expect(found).not.toBeNull();
       expect(found!.id).toBeDefined();
-      expect(found!.int_val).toBe(42n); // v2: INTEGER → BigInt (bc int model); float stays number
+      expect(found!.int_val).toBe(42); // @column.number() declares the column → JS number (driver plane still BigInt)
       expect(found!.float_val).toBeCloseTo(3.14159, 4);
       expect(found!.bool_val).toBe(true);
       expect(found!.text_val).toBe('long text content');
@@ -769,7 +767,7 @@ describe.skipIf(skipIntegrationTests)('DBModel advanced operations', () => {
       // Find and verify updated values
       const found = await AllTypes.findOne([[AllTypes.id, createdId]]);
       expect(found).not.toBeNull();
-      expect(found!.int_val).toBe(99n); // v2: INTEGER → BigInt
+      expect(found!.int_val).toBe(99); // @column.number() declares the column → JS number (driver plane still BigInt)
       expect(found!.float_val).toBeCloseTo(9.99, 2);
       expect(found!.bool_val).toBe(true);
       expect(found!.text_val).toBe('updated text');
@@ -801,7 +799,7 @@ describe.skipIf(skipIntegrationTests)('DBModel advanced operations', () => {
       // Find and verify
       const found = await AllTypes.findOne([[AllTypes.id, createdId]]);
       expect(found).not.toBeNull();
-      expect(found!.int_val).toBe(0n); // v2: INTEGER → BigInt
+      expect(found!.int_val).toBe(0); // @column.number() declares the column → JS number (driver plane still BigInt)
       expect(found!.float_val).toBe(0);
       expect(found!.bool_val).toBe(false);
       expect(found!.text_val).toBe('');
@@ -937,7 +935,7 @@ describe.skipIf(skipIntegrationTests)('DBModel advanced operations', () => {
 
       // Verify row 2 (mix)
       const row2 = records.find(r => r.id === ids[1])!;
-      expect(row2.int_val).toBe(42n); // v2: INTEGER → BigInt
+      expect(row2.int_val).toBe(42); // @column.number() declares the column → JS number (driver plane still BigInt)
       expect(row2.float_val).toBeNull();
       expect(row2.bool_val).toBe(true);
       expect(row2.text_val).toBeNull();
@@ -947,7 +945,7 @@ describe.skipIf(skipIntegrationTests)('DBModel advanced operations', () => {
 
       // Verify row 3 (date/datetime nulls)
       const row3 = records.find(r => r.id === ids[2])!;
-      expect(row3.int_val).toBe(100n); // v2: INTEGER → BigInt
+      expect(row3.int_val).toBe(100); // @column.number() declares the column → JS number (driver plane still BigInt)
       expect(row3.timestamp_val).toBeNull();
       expect(row3.date_val).toBeNull();
     });
@@ -970,7 +968,7 @@ describe.skipIf(skipIntegrationTests)('DBModel advanced operations', () => {
 
       // Verify initial values
       const initial = await AllTypes.findOne([[AllTypes.id, id]]);
-      expect(initial!.int_val).toBe(10n); // v2: INTEGER → BigInt
+      expect(initial!.int_val).toBe(10); // @column.number() declares the column → JS number (driver plane still BigInt)
       expect(typeof initial!.timestamp_val).toBe('string'); // v2 read contract (issue #9): date → string
       expect(typeof initial!.date_val).toBe('string');
 
@@ -1119,9 +1117,9 @@ describe.skipIf(skipIntegrationTests)('DBModel advanced operations', () => {
     });
   });
 
-  describe('Auto-inferred Date with @column()', () => {
+  describe('@column.datetime() read contract', () => {
     // Note: AutoDateModel is defined at file top level for decorator metadata support
-    // In production with tsc, plain @column() works via auto-inference from Date type
+
 
     beforeAll(async () => {
       await DBModel.execute(`
@@ -1152,7 +1150,7 @@ describe.skipIf(skipIntegrationTests)('DBModel advanced operations', () => {
       // Find and verify timezone is preserved
       const found = await AutoDate.findOne([[AutoDate.id, createdId]]);
       expect(found).not.toBeNull();
-      // v2 read contract (issue #9): auto-inferred Date column → TZ-attached string; parse back.
+      // v2 read contract (issue #9): a datetime column → TZ-attached string; parse back.
       expect(typeof found!.created_at).toBe('string');
       expect(new Date(found!.created_at as unknown as string).toISOString()).toBe(testDate.toISOString());
     });

@@ -15,14 +15,14 @@ import * as path from 'path';
 // Define a model for all types testing (outside describe block for decorator support)
 @model('all_types_test')
 class SqliteAllTypesModel extends DBModel {
-  @column() id?: number;
-  @column() int_val?: number | null;
-  @column() float_val?: number | null;
+  @column.number() id?: number;
+  @column.number() int_val?: number | null;
+  @column.number() float_val?: number | null;
   @column.boolean() bool_val?: boolean | null;
-  @column() text_val?: string | null;
-  @column() varchar_val?: string | null;
-  @column.datetime() timestamp_val?: Date | null;
-  @column() date_val?: string | null;
+  @column.text() text_val?: string | null;
+  @column.text() varchar_val?: string | null;
+  @column.datetime() timestamp_val?: string | null;
+  @column.text() date_val?: string | null;
   @column.json() json_val?: Record<string, unknown> | unknown[] | null;
 }
 const SqliteAllTypes = SqliteAllTypesModel as typeof SqliteAllTypesModel & ColumnsOf<SqliteAllTypesModel>;
@@ -44,11 +44,11 @@ const testConfig: DBConfig = {
 
 @model('users')
 class User extends DBModel {
-  @column() id?: number;
-  @column() name?: string;
-  @column() email?: string;
-  @column() is_active?: boolean;
-  @column() created_at?: string;
+  @column.number() id?: number;
+  @column.text() name?: string;
+  @column.text() email?: string;
+  @column.boolean() is_active?: boolean;
+  @column.text() created_at?: string;
 }
 
 // Cast to include column properties
@@ -56,11 +56,11 @@ const UserModel = User as typeof User & ColumnsOf<User>;
 
 @model('posts')
 class Post extends DBModel {
-  @column() id?: number;
-  @column() user_id?: number;
-  @column() title?: string;
-  @column() content?: string;
-  @column() published?: boolean;
+  @column.number() id?: number;
+  @column.number() user_id?: number;
+  @column.text() title?: string;
+  @column.text() content?: string;
+  @column.boolean() published?: boolean;
 }
 
 const PostModel = Post as typeof Post & ColumnsOf<Post>;
@@ -715,18 +715,18 @@ describe('SQLite Driver', () => {
     // Model with hasMany relation and limit
     @model('posts')
     class SqlitePostModel extends DBModel {
-      @column() id?: number;
-      @column() user_id?: number;
-      @column() title?: string;
-      @column() content?: string;
+      @column.number() id?: number;
+      @column.number() user_id?: number;
+      @column.text() title?: string;
+      @column.text() content?: string;
     }
     const SqlitePost = SqlitePostModel as typeof SqlitePostModel & ColumnsOf<SqlitePostModel>;
 
     @model('users')
     class SqliteUserWithPostsModel extends DBModel {
-      @column() id?: number;
-      @column() name?: string;
-      @column() email?: string;
+      @column.number() id?: number;
+      @column.text() name?: string;
+      @column.text() email?: string;
 
       @hasMany(() => [SqliteUserWithPosts.id, SqlitePost.user_id], {
         limit: 2,
@@ -872,18 +872,18 @@ describe('SQLite Driver', () => {
     // Define models for composite key
     @model('tenant_posts')
     class SqliteTenantPostModel extends DBModel {
-      @column() tenant_id?: number;
-      @column() id?: number;
-      @column() user_id?: number;
-      @column() title?: string;
+      @column.number() tenant_id?: number;
+      @column.number() id?: number;
+      @column.number() user_id?: number;
+      @column.text() title?: string;
     }
     const SqliteTenantPost = SqliteTenantPostModel as typeof SqliteTenantPostModel & ColumnsOf<SqliteTenantPostModel>;
 
     @model('tenant_users')
     class SqliteTenantUserModel extends DBModel {
-      @column() tenant_id?: number;
-      @column() id?: number;
-      @column() name?: string;
+      @column.number() tenant_id?: number;
+      @column.number() id?: number;
+      @column.text() name?: string;
 
       @hasMany(() => [
         [SqliteTenantUser.tenant_id, SqliteTenantPost.tenant_id],

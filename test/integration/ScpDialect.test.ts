@@ -104,26 +104,26 @@ const REPO_ROOT = resolve(__dirname, '../..');
 // ── #153 / #46 — the DECORATED models + DECLARED IN-list endpoints the emitter lowers ────────────
 //
 // This is the whole ORM-side input: metadata collectors and endpoint declarations, no SQL. vitest
-// (esbuild) has no `emitDecoratorMetadata`, so a bare `@column()` carries no `design:type` and the
+// The column's SQL type comes from the family it declares, and the
 // non-INTEGER columns are pinned through the adapter's documented `columnTypes` escape hatch.
 
 @model(T_POSTS)
 class ScpPost {
-  @column() id?: number;
-  @column() user_id?: number;
-  @column() title?: string;
-  @column() view_count?: number;
-  @column() guid?: string;
+  @column.number() id?: number;
+  @column.number() user_id?: number;
+  @column.text() title?: string;
+  @column.number() view_count?: number;
+  @column.text() guid?: string;
 }
 
 @model(T_TYPED)
 class ScpTyped {
-  @column() big?: number;
-  @column() txt?: string;
-  @column() flag?: boolean;
-  @column() ts?: string;
-  @column() amt?: string;
-  @column() label?: string;
+  @column.number() big?: number;
+  @column.text() txt?: string;
+  @column.boolean() flag?: boolean;
+  @column.text() ts?: string;
+  @column.text() amt?: string;
+  @column.text() label?: string;
 }
 
 const IN_LIST_MODELS: Record<string, never> = { ScpPost, ScpTyped } as unknown as Record<string, never>;

@@ -36,16 +36,16 @@ const skipIntegrationTests = process.env.SKIP_INTEGRATION_TESTS === '1';
 
 @model('users')
 class UserModel extends DBModel {
-  @column() id?: number;
-  @column() name?: string;
-  @column() email?: string;
+  @column.number() id?: number;
+  @column.text() name?: string;
+  @column.text() email?: string;
   @column.boolean() is_active?: boolean;
-  @column() role?: string;
+  @column.text() role?: string;
   @column.stringArray() tags?: string[];
   @column.json<Record<string, unknown>>() metadata?: Record<string, unknown>;
-  @column.datetime() created_at?: Date;
-  @column.datetime() updated_at?: Date;
-  @column.datetime() deleted_at?: Date | null;
+  @column.datetime() created_at?: string;
+  @column.datetime() updated_at?: string;
+  @column.datetime() deleted_at?: string | null;
 }
 const User = UserModel as typeof UserModel & ColumnsOf<UserModel>;
 
@@ -55,9 +55,9 @@ const User = UserModel as typeof UserModel & ColumnsOf<UserModel>;
 
 @model('post_tags')
 class PostTagModel extends DBModel {
-  @column({ primaryKey: true }) post_id?: number;
-  @column({ primaryKey: true }) tag_id?: number;
-  @column.datetime() created_at?: Date;
+  @column.number({ primaryKey: true }) post_id?: number;
+  @column.number({ primaryKey: true }) tag_id?: number;
+  @column.datetime() created_at?: string;
 }
 const PostTag = PostTagModel as typeof PostTagModel & ColumnsOf<PostTagModel>;
 

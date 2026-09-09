@@ -177,174 +177,152 @@ export interface RelationMeta {
 }
 
 // ============================================
-// Internal Helper
+// Decorator Protocol Adapter (legacy + TC39 standard)
 // ============================================
 
-/** Result of type inference from design:type metadata */
-interface InferredTypeInfo {
-  typeCast: TypeCastFn;
-  serialize?: SerializeFn;
-  sqlCast?: string;
+/**
+ * TC39 (standard) decorators carry NO `design:type`: `emitDecoratorMetadata` is a legacy-decorator
+ * feature, and esbuild — which powers `tsx`, `vite` and `vitest` — does not implement it even for
+ * legacy decorators. A column's type is therefore declared by its `@column.*` FAMILY, which is the
+ * single source of truth on every toolchain (`.text()` / `.number()` / `.datetime()` / …). The bare
+ * `@column()` carries no type and is rejected at decoration time — see {@link requireColumnFamily}.
+ *
+ * Standard decorators reach the class through `context.metadata`: the SAME object is handed to every
+ * member decorator of a class and then to the class decorator, in that order. TypeScript only creates
+ * it when `Symbol.metadata` exists (esbuild always creates it), so the polyfill below — the one the
+ * TC39 proposal prescribes — makes the two emits behave identically.
+ */
+if (typeof Symbol === 'function' && !(Symbol as { metadata?: symbol }).metadata) {
+  Object.defineProperty(Symbol, 'metadata', {
+    value: Symbol.for('Symbol.metadata'),
+    writable: false,
+    enumerable: false,
+    configurable: false,
+  });
+}
+
+/** The TC39 metadata bag, keyed by our own symbols. @internal */
+type MetadataBag = Record<PropertyKey, unknown>;
+
+/**
+ * The subset of a TC39 `ClassFieldDecoratorContext` / `ClassDecoratorContext` this module reads.
+ * `metadata` is optional in the type only to keep the runtime guard honest — a missing bag THROWS
+ * ({@link classMetadataBag}) rather than registering a column nowhere.
+ * @internal
+ */
+export interface StandardDecoratorContext {
+  readonly kind: string;
+  readonly name?: string | symbol;
+  readonly metadata?: MetadataBag;
+  addInitializer?(initializer: (this: unknown) => void): void;
 }
 
 /**
- * Infer type cast function from design:type metadata
- * Returns undefined if type cannot be inferred (Array, Object, etc.)
- * Note: All type casts preserve null (DB NULL -> JS null)
+ * Which decorator protocol a decorator was invoked under. Legacy passes `(prototype, propertyKey)`;
+ * standard passes `(value, context)` where `context.kind` names the member being decorated. The
+ * `kind` probe is the discriminator both emits guarantee.
+ * @internal
  */
-function inferTypeCastFromDesignType(
-  target: object,
-  propertyKey: string
-): InferredTypeInfo | undefined {
-  const designType = Reflect.getMetadata('design:type', target, propertyKey);
-  
-  if (!designType) return undefined;
-  
-  switch (designType) {
-    case Boolean:
-      return {
-        // v2 read contract: BOOLEAN → boolean, via the shared materializer.
-        typeCast: (v) => {
-          if (v === undefined) return undefined;
-          return materializeCell(v, 'bool');
-        },
-        sqlCast: 'boolean',
-      };
-    case Date:
-      // Auto-inferred Date: same behavior as @column.datetime() — v2 read contract materializes the
-      // date family to a TZ-attached STRING (NOT a TZ-shifted JS Date), via the shared materializer.
-      return {
-        typeCast: (v) => {
-          if (v === undefined) return undefined;
-          return materializeCell(v, 'date');
-        },
-        // Delegate to driver-specific serializeDatetime
-        serialize: (val, typeCast) => {
-          if (val === null || val === undefined) return null;
-          if (val instanceof Date) {
-            return typeCast?.serializeDatetime(val) ?? val;
-          }
-          return val;
-        },
-        sqlCast: 'timestamp',
-      };
-    case Number:
-      return {
-        typeCast: (v) => {
-          if (v === undefined) return undefined;
-          if (v === null) return null;
-          const n = Number(v);
-          return isNaN(n) ? null : n;
-        },
-      };
-    case BigInt:
-      return {
-        // v2 read contract: BIGINT/INT8 → EXACT decimal STRING (no i64 rounding, JSON-safe), via the
-        // shared materializer. NOTE: the TS field type stays `bigint` in existing models for source
-        // compat, but the VALUE is now the exact string — the whole point of the #9 realignment.
-        typeCast: (v) => {
-          if (v === undefined) return undefined;
-          return materializeCell(v, 'int64');
-        },
-        sqlCast: 'bigint',
-      };
-    // Array, Object, String, and other types require explicit specification
-    default:
-      return undefined;
-  }
+function isStandardContext(second: unknown): second is StandardDecoratorContext {
+  return typeof second === 'object' && second !== null && typeof (second as { kind?: unknown }).kind === 'string';
 }
 
 /**
- * Derive the §4.1 SQL-type token from a field's TS `design:type` (Phase F-2 / #105 option B), for a
- * column with NO explicit `sqlCast` family. This types the SCP typed-read de-box for a bare `@column()`
- * (the README shape) — extending the SAME `design:type` source `inferTypeCastFromDesignType` reads for
- * the read cast, so it stays consistent with v1's read contract (String→TEXT→string, Number→INTEGER→
- * number, Boolean→BOOLEAN, Date→TIMESTAMP, BigInt→BIGINT). Returns `undefined` when `design:type` is
- * absent (no `emitDecoratorMetadata`) or is a family with no unambiguous SQL type (Array/Object) — the
- * adapter then falls back to its documented default / the `columnTypes` escape hatch (REAL/DECIMAL/etc.).
+ * The TC39 metadata bag of the class currently being defined. Fail-closed: a toolchain that hands a
+ * decorator no bag cannot register a column at all, and silently dropping it is exactly the class of
+ * defect this file is being repaired for (issue #287) — so it throws, naming the cause.
  */
-function inferBaseSqlTypeFromDesignType(target: object, propertyKey: string): string | undefined {
-  const designType = Reflect.getMetadata('design:type', target, propertyKey);
-  if (!designType) return undefined;
-  switch (designType) {
-    case String:
-      return 'TEXT';
-    case Number:
-      return 'INTEGER';
-    case Boolean:
-      return 'BOOLEAN';
-    case Date:
-      return 'TIMESTAMP';
-    case BigInt:
-      return 'BIGINT';
-    default:
-      // Array / Object / unknown — no unambiguous scalar SQL type. The adapter's escape hatch pins it.
-      return undefined;
+function classMetadataBag(context: StandardDecoratorContext, propertyKey: string): MetadataBag {
+  const bag = context.metadata;
+  if (bag === undefined) {
+    throw new Error(
+      `litedbmodel: the standard-decorator context for '${propertyKey}' carries no \`context.metadata\`. ` +
+        `litedbmodel defines \`Symbol.metadata\` on import, which every current emit needs to create the ` +
+        `bag — import litedbmodel (or 'litedbmodel/decorators') BEFORE the module that defines the model.`,
+    );
   }
+  return bag;
 }
 
-/** Options for registerColumn */
+/**
+ * The COLUMN map a decorator registers into, per protocol.
+ *
+ * A subclass must NOT write into the map it INHERITS: `Reflect.getMetadata` walks the prototype chain
+ * (and a TC39 metadata bag prototype-chains by construction), so mutating the value it returns leaks a
+ * subclass's columns into its base — and from there into every SIBLING subclass that extends the same
+ * decorated base. Both resolvers therefore COPY the inherited map on first write and own the copy.
+ */
+function legacyColumnMap(constructor: object): Map<string, ColumnMeta> {
+  const own = Reflect.getOwnMetadata(COLUMNS_KEY, constructor) as Map<string, ColumnMeta> | undefined;
+  if (own !== undefined) return own;
+  const inherited = Reflect.getMetadata(COLUMNS_KEY, constructor) as Map<string, ColumnMeta> | undefined;
+  const map = new Map(inherited);
+  Reflect.defineMetadata(COLUMNS_KEY, map, constructor);
+  return map;
+}
+
+/** @see legacyColumnMap */
+function standardColumnMap(bag: MetadataBag): Map<string, ColumnMeta> {
+  if (!Object.prototype.hasOwnProperty.call(bag, COLUMNS_KEY)) {
+    bag[COLUMNS_KEY] = new Map(bag[COLUMNS_KEY] as Map<string, ColumnMeta> | undefined);
+  }
+  return bag[COLUMNS_KEY] as Map<string, ColumnMeta>;
+}
+
+/** The RELATION list a decorator registers into. Copy-on-inherit, exactly as the column map. */
+function legacyRelationList(constructor: object): RelationMeta[] {
+  const own = Reflect.getOwnMetadata(RELATIONS_KEY, constructor) as RelationMeta[] | undefined;
+  if (own !== undefined) return own;
+  const inherited = Reflect.getMetadata(RELATIONS_KEY, constructor) as RelationMeta[] | undefined;
+  const list = inherited !== undefined ? [...inherited] : [];
+  Reflect.defineMetadata(RELATIONS_KEY, list, constructor);
+  return list;
+}
+
+/** @see legacyRelationList */
+function standardRelationList(bag: MetadataBag): RelationMeta[] {
+  if (!Object.prototype.hasOwnProperty.call(bag, RELATIONS_KEY)) {
+    const inherited = bag[RELATIONS_KEY] as RelationMeta[] | undefined;
+    bag[RELATIONS_KEY] = inherited !== undefined ? [...inherited] : [];
+  }
+  return bag[RELATIONS_KEY] as RelationMeta[];
+}
+
+/** Options for {@link registerColumn} — the family's own declaration of the column's type. */
 interface RegisterColumnOptions {
   columnName: string;
   typeCast?: TypeCastFn;
   serialize?: SerializeFn;
-  skipAutoInfer?: boolean;
   primaryKey?: boolean;
   autoIncrement?: boolean;
   /** SQL type for automatic casting in conditions (e.g., 'uuid') */
   sqlCast?: string;
+  /** §4.1 SQL-type token for a family that needs no cast but still types the SCP read (`TEXT`). */
+  baseSqlType?: string;
 }
 
 /**
- * Register column metadata on the model class
+ * Record one column on the class being defined. The ONE place a `@column.*` family lands, for both
+ * decorator protocols — the protocol only decides WHICH map is handed in ({@link legacyColumnMap} /
+ * {@link standardColumnMap}).
  */
 function registerColumn(
-  target: object,
+  columns: Map<string, ColumnMeta>,
   propertyKey: string,
   options: RegisterColumnOptions
 ): void {
-  const constructor = target.constructor;
-
-  // Get or create columns map
-  const columns: Map<string, ColumnMeta> =
-    Reflect.getMetadata(COLUMNS_KEY, constructor) || new Map();
-
-  // Auto-infer type info if not explicitly provided
-  let finalTypeCast = options.typeCast;
-  let finalSerialize = options.serialize;
-  let finalSqlCast = options.sqlCast;
-  
-  if (!options.skipAutoInfer) {
-    const inferred = inferTypeCastFromDesignType(target, propertyKey);
-    if (inferred) {
-      // Use inferred values only if not explicitly provided
-      if (!finalTypeCast) finalTypeCast = inferred.typeCast;
-      if (!finalSerialize) finalSerialize = inferred.serialize;
-      if (!finalSqlCast) finalSqlCast = inferred.sqlCast;
-    }
-  }
-
-  // Phase F-2 (#105 option B): record the base SQL-type token from the field's TS `design:type` so the
-  // SCP typed-read de-box can type a bare `@column()` (no explicit sqlCast family) correctly — the fix
-  // for F1's blanket-INTEGER default (which threw `materialize int32` on a live string column). Recorded
-  // always (independent of the auto-infer skip / explicit sqlCast); the adapter consults it only when
-  // there is no explicit `sqlCast` family and no `columnTypes` override.
-  const baseSqlType = inferBaseSqlTypeFromDesignType(target, propertyKey);
-
   columns.set(propertyKey, {
     columnName: options.columnName,
-    typeCast: finalTypeCast,
-    serialize: finalSerialize,
+    typeCast: options.typeCast,
+    serialize: options.serialize,
     primaryKey: options.primaryKey,
     autoIncrement: options.autoIncrement,
-    sqlCast: finalSqlCast,
-    ...(baseSqlType !== undefined ? { baseSqlType } : {}),
+    sqlCast: options.sqlCast,
+    ...(options.baseSqlType !== undefined ? { baseSqlType: options.baseSqlType } : {}),
   });
-
-  Reflect.defineMetadata(COLUMNS_KEY, columns, constructor);
 }
 
-/** Options that can be passed to @column decorator */
+/** Options that can be passed to any `@column.*` decorator */
 export interface ColumnOptions {
   /** Custom column name (defaults to property name) */
   columnName?: string;
@@ -359,50 +337,98 @@ export interface ColumnOptions {
 }
 
 /**
- * Create a column decorator with optional type cast and serialize
+ * What a `@column.*` decorator may be applied to, under EITHER protocol.
+ *
+ * The standard-decorator overload is typed: `Value` is the decorated field's declared TS type, so a
+ * family whose read contract yields a `string` (`@column.datetime()`, `@column.bigint()`, …) will not
+ * compile onto a field declared `Date` / `bigint`. That is the compile-time half of the fix for the
+ * "declared type ≠ value `find()` returns" defect (issue #286); the legacy protocol hands decorators
+ * no type information at all, so there it can only be documented.
+ *
+ * @category Decorators
+ */
+export interface ColumnDecorator<Value> {
+  /** Legacy (`experimentalDecorators`) property decorator. */
+  (target: object, propertyKey: string | symbol): void;
+  /** TC39 standard class-field decorator. */
+  <This>(value: undefined, context: ClassFieldDecoratorContext<This, Value>): void;
+}
+
+/** What a relation decorator may be applied to, under either protocol. @category Decorators */
+export interface RelationDecorator<Value> {
+  (target: object, propertyKey: string | symbol): void;
+  <This>(value: undefined, context: ClassFieldDecoratorContext<This, Value>): void;
+}
+
+/** Parse the `columnName | ColumnOptions` argument every family accepts. */
+function parseColumnOptions(
+  columnNameOrOptions: string | ColumnOptions | undefined,
+  propKey: string
+): { columnName: string; primaryKey?: boolean; autoIncrement?: boolean } {
+  if (typeof columnNameOrOptions === 'string') return { columnName: columnNameOrOptions };
+  if (columnNameOrOptions) {
+    return {
+      columnName: columnNameOrOptions.columnName || propKey,
+      primaryKey: columnNameOrOptions.primaryKey,
+      autoIncrement: columnNameOrOptions.autoIncrement,
+    };
+  }
+  return { columnName: propKey };
+}
+
+/**
+ * Build one `@column.*` family decorator. The returned decorator accepts BOTH protocols: legacy hands
+ * it `(prototype, propertyKey)`, TC39 standard hands it `(undefined, context)`. Everything that
+ * describes the COLUMN (cast, serializer, SQL family) is fixed here by the family itself — nothing is
+ * read back from the compiler, so every toolchain produces the same model.
+ *
  * @param typeCast - Function to convert DB value to JS value (read)
  * @param serialize - Function to convert JS value to DB value (write)
- * @param skipAutoInfer - If true, skip auto-inference even if typeCast is undefined
- * @param sqlCast - SQL type for automatic casting in conditions (e.g., 'uuid')
+ * @param sqlCast - SQL type family for casting in conditions / typed reads (e.g. `'uuid'`)
+ * @param baseSqlType - §4.1 SQL-type token for a family that applies no cast (`@column.text()`)
  */
-function createColumnDecorator(
+function createColumnDecorator<Value = unknown>(
   typeCast?: TypeCastFn,
   serialize?: SerializeFn,
-  skipAutoInfer = false,
-  sqlCast?: string
+  sqlCast?: string,
+  baseSqlType?: string
 ) {
-  return function (columnNameOrOptions?: string | ColumnOptions): PropertyDecorator {
-    return function (target: object, propertyKey: string | symbol) {
-      const propKey = String(propertyKey);
-      // If typeCast is explicitly provided, skip auto-inference
-      const shouldSkipAutoInfer = skipAutoInfer || typeCast !== undefined;
-      
-      // Parse options
-      let columnName: string;
-      let primaryKey: boolean | undefined;
-      let autoIncrement: boolean | undefined;
-
-      if (typeof columnNameOrOptions === 'string') {
-        columnName = columnNameOrOptions;
-      } else if (columnNameOrOptions) {
-        columnName = columnNameOrOptions.columnName || propKey;
-        primaryKey = columnNameOrOptions.primaryKey;
-        autoIncrement = columnNameOrOptions.autoIncrement;
-      } else {
-        columnName = propKey;
+  return function (columnNameOrOptions?: string | ColumnOptions): ColumnDecorator<Value> {
+    return function (targetOrValue: unknown, keyOrContext: unknown): void {
+      if (isStandardContext(keyOrContext)) {
+        const propKey = String(keyOrContext.name);
+        const parsed = parseColumnOptions(columnNameOrOptions, propKey);
+        registerColumn(standardColumnMap(classMetadataBag(keyOrContext, propKey)), propKey, {
+          ...parsed, typeCast, serialize, sqlCast, baseSqlType,
+        });
+        return;
       }
-
-      registerColumn(target, propKey, {
-        columnName,
-        typeCast,
-        serialize,
-        skipAutoInfer: shouldSkipAutoInfer,
-        primaryKey,
-        autoIncrement,
-        sqlCast,
+      const propKey = String(keyOrContext as string | symbol);
+      const parsed = parseColumnOptions(columnNameOrOptions, propKey);
+      registerColumn(legacyColumnMap((targetOrValue as object).constructor), propKey, {
+        ...parsed, typeCast, serialize, sqlCast, baseSqlType,
       });
-    };
+    } as ColumnDecorator<Value>;
   };
+}
+
+/**
+ * The bare `@column()` — REMOVED. It declared no type: it relied on `design:type`, which only exists
+ * under legacy decorators AND `emitDecoratorMetadata`, which esbuild (tsx / vite / vitest) does not
+ * implement and TC39 standard decorators do not have. Where that metadata was absent the column
+ * silently got NO cast and the raw driver value reached the caller — an `integer` read back as a
+ * `bigint`, a `numeric` as a `string` (issue #286). A column states its own type instead.
+ */
+function requireColumnFamily(): never {
+  throw new Error(
+    'litedbmodel: `@column()` no longer declares a column — a column must state its type with a ' +
+      'family: @column.text() / .number() / .boolean() / .bigint() / .datetime() / .date() / .uuid() / ' +
+      '.json() / .stringArray() / .intArray() / .numericArray() / .booleanArray() / .datetimeArray() / ' +
+      '.custom(). Every family takes the same argument as `@column()` did ' +
+      "(`@column.text('db_name')`, `@column.number({ primaryKey: true })`). The bare form inferred the " +
+      'type from `emitDecoratorMetadata`, which esbuild (tsx/vite/vitest) never emits and standard ' +
+      'decorators do not have, so it silently produced untyped reads.',
+  );
 }
 
 // ============================================
@@ -514,12 +540,26 @@ function serializeJson(val: unknown, typeCast?: DriverTypeCast): unknown {
  * @category Decorators
  */
 export const column = Object.assign(
-  // Basic @column() - no type conversion
-  createColumnDecorator(),
+  // The bare `@column()` declared no type — it is rejected, with the migration in the message.
+  (_columnNameOrOptions?: string | ColumnOptions): never => requireColumnFamily(),
   {
     // ============================================
     // Primitive Types
     // ============================================
+
+    /**
+     * Text type (TEXT / VARCHAR / CHAR / ENUM / citext) — the driver value is already a string, so no
+     * cast is applied. The family still DECLARES the column so the typed read types it as `TEXT`.
+     * @example @column.text() name?: string;
+     * @example @column.text('user_name') name?: string;
+     */
+    text: (columnNameOrOptions?: string | ColumnOptions) =>
+      createColumnDecorator<string | null | undefined>(
+        undefined,  // no cast — a TEXT column arrives as a string on every driver
+        undefined,  // no custom serialize
+        undefined,  // no sqlCast family (a text literal needs no SQL cast)
+        'TEXT'      // §4.1 token: types the SCP typed read (what design:type = String used to give)
+      )(columnNameOrOptions),
 
     /**
      * Boolean type conversion
@@ -527,38 +567,37 @@ export const column = Object.assign(
      * Preserves null for nullable columns, undefined stays undefined
      * @example @column.boolean() is_active?: boolean;
      */
-    boolean: (columnName?: string) =>
-      createColumnDecorator(
+    boolean: (columnNameOrOptions?: string | ColumnOptions) =>
+      createColumnDecorator<boolean | null | undefined>(
         // v2 read contract: BOOLEAN → boolean, via the shared materializer (issue #9).
         (v) => {
           if (v === undefined) return undefined;
           return materializeCell(v, 'bool');
         },
         undefined,  // no custom serialize
-        false,      // allow auto-inference
         'boolean'   // sqlCast for updateMany type inference
-      )(columnName),
+      )(columnNameOrOptions),
 
     /**
      * Number type conversion (from string)
      * Preserves null for nullable columns, undefined stays undefined
      * @example @column.number() amount?: number;
      */
-    number: (columnName?: string) =>
-      createColumnDecorator((v) => {
+    number: (columnNameOrOptions?: string | ColumnOptions) =>
+      createColumnDecorator<number | null | undefined>((v) => {
         if (v === undefined) return undefined;
         if (v === null) return null;
         const n = Number(v);
         return isNaN(n) ? null : n;
-      })(columnName),
+      })(columnNameOrOptions),
 
     /**
      * BigInt type conversion
      * Preserves null for nullable columns, undefined stays undefined
-     * @example @column.bigint() large_id?: bigint;
+     * @example @column.bigint() large_id?: string;   // exact decimal string (JSON-safe)
      */
-    bigint: (columnName?: string) =>
-      createColumnDecorator(
+    bigint: (columnNameOrOptions?: string | ColumnOptions) =>
+      createColumnDecorator<string | null | undefined>(
         // v2 read contract: BIGINT/INT8 → EXACT decimal STRING (no i64 rounding, JSON-safe), via the
         // shared materializer (issue #9). The declared TS field type may still be `bigint` in existing
         // models, but the runtime value is now the exact string — that IS the realignment.
@@ -567,9 +606,8 @@ export const column = Object.assign(
           return materializeCell(v, 'int64');
         },
         undefined,  // no custom serialize
-        false,      // allow auto-inference
         'bigint'    // sqlCast for WHERE/INSERT type casting
-      )(columnName),
+      )(columnNameOrOptions),
 
     // ============================================
     // Date/Time Types
@@ -583,10 +621,10 @@ export const column = Object.assign(
      * - PostgreSQL: Serializes to ISO 8601 UTC string with 'Z' suffix for explicit timezone
      * - MySQL/SQLite: Passes Date object to driver (driver-dependent timezone handling)
      * 
-     * @example @column.datetime() created_at?: Date;
+     * @example @column.datetime() created_at?: string;  // TZ-attached string, NOT a JS Date
      */
-    datetime: (columnName?: string) =>
-      createColumnDecorator(
+    datetime: (columnNameOrOptions?: string | ColumnOptions) =>
+      createColumnDecorator<string | null | undefined>(
         // v2 read contract: DATE/TIMESTAMP/TIMESTAMPTZ/DATETIME/TIME → TZ-attached STRING (NOT a
         // TZ-shifted JS Date), via the shared materializer (issue #9). A driver already returning the
         // native textual form passes through; a JS Date is rendered to its lossless ISO instant.
@@ -602,9 +640,8 @@ export const column = Object.assign(
           }
           return val;
         },
-        false,      // allow auto-inference
         'timestamp' // sqlCast for updateMany type inference
-      )(columnName),
+      )(columnNameOrOptions),
 
     /**
      * Date type conversion — returns YYYY-MM-DD string.
@@ -613,10 +650,10 @@ export const column = Object.assign(
      * DB values (Date object or string) are normalized to 'YYYY-MM-DD' string.
      * On write, string values are passed through; Date objects are formatted as 'YYYY-MM-DD'.
      * 
-     * @example @column.date() birth_date?: string;
+     * @example @column.date() birth_date?: string;      // 'YYYY-MM-DD'
      */
-    date: (columnName?: string) =>
-      createColumnDecorator(
+    date: (columnNameOrOptions?: string | ColumnOptions) =>
+      createColumnDecorator<string | null | undefined>(
         (v) => {
           if (v === undefined) return undefined;
           if (v === null) return null;
@@ -641,9 +678,8 @@ export const column = Object.assign(
           }
           return val;
         },
-        false,      // allow auto-inference
         'date'      // sqlCast for updateMany type inference
-      )(columnName),
+      )(columnNameOrOptions),
 
     // ============================================
     // Array Types
@@ -654,76 +690,72 @@ export const column = Object.assign(
      * Preserves null for nullable columns, undefined stays undefined
      * @example @column.stringArray() tags?: string[];
      */
-    stringArray: (columnName?: string) =>
-      createColumnDecorator(
+    stringArray: (columnNameOrOptions?: string | ColumnOptions) =>
+      createColumnDecorator<string[] | null | undefined>(
         (v) => {
           if (v === undefined) return undefined;
           if (v === null) return null;
           return castToStringArray(v);
         },
         serializeArray,
-        false,
         'text[]'
-      )(columnName),
+      )(columnNameOrOptions),
 
     /**
      * Integer array type conversion (integer[])
      * Preserves null for nullable columns, undefined stays undefined
      * @example @column.intArray() scores?: number[];
      */
-    intArray: (columnName?: string) =>
-      createColumnDecorator(
+    intArray: (columnNameOrOptions?: string | ColumnOptions) =>
+      createColumnDecorator<number[] | null | undefined>(
         (v) => {
           if (v === undefined) return undefined;
           if (v === null) return null;
           return castToIntegerArray(v);
         },
         serializeArray,
-        false,
         'int[]'
-      )(columnName),
+      )(columnNameOrOptions),
 
     /**
      * Numeric array type conversion (numeric[], allows null elements)
      * Preserves null for nullable columns, undefined stays undefined
      * @example @column.numericArray() values?: (number | null)[];
      */
-    numericArray: (columnName?: string) =>
-      createColumnDecorator(
+    numericArray: (columnNameOrOptions?: string | ColumnOptions) =>
+      createColumnDecorator<(number | null)[] | null | undefined>(
         (v) => {
           if (v === undefined) return undefined;
           if (v === null) return null;
           return castToNumericArray(v);
         },
         serializeArray,
-        false,
         'numeric[]'
-      )(columnName),
+      )(columnNameOrOptions),
 
     /**
      * Boolean array type conversion (boolean[])
      * Preserves null for nullable columns, undefined stays undefined
      * @example @column.booleanArray() flags?: (boolean | null)[];
      */
-    booleanArray: (columnName?: string) =>
-      createColumnDecorator(
+    booleanArray: (columnNameOrOptions?: string | ColumnOptions) =>
+      createColumnDecorator<(boolean | null)[] | null | undefined>(
         (v) => {
           if (v === undefined) return undefined;
           if (v === null) return null;
           return castToBooleanArray(v);
         },
         serializeBooleanArray,
-        false,
         'boolean[]'
-      )(columnName),
+      )(columnNameOrOptions),
 
     /**
      * DateTime array type conversion (timestamp[])
      * Preserves null for nullable columns, undefined stays undefined
      * @example @column.datetimeArray() event_dates?: (Date | null)[];
      */
-    datetimeArray: (columnName?: string) =>
-      createColumnDecorator(
+    datetimeArray: (columnNameOrOptions?: string | ColumnOptions) =>
+      createColumnDecorator<(Date | null)[] | null | undefined>(
         (v) => {
           if (v === undefined) return undefined;
           if (v === null) return null;
@@ -736,7 +768,7 @@ export const column = Object.assign(
           const mapped = val.map(v => v === null ? 'NULL' : (v instanceof Date ? v.toISOString() : String(v)));
           return `{${mapped.join(',')}}`;
         }
-      )(columnName),
+      )(columnNameOrOptions),
 
     // ============================================
     // JSON Types
@@ -748,17 +780,16 @@ export const column = Object.assign(
      * @example @column.json() metadata?: Record<string, unknown>;
      * @example @column.json<UserSettings>() settings?: UserSettings;
      */
-    json: <T = Record<string, unknown>>(columnName?: string) =>
-      createColumnDecorator(
+    json: <T = Record<string, unknown>>(columnNameOrOptions?: string | ColumnOptions) =>
+      createColumnDecorator<T | null | undefined>(
         (v) => {
           if (v === undefined) return undefined;
           if (v === null) return null;
           return castToJson(v) as T;
         },
         serializeJson,
-        false,
         'jsonb'
-      )(columnName),
+      )(columnNameOrOptions),
 
     // ============================================
     // UUID Type (PostgreSQL)
@@ -784,7 +815,7 @@ export const column = Object.assign(
      * ```
      */
     uuid: (columnNameOrOptions?: string | ColumnOptions) =>
-      createColumnDecorator(
+      createColumnDecorator<string | null | undefined>(
         (v) => {
           if (v === undefined) return undefined;
           if (v === null) return null;
@@ -792,13 +823,22 @@ export const column = Object.assign(
           return String(v);
         },
         undefined,  // No serialization needed - handled by sqlCast
-        true,       // Skip auto-inference
         'uuid'      // SQL type for casting
       )(columnNameOrOptions),
 
     // ============================================
     // Custom Type Conversion
     // ============================================
+
+    /**
+     * The driver's value, UNCAST — for a column whose type the library has no cast for (`BYTEA` /
+     * `BLOB` arrives as a driver Buffer, a vendor type as whatever the driver decodes). It states
+     * "this column is passed through", which is a DECLARATION; the removed bare `@column()` was the
+     * absence of one, and produced this same passthrough by accident for every unresolvable type.
+     * @example @column.passthrough() payload?: unknown;
+     */
+    passthrough: (columnNameOrOptions?: string | ColumnOptions) =>
+      createColumnDecorator<unknown>()(columnNameOrOptions),
 
     /**
      * Custom type conversion with user-provided function
@@ -808,9 +848,9 @@ export const column = Object.assign(
     custom: <T>(
       castFn: (value: unknown) => T,
       serializeFn?: SerializeFn,
-      columnName?: string
+      columnNameOrOptions?: string | ColumnOptions
     ) =>
-      createColumnDecorator(castFn, serializeFn)(columnName),
+      createColumnDecorator<T | null | undefined>(castFn, serializeFn)(columnNameOrOptions),
   }
 );
 
@@ -819,29 +859,48 @@ export const column = Object.assign(
 // ============================================
 
 /**
- * Register relation metadata on the model class
+ * Record one relation on the class being defined — the ONE place `@hasMany` / `@belongsTo` / `@hasOne`
+ * land, for both decorator protocols. The getter itself is installed once, on the prototype, by
+ * {@link applyModelDecorator}; see {@link createRelationDecorator} for why the standard protocol needs
+ * one extra step to let that getter through.
  */
 function registerRelation(
-  target: object,
+  relations: RelationMeta[],
   propertyKey: string,
   type: RelationType,
   keysFactory: KeysFactory,
   options?: RelationDecoratorOptions
 ): void {
-  const constructor = target.constructor;
+  relations.push({ propertyKey, type, keysFactory, options });
+}
 
-  // Get or create relations array
-  const relations: RelationMeta[] =
-    Reflect.getMetadata(RELATIONS_KEY, constructor) || [];
-
-  relations.push({
-    propertyKey,
-    type,
-    keysFactory,
-    options,
-  });
-
-  Reflect.defineMetadata(RELATIONS_KEY, relations, constructor);
+/**
+ * Build a relation decorator that accepts BOTH protocols.
+ *
+ * Under legacy decorators a relation is declared `declare posts: Promise<Post[]>` — `declare` emits no
+ * field, so the prototype getter `@model` installs is what the instance sees. TC39 standard decorators
+ * REJECT a decorated `declare` field (TS1206), so the relation is declared `posts!: Promise<Post[]>`
+ * instead — and a class field IS defined on the instance (as `undefined`), which would SHADOW that
+ * prototype getter. The initializer below deletes the shadowing own property, so both protocols end up
+ * reading the exact same getter; the getter is not duplicated for the standard path.
+ */
+function createRelationDecorator<Value>(
+  type: RelationType,
+  keys: KeysFactory,
+  options?: RelationDecoratorOptions
+): RelationDecorator<Value> {
+  return function (targetOrValue: unknown, keyOrContext: unknown): void {
+    if (isStandardContext(keyOrContext)) {
+      const propKey = String(keyOrContext.name);
+      registerRelation(standardRelationList(classMetadataBag(keyOrContext, propKey)), propKey, type, keys, options);
+      keyOrContext.addInitializer?.(function (this: unknown) {
+        delete (this as Record<string, unknown>)[propKey];
+      });
+      return;
+    }
+    const propKey = String(keyOrContext as string | symbol);
+    registerRelation(legacyRelationList((targetOrValue as object).constructor), propKey, type, keys, options);
+  } as RelationDecorator<Value>;
 }
 
 /**
@@ -853,7 +912,7 @@ function registerRelation(
  *
  * @example
  * ```typescript
- * // Single key relation
+ * // Single key relation (legacy decorators: `declare`; standard decorators: `posts!: …`)
  * @hasMany(() => [User.id, Post.author_id])
  * declare posts: Promise<Post[]>;
  *
@@ -871,16 +930,14 @@ function registerRelation(
  * ])
  * declare posts: Promise<TenantPost[]>;
  * ```
- * 
+ *
  * @category Decorators
  */
-export function hasMany(
+export function hasMany<Value = unknown>(
   keys: KeysFactory,
   options?: RelationDecoratorOptions
-): PropertyDecorator {
-  return function (target: object, propertyKey: string | symbol) {
-    registerRelation(target, String(propertyKey), 'hasMany', keys, options);
-  };
+): RelationDecorator<Value> {
+  return createRelationDecorator<Value>('hasMany', keys, options);
 }
 
 /**
@@ -903,16 +960,14 @@ export function hasMany(
  * ])
  * declare author: Promise<TenantUser | null>;
  * ```
- * 
+ *
  * @category Decorators
  */
-export function belongsTo(
+export function belongsTo<Value = unknown>(
   keys: KeysFactory,
   options?: RelationDecoratorOptions
-): PropertyDecorator {
-  return function (target: object, propertyKey: string | symbol) {
-    registerRelation(target, String(propertyKey), 'belongsTo', keys, options);
-  };
+): RelationDecorator<Value> {
+  return createRelationDecorator<Value>('belongsTo', keys, options);
 }
 
 /**
@@ -935,16 +990,14 @@ export function belongsTo(
  * ])
  * declare profile: Promise<TenantProfile | null>;
  * ```
- * 
+ *
  * @category Decorators
  */
-export function hasOne(
+export function hasOne<Value = unknown>(
   keys: KeysFactory,
   options?: RelationDecoratorOptions
-): PropertyDecorator {
-  return function (target: object, propertyKey: string | symbol) {
-    registerRelation(target, String(propertyKey), 'hasOne', keys, options);
-  };
+): RelationDecorator<Value> {
+  return createRelationDecorator<Value>('hasOne', keys, options);
 }
 
 /**
@@ -983,7 +1036,7 @@ export function getRelationMeta(modelClass: object): RelationMeta[] {
  *   @column() id?: number;
  *   @column() name?: string;
  *   @column.boolean() is_active?: boolean;
- *   @column.datetime() created_at?: Date;
+ *   @column.datetime() created_at?: string;
  *
  *   @hasMany(() => [User.id, Post.author_id])
  *   declare posts: Promise<Post[]>;
@@ -1002,36 +1055,70 @@ export function getRelationMeta(modelClass: object): RelationMeta[] {
  * 
  * @category Decorators
  */
+/** A class decorator that works under both protocols. @category Decorators */
+export interface ModelClassDecorator {
+  <T extends { new (...args: unknown[]): object }>(constructor: T): T;
+  <T extends { new (...args: unknown[]): object }>(value: T, context: ClassDecoratorContext): T;
+}
+
 // Overload 1: @model (without arguments)
 export function model<T extends { new (...args: unknown[]): object }>(
   constructor: T
 ): T;
 // Overload 2: @model('table_name')
-export function model(
-  tableName: string
-): <T extends { new (...args: unknown[]): object }>(constructor: T) => T;
+export function model(tableName: string): ModelClassDecorator;
 // Overload 3: @model('table_name', options)
-export function model(
-  tableName: string,
-  options: ModelOptions
-): <T extends { new (...args: unknown[]): object }>(constructor: T) => T;
+export function model(tableName: string, options: ModelOptions): ModelClassDecorator;
 // Implementation
 export function model<T extends { new (...args: unknown[]): object }>(
   tableNameOrConstructor: string | T,
   options?: ModelOptions
-): T | (<U extends { new (...args: unknown[]): object }>(constructor: U) => U) {
+): T | ModelClassDecorator {
   // Called as @model('table_name') or @model('table_name', options)
   if (typeof tableNameOrConstructor === 'string') {
     const tableName = tableNameOrConstructor;
     return function <U extends { new (...args: unknown[]): object }>(
-      constructor: U
+      constructor: U,
+      context?: unknown
     ): U {
-      return applyModelDecorator(constructor, tableName, options);
-    };
+      const members = modelMembers(constructor, context);
+      if (isStandardContext(context)) {
+        // Under the standard protocol the class is not finished when its decorator runs: a bundler
+        // that preserves names (esbuild's `--keep-names`, which `tsx` turns on) re-defines `Class.name`
+        // AFTER the decorator returns. Installing the static column accessors here would either be
+        // clobbered by that, or — since they are non-configurable — make it throw `Cannot redefine
+        // property: name` on any model with a `name` column. A class decorator's extra initializer is
+        // the one hook that runs after the class is fully formed, so the model is assembled there.
+        (context as StandardDecoratorContext).addInitializer?.(function (this: unknown) {
+          applyModelDecorator(this as U, members, tableName, options);
+        });
+        return constructor;
+      }
+      return applyModelDecorator(constructor, members, tableName, options);
+    } as ModelClassDecorator;
   }
 
-  // Called as @model (without parentheses or arguments)
-  return applyModelDecorator(tableNameOrConstructor);
+  // Called as @model (without parentheses or arguments) — legacy only; the standard protocol always
+  // invokes a class decorator with `(value, context)`, and `@model` bare is `model(Class)` there too.
+  return applyModelDecorator(tableNameOrConstructor, modelMembers(tableNameOrConstructor, undefined));
+}
+
+/** The columns + relations `@column.*` / `@hasMany` … recorded for this class, per protocol. */
+function modelMembers(
+  constructor: object,
+  context: unknown
+): { columns: Map<string, ColumnMeta>; relations: RelationMeta[] } {
+  if (isStandardContext(context)) {
+    const bag = classMetadataBag(context, String((constructor as { name?: string }).name ?? 'model'));
+    return {
+      columns: (bag[COLUMNS_KEY] as Map<string, ColumnMeta> | undefined) ?? new Map(),
+      relations: (bag[RELATIONS_KEY] as RelationMeta[] | undefined) ?? [],
+    };
+  }
+  return {
+    columns: (Reflect.getMetadata(COLUMNS_KEY, constructor) as Map<string, ColumnMeta> | undefined) ?? new Map(),
+    relations: (Reflect.getMetadata(RELATIONS_KEY, constructor) as RelationMeta[] | undefined) ?? [],
+  };
 }
 
 /**
@@ -1075,13 +1162,11 @@ function parseKeys(keys: KeyPair | CompositeKeyPairs): {
  */
 function applyModelDecorator<T extends { new (...args: unknown[]): object }>(
   constructor: T,
+  members: { columns: Map<string, ColumnMeta>; relations: RelationMeta[] },
   tableName?: string,
   options?: ModelOptions
 ): T {
-  const columns: Map<string, ColumnMeta> =
-    Reflect.getMetadata(COLUMNS_KEY, constructor) || new Map();
-  const relations: RelationMeta[] =
-    Reflect.getMetadata(RELATIONS_KEY, constructor) || [];
+  const { columns, relations } = members;
   const modelName = constructor.name;
 
   // 0. Set TABLE_NAME if provided
