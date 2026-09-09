@@ -275,7 +275,7 @@ const COLUMN_OPTIONS: DeriveColumnsOptions = {
   // `ts`/`flag` (#137) are pinned for the same reason: the read-decode class is the COLUMN's SQL
   // type, so TIMESTAMP → the canonical date string and SMALLINT → Int come from here, not a guess.
   // `doc_id` is the STRING primary key of `conf_docs` and `sku` a plain text column of `conf_lines`.
-  columnTypes: { flag: 'SMALLINT', doc_id: 'VARCHAR' },
+  columnTypes: { ts: 'TIMESTAMP', flag: 'SMALLINT', doc_id: 'VARCHAR' },
 };
 
 /** The emitted `@behavior` class name (the `bc generate --behavior` argument). */
