@@ -749,10 +749,24 @@ export type CV<C extends Column<any, any>> =
 export type CVs<T extends readonly (readonly [Column<any, any>, any])[]> = {
   [K in keyof T]: T[K] extends readonly [infer C, any]
     ? C extends Column<infer V, any>
-      ? readonly [C, V | null | undefined | SkipType]
+      ? readonly [C, WriteValue<V> | null | undefined | SkipType]
       : never
     : never;
 };
+
+/**
+ * What a column ACCEPTS on write, given the type it READS BACK.
+ *
+ * A `@column.datetime()` / `.date()` / `.bigint()` column reads a string — the column's own textual
+ * form, or a BIGINT's exact decimal — but the write path still takes the JS value that string stands
+ * for: a `Date` goes through the driver's dialect-specific datetime serializer (MySQL wants a local
+ * `YYYY-MM-DD HH:mm:ss`, PostgreSQL an ISO instant, and getting that right is the library's job, not
+ * the caller's), and a `bigint` is written as its exact digits. TypeScript cannot tell those columns
+ * from a plain text one — all of them read `string` — so the widening applies to every string column.
+ *
+ * @category Column
+ */
+export type WriteValue<V> = V | (V extends string ? Date | bigint : never);
 
 // ============================================
 // SKIP Sentinel Value

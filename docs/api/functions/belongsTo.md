@@ -7,13 +7,19 @@
 # Function: belongsTo()
 
 ```ts
-function belongsTo(keys: KeysFactory, options?: RelationDecoratorOptions): PropertyDecorator;
+function belongsTo<Value>(keys: KeysFactory, options?: RelationDecoratorOptions): RelationDecorator<Value>;
 ```
 
-Defined in: [decorators.ts:909](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L909)
+Defined in: [decorators.ts:966](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L966)
 
 BelongsTo relation decorator (N:1).
 Defines a many-to-one relationship where this model belongs to a parent record.
+
+## Type Parameters
+
+| Type Parameter | Default type |
+| ------ | ------ |
+| `Value` | `unknown` |
 
 ## Parameters
 
@@ -24,7 +30,7 @@ Defines a many-to-one relationship where this model belongs to a parent record.
 
 ## Returns
 
-`PropertyDecorator`
+[`RelationDecorator`](../interfaces/RelationDecorator.md)\<`Value`\>
 
 ## Example
 

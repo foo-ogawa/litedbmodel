@@ -12,7 +12,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/foo-ogawa/litedbmodel/go/v2/litedbmodel_runtime/wire"
+	"github.com/foo-ogawa/litedbmodel/go/v3/litedbmodel_runtime/wire"
 )
 
 // wireUsers builds the wire row SLICE (the shape the covered runner hands the transport — a

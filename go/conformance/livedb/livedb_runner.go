@@ -36,10 +36,10 @@ import (
 	"strconv"
 	"strings"
 
-	rt "github.com/foo-ogawa/litedbmodel/go/v2/litedbmodel_runtime"
+	rt "github.com/foo-ogawa/litedbmodel/go/v3/litedbmodel_runtime"
 
-	my "github.com/foo-ogawa/litedbmodel/go/v2/conformance/gen/mysql"
-	pg "github.com/foo-ogawa/litedbmodel/go/v2/conformance/gen/postgres"
+	my "github.com/foo-ogawa/litedbmodel/go/v3/conformance/gen/mysql"
+	pg "github.com/foo-ogawa/litedbmodel/go/v3/conformance/gen/postgres"
 )
 
 // SupportedCorpusVersion is the corpus schema version this leg supports (harness.CORPUS_VERSION —

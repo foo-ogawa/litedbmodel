@@ -7,13 +7,19 @@
 # Function: hasMany()
 
 ```ts
-function hasMany(keys: KeysFactory, options?: RelationDecoratorOptions): PropertyDecorator;
+function hasMany<Value>(keys: KeysFactory, options?: RelationDecoratorOptions): RelationDecorator<Value>;
 ```
 
-Defined in: [decorators.ts:877](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L877)
+Defined in: [decorators.ts:936](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L936)
 
 HasMany relation decorator (1:N).
 Defines a one-to-many relationship where this model has many related records.
+
+## Type Parameters
+
+| Type Parameter | Default type |
+| ------ | ------ |
+| `Value` | `unknown` |
 
 ## Parameters
 
@@ -24,12 +30,12 @@ Defines a one-to-many relationship where this model has many related records.
 
 ## Returns
 
-`PropertyDecorator`
+[`RelationDecorator`](../interfaces/RelationDecorator.md)\<`Value`\>
 
 ## Example
 
 ```typescript
-// Single key relation
+// Single key relation (legacy decorators: `declare`; standard decorators: `posts!: …`)
 @hasMany(() => [User.id, Post.author_id])
 declare posts: Promise<Post[]>;
 

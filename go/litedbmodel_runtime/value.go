@@ -2,7 +2,7 @@
 //
 // The runtime is NATIVE-ONLY (#8): it carries NO `encoding/json`. The bigint-safe conformance value
 // codec (`DecodeConformanceValue`/`EncodeConformanceJSON` — the only place a `json.Number` type is
-// inspected) is RUNNER-side, in package `github.com/foo-ogawa/litedbmodel/go/v2/conformance`. This file
+// inspected) is RUNNER-side, in package `github.com/foo-ogawa/litedbmodel/go/v3/conformance`. This file
 // keeps only the JSON-library-free numeric formatter the exec path needs (IN-list JSON param + emit
 // payload rendering via `jsStringify`, relation key identity) — no encoding/json.
 

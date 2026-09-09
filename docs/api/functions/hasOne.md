@@ -7,13 +7,19 @@
 # Function: hasOne()
 
 ```ts
-function hasOne(keys: KeysFactory, options?: RelationDecoratorOptions): PropertyDecorator;
+function hasOne<Value>(keys: KeysFactory, options?: RelationDecoratorOptions): RelationDecorator<Value>;
 ```
 
-Defined in: [decorators.ts:941](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L941)
+Defined in: [decorators.ts:996](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L996)
 
 HasOne relation decorator (1:1).
 Defines a one-to-one relationship where this model has one related record.
+
+## Type Parameters
+
+| Type Parameter | Default type |
+| ------ | ------ |
+| `Value` | `unknown` |
 
 ## Parameters
 
@@ -24,7 +30,7 @@ Defines a one-to-one relationship where this model has one related record.
 
 ## Returns
 
-`PropertyDecorator`
+[`RelationDecorator`](../interfaces/RelationDecorator.md)\<`Value`\>
 
 ## Example
 
