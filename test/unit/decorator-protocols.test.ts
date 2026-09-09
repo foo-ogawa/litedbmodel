@@ -58,6 +58,9 @@ function runEsbuild(p: Protocol): string {
     const out = join(dir, 'out.cjs');
     execFileSync(ESBUILD, [
       FIXTURE, '--bundle', '--platform=node', '--format=cjs', '--target=es2022',
+      // `tsx` turns this on, and it is the reason `@model` assembles in a class initializer: it
+      // re-defines `Class.name` AFTER the decorator returns, which throws on a `name` column.
+      '--keep-names',
       ...EXTERNALS, ...ALIASES, `--outfile=${out}`, '--log-level=error',
       // esbuild does not implement `emitDecoratorMetadata` at all — asking for it is exactly how a
       // consumer ends up depending on metadata that never arrives.
@@ -89,7 +92,7 @@ function runTsc(p: Protocol): string {
     const emitted = join(dir, 'out/test/fixtures/decorator-protocols/model-fixture.js');
     const linked = join(dir, 'run.cjs');
     execFileSync(ESBUILD, [
-      emitted, '--bundle', '--platform=node', '--format=cjs',
+      emitted, '--bundle', '--platform=node', '--format=cjs', '--keep-names',
       ...EXTERNALS, ...ALIASES, `--outfile=${linked}`, '--log-level=error',
     ], { cwd: ROOT, encoding: 'utf8' });
     return execFileSync(process.execPath, [linked], { cwd: ROOT, encoding: 'utf8' }).trim();
@@ -112,6 +115,10 @@ const EXPECTED = {
   userStatics: ['id->id', 'name->name', 'email->mail_addr', 'created_at->created_at'],
   relations: ['posts:hasMany'],
   relationGetterOnPrototype: true,
+  // `@model` without parentheses must register the same model as `@model('t')`.
+  bareColumns: ['id:id:cast:-:-:pk:-', 'flag:flag:cast:boolean:-:-:-'],
+  bareStatics: ['id->id', 'flag->flag'],
+  bareTableName: 'proto_bare',
   // A subclass must not see its sibling's columns through the base they share.
   aColumns: ['created_at:created_at:cast:timestamp:-:-:-', 'a_only:a_only:-:-:TEXT:-:-'],
   bColumns: ['created_at:created_at:cast:timestamp:-:-:-', 'b_only:b_only:-:-:TEXT:-:-'],

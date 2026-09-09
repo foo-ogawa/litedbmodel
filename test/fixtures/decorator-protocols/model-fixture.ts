@@ -30,6 +30,18 @@ class UserModel extends DBModel {
 }
 const User = UserModel as typeof UserModel & ColumnsOf<UserModel>;
 
+/**
+ * `@model` WITHOUT parentheses. The standard protocol invokes a class decorator as `(value, context)`,
+ * so this form receives the context in the argument position `@model('t', options)` uses for options —
+ * reading it as options registered a model with NO columns at all, and said nothing.
+ */
+@model
+class BareModel extends DBModel {
+  static TABLE_NAME = 'proto_bare';
+  @column.number({ primaryKey: true }) id?: number;
+  @column.boolean() flag?: boolean;
+}
+
 /** A base with columns, extended twice: neither subclass may see the other's columns. */
 class AuditedBase extends DBModel {
   @column.datetime() created_at?: string;
@@ -44,9 +56,9 @@ const columns = (c: object): string[] =>
       `${(v as { baseSqlType?: string }).baseSqlType ?? '-'}:${v.primaryKey ? 'pk' : '-'}:${v.autoIncrement ? 'ai' : '-'}`,
   );
 
-const statics = (c: object): string[] => {
+const statics = (c: object, keys: readonly string[] = ['id', 'name', 'email', 'created_at']): string[] => {
   const rec = c as unknown as Record<string, { columnName?: string } | undefined>;
-  return ['id', 'name', 'email', 'created_at'].map((k) => `${k}->${rec[k]?.columnName ?? String(rec[k])}`);
+  return keys.map((k) => `${k}->${rec[k]?.columnName ?? String(rec[k])}`);
 };
 
 const instance = new UserModel();
@@ -59,6 +71,9 @@ console.log(JSON.stringify({
   /** The lazy relation getter `@model` installs, and whether an instance can actually reach it. */
   relationGetterOnPrototype: typeof Object.getOwnPropertyDescriptor(proto, 'posts')?.get === 'function',
   relationReachableOnInstance: !Object.prototype.hasOwnProperty.call(instance, 'posts'),
+  bareColumns: columns(BareModel),
+  bareStatics: statics(BareModel, ['id', 'flag']),
+  bareTableName: (BareModel as unknown as { TABLE_NAME: string }).TABLE_NAME,
   aColumns: columns(AModel),
   bColumns: columns(BModel),
   tableNames: [

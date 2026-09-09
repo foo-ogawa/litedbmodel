@@ -375,6 +375,33 @@ function parseColumnOptions(
 }
 
 /**
+ * Reject a write a TEXT-shaped family cannot carry.
+ *
+ * {@link WriteValue} widens every string-reading column to also accept the `Date` / `bigint` that a
+ * datetime or bigint column serializes, because `Column<V>` carries only the READ type — the type
+ * system cannot tell `@column.text()` from `@column.datetime()` (both read `string`). The FAMILY can,
+ * so it says so here: a `Date` handed to a text column reaches the driver unserialized and PostgreSQL
+ * stores `{}` — silent corruption, measured. Fail closed, naming the family that would have taken it.
+ */
+function rejectNonText(family: string, val: unknown): unknown {
+  if (val === null || val === undefined) return null;
+  if (val instanceof Date) {
+    throw new Error(
+      `litedbmodel: @column.${family}() received a Date. A text column cannot serialize one — the ` +
+        'driver would store an object literal. Use @column.datetime() / @column.date() for a date ' +
+        'column, or format the value yourself.',
+    );
+  }
+  if (typeof val === 'object') {
+    throw new Error(
+      `litedbmodel: @column.${family}() received an object. Use @column.json<T>() for a JSON column, ` +
+        'or @column.custom() with a serializer.',
+    );
+  }
+  return val;
+}
+
+/**
  * Build one `@column.*` family decorator. The returned decorator accepts BOTH protocols: legacy hands
  * it `(prototype, propertyKey)`, TC39 standard hands it `(undefined, context)`. Everything that
  * describes the COLUMN (cast, serializer, SQL family) is fixed here by the family itself — nothing is
@@ -422,7 +449,7 @@ function requireColumnFamily(): never {
     'litedbmodel: `@column()` no longer declares a column — a column must state its type with a ' +
       'family: @column.text() / .number() / .boolean() / .bigint() / .datetime() / .date() / .uuid() / ' +
       '.json() / .stringArray() / .intArray() / .numericArray() / .booleanArray() / .datetimeArray() / ' +
-      '.custom(). Every family takes the same argument as `@column()` did ' +
+      '.passthrough() / .custom(). Every family takes the same argument as `@column()` did ' +
       "(`@column.text('db_name')`, `@column.number({ primaryKey: true })`). The bare form inferred the " +
       'type from `emitDecoratorMetadata`, which esbuild (tsx/vite/vitest) never emits and standard ' +
       'decorators do not have, so it silently produced untyped reads.',
@@ -556,10 +583,10 @@ export const column = Object.assign(
      */
     text: (columnNameOrOptions?: string | ColumnOptions) =>
       createColumnDecorator<string | null | undefined>(
-        undefined,  // no cast — a TEXT column arrives as a string on every driver
-        undefined,  // no custom serialize
-        undefined,  // no sqlCast family (a text literal needs no SQL cast)
-        'TEXT'      // §4.1 token: types the SCP typed read (what design:type = String used to give)
+        undefined,                            // no cast — a TEXT column arrives as a string on every driver
+        (val) => rejectNonText('text', val),  // …but it cannot SERIALIZE a Date or an object
+        undefined,                            // no sqlCast family (a text literal needs no SQL cast)
+        'TEXT'                                // §4.1 token: types the SCP typed read
       )(columnNameOrOptions),
 
     /**
@@ -823,7 +850,7 @@ export const column = Object.assign(
           // UUID values from DB are typically already strings
           return String(v);
         },
-        undefined,  // No serialization needed - handled by sqlCast
+        (val) => rejectNonText('uuid', val),  // the ::uuid cast handles the rest
         'uuid'      // SQL type for casting
       )(columnNameOrOptions),
 
@@ -894,7 +921,13 @@ function createRelationDecorator<Value>(
     if (isStandardContext(keyOrContext)) {
       const propKey = String(keyOrContext.name);
       registerRelation(standardRelationList(classMetadataBag(keyOrContext, propKey)), propKey, type, keys, options);
-      keyOrContext.addInitializer?.(function (this: unknown) {
+      if (typeof keyOrContext.addInitializer !== 'function') {
+        throw new Error(
+          `litedbmodel: the standard-decorator context for relation '${propKey}' has no ` +
+            '`addInitializer`, so the class field cannot be removed and would shadow the relation getter.',
+        );
+      }
+      keyOrContext.addInitializer(function (this: unknown) {
         delete (this as Record<string, unknown>)[propKey];
       });
       return;
@@ -1073,35 +1106,59 @@ export function model(tableName: string, options: ModelOptions): ModelClassDecor
 // Implementation
 export function model<T extends { new (...args: unknown[]): object }>(
   tableNameOrConstructor: string | T,
-  options?: ModelOptions
+  // `@model('t', options)` passes ModelOptions; a bare `@model` under the standard protocol passes the
+  // ClassDecoratorContext in this position instead.
+  optionsOrContext?: ModelOptions | unknown
 ): T | ModelClassDecorator {
   // Called as @model('table_name') or @model('table_name', options)
   if (typeof tableNameOrConstructor === 'string') {
     const tableName = tableNameOrConstructor;
+    const options = optionsOrContext as ModelOptions | undefined;
     return function <U extends { new (...args: unknown[]): object }>(
       constructor: U,
       context?: unknown
     ): U {
-      const members = modelMembers(constructor, context);
-      if (isStandardContext(context)) {
-        // Under the standard protocol the class is not finished when its decorator runs: a bundler
-        // that preserves names (esbuild's `--keep-names`, which `tsx` turns on) re-defines `Class.name`
-        // AFTER the decorator returns. Installing the static column accessors here would either be
-        // clobbered by that, or — since they are non-configurable — make it throw `Cannot redefine
-        // property: name` on any model with a `name` column. A class decorator's extra initializer is
-        // the one hook that runs after the class is fully formed, so the model is assembled there.
-        (context as StandardDecoratorContext).addInitializer?.(function (this: unknown) {
-          applyModelDecorator(this as U, members, tableName, options);
-        });
-        return constructor;
-      }
-      return applyModelDecorator(constructor, members, tableName, options);
+      return applyToClass(constructor, context, tableName, options);
     } as ModelClassDecorator;
   }
 
-  // Called as @model (without parentheses or arguments) — legacy only; the standard protocol always
-  // invokes a class decorator with `(value, context)`, and `@model` bare is `model(Class)` there too.
-  return applyModelDecorator(tableNameOrConstructor, modelMembers(tableNameOrConstructor, undefined));
+  // Called as `@model` without parentheses. The standard protocol invokes a CLASS decorator as
+  // `(value, context)`, so the second argument here is that CONTEXT, not `ModelOptions` — reading it
+  // as options and applying the legacy path registered a model with NO columns at all, silently.
+  return applyToClass(tableNameOrConstructor, optionsOrContext);
+}
+
+/**
+ * Apply `@model` under either decorator protocol. The ONE place the class decorator's protocol
+ * difference lives, so `@model` and `@model('t')` cannot diverge.
+ *
+ * Under the standard protocol the class is not finished when its decorator runs: a bundler that
+ * preserves names (esbuild's `--keep-names`, which `tsx` turns on) re-defines `Class.name` AFTER the
+ * decorator returns. Installing the static column accessors here would either be clobbered by that,
+ * or — since they are non-configurable — make it throw `Cannot redefine property: name` on any model
+ * with a `name` column. A class decorator's extra initializer is the one hook that runs after the
+ * class is fully formed, so the model is assembled there.
+ */
+function applyToClass<U extends { new (...args: unknown[]): object }>(
+  constructor: U,
+  context: unknown,
+  tableName?: string,
+  options?: ModelOptions
+): U {
+  const members = modelMembers(constructor, context);
+  if (!isStandardContext(context)) return applyModelDecorator(constructor, members, tableName, options);
+  // Fail-closed, exactly as `classMetadataBag` does: assembling nothing and returning the class is how
+  // a model ends up with no columns and no error — the defect this file exists to remove.
+  if (typeof context.addInitializer !== 'function') {
+    throw new Error(
+      `litedbmodel: the standard-decorator context for '${constructor.name}' has no ` +
+        '`addInitializer`, so `@model` cannot assemble the model after the class is defined.',
+    );
+  }
+  context.addInitializer(function (this: unknown) {
+    applyModelDecorator(this as U, members, tableName, options);
+  });
+  return constructor;
 }
 
 /** The columns + relations `@column.*` / `@hasMany` … recorded for this class, per protocol. */

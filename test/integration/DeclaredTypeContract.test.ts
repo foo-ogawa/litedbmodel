@@ -132,6 +132,18 @@ describe.skipIf(skipIntegrationTests)('declared type === value type (#286)', () 
         expect(json.d_date).toBe('2026-11-01');
       });
 
+      it('a text column REFUSES a value it cannot serialize (no silent {} in the row)', async () => {
+        // `WriteValue` widens every string-reading column to accept the Date/bigint a datetime or
+        // bigint column serializes, because `Column<V>` carries only the READ type. The FAMILY knows
+        // better: a Date handed to a text column reached the driver unserialized and PostgreSQL
+        // stored `{}`. It is refused instead, naming the family that would have taken it.
+        await expect(
+          Base.transaction(async () => Model.create([[Model.t_text, new Date() as unknown as string]])),
+        ).rejects.toThrow(/@column\.text\(\) received a Date/);
+        const [row] = await Model.find([]);
+        expect((row as unknown as Record<string, unknown>).t_text).toBe('hello');
+      });
+
       it('the DRIVER plane is unchanged by the family', async () => {
         // Negative control for the layering: a family types a DECLARED column, it does not change what
         // the driver hands back for a raw statement. PG/MySQL return an integer as BigInt
