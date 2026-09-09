@@ -541,7 +541,7 @@ function serializeJson(val: unknown, typeCast?: DriverTypeCast): unknown {
  */
 export const column = Object.assign(
   // The bare `@column()` declared no type — it is rejected, with the migration in the message.
-  (() => requireColumnFamily()) as unknown as (columnNameOrOptions?: string | ColumnOptions) => never,
+  (_columnNameOrOptions?: string | ColumnOptions): never => requireColumnFamily(),
   {
     // ============================================
     // Primitive Types

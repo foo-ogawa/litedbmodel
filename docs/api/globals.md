@@ -188,7 +188,7 @@ Union of all types allowed as interpolated values in `sql` tagged templates.
 #### column
 
 ```ts
-const column: (columnNameOrOptions?: string | ColumnOptions) => never & {
+const column: (_columnNameOrOptions?: string | ColumnOptions) => never & {
   text: (columnNameOrOptions?: string | ColumnOptions) => ColumnDecorator<string | null | undefined>;
   boolean: (columnNameOrOptions?: string | ColumnOptions) => ColumnDecorator<boolean | null | undefined>;
   number: (columnNameOrOptions?: string | ColumnOptions) => ColumnDecorator<number | null | undefined>;

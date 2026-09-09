@@ -244,13 +244,13 @@ describe('decorators', () => {
     // reached the caller — an `integer` as a `bigint`, a `numeric` as a `string`. It now says so.
 
     it('throws, naming the families that replace it', () => {
-      expect(() => (column as unknown as () => void)()).toThrow(/must state its type with a family/);
-      expect(() => (column as unknown as () => void)()).toThrow(/@column\.text\(\)/);
+      expect(() => column()).toThrow(/must state its type with a family/);
+      expect(() => column()).toThrow(/@column\.text\(\)/);
     });
 
     it('throws before any column is registered, whatever argument it was given', () => {
-      expect(() => (column as unknown as (a: unknown) => void)('db_name')).toThrow(/family/);
-      expect(() => (column as unknown as (a: unknown) => void)({ primaryKey: true })).toThrow(/family/);
+      expect(() => column('db_name')).toThrow(/family/);
+      expect(() => column({ primaryKey: true })).toThrow(/family/);
     });
 
     it('every family accepts what the bare form accepted (a name, or ColumnOptions)', () => {
