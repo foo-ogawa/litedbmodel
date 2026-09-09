@@ -32,9 +32,9 @@ import type { ModelOptions } from './types';
 // v1 coercion. The v1 decorator IS the static type source (unlike v2, whose SoT is the SQL DDL), so
 // each read-affected decorator variant pins its v2 `MaterializeClass` and routes the raw driver cell
 // through `materializeCell`:
-//   - `@column.bigint()` / auto `BigInt`  → `int64` → EXACT decimal STRING (no i64 rounding, JSON-safe)
-//   - `@column.datetime()` / auto `Date`  → `date`  → TZ-attached STRING (NOT a TZ-shifted JS Date)
-//   - `@column.boolean()`  / auto `Boolean` → `bool` → JS boolean
+//   - `@column.bigint()`   → `int64` → EXACT decimal STRING (no i64 rounding, JSON-safe)
+//   - `@column.datetime()` → `date`  → TZ-attached STRING (NOT a TZ-shifted JS Date)
+//   - `@column.boolean()`  → `bool`  → JS boolean
 // `null`/`undefined` pass through (nullable columns) exactly as `materializeCell` and the prior v1
 // casts did. Fail-closed like v2: a driver cell that cannot be coerced to the declared class throws
 // (a declared BIGINT column returning a non-integer string is a driver-contract violation, not a
@@ -82,14 +82,12 @@ export interface ColumnMeta {
   /** SQL type for automatic casting in conditions (e.g., 'uuid') */
   sqlCast?: string;
   /**
-   * The §4.1 SQL-type token derived from the field's TS `design:type` for a column with NO explicit
-   * `sqlCast` (Phase F-2 / #105 option B). `String → TEXT`, `Number → INTEGER`, `Boolean → BOOLEAN`,
-   * `Date → TIMESTAMP`, `BigInt → BIGINT`. This types the SCP typed-read de-box for a bare `@column()`
-   * (the README shape) so it is byte-safe (`materializeCell` never mis-reads a string as int32), and
-   * preserves the v1 read contract exactly (string→TEXT→string, int→INTEGER→number). A column WITH an
-   * explicit `sqlCast` family (`@column.boolean()` / `.bigint()` / `.uuid()` / …) does not set this —
-   * its family already maps to the SQL type. `REAL`/`DECIMAL` (a `Number` that is not INT) stays pinned
-   * via the adapter's `columnTypes` escape hatch. @internal
+   * The SQL-type token a CAST-FREE family declares (`@column.text()` → `TEXT`), so it types the SCP
+   * typed-read de-box exactly as a cast-carrying family does: `materializeCell` never mis-reads a
+   * string as an int32. A family that already carries a `sqlCast` (`@column.boolean()` / `.bigint()` /
+   * `.uuid()` / …) does not set this — its family already maps to the SQL type — and `@column.number()`
+   * sets neither, because a JS `number` backs an INTEGER as readily as a REAL/DECIMAL; the DBModel read
+   * path pins those to passthrough via the adapter's `columnTypes`. @internal
    */
   baseSqlType?: string;
 }
@@ -512,30 +510,33 @@ function serializeJson(val: unknown, typeCast?: DriverTypeCast): unknown {
 /**
  * Column decorator for defining model properties.
  *
- * **Auto-inference**: For simple types (boolean, number, Date, bigint),
- * type conversion is automatically inferred from the TypeScript property type.
- * No need to use explicit variants like `@column.boolean()`.
+ * **A column declares its own type with a family** — the family decides both the TypeScript type the
+ * model declares and the value `find()` gives back, on every toolchain and under either decorator
+ * protocol. Nothing is inferred from the TypeScript type annotation.
  *
- * Auto-inferred types:
  * ```typescript
- * @column() id?: number;          // Auto: Number conversion
- * @column() name?: string;        // No conversion needed
- * @column() is_active?: boolean;  // Auto: Boolean conversion
- * @column() created_at?: Date;    // Auto: DateTime conversion
- * @column() large_id?: bigint;    // Auto: BigInt conversion
- * @column('custom_name') prop?: string;  // Custom column name
+ * @column.number() id?: number;          // Auto: Number conversion
+ * @column.text() name?: string;        // No conversion needed
+ * @column.boolean() is_active?: boolean;  // Auto: Boolean conversion
+ * @column.datetime() created_at?: string;    // Auto: DateTime conversion
+ * @column.bigint() large_id?: string;    // Auto: BigInt conversion
+ * @column.text('custom_name') prop?: string;  // Custom column name
  * ```
  *
- * Explicit type conversion required (cannot be auto-inferred):
  * ```typescript
- * @column.stringArray() tags?: string[];           // Array element type unknown
- * @column.intArray() scores?: number[];            // Array element type unknown
- * @column.json<MyType>() data?: MyType;            // Generic type unknown
- * @column.date() birth_date?: string;              // date vs datetime distinction
+ * @column.uuid() ext_id?: string;
+ * @column.stringArray() tags?: string[];
+ * @column.intArray() scores?: number[];
+ * @column.json<MyType>() data?: MyType;
+ * @column.date() birth_date?: string;              // 'YYYY-MM-DD' — not a datetime
+ * @column.passthrough() payload?: unknown;         // BYTEA / BLOB — no cast exists
+ * @column.custom((v) => String(v).toUpperCase()) status?: string;
  * ```
  *
- * Note: The explicit variants (`@column.boolean()`, `@column.datetime()`, etc.)
- * still work and can be used when you want to be explicit about the conversion.
+ * Every family takes what the removed bare `@column()` took: a column name, or {@link ColumnOptions}.
+ * The bare form inferred the type from `emitDecoratorMetadata`, which esbuild (tsx / vite / vitest)
+ * never emits and TC39 standard decorators do not have, so it silently produced untyped reads; it now
+ * reports the migration instead (see {@link requireColumnFamily}).
  * 
  * @category Decorators
  */
@@ -1033,8 +1034,8 @@ export function getRelationMeta(modelClass: object): RelationMeta[] {
  * ```typescript
  * @model('users')
  * class User extends DBModel {
- *   @column() id?: number;
- *   @column() name?: string;
+ *   @column.number() id?: number;
+ *   @column.text() name?: string;
  *   @column.boolean() is_active?: boolean;
  *   @column.datetime() created_at?: string;
  *

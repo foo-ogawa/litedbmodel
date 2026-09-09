@@ -104,10 +104,10 @@ export function getTransactionClient(): DBConnection | undefined {
  * // 1. Define model
  * @model('users')
  * class UserModel extends DBModel {
- *   @column() id?: number;
- *   @column() name?: string;
- *   @column() email?: string;
- *   @column() is_active?: boolean;
+ *   @column.number() id?: number;
+ *   @column.text() name?: string;
+ *   @column.text() email?: string;
+ *   @column.boolean() is_active?: boolean;
  * }
  * export const User = UserModel.asModel();
  * 
@@ -152,8 +152,8 @@ export abstract class DBModel {
    * ```typescript
    * @model('users')
    * class UserModel extends DBModel {
-   *   @column() id?: number;
-   *   @column() name?: string;
+   *   @column.number() id?: number;
+   *   @column.text() name?: string;
    * }
    * export const User = UserModel.asModel();
    * export type User = UserModel;
@@ -3295,12 +3295,12 @@ export abstract class DBModel {
    * // Define models using appropriate base class
    * @model('users')
    * class UserModel extends BaseDB {
-   *   @column() id?: number;
+   *   @column.number() id?: number;
    * }
    *
    * @model('articles')
    * class ArticleModel extends CmsDB {
-   *   @column() id?: number;
+   *   @column.number() id?: number;
    * }
    *
    * // Each base class has independent transactions

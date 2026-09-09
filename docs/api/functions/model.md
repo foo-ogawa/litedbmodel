@@ -12,7 +12,7 @@
 function model<T>(constructor: T): T;
 ```
 
-Defined in: [decorators.ts:1065](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L1065)
+Defined in: [decorators.ts:1066](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L1066)
 
 ### Type Parameters
 
@@ -36,7 +36,7 @@ Defined in: [decorators.ts:1065](https://github.com/foo-ogawa/litedbmodel/blob/m
 function model(tableName: string): ModelClassDecorator;
 ```
 
-Defined in: [decorators.ts:1069](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L1069)
+Defined in: [decorators.ts:1070](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L1070)
 
 ### Parameters
 
@@ -54,7 +54,7 @@ Defined in: [decorators.ts:1069](https://github.com/foo-ogawa/litedbmodel/blob/m
 function model(tableName: string, options: ModelOptions): ModelClassDecorator;
 ```
 
-Defined in: [decorators.ts:1071](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L1071)
+Defined in: [decorators.ts:1072](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L1072)
 
 ### Parameters
 

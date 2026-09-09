@@ -6,7 +6,7 @@
 
 # Interface: RelationDecorator()\<Value\>
 
-Defined in: [decorators.ts:358](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L358)
+Defined in: [decorators.ts:356](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L356)
 
 What a relation decorator may be applied to, under either protocol.
 
@@ -22,7 +22,7 @@ What a relation decorator may be applied to, under either protocol.
 RelationDecorator(target: object, propertyKey: string | symbol): void;
 ```
 
-Defined in: [decorators.ts:359](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L359)
+Defined in: [decorators.ts:357](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L357)
 
 What a relation decorator may be applied to, under either protocol.
 
@@ -43,7 +43,7 @@ What a relation decorator may be applied to, under either protocol.
 RelationDecorator<This>(value: undefined, context: ClassFieldDecoratorContext<This, Value>): void;
 ```
 
-Defined in: [decorators.ts:360](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L360)
+Defined in: [decorators.ts:358](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L358)
 
 What a relation decorator may be applied to, under either protocol.
 

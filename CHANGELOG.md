@@ -52,9 +52,15 @@ Closes #286, #287。**モデル定義の書き換えが必要 — 下の移行�
 `@column.datetime()` などの**戻り値の挙動は 2.0.0 から一切変わっていない**（変わったのは、実装と食い違って
 いた宣言と README の側）。
 
-- **無印 `@column()` は列を宣言しない。** 列は family で型を宣言する（v2 §4.1「未指定=error, no-assume」）。
-  無印は `emitDecoratorMetadata` があれば偶然動いていただけで、esbuild 系では黙って型無しの列になっていた。
-  書き換え先はエラーメッセージにも出る:
+- **無印 `@column()` は列を宣言しない。** 列は family で型を宣言する。
+  - 無印が **`docs/architecture.md` §4.1 の規律「型が曖昧/未指定なら error（no-assume・no-fallback）」に
+    反していた**のがこの変更の根拠。型を述べていない列を error にせず素通りさせ、`emitDecoratorMetadata`
+    が無い環境（esbuild = tsx / vite / vitest）では黙って型無しの列になっていた。
+  - なお §4.1 が SoT と呼んでいるのは `schema.sql` の SQL 型であって「family」ではない。デコレータ経路に
+    ついては `src/decorators.ts` の #9 契約が「The v1 decorator IS the static type source」と述べており、
+    **その「source」を family だけに限定したのは本リリースで導入した規則**（従来はそこに `design:type`
+    推論が含まれていた）。
+  - 書き換え先はエラーメッセージにも出る:
 
   | 旧 | 新 |
   |---|---|

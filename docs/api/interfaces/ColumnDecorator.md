@@ -6,7 +6,7 @@
 
 # Interface: ColumnDecorator()\<Value\>
 
-Defined in: [decorators.ts:350](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L350)
+Defined in: [decorators.ts:348](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L348)
 
 What a `@column.*` decorator may be applied to, under EITHER protocol.
 
@@ -28,7 +28,7 @@ no type information at all, so there it can only be documented.
 ColumnDecorator(target: object, propertyKey: string | symbol): void;
 ```
 
-Defined in: [decorators.ts:352](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L352)
+Defined in: [decorators.ts:350](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L350)
 
 Legacy (`experimentalDecorators`) property decorator.
 
@@ -49,7 +49,7 @@ Legacy (`experimentalDecorators`) property decorator.
 ColumnDecorator<This>(value: undefined, context: ClassFieldDecoratorContext<This, Value>): void;
 ```
 
-Defined in: [decorators.ts:354](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L354)
+Defined in: [decorators.ts:352](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L352)
 
 TC39 standard class-field decorator.
 

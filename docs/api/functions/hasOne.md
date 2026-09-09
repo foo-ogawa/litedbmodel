@@ -10,7 +10,7 @@
 function hasOne<Value>(keys: KeysFactory, options?: RelationDecoratorOptions): RelationDecorator<Value>;
 ```
 
-Defined in: [decorators.ts:996](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L996)
+Defined in: [decorators.ts:997](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L997)
 
 HasOne relation decorator (1:1).
 Defines a one-to-one relationship where this model has one related record.

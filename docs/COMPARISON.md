@@ -115,7 +115,7 @@ class UserModel extends DBModel {
 }
 
 // Migrations: Manual SQL files
-// Code generation: litedbmodel-gen generates @column() from schema.sql (optional)
+// Code generation: litedbmodel-gen generates @column.* declarations from schema.sql (optional)
 ```
 
 ### Prisma

@@ -12,8 +12,8 @@
  * ```typescript
  * @model('posts')
  * class Post extends DBModel {
- *   @column() id?: number;
- *   @column() author_id?: number;
+ *   @column.number() id?: number;
+ *   @column.number() author_id?: number;
  *
  *   @belongsTo(() => [Post.author_id, User.id])
  *   declare author: Promise<User | null>;
