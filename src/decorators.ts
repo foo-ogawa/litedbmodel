@@ -943,7 +943,12 @@ function createRelationDecorator<Value>(
         );
       }
       keyOrContext.addInitializer(function (this: unknown) {
-        delete (this as Record<string, unknown>)[propKey];
+        // Only under DEFINE semantics does the field land as an own property that shadows the
+        // prototype getter; under SET semantics the accessor's setter already swallowed it, and
+        // deleting a property that is not there still costs the object its shape.
+        if (Object.prototype.hasOwnProperty.call(this, propKey)) {
+          delete (this as Record<string, unknown>)[propKey];
+        }
       });
       return;
     }
@@ -1386,6 +1391,26 @@ function applyModelDecorator<T extends { new (...args: unknown[]): object }>(
           limit: options?.limit,
           hardLimit: options?.hardLimit,
           relationName: propertyKey,
+        });
+      },
+      /**
+       * A relation is a getter, but a class FIELD declaring it still writes to the property. Which
+       * write it is depends on `useDefineForClassFields`: with define semantics (the default from
+       * target ES2022) the field is `defineProperty`-d onto the instance, bypassing this setter — the
+       * standard protocol's initializer removes that shadowing property. With SET semantics (the
+       * default below ES2022) the field ASSIGNS, and an accessor with no setter throws
+       * `Cannot set property … which has only a getter` on EVERY instantiation.
+       *
+       * So: the field's own `undefined` is ignored, and any other value is honoured as an own
+       * property — priming a relation (a loaded graph, a test double) reads back what was set.
+       */
+      set: function (value: unknown) {
+        if (value === undefined) return;
+        Object.defineProperty(this, propertyKey, {
+          value,
+          writable: true,
+          enumerable: true,
+          configurable: true,
         });
       },
       enumerable: true,

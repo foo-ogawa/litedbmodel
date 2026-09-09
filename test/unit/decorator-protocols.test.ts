@@ -51,13 +51,19 @@ function scratch(prefix: string): string {
   return mkdtempSync(join(CACHE, prefix));
 }
 
-/** Bundle + run the fixture with esbuild — the emit behind tsx, vite and vitest. */
-function runEsbuild(p: Protocol): string {
+/**
+ * Bundle + run the fixture with esbuild — the emit behind tsx, vite and vitest.
+ *
+ * `target` decides `useDefineForClassFields`, which decides how a class FIELD reaches a relation's
+ * prototype getter: ES2022+ DEFINES an own property (shadowing it), below that it ASSIGNS (hitting
+ * the accessor). Running only ES2022 missed a crash on every instantiation under the other one.
+ */
+function runEsbuild(p: Protocol, target = 'es2022'): string {
   const dir = scratch('proto-esbuild-');
   try {
     const out = join(dir, 'out.cjs');
     execFileSync(ESBUILD, [
-      FIXTURE, '--bundle', '--platform=node', '--format=cjs', '--target=es2022',
+      FIXTURE, '--bundle', '--platform=node', '--format=cjs', `--target=${target}`,
       // `tsx` turns this on, and it is the reason `@model` assembles in a class initializer: it
       // re-defines `Class.name` AFTER the decorator returns, which throws on a `name` column.
       '--keep-names',
@@ -65,7 +71,7 @@ function runEsbuild(p: Protocol): string {
       // esbuild does not implement `emitDecoratorMetadata` at all — asking for it is exactly how a
       // consumer ends up depending on metadata that never arrives.
       `--tsconfig-raw=${JSON.stringify({ compilerOptions: {
-        target: 'ES2022', experimentalDecorators: p.legacy, emitDecoratorMetadata: p.legacy } })}`,
+        target, experimentalDecorators: p.legacy, emitDecoratorMetadata: p.legacy } })}`,
     ], { cwd: ROOT, encoding: 'utf8' });
     return execFileSync(process.execPath, [out], { cwd: ROOT, encoding: 'utf8' }).trim();
   } finally {
@@ -144,6 +150,16 @@ describe('one model source, every decorator protocol (#287)', () => {
         expect(model.relationReachableOnInstance).toBe(!p.legacy);
       }, 120_000);
     }
+  }
+
+  for (const p of PROTOCOLS) {
+    it(`esbuild, class fields ASSIGN (target es2020) — ${p.name}`, () => {
+      // `useDefineForClassFields` is false below ES2022, so the relation field assigns into the
+      // prototype accessor instead of defining over it. With no setter that threw
+      // `Cannot set property posts of #<User> which has only a getter` on EVERY instantiation.
+      const model = JSON.parse(runEsbuild(p, 'es2020')) as Record<string, unknown>;
+      for (const [k, v] of Object.entries(EXPECTED)) expect(model[k], k).toEqual(v);
+    }, 120_000);
   }
 
   it('all four toolchain × protocol runs register the same model', () => {

@@ -614,7 +614,7 @@ await User.find([
 > **ESLint Plugin:** Use `litedbmodel/eslint-plugin` to catch mistakes that TypeScript cannot:
 > - Wrong model columns (e.g., `User.find([[Post.id, 1]])`)
 > - Hardcoded column names instead of `${Model.column}`
-> - Missing `declare` keyword for relation properties
+> - The wrong relation declaration for your decorator protocol (`declare` vs `!`)
 
 ---
 
@@ -789,7 +789,16 @@ const author = await post.author;       // Lazy loaded
 const comments = await post.comments;   // Lazy loaded
 ```
 
-> **Important:** Use `declare` (not `!`) for relation properties. TypeScript class field declarations with `!` create instance properties that shadow the prototype getter. The ESLint plugin detects this mistake.
+> **Important — the relation declaration depends on your decorator protocol:**
+>
+> - **Legacy decorators**: write `declare posts: Promise<Post[]>`. A field written `posts!: …` emits a
+>   class field that shadows the prototype getter, and the relation reads back as `undefined`.
+> - **Standard (TC39) decorators**: write `posts!: Promise<Post[]>`. A decorated `declare` field does
+>   not compile (`TS1206`), and litedbmodel removes the shadowing field itself.
+>
+> `litedbmodel/eslint-plugin` enforces whichever applies. It reads `experimentalDecorators` from your
+> TypeScript program when type-aware linting is on; otherwise set it explicitly:
+> `"litedbmodel/require-declare-for-relations": ["error", { "decorators": "standard" }]`.
 
 ### With Options (order, where, limit)
 
