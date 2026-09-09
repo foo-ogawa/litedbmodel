@@ -52,7 +52,7 @@ import { skipIntegrationTests, pgConfig, mysqlConfig, sqliteConfig } from '../he
 
 // ============================================================================
 // README models — copied VERBATIM from README.md (decorators + shapes unchanged).
-// The bare `@column()` shapes are exactly what the README Quick Start uses.
+// The `@column.*` families are exactly what the README Quick Start uses.
 // ============================================================================
 
 // Quick Start / CRUD / Conditions / Middleware model (README §Quick Start, §CRUD, §Conditions)
@@ -417,8 +417,10 @@ for (const d of dialects) {
       expect(typeof e.birth_date).toBe('string');
       expect(e.birth_date).toBe('1990-06-15');
       // README: @column.datetime() reads back a TZ-attached STRING, not a Date. Assert the TYPE, not
-      // just its rendering — `String(aDate)` also starts with a date, which is how a `Date` return
-      // slipped past this gate while the README promised one.
+      // just a rendering: the previous form asserted `String(value)` against a date-shaped prefix,
+      // which says nothing about the type the caller receives. (It would NOT have passed for a Date —
+      // `String(new Date())` renders "Sat Jun 15 2024 …". What let the README keep promising a `Date`
+      // was its TS type annotation, which no runtime assertion here could ever have contradicted.)
       expect(typeof e.updated_at).toBe('string');
       expect(e.updated_at).not.toBeInstanceOf(Date);
       // README: the string is the COLUMN's own textual form. `rc_events.updated_at` is declared

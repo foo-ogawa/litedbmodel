@@ -22,7 +22,7 @@ class AllTypesModel extends DBModel {
   @column.text() text_val?: string | null;
   @column.text() varchar_val?: string | null;
   @column.datetime() timestamp_val?: string | null;
-  @column.date() date_val?: string | null;  // Changed to use @column.date() for proper type casting
+  @column.date() date_val?: string | null;
   @column.intArray() int_array?: number[];
   @column.stringArray() text_array?: string[];
   @column.booleanArray() bool_array?: (boolean | null)[];
@@ -1118,9 +1118,6 @@ describe.skipIf(skipIntegrationTests)('DBModel advanced operations', () => {
   });
 
   describe('@column.datetime() read contract', () => {
-    // Note: AutoDateModel is defined at file top level for decorator metadata support
-
-
     beforeAll(async () => {
       await DBModel.execute(`
         CREATE TABLE IF NOT EXISTS auto_date_test (

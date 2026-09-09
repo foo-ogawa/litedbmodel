@@ -1,7 +1,7 @@
 /**
  * Phase F-2 (#105) — the option-B LIVE read-contract proof.
  *
- * The README `User` shape uses BARE `@column()` for its columns (`name`/`email`: string, `id`: number,
+ * The README `User` shape declares each column with a `@column.*` family (`name`/`email`: string, `id`: number,
  * `is_active`: boolean, `created_at`: Date). F1's blanket-INTEGER default typed a bare string column as
  * INTEGER, so the SCP typed-read de-box threw `materialize int32` on a live string value. Option B
  * (the family's declared `baseSqlType`, + the DBModel path's passthrough pin for ambiguous
@@ -19,7 +19,7 @@ import { DBModel, model, column } from '../../src';
 import type { ColumnsOf } from '../../src';
 import { skipIntegrationTests, pgConfig } from '../helpers/setup';
 
-// The README `User` shape — every column is a BARE `@column()` (the shape option B must handle).
+// The README `User` shape — every column declares its family (the shape option B must handle).
 @model('f2_users')
 class F2UserModel extends DBModel {
   @column.number() id?: number;

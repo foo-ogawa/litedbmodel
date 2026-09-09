@@ -274,7 +274,7 @@ const conformanceModels = (name: string): ModelClassLike => MODEL_REGISTRY[name]
 const COLUMN_OPTIONS: DeriveColumnsOptions = {
   // `ts`/`flag` (#137) are pinned for the same reason: the read-decode class is the COLUMN's SQL
   // type, so TIMESTAMP → the canonical date string and SMALLINT → Int come from here, not a guess.
-  // `doc_id` is the STRING primary key of `conf_docs` and `sku` a plain text column of `conf_lines`.
+  // `doc_id` is the STRING primary key of `conf_docs`.
   columnTypes: { ts: 'TIMESTAMP', flag: 'SMALLINT', doc_id: 'VARCHAR' },
 };
 
