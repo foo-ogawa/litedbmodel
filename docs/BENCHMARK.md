@@ -3,7 +3,7 @@
 Benchmark comparing litedbmodel with Prisma, Kysely, Drizzle, and TypeORM on PostgreSQL.
 
 <!--@embedoc:package_version-->
-**Version:** litedbmodel **3.0.0**
+**Version:** litedbmodel **2.2.7**
 <!--@embedoc:end-->
 
 > Measured on PostgreSQL 16 · Apple Silicon (arm64).

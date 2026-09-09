@@ -7,8 +7,8 @@
 package benchsqlite
 
 import (
-	"github.com/foo-ogawa/litedbmodel/go/v3/litedbmodel_runtime/wire"
-	"github.com/foo-ogawa/litedbmodel/go/v3/litedbmodel_runtime"
+	"github.com/foo-ogawa/litedbmodel/go/v2/litedbmodel_runtime/wire"
+	"github.com/foo-ogawa/litedbmodel/go/v2/litedbmodel_runtime"
 )
 
 // ExpectedSpecVersions are the spec versions baked at generation time (provenance only — the module

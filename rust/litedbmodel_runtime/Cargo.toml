@@ -1,6 +1,6 @@
 [package]
 name = "litedbmodel_runtime"
-version = "3.0.0"
+version = "2.2.7"
 edition.workspace = true
 license.workspace = true
 description = "Native SQL execution core shared by generated litedbmodel Rust modules."

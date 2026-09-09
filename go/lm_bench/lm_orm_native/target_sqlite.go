@@ -7,7 +7,7 @@
 // direct function values: the call in `op()` resolves statically, with no lookup at run time.
 package main
 
-import g "github.com/foo-ogawa/litedbmodel/go/v3/lm_bench/lm_orm_native/gen/benchsqlite"
+import g "github.com/foo-ogawa/litedbmodel/go/v2/lm_bench/lm_orm_native/gen/benchsqlite"
 
 const benchDialect = "sqlite"
 

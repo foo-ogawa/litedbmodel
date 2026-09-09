@@ -5,10 +5,10 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
-## [3.0.0] - 2026-09-10
+## [2.2.7] - 2026-09-10
 
 **標準デコレータ（TypeScript 5 既定）に対応し、列の型は `@column.*` family が唯一の権威になる。**
-Closes #286, #287。**破壊的変更あり — 下の移行手順を参照。**
+Closes #286, #287。**モデル定義の書き換えが必要 — 下の移行手順を参照。**
 
 ### Fixed
 
@@ -46,11 +46,15 @@ Closes #286, #287。**破壊的変更あり — 下の移行手順を参照。**
 - **`WriteValue<V>` を追加** — read が文字列の列も、write では `Date` / `bigint` を受ける（方言ごとの
   日時整形はライブラリの仕事であって呼び出し側の仕事ではない）。
 
-### BREAKING CHANGES
+### 書き換えが必要なモデル定義
 
-- **[go] import パスが `github.com/foo-ogawa/litedbmodel/go/v3` になる。** Go は major 3 以上でモジュール
-  パスが `/vN` で終わることを要求するので、major bump と同時でなければ全タグが 404 になる（#265）。
-- **無印 `@column()` を削除した。** 列は family で型を宣言する。移行はエラーメッセージにも出る:
+仕様は変わっていない。**欠陥に依存していた書き方**が、仕様どおりに動かないと分かった箇所であり、
+`@column.datetime()` などの**戻り値の挙動は 2.0.0 から一切変わっていない**（変わったのは、実装と食い違って
+いた宣言と README の側）。
+
+- **無印 `@column()` は列を宣言しない。** 列は family で型を宣言する（v2 §4.1「未指定=error, no-assume」）。
+  無印は `emitDecoratorMetadata` があれば偶然動いていただけで、esbuild 系では黙って型無しの列になっていた。
+  書き換え先はエラーメッセージにも出る:
 
   | 旧 | 新 |
   |---|---|
@@ -62,12 +66,11 @@ Closes #286, #287。**破壊的変更あり — 下の移行手順を参照。**
   | `@column({ primaryKey: true }) id?: number` | `@column.number({ primaryKey: true }) id?: number` |
 
   litedbmodel-gen を使っているなら `npx embedoc build` で生成区間はそのまま置き換わる。
-- **`@column.datetime()` / `.date()` / `.bigint()` の宣言型を `string` に変更した。** 実行時の値は
-  2.0.0 から文字列であり、変わったのは**宣言だけ**（値の挙動に変更は無い）。`Date` が要るなら
-  `new Date(row.created_at)`。PostgreSQL の `timestamptz` は `2026-11-01 10:00:00+00`（`T` は無い）で
-  返り、`new Date()` はその形をそのまま解釈する。
-- **標準デコレータでは relation を `declare` で宣言できない**（TypeScript が `TS1206` で拒否する）。
-  `posts!: Promise<Post[]>` と書く。legacy デコレータは従来どおり `declare`。
+- **`@column.datetime()` / `.date()` / `.bigint()` の宣言型が `string` になる。** 実行時の値は 2.0.0 から
+  文字列で、**型注釈の側が間違っていた**。`Date` が要るなら `new Date(row.created_at)`。PostgreSQL の
+  `timestamptz` は `2026-11-01 10:00:00+00`（`T` は無い）で返り、`new Date()` はその形をそのまま解釈する。
+- **標準デコレータで relation を書くときだけ `declare` が使えない**（TypeScript が `TS1206` で拒否する）。
+  `posts!: Promise<Post[]>` と書く。legacy デコレータは従来どおり `declare` で、変更は無い。
 
 ## [2.2.6] - 2026-08-06
 

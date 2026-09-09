@@ -8,7 +8,7 @@ litedbmodel v2 ships from **one monorepo** to **five registries**, all pinned to
 | npm        | `litedbmodel`                             | `package.json` (the SSoT)                |
 | PyPI       | `litedbmodel-runtime`                     | `python/pyproject.toml` + `__init__.py`  |
 | crates.io  | `litedbmodel_runtime`                     | `rust/litedbmodel_runtime/Cargo.toml` + `src/lib.rs` |
-| Go         | `github.com/foo-ogawa/litedbmodel/go/v3`  | VCS tag `go/vX.Y.Z` (no registry upload) |
+| Go         | `github.com/foo-ogawa/litedbmodel/go/v2`  | VCS tag `go/vX.Y.Z` (no registry upload) |
 | Packagist  | `litedbmodel/runtime`                     | git tag `vX.Y.Z` via repo webhook        |
 
 > **⚠️ Publishing is irreversible.** npm / PyPI / crates.io do not allow re-publishing a version,
@@ -35,7 +35,7 @@ The chain is **merge-to-`main` → GitHub Release → publish workflows**, mirro
    own dry-run/build/test before uploading.
 3. **Packagist** (`litedbmodel/runtime`) needs no workflow — its repo webhook syncs the new
    `vX.Y.Z` tag automatically. (First release only: submit the repo once at packagist.org.)
-4. **Go** needs no upload — `go get .../litedbmodel/go/v3@vX.Y.Z` resolves the `go/vX.Y.Z` tag that
+4. **Go** needs no upload — `go get .../litedbmodel/go/v2@vX.Y.Z` resolves the `go/vX.Y.Z` tag that
    `release.yml` pushed. The `/v2` is not decoration: Go requires the module path to end in `/vN` from
    major 2 on, and without it the tag resolves for nobody — which is exactly what happened to v2.0.0
    through v2.2.4 (#265). `release.yml` now asks `proxy.golang.org` whether the version actually
@@ -89,7 +89,7 @@ prompt that shows none of the diff it is approving.
 | Packagist | `litedbmodel/runtime` | ❌ not submitted (404). **First release only: submit the repo once at packagist.org** and connect the GitHub→Packagist webhook (thereafter tag pushes auto-sync) |
 
 **D. Downstream note (not a publish blocker):** the Go module fetches `behavior-contracts` from its
-**private** repo, so anyone consuming `github.com/foo-ogawa/litedbmodel/go/v3` needs read access to
+**private** repo, so anyone consuming `github.com/foo-ogawa/litedbmodel/go/v2` needs read access to
 `foo-ogawa/behavior-contracts`. If the Go module is meant for public consumption, make bc's Go module
 public (or otherwise redistribute it) before advertising the Go package.
 
@@ -112,7 +112,7 @@ Prereq (already done for 2.0.0 on branch `ws8b-release`): version bumped to the 
    - `npm view litedbmodel@X.Y.Z version`
    - `pip install litedbmodel-runtime==X.Y.Z` (fresh venv)
    - `cargo add litedbmodel_runtime@X.Y.Z` (throwaway crate)
-   - `go get github.com/foo-ogawa/litedbmodel/go/v3@vX.Y.Z`
+   - `go get github.com/foo-ogawa/litedbmodel/go/v2@vX.Y.Z`
    - `composer require litedbmodel/runtime:^X`
 6. **Archive `foo-ogawa/litedbmodel.rs`** — see below.
 
@@ -165,7 +165,7 @@ Run from the repo root.
       **`-p livedb_runner --features livedb` is not optional**: the runner is no default-member and its
       generated modules are behind that feature, so neither `cargo check` nor `clippy --workspace`
       compiles them, and a missing `impl_to_compare!` surfaces only in the live-DB leg
-- [ ] `(cd go && go vet ./...) && npm run go:fmt:check` — module path `.../litedbmodel/go/v3`.
+- [ ] `(cd go && go vet ./...) && npm run go:fmt:check` — module path `.../litedbmodel/go/v2`.
       `gofmt -l` alone is not a gate: it exits 0 whatever it prints, and the bc-generated modules are
       legitimately unformatted (gofmt-ing them is a `bc check` drift), so they would always be listed
 
@@ -241,6 +241,6 @@ that skips itself): its tests never run, so none of them can pass either way.
 
 The GitHub repository has been renamed `litedbmodel.ts` → **`litedbmodel`** (owner decision; GitHub
 301-redirects the old URL). All manifests now agree on `github.com/foo-ogawa/litedbmodel`:
-`go/go.mod` (`.../litedbmodel/go/v3`), `rust/litedbmodel_runtime/Cargo.toml` (`repository`), and
+`go/go.mod` (`.../litedbmodel/go/v2`), `rust/litedbmodel_runtime/Cargo.toml` (`repository`), and
 `package.json` (`repository`/`homepage`). Go's VCS-tag resolution and the Packagist webhook resolve
 against the live repo path. No further action required here.

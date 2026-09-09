@@ -14,7 +14,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/foo-ogawa/litedbmodel/go/v3/litedbmodel_runtime/wire"
+	"github.com/foo-ogawa/litedbmodel/go/v2/litedbmodel_runtime/wire"
 
 	_ "modernc.org/sqlite" // pure-go sqlite driver (registered as "sqlite")
 )

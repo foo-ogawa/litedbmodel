@@ -32,7 +32,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"github.com/foo-ogawa/litedbmodel/go/v3/lm_bench/setup"
+	"github.com/foo-ogawa/litedbmodel/go/v2/lm_bench/setup"
 	"os"
 	"regexp"
 	"strconv"
