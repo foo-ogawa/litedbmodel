@@ -31,9 +31,9 @@ import { MYSQL_CONFIG, PG_CONFIG, SQLITE_CONFIG, resolveInput, setupFor } from '
 // other cell loads.
 @model('benchmark_users')
 class UserModel extends DBModel {
-  @column() id?: number;
-  @column() email?: string;
-  @column() name?: string;
+  @column.number() id?: number;
+  @column.text() email?: string;
+  @column.text() name?: string;
   @hasMany(() => [User.id, Post.author_id])
   declare posts: Promise<PostModel[]>;
 }
@@ -41,12 +41,12 @@ const User = UserModel as typeof UserModel & ColumnsOf<UserModel>;
 
 @model('benchmark_posts')
 class PostModel extends DBModel {
-  @column() id?: number;
-  @column() title?: string;
-  @column() content?: string;
-  @column() published?: number;
-  @column() author_id?: number;
-  @column() created_at?: string;
+  @column.number() id?: number;
+  @column.text() title?: string;
+  @column.text() content?: string;
+  @column.number() published?: number;
+  @column.number() author_id?: number;
+  @column.text() created_at?: string;
   @belongsTo(() => [Post.author_id, User.id])
   declare author: Promise<UserModel | null>;
   @hasMany(() => [Post.id, Comment.post_id])
@@ -56,9 +56,9 @@ const Post = PostModel as typeof PostModel & ColumnsOf<PostModel>;
 
 @model('benchmark_comments')
 class CommentModel extends DBModel {
-  @column() id?: number;
-  @column() body?: string;
-  @column() post_id?: number;
+  @column.number() id?: number;
+  @column.text() body?: string;
+  @column.number() post_id?: number;
   @belongsTo(() => [Comment.post_id, Post.id])
   declare post: Promise<PostModel | null>;
 }
@@ -66,9 +66,9 @@ const Comment = CommentModel as typeof CommentModel & ColumnsOf<CommentModel>;
 
 @model('benchmark_tenant_users')
 class TenantUserModel extends DBModel {
-  @column({ primaryKey: true }) tenant_id?: number;
-  @column({ primaryKey: true }) user_id?: number;
-  @column() name?: string;
+  @column.number({ primaryKey: true }) tenant_id?: number;
+  @column.number({ primaryKey: true }) user_id?: number;
+  @column.text() name?: string;
   @hasMany(() => [
       [TenantUser.tenant_id, TenantPost.tenant_id],
       [TenantUser.user_id, TenantPost.user_id],
@@ -79,10 +79,10 @@ const TenantUser = TenantUserModel as typeof TenantUserModel & ColumnsOf<TenantU
 
 @model('benchmark_tenant_posts')
 class TenantPostModel extends DBModel {
-  @column({ primaryKey: true }) tenant_id?: number;
-  @column({ primaryKey: true }) post_id?: number;
-  @column() user_id?: number;
-  @column() title?: string;
+  @column.number({ primaryKey: true }) tenant_id?: number;
+  @column.number({ primaryKey: true }) post_id?: number;
+  @column.number() user_id?: number;
+  @column.text() title?: string;
   @hasMany(() => [
       [TenantPost.tenant_id, TenantComment.tenant_id],
       [TenantPost.post_id, TenantComment.post_id],
@@ -93,10 +93,10 @@ const TenantPost = TenantPostModel as typeof TenantPostModel & ColumnsOf<TenantP
 
 @model('benchmark_tenant_comments')
 class TenantCommentModel extends DBModel {
-  @column({ primaryKey: true }) tenant_id?: number;
-  @column({ primaryKey: true }) comment_id?: number;
-  @column() post_id?: number;
-  @column() body?: string;
+  @column.number({ primaryKey: true }) tenant_id?: number;
+  @column.number({ primaryKey: true }) comment_id?: number;
+  @column.number() post_id?: number;
+  @column.text() body?: string;
 }
 const TenantComment = TenantCommentModel as typeof TenantCommentModel & ColumnsOf<TenantCommentModel>;
 

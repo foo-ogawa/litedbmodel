@@ -149,9 +149,9 @@ function decodeValue(v: EncodedValue): unknown {
 class ConfUser {
   declare static id: Column<number, ConfUser>;
 
-  @column() id?: number;
-  @column() name?: string;
-  @column() post_count?: number;
+  @column.number() id?: number;
+  @column.text() name?: string;
+  @column.number() post_count?: number;
 
   @hasMany(() => [ConfUser.id, ConfPost.author_id], { order: () => ConfPost.id.asc() })
   declare posts: Promise<ConfPost[]>;
@@ -179,11 +179,11 @@ class ConfPost {
 
   // The schema is `id INT PRIMARY KEY` — CLIENT-supplied, no AUTO_INCREMENT. Declaring it is what
   // lets a `… RETURNING` write recover its rows by the value it bound (#130).
-  @column({ primaryKey: true }) id?: number;
-  @column() author_id?: number;
-  @column() title?: string;
-  @column() status?: string;
-  @column() created_at?: string;
+  @column.number({ primaryKey: true }) id?: number;
+  @column.number() author_id?: number;
+  @column.text() title?: string;
+  @column.text() status?: string;
+  @column.text() created_at?: string;
 
   @hasMany(() => [ConfPost.id, ConfTag.post_id], { order: () => ConfTag.id.asc() })
   declare tags: Promise<ConfTag[]>;
@@ -198,9 +198,9 @@ class ConfTag {
   declare static post_id: Column<number, ConfTag>;
 
   // `id INT PRIMARY KEY` — CLIENT-supplied, as `conf_posts` (#130).
-  @column({ primaryKey: true }) id?: number;
-  @column() post_id?: number;
-  @column() label?: string;
+  @column.number({ primaryKey: true }) id?: number;
+  @column.number() post_id?: number;
+  @column.text() label?: string;
 }
 
 /**
@@ -225,10 +225,10 @@ class ConfTag {
 class ConfTyped {
   declare static id: Column<number, ConfTyped>;
 
-  @column() id?: number;
-  @column() ts?: string;
-  @column() flag?: number;
-  @column() label?: string;
+  @column.number() id?: number;
+  @column.text() ts?: string;
+  @column.number() flag?: number;
+  @column.text() label?: string;
 }
 
 /**
@@ -242,8 +242,8 @@ class ConfTyped {
 class ConfDoc {
   declare static doc_id: Column<string, ConfDoc>;
 
-  @column({ primaryKey: true }) doc_id?: string;
-  @column() title?: string;
+  @column.text({ primaryKey: true }) doc_id?: string;
+  @column.text() title?: string;
 }
 
 /**
@@ -256,9 +256,9 @@ class ConfLine {
   declare static order_id: Column<number, ConfLine>;
   declare static line_no: Column<number, ConfLine>;
 
-  @column({ primaryKey: true }) order_id?: number;
-  @column({ primaryKey: true }) line_no?: number;
-  @column() sku?: string;
+  @column.number({ primaryKey: true }) order_id?: number;
+  @column.number({ primaryKey: true }) line_no?: number;
+  @column.text() sku?: string;
 }
 
 const MODEL_REGISTRY: Record<string, unknown> = { ConfUser, ConfPost, ConfTag, ConfTyped, ConfDoc, ConfLine };

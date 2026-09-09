@@ -15,14 +15,14 @@ import type { DBConfig } from '../../src';
 // MySQL doesn't have native arrays
 @model('all_types_test')
 class AllTypesModel extends DBModel {
-  @column() id?: number;
-  @column() int_val?: number | null;
-  @column() float_val?: number | null;
+  @column.number() id?: number;
+  @column.number() int_val?: number | null;
+  @column.number() float_val?: number | null;
   @column.boolean() bool_val?: boolean | null;
-  @column() text_val?: string | null;
-  @column() varchar_val?: string | null;
-  @column.datetime() timestamp_val?: Date | null;
-  @column() date_val?: string | null;
+  @column.text() text_val?: string | null;
+  @column.text() varchar_val?: string | null;
+  @column.datetime() timestamp_val?: string | null;
+  @column.text() date_val?: string | null;
   @column.json() json_val?: Record<string, unknown> | null;
   @column.json() json_array_val?: unknown[] | null;
 }
@@ -74,12 +74,12 @@ const requireMysql = async (): Promise<void> => {
 
 @model('users')
 class User extends DBModel {
-  @column() id?: number;
-  @column() name?: string;
-  @column() email?: string;
-  @column() is_active?: boolean;
-  @column() role?: string;
-  @column() created_at?: Date;
+  @column.number() id?: number;
+  @column.text() name?: string;
+  @column.text() email?: string;
+  @column.boolean() is_active?: boolean;
+  @column.text() role?: string;
+  @column.datetime() created_at?: string;
 }
 
 // Cast to include column properties
@@ -87,12 +87,12 @@ const UserModel = User as typeof User & ColumnsOf<User>;
 
 @model('posts')
 class Post extends DBModel {
-  @column() id?: number;
-  @column() user_id?: number;
-  @column() title?: string;
-  @column() content?: string;
-  @column() published?: boolean;
-  @column() view_count?: number;
+  @column.number() id?: number;
+  @column.number() user_id?: number;
+  @column.text() title?: string;
+  @column.text() content?: string;
+  @column.boolean() published?: boolean;
+  @column.number() view_count?: number;
 }
 
 const PostModel = Post as typeof Post & ColumnsOf<Post>;
@@ -576,7 +576,7 @@ describe('MySQL Driver', () => {
       expect(result).not.toBeNull();
       const [created] = await AllTypes.findById(result!);
       expect(created.id).toBeDefined();
-      expect(created.int_val).toBe(42n); // v2: INTEGER → BigInt (bc int model); float stays number
+      expect(created.int_val).toBe(42); // @column.number() declares the column → JS number (driver plane still BigInt)
       expect(created.float_val).toBeCloseTo(3.14159, 4);
       expect(created.bool_val).toBe(true);
       expect(created.text_val).toBe('long text content');
@@ -589,7 +589,7 @@ describe('MySQL Driver', () => {
       // Find and verify values are preserved
       const found = await AllTypes.findOne([[AllTypes.id, created.id]]);
       expect(found).not.toBeNull();
-      expect(found!.int_val).toBe(42n); // v2: INTEGER → BigInt
+      expect(found!.int_val).toBe(42); // @column.number() declares the column → JS number (driver plane still BigInt)
       expect(found!.float_val).toBeCloseTo(3.14159, 4);
       expect(found!.bool_val).toBe(true);
       expect(found!.text_val).toBe('long text content');
@@ -692,7 +692,7 @@ describe('MySQL Driver', () => {
       // Find and verify updated values
       const found = await AllTypes.findOne([[AllTypes.id, created.id]]);
       expect(found).not.toBeNull();
-      expect(found!.int_val).toBe(99n); // v2: INTEGER → BigInt
+      expect(found!.int_val).toBe(99); // @column.number() declares the column → JS number (driver plane still BigInt)
       expect(found!.float_val).toBeCloseTo(9.99, 2);
       expect(found!.bool_val).toBe(true);
       expect(found!.text_val).toBe('updated text');
@@ -717,7 +717,7 @@ describe('MySQL Driver', () => {
       });
       
       const [created] = await AllTypes.findById(result!);
-      expect(created.int_val).toBe(0n); // v2: INTEGER → BigInt
+      expect(created.int_val).toBe(0); // @column.number() declares the column → JS number (driver plane still BigInt)
       expect(created.float_val).toBe(0);
       expect(created.bool_val).toBe(false);
       expect(created.text_val).toBe('');
@@ -727,7 +727,7 @@ describe('MySQL Driver', () => {
       // Find and verify
       const found = await AllTypes.findOne([[AllTypes.id, created.id]]);
       expect(found).not.toBeNull();
-      expect(found!.int_val).toBe(0n); // v2: INTEGER → BigInt
+      expect(found!.int_val).toBe(0); // @column.number() declares the column → JS number (driver plane still BigInt)
       expect(found!.float_val).toBe(0);
       expect(found!.bool_val).toBe(false);
       expect(found!.text_val).toBe('');

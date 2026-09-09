@@ -17,8 +17,8 @@ describe('Query-Based Models', () => {
     it('should recognize a model with QUERY as query-based', () => {
       @model('user_stats')
       class UserStats extends DBModel {
-        @column() id?: number;
-        @column() post_count?: number;
+        @column.number() id?: number;
+        @column.number() post_count?: number;
 
         static QUERY = `
           SELECT users.id, COUNT(posts.id) as post_count
@@ -34,7 +34,7 @@ describe('Query-Based Models', () => {
     it('should not be query-based without QUERY', () => {
       @model('users')
       class RegularModel extends DBModel {
-        @column() id?: number;
+        @column.number() id?: number;
       }
 
       expect(RegularModel.isQueryBased()).toBe(false);
@@ -45,7 +45,7 @@ describe('Query-Based Models', () => {
     it('should throw error on getUpdateTableName for query-based models', () => {
       @model('derived')
       class QueryModel extends DBModel {
-        @column() id?: number;
+        @column.number() id?: number;
 
         static QUERY = `SELECT id FROM users`;
       }
@@ -58,8 +58,8 @@ describe('Query-Based Models', () => {
     it('should generate CTE-based SQL for query-based models', () => {
       @model('user_stats')
       class UserStatsModel extends DBModel {
-        @column() id?: number;
-        @column() post_count?: number;
+        @column.number() id?: number;
+        @column.number() post_count?: number;
 
         static QUERY = `SELECT users.id, COUNT(posts.id) as post_count FROM users LEFT JOIN posts ON users.id = posts.user_id GROUP BY users.id`;
       }
@@ -78,8 +78,8 @@ describe('Query-Based Models', () => {
     it('should not use CTE for regular models', () => {
       @model('users')
       class RegularModel extends DBModel {
-        @column() id?: number;
-        @column() name?: string;
+        @column.number() id?: number;
+        @column.text() name?: string;
       }
 
       const { sql } = (RegularModel as any)._buildSelectSQL({ name: 'John' });
@@ -92,7 +92,7 @@ describe('Query-Based Models', () => {
     it('should use custom alias from TABLE_NAME', () => {
       @model('my_custom_alias')
       class CustomAliasModel extends DBModel {
-        @column() id?: number;
+        @column.number() id?: number;
 
         static QUERY = `SELECT id FROM users`;
       }
@@ -108,8 +108,8 @@ describe('Query-Based Models', () => {
     it('should create a bound model with query parameters', () => {
       @model('sales_report')
       class SalesReportModel extends DBModel {
-        @column() product_id?: number;
-        @column() total_revenue?: number;
+        @column.number() product_id?: number;
+        @column.number() total_revenue?: number;
 
         static forPeriod(startDate: string, endDate: string) {
           return this.withQuery({
@@ -137,7 +137,7 @@ describe('Query-Based Models', () => {
     it('should preserve TABLE_NAME in bound model', () => {
       @model('my_model')
       class MyModel extends DBModel {
-        @column() id?: number;
+        @column.number() id?: number;
 
         static forDate(date: string) {
           return this.withQuery({
@@ -156,8 +156,8 @@ describe('Query-Based Models', () => {
     it('should preserve Column properties in bound model', () => {
       @model('test_model')
       class TestModel extends DBModel {
-        @column() id?: number;
-        @column() name?: string;
+        @column.number() id?: number;
+        @column.text() name?: string;
 
         static withDateFilter(date: string) {
           return this.withQuery({
@@ -178,8 +178,8 @@ describe('Query-Based Models', () => {
     it('should prepend query params to condition params', () => {
       @model('filtered')
       class FilteredModel extends DBModel {
-        @column() id?: number;
-        @column() status?: string;
+        @column.number() id?: number;
+        @column.text() status?: string;
 
         static QUERY = `SELECT * FROM users`;
         
@@ -206,7 +206,7 @@ describe('Query-Based Models', () => {
     it('should create independent bound models', () => {
       @model('report')
       class ReportModel extends DBModel {
-        @column() id?: number;
+        @column.number() id?: number;
 
         static forYear(year: number) {
           return this.withQuery({
@@ -232,8 +232,8 @@ describe('Query-Based Models', () => {
     it('should generate CTE-based COUNT SQL', () => {
       @model('stats')
       class StatsModel extends DBModel {
-        @column() id?: number;
-        @column() value?: number;
+        @column.number() id?: number;
+        @column.number() value?: number;
 
         static QUERY = `SELECT id, value FROM source_table`;
       }
@@ -250,23 +250,23 @@ describe('Query-Based Models', () => {
     it('should allow using Column references in QUERY string', () => {
       @model('users')
       class UserModel extends DBModel {
-        @column() id?: number;
-        @column() name?: string;
+        @column.number() id?: number;
+        @column.text() name?: string;
       }
       const User = UserModel as typeof UserModel & ColumnsOf<UserModel>;
 
       @model('posts')
       class PostModel extends DBModel {
-        @column() id?: number;
-        @column() user_id?: number;
+        @column.number() id?: number;
+        @column.number() user_id?: number;
       }
       const Post = PostModel as typeof PostModel & ColumnsOf<PostModel>;
 
       // Using Column references in QUERY
       @model('user_post_stats')
       class UserPostStatsModel extends DBModel {
-        @column() user_id?: number;
-        @column() post_count?: number;
+        @column.number() user_id?: number;
+        @column.number() post_count?: number;
 
         // Column.toString() returns the column name
         static QUERY = `

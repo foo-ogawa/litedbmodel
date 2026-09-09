@@ -182,12 +182,12 @@ No need to use explicit variants like `@column.boolean()`.
 
 Auto-inferred types:
 ```typescript
-@column() id?: number;          // Auto: Number conversion
-@column() name?: string;        // No conversion needed
-@column() is_active?: boolean;  // Auto: Boolean conversion
-@column() created_at?: Date;    // Auto: DateTime conversion
-@column() large_id?: bigint;    // Auto: BigInt conversion
-@column('custom_name') prop?: string;  // Custom column name
+@column.number() id?: number;          // Auto: Number conversion
+@column.text() name?: string;        // No conversion needed
+@column.boolean() is_active?: boolean;  // Auto: Boolean conversion
+@column.datetime() created_at?: string;    // Auto: DateTime conversion
+@column.bigint() large_id?: string;    // Auto: BigInt conversion
+@column.text('custom_name') prop?: string;  // Custom column name
 ```
 
 Explicit type conversion required (cannot be auto-inferred):
@@ -207,8 +207,8 @@ still work and can be used when you want to be explicit about the conversion.
 | ------ | ------ | ------ | ------ |
 | `boolean()` | (`columnName?`: `string`) => `PropertyDecorator` | Boolean type conversion Converts 't'/'f', 'true'/'false', 1/0 to boolean Preserves null for nullable columns, undefined stays undefined **Example** `@column.boolean() is_active?: boolean;` | [decorators.ts:530](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L530) |
 | `number()` | (`columnName?`: `string`) => `PropertyDecorator` | Number type conversion (from string) Preserves null for nullable columns, undefined stays undefined **Example** `@column.number() amount?: number;` | [decorators.ts:547](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L547) |
-| `bigint()` | (`columnName?`: `string`) => `PropertyDecorator` | BigInt type conversion Preserves null for nullable columns, undefined stays undefined **Example** `@column.bigint() large_id?: bigint;` | [decorators.ts:560](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L560) |
-| `datetime()` | (`columnName?`: `string`) => `PropertyDecorator` | DateTime type conversion (timestamp, timestamptz) Preserves null for nullable columns, undefined stays undefined Timezone handling: - PostgreSQL: Serializes to ISO 8601 UTC string with 'Z' suffix for explicit timezone - MySQL/SQLite: Passes Date object to driver (driver-dependent timezone handling) **Example** `@column.datetime() created_at?: Date;` | [decorators.ts:588](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L588) |
+| `bigint()` | (`columnName?`: `string`) => `PropertyDecorator` | BigInt type conversion Preserves null for nullable columns, undefined stays undefined **Example** `@column.bigint() large_id?: string;` | [decorators.ts:560](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L560) |
+| `datetime()` | (`columnName?`: `string`) => `PropertyDecorator` | DateTime type conversion (timestamp, timestamptz) Preserves null for nullable columns, undefined stays undefined Timezone handling: - PostgreSQL: Serializes to ISO 8601 UTC string with 'Z' suffix for explicit timezone - MySQL/SQLite: Passes Date object to driver (driver-dependent timezone handling) **Example** `@column.datetime() created_at?: string;` | [decorators.ts:588](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L588) |
 | `date()` | (`columnName?`: `string`) => `PropertyDecorator` | Date type conversion — returns YYYY-MM-DD string. Preserves null for nullable columns, undefined stays undefined. DB values (Date object or string) are normalized to 'YYYY-MM-DD' string. On write, string values are passed through; Date objects are formatted as 'YYYY-MM-DD'. **Example** `@column.date() birth_date?: string;` | [decorators.ts:618](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L618) |
 | `stringArray()` | (`columnName?`: `string`) => `PropertyDecorator` | String array type conversion (text[]) Preserves null for nullable columns, undefined stays undefined **Example** `@column.stringArray() tags?: string[];` | [decorators.ts:657](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L657) |
 | `intArray()` | (`columnName?`: `string`) => `PropertyDecorator` | Integer array type conversion (integer[]) Preserves null for nullable columns, undefined stays undefined **Example** `@column.intArray() scores?: number[];` | [decorators.ts:674](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L674) |

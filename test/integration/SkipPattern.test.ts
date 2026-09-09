@@ -28,11 +28,11 @@ import {
 
 @model('pg_skip_test')
 class PgSkipTestModel extends DBModel {
-  @column({ primaryKey: true }) id?: number;
-  @column() name?: string;
-  @column() email?: string;
-  @column() status?: string;
-  @column() score?: number;
+  @column.number({ primaryKey: true }) id?: number;
+  @column.text() name?: string;
+  @column.text() email?: string;
+  @column.text() status?: string;
+  @column.number() score?: number;
 }
 const PgSkipTest = PgSkipTestModel.asModel();
 type PgSkipTest = PgSkipTestModel;
@@ -265,8 +265,8 @@ describe.skipIf(skipIntegrationTests)('SKIP Pattern - PostgreSQL', () => {
 
 @model('pg_array_skip_test')
 class PgArraySkipTestModel extends DBModel {
-  @column({ primaryKey: true }) id?: number;
-  @column() name?: string;
+  @column.number({ primaryKey: true }) id?: number;
+  @column.text() name?: string;
   @column.intArray() int_arr?: number[];
   @column.stringArray() str_arr?: string[];
   @column.booleanArray() bool_arr?: (boolean | null)[];
@@ -537,11 +537,11 @@ describe.skipIf(skipIntegrationTests)('SKIP Pattern - MySQL', () => {
 
   @model('mysql_skip_test')
   class MysqlSkipTestModel extends DBModel {
-    @column({ primaryKey: true }) id?: number;
-    @column() name?: string;
-    @column() email?: string;
-    @column() status?: string;
-    @column() score?: number;
+    @column.number({ primaryKey: true }) id?: number;
+    @column.text() name?: string;
+    @column.text() email?: string;
+    @column.text() status?: string;
+    @column.number() score?: number;
   }
 
   beforeAll(async () => {
@@ -683,11 +683,11 @@ describe.skipIf(skipIntegrationTests)('SKIP Pattern - SQLite', () => {
 
   @model('lite_skip_test')
   class SqliteSkipTestModel extends DBModel {
-    @column({ primaryKey: true }) id?: number;
-    @column() name?: string;
-    @column() email?: string;
-    @column() status?: string;
-    @column() score?: number;
+    @column.number({ primaryKey: true }) id?: number;
+    @column.text() name?: string;
+    @column.text() email?: string;
+    @column.text() status?: string;
+    @column.number() score?: number;
   }
 
   beforeAll(async () => {
@@ -843,8 +843,8 @@ describe.skipIf(skipIntegrationTests)('SKIP Pattern - SQLite', () => {
 
 @model('mysql_array_test')
 class MysqlArrayTestModel extends DBModel {
-  @column({ primaryKey: true }) id?: number;
-  @column() name?: string;
+  @column.number({ primaryKey: true }) id?: number;
+  @column.text() name?: string;
   @column.json<number[]>() int_arr?: number[];
   @column.json<string[]>() str_arr?: string[];
   @column.json<Record<string, unknown>>() json_data?: Record<string, unknown>;
@@ -940,8 +940,8 @@ describe.skipIf(skipIntegrationTests)('Array (JSON) Pattern - MySQL', () => {
 
 @model('lite_array_test')
 class SqliteArrayTestModel extends DBModel {
-  @column({ primaryKey: true }) id?: number;
-  @column() name?: string;
+  @column.number({ primaryKey: true }) id?: number;
+  @column.text() name?: string;
   @column.json<number[]>() int_arr?: number[];
   @column.json<string[]>() str_arr?: string[];
   @column.json<Record<string, unknown>>() json_data?: Record<string, unknown>;

@@ -113,16 +113,16 @@ export function bindModelToBase<T extends typeof DBModel>(
 
 @model('users')
 class UserModel extends DBModel {
-  @column() id?: number;
-  @column() name?: string;
-  @column() email?: string;
+  @column.number() id?: number;
+  @column.text() name?: string;
+  @column.text() email?: string;
   @column.boolean() is_active?: boolean;
-  @column() role?: string;
+  @column.text() role?: string;
   @column.stringArray() tags?: string[];
   @column.json<Record<string, unknown>>() metadata?: Record<string, unknown>;
-  @column.datetime() created_at?: Date;
-  @column.datetime() updated_at?: Date;
-  @column.datetime() deleted_at?: Date | null;
+  @column.datetime() created_at?: string;
+  @column.datetime() updated_at?: string;
+  @column.datetime() deleted_at?: string | null;
 }
 export const User = UserModel as typeof UserModel & ColumnsOf<UserModel>;
 export type User = UserModel;
@@ -133,15 +133,15 @@ export type User = UserModel;
 
 @model('posts')
 class PostModel extends DBModel {
-  @column() id?: number;
-  @column() user_id?: number;
-  @column() title?: string;
-  @column() content?: string;
-  @column() view_count?: number;
+  @column.number() id?: number;
+  @column.number() user_id?: number;
+  @column.text() title?: string;
+  @column.text() content?: string;
+  @column.number() view_count?: number;
   @column.boolean() published?: boolean;
-  @column.datetime() published_at?: Date | null;
-  @column.datetime() created_at?: Date;
-  @column.datetime() updated_at?: Date;
+  @column.datetime() published_at?: string | null;
+  @column.datetime() created_at?: string;
+  @column.datetime() updated_at?: string;
 }
 export const Post = PostModel as typeof PostModel & ColumnsOf<PostModel>;
 export type Post = PostModel;
@@ -152,9 +152,9 @@ export type Post = PostModel;
 
 @model('post_tags')
 class PostTagModel extends DBModel {
-  @column({ primaryKey: true }) post_id?: number;
-  @column({ primaryKey: true }) tag_id?: number;
-  @column.datetime() created_at?: Date;
+  @column.number({ primaryKey: true }) post_id?: number;
+  @column.number({ primaryKey: true }) tag_id?: number;
+  @column.datetime() created_at?: string;
 }
 export const PostTag = PostTagModel as typeof PostTagModel & ColumnsOf<PostTagModel>;
 export type PostTag = PostTagModel;

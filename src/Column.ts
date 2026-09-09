@@ -472,9 +472,9 @@ export function isColumn(value: unknown): value is Column {
  * ```typescript
  * @model('users')
  * class User extends DBModel {
- *   @column() id?: number;
- *   @column() name?: string;
- *   @column() is_active?: boolean;
+ *   @column.number() id?: number;
+ *   @column.text() name?: string;
+ *   @column.boolean() is_active?: boolean;
  * }
  *
  * // Use asModel() to get type-safe Column references

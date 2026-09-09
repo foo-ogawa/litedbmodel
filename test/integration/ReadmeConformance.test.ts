@@ -58,23 +58,23 @@ import { skipIntegrationTests, pgConfig, mysqlConfig, sqliteConfig } from '../he
 // Quick Start / CRUD / Conditions / Middleware model (README §Quick Start, §CRUD, §Conditions)
 @model('rc_users')
 class UserModel extends DBModel {
-  @column() id?: number;
-  @column() name?: string;
-  @column() email?: string;
-  @column() is_active?: boolean;
-  @column() created_at?: Date;
-  @column() updated_at?: Date;
+  @column.number() id?: number;
+  @column.text() name?: string;
+  @column.text() email?: string;
+  @column.boolean() is_active?: boolean;
+  @column.datetime() created_at?: string;
+  @column.datetime() updated_at?: string;
   // extra columns exercised by README condition/subquery/upsert examples
-  @column() status?: string;
-  @column() role?: string;
-  @column() age?: number;
-  @column() tenant_id?: number;
-  @column() group_id?: number;
+  @column.text() status?: string;
+  @column.text() role?: string;
+  @column.number() age?: number;
+  @column.number() tenant_id?: number;
+  @column.number() group_id?: number;
   // README §Date vs DateTime: a NULLABLE timestamp uses an EXPLICIT decorator — the `Date | null`
   // union defeats reflect-metadata's design:type inference (it emits Object, not Date), so a bare
   // `@column()` cannot type it. `@column.datetime()` is the documented decorator for this (mirrors
   // the repo's own test helper). Non-null `Date` columns (created_at/updated_at) reflect fine as bare.
-  @column.datetime() deleted_at?: Date | null;
+  @column.datetime() deleted_at?: string | null;
 
   // README §Relations
   @hasMany(() => [User.id, Post.author_id])
@@ -106,9 +106,9 @@ type User = UserModel;
 
 @model('rc_posts')
 class PostModel extends DBModel {
-  @column() id?: number;
-  @column() author_id?: number;
-  @column() title?: string;
+  @column.number() id?: number;
+  @column.number() author_id?: number;
+  @column.text() title?: string;
 
   @belongsTo(() => [Post.author_id, User.id])
   declare author: Promise<User | null>;
@@ -121,18 +121,18 @@ type Post = PostModel;
 
 @model('rc_comments')
 class CommentModel extends DBModel {
-  @column() id?: number;
-  @column() post_id?: number;
-  @column() body?: string;
+  @column.number() id?: number;
+  @column.number() post_id?: number;
+  @column.text() body?: string;
 }
 const Comment = CommentModel as typeof CommentModel & ColumnsOf<CommentModel>;
 type Comment = CommentModel;
 
 @model('rc_user_profiles')
 class UserProfileModel extends DBModel {
-  @column() id?: number;
-  @column() user_id?: number;
-  @column() bio?: string;
+  @column.number() id?: number;
+  @column.number() user_id?: number;
+  @column.text() bio?: string;
 }
 const UserProfile = UserProfileModel as typeof UserProfileModel & ColumnsOf<UserProfileModel>;
 type UserProfile = UserProfileModel;
@@ -140,23 +140,23 @@ type UserProfile = UserProfileModel;
 // README §Subqueries target tables
 @model('rc_orders')
 class OrderModel extends DBModel {
-  @column() id?: number;
-  @column() user_id?: number;
-  @column() group_id?: number;
-  @column() tenant_id?: number;
-  @column() status?: string;
+  @column.number() id?: number;
+  @column.number() user_id?: number;
+  @column.number() group_id?: number;
+  @column.number() tenant_id?: number;
+  @column.text() status?: string;
 }
 const Order = OrderModel as typeof OrderModel & ColumnsOf<OrderModel>;
 
 @model('rc_banned_users')
 class BannedUserModel extends DBModel {
-  @column() user_id?: number;
+  @column.number() user_id?: number;
 }
 const BannedUser = BannedUserModel as typeof BannedUserModel & ColumnsOf<BannedUserModel>;
 
 @model('rc_complaints')
 class ComplaintModel extends DBModel {
-  @column() user_id?: number;
+  @column.number() user_id?: number;
 }
 const Complaint = ComplaintModel as typeof ComplaintModel & ColumnsOf<ComplaintModel>;
 
@@ -166,9 +166,9 @@ const Complaint = ComplaintModel as typeof ComplaintModel & ColumnsOf<ComplaintM
 // to MySQL. We keep the README's INTENT (composite-unique-key upsert) with a portable column name.
 @model('rc_user_prefs')
 class UserPrefModel extends DBModel {
-  @column() user_id?: number;
-  @column() pref_key?: string;
-  @column() value?: string;
+  @column.number() user_id?: number;
+  @column.text() pref_key?: string;
+  @column.text() value?: string;
 }
 const UserPref = UserPrefModel as typeof UserPrefModel & ColumnsOf<UserPrefModel>;
 
@@ -179,9 +179,9 @@ const UserPref = UserPrefModel as typeof UserPrefModel & ColumnsOf<UserPrefModel
   select: 'id, title, created_at',
 })
 class EntryModel extends DBModel {
-  @column() id?: number;
-  @column() title?: string;
-  @column() created_at?: Date;
+  @column.number() id?: number;
+  @column.text() title?: string;
+  @column.datetime() created_at?: string;
   @column.boolean() is_deleted?: boolean;
 }
 const Entry = EntryModel as typeof EntryModel & ColumnsOf<EntryModel>;
@@ -189,27 +189,27 @@ const Entry = EntryModel as typeof EntryModel & ColumnsOf<EntryModel>;
 // README §Column Decorators — the Date vs DateTime distinction
 @model('rc_events')
 class EventModel extends DBModel {
-  @column() id?: number;
+  @column.number() id?: number;
   @column.date() birth_date?: string; // DATE → 'YYYY-MM-DD' string
-  @column.datetime() updated_at?: Date; // TIMESTAMP → Date/string
+  @column.datetime() updated_at?: string; // TIMESTAMP → Date/string
 }
 const Event = EventModel as typeof EventModel & ColumnsOf<EventModel>;
 
 // README §Composite Key Relations
 @model('rc_tenant_users')
 class TenantUserModel extends DBModel {
-  @column({ primaryKey: true }) tenant_id?: number;
-  @column({ primaryKey: true }) id?: number;
-  @column() name?: string;
+  @column.number({ primaryKey: true }) tenant_id?: number;
+  @column.number({ primaryKey: true }) id?: number;
+  @column.text() name?: string;
 }
 const TenantUser = TenantUserModel as typeof TenantUserModel & ColumnsOf<TenantUserModel>;
 type TenantUser = TenantUserModel;
 
 @model('rc_tenant_posts')
 class TenantPostModel extends DBModel {
-  @column({ primaryKey: true }) tenant_id?: number;
-  @column({ primaryKey: true }) id?: number;
-  @column() author_id?: number;
+  @column.number({ primaryKey: true }) tenant_id?: number;
+  @column.number({ primaryKey: true }) id?: number;
+  @column.number() author_id?: number;
 
   @belongsTo(() => [
     [TenantPost.tenant_id, TenantUser.tenant_id],
@@ -222,9 +222,9 @@ const TenantPost = TenantPostModel as typeof TenantPostModel & ColumnsOf<TenantP
 // README §Query-Based Models
 @model('rc_user_stats')
 class UserStatsModel extends DBModel {
-  @column() id?: number;
-  @column() name?: string;
-  @column() post_count?: number;
+  @column.number() id?: number;
+  @column.text() name?: string;
+  @column.number() post_count?: number;
 
   static QUERY = `
     SELECT

@@ -17,47 +17,47 @@ import type { ColumnsOf } from '../../src/Column';
 
 @model('users')
 class UserModel extends DBModel {
-  @column() id?: number;
-  @column() group_id?: number;
-  @column() tenant_id?: number;
-  @column() is_active?: boolean;
-  @column() created_at?: Date;
-  @column() deleted_at?: Date;
-  @column() parent_id?: number;
+  @column.number() id?: number;
+  @column.number() group_id?: number;
+  @column.number() tenant_id?: number;
+  @column.boolean() is_active?: boolean;
+  @column.datetime() created_at?: string;
+  @column.datetime() deleted_at?: string;
+  @column.number() parent_id?: number;
 }
 export const User = UserModel as typeof UserModel & ColumnsOf<UserModel>;
 
 @model('orders')
 class OrderModel extends DBModel {
-  @column() id?: number;
-  @column() user_id?: number;
-  @column() group_id?: number;
-  @column() tenant_id?: number;
-  @column() status?: string;
-  @column() amount?: number;
-  @column() created_at?: Date;
+  @column.number() id?: number;
+  @column.number() user_id?: number;
+  @column.number() group_id?: number;
+  @column.number() tenant_id?: number;
+  @column.text() status?: string;
+  @column.number() amount?: number;
+  @column.datetime() created_at?: string;
 }
 export const Order = OrderModel as typeof OrderModel & ColumnsOf<OrderModel>;
 
 @model('banned_users')
 class BannedUserModel extends DBModel {
-  @column() id?: number;
-  @column() user_id?: number;
-  @column() group_id?: number;
-  @column() is_active?: boolean;
+  @column.number() id?: number;
+  @column.number() user_id?: number;
+  @column.number() group_id?: number;
+  @column.boolean() is_active?: boolean;
 }
 export const BannedUser = BannedUserModel as typeof BannedUserModel & ColumnsOf<BannedUserModel>;
 
 @model('complaints')
 class ComplaintModel extends DBModel {
-  @column() id?: number;
-  @column() user_id?: number;
+  @column.number() id?: number;
+  @column.number() user_id?: number;
 }
 export const Complaint = ComplaintModel as typeof ComplaintModel & ColumnsOf<ComplaintModel>;
 
 @model('temp_table')
 class TempModel extends DBModel {
-  @column() id?: number;
+  @column.number() id?: number;
 }
 export const Temp = TempModel as typeof TempModel & ColumnsOf<TempModel>;
 

@@ -400,8 +400,8 @@ litedbmodel takes a fundamentally different approach: **relations are statically
 // Define relations once in your model
 @model('users')
 class UserModel extends DBModel {
-  @column() id?: number;
-  @column() name?: string;
+  @column.number() id?: number;
+  @column.text() name?: string;
   
   // Use 'declare' for relation properties
   @hasMany(() => [User.id, Post.author_id])

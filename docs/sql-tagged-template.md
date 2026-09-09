@@ -94,8 +94,8 @@ The `sql` tag eliminates manual `$1`/`$2` placeholder numbering and DB dialect d
 ```typescript
 @model('sales_report')
 class SalesReportModel extends DBModel {
-  @column() product_id?: number;
-  @column() total_revenue?: number;
+  @column.number() product_id?: number;
+  @column.number() total_revenue?: number;
 
   static forPeriod(startDate: string, endDate: string) {
     return this.withQuery(sql`
@@ -130,9 +130,9 @@ Use the `sql` tag for `QUERY` to get Column and table name references that are r
 ```typescript
 @model('user_activity')
 class UserActivityModel extends DBModel {
-  @column() user_id?: number;
-  @column() user_name?: string;
-  @column() total_posts?: number;
+  @column.number() user_id?: number;
+  @column.text() user_name?: string;
+  @column.number() total_posts?: number;
 
   static QUERY = sql`
     SELECT 

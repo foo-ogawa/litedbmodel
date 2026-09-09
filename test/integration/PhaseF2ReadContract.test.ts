@@ -22,11 +22,11 @@ import { skipIntegrationTests, pgConfig } from '../helpers/setup';
 // The README `User` shape — every column is a BARE `@column()` (the shape option B must handle).
 @model('f2_users')
 class F2UserModel extends DBModel {
-  @column() id?: number;
-  @column() name?: string;
-  @column() email?: string;
+  @column.number() id?: number;
+  @column.text() name?: string;
+  @column.text() email?: string;
   @column.boolean() is_active?: boolean;
-  @column.datetime() created_at?: Date;
+  @column.datetime() created_at?: string;
 }
 const F2User = F2UserModel as typeof F2UserModel & ColumnsOf<F2UserModel>;
 

@@ -59,10 +59,10 @@ decorators
 ```typescript
 @model('users')
 class User extends DBModel {
-  @column() id?: number;
-  @column() name?: string;
+  @column.number() id?: number;
+  @column.text() name?: string;
   @column.boolean() is_active?: boolean;
-  @column.datetime() created_at?: Date;
+  @column.datetime() created_at?: string;
 
   @hasMany(() => [User.id, Post.author_id])
   declare posts: Promise<Post[]>;
@@ -126,10 +126,10 @@ decorators
 ```typescript
 @model('users')
 class User extends DBModel {
-  @column() id?: number;
-  @column() name?: string;
+  @column.number() id?: number;
+  @column.text() name?: string;
   @column.boolean() is_active?: boolean;
-  @column.datetime() created_at?: Date;
+  @column.datetime() created_at?: string;
 
   @hasMany(() => [User.id, Post.author_id])
   declare posts: Promise<Post[]>;
@@ -194,10 +194,10 @@ decorators
 ```typescript
 @model('users')
 class User extends DBModel {
-  @column() id?: number;
-  @column() name?: string;
+  @column.number() id?: number;
+  @column.text() name?: string;
   @column.boolean() is_active?: boolean;
-  @column.datetime() created_at?: Date;
+  @column.datetime() created_at?: string;
 
   @hasMany(() => [User.id, Post.author_id])
   declare posts: Promise<Post[]>;

@@ -256,7 +256,7 @@ Use explicit type decorators when auto-inference isn't sufficient:
 
 ```typescript
 @column.date() birth_date?: string;         // Date only (YYYY-MM-DD string)
-@column.datetime() updated_at?: Date;       // DateTime with timezone
+@column.datetime() updated_at?: string;       // DateTime with timezone
 @column.boolean() is_active?: boolean;      // Explicit boolean
 @column.number() amount?: number;           // Explicit number
 @column.uuid() id?: string;                 // UUID with auto-casting (PostgreSQL)
@@ -282,7 +282,7 @@ Databases distinguish between date-only and datetime columns. `@column.date()` r
 ```typescript
 // ✅ Correct usage
 @column() created_at?: Date;              // TIMESTAMP column (datetime → Date)
-@column.datetime() updated_at?: Date;     // TIMESTAMP column (datetime → Date)
+@column.datetime() updated_at?: string;     // TIMESTAMP column (datetime → Date)
 @column.date() settlement_date?: string;  // DATE column (date only → 'YYYY-MM-DD')
 
 // ❌ Wrong: will cause type mismatch errors

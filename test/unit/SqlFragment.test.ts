@@ -677,8 +677,8 @@ describe('DBModel integration: withQuery with SqlFragment', () => {
   it('should accept SqlFragment and extract sql/params', () => {
     @model('wq_test')
     class WQModel extends DBModel {
-      @column() id?: number;
-      @column() total?: number;
+      @column.number() id?: number;
+      @column.number() total?: number;
 
       static forPeriod(start: string, end: string) {
         return this.withQuery(sql`
@@ -700,7 +700,7 @@ describe('DBModel integration: withQuery with SqlFragment', () => {
   it('should create independent bound models with SqlFragment', () => {
     @model('wq_independent')
     class IndModel extends DBModel {
-      @column() id?: number;
+      @column.number() id?: number;
 
       static forYear(year: number) {
         return this.withQuery(sql`SELECT * FROM data WHERE year = ${year}`);
@@ -722,8 +722,8 @@ describe('DBModel integration: QUERY as SqlFragment', () => {
 
     @model('query_frag')
     class QFModel extends DBModel {
-      @column() id?: number;
-      @column() name?: string;
+      @column.number() id?: number;
+      @column.text() name?: string;
 
       static QUERY = sql`SELECT ${UserCol}, name FROM users WHERE active = ${true}`;
     }
@@ -736,7 +736,7 @@ describe('DBModel integration: QUERY as SqlFragment', () => {
   it('should merge SqlFragment params with _queryParams', () => {
     @model('merge_params')
     class MergeModel extends DBModel {
-      @column() id?: number;
+      @column.number() id?: number;
     }
 
     const frag = sql`SELECT * FROM data WHERE x = ${10}`;
@@ -772,8 +772,8 @@ describe('Model class (function type) as table name in sql tag', () => {
   it('should expand Model class to TABLE_NAME in FROM clause', () => {
     @model('meals')
     class Meal extends DBModel {
-      @column() id?: number;
-      @column() name?: string;
+      @column.number() id?: number;
+      @column.text() name?: string;
     }
 
     const frag = sql`SELECT * FROM ${Meal}`;
@@ -785,13 +785,13 @@ describe('Model class (function type) as table name in sql tag', () => {
   it('should expand Model class in JOIN clause', () => {
     @model('users')
     class User extends DBModel {
-      @column() id?: number;
+      @column.number() id?: number;
     }
 
     @model('posts')
     class Post extends DBModel {
-      @column() id?: number;
-      @column() user_id?: number;
+      @column.number() id?: number;
+      @column.number() user_id?: number;
     }
 
     const frag = sql`SELECT * FROM ${User} JOIN ${Post} ON ${User}.id = ${Post}.user_id`;
@@ -803,7 +803,7 @@ describe('Model class (function type) as table name in sql tag', () => {
   it('should expand Model class with value params', () => {
     @model('meals')
     class Meal extends DBModel {
-      @column() id?: number;
+      @column.number() id?: number;
     }
 
     const frag = sql`SELECT * FROM ${Meal} WHERE id = ${42}`;
