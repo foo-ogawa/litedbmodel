@@ -22,16 +22,24 @@
       ],
       "expectedResult": [
         {
-          "author_id": 1,
+          "author_id": {
+            "$bigint": "1"
+          },
           "created_at": "2026-02-01",
-          "id": 10,
+          "id": {
+            "$bigint": "10"
+          },
           "status": "live",
           "title": "a1"
         },
         {
-          "author_id": 1,
+          "author_id": {
+            "$bigint": "1"
+          },
           "created_at": "2026-03-01",
-          "id": 11,
+          "id": {
+            "$bigint": "11"
+          },
           "status": "draft",
           "title": "a2"
         }
@@ -57,16 +65,24 @@
       ],
       "expectedResult": [
         {
-          "author_id": 1,
+          "author_id": {
+            "$bigint": "1"
+          },
           "created_at": "2026-02-01",
-          "id": 10,
+          "id": {
+            "$bigint": "10"
+          },
           "status": "live",
           "title": "a1"
         },
         {
-          "author_id": 1,
+          "author_id": {
+            "$bigint": "1"
+          },
           "created_at": "2026-03-01",
-          "id": 11,
+          "id": {
+            "$bigint": "11"
+          },
           "status": "draft",
           "title": "a2"
         }
@@ -92,16 +108,24 @@
       ],
       "expectedResult": [
         {
-          "author_id": 1,
+          "author_id": {
+            "$bigint": "1"
+          },
           "created_at": "2026-02-01",
-          "id": 10,
+          "id": {
+            "$bigint": "10"
+          },
           "status": "live",
           "title": "a1"
         },
         {
-          "author_id": 1,
+          "author_id": {
+            "$bigint": "1"
+          },
           "created_at": "2026-03-01",
-          "id": 11,
+          "id": {
+            "$bigint": "11"
+          },
           "status": "draft",
           "title": "a2"
         }
@@ -123,16 +147,24 @@
       ],
       "expectedResult": [
         {
-          "author_id": 1,
+          "author_id": {
+            "$bigint": "1"
+          },
           "created_at": "2026-02-01",
-          "id": 10,
+          "id": {
+            "$bigint": "10"
+          },
           "status": "live",
           "title": "a1"
         },
         {
-          "author_id": 1,
+          "author_id": {
+            "$bigint": "1"
+          },
           "created_at": "2026-03-01",
-          "id": 11,
+          "id": {
+            "$bigint": "11"
+          },
           "status": "draft",
           "title": "a2"
         }
@@ -154,16 +186,24 @@
       ],
       "expectedResult": [
         {
-          "author_id": 1,
+          "author_id": {
+            "$bigint": "1"
+          },
           "created_at": "2026-02-01",
-          "id": 10,
+          "id": {
+            "$bigint": "10"
+          },
           "status": "live",
           "title": "a1"
         },
         {
-          "author_id": 1,
+          "author_id": {
+            "$bigint": "1"
+          },
           "created_at": "2026-03-01",
-          "id": 11,
+          "id": {
+            "$bigint": "11"
+          },
           "status": "draft",
           "title": "a2"
         }
@@ -185,16 +225,24 @@
       ],
       "expectedResult": [
         {
-          "author_id": 1,
+          "author_id": {
+            "$bigint": "1"
+          },
           "created_at": "2026-02-01",
-          "id": 10,
+          "id": {
+            "$bigint": "10"
+          },
           "status": "live",
           "title": "a1"
         },
         {
-          "author_id": 1,
+          "author_id": {
+            "$bigint": "1"
+          },
           "created_at": "2026-03-01",
-          "id": 11,
+          "id": {
+            "$bigint": "11"
+          },
           "status": "draft",
           "title": "a2"
         }
@@ -222,11 +270,15 @@
       ],
       "expectedResult": [
         {
-          "id": 10,
+          "id": {
+            "$bigint": "10"
+          },
           "title": "a1"
         },
         {
-          "id": 11,
+          "id": {
+            "$bigint": "11"
+          },
           "title": "a2"
         }
       ],
@@ -253,11 +305,15 @@
       ],
       "expectedResult": [
         {
-          "id": 10,
+          "id": {
+            "$bigint": "10"
+          },
           "title": "a1"
         },
         {
-          "id": 11,
+          "id": {
+            "$bigint": "11"
+          },
           "title": "a2"
         }
       ],
@@ -284,11 +340,15 @@
       ],
       "expectedResult": [
         {
-          "id": 10,
+          "id": {
+            "$bigint": "10"
+          },
           "title": "a1"
         },
         {
-          "id": 11,
+          "id": {
+            "$bigint": "11"
+          },
           "title": "a2"
         }
       ],
@@ -315,11 +375,15 @@
       ],
       "expectedResult": [
         {
-          "id": 11,
+          "id": {
+            "$bigint": "11"
+          },
           "title": "a2"
         },
         {
-          "id": 12,
+          "id": {
+            "$bigint": "12"
+          },
           "title": "b1"
         }
       ],
@@ -346,11 +410,15 @@
       ],
       "expectedResult": [
         {
-          "id": 11,
+          "id": {
+            "$bigint": "11"
+          },
           "title": "a2"
         },
         {
-          "id": 12,
+          "id": {
+            "$bigint": "12"
+          },
           "title": "b1"
         }
       ],
@@ -377,11 +445,15 @@
       ],
       "expectedResult": [
         {
-          "id": 11,
+          "id": {
+            "$bigint": "11"
+          },
           "title": "a2"
         },
         {
-          "id": 12,
+          "id": {
+            "$bigint": "12"
+          },
           "title": "b1"
         }
       ],
@@ -409,11 +481,15 @@
       ],
       "expectedResult": [
         {
-          "id": 10,
+          "id": {
+            "$bigint": "10"
+          },
           "title": "a1"
         },
         {
-          "id": 12,
+          "id": {
+            "$bigint": "12"
+          },
           "title": "b1"
         }
       ],
@@ -444,11 +520,15 @@
       ],
       "expectedResult": [
         {
-          "id": 10,
+          "id": {
+            "$bigint": "10"
+          },
           "title": "a1"
         },
         {
-          "id": 12,
+          "id": {
+            "$bigint": "12"
+          },
           "title": "b1"
         }
       ],
@@ -476,11 +556,15 @@
       ],
       "expectedResult": [
         {
-          "id": 10,
+          "id": {
+            "$bigint": "10"
+          },
           "title": "a1"
         },
         {
-          "id": 12,
+          "id": {
+            "$bigint": "12"
+          },
           "title": "b1"
         }
       ],
@@ -565,14 +649,22 @@
       ],
       "expectedResult": [
         {
-          "author_id": 1,
-          "id": 10,
+          "author_id": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "10"
+          },
           "status": "live",
           "title": "a1"
         },
         {
-          "author_id": 1,
-          "id": 11,
+          "author_id": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "11"
+          },
           "status": "draft",
           "title": "a2"
         }
@@ -598,14 +690,22 @@
       ],
       "expectedResult": [
         {
-          "author_id": 1,
-          "id": 10,
+          "author_id": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "10"
+          },
           "status": "live",
           "title": "a1"
         },
         {
-          "author_id": 1,
-          "id": 11,
+          "author_id": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "11"
+          },
           "status": "draft",
           "title": "a2"
         }
@@ -631,14 +731,22 @@
       ],
       "expectedResult": [
         {
-          "author_id": 1,
-          "id": 10,
+          "author_id": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "10"
+          },
           "status": "live",
           "title": "a1"
         },
         {
-          "author_id": 1,
-          "id": 11,
+          "author_id": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "11"
+          },
           "status": "draft",
           "title": "a2"
         }
@@ -666,8 +774,12 @@
       ],
       "expectedResult": [
         {
-          "author_id": 1,
-          "id": 11,
+          "author_id": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "11"
+          },
           "status": "draft",
           "title": "a2"
         }
@@ -695,8 +807,12 @@
       ],
       "expectedResult": [
         {
-          "author_id": 1,
-          "id": 11,
+          "author_id": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "11"
+          },
           "status": "draft",
           "title": "a2"
         }
@@ -724,8 +840,12 @@
       ],
       "expectedResult": [
         {
-          "author_id": 1,
-          "id": 11,
+          "author_id": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "11"
+          },
           "status": "draft",
           "title": "a2"
         }
@@ -753,8 +873,12 @@
       ],
       "expectedResult": [
         {
-          "author_id": 1,
-          "id": 11,
+          "author_id": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "11"
+          },
           "status": "draft",
           "title": "a2"
         }
@@ -782,8 +906,12 @@
       ],
       "expectedResult": [
         {
-          "author_id": 1,
-          "id": 11,
+          "author_id": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "11"
+          },
           "status": "draft",
           "title": "a2"
         }
@@ -811,8 +939,12 @@
       ],
       "expectedResult": [
         {
-          "author_id": 1,
-          "id": 11,
+          "author_id": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "11"
+          },
           "status": "draft",
           "title": "a2"
         }
@@ -842,8 +974,12 @@
       ],
       "expectedResult": [
         {
-          "author_id": 1,
-          "id": 10,
+          "author_id": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "10"
+          },
           "status": "live",
           "title": "a1"
         }
@@ -873,8 +1009,12 @@
       ],
       "expectedResult": [
         {
-          "author_id": 1,
-          "id": 10,
+          "author_id": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "10"
+          },
           "status": "live",
           "title": "a1"
         }
@@ -904,8 +1044,12 @@
       ],
       "expectedResult": [
         {
-          "author_id": 1,
-          "id": 10,
+          "author_id": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "10"
+          },
           "status": "live",
           "title": "a1"
         }
@@ -935,8 +1079,12 @@
       ],
       "expectedResult": [
         {
-          "author_id": 1,
-          "id": 11,
+          "author_id": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "11"
+          },
           "status": "draft",
           "title": "a2"
         }
@@ -966,8 +1114,12 @@
       ],
       "expectedResult": [
         {
-          "author_id": 1,
-          "id": 11,
+          "author_id": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "11"
+          },
           "status": "draft",
           "title": "a2"
         }
@@ -997,8 +1149,12 @@
       ],
       "expectedResult": [
         {
-          "author_id": 1,
-          "id": 11,
+          "author_id": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "11"
+          },
           "status": "draft",
           "title": "a2"
         }
@@ -1030,8 +1186,12 @@
       ],
       "expectedResult": [
         {
-          "author_id": 1,
-          "id": 10,
+          "author_id": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "10"
+          },
           "status": "live",
           "title": "a1"
         }
@@ -1063,8 +1223,12 @@
       ],
       "expectedResult": [
         {
-          "author_id": 1,
-          "id": 10,
+          "author_id": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "10"
+          },
           "status": "live",
           "title": "a1"
         }
@@ -1096,8 +1260,12 @@
       ],
       "expectedResult": [
         {
-          "author_id": 1,
-          "id": 10,
+          "author_id": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "10"
+          },
           "status": "live",
           "title": "a1"
         }
@@ -1129,8 +1297,12 @@
       ],
       "expectedResult": [
         {
-          "author_id": 1,
-          "id": 11,
+          "author_id": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "11"
+          },
           "status": "draft",
           "title": "a2"
         }
@@ -1162,8 +1334,12 @@
       ],
       "expectedResult": [
         {
-          "author_id": 1,
-          "id": 11,
+          "author_id": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "11"
+          },
           "status": "draft",
           "title": "a2"
         }
@@ -1195,8 +1371,12 @@
       ],
       "expectedResult": [
         {
-          "author_id": 1,
-          "id": 11,
+          "author_id": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "11"
+          },
           "status": "draft",
           "title": "a2"
         }
@@ -1230,8 +1410,12 @@
       ],
       "expectedResult": [
         {
-          "author_id": 1,
-          "id": 11,
+          "author_id": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "11"
+          },
           "status": "draft",
           "title": "a2"
         }
@@ -1265,8 +1449,12 @@
       ],
       "expectedResult": [
         {
-          "author_id": 1,
-          "id": 11,
+          "author_id": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "11"
+          },
           "status": "draft",
           "title": "a2"
         }
@@ -1300,8 +1488,12 @@
       ],
       "expectedResult": [
         {
-          "author_id": 1,
-          "id": 11,
+          "author_id": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "11"
+          },
           "status": "draft",
           "title": "a2"
         }
@@ -1323,18 +1515,30 @@
       ],
       "expectedResult": [
         {
-          "author_id": 1,
-          "id": 10,
+          "author_id": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "10"
+          },
           "status": "live"
         },
         {
-          "author_id": 1,
-          "id": 11,
+          "author_id": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "11"
+          },
           "status": "draft"
         },
         {
-          "author_id": 2,
-          "id": 12,
+          "author_id": {
+            "$bigint": "2"
+          },
+          "id": {
+            "$bigint": "12"
+          },
           "status": "live"
         }
       ],
@@ -1355,18 +1559,30 @@
       ],
       "expectedResult": [
         {
-          "author_id": 1,
-          "id": 10,
+          "author_id": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "10"
+          },
           "status": "live"
         },
         {
-          "author_id": 1,
-          "id": 11,
+          "author_id": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "11"
+          },
           "status": "draft"
         },
         {
-          "author_id": 2,
-          "id": 12,
+          "author_id": {
+            "$bigint": "2"
+          },
+          "id": {
+            "$bigint": "12"
+          },
           "status": "live"
         }
       ],
@@ -1387,18 +1603,30 @@
       ],
       "expectedResult": [
         {
-          "author_id": 1,
-          "id": 10,
+          "author_id": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "10"
+          },
           "status": "live"
         },
         {
-          "author_id": 1,
-          "id": 11,
+          "author_id": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "11"
+          },
           "status": "draft"
         },
         {
-          "author_id": 2,
-          "id": 12,
+          "author_id": {
+            "$bigint": "2"
+          },
+          "id": {
+            "$bigint": "12"
+          },
           "status": "live"
         }
       ],
@@ -1423,13 +1651,21 @@
       ],
       "expectedResult": [
         {
-          "author_id": 1,
-          "id": 10,
+          "author_id": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "10"
+          },
           "status": "live"
         },
         {
-          "author_id": 1,
-          "id": 11,
+          "author_id": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "11"
+          },
           "status": "draft"
         }
       ],
@@ -1454,13 +1690,21 @@
       ],
       "expectedResult": [
         {
-          "author_id": 1,
-          "id": 10,
+          "author_id": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "10"
+          },
           "status": "live"
         },
         {
-          "author_id": 1,
-          "id": 11,
+          "author_id": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "11"
+          },
           "status": "draft"
         }
       ],
@@ -1485,13 +1729,21 @@
       ],
       "expectedResult": [
         {
-          "author_id": 1,
-          "id": 10,
+          "author_id": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "10"
+          },
           "status": "live"
         },
         {
-          "author_id": 1,
-          "id": 11,
+          "author_id": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "11"
+          },
           "status": "draft"
         }
       ],
@@ -1518,8 +1770,12 @@
       ],
       "expectedResult": [
         {
-          "author_id": 1,
-          "id": 10,
+          "author_id": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "10"
+          },
           "status": "live"
         }
       ],
@@ -1546,8 +1802,12 @@
       ],
       "expectedResult": [
         {
-          "author_id": 1,
-          "id": 10,
+          "author_id": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "10"
+          },
           "status": "live"
         }
       ],
@@ -1574,8 +1834,12 @@
       ],
       "expectedResult": [
         {
-          "author_id": 1,
-          "id": 10,
+          "author_id": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "10"
+          },
           "status": "live"
         }
       ],
@@ -1602,14 +1866,22 @@
       ],
       "expectedResult": [
         {
-          "author_id": 1,
-          "id": 10,
+          "author_id": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "10"
+          },
           "status": "live",
           "title": "a1"
         },
         {
-          "author_id": 1,
-          "id": 11,
+          "author_id": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "11"
+          },
           "status": "draft",
           "title": "a2"
         }
@@ -1637,14 +1909,22 @@
       ],
       "expectedResult": [
         {
-          "author_id": 1,
-          "id": 10,
+          "author_id": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "10"
+          },
           "status": "live",
           "title": "a1"
         },
         {
-          "author_id": 1,
-          "id": 11,
+          "author_id": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "11"
+          },
           "status": "draft",
           "title": "a2"
         }
@@ -1672,14 +1952,22 @@
       ],
       "expectedResult": [
         {
-          "author_id": 1,
-          "id": 10,
+          "author_id": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "10"
+          },
           "status": "live",
           "title": "a1"
         },
         {
-          "author_id": 1,
-          "id": 11,
+          "author_id": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "11"
+          },
           "status": "draft",
           "title": "a2"
         }
@@ -1709,8 +1997,12 @@
       ],
       "expectedResult": [
         {
-          "author_id": 1,
-          "id": 11,
+          "author_id": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "11"
+          },
           "status": "draft",
           "title": "a2"
         }
@@ -1740,8 +2032,12 @@
       ],
       "expectedResult": [
         {
-          "author_id": 1,
-          "id": 11,
+          "author_id": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "11"
+          },
           "status": "draft",
           "title": "a2"
         }
@@ -1771,8 +2067,12 @@
       ],
       "expectedResult": [
         {
-          "author_id": 1,
-          "id": 11,
+          "author_id": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "11"
+          },
           "status": "draft",
           "title": "a2"
         }
@@ -1802,8 +2102,12 @@
       ],
       "expectedResult": [
         {
-          "author_id": 1,
-          "id": 10,
+          "author_id": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "10"
+          },
           "status": "live",
           "title": "a1"
         }
@@ -1833,8 +2137,12 @@
       ],
       "expectedResult": [
         {
-          "author_id": 1,
-          "id": 10,
+          "author_id": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "10"
+          },
           "status": "live",
           "title": "a1"
         }
@@ -1864,8 +2172,12 @@
       ],
       "expectedResult": [
         {
-          "author_id": 1,
-          "id": 10,
+          "author_id": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "10"
+          },
           "status": "live",
           "title": "a1"
         }
@@ -1887,17 +2199,23 @@
       ],
       "expectedResult": [
         {
-          "id": 10,
+          "id": {
+            "$bigint": "10"
+          },
           "status": "live",
           "title": "a1"
         },
         {
-          "id": 11,
+          "id": {
+            "$bigint": "11"
+          },
           "status": "draft",
           "title": "a2"
         },
         {
-          "id": 12,
+          "id": {
+            "$bigint": "12"
+          },
           "status": "live",
           "title": "b1"
         }
@@ -1919,17 +2237,23 @@
       ],
       "expectedResult": [
         {
-          "id": 10,
+          "id": {
+            "$bigint": "10"
+          },
           "status": "live",
           "title": "a1"
         },
         {
-          "id": 11,
+          "id": {
+            "$bigint": "11"
+          },
           "status": "draft",
           "title": "a2"
         },
         {
-          "id": 12,
+          "id": {
+            "$bigint": "12"
+          },
           "status": "live",
           "title": "b1"
         }
@@ -1951,17 +2275,23 @@
       ],
       "expectedResult": [
         {
-          "id": 10,
+          "id": {
+            "$bigint": "10"
+          },
           "status": "live",
           "title": "a1"
         },
         {
-          "id": 11,
+          "id": {
+            "$bigint": "11"
+          },
           "status": "draft",
           "title": "a2"
         },
         {
-          "id": 12,
+          "id": {
+            "$bigint": "12"
+          },
           "status": "live",
           "title": "b1"
         }
@@ -1987,12 +2317,16 @@
       ],
       "expectedResult": [
         {
-          "id": 10,
+          "id": {
+            "$bigint": "10"
+          },
           "status": "live",
           "title": "a1"
         },
         {
-          "id": 12,
+          "id": {
+            "$bigint": "12"
+          },
           "status": "live",
           "title": "b1"
         }
@@ -2018,12 +2352,16 @@
       ],
       "expectedResult": [
         {
-          "id": 10,
+          "id": {
+            "$bigint": "10"
+          },
           "status": "live",
           "title": "a1"
         },
         {
-          "id": 12,
+          "id": {
+            "$bigint": "12"
+          },
           "status": "live",
           "title": "b1"
         }
@@ -2049,12 +2387,16 @@
       ],
       "expectedResult": [
         {
-          "id": 10,
+          "id": {
+            "$bigint": "10"
+          },
           "status": "live",
           "title": "a1"
         },
         {
-          "id": 12,
+          "id": {
+            "$bigint": "12"
+          },
           "status": "live",
           "title": "b1"
         }
@@ -2076,14 +2418,22 @@
       ],
       "expectedResult": [
         {
-          "author_id": 1,
-          "id": 10,
+          "author_id": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "10"
+          },
           "status": "live",
           "title": "a1"
         },
         {
-          "author_id": 1,
-          "id": 11,
+          "author_id": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "11"
+          },
           "status": "draft",
           "title": "a2"
         }
@@ -2105,14 +2455,22 @@
       ],
       "expectedResult": [
         {
-          "author_id": 1,
-          "id": 10,
+          "author_id": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "10"
+          },
           "status": "live",
           "title": "a1"
         },
         {
-          "author_id": 1,
-          "id": 11,
+          "author_id": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "11"
+          },
           "status": "draft",
           "title": "a2"
         }
@@ -2134,14 +2492,22 @@
       ],
       "expectedResult": [
         {
-          "author_id": 1,
-          "id": 10,
+          "author_id": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "10"
+          },
           "status": "live",
           "title": "a1"
         },
         {
-          "author_id": 1,
-          "id": 11,
+          "author_id": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "11"
+          },
           "status": "draft",
           "title": "a2"
         }
@@ -2167,8 +2533,12 @@
       ],
       "expectedResult": [
         {
-          "author_id": 1,
-          "id": 10,
+          "author_id": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "10"
+          },
           "status": "live",
           "title": "a1"
         }
@@ -2194,8 +2564,12 @@
       ],
       "expectedResult": [
         {
-          "author_id": 1,
-          "id": 10,
+          "author_id": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "10"
+          },
           "status": "live",
           "title": "a1"
         }
@@ -2221,8 +2595,12 @@
       ],
       "expectedResult": [
         {
-          "author_id": 1,
-          "id": 10,
+          "author_id": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "10"
+          },
           "status": "live",
           "title": "a1"
         }
@@ -2248,8 +2626,12 @@
       ],
       "expectedResult": [
         {
-          "author_id": 1,
-          "id": 11,
+          "author_id": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "11"
+          },
           "status": "draft",
           "title": "a2"
         }
@@ -2275,8 +2657,12 @@
       ],
       "expectedResult": [
         {
-          "author_id": 1,
-          "id": 11,
+          "author_id": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "11"
+          },
           "status": "draft",
           "title": "a2"
         }
@@ -2302,8 +2688,12 @@
       ],
       "expectedResult": [
         {
-          "author_id": 1,
-          "id": 11,
+          "author_id": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "11"
+          },
           "status": "draft",
           "title": "a2"
         }
@@ -2337,32 +2727,50 @@
       ],
       "expectedResult": [
         {
-          "id": 1,
+          "id": {
+            "$bigint": "1"
+          },
           "name": "Ada",
           "posts": [
             {
-              "author_id": 1,
+              "author_id": {
+                "$bigint": "1"
+              },
               "created_at": "2026-02-01",
-              "id": 10,
+              "id": {
+                "$bigint": "10"
+              },
               "status": "live",
               "tags": [
                 {
-                  "id": 100,
+                  "id": {
+                    "$bigint": "100"
+                  },
                   "label": "greeting",
-                  "post_id": 10
+                  "post_id": {
+                    "$bigint": "10"
+                  }
                 },
                 {
-                  "id": 101,
+                  "id": {
+                    "$bigint": "101"
+                  },
                   "label": "first",
-                  "post_id": 10
+                  "post_id": {
+                    "$bigint": "10"
+                  }
                 }
               ],
               "title": "a1"
             },
             {
-              "author_id": 1,
+              "author_id": {
+                "$bigint": "1"
+              },
               "created_at": "2026-03-01",
-              "id": 11,
+              "id": {
+                "$bigint": "11"
+              },
               "status": "draft",
               "tags": [],
               "title": "a2"
@@ -2370,19 +2778,29 @@
           ]
         },
         {
-          "id": 2,
+          "id": {
+            "$bigint": "2"
+          },
           "name": "Bob",
           "posts": [
             {
-              "author_id": 2,
+              "author_id": {
+                "$bigint": "2"
+              },
               "created_at": "2026-01-15",
-              "id": 12,
+              "id": {
+                "$bigint": "12"
+              },
               "status": "live",
               "tags": [
                 {
-                  "id": 102,
+                  "id": {
+                    "$bigint": "102"
+                  },
                   "label": "world",
-                  "post_id": 12
+                  "post_id": {
+                    "$bigint": "12"
+                  }
                 }
               ],
               "title": "b1"
@@ -2390,7 +2808,9 @@
           ]
         },
         {
-          "id": 3,
+          "id": {
+            "$bigint": "3"
+          },
           "name": "Cy",
           "posts": []
         }
@@ -2425,7 +2845,7 @@
           "params": []
         },
         {
-          "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE conf_posts.author_id = ANY($1::int[]) ORDER BY id ASC",
+          "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE conf_posts.author_id = ANY($1::bigint[]) ORDER BY id ASC",
           "params": [
             [
               {
@@ -2441,7 +2861,7 @@
           ]
         },
         {
-          "sql": "SELECT id, post_id, label FROM conf_tags WHERE conf_tags.post_id = ANY($1::int[]) ORDER BY id ASC",
+          "sql": "SELECT id, post_id, label FROM conf_tags WHERE conf_tags.post_id = ANY($1::bigint[]) ORDER BY id ASC",
           "params": [
             [
               {
@@ -2459,32 +2879,50 @@
       ],
       "expectedResult": [
         {
-          "id": 1,
+          "id": {
+            "$bigint": "1"
+          },
           "name": "Ada",
           "posts": [
             {
-              "author_id": 1,
+              "author_id": {
+                "$bigint": "1"
+              },
               "created_at": "2026-02-01",
-              "id": 10,
+              "id": {
+                "$bigint": "10"
+              },
               "status": "live",
               "tags": [
                 {
-                  "id": 100,
+                  "id": {
+                    "$bigint": "100"
+                  },
                   "label": "greeting",
-                  "post_id": 10
+                  "post_id": {
+                    "$bigint": "10"
+                  }
                 },
                 {
-                  "id": 101,
+                  "id": {
+                    "$bigint": "101"
+                  },
                   "label": "first",
-                  "post_id": 10
+                  "post_id": {
+                    "$bigint": "10"
+                  }
                 }
               ],
               "title": "a1"
             },
             {
-              "author_id": 1,
+              "author_id": {
+                "$bigint": "1"
+              },
               "created_at": "2026-03-01",
-              "id": 11,
+              "id": {
+                "$bigint": "11"
+              },
               "status": "draft",
               "tags": [],
               "title": "a2"
@@ -2492,19 +2930,29 @@
           ]
         },
         {
-          "id": 2,
+          "id": {
+            "$bigint": "2"
+          },
           "name": "Bob",
           "posts": [
             {
-              "author_id": 2,
+              "author_id": {
+                "$bigint": "2"
+              },
               "created_at": "2026-01-15",
-              "id": 12,
+              "id": {
+                "$bigint": "12"
+              },
               "status": "live",
               "tags": [
                 {
-                  "id": 102,
+                  "id": {
+                    "$bigint": "102"
+                  },
                   "label": "world",
-                  "post_id": 12
+                  "post_id": {
+                    "$bigint": "12"
+                  }
                 }
               ],
               "title": "b1"
@@ -2512,7 +2960,9 @@
           ]
         },
         {
-          "id": 3,
+          "id": {
+            "$bigint": "3"
+          },
           "name": "Cy",
           "posts": []
         }
@@ -2561,32 +3011,50 @@
       ],
       "expectedResult": [
         {
-          "id": 1,
+          "id": {
+            "$bigint": "1"
+          },
           "name": "Ada",
           "posts": [
             {
-              "author_id": 1,
+              "author_id": {
+                "$bigint": "1"
+              },
               "created_at": "2026-02-01",
-              "id": 10,
+              "id": {
+                "$bigint": "10"
+              },
               "status": "live",
               "tags": [
                 {
-                  "id": 100,
+                  "id": {
+                    "$bigint": "100"
+                  },
                   "label": "greeting",
-                  "post_id": 10
+                  "post_id": {
+                    "$bigint": "10"
+                  }
                 },
                 {
-                  "id": 101,
+                  "id": {
+                    "$bigint": "101"
+                  },
                   "label": "first",
-                  "post_id": 10
+                  "post_id": {
+                    "$bigint": "10"
+                  }
                 }
               ],
               "title": "a1"
             },
             {
-              "author_id": 1,
+              "author_id": {
+                "$bigint": "1"
+              },
               "created_at": "2026-03-01",
-              "id": 11,
+              "id": {
+                "$bigint": "11"
+              },
               "status": "draft",
               "tags": [],
               "title": "a2"
@@ -2594,19 +3062,29 @@
           ]
         },
         {
-          "id": 2,
+          "id": {
+            "$bigint": "2"
+          },
           "name": "Bob",
           "posts": [
             {
-              "author_id": 2,
+              "author_id": {
+                "$bigint": "2"
+              },
               "created_at": "2026-01-15",
-              "id": 12,
+              "id": {
+                "$bigint": "12"
+              },
               "status": "live",
               "tags": [
                 {
-                  "id": 102,
+                  "id": {
+                    "$bigint": "102"
+                  },
                   "label": "world",
-                  "post_id": 12
+                  "post_id": {
+                    "$bigint": "12"
+                  }
                 }
               ],
               "title": "b1"
@@ -2614,7 +3092,9 @@
           ]
         },
         {
-          "id": 3,
+          "id": {
+            "$bigint": "3"
+          },
           "name": "Cy",
           "posts": []
         }
@@ -2658,37 +3138,61 @@
       "expectedResult": [
         {
           "author": {
-            "id": 1,
+            "id": {
+              "$bigint": "1"
+            },
             "name": "Ada",
-            "post_count": 2
+            "post_count": {
+              "$bigint": "2"
+            }
           },
-          "author_id": 1,
+          "author_id": {
+            "$bigint": "1"
+          },
           "created_at": "2026-02-01",
-          "id": 10,
+          "id": {
+            "$bigint": "10"
+          },
           "status": "live",
           "title": "a1"
         },
         {
           "author": {
-            "id": 1,
+            "id": {
+              "$bigint": "1"
+            },
             "name": "Ada",
-            "post_count": 2
+            "post_count": {
+              "$bigint": "2"
+            }
           },
-          "author_id": 1,
+          "author_id": {
+            "$bigint": "1"
+          },
           "created_at": "2026-03-01",
-          "id": 11,
+          "id": {
+            "$bigint": "11"
+          },
           "status": "draft",
           "title": "a2"
         },
         {
           "author": {
-            "id": 2,
+            "id": {
+              "$bigint": "2"
+            },
             "name": "Bob",
-            "post_count": 1
+            "post_count": {
+              "$bigint": "1"
+            }
           },
-          "author_id": 2,
+          "author_id": {
+            "$bigint": "2"
+          },
           "created_at": "2026-01-15",
-          "id": 12,
+          "id": {
+            "$bigint": "12"
+          },
           "status": "live",
           "title": "b1"
         }
@@ -2715,7 +3219,7 @@
           "params": []
         },
         {
-          "sql": "SELECT id, name, post_count FROM conf_users WHERE conf_users.id = ANY($1::int[])",
+          "sql": "SELECT id, name, post_count FROM conf_users WHERE conf_users.id = ANY($1::bigint[])",
           "params": [
             [
               {
@@ -2731,37 +3235,61 @@
       "expectedResult": [
         {
           "author": {
-            "id": 1,
+            "id": {
+              "$bigint": "1"
+            },
             "name": "Ada",
-            "post_count": 2
+            "post_count": {
+              "$bigint": "2"
+            }
           },
-          "author_id": 1,
+          "author_id": {
+            "$bigint": "1"
+          },
           "created_at": "2026-02-01",
-          "id": 10,
+          "id": {
+            "$bigint": "10"
+          },
           "status": "live",
           "title": "a1"
         },
         {
           "author": {
-            "id": 1,
+            "id": {
+              "$bigint": "1"
+            },
             "name": "Ada",
-            "post_count": 2
+            "post_count": {
+              "$bigint": "2"
+            }
           },
-          "author_id": 1,
+          "author_id": {
+            "$bigint": "1"
+          },
           "created_at": "2026-03-01",
-          "id": 11,
+          "id": {
+            "$bigint": "11"
+          },
           "status": "draft",
           "title": "a2"
         },
         {
           "author": {
-            "id": 2,
+            "id": {
+              "$bigint": "2"
+            },
             "name": "Bob",
-            "post_count": 1
+            "post_count": {
+              "$bigint": "1"
+            }
           },
-          "author_id": 2,
+          "author_id": {
+            "$bigint": "2"
+          },
           "created_at": "2026-01-15",
-          "id": 12,
+          "id": {
+            "$bigint": "12"
+          },
           "status": "live",
           "title": "b1"
         }
@@ -2797,37 +3325,61 @@
       "expectedResult": [
         {
           "author": {
-            "id": 1,
+            "id": {
+              "$bigint": "1"
+            },
             "name": "Ada",
-            "post_count": 2
+            "post_count": {
+              "$bigint": "2"
+            }
           },
-          "author_id": 1,
+          "author_id": {
+            "$bigint": "1"
+          },
           "created_at": "2026-02-01",
-          "id": 10,
+          "id": {
+            "$bigint": "10"
+          },
           "status": "live",
           "title": "a1"
         },
         {
           "author": {
-            "id": 1,
+            "id": {
+              "$bigint": "1"
+            },
             "name": "Ada",
-            "post_count": 2
+            "post_count": {
+              "$bigint": "2"
+            }
           },
-          "author_id": 1,
+          "author_id": {
+            "$bigint": "1"
+          },
           "created_at": "2026-03-01",
-          "id": 11,
+          "id": {
+            "$bigint": "11"
+          },
           "status": "draft",
           "title": "a2"
         },
         {
           "author": {
-            "id": 2,
+            "id": {
+              "$bigint": "2"
+            },
             "name": "Bob",
-            "post_count": 1
+            "post_count": {
+              "$bigint": "1"
+            }
           },
-          "author_id": 2,
+          "author_id": {
+            "$bigint": "2"
+          },
           "created_at": "2026-01-15",
-          "id": 12,
+          "id": {
+            "$bigint": "12"
+          },
           "status": "live",
           "title": "b1"
         }
@@ -3606,7 +4158,7 @@
       "case": "createTags: batch INSERT persists (one statement for N records)",
       "expectedStatements": [
         {
-          "sql": "INSERT INTO conf_tags (id, label, post_id) SELECT v.id, v.label, v.post_id FROM UNNEST($1::int[], $2::text[], $3::int[]) AS v(id, label, post_id)",
+          "sql": "INSERT INTO conf_tags (id, label, post_id) SELECT v.id, v.label, v.post_id FROM UNNEST($1::bigint[], $2::text[], $3::bigint[]) AS v(id, label, post_id)",
           "params": [
             [
               103,
@@ -3956,11 +4508,15 @@
       ],
       "expectedResult": [
         {
-          "id": 105,
+          "id": {
+            "$bigint": "105"
+          },
           "label": "p"
         },
         {
-          "id": 106,
+          "id": {
+            "$bigint": "106"
+          },
           "label": "q"
         }
       ],
@@ -4040,7 +4596,7 @@
       "case": "createTagsReturning: batch INSERT … RETURNING returns every created row",
       "expectedStatements": [
         {
-          "sql": "INSERT INTO conf_tags (id, label, post_id) SELECT v.id, v.label, v.post_id FROM UNNEST($1::int[], $2::text[], $3::int[]) AS v(id, label, post_id) RETURNING id, label",
+          "sql": "INSERT INTO conf_tags (id, label, post_id) SELECT v.id, v.label, v.post_id FROM UNNEST($1::bigint[], $2::text[], $3::bigint[]) AS v(id, label, post_id) RETURNING id, label",
           "params": [
             [
               105,
@@ -4059,11 +4615,15 @@
       ],
       "expectedResult": [
         {
-          "id": 105,
+          "id": {
+            "$bigint": "105"
+          },
           "label": "p"
         },
         {
-          "id": 106,
+          "id": {
+            "$bigint": "106"
+          },
           "label": "q"
         }
       ],
@@ -4151,11 +4711,15 @@
       ],
       "expectedResult": [
         {
-          "id": 105,
+          "id": {
+            "$bigint": "105"
+          },
           "label": "p"
         },
         {
-          "id": 106,
+          "id": {
+            "$bigint": "106"
+          },
           "label": "q"
         }
       ],
@@ -4242,11 +4806,15 @@
       ],
       "expectedResult": [
         {
-          "id": 100,
+          "id": {
+            "$bigint": "100"
+          },
           "label": "re-100"
         },
         {
-          "id": 102,
+          "id": {
+            "$bigint": "102"
+          },
           "label": "re-102"
         }
       ],
@@ -4304,7 +4872,7 @@
       "case": "relabelTagsReturning: batch UPDATE … RETURNING returns every updated row",
       "expectedStatements": [
         {
-          "sql": "UPDATE conf_tags AS t SET label = v.label FROM UNNEST($1::int[], $2::text[]) AS v(id, label) WHERE t.id = v.id RETURNING t.id, t.label",
+          "sql": "UPDATE conf_tags AS t SET label = v.label FROM UNNEST($1::bigint[], $2::text[]) AS v(id, label) WHERE t.id = v.id RETURNING t.id, t.label",
           "params": [
             [
               100,
@@ -4319,11 +4887,15 @@
       ],
       "expectedResult": [
         {
-          "id": 100,
+          "id": {
+            "$bigint": "100"
+          },
           "label": "re-100"
         },
         {
-          "id": 102,
+          "id": {
+            "$bigint": "102"
+          },
           "label": "re-102"
         }
       ],
@@ -4391,11 +4963,15 @@
       ],
       "expectedResult": [
         {
-          "id": 100,
+          "id": {
+            "$bigint": "100"
+          },
           "label": "re-100"
         },
         {
-          "id": 102,
+          "id": {
+            "$bigint": "102"
+          },
           "label": "re-102"
         }
       ],
@@ -4457,11 +5033,15 @@
       ],
       "expectedResult": [
         {
-          "id": 100,
+          "id": {
+            "$bigint": "100"
+          },
           "label": "greeting"
         },
         {
-          "id": 101,
+          "id": {
+            "$bigint": "101"
+          },
           "label": "first"
         }
       ],
@@ -4508,11 +5088,15 @@
       ],
       "expectedResult": [
         {
-          "id": 100,
+          "id": {
+            "$bigint": "100"
+          },
           "label": "greeting"
         },
         {
-          "id": 101,
+          "id": {
+            "$bigint": "101"
+          },
           "label": "first"
         }
       ],
@@ -4556,11 +5140,15 @@
       ],
       "expectedResult": [
         {
-          "id": 100,
+          "id": {
+            "$bigint": "100"
+          },
           "label": "greeting"
         },
         {
-          "id": 101,
+          "id": {
+            "$bigint": "101"
+          },
           "label": "first"
         }
       ],
@@ -4609,7 +5197,9 @@
       ],
       "expectedResult": [
         {
-          "id": 14,
+          "id": {
+            "$bigint": "14"
+          },
           "title": "c2"
         }
       ],
@@ -4693,7 +5283,9 @@
       ],
       "expectedResult": [
         {
-          "id": 14,
+          "id": {
+            "$bigint": "14"
+          },
           "title": "c2"
         }
       ],
@@ -4777,7 +5369,9 @@
       ],
       "expectedResult": [
         {
-          "id": 14,
+          "id": {
+            "$bigint": "14"
+          },
           "title": "c2"
         }
       ],
@@ -4855,7 +5449,9 @@
       ],
       "expectedResult": [
         {
-          "id": 10,
+          "id": {
+            "$bigint": "10"
+          },
           "title": "a1-returned"
         }
       ],
@@ -4922,7 +5518,9 @@
       ],
       "expectedResult": [
         {
-          "id": 10,
+          "id": {
+            "$bigint": "10"
+          },
           "title": "a1-returned"
         }
       ],
@@ -4989,7 +5587,9 @@
       ],
       "expectedResult": [
         {
-          "id": 10,
+          "id": {
+            "$bigint": "10"
+          },
           "title": "a1-returned"
         }
       ],
@@ -5054,7 +5654,9 @@
       ],
       "expectedResult": [
         {
-          "id": 11,
+          "id": {
+            "$bigint": "11"
+          },
           "title": "a2"
         }
       ],
@@ -5108,7 +5710,9 @@
       ],
       "expectedResult": [
         {
-          "id": 11,
+          "id": {
+            "$bigint": "11"
+          },
           "title": "a2"
         }
       ],
@@ -5162,7 +5766,9 @@
       ],
       "expectedResult": [
         {
-          "id": 11,
+          "id": {
+            "$bigint": "11"
+          },
           "title": "a2"
         }
       ],
@@ -5346,8 +5952,12 @@
       ],
       "expectedResult": [
         {
-          "line_no": 2,
-          "order_id": 10,
+          "line_no": {
+            "$bigint": "2"
+          },
+          "order_id": {
+            "$bigint": "10"
+          },
           "sku": "SKU-2"
         }
       ],
@@ -5401,8 +6011,12 @@
       ],
       "expectedResult": [
         {
-          "line_no": 2,
-          "order_id": 10,
+          "line_no": {
+            "$bigint": "2"
+          },
+          "order_id": {
+            "$bigint": "10"
+          },
           "sku": "SKU-2"
         }
       ],
@@ -5456,8 +6070,12 @@
       ],
       "expectedResult": [
         {
-          "line_no": 2,
-          "order_id": 10,
+          "line_no": {
+            "$bigint": "2"
+          },
+          "order_id": {
+            "$bigint": "10"
+          },
           "sku": "SKU-2"
         }
       ],
@@ -5509,11 +6127,15 @@
       ],
       "expectedResult": [
         {
-          "id": 10,
+          "id": {
+            "$bigint": "10"
+          },
           "status": "archived"
         },
         {
-          "id": 11,
+          "id": {
+            "$bigint": "11"
+          },
           "status": "archived"
         }
       ],
@@ -5580,11 +6202,15 @@
       ],
       "expectedResult": [
         {
-          "id": 10,
+          "id": {
+            "$bigint": "10"
+          },
           "status": "archived"
         },
         {
-          "id": 11,
+          "id": {
+            "$bigint": "11"
+          },
           "status": "archived"
         }
       ],
@@ -5651,11 +6277,15 @@
       ],
       "expectedResult": [
         {
-          "id": 10,
+          "id": {
+            "$bigint": "10"
+          },
           "status": "archived"
         },
         {
-          "id": 11,
+          "id": {
+            "$bigint": "11"
+          },
           "status": "archived"
         }
       ],
@@ -5720,11 +6350,15 @@
       ],
       "expectedResult": [
         {
-          "id": 10,
+          "id": {
+            "$bigint": "10"
+          },
           "title": "a1"
         },
         {
-          "id": 11,
+          "id": {
+            "$bigint": "11"
+          },
           "title": "a2"
         }
       ],
@@ -5767,11 +6401,15 @@
       ],
       "expectedResult": [
         {
-          "id": 10,
+          "id": {
+            "$bigint": "10"
+          },
           "title": "a1"
         },
         {
-          "id": 11,
+          "id": {
+            "$bigint": "11"
+          },
           "title": "a2"
         }
       ],
@@ -5814,11 +6452,15 @@
       ],
       "expectedResult": [
         {
-          "id": 10,
+          "id": {
+            "$bigint": "10"
+          },
           "title": "a1"
         },
         {
-          "id": 11,
+          "id": {
+            "$bigint": "11"
+          },
           "title": "a2"
         }
       ],
@@ -5857,20 +6499,32 @@
       ],
       "expectedResult": [
         {
-          "flag": 1,
-          "id": 1,
+          "flag": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "1"
+          },
           "label": "alpha",
           "ts": "2026-01-01 00:00:00"
         },
         {
-          "flag": 0,
-          "id": 2,
+          "flag": {
+            "$bigint": "0"
+          },
+          "id": {
+            "$bigint": "2"
+          },
           "label": "beta",
           "ts": "2026-02-01 12:34:56"
         },
         {
-          "flag": 1,
-          "id": 3,
+          "flag": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "3"
+          },
           "label": "gamma",
           "ts": "2026-03-15 23:59:59"
         }
@@ -5892,20 +6546,32 @@
       ],
       "expectedResult": [
         {
-          "flag": 1,
-          "id": 1,
+          "flag": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "1"
+          },
           "label": "alpha",
           "ts": "2026-01-01 00:00:00"
         },
         {
-          "flag": 0,
-          "id": 2,
+          "flag": {
+            "$bigint": "0"
+          },
+          "id": {
+            "$bigint": "2"
+          },
           "label": "beta",
           "ts": "2026-02-01 12:34:56"
         },
         {
-          "flag": 1,
-          "id": 3,
+          "flag": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "3"
+          },
           "label": "gamma",
           "ts": "2026-03-15 23:59:59"
         }
@@ -5927,20 +6593,32 @@
       ],
       "expectedResult": [
         {
-          "flag": 1,
-          "id": 1,
+          "flag": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "1"
+          },
           "label": "alpha",
           "ts": "2026-01-01 00:00:00"
         },
         {
-          "flag": 0,
-          "id": 2,
+          "flag": {
+            "$bigint": "0"
+          },
+          "id": {
+            "$bigint": "2"
+          },
           "label": "beta",
           "ts": "2026-02-01 12:34:56"
         },
         {
-          "flag": 1,
-          "id": 3,
+          "flag": {
+            "$bigint": "1"
+          },
+          "id": {
+            "$bigint": "3"
+          },
           "label": "gamma",
           "ts": "2026-03-15 23:59:59"
         }
@@ -5969,16 +6647,24 @@
       ],
       "expectedResult": [
         {
-          "author_id": 1,
+          "author_id": {
+            "$bigint": "1"
+          },
           "created_at": "2026-02-01",
-          "id": 10,
+          "id": {
+            "$bigint": "10"
+          },
           "status": "live",
           "title": "a1"
         },
         {
-          "author_id": 1,
+          "author_id": {
+            "$bigint": "1"
+          },
           "created_at": "2026-03-01",
-          "id": 11,
+          "id": {
+            "$bigint": "11"
+          },
           "status": "draft",
           "title": "a2"
         }
@@ -6007,16 +6693,24 @@
       ],
       "expectedResult": [
         {
-          "author_id": 1,
+          "author_id": {
+            "$bigint": "1"
+          },
           "created_at": "2026-02-01",
-          "id": 10,
+          "id": {
+            "$bigint": "10"
+          },
           "status": "live",
           "title": "a1"
         },
         {
-          "author_id": 1,
+          "author_id": {
+            "$bigint": "1"
+          },
           "created_at": "2026-03-01",
-          "id": 11,
+          "id": {
+            "$bigint": "11"
+          },
           "status": "draft",
           "title": "a2"
         }
@@ -6045,16 +6739,24 @@
       ],
       "expectedResult": [
         {
-          "author_id": 1,
+          "author_id": {
+            "$bigint": "1"
+          },
           "created_at": "2026-02-01",
-          "id": 10,
+          "id": {
+            "$bigint": "10"
+          },
           "status": "live",
           "title": "a1"
         },
         {
-          "author_id": 1,
+          "author_id": {
+            "$bigint": "1"
+          },
           "created_at": "2026-03-01",
-          "id": 11,
+          "id": {
+            "$bigint": "11"
+          },
           "status": "draft",
           "title": "a2"
         }
@@ -6079,16 +6781,24 @@
       ],
       "expectedResult": [
         {
-          "author_id": 1,
+          "author_id": {
+            "$bigint": "1"
+          },
           "created_at": "2026-02-01",
-          "id": 10,
+          "id": {
+            "$bigint": "10"
+          },
           "status": "live",
           "title": "a1"
         },
         {
-          "author_id": 1,
+          "author_id": {
+            "$bigint": "1"
+          },
           "created_at": "2026-03-01",
-          "id": 11,
+          "id": {
+            "$bigint": "11"
+          },
           "status": "draft",
           "title": "a2"
         }
@@ -6113,16 +6823,24 @@
       ],
       "expectedResult": [
         {
-          "author_id": 1,
+          "author_id": {
+            "$bigint": "1"
+          },
           "created_at": "2026-02-01",
-          "id": 10,
+          "id": {
+            "$bigint": "10"
+          },
           "status": "live",
           "title": "a1"
         },
         {
-          "author_id": 1,
+          "author_id": {
+            "$bigint": "1"
+          },
           "created_at": "2026-03-01",
-          "id": 11,
+          "id": {
+            "$bigint": "11"
+          },
           "status": "draft",
           "title": "a2"
         }
@@ -6147,16 +6865,24 @@
       ],
       "expectedResult": [
         {
-          "author_id": 1,
+          "author_id": {
+            "$bigint": "1"
+          },
           "created_at": "2026-02-01",
-          "id": 10,
+          "id": {
+            "$bigint": "10"
+          },
           "status": "live",
           "title": "a1"
         },
         {
-          "author_id": 1,
+          "author_id": {
+            "$bigint": "1"
+          },
           "created_at": "2026-03-01",
-          "id": 11,
+          "id": {
+            "$bigint": "11"
+          },
           "status": "draft",
           "title": "a2"
         }
@@ -6187,40 +6913,58 @@
       ],
       "expectedResult": [
         {
-          "id": 1,
+          "id": {
+            "$bigint": "1"
+          },
           "name": "Ada",
           "uncappedPosts": [
             {
-              "author_id": 1,
+              "author_id": {
+                "$bigint": "1"
+              },
               "created_at": "2026-02-01",
-              "id": 10,
+              "id": {
+                "$bigint": "10"
+              },
               "status": "live",
               "title": "a1"
             },
             {
-              "author_id": 1,
+              "author_id": {
+                "$bigint": "1"
+              },
               "created_at": "2026-03-01",
-              "id": 11,
+              "id": {
+                "$bigint": "11"
+              },
               "status": "draft",
               "title": "a2"
             }
           ]
         },
         {
-          "id": 2,
+          "id": {
+            "$bigint": "2"
+          },
           "name": "Bob",
           "uncappedPosts": [
             {
-              "author_id": 2,
+              "author_id": {
+                "$bigint": "2"
+              },
               "created_at": "2026-01-15",
-              "id": 12,
+              "id": {
+                "$bigint": "12"
+              },
               "status": "live",
               "title": "b1"
             }
           ]
         },
         {
-          "id": 3,
+          "id": {
+            "$bigint": "3"
+          },
           "name": "Cy",
           "uncappedPosts": []
         }
@@ -6252,7 +6996,7 @@
           "params": []
         },
         {
-          "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE conf_posts.author_id = ANY($1::int[]) ORDER BY id ASC",
+          "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE conf_posts.author_id = ANY($1::bigint[]) ORDER BY id ASC",
           "params": [
             [
               {
@@ -6270,40 +7014,58 @@
       ],
       "expectedResult": [
         {
-          "id": 1,
+          "id": {
+            "$bigint": "1"
+          },
           "name": "Ada",
           "uncappedPosts": [
             {
-              "author_id": 1,
+              "author_id": {
+                "$bigint": "1"
+              },
               "created_at": "2026-02-01",
-              "id": 10,
+              "id": {
+                "$bigint": "10"
+              },
               "status": "live",
               "title": "a1"
             },
             {
-              "author_id": 1,
+              "author_id": {
+                "$bigint": "1"
+              },
               "created_at": "2026-03-01",
-              "id": 11,
+              "id": {
+                "$bigint": "11"
+              },
               "status": "draft",
               "title": "a2"
             }
           ]
         },
         {
-          "id": 2,
+          "id": {
+            "$bigint": "2"
+          },
           "name": "Bob",
           "uncappedPosts": [
             {
-              "author_id": 2,
+              "author_id": {
+                "$bigint": "2"
+              },
               "created_at": "2026-01-15",
-              "id": 12,
+              "id": {
+                "$bigint": "12"
+              },
               "status": "live",
               "title": "b1"
             }
           ]
         },
         {
-          "id": 3,
+          "id": {
+            "$bigint": "3"
+          },
           "name": "Cy",
           "uncappedPosts": []
         }
@@ -6343,40 +7105,58 @@
       ],
       "expectedResult": [
         {
-          "id": 1,
+          "id": {
+            "$bigint": "1"
+          },
           "name": "Ada",
           "uncappedPosts": [
             {
-              "author_id": 1,
+              "author_id": {
+                "$bigint": "1"
+              },
               "created_at": "2026-02-01",
-              "id": 10,
+              "id": {
+                "$bigint": "10"
+              },
               "status": "live",
               "title": "a1"
             },
             {
-              "author_id": 1,
+              "author_id": {
+                "$bigint": "1"
+              },
               "created_at": "2026-03-01",
-              "id": 11,
+              "id": {
+                "$bigint": "11"
+              },
               "status": "draft",
               "title": "a2"
             }
           ]
         },
         {
-          "id": 2,
+          "id": {
+            "$bigint": "2"
+          },
           "name": "Bob",
           "uncappedPosts": [
             {
-              "author_id": 2,
+              "author_id": {
+                "$bigint": "2"
+              },
               "created_at": "2026-01-15",
-              "id": 12,
+              "id": {
+                "$bigint": "12"
+              },
               "status": "live",
               "title": "b1"
             }
           ]
         },
         {
-          "id": 3,
+          "id": {
+            "$bigint": "3"
+          },
           "name": "Cy",
           "uncappedPosts": []
         }
@@ -6416,33 +7196,47 @@
       ],
       "expectedResult": [
         {
-          "id": 1,
+          "id": {
+            "$bigint": "1"
+          },
           "name": "Ada",
           "topPosts": [
             {
-              "author_id": 1,
+              "author_id": {
+                "$bigint": "1"
+              },
               "created_at": "2026-02-01",
-              "id": 10,
+              "id": {
+                "$bigint": "10"
+              },
               "status": "live",
               "title": "a1"
             }
           ]
         },
         {
-          "id": 2,
+          "id": {
+            "$bigint": "2"
+          },
           "name": "Bob",
           "topPosts": [
             {
-              "author_id": 2,
+              "author_id": {
+                "$bigint": "2"
+              },
               "created_at": "2026-01-15",
-              "id": 12,
+              "id": {
+                "$bigint": "12"
+              },
               "status": "live",
               "title": "b1"
             }
           ]
         },
         {
-          "id": 3,
+          "id": {
+            "$bigint": "3"
+          },
           "name": "Cy",
           "topPosts": []
         }
@@ -6465,7 +7259,7 @@
           "params": []
         },
         {
-          "sql": "SELECT conf_posts.* FROM unnest($1::int[]) AS _keys(key) CROSS JOIN LATERAL (SELECT * FROM conf_posts WHERE conf_posts.author_id = _keys.key ORDER BY id ASC LIMIT 1) conf_posts",
+          "sql": "SELECT conf_posts.* FROM unnest($1::bigint[]) AS _keys(key) CROSS JOIN LATERAL (SELECT * FROM conf_posts WHERE conf_posts.author_id = _keys.key ORDER BY id ASC LIMIT 1) conf_posts",
           "params": [
             [
               {
@@ -6483,33 +7277,47 @@
       ],
       "expectedResult": [
         {
-          "id": 1,
+          "id": {
+            "$bigint": "1"
+          },
           "name": "Ada",
           "topPosts": [
             {
-              "author_id": 1,
+              "author_id": {
+                "$bigint": "1"
+              },
               "created_at": "2026-02-01",
-              "id": 10,
+              "id": {
+                "$bigint": "10"
+              },
               "status": "live",
               "title": "a1"
             }
           ]
         },
         {
-          "id": 2,
+          "id": {
+            "$bigint": "2"
+          },
           "name": "Bob",
           "topPosts": [
             {
-              "author_id": 2,
+              "author_id": {
+                "$bigint": "2"
+              },
               "created_at": "2026-01-15",
-              "id": 12,
+              "id": {
+                "$bigint": "12"
+              },
               "status": "live",
               "title": "b1"
             }
           ]
         },
         {
-          "id": 3,
+          "id": {
+            "$bigint": "3"
+          },
           "name": "Cy",
           "topPosts": []
         }
@@ -6540,33 +7348,47 @@
       ],
       "expectedResult": [
         {
-          "id": 1,
+          "id": {
+            "$bigint": "1"
+          },
           "name": "Ada",
           "topPosts": [
             {
-              "author_id": 1,
+              "author_id": {
+                "$bigint": "1"
+              },
               "created_at": "2026-02-01",
-              "id": 10,
+              "id": {
+                "$bigint": "10"
+              },
               "status": "live",
               "title": "a1"
             }
           ]
         },
         {
-          "id": 2,
+          "id": {
+            "$bigint": "2"
+          },
           "name": "Bob",
           "topPosts": [
             {
-              "author_id": 2,
+              "author_id": {
+                "$bigint": "2"
+              },
               "created_at": "2026-01-15",
-              "id": 12,
+              "id": {
+                "$bigint": "12"
+              },
               "status": "live",
               "title": "b1"
             }
           ]
         },
         {
-          "id": 3,
+          "id": {
+            "$bigint": "3"
+          },
           "name": "Cy",
           "topPosts": []
         }

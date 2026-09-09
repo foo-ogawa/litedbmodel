@@ -31,7 +31,7 @@ import type { ModelOptions } from './types';
 // v1 coercion. The v1 decorator IS the static type source (unlike v2, whose SoT is the SQL DDL), so
 // each read-affected decorator variant pins its v2 `MaterializeClass` and routes the raw driver cell
 // through `materializeCell`:
-//   - `@column.bigint()`   → `int64` → EXACT decimal STRING (no i64 rounding, JSON-safe)
+//   - `@column.bigint()`   → `int`   → JS bigint (bc's `int` value model, checked i64)
 //   - `@column.datetime()` → `date`  → TZ-attached STRING (NOT a TZ-shifted JS Date)
 //   - `@column.boolean()`  → `bool`  → JS boolean
 // `null`/`undefined` pass through (nullable columns) exactly as `materializeCell` and the prior v1
@@ -562,7 +562,7 @@ function serializeJson(val: unknown, typeCast?: DriverTypeCast): unknown {
  * @column.boolean() is_active?: boolean;
  * @column.datetime() created_at?: string;      // TZ-attached string, NOT a JS Date
  * @column.date() birth_date?: string;          // 'YYYY-MM-DD'
- * @column.bigint() large_id?: string;          // exact decimal string (JSON-safe)
+ * @column.bigint() large_id?: bigint;           // bc `int` — a JS bigint
  * @column.uuid() ext_id?: string;
  * @column.stringArray() tags?: string[];
  * @column.intArray() scores?: number[];
@@ -595,8 +595,19 @@ export const column = Object.assign(
      */
     text: (columnNameOrOptions?: string | ColumnOptions) =>
       createColumnDecorator<string | null | undefined>(
-        undefined,                            // no cast — a TEXT column arrives as a string on every driver
-        (val) => rejectNonText('text', val),  // …but it cannot SERIALIZE a Date or an object
+        // The family DECLARES `string`, so it must hand back one. Most drivers already do, but SQLite
+        // is dynamically typed: it returns a JS number for a `NUMERIC`/`DECIMAL` column whatever the
+        // declaration says, and the declared type would be a lie on that dialect alone.
+        (v) => {
+          if (v === undefined || v === null) return v;
+          if (typeof v === 'string') return v;
+          if (typeof v === 'number' || typeof v === 'bigint' || typeof v === 'boolean') return String(v);
+          throw new Error(
+            `materialize text: driver returned ${typeof v} for a text column. Use @column.passthrough() ` +
+              'for a BYTEA/BLOB column, or @column.json<T>() for JSON.',
+          );
+        },
+        (val) => rejectNonText('text', val),  // …and it cannot SERIALIZE a Date or an object
         undefined,                            // no sqlCast family (a text literal needs no SQL cast)
         'TEXT'                                // §4.1 token: types the SCP typed read
       )(columnNameOrOptions),
@@ -634,16 +645,16 @@ export const column = Object.assign(
     /**
      * BigInt type conversion
      * Preserves null for nullable columns, undefined stays undefined
-     * @example @column.bigint() large_id?: string;   // exact decimal string (JSON-safe)
+     * @example @column.bigint() large_id?: bigint;   // bc `int` — a JS bigint, checked i64
      */
     bigint: (columnNameOrOptions?: string | ColumnOptions) =>
-      createColumnDecorator<string | null | undefined>(
-        // v2 read contract: BIGINT/INT8 → EXACT decimal STRING (no i64 rounding, JSON-safe), via the
-        // shared materializer (issue #9). The declared TS field type may still be `bigint` in existing
-        // models, but the runtime value is now the exact string — that IS the realignment.
+      createColumnDecorator<bigint | null | undefined>(
+        // An integer column reads back as a JS `bigint` — behavior-contracts' `int` value model
+        // (`int` = bigint, checked i64), which is what the drivers already hand over. `JSON.stringify`
+        // does not serialize a bigint: give the field a `toJSON`, or convert at the boundary.
         (v) => {
           if (v === undefined) return undefined;
-          return materializeCell(v, 'int64');
+          return materializeCell(v, 'int');
         },
         undefined,  // no custom serialize
         'bigint'    // sqlCast for WHERE/INSERT type casting

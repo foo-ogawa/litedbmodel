@@ -546,7 +546,12 @@ describe('WS6 integration — Postgres: SCP-compiled SQL executes + parity with 
       let i = 0;
       const v1Sql = `SELECT id, title FROM ${T_POSTS} WHERE ${v1Where} ORDER BY id ASC`.replace(/\?/g, () => `$${++i}`);
       const v1Rows = await pgQuery(pgPool!, v1Sql, v1Params);
-      expect(scpRows).toEqual(v1Rows);
+      // Same ROWS. The SCP read materializes an integer to behavior-contracts' `int` (a JS bigint);
+      // this raw comparison query does not go through that materializer, so the ids are compared by
+      // value rather than by JS type.
+      const byValue = (rows: Record<string, unknown>[]) =>
+        rows.map((r) => ({ ...r, id: String(r.id) }));
+      expect(byValue(scpRows as Record<string, unknown>[])).toEqual(byValue(v1Rows));
     });
 
     it('SELECT IN-list EMPTY int array: `= ANY(?)` with [] → ZERO rows, no error — #46; == v1 `1 = 0`', async () => {
@@ -646,7 +651,7 @@ describe('WS6 integration — Postgres: SCP-compiled SQL executes + parity with 
     expect(v1Rows[0]).toMatchObject({ user_id: 2, title: 'v1 PG Post', view_count: 0 });
 
     // Cleanup the two inserted rows.
-    await pgPool!.query(`DELETE FROM ${T_POSTS} WHERE id = ANY($1::int[])`, [[scpRows[0].id, v1Rows[0].id]]);
+    await pgPool!.query(`DELETE FROM ${T_POSTS} WHERE id = ANY($1::bigint[])`, [[scpRows[0].id, v1Rows[0].id]]);
   });
 
   it('read-relation batch (belongsTo author, INT key): `$1::int[]` (NOT text[]) — #46; SCP == v1', async () => {
@@ -686,7 +691,7 @@ describe('WS6 integration — Postgres: SCP-compiled SQL executes + parity with 
     const docs = await pgQuery(pgPool!, `SELECT tenant_id, doc_id, owner_id FROM ${T_DOCS2} ORDER BY tenant_id, doc_id`, []);
     const tuples = docs.map((d) => [Number(d.tenant_id), Number(d.owner_id)]);
     const { sql, params } = renderCompositeRelation(op, tuples);
-    expect(sql).toContain('JOIN (SELECT (_t->>0)::int AS key0, (_t->>1)::int AS key1 FROM json_array_elements($1::json) AS _t) AS _keys');
+    expect(sql).toContain('JOIN (SELECT (_t->>0)::bigint AS key0, (_t->>1)::bigint AS key1 FROM json_array_elements($1::json) AS _t) AS _keys');
     expect(params).toHaveLength(1); // the WHOLE key set is ONE param, whatever its length
     const children = await pgQuery(pgPool!, sql, params);
     // (2,100) must resolve to Bob (tenant 2), NOT Ada (tenant 1) — the composite key disambiguates.
@@ -718,7 +723,7 @@ describe('WS6 integration — Postgres: SCP-compiled SQL executes + parity with 
     const tuples = [[1, 10], [1, 11], [2, 10]];
     const { sql, params } = renderCompositeRelation(op, tuples);
     // STATIC composite-LIMITED = the v1 LATERAL window over the ONE JSON key-tuple param's key rows.
-    expect(sql).toContain('FROM (SELECT (_t->>0)::int AS key0, (_t->>1)::int AS key1 FROM json_array_elements($1::json) AS _t) AS _keys');
+    expect(sql).toContain('FROM (SELECT (_t->>0)::bigint AS key0, (_t->>1)::bigint AS key1 FROM json_array_elements($1::json) AS _t) AS _keys');
     expect(params).toHaveLength(1);
     expect(sql).toContain('CROSS JOIN LATERAL');
     expect(sql).toContain('ORDER BY rev DESC LIMIT 1');

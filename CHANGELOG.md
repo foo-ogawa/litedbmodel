@@ -12,6 +12,17 @@ Closes #286, #287。**モデル定義の書き換えが必要 — 下の移行�
 
 ### Fixed
 
+- **[mysql][sqlite] モデル経由の書き込みで 2^53 を超える整数が黙って丸まっていた。** 書き込みは単一
+  JSON パラメータで束ねられ、その JSON 化で bc の `int`(bigint) が `Number()` に落とされていた
+  （`src/scp/makesql/json-array.ts`）。実測: `9007199254740993` を書くと **DB には
+  `9007199254740992` が保存される**。生 `execute` は厳密なので、モデル経由だけが壊れていた。JSON は
+  任意精度の数値リテラルを許すので、桁を保ったまま出す形にした（`JSON_TABLE` / `json_each` は
+  i64 の整数リテラルを厳密に読む）。
+- **未宣言の整数列が relation の子行で number/文字列へ戻されていた**（`src/scp/relation.ts`）。
+  1つの列の読み型を値の大きさで分岐させており、driver が揃えたものを崩していた。
+- **[sqlite] `@column.text()` の宣言 `string` が破られていた。** SQLite は動的型付けで `NUMERIC` 列に
+  JS number を返すため、宣言と実値が方言単位でズレていた。family が保証する。
+
 - **標準デコレータでモデル定義が実行時に落ちていた（#287）** — `registerColumn` が legacy デコレータの
   signature（`target.constructor`）を前提にしており、TC39 標準デコレータでは `target` が `undefined` の
   ため `TypeError: Cannot read properties of undefined (reading 'constructor')` で import 時に落ちた。
@@ -34,6 +45,15 @@ Closes #286, #287。**モデル定義の書き換えが必要 — 下の移行�
   `@column({ primaryKey: true })` を出しており、型の宣言が完全に消えていた。
 
 ### Changed
+
+- **整数は幅を問わず JS `bigint` で読み戻る — behavior-contracts の `int` に統一。** bc の値モデルは
+  整数型を1つしか持たない（`int` = TS 平面では JS bigint、checked i64。`ts/src/canonical.ts` /
+  `ts/src/behavior.ts`）。driver は既にそれを返すよう設定されており（`configurePgDeboxTypeParsers` /
+  `mysqlDeboxPoolOptions` / better-sqlite3 `safeIntegers`）、`sqlTypeToBcScalar` も `INTEGER`/`BIGINT` を
+  `int` と宣言していたのに、**materializer だけが int32→`number` / int64→**文字列** に割り戻していた**。
+  `MaterializeClass` の `int32`/`int64` を1つの `int` に畳み、`@column.bigint()` の宣言型を `bigint` に戻した。
+  `JSON.stringify` は bigint を受け付けないので、境界で変換する（README に例）。
+
 
 - **`emitDecoratorMetadata` は不要になった**（有効でも無害・参照しない）。`experimentalDecorators` も
   任意。同じモデルソースが tsc / esbuild / tsx / vite のどれでも同じモデルを登録する。

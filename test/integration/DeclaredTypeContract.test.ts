@@ -27,33 +27,33 @@ const LiteBase = DBModel.createDBBase(sqliteConfig);
 
 @model('dtc_types')
 class TypesPgModel extends PgBase {
-  @column.number({ primaryKey: true, autoIncrement: true }) id?: number;
+  @column.bigint({ primaryKey: true, autoIncrement: true }) id?: bigint;
   @column.text() t_text?: string;
-  @column.number() n_int?: number;
-  @column.number() n_num?: number;
-  @column.bigint() n_big?: string;
+  @column.bigint() n_int?: bigint;
+  @column.text() n_num?: string;
+  @column.bigint() n_big?: bigint;
   @column.datetime() t_stamp?: string;
   @column.date() d_date?: string;
   @column.boolean() b_flag?: boolean;
 }
 @model('dtc_types')
 class TypesMyModel extends MyBase {
-  @column.number({ primaryKey: true, autoIncrement: true }) id?: number;
+  @column.bigint({ primaryKey: true, autoIncrement: true }) id?: bigint;
   @column.text() t_text?: string;
-  @column.number() n_int?: number;
-  @column.number() n_num?: number;
-  @column.bigint() n_big?: string;
+  @column.bigint() n_int?: bigint;
+  @column.text() n_num?: string;
+  @column.bigint() n_big?: bigint;
   @column.datetime() t_stamp?: string;
   @column.date() d_date?: string;
   @column.boolean() b_flag?: boolean;
 }
 @model('dtc_types')
 class TypesLiteModel extends LiteBase {
-  @column.number({ primaryKey: true, autoIncrement: true }) id?: number;
+  @column.bigint({ primaryKey: true, autoIncrement: true }) id?: bigint;
   @column.text() t_text?: string;
-  @column.number() n_int?: number;
-  @column.number() n_num?: number;
-  @column.bigint() n_big?: string;
+  @column.bigint() n_int?: bigint;
+  @column.text() n_num?: string;
+  @column.bigint() n_big?: bigint;
   @column.datetime() t_stamp?: string;
   @column.date() d_date?: string;
   @column.boolean() b_flag?: boolean;
@@ -61,8 +61,8 @@ class TypesLiteModel extends LiteBase {
 
 /** property → the `typeof` its DECLARED type demands. */
 const DECLARED: Record<string, string> = {
-  id: 'number', t_text: 'string', n_int: 'number', n_num: 'number',
-  n_big: 'string', t_stamp: 'string', d_date: 'string', b_flag: 'boolean',
+  id: 'bigint', t_text: 'string', n_int: 'bigint', n_num: 'string',
+  n_big: 'bigint', t_stamp: 'string', d_date: 'string', b_flag: 'boolean',
 };
 
 const DIALECTS = [
@@ -103,9 +103,9 @@ describe.skipIf(skipIntegrationTests)('declared type === value type (#286)', () 
         await Base.transaction(async () =>
           Model.create([
             [Model.t_text, 'hello'],
-            [Model.n_int, 42],
-            [Model.n_num, 12.34],
-            [Model.n_big, '9007199254740993'],
+            [Model.n_int, 42n],
+            [Model.n_num, '12.34'],
+            [Model.n_big, 9007199254740993n],
             [Model.t_stamp, new Date('2026-11-01T10:00:00Z')],
             [Model.d_date, '2026-11-01'],
             [Model.b_flag, true],
@@ -124,10 +124,19 @@ describe.skipIf(skipIntegrationTests)('declared type === value type (#286)', () 
         expect(actual).toEqual(DECLARED);
       });
 
-      it('a row survives JSON.stringify (no bigint, no TZ-shifted Date)', async () => {
+      it('an integer keeps its exact value, and JSON needs a conversion at the boundary', async () => {
         const [row] = await Model.find([]);
-        const json = JSON.parse(JSON.stringify(row)) as Record<string, unknown>;
-        expect(json.n_big).toBe('9007199254740993'); // exact: a JS number would round to …92
+        const r = row as unknown as Record<string, unknown>;
+        // Exact: a JS number would have rounded this to …92.
+        expect(r.n_big).toBe(9007199254740993n);
+        // A JS bigint is not JSON — that is the language, not this library. `JSON.stringify` throws
+        // unless the caller converts, so the contract is stated here rather than hidden.
+        expect(() => JSON.stringify(row)).toThrow(/BigInt/);
+        const json = JSON.parse(
+          JSON.stringify(row, (_k, v) => (typeof v === 'bigint' ? v.toString() : v)),
+        ) as Record<string, unknown>;
+        expect(json.n_big).toBe('9007199254740993');
+        // The date family carries no bigint: those columns are strings and survive as they are.
         expect(typeof json.t_stamp).toBe('string');
         expect(json.d_date).toBe('2026-11-01');
       });
@@ -145,10 +154,10 @@ describe.skipIf(skipIntegrationTests)('declared type === value type (#286)', () 
       });
 
       it('the DRIVER plane is unchanged by the family', async () => {
-        // Negative control for the layering: a family types a DECLARED column, it does not change what
-        // the driver hands back for a raw statement. PG/MySQL return an integer as BigInt
-        // (`configurePgDeboxTypeParsers` / `mysqlDeboxPoolOptions`) — do NOT "fix" that into a number.
-        // The v1 in-proc SQLite path has no `safeIntegers`, so it returns a JS number there.
+        // The driver plane and the family now AGREE: both hand back a JS bigint for an integer
+        // (`configurePgDeboxTypeParsers` / `mysqlDeboxPoolOptions`), which is behavior-contracts'
+        // `int`. The v1 in-proc SQLite path has no `safeIntegers`, so a RAW statement still returns a
+        // JS number there — the family's materializer is what makes the declared column exact.
         const res = await Base.execute('SELECT n_int FROM dtc_types');
         const raw = (res.rows as Record<string, unknown>[])[0].n_int;
         expect(typeof raw).toBe(name === 'sqlite' ? 'number' : 'bigint');

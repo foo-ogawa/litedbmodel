@@ -49,7 +49,7 @@ class User {
   @column.text() name?: string;
   @column.boolean() is_active?: boolean;
   @column.datetime() created_at?: string;
-  @column.bigint() big_id?: string;
+  @column.bigint() big_id?: bigint;
   @column.uuid() ext_id?: string;
   @column.json() metadata?: Record<string, unknown>;
   @column.date() birth_date?: string;

@@ -246,10 +246,10 @@ either decorator protocol. Nothing is inferred from the TypeScript type annotati
 | DB column type | Decorator | Declared TS type | Value `find()` returns |
 |---|---|---|---|
 | `TEXT` / `VARCHAR` / `CHAR` / `ENUM` | `@column.text()` | `string` | the driver string, uncast |
-| `INTEGER` / `REAL` / `FLOAT` / `DOUBLE` | `@column.number()` | `number` | JS number |
+| `REAL` / `FLOAT` / `DOUBLE` | `@column.number()` | `number` | JS number (bc `float`) |
 | `NUMERIC` / `DECIMAL` / `MONEY` | `@column.text()` | `string` | the **exact decimal string** — a JS number destroys `NUMERIC(38,10)` |
 | `BOOLEAN` | `@column.boolean()` | `boolean` | JS boolean |
-| `BIGINT` / `INT8` | `@column.bigint()` | `string` | **exact decimal string** — a JS number rounds past 2^53, a JS `bigint` throws in `JSON.stringify` |
+| `INTEGER` / `BIGINT` / `SERIAL` … | `@column.bigint()` | `bigint` | a JS **bigint** — behavior-contracts' `int` value model (checked i64) |
 | `TIMESTAMP` / `TIMESTAMPTZ` / `DATETIME` | `@column.datetime()` | `string` | the column's **own textual form**, never a TZ-shifted `Date` — with the offset when the column carries one (`timestamptz` → `2024-06-15 10:30:00+00`), without it when it does not (`timestamp` → `2024-06-15 10:30:00`) |
 | `DATE` | `@column.date()` | `string` | `'YYYY-MM-DD'` — a calendar date has no timezone |
 | `UUID` | `@column.uuid()` | `string` | the UUID string (adds `::uuid` casts on PostgreSQL) |
@@ -271,13 +271,24 @@ class UserModel extends DBModel {
   @column.boolean() is_active?: boolean;
   @column.datetime() created_at?: string;     // reads back a string, so it is declared a string
   @column.date() birth_date?: string;         // 'YYYY-MM-DD'
-  @column.bigint() large_id?: string;         // exact decimal string
+  @column.bigint() large_id?: bigint;         // every integer width — bc's `int`
 }
 ```
 
-Writes still accept the natural JS value: `[[User.created_at, new Date()]]` serializes a `Date`, and
-`[[User.large_id, 9007199254740993n]]` a `bigint`. It is the READ that is a string, so that a row can
-be `JSON.stringify`-ed and compared without a timezone shift or a silent rounding.
+**An integer column is one type at every width.** behavior-contracts has a single integer type — `int`,
+a JS `bigint` on the TS plane, checked i64 — and the drivers are configured to produce exactly that
+(`configurePgDeboxTypeParsers`, `mysqlDeboxPoolOptions`, better-sqlite3 `safeIntegers`). A `SMALLINT`
+and a `BIGINT` therefore read back the same way, and no value is ever rounded on the way in.
+
+`JSON.stringify` refuses a `bigint` — that is JavaScript, not this library. Convert at the boundary:
+
+```ts
+JSON.stringify(row, (_k, v) => (typeof v === 'bigint' ? v.toString() : v));
+```
+
+Writes accept the natural JS value: `[[User.created_at, new Date()]]` serializes a `Date`, and
+`[[User.large_id, 9007199254740993n]]` a `bigint`. Dates read back as strings so a row compares
+without a timezone shift.
 
 SQLite is the exception to the decimal row: it stores no fixed-precision type, so its driver hands
 back a JS number whatever the column says, and the value is already rounded before litedbmodel sees it.

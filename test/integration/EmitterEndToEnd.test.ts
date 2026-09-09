@@ -158,24 +158,24 @@ describe('#152 end-to-end — decorated model → emitter → bc generate → li
     const rows = await blog.usersWithPosts();
     expect(rows).toEqual([
       {
-        id: 1,
+        id: 1n,
         name: 'Ada',
         posts: [
-          { id: 10, author_id: 1, title: 'a1', comments: [
-            { id: 100, post_id: 10, body: 'c1' },
-            { id: 101, post_id: 10, body: 'c2' },
+          { id: 10n, author_id: 1n, title: 'a1', comments: [
+            { id: 100n, post_id: 10n, body: 'c1' },
+            { id: 101n, post_id: 10n, body: 'c2' },
           ] },
-          { id: 11, author_id: 1, title: 'a2', comments: [] },
+          { id: 11n, author_id: 1n, title: 'a2', comments: [] },
         ],
       },
       {
-        id: 2,
+        id: 2n,
         name: 'Bob',
         posts: [
-          { id: 12, author_id: 2, title: 'b1', comments: [{ id: 102, post_id: 12, body: 'c3' }] },
+          { id: 12n, author_id: 2n, title: 'b1', comments: [{ id: 102n, post_id: 12n, body: 'c3' }] },
         ],
       },
-      { id: 3, name: 'Cy', posts: [] },
+      { id: 3n, name: 'Cy', posts: [] },
     ]);
     // Fail loudly on the exact #150 symptom — a nested child object with no keys.
     for (const u of rows) for (const p of u.posts) {
@@ -185,34 +185,34 @@ describe('#152 end-to-end — decorated model → emitter → bc generate → li
   });
 
   it('#46 — the PG `= ANY(?)` IN-list binds a whole key set as ONE param (and an EMPTY one is legal)', async () => {
-    expect(await blog.usersByIds({ ids: [1, 3] })).toEqual([{ id: 1, name: 'Ada' }, { id: 3, name: 'Cy' }]);
+    expect(await blog.usersByIds({ ids: [1, 3] })).toEqual([{ id: 1n, name: 'Ada' }, { id: 3n, name: 'Cy' }]);
     expect(await blog.usersByIds({ ids: [] })).toEqual([]);
   });
 
   it('SKIP — the leaf assembles the surviving fragments per call (one static base statement)', async () => {
     expect(await blog.feed({ authorId: 1 })).toEqual([
-      { id: 10, author_id: 1, title: 'a1' },
-      { id: 11, author_id: 1, title: 'a2' },
+      { id: 10n, author_id: 1n, title: 'a1' },
+      { id: 11n, author_id: 1n, title: 'a2' },
     ]);
-    expect(await blog.feed({ authorId: 1, title: 'a2' })).toEqual([{ id: 11, author_id: 1, title: 'a2' }]);
-    expect(await blog.feed({ authorId: 1, minId: 11 })).toEqual([{ id: 11, author_id: 1, title: 'a2' }]);
-    expect(await blog.feed({ authorId: 1, title: 'a%', minId: 11 })).toEqual([{ id: 11, author_id: 1, title: 'a2' }]);
+    expect(await blog.feed({ authorId: 1, title: 'a2' })).toEqual([{ id: 11n, author_id: 1n, title: 'a2' }]);
+    expect(await blog.feed({ authorId: 1, minId: 11 })).toEqual([{ id: 11n, author_id: 1n, title: 'a2' }]);
+    expect(await blog.feed({ authorId: 1, title: 'a%', minId: 11 })).toEqual([{ id: 11n, author_id: 1n, title: 'a2' }]);
   });
 
   it('#97 — a correlated EXISTS and a typed IN-subquery both execute', async () => {
-    expect(await blog.authorsWithAnyPost()).toEqual([{ id: 1, name: 'Ada' }, { id: 2, name: 'Bob' }]);
-    expect(await blog.usersWhoWrote({ title: 'b1' })).toEqual([{ id: 2, name: 'Bob' }]);
+    expect(await blog.authorsWithAnyPost()).toEqual([{ id: 1n, name: 'Ada' }, { id: 2n, name: 'Bob' }]);
+    expect(await blog.usersWhoWrote({ title: 'b1' })).toEqual([{ id: 2n, name: 'Bob' }]);
   });
 
   it('#98 — a QUERY view reads through the derived CTE (its own param bound first)', async () => {
-    expect(await blog.postsOfAuthorView()).toEqual([{ id: 10, title: 'a1' }, { id: 11, title: 'a2' }]);
+    expect(await blog.postsOfAuthorView()).toEqual([{ id: 10n, title: 'a1' }, { id: 11n, title: 'a2' }]);
   });
 
   it('#161 — a PAGED read binds its page position: ONE statement, a different window per call', async () => {
     // Three calls, three windows, over the SAME emitted statement — the counts cannot have been baked.
-    expect(await blog.pagedPosts({ limit: 2, offset: 0 })).toEqual([{ id: 10, title: 'a1' }, { id: 11, title: 'a2' }]);
-    expect(await blog.pagedPosts({ limit: 2, offset: 1 })).toEqual([{ id: 11, title: 'a2' }, { id: 12, title: 'b1' }]);
-    expect(await blog.pagedPosts({ limit: 1, offset: 2 })).toEqual([{ id: 12, title: 'b1' }]);
+    expect(await blog.pagedPosts({ limit: 2, offset: 0 })).toEqual([{ id: 10n, title: 'a1' }, { id: 11n, title: 'a2' }]);
+    expect(await blog.pagedPosts({ limit: 2, offset: 1 })).toEqual([{ id: 11n, title: 'a2' }, { id: 12n, title: 'b1' }]);
+    expect(await blog.pagedPosts({ limit: 1, offset: 2 })).toEqual([{ id: 12n, title: 'b1' }]);
     // The emitted text carries `?` (the `?`→`$N` render is the transport's, after final assembly) and
     // NO literal count — PostgreSQL would have rejected an unrendered `?` outright.
     expect(emittedSource).toContain('SELECT id, title FROM e2e_posts ORDER BY id ASC LIMIT ? OFFSET ?", [limit, offset]');
@@ -221,13 +221,13 @@ describe('#152 end-to-end — decorated model → emitter → bc generate → li
   it('#132 — a declared SHARE lock: ` FOR SHARE` is baked in and the locking read runs on live PG', async () => {
     // The generated method carries the row-lock tail and PostgreSQL EXECUTES it (a parse error would
     // fail here) — the rows are the ones the unlocked twin returns, the lock being orthogonal.
-    expect(await blog.lockedPosts({ authorId: 1 })).toEqual([{ id: 10, title: 'a1' }, { id: 11, title: 'a2' }]);
+    expect(await blog.lockedPosts({ authorId: 1 })).toEqual([{ id: 10n, title: 'a1' }, { id: 11n, title: 'a2' }]);
     expect(emittedSource).toContain('SELECT id, title FROM e2e_posts WHERE author_id = ? ORDER BY id ASC FOR SHARE"');
   });
 
   it('writes: INSERT…RETURNING, UPDATE, DELETE and a batch INSERT all execute', async () => {
     const created = await blog.createUser({ name: 'Dee' });
-    expect(created).toEqual([{ id: expect.any(Number), name: 'Dee' }]);
+    expect(created).toEqual([{ id: expect.any(BigInt), name: 'Dee' }]);
     expect((await blog.renameUser({ id: 3, name: 'Cyrus' }))[0].changes).toBe(1n);
     expect((await pool.query('SELECT name FROM e2e_users WHERE id = 3')).rows).toEqual([{ name: 'Cyrus' }]);
 
@@ -247,8 +247,8 @@ describe('#152 end-to-end — decorated model → emitter → bc generate → li
     // four rows. The UNNEST form zips the arrays into TUPLES, so only the two requested pairs match —
     // with a CONSTANT two params, whatever the tuple count (v1 bound 2×N).
     expect(await blog.tenantPostsByKeys({ keys_tenant_id: [1, 2], keys_user_id: [100, 101] })).toEqual([
-      { tenant_id: 1, user_id: 100, title: 't1u100' },
-      { tenant_id: 2, user_id: 101, title: 't2u101' },
+      { tenant_id: 1n, user_id: 100n, title: 't1u100' },
+      { tenant_id: 2n, user_id: 101n, title: 't2u101' },
     ]);
     expect(await blog.tenantPostsByKeys({ keys_tenant_id: [], keys_user_id: [] })).toEqual([]);
   });
@@ -259,18 +259,18 @@ describe('#152 end-to-end — decorated model → emitter → bc generate → li
     // share user_id 100/101, so any key bind that is not the whole (tenant_id, user_id) tuple
     // cross-hydrates — 't2u100' would appear under (1,100) and vice versa.
     expect(rows).toEqual([
-      { tenant_id: 1, user_id: 100, name: 'Ada', posts: [{ tenant_id: 1, user_id: 100, title: 't1u100' }] },
+      { tenant_id: 1n, user_id: 100n, name: 'Ada', posts: [{ tenant_id: 1n, user_id: 100n, title: 't1u100' }] },
       {
-        tenant_id: 1,
-        user_id: 101,
+        tenant_id: 1n,
+        user_id: 101n,
         name: 'Alan',
         posts: [
-          { tenant_id: 1, user_id: 101, title: 't1u101' },
-          { tenant_id: 1, user_id: 101, title: 't1u101b' },
+          { tenant_id: 1n, user_id: 101n, title: 't1u101' },
+          { tenant_id: 1n, user_id: 101n, title: 't1u101b' },
         ],
       },
-      { tenant_id: 2, user_id: 100, name: 'Bob', posts: [{ tenant_id: 2, user_id: 100, title: 't2u100' }] },
-      { tenant_id: 2, user_id: 102, name: 'Cy', posts: [] },
+      { tenant_id: 2n, user_id: 100n, name: 'Bob', posts: [{ tenant_id: 2n, user_id: 100n, title: 't2u100' }] },
+      { tenant_id: 2n, user_id: 102n, name: 'Cy', posts: [] },
     ]);
     // Fail loudly on the #150 symptom — a nested child object with no keys.
     for (const u of rows) for (const p of u.posts) expect(Object.keys(p).sort()).toEqual(['tenant_id', 'title', 'user_id']);

@@ -111,8 +111,8 @@ function runTsc(p: Protocol): string {
 const EXPECTED = {
   userColumns: [
     'id:id:cast:-:-:pk:ai',
-    'name:name:-:-:TEXT:-:-',
-    'email:mail_addr:-:-:TEXT:-:-',
+    'name:name:cast:-:TEXT:-:-',
+    'email:mail_addr:cast:-:TEXT:-:-',
     'is_active:is_active:cast:boolean:-:-:-',
     'created_at:created_at:cast:timestamp:-:-:-',
     'big:big:cast:bigint:-:-:-',
@@ -126,8 +126,8 @@ const EXPECTED = {
   bareStatics: ['id->id', 'flag->flag'],
   bareTableName: 'proto_bare',
   // A subclass must not see its sibling's columns through the base they share.
-  aColumns: ['created_at:created_at:cast:timestamp:-:-:-', 'a_only:a_only:-:-:TEXT:-:-'],
-  bColumns: ['created_at:created_at:cast:timestamp:-:-:-', 'b_only:b_only:-:-:TEXT:-:-'],
+  aColumns: ['created_at:created_at:cast:timestamp:-:-:-', 'a_only:a_only:cast:-:TEXT:-:-'],
+  bColumns: ['created_at:created_at:cast:timestamp:-:-:-', 'b_only:b_only:cast:-:TEXT:-:-'],
   tableNames: ['proto_users', 'proto_a'],
 };
 

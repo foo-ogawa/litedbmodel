@@ -175,8 +175,8 @@ describe('#217 named-DB routing — declaration → codegen → TWO live databas
       // not exist on the default one, and the parent rows can only have come from the default —
       // `scp217_posts` does not exist on analytics.
       expect(await facade.postsWithAuthor()).toEqual([
-        { id: 10, author_id: 1, title: 'a1', author: { id: 1, name: 'Ada' } },
-        { id: 11, author_id: 2, title: 'b1', author: { id: 2, name: 'Bob' } },
+        { id: 10n, author_id: 1n, title: 'a1', author: { id: 1n, name: 'Ada' } },
+        { id: 11n, author_id: 2n, title: 'b1', author: { id: 2n, name: 'Bob' } },
       ]);
     } finally {
       await close();
@@ -186,7 +186,7 @@ describe('#217 named-DB routing — declaration → codegen → TWO live databas
   it('an ENDPOINT on the other connection runs its READ and its WRITE there', async () => {
     const { facade, close } = await build();
     try {
-      expect(await facade.usersOnB()).toEqual([{ id: 1, name: 'Ada' }, { id: 2, name: 'Bob' }]);
+      expect(await facade.usersOnB()).toEqual([{ id: 1n, name: 'Ada' }, { id: 2n, name: 'Bob' }]);
       // The WRITE lands in B too — proven by reading it back through B and by B's own table being the
       // only place the row exists.
       const summary = await facade.renameUserOnB({ name: 'Ada2', id: 1 });

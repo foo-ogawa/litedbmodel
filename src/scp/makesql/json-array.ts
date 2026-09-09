@@ -146,17 +146,33 @@ export function encodeJsonArrayParam(dialect: Dialect, values: readonly unknown[
 }
 
 /**
+ * Marks a bc `int` while it passes through `JSON.stringify`, which refuses a BigInt outright. The
+ * sentinel is spliced back out as a bare JSON number token below, so the digits survive.
+ */
+const BIGINT_SENTINEL = '\u0000int:';
+
+/**
  * The ONE JSON-param serializer every single-JSON-param form goes through — the array/tuple sets here and
  * the batch record sets in {@link import('./json-batch')} alike. Both bind values that came OFF a read, so
  * both meet the same two cases (a bc `int` is a `BigInt`, which `JSON.stringify` refuses; a MySQL boolean
  * must ride as 1/0), and a second bare `JSON.stringify` would silently diverge on either.
+ *
+ * A bc `int` is written as a JSON NUMBER TOKEN carrying every digit — `JSON.stringify` cannot emit one
+ * (it throws on a BigInt), and routing it through `Number` LOSES the value: an id past 2^53 was rounded
+ * inside the JSON text and the rounded id is what MySQL/SQLite stored, silently. JSON numbers are
+ * arbitrary-precision by grammar, and both `JSON_TABLE` (MySQL) and `json_each` (SQLite) read an
+ * integer literal within i64 exactly — which is the whole range bc's `int` admits.
  */
 export function encodeJsonParam(dialect: Dialect, payload: unknown): string {
-  return JSON.stringify(payload, (_key, v: unknown) => {
-    if (typeof v === 'bigint') return Number(v);
+  const tagged = JSON.stringify(payload, (_key, v: unknown) => {
+    if (typeof v === 'bigint') return `${BIGINT_SENTINEL}${v.toString()}`;
     if (dialect === 'mysql' && typeof v === 'boolean') return v ? 1 : 0;
     return v;
   });
+  // Unquote the tagged values back into bare number tokens. The sentinel starts with a NUL, which
+  // `JSON.stringify` escapes as `\u0000` inside any string a caller could supply, so a payload cannot
+  // forge one.
+  return tagged.replace(/"\\u0000int:(-?\d+)"/g, '$1');
 }
 
 /**

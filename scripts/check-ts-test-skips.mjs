@@ -177,7 +177,8 @@ const OFFLINE_FILES = ['test/integration/MiddlewareHooks.test.ts', 'test/integra
  * a database, so it must not be excused), and an entry whose test is gone is stale.
  */
 const OFFLINE_TESTS = [
-  "test/integration/DeclaredTypeContract.test.ts › declared type === value type (#286) sqlite a row survives JSON.stringify (no bigint, no TZ-shifted Date)",
+  "test/integration/DeclaredTypeContract.test.ts › declared type === value type (#286) sqlite a text column REFUSES a value it cannot serialize (no silent {} in the row)",
+  "test/integration/DeclaredTypeContract.test.ts › declared type === value type (#286) sqlite an integer keeps its exact value, and JSON needs a conversion at the boundary",
   "test/integration/DeclaredTypeContract.test.ts › declared type === value type (#286) sqlite every column reads back as the type its family declares",
   "test/integration/DeclaredTypeContract.test.ts › declared type === value type (#286) sqlite the DRIVER plane is unchanged by the family",
   "test/integration/MultiDB.test.ts › createDBBase() Global DBModel isolation should not affect global DBModel writer state",

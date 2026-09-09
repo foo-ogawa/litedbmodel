@@ -133,14 +133,23 @@ export function sqlTypeToBcScalar(sqlType: string): BcScalar {
  *   - `'passthrough'` — every other class (float, text, decimal-as-string, json, uuid): the driver
  *                  value already matches the outType, so no coercion.
  */
-export type MaterializeClass = 'int32' | 'int64' | 'date' | 'bool' | 'passthrough';
+/**
+ * The JS form a read cell is coerced to. `int` is ONE class, not two: behavior-contracts' value model
+ * has a single integer type (`int` = a JS `bigint`, checked i64 — `ts/src/canonical.ts`,
+ * `ts/src/behavior.ts`), and this library declares INTEGER *and* BIGINT to it as that same `int`
+ * ({@link sqlTypeToBcScalar}). Splitting the read by width and handing back a JS `number` for the
+ * narrow one and a decimal STRING for the wide one contradicted the type this library had already
+ * declared, and undid what the drivers do: they are configured to return every integer as a BigInt
+ * (`configurePgDeboxTypeParsers`, `mysqlDeboxPoolOptions`, better-sqlite3 `safeIntegers`).
+ */
+export type MaterializeClass = 'int' | 'date' | 'bool' | 'passthrough';
 
 /**
  * Derive the TS read-path {@link MaterializeClass} for a SQL type (spec §4.1 owner de-box). Uses
  * the SAME normalization + closed-set discipline as {@link sqlTypeToBcScalar} (unknown ⇒ throw),
  * so a column that types for the bc scalar also types for materialization (and vice-versa). The
- * `int` scalar splits int32/int64 by width; `date`/`bool` get their own class; everything else is
- * `passthrough`.
+ * `int` covers every integer width (bc has one integer type); `date`/`bool` get their own class;
+ * everything else is `passthrough`.
  */
 export function arrayElementType(sqlType: string): string | null {
   const m = /^(.+?)\s*\[\s*\]$/.exec(normalizeSqlTypeToken(sqlType));
@@ -160,8 +169,8 @@ export function sqlTypeToMaterializeClass(sqlType: string): MaterializeClass {
     return 'passthrough';
   }
   switch (t) {
-    // 32-bit int family: JS number holds the full range exactly. The PostgreSQL SERIAL family maps to
-    // its underlying int width (SERIAL/SERIAL4=int4, SMALLSERIAL/SERIAL2=int2).
+    // Integer family. The PostgreSQL SERIAL types are the same integers under an auto-increment
+    // default (SERIAL/SERIAL4=int4, SMALLSERIAL/SERIAL2=int2, BIGSERIAL/SERIAL8=int8).
     case 'INTEGER':
     case 'INT':
     case 'SMALLINT':
@@ -173,13 +182,13 @@ export function sqlTypeToMaterializeClass(sqlType: string): MaterializeClass {
     case 'SERIAL4':
     case 'SMALLSERIAL':
     case 'SERIAL2':
-      return 'int32';
-    // 64-bit int: needs JS bigint for exactness.
     case 'BIGINT':
     case 'INT8':
     case 'BIGSERIAL':
     case 'SERIAL8':
-      return 'int64';
+      // Every width is bc's one `int`. The declared SQL type still carries the width — it is a column
+      // CONSTRAINT, not a separate read type ({@link sqlTypeToBcScalar}: "bigint を別型にしない").
+      return 'int';
     case 'BOOLEAN':
     case 'BOOL':
       return 'bool';
@@ -221,24 +230,33 @@ export function sqlTypeToMaterializeClass(sqlType: string): MaterializeClass {
  * The bc scalar of a de-boxed READ KEY value — the element type a relation key-array (`pluck` → `.as`)
  * carries when it is bound to `= ANY($1)` / `json_each(?)` (#141, spec §4.1). A key array is an opaque
  * transport value list, so its bc element tag is the JS type of the READ-materialized key cell, NOT the
- * column's `sqlTypeToBcScalar` outType: an `int32` column materializes to a JS `number` (bc `float`),
- * a `BIGINT`/`int64` to a decimal STRING (bc `string`), a `date` to a string, a `bool` to a boolean.
+ * column's `sqlTypeToBcScalar` outType: an integer column materializes to a JS `bigint` (bc `int`),
+ * a `date` to a string, a `bool` to a boolean.
  * Derived by composing {@link sqlTypeToMaterializeClass} (the read de-box class) with the base scalar,
  * so it stays the SINGLE type-system SoT — no hand-rolled type table at the relation call site.
  */
 export function keyArrayElemScalar(sqlType: string): BcScalar {
   switch (sqlTypeToMaterializeClass(sqlType)) {
-    case 'int32':
-      return 'float'; // materializes to a JS number → bc float
-    case 'int64':
+    case 'int':
+      return 'int'; // materializes to a JS bigint → bc int
     case 'date':
-      return 'string'; // materializes to a decimal / TZ string → bc string
+      return 'string'; // materializes to a TZ string → bc string
     case 'bool':
       return 'bool';
     case 'passthrough':
       // float stays a JS number (bc float); text / uuid / decimal-as-string / json are all bc string.
       return sqlTypeToBcScalar(sqlType) === 'float' ? 'float' : 'string';
   }
+}
+
+/** bc's `int` is a checked i64 (`behavior-contracts` #272): a wider value is outside the value model. */
+const I64_MIN = -(2n ** 63n);
+const I64_MAX = 2n ** 63n - 1n;
+function checkI64(v: bigint): bigint {
+  if (v < I64_MIN || v > I64_MAX) {
+    throw new Error(`materialize int: ${v} is outside the i64 range behavior-contracts' \`int\` admits`);
+  }
+  return v;
 }
 
 /**
@@ -256,34 +274,28 @@ export function keyArrayElemScalar(sqlType: string): BcScalar {
 export function materializeCell(value: unknown, klass: MaterializeClass): unknown {
   if (value === null || value === undefined) return value;
   switch (klass) {
-    case 'int64': {
-      // BIGINT → a value-preserving decimal STRING (exact + JSON-safe; a JS bigint throws in
-      // JSON.stringify, a JS number rounds past 2^53). Accept each driver's exact form.
-      if (typeof value === 'bigint') return value.toString();
+    case 'int': {
+      // An integer column reads back as a JS `bigint` — behavior-contracts' `int`, checked i64. The
+      // drivers already hand one over; accept the other exact forms a driver may still produce, and
+      // refuse anything that has ALREADY lost the value before it got here.
+      if (typeof value === 'bigint') return checkI64(value);
       if (typeof value === 'string') {
-        if (!/^-?\d+$/.test(value)) throw new Error(`materialize int64: driver returned a non-integer string '${value}'`);
-        return value; // already the exact decimal string (pg int8 / mysql2 bigNumberStrings)
+        if (!/^-?\d+$/.test(value)) throw new Error(`materialize int: driver returned a non-integer string '${value}'`);
+        return checkI64(BigInt(value)); // pg int8-as-string / mysql2 bigNumberStrings
       }
       if (typeof value === 'number') {
-        if (!Number.isInteger(value)) throw new Error(`materialize int64: driver returned a non-integer number ${value} for a 64-bit int column`);
-        // A JS number past 2^53 already lost precision at the driver boundary; that is exactly the
-        // hole this de-box closes, so a number here means the driver was NOT put in exact mode.
+        if (!Number.isInteger(value)) throw new Error(`materialize int: driver returned a non-integer number ${value} for an integer column`);
         if (!Number.isSafeInteger(value)) {
           throw new Error(
-            `materialize int64: driver returned an UNSAFE JS number ${value} for a 64-bit int column — ` +
-              `precision was already lost before materialization (the driver must return int8 as string/bigint, ` +
-              `not a rounded double). Configure the driver (better-sqlite3 safeIntegers / mysql2 supportBigNumbers+bigNumberStrings / pg int8-as-string).`,
+            `materialize int: driver returned an UNSAFE JS number ${value} for an integer column — ` +
+              `precision was already lost before materialization (the driver must return integers as ` +
+              `bigint/string, not a rounded double). Configure the driver (better-sqlite3 safeIntegers / ` +
+              `mysql2 supportBigNumbers+bigNumberStrings / pg int-as-bigint).`,
           );
         }
-        return value.toString(); // a small BIGINT value that fit safely — stringify for a uniform exact string
+        return BigInt(value);
       }
-      throw new Error(`materialize int64: unexpected driver JS type ${typeof value}`);
-    }
-    case 'int32': {
-      if (typeof value === 'number') return value;
-      if (typeof value === 'bigint') return Number(value);
-      if (typeof value === 'string' && /^-?\d+$/.test(value)) return Number(value);
-      throw new Error(`materialize int32: unexpected driver JS type ${typeof value} (${String(value)})`);
+      throw new Error(`materialize int: unexpected driver JS type ${typeof value}`);
     }
     case 'date': {
       if (typeof value === 'string') return value;

@@ -24,7 +24,7 @@ class UserModel extends DBModel {
   @column.text('mail_addr') email?: string;
   @column.boolean() is_active?: boolean;
   @column.datetime() created_at?: string;
-  @column.bigint() big?: string;
+  @column.bigint() big?: bigint;
   @column.uuid() ext_id?: string;
   @hasMany(() => [User.id, Post.author_id]) posts!: Promise<PostModel[]>;
 }

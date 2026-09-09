@@ -16,9 +16,9 @@
 import { describe, it, expect } from 'vitest';
 import { sqlTypeToBcScalar, sqlTypeToMaterializeClass, materializeCell, schemaColumnTypeResolver } from '../../src/scp';
 
-const COVERAGE_DIALECT_TYPES: Record<string, { sqlite: string; postgres: string; mysql: string; scalar: 'int' | 'float' | 'string' | 'bool'; mat: 'int32' | 'int64' | 'date' | 'bool' | 'passthrough' }> = {
-  int32_val: { sqlite: 'INT', postgres: 'INTEGER', mysql: 'INT', scalar: 'int', mat: 'int32' },
-  int64_val: { sqlite: 'BIGINT', postgres: 'BIGINT', mysql: 'BIGINT', scalar: 'int', mat: 'int64' },
+const COVERAGE_DIALECT_TYPES: Record<string, { sqlite: string; postgres: string; mysql: string; scalar: 'int' | 'float' | 'string' | 'bool'; mat: 'int' | 'int' | 'date' | 'bool' | 'passthrough' }> = {
+  int32_val: { sqlite: 'INT', postgres: 'INTEGER', mysql: 'INT', scalar: 'int', mat: 'int' },
+  int64_val: { sqlite: 'BIGINT', postgres: 'BIGINT', mysql: 'BIGINT', scalar: 'int', mat: 'int' },
   real_val: { sqlite: 'REAL', postgres: 'DOUBLE PRECISION', mysql: 'DOUBLE', scalar: 'float', mat: 'passthrough' },
   dec_val: { sqlite: 'TEXT', postgres: 'NUMERIC(20,4)', mysql: 'DECIMAL(20,4)', scalar: 'string', mat: 'passthrough' }, // decimal→string
   text_val: { sqlite: 'TEXT', postgres: 'TEXT', mysql: 'TEXT', scalar: 'string', mat: 'passthrough' },
@@ -58,10 +58,10 @@ describe('#59 coverage — sqlTypeToMaterializeClass (TS read-path int32/int64/d
 
   it('32-bit int family → int32; 64-bit → int64 (the width split)', () => {
     for (const t of ['INT', 'INTEGER', 'SMALLINT', 'TINYINT', 'MEDIUMINT', 'INT2', 'INT4']) {
-      expect(sqlTypeToMaterializeClass(t)).toBe('int32');
+      expect(sqlTypeToMaterializeClass(t)).toBe('int');
     }
     for (const t of ['BIGINT', 'INT8']) {
-      expect(sqlTypeToMaterializeClass(t)).toBe('int64');
+      expect(sqlTypeToMaterializeClass(t)).toBe('int');
     }
   });
 
@@ -87,24 +87,24 @@ describe('#59 coverage — sqlTypeToMaterializeClass (TS read-path int32/int64/d
 });
 
 describe('#59 coverage — materializeCell (per-cell JS coercion)', () => {
-  it('int64: bigint/string/safe-number → exact decimal STRING (JSON-safe)', () => {
-    expect(materializeCell(9223372036854775807n, 'int64')).toBe('9223372036854775807');
-    expect(materializeCell('9223372036854775807', 'int64')).toBe('9223372036854775807');
-    expect(materializeCell('-9223372036854775808', 'int64')).toBe('-9223372036854775808');
-    expect(materializeCell(42, 'int64')).toBe('42');
-    // A string result JSON.stringify-es without throwing (a bigint would throw).
-    expect(() => JSON.stringify({ v: materializeCell(9223372036854775807n, 'int64') })).not.toThrow();
+  it("int: every width materializes to a JS bigint — behavior-contracts' `int` value model", () => {
+    // bc has ONE integer type (`ts/src/canonical.ts`: bigint=int / number=float), so the read does
+    // not split by width: a SMALLINT and a BIGINT both arrive as a JS bigint.
+    expect(materializeCell(9223372036854775807n, 'int')).toBe(9223372036854775807n);
+    expect(materializeCell('9223372036854775807', 'int')).toBe(9223372036854775807n);
+    expect(materializeCell('-9223372036854775808', 'int')).toBe(-9223372036854775808n);
+    expect(materializeCell(42, 'int')).toBe(42n);
+    expect(materializeCell(2147483647, 'int')).toBe(2147483647n);
+    expect(typeof materializeCell(42n, 'int')).toBe('bigint');
   });
 
-  it('int64: an ALREADY-ROUNDED unsafe JS number is a HARD error (precision lost upstream)', () => {
-    expect(() => materializeCell(9223372036854775807 /* rounds to ...776000 */, 'int64')).toThrow(/UNSAFE JS number|precision/i);
+  it('int: an ALREADY-ROUNDED unsafe JS number is a HARD error (precision lost upstream)', () => {
+    expect(() => materializeCell(9223372036854775807 /* rounds to ...776000 */, 'int')).toThrow(/UNSAFE JS number|precision/i);
   });
 
-  it('int32: number stays; bigint/string → number', () => {
-    expect(materializeCell(2147483647, 'int32')).toBe(2147483647);
-    expect(materializeCell(42n, 'int32')).toBe(42);
-    expect(materializeCell('7', 'int32')).toBe(7);
-    expect(typeof materializeCell(42n, 'int32')).toBe('number');
+  it("int: a value outside i64 is outside bc's `int` (checked i64)", () => {
+    expect(() => materializeCell(2n ** 63n, 'int')).toThrow(/i64/);
+    expect(() => materializeCell(-(2n ** 63n) - 1n, 'int')).toThrow(/i64/);
   });
 
   it('date: a JS Date → its ISO string; a string stays', () => {
@@ -121,7 +121,7 @@ describe('#59 coverage — materializeCell (per-cell JS coercion)', () => {
   });
 
   it('NULL passes through for every class', () => {
-    for (const k of ['int32', 'int64', 'date', 'bool', 'passthrough'] as const) {
+    for (const k of ['int', 'int', 'date', 'bool', 'passthrough'] as const) {
       expect(materializeCell(null, k)).toBeNull();
     }
   });
@@ -161,10 +161,10 @@ describe('#59 coverage — schemaColumnTypeResolver over the coverage DDL', () =
     int32n_val: 'int', int64n_val: 'int', realn_val: 'float', decn_val: 'string', textn_val: 'string',
     booln_val: 'bool', daten_val: 'string', jsonn_val: 'string',
   };
-  const EXPECTED_MAT: Record<string, 'int32' | 'int64' | 'date' | 'bool' | 'passthrough'> = {
-    id: 'int32', int32_val: 'int32', int64_val: 'int64', real_val: 'passthrough', dec_val: 'passthrough',
+  const EXPECTED_MAT: Record<string, 'int' | 'int' | 'date' | 'bool' | 'passthrough'> = {
+    id: 'int', int32_val: 'int', int64_val: 'int', real_val: 'passthrough', dec_val: 'passthrough',
     text_val: 'passthrough', bool_val: 'bool', date_val: 'date', json_val: 'passthrough',
-    int32n_val: 'int32', int64n_val: 'int64', realn_val: 'passthrough', decn_val: 'passthrough',
+    int32n_val: 'int', int64n_val: 'int', realn_val: 'passthrough', decn_val: 'passthrough',
     textn_val: 'passthrough', booln_val: 'bool', daten_val: 'date', jsonn_val: 'passthrough',
   };
 
