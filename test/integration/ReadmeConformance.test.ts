@@ -386,8 +386,8 @@ for (const d of dialects) {
       expect(remaining.length).toBe(2);
     });
 
-    // ---------------------------------------------------------------- bare @column() read contract
-    it('README §Column Decorators — the BARE @column() read contract holds live (string→string, number→number, boolean→boolean, Date column)', async () => {
+    // ------------------------------------------------------------ the declared read contract
+    it('README §Column Decorators — the declared read contract holds live (string→string, number→number, boolean→boolean, datetime column)', async () => {
       await DBModel.transaction(async () =>
         User.create(
           [[User.name, 'Alice'], [User.email, 'alice@example.com'], [User.is_active, true]],

@@ -132,6 +132,7 @@ const SKIP_BUDGET = 0;
  */
 const LIVE_FILES = [
   'test/integration/ConnectionRouting.test.ts',
+  'test/integration/DeclaredTypeContract.test.ts',
   'test/integration/EmitterEndToEnd.test.ts',
   'test/integration/LazyRelation.test.ts',
   'test/integration/MultiDB.test.ts',
@@ -165,9 +166,10 @@ const OFFLINE_FILES = ['test/integration/MiddlewareHooks.test.ts', 'test/integra
  * The individual tests INSIDE a live file that legitimately pass with no server, and must — the same
  * device php's and python's gates use for their offline corpus checks.
  *
- * Four live files are mixed: `ReadmeConformance` and `SkipPattern` run their SQLite dialect leg
- * in-process while their PG/MySQL legs skip, `MultiDB` asserts class structure that needs no
- * connection, and `Postgres` has one error-path test that throws before dialling. Naming them is what
+ * Five live files are mixed: `ReadmeConformance`, `SkipPattern` and `DeclaredTypeContract` run their
+ * SQLite dialect leg in-process while their PG/MySQL legs skip or fail, `MultiDB` asserts class
+ * structure that needs no connection, and `Postgres` has one error-path test that throws before
+ * dialling. Naming them is what
  * lets the rule for everything else be absolute: a live test that PASSES without a server never
  * dialled one.
  *
@@ -175,6 +177,9 @@ const OFFLINE_FILES = ['test/integration/MiddlewareHooks.test.ts', 'test/integra
  * a database, so it must not be excused), and an entry whose test is gone is stale.
  */
 const OFFLINE_TESTS = [
+  "test/integration/DeclaredTypeContract.test.ts › declared type === value type (#286) sqlite a row survives JSON.stringify (no bigint, no TZ-shifted Date)",
+  "test/integration/DeclaredTypeContract.test.ts › declared type === value type (#286) sqlite every column reads back as the type its family declares",
+  "test/integration/DeclaredTypeContract.test.ts › declared type === value type (#286) sqlite the DRIVER plane is unchanged by the family",
   "test/integration/MultiDB.test.ts › createDBBase() Global DBModel isolation should not affect global DBModel writer state",
   "test/integration/MultiDB.test.ts › createDBBase() Independent withWriter() Contexts should have independent inWriterContext() state",
   "test/integration/MultiDB.test.ts › createDBBase() Independent withWriter() Contexts should have nested withWriter work independently",
@@ -183,7 +188,7 @@ const OFFLINE_TESTS = [
   "test/integration/Postgres.test.ts › DBModel advanced operations Error handling should throw error when reloading without primary key",
   "test/integration/ReadmeConformance.test.ts › README conformance — sqlite README §CRUD — createMany returning + updateMany (keyColumns) returning + delete returning",
   "test/integration/ReadmeConformance.test.ts › README conformance — sqlite README §Column Decorators — @column.date() reads a DATE as a YYYY-MM-DD string; @column.datetime() reads a TIMESTAMP",
-  "test/integration/ReadmeConformance.test.ts › README conformance — sqlite README §Column Decorators — the BARE @column() read contract holds live (string→string, number→number, boolean→boolean, Date column)",
+  "test/integration/ReadmeConformance.test.ts › README conformance — sqlite README §Column Decorators — the declared read contract holds live (string→string, number→number, boolean→boolean, datetime column)",
   "test/integration/ReadmeConformance.test.ts › README conformance — sqlite README §Date Utility Functions — formatLocalDate / formatUTCDate return YYYY-MM-DD",
   "test/integration/ReadmeConformance.test.ts › README conformance — sqlite README §Middleware — execute middleware sees EVERY SQL statement through the decorator API",
   "test/integration/ReadmeConformance.test.ts › README conformance — sqlite README §Middleware — method-level find hook with per-request state (getCurrentContext)",
