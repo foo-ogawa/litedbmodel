@@ -59,8 +59,8 @@ export type KeyTypeResolver = (table: string, column: string) => BcScalar;
 /**
  * The decorator's `ColumnMeta.sqlCast` type-family token → the canonical §4.1 SQL-type token the SCP
  * `static columns` SoT carries (validated by `coltype.ts`). The decorator ALREADY knows the family
- * (it set `sqlCast` from the `@column.*` variant / the `design:type` inference — `src/decorators.ts`),
- * so this is a pure token normalization, no inference. `coltype.ts` accepts every RHS here:
+ * (the model DECLARED it with a `@column.*` variant — `src/decorators.ts`), so this is a pure token
+ * normalization, no inference. `coltype.ts` accepts every RHS here:
  * BOOLEAN/BIGINT/TIMESTAMP/DATE/UUID/JSONB are scalar; the array tokens de-box as `passthrough`
  * (`sqlTypeToMaterializeClass`).
  *
@@ -87,15 +87,12 @@ export const COLUMN_FAMILY_SQL_TYPE: Readonly<Record<string, string>> = {
 };
 
 /**
- * The LAST-RESORT SQL type for a column that carries NO `sqlCast` family, NO `baseSqlType` (its
- * `design:type` is absent — no `emitDecoratorMetadata` — or is an Array/Object family), and NO
- * `columnTypes` override. Phase F-2 (#105 option B) made {@link columnSqlType} consult the decorator's
- * `baseSqlType` (derived from the field's TS `design:type`: String→TEXT / Number→INTEGER / Boolean→
- * BOOLEAN / Date→TIMESTAMP / BigInt→BIGINT) BEFORE this default, so a bare `@column() name: string`
- * types as `TEXT` (not `INTEGER`) — the fix for F1's blanket-INTEGER read-de-box defect (it threw
- * `materialize int32` on a live string column). This default now only applies when `design:type` is
- * genuinely unavailable; a REAL/DECIMAL column (a `Number` that is not INT) is pinned via
- * {@link DeriveColumnsOptions.columnTypes} (the escape hatch, unchanged from F1).
+ * The LAST-RESORT SQL type for a column that carries NO `sqlCast` family, NO `baseSqlType` and NO
+ * `columnTypes` override — `@column.number()`, whose JS `number` does not say whether the column is
+ * INTEGER or REAL/DECIMAL. The DBModel read path pins such a column to `TEXT` (passthrough) via
+ * {@link DeriveColumnsOptions.columnTypes} before it reaches here, so this default is only taken by a
+ * caller that supplies its own metadata; a REAL/DECIMAL column is pinned the same way (the escape
+ * hatch, unchanged from F1).
  */
 export const DEFAULT_UNCAST_SQL_TYPE = 'INTEGER';
 
@@ -115,10 +112,9 @@ export interface DeriveColumnsOptions {
  * option B):
  *   1. an explicit `columnTypes` override (the REAL/DECIMAL/width escape hatch) wins;
  *   2. else the family token from {@link COLUMN_FAMILY_SQL_TYPE} (an explicit `@column.*` `sqlCast`);
- *   3. else the decorator's `baseSqlType` — derived from the field's TS `design:type` (String→TEXT /
- *      Number→INTEGER / Boolean→BOOLEAN / Date→TIMESTAMP / BigInt→BIGINT), so a bare `@column()` types
- *      correctly for the SCP typed-read de-box (the fix for F1's blanket-INTEGER default);
- *   4. else {@link DEFAULT_UNCAST_SQL_TYPE} (only when `design:type` is unavailable).
+ *   3. else the decorator's `baseSqlType` — the token a cast-free family declares (`@column.text()`
+ *      → `TEXT`), so it types the SCP typed-read de-box exactly as a cast-carrying family does;
+ *   4. else {@link DEFAULT_UNCAST_SQL_TYPE}.
  * Fail-closed: a family token the mapping does not know, or a produced token `coltype.ts` rejects,
  * THROWS (naming the column) — never a silent skip (no-assume, no-fallback).
  */

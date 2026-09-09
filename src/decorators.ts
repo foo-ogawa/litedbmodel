@@ -831,6 +831,16 @@ export const column = Object.assign(
     // ============================================
 
     /**
+     * The driver's value, UNCAST — for a column whose type the library has no cast for (`BYTEA` /
+     * `BLOB` arrives as a driver Buffer, a vendor type as whatever the driver decodes). It states
+     * "this column is passed through", which is a DECLARATION; the removed bare `@column()` was the
+     * absence of one, and produced this same passthrough by accident for every unresolvable type.
+     * @example @column.passthrough() payload?: unknown;
+     */
+    passthrough: (columnNameOrOptions?: string | ColumnOptions) =>
+      createColumnDecorator<unknown>()(columnNameOrOptions),
+
+    /**
      * Custom type conversion with user-provided function
      * @example @column.custom((v) => String(v).toUpperCase()) status?: string;
      * @example @column.custom((v) => v, (v) => JSON.stringify(v)) data?: MyType; // with serializer

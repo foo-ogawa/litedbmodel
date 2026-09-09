@@ -4,7 +4,7 @@
  * behavior for the same model (authoring.ts guarantees eager↔declaration byte-identity — this leans on
  * that). Proves the decorator surface lowers to the SAME SCP the native runtimes already execute.
  *
- * Note: vitest (esbuild) does NOT support `emitDecoratorMetadata`, so `design:type` auto-inference is
+ * Note: a column's SQL type comes from the `@column.*` family it declares, so these expectations are
  * unavailable; the models here use the EXPLICIT `@column.*` variants (which set the `sqlCast` family),
  * and bare `@column()` id/number columns take the documented `DEFAULT_UNCAST_SQL_TYPE` (INTEGER) or a
  * `columnTypes` pin — exactly the adapter's column-type mapping under test.

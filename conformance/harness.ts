@@ -267,15 +267,15 @@ const MODEL_REGISTRY: Record<string, unknown> = { ConfUser, ConfPost, ConfTag, C
 const conformanceModels = (name: string): ModelClassLike => MODEL_REGISTRY[name] as ModelClassLike;
 
 /**
- * The TEXT columns, pinned. vitest (esbuild) has no `emitDecoratorMetadata`, so a bare `@column()`
- * carries no `design:type` and takes the documented `DEFAULT_UNCAST_SQL_TYPE` (INTEGER); the text
- * columns go through the adapter's documented `columnTypes` escape hatch.
+ * The columns whose SQL type is NARROWER than the family they declare (a SMALLINT read as Int, a
+ * TIMESTAMP read as the canonical date string, a VARCHAR primary key), through the adapter's
+ * documented `columnTypes` escape hatch.
  */
 const COLUMN_OPTIONS: DeriveColumnsOptions = {
   // `ts`/`flag` (#137) are pinned for the same reason: the read-decode class is the COLUMN's SQL
   // type, so TIMESTAMP → the canonical date string and SMALLINT → Int come from here, not a guess.
   // `doc_id` is the STRING primary key of `conf_docs` and `sku` a plain text column of `conf_lines`.
-  columnTypes: { name: 'TEXT', title: 'TEXT', status: 'TEXT', created_at: 'TEXT', label: 'TEXT', ts: 'TIMESTAMP', flag: 'SMALLINT', doc_id: 'VARCHAR', sku: 'TEXT' },
+  columnTypes: { ts: 'TIMESTAMP', flag: 'SMALLINT', doc_id: 'VARCHAR' },
 };
 
 /** The emitted `@behavior` class name (the `bc generate --behavior` argument). */

@@ -5,10 +5,8 @@
  * the endpoints name model columns, relations and parameters. Everything the generated modules execute
  * is derived from exactly this by `emitBehaviorModule`.
  *
- * Note: vitest (esbuild) does not support `emitDecoratorMetadata`, so a bare `@column()` carries no
- * `design:type` and takes the documented `DEFAULT_UNCAST_SQL_TYPE` (INTEGER); the text columns are
- * pinned through the adapter's `columnTypes` escape hatch ({@link EMIT_COLUMN_OPTIONS}) exactly as the
- * decorator-adapter tests do.
+ * Every column DECLARES its type with a `@column.*` family, so these models lower identically under
+ * every toolchain — nothing here depends on compiler-emitted metadata.
  */
 
 import type { ColumnsOf } from '../../src';
@@ -157,8 +155,8 @@ const REGISTRY: Record<string, unknown> = { User, Post, Comment, TenantUser, Ten
 /** Model NAME → class, as `relationDeclOf` resolves a relation's target. */
 export const emitModels = (name: string): ModelClassLike => REGISTRY[name] as ModelClassLike;
 
-/** The TEXT columns, pinned (no `emitDecoratorMetadata` under vitest — see the module note). */
-export const EMIT_COLUMN_OPTIONS: DeriveColumnsOptions = { columnTypes: { name: 'TEXT', title: 'TEXT', body: 'TEXT' } };
+/** No column needs pinning: every one declares its SQL type through its `@column.*` family. */
+export const EMIT_COLUMN_OPTIONS: DeriveColumnsOptions = { columnTypes: {} };
 
 /**
  * The declared endpoints. Read / relation graph / IN-list / SKIP / EXISTS+parentRef / QUERY view /

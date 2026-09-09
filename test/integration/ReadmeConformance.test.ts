@@ -70,10 +70,8 @@ class UserModel extends DBModel {
   @column.number() age?: number;
   @column.number() tenant_id?: number;
   @column.number() group_id?: number;
-  // README §Date vs DateTime: a NULLABLE timestamp uses an EXPLICIT decorator — the `Date | null`
-  // union defeats reflect-metadata's design:type inference (it emits Object, not Date), so a bare
-  // `@column()` cannot type it. `@column.datetime()` is the documented decorator for this (mirrors
-  // the repo's own test helper). Non-null `Date` columns (created_at/updated_at) reflect fine as bare.
+  // README §Date vs DateTime: every column states its family, and `@column.datetime()` reads back a
+  // TZ-attached STRING (not a JS Date) — the declared type says so.
   @column.datetime() deleted_at?: string | null;
 
   // README §Relations
@@ -397,7 +395,7 @@ for (const d of dialects) {
         ),
       );
       const [u] = await User.find([[User.email, 'alice@example.com']]);
-      // README auto-inferred types: name/email string, id number, is_active boolean
+      // README declared types: name/email text, id number, is_active boolean
       expect(typeof u.id).toBe('number');
       expect(typeof u.name).toBe('string');
       expect(u.name).toBe('Alice');
@@ -418,8 +416,16 @@ for (const d of dialects) {
       // README: @column.date() returns a string 'YYYY-MM-DD'
       expect(typeof e.birth_date).toBe('string');
       expect(e.birth_date).toBe('1990-06-15');
-      // README: @column.datetime() is a datetime column (v2 read materializes to a TZ-attached string)
-      expect(String(e.updated_at)).toMatch(/^\d{4}-\d{2}-\d{2}/);
+      // README: @column.datetime() reads back a TZ-attached STRING, not a Date. Assert the TYPE, not
+      // just its rendering — `String(aDate)` also starts with a date, which is how a `Date` return
+      // slipped past this gate while the README promised one.
+      expect(typeof e.updated_at).toBe('string');
+      expect(e.updated_at).not.toBeInstanceOf(Date);
+      // README: the string is the COLUMN's own textual form. `rc_events.updated_at` is declared
+      // `TIMESTAMP` (no time zone) on every dialect here, so it carries no offset — which is exactly
+      // why the README tells you to declare `timestamptz` when the value is an instant.
+      expect(e.updated_at).toMatch(/^2024-06-15[ T]\d{2}:30:00/);
+      expect(e.updated_at).not.toMatch(/[+-]\d{2}(:?\d{2})?$/);
     });
 
     it('README §Date Utility Functions — formatLocalDate / formatUTCDate return YYYY-MM-DD', () => {

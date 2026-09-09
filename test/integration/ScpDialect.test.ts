@@ -104,7 +104,7 @@ const REPO_ROOT = resolve(__dirname, '../..');
 // ── #153 / #46 — the DECORATED models + DECLARED IN-list endpoints the emitter lowers ────────────
 //
 // This is the whole ORM-side input: metadata collectors and endpoint declarations, no SQL. vitest
-// (esbuild) has no `emitDecoratorMetadata`, so a bare `@column()` carries no `design:type` and the
+// The column's SQL type comes from the family it declares, and the
 // non-INTEGER columns are pinned through the adapter's documented `columnTypes` escape hatch.
 
 @model(T_POSTS)

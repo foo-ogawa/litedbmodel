@@ -238,11 +238,40 @@ describe('decorators', () => {
     });
   });
 
-  describe('@column type auto-inference', () => {
-    // Note: Auto-inference requires emitDecoratorMetadata which esbuild (used by vitest) doesn't support.
-    // These tests verify that explicit type decorators work when auto-inference is not available.
-    
-    it('should work with explicit @column.boolean when auto-inference unavailable', () => {
+  describe('the bare @column() is rejected (#286)', () => {
+    // It declared no type: it read `design:type`, which needs legacy decorators AND
+    // `emitDecoratorMetadata`. Where that was absent the column got NO cast and the raw driver value
+    // reached the caller — an `integer` as a `bigint`, a `numeric` as a `string`. It now says so.
+
+    it('throws, naming the families that replace it', () => {
+      expect(() => (column as unknown as () => void)()).toThrow(/must state its type with a family/);
+      expect(() => (column as unknown as () => void)()).toThrow(/@column\.text\(\)/);
+    });
+
+    it('throws before any column is registered, whatever argument it was given', () => {
+      expect(() => (column as unknown as (a: unknown) => void)('db_name')).toThrow(/family/);
+      expect(() => (column as unknown as (a: unknown) => void)({ primaryKey: true })).toThrow(/family/);
+    });
+
+    it('every family accepts what the bare form accepted (a name, or ColumnOptions)', () => {
+      @model('opts')
+      class OptsModel extends DBModel {
+        @column.number({ primaryKey: true, autoIncrement: true }) id?: number;
+        @column.text('mail_addr') email?: string;
+        @column.datetime({ columnName: 'ts' }) at?: string;
+      }
+      const meta = getColumnMeta(OptsModel)!;
+      expect(meta.get('id')).toMatchObject({ primaryKey: true, autoIncrement: true });
+      expect(meta.get('email')!.columnName).toBe('mail_addr');
+      expect(meta.get('at')!.columnName).toBe('ts');
+    });
+  });
+
+  describe('@column family declarations', () => {
+    // A column's type comes from the family it declares, on every toolchain — nothing is read back
+    // from the compiler, so these hold under tsc, esbuild/tsx and standard decorators alike.
+
+    it('@column.boolean() declares its sqlCast + cast', () => {
       @model('test')
       class TestModel extends DBModel {
         @column.boolean() is_active?: boolean;
@@ -254,7 +283,7 @@ describe('decorators', () => {
       expect(instance.is_active).toBe(true);
     });
 
-    it('should work with explicit @column.number when auto-inference unavailable', () => {
+    it('@column.number() declares its cast', () => {
       @model('test')
       class TestModel extends DBModel {
         @column.number() count?: number;
@@ -266,7 +295,7 @@ describe('decorators', () => {
       expect(instance.count).toBe(42);
     });
 
-    it('should work with explicit @column.datetime when auto-inference unavailable', () => {
+    it('@column.datetime() declares its sqlCast + cast', () => {
       @model('test')
       class TestModel extends DBModel {
         @column.datetime() created_at?: string;
@@ -722,10 +751,6 @@ describe('decorators', () => {
       expect(sqlCastMap.get('id')).toBeUndefined();
     });
 
-    // Note: Auto-inference tests are limited in vitest because esbuild doesn't fully support
-    // emitDecoratorMetadata. Auto-inference is verified in integration tests instead.
-    // When design:type metadata is available, @column() with Date/boolean/bigint types will
-    // automatically get sqlCast and serialize functions.
   });
 });
 

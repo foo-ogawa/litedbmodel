@@ -4,7 +4,7 @@
  * The README `User` shape uses BARE `@column()` for its columns (`name`/`email`: string, `id`: number,
  * `is_active`: boolean, `created_at`: Date). F1's blanket-INTEGER default typed a bare string column as
  * INTEGER, so the SCP typed-read de-box threw `materialize int32` on a live string value. Option B
- * (decorator `baseSqlType` from `design:type`, + the DBModel path's passthrough pin for ambiguous
+ * (the family's declared `baseSqlType`, + the DBModel path's passthrough pin for ambiguous
  * numbers) fixes that: name/email read back as STRINGS, id as a NUMBER, is_active as a BOOLEAN — the
  * v1 read contract, unchanged — through the SCP compile + Phase A-E runtime (no `materialize int32`
  * throw). This test drives the PUBLIC `User.find`/`findOne`/`count` API (README code unchanged) on

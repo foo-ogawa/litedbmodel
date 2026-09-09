@@ -31,9 +31,7 @@ class AllTypesModel extends DBModel {
 }
 const AllTypes = AllTypesModel as typeof AllTypesModel & ColumnsOf<AllTypesModel>;
 
-// Model for testing @column() with Date auto-inference
-// Note: Uses @column.datetime() explicitly because esbuild/vitest doesn't support emitDecoratorMetadata
-// In production with tsc, plain @column() would work via auto-inference
+// Model for testing the @column.datetime() read contract
 @model('auto_date_test')
 class AutoDateModel extends DBModel {
   @column.number() id?: number;
@@ -1119,9 +1117,9 @@ describe.skipIf(skipIntegrationTests)('DBModel advanced operations', () => {
     });
   });
 
-  describe('Auto-inferred Date with @column()', () => {
+  describe('@column.datetime() read contract', () => {
     // Note: AutoDateModel is defined at file top level for decorator metadata support
-    // In production with tsc, plain @column() works via auto-inference from Date type
+
 
     beforeAll(async () => {
       await DBModel.execute(`
@@ -1152,7 +1150,7 @@ describe.skipIf(skipIntegrationTests)('DBModel advanced operations', () => {
       // Find and verify timezone is preserved
       const found = await AutoDate.findOne([[AutoDate.id, createdId]]);
       expect(found).not.toBeNull();
-      // v2 read contract (issue #9): auto-inferred Date column → TZ-attached string; parse back.
+      // v2 read contract (issue #9): a datetime column → TZ-attached string; parse back.
       expect(typeof found!.created_at).toBe('string');
       expect(new Date(found!.created_at as unknown as string).toISOString()).toBe(testDate.toISOString());
     });
