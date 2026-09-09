@@ -6,15 +6,15 @@
 
 # Interface: ColumnDecorator()\<Value\>
 
-Defined in: [decorators.ts:348](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L348)
+Defined in: [decorators.ts:351](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L351)
 
 What a `@column.*` decorator may be applied to, under EITHER protocol.
 
-The standard-decorator overload is typed: `Value` is the decorated field's declared TS type, so a
-family whose read contract yields a `string` (`@column.datetime()`, `@column.bigint()`, …) will not
-compile onto a field declared `Date` / `bigint`. That is the compile-time half of the fix for the
-"declared type ≠ value `find()` returns" defect (issue #286); the legacy protocol hands decorators
-no type information at all, so there it can only be documented.
+Both overloads are typed: `Value` is the decorated field's declared TS type, so a family whose read
+contract yields a `string` (`@column.datetime()`, `@column.bigint()`, …) will not compile onto a
+field declared `Date` / `bigint`. That is the compile-time half of the fix for the "declared type ≠
+value `find()` returns" defect (issue #286), and it holds under BOTH protocols — the legacy
+property decorator receives the prototype, whose property types a mapped type can constrain.
 
 ## Type Parameters
 
@@ -25,19 +25,29 @@ no type information at all, so there it can only be documented.
 ## Call Signature
 
 ```ts
-ColumnDecorator(target: object, propertyKey: string | symbol): void;
+ColumnDecorator<This, Key>(target: This, propertyKey: Key): void;
 ```
 
-Defined in: [decorators.ts:350](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L350)
+Defined in: [decorators.ts:358](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L358)
 
-Legacy (`experimentalDecorators`) property decorator.
+Legacy (`experimentalDecorators`) property decorator. The prototype it receives IS typed, so the
+decorated property's declared type is constrained here too — `@column.datetime() x?: Date` does
+not compile under either protocol. (It was believed legacy carried no type information; it does,
+and the majority of models are compiled that way.)
+
+### Type Parameters
+
+| Type Parameter |
+| ------ |
+| `This` *extends* `Partial`\<`Record`\<`Key`, `Value`\>\> |
+| `Key` *extends* `string` \| `symbol` |
 
 ### Parameters
 
 | Parameter | Type |
 | ------ | ------ |
-| `target` | `object` |
-| `propertyKey` | `string` \| `symbol` |
+| `target` | `This` |
+| `propertyKey` | `Key` |
 
 ### Returns
 
@@ -49,7 +59,7 @@ Legacy (`experimentalDecorators`) property decorator.
 ColumnDecorator<This>(value: undefined, context: ClassFieldDecoratorContext<This, Value>): void;
 ```
 
-Defined in: [decorators.ts:352](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L352)
+Defined in: [decorators.ts:363](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L363)
 
 TC39 standard class-field decorator.
 

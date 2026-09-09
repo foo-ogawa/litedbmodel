@@ -246,7 +246,8 @@ either decorator protocol. Nothing is inferred from the TypeScript type annotati
 | DB column type | Decorator | Declared TS type | Value `find()` returns |
 |---|---|---|---|
 | `TEXT` / `VARCHAR` / `CHAR` / `ENUM` | `@column.text()` | `string` | the driver string, uncast |
-| `INTEGER` / `REAL` / `NUMERIC` | `@column.number()` | `number` | JS number |
+| `INTEGER` / `REAL` / `FLOAT` / `DOUBLE` | `@column.number()` | `number` | JS number |
+| `NUMERIC` / `DECIMAL` / `MONEY` | `@column.text()` | `string` | the **exact decimal string** — a JS number destroys `NUMERIC(38,10)` |
 | `BOOLEAN` | `@column.boolean()` | `boolean` | JS boolean |
 | `BIGINT` / `INT8` | `@column.bigint()` | `string` | **exact decimal string** — a JS number rounds past 2^53, a JS `bigint` throws in `JSON.stringify` |
 | `TIMESTAMP` / `TIMESTAMPTZ` / `DATETIME` | `@column.datetime()` | `string` | the column's **own textual form**, never a TZ-shifted `Date` — with the offset when the column carries one (`timestamptz` → `2024-06-15 10:30:00+00`), without it when it does not (`timestamp` → `2024-06-15 10:30:00`) |
@@ -257,7 +258,8 @@ either decorator protocol. Nothing is inferred from the TypeScript type annotati
 | `INT[]` | `@column.intArray()` | `number[]` | `number[]` |
 | `NUMERIC[]` | `@column.numericArray()` | `(number \| null)[]` | `(number \| null)[]` |
 | `BOOLEAN[]` | `@column.booleanArray()` | `(boolean \| null)[]` | `(boolean \| null)[]` |
-| `TIMESTAMP[]` | `@column.datetimeArray()` | `(Date \| null)[]` | `(Date \| null)[]` |
+| `TIMESTAMP[]` | `@column.datetimeArray()` | `(string \| null)[]` | element-wise the same TZ-attached string `@column.datetime()` returns |
+| `BYTEA` / `BLOB` / a vendor type | `@column.passthrough()` | `unknown` | the driver's value, uncast |
 | anything else | `@column.custom(cast, serialize?)` | whatever `cast` returns | whatever `cast` returns |
 
 ```typescript
@@ -276,6 +278,9 @@ class UserModel extends DBModel {
 Writes still accept the natural JS value: `[[User.created_at, new Date()]]` serializes a `Date`, and
 `[[User.large_id, 9007199254740993n]]` a `bigint`. It is the READ that is a string, so that a row can
 be `JSON.stringify`-ed and compared without a timezone shift or a silent rounding.
+
+SQLite is the exception to the decimal row: it stores no fixed-precision type, so its driver hands
+back a JS number whatever the column says, and the value is already rounded before litedbmodel sees it.
 
 Parse a datetime when you need a `Date`: `new Date(user.created_at)`. PostgreSQL returns
 `2024-06-15 10:30:00+00` — a space, not a `T`; `new Date()` accepts that form as-is. Do not "repair"

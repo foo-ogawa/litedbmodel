@@ -200,17 +200,22 @@ describe('decorators', () => {
       expect(instance.flags).toEqual([true, false, null]);
     });
 
-    it('@column.datetimeArray should convert to Date array', () => {
+    it('@column.datetimeArray reads element-wise as the scalar datetime does — a string, not a Date', () => {
       @model('test')
       class TestModel extends DBModel {
-        @column.datetimeArray() dates?: (Date | null)[];
+        @column.datetimeArray() dates?: (string | null)[];
       }
 
       const instance = new TestModel();
       (instance as any).dates = ['2024-01-01', '2024-01-02'];
       instance.typeCastFromDB();
-      expect(instance.dates![0]).toBeInstanceOf(Date);
-      expect(instance.dates![1]).toBeInstanceOf(Date);
+      // The array family used to be the one place a TZ-shifted `Date` still came back, so
+      // `JSON.stringify` of a row re-rendered those elements in UTC — the hazard #9 closed for the
+      // scalar. Elements now carry the same TZ-attached string the scalar family returns.
+      expect(instance.dates!.every((d) => typeof d === 'string')).toBe(true);
+      expect(instance.dates![0]).not.toBeInstanceOf(Date);
+      expect(String(instance.dates![0])).toMatch(/^2024-01-01/);
+      expect(String(instance.dates![1])).toMatch(/^2024-01-02/);
     });
 
     it('@column.json should convert to object', () => {

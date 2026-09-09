@@ -20,7 +20,7 @@ Closes #286, #287。**モデル定義の書き換えが必要 — 下の移行�
   プロトコルは「どのメタデータ袋を渡すか」だけを決める。
 - **宣言した型と `find()` が返す値の型が一致していなかった（#286）** — 7列中5列がズレていた（実機
   PostgreSQL で再現・確認）。原因は2つ。
-  - `@column.datetime()` / `.date()` / `.bigint()` は 2.0.0 の read 契約（#9）で**文字列**を返すように
+  - `@column.datetime()` / `.date()` / `.bigint()` は #9 の read 契約（2.1.0 で出荷）で**文字列**を返すように
     なっていたが、README・`.d.ts` の例・litedbmodel-gen の生成物はいずれも `Date` / `bigint` を宣言した
     ままだった。宣言側を実際の戻り値に合わせた。
   - 無印 `@column()` の型推論は `design:type`（= `emitDecoratorMetadata`）に依存していた。**esbuild は
@@ -49,7 +49,7 @@ Closes #286, #287。**モデル定義の書き換えが必要 — 下の移行�
 ### 書き換えが必要なモデル定義
 
 仕様は変わっていない。**欠陥に依存していた書き方**が、仕様どおりに動かないと分かった箇所であり、
-`@column.datetime()` などの**戻り値の挙動は 2.0.0 から一切変わっていない**（変わったのは、実装と食い違って
+`@column.datetime()` などの**戻り値の挙動は 2.1.0 から一切変わっていない**（変わったのは、実装と食い違って
 いた宣言と README の側）。
 
 - **無印 `@column()` は列を宣言しない。** 列は family で型を宣言する。
@@ -72,11 +72,19 @@ Closes #286, #287。**モデル定義の書き換えが必要 — 下の移行�
   | `@column({ primaryKey: true }) id?: number` | `@column.number({ primaryKey: true }) id?: number` |
 
   litedbmodel-gen を使っているなら `npx embedoc build` で生成区間はそのまま置き換わる。
-- **`@column.datetime()` / `.date()` / `.bigint()` の宣言型が `string` になる。** 実行時の値は 2.0.0 から
+- **`@column.datetime()` / `.date()` / `.bigint()` の宣言型が `string` になる。** 実行時の値は 2.1.0 から
   文字列で、**型注釈の側が間違っていた**。`Date` が要るなら `new Date(row.created_at)`。PostgreSQL の
   `timestamptz` は `2026-11-01 10:00:00+00`（`T` は無い）で返り、`new Date()` はその形をそのまま解釈する。
 - **標準デコレータで relation を書くときだけ `declare` が使えない**（TypeScript が `TS1206` で拒否する）。
   `posts!: Promise<Post[]>` と書く。legacy デコレータは従来どおり `declare` で、変更は無い。
+
+### 記録されていなかったこと
+
+- **`@column.datetime()` / `.bigint()` の戻り値が `Date` / `bigint` から文字列に変わったのは 2.1.0 で、
+  CHANGELOG に項目が無い。** 2.0.0 は `castToDatetime` が `Date` を、`bigint` family が `BigInt` を返して
+  いた（`git show v2.0.0:src/TypeCast.ts` / `:src/decorators.ts`）。#9 の裁定（2026-07-15）を実装した
+  `b13842e` を最初に含むタグが `v2.1.0`。**値の挙動が変わったリリースが無告知で出た**ことが、宣言と
+  README が実装から取り残された起点であり、本リリースが直している drift の発生源。
 
 ## [2.2.6] - 2026-08-06
 

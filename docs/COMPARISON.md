@@ -111,7 +111,7 @@ const stats = await User.query(`
 class UserModel extends DBModel {
   @column.number() id?: number;
   @column.text() name?: string;
-  @column.datetime() created_at?: string;  // Auto-inferred from Date type
+  @column.datetime() created_at?: string;  // TZ-attached string, declared by the family
 }
 
 // Migrations: Manual SQL files

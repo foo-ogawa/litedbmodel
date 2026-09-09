@@ -6,7 +6,7 @@
 
 # Interface: ModelClassDecorator()
 
-Defined in: [decorators.ts:1060](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L1060)
+Defined in: [decorators.ts:1114](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L1114)
 
 A class decorator that works under both protocols.
 
@@ -16,7 +16,7 @@ A class decorator that works under both protocols.
 ModelClassDecorator<T>(constructor: T): T;
 ```
 
-Defined in: [decorators.ts:1061](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L1061)
+Defined in: [decorators.ts:1115](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L1115)
 
 A class decorator that works under both protocols.
 
@@ -42,7 +42,7 @@ A class decorator that works under both protocols.
 ModelClassDecorator<T>(value: T, context: ClassDecoratorContext): T;
 ```
 
-Defined in: [decorators.ts:1062](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L1062)
+Defined in: [decorators.ts:1116](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L1116)
 
 A class decorator that works under both protocols.
 

@@ -57,7 +57,7 @@ class UserModel extends DBModel {
   // UUID primary key (PostgreSQL: auto-casts to ::uuid)
   // @column.uuid({ primaryKey: true }) id?: string;
 
-  // Basic columns (types auto-inferred)
+  // Basic columns — each states its type with a family
   @column.text() name?: string;
   @column.text() email?: string;
   @column.boolean() is_active?: boolean;

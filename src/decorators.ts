@@ -25,8 +25,7 @@ import type { ModelOptions } from './types';
 
 // ── v1 read type contract (issue #9), aligned to the v2 SCP read de-box ────────
 // The legacy v1 `DBModel` decorator read path historically materialized `@column.bigint()` to a JS
-// `bigint` (not JSON-safe) and `@column.datetime()` / an auto-inferred `Date` to a JS `Date`
-// (TZ-shifted). Both carry the SAME i64-rounding / date-corruption hazards the v2 SCP read path
+// `bigint` (not JSON-safe) and `@column.datetime()` to a JS `Date` (TZ-shifted). Both carry the SAME i64-rounding / date-corruption hazards the v2 SCP read path
 // already closed. Per the owner (2026-07-15), v1 is realigned to the v2 read TYPE CONTRACT — and it
 // does so by REUSING the v2 materializer (`materializeCell`, `src/scp/coltype.ts`), NOT a divergent
 // v1 coercion. The v1 decorator IS the static type source (unlike v2, whose SoT is the SQL DDL), so
@@ -557,15 +556,13 @@ function serializeJson(val: unknown, typeCast?: DriverTypeCast): unknown {
  * protocol. Nothing is inferred from the TypeScript type annotation.
  *
  * ```typescript
- * @column.number() id?: number;          // Auto: Number conversion
- * @column.text() name?: string;        // No conversion needed
- * @column.boolean() is_active?: boolean;  // Auto: Boolean conversion
- * @column.datetime() created_at?: string;    // Auto: DateTime conversion
- * @column.bigint() large_id?: string;    // Auto: BigInt conversion
- * @column.text('custom_name') prop?: string;  // Custom column name
- * ```
- *
- * ```typescript
+ * @column.number({ primaryKey: true, autoIncrement: true }) id?: number;
+ * @column.text() name?: string;                // TEXT / VARCHAR / CHAR / ENUM — no cast needed
+ * @column.text('custom_name') prop?: string;   // custom column name
+ * @column.boolean() is_active?: boolean;
+ * @column.datetime() created_at?: string;      // TZ-attached string, NOT a JS Date
+ * @column.date() birth_date?: string;          // 'YYYY-MM-DD'
+ * @column.bigint() large_id?: string;          // exact decimal string (JSON-safe)
  * @column.uuid() ext_id?: string;
  * @column.stringArray() tags?: string[];
  * @column.intArray() scores?: number[];
@@ -795,14 +792,18 @@ export const column = Object.assign(
     /**
      * DateTime array type conversion (timestamp[])
      * Preserves null for nullable columns, undefined stays undefined
-     * @example @column.datetimeArray() event_dates?: (Date | null)[];
+     * @example @column.datetimeArray() event_dates?: (string | null)[];
      */
     datetimeArray: (columnNameOrOptions?: string | ColumnOptions) =>
-      createColumnDecorator<(Date | null)[] | null | undefined>(
+      createColumnDecorator<(string | null)[] | null | undefined>(
+        // Element-wise the SAME contract as `@column.datetime()`: a TZ-attached STRING, never a
+        // TZ-shifted JS Date. The array family used to be the one place a `Date` still came back, so
+        // `JSON.stringify` of a row silently re-rendered those elements in UTC — the exact hazard #9
+        // closed for the scalar.
         (v) => {
           if (v === undefined) return undefined;
           if (v === null) return null;
-          return castToDatetimeArray(v);
+          return castToDatetimeArray(v).map((d) => (d === null ? null : materializeCell(d, 'date')));
         },
         // DateTime arrays serialize each Date to ISO string
         (val) => {

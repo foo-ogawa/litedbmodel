@@ -63,7 +63,7 @@ const john = await User.findOne([[User.email, 'john@example.com']]);
 new DBModel(): DBModel;
 ```
 
-Defined in: [DBModel.ts:1864](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L1864)
+Defined in: [DBModel.ts:1865](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L1865)
 
 #### Returns
 
@@ -78,14 +78,14 @@ Defined in: [DBModel.ts:1864](https://github.com/foo-ogawa/litedbmodel/blob/main
 | <a id="_limitconfig"></a> `_limitConfig` | `static` | [`LimitConfig`](../interfaces/LimitConfig.md) | `{}` | Limit config for safety guards | [DBModel.ts:223](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L223) |
 | <a id="_configoptions"></a> `_configOptions` | `static` | [`DBConfigOptions`](../interfaces/DBConfigOptions.md) | `undefined` | Configuration options for reader/writer separation | [DBModel.ts:226](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L226) |
 | <a id="_lasttransactiontime"></a> `_lastTransactionTime` | `static` | `number` | `0` | Last transaction completion time (for writer sticky) | [DBModel.ts:232](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L232) |
-| <a id="true"></a> `true` | `readonly` | `DBBoolValue` | `undefined` | Boolean TRUE value | [DBModel.ts:1439](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L1439) |
-| <a id="false"></a> `false` | `readonly` | `DBBoolValue` | `undefined` | Boolean FALSE value | [DBModel.ts:1442](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L1442) |
-| <a id="null"></a> `null` | `readonly` | `DBNullValue` | `undefined` | NULL value | [DBModel.ts:1445](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L1445) |
-| <a id="notnull"></a> `notNull` | `readonly` | `DBNotNullValue` | `undefined` | NOT NULL value | [DBModel.ts:1448](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L1448) |
-| <a id="now"></a> `now` | `readonly` | `DBImmediateValue` | `undefined` | NOW() value | [DBModel.ts:1451](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L1451) |
-| <a id="_modelclass"></a> `_modelClass` | `protected` | *typeof* `DBModel` | `undefined` | Instance reference to the static class | [DBModel.ts:1853](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L1853) |
-| <a id="_relationcache"></a> `_relationCache` | `protected` | `Map`\<`string`, `unknown`\> \| `null` | `null` | Per-instance cache for loaded relations (lazy-initialized) | [DBModel.ts:1856](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L1856) |
-| <a id="_deferredcontext"></a> `_deferredContext` | `public` | \[*typeof* `DBModel`, `DBModel`[]\] \| `null` | `null` | Deferred context info: [sourceClass, records] set by _select, resolved on first relation access | [DBModel.ts:1862](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L1862) |
+| <a id="true"></a> `true` | `readonly` | `DBBoolValue` | `undefined` | Boolean TRUE value | [DBModel.ts:1440](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L1440) |
+| <a id="false"></a> `false` | `readonly` | `DBBoolValue` | `undefined` | Boolean FALSE value | [DBModel.ts:1443](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L1443) |
+| <a id="null"></a> `null` | `readonly` | `DBNullValue` | `undefined` | NULL value | [DBModel.ts:1446](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L1446) |
+| <a id="notnull"></a> `notNull` | `readonly` | `DBNotNullValue` | `undefined` | NOT NULL value | [DBModel.ts:1449](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L1449) |
+| <a id="now"></a> `now` | `readonly` | `DBImmediateValue` | `undefined` | NOW() value | [DBModel.ts:1452](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L1452) |
+| <a id="_modelclass"></a> `_modelClass` | `protected` | *typeof* `DBModel` | `undefined` | Instance reference to the static class | [DBModel.ts:1854](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L1854) |
+| <a id="_relationcache"></a> `_relationCache` | `protected` | `Map`\<`string`, `unknown`\> \| `null` | `null` | Per-instance cache for loaded relations (lazy-initialized) | [DBModel.ts:1857](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L1857) |
+| <a id="_deferredcontext"></a> `_deferredContext` | `public` | \[*typeof* `DBModel`, `DBModel`[]\] \| `null` | `null` | Deferred context info: [sourceClass, records] set by _select, resolved on first relation access | [DBModel.ts:1863](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L1863) |
 
 ## Methods
 
@@ -139,7 +139,7 @@ await User.find([[User.name, 'John']]);
 static setConfig(config: DBConfig, options?: DBConfigOptions): void;
 ```
 
-Defined in: [DBModel.ts:390](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L390)
+Defined in: [DBModel.ts:391](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L391)
 
 Initialize DBModel with database config.
 Call this once at application startup.
@@ -188,7 +188,7 @@ DBModel.setConfig(
 static getLimitConfig(): LimitConfig;
 ```
 
-Defined in: [DBModel.ts:419](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L419)
+Defined in: [DBModel.ts:420](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L420)
 
 Get current limit configuration.
 
@@ -204,7 +204,7 @@ Get current limit configuration.
 static setLimitConfig(config: LimitConfig): void;
 ```
 
-Defined in: [DBModel.ts:434](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L434)
+Defined in: [DBModel.ts:435](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L435)
 
 Update limit configuration.
 
@@ -236,7 +236,7 @@ DBModel.setLimitConfig({ findHardLimit: null, hasManyHardLimit: null });
 static getDBConfig(): DBConfig | null;
 ```
 
-Defined in: [DBModel.ts:441](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L441)
+Defined in: [DBModel.ts:442](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L442)
 
 Get database config
 
@@ -252,7 +252,7 @@ Get database config
 static getDriverType(): "postgres" | "mysql" | "sqlite";
 ```
 
-Defined in: [DBModel.ts:449](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L449)
+Defined in: [DBModel.ts:450](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L450)
 
 Get the database driver type.
 Returns 'postgres', 'mysql', or 'sqlite'.
@@ -269,7 +269,7 @@ Returns 'postgres', 'mysql', or 'sqlite'.
 protected static getHandler(): DBHandler;
 ```
 
-Defined in: [DBModel.ts:475](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L475)
+Defined in: [DBModel.ts:476](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L476)
 
 Get a DBHandler instance for this model.
 Connection priority:
@@ -290,7 +290,7 @@ Connection priority:
 protected static _shouldUseWriterSticky(): boolean;
 ```
 
-Defined in: [DBModel.ts:504](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L504)
+Defined in: [DBModel.ts:505](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L505)
 
 Check if we should use writer due to sticky after transaction.
 
@@ -306,7 +306,7 @@ Check if we should use writer due to sticky after transaction.
 protected static _getTransactionContext(): AsyncLocalStorage<TransactionContext>;
 ```
 
-Defined in: [DBModel.ts:516](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L516)
+Defined in: [DBModel.ts:517](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L517)
 
 Get transaction context storage.
 Override in subclass to use independent transaction context.
@@ -323,7 +323,7 @@ Override in subclass to use independent transaction context.
 protected static _getWriterContext(): AsyncLocalStorage<WriterContext>;
 ```
 
-Defined in: [DBModel.ts:524](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L524)
+Defined in: [DBModel.ts:525](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L525)
 
 Get writer context storage.
 Override in subclass to use independent writer context.
@@ -340,7 +340,7 @@ Override in subclass to use independent writer context.
 static inWriterContext(): boolean;
 ```
 
-Defined in: [DBModel.ts:531](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L531)
+Defined in: [DBModel.ts:532](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L532)
 
 Check if currently in a withWriter context.
 
@@ -356,7 +356,7 @@ Check if currently in a withWriter context.
 static use(MiddlewareClass: MiddlewareClass): () => void;
 ```
 
-Defined in: [DBModel.ts:574](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L574)
+Defined in: [DBModel.ts:575](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L575)
 
 Register a middleware class to intercept DBModel methods.
 
@@ -407,7 +407,7 @@ console.log(LoggerMiddleware.getCurrentContext().getLogs());
 static createMiddleware<S>(config: MiddlewareConfig<S>): CreatedMiddlewareClass<S>;
 ```
 
-Defined in: [DBModel.ts:626](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L626)
+Defined in: [DBModel.ts:627](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L627)
 
 Create a middleware class from a configuration object.
 
@@ -473,7 +473,7 @@ TenantMiddleware.getCurrentContext().tenantId = 123;
 static removeMiddleware(MiddlewareClass: MiddlewareClass): boolean;
 ```
 
-Defined in: [DBModel.ts:637](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L637)
+Defined in: [DBModel.ts:638](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L638)
 
 Remove a middleware class
 
@@ -497,7 +497,7 @@ true if middleware was found and removed
 static clearMiddlewares(): void;
 ```
 
-Defined in: [DBModel.ts:649](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L649)
+Defined in: [DBModel.ts:650](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L650)
 
 Clear all middlewares (useful for testing)
 
@@ -513,7 +513,7 @@ Clear all middlewares (useful for testing)
 static getMiddlewares(): readonly MiddlewareClass[];
 ```
 
-Defined in: [DBModel.ts:656](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L656)
+Defined in: [DBModel.ts:657](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L657)
 
 Get registered middleware classes
 
@@ -536,7 +536,7 @@ static buildSelectSQL<T>(
 };
 ```
 
-Defined in: [DBModel.ts:846](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L846)
+Defined in: [DBModel.ts:847](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L847)
 
 Build SELECT SQL without executing.
 Useful for constructing CTE/subquery SQL fragments.
@@ -570,8 +570,8 @@ Object with sql and params
 
 | Name | Type | Defined in |
 | ------ | ------ | ------ |
-| `sql` | `string` | [DBModel.ts:851](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L851) |
-| `params` | `unknown`[] | [DBModel.ts:851](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L851) |
+| `sql` | `string` | [DBModel.ts:852](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L852) |
+| `params` | `unknown`[] | [DBModel.ts:852](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L852) |
 
 #### Example
 
@@ -593,7 +593,7 @@ const { sql, params } = User.buildSelectSQL(
 protected static _mergeFindFilter(conditions: ConditionObject): ConditionObject;
 ```
 
-Defined in: [DBModel.ts:933](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L933)
+Defined in: [DBModel.ts:934](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L934)
 
 Merge FIND_FILTER (the model's default filter) into a condition object (v1 `_buildSelectSQL` parity).
 
@@ -618,7 +618,7 @@ static inSubquery<T, S>(
    conditions?: readonly [Column<any, S>, unknown][]): readonly [string, DBSubquery];
 ```
 
-Defined in: [DBModel.ts:1497](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L1497)
+Defined in: [DBModel.ts:1498](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L1498)
 
 IN subquery condition.
 Creates a condition like: column IN (SELECT selectColumn FROM targetModel WHERE ...)
@@ -686,7 +686,7 @@ static notInSubquery<T, S>(
    conditions?: readonly [Column<any, S>, unknown][]): readonly [string, DBSubquery];
 ```
 
-Defined in: [DBModel.ts:1545](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L1545)
+Defined in: [DBModel.ts:1546](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L1546)
 
 NOT IN subquery condition.
 Creates a condition like: table.column NOT IN (SELECT table.column FROM targetModel WHERE ...)
@@ -739,7 +739,7 @@ await User.find([
 static exists<S>(conditions: readonly [Column<any, S>, unknown][]): readonly [string, DBExists];
 ```
 
-Defined in: [DBModel.ts:1588](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L1588)
+Defined in: [DBModel.ts:1589](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L1589)
 
 EXISTS subquery condition.
 Creates a condition like: EXISTS (SELECT 1 FROM targetModel WHERE table.column = ...)
@@ -786,7 +786,7 @@ await User.find([
 static notExists<S>(conditions: readonly [Column<any, S>, unknown][]): readonly [string, DBExists];
 ```
 
-Defined in: [DBModel.ts:1623](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L1623)
+Defined in: [DBModel.ts:1624](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L1624)
 
 NOT EXISTS subquery condition.
 Creates a condition like: NOT EXISTS (SELECT 1 FROM targetModel WHERE table.column = ...)
@@ -832,7 +832,7 @@ await User.find([
 static getTableName(): string;
 ```
 
-Defined in: [DBModel.ts:1704](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L1704)
+Defined in: [DBModel.ts:1705](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L1705)
 
 Get table name for SELECT queries.
 For query-based models, returns the CTE alias (TABLE_NAME).
@@ -849,7 +849,7 @@ For query-based models, returns the CTE alias (TABLE_NAME).
 static isQueryBased(): boolean;
 ```
 
-Defined in: [DBModel.ts:1762](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L1762)
+Defined in: [DBModel.ts:1763](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L1763)
 
 Check if this model is query-based (uses QUERY instead of TABLE_NAME)
 
@@ -872,7 +872,7 @@ static withQuery<T>(this: T, queryConfig:
 }): T;
 ```
 
-Defined in: [DBModel.ts:1791](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L1791)
+Defined in: [DBModel.ts:1792](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L1792)
 
 Create a new model class bound to specific query parameters.
 Used for parameterized query-based models.
@@ -923,7 +923,7 @@ class SalesReportModel extends DBModel {
 static getUpdateTableName(): string;
 ```
 
-Defined in: [DBModel.ts:1841](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L1841)
+Defined in: [DBModel.ts:1842](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L1842)
 
 Get table name for UPDATE/DELETE queries.
 Query-based models cannot be updated/deleted directly.
@@ -940,7 +940,7 @@ Query-based models cannot be updated/deleted directly.
 clearRelationCache(): void;
 ```
 
-Defined in: [DBModel.ts:1905](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L1905)
+Defined in: [DBModel.ts:1906](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L1906)
 
 Clear the relation cache for this instance.
 Also clears the context cache to force reload from DB.
@@ -957,7 +957,7 @@ Also clears the context cache to force reload from DB.
 typeCastFromDB(): void;
 ```
 
-Defined in: [DBModel.ts:2045](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L2045)
+Defined in: [DBModel.ts:2046](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L2046)
 
 Called after loading from DB to convert types
 Override in derived class to implement type conversions
@@ -983,7 +983,7 @@ typeCastFromDB(): void {
 getPkey(): Record<string, unknown> | null;
 ```
 
-Defined in: [DBModel.ts:2057](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L2057)
+Defined in: [DBModel.ts:2058](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L2058)
 
 Get primary key as object
 
@@ -1001,7 +1001,7 @@ Object with primary key column names and values, or null if not set
 setPkey(key: unknown): void;
 ```
 
-Defined in: [DBModel.ts:2078](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L2078)
+Defined in: [DBModel.ts:2079](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L2079)
 
 Set primary key value
 
@@ -1023,7 +1023,7 @@ Set primary key value
 getPkeyString(): string;
 ```
 
-Defined in: [DBModel.ts:2096](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L2096)
+Defined in: [DBModel.ts:2097](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L2097)
 
 Get primary key as string (for logging, caching, etc.)
 
@@ -1039,7 +1039,7 @@ Get primary key as string (for logging, caching, etc.)
 getSingleColId(): unknown;
 ```
 
-Defined in: [DBModel.ts:2108](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L2108)
+Defined in: [DBModel.ts:2109](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L2109)
 
 Get single-column ID value
 
@@ -1057,7 +1057,7 @@ ID value or undefined
 clone<T>(this: T): T;
 ```
 
-Defined in: [DBModel.ts:2123](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L2123)
+Defined in: [DBModel.ts:2124](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L2124)
 
 Create a shallow copy of the model instance
 
@@ -1085,7 +1085,7 @@ Create a shallow copy of the model instance
 assign(source: Partial<this>): this;
 ```
 
-Defined in: [DBModel.ts:2131](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L2131)
+Defined in: [DBModel.ts:2132](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L2132)
 
 Copy properties from another object
 
@@ -1107,7 +1107,7 @@ Copy properties from another object
 toObject(): Record<string, unknown>;
 ```
 
-Defined in: [DBModel.ts:2142](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L2142)
+Defined in: [DBModel.ts:2143](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L2143)
 
 Convert to plain object
 
@@ -1123,7 +1123,7 @@ Convert to plain object
 toJSON(): Record<string, unknown>;
 ```
 
-Defined in: [DBModel.ts:2155](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L2155)
+Defined in: [DBModel.ts:2156](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L2156)
 
 Convert to JSON-serializable object
 
@@ -1139,7 +1139,7 @@ Convert to JSON-serializable object
 static fromObject<T>(this: () => T, obj: Record<string, unknown>): T;
 ```
 
-Defined in: [DBModel.ts:2166](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L2166)
+Defined in: [DBModel.ts:2167](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L2167)
 
 Create an instance from a plain object
 
@@ -1168,7 +1168,7 @@ Create an instance from a plain object
 static fromObjects<T>(this: () => T, objs: Record<string, unknown>[]): T[];
 ```
 
-Defined in: [DBModel.ts:2179](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L2179)
+Defined in: [DBModel.ts:2180](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L2180)
 
 Create multiple instances from an array of plain objects
 
@@ -1197,7 +1197,7 @@ Create multiple instances from an array of plain objects
 static columnList<T>(records: T[], columnName: string): unknown[];
 ```
 
-Defined in: [DBModel.ts:2189](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L2189)
+Defined in: [DBModel.ts:2190](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L2190)
 
 Get column values from an array of model instances
 
@@ -1226,7 +1226,7 @@ Get column values from an array of model instances
 static hashByProperty<T>(records: T[], propertyKey: string): Record<string, T>;
 ```
 
-Defined in: [DBModel.ts:2199](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L2199)
+Defined in: [DBModel.ts:2200](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L2200)
 
 Create a hash map by property value
 
@@ -1255,7 +1255,7 @@ Create a hash map by property value
 static groupByProperty<T>(records: T[], propertyKey: string): Record<string, T[]>;
 ```
 
-Defined in: [DBModel.ts:2214](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L2214)
+Defined in: [DBModel.ts:2215](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L2215)
 
 Group records by property value
 
@@ -1284,7 +1284,7 @@ Group records by property value
 static idList<T>(records: T[], column?: string): unknown[];
 ```
 
-Defined in: [DBModel.ts:2232](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L2232)
+Defined in: [DBModel.ts:2233](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L2233)
 
 Get ID list from records
 
@@ -1316,7 +1316,7 @@ static makeLikeString(
    back?: boolean): string;
 ```
 
-Defined in: [DBModel.ts:2240](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L2240)
+Defined in: [DBModel.ts:2241](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L2241)
 
 Generate LIKE pattern string
 
@@ -1340,7 +1340,7 @@ Generate LIKE pattern string
 static or<T>(this: T, ...condGroups: readonly CondsOf<T>[]): OrCondOf<T>;
 ```
 
-Defined in: [DBModel.ts:2277](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L2277)
+Defined in: [DBModel.ts:2278](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L2278)
 
 Create a type-safe OR condition for this model.
 All columns in the conditions must belong to this model.
@@ -1391,7 +1391,7 @@ static find<T>(
 options?: SelectOptions): Promise<InstanceType<T>[]>;
 ```
 
-Defined in: [DBModel.ts:2313](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L2313)
+Defined in: [DBModel.ts:2314](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L2314)
 
 Find all records using type-safe condition tuples.
 All columns in conditions must belong to this model.
@@ -1445,7 +1445,7 @@ static findOne<T>(
 options?: SelectOptions): Promise<InstanceType<T> | null>;
 ```
 
-Defined in: [DBModel.ts:2359](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L2359)
+Defined in: [DBModel.ts:2360](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L2360)
 
 Find first record using type-safe condition tuples.
 
@@ -1488,7 +1488,7 @@ static findById<T>(
 options?: SelectOptions): Promise<InstanceType<T>[]>;
 ```
 
-Defined in: [DBModel.ts:2398](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L2398)
+Defined in: [DBModel.ts:2399](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L2399)
 
 Find records by primary key using PkeyResult format.
 Efficiently fetches multiple records by their primary keys.
@@ -1540,7 +1540,7 @@ const users = await User.findById(result);
 static count<T>(this: T, conditions: CondsOf<T>): Promise<number>;
 ```
 
-Defined in: [DBModel.ts:2463](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L2463)
+Defined in: [DBModel.ts:2464](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L2464)
 
 Count records using type-safe condition tuples.
 
@@ -1580,7 +1580,7 @@ static create<T, P>(
 options?: InsertOptions<InstanceType<T>>): Promise<PkeyResult | null>;
 ```
 
-Defined in: [DBModel.ts:2498](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L2498)
+Defined in: [DBModel.ts:2499](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L2499)
 
 Create a new record using type-safe column-value tuples.
 Value types are validated at compile time.
@@ -1634,7 +1634,7 @@ static createMany<T>(
 options?: InsertOptions<InstanceType<T>>): Promise<PkeyResult | null>;
 ```
 
-Defined in: [DBModel.ts:2568](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L2568)
+Defined in: [DBModel.ts:2569](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L2569)
 
 Create multiple records using type-safe column-value tuples.
 
@@ -1687,7 +1687,7 @@ static update<T, V>(
 options?: UpdateOptions): Promise<PkeyResult | null>;
 ```
 
-Defined in: [DBModel.ts:2638](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L2638)
+Defined in: [DBModel.ts:2639](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L2639)
 
 Update records using type-safe column-value tuples.
 Value types are validated at compile time.
@@ -1743,7 +1743,7 @@ static delete<T>(
 options?: DeleteOptions): Promise<PkeyResult | null>;
 ```
 
-Defined in: [DBModel.ts:2717](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L2717)
+Defined in: [DBModel.ts:2718](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L2718)
 
 Delete records matching conditions
 
@@ -1789,7 +1789,7 @@ static updateMany<T>(
 options: UpdateManyOptions): Promise<PkeyResult | null>;
 ```
 
-Defined in: [DBModel.ts:2795](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L2795)
+Defined in: [DBModel.ts:2796](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L2796)
 
 Update multiple records with different values per row.
 Uses efficient bulk update strategies (UNNEST for PostgreSQL, VALUES for MySQL/SQLite).
@@ -1841,7 +1841,7 @@ const users = await User.findById(result);
 static execute(sql: string, params?: unknown[]): Promise<ExecuteResult>;
 ```
 
-Defined in: [DBModel.ts:2938](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L2938)
+Defined in: [DBModel.ts:2939](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L2939)
 
 Execute raw SQL query.
 Accepts either a SQL string with params, or a `SqlFragment` from `sql` tagged template.
@@ -1884,7 +1884,7 @@ static execute(fragment:
 | SqlCondition<unknown>): Promise<ExecuteResult>;
 ```
 
-Defined in: [DBModel.ts:2939](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L2939)
+Defined in: [DBModel.ts:2940](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L2940)
 
 Execute raw SQL query.
 Accepts either a SQL string with params, or a `SqlFragment` from `sql` tagged template.
@@ -1928,7 +1928,7 @@ static query<T>(
 params?: unknown[]): Promise<InstanceType<T>[]>;
 ```
 
-Defined in: [DBModel.ts:3003](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L3003)
+Defined in: [DBModel.ts:3004](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L3004)
 
 Execute raw SQL and return model instances.
 The SQL should return columns matching the model's properties.
@@ -1977,7 +1977,7 @@ const posts = await Post.query(`
 static inTransaction(): boolean;
 ```
 
-Defined in: [DBModel.ts:3035](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L3035)
+Defined in: [DBModel.ts:3036](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L3036)
 
 Check if currently in a transaction
 
@@ -1993,7 +1993,7 @@ Check if currently in a transaction
 static transaction<R>(func: () => Promise<R>, options?: TransactionOptions): Promise<R>;
 ```
 
-Defined in: [DBModel.ts:3073](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L3073)
+Defined in: [DBModel.ts:3074](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L3074)
 
 Execute a function within a transaction
 All model operations inside the callback will use the same database connection.
@@ -2052,7 +2052,7 @@ await DBModel.transaction(
 static getCurrentConnection(): DBConnection | null;
 ```
 
-Defined in: [DBModel.ts:3217](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L3217)
+Defined in: [DBModel.ts:3218](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L3218)
 
 Get current transaction connection
 Use this to execute raw SQL queries within a transaction
@@ -2082,7 +2082,7 @@ await DBModel.transaction(async () => {
 static getCurrentClient(): DBConnection | null;
 ```
 
-Defined in: [DBModel.ts:3225](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L3225)
+Defined in: [DBModel.ts:3226](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L3226)
 
 #### Returns
 
@@ -2100,7 +2100,7 @@ Use getCurrentConnection() instead
 static withWriter<R>(func: () => Promise<R>): Promise<R>;
 ```
 
-Defined in: [DBModel.ts:3250](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L3250)
+Defined in: [DBModel.ts:3251](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L3251)
 
 Execute a function with explicit writer connection access.
 Use this when you need to read from writer to avoid replication lag.
@@ -2146,7 +2146,7 @@ await DBModel.withWriter(async () => {
 static createDBBase(config: DBConfig, options?: DBConfigOptions): typeof DBModel;
 ```
 
-Defined in: [DBModel.ts:3312](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L3312)
+Defined in: [DBModel.ts:3313](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L3313)
 
 Create an independent database base class.
 Use this to connect to multiple databases with isolated configurations.
@@ -2205,7 +2205,7 @@ await BaseDB.transaction(async () => {
 reload(forUpdate?: boolean): Promise<DBModel | null>;
 ```
 
-Defined in: [DBModel.ts:3386](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L3386)
+Defined in: [DBModel.ts:3387](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L3387)
 
 Reload this instance from the database
 
