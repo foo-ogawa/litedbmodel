@@ -27,7 +27,7 @@ class AllTypesModel extends DBModel {
   @column.stringArray() text_array?: string[];
   @column.booleanArray() bool_array?: (boolean | null)[];
   @column.json() json_val?: Record<string, unknown> | null;
-  @column.json() json_array_val?: unknown[] | null;
+  @column.json<unknown[]>() json_array_val?: unknown[] | null;
 }
 const AllTypes = AllTypesModel as typeof AllTypesModel & ColumnsOf<AllTypesModel>;
 

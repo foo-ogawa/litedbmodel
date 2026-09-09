@@ -191,11 +191,15 @@ export interface RelationMeta {
  * TC39 proposal prescribes — makes the two emits behave identically.
  */
 if (typeof Symbol === 'function' && !(Symbol as { metadata?: symbol }).metadata) {
+  // `configurable: true`, as the TC39 proposal's own `Symbol.metadata ??= Symbol('Symbol.metadata')`
+  // leaves it: a library has no business locking a global well-known symbol. Locking it made a
+  // polyfill loaded LATER throw `Cannot redefine property: metadata`. `Symbol.for` keeps the value
+  // identical across copies of this package, so a later polyfill that reuses it is a no-op.
   Object.defineProperty(Symbol, 'metadata', {
     value: Symbol.for('Symbol.metadata'),
     writable: false,
     enumerable: false,
-    configurable: false,
+    configurable: true,
   });
 }
 
@@ -337,24 +341,35 @@ export interface ColumnOptions {
 /**
  * What a `@column.*` decorator may be applied to, under EITHER protocol.
  *
- * The standard-decorator overload is typed: `Value` is the decorated field's declared TS type, so a
- * family whose read contract yields a `string` (`@column.datetime()`, `@column.bigint()`, …) will not
- * compile onto a field declared `Date` / `bigint`. That is the compile-time half of the fix for the
- * "declared type ≠ value `find()` returns" defect (issue #286); the legacy protocol hands decorators
- * no type information at all, so there it can only be documented.
+ * Both overloads are typed: `Value` is the decorated field's declared TS type, so a family whose read
+ * contract yields a `string` (`@column.datetime()`, `@column.bigint()`, …) will not compile onto a
+ * field declared `Date` / `bigint`. That is the compile-time half of the fix for the "declared type ≠
+ * value `find()` returns" defect (issue #286), and it holds under BOTH protocols — the legacy
+ * property decorator receives the prototype, whose property types a mapped type can constrain.
  *
  * @category Decorators
  */
 export interface ColumnDecorator<Value> {
-  /** Legacy (`experimentalDecorators`) property decorator. */
-  (target: object, propertyKey: string | symbol): void;
+  /**
+   * Legacy (`experimentalDecorators`) property decorator. The prototype it receives IS typed, so the
+   * decorated property's declared type is constrained here too — `@column.datetime() x?: Date` does
+   * not compile under either protocol. (It was believed legacy carried no type information; it does,
+   * and the majority of models are compiled that way.)
+   */
+  <This extends Partial<Record<Key, Value>>, Key extends string | symbol>(
+    target: This,
+    propertyKey: Key
+  ): void;
   /** TC39 standard class-field decorator. */
   <This>(value: undefined, context: ClassFieldDecoratorContext<This, Value>): void;
 }
 
 /** What a relation decorator may be applied to, under either protocol. @category Decorators */
 export interface RelationDecorator<Value> {
-  (target: object, propertyKey: string | symbol): void;
+  <This extends Partial<Record<Key, Value>>, Key extends string | symbol>(
+    target: This,
+    propertyKey: Key
+  ): void;
   <This>(value: undefined, context: ClassFieldDecoratorContext<This, Value>): void;
 }
 

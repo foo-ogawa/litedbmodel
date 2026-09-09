@@ -333,10 +333,11 @@ export abstract class DBModel {
         if (m.sqlCast !== undefined) continue;
         // A cast-free family that still DECLARES its SQL type (`@column.text()` → TEXT) is
         // unambiguous — keep it, so the SCP typed de-box fires exactly as the v1 contract.
-        if (baseSqlType !== undefined && baseSqlType !== 'INTEGER') continue;
-        // What remains is `@column.number()` — AMBIGUOUS: a JS number backs an INTEGER just as well as
-        // a DECIMAL/NUMERIC column (pg returns DECIMAL as a string that `int32` materialize would
-        // REJECT). Pin these to `TEXT` = passthrough:
+        if (baseSqlType !== undefined) continue;
+        // What remains states no SQL type at all: `@column.number()` (AMBIGUOUS — a JS number backs an
+        // INTEGER just as well as a DECIMAL/NUMERIC column, and pg returns DECIMAL as a string that
+        // `int32` materialize would REJECT), `@column.passthrough()` and `@column.custom()`. Pin these
+        // to `TEXT` = passthrough:
         // the DBModel path does its OWN v1 de-box (`_createInstance` → `typeCastFromDB`), so the SCP
         // read only needs a NON-THROWING passthrough (int→number, decimal→number, string→string — the
         // exact v1 read contract). This is F1's `columnTypes` escape hatch for the un-derivable number.

@@ -23,7 +23,7 @@ class SqliteAllTypesModel extends DBModel {
   @column.text() varchar_val?: string | null;
   @column.datetime() timestamp_val?: string | null;
   @column.text() date_val?: string | null;
-  @column.json() json_val?: Record<string, unknown> | unknown[] | null;
+  @column.json<Record<string, unknown> | unknown[]>() json_val?: Record<string, unknown> | unknown[] | null;
 }
 const SqliteAllTypes = SqliteAllTypesModel as typeof SqliteAllTypesModel & ColumnsOf<SqliteAllTypesModel>;
 

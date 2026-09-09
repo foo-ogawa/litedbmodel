@@ -24,7 +24,7 @@ class AllTypesModel extends DBModel {
   @column.datetime() timestamp_val?: string | null;
   @column.text() date_val?: string | null;
   @column.json() json_val?: Record<string, unknown> | null;
-  @column.json() json_array_val?: unknown[] | null;
+  @column.json<unknown[]>() json_array_val?: unknown[] | null;
 }
 const AllTypes = AllTypesModel as typeof AllTypesModel & ColumnsOf<AllTypesModel>;
 
