@@ -57,13 +57,24 @@ jobs:
         # lockfile, and failing the job on them holds the workflow permanently red and buries
         # the part it did fix. The gate that is enforced is the one that carries the risk — the
         # fix may leave an advisory behind, but it may never bring one in.
+        #
+        # `npm audit fix` exits 1 both when it converged with advisories left over and when npm
+        # itself aborted without touching the lockfile, so the exit code cannot tell the two
+        # apart — and the loop below reads an unchanged hash as a fixed point either way. npm
+        # prints an `npm error code <CODE>` line only for its own failure; a run that merely
+        # leaves advisories behind prints none. That line, not the exit code, stops the job.
         run: |
           node .github/scripts/npm-audit-advisories.mjs --level moderate > "$RUNNER_TEMP/advisories-before.txt"
 
           fix_here() {
             for _ in 1 2 3 4 5; do
               before=$(git hash-object package-lock.json)
-              npm audit fix --package-lock-only --ignore-scripts || true
+              npm audit fix --package-lock-only --ignore-scripts 2>&1 \
+                | tee "$RUNNER_TEMP/audit-fix.log" || true
+              if grep -q '^npm error code' "$RUNNER_TEMP/audit-fix.log"; then
+                echo "::error::npm audit fix aborted in $(pwd); the lockfile was not touched"
+                exit 1
+              fi
               if [ "$(git hash-object package-lock.json)" = "$before" ]; then break; fi
             done
           }
@@ -118,6 +129,14 @@ jobs:
       - name: Build
         if: steps.audit.outcome == 'failure' && steps.diff.outcome == 'failure'
         run: npm run build
+      # `npm run test:unit`, not `npm test`: the full suite (`vitest run` over test/**) includes
+      # test/integration, which needs the live PostgreSQL + MySQL that only conformance.yml starts,
+      # and test/scp/native-closure.test.ts, which compiles a probe crate against a warmed cargo
+      # registry. Neither exists in this npm-only job. test/unit runs offline, and running it is
+      # what makes the "test passed" line in the issue body below true.
+      - name: Test
+        if: steps.audit.outcome == 'failure' && steps.diff.outcome == 'failure'
+        run: npm run test:unit
       - name: Verify package contents
         if: steps.audit.outcome == 'failure' && steps.diff.outcome == 'failure'
         run: npm pack --dry-run
@@ -140,7 +159,7 @@ jobs:
             - package.json changes are rejected
             - npm install scripts are disabled
             - The fix brought in no advisory that was not already there
-            - npm audit signatures, lint, build, test, and npm pack --dry-run passed
+            - npm audit signatures, lint, build, the unit test suite, and npm pack --dry-run passed
 
             Policy:
             - Dependabot version updates are not used

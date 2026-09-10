@@ -29,15 +29,15 @@ const option = (name) => {
 const threshold = RANK.indexOf(option("--level") ?? "moderate");
 if (threshold === -1) throw new Error(`unknown --level: ${option("--level")}`);
 
-// Every lockfile in the repository, the root first. `git ls-files` keeps the set in step with
-// the repository — a hand-written list goes stale the day someone adds a lockfile.
-const trees = [
-  ".",
-  ...execFileSync("git", ["ls-files", "*/package-lock.json"], { encoding: "utf8" })
-    .split("\n")
-    .filter(Boolean)
-    .map(dirname),
-];
+// Every lockfile in the repository. `git ls-files` keeps the set in step with the repository —
+// a hand-written list goes stale the day someone adds a lockfile. The root tree comes out of the
+// same listing (`dirname` of a root lockfile is "."), rather than being prepended: a repository
+// whose npm tree sits in a subdirectory has no root lockfile at all, and `npm audit` run at such
+// a root walks UP out of the checkout and reports whatever tree it finds above it.
+const trees = execFileSync("git", ["ls-files", "*package-lock.json"], { encoding: "utf8" })
+  .split("\n")
+  .filter(Boolean)
+  .map(dirname);
 
 // Read the lockfiles rather than an install: the fix rewrites them, while node_modules still
 // holds the tree from before it.
