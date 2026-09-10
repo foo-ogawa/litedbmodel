@@ -129,14 +129,13 @@ jobs:
       - name: Build
         if: steps.audit.outcome == 'failure' && steps.diff.outcome == 'failure'
         run: npm run build
-      # `npm run test:unit`, not `npm test`: the full suite (`vitest run` over test/**) includes
-      # test/integration, which needs the live PostgreSQL + MySQL that only conformance.yml starts,
-      # and test/scp/native-closure.test.ts, which compiles a probe crate against a warmed cargo
-      # registry. Neither exists in this npm-only job. test/unit runs offline, and running it is
-      # what makes the "test passed" line in the issue body below true.
-      - name: Test
-        if: steps.audit.outcome == 'failure' && steps.diff.outcome == 'failure'
-        run: npm run test:unit
+      # No test step, and the issue body below says so rather than claiming one. The suite's only
+      # sanctioned invocation is `npm run ts:test`, the run gate, and it is red unless every gate
+      # livedb-gates.env declares is open — the live PostgreSQL + MySQL that conformance.yml starts.
+      # A narrowed `vitest run test/unit` in its place is what check-reachable-test-gates.mjs clause
+      # D rejects: a partial run reports green for a suite that never ran. ci.yml, the pull_request
+      # gate, runs no test step for the same reason, and the pull request opened against the branch
+      # this job pushes is what puts the fix through the full suite.
       - name: Verify package contents
         if: steps.audit.outcome == 'failure' && steps.diff.outcome == 'failure'
         run: npm pack --dry-run
@@ -159,7 +158,8 @@ jobs:
             - package.json changes are rejected
             - npm install scripts are disabled
             - The fix brought in no advisory that was not already there
-            - npm audit signatures, lint, build, the unit test suite, and npm pack --dry-run passed
+            - npm audit signatures, lint, build, and npm pack --dry-run passed — what ci.yml checks
+            - The suite is NOT run here: it needs the live PostgreSQL + MySQL that conformance.yml starts, so the pull request is what runs it
 
             Policy:
             - Dependabot version updates are not used
