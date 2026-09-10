@@ -207,15 +207,19 @@ nullability は基底スカラと直交する（`` `sqlTypeIsNotNull` (`src/scp/
 
 **TS 読み出しの materialization（`sqlTypeToMaterializeClass` / `materializeCell`）**
 
-bc outType（可搬型）に加え、TS/driver の読み経路では `int` スカラを SQL 幅で分割し、`date`/`bool` を
-正確な JS 形へ矯正する（JS `number` は i64 を保持できず、driver は `string` outType に反する `Date`/`0|1`
-を返し得るため）。クラスは `` `MaterializeClass` (`src/scp/coltype.ts`) ``:
+bc outType（可搬型）に加え、TS/driver の読み経路では `int`/`date`/`bool` を正確な JS 形へ矯正する
+（JS `number` は i64 を保持できず、driver は `string` outType に反する `Date`/`0|1` を返し得るため）。
+クラスは `` `MaterializeClass` (`src/scp/coltype.ts`) ``:
 
-- `int32`（INT/INTEGER/SMALLINT/…）→ JS `number`（範囲が収まる）。
-- `int64`（BIGINT/INT8/BIGSERIAL）→ **値保存の10進文字列**（JS number は 2^53 超で丸む・JSON 安全）。
-- `date`（DATE/TIMESTAMP/…）→ **TZ 付き文字列**（`string` outType に整合。全言語同一、TS も Date にしない）。
+- `int`（INTEGER / INT / SMALLINT / TINYINT / MEDIUMINT / BIGINT / INT2 / INT4 / INT8 / SERIAL 系）→
+  **JS `bigint`**（checked i64）。bc の整数型は `int` 1 つなので幅で分けない（幅は列制約であって別の読み型
+  ではない）。driver が返す `bigint`・整数の10進文字列・安全な整数の `number` を受け、2^53 を超える
+  `number`（読み出しの前に精度が失われている）は throw する。
+- `date`（DATE / TIMESTAMP / TIMESTAMPTZ / DATETIME / TIME）→ **TZ 付き文字列**（`string` outType に整合。
+  全言語同一、TS も Date にしない）。
 - `bool` → JS `boolean`。
-- `passthrough`（float / text / decimal→string / json / uuid / 配列列）→ 無変換。
+- `passthrough`（float / decimal→string / text / json / uuid / 配列列）→ 無変換。配列列は driver の配列
+  typeCast が要素を宣言型どおりに解いた JS 配列をそのまま返す（要素の基底型は検証する）。
 
 読み出しは fail-closed の resolver（`` `failClosedMaterializeResolverFromColumnMap` (`src/scp/coltype.ts`) ``）
 で常時 de-box され、宣言されていない列は throw する（未型付き列を silent に box しない）。
