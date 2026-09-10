@@ -57,13 +57,24 @@ jobs:
         # lockfile, and failing the job on them holds the workflow permanently red and buries
         # the part it did fix. The gate that is enforced is the one that carries the risk — the
         # fix may leave an advisory behind, but it may never bring one in.
+        #
+        # An abort leaves the lockfile untouched and exits 1 — exactly what a converged fix
+        # with a surviving advisory looks like — so neither the hash nor the exit code
+        # separates them. npm prints `npm error` only when it gave up; that line fails the
+        # step, so an abort can never be read as "the fix reached everything it could".
         run: |
           node .github/scripts/npm-audit-advisories.mjs --level moderate > "$RUNNER_TEMP/advisories-before.txt"
 
           fix_here() {
             for _ in 1 2 3 4 5; do
               before=$(git hash-object package-lock.json)
-              npm audit fix --package-lock-only --ignore-scripts || true
+              npm audit fix --package-lock-only --ignore-scripts \
+                > "$RUNNER_TEMP/audit-fix.log" 2>&1 || true
+              cat "$RUNNER_TEMP/audit-fix.log"
+              if grep -q '^npm error' "$RUNNER_TEMP/audit-fix.log"; then
+                echo "::error::npm audit fix gave up in $PWD without judging the lockfile"
+                return 1
+              fi
               if [ "$(git hash-object package-lock.json)" = "$before" ]; then break; fi
             done
           }
@@ -118,6 +129,13 @@ jobs:
       - name: Build
         if: steps.audit.outcome == 'failure' && steps.diff.outcome == 'failure'
         run: npm run build
+      # No test step, and the issue body below says so rather than claiming one. The suite's only
+      # sanctioned invocation is `npm run ts:test`, the run gate, and it is red unless every gate
+      # livedb-gates.env declares is open — the live PostgreSQL + MySQL that conformance.yml starts.
+      # A narrowed `vitest run test/unit` in its place is what check-reachable-test-gates.mjs clause
+      # D rejects: a partial run reports green for a suite that never ran. ci.yml, the pull_request
+      # gate, runs no test step for the same reason, and the pull request opened against the branch
+      # this job pushes is what puts the fix through the full suite.
       - name: Verify package contents
         if: steps.audit.outcome == 'failure' && steps.diff.outcome == 'failure'
         run: npm pack --dry-run
@@ -140,7 +158,8 @@ jobs:
             - package.json changes are rejected
             - npm install scripts are disabled
             - The fix brought in no advisory that was not already there
-            - npm audit signatures, lint, build, test, and npm pack --dry-run passed
+            - npm audit signatures, lint, build, and npm pack --dry-run passed
+            - The suite is NOT run here: it needs the live PostgreSQL + MySQL that conformance.yml starts, so the pull request is what runs it
 
             Policy:
             - Dependabot version updates are not used
