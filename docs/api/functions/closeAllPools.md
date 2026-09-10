@@ -1,4 +1,4 @@
-[**litedbmodel v2.2.6**](../README.md)
+[**litedbmodel v2.2.7**](../README.md)
 
 ***
 

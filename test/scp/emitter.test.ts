@@ -90,8 +90,8 @@ describe('emitter — READ', () => {
   it('types the projection + the bound params from the model column SoT (never hand-written)', () => {
     const { source, endpoints } = emit('sqlite');
     expect(source).toContain('interface UsersByIdsRow {');
-    // id is INTEGER → the READ de-box scalar is a JS number (Float); name is the pinned TEXT.
-    expect(source).toMatch(/interface UsersByIdsRow \{\n {2}id: Float \| null;\n {2}name: string \| null;\n\}/);
+    // id is INTEGER → bc's `int` (a JS bigint on the TS plane); name is the pinned TEXT.
+    expect(source).toMatch(/interface UsersByIdsRow \{\n {2}id: Int \| null;\n {2}name: string \| null;\n\}/);
     // The BOUND param is the bc scalar of the column's SQL type — an INTEGER key set is `Int[]`.
     expect(endpoints.find((e) => e.name === 'usersByIds')?.params).toEqual([{ name: 'ids', type: 'Int[]' }]);
   });
@@ -119,7 +119,7 @@ describe('emitter — #133 composite tuple-IN (a CONSTANT number of params, what
   it('postgres binds ONE ARRAY PER KEY COLUMN through UNNEST (v1 bound 2×N params instead)', () => {
     const r = emit('postgres', { tenantPostsByKeys: EMIT_ENDPOINTS.tenantPostsByKeys });
     expect(bodyOf(r.source, 'tenantPostsByKeys')[0]).toContain(
-      '(e2e_tenant_posts.tenant_id, e2e_tenant_posts.user_id) IN (SELECT * FROM UNNEST(?::int[], ?::int[]))',
+      '(e2e_tenant_posts.tenant_id, e2e_tenant_posts.user_id) IN (SELECT * FROM UNNEST(?::bigint[], ?::bigint[]))',
     );
     expect(bodyOf(r.source, 'tenantPostsByKeys')[0]).toContain('[keys_tenant_id, keys_user_id]');
     expect(r.endpoints[0].params).toEqual([
@@ -142,7 +142,7 @@ describe('emitter — #133 composite tuple-IN (a CONSTANT number of params, what
 
   it('the `?` count is FIXED — it does not grow with the number of tuples', () => {
     const r = emit('postgres', { tenantPostsByKeys: EMIT_ENDPOINTS.tenantPostsByKeys });
-    expect((bodyOf(r.source, 'tenantPostsByKeys')[0].match(/\?::int\[\]/g) ?? []).length).toBe(2);
+    expect((bodyOf(r.source, 'tenantPostsByKeys')[0].match(/\?::bigint\[\]/g) ?? []).length).toBe(2);
   });
 
   it('a single-column tupleIn is a loud reject (use `in`)', () => {
@@ -307,7 +307,7 @@ describe('emitter — RELATIONS (one query per level, N+1-free)', () => {
     const { source } = emit('sqlite');
     expect(source).toContain('posts: UsersWithPostsRow_posts[];');
     expect(source).toContain('comments: UsersWithPostsRow_posts_comments[];');
-    expect(source).toMatch(/interface UsersWithPostsRow_posts_comments \{\n {2}id: Float \| null;\n {2}post_id: Float \| null;\n {2}body: string \| null;\n\}/);
+    expect(source).toMatch(/interface UsersWithPostsRow_posts_comments \{\n {2}id: Int \| null;\n {2}post_id: Int \| null;\n {2}body: string \| null;\n\}/);
   });
 
   it('composite-key relations bind the key TUPLE set on mysql/sqlite', () => {
@@ -322,7 +322,7 @@ describe('emitter — RELATIONS (one query per level, N+1-free)', () => {
     expect(body[1]).toContain('Db.pluck(rows, ["tenant_id", "user_id"])');
     // …expanded server-side into typed key rows, so the statement binds exactly ONE param.
     expect(body[2]).toContain(
-      'JOIN (SELECT (_t->>0)::int AS key0, (_t->>1)::int AS key1 FROM json_array_elements(?::json) AS _t) AS _keys ' +
+      'JOIN (SELECT (_t->>0)::bigint AS key0, (_t->>1)::bigint AS key1 FROM json_array_elements(?::json) AS _t) AS _keys ' +
         'ON e2e_tenant_posts.tenant_id = _keys.key0 AND e2e_tenant_posts.user_id = _keys.key1',
     );
     expect(body[2]).toContain('Db.executeSQL(');
@@ -370,7 +370,7 @@ describe('emitter — WRITES', () => {
 
   it('batch writes bind ONE ARRAY PER COLUMN on postgres (the UNNEST builder shape)', () => {
     const r = emit('postgres', { createComments: EMIT_ENDPOINTS.createComments });
-    expect(bodyOf(r.source, 'createComments')[0]).toContain('UNNEST(?::text[], ?::int[])');
+    expect(bodyOf(r.source, 'createComments')[0]).toContain('UNNEST(?::text[], ?::bigint[])');
     expect(r.endpoints[0].params).toEqual([
       { name: 'rows_post_id', type: 'Int[]' },
       { name: 'rows_body', type: 'string[]' },

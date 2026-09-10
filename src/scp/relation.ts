@@ -363,10 +363,10 @@ function compiledBatchSql(decl: RelationDecl, dialect: Dialect, resolveColumnTyp
   const placeholderKeys: unknown[] = [null];
   // The PG `= ANY(?::<T>[])` element type comes from the target key COLUMN's DECLARED type — the same
   // schema-derived derivation the composite path uses (`pgKeyTypesOf`). It must NOT be inferred at
-  // render from a bound value: the value's type differs by language (a bc int is a BigInt on the TS
-  // plane → `bigint[]`, a native int in python/php → `int[]`), which broke cross-language byte-identity.
-  // The column is the authority (an int column → `int[]`, byte-identical to v1's live-correct cast, and
-  // never the #43 `text[]`). Only fall back to render-time inference when no resolver is available.
+  // render from a bound value: the value's type differs by language, which broke cross-language
+  // byte-identity. The column is the authority: an integer column is bc's `int` (i64), so the cast is
+  // `bigint[]` — PG compares int4 against int8 without complaint, and never the #43 `text[]`. Only
+  // fall back to render-time inference when no resolver is available.
   const pgKeyCast =
     dialect === 'postgres' && resolveColumnType !== undefined
       ? inferPgElementType([pgTypeSpecimen(resolveColumnType(decl.targetTable, decl.targetKey as string))])
@@ -545,12 +545,10 @@ function materializeChildRows(
     for (const key of Object.keys(row)) {
       const klass = cols?.[key];
       if (klass !== undefined) { row[key] = materializeCell(row[key], klass); continue; }
-      // An UNDECLARED integer column arrives as bigint from the exact seam — narrow it here. There is
-      // no longer a mode in which it does not, so this is the normal path, not a defensive one.
-      if (typeof row[key] === 'bigint') {
-        const v = row[key] as bigint;
-        row[key] = v >= BigInt(Number.MIN_SAFE_INTEGER) && v <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(v) : v.toString();
-      }
+      // An UNDECLARED integer column arrives as a bigint from the exact seam, and STAYS one: that is
+      // behavior-contracts' `int` value model, the same thing a declared column materializes to.
+      // Narrowing it here (to a number when it fit, to a string when it did not) split one column's
+      // read type by its VALUE and undid what the drivers were configured to produce.
     }
   }
   return rows;

@@ -116,7 +116,7 @@ const opBuilders: Record<string, OpBuilder> = {
   'Find all (limit 100)': (d) => [render(compileSelect({ dialect: d, tableName: 'benchmark_users', select: '*', limit: 100 }), d)],
 
   // 2. Filter, paginate & sort: WHERE published = ? [::boolean on pg] ORDER BY created_at DESC LIMIT 20 OFFSET 10
-  // The `published` column is a decorated boolean → v1 auto-infers sqlCast 'boolean'
+  // The `published` column is declared `@column.boolean()` → sqlCast 'boolean'
   // (decorators.ts `Boolean` → `sqlCast: 'boolean'`), so the value is a BOUND param with a
   // `::boolean` pg cast — NOT the `= TRUE` boolean-literal path. The v2 SCP threads the same
   // column type via `dbCast(value, 'boolean')` (the makesql-golden dbCast construct), so the

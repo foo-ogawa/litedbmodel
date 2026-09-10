@@ -335,7 +335,7 @@ describe('@column.uuid() Decorator', () => {
       @model('test_uuid_pk')
       class TestModel extends DBModel {
         @column.uuid({ primaryKey: true }) id?: string;
-        @column() name?: string;
+        @column.text() name?: string;
       }
 
       const meta = getColumnMeta(TestModel);
@@ -386,7 +386,7 @@ describe('@column.uuid() Decorator', () => {
       @model('test_sqlcast_map')
       class TestModel extends DBModel {
         @column.uuid({ primaryKey: true }) id?: string;
-        @column() name?: string;
+        @column.text() name?: string;
         @column.uuid() ref_id?: string;
       }
 
@@ -400,8 +400,8 @@ describe('@column.uuid() Decorator', () => {
     it('should return empty map for models without uuid columns', () => {
       @model('test_no_uuid')
       class TestModel extends DBModel {
-        @column({ primaryKey: true }) id?: number;
-        @column() name?: string;
+        @column.number({ primaryKey: true }) id?: number;
+        @column.text() name?: string;
       }
 
       const sqlCastMap = getSqlCastMap(TestModel);
@@ -415,8 +415,8 @@ describe('@column.uuid() Decorator', () => {
     @model('users_with_uuid_pk')
     class UserWithUuidPk extends DBModel {
       @column.uuid({ primaryKey: true }) id?: string;
-      @column() name?: string;
-      @column() email?: string;
+      @column.text() name?: string;
+      @column.text() email?: string;
     }
 
     it('should have sqlCast=uuid for primary key', () => {
@@ -443,12 +443,12 @@ describe('inferPgArrayType with sqlCast', () => {
     @model('test_uuid_fk')
     class ParentModel extends DBModel {
       @column.uuid({ primaryKey: true }) id?: string;
-      @column() name?: string;
+      @column.text() name?: string;
     }
 
     @model('test_child_fk')
     class ChildModel extends DBModel {
-      @column({ primaryKey: true }) id?: number;
+      @column.number({ primaryKey: true }) id?: number;
       @column.uuid() parent_id?: string;
     }
 
@@ -478,15 +478,15 @@ describe('Batch operations with UUID columns', () => {
   @model('batch_uuid_users')
   class BatchUuidUser extends DBModel {
     @column.uuid({ primaryKey: true }) id?: string;
-    @column() name?: string;
-    @column() email?: string;
+    @column.text() name?: string;
+    @column.text() email?: string;
   }
 
   @model('batch_uuid_posts')
   class BatchUuidPost extends DBModel {
-    @column({ primaryKey: true }) id?: number;
+    @column.number({ primaryKey: true }) id?: number;
     @column.uuid() author_id?: string;
-    @column() title?: string;
+    @column.text() title?: string;
   }
 
   // Composite key model
@@ -494,7 +494,7 @@ describe('Batch operations with UUID columns', () => {
   class BatchCompositeUuid extends DBModel {
     @column.uuid({ primaryKey: true }) org_id?: string;
     @column.uuid({ primaryKey: true }) user_id?: string;
-    @column() role?: string;
+    @column.text() role?: string;
   }
 
   describe('getSqlCastMap for batch operations', () => {

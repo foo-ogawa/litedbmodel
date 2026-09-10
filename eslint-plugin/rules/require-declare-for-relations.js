@@ -1,6 +1,18 @@
 /**
- * @fileoverview Require 'declare' keyword for relation properties instead of '!' assertion
- * @description Relations use prototype getters. Using '!' creates instance properties that shadow getters.
+ * @fileoverview Require the relation declaration form the project's DECORATOR PROTOCOL allows.
+ * @description
+ * A relation is a prototype getter. How a class field interacts with it differs by protocol:
+ *
+ *  - **legacy decorators** (`experimentalDecorators: true`): `declare posts: …` emits no field, so the
+ *    getter is what the instance sees. `posts!: …` DOES emit a field under `useDefineForClassFields`
+ *    and shadows the getter — silently, with `undefined` reads. That is what this rule catches.
+ *  - **standard decorators** (TC39, the TypeScript 5 default): a decorated `declare` field is a
+ *    COMPILE ERROR (TS1206), so `posts!: …` is the only spelling — and litedbmodel removes the
+ *    shadowing field itself. Requiring `declare` there makes the project uncompilable, and the
+ *    autofix used to do exactly that.
+ *
+ * The protocol is read from the TypeScript program when type-aware linting is on; otherwise set it
+ * explicitly: `"litedbmodel/require-declare-for-relations": ["error", { "decorators": "standard" }]`.
  */
 
 "use strict";
@@ -15,17 +27,50 @@ module.exports = {
       recommended: true,
     },
     fixable: "code",
-    schema: [],
+    schema: [
+      {
+        type: "object",
+        properties: {
+          decorators: { enum: ["legacy", "standard", "auto"] },
+        },
+        additionalProperties: false,
+      },
+    ],
     messages: {
       useDeclare:
         "Relation property '{{name}}' should use 'declare' instead of '!' assertion. " +
-        "Class field declarations with '!' create instance properties that shadow the prototype getter.",
+        "Under legacy decorators a class field with '!' shadows the prototype getter, so the relation " +
+        "reads as undefined.",
+      useDefinite:
+        "Relation property '{{name}}' must use '!' instead of 'declare'. " +
+        "Standard (TC39) decorators reject a decorated 'declare' field (TS1206); litedbmodel removes " +
+        "the shadowing class field itself.",
     },
   },
 
   create(context) {
     const relationDecorators = new Set(["hasMany", "belongsTo", "hasOne"]);
     const sourceCode = context.getSourceCode();
+
+    /**
+     * Which decorator protocol this project compiles with. Read from the TypeScript program when
+     * type-aware linting makes it available — guessing wrong turns this rule into an autofix that
+     * breaks the build, so the answer comes from the compiler options, not from the source text.
+     */
+    function decoratorProtocol() {
+      const configured = (context.options && context.options[0] && context.options[0].decorators) || "auto";
+      if (configured !== "auto") return configured;
+      const services = sourceCode.parserServices || context.parserServices;
+      const program = services && services.program;
+      if (program && typeof program.getCompilerOptions === "function") {
+        return program.getCompilerOptions().experimentalDecorators ? "legacy" : "standard";
+      }
+      // No program to ask. `experimentalDecorators` is what this rule has always assumed, and it is
+      // still the only protocol where `declare` is required.
+      return "legacy";
+    }
+
+    const protocol = decoratorProtocol();
 
     /**
      * Check if a decorator is a relation decorator
@@ -78,6 +123,16 @@ module.exports = {
       PropertyDefinition(node) {
         // Skip if no decorators or not a relation
         if (!hasRelationDecorator(node)) {
+          return;
+        }
+
+        const propertyKeyName = node.key?.name || node.key?.value || "unknown";
+
+        // Standard decorators: `declare` does not compile on a decorated field, so `!` is correct.
+        if (protocol === "standard") {
+          if (node.declare === true) {
+            context.report({ node, messageId: "useDefinite", data: { name: propertyKeyName } });
+          }
           return;
         }
 

@@ -127,6 +127,26 @@ npm install mysql2        # MySQL
 npm install better-sqlite3  # SQLite
 ```
 
+### TypeScript configuration
+
+Models work under **either** decorator protocol, with no other compiler setting required:
+
+```jsonc
+// TC39 standard decorators — the TypeScript 5 default, and what esbuild / tsx / vite / Next.js emit.
+{ "compilerOptions": { "target": "ES2022" } }
+
+// Legacy decorators — also supported.
+{ "compilerOptions": { "target": "ES2022", "experimentalDecorators": true } }
+```
+
+`emitDecoratorMetadata` is **not** used and does not need to be enabled. Every column states its own
+type through its `@column.*` family, so the same model source produces the same model whether it is
+compiled by `tsc`, esbuild, `tsx` or `vite`.
+
+One difference the compiler forces, on relations only: standard decorators reject a decorated
+`declare` field (`TS1206`), so write `posts!: Promise<Post[]>` there; legacy decorators keep
+`declare posts: Promise<Post[]>`.
+
 ### Code Generation (optional)
 
 [**litedbmodel-gen**](https://www.npmjs.com/package/litedbmodel-gen) generates model column definitions from SQL DDL (`schema.sql`). Column definitions inside markers are auto-updated when the schema changes; hand-written code (relations, methods, exports) is preserved.
@@ -147,10 +167,10 @@ import { DBModel, model, column } from 'litedbmodel';
 // 1. Define model
 @model('users')
 class UserModel extends DBModel {
-  @column() id?: number;
-  @column() name?: string;
-  @column() email?: string;
-  @column() is_active?: boolean;
+  @column.number() id?: number;
+  @column.text() name?: string;
+  @column.text() email?: string;
+  @column.boolean() is_active?: boolean;
 }
 export const User = UserModel.asModel();  // Adds type-safe column references
 
@@ -195,9 +215,9 @@ The `@model` decorator accepts optional configuration for default behaviors:
   updateTable: 'entries_writable',           // UPDATE_TABLE_NAME (for views)
 })
 class EntryModel extends DBModel {
-  @column() id?: number;
-  @column() title?: string;
-  @column() created_at?: Date;
+  @column.number() id?: number;
+  @column.text() title?: string;
+  @column.datetime() created_at?: string;
   @column.boolean() is_deleted?: boolean;
 }
 export const Entry = EntryModel.asModel();
@@ -217,26 +237,80 @@ export const Entry = EntryModel.asModel();
 
 ## Column Decorators
 
-### Auto-Inferred Types
+### Declared Types
 
-Types are inferred from TypeScript property types:
+**A column states its own type.** The `@column.*` family is the single source of truth: it decides
+both the TypeScript type you declare and the value `find()` gives back, on every toolchain and under
+either decorator protocol. Nothing is inferred from the TypeScript type annotation.
+
+| DB column type | Decorator | Declared TS type | Value `find()` returns |
+|---|---|---|---|
+| `TEXT` / `VARCHAR` / `CHAR` / `ENUM` | `@column.text()` | `string` | the driver string, uncast |
+| `REAL` / `FLOAT` / `DOUBLE` | `@column.number()` | `number` | JS number (bc `float`) |
+| `NUMERIC` / `DECIMAL` / `MONEY` | `@column.text()` | `string` | the **exact decimal string** — a JS number destroys `NUMERIC(38,10)` |
+| `BOOLEAN` | `@column.boolean()` | `boolean` | JS boolean |
+| `INTEGER` / `BIGINT` / `SERIAL` … | `@column.bigint()` | `bigint` | a JS **bigint** — behavior-contracts' `int` value model (checked i64) |
+| `TIMESTAMP` / `TIMESTAMPTZ` / `DATETIME` | `@column.datetime()` | `string` | the column's **own textual form**, never a TZ-shifted `Date` — with the offset when the column carries one (`timestamptz` → `2024-06-15 10:30:00+00`), without it when it does not (`timestamp` → `2024-06-15 10:30:00`) |
+| `DATE` | `@column.date()` | `string` | `'YYYY-MM-DD'` — a calendar date has no timezone |
+| `UUID` | `@column.uuid()` | `string` | the UUID string (adds `::uuid` casts on PostgreSQL) |
+| `JSON` / `JSONB` | `@column.json<T>()` | `T` | parsed JSON |
+| `TEXT[]` | `@column.stringArray()` | `string[]` | `string[]` |
+| `INT[]` | `@column.intArray()` | `number[]` | `number[]` |
+| `NUMERIC[]` | `@column.numericArray()` | `(number \| null)[]` | `(number \| null)[]` |
+| `BOOLEAN[]` | `@column.booleanArray()` | `(boolean \| null)[]` | `(boolean \| null)[]` |
+| `TIMESTAMP[]` | `@column.datetimeArray()` | `(string \| null)[]` | element-wise the same TZ-attached string `@column.datetime()` returns |
+| `BYTEA` / `BLOB` / a vendor type | `@column.passthrough()` | `unknown` | the driver's value, uncast |
+| anything else | `@column.custom(cast, serialize?)` | whatever `cast` returns | whatever `cast` returns |
 
 ```typescript
-@column() id?: number;           // Number conversion
-@column() name?: string;         // No conversion
-@column() is_active?: boolean;   // Boolean conversion
-@column() created_at?: Date;     // DateTime conversion
-@column() large_id?: bigint;     // BigInt conversion
+@model('users')
+class UserModel extends DBModel {
+  @column.number({ primaryKey: true, autoIncrement: true }) id?: number;
+  @column.text() name?: string;
+  @column.text('mail_addr') email?: string;   // property `email`, column `mail_addr`
+  @column.boolean() is_active?: boolean;
+  @column.datetime() created_at?: string;     // reads back a string, so it is declared a string
+  @column.date() birth_date?: string;         // 'YYYY-MM-DD'
+  @column.bigint() large_id?: bigint;         // every integer width — bc's `int`
+}
 ```
+
+**An integer column is one type at every width.** behavior-contracts has a single integer type — `int`,
+a JS `bigint` on the TS plane, checked i64 — and the drivers are configured to produce exactly that
+(`configurePgDeboxTypeParsers`, `mysqlDeboxPoolOptions`, better-sqlite3 `safeIntegers`). A `SMALLINT`
+and a `BIGINT` therefore read back the same way, and no value is ever rounded on the way in.
+
+`JSON.stringify` refuses a `bigint` — that is JavaScript, not this library. Convert at the boundary:
+
+```ts
+JSON.stringify(row, (_k, v) => (typeof v === 'bigint' ? v.toString() : v));
+```
+
+Writes accept the natural JS value: `[[User.created_at, new Date()]]` serializes a `Date`, and
+`[[User.large_id, 9007199254740993n]]` a `bigint`. Dates read back as strings so a row compares
+without a timezone shift.
+
+SQLite is the exception to the decimal row: it stores no fixed-precision type, so its driver hands
+back a JS number whatever the column says, and the value is already rounded before litedbmodel sees it.
+
+Parse a datetime when you need a `Date`: `new Date(user.created_at)`. PostgreSQL returns
+`2024-06-15 10:30:00+00` — a space, not a `T`; `new Date()` accepts that form as-is. Do not "repair"
+it into `2024-06-15T10:30:00+00`, which is an `Invalid Date` (a `T` form needs `+00:00`).
+
+A string from a column with **no** timezone (`timestamp`, MySQL `datetime`) has no offset to parse, so
+`new Date()` reads it as LOCAL time. Declare the column `timestamptz` when the value is an instant —
+that is a schema decision no client-side conversion can substitute for.
 
 ### Column Options
 
+Every family takes the same argument: a column name, or an options object.
+
 ```typescript
-@column('db_column_name') prop?: string;         // Custom column name (string shorthand)
-@column({ columnName: 'db_col' }) prop?: string; // Custom column name (object form)
-@column({ primaryKey: true }) id?: number;       // Mark as primary key
-@column({ primaryKey: true, columnName: 'user_id' }) id?: number; // Both options
-@column({ primaryKey: true, autoIncrement: true }) id?: number;   // Server-assigned key
+@column.text('db_column_name') prop?: string;         // Custom column name (string shorthand)
+@column.text({ columnName: 'db_col' }) prop?: string; // Custom column name (object form)
+@column.number({ primaryKey: true }) id?: number;     // Mark as primary key
+@column.number({ primaryKey: true, columnName: 'user_id' }) id?: number; // Both options
+@column.number({ primaryKey: true, autoIncrement: true }) id?: number;   // Server-assigned key
 ```
 
 | Option | Type | Description |
@@ -250,47 +324,22 @@ whenever that is not true: on MySQL, which has no native `RETURNING`, a `returni
 the rows it wrote from the declared key — by the auto-increment range for a server-assigned key, and
 by the values the write itself bound for a UUID, a client-supplied, or a composite key.
 
-### Explicit Types (for arrays/JSON/UUID)
-
-Use explicit type decorators when auto-inference isn't sufficient:
-
-```typescript
-@column.date() birth_date?: string;         // Date only (YYYY-MM-DD string)
-@column.datetime() updated_at?: Date;       // DateTime with timezone
-@column.boolean() is_active?: boolean;      // Explicit boolean
-@column.number() amount?: number;           // Explicit number
-@column.uuid() id?: string;                 // UUID with auto-casting (PostgreSQL)
-@column.stringArray() tags?: string[];      // String array
-@column.intArray() scores?: number[];       // Integer array
-@column.numericArray() prices?: number[];   // Numeric/decimal array
-@column.booleanArray() flags?: boolean[];   // Boolean array
-@column.datetimeArray() dates?: Date[];     // DateTime array
-@column.json<Settings>() settings?: Settings; // JSON with type
-```
-
 ### Date vs DateTime: Important Distinction
 
-Databases distinguish between date-only and datetime columns. `@column.date()` returns a **`string`** (`YYYY-MM-DD`), not a `Date` object, because a calendar date has no timezone concept:
-
-| DB Column Type | Decorator | TypeScript Type | Example |
-|----------------|-----------|-----------------|---------|
-| `TIMESTAMP` / `DATETIME` | `@column()` or `@column.datetime()` | `Date` | `created_at`, `updated_at` |
-| `DATE` | `@column.date()` | `string` | `birth_date`, `settlement_date` |
-
-**⚠️ Important**: `@column()` with `Date` type is treated as `TIMESTAMP/DATETIME`. For date-only columns (no time component), you **must** use `@column.date()` explicitly.
+Databases distinguish date-only from datetime columns, and so do the decorators. Both read back as a
+string, but a different one — pick the family that matches the column:
 
 ```typescript
 // ✅ Correct usage
-@column() created_at?: Date;              // TIMESTAMP column (datetime → Date)
-@column.datetime() updated_at?: Date;     // TIMESTAMP column (datetime → Date)
-@column.date() settlement_date?: string;  // DATE column (date only → 'YYYY-MM-DD')
+@column.datetime() updated_at?: string;   // TIMESTAMP column → '2024-06-15 10:30:00+00'
+@column.date() settlement_date?: string;  // DATE column      → '2024-06-15'
 
-// ❌ Wrong: will cause type mismatch errors
-@column() settlement_date?: Date;         // Treated as TIMESTAMP, not DATE!
+// ❌ Wrong: a DATE column read through the datetime family carries a time that is not in the column
+@column.datetime() settlement_date?: string;
 ```
 
-**Serialization behavior** (PostgreSQL):
-- `@column()` / `@column.datetime()` → ISO 8601 UTC: `2024-06-15T10:30:00.000Z`
+**Serialization behavior on write** (PostgreSQL):
+- `@column.datetime()` → ISO 8601 UTC: `2024-06-15T10:30:00.000Z`
 - `@column.date()` → date string: `2024-06-15`
 
 ### Date Utility Functions
@@ -581,7 +630,7 @@ await User.find([
 > **ESLint Plugin:** Use `litedbmodel/eslint-plugin` to catch mistakes that TypeScript cannot:
 > - Wrong model columns (e.g., `User.find([[Post.id, 1]])`)
 > - Hardcoded column names instead of `${Model.column}`
-> - Missing `declare` keyword for relation properties
+> - The wrong relation declaration for your decorator protocol (`declare` vs `!`)
 
 ---
 
@@ -722,11 +771,12 @@ import { DBModel, model, column, hasMany, belongsTo, hasOne } from 'litedbmodel'
 
 @model('users')
 class UserModel extends DBModel {
-  @column() id?: number;
-  @column() name?: string;
+  @column.number() id?: number;
+  @column.text() name?: string;
 
-  // Use 'declare' for relation properties (not '!' assertion)
-  // This prevents TypeScript from creating instance properties that shadow the getter
+  // Legacy decorators: declare a relation with 'declare' (not '!'), so TypeScript emits no instance
+  // field to shadow the getter. Standard decorators reject a decorated 'declare' field (TS1206) —
+  // write `posts!: Promise<Post[]>` there; the library removes the shadowing field itself.
   @hasMany(() => [User.id, Post.author_id])
   declare posts: Promise<Post[]>;
 
@@ -737,9 +787,9 @@ export const User = UserModel.asModel();
 
 @model('posts')
 class PostModel extends DBModel {
-  @column() id?: number;
-  @column() author_id?: number;
-  @column() title?: string;
+  @column.number() id?: number;
+  @column.number() author_id?: number;
+  @column.text() title?: string;
 
   @belongsTo(() => [Post.author_id, User.id])
   declare author: Promise<User | null>;
@@ -755,7 +805,16 @@ const author = await post.author;       // Lazy loaded
 const comments = await post.comments;   // Lazy loaded
 ```
 
-> **Important:** Use `declare` (not `!`) for relation properties. TypeScript class field declarations with `!` create instance properties that shadow the prototype getter. The ESLint plugin detects this mistake.
+> **Important — the relation declaration depends on your decorator protocol:**
+>
+> - **Legacy decorators**: write `declare posts: Promise<Post[]>`. A field written `posts!: …` emits a
+>   class field that shadows the prototype getter, and the relation reads back as `undefined`.
+> - **Standard (TC39) decorators**: write `posts!: Promise<Post[]>`. A decorated `declare` field does
+>   not compile (`TS1206`), and litedbmodel removes the shadowing field itself.
+>
+> `litedbmodel/eslint-plugin` enforces whichever applies. It reads `experimentalDecorators` from your
+> TypeScript program when type-aware linting is on; otherwise set it explicitly:
+> `"litedbmodel/require-declare-for-relations": ["error", { "decorators": "standard" }]`.
 
 ### With Options (order, where, limit)
 
@@ -787,9 +846,9 @@ This is more efficient than fetching all records and filtering in application co
 ```typescript
 @model('tenant_posts')
 class TenantPostModel extends DBModel {
-  @column({ primaryKey: true }) tenant_id?: number;
-  @column({ primaryKey: true }) id?: number;
-  @column() author_id?: number;
+  @column.number({ primaryKey: true }) tenant_id?: number;
+  @column.number({ primaryKey: true }) id?: number;
+  @column.number() author_id?: number;
 
   @belongsTo(() => [
     [TenantPost.tenant_id, TenantUser.tenant_id],
@@ -1034,10 +1093,10 @@ const activeUsers = await User.query(`
 // Window functions, CTEs, recursive queries - anything PostgreSQL supports
 @model('user_rankings')
 class UserRankingModel extends DBModel {
-  @column() user_id?: number;
-  @column() score?: number;
-  @column() rank?: number;
-  @column() percentile?: number;
+  @column.number() user_id?: number;
+  @column.number() score?: number;
+  @column.number() rank?: number;
+  @column.number() percentile?: number;
 }
 const UserRanking = UserRankingModel.asModel();
 
@@ -1097,11 +1156,11 @@ import { DBModel, model, column } from 'litedbmodel';
 
 @model('user_stats')  // Alias for the CTE
 class UserStatsModel extends DBModel {
-  @column() id?: number;
-  @column() name?: string;
-  @column() post_count?: number;
-  @column() comment_count?: number;
-  @column() last_activity?: Date;
+  @column.number() id?: number;
+  @column.text() name?: string;
+  @column.number() post_count?: number;
+  @column.number() comment_count?: number;
+  @column.datetime() last_activity?: string;
 
   // Define the base query
   static QUERY = `
@@ -1160,11 +1219,11 @@ import { sql } from 'litedbmodel';
 
 @model('sales_report')
 class SalesReportModel extends DBModel {
-  @column() product_id?: number;
-  @column() product_name?: string;
-  @column() total_quantity?: number;
-  @column() total_revenue?: number;
-  @column() order_count?: number;
+  @column.number() product_id?: number;
+  @column.text() product_name?: string;
+  @column.number() total_quantity?: number;
+  @column.number() total_revenue?: number;
+  @column.number() order_count?: number;
 
   static forPeriod(startDate: string, endDate: string) {
     return this.withQuery(sql`
@@ -1204,9 +1263,9 @@ import { sql } from 'litedbmodel';
 
 @model('user_activity')
 class UserActivityModel extends DBModel {
-  @column() user_id?: number;
-  @column() user_name?: string;
-  @column() total_posts?: number;
+  @column.number() user_id?: number;
+  @column.text() user_name?: string;
+  @column.number() total_posts?: number;
 
   static QUERY = sql`
     SELECT 
@@ -1340,15 +1399,15 @@ const CmsDB = DBModel.createDBBase({
 // Models inherit from their respective database base class
 @model('users')
 class UserModel extends BaseDB {
-  @column() id?: number;
-  @column() name?: string;
+  @column.number() id?: number;
+  @column.text() name?: string;
 }
 export const User = UserModel.asModel();
 
 @model('articles')
 class ArticleModel extends CmsDB {
-  @column() id?: number;
-  @column() title?: string;
+  @column.number() id?: number;
+  @column.text() title?: string;
 }
 export const Article = ArticleModel.asModel();
 ```

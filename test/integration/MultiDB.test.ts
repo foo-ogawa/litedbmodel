@@ -99,20 +99,20 @@ const testWriterConfig: DBConfig = {
 
 @model('multi_users')
 class MultiUserModel extends DBModel {
-  @column() id?: number;
-  @column() name?: string;
-  @column() email?: string;
-  @column() tenant_id?: number;
+  @column.number() id?: number;
+  @column.text() name?: string;
+  @column.text() email?: string;
+  @column.number() tenant_id?: number;
 }
 const MultiUser = MultiUserModel as typeof MultiUserModel & ColumnsOf<MultiUserModel>;
 type MultiUser = MultiUserModel;
 
 @model('multi_posts')
 class MultiPostModel extends DBModel {
-  @column() id?: number;
-  @column() user_id?: number;
-  @column() title?: string;
-  @column() content?: string;
+  @column.number() id?: number;
+  @column.number() user_id?: number;
+  @column.text() title?: string;
+  @column.text() content?: string;
 
   @belongsTo(() => [MultiPost.user_id, MultiUser.id])
   declare author: Promise<MultiUserModel | null>;
@@ -587,9 +587,9 @@ describe.skipIf(skipIntegrationTests)('createDBBase()', () => {
 // "Core DB" model
 @model('cross_users')
 class CrossUserModel extends DBModel {
-  @column() id?: number;
-  @column() tenant_id?: number;
-  @column() name?: string;
+  @column.number() id?: number;
+  @column.number() tenant_id?: number;
+  @column.text() name?: string;
 
   @hasMany(() => [
     [CrossUser.tenant_id, CrossOrder.tenant_id],
@@ -603,10 +603,10 @@ type CrossUser = CrossUserModel;
 // "Orders DB" model
 @model('cross_orders')
 class CrossOrderModel extends DBModel {
-  @column() id?: number;
-  @column() tenant_id?: number;
-  @column() user_id?: number;
-  @column() total?: number;
+  @column.number() id?: number;
+  @column.number() tenant_id?: number;
+  @column.number() user_id?: number;
+  @column.number() total?: number;
 
   @belongsTo(() => [
     [CrossOrder.tenant_id, CrossUser.tenant_id],
@@ -623,10 +623,10 @@ type CrossOrder = CrossOrderModel;
 // "Orders DB" model (composite primary key)
 @model('cross_order_items')
 class CrossOrderItemModel extends DBModel {
-  @column({ primaryKey: true }) order_id?: number;
-  @column({ primaryKey: true }) product_id?: number;
-  @column() quantity?: number;
-  @column() price?: number;
+  @column.number({ primaryKey: true }) order_id?: number;
+  @column.number({ primaryKey: true }) product_id?: number;
+  @column.number() quantity?: number;
+  @column.number() price?: number;
 
   @belongsTo(() => [CrossOrderItem.order_id, CrossOrder.id])
   declare order: Promise<CrossOrderModel | null>;

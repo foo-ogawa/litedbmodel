@@ -122,40 +122,42 @@ describe('WS7a conformance — relation CONTENT (#150: a count-only assertion is
   it('the frozen values are concrete, not placeholders — a two-level graph reads end to end', () => {
     const v = relationVectors.find((x) => x.entry === 'usersWithPosts' && x.dialect === 'sqlite');
     expect(v, 'the two-level relation vector is missing from the corpus').toBeDefined();
+    // An integer column is behavior-contracts' `int`. The corpus is the CROSS-LANGUAGE artifact, so it
+    // carries one as the portable `{$bigint}` tag rather than a JSON number a JS reader would round.
     expect(v!.expectedResult).toEqual([
       {
-        id: 1,
+        id: { $bigint: '1' },
         name: 'Ada',
         posts: [
           {
-            id: 10,
-            author_id: 1,
+            id: { $bigint: '10' },
+            author_id: { $bigint: '1' },
             title: 'a1',
             status: 'live',
             created_at: '2026-02-01',
             tags: [
-              { id: 100, post_id: 10, label: 'greeting' },
-              { id: 101, post_id: 10, label: 'first' },
+              { id: { $bigint: '100' }, post_id: { $bigint: '10' }, label: 'greeting' },
+              { id: { $bigint: '101' }, post_id: { $bigint: '10' }, label: 'first' },
             ],
           },
-          { id: 11, author_id: 1, title: 'a2', status: 'draft', created_at: '2026-03-01', tags: [] },
+          { id: { $bigint: '11' }, author_id: { $bigint: '1' }, title: 'a2', status: 'draft', created_at: '2026-03-01', tags: [] },
         ],
       },
       {
-        id: 2,
+        id: { $bigint: '2' },
         name: 'Bob',
         posts: [
           {
-            id: 12,
-            author_id: 2,
+            id: { $bigint: '12' },
+            author_id: { $bigint: '2' },
             title: 'b1',
             status: 'live',
             created_at: '2026-01-15',
-            tags: [{ id: 102, post_id: 12, label: 'world' }],
+            tags: [{ id: { $bigint: '102' }, post_id: { $bigint: '12' }, label: 'world' }],
           },
         ],
       },
-      { id: 3, name: 'Cy', posts: [] },
+      { id: { $bigint: '3' }, name: 'Cy', posts: [] },
     ]);
   });
 });

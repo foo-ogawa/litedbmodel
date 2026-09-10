@@ -4,10 +4,11 @@
  * behavior for the same model (authoring.ts guarantees eager↔declaration byte-identity — this leans on
  * that). Proves the decorator surface lowers to the SAME SCP the native runtimes already execute.
  *
- * Note: vitest (esbuild) does NOT support `emitDecoratorMetadata`, so `design:type` auto-inference is
- * unavailable; the models here use the EXPLICIT `@column.*` variants (which set the `sqlCast` family),
- * and bare `@column()` id/number columns take the documented `DEFAULT_UNCAST_SQL_TYPE` (INTEGER) or a
- * `columnTypes` pin — exactly the adapter's column-type mapping under test.
+ * Note: a column's SQL type comes from the `@column.*` family it declares — either through the family's
+ * `sqlCast`, or through the token a cast-free family states (`@column.text()` → `TEXT`). A
+ * `@column.number()` column states neither (a JS number backs an INTEGER as readily as a REAL), so it
+ * takes the documented `DEFAULT_UNCAST_SQL_TYPE` or a `columnTypes` pin — exactly the adapter's
+ * column-type mapping under test.
  */
 
 import type { ColumnsOf } from '../../src';
@@ -44,10 +45,10 @@ class User {
   declare static metadata: ColumnsOf<User>['metadata'];
   declare static birth_date: ColumnsOf<User>['birth_date'];
   declare static tags: ColumnsOf<User>['tags'];
-  @column() id?: number;
-  @column() name?: string;
+  @column.number() id?: number;
+  @column.text() name?: string;
   @column.boolean() is_active?: boolean;
-  @column.datetime() created_at?: Date;
+  @column.datetime() created_at?: string;
   @column.bigint() big_id?: bigint;
   @column.uuid() ext_id?: string;
   @column.json() metadata?: Record<string, unknown>;
@@ -73,10 +74,10 @@ class Post {
   declare static author_id: ColumnsOf<Post>['author_id'];
   declare static title: ColumnsOf<Post>['title'];
   declare static created_at: ColumnsOf<Post>['created_at'];
-  @column() id?: number;
-  @column() author_id?: number;
-  @column() title?: string;
-  @column.datetime() created_at?: Date;
+  @column.number() id?: number;
+  @column.number() author_id?: number;
+  @column.text() title?: string;
+  @column.datetime() created_at?: string;
 
   @belongsTo(() => [Post.author_id, User.id])
   declare author: Promise<User | null>;
@@ -89,9 +90,9 @@ class Profile {
   declare static id: ColumnsOf<Profile>['id'];
   declare static user_id: ColumnsOf<Profile>['user_id'];
   declare static bio: ColumnsOf<Profile>['bio'];
-  @column() id?: number;
-  @column() user_id?: number;
-  @column() bio?: string;
+  @column.number() id?: number;
+  @column.number() user_id?: number;
+  @column.text() bio?: string;
 }
 
 // Composite-key tenant models
@@ -101,9 +102,9 @@ class TenantUser {
   // static reference (TenantUser.tenant_id) is CHECKED instead of resolving to an implicit any.
   declare static tenant_id: ColumnsOf<TenantUser>['tenant_id'];
   declare static id: ColumnsOf<TenantUser>['id'];
-  @column() tenant_id?: number;
-  @column() id?: number;
-  @column() name?: string;
+  @column.number() tenant_id?: number;
+  @column.number() id?: number;
+  @column.text() name?: string;
 
   @hasMany(() => [
     [TenantUser.tenant_id, TenantPost.tenant_id],
@@ -119,9 +120,9 @@ class TenantPost {
   declare static tenant_id: ColumnsOf<TenantPost>['tenant_id'];
   declare static author_id: ColumnsOf<TenantPost>['author_id'];
   declare static title: ColumnsOf<TenantPost>['title'];
-  @column() tenant_id?: number;
-  @column() author_id?: number;
-  @column() title?: string;
+  @column.number() tenant_id?: number;
+  @column.number() author_id?: number;
+  @column.text() title?: string;
 }
 
 const registry: Record<string, unknown> = { User, Post, Profile, TenantUser, TenantPost };
@@ -196,7 +197,7 @@ describe('F1 reads — find/findOne/findById/count byte-identical to hand-writte
     // SAME model shape (with a plain `id`) the retired read test used.
     @model('array_cols')
     class ArrayCols {
-      @column() id?: number;
+      @column.number() id?: number;
       @column.intArray() ints?: number[];
       @column.numericArray() nums?: number[];
       @column.booleanArray() flags?: boolean[];

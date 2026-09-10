@@ -104,10 +104,10 @@ export function getTransactionClient(): DBConnection | undefined {
  * // 1. Define model
  * @model('users')
  * class UserModel extends DBModel {
- *   @column() id?: number;
- *   @column() name?: string;
- *   @column() email?: string;
- *   @column() is_active?: boolean;
+ *   @column.number() id?: number;
+ *   @column.text() name?: string;
+ *   @column.text() email?: string;
+ *   @column.boolean() is_active?: boolean;
  * }
  * export const User = UserModel.asModel();
  * 
@@ -152,8 +152,8 @@ export abstract class DBModel {
    * ```typescript
    * @model('users')
    * class UserModel extends DBModel {
-   *   @column() id?: number;
-   *   @column() name?: string;
+   *   @column.number() id?: number;
+   *   @column.text() name?: string;
    * }
    * export const User = UserModel.asModel();
    * export type User = UserModel;
@@ -310,15 +310,14 @@ export abstract class DBModel {
 
   /**
    * The §4.1 column-type OVERRIDES for the SCP read/write bundle (the F1 `columnTypes` escape hatch).
-   * Phase F-2 (#105): a column whose SQL type cannot be derived from the decorator — no explicit
-   * `sqlCast` family AND no `baseSqlType` (its TS `design:type` is `Object`, e.g. a NULLABLE
-   * `string | null` / `number | null` field: TS emits `design:type = Object` for a union) — would
-   * otherwise take the blanket-INTEGER default and THROW `materialize int32` on a live string. Because
+   * A column whose SQL type cannot be derived from its family — `@column.number()`, whose JS `number`
+   * backs an INTEGER just as well as a REAL/DECIMAL (pg returns DECIMAL as a string that an `int32`
+   * materialize REJECTS) — would otherwise take the blanket-INTEGER default and THROW. Because
    * the DBModel read path does its OWN v1 de-box (`_createInstance` → `typeCastFromDB`), the SCP typed
    * read only needs a NON-THROWING, passthrough-safe SQL type for such columns: we pin them to `TEXT`
    * (passthrough — the driver value flows through unchanged, then v1 casts it). Columns WITH a derivable
-   * type (explicit family / a non-union `design:type`) keep it. This preserves the v1 read contract
-   * exactly (int→number, string→string) while never throwing on an undeterminable nullable column.
+   * type (every family but `@column.number()`) keep it. This preserves the v1 read contract exactly
+   * (int→number, string→string) while never throwing on a column whose width the model did not state.
    * @internal
    */
   protected static _scpColumnTypes(): DeriveColumnsOptions | undefined {
@@ -332,13 +331,13 @@ export abstract class DBModel {
         // A column with an EXPLICIT `@column.*` family (`sqlCast`: boolean / bigint / uuid / jsonb /
         // date / timestamp / *Array) keeps its derived SQL type — that family de-box matches v1's.
         if (m.sqlCast !== undefined) continue;
-        // A bare `@column()` whose TS `design:type` is String / Boolean / Date / BigInt has an
-        // UNAMBIGUOUS SQL type (option B: TEXT / BOOLEAN / TIMESTAMP / BIGINT) — keep it, so the SCP
-        // typed de-box fires exactly as the v1 contract (string→string, bool→boolean, …).
-        if (baseSqlType !== undefined && baseSqlType !== 'INTEGER') continue;
-        // What remains is a bare `Number` (baseSqlType INTEGER) — AMBIGUOUS: it may back an INTEGER or a
-        // DECIMAL/NUMERIC column (pg returns DECIMAL as a string that `int32` materialize would REJECT)
-        // — OR a union field with NO `design:type` (string|null). Pin these to `TEXT` = passthrough:
+        // A cast-free family that still DECLARES its SQL type (`@column.text()` → TEXT) is
+        // unambiguous — keep it, so the SCP typed de-box fires exactly as the v1 contract.
+        if (baseSqlType !== undefined) continue;
+        // What remains states no SQL type at all: `@column.number()` (AMBIGUOUS — a JS number backs an
+        // INTEGER just as well as a DECIMAL/NUMERIC column, and pg returns DECIMAL as a string that
+        // `int32` materialize would REJECT), `@column.passthrough()` and `@column.custom()`. Pin these
+        // to `TEXT` = passthrough:
         // the DBModel path does its OWN v1 de-box (`_createInstance` → `typeCastFromDB`), so the SCP
         // read only needs a NON-THROWING passthrough (int→number, decimal→number, string→string — the
         // exact v1 read contract). This is F1's `columnTypes` escape hatch for the un-derivable number.
@@ -3297,12 +3296,12 @@ export abstract class DBModel {
    * // Define models using appropriate base class
    * @model('users')
    * class UserModel extends BaseDB {
-   *   @column() id?: number;
+   *   @column.number() id?: number;
    * }
    *
    * @model('articles')
    * class ArticleModel extends CmsDB {
-   *   @column() id?: number;
+   *   @column.number() id?: number;
    * }
    *
    * // Each base class has independent transactions

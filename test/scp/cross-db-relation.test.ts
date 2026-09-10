@@ -93,8 +93,8 @@ describe('R1 cross-DB relation routing (typed-object surface, two real SQLite DB
     // DECLARATIVE SELECT: the tagged relation resolves to REAL rows — only DB-B has `users`.
     const rows = buildResultSet(parents, { author: op }, ctx, { with: { author: true } });
     expect(rows).toEqual([
-      { id: 1, author_id: 7, author: { id: 7, name: 'Ada' } },
-      { id: 2, author_id: 8, author: { id: 8, name: 'Alan' } },
+      { id: 1, author_id: 7, author: { id: 7n, name: 'Ada' } },
+      { id: 2, author_id: 8, author: { id: 8n, name: 'Alan' } },
     ]);
     // The routing key the RUNTIME produced (not a fixture switch): the op's own connection name.
     expect(seen).toEqual([{ write: false, db: 'analytics' }]);
@@ -102,7 +102,7 @@ describe('R1 cross-DB relation routing (typed-object surface, two real SQLite DB
     // LAZY: the prototype getter fires the SAME op through the SAME target, so it routes identically.
     seen.length = 0;
     const lazy = buildResultSet(parents, { author: op }, ctx) as Record<string, unknown>[];
-    expect(await lazy[0].author).toEqual({ id: 7, name: 'Ada' });
+    expect(await lazy[0].author).toEqual({ id: 7n, name: 'Ada' });
     expect(seen).toEqual([{ write: false, db: 'analytics' }]);
 
     dbA.close();
@@ -148,10 +148,13 @@ describe('R1 cross-DB relation routing (typed-object surface, two real SQLite DB
     db.exec('INSERT INTO posts VALUES (1, 7)');
     db.exec("INSERT INTO users VALUES (7, 'Ada')");
     const op = compileRelationOp(authorDecl());
+    // The PARENT rows are read straight off better-sqlite3 here (no `safeIntegers`), so they carry
+    // plain JS numbers; the CHILD goes through the read materializer and carries bc's `int` (a
+    // bigint). The assertion states both rather than smoothing them together.
     const parents = db.prepare('SELECT id, author_id FROM posts').all() as Record<string, unknown>[];
     // The default connection IS the single-connection case: it runs, on the driver it was handed.
     expect(buildResultSet(parents, { author: op }, db, { with: { author: true } })).toEqual([
-      { id: 1, author_id: 7, author: { id: 7, name: 'Ada' } },
+      { id: 1, author_id: 7, author: { id: 7n, name: 'Ada' } },
     ]);
     db.close();
   });

@@ -400,8 +400,7 @@ function onConflictTail(dialect: MakeSQLDialect, ports: Record<string, unknown>,
  */
 export function pgTypeSpecimen(sqlType: string): unknown {
   const klass = sqlTypeToMaterializeClass(sqlType);
-  if (klass === 'int32') return 0;
-  if (klass === 'int64') return 0n;
+  if (klass === 'int') return 0n;
   if (klass === 'bool') return false;
   if (klass === 'date') return new Date(0);
   // passthrough: float / decimal(→string) / text / uuid / json — split by the bc scalar.

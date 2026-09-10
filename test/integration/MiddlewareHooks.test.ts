@@ -125,8 +125,8 @@ let Profile: typeof ProfileModel & ColumnsOf<ProfileModel>;
 
 @model('mw_users')
 class UserModel extends DBModel {
-  @column({ primaryKey: true }) id?: number;
-  @column() name?: string;
+  @column.number({ primaryKey: true }) id?: number;
+  @column.text() name?: string;
 
   @hasMany(() => [User.id, Post.user_id])
   declare posts: Promise<(typeof PostModel)[]>;
@@ -138,9 +138,9 @@ User = UserModel as typeof UserModel & ColumnsOf<UserModel>;
 
 @model('mw_posts')
 class PostModel extends DBModel {
-  @column({ primaryKey: true }) id?: number;
-  @column() user_id?: number;
-  @column() title?: string;
+  @column.number({ primaryKey: true }) id?: number;
+  @column.number() user_id?: number;
+  @column.text() title?: string;
 
   @belongsTo(() => [Post.user_id, User.id])
   declare author: Promise<typeof UserModel | null>;
@@ -149,9 +149,9 @@ Post = PostModel as typeof PostModel & ColumnsOf<PostModel>;
 
 @model('mw_profiles')
 class ProfileModel extends DBModel {
-  @column({ primaryKey: true }) id?: number;
-  @column() user_id?: number;
-  @column() bio?: string;
+  @column.number({ primaryKey: true }) id?: number;
+  @column.number() user_id?: number;
+  @column.text() bio?: string;
 
   @belongsTo(() => [Profile.user_id, User.id])
   declare user: Promise<typeof UserModel | null>;

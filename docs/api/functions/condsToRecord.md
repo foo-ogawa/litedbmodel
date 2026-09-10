@@ -1,4 +1,4 @@
-[**litedbmodel v2.2.6**](../README.md)
+[**litedbmodel v2.2.7**](../README.md)
 
 ***
 
@@ -10,7 +10,7 @@
 function condsToRecord(conditions: Conds): Record<string, unknown>;
 ```
 
-Defined in: [Column.ts:1006](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L1006)
+Defined in: [Column.ts:1020](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L1020)
 
 ## Parameters
 

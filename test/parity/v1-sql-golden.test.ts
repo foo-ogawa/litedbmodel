@@ -95,11 +95,11 @@ class SqlLoggerMiddleware extends Middleware {
 
 @model('benchmark_users')
 class LiteUserModel extends DBModel {
-  @column() id?: number;
-  @column() email?: string;
-  @column() name?: string;
-  @column() created_at?: Date;
-  @column() updated_at?: Date;
+  @column.number() id?: number;
+  @column.text() email?: string;
+  @column.text() name?: string;
+  @column.datetime() created_at?: string;
+  @column.datetime() updated_at?: string;
 
   @hasMany(() => [LiteUser.id, LitePost.author_id])
   declare posts: Promise<LitePostModel[]>;
@@ -108,12 +108,12 @@ const LiteUser = LiteUserModel as typeof LiteUserModel & ColumnsOf<LiteUserModel
 
 @model('benchmark_posts')
 class LitePostModel extends DBModel {
-  @column() id?: number;
-  @column() title?: string;
-  @column() content?: string;
-  @column() published?: boolean;
-  @column() author_id?: number;
-  @column() created_at?: Date;
+  @column.number() id?: number;
+  @column.text() title?: string;
+  @column.text() content?: string;
+  @column.boolean() published?: boolean;
+  @column.number() author_id?: number;
+  @column.datetime() created_at?: string;
 
   @belongsTo(() => [LitePost.author_id, LiteUser.id])
   declare author: Promise<LiteUserModel | null>;
@@ -125,10 +125,10 @@ const LitePost = LitePostModel as typeof LitePostModel & ColumnsOf<LitePostModel
 
 @model('benchmark_comments')
 class LiteCommentModel extends DBModel {
-  @column() id?: number;
-  @column() body?: string;
-  @column() post_id?: number;
-  @column() created_at?: Date;
+  @column.number() id?: number;
+  @column.text() body?: string;
+  @column.number() post_id?: number;
+  @column.datetime() created_at?: string;
 
   @belongsTo(() => [LiteComment.post_id, LitePost.id])
   declare post: Promise<LitePostModel | null>;
@@ -138,9 +138,9 @@ const LiteComment = LiteCommentModel as typeof LiteCommentModel & ColumnsOf<Lite
 // Composite key models (multi-tenant)
 @model('benchmark_tenant_users')
 class LiteTenantUserModel extends DBModel {
-  @column({ primaryKey: true }) tenant_id?: number;
-  @column({ primaryKey: true }) user_id?: number;
-  @column() name?: string;
+  @column.number({ primaryKey: true }) tenant_id?: number;
+  @column.number({ primaryKey: true }) user_id?: number;
+  @column.text() name?: string;
 
   @hasMany(() => [[LiteTenantUser.tenant_id, LiteTenantPost.tenant_id], [LiteTenantUser.user_id, LiteTenantPost.user_id]])
   declare posts: Promise<LiteTenantPostModel[]>;
@@ -149,10 +149,10 @@ const LiteTenantUser = LiteTenantUserModel as typeof LiteTenantUserModel & Colum
 
 @model('benchmark_tenant_posts')
 class LiteTenantPostModel extends DBModel {
-  @column({ primaryKey: true }) tenant_id?: number;
-  @column({ primaryKey: true }) post_id?: number;
-  @column() user_id?: number;
-  @column() title?: string;
+  @column.number({ primaryKey: true }) tenant_id?: number;
+  @column.number({ primaryKey: true }) post_id?: number;
+  @column.number() user_id?: number;
+  @column.text() title?: string;
 
   @belongsTo(() => [[LiteTenantPost.tenant_id, LiteTenantUser.tenant_id], [LiteTenantPost.user_id, LiteTenantUser.user_id]])
   declare user: Promise<LiteTenantUserModel | null>;
@@ -164,10 +164,10 @@ const LiteTenantPost = LiteTenantPostModel as typeof LiteTenantPostModel & Colum
 
 @model('benchmark_tenant_comments')
 class LiteTenantCommentModel extends DBModel {
-  @column({ primaryKey: true }) tenant_id?: number;
-  @column({ primaryKey: true }) comment_id?: number;
-  @column() post_id?: number;
-  @column() body?: string;
+  @column.number({ primaryKey: true }) tenant_id?: number;
+  @column.number({ primaryKey: true }) comment_id?: number;
+  @column.number() post_id?: number;
+  @column.text() body?: string;
 
   @belongsTo(() => [[LiteTenantComment.tenant_id, LiteTenantPost.tenant_id], [LiteTenantComment.post_id, LiteTenantPost.post_id]])
   declare post: Promise<LiteTenantPostModel | null>;

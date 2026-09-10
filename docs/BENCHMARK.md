@@ -3,7 +3,7 @@
 Benchmark comparing litedbmodel with Prisma, Kysely, Drizzle, and TypeORM on PostgreSQL.
 
 <!--@embedoc:package_version-->
-**Version:** litedbmodel **2.2.6**
+**Version:** litedbmodel **2.2.7**
 <!--@embedoc:end-->
 
 > Measured on PostgreSQL 16 · Apple Silicon (arm64).
@@ -400,8 +400,8 @@ litedbmodel takes a fundamentally different approach: **relations are statically
 // Define relations once in your model
 @model('users')
 class UserModel extends DBModel {
-  @column() id?: number;
-  @column() name?: string;
+  @column.number() id?: number;
+  @column.text() name?: string;
   
   // Use 'declare' for relation properties
   @hasMany(() => [User.id, Post.author_id])

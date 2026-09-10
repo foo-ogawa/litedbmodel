@@ -73,9 +73,9 @@ graphddb と並ぶ SQL backend の consumer である。`` `src/scp/index.ts` ``
 ```ts
 @model('posts')
 export class PostModel extends DBModel {
-  @column({ primaryKey: true }) id!: number;
-  @column() author_id!: number;
-  @column() title!: string;
+  @column.number({ primaryKey: true }) id!: number;
+  @column.number() author_id!: number;
+  @column.text() title!: string;
 
   @belongsTo(() => [Post.author_id, User.id]) declare author: User | null;
 }

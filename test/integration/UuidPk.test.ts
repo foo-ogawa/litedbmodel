@@ -130,9 +130,9 @@ let UuidProfile: typeof UuidProfileModel & ColumnsOf<UuidProfileModel>;
 @model('test_uuid_users')
 class UuidUserModel extends DBModel {
   @column.uuid({ primaryKey: true }) id?: string;
-  @column() name?: string;
-  @column() email?: string;
-  @column() created_at?: Date;
+  @column.text() name?: string;
+  @column.text() email?: string;
+  @column.datetime() created_at?: string;
 
   // hasMany with UUID FK
   @hasMany(() => [UuidUser.id, UuidPost.author_id], {
@@ -151,10 +151,10 @@ type UuidUser = UuidUserModel;
 class UuidPostModel extends DBModel {
   @column.uuid({ primaryKey: true }) id?: string;
   @column.uuid() author_id?: string;
-  @column() title?: string;
-  @column() content?: string;
-  @column() published?: boolean;
-  @column() created_at?: Date;
+  @column.text() title?: string;
+  @column.text() content?: string;
+  @column.boolean() published?: boolean;
+  @column.datetime() created_at?: string;
 
   // belongsTo with UUID FK
   @belongsTo(() => [UuidPost.author_id, UuidUser.id])
@@ -167,8 +167,8 @@ type UuidPost = UuidPostModel;
 class UuidProfileModel extends DBModel {
   @column.uuid({ primaryKey: true }) id?: string;
   @column.uuid() user_id?: string;
-  @column() bio?: string;
-  @column() website?: string;
+  @column.text() bio?: string;
+  @column.text() website?: string;
 
   // belongsTo with UUID FK
   @belongsTo(() => [UuidProfile.user_id, UuidUser.id])
@@ -190,9 +190,9 @@ let OrgPost: typeof OrgPostModel & ColumnsOf<OrgPostModel>;
 class OrgUserModel extends DBModel {
   @column.uuid({ primaryKey: true }) org_id?: string;
   @column.uuid({ primaryKey: true }) user_id?: string;
-  @column() name?: string;
-  @column() role?: string;
-  @column() created_at?: Date;
+  @column.text() name?: string;
+  @column.text() role?: string;
+  @column.datetime() created_at?: string;
 
   // hasMany with composite UUID FK
   @hasMany(() => [
@@ -209,11 +209,11 @@ type OrgUser = OrgUserModel;
 @model('test_org_posts')
 class OrgPostModel extends DBModel {
   @column.uuid({ primaryKey: true }) org_id?: string;
-  @column({ primaryKey: true }) post_id?: number;
+  @column.number({ primaryKey: true }) post_id?: number;
   @column.uuid() author_id?: string;
-  @column() title?: string;
-  @column() content?: string;
-  @column() created_at?: Date;
+  @column.text() title?: string;
+  @column.text() content?: string;
+  @column.datetime() created_at?: string;
 
   // belongsTo with composite UUID FK
   @belongsTo(() => [

@@ -5,6 +5,107 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.2.7] - 2026-09-10
+
+**標準デコレータ（TypeScript 5 既定）に対応し、列の型は `@column.*` family が唯一の権威になる。**
+Closes #286, #287。**モデル定義の書き換えが必要 — 下の移行手順を参照。**
+
+### Fixed
+
+- **[mysql][sqlite] モデル経由の書き込みで 2^53 を超える整数が黙って丸まっていた。** 書き込みは単一
+  JSON パラメータで束ねられ、その JSON 化で bc の `int`(bigint) が `Number()` に落とされていた
+  （`src/scp/makesql/json-array.ts`）。実測: `9007199254740993` を書くと **DB には
+  `9007199254740992` が保存される**。生 `execute` は厳密なので、モデル経由だけが壊れていた。JSON は
+  任意精度の数値リテラルを許すので、桁を保ったまま出す形にした（`JSON_TABLE` / `json_each` は
+  i64 の整数リテラルを厳密に読む）。
+- **未宣言の整数列が relation の子行で number/文字列へ戻されていた**（`src/scp/relation.ts`）。
+  1つの列の読み型を値の大きさで分岐させており、driver が揃えたものを崩していた。
+- **[sqlite] `@column.text()` の宣言 `string` が破られていた。** SQLite は動的型付けで `NUMERIC` 列に
+  JS number を返すため、宣言と実値が方言単位でズレていた。family が保証する。
+
+- **標準デコレータでモデル定義が実行時に落ちていた（#287）** — `registerColumn` が legacy デコレータの
+  signature（`target.constructor`）を前提にしており、TC39 標準デコレータでは `target` が `undefined` の
+  ため `TypeError: Cannot read properties of undefined (reading 'constructor')` で import 時に落ちた。
+  標準デコレータは TypeScript 5 の既定で、esbuild / tsx / vite / Next.js が出す形。
+  `registerColumn` / `registerRelation` / `applyModelDecorator` の3入口が両プロトコルを受けるようにし、
+  プロトコルは「どのメタデータ袋を渡すか」だけを決める。
+- **宣言した型と `find()` が返す値の型が一致していなかった（#286）** — 7列中5列がズレていた（実機
+  PostgreSQL で再現・確認）。原因は2つ。
+  - `@column.datetime()` / `.date()` / `.bigint()` は #9 の read 契約（2.1.0 で出荷）で**文字列**を返すように
+    なっていたが、README・`.d.ts` の例・litedbmodel-gen の生成物はいずれも `Date` / `bigint` を宣言した
+    ままだった。宣言側を実際の戻り値に合わせた。
+  - 無印 `@column()` の型推論は `design:type`（= `emitDecoratorMetadata`）に依存していた。**esbuild は
+    このメタデータを実装していない**ため、tsx / vite / vitest 経由では推論が黙って効かず、キャストの
+    無い列として登録され、生の driver 値（`integer` → `bigint`、`numeric` → `string`）がそのまま返って
+    いた。`tsconfig` に `emitDecoratorMetadata: true` と書いても効かないので、利用側の設定では直せない。
+- **共通ベースを継承した兄弟モデルが互いの列を持っていた** — `Reflect.getMetadata` は prototype chain を
+  辿るため、サブクラスが**継承した列 Map をそのまま破壊的に更新**していた。`A` が `b_only` を、`B` が
+  `a_only` を持つ状態になり、SELECT する列とキャストが壊れる。継承時にコピーするようにした。
+- **[litedbmodel-gen] 主キー列が family を失っていた** — 生成器は主キーに限り型マッピングを捨てて
+  `@column({ primaryKey: true })` を出しており、型の宣言が完全に消えていた。
+
+### Changed
+
+- **整数は幅を問わず JS `bigint` で読み戻る — behavior-contracts の `int` に統一。** bc の値モデルは
+  整数型を1つしか持たない（`int` = TS 平面では JS bigint、checked i64。`ts/src/canonical.ts` /
+  `ts/src/behavior.ts`）。driver は既にそれを返すよう設定されており（`configurePgDeboxTypeParsers` /
+  `mysqlDeboxPoolOptions` / better-sqlite3 `safeIntegers`）、`sqlTypeToBcScalar` も `INTEGER`/`BIGINT` を
+  `int` と宣言していたのに、**materializer だけが int32→`number` / int64→**文字列** に割り戻していた**。
+  `MaterializeClass` の `int32`/`int64` を1つの `int` に畳み、`@column.bigint()` の宣言型を `bigint` に戻した。
+  `JSON.stringify` は bigint を受け付けないので、境界で変換する（README に例）。
+
+
+- **`emitDecoratorMetadata` は不要になった**（有効でも無害・参照しない）。`experimentalDecorators` も
+  任意。同じモデルソースが tsc / esbuild / tsx / vite のどれでも同じモデルを登録する。
+- **`@column.text()` を追加** — 唯一欠けていた明示 family（文字列列は無印 `@column()` でしか書けなかった）。
+- **`@column.passthrough()` を追加** — キャストが存在しない列（`BYTEA` / `BLOB` / 未知の型）の明示宣言。
+- **全 family が `ColumnOptions` を受け取る** — `@column.number({ primaryKey: true })` のように、無印
+  `@column()` が受けていた引数をそのまま渡せる。
+- **標準デコレータでは `@column.*` が宣言フィールドの型を検査する** — `@column.datetime() x?: Date` が
+  コンパイルエラーになる（legacy デコレータは型情報を渡さないため検査できない）。
+- **`WriteValue<V>` を追加** — read が文字列の列も、write では `Date` / `bigint` を受ける（方言ごとの
+  日時整形はライブラリの仕事であって呼び出し側の仕事ではない）。
+
+### 書き換えが必要なモデル定義
+
+仕様は変わっていない。**欠陥に依存していた書き方**が、仕様どおりに動かないと分かった箇所であり、
+`@column.datetime()` などの**戻り値の挙動は 2.1.0 から一切変わっていない**（変わったのは、実装と食い違って
+いた宣言と README の側）。
+
+- **無印 `@column()` は列を宣言しない。** 列は family で型を宣言する。
+  - 無印が **`docs/architecture.md` §4.1 の規律「型が曖昧/未指定なら error（no-assume・no-fallback）」に
+    反していた**のがこの変更の根拠。型を述べていない列を error にせず素通りさせ、`emitDecoratorMetadata`
+    が無い環境（esbuild = tsx / vite / vitest）では黙って型無しの列になっていた。
+  - なお §4.1 が SoT と呼んでいるのは `schema.sql` の SQL 型であって「family」ではない。デコレータ経路に
+    ついては `src/decorators.ts` の #9 契約が「The v1 decorator IS the static type source」と述べており、
+    **その「source」を family だけに限定したのは本リリースで導入した規則**（従来はそこに `design:type`
+    推論が含まれていた）。
+  - 書き換え先はエラーメッセージにも出る:
+
+  | 旧 | 新 |
+  |---|---|
+  | `@column() name?: string` | `@column.text() name?: string` |
+  | `@column() count?: number` | `@column.number() count?: number` |
+  | `@column() flag?: boolean` | `@column.boolean() flag?: boolean` |
+  | `@column() at?: Date` | `@column.datetime() at?: string` |
+  | `@column() big?: bigint` | `@column.bigint() big?: string` |
+  | `@column({ primaryKey: true }) id?: number` | `@column.number({ primaryKey: true }) id?: number` |
+
+  litedbmodel-gen を使っているなら `npx embedoc build` で生成区間はそのまま置き換わる。
+- **`@column.datetime()` / `.date()` / `.bigint()` の宣言型が `string` になる。** 実行時の値は 2.1.0 から
+  文字列で、**型注釈の側が間違っていた**。`Date` が要るなら `new Date(row.created_at)`。PostgreSQL の
+  `timestamptz` は `2026-11-01 10:00:00+00`（`T` は無い）で返り、`new Date()` はその形をそのまま解釈する。
+- **標準デコレータで relation を書くときだけ `declare` が使えない**（TypeScript が `TS1206` で拒否する）。
+  `posts!: Promise<Post[]>` と書く。legacy デコレータは従来どおり `declare` で、変更は無い。
+
+### 記録されていなかったこと
+
+- **`@column.datetime()` / `.bigint()` の戻り値が `Date` / `bigint` から文字列に変わったのは 2.1.0 で、
+  CHANGELOG に項目が無い。** 2.0.0 は `castToDatetime` が `Date` を、`bigint` family が `BigInt` を返して
+  いた（`git show v2.0.0:src/TypeCast.ts` / `:src/decorators.ts`）。#9 の裁定（2026-07-15）を実装した
+  `b13842e` を最初に含むタグが `v2.1.0`。**値の挙動が変わったリリースが無告知で出た**ことが、宣言と
+  README が実装から取り残された起点であり、本リリースが直している drift の発生源。
+
 ## [2.2.6] - 2026-08-06
 
 **依存の脆弱性を塞ぐ。出荷コードの変更は無い。**

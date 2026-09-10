@@ -92,6 +92,7 @@ export {
   // Type-safe tuple API
   type CV,
   type CVs,
+  type WriteValue,
   pairsToRecord,
   // SKIP sentinel for conditional fields
   SKIP,
@@ -139,6 +140,9 @@ export {
   getModelColumnNames,
   getModelPropertyNames,
   type ColumnOptions,
+  type ColumnDecorator,
+  type RelationDecorator,
+  type ModelClassDecorator,
   type ColumnMeta,
   type RelationMeta,
   type RelationType,
