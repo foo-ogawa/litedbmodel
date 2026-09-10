@@ -158,7 +158,7 @@ jobs:
             - package.json changes are rejected
             - npm install scripts are disabled
             - The fix brought in no advisory that was not already there
-            - npm audit signatures, lint, build, and npm pack --dry-run passed — what ci.yml checks
+            - npm audit signatures, lint, build, and npm pack --dry-run passed
             - The suite is NOT run here: it needs the live PostgreSQL + MySQL that conformance.yml starts, so the pull request is what runs it
 
             Policy:
