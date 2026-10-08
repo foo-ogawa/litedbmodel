@@ -149,25 +149,11 @@ export function castToDatetimeArray(val: unknown): (Date | null)[] {
 }
 
 /**
- * Cast a value to JSON object/array
+ * A json / jsonb column's value. `pg` decodes json / jsonb by the column's type OID, so the value
+ * arrives as the JSON value itself — object, array, string, number or boolean — and is returned as is.
  */
-export function castToJson(
-  val: unknown
-): Record<string, unknown> | unknown[] | null {
-  if (val === null || val === undefined) {
-    return null;
-  }
-  if (typeof val === 'object') {
-    return val as Record<string, unknown> | unknown[];
-  }
-  if (typeof val === 'string') {
-    try {
-      return JSON.parse(val);
-    } catch {
-      return null;
-    }
-  }
-  return null;
+export function castToJson(val: unknown): unknown {
+  return val ?? null;
 }
 
 // Alias for backward compatibility

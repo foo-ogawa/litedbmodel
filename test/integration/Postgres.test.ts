@@ -26,7 +26,7 @@ class AllTypesModel extends DBModel {
   @column.intArray() int_array?: number[];
   @column.stringArray() text_array?: string[];
   @column.booleanArray() bool_array?: (boolean | null)[];
-  @column.json() json_val?: Record<string, unknown> | null;
+  @column.json<unknown>() json_val?: unknown;
   @column.json() json_array_val?: unknown[] | null;
 }
 const AllTypes = AllTypesModel as typeof AllTypesModel & ColumnsOf<AllTypesModel>;
@@ -693,6 +693,19 @@ describe.skipIf(skipIntegrationTests)('DBModel advanced operations', () => {
       expect(found).not.toBeNull();
       expect(found!.json_val).toEqual(jsonObj);
       expect(found!.json_array_val).toEqual(jsonArray);
+    });
+
+    it('should persist and retrieve JSON scalar values unchanged via create/find', async () => {
+      // A JSON value need not be an object or array. Strings that themselves look like JSON must come
+      // back as the same strings, not decoded a second time.
+      const scalars: unknown[] = ['abc', '{"a":1}', '42', 'true', 42, 1.5, true, false];
+      for (const value of scalars) {
+        const result = await DBModel.transaction(async () => {
+          return await AllTypes.create([[AllTypes.json_val, value]], { returning: true });
+        });
+        const found = await AllTypes.findOne([[AllTypes.id, result!.values[0][0] as number]]);
+        expect(found!.json_val).toStrictEqual(value);
+      }
     });
 
     it('should persist and retrieve NULL values correctly via create/find', async () => {

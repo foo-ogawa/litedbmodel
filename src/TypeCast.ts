@@ -22,7 +22,7 @@ export interface TypeCastFunctions {
   castToStringArray(val: unknown): string[];
   castToBooleanArray(val: unknown): (boolean | null)[];
   castToDatetimeArray(val: unknown): (Date | null)[];
-  castToJson(val: unknown): Record<string, unknown> | unknown[] | null;
+  castToJson(val: unknown): unknown;
 }
 
 // ============================================
@@ -164,17 +164,15 @@ const defaultTypeCast: TypeCastFunctions = {
     return [];
   },
 
-  castToJson(val: unknown): Record<string, unknown> | unknown[] | null {
+  // A string is JSON text to decode; any other value is already a JSON value
+  castToJson(val: unknown): unknown {
     if (val === null || val === undefined) return null;
-    if (typeof val === 'object') return val as Record<string, unknown> | unknown[];
-    if (typeof val === 'string') {
-      try {
-        return JSON.parse(val);
-      } catch {
-        return null;
-      }
+    if (typeof val !== 'string') return val;
+    try {
+      return JSON.parse(val);
+    } catch {
+      return null;
     }
-    return null;
   },
 };
 
@@ -302,7 +300,7 @@ export function castToDatetimeArray(val: unknown): (Date | null)[] {
 }
 
 /** @internal */
-export function castToJson(val: unknown): Record<string, unknown> | unknown[] | null {
+export function castToJson(val: unknown): unknown {
   return currentTypeCast.castToJson(val);
 }
 

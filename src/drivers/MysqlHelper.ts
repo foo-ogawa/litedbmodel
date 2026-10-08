@@ -111,26 +111,11 @@ export function castToStringArray(val: unknown): string[] {
 }
 
 /**
- * Cast a JSON string to object or array
- * MySQL 5.7+ has native JSON type, mysql2 auto-parses it
+ * A JSON column's value. `mysql2` decodes the JSON field type, so the value arrives as the JSON value
+ * itself — object, array, string, number or boolean — and is returned as is.
  */
-export function castToJson(
-  val: unknown
-): Record<string, unknown> | unknown[] | null {
-  if (val === null || val === undefined) {
-    return null;
-  }
-  if (typeof val === 'object') {
-    return val as Record<string, unknown> | unknown[];
-  }
-  if (typeof val === 'string') {
-    try {
-      return JSON.parse(val);
-    } catch {
-      return null;
-    }
-  }
-  return null;
+export function castToJson(val: unknown): unknown {
+  return val ?? null;
 }
 
 // ============================================
