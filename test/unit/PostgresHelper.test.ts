@@ -136,12 +136,11 @@ describe('PostgresHelper', () => {
       expect(castToJson(obj)).toEqual(obj);
     });
 
-    it('should parse JSON string', () => {
-      expect(castToJson('{"key":"value"}')).toEqual({ key: 'value' });
-    });
-
-    it('should return null for invalid JSON', () => {
-      expect(castToJson('invalid')).toBeNull();
+    it('should return a JSON scalar as-is (pg has already decoded it)', () => {
+      expect(castToJson('{"key":"value"}')).toBe('{"key":"value"}');
+      expect(castToJson('abc')).toBe('abc');
+      expect(castToJson(42)).toBe(42);
+      expect(castToJson(false)).toBe(false);
     });
 
     it('should return null for null/undefined', () => {

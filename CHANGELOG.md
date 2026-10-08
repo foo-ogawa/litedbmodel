@@ -5,6 +5,27 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.2.8] - 2026-10-08
+
+**json / jsonb 列のスカラー値（文字列・数値・真偽値）が読み出しで `null` になっていたのを直す。** Closes #298。
+
+### Fixed
+
+- **[pg][mysql][sqlite] JSON 列のスカラー値が `@column.json()` 経由の読み出しで消えていた。** DB には正しく
+  書き込まれるのに、`find` で読むと `"abc"` / `42` / `true` が `null` になっていた（1.2.10・2.2.7 で実測）。
+  pg（json/jsonb の OID）と mysql2（JSON の field type）は列の型で JSON 値を既に decode して渡すのに、
+  `castToJson` が値の形から推測して文字列をもう一度 `JSON.parse` していた。読み出しの decode は列の型で
+  一度だけ行う形にした（pg / mysql は driver が decode した値をそのまま、JSON 型の無い sqlite は保存
+  テキストを一度 decode）。JSON に見える文字列（`'{"a":1}'`）も、書いた文字列のまま戻る。
+- `litedbmodel/drivers` の `deserializeJson` も同じロジックの複製だったため、各 driver の `castToJson` に委譲した。
+
+### 書き換えが必要な箇所
+
+- `castToJson` の戻り型は JSON 値全体（`unknown`）になった。`Record<string, unknown> | unknown[] | null`
+  はスカラーを取りこぼしていた型。
+- pg / MySQL で json / jsonb ではない列（TEXT など）に `@column.json()` を付けていた場合、値は保存テキスト
+  （文字列）のまま返る。列を json / jsonb で宣言する。
+
 ## [2.2.7] - 2026-09-10
 
 **標準デコレータ（TypeScript 5 既定）に対応し、列の型は `@column.*` family が唯一の権威になる。**

@@ -1,4 +1,4 @@
-[**litedbmodel v2.2.7**](../README.md)
+[**litedbmodel v2.2.8**](../README.md)
 
 ***
 
@@ -10,7 +10,7 @@
 function formatLocalDate(d: Date): string;
 ```
 
-Defined in: [TypeCast.ts:310](https://github.com/foo-ogawa/litedbmodel/blob/main/src/TypeCast.ts#L310)
+Defined in: [TypeCast.ts:308](https://github.com/foo-ogawa/litedbmodel/blob/main/src/TypeCast.ts#L308)
 
 Format Date as YYYY-MM-DD using local time components
 

@@ -1,4 +1,4 @@
-[**litedbmodel v2.2.7**](../README.md)
+[**litedbmodel v2.2.8**](../README.md)
 
 ***
 
@@ -10,7 +10,7 @@
 function formatUTCDate(d: Date): string;
 ```
 
-Defined in: [TypeCast.ts:318](https://github.com/foo-ogawa/litedbmodel/blob/main/src/TypeCast.ts#L318)
+Defined in: [TypeCast.ts:316](https://github.com/foo-ogawa/litedbmodel/blob/main/src/TypeCast.ts#L316)
 
 Format Date as YYYY-MM-DD using UTC components
 
