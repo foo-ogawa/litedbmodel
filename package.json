@@ -1,6 +1,6 @@
 {
   "name": "litedbmodel",
-  "version": "1.2.11",
+  "version": "1.2.12",
   "description": "A lightweight TypeScript ORM for PostgreSQL, MySQL, and SQLite with Active Record pattern",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -66,9 +66,9 @@
     "@types/better-sqlite3": "^7.6.8",
     "@types/node": "^20.10.0",
     "@types/pg": "^8.10.9",
-    "@vitest/coverage-v8": "^4.1.7",
+    "@vitest/coverage-v8": "^4.1.11",
     "better-sqlite3": "^11.0.0",
-    "embedoc": "^0.9.1",
+    "embedoc": "^0.14.9",
     "esbuild": "^0.28.1",
     "eslint": "^9.39.4",
     "globals": "^17.6.0",
@@ -79,7 +79,7 @@
     "typedoc-plugin-markdown": "^4.9.0",
     "typescript": "^5.3.0",
     "typescript-eslint": "^8.60.0",
-    "vitest": "^4.1.7"
+    "vitest": "^4.1.11"
   },
   "peerDependencies": {
     "better-sqlite3": "^9.0.0 || ^10.0.0 || ^11.0.0",

@@ -9,7 +9,7 @@
  */
 
 import 'reflect-metadata';
-import { type Column, type OrderSpec, createColumn, orderToString, type Conds, condsToRecord } from './Column';
+import { type Column, type OrderSpec, createColumn, orderToString, type Conds } from './Column';
 import type { DriverTypeCast } from './drivers/types';
 import {
   castToBoolean,
@@ -418,6 +418,7 @@ function serializeJson(val: unknown, typeCast?: DriverTypeCast): unknown {
  * @column.intArray() scores?: number[];            // Array element type unknown
  * @column.json<MyType>() data?: MyType;            // Generic type unknown
  * @column.date() birth_date?: string;              // date vs datetime distinction
+ * @column.decimal() price?: string;               // NUMERIC / DECIMAL — exact decimal string
  * ```
  *
  * Note: The explicit variants (`@column.boolean()`, `@column.datetime()`, etc.)
@@ -693,6 +694,24 @@ export const column = Object.assign(
      * // → WHERE id IN (?::uuid, ?::uuid)
      * ```
      */
+    /**
+     * Exact decimal type (NUMERIC / DECIMAL) — read back as its exact decimal STRING (a JS number
+     * rounds past 2^53). The family states the column is `numeric`, so a write binds the string as a
+     * numeric — a batch write (`createMany` / `updateMany`) included.
+     * @example @column.decimal() price?: string;
+     */
+    decimal: (columnNameOrOptions?: string | ColumnOptions) =>
+      createColumnDecorator(
+        (v) => {
+          if (v === undefined || v === null) return v;
+          // pg / mysql2 already hand back the exact decimal string; SQLite hands back a number
+          return typeof v === 'string' ? v : String(v);
+        },
+        undefined,  // no custom serialize
+        true,       // Skip auto-inference
+        'numeric'   // SQL type for WHERE / INSERT / batch-write casting
+      )(columnNameOrOptions),
+
     uuid: (columnNameOrOptions?: string | ColumnOptions) =>
       createColumnDecorator(
         (v) => {
@@ -1053,7 +1072,7 @@ function applyModelDecorator<T extends { new (...args: unknown[]): object }>(
   const effectiveTableName = tableName ?? modelName.toLowerCase();
   for (const [propKey, meta] of columns) {
     Object.defineProperty(constructor, propKey, {
-      value: createColumn(meta.columnName, effectiveTableName, modelName, propKey, meta.sqlCast),
+      value: createColumn(meta.columnName, effectiveTableName, modelName, propKey, meta.sqlCast, meta.serialize),
       writable: false,
       enumerable: true,
       configurable: false,
@@ -1119,14 +1138,12 @@ function applyModelDecorator<T extends { new (...args: unknown[]): object }>(
 
         // Build relation config
         const order = options?.order ? orderToString(options.order()) : null;
-        const conditions = options?.where ? condsToRecord(options.where()) : undefined;
-
         // Call internal relation method
         return this._loadRelation(type, targetModelName, {
           sourceKeys,
           targetKeys,
           order,
-          conditions,
+          where: options?.where?.(),
           limit: options?.limit,
           hardLimit: options?.hardLimit,
           relationName: propertyKey,
