@@ -235,6 +235,7 @@ Types are inferred from TypeScript property types:
 @column({ columnName: 'db_col' }) prop?: string; // Custom column name (object form)
 @column({ primaryKey: true }) id?: number;       // Mark as primary key
 @column({ primaryKey: true, columnName: 'user_id' }) id?: number; // Both options
+@column.date({ primaryKey: true }) day?: string; // Every typed helper takes the same options
 ```
 
 | Option | Type | Description |

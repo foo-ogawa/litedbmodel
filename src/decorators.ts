@@ -440,7 +440,7 @@ export const column = Object.assign(
      * Preserves null for nullable columns, undefined stays undefined
      * @example @column.boolean() is_active?: boolean;
      */
-    boolean: (columnName?: string) =>
+    boolean: (columnNameOrOptions?: string | ColumnOptions) =>
       createColumnDecorator(
         (v) => {
           if (v === undefined) return undefined;
@@ -449,27 +449,27 @@ export const column = Object.assign(
         undefined,  // no custom serialize
         false,      // allow auto-inference
         'boolean'   // sqlCast for updateMany type inference
-      )(columnName),
+      )(columnNameOrOptions),
 
     /**
      * Number type conversion (from string)
      * Preserves null for nullable columns, undefined stays undefined
      * @example @column.number() amount?: number;
      */
-    number: (columnName?: string) =>
+    number: (columnNameOrOptions?: string | ColumnOptions) =>
       createColumnDecorator((v) => {
         if (v === undefined) return undefined;
         if (v === null) return null;
         const n = Number(v);
         return isNaN(n) ? null : n;
-      })(columnName),
+      })(columnNameOrOptions),
 
     /**
      * BigInt type conversion
      * Preserves null for nullable columns, undefined stays undefined
      * @example @column.bigint() large_id?: bigint;
      */
-    bigint: (columnName?: string) =>
+    bigint: (columnNameOrOptions?: string | ColumnOptions) =>
       createColumnDecorator(
         (v) => {
           if (v === undefined) return undefined;
@@ -483,7 +483,7 @@ export const column = Object.assign(
         undefined,  // no custom serialize
         false,      // allow auto-inference
         'bigint'    // sqlCast for WHERE/INSERT type casting
-      )(columnName),
+      )(columnNameOrOptions),
 
     // ============================================
     // Date/Time Types
@@ -499,7 +499,7 @@ export const column = Object.assign(
      * 
      * @example @column.datetime() created_at?: Date;
      */
-    datetime: (columnName?: string) =>
+    datetime: (columnNameOrOptions?: string | ColumnOptions) =>
       createColumnDecorator(
         (v) => {
           if (v === undefined) return undefined;
@@ -515,7 +515,7 @@ export const column = Object.assign(
         },
         false,      // allow auto-inference
         'timestamp' // sqlCast for updateMany type inference
-      )(columnName),
+      )(columnNameOrOptions),
 
     /**
      * Date type conversion — returns YYYY-MM-DD string.
@@ -526,7 +526,7 @@ export const column = Object.assign(
      * 
      * @example @column.date() birth_date?: string;
      */
-    date: (columnName?: string) =>
+    date: (columnNameOrOptions?: string | ColumnOptions) =>
       createColumnDecorator(
         (v) => {
           if (v === undefined) return undefined;
@@ -554,7 +554,7 @@ export const column = Object.assign(
         },
         false,      // allow auto-inference
         'date'      // sqlCast for updateMany type inference
-      )(columnName),
+      )(columnNameOrOptions),
 
     // ============================================
     // Array Types
@@ -565,7 +565,7 @@ export const column = Object.assign(
      * Preserves null for nullable columns, undefined stays undefined
      * @example @column.stringArray() tags?: string[];
      */
-    stringArray: (columnName?: string) =>
+    stringArray: (columnNameOrOptions?: string | ColumnOptions) =>
       createColumnDecorator(
         (v) => {
           if (v === undefined) return undefined;
@@ -575,14 +575,14 @@ export const column = Object.assign(
         serializeArray,
         false,
         'text[]'
-      )(columnName),
+      )(columnNameOrOptions),
 
     /**
      * Integer array type conversion (integer[])
      * Preserves null for nullable columns, undefined stays undefined
      * @example @column.intArray() scores?: number[];
      */
-    intArray: (columnName?: string) =>
+    intArray: (columnNameOrOptions?: string | ColumnOptions) =>
       createColumnDecorator(
         (v) => {
           if (v === undefined) return undefined;
@@ -592,14 +592,14 @@ export const column = Object.assign(
         serializeArray,
         false,
         'int[]'
-      )(columnName),
+      )(columnNameOrOptions),
 
     /**
      * Numeric array type conversion (numeric[], allows null elements)
      * Preserves null for nullable columns, undefined stays undefined
      * @example @column.numericArray() values?: (number | null)[];
      */
-    numericArray: (columnName?: string) =>
+    numericArray: (columnNameOrOptions?: string | ColumnOptions) =>
       createColumnDecorator(
         (v) => {
           if (v === undefined) return undefined;
@@ -609,14 +609,14 @@ export const column = Object.assign(
         serializeArray,
         false,
         'numeric[]'
-      )(columnName),
+      )(columnNameOrOptions),
 
     /**
      * Boolean array type conversion (boolean[])
      * Preserves null for nullable columns, undefined stays undefined
      * @example @column.booleanArray() flags?: (boolean | null)[];
      */
-    booleanArray: (columnName?: string) =>
+    booleanArray: (columnNameOrOptions?: string | ColumnOptions) =>
       createColumnDecorator(
         (v) => {
           if (v === undefined) return undefined;
@@ -626,14 +626,14 @@ export const column = Object.assign(
         serializeBooleanArray,
         false,
         'boolean[]'
-      )(columnName),
+      )(columnNameOrOptions),
 
     /**
      * DateTime array type conversion (timestamp[])
      * Preserves null for nullable columns, undefined stays undefined
      * @example @column.datetimeArray() event_dates?: (Date | null)[];
      */
-    datetimeArray: (columnName?: string) =>
+    datetimeArray: (columnNameOrOptions?: string | ColumnOptions) =>
       createColumnDecorator(
         (v) => {
           if (v === undefined) return undefined;
@@ -647,7 +647,7 @@ export const column = Object.assign(
           const mapped = val.map(v => v === null ? 'NULL' : (v instanceof Date ? v.toISOString() : String(v)));
           return `{${mapped.join(',')}}`;
         }
-      )(columnName),
+      )(columnNameOrOptions),
 
     // ============================================
     // JSON Types
@@ -659,7 +659,7 @@ export const column = Object.assign(
      * @example @column.json() metadata?: Record<string, unknown>;
      * @example @column.json<UserSettings>() settings?: UserSettings;
      */
-    json: <T = Record<string, unknown>>(columnName?: string) =>
+    json: <T = Record<string, unknown>>(columnNameOrOptions?: string | ColumnOptions) =>
       createColumnDecorator(
         (v) => {
           if (v === undefined) return undefined;
@@ -669,7 +669,7 @@ export const column = Object.assign(
         serializeJson,
         false,
         'jsonb'
-      )(columnName),
+      )(columnNameOrOptions),
 
     // ============================================
     // UUID Type (PostgreSQL)
@@ -737,9 +737,9 @@ export const column = Object.assign(
     custom: <T>(
       castFn: (value: unknown) => T,
       serializeFn?: SerializeFn,
-      columnName?: string
+      columnNameOrOptions?: string | ColumnOptions
     ) =>
-      createColumnDecorator(castFn, serializeFn)(columnName),
+      createColumnDecorator(castFn, serializeFn)(columnNameOrOptions),
   }
 );
 
