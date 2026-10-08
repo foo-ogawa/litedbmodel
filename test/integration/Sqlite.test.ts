@@ -23,7 +23,8 @@ class SqliteAllTypesModel extends DBModel {
   @column() varchar_val?: string | null;
   @column.datetime() timestamp_val?: Date | null;
   @column() date_val?: string | null;
-  @column.json() json_val?: Record<string, unknown> | unknown[] | null;
+  @column.json<unknown>() json_val?: unknown;
+  @column.json<unknown>() json_decl_val?: unknown;
 }
 const SqliteAllTypes = SqliteAllTypesModel as typeof SqliteAllTypesModel & ColumnsOf<SqliteAllTypesModel>;
 
@@ -471,7 +472,8 @@ describe('SQLite Driver', () => {
           varchar_val TEXT,
           timestamp_val TEXT,
           date_val TEXT,
-          json_val TEXT
+          json_val TEXT,
+          json_decl_val JSON
         )
       `);
     });
@@ -544,6 +546,24 @@ describe('SQLite Driver', () => {
       const found = await SqliteAllTypes.findOne([[SqliteAllTypes.id, createdId]]);
       expect(found).not.toBeNull();
       expect(found!.json_val).toEqual(jsonArray);
+    });
+
+    it('should persist and retrieve JSON scalar values unchanged via create/find', async () => {
+      // A JSON value need not be an object or array. Strings that themselves look like JSON must come
+      // back as the same strings, not decoded a second time. `json_decl_val` is declared `JSON`, which
+      // SQLite gives NUMERIC affinity: the JSON text `42` is stored as the integer 42.
+      const scalars: unknown[] = ['abc', '{"a":1}', '42', 'true', 42, 1.5, true, false];
+      for (const value of scalars) {
+        const result = await DBModel.transaction(async () => {
+          return await SqliteAllTypes.create([
+            [SqliteAllTypes.json_val, value],
+            [SqliteAllTypes.json_decl_val, value],
+          ], { returning: true });
+        });
+        const found = await SqliteAllTypes.findOne([[SqliteAllTypes.id, result!.values[0][0] as number]]);
+        expect(found!.json_val).toStrictEqual(value);
+        expect(found!.json_decl_val).toStrictEqual(value);
+      }
     });
 
     it('should persist and retrieve NULL values correctly via create/find', async () => {
