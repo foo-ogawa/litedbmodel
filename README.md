@@ -251,6 +251,7 @@ Use explicit type decorators when auto-inference isn't sufficient:
 @column.datetime() updated_at?: Date;       // DateTime with timezone
 @column.boolean() is_active?: boolean;      // Explicit boolean
 @column.number() amount?: number;           // Explicit number
+@column.decimal() price?: string;           // NUMERIC / DECIMAL — exact decimal string
 @column.uuid() id?: string;                 // UUID with auto-casting (PostgreSQL)
 @column.stringArray() tags?: string[];      // String array
 @column.intArray() scores?: number[];       // Integer array
