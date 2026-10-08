@@ -247,7 +247,8 @@ either decorator protocol. Nothing is inferred from the TypeScript type annotati
 |---|---|---|---|
 | `TEXT` / `VARCHAR` / `CHAR` / `ENUM` | `@column.text()` | `string` | the driver string, uncast |
 | `REAL` / `FLOAT` / `DOUBLE` | `@column.number()` | `number` | JS number (bc `float`) |
-| `NUMERIC` / `DECIMAL` / `MONEY` | `@column.text()` | `string` | the **exact decimal string** — a JS number destroys `NUMERIC(38,10)` |
+| `NUMERIC` / `DECIMAL` | `@column.decimal()` | `string` | the **exact decimal string** — a JS number destroys `NUMERIC(38,10)` |
+| `MONEY` | `@column.text()` | `string` | the driver's money text (`$1.50`) |
 | `BOOLEAN` | `@column.boolean()` | `boolean` | JS boolean |
 | `INTEGER` / `BIGINT` / `SERIAL` … | `@column.bigint()` | `bigint` | a JS **bigint** — behavior-contracts' `int` value model (checked i64) |
 | `TIMESTAMP` / `TIMESTAMPTZ` / `DATETIME` | `@column.datetime()` | `string` | the column's **own textual form**, never a TZ-shifted `Date` — with the offset when the column carries one (`timestamptz` → `2024-06-15 10:30:00+00`), without it when it does not (`timestamp` → `2024-06-15 10:30:00`) |

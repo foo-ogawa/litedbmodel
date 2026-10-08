@@ -39,6 +39,14 @@ class AutoDateModel extends DBModel {
 }
 const AutoDate = AutoDateModel as typeof AutoDateModel & ColumnsOf<AutoDateModel>;
 
+// A NUMERIC column, declared the way litedbmodel-gen declares it
+@model('numeric_bulk_test')
+class NumericBulkModel extends DBModel {
+  @column.number({ primaryKey: true }) id?: number;
+  @column.decimal() amount?: string | null;
+}
+const NumericBulk = NumericBulkModel as typeof NumericBulkModel & ColumnsOf<NumericBulkModel>;
+
 // Skip integration tests if SKIP_INTEGRATION_TESTS=1 is set
 const skipIntegrationTests = process.env.SKIP_INTEGRATION_TESTS === '1';
 
@@ -1010,6 +1018,44 @@ describe.skipIf(skipIntegrationTests)('DBModel advanced operations', () => {
       expect(updated!.timestamp_val).toBeNull();
       expect(updated!.date_val).toBeNull();
       expect(updated!.json_val).toBeNull();
+    });
+
+    it('should match a Date in WHERE whatever the process timezone is', async () => {
+      const d = new Date('2024-06-15T10:30:00.000Z');
+      const result = await DBModel.transaction(async () => {
+        return await AllTypes.create([[AllTypes.timestamp_val, d]], { returning: true });
+      });
+      const id = result!.values[0][0] as number;
+      const savedTz = process.env.TZ;
+      process.env.TZ = 'Asia/Tokyo';
+      try {
+        expect((await AllTypes.find([[AllTypes.id, id], [AllTypes.timestamp_val, d]])).map(r => r.id)).toStrictEqual([id]);
+        expect((await AllTypes.find([[AllTypes.id, id], [AllTypes.timestamp_val, [d]]])).map(r => r.id)).toStrictEqual([id]);
+      } finally {
+        if (savedTz === undefined) delete process.env.TZ;
+        else process.env.TZ = savedTz;
+      }
+    });
+
+    it('should write a NUMERIC column declared @column.decimal() via createMany / updateMany', async () => {
+      await DBModel.execute('CREATE TABLE IF NOT EXISTS numeric_bulk_test (id SERIAL PRIMARY KEY, amount NUMERIC(6,2))');
+      await DBModel.execute('DELETE FROM numeric_bulk_test');
+      const result = await DBModel.transaction(async () => {
+        return await NumericBulk.createMany([
+          [[NumericBulk.amount, '1.50']],
+          [[NumericBulk.amount, '20.00']],
+        ], { returning: true });
+      });
+      const ids = result!.values.map(v => v[0] as number);
+      await DBModel.transaction(async () => {
+        await NumericBulk.updateMany([
+          [[NumericBulk.id, ids[0]], [NumericBulk.amount, '3.25']],
+          [[NumericBulk.id, ids[1]], [NumericBulk.amount, '40.10']],
+        ], { keyColumns: NumericBulk.id });
+      });
+      const rows = await NumericBulk.find([[NumericBulk.id, ids]], { order: NumericBulk.id.asc() });
+      expect(rows.map(r => r.amount)).toStrictEqual(['3.25', '40.10']);
+      expect((await NumericBulk.find([[NumericBulk.amount, '3.25']])).map(r => r.id)).toStrictEqual([ids[0]]);
     });
 
     // Test setting null via updateMany for typed columns (same columns in all rows)

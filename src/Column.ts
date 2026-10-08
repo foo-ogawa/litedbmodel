@@ -20,6 +20,7 @@
 
 import { DBNotNullValue, dbTupleIn, DBCast, DBCastArray, DBToken } from './DBValues';
 import { type SqlFragment, type SqlTypedFragment, type SqlCondition, isSqlTypedFragment, isAnySqlFragment } from './SqlFragment';
+import type { DriverTypeCast } from './drivers/types';
 
 // ============================================
 // OrderColumn Class (Type-safe ORDER BY)
@@ -162,6 +163,9 @@ export interface Column<ValueType = unknown, ModelType = unknown> {
 
   /** SQL type for automatic casting in conditions (e.g., 'uuid') */
   readonly sqlCast?: string;
+
+  /** The column family's serializer: a condition value binds exactly as a written value does */
+  readonly serialize?: (value: unknown, typeCast?: DriverTypeCast) => unknown;
 
   /** Phantom type for model association (compile-time only, not used at runtime) */
   readonly __model?: ModelType;
@@ -320,6 +324,7 @@ export interface Column<ValueType = unknown, ModelType = unknown> {
  * @param modelName - The model class name (for debugging)
  * @param propertyName - The property name on the model (defaults to columnName)
  * @param sqlCast - SQL type for automatic casting in conditions (e.g., 'uuid')
+ * @param serialize - The column family's serializer, applied to a condition value before it binds
  * @returns A callable Column function with condition builder methods
  *
  * @example
@@ -340,7 +345,8 @@ export function createColumn<ValueType, ModelType = unknown>(
   tableName: string,
   modelName: string,
   propertyName?: string,
-  sqlCast?: string
+  sqlCast?: string,
+  serialize?: (value: unknown, typeCast?: DriverTypeCast) => unknown
 ): Column<ValueType, ModelType> {
   // The callable function itself - returns column name as string
   const fn = function (): string {
@@ -380,6 +386,11 @@ export function createColumn<ValueType, ModelType = unknown>(
     value: sqlCast,
     writable: false,
     enumerable: true,
+  });
+  Object.defineProperty(fn, 'serialize', {
+    value: serialize,
+    writable: false,
+    enumerable: false,
   });
   // __model is a phantom type - not set at runtime, only used for TypeScript type checking
 
@@ -943,10 +954,22 @@ export function isOrCond(cond: CondElement | CondElementOf<any>): cond is OrCond
 }
 
 /**
+ * Bind a condition value the way the column's family writes it (`typeCast` is the driver's), so a
+ * value matches what a create / update stored — a `Date` on a `@column.datetime()` column included.
+ * An array is an IN list: each element binds on its own.
+ * @internal
+ */
+export function serializeCondValue(col: Column<any, any>, value: unknown, typeCast?: DriverTypeCast): unknown {
+  const serialize = col.serialize;
+  if (serialize === undefined) return value;
+  return Array.isArray(value) ? value.map(v => serialize(v, typeCast)) : serialize(value, typeCast);
+}
+
+/**
  * Convert a single condition to key-value pair.
  * Returns null if the condition should be skipped.
  */
-function condToKeyValue(cond: Cond): [string, unknown] | null {
+function condToKeyValue(cond: Cond, typeCast?: DriverTypeCast): [string, unknown] | null {
   if (cond.length === 1) {
     // No value condition like [${User.deleted_at} IS NULL]
     return [cond[0] as string, true]; // Use true as placeholder for DBConditions
@@ -960,7 +983,7 @@ function condToKeyValue(cond: Cond): [string, unknown] | null {
   // Handle composite key IN condition: [[Col1, Col2], [[v1, v2], [v3, v4]]]
   if (Array.isArray(keyOrCol)) {
     const columns = keyOrCol as Column<any, any>[];
-    const tuples = value as unknown[][];
+    const tuples = (value as unknown[][]).map(t => t.map((v, i) => serializeCondValue(columns[i], v, typeCast)));
     const columnNames = columns.map(col => col.columnName);
     return ['__tuple__', dbTupleIn(columnNames, tuples)];
   }
@@ -982,16 +1005,17 @@ function condToKeyValue(cond: Cond): [string, unknown] | null {
   if (value instanceof DBToken) {
     return [col.columnName, value];
   }
+  const bound = serializeCondValue(col, value, typeCast);
   
   if (sqlCast) {
     // Wrap value with DBCast/DBCastArray for type casting
-    if (Array.isArray(value)) {
-      return [col.columnName, new DBCastArray(value, sqlCast)];
+    if (Array.isArray(bound)) {
+      return [col.columnName, new DBCastArray(bound, sqlCast)];
     }
-    return [col.columnName, new DBCast(value, sqlCast, '=')];
+    return [col.columnName, new DBCast(bound, sqlCast, '=')];
   }
   
-  return [col.columnName, value];
+  return [col.columnName, bound];
 }
 
 /**
@@ -1018,7 +1042,8 @@ function sqlFragmentToKeyValue(
 }
 
 export function condsToRecord(
-  conditions: Conds
+  conditions: Conds,
+  typeCast?: DriverTypeCast
 ): Record<string, unknown> {
   const result: Record<string, unknown> = {};
   
@@ -1028,7 +1053,7 @@ export function condsToRecord(
       continue;
     }
     if (isOrCond(cond)) {
-      const orGroups = cond.conditions.map(group => condsToRecord(group as Conds));
+      const orGroups = cond.conditions.map(group => condsToRecord(group as Conds, typeCast));
       result['__or__'] = orGroups;
     } else if (isAnySqlFragment(cond)) {
       // Direct SqlCondition / SqlFragment / SqlTypedFragment as condition element
@@ -1038,7 +1063,7 @@ export function condsToRecord(
         result[key] = value;
       }
     } else {
-      const kv = condToKeyValue(cond as Cond);
+      const kv = condToKeyValue(cond as Cond, typeCast);
       if (kv === null) continue;
       const [key, value] = kv;
       result[key] = value;

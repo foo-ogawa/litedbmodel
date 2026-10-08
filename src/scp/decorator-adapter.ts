@@ -66,6 +66,7 @@ export type KeyTypeResolver = (table: string, column: string) => BcScalar;
  *
  * The RHS matches the decorator families 1:1:
  *  - `boolean`    → `BOOLEAN`     (`@column.boolean()` / auto `Boolean`)
+ *  - `numeric`    → `NUMERIC`     (`@column.decimal()` — read de-box: exact decimal string)
  *  - `bigint`     → `BIGINT`      (`@column.bigint()` / auto `BigInt` — read de-box: exact string)
  *  - `timestamp`  → `TIMESTAMP`   (`@column.datetime()` / auto `Date` — read de-box: TZ string)
  *  - `date`       → `DATE`        (`@column.date()` — read de-box: YYYY-MM-DD string)
@@ -75,6 +76,7 @@ export type KeyTypeResolver = (table: string, column: string) => BcScalar;
  */
 export const COLUMN_FAMILY_SQL_TYPE: Readonly<Record<string, string>> = {
   boolean: 'BOOLEAN',
+  numeric: 'NUMERIC',
   bigint: 'BIGINT',
   timestamp: 'TIMESTAMP',
   date: 'DATE',

@@ -10,7 +10,7 @@
 function hasMany<Value>(keys: KeysFactory, options?: RelationDecoratorOptions): RelationDecorator<Value>;
 ```
 
-Defined in: [decorators.ts:1002](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L1002)
+Defined in: [decorators.ts:1020](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L1020)
 
 HasMany relation decorator (1:N).
 Defines a one-to-many relationship where this model has many related records.
