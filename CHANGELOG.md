@@ -7,10 +7,27 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [2.2.8] - 2026-10-08
 
-**json / jsonb 列のスカラー値（文字列・数値・真偽値）が読み出しで `null` になっていたのを直す。** Closes #298。
+**json / jsonb 列のスカラー値の読み出し、NUMERIC 列の一括書き込み、WHERE の Date のタイムゾーン依存を直す。**
+Closes #298, #295, #296, #302, #294。
+
+### Added
+
+- **`@column.decimal()`**（NUMERIC / DECIMAL）。正確な10進文字列で読み、`numeric` として書く。
 
 ### Fixed
 
+- **[pg] NUMERIC 列の `createMany` / `updateMany` が `column "…" is of type numeric but expression is of type
+  text` で失敗していた（#295）。** NUMERIC 列は `@column.text()`（TEXT と宣言）で書かれており、一括書き込みは
+  UNNEST の配列型を値の JS 型から推測して `text[]` で束ねていた。列が NUMERIC であることを宣言する
+  `@column.decimal()` を追加し、一括書き込みも `numeric[]` で束ねる。litedbmodel-gen は NUMERIC / DECIMAL を
+  `@column.decimal()` で生成する。
+- **[pg] WHERE の `Date` がプロセスの TZ が UTC のときしか一致しなかった（#296）。** 書き込みは列の family の
+  serializer（ISO 8601 UTC）で束ねるのに、条件の値は `Date` のまま driver に渡り、`::timestamp` のキャストで
+  オフセットが落ちていた。条件の値（IN リスト・複合キー・サブクエリ条件・relation の `where` を含む）も
+  書き込みと同じ family の serializer で束ねる。
+- **PR の CI の audit が `--omit=dev` で、`release.yml`（devDeps 込み）と食い違っていた（#302）。** 緑の PR を
+  マージしても publish が止まっていた。CI を release と同じ基準にした。lockfile の脆弱性（brace-expansion /
+  markdown-it / source-map-js、benchmark の brace-expansion）を `npm audit fix --package-lock-only` で解消（#294）。
 - **[pg][mysql][sqlite] JSON 列のスカラー値が `@column.json()` 経由の読み出しで消えていた。** DB には正しく
   書き込まれるのに、`find` で読むと `"abc"` / `42` / `true` が `null` になっていた（1.2.10・2.2.7 で実測）。
   pg（json/jsonb の OID）と mysql2（JSON の field type）は列の型で JSON 値を既に decode して渡すのに、
@@ -21,6 +38,9 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### 書き換えが必要な箇所
 
+- NUMERIC / DECIMAL 列は `@column.decimal()` で宣言する（`@column.text()` のままでは一括書き込みが失敗する）。
+- 条件の値は列の family の serializer を通る。`@column.text()` の列を `Date` やオブジェクトで絞り込んでいた
+  場合は、書き込みと同じく例外になる。
 - `castToJson` の戻り型は JSON 値全体（`unknown`）になった。`Record<string, unknown> | unknown[] | null`
   はスカラーを取りこぼしていた型。
 - pg / MySQL で json / jsonb ではない列（TEXT など）に `@column.json()` を付けていた場合、値は保存テキスト

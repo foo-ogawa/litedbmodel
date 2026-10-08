@@ -9,11 +9,12 @@ import { normalizeConditions, type ConditionObject } from './DBConditions';
 import { initDBHandler, getDBHandler, createHandlerWithConnection, DBHandler, type DBConfig, type DBConnection } from './DBHandler';
 import type { SelectOptions, InsertOptions, UpdateOptions, DeleteOptions, UpdateManyOptions, TransactionOptions, LimitConfig, DBConfigOptions, PkeyResult, InternalInsertOptions, InternalUpdateOptions, InternalDeleteOptions } from './types';
 import { LimitExceededError, WriteOutsideTransactionError, WriteInReadOnlyContextError } from './types';
-import { type Column, type OrderSpec, type CVs, type Conds, type CondsOf, type OrCondOf, type ColumnsOf, createColumn, columnsToNames, pairsToRecord, condsToRecord, orderToString, createOrCond } from './Column';
+import { type Column, type OrderSpec, type CVs, type Conds, type CondsOf, type OrCondOf, type ColumnsOf, createColumn, columnsToNames, pairsToRecord, condsToRecord, serializeCondValue, orderToString, createOrCond } from './Column';
 import { type SqlFragment, type SqlCondition, type SqlTypedFragment, isAnySqlFragment } from './SqlFragment';
 import { createMiddleware as createMiddlewareFn, type Middleware, type MiddlewareClass, type MiddlewareConfig, type CreatedMiddlewareClass, type ExecuteResult } from './Middleware';
 import { serializeRecord, getColumnMeta, getPrimaryKey, getSqlCastMap, type KeyPair, type CompositeKeyPairs } from './decorators';
 import { getTypeCast, getSqlBuilder } from './drivers';
+import type { DriverTypeCast } from './drivers/types';
 import { isConnectionError } from './connection-errors';
 
 // Import LazyRelation module (static import for Vitest compatibility)
@@ -466,6 +467,34 @@ export abstract class DBModel {
   }
 
   /**
+   * A subquery's `[column, value]` conditions, each literal value bound the way the column's family
+   * writes it (see {@link _getConditionTypeCast}); a correlation reference passes through.
+   * @internal
+   */
+  protected static _subqueryConditions(
+    conditions: ReadonlyArray<readonly [Column<any, any>, unknown]>
+  ): SubqueryCondition[] {
+    const typeCast = this._getConditionTypeCast();
+    return conditions.map(([col, value]) => ({
+      column: col,
+      value: value instanceof DBToken ? value : serializeCondValue(col, value, typeCast),
+    }));
+  }
+
+  /**
+   * The driver's type cast a condition value binds with — the one a create / update serializes with.
+   * Returns undefined if DBHandler is not initialized, like {@link _getSqlCastFormatter}.
+   * @internal
+   */
+  protected static _getConditionTypeCast(): DriverTypeCast | undefined {
+    try {
+      return getTypeCast(this.getDriverType());
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
    * Get a DBHandler instance for this model.
    * Connection priority:
    * 1. Transaction connection (if in transaction)
@@ -757,7 +786,7 @@ export abstract class DBModel {
 
     const normalizedCond = normalizeConditions(conditions);
     if (this.FIND_FILTER) {
-      const filterCondition = condsToRecord(this.FIND_FILTER) as ConditionObject;
+      const filterCondition = condsToRecord(this.FIND_FILTER, this._getConditionTypeCast()) as ConditionObject;
       normalizedCond.add(filterCondition);
     }
 
@@ -933,7 +962,7 @@ export abstract class DBModel {
   /** Merge FIND_FILTER (the model's default filter) into a condition object (v1 `_buildSelectSQL` parity). */
   protected static _mergeFindFilter(conditions: ConditionObject): ConditionObject {
     if (!this.FIND_FILTER) return conditions;
-    const filter = condsToRecord(this.FIND_FILTER) as ConditionObject;
+    const filter = condsToRecord(this.FIND_FILTER, this._getConditionTypeCast()) as ConditionObject;
     return { ...conditions, ...filter };
   }
 
@@ -1039,7 +1068,7 @@ export abstract class DBModel {
 
     const normalizedCond = normalizeConditions(conditions);
     if (this.FIND_FILTER) {
-      const filterCondition = condsToRecord(this.FIND_FILTER) as ConditionObject;
+      const filterCondition = condsToRecord(this.FIND_FILTER, this._getConditionTypeCast()) as ConditionObject;
       normalizedCond.add(filterCondition);
     }
 
@@ -1508,10 +1537,7 @@ export abstract class DBModel {
     // Get target table name from selectColumns (they all have same tableName)
     const targetTableName = selectColumns[0]?.tableName ?? '';
     // Column already has tableName, pass directly
-    const subqueryConditions: SubqueryCondition[] = conditions.map(([col, value]) => ({
-      column: col,
-      value,
-    }));
+    const subqueryConditions = this._subqueryConditions(conditions);
     return ['__subquery__', new DBSubquery(parentColumns, targetTableName, selectColumns, subqueryConditions, 'IN')] as const;
   }
 
@@ -1556,10 +1582,7 @@ export abstract class DBModel {
     // Get target table name from selectColumns (they all have same tableName)
     const targetTableName = selectColumns[0]?.tableName ?? '';
     // Column already has tableName, pass directly
-    const subqueryConditions: SubqueryCondition[] = conditions.map(([col, value]) => ({
-      column: col,
-      value,
-    }));
+    const subqueryConditions = this._subqueryConditions(conditions);
     return ['__subquery__', new DBSubquery(parentColumns, targetTableName, selectColumns, subqueryConditions, 'NOT IN')] as const;
   }
 
@@ -1592,10 +1615,7 @@ export abstract class DBModel {
     // Get target table name from conditions (they all have same tableName)
     const targetTableName = conditions[0]?.[0]?.tableName ?? '';
     // Column already has tableName, pass directly
-    const subqueryConditions: SubqueryCondition[] = conditions.map(([col, value]) => ({
-      column: col,
-      value,
-    }));
+    const subqueryConditions = this._subqueryConditions(conditions);
     return ['__exists__', new DBExists(targetTableName, subqueryConditions, false)] as const;
   }
 
@@ -1627,10 +1647,7 @@ export abstract class DBModel {
     // Get target table name from conditions (they all have same tableName)
     const targetTableName = conditions[0]?.[0]?.tableName ?? '';
     // Column already has tableName, pass directly
-    const subqueryConditions: SubqueryCondition[] = conditions.map(([col, value]) => ({
-      column: col,
-      value,
-    }));
+    const subqueryConditions = this._subqueryConditions(conditions);
     return ['__exists__', new DBExists(targetTableName, subqueryConditions, true)] as const;
   }
 
@@ -1929,7 +1946,7 @@ export abstract class DBModel {
       sourceKeys: string[];
       targetKeys: string[];
       order: string | null;
-      conditions?: Record<string, unknown>;
+      where?: Conds;
       limit?: number;
       hardLimit?: number | null;
       relationName?: string;
@@ -1944,7 +1961,9 @@ export abstract class DBModel {
     // Build RelationConfig
     const relationConfig: RelationConfig = {
       targetClass: TargetClass,
-      conditions: config.conditions as ConditionObject | undefined,
+      conditions: config.where
+        ? (condsToRecord(config.where, TargetClass._getConditionTypeCast()) as ConditionObject)
+        : undefined,
       order: config.order,
       limit: config.limit,
       hardLimit: config.hardLimit,
@@ -2317,7 +2336,7 @@ export abstract class DBModel {
     options?: SelectOptions
   ): Promise<InstanceType<T>[]> {
     const core = async (conds: Conds, opts?: SelectOptions): Promise<InstanceType<T>[]> => {
-      const conditionRecord = condsToRecord(conds) as ConditionObject;
+      const conditionRecord = condsToRecord(conds, this._getConditionTypeCast()) as ConditionObject;
       
       // Apply hardLimit + 1 to detect overflow without fetching all records
       const hardLimit = DBModel._limitConfig.findHardLimit;
@@ -2363,7 +2382,7 @@ export abstract class DBModel {
     options?: SelectOptions
   ): Promise<InstanceType<T> | null> {
     const core = async (conds: Conds, opts?: SelectOptions): Promise<InstanceType<T> | null> => {
-      const conditionRecord = condsToRecord(conds) as ConditionObject;
+      const conditionRecord = condsToRecord(conds, this._getConditionTypeCast()) as ConditionObject;
       const results = await this._select(conditionRecord, { ...opts, limit: 1 });
       return results.length > 0 ? results[0] : null;
     };
@@ -2466,7 +2485,7 @@ export abstract class DBModel {
     conditions: CondsOf<T>
   ): Promise<number> {
     const core = async (conds: Conds): Promise<number> => {
-      const conditionRecord = condsToRecord(conds) as ConditionObject;
+      const conditionRecord = condsToRecord(conds, this._getConditionTypeCast()) as ConditionObject;
       return this._count(conditionRecord);
     };
     return this._applyMiddleware('count', core, [conditions]);
@@ -2650,7 +2669,7 @@ export abstract class DBModel {
       vals: readonly (readonly [Column<any, any>, any])[],
       opts?: UpdateOptions
     ): Promise<PkeyResult | null> => {
-      const conditionRecord = condsToRecord(conds) as ConditionObject;
+      const conditionRecord = condsToRecord(conds, this._getConditionTypeCast()) as ConditionObject;
       const valueRecord = pairsToRecord(vals);
       
       if (!opts?.returning) {
@@ -2721,7 +2740,7 @@ export abstract class DBModel {
     options?: DeleteOptions
   ): Promise<PkeyResult | null> {
     const core = async (conds: Conds, opts?: DeleteOptions): Promise<PkeyResult | null> => {
-      const conditionRecord = condsToRecord(conds) as ConditionObject;
+      const conditionRecord = condsToRecord(conds, this._getConditionTypeCast()) as ConditionObject;
       
       if (!opts?.returning) {
         // No RETURNING - just delete

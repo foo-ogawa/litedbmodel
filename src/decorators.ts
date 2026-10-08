@@ -9,7 +9,7 @@
  */
 
 import 'reflect-metadata';
-import { type Column, type OrderSpec, createColumn, orderToString, type Conds, condsToRecord } from './Column';
+import { type Column, type OrderSpec, createColumn, orderToString, type Conds } from './Column';
 import type { DriverTypeCast } from './drivers/types';
 import {
   castToIntegerArray,
@@ -416,6 +416,21 @@ function rejectNonText(family: string, val: unknown): unknown {
 }
 
 /**
+ * Read a column whose family declares `string`. Most drivers already hand back a string, but SQLite is
+ * dynamically typed: it returns a JS number for a `NUMERIC`/`DECIMAL` column whatever the declaration
+ * says, and the declared type would be a lie on that dialect alone.
+ */
+function materializeString(family: string, v: unknown): string | null | undefined {
+  if (v === undefined || v === null) return v;
+  if (typeof v === 'string') return v;
+  if (typeof v === 'number' || typeof v === 'bigint' || typeof v === 'boolean') return String(v);
+  throw new Error(
+    `materialize ${family}: driver returned ${typeof v} for a ${family} column. Use @column.passthrough() ` +
+      'for a BYTEA/BLOB column, or @column.json<T>() for JSON.',
+  );
+}
+
+/**
  * Build one `@column.*` family decorator. The returned decorator accepts BOTH protocols: legacy hands
  * it `(prototype, propertyKey)`, TC39 standard hands it `(undefined, context)`. Everything that
  * describes the COLUMN (cast, serializer, SQL family) is fixed here by the family itself — nothing is
@@ -461,7 +476,7 @@ function createColumnDecorator<Value = unknown>(
 function requireColumnFamily(): never {
   throw new Error(
     'litedbmodel: `@column()` no longer declares a column — a column must state its type with a ' +
-      'family: @column.text() / .number() / .boolean() / .bigint() / .datetime() / .date() / .uuid() / ' +
+      'family: @column.text() / .decimal() / .number() / .boolean() / .bigint() / .datetime() / .date() / .uuid() / ' +
       '.json() / .stringArray() / .intArray() / .numericArray() / .booleanArray() / .datetimeArray() / ' +
       '.passthrough() / .custom(). Every family takes the same argument as `@column()` did ' +
       "(`@column.text('db_name')`, `@column.number({ primaryKey: true })`). The bare form inferred the " +
@@ -559,6 +574,7 @@ function serializeJson(val: unknown, typeCast?: DriverTypeCast): unknown {
  * @column.number({ primaryKey: true, autoIncrement: true }) id?: number;
  * @column.text() name?: string;                // TEXT / VARCHAR / CHAR / ENUM — no cast needed
  * @column.text('custom_name') prop?: string;   // custom column name
+ * @column.decimal() price?: string;           // NUMERIC / DECIMAL — exact decimal string
  * @column.boolean() is_active?: boolean;
  * @column.datetime() created_at?: string;      // TZ-attached string, NOT a JS Date
  * @column.date() birth_date?: string;          // 'YYYY-MM-DD'
@@ -595,21 +611,23 @@ export const column = Object.assign(
      */
     text: (columnNameOrOptions?: string | ColumnOptions) =>
       createColumnDecorator<string | null | undefined>(
-        // The family DECLARES `string`, so it must hand back one. Most drivers already do, but SQLite
-        // is dynamically typed: it returns a JS number for a `NUMERIC`/`DECIMAL` column whatever the
-        // declaration says, and the declared type would be a lie on that dialect alone.
-        (v) => {
-          if (v === undefined || v === null) return v;
-          if (typeof v === 'string') return v;
-          if (typeof v === 'number' || typeof v === 'bigint' || typeof v === 'boolean') return String(v);
-          throw new Error(
-            `materialize text: driver returned ${typeof v} for a text column. Use @column.passthrough() ` +
-              'for a BYTEA/BLOB column, or @column.json<T>() for JSON.',
-          );
-        },
+        (v) => materializeString('text', v),  // the family DECLARES `string`, so it hands back one
         (val) => rejectNonText('text', val),  // …and it cannot SERIALIZE a Date or an object
         undefined,                            // no sqlCast family (a text literal needs no SQL cast)
         'TEXT'                                // §4.1 token: types the SCP typed read
+      )(columnNameOrOptions),
+
+    /**
+     * Exact decimal type (NUMERIC / DECIMAL) — read back as its exact decimal STRING (a JS number
+     * rounds past 2^53). The family states the column is `numeric`, so a write binds the string as a
+     * numeric — a batch write (`createMany` / `updateMany`) included.
+     * @example @column.decimal() price?: string;
+     */
+    decimal: (columnNameOrOptions?: string | ColumnOptions) =>
+      createColumnDecorator<string | null | undefined>(
+        (v) => materializeString('decimal', v),
+        (val) => rejectNonText('decimal', val),
+        'numeric'   // sqlCast for WHERE / INSERT / batch-write type casting
       )(columnNameOrOptions),
 
     /**
@@ -1326,7 +1344,7 @@ function applyModelDecorator<T extends { new (...args: unknown[]): object }>(
   const effectiveTableName = tableName ?? modelName.toLowerCase();
   for (const [propKey, meta] of columns) {
     Object.defineProperty(constructor, propKey, {
-      value: createColumn(meta.columnName, effectiveTableName, modelName, propKey, meta.sqlCast),
+      value: createColumn(meta.columnName, effectiveTableName, modelName, propKey, meta.sqlCast, meta.serialize),
       writable: false,
       enumerable: true,
       configurable: false,
@@ -1392,14 +1410,13 @@ function applyModelDecorator<T extends { new (...args: unknown[]): object }>(
 
         // Build relation config
         const order = options?.order ? orderToString(options.order()) : null;
-        const conditions = options?.where ? condsToRecord(options.where()) : undefined;
 
         // Call internal relation method
         return this._loadRelation(type, targetModelName, {
           sourceKeys,
           targetKeys,
           order,
-          conditions,
+          where: options?.where?.(),
           limit: options?.limit,
           hardLimit: options?.hardLimit,
           relationName: propertyKey,
