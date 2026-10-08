@@ -12,6 +12,7 @@ import type {
   FindByPkeysOptions,
   SqlBuildResult,
 } from './types';
+import { castToJson } from './PostgresHelper';
 import { DBToken } from '../DBValues';
 import { formatUTCDate } from '../TypeCast';
 
@@ -59,17 +60,7 @@ export const postgresTypeCast: DriverTypeCast = {
   },
 
   deserializeJson<T>(val: unknown): T | null {
-    if (val === null || val === undefined) return null;
-    // PostgreSQL driver returns parsed JSON
-    if (typeof val === 'object') return val as T;
-    if (typeof val === 'string') {
-      try {
-        return JSON.parse(val) as T;
-      } catch {
-        return null;
-      }
-    }
-    return null;
+    return castToJson(val) as T | null;
   },
 
   serializeBooleanArray(val: (boolean | null)[]): string | null {

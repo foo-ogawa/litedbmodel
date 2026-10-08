@@ -107,16 +107,16 @@ export function castToStringArray(val: unknown): string[] {
 }
 
 /**
- * Cast a JSON string to object or array
+ * A JSON column's value. SQLite has no JSON type: the value arrives as its stored JSON text and is
+ * decoded here, once. A column declared `JSON` has NUMERIC affinity, so a JSON number is stored and
+ * read back as a number.
  */
-export function castToJson(
-  val: unknown
-): Record<string, unknown> | unknown[] | null {
+export function castToJson(val: unknown): unknown {
   if (val === null || val === undefined) {
     return null;
   }
-  if (typeof val === 'object') {
-    return val as Record<string, unknown> | unknown[];
+  if (typeof val === 'object' || typeof val === 'number') {
+    return val;
   }
   if (typeof val === 'string') {
     try {
