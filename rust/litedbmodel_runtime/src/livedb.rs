@@ -14,7 +14,7 @@
 //! ## Why the sync [`Driver`] facade over an async pool
 //!
 //! The runtime's [`Driver`] trait is a synchronous facade (`prepare(sql).all()/.run()`). Each live
-//! driver owns a shared multi-thread tokio [`Runtime`] and `block_on`s the pooled future. Because a
+//! driver owns a current-thread tokio [`Runtime`] and `block_on`s the pooled future. Because a
 //! pool is `Clone`-cheap and internally synchronized, the driver is `Send + Sync`: DISTINCT threads
 //! calling `all()` concurrently each check out a DISTINCT pooled connection, so the plan's
 //! `concurrency` (default 16) becomes REAL parallel DB I/O when the executor dispatches independent
@@ -39,11 +39,16 @@ use behavior_contracts::Value;
 use deadpool_postgres::{Config as PgConfig, Pool as PgPool, Runtime as PgRuntime};
 use sqlx::mysql::{MySqlPoolOptions, MySqlRow};
 use sqlx::{Column, MySqlPool, Row, TypeInfo, ValueRef as SqlxValueRef};
+use std::sync::Arc;
+use std::time::Duration;
 use tokio::runtime::Runtime;
 use tokio_postgres::types::{ToSql, Type as PgType};
 use tokio_postgres::NoTls;
 
-use crate::connection_routing::{ConfigDialect, ResolvedConnectionConfig};
+use crate::connection_routing::{
+    ConfigDialect, ResolvedConnectionConfig, DEFAULT_CONNECT_TIMEOUT_MILLIS,
+    DEFAULT_IDLE_TIMEOUT_MILLIS,
+};
 use crate::driver::{Driver, PreparedStatement, RunInfo};
 use crate::errors::SqlFailure;
 use crate::exec_context::{SessionConnection, TxConnection};
@@ -76,38 +81,78 @@ fn pg_err(context: &str, e: &tokio_postgres::Error) -> SqlFailure {
 /// relations can each hold a live connection without starving.
 pub const DEFAULT_POOL_SIZE: usize = 16;
 
-/// The acquire budget, in seconds. 30 is this codebase's established cross-language default, settled
-/// in #225: the v1 pg/mysql drivers' `config.timeout || 30`, python's
-/// `DEFAULT_ACQUIRE_TIMEOUT_SECONDS = 30.0`, and the pool libraries the other legs inherit it from.
-/// `sqlx`'s own default is the same 30s, so naming it here changes no behaviour — it makes the shared
-/// value VISIBLE instead of arriving by coincidence, and gives it one place to be read from.
-pub const DEFAULT_ACQUIRE_TIMEOUT_SECONDS: u64 = 30;
+/// The acquire budget of the conn-string / URL constructors ([`PostgresDriver::connect`],
+/// [`MysqlDriver::connect`]), in seconds: the `connect_timeout_millis` default of the connection
+/// config, which is the v1 pg/mysql drivers' `config.timeout || 30`. A pool built from a
+/// [`ResolvedConnectionConfig`] takes its budget from that config instead.
+pub const DEFAULT_ACQUIRE_TIMEOUT_SECONDS: u64 = DEFAULT_CONNECT_TIMEOUT_MILLIS / 1000;
 
 /// The env var that overrides [`DEFAULT_ACQUIRE_TIMEOUT_SECONDS`] — the run gate's channel, and the
 /// only one it has (phase 2 drives `cargo test`, so it cannot pass an argument).
 pub const ACQUIRE_TIMEOUT_ENV: &str = "LITEDBMODEL_ACQUIRE_TIMEOUT_SECS";
 
-/// How long an acquire may take before it fails.
+/// How long an acquire of the conn-string / URL constructors may take before it fails.
 ///
 /// Production keeps the full 30s budget: `sqlx`'s `connect()` RETRIES a connection error until this
 /// expires, which is what absorbs a database restart, so shortening it in production would trade that
-/// away and break the parity #225 established across the five runtimes.
+/// away.
 ///
 /// The run gate's phase 2 is the one caller that wants it short. It points every leg at a port that
 /// REFUSES every connection (`127.0.0.1:1`) to prove a test really dials a server — and against a hard
-/// refusal the retry loop is pure waiting, ~30s per MySQL-touching suite, ~90s of the gate's ~165s
-/// (#255). Postgres is unaffected: `deadpool`/`tokio-postgres` surfaces the refusal in ~1.5s rather than
-/// retrying, so it needs no knob and does not get one.
+/// refusal the MySQL retry loop is pure waiting, ~30s per MySQL-touching suite. Postgres surfaces the
+/// refusal in ~1.5s rather than retrying, so the override changes little there.
 ///
 /// An unparseable or zero value falls back to the default rather than being honoured — a typo in the
 /// override must not silently install a 0s budget that fails every acquire on a live database.
-fn acquire_timeout() -> std::time::Duration {
+fn acquire_timeout() -> Duration {
     let secs = std::env::var(ACQUIRE_TIMEOUT_ENV)
         .ok()
         .and_then(|v| v.trim().parse::<u64>().ok())
         .filter(|s| *s > 0)
         .unwrap_or(DEFAULT_ACQUIRE_TIMEOUT_SECONDS);
-    std::time::Duration::from_secs(secs)
+    Duration::from_secs(secs)
+}
+
+/// `connect_timeout_millis` as a bound on getting a connection: `0` is no limit.
+fn connect_bound(millis: u64) -> Option<Duration> {
+    (millis > 0).then(|| Duration::from_millis(millis))
+}
+
+/// What "no limit" is passed to `sqlx` as. Its acquire has no unbounded form — it adds the timeout to
+/// `Instant::now()` (`sqlx-core` `pool/inner.rs`, `pool/options.rs`), so `Duration::MAX` would overflow —
+/// and a hundred years is the stand-in.
+const SQLX_NO_LIMIT: Duration = Duration::from_secs(100 * 365 * 24 * 60 * 60);
+
+/// How long a sweep of the [`IdleReaper`] runs the driver's runtime.
+const REAPER_SLICE: Duration = Duration::from_millis(10);
+
+/// Closes a pool's connections once they have gone unused for `idle`, on a thread of its own.
+///
+/// The drivers' runtime is current-thread: it only runs while some caller is inside `block_on`. In a
+/// quiet application nothing drives it, so neither a pool's maintenance nor a connection's task would
+/// run and an idle connection would stay open on the server until the next query. This thread wakes
+/// every `idle` and runs `sweep`, which closes what has been idle for `idle` and drives the runtime for
+/// [`REAPER_SLICE`] so the closes complete — an idle connection is closed between `idle` and `2 × idle`
+/// after its last use. The thread stops when the reaper (the driver that owns it) is dropped.
+struct IdleReaper {
+    _stop: std::sync::mpsc::Sender<()>,
+}
+
+impl IdleReaper {
+    fn spawn(idle: Duration, sweep: impl Fn() + Send + 'static) -> Result<Self, SqlFailure> {
+        let (stop, stopped) = std::sync::mpsc::channel::<()>();
+        std::thread::Builder::new()
+            .name("litedbmodel-idle-reaper".into())
+            .spawn(move || {
+                while let Err(std::sync::mpsc::RecvTimeoutError::Timeout) =
+                    stopped.recv_timeout(idle)
+                {
+                    sweep();
+                }
+            })
+            .map_err(|e| driver_failure(format!("idle reaper thread: {e}")))?;
+        Ok(IdleReaper { _stop: stop })
+    }
 }
 
 // ── Postgres (tokio-postgres + deadpool-postgres) ──────────────────────────────
@@ -117,8 +162,9 @@ fn acquire_timeout() -> std::time::Duration {
 /// connection for the BEGIN…COMMIT span via [`Driver::begin_tx`] (per-execution ownership §3 — no
 /// driver-global writer slot).
 pub struct PostgresDriver {
-    rt: Runtime,
+    rt: Arc<Runtime>,
     pool: PgPool,
+    _idle_reaper: IdleReaper,
 }
 
 impl PostgresDriver {
@@ -152,13 +198,51 @@ impl PostgresDriver {
             .map(|p| String::from_utf8_lossy(p).into_owned());
         cfg.dbname = pg_conf.get_dbname().map(str::to_string);
         cfg.options = pg_conf.get_options().map(str::to_string);
-        cfg.pool = Some(deadpool_postgres::PoolConfig::new(DEFAULT_POOL_SIZE));
+        Self::assemble(
+            rt,
+            cfg,
+            DEFAULT_POOL_SIZE,
+            Some(acquire_timeout()),
+            Duration::from_millis(DEFAULT_IDLE_TIMEOUT_MILLIS),
+        )
+    }
 
+    /// Build the pool both constructors share: `max` connections; getting one — waiting for a free
+    /// slot, and opening a new connection — bounded by `connect_timeout` each (`None` ⇒ no limit); and an [`IdleReaper`]
+    /// closing connections unused for `idle`. `deadpool` has no idle timeout of its own, so the sweep
+    /// `retain`s only the connections whose `last_used` (deadpool's time since the connection was last
+    /// CHECKED OUT) is under `idle` — a connection held longer than `idle` is therefore closed at the
+    /// first sweep after it is returned.
+    fn assemble(
+        rt: Runtime,
+        mut cfg: PgConfig,
+        max: usize,
+        connect_timeout: Option<Duration>,
+        idle: Duration,
+    ) -> Result<Self, SqlFailure> {
+        let mut pool_cfg = deadpool_postgres::PoolConfig::new(max);
+        pool_cfg.timeouts.wait = connect_timeout;
+        pool_cfg.timeouts.create = connect_timeout;
+        cfg.pool = Some(pool_cfg);
         let pool = cfg
             .create_pool(Some(PgRuntime::Tokio1), NoTls)
             .map_err(|e| driver_failure(format!("postgres pool: {e}")))?;
-
-        Ok(PostgresDriver { rt, pool })
+        let rt = Arc::new(rt);
+        let idle_reaper = {
+            let (rt, pool) = (rt.clone(), pool.clone());
+            IdleReaper::spawn(idle, move || {
+                rt.block_on(async {
+                    drop(pool.retain(|_, metrics| metrics.last_used() < idle));
+                    // The dropped clients' connection tasks close their sockets when next polled.
+                    tokio::time::sleep(REAPER_SLICE).await;
+                })
+            })?
+        };
+        Ok(PostgresDriver {
+            rt,
+            pool,
+            _idle_reaper: idle_reaper,
+        })
     }
 
     /// Connect from a resolved Phase C [`ResolvedConnectionConfig`] — the [`PoolFactory`] path (#88):
@@ -200,12 +284,13 @@ impl PostgresDriver {
             ));
         }
         // SIZING (construction knob): max_pool is the SOLE cap. min_pool has no deadpool equivalent.
-        cfg.pool = Some(deadpool_postgres::PoolConfig::new(config.max_pool as usize));
-
-        let pool = cfg
-            .create_pool(Some(PgRuntime::Tokio1), NoTls)
-            .map_err(|e| driver_failure(format!("postgres pool: {e}")))?;
-        Ok(PostgresDriver { rt, pool })
+        Self::assemble(
+            rt,
+            cfg,
+            config.max_pool as usize,
+            connect_bound(config.connect_timeout_millis),
+            Duration::from_millis(config.idle_timeout_millis),
+        )
     }
 
     pub fn exec_ddl(&self, statements: &[String]) -> Result<(), SqlFailure> {
@@ -823,8 +908,9 @@ impl PreparedStatement for PgPrepared<'_> {
 /// sqlx already caches prepared statements per connection (see the module note above) — no additional
 /// statement cache is layered here.
 pub struct MysqlDriver {
-    rt: Runtime,
+    rt: Arc<Runtime>,
     pool: MySqlPool,
+    _idle_reaper: IdleReaper,
 }
 
 impl MysqlDriver {
@@ -836,15 +922,47 @@ impl MysqlDriver {
             .enable_all()
             .build()
             .map_err(|e| driver_failure(format!("mysql runtime: {e}")))?;
+        Self::assemble(
+            rt,
+            MySqlPoolOptions::new().max_connections(DEFAULT_POOL_SIZE as u32),
+            url,
+            Some(acquire_timeout()),
+            Duration::from_millis(DEFAULT_IDLE_TIMEOUT_MILLIS),
+        )
+    }
+
+    /// Build the pool both constructors share: getting a connection — waiting for a free one, and
+    /// opening a new one — bounded by `connect_timeout` (`sqlx`'s `acquire_timeout` covers both;
+    /// `None` ⇒ [`SQLX_NO_LIMIT`]), and
+    /// connections unused for `idle` closed by `sqlx`'s own `idle_timeout` reaper task, which the
+    /// [`IdleReaper`] gives the runtime to run on.
+    fn assemble(
+        rt: Runtime,
+        options: MySqlPoolOptions,
+        url: &str,
+        connect_timeout: Option<Duration>,
+        idle: Duration,
+    ) -> Result<Self, SqlFailure> {
         let pool = rt.block_on(async {
-            MySqlPoolOptions::new()
-                .max_connections(DEFAULT_POOL_SIZE as u32)
-                .acquire_timeout(acquire_timeout())
+            options
+                .acquire_timeout(connect_timeout.unwrap_or(SQLX_NO_LIMIT))
+                .idle_timeout(Some(idle))
                 .connect(url)
                 .await
                 .map_err(|e| driver_failure(format!("mysql connect: {e}")))
         })?;
-        Ok(MysqlDriver { rt, pool })
+        let rt = Arc::new(rt);
+        let idle_reaper = {
+            let rt = rt.clone();
+            IdleReaper::spawn(idle, move || {
+                rt.block_on(async { tokio::time::sleep(REAPER_SLICE).await })
+            })?
+        };
+        Ok(MysqlDriver {
+            rt,
+            pool,
+            _idle_reaper: idle_reaper,
+        })
     }
 
     /// Connect from a resolved Phase C [`ResolvedConnectionConfig`] — the [`PoolFactory`] path (#88):
@@ -883,16 +1001,15 @@ impl MysqlDriver {
         let url = format!("mysql://{user}:{password}@{host}:{port}/{database}");
         let min = config.min_pool;
         let max = config.max_pool.max(1); // sqlx requires max >= 1
-        let pool = rt.block_on(async {
+        Self::assemble(
+            rt,
             MySqlPoolOptions::new()
                 .min_connections(min)
-                .max_connections(max)
-                .acquire_timeout(acquire_timeout())
-                .connect(&url)
-                .await
-                .map_err(|e| driver_failure(format!("mysql connect: {e}")))
-        })?;
-        Ok(MysqlDriver { rt, pool })
+                .max_connections(max),
+            &url,
+            connect_bound(config.connect_timeout_millis),
+            Duration::from_millis(config.idle_timeout_millis),
+        )
     }
 
     pub fn exec_ddl(&self, statements: &[String]) -> Result<(), SqlFailure> {

@@ -26,7 +26,8 @@
 //!      ([`assert_tx_db_agrees`]) (Phase A, resolved in [`ExecutionContext`](crate::exec_context) BEFORE
 //!      this module, since only the ctx holds the tx pin).
 //!   2. **writer scope / writer-sticky** — inside [`with_writer`](crate::exec_context) or within
-//!      `writer_sticky_duration` after a committed tx, a READ goes to the WRITER pool (read-your-writes).
+//!      `writer_sticky_duration` after a tx the same thread committed, a READ goes to the WRITER pool
+//!      (read-your-writes).
 //!   3. **read = reader / write = writer** — otherwise a read → reader pool, a write → writer pool
 //!      (single-pool config ⇒ reader === writer).
 //!   4. **named-DB routing** — the pair is selected FIRST by `intent.db` (the connection NAME the
@@ -42,7 +43,7 @@
 //! that one driver, and the writer-sticky clock only ever diverts to a pool that is the SAME `Arc` —
 //! so nothing observable changes.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use crate::driver::Driver;
@@ -59,6 +60,13 @@ pub enum ConfigDialect {
     Mysql,
     Sqlite,
 }
+
+/// The default bound on getting a connection ([`ConnectionConfig::connect_timeout_millis`]): the v1
+/// pg/mysql drivers' `config.timeout || 30` seconds.
+pub(crate) const DEFAULT_CONNECT_TIMEOUT_MILLIS: u64 = 30_000;
+
+/// The default time an unused pooled connection stays open ([`ConnectionConfig::idle_timeout_millis`]).
+pub(crate) const DEFAULT_IDLE_TIMEOUT_MILLIS: u64 = 10_000;
 
 /// Per-connection database config (C3) — the knobs a pool is BUILT with. Mirrors the TS
 /// [`ConnectionConfig`] (`connection-routing.ts`) field-for-field: connection target + pool sizing +
@@ -92,6 +100,11 @@ pub struct ConnectionConfig {
     pub min_pool: Option<u32>,
     /// Maximum pooled connections. Default 10.
     pub max_pool: Option<u32>,
+    /// Upper bound in MILLISECONDS on getting a connection: opening a new one, and waiting for a free
+    /// one when the pool is at `max_pool`. `0` ⇒ no limit. Default 30000.
+    pub connect_timeout_millis: Option<u64>,
+    /// MILLISECONDS an unused pooled connection stays open before it is closed. Default 10000.
+    pub idle_timeout_millis: Option<u64>,
     /// PG `search_path` set on each pooled connection at checkout (schema routing).
     pub search_path: Option<String>,
     /// MySQL connection charset / PG `client_encoding` set on each pooled connection.
@@ -100,7 +113,8 @@ pub struct ConnectionConfig {
 
 impl ConnectionConfig {
     /// Apply the C3 defaults (query_timeout=0, keep_alive=false, min_pool=0, max_pool=10,
-    /// keep_alive_initial_delay_millis=10000). Mirrors the TS `resolveConnectionConfig`.
+    /// keep_alive_initial_delay_millis=10000, connect_timeout_millis=30000, idle_timeout_millis=10000).
+    /// Mirrors the TS `resolveConnectionConfig`.
     pub fn resolve(&self) -> ResolvedConnectionConfig {
         ResolvedConnectionConfig {
             driver: self.driver.unwrap_or(ConfigDialect::Postgres),
@@ -114,6 +128,12 @@ impl ConnectionConfig {
             keep_alive_initial_delay_millis: self.keep_alive_initial_delay_millis.unwrap_or(10_000),
             min_pool: self.min_pool.unwrap_or(0),
             max_pool: self.max_pool.unwrap_or(10),
+            connect_timeout_millis: self
+                .connect_timeout_millis
+                .unwrap_or(DEFAULT_CONNECT_TIMEOUT_MILLIS),
+            idle_timeout_millis: self
+                .idle_timeout_millis
+                .unwrap_or(DEFAULT_IDLE_TIMEOUT_MILLIS),
             search_path: self.search_path.clone(),
             charset: self.charset.clone(),
         }
@@ -135,6 +155,8 @@ pub struct ResolvedConnectionConfig {
     pub keep_alive_initial_delay_millis: u64,
     pub min_pool: u32,
     pub max_pool: u32,
+    pub connect_timeout_millis: u64,
+    pub idle_timeout_millis: u64,
     pub search_path: Option<String>,
     pub charset: Option<String>,
 }
@@ -480,21 +502,37 @@ impl Clock for ManualClock {
     }
 }
 
-/// A writer-sticky CLOCK (C1, read-your-writes; mirror v1 `_shouldUseWriterSticky` + the TS
-/// [`WriterStickyClock`]). After a transaction (or a bare write) COMMITs, reads within
-/// `sticky_duration_ms` route to the WRITER pool so a just-committed row is visible despite reader-
-/// replica lag. The ctx owns ONE clock; the tx runtime `.mark()`s it on every successful write/commit;
-/// [`resolve_pool`] reads `.is_sticky()`.
+/// The source of each [`WriterStickyClock`]'s key in [`LAST_WRITE_AT`]: unique per instance, never
+/// reused, so one clock never reads another clock's stamp.
+static NEXT_STICKY_CLOCK_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+thread_local! {
+    /// The CURRENT thread's last commit time, per [`WriterStickyClock`] (keyed by its id). A key is
+    /// absent until that thread's first `mark()` on that clock — absence, NOT a value sentinel:
+    /// `now_ms()` legitimately returns 0 (`SystemClock` does right after process start), so encoding
+    /// "never marked" as the value 0 would mis-classify a `mark()` at clock t=0 as unmarked and leak the
+    /// read-your-writes read to the reader replica.
+    static LAST_WRITE_AT: std::cell::RefCell<HashMap<u64, u64>> = std::cell::RefCell::new(HashMap::new());
+}
+
+/// A writer-sticky CLOCK (C1, read-your-writes; mirror the TS [`WriterStickyClock`]). After a
+/// transaction COMMITs, the reads of the execution chain that committed route to the WRITER pool for
+/// `sticky_duration_ms`, so the just-committed row is visible despite reader-replica lag. Other chains —
+/// concurrent requests on other threads — keep reading from the reader: they did not write, so they
+/// have no lag to hide.
+///
+/// The chain is the current thread (the [`Driver`] is a sync facade and the ambient ctx is
+/// thread-local, so a transaction and its caller's later reads run on one thread). The clock is per
+/// routing config (per connection setup); the time it holds is per thread, in [`LAST_WRITE_AT`] under
+/// this clock's `id`. The tx runtime `.mark()`s it on a successful commit; [`resolve_pool`] reads
+/// `.is_sticky()`.
 ///
 /// `use_writer_after_transaction=false` disables it entirely (`.is_sticky()` always false). A
 /// single-pool deployment (reader === writer) is unaffected by stickiness — the diverted pool is the
-/// SAME `Arc`. Interior-mutable (`Mutex`) so the shared ctx (`&self`) can `mark()` it.
+/// SAME `Arc`.
 pub struct WriterStickyClock {
-    /// `None` until the first `mark()` — absence, NOT a value sentinel. `now_ms()` legitimately returns
-    /// 0 — `SystemClock` (`Instant::elapsed`) does right after process start — so encoding "never
-    /// marked" as the value 0 would mis-classify a `mark()` at clock t=0 as unmarked and leak the
-    /// read-your-writes read to the reader replica. Absence must be distinct from the value 0.
-    last_write_at: std::sync::Mutex<Option<u64>>,
+    /// This clock's key in the per-thread [`LAST_WRITE_AT`] map.
+    id: u64,
     enabled: bool,
     sticky_duration_ms: u64,
     clock: Arc<dyn Clock>,
@@ -524,7 +562,7 @@ impl WriterStickyClock {
     /// Build from [`StickyOptions`] (mirror the TS `new WriterStickyClock(opts)`).
     pub fn new(opts: StickyOptions) -> Self {
         WriterStickyClock {
-            last_write_at: std::sync::Mutex::new(None),
+            id: NEXT_STICKY_CLOCK_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             enabled: opts.use_writer_after_transaction,
             sticky_duration_ms: opts.writer_sticky_duration,
             clock: opts.clock,
@@ -540,27 +578,24 @@ impl WriterStickyClock {
         })
     }
 
-    /// Record that a write/commit just happened (the tx runtime calls this on success).
+    /// Record that the current thread just committed (the tx runtime calls this on success).
     pub fn mark(&self) {
         if self.enabled {
-            *self.last_write_at.lock().unwrap() = Some(self.clock.now_ms());
+            let now = self.clock.now_ms();
+            LAST_WRITE_AT.with(|m| m.borrow_mut().insert(self.id, now));
         }
     }
 
-    /// Is a read currently sticky-to-writer (within `writer_sticky_duration` of the last write)?
+    /// Is a read on the current thread sticky-to-writer (within `writer_sticky_duration` of that
+    /// thread's last commit)?
     pub fn is_sticky(&self) -> bool {
         if !self.enabled {
             return false;
         }
-        let Some(last) = *self.last_write_at.lock().unwrap() else {
+        let Some(last) = LAST_WRITE_AT.with(|m| m.borrow().get(&self.id).copied()) else {
             return false;
         };
         self.clock.now_ms().saturating_sub(last) < self.sticky_duration_ms
-    }
-
-    /// Reset the clock (e.g. between tests / on close).
-    pub fn reset(&self) {
-        *self.last_write_at.lock().unwrap() = None;
     }
 }
 
@@ -596,7 +631,8 @@ impl RoutingConfig {
 ///
 ///   1. **named-DB** (`intent.db`) selects the [`ReaderWriterPools`] pair (loud on unknown name).
 ///   2. within that pair: a WRITE ⇒ the writer pool.
-///   3. a READ in a writer scope OR within writer-sticky ⇒ the writer pool (read-your-writes).
+///   3. a READ in a writer scope OR within the current thread's writer-sticky window ⇒ the writer
+///      pool (read-your-writes).
 ///   4. otherwise a READ ⇒ the reader pool.
 ///
 /// Single-pool (reader === writer) ⇒ every branch returns the SAME `Arc` (backward-compat). Returns a
@@ -938,6 +974,18 @@ mod tests {
         assert_eq!(a.min_pool, 0);
         assert_eq!(a.max_pool, 10);
         assert_eq!(a.keep_alive_initial_delay_millis, 10_000);
+        assert_eq!(a.connect_timeout_millis, 30_000);
+        assert_eq!(a.idle_timeout_millis, 10_000);
+        let b = ConnectionConfig {
+            connect_timeout_millis: Some(250),
+            idle_timeout_millis: Some(400),
+            ..Default::default()
+        }
+        .resolve();
+        assert_eq!(
+            (b.connect_timeout_millis, b.idle_timeout_millis),
+            (250, 400)
+        );
     }
 
     #[test]
@@ -1154,6 +1202,85 @@ mod tests {
             label_of(post, &cands),
             "writer",
             "a read right after a t=0 commit must route to the writer (read-your-writes)"
+        );
+    }
+
+    #[test]
+    fn writer_sticky_is_per_thread() {
+        // Two threads alive at the same time on ONE routing config: A commits (marks), B does not. A's
+        // reads go to the writer; B's reads — before AND after A's mark, while A is still in its window —
+        // stay on the reader. A second clock on another routing config is not armed by A's mark.
+        use std::sync::Barrier;
+        let clock = Arc::new(ManualClock::new(1_000_000));
+        let reader = stub("reader");
+        let writer = stub("writer");
+        let routing = RoutingConfig {
+            registry: ConnectionRegistry::from_default(ReaderWriterPools::split(
+                reader.clone(),
+                writer.clone(),
+            ))
+            .build()
+            .unwrap(),
+            sticky: WriterStickyClock::new(StickyOptions {
+                use_writer_after_transaction: true,
+                writer_sticky_duration: 5000,
+                clock: clock.clone(),
+            }),
+        };
+        let other = WriterStickyClock::new(StickyOptions {
+            use_writer_after_transaction: true,
+            writer_sticky_duration: 5000,
+            clock: clock.clone(),
+        });
+        let cands = [("reader", &reader), ("writer", &writer)];
+        let read = || {
+            label_of(
+                resolve_pool(&StatementIntent::read(), &routing, false).unwrap(),
+                &cands,
+            )
+        };
+        let b_first = Barrier::new(2);
+        let a_marked = Barrier::new(2);
+        let b_checked = Barrier::new(2);
+
+        let (a, b) = std::thread::scope(|s| {
+            let a = s.spawn(|| {
+                b_first.wait(); // B has read once, before this mark
+                routing.sticky.mark();
+                let after_mark = read();
+                let other_armed = other.is_sticky();
+                a_marked.wait();
+                b_checked.wait();
+                (after_mark, other_armed, read())
+            });
+            let b = s.spawn(|| {
+                let before = read();
+                b_first.wait();
+                a_marked.wait();
+                let after = read();
+                b_checked.wait();
+                (before, after)
+            });
+            (a.join().unwrap(), b.join().unwrap())
+        });
+
+        assert_eq!(
+            a.0, "writer",
+            "the committing thread reads its own write from the writer"
+        );
+        assert!(!a.1, "a mark on one clock does not arm another clock");
+        assert_eq!(
+            a.2, "writer",
+            "still within the window on the committing thread"
+        );
+        assert_eq!(
+            b,
+            ("reader", "reader"),
+            "a concurrent thread that did not commit stays on the reader"
+        );
+        assert!(
+            !routing.sticky.is_sticky(),
+            "the test thread never committed"
         );
     }
 

@@ -481,8 +481,9 @@ impl<'a, 't> ExecutionContext<'a, 't> {
         }
     }
 
-    /// Mark writer-stickiness on a committed write/tx (Phase C / #88 read-your-writes): subsequent
-    /// reads within `writer_sticky_duration` route to the writer pool. A no-op WITHOUT a routing config
+    /// Mark writer-stickiness on a committed write/tx (Phase C / #88 read-your-writes): this thread's
+    /// subsequent reads within `writer_sticky_duration` route to the writer pool; other threads keep
+    /// reading from the reader. A no-op WITHOUT a routing config
     /// (base ctx) or with sticky disabled (single-pool). The tx runtime calls this on a successful,
     /// non-rollback-only COMMIT.
     pub fn mark_sticky(&self) {

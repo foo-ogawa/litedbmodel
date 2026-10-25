@@ -480,6 +480,419 @@ fn c1_with_writer() {
 }
 
 // ════════════════════════════════════════════════════════════════════════════════
+// C1 — the same routing under REAL concurrent threads (PG + MySQL)
+// ════════════════════════════════════════════════════════════════════════════════
+
+/// One live server, as the concurrent legs need it: a driver, the SQL in its placeholder style, its
+/// server-side session id and sleep, and its tx dialect. Each concurrent leg runs on both.
+struct Live {
+    name: &'static str,
+    driver: fn() -> Arc<dyn Driver + Send + Sync>,
+    config: fn(u32) -> ConnectionConfig,
+    tx: TxDialect,
+    insert: String,
+    select_ids: String,
+    select_val: String,
+    session_id: &'static str,
+    /// How many server sessions have the id bound as the one parameter (0 once it is closed).
+    alive: &'static str,
+    sleep: &'static str,
+}
+
+fn pg_config(max_pool: u32) -> ConnectionConfig {
+    ConnectionConfig {
+        driver: Some(ConfigDialect::Postgres),
+        host: Some(env("TEST_DB_HOST", "localhost")),
+        port: Some(env("TEST_DB_PORT", "5433").parse().unwrap()),
+        database: Some(env("TEST_DB_NAME", "testdb")),
+        user: Some(env("TEST_DB_USER", "testuser")),
+        password: Some(env("TEST_DB_PASSWORD", "testpass")),
+        max_pool: Some(max_pool),
+        ..Default::default()
+    }
+}
+
+fn mysql_config(max_pool: u32) -> ConnectionConfig {
+    ConnectionConfig {
+        driver: Some(ConfigDialect::Mysql),
+        host: Some(env("TEST_MYSQL_HOST", "127.0.0.1")),
+        port: Some(env("TEST_MYSQL_PORT", "3307").parse().unwrap()),
+        database: Some(MYSQL_DB.to_string()),
+        user: Some(env("TEST_MYSQL_USER", "testuser")),
+        password: Some(env("TEST_MYSQL_PASSWORD", "testpass")),
+        max_pool: Some(max_pool),
+        ..Default::default()
+    }
+}
+
+fn live_servers() -> [Live; 2] {
+    [
+        Live {
+            name: "postgres",
+            driver: pg_driver,
+            config: pg_config,
+            tx: TxDialect::Postgres,
+            insert: format!("INSERT INTO {} (id, val) VALUES ($1, $2)", pg_tbl()),
+            select_ids: format!(
+                "SELECT id FROM {} WHERE id >= $1 AND id < $2 ORDER BY id",
+                pg_tbl()
+            ),
+            select_val: format!("SELECT val FROM {} WHERE id = $1", pg_tbl()),
+            session_id: "SELECT pg_backend_pid() AS sid",
+            alive: "SELECT count(*)::int AS n FROM pg_stat_activity WHERE pid = $1",
+            sleep: "SELECT 1 AS d FROM pg_sleep(0.05)",
+        },
+        Live {
+            name: "mysql",
+            driver: mysql_driver,
+            config: mysql_config,
+            tx: TxDialect::Mysql,
+            insert: format!("INSERT INTO {TBL} (id, val) VALUES (?, ?)"),
+            select_ids: format!("SELECT id FROM {TBL} WHERE id >= ? AND id < ? ORDER BY id"),
+            select_val: format!("SELECT val FROM {TBL} WHERE id = ?"),
+            session_id: "SELECT CONNECTION_ID() AS sid",
+            alive: "SELECT COUNT(*) AS n FROM information_schema.PROCESSLIST WHERE ID = ?",
+            sleep: "SELECT SLEEP(0.05) AS d",
+        },
+    ]
+}
+
+fn ids_in(ctx: &litedbmodel_runtime::ExecutionContext, l: &Live, lo: i64, hi: i64) -> Vec<i64> {
+    seam_execute(
+        ctx,
+        &l.select_ids,
+        &[Value::Int(lo), Value::Int(hi)],
+        &StatementIntent::read(),
+    )
+    .unwrap()
+    .iter()
+    .map(|r| n_of(r, "id"))
+    .collect()
+}
+
+/// Writer-sticky is read-your-writes for the THREAD that committed. One thread commits and reads (→
+/// WRITER, and sees its row); five other threads, alive at the same time, then read inside that same
+/// sticky window (→ READER, every one). The phases are fenced by barriers, so every log entry between
+/// two fences belongs to the phase's threads. On PG and on MySQL, with two distinct pools.
+fn c1_writer_sticky_is_per_thread() {
+    use std::sync::Barrier;
+    for l in live_servers() {
+        let log_ = log();
+        let reader = RecordingDriver::wrap((l.driver)(), "reader", log_.clone());
+        let writer = RecordingDriver::wrap((l.driver)(), "writer", log_.clone());
+        let routing = RoutingConfig {
+            registry: ConnectionRegistry::from_default(ReaderWriterPools::split(reader, writer))
+                .build()
+                .unwrap(),
+            // A 60s window: every read below happens inside it, however slow the machine.
+            sticky: WriterStickyClock::new(StickyOptions {
+                use_writer_after_transaction: true,
+                writer_sticky_duration: 60_000,
+                ..StickyOptions::default()
+            }),
+        };
+        const OTHERS: usize = 5;
+        let committed = Barrier::new(OTHERS + 1);
+        let others_read = Barrier::new(OTHERS + 1);
+        let (first, between, later) = std::thread::scope(|s| {
+            for _ in 0..OTHERS {
+                s.spawn(|| {
+                    let ctx = for_routing(&routing).unwrap();
+                    committed.wait();
+                    let rows = seam_execute(&ctx, "SELECT 1 AS one", &[], &StatementIntent::read())
+                        .unwrap();
+                    assert_eq!(n_of(&rows[0], "one"), 1);
+                    others_read.wait();
+                });
+            }
+            let committer = s.spawn(|| {
+                let ctx = for_routing(&routing).unwrap();
+                transaction_on(&ctx, None, l.tx, &TransactionOptions::default(), |tx| {
+                    seam_run(
+                        tx,
+                        &l.insert,
+                        &[Value::Int(1100), Value::Str("mine".into())],
+                        &StatementIntent::write(),
+                    )?;
+                    Ok(())
+                })
+                .unwrap();
+                let read_val = || {
+                    let rows = seam_execute(
+                        &ctx,
+                        &l.select_val,
+                        &[Value::Int(1100)],
+                        &StatementIntent::read(),
+                    )
+                    .unwrap();
+                    (str_of(&rows[0], "val"), snapshot(&log_).last().cloned())
+                };
+                let first = read_val();
+                let fence = snapshot(&log_).len();
+                committed.wait(); // the others read now, inside this thread's window
+                others_read.wait();
+                let between = snapshot(&log_)[fence..].to_vec();
+                (first, between, read_val())
+            });
+            committer.join().unwrap()
+        });
+        let mine = (Some("mine".to_string()), Some("writer".to_string()));
+        assert_eq!(
+            first, mine,
+            "{}: the committing thread reads its own write from the writer",
+            l.name
+        );
+        assert_eq!(
+            later, mine,
+            "{}: still the writer for the committing thread",
+            l.name
+        );
+        assert_eq!(
+            between,
+            vec!["reader"; OTHERS],
+            "{}: concurrent threads that did not commit read from the reader",
+            l.name
+        );
+        assert!(
+            !routing.sticky.is_sticky(),
+            "{}: the test thread never committed",
+            l.name
+        );
+    }
+    println!("C1 writer-sticky per thread (PG + MySQL, 6 threads): green");
+}
+
+/// Four threads hold a transaction open at the same time while a fifth runs plain statements. Each
+/// transaction is on its own server session and sees only its own uncommitted row; the fifth thread's
+/// statements run on none of those sessions and see none of those rows. After COMMIT every row is
+/// there. On PG and on MySQL.
+fn c1_concurrent_transactions_each_own_a_connection() {
+    use std::sync::Barrier;
+    for l in live_servers() {
+        let routing = RoutingConfig {
+            registry: ConnectionRegistry::from_default(ReaderWriterPools::single((l.driver)()))
+                .build()
+                .unwrap(),
+            sticky: WriterStickyClock::disabled(),
+        };
+        let ids: [i64; 4] = [1200, 1201, 1202, 1203];
+        let all_open = Barrier::new(ids.len() + 1);
+        let checked = Barrier::new(ids.len() + 1);
+        let (txs, outside) = std::thread::scope(|s| {
+            let txs: Vec<_> = ids
+                .iter()
+                .map(|&id| {
+                    let (l, routing, all_open, checked) = (&l, &routing, &all_open, &checked);
+                    s.spawn(move || {
+                        let ctx = for_routing(routing).unwrap();
+                        transaction_on(&ctx, None, l.tx, &TransactionOptions::default(), |tx| {
+                            seam_run(
+                                tx,
+                                &l.insert,
+                                &[Value::Int(id), Value::Str("tx".into())],
+                                &StatementIntent::write(),
+                            )?;
+                            let sid =
+                                seam_execute(tx, l.session_id, &[], &StatementIntent::read())?;
+                            all_open.wait(); // every transaction is open and has written, none committed
+                            let seen = ids_in(tx, l, 1200, 1300);
+                            checked.wait();
+                            Ok((n_of(&sid[0], "sid"), seen))
+                        })
+                        .unwrap()
+                    })
+                })
+                .collect();
+            let outside = s.spawn(|| {
+                let ctx = for_routing(&routing).unwrap();
+                all_open.wait();
+                let sid = seam_execute(&ctx, l.session_id, &[], &StatementIntent::read()).unwrap();
+                let seen = ids_in(&ctx, &l, 1200, 1300);
+                checked.wait();
+                (n_of(&sid[0], "sid"), seen)
+            });
+            let txs: Vec<_> = txs.into_iter().map(|h| h.join().unwrap()).collect();
+            (txs, outside.join().unwrap())
+        });
+        let tx_sids: Vec<i64> = txs.iter().map(|(sid, _)| *sid).collect();
+        assert!(
+            tx_sids.iter().all(|s| *s > 0),
+            "{}: session ids {tx_sids:?}",
+            l.name
+        );
+        let distinct: std::collections::BTreeSet<_> = tx_sids.iter().collect();
+        assert_eq!(
+            distinct.len(),
+            ids.len(),
+            "{}: concurrent transactions shared a session: {tx_sids:?}",
+            l.name
+        );
+        for (id, (_, seen)) in ids.iter().zip(&txs) {
+            assert_eq!(
+                seen,
+                &vec![*id],
+                "{}: tx {id} saw another transaction's rows",
+                l.name
+            );
+        }
+        assert!(
+            outside.0 > 0 && !tx_sids.contains(&outside.0),
+            "{}: a non-tx statement ran on a transaction's connection",
+            l.name
+        );
+        assert_eq!(
+            outside.1,
+            Vec::<i64>::new(),
+            "{}: a non-tx read saw uncommitted rows",
+            l.name
+        );
+        let ctx = for_routing(&routing).unwrap();
+        assert_eq!(
+            ids_in(&ctx, &l, 1200, 1300),
+            ids.to_vec(),
+            "{}: every transaction committed",
+            l.name
+        );
+    }
+    println!("C1 concurrent transactions isolated per thread (PG + MySQL, 5 threads): green");
+}
+
+/// A captured pool's live connection count.
+type ConnCount = Box<dyn Fn() -> usize + Send + Sync>;
+
+/// Build a routing config through the shipped driver constructor for `config`'s server, and capture
+/// the pool it built: as a driver (to check a connection out directly) and its live connection count.
+fn built(
+    config: ConnectionConfig,
+) -> (
+    litedbmodel_runtime::RoutingHandle,
+    Arc<dyn Driver + Send + Sync>,
+    ConnCount,
+) {
+    type Captured = (Arc<dyn Driver + Send + Sync>, ConnCount);
+    let captured: Arc<Mutex<Option<Captured>>> = Arc::new(Mutex::new(None));
+    let sink = captured.clone();
+    let factory = move |config: &litedbmodel_runtime::ResolvedConnectionConfig,
+                        _role: litedbmodel_runtime::PoolRole| {
+        let (pool, total): Captured = match config.driver {
+            ConfigDialect::Postgres => {
+                let d = Arc::new(PostgresDriver::connect_with_config(config)?);
+                let c = d.clone();
+                (d, Box::new(move || c.total_connections()))
+            }
+            _ => {
+                let d = Arc::new(MysqlDriver::connect_with_config(config)?);
+                let c = d.clone();
+                (d, Box::new(move || c.total_connections()))
+            }
+        };
+        *sink.lock().unwrap() = Some((pool.clone(), total));
+        Ok(litedbmodel_runtime::BuiltPool { pool })
+    };
+    let handle = build_routing_config(
+        vec![ConnectionSetup {
+            name: None,
+            config,
+            pool_factory: &factory,
+            separate_writer: false,
+        }],
+        StickyOptions {
+            use_writer_after_transaction: false,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let (driver, total) = captured.lock().unwrap().take().expect("captured pool");
+    (handle, driver, total)
+}
+
+/// More threads than connections: twelve threads (six transactions, six plain reads) on a pool of TWO
+/// built by the factory from the config. Every acquire past the second waits for a release and then
+/// succeeds — no hang, no lost result, never more than two connections open. On PG and on MySQL.
+fn c1_pool_contention_waits_then_succeeds() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    for l in live_servers() {
+        let (handle, _, total) = built((l.config)(2));
+        let routing = handle.routing();
+        let peak = AtomicUsize::new(0);
+        let tx_ids: Vec<i64> = (1300..1306).collect();
+        let observe = || peak.fetch_max(total(), Ordering::SeqCst);
+        let (vals, reads) = std::thread::scope(|s| {
+            let txs: Vec<_> = tx_ids
+                .iter()
+                .map(|&id| {
+                    let (l, observe) = (&l, &observe);
+                    s.spawn(move || {
+                        let ctx = for_routing(routing).unwrap();
+                        transaction_on(&ctx, None, l.tx, &TransactionOptions::default(), |tx| {
+                            seam_run(
+                                tx,
+                                &l.insert,
+                                &[Value::Int(id), Value::Str(format!("c{id}"))],
+                                &StatementIntent::write(),
+                            )?;
+                            // Hold the connection so the other threads must wait for it.
+                            seam_execute(tx, l.sleep, &[], &StatementIntent::read())?;
+                            observe();
+                            let rows = seam_execute(
+                                tx,
+                                &l.select_val,
+                                &[Value::Int(id)],
+                                &StatementIntent::read(),
+                            )?;
+                            Ok(str_of(&rows[0], "val"))
+                        })
+                        .unwrap()
+                    })
+                })
+                .collect();
+            let reads: Vec<_> = (0..6)
+                .map(|_| {
+                    let (l, observe) = (&l, &observe);
+                    s.spawn(move || {
+                        let ctx = for_routing(routing).unwrap();
+                        seam_execute(&ctx, l.sleep, &[], &StatementIntent::read()).unwrap();
+                        observe();
+                        let rows =
+                            seam_execute(&ctx, "SELECT 1 AS one", &[], &StatementIntent::read())
+                                .unwrap();
+                        n_of(&rows[0], "one")
+                    })
+                })
+                .collect();
+            (
+                txs.into_iter()
+                    .map(|h| h.join().unwrap())
+                    .collect::<Vec<_>>(),
+                reads
+                    .into_iter()
+                    .map(|h| h.join().unwrap())
+                    .collect::<Vec<_>>(),
+            )
+        });
+        let expected: Vec<Option<String>> =
+            tx_ids.iter().map(|id| Some(format!("c{id}"))).collect();
+        assert_eq!(
+            vals, expected,
+            "{}: every transaction got its own row back",
+            l.name
+        );
+        assert_eq!(reads, vec![1; 6], "{}: every plain read returned", l.name);
+        let peak = peak.load(Ordering::SeqCst).max(total());
+        assert!(peak <= 2, "{}: a pool of 2 opened {peak}", l.name);
+        let ctx = for_routing(routing).unwrap();
+        assert_eq!(
+            ids_in(&ctx, &l, 1300, 1400),
+            tx_ids,
+            "{}: every transaction committed",
+            l.name
+        );
+        handle.close();
+    }
+    println!("C1 pool contention (pool of 2, 12 threads, PG + MySQL): green");
+}
+
+// ════════════════════════════════════════════════════════════════════════════════
 // C2 — multi-DB name routing (PG = A default, MySQL = B) + tx-pin precedence
 // ════════════════════════════════════════════════════════════════════════════════
 
@@ -1114,6 +1527,126 @@ fn c3_session_reset_on_release() {
     println!("C3 session search_path apply + reset-on-release (same-conn default→set→reset→default): green + RED proof");
 }
 
+/// With the pool at `max_pool` and nothing released, getting a connection fails after
+/// `connect_timeout_millis` — not sooner, and not never. Once the connection is released the same
+/// statement succeeds. On PG and on MySQL, through the shipped constructors.
+fn c3_connect_timeout_bounds_the_wait_for_a_free_connection() {
+    for l in live_servers() {
+        let (handle, driver, _) = built(ConnectionConfig {
+            connect_timeout_millis: Some(400),
+            ..(l.config)(1)
+        });
+        let ctx = for_routing(handle.routing()).unwrap();
+        let held = driver.acquire_tx().unwrap(); // the only connection is checked out
+        let t0 = std::time::Instant::now();
+        let Err(err) = seam_execute(&ctx, "SELECT 1 AS one", &[], &StatementIntent::read()) else {
+            panic!(
+                "{}: a statement got a connection from an exhausted pool",
+                l.name
+            )
+        };
+        let waited = t0.elapsed();
+        assert!(
+            waited >= std::time::Duration::from_millis(400)
+                && waited < std::time::Duration::from_secs(3),
+            "{}: waited {waited:?} for a 400ms bound ({})",
+            l.name,
+            err.message
+        );
+        held.release(false).unwrap();
+        let rows = seam_execute(&ctx, "SELECT 1 AS one", &[], &StatementIntent::read()).unwrap();
+        assert_eq!(n_of(&rows[0], "one"), 1, "{}", l.name);
+        handle.close();
+    }
+    println!("C3 connect_timeout_millis bounds the wait for a free connection (PG + MySQL): green");
+}
+
+/// `connect_timeout_millis = 0` is no limit: with the pool exhausted, a statement keeps waiting — well
+/// past any short bound — and completes once the connection is released. On PG and on MySQL, through
+/// the shipped constructors.
+fn c3_connect_timeout_zero_waits_without_limit() {
+    for l in live_servers() {
+        let (handle, driver, _) = built(ConnectionConfig {
+            connect_timeout_millis: Some(0),
+            ..(l.config)(1)
+        });
+        let routing = handle.routing();
+        let held = driver.acquire_tx().unwrap(); // the only connection is checked out
+        let rows = std::thread::scope(|s| {
+            let waiter = s.spawn(|| {
+                let ctx = for_routing(routing).unwrap();
+                seam_execute(&ctx, "SELECT 1 AS one", &[], &StatementIntent::read())
+            });
+            std::thread::sleep(std::time::Duration::from_millis(1500));
+            assert!(
+                !waiter.is_finished(),
+                "{}: the waiter gave up with no limit configured",
+                l.name
+            );
+            held.release(false).unwrap();
+            waiter.join().unwrap()
+        })
+        .unwrap();
+        assert_eq!(n_of(&rows[0], "one"), 1, "{}", l.name);
+        handle.close();
+    }
+    println!("C3 connect_timeout_millis = 0 waits without limit (PG + MySQL): green");
+}
+
+/// A pooled connection unused for `idle_timeout_millis` is closed — its server session is gone
+/// (checked from a separate connection) with no further statement on the pool — and the next statement
+/// opens a new session. On PG and on MySQL, through the shipped constructors.
+fn c3_idle_connection_is_closed_on_the_server() {
+    for l in live_servers() {
+        let (handle, _, total) = built(ConnectionConfig {
+            idle_timeout_millis: Some(300),
+            ..(l.config)(10)
+        });
+        let ctx = for_routing(handle.routing()).unwrap();
+        let probe = (l.driver)();
+        let alive = |sid: i64| {
+            n_of(
+                &probe.prepare(l.alive).all(&[Value::Int(sid)]).unwrap()[0],
+                "n",
+            )
+        };
+        let sid_of = || {
+            let rows = seam_execute(&ctx, l.session_id, &[], &StatementIntent::read()).unwrap();
+            n_of(&rows[0], "sid")
+        };
+        let sid = sid_of();
+        assert!(
+            sid > 0 && alive(sid) == 1 && total() == 1,
+            "{}: session {sid}",
+            l.name
+        );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while alive(sid) > 0 && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert_eq!(
+            alive(sid),
+            0,
+            "{}: the idle session {sid} is still open on the server",
+            l.name
+        );
+        assert_eq!(
+            total(),
+            0,
+            "{}: the pool still counts the idle connection",
+            l.name
+        );
+        assert_ne!(
+            sid_of(),
+            sid,
+            "{}: the next statement opened a new session",
+            l.name
+        );
+        handle.close();
+    }
+    println!("C3 idle_timeout_millis closes an idle connection on the server (PG + MySQL): green");
+}
+
 /// Read `current_setting('search_path')` on an owned session connection with the given `setup`
 /// statements applied (empty ⇒ the connection's current/default search_path). maxPool=1 pools reuse the
 /// SAME underlying connection, so this observes the reset state directly.
@@ -1139,6 +1672,9 @@ fn phase_c_connection_routing_and_config() {
     c1_reader_writer_split();
     c1_writer_sticky();
     c1_with_writer();
+    c1_writer_sticky_is_per_thread();
+    c1_concurrent_transactions_each_own_a_connection();
+    c1_pool_contention_waits_then_succeeds();
     // C2
     c2_multi_db_routing();
     c2_unknown_name_loud();
@@ -1148,6 +1684,9 @@ fn phase_c_connection_routing_and_config() {
     c3_query_timeout_mysql();
     c3_max_pool_sole_cap();
     c3_session_reset_on_release();
+    c3_connect_timeout_bounds_the_wait_for_a_free_connection();
+    c3_connect_timeout_zero_waits_without_limit();
+    c3_idle_connection_is_closed_on_the_server();
 
     println!("PHASE C ROUTING+CONFIG PROOF: all C1/C2/C3 green (reader/writer, sticky, with_writer, \
               multi-DB, tx-pin, query_timeout PG+MySQL, maxPool sole cap, session reset-on-release)");
