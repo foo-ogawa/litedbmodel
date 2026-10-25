@@ -397,6 +397,35 @@ describe.skipIf(skipIntegrationTests)('SKIP Pattern - PostgreSQL Array/JSON', ()
       expect(c?.str_arr).toEqual(['a', 'b']);  // DEFAULT
       expect(c?.json_data).toEqual({ default: true });  // DEFAULT
     });
+
+    it('should write array values when 2+ rows share a column pattern', async () => {
+      await PgArraySkipTest.transaction(async () => {
+        await PgArraySkipTest.createMany([
+          [[PgArraySkipTest.name, 'P'], [PgArraySkipTest.int_arr, [1, 2]], [PgArraySkipTest.str_arr, ['x', 'y']], [PgArraySkipTest.bool_arr, [true, null]]],
+          [[PgArraySkipTest.name, 'Q'], [PgArraySkipTest.int_arr, [3]], [PgArraySkipTest.str_arr, ['z']], [PgArraySkipTest.bool_arr, [false]]],
+          [[PgArraySkipTest.name, 'R'], [PgArraySkipTest.int_arr, []], [PgArraySkipTest.str_arr, null], [PgArraySkipTest.bool_arr, []]],
+        ]);
+      });
+
+      const users = await PgArraySkipTest.find([]);
+      expect(users).toHaveLength(3);
+
+      const p = users.find(u => u.name === 'P');
+      const q = users.find(u => u.name === 'Q');
+      const r = users.find(u => u.name === 'R');
+
+      expect(p?.int_arr).toEqual([1, 2]);
+      expect(p?.str_arr).toEqual(['x', 'y']);
+      expect(p?.bool_arr).toEqual([true, null]);
+
+      expect(q?.int_arr).toEqual([3]);
+      expect(q?.str_arr).toEqual(['z']);
+      expect(q?.bool_arr).toEqual([false]);
+
+      expect(r?.int_arr).toEqual([]);
+      expect(r?.str_arr).toBeNull();
+      expect(r?.bool_arr).toEqual([]);
+    });
   });
 
   describe('updateMany with Array/JSON and SKIP', () => {
