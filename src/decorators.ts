@@ -1288,7 +1288,8 @@ export function getSqlCastMap(modelClass: object): Map<string, string> {
  * @param modelClass - The model class with column metadata
  * @param record - The record to serialize
  * @param typeCast - Optional driver type cast helper for driver-specific serialization
- * @returns Serialized record
+ * @returns Serialized record — a new object when any value was serialized; the input is never
+ *   mutated (callers such as the batch INSERT keep the input alongside the result as `rawRecords`)
  */
 export function serializeRecord(
   modelClass: object,
@@ -1296,20 +1297,23 @@ export function serializeRecord(
   typeCast?: DriverTypeCast
 ): Record<string, unknown> {
   const serializeMap = getSerializeMap(modelClass);
-  
+
   // Fast path: no serializers defined
   if (serializeMap.size === 0) {
     return record;
   }
 
-  // Mutate in-place: callers (create/createMany/update) build a fresh record object
-  // from user input before calling serializeRecord, so the original user data is not affected.
+  // Copy on the first serialized key, so a record with no serialized column costs nothing.
+  let result = record;
   for (const key of Object.keys(record)) {
     const serialize = serializeMap.get(key);
     if (serialize) {
-      record[key] = serialize(record[key], typeCast);
+      if (result === record) {
+        result = { ...record };
+      }
+      result[key] = serialize(record[key], typeCast);
     }
   }
 
-  return record;
+  return result;
 }
