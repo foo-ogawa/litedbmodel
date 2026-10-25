@@ -1,4 +1,4 @@
-// The repo's TOOLING sources — the benchmark and the doc embeds. Sibling of `tsconfig.test.json`:
+// The repo's TOOLING sources — the benchmark and the doc embeds. Sibling of `test/tsconfig.json`:
 // both name a tree that `tsconfig.json` (which emits from `src`) does not compile, and both are run
 // by `scripts/check-typechecked-trees.mjs`, which additionally proves the tree is fully covered.
 //
