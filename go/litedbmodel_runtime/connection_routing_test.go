@@ -18,9 +18,13 @@
 package litedbmodel_runtime
 
 import (
+	"context"
+	"fmt"
+	"net"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	bc "github.com/foo-ogawa/behavior-contracts/go"
 )
@@ -78,6 +82,10 @@ func (p *recordPool) Release(_ PooledConn, destroy bool) error {
 func intPtr(i int) *int    { return &i }
 func boolPtr(b bool) *bool { return &b }
 
+// defaultConnectTimeoutMillis is the C3 default checkout bound, for tests that wrap a raw *sql.DB in a
+// [SQLDBPool].
+var defaultConnectTimeoutMillis = ResolveConnectionConfig(ConnectionConfig{}).ConnectTimeoutMillis
+
 // ── SessionStatements / SessionResetStatements (C3) ────────────────────────────
 
 func TestSessionStatementsPerDialect(t *testing.T) {
@@ -133,9 +141,133 @@ func TestResolveConnectionConfigDefaults(t *testing.T) {
 	if r.Driver != "postgres" || r.QueryTimeout != 0 || r.KeepAlive != false || r.MinPool != 0 || r.MaxPool != 10 || r.KeepAliveInitialDelayMillis != 10000 {
 		t.Fatalf("defaults wrong: %+v", r)
 	}
+	if r.ConnectTimeoutMillis != 30000 || r.IdleTimeoutMillis != 10000 {
+		t.Fatalf("timeout defaults wrong: connectTimeoutMillis=%d idleTimeoutMillis=%d, want 30000/10000", r.ConnectTimeoutMillis, r.IdleTimeoutMillis)
+	}
 	// Explicit 0 maxPool is honored (a *int of &0 is not "unset").
 	if got := ResolveConnectionConfig(ConnectionConfig{MaxPool: intPtr(0)}).MaxPool; got != 0 {
 		t.Fatalf("explicit maxPool=0 not honored: %d", got)
+	}
+	// Explicit timeouts replace the defaults.
+	set := ResolveConnectionConfig(ConnectionConfig{ConnectTimeoutMillis: intPtr(1500), IdleTimeoutMillis: intPtr(250)})
+	if set.ConnectTimeoutMillis != 1500 || set.IdleTimeoutMillis != 250 {
+		t.Fatalf("explicit timeouts not honored: connectTimeoutMillis=%d idleTimeoutMillis=%d", set.ConnectTimeoutMillis, set.IdleTimeoutMillis)
+	}
+}
+
+// ConnectTimeoutMillis bounds OPENING a connection: against a server that completes the TCP handshake
+// and then never answers (a listener that never accepts — the kernel still queues the connection), the
+// factory's construction-time connect fails after the bound instead of hanging. For MySQL this needs
+// the checkout context to reach the handshake: go-sql-driver's `timeout` covers only the dial. With
+// ConnectTimeoutMillis = 0 (no limit) the same connect is still waiting well past where a bound would
+// have fired, and ends only when the server goes away.
+func TestPoolFactoryConnectTimeoutBoundsStalledServer(t *testing.T) {
+	const timeoutMs = 300
+	type result struct {
+		err     error
+		elapsed time.Duration
+	}
+	// connectStalled starts the factory against a listener that never answers; close stops the server.
+	connectStalled := func(t *testing.T, driver string, factory PoolFactory, connectTimeoutMillis int) (<-chan result, func()) {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg := ResolveConnectionConfig(ConnectionConfig{Driver: driver, Host: "127.0.0.1",
+			Port: ln.Addr().(*net.TCPAddr).Port, Database: "x", User: "u", Password: "p",
+			ConnectTimeoutMillis: intPtr(connectTimeoutMillis)})
+		done := make(chan result, 1)
+		go func() {
+			start := time.Now()
+			bp, ferr := factory(cfg, "reader")
+			if ferr == nil {
+				_ = bp.Close()
+			}
+			done <- result{ferr, time.Since(start)}
+		}()
+		return done, func() { _ = ln.Close() }
+	}
+	for _, tc := range []struct {
+		driver  string
+		factory PoolFactory
+	}{{"postgres", PgPoolFactory()}, {"mysql", MysqlPoolFactory()}} {
+		t.Run(tc.driver+"/bounded", func(t *testing.T) {
+			done, stop := connectStalled(t, tc.driver, tc.factory, timeoutMs)
+			defer stop()
+			select {
+			case r := <-done:
+				if r.err == nil {
+					t.Fatal("factory connected to a server that never answers")
+				}
+				if r.elapsed < timeoutMs*time.Millisecond || r.elapsed > timeoutMs*time.Millisecond+2*time.Second {
+					t.Fatalf("connect failed after %v, want within [%dms, %dms+2s] (err: %v)", r.elapsed, timeoutMs, timeoutMs, r.err)
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatalf("factory still connecting after 10s — ConnectTimeoutMillis=%d does not bound the connect", timeoutMs)
+			}
+		})
+		t.Run(tc.driver+"/zero-is-no-limit", func(t *testing.T) {
+			done, stop := connectStalled(t, tc.driver, tc.factory, 0)
+			select {
+			case r := <-done:
+				stop()
+				t.Fatalf("ConnectTimeoutMillis=0 gave up after %v (err: %v), want no limit", r.elapsed, r.err)
+			case <-time.After(timeoutMs*time.Millisecond + time.Second):
+			}
+			stop() // the server goes away ⇒ the connect ends
+			select {
+			case r := <-done:
+				if r.err == nil {
+					t.Fatal("factory connected to a server that went away")
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatal("factory still connecting 10s after the server went away")
+			}
+		})
+	}
+}
+
+// KeepAlive lands on the drivers' TCP sockets: the dialer in the pgx config ([pgConnConfig]) and in the
+// go-sql-driver config ([mysqlConfig]) — the configs the factories open their *sql.DB with — enables
+// SO_KEEPALIVE with the first probe after KeepAliveInitialDelayMillis when KeepAlive is true, and
+// leaves the socket without keepalive when it is false (Go's dialer default would enable it).
+func TestDriverConfigsDialWithKeepAlive(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	addr := ln.Addr().String()
+	type dialFunc func(ctx context.Context, network, addr string) (net.Conn, error)
+	dialers := map[string]func(c ResolvedConnectionConfig) dialFunc{
+		"postgres": func(c ResolvedConnectionConfig) dialFunc {
+			connConfig, err := pgConnConfig(c)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return dialFunc(connConfig.DialFunc)
+		},
+		"mysql": func(c ResolvedConnectionConfig) dialFunc { return mysqlConfig(c).DialFunc },
+	}
+	for driver, dialerFor := range dialers {
+		for _, keepAlive := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/keepAlive=%v", driver, keepAlive), func(t *testing.T) {
+				c := ResolveConnectionConfig(ConnectionConfig{Driver: driver, Host: "127.0.0.1", Port: 1,
+					KeepAlive: boolPtr(keepAlive), KeepAliveInitialDelayMillis: intPtr(3000)})
+				conn, err := dialerFor(c)(context.Background(), "tcp", addr)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer conn.Close()
+				enabled, idle := socketKeepAlive(t, conn.(*net.TCPConn))
+				if enabled != keepAlive {
+					t.Fatalf("SO_KEEPALIVE = %v, want %v", enabled, keepAlive)
+				}
+				if keepAlive && idle != 3*time.Second {
+					t.Fatalf("keepalive idle before the first probe = %v, want 3s (KeepAliveInitialDelayMillis)", idle)
+				}
+			})
+		}
 	}
 }
 
@@ -179,23 +311,28 @@ func TestReaderWriterSplitRouting(t *testing.T) {
 func TestWriterStickyClockExpiry(t *testing.T) {
 	clock := int64(1_000_000)
 	sticky := NewWriterStickyClock(StickyOptions{UseWriterAfterTransaction: boolPtr(true), WriterStickyDuration: intPtr(5000), Now: func() int64 { return clock }})
-	if sticky.IsSticky() {
+	scope := &StickyScope{}
+	if sticky.IsSticky(scope) {
 		t.Fatal("sticky before any mark should be false")
 	}
-	sticky.Mark()
+	sticky.Mark(scope)
 	clock += 100
-	if !sticky.IsSticky() {
+	if !sticky.IsSticky(scope) {
 		t.Fatal("in-window read should be sticky")
 	}
+	if sticky.IsSticky(&StickyScope{}) {
+		t.Fatal("another request's scope must not be sticky after this one's commit")
+	}
 	clock += 6000
-	if sticky.IsSticky() {
+	if sticky.IsSticky(scope) {
 		t.Fatal("after-window read should NOT be sticky")
 	}
 
 	// MUTATION (RED): a DISABLED sticky clock never sticks even in-window.
 	off := NewWriterStickyClock(StickyOptions{UseWriterAfterTransaction: boolPtr(false), Now: func() int64 { return clock }})
-	off.Mark()
-	if off.IsSticky() {
+	offScope := &StickyScope{}
+	off.Mark(offScope)
+	if off.IsSticky(offScope) {
 		t.Fatal("disabled sticky must never stick (never-mark-sticky RED)")
 	}
 }
@@ -211,12 +348,12 @@ func TestWriterStickyArmedAtClockZero(t *testing.T) {
 	reader := newRecordPool("reader", &log)
 	writer := newRecordPool("writer", &log)
 	sticky := NewWriterStickyClock(StickyOptions{UseWriterAfterTransaction: boolPtr(true), WriterStickyDuration: intPtr(5000), Now: func() int64 { return 0 }})
-	if sticky.IsSticky() {
+	ctx := ContextForRouting(routingWithPools(reader, writer, sticky), nil)
+	if sticky.IsSticky(ctx.sticky) {
 		t.Fatal("before any mark, sticky must be false even at t=0 (absence, not the value 0)")
 	}
-	ctx := ContextForRouting(routingWithPools(reader, writer, sticky), nil)
 	// A commit at clock t=0 arms the sticky clock.
-	sticky.Mark()
+	sticky.Mark(ctx.sticky)
 	_, _ = Execute(ctx, "SELECT 1", nil, ReadIntent())
 	if got := log[len(log)-1]; got != "writer" {
 		t.Fatalf("read right after a t=0 commit = %v, want writer (read-your-writes)", got)
@@ -237,11 +374,16 @@ func TestWriterStickyRoutesReadToWriter(t *testing.T) {
 		t.Fatalf("pre-write read = %v, want reader", log[len(log)-1])
 	}
 	// Arm the clock (a commit would call this in the real tx path).
-	sticky.Mark()
+	sticky.Mark(ctx.sticky)
 	clock += 100
 	_, _ = Execute(ctx, "SELECT 1", nil, ReadIntent())
 	if log[len(log)-1] != "writer" {
 		t.Fatalf("in-window read = %v, want writer (read-your-writes)", log[len(log)-1])
+	}
+	// The same read from ANOTHER request (its own ctx over the same routing) stays on the reader.
+	_, _ = Execute(ContextForRouting(routingWithPools(reader, writer, sticky), nil), "SELECT 1", nil, ReadIntent())
+	if log[len(log)-1] != "reader" {
+		t.Fatalf("another request's in-window read = %v, want reader (sticky is per request)", log[len(log)-1])
 	}
 	clock += 6000
 	_, _ = Execute(ctx, "SELECT 1", nil, ReadIntent())
@@ -319,7 +461,7 @@ func TestNamedDBRouting(t *testing.T) {
 // C2, the TRANSACTION half of named-DB routing (#215): WHICH db a transaction opens on is the ctx's
 // answer ([ExecutionContext.WithConnectionName]), not the caller's. A statement carries its db in its
 // own [StatementIntent]; a transaction has no statement to carry it — and the covered plane's boundary
-// ([WithAmbientTransaction]) takes no argument at all — so the name rides on the ctx and
+// ([WithAmbientTransaction]) takes no connection name — so the name rides on the ctx and
 // [ExecutionContext.acquireTxConnection] resolves the WRITER pool of THAT db.
 //
 // This is the OFFLINE twin of TestPhaseCRoutingTxPinPrecedenceLive: the live one proves it against a

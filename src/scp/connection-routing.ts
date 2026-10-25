@@ -75,6 +75,13 @@ export interface ConnectionConfig {
   readonly minPool?: number;
   /** Maximum pooled connections. @default 10 */
   readonly maxPool?: number;
+  /**
+   * Upper bound in MILLISECONDS on getting a connection: opening a new one, and waiting for a free one
+   * when the pool is at `maxPool`. `0` ⇒ no limit. @default 30000
+   */
+  readonly connectTimeoutMillis?: number;
+  /** MILLISECONDS an unused pooled connection stays open before it is closed. @default 10000 */
+  readonly idleTimeoutMillis?: number;
   /** PG `search_path` set on each pooled connection at checkout (schema routing). */
   readonly searchPath?: string;
   /** MySQL connection charset / PG client_encoding set on each pooled connection. */
@@ -94,11 +101,16 @@ export interface ResolvedConnectionConfig {
   readonly keepAliveInitialDelayMillis: number;
   readonly minPool: number;
   readonly maxPool: number;
+  readonly connectTimeoutMillis: number;
+  readonly idleTimeoutMillis: number;
   readonly searchPath?: string;
   readonly charset?: string;
 }
 
-/** Apply the C3 defaults (queryTimeout=0, keepAlive=false, minPool=0, maxPool=10). */
+/**
+ * Apply the C3 defaults (queryTimeout=0, keepAlive=false, minPool=0, maxPool=10,
+ * connectTimeoutMillis=30000, idleTimeoutMillis=10000).
+ */
 export function resolveConnectionConfig(config: ConnectionConfig = {}): ResolvedConnectionConfig {
   return {
     driver: config.driver ?? 'postgres',
@@ -112,6 +124,8 @@ export function resolveConnectionConfig(config: ConnectionConfig = {}): Resolved
     keepAliveInitialDelayMillis: config.keepAliveInitialDelayMillis ?? 10000,
     minPool: config.minPool ?? 0,
     maxPool: config.maxPool ?? 10,
+    connectTimeoutMillis: config.connectTimeoutMillis ?? 30000,
+    idleTimeoutMillis: config.idleTimeoutMillis ?? 10000,
     ...(config.searchPath !== undefined ? { searchPath: config.searchPath } : {}),
     ...(config.charset !== undefined ? { charset: config.charset } : {}),
   };
@@ -344,22 +358,47 @@ export function withWriter<R>(fn: () => Promise<R>): Promise<R> {
 }
 
 /**
- * A writer-sticky CLOCK (C1, read-your-writes; v1 `_shouldUseWriterSticky` :344 + `_lastTransactionTime`).
- * After a transaction (or a bare write) COMMITs, reads within `stickyDurationMs` route to the WRITER
- * pool so a just-committed row is visible despite reader-replica lag. The ctx owns ONE clock instance;
- * the tx runtime `.mark()`s it on every successful write/commit; `connectionFor` reads `.isSticky()`.
+ * One async chain's record of its commits on a {@link WriterStickyClock}. A transaction enters a fresh
+ * cell into its CALLER's chain when it starts and stamps it on commit, so the stamp is visible to the
+ * caller's later reads and to nothing else: another request is another chain, and a chain that
+ * inherited a cell (a request descending from startup code that committed) never stamps that cell —
+ * it enters its own. `prev` links to the cells still open when this one began, so concurrent
+ * transactions of ONE chain (`Promise.all([tx1, tx2])`) all count once they are done.
+ */
+export interface StickyCell {
+  /**
+   * `null` until stamped — absence, NOT a value sentinel. The injectable clocks legitimately return 0
+   * (a monotonic clock right after process start), so encoding "never marked" as 0 would mis-classify a
+   * commit at clock t=0 and leak the read-your-writes read to the reader replica.
+   */
+  at: number | null;
+  open: boolean;
+  readonly prev: StickyCell | null;
+}
+
+/** The latest stamp on `cell` or the open cells it was linked to. */
+function latestStamp(cell: StickyCell | undefined): number | null {
+  let latest: number | null = null;
+  for (let c: StickyCell | null | undefined = cell; c; c = c.prev) {
+    if (c.at !== null && (latest === null || c.at > latest)) latest = c.at;
+  }
+  return latest;
+}
+
+/**
+ * A writer-sticky CLOCK (C1, read-your-writes). After a transaction COMMITs, the reads of the async
+ * chain that committed (the request that wrote) route to the WRITER pool for `stickyDurationMs`, so the
+ * just-committed row is visible despite reader-replica lag. Other chains — concurrent requests — keep
+ * reading from the reader: they did not write, so they have no lag to hide. The clock is per routing
+ * config (per DB base); the time it holds is per async chain.
  *
- * `useWriterAfterTransaction=false` disables it entirely (`.isSticky()` always false). A single-pool
- * deployment (reader === writer) is unaffected by stickiness — the diverted pool is the same object.
+ * The tx runtime calls {@link begin} as its first synchronous step (so the cell lands in the caller's
+ * chain), {@link mark} on commit, and {@link end} when the transaction is over; `connectionFor` reads
+ * {@link isSticky}. `useWriterAfterTransaction=false` disables it entirely (`isSticky()` always false).
+ * A single-pool deployment (reader === writer) is unaffected — the diverted pool is the same object.
  */
 export class WriterStickyClock {
-  /**
-   * `null` until the first `mark()` — absence, NOT a value sentinel. The injectable clocks legitimately
-   * return 0 (a monotonic clock right after process start; rust's `SystemClock` does), so encoding
-   * "never marked" as the value 0 would mis-classify a `mark()` at clock t=0 as unmarked and leak the
-   * read-your-writes read to the reader replica. Absence must be distinct from the value 0.
-   */
-  private lastWriteAt: number | null = null;
+  private readonly chain = new AsyncLocalStorage<StickyCell>();
   private readonly enabled: boolean;
   private readonly stickyDurationMs: number;
   /** Injectable clock (tests advance it); defaults to `Date.now`. */
@@ -371,20 +410,40 @@ export class WriterStickyClock {
     this.now = opts.now ?? Date.now;
   }
 
-  /** Record that a write/commit just happened (the tx runtime calls this on success). */
+  /**
+   * Start tracking a transaction in the current chain: enters a fresh cell that carries the chain's
+   * latest stamp. Must run synchronously at the start of the transaction, before its first `await`.
+   */
+  begin(): StickyCell {
+    const current = this.chain.getStore();
+    let open: StickyCell | null = current ?? null;
+    while (open !== null && !open.open) open = open.prev;
+    const cell: StickyCell = { at: latestStamp(current), open: true, prev: open };
+    this.chain.enterWith(cell);
+    return cell;
+  }
+
+  /** The transaction that began `cell` is over (committed or not). */
+  end(cell: StickyCell): void {
+    cell.open = false;
+  }
+
+  /** Record that the current chain just committed. */
   mark(): void {
-    if (this.enabled) this.lastWriteAt = this.now();
+    if (!this.enabled) return;
+    let cell = this.chain.getStore();
+    if (cell === undefined) {
+      cell = { at: null, open: false, prev: null };
+      this.chain.enterWith(cell);
+    }
+    cell.at = this.now();
   }
 
-  /** Is a read currently sticky-to-writer (within `writerStickyDuration` of the last write)? */
+  /** Is a read in the current chain sticky-to-writer (within `writerStickyDuration` of its last commit)? */
   isSticky(): boolean {
-    if (!this.enabled || this.lastWriteAt === null) return false;
-    return this.now() - this.lastWriteAt < this.stickyDurationMs;
-  }
-
-  /** Reset the clock (e.g. between tests / on `closeAllPools`). */
-  reset(): void {
-    this.lastWriteAt = null;
+    if (!this.enabled) return false;
+    const at = latestStamp(this.chain.getStore());
+    return at !== null && this.now() - at < this.stickyDurationMs;
   }
 }
 

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import re
 import sqlite3
-from typing import Any, Callable, Dict, List, Protocol, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Protocol, Sequence, Tuple
 
 
 # ── Row materialization: per-column-set dict builder (read-path hot loop, #63 §② perf) ──────────
@@ -248,119 +248,156 @@ class _SqliteTxConnection:
 # relations can each hold a live connection without starving.
 DEFAULT_POOL_SIZE = 16
 
-# Bound EVERY acquire so an UNREACHABLE / non-responding DB fails in FINITE time instead of hanging
-# (#225). `acquire` has two sub-waits, both bounded to this budget: the factory's TCP connect
-# (`connect_timeout`, set in the pg/mysql factories) and the wait for a released connection when the
-# pool is at capacity (`_free.get(timeout=…)`). 30s matches the established codebase default — the v1
-# pg/mysql drivers' `config.timeout || 30` (src/drivers/postgres.ts, src/drivers/mysql.ts) — and the
-# other runtimes' pool-library connect/acquire timeouts (rust sqlx ~30s / deadpool wait, go database/sql
-# Ping, TS pg `connectionTimeoutMillis`). Only Python hand-rolls its pool, so it must supply the bound
-# those libraries give the other four legs for free.
+# Bound EVERY acquire so an UNREACHABLE / non-responding DB fails in FINITE time instead of hanging.
+# `acquire` has two sub-waits, each bounded to this budget: the factory's connect (`connect_timeout`,
+# set in the pg/mysql factories) and the wait for a released connection when the pool is at capacity.
+# 30s is the codebase default (the v1 pg/mysql drivers' `config.timeout || 30`) and the
+# `connectTimeoutMillis` default of the connection config. Only Python hand-rolls its pool, so it supplies
+# the bound the other runtimes take from their pool libraries.
 DEFAULT_ACQUIRE_TIMEOUT_SECONDS = 30.0
+
+# How long a released connection may sit unused in the pool before the pool closes it — the
+# `idleTimeoutMillis` default of the connection config (and of the v1 pg/mysql drivers).
+DEFAULT_IDLE_TIMEOUT_SECONDS = 10.0
 
 
 class _ConnectionPool:
     """A minimal thread-safe, bounded pool of DB-API connections (dependency-free).
 
-    A bounded ``queue`` of live connections created lazily up to ``max_size``. ``acquire`` blocks
-    for a free connection (or opens a new one below the ceiling); ``release`` returns it. This keeps
-    the parallel-read seam dependency-free (no psycopg_pool / DBUtils needed) while giving each
-    concurrent sibling its own connection.
+    Connections are opened lazily up to ``max_size``. ``acquire`` hands out the most recently released
+    free connection, opens a new one below the ceiling, or waits — at most ``acquire_timeout`` seconds,
+    without limit when it is ``None`` — for a release or a freed slot. ``release`` returns a connection; one left unused for
+    ``idle_timeout`` seconds is closed by a timer (a daemon ``threading.Timer`` armed while free
+    connections exist), so a quiet application does not hold server sessions open. This keeps the
+    parallel-read seam dependency-free while giving each concurrent sibling its own connection.
     """
 
-    __slots__ = ("_factory", "_max", "_free", "_opened", "_lock", "_closed", "_acquire_timeout")
+    __slots__ = ("_factory", "_max", "_free", "_opened", "_cond", "_closed", "_acquire_timeout", "_idle_timeout", "_reaper")
 
-    def __init__(self, factory, max_size: int, acquire_timeout: float = DEFAULT_ACQUIRE_TIMEOUT_SECONDS) -> None:
-        import queue as _queue
+    def __init__(
+        self,
+        factory,
+        max_size: int,
+        acquire_timeout: Optional[float] = DEFAULT_ACQUIRE_TIMEOUT_SECONDS,
+        idle_timeout: float = DEFAULT_IDLE_TIMEOUT_SECONDS,
+    ) -> None:
         import threading as _threading
 
         self._factory = factory
         self._max = max_size
-        self._free: "Any" = _queue.LifoQueue()
+        # Free connections with the monotonic time each was released, oldest first: ``acquire`` takes
+        # from the end (most recently used), the idle timer closes from the front.
+        self._free: List[Tuple[Any, float]] = []
         self._opened = 0
-        self._lock = _threading.Lock()
-        # The bound on the at-capacity wait for a released connection (see acquire). Finite so an
-        # exhausted pool that will never be replenished (e.g. every open failed) raises instead of
-        # blocking forever (#225).
+        self._cond = _threading.Condition()
         self._acquire_timeout = acquire_timeout
-        # Fail-fast after close(): a post-close acquire must RAISE, not block forever on `_free.get()`
-        # (the pool is drained and nothing will be released). Additive — the Phase A/B paths never
-        # acquire after close, so behavior there is unchanged; Phase C's close_all_pools relies on it so
-        # a query on a closed pool fails loudly (mirror the TS pool.end() → query rejects).
+        self._idle_timeout = idle_timeout
+        self._reaper: Any = None
+        # Fail-fast after close(): a post-close acquire RAISES instead of waiting on a drained pool
+        # (close_all_pools relies on it so a query on a closed pool fails loudly).
         self._closed = False
 
     def acquire(self) -> Any:
-        import queue as _queue
+        import time as _time
 
-        if self._closed:
-            raise RuntimeError("scp connection pool: acquire after close (the pool has been closed)")
-        # Fast path: reuse a free connection.
+        deadline = None if self._acquire_timeout is None else _time.monotonic() + self._acquire_timeout
+        with self._cond:
+            while True:
+                if self._closed:
+                    raise RuntimeError("scp connection pool: acquire after close (the pool has been closed)")
+                if self._free:
+                    return self._free.pop()[0]
+                if self._opened < self._max:
+                    # Reserve the slot, then open OUTSIDE the lock (a slow connect must not serialize
+                    # every other acquire/release on this pool).
+                    self._opened += 1
+                    break
+                # At capacity: wait for a release (or a discarded/closed slot), bounded by the deadline
+                # when there is one.
+                remaining = None if deadline is None else deadline - _time.monotonic()
+                if remaining is not None and remaining <= 0:
+                    raise TimeoutError(
+                        f"scp connection pool: acquire timed out after {self._acquire_timeout}s "
+                        f"(pool at capacity {self._max}, no connection released)"
+                    )
+                self._cond.wait(remaining)
         try:
-            return self._free.get_nowait()
-        except _queue.Empty:
-            pass
-        # Reserve a slot if below the ceiling, then open OUTSIDE the lock (a slow/blocked connect must
-        # not serialize every other acquire/release on this pool).
-        reserved = False
-        with self._lock:
-            if self._closed:
-                raise RuntimeError("scp connection pool: acquire after close (the pool has been closed)")
-            if self._opened < self._max:
-                self._opened += 1
-                reserved = True
-        if reserved:
-            try:
-                return self._factory()
-            except BaseException:
-                # The open FAILED — RELEASE the reserved slot (mirror `discard`'s decrement). Without
-                # this a failed connect permanently consumes capacity; once `_opened` hits the ceiling
-                # every later acquire falls through to the wait below with no connection ever coming, so
-                # an unreachable DB turns each fast connect-refused into an unbounded hang (#225).
-                with self._lock:
-                    self._opened -= 1
-                raise
-        # Pool at capacity: wait for a released connection, but BOUND the wait. An unbounded get() hangs
-        # forever when nothing will ever be released; on timeout raise a clear error instead (#225 — the
-        # parity target: the other runtimes' pool libraries bound this acquire wait).
-        try:
-            return self._free.get(timeout=self._acquire_timeout)
-        except _queue.Empty:
-            raise TimeoutError(
-                f"scp connection pool: acquire timed out after {self._acquire_timeout}s "
-                f"(pool at capacity {self._max}, no connection released)"
-            ) from None
+            return self._factory()
+        except BaseException:
+            # The open FAILED — give the reserved slot back. Without this a failed connect permanently
+            # consumes capacity, and once every slot is consumed each later acquire waits for a
+            # connection that never comes.
+            self._free_slots(1)
+            raise
 
     def release(self, conn: Any) -> None:
-        self._free.put(conn)
+        import time as _time
+
+        with self._cond:
+            if not self._closed:
+                self._free.append((conn, _time.monotonic()))
+                self._cond.notify()
+                self._arm_reaper()
+                return
+        _close_quietly(conn)  # released after close(): nothing will hand it out again
 
     def discard(self, conn: Any) -> None:
         """Permanently drop a POISONED connection (a tx whose COMMIT/ROLLBACK itself raised): close it
-        and DECREMENT the opened count so a fresh connection can be opened in its place. Without the
-        decrement the pool's ``_opened < _max`` ceiling would count the dead connection forever and
-        capacity would shrink by one per discard — eventual exhaustion under repeated commit failures
-        (the deeper half of the #78 leak: releasing wasn't enough; the destroy path must re-open a slot).
-        """
-        try:
-            conn.close()
-        except Exception:
-            pass
-        with self._lock:
-            if self._opened > 0:
-                self._opened -= 1
+        and free its slot so a fresh connection can be opened in its place — otherwise capacity would
+        shrink by one per discard until the pool is exhausted."""
+        _close_quietly(conn)
+        self._free_slots(1)
 
     def close(self) -> None:
-        import queue as _queue
+        with self._cond:
+            self._closed = True
+            free, self._free = self._free, []
+            if self._reaper is not None:
+                self._reaper.cancel()
+                self._reaper = None
+            self._cond.notify_all()  # waiters raise "acquire after close" instead of timing out
+        for conn, _ in free:
+            _close_quietly(conn)
 
-        self._closed = True  # fail-fast: a subsequent acquire raises instead of blocking on a drained pool
-        while True:
-            try:
-                conn = self._free.get_nowait()
-            except _queue.Empty:
-                break
-            try:
-                conn.close()
-            except Exception:
-                pass
+    def _free_slots(self, n: int) -> None:
+        with self._cond:
+            self._opened = max(0, self._opened - n)
+            self._cond.notify(n)  # a waiter may now open a connection in a freed slot
+
+    def _arm_reaper(self) -> None:
+        """(Under the lock.) Arm the idle timer for the oldest free connection, unless it is armed."""
+        import threading as _threading
+        import time as _time
+
+        if self._reaper is not None or not self._free or self._closed:
+            return
+        delay = max(0.0, self._free[0][1] + self._idle_timeout - _time.monotonic())
+        self._reaper = _threading.Timer(delay, self._reap)
+        self._reaper.daemon = True
+        self._reaper.start()
+
+    def _reap(self) -> None:
+        """Close every free connection that has been unused for ``idle_timeout``, then re-arm."""
+        import time as _time
+
+        with self._cond:
+            self._reaper = None
+            cutoff = _time.monotonic() - self._idle_timeout
+            expired = [c for c, at in self._free if at <= cutoff]
+            self._free = [(c, at) for c, at in self._free if at > cutoff]
+            self._opened = max(0, self._opened - len(expired))
+            self._cond.notify(len(expired))
+            self._arm_reaper()
+        for conn in expired:
+            _close_quietly(conn)
+
+
+def _close_quietly(conn: Any) -> None:
+    try:
+        conn.close()
+    except Exception:
+        pass
+
 
 # `$1`, `$2`, … (Postgres render output).
 _DOLLAR_RE = re.compile(r"\$\d+")

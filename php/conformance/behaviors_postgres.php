@@ -7,7 +7,7 @@
 // (Behavior::runBehavior) — no execution logic is generated. Handlers are ALWAYS
 // injected at the boundary (IR + {effects,config,hooks} — concept.md §4.4); they
 // are never generated.
-// irFingerprint: fnv1a64:1ab19d17f7309145
+// irFingerprint: fnv1a64:c477e0494622c539
 
 declare(strict_types=1);
 
@@ -15,7 +15,7 @@ declare(strict_types=1);
 $expectedSpecVersions = ['behavior' => 6, 'expression' => 2, 'plan' => 1];
 
 // FNV-1a 64 fingerprint of the source portable IR (canonical-json discipline, #208).
-$irFingerprint = 'fnv1a64:1ab19d17f7309145';
+$irFingerprint = 'fnv1a64:c477e0494622c539';
 
 // Component names exposed by bind(), in IR declaration order.
 $componentNames = ['posts', 'postsTop', 'page', 'postsByIds', 'feed', 'pagedFeed', 'optionalOnlyFeed', 'quotedOrderFeed', 'quotedWhereOrderFeed', 'viewFeed', 'usersWithPosts', 'postsWithAuthor', 'usersWithCappedPosts', 'usersWithUncappedPosts', 'usersWithTopPosts', 'createPost', 'renamePost', 'removePost', 'createPostReturning', 'renamePostReturning', 'removePostReturning', 'restatusPostsReturning', 'removePostsByAuthorReturning', 'typedRows', 'createTags', 'removeTags', 'createDoc', 'createLine', 'createTagsReturning', 'relabelTagsReturning', 'removeTagsReturning'];
@@ -38,13 +38,13 @@ $irDoc = (object) [
                             "name" => "PostsRow",
                             "obj" => (object) [
                                 "author_id" => (object) [
-                                    "opt" => "float",
+                                    "opt" => "int",
                                 ],
                                 "created_at" => (object) [
                                     "opt" => "string",
                                 ],
                                 "id" => (object) [
-                                    "opt" => "float",
+                                    "opt" => "int",
                                 ],
                                 "status" => (object) [
                                     "opt" => "string",
@@ -104,13 +104,13 @@ $irDoc = (object) [
                 "arr" => (object) [
                     "obj" => (object) [
                         "author_id" => (object) [
-                            "opt" => "float",
+                            "opt" => "int",
                         ],
                         "created_at" => (object) [
                             "opt" => "string",
                         ],
                         "id" => (object) [
-                            "opt" => "float",
+                            "opt" => "int",
                         ],
                         "status" => (object) [
                             "opt" => "string",
@@ -133,13 +133,13 @@ $irDoc = (object) [
                             "name" => "PostsTopRow",
                             "obj" => (object) [
                                 "author_id" => (object) [
-                                    "opt" => "float",
+                                    "opt" => "int",
                                 ],
                                 "created_at" => (object) [
                                     "opt" => "string",
                                 ],
                                 "id" => (object) [
-                                    "opt" => "float",
+                                    "opt" => "int",
                                 ],
                                 "status" => (object) [
                                     "opt" => "string",
@@ -188,13 +188,13 @@ $irDoc = (object) [
                 "arr" => (object) [
                     "obj" => (object) [
                         "author_id" => (object) [
-                            "opt" => "float",
+                            "opt" => "int",
                         ],
                         "created_at" => (object) [
                             "opt" => "string",
                         ],
                         "id" => (object) [
-                            "opt" => "float",
+                            "opt" => "int",
                         ],
                         "status" => (object) [
                             "opt" => "string",
@@ -217,7 +217,7 @@ $irDoc = (object) [
                             "name" => "PageRow",
                             "obj" => (object) [
                                 "id" => (object) [
-                                    "opt" => "float",
+                                    "opt" => "int",
                                 ],
                                 "title" => (object) [
                                     "opt" => "string",
@@ -283,7 +283,7 @@ $irDoc = (object) [
                 "arr" => (object) [
                     "obj" => (object) [
                         "id" => (object) [
-                            "opt" => "float",
+                            "opt" => "int",
                         ],
                         "title" => (object) [
                             "opt" => "string",
@@ -303,7 +303,7 @@ $irDoc = (object) [
                             "name" => "PostsByIdsRow",
                             "obj" => (object) [
                                 "id" => (object) [
-                                    "opt" => "float",
+                                    "opt" => "int",
                                 ],
                                 "title" => (object) [
                                     "opt" => "string",
@@ -361,7 +361,7 @@ $irDoc = (object) [
                 "arr" => (object) [
                     "obj" => (object) [
                         "id" => (object) [
-                            "opt" => "float",
+                            "opt" => "int",
                         ],
                         "title" => (object) [
                             "opt" => "string",
@@ -381,10 +381,10 @@ $irDoc = (object) [
                             "name" => "FeedRow",
                             "obj" => (object) [
                                 "author_id" => (object) [
-                                    "opt" => "float",
+                                    "opt" => "int",
                                 ],
                                 "id" => (object) [
-                                    "opt" => "float",
+                                    "opt" => "int",
                                 ],
                                 "status" => (object) [
                                     "opt" => "string",
@@ -578,10 +578,10 @@ $irDoc = (object) [
                 "arr" => (object) [
                     "obj" => (object) [
                         "author_id" => (object) [
-                            "opt" => "float",
+                            "opt" => "int",
                         ],
                         "id" => (object) [
-                            "opt" => "float",
+                            "opt" => "int",
                         ],
                         "status" => (object) [
                             "opt" => "string",
@@ -604,10 +604,10 @@ $irDoc = (object) [
                             "name" => "PagedFeedRow",
                             "obj" => (object) [
                                 "author_id" => (object) [
-                                    "opt" => "float",
+                                    "opt" => "int",
                                 ],
                                 "id" => (object) [
-                                    "opt" => "float",
+                                    "opt" => "int",
                                 ],
                                 "status" => (object) [
                                     "opt" => "string",
@@ -820,10 +820,10 @@ $irDoc = (object) [
                 "arr" => (object) [
                     "obj" => (object) [
                         "author_id" => (object) [
-                            "opt" => "float",
+                            "opt" => "int",
                         ],
                         "id" => (object) [
-                            "opt" => "float",
+                            "opt" => "int",
                         ],
                         "status" => (object) [
                             "opt" => "string",
@@ -846,10 +846,10 @@ $irDoc = (object) [
                             "name" => "OptionalOnlyFeedRow",
                             "obj" => (object) [
                                 "author_id" => (object) [
-                                    "opt" => "float",
+                                    "opt" => "int",
                                 ],
                                 "id" => (object) [
-                                    "opt" => "float",
+                                    "opt" => "int",
                                 ],
                                 "status" => (object) [
                                     "opt" => "string",
@@ -1030,10 +1030,10 @@ $irDoc = (object) [
                 "arr" => (object) [
                     "obj" => (object) [
                         "author_id" => (object) [
-                            "opt" => "float",
+                            "opt" => "int",
                         ],
                         "id" => (object) [
-                            "opt" => "float",
+                            "opt" => "int",
                         ],
                         "status" => (object) [
                             "opt" => "string",
@@ -1053,10 +1053,10 @@ $irDoc = (object) [
                             "name" => "QuotedOrderFeedRow",
                             "obj" => (object) [
                                 "author_id" => (object) [
-                                    "opt" => "float",
+                                    "opt" => "int",
                                 ],
                                 "id" => (object) [
-                                    "opt" => "float",
+                                    "opt" => "int",
                                 ],
                                 "status" => (object) [
                                     "opt" => "string",
@@ -1232,10 +1232,10 @@ $irDoc = (object) [
                 "arr" => (object) [
                     "obj" => (object) [
                         "author_id" => (object) [
-                            "opt" => "float",
+                            "opt" => "int",
                         ],
                         "id" => (object) [
-                            "opt" => "float",
+                            "opt" => "int",
                         ],
                         "status" => (object) [
                             "opt" => "string",
@@ -1258,7 +1258,7 @@ $irDoc = (object) [
                             "name" => "QuotedWhereOrderFeedRow",
                             "obj" => (object) [
                                 "id" => (object) [
-                                    "opt" => "float",
+                                    "opt" => "int",
                                 ],
                                 "status" => (object) [
                                     "opt" => "string",
@@ -1414,7 +1414,7 @@ $irDoc = (object) [
                 "arr" => (object) [
                     "obj" => (object) [
                         "id" => (object) [
-                            "opt" => "float",
+                            "opt" => "int",
                         ],
                         "status" => (object) [
                             "opt" => "string",
@@ -1437,10 +1437,10 @@ $irDoc = (object) [
                             "name" => "ViewFeedRow",
                             "obj" => (object) [
                                 "author_id" => (object) [
-                                    "opt" => "float",
+                                    "opt" => "int",
                                 ],
                                 "id" => (object) [
-                                    "opt" => "float",
+                                    "opt" => "int",
                                 ],
                                 "status" => (object) [
                                     "opt" => "string",
@@ -1596,10 +1596,10 @@ $irDoc = (object) [
                 "arr" => (object) [
                     "obj" => (object) [
                         "author_id" => (object) [
-                            "opt" => "float",
+                            "opt" => "int",
                         ],
                         "id" => (object) [
-                            "opt" => "float",
+                            "opt" => "int",
                         ],
                         "status" => (object) [
                             "opt" => "string",
@@ -1700,7 +1700,7 @@ $irDoc = (object) [
                                 ],
                             ],
                         ],
-                        "sql" => "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE conf_posts.author_id = ANY(?::int[]) ORDER BY id ASC",
+                        "sql" => "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE conf_posts.author_id = ANY(?::bigint[]) ORDER BY id ASC",
                     ],
                     "wirePassthrough" => true,
                 ],
@@ -1765,7 +1765,7 @@ $irDoc = (object) [
                                 ],
                             ],
                         ],
-                        "sql" => "SELECT id, post_id, label FROM conf_tags WHERE conf_tags.post_id = ANY(?::int[]) ORDER BY id ASC",
+                        "sql" => "SELECT id, post_id, label FROM conf_tags WHERE conf_tags.post_id = ANY(?::bigint[]) ORDER BY id ASC",
                     ],
                     "wirePassthrough" => true,
                 ],
@@ -1840,7 +1840,7 @@ $irDoc = (object) [
                             "name" => "UsersWithPostsRow",
                             "obj" => (object) [
                                 "id" => (object) [
-                                    "opt" => "float",
+                                    "opt" => "int",
                                 ],
                                 "name" => (object) [
                                     "opt" => "string",
@@ -1850,13 +1850,13 @@ $irDoc = (object) [
                                         "name" => "UsersWithPostsRow_posts",
                                         "obj" => (object) [
                                             "author_id" => (object) [
-                                                "opt" => "float",
+                                                "opt" => "int",
                                             ],
                                             "created_at" => (object) [
                                                 "opt" => "string",
                                             ],
                                             "id" => (object) [
-                                                "opt" => "float",
+                                                "opt" => "int",
                                             ],
                                             "status" => (object) [
                                                 "opt" => "string",
@@ -1866,13 +1866,13 @@ $irDoc = (object) [
                                                     "name" => "UsersWithPostsRow_posts_tags",
                                                     "obj" => (object) [
                                                         "id" => (object) [
-                                                            "opt" => "float",
+                                                            "opt" => "int",
                                                         ],
                                                         "label" => (object) [
                                                             "opt" => "string",
                                                         ],
                                                         "post_id" => (object) [
-                                                            "opt" => "float",
+                                                            "opt" => "int",
                                                         ],
                                                     ],
                                                 ],
@@ -1980,7 +1980,7 @@ $irDoc = (object) [
                 "arr" => (object) [
                     "obj" => (object) [
                         "id" => (object) [
-                            "opt" => "float",
+                            "opt" => "int",
                         ],
                         "name" => (object) [
                             "opt" => "string",
@@ -1989,13 +1989,13 @@ $irDoc = (object) [
                             "arr" => (object) [
                                 "obj" => (object) [
                                     "author_id" => (object) [
-                                        "opt" => "float",
+                                        "opt" => "int",
                                     ],
                                     "created_at" => (object) [
                                         "opt" => "string",
                                     ],
                                     "id" => (object) [
-                                        "opt" => "float",
+                                        "opt" => "int",
                                     ],
                                     "status" => (object) [
                                         "opt" => "string",
@@ -2004,13 +2004,13 @@ $irDoc = (object) [
                                         "arr" => (object) [
                                             "obj" => (object) [
                                                 "id" => (object) [
-                                                    "opt" => "float",
+                                                    "opt" => "int",
                                                 ],
                                                 "label" => (object) [
                                                     "opt" => "string",
                                                 ],
                                                 "post_id" => (object) [
-                                                    "opt" => "float",
+                                                    "opt" => "int",
                                                 ],
                                             ],
                                             "name" => "UsersWithPostsRow_posts_tags",
@@ -2116,7 +2116,7 @@ $irDoc = (object) [
                                 ],
                             ],
                         ],
-                        "sql" => "SELECT id, name, post_count FROM conf_users WHERE conf_users.id = ANY(?::int[])",
+                        "sql" => "SELECT id, name, post_count FROM conf_users WHERE conf_users.id = ANY(?::bigint[])",
                     ],
                     "wirePassthrough" => true,
                 ],
@@ -2132,25 +2132,25 @@ $irDoc = (object) [
                                         "name" => "PostsWithAuthorRow_author",
                                         "obj" => (object) [
                                             "id" => (object) [
-                                                "opt" => "float",
+                                                "opt" => "int",
                                             ],
                                             "name" => (object) [
                                                 "opt" => "string",
                                             ],
                                             "post_count" => (object) [
-                                                "opt" => "float",
+                                                "opt" => "int",
                                             ],
                                         ],
                                     ],
                                 ],
                                 "author_id" => (object) [
-                                    "opt" => "float",
+                                    "opt" => "int",
                                 ],
                                 "created_at" => (object) [
                                     "opt" => "string",
                                 ],
                                 "id" => (object) [
-                                    "opt" => "float",
+                                    "opt" => "int",
                                 ],
                                 "status" => (object) [
                                     "opt" => "string",
@@ -2249,26 +2249,26 @@ $irDoc = (object) [
                             "opt" => (object) [
                                 "obj" => (object) [
                                     "id" => (object) [
-                                        "opt" => "float",
+                                        "opt" => "int",
                                     ],
                                     "name" => (object) [
                                         "opt" => "string",
                                     ],
                                     "post_count" => (object) [
-                                        "opt" => "float",
+                                        "opt" => "int",
                                     ],
                                 ],
                                 "name" => "PostsWithAuthorRow_author",
                             ],
                         ],
                         "author_id" => (object) [
-                            "opt" => "float",
+                            "opt" => "int",
                         ],
                         "created_at" => (object) [
                             "opt" => "string",
                         ],
                         "id" => (object) [
-                            "opt" => "float",
+                            "opt" => "int",
                         ],
                         "status" => (object) [
                             "opt" => "string",
@@ -2441,7 +2441,7 @@ $irDoc = (object) [
                                 ],
                             ],
                         ],
-                        "sql" => "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE conf_posts.author_id = ANY(?::int[]) ORDER BY id ASC",
+                        "sql" => "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE conf_posts.author_id = ANY(?::bigint[]) ORDER BY id ASC",
                     ],
                     "wirePassthrough" => true,
                 ],
@@ -2457,13 +2457,13 @@ $irDoc = (object) [
                                         "name" => "UsersWithCappedPostsRow_cappedPosts",
                                         "obj" => (object) [
                                             "author_id" => (object) [
-                                                "opt" => "float",
+                                                "opt" => "int",
                                             ],
                                             "created_at" => (object) [
                                                 "opt" => "string",
                                             ],
                                             "id" => (object) [
-                                                "opt" => "float",
+                                                "opt" => "int",
                                             ],
                                             "status" => (object) [
                                                 "opt" => "string",
@@ -2475,7 +2475,7 @@ $irDoc = (object) [
                                     ],
                                 ],
                                 "id" => (object) [
-                                    "opt" => "float",
+                                    "opt" => "int",
                                 ],
                                 "name" => (object) [
                                     "opt" => "string",
@@ -2571,13 +2571,13 @@ $irDoc = (object) [
                             "arr" => (object) [
                                 "obj" => (object) [
                                     "author_id" => (object) [
-                                        "opt" => "float",
+                                        "opt" => "int",
                                     ],
                                     "created_at" => (object) [
                                         "opt" => "string",
                                     ],
                                     "id" => (object) [
-                                        "opt" => "float",
+                                        "opt" => "int",
                                     ],
                                     "status" => (object) [
                                         "opt" => "string",
@@ -2590,7 +2590,7 @@ $irDoc = (object) [
                             ],
                         ],
                         "id" => (object) [
-                            "opt" => "float",
+                            "opt" => "int",
                         ],
                         "name" => (object) [
                             "opt" => "string",
@@ -2688,7 +2688,7 @@ $irDoc = (object) [
                                 ],
                             ],
                         ],
-                        "sql" => "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE conf_posts.author_id = ANY(?::int[]) ORDER BY id ASC",
+                        "sql" => "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE conf_posts.author_id = ANY(?::bigint[]) ORDER BY id ASC",
                     ],
                     "wirePassthrough" => true,
                 ],
@@ -2700,7 +2700,7 @@ $irDoc = (object) [
                             "name" => "UsersWithUncappedPostsRow",
                             "obj" => (object) [
                                 "id" => (object) [
-                                    "opt" => "float",
+                                    "opt" => "int",
                                 ],
                                 "name" => (object) [
                                     "opt" => "string",
@@ -2710,13 +2710,13 @@ $irDoc = (object) [
                                         "name" => "UsersWithUncappedPostsRow_uncappedPosts",
                                         "obj" => (object) [
                                             "author_id" => (object) [
-                                                "opt" => "float",
+                                                "opt" => "int",
                                             ],
                                             "created_at" => (object) [
                                                 "opt" => "string",
                                             ],
                                             "id" => (object) [
-                                                "opt" => "float",
+                                                "opt" => "int",
                                             ],
                                             "status" => (object) [
                                                 "opt" => "string",
@@ -2815,7 +2815,7 @@ $irDoc = (object) [
                 "arr" => (object) [
                     "obj" => (object) [
                         "id" => (object) [
-                            "opt" => "float",
+                            "opt" => "int",
                         ],
                         "name" => (object) [
                             "opt" => "string",
@@ -2824,13 +2824,13 @@ $irDoc = (object) [
                             "arr" => (object) [
                                 "obj" => (object) [
                                     "author_id" => (object) [
-                                        "opt" => "float",
+                                        "opt" => "int",
                                     ],
                                     "created_at" => (object) [
                                         "opt" => "string",
                                     ],
                                     "id" => (object) [
-                                        "opt" => "float",
+                                        "opt" => "int",
                                     ],
                                     "status" => (object) [
                                         "opt" => "string",
@@ -2935,7 +2935,7 @@ $irDoc = (object) [
                                 ],
                             ],
                         ],
-                        "sql" => "SELECT conf_posts.* FROM unnest(?::int[]) AS _keys(key) CROSS JOIN LATERAL (SELECT * FROM conf_posts WHERE conf_posts.author_id = _keys.key ORDER BY id ASC LIMIT 1) conf_posts",
+                        "sql" => "SELECT conf_posts.* FROM unnest(?::bigint[]) AS _keys(key) CROSS JOIN LATERAL (SELECT * FROM conf_posts WHERE conf_posts.author_id = _keys.key ORDER BY id ASC LIMIT 1) conf_posts",
                     ],
                     "wirePassthrough" => true,
                 ],
@@ -2947,7 +2947,7 @@ $irDoc = (object) [
                             "name" => "UsersWithTopPostsRow",
                             "obj" => (object) [
                                 "id" => (object) [
-                                    "opt" => "float",
+                                    "opt" => "int",
                                 ],
                                 "name" => (object) [
                                     "opt" => "string",
@@ -2957,13 +2957,13 @@ $irDoc = (object) [
                                         "name" => "UsersWithTopPostsRow_topPosts",
                                         "obj" => (object) [
                                             "author_id" => (object) [
-                                                "opt" => "float",
+                                                "opt" => "int",
                                             ],
                                             "created_at" => (object) [
                                                 "opt" => "string",
                                             ],
                                             "id" => (object) [
-                                                "opt" => "float",
+                                                "opt" => "int",
                                             ],
                                             "status" => (object) [
                                                 "opt" => "string",
@@ -3062,7 +3062,7 @@ $irDoc = (object) [
                 "arr" => (object) [
                     "obj" => (object) [
                         "id" => (object) [
-                            "opt" => "float",
+                            "opt" => "int",
                         ],
                         "name" => (object) [
                             "opt" => "string",
@@ -3071,13 +3071,13 @@ $irDoc = (object) [
                             "arr" => (object) [
                                 "obj" => (object) [
                                     "author_id" => (object) [
-                                        "opt" => "float",
+                                        "opt" => "int",
                                     ],
                                     "created_at" => (object) [
                                         "opt" => "string",
                                     ],
                                     "id" => (object) [
-                                        "opt" => "float",
+                                        "opt" => "int",
                                     ],
                                     "status" => (object) [
                                         "opt" => "string",
@@ -3566,7 +3566,7 @@ $irDoc = (object) [
                             "name" => "CreatePostReturningRow",
                             "obj" => (object) [
                                 "id" => (object) [
-                                    "opt" => "float",
+                                    "opt" => "int",
                                 ],
                                 "title" => (object) [
                                     "opt" => "string",
@@ -3729,7 +3729,7 @@ $irDoc = (object) [
                 "arr" => (object) [
                     "obj" => (object) [
                         "id" => (object) [
-                            "opt" => "float",
+                            "opt" => "int",
                         ],
                         "title" => (object) [
                             "opt" => "string",
@@ -3749,7 +3749,7 @@ $irDoc = (object) [
                             "name" => "RenamePostReturningRow",
                             "obj" => (object) [
                                 "id" => (object) [
-                                    "opt" => "float",
+                                    "opt" => "int",
                                 ],
                                 "title" => (object) [
                                     "opt" => "string",
@@ -3885,7 +3885,7 @@ $irDoc = (object) [
                 "arr" => (object) [
                     "obj" => (object) [
                         "id" => (object) [
-                            "opt" => "float",
+                            "opt" => "int",
                         ],
                         "title" => (object) [
                             "opt" => "string",
@@ -3905,7 +3905,7 @@ $irDoc = (object) [
                             "name" => "RemovePostReturningRow",
                             "obj" => (object) [
                                 "id" => (object) [
-                                    "opt" => "float",
+                                    "opt" => "int",
                                 ],
                                 "title" => (object) [
                                     "opt" => "string",
@@ -4032,7 +4032,7 @@ $irDoc = (object) [
                 "arr" => (object) [
                     "obj" => (object) [
                         "id" => (object) [
-                            "opt" => "float",
+                            "opt" => "int",
                         ],
                         "title" => (object) [
                             "opt" => "string",
@@ -4052,7 +4052,7 @@ $irDoc = (object) [
                             "name" => "RestatusPostsReturningRow",
                             "obj" => (object) [
                                 "id" => (object) [
-                                    "opt" => "float",
+                                    "opt" => "int",
                                 ],
                                 "status" => (object) [
                                     "opt" => "string",
@@ -4188,7 +4188,7 @@ $irDoc = (object) [
                 "arr" => (object) [
                     "obj" => (object) [
                         "id" => (object) [
-                            "opt" => "float",
+                            "opt" => "int",
                         ],
                         "status" => (object) [
                             "opt" => "string",
@@ -4208,7 +4208,7 @@ $irDoc = (object) [
                             "name" => "RemovePostsByAuthorReturningRow",
                             "obj" => (object) [
                                 "id" => (object) [
-                                    "opt" => "float",
+                                    "opt" => "int",
                                 ],
                                 "title" => (object) [
                                     "opt" => "string",
@@ -4335,7 +4335,7 @@ $irDoc = (object) [
                 "arr" => (object) [
                     "obj" => (object) [
                         "id" => (object) [
-                            "opt" => "float",
+                            "opt" => "int",
                         ],
                         "title" => (object) [
                             "opt" => "string",
@@ -4355,10 +4355,10 @@ $irDoc = (object) [
                             "name" => "TypedRowsRow",
                             "obj" => (object) [
                                 "flag" => (object) [
-                                    "opt" => "float",
+                                    "opt" => "int",
                                 ],
                                 "id" => (object) [
-                                    "opt" => "float",
+                                    "opt" => "int",
                                 ],
                                 "label" => (object) [
                                     "opt" => "string",
@@ -4407,10 +4407,10 @@ $irDoc = (object) [
                 "arr" => (object) [
                     "obj" => (object) [
                         "flag" => (object) [
-                            "opt" => "float",
+                            "opt" => "int",
                         ],
                         "id" => (object) [
-                            "opt" => "float",
+                            "opt" => "int",
                         ],
                         "label" => (object) [
                             "opt" => "string",
@@ -4538,7 +4538,7 @@ $irDoc = (object) [
                                 ],
                             ],
                         ],
-                        "sql" => "INSERT INTO conf_tags (id, label, post_id) SELECT v.id, v.label, v.post_id FROM UNNEST(?::int[], ?::text[], ?::int[]) AS v(id, label, post_id)",
+                        "sql" => "INSERT INTO conf_tags (id, label, post_id) SELECT v.id, v.label, v.post_id FROM UNNEST(?::bigint[], ?::text[], ?::bigint[]) AS v(id, label, post_id)",
                     ],
                 ],
             ],
@@ -4889,10 +4889,10 @@ $irDoc = (object) [
                             "name" => "CreateLineRow",
                             "obj" => (object) [
                                 "line_no" => (object) [
-                                    "opt" => "float",
+                                    "opt" => "int",
                                 ],
                                 "order_id" => (object) [
-                                    "opt" => "float",
+                                    "opt" => "int",
                                 ],
                                 "sku" => (object) [
                                     "opt" => "string",
@@ -5037,10 +5037,10 @@ $irDoc = (object) [
                 "arr" => (object) [
                     "obj" => (object) [
                         "line_no" => (object) [
-                            "opt" => "float",
+                            "opt" => "int",
                         ],
                         "order_id" => (object) [
-                            "opt" => "float",
+                            "opt" => "int",
                         ],
                         "sku" => (object) [
                             "opt" => "string",
@@ -5060,7 +5060,7 @@ $irDoc = (object) [
                             "name" => "CreateTagsReturningRow",
                             "obj" => (object) [
                                 "id" => (object) [
-                                    "opt" => "float",
+                                    "opt" => "int",
                                 ],
                                 "label" => (object) [
                                     "opt" => "string",
@@ -5169,7 +5169,7 @@ $irDoc = (object) [
                                 ],
                             ],
                         ],
-                        "sql" => "INSERT INTO conf_tags (id, label, post_id) SELECT v.id, v.label, v.post_id FROM UNNEST(?::int[], ?::text[], ?::int[]) AS v(id, label, post_id) RETURNING id, label",
+                        "sql" => "INSERT INTO conf_tags (id, label, post_id) SELECT v.id, v.label, v.post_id FROM UNNEST(?::bigint[], ?::text[], ?::bigint[]) AS v(id, label, post_id) RETURNING id, label",
                     ],
                 ],
             ],
@@ -5208,7 +5208,7 @@ $irDoc = (object) [
                 "arr" => (object) [
                     "obj" => (object) [
                         "id" => (object) [
-                            "opt" => "float",
+                            "opt" => "int",
                         ],
                         "label" => (object) [
                             "opt" => "string",
@@ -5228,7 +5228,7 @@ $irDoc = (object) [
                             "name" => "RelabelTagsReturningRow",
                             "obj" => (object) [
                                 "id" => (object) [
-                                    "opt" => "float",
+                                    "opt" => "int",
                                 ],
                                 "label" => (object) [
                                     "opt" => "string",
@@ -5332,7 +5332,7 @@ $irDoc = (object) [
                                 ],
                             ],
                         ],
-                        "sql" => "UPDATE conf_tags AS t SET label = v.label FROM UNNEST(?::int[], ?::text[]) AS v(id, label) WHERE t.id = v.id RETURNING t.id, t.label",
+                        "sql" => "UPDATE conf_tags AS t SET label = v.label FROM UNNEST(?::bigint[], ?::text[]) AS v(id, label) WHERE t.id = v.id RETURNING t.id, t.label",
                     ],
                 ],
             ],
@@ -5366,7 +5366,7 @@ $irDoc = (object) [
                 "arr" => (object) [
                     "obj" => (object) [
                         "id" => (object) [
-                            "opt" => "float",
+                            "opt" => "int",
                         ],
                         "label" => (object) [
                             "opt" => "string",
@@ -5386,7 +5386,7 @@ $irDoc = (object) [
                             "name" => "RemoveTagsReturningRow",
                             "obj" => (object) [
                                 "id" => (object) [
-                                    "opt" => "float",
+                                    "opt" => "int",
                                 ],
                                 "label" => (object) [
                                     "opt" => "string",
@@ -5514,7 +5514,7 @@ $irDoc = (object) [
                 "arr" => (object) [
                     "obj" => (object) [
                         "id" => (object) [
-                            "opt" => "float",
+                            "opt" => "int",
                         ],
                         "label" => (object) [
                             "opt" => "string",

@@ -13,18 +13,22 @@
 // the Go twin of the rust `execute_sql`/`pluck_keys`/`group_children` leaf (same op-agnostic wire
 // contract), NOT the py/php native-record method leaf.
 //
-// CONNECTION: the covered module calls these as free functions (bc's transport contract carries no db
-// handle), so the consumer BINDS the target [ExecutionContext] once via [BindLeafTransport] before
-// driving the generated runners. This is the leaf transport's single bound context — not a fallback
-// path. It is the CONTEXT that is bound, not a raw db: the ctx is what carries the connection ROUTING
-// (reader/writer split, named DB, writer-sticky), and this is the only path a bc typed-native module
-// reaches a connection by, so a routed consumer configuration has to arrive HERE. Wrapping the db in
-// [ContextForDB] inside the binder instead — which never sets `routing` — left every routed setup
-// inert (#214).
+// CONNECTION: the covered module passes its caller's `context.Context` to every transport call (bc's
+// transport contract carries no db handle), and the [ExecutionContext] a statement runs on rides IN that
+// context: the consumer binds it with [BindLeafTransport] and calls the generated entries with the
+// returned context. Go has no goroutine-local storage, so the call's context is the only thing that
+// tells concurrent requests apart — each request binds its own ExecutionContext, and a transaction
+// ([WithAmbientTransaction]) hands its body a DERIVED context bound to the tx-scoped ExecutionContext,
+// leaving every other request's context untouched. It is the CONTEXT that is bound, not a raw db: the ctx
+// is what carries the connection ROUTING (reader/writer split, named DB, writer-sticky), and this is the
+// only path a bc typed-native module reaches a connection by, so a routed consumer configuration has to
+// arrive HERE. Wrapping the db in [ContextForDB] inside the binder instead — which never sets `routing` —
+// left every routed setup inert (#214).
 
 package litedbmodel_runtime
 
 import (
+	"context"
 	"fmt"
 	"github.com/foo-ogawa/litedbmodel/go/v2/litedbmodel_runtime/wire"
 	"math"
@@ -39,26 +43,41 @@ import (
 // generated de-box also compares against).
 const wireProbeGot uint8 = 0
 
-// leaf transport bound state (set by BindLeafTransport). The bench/consumer drives the generated
-// runners sequentially against ONE bound context; ExecuteSQL funnels every SQL node through it.
-var (
-	leafExecCtx *ExecutionContext
-	leafDialect = "sqlite"
-)
-
-// BindLeafTransport binds the [ExecutionContext] (+ dialect for placeholder rendering) the
-// free-function leaf transport issues SQL against. Call ONCE before driving
-// RunNativeRawStruct_<comp>. A single-DB consumer passes [ContextForDB]; a routed one passes
-// [ContextForRouting], and its reader/writer split, named-DB registry and writer-sticky clock then
-// resolve per statement inside [ExecutionContext.ConnectionFor] — the leaf issues an INTENT, the ctx
-// picks the connection.
-func BindLeafTransport(ctx *ExecutionContext, dialect string) {
-	leafExecCtx = ctx
-	leafDialect = dialect
+// leafBinding is what a Go context carries to the leaf transport: the [ExecutionContext] the statements
+// run on and the dialect their placeholders render for.
+type leafBinding struct {
+	exec    *ExecutionContext
+	dialect string
 }
 
-// UnbindLeafTransport clears the bound CONTEXT (leaves ExecuteSQL fail-closed until re-bound).
-func UnbindLeafTransport() { leafExecCtx = nil }
+// leafBindingKey is the private context key the binding rides under.
+type leafBindingKey struct{}
+
+// BindLeafTransport returns a Go context — derived from the one `exec` rides — that carries `exec` (+ the
+// dialect for placeholder rendering) to the leaf transport: every bc-generated entry called with it, or
+// with any context derived from it, issues its statements on `exec`. Bind once per request, with an
+// ExecutionContext built for that request ([ContextForDBCtx] / [ContextForRoutingCtx] over the request's
+// context): the ExecutionContext is the request scope, so its writer-sticky stamp ([WriterStickyClock])
+// is that request's alone. A single-DB consumer passes a [ContextForDB] ctx; a routed one a
+// [ContextForRouting] ctx, and its reader/writer split, named-DB registry and writer-sticky then resolve
+// per statement inside [ExecutionContext.ConnectionFor] — the leaf issues an INTENT, the ctx picks the
+// connection.
+func BindLeafTransport(exec *ExecutionContext, dialect string) context.Context {
+	return bindLeaf(exec.Context(), leafBinding{exec: exec, dialect: dialect})
+}
+
+func bindLeaf(goCtx context.Context, b leafBinding) context.Context {
+	return context.WithValue(goCtx, leafBindingKey{}, b)
+}
+
+// leafBindingOf reads the binding a generated entry's context carries. Absent is LOUD: a statement with
+// no ExecutionContext has no connection to run on, and there is nothing else to fall back to.
+func leafBindingOf(goCtx context.Context) (leafBinding, error) {
+	if b, ok := goCtx.Value(leafBindingKey{}).(leafBinding); ok {
+		return b, nil
+	}
+	return leafBinding{}, fmt.Errorf("leaf transport: the context carries no execution context (call the generated entry with a context returned by BindLeafTransport, or derived from one)")
+}
 
 // ── Port unbox — the generic-wire payload → the leaf's declared ports ───────────────────────────────
 //
@@ -510,7 +529,7 @@ func assembleDynamicWhere(head string, headParams []wire.WireValue, plan *dynami
 // shared checkHardLimit SSoT) because past [GroupChildren] the graph is already nested. The whole
 // control surface is ONE optional record, so ports ride in the payload as {opts?, params, sql} — a
 // bounded read carries `sql` and `params` alone.
-func ExecuteSQL(payload wire.WireRow) (wire.WireValue, error) {
+func ExecuteSQL(ctx context.Context, payload wire.WireRow) (wire.WireValue, error) {
 	params, err := portList(payload, "params")
 	if err != nil {
 		return wire.WireNull(), err
@@ -523,8 +542,9 @@ func ExecuteSQL(payload wire.WireRow) (wire.WireValue, error) {
 	if err != nil {
 		return wire.WireNull(), err
 	}
-	if leafExecCtx == nil {
-		return wire.WireNull(), fmt.Errorf("leaf transport: no bound execution context (call BindLeafTransport before running the native module)")
+	bound, err := leafBindingOf(ctx)
+	if err != nil {
+		return wire.WireNull(), err
 	}
 	// Assemble the DYNAMIC (SKIP) WHERE FIRST when a plan is present: the final statement shape is only
 	// known here, so the placeholder render (finalizeSQL, below) must follow it (CLAUDE.md §2). With a
@@ -537,9 +557,9 @@ func ExecuteSQL(payload wire.WireRow) (wire.WireValue, error) {
 	values := make([]bc.Value, len(params))
 	for i, p := range params {
 		values[i] = wireToValue(p)
-		args[i] = leafParam(p, leafDialect)
+		args[i] = leafParam(p, bound.dialect)
 	}
-	text := finalizeSQL(sql, arrayBinds(values), leafDialect)
+	text := finalizeSQL(sql, arrayBinds(values), bound.dialect)
 	// The seam INTENT the statement's RUN MODE reduces to: a write mode PRESENT ⇒ a WRITE (the writer /
 	// tx connection), absent ⇒ a READ. Derived ONCE, BEFORE the branch, because the branch selects the
 	// SEAM (`returning` ⇒ the row seam) while the intent selects the CONNECTION: a RETURNING write runs
@@ -550,7 +570,7 @@ func ExecuteSQL(payload wire.WireRow) (wire.WireValue, error) {
 	// default connection, i.e. the intent every single-DB statement has always carried.
 	intent := StatementIntent{Write: opts.write != nil, DB: opts.db}
 	if opts.write != nil && !opts.write.returning {
-		info, err := Run(leafExecCtx, text, args, intent)
+		info, err := Run(bound.exec, text, args, intent)
 		if err != nil {
 			return wire.WireNull(), err
 		}
@@ -562,7 +582,7 @@ func ExecuteSQL(payload wire.WireRow) (wire.WireValue, error) {
 		})
 		return wire.WireListOf([]wire.WireValue{summary}), nil
 	}
-	rows, err := Execute(leafExecCtx, text, args, intent)
+	rows, err := Execute(bound.exec, text, args, intent)
 	if err != nil {
 		return wire.WireNull(), err
 	}
@@ -582,28 +602,26 @@ func ExecuteSQL(payload wire.WireRow) (wire.WireValue, error) {
 	return wire.WireListOf(items), nil
 }
 
-// WithAmbientTransaction runs `body` inside ONE transaction on the BOUND context, threading the
-// tx-owned connection as the AMBIENT the free-function [ExecuteSQL] resolves — so a bc-generated tx
-// runner (which calls ExecuteSQL directly, taking no db handle) executes every statement of the tx's own database (an unnamed one, or one naming that database) ON the
-// transaction. BEGIN → run body under the tx-pinned ambient → COMMIT on ok / ROLLBACK on a body error
-// (atomicity). This is the CONSUMER's tx-boundary responsibility (NOT a bc feature, NOT emitted into
-// the generated runner); it adds NO tx engine — it reuses the existing tx combinator
-// ([WithTransaction], which owns BEGIN/COMMIT/ROLLBACK through the central seam, acquires the tx's
-// owned connection from the ctx's WRITER pool and arms writer-sticky on COMMIT) and only swaps the
-// ambient leaf ctx for the body span. WHICH connection the transaction opens on is therefore the same
-// question the bound ctx already answers for every statement — taking a `db` here instead let a routed
-// covered plane BEGIN outside its own routing (#215). Go twin of the rust `with_ambient_transaction`
-// leaf. Requires a bound transport ([BindLeafTransport]).
-func WithAmbientTransaction(body func() error) error {
-	base := leafExecCtx
-	if base == nil {
-		return fmt.Errorf("leaf transport: WithAmbientTransaction needs a bound transport (call BindLeafTransport first)")
+// WithAmbientTransaction runs `body` inside ONE transaction on the ExecutionContext `ctx` is bound to
+// ([BindLeafTransport]), handing `body` a context DERIVED from `ctx` and bound to the tx-scoped
+// ExecutionContext — so a bc-generated entry called with `txCtx` (which reaches its connection only
+// through [ExecuteSQL]) executes every statement of the tx's own database (an unnamed one, or one naming
+// that database) ON the transaction. BEGIN → body(txCtx) → COMMIT on ok / ROLLBACK on a body error
+// (atomicity). `ctx` itself is not changed: a statement issued with it — or with any other request's
+// context — still runs off the transaction, which is what keeps concurrent goroutines apart. This is the
+// CONSUMER's tx-boundary responsibility (NOT a bc feature, NOT emitted into the generated runner); it adds
+// NO tx engine — it reuses the existing tx combinator ([WithTransaction], which owns BEGIN/COMMIT/ROLLBACK
+// through the central seam, acquires the tx's owned connection from the ctx's WRITER pool and arms
+// writer-sticky on COMMIT). WHICH connection the transaction opens on is therefore the same question the
+// bound ctx already answers for every statement — taking a `db` here instead let a routed covered plane
+// BEGIN outside its own routing (#215). Go twin of the rust `with_ambient_transaction` leaf.
+func WithAmbientTransaction(ctx context.Context, body func(txCtx context.Context) error) error {
+	bound, err := leafBindingOf(ctx)
+	if err != nil {
+		return err
 	}
-	prev := leafExecCtx
-	_, err := WithTransaction(base, func(txCtx *ExecutionContext) (struct{}, error) {
-		leafExecCtx = txCtx                   // the tx-owned ctx is the ambient the covered runner's ExecuteSQL resolves…
-		defer func() { leafExecCtx = prev }() // …restored on COMMIT / ROLLBACK / panic (scopes restore)
-		return struct{}{}, body()
+	_, err = WithTransaction(bound.exec, func(txExec *ExecutionContext) (struct{}, error) {
+		return struct{}{}, body(bindLeaf(ctx, leafBinding{exec: txExec, dialect: bound.dialect}))
 	})
 	return err
 }
@@ -616,7 +634,7 @@ func WithAmbientTransaction(body func() error) error {
 // read path. A single-key `col` emits a FLAT scalar key array (the deduped cell itself); a composite
 // `col` emits an array-of-tuples (each a wire list) — the SAME shape the child SQL's json_each param
 // expects. Go twin of the rust `pluck_keys` leaf. Ports ride in the payload as {col, rows}.
-func PluckKeys(payload wire.WireRow) (wire.WireValue, error) {
+func PluckKeys(_ context.Context, payload wire.WireRow) (wire.WireValue, error) {
 	col, err := portStrings(payload, "col")
 	if err != nil {
 		return wire.WireNull(), err
@@ -647,7 +665,7 @@ func PluckKeys(payload wire.WireRow) (wire.WireValue, error) {
 // order). Each parent is shallow-copied before the own-key set (matching the TS `{...par, [into]: …}`
 // spread — the input is not mutated; nested children are referenced, not deep-cloned). Go twin of the
 // rust `group_children` leaf. Ports ride in the payload as {children, fk, into, parents, pk, single}.
-func GroupChildren(payload wire.WireRow) (wire.WireValue, error) {
+func GroupChildren(_ context.Context, payload wire.WireRow) (wire.WireValue, error) {
 	children, err := portList(payload, "children")
 	if err != nil {
 		return wire.WireNull(), err

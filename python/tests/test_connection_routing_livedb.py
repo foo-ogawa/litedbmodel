@@ -324,6 +324,228 @@ def test_c1_with_writer_scope():
 
 
 # ════════════════════════════════════════════════════════════════════════════════
+# C1 — the same routing under REAL concurrent threads (PG + MySQL)
+# ════════════════════════════════════════════════════════════════════════════════
+
+# Per dialect: the table, the placeholder style, the server-side session id, a server-side sleep, and the
+# tx dialect name. Each test runs the SAME scenario on both servers.
+_DIALECTS = {
+    "postgres": dict(
+        setup=_setup_pg,
+        raw=_pg_raw_pool,
+        factory=pg_pool_factory,
+        config=_pg_conn_config,
+        session_alive="SELECT count(*) FROM pg_stat_activity WHERE pid = %s",
+        pool=_pg_pool,
+        insert="INSERT INTO %s (id, val) VALUES ($1, $2)" % TBL,
+        select_ids="SELECT id FROM %s WHERE id >= $1 AND id < $2 ORDER BY id" % TBL,
+        select_val="SELECT val FROM %s WHERE id = $1" % TBL,
+        session_id="SELECT pg_backend_pid() AS sid",
+        sleep="SELECT pg_sleep(0.05) AS d",
+    ),
+    "mysql": dict(
+        setup=_setup_my,
+        raw=_my_raw_pool,
+        factory=mysql_pool_factory,
+        config=_my_conn_config,
+        session_alive="SELECT COUNT(*) FROM information_schema.PROCESSLIST WHERE ID = %s",
+        pool=_my_pool,
+        insert="INSERT INTO %s (id, val) VALUES (?, ?)" % MY_TBL,
+        select_ids="SELECT id FROM %s WHERE id >= ? AND id < ? ORDER BY id" % MY_TBL,
+        select_val="SELECT val FROM %s WHERE id = ?" % MY_TBL,
+        session_id="SELECT CONNECTION_ID() AS sid",
+        sleep="SELECT SLEEP(0.05) AS d",
+    ),
+}
+
+_READ = StatementIntent(write=False)
+_WRITE = StatementIntent(write=True)
+
+
+class _ThreadLog:
+    """A ``_RecordingPool`` log that files each acquire under the thread that made it, so a test can
+    say WHICH thread's statement was served by which pool."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self.by_thread = {}
+
+    def append(self, label):
+        with self._lock:
+            self.by_thread.setdefault(threading.current_thread().name, []).append(label)
+
+    def last(self, name):
+        with self._lock:
+            return self.by_thread[name][-1]
+
+
+def _run_threads(targets, timeout=60):
+    """Start one named thread per ``(name, fn)``, all at once, and join them. A thread that is still
+    alive after ``timeout`` is a hang (deadlock / lost wake-up); an exception in any thread fails the
+    test (a bare ``threading.Thread`` would only print it). Returns ``{name: fn's return value}``."""
+    results, errors = {}, []
+
+    def wrap(name, fn):
+        def body():
+            try:
+                results[name] = fn()
+            except BaseException as e:
+                errors.append((name, e))
+
+        return body
+
+    threads = [threading.Thread(target=wrap(n, f), name=n) for n, f in targets]
+    for t in threads:
+        t.start()
+    deadline = time.monotonic() + timeout
+    for t in threads:
+        t.join(max(0.0, deadline - time.monotonic()))
+    hung = [t.name for t in threads if t.is_alive()]
+    assert hung == [], "threads still running after %ss (hang): %r" % (timeout, hung)
+    assert errors == [], "thread failures: %r" % errors
+    return results
+
+
+def test_c1_writer_sticky_is_per_thread_live():
+    """Writer-sticky is read-your-writes for the thread that committed. One thread commits and then reads
+    (→ WRITER, and it sees its row); five other threads, alive at the same time, read inside that same
+    sticky window (→ READER, each of them). On PG and on MySQL, with two distinct pools."""
+    for name, d in _DIALECTS.items():
+        raw = d["setup"]()
+        try:
+            tlog = _ThreadLog()
+            reader = _RecordingPool(d["pool"](raw), "reader", tlog)
+            writer = _RecordingPool(d["pool"](raw), "writer", tlog)
+            # A 60s window: every read below happens inside it, however slow the machine.
+            sticky = WriterStickyClock(use_writer_after_transaction=True, writer_sticky_duration=60_000)
+            ctx = _ctx(RoutingConfig(ConnectionRegistry.from_default(reader_writer_pair(reader, writer)).build(), sticky))
+            readers = ["reader-%d" % i for i in range(5)]
+            started = threading.Barrier(1 + len(readers), timeout=30)
+            committed = threading.Event()
+            read_done = threading.Barrier(1 + len(readers), timeout=30)
+
+            def committer():
+                started.wait()
+                transaction(ctx, lambda: run_guarded(current_context(), d["insert"], [100, "mine"], "INSERT"), TransactionOptions(), name)
+                committed.set()
+                first = execute(ctx, d["select_val"], [100], _READ)
+                first_pool = tlog.last("committer")
+                read_done.wait()  # the other threads have read inside the window
+                later = execute(ctx, d["select_val"], [100], _READ)
+                return first, first_pool, later, tlog.last("committer")
+
+            def other(me):
+                def body():
+                    started.wait()
+                    assert committed.wait(30)
+                    execute(ctx, "SELECT 1 AS one", [], _READ)
+                    pool = tlog.last(me)
+                    read_done.wait()
+                    return pool
+
+                return body
+
+            res = _run_threads([("committer", committer)] + [(r, other(r)) for r in readers])
+            first, first_pool, later, later_pool = res["committer"]
+            assert (first_pool, later_pool) == ("writer", "writer"), name
+            assert first[0]["val"] == "mine" and later[0]["val"] == "mine", name
+            assert {r: res[r] for r in readers} == {r: "reader" for r in readers}, name
+            assert sticky.is_sticky() is False, name  # the test's own thread never committed
+        finally:
+            raw.close()
+
+
+def test_c1_concurrent_transactions_each_own_a_connection():
+    """Four threads hold a transaction open at the same time while a fifth runs plain statements. Each
+    transaction is on its own server session and sees only its own uncommitted row; the fifth thread's
+    statements run on none of those sessions and see none of those rows. After COMMIT every row is
+    there. On PG and on MySQL."""
+    for name, d in _DIALECTS.items():
+        raw = d["setup"]()
+        try:
+            ctx = _ctx(RoutingConfig(ConnectionRegistry.single_default(d["pool"](raw)), WriterStickyClock(use_writer_after_transaction=False)))
+            ids = [200, 201, 202, 203]
+            all_open = threading.Barrier(len(ids) + 1, timeout=30)
+            checked = threading.Barrier(len(ids) + 1, timeout=30)
+
+            def tx_thread(my_id):
+                def body():
+                    tx_ctx = current_context()
+                    run_guarded(tx_ctx, d["insert"], [my_id, "tx"], "INSERT")
+                    sid = execute(tx_ctx, d["session_id"], [], _READ)[0]["sid"]
+                    all_open.wait()  # every transaction is open and has written, none committed
+                    seen = [int(r["id"]) for r in execute(tx_ctx, d["select_ids"], [200, 300], _READ)]
+                    checked.wait()
+                    return sid, seen
+
+                return lambda: transaction(ctx, body, TransactionOptions(), name)
+
+            def outside():
+                assert current_context() is None  # another thread's tx pin is not visible here
+                all_open.wait()
+                sid = execute(ctx, d["session_id"], [], _READ)[0]["sid"]
+                seen = [int(r["id"]) for r in execute(ctx, d["select_ids"], [200, 300], _READ)]
+                checked.wait()
+                return sid, seen
+
+            res = _run_threads([("tx-%d" % i, tx_thread(i)) for i in ids] + [("outside", outside)])
+            tx_sids = [res["tx-%d" % i][0] for i in ids]
+            assert len(set(tx_sids)) == len(ids), "%s: concurrent transactions shared a session: %r" % (name, tx_sids)
+            for i in ids:
+                assert res["tx-%d" % i][1] == [i], "%s: tx %d saw %r" % (name, i, res["tx-%d" % i][1])
+            out_sid, out_seen = res["outside"]
+            assert out_sid not in tx_sids, "%s: a non-tx statement ran on a transaction's connection" % name
+            assert out_seen == [], "%s: a non-tx read saw uncommitted rows %r" % (name, out_seen)
+            committed = [int(r["id"]) for r in execute(ctx, d["select_ids"], [200, 300], _READ)]
+            assert committed == ids, name
+        finally:
+            raw.close()
+
+
+def test_c1_pool_contention_waits_then_succeeds():
+    """More threads than connections: twelve threads (six transactions, six plain reads) on a pool of
+    TWO. Every acquire past the second waits for a release and then succeeds — no hang, no lost result,
+    never more than two connections open. On PG and on MySQL."""
+    for name, d in _DIALECTS.items():
+        d["setup"]().close()  # a fresh table
+        raw = d["raw"](size=2)
+        try:
+            ctx = _ctx(RoutingConfig(ConnectionRegistry.single_default(d["pool"](raw)), WriterStickyClock(use_writer_after_transaction=False)))
+            peak = {"v": 0}
+            lock = threading.Lock()
+
+            def observe():
+                with lock:
+                    peak["v"] = max(peak["v"], raw._opened)
+
+            def tx_thread(my_id):
+                def body():
+                    tx_ctx = current_context()
+                    run_guarded(tx_ctx, d["insert"], [my_id, "c%d" % my_id], "INSERT")
+                    execute(tx_ctx, d["sleep"], [], _READ)  # hold the connection so others must wait
+                    observe()
+                    return execute(tx_ctx, d["select_val"], [my_id], _READ)[0]["val"]
+
+                return lambda: transaction(ctx, body, TransactionOptions(), name)
+
+            def reader_thread():
+                execute(ctx, d["sleep"], [], _READ)
+                observe()
+                return int(execute(ctx, "SELECT 1 AS one", [], _READ)[0]["one"])
+
+            tx_ids = list(range(300, 306))
+            targets = [("tx-%d" % i, tx_thread(i)) for i in tx_ids] + [("read-%d" % i, reader_thread) for i in range(6)]
+            res = _run_threads(targets, timeout=60)
+            assert {i: res["tx-%d" % i] for i in tx_ids} == {i: "c%d" % i for i in tx_ids}, name
+            assert [res["read-%d" % i] for i in range(6)] == [1] * 6, name
+            assert peak["v"] <= 2 and raw._opened <= 2, "%s: pool of 2 opened %d" % (name, peak["v"])
+            committed = [int(r["id"]) for r in execute(ctx, d["select_ids"], [300, 400], _READ)]
+            assert committed == tx_ids, name
+        finally:
+            raw.close()
+
+
+# ════════════════════════════════════════════════════════════════════════════════
 # C2 — multi-DB name routing (PG = A, MySQL = B) + tx-pin precedence
 # ════════════════════════════════════════════════════════════════════════════════
 
@@ -603,3 +825,99 @@ def test_c3_pg_and_mysql_factories_end_to_end():
     mr = execute(mctx, "SELECT 13 AS n", [], StatementIntent(write=False))
     assert int(mr[0]["n"]) == 13
     my_close()
+
+
+def _built(d, **knobs):
+    """Build a routing config through the dialect's SHIPPED factory with ``knobs`` set on its
+    connection config, and capture the ``_ConnectionPool`` the factory constructed."""
+    captured = {}
+    base = d["factory"]()
+
+    def factory(config, role):
+        pool, close = base(config, role)
+        captured["raw"] = pool._pool
+        return pool, close
+
+    config = d["config"]()
+    for k, v in knobs.items():
+        setattr(config, k, v)
+    routing, close = build_routing_config([ConnectionSetup(pool_factory=factory, config=config)])
+    return _ctx(routing), captured["raw"], close
+
+
+def test_c3_connect_timeout_bounds_the_wait_for_a_free_connection():
+    """With the pool at ``max_pool`` and nothing released, getting a connection fails after
+    ``connect_timeout_millis`` — not sooner, and not never. Once a connection is released the same
+    statement succeeds. On PG and on MySQL, through the shipped factories."""
+    for name, d in _DIALECTS.items():
+        ctx, raw, close = _built(d, max_pool=1, connect_timeout_millis=400)
+        try:
+            held = raw.acquire()  # the only connection is checked out
+            t0 = time.monotonic()
+            with pytest.raises(TimeoutError, match="acquire timed out after 0.4s"):
+                execute(ctx, "SELECT 1 AS one", [], _READ)
+            elapsed = time.monotonic() - t0
+            assert 0.4 <= elapsed < 3.0, "%s: waited %.2fs for a 400ms bound" % (name, elapsed)
+            raw.release(held)
+            assert int(execute(ctx, "SELECT 1 AS one", [], _READ)[0]["one"]) == 1, name
+        finally:
+            close()
+
+
+
+def test_c3_connect_timeout_zero_waits_without_limit():
+    """``connect_timeout_millis=0`` is no limit: with the pool exhausted, a statement keeps waiting —
+    well past any short bound — and completes once the connection is released. On PG and on MySQL,
+    through the shipped factories."""
+    for name, d in _DIALECTS.items():
+        ctx, raw, close = _built(d, max_pool=1, connect_timeout_millis=0)
+        try:
+            held = raw.acquire()
+            got = {}
+
+            def waiter():
+                got["one"] = int(execute(ctx, "SELECT 1 AS one", [], _READ)[0]["one"])
+
+            t = threading.Thread(target=waiter)
+            t.start()
+            t.join(1.5)
+            assert t.is_alive() and got == {}, "%s: the waiter gave up with no limit configured" % name
+            raw.release(held)
+            t.join(30)
+            assert not t.is_alive() and got == {"one": 1}, name
+        finally:
+            close()
+
+
+def test_c3_idle_connection_is_closed_on_the_server():
+    """A pooled connection unused for ``idle_timeout_millis`` is closed — its server session is gone
+    (checked from a separate connection), with no further query needed — and the next statement opens
+    a new session. On PG and on MySQL, through the shipped factories."""
+    for name, d in _DIALECTS.items():
+        ctx, raw, close = _built(d, idle_timeout_millis=300)
+        probe = d["raw"](size=1)
+        try:
+
+            def alive(sid):
+                conn = probe.acquire()
+                try:
+                    cur = conn.cursor()
+                    cur.execute(d["session_alive"], [sid])
+                    n = cur.fetchone()[0]
+                    cur.close()
+                    return int(n)
+                finally:
+                    probe.release(conn)
+
+            sid = execute(ctx, d["session_id"], [], _READ)[0]["sid"]
+            assert raw._opened == 1 and alive(sid) == 1, name
+            deadline = time.monotonic() + 5.0
+            while alive(sid) and time.monotonic() < deadline:
+                time.sleep(0.05)
+            assert alive(sid) == 0, "%s: the idle session %s is still open on the server" % (name, sid)
+            assert raw._opened == 0, name
+            again = execute(ctx, d["session_id"], [], _READ)[0]["sid"]
+            assert again != sid, name
+        finally:
+            probe.close()
+            close()

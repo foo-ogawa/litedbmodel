@@ -28,7 +28,7 @@
  * Run:  see benchmark/parity/README (regeneration) or the npm script `parity:capture`.
  */
 import 'reflect-metadata';
-import { describe, it } from 'vitest';
+import { describe, it, aroundEach } from 'vitest';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
@@ -43,6 +43,11 @@ import {
   closeAllPools,
   Middleware,
 } from '../../src';
+
+// Each test is one request: middleware instances live in the Middleware.run scope around it.
+aroundEach(async (runTest) => {
+  await Middleware.run(() => runTest());
+});
 import type { DBConfig, ExecuteResult } from '../../src';
 
 const __filename = fileURLToPath(import.meta.url);

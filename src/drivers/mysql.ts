@@ -33,6 +33,7 @@ interface Mysql2Module {
     waitForConnections?: boolean;
     connectionLimit?: number;
     connectTimeout?: number;
+    idleTimeout?: number;
     // v1/v2 read de-box (issue #9/#59): BIGINT → exact string, date family → native textual string.
     supportBigNumbers?: boolean;
     bigNumberStrings?: boolean;
@@ -89,6 +90,7 @@ function getPool(config: DBConfig): Mysql2Pool {
       waitForConnections: true,
       connectionLimit: config.max || 10,
       connectTimeout: (config.timeout || 30) * 1000,
+      idleTimeout: config.idleTimeoutMillis ?? 10000,
       // Read de-box (issue #9): make BIGINT arrive as an exact string (else mysql2 rounds it to a JS
       // number past 2^53) and the DATE/TIMESTAMP/DATETIME family arrive as its native textual string
       // (else a TZ-shifted JS Date) — the coercible forms `materializeCell` (int64/date) expects. Same

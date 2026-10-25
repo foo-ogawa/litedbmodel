@@ -43,6 +43,7 @@ import {
 // The row-lock tail SSoT (` FOR UPDATE` / ` FOR SHARE`) — shared with the SCP `compileSelect`, so the
 // imperative builder and the compiled statement render byte-identical locking clauses.
 import { lockTail } from './scp/makesql/compile-select';
+import { WriterStickyClock } from './scp/connection-routing';
 import type { Scope } from 'behavior-contracts/runtime';
 
 // Transaction context stored in AsyncLocalStorage
@@ -229,8 +230,8 @@ export abstract class DBModel {
     writerStickyDuration: 5000,
   };
 
-  /** Last transaction completion time (for writer sticky) */
-  protected static _lastTransactionTime: number = 0;
+  /** Writer-sticky clock of the v1 execution path (the SCP runtime carries its own in its routing). */
+  protected static _writerSticky: WriterStickyClock = new WriterStickyClock();
 
   /**
    * The Phase A-E SCP runtime context (built lazily from `_dbConfig` for the live pg/mysql dialects).
@@ -274,6 +275,8 @@ export abstract class DBModel {
           ...(config.user !== undefined ? { user: config.user } : {}),
           ...(config.password !== undefined ? { password: config.password } : {}),
           ...(config.max !== undefined ? { max: config.max } : {}),
+          ...(config.timeout !== undefined ? { timeout: config.timeout } : {}),
+          ...(config.idleTimeoutMillis !== undefined ? { idleTimeoutMillis: config.idleTimeoutMillis } : {}),
           ...(config.keepAlive !== undefined ? { keepAlive: config.keepAlive } : {}),
           ...(config.keepAliveInitialDelayMillis !== undefined ? { keepAliveInitialDelayMillis: config.keepAliveInitialDelayMillis } : {}),
           driver: driver as 'postgres' | 'mysql',
@@ -408,6 +411,10 @@ export abstract class DBModel {
       ...this._configOptions,
       ...options,
     };
+    this._writerSticky = new WriterStickyClock({
+      useWriterAfterTransaction: this._configOptions.useWriterAfterTransaction,
+      writerStickyDuration: this._configOptions.writerStickyDuration,
+    });
     // Phase F-2 (#105): drop the cached SCP runtime so the next op rebuilds it from the new config
     // (new reader/writer pools + routing). The v1 DBHandler above still owns its own pools (used by
     // the v1 fallback path + tx-context bridging); the SCP runtime owns the routed pools for the
@@ -495,15 +502,11 @@ export abstract class DBModel {
   }
 
   /**
-   * Get a DBHandler instance for this model.
-   * Connection priority:
-   * 1. Transaction connection (if in transaction)
-   * 2. Writer context (if in withWriter())
-   * 3. Writer sticky (if within writerStickyDuration after transaction)
-   * 4. Default reader connection
+   * Get a DBHandler instance for this model: the transaction's handler inside a transaction, else the
+   * default handler (whose reads `execute()` sends to the writer inside `withWriter()` or while
+   * writer-sticky).
    */
   protected static getHandler(): DBHandler {
-    // Check if we're in a transaction
     const txContext = this._getTransactionContext().getStore();
     if (txContext) {
       if (!txContext.handler) {
@@ -511,32 +514,15 @@ export abstract class DBModel {
       }
       return txContext.handler;
     }
-
-    const handler = getDBHandler();
-
-    // Check if we're in withWriter context
-    if (this._getWriterContext().getStore()) {
-      // Return handler that uses writer pool for reads
-      return handler;  // executeOnWriter will be called explicitly
-    }
-
-    // Check writer sticky
-    if (this._shouldUseWriterSticky()) {
-      return handler;  // executeOnWriter will be called explicitly
-    }
-
-    return handler;
+    return getDBHandler();
   }
 
   /**
-   * Check if we should use writer due to sticky after transaction.
+   * Check if this async chain should read from the writer because it committed a transaction within
+   * `writerStickyDuration` (read-your-writes for the request that wrote).
    */
   protected static _shouldUseWriterSticky(): boolean {
-    if (!this._configOptions.useWriterAfterTransaction) {
-      return false;
-    }
-    const stickyDuration = this._configOptions.writerStickyDuration ?? 5000;
-    return Date.now() - this._lastTransactionTime < stickyDuration;
+    return this._writerSticky.isSticky();
   }
 
   /**
@@ -597,8 +583,11 @@ export abstract class DBModel {
    * 
    * DBModel.use(LoggerMiddleware);
    * 
-   * // After queries
-   * console.log(LoggerMiddleware.getCurrentContext().getLogs());
+   * // One request
+   * await Middleware.run(async () => {
+   *   await handleRequest();
+   *   console.log(LoggerMiddleware.getCurrentContext().getLogs());
+   * });
    * ```
    */
   static use(MiddlewareClass: MiddlewareClass): () => void {
@@ -649,7 +638,7 @@ export abstract class DBModel {
    * // Register
    * DBModel.use(TenantMiddleware);
    * 
-   * // Set tenant for current request (type-safe)
+   * // Set tenant for the current request (inside Middleware.run at the request entry, type-safe)
    * TenantMiddleware.getCurrentContext().tenantId = 123;
    * ```
    */
@@ -3111,8 +3100,8 @@ export abstract class DBModel {
     // `inTransaction()` / `_checkWriteAllowed` / `getCurrentConnection()` still sees an active tx.
     const rt = this._getScpRuntime();
     if (rt !== null && this._scpUsable()) {
-      const useWriterAfterTx = options.useWriterAfterTransaction ?? this._configOptions.useWriterAfterTransaction ?? true;
-      const result = await scpTransaction(
+      // The SCP transaction stamps the SCP routing's writer-sticky clock itself.
+      return scpTransaction(
         rt.ctx,
         () => {
           // Set the v1 tx marker for the duration of the body (same async scope as the SCP pin). The
@@ -3126,8 +3115,6 @@ export abstract class DBModel {
         options,
         rt.dialect,
       );
-      if (useWriterAfterTx && !(options.rollbackOnly ?? false)) this._lastTransactionTime = Date.now();
-      return result;
     }
 
     // Get handler
@@ -3143,53 +3130,56 @@ export abstract class DBModel {
     const useWriterAfterTransaction = options.useWriterAfterTransaction ?? 
       this._configOptions.useWriterAfterTransaction ?? true;
 
-    let attempt = 0;
+    // Before the first `await`: the sticky cell must land in the CALLER's async chain (see
+    // WriterStickyClock.begin).
+    const stickyCell = this._writerSticky.begin();
+    try {
+      let attempt = 0;
 
-    while (true) {
-      attempt++;
-      const connection = await handler.getConnection();
-      let destroyConnection = false;
+      while (true) {
+        attempt++;
+        const connection = await handler.getConnection();
+        let destroyConnection = false;
 
-      try {
-        await connection.query('BEGIN');
-
-        const context: TransactionContext = { connection };
-        const result = await txContext.run(context, func);
-
-        if (rollbackOnly) {
-          // Rollback instead of commit (for preview/dry-run scenarios)
-          await connection.query('ROLLBACK');
-        } else {
-          await connection.query('COMMIT');
-          
-          // Enable writer sticky if configured
-          if (useWriterAfterTransaction) {
-            this._lastTransactionTime = Date.now();
-          }
-        }
-        return result;
-      } catch (error) {
-        destroyConnection = true;
         try {
-          await connection.query('ROLLBACK');
-        } catch {
-          // ROLLBACK failed — connection is in an unknown state.
-          // destroyConnection is already true; original error is preserved.
-        }
+          await connection.query('BEGIN');
 
-        if (
-          retryOnError &&
-          attempt < retryLimit &&
-          this.isRetryableError(error as Error)
-        ) {
-          await this.sleep(retryDuration * Math.pow(2, attempt - 1));
-          continue;
-        }
+          const context: TransactionContext = { connection };
+          const result = await txContext.run(context, func);
 
-        throw error;
-      } finally {
-        connection.release(destroyConnection || undefined);
+          if (rollbackOnly) {
+            // Rollback instead of commit (for preview/dry-run scenarios)
+            await connection.query('ROLLBACK');
+          } else {
+            await connection.query('COMMIT');
+            if (useWriterAfterTransaction) this._writerSticky.mark();
+          }
+          return result;
+        } catch (error) {
+          destroyConnection = true;
+          try {
+            await connection.query('ROLLBACK');
+          } catch {
+            // ROLLBACK failed — connection is in an unknown state.
+            // destroyConnection is already true; original error is preserved.
+          }
+
+          if (
+            retryOnError &&
+            attempt < retryLimit &&
+            this.isRetryableError(error as Error)
+          ) {
+            await this.sleep(retryDuration * Math.pow(2, attempt - 1));
+            continue;
+          }
+
+          throw error;
+        } finally {
+          connection.release(destroyConnection || undefined);
+        }
       }
+    } finally {
+      this._writerSticky.end(stickyCell);
     }
   }
 
@@ -3360,7 +3350,10 @@ export abstract class DBModel {
         writerStickyDuration: options?.writerStickyDuration ?? 5000,
         ...options,
       };
-      protected static _lastTransactionTime: number = 0;
+      protected static _writerSticky: WriterStickyClock = new WriterStickyClock({
+        useWriterAfterTransaction: options?.useWriterAfterTransaction ?? true,
+        writerStickyDuration: options?.writerStickyDuration ?? 5000,
+      });
       // Phase F-2 (#105): this base class gets its OWN SCP runtime slot (built lazily from ITS config),
       // isolated from DBModel's default-config runtime and from other base classes — otherwise a
       // sqlite/mysql base would inherit DBModel's shared pg runtime and route its SQL to the wrong DB.

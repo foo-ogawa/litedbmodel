@@ -14,7 +14,8 @@
 //     DIFFERENT database than the tx opened on is REJECTED there rather than routed; Phase A, resolved
 //     in exec_context.go BEFORE this module is consulted).
 //  2. writer scope / writer-sticky — inside [WithWriter], or within writerStickyDuration after a
-//     transaction (read-your-writes), a READ goes to the WRITER pool (Phase C — here).
+//     transaction committed by the SAME request (read-your-writes), a READ goes to the WRITER pool
+//     (Phase C — here).
 //  3. read=reader / write=writer — otherwise a read goes to the reader pool, a write to the writer
 //     pool (reader/writer separation; single-pool config ⇒ reader === writer, Phase C).
 //  4. named-DB routing — the target pool is selected by intent.DB (the connection NAME the
@@ -33,8 +34,8 @@
 // # The go pool model (honest deviation from TS)
 //
 // TS's AsyncConnectionPool wraps a pg.Pool / mysql2 pool. Go's *sql.DB IS ALREADY a goroutine-safe
-// connection pool; the sizing knobs (SetMaxOpenConns / SetMaxIdleConns / SetConnMax{Lifetime,IdleTime})
-// are set on the *sql.DB AFTER sql.Open — so the [PoolFactory] builds a CONFIGURED *sql.DB and applies
+// connection pool; the sizing knobs (SetMaxOpenConns / SetMaxIdleConns / SetConnMaxIdleTime)
+// are set on the *sql.DB AFTER it is opened — so the [PoolFactory] builds a CONFIGURED *sql.DB and applies
 // those at construction (NOT on a pre-built shared *sql.DB — that was the #87 blocker). One acquired
 // "connection" is a *sql.Conn (db.Conn(ctx)), which pins ONE physical connection for the session
 // statements (search_path / statement_timeout) to apply + reset on release — the *sql.DB pool cap
@@ -80,19 +81,30 @@ type ConnectionConfig struct {
 	// (PG) / max_execution_time (MySQL) so a runaway query is aborted by the SERVER. nil / 0 ⇒ no
 	// statement timeout (the engine default). Default 0.
 	QueryTimeout *int
-	// KeepAlive enables TCP-style keepalive on pooled connections (mapped to SetConnMaxIdleTime /
-	// SetConnMaxLifetime in the factory — go's database/sql has no raw TCP-keepalive knob, so the
-	// keepalive intent is expressed as a max idle/lifetime bound; a documented per-driver deviation).
-	// nil / false ⇒ disabled. Default false.
+	// KeepAlive enables TCP keepalive on the pooled connections' sockets (the drivers' dialer). nil /
+	// false ⇒ the dialer opens the sockets without keepalive; go-sql-driver/mysql then switches
+	// SO_KEEPALIVE on for every TCP connection it opens (at the OS's default probe timing), so a MySQL
+	// socket carries keepalive either way. Default false.
 	KeepAlive *bool
-	// KeepAliveInitialDelayMillis is the ms before the first keepalive probe (maps to the max idle time
-	// bound). nil ⇒ 10000 (when KeepAlive). Default 10000.
+	// KeepAliveInitialDelayMillis is the ms of idleness before the first keepalive probe (the dialer's
+	// net.Dialer.KeepAlive). nil ⇒ 10000 (when KeepAlive). Default 10000.
 	KeepAliveInitialDelayMillis *int
-	// MinPool is the minimum pooled connections kept warm (SetMaxIdleConns). nil / 0 ⇒ 0. Default 0.
+	// MinPool is the minimum pooled connections kept warm. database/sql has no idle FLOOR (its idle
+	// knob, SetMaxIdleConns, is a ceiling on retained idle connections, and nothing pre-opens or keeps
+	// connections below a minimum), so go accepts MinPool for cross-lang parity and does not apply it —
+	// as the TS mysql2 factory and the rust deadpool-postgres factory do not. nil / 0 ⇒ 0. Default 0.
 	MinPool *int
-	// MaxPool is the maximum pooled connections (SetMaxOpenConns — the SOLE cap source). nil ⇒ 10.
-	// Default 10.
+	// MaxPool is the maximum pooled connections (SetMaxOpenConns — the SOLE cap source — and the ceiling
+	// on retained idle connections, SetMaxIdleConns). nil ⇒ 10. Default 10.
 	MaxPool *int
+	// ConnectTimeoutMillis is the upper bound in MILLISECONDS on getting a connection: opening a new one
+	// (pgx ConnectTimeout / go-sql-driver `timeout` for the dial, plus the acquire context for the whole
+	// connect) and waiting for a free one when the pool is at MaxPool (the acquire context — database/sql
+	// waits on it). 0 ⇒ no limit. nil ⇒ 30000. Default 30000.
+	ConnectTimeoutMillis *int
+	// IdleTimeoutMillis is the MILLISECONDS an unused pooled connection stays open before it is closed
+	// (SetConnMaxIdleTime). nil ⇒ 10000. Default 10000.
+	IdleTimeoutMillis *int
 	// SearchPath is the PG search_path set on each pooled connection at checkout (schema routing).
 	// "" ⇒ unset (no session statement).
 	SearchPath string
@@ -116,13 +128,15 @@ type ResolvedConnectionConfig struct {
 	KeepAliveInitialDelayMillis int
 	MinPool                     int
 	MaxPool                     int
+	ConnectTimeoutMillis        int
+	IdleTimeoutMillis           int
 	SearchPath                  string
 	Charset                     string
 }
 
 // ResolveConnectionConfig applies the C3 defaults (QueryTimeout=0, KeepAlive=false, MinPool=0,
-// MaxPool=10, KeepAliveInitialDelayMillis=10000, Driver="postgres") — mirrors the TS
-// resolveConnectionConfig.
+// MaxPool=10, KeepAliveInitialDelayMillis=10000, ConnectTimeoutMillis=30000, IdleTimeoutMillis=10000,
+// Driver="postgres") — mirrors the TS resolveConnectionConfig.
 func ResolveConnectionConfig(config ConnectionConfig) ResolvedConnectionConfig {
 	driver := config.Driver
 	if driver == "" {
@@ -152,6 +166,8 @@ func ResolveConnectionConfig(config ConnectionConfig) ResolvedConnectionConfig {
 		KeepAliveInitialDelayMillis: intOr(config.KeepAliveInitialDelayMillis, 10000),
 		MinPool:                     intOr(config.MinPool, 0),
 		MaxPool:                     intOr(config.MaxPool, 10),
+		ConnectTimeoutMillis:        intOr(config.ConnectTimeoutMillis, 30000),
+		IdleTimeoutMillis:           intOr(config.IdleTimeoutMillis, 10000),
 		SearchPath:                  config.SearchPath,
 		Charset:                     config.Charset,
 	}
@@ -286,20 +302,47 @@ func (c sqlConnDB) Exec(query string, args ...any) (sql.Result, error) {
 // the sizing knobs on the *sql.DB at construction.
 type SQLDBPool struct {
 	db *sql.DB
+	// connectTimeout bounds every connection checkout (the C3 ConnectTimeoutMillis).
+	connectTimeout time.Duration
 }
 
-// NewSQLDBPool wraps a (constructed, sized) *sql.DB as a [Pool].
-func NewSQLDBPool(db *sql.DB) *SQLDBPool { return &SQLDBPool{db: db} }
+// NewSQLDBPool wraps a (constructed, sized) *sql.DB as a [Pool] whose checkouts are bounded by
+// connectTimeoutMillis (the C3 [ResolvedConnectionConfig.ConnectTimeoutMillis]; 0 ⇒ no limit).
+func NewSQLDBPool(db *sql.DB, connectTimeoutMillis int) *SQLDBPool {
+	return &SQLDBPool{db: db, connectTimeout: time.Duration(connectTimeoutMillis) * time.Millisecond}
+}
+
+// connectContext is the context every checkout runs under: database/sql waits on it for a free
+// connection once SetMaxOpenConns is reached, and hands it to the driver's connector when it opens a
+// new one — so ONE deadline bounds both halves of "getting a connection". A connect timeout of 0 is
+// the contract's "no limit": the context then carries no deadline.
+func (p *SQLDBPool) connectContext() (context.Context, context.CancelFunc) {
+	if p.connectTimeout == 0 {
+		return context.WithCancel(context.Background())
+	}
+	return context.WithTimeout(context.Background(), p.connectTimeout)
+}
 
 // Acquire pins one physical connection (db.Conn) for exclusive use — bounded by the *sql.DB's
 // SetMaxOpenConns cap (Acquire BLOCKS once the cap is reached until a Release frees one, exactly the
-// "maxPool is the sole cap" contract).
+// "maxPool is the sole cap" contract) and by the connect timeout (a wait or a connect that outlasts it
+// fails with context.DeadlineExceeded).
 func (p *SQLDBPool) Acquire() (PooledConn, error) {
-	conn, err := p.db.Conn(context.Background())
+	ctx, cancel := p.connectContext()
+	defer cancel()
+	conn, err := p.db.Conn(ctx)
 	if err != nil {
 		return nil, mapSqliteError(err)
 	}
 	return &sqlConnPooled{conn: conn}, nil
+}
+
+// ping opens (or reuses) one connection under the connect timeout — the construction-time liveness
+// check a [PoolFactory] runs before handing the pool out.
+func (p *SQLDBPool) ping() error {
+	ctx, cancel := p.connectContext()
+	defer cancel()
+	return p.db.PingContext(ctx)
 }
 
 // Release closes the pinned *sql.Conn back to the *sql.DB pool. destroy is honored via
@@ -566,27 +609,34 @@ func (b *ConnectionRegistryBuilder) Build() (*ConnectionRegistry, error) {
 // ── Writer-sticky + withWriter (C1) ────────────────────────────────────────────
 
 // WriterStickyClock is a writer-sticky CLOCK (C1, read-your-writes; v1 _shouldUseWriterSticky :344 +
-// _lastTransactionTime). After a transaction (or a bare write) COMMITs, reads within
-// WriterStickyDuration route to the WRITER pool so a just-committed row is visible despite
-// reader-replica lag. The ctx owns ONE clock; the tx runtime .Mark()s it on every successful
-// write/commit; the router reads .IsSticky(). Mirrors the TS WriterStickyClock.
+// _lastTransactionTime). After a transaction COMMITs, the reads of the REQUEST that committed route to
+// the WRITER pool for WriterStickyDuration, so the just-committed row is visible despite reader-replica
+// lag. Other requests keep reading from the reader: they did not write, so they have no lag to hide.
+// The clock is per routing config (the policy: enabled, duration, time source); the time it holds is per
+// request — a [StickyScope], which each [ExecutionContext] constructor starts fresh and every derived ctx
+// (tx-scoped, read-only, writer, named-connection) shares. The tx runtime .Mark()s the committing ctx's
+// scope; the router reads .IsSticky(scope). Mirrors the TS WriterStickyClock (per async chain).
 //
 // UseWriterAfterTransaction=false disables it entirely (.IsSticky() always false). A single-pool
 // deployment (Reader == Writer) is unaffected by stickiness — the diverted pool is the same object.
 //
 // The Now func is injectable (tests advance it deterministically); nil ⇒ a real monotonic clock.
-// Access is mutex-guarded so a concurrent tx (which .Mark()s) and a concurrent read (which
-// .IsSticky()) do not race.
 type WriterStickyClock struct {
+	enabled          bool
+	stickyDurationMs int64
+	now              func() int64
+}
+
+// StickyScope is one request's record of its commits on a [WriterStickyClock] — the time of its latest
+// commit. It is mutex-guarded because one request may fan out goroutines that commit and read
+// concurrently over the same (shared) scope.
+type StickyScope struct {
 	mu sync.Mutex
 	// nil until the first Mark() — absence, NOT a value sentinel. The injectable clock legitimately
 	// returns 0 (rust's SystemClock does right after process start), so encoding "never marked" as the
 	// value 0 would mis-classify a Mark() at clock t=0 as unmarked and leak the read-your-writes read
 	// to the reader replica. Absence must be distinct from the value 0.
-	lastWriteAtMs    *int64
-	enabled          bool
-	stickyDurationMs int64
-	now              func() int64
+	lastWriteAtMs *int64
 }
 
 // StickyOptions configures a [WriterStickyClock] (mirrors the TS WriterStickyClock ctor opts +
@@ -617,36 +667,29 @@ func NewWriterStickyClock(opts StickyOptions) *WriterStickyClock {
 	return &WriterStickyClock{enabled: enabled, stickyDurationMs: duration, now: now}
 }
 
-// Mark records that a write/commit just happened (the tx runtime calls this on success).
-func (c *WriterStickyClock) Mark() {
+// Mark records that the request owning `scope` just committed (the tx runtime calls this on success).
+func (c *WriterStickyClock) Mark(scope *StickyScope) {
 	if !c.enabled {
 		return
 	}
-	c.mu.Lock()
 	now := c.now()
-	c.lastWriteAtMs = &now
-	c.mu.Unlock()
+	scope.mu.Lock()
+	scope.lastWriteAtMs = &now
+	scope.mu.Unlock()
 }
 
-// IsSticky reports whether a read is currently sticky-to-writer (within WriterStickyDuration of the
-// last write).
-func (c *WriterStickyClock) IsSticky() bool {
+// IsSticky reports whether a read of the request owning `scope` is currently sticky-to-writer (within
+// WriterStickyDuration of that request's last commit).
+func (c *WriterStickyClock) IsSticky(scope *StickyScope) bool {
 	if !c.enabled {
 		return false
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.lastWriteAtMs == nil {
+	scope.mu.Lock()
+	defer scope.mu.Unlock()
+	if scope.lastWriteAtMs == nil {
 		return false
 	}
-	return c.now()-*c.lastWriteAtMs < c.stickyDurationMs
-}
-
-// Reset resets the clock (e.g. between tests / on CloseAllPools).
-func (c *WriterStickyClock) Reset() {
-	c.mu.Lock()
-	c.lastWriteAtMs = nil
-	c.mu.Unlock()
+	return c.now()-*scope.lastWriteAtMs < c.stickyDurationMs
 }
 
 // ── withWriter scope (C1) — go: explicit ctx marker ────────────────────────────
@@ -675,11 +718,12 @@ type RoutingConfig struct {
 //
 //  1. named-DB (intent.DB) selects the [ReaderWriterPools] pair (loud on unknown name).
 //  2. within that pair: a WRITE ⇒ the writer pool.
-//  3. a READ in a writer scope (writerScope) OR within writer-sticky ⇒ the writer pool (read-your-writes).
+//  3. a READ in a writer scope (writerScope) OR within writer-sticky of the requesting ctx's own
+//     commit (`sticky`, that ctx's [StickyScope]) ⇒ the writer pool (read-your-writes).
 //  4. otherwise a READ ⇒ the reader pool.
 //
 // Single-pool (Reader == Writer) ⇒ every branch returns the same pool (backward-compat).
-func resolvePool(intent StatementIntent, writerScope bool, routing RoutingConfig) (Pool, error) {
+func resolvePool(intent StatementIntent, writerScope bool, sticky *StickyScope, routing RoutingConfig) (Pool, error) {
 	pair, err := routing.Registry.PairFor(intent.DB)
 	if err != nil {
 		return nil, err
@@ -687,7 +731,7 @@ func resolvePool(intent StatementIntent, writerScope bool, routing RoutingConfig
 	if intent.Write {
 		return pair.Writer, nil // writes always to the writer
 	}
-	if writerScope || (routing.Sticky != nil && routing.Sticky.IsSticky()) {
+	if writerScope || (routing.Sticky != nil && routing.Sticky.IsSticky(sticky)) {
 		return pair.Writer, nil // read-your-writes
 	}
 	return pair.Reader, nil // plain read → reader
@@ -705,10 +749,11 @@ type BuiltPool struct {
 }
 
 // PoolFactory BUILDS a pool from a [ResolvedConnectionConfig] + a role, returning the [Pool] seam
-// adapter plus a [PoolCloser]. This is where the CONSTRUCTION knobs — pool sizing (MinPool/MaxPool)
-// + KeepAlive/KeepAliveInitialDelayMillis — reach the real *sql.DB (sql.Open then
-// SetMaxOpenConns/SetMaxIdleConns/SetConnMax{Lifetime,IdleTime}), because in go those are set on the
-// *sql.DB AFTER sql.Open — NOT on a pre-built shared *sql.DB (the #87 blocker).
+// adapter plus a [PoolCloser]. This is where the CONSTRUCTION knobs — pool sizing (MaxPool) +
+// IdleTimeoutMillis + KeepAlive/KeepAliveInitialDelayMillis + ConnectTimeoutMillis — reach the real
+// *sql.DB (opened, then SetMaxOpenConns/SetMaxIdleConns/SetConnMaxIdleTime) and its
+// driver, because in go those are set on the *sql.DB AFTER it is opened — NOT on a pre-built shared
+// *sql.DB (the #87 blocker).
 //
 // [BuildRoutingConfig] OWNS the call to this factory with the RESOLVED config, so the configured
 // sizing/keepAlive is the SOLE source of the pool's cap. role lets a factory build a distinct replica
@@ -744,8 +789,8 @@ type BuiltRouting struct {
 // buildRoutingConfig.
 //
 // For each setup: resolve the config, CALL its [PoolFactory] to construct the pool(s) — so
-// MinPool/MaxPool/KeepAlive/KeepAliveInitialDelayMillis are applied at construction (the config is
-// the SOLE source of the cap) — then wrap each pool with [ConfiguredPool] so the SESSION knobs
+// MaxPool/IdleTimeoutMillis/KeepAlive/KeepAliveInitialDelayMillis/ConnectTimeoutMillis are applied at
+// construction (the config is the SOLE source of the cap) — then wrap each pool with [ConfiguredPool] so the SESSION knobs
 // (queryTimeout/searchPath/charset) apply on checkout + reset on release.
 func BuildRoutingConfig(setups []ConnectionSetup, sticky StickyOptions) (BuiltRouting, error) {
 	if len(setups) == 0 {

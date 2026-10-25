@@ -77,7 +77,11 @@ def test_resolve_connection_config_defaults():
     assert r.keep_alive_initial_delay_millis == 10000
     assert r.min_pool == 0
     assert r.max_pool == 10
+    assert r.connect_timeout_millis == 30000
+    assert r.idle_timeout_millis == 10000
     assert r.search_path is None and r.charset is None
+    r3 = resolve_connection_config(ConnectionConfig(connect_timeout_millis=250, idle_timeout_millis=400))
+    assert (r3.connect_timeout_millis, r3.idle_timeout_millis) == (250, 400)
     # Overrides pass through with the same field names.
     r2 = resolve_connection_config(
         ConnectionConfig(driver="mysql", max_pool=2, min_pool=1, query_timeout=250, keep_alive=True, search_path="app", charset="utf8mb4")
@@ -219,9 +223,6 @@ def test_writer_sticky_clock_expiry_deterministic():
     assert c.is_sticky() is True  # 400ms < 1000ms window
     clock["t"] = 1600
     assert c.is_sticky() is False  # 1100ms ≥ window
-    c.reset()
-    clock["t"] = 1700
-    assert c.is_sticky() is False
 
 
 def test_writer_sticky_armed_at_clock_zero():
@@ -238,6 +239,60 @@ def test_writer_sticky_armed_at_clock_zero():
     # A commit at clock t=0 arms the sticky clock.
     sticky.mark()
     assert resolve_pool(StatementIntent(write=False), routing) is writer  # read-your-writes → writer
+
+
+def test_writer_sticky_is_per_thread():
+    # Two threads alive at the same time on ONE routing config: A commits (marks), B does not. A's reads
+    # go to the writer; B's reads — before AND after A's mark, while A is still in its window — stay on
+    # the reader. A second clock on another routing config is not armed by A's mark.
+    import threading
+
+    reader, writer = _FakePool("reader"), _FakePool("writer")
+    sticky = WriterStickyClock(use_writer_after_transaction=True, writer_sticky_duration=5000, now=lambda: 1_000_000)
+    other = WriterStickyClock(use_writer_after_transaction=True, writer_sticky_duration=5000, now=lambda: 1_000_000)
+    routing = _routing(reader, writer, sticky=sticky)
+    b_first, a_marked, b_checked = (threading.Barrier(2, timeout=10) for _ in range(3))
+    seen, errors = {}, []
+
+    def read():
+        return resolve_pool(StatementIntent(write=False), routing).label
+
+    def thread_a():
+        b_first.wait()  # B has read once, before this mark
+        sticky.mark()
+        seen["a_after_mark"] = read()
+        seen["other_armed"] = other.is_sticky()
+        a_marked.wait()
+        b_checked.wait()
+        seen["a_later"] = read()
+
+    def thread_b():
+        seen["b_before"] = read()
+        b_first.wait()
+        a_marked.wait()
+        seen["b_after"] = read()
+        b_checked.wait()
+
+    def guarded(fn):
+        def body():
+            try:
+                fn()
+            except BaseException as e:  # surfaced below: a thread's exception never fails pytest itself
+                errors.append(e)
+
+        return body
+
+    threads = [threading.Thread(target=guarded(f)) for f in (thread_a, thread_b)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(10)
+    assert not any(t.is_alive() for t in threads) and errors == []
+    assert seen["a_after_mark"] == "writer"  # the committing thread reads its own write from the writer
+    assert seen["other_armed"] is False  # a mark on one clock does not arm another clock
+    assert seen["a_later"] == "writer"  # still within the window on the committing thread
+    assert (seen["b_before"], seen["b_after"]) == ("reader", "reader")  # the concurrent thread did not commit
+    assert sticky.is_sticky() is False  # the test thread never committed
 
 
 # ── C3: configured_pool session apply/reset (no session leak) — fake conn ────────
@@ -479,3 +534,46 @@ def test_acquire_wait_succeeds_when_a_connection_is_released_in_time():
     releaser.join()
     assert got is held  # the SAME connection came back through the wait
     assert time.monotonic() - t0 < 5.0
+
+
+def test_connect_timeout_reaches_both_drivers_connect():
+    """``connect_timeout_millis`` bounds the driver's own connect: PyMySQL takes fractional seconds,
+    psycopg whole seconds (rounded UP, so the bound is never shorter than configured); 0 is no limit."""
+    from litedbmodel_runtime.connection_routing import _mysql_connect_kwargs, _pg_connect_kwargs
+
+    pg = resolve_connection_config(ConnectionConfig(driver="postgres", connect_timeout_millis=2500))
+    my = resolve_connection_config(ConnectionConfig(driver="mysql", connect_timeout_millis=2500))
+    assert _pg_connect_kwargs(pg)["connect_timeout"] == 3
+    assert _mysql_connect_kwargs(my)["connect_timeout"] == 2.5
+    # 0 ⇒ no limit: psycopg's own reading of 0, and PyMySQL's largest accepted value.
+    pg0 = resolve_connection_config(ConnectionConfig(driver="postgres", connect_timeout_millis=0))
+    my0 = resolve_connection_config(ConnectionConfig(driver="mysql", connect_timeout_millis=0))
+    assert _pg_connect_kwargs(pg0)["connect_timeout"] == 0
+    assert _mysql_connect_kwargs(my0)["connect_timeout"] == 31536000
+
+
+def test_idle_connection_is_closed_by_the_pool():
+    """A released connection left unused for ``idle_timeout`` is closed and its slot freed, with no
+    acquire needed to notice; a connection that is still checked out is not touched."""
+    import time
+
+    from litedbmodel_runtime.driver import _ConnectionPool
+
+    class _Conn:
+        closed = False
+
+        def close(self):
+            self.closed = True
+
+    pool = _ConnectionPool(_Conn, max_size=2, idle_timeout=0.2)
+    idle, held = pool.acquire(), pool.acquire()
+    pool.release(idle)
+    deadline = time.monotonic() + 5.0
+    while not idle.closed and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert idle.closed and not held.closed
+    assert pool._opened == 1 and pool._free == []  # the idle one's slot is free again
+    pool.release(held)
+    assert pool.acquire() is held  # reused before its idle time ran out ⇒ still open
+    assert not held.closed
+    pool.close()

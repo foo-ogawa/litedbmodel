@@ -15,7 +15,8 @@ A statement's connection is resolved in THIS priority (first match wins):
      DIFFERENT database than the tx opened on is REJECTED there rather than routed (Phase A;
      resolved by :class:`ExecutionContext` BEFORE the routing steps, since only it holds the pin).
   2. **writer scope / writer-sticky** — inside :func:`with_writer`, or within ``writer_sticky_duration``
-     after a transaction (read-your-writes), a READ goes to the WRITER pool (Phase C — here).
+     after a transaction the same chain committed (read-your-writes), a READ goes to the WRITER pool
+     (Phase C — here).
   3. **read=reader / write=writer** — otherwise a read → the reader pool, a write → the writer pool
      (reader/writer separation; single-pool config ⇒ reader IS writer, Phase C).
   4. **named-DB routing** — the target pool is selected by ``intent.db`` (the connection NAME) against
@@ -49,6 +50,8 @@ import time
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from .driver import (
+    DEFAULT_ACQUIRE_TIMEOUT_SECONDS,
+    DEFAULT_IDLE_TIMEOUT_SECONDS,
     RunInfo,
     TxConnection,
     _conn_all,
@@ -70,6 +73,8 @@ _DEFAULT_KEEP_ALIVE = False
 _DEFAULT_KEEP_ALIVE_INITIAL_DELAY_MS = 10000
 _DEFAULT_MIN_POOL = 0
 _DEFAULT_MAX_POOL = 10
+_DEFAULT_CONNECT_TIMEOUT_MS = int(DEFAULT_ACQUIRE_TIMEOUT_SECONDS * 1000)
+_DEFAULT_IDLE_TIMEOUT_MS = int(DEFAULT_IDLE_TIMEOUT_SECONDS * 1000)
 
 
 class ConnectionConfig:
@@ -91,6 +96,10 @@ class ConnectionConfig:
       - ``keep_alive_initial_delay_millis``: ms before the first keepalive probe (@default 10000).
       - ``min_pool``: minimum pooled connections kept warm (@default 0).
       - ``max_pool``: maximum pooled connections (@default 10).
+      - ``connect_timeout_millis``: upper bound in ms on getting a connection — opening a new one, and
+        waiting for a free one when the pool is at ``max_pool``. ``0`` ⇒ no limit (@default 30000).
+      - ``idle_timeout_millis``: ms an unused pooled connection stays open before it is closed
+        (@default 10000).
       - ``search_path``: PG ``search_path`` set on each pooled connection at checkout (schema routing).
       - ``charset``: MySQL connection charset / PG ``client_encoding`` set on each pooled connection.
     """
@@ -107,6 +116,8 @@ class ConnectionConfig:
         "keep_alive_initial_delay_millis",
         "min_pool",
         "max_pool",
+        "connect_timeout_millis",
+        "idle_timeout_millis",
         "search_path",
         "charset",
     )
@@ -126,6 +137,8 @@ class ConnectionConfig:
         max_pool: Optional[int] = None,
         search_path: Optional[str] = None,
         charset: Optional[str] = None,
+        connect_timeout_millis: Optional[int] = None,
+        idle_timeout_millis: Optional[int] = None,
     ) -> None:
         self.driver = driver
         self.host = host
@@ -140,12 +153,14 @@ class ConnectionConfig:
         self.max_pool = max_pool
         self.search_path = search_path
         self.charset = charset
+        self.connect_timeout_millis = connect_timeout_millis
+        self.idle_timeout_millis = idle_timeout_millis
 
 
 class ResolvedConnectionConfig:
     """The resolved (defaults-applied) config the pool builder consumes — no ``None`` holes on the
     knobs (``query_timeout`` / ``keep_alive`` / ``keep_alive_initial_delay_millis`` / ``min_pool`` /
-    ``max_pool`` are always concrete). Connection-target fields (``host`` … ``password``) and the
+    ``max_pool`` / ``connect_timeout_millis`` / ``idle_timeout_millis`` are always concrete). Connection-target fields (``host`` … ``password``) and the
     optional session knobs (``search_path`` / ``charset``) stay ``None`` when unset (so a factory omits
     them). Mirrors the TS ``ResolvedConnectionConfig``.
     """
@@ -162,6 +177,8 @@ class ResolvedConnectionConfig:
         "keep_alive_initial_delay_millis",
         "min_pool",
         "max_pool",
+        "connect_timeout_millis",
+        "idle_timeout_millis",
         "search_path",
         "charset",
     )
@@ -174,6 +191,8 @@ class ResolvedConnectionConfig:
         keep_alive_initial_delay_millis: int,
         min_pool: int,
         max_pool: int,
+        connect_timeout_millis: int,
+        idle_timeout_millis: int,
         host: Optional[str] = None,
         port: Optional[int] = None,
         database: Optional[str] = None,
@@ -188,6 +207,8 @@ class ResolvedConnectionConfig:
         self.keep_alive_initial_delay_millis = keep_alive_initial_delay_millis
         self.min_pool = min_pool
         self.max_pool = max_pool
+        self.connect_timeout_millis = connect_timeout_millis
+        self.idle_timeout_millis = idle_timeout_millis
         self.host = host
         self.port = port
         self.database = database
@@ -199,7 +220,8 @@ class ResolvedConnectionConfig:
 
 def resolve_connection_config(config: Optional[ConnectionConfig] = None) -> ResolvedConnectionConfig:
     """Apply the C3 defaults (``query_timeout=0``, ``keep_alive=False``,
-    ``keep_alive_initial_delay_millis=10000``, ``min_pool=0``, ``max_pool=10``, ``driver='postgres'``).
+    ``keep_alive_initial_delay_millis=10000``, ``min_pool=0``, ``max_pool=10``,
+    ``connect_timeout_millis=30000``, ``idle_timeout_millis=10000``, ``driver='postgres'``).
     Mirrors the TS ``resolveConnectionConfig`` — identical field names + defaults."""
     c = config if config is not None else ConnectionConfig()
     return ResolvedConnectionConfig(
@@ -218,6 +240,10 @@ def resolve_connection_config(config: Optional[ConnectionConfig] = None) -> Reso
         ),
         min_pool=c.min_pool if c.min_pool is not None else _DEFAULT_MIN_POOL,
         max_pool=c.max_pool if c.max_pool is not None else _DEFAULT_MAX_POOL,
+        connect_timeout_millis=(
+            c.connect_timeout_millis if c.connect_timeout_millis is not None else _DEFAULT_CONNECT_TIMEOUT_MS
+        ),
+        idle_timeout_millis=c.idle_timeout_millis if c.idle_timeout_millis is not None else _DEFAULT_IDLE_TIMEOUT_MS,
         search_path=c.search_path,
         charset=c.charset,
     )
@@ -610,11 +636,16 @@ def with_writer(fn: Callable[[], Any]) -> Any:
 
 
 class WriterStickyClock:
-    """A writer-sticky CLOCK (C1, read-your-writes; v1 ``_shouldUseWriterSticky`` + ``_lastTransactionTime``).
-    After a transaction (or a bare write) COMMITs, reads within ``sticky_duration_ms`` route to the
-    WRITER pool so a just-committed row is visible despite reader-replica lag. The ctx owns ONE clock
-    instance; the tx runtime :meth:`mark` s it on every successful write/commit; :func:`resolve_pool`
-    reads :meth:`is_sticky`.
+    """A writer-sticky CLOCK (C1, read-your-writes). After a transaction COMMITs, the reads of the
+    execution chain that committed route to the WRITER pool for ``writer_sticky_duration`` ms, so the
+    just-committed row is visible despite reader-replica lag. Other chains — concurrent requests on other
+    threads — keep reading from the reader: they did not write, so they have no lag to hide.
+
+    The chain is the current :mod:`contextvars` Context: each thread has its own, and a transaction body
+    runs in its caller's Context, so the tx runtime's :meth:`mark` after COMMIT is seen by the caller's
+    later reads and by no other thread. The clock is per routing config (per connection setup); the time
+    it holds is per chain, in a ``ContextVar`` this instance owns. :func:`resolve_pool` reads
+    :meth:`is_sticky`.
 
     ``use_writer_after_transaction=False`` disables it entirely (:meth:`is_sticky` always False). A
     single-pool deployment (reader IS writer) is unaffected — the diverted pool is the same object.
@@ -630,30 +661,32 @@ class WriterStickyClock:
         writer_sticky_duration: int = 5000,
         now: Optional[Callable[[], int]] = None,
     ) -> None:
-        # ``None`` until the first ``mark()`` — absence, NOT a value sentinel. The injectable clock
-        # legitimately returns 0 (rust's SystemClock does right after process start), so encoding
-        # "never marked" as the value 0 would mis-classify a ``mark()`` at clock t=0 as unmarked and
-        # leak the read-your-writes read to the reader replica. Absence must be distinct from value 0.
-        self._last_write_at: Optional[int] = None
+        # The current chain's last commit time: ``None`` until that chain's first ``mark()`` — absence,
+        # NOT a value sentinel. The injectable clock legitimately returns 0 (rust's SystemClock does right
+        # after process start), so encoding "never marked" as the value 0 would mis-classify a ``mark()``
+        # at clock t=0 as unmarked and leak the read-your-writes read to the reader replica.
+        self._last_write_at: "contextvars.ContextVar[Optional[int]]" = contextvars.ContextVar(
+            "litedbmodel_writer_sticky_last_write_at", default=None
+        )
         self._enabled = use_writer_after_transaction
         self._sticky_duration_ms = writer_sticky_duration
         # Default clock: monotonic ms (Date.now analogue). An injectable clock makes expiry deterministic.
         self._now: Callable[[], int] = now if now is not None else (lambda: int(time.monotonic() * 1000))
 
     def mark(self) -> None:
-        """Record that a write/commit just happened (the tx runtime calls this on success)."""
+        """Record that the current chain just committed (the tx runtime calls this on success)."""
         if self._enabled:
-            self._last_write_at = self._now()
+            self._last_write_at.set(self._now())
 
     def is_sticky(self) -> bool:
-        """Is a read currently sticky-to-writer (within ``writer_sticky_duration`` of the last write)?"""
-        if not self._enabled or self._last_write_at is None:
+        """Is a read in the current chain sticky-to-writer (within ``writer_sticky_duration`` of its
+        last commit)?"""
+        if not self._enabled:
             return False
-        return (self._now() - self._last_write_at) < self._sticky_duration_ms
-
-    def reset(self) -> None:
-        """Reset the clock (e.g. between tests / on :func:`close_all_pools`)."""
-        self._last_write_at = None
+        last = self._last_write_at.get()
+        if last is None:
+            return False
+        return (self._now() - last) < self._sticky_duration_ms
 
 
 # ── The routing config a ctx carries (C1+C2+C3) ────────────────────────────────
@@ -680,7 +713,8 @@ def resolve_pool(intent: StatementIntent, routing: RoutingConfig) -> ConnectionP
 
       1. **named-DB** (``intent.db``) selects the :class:`ReaderWriterPools` pair (loud on unknown name).
       2. within that pair: a WRITE ⇒ the writer pool.
-      3. a READ in a :func:`with_writer` scope OR within writer-sticky ⇒ the writer pool (read-your-writes).
+      3. a READ in a :func:`with_writer` scope OR within the current chain's writer-sticky window ⇒ the
+         writer pool (read-your-writes).
       4. otherwise a READ ⇒ the reader pool.
 
     Single-pool (reader IS writer) ⇒ every branch returns the same pool (backward-compat). Mirrors the
@@ -887,6 +921,31 @@ def close_all_pools(closers: Sequence[PoolCloser]) -> None:
 #   - min_pool: the dependency-free `_ConnectionPool` opens connections LAZILY up to `max_pool`; it has
 #     no warm-idle floor, so `min_pool` is a documented NO-OP for both drivers (same as mysql2's absent
 #     `min`). The SIZING CAP that matters — `max_pool` → the pool ceiling — IS honored at construction.
+#
+# ── connect_timeout_millis / idle_timeout_millis (both drivers) ──
+#   - The wait for a free connection at `max_pool` and the idle close are the `_ConnectionPool`'s own
+#     (`acquire_timeout` / `idle_timeout`), so both are millisecond-exact on PG and MySQL alike.
+#   - The connect itself is bounded by the driver's `connect_timeout`. PyMySQL takes fractional seconds.
+#     psycopg takes WHOLE seconds and raises anything under 2 to 2 (libpq's rule, which psycopg
+#     enforces in `conninfo.timeout_from_conninfo`), so on PG the connect bound is
+#     `max(2, ceil(connect_timeout_millis / 1000))` seconds.
+#   - `connect_timeout_millis = 0` is "no limit". The pool's wait honors it exactly. Neither driver can
+#     connect without a limit: psycopg reads a `connect_timeout` of 0 as its own 130s bound
+#     (`conninfo._DEFAULT_CONNECT_TIMEOUT`), and PyMySQL accepts only `0 < connect_timeout <= 31536000`,
+#     so 0 is passed to it as that maximum (one year).
+_PYMYSQL_MAX_CONNECT_TIMEOUT_SECONDS = 31536000
+
+
+def _pool(conn_factory: Callable[[], Any], config: ResolvedConnectionConfig) -> _ConnectionPool:
+    """The `_ConnectionPool` a factory builds: sized to ``max_pool`` (the SOLE cap source), waiting at
+    most ``connect_timeout_millis`` for a free connection (``0`` ⇒ no limit) and closing one unused for
+    ``idle_timeout_millis``."""
+    return _ConnectionPool(
+        conn_factory,
+        config.max_pool,
+        acquire_timeout=config.connect_timeout_millis / 1000.0 or None,
+        idle_timeout=config.idle_timeout_millis / 1000.0,
+    )
 
 
 def _pg_connect_kwargs(config: ResolvedConnectionConfig) -> Dict[str, Any]:
@@ -903,6 +962,9 @@ def _pg_connect_kwargs(config: ResolvedConnectionConfig) -> Dict[str, Any]:
         kwargs["user"] = config.user
     if config.password is not None:
         kwargs["password"] = config.password
+    # Whole seconds, rounded UP so the bound is never shorter than configured (psycopg raises < 2 to 2;
+    # 0 stays 0, which psycopg reads as its 130s default).
+    kwargs["connect_timeout"] = -(-config.connect_timeout_millis // 1000)
     if config.keep_alive:
         # libpq TCP keepalive (SECONDS for the idle delay; convert the ms knob, min 1s).
         kwargs["keepalives"] = 1
@@ -929,7 +991,7 @@ def pg_pool_factory() -> PoolFactory:
         def conn_factory() -> Any:
             return psycopg.connect(**kwargs)
 
-        raw = _ConnectionPool(conn_factory, config.max_pool)  # SIZING at construction: max_pool = the cap
+        raw = _pool(conn_factory, config)
         pool = RawConnectionPool(raw, _dollar_to_pyformat, emulate_returning=False)
         return pool, raw.close
 
@@ -948,6 +1010,7 @@ def _mysql_connect_kwargs(config: ResolvedConnectionConfig) -> Dict[str, Any]:
         kwargs["user"] = config.user
     if config.password is not None:
         kwargs["password"] = config.password
+    kwargs["connect_timeout"] = config.connect_timeout_millis / 1000.0 or _PYMYSQL_MAX_CONNECT_TIMEOUT_SECONDS
     # NB: PyMySQL exposes no TCP-keepalive connect option ⇒ keep_alive is a documented NO-OP on MySQL
     # (mirror the TS mysqlPoolFactory's "mysql2 has no min idle floor" per-driver deviation note).
     return kwargs
@@ -972,7 +1035,7 @@ def mysql_pool_factory() -> PoolFactory:
         def conn_factory() -> Any:
             return pymysql.connect(**kwargs)
 
-        raw = _ConnectionPool(conn_factory, config.max_pool)  # SIZING at construction: max_pool = the cap
+        raw = _pool(conn_factory, config)
         pool = RawConnectionPool(raw, _qmark_to_pyformat, emulate_returning=True)
         return pool, raw.close
 

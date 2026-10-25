@@ -9,7 +9,7 @@
  */
 
 import 'reflect-metadata';
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, aroundEach } from 'vitest';
 import {
   createRelationContext,
   preloadRelations,
@@ -23,6 +23,11 @@ import {
   closeAllPools,
   Middleware,
 } from '../../src';
+
+// Each test is one request: middleware instances live in the Middleware.run scope around it.
+aroundEach(async (runTest) => {
+  await Middleware.run(() => runTest());
+});
 import type { DBConfig, ExecuteResult } from '../../src';
 
 // ============================================

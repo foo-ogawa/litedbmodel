@@ -1,4 +1,4 @@
-[**litedbmodel v2.2.10**](../README.md)
+[**litedbmodel v2.2.11**](../README.md)
 
 ***
 
@@ -10,7 +10,7 @@
 function getDBHandler(): DBHandler;
 ```
 
-Defined in: [DBHandler.ts:317](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBHandler.ts#L317)
+Defined in: [DBHandler.ts:286](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBHandler.ts#L286)
 
 Get global handler
 

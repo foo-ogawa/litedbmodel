@@ -621,57 +621,64 @@ export async function withTransactionAsync<R>(
   // connection (`connection` name, or the default). Single-DB ⇒ the one default writer pool.
   const pool = ctx.connectionPoolFor({ write: true, ...(connection !== undefined ? { db: connection } : {}) });
 
-  let attempt = 0;
-  for (;;) {
-    attempt++;
-    const conn = await pool.acquire();
-    const txCtx = ctx.withConnection(conn, true);
+  // Before the first `await`: the sticky cell must land in the CALLER's async chain, so the commit
+  // stamped below is what the caller's later reads see (and no other request's).
+  const stickyCell = ctx.stickyClock.begin();
+  try {
+    let attempt = 0;
+    for (;;) {
+      attempt++;
+      const conn = await pool.acquire();
+      const txCtx = ctx.withConnection(conn, true);
 
-    // One attempt: BEGIN…body…COMMIT/ROLLBACK on the pinned conn. Returns `{ ok, value }` on success
-    // or `{ ok:false, error }` on failure — so the release + retry decision happens OUTSIDE the ALS
-    // run and the connection is released EXACTLY once per attempt.
-    let poisoned = false;
-    const attemptResult = await runWithPinnedAsyncConnection(conn, connection ?? null, async (): Promise<{ ok: true; value: R } | { ok: false; error: unknown }> => {
-      for (const begin of begins) await runAsync(txCtx, begin, []);
-      try {
-        // Mark the body as "inside a transaction" so a nested write's guard (`checkWriteAllowed`)
-        // and nested-tx detection see an active tx. The connection pin (above) and this marker share
-        // the SAME async scope.
-        const r = await runInTransactionScope(() => fn(txCtx));
-        // rollbackOnly (dry-run): ROLLBACK but still return the body result — no committed change.
-        await runAsync(txCtx, resolved.rollbackOnly ? 'ROLLBACK' : 'COMMIT', []);
-        return { ok: true, value: r };
-      } catch (error) {
+      // One attempt: BEGIN…body…COMMIT/ROLLBACK on the pinned conn. Returns `{ ok, value }` on success
+      // or `{ ok:false, error }` on failure — so the release + retry decision happens OUTSIDE the ALS
+      // run and the connection is released EXACTLY once per attempt.
+      let poisoned = false;
+      const attemptResult = await runWithPinnedAsyncConnection(conn, connection ?? null, async (): Promise<{ ok: true; value: R } | { ok: false; error: unknown }> => {
+        for (const begin of begins) await runAsync(txCtx, begin, []);
         try {
-          await runAsync(txCtx, 'ROLLBACK', []);
-        } catch {
-          poisoned = true; // ROLLBACK failed ⇒ the connection is in an unknown state; drop it.
+          // Mark the body as "inside a transaction" so a nested write's guard (`checkWriteAllowed`)
+          // and nested-tx detection see an active tx. The connection pin (above) and this marker share
+          // the SAME async scope.
+          const r = await runInTransactionScope(() => fn(txCtx));
+          // rollbackOnly (dry-run): ROLLBACK but still return the body result — no committed change.
+          await runAsync(txCtx, resolved.rollbackOnly ? 'ROLLBACK' : 'COMMIT', []);
+          return { ok: true, value: r };
+        } catch (error) {
+          try {
+            await runAsync(txCtx, 'ROLLBACK', []);
+          } catch {
+            poisoned = true; // ROLLBACK failed ⇒ the connection is in an unknown state; drop it.
+          }
+          return { ok: false, error };
         }
-        return { ok: false, error };
+      });
+
+      // An errored attempt saw a failed statement — destroy the (possibly poisoned) conn so a retry
+      // reconnects on a fresh one; a clean success returns the conn to the pool.
+      await pool.release(conn, poisoned || !attemptResult.ok);
+
+      if (attemptResult.ok) {
+        // WRITER-STICKY (§3-2, read-your-writes): a committed tx stamps the caller chain's sticky cell
+        // so that chain's reads within `writerStickyDuration` route to the writer pool. A
+        // rollbackOnly (dry-run) tx committed NOTHING ⇒ it does NOT arm stickiness, and a tx that opted
+        // OUT per-transaction (`useWriterAfterTransaction: false`) does not arm it either — mirror v1
+        // `DBModel.transaction` :3126. The GLOBAL setting still has the last word: `mark()` is a no-op
+        // on a clock the deployment disabled, so a per-tx `true` cannot force stickiness on (v1 :487).
+        if (!resolved.rollbackOnly && resolved.useWriterAfterTransaction) ctx.stickyClock.mark();
+        return attemptResult.value;
       }
-    });
 
-    // An errored attempt saw a failed statement — destroy the (possibly poisoned) conn so a retry
-    // reconnects on a fresh one; a clean success returns the conn to the pool.
-    await pool.release(conn, poisoned || !attemptResult.ok);
-
-    if (attemptResult.ok) {
-      // WRITER-STICKY (§3-2, read-your-writes): a committed tx marks the sticky clock so subsequent
-      // reads within `writerStickyDuration` route to the writer pool (v1 `_lastTransactionTime`). A
-      // rollbackOnly (dry-run) tx committed NOTHING ⇒ it does NOT arm stickiness, and a tx that opted
-      // OUT per-transaction (`useWriterAfterTransaction: false`) does not arm it either — mirror v1
-      // `DBModel.transaction` :3126. The GLOBAL setting still has the last word: `mark()` is a no-op
-      // on a clock the deployment disabled, so a per-tx `true` cannot force stickiness on (v1 :487).
-      if (!resolved.rollbackOnly && resolved.useWriterAfterTransaction) ctx.stickyClock.mark();
-      return attemptResult.value;
+      const { error } = attemptResult;
+      if (resolved.retryOnError && attempt < resolved.retryLimit && isRetryableTxError(error, isConnectionError)) {
+        await sleep(resolved.retryDuration * Math.pow(2, attempt - 1));
+        continue; // RETRY the whole transaction on a fresh connection
+      }
+      throw error;
     }
-
-    const { error } = attemptResult;
-    if (resolved.retryOnError && attempt < resolved.retryLimit && isRetryableTxError(error, isConnectionError)) {
-      await sleep(resolved.retryDuration * Math.pow(2, attempt - 1));
-      continue; // RETRY the whole transaction on a fresh connection
-    }
-    throw error;
+  } finally {
+    ctx.stickyClock.end(stickyCell);
   }
 }
 

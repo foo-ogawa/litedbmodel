@@ -413,7 +413,8 @@ class ExecutionContext:
 
     def mark_sticky(self) -> None:
         """Mark the writer-sticky clock (Phase C-1, read-your-writes): the tx runtime calls this on a
-        successful COMMIT so subsequent reads within ``writer_sticky_duration`` route to the writer pool.
+        successful COMMIT so the current chain's (this Context's) subsequent reads within
+        ``writer_sticky_duration`` route to the writer pool; other threads keep reading from the reader.
         A no-op on the single-driver path (no routing ⇒ no sticky clock)."""
         if self._routing is not None:
             self._routing.sticky.mark()

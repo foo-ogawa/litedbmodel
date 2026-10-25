@@ -25,6 +25,7 @@ package litedbmodel_runtime
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -109,7 +110,7 @@ type livePool struct {
 }
 
 func newLivePool(label string, db *sql.DB, log *[]string, mu *sync.Mutex) *livePool {
-	return &livePool{label: label, inner: NewSQLDBPool(db), log: log, mu: mu}
+	return &livePool{label: label, inner: NewSQLDBPool(db, defaultConnectTimeoutMillis), log: log, mu: mu}
 }
 
 func (p *livePool) Acquire() (PooledConn, error) {
@@ -454,7 +455,7 @@ func TestPhaseCConfigQueryTimeoutLivePG(t *testing.T) {
 
 	// A configured pool over live PG with a 200ms statement_timeout.
 	cfg := ResolveConnectionConfig(ConnectionConfig{Driver: "postgres", QueryTimeout: intPtr(200)})
-	pool := ConfiguredPool(NewSQLDBPool(db), cfg)
+	pool := ConfiguredPool(NewSQLDBPool(db, defaultConnectTimeoutMillis), cfg)
 	reg := SingleDefaultRegistry(pool)
 	ctx := ContextForRouting(RoutingConfig{Registry: reg, Sticky: NewWriterStickyClock(StickyOptions{UseWriterAfterTransaction: boolPtr(false)})}, nil)
 
@@ -466,7 +467,7 @@ func TestPhaseCConfigQueryTimeoutLivePG(t *testing.T) {
 
 	// MUTATION (RED): the SAME slow query on an UNCONFIGURED pool (no statement_timeout) does NOT time
 	// out at 200ms — it completes — so the timeout is the config's doing.
-	plain := ContextForRouting(RoutingConfig{Registry: SingleDefaultRegistry(NewSQLDBPool(db)), Sticky: NewWriterStickyClock(StickyOptions{UseWriterAfterTransaction: boolPtr(false)})}, nil)
+	plain := ContextForRouting(RoutingConfig{Registry: SingleDefaultRegistry(NewSQLDBPool(db, defaultConnectTimeoutMillis)), Sticky: NewWriterStickyClock(StickyOptions{UseWriterAfterTransaction: boolPtr(false)})}, nil)
 	ok, err := Execute(plain, "SELECT pg_sleep(0.3) AS done", nil, StatementIntent{Write: false}) // 300ms > 200ms; no timeout set ⇒ succeeds
 	if err != nil || len(ok) != 1 {
 		t.Fatalf("unconfigured 300ms query should succeed, got rows=%d err=%v", len(ok), err)
@@ -479,7 +480,7 @@ func TestPhaseCConfigQueryTimeoutLiveMySQL(t *testing.T) {
 	defer db.Close()
 
 	cfg := ResolveConnectionConfig(ConnectionConfig{Driver: "mysql", QueryTimeout: intPtr(200)})
-	pool := ConfiguredPool(NewSQLDBPool(db), cfg)
+	pool := ConfiguredPool(NewSQLDBPool(db, defaultConnectTimeoutMillis), cfg)
 	ctx := ContextForRouting(RoutingConfig{Registry: SingleDefaultRegistry(pool), Sticky: NewWriterStickyClock(StickyOptions{UseWriterAfterTransaction: boolPtr(false)})}, nil)
 
 	// A CPU-heavy SELECT (cross-join + SHA2 per row) burns past 200ms; max_execution_time aborts it
@@ -499,7 +500,7 @@ func TestPhaseCConfigQueryTimeoutLiveMySQL(t *testing.T) {
 	}
 
 	// MUTATION (RED): a smaller heavy query on an UNCONFIGURED pool COMPLETES.
-	plain := ContextForRouting(RoutingConfig{Registry: SingleDefaultRegistry(NewSQLDBPool(db)), Sticky: NewWriterStickyClock(StickyOptions{UseWriterAfterTransaction: boolPtr(false)})}, nil)
+	plain := ContextForRouting(RoutingConfig{Registry: SingleDefaultRegistry(NewSQLDBPool(db, defaultConnectTimeoutMillis)), Sticky: NewWriterStickyClock(StickyOptions{UseWriterAfterTransaction: boolPtr(false)})}, nil)
 	small := `SELECT COUNT(*) AS n FROM
 		information_schema.COLLATIONS a,
 		information_schema.COLLATIONS b
@@ -606,6 +607,193 @@ func TestPhaseCConfigMaxPoolSoleCapLivePG(t *testing.T) {
 	}
 }
 
+// phaseCLiveLeg is one live engine: the connection config pointing at the docker service + the
+// factory that builds its pool.
+type phaseCLiveLeg struct {
+	name    string
+	config  ConnectionConfig
+	factory PoolFactory
+}
+
+func phaseCLiveLegs() []phaseCLiveLeg {
+	return []phaseCLiveLeg{
+		{"postgres", ConnectionConfig{Driver: "postgres",
+			Host: envOr("TEST_DB_HOST", "localhost"), Port: int(atoiOr(envOr("TEST_DB_PORT", "5433"), 5433)),
+			Database: envOr("TEST_DB_NAME", "testdb"), User: envOr("TEST_DB_USER", "testuser"), Password: envOr("TEST_DB_PASSWORD", "testpass")},
+			PgPoolFactory()},
+		{"mysql", ConnectionConfig{Driver: "mysql",
+			Host: envOr("TEST_MYSQL_HOST", "127.0.0.1"), Port: int(atoiOr(envOr("TEST_MYSQL_PORT", "3307"), 3307)),
+			Database: envOr("TEST_MYSQL_DB", "testdb"), User: envOr("TEST_MYSQL_USER", "testuser"), Password: envOr("TEST_MYSQL_PASSWORD", "testpass")},
+			MysqlPoolFactory()},
+	}
+}
+
+// connectTimeoutMillis bounds the WAIT for a free connection: with maxPool=1 and the pool's one
+// connection held, a statement fails with context.DeadlineExceeded once it has waited
+// connectTimeoutMillis; when the held connection is released inside the bound, the waiting statement
+// gets it and succeeds. connectTimeoutMillis=0 is no limit: the statement is still waiting well past
+// where a bound would have fired, and gets the connection once it is released.
+func TestPhaseCConfigConnectTimeoutBoundsWaitLive(t *testing.T) {
+	phaseCGated(t)
+	const timeoutMs = 400
+	const bound = timeoutMs * time.Millisecond
+	type result struct {
+		err     error
+		elapsed time.Duration
+	}
+	for _, leg := range phaseCLiveLegs() {
+		t.Run(leg.name, func(t *testing.T) {
+			// singleConnection builds a routed ctx over a maxPool=1 pool and returns it with the pool.
+			singleConnection := func(connectTimeoutMillis int) (*ExecutionContext, Pool) {
+				cfg := leg.config
+				cfg.MaxPool = intPtr(1)
+				cfg.ConnectTimeoutMillis = intPtr(connectTimeoutMillis)
+				var pool Pool
+				capturing := func(c ResolvedConnectionConfig, role string) (BuiltPool, error) {
+					bp, err := leg.factory(c, role)
+					pool = bp.Pool
+					return bp, err
+				}
+				built, err := BuildRoutingConfig([]ConnectionSetup{{Config: cfg, PoolFactory: capturing}}, StickyOptions{UseWriterAfterTransaction: boolPtr(false)})
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = built.Close() })
+				return ContextForRouting(built.Routing, nil), pool
+			}
+			// executeAsync runs one statement on ctx and delivers its outcome and duration.
+			executeAsync := func(ctx *ExecutionContext) <-chan result {
+				done := make(chan result, 1)
+				go func() {
+					start := time.Now()
+					_, err := Execute(ctx, "SELECT 1 AS x", nil, StatementIntent{Write: false})
+					done <- result{err, time.Since(start)}
+				}()
+				return done
+			}
+			// awaitResult waits for a statement; one still waiting after limit is RED, not a hung test.
+			awaitResult := func(done <-chan result, limit time.Duration, what string) result {
+				select {
+				case r := <-done:
+					return r
+				case <-time.After(limit):
+					t.Fatalf("%s: statement still waiting for a connection after %v", what, limit)
+					return result{}
+				}
+			}
+
+			ctx, pool := singleConnection(timeoutMs)
+			held, err := pool.Acquire() // the pool's only connection
+			if err != nil {
+				t.Fatal(err)
+			}
+			r := awaitResult(executeAsync(ctx), bound+5*time.Second, fmt.Sprintf("connectTimeoutMillis=%d", timeoutMs))
+			if !errors.Is(r.err, context.DeadlineExceeded) {
+				t.Fatalf("statement on an exhausted pool: err = %v, want context.DeadlineExceeded", r.err)
+			}
+			if r.elapsed < bound || r.elapsed > bound+1500*time.Millisecond {
+				t.Fatalf("statement gave up after %v, want within [%v, %v+1.5s]", r.elapsed, bound, bound)
+			}
+
+			const freeAfter = 100 * time.Millisecond
+			go func() {
+				time.Sleep(freeAfter)
+				_ = pool.Release(held, false)
+			}()
+			r = awaitResult(executeAsync(ctx), bound+5*time.Second, "connection freed in time")
+			if r.err != nil {
+				t.Fatalf("statement after the held connection was freed in time: %v", r.err)
+			}
+			if r.elapsed < freeAfter || r.elapsed >= bound {
+				t.Fatalf("statement took %v, want within [%v, %v) (it waits for the freed connection)", r.elapsed, freeAfter, bound)
+			}
+
+			unboundedCtx, unboundedPool := singleConnection(0)
+			heldForever, err := unboundedPool.Acquire()
+			if err != nil {
+				t.Fatal(err)
+			}
+			waiting := executeAsync(unboundedCtx)
+			select {
+			case r := <-waiting:
+				t.Fatalf("connectTimeoutMillis=0: statement gave up after %v (err: %v), want no limit", r.elapsed, r.err)
+			case <-time.After(bound + time.Second):
+			}
+			_ = unboundedPool.Release(heldForever, false)
+			if r := awaitResult(waiting, 5*time.Second, "connectTimeoutMillis=0 after release"); r.err != nil {
+				t.Fatalf("connectTimeoutMillis=0: statement after the connection was released: %v", r.err)
+			}
+		})
+	}
+}
+
+// idleTimeoutMillis closes UNUSED pooled connections: two released connections stay open in the pool,
+// and are closed once idle for idleTimeoutMillis (Stats().MaxIdleTimeClosed). A pool with the default
+// (10000) still holds both at that moment, so the closing is the configured timeout's doing — and that
+// pool runs with keepAlive (300 ms probe delay), which is TCP keepalive on the socket, not a lifetime:
+// two cleaner sweeps later nothing has been closed for its age (Stats().MaxLifetimeClosed == 0).
+func TestPhaseCConfigIdleTimeoutClosesIdleLive(t *testing.T) {
+	phaseCGated(t)
+	for _, leg := range phaseCLiveLegs() {
+		t.Run(leg.name, func(t *testing.T) {
+			build := func(idleTimeoutMillis *int, keepAlive bool) (*SQLDBPool, *sql.DB) {
+				cfg := leg.config
+				cfg.MaxPool = intPtr(2)
+				cfg.IdleTimeoutMillis = idleTimeoutMillis
+				cfg.KeepAlive = boolPtr(keepAlive)
+				cfg.KeepAliveInitialDelayMillis = intPtr(300)
+				bp, err := leg.factory(ResolveConnectionConfig(cfg), "reader")
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = bp.Close() })
+				pool := bp.Pool.(*SQLDBPool)
+				return pool, pool.db
+			}
+			useTwo := func(pool *SQLDBPool) {
+				a, err := pool.Acquire()
+				if err != nil {
+					t.Fatal(err)
+				}
+				b, err := pool.Acquire()
+				if err != nil {
+					t.Fatal(err)
+				}
+				_ = pool.Release(a, false)
+				_ = pool.Release(b, false)
+			}
+			shortPool, short := build(intPtr(300), false)
+			// default idleTimeoutMillis; keepAlive with a 300 ms probe delay must not shorten the lifetime
+			longPool, long := build(nil, true)
+			useTwo(shortPool)
+			useTwo(longPool)
+			longReleased := time.Now()
+			for name, db := range map[string]*sql.DB{"idleTimeoutMillis=300": short, "default": long} {
+				if s := db.Stats(); s.Idle != 2 {
+					t.Fatalf("%s: right after release Idle = %d (closed %d), want 2 — a released connection stays open", name, s.Idle, s.MaxIdleClosed)
+				}
+			}
+			deadline := time.Now().Add(5 * time.Second)
+			for {
+				s := short.Stats()
+				if s.Idle == 0 && s.MaxIdleTimeClosed == 2 {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("idleTimeoutMillis=300: after 5s Idle = %d, MaxIdleTimeClosed = %d, want 0 / 2", s.Idle, s.MaxIdleTimeClosed)
+				}
+				time.Sleep(50 * time.Millisecond)
+			}
+			// database/sql's cleaner sweeps at most once a second; give a lifetime bound two sweeps.
+			time.Sleep(time.Until(longReleased.Add(2100 * time.Millisecond)))
+			if s := long.Stats(); s.Idle != 2 || s.MaxIdleTimeClosed != 0 || s.MaxLifetimeClosed != 0 {
+				t.Fatalf("default idleTimeoutMillis + keepAlive(300ms): Idle = %d, MaxIdleTimeClosed = %d, MaxLifetimeClosed = %d, want 2 / 0 / 0",
+					s.Idle, s.MaxIdleTimeClosed, s.MaxLifetimeClosed)
+			}
+		})
+	}
+}
+
 // searchPath reset-on-release: a configured pool with searchPath sets it on checkout and RESETs it on
 // release, so a pooled connection does NOT leak the search_path to the next caller. Proven by: with
 // searchPath=go schema, an UNQUALIFIED table name resolves to the go schema's table; after the
@@ -626,7 +814,7 @@ func TestPhaseCConfigSearchPathResetOnReleaseLivePG(t *testing.T) {
 	singleDB.SetMaxOpenConns(1)
 
 	cfg := ResolveConnectionConfig(ConnectionConfig{Driver: "postgres", SearchPath: goPGSchema})
-	pool := ConfiguredPool(NewSQLDBPool(singleDB), cfg)
+	pool := ConfiguredPool(NewSQLDBPool(singleDB, defaultConnectTimeoutMillis), cfg)
 	ctx := ContextForRouting(RoutingConfig{Registry: SingleDefaultRegistry(pool), Sticky: NewWriterStickyClock(StickyOptions{UseWriterAfterTransaction: boolPtr(false)})}, nil)
 
 	// With searchPath = go schema, the UNQUALIFIED table name resolves to the go-schema table.
@@ -652,7 +840,7 @@ func TestPhaseCConfigSearchPathResetOnReleaseLivePG(t *testing.T) {
 	// MUTATION (RED): a pool WITHOUT the searchPath config (all-default) does NOT set search_path, so
 	// the unqualified read fails immediately (proving the searchPath session statement was load-bearing
 	// for the green read above).
-	plainPool := ConfiguredPool(NewSQLDBPool(db), ResolveConnectionConfig(ConnectionConfig{Driver: "postgres"}))
+	plainPool := ConfiguredPool(NewSQLDBPool(db, defaultConnectTimeoutMillis), ResolveConnectionConfig(ConnectionConfig{Driver: "postgres"}))
 	plainCtx := ContextForRouting(RoutingConfig{Registry: SingleDefaultRegistry(plainPool), Sticky: NewWriterStickyClock(StickyOptions{UseWriterAfterTransaction: boolPtr(false)})}, nil)
 	if _, err := Execute(plainCtx, fmt.Sprintf("SELECT val FROM %s WHERE id=1", goRouteTable), nil, StatementIntent{Write: false}); err == nil {
 		t.Fatal("without searchPath config, the unqualified go-schema read must FAIL (searchPath was load-bearing)")
@@ -669,7 +857,7 @@ func TestPhaseCConfigCharsetResetOnReleaseLiveMySQL(t *testing.T) {
 	db.SetMaxOpenConns(1) // reuse the SAME physical conn so a leak would be visible
 
 	cfg := ResolveConnectionConfig(ConnectionConfig{Driver: "mysql", Charset: "latin1"})
-	pool := ConfiguredPool(NewSQLDBPool(db), cfg)
+	pool := ConfiguredPool(NewSQLDBPool(db, defaultConnectTimeoutMillis), cfg)
 	ctx := ContextForRouting(RoutingConfig{Registry: SingleDefaultRegistry(pool), Sticky: NewWriterStickyClock(StickyOptions{UseWriterAfterTransaction: boolPtr(false)})}, nil)
 
 	rows, err := Execute(ctx, "SELECT @@character_set_connection AS cs", nil, StatementIntent{Write: false})

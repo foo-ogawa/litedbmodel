@@ -3,7 +3,7 @@
 A detailed comparison of litedbmodel with popular TypeScript/JavaScript ORMs.
 
 <!--@embedoc:package_version label="Benchmark figures"-->
-**Benchmark figures:** litedbmodel **2.2.10**
+**Benchmark figures:** litedbmodel **2.2.11**
 <!--@embedoc:end-->
 
 > The only performance number on this page is the machine-computed win count below; the full
@@ -760,7 +760,7 @@ class AuditMiddleware extends Middleware {
 
 DBModel.use(AuditMiddleware);
 
-// Per-request context access
+// Per-request context access (inside Middleware.run at the request entry)
 const ctx = AuditMiddleware.getCurrentContext();
 ctx.tenantId = req.user.tenantId;
 ```

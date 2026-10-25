@@ -6,6 +6,7 @@
 package litedbmodel_runtime
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"path/filepath"
@@ -20,8 +21,8 @@ import (
 )
 
 // openBoundT opens a fresh in-memory sqlite (one pooled connection so schema + tx + reads share the same
-// DB), creates table t, and binds the leaf transport to it. Returns the db; the caller unbinds.
-func openBoundT(t *testing.T) *sql.DB {
+// DB), creates table t, and binds the leaf transport to it. Returns the db and the bound context.
+func openBoundT(t *testing.T) (*sql.DB, context.Context) {
 	t.Helper()
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -32,8 +33,7 @@ func openBoundT(t *testing.T) *sql.DB {
 	if _, err := db.Exec("CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)"); err != nil {
 		t.Fatalf("ddl: %v", err)
 	}
-	BindLeafTransport(ContextForDB(db), "sqlite")
-	return db
+	return db, BindLeafTransport(ContextForDB(db), "sqlite")
 }
 
 // optsPort builds the `opts` control record port — the ExecOptions record the covered runner assembles:
@@ -83,14 +83,14 @@ func sqlPayload(params []wire.WireValue, sql string, write bool) wire.WireRow {
 }
 
 // insT issues one INSERT through ExecuteSQL (the covered write path). Returns the leaf result wire.
-func insT(id int64, v string) (wire.WireValue, error) {
-	return ExecuteSQL(sqlPayload([]wire.WireValue{wire.WireInt(id), wire.WireStr(v)}, "INSERT INTO t (id, v) VALUES (?, ?)", true))
+func insT(ctx context.Context, id int64, v string) (wire.WireValue, error) {
+	return ExecuteSQL(ctx, sqlPayload([]wire.WireValue{wire.WireInt(id), wire.WireStr(v)}, "INSERT INTO t (id, v) VALUES (?, ?)", true))
 }
 
 // countT reads COUNT(*) via ExecuteSQL (the covered read path) and returns the single numeric cell.
-func countT(t *testing.T) string {
+func countT(t *testing.T, ctx context.Context) string {
 	t.Helper()
-	out, err := ExecuteSQL(sqlPayload(nil, "SELECT COUNT(*) AS c FROM t", false))
+	out, err := ExecuteSQL(ctx, sqlPayload(nil, "SELECT COUNT(*) AS c FROM t", false))
 	if err != nil {
 		t.Fatalf("count: %v", err)
 	}
@@ -109,11 +109,10 @@ func countT(t *testing.T) string {
 // A non-RETURNING write returns the uniform one-row [{changes,lastInsertRowid}] summary (rust
 // execute_sql parity) — NOT an empty list. (#141 slice-2 piece 2.)
 func TestExecuteSQL_WriteSummaryShape(t *testing.T) {
-	db := openBoundT(t)
+	db, ctx := openBoundT(t)
 	defer db.Close()
-	defer UnbindLeafTransport()
 
-	out, err := insT(7, "a")
+	out, err := insT(ctx, 7, "a")
 	if err != nil {
 		t.Fatalf("insert: %v", err)
 	}
@@ -137,28 +136,27 @@ func TestExecuteSQL_WriteSummaryShape(t *testing.T) {
 // a mid-tx body error ROLLBACKs (no rows persist). Mirror of rust's
 // tx_commits_on_ok_and_rolls_back_on_err. Proves the covered tx runner's boundary is genuinely atomic.
 func TestWithAmbientTransaction_CommitsOnOkRollsBackOnErr(t *testing.T) {
-	db := openBoundT(t)
+	db, ctx := openBoundT(t)
 	defer db.Close()
-	defer UnbindLeafTransport()
 
 	// Ok body: two inserts on the tx-owned connection → COMMIT → both rows persist.
-	if err := WithAmbientTransaction(func() error {
-		if _, e := insT(1, "a"); e != nil {
+	if err := WithAmbientTransaction(ctx, func(txCtx context.Context) error {
+		if _, e := insT(txCtx, 1, "a"); e != nil {
 			return e
 		}
-		_, e := insT(2, "b")
+		_, e := insT(txCtx, 2, "b")
 		return e
 	}); err != nil {
 		t.Fatalf("committed tx returned error: %v", err)
 	}
-	if got := countT(t); got != "2" {
+	if got := countT(t, ctx); got != "2" {
 		t.Fatalf("after commit: row count = %s, want 2 (all writes persisted)", got)
 	}
 
 	// Err body: insert row 3 then fail mid-tx → ROLLBACK → row 3 must NOT persist (still 2 rows).
 	boom := errors.New("mid-tx failure")
-	err := WithAmbientTransaction(func() error {
-		if _, e := insT(3, "c"); e != nil { // issued inside the tx…
+	err := WithAmbientTransaction(ctx, func(txCtx context.Context) error {
+		if _, e := insT(txCtx, 3, "c"); e != nil { // issued inside the tx…
 			return e
 		}
 		return boom // …then the body errors → rollback
@@ -166,25 +164,25 @@ func TestWithAmbientTransaction_CommitsOnOkRollsBackOnErr(t *testing.T) {
 	if !errors.Is(err, boom) {
 		t.Fatalf("rolled-back tx must propagate the body error, got %v", err)
 	}
-	if got := countT(t); got != "2" {
+	if got := countT(t, ctx); got != "2" {
 		t.Fatalf("after rollback: row count = %s, want 2 (row 3 must be gone)", got)
 	}
 }
 
-// The tx-scoped ambient is restored after the transaction: a plain ExecuteSQL write AFTER the tx runs
-// on the bound (non-tx) connection and persists (proves the ambient swap does not leak past the body).
-func TestWithAmbientTransaction_RestoresAmbient(t *testing.T) {
-	db := openBoundT(t)
+// The transaction binds only the context it hands its body: the caller's context still carries the
+// non-tx ExecutionContext, so a plain ExecuteSQL write with it AFTER the tx runs on the bound (non-tx)
+// connection and persists.
+func TestWithAmbientTransaction_LeavesTheCallerContextUnchanged(t *testing.T) {
+	db, ctx := openBoundT(t)
 	defer db.Close()
-	defer UnbindLeafTransport()
 
-	if err := WithAmbientTransaction(func() error { _, e := insT(1, "a"); return e }); err != nil {
+	if err := WithAmbientTransaction(ctx, func(txCtx context.Context) error { _, e := insT(txCtx, 1, "a"); return e }); err != nil {
 		t.Fatalf("tx: %v", err)
 	}
-	if _, err := insT(2, "b"); err != nil { // outside any tx — on the restored ambient
+	if _, err := insT(ctx, 2, "b"); err != nil { // the caller's context — outside any tx
 		t.Fatalf("post-tx write: %v", err)
 	}
-	if got := countT(t); got != "2" {
+	if got := countT(t, ctx); got != "2" {
 		t.Fatalf("row count = %s, want 2 (tx write + post-tx write)", got)
 	}
 }
@@ -209,17 +207,16 @@ func guardPayload(sql string, limit int64, model, relation string) wire.WireRow 
 // twin of the rust `relation_guard_trips_on_the_raw_child_rows` and of the TS conformance guard
 // vectors, proven against a real in-proc sqlite rather than by inspection.
 func TestExecuteSQL_RelationGuardOnRawChildRows(t *testing.T) {
-	db := openBoundT(t)
+	db, ctx := openBoundT(t)
 	defer db.Close()
-	defer UnbindLeafTransport()
 	for i, v := range []string{"a", "b", "c"} {
-		if _, err := insT(int64(i+1), v); err != nil {
+		if _, err := insT(ctx, int64(i+1), v); err != nil {
 			t.Fatalf("seed: %v", err)
 		}
 	}
 
 	// 3 rows > cap 2 ⇒ the transport raises before the rows are handed on.
-	_, err := ExecuteSQL(guardPayload("SELECT id, v FROM t ORDER BY id", 2, "t", "things"))
+	_, err := ExecuteSQL(ctx, guardPayload("SELECT id, v FROM t ORDER BY id", 2, "t", "things"))
 	if err == nil {
 		t.Fatal("a relation batch over its cap must raise")
 	}
@@ -238,7 +235,7 @@ func TestExecuteSQL_RelationGuardOnRawChildRows(t *testing.T) {
 	}
 
 	// 3 rows ≤ cap 3 ⇒ no raise, and the rows come back untouched.
-	out, err := ExecuteSQL(guardPayload("SELECT id, v FROM t ORDER BY id", 3, "t", "things"))
+	out, err := ExecuteSQL(ctx, guardPayload("SELECT id, v FROM t ORDER BY id", 3, "t", "things"))
 	if err != nil {
 		t.Fatalf("a batch within its cap must pass: %v", err)
 	}
@@ -247,7 +244,7 @@ func TestExecuteSQL_RelationGuardOnRawChildRows(t *testing.T) {
 	}
 
 	// An UNCAPPED statement (no guard port at all) is never checked — the byte-unchanged path.
-	if _, err := ExecuteSQL(sqlPayload(nil, "SELECT id, v FROM t ORDER BY id", false)); err != nil {
+	if _, err := ExecuteSQL(ctx, sqlPayload(nil, "SELECT id, v FROM t ORDER BY id", false)); err != nil {
 		t.Fatalf("an uncapped read must not be guarded: %v", err)
 	}
 }
@@ -260,11 +257,10 @@ func TestExecuteSQL_RelationGuardOnRawChildRows(t *testing.T) {
 // of the five-language parity (rust `dynamic_where_continues_a_bounded_where`, python
 // `test_dynamic_where_continues_a_bounded_where`, php `DynamicWhereTest`, TS `leaves.test.ts`).
 func TestExecuteSQL_DynamicWhereContinuesBoundedWhere(t *testing.T) {
-	db := openBoundT(t)
+	db, ctx := openBoundT(t)
 	defer db.Close()
-	defer UnbindLeafTransport()
 	for i, v := range []string{"a", "b", "c"} {
-		if _, err := insT(int64(i+1), v); err != nil {
+		if _, err := insT(ctx, int64(i+1), v); err != nil {
 			t.Fatalf("seed: %v", err)
 		}
 	}
@@ -277,7 +273,7 @@ func TestExecuteSQL_DynamicWhereContinuesBoundedWhere(t *testing.T) {
 	// With a plan the `sql` port is the statement's HEAD (up to its WHERE region) and the plan carries
 	// what finishes it: `lead: "AND"` (the head ends in a static WHERE), the ` ORDER BY … LIMIT ?` tail
 	// and the tail's own bound count. The transport concatenates — it never scans for the boundary.
-	out, err := ExecuteSQL(leafPayload(
+	out, err := ExecuteSQL(ctx, leafPayload(
 		optsPort(wire.WireNull(), wire.WireNull(),
 			planRow([]wire.WireValue{frag}, "AND", " ORDER BY id LIMIT ?", []wire.WireValue{wire.WireInt(2)}), wire.WireNull()),
 		port("params", wire.WireListOf([]wire.WireValue{wire.WireInt(1)})),
@@ -302,11 +298,10 @@ func TestExecuteSQL_DynamicWhereContinuesBoundedWhere(t *testing.T) {
 // drop a relation cap, erase a SKIP predicate, or run a write as a read. The five languages must agree;
 // this is the go leg.
 func TestExecuteSQL_MissingOrMistypedFieldOfAPresentStructIsLoud(t *testing.T) {
-	db := openBoundT(t)
+	db, ctx := openBoundT(t)
 	defer db.Close()
-	defer UnbindLeafTransport()
 	for i, v := range []string{"a", "b", "c"} {
-		if _, err := insT(int64(i+1), v); err != nil {
+		if _, err := insT(ctx, int64(i+1), v); err != nil {
 			t.Fatalf("seed: %v", err)
 		}
 	}
@@ -449,7 +444,7 @@ func TestExecuteSQL_MissingOrMistypedFieldOfAPresentStructIsLoud(t *testing.T) {
 				{Key: "relation", Val: wire.WireInt(42)},
 			}))), `port "guard.relation" expected a wire string`},
 	} {
-		_, err := ExecuteSQL(tc.payload)
+		_, err := ExecuteSQL(ctx, tc.payload)
 		if err == nil {
 			t.Fatalf("%s: must be loud, got no error", tc.name)
 		}
@@ -460,14 +455,14 @@ func TestExecuteSQL_MissingOrMistypedFieldOfAPresentStructIsLoud(t *testing.T) {
 
 	// The LEGAL absences stay silent: an omitted record is a plain read, and a null FIELD is how an
 	// absent write mode / plan / cap is spelled. Neither may be turned into a failure by the above.
-	if _, err := ExecuteSQL(leafPayload(sqlPort, paramsPort)); err != nil {
+	if _, err := ExecuteSQL(ctx, leafPayload(sqlPort, paramsPort)); err != nil {
 		t.Fatalf("an omitted control record is a plain read, got %v", err)
 	}
-	if _, err := ExecuteSQL(leafPayload(sqlPort, paramsPort, optsPort(wire.WireNull(), wire.WireNull(), wire.WireNull(), wire.WireNull()))); err != nil {
+	if _, err := ExecuteSQL(ctx, leafPayload(sqlPort, paramsPort, optsPort(wire.WireNull(), wire.WireNull(), wire.WireNull(), wire.WireNull()))); err != nil {
 		t.Fatalf("an all-null control record is a plain read, got %v", err)
 	}
 	// …and a cap that IS spelled still trips (the fail-closed reads did not disarm it).
-	if _, err := ExecuteSQL(leafPayload(sqlPort, paramsPort, optsPort(wire.WireNull(), wire.WireNull(), wire.WireNull(), cap2))); err == nil {
+	if _, err := ExecuteSQL(ctx, leafPayload(sqlPort, paramsPort, optsPort(wire.WireNull(), wire.WireNull(), wire.WireNull(), cap2))); err == nil {
 		t.Fatal("a relation batch over its cap must still raise")
 	}
 }
@@ -482,29 +477,29 @@ func TestExecuteSQL_MissingOrMistypedFieldOfAPresentStructIsLoud(t *testing.T) {
 // Every statement here crosses the same central seam the walker does, so a registered middleware
 // observes both of them; and the leaf transport must be BOUND by the caller (that is what decides which
 // context, and therefore which connection registry, the statements resolve against).
-func relationThroughLeaves(parentSQL, childSQL, pk, fk, into string, childDB wire.WireValue) (wire.WireValue, error) {
+func relationThroughLeaves(ctx context.Context, parentSQL, childSQL, pk, fk, into string, childDB wire.WireValue) (wire.WireValue, error) {
 	noOpts := func() wire.WireField {
 		return optsPort(wire.WireNull(), wire.WireNull(), wire.WireNull(), wire.WireNull())
 	}
-	parents, err := ExecuteSQL(leafPayload(
+	parents, err := ExecuteSQL(ctx, leafPayload(
 		port("sql", wire.WireStr(parentSQL)), port("params", wire.WireListOf(nil)), noOpts()))
 	if err != nil {
 		return wire.WireNull(), err
 	}
-	keys, err := PluckKeys(leafPayload(port("col", wireStrings(pk)), port("rows", parents)))
+	keys, err := PluckKeys(ctx, leafPayload(port("col", wireStrings(pk)), port("rows", parents)))
 	if err != nil {
 		return wire.WireNull(), err
 	}
 	// ONE param: the deduped key set. The leaf owns its dialect encoding (a JSON array on sqlite/MySQL,
 	// a native array on PG) — the same shaping the batched child SELECT is compiled against.
-	children, err := ExecuteSQL(leafPayload(
+	children, err := ExecuteSQL(ctx, leafPayload(
 		port("sql", wire.WireStr(childSQL)),
 		port("params", wire.WireListOf([]wire.WireValue{keys})),
 		optsPort(childDB, wire.WireNull(), wire.WireNull(), wire.WireNull())))
 	if err != nil {
 		return wire.WireNull(), err
 	}
-	return GroupChildren(leafPayload(
+	return GroupChildren(ctx, leafPayload(
 		port("children", children),
 		port("fk", wireStrings(fk)),
 		port("into", wire.WireStr(into)),
@@ -587,16 +582,14 @@ func namedDBPools(t *testing.T) (*ExecutionContext, *[]string, func()) {
 		"INSERT INTO named_users VALUES (1,'Ada'),(2,'Bob')")
 	log := &[]string{}
 	reg := NewConnectionRegistry(map[string]ReaderWriterPools{
-		DefaultConnection: SinglePoolPair(&countingPool{inner: NewSQLDBPool(a), label: "A", log: log}),
-		"B":               SinglePoolPair(&countingPool{inner: NewSQLDBPool(b), label: "B", log: log}),
+		DefaultConnection: SinglePoolPair(&countingPool{inner: NewSQLDBPool(a, defaultConnectTimeoutMillis), label: "A", log: log}),
+		"B":               SinglePoolPair(&countingPool{inner: NewSQLDBPool(b, defaultConnectTimeoutMillis), label: "B", log: log}),
 	})
 	ctx := ContextForRouting(RoutingConfig{
 		Registry: reg,
 		Sticky:   NewWriterStickyClock(StickyOptions{UseWriterAfterTransaction: boolPtr(false)}),
 	}, nil)
-	BindLeafTransport(ctx, "sqlite")
 	return ctx, log, func() {
-		UnbindLeafTransport()
 		_ = a.Close()
 		_ = b.Close()
 	}
@@ -607,11 +600,12 @@ func namedDBPools(t *testing.T) (*ExecutionContext, *[]string, func()) {
 // `leaves.test.ts` #217 tests, the rust `named_db_routes_the_statement`, the python
 // `test_named_db_routes_the_statement` and the php `NamedDbRoutingTest`.
 func TestExecuteSQL_NamedDBRoutesTheStatement(t *testing.T) {
-	_, _, done := namedDBPools(t)
+	exec, _, done := namedDBPools(t)
 	defer done()
+	ctx := BindLeafTransport(exec, "sqlite")
 
 	read := func(db wire.WireValue) (wire.WireValue, error) {
-		return ExecuteSQL(leafPayload(
+		return ExecuteSQL(ctx, leafPayload(
 			port("sql", wire.WireStr("SELECT id, name FROM named_users ORDER BY id")),
 			port("params", wire.WireListOf(nil)),
 			optsPort(db, wire.WireNull(), wire.WireNull(), wire.WireNull()),
@@ -648,15 +642,16 @@ func TestExecuteSQL_NamedDBRoutesTheStatement(t *testing.T) {
 // (`test/scp/emitter.test.ts` gates the lowering); here the leaf carries it to ConnectionFor and the ONE
 // [ConnectionRegistry] resolves it. The tables are DISJOINT, so a mis-routed half sees no table at all.
 func TestRelationThroughLeaves_NamedDBRoutesTheChildFetch(t *testing.T) {
-	_, _, done := namedDBPools(t)
+	exec, _, done := namedDBPools(t)
 	defer done()
+	ctx := BindLeafTransport(exec, "sqlite")
 
 	const parentSQL = "SELECT id FROM only_in_a ORDER BY id"
 	const childSQL = "SELECT id, name FROM named_users WHERE id IN (SELECT value FROM json_each(?)) ORDER BY id"
 
 	// NAMED ⇒ B served the child fetch, and the nested rows prove it: `named_users` exists in NO other
 	// registered database, and `only_in_a` exists ONLY on the default one.
-	grouped, err := relationThroughLeaves(parentSQL, childSQL, "id", "id", "kids", wire.WireStr("B"))
+	grouped, err := relationThroughLeaves(ctx, parentSQL, childSQL, "id", "id", "kids", wire.WireStr("B"))
 	if err != nil {
 		t.Fatalf(`child fetch on "B": %v`, err)
 	}
@@ -667,14 +662,14 @@ func TestRelationThroughLeaves_NamedDBRoutesTheChildFetch(t *testing.T) {
 	// NEGATIVE CONTROL — the SAME relation with the child fetch's name DROPPED (a wire null, which is
 	// exactly the pre-#217 lowering) sends it to the DEFAULT connection, where `named_users` does not
 	// exist. Measured, not reasoned: this is the wrong-database execution the name prevents.
-	if _, err := relationThroughLeaves(parentSQL, childSQL, "id", "id", "kids", wire.WireNull()); err == nil {
+	if _, err := relationThroughLeaves(ctx, parentSQL, childSQL, "id", "id", "kids", wire.WireNull()); err == nil {
 		t.Fatal("a dropped name must hit the DEFAULT connection, where named_users does not exist — got no error")
 	} else if !strings.Contains(err.Error(), "named_users") {
 		t.Fatalf("dropped-name error = %v, want a missing-table failure naming named_users", err)
 	}
 
 	// An UNREGISTERED name is LOUD, never a silent fall back to the parent's database.
-	if _, err := relationThroughLeaves(parentSQL, childSQL, "id", "id", "kids", wire.WireStr("ghost")); err == nil ||
+	if _, err := relationThroughLeaves(ctx, parentSQL, childSQL, "id", "id", "kids", wire.WireStr("ghost")); err == nil ||
 		!strings.Contains(err.Error(), "no connection registered under name 'ghost'") {
 		t.Fatalf(`child fetch on "ghost" error = %v, want the loud unregistered-name failure`, err)
 	}
@@ -685,12 +680,9 @@ func TestRelationThroughLeaves_NamedDBRoutesTheChildFetch(t *testing.T) {
 // wrong-database execution named-DB lowering exists to prevent — and a single-DB deployment is exactly
 // where it would go unnoticed.
 func TestExecuteSQL_NamedDBOnANonRoutedContextIsLoud(t *testing.T) {
-	db := openBoundT(t)
-	defer func() {
-		UnbindLeafTransport()
-		_ = db.Close()
-	}()
-	_, err := ExecuteSQL(leafPayload(
+	db, ctx := openBoundT(t)
+	defer db.Close()
+	_, err := ExecuteSQL(ctx, leafPayload(
 		port("sql", wire.WireStr("SELECT id FROM t")),
 		port("params", wire.WireListOf(nil)),
 		optsPort(wire.WireStr("analytics"), wire.WireNull(), wire.WireNull(), wire.WireNull()),
@@ -699,7 +691,7 @@ func TestExecuteSQL_NamedDBOnANonRoutedContextIsLoud(t *testing.T) {
 		t.Fatalf("non-routed named statement error = %v, want the loud no-registry failure", err)
 	}
 	// The DEFAULT connection is the single-db case itself and still runs.
-	if _, err := ExecuteSQL(leafPayload(
+	if _, err := ExecuteSQL(ctx, leafPayload(
 		port("sql", wire.WireStr("SELECT id FROM t")),
 		port("params", wire.WireListOf(nil)),
 		optsPort(wire.WireNull(), wire.WireNull(), wire.WireNull(), wire.WireNull()),
@@ -717,11 +709,11 @@ func TestExecuteSQL_NamedDBOnANonRoutedContextIsLoud(t *testing.T) {
 // The whole matrix is asserted, the NORMAL cases included: an unnamed in-body statement, and one naming
 // the tx's OWN database, must NOT become loud. The go leg; twins in TS / rust / python / php.
 func TestExecuteSQL_NamedDBInsideATransactionMustAgree(t *testing.T) {
-	ctx, log, done := namedDBPools(t)
+	exec, log, done := namedDBPools(t)
 	defer done()
 
-	read := func(db wire.WireValue) (wire.WireValue, error) {
-		return ExecuteSQL(leafPayload(
+	read := func(ctx context.Context, db wire.WireValue) (wire.WireValue, error) {
+		return ExecuteSQL(ctx, leafPayload(
 			port("sql", wire.WireStr("SELECT id, name FROM named_users ORDER BY id")),
 			port("params", wire.WireListOf(nil)),
 			optsPort(db, wire.WireNull(), wire.WireNull(), wire.WireNull()),
@@ -729,8 +721,8 @@ func TestExecuteSQL_NamedDBInsideATransactionMustAgree(t *testing.T) {
 	}
 	// The DEFAULT db has no `named_users`, so a read that reaches it fails on the TABLE — which is how a
 	// silently-mis-routed statement is told apart from a LOUD refusal.
-	countOnA := func(db wire.WireValue) (wire.WireValue, error) {
-		return ExecuteSQL(leafPayload(
+	countOnA := func(ctx context.Context, db wire.WireValue) (wire.WireValue, error) {
+		return ExecuteSQL(ctx, leafPayload(
 			port("sql", wire.WireStr("SELECT count(*) AS n FROM only_in_a")),
 			port("params", wire.WireListOf(nil)),
 			optsPort(db, wire.WireNull(), wire.WireNull(), wire.WireNull()),
@@ -738,20 +730,19 @@ func TestExecuteSQL_NamedDBInsideATransactionMustAgree(t *testing.T) {
 	}
 
 	// A transaction on the DEFAULT connection (the ctx names none).
-	BindLeafTransport(ctx, "sqlite")
-	if err := WithAmbientTransaction(func() error {
+	if err := WithAmbientTransaction(BindLeafTransport(exec, "sqlite"), func(txCtx context.Context) error {
 		// ORDINARY in-body statement (unnamed) → the pin. It must NOT be loud.
-		if _, err := countOnA(wire.WireNull()); err != nil {
+		if _, err := countOnA(txCtx, wire.WireNull()); err != nil {
 			t.Fatalf("an unnamed in-body statement must run on the pin: %v", err)
 		}
 		// A statement naming ANOTHER database is LOUD. Before this it returned B's rows' worth of nothing:
 		// it ran on the tx's own (DEFAULT) connection, silently.
-		if _, err := read(wire.WireStr("B")); err == nil ||
+		if _, err := read(txCtx, wire.WireStr("B")); err == nil ||
 			!strings.Contains(err.Error(), "transaction opened on 'default'") {
 			t.Fatalf(`db "B" inside a default tx = %v, want the LOUD disagreement`, err)
 		}
 		// An UNREGISTERED name is loud too (the pin used to swallow it whole).
-		if _, err := read(wire.WireStr("ghost")); err == nil ||
+		if _, err := read(txCtx, wire.WireStr("ghost")); err == nil ||
 			!strings.Contains(err.Error(), "names connection 'ghost'") {
 			t.Fatalf(`db "ghost" inside a tx = %v, want LOUD`, err)
 		}
@@ -762,19 +753,18 @@ func TestExecuteSQL_NamedDBInsideATransactionMustAgree(t *testing.T) {
 
 	// A transaction on "B": the statement naming "B" AGREES and runs on the pin — the rows are
 	// unforgeable (named_users exists in NO other registered db) — and "default" now disagrees.
-	BindLeafTransport(ctx.WithConnectionName("B"), "sqlite")
-	if err := WithAmbientTransaction(func() error {
-		got, err := read(wire.WireStr("B"))
+	if err := WithAmbientTransaction(BindLeafTransport(exec.WithConnectionName("B"), "sqlite"), func(txCtx context.Context) error {
+		got, err := read(txCtx, wire.WireStr("B"))
 		if err != nil {
 			t.Fatalf(`db "B" inside a tx on B must run: %v`, err)
 		}
 		if l := got.AsList(); l.Kind != wireProbeGot || l.Got.Len() != 2 {
 			t.Fatalf(`db "B" inside a tx on B returned %v, want B's 2 rows`, got)
 		}
-		if _, err := read(wire.WireNull()); err != nil {
+		if _, err := read(txCtx, wire.WireNull()); err != nil {
 			t.Fatalf("an unnamed in-body statement must run on the pin: %v", err)
 		}
-		if _, err := countOnA(wire.WireStr("default")); err == nil ||
+		if _, err := countOnA(txCtx, wire.WireStr("default")); err == nil ||
 			!strings.Contains(err.Error(), "transaction opened on 'B'") {
 			t.Fatalf(`db "default" inside a tx on B = %v, want the LOUD disagreement`, err)
 		}
@@ -793,36 +783,33 @@ func TestExecuteSQL_NamedDBInsideATransactionMustAgree(t *testing.T) {
 // The guard used to sit BEFORE the pin on the TS/php planes and AFTER it here, so "a named statement in a
 // non-routed tx" threw in two languages and ran silently in three.
 func TestExecuteSQL_NamedDBOnANonRoutedContextIsLoudInsideATransactionToo(t *testing.T) {
-	db := openBoundT(t)
-	defer func() {
-		UnbindLeafTransport()
-		_ = db.Close()
-	}()
-	named := func() error {
-		_, err := ExecuteSQL(leafPayload(
+	db, ctx := openBoundT(t)
+	defer db.Close()
+	named := func(ctx context.Context) error {
+		_, err := ExecuteSQL(ctx, leafPayload(
 			port("sql", wire.WireStr("SELECT id FROM t")),
 			port("params", wire.WireListOf(nil)),
 			optsPort(wire.WireStr("analytics"), wire.WireNull(), wire.WireNull(), wire.WireNull()),
 		))
 		return err
 	}
-	unnamed := func() error {
-		_, err := ExecuteSQL(leafPayload(
+	unnamed := func(ctx context.Context) error {
+		_, err := ExecuteSQL(ctx, leafPayload(
 			port("sql", wire.WireStr("SELECT id FROM t")),
 			port("params", wire.WireListOf(nil)),
 			optsPort(wire.WireNull(), wire.WireNull(), wire.WireNull(), wire.WireNull()),
 		))
 		return err
 	}
-	if err := named(); err == nil || !strings.Contains(err.Error(), "names connection 'analytics'") {
+	if err := named(ctx); err == nil || !strings.Contains(err.Error(), "names connection 'analytics'") {
 		t.Fatalf("outside a tx = %v, want LOUD", err)
 	}
-	if err := WithAmbientTransaction(func() error {
-		if err := named(); err == nil || !strings.Contains(err.Error(), "names connection 'analytics'") {
+	if err := WithAmbientTransaction(ctx, func(txCtx context.Context) error {
+		if err := named(txCtx); err == nil || !strings.Contains(err.Error(), "names connection 'analytics'") {
 			t.Fatalf("inside a tx = %v, want the SAME loud outcome as outside it", err)
 		}
 		// …and the ordinary unnamed statement still runs on the pin.
-		return unnamed()
+		return unnamed(txCtx)
 	}); err != nil {
 		t.Fatalf("tx: %v", err)
 	}

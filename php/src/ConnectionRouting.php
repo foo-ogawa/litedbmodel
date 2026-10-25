@@ -65,6 +65,27 @@ namespace LiteDbModel\Runtime;
  *     one) is therefore NOT ported: PHP's execution model cannot support it, and faking it would be a
  *     lie. {@see PdoPoolFactory} does NOT read `minPool`/`maxPool` — they are inert by construction,
  *     not by a silently-dropped knob.
+ *   - **connectTimeoutMillis** — REAL for opening a connection: {@see PdoPoolFactory} passes it as
+ *     {@see PDO::ATTR_TIMEOUT}, which takes whole SECONDS, so the milliseconds are rounded UP
+ *     (`ceil(ms / 1000)`) — the applied bound is never shorter than the configured one. For PG it
+ *     bounds the whole connect (libpq `connect_timeout`). For MySQL it bounds the TCP connect only:
+ *     a server that accepts the TCP connection and then never sends its handshake is bounded by
+ *     `mysqlnd.net_read_timeout`, an ini value each connection captures at construction and applies
+ *     to EVERY later read — so it cannot bound the handshake without also cutting off long queries,
+ *     and it is not set here. `0` is the contract's "no limit" and reaches the drivers as
+ *     `ATTR_TIMEOUT = 0`: libpq waits indefinitely; pdo_mysql reads 0 as "no connect timeout given"
+ *     and bounds its TCP connect by php.ini `default_socket_timeout` instead, so for a MySQL connect
+ *     with `0` that ini is `-1` (no limit) for the duration of the `\PDO` construction and is restored
+ *     right after it (PHP runs one request per process, so nothing else reads it meanwhile).
+ *     The other half of the knob, waiting for a free connection when the pool is at `maxPool`, has
+ *     nothing to wait on in PHP (no in-process pool).
+ *   - **idleTimeoutMillis** — **N/A in PHP**. There is no pool holding spare connections: the process
+ *     holds its one `\PDO` from construction until the request ends (or, with `keepAlive`, the SAPI
+ *     keeps the persistent connection for the worker), and `\PDO` has no idle-close setting. The
+ *     server-side idle limits (PG `idle_session_timeout`, MySQL `wait_timeout`) would terminate the
+ *     connection the process still holds, so its next statement fails ("terminating connection due to
+ *     idle-session timeout" / error 4031) instead of a fresh connection being opened. The field is
+ *     accepted for cross-lang parity and is not read by {@see PdoPoolFactory}.
  */
 
 // ── The runtime config (C3) — mirrors the TS ConnectionConfig / v1 DBConfig ────────
@@ -91,6 +112,11 @@ final class ConnectionConfig
      *        Accepted for cross-lang parity; IGNORED. @default 10000
      * @param int $minPool N/A in PHP (no in-process connection pool). Accepted for parity; INERT. @default 0
      * @param int $maxPool N/A in PHP (no in-process connection pool). Accepted for parity; INERT. @default 10
+     * @param int $connectTimeoutMillis Upper bound in MILLISECONDS on opening a connection, applied as
+     *        {@see PDO::ATTR_TIMEOUT} rounded UP to whole seconds (PG: the whole connect; MySQL: the TCP
+     *        connect — see the file docblock). 0 ⇒ no limit. @default 30000
+     * @param int $idleTimeoutMillis N/A in PHP (no pool holding idle connections; see the file
+     *        docblock). Accepted for parity; INERT. @default 10000
      * @param ?string $searchPath PG `search_path` set as a session statement on checkout (schema routing).
      * @param ?string $charset MySQL connection charset / PG client_encoding set on each session.
      */
@@ -106,6 +132,8 @@ final class ConnectionConfig
         public readonly int $keepAliveInitialDelayMillis = 10000,
         public readonly int $minPool = 0,
         public readonly int $maxPool = 10,
+        public readonly int $connectTimeoutMillis = 30000,
+        public readonly int $idleTimeoutMillis = 10000,
         public readonly ?string $searchPath = null,
         public readonly ?string $charset = null,
     ) {
@@ -136,13 +164,18 @@ final class ResolvedConnectionConfig
         public readonly int $keepAliveInitialDelayMillis,
         public readonly int $minPool,
         public readonly int $maxPool,
+        public readonly int $connectTimeoutMillis,
+        public readonly int $idleTimeoutMillis,
         public readonly ?string $searchPath,
         public readonly ?string $charset,
     ) {
     }
 }
 
-/** Apply the C3 defaults (queryTimeout=0, keepAlive=false, minPool=0, maxPool=10). */
+/**
+ * Apply the C3 defaults (queryTimeout=0, keepAlive=false, minPool=0, maxPool=10,
+ * connectTimeoutMillis=30000, idleTimeoutMillis=10000).
+ */
 function resolveConnectionConfig(?ConnectionConfig $config = null): ResolvedConnectionConfig
 {
     $c = $config ?? new ConnectionConfig();
@@ -158,6 +191,8 @@ function resolveConnectionConfig(?ConnectionConfig $config = null): ResolvedConn
         keepAliveInitialDelayMillis: $c->keepAliveInitialDelayMillis,
         minPool: $c->minPool,
         maxPool: $c->maxPool,
+        connectTimeoutMillis: $c->connectTimeoutMillis,
+        idleTimeoutMillis: $c->idleTimeoutMillis,
         searchPath: $c->searchPath,
         charset: $c->charset,
     );
@@ -940,9 +975,10 @@ final class RoutedConnection implements Connection
  *
  * In PHP a factory constructs a `\PDO` from the config's connection params and applies the CONSTRUCTION
  * knobs that ARE meaningful here — `keepAlive` → {@see PDO::ATTR_PERSISTENT} (a warm persistent
- * connection). Pool sizing (`minPool`/`maxPool`) and `keepAliveInitialDelayMillis` are N/A in PHP (no
- * in-process pool / no per-probe TCP keepalive delay in \PDO — see the file docblock) and are NOT read
- * by {@see PdoPoolFactory} — they are inert by construction, not by a silently-dropped knob.
+ * connection) and `connectTimeoutMillis` → {@see PDO::ATTR_TIMEOUT}. Pool sizing (`minPool`/`maxPool`),
+ * `idleTimeoutMillis` and `keepAliveInitialDelayMillis` are N/A in PHP (no in-process pool / no
+ * per-probe TCP keepalive delay in \PDO — see the file docblock) and are NOT read by
+ * {@see PdoPoolFactory} — they are inert by construction, not by a silently-dropped knob.
  *
  * `$role` ('reader'|'writer') lets a factory build a distinct replica connection for the reader vs. the
  * writer (a real reader/writer split would target different hosts via role-varied config); a factory
@@ -977,13 +1013,14 @@ final class PoolCloser
 /**
  * The reference {@see PoolFactory} for `\PDO` (PG / MySQL / SQLite). Constructs a `\PDO` from the
  * {@see ResolvedConnectionConfig} connection params, applying `keepAlive` → {@see PDO::ATTR_PERSISTENT}
- * AT CONSTRUCTION (the PHP analogue of a warm pooled connection). Wraps it in a {@see PdoDriver} and a
- * {@see ConfiguredPdoPool} so the SESSION knobs (queryTimeout/searchPath/charset) apply on checkout.
+ * (the PHP analogue of a warm pooled connection) and `connectTimeoutMillis` → {@see PDO::ATTR_TIMEOUT}
+ * AT CONSTRUCTION. Wraps it in a {@see PdoDriver} and a {@see ConfiguredPdoPool} so the SESSION knobs (queryTimeout/searchPath/charset) apply on checkout.
  * For PG it returns a {@see PgLivePdo} (`$N`→`?` placeholder rewrite); for MySQL a {@see MysqlLivePdo}
  * (RETURNING emulation) — so the routed pools carry the SAME dialect adaptation the LiveDb path does.
  *
- * Pool sizing (`minPool`/`maxPool`) + `keepAliveInitialDelayMillis` are N/A in PHP and are NOT read
- * here (documented; see the file docblock) — no in-process pool to cap, no per-probe keepalive delay.
+ * Pool sizing (`minPool`/`maxPool`), `idleTimeoutMillis` + `keepAliveInitialDelayMillis` are N/A in PHP
+ * and are NOT read here (documented; see the file docblock) — no in-process pool to cap or to hold idle
+ * connections, no per-probe keepalive delay.
  *
  * A caller may inject a pre-built `\PDO` (e.g. a shared test connection over the docker port) via
  * {@see PdoPoolFactory::forExisting()} so the reader/writer pair can wrap the SAME live connection —
@@ -1025,8 +1062,10 @@ final class PdoPoolFactory implements PoolFactory
 
     /**
      * Construct a `\PDO` from the config's connection params, applying `keepAlive` →
-     * {@see PDO::ATTR_PERSISTENT} at construction. PG → {@see PgLivePdo}, MySQL → {@see MysqlLivePdo}
-     * (the dialect-adapting subclasses), SQLite → a plain `\PDO`.
+     * {@see PDO::ATTR_PERSISTENT} and, for the server dialects, `connectTimeoutMillis` →
+     * {@see PDO::ATTR_TIMEOUT} (whole seconds, rounded up) at construction. PG → {@see PgLivePdo},
+     * MySQL → {@see MysqlLivePdo} (the dialect-adapting subclasses), SQLite → a plain `\PDO` (where
+     * `ATTR_TIMEOUT` is the busy-lock wait, not a connect bound, so it is not set).
      */
     private static function connectFromConfig(ResolvedConnectionConfig $config): \PDO
     {
@@ -1035,14 +1074,29 @@ final class PdoPoolFactory implements PoolFactory
         if ($config->keepAlive) {
             $opts[\PDO::ATTR_PERSISTENT] = true;
         }
+        $connectTimeoutSeconds = (int) ceil($config->connectTimeoutMillis / 1000);
         switch ($config->driver) {
             case 'postgres':
                 $dsn = "pgsql:host={$config->host};port={$config->port};dbname={$config->database}";
+                $opts[\PDO::ATTR_TIMEOUT] = $connectTimeoutSeconds;
                 return new PgLivePdo($dsn, (string) $config->user, (string) $config->password, $opts);
             case 'mysql':
                 $dsn = "mysql:host={$config->host};port={$config->port};dbname={$config->database}";
+                $opts[\PDO::ATTR_TIMEOUT] = $connectTimeoutSeconds;
                 $opts[\PDO::ATTR_EMULATE_PREPARES] = false;
-                $pdo = new MysqlLivePdo($dsn, (string) $config->user, (string) $config->password, $opts);
+                // connectTimeoutMillis = 0 (no limit): pdo_mysql reads ATTR_TIMEOUT 0 as "none given"
+                // and bounds the TCP connect by default_socket_timeout, so that ini is lifted to -1 (no
+                // limit) for this construction only.
+                $previousSocketTimeout = $config->connectTimeoutMillis === 0
+                    ? ini_set('default_socket_timeout', '-1')
+                    : false;
+                try {
+                    $pdo = new MysqlLivePdo($dsn, (string) $config->user, (string) $config->password, $opts);
+                } finally {
+                    if (is_string($previousSocketTimeout)) {
+                        ini_set('default_socket_timeout', $previousSocketTimeout);
+                    }
+                }
                 $pdo->setAttribute(\PDO::ATTR_STATEMENT_CLASS, [MysqlReturningStatement::class, [$pdo]]);
                 return $pdo;
             case 'sqlite':

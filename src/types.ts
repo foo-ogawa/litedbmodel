@@ -91,9 +91,6 @@ export interface ModelOptions {
  * ```
  */
 export interface DBConfig {
-  name?: string;
-  /** @deprecated Use driver instead */
-  type?: 'pgsql';
   /** Database driver: 'postgres' (default), 'sqlite', or 'mysql' */
   driver?: 'postgres' | 'sqlite' | 'mysql';
   /** Database host (for server-based DBs like PostgreSQL) */
@@ -106,12 +103,17 @@ export interface DBConfig {
   user?: string;
   /** Password */
   password?: string;
-  charset?: string;
-  timeout?: number;
-  queryTimeout?: number;
-  searchPath?: string;
-  /** Pool max connections */
+  /** Maximum pool size */
   max?: number;
+  /**
+   * Seconds allowed for getting a connection (default: 30). With PostgreSQL this also bounds the wait
+   * for a free connection when the pool is at `max`.
+   */
+  timeout?: number;
+  /** Milliseconds an unused pooled connection stays open before it is closed (default: 10000) */
+  idleTimeoutMillis?: number;
+  /** Query timeout in seconds */
+  queryTimeout?: number;
   /** Enable TCP keepalive on connections (recommended for serverless/Lambda) */
   keepAlive?: boolean;
   /** Delay in milliseconds before first keepalive probe (default: 10000) */

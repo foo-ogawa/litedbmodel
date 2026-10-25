@@ -131,6 +131,7 @@ const SKIP_BUDGET = 0;
  * Removing a name is a decision about coverage, not a formality: say which file and why.
  */
 const LIVE_FILES = [
+  'test/integration/ConcurrentRequests.test.ts',
   'test/integration/ConnectionRouting.test.ts',
   'test/integration/DeclaredTypeContract.test.ts',
   'test/integration/EmitterEndToEnd.test.ts',
