@@ -21,6 +21,13 @@ project adheres to [Semantic Versioning](https://semver.org/).
 - **[go] writer sticky がプロセス全体で 1 つだった（#315）。** コミットの時刻は要求単位
   （`ExecutionContext` の生成ごと）に持ち、コミットした要求の読みだけが writer に行く。
   `WriterStickyClock.Mark` / `IsSticky` は要求の `StickyScope` を取り、`Reset` は無くなった。
+- **[php] 型不一致の Error Value を作るときに `Class "…\BehaviorContracts\Canonical" not found` で落ちていた（#323）。**
+  float や配列・オブジェクトの値で型不一致が起きると、vendor した `Behavior.php` が呼ぶ `Canonical` が
+  vendor されていなかったため、構造化された失敗（TYPE_MISMATCH 等）にならずにクラス未定義で落ちていた。
+
+### Changed
+
+- behavior-contracts を全言語で 0.11.20 に揃えた（npm / Go / Python / Rust / PHP vendor）。
 
 ## [2.2.10] - 2026-10-25
 
