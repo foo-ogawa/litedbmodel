@@ -5,6 +5,23 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- **[go] 生成エントリを同時に呼ぶゴルーチンが、他のゴルーチンのトランザクション接続に乗っていた（#315）。**
+  生成エントリが SQL を流す先がパッケージのグローバル 1 つで、`WithAmbientTransaction` はトランザクションの
+  間それを差し替えていたため、同じプロセスで同時に要求をさばくと（Go の HTTP サーバーの通常の形）、他の
+  ゴルーチンの読み書きがそのトランザクションの接続で走り、未コミットの行が見え、書き込みがロールバックに
+  巻き込まれ、同じ接続の同時使用でプロセスが落ちることもあった。実行文脈は呼び出しの `context.Context` で
+  渡る: `BindLeafTransport(execCtx, dialect)` が返す context で生成エントリを呼び（`Posts(ctx, 1)`）、
+  `WithAmbientTransaction(ctx, func(txCtx context.Context) error { … })` は本体に tx 用の context を渡す。
+  `UnbindLeafTransport` は無くなった。生成エントリが `context.Context` を取るのは behavior-contracts の
+  go-typed-native の生成形の変更による。
+- **[go] writer sticky がプロセス全体で 1 つだった（#315）。** コミットの時刻は要求単位
+  （`ExecutionContext` の生成ごと）に持ち、コミットした要求の読みだけが writer に行く。
+  `WriterStickyClock.Mark` / `IsSticky` は要求の `StickyScope` を取り、`Reset` は無くなった。
+
 ## [2.2.10] - 2026-10-25
 
 **relation の初回に同時アクセスすると、一括読み込みがレコードの数だけ流れていたのを直す。** Closes #311。
