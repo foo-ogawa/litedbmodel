@@ -24,8 +24,9 @@
 //   2. CLEANLINESS — that program reports zero diagnostics.
 //
 // Each project file extends the config of the tree it belongs to, so the sources are checked against
-// exactly the types they run with. tsconfig.test.json extends the root one and overrides only what it
-// must: `rootDir` (the root project emits from `src`, so `test/**` would trip TS6059) and `module` (a
+// exactly the types they run with. test/tsconfig.json extends the root one and overrides only what it
+// must (it sits in test/ because vitest transforms each file with the nearest `tsconfig.json`, and the
+// decorator settings reach the test files only through it): `rootDir` (the root project emits from `src`, so `test/**` would trip TS6059) and `module` (a
 // test imports the ESM-only `conformance/harness`, whose `import.meta` is illegal under CommonJS).
 // `moduleResolution` is NOT changed — `bundler` resolves to a different type universe than the one the
 // library ships. tsconfig.tools.json extends benchmark/tsconfig.json, the config tsx already runs the
@@ -46,7 +47,7 @@ const ROOT = resolve(join(dirname(fileURLToPath(import.meta.url)), '..'));
 
 /** The TS trees `tsconfig.json` leaves uncompiled, and the project file that covers each. */
 const PROJECTS = [
-  { project: 'tsconfig.test.json', tree: 'test tree', globs: ['test/**/*.ts'] },
+  { project: 'test/tsconfig.json', tree: 'test tree', globs: ['test/**/*.ts'] },
   {
     project: 'tsconfig.tools.json',
     tree: 'tooling tree (benchmark + doc embeds)',
