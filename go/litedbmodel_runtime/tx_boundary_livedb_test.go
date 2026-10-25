@@ -34,7 +34,6 @@ import (
 	"testing"
 
 	bc "github.com/foo-ogawa/behavior-contracts/go"
-	gomysql "github.com/go-sql-driver/mysql"
 	pgxstd "github.com/jackc/pgx/v5/stdlib"
 )
 
@@ -65,7 +64,7 @@ func registerLiveRecDrivers() {
 		// pgx-rec wraps the pgx stdlib driver; mysql-scp-rec wraps the RETURNING-emulating driver.
 		sql.Register("pgx-rec", liveRecDriver{base: &pgxstd.Driver{}})
 		registerMysqlScp()
-		sql.Register("mysql-scp-rec", liveRecDriver{base: scpMysqlDriver{base: gomysql.MySQLDriver{}}})
+		sql.Register("mysql-scp-rec", liveRecDriver{base: scpMysqlDriver{}})
 	})
 }
 

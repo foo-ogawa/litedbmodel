@@ -587,8 +587,8 @@ func namedDBPools(t *testing.T) (*ExecutionContext, *[]string, func()) {
 		"INSERT INTO named_users VALUES (1,'Ada'),(2,'Bob')")
 	log := &[]string{}
 	reg := NewConnectionRegistry(map[string]ReaderWriterPools{
-		DefaultConnection: SinglePoolPair(&countingPool{inner: NewSQLDBPool(a), label: "A", log: log}),
-		"B":               SinglePoolPair(&countingPool{inner: NewSQLDBPool(b), label: "B", log: log}),
+		DefaultConnection: SinglePoolPair(&countingPool{inner: NewSQLDBPool(a, defaultConnectTimeoutMillis), label: "A", log: log}),
+		"B":               SinglePoolPair(&countingPool{inner: NewSQLDBPool(b, defaultConnectTimeoutMillis), label: "B", log: log}),
 	})
 	ctx := ContextForRouting(RoutingConfig{
 		Registry: reg,

@@ -21,6 +21,7 @@
             "src/TxOptions.php",
             "src/ExecutionContext.php",
             "src/ConnectionRouting.php",
+            "src/LiveDb.php",
             "src/Middleware.php"
         ]
     },

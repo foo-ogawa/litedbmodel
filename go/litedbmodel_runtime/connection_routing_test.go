@@ -18,9 +18,13 @@
 package litedbmodel_runtime
 
 import (
+	"context"
+	"fmt"
+	"net"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	bc "github.com/foo-ogawa/behavior-contracts/go"
 )
@@ -78,6 +82,10 @@ func (p *recordPool) Release(_ PooledConn, destroy bool) error {
 func intPtr(i int) *int    { return &i }
 func boolPtr(b bool) *bool { return &b }
 
+// defaultConnectTimeoutMillis is the C3 default checkout bound, for tests that wrap a raw *sql.DB in a
+// [SQLDBPool].
+var defaultConnectTimeoutMillis = ResolveConnectionConfig(ConnectionConfig{}).ConnectTimeoutMillis
+
 // ── SessionStatements / SessionResetStatements (C3) ────────────────────────────
 
 func TestSessionStatementsPerDialect(t *testing.T) {
@@ -133,9 +141,133 @@ func TestResolveConnectionConfigDefaults(t *testing.T) {
 	if r.Driver != "postgres" || r.QueryTimeout != 0 || r.KeepAlive != false || r.MinPool != 0 || r.MaxPool != 10 || r.KeepAliveInitialDelayMillis != 10000 {
 		t.Fatalf("defaults wrong: %+v", r)
 	}
+	if r.ConnectTimeoutMillis != 30000 || r.IdleTimeoutMillis != 10000 {
+		t.Fatalf("timeout defaults wrong: connectTimeoutMillis=%d idleTimeoutMillis=%d, want 30000/10000", r.ConnectTimeoutMillis, r.IdleTimeoutMillis)
+	}
 	// Explicit 0 maxPool is honored (a *int of &0 is not "unset").
 	if got := ResolveConnectionConfig(ConnectionConfig{MaxPool: intPtr(0)}).MaxPool; got != 0 {
 		t.Fatalf("explicit maxPool=0 not honored: %d", got)
+	}
+	// Explicit timeouts replace the defaults.
+	set := ResolveConnectionConfig(ConnectionConfig{ConnectTimeoutMillis: intPtr(1500), IdleTimeoutMillis: intPtr(250)})
+	if set.ConnectTimeoutMillis != 1500 || set.IdleTimeoutMillis != 250 {
+		t.Fatalf("explicit timeouts not honored: connectTimeoutMillis=%d idleTimeoutMillis=%d", set.ConnectTimeoutMillis, set.IdleTimeoutMillis)
+	}
+}
+
+// ConnectTimeoutMillis bounds OPENING a connection: against a server that completes the TCP handshake
+// and then never answers (a listener that never accepts — the kernel still queues the connection), the
+// factory's construction-time connect fails after the bound instead of hanging. For MySQL this needs
+// the checkout context to reach the handshake: go-sql-driver's `timeout` covers only the dial. With
+// ConnectTimeoutMillis = 0 (no limit) the same connect is still waiting well past where a bound would
+// have fired, and ends only when the server goes away.
+func TestPoolFactoryConnectTimeoutBoundsStalledServer(t *testing.T) {
+	const timeoutMs = 300
+	type result struct {
+		err     error
+		elapsed time.Duration
+	}
+	// connectStalled starts the factory against a listener that never answers; close stops the server.
+	connectStalled := func(t *testing.T, driver string, factory PoolFactory, connectTimeoutMillis int) (<-chan result, func()) {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg := ResolveConnectionConfig(ConnectionConfig{Driver: driver, Host: "127.0.0.1",
+			Port: ln.Addr().(*net.TCPAddr).Port, Database: "x", User: "u", Password: "p",
+			ConnectTimeoutMillis: intPtr(connectTimeoutMillis)})
+		done := make(chan result, 1)
+		go func() {
+			start := time.Now()
+			bp, ferr := factory(cfg, "reader")
+			if ferr == nil {
+				_ = bp.Close()
+			}
+			done <- result{ferr, time.Since(start)}
+		}()
+		return done, func() { _ = ln.Close() }
+	}
+	for _, tc := range []struct {
+		driver  string
+		factory PoolFactory
+	}{{"postgres", PgPoolFactory()}, {"mysql", MysqlPoolFactory()}} {
+		t.Run(tc.driver+"/bounded", func(t *testing.T) {
+			done, stop := connectStalled(t, tc.driver, tc.factory, timeoutMs)
+			defer stop()
+			select {
+			case r := <-done:
+				if r.err == nil {
+					t.Fatal("factory connected to a server that never answers")
+				}
+				if r.elapsed < timeoutMs*time.Millisecond || r.elapsed > timeoutMs*time.Millisecond+2*time.Second {
+					t.Fatalf("connect failed after %v, want within [%dms, %dms+2s] (err: %v)", r.elapsed, timeoutMs, timeoutMs, r.err)
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatalf("factory still connecting after 10s — ConnectTimeoutMillis=%d does not bound the connect", timeoutMs)
+			}
+		})
+		t.Run(tc.driver+"/zero-is-no-limit", func(t *testing.T) {
+			done, stop := connectStalled(t, tc.driver, tc.factory, 0)
+			select {
+			case r := <-done:
+				stop()
+				t.Fatalf("ConnectTimeoutMillis=0 gave up after %v (err: %v), want no limit", r.elapsed, r.err)
+			case <-time.After(timeoutMs*time.Millisecond + time.Second):
+			}
+			stop() // the server goes away ⇒ the connect ends
+			select {
+			case r := <-done:
+				if r.err == nil {
+					t.Fatal("factory connected to a server that went away")
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatal("factory still connecting 10s after the server went away")
+			}
+		})
+	}
+}
+
+// KeepAlive lands on the drivers' TCP sockets: the dialer in the pgx config ([pgConnConfig]) and in the
+// go-sql-driver config ([mysqlConfig]) — the configs the factories open their *sql.DB with — enables
+// SO_KEEPALIVE with the first probe after KeepAliveInitialDelayMillis when KeepAlive is true, and
+// leaves the socket without keepalive when it is false (Go's dialer default would enable it).
+func TestDriverConfigsDialWithKeepAlive(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	addr := ln.Addr().String()
+	type dialFunc func(ctx context.Context, network, addr string) (net.Conn, error)
+	dialers := map[string]func(c ResolvedConnectionConfig) dialFunc{
+		"postgres": func(c ResolvedConnectionConfig) dialFunc {
+			connConfig, err := pgConnConfig(c)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return dialFunc(connConfig.DialFunc)
+		},
+		"mysql": func(c ResolvedConnectionConfig) dialFunc { return mysqlConfig(c).DialFunc },
+	}
+	for driver, dialerFor := range dialers {
+		for _, keepAlive := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/keepAlive=%v", driver, keepAlive), func(t *testing.T) {
+				c := ResolveConnectionConfig(ConnectionConfig{Driver: driver, Host: "127.0.0.1", Port: 1,
+					KeepAlive: boolPtr(keepAlive), KeepAliveInitialDelayMillis: intPtr(3000)})
+				conn, err := dialerFor(c)(context.Background(), "tcp", addr)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer conn.Close()
+				enabled, idle := socketKeepAlive(t, conn.(*net.TCPConn))
+				if enabled != keepAlive {
+					t.Fatalf("SO_KEEPALIVE = %v, want %v", enabled, keepAlive)
+				}
+				if keepAlive && idle != 3*time.Second {
+					t.Fatalf("keepalive idle before the first probe = %v, want 3s (KeepAliveInitialDelayMillis)", idle)
+				}
+			})
+		}
 	}
 }
 

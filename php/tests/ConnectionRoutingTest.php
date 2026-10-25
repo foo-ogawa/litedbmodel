@@ -8,6 +8,7 @@ use LiteDbModel\Runtime\ConnectionConfig;
 use LiteDbModel\Runtime\ConnectionRegistry;
 use LiteDbModel\Runtime\ConnectionRegistryBuilder;
 use LiteDbModel\Runtime\PdoPool;
+use LiteDbModel\Runtime\PdoPoolFactory;
 use LiteDbModel\Runtime\PdoDriver;
 use LiteDbModel\Runtime\ReaderWriterPools;
 use LiteDbModel\Runtime\RoutingConfig;
@@ -44,6 +45,8 @@ final class ConnectionRoutingTest extends TestCase
         $this->assertSame(10000, $r->keepAliveInitialDelayMillis);
         $this->assertSame(0, $r->minPool);
         $this->assertSame(10, $r->maxPool);
+        $this->assertSame(30000, $r->connectTimeoutMillis);
+        $this->assertSame(10000, $r->idleTimeoutMillis);
         $this->assertNull($r->searchPath);
         $this->assertNull($r->charset);
     }
@@ -55,6 +58,8 @@ final class ConnectionRoutingTest extends TestCase
             queryTimeout: 250,
             keepAlive: true,
             maxPool: 3,
+            connectTimeoutMillis: 1500,
+            idleTimeoutMillis: 250,
             searchPath: 'app,public',
             charset: 'utf8mb4',
         ));
@@ -62,8 +67,144 @@ final class ConnectionRoutingTest extends TestCase
         $this->assertSame(250, $r->queryTimeout);
         $this->assertTrue($r->keepAlive);
         $this->assertSame(3, $r->maxPool);
+        $this->assertSame(1500, $r->connectTimeoutMillis);
+        $this->assertSame(250, $r->idleTimeoutMillis);
         $this->assertSame('app,public', $r->searchPath);
         $this->assertSame('utf8mb4', $r->charset);
+    }
+
+    /**
+     * connectTimeoutMillis bounds opening a PG connection: against a server that completes the TCP
+     * handshake and never answers (a listening socket that is never accepted — the kernel still queues
+     * the connection), the factory fails after the bound rounded UP to whole seconds (300 ms ⇒ 1 s),
+     * instead of pdo_pgsql's own 30 s.
+     */
+    public function testConnectTimeoutBoundsStalledPgServer(): void
+    {
+        $server = stream_socket_server('tcp://127.0.0.1:0');
+        $this->assertNotFalse($server);
+        $address = (string) stream_socket_get_name($server, false);
+        $port = (int) substr($address, (int) strrpos($address, ':') + 1);
+        $config = resolveConnectionConfig(new ConnectionConfig(
+            driver: 'postgres',
+            host: '127.0.0.1',
+            port: $port,
+            database: 'x',
+            user: 'u',
+            password: 'p',
+            connectTimeoutMillis: 300,
+        ));
+        $start = microtime(true);
+        try {
+            (new PdoPoolFactory())->build($config, 'reader');
+            $this->fail('the factory connected to a server that never answers');
+        } catch (\PDOException $e) {
+            $elapsed = microtime(true) - $start;
+            $this->assertGreaterThanOrEqual(1.0, $elapsed, 'the bound is never shorter than configured');
+            $this->assertLessThan(2.5, $elapsed, "connect gave up after {$elapsed}s, want ~1s: {$e->getMessage()}");
+        } finally {
+            fclose($server);
+        }
+    }
+
+    /**
+     * connectTimeoutMillis = 0 is no limit for PG: `ATTR_TIMEOUT = 0` reaches libpq as
+     * `connect_timeout=0`, which waits indefinitely. The connect runs in a child process (it does not
+     * return on its own) against a server that never answers; two seconds later — past the smallest
+     * bound `ATTR_TIMEOUT` can express (1 s) — it is still connecting.
+     */
+    public function testConnectTimeoutZeroIsNoLimitForPg(): void
+    {
+        $server = stream_socket_server('tcp://127.0.0.1:0');
+        $this->assertNotFalse($server);
+        $address = (string) stream_socket_get_name($server, false);
+        $port = (int) substr($address, (int) strrpos($address, ':') + 1);
+        $code = sprintf(
+            'require %s; (new \\LiteDbModel\\Runtime\\PdoPoolFactory())->build(\\LiteDbModel\\Runtime\\resolveConnectionConfig('
+            . 'new \\LiteDbModel\\Runtime\\ConnectionConfig(driver: "postgres", host: "127.0.0.1", port: %d, database: "x",'
+            . ' user: "u", password: "p", connectTimeoutMillis: 0)), "reader");',
+            var_export(dirname(__DIR__) . '/vendor/autoload.php', true),
+            $port,
+        );
+        $child = proc_open([PHP_BINARY, '-r', $code], [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
+        $this->assertIsResource($child);
+        try {
+            usleep(2_000_000);
+            $status = proc_get_status($child);
+            if (!$status['running']) {
+                $this->fail("connectTimeoutMillis=0: the connect ended within 2 s (exit {$status['exitcode']}): "
+                    . stream_get_contents($pipes[1]) . stream_get_contents($pipes[2]));
+            }
+            $this->addToAssertionCount(1);
+        } finally {
+            fclose($server);
+            proc_terminate($child, 9); // SIGKILL: libpq's connect does not end on SIGTERM
+            proc_close($child);
+        }
+    }
+
+    /**
+     * connectTimeoutMillis = 0 is no limit for MySQL too. pdo_mysql bounds a TCP connect that has no
+     * ATTR_TIMEOUT by php.ini `default_socket_timeout`; the factory lifts it for the construction only.
+     * The connect runs in a child process started with `default_socket_timeout=1` against a listener
+     * whose accept queue is full (the kernel drops the SYNs, so the TCP connect itself waits): two
+     * seconds later it is still connecting. Once the listener goes away the connect fails, and the
+     * child reports `default_socket_timeout` back at 1.
+     */
+    public function testConnectTimeoutZeroIsNoLimitForMysql(): void
+    {
+        $server = stream_socket_server(
+            'tcp://127.0.0.1:0',
+            $errno,
+            $errstr,
+            STREAM_SERVER_BIND | STREAM_SERVER_LISTEN,
+            stream_context_create(['socket' => ['backlog' => 1]]),
+        );
+        $this->assertNotFalse($server, $errstr);
+        $address = (string) stream_socket_get_name($server, false);
+        $port = (int) substr($address, (int) strrpos($address, ':') + 1);
+        $queued = [];
+        for ($i = 0; $i < 8; $i++) {
+            $queued[] = @stream_socket_client("tcp://127.0.0.1:{$port}", $errno, $errstr, 0.2, STREAM_CLIENT_CONNECT | STREAM_CLIENT_ASYNC_CONNECT);
+        }
+        $code = sprintf(
+            'require %s; try { (new \LiteDbModel\Runtime\PdoPoolFactory())->build(\LiteDbModel\Runtime\resolveConnectionConfig('
+            . 'new \LiteDbModel\Runtime\ConnectionConfig(driver: "mysql", host: "127.0.0.1", port: %d, database: "x",'
+            . ' user: "u", password: "p", connectTimeoutMillis: 0)), "reader"); } catch (\PDOException $e) {'
+            . ' echo "connect failed: ", $e->getMessage(), "\n"; } echo "default_socket_timeout=", ini_get("default_socket_timeout"), "\n";',
+            var_export(dirname(__DIR__) . '/vendor/autoload.php', true),
+            $port,
+        );
+        $child = proc_open([PHP_BINARY, '-d', 'default_socket_timeout=1', '-r', $code], [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
+        $this->assertIsResource($child);
+        try {
+            usleep(2_000_000);
+            $status = proc_get_status($child);
+            if (!$status['running']) {
+                $this->fail("connectTimeoutMillis=0: the MySQL connect ended within 2 s (exit {$status['exitcode']}): "
+                    . stream_get_contents($pipes[1]) . stream_get_contents($pipes[2]));
+            }
+            fclose($server); // the listener goes away ⇒ the connect fails
+            foreach ($queued as $q) {
+                if (is_resource($q)) {
+                    fclose($q);
+                }
+            }
+            $deadline = microtime(true) + 20;
+            while (proc_get_status($child)['running'] && microtime(true) < $deadline) {
+                usleep(100_000);
+            }
+            $this->assertFalse(proc_get_status($child)['running'], 'the connect did not end after the listener closed');
+            $out = stream_get_contents($pipes[1]) . stream_get_contents($pipes[2]);
+            $this->assertStringContainsString('connect failed:', $out);
+            $this->assertStringContainsString("default_socket_timeout=1\n", $out, 'the ini is restored after the connect');
+        } finally {
+            if (is_resource($server)) {
+                fclose($server);
+            }
+            proc_terminate($child, 9);
+            proc_close($child);
+        }
     }
 
     // ── C3 session-statement mapping (mirror the TS sessionStatements table) ─────

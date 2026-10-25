@@ -33,8 +33,8 @@
 // # The go pool model (honest deviation from TS)
 //
 // TS's AsyncConnectionPool wraps a pg.Pool / mysql2 pool. Go's *sql.DB IS ALREADY a goroutine-safe
-// connection pool; the sizing knobs (SetMaxOpenConns / SetMaxIdleConns / SetConnMax{Lifetime,IdleTime})
-// are set on the *sql.DB AFTER sql.Open — so the [PoolFactory] builds a CONFIGURED *sql.DB and applies
+// connection pool; the sizing knobs (SetMaxOpenConns / SetMaxIdleConns / SetConnMaxIdleTime)
+// are set on the *sql.DB AFTER it is opened — so the [PoolFactory] builds a CONFIGURED *sql.DB and applies
 // those at construction (NOT on a pre-built shared *sql.DB — that was the #87 blocker). One acquired
 // "connection" is a *sql.Conn (db.Conn(ctx)), which pins ONE physical connection for the session
 // statements (search_path / statement_timeout) to apply + reset on release — the *sql.DB pool cap
@@ -80,19 +80,30 @@ type ConnectionConfig struct {
 	// (PG) / max_execution_time (MySQL) so a runaway query is aborted by the SERVER. nil / 0 ⇒ no
 	// statement timeout (the engine default). Default 0.
 	QueryTimeout *int
-	// KeepAlive enables TCP-style keepalive on pooled connections (mapped to SetConnMaxIdleTime /
-	// SetConnMaxLifetime in the factory — go's database/sql has no raw TCP-keepalive knob, so the
-	// keepalive intent is expressed as a max idle/lifetime bound; a documented per-driver deviation).
-	// nil / false ⇒ disabled. Default false.
+	// KeepAlive enables TCP keepalive on the pooled connections' sockets (the drivers' dialer). nil /
+	// false ⇒ the dialer opens the sockets without keepalive; go-sql-driver/mysql then switches
+	// SO_KEEPALIVE on for every TCP connection it opens (at the OS's default probe timing), so a MySQL
+	// socket carries keepalive either way. Default false.
 	KeepAlive *bool
-	// KeepAliveInitialDelayMillis is the ms before the first keepalive probe (maps to the max idle time
-	// bound). nil ⇒ 10000 (when KeepAlive). Default 10000.
+	// KeepAliveInitialDelayMillis is the ms of idleness before the first keepalive probe (the dialer's
+	// net.Dialer.KeepAlive). nil ⇒ 10000 (when KeepAlive). Default 10000.
 	KeepAliveInitialDelayMillis *int
-	// MinPool is the minimum pooled connections kept warm (SetMaxIdleConns). nil / 0 ⇒ 0. Default 0.
+	// MinPool is the minimum pooled connections kept warm. database/sql has no idle FLOOR (its idle
+	// knob, SetMaxIdleConns, is a ceiling on retained idle connections, and nothing pre-opens or keeps
+	// connections below a minimum), so go accepts MinPool for cross-lang parity and does not apply it —
+	// as the TS mysql2 factory and the rust deadpool-postgres factory do not. nil / 0 ⇒ 0. Default 0.
 	MinPool *int
-	// MaxPool is the maximum pooled connections (SetMaxOpenConns — the SOLE cap source). nil ⇒ 10.
-	// Default 10.
+	// MaxPool is the maximum pooled connections (SetMaxOpenConns — the SOLE cap source — and the ceiling
+	// on retained idle connections, SetMaxIdleConns). nil ⇒ 10. Default 10.
 	MaxPool *int
+	// ConnectTimeoutMillis is the upper bound in MILLISECONDS on getting a connection: opening a new one
+	// (pgx ConnectTimeout / go-sql-driver `timeout` for the dial, plus the acquire context for the whole
+	// connect) and waiting for a free one when the pool is at MaxPool (the acquire context — database/sql
+	// waits on it). 0 ⇒ no limit. nil ⇒ 30000. Default 30000.
+	ConnectTimeoutMillis *int
+	// IdleTimeoutMillis is the MILLISECONDS an unused pooled connection stays open before it is closed
+	// (SetConnMaxIdleTime). nil ⇒ 10000. Default 10000.
+	IdleTimeoutMillis *int
 	// SearchPath is the PG search_path set on each pooled connection at checkout (schema routing).
 	// "" ⇒ unset (no session statement).
 	SearchPath string
@@ -116,13 +127,15 @@ type ResolvedConnectionConfig struct {
 	KeepAliveInitialDelayMillis int
 	MinPool                     int
 	MaxPool                     int
+	ConnectTimeoutMillis        int
+	IdleTimeoutMillis           int
 	SearchPath                  string
 	Charset                     string
 }
 
 // ResolveConnectionConfig applies the C3 defaults (QueryTimeout=0, KeepAlive=false, MinPool=0,
-// MaxPool=10, KeepAliveInitialDelayMillis=10000, Driver="postgres") — mirrors the TS
-// resolveConnectionConfig.
+// MaxPool=10, KeepAliveInitialDelayMillis=10000, ConnectTimeoutMillis=30000, IdleTimeoutMillis=10000,
+// Driver="postgres") — mirrors the TS resolveConnectionConfig.
 func ResolveConnectionConfig(config ConnectionConfig) ResolvedConnectionConfig {
 	driver := config.Driver
 	if driver == "" {
@@ -152,6 +165,8 @@ func ResolveConnectionConfig(config ConnectionConfig) ResolvedConnectionConfig {
 		KeepAliveInitialDelayMillis: intOr(config.KeepAliveInitialDelayMillis, 10000),
 		MinPool:                     intOr(config.MinPool, 0),
 		MaxPool:                     intOr(config.MaxPool, 10),
+		ConnectTimeoutMillis:        intOr(config.ConnectTimeoutMillis, 30000),
+		IdleTimeoutMillis:           intOr(config.IdleTimeoutMillis, 10000),
 		SearchPath:                  config.SearchPath,
 		Charset:                     config.Charset,
 	}
@@ -286,20 +301,47 @@ func (c sqlConnDB) Exec(query string, args ...any) (sql.Result, error) {
 // the sizing knobs on the *sql.DB at construction.
 type SQLDBPool struct {
 	db *sql.DB
+	// connectTimeout bounds every connection checkout (the C3 ConnectTimeoutMillis).
+	connectTimeout time.Duration
 }
 
-// NewSQLDBPool wraps a (constructed, sized) *sql.DB as a [Pool].
-func NewSQLDBPool(db *sql.DB) *SQLDBPool { return &SQLDBPool{db: db} }
+// NewSQLDBPool wraps a (constructed, sized) *sql.DB as a [Pool] whose checkouts are bounded by
+// connectTimeoutMillis (the C3 [ResolvedConnectionConfig.ConnectTimeoutMillis]; 0 ⇒ no limit).
+func NewSQLDBPool(db *sql.DB, connectTimeoutMillis int) *SQLDBPool {
+	return &SQLDBPool{db: db, connectTimeout: time.Duration(connectTimeoutMillis) * time.Millisecond}
+}
+
+// connectContext is the context every checkout runs under: database/sql waits on it for a free
+// connection once SetMaxOpenConns is reached, and hands it to the driver's connector when it opens a
+// new one — so ONE deadline bounds both halves of "getting a connection". A connect timeout of 0 is
+// the contract's "no limit": the context then carries no deadline.
+func (p *SQLDBPool) connectContext() (context.Context, context.CancelFunc) {
+	if p.connectTimeout == 0 {
+		return context.WithCancel(context.Background())
+	}
+	return context.WithTimeout(context.Background(), p.connectTimeout)
+}
 
 // Acquire pins one physical connection (db.Conn) for exclusive use — bounded by the *sql.DB's
 // SetMaxOpenConns cap (Acquire BLOCKS once the cap is reached until a Release frees one, exactly the
-// "maxPool is the sole cap" contract).
+// "maxPool is the sole cap" contract) and by the connect timeout (a wait or a connect that outlasts it
+// fails with context.DeadlineExceeded).
 func (p *SQLDBPool) Acquire() (PooledConn, error) {
-	conn, err := p.db.Conn(context.Background())
+	ctx, cancel := p.connectContext()
+	defer cancel()
+	conn, err := p.db.Conn(ctx)
 	if err != nil {
 		return nil, mapSqliteError(err)
 	}
 	return &sqlConnPooled{conn: conn}, nil
+}
+
+// ping opens (or reuses) one connection under the connect timeout — the construction-time liveness
+// check a [PoolFactory] runs before handing the pool out.
+func (p *SQLDBPool) ping() error {
+	ctx, cancel := p.connectContext()
+	defer cancel()
+	return p.db.PingContext(ctx)
 }
 
 // Release closes the pinned *sql.Conn back to the *sql.DB pool. destroy is honored via
@@ -705,10 +747,11 @@ type BuiltPool struct {
 }
 
 // PoolFactory BUILDS a pool from a [ResolvedConnectionConfig] + a role, returning the [Pool] seam
-// adapter plus a [PoolCloser]. This is where the CONSTRUCTION knobs — pool sizing (MinPool/MaxPool)
-// + KeepAlive/KeepAliveInitialDelayMillis — reach the real *sql.DB (sql.Open then
-// SetMaxOpenConns/SetMaxIdleConns/SetConnMax{Lifetime,IdleTime}), because in go those are set on the
-// *sql.DB AFTER sql.Open — NOT on a pre-built shared *sql.DB (the #87 blocker).
+// adapter plus a [PoolCloser]. This is where the CONSTRUCTION knobs — pool sizing (MaxPool) +
+// IdleTimeoutMillis + KeepAlive/KeepAliveInitialDelayMillis + ConnectTimeoutMillis — reach the real
+// *sql.DB (opened, then SetMaxOpenConns/SetMaxIdleConns/SetConnMaxIdleTime) and its
+// driver, because in go those are set on the *sql.DB AFTER it is opened — NOT on a pre-built shared
+// *sql.DB (the #87 blocker).
 //
 // [BuildRoutingConfig] OWNS the call to this factory with the RESOLVED config, so the configured
 // sizing/keepAlive is the SOLE source of the pool's cap. role lets a factory build a distinct replica
@@ -744,8 +787,8 @@ type BuiltRouting struct {
 // buildRoutingConfig.
 //
 // For each setup: resolve the config, CALL its [PoolFactory] to construct the pool(s) — so
-// MinPool/MaxPool/KeepAlive/KeepAliveInitialDelayMillis are applied at construction (the config is
-// the SOLE source of the cap) — then wrap each pool with [ConfiguredPool] so the SESSION knobs
+// MaxPool/IdleTimeoutMillis/KeepAlive/KeepAliveInitialDelayMillis/ConnectTimeoutMillis are applied at
+// construction (the config is the SOLE source of the cap) — then wrap each pool with [ConfiguredPool] so the SESSION knobs
 // (queryTimeout/searchPath/charset) apply on checkout + reset on release.
 func BuildRoutingConfig(setups []ConnectionSetup, sticky StickyOptions) (BuiltRouting, error) {
 	if len(setups) == 0 {

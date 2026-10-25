@@ -100,6 +100,8 @@ const SKIP_BUDGET = 0;
  */
 const LIVE_TESTS = [
   'TestPhaseCConfigCharsetResetOnReleaseLiveMySQL',
+  'TestPhaseCConfigConnectTimeoutBoundsWaitLive',
+  'TestPhaseCConfigIdleTimeoutClosesIdleLive',
   'TestPhaseCConfigMaxPoolSoleCapLivePG',
   'TestPhaseCConfigQueryTimeoutLiveMySQL',
   'TestPhaseCConfigQueryTimeoutLivePG',

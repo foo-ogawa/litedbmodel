@@ -86,19 +86,59 @@ var (
 
 func registerMysqlScp() {
 	mysqlScpOnce.Do(func() {
-		sql.Register("mysql-scp", scpMysqlDriver{base: gomysql.MySQLDriver{}})
+		sql.Register("mysql-scp", scpMysqlDriver{})
 	})
 }
 
-type scpMysqlDriver struct{ base driver.Driver }
+// scpMysqlDriver is the "mysql-scp" driver: go-sql-driver/mysql with every connection wrapped in
+// [scpMysqlConn]. It is a driver.DriverContext, so database/sql connects through [scpMysqlConnector]
+// with the caller's context — a checkout deadline then bounds the MySQL handshake, which the
+// driver's `timeout` (the dial only) does not.
+type scpMysqlDriver struct{}
 
+// Open is the driver.Driver entry: it connects through the same connector, without a deadline.
 func (d scpMysqlDriver) Open(name string) (driver.Conn, error) {
-	c, err := d.base.Open(name)
+	c, err := d.OpenConnector(name)
 	if err != nil {
 		return nil, err
 	}
-	return &scpMysqlConn{base: c}, nil
+	return c.Connect(context.Background())
 }
+
+// OpenConnector parses the DSN once and returns the connector database/sql connects through.
+func (d scpMysqlDriver) OpenConnector(name string) (driver.Connector, error) {
+	cfg, err := gomysql.ParseDSN(name)
+	if err != nil {
+		return nil, err
+	}
+	return newScpMysqlConnector(cfg)
+}
+
+// newScpMysqlConnector is the one constructor of a "mysql-scp" connector: from a DSN
+// ([scpMysqlDriver.OpenConnector]) or from a config the pool factory builds ([mysqlConfig]).
+func newScpMysqlConnector(cfg *gomysql.Config) (driver.Connector, error) {
+	base, err := gomysql.NewConnector(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return scpMysqlConnector{base: base}, nil
+}
+
+// scpMysqlConnector connects with go-sql-driver's connector under the caller's context and wraps the
+// connection in [scpMysqlConn].
+type scpMysqlConnector struct {
+	base driver.Connector
+}
+
+func (c scpMysqlConnector) Connect(ctx context.Context) (driver.Conn, error) {
+	conn, err := c.base.Connect(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &scpMysqlConn{base: conn}, nil
+}
+
+func (c scpMysqlConnector) Driver() driver.Driver { return scpMysqlDriver{} }
 
 // scpMysqlConn wraps a go-sql-driver connection, intercepting RETURNING queries. It forwards every
 // other driver capability to the base connection.
