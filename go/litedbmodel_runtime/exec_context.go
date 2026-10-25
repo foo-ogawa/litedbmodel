@@ -251,11 +251,16 @@ type ExecutionContext struct {
 	// [ExecutionContext.acquireTxConnection] resolves the WRITER pool of THIS name. "" ⇒ the default
 	// connection; ignored when routing is nil (the Phase A/B single-db path). A STATEMENT names its DB
 	// per call ([StatementIntent.DB]) — a transaction cannot, because the covered plane's tx boundary
-	// ([WithAmbientTransaction]) takes only a body, so the tx's target rides on the ctx. Derived via
+	// ([WithAmbientTransaction]) takes no connection name, so the tx's target rides on the ctx. Derived via
 	// [ExecutionContext.WithConnectionName]; twin of python `ExecutionContext._connection` (read by
 	// `begin_tx`) and of the `connection` argument rust `transaction_on` / TS `withTransactionAsync` /
 	// php `routedTransaction` take.
 	connection string
+	// sticky is this ctx's REQUEST SCOPE on the [WriterStickyClock]: the time of the latest commit made
+	// through this ctx or any ctx derived from it. Every constructor (ContextFor*) starts a fresh one and
+	// every derivation shares it, so a commit routes the committing request's later reads to the writer
+	// and no other request's. Consulted only when routing carries a sticky clock.
+	sticky *StickyScope
 }
 
 // sharedEmptyChain is the Phase A middleware chain — a nil-source empty passthrough so a ctx can be
@@ -283,7 +288,7 @@ func registryChainFor(goCtx context.Context) *MiddlewareChain {
 // **byte-identical** passthrough to queryRows / execWrite. Go analogue of the TS contextForDriver.
 func ContextForDB(db SQLDB) *ExecutionContext {
 	goCtx := context.Background()
-	return &ExecutionContext{ctx: goCtx, db: db, middleware: registryChainFor(goCtx)}
+	return &ExecutionContext{ctx: goCtx, db: db, middleware: registryChainFor(goCtx), sticky: &StickyScope{}}
 }
 
 // ContextForDBCtx wraps a raw SQLDB riding a caller-supplied context.Context (Phase D: a scoped Go
@@ -294,7 +299,7 @@ func ContextForDBCtx(goCtx context.Context, db SQLDB) *ExecutionContext {
 	if goCtx == nil {
 		goCtx = context.Background()
 	}
-	return &ExecutionContext{ctx: goCtx, db: db, middleware: registryChainFor(goCtx)}
+	return &ExecutionContext{ctx: goCtx, db: db, middleware: registryChainFor(goCtx), sticky: &StickyScope{}}
 }
 
 // ContextForDBWith wraps a raw SQLDB with a caller-supplied context.Context + an explicit
@@ -309,7 +314,7 @@ func ContextForDBWith(ctx context.Context, db SQLDB, middleware *MiddlewareChain
 	if middleware == nil {
 		middleware = registryChainFor(ctx)
 	}
-	return &ExecutionContext{ctx: ctx, db: db, middleware: middleware}
+	return &ExecutionContext{ctx: ctx, db: db, middleware: middleware, sticky: &StickyScope{}}
 }
 
 // ContextForRouting builds a Phase C (#89) routed [ExecutionContext] over a [RoutingConfig] (the
@@ -324,7 +329,7 @@ func ContextForRouting(routing RoutingConfig, middleware *MiddlewareChain) *Exec
 	if middleware == nil {
 		middleware = registryChainFor(goCtx)
 	}
-	return &ExecutionContext{ctx: goCtx, middleware: middleware, routing: &routing}
+	return &ExecutionContext{ctx: goCtx, middleware: middleware, routing: &routing, sticky: &StickyScope{}}
 }
 
 // ContextForRoutingCtx is [ContextForRouting] riding a caller-supplied (scoped) context.Context, so
@@ -333,7 +338,7 @@ func ContextForRoutingCtx(goCtx context.Context, routing RoutingConfig) *Executi
 	if goCtx == nil {
 		goCtx = context.Background()
 	}
-	return &ExecutionContext{ctx: goCtx, middleware: registryChainFor(goCtx), routing: &routing}
+	return &ExecutionContext{ctx: goCtx, middleware: registryChainFor(goCtx), routing: &routing, sticky: &StickyScope{}}
 }
 
 // Routing returns the Phase C routing config this ctx carries (nil for the Phase A/B primary-db path).
@@ -365,7 +370,9 @@ func (c *ExecutionContext) ReadOnly() bool { return c.readOnly }
 // writer-pinned read scope that must never accidentally mutate. Shares the primary db + middleware +
 // Go context + pinned tx connection.
 func (c *ExecutionContext) WithReadOnly() *ExecutionContext {
-	return &ExecutionContext{ctx: c.ctx, db: c.db, middleware: c.middleware, pinned: c.pinned, readOnly: true, routing: c.routing, writerScope: c.writerScope, connection: c.connection}
+	d := *c
+	d.readOnly = true
+	return &d
 }
 
 // WithWriter derives a WRITER-scoped ctx (Phase C / #89 — the go analogue of the TS `withWriter`):
@@ -376,7 +383,10 @@ func (c *ExecutionContext) WithReadOnly() *ExecutionContext {
 // ConnectionFor, so WithWriter there is a no-op on routing (matches v1 :2941). Shares the primary db +
 // middleware + Go context + pinned tx connection + routing.
 func (c *ExecutionContext) WithWriter() *ExecutionContext {
-	return &ExecutionContext{ctx: c.ctx, db: c.db, middleware: c.middleware, pinned: c.pinned, readOnly: true, routing: c.routing, writerScope: true, connection: c.connection}
+	d := *c
+	d.readOnly = true
+	d.writerScope = true
+	return &d
 }
 
 // InWriterScope reports whether this is a [WithWriter]-scoped ctx (reads route to the writer).
@@ -393,7 +403,9 @@ func (c *ExecutionContext) InWriterScope() bool { return c.writerScope }
 // `with_connection_name`; the `connection` argument of rust `transaction_on` / the TS
 // `withTransactionAsync` / php `routedTransaction` names the same thing.
 func (c *ExecutionContext) WithConnectionName(name string) *ExecutionContext {
-	return &ExecutionContext{ctx: c.ctx, db: c.db, middleware: c.middleware, pinned: c.pinned, readOnly: c.readOnly, routing: c.routing, writerScope: c.writerScope, connection: name}
+	d := *c
+	d.connection = name
+	return &d
 }
 
 // ConnectionFor resolves WHICH connection a statement runs on (§3). Resolution order:
@@ -424,7 +436,7 @@ func (c *ExecutionContext) ConnectionFor(intent StatementIntent) Connection {
 		return c.pinned
 	}
 	if c.routing != nil {
-		pool, err := resolvePool(intent, c.writerScope, *c.routing)
+		pool, err := resolvePool(intent, c.writerScope, c.sticky, *c.routing)
 		if err != nil {
 			return failingConnection{err: err}
 		}
@@ -452,7 +464,9 @@ func (c *ExecutionContext) ConnectionFor(intent StatementIntent) Connection {
 func (c *ExecutionContext) WithTxConnection(conn Connection) *ExecutionContext {
 	// A tx-scoped ctx INHERITS the read-only + writer markers + routing: a Transaction() opened inside
 	// a read-only scope is still read-only (v1 parity — withWriter reads never mutate).
-	return &ExecutionContext{ctx: c.ctx, db: c.db, middleware: c.middleware, pinned: conn, readOnly: c.readOnly, routing: c.routing, writerScope: c.writerScope, connection: c.connection}
+	d := *c
+	d.pinned = conn
+	return &d
 }
 
 // acquireTxConnection checks out the ONE OWNED connection a TRANSACTION runs on (§3) — the ownership
@@ -477,7 +491,7 @@ func (c *ExecutionContext) WithTxConnection(conn Connection) *ExecutionContext {
 // `_connection`) / the php `routedTransaction` writer pin.
 func (c *ExecutionContext) acquireTxConnection() (Connection, func(poisoned bool), error) {
 	if c.routing != nil {
-		pool, err := resolvePool(StatementIntent{Write: true, DB: c.connection}, c.writerScope, *c.routing)
+		pool, err := resolvePool(StatementIntent{Write: true, DB: c.connection}, c.writerScope, c.sticky, *c.routing)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -739,12 +753,13 @@ func WithTransactionDecidedIsolated[R any](ctx *ExecutionContext, isolation Isol
 		}
 		return zero, mapSqliteError(e)
 	}
-	// Phase C (#89): a SUCCESSFUL commit ARMS the writer-sticky clock (read-your-writes) — subsequent
-	// reads within writerStickyDuration route to the WRITER. No-op when the ctx carries no routing /
-	// no sticky clock (the Phase A/B path) or when sticky is disabled (.Mark checks .enabled), and
-	// skipped entirely when this tx opted out per-transaction (#134).
+	// Phase C (#89): a SUCCESSFUL commit ARMS writer-sticky (read-your-writes) for the committing ctx's
+	// REQUEST SCOPE — that request's subsequent reads within writerStickyDuration route to the WRITER, and
+	// no other request's do. No-op when the ctx carries no routing / no sticky clock (the Phase A/B path)
+	// or when sticky is disabled (.Mark checks .enabled), and skipped entirely when this tx opted out
+	// per-transaction (#134).
 	if useWriterAfterTransaction && ctx.routing != nil && ctx.routing.Sticky != nil {
-		ctx.routing.Sticky.Mark()
+		ctx.routing.Sticky.Mark(ctx.sticky)
 	}
 	return result, nil
 }

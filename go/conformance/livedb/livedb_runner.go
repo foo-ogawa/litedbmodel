@@ -7,8 +7,8 @@
 // bundle-replay model is gone.
 //
 // The ONLY hand-wiring is the two things that make the generated module callable: BIND the op-agnostic
-// leaf transport to a live *sql.DB (litedbmodel_runtime.BindLeafTransport) and CALL the endpoint by its
-// SIGNATURE. The dispatch below is the sanctioned conformance-runner switch (CLAUDE.md §3.1) — a plain
+// leaf transport to a live *sql.DB (litedbmodel_runtime.BindLeafTransport returns the context the
+// generated entries take) and CALL the endpoint by its SIGNATURE. The dispatch below is the sanctioned conformance-runner switch (CLAUDE.md §3.1) — a plain
 // signature-direct call table on vector.entry, not a per-endpoint hand-written exec seam.
 //
 // Every vector is compared against what the TS leg observed on the SAME server for the SAME dialect
@@ -286,10 +286,10 @@ func records(m map[string]any) []map[string]any {
 	return out
 }
 
-// entryFn is one endpoint of the dispatch TABLE below: the dialect flag and the vector's input,
+// entryFn is one endpoint of the dispatch TABLE below: the bound context, the dialect flag and the vector's input,
 // returning what the generated method returned. Every body is a signature-direct call on the
 // dialect's generated package (CLAUDE.md §3.1) — the table only decides WHICH one runs.
-type entryFn func(postgres bool, in map[string]any) (any, error)
+type entryFn func(ctx context.Context, postgres bool, in map[string]any) (any, error)
 
 // dispatch is the conformance runner's endpoint table — the sanctioned harness form (CLAUDE.md §3,
 // the same shape python/php already have with `ops[vector["entry"]]`). It is a TABLE and not a
@@ -302,197 +302,197 @@ type entryFn func(postgres bool, in map[string]any) (any, error)
 // The batch endpoints bind a per-dialect input shape (PG columnar arrays vs MySQL/SQLite one record
 // array), so those bodies branch on `postgres`.
 var dispatch = map[string]entryFn{
-	"posts": func(postgres bool, in map[string]any) (any, error) {
+	"posts": func(ctx context.Context, postgres bool, in map[string]any) (any, error) {
 		if postgres {
-			return pg.Posts(i64(in, "authorId"))
+			return pg.Posts(ctx, i64(in, "authorId"))
 		}
-		return my.Posts(i64(in, "authorId"))
+		return my.Posts(ctx, i64(in, "authorId"))
 	},
-	"postsTop": func(postgres bool, in map[string]any) (any, error) {
+	"postsTop": func(ctx context.Context, postgres bool, in map[string]any) (any, error) {
 		if postgres {
-			return pg.PostsTop()
+			return pg.PostsTop(ctx)
 		}
-		return my.PostsTop()
+		return my.PostsTop(ctx)
 	},
-	"page": func(postgres bool, in map[string]any) (any, error) {
+	"page": func(ctx context.Context, postgres bool, in map[string]any) (any, error) {
 		if postgres {
-			return pg.Page(i64(in, "limit"), i64(in, "offset"))
+			return pg.Page(ctx, i64(in, "limit"), i64(in, "offset"))
 		}
-		return my.Page(i64(in, "limit"), i64(in, "offset"))
+		return my.Page(ctx, i64(in, "limit"), i64(in, "offset"))
 	},
-	"postsByIds": func(postgres bool, in map[string]any) (any, error) {
+	"postsByIds": func(ctx context.Context, postgres bool, in map[string]any) (any, error) {
 		if postgres {
-			return pg.PostsByIds(i64s(in, "ids"))
+			return pg.PostsByIds(ctx, i64s(in, "ids"))
 		}
-		return my.PostsByIds(i64s(in, "ids"))
+		return my.PostsByIds(ctx, i64s(in, "ids"))
 	},
-	"feed": func(postgres bool, in map[string]any) (any, error) {
+	"feed": func(ctx context.Context, postgres bool, in map[string]any) (any, error) {
 		if postgres {
-			return pg.Feed(i64(in, "authorId"), optStr(in, "status"), optStr(in, "since"))
+			return pg.Feed(ctx, i64(in, "authorId"), optStr(in, "status"), optStr(in, "since"))
 		}
-		return my.Feed(i64(in, "authorId"), optStr(in, "status"), optStr(in, "since"))
+		return my.Feed(ctx, i64(in, "authorId"), optStr(in, "status"), optStr(in, "since"))
 	},
-	"pagedFeed": func(postgres bool, in map[string]any) (any, error) {
+	"pagedFeed": func(ctx context.Context, postgres bool, in map[string]any) (any, error) {
 		if postgres {
-			return pg.PagedFeed(i64(in, "authorId"), optI64(in, "minId"), optStr(in, "status"), i64(in, "limit"), i64(in, "offset"))
+			return pg.PagedFeed(ctx, i64(in, "authorId"), optI64(in, "minId"), optStr(in, "status"), i64(in, "limit"), i64(in, "offset"))
 		}
-		return my.PagedFeed(i64(in, "authorId"), optI64(in, "minId"), optStr(in, "status"), i64(in, "limit"), i64(in, "offset"))
+		return my.PagedFeed(ctx, i64(in, "authorId"), optI64(in, "minId"), optStr(in, "status"), i64(in, "limit"), i64(in, "offset"))
 	},
-	"optionalOnlyFeed": func(postgres bool, in map[string]any) (any, error) {
+	"optionalOnlyFeed": func(ctx context.Context, postgres bool, in map[string]any) (any, error) {
 		if postgres {
-			return pg.OptionalOnlyFeed(optI64(in, "authorId"), optStr(in, "status"))
+			return pg.OptionalOnlyFeed(ctx, optI64(in, "authorId"), optStr(in, "status"))
 		}
-		return my.OptionalOnlyFeed(optI64(in, "authorId"), optStr(in, "status"))
+		return my.OptionalOnlyFeed(ctx, optI64(in, "authorId"), optStr(in, "status"))
 	},
-	"quotedOrderFeed": func(postgres bool, in map[string]any) (any, error) {
+	"quotedOrderFeed": func(ctx context.Context, postgres bool, in map[string]any) (any, error) {
 		if postgres {
-			return pg.QuotedOrderFeed(i64(in, "authorId"), optI64(in, "minId"), i64(in, "limit"))
+			return pg.QuotedOrderFeed(ctx, i64(in, "authorId"), optI64(in, "minId"), i64(in, "limit"))
 		}
-		return my.QuotedOrderFeed(i64(in, "authorId"), optI64(in, "minId"), i64(in, "limit"))
+		return my.QuotedOrderFeed(ctx, i64(in, "authorId"), optI64(in, "minId"), i64(in, "limit"))
 	},
-	"quotedWhereOrderFeed": func(postgres bool, in map[string]any) (any, error) {
+	"quotedWhereOrderFeed": func(ctx context.Context, postgres bool, in map[string]any) (any, error) {
 		if postgres {
-			return pg.QuotedWhereOrderFeed(optStr(in, "status"))
+			return pg.QuotedWhereOrderFeed(ctx, optStr(in, "status"))
 		}
-		return my.QuotedWhereOrderFeed(optStr(in, "status"))
+		return my.QuotedWhereOrderFeed(ctx, optStr(in, "status"))
 	},
-	"viewFeed": func(postgres bool, in map[string]any) (any, error) {
+	"viewFeed": func(ctx context.Context, postgres bool, in map[string]any) (any, error) {
 		if postgres {
-			return pg.ViewFeed(optStr(in, "status"))
+			return pg.ViewFeed(ctx, optStr(in, "status"))
 		}
-		return my.ViewFeed(optStr(in, "status"))
+		return my.ViewFeed(ctx, optStr(in, "status"))
 	},
-	"usersWithPosts": func(postgres bool, in map[string]any) (any, error) {
+	"usersWithPosts": func(ctx context.Context, postgres bool, in map[string]any) (any, error) {
 		if postgres {
-			return pg.UsersWithPosts()
+			return pg.UsersWithPosts(ctx)
 		}
-		return my.UsersWithPosts()
+		return my.UsersWithPosts(ctx)
 	},
-	"postsWithAuthor": func(postgres bool, in map[string]any) (any, error) {
+	"postsWithAuthor": func(ctx context.Context, postgres bool, in map[string]any) (any, error) {
 		if postgres {
-			return pg.PostsWithAuthor()
+			return pg.PostsWithAuthor(ctx)
 		}
-		return my.PostsWithAuthor()
+		return my.PostsWithAuthor(ctx)
 	},
-	"createPost": func(postgres bool, in map[string]any) (any, error) {
+	"createPost": func(ctx context.Context, postgres bool, in map[string]any) (any, error) {
 		if postgres {
-			return pg.CreatePost(i64(in, "id"), i64(in, "authorId"), str(in, "title"), str(in, "status"), str(in, "createdAt"))
+			return pg.CreatePost(ctx, i64(in, "id"), i64(in, "authorId"), str(in, "title"), str(in, "status"), str(in, "createdAt"))
 		}
-		return my.CreatePost(i64(in, "id"), i64(in, "authorId"), str(in, "title"), str(in, "status"), str(in, "createdAt"))
+		return my.CreatePost(ctx, i64(in, "id"), i64(in, "authorId"), str(in, "title"), str(in, "status"), str(in, "createdAt"))
 	},
-	"renamePost": func(postgres bool, in map[string]any) (any, error) {
+	"renamePost": func(ctx context.Context, postgres bool, in map[string]any) (any, error) {
 		if postgres {
-			return pg.RenamePost(str(in, "title"), i64(in, "id"))
+			return pg.RenamePost(ctx, str(in, "title"), i64(in, "id"))
 		}
-		return my.RenamePost(str(in, "title"), i64(in, "id"))
+		return my.RenamePost(ctx, str(in, "title"), i64(in, "id"))
 	},
-	"removePost": func(postgres bool, in map[string]any) (any, error) {
+	"removePost": func(ctx context.Context, postgres bool, in map[string]any) (any, error) {
 		if postgres {
-			return pg.RemovePost(i64(in, "id"))
+			return pg.RemovePost(ctx, i64(in, "id"))
 		}
-		return my.RemovePost(i64(in, "id"))
+		return my.RemovePost(ctx, i64(in, "id"))
 	},
-	"createPostReturning": func(postgres bool, in map[string]any) (any, error) {
+	"createPostReturning": func(ctx context.Context, postgres bool, in map[string]any) (any, error) {
 		if postgres {
-			return pg.CreatePostReturning(i64(in, "id"), i64(in, "authorId"), str(in, "title"), str(in, "status"), str(in, "createdAt"))
+			return pg.CreatePostReturning(ctx, i64(in, "id"), i64(in, "authorId"), str(in, "title"), str(in, "status"), str(in, "createdAt"))
 		}
-		return my.CreatePostReturning(i64(in, "id"), i64(in, "authorId"), str(in, "title"), str(in, "status"), str(in, "createdAt"))
+		return my.CreatePostReturning(ctx, i64(in, "id"), i64(in, "authorId"), str(in, "title"), str(in, "status"), str(in, "createdAt"))
 	},
-	"renamePostReturning": func(postgres bool, in map[string]any) (any, error) {
+	"renamePostReturning": func(ctx context.Context, postgres bool, in map[string]any) (any, error) {
 		if postgres {
-			return pg.RenamePostReturning(str(in, "title"), i64(in, "id"))
+			return pg.RenamePostReturning(ctx, str(in, "title"), i64(in, "id"))
 		}
-		return my.RenamePostReturning(str(in, "title"), i64(in, "id"))
+		return my.RenamePostReturning(ctx, str(in, "title"), i64(in, "id"))
 	},
-	"removePostReturning": func(postgres bool, in map[string]any) (any, error) {
+	"removePostReturning": func(ctx context.Context, postgres bool, in map[string]any) (any, error) {
 		if postgres {
-			return pg.RemovePostReturning(i64(in, "id"))
+			return pg.RemovePostReturning(ctx, i64(in, "id"))
 		}
-		return my.RemovePostReturning(i64(in, "id"))
+		return my.RemovePostReturning(ctx, i64(in, "id"))
 	},
-	"createDoc": func(postgres bool, in map[string]any) (any, error) {
+	"createDoc": func(ctx context.Context, postgres bool, in map[string]any) (any, error) {
 		if postgres {
-			return pg.CreateDoc(str(in, "docId"), str(in, "title"))
+			return pg.CreateDoc(ctx, str(in, "docId"), str(in, "title"))
 		}
-		return my.CreateDoc(str(in, "docId"), str(in, "title"))
+		return my.CreateDoc(ctx, str(in, "docId"), str(in, "title"))
 	},
-	"createLine": func(postgres bool, in map[string]any) (any, error) {
+	"createLine": func(ctx context.Context, postgres bool, in map[string]any) (any, error) {
 		if postgres {
-			return pg.CreateLine(i64(in, "orderId"), i64(in, "lineNo"), str(in, "sku"))
+			return pg.CreateLine(ctx, i64(in, "orderId"), i64(in, "lineNo"), str(in, "sku"))
 		}
-		return my.CreateLine(i64(in, "orderId"), i64(in, "lineNo"), str(in, "sku"))
+		return my.CreateLine(ctx, i64(in, "orderId"), i64(in, "lineNo"), str(in, "sku"))
 	},
-	"restatusPostsReturning": func(postgres bool, in map[string]any) (any, error) {
+	"restatusPostsReturning": func(ctx context.Context, postgres bool, in map[string]any) (any, error) {
 		if postgres {
-			return pg.RestatusPostsReturning(str(in, "status"), i64(in, "authorId"))
+			return pg.RestatusPostsReturning(ctx, str(in, "status"), i64(in, "authorId"))
 		}
-		return my.RestatusPostsReturning(str(in, "status"), i64(in, "authorId"))
+		return my.RestatusPostsReturning(ctx, str(in, "status"), i64(in, "authorId"))
 	},
-	"removePostsByAuthorReturning": func(postgres bool, in map[string]any) (any, error) {
+	"removePostsByAuthorReturning": func(ctx context.Context, postgres bool, in map[string]any) (any, error) {
 		if postgres {
-			return pg.RemovePostsByAuthorReturning(i64(in, "authorId"))
+			return pg.RemovePostsByAuthorReturning(ctx, i64(in, "authorId"))
 		}
-		return my.RemovePostsByAuthorReturning(i64(in, "authorId"))
+		return my.RemovePostsByAuthorReturning(ctx, i64(in, "authorId"))
 	},
-	"typedRows": func(postgres bool, in map[string]any) (any, error) {
+	"typedRows": func(ctx context.Context, postgres bool, in map[string]any) (any, error) {
 		if postgres {
-			return pg.TypedRows()
+			return pg.TypedRows(ctx)
 		}
-		return my.TypedRows()
+		return my.TypedRows(ctx)
 	},
-	"removeTags": func(postgres bool, in map[string]any) (any, error) {
+	"removeTags": func(ctx context.Context, postgres bool, in map[string]any) (any, error) {
 		if postgres {
-			return pg.RemoveTags(i64s(in, "ids"))
+			return pg.RemoveTags(ctx, i64s(in, "ids"))
 		}
-		return my.RemoveTags(i64s(in, "ids"))
+		return my.RemoveTags(ctx, i64s(in, "ids"))
 	},
-	"removeTagsReturning": func(postgres bool, in map[string]any) (any, error) {
+	"removeTagsReturning": func(ctx context.Context, postgres bool, in map[string]any) (any, error) {
 		if postgres {
-			return pg.RemoveTagsReturning(i64s(in, "ids"))
+			return pg.RemoveTagsReturning(ctx, i64s(in, "ids"))
 		}
-		return my.RemoveTagsReturning(i64s(in, "ids"))
+		return my.RemoveTagsReturning(ctx, i64s(in, "ids"))
 	},
-	"createTags": func(postgres bool, in map[string]any) (any, error) {
+	"createTags": func(ctx context.Context, postgres bool, in map[string]any) (any, error) {
 		if postgres {
-			return pg.CreateTags(i64s(in, "rows_id"), i64s(in, "rows_post_id"), strs(in, "rows_label"))
+			return pg.CreateTags(ctx, i64s(in, "rows_id"), i64s(in, "rows_post_id"), strs(in, "rows_label"))
 		}
 		rows := make([]my.CreateTagsRecord, 0)
 		for _, r := range records(in) {
 			rows = append(rows, my.CreateTagsRecord{Id: i64(r, "id"), Post_id: i64(r, "post_id"), Label: str(r, "label")})
 		}
-		return my.CreateTags(rows)
+		return my.CreateTags(ctx, rows)
 	},
-	"createTagsReturning": func(postgres bool, in map[string]any) (any, error) {
+	"createTagsReturning": func(ctx context.Context, postgres bool, in map[string]any) (any, error) {
 		if postgres {
-			return pg.CreateTagsReturning(i64s(in, "rows_id"), i64s(in, "rows_post_id"), strs(in, "rows_label"))
+			return pg.CreateTagsReturning(ctx, i64s(in, "rows_id"), i64s(in, "rows_post_id"), strs(in, "rows_label"))
 		}
 		rows := make([]my.CreateTagsReturningRecord, 0)
 		for _, r := range records(in) {
 			rows = append(rows, my.CreateTagsReturningRecord{Id: i64(r, "id"), Post_id: i64(r, "post_id"), Label: str(r, "label")})
 		}
-		return my.CreateTagsReturning(rows)
+		return my.CreateTagsReturning(ctx, rows)
 	},
-	"relabelTagsReturning": func(postgres bool, in map[string]any) (any, error) {
+	"relabelTagsReturning": func(ctx context.Context, postgres bool, in map[string]any) (any, error) {
 		if postgres {
-			return pg.RelabelTagsReturning(i64s(in, "rows_id"), strs(in, "rows_label"))
+			return pg.RelabelTagsReturning(ctx, i64s(in, "rows_id"), strs(in, "rows_label"))
 		}
 		rows := make([]my.RelabelTagsReturningRecord, 0)
 		for _, r := range records(in) {
 			rows = append(rows, my.RelabelTagsReturningRecord{Id: i64(r, "id"), Label: str(r, "label")})
 		}
-		return my.RelabelTagsReturning(rows)
+		return my.RelabelTagsReturning(ctx, rows)
 	},
 }
 
 // callEntry runs one vector's endpoint. The catch-all is kept as a runtime guard, but it is no
 // longer the only thing standing between a missed endpoint and a live-DB failure: main asserts
 // coverage from the same table before connecting.
-func callEntry(dialect, entry string, in map[string]any) (any, error) {
+func callEntry(ctx context.Context, dialect, entry string, in map[string]any) (any, error) {
 	fn, ok := dispatch[entry]
 	if !ok {
 		return nil, fmt.Errorf("unknown entry %q", entry)
 	}
-	return fn(dialect == "postgres", in)
+	return fn(ctx, dialect == "postgres", in)
 }
 
 // gap is one corpus entry the dispatch table cannot serve, with how many vectors would have failed.
@@ -580,7 +580,7 @@ type tally struct {
 
 func runVector(db *sql.DB, ctx *rt.ExecutionContext, v vecT) (bool, string) {
 	stmtLog = nil
-	result, callErr := callEntry(v.Dialect, v.Entry, v.Input)
+	result, callErr := callEntry(rt.BindLeafTransport(ctx, v.Dialect), v.Dialect, v.Entry, v.Input)
 	// Snapshot the vector's statements BEFORE any DB-state query (which runs through the same seam).
 	got := make([]stmtT, len(stmtLog))
 	copy(got, stmtLog)
@@ -666,8 +666,6 @@ func runLeg(dialect string, db *sql.DB, corpus corpusT) tally {
 	}
 	fmt.Fprintf(os.Stderr, "\nlivedb-%s — %d vectors (real %s)\n", dialect, len(vectors), dialect)
 	ctx := rt.ContextForDB(db)
-	rt.BindLeafTransport(ctx, dialect)
-	defer rt.UnbindLeafTransport()
 	for _, v := range vectors {
 		// Every vector starts from the SAME seeded state the TS leg captured from (raw, OFF the seam).
 		if err := applySchema(db, corpus.Schema); err != nil {
@@ -712,11 +710,13 @@ func pgDSN() string {
 		envOr("TEST_DB_NAME", "testdb"))
 }
 
-func mysqlDSN() string {
+func mysqlDSN() string { return mysqlDSNOn(envOr("TEST_MYSQL_DB", "testdb")) }
+
+// mysqlDSNOn is [mysqlDSN] on the named database of the same server.
+func mysqlDSNOn(database string) string {
 	return fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?multiStatements=false",
 		envOr("TEST_MYSQL_USER", "testuser"), envOr("TEST_MYSQL_PASSWORD", "testpass"),
-		envOr("TEST_MYSQL_HOST", "127.0.0.1"), envOr("TEST_MYSQL_PORT", "3307"),
-		envOr("TEST_MYSQL_DB", "testdb"))
+		envOr("TEST_MYSQL_HOST", "127.0.0.1"), envOr("TEST_MYSQL_PORT", "3307"), database)
 }
 
 func printSummary(suites map[string]tally, totalPass, totalFail int, versionMismatch bool) {

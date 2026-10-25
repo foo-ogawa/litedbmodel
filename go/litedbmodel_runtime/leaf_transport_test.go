@@ -60,7 +60,7 @@ func TestPluckKeysDedupesNonNull(t *testing.T) {
 		wire.WireRowOf([]wire.WireField{{Key: "id", Val: wire.WireInt(1)}}),
 		wire.WireRowOf([]wire.WireField{{Key: "id", Val: wire.WireNull()}}),
 	}
-	out, err := PluckKeys(leafPayload(port("col", wireStrings("id")), port("rows", wire.WireListOf(rows))))
+	out, err := PluckKeys(context.Background(), leafPayload(port("col", wireStrings("id")), port("rows", wire.WireListOf(rows))))
 	if err != nil {
 		t.Fatalf("PluckKeys: %v", err)
 	}
@@ -85,7 +85,7 @@ func TestPluckKeysCompositeEmitsTuples(t *testing.T) {
 		})
 	}
 	rows := []wire.WireValue{mk(1, 9), mk(1, 9), mk(1, 8)} // one dup tuple
-	out, err := PluckKeys(leafPayload(port("col", wireStrings("tenant_id", "user_id")), port("rows", wire.WireListOf(rows))))
+	out, err := PluckKeys(context.Background(), leafPayload(port("col", wireStrings("tenant_id", "user_id")), port("rows", wire.WireListOf(rows))))
 	if err != nil {
 		t.Fatalf("PluckKeys composite: %v", err)
 	}
@@ -101,7 +101,7 @@ func TestPluckKeysCompositeEmitsTuples(t *testing.T) {
 func TestGroupChildrenDistributesPerParent(t *testing.T) {
 	parents := wireUsers(1, 2, 3)
 	children := wirePosts([2]int64{10, 1}, [2]int64{11, 1}, [2]int64{12, 2})
-	out, err := GroupChildren(leafPayload(
+	out, err := GroupChildren(context.Background(), leafPayload(
 		port("children", wire.WireListOf(children)),
 		port("fk", wireStrings("author_id")),
 		port("into", wire.WireStr("posts")),
@@ -153,7 +153,7 @@ func TestPayloadMaterializationIsLossless(t *testing.T) {
 			wire.WireRowOf([]wire.WireField{{Key: "body", Val: wire.WireStr("c1")}}),
 		})},
 	})
-	out, err := GroupChildren(leafPayload(
+	out, err := GroupChildren(context.Background(), leafPayload(
 		port("children", wire.WireListOf(wirePosts([2]int64{10, 1}))),
 		port("fk", wireStrings("author_id")),
 		port("into", wire.WireStr("posts")),
@@ -210,15 +210,15 @@ func TestPayloadMaterializationIsLossless(t *testing.T) {
 // silent default) — a port that is missing or mistyped is an ABI break, and a default would corrupt the
 // result instead of stopping it.
 func TestPortUnboxIsFailClosed(t *testing.T) {
-	_, err := PluckKeys(leafPayload(port("col", wireStrings("id"))))
+	_, err := PluckKeys(context.Background(), leafPayload(port("col", wireStrings("id"))))
 	if err == nil || !strings.Contains(err.Error(), `"rows"`) || !strings.Contains(err.Error(), "absent") {
 		t.Fatalf("absent port must fail loudly, got %v", err)
 	}
-	_, err = PluckKeys(leafPayload(port("col", wireStrings("id")), port("rows", wire.WireInt(7))))
+	_, err = PluckKeys(context.Background(), leafPayload(port("col", wireStrings("id")), port("rows", wire.WireInt(7))))
 	if err == nil || !strings.Contains(err.Error(), `"rows"`) || !strings.Contains(err.Error(), "got N") {
 		t.Fatalf("wrong-variant port must name the actual wire tag, got %v", err)
 	}
-	_, err = PluckKeys(leafPayload(
+	_, err = PluckKeys(context.Background(), leafPayload(
 		port("col", wire.WireListOf([]wire.WireValue{wire.WireInt(1)})),
 		port("rows", wire.WireListOf(nil)),
 	))
@@ -227,11 +227,11 @@ func TestPortUnboxIsFailClosed(t *testing.T) {
 	}
 	// The SAME two failures on the OTHER pluck port, so both are pinned on both — the TS / python / php
 	// legs pin all four, and a parity that holds on 6 of 8 is a parity nobody is watching.
-	_, err = PluckKeys(leafPayload(port("rows", wire.WireListOf(nil))))
+	_, err = PluckKeys(context.Background(), leafPayload(port("rows", wire.WireListOf(nil))))
 	if err == nil || !strings.Contains(err.Error(), `"col"`) || !strings.Contains(err.Error(), "absent") {
 		t.Fatalf("an absent %q port must fail loudly and name itself, got %v", "col", err)
 	}
-	_, err = PluckKeys(leafPayload(port("col", wire.WireStr("id")), port("rows", wire.WireListOf(nil))))
+	_, err = PluckKeys(context.Background(), leafPayload(port("col", wire.WireStr("id")), port("rows", wire.WireListOf(nil))))
 	if err == nil || !strings.Contains(err.Error(), `"col"`) || !strings.Contains(err.Error(), "list") {
 		t.Fatalf("a key-column TUPLE that is one bare column name must be loud, got %v", err)
 	}
@@ -259,7 +259,7 @@ func TestPortUnboxIsFailClosed(t *testing.T) {
 		return leafPayload(append(out, override...)...)
 	}
 	for _, name := range []string{"children", "fk", "into", "parents", "pk", "single"} {
-		if _, err := GroupChildren(groupPorts(name)); err == nil ||
+		if _, err := GroupChildren(context.Background(), groupPorts(name)); err == nil ||
 			!strings.Contains(err.Error(), `"`+name+`"`) || !strings.Contains(err.Error(), "absent") {
 			t.Fatalf("an absent %q port must fail loudly and name itself, got %v", name, err)
 		}
@@ -276,14 +276,14 @@ func TestPortUnboxIsFailClosed(t *testing.T) {
 		{"parents", wire.WireInt(7), "list"},
 		{"children", wire.WireStr("x"), "list"},
 	} {
-		if _, err := GroupChildren(groupPorts(c.name, port(c.name, c.val))); err == nil ||
+		if _, err := GroupChildren(context.Background(), groupPorts(c.name, port(c.name, c.val))); err == nil ||
 			!strings.Contains(err.Error(), `"`+c.name+`"`) || !strings.Contains(err.Error(), c.want) {
 			t.Fatalf("a mistyped %q port must name the port and its declared wire kind, got %v", c.name, err)
 		}
 	}
 
 	// The LEGAL shape stays silent, and the CARDINALITY the ports declare is the one that comes out.
-	if _, err := GroupChildren(groupPorts("")); err != nil {
+	if _, err := GroupChildren(context.Background(), groupPorts("")); err != nil {
 		t.Fatalf("a well-formed group payload must pass, got %v", err)
 	}
 }
@@ -368,18 +368,17 @@ func TestExecuteSQL_RunModePicksThePool(t *testing.T) {
 	var log []string
 	reader := newRecordPool("reader", &log)
 	writer := newRecordPool("writer", &log)
-	BindLeafTransport(
+	ctx := BindLeafTransport(
 		ContextForRouting(routingWithPools(reader, writer, NewWriterStickyClock(StickyOptions{UseWriterAfterTransaction: boolPtr(false)})), nil),
 		"sqlite",
 	)
-	defer UnbindLeafTransport()
 
 	// A plain READ — the bounded payload that omits the control record entirely → the READER.
-	if _, err := ExecuteSQL(sqlPayload(nil, "SELECT id FROM users", false)); err != nil {
+	if _, err := ExecuteSQL(ctx, sqlPayload(nil, "SELECT id FROM users", false)); err != nil {
 		t.Fatalf("read: %v", err)
 	}
 	// A RETURNING write → the WRITER, even though it runs on the ROW seam.
-	returning, err := ExecuteSQL(leafPayload(
+	returning, err := ExecuteSQL(ctx, leafPayload(
 		optsPort(wire.WireNull(), writeModeRow(true), wire.WireNull(), wire.WireNull()),
 		port("params", wire.WireListOf(nil)),
 		port("sql", wire.WireStr("INSERT INTO users (name) VALUES (?) RETURNING id")),
@@ -388,7 +387,7 @@ func TestExecuteSQL_RunModePicksThePool(t *testing.T) {
 		t.Fatalf("returning write: %v", err)
 	}
 	// A NON-returning write → the WRITER too (the half that was already right stays right).
-	summary, err := ExecuteSQL(sqlPayload(nil, "INSERT INTO users (name) VALUES (?)", true))
+	summary, err := ExecuteSQL(ctx, sqlPayload(nil, "INSERT INTO users (name) VALUES (?)", true))
 	if err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -427,8 +426,8 @@ func TestWithAmbientTransaction_OpensOnTheWriterAndIsSeamVisible(t *testing.T) {
 		WriterStickyDuration:      intPtr(5000),
 		Now:                       func() int64 { return clock },
 	})
-	read := func() error {
-		_, err := ExecuteSQL(sqlPayload(nil, "SELECT id FROM users", false))
+	read := func(ctx context.Context) error {
+		_, err := ExecuteSQL(ctx, sqlPayload(nil, "SELECT id FROM users", false))
 		return err
 	}
 
@@ -436,38 +435,42 @@ func TestWithAmbientTransaction_OpensOnTheWriterAndIsSeamVisible(t *testing.T) {
 	var mu sync.Mutex
 	if _, err := WithMiddlewareScope(context.Background(), func(scopeCtx context.Context) (struct{}, error) {
 		RegisterMiddleware(scopeCtx, observeMiddleware(&seen, &mu).Descriptor())
-		BindLeafTransport(ContextForRoutingCtx(scopeCtx, routingWithPools(reader, writer, sticky)), "sqlite")
-		defer UnbindLeafTransport()
+		ctx := BindLeafTransport(ContextForRoutingCtx(scopeCtx, routingWithPools(reader, writer, sticky)), "sqlite")
 
 		// Before any transaction: a read is a plain read ⇒ the READER (the sticky clock is unarmed).
-		if err := read(); err != nil {
+		if err := read(ctx); err != nil {
 			return struct{}{}, err
 		}
-		if err := WithAmbientTransaction(func() error {
+		if err := WithAmbientTransaction(ctx, func(txCtx context.Context) error {
 			// A READ inside the tx: its intent says READER, but the tx PIN wins — this is the "a read in
 			// a transaction sticks to the tx connection" half, and it acquires NO further connection.
-			if err := read(); err != nil {
+			if err := read(txCtx); err != nil {
 				return err
 			}
-			_, err := ExecuteSQL(sqlPayload(nil, "INSERT INTO users (name) VALUES (?)", true))
+			_, err := ExecuteSQL(txCtx, sqlPayload(nil, "INSERT INTO users (name) VALUES (?)", true))
 			return err
 		}); err != nil {
 			return struct{}{}, err
 		}
-		// The COMMIT armed the writer-sticky clock: the SAME plain read that opened this test on the
-		// reader now routes to the WRITER (read-your-writes).
+		// The COMMIT armed writer-sticky for THIS request: the SAME plain read that opened this test on
+		// the reader now routes to the WRITER (read-your-writes)…
 		clock += 100
-		return struct{}{}, read()
+		if err := read(ctx); err != nil {
+			return struct{}{}, err
+		}
+		// …while another request (its own ExecutionContext over the same routing) did not write and keeps
+		// reading from the READER.
+		return struct{}{}, read(BindLeafTransport(ContextForRoutingCtx(scopeCtx, routingWithPools(reader, writer, sticky)), "sqlite"))
 	}); err != nil {
 		t.Fatalf("covered tx: %v", err)
 	}
 
 	// (1) the BEGIN is drawn from the WRITER pool, and (2) it is the tx's ONLY acquire — both body
-	// statements, the READ included, ran on that pinned connection. The trailing writer is the post-tx
-	// read: sticky armed.
-	if !reflect.DeepEqual(pools, []string{"reader", "writer", "writer"}) {
-		t.Fatalf("pool acquires = %v, want [reader writer writer] (pre-tx read, the tx's ONE writer "+
-			"connection, the sticky post-tx read)", pools)
+	// statements, the READ included, ran on that pinned connection. The writer after it is the post-tx
+	// read (sticky armed); the final reader is the other request's read.
+	if !reflect.DeepEqual(pools, []string{"reader", "writer", "writer", "reader"}) {
+		t.Fatalf("pool acquires = %v, want [reader writer writer reader] (pre-tx read, the tx's ONE writer "+
+			"connection, the sticky post-tx read, another request's read)", pools)
 	}
 	// (3) the tx-control is SEAM-issued, so a registered middleware observes the whole envelope.
 	want := []string{
@@ -476,6 +479,7 @@ func TestWithAmbientTransaction_OpensOnTheWriterAndIsSeamVisible(t *testing.T) {
 		"SELECT id FROM users",
 		"INSERT INTO users (name) VALUES (?)",
 		"COMMIT",
+		"SELECT id FROM users",
 		"SELECT id FROM users",
 	}
 	if !reflect.DeepEqual(seen, want) {

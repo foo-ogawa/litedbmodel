@@ -99,6 +99,9 @@ const SKIP_BUDGET = 0;
  * Removing a name is a decision about coverage, not a formality: say which test and why.
  */
 const LIVE_TESTS = [
+  'TestConcurrentNonTransactionalStatementsStayOffOtherTransactionsLive',
+  'TestConcurrentTransactionsAreIsolatedLive',
+  'TestConcurrentWriterStickyIsPerRequestLive',
   'TestPhaseCConfigCharsetResetOnReleaseLiveMySQL',
   'TestPhaseCConfigMaxPoolSoleCapLivePG',
   'TestPhaseCConfigQueryTimeoutLiveMySQL',
