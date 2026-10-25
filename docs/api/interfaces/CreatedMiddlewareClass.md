@@ -1,4 +1,4 @@
-[**litedbmodel v2.2.11**](../README.md)
+[**litedbmodel v2.2.12**](../README.md)
 
 ***
 
@@ -6,7 +6,7 @@
 
 # Interface: CreatedMiddlewareClass\<S\>
 
-Defined in: [Middleware.ts:438](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Middleware.ts#L438)
+Defined in: [Middleware.ts:439](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Middleware.ts#L439)
 
 Type for the middleware class created by createMiddleware.
 Provides typed access to state via getCurrentContext().
@@ -25,7 +25,7 @@ Provides typed access to state via getCurrentContext().
 new CreatedMiddlewareClass(): Middleware & S;
 ```
 
-Defined in: [Middleware.ts:448](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Middleware.ts#L448)
+Defined in: [Middleware.ts:449](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Middleware.ts#L449)
 
 Constructor
 
@@ -41,7 +41,7 @@ Constructor
 getCurrentContext(): S;
 ```
 
-Defined in: [Middleware.ts:440](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Middleware.ts#L440)
+Defined in: [Middleware.ts:441](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Middleware.ts#L441)
 
 Get the current request's state (creates new instance if none exists)
 
@@ -57,7 +57,7 @@ Get the current request's state (creates new instance if none exists)
 run<R>(fn: () => R): R;
 ```
 
-Defined in: [Middleware.ts:442](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Middleware.ts#L442)
+Defined in: [Middleware.ts:443](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Middleware.ts#L443)
 
 Run a function with a fresh middleware context
 
@@ -85,7 +85,7 @@ Run a function with a fresh middleware context
 hasContext(): boolean;
 ```
 
-Defined in: [Middleware.ts:444](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Middleware.ts#L444)
+Defined in: [Middleware.ts:445](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Middleware.ts#L445)
 
 Check if a context exists for the current request
 
@@ -101,7 +101,7 @@ Check if a context exists for the current request
 clearContext(): void;
 ```
 
-Defined in: [Middleware.ts:446](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Middleware.ts#L446)
+Defined in: [Middleware.ts:447](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Middleware.ts#L447)
 
 Clear the current context (useful for testing)
 

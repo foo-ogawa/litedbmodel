@@ -5,6 +5,22 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.2.12] - 2026-10-26
+
+**writer sticky が、トランザクションの前に `await` がある関数越しのコミットで効かなかったのを直す。`execute()` の DDL・保守がリーダーへ流れていたのを直す。**
+Closes #325。
+
+### Fixed
+
+- **writer sticky が、トランザクションを開いた関数の呼び出し元に効かないことがあった（2.2.11 で入った）。** Node 24 では、
+  トランザクションの前に `await` がある関数越しにコミットすると、同じ要求の続きの読みがリーダーへ行き、書いた直後の
+  行が見えなかった。要求は `Middleware.run(fn)` の範囲で、コミット時刻はその範囲に置く。`await` の深さに関係なく、
+  コミットした要求の読みは `writerStickyDuration` の間ライターへ行く。**`Middleware.run` の外ではコミット後もリーダーで
+  読む。** 要求の入口を `Middleware.run` で囲む（例: Fastify の `onRequest` で `Middleware.run(done)`）。
+- **reader / writer を分けると、`DBModel.execute()` の DDL・保守（VACUUM、CREATE INDEX CONCURRENTLY など）がリーダーへ
+  流れて拒まれていた（#325）。** トランザクションの外では、行を返す文はリーダー、それ以外はライターで実行する（SCP 経路と
+  v1 経路で同じ規則）。書き込む関数の呼び出し（`SELECT fn()`）は `transaction()` の中で呼ぶ。
+
 ## [2.2.11] - 2026-10-26
 
 **1 プロセスで多数の要求を同時にさばくとき（Lambda Web Functions、HTTP サーバー）に、要求の間で状態が共有されていたのを直す。**
