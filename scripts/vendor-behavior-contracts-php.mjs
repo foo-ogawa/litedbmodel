@@ -67,6 +67,13 @@ const VENDORED_FILES = [
   'Plan.php',
   'BehaviorFailure.php',
   'Behavior.php',
+  // Behavior's per-compiled-IR preparation: each component's node expressions are resolved into
+  // closures once (PreparedComponent holds them per component, NodeExprs per node).
+  'PreparedComponent.php',
+  'NodeExprs.php',
+  // Behavior's result-type conform check: ConformPending carries a mismatch up to the one place that
+  // builds the Error Value.
+  'ConformPending.php',
   // Require-time gates of a bc `--lang php` GENERATED native module (#141). SpecVersions is
   // standalone consts; Fingerprint recomputes the portable-IR fnv1a64 and raises FingerprintFailure.
   'SpecVersions.php',

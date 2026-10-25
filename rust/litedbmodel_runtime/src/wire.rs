@@ -108,7 +108,7 @@ impl std::error::Error for BehaviorError {}
 // the copying spellings and failing the build on them: a wire classifier that BORROWS (which forces a
 // per-cell copy to de-box), a de-box that clones a list out of the wire, and a row cloned out of its cell
 // before a field is taken from the copy. Owning ONE leaf value that a borrow cannot outlive is not a copy
-// of the result set and is not forbidden.
+// of the result set and is not forbidden — that is the whole rule: own what crosses, borrow to reach it.
 pub enum Probe<T> {
     Got(T),
     Wrong {
@@ -189,15 +189,28 @@ impl WireValue {
 }
 
 impl WireRow {
-    // Move the value at `field` OUT of the row (or None when the producer did not send it). The de-box
-    // reads each declared field exactly once, so taking is always right — and it is what keeps a cell
-    // from being copied: the String travels from the wire into the typed struct without a heap copy.
-    // Undeclared extras are simply left behind with the row.
+    // Move the value at `field` OUT of the row (or None when the producer did not send it). `at` is the
+    // position the column resolved to in an EARLIER row of the SAME result set: the key is verified to
+    // still sit there (one compare) and only a row that does not match is scanned again, so a result set
+    // resolves each column name ONCE and every later row reads it by index. Scanning per field instead
+    // cost O(columns²) per row — the de-box reads every declared field, and each read walked the row.
+    // The reuse needs NO stable-layout assumption from the producer: the verify IS the read's guard, and
+    // a differing row just re-resolves.
+    //
+    // The de-box reads each declared field exactly once, so taking is always right — and it is what keeps
+    // a cell from being copied: the String travels from the wire into the typed struct without a heap
+    // copy. The emptied slot STAYS in the row (its key is what the next row's O(1) check reads);
+    // undeclared extras are simply left behind with the row.
+    pub fn take_at(&mut self, field: &str, at: &mut usize) -> Option<WireValue> {
+        if !matches!(self.entries.get(*at), Some((k, _)) if k == field) {
+            *at = self.entries.iter().position(|(k, _)| k == field)?;
+        }
+        Some(std::mem::replace(&mut self.entries[*at].1, WireValue::Null))
+    }
+    // The same move, BY NAME only — the read a consumer's leaf transport does on its payload (each of its
+    // ports is read one time, so there is no position to carry) and the read a de-box that runs once does.
     pub fn take(&mut self, field: &str) -> Option<WireValue> {
-        self.entries
-            .iter()
-            .position(|(k, _)| k == field)
-            .map(|i| self.entries.swap_remove(i).1)
+        self.take_at(field, &mut 0)
     }
 }
 
