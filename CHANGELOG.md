@@ -5,6 +5,21 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.2.9] - 2026-10-25
+
+**配列列（`*Array`）を含む `createMany` が PostgreSQL で 2 行以上のとき失敗していたのを直す。** Closes #307, #308。
+
+### Fixed
+
+- **[pg] `@column.stringArray()` などの配列列を持つ `createMany` が、同じ列の組み合わせの行が 2 行以上あると
+  `cannot extract elements from a scalar` で失敗していた（#307）。** 一括 INSERT（UNNEST）は配列列を
+  直列化前の値から JSON 配列にして束ねるが、列の serializer が入力のレコードをその場で書き換えていたため、
+  直列化前の値として PostgreSQL の配列リテラル文字列（`{x,y}`）を JSON 化していた。serializer は入力を
+  書き換えず新しいレコードを返す。1 行の `create` / `createMany` はこの経路を通らないので影響を受けていなかった。
+- **dev 依存（vitest / vite / markdown-it）の advisory で audit が赤だった（#308）。** vitest を 4.1.12 に、
+  markdown-it を 14.3.3 に上げる。新しい vite は各ファイルを最寄りの `tsconfig.json` で変換するため、テスト木の
+  tsconfig（旧 `tsconfig.test.json`）を `test/tsconfig.json` に移した。公開パッケージの依存は変わらない。
+
 ## [2.2.8] - 2026-10-08
 
 **json / jsonb 列のスカラー値の読み出し、NUMERIC 列の一括書き込み、WHERE の Date のタイムゾーン依存を直す。**
