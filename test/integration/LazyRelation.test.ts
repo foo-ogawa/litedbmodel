@@ -967,6 +967,31 @@ describe.skipIf(skipIntegrationTests)('LazyRelation', () => {
       expect(postsQuery).not.toMatch(/user_id\s+IN\s*\(/i);
     });
 
+    it('should batch load once when every record accesses the relation concurrently', async () => {
+      const user1 = await createTestUser('User 1', 'user1@concurrent.com');
+      await createTestUser('User 2', 'user2@concurrent.com');
+      const user3 = await createTestUser('User 3', 'user3@concurrent.com');
+
+      await createTestPost(user1.id!, 'Post 1a', 'Content');
+      await createTestPost(user1.id!, 'Post 1b', 'Content');
+      await createTestPost(user3.id!, 'Post 3', 'Content');
+
+      const logger = SqlLoggerMiddleware.getCurrentContext();
+      logger.clear();
+
+      const users = await TestUser.find([], { order: 'id' });
+      const [posts, authors] = await Promise.all([
+        Promise.all(users.map((user) => user.posts)),
+        // A second relation in flight at the same time loads on its own, once.
+        Promise.all(users.map((user) => user.posts.then((p) => Promise.all(p.map((post) => post.author))))),
+      ]);
+
+      expect(posts.map((p) => p.map((post) => post.title).sort())).toEqual([['Post 1a', 'Post 1b'], [], ['Post 3']]);
+      expect(authors.map((a) => a.map((author) => author?.id))).toEqual([[user1.id, user1.id], [], [user3.id]]);
+      // users + posts + authors: one query each, however many records asked at once.
+      expect(logger.getSelectQueries().length).toBe(3);
+    });
+
     it('should use unnest + JOIN for composite key batch loading on PostgreSQL', async () => {
       // Create multi-tenant test data
       await createTenantUserForN1(1, 100, 'Tenant1 User1');

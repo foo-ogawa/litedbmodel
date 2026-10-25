@@ -5,6 +5,18 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.2.10] - 2026-10-25
+
+**relation の初回に同時アクセスすると、一括読み込みがレコードの数だけ流れていたのを直す。** Closes #311。
+
+### Fixed
+
+- **relation の一括読み込みが、同時アクセスで重複していた（#311）。** `find()` で読んだ複数レコードの同じ
+  relation に初回を同時にアクセスすると（`Promise.all(records.map((r) => r.posts))` など）、読み込み済みか
+  だけを見て判定していたため、読み込み中に来た呼び出しがそれぞれ一括読み込みを走らせ、レコードの数だけ
+  （各本が全件分を読む）クエリが流れていた。読み込み中のものも共有し、同時の呼び出しは 1 本の読み込みを待つ。
+  失敗した読み込みは従来どおり残さず、次のアクセスで読み直す。
+
 ## [2.2.9] - 2026-10-25
 
 **配列列（`*Array`）を含む `createMany` が PostgreSQL で 2 行以上のとき失敗していたのを直す。** Closes #307, #308。

@@ -108,7 +108,8 @@ export interface RelationConfig {
 export class LazyRelationContext {
   private sourceClass: typeof DBModel;
   private records: DBModel[];
-  private batchCache: Map<string, Map<string, unknown>> = new Map();
+  /** Batch loads by cache key — held from the start, so concurrent first accesses share one load. */
+  private batchCache: Map<string, Promise<Map<string, unknown>>> = new Map();
 
   constructor(
     sourceClass: typeof DBModel,
@@ -133,13 +134,19 @@ export class LazyRelationContext {
   ): Promise<T | T[] | null> {
     const cacheKey = this.getCacheKey(relationType, config);
 
-    // Check if relation is already batch-loaded
-    if (!this.batchCache.has(cacheKey)) {
-      // Load relation for all records in the batch
-      await this.batchLoadRelation(relationType, config);
+    // Load relation for all records in the batch, unless that load is already done or in flight
+    let pending = this.batchCache.get(cacheKey);
+    if (!pending) {
+      const load = this.batchLoadRelation(relationType, config);
+      pending = load;
+      this.batchCache.set(cacheKey, load);
+      // A failed load is not kept, so the next access loads again.
+      load.catch(() => {
+        if (this.batchCache.get(cacheKey) === load) this.batchCache.delete(cacheKey);
+      });
     }
 
-    const relationMap = this.batchCache.get(cacheKey)!;
+    const relationMap = await pending;
     const isCompositeKey = (config.targetKeys && config.targetKeys.length > 0) || 
                            (config.sourceKeys && config.sourceKeys.length > 0);
     
@@ -203,7 +210,7 @@ export class LazyRelationContext {
   private async batchLoadRelation(
     relationType: RelationType,
     config: RelationConfig
-  ): Promise<void> {
+  ): Promise<Map<string, unknown>> {
     const TargetClass = config.targetClass;
     const isCompositeKey = (config.targetKeys && config.targetKeys.length > 1) || 
                            (config.sourceKeys && config.sourceKeys.length > 1);
@@ -226,11 +233,9 @@ export class LazyRelationContext {
       }
     }
 
-    // If no values, create empty cache
+    // If no values, nothing to load
     if (sourceKeyValues.length === 0 && compositeKeyValues.length === 0) {
-      const cacheKey = this.getCacheKey(relationType, config);
-      this.batchCache.set(cacheKey, new Map());
-      return;
+      return new Map();
     }
 
     // Use target model's driver type (important for multi-DB scenarios)
@@ -250,9 +255,7 @@ export class LazyRelationContext {
       const uniqueTuples = this.getUniqueCompositeKeyTuples(compositeKeyValues, sourceKeys);
       
       if (uniqueTuples.length === 0) {
-        const cacheKey = this.getCacheKey(relationType, config);
-        this.batchCache.set(cacheKey, new Map());
-        return;
+        return new Map();
       }
 
       if (needsLimitedLoading) {
@@ -318,8 +321,7 @@ export class LazyRelationContext {
       }
     }
 
-    const cacheKey = this.getCacheKey(relationType, config);
-    this.batchCache.set(cacheKey, relationMap);
+    return relationMap;
   }
 
   /**
