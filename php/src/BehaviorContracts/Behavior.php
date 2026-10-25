@@ -16,7 +16,7 @@
  * 移植（scp-ir-architecture.md §5–§7）。
  *
  * component-graph IR（`components[]{name, inputPorts, body[], output, plan}`）を、既存 COMMON の
- * `Plan::runPlan`（stage 実行・Skip 伝播・Policy Kind）+ `ExprEval::evaluate`（Expression IR）の
+ * `Plan::runPlan`（stage 実行・Skip 伝播・Policy Kind）+ `ExprEval::compile`（Expression IR）の
  * 上に実行する。専用コンポーネントの実装は handler registry（catalog名 → 実装。境界注入）で
  * 名前解決して委譲する。
  *
@@ -53,6 +53,23 @@ namespace LiteDbModel\Runtime\BehaviorContracts;
 
 final class Behavior
 {
+    /** ノード結果 path の root（`ErrorDetail.field` は `result` から綴る — scp-error.md）。 */
+    private const RESULT_ROOT = 'result';
+
+    /**
+     * 実行に要る構造は compile 済み IR に固定なので、解決は **IR handle ごとに 1 回**だけ（call ごとに
+     * 組み直すと、行数の少ない op ではその組み立て代が interpreter の支配項になる — #287。#280 で潰した
+     * outType 走査と同じ「静的に決まるものを実行ごとに再計算している」型で、conformer もこの解決の
+     * 1 フィールドとしてここに畳んである）。key は handle 自身の弱参照なので、handle が落ちればこの
+     * cache も落ちる。内側の key は {@see self::prepare} が綴る**タグ付き** key。
+     *
+     * @var \WeakMap<CompiledIr, array<string, PreparedComponent>>|null
+     */
+    private static ?\WeakMap $prepared = null;
+
+    /** {@see self::passConformer} の唯一のインスタンス（`===` で「検査なし」を畳むための同一性）。 */
+    private static ?\Closure $passConformer = null;
+
     /**
      * runBehavior — component-graph IR の統合実行 IF（scp-ir-architecture.md §7）。
      *
@@ -69,77 +86,22 @@ final class Behavior
      */
     public static function runBehavior(CompiledIr $ir, array $handlers, array $input = [], ?string $entry = null): mixed
     {
-        // 出自ゲート（#208・TS runBehavior の assertCompiled と同位置）。型で要求し、handle から doc を開く。
-        $components = get_object_vars(CompiledIr::assertCompiled($ir)->doc)['components'] ?? [];
-        if (!is_array($components)) {
-            $components = [];
-        }
+        // 出自ゲート（#208・TS runBehavior の assertCompiled と同位置）。型で要求し、entry component の
+        // 構造は IR ごとに 1 回だけ解決する（#287）。
+        $prep = self::prepare(CompiledIr::assertCompiled($ir), $entry);
+        $body = $prep->body;
+        $idToIndex = $prep->idToIndex;
+        $conformers = $prep->conformers;
+        $ops = $prep->ops;
+        $nodeExprs = $prep->nodeExprs;
+        $declaredPorts = $prep->inputPorts;
 
-        $comp = null;
-        if ($entry !== null) {
-            foreach ($components as $c) {
-                if ($c instanceof \stdClass && (get_object_vars($c)['name'] ?? null) === $entry) {
-                    $comp = $c;
-                    break;
-                }
+        // 省略された opt input port（`required:false`）を null に束縛する。どの port が省略可かは宣言
+        // （=IR）で決まっているので {@see PreparedComponent} が解決済み。ここは値の束縛だけ。
+        foreach ($prep->optionalPorts as $portName) {
+            if (!array_key_exists($portName, $input)) {
+                $input[$portName] = null;
             }
-        } elseif (count($components) > 0) {
-            $comp = $components[0];
-        }
-        if (!($comp instanceof \stdClass)) {
-            BehaviorFailure::raise('UNKNOWN_ENTRY', "component '" . ($entry ?? '<first>') . "' not found in IR");
-        }
-
-        $compProps = get_object_vars($comp);
-
-        // `{opt:T}` と宣言された input port（PortSchema `required:false`）は **省略可**で、値域は
-        // `T | null`。「キーごと省略」と「null を渡す」は同じ「値が無い」の 2 通りの綴りなので、省略
-        // されたキーは null に束縛する（可搬 IR が既に持つ宣言を読むだけ）。required な port と未宣言
-        // の名前は束縛しない: 未束縛のまま参照されれば UNKNOWN_BINDING（fail-closed はそのまま）。
-        $declaredPorts = $compProps['inputPorts'] ?? null;
-        if ($declaredPorts instanceof \stdClass) {
-            foreach (get_object_vars($declaredPorts) as $portName => $portSchema) {
-                if (!($portSchema instanceof \stdClass)) {
-                    continue;
-                }
-                if ((get_object_vars($portSchema)['required'] ?? null) !== false) {
-                    continue;
-                }
-                if (!array_key_exists((string) $portName, $input)) {
-                    $input[(string) $portName] = null;
-                }
-            }
-        }
-
-        /** @var array<int,\stdClass> $body */
-        $body = $compProps['body'] ?? [];
-
-        // id → index。
-        $idToIndex = [];
-        foreach ($body as $i => $node) {
-            $idToIndex[(string) (get_object_vars($node)['id'] ?? '')] = $i;
-        }
-
-        // body ノード → OpSpec（runPlan の staging に載せる）。parent は id → index に解決。
-        $ops = [];
-        foreach ($body as $node) {
-            $id = (string) (get_object_vars($node)['id'] ?? '');
-            $pid = self::nodeParent($node);
-            $parent = ($pid !== null) ? ($idToIndex[$pid] ?? null) : null;
-            $op = ['id' => $id, 'parent' => $parent];
-            $bf = self::nodeBindField($node);
-            if ($bf !== null) {
-                $op['bindField'] = $bf;
-            }
-            $rk = self::nodeRelationKind($node);
-            if ($rk !== null) {
-                $op['relationKind'] = $rk;
-            }
-            $pol = self::nodePolicy($node);
-            if ($pol !== null) {
-                $op['policy'] = $pol;
-            }
-            $ops[] = $op;
         }
 
         // 各 op 実行時に参照するスコープ: input params + それまでに ok になった node 結果（id → Value）。
@@ -148,49 +110,42 @@ final class Behavior
             return array_merge($input, $results);
         };
 
-        $exec = static function (array $op, mixed $_bound) use (&$body, $idToIndex, $handlers, $baseScope, $declaredPorts): array {
+        $exec = static function (array $op, mixed $_bound) use (&$body, $idToIndex, $nodeExprs, $handlers, $baseScope, $declaredPorts): array {
             $idx = $idToIndex[$op['id']];
             $node = $body[$idx];
+            $exprs = $nodeExprs[$idx];
             $props = get_object_vars($node);
             $kind = self::nodeKind($node);
 
             if ($kind === 'cond') {
-                // Conditional は純 Expression。cond 演算子（[if,then,else]）へ lower して評価。
-                $c = get_object_vars($props['cond']);
-                $condNode = new \stdClass();
-                $condNode->cond = [$c['if'] ?? null, $c['then'] ?? null, $c['else'] ?? null];
-                return ['ok' => ExprEval::evaluate($condNode, $baseScope())];
+                return ['ok' => ($exprs->cond)($baseScope())];
             }
 
             if ($kind === 'map') {
                 $m = get_object_vars($props['map']);
                 $over = self::resolveOverArray(
-                    ExprEval::evaluate($m['over'] ?? null, $baseScope()),
+                    ($exprs->over)($baseScope()),
                     $m['over'] ?? null,
                     $body,
-                    $declaredPorts instanceof \stdClass ? $declaredPorts : null,
+                    $declaredPorts,
                     (string) $op['id'],
                     'MAP_OVER_NOT_ARRAY',
                     'map'
                 );
                 $component = $m['component'] ?? null;
+                $whenC = $exprs->when; // guard が宣言されていなければ null
                 // 純式 map（Component 呼びなし・#222）: 各要素を `as` 束縛入りスコープで評価するだけ。
                 // handler も要素ごとの Failure も無い（elementPolicy / batched / into / policy は guard が拒否）。
-                if ($component === null && array_key_exists('transform', $m)) {
+                if ($exprs->transform !== null) {
                     $asT = (string) ($m['as'] ?? '');
-                    $hasWhenT = array_key_exists('when', $m);
                     $outT = [];
                     foreach ($over as $el) {
                         $scope = $baseScope();
                         $scope[$asT] = $el;
-                        if ($hasWhenT) {
-                            $condNode = new \stdClass();
-                            $condNode->cond = [$m['when'], true, false];
-                            if (ExprEval::evaluate($condNode, $scope) !== true) {
-                                continue;
-                            }
+                        if ($whenC !== null && $whenC($scope) !== true) {
+                            continue;
                         }
-                        $outT[] = ExprEval::evaluate($m['transform'], $scope);
+                        $outT[] = ($exprs->transform)($scope);
                     }
                     return ['ok' => $outT];
                 }
@@ -199,20 +154,13 @@ final class Behavior
                 }
                 $handler = $handlers[$component];
                 $as = (string) ($m['as'] ?? '');
-                $mports = $m['ports'] ?? new \stdClass();
                 $ctx = ['nodeId' => $op['id'], 'component' => $component];
-                $hasWhen = array_key_exists('when', $m);
                 $batched = ($m['batched'] ?? null) === true;
                 $hasInto = array_key_exists('into', $m);
 
-                // per-element guard（v2）: `{cond:[when,true,false]}` へ lower（strict-bool）。
-                $keep = static function (array $scope) use ($hasWhen, $m): bool {
-                    if (!$hasWhen) {
-                        return true;
-                    }
-                    $condNode = new \stdClass();
-                    $condNode->cond = [$m['when'], true, false];
-                    return ExprEval::evaluate($condNode, $scope) === true;
+                // per-element guard（v2）: `{cond:[when,true,false]}` へ lower 済み（strict-bool）。
+                $keep = static function (array $scope) use ($whenC): bool {
+                    return $whenC === null ? true : $whenC($scope) === true;
                 };
 
                 // Element Error Policy Kind（scp-error.md）。既定 error; 未知 kind は fail-closed。
@@ -237,7 +185,7 @@ final class Behavior
                         if (!$keep($scope)) {
                             continue;
                         }
-                        $items[] = (object) self::evalPorts($mports, $scope);
+                        $items[] = (object) self::evalPorts($exprs->ports, $scope);
                         $keptIdx[] = $i;
                     }
                     if (count($items) > 0) {
@@ -262,7 +210,7 @@ final class Behavior
                         if (!$keep($scope)) {
                             continue;
                         }
-                        $ports = self::evalPorts($mports, $scope);
+                        $ports = self::evalPorts($exprs->ports, $scope);
                         $outcome = $handler($ports, $ctx + ['bound' => $el]);
                         if (array_key_exists('error', $outcome)) {
                             // Element Error Policy（scp-error.md）: skip は失敗要素を落として続行
@@ -316,10 +264,10 @@ final class Behavior
                 // connection {items, cursor:null}。整列制約（MAP_BATCH_RESULT_MISMATCH）は適用されない。
                 $f = get_object_vars($props['fanout']);
                 $over = self::resolveOverArray(
-                    ExprEval::evaluate($f['over'] ?? null, $baseScope()),
+                    ($exprs->over)($baseScope()),
                     $f['over'] ?? null,
                     $body,
-                    $declaredPorts instanceof \stdClass ? $declaredPorts : null,
+                    $declaredPorts,
                     (string) $op['id'],
                     'FANOUT_OVER_NOT_ARRAY',
                     'fanout'
@@ -330,12 +278,11 @@ final class Behavior
                 }
                 $handler = $handlers[$component];
                 $as = (string) ($f['as'] ?? '');
-                $fports = $f['ports'] ?? new \stdClass();
                 $itemsPorts = [];
                 foreach ($over as $el) {
                     $scope = $baseScope();
                     $scope[$as] = $el;
-                    $itemsPorts[] = (object) self::evalPorts($fports, $scope);
+                    $itemsPorts[] = (object) self::evalPorts($exprs->ports, $scope);
                 }
                 $conn = new \stdClass();
                 $conn->items = [];
@@ -363,39 +310,29 @@ final class Behavior
                 BehaviorFailure::raise('UNKNOWN_COMPONENT', "component '{$component}' has no handler (fail-closed)");
             }
             $handler = $handlers[$component];
-            $ports = self::evalPorts($props['ports'] ?? new \stdClass(), $baseScope());
+            $ports = self::evalPorts($exprs->ports, $baseScope());
             return $handler($ports, ['nodeId' => $op['id'], 'component' => $component]);
         };
 
         // runPlan は stage 実行・Skip 伝播・Policy Kind を担う。成功結果を results へ写す薄いラッパ。
-        $wrappedExec = static function (array $op, mixed $bound) use ($exec, &$results, &$body, $idToIndex): array {
+        $wrappedExec = static function (array $op, mixed $bound) use ($exec, &$results, $conformers): array {
             $outcome = $exec($op, $bound);
             if (array_key_exists('ok', $outcome)) {
                 // outType conformance（scp-error.md）: 宣言は主張であり、ここで（runtime が宣言型と
                 // 返り値の両方を持つ地点で）検査する。不一致は構造化 Error Value を載せて loud に落とし、
                 // 値は宣言型へ正規化する（int→float widen / 欠落 opt→null）ので results が de-box と一致する。
-                $node = $body[$idToIndex[$op['id']]];
-                $nodeProps = get_object_vars($node);
+                // 宣言型の解決は compile 済み IR ごとに 1 回だけ（{@see self::prepare}）。
                 $value = $outcome['ok'];
-                if (array_key_exists('outType', $nodeProps)) {
-                    $value = self::assertConformsToOutType($op['id'], $value, self::resultTypeOf($nodeProps, $nodeProps['outType']), 'result');
+                $conform = $conformers[$op['id']];
+                if ($conform !== null) {
+                    $value = $conform($value);
                 }
                 $results[$op['id']] = $value;
             }
             return $outcome;
         };
 
-        $plan = $compProps['plan'] ?? null;
-        $planSpec = null;
-        if ($plan instanceof \stdClass) {
-            $pp = get_object_vars($plan);
-            $planSpec = [
-                'groups' => $pp['groups'] ?? [],
-                'concurrency' => $pp['concurrency'] ?? 1,
-            ];
-        }
-
-        $run = Plan::runPlan($planSpec, $ops, $wrappedExec);
+        $run = Plan::runPlan($prep->planSpec, $ops, $wrappedExec);
 
         // Skip されたノードは未生成表現を results に載せる（output の ref が読めるように）。
         foreach ($run['states'] as $i => $s) {
@@ -405,7 +342,7 @@ final class Behavior
         }
 
         // output（Φ 合流）を Expression IR として評価。
-        return ExprEval::evaluate($compProps['output'] ?? null, $baseScope());
+        return ($prep->output)($baseScope());
     }
 
     // ── ノード種判定 ─────────────────────────────────────────────────────────
@@ -529,20 +466,83 @@ final class Behavior
     }
 
     /**
-     * ports オブジェクトの各値を Expression IR として評価する（key はソートせず宣言順のまま）。
-     * FORBIDDEN_KEY 等は ExprEval が投げる（fail-closed）。
+     * ports オブジェクトの各式を compile 済み Closure へ解決する（key はソートせず宣言順のまま）。
      *
      * @param mixed $ports stdClass（ポート配線）。
-     * @param array<string,mixed> $scope
-     * @return array<string,mixed>
+     * @return array<int,array{0:string,1:\Closure}>
      */
-    private static function evalPorts(mixed $ports, array $scope): array
+    private static function compilePorts(mixed $ports): array
     {
         $out = [];
         if ($ports instanceof \stdClass) {
             foreach (get_object_vars($ports) as $k => $v) {
-                $out[$k] = ExprEval::evaluate($v, $scope);
+                $out[] = [$k, ExprEval::compile($v)];
             }
+        }
+        return $out;
+    }
+
+    /**
+     * ノードの式を解決する。種の判定順は {@see self::nodeKind} と同じ。
+     *
+     * 種を持たないノードは式も持たない（UNKNOWN_NODE_KIND は {@see self::nodeKind} が実行時に
+     * 出す — 解決は total で、実行されないノードのために失敗しない）。
+     */
+    private static function compileNodeExprs(\stdClass $node): NodeExprs
+    {
+        $props = get_object_vars($node);
+        if (array_key_exists('fanout', $props)) {
+            $f = get_object_vars($props['fanout']);
+            return new NodeExprs(
+                over: ExprEval::compile($f['over'] ?? null),
+                ports: self::compilePorts($f['ports'] ?? new \stdClass()),
+            );
+        }
+        if (array_key_exists('map', $props)) {
+            $m = get_object_vars($props['map']);
+            // 要素本体の 2 形は排他: 純式（transform）か Component 呼び（component + ports）。
+            $isTransform = ($m['component'] ?? null) === null && array_key_exists('transform', $m);
+            $when = null;
+            if (array_key_exists('when', $m)) {
+                // per-element guard（v2）: `{cond:[when,true,false]}` へ lower（strict-bool）。
+                $whenNode = new \stdClass();
+                $whenNode->cond = [$m['when'], true, false];
+                $when = ExprEval::compile($whenNode);
+            }
+            return new NodeExprs(
+                over: ExprEval::compile($m['over'] ?? null),
+                when: $when,
+                transform: $isTransform ? ExprEval::compile($m['transform']) : null,
+                ports: $isTransform ? [] : self::compilePorts($m['ports'] ?? new \stdClass()),
+            );
+        }
+        if (array_key_exists('cond', $props)) {
+            // Conditional は純 Expression。cond 演算子（[if,then,else]）へ lower して評価する。
+            $c = get_object_vars($props['cond']);
+            $condNode = new \stdClass();
+            $condNode->cond = [$c['if'] ?? null, $c['then'] ?? null, $c['else'] ?? null];
+            return new NodeExprs(cond: ExprEval::compile($condNode));
+        }
+        if (array_key_exists('component', $props)) {
+            return new NodeExprs(ports: self::compilePorts($props['ports'] ?? new \stdClass()));
+        }
+        return new NodeExprs();
+    }
+
+    /**
+     * compile 済み ports 配線を評価する（宣言順は {@see self::compilePorts} が保持済み）。
+     * FORBIDDEN_KEY 等は compile 済み式が投げる（fail-closed — 組み立ては total で、送出は
+     * その位置が評価されたとき）。
+     *
+     * @param array<int,array{0:string,1:\Closure}> $ports
+     * @param array<string,mixed> $scope
+     * @return array<string,mixed>
+     */
+    private static function evalPorts(array $ports, array $scope): array
+    {
+        $out = [];
+        foreach ($ports as [$k, $f]) {
+            $out[$k] = $f($scope);
         }
         return $out;
     }
@@ -840,90 +840,343 @@ final class Behavior
     }
 
     /**
-     * handler 結果を宣言 outType に照らして検査し、**その型の値へ正規化して返す**（scp-error.md）。
+     * 積まれた segment から field path を確定し、Error Value（scp-error.md）を送出する。
+     *
+     * @return never
+     */
+    private static function raiseConform(string $nodeId, ConformPending $e): never
+    {
+        $field = self::RESULT_ROOT . implode('', array_reverse($e->segs));
+        if ($e->prop === null) {
+            self::conformFail('TYPE_MISMATCH', "node '{$nodeId}': {$field}: expected {$e->what}, got " . self::wireTypeName($e->actual), 'typeMismatch', $nodeId, $field, $e->expected, $e->actual, true);
+        }
+        self::conformFail('MISSING_PROP', "node '{$nodeId}': {$field}: missing property .{$e->prop}", 'missingField', $nodeId, "{$field}.{$e->prop}", $e->expected, null, false);
+    }
+
+    /** 検査を持たない宣言型（不透明ワイヤ値 `value`）の恒等。同一インスタンスなので `===` で畳める。 */
+    private static function passConformer(): \Closure
+    {
+        return self::$passConformer ??= static fn (mixed $v): mixed => $v;
+    }
+
+    /**
+     * 宣言 PortableType を **1 回だけ**解決して、値を検査＋正規化する Closure にする。
+     *
+     * 宣言型は IR に固定なので、型を歩くのは compile 時の 1 回で足りる。値ごとに歩き直すと、走査が
+     * 行数×フィールド数に比例して interpreter の支配項になる（#280 — php で 72% を占めていた）。
+     * 返る Closure は型 dispatch も path 組み立ても持たない。
+     *
      * 意味論は emitter の de-box と厳密一致させる（検査だけでなく値も同じ形へ正規化する）:
      *   - float は int を受けて **値を float へ widen**（de-box の ParseFloat と同一・int のまま返すと発散）。
      *   - opt は null 許容。宣言 obj フィールドのキー欠落は opt なら null へ materialize
      *     （de-box の absent→None と同一・MISSING_PROP にしない）。required 欠落は MISSING_PROP のまま。
-     *   - obj は宣言フィールドを検査し、未宣言の余剰キーはそのまま通す（本 ruling の対象外）。
+     *   - obj は**宣言フィールドだけ**を組み直す。宣言に無いキーは落とす（#233 — de-box は宣言型に対して
+     *     total で、宣言に無いキーは「位置」ではない）。
+     * 宣言と実物がずれた偽注記は loud に落とす。
      *
      * @param mixed $t
-     * @return mixed 正規化後の値
      */
-    private static function assertConformsToOutType(string $nodeId, mixed $v, mixed $t, string $field): mixed
+    private static function compileConformer(mixed $t): \Closure
     {
         if (is_string($t)) {
-            if ($t === 'float' && is_int($v) && !is_bool($v)) {
-                return (float) $v; // int → float へ widen（de-box: ParseFloat と同一）
+            switch ($t) {
+                case 'string':
+                    return static function (mixed $v): mixed {
+                        if (!is_string($v)) {
+                            throw new ConformPending('string', 'string', $v, null);
+                        }
+                        return $v;
+                    };
+                case 'int':
+                    return static function (mixed $v): mixed {
+                        // #261: 整数値の float variant は同じ値の別綴りなので厳密に narrow する（float 側の
+                        // widening の鏡）。非整数 / i64 の外は LOUD のまま（fail-closed 境界つきの厳密変換
+                        // であって fallback ではない）。
+                        if (is_float($v) && $v === floor($v) && $v >= -9223372036854775808.0 && $v < 9223372036854775808.0) {
+                            return (int) $v;
+                        }
+                        if (!is_int($v) || is_bool($v)) {
+                            throw new ConformPending('int', 'int', $v, null);
+                        }
+                        return $v;
+                    };
+                case 'float':
+                    return static function (mixed $v): mixed {
+                        if (is_int($v) && !is_bool($v)) {
+                            return (float) $v; // int → float へ widen（de-box: ParseFloat と同一）
+                        }
+                        if (!is_float($v)) {
+                            throw new ConformPending('float', 'float', $v, null);
+                        }
+                        return $v;
+                    };
+                case 'bool':
+                    return static function (mixed $v): mixed {
+                        if (!is_bool($v)) {
+                            throw new ConformPending('bool', 'bool', $v, null);
+                        }
+                        return $v;
+                    };
+                case 'null':
+                    return static function (mixed $v): mixed {
+                        if ($v !== null) {
+                            throw new ConformPending('null', 'null', $v, null);
+                        }
+                        return $v;
+                    };
+                default:
+                    // 不透明ワイヤ値 `value`（wirePassthrough — guard がこの位置を fail-closed で許す）。
+                    return self::passConformer();
             }
-            // #261: 整数値の float variant は同じ値の別綴りなので厳密に narrow する（上の widening の鏡）。
-            // 非整数 / i64 の外は LOUD のまま（fail-closed 境界つきの厳密変換であって fallback ではない）。
-            if ($t === 'int' && is_float($v) && $v === floor($v) && $v >= -9223372036854775808.0 && $v < 9223372036854775808.0) {
-                return (int) $v;
-            }
-            $ok = match ($t) {
-                'string' => is_string($v),
-                'int' => is_int($v) && !is_bool($v),
-                'float' => is_float($v),
-                'bool' => is_bool($v),
-                'null' => $v === null,
-                default => true,
-            };
-            if (!$ok) {
-                self::conformFail('TYPE_MISMATCH', "node '{$nodeId}': {$field}: expected {$t}, got " . self::wireTypeName($v), 'typeMismatch', $nodeId, $field, $t, $v, true);
-            }
-            return $v;
         }
         if (!($t instanceof \stdClass)) {
-            return $v;
+            return self::passConformer();
         }
         $props = get_object_vars($t);
         if (array_key_exists('opt', $props)) {
-            if ($v === null) {
-                return null;
+            $inner = self::compileConformer($props['opt']);
+            if ($inner === self::passConformer()) {
+                return self::passConformer(); // opt(不透明) は恒等（null も非 null も素通し）
             }
-            return self::assertConformsToOutType($nodeId, $v, $props['opt'], $field);
+            return static function (mixed $v) use ($inner): mixed {
+                return $v === null ? null : $inner($v);
+            };
         }
         if (array_key_exists('arr', $props)) {
-            if (!is_array($v) || !array_is_list($v)) {
-                self::conformFail('TYPE_MISMATCH', "node '{$nodeId}': {$field}: expected arr, got " . self::wireTypeName($v), 'typeMismatch', $nodeId, $field, $t, $v, true);
+            $elem = self::compileConformer($props['arr']);
+            if ($elem === self::passConformer()) {
+                // `{arr:"value"}` — 出力ワイヤ透過ノードが取り得る 2 形のうちの片方（もう片方は素の
+                // `value`）。要素は AS-IS なので、走らせるのは配列であることの検査だけ。
+                return static function (mixed $v) use ($t): mixed {
+                    if (!is_array($v) || !array_is_list($v)) {
+                        throw new ConformPending('arr', $t, $v, null);
+                    }
+                    return $v;
+                };
             }
-            $out = [];
-            foreach ($v as $i => $el) {
-                $out[] = self::assertConformsToOutType($nodeId, $el, $props['arr'], "{$field}[{$i}]");
-            }
-            return $out;
+            return static function (mixed $v) use ($t, $elem): mixed {
+                if (!is_array($v) || !array_is_list($v)) {
+                    throw new ConformPending('arr', $t, $v, null);
+                }
+                $out = [];
+                $i = 0;
+                try {
+                    foreach ($v as $i => $el) {
+                        $out[] = $elem($el);
+                    }
+                } catch (ConformPending $e) {
+                    $e->segs[] = "[{$i}]";
+                    throw $e;
+                }
+                return $out;
+            };
         }
         if (array_key_exists('map', $props)) {
-            if (!($v instanceof \stdClass)) {
-                self::conformFail('TYPE_MISMATCH', "node '{$nodeId}': {$field}: expected map, got " . self::wireTypeName($v), 'typeMismatch', $nodeId, $field, $t, $v, true);
-            }
-            $out = new \stdClass();
-            foreach (get_object_vars($v) as $k => $mv) {
-                $out->{$k} = self::assertConformsToOutType($nodeId, $mv, $props['map'], "{$field}.{$k}");
-            }
-            return $out;
+            $val = self::compileConformer($props['map']);
+            return static function (mixed $v) use ($t, $val): mixed {
+                if (!($v instanceof \stdClass)) {
+                    throw new ConformPending('map', $t, $v, null);
+                }
+                $out = new \stdClass();
+                $k = '';
+                try {
+                    foreach (get_object_vars($v) as $k => $mv) {
+                        $out->{$k} = $val($mv);
+                    }
+                } catch (ConformPending $e) {
+                    $e->segs[] = ".{$k}";
+                    throw $e;
+                }
+                return $out;
+            };
         }
         if (array_key_exists('obj', $props) && $props['obj'] instanceof \stdClass) {
-            if (!($v instanceof \stdClass)) {
-                self::conformFail('TYPE_MISMATCH', "node '{$nodeId}': {$field}: expected obj, got " . self::wireTypeName($v), 'typeMismatch', $nodeId, $field, $t, $v, true);
-            }
-            // 宣言フィールドだけを組み直す（#233 — de-box は宣言型に対して total。宣言に無いキーは
-            // 「位置」ではなく、typed-native には載せる場所が無いので落とす）。
-            $out = new \stdClass();
-            $vProps = get_object_vars($v);
+            // フィールドの `opt` はこの loop 自身が読む（欠落キーの分岐が既に読んでいる同じ宣言）ので、
+            // compile するのは **opt を剥がした内側**の型。`opt` を別の Closure で包むと、null 許容
+            // フィールド 1 つにつき呼び出しが 1 段増える（実測ワークロードでは全 conformer 呼び出しの
+            // 約半分がそれだった）。
+            $plan = [];
             foreach (get_object_vars($props['obj']) as $k => $ft) {
-                if (!array_key_exists($k, $vProps)) {
-                    if ($ft instanceof \stdClass && array_key_exists('opt', get_object_vars($ft))) {
-                        $out->{$k} = null; // absent opt → null（de-box: absent→None）
-                        continue;
-                    }
-                    self::conformFail('MISSING_PROP', "node '{$nodeId}': {$field}: missing property .{$k}", 'missingField', $nodeId, "{$field}.{$k}", $ft, null, false);
-                }
-                $out->{$k} = self::assertConformsToOutType($nodeId, $vProps[$k], $ft, "{$field}.{$k}");
+                $isOpt = $ft instanceof \stdClass && array_key_exists('opt', get_object_vars($ft));
+                $inner = $isOpt ? get_object_vars($ft)['opt'] : $ft;
+                $plan[] = [$k, $isOpt, $ft, self::compileConformer($inner)];
             }
-            return $out;
+            return static function (mixed $v) use ($t, $plan): mixed {
+                if (!($v instanceof \stdClass)) {
+                    throw new ConformPending('obj', $t, $v, null);
+                }
+                $out = new \stdClass();
+                $vProps = get_object_vars($v);
+                $k = '';
+                $ftMissing = null;
+                $missing = false;
+                try {
+                    foreach ($plan as [$k, $isOpt, $ft, $check]) {
+                        if (array_key_exists($k, $vProps)) {
+                            $fv = $vProps[$k];
+                            $out->{$k} = ($isOpt && $fv === null) ? null : $check($fv);
+                        } elseif ($isOpt) {
+                            $out->{$k} = null; // absent opt → null（de-box: absent→None）
+                        } else {
+                            $ftMissing = $ft;
+                            $missing = true;
+                            break;
+                        }
+                    }
+                } catch (ConformPending $e) {
+                    $e->segs[] = ".{$k}";
+                    throw $e;
+                }
+                if ($missing) {
+                    // MISSING_PROP の field は「親 path + .k」を detail 側だけが綴る（message は親 path）。
+                    // この階層の segment は搬送体が prop として持つので、ここでは積まない。
+                    throw new ConformPending(null, $ftMissing, null, (string) $k);
+                }
+                return $out;
+            };
         }
-        return $v;
+        return self::passConformer();
     }
-}
+
+    /**
+     * ノードの宣言 outType を解決して「結果値を検査＋正規化する Closure」にする（無ければ null）。
+     *
+     * 注記の無いノードは検査しない（宣言が無ければ主張も無い）。不透明ワイヤ値そのものを宣言した
+     * ノードも検査を持たないので、呼び出し自体を省いて null にする。
+     */
+    private static function compileNodeConformer(\stdClass $node, string $nodeId): ?\Closure
+    {
+        $props = get_object_vars($node);
+        if (!array_key_exists('outType', $props)) {
+            return null;
+        }
+        $check = self::compileConformer(self::resultTypeOf($props, $props['outType']));
+        if ($check === self::passConformer()) {
+            return null;
+        }
+        return static function (mixed $v) use ($check, $nodeId): mixed {
+            try {
+                return $check($v);
+            } catch (ConformPending $e) {
+                self::raiseConform($nodeId, $e);
+            }
+        };
+    }
+
+    /**
+     * この handle の entry component を実行できる形へ解決する（IR handle × entry ごとに 1 回だけ）。
+     *
+     * 解決するもの（全て compile 済み IR と entry 名だけで決まる）は {@see PreparedComponent} を参照。
+     *
+     * @throws BehaviorFailure UNKNOWN_ENTRY（解決できない entry は cache しない — 次の call も同じく落ちる）。
+     */
+    private static function prepare(CompiledIr $ir, ?string $entry): PreparedComponent
+    {
+        self::$prepared ??= new \WeakMap();
+        // cache key は **タグ付き**にする。`$entry` をそのまま key にして「省略」を番兵**文字列**で綴ると、
+        // 番兵が component 名と同じ key 空間に入る — `component.name` は guard が string であることしか
+        // 要求しない（`ts/src/guard.ts:234`）ので、その文字列を名前に持つ entry が「省略」の解決を掴み、
+        // 存在しない entry が warm cache で UNKNOWN_ENTRY を出さずに先頭 component を返す（fail-open）。
+        // 'f' は 1 文字・名前側は必ず 'n' 始まりなので両者は決して一致せず、'n' 接頭辞は数値文字列 key の
+        // int 化も塞ぐ。（python は key が `None` で、文字列とは別の key なので構造的に起きない。）
+        $key = $entry === null ? 'f' : 'n' . $entry;
+        /** @var array<string, PreparedComponent> $perIr */
+        $perIr = self::$prepared[$ir] ?? [];
+        if (isset($perIr[$key])) {
+            return $perIr[$key];
+        }
+
+        $components = get_object_vars($ir->doc)['components'] ?? [];
+        if (!is_array($components)) {
+            $components = [];
+        }
+        $comp = null;
+        if ($entry !== null) {
+            foreach ($components as $c) {
+                if ($c instanceof \stdClass && (get_object_vars($c)['name'] ?? null) === $entry) {
+                    $comp = $c;
+                    break;
+                }
+            }
+        } elseif (count($components) > 0) {
+            $comp = $components[0];
+        }
+        if (!($comp instanceof \stdClass)) {
+            BehaviorFailure::raise('UNKNOWN_ENTRY', "component '" . ($entry ?? '<first>') . "' not found in IR");
+        }
+        $compProps = get_object_vars($comp);
+
+        // `{opt:T}` と宣言された input port（PortSchema `required:false`）は **省略可**で、値域は
+        // `T | null`。「キーごと省略」と「null を渡す」は同じ「値が無い」の 2 通りの綴りなので、省略
+        // されたキーは null に束縛する（可搬 IR が既に持つ宣言を読むだけ）。required な port と未宣言
+        // の名前は束縛しない: 未束縛のまま参照されれば UNKNOWN_BINDING（fail-closed はそのまま）。
+        $inputPorts = $compProps['inputPorts'] ?? null;
+        $inputPorts = $inputPorts instanceof \stdClass ? $inputPorts : null;
+        $optionalPorts = [];
+        if ($inputPorts !== null) {
+            foreach (get_object_vars($inputPorts) as $portName => $portSchema) {
+                if ($portSchema instanceof \stdClass && (get_object_vars($portSchema)['required'] ?? null) === false) {
+                    $optionalPorts[] = (string) $portName;
+                }
+            }
+        }
+
+        /** @var array<int,\stdClass> $body */
+        $body = $compProps['body'] ?? [];
+
+        // id → index、nodeId → 結果 conformer、および index → compile 済みの式。
+        $idToIndex = [];
+        $conformers = [];
+        $nodeExprs = [];
+        foreach ($body as $i => $node) {
+            $id = (string) (get_object_vars($node)['id'] ?? '');
+            $idToIndex[$id] = $i;
+            $conformers[$id] = self::compileNodeConformer($node, $id);
+            $nodeExprs[$i] = self::compileNodeExprs($node);
+        }
+
+        // body ノード → OpSpec（runPlan の staging に載せる）。parent は id → index に解決。
+        $ops = [];
+        foreach ($body as $node) {
+            $id = (string) (get_object_vars($node)['id'] ?? '');
+            $pid = self::nodeParent($node);
+            $op = ['id' => $id, 'parent' => ($pid !== null) ? ($idToIndex[$pid] ?? null) : null];
+            $bf = self::nodeBindField($node);
+            if ($bf !== null) {
+                $op['bindField'] = $bf;
+            }
+            $rk = self::nodeRelationKind($node);
+            if ($rk !== null) {
+                $op['relationKind'] = $rk;
+            }
+            $pol = self::nodePolicy($node);
+            if ($pol !== null) {
+                $op['policy'] = $pol;
+            }
+            $ops[] = $op;
+        }
+
+        $plan = $compProps['plan'] ?? null;
+        $planSpec = null;
+        if ($plan instanceof \stdClass) {
+            $pp = get_object_vars($plan);
+            $planSpec = [
+                'groups' => $pp['groups'] ?? [],
+                'concurrency' => $pp['concurrency'] ?? 1,
+            ];
+        }
+
+        $perIr[$key] = new PreparedComponent(
+            $inputPorts,
+            $optionalPorts,
+            $body,
+            $idToIndex,
+            $conformers,
+            $ops,
+            $nodeExprs,
+            $planSpec,
+            ExprEval::compile($compProps['output'] ?? null),
+        );
+        self::$prepared[$ir] = $perIr;
+        return $perIr[$key];
+    }}

@@ -51,8 +51,8 @@ const repoRoot = resolve(scriptDir, '..');
 //     the baked spec versions (spec-skew reject) and recomputes `Fingerprint::componentGraph($ir)`
 //     against the baked fingerprint (tamper/stale reject). Both classes are therefore in the
 //     runtime closure and MUST be vendored (Fingerprint pulls FingerprintFailure).
-// `Codec`/`Envelope`/`template`/`canonical` remain outside the closure (no call sites in the
-// vendored set) and are intentionally not vendored.
+// `Codec`/`Envelope`/`template` remain outside the closure (no call sites in the vendored set) and
+// are intentionally not vendored.
 const VENDORED_FILES = [
   // Namespace-level shared constants (bc 0.2.3, foo-ogawa/behavior-contracts#… split
   // FORBIDDEN_OBJECT_KEY out of ExprEval.php into its own file-scope const so ExprEval and
@@ -67,6 +67,16 @@ const VENDORED_FILES = [
   'Plan.php',
   'BehaviorFailure.php',
   'Behavior.php',
+  // Behavior's per-compiled-IR preparation: each component's node expressions are resolved into
+  // closures once (PreparedComponent holds them per component, NodeExprs per node).
+  'PreparedComponent.php',
+  'NodeExprs.php',
+  // Behavior's result-type conform check: ConformPending carries a mismatch up to the one place that
+  // builds the Error Value, and that Error Value renders the offending value with Canonical (which
+  // raises CanonicalFailure).
+  'ConformPending.php',
+  'CanonicalFailure.php',
+  'Canonical.php',
   // Require-time gates of a bc `--lang php` GENERATED native module (#141). SpecVersions is
   // standalone consts; Fingerprint recomputes the portable-IR fnv1a64 and raises FingerprintFailure.
   'SpecVersions.php',

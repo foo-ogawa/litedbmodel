@@ -29,28 +29,7 @@ declare(strict_types=1);
  */
 
 $root = dirname(__DIR__, 2); // php/conformance -> php -> repo root
-require $root . '/php/src/BehaviorContracts/Constants.php';
-require $root . '/php/src/BehaviorContracts/ExprFailure.php';
-require $root . '/php/src/BehaviorContracts/ExprEval.php';
-require $root . '/php/src/BehaviorContracts/PlanFailure.php';
-require $root . '/php/src/BehaviorContracts/Plan.php';
-require $root . '/php/src/BehaviorContracts/BehaviorFailure.php';
-require $root . '/php/src/BehaviorContracts/Behavior.php';
-require $root . '/php/src/BehaviorContracts/SpecVersions.php';
-require $root . '/php/src/BehaviorContracts/FingerprintFailure.php';
-require $root . '/php/src/BehaviorContracts/Fingerprint.php';
-require $root . '/php/src/BehaviorContracts/ProvenanceError.php';
-require $root . '/php/src/BehaviorContracts/CompiledIr.php';
-require $root . '/php/src/Dialect.php';
-require $root . '/php/src/SqlFailure.php';
-require $root . '/php/src/TxOptions.php';
-require $root . '/php/src/ExecutionContext.php';
-require $root . '/php/src/ConnectionRouting.php';
-require $root . '/php/src/Middleware.php';
-require $root . '/php/src/StaticBundle.php';
-require $root . '/php/src/Grouping.php';
-require $root . '/php/src/Leaves.php';
-require $root . '/php/src/LiveDb.php';
+require $root . '/php/vendor/autoload.php';
 
 use LiteDbModel\Runtime\Leaves;
 use LiteDbModel\Runtime\LiveDb;

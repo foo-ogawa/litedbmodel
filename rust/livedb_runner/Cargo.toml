@@ -22,7 +22,7 @@ path = "src/main.rs"
 litedbmodel_runtime = { path = "../litedbmodel_runtime", default-features = false }
 # Pin the transitive behavior-contracts to the EXACT version the rust/ workspace lock uses (the runtime
 # is written against that crate API). Not used directly except for the shared BehaviorError type.
-behavior-contracts = { version = "=0.11.17", default-features = false }
+behavior-contracts = { version = "=0.11.20", default-features = false }
 # Parse the pure-JSON corpus + build the machine-comparable result/summary (a runner-only dep).
 serde_json = { version = "1", features = ["preserve_order"] }
 

@@ -4,14 +4,14 @@
 # native dict literal and handed to the EXISTING runtime core (run_behavior) —
 # no execution logic is generated. Handlers are ALWAYS injected at the boundary
 # (IR + {effects,config,hooks}); they are never generated.
-# irFingerprint: fnv1a64:fdda6f008400214e
+# irFingerprint: fnv1a64:79124edb97ea0186
 from behavior_contracts import SPEC_VERSIONS, ProvenanceError, load_compiled_ir, run_behavior
 
 # Spec versions baked at generation time (fail-closed constant comparison at load).
 EXPECTED_SPEC_VERSIONS = {"behavior": 6, "expression": 2, "plan": 1}
 
 # FNV-1a 64 fingerprint of the source portable IR (canonical_json discipline, #208).
-IR_FINGERPRINT = "fnv1a64:fdda6f008400214e"
+IR_FINGERPRINT = "fnv1a64:79124edb97ea0186"
 
 # Component names exposed by bind(), in IR declaration order.
 COMPONENT_NAMES = ("posts", "postsTop", "page", "postsByIds", "feed", "pagedFeed", "optionalOnlyFeed", "quotedOrderFeed", "quotedWhereOrderFeed", "viewFeed", "usersWithPosts", "postsWithAuthor", "usersWithCappedPosts", "usersWithUncappedPosts", "usersWithTopPosts", "createPost", "renamePost", "removePost", "createPostReturning", "renamePostReturning", "removePostReturning", "restatusPostsReturning", "removePostsByAuthorReturning", "typedRows", "createTags", "removeTags", "createDoc", "createLine", "createTagsReturning", "relabelTagsReturning", "removeTagsReturning")
@@ -34,13 +34,13 @@ IR_DOC = {
               "name": "PostsRow",
               "obj": {
                 "author_id": {
-                  "opt": "float"
+                  "opt": "int"
                 },
                 "created_at": {
                   "opt": "string"
                 },
                 "id": {
-                  "opt": "float"
+                  "opt": "int"
                 },
                 "status": {
                   "opt": "string"
@@ -100,13 +100,13 @@ IR_DOC = {
         "arr": {
           "obj": {
             "author_id": {
-              "opt": "float"
+              "opt": "int"
             },
             "created_at": {
               "opt": "string"
             },
             "id": {
-              "opt": "float"
+              "opt": "int"
             },
             "status": {
               "opt": "string"
@@ -129,13 +129,13 @@ IR_DOC = {
               "name": "PostsTopRow",
               "obj": {
                 "author_id": {
-                  "opt": "float"
+                  "opt": "int"
                 },
                 "created_at": {
                   "opt": "string"
                 },
                 "id": {
-                  "opt": "float"
+                  "opt": "int"
                 },
                 "status": {
                   "opt": "string"
@@ -184,13 +184,13 @@ IR_DOC = {
         "arr": {
           "obj": {
             "author_id": {
-              "opt": "float"
+              "opt": "int"
             },
             "created_at": {
               "opt": "string"
             },
             "id": {
-              "opt": "float"
+              "opt": "int"
             },
             "status": {
               "opt": "string"
@@ -213,7 +213,7 @@ IR_DOC = {
               "name": "PageRow",
               "obj": {
                 "id": {
-                  "opt": "float"
+                  "opt": "int"
                 },
                 "title": {
                   "opt": "string"
@@ -279,7 +279,7 @@ IR_DOC = {
         "arr": {
           "obj": {
             "id": {
-              "opt": "float"
+              "opt": "int"
             },
             "title": {
               "opt": "string"
@@ -299,7 +299,7 @@ IR_DOC = {
               "name": "PostsByIdsRow",
               "obj": {
                 "id": {
-                  "opt": "float"
+                  "opt": "int"
                 },
                 "title": {
                   "opt": "string"
@@ -357,7 +357,7 @@ IR_DOC = {
         "arr": {
           "obj": {
             "id": {
-              "opt": "float"
+              "opt": "int"
             },
             "title": {
               "opt": "string"
@@ -377,10 +377,10 @@ IR_DOC = {
               "name": "FeedRow",
               "obj": {
                 "author_id": {
-                  "opt": "float"
+                  "opt": "int"
                 },
                 "id": {
-                  "opt": "float"
+                  "opt": "int"
                 },
                 "status": {
                   "opt": "string"
@@ -574,10 +574,10 @@ IR_DOC = {
         "arr": {
           "obj": {
             "author_id": {
-              "opt": "float"
+              "opt": "int"
             },
             "id": {
-              "opt": "float"
+              "opt": "int"
             },
             "status": {
               "opt": "string"
@@ -600,10 +600,10 @@ IR_DOC = {
               "name": "PagedFeedRow",
               "obj": {
                 "author_id": {
-                  "opt": "float"
+                  "opt": "int"
                 },
                 "id": {
-                  "opt": "float"
+                  "opt": "int"
                 },
                 "status": {
                   "opt": "string"
@@ -816,10 +816,10 @@ IR_DOC = {
         "arr": {
           "obj": {
             "author_id": {
-              "opt": "float"
+              "opt": "int"
             },
             "id": {
-              "opt": "float"
+              "opt": "int"
             },
             "status": {
               "opt": "string"
@@ -842,10 +842,10 @@ IR_DOC = {
               "name": "OptionalOnlyFeedRow",
               "obj": {
                 "author_id": {
-                  "opt": "float"
+                  "opt": "int"
                 },
                 "id": {
-                  "opt": "float"
+                  "opt": "int"
                 },
                 "status": {
                   "opt": "string"
@@ -1026,10 +1026,10 @@ IR_DOC = {
         "arr": {
           "obj": {
             "author_id": {
-              "opt": "float"
+              "opt": "int"
             },
             "id": {
-              "opt": "float"
+              "opt": "int"
             },
             "status": {
               "opt": "string"
@@ -1049,10 +1049,10 @@ IR_DOC = {
               "name": "QuotedOrderFeedRow",
               "obj": {
                 "author_id": {
-                  "opt": "float"
+                  "opt": "int"
                 },
                 "id": {
-                  "opt": "float"
+                  "opt": "int"
                 },
                 "status": {
                   "opt": "string"
@@ -1228,10 +1228,10 @@ IR_DOC = {
         "arr": {
           "obj": {
             "author_id": {
-              "opt": "float"
+              "opt": "int"
             },
             "id": {
-              "opt": "float"
+              "opt": "int"
             },
             "status": {
               "opt": "string"
@@ -1254,7 +1254,7 @@ IR_DOC = {
               "name": "QuotedWhereOrderFeedRow",
               "obj": {
                 "id": {
-                  "opt": "float"
+                  "opt": "int"
                 },
                 "status": {
                   "opt": "string"
@@ -1410,7 +1410,7 @@ IR_DOC = {
         "arr": {
           "obj": {
             "id": {
-              "opt": "float"
+              "opt": "int"
             },
             "status": {
               "opt": "string"
@@ -1433,10 +1433,10 @@ IR_DOC = {
               "name": "ViewFeedRow",
               "obj": {
                 "author_id": {
-                  "opt": "float"
+                  "opt": "int"
                 },
                 "id": {
-                  "opt": "float"
+                  "opt": "int"
                 },
                 "status": {
                   "opt": "string"
@@ -1592,10 +1592,10 @@ IR_DOC = {
         "arr": {
           "obj": {
             "author_id": {
-              "opt": "float"
+              "opt": "int"
             },
             "id": {
-              "opt": "float"
+              "opt": "int"
             },
             "status": {
               "opt": "string"
@@ -1836,7 +1836,7 @@ IR_DOC = {
               "name": "UsersWithPostsRow",
               "obj": {
                 "id": {
-                  "opt": "float"
+                  "opt": "int"
                 },
                 "name": {
                   "opt": "string"
@@ -1846,13 +1846,13 @@ IR_DOC = {
                     "name": "UsersWithPostsRow_posts",
                     "obj": {
                       "author_id": {
-                        "opt": "float"
+                        "opt": "int"
                       },
                       "created_at": {
                         "opt": "string"
                       },
                       "id": {
-                        "opt": "float"
+                        "opt": "int"
                       },
                       "status": {
                         "opt": "string"
@@ -1862,13 +1862,13 @@ IR_DOC = {
                           "name": "UsersWithPostsRow_posts_tags",
                           "obj": {
                             "id": {
-                              "opt": "float"
+                              "opt": "int"
                             },
                             "label": {
                               "opt": "string"
                             },
                             "post_id": {
-                              "opt": "float"
+                              "opt": "int"
                             }
                           }
                         }
@@ -1976,7 +1976,7 @@ IR_DOC = {
         "arr": {
           "obj": {
             "id": {
-              "opt": "float"
+              "opt": "int"
             },
             "name": {
               "opt": "string"
@@ -1985,13 +1985,13 @@ IR_DOC = {
               "arr": {
                 "obj": {
                   "author_id": {
-                    "opt": "float"
+                    "opt": "int"
                   },
                   "created_at": {
                     "opt": "string"
                   },
                   "id": {
-                    "opt": "float"
+                    "opt": "int"
                   },
                   "status": {
                     "opt": "string"
@@ -2000,13 +2000,13 @@ IR_DOC = {
                     "arr": {
                       "obj": {
                         "id": {
-                          "opt": "float"
+                          "opt": "int"
                         },
                         "label": {
                           "opt": "string"
                         },
                         "post_id": {
-                          "opt": "float"
+                          "opt": "int"
                         }
                       },
                       "name": "UsersWithPostsRow_posts_tags"
@@ -2128,25 +2128,25 @@ IR_DOC = {
                     "name": "PostsWithAuthorRow_author",
                     "obj": {
                       "id": {
-                        "opt": "float"
+                        "opt": "int"
                       },
                       "name": {
                         "opt": "string"
                       },
                       "post_count": {
-                        "opt": "float"
+                        "opt": "int"
                       }
                     }
                   }
                 },
                 "author_id": {
-                  "opt": "float"
+                  "opt": "int"
                 },
                 "created_at": {
                   "opt": "string"
                 },
                 "id": {
-                  "opt": "float"
+                  "opt": "int"
                 },
                 "status": {
                   "opt": "string"
@@ -2245,26 +2245,26 @@ IR_DOC = {
               "opt": {
                 "obj": {
                   "id": {
-                    "opt": "float"
+                    "opt": "int"
                   },
                   "name": {
                     "opt": "string"
                   },
                   "post_count": {
-                    "opt": "float"
+                    "opt": "int"
                   }
                 },
                 "name": "PostsWithAuthorRow_author"
               }
             },
             "author_id": {
-              "opt": "float"
+              "opt": "int"
             },
             "created_at": {
               "opt": "string"
             },
             "id": {
-              "opt": "float"
+              "opt": "int"
             },
             "status": {
               "opt": "string"
@@ -2453,13 +2453,13 @@ IR_DOC = {
                     "name": "UsersWithCappedPostsRow_cappedPosts",
                     "obj": {
                       "author_id": {
-                        "opt": "float"
+                        "opt": "int"
                       },
                       "created_at": {
                         "opt": "string"
                       },
                       "id": {
-                        "opt": "float"
+                        "opt": "int"
                       },
                       "status": {
                         "opt": "string"
@@ -2471,7 +2471,7 @@ IR_DOC = {
                   }
                 },
                 "id": {
-                  "opt": "float"
+                  "opt": "int"
                 },
                 "name": {
                   "opt": "string"
@@ -2567,13 +2567,13 @@ IR_DOC = {
               "arr": {
                 "obj": {
                   "author_id": {
-                    "opt": "float"
+                    "opt": "int"
                   },
                   "created_at": {
                     "opt": "string"
                   },
                   "id": {
-                    "opt": "float"
+                    "opt": "int"
                   },
                   "status": {
                     "opt": "string"
@@ -2586,7 +2586,7 @@ IR_DOC = {
               }
             },
             "id": {
-              "opt": "float"
+              "opt": "int"
             },
             "name": {
               "opt": "string"
@@ -2696,7 +2696,7 @@ IR_DOC = {
               "name": "UsersWithUncappedPostsRow",
               "obj": {
                 "id": {
-                  "opt": "float"
+                  "opt": "int"
                 },
                 "name": {
                   "opt": "string"
@@ -2706,13 +2706,13 @@ IR_DOC = {
                     "name": "UsersWithUncappedPostsRow_uncappedPosts",
                     "obj": {
                       "author_id": {
-                        "opt": "float"
+                        "opt": "int"
                       },
                       "created_at": {
                         "opt": "string"
                       },
                       "id": {
-                        "opt": "float"
+                        "opt": "int"
                       },
                       "status": {
                         "opt": "string"
@@ -2811,7 +2811,7 @@ IR_DOC = {
         "arr": {
           "obj": {
             "id": {
-              "opt": "float"
+              "opt": "int"
             },
             "name": {
               "opt": "string"
@@ -2820,13 +2820,13 @@ IR_DOC = {
               "arr": {
                 "obj": {
                   "author_id": {
-                    "opt": "float"
+                    "opt": "int"
                   },
                   "created_at": {
                     "opt": "string"
                   },
                   "id": {
-                    "opt": "float"
+                    "opt": "int"
                   },
                   "status": {
                     "opt": "string"
@@ -2943,7 +2943,7 @@ IR_DOC = {
               "name": "UsersWithTopPostsRow",
               "obj": {
                 "id": {
-                  "opt": "float"
+                  "opt": "int"
                 },
                 "name": {
                   "opt": "string"
@@ -2953,13 +2953,13 @@ IR_DOC = {
                     "name": "UsersWithTopPostsRow_topPosts",
                     "obj": {
                       "author_id": {
-                        "opt": "float"
+                        "opt": "int"
                       },
                       "created_at": {
                         "opt": "string"
                       },
                       "id": {
-                        "opt": "float"
+                        "opt": "int"
                       },
                       "status": {
                         "opt": "string"
@@ -3058,7 +3058,7 @@ IR_DOC = {
         "arr": {
           "obj": {
             "id": {
-              "opt": "float"
+              "opt": "int"
             },
             "name": {
               "opt": "string"
@@ -3067,13 +3067,13 @@ IR_DOC = {
               "arr": {
                 "obj": {
                   "author_id": {
-                    "opt": "float"
+                    "opt": "int"
                   },
                   "created_at": {
                     "opt": "string"
                   },
                   "id": {
-                    "opt": "float"
+                    "opt": "int"
                   },
                   "status": {
                     "opt": "string"
@@ -3562,7 +3562,7 @@ IR_DOC = {
               "name": "CreatePostReturningRow",
               "obj": {
                 "id": {
-                  "opt": "float"
+                  "opt": "int"
                 },
                 "title": {
                   "opt": "string"
@@ -3725,7 +3725,7 @@ IR_DOC = {
         "arr": {
           "obj": {
             "id": {
-              "opt": "float"
+              "opt": "int"
             },
             "title": {
               "opt": "string"
@@ -3745,7 +3745,7 @@ IR_DOC = {
               "name": "RenamePostReturningRow",
               "obj": {
                 "id": {
-                  "opt": "float"
+                  "opt": "int"
                 },
                 "title": {
                   "opt": "string"
@@ -3881,7 +3881,7 @@ IR_DOC = {
         "arr": {
           "obj": {
             "id": {
-              "opt": "float"
+              "opt": "int"
             },
             "title": {
               "opt": "string"
@@ -3901,7 +3901,7 @@ IR_DOC = {
               "name": "RemovePostReturningRow",
               "obj": {
                 "id": {
-                  "opt": "float"
+                  "opt": "int"
                 },
                 "title": {
                   "opt": "string"
@@ -4028,7 +4028,7 @@ IR_DOC = {
         "arr": {
           "obj": {
             "id": {
-              "opt": "float"
+              "opt": "int"
             },
             "title": {
               "opt": "string"
@@ -4048,7 +4048,7 @@ IR_DOC = {
               "name": "RestatusPostsReturningRow",
               "obj": {
                 "id": {
-                  "opt": "float"
+                  "opt": "int"
                 },
                 "status": {
                   "opt": "string"
@@ -4184,7 +4184,7 @@ IR_DOC = {
         "arr": {
           "obj": {
             "id": {
-              "opt": "float"
+              "opt": "int"
             },
             "status": {
               "opt": "string"
@@ -4204,7 +4204,7 @@ IR_DOC = {
               "name": "RemovePostsByAuthorReturningRow",
               "obj": {
                 "id": {
-                  "opt": "float"
+                  "opt": "int"
                 },
                 "title": {
                   "opt": "string"
@@ -4331,7 +4331,7 @@ IR_DOC = {
         "arr": {
           "obj": {
             "id": {
-              "opt": "float"
+              "opt": "int"
             },
             "title": {
               "opt": "string"
@@ -4351,10 +4351,10 @@ IR_DOC = {
               "name": "TypedRowsRow",
               "obj": {
                 "flag": {
-                  "opt": "float"
+                  "opt": "int"
                 },
                 "id": {
-                  "opt": "float"
+                  "opt": "int"
                 },
                 "label": {
                   "opt": "string"
@@ -4403,10 +4403,10 @@ IR_DOC = {
         "arr": {
           "obj": {
             "flag": {
-              "opt": "float"
+              "opt": "int"
             },
             "id": {
-              "opt": "float"
+              "opt": "int"
             },
             "label": {
               "opt": "string"
@@ -4872,10 +4872,10 @@ IR_DOC = {
               "name": "CreateLineRow",
               "obj": {
                 "line_no": {
-                  "opt": "float"
+                  "opt": "int"
                 },
                 "order_id": {
-                  "opt": "float"
+                  "opt": "int"
                 },
                 "sku": {
                   "opt": "string"
@@ -5020,10 +5020,10 @@ IR_DOC = {
         "arr": {
           "obj": {
             "line_no": {
-              "opt": "float"
+              "opt": "int"
             },
             "order_id": {
-              "opt": "float"
+              "opt": "int"
             },
             "sku": {
               "opt": "string"
@@ -5043,7 +5043,7 @@ IR_DOC = {
               "name": "CreateTagsReturningRow",
               "obj": {
                 "id": {
-                  "opt": "float"
+                  "opt": "int"
                 },
                 "label": {
                   "opt": "string"
@@ -5178,7 +5178,7 @@ IR_DOC = {
         "arr": {
           "obj": {
             "id": {
-              "opt": "float"
+              "opt": "int"
             },
             "label": {
               "opt": "string"
@@ -5198,7 +5198,7 @@ IR_DOC = {
               "name": "RelabelTagsReturningRow",
               "obj": {
                 "id": {
-                  "opt": "float"
+                  "opt": "int"
                 },
                 "label": {
                   "opt": "string"
@@ -5332,7 +5332,7 @@ IR_DOC = {
         "arr": {
           "obj": {
             "id": {
-              "opt": "float"
+              "opt": "int"
             },
             "label": {
               "opt": "string"
@@ -5352,7 +5352,7 @@ IR_DOC = {
               "name": "RemoveTagsReturningRow",
               "obj": {
                 "id": {
-                  "opt": "float"
+                  "opt": "int"
                 },
                 "label": {
                   "opt": "string"
@@ -5480,7 +5480,7 @@ IR_DOC = {
         "arr": {
           "obj": {
             "id": {
-              "opt": "float"
+              "opt": "int"
             },
             "label": {
               "opt": "string"

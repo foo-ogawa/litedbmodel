@@ -50,6 +50,12 @@ final class ExprEval
     private const WIDEN_EXACT = 9007199254740992;   // 2^53（div widening の正確域）
     private const SAFE_INT = 9007199254740991;      // 2^53 - 1（JS MAX_SAFE_INTEGER）
 
+    // ── 評価器本体 ──────────────────────────────────────────────────────────
+    // 意味論は {@see self::compileNode} の 1 箇所だけに綴られる。{@see self::evaluate} はそれを
+    // 組み立てて即座に適用する薄いラッパ、{@see self::compile} は同じ組み立てを call をまたいで
+    // 使い回せる形（Closure）で返す入口。どちらも同じ switch・同じメッセージを通るので、解釈器と
+    // compiler が 2 本になることはない。
+
     /**
      * 式ノードを評価する。
      *
@@ -60,12 +66,69 @@ final class ExprEval
      */
     public static function evaluate(mixed $node, array $scope = []): mixed
     {
+        return (self::compile($node))($scope);
+    }
+
+    /**
+     * 式ノードを **1 回だけ**解決して、スコープを取り値を返す Closure にする。
+     *
+     * どの演算子か・引数の形が正しいか・path が何かは IR に固定なので、演算子 dispatch と引数形の
+     * 検査は組み立て時の 1 回で足りる。値ごとに歩き直すと、ノードの少ない op ではその dispatch 代が
+     * interpreter の支配項になる（#291 — findUnique で php 14% / python 20〜25%）。返る Closure は
+     * 演算子 dispatch も引数形の検査も持たない。
+     *
+     * **組み立ては total（決して送出しない）。** 構造の失敗（INVALID_NODE / INVALID_LITERAL /
+     * UNKNOWN_OP / FORBIDDEN_KEY）は「送出する Closure」へ畳まれ、**その位置が実際に評価された
+     * ときだけ**送出される。これにより短絡（cond の非採用枝・and/or/coalesce の右辺）に潜む不正
+     * ノードは解釈器と同じく一度も観測されず、失敗の順序も解釈器と一致する。
+     *
+     * @internal `Behavior::prepare` が compile 済み IR ごとに 1 回だけ解決するために使う。
+     * @return \Closure(array<string,mixed>):mixed
+     */
+    public static function compile(mixed $node): \Closure
+    {
+        try {
+            return self::compileNode($node);
+        } catch (ExprFailure $e) {
+            return self::deferred($e->failureCode, $e->getMessage(), $e->detail);
+        }
+    }
+
+    /**
+     * スコープに依存しない値（リテラル）の Closure。
+     *
+     * @return \Closure(array<string,mixed>):mixed
+     */
+    private static function constant(mixed $v): \Closure
+    {
+        return static fn (array $scope): mixed => $v;
+    }
+
+    /**
+     * 組み立て時に確定した失敗を、**適用されたときに**送出する Closure。
+     *
+     * @param array<string,mixed>|null $detail
+     * @return \Closure(array<string,mixed>):mixed
+     */
+    private static function deferred(string $code, string $message, ?array $detail = null): \Closure
+    {
+        return static function (array $scope) use ($code, $message, $detail): mixed {
+            ExprFailure::raise($code, $message, $detail);
+        };
+    }
+
+    /**
+     * @return \Closure(array<string,mixed>):mixed
+     * @throws ExprFailure 構造の失敗（{@see self::compile} が送出 Closure へ畳む）。
+     */
+    private static function compileNode(mixed $node): \Closure
+    {
         // ── リテラル ──
         if ($node === null) {
-            return null;
+            return self::constant(null);
         }
         if (is_bool($node) || is_string($node)) {
-            return $node;
+            return self::constant($node);
         }
         if (self::isInt($node)) {
             // 分類規則（§2.3）: 生の整数 number は安全整数域内に限る。
@@ -75,10 +138,10 @@ final class ExprEval
                     "integral number literal {$node} exceeds safe range; use {int:\"...\"}"
                 );
             }
-            return $node;
+            return self::constant($node);
         }
         if (is_float($node)) {
-            return self::checkFinite($node);
+            return self::constant(self::checkFinite($node));
         }
         if (is_array($node)) {
             // json_decode(.., false) 由来なら list は PHP array。bare array は式ではない。
@@ -106,105 +169,128 @@ final class ExprEval
                 if (!is_string($arg)) {
                     ExprFailure::raise('INVALID_NODE', '{int: ...} expects a string');
                 }
-                return self::parseI64Literal($arg);
+                return self::constant(self::parseI64Literal($arg));
             case 'float':
                 // bool は number ではない（typeof number は bool を含まない）。
                 if (is_bool($arg) || !(is_int($arg) || is_float($arg))) {
                     ExprFailure::raise('INVALID_NODE', '{float: ...} expects a number');
                 }
-                return self::checkFinite((float) $arg);
+                return self::constant(self::checkFinite((float) $arg));
 
             // ── 参照 ──
             case 'ref':
             case 'refOpt':
-                return self::evalRef($op, $arg, $scope);
+                return self::compileRef($op, $arg);
 
             // ── 構築 ──
             case 'obj':
                 if (!($arg instanceof \stdClass)) {
                     ExprFailure::raise('INVALID_NODE', '{obj: ...} expects an object');
                 }
-                $out = new \stdClass();
+                $fields = [];
                 foreach (get_object_vars($arg) as $k => $v) {
-                    if ($k === FORBIDDEN_OBJECT_KEY) {
-                        ExprFailure::raise(
+                    // 禁止キーは **その位置に到達したときに**落とす（先行キーの評価は済ませる）ので、
+                    // 組み立て時ではなく送出 Closure として並べる。
+                    $fields[] = [$k, $k === FORBIDDEN_OBJECT_KEY
+                        ? self::deferred(
                             'FORBIDDEN_KEY',
                             'obj key "' . FORBIDDEN_OBJECT_KEY . '" is forbidden (fail-closed)'
-                        );
-                    }
-                    $out->{$k} = self::evaluate($v, $scope);
+                        )
+                        : self::compile($v)];
                 }
-                return $out;
+                return static function (array $scope) use ($fields): mixed {
+                    $out = new \stdClass();
+                    foreach ($fields as [$k, $f]) {
+                        $out->{$k} = $f($scope);
+                    }
+                    return $out;
+                };
             case 'arr':
-                return array_map(
-                    static fn ($e) => self::evaluate($e, $scope),
+                $elems = array_map(
+                    static fn ($e): \Closure => self::compile($e),
                     self::argArray($op, $arg)
+                );
+                return static fn (array $scope): mixed => array_map(
+                    static fn (\Closure $f): mixed => $f($scope),
+                    $elems
                 );
 
             // ── 数値（モノモーフィック・checked）──
             case 'add':
             case 'sub':
             case 'mul':
-                [$a, $b] = self::evalBinary($op, $arg, $scope);
-                if (self::isInt($a) && self::isInt($b)) {
-                    // PHP は int 演算が i64 を溢れると float へ昇格する。float 化 = overflow。
-                    $r = $op === 'add' ? $a + $b : ($op === 'sub' ? $a - $b : $a * $b);
-                    if (!is_int($r)) {
-                        ExprFailure::raise('INT_OVERFLOW', "i64 overflow in {$op}");
+                [$ca, $cb] = self::compileBinary($op, $arg);
+                return static function (array $scope) use ($op, $ca, $cb): mixed {
+                    $a = $ca($scope);
+                    $b = $cb($scope); // 左から右
+                    if (self::isInt($a) && self::isInt($b)) {
+                        // PHP は int 演算が i64 を溢れると float へ昇格する。float 化 = overflow。
+                        $r = $op === 'add' ? $a + $b : ($op === 'sub' ? $a - $b : $a * $b);
+                        if (!is_int($r)) {
+                            ExprFailure::raise('INT_OVERFLOW', "i64 overflow in {$op}");
+                        }
+                        return $r;
                     }
-                    return $r;
-                }
-                if (is_float($a) && is_float($b)) {
-                    $r = $op === 'add' ? $a + $b : ($op === 'sub' ? $a - $b : $a * $b);
-                    return self::checkFinite($r);
-                }
-                ExprFailure::raise(
-                    'TYPE_MISMATCH',
-                    "{$op}: int×int か float×float（got " . self::typeName($a) . '×' . self::typeName($b) . '）'
-                );
-                // no break (raise never returns)
+                    if (is_float($a) && is_float($b)) {
+                        $r = $op === 'add' ? $a + $b : ($op === 'sub' ? $a - $b : $a * $b);
+                        return self::checkFinite($r);
+                    }
+                    ExprFailure::raise(
+                        'TYPE_MISMATCH',
+                        "{$op}: int×int か float×float（got " . self::typeName($a) . '×' . self::typeName($b) . '）'
+                    );
+                };
             case 'neg':
-                $a = self::evaluate(self::argUnary($op, $arg), $scope);
-                if (self::isInt($a)) {
-                    $r = -$a;
-                    if (!is_int($r)) {
-                        // -(i64 min) は i64 max+1 で float 化 = overflow。
-                        ExprFailure::raise('INT_OVERFLOW', 'i64 overflow in neg');
+                $ca = self::compile(self::argUnary($op, $arg));
+                return static function (array $scope) use ($ca): mixed {
+                    $a = $ca($scope);
+                    if (self::isInt($a)) {
+                        $r = -$a;
+                        if (!is_int($r)) {
+                            // -(i64 min) は i64 max+1 で float 化 = overflow。
+                            ExprFailure::raise('INT_OVERFLOW', 'i64 overflow in neg');
+                        }
+                        return $r;
                     }
-                    return $r;
-                }
-                if (is_float($a)) {
-                    return self::checkFinite(-$a);
-                }
-                ExprFailure::raise('TYPE_MISMATCH', 'neg: numeric expected, got ' . self::typeName($a));
-                // no break
+                    if (is_float($a)) {
+                        return self::checkFinite(-$a);
+                    }
+                    ExprFailure::raise('TYPE_MISMATCH', 'neg: numeric expected, got ' . self::typeName($a));
+                };
             case 'div':
                 // 常に float 除算。int は正確に widening、0 除算は NaN/Inf 規則で Failure。
-                [$a, $b] = self::evalBinary($op, $arg, $scope);
-                $fa = self::widenToFloat($a);
-                $fb = self::widenToFloat($b);
-                if ($fb === 0.0) {
-                    ExprFailure::raise('NAN_OR_INF', 'division produced a non-finite float (div by zero)');
-                }
-                return self::checkFinite($fa / $fb);
+                [$ca, $cb] = self::compileBinary($op, $arg);
+                return static function (array $scope) use ($ca, $cb): mixed {
+                    $a = $ca($scope);
+                    $b = $cb($scope); // 左から右
+                    $fa = self::widenToFloat($a);
+                    $fb = self::widenToFloat($b);
+                    if ($fb === 0.0) {
+                        ExprFailure::raise('NAN_OR_INF', 'division produced a non-finite float (div by zero)');
+                    }
+                    return self::checkFinite($fa / $fb);
+                };
             case 'mod':
                 // truncated division の剰余。符号は被除数（PHP の % / fmod と一致）。
-                [$a, $b] = self::evalBinary($op, $arg, $scope);
-                if (self::isInt($a) && self::isInt($b)) {
-                    if ($b === 0) {
-                        ExprFailure::raise('MOD_ZERO', 'int mod by zero');
+                [$ca, $cb] = self::compileBinary($op, $arg);
+                return static function (array $scope) use ($ca, $cb): mixed {
+                    $a = $ca($scope);
+                    $b = $cb($scope); // 左から右
+                    if (self::isInt($a) && self::isInt($b)) {
+                        if ($b === 0) {
+                            ExprFailure::raise('MOD_ZERO', 'int mod by zero');
+                        }
+                        // PHP の % は truncated（符号は被除数）。-7 % 2 == -1。
+                        return $a % $b;
                     }
-                    // PHP の % は truncated（符号は被除数）。-7 % 2 == -1。
-                    return $a % $b;
-                }
-                if (is_float($a) && is_float($b)) {
-                    return self::checkFinite(fmod($a, $b));
-                }
-                ExprFailure::raise(
-                    'TYPE_MISMATCH',
-                    "mod: int×int か float×float（got " . self::typeName($a) . '×' . self::typeName($b) . '）'
-                );
-                // no break
+                    if (is_float($a) && is_float($b)) {
+                        return self::checkFinite(fmod($a, $b));
+                    }
+                    ExprFailure::raise(
+                        'TYPE_MISMATCH',
+                        "mod: int×int か float×float（got " . self::typeName($a) . '×' . self::typeName($b) . '）'
+                    );
+                };
 
             // ── 文字列 ──
             case 'concat':
@@ -213,81 +299,116 @@ final class ExprEval
                 if (count($rawParts) < 2) {
                     ExprFailure::raise('INVALID_NODE', 'concat expects >= 2 args, got ' . count($rawParts));
                 }
-                $parts = [];
-                foreach ($rawParts as $e) {
-                    $p = self::evaluate($e, $scope);
-                    if (!is_string($p)) {
-                        ExprFailure::raise('TYPE_MISMATCH', 'concat: string のみ（got ' . self::typeName($p) . '）');
+                $cs = array_map(static fn ($e): \Closure => self::compile($e), $rawParts);
+                return static function (array $scope) use ($cs): mixed {
+                    $parts = [];
+                    foreach ($cs as $f) {
+                        $p = $f($scope);
+                        if (!is_string($p)) {
+                            ExprFailure::raise('TYPE_MISMATCH', 'concat: string のみ（got ' . self::typeName($p) . '）');
+                        }
+                        $parts[] = $p;
                     }
-                    $parts[] = $p;
-                }
-                return implode('', $parts);
+                    return implode('', $parts);
+                };
 
             // ── 比較 ──
             case 'eq':
             case 'ne':
-                [$a, $b] = self::evalBinary($op, $arg, $scope);
-                $equal = self::valueEquals($a, $b);
-                return $op === 'eq' ? $equal : !$equal;
+                [$ca, $cb] = self::compileBinary($op, $arg);
+                $negate = ($op === 'ne');
+                return static function (array $scope) use ($ca, $cb, $negate): mixed {
+                    $a = $ca($scope);
+                    $b = $cb($scope); // 左から右
+                    $equal = self::valueEquals($a, $b);
+                    return $negate ? !$equal : $equal;
+                };
             case 'lt':
             case 'le':
             case 'gt':
             case 'ge':
-                [$a, $b] = self::evalBinary($op, $arg, $scope);
-                if (self::isInt($a) && self::isInt($b)) {
-                    $c = $a < $b ? -1 : ($a > $b ? 1 : 0);
-                } elseif (is_float($a) && is_float($b)) {
-                    $c = $a < $b ? -1 : ($a > $b ? 1 : 0);
-                } elseif (is_string($a) && is_string($b)) {
-                    $c = self::cmpCodePoints($a, $b);
-                } else {
-                    ExprFailure::raise(
-                        'TYPE_MISMATCH',
-                        "{$op}: 同一型の int/float/string のみ（got " . self::typeName($a) . '×' . self::typeName($b) . '）'
-                    );
-                }
-                return match ($op) {
-                    'lt' => $c < 0,
-                    'le' => $c <= 0,
-                    'gt' => $c > 0,
-                    default => $c >= 0, // ge
+                [$ca, $cb] = self::compileBinary($op, $arg);
+                return static function (array $scope) use ($op, $ca, $cb): mixed {
+                    // float は IEEE-754 の半順序: NaN が絡む対は順序付け不能（null）で lt/le/gt/ge
+                    // すべて false。int/string は全順序なので null にならない。
+                    $a = $ca($scope);
+                    $b = $cb($scope); // 左から右
+                    if (self::isInt($a) && self::isInt($b)) {
+                        $c = $a < $b ? -1 : ($a > $b ? 1 : 0);
+                    } elseif (is_float($a) && is_float($b)) {
+                        $c = $a < $b ? -1 : ($a > $b ? 1 : ($a === $b ? 0 : null));
+                    } elseif (is_string($a) && is_string($b)) {
+                        $c = self::cmpCodePoints($a, $b);
+                    } else {
+                        ExprFailure::raise(
+                            'TYPE_MISMATCH',
+                            "{$op}: 同一型の int/float/string のみ（got " . self::typeName($a) . '×' . self::typeName($b) . '）'
+                        );
+                    }
+                    if ($c === null) {
+                        return false; // 順序付け不能（NaN）
+                    }
+                    return match ($op) {
+                        'lt' => $c < 0,
+                        'le' => $c <= 0,
+                        'gt' => $c > 0,
+                        default => $c >= 0, // ge
+                    };
                 };
 
             // ── bool / null（短絡評価）──
             case 'and':
             case 'or':
                 [$ea, $eb] = self::rawBinary($op, $arg);
-                $a = self::requireBool(self::evaluate($ea, $scope), $op);
-                if ($op === 'and' && !$a) {
-                    return false; // 短絡: 右辺は評価されない
-                }
-                if ($op === 'or' && $a) {
-                    return true;
-                }
-                return self::requireBool(self::evaluate($eb, $scope), $op);
+                $ca = self::compile($ea);
+                $cb = self::compile($eb);
+                $isAnd = ($op === 'and');
+                return static function (array $scope) use ($op, $ca, $cb, $isAnd): mixed {
+                    $a = self::requireBool($ca($scope), $op);
+                    if ($isAnd && !$a) {
+                        return false; // 短絡: 右辺は評価されない
+                    }
+                    if (!$isAnd && $a) {
+                        return true;
+                    }
+                    return self::requireBool($cb($scope), $op);
+                };
             case 'not':
-                return !self::requireBool(self::evaluate(self::argUnary($op, $arg), $scope), 'not');
+                $ca = self::compile(self::argUnary($op, $arg));
+                return static fn (array $scope): mixed => !self::requireBool($ca($scope), 'not');
             case 'coalesce':
                 [$ea, $eb] = self::rawBinary($op, $arg);
-                $a = self::evaluate($ea, $scope);
-                return $a === null ? self::evaluate($eb, $scope) : $a; // 右辺は遅延評価
+                $ca = self::compile($ea);
+                $cb = self::compile($eb);
+                return static function (array $scope) use ($ca, $cb): mixed {
+                    $a = $ca($scope);
+                    return $a === null ? $cb($scope) : $a; // 右辺は遅延評価
+                };
             case 'cond':
                 if (!is_array($arg) || count($arg) !== 3) {
                     ExprFailure::raise('INVALID_NODE', 'cond expects [c, t, e]');
                 }
-                $c = self::requireBool(self::evaluate($arg[0], $scope), 'cond');
-                return self::evaluate($c ? $arg[1] : $arg[2], $scope); // 採用側のみ評価
+                $cc = self::compile($arg[0]);
+                $ct = self::compile($arg[1]);
+                $ce = self::compile($arg[2]);
+                return static function (array $scope) use ($cc, $ct, $ce): mixed {
+                    $c = self::requireBool($cc($scope), 'cond');
+                    return $c ? $ct($scope) : $ce($scope); // 採用側のみ評価
+                };
 
             // ── その他 ──
             case 'len':
-                $a = self::evaluate(self::argUnary($op, $arg), $scope);
-                if (!self::isList($a)) {
-                    ExprFailure::raise(
-                        'TYPE_MISMATCH',
-                        'len: 配列のみ（string length は v1 に存在しない。got ' . self::typeName($a) . '）'
-                    );
-                }
-                return count($a);
+                $ca = self::compile(self::argUnary($op, $arg));
+                return static function (array $scope) use ($ca): mixed {
+                    $a = $ca($scope);
+                    if (!self::isList($a)) {
+                        ExprFailure::raise(
+                            'TYPE_MISMATCH',
+                            'len: 配列のみ（string length は v1 に存在しない。got ' . self::typeName($a) . '）'
+                        );
+                    }
+                    return count($a);
+                };
 
             default:
                 ExprFailure::raise('UNKNOWN_OP', "unknown operator: {$op}（fail-closed）");
@@ -298,7 +419,8 @@ final class ExprEval
     }
 
     // ── 参照 ────────────────────────────────────────────────────────────────
-    private static function evalRef(string $op, mixed $arg, array $scope): mixed
+    /** @return \Closure(array<string,mixed>):mixed */
+    private static function compileRef(string $op, mixed $arg): \Closure
     {
         $path = self::argArray($op, $arg);
         if (count($path) === 0) {
@@ -311,26 +433,29 @@ final class ExprEval
         }
         $head = $path[0];
         $rest = array_slice($path, 1);
-        if (!array_key_exists($head, $scope)) {
-            ExprFailure::raise('UNKNOWN_BINDING', "unknown binding: {$head}");
-        }
-        $cur = $scope[$head];
-        foreach ($rest as $seg) {
-            if ($cur === null) {
-                if ($op === 'refOpt') {
-                    return null; // ?. の null 伝播
+        $propagateNull = ($op === 'refOpt');
+        return static function (array $scope) use ($head, $rest, $propagateNull): mixed {
+            if (!array_key_exists($head, $scope)) {
+                ExprFailure::raise('UNKNOWN_BINDING', "unknown binding: {$head}");
+            }
+            $cur = $scope[$head];
+            foreach ($rest as $seg) {
+                if ($cur === null) {
+                    if ($propagateNull) {
+                        return null; // ?. の null 伝播
+                    }
+                    ExprFailure::raise('NULL_REF', "null intermediate at .{$seg}（?. を使う）");
                 }
-                ExprFailure::raise('NULL_REF', "null intermediate at .{$seg}（?. を使う）");
+                if (!($cur instanceof \stdClass)) {
+                    ExprFailure::raise('TYPE_MISMATCH', "cannot access .{$seg} on " . self::typeName($cur));
+                }
+                if (!array_key_exists($seg, get_object_vars($cur))) {
+                    ExprFailure::raise('MISSING_PROP', "missing property .{$seg}");
+                }
+                $cur = $cur->{$seg};
             }
-            if (!($cur instanceof \stdClass)) {
-                ExprFailure::raise('TYPE_MISMATCH', "cannot access .{$seg} on " . self::typeName($cur));
-            }
-            if (!array_key_exists($seg, get_object_vars($cur))) {
-                ExprFailure::raise('MISSING_PROP', "missing property .{$seg}");
-            }
-            $cur = $cur->{$seg};
-        }
-        return $cur;
+            return $cur;
+        };
     }
 
     // ── i64 / f64 チェック ────────────────────────────────────────────────────
@@ -521,10 +646,10 @@ final class ExprEval
         return [$a[0], $a[1]];
     }
 
-    /** @return array{0:mixed,1:mixed} */
-    private static function evalBinary(string $op, mixed $arg, array $scope): array
+    /** @return array{0:\Closure,1:\Closure} */
+    private static function compileBinary(string $op, mixed $arg): array
     {
         [$ea, $eb] = self::rawBinary($op, $arg);
-        return [self::evaluate($ea, $scope), self::evaluate($eb, $scope)]; // 左から右
+        return [self::compile($ea), self::compile($eb)];
     }
 }
