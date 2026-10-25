@@ -184,17 +184,22 @@ final class ConnectionRoutingTest extends TestCase
                 $this->fail("connectTimeoutMillis=0: the MySQL connect ended within 2 s (exit {$status['exitcode']}): "
                     . stream_get_contents($pipes[1]) . stream_get_contents($pipes[2]));
             }
-            fclose($server); // the listener goes away ⇒ the connect fails
+            // End the connect on every OS: drain the accept queue and close what arrives, so the child's
+            // retransmitted SYN is accepted and its handshake read sees EOF. (Closing the listener instead
+            // leaves a dropped SYN retrying for minutes on Linux.)
             foreach ($queued as $q) {
                 if (is_resource($q)) {
                     fclose($q);
                 }
             }
-            $deadline = microtime(true) + 20;
+            $deadline = microtime(true) + 30;
             while (proc_get_status($child)['running'] && microtime(true) < $deadline) {
-                usleep(100_000);
+                $accepted = @stream_socket_accept($server, 0.1);
+                if (is_resource($accepted)) {
+                    fclose($accepted);
+                }
             }
-            $this->assertFalse(proc_get_status($child)['running'], 'the connect did not end after the listener closed');
+            $this->assertFalse(proc_get_status($child)['running'], 'the connect did not end after the server closed it');
             $out = stream_get_contents($pipes[1]) . stream_get_contents($pipes[2]);
             $this->assertStringContainsString('connect failed:', $out);
             $this->assertStringContainsString("default_socket_timeout=1\n", $out, 'the ini is restored after the connect');
