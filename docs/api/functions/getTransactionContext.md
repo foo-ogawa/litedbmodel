@@ -1,4 +1,4 @@
-[**litedbmodel v2.2.10**](../README.md)
+[**litedbmodel v2.2.11**](../README.md)
 
 ***
 
@@ -10,7 +10,7 @@
 function getTransactionContext(): TransactionContext | undefined;
 ```
 
-Defined in: [DBModel.ts:68](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L68)
+Defined in: [DBModel.ts:69](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L69)
 
 Get current transaction context (if in a transaction)
 

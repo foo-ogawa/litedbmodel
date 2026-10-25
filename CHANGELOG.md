@@ -5,10 +5,33 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [2.2.11] - 2026-10-26
+
+**1 プロセスで多数の要求を同時にさばくとき（Lambda Web Functions、HTTP サーバー）に、要求の間で状態が共有されていたのを直す。**
+Closes #314, #315, #316, #318, #319, #320, #321, #322, #323。
 
 ### Fixed
 
+- **writer sticky がプロセス全体で 1 つだった（#314）。** どれかの要求がコミットすると、プロセス中の全要求の読み取りが
+  `writerStickyDuration` の間ライターへ寄っていた。コミットの時刻は要求（TS は非同期の連鎖、python は contextvars の
+  Context、rust はスレッド）ごとに持ち、コミットした要求の読みだけが writer に行く。同時に動く他の要求は reader の
+  まま。1 つの要求の中で同時に走るトランザクションも、全部終わればまとめて数える。
+- **Middleware の state が要求をまたいで共有されることがあった（#314）。** `getCurrentContext()` が最初に触った非同期の
+  連鎖に居座ったため、起動時（`listen` の前）に一度触ると、その後の全要求が同じインスタンスを共有していた。要求の
+  境界は `Middleware.run(fn)`。要求の入口を `run` で囲む（例: Fastify の `onRequest` で `Middleware.run(done)`）。
+  `run` の外では、触るたびにその場限りのインスタンスになる。
+- **Middleware の `init()` が一度も呼ばれていなかった（#316）。** インスタンスを作ったときに呼ぶ。
+- **SCP 経路のプールが `DBConfig.timeout` を受け取っておらず、プールが埋まると接続待ちが終わらなかった（#314）。**
+  接続設定の契約に `connectTimeoutMillis`（既定 30000、`0` は上限なし）と `idleTimeoutMillis`（既定 10000）を加え、
+  5 言語のプールに効かせる。`DBConfig.idleTimeoutMillis` を追加した。mysql の空き待ちにも上限を付けた。
+- **[pg] 1 回しか流れない SQL も名前付き prepared statement にしていた（#314）。** `IN (${ids})` のように件数ごとに
+  文が変わる SQL で、クライアントのキャッシュとサーバー側の prepared statement が増え続けていた。2 回目に来た SQL
+  だけ名前を付け、名前付きの数に上限を置く。
+- **[rust] PG プールが満杯のとき、接続の空き待ちが無期限に続いていた（#321）。**
+- **[py] 設定から作るプールが、接続確立の上限を DB ドライバに渡していなかった（#322）。**
+- **[go] 既定設定（MinPool=0）でアイドル接続を残さず、文ごとに接続し直していた（#318）。** アイドルの上限は `MaxPool`。
+- **[go] keepAlive が TCP keepalive ではなく接続の寿命（10 秒ごとの作り直し）になっていた（#320）。**
+- **[php] 引数なしの `PdoPoolFactory` が pg / mysql で `PgLivePdo` を見つけられず落ちていた（#319）。**
 - **[go] 生成エントリを同時に呼ぶゴルーチンが、他のゴルーチンのトランザクション接続に乗っていた（#315）。**
   生成エントリが SQL を流す先がパッケージのグローバル 1 つで、`WithAmbientTransaction` はトランザクションの
   間それを差し替えていたため、同じプロセスで同時に要求をさばくと（Go の HTTP サーバーの通常の形）、他の

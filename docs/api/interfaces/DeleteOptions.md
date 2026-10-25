@@ -1,4 +1,4 @@
-[**litedbmodel v2.2.10**](../README.md)
+[**litedbmodel v2.2.11**](../README.md)
 
 ***
 
@@ -6,11 +6,11 @@
 
 # Interface: DeleteOptions
 
-Defined in: [types.ts:222](https://github.com/foo-ogawa/litedbmodel/blob/main/src/types.ts#L222)
+Defined in: [types.ts:224](https://github.com/foo-ogawa/litedbmodel/blob/main/src/types.ts#L224)
 
 ## Properties
 
 | Property | Type | Description | Defined in |
 | ------ | ------ | ------ | ------ |
-| <a id="tablename"></a> `tableName?` | `string` | - | [types.ts:223](https://github.com/foo-ogawa/litedbmodel/blob/main/src/types.ts#L223) |
-| <a id="returning"></a> `returning?` | `boolean` | If true, return PkeyResult with affected primary keys. If false (default), return null for better performance. | [types.ts:228](https://github.com/foo-ogawa/litedbmodel/blob/main/src/types.ts#L228) |
+| <a id="tablename"></a> `tableName?` | `string` | - | [types.ts:225](https://github.com/foo-ogawa/litedbmodel/blob/main/src/types.ts#L225) |
+| <a id="returning"></a> `returning?` | `boolean` | If true, return PkeyResult with affected primary keys. If false (default), return null for better performance. | [types.ts:230](https://github.com/foo-ogawa/litedbmodel/blob/main/src/types.ts#L230) |

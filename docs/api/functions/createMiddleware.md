@@ -1,4 +1,4 @@
-[**litedbmodel v2.2.10**](../README.md)
+[**litedbmodel v2.2.11**](../README.md)
 
 ***
 
@@ -10,12 +10,12 @@
 function createMiddleware<S>(config: MiddlewareConfig<S>): CreatedMiddlewareClass<S>;
 ```
 
-Defined in: [Middleware.ts:497](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Middleware.ts#L497)
+Defined in: [Middleware.ts:493](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Middleware.ts#L493)
 
 Create a middleware class from a configuration object.
 
 This is a simpler alternative to extending the Middleware class directly.
-Each request gets its own copy of the state object via AsyncLocalStorage.
+Each request (a [Middleware.run](../classes/Middleware.md#run) scope) gets its own copy of the state object.
 
 ## Type Parameters
 
@@ -63,6 +63,6 @@ const TenantMiddleware = createMiddleware({
 // Register and use
 DBModel.use(TenantMiddleware);
 
-// Set tenant for current request
+// Set tenant for the current request (inside Middleware.run at the request entry)
 TenantMiddleware.getCurrentContext().tenantId = 123;
 ```

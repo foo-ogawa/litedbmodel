@@ -1,8 +1,8 @@
-[**litedbmodel v2.2.10**](README.md)
+[**litedbmodel v2.2.11**](README.md)
 
 ***
 
-# litedbmodel v2.2.10
+# litedbmodel v2.2.11
 
 litedbmodel - A lightweight TypeScript data access layer
 
@@ -53,13 +53,13 @@ Supports PostgreSQL and SQLite databases.
 ### Other
 
 - [Column](interfaces/Column.md)
-- [DBConfig](interfaces/DBConfig.md)
 - [MiddlewareConfig](interfaces/MiddlewareConfig.md)
 - [CreatedMiddlewareClass](interfaces/CreatedMiddlewareClass.md)
 - [SqlFragment](interfaces/SqlFragment.md)
 - [SqlTypedFragment](interfaces/SqlTypedFragment.md)
 - [SqlCondition](interfaces/SqlCondition.md)
 - [ColumnOptions](interfaces/ColumnOptions.md)
+- [DBConfig](interfaces/DBConfig.md)
 - [SelectOptions](interfaces/SelectOptions.md)
 - [InsertOptions](interfaces/InsertOptions.md)
 - [UpdateOptions](interfaces/UpdateOptions.md)
@@ -114,7 +114,7 @@ type MiddlewareClass = {
 };
 ```
 
-Defined in: [Middleware.ts:310](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Middleware.ts#L310)
+Defined in: [Middleware.ts:306](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Middleware.ts#L306)
 
 Type for middleware class (not instance) — what [DBModel.use](classes/DBModel.md#use) registers.
 
@@ -139,7 +139,7 @@ runtime-correct call, and every stateful middleware in the README was affected.
 getCurrentContext(): object;
 ```
 
-Defined in: [Middleware.ts:310](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Middleware.ts#L310)
+Defined in: [Middleware.ts:306](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Middleware.ts#L306)
 
 ###### Returns
 

@@ -1,4 +1,4 @@
-[**litedbmodel v2.2.10**](../README.md)
+[**litedbmodel v2.2.11**](../README.md)
 
 ***
 
@@ -6,7 +6,7 @@
 
 # Interface: UpdateManyOptions
 
-Defined in: [types.ts:234](https://github.com/foo-ogawa/litedbmodel/blob/main/src/types.ts#L234)
+Defined in: [types.ts:236](https://github.com/foo-ogawa/litedbmodel/blob/main/src/types.ts#L236)
 
 Options for updateMany operation.
 
@@ -14,5 +14,5 @@ Options for updateMany operation.
 
 | Property | Type | Description | Defined in |
 | ------ | ------ | ------ | ------ |
-| <a id="keycolumns"></a> `keyColumns` | \| [`Column`](Column.md)\<`unknown`, `unknown`\> \| [`Column`](Column.md)\<`unknown`, `unknown`\>[] | Columns that identify each row (used in WHERE/JOIN clause). Must uniquely identify rows (primary key or unique constraint). | [types.ts:239](https://github.com/foo-ogawa/litedbmodel/blob/main/src/types.ts#L239) |
-| <a id="returning"></a> `returning?` | `boolean` | If true, return PkeyResult with affected primary keys. If false (default), return null for better performance. | [types.ts:244](https://github.com/foo-ogawa/litedbmodel/blob/main/src/types.ts#L244) |
+| <a id="keycolumns"></a> `keyColumns` | \| [`Column`](Column.md)\<`unknown`, `unknown`\> \| [`Column`](Column.md)\<`unknown`, `unknown`\>[] | Columns that identify each row (used in WHERE/JOIN clause). Must uniquely identify rows (primary key or unique constraint). | [types.ts:241](https://github.com/foo-ogawa/litedbmodel/blob/main/src/types.ts#L241) |
+| <a id="returning"></a> `returning?` | `boolean` | If true, return PkeyResult with affected primary keys. If false (default), return null for better performance. | [types.ts:246](https://github.com/foo-ogawa/litedbmodel/blob/main/src/types.ts#L246) |

@@ -1,4 +1,4 @@
-[**litedbmodel v2.2.10**](../README.md)
+[**litedbmodel v2.2.11**](../README.md)
 
 ***
 
@@ -6,11 +6,11 @@
 
 # Interface: UpdateOptions
 
-Defined in: [types.ts:213](https://github.com/foo-ogawa/litedbmodel/blob/main/src/types.ts#L213)
+Defined in: [types.ts:215](https://github.com/foo-ogawa/litedbmodel/blob/main/src/types.ts#L215)
 
 ## Properties
 
 | Property | Type | Description | Defined in |
 | ------ | ------ | ------ | ------ |
-| <a id="tablename"></a> `tableName?` | `string` | - | [types.ts:214](https://github.com/foo-ogawa/litedbmodel/blob/main/src/types.ts#L214) |
-| <a id="returning"></a> `returning?` | `boolean` | If true, return PkeyResult with affected primary keys. If false (default), return null for better performance. | [types.ts:219](https://github.com/foo-ogawa/litedbmodel/blob/main/src/types.ts#L219) |
+| <a id="tablename"></a> `tableName?` | `string` | - | [types.ts:216](https://github.com/foo-ogawa/litedbmodel/blob/main/src/types.ts#L216) |
+| <a id="returning"></a> `returning?` | `boolean` | If true, return PkeyResult with affected primary keys. If false (default), return null for better performance. | [types.ts:221](https://github.com/foo-ogawa/litedbmodel/blob/main/src/types.ts#L221) |
