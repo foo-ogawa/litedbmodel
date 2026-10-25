@@ -66,10 +66,12 @@ ORMユーザ  : ライブラリのデコレータでモデル＋宣言エンド�
 
 **bc の生成エントリは authored メソッドの 1:1 写像。宣言クラスが名前空間、authored 引数がその順の位置引数。
 transport / wire の配線は `--leaf-transport-import` / `--shared-types-import` で generate 時に焼き込まれ、
-呼び出し側にランタイム注入は無い。ハーネスは「シグネチャで直呼びするだけ」。**
+呼び出し側にランタイム注入は無い。ハーネスは「シグネチャで直呼びするだけ」。** go だけは先頭に呼び出し側の
+`context.Context` を取る（ゴルーチンローカルが無いので、要求ごとの ExecutionContext は
+`litedbmodel_runtime.BindLeafTransport` が返す context に乗って届く）。
 
 ```go
-rows, err := userrepo.FindByEmail("a@b.c")   // go
+rows, err := userrepo.FindByEmail(ctx, "a@b.c")   // go — ctx = BindLeafTransport(execCtx, dialect)
 ```
 ```rust
 let rows = findByEmail("a@b.c".to_string())?; // rust

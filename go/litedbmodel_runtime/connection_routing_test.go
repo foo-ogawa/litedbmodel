@@ -311,23 +311,28 @@ func TestReaderWriterSplitRouting(t *testing.T) {
 func TestWriterStickyClockExpiry(t *testing.T) {
 	clock := int64(1_000_000)
 	sticky := NewWriterStickyClock(StickyOptions{UseWriterAfterTransaction: boolPtr(true), WriterStickyDuration: intPtr(5000), Now: func() int64 { return clock }})
-	if sticky.IsSticky() {
+	scope := &StickyScope{}
+	if sticky.IsSticky(scope) {
 		t.Fatal("sticky before any mark should be false")
 	}
-	sticky.Mark()
+	sticky.Mark(scope)
 	clock += 100
-	if !sticky.IsSticky() {
+	if !sticky.IsSticky(scope) {
 		t.Fatal("in-window read should be sticky")
 	}
+	if sticky.IsSticky(&StickyScope{}) {
+		t.Fatal("another request's scope must not be sticky after this one's commit")
+	}
 	clock += 6000
-	if sticky.IsSticky() {
+	if sticky.IsSticky(scope) {
 		t.Fatal("after-window read should NOT be sticky")
 	}
 
 	// MUTATION (RED): a DISABLED sticky clock never sticks even in-window.
 	off := NewWriterStickyClock(StickyOptions{UseWriterAfterTransaction: boolPtr(false), Now: func() int64 { return clock }})
-	off.Mark()
-	if off.IsSticky() {
+	offScope := &StickyScope{}
+	off.Mark(offScope)
+	if off.IsSticky(offScope) {
 		t.Fatal("disabled sticky must never stick (never-mark-sticky RED)")
 	}
 }
@@ -343,12 +348,12 @@ func TestWriterStickyArmedAtClockZero(t *testing.T) {
 	reader := newRecordPool("reader", &log)
 	writer := newRecordPool("writer", &log)
 	sticky := NewWriterStickyClock(StickyOptions{UseWriterAfterTransaction: boolPtr(true), WriterStickyDuration: intPtr(5000), Now: func() int64 { return 0 }})
-	if sticky.IsSticky() {
+	ctx := ContextForRouting(routingWithPools(reader, writer, sticky), nil)
+	if sticky.IsSticky(ctx.sticky) {
 		t.Fatal("before any mark, sticky must be false even at t=0 (absence, not the value 0)")
 	}
-	ctx := ContextForRouting(routingWithPools(reader, writer, sticky), nil)
 	// A commit at clock t=0 arms the sticky clock.
-	sticky.Mark()
+	sticky.Mark(ctx.sticky)
 	_, _ = Execute(ctx, "SELECT 1", nil, ReadIntent())
 	if got := log[len(log)-1]; got != "writer" {
 		t.Fatalf("read right after a t=0 commit = %v, want writer (read-your-writes)", got)
@@ -369,11 +374,16 @@ func TestWriterStickyRoutesReadToWriter(t *testing.T) {
 		t.Fatalf("pre-write read = %v, want reader", log[len(log)-1])
 	}
 	// Arm the clock (a commit would call this in the real tx path).
-	sticky.Mark()
+	sticky.Mark(ctx.sticky)
 	clock += 100
 	_, _ = Execute(ctx, "SELECT 1", nil, ReadIntent())
 	if log[len(log)-1] != "writer" {
 		t.Fatalf("in-window read = %v, want writer (read-your-writes)", log[len(log)-1])
+	}
+	// The same read from ANOTHER request (its own ctx over the same routing) stays on the reader.
+	_, _ = Execute(ContextForRouting(routingWithPools(reader, writer, sticky), nil), "SELECT 1", nil, ReadIntent())
+	if log[len(log)-1] != "reader" {
+		t.Fatalf("another request's in-window read = %v, want reader (sticky is per request)", log[len(log)-1])
 	}
 	clock += 6000
 	_, _ = Execute(ctx, "SELECT 1", nil, ReadIntent())
@@ -451,7 +461,7 @@ func TestNamedDBRouting(t *testing.T) {
 // C2, the TRANSACTION half of named-DB routing (#215): WHICH db a transaction opens on is the ctx's
 // answer ([ExecutionContext.WithConnectionName]), not the caller's. A statement carries its db in its
 // own [StatementIntent]; a transaction has no statement to carry it — and the covered plane's boundary
-// ([WithAmbientTransaction]) takes no argument at all — so the name rides on the ctx and
+// ([WithAmbientTransaction]) takes no connection name — so the name rides on the ctx and
 // [ExecutionContext.acquireTxConnection] resolves the WRITER pool of THAT db.
 //
 // This is the OFFLINE twin of TestPhaseCRoutingTxPinPrecedenceLive: the live one proves it against a

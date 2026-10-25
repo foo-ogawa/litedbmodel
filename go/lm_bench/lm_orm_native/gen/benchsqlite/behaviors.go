@@ -7,6 +7,7 @@
 package benchsqlite
 
 import (
+	"context"
 	"github.com/foo-ogawa/litedbmodel/go/v2/litedbmodel_runtime/wire"
 	"github.com/foo-ogawa/litedbmodel/go/v2/litedbmodel_runtime"
 )
@@ -28,10 +29,10 @@ var ExpectedSpecVersions = map[string]int64{"behavior": 6, "expression": 2, "pla
 // run_behavior). Exec is INLINE sequential (no plan driver) so a relation child reads the parent's REAL
 // struct result via direct field access and the child-present decision is made from the real parent value —
 // relation / connection converge with run_behavior (fixes #323/#74). The exposed API is the 1:1
-// STRUCT-returning entry <Method>(<positional params>) (the In_<comp> box removed); the consumer supplies
-// the leaf transport symbols (default same-package Leaf_<comp>, or a leafTransport import). This module is
-// FULLY NATIVE: a naive grep for
-// boxing primitives OR for the bc-runtime package finds nothing, by design (bc#90/runtime-free).
+// STRUCT-returning entry <Method>(ctx, <positional params>) (the In_<comp> box removed; ctx is the caller's
+// context.Context, passed to every transport call); the consumer supplies the leaf transport symbols
+// (default same-package Leaf_<comp>, or a leafTransport import). This module is FULLY NATIVE: a naive grep
+// for boxing primitives OR for the bc-runtime package finds nothing, by design (bc#90/runtime-free).
 
 // Local concrete failure type (runtime-free) — a covered runner returns *BehaviorError (satisfies
 // error) instead of a bc-runtime failure, so the fully-covered module imports ZERO bc runtime.
@@ -254,33 +255,34 @@ const (
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func FindAll() ([]UserRow, error) {
+func FindAll(ctx context.Context) ([]UserRow, error) {
 	var t_n0 []UserRow
 	produced_n0 := false
 	_ = t_n0
 	_ = produced_n0
 	// ── op 'n0' (executeSQL) ──
 	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{})}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100")}})
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ctx, payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
 	}
 	p0 := wire_n0.AsList()
 	if p0.Kind == probeGot {
+		var at1 [3]int
 		list0 := make([]UserRow, 0, p0.Got.Len())
 		for i0 := 0; i0 < p0.Got.Len(); i0++ {
 			var el0 UserRow
 			p1 := p0.Got.ElemRow(i0)
 			if p1.Kind == probeGot {
 				var rec1 UserRow
-				p2 := p1.Got.ProbeString("email")
+				p2 := p1.Got.ProbeStringAt("email", &at1[0])
 				if p2.Kind == probeGot {
 					sv2 := p2.Got
 					rec1.Email = &sv2
 				} else if p2.Kind == probeWrong {
 					return nil, deTypeMismatch("UserRow", "email", "opt(string)", p2.ActualWireType, p2.Raw)
 				}
-				p3 := p1.Got.ProbeInt("id")
+				p3 := p1.Got.ProbeIntAt("id", &at1[1])
 				if p3.Kind == probeGot {
 					rec1.Id = p3.Got
 				} else if p3.Kind == probeWrong {
@@ -290,7 +292,7 @@ func FindAll() ([]UserRow, error) {
 				} else {
 					return nil, deMissingField("UserRow", "id", "int")
 				}
-				p4 := p1.Got.ProbeString("name")
+				p4 := p1.Got.ProbeStringAt("name", &at1[2])
 				if p4.Kind == probeGot {
 					sv4 := p4.Got
 					rec1.Name = &sv4
@@ -331,46 +333,47 @@ func FindAll() ([]UserRow, error) {
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func FilterPaginateSort(published int64) ([]PostFullRow, error) {
+func FilterPaginateSort(ctx context.Context, published int64) ([]PostFullRow, error) {
 	var t_n0 []PostFullRow
 	produced_n0 := false
 	_ = t_n0
 	_ = produced_n0
 	// ── op 'n0' (executeSQL) ──
 	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireInt(published)})}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, title, content, published, author_id, created_at FROM benchmark_posts WHERE published = ? ORDER BY created_at DESC LIMIT 20 OFFSET 10")}})
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ctx, payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
 	}
 	p0 := wire_n0.AsList()
 	if p0.Kind == probeGot {
+		var at1 [6]int
 		list0 := make([]PostFullRow, 0, p0.Got.Len())
 		for i0 := 0; i0 < p0.Got.Len(); i0++ {
 			var el0 PostFullRow
 			p1 := p0.Got.ElemRow(i0)
 			if p1.Kind == probeGot {
 				var rec1 PostFullRow
-				p2 := p1.Got.ProbeInt("author_id")
+				p2 := p1.Got.ProbeIntAt("author_id", &at1[0])
 				if p2.Kind == probeGot {
 					rec1.Author_id = &p2.Got
 				} else if p2.Kind == probeWrong {
 					return nil, deTypeMismatch("PostFullRow", "author_id", "opt(int)", p2.ActualWireType, p2.Raw)
 				}
-				p3 := p1.Got.ProbeString("content")
+				p3 := p1.Got.ProbeStringAt("content", &at1[1])
 				if p3.Kind == probeGot {
 					sv3 := p3.Got
 					rec1.Content = &sv3
 				} else if p3.Kind == probeWrong {
 					return nil, deTypeMismatch("PostFullRow", "content", "opt(string)", p3.ActualWireType, p3.Raw)
 				}
-				p4 := p1.Got.ProbeString("created_at")
+				p4 := p1.Got.ProbeStringAt("created_at", &at1[2])
 				if p4.Kind == probeGot {
 					sv4 := p4.Got
 					rec1.Created_at = &sv4
 				} else if p4.Kind == probeWrong {
 					return nil, deTypeMismatch("PostFullRow", "created_at", "opt(string)", p4.ActualWireType, p4.Raw)
 				}
-				p5 := p1.Got.ProbeInt("id")
+				p5 := p1.Got.ProbeIntAt("id", &at1[3])
 				if p5.Kind == probeGot {
 					rec1.Id = p5.Got
 				} else if p5.Kind == probeWrong {
@@ -380,13 +383,13 @@ func FilterPaginateSort(published int64) ([]PostFullRow, error) {
 				} else {
 					return nil, deMissingField("PostFullRow", "id", "int")
 				}
-				p6 := p1.Got.ProbeInt("published")
+				p6 := p1.Got.ProbeIntAt("published", &at1[4])
 				if p6.Kind == probeGot {
 					rec1.Published = &p6.Got
 				} else if p6.Kind == probeWrong {
 					return nil, deTypeMismatch("PostFullRow", "published", "opt(int)", p6.ActualWireType, p6.Raw)
 				}
-				p7 := p1.Got.ProbeString("title")
+				p7 := p1.Got.ProbeStringAt("title", &at1[5])
 				if p7.Kind == probeGot {
 					sv7 := p7.Got
 					rec1.Title = &sv7
@@ -427,33 +430,34 @@ func FilterPaginateSort(published int64) ([]PostFullRow, error) {
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func FindFirst(name string) ([]UserRow, error) {
+func FindFirst(ctx context.Context, name string) ([]UserRow, error) {
 	var t_n0 []UserRow
 	produced_n0 := false
 	_ = t_n0
 	_ = produced_n0
 	// ── op 'n0' (executeSQL) ──
 	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireStr(name)})}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, email, name FROM benchmark_users WHERE name LIKE ? ORDER BY id ASC LIMIT 1")}})
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ctx, payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
 	}
 	p0 := wire_n0.AsList()
 	if p0.Kind == probeGot {
+		var at1 [3]int
 		list0 := make([]UserRow, 0, p0.Got.Len())
 		for i0 := 0; i0 < p0.Got.Len(); i0++ {
 			var el0 UserRow
 			p1 := p0.Got.ElemRow(i0)
 			if p1.Kind == probeGot {
 				var rec1 UserRow
-				p2 := p1.Got.ProbeString("email")
+				p2 := p1.Got.ProbeStringAt("email", &at1[0])
 				if p2.Kind == probeGot {
 					sv2 := p2.Got
 					rec1.Email = &sv2
 				} else if p2.Kind == probeWrong {
 					return nil, deTypeMismatch("UserRow", "email", "opt(string)", p2.ActualWireType, p2.Raw)
 				}
-				p3 := p1.Got.ProbeInt("id")
+				p3 := p1.Got.ProbeIntAt("id", &at1[1])
 				if p3.Kind == probeGot {
 					rec1.Id = p3.Got
 				} else if p3.Kind == probeWrong {
@@ -463,7 +467,7 @@ func FindFirst(name string) ([]UserRow, error) {
 				} else {
 					return nil, deMissingField("UserRow", "id", "int")
 				}
-				p4 := p1.Got.ProbeString("name")
+				p4 := p1.Got.ProbeStringAt("name", &at1[2])
 				if p4.Kind == probeGot {
 					sv4 := p4.Got
 					rec1.Name = &sv4
@@ -504,33 +508,34 @@ func FindFirst(name string) ([]UserRow, error) {
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func FindUnique(email string) ([]UserRow, error) {
+func FindUnique(ctx context.Context, email string) ([]UserRow, error) {
 	var t_n0 []UserRow
 	produced_n0 := false
 	_ = t_n0
 	_ = produced_n0
 	// ── op 'n0' (executeSQL) ──
 	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireStr(email)})}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, email, name FROM benchmark_users WHERE email = ? LIMIT 1")}})
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ctx, payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
 	}
 	p0 := wire_n0.AsList()
 	if p0.Kind == probeGot {
+		var at1 [3]int
 		list0 := make([]UserRow, 0, p0.Got.Len())
 		for i0 := 0; i0 < p0.Got.Len(); i0++ {
 			var el0 UserRow
 			p1 := p0.Got.ElemRow(i0)
 			if p1.Kind == probeGot {
 				var rec1 UserRow
-				p2 := p1.Got.ProbeString("email")
+				p2 := p1.Got.ProbeStringAt("email", &at1[0])
 				if p2.Kind == probeGot {
 					sv2 := p2.Got
 					rec1.Email = &sv2
 				} else if p2.Kind == probeWrong {
 					return nil, deTypeMismatch("UserRow", "email", "opt(string)", p2.ActualWireType, p2.Raw)
 				}
-				p3 := p1.Got.ProbeInt("id")
+				p3 := p1.Got.ProbeIntAt("id", &at1[1])
 				if p3.Kind == probeGot {
 					rec1.Id = p3.Got
 				} else if p3.Kind == probeWrong {
@@ -540,7 +545,7 @@ func FindUnique(email string) ([]UserRow, error) {
 				} else {
 					return nil, deMissingField("UserRow", "id", "int")
 				}
-				p4 := p1.Got.ProbeString("name")
+				p4 := p1.Got.ProbeStringAt("name", &at1[2])
 				if p4.Kind == probeGot {
 					sv4 := p4.Got
 					rec1.Name = &sv4
@@ -581,7 +586,7 @@ func FindUnique(email string) ([]UserRow, error) {
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func NestedFindAll() ([]UserWithPosts, error) {
+func NestedFindAll(ctx context.Context) ([]UserWithPosts, error) {
 	var t_n0 []wire.WireValue
 	produced_n0 := false
 	_ = t_n0
@@ -600,7 +605,7 @@ func NestedFindAll() ([]UserWithPosts, error) {
 	_ = produced_n3
 	// ── op 'n0' (executeSQL) ──
 	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{})}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100")}})
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ctx, payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
 	}
@@ -618,7 +623,7 @@ func NestedFindAll() ([]UserWithPosts, error) {
 	// ── op 'n1' (pluck, parent:n0) ──
 	if produced_n0 {
 		payload_n1 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "col", Val: func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range []string{"id"} { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()}, wire.WireField{Key: "rows", Val: wire.WireListOf(t_n0)}})
-		wire_n1, wire_n1Err := litedbmodel_runtime.PluckKeys(payload_n1)
+		wire_n1, wire_n1Err := litedbmodel_runtime.PluckKeys(ctx, payload_n1)
 		if wire_n1Err != nil {
 			return nil, opFailed("n1", "fail", wire_n1Err)
 		}
@@ -637,7 +642,7 @@ func NestedFindAll() ([]UserWithPosts, error) {
 	// ── op 'n2' (executeSQL, parent:n1) ──
 	if produced_n1 {
 		payload_n2 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireListOf(t_n1)})}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN (SELECT value FROM json_each(?)) ORDER BY id ASC")}})
-		wire_n2, wire_n2Err := litedbmodel_runtime.ExecuteSQL(payload_n2)
+		wire_n2, wire_n2Err := litedbmodel_runtime.ExecuteSQL(ctx, payload_n2)
 		if wire_n2Err != nil {
 			return nil, opFailed("n2", "fail", wire_n2Err)
 		}
@@ -656,26 +661,28 @@ func NestedFindAll() ([]UserWithPosts, error) {
 	// ── op 'n3' (group, parent:n0) ──
 	if produced_n0 {
 		payload_n3 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "children", Val: wire.WireListOf(t_n2)}, wire.WireField{Key: "fk", Val: func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range []string{"author_id"} { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()}, wire.WireField{Key: "into", Val: wire.WireStr("posts")}, wire.WireField{Key: "parents", Val: wire.WireListOf(t_n0)}, wire.WireField{Key: "pk", Val: func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range []string{"id"} { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()}, wire.WireField{Key: "single", Val: wire.WireBool(false)}})
-		wire_n3, wire_n3Err := litedbmodel_runtime.GroupChildren(payload_n3)
+		wire_n3, wire_n3Err := litedbmodel_runtime.GroupChildren(ctx, payload_n3)
 		if wire_n3Err != nil {
 			return nil, opFailed("n3", "fail", wire_n3Err)
 		}
 		p3 := wire_n3.AsList()
 		if p3.Kind == probeGot {
+			var at4 [4]int
+			var at9 [3]int
 			list3 := make([]UserWithPosts, 0, p3.Got.Len())
 			for i3 := 0; i3 < p3.Got.Len(); i3++ {
 				var el3 UserWithPosts
 				p4 := p3.Got.ElemRow(i3)
 				if p4.Kind == probeGot {
 					var rec4 UserWithPosts
-					p5 := p4.Got.ProbeString("email")
+					p5 := p4.Got.ProbeStringAt("email", &at4[0])
 					if p5.Kind == probeGot {
 						sv5 := p5.Got
 						rec4.Email = &sv5
 					} else if p5.Kind == probeWrong {
 						return nil, deTypeMismatch("UserWithPosts", "email", "opt(string)", p5.ActualWireType, p5.Raw)
 					}
-					p6 := p4.Got.ProbeInt("id")
+					p6 := p4.Got.ProbeIntAt("id", &at4[1])
 					if p6.Kind == probeGot {
 						rec4.Id = p6.Got
 					} else if p6.Kind == probeWrong {
@@ -685,14 +692,14 @@ func NestedFindAll() ([]UserWithPosts, error) {
 					} else {
 						return nil, deMissingField("UserWithPosts", "id", "int")
 					}
-					p7 := p4.Got.ProbeString("name")
+					p7 := p4.Got.ProbeStringAt("name", &at4[2])
 					if p7.Kind == probeGot {
 						sv7 := p7.Got
 						rec4.Name = &sv7
 					} else if p7.Kind == probeWrong {
 						return nil, deTypeMismatch("UserWithPosts", "name", "opt(string)", p7.ActualWireType, p7.Raw)
 					}
-					p8 := p4.Got.ProbeList("posts")
+					p8 := p4.Got.ProbeListAt("posts", &at4[3])
 					if p8.Kind == probeGot {
 						list8 := make([]PostRow, 0, p8.Got.Len())
 						for i8 := 0; i8 < p8.Got.Len(); i8++ {
@@ -700,13 +707,13 @@ func NestedFindAll() ([]UserWithPosts, error) {
 							p9 := p8.Got.ElemRow(i8)
 							if p9.Kind == probeGot {
 								var rec9 PostRow
-								p10 := p9.Got.ProbeInt("author_id")
+								p10 := p9.Got.ProbeIntAt("author_id", &at9[0])
 								if p10.Kind == probeGot {
 									rec9.Author_id = &p10.Got
 								} else if p10.Kind == probeWrong {
 									return nil, deTypeMismatch("PostRow", "author_id", "opt(int)", p10.ActualWireType, p10.Raw)
 								}
-								p11 := p9.Got.ProbeInt("id")
+								p11 := p9.Got.ProbeIntAt("id", &at9[1])
 								if p11.Kind == probeGot {
 									rec9.Id = p11.Got
 								} else if p11.Kind == probeWrong {
@@ -716,7 +723,7 @@ func NestedFindAll() ([]UserWithPosts, error) {
 								} else {
 									return nil, deMissingField("PostRow", "id", "int")
 								}
-								p12 := p9.Got.ProbeString("title")
+								p12 := p9.Got.ProbeStringAt("title", &at9[2])
 								if p12.Kind == probeGot {
 									sv12 := p12.Got
 									rec9.Title = &sv12
@@ -776,7 +783,7 @@ func NestedFindAll() ([]UserWithPosts, error) {
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func NestedFindFirst(name string) ([]UserWithPosts, error) {
+func NestedFindFirst(ctx context.Context, name string) ([]UserWithPosts, error) {
 	var t_n0 []wire.WireValue
 	produced_n0 := false
 	_ = t_n0
@@ -795,7 +802,7 @@ func NestedFindFirst(name string) ([]UserWithPosts, error) {
 	_ = produced_n3
 	// ── op 'n0' (executeSQL) ──
 	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireStr(name)})}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, email, name FROM benchmark_users WHERE name LIKE ? ORDER BY id ASC LIMIT 1")}})
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ctx, payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
 	}
@@ -813,7 +820,7 @@ func NestedFindFirst(name string) ([]UserWithPosts, error) {
 	// ── op 'n1' (pluck, parent:n0) ──
 	if produced_n0 {
 		payload_n1 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "col", Val: func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range []string{"id"} { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()}, wire.WireField{Key: "rows", Val: wire.WireListOf(t_n0)}})
-		wire_n1, wire_n1Err := litedbmodel_runtime.PluckKeys(payload_n1)
+		wire_n1, wire_n1Err := litedbmodel_runtime.PluckKeys(ctx, payload_n1)
 		if wire_n1Err != nil {
 			return nil, opFailed("n1", "fail", wire_n1Err)
 		}
@@ -832,7 +839,7 @@ func NestedFindFirst(name string) ([]UserWithPosts, error) {
 	// ── op 'n2' (executeSQL, parent:n1) ──
 	if produced_n1 {
 		payload_n2 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireListOf(t_n1)})}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN (SELECT value FROM json_each(?)) ORDER BY id ASC")}})
-		wire_n2, wire_n2Err := litedbmodel_runtime.ExecuteSQL(payload_n2)
+		wire_n2, wire_n2Err := litedbmodel_runtime.ExecuteSQL(ctx, payload_n2)
 		if wire_n2Err != nil {
 			return nil, opFailed("n2", "fail", wire_n2Err)
 		}
@@ -851,26 +858,28 @@ func NestedFindFirst(name string) ([]UserWithPosts, error) {
 	// ── op 'n3' (group, parent:n0) ──
 	if produced_n0 {
 		payload_n3 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "children", Val: wire.WireListOf(t_n2)}, wire.WireField{Key: "fk", Val: func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range []string{"author_id"} { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()}, wire.WireField{Key: "into", Val: wire.WireStr("posts")}, wire.WireField{Key: "parents", Val: wire.WireListOf(t_n0)}, wire.WireField{Key: "pk", Val: func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range []string{"id"} { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()}, wire.WireField{Key: "single", Val: wire.WireBool(false)}})
-		wire_n3, wire_n3Err := litedbmodel_runtime.GroupChildren(payload_n3)
+		wire_n3, wire_n3Err := litedbmodel_runtime.GroupChildren(ctx, payload_n3)
 		if wire_n3Err != nil {
 			return nil, opFailed("n3", "fail", wire_n3Err)
 		}
 		p3 := wire_n3.AsList()
 		if p3.Kind == probeGot {
+			var at4 [4]int
+			var at9 [3]int
 			list3 := make([]UserWithPosts, 0, p3.Got.Len())
 			for i3 := 0; i3 < p3.Got.Len(); i3++ {
 				var el3 UserWithPosts
 				p4 := p3.Got.ElemRow(i3)
 				if p4.Kind == probeGot {
 					var rec4 UserWithPosts
-					p5 := p4.Got.ProbeString("email")
+					p5 := p4.Got.ProbeStringAt("email", &at4[0])
 					if p5.Kind == probeGot {
 						sv5 := p5.Got
 						rec4.Email = &sv5
 					} else if p5.Kind == probeWrong {
 						return nil, deTypeMismatch("UserWithPosts", "email", "opt(string)", p5.ActualWireType, p5.Raw)
 					}
-					p6 := p4.Got.ProbeInt("id")
+					p6 := p4.Got.ProbeIntAt("id", &at4[1])
 					if p6.Kind == probeGot {
 						rec4.Id = p6.Got
 					} else if p6.Kind == probeWrong {
@@ -880,14 +889,14 @@ func NestedFindFirst(name string) ([]UserWithPosts, error) {
 					} else {
 						return nil, deMissingField("UserWithPosts", "id", "int")
 					}
-					p7 := p4.Got.ProbeString("name")
+					p7 := p4.Got.ProbeStringAt("name", &at4[2])
 					if p7.Kind == probeGot {
 						sv7 := p7.Got
 						rec4.Name = &sv7
 					} else if p7.Kind == probeWrong {
 						return nil, deTypeMismatch("UserWithPosts", "name", "opt(string)", p7.ActualWireType, p7.Raw)
 					}
-					p8 := p4.Got.ProbeList("posts")
+					p8 := p4.Got.ProbeListAt("posts", &at4[3])
 					if p8.Kind == probeGot {
 						list8 := make([]PostRow, 0, p8.Got.Len())
 						for i8 := 0; i8 < p8.Got.Len(); i8++ {
@@ -895,13 +904,13 @@ func NestedFindFirst(name string) ([]UserWithPosts, error) {
 							p9 := p8.Got.ElemRow(i8)
 							if p9.Kind == probeGot {
 								var rec9 PostRow
-								p10 := p9.Got.ProbeInt("author_id")
+								p10 := p9.Got.ProbeIntAt("author_id", &at9[0])
 								if p10.Kind == probeGot {
 									rec9.Author_id = &p10.Got
 								} else if p10.Kind == probeWrong {
 									return nil, deTypeMismatch("PostRow", "author_id", "opt(int)", p10.ActualWireType, p10.Raw)
 								}
-								p11 := p9.Got.ProbeInt("id")
+								p11 := p9.Got.ProbeIntAt("id", &at9[1])
 								if p11.Kind == probeGot {
 									rec9.Id = p11.Got
 								} else if p11.Kind == probeWrong {
@@ -911,7 +920,7 @@ func NestedFindFirst(name string) ([]UserWithPosts, error) {
 								} else {
 									return nil, deMissingField("PostRow", "id", "int")
 								}
-								p12 := p9.Got.ProbeString("title")
+								p12 := p9.Got.ProbeStringAt("title", &at9[2])
 								if p12.Kind == probeGot {
 									sv12 := p12.Got
 									rec9.Title = &sv12
@@ -971,7 +980,7 @@ func NestedFindFirst(name string) ([]UserWithPosts, error) {
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func NestedFindUnique(email string) ([]UserWithPosts, error) {
+func NestedFindUnique(ctx context.Context, email string) ([]UserWithPosts, error) {
 	var t_n0 []wire.WireValue
 	produced_n0 := false
 	_ = t_n0
@@ -990,7 +999,7 @@ func NestedFindUnique(email string) ([]UserWithPosts, error) {
 	_ = produced_n3
 	// ── op 'n0' (executeSQL) ──
 	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireStr(email)})}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, email, name FROM benchmark_users WHERE email = ? LIMIT 1")}})
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ctx, payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
 	}
@@ -1008,7 +1017,7 @@ func NestedFindUnique(email string) ([]UserWithPosts, error) {
 	// ── op 'n1' (pluck, parent:n0) ──
 	if produced_n0 {
 		payload_n1 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "col", Val: func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range []string{"id"} { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()}, wire.WireField{Key: "rows", Val: wire.WireListOf(t_n0)}})
-		wire_n1, wire_n1Err := litedbmodel_runtime.PluckKeys(payload_n1)
+		wire_n1, wire_n1Err := litedbmodel_runtime.PluckKeys(ctx, payload_n1)
 		if wire_n1Err != nil {
 			return nil, opFailed("n1", "fail", wire_n1Err)
 		}
@@ -1027,7 +1036,7 @@ func NestedFindUnique(email string) ([]UserWithPosts, error) {
 	// ── op 'n2' (executeSQL, parent:n1) ──
 	if produced_n1 {
 		payload_n2 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireListOf(t_n1)})}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN (SELECT value FROM json_each(?)) ORDER BY id ASC")}})
-		wire_n2, wire_n2Err := litedbmodel_runtime.ExecuteSQL(payload_n2)
+		wire_n2, wire_n2Err := litedbmodel_runtime.ExecuteSQL(ctx, payload_n2)
 		if wire_n2Err != nil {
 			return nil, opFailed("n2", "fail", wire_n2Err)
 		}
@@ -1046,26 +1055,28 @@ func NestedFindUnique(email string) ([]UserWithPosts, error) {
 	// ── op 'n3' (group, parent:n0) ──
 	if produced_n0 {
 		payload_n3 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "children", Val: wire.WireListOf(t_n2)}, wire.WireField{Key: "fk", Val: func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range []string{"author_id"} { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()}, wire.WireField{Key: "into", Val: wire.WireStr("posts")}, wire.WireField{Key: "parents", Val: wire.WireListOf(t_n0)}, wire.WireField{Key: "pk", Val: func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range []string{"id"} { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()}, wire.WireField{Key: "single", Val: wire.WireBool(false)}})
-		wire_n3, wire_n3Err := litedbmodel_runtime.GroupChildren(payload_n3)
+		wire_n3, wire_n3Err := litedbmodel_runtime.GroupChildren(ctx, payload_n3)
 		if wire_n3Err != nil {
 			return nil, opFailed("n3", "fail", wire_n3Err)
 		}
 		p3 := wire_n3.AsList()
 		if p3.Kind == probeGot {
+			var at4 [4]int
+			var at9 [3]int
 			list3 := make([]UserWithPosts, 0, p3.Got.Len())
 			for i3 := 0; i3 < p3.Got.Len(); i3++ {
 				var el3 UserWithPosts
 				p4 := p3.Got.ElemRow(i3)
 				if p4.Kind == probeGot {
 					var rec4 UserWithPosts
-					p5 := p4.Got.ProbeString("email")
+					p5 := p4.Got.ProbeStringAt("email", &at4[0])
 					if p5.Kind == probeGot {
 						sv5 := p5.Got
 						rec4.Email = &sv5
 					} else if p5.Kind == probeWrong {
 						return nil, deTypeMismatch("UserWithPosts", "email", "opt(string)", p5.ActualWireType, p5.Raw)
 					}
-					p6 := p4.Got.ProbeInt("id")
+					p6 := p4.Got.ProbeIntAt("id", &at4[1])
 					if p6.Kind == probeGot {
 						rec4.Id = p6.Got
 					} else if p6.Kind == probeWrong {
@@ -1075,14 +1086,14 @@ func NestedFindUnique(email string) ([]UserWithPosts, error) {
 					} else {
 						return nil, deMissingField("UserWithPosts", "id", "int")
 					}
-					p7 := p4.Got.ProbeString("name")
+					p7 := p4.Got.ProbeStringAt("name", &at4[2])
 					if p7.Kind == probeGot {
 						sv7 := p7.Got
 						rec4.Name = &sv7
 					} else if p7.Kind == probeWrong {
 						return nil, deTypeMismatch("UserWithPosts", "name", "opt(string)", p7.ActualWireType, p7.Raw)
 					}
-					p8 := p4.Got.ProbeList("posts")
+					p8 := p4.Got.ProbeListAt("posts", &at4[3])
 					if p8.Kind == probeGot {
 						list8 := make([]PostRow, 0, p8.Got.Len())
 						for i8 := 0; i8 < p8.Got.Len(); i8++ {
@@ -1090,13 +1101,13 @@ func NestedFindUnique(email string) ([]UserWithPosts, error) {
 							p9 := p8.Got.ElemRow(i8)
 							if p9.Kind == probeGot {
 								var rec9 PostRow
-								p10 := p9.Got.ProbeInt("author_id")
+								p10 := p9.Got.ProbeIntAt("author_id", &at9[0])
 								if p10.Kind == probeGot {
 									rec9.Author_id = &p10.Got
 								} else if p10.Kind == probeWrong {
 									return nil, deTypeMismatch("PostRow", "author_id", "opt(int)", p10.ActualWireType, p10.Raw)
 								}
-								p11 := p9.Got.ProbeInt("id")
+								p11 := p9.Got.ProbeIntAt("id", &at9[1])
 								if p11.Kind == probeGot {
 									rec9.Id = p11.Got
 								} else if p11.Kind == probeWrong {
@@ -1106,7 +1117,7 @@ func NestedFindUnique(email string) ([]UserWithPosts, error) {
 								} else {
 									return nil, deMissingField("PostRow", "id", "int")
 								}
-								p12 := p9.Got.ProbeString("title")
+								p12 := p9.Got.ProbeStringAt("title", &at9[2])
 								if p12.Kind == probeGot {
 									sv12 := p12.Got
 									rec9.Title = &sv12
@@ -1166,7 +1177,7 @@ func NestedFindUnique(email string) ([]UserWithPosts, error) {
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func NestedRelations() ([]UserWithPostsAndComments, error) {
+func NestedRelations(ctx context.Context) ([]UserWithPostsAndComments, error) {
 	var t_n0 []wire.WireValue
 	produced_n0 := false
 	_ = t_n0
@@ -1197,7 +1208,7 @@ func NestedRelations() ([]UserWithPostsAndComments, error) {
 	_ = produced_n6
 	// ── op 'n0' (executeSQL) ──
 	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{})}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, email, name FROM benchmark_users ORDER BY id ASC LIMIT 100")}})
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ctx, payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
 	}
@@ -1215,7 +1226,7 @@ func NestedRelations() ([]UserWithPostsAndComments, error) {
 	// ── op 'n1' (pluck, parent:n0) ──
 	if produced_n0 {
 		payload_n1 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "col", Val: func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range []string{"id"} { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()}, wire.WireField{Key: "rows", Val: wire.WireListOf(t_n0)}})
-		wire_n1, wire_n1Err := litedbmodel_runtime.PluckKeys(payload_n1)
+		wire_n1, wire_n1Err := litedbmodel_runtime.PluckKeys(ctx, payload_n1)
 		if wire_n1Err != nil {
 			return nil, opFailed("n1", "fail", wire_n1Err)
 		}
@@ -1234,7 +1245,7 @@ func NestedRelations() ([]UserWithPostsAndComments, error) {
 	// ── op 'n2' (executeSQL, parent:n1) ──
 	if produced_n1 {
 		payload_n2 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireListOf(t_n1)})}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, title, author_id FROM benchmark_posts WHERE author_id IN (SELECT value FROM json_each(?)) ORDER BY id ASC")}})
-		wire_n2, wire_n2Err := litedbmodel_runtime.ExecuteSQL(payload_n2)
+		wire_n2, wire_n2Err := litedbmodel_runtime.ExecuteSQL(ctx, payload_n2)
 		if wire_n2Err != nil {
 			return nil, opFailed("n2", "fail", wire_n2Err)
 		}
@@ -1253,7 +1264,7 @@ func NestedRelations() ([]UserWithPostsAndComments, error) {
 	// ── op 'n3' (pluck, parent:n2) ──
 	if produced_n2 {
 		payload_n3 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "col", Val: func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range []string{"id"} { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()}, wire.WireField{Key: "rows", Val: wire.WireListOf(t_n2)}})
-		wire_n3, wire_n3Err := litedbmodel_runtime.PluckKeys(payload_n3)
+		wire_n3, wire_n3Err := litedbmodel_runtime.PluckKeys(ctx, payload_n3)
 		if wire_n3Err != nil {
 			return nil, opFailed("n3", "fail", wire_n3Err)
 		}
@@ -1272,7 +1283,7 @@ func NestedRelations() ([]UserWithPostsAndComments, error) {
 	// ── op 'n4' (executeSQL, parent:n3) ──
 	if produced_n3 {
 		payload_n4 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireListOf(t_n3)})}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, body, post_id FROM benchmark_comments WHERE post_id IN (SELECT value FROM json_each(?)) ORDER BY id ASC")}})
-		wire_n4, wire_n4Err := litedbmodel_runtime.ExecuteSQL(payload_n4)
+		wire_n4, wire_n4Err := litedbmodel_runtime.ExecuteSQL(ctx, payload_n4)
 		if wire_n4Err != nil {
 			return nil, opFailed("n4", "fail", wire_n4Err)
 		}
@@ -1291,7 +1302,7 @@ func NestedRelations() ([]UserWithPostsAndComments, error) {
 	// ── op 'n5' (group, parent:n2) ──
 	if produced_n2 {
 		payload_n5 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "children", Val: wire.WireListOf(t_n4)}, wire.WireField{Key: "fk", Val: func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range []string{"post_id"} { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()}, wire.WireField{Key: "into", Val: wire.WireStr("comments")}, wire.WireField{Key: "parents", Val: wire.WireListOf(t_n2)}, wire.WireField{Key: "pk", Val: func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range []string{"id"} { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()}, wire.WireField{Key: "single", Val: wire.WireBool(false)}})
-		wire_n5, wire_n5Err := litedbmodel_runtime.GroupChildren(payload_n5)
+		wire_n5, wire_n5Err := litedbmodel_runtime.GroupChildren(ctx, payload_n5)
 		if wire_n5Err != nil {
 			return nil, opFailed("n5", "fail", wire_n5Err)
 		}
@@ -1310,26 +1321,29 @@ func NestedRelations() ([]UserWithPostsAndComments, error) {
 	// ── op 'n6' (group, parent:n0) ──
 	if produced_n0 {
 		payload_n6 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "children", Val: wire.WireListOf(t_n5)}, wire.WireField{Key: "fk", Val: func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range []string{"author_id"} { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()}, wire.WireField{Key: "into", Val: wire.WireStr("posts")}, wire.WireField{Key: "parents", Val: wire.WireListOf(t_n0)}, wire.WireField{Key: "pk", Val: func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range []string{"id"} { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()}, wire.WireField{Key: "single", Val: wire.WireBool(false)}})
-		wire_n6, wire_n6Err := litedbmodel_runtime.GroupChildren(payload_n6)
+		wire_n6, wire_n6Err := litedbmodel_runtime.GroupChildren(ctx, payload_n6)
 		if wire_n6Err != nil {
 			return nil, opFailed("n6", "fail", wire_n6Err)
 		}
 		p6 := wire_n6.AsList()
 		if p6.Kind == probeGot {
+			var at7 [4]int
+			var at12 [4]int
+			var at15 [3]int
 			list6 := make([]UserWithPostsAndComments, 0, p6.Got.Len())
 			for i6 := 0; i6 < p6.Got.Len(); i6++ {
 				var el6 UserWithPostsAndComments
 				p7 := p6.Got.ElemRow(i6)
 				if p7.Kind == probeGot {
 					var rec7 UserWithPostsAndComments
-					p8 := p7.Got.ProbeString("email")
+					p8 := p7.Got.ProbeStringAt("email", &at7[0])
 					if p8.Kind == probeGot {
 						sv8 := p8.Got
 						rec7.Email = &sv8
 					} else if p8.Kind == probeWrong {
 						return nil, deTypeMismatch("UserWithPostsAndComments", "email", "opt(string)", p8.ActualWireType, p8.Raw)
 					}
-					p9 := p7.Got.ProbeInt("id")
+					p9 := p7.Got.ProbeIntAt("id", &at7[1])
 					if p9.Kind == probeGot {
 						rec7.Id = p9.Got
 					} else if p9.Kind == probeWrong {
@@ -1339,14 +1353,14 @@ func NestedRelations() ([]UserWithPostsAndComments, error) {
 					} else {
 						return nil, deMissingField("UserWithPostsAndComments", "id", "int")
 					}
-					p10 := p7.Got.ProbeString("name")
+					p10 := p7.Got.ProbeStringAt("name", &at7[2])
 					if p10.Kind == probeGot {
 						sv10 := p10.Got
 						rec7.Name = &sv10
 					} else if p10.Kind == probeWrong {
 						return nil, deTypeMismatch("UserWithPostsAndComments", "name", "opt(string)", p10.ActualWireType, p10.Raw)
 					}
-					p11 := p7.Got.ProbeList("posts")
+					p11 := p7.Got.ProbeListAt("posts", &at7[3])
 					if p11.Kind == probeGot {
 						list11 := make([]PostWithComments, 0, p11.Got.Len())
 						for i11 := 0; i11 < p11.Got.Len(); i11++ {
@@ -1354,13 +1368,13 @@ func NestedRelations() ([]UserWithPostsAndComments, error) {
 							p12 := p11.Got.ElemRow(i11)
 							if p12.Kind == probeGot {
 								var rec12 PostWithComments
-								p13 := p12.Got.ProbeInt("author_id")
+								p13 := p12.Got.ProbeIntAt("author_id", &at12[0])
 								if p13.Kind == probeGot {
 									rec12.Author_id = &p13.Got
 								} else if p13.Kind == probeWrong {
 									return nil, deTypeMismatch("PostWithComments", "author_id", "opt(int)", p13.ActualWireType, p13.Raw)
 								}
-								p14 := p12.Got.ProbeList("comments")
+								p14 := p12.Got.ProbeListAt("comments", &at12[1])
 								if p14.Kind == probeGot {
 									list14 := make([]CommentRow, 0, p14.Got.Len())
 									for i14 := 0; i14 < p14.Got.Len(); i14++ {
@@ -1368,20 +1382,20 @@ func NestedRelations() ([]UserWithPostsAndComments, error) {
 										p15 := p14.Got.ElemRow(i14)
 										if p15.Kind == probeGot {
 											var rec15 CommentRow
-											p16 := p15.Got.ProbeString("body")
+											p16 := p15.Got.ProbeStringAt("body", &at15[0])
 											if p16.Kind == probeGot {
 												sv16 := p16.Got
 												rec15.Body = &sv16
 											} else if p16.Kind == probeWrong {
 												return nil, deTypeMismatch("CommentRow", "body", "opt(string)", p16.ActualWireType, p16.Raw)
 											}
-											p17 := p15.Got.ProbeInt("id")
+											p17 := p15.Got.ProbeIntAt("id", &at15[1])
 											if p17.Kind == probeGot {
 												rec15.Id = &p17.Got
 											} else if p17.Kind == probeWrong {
 												return nil, deTypeMismatch("CommentRow", "id", "opt(int)", p17.ActualWireType, p17.Raw)
 											}
-											p18 := p15.Got.ProbeInt("post_id")
+											p18 := p15.Got.ProbeIntAt("post_id", &at15[2])
 											if p18.Kind == probeGot {
 												rec15.Post_id = &p18.Got
 											} else if p18.Kind == probeWrong {
@@ -1405,7 +1419,7 @@ func NestedRelations() ([]UserWithPostsAndComments, error) {
 								} else {
 									return nil, deMissingField("PostWithComments", "comments", "arr(obj{body:opt(string),id:opt(int),post_id:opt(int)})")
 								}
-								p19 := p12.Got.ProbeInt("id")
+								p19 := p12.Got.ProbeIntAt("id", &at12[2])
 								if p19.Kind == probeGot {
 									rec12.Id = p19.Got
 								} else if p19.Kind == probeWrong {
@@ -1415,7 +1429,7 @@ func NestedRelations() ([]UserWithPostsAndComments, error) {
 								} else {
 									return nil, deMissingField("PostWithComments", "id", "int")
 								}
-								p20 := p12.Got.ProbeString("title")
+								p20 := p12.Got.ProbeStringAt("title", &at12[3])
 								if p20.Kind == probeGot {
 									sv20 := p20.Got
 									rec12.Title = &sv20
@@ -1475,7 +1489,7 @@ func NestedRelations() ([]UserWithPostsAndComments, error) {
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func CompositeRelations() ([]TenantUserWithPosts, error) {
+func CompositeRelations(ctx context.Context) ([]TenantUserWithPosts, error) {
 	var t_n0 []wire.WireValue
 	produced_n0 := false
 	_ = t_n0
@@ -1506,7 +1520,7 @@ func CompositeRelations() ([]TenantUserWithPosts, error) {
 	_ = produced_n6
 	// ── op 'n0' (executeSQL) ──
 	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{})}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT tenant_id, user_id, name FROM benchmark_tenant_users ORDER BY user_id ASC LIMIT 100")}})
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ctx, payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
 	}
@@ -1524,7 +1538,7 @@ func CompositeRelations() ([]TenantUserWithPosts, error) {
 	// ── op 'n1' (pluck, parent:n0) ──
 	if produced_n0 {
 		payload_n1 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "col", Val: func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range []string{"tenant_id", "user_id"} { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()}, wire.WireField{Key: "rows", Val: wire.WireListOf(t_n0)}})
-		wire_n1, wire_n1Err := litedbmodel_runtime.PluckKeys(payload_n1)
+		wire_n1, wire_n1Err := litedbmodel_runtime.PluckKeys(ctx, payload_n1)
 		if wire_n1Err != nil {
 			return nil, opFailed("n1", "fail", wire_n1Err)
 		}
@@ -1543,7 +1557,7 @@ func CompositeRelations() ([]TenantUserWithPosts, error) {
 	// ── op 'n2' (executeSQL, parent:n1) ──
 	if produced_n1 {
 		payload_n2 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireListOf(t_n1)})}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT tenant_id, post_id, user_id, title FROM benchmark_tenant_posts WHERE (benchmark_tenant_posts.tenant_id, benchmark_tenant_posts.user_id) IN (SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]') FROM json_each(?)) ORDER BY post_id ASC")}})
-		wire_n2, wire_n2Err := litedbmodel_runtime.ExecuteSQL(payload_n2)
+		wire_n2, wire_n2Err := litedbmodel_runtime.ExecuteSQL(ctx, payload_n2)
 		if wire_n2Err != nil {
 			return nil, opFailed("n2", "fail", wire_n2Err)
 		}
@@ -1562,7 +1576,7 @@ func CompositeRelations() ([]TenantUserWithPosts, error) {
 	// ── op 'n3' (pluck, parent:n2) ──
 	if produced_n2 {
 		payload_n3 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "col", Val: func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range []string{"tenant_id", "post_id"} { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()}, wire.WireField{Key: "rows", Val: wire.WireListOf(t_n2)}})
-		wire_n3, wire_n3Err := litedbmodel_runtime.PluckKeys(payload_n3)
+		wire_n3, wire_n3Err := litedbmodel_runtime.PluckKeys(ctx, payload_n3)
 		if wire_n3Err != nil {
 			return nil, opFailed("n3", "fail", wire_n3Err)
 		}
@@ -1581,7 +1595,7 @@ func CompositeRelations() ([]TenantUserWithPosts, error) {
 	// ── op 'n4' (executeSQL, parent:n3) ──
 	if produced_n3 {
 		payload_n4 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireListOf(t_n3)})}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT tenant_id, comment_id, post_id, body FROM benchmark_tenant_comments WHERE (benchmark_tenant_comments.tenant_id, benchmark_tenant_comments.post_id) IN (SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]') FROM json_each(?)) ORDER BY comment_id ASC")}})
-		wire_n4, wire_n4Err := litedbmodel_runtime.ExecuteSQL(payload_n4)
+		wire_n4, wire_n4Err := litedbmodel_runtime.ExecuteSQL(ctx, payload_n4)
 		if wire_n4Err != nil {
 			return nil, opFailed("n4", "fail", wire_n4Err)
 		}
@@ -1600,7 +1614,7 @@ func CompositeRelations() ([]TenantUserWithPosts, error) {
 	// ── op 'n5' (group, parent:n2) ──
 	if produced_n2 {
 		payload_n5 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "children", Val: wire.WireListOf(t_n4)}, wire.WireField{Key: "fk", Val: func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range []string{"tenant_id", "post_id"} { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()}, wire.WireField{Key: "into", Val: wire.WireStr("comments")}, wire.WireField{Key: "parents", Val: wire.WireListOf(t_n2)}, wire.WireField{Key: "pk", Val: func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range []string{"tenant_id", "post_id"} { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()}, wire.WireField{Key: "single", Val: wire.WireBool(false)}})
-		wire_n5, wire_n5Err := litedbmodel_runtime.GroupChildren(payload_n5)
+		wire_n5, wire_n5Err := litedbmodel_runtime.GroupChildren(ctx, payload_n5)
 		if wire_n5Err != nil {
 			return nil, opFailed("n5", "fail", wire_n5Err)
 		}
@@ -1619,26 +1633,29 @@ func CompositeRelations() ([]TenantUserWithPosts, error) {
 	// ── op 'n6' (group, parent:n0) ──
 	if produced_n0 {
 		payload_n6 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "children", Val: wire.WireListOf(t_n5)}, wire.WireField{Key: "fk", Val: func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range []string{"tenant_id", "user_id"} { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()}, wire.WireField{Key: "into", Val: wire.WireStr("posts")}, wire.WireField{Key: "parents", Val: wire.WireListOf(t_n0)}, wire.WireField{Key: "pk", Val: func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range []string{"tenant_id", "user_id"} { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()}, wire.WireField{Key: "single", Val: wire.WireBool(false)}})
-		wire_n6, wire_n6Err := litedbmodel_runtime.GroupChildren(payload_n6)
+		wire_n6, wire_n6Err := litedbmodel_runtime.GroupChildren(ctx, payload_n6)
 		if wire_n6Err != nil {
 			return nil, opFailed("n6", "fail", wire_n6Err)
 		}
 		p6 := wire_n6.AsList()
 		if p6.Kind == probeGot {
+			var at7 [4]int
+			var at10 [5]int
+			var at12 [4]int
 			list6 := make([]TenantUserWithPosts, 0, p6.Got.Len())
 			for i6 := 0; i6 < p6.Got.Len(); i6++ {
 				var el6 TenantUserWithPosts
 				p7 := p6.Got.ElemRow(i6)
 				if p7.Kind == probeGot {
 					var rec7 TenantUserWithPosts
-					p8 := p7.Got.ProbeString("name")
+					p8 := p7.Got.ProbeStringAt("name", &at7[0])
 					if p8.Kind == probeGot {
 						sv8 := p8.Got
 						rec7.Name = &sv8
 					} else if p8.Kind == probeWrong {
 						return nil, deTypeMismatch("TenantUserWithPosts", "name", "opt(string)", p8.ActualWireType, p8.Raw)
 					}
-					p9 := p7.Got.ProbeList("posts")
+					p9 := p7.Got.ProbeListAt("posts", &at7[1])
 					if p9.Kind == probeGot {
 						list9 := make([]TenantPostWithComments, 0, p9.Got.Len())
 						for i9 := 0; i9 < p9.Got.Len(); i9++ {
@@ -1646,7 +1663,7 @@ func CompositeRelations() ([]TenantUserWithPosts, error) {
 							p10 := p9.Got.ElemRow(i9)
 							if p10.Kind == probeGot {
 								var rec10 TenantPostWithComments
-								p11 := p10.Got.ProbeList("comments")
+								p11 := p10.Got.ProbeListAt("comments", &at10[0])
 								if p11.Kind == probeGot {
 									list11 := make([]TenantCommentRow, 0, p11.Got.Len())
 									for i11 := 0; i11 < p11.Got.Len(); i11++ {
@@ -1654,26 +1671,26 @@ func CompositeRelations() ([]TenantUserWithPosts, error) {
 										p12 := p11.Got.ElemRow(i11)
 										if p12.Kind == probeGot {
 											var rec12 TenantCommentRow
-											p13 := p12.Got.ProbeString("body")
+											p13 := p12.Got.ProbeStringAt("body", &at12[0])
 											if p13.Kind == probeGot {
 												sv13 := p13.Got
 												rec12.Body = &sv13
 											} else if p13.Kind == probeWrong {
 												return nil, deTypeMismatch("TenantCommentRow", "body", "opt(string)", p13.ActualWireType, p13.Raw)
 											}
-											p14 := p12.Got.ProbeInt("comment_id")
+											p14 := p12.Got.ProbeIntAt("comment_id", &at12[1])
 											if p14.Kind == probeGot {
 												rec12.Comment_id = &p14.Got
 											} else if p14.Kind == probeWrong {
 												return nil, deTypeMismatch("TenantCommentRow", "comment_id", "opt(int)", p14.ActualWireType, p14.Raw)
 											}
-											p15 := p12.Got.ProbeInt("post_id")
+											p15 := p12.Got.ProbeIntAt("post_id", &at12[2])
 											if p15.Kind == probeGot {
 												rec12.Post_id = &p15.Got
 											} else if p15.Kind == probeWrong {
 												return nil, deTypeMismatch("TenantCommentRow", "post_id", "opt(int)", p15.ActualWireType, p15.Raw)
 											}
-											p16 := p12.Got.ProbeInt("tenant_id")
+											p16 := p12.Got.ProbeIntAt("tenant_id", &at12[3])
 											if p16.Kind == probeGot {
 												rec12.Tenant_id = &p16.Got
 											} else if p16.Kind == probeWrong {
@@ -1697,26 +1714,26 @@ func CompositeRelations() ([]TenantUserWithPosts, error) {
 								} else {
 									return nil, deMissingField("TenantPostWithComments", "comments", "arr(obj{body:opt(string),comment_id:opt(int),post_id:opt(int),tenant_id:opt(int)})")
 								}
-								p17 := p10.Got.ProbeInt("post_id")
+								p17 := p10.Got.ProbeIntAt("post_id", &at10[1])
 								if p17.Kind == probeGot {
 									rec10.Post_id = &p17.Got
 								} else if p17.Kind == probeWrong {
 									return nil, deTypeMismatch("TenantPostWithComments", "post_id", "opt(int)", p17.ActualWireType, p17.Raw)
 								}
-								p18 := p10.Got.ProbeInt("tenant_id")
+								p18 := p10.Got.ProbeIntAt("tenant_id", &at10[2])
 								if p18.Kind == probeGot {
 									rec10.Tenant_id = &p18.Got
 								} else if p18.Kind == probeWrong {
 									return nil, deTypeMismatch("TenantPostWithComments", "tenant_id", "opt(int)", p18.ActualWireType, p18.Raw)
 								}
-								p19 := p10.Got.ProbeString("title")
+								p19 := p10.Got.ProbeStringAt("title", &at10[3])
 								if p19.Kind == probeGot {
 									sv19 := p19.Got
 									rec10.Title = &sv19
 								} else if p19.Kind == probeWrong {
 									return nil, deTypeMismatch("TenantPostWithComments", "title", "opt(string)", p19.ActualWireType, p19.Raw)
 								}
-								p20 := p10.Got.ProbeInt("user_id")
+								p20 := p10.Got.ProbeIntAt("user_id", &at10[4])
 								if p20.Kind == probeGot {
 									rec10.User_id = &p20.Got
 								} else if p20.Kind == probeWrong {
@@ -1740,13 +1757,13 @@ func CompositeRelations() ([]TenantUserWithPosts, error) {
 					} else {
 						return nil, deMissingField("TenantUserWithPosts", "posts", "arr(obj{comments:arr(obj{body:opt(string),comment_id:opt(int),post_id:opt(int),tenant_id:opt(int)}),post_id:opt(int),tenant_id:opt(int),title:opt(string),user_id:opt(int)})")
 					}
-					p21 := p7.Got.ProbeInt("tenant_id")
+					p21 := p7.Got.ProbeIntAt("tenant_id", &at7[2])
 					if p21.Kind == probeGot {
 						rec7.Tenant_id = &p21.Got
 					} else if p21.Kind == probeWrong {
 						return nil, deTypeMismatch("TenantUserWithPosts", "tenant_id", "opt(int)", p21.ActualWireType, p21.Raw)
 					}
-					p22 := p7.Got.ProbeInt("user_id")
+					p22 := p7.Got.ProbeIntAt("user_id", &at7[3])
 					if p22.Kind == probeGot {
 						rec7.User_id = &p22.Got
 					} else if p22.Kind == probeWrong {
@@ -1787,7 +1804,7 @@ func CompositeRelations() ([]TenantUserWithPosts, error) {
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func Create(email string, name string) ([]WriteSummary, error) {
+func Create(ctx context.Context, email string, name string) ([]WriteSummary, error) {
 	var t_n0 []WriteSummary
 	produced_n0 := false
 	_ = t_n0
@@ -1802,19 +1819,20 @@ func Create(email string, name string) ([]WriteSummary, error) {
 		return nil, pe_n0
 	}
 	payload_n0 := wire.WireRowOfFields(pf_n0)
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ctx, payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
 	}
 	p0 := wire_n0.AsList()
 	if p0.Kind == probeGot {
+		var at1 [2]int
 		list0 := make([]WriteSummary, 0, p0.Got.Len())
 		for i0 := 0; i0 < p0.Got.Len(); i0++ {
 			var el0 WriteSummary
 			p1 := p0.Got.ElemRow(i0)
 			if p1.Kind == probeGot {
 				var rec1 WriteSummary
-				p2 := p1.Got.ProbeInt("changes")
+				p2 := p1.Got.ProbeIntAt("changes", &at1[0])
 				if p2.Kind == probeGot {
 					rec1.Changes = p2.Got
 				} else if p2.Kind == probeWrong {
@@ -1824,7 +1842,7 @@ func Create(email string, name string) ([]WriteSummary, error) {
 				} else {
 					return nil, deMissingField("WriteSummary", "changes", "int")
 				}
-				p3 := p1.Got.ProbeInt("lastInsertRowid")
+				p3 := p1.Got.ProbeIntAt("lastInsertRowid", &at1[1])
 				if p3.Kind == probeGot {
 					rec1.LastInsertRowid = p3.Got
 				} else if p3.Kind == probeWrong {
@@ -1868,7 +1886,7 @@ func Create(email string, name string) ([]WriteSummary, error) {
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func Update(id int64, name string) ([]WriteSummary, error) {
+func Update(ctx context.Context, id int64, name string) ([]WriteSummary, error) {
 	var t_n0 []WriteSummary
 	produced_n0 := false
 	_ = t_n0
@@ -1883,19 +1901,20 @@ func Update(id int64, name string) ([]WriteSummary, error) {
 		return nil, pe_n0
 	}
 	payload_n0 := wire.WireRowOfFields(pf_n0)
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ctx, payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
 	}
 	p0 := wire_n0.AsList()
 	if p0.Kind == probeGot {
+		var at1 [2]int
 		list0 := make([]WriteSummary, 0, p0.Got.Len())
 		for i0 := 0; i0 < p0.Got.Len(); i0++ {
 			var el0 WriteSummary
 			p1 := p0.Got.ElemRow(i0)
 			if p1.Kind == probeGot {
 				var rec1 WriteSummary
-				p2 := p1.Got.ProbeInt("changes")
+				p2 := p1.Got.ProbeIntAt("changes", &at1[0])
 				if p2.Kind == probeGot {
 					rec1.Changes = p2.Got
 				} else if p2.Kind == probeWrong {
@@ -1905,7 +1924,7 @@ func Update(id int64, name string) ([]WriteSummary, error) {
 				} else {
 					return nil, deMissingField("WriteSummary", "changes", "int")
 				}
-				p3 := p1.Got.ProbeInt("lastInsertRowid")
+				p3 := p1.Got.ProbeIntAt("lastInsertRowid", &at1[1])
 				if p3.Kind == probeGot {
 					rec1.LastInsertRowid = p3.Got
 				} else if p3.Kind == probeWrong {
@@ -1949,7 +1968,7 @@ func Update(id int64, name string) ([]WriteSummary, error) {
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func Upsert(email string, name string) ([]IdRow, error) {
+func Upsert(ctx context.Context, email string, name string) ([]IdRow, error) {
 	var t_n0 []IdRow
 	produced_n0 := false
 	_ = t_n0
@@ -1964,19 +1983,20 @@ func Upsert(email string, name string) ([]IdRow, error) {
 		return nil, pe_n0
 	}
 	payload_n0 := wire.WireRowOfFields(pf_n0)
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ctx, payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
 	}
 	p0 := wire_n0.AsList()
 	if p0.Kind == probeGot {
+		var at1 [1]int
 		list0 := make([]IdRow, 0, p0.Got.Len())
 		for i0 := 0; i0 < p0.Got.Len(); i0++ {
 			var el0 IdRow
 			p1 := p0.Got.ElemRow(i0)
 			if p1.Kind == probeGot {
 				var rec1 IdRow
-				p2 := p1.Got.ProbeInt("id")
+				p2 := p1.Got.ProbeIntAt("id", &at1[0])
 				if p2.Kind == probeGot {
 					rec1.Id = p2.Got
 				} else if p2.Kind == probeWrong {
@@ -2020,7 +2040,7 @@ func Upsert(email string, name string) ([]IdRow, error) {
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func CreateMany(rows []NewUser) ([]WriteSummary, error) {
+func CreateMany(ctx context.Context, rows []NewUser) ([]WriteSummary, error) {
 	var t_n0 []WriteSummary
 	produced_n0 := false
 	_ = t_n0
@@ -2035,19 +2055,20 @@ func CreateMany(rows []NewUser) ([]WriteSummary, error) {
 		return nil, pe_n0
 	}
 	payload_n0 := wire.WireRowOfFields(pf_n0)
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ctx, payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
 	}
 	p0 := wire_n0.AsList()
 	if p0.Kind == probeGot {
+		var at1 [2]int
 		list0 := make([]WriteSummary, 0, p0.Got.Len())
 		for i0 := 0; i0 < p0.Got.Len(); i0++ {
 			var el0 WriteSummary
 			p1 := p0.Got.ElemRow(i0)
 			if p1.Kind == probeGot {
 				var rec1 WriteSummary
-				p2 := p1.Got.ProbeInt("changes")
+				p2 := p1.Got.ProbeIntAt("changes", &at1[0])
 				if p2.Kind == probeGot {
 					rec1.Changes = p2.Got
 				} else if p2.Kind == probeWrong {
@@ -2057,7 +2078,7 @@ func CreateMany(rows []NewUser) ([]WriteSummary, error) {
 				} else {
 					return nil, deMissingField("WriteSummary", "changes", "int")
 				}
-				p3 := p1.Got.ProbeInt("lastInsertRowid")
+				p3 := p1.Got.ProbeIntAt("lastInsertRowid", &at1[1])
 				if p3.Kind == probeGot {
 					rec1.LastInsertRowid = p3.Got
 				} else if p3.Kind == probeWrong {
@@ -2101,7 +2122,7 @@ func CreateMany(rows []NewUser) ([]WriteSummary, error) {
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func UpsertMany(rows []NewUser) ([]WriteSummary, error) {
+func UpsertMany(ctx context.Context, rows []NewUser) ([]WriteSummary, error) {
 	var t_n0 []WriteSummary
 	produced_n0 := false
 	_ = t_n0
@@ -2116,19 +2137,20 @@ func UpsertMany(rows []NewUser) ([]WriteSummary, error) {
 		return nil, pe_n0
 	}
 	payload_n0 := wire.WireRowOfFields(pf_n0)
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ctx, payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
 	}
 	p0 := wire_n0.AsList()
 	if p0.Kind == probeGot {
+		var at1 [2]int
 		list0 := make([]WriteSummary, 0, p0.Got.Len())
 		for i0 := 0; i0 < p0.Got.Len(); i0++ {
 			var el0 WriteSummary
 			p1 := p0.Got.ElemRow(i0)
 			if p1.Kind == probeGot {
 				var rec1 WriteSummary
-				p2 := p1.Got.ProbeInt("changes")
+				p2 := p1.Got.ProbeIntAt("changes", &at1[0])
 				if p2.Kind == probeGot {
 					rec1.Changes = p2.Got
 				} else if p2.Kind == probeWrong {
@@ -2138,7 +2160,7 @@ func UpsertMany(rows []NewUser) ([]WriteSummary, error) {
 				} else {
 					return nil, deMissingField("WriteSummary", "changes", "int")
 				}
-				p3 := p1.Got.ProbeInt("lastInsertRowid")
+				p3 := p1.Got.ProbeIntAt("lastInsertRowid", &at1[1])
 				if p3.Kind == probeGot {
 					rec1.LastInsertRowid = p3.Got
 				} else if p3.Kind == probeWrong {
@@ -2182,7 +2204,7 @@ func UpsertMany(rows []NewUser) ([]WriteSummary, error) {
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func UpdateMany(rows []UserPatch) ([]WriteSummary, error) {
+func UpdateMany(ctx context.Context, rows []UserPatch) ([]WriteSummary, error) {
 	var t_n0 []WriteSummary
 	produced_n0 := false
 	_ = t_n0
@@ -2197,19 +2219,20 @@ func UpdateMany(rows []UserPatch) ([]WriteSummary, error) {
 		return nil, pe_n0
 	}
 	payload_n0 := wire.WireRowOfFields(pf_n0)
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ctx, payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
 	}
 	p0 := wire_n0.AsList()
 	if p0.Kind == probeGot {
+		var at1 [2]int
 		list0 := make([]WriteSummary, 0, p0.Got.Len())
 		for i0 := 0; i0 < p0.Got.Len(); i0++ {
 			var el0 WriteSummary
 			p1 := p0.Got.ElemRow(i0)
 			if p1.Kind == probeGot {
 				var rec1 WriteSummary
-				p2 := p1.Got.ProbeInt("changes")
+				p2 := p1.Got.ProbeIntAt("changes", &at1[0])
 				if p2.Kind == probeGot {
 					rec1.Changes = p2.Got
 				} else if p2.Kind == probeWrong {
@@ -2219,7 +2242,7 @@ func UpdateMany(rows []UserPatch) ([]WriteSummary, error) {
 				} else {
 					return nil, deMissingField("WriteSummary", "changes", "int")
 				}
-				p3 := p1.Got.ProbeInt("lastInsertRowid")
+				p3 := p1.Got.ProbeIntAt("lastInsertRowid", &at1[1])
 				if p3.Kind == probeGot {
 					rec1.LastInsertRowid = p3.Got
 				} else if p3.Kind == probeWrong {
@@ -2263,7 +2286,7 @@ func UpdateMany(rows []UserPatch) ([]WriteSummary, error) {
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func NestedCreate(email string, name string, title string) ([][]WriteSummary, error) {
+func NestedCreate(ctx context.Context, email string, name string, title string) ([][]WriteSummary, error) {
 	var t_n0 []IdRow
 	produced_n0 := false
 	_ = t_n0
@@ -2282,19 +2305,20 @@ func NestedCreate(email string, name string, title string) ([][]WriteSummary, er
 		return nil, pe_n0
 	}
 	payload_n0 := wire.WireRowOfFields(pf_n0)
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ctx, payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
 	}
 	p0 := wire_n0.AsList()
 	if p0.Kind == probeGot {
+		var at1 [1]int
 		list0 := make([]IdRow, 0, p0.Got.Len())
 		for i0 := 0; i0 < p0.Got.Len(); i0++ {
 			var el0 IdRow
 			p1 := p0.Got.ElemRow(i0)
 			if p1.Kind == probeGot {
 				var rec1 IdRow
-				p2 := p1.Got.ProbeInt("id")
+				p2 := p1.Got.ProbeIntAt("id", &at1[0])
 				if p2.Kind == probeGot {
 					rec1.Id = p2.Got
 				} else if p2.Kind == probeWrong {
@@ -2338,20 +2362,21 @@ func NestedCreate(email string, name string, title string) ([][]WriteSummary, er
 				return nil, pe_n1
 			}
 			ep_n1 := wire.WireRowOfFields(pf_n1)
-			mo_n1, mo_n1Err := litedbmodel_runtime.ExecuteSQL(ep_n1)
+			mo_n1, mo_n1Err := litedbmodel_runtime.ExecuteSQL(ctx, ep_n1)
 			if mo_n1Err != nil {
 				return nil, opFailed("n1", "fail", mo_n1Err)
 			}
 			var el_n1 []WriteSummary
 			p0 := mo_n1.AsList()
 			if p0.Kind == probeGot {
+				var at1 [2]int
 				list0 := make([]WriteSummary, 0, p0.Got.Len())
 				for i0 := 0; i0 < p0.Got.Len(); i0++ {
 					var el0 WriteSummary
 					p1 := p0.Got.ElemRow(i0)
 					if p1.Kind == probeGot {
 						var rec1 WriteSummary
-						p2 := p1.Got.ProbeInt("changes")
+						p2 := p1.Got.ProbeIntAt("changes", &at1[0])
 						if p2.Kind == probeGot {
 							rec1.Changes = p2.Got
 						} else if p2.Kind == probeWrong {
@@ -2361,7 +2386,7 @@ func NestedCreate(email string, name string, title string) ([][]WriteSummary, er
 						} else {
 							return nil, deMissingField("WriteSummary", "changes", "int")
 						}
-						p3 := p1.Got.ProbeInt("lastInsertRowid")
+						p3 := p1.Got.ProbeIntAt("lastInsertRowid", &at1[1])
 						if p3.Kind == probeGot {
 							rec1.LastInsertRowid = p3.Got
 						} else if p3.Kind == probeWrong {
@@ -2408,7 +2433,7 @@ func NestedCreate(email string, name string, title string) ([][]WriteSummary, er
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func NestedUpsert(email string, name string, title string) ([][]WriteSummary, error) {
+func NestedUpsert(ctx context.Context, email string, name string, title string) ([][]WriteSummary, error) {
 	var t_n0 []IdRow
 	produced_n0 := false
 	_ = t_n0
@@ -2427,19 +2452,20 @@ func NestedUpsert(email string, name string, title string) ([][]WriteSummary, er
 		return nil, pe_n0
 	}
 	payload_n0 := wire.WireRowOfFields(pf_n0)
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ctx, payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
 	}
 	p0 := wire_n0.AsList()
 	if p0.Kind == probeGot {
+		var at1 [1]int
 		list0 := make([]IdRow, 0, p0.Got.Len())
 		for i0 := 0; i0 < p0.Got.Len(); i0++ {
 			var el0 IdRow
 			p1 := p0.Got.ElemRow(i0)
 			if p1.Kind == probeGot {
 				var rec1 IdRow
-				p2 := p1.Got.ProbeInt("id")
+				p2 := p1.Got.ProbeIntAt("id", &at1[0])
 				if p2.Kind == probeGot {
 					rec1.Id = p2.Got
 				} else if p2.Kind == probeWrong {
@@ -2483,20 +2509,21 @@ func NestedUpsert(email string, name string, title string) ([][]WriteSummary, er
 				return nil, pe_n1
 			}
 			ep_n1 := wire.WireRowOfFields(pf_n1)
-			mo_n1, mo_n1Err := litedbmodel_runtime.ExecuteSQL(ep_n1)
+			mo_n1, mo_n1Err := litedbmodel_runtime.ExecuteSQL(ctx, ep_n1)
 			if mo_n1Err != nil {
 				return nil, opFailed("n1", "fail", mo_n1Err)
 			}
 			var el_n1 []WriteSummary
 			p0 := mo_n1.AsList()
 			if p0.Kind == probeGot {
+				var at1 [2]int
 				list0 := make([]WriteSummary, 0, p0.Got.Len())
 				for i0 := 0; i0 < p0.Got.Len(); i0++ {
 					var el0 WriteSummary
 					p1 := p0.Got.ElemRow(i0)
 					if p1.Kind == probeGot {
 						var rec1 WriteSummary
-						p2 := p1.Got.ProbeInt("changes")
+						p2 := p1.Got.ProbeIntAt("changes", &at1[0])
 						if p2.Kind == probeGot {
 							rec1.Changes = p2.Got
 						} else if p2.Kind == probeWrong {
@@ -2506,7 +2533,7 @@ func NestedUpsert(email string, name string, title string) ([][]WriteSummary, er
 						} else {
 							return nil, deMissingField("WriteSummary", "changes", "int")
 						}
-						p3 := p1.Got.ProbeInt("lastInsertRowid")
+						p3 := p1.Got.ProbeIntAt("lastInsertRowid", &at1[1])
 						if p3.Kind == probeGot {
 							rec1.LastInsertRowid = p3.Got
 						} else if p3.Kind == probeWrong {
@@ -2553,7 +2580,7 @@ func NestedUpsert(email string, name string, title string) ([][]WriteSummary, er
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func NestedUpdate(id int64, name string, title string) ([][]WriteSummary, error) {
+func NestedUpdate(ctx context.Context, id int64, name string, title string) ([][]WriteSummary, error) {
 	var t_n0 []IdRow
 	produced_n0 := false
 	_ = t_n0
@@ -2572,19 +2599,20 @@ func NestedUpdate(id int64, name string, title string) ([][]WriteSummary, error)
 		return nil, pe_n0
 	}
 	payload_n0 := wire.WireRowOfFields(pf_n0)
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ctx, payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
 	}
 	p0 := wire_n0.AsList()
 	if p0.Kind == probeGot {
+		var at1 [1]int
 		list0 := make([]IdRow, 0, p0.Got.Len())
 		for i0 := 0; i0 < p0.Got.Len(); i0++ {
 			var el0 IdRow
 			p1 := p0.Got.ElemRow(i0)
 			if p1.Kind == probeGot {
 				var rec1 IdRow
-				p2 := p1.Got.ProbeInt("id")
+				p2 := p1.Got.ProbeIntAt("id", &at1[0])
 				if p2.Kind == probeGot {
 					rec1.Id = p2.Got
 				} else if p2.Kind == probeWrong {
@@ -2628,20 +2656,21 @@ func NestedUpdate(id int64, name string, title string) ([][]WriteSummary, error)
 				return nil, pe_n1
 			}
 			ep_n1 := wire.WireRowOfFields(pf_n1)
-			mo_n1, mo_n1Err := litedbmodel_runtime.ExecuteSQL(ep_n1)
+			mo_n1, mo_n1Err := litedbmodel_runtime.ExecuteSQL(ctx, ep_n1)
 			if mo_n1Err != nil {
 				return nil, opFailed("n1", "fail", mo_n1Err)
 			}
 			var el_n1 []WriteSummary
 			p0 := mo_n1.AsList()
 			if p0.Kind == probeGot {
+				var at1 [2]int
 				list0 := make([]WriteSummary, 0, p0.Got.Len())
 				for i0 := 0; i0 < p0.Got.Len(); i0++ {
 					var el0 WriteSummary
 					p1 := p0.Got.ElemRow(i0)
 					if p1.Kind == probeGot {
 						var rec1 WriteSummary
-						p2 := p1.Got.ProbeInt("changes")
+						p2 := p1.Got.ProbeIntAt("changes", &at1[0])
 						if p2.Kind == probeGot {
 							rec1.Changes = p2.Got
 						} else if p2.Kind == probeWrong {
@@ -2651,7 +2680,7 @@ func NestedUpdate(id int64, name string, title string) ([][]WriteSummary, error)
 						} else {
 							return nil, deMissingField("WriteSummary", "changes", "int")
 						}
-						p3 := p1.Got.ProbeInt("lastInsertRowid")
+						p3 := p1.Got.ProbeIntAt("lastInsertRowid", &at1[1])
 						if p3.Kind == probeGot {
 							rec1.LastInsertRowid = p3.Got
 						} else if p3.Kind == probeWrong {
@@ -2698,7 +2727,7 @@ func NestedUpdate(id int64, name string, title string) ([][]WriteSummary, error)
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func Delete(email string, name string) ([][]WriteSummary, error) {
+func Delete(ctx context.Context, email string, name string) ([][]WriteSummary, error) {
 	var t_n0 []IdRow
 	produced_n0 := false
 	_ = t_n0
@@ -2717,19 +2746,20 @@ func Delete(email string, name string) ([][]WriteSummary, error) {
 		return nil, pe_n0
 	}
 	payload_n0 := wire.WireRowOfFields(pf_n0)
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ctx, payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
 	}
 	p0 := wire_n0.AsList()
 	if p0.Kind == probeGot {
+		var at1 [1]int
 		list0 := make([]IdRow, 0, p0.Got.Len())
 		for i0 := 0; i0 < p0.Got.Len(); i0++ {
 			var el0 IdRow
 			p1 := p0.Got.ElemRow(i0)
 			if p1.Kind == probeGot {
 				var rec1 IdRow
-				p2 := p1.Got.ProbeInt("id")
+				p2 := p1.Got.ProbeIntAt("id", &at1[0])
 				if p2.Kind == probeGot {
 					rec1.Id = p2.Got
 				} else if p2.Kind == probeWrong {
@@ -2773,20 +2803,21 @@ func Delete(email string, name string) ([][]WriteSummary, error) {
 				return nil, pe_n1
 			}
 			ep_n1 := wire.WireRowOfFields(pf_n1)
-			mo_n1, mo_n1Err := litedbmodel_runtime.ExecuteSQL(ep_n1)
+			mo_n1, mo_n1Err := litedbmodel_runtime.ExecuteSQL(ctx, ep_n1)
 			if mo_n1Err != nil {
 				return nil, opFailed("n1", "fail", mo_n1Err)
 			}
 			var el_n1 []WriteSummary
 			p0 := mo_n1.AsList()
 			if p0.Kind == probeGot {
+				var at1 [2]int
 				list0 := make([]WriteSummary, 0, p0.Got.Len())
 				for i0 := 0; i0 < p0.Got.Len(); i0++ {
 					var el0 WriteSummary
 					p1 := p0.Got.ElemRow(i0)
 					if p1.Kind == probeGot {
 						var rec1 WriteSummary
-						p2 := p1.Got.ProbeInt("changes")
+						p2 := p1.Got.ProbeIntAt("changes", &at1[0])
 						if p2.Kind == probeGot {
 							rec1.Changes = p2.Got
 						} else if p2.Kind == probeWrong {
@@ -2796,7 +2827,7 @@ func Delete(email string, name string) ([][]WriteSummary, error) {
 						} else {
 							return nil, deMissingField("WriteSummary", "changes", "int")
 						}
-						p3 := p1.Got.ProbeInt("lastInsertRowid")
+						p3 := p1.Got.ProbeIntAt("lastInsertRowid", &at1[1])
 						if p3.Kind == probeGot {
 							rec1.LastInsertRowid = p3.Got
 						} else if p3.Kind == probeWrong {

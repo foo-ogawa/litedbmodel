@@ -544,9 +544,7 @@ func TestD1RelationBatchEndToEnd(t *testing.T) {
 	var grouped wire.WireValue
 	_, err := WithMiddlewareScope(context.Background(), func(scopeCtx context.Context) (struct{}, error) {
 		RegisterMiddleware(scopeCtx, observeMiddleware(&seen, &mu).Descriptor())
-		BindLeafTransport(ContextForDBCtx(scopeCtx, db), "sqlite")
-		defer UnbindLeafTransport()
-		g, e := relationThroughLeaves(relParentSQL, relChildSQL, "id", "parent_id", "kids", wire.WireNull())
+		g, e := relationThroughLeaves(BindLeafTransport(ContextForDBCtx(scopeCtx, db), "sqlite"), relParentSQL, relChildSQL, "id", "parent_id", "kids", wire.WireNull())
 		grouped = g
 		return struct{}{}, e
 	})
@@ -573,9 +571,7 @@ func TestD1RelationBatchRed(t *testing.T) {
 	db := relE2EDB(t)
 	defer db.Close()
 	var seen []string
-	BindLeafTransport(ContextForDB(db), "sqlite")
-	defer UnbindLeafTransport()
-	grouped, err := relationThroughLeaves(relParentSQL, relChildSQL, "id", "parent_id", "kids", wire.WireNull())
+	grouped, err := relationThroughLeaves(BindLeafTransport(ContextForDB(db), "sqlite"), relParentSQL, relChildSQL, "id", "parent_id", "kids", wire.WireNull())
 	if err != nil {
 		t.Fatalf("relation through leaves: %v", err)
 	}

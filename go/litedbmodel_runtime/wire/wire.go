@@ -169,9 +169,19 @@ func (w WireValue) AsBool() BoolProbe     { return ProbeBoolOf(&w) }
 func (w WireValue) AsRow() RowProbe       { return ProbeRowOf(&w) }
 func (w WireValue) AsList() ListProbe     { return ProbeListOf(&w) }
 
-func (r WireRow) get(field string) *WireValue {
+// at — the ONE field lookup. `pos` is the position the column resolved to in an EARLIER row of the SAME
+// result set: the key is verified to still sit there (one compare) and only a row that does not match is
+// scanned again, so a result set resolves each column name ONCE and every later row reads it by index.
+// Scanning per field instead cost O(columns²) per row — the de-box reads every declared field, and each
+// read walked the row. The reuse needs NO stable-layout assumption from the producer: the verify IS the
+// read's guard, and a differing row just re-resolves. nil = the producer did not send the field.
+func (r WireRow) at(field string, pos *int) *WireValue {
+	if *pos < len(r.entries) && r.entries[*pos].Key == field {
+		return &r.entries[*pos].Val
+	}
 	for i := range r.entries {
 		if r.entries[i].Key == field {
+			*pos = i
 			return &r.entries[i].Val
 		}
 	}
@@ -181,12 +191,22 @@ func (r WireRow) get(field string) *WireValue {
 // materialising a []string of keys per row and then looking each one up again.
 func (r WireRow) Entries() []WireField { return r.entries }
 
-func (r WireRow) ProbeString(field string) StringProbe { return ProbeStringOf(r.get(field)) }
-func (r WireRow) ProbeInt(field string) IntProbe       { return ProbeIntOf(r.get(field)) }
-func (r WireRow) ProbeFloat(field string) FloatProbe   { return ProbeFloatOf(r.get(field)) }
-func (r WireRow) ProbeBool(field string) BoolProbe     { return ProbeBoolOf(r.get(field)) }
-func (r WireRow) ProbeRow(field string) RowProbe       { return ProbeRowOf(r.get(field)) }
-func (r WireRow) ProbeList(field string) ListProbe     { return ProbeListOf(r.get(field)) }
+// Probe<Kind> — read a field BY NAME, once (the payload read the consumer's leaf transport does: each of
+// its ports is read one time, so there is no position to carry). Probe<Kind>At is the SAME read carrying
+// the result set's resolved position — what the generated per-row de-box calls.
+func (r WireRow) ProbeString(field string) StringProbe { pos := 0; return ProbeStringOf(r.at(field, &pos)) }
+func (r WireRow) ProbeInt(field string) IntProbe       { pos := 0; return ProbeIntOf(r.at(field, &pos)) }
+func (r WireRow) ProbeFloat(field string) FloatProbe   { pos := 0; return ProbeFloatOf(r.at(field, &pos)) }
+func (r WireRow) ProbeBool(field string) BoolProbe     { pos := 0; return ProbeBoolOf(r.at(field, &pos)) }
+func (r WireRow) ProbeRow(field string) RowProbe       { pos := 0; return ProbeRowOf(r.at(field, &pos)) }
+func (r WireRow) ProbeList(field string) ListProbe     { pos := 0; return ProbeListOf(r.at(field, &pos)) }
+
+func (r WireRow) ProbeStringAt(field string, pos *int) StringProbe { return ProbeStringOf(r.at(field, pos)) }
+func (r WireRow) ProbeIntAt(field string, pos *int) IntProbe       { return ProbeIntOf(r.at(field, pos)) }
+func (r WireRow) ProbeFloatAt(field string, pos *int) FloatProbe   { return ProbeFloatOf(r.at(field, pos)) }
+func (r WireRow) ProbeBoolAt(field string, pos *int) BoolProbe     { return ProbeBoolOf(r.at(field, pos)) }
+func (r WireRow) ProbeRowAt(field string, pos *int) RowProbe       { return ProbeRowOf(r.at(field, pos)) }
+func (r WireRow) ProbeListAt(field string, pos *int) ListProbe     { return ProbeListOf(r.at(field, pos)) }
 
 func (l WireList) Len() int                     { return len(l.items) }
 func (l WireList) ElemString(i int) StringProbe { return ProbeStringOf(&l.items[i]) }

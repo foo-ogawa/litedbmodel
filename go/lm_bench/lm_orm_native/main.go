@@ -142,84 +142,85 @@ func userPatches(in setup.Values) []UserPatch {
 // runtime seam (every row of every statement), which is the only place a relation's true 11,100-row
 // traversal is visible. Fixed inputs mirror the SCP ops SSoT; mutating ops vary their
 // UNIQUE column by it so a timed loop does not collide. A RETURNING-chained tx op runs THROUGH the
-// runtime tx boundary (WithAmbientTransaction on the BOUND ctx) so BEGIN/COMMIT bracket the leaf's 2
-// body statements on the tx-owned connection; the generated runner emits no BEGIN/COMMIT.
-func op(doc setup.Doc, name string, it int) error {
+// runtime tx boundary (WithAmbientTransaction on the BOUND ctx, the body calling the runner with the
+// tx-bound ctx it is handed) so BEGIN/COMMIT bracket the leaf's 2 body statements on the tx-owned
+// connection; the generated runner emits no BEGIN/COMMIT.
+func op(ctx context.Context, doc setup.Doc, name string, it int) error {
 	in := doc.Input(name, it)
 	switch name {
 	case "findAll":
-		_, err := findAll()
+		_, err := findAll(ctx)
 		return err
 	case "filterPaginateSort":
-		_, err := filterPaginateSort(in.Int("published"))
+		_, err := filterPaginateSort(ctx, in.Int("published"))
 		return err
 	case "findFirst":
-		_, err := findFirst(in.Str("name"))
+		_, err := findFirst(ctx, in.Str("name"))
 		return err
 	case "findUnique":
-		_, err := findUnique(in.Str("email"))
+		_, err := findUnique(ctx, in.Str("email"))
 		return err
 	case "nestedFindAll":
-		_, err := nestedFindAll()
+		_, err := nestedFindAll(ctx)
 		return err
 	case "nestedFindFirst":
-		_, err := nestedFindFirst(in.Str("name"))
+		_, err := nestedFindFirst(ctx, in.Str("name"))
 		return err
 	case "nestedFindUnique":
-		_, err := nestedFindUnique(in.Str("email"))
+		_, err := nestedFindUnique(ctx, in.Str("email"))
 		return err
 	case "nestedRelations":
-		_, err := nestedRelations()
+		_, err := nestedRelations(ctx)
 		return err
 	case "compositeRelations":
-		_, err := compositeRelations()
+		_, err := compositeRelations(ctx)
 		return err
 	case "create":
-		_, err := create(in.Str("email"), in.Str("name"))
+		_, err := create(ctx, in.Str("email"), in.Str("name"))
 		return err
 	case "update":
-		_, err := update(in.Int("id"), in.Str("name"))
+		_, err := update(ctx, in.Int("id"), in.Str("name"))
 		return err
 	case "upsert":
-		_, err := upsert(in.Str("email"), in.Str("name"))
+		_, err := upsert(ctx, in.Str("email"), in.Str("name"))
 		return err
 	case "createMany":
 		// 10 fresh rows — email is UNIQUE NOT NULL, so the declared email varies by iteration.
-		_, err := createMany(newUsers(in))
+		_, err := createMany(ctx, newUsers(in))
 		return err
 	case "upsertMany":
 		// 10 rows keyed on email (ON CONFLICT DO UPDATE) — idempotent across iterations.
-		_, err := upsertMany(newUsers(in))
+		_, err := upsertMany(ctx, newUsers(in))
 		return err
 	case "updateMany":
 		// 10 rows keyed on id (1..10) — updates the seeded users.
-		_, err := updateMany(userPatches(in))
+		_, err := updateMany(ctx, userPatches(in))
 		return err
 	case "nestedCreate":
 		// Fresh user per iteration (email is UNIQUE) → INSERT user RETURNING id → INSERT post (author_id).
-		err := rt.WithAmbientTransaction(func() error {
-			_, e := nestedCreate(in.Str("email"), in.Str("name"), in.Str("title"))
+		err := rt.WithAmbientTransaction(ctx, func(txCtx context.Context) error {
+			_, e := nestedCreate(txCtx, in.Str("email"), in.Str("name"), in.Str("title"))
 			return e
 		})
 		return err
 	case "nestedUpsert":
 		// Existing email (ON CONFLICT DO UPDATE) → INSERT post keyed on the upserted user's id.
-		err := rt.WithAmbientTransaction(func() error {
-			_, e := nestedUpsert(in.Str("email"), in.Str("name"), in.Str("title"))
+		err := rt.WithAmbientTransaction(ctx, func(txCtx context.Context) error {
+			_, e := nestedUpsert(txCtx, in.Str("email"), in.Str("name"), in.Str("title"))
 			return e
 		})
 		return err
 	case "nestedUpdate":
 		// UPDATE the seeded user RETURNING id → UPDATE that user's posts.
-		err := rt.WithAmbientTransaction(func() error {
-			_, e := nestedUpdate(in.Int("id"), in.Str("name"), in.Str("title"))
+		err := rt.WithAmbientTransaction(ctx, func(txCtx context.Context) error {
+			_, e := nestedUpdate(txCtx, in.Int("id"), in.Str("name"), in.Str("title"))
 			return e
 		})
 		return err
 	case "delete":
 		// Create-then-delete: INSERT a fresh user RETURNING id → DELETE the exact created row by id.
-		err := rt.WithAmbientTransaction(func() error {
-			_, e := delete(in.Str("email"), in.Str("name"))
+		err := rt.WithAmbientTransaction(ctx, func(txCtx context.Context) error {
+			_, e := delete(txCtx, in.Str("email"), in.Str("name"))
 			return e
 		})
 		return err
@@ -266,8 +267,7 @@ func main() {
 		os.Exit(1)
 	}
 	defer db.Close()
-	rt.BindLeafTransport(rt.ContextForDB(db), benchDialect)
-	defer rt.UnbindLeafTransport()
+	ctx := rt.BindLeafTransport(rt.ContextForDB(db), benchDialect)
 
 	// The N+1-avoidance / atomic-tx safety proof: a seam middleware counts EVERY statement that funnels
 	// through Execute/Run (reads + writes + tx-control BEGIN/COMMIT) — the SAME lens the python/php cells
@@ -315,7 +315,7 @@ func main() {
 		atomic.StoreInt64(&stmtCount, 0)
 		atomic.StoreInt64(&rowCount, 0)
 		seenSQL = nil
-		if err := op(doc, name, 0); err != nil {
+		if err := op(ctx, doc, name, 0); err != nil {
 			fmt.Printf("%-20s  ERR: %v\n", name, err)
 			fail++
 			continue
@@ -408,7 +408,7 @@ func main() {
 				os.Exit(1)
 			}
 			for it := 0; it < warmup; it++ {
-				if err := op(doc, name, it+1); err != nil {
+				if err := op(ctx, doc, name, it+1); err != nil {
 					fmt.Fprintf(os.Stderr, "warmup %s: %v\n", name, err)
 					os.Exit(1)
 				}
@@ -416,7 +416,7 @@ func main() {
 			for it := 0; it < reps; it++ {
 				g := it + warmup + 1
 				t := time.Now()
-				if err := op(doc, name, g); err != nil {
+				if err := op(ctx, doc, name, g); err != nil {
 					fmt.Fprintf(os.Stderr, "bench %s: %v\n", name, err)
 					os.Exit(1)
 				}

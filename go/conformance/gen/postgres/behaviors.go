@@ -7,6 +7,7 @@
 package conformance
 
 import (
+	"context"
 	"github.com/foo-ogawa/litedbmodel/go/v2/litedbmodel_runtime/wire"
 	"github.com/foo-ogawa/litedbmodel/go/v2/litedbmodel_runtime"
 )
@@ -28,10 +29,10 @@ var ExpectedSpecVersions = map[string]int64{"behavior": 6, "expression": 2, "pla
 // run_behavior). Exec is INLINE sequential (no plan driver) so a relation child reads the parent's REAL
 // struct result via direct field access and the child-present decision is made from the real parent value —
 // relation / connection converge with run_behavior (fixes #323/#74). The exposed API is the 1:1
-// STRUCT-returning entry <Method>(<positional params>) (the In_<comp> box removed); the consumer supplies
-// the leaf transport symbols (default same-package Leaf_<comp>, or a leafTransport import). This module is
-// FULLY NATIVE: a naive grep for
-// boxing primitives OR for the bc-runtime package finds nothing, by design (bc#90/runtime-free).
+// STRUCT-returning entry <Method>(ctx, <positional params>) (the In_<comp> box removed; ctx is the caller's
+// context.Context, passed to every transport call); the consumer supplies the leaf transport symbols
+// (default same-package Leaf_<comp>, or a leafTransport import). This module is FULLY NATIVE: a naive grep
+// for boxing primitives OR for the bc-runtime package finds nothing, by design (bc#90/runtime-free).
 
 // Local concrete failure type (runtime-free) — a covered runner returns *BehaviorError (satisfies
 // error) instead of a bc-runtime failure, so the fully-covered module imports ZERO bc runtime.
@@ -114,36 +115,36 @@ func deMissingField(model, field, expected string) *BehaviorError {
 
 // Typed struct declarations (outType-derived; hash-dedup — shared type plan).
 type PostsRow struct {
-	Author_id  *float64 // "author_id"
-	Created_at *string  // "created_at"
-	Id         *float64 // "id"
-	Status     *string  // "status"
-	Title      *string  // "title"
+	Author_id  *int64  // "author_id"
+	Created_at *string // "created_at"
+	Id         *int64  // "id"
+	Status     *string // "status"
+	Title      *string // "title"
 }
 
 type PostsTopRow struct {
-	Author_id  *float64 // "author_id"
-	Created_at *string  // "created_at"
-	Id         *float64 // "id"
-	Status     *string  // "status"
-	Title      *string  // "title"
+	Author_id  *int64  // "author_id"
+	Created_at *string // "created_at"
+	Id         *int64  // "id"
+	Status     *string // "status"
+	Title      *string // "title"
 }
 
 type PageRow struct {
-	Id    *float64 // "id"
-	Title *string  // "title"
+	Id    *int64  // "id"
+	Title *string // "title"
 }
 
 type PostsByIdsRow struct {
-	Id    *float64 // "id"
-	Title *string  // "title"
+	Id    *int64  // "id"
+	Title *string // "title"
 }
 
 type FeedRow struct {
-	Author_id *float64 // "author_id"
-	Id        *float64 // "id"
-	Status    *string  // "status"
-	Title     *string  // "title"
+	Author_id *int64  // "author_id"
+	Id        *int64  // "id"
+	Status    *string // "status"
+	Title     *string // "title"
 }
 
 type ExecOptions struct {
@@ -177,114 +178,114 @@ type WriteMode struct {
 }
 
 type PagedFeedRow struct {
-	Author_id *float64 // "author_id"
-	Id        *float64 // "id"
-	Status    *string  // "status"
-	Title     *string  // "title"
+	Author_id *int64  // "author_id"
+	Id        *int64  // "id"
+	Status    *string // "status"
+	Title     *string // "title"
 }
 
 type OptionalOnlyFeedRow struct {
-	Author_id *float64 // "author_id"
-	Id        *float64 // "id"
-	Status    *string  // "status"
+	Author_id *int64  // "author_id"
+	Id        *int64  // "id"
+	Status    *string // "status"
 }
 
 type QuotedOrderFeedRow struct {
-	Author_id *float64 // "author_id"
-	Id        *float64 // "id"
-	Status    *string  // "status"
-	Title     *string  // "title"
+	Author_id *int64  // "author_id"
+	Id        *int64  // "id"
+	Status    *string // "status"
+	Title     *string // "title"
 }
 
 type QuotedWhereOrderFeedRow struct {
-	Id     *float64 // "id"
-	Status *string  // "status"
-	Title  *string  // "title"
+	Id     *int64  // "id"
+	Status *string // "status"
+	Title  *string // "title"
 }
 
 type ViewFeedRow struct {
-	Author_id *float64 // "author_id"
-	Id        *float64 // "id"
-	Status    *string  // "status"
-	Title     *string  // "title"
+	Author_id *int64  // "author_id"
+	Id        *int64  // "id"
+	Status    *string // "status"
+	Title     *string // "title"
 }
 
 type UsersWithPostsRow struct {
-	Id    *float64                  // "id"
+	Id    *int64                    // "id"
 	Name  *string                   // "name"
 	Posts []UsersWithPostsRow_posts // "posts"
 }
 
 type UsersWithPostsRow_posts struct {
-	Author_id  *float64                       // "author_id"
+	Author_id  *int64                         // "author_id"
 	Created_at *string                        // "created_at"
-	Id         *float64                       // "id"
+	Id         *int64                         // "id"
 	Status     *string                        // "status"
 	Tags       []UsersWithPostsRow_posts_tags // "tags"
 	Title      *string                        // "title"
 }
 
 type UsersWithPostsRow_posts_tags struct {
-	Id      *float64 // "id"
-	Label   *string  // "label"
-	Post_id *float64 // "post_id"
+	Id      *int64  // "id"
+	Label   *string // "label"
+	Post_id *int64  // "post_id"
 }
 
 type PostsWithAuthorRow struct {
 	Author     *PostsWithAuthorRow_author // "author"
-	Author_id  *float64                   // "author_id"
+	Author_id  *int64                     // "author_id"
 	Created_at *string                    // "created_at"
-	Id         *float64                   // "id"
+	Id         *int64                     // "id"
 	Status     *string                    // "status"
 	Title      *string                    // "title"
 }
 
 type PostsWithAuthorRow_author struct {
-	Id         *float64 // "id"
-	Name       *string  // "name"
-	Post_count *float64 // "post_count"
+	Id         *int64  // "id"
+	Name       *string // "name"
+	Post_count *int64  // "post_count"
 }
 
 type UsersWithCappedPostsRow struct {
 	CappedPosts []UsersWithCappedPostsRow_cappedPosts // "cappedPosts"
-	Id          *float64                              // "id"
+	Id          *int64                                // "id"
 	Name        *string                               // "name"
 }
 
 type UsersWithCappedPostsRow_cappedPosts struct {
-	Author_id  *float64 // "author_id"
-	Created_at *string  // "created_at"
-	Id         *float64 // "id"
-	Status     *string  // "status"
-	Title      *string  // "title"
+	Author_id  *int64  // "author_id"
+	Created_at *string // "created_at"
+	Id         *int64  // "id"
+	Status     *string // "status"
+	Title      *string // "title"
 }
 
 type UsersWithUncappedPostsRow struct {
-	Id            *float64                                  // "id"
+	Id            *int64                                    // "id"
 	Name          *string                                   // "name"
 	UncappedPosts []UsersWithUncappedPostsRow_uncappedPosts // "uncappedPosts"
 }
 
 type UsersWithUncappedPostsRow_uncappedPosts struct {
-	Author_id  *float64 // "author_id"
-	Created_at *string  // "created_at"
-	Id         *float64 // "id"
-	Status     *string  // "status"
-	Title      *string  // "title"
+	Author_id  *int64  // "author_id"
+	Created_at *string // "created_at"
+	Id         *int64  // "id"
+	Status     *string // "status"
+	Title      *string // "title"
 }
 
 type UsersWithTopPostsRow struct {
-	Id       *float64                        // "id"
+	Id       *int64                          // "id"
 	Name     *string                         // "name"
 	TopPosts []UsersWithTopPostsRow_topPosts // "topPosts"
 }
 
 type UsersWithTopPostsRow_topPosts struct {
-	Author_id  *float64 // "author_id"
-	Created_at *string  // "created_at"
-	Id         *float64 // "id"
-	Status     *string  // "status"
-	Title      *string  // "title"
+	Author_id  *int64  // "author_id"
+	Created_at *string // "created_at"
+	Id         *int64  // "id"
+	Status     *string // "status"
+	Title      *string // "title"
 }
 
 type WriteSummary struct {
@@ -293,35 +294,35 @@ type WriteSummary struct {
 }
 
 type CreatePostReturningRow struct {
-	Id    *float64 // "id"
-	Title *string  // "title"
+	Id    *int64  // "id"
+	Title *string // "title"
 }
 
 type RenamePostReturningRow struct {
-	Id    *float64 // "id"
-	Title *string  // "title"
+	Id    *int64  // "id"
+	Title *string // "title"
 }
 
 type RemovePostReturningRow struct {
-	Id    *float64 // "id"
-	Title *string  // "title"
+	Id    *int64  // "id"
+	Title *string // "title"
 }
 
 type RestatusPostsReturningRow struct {
-	Id     *float64 // "id"
-	Status *string  // "status"
+	Id     *int64  // "id"
+	Status *string // "status"
 }
 
 type RemovePostsByAuthorReturningRow struct {
-	Id    *float64 // "id"
-	Title *string  // "title"
+	Id    *int64  // "id"
+	Title *string // "title"
 }
 
 type TypedRowsRow struct {
-	Flag  *float64 // "flag"
-	Id    *float64 // "id"
-	Label *string  // "label"
-	Ts    *string  // "ts"
+	Flag  *int64  // "flag"
+	Id    *int64  // "id"
+	Label *string // "label"
+	Ts    *string // "ts"
 }
 
 type CreateDocRow struct {
@@ -330,24 +331,24 @@ type CreateDocRow struct {
 }
 
 type CreateLineRow struct {
-	Line_no  *float64 // "line_no"
-	Order_id *float64 // "order_id"
-	Sku      *string  // "sku"
+	Line_no  *int64  // "line_no"
+	Order_id *int64  // "order_id"
+	Sku      *string // "sku"
 }
 
 type CreateTagsReturningRow struct {
-	Id    *float64 // "id"
-	Label *string  // "label"
+	Id    *int64  // "id"
+	Label *string // "label"
 }
 
 type RelabelTagsReturningRow struct {
-	Id    *float64 // "id"
-	Label *string  // "label"
+	Id    *int64  // "id"
+	Label *string // "label"
 }
 
 type RemoveTagsReturningRow struct {
-	Id    *float64 // "id"
-	Label *string  // "label"
+	Id    *int64  // "id"
+	Label *string // "label"
 }
 
 // Probe kind consts (the inline de-box compares against these).
@@ -372,52 +373,53 @@ const (
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func Posts(authorId int64) ([]PostsRow, error) {
+func Posts(ctx context.Context, authorId int64) ([]PostsRow, error) {
 	var t_n0 []PostsRow
 	produced_n0 := false
 	_ = t_n0
 	_ = produced_n0
 	// ── op 'n0' (executeSQL) ──
 	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireInt(authorId)})}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, author_id, title, status, created_at FROM conf_posts WHERE author_id = ? ORDER BY id ASC")}})
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ctx, payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
 	}
 	p0 := wire_n0.AsList()
 	if p0.Kind == probeGot {
+		var at1 [5]int
 		list0 := make([]PostsRow, 0, p0.Got.Len())
 		for i0 := 0; i0 < p0.Got.Len(); i0++ {
 			var el0 PostsRow
 			p1 := p0.Got.ElemRow(i0)
 			if p1.Kind == probeGot {
 				var rec1 PostsRow
-				p2 := p1.Got.ProbeFloat("author_id")
+				p2 := p1.Got.ProbeIntAt("author_id", &at1[0])
 				if p2.Kind == probeGot {
 					rec1.Author_id = &p2.Got
 				} else if p2.Kind == probeWrong {
-					return nil, deTypeMismatch("PostsRow", "author_id", "opt(float)", p2.ActualWireType, p2.Raw)
+					return nil, deTypeMismatch("PostsRow", "author_id", "opt(int)", p2.ActualWireType, p2.Raw)
 				}
-				p3 := p1.Got.ProbeString("created_at")
+				p3 := p1.Got.ProbeStringAt("created_at", &at1[1])
 				if p3.Kind == probeGot {
 					sv3 := p3.Got
 					rec1.Created_at = &sv3
 				} else if p3.Kind == probeWrong {
 					return nil, deTypeMismatch("PostsRow", "created_at", "opt(string)", p3.ActualWireType, p3.Raw)
 				}
-				p4 := p1.Got.ProbeFloat("id")
+				p4 := p1.Got.ProbeIntAt("id", &at1[2])
 				if p4.Kind == probeGot {
 					rec1.Id = &p4.Got
 				} else if p4.Kind == probeWrong {
-					return nil, deTypeMismatch("PostsRow", "id", "opt(float)", p4.ActualWireType, p4.Raw)
+					return nil, deTypeMismatch("PostsRow", "id", "opt(int)", p4.ActualWireType, p4.Raw)
 				}
-				p5 := p1.Got.ProbeString("status")
+				p5 := p1.Got.ProbeStringAt("status", &at1[3])
 				if p5.Kind == probeGot {
 					sv5 := p5.Got
 					rec1.Status = &sv5
 				} else if p5.Kind == probeWrong {
 					return nil, deTypeMismatch("PostsRow", "status", "opt(string)", p5.ActualWireType, p5.Raw)
 				}
-				p6 := p1.Got.ProbeString("title")
+				p6 := p1.Got.ProbeStringAt("title", &at1[4])
 				if p6.Kind == probeGot {
 					sv6 := p6.Got
 					rec1.Title = &sv6
@@ -426,21 +428,21 @@ func Posts(authorId int64) ([]PostsRow, error) {
 				}
 				el0 = rec1
 			} else if p1.Kind == probeWrong {
-				return nil, deTypeMismatch("n0", "n0", "obj{author_id:opt(float),created_at:opt(string),id:opt(float),status:opt(string),title:opt(string)}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)}", p1.ActualWireType, p1.Raw)
 			} else if p1.Kind == probeNull {
-				return nil, deTypeMismatch("n0", "n0", "obj{author_id:opt(float),created_at:opt(string),id:opt(float),status:opt(string),title:opt(string)}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)}", p1.ActualWireType, p1.Raw)
 			} else {
-				return nil, deMissingField("n0", "n0", "obj{author_id:opt(float),created_at:opt(string),id:opt(float),status:opt(string),title:opt(string)}")
+				return nil, deMissingField("n0", "n0", "obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)}")
 			}
 			list0 = append(list0, el0)
 		}
 		t_n0 = list0
 	} else if p0.Kind == probeWrong {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{author_id:opt(float),created_at:opt(string),id:opt(float),status:opt(string),title:opt(string)})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)})", p0.ActualWireType, p0.Raw)
 	} else if p0.Kind == probeNull {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{author_id:opt(float),created_at:opt(string),id:opt(float),status:opt(string),title:opt(string)})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)})", p0.ActualWireType, p0.Raw)
 	} else {
-		return nil, deMissingField("n0", "n0", "arr(obj{author_id:opt(float),created_at:opt(string),id:opt(float),status:opt(string),title:opt(string)})")
+		return nil, deMissingField("n0", "n0", "arr(obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)})")
 	}
 	produced_n0 = true
 	return t_n0, nil
@@ -458,52 +460,53 @@ func Posts(authorId int64) ([]PostsRow, error) {
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func PostsTop() ([]PostsTopRow, error) {
+func PostsTop(ctx context.Context) ([]PostsTopRow, error) {
 	var t_n0 []PostsTopRow
 	produced_n0 := false
 	_ = t_n0
 	_ = produced_n0
 	// ── op 'n0' (executeSQL) ──
 	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{})}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, author_id, title, status, created_at FROM conf_posts ORDER BY id ASC LIMIT 2")}})
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ctx, payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
 	}
 	p0 := wire_n0.AsList()
 	if p0.Kind == probeGot {
+		var at1 [5]int
 		list0 := make([]PostsTopRow, 0, p0.Got.Len())
 		for i0 := 0; i0 < p0.Got.Len(); i0++ {
 			var el0 PostsTopRow
 			p1 := p0.Got.ElemRow(i0)
 			if p1.Kind == probeGot {
 				var rec1 PostsTopRow
-				p2 := p1.Got.ProbeFloat("author_id")
+				p2 := p1.Got.ProbeIntAt("author_id", &at1[0])
 				if p2.Kind == probeGot {
 					rec1.Author_id = &p2.Got
 				} else if p2.Kind == probeWrong {
-					return nil, deTypeMismatch("PostsTopRow", "author_id", "opt(float)", p2.ActualWireType, p2.Raw)
+					return nil, deTypeMismatch("PostsTopRow", "author_id", "opt(int)", p2.ActualWireType, p2.Raw)
 				}
-				p3 := p1.Got.ProbeString("created_at")
+				p3 := p1.Got.ProbeStringAt("created_at", &at1[1])
 				if p3.Kind == probeGot {
 					sv3 := p3.Got
 					rec1.Created_at = &sv3
 				} else if p3.Kind == probeWrong {
 					return nil, deTypeMismatch("PostsTopRow", "created_at", "opt(string)", p3.ActualWireType, p3.Raw)
 				}
-				p4 := p1.Got.ProbeFloat("id")
+				p4 := p1.Got.ProbeIntAt("id", &at1[2])
 				if p4.Kind == probeGot {
 					rec1.Id = &p4.Got
 				} else if p4.Kind == probeWrong {
-					return nil, deTypeMismatch("PostsTopRow", "id", "opt(float)", p4.ActualWireType, p4.Raw)
+					return nil, deTypeMismatch("PostsTopRow", "id", "opt(int)", p4.ActualWireType, p4.Raw)
 				}
-				p5 := p1.Got.ProbeString("status")
+				p5 := p1.Got.ProbeStringAt("status", &at1[3])
 				if p5.Kind == probeGot {
 					sv5 := p5.Got
 					rec1.Status = &sv5
 				} else if p5.Kind == probeWrong {
 					return nil, deTypeMismatch("PostsTopRow", "status", "opt(string)", p5.ActualWireType, p5.Raw)
 				}
-				p6 := p1.Got.ProbeString("title")
+				p6 := p1.Got.ProbeStringAt("title", &at1[4])
 				if p6.Kind == probeGot {
 					sv6 := p6.Got
 					rec1.Title = &sv6
@@ -512,21 +515,21 @@ func PostsTop() ([]PostsTopRow, error) {
 				}
 				el0 = rec1
 			} else if p1.Kind == probeWrong {
-				return nil, deTypeMismatch("n0", "n0", "obj{author_id:opt(float),created_at:opt(string),id:opt(float),status:opt(string),title:opt(string)}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)}", p1.ActualWireType, p1.Raw)
 			} else if p1.Kind == probeNull {
-				return nil, deTypeMismatch("n0", "n0", "obj{author_id:opt(float),created_at:opt(string),id:opt(float),status:opt(string),title:opt(string)}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)}", p1.ActualWireType, p1.Raw)
 			} else {
-				return nil, deMissingField("n0", "n0", "obj{author_id:opt(float),created_at:opt(string),id:opt(float),status:opt(string),title:opt(string)}")
+				return nil, deMissingField("n0", "n0", "obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)}")
 			}
 			list0 = append(list0, el0)
 		}
 		t_n0 = list0
 	} else if p0.Kind == probeWrong {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{author_id:opt(float),created_at:opt(string),id:opt(float),status:opt(string),title:opt(string)})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)})", p0.ActualWireType, p0.Raw)
 	} else if p0.Kind == probeNull {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{author_id:opt(float),created_at:opt(string),id:opt(float),status:opt(string),title:opt(string)})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)})", p0.ActualWireType, p0.Raw)
 	} else {
-		return nil, deMissingField("n0", "n0", "arr(obj{author_id:opt(float),created_at:opt(string),id:opt(float),status:opt(string),title:opt(string)})")
+		return nil, deMissingField("n0", "n0", "arr(obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)})")
 	}
 	produced_n0 = true
 	return t_n0, nil
@@ -544,32 +547,33 @@ func PostsTop() ([]PostsTopRow, error) {
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func Page(limit int64, offset int64) ([]PageRow, error) {
+func Page(ctx context.Context, limit int64, offset int64) ([]PageRow, error) {
 	var t_n0 []PageRow
 	produced_n0 := false
 	_ = t_n0
 	_ = produced_n0
 	// ── op 'n0' (executeSQL) ──
 	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireInt(limit), wire.WireInt(offset)})}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, title FROM conf_posts ORDER BY id ASC LIMIT ? OFFSET ?")}})
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ctx, payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
 	}
 	p0 := wire_n0.AsList()
 	if p0.Kind == probeGot {
+		var at1 [2]int
 		list0 := make([]PageRow, 0, p0.Got.Len())
 		for i0 := 0; i0 < p0.Got.Len(); i0++ {
 			var el0 PageRow
 			p1 := p0.Got.ElemRow(i0)
 			if p1.Kind == probeGot {
 				var rec1 PageRow
-				p2 := p1.Got.ProbeFloat("id")
+				p2 := p1.Got.ProbeIntAt("id", &at1[0])
 				if p2.Kind == probeGot {
 					rec1.Id = &p2.Got
 				} else if p2.Kind == probeWrong {
-					return nil, deTypeMismatch("PageRow", "id", "opt(float)", p2.ActualWireType, p2.Raw)
+					return nil, deTypeMismatch("PageRow", "id", "opt(int)", p2.ActualWireType, p2.Raw)
 				}
-				p3 := p1.Got.ProbeString("title")
+				p3 := p1.Got.ProbeStringAt("title", &at1[1])
 				if p3.Kind == probeGot {
 					sv3 := p3.Got
 					rec1.Title = &sv3
@@ -578,21 +582,21 @@ func Page(limit int64, offset int64) ([]PageRow, error) {
 				}
 				el0 = rec1
 			} else if p1.Kind == probeWrong {
-				return nil, deTypeMismatch("n0", "n0", "obj{id:opt(float),title:opt(string)}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{id:opt(int),title:opt(string)}", p1.ActualWireType, p1.Raw)
 			} else if p1.Kind == probeNull {
-				return nil, deTypeMismatch("n0", "n0", "obj{id:opt(float),title:opt(string)}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{id:opt(int),title:opt(string)}", p1.ActualWireType, p1.Raw)
 			} else {
-				return nil, deMissingField("n0", "n0", "obj{id:opt(float),title:opt(string)}")
+				return nil, deMissingField("n0", "n0", "obj{id:opt(int),title:opt(string)}")
 			}
 			list0 = append(list0, el0)
 		}
 		t_n0 = list0
 	} else if p0.Kind == probeWrong {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:opt(float),title:opt(string)})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:opt(int),title:opt(string)})", p0.ActualWireType, p0.Raw)
 	} else if p0.Kind == probeNull {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:opt(float),title:opt(string)})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:opt(int),title:opt(string)})", p0.ActualWireType, p0.Raw)
 	} else {
-		return nil, deMissingField("n0", "n0", "arr(obj{id:opt(float),title:opt(string)})")
+		return nil, deMissingField("n0", "n0", "arr(obj{id:opt(int),title:opt(string)})")
 	}
 	produced_n0 = true
 	return t_n0, nil
@@ -610,32 +614,33 @@ func Page(limit int64, offset int64) ([]PageRow, error) {
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func PostsByIds(ids []int64) ([]PostsByIdsRow, error) {
+func PostsByIds(ctx context.Context, ids []int64) ([]PostsByIdsRow, error) {
 	var t_n0 []PostsByIdsRow
 	produced_n0 := false
 	_ = t_n0
 	_ = produced_n0
 	// ── op 'n0' (executeSQL) ──
 	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range ids { it0 = append(it0, wire.WireInt(e0)) }; return wire.WireListOf(it0) }()})}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, title FROM conf_posts WHERE id = ANY(?) ORDER BY id ASC")}})
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ctx, payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
 	}
 	p0 := wire_n0.AsList()
 	if p0.Kind == probeGot {
+		var at1 [2]int
 		list0 := make([]PostsByIdsRow, 0, p0.Got.Len())
 		for i0 := 0; i0 < p0.Got.Len(); i0++ {
 			var el0 PostsByIdsRow
 			p1 := p0.Got.ElemRow(i0)
 			if p1.Kind == probeGot {
 				var rec1 PostsByIdsRow
-				p2 := p1.Got.ProbeFloat("id")
+				p2 := p1.Got.ProbeIntAt("id", &at1[0])
 				if p2.Kind == probeGot {
 					rec1.Id = &p2.Got
 				} else if p2.Kind == probeWrong {
-					return nil, deTypeMismatch("PostsByIdsRow", "id", "opt(float)", p2.ActualWireType, p2.Raw)
+					return nil, deTypeMismatch("PostsByIdsRow", "id", "opt(int)", p2.ActualWireType, p2.Raw)
 				}
-				p3 := p1.Got.ProbeString("title")
+				p3 := p1.Got.ProbeStringAt("title", &at1[1])
 				if p3.Kind == probeGot {
 					sv3 := p3.Got
 					rec1.Title = &sv3
@@ -644,21 +649,21 @@ func PostsByIds(ids []int64) ([]PostsByIdsRow, error) {
 				}
 				el0 = rec1
 			} else if p1.Kind == probeWrong {
-				return nil, deTypeMismatch("n0", "n0", "obj{id:opt(float),title:opt(string)}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{id:opt(int),title:opt(string)}", p1.ActualWireType, p1.Raw)
 			} else if p1.Kind == probeNull {
-				return nil, deTypeMismatch("n0", "n0", "obj{id:opt(float),title:opt(string)}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{id:opt(int),title:opt(string)}", p1.ActualWireType, p1.Raw)
 			} else {
-				return nil, deMissingField("n0", "n0", "obj{id:opt(float),title:opt(string)}")
+				return nil, deMissingField("n0", "n0", "obj{id:opt(int),title:opt(string)}")
 			}
 			list0 = append(list0, el0)
 		}
 		t_n0 = list0
 	} else if p0.Kind == probeWrong {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:opt(float),title:opt(string)})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:opt(int),title:opt(string)})", p0.ActualWireType, p0.Raw)
 	} else if p0.Kind == probeNull {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:opt(float),title:opt(string)})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:opt(int),title:opt(string)})", p0.ActualWireType, p0.Raw)
 	} else {
-		return nil, deMissingField("n0", "n0", "arr(obj{id:opt(float),title:opt(string)})")
+		return nil, deMissingField("n0", "n0", "arr(obj{id:opt(int),title:opt(string)})")
 	}
 	produced_n0 = true
 	return t_n0, nil
@@ -676,7 +681,7 @@ func PostsByIds(ids []int64) ([]PostsByIdsRow, error) {
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func Feed(authorId int64, status *string, since *string) ([]FeedRow, error) {
+func Feed(ctx context.Context, authorId int64, status *string, since *string) ([]FeedRow, error) {
 	var t_n0 []FeedRow
 	produced_n0 := false
 	_ = t_n0
@@ -691,38 +696,39 @@ func Feed(authorId int64, status *string, since *string) ([]FeedRow, error) {
 		return nil, pe_n0
 	}
 	payload_n0 := wire.WireRowOfFields(pf_n0)
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ctx, payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
 	}
 	p0 := wire_n0.AsList()
 	if p0.Kind == probeGot {
+		var at1 [4]int
 		list0 := make([]FeedRow, 0, p0.Got.Len())
 		for i0 := 0; i0 < p0.Got.Len(); i0++ {
 			var el0 FeedRow
 			p1 := p0.Got.ElemRow(i0)
 			if p1.Kind == probeGot {
 				var rec1 FeedRow
-				p2 := p1.Got.ProbeFloat("author_id")
+				p2 := p1.Got.ProbeIntAt("author_id", &at1[0])
 				if p2.Kind == probeGot {
 					rec1.Author_id = &p2.Got
 				} else if p2.Kind == probeWrong {
-					return nil, deTypeMismatch("FeedRow", "author_id", "opt(float)", p2.ActualWireType, p2.Raw)
+					return nil, deTypeMismatch("FeedRow", "author_id", "opt(int)", p2.ActualWireType, p2.Raw)
 				}
-				p3 := p1.Got.ProbeFloat("id")
+				p3 := p1.Got.ProbeIntAt("id", &at1[1])
 				if p3.Kind == probeGot {
 					rec1.Id = &p3.Got
 				} else if p3.Kind == probeWrong {
-					return nil, deTypeMismatch("FeedRow", "id", "opt(float)", p3.ActualWireType, p3.Raw)
+					return nil, deTypeMismatch("FeedRow", "id", "opt(int)", p3.ActualWireType, p3.Raw)
 				}
-				p4 := p1.Got.ProbeString("status")
+				p4 := p1.Got.ProbeStringAt("status", &at1[2])
 				if p4.Kind == probeGot {
 					sv4 := p4.Got
 					rec1.Status = &sv4
 				} else if p4.Kind == probeWrong {
 					return nil, deTypeMismatch("FeedRow", "status", "opt(string)", p4.ActualWireType, p4.Raw)
 				}
-				p5 := p1.Got.ProbeString("title")
+				p5 := p1.Got.ProbeStringAt("title", &at1[3])
 				if p5.Kind == probeGot {
 					sv5 := p5.Got
 					rec1.Title = &sv5
@@ -731,21 +737,21 @@ func Feed(authorId int64, status *string, since *string) ([]FeedRow, error) {
 				}
 				el0 = rec1
 			} else if p1.Kind == probeWrong {
-				return nil, deTypeMismatch("n0", "n0", "obj{author_id:opt(float),id:opt(float),status:opt(string),title:opt(string)}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{author_id:opt(int),id:opt(int),status:opt(string),title:opt(string)}", p1.ActualWireType, p1.Raw)
 			} else if p1.Kind == probeNull {
-				return nil, deTypeMismatch("n0", "n0", "obj{author_id:opt(float),id:opt(float),status:opt(string),title:opt(string)}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{author_id:opt(int),id:opt(int),status:opt(string),title:opt(string)}", p1.ActualWireType, p1.Raw)
 			} else {
-				return nil, deMissingField("n0", "n0", "obj{author_id:opt(float),id:opt(float),status:opt(string),title:opt(string)}")
+				return nil, deMissingField("n0", "n0", "obj{author_id:opt(int),id:opt(int),status:opt(string),title:opt(string)}")
 			}
 			list0 = append(list0, el0)
 		}
 		t_n0 = list0
 	} else if p0.Kind == probeWrong {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{author_id:opt(float),id:opt(float),status:opt(string),title:opt(string)})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{author_id:opt(int),id:opt(int),status:opt(string),title:opt(string)})", p0.ActualWireType, p0.Raw)
 	} else if p0.Kind == probeNull {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{author_id:opt(float),id:opt(float),status:opt(string),title:opt(string)})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{author_id:opt(int),id:opt(int),status:opt(string),title:opt(string)})", p0.ActualWireType, p0.Raw)
 	} else {
-		return nil, deMissingField("n0", "n0", "arr(obj{author_id:opt(float),id:opt(float),status:opt(string),title:opt(string)})")
+		return nil, deMissingField("n0", "n0", "arr(obj{author_id:opt(int),id:opt(int),status:opt(string),title:opt(string)})")
 	}
 	produced_n0 = true
 	return t_n0, nil
@@ -763,7 +769,7 @@ func Feed(authorId int64, status *string, since *string) ([]FeedRow, error) {
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func PagedFeed(authorId int64, minId *int64, status *string, limit int64, offset int64) ([]PagedFeedRow, error) {
+func PagedFeed(ctx context.Context, authorId int64, minId *int64, status *string, limit int64, offset int64) ([]PagedFeedRow, error) {
 	var t_n0 []PagedFeedRow
 	produced_n0 := false
 	_ = t_n0
@@ -778,38 +784,39 @@ func PagedFeed(authorId int64, minId *int64, status *string, limit int64, offset
 		return nil, pe_n0
 	}
 	payload_n0 := wire.WireRowOfFields(pf_n0)
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ctx, payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
 	}
 	p0 := wire_n0.AsList()
 	if p0.Kind == probeGot {
+		var at1 [4]int
 		list0 := make([]PagedFeedRow, 0, p0.Got.Len())
 		for i0 := 0; i0 < p0.Got.Len(); i0++ {
 			var el0 PagedFeedRow
 			p1 := p0.Got.ElemRow(i0)
 			if p1.Kind == probeGot {
 				var rec1 PagedFeedRow
-				p2 := p1.Got.ProbeFloat("author_id")
+				p2 := p1.Got.ProbeIntAt("author_id", &at1[0])
 				if p2.Kind == probeGot {
 					rec1.Author_id = &p2.Got
 				} else if p2.Kind == probeWrong {
-					return nil, deTypeMismatch("PagedFeedRow", "author_id", "opt(float)", p2.ActualWireType, p2.Raw)
+					return nil, deTypeMismatch("PagedFeedRow", "author_id", "opt(int)", p2.ActualWireType, p2.Raw)
 				}
-				p3 := p1.Got.ProbeFloat("id")
+				p3 := p1.Got.ProbeIntAt("id", &at1[1])
 				if p3.Kind == probeGot {
 					rec1.Id = &p3.Got
 				} else if p3.Kind == probeWrong {
-					return nil, deTypeMismatch("PagedFeedRow", "id", "opt(float)", p3.ActualWireType, p3.Raw)
+					return nil, deTypeMismatch("PagedFeedRow", "id", "opt(int)", p3.ActualWireType, p3.Raw)
 				}
-				p4 := p1.Got.ProbeString("status")
+				p4 := p1.Got.ProbeStringAt("status", &at1[2])
 				if p4.Kind == probeGot {
 					sv4 := p4.Got
 					rec1.Status = &sv4
 				} else if p4.Kind == probeWrong {
 					return nil, deTypeMismatch("PagedFeedRow", "status", "opt(string)", p4.ActualWireType, p4.Raw)
 				}
-				p5 := p1.Got.ProbeString("title")
+				p5 := p1.Got.ProbeStringAt("title", &at1[3])
 				if p5.Kind == probeGot {
 					sv5 := p5.Got
 					rec1.Title = &sv5
@@ -818,21 +825,21 @@ func PagedFeed(authorId int64, minId *int64, status *string, limit int64, offset
 				}
 				el0 = rec1
 			} else if p1.Kind == probeWrong {
-				return nil, deTypeMismatch("n0", "n0", "obj{author_id:opt(float),id:opt(float),status:opt(string),title:opt(string)}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{author_id:opt(int),id:opt(int),status:opt(string),title:opt(string)}", p1.ActualWireType, p1.Raw)
 			} else if p1.Kind == probeNull {
-				return nil, deTypeMismatch("n0", "n0", "obj{author_id:opt(float),id:opt(float),status:opt(string),title:opt(string)}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{author_id:opt(int),id:opt(int),status:opt(string),title:opt(string)}", p1.ActualWireType, p1.Raw)
 			} else {
-				return nil, deMissingField("n0", "n0", "obj{author_id:opt(float),id:opt(float),status:opt(string),title:opt(string)}")
+				return nil, deMissingField("n0", "n0", "obj{author_id:opt(int),id:opt(int),status:opt(string),title:opt(string)}")
 			}
 			list0 = append(list0, el0)
 		}
 		t_n0 = list0
 	} else if p0.Kind == probeWrong {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{author_id:opt(float),id:opt(float),status:opt(string),title:opt(string)})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{author_id:opt(int),id:opt(int),status:opt(string),title:opt(string)})", p0.ActualWireType, p0.Raw)
 	} else if p0.Kind == probeNull {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{author_id:opt(float),id:opt(float),status:opt(string),title:opt(string)})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{author_id:opt(int),id:opt(int),status:opt(string),title:opt(string)})", p0.ActualWireType, p0.Raw)
 	} else {
-		return nil, deMissingField("n0", "n0", "arr(obj{author_id:opt(float),id:opt(float),status:opt(string),title:opt(string)})")
+		return nil, deMissingField("n0", "n0", "arr(obj{author_id:opt(int),id:opt(int),status:opt(string),title:opt(string)})")
 	}
 	produced_n0 = true
 	return t_n0, nil
@@ -850,7 +857,7 @@ func PagedFeed(authorId int64, minId *int64, status *string, limit int64, offset
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func OptionalOnlyFeed(authorId *int64, status *string) ([]OptionalOnlyFeedRow, error) {
+func OptionalOnlyFeed(ctx context.Context, authorId *int64, status *string) ([]OptionalOnlyFeedRow, error) {
 	var t_n0 []OptionalOnlyFeedRow
 	produced_n0 := false
 	_ = t_n0
@@ -865,31 +872,32 @@ func OptionalOnlyFeed(authorId *int64, status *string) ([]OptionalOnlyFeedRow, e
 		return nil, pe_n0
 	}
 	payload_n0 := wire.WireRowOfFields(pf_n0)
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ctx, payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
 	}
 	p0 := wire_n0.AsList()
 	if p0.Kind == probeGot {
+		var at1 [3]int
 		list0 := make([]OptionalOnlyFeedRow, 0, p0.Got.Len())
 		for i0 := 0; i0 < p0.Got.Len(); i0++ {
 			var el0 OptionalOnlyFeedRow
 			p1 := p0.Got.ElemRow(i0)
 			if p1.Kind == probeGot {
 				var rec1 OptionalOnlyFeedRow
-				p2 := p1.Got.ProbeFloat("author_id")
+				p2 := p1.Got.ProbeIntAt("author_id", &at1[0])
 				if p2.Kind == probeGot {
 					rec1.Author_id = &p2.Got
 				} else if p2.Kind == probeWrong {
-					return nil, deTypeMismatch("OptionalOnlyFeedRow", "author_id", "opt(float)", p2.ActualWireType, p2.Raw)
+					return nil, deTypeMismatch("OptionalOnlyFeedRow", "author_id", "opt(int)", p2.ActualWireType, p2.Raw)
 				}
-				p3 := p1.Got.ProbeFloat("id")
+				p3 := p1.Got.ProbeIntAt("id", &at1[1])
 				if p3.Kind == probeGot {
 					rec1.Id = &p3.Got
 				} else if p3.Kind == probeWrong {
-					return nil, deTypeMismatch("OptionalOnlyFeedRow", "id", "opt(float)", p3.ActualWireType, p3.Raw)
+					return nil, deTypeMismatch("OptionalOnlyFeedRow", "id", "opt(int)", p3.ActualWireType, p3.Raw)
 				}
-				p4 := p1.Got.ProbeString("status")
+				p4 := p1.Got.ProbeStringAt("status", &at1[2])
 				if p4.Kind == probeGot {
 					sv4 := p4.Got
 					rec1.Status = &sv4
@@ -898,21 +906,21 @@ func OptionalOnlyFeed(authorId *int64, status *string) ([]OptionalOnlyFeedRow, e
 				}
 				el0 = rec1
 			} else if p1.Kind == probeWrong {
-				return nil, deTypeMismatch("n0", "n0", "obj{author_id:opt(float),id:opt(float),status:opt(string)}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{author_id:opt(int),id:opt(int),status:opt(string)}", p1.ActualWireType, p1.Raw)
 			} else if p1.Kind == probeNull {
-				return nil, deTypeMismatch("n0", "n0", "obj{author_id:opt(float),id:opt(float),status:opt(string)}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{author_id:opt(int),id:opt(int),status:opt(string)}", p1.ActualWireType, p1.Raw)
 			} else {
-				return nil, deMissingField("n0", "n0", "obj{author_id:opt(float),id:opt(float),status:opt(string)}")
+				return nil, deMissingField("n0", "n0", "obj{author_id:opt(int),id:opt(int),status:opt(string)}")
 			}
 			list0 = append(list0, el0)
 		}
 		t_n0 = list0
 	} else if p0.Kind == probeWrong {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{author_id:opt(float),id:opt(float),status:opt(string)})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{author_id:opt(int),id:opt(int),status:opt(string)})", p0.ActualWireType, p0.Raw)
 	} else if p0.Kind == probeNull {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{author_id:opt(float),id:opt(float),status:opt(string)})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{author_id:opt(int),id:opt(int),status:opt(string)})", p0.ActualWireType, p0.Raw)
 	} else {
-		return nil, deMissingField("n0", "n0", "arr(obj{author_id:opt(float),id:opt(float),status:opt(string)})")
+		return nil, deMissingField("n0", "n0", "arr(obj{author_id:opt(int),id:opt(int),status:opt(string)})")
 	}
 	produced_n0 = true
 	return t_n0, nil
@@ -930,7 +938,7 @@ func OptionalOnlyFeed(authorId *int64, status *string) ([]OptionalOnlyFeedRow, e
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func QuotedOrderFeed(authorId int64, minId *int64, limit int64) ([]QuotedOrderFeedRow, error) {
+func QuotedOrderFeed(ctx context.Context, authorId int64, minId *int64, limit int64) ([]QuotedOrderFeedRow, error) {
 	var t_n0 []QuotedOrderFeedRow
 	produced_n0 := false
 	_ = t_n0
@@ -945,38 +953,39 @@ func QuotedOrderFeed(authorId int64, minId *int64, limit int64) ([]QuotedOrderFe
 		return nil, pe_n0
 	}
 	payload_n0 := wire.WireRowOfFields(pf_n0)
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ctx, payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
 	}
 	p0 := wire_n0.AsList()
 	if p0.Kind == probeGot {
+		var at1 [4]int
 		list0 := make([]QuotedOrderFeedRow, 0, p0.Got.Len())
 		for i0 := 0; i0 < p0.Got.Len(); i0++ {
 			var el0 QuotedOrderFeedRow
 			p1 := p0.Got.ElemRow(i0)
 			if p1.Kind == probeGot {
 				var rec1 QuotedOrderFeedRow
-				p2 := p1.Got.ProbeFloat("author_id")
+				p2 := p1.Got.ProbeIntAt("author_id", &at1[0])
 				if p2.Kind == probeGot {
 					rec1.Author_id = &p2.Got
 				} else if p2.Kind == probeWrong {
-					return nil, deTypeMismatch("QuotedOrderFeedRow", "author_id", "opt(float)", p2.ActualWireType, p2.Raw)
+					return nil, deTypeMismatch("QuotedOrderFeedRow", "author_id", "opt(int)", p2.ActualWireType, p2.Raw)
 				}
-				p3 := p1.Got.ProbeFloat("id")
+				p3 := p1.Got.ProbeIntAt("id", &at1[1])
 				if p3.Kind == probeGot {
 					rec1.Id = &p3.Got
 				} else if p3.Kind == probeWrong {
-					return nil, deTypeMismatch("QuotedOrderFeedRow", "id", "opt(float)", p3.ActualWireType, p3.Raw)
+					return nil, deTypeMismatch("QuotedOrderFeedRow", "id", "opt(int)", p3.ActualWireType, p3.Raw)
 				}
-				p4 := p1.Got.ProbeString("status")
+				p4 := p1.Got.ProbeStringAt("status", &at1[2])
 				if p4.Kind == probeGot {
 					sv4 := p4.Got
 					rec1.Status = &sv4
 				} else if p4.Kind == probeWrong {
 					return nil, deTypeMismatch("QuotedOrderFeedRow", "status", "opt(string)", p4.ActualWireType, p4.Raw)
 				}
-				p5 := p1.Got.ProbeString("title")
+				p5 := p1.Got.ProbeStringAt("title", &at1[3])
 				if p5.Kind == probeGot {
 					sv5 := p5.Got
 					rec1.Title = &sv5
@@ -985,21 +994,21 @@ func QuotedOrderFeed(authorId int64, minId *int64, limit int64) ([]QuotedOrderFe
 				}
 				el0 = rec1
 			} else if p1.Kind == probeWrong {
-				return nil, deTypeMismatch("n0", "n0", "obj{author_id:opt(float),id:opt(float),status:opt(string),title:opt(string)}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{author_id:opt(int),id:opt(int),status:opt(string),title:opt(string)}", p1.ActualWireType, p1.Raw)
 			} else if p1.Kind == probeNull {
-				return nil, deTypeMismatch("n0", "n0", "obj{author_id:opt(float),id:opt(float),status:opt(string),title:opt(string)}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{author_id:opt(int),id:opt(int),status:opt(string),title:opt(string)}", p1.ActualWireType, p1.Raw)
 			} else {
-				return nil, deMissingField("n0", "n0", "obj{author_id:opt(float),id:opt(float),status:opt(string),title:opt(string)}")
+				return nil, deMissingField("n0", "n0", "obj{author_id:opt(int),id:opt(int),status:opt(string),title:opt(string)}")
 			}
 			list0 = append(list0, el0)
 		}
 		t_n0 = list0
 	} else if p0.Kind == probeWrong {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{author_id:opt(float),id:opt(float),status:opt(string),title:opt(string)})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{author_id:opt(int),id:opt(int),status:opt(string),title:opt(string)})", p0.ActualWireType, p0.Raw)
 	} else if p0.Kind == probeNull {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{author_id:opt(float),id:opt(float),status:opt(string),title:opt(string)})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{author_id:opt(int),id:opt(int),status:opt(string),title:opt(string)})", p0.ActualWireType, p0.Raw)
 	} else {
-		return nil, deMissingField("n0", "n0", "arr(obj{author_id:opt(float),id:opt(float),status:opt(string),title:opt(string)})")
+		return nil, deMissingField("n0", "n0", "arr(obj{author_id:opt(int),id:opt(int),status:opt(string),title:opt(string)})")
 	}
 	produced_n0 = true
 	return t_n0, nil
@@ -1017,7 +1026,7 @@ func QuotedOrderFeed(authorId int64, minId *int64, limit int64) ([]QuotedOrderFe
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func QuotedWhereOrderFeed(status *string) ([]QuotedWhereOrderFeedRow, error) {
+func QuotedWhereOrderFeed(ctx context.Context, status *string) ([]QuotedWhereOrderFeedRow, error) {
 	var t_n0 []QuotedWhereOrderFeedRow
 	produced_n0 := false
 	_ = t_n0
@@ -1032,32 +1041,33 @@ func QuotedWhereOrderFeed(status *string) ([]QuotedWhereOrderFeedRow, error) {
 		return nil, pe_n0
 	}
 	payload_n0 := wire.WireRowOfFields(pf_n0)
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ctx, payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
 	}
 	p0 := wire_n0.AsList()
 	if p0.Kind == probeGot {
+		var at1 [3]int
 		list0 := make([]QuotedWhereOrderFeedRow, 0, p0.Got.Len())
 		for i0 := 0; i0 < p0.Got.Len(); i0++ {
 			var el0 QuotedWhereOrderFeedRow
 			p1 := p0.Got.ElemRow(i0)
 			if p1.Kind == probeGot {
 				var rec1 QuotedWhereOrderFeedRow
-				p2 := p1.Got.ProbeFloat("id")
+				p2 := p1.Got.ProbeIntAt("id", &at1[0])
 				if p2.Kind == probeGot {
 					rec1.Id = &p2.Got
 				} else if p2.Kind == probeWrong {
-					return nil, deTypeMismatch("QuotedWhereOrderFeedRow", "id", "opt(float)", p2.ActualWireType, p2.Raw)
+					return nil, deTypeMismatch("QuotedWhereOrderFeedRow", "id", "opt(int)", p2.ActualWireType, p2.Raw)
 				}
-				p3 := p1.Got.ProbeString("status")
+				p3 := p1.Got.ProbeStringAt("status", &at1[1])
 				if p3.Kind == probeGot {
 					sv3 := p3.Got
 					rec1.Status = &sv3
 				} else if p3.Kind == probeWrong {
 					return nil, deTypeMismatch("QuotedWhereOrderFeedRow", "status", "opt(string)", p3.ActualWireType, p3.Raw)
 				}
-				p4 := p1.Got.ProbeString("title")
+				p4 := p1.Got.ProbeStringAt("title", &at1[2])
 				if p4.Kind == probeGot {
 					sv4 := p4.Got
 					rec1.Title = &sv4
@@ -1066,21 +1076,21 @@ func QuotedWhereOrderFeed(status *string) ([]QuotedWhereOrderFeedRow, error) {
 				}
 				el0 = rec1
 			} else if p1.Kind == probeWrong {
-				return nil, deTypeMismatch("n0", "n0", "obj{id:opt(float),status:opt(string),title:opt(string)}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{id:opt(int),status:opt(string),title:opt(string)}", p1.ActualWireType, p1.Raw)
 			} else if p1.Kind == probeNull {
-				return nil, deTypeMismatch("n0", "n0", "obj{id:opt(float),status:opt(string),title:opt(string)}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{id:opt(int),status:opt(string),title:opt(string)}", p1.ActualWireType, p1.Raw)
 			} else {
-				return nil, deMissingField("n0", "n0", "obj{id:opt(float),status:opt(string),title:opt(string)}")
+				return nil, deMissingField("n0", "n0", "obj{id:opt(int),status:opt(string),title:opt(string)}")
 			}
 			list0 = append(list0, el0)
 		}
 		t_n0 = list0
 	} else if p0.Kind == probeWrong {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:opt(float),status:opt(string),title:opt(string)})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:opt(int),status:opt(string),title:opt(string)})", p0.ActualWireType, p0.Raw)
 	} else if p0.Kind == probeNull {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:opt(float),status:opt(string),title:opt(string)})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:opt(int),status:opt(string),title:opt(string)})", p0.ActualWireType, p0.Raw)
 	} else {
-		return nil, deMissingField("n0", "n0", "arr(obj{id:opt(float),status:opt(string),title:opt(string)})")
+		return nil, deMissingField("n0", "n0", "arr(obj{id:opt(int),status:opt(string),title:opt(string)})")
 	}
 	produced_n0 = true
 	return t_n0, nil
@@ -1098,7 +1108,7 @@ func QuotedWhereOrderFeed(status *string) ([]QuotedWhereOrderFeedRow, error) {
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func ViewFeed(status *string) ([]ViewFeedRow, error) {
+func ViewFeed(ctx context.Context, status *string) ([]ViewFeedRow, error) {
 	var t_n0 []ViewFeedRow
 	produced_n0 := false
 	_ = t_n0
@@ -1113,38 +1123,39 @@ func ViewFeed(status *string) ([]ViewFeedRow, error) {
 		return nil, pe_n0
 	}
 	payload_n0 := wire.WireRowOfFields(pf_n0)
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ctx, payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
 	}
 	p0 := wire_n0.AsList()
 	if p0.Kind == probeGot {
+		var at1 [4]int
 		list0 := make([]ViewFeedRow, 0, p0.Got.Len())
 		for i0 := 0; i0 < p0.Got.Len(); i0++ {
 			var el0 ViewFeedRow
 			p1 := p0.Got.ElemRow(i0)
 			if p1.Kind == probeGot {
 				var rec1 ViewFeedRow
-				p2 := p1.Got.ProbeFloat("author_id")
+				p2 := p1.Got.ProbeIntAt("author_id", &at1[0])
 				if p2.Kind == probeGot {
 					rec1.Author_id = &p2.Got
 				} else if p2.Kind == probeWrong {
-					return nil, deTypeMismatch("ViewFeedRow", "author_id", "opt(float)", p2.ActualWireType, p2.Raw)
+					return nil, deTypeMismatch("ViewFeedRow", "author_id", "opt(int)", p2.ActualWireType, p2.Raw)
 				}
-				p3 := p1.Got.ProbeFloat("id")
+				p3 := p1.Got.ProbeIntAt("id", &at1[1])
 				if p3.Kind == probeGot {
 					rec1.Id = &p3.Got
 				} else if p3.Kind == probeWrong {
-					return nil, deTypeMismatch("ViewFeedRow", "id", "opt(float)", p3.ActualWireType, p3.Raw)
+					return nil, deTypeMismatch("ViewFeedRow", "id", "opt(int)", p3.ActualWireType, p3.Raw)
 				}
-				p4 := p1.Got.ProbeString("status")
+				p4 := p1.Got.ProbeStringAt("status", &at1[2])
 				if p4.Kind == probeGot {
 					sv4 := p4.Got
 					rec1.Status = &sv4
 				} else if p4.Kind == probeWrong {
 					return nil, deTypeMismatch("ViewFeedRow", "status", "opt(string)", p4.ActualWireType, p4.Raw)
 				}
-				p5 := p1.Got.ProbeString("title")
+				p5 := p1.Got.ProbeStringAt("title", &at1[3])
 				if p5.Kind == probeGot {
 					sv5 := p5.Got
 					rec1.Title = &sv5
@@ -1153,21 +1164,21 @@ func ViewFeed(status *string) ([]ViewFeedRow, error) {
 				}
 				el0 = rec1
 			} else if p1.Kind == probeWrong {
-				return nil, deTypeMismatch("n0", "n0", "obj{author_id:opt(float),id:opt(float),status:opt(string),title:opt(string)}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{author_id:opt(int),id:opt(int),status:opt(string),title:opt(string)}", p1.ActualWireType, p1.Raw)
 			} else if p1.Kind == probeNull {
-				return nil, deTypeMismatch("n0", "n0", "obj{author_id:opt(float),id:opt(float),status:opt(string),title:opt(string)}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{author_id:opt(int),id:opt(int),status:opt(string),title:opt(string)}", p1.ActualWireType, p1.Raw)
 			} else {
-				return nil, deMissingField("n0", "n0", "obj{author_id:opt(float),id:opt(float),status:opt(string),title:opt(string)}")
+				return nil, deMissingField("n0", "n0", "obj{author_id:opt(int),id:opt(int),status:opt(string),title:opt(string)}")
 			}
 			list0 = append(list0, el0)
 		}
 		t_n0 = list0
 	} else if p0.Kind == probeWrong {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{author_id:opt(float),id:opt(float),status:opt(string),title:opt(string)})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{author_id:opt(int),id:opt(int),status:opt(string),title:opt(string)})", p0.ActualWireType, p0.Raw)
 	} else if p0.Kind == probeNull {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{author_id:opt(float),id:opt(float),status:opt(string),title:opt(string)})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{author_id:opt(int),id:opt(int),status:opt(string),title:opt(string)})", p0.ActualWireType, p0.Raw)
 	} else {
-		return nil, deMissingField("n0", "n0", "arr(obj{author_id:opt(float),id:opt(float),status:opt(string),title:opt(string)})")
+		return nil, deMissingField("n0", "n0", "arr(obj{author_id:opt(int),id:opt(int),status:opt(string),title:opt(string)})")
 	}
 	produced_n0 = true
 	return t_n0, nil
@@ -1185,7 +1196,7 @@ func ViewFeed(status *string) ([]ViewFeedRow, error) {
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func UsersWithPosts() ([]UsersWithPostsRow, error) {
+func UsersWithPosts(ctx context.Context) ([]UsersWithPostsRow, error) {
 	var t_n0 []wire.WireValue
 	produced_n0 := false
 	_ = t_n0
@@ -1216,7 +1227,7 @@ func UsersWithPosts() ([]UsersWithPostsRow, error) {
 	_ = produced_n6
 	// ── op 'n0' (executeSQL) ──
 	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{})}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, name FROM conf_users ORDER BY id ASC")}})
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ctx, payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
 	}
@@ -1234,7 +1245,7 @@ func UsersWithPosts() ([]UsersWithPostsRow, error) {
 	// ── op 'n1' (pluck, parent:n0) ──
 	if produced_n0 {
 		payload_n1 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "col", Val: func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range []string{"id"} { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()}, wire.WireField{Key: "rows", Val: wire.WireListOf(t_n0)}})
-		wire_n1, wire_n1Err := litedbmodel_runtime.PluckKeys(payload_n1)
+		wire_n1, wire_n1Err := litedbmodel_runtime.PluckKeys(ctx, payload_n1)
 		if wire_n1Err != nil {
 			return nil, opFailed("n1", "fail", wire_n1Err)
 		}
@@ -1252,8 +1263,8 @@ func UsersWithPosts() ([]UsersWithPostsRow, error) {
 	}
 	// ── op 'n2' (executeSQL, parent:n1) ──
 	if produced_n1 {
-		payload_n2 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireListOf(t_n1)})}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, author_id, title, status, created_at FROM conf_posts WHERE conf_posts.author_id = ANY(?::int[]) ORDER BY id ASC")}})
-		wire_n2, wire_n2Err := litedbmodel_runtime.ExecuteSQL(payload_n2)
+		payload_n2 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireListOf(t_n1)})}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, author_id, title, status, created_at FROM conf_posts WHERE conf_posts.author_id = ANY(?::bigint[]) ORDER BY id ASC")}})
+		wire_n2, wire_n2Err := litedbmodel_runtime.ExecuteSQL(ctx, payload_n2)
 		if wire_n2Err != nil {
 			return nil, opFailed("n2", "fail", wire_n2Err)
 		}
@@ -1272,7 +1283,7 @@ func UsersWithPosts() ([]UsersWithPostsRow, error) {
 	// ── op 'n3' (pluck, parent:n2) ──
 	if produced_n2 {
 		payload_n3 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "col", Val: func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range []string{"id"} { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()}, wire.WireField{Key: "rows", Val: wire.WireListOf(t_n2)}})
-		wire_n3, wire_n3Err := litedbmodel_runtime.PluckKeys(payload_n3)
+		wire_n3, wire_n3Err := litedbmodel_runtime.PluckKeys(ctx, payload_n3)
 		if wire_n3Err != nil {
 			return nil, opFailed("n3", "fail", wire_n3Err)
 		}
@@ -1290,8 +1301,8 @@ func UsersWithPosts() ([]UsersWithPostsRow, error) {
 	}
 	// ── op 'n4' (executeSQL, parent:n3) ──
 	if produced_n3 {
-		payload_n4 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireListOf(t_n3)})}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, post_id, label FROM conf_tags WHERE conf_tags.post_id = ANY(?::int[]) ORDER BY id ASC")}})
-		wire_n4, wire_n4Err := litedbmodel_runtime.ExecuteSQL(payload_n4)
+		payload_n4 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireListOf(t_n3)})}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, post_id, label FROM conf_tags WHERE conf_tags.post_id = ANY(?::bigint[]) ORDER BY id ASC")}})
+		wire_n4, wire_n4Err := litedbmodel_runtime.ExecuteSQL(ctx, payload_n4)
 		if wire_n4Err != nil {
 			return nil, opFailed("n4", "fail", wire_n4Err)
 		}
@@ -1310,7 +1321,7 @@ func UsersWithPosts() ([]UsersWithPostsRow, error) {
 	// ── op 'n5' (group, parent:n2) ──
 	if produced_n2 {
 		payload_n5 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "children", Val: wire.WireListOf(t_n4)}, wire.WireField{Key: "fk", Val: func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range []string{"post_id"} { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()}, wire.WireField{Key: "into", Val: wire.WireStr("tags")}, wire.WireField{Key: "parents", Val: wire.WireListOf(t_n2)}, wire.WireField{Key: "pk", Val: func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range []string{"id"} { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()}, wire.WireField{Key: "single", Val: wire.WireBool(false)}})
-		wire_n5, wire_n5Err := litedbmodel_runtime.GroupChildren(payload_n5)
+		wire_n5, wire_n5Err := litedbmodel_runtime.GroupChildren(ctx, payload_n5)
 		if wire_n5Err != nil {
 			return nil, opFailed("n5", "fail", wire_n5Err)
 		}
@@ -1329,32 +1340,35 @@ func UsersWithPosts() ([]UsersWithPostsRow, error) {
 	// ── op 'n6' (group, parent:n0) ──
 	if produced_n0 {
 		payload_n6 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "children", Val: wire.WireListOf(t_n5)}, wire.WireField{Key: "fk", Val: func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range []string{"author_id"} { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()}, wire.WireField{Key: "into", Val: wire.WireStr("posts")}, wire.WireField{Key: "parents", Val: wire.WireListOf(t_n0)}, wire.WireField{Key: "pk", Val: func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range []string{"id"} { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()}, wire.WireField{Key: "single", Val: wire.WireBool(false)}})
-		wire_n6, wire_n6Err := litedbmodel_runtime.GroupChildren(payload_n6)
+		wire_n6, wire_n6Err := litedbmodel_runtime.GroupChildren(ctx, payload_n6)
 		if wire_n6Err != nil {
 			return nil, opFailed("n6", "fail", wire_n6Err)
 		}
 		p6 := wire_n6.AsList()
 		if p6.Kind == probeGot {
+			var at7 [3]int
+			var at11 [6]int
+			var at17 [3]int
 			list6 := make([]UsersWithPostsRow, 0, p6.Got.Len())
 			for i6 := 0; i6 < p6.Got.Len(); i6++ {
 				var el6 UsersWithPostsRow
 				p7 := p6.Got.ElemRow(i6)
 				if p7.Kind == probeGot {
 					var rec7 UsersWithPostsRow
-					p8 := p7.Got.ProbeFloat("id")
+					p8 := p7.Got.ProbeIntAt("id", &at7[0])
 					if p8.Kind == probeGot {
 						rec7.Id = &p8.Got
 					} else if p8.Kind == probeWrong {
-						return nil, deTypeMismatch("UsersWithPostsRow", "id", "opt(float)", p8.ActualWireType, p8.Raw)
+						return nil, deTypeMismatch("UsersWithPostsRow", "id", "opt(int)", p8.ActualWireType, p8.Raw)
 					}
-					p9 := p7.Got.ProbeString("name")
+					p9 := p7.Got.ProbeStringAt("name", &at7[1])
 					if p9.Kind == probeGot {
 						sv9 := p9.Got
 						rec7.Name = &sv9
 					} else if p9.Kind == probeWrong {
 						return nil, deTypeMismatch("UsersWithPostsRow", "name", "opt(string)", p9.ActualWireType, p9.Raw)
 					}
-					p10 := p7.Got.ProbeList("posts")
+					p10 := p7.Got.ProbeListAt("posts", &at7[2])
 					if p10.Kind == probeGot {
 						list10 := make([]UsersWithPostsRow_posts, 0, p10.Got.Len())
 						for i10 := 0; i10 < p10.Got.Len(); i10++ {
@@ -1362,33 +1376,33 @@ func UsersWithPosts() ([]UsersWithPostsRow, error) {
 							p11 := p10.Got.ElemRow(i10)
 							if p11.Kind == probeGot {
 								var rec11 UsersWithPostsRow_posts
-								p12 := p11.Got.ProbeFloat("author_id")
+								p12 := p11.Got.ProbeIntAt("author_id", &at11[0])
 								if p12.Kind == probeGot {
 									rec11.Author_id = &p12.Got
 								} else if p12.Kind == probeWrong {
-									return nil, deTypeMismatch("UsersWithPostsRow_posts", "author_id", "opt(float)", p12.ActualWireType, p12.Raw)
+									return nil, deTypeMismatch("UsersWithPostsRow_posts", "author_id", "opt(int)", p12.ActualWireType, p12.Raw)
 								}
-								p13 := p11.Got.ProbeString("created_at")
+								p13 := p11.Got.ProbeStringAt("created_at", &at11[1])
 								if p13.Kind == probeGot {
 									sv13 := p13.Got
 									rec11.Created_at = &sv13
 								} else if p13.Kind == probeWrong {
 									return nil, deTypeMismatch("UsersWithPostsRow_posts", "created_at", "opt(string)", p13.ActualWireType, p13.Raw)
 								}
-								p14 := p11.Got.ProbeFloat("id")
+								p14 := p11.Got.ProbeIntAt("id", &at11[2])
 								if p14.Kind == probeGot {
 									rec11.Id = &p14.Got
 								} else if p14.Kind == probeWrong {
-									return nil, deTypeMismatch("UsersWithPostsRow_posts", "id", "opt(float)", p14.ActualWireType, p14.Raw)
+									return nil, deTypeMismatch("UsersWithPostsRow_posts", "id", "opt(int)", p14.ActualWireType, p14.Raw)
 								}
-								p15 := p11.Got.ProbeString("status")
+								p15 := p11.Got.ProbeStringAt("status", &at11[3])
 								if p15.Kind == probeGot {
 									sv15 := p15.Got
 									rec11.Status = &sv15
 								} else if p15.Kind == probeWrong {
 									return nil, deTypeMismatch("UsersWithPostsRow_posts", "status", "opt(string)", p15.ActualWireType, p15.Raw)
 								}
-								p16 := p11.Got.ProbeList("tags")
+								p16 := p11.Got.ProbeListAt("tags", &at11[4])
 								if p16.Kind == probeGot {
 									list16 := make([]UsersWithPostsRow_posts_tags, 0, p16.Got.Len())
 									for i16 := 0; i16 < p16.Got.Len(); i16++ {
@@ -1396,44 +1410,44 @@ func UsersWithPosts() ([]UsersWithPostsRow, error) {
 										p17 := p16.Got.ElemRow(i16)
 										if p17.Kind == probeGot {
 											var rec17 UsersWithPostsRow_posts_tags
-											p18 := p17.Got.ProbeFloat("id")
+											p18 := p17.Got.ProbeIntAt("id", &at17[0])
 											if p18.Kind == probeGot {
 												rec17.Id = &p18.Got
 											} else if p18.Kind == probeWrong {
-												return nil, deTypeMismatch("UsersWithPostsRow_posts_tags", "id", "opt(float)", p18.ActualWireType, p18.Raw)
+												return nil, deTypeMismatch("UsersWithPostsRow_posts_tags", "id", "opt(int)", p18.ActualWireType, p18.Raw)
 											}
-											p19 := p17.Got.ProbeString("label")
+											p19 := p17.Got.ProbeStringAt("label", &at17[1])
 											if p19.Kind == probeGot {
 												sv19 := p19.Got
 												rec17.Label = &sv19
 											} else if p19.Kind == probeWrong {
 												return nil, deTypeMismatch("UsersWithPostsRow_posts_tags", "label", "opt(string)", p19.ActualWireType, p19.Raw)
 											}
-											p20 := p17.Got.ProbeFloat("post_id")
+											p20 := p17.Got.ProbeIntAt("post_id", &at17[2])
 											if p20.Kind == probeGot {
 												rec17.Post_id = &p20.Got
 											} else if p20.Kind == probeWrong {
-												return nil, deTypeMismatch("UsersWithPostsRow_posts_tags", "post_id", "opt(float)", p20.ActualWireType, p20.Raw)
+												return nil, deTypeMismatch("UsersWithPostsRow_posts_tags", "post_id", "opt(int)", p20.ActualWireType, p20.Raw)
 											}
 											el16 = rec17
 										} else if p17.Kind == probeWrong {
-											return nil, deTypeMismatch("UsersWithPostsRow_posts", "tags", "obj{id:opt(float),label:opt(string),post_id:opt(float)}", p17.ActualWireType, p17.Raw)
+											return nil, deTypeMismatch("UsersWithPostsRow_posts", "tags", "obj{id:opt(int),label:opt(string),post_id:opt(int)}", p17.ActualWireType, p17.Raw)
 										} else if p17.Kind == probeNull {
-											return nil, deTypeMismatch("UsersWithPostsRow_posts", "tags", "obj{id:opt(float),label:opt(string),post_id:opt(float)}", p17.ActualWireType, p17.Raw)
+											return nil, deTypeMismatch("UsersWithPostsRow_posts", "tags", "obj{id:opt(int),label:opt(string),post_id:opt(int)}", p17.ActualWireType, p17.Raw)
 										} else {
-											return nil, deMissingField("UsersWithPostsRow_posts", "tags", "obj{id:opt(float),label:opt(string),post_id:opt(float)}")
+											return nil, deMissingField("UsersWithPostsRow_posts", "tags", "obj{id:opt(int),label:opt(string),post_id:opt(int)}")
 										}
 										list16 = append(list16, el16)
 									}
 									rec11.Tags = list16
 								} else if p16.Kind == probeWrong {
-									return nil, deTypeMismatch("UsersWithPostsRow_posts", "tags", "arr(obj{id:opt(float),label:opt(string),post_id:opt(float)})", p16.ActualWireType, p16.Raw)
+									return nil, deTypeMismatch("UsersWithPostsRow_posts", "tags", "arr(obj{id:opt(int),label:opt(string),post_id:opt(int)})", p16.ActualWireType, p16.Raw)
 								} else if p16.Kind == probeNull {
-									return nil, deTypeMismatch("UsersWithPostsRow_posts", "tags", "arr(obj{id:opt(float),label:opt(string),post_id:opt(float)})", p16.ActualWireType, p16.Raw)
+									return nil, deTypeMismatch("UsersWithPostsRow_posts", "tags", "arr(obj{id:opt(int),label:opt(string),post_id:opt(int)})", p16.ActualWireType, p16.Raw)
 								} else {
-									return nil, deMissingField("UsersWithPostsRow_posts", "tags", "arr(obj{id:opt(float),label:opt(string),post_id:opt(float)})")
+									return nil, deMissingField("UsersWithPostsRow_posts", "tags", "arr(obj{id:opt(int),label:opt(string),post_id:opt(int)})")
 								}
-								p21 := p11.Got.ProbeString("title")
+								p21 := p11.Got.ProbeStringAt("title", &at11[5])
 								if p21.Kind == probeGot {
 									sv21 := p21.Got
 									rec11.Title = &sv21
@@ -1442,39 +1456,39 @@ func UsersWithPosts() ([]UsersWithPostsRow, error) {
 								}
 								el10 = rec11
 							} else if p11.Kind == probeWrong {
-								return nil, deTypeMismatch("UsersWithPostsRow", "posts", "obj{author_id:opt(float),created_at:opt(string),id:opt(float),status:opt(string),tags:arr(obj{id:opt(float),label:opt(string),post_id:opt(float)}),title:opt(string)}", p11.ActualWireType, p11.Raw)
+								return nil, deTypeMismatch("UsersWithPostsRow", "posts", "obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),tags:arr(obj{id:opt(int),label:opt(string),post_id:opt(int)}),title:opt(string)}", p11.ActualWireType, p11.Raw)
 							} else if p11.Kind == probeNull {
-								return nil, deTypeMismatch("UsersWithPostsRow", "posts", "obj{author_id:opt(float),created_at:opt(string),id:opt(float),status:opt(string),tags:arr(obj{id:opt(float),label:opt(string),post_id:opt(float)}),title:opt(string)}", p11.ActualWireType, p11.Raw)
+								return nil, deTypeMismatch("UsersWithPostsRow", "posts", "obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),tags:arr(obj{id:opt(int),label:opt(string),post_id:opt(int)}),title:opt(string)}", p11.ActualWireType, p11.Raw)
 							} else {
-								return nil, deMissingField("UsersWithPostsRow", "posts", "obj{author_id:opt(float),created_at:opt(string),id:opt(float),status:opt(string),tags:arr(obj{id:opt(float),label:opt(string),post_id:opt(float)}),title:opt(string)}")
+								return nil, deMissingField("UsersWithPostsRow", "posts", "obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),tags:arr(obj{id:opt(int),label:opt(string),post_id:opt(int)}),title:opt(string)}")
 							}
 							list10 = append(list10, el10)
 						}
 						rec7.Posts = list10
 					} else if p10.Kind == probeWrong {
-						return nil, deTypeMismatch("UsersWithPostsRow", "posts", "arr(obj{author_id:opt(float),created_at:opt(string),id:opt(float),status:opt(string),tags:arr(obj{id:opt(float),label:opt(string),post_id:opt(float)}),title:opt(string)})", p10.ActualWireType, p10.Raw)
+						return nil, deTypeMismatch("UsersWithPostsRow", "posts", "arr(obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),tags:arr(obj{id:opt(int),label:opt(string),post_id:opt(int)}),title:opt(string)})", p10.ActualWireType, p10.Raw)
 					} else if p10.Kind == probeNull {
-						return nil, deTypeMismatch("UsersWithPostsRow", "posts", "arr(obj{author_id:opt(float),created_at:opt(string),id:opt(float),status:opt(string),tags:arr(obj{id:opt(float),label:opt(string),post_id:opt(float)}),title:opt(string)})", p10.ActualWireType, p10.Raw)
+						return nil, deTypeMismatch("UsersWithPostsRow", "posts", "arr(obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),tags:arr(obj{id:opt(int),label:opt(string),post_id:opt(int)}),title:opt(string)})", p10.ActualWireType, p10.Raw)
 					} else {
-						return nil, deMissingField("UsersWithPostsRow", "posts", "arr(obj{author_id:opt(float),created_at:opt(string),id:opt(float),status:opt(string),tags:arr(obj{id:opt(float),label:opt(string),post_id:opt(float)}),title:opt(string)})")
+						return nil, deMissingField("UsersWithPostsRow", "posts", "arr(obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),tags:arr(obj{id:opt(int),label:opt(string),post_id:opt(int)}),title:opt(string)})")
 					}
 					el6 = rec7
 				} else if p7.Kind == probeWrong {
-					return nil, deTypeMismatch("n6", "n6", "obj{id:opt(float),name:opt(string),posts:arr(obj{author_id:opt(float),created_at:opt(string),id:opt(float),status:opt(string),tags:arr(obj{id:opt(float),label:opt(string),post_id:opt(float)}),title:opt(string)})}", p7.ActualWireType, p7.Raw)
+					return nil, deTypeMismatch("n6", "n6", "obj{id:opt(int),name:opt(string),posts:arr(obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),tags:arr(obj{id:opt(int),label:opt(string),post_id:opt(int)}),title:opt(string)})}", p7.ActualWireType, p7.Raw)
 				} else if p7.Kind == probeNull {
-					return nil, deTypeMismatch("n6", "n6", "obj{id:opt(float),name:opt(string),posts:arr(obj{author_id:opt(float),created_at:opt(string),id:opt(float),status:opt(string),tags:arr(obj{id:opt(float),label:opt(string),post_id:opt(float)}),title:opt(string)})}", p7.ActualWireType, p7.Raw)
+					return nil, deTypeMismatch("n6", "n6", "obj{id:opt(int),name:opt(string),posts:arr(obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),tags:arr(obj{id:opt(int),label:opt(string),post_id:opt(int)}),title:opt(string)})}", p7.ActualWireType, p7.Raw)
 				} else {
-					return nil, deMissingField("n6", "n6", "obj{id:opt(float),name:opt(string),posts:arr(obj{author_id:opt(float),created_at:opt(string),id:opt(float),status:opt(string),tags:arr(obj{id:opt(float),label:opt(string),post_id:opt(float)}),title:opt(string)})}")
+					return nil, deMissingField("n6", "n6", "obj{id:opt(int),name:opt(string),posts:arr(obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),tags:arr(obj{id:opt(int),label:opt(string),post_id:opt(int)}),title:opt(string)})}")
 				}
 				list6 = append(list6, el6)
 			}
 			t_n6 = list6
 		} else if p6.Kind == probeWrong {
-			return nil, deTypeMismatch("n6", "n6", "arr(obj{id:opt(float),name:opt(string),posts:arr(obj{author_id:opt(float),created_at:opt(string),id:opt(float),status:opt(string),tags:arr(obj{id:opt(float),label:opt(string),post_id:opt(float)}),title:opt(string)})})", p6.ActualWireType, p6.Raw)
+			return nil, deTypeMismatch("n6", "n6", "arr(obj{id:opt(int),name:opt(string),posts:arr(obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),tags:arr(obj{id:opt(int),label:opt(string),post_id:opt(int)}),title:opt(string)})})", p6.ActualWireType, p6.Raw)
 		} else if p6.Kind == probeNull {
-			return nil, deTypeMismatch("n6", "n6", "arr(obj{id:opt(float),name:opt(string),posts:arr(obj{author_id:opt(float),created_at:opt(string),id:opt(float),status:opt(string),tags:arr(obj{id:opt(float),label:opt(string),post_id:opt(float)}),title:opt(string)})})", p6.ActualWireType, p6.Raw)
+			return nil, deTypeMismatch("n6", "n6", "arr(obj{id:opt(int),name:opt(string),posts:arr(obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),tags:arr(obj{id:opt(int),label:opt(string),post_id:opt(int)}),title:opt(string)})})", p6.ActualWireType, p6.Raw)
 		} else {
-			return nil, deMissingField("n6", "n6", "arr(obj{id:opt(float),name:opt(string),posts:arr(obj{author_id:opt(float),created_at:opt(string),id:opt(float),status:opt(string),tags:arr(obj{id:opt(float),label:opt(string),post_id:opt(float)}),title:opt(string)})})")
+			return nil, deMissingField("n6", "n6", "arr(obj{id:opt(int),name:opt(string),posts:arr(obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),tags:arr(obj{id:opt(int),label:opt(string),post_id:opt(int)}),title:opt(string)})})")
 		}
 		produced_n6 = true
 	}
@@ -1493,7 +1507,7 @@ func UsersWithPosts() ([]UsersWithPostsRow, error) {
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func PostsWithAuthor() ([]PostsWithAuthorRow, error) {
+func PostsWithAuthor(ctx context.Context) ([]PostsWithAuthorRow, error) {
 	var t_n0 []wire.WireValue
 	produced_n0 := false
 	_ = t_n0
@@ -1512,7 +1526,7 @@ func PostsWithAuthor() ([]PostsWithAuthorRow, error) {
 	_ = produced_n3
 	// ── op 'n0' (executeSQL) ──
 	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{})}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, author_id, title, status, created_at FROM conf_posts ORDER BY id ASC")}})
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ctx, payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
 	}
@@ -1530,7 +1544,7 @@ func PostsWithAuthor() ([]PostsWithAuthorRow, error) {
 	// ── op 'n1' (pluck, parent:n0) ──
 	if produced_n0 {
 		payload_n1 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "col", Val: func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range []string{"author_id"} { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()}, wire.WireField{Key: "rows", Val: wire.WireListOf(t_n0)}})
-		wire_n1, wire_n1Err := litedbmodel_runtime.PluckKeys(payload_n1)
+		wire_n1, wire_n1Err := litedbmodel_runtime.PluckKeys(ctx, payload_n1)
 		if wire_n1Err != nil {
 			return nil, opFailed("n1", "fail", wire_n1Err)
 		}
@@ -1548,8 +1562,8 @@ func PostsWithAuthor() ([]PostsWithAuthorRow, error) {
 	}
 	// ── op 'n2' (executeSQL, parent:n1) ──
 	if produced_n1 {
-		payload_n2 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireListOf(t_n1)})}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, name, post_count FROM conf_users WHERE conf_users.id = ANY(?::int[])")}})
-		wire_n2, wire_n2Err := litedbmodel_runtime.ExecuteSQL(payload_n2)
+		payload_n2 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireListOf(t_n1)})}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, name, post_count FROM conf_users WHERE conf_users.id = ANY(?::bigint[])")}})
+		wire_n2, wire_n2Err := litedbmodel_runtime.ExecuteSQL(ctx, payload_n2)
 		if wire_n2Err != nil {
 			return nil, opFailed("n2", "fail", wire_n2Err)
 		}
@@ -1568,71 +1582,73 @@ func PostsWithAuthor() ([]PostsWithAuthorRow, error) {
 	// ── op 'n3' (group, parent:n0) ──
 	if produced_n0 {
 		payload_n3 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "children", Val: wire.WireListOf(t_n2)}, wire.WireField{Key: "fk", Val: func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range []string{"id"} { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()}, wire.WireField{Key: "into", Val: wire.WireStr("author")}, wire.WireField{Key: "parents", Val: wire.WireListOf(t_n0)}, wire.WireField{Key: "pk", Val: func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range []string{"author_id"} { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()}, wire.WireField{Key: "single", Val: wire.WireBool(true)}})
-		wire_n3, wire_n3Err := litedbmodel_runtime.GroupChildren(payload_n3)
+		wire_n3, wire_n3Err := litedbmodel_runtime.GroupChildren(ctx, payload_n3)
 		if wire_n3Err != nil {
 			return nil, opFailed("n3", "fail", wire_n3Err)
 		}
 		p3 := wire_n3.AsList()
 		if p3.Kind == probeGot {
+			var at4 [6]int
+			var at5 [3]int
 			list3 := make([]PostsWithAuthorRow, 0, p3.Got.Len())
 			for i3 := 0; i3 < p3.Got.Len(); i3++ {
 				var el3 PostsWithAuthorRow
 				p4 := p3.Got.ElemRow(i3)
 				if p4.Kind == probeGot {
 					var rec4 PostsWithAuthorRow
-					p5 := p4.Got.ProbeRow("author")
+					p5 := p4.Got.ProbeRowAt("author", &at4[0])
 					if p5.Kind == probeGot {
 						var rec5 PostsWithAuthorRow_author
-						p6 := p5.Got.ProbeFloat("id")
+						p6 := p5.Got.ProbeIntAt("id", &at5[0])
 						if p6.Kind == probeGot {
 							rec5.Id = &p6.Got
 						} else if p6.Kind == probeWrong {
-							return nil, deTypeMismatch("PostsWithAuthorRow_author", "id", "opt(float)", p6.ActualWireType, p6.Raw)
+							return nil, deTypeMismatch("PostsWithAuthorRow_author", "id", "opt(int)", p6.ActualWireType, p6.Raw)
 						}
-						p7 := p5.Got.ProbeString("name")
+						p7 := p5.Got.ProbeStringAt("name", &at5[1])
 						if p7.Kind == probeGot {
 							sv7 := p7.Got
 							rec5.Name = &sv7
 						} else if p7.Kind == probeWrong {
 							return nil, deTypeMismatch("PostsWithAuthorRow_author", "name", "opt(string)", p7.ActualWireType, p7.Raw)
 						}
-						p8 := p5.Got.ProbeFloat("post_count")
+						p8 := p5.Got.ProbeIntAt("post_count", &at5[2])
 						if p8.Kind == probeGot {
 							rec5.Post_count = &p8.Got
 						} else if p8.Kind == probeWrong {
-							return nil, deTypeMismatch("PostsWithAuthorRow_author", "post_count", "opt(float)", p8.ActualWireType, p8.Raw)
+							return nil, deTypeMismatch("PostsWithAuthorRow_author", "post_count", "opt(int)", p8.ActualWireType, p8.Raw)
 						}
 						rec4.Author = &rec5
 					} else if p5.Kind == probeWrong {
-						return nil, deTypeMismatch("PostsWithAuthorRow", "author", "opt(obj{id:opt(float),name:opt(string),post_count:opt(float)})", p5.ActualWireType, p5.Raw)
+						return nil, deTypeMismatch("PostsWithAuthorRow", "author", "opt(obj{id:opt(int),name:opt(string),post_count:opt(int)})", p5.ActualWireType, p5.Raw)
 					}
-					p9 := p4.Got.ProbeFloat("author_id")
+					p9 := p4.Got.ProbeIntAt("author_id", &at4[1])
 					if p9.Kind == probeGot {
 						rec4.Author_id = &p9.Got
 					} else if p9.Kind == probeWrong {
-						return nil, deTypeMismatch("PostsWithAuthorRow", "author_id", "opt(float)", p9.ActualWireType, p9.Raw)
+						return nil, deTypeMismatch("PostsWithAuthorRow", "author_id", "opt(int)", p9.ActualWireType, p9.Raw)
 					}
-					p10 := p4.Got.ProbeString("created_at")
+					p10 := p4.Got.ProbeStringAt("created_at", &at4[2])
 					if p10.Kind == probeGot {
 						sv10 := p10.Got
 						rec4.Created_at = &sv10
 					} else if p10.Kind == probeWrong {
 						return nil, deTypeMismatch("PostsWithAuthorRow", "created_at", "opt(string)", p10.ActualWireType, p10.Raw)
 					}
-					p11 := p4.Got.ProbeFloat("id")
+					p11 := p4.Got.ProbeIntAt("id", &at4[3])
 					if p11.Kind == probeGot {
 						rec4.Id = &p11.Got
 					} else if p11.Kind == probeWrong {
-						return nil, deTypeMismatch("PostsWithAuthorRow", "id", "opt(float)", p11.ActualWireType, p11.Raw)
+						return nil, deTypeMismatch("PostsWithAuthorRow", "id", "opt(int)", p11.ActualWireType, p11.Raw)
 					}
-					p12 := p4.Got.ProbeString("status")
+					p12 := p4.Got.ProbeStringAt("status", &at4[4])
 					if p12.Kind == probeGot {
 						sv12 := p12.Got
 						rec4.Status = &sv12
 					} else if p12.Kind == probeWrong {
 						return nil, deTypeMismatch("PostsWithAuthorRow", "status", "opt(string)", p12.ActualWireType, p12.Raw)
 					}
-					p13 := p4.Got.ProbeString("title")
+					p13 := p4.Got.ProbeStringAt("title", &at4[5])
 					if p13.Kind == probeGot {
 						sv13 := p13.Got
 						rec4.Title = &sv13
@@ -1641,21 +1657,21 @@ func PostsWithAuthor() ([]PostsWithAuthorRow, error) {
 					}
 					el3 = rec4
 				} else if p4.Kind == probeWrong {
-					return nil, deTypeMismatch("n3", "n3", "obj{author:opt(obj{id:opt(float),name:opt(string),post_count:opt(float)}),author_id:opt(float),created_at:opt(string),id:opt(float),status:opt(string),title:opt(string)}", p4.ActualWireType, p4.Raw)
+					return nil, deTypeMismatch("n3", "n3", "obj{author:opt(obj{id:opt(int),name:opt(string),post_count:opt(int)}),author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)}", p4.ActualWireType, p4.Raw)
 				} else if p4.Kind == probeNull {
-					return nil, deTypeMismatch("n3", "n3", "obj{author:opt(obj{id:opt(float),name:opt(string),post_count:opt(float)}),author_id:opt(float),created_at:opt(string),id:opt(float),status:opt(string),title:opt(string)}", p4.ActualWireType, p4.Raw)
+					return nil, deTypeMismatch("n3", "n3", "obj{author:opt(obj{id:opt(int),name:opt(string),post_count:opt(int)}),author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)}", p4.ActualWireType, p4.Raw)
 				} else {
-					return nil, deMissingField("n3", "n3", "obj{author:opt(obj{id:opt(float),name:opt(string),post_count:opt(float)}),author_id:opt(float),created_at:opt(string),id:opt(float),status:opt(string),title:opt(string)}")
+					return nil, deMissingField("n3", "n3", "obj{author:opt(obj{id:opt(int),name:opt(string),post_count:opt(int)}),author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)}")
 				}
 				list3 = append(list3, el3)
 			}
 			t_n3 = list3
 		} else if p3.Kind == probeWrong {
-			return nil, deTypeMismatch("n3", "n3", "arr(obj{author:opt(obj{id:opt(float),name:opt(string),post_count:opt(float)}),author_id:opt(float),created_at:opt(string),id:opt(float),status:opt(string),title:opt(string)})", p3.ActualWireType, p3.Raw)
+			return nil, deTypeMismatch("n3", "n3", "arr(obj{author:opt(obj{id:opt(int),name:opt(string),post_count:opt(int)}),author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)})", p3.ActualWireType, p3.Raw)
 		} else if p3.Kind == probeNull {
-			return nil, deTypeMismatch("n3", "n3", "arr(obj{author:opt(obj{id:opt(float),name:opt(string),post_count:opt(float)}),author_id:opt(float),created_at:opt(string),id:opt(float),status:opt(string),title:opt(string)})", p3.ActualWireType, p3.Raw)
+			return nil, deTypeMismatch("n3", "n3", "arr(obj{author:opt(obj{id:opt(int),name:opt(string),post_count:opt(int)}),author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)})", p3.ActualWireType, p3.Raw)
 		} else {
-			return nil, deMissingField("n3", "n3", "arr(obj{author:opt(obj{id:opt(float),name:opt(string),post_count:opt(float)}),author_id:opt(float),created_at:opt(string),id:opt(float),status:opt(string),title:opt(string)})")
+			return nil, deMissingField("n3", "n3", "arr(obj{author:opt(obj{id:opt(int),name:opt(string),post_count:opt(int)}),author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)})")
 		}
 		produced_n3 = true
 	}
@@ -1674,7 +1690,7 @@ func PostsWithAuthor() ([]PostsWithAuthorRow, error) {
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func UsersWithCappedPosts() ([]UsersWithCappedPostsRow, error) {
+func UsersWithCappedPosts(ctx context.Context) ([]UsersWithCappedPostsRow, error) {
 	var t_n0 []wire.WireValue
 	produced_n0 := false
 	_ = t_n0
@@ -1693,7 +1709,7 @@ func UsersWithCappedPosts() ([]UsersWithCappedPostsRow, error) {
 	_ = produced_n3
 	// ── op 'n0' (executeSQL) ──
 	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{})}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, name FROM conf_users ORDER BY id ASC")}})
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ctx, payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
 	}
@@ -1711,7 +1727,7 @@ func UsersWithCappedPosts() ([]UsersWithCappedPostsRow, error) {
 	// ── op 'n1' (pluck, parent:n0) ──
 	if produced_n0 {
 		payload_n1 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "col", Val: func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range []string{"id"} { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()}, wire.WireField{Key: "rows", Val: wire.WireListOf(t_n0)}})
-		wire_n1, wire_n1Err := litedbmodel_runtime.PluckKeys(payload_n1)
+		wire_n1, wire_n1Err := litedbmodel_runtime.PluckKeys(ctx, payload_n1)
 		if wire_n1Err != nil {
 			return nil, opFailed("n1", "fail", wire_n1Err)
 		}
@@ -1733,13 +1749,13 @@ func UsersWithCappedPosts() ([]UsersWithCappedPostsRow, error) {
 			ex_147 := "conf_posts"
 			ex_148 := CapGuard{Limit: int64(2), Model: &ex_147, Relation: "cappedPosts"}
 			ex_149 := ExecOptions{Db: nil, Guard: &ex_148, WhereDynamic: nil, Write: nil}
-			return []wire.WireField{wire.WireField{Key: "opts", Val: func() wire.WireValue { o0 := &ex_149; if o0 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "db", Val: func() wire.WireValue { o1 := (*o0).Db; if o1 == nil { return wire.WireNull() }; return wire.WireStr((*o1)) }()}, {Key: "guard", Val: func() wire.WireValue { o1 := (*o0).Guard; if o1 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "limit", Val: wire.WireInt((*o1).Limit)}, {Key: "model", Val: func() wire.WireValue { o2 := (*o1).Model; if o2 == nil { return wire.WireNull() }; return wire.WireStr((*o2)) }()}, {Key: "relation", Val: wire.WireStr((*o1).Relation)}}) }()}, {Key: "whereDynamic", Val: func() wire.WireValue { o1 := (*o0).WhereDynamic; if o1 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "frags", Val: func() wire.WireValue { it2 := []wire.WireValue{}; for _, e2 := range (*o1).Frags { it2 = append(it2, wire.WireRowOf([]wire.WireField{{Key: "params", Val: func() wire.WireValue { it4 := []wire.WireValue{}; for _, e4 := range e2.Params { it4 = append(it4, func() wire.WireValue { o5 := e4; if o5 == nil { return wire.WireNull() }; return (*o5) }()) }; return wire.WireListOf(it4) }()}, {Key: "skipped", Val: wire.WireBool(e2.Skipped)}, {Key: "sql", Val: wire.WireStr(e2.Sql)}})) }; return wire.WireListOf(it2) }()}, {Key: "lead", Val: wire.WireStr((*o1).Lead)}, {Key: "tail", Val: wire.WireStr((*o1).Tail)}, {Key: "tailParams", Val: wire.WireListOf((*o1).TailParams)}}) }()}, {Key: "write", Val: func() wire.WireValue { o1 := (*o0).Write; if o1 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "returning", Val: wire.WireBool((*o1).Returning)}}) }()}}) }()}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireListOf(t_n1)})}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, author_id, title, status, created_at FROM conf_posts WHERE conf_posts.author_id = ANY(?::int[]) ORDER BY id ASC")}}, nil
+			return []wire.WireField{wire.WireField{Key: "opts", Val: func() wire.WireValue { o0 := &ex_149; if o0 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "db", Val: func() wire.WireValue { o1 := (*o0).Db; if o1 == nil { return wire.WireNull() }; return wire.WireStr((*o1)) }()}, {Key: "guard", Val: func() wire.WireValue { o1 := (*o0).Guard; if o1 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "limit", Val: wire.WireInt((*o1).Limit)}, {Key: "model", Val: func() wire.WireValue { o2 := (*o1).Model; if o2 == nil { return wire.WireNull() }; return wire.WireStr((*o2)) }()}, {Key: "relation", Val: wire.WireStr((*o1).Relation)}}) }()}, {Key: "whereDynamic", Val: func() wire.WireValue { o1 := (*o0).WhereDynamic; if o1 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "frags", Val: func() wire.WireValue { it2 := []wire.WireValue{}; for _, e2 := range (*o1).Frags { it2 = append(it2, wire.WireRowOf([]wire.WireField{{Key: "params", Val: func() wire.WireValue { it4 := []wire.WireValue{}; for _, e4 := range e2.Params { it4 = append(it4, func() wire.WireValue { o5 := e4; if o5 == nil { return wire.WireNull() }; return (*o5) }()) }; return wire.WireListOf(it4) }()}, {Key: "skipped", Val: wire.WireBool(e2.Skipped)}, {Key: "sql", Val: wire.WireStr(e2.Sql)}})) }; return wire.WireListOf(it2) }()}, {Key: "lead", Val: wire.WireStr((*o1).Lead)}, {Key: "tail", Val: wire.WireStr((*o1).Tail)}, {Key: "tailParams", Val: wire.WireListOf((*o1).TailParams)}}) }()}, {Key: "write", Val: func() wire.WireValue { o1 := (*o0).Write; if o1 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "returning", Val: wire.WireBool((*o1).Returning)}}) }()}}) }()}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireListOf(t_n1)})}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, author_id, title, status, created_at FROM conf_posts WHERE conf_posts.author_id = ANY(?::bigint[]) ORDER BY id ASC")}}, nil
 		}()
 		if pe_n2 != nil {
 			return nil, pe_n2
 		}
 		payload_n2 := wire.WireRowOfFields(pf_n2)
-		wire_n2, wire_n2Err := litedbmodel_runtime.ExecuteSQL(payload_n2)
+		wire_n2, wire_n2Err := litedbmodel_runtime.ExecuteSQL(ctx, payload_n2)
 		if wire_n2Err != nil {
 			return nil, opFailed("n2", "fail", wire_n2Err)
 		}
@@ -1758,19 +1774,21 @@ func UsersWithCappedPosts() ([]UsersWithCappedPostsRow, error) {
 	// ── op 'n3' (group, parent:n0) ──
 	if produced_n0 {
 		payload_n3 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "children", Val: wire.WireListOf(t_n2)}, wire.WireField{Key: "fk", Val: func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range []string{"author_id"} { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()}, wire.WireField{Key: "into", Val: wire.WireStr("cappedPosts")}, wire.WireField{Key: "parents", Val: wire.WireListOf(t_n0)}, wire.WireField{Key: "pk", Val: func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range []string{"id"} { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()}, wire.WireField{Key: "single", Val: wire.WireBool(false)}})
-		wire_n3, wire_n3Err := litedbmodel_runtime.GroupChildren(payload_n3)
+		wire_n3, wire_n3Err := litedbmodel_runtime.GroupChildren(ctx, payload_n3)
 		if wire_n3Err != nil {
 			return nil, opFailed("n3", "fail", wire_n3Err)
 		}
 		p3 := wire_n3.AsList()
 		if p3.Kind == probeGot {
+			var at4 [3]int
+			var at6 [5]int
 			list3 := make([]UsersWithCappedPostsRow, 0, p3.Got.Len())
 			for i3 := 0; i3 < p3.Got.Len(); i3++ {
 				var el3 UsersWithCappedPostsRow
 				p4 := p3.Got.ElemRow(i3)
 				if p4.Kind == probeGot {
 					var rec4 UsersWithCappedPostsRow
-					p5 := p4.Got.ProbeList("cappedPosts")
+					p5 := p4.Got.ProbeListAt("cappedPosts", &at4[0])
 					if p5.Kind == probeGot {
 						list5 := make([]UsersWithCappedPostsRow_cappedPosts, 0, p5.Got.Len())
 						for i5 := 0; i5 < p5.Got.Len(); i5++ {
@@ -1778,33 +1796,33 @@ func UsersWithCappedPosts() ([]UsersWithCappedPostsRow, error) {
 							p6 := p5.Got.ElemRow(i5)
 							if p6.Kind == probeGot {
 								var rec6 UsersWithCappedPostsRow_cappedPosts
-								p7 := p6.Got.ProbeFloat("author_id")
+								p7 := p6.Got.ProbeIntAt("author_id", &at6[0])
 								if p7.Kind == probeGot {
 									rec6.Author_id = &p7.Got
 								} else if p7.Kind == probeWrong {
-									return nil, deTypeMismatch("UsersWithCappedPostsRow_cappedPosts", "author_id", "opt(float)", p7.ActualWireType, p7.Raw)
+									return nil, deTypeMismatch("UsersWithCappedPostsRow_cappedPosts", "author_id", "opt(int)", p7.ActualWireType, p7.Raw)
 								}
-								p8 := p6.Got.ProbeString("created_at")
+								p8 := p6.Got.ProbeStringAt("created_at", &at6[1])
 								if p8.Kind == probeGot {
 									sv8 := p8.Got
 									rec6.Created_at = &sv8
 								} else if p8.Kind == probeWrong {
 									return nil, deTypeMismatch("UsersWithCappedPostsRow_cappedPosts", "created_at", "opt(string)", p8.ActualWireType, p8.Raw)
 								}
-								p9 := p6.Got.ProbeFloat("id")
+								p9 := p6.Got.ProbeIntAt("id", &at6[2])
 								if p9.Kind == probeGot {
 									rec6.Id = &p9.Got
 								} else if p9.Kind == probeWrong {
-									return nil, deTypeMismatch("UsersWithCappedPostsRow_cappedPosts", "id", "opt(float)", p9.ActualWireType, p9.Raw)
+									return nil, deTypeMismatch("UsersWithCappedPostsRow_cappedPosts", "id", "opt(int)", p9.ActualWireType, p9.Raw)
 								}
-								p10 := p6.Got.ProbeString("status")
+								p10 := p6.Got.ProbeStringAt("status", &at6[3])
 								if p10.Kind == probeGot {
 									sv10 := p10.Got
 									rec6.Status = &sv10
 								} else if p10.Kind == probeWrong {
 									return nil, deTypeMismatch("UsersWithCappedPostsRow_cappedPosts", "status", "opt(string)", p10.ActualWireType, p10.Raw)
 								}
-								p11 := p6.Got.ProbeString("title")
+								p11 := p6.Got.ProbeStringAt("title", &at6[4])
 								if p11.Kind == probeGot {
 									sv11 := p11.Got
 									rec6.Title = &sv11
@@ -1813,29 +1831,29 @@ func UsersWithCappedPosts() ([]UsersWithCappedPostsRow, error) {
 								}
 								el5 = rec6
 							} else if p6.Kind == probeWrong {
-								return nil, deTypeMismatch("UsersWithCappedPostsRow", "cappedPosts", "obj{author_id:opt(float),created_at:opt(string),id:opt(float),status:opt(string),title:opt(string)}", p6.ActualWireType, p6.Raw)
+								return nil, deTypeMismatch("UsersWithCappedPostsRow", "cappedPosts", "obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)}", p6.ActualWireType, p6.Raw)
 							} else if p6.Kind == probeNull {
-								return nil, deTypeMismatch("UsersWithCappedPostsRow", "cappedPosts", "obj{author_id:opt(float),created_at:opt(string),id:opt(float),status:opt(string),title:opt(string)}", p6.ActualWireType, p6.Raw)
+								return nil, deTypeMismatch("UsersWithCappedPostsRow", "cappedPosts", "obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)}", p6.ActualWireType, p6.Raw)
 							} else {
-								return nil, deMissingField("UsersWithCappedPostsRow", "cappedPosts", "obj{author_id:opt(float),created_at:opt(string),id:opt(float),status:opt(string),title:opt(string)}")
+								return nil, deMissingField("UsersWithCappedPostsRow", "cappedPosts", "obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)}")
 							}
 							list5 = append(list5, el5)
 						}
 						rec4.CappedPosts = list5
 					} else if p5.Kind == probeWrong {
-						return nil, deTypeMismatch("UsersWithCappedPostsRow", "cappedPosts", "arr(obj{author_id:opt(float),created_at:opt(string),id:opt(float),status:opt(string),title:opt(string)})", p5.ActualWireType, p5.Raw)
+						return nil, deTypeMismatch("UsersWithCappedPostsRow", "cappedPosts", "arr(obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)})", p5.ActualWireType, p5.Raw)
 					} else if p5.Kind == probeNull {
-						return nil, deTypeMismatch("UsersWithCappedPostsRow", "cappedPosts", "arr(obj{author_id:opt(float),created_at:opt(string),id:opt(float),status:opt(string),title:opt(string)})", p5.ActualWireType, p5.Raw)
+						return nil, deTypeMismatch("UsersWithCappedPostsRow", "cappedPosts", "arr(obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)})", p5.ActualWireType, p5.Raw)
 					} else {
-						return nil, deMissingField("UsersWithCappedPostsRow", "cappedPosts", "arr(obj{author_id:opt(float),created_at:opt(string),id:opt(float),status:opt(string),title:opt(string)})")
+						return nil, deMissingField("UsersWithCappedPostsRow", "cappedPosts", "arr(obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)})")
 					}
-					p12 := p4.Got.ProbeFloat("id")
+					p12 := p4.Got.ProbeIntAt("id", &at4[1])
 					if p12.Kind == probeGot {
 						rec4.Id = &p12.Got
 					} else if p12.Kind == probeWrong {
-						return nil, deTypeMismatch("UsersWithCappedPostsRow", "id", "opt(float)", p12.ActualWireType, p12.Raw)
+						return nil, deTypeMismatch("UsersWithCappedPostsRow", "id", "opt(int)", p12.ActualWireType, p12.Raw)
 					}
-					p13 := p4.Got.ProbeString("name")
+					p13 := p4.Got.ProbeStringAt("name", &at4[2])
 					if p13.Kind == probeGot {
 						sv13 := p13.Got
 						rec4.Name = &sv13
@@ -1844,21 +1862,21 @@ func UsersWithCappedPosts() ([]UsersWithCappedPostsRow, error) {
 					}
 					el3 = rec4
 				} else if p4.Kind == probeWrong {
-					return nil, deTypeMismatch("n3", "n3", "obj{cappedPosts:arr(obj{author_id:opt(float),created_at:opt(string),id:opt(float),status:opt(string),title:opt(string)}),id:opt(float),name:opt(string)}", p4.ActualWireType, p4.Raw)
+					return nil, deTypeMismatch("n3", "n3", "obj{cappedPosts:arr(obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)}),id:opt(int),name:opt(string)}", p4.ActualWireType, p4.Raw)
 				} else if p4.Kind == probeNull {
-					return nil, deTypeMismatch("n3", "n3", "obj{cappedPosts:arr(obj{author_id:opt(float),created_at:opt(string),id:opt(float),status:opt(string),title:opt(string)}),id:opt(float),name:opt(string)}", p4.ActualWireType, p4.Raw)
+					return nil, deTypeMismatch("n3", "n3", "obj{cappedPosts:arr(obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)}),id:opt(int),name:opt(string)}", p4.ActualWireType, p4.Raw)
 				} else {
-					return nil, deMissingField("n3", "n3", "obj{cappedPosts:arr(obj{author_id:opt(float),created_at:opt(string),id:opt(float),status:opt(string),title:opt(string)}),id:opt(float),name:opt(string)}")
+					return nil, deMissingField("n3", "n3", "obj{cappedPosts:arr(obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)}),id:opt(int),name:opt(string)}")
 				}
 				list3 = append(list3, el3)
 			}
 			t_n3 = list3
 		} else if p3.Kind == probeWrong {
-			return nil, deTypeMismatch("n3", "n3", "arr(obj{cappedPosts:arr(obj{author_id:opt(float),created_at:opt(string),id:opt(float),status:opt(string),title:opt(string)}),id:opt(float),name:opt(string)})", p3.ActualWireType, p3.Raw)
+			return nil, deTypeMismatch("n3", "n3", "arr(obj{cappedPosts:arr(obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)}),id:opt(int),name:opt(string)})", p3.ActualWireType, p3.Raw)
 		} else if p3.Kind == probeNull {
-			return nil, deTypeMismatch("n3", "n3", "arr(obj{cappedPosts:arr(obj{author_id:opt(float),created_at:opt(string),id:opt(float),status:opt(string),title:opt(string)}),id:opt(float),name:opt(string)})", p3.ActualWireType, p3.Raw)
+			return nil, deTypeMismatch("n3", "n3", "arr(obj{cappedPosts:arr(obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)}),id:opt(int),name:opt(string)})", p3.ActualWireType, p3.Raw)
 		} else {
-			return nil, deMissingField("n3", "n3", "arr(obj{cappedPosts:arr(obj{author_id:opt(float),created_at:opt(string),id:opt(float),status:opt(string),title:opt(string)}),id:opt(float),name:opt(string)})")
+			return nil, deMissingField("n3", "n3", "arr(obj{cappedPosts:arr(obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)}),id:opt(int),name:opt(string)})")
 		}
 		produced_n3 = true
 	}
@@ -1877,7 +1895,7 @@ func UsersWithCappedPosts() ([]UsersWithCappedPostsRow, error) {
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func UsersWithUncappedPosts() ([]UsersWithUncappedPostsRow, error) {
+func UsersWithUncappedPosts(ctx context.Context) ([]UsersWithUncappedPostsRow, error) {
 	var t_n0 []wire.WireValue
 	produced_n0 := false
 	_ = t_n0
@@ -1896,7 +1914,7 @@ func UsersWithUncappedPosts() ([]UsersWithUncappedPostsRow, error) {
 	_ = produced_n3
 	// ── op 'n0' (executeSQL) ──
 	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{})}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, name FROM conf_users ORDER BY id ASC")}})
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ctx, payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
 	}
@@ -1914,7 +1932,7 @@ func UsersWithUncappedPosts() ([]UsersWithUncappedPostsRow, error) {
 	// ── op 'n1' (pluck, parent:n0) ──
 	if produced_n0 {
 		payload_n1 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "col", Val: func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range []string{"id"} { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()}, wire.WireField{Key: "rows", Val: wire.WireListOf(t_n0)}})
-		wire_n1, wire_n1Err := litedbmodel_runtime.PluckKeys(payload_n1)
+		wire_n1, wire_n1Err := litedbmodel_runtime.PluckKeys(ctx, payload_n1)
 		if wire_n1Err != nil {
 			return nil, opFailed("n1", "fail", wire_n1Err)
 		}
@@ -1932,8 +1950,8 @@ func UsersWithUncappedPosts() ([]UsersWithUncappedPostsRow, error) {
 	}
 	// ── op 'n2' (executeSQL, parent:n1) ──
 	if produced_n1 {
-		payload_n2 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireListOf(t_n1)})}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, author_id, title, status, created_at FROM conf_posts WHERE conf_posts.author_id = ANY(?::int[]) ORDER BY id ASC")}})
-		wire_n2, wire_n2Err := litedbmodel_runtime.ExecuteSQL(payload_n2)
+		payload_n2 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireListOf(t_n1)})}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, author_id, title, status, created_at FROM conf_posts WHERE conf_posts.author_id = ANY(?::bigint[]) ORDER BY id ASC")}})
+		wire_n2, wire_n2Err := litedbmodel_runtime.ExecuteSQL(ctx, payload_n2)
 		if wire_n2Err != nil {
 			return nil, opFailed("n2", "fail", wire_n2Err)
 		}
@@ -1952,32 +1970,34 @@ func UsersWithUncappedPosts() ([]UsersWithUncappedPostsRow, error) {
 	// ── op 'n3' (group, parent:n0) ──
 	if produced_n0 {
 		payload_n3 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "children", Val: wire.WireListOf(t_n2)}, wire.WireField{Key: "fk", Val: func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range []string{"author_id"} { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()}, wire.WireField{Key: "into", Val: wire.WireStr("uncappedPosts")}, wire.WireField{Key: "parents", Val: wire.WireListOf(t_n0)}, wire.WireField{Key: "pk", Val: func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range []string{"id"} { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()}, wire.WireField{Key: "single", Val: wire.WireBool(false)}})
-		wire_n3, wire_n3Err := litedbmodel_runtime.GroupChildren(payload_n3)
+		wire_n3, wire_n3Err := litedbmodel_runtime.GroupChildren(ctx, payload_n3)
 		if wire_n3Err != nil {
 			return nil, opFailed("n3", "fail", wire_n3Err)
 		}
 		p3 := wire_n3.AsList()
 		if p3.Kind == probeGot {
+			var at4 [3]int
+			var at8 [5]int
 			list3 := make([]UsersWithUncappedPostsRow, 0, p3.Got.Len())
 			for i3 := 0; i3 < p3.Got.Len(); i3++ {
 				var el3 UsersWithUncappedPostsRow
 				p4 := p3.Got.ElemRow(i3)
 				if p4.Kind == probeGot {
 					var rec4 UsersWithUncappedPostsRow
-					p5 := p4.Got.ProbeFloat("id")
+					p5 := p4.Got.ProbeIntAt("id", &at4[0])
 					if p5.Kind == probeGot {
 						rec4.Id = &p5.Got
 					} else if p5.Kind == probeWrong {
-						return nil, deTypeMismatch("UsersWithUncappedPostsRow", "id", "opt(float)", p5.ActualWireType, p5.Raw)
+						return nil, deTypeMismatch("UsersWithUncappedPostsRow", "id", "opt(int)", p5.ActualWireType, p5.Raw)
 					}
-					p6 := p4.Got.ProbeString("name")
+					p6 := p4.Got.ProbeStringAt("name", &at4[1])
 					if p6.Kind == probeGot {
 						sv6 := p6.Got
 						rec4.Name = &sv6
 					} else if p6.Kind == probeWrong {
 						return nil, deTypeMismatch("UsersWithUncappedPostsRow", "name", "opt(string)", p6.ActualWireType, p6.Raw)
 					}
-					p7 := p4.Got.ProbeList("uncappedPosts")
+					p7 := p4.Got.ProbeListAt("uncappedPosts", &at4[2])
 					if p7.Kind == probeGot {
 						list7 := make([]UsersWithUncappedPostsRow_uncappedPosts, 0, p7.Got.Len())
 						for i7 := 0; i7 < p7.Got.Len(); i7++ {
@@ -1985,33 +2005,33 @@ func UsersWithUncappedPosts() ([]UsersWithUncappedPostsRow, error) {
 							p8 := p7.Got.ElemRow(i7)
 							if p8.Kind == probeGot {
 								var rec8 UsersWithUncappedPostsRow_uncappedPosts
-								p9 := p8.Got.ProbeFloat("author_id")
+								p9 := p8.Got.ProbeIntAt("author_id", &at8[0])
 								if p9.Kind == probeGot {
 									rec8.Author_id = &p9.Got
 								} else if p9.Kind == probeWrong {
-									return nil, deTypeMismatch("UsersWithUncappedPostsRow_uncappedPosts", "author_id", "opt(float)", p9.ActualWireType, p9.Raw)
+									return nil, deTypeMismatch("UsersWithUncappedPostsRow_uncappedPosts", "author_id", "opt(int)", p9.ActualWireType, p9.Raw)
 								}
-								p10 := p8.Got.ProbeString("created_at")
+								p10 := p8.Got.ProbeStringAt("created_at", &at8[1])
 								if p10.Kind == probeGot {
 									sv10 := p10.Got
 									rec8.Created_at = &sv10
 								} else if p10.Kind == probeWrong {
 									return nil, deTypeMismatch("UsersWithUncappedPostsRow_uncappedPosts", "created_at", "opt(string)", p10.ActualWireType, p10.Raw)
 								}
-								p11 := p8.Got.ProbeFloat("id")
+								p11 := p8.Got.ProbeIntAt("id", &at8[2])
 								if p11.Kind == probeGot {
 									rec8.Id = &p11.Got
 								} else if p11.Kind == probeWrong {
-									return nil, deTypeMismatch("UsersWithUncappedPostsRow_uncappedPosts", "id", "opt(float)", p11.ActualWireType, p11.Raw)
+									return nil, deTypeMismatch("UsersWithUncappedPostsRow_uncappedPosts", "id", "opt(int)", p11.ActualWireType, p11.Raw)
 								}
-								p12 := p8.Got.ProbeString("status")
+								p12 := p8.Got.ProbeStringAt("status", &at8[3])
 								if p12.Kind == probeGot {
 									sv12 := p12.Got
 									rec8.Status = &sv12
 								} else if p12.Kind == probeWrong {
 									return nil, deTypeMismatch("UsersWithUncappedPostsRow_uncappedPosts", "status", "opt(string)", p12.ActualWireType, p12.Raw)
 								}
-								p13 := p8.Got.ProbeString("title")
+								p13 := p8.Got.ProbeStringAt("title", &at8[4])
 								if p13.Kind == probeGot {
 									sv13 := p13.Got
 									rec8.Title = &sv13
@@ -2020,39 +2040,39 @@ func UsersWithUncappedPosts() ([]UsersWithUncappedPostsRow, error) {
 								}
 								el7 = rec8
 							} else if p8.Kind == probeWrong {
-								return nil, deTypeMismatch("UsersWithUncappedPostsRow", "uncappedPosts", "obj{author_id:opt(float),created_at:opt(string),id:opt(float),status:opt(string),title:opt(string)}", p8.ActualWireType, p8.Raw)
+								return nil, deTypeMismatch("UsersWithUncappedPostsRow", "uncappedPosts", "obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)}", p8.ActualWireType, p8.Raw)
 							} else if p8.Kind == probeNull {
-								return nil, deTypeMismatch("UsersWithUncappedPostsRow", "uncappedPosts", "obj{author_id:opt(float),created_at:opt(string),id:opt(float),status:opt(string),title:opt(string)}", p8.ActualWireType, p8.Raw)
+								return nil, deTypeMismatch("UsersWithUncappedPostsRow", "uncappedPosts", "obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)}", p8.ActualWireType, p8.Raw)
 							} else {
-								return nil, deMissingField("UsersWithUncappedPostsRow", "uncappedPosts", "obj{author_id:opt(float),created_at:opt(string),id:opt(float),status:opt(string),title:opt(string)}")
+								return nil, deMissingField("UsersWithUncappedPostsRow", "uncappedPosts", "obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)}")
 							}
 							list7 = append(list7, el7)
 						}
 						rec4.UncappedPosts = list7
 					} else if p7.Kind == probeWrong {
-						return nil, deTypeMismatch("UsersWithUncappedPostsRow", "uncappedPosts", "arr(obj{author_id:opt(float),created_at:opt(string),id:opt(float),status:opt(string),title:opt(string)})", p7.ActualWireType, p7.Raw)
+						return nil, deTypeMismatch("UsersWithUncappedPostsRow", "uncappedPosts", "arr(obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)})", p7.ActualWireType, p7.Raw)
 					} else if p7.Kind == probeNull {
-						return nil, deTypeMismatch("UsersWithUncappedPostsRow", "uncappedPosts", "arr(obj{author_id:opt(float),created_at:opt(string),id:opt(float),status:opt(string),title:opt(string)})", p7.ActualWireType, p7.Raw)
+						return nil, deTypeMismatch("UsersWithUncappedPostsRow", "uncappedPosts", "arr(obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)})", p7.ActualWireType, p7.Raw)
 					} else {
-						return nil, deMissingField("UsersWithUncappedPostsRow", "uncappedPosts", "arr(obj{author_id:opt(float),created_at:opt(string),id:opt(float),status:opt(string),title:opt(string)})")
+						return nil, deMissingField("UsersWithUncappedPostsRow", "uncappedPosts", "arr(obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)})")
 					}
 					el3 = rec4
 				} else if p4.Kind == probeWrong {
-					return nil, deTypeMismatch("n3", "n3", "obj{id:opt(float),name:opt(string),uncappedPosts:arr(obj{author_id:opt(float),created_at:opt(string),id:opt(float),status:opt(string),title:opt(string)})}", p4.ActualWireType, p4.Raw)
+					return nil, deTypeMismatch("n3", "n3", "obj{id:opt(int),name:opt(string),uncappedPosts:arr(obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)})}", p4.ActualWireType, p4.Raw)
 				} else if p4.Kind == probeNull {
-					return nil, deTypeMismatch("n3", "n3", "obj{id:opt(float),name:opt(string),uncappedPosts:arr(obj{author_id:opt(float),created_at:opt(string),id:opt(float),status:opt(string),title:opt(string)})}", p4.ActualWireType, p4.Raw)
+					return nil, deTypeMismatch("n3", "n3", "obj{id:opt(int),name:opt(string),uncappedPosts:arr(obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)})}", p4.ActualWireType, p4.Raw)
 				} else {
-					return nil, deMissingField("n3", "n3", "obj{id:opt(float),name:opt(string),uncappedPosts:arr(obj{author_id:opt(float),created_at:opt(string),id:opt(float),status:opt(string),title:opt(string)})}")
+					return nil, deMissingField("n3", "n3", "obj{id:opt(int),name:opt(string),uncappedPosts:arr(obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)})}")
 				}
 				list3 = append(list3, el3)
 			}
 			t_n3 = list3
 		} else if p3.Kind == probeWrong {
-			return nil, deTypeMismatch("n3", "n3", "arr(obj{id:opt(float),name:opt(string),uncappedPosts:arr(obj{author_id:opt(float),created_at:opt(string),id:opt(float),status:opt(string),title:opt(string)})})", p3.ActualWireType, p3.Raw)
+			return nil, deTypeMismatch("n3", "n3", "arr(obj{id:opt(int),name:opt(string),uncappedPosts:arr(obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)})})", p3.ActualWireType, p3.Raw)
 		} else if p3.Kind == probeNull {
-			return nil, deTypeMismatch("n3", "n3", "arr(obj{id:opt(float),name:opt(string),uncappedPosts:arr(obj{author_id:opt(float),created_at:opt(string),id:opt(float),status:opt(string),title:opt(string)})})", p3.ActualWireType, p3.Raw)
+			return nil, deTypeMismatch("n3", "n3", "arr(obj{id:opt(int),name:opt(string),uncappedPosts:arr(obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)})})", p3.ActualWireType, p3.Raw)
 		} else {
-			return nil, deMissingField("n3", "n3", "arr(obj{id:opt(float),name:opt(string),uncappedPosts:arr(obj{author_id:opt(float),created_at:opt(string),id:opt(float),status:opt(string),title:opt(string)})})")
+			return nil, deMissingField("n3", "n3", "arr(obj{id:opt(int),name:opt(string),uncappedPosts:arr(obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)})})")
 		}
 		produced_n3 = true
 	}
@@ -2071,7 +2091,7 @@ func UsersWithUncappedPosts() ([]UsersWithUncappedPostsRow, error) {
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func UsersWithTopPosts() ([]UsersWithTopPostsRow, error) {
+func UsersWithTopPosts(ctx context.Context) ([]UsersWithTopPostsRow, error) {
 	var t_n0 []wire.WireValue
 	produced_n0 := false
 	_ = t_n0
@@ -2090,7 +2110,7 @@ func UsersWithTopPosts() ([]UsersWithTopPostsRow, error) {
 	_ = produced_n3
 	// ── op 'n0' (executeSQL) ──
 	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{})}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, name FROM conf_users ORDER BY id ASC")}})
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ctx, payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
 	}
@@ -2108,7 +2128,7 @@ func UsersWithTopPosts() ([]UsersWithTopPostsRow, error) {
 	// ── op 'n1' (pluck, parent:n0) ──
 	if produced_n0 {
 		payload_n1 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "col", Val: func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range []string{"id"} { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()}, wire.WireField{Key: "rows", Val: wire.WireListOf(t_n0)}})
-		wire_n1, wire_n1Err := litedbmodel_runtime.PluckKeys(payload_n1)
+		wire_n1, wire_n1Err := litedbmodel_runtime.PluckKeys(ctx, payload_n1)
 		if wire_n1Err != nil {
 			return nil, opFailed("n1", "fail", wire_n1Err)
 		}
@@ -2126,8 +2146,8 @@ func UsersWithTopPosts() ([]UsersWithTopPostsRow, error) {
 	}
 	// ── op 'n2' (executeSQL, parent:n1) ──
 	if produced_n1 {
-		payload_n2 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireListOf(t_n1)})}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT conf_posts.* FROM unnest(?::int[]) AS _keys(key) CROSS JOIN LATERAL (SELECT * FROM conf_posts WHERE conf_posts.author_id = _keys.key ORDER BY id ASC LIMIT 1) conf_posts")}})
-		wire_n2, wire_n2Err := litedbmodel_runtime.ExecuteSQL(payload_n2)
+		payload_n2 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireListOf(t_n1)})}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT conf_posts.* FROM unnest(?::bigint[]) AS _keys(key) CROSS JOIN LATERAL (SELECT * FROM conf_posts WHERE conf_posts.author_id = _keys.key ORDER BY id ASC LIMIT 1) conf_posts")}})
+		wire_n2, wire_n2Err := litedbmodel_runtime.ExecuteSQL(ctx, payload_n2)
 		if wire_n2Err != nil {
 			return nil, opFailed("n2", "fail", wire_n2Err)
 		}
@@ -2146,32 +2166,34 @@ func UsersWithTopPosts() ([]UsersWithTopPostsRow, error) {
 	// ── op 'n3' (group, parent:n0) ──
 	if produced_n0 {
 		payload_n3 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "children", Val: wire.WireListOf(t_n2)}, wire.WireField{Key: "fk", Val: func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range []string{"author_id"} { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()}, wire.WireField{Key: "into", Val: wire.WireStr("topPosts")}, wire.WireField{Key: "parents", Val: wire.WireListOf(t_n0)}, wire.WireField{Key: "pk", Val: func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range []string{"id"} { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()}, wire.WireField{Key: "single", Val: wire.WireBool(false)}})
-		wire_n3, wire_n3Err := litedbmodel_runtime.GroupChildren(payload_n3)
+		wire_n3, wire_n3Err := litedbmodel_runtime.GroupChildren(ctx, payload_n3)
 		if wire_n3Err != nil {
 			return nil, opFailed("n3", "fail", wire_n3Err)
 		}
 		p3 := wire_n3.AsList()
 		if p3.Kind == probeGot {
+			var at4 [3]int
+			var at8 [5]int
 			list3 := make([]UsersWithTopPostsRow, 0, p3.Got.Len())
 			for i3 := 0; i3 < p3.Got.Len(); i3++ {
 				var el3 UsersWithTopPostsRow
 				p4 := p3.Got.ElemRow(i3)
 				if p4.Kind == probeGot {
 					var rec4 UsersWithTopPostsRow
-					p5 := p4.Got.ProbeFloat("id")
+					p5 := p4.Got.ProbeIntAt("id", &at4[0])
 					if p5.Kind == probeGot {
 						rec4.Id = &p5.Got
 					} else if p5.Kind == probeWrong {
-						return nil, deTypeMismatch("UsersWithTopPostsRow", "id", "opt(float)", p5.ActualWireType, p5.Raw)
+						return nil, deTypeMismatch("UsersWithTopPostsRow", "id", "opt(int)", p5.ActualWireType, p5.Raw)
 					}
-					p6 := p4.Got.ProbeString("name")
+					p6 := p4.Got.ProbeStringAt("name", &at4[1])
 					if p6.Kind == probeGot {
 						sv6 := p6.Got
 						rec4.Name = &sv6
 					} else if p6.Kind == probeWrong {
 						return nil, deTypeMismatch("UsersWithTopPostsRow", "name", "opt(string)", p6.ActualWireType, p6.Raw)
 					}
-					p7 := p4.Got.ProbeList("topPosts")
+					p7 := p4.Got.ProbeListAt("topPosts", &at4[2])
 					if p7.Kind == probeGot {
 						list7 := make([]UsersWithTopPostsRow_topPosts, 0, p7.Got.Len())
 						for i7 := 0; i7 < p7.Got.Len(); i7++ {
@@ -2179,33 +2201,33 @@ func UsersWithTopPosts() ([]UsersWithTopPostsRow, error) {
 							p8 := p7.Got.ElemRow(i7)
 							if p8.Kind == probeGot {
 								var rec8 UsersWithTopPostsRow_topPosts
-								p9 := p8.Got.ProbeFloat("author_id")
+								p9 := p8.Got.ProbeIntAt("author_id", &at8[0])
 								if p9.Kind == probeGot {
 									rec8.Author_id = &p9.Got
 								} else if p9.Kind == probeWrong {
-									return nil, deTypeMismatch("UsersWithTopPostsRow_topPosts", "author_id", "opt(float)", p9.ActualWireType, p9.Raw)
+									return nil, deTypeMismatch("UsersWithTopPostsRow_topPosts", "author_id", "opt(int)", p9.ActualWireType, p9.Raw)
 								}
-								p10 := p8.Got.ProbeString("created_at")
+								p10 := p8.Got.ProbeStringAt("created_at", &at8[1])
 								if p10.Kind == probeGot {
 									sv10 := p10.Got
 									rec8.Created_at = &sv10
 								} else if p10.Kind == probeWrong {
 									return nil, deTypeMismatch("UsersWithTopPostsRow_topPosts", "created_at", "opt(string)", p10.ActualWireType, p10.Raw)
 								}
-								p11 := p8.Got.ProbeFloat("id")
+								p11 := p8.Got.ProbeIntAt("id", &at8[2])
 								if p11.Kind == probeGot {
 									rec8.Id = &p11.Got
 								} else if p11.Kind == probeWrong {
-									return nil, deTypeMismatch("UsersWithTopPostsRow_topPosts", "id", "opt(float)", p11.ActualWireType, p11.Raw)
+									return nil, deTypeMismatch("UsersWithTopPostsRow_topPosts", "id", "opt(int)", p11.ActualWireType, p11.Raw)
 								}
-								p12 := p8.Got.ProbeString("status")
+								p12 := p8.Got.ProbeStringAt("status", &at8[3])
 								if p12.Kind == probeGot {
 									sv12 := p12.Got
 									rec8.Status = &sv12
 								} else if p12.Kind == probeWrong {
 									return nil, deTypeMismatch("UsersWithTopPostsRow_topPosts", "status", "opt(string)", p12.ActualWireType, p12.Raw)
 								}
-								p13 := p8.Got.ProbeString("title")
+								p13 := p8.Got.ProbeStringAt("title", &at8[4])
 								if p13.Kind == probeGot {
 									sv13 := p13.Got
 									rec8.Title = &sv13
@@ -2214,39 +2236,39 @@ func UsersWithTopPosts() ([]UsersWithTopPostsRow, error) {
 								}
 								el7 = rec8
 							} else if p8.Kind == probeWrong {
-								return nil, deTypeMismatch("UsersWithTopPostsRow", "topPosts", "obj{author_id:opt(float),created_at:opt(string),id:opt(float),status:opt(string),title:opt(string)}", p8.ActualWireType, p8.Raw)
+								return nil, deTypeMismatch("UsersWithTopPostsRow", "topPosts", "obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)}", p8.ActualWireType, p8.Raw)
 							} else if p8.Kind == probeNull {
-								return nil, deTypeMismatch("UsersWithTopPostsRow", "topPosts", "obj{author_id:opt(float),created_at:opt(string),id:opt(float),status:opt(string),title:opt(string)}", p8.ActualWireType, p8.Raw)
+								return nil, deTypeMismatch("UsersWithTopPostsRow", "topPosts", "obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)}", p8.ActualWireType, p8.Raw)
 							} else {
-								return nil, deMissingField("UsersWithTopPostsRow", "topPosts", "obj{author_id:opt(float),created_at:opt(string),id:opt(float),status:opt(string),title:opt(string)}")
+								return nil, deMissingField("UsersWithTopPostsRow", "topPosts", "obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)}")
 							}
 							list7 = append(list7, el7)
 						}
 						rec4.TopPosts = list7
 					} else if p7.Kind == probeWrong {
-						return nil, deTypeMismatch("UsersWithTopPostsRow", "topPosts", "arr(obj{author_id:opt(float),created_at:opt(string),id:opt(float),status:opt(string),title:opt(string)})", p7.ActualWireType, p7.Raw)
+						return nil, deTypeMismatch("UsersWithTopPostsRow", "topPosts", "arr(obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)})", p7.ActualWireType, p7.Raw)
 					} else if p7.Kind == probeNull {
-						return nil, deTypeMismatch("UsersWithTopPostsRow", "topPosts", "arr(obj{author_id:opt(float),created_at:opt(string),id:opt(float),status:opt(string),title:opt(string)})", p7.ActualWireType, p7.Raw)
+						return nil, deTypeMismatch("UsersWithTopPostsRow", "topPosts", "arr(obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)})", p7.ActualWireType, p7.Raw)
 					} else {
-						return nil, deMissingField("UsersWithTopPostsRow", "topPosts", "arr(obj{author_id:opt(float),created_at:opt(string),id:opt(float),status:opt(string),title:opt(string)})")
+						return nil, deMissingField("UsersWithTopPostsRow", "topPosts", "arr(obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)})")
 					}
 					el3 = rec4
 				} else if p4.Kind == probeWrong {
-					return nil, deTypeMismatch("n3", "n3", "obj{id:opt(float),name:opt(string),topPosts:arr(obj{author_id:opt(float),created_at:opt(string),id:opt(float),status:opt(string),title:opt(string)})}", p4.ActualWireType, p4.Raw)
+					return nil, deTypeMismatch("n3", "n3", "obj{id:opt(int),name:opt(string),topPosts:arr(obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)})}", p4.ActualWireType, p4.Raw)
 				} else if p4.Kind == probeNull {
-					return nil, deTypeMismatch("n3", "n3", "obj{id:opt(float),name:opt(string),topPosts:arr(obj{author_id:opt(float),created_at:opt(string),id:opt(float),status:opt(string),title:opt(string)})}", p4.ActualWireType, p4.Raw)
+					return nil, deTypeMismatch("n3", "n3", "obj{id:opt(int),name:opt(string),topPosts:arr(obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)})}", p4.ActualWireType, p4.Raw)
 				} else {
-					return nil, deMissingField("n3", "n3", "obj{id:opt(float),name:opt(string),topPosts:arr(obj{author_id:opt(float),created_at:opt(string),id:opt(float),status:opt(string),title:opt(string)})}")
+					return nil, deMissingField("n3", "n3", "obj{id:opt(int),name:opt(string),topPosts:arr(obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)})}")
 				}
 				list3 = append(list3, el3)
 			}
 			t_n3 = list3
 		} else if p3.Kind == probeWrong {
-			return nil, deTypeMismatch("n3", "n3", "arr(obj{id:opt(float),name:opt(string),topPosts:arr(obj{author_id:opt(float),created_at:opt(string),id:opt(float),status:opt(string),title:opt(string)})})", p3.ActualWireType, p3.Raw)
+			return nil, deTypeMismatch("n3", "n3", "arr(obj{id:opt(int),name:opt(string),topPosts:arr(obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)})})", p3.ActualWireType, p3.Raw)
 		} else if p3.Kind == probeNull {
-			return nil, deTypeMismatch("n3", "n3", "arr(obj{id:opt(float),name:opt(string),topPosts:arr(obj{author_id:opt(float),created_at:opt(string),id:opt(float),status:opt(string),title:opt(string)})})", p3.ActualWireType, p3.Raw)
+			return nil, deTypeMismatch("n3", "n3", "arr(obj{id:opt(int),name:opt(string),topPosts:arr(obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)})})", p3.ActualWireType, p3.Raw)
 		} else {
-			return nil, deMissingField("n3", "n3", "arr(obj{id:opt(float),name:opt(string),topPosts:arr(obj{author_id:opt(float),created_at:opt(string),id:opt(float),status:opt(string),title:opt(string)})})")
+			return nil, deMissingField("n3", "n3", "arr(obj{id:opt(int),name:opt(string),topPosts:arr(obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)})})")
 		}
 		produced_n3 = true
 	}
@@ -2265,7 +2287,7 @@ func UsersWithTopPosts() ([]UsersWithTopPostsRow, error) {
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func CreatePost(id int64, authorId int64, title string, status string, createdAt string) ([]WriteSummary, error) {
+func CreatePost(ctx context.Context, id int64, authorId int64, title string, status string, createdAt string) ([]WriteSummary, error) {
 	var t_n0 []WriteSummary
 	produced_n0 := false
 	_ = t_n0
@@ -2280,19 +2302,20 @@ func CreatePost(id int64, authorId int64, title string, status string, createdAt
 		return nil, pe_n0
 	}
 	payload_n0 := wire.WireRowOfFields(pf_n0)
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ctx, payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
 	}
 	p0 := wire_n0.AsList()
 	if p0.Kind == probeGot {
+		var at1 [2]int
 		list0 := make([]WriteSummary, 0, p0.Got.Len())
 		for i0 := 0; i0 < p0.Got.Len(); i0++ {
 			var el0 WriteSummary
 			p1 := p0.Got.ElemRow(i0)
 			if p1.Kind == probeGot {
 				var rec1 WriteSummary
-				p2 := p1.Got.ProbeInt("changes")
+				p2 := p1.Got.ProbeIntAt("changes", &at1[0])
 				if p2.Kind == probeGot {
 					rec1.Changes = p2.Got
 				} else if p2.Kind == probeWrong {
@@ -2302,7 +2325,7 @@ func CreatePost(id int64, authorId int64, title string, status string, createdAt
 				} else {
 					return nil, deMissingField("WriteSummary", "changes", "int")
 				}
-				p3 := p1.Got.ProbeInt("lastInsertRowid")
+				p3 := p1.Got.ProbeIntAt("lastInsertRowid", &at1[1])
 				if p3.Kind == probeGot {
 					rec1.LastInsertRowid = p3.Got
 				} else if p3.Kind == probeWrong {
@@ -2346,7 +2369,7 @@ func CreatePost(id int64, authorId int64, title string, status string, createdAt
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func RenamePost(title string, id int64) ([]WriteSummary, error) {
+func RenamePost(ctx context.Context, title string, id int64) ([]WriteSummary, error) {
 	var t_n0 []WriteSummary
 	produced_n0 := false
 	_ = t_n0
@@ -2361,19 +2384,20 @@ func RenamePost(title string, id int64) ([]WriteSummary, error) {
 		return nil, pe_n0
 	}
 	payload_n0 := wire.WireRowOfFields(pf_n0)
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ctx, payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
 	}
 	p0 := wire_n0.AsList()
 	if p0.Kind == probeGot {
+		var at1 [2]int
 		list0 := make([]WriteSummary, 0, p0.Got.Len())
 		for i0 := 0; i0 < p0.Got.Len(); i0++ {
 			var el0 WriteSummary
 			p1 := p0.Got.ElemRow(i0)
 			if p1.Kind == probeGot {
 				var rec1 WriteSummary
-				p2 := p1.Got.ProbeInt("changes")
+				p2 := p1.Got.ProbeIntAt("changes", &at1[0])
 				if p2.Kind == probeGot {
 					rec1.Changes = p2.Got
 				} else if p2.Kind == probeWrong {
@@ -2383,7 +2407,7 @@ func RenamePost(title string, id int64) ([]WriteSummary, error) {
 				} else {
 					return nil, deMissingField("WriteSummary", "changes", "int")
 				}
-				p3 := p1.Got.ProbeInt("lastInsertRowid")
+				p3 := p1.Got.ProbeIntAt("lastInsertRowid", &at1[1])
 				if p3.Kind == probeGot {
 					rec1.LastInsertRowid = p3.Got
 				} else if p3.Kind == probeWrong {
@@ -2427,7 +2451,7 @@ func RenamePost(title string, id int64) ([]WriteSummary, error) {
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func RemovePost(id int64) ([]WriteSummary, error) {
+func RemovePost(ctx context.Context, id int64) ([]WriteSummary, error) {
 	var t_n0 []WriteSummary
 	produced_n0 := false
 	_ = t_n0
@@ -2442,19 +2466,20 @@ func RemovePost(id int64) ([]WriteSummary, error) {
 		return nil, pe_n0
 	}
 	payload_n0 := wire.WireRowOfFields(pf_n0)
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ctx, payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
 	}
 	p0 := wire_n0.AsList()
 	if p0.Kind == probeGot {
+		var at1 [2]int
 		list0 := make([]WriteSummary, 0, p0.Got.Len())
 		for i0 := 0; i0 < p0.Got.Len(); i0++ {
 			var el0 WriteSummary
 			p1 := p0.Got.ElemRow(i0)
 			if p1.Kind == probeGot {
 				var rec1 WriteSummary
-				p2 := p1.Got.ProbeInt("changes")
+				p2 := p1.Got.ProbeIntAt("changes", &at1[0])
 				if p2.Kind == probeGot {
 					rec1.Changes = p2.Got
 				} else if p2.Kind == probeWrong {
@@ -2464,7 +2489,7 @@ func RemovePost(id int64) ([]WriteSummary, error) {
 				} else {
 					return nil, deMissingField("WriteSummary", "changes", "int")
 				}
-				p3 := p1.Got.ProbeInt("lastInsertRowid")
+				p3 := p1.Got.ProbeIntAt("lastInsertRowid", &at1[1])
 				if p3.Kind == probeGot {
 					rec1.LastInsertRowid = p3.Got
 				} else if p3.Kind == probeWrong {
@@ -2508,7 +2533,7 @@ func RemovePost(id int64) ([]WriteSummary, error) {
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func CreatePostReturning(id int64, authorId int64, title string, status string, createdAt string) ([]CreatePostReturningRow, error) {
+func CreatePostReturning(ctx context.Context, id int64, authorId int64, title string, status string, createdAt string) ([]CreatePostReturningRow, error) {
 	var t_n0 []CreatePostReturningRow
 	produced_n0 := false
 	_ = t_n0
@@ -2523,25 +2548,26 @@ func CreatePostReturning(id int64, authorId int64, title string, status string, 
 		return nil, pe_n0
 	}
 	payload_n0 := wire.WireRowOfFields(pf_n0)
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ctx, payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
 	}
 	p0 := wire_n0.AsList()
 	if p0.Kind == probeGot {
+		var at1 [2]int
 		list0 := make([]CreatePostReturningRow, 0, p0.Got.Len())
 		for i0 := 0; i0 < p0.Got.Len(); i0++ {
 			var el0 CreatePostReturningRow
 			p1 := p0.Got.ElemRow(i0)
 			if p1.Kind == probeGot {
 				var rec1 CreatePostReturningRow
-				p2 := p1.Got.ProbeFloat("id")
+				p2 := p1.Got.ProbeIntAt("id", &at1[0])
 				if p2.Kind == probeGot {
 					rec1.Id = &p2.Got
 				} else if p2.Kind == probeWrong {
-					return nil, deTypeMismatch("CreatePostReturningRow", "id", "opt(float)", p2.ActualWireType, p2.Raw)
+					return nil, deTypeMismatch("CreatePostReturningRow", "id", "opt(int)", p2.ActualWireType, p2.Raw)
 				}
-				p3 := p1.Got.ProbeString("title")
+				p3 := p1.Got.ProbeStringAt("title", &at1[1])
 				if p3.Kind == probeGot {
 					sv3 := p3.Got
 					rec1.Title = &sv3
@@ -2550,21 +2576,21 @@ func CreatePostReturning(id int64, authorId int64, title string, status string, 
 				}
 				el0 = rec1
 			} else if p1.Kind == probeWrong {
-				return nil, deTypeMismatch("n0", "n0", "obj{id:opt(float),title:opt(string)}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{id:opt(int),title:opt(string)}", p1.ActualWireType, p1.Raw)
 			} else if p1.Kind == probeNull {
-				return nil, deTypeMismatch("n0", "n0", "obj{id:opt(float),title:opt(string)}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{id:opt(int),title:opt(string)}", p1.ActualWireType, p1.Raw)
 			} else {
-				return nil, deMissingField("n0", "n0", "obj{id:opt(float),title:opt(string)}")
+				return nil, deMissingField("n0", "n0", "obj{id:opt(int),title:opt(string)}")
 			}
 			list0 = append(list0, el0)
 		}
 		t_n0 = list0
 	} else if p0.Kind == probeWrong {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:opt(float),title:opt(string)})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:opt(int),title:opt(string)})", p0.ActualWireType, p0.Raw)
 	} else if p0.Kind == probeNull {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:opt(float),title:opt(string)})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:opt(int),title:opt(string)})", p0.ActualWireType, p0.Raw)
 	} else {
-		return nil, deMissingField("n0", "n0", "arr(obj{id:opt(float),title:opt(string)})")
+		return nil, deMissingField("n0", "n0", "arr(obj{id:opt(int),title:opt(string)})")
 	}
 	produced_n0 = true
 	return t_n0, nil
@@ -2582,7 +2608,7 @@ func CreatePostReturning(id int64, authorId int64, title string, status string, 
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func RenamePostReturning(title string, id int64) ([]RenamePostReturningRow, error) {
+func RenamePostReturning(ctx context.Context, title string, id int64) ([]RenamePostReturningRow, error) {
 	var t_n0 []RenamePostReturningRow
 	produced_n0 := false
 	_ = t_n0
@@ -2597,25 +2623,26 @@ func RenamePostReturning(title string, id int64) ([]RenamePostReturningRow, erro
 		return nil, pe_n0
 	}
 	payload_n0 := wire.WireRowOfFields(pf_n0)
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ctx, payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
 	}
 	p0 := wire_n0.AsList()
 	if p0.Kind == probeGot {
+		var at1 [2]int
 		list0 := make([]RenamePostReturningRow, 0, p0.Got.Len())
 		for i0 := 0; i0 < p0.Got.Len(); i0++ {
 			var el0 RenamePostReturningRow
 			p1 := p0.Got.ElemRow(i0)
 			if p1.Kind == probeGot {
 				var rec1 RenamePostReturningRow
-				p2 := p1.Got.ProbeFloat("id")
+				p2 := p1.Got.ProbeIntAt("id", &at1[0])
 				if p2.Kind == probeGot {
 					rec1.Id = &p2.Got
 				} else if p2.Kind == probeWrong {
-					return nil, deTypeMismatch("RenamePostReturningRow", "id", "opt(float)", p2.ActualWireType, p2.Raw)
+					return nil, deTypeMismatch("RenamePostReturningRow", "id", "opt(int)", p2.ActualWireType, p2.Raw)
 				}
-				p3 := p1.Got.ProbeString("title")
+				p3 := p1.Got.ProbeStringAt("title", &at1[1])
 				if p3.Kind == probeGot {
 					sv3 := p3.Got
 					rec1.Title = &sv3
@@ -2624,21 +2651,21 @@ func RenamePostReturning(title string, id int64) ([]RenamePostReturningRow, erro
 				}
 				el0 = rec1
 			} else if p1.Kind == probeWrong {
-				return nil, deTypeMismatch("n0", "n0", "obj{id:opt(float),title:opt(string)}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{id:opt(int),title:opt(string)}", p1.ActualWireType, p1.Raw)
 			} else if p1.Kind == probeNull {
-				return nil, deTypeMismatch("n0", "n0", "obj{id:opt(float),title:opt(string)}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{id:opt(int),title:opt(string)}", p1.ActualWireType, p1.Raw)
 			} else {
-				return nil, deMissingField("n0", "n0", "obj{id:opt(float),title:opt(string)}")
+				return nil, deMissingField("n0", "n0", "obj{id:opt(int),title:opt(string)}")
 			}
 			list0 = append(list0, el0)
 		}
 		t_n0 = list0
 	} else if p0.Kind == probeWrong {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:opt(float),title:opt(string)})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:opt(int),title:opt(string)})", p0.ActualWireType, p0.Raw)
 	} else if p0.Kind == probeNull {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:opt(float),title:opt(string)})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:opt(int),title:opt(string)})", p0.ActualWireType, p0.Raw)
 	} else {
-		return nil, deMissingField("n0", "n0", "arr(obj{id:opt(float),title:opt(string)})")
+		return nil, deMissingField("n0", "n0", "arr(obj{id:opt(int),title:opt(string)})")
 	}
 	produced_n0 = true
 	return t_n0, nil
@@ -2656,7 +2683,7 @@ func RenamePostReturning(title string, id int64) ([]RenamePostReturningRow, erro
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func RemovePostReturning(id int64) ([]RemovePostReturningRow, error) {
+func RemovePostReturning(ctx context.Context, id int64) ([]RemovePostReturningRow, error) {
 	var t_n0 []RemovePostReturningRow
 	produced_n0 := false
 	_ = t_n0
@@ -2671,25 +2698,26 @@ func RemovePostReturning(id int64) ([]RemovePostReturningRow, error) {
 		return nil, pe_n0
 	}
 	payload_n0 := wire.WireRowOfFields(pf_n0)
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ctx, payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
 	}
 	p0 := wire_n0.AsList()
 	if p0.Kind == probeGot {
+		var at1 [2]int
 		list0 := make([]RemovePostReturningRow, 0, p0.Got.Len())
 		for i0 := 0; i0 < p0.Got.Len(); i0++ {
 			var el0 RemovePostReturningRow
 			p1 := p0.Got.ElemRow(i0)
 			if p1.Kind == probeGot {
 				var rec1 RemovePostReturningRow
-				p2 := p1.Got.ProbeFloat("id")
+				p2 := p1.Got.ProbeIntAt("id", &at1[0])
 				if p2.Kind == probeGot {
 					rec1.Id = &p2.Got
 				} else if p2.Kind == probeWrong {
-					return nil, deTypeMismatch("RemovePostReturningRow", "id", "opt(float)", p2.ActualWireType, p2.Raw)
+					return nil, deTypeMismatch("RemovePostReturningRow", "id", "opt(int)", p2.ActualWireType, p2.Raw)
 				}
-				p3 := p1.Got.ProbeString("title")
+				p3 := p1.Got.ProbeStringAt("title", &at1[1])
 				if p3.Kind == probeGot {
 					sv3 := p3.Got
 					rec1.Title = &sv3
@@ -2698,21 +2726,21 @@ func RemovePostReturning(id int64) ([]RemovePostReturningRow, error) {
 				}
 				el0 = rec1
 			} else if p1.Kind == probeWrong {
-				return nil, deTypeMismatch("n0", "n0", "obj{id:opt(float),title:opt(string)}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{id:opt(int),title:opt(string)}", p1.ActualWireType, p1.Raw)
 			} else if p1.Kind == probeNull {
-				return nil, deTypeMismatch("n0", "n0", "obj{id:opt(float),title:opt(string)}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{id:opt(int),title:opt(string)}", p1.ActualWireType, p1.Raw)
 			} else {
-				return nil, deMissingField("n0", "n0", "obj{id:opt(float),title:opt(string)}")
+				return nil, deMissingField("n0", "n0", "obj{id:opt(int),title:opt(string)}")
 			}
 			list0 = append(list0, el0)
 		}
 		t_n0 = list0
 	} else if p0.Kind == probeWrong {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:opt(float),title:opt(string)})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:opt(int),title:opt(string)})", p0.ActualWireType, p0.Raw)
 	} else if p0.Kind == probeNull {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:opt(float),title:opt(string)})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:opt(int),title:opt(string)})", p0.ActualWireType, p0.Raw)
 	} else {
-		return nil, deMissingField("n0", "n0", "arr(obj{id:opt(float),title:opt(string)})")
+		return nil, deMissingField("n0", "n0", "arr(obj{id:opt(int),title:opt(string)})")
 	}
 	produced_n0 = true
 	return t_n0, nil
@@ -2730,7 +2758,7 @@ func RemovePostReturning(id int64) ([]RemovePostReturningRow, error) {
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func RestatusPostsReturning(status string, authorId int64) ([]RestatusPostsReturningRow, error) {
+func RestatusPostsReturning(ctx context.Context, status string, authorId int64) ([]RestatusPostsReturningRow, error) {
 	var t_n0 []RestatusPostsReturningRow
 	produced_n0 := false
 	_ = t_n0
@@ -2745,25 +2773,26 @@ func RestatusPostsReturning(status string, authorId int64) ([]RestatusPostsRetur
 		return nil, pe_n0
 	}
 	payload_n0 := wire.WireRowOfFields(pf_n0)
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ctx, payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
 	}
 	p0 := wire_n0.AsList()
 	if p0.Kind == probeGot {
+		var at1 [2]int
 		list0 := make([]RestatusPostsReturningRow, 0, p0.Got.Len())
 		for i0 := 0; i0 < p0.Got.Len(); i0++ {
 			var el0 RestatusPostsReturningRow
 			p1 := p0.Got.ElemRow(i0)
 			if p1.Kind == probeGot {
 				var rec1 RestatusPostsReturningRow
-				p2 := p1.Got.ProbeFloat("id")
+				p2 := p1.Got.ProbeIntAt("id", &at1[0])
 				if p2.Kind == probeGot {
 					rec1.Id = &p2.Got
 				} else if p2.Kind == probeWrong {
-					return nil, deTypeMismatch("RestatusPostsReturningRow", "id", "opt(float)", p2.ActualWireType, p2.Raw)
+					return nil, deTypeMismatch("RestatusPostsReturningRow", "id", "opt(int)", p2.ActualWireType, p2.Raw)
 				}
-				p3 := p1.Got.ProbeString("status")
+				p3 := p1.Got.ProbeStringAt("status", &at1[1])
 				if p3.Kind == probeGot {
 					sv3 := p3.Got
 					rec1.Status = &sv3
@@ -2772,21 +2801,21 @@ func RestatusPostsReturning(status string, authorId int64) ([]RestatusPostsRetur
 				}
 				el0 = rec1
 			} else if p1.Kind == probeWrong {
-				return nil, deTypeMismatch("n0", "n0", "obj{id:opt(float),status:opt(string)}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{id:opt(int),status:opt(string)}", p1.ActualWireType, p1.Raw)
 			} else if p1.Kind == probeNull {
-				return nil, deTypeMismatch("n0", "n0", "obj{id:opt(float),status:opt(string)}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{id:opt(int),status:opt(string)}", p1.ActualWireType, p1.Raw)
 			} else {
-				return nil, deMissingField("n0", "n0", "obj{id:opt(float),status:opt(string)}")
+				return nil, deMissingField("n0", "n0", "obj{id:opt(int),status:opt(string)}")
 			}
 			list0 = append(list0, el0)
 		}
 		t_n0 = list0
 	} else if p0.Kind == probeWrong {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:opt(float),status:opt(string)})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:opt(int),status:opt(string)})", p0.ActualWireType, p0.Raw)
 	} else if p0.Kind == probeNull {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:opt(float),status:opt(string)})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:opt(int),status:opt(string)})", p0.ActualWireType, p0.Raw)
 	} else {
-		return nil, deMissingField("n0", "n0", "arr(obj{id:opt(float),status:opt(string)})")
+		return nil, deMissingField("n0", "n0", "arr(obj{id:opt(int),status:opt(string)})")
 	}
 	produced_n0 = true
 	return t_n0, nil
@@ -2804,7 +2833,7 @@ func RestatusPostsReturning(status string, authorId int64) ([]RestatusPostsRetur
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func RemovePostsByAuthorReturning(authorId int64) ([]RemovePostsByAuthorReturningRow, error) {
+func RemovePostsByAuthorReturning(ctx context.Context, authorId int64) ([]RemovePostsByAuthorReturningRow, error) {
 	var t_n0 []RemovePostsByAuthorReturningRow
 	produced_n0 := false
 	_ = t_n0
@@ -2819,25 +2848,26 @@ func RemovePostsByAuthorReturning(authorId int64) ([]RemovePostsByAuthorReturnin
 		return nil, pe_n0
 	}
 	payload_n0 := wire.WireRowOfFields(pf_n0)
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ctx, payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
 	}
 	p0 := wire_n0.AsList()
 	if p0.Kind == probeGot {
+		var at1 [2]int
 		list0 := make([]RemovePostsByAuthorReturningRow, 0, p0.Got.Len())
 		for i0 := 0; i0 < p0.Got.Len(); i0++ {
 			var el0 RemovePostsByAuthorReturningRow
 			p1 := p0.Got.ElemRow(i0)
 			if p1.Kind == probeGot {
 				var rec1 RemovePostsByAuthorReturningRow
-				p2 := p1.Got.ProbeFloat("id")
+				p2 := p1.Got.ProbeIntAt("id", &at1[0])
 				if p2.Kind == probeGot {
 					rec1.Id = &p2.Got
 				} else if p2.Kind == probeWrong {
-					return nil, deTypeMismatch("RemovePostsByAuthorReturningRow", "id", "opt(float)", p2.ActualWireType, p2.Raw)
+					return nil, deTypeMismatch("RemovePostsByAuthorReturningRow", "id", "opt(int)", p2.ActualWireType, p2.Raw)
 				}
-				p3 := p1.Got.ProbeString("title")
+				p3 := p1.Got.ProbeStringAt("title", &at1[1])
 				if p3.Kind == probeGot {
 					sv3 := p3.Got
 					rec1.Title = &sv3
@@ -2846,21 +2876,21 @@ func RemovePostsByAuthorReturning(authorId int64) ([]RemovePostsByAuthorReturnin
 				}
 				el0 = rec1
 			} else if p1.Kind == probeWrong {
-				return nil, deTypeMismatch("n0", "n0", "obj{id:opt(float),title:opt(string)}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{id:opt(int),title:opt(string)}", p1.ActualWireType, p1.Raw)
 			} else if p1.Kind == probeNull {
-				return nil, deTypeMismatch("n0", "n0", "obj{id:opt(float),title:opt(string)}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{id:opt(int),title:opt(string)}", p1.ActualWireType, p1.Raw)
 			} else {
-				return nil, deMissingField("n0", "n0", "obj{id:opt(float),title:opt(string)}")
+				return nil, deMissingField("n0", "n0", "obj{id:opt(int),title:opt(string)}")
 			}
 			list0 = append(list0, el0)
 		}
 		t_n0 = list0
 	} else if p0.Kind == probeWrong {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:opt(float),title:opt(string)})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:opt(int),title:opt(string)})", p0.ActualWireType, p0.Raw)
 	} else if p0.Kind == probeNull {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:opt(float),title:opt(string)})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:opt(int),title:opt(string)})", p0.ActualWireType, p0.Raw)
 	} else {
-		return nil, deMissingField("n0", "n0", "arr(obj{id:opt(float),title:opt(string)})")
+		return nil, deMissingField("n0", "n0", "arr(obj{id:opt(int),title:opt(string)})")
 	}
 	produced_n0 = true
 	return t_n0, nil
@@ -2878,45 +2908,46 @@ func RemovePostsByAuthorReturning(authorId int64) ([]RemovePostsByAuthorReturnin
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func TypedRows() ([]TypedRowsRow, error) {
+func TypedRows(ctx context.Context) ([]TypedRowsRow, error) {
 	var t_n0 []TypedRowsRow
 	produced_n0 := false
 	_ = t_n0
 	_ = produced_n0
 	// ── op 'n0' (executeSQL) ──
 	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{})}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, ts, flag, label FROM conf_typed ORDER BY id ASC")}})
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ctx, payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
 	}
 	p0 := wire_n0.AsList()
 	if p0.Kind == probeGot {
+		var at1 [4]int
 		list0 := make([]TypedRowsRow, 0, p0.Got.Len())
 		for i0 := 0; i0 < p0.Got.Len(); i0++ {
 			var el0 TypedRowsRow
 			p1 := p0.Got.ElemRow(i0)
 			if p1.Kind == probeGot {
 				var rec1 TypedRowsRow
-				p2 := p1.Got.ProbeFloat("flag")
+				p2 := p1.Got.ProbeIntAt("flag", &at1[0])
 				if p2.Kind == probeGot {
 					rec1.Flag = &p2.Got
 				} else if p2.Kind == probeWrong {
-					return nil, deTypeMismatch("TypedRowsRow", "flag", "opt(float)", p2.ActualWireType, p2.Raw)
+					return nil, deTypeMismatch("TypedRowsRow", "flag", "opt(int)", p2.ActualWireType, p2.Raw)
 				}
-				p3 := p1.Got.ProbeFloat("id")
+				p3 := p1.Got.ProbeIntAt("id", &at1[1])
 				if p3.Kind == probeGot {
 					rec1.Id = &p3.Got
 				} else if p3.Kind == probeWrong {
-					return nil, deTypeMismatch("TypedRowsRow", "id", "opt(float)", p3.ActualWireType, p3.Raw)
+					return nil, deTypeMismatch("TypedRowsRow", "id", "opt(int)", p3.ActualWireType, p3.Raw)
 				}
-				p4 := p1.Got.ProbeString("label")
+				p4 := p1.Got.ProbeStringAt("label", &at1[2])
 				if p4.Kind == probeGot {
 					sv4 := p4.Got
 					rec1.Label = &sv4
 				} else if p4.Kind == probeWrong {
 					return nil, deTypeMismatch("TypedRowsRow", "label", "opt(string)", p4.ActualWireType, p4.Raw)
 				}
-				p5 := p1.Got.ProbeString("ts")
+				p5 := p1.Got.ProbeStringAt("ts", &at1[3])
 				if p5.Kind == probeGot {
 					sv5 := p5.Got
 					rec1.Ts = &sv5
@@ -2925,21 +2956,21 @@ func TypedRows() ([]TypedRowsRow, error) {
 				}
 				el0 = rec1
 			} else if p1.Kind == probeWrong {
-				return nil, deTypeMismatch("n0", "n0", "obj{flag:opt(float),id:opt(float),label:opt(string),ts:opt(string)}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{flag:opt(int),id:opt(int),label:opt(string),ts:opt(string)}", p1.ActualWireType, p1.Raw)
 			} else if p1.Kind == probeNull {
-				return nil, deTypeMismatch("n0", "n0", "obj{flag:opt(float),id:opt(float),label:opt(string),ts:opt(string)}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{flag:opt(int),id:opt(int),label:opt(string),ts:opt(string)}", p1.ActualWireType, p1.Raw)
 			} else {
-				return nil, deMissingField("n0", "n0", "obj{flag:opt(float),id:opt(float),label:opt(string),ts:opt(string)}")
+				return nil, deMissingField("n0", "n0", "obj{flag:opt(int),id:opt(int),label:opt(string),ts:opt(string)}")
 			}
 			list0 = append(list0, el0)
 		}
 		t_n0 = list0
 	} else if p0.Kind == probeWrong {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{flag:opt(float),id:opt(float),label:opt(string),ts:opt(string)})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{flag:opt(int),id:opt(int),label:opt(string),ts:opt(string)})", p0.ActualWireType, p0.Raw)
 	} else if p0.Kind == probeNull {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{flag:opt(float),id:opt(float),label:opt(string),ts:opt(string)})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{flag:opt(int),id:opt(int),label:opt(string),ts:opt(string)})", p0.ActualWireType, p0.Raw)
 	} else {
-		return nil, deMissingField("n0", "n0", "arr(obj{flag:opt(float),id:opt(float),label:opt(string),ts:opt(string)})")
+		return nil, deMissingField("n0", "n0", "arr(obj{flag:opt(int),id:opt(int),label:opt(string),ts:opt(string)})")
 	}
 	produced_n0 = true
 	return t_n0, nil
@@ -2957,7 +2988,7 @@ func TypedRows() ([]TypedRowsRow, error) {
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func CreateTags(rows_id []int64, rows_post_id []int64, rows_label []string) ([]WriteSummary, error) {
+func CreateTags(ctx context.Context, rows_id []int64, rows_post_id []int64, rows_label []string) ([]WriteSummary, error) {
 	var t_n0 []WriteSummary
 	produced_n0 := false
 	_ = t_n0
@@ -2966,25 +2997,26 @@ func CreateTags(rows_id []int64, rows_post_id []int64, rows_label []string) ([]W
 	pf_n0, pe_n0 := func() ([]wire.WireField, error) {
 		ex_166 := WriteMode{Returning: false}
 		ex_167 := ExecOptions{Db: nil, Guard: nil, WhereDynamic: nil, Write: &ex_166}
-		return []wire.WireField{wire.WireField{Key: "opts", Val: func() wire.WireValue { o0 := &ex_167; if o0 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "db", Val: func() wire.WireValue { o1 := (*o0).Db; if o1 == nil { return wire.WireNull() }; return wire.WireStr((*o1)) }()}, {Key: "guard", Val: func() wire.WireValue { o1 := (*o0).Guard; if o1 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "limit", Val: wire.WireInt((*o1).Limit)}, {Key: "model", Val: func() wire.WireValue { o2 := (*o1).Model; if o2 == nil { return wire.WireNull() }; return wire.WireStr((*o2)) }()}, {Key: "relation", Val: wire.WireStr((*o1).Relation)}}) }()}, {Key: "whereDynamic", Val: func() wire.WireValue { o1 := (*o0).WhereDynamic; if o1 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "frags", Val: func() wire.WireValue { it2 := []wire.WireValue{}; for _, e2 := range (*o1).Frags { it2 = append(it2, wire.WireRowOf([]wire.WireField{{Key: "params", Val: func() wire.WireValue { it4 := []wire.WireValue{}; for _, e4 := range e2.Params { it4 = append(it4, func() wire.WireValue { o5 := e4; if o5 == nil { return wire.WireNull() }; return (*o5) }()) }; return wire.WireListOf(it4) }()}, {Key: "skipped", Val: wire.WireBool(e2.Skipped)}, {Key: "sql", Val: wire.WireStr(e2.Sql)}})) }; return wire.WireListOf(it2) }()}, {Key: "lead", Val: wire.WireStr((*o1).Lead)}, {Key: "tail", Val: wire.WireStr((*o1).Tail)}, {Key: "tailParams", Val: wire.WireListOf((*o1).TailParams)}}) }()}, {Key: "write", Val: func() wire.WireValue { o1 := (*o0).Write; if o1 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "returning", Val: wire.WireBool((*o1).Returning)}}) }()}}) }()}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range rows_id { it0 = append(it0, wire.WireInt(e0)) }; return wire.WireListOf(it0) }(), func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range rows_label { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }(), func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range rows_post_id { it0 = append(it0, wire.WireInt(e0)) }; return wire.WireListOf(it0) }()})}, wire.WireField{Key: "sql", Val: wire.WireStr("INSERT INTO conf_tags (id, label, post_id) SELECT v.id, v.label, v.post_id FROM UNNEST(?::int[], ?::text[], ?::int[]) AS v(id, label, post_id)")}}, nil
+		return []wire.WireField{wire.WireField{Key: "opts", Val: func() wire.WireValue { o0 := &ex_167; if o0 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "db", Val: func() wire.WireValue { o1 := (*o0).Db; if o1 == nil { return wire.WireNull() }; return wire.WireStr((*o1)) }()}, {Key: "guard", Val: func() wire.WireValue { o1 := (*o0).Guard; if o1 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "limit", Val: wire.WireInt((*o1).Limit)}, {Key: "model", Val: func() wire.WireValue { o2 := (*o1).Model; if o2 == nil { return wire.WireNull() }; return wire.WireStr((*o2)) }()}, {Key: "relation", Val: wire.WireStr((*o1).Relation)}}) }()}, {Key: "whereDynamic", Val: func() wire.WireValue { o1 := (*o0).WhereDynamic; if o1 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "frags", Val: func() wire.WireValue { it2 := []wire.WireValue{}; for _, e2 := range (*o1).Frags { it2 = append(it2, wire.WireRowOf([]wire.WireField{{Key: "params", Val: func() wire.WireValue { it4 := []wire.WireValue{}; for _, e4 := range e2.Params { it4 = append(it4, func() wire.WireValue { o5 := e4; if o5 == nil { return wire.WireNull() }; return (*o5) }()) }; return wire.WireListOf(it4) }()}, {Key: "skipped", Val: wire.WireBool(e2.Skipped)}, {Key: "sql", Val: wire.WireStr(e2.Sql)}})) }; return wire.WireListOf(it2) }()}, {Key: "lead", Val: wire.WireStr((*o1).Lead)}, {Key: "tail", Val: wire.WireStr((*o1).Tail)}, {Key: "tailParams", Val: wire.WireListOf((*o1).TailParams)}}) }()}, {Key: "write", Val: func() wire.WireValue { o1 := (*o0).Write; if o1 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "returning", Val: wire.WireBool((*o1).Returning)}}) }()}}) }()}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range rows_id { it0 = append(it0, wire.WireInt(e0)) }; return wire.WireListOf(it0) }(), func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range rows_label { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }(), func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range rows_post_id { it0 = append(it0, wire.WireInt(e0)) }; return wire.WireListOf(it0) }()})}, wire.WireField{Key: "sql", Val: wire.WireStr("INSERT INTO conf_tags (id, label, post_id) SELECT v.id, v.label, v.post_id FROM UNNEST(?::bigint[], ?::text[], ?::bigint[]) AS v(id, label, post_id)")}}, nil
 	}()
 	if pe_n0 != nil {
 		return nil, pe_n0
 	}
 	payload_n0 := wire.WireRowOfFields(pf_n0)
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ctx, payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
 	}
 	p0 := wire_n0.AsList()
 	if p0.Kind == probeGot {
+		var at1 [2]int
 		list0 := make([]WriteSummary, 0, p0.Got.Len())
 		for i0 := 0; i0 < p0.Got.Len(); i0++ {
 			var el0 WriteSummary
 			p1 := p0.Got.ElemRow(i0)
 			if p1.Kind == probeGot {
 				var rec1 WriteSummary
-				p2 := p1.Got.ProbeInt("changes")
+				p2 := p1.Got.ProbeIntAt("changes", &at1[0])
 				if p2.Kind == probeGot {
 					rec1.Changes = p2.Got
 				} else if p2.Kind == probeWrong {
@@ -2994,7 +3026,7 @@ func CreateTags(rows_id []int64, rows_post_id []int64, rows_label []string) ([]W
 				} else {
 					return nil, deMissingField("WriteSummary", "changes", "int")
 				}
-				p3 := p1.Got.ProbeInt("lastInsertRowid")
+				p3 := p1.Got.ProbeIntAt("lastInsertRowid", &at1[1])
 				if p3.Kind == probeGot {
 					rec1.LastInsertRowid = p3.Got
 				} else if p3.Kind == probeWrong {
@@ -3038,7 +3070,7 @@ func CreateTags(rows_id []int64, rows_post_id []int64, rows_label []string) ([]W
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func RemoveTags(ids []int64) ([]WriteSummary, error) {
+func RemoveTags(ctx context.Context, ids []int64) ([]WriteSummary, error) {
 	var t_n0 []WriteSummary
 	produced_n0 := false
 	_ = t_n0
@@ -3053,19 +3085,20 @@ func RemoveTags(ids []int64) ([]WriteSummary, error) {
 		return nil, pe_n0
 	}
 	payload_n0 := wire.WireRowOfFields(pf_n0)
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ctx, payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
 	}
 	p0 := wire_n0.AsList()
 	if p0.Kind == probeGot {
+		var at1 [2]int
 		list0 := make([]WriteSummary, 0, p0.Got.Len())
 		for i0 := 0; i0 < p0.Got.Len(); i0++ {
 			var el0 WriteSummary
 			p1 := p0.Got.ElemRow(i0)
 			if p1.Kind == probeGot {
 				var rec1 WriteSummary
-				p2 := p1.Got.ProbeInt("changes")
+				p2 := p1.Got.ProbeIntAt("changes", &at1[0])
 				if p2.Kind == probeGot {
 					rec1.Changes = p2.Got
 				} else if p2.Kind == probeWrong {
@@ -3075,7 +3108,7 @@ func RemoveTags(ids []int64) ([]WriteSummary, error) {
 				} else {
 					return nil, deMissingField("WriteSummary", "changes", "int")
 				}
-				p3 := p1.Got.ProbeInt("lastInsertRowid")
+				p3 := p1.Got.ProbeIntAt("lastInsertRowid", &at1[1])
 				if p3.Kind == probeGot {
 					rec1.LastInsertRowid = p3.Got
 				} else if p3.Kind == probeWrong {
@@ -3119,7 +3152,7 @@ func RemoveTags(ids []int64) ([]WriteSummary, error) {
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func CreateDoc(docId string, title string) ([]CreateDocRow, error) {
+func CreateDoc(ctx context.Context, docId string, title string) ([]CreateDocRow, error) {
 	var t_n0 []CreateDocRow
 	produced_n0 := false
 	_ = t_n0
@@ -3134,26 +3167,27 @@ func CreateDoc(docId string, title string) ([]CreateDocRow, error) {
 		return nil, pe_n0
 	}
 	payload_n0 := wire.WireRowOfFields(pf_n0)
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ctx, payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
 	}
 	p0 := wire_n0.AsList()
 	if p0.Kind == probeGot {
+		var at1 [2]int
 		list0 := make([]CreateDocRow, 0, p0.Got.Len())
 		for i0 := 0; i0 < p0.Got.Len(); i0++ {
 			var el0 CreateDocRow
 			p1 := p0.Got.ElemRow(i0)
 			if p1.Kind == probeGot {
 				var rec1 CreateDocRow
-				p2 := p1.Got.ProbeString("doc_id")
+				p2 := p1.Got.ProbeStringAt("doc_id", &at1[0])
 				if p2.Kind == probeGot {
 					sv2 := p2.Got
 					rec1.Doc_id = &sv2
 				} else if p2.Kind == probeWrong {
 					return nil, deTypeMismatch("CreateDocRow", "doc_id", "opt(string)", p2.ActualWireType, p2.Raw)
 				}
-				p3 := p1.Got.ProbeString("title")
+				p3 := p1.Got.ProbeStringAt("title", &at1[1])
 				if p3.Kind == probeGot {
 					sv3 := p3.Got
 					rec1.Title = &sv3
@@ -3194,7 +3228,7 @@ func CreateDoc(docId string, title string) ([]CreateDocRow, error) {
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func CreateLine(orderId int64, lineNo int64, sku string) ([]CreateLineRow, error) {
+func CreateLine(ctx context.Context, orderId int64, lineNo int64, sku string) ([]CreateLineRow, error) {
 	var t_n0 []CreateLineRow
 	produced_n0 := false
 	_ = t_n0
@@ -3209,31 +3243,32 @@ func CreateLine(orderId int64, lineNo int64, sku string) ([]CreateLineRow, error
 		return nil, pe_n0
 	}
 	payload_n0 := wire.WireRowOfFields(pf_n0)
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ctx, payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
 	}
 	p0 := wire_n0.AsList()
 	if p0.Kind == probeGot {
+		var at1 [3]int
 		list0 := make([]CreateLineRow, 0, p0.Got.Len())
 		for i0 := 0; i0 < p0.Got.Len(); i0++ {
 			var el0 CreateLineRow
 			p1 := p0.Got.ElemRow(i0)
 			if p1.Kind == probeGot {
 				var rec1 CreateLineRow
-				p2 := p1.Got.ProbeFloat("line_no")
+				p2 := p1.Got.ProbeIntAt("line_no", &at1[0])
 				if p2.Kind == probeGot {
 					rec1.Line_no = &p2.Got
 				} else if p2.Kind == probeWrong {
-					return nil, deTypeMismatch("CreateLineRow", "line_no", "opt(float)", p2.ActualWireType, p2.Raw)
+					return nil, deTypeMismatch("CreateLineRow", "line_no", "opt(int)", p2.ActualWireType, p2.Raw)
 				}
-				p3 := p1.Got.ProbeFloat("order_id")
+				p3 := p1.Got.ProbeIntAt("order_id", &at1[1])
 				if p3.Kind == probeGot {
 					rec1.Order_id = &p3.Got
 				} else if p3.Kind == probeWrong {
-					return nil, deTypeMismatch("CreateLineRow", "order_id", "opt(float)", p3.ActualWireType, p3.Raw)
+					return nil, deTypeMismatch("CreateLineRow", "order_id", "opt(int)", p3.ActualWireType, p3.Raw)
 				}
-				p4 := p1.Got.ProbeString("sku")
+				p4 := p1.Got.ProbeStringAt("sku", &at1[2])
 				if p4.Kind == probeGot {
 					sv4 := p4.Got
 					rec1.Sku = &sv4
@@ -3242,21 +3277,21 @@ func CreateLine(orderId int64, lineNo int64, sku string) ([]CreateLineRow, error
 				}
 				el0 = rec1
 			} else if p1.Kind == probeWrong {
-				return nil, deTypeMismatch("n0", "n0", "obj{line_no:opt(float),order_id:opt(float),sku:opt(string)}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{line_no:opt(int),order_id:opt(int),sku:opt(string)}", p1.ActualWireType, p1.Raw)
 			} else if p1.Kind == probeNull {
-				return nil, deTypeMismatch("n0", "n0", "obj{line_no:opt(float),order_id:opt(float),sku:opt(string)}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{line_no:opt(int),order_id:opt(int),sku:opt(string)}", p1.ActualWireType, p1.Raw)
 			} else {
-				return nil, deMissingField("n0", "n0", "obj{line_no:opt(float),order_id:opt(float),sku:opt(string)}")
+				return nil, deMissingField("n0", "n0", "obj{line_no:opt(int),order_id:opt(int),sku:opt(string)}")
 			}
 			list0 = append(list0, el0)
 		}
 		t_n0 = list0
 	} else if p0.Kind == probeWrong {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{line_no:opt(float),order_id:opt(float),sku:opt(string)})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{line_no:opt(int),order_id:opt(int),sku:opt(string)})", p0.ActualWireType, p0.Raw)
 	} else if p0.Kind == probeNull {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{line_no:opt(float),order_id:opt(float),sku:opt(string)})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{line_no:opt(int),order_id:opt(int),sku:opt(string)})", p0.ActualWireType, p0.Raw)
 	} else {
-		return nil, deMissingField("n0", "n0", "arr(obj{line_no:opt(float),order_id:opt(float),sku:opt(string)})")
+		return nil, deMissingField("n0", "n0", "arr(obj{line_no:opt(int),order_id:opt(int),sku:opt(string)})")
 	}
 	produced_n0 = true
 	return t_n0, nil
@@ -3274,7 +3309,7 @@ func CreateLine(orderId int64, lineNo int64, sku string) ([]CreateLineRow, error
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func CreateTagsReturning(rows_id []int64, rows_post_id []int64, rows_label []string) ([]CreateTagsReturningRow, error) {
+func CreateTagsReturning(ctx context.Context, rows_id []int64, rows_post_id []int64, rows_label []string) ([]CreateTagsReturningRow, error) {
 	var t_n0 []CreateTagsReturningRow
 	produced_n0 := false
 	_ = t_n0
@@ -3283,31 +3318,32 @@ func CreateTagsReturning(rows_id []int64, rows_post_id []int64, rows_label []str
 	pf_n0, pe_n0 := func() ([]wire.WireField, error) {
 		ex_174 := WriteMode{Returning: true}
 		ex_175 := ExecOptions{Db: nil, Guard: nil, WhereDynamic: nil, Write: &ex_174}
-		return []wire.WireField{wire.WireField{Key: "opts", Val: func() wire.WireValue { o0 := &ex_175; if o0 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "db", Val: func() wire.WireValue { o1 := (*o0).Db; if o1 == nil { return wire.WireNull() }; return wire.WireStr((*o1)) }()}, {Key: "guard", Val: func() wire.WireValue { o1 := (*o0).Guard; if o1 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "limit", Val: wire.WireInt((*o1).Limit)}, {Key: "model", Val: func() wire.WireValue { o2 := (*o1).Model; if o2 == nil { return wire.WireNull() }; return wire.WireStr((*o2)) }()}, {Key: "relation", Val: wire.WireStr((*o1).Relation)}}) }()}, {Key: "whereDynamic", Val: func() wire.WireValue { o1 := (*o0).WhereDynamic; if o1 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "frags", Val: func() wire.WireValue { it2 := []wire.WireValue{}; for _, e2 := range (*o1).Frags { it2 = append(it2, wire.WireRowOf([]wire.WireField{{Key: "params", Val: func() wire.WireValue { it4 := []wire.WireValue{}; for _, e4 := range e2.Params { it4 = append(it4, func() wire.WireValue { o5 := e4; if o5 == nil { return wire.WireNull() }; return (*o5) }()) }; return wire.WireListOf(it4) }()}, {Key: "skipped", Val: wire.WireBool(e2.Skipped)}, {Key: "sql", Val: wire.WireStr(e2.Sql)}})) }; return wire.WireListOf(it2) }()}, {Key: "lead", Val: wire.WireStr((*o1).Lead)}, {Key: "tail", Val: wire.WireStr((*o1).Tail)}, {Key: "tailParams", Val: wire.WireListOf((*o1).TailParams)}}) }()}, {Key: "write", Val: func() wire.WireValue { o1 := (*o0).Write; if o1 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "returning", Val: wire.WireBool((*o1).Returning)}}) }()}}) }()}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range rows_id { it0 = append(it0, wire.WireInt(e0)) }; return wire.WireListOf(it0) }(), func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range rows_label { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }(), func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range rows_post_id { it0 = append(it0, wire.WireInt(e0)) }; return wire.WireListOf(it0) }()})}, wire.WireField{Key: "sql", Val: wire.WireStr("INSERT INTO conf_tags (id, label, post_id) SELECT v.id, v.label, v.post_id FROM UNNEST(?::int[], ?::text[], ?::int[]) AS v(id, label, post_id) RETURNING id, label")}}, nil
+		return []wire.WireField{wire.WireField{Key: "opts", Val: func() wire.WireValue { o0 := &ex_175; if o0 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "db", Val: func() wire.WireValue { o1 := (*o0).Db; if o1 == nil { return wire.WireNull() }; return wire.WireStr((*o1)) }()}, {Key: "guard", Val: func() wire.WireValue { o1 := (*o0).Guard; if o1 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "limit", Val: wire.WireInt((*o1).Limit)}, {Key: "model", Val: func() wire.WireValue { o2 := (*o1).Model; if o2 == nil { return wire.WireNull() }; return wire.WireStr((*o2)) }()}, {Key: "relation", Val: wire.WireStr((*o1).Relation)}}) }()}, {Key: "whereDynamic", Val: func() wire.WireValue { o1 := (*o0).WhereDynamic; if o1 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "frags", Val: func() wire.WireValue { it2 := []wire.WireValue{}; for _, e2 := range (*o1).Frags { it2 = append(it2, wire.WireRowOf([]wire.WireField{{Key: "params", Val: func() wire.WireValue { it4 := []wire.WireValue{}; for _, e4 := range e2.Params { it4 = append(it4, func() wire.WireValue { o5 := e4; if o5 == nil { return wire.WireNull() }; return (*o5) }()) }; return wire.WireListOf(it4) }()}, {Key: "skipped", Val: wire.WireBool(e2.Skipped)}, {Key: "sql", Val: wire.WireStr(e2.Sql)}})) }; return wire.WireListOf(it2) }()}, {Key: "lead", Val: wire.WireStr((*o1).Lead)}, {Key: "tail", Val: wire.WireStr((*o1).Tail)}, {Key: "tailParams", Val: wire.WireListOf((*o1).TailParams)}}) }()}, {Key: "write", Val: func() wire.WireValue { o1 := (*o0).Write; if o1 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "returning", Val: wire.WireBool((*o1).Returning)}}) }()}}) }()}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range rows_id { it0 = append(it0, wire.WireInt(e0)) }; return wire.WireListOf(it0) }(), func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range rows_label { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }(), func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range rows_post_id { it0 = append(it0, wire.WireInt(e0)) }; return wire.WireListOf(it0) }()})}, wire.WireField{Key: "sql", Val: wire.WireStr("INSERT INTO conf_tags (id, label, post_id) SELECT v.id, v.label, v.post_id FROM UNNEST(?::bigint[], ?::text[], ?::bigint[]) AS v(id, label, post_id) RETURNING id, label")}}, nil
 	}()
 	if pe_n0 != nil {
 		return nil, pe_n0
 	}
 	payload_n0 := wire.WireRowOfFields(pf_n0)
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ctx, payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
 	}
 	p0 := wire_n0.AsList()
 	if p0.Kind == probeGot {
+		var at1 [2]int
 		list0 := make([]CreateTagsReturningRow, 0, p0.Got.Len())
 		for i0 := 0; i0 < p0.Got.Len(); i0++ {
 			var el0 CreateTagsReturningRow
 			p1 := p0.Got.ElemRow(i0)
 			if p1.Kind == probeGot {
 				var rec1 CreateTagsReturningRow
-				p2 := p1.Got.ProbeFloat("id")
+				p2 := p1.Got.ProbeIntAt("id", &at1[0])
 				if p2.Kind == probeGot {
 					rec1.Id = &p2.Got
 				} else if p2.Kind == probeWrong {
-					return nil, deTypeMismatch("CreateTagsReturningRow", "id", "opt(float)", p2.ActualWireType, p2.Raw)
+					return nil, deTypeMismatch("CreateTagsReturningRow", "id", "opt(int)", p2.ActualWireType, p2.Raw)
 				}
-				p3 := p1.Got.ProbeString("label")
+				p3 := p1.Got.ProbeStringAt("label", &at1[1])
 				if p3.Kind == probeGot {
 					sv3 := p3.Got
 					rec1.Label = &sv3
@@ -3316,21 +3352,21 @@ func CreateTagsReturning(rows_id []int64, rows_post_id []int64, rows_label []str
 				}
 				el0 = rec1
 			} else if p1.Kind == probeWrong {
-				return nil, deTypeMismatch("n0", "n0", "obj{id:opt(float),label:opt(string)}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{id:opt(int),label:opt(string)}", p1.ActualWireType, p1.Raw)
 			} else if p1.Kind == probeNull {
-				return nil, deTypeMismatch("n0", "n0", "obj{id:opt(float),label:opt(string)}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{id:opt(int),label:opt(string)}", p1.ActualWireType, p1.Raw)
 			} else {
-				return nil, deMissingField("n0", "n0", "obj{id:opt(float),label:opt(string)}")
+				return nil, deMissingField("n0", "n0", "obj{id:opt(int),label:opt(string)}")
 			}
 			list0 = append(list0, el0)
 		}
 		t_n0 = list0
 	} else if p0.Kind == probeWrong {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:opt(float),label:opt(string)})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:opt(int),label:opt(string)})", p0.ActualWireType, p0.Raw)
 	} else if p0.Kind == probeNull {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:opt(float),label:opt(string)})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:opt(int),label:opt(string)})", p0.ActualWireType, p0.Raw)
 	} else {
-		return nil, deMissingField("n0", "n0", "arr(obj{id:opt(float),label:opt(string)})")
+		return nil, deMissingField("n0", "n0", "arr(obj{id:opt(int),label:opt(string)})")
 	}
 	produced_n0 = true
 	return t_n0, nil
@@ -3348,7 +3384,7 @@ func CreateTagsReturning(rows_id []int64, rows_post_id []int64, rows_label []str
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func RelabelTagsReturning(rows_id []int64, rows_label []string) ([]RelabelTagsReturningRow, error) {
+func RelabelTagsReturning(ctx context.Context, rows_id []int64, rows_label []string) ([]RelabelTagsReturningRow, error) {
 	var t_n0 []RelabelTagsReturningRow
 	produced_n0 := false
 	_ = t_n0
@@ -3357,31 +3393,32 @@ func RelabelTagsReturning(rows_id []int64, rows_label []string) ([]RelabelTagsRe
 	pf_n0, pe_n0 := func() ([]wire.WireField, error) {
 		ex_176 := WriteMode{Returning: true}
 		ex_177 := ExecOptions{Db: nil, Guard: nil, WhereDynamic: nil, Write: &ex_176}
-		return []wire.WireField{wire.WireField{Key: "opts", Val: func() wire.WireValue { o0 := &ex_177; if o0 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "db", Val: func() wire.WireValue { o1 := (*o0).Db; if o1 == nil { return wire.WireNull() }; return wire.WireStr((*o1)) }()}, {Key: "guard", Val: func() wire.WireValue { o1 := (*o0).Guard; if o1 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "limit", Val: wire.WireInt((*o1).Limit)}, {Key: "model", Val: func() wire.WireValue { o2 := (*o1).Model; if o2 == nil { return wire.WireNull() }; return wire.WireStr((*o2)) }()}, {Key: "relation", Val: wire.WireStr((*o1).Relation)}}) }()}, {Key: "whereDynamic", Val: func() wire.WireValue { o1 := (*o0).WhereDynamic; if o1 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "frags", Val: func() wire.WireValue { it2 := []wire.WireValue{}; for _, e2 := range (*o1).Frags { it2 = append(it2, wire.WireRowOf([]wire.WireField{{Key: "params", Val: func() wire.WireValue { it4 := []wire.WireValue{}; for _, e4 := range e2.Params { it4 = append(it4, func() wire.WireValue { o5 := e4; if o5 == nil { return wire.WireNull() }; return (*o5) }()) }; return wire.WireListOf(it4) }()}, {Key: "skipped", Val: wire.WireBool(e2.Skipped)}, {Key: "sql", Val: wire.WireStr(e2.Sql)}})) }; return wire.WireListOf(it2) }()}, {Key: "lead", Val: wire.WireStr((*o1).Lead)}, {Key: "tail", Val: wire.WireStr((*o1).Tail)}, {Key: "tailParams", Val: wire.WireListOf((*o1).TailParams)}}) }()}, {Key: "write", Val: func() wire.WireValue { o1 := (*o0).Write; if o1 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "returning", Val: wire.WireBool((*o1).Returning)}}) }()}}) }()}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range rows_id { it0 = append(it0, wire.WireInt(e0)) }; return wire.WireListOf(it0) }(), func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range rows_label { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()})}, wire.WireField{Key: "sql", Val: wire.WireStr("UPDATE conf_tags AS t SET label = v.label FROM UNNEST(?::int[], ?::text[]) AS v(id, label) WHERE t.id = v.id RETURNING t.id, t.label")}}, nil
+		return []wire.WireField{wire.WireField{Key: "opts", Val: func() wire.WireValue { o0 := &ex_177; if o0 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "db", Val: func() wire.WireValue { o1 := (*o0).Db; if o1 == nil { return wire.WireNull() }; return wire.WireStr((*o1)) }()}, {Key: "guard", Val: func() wire.WireValue { o1 := (*o0).Guard; if o1 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "limit", Val: wire.WireInt((*o1).Limit)}, {Key: "model", Val: func() wire.WireValue { o2 := (*o1).Model; if o2 == nil { return wire.WireNull() }; return wire.WireStr((*o2)) }()}, {Key: "relation", Val: wire.WireStr((*o1).Relation)}}) }()}, {Key: "whereDynamic", Val: func() wire.WireValue { o1 := (*o0).WhereDynamic; if o1 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "frags", Val: func() wire.WireValue { it2 := []wire.WireValue{}; for _, e2 := range (*o1).Frags { it2 = append(it2, wire.WireRowOf([]wire.WireField{{Key: "params", Val: func() wire.WireValue { it4 := []wire.WireValue{}; for _, e4 := range e2.Params { it4 = append(it4, func() wire.WireValue { o5 := e4; if o5 == nil { return wire.WireNull() }; return (*o5) }()) }; return wire.WireListOf(it4) }()}, {Key: "skipped", Val: wire.WireBool(e2.Skipped)}, {Key: "sql", Val: wire.WireStr(e2.Sql)}})) }; return wire.WireListOf(it2) }()}, {Key: "lead", Val: wire.WireStr((*o1).Lead)}, {Key: "tail", Val: wire.WireStr((*o1).Tail)}, {Key: "tailParams", Val: wire.WireListOf((*o1).TailParams)}}) }()}, {Key: "write", Val: func() wire.WireValue { o1 := (*o0).Write; if o1 == nil { return wire.WireNull() }; return wire.WireRowOf([]wire.WireField{{Key: "returning", Val: wire.WireBool((*o1).Returning)}}) }()}}) }()}, wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range rows_id { it0 = append(it0, wire.WireInt(e0)) }; return wire.WireListOf(it0) }(), func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range rows_label { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()})}, wire.WireField{Key: "sql", Val: wire.WireStr("UPDATE conf_tags AS t SET label = v.label FROM UNNEST(?::bigint[], ?::text[]) AS v(id, label) WHERE t.id = v.id RETURNING t.id, t.label")}}, nil
 	}()
 	if pe_n0 != nil {
 		return nil, pe_n0
 	}
 	payload_n0 := wire.WireRowOfFields(pf_n0)
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ctx, payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
 	}
 	p0 := wire_n0.AsList()
 	if p0.Kind == probeGot {
+		var at1 [2]int
 		list0 := make([]RelabelTagsReturningRow, 0, p0.Got.Len())
 		for i0 := 0; i0 < p0.Got.Len(); i0++ {
 			var el0 RelabelTagsReturningRow
 			p1 := p0.Got.ElemRow(i0)
 			if p1.Kind == probeGot {
 				var rec1 RelabelTagsReturningRow
-				p2 := p1.Got.ProbeFloat("id")
+				p2 := p1.Got.ProbeIntAt("id", &at1[0])
 				if p2.Kind == probeGot {
 					rec1.Id = &p2.Got
 				} else if p2.Kind == probeWrong {
-					return nil, deTypeMismatch("RelabelTagsReturningRow", "id", "opt(float)", p2.ActualWireType, p2.Raw)
+					return nil, deTypeMismatch("RelabelTagsReturningRow", "id", "opt(int)", p2.ActualWireType, p2.Raw)
 				}
-				p3 := p1.Got.ProbeString("label")
+				p3 := p1.Got.ProbeStringAt("label", &at1[1])
 				if p3.Kind == probeGot {
 					sv3 := p3.Got
 					rec1.Label = &sv3
@@ -3390,21 +3427,21 @@ func RelabelTagsReturning(rows_id []int64, rows_label []string) ([]RelabelTagsRe
 				}
 				el0 = rec1
 			} else if p1.Kind == probeWrong {
-				return nil, deTypeMismatch("n0", "n0", "obj{id:opt(float),label:opt(string)}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{id:opt(int),label:opt(string)}", p1.ActualWireType, p1.Raw)
 			} else if p1.Kind == probeNull {
-				return nil, deTypeMismatch("n0", "n0", "obj{id:opt(float),label:opt(string)}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{id:opt(int),label:opt(string)}", p1.ActualWireType, p1.Raw)
 			} else {
-				return nil, deMissingField("n0", "n0", "obj{id:opt(float),label:opt(string)}")
+				return nil, deMissingField("n0", "n0", "obj{id:opt(int),label:opt(string)}")
 			}
 			list0 = append(list0, el0)
 		}
 		t_n0 = list0
 	} else if p0.Kind == probeWrong {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:opt(float),label:opt(string)})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:opt(int),label:opt(string)})", p0.ActualWireType, p0.Raw)
 	} else if p0.Kind == probeNull {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:opt(float),label:opt(string)})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:opt(int),label:opt(string)})", p0.ActualWireType, p0.Raw)
 	} else {
-		return nil, deMissingField("n0", "n0", "arr(obj{id:opt(float),label:opt(string)})")
+		return nil, deMissingField("n0", "n0", "arr(obj{id:opt(int),label:opt(string)})")
 	}
 	produced_n0 = true
 	return t_n0, nil
@@ -3422,7 +3459,7 @@ func RelabelTagsReturning(rows_id []int64, rows_label []string) ([]RelabelTagsRe
 // index order so the observed value / op multiset / failure precedence byte-match run_behavior
 // (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
 // struct/value assembled by struct literal + field access — the consumer keeps it native.
-func RemoveTagsReturning(ids []int64) ([]RemoveTagsReturningRow, error) {
+func RemoveTagsReturning(ctx context.Context, ids []int64) ([]RemoveTagsReturningRow, error) {
 	var t_n0 []RemoveTagsReturningRow
 	produced_n0 := false
 	_ = t_n0
@@ -3437,25 +3474,26 @@ func RemoveTagsReturning(ids []int64) ([]RemoveTagsReturningRow, error) {
 		return nil, pe_n0
 	}
 	payload_n0 := wire.WireRowOfFields(pf_n0)
-	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(payload_n0)
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ctx, payload_n0)
 	if wire_n0Err != nil {
 		return nil, opFailed("n0", "fail", wire_n0Err)
 	}
 	p0 := wire_n0.AsList()
 	if p0.Kind == probeGot {
+		var at1 [2]int
 		list0 := make([]RemoveTagsReturningRow, 0, p0.Got.Len())
 		for i0 := 0; i0 < p0.Got.Len(); i0++ {
 			var el0 RemoveTagsReturningRow
 			p1 := p0.Got.ElemRow(i0)
 			if p1.Kind == probeGot {
 				var rec1 RemoveTagsReturningRow
-				p2 := p1.Got.ProbeFloat("id")
+				p2 := p1.Got.ProbeIntAt("id", &at1[0])
 				if p2.Kind == probeGot {
 					rec1.Id = &p2.Got
 				} else if p2.Kind == probeWrong {
-					return nil, deTypeMismatch("RemoveTagsReturningRow", "id", "opt(float)", p2.ActualWireType, p2.Raw)
+					return nil, deTypeMismatch("RemoveTagsReturningRow", "id", "opt(int)", p2.ActualWireType, p2.Raw)
 				}
-				p3 := p1.Got.ProbeString("label")
+				p3 := p1.Got.ProbeStringAt("label", &at1[1])
 				if p3.Kind == probeGot {
 					sv3 := p3.Got
 					rec1.Label = &sv3
@@ -3464,21 +3502,21 @@ func RemoveTagsReturning(ids []int64) ([]RemoveTagsReturningRow, error) {
 				}
 				el0 = rec1
 			} else if p1.Kind == probeWrong {
-				return nil, deTypeMismatch("n0", "n0", "obj{id:opt(float),label:opt(string)}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{id:opt(int),label:opt(string)}", p1.ActualWireType, p1.Raw)
 			} else if p1.Kind == probeNull {
-				return nil, deTypeMismatch("n0", "n0", "obj{id:opt(float),label:opt(string)}", p1.ActualWireType, p1.Raw)
+				return nil, deTypeMismatch("n0", "n0", "obj{id:opt(int),label:opt(string)}", p1.ActualWireType, p1.Raw)
 			} else {
-				return nil, deMissingField("n0", "n0", "obj{id:opt(float),label:opt(string)}")
+				return nil, deMissingField("n0", "n0", "obj{id:opt(int),label:opt(string)}")
 			}
 			list0 = append(list0, el0)
 		}
 		t_n0 = list0
 	} else if p0.Kind == probeWrong {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:opt(float),label:opt(string)})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:opt(int),label:opt(string)})", p0.ActualWireType, p0.Raw)
 	} else if p0.Kind == probeNull {
-		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:opt(float),label:opt(string)})", p0.ActualWireType, p0.Raw)
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{id:opt(int),label:opt(string)})", p0.ActualWireType, p0.Raw)
 	} else {
-		return nil, deMissingField("n0", "n0", "arr(obj{id:opt(float),label:opt(string)})")
+		return nil, deMissingField("n0", "n0", "arr(obj{id:opt(int),label:opt(string)})")
 	}
 	produced_n0 = true
 	return t_n0, nil
