@@ -379,6 +379,7 @@ export function mysqlPoolFactory(mysql2: { createPool(config: Record<string, unk
       ...(config.keepAlive ? { keepAliveInitialDelay: config.keepAliveInitialDelayMillis } : {}),
       ...mysqlDeboxPoolOptions,
     });
-    return { pool: mysqlConnectionPool(pool, config.connectTimeoutMillis), close: () => pool.end() };
+    const acquireTimeout = config.connectTimeoutMillis > 0 ? config.connectTimeoutMillis : undefined; // 0 ⇒ no limit
+    return { pool: mysqlConnectionPool(pool, acquireTimeout), close: () => pool.end() };
   };
 }

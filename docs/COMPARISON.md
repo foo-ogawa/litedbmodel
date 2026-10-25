@@ -760,7 +760,7 @@ class AuditMiddleware extends Middleware {
 
 DBModel.use(AuditMiddleware);
 
-// Per-request context access
+// Per-request context access (inside Middleware.run at the request entry)
 const ctx = AuditMiddleware.getCurrentContext();
 ctx.tenantId = req.user.tenantId;
 ```

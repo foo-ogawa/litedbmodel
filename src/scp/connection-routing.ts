@@ -77,7 +77,7 @@ export interface ConnectionConfig {
   readonly maxPool?: number;
   /**
    * Upper bound in MILLISECONDS on getting a connection: opening a new one, and waiting for a free one
-   * when the pool is at `maxPool`. @default 30000
+   * when the pool is at `maxPool`. `0` ⇒ no limit. @default 30000
    */
   readonly connectTimeoutMillis?: number;
   /** MILLISECONDS an unused pooled connection stays open before it is closed. @default 10000 */
