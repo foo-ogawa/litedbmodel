@@ -17,6 +17,8 @@
     "PreparedComponent.php": "7b8c37e35d6a5fc50054ce31dd4dec753cb21a7dfdd80c27208ac1326d7f72b1",
     "NodeExprs.php": "d4094b8717ab7206ce9606880c22cd4c539216451c9b60530e52c00a3ea3586e",
     "ConformPending.php": "69aef964fe5e5857a169eb6aacfed63f055df17483e647b5209ac594fbf70b51",
+    "CanonicalFailure.php": "ec90c90b5e46b565892d5b55a05adf67f21b671248ce791daf8b3fe65f1286bb",
+    "Canonical.php": "aae6ffda6d054fcd42e8297f4df77a06db470b70e3c6ff65c776b9446d55bac9",
     "SpecVersions.php": "bf51d9767ec95bcf7ecd18643e9111d51e49d7a126553c9e3499922d671ca238",
     "FingerprintFailure.php": "754f909a0c5fce0bd15c06dc2a87e909d280dc0f86ef2eeed1fd17e04c32605e",
     "Fingerprint.php": "1d30f51f498f372723ffa3ed475f2335f40e6e4c9ec4b30fce4b78ea858dcad6",
