@@ -32,6 +32,7 @@ interface Mysql2Module {
     waitForConnections?: boolean;
     connectionLimit?: number;
     connectTimeout?: number;
+    idleTimeout?: number;
   }): Mysql2Pool;
 }
 
@@ -84,6 +85,7 @@ function getPool(config: DBConfig): Mysql2Pool {
       waitForConnections: true,
       connectionLimit: config.max || 10,
       connectTimeout: (config.timeout || 30) * 1000,
+      idleTimeout: config.idleTimeoutMillis ?? 10000,
     });
     pools.set(key, pool);
   }

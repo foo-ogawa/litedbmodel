@@ -16,6 +16,7 @@
  */
 
 import type { DBDriver, DBConnection, QueryResult, Logger } from './drivers/types';
+import type { DBConfig } from './types';
 import { defaultLogger } from './drivers/types';
 import { setTypeCastImpl, type TypeCastFunctions } from './TypeCast';
 
@@ -28,39 +29,7 @@ import * as SqliteHelper from './drivers/SqliteHelper';
 import * as MysqlHelper from './drivers/MysqlHelper';
 
 // Re-export for backward compatibility
-export type { QueryResult, Logger, DBConnection };
-
-// ============================================
-// DBConfig Type (backward compatible)
-// ============================================
-
-/**
- * Database configuration
- */
-export interface DBConfig {
-  /** Database host (for server-based DBs) */
-  host?: string;
-  /** Database port */
-  port?: number;
-  /** Database name or file path */
-  database: string;
-  /** Username */
-  user?: string;
-  /** Password */
-  password?: string;
-  /** Maximum pool size */
-  max?: number;
-  /** Connection timeout in seconds */
-  timeout?: number;
-  /** Query timeout in seconds */
-  queryTimeout?: number;
-  /** Enable TCP keepalive on connections (recommended for serverless/Lambda) */
-  keepAlive?: boolean;
-  /** Delay in milliseconds before first keepalive probe (default: 10000) */
-  keepAliveInitialDelayMillis?: number;
-  /** Driver type: 'postgres' (default), 'sqlite', or 'mysql' */
-  driver?: 'postgres' | 'sqlite' | 'mysql';
-}
+export type { QueryResult, Logger, DBConnection, DBConfig };
 
 // ============================================
 // Driver Factory (Lazy Loading)

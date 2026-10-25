@@ -96,11 +96,14 @@ export type NextQuery<T extends typeof DBModel> = (
 // Middleware Base Class
 // ===========================================
 
+/** The current request's middleware instances, by middleware class (see {@link Middleware.run}). */
+const requestScope = new AsyncLocalStorage<Map<Function, Middleware>>();
+
 /**
  * Base class for middlewares.
  * 
- * Middlewares use AsyncLocalStorage to maintain per-request instances.
- * On first access within a request, a new instance is created automatically.
+ * Middlewares keep per-request instances in AsyncLocalStorage. A request is the scope opened by
+ * {@link Middleware.run} at the request entry; on first access within it, a new instance is created.
  * 
  * Middleware hooks are called in the following flow:
  * - Method-level: `find`, `findOne`, `findById`, `count`, `create`, `createMany`, `update`, `updateMany`, `delete`
@@ -125,64 +128,57 @@ export type NextQuery<T extends typeof DBModel> = (
  * // Register
  * DBModel.use(LoggerMiddleware);
  * 
- * // After request
- * console.log(LoggerMiddleware.getCurrentContext().getLogs());
+ * // One request
+ * await Middleware.run(async () => {
+ *   await handleRequest();
+ *   console.log(LoggerMiddleware.getCurrentContext().getLogs());
+ * });
  * ```
  * 
  * @category Middleware
  */
 export abstract class Middleware {
-  /** AsyncLocalStorage for per-request instances */
-  private static _storage: AsyncLocalStorage<Middleware>;
-  
-  /** Get or create storage for this class */
-  private static getStorage(): AsyncLocalStorage<Middleware> {
-    // Each subclass gets its own storage
-    if (!this.hasOwnProperty('_storage') || !this._storage) {
-      this._storage = new AsyncLocalStorage<Middleware>();
-    }
-    return this._storage;
-  }
-  
   /**
-   * Get current request's instance.
-   * Creates a new instance on first access within a request.
+   * Get the current request's instance of this middleware. Inside a {@link Middleware.run} scope the
+   * instance is created on first access and shared by the rest of the scope; outside any scope each
+   * call gets a new instance that lives only for that call.
    */
   static getCurrentContext<T extends Middleware>(this: new () => T): T {
-    const storage = (this as unknown as typeof Middleware).getStorage();
-    let instance = storage.getStore() as T | undefined;
+    const scope = requestScope.getStore();
+    let instance = scope?.get(this) as T | undefined;
     if (!instance) {
       instance = new this();
-      storage.enterWith(instance);
+      instance.init?.();
+      scope?.set(this, instance);
     }
     return instance;
   }
-  
+
   /**
-   * Run a function with a fresh middleware context.
-   * Useful for explicit context boundaries (e.g., in tests).
+   * Run `fn` as one request: the middleware instances `fn` uses (directly or through DBModel
+   * operations) are created inside the scope and are not shared with any other request. Call it at
+   * the request entry. `Middleware.run` gives every middleware a fresh instance; `X.run` gives `X` a
+   * fresh instance and keeps the enclosing scope's instances of the others.
    */
-  static run<T extends Middleware, R>(this: new () => T, fn: () => R): R {
-    const storage = (this as unknown as typeof Middleware).getStorage();
-    const instance = new this();
-    return storage.run(instance, fn);
+  static run<R>(fn: () => R): R {
+    const enclosing = requestScope.getStore();
+    const scope = new Map(this === Middleware || enclosing === undefined ? [] : enclosing);
+    scope.delete(this);
+    return requestScope.run(scope, fn);
   }
-  
+
   /**
-   * Check if currently in a context
+   * Check if the current request scope holds an instance of this middleware
    */
   static hasContext(): boolean {
-    return this.getStorage().getStore() !== undefined;
+    return requestScope.getStore()?.has(this) ?? false;
   }
-  
+
   /**
-   * Clear current context (for testing)
+   * Drop this middleware's instance from the current request scope (for testing)
    */
   static clearContext(): void {
-    const storage = this.getStorage();
-    if (storage.getStore()) {
-      storage.enterWith(undefined as unknown as Middleware);
-    }
+    requestScope.getStore()?.delete(this);
   }
 
   // ===========================================
@@ -441,7 +437,7 @@ export interface CreatedMiddlewareClass<S extends object> {
  * Create a middleware class from a configuration object.
  * 
  * This is a simpler alternative to extending the Middleware class directly.
- * Each request gets its own copy of the state object via AsyncLocalStorage.
+ * Each request (a {@link Middleware.run} scope) gets its own copy of the state object.
  * 
  * @param config - Middleware configuration with state and hook functions
  * @returns A middleware class that can be passed to DBModel.use()
@@ -473,7 +469,7 @@ export interface CreatedMiddlewareClass<S extends object> {
  * // Register and use
  * DBModel.use(TenantMiddleware);
  * 
- * // Set tenant for current request
+ * // Set tenant for the current request (inside Middleware.run at the request entry)
  * TenantMiddleware.getCurrentContext().tenantId = 123;
  * ```
  * 
