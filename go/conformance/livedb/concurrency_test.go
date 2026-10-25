@@ -366,9 +366,10 @@ func TestConcurrentWriterStickyIsPerRequestLive(t *testing.T) {
 			seedCorpusSchema(t, writer)
 			replica := d.openRepl(t, writer)
 			seedCorpusSchema(t, replica)
+			connectTimeout := rt.ResolveConnectionConfig(rt.ConnectionConfig{}).ConnectTimeoutMillis
 			routing := rt.RoutingConfig{
 				Registry: rt.NewConnectionRegistry(map[string]rt.ReaderWriterPools{
-					rt.DefaultConnection: rt.ReaderWriterPair(rt.NewSQLDBPool(replica), rt.NewSQLDBPool(writer)),
+					rt.DefaultConnection: rt.ReaderWriterPair(rt.NewSQLDBPool(replica, connectTimeout), rt.NewSQLDBPool(writer, connectTimeout)),
 				}),
 				Sticky: rt.NewWriterStickyClock(rt.StickyOptions{}),
 			}
