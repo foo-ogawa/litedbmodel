@@ -262,12 +262,27 @@ function mysqlConnection(conn: MysqlPoolConnLike): AsyncConnection {
  * Adapt a mysql2/promise `Pool` to the {@link AsyncConnectionPool} contract — `acquire` checks out
  * an owned connection, `release` returns it (or `destroy`s a poisoned one). Feed this to
  * `withTransactionAsync` for per-execution connection ownership.
+ *
+ * mysql2 waits for a free connection without limit; `acquireTimeoutMillis` (the C3
+ * `connectTimeoutMillis`) bounds that wait, and a connection that arrives after it is released.
  */
-export function mysqlConnectionPool(pool: MysqlOwnedPoolLike): AsyncConnectionPool {
+export function mysqlConnectionPool(pool: MysqlOwnedPoolLike, acquireTimeoutMillis?: number): AsyncConnectionPool {
   const handles = new WeakMap<AsyncConnection, MysqlPoolConnLike>();
   return {
     async acquire() {
-      const raw = await pool.getConnection();
+      const pending = pool.getConnection();
+      const raw = acquireTimeoutMillis === undefined
+        ? await pending
+        : await new Promise<MysqlPoolConnLike>((resolve, reject) => {
+            const timer = setTimeout(() => {
+              pending.then((late) => late.release(), () => undefined);
+              reject(new Error(`timeout exceeded when trying to get a connection (${acquireTimeoutMillis} ms)`));
+            }, acquireTimeoutMillis);
+            pending.then(
+              (c) => { clearTimeout(timer); resolve(c); },
+              (e: unknown) => { clearTimeout(timer); reject(e); },
+            );
+          });
       const conn = mysqlConnection(raw);
       handles.set(conn, raw);
       return conn;
@@ -322,6 +337,9 @@ export function pgPoolFactory(pg: PgFactoryModuleLike): PoolFactory {
       // SIZING (construction knob): the config is the sole source of the cap.
       max: config.maxPool,
       min: config.minPool,
+      // pg-pool bounds BOTH a new connection and the wait for a free one with this one limit.
+      connectionTimeoutMillis: config.connectTimeoutMillis,
+      idleTimeoutMillis: config.idleTimeoutMillis,
       // keepAlive (construction knob): TCP keepalive for serverless/long-idle connections.
       keepAlive: config.keepAlive,
       ...(config.keepAlive ? { keepAliveInitialDelayMillis: config.keepAliveInitialDelayMillis } : {}),
@@ -354,11 +372,13 @@ export function mysqlPoolFactory(mysql2: { createPool(config: Record<string, unk
       ...(config.password !== undefined ? { password: config.password } : {}),
       // SIZING (construction knob): connectionLimit = maxPool (the sole source of the cap).
       connectionLimit: config.maxPool,
+      connectTimeout: config.connectTimeoutMillis,
+      idleTimeout: config.idleTimeoutMillis,
       // keepAlive (construction knob).
       enableKeepAlive: config.keepAlive,
       ...(config.keepAlive ? { keepAliveInitialDelay: config.keepAliveInitialDelayMillis } : {}),
       ...mysqlDeboxPoolOptions,
     });
-    return { pool: mysqlConnectionPool(pool), close: () => pool.end() };
+    return { pool: mysqlConnectionPool(pool, config.connectTimeoutMillis), close: () => pool.end() };
   };
 }

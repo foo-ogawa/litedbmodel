@@ -2,9 +2,14 @@
  * Middleware Tests
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, aroundEach } from 'vitest';
 import { Middleware, createMiddleware } from '../../src/Middleware';
 import { StatisticsMiddleware } from '../../src/middlewares/statistics';
+
+// Each test is one request: middleware instances live in the Middleware.run scope around it.
+aroundEach(async (runTest) => {
+  await Middleware.run(() => runTest());
+});
 import { DBModel } from '../../src/DBModel';
 
 // Test middleware implementation
@@ -45,6 +50,17 @@ describe('Middleware', () => {
       const ctx1 = TestMiddleware.getCurrentContext();
       const ctx2 = TestMiddleware.getCurrentContext();
       expect(ctx1).toBe(ctx2);
+    });
+
+    it('should call init when the instance is created', () => {
+      expect(TestMiddleware.getCurrentContext().initCalled).toBe(true);
+      const Created = createMiddleware({
+        state: { ready: false },
+        init: function () {
+          this.ready = true;
+        },
+      });
+      expect(Created.getCurrentContext().ready).toBe(true);
     });
   });
 

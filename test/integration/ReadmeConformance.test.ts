@@ -32,7 +32,7 @@
  */
 
 import 'reflect-metadata';
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, aroundEach } from 'vitest';
 import {
   DBModel,
   model,
@@ -47,6 +47,12 @@ import {
   formatLocalDate,
   formatUTCDate,
 } from '../../src';
+import { Middleware } from '../../src';
+
+// Each test is one request: middleware instances live in the Middleware.run scope around it.
+aroundEach(async (runTest) => {
+  await Middleware.run(() => runTest());
+});
 import type { Column, ColumnsOf } from '../../src';
 import { skipIntegrationTests, pgConfig, mysqlConfig, sqliteConfig } from '../helpers/setup';
 

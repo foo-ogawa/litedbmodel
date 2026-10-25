@@ -67,6 +67,7 @@ function getPool(config: DBConfig): Pool {
       password: config.password,
       max: config.max || 10,
       connectionTimeoutMillis: (config.timeout || 30) * 1000,
+      idleTimeoutMillis: config.idleTimeoutMillis ?? 10000,
       query_timeout: (config.queryTimeout || 30) * 1000,
       keepAlive: config.keepAlive,
       keepAliveInitialDelayMillis: config.keepAliveInitialDelayMillis,
@@ -119,36 +120,55 @@ function convertPlaceholders(sql: string): string {
 interface CachedQuery {
   convertedSql: string;
   isMulti: boolean;
-  name: string;
+  /** Prepared statement name; absent until the SQL text is seen a second time. */
+  name?: string;
 }
+
+/**
+ * Upper bounds of the query cache. A prepared statement lives on every pooled connection until the
+ * connection closes, so naming every distinct SQL text (e.g. `IN (${ids})` per list length) would grow
+ * the client map and the server-side statements without limit. A text is named only when it repeats,
+ * and at most {@link MAX_NAMED_STATEMENTS} texts are ever named; a text seen once is kept (unnamed) in a
+ * FIFO window of {@link MAX_UNNAMED_QUERIES}.
+ */
+const MAX_NAMED_STATEMENTS = 1000;
+const MAX_UNNAMED_QUERIES = 1000;
 
 let preparedStmtCounter = 0;
 const queryCache: Map<string, CachedQuery> = new Map();
+const unnamedQueries: Map<string, CachedQuery> = new Map();
 
 /**
  * Resolve a ?-placeholder SQL into its cached converted form, multi-statement flag,
- * and prepared statement name. On cache hit (the common ORM path), this is a single
- * Map lookup — no regex, no string allocation.
+ * and prepared statement name (when the text repeats). On a named hit (the common ORM path),
+ * this is a single Map lookup — no regex, no string allocation.
  */
 function resolveQuery(sql: string): CachedQuery {
   let cached = queryCache.get(sql);
-  if (!cached) {
-    const convertedSql = convertPlaceholders(sql);
-    // Multi-statement detection without intermediate allocations
-    let isMulti = false;
-    let end = convertedSql.length - 1;
-    while (end >= 0 && (convertedSql[end] === ' ' || convertedSql[end] === '\n' || convertedSql[end] === '\t' || convertedSql[end] === '\r')) end--;
-    if (end >= 0 && convertedSql[end] === ';') end--;
-    for (let i = 0; i <= end; i++) {
-      if (convertedSql[i] === ';') { isMulti = true; break; }
+  if (cached) return cached;
+  cached = unnamedQueries.get(sql);
+  if (cached) {
+    if (preparedStmtCounter < MAX_NAMED_STATEMENTS) {
+      unnamedQueries.delete(sql);
+      cached.name = `ldb_${++preparedStmtCounter}`;
+      queryCache.set(sql, cached);
     }
-    cached = {
-      convertedSql,
-      isMulti,
-      name: `ldb_${++preparedStmtCounter}`,
-    };
-    queryCache.set(sql, cached);
+    return cached;
   }
+  const convertedSql = convertPlaceholders(sql);
+  // Multi-statement detection without intermediate allocations
+  let isMulti = false;
+  let end = convertedSql.length - 1;
+  while (end >= 0 && (convertedSql[end] === ' ' || convertedSql[end] === '\n' || convertedSql[end] === '\t' || convertedSql[end] === '\r')) end--;
+  if (end >= 0 && convertedSql[end] === ';') end--;
+  for (let i = 0; i <= end; i++) {
+    if (convertedSql[i] === ';') { isMulti = true; break; }
+  }
+  cached = { convertedSql, isMulti };
+  if (unnamedQueries.size >= MAX_UNNAMED_QUERIES) {
+    unnamedQueries.delete(unnamedQueries.keys().next().value as string);
+  }
+  unnamedQueries.set(sql, cached);
   return cached;
 }
 
@@ -157,6 +177,7 @@ function resolveQuery(sql: string): CachedQuery {
  */
 function clearQueryCache(): void {
   queryCache.clear();
+  unnamedQueries.clear();
   preparedStmtCounter = 0;
 }
 

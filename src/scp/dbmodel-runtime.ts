@@ -62,6 +62,9 @@ export interface RuntimeDbConfig {
   readonly user?: string;
   readonly password?: string;
   readonly max?: number;
+  /** Seconds allowed for getting a connection (v1 `DBConfig.timeout`). */
+  readonly timeout?: number;
+  readonly idleTimeoutMillis?: number;
   readonly keepAlive?: boolean;
   readonly keepAliveInitialDelayMillis?: number;
   readonly driver?: 'postgres' | 'mysql' | 'sqlite';
@@ -101,6 +104,8 @@ function toConnectionConfig(config: RuntimeDbConfig): ConnectionConfig {
     ...(config.user !== undefined ? { user: config.user } : {}),
     ...(config.password !== undefined ? { password: config.password } : {}),
     ...(config.max !== undefined ? { maxPool: config.max } : {}),
+    ...(config.timeout !== undefined ? { connectTimeoutMillis: config.timeout * 1000 } : {}),
+    ...(config.idleTimeoutMillis !== undefined ? { idleTimeoutMillis: config.idleTimeoutMillis } : {}),
     ...(config.keepAlive !== undefined ? { keepAlive: config.keepAlive } : {}),
     ...(config.keepAliveInitialDelayMillis !== undefined ? { keepAliveInitialDelayMillis: config.keepAliveInitialDelayMillis } : {}),
   };

@@ -5,32 +5,8 @@
  * Implement this interface to support different database engines.
  */
 
-/**
- * Database configuration
- * @internal
- */
-export interface DBConfig {
-  /** Database host (for server-based DBs like PostgreSQL) */
-  host?: string;
-  /** Database port */
-  port?: number;
-  /** Database name or file path (for SQLite) */
-  database: string;
-  /** Username */
-  user?: string;
-  /** Password */
-  password?: string;
-  /** Maximum pool size */
-  max?: number;
-  /** Connection timeout in seconds */
-  timeout?: number;
-  /** Query timeout in seconds */
-  queryTimeout?: number;
-  /** Enable TCP keepalive on connections (recommended for serverless/Lambda) */
-  keepAlive?: boolean;
-  /** Delay in milliseconds before first keepalive probe (default: 10000) */
-  keepAliveInitialDelayMillis?: number;
-}
+import type { DBConfig } from '../types';
+export type { DBConfig };
 
 /**
  * Logger interface
