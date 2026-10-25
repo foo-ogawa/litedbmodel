@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, aroundEach } from 'vitest';
 import {
   resolvePool,
   WriterStickyClock,
@@ -6,6 +6,12 @@ import {
   type AsyncConnectionPool,
   type RoutingConfig,
 } from '../../src/scp';
+import { Middleware } from '../../src/Middleware';
+
+// Each test is one request: writer-sticky records the commit in the Middleware.run scope around it.
+aroundEach(async (runTest) => {
+  await Middleware.run(() => runTest());
+});
 
 // A fake pool IDENTITY: `resolvePool` returns the pool by reference and never acquires, so a bare
 // object stands in for a real AsyncConnectionPool — this is a pure routing unit test (no live DB), the

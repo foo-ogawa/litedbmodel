@@ -1384,8 +1384,18 @@ export abstract class DBModel {
   }
 
   /**
+   * Whether a raw statement returns rows (SELECT / WITH / VALUES / SHOW / PRAGMA / EXPLAIN / TABLE /
+   * …RETURNING). Outside a transaction, `execute()` sends such a statement to the reader and any other
+   * (DDL, maintenance such as VACUUM / CREATE INDEX CONCURRENTLY, writes) to the writer, on both the
+   * SCP and the v1 path. @internal
+   */
+  protected static _returnsRows(sql: string): boolean {
+    return /^\s*(select|with|show|pragma|values|explain|table)\b/i.test(sql) || /\breturning\b/i.test(sql);
+  }
+
+  /**
    * Route a raw `(sql, params)` through the SCP ctx seam (the escape-hatch / Fragment path). A
-   * SELECT / …RETURNING / WITH / VALUES / SHOW / PRAGMA runs the READ seam (reader routing / an
+   * statement that returns rows ({@link _returnsRows}) runs the READ seam (reader routing / an
    * ambient tx pin); any other statement the WRITE seam (writer routing / the tx pin). The seam
    * applies the SCP middleware chain + connection routing; inside a SCP `transaction(fn)` the ALS pin
    * resolves the tx connection so the statement joins the transaction. Phase F-2 (#105). @internal
@@ -1395,8 +1405,7 @@ export abstract class DBModel {
     // v1-built SQL uses `?` placeholders; the SCP seam passes SQL verbatim, so renumber `?`→`$N` for
     // postgres (mysql keeps `?`) — the conversion v1's DBHandler did on the imperative path.
     const rendered = renderRawSql(sql, rt.dialect);
-    const returnsRows = /^\s*(select|with|show|pragma|values|explain|table)\b/i.test(rendered) || /\breturning\b/i.test(rendered);
-    if (returnsRows) {
+    if (this._returnsRows(rendered)) {
       return scpExecuteAsync(ctx, rendered, params, { write: false });
     }
     await scpRunAsync(ctx, rendered, params, { write: true });
@@ -2972,8 +2981,8 @@ export abstract class DBModel {
 
       const handler = this.getHandler();
 
-      // Use writer pool if in withWriter context or writer sticky period
-      const useWriter = this._getWriterContext().getStore() !== undefined || this._shouldUseWriterSticky();
+      // The writer for a statement that does not return rows, inside withWriter, or while writer-sticky
+      const useWriter = !this._returnsRows(s) || this._getWriterContext().getStore() !== undefined || this._shouldUseWriterSticky();
       const result = useWriter
         ? await handler.executeOnWriter(s, p || [])
         : await handler.execute(s, p || []);
@@ -3130,56 +3139,49 @@ export abstract class DBModel {
     const useWriterAfterTransaction = options.useWriterAfterTransaction ?? 
       this._configOptions.useWriterAfterTransaction ?? true;
 
-    // Before the first `await`: the sticky cell must land in the CALLER's async chain (see
-    // WriterStickyClock.begin).
-    const stickyCell = this._writerSticky.begin();
-    try {
-      let attempt = 0;
+    let attempt = 0;
 
-      while (true) {
-        attempt++;
-        const connection = await handler.getConnection();
-        let destroyConnection = false;
+    while (true) {
+      attempt++;
+      const connection = await handler.getConnection();
+      let destroyConnection = false;
 
-        try {
-          await connection.query('BEGIN');
+      try {
+        await connection.query('BEGIN');
 
-          const context: TransactionContext = { connection };
-          const result = await txContext.run(context, func);
+        const context: TransactionContext = { connection };
+        const result = await txContext.run(context, func);
 
-          if (rollbackOnly) {
-            // Rollback instead of commit (for preview/dry-run scenarios)
-            await connection.query('ROLLBACK');
-          } else {
-            await connection.query('COMMIT');
-            if (useWriterAfterTransaction) this._writerSticky.mark();
-          }
-          return result;
-        } catch (error) {
-          destroyConnection = true;
-          try {
-            await connection.query('ROLLBACK');
-          } catch {
-            // ROLLBACK failed — connection is in an unknown state.
-            // destroyConnection is already true; original error is preserved.
-          }
-
-          if (
-            retryOnError &&
-            attempt < retryLimit &&
-            this.isRetryableError(error as Error)
-          ) {
-            await this.sleep(retryDuration * Math.pow(2, attempt - 1));
-            continue;
-          }
-
-          throw error;
-        } finally {
-          connection.release(destroyConnection || undefined);
+        if (rollbackOnly) {
+          // Rollback instead of commit (for preview/dry-run scenarios)
+          await connection.query('ROLLBACK');
+        } else {
+          await connection.query('COMMIT');
+          if (useWriterAfterTransaction) this._writerSticky.mark();
         }
+        return result;
+      } catch (error) {
+        destroyConnection = true;
+        try {
+          await connection.query('ROLLBACK');
+        } catch {
+          // ROLLBACK failed — connection is in an unknown state.
+          // destroyConnection is already true; original error is preserved.
+        }
+
+        if (
+          retryOnError &&
+          attempt < retryLimit &&
+          this.isRetryableError(error as Error)
+        ) {
+          await this.sleep(retryDuration * Math.pow(2, attempt - 1));
+          continue;
+        }
+
+        throw error;
+      } finally {
+        connection.release(destroyConnection || undefined);
       }
-    } finally {
-      this._writerSticky.end(stickyCell);
     }
   }
 

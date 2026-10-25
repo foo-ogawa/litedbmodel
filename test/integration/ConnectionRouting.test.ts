@@ -24,7 +24,7 @@
  * Requires live PG (:5433) + MySQL (:3307). Bring up: `npm run docker:livedb:up`.
  */
 
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, aroundEach } from 'vitest';
 import { Pool } from 'pg';
 import mysql from 'mysql2/promise';
 import {
@@ -49,6 +49,12 @@ import {
   type AsyncConnectionPool,
   type RoutingConfig,
 } from '../../src/scp';
+import { Middleware } from '../../src/Middleware';
+
+// Each test is one request: writer-sticky records the commit in the Middleware.run scope around it.
+aroundEach(async (runTest) => {
+  await Middleware.run(() => runTest());
+});
 
 // ── Connection config (host-published docker ports) ────────────────────────────
 const PG = {
