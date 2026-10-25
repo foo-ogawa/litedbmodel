@@ -21,7 +21,7 @@
  */
 
 import 'reflect-metadata';
-import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, aroundEach } from 'vitest';
 import {
   DBModel,
   model,
@@ -35,6 +35,12 @@ import {
   type ColumnsOf,
   type DBConfig,
 } from '../../src';
+import { Middleware } from '../../src';
+
+// Each test is one request: middleware instances live in the Middleware.run scope around it.
+aroundEach(async (runTest) => {
+  await Middleware.run(() => runTest());
+});
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';

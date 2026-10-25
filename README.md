@@ -988,12 +988,15 @@ const TenantMiddleware = DBModel.createMiddleware({
 DBModel.use(LoggerMiddleware);
 DBModel.use(TenantMiddleware);
 
+// Open one request scope at the request entry (e.g. Fastify)
+fastify.addHook('onRequest', (req, reply, done) => Middleware.run(done));
+
 // Per-request usage (type-safe)
 TenantMiddleware.getCurrentContext().tenantId = req.user.tenantId;
 console.log(TenantMiddleware.getCurrentContext().queryCount);
 ```
 
-**State lifecycle:** Each HTTP request gets its own copy of the `state` object via `AsyncLocalStorage`. States are isolated between concurrent requests and automatically cleaned up when the request ends.
+**State lifecycle:** A request is the scope opened by `Middleware.run(fn)` at the request entry. Each request gets its own copy of the `state` object (via `AsyncLocalStorage`), shared by everything the request does and isolated from concurrent requests; it is dropped when the request ends. Outside any `Middleware.run` scope (startup code, scripts), each access gets a fresh copy that lives only for that access, so state set there never leaks into later requests.
 
 ---
 
@@ -1247,8 +1250,8 @@ DBModel.setConfig(
   {
     writerConfig: { host: 'writer.db.example.com', database: 'mydb', ... },
     
-    // Keep using writer after transaction (default: true)
-    // Avoids stale reads due to replication lag
+    // After a request commits, keep its reads on the writer (default: true)
+    // Avoids stale reads due to replication lag; other requests are unaffected
     useWriterAfterTransaction: true,
     
     // Duration to keep using writer after transaction (ms, default: 5000)
@@ -1263,7 +1266,7 @@ DBModel.setConfig(
 |---------|------------|---------------|
 | Inside `transaction()` | Writer | ✅ Yes |
 | Inside `withWriter()` | Writer | ❌ No (SELECT only) |
-| After transaction (within sticky duration) | Writer | ❌ No |
+| After this request's transaction (within sticky duration) | Writer | ❌ No |
 | Normal query | Reader | ❌ No |
 
 **Important:** Write operations (`create()`, `update()`, `delete()`) require a transaction. Attempting to write outside a transaction throws an error.
@@ -1375,7 +1378,7 @@ const article = await CmsDB.withWriter(async () => {
 | Connection Handler | Per DBBase | Each base class has its own connection pool |
 | Transaction Context | Per DBBase | `AsyncLocalStorage` isolated per base class |
 | Writer Context | Per DBBase | `withWriter()` isolated per base class |
-| Sticky Timer | Per DBBase | Writer sticky duration tracked separately |
+| Sticky Timer | Per DBBase, per request | Only the request (async chain) that committed reads from the writer; concurrent requests keep reading from the reader |
 | Middlewares | **Global** | Cross-cutting concerns shared across all DBs |
 | Model Registry | **Global** | For relation resolution across databases |
 
