@@ -5,13 +5,17 @@
  * an application's requests do. The reader and the writer are two DIFFERENT databases with different
  * rows, so which one a read was served from is visible in the rows it returns — no pool is mocked.
  *
- *   - writer-sticky: a request that committed reads its own row from the writer; requests running at
- *     the same time keep reading from the reader.
+ *   - writer-sticky: a request (a `Middleware.run` scope) that committed reads its own row from the
+ *     writer — also when the commit happened in a function it awaited, after an `await` — while
+ *     requests running at the same time keep reading from the reader; outside a request scope a read
+ *     after a commit goes to the reader.
  *   - middleware state: each `Middleware.run` scope (one request) has its own state; state touched
  *     before the server started (outside any scope) is not shared by the requests.
  *   - transactions running at the same time each see only their own uncommitted row.
  *   - `DBConfig.timeout` bounds the wait for a free pooled connection.
  *   - SQL texts seen once are not left behind as server-side prepared statements.
+ *   - outside a transaction, `execute()` of DDL / maintenance runs on the writer, and a function that
+ *     writes runs on the writer inside `transaction()`.
  *
  * Requires live PG (:5433). Bring up: `npm run docker:livedb:up`.
  */
@@ -87,8 +91,17 @@ describe.skipIf(skipIntegrationTests)('Concurrent requests in one process (PG)',
   /** A writer request commits its row, then reads; reader requests only read, at the same time. */
   async function stickyScenario(): Promise<void> {
     DBModel.setConfig(readerConfig, { writerConfig: pgConfig, writerStickyDuration: 5000 });
-    const app = await serve(async (path) => {
+    // Commits in a function the request awaits, after an `await` of its own.
+    const commitAfterAwait = async (id: string) => {
+      await Promise.resolve();
+      await DBModel.transaction(() => CrItem.create([[CrItem.label, id]]));
+    };
+    const app = await serve((path) => Middleware.run(async () => {
       const [, kind, id] = path.split('/');
+      if (kind === 'write-nested') {
+        await commitAfterAwait(id);
+        return labels();
+      }
       if (kind === 'write') {
         await DBModel.transaction(() => CrItem.create([[CrItem.label, id]]));
         await sleep(30);
@@ -108,13 +121,14 @@ describe.skipIf(skipIntegrationTests)('Concurrent requests in one process (PG)',
       }
       await sleep(60); // after the writers have committed
       return labels();
-    });
+    }));
     try {
       const writers = ['w1', 'w2', 'w3', 'w4'];
       const readers = Array.from({ length: 12 }, (_, i) => `r${i}`);
-      const [writeResults, pairResult, readResults] = await Promise.all([
+      const [writeResults, pairResult, nestedResult, readResults] = await Promise.all([
         Promise.all(writers.map((id) => app.get(`/write/${id}`))),
         app.get('/write-pair/p1'),
+        app.get('/write-nested/n1'),
         Promise.all(readers.map((id) => app.get(`/read/${id}`))),
       ]);
       writeResults.forEach((res, i) => {
@@ -126,6 +140,9 @@ describe.skipIf(skipIntegrationTests)('Concurrent requests in one process (PG)',
       expect(pairResult.body).toContain('p1');
       expect(pairResult.body).not.toContain('p1-rolled-back');
       expect(pairResult.body).not.toContain(READER_ROW);
+      expect(nestedResult.ok).toBe(true);
+      expect(nestedResult.body).toContain('n1');
+      expect(nestedResult.body).not.toContain(READER_ROW);
       for (const res of readResults) {
         expect(res.ok).toBe(true);
         expect(res.body).toEqual([READER_ROW]); // the reader, although other requests just committed
@@ -137,6 +154,19 @@ describe.skipIf(skipIntegrationTests)('Concurrent requests in one process (PG)',
 
   it('writer-sticky is per request', async () => {
     await stickyScenario();
+  });
+
+  it('outside a request scope, a read after a commit goes to the reader', async () => {
+    DBModel.setConfig(readerConfig, { writerConfig: pgConfig, writerStickyDuration: 5000 });
+    const app = await serve(async () => {
+      await DBModel.transaction(() => CrItem.create([[CrItem.label, 'no-scope']]));
+      return labels();
+    });
+    try {
+      expect((await app.get('/')).body).toEqual([READER_ROW]);
+    } finally {
+      await app.close();
+    }
   });
 
   it('middleware state is per Middleware.run scope; state touched before the server is not shared', async () => {
@@ -213,6 +243,20 @@ describe.skipIf(skipIntegrationTests)('Concurrent requests in one process (PG)',
     await expect(DBModel.transaction(() => CrItem.create([[CrItem.label, 'waiter']]))).rejects.toThrow(/timeout/i);
     expect(Date.now() - started).toBeLessThan(2000);
     expect(await holder).toBe('committed');
+  });
+
+  it('execute(): DDL / maintenance outside a transaction and a writing function inside one run on the writer', async () => {
+    // The table and the function exist only on the writer, so a statement sent to the reader fails.
+    await adminQuery(pgConfig.database, 'DROP TABLE IF EXISTS cr_maint; CREATE TABLE cr_maint (id int, at timestamptz)');
+    await adminQuery(pgConfig.database, "CREATE OR REPLACE FUNCTION cr_touch() RETURNS int LANGUAGE sql AS 'INSERT INTO cr_maint VALUES (1, now()) RETURNING 1'");
+    try {
+      DBModel.setConfig(readerConfig, { writerConfig: pgConfig });
+      await DBModel.execute('VACUUM ANALYZE cr_maint');
+      await DBModel.execute('CREATE INDEX CONCURRENTLY cr_maint_at ON cr_maint(at)');
+      await DBModel.transaction(() => DBModel.execute('SELECT cr_touch()'));
+    } finally {
+      await adminQuery(pgConfig.database, 'DROP TABLE IF EXISTS cr_maint; DROP FUNCTION IF EXISTS cr_touch()');
+    }
   });
 
   it('a SQL text seen once does not leave a server-side prepared statement behind', async () => {

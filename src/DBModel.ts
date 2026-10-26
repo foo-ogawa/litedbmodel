@@ -11,7 +11,7 @@ import type { SelectOptions, InsertOptions, UpdateOptions, DeleteOptions, Update
 import { LimitExceededError, WriteOutsideTransactionError, WriteInReadOnlyContextError } from './types';
 import { type Column, type OrderSpec, type CVs, type Conds, type CondsOf, type OrCondOf, type ColumnsOf, createColumn, columnsToNames, pairsToRecord, condsToRecord, serializeCondValue, orderToString, createOrCond } from './Column';
 import { type SqlFragment, type SqlCondition, type SqlTypedFragment, isAnySqlFragment } from './SqlFragment';
-import { createMiddleware as createMiddlewareFn, type MiddlewareClass, type MiddlewareConfig, type CreatedMiddlewareClass, type ExecuteResult } from './Middleware';
+import { createMiddleware as createMiddlewareFn, type Middleware, type MiddlewareClass, type MiddlewareConfig, type CreatedMiddlewareClass, type ExecuteResult } from './Middleware';
 import { serializeRecord, getColumnMeta, getSqlCastMap, type KeyPair, type CompositeKeyPairs } from './decorators';
 import { getTypeCast, getSqlBuilder } from './drivers';
 import type { DriverTypeCast } from './drivers/types';
@@ -357,8 +357,17 @@ export abstract class DBModel {
   }
 
   /**
-   * Check if this async chain should read from the writer because it committed a transaction within
-   * `writerStickyDuration` (read-your-writes for the request that wrote).
+   * Whether a raw statement returns rows (SELECT / WITH / VALUES / SHOW / PRAGMA / EXPLAIN / TABLE /
+   * …RETURNING). Outside a transaction, `execute()` sends such a statement to the reader and any other
+   * (DDL, maintenance such as VACUUM / CREATE INDEX CONCURRENTLY, writes) to the writer. @internal
+   */
+  protected static _returnsRows(sql: string): boolean {
+    return /^\s*(select|with|show|pragma|values|explain|table)\b/i.test(sql) || /\breturning\b/i.test(sql);
+  }
+
+  /**
+   * Check if the current request should read from the writer because it committed a transaction
+   * within `writerStickyDuration` (read-your-writes for the request that wrote).
    */
   protected static _shouldUseWriterSticky(): boolean {
     return this._writerSticky.isSticky();
@@ -532,7 +541,8 @@ export abstract class DBModel {
     let next: (...a: Args) => Promise<R> = core;
     for (let i = this._middlewares.length - 1; i >= 0; i--) {
       const MWClass = this._middlewares[i];
-      const instance = MWClass.getCurrentContext();
+      // The per-request instance, as the registry sees it: a bag of OPTIONAL hooks, looked up by name.
+      const instance = MWClass.getCurrentContext() as Partial<Middleware>;
       const method = instance[methodName] as ((...a: unknown[]) => Promise<R>) | undefined;
       if (method) {
         const currentNext = next;
@@ -559,7 +569,7 @@ export abstract class DBModel {
     let next = core;
     for (let i = this._middlewares.length - 1; i >= 0; i--) {
       const MWClass = this._middlewares[i];
-      const instance = MWClass.getCurrentContext();
+      const instance = MWClass.getCurrentContext() as Partial<Middleware>;
       if (instance.execute) {
         const currentNext = next;
         next = (s, p) => instance.execute!(currentNext, s, p);
@@ -2677,8 +2687,8 @@ export abstract class DBModel {
     const core = async (s: string, p?: unknown[]): Promise<ExecuteResult> => {
       const handler = this.getHandler();
       
-      // Use writer pool if in withWriter context or writer sticky period
-      const useWriter = this._getWriterContext().getStore() !== undefined || this._shouldUseWriterSticky();
+      // The writer for a statement that does not return rows, inside withWriter, or while writer-sticky
+      const useWriter = !this._returnsRows(s) || this._getWriterContext().getStore() !== undefined || this._shouldUseWriterSticky();
       const result = useWriter 
         ? await handler.executeOnWriter(s, p || [])
         : await handler.execute(s, p || []);
@@ -2809,56 +2819,49 @@ export abstract class DBModel {
     const useWriterAfterTransaction = options.useWriterAfterTransaction ?? 
       this._configOptions.useWriterAfterTransaction ?? true;
 
-    // Before the first `await`: the sticky cell must land in the CALLER's async chain (see
-    // WriterStickyClock.begin).
-    const stickyCell = this._writerSticky.begin();
-    try {
-      let attempt = 0;
+    let attempt = 0;
 
-      while (true) {
-        attempt++;
-        const connection = await handler.getConnection();
-        let destroyConnection = false;
+    while (true) {
+      attempt++;
+      const connection = await handler.getConnection();
+      let destroyConnection = false;
 
-        try {
-          await connection.query('BEGIN');
+      try {
+        await connection.query('BEGIN');
 
-          const context: TransactionContext = { connection };
-          const result = await txContext.run(context, func);
+        const context: TransactionContext = { connection };
+        const result = await txContext.run(context, func);
 
-          if (rollbackOnly) {
-            // Rollback instead of commit (for preview/dry-run scenarios)
-            await connection.query('ROLLBACK');
-          } else {
-            await connection.query('COMMIT');
-            if (useWriterAfterTransaction) this._writerSticky.mark();
-          }
-          return result;
-        } catch (error) {
-          destroyConnection = true;
-          try {
-            await connection.query('ROLLBACK');
-          } catch {
-            // ROLLBACK failed — connection is in an unknown state.
-            // destroyConnection is already true; original error is preserved.
-          }
-
-          if (
-            retryOnError &&
-            attempt < retryLimit &&
-            this.isRetryableError(error as Error)
-          ) {
-            await this.sleep(retryDuration * Math.pow(2, attempt - 1));
-            continue;
-          }
-
-          throw error;
-        } finally {
-          connection.release(destroyConnection || undefined);
+        if (rollbackOnly) {
+          // Rollback instead of commit (for preview/dry-run scenarios)
+          await connection.query('ROLLBACK');
+        } else {
+          await connection.query('COMMIT');
+          if (useWriterAfterTransaction) this._writerSticky.mark();
         }
+        return result;
+      } catch (error) {
+        destroyConnection = true;
+        try {
+          await connection.query('ROLLBACK');
+        } catch {
+          // ROLLBACK failed — connection is in an unknown state.
+          // destroyConnection is already true; original error is preserved.
+        }
+
+        if (
+          retryOnError &&
+          attempt < retryLimit &&
+          this.isRetryableError(error as Error)
+        ) {
+          await this.sleep(retryDuration * Math.pow(2, attempt - 1));
+          continue;
+        }
+
+        throw error;
+      } finally {
+        connection.release(destroyConnection || undefined);
       }
-    } finally {
-      this._writerSticky.end(stickyCell);
     }
   }
 
