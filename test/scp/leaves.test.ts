@@ -11,7 +11,7 @@
  *   - a write routes through the `run` seam and returns the `[{changes,lastInsertRowid}]` summary.
  */
 
-import { test, expect } from 'vitest';
+import { test, expect, aroundEach } from 'vitest';
 import { executeSQL, pluck, group, leafHandlers, leafHandlersAsync, type LeafContext } from '../../src/scp/leaves';
 import { LimitExceededError } from '../../src/scp/errors';
 import type { Value } from 'behavior-contracts/runtime';
@@ -27,6 +27,12 @@ import {
 } from '../../src/scp/exec-context';
 import { ConnectionRegistry, WriterStickyClock, withWriter } from '../../src/scp/connection-routing';
 import { createMiddleware, use, withMiddlewareScope } from '../../src/scp/middleware';
+import { Middleware } from '../../src/Middleware';
+
+// Each test is one request: writer-sticky records the commit in the Middleware.run scope around it.
+aroundEach(async (runTest) => {
+  await Middleware.run(() => runTest());
+});
 
 interface Call { kind: 'execute' | 'executeSafe' | 'run'; sql: string; params: unknown[] }
 

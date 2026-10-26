@@ -1,4 +1,4 @@
-[**litedbmodel v2.2.11**](../README.md)
+[**litedbmodel v2.2.12**](../README.md)
 
 ***
 
@@ -6,7 +6,7 @@
 
 # Abstract Class: Middleware
 
-Defined in: [Middleware.ts:140](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Middleware.ts#L140)
+Defined in: [Middleware.ts:137](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Middleware.ts#L137)
 
 Base class for middlewares.
 
@@ -64,7 +64,7 @@ new Middleware(): Middleware;
 static getCurrentContext<T>(this: () => T): T;
 ```
 
-Defined in: [Middleware.ts:146](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Middleware.ts#L146)
+Defined in: [Middleware.ts:143](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Middleware.ts#L143)
 
 Get the current request's instance of this middleware. Inside a [Middleware.run](#run) scope the
 instance is created on first access and shared by the rest of the scope; outside any scope each
@@ -94,12 +94,13 @@ call gets a new instance that lives only for that call.
 static run<R>(fn: () => R): R;
 ```
 
-Defined in: [Middleware.ts:163](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Middleware.ts#L163)
+Defined in: [Middleware.ts:161](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Middleware.ts#L161)
 
-Run `fn` as one request: the middleware instances `fn` uses (directly or through DBModel
-operations) are created inside the scope and are not shared with any other request. Call it at
-the request entry. `Middleware.run` gives every middleware a fresh instance; `X.run` gives `X` a
-fresh instance and keeps the enclosing scope's instances of the others.
+Run `fn` as one request. Call it at the request entry. Everything `fn` does (directly or through
+DBModel operations, at any `await` depth) shares the request's state and no other request sees
+it: the middleware instances, and the request's commits that make its later reads go to the
+writer (writer-sticky). `Middleware.run` opens a new request; `X.run` inside a request gives `X`
+a fresh instance and keeps the rest of the enclosing request.
 
 #### Type Parameters
 
@@ -125,7 +126,7 @@ fresh instance and keeps the enclosing scope's instances of the others.
 static hasContext(): boolean;
 ```
 
-Defined in: [Middleware.ts:173](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Middleware.ts#L173)
+Defined in: [Middleware.ts:174](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Middleware.ts#L174)
 
 Check if the current request scope holds an instance of this middleware
 
@@ -141,7 +142,7 @@ Check if the current request scope holds an instance of this middleware
 static clearContext(): void;
 ```
 
-Defined in: [Middleware.ts:180](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Middleware.ts#L180)
+Defined in: [Middleware.ts:181](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Middleware.ts#L181)
 
 Drop this middleware's instance from the current request scope (for testing)
 
@@ -157,7 +158,7 @@ Drop this middleware's instance from the current request scope (for testing)
 optional init(): void;
 ```
 
-Defined in: [Middleware.ts:189](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Middleware.ts#L189)
+Defined in: [Middleware.ts:190](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Middleware.ts#L190)
 
 Called when instance is created
 
@@ -178,7 +179,7 @@ optional find<T>(
 options?: SelectOptions): Promise<InstanceType<T>[]>;
 ```
 
-Defined in: [Middleware.ts:192](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Middleware.ts#L192)
+Defined in: [Middleware.ts:193](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Middleware.ts#L193)
 
 Intercept find()
 
@@ -215,7 +216,7 @@ optional findOne<T>(
 options?: SelectOptions): Promise<InstanceType<T> | null>;
 ```
 
-Defined in: [Middleware.ts:201](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Middleware.ts#L201)
+Defined in: [Middleware.ts:202](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Middleware.ts#L202)
 
 Intercept findOne()
 
@@ -252,7 +253,7 @@ optional findById<T>(
 options?: SelectOptions): Promise<InstanceType<T>[]>;
 ```
 
-Defined in: [Middleware.ts:210](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Middleware.ts#L210)
+Defined in: [Middleware.ts:211](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Middleware.ts#L211)
 
 Intercept findById()
 
@@ -288,7 +289,7 @@ optional count<T>(
 conditions: Conds): Promise<number>;
 ```
 
-Defined in: [Middleware.ts:219](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Middleware.ts#L219)
+Defined in: [Middleware.ts:220](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Middleware.ts#L220)
 
 Intercept count()
 
@@ -324,7 +325,7 @@ optional create<T>(
 options?: InsertOptions<unknown>): Promise<PkeyResult | null>;
 ```
 
-Defined in: [Middleware.ts:227](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Middleware.ts#L227)
+Defined in: [Middleware.ts:228](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Middleware.ts#L228)
 
 Intercept create()
 
@@ -361,7 +362,7 @@ optional createMany<T>(
 options?: InsertOptions<unknown>): Promise<PkeyResult | null>;
 ```
 
-Defined in: [Middleware.ts:236](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Middleware.ts#L236)
+Defined in: [Middleware.ts:237](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Middleware.ts#L237)
 
 Intercept createMany()
 
@@ -399,7 +400,7 @@ optional update<T>(
 options?: UpdateOptions): Promise<PkeyResult | null>;
 ```
 
-Defined in: [Middleware.ts:245](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Middleware.ts#L245)
+Defined in: [Middleware.ts:246](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Middleware.ts#L246)
 
 Intercept update()
 
@@ -437,7 +438,7 @@ optional updateMany<T>(
 options?: UpdateManyOptions): Promise<PkeyResult | null>;
 ```
 
-Defined in: [Middleware.ts:255](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Middleware.ts#L255)
+Defined in: [Middleware.ts:256](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Middleware.ts#L256)
 
 Intercept updateMany()
 
@@ -474,7 +475,7 @@ optional delete<T>(
 options?: DeleteOptions): Promise<PkeyResult | null>;
 ```
 
-Defined in: [Middleware.ts:264](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Middleware.ts#L264)
+Defined in: [Middleware.ts:265](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Middleware.ts#L265)
 
 Intercept delete()
 
@@ -510,7 +511,7 @@ optional execute(
 params?: unknown[]): Promise<ExecuteResult>;
 ```
 
-Defined in: [Middleware.ts:273](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Middleware.ts#L273)
+Defined in: [Middleware.ts:274](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Middleware.ts#L274)
 
 Intercept execute()
 
@@ -540,7 +541,7 @@ optional query<T>(
 params?: unknown[]): Promise<InstanceType<T>[]>;
 ```
 
-Defined in: [Middleware.ts:281](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Middleware.ts#L281)
+Defined in: [Middleware.ts:282](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Middleware.ts#L282)
 
 Intercept query()
 

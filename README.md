@@ -1122,16 +1122,21 @@ const rankings = await UserRanking.query(`
 ### DBModel.execute() - Non-Model Operations
 
 Use `execute()` for DDL, maintenance, and operations that don't return model instances.
-Accepts either raw SQL strings or `sql` tagged templates:
+Accepts either raw SQL strings or `sql` tagged templates. Outside a transaction, a statement that
+returns rows (`SELECT`, `WITH`, `… RETURNING`, …) runs on the reader and any other statement on the
+writer. A `SELECT` that calls a function which writes is still a `SELECT`, so call it inside
+`transaction()`:
 
 ```typescript
 import { sql } from 'litedbmodel';
 
-// With sql tag — parameters are co-located
-await DBModel.execute(sql`SELECT process_daily_aggregates(${targetDate})`);
-await DBModel.execute(sql`SELECT pg_notify(${'events'}, ${JSON.stringify(payload)})`);
+// Functions that write — inside a transaction (on the writer)
+await DBModel.transaction(async () => {
+  await DBModel.execute(sql`SELECT process_daily_aggregates(${targetDate})`);
+  await DBModel.execute(sql`SELECT pg_notify(${'events'}, ${JSON.stringify(payload)})`);
+});
 
-// Raw SQL strings for DDL and maintenance
+// DDL and maintenance — these cannot run inside a transaction; they run on the writer
 await DBModel.execute('REFRESH MATERIALIZED VIEW CONCURRENTLY monthly_sales_summary');
 await DBModel.execute('VACUUM ANALYZE orders');
 await DBModel.execute('CREATE INDEX CONCURRENTLY idx_orders_date ON orders(created_at)');
@@ -1333,7 +1338,10 @@ DBModel.setConfig(
 | Inside `transaction()` | Writer | ✅ Yes |
 | Inside `withWriter()` | Writer | ❌ No (SELECT only) |
 | After this request's transaction (within sticky duration) | Writer | ❌ No |
+| `execute()` of a statement that returns no rows (DDL, maintenance) | Writer | — |
 | Normal query | Reader | ❌ No |
+
+**Request scope:** a request is the scope opened by `Middleware.run(fn)` at the request entry (e.g. Fastify: `fastify.addHook('onRequest', (req, reply, done) => Middleware.run(done))`). After a request commits, every read of that request — at any `await` depth — goes to the writer for `writerStickyDuration`; concurrent requests keep reading from the reader. Outside a request scope, a read after a commit goes to the reader.
 
 **Important:** Write operations (`create()`, `update()`, `delete()`) require a transaction. Attempting to write outside a transaction throws an error.
 
@@ -1444,7 +1452,7 @@ const article = await CmsDB.withWriter(async () => {
 | Connection Handler | Per DBBase | Each base class has its own connection pool |
 | Transaction Context | Per DBBase | `AsyncLocalStorage` isolated per base class |
 | Writer Context | Per DBBase | `withWriter()` isolated per base class |
-| Sticky Timer | Per DBBase, per request | Only the request (async chain) that committed reads from the writer; concurrent requests keep reading from the reader |
+| Sticky Timer | Per DBBase, per request | Only the request (`Middleware.run` scope) that committed reads from the writer; concurrent requests keep reading from the reader |
 | Middlewares | **Global** | Cross-cutting concerns shared across all DBs |
 | Model Registry | **Global** | For relation resolution across databases |
 

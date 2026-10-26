@@ -1,8 +1,8 @@
-[**litedbmodel v2.2.11**](README.md)
+[**litedbmodel v2.2.12**](README.md)
 
 ***
 
-# litedbmodel v2.2.11
+# litedbmodel v2.2.12
 
 litedbmodel - A lightweight TypeScript data access layer
 
@@ -114,7 +114,7 @@ type MiddlewareClass = {
 };
 ```
 
-Defined in: [Middleware.ts:306](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Middleware.ts#L306)
+Defined in: [Middleware.ts:307](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Middleware.ts#L307)
 
 Type for middleware class (not instance) — what [DBModel.use](classes/DBModel.md#use) registers.
 
@@ -139,7 +139,7 @@ runtime-correct call, and every stateful middleware in the README was affected.
 getCurrentContext(): object;
 ```
 
-Defined in: [Middleware.ts:306](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Middleware.ts#L306)
+Defined in: [Middleware.ts:307](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Middleware.ts#L307)
 
 ###### Returns
 

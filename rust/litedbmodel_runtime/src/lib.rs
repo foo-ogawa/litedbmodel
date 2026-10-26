@@ -21,7 +21,7 @@ pub mod wire;
 pub mod livedb;
 
 /// Version mirrored from package.json by scripts/sync-versions.mjs (SSoT).
-pub const VERSION: &str = "2.2.11";
+pub const VERSION: &str = "2.2.12";
 
 // ── public surface (mirrors the Python `__all__`) ──────────────────────────────
 pub use connection_routing::{

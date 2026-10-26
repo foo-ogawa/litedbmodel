@@ -1,4 +1,4 @@
-[**litedbmodel v2.2.11**](../README.md)
+[**litedbmodel v2.2.12**](../README.md)
 
 ***
 
@@ -10,7 +10,7 @@
 function createMiddleware<S>(config: MiddlewareConfig<S>): CreatedMiddlewareClass<S>;
 ```
 
-Defined in: [Middleware.ts:493](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Middleware.ts#L493)
+Defined in: [Middleware.ts:494](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Middleware.ts#L494)
 
 Create a middleware class from a configuration object.
 
