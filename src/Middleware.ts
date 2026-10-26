@@ -4,7 +4,7 @@
  * Class-based middleware with per-request instance via AsyncLocalStorage.
  */
 
-import { AsyncLocalStorage } from 'async_hooks';
+import { currentRequestScope, runInRequestScope } from './RequestScope';
 import type { DBModel } from './DBModel';
 import type { SelectOptions, InsertOptions, UpdateOptions, DeleteOptions, UpdateManyOptions, PkeyResult } from './types';
 import type { Column, Conds } from './Column';
@@ -96,9 +96,6 @@ export type NextQuery<T extends typeof DBModel> = (
 // Middleware Base Class
 // ===========================================
 
-/** The current request's middleware instances, by middleware class (see {@link Middleware.run}). */
-const requestScope = new AsyncLocalStorage<Map<Function, Middleware>>();
-
 /**
  * Base class for middlewares.
  * 
@@ -144,41 +141,45 @@ export abstract class Middleware {
    * call gets a new instance that lives only for that call.
    */
   static getCurrentContext<T extends Middleware>(this: new () => T): T {
-    const scope = requestScope.getStore();
-    let instance = scope?.get(this) as T | undefined;
+    const scope = currentRequestScope();
+    let instance = scope?.middlewares.get(this) as T | undefined;
     if (!instance) {
       instance = new this();
       instance.init?.();
-      scope?.set(this, instance);
+      scope?.middlewares.set(this, instance);
     }
     return instance;
   }
 
   /**
-   * Run `fn` as one request: the middleware instances `fn` uses (directly or through DBModel
-   * operations) are created inside the scope and are not shared with any other request. Call it at
-   * the request entry. `Middleware.run` gives every middleware a fresh instance; `X.run` gives `X` a
-   * fresh instance and keeps the enclosing scope's instances of the others.
+   * Run `fn` as one request. Call it at the request entry. Everything `fn` does (directly or through
+   * DBModel operations, at any `await` depth) shares the request's state and no other request sees
+   * it: the middleware instances, and the request's commits that make its later reads go to the
+   * writer (writer-sticky). `Middleware.run` opens a new request; `X.run` inside a request gives `X`
+   * a fresh instance and keeps the rest of the enclosing request.
    */
   static run<R>(fn: () => R): R {
-    const enclosing = requestScope.getStore();
-    const scope = new Map(this === Middleware || enclosing === undefined ? [] : enclosing);
-    scope.delete(this);
-    return requestScope.run(scope, fn);
+    const enclosing = currentRequestScope();
+    if (this === Middleware || enclosing === undefined) {
+      return runInRequestScope({ middlewares: new Map(), commits: new Map() }, fn);
+    }
+    const middlewares = new Map(enclosing.middlewares);
+    middlewares.delete(this);
+    return runInRequestScope({ middlewares, commits: enclosing.commits }, fn);
   }
 
   /**
    * Check if the current request scope holds an instance of this middleware
    */
   static hasContext(): boolean {
-    return requestScope.getStore()?.has(this) ?? false;
+    return currentRequestScope()?.middlewares.has(this) ?? false;
   }
 
   /**
    * Drop this middleware's instance from the current request scope (for testing)
    */
   static clearContext(): void {
-    requestScope.getStore()?.delete(this);
+    currentRequestScope()?.middlewares.delete(this);
   }
 
   // ===========================================
@@ -287,8 +288,12 @@ export abstract class Middleware {
   ): Promise<InstanceType<T>[]>;
 }
 
-/** Type for middleware class (not instance) */
-export type MiddlewareClass = typeof Middleware & (new () => Middleware);
+/**
+ * Type for middleware class (not instance): what `DBModel.use` needs from it — the current request's
+ * instance (`getCurrentContext()`), whose hooks are looked up by name. A class made by
+ * {@link createMiddleware} has its own state shape, so this does not ask for the full `Middleware`.
+ */
+export type MiddlewareClass = { getCurrentContext(): object };
 
 // ===========================================
 // createMiddleware Factory Function
