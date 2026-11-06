@@ -36,13 +36,16 @@ function makeError(message: string, code?: string): Error {
 }
 
 /** A fake owned-connection pool recording every statement and every release. */
-function makeFakePool(behave: (sql: string) => void | Promise<void> = () => {}) {
+function makeFakePool(
+  behave: (sql: string) => void | Promise<void> = () => {},
+  result: { rows?: Record<string, unknown>[]; changes?: number } = {},
+) {
   const log: string[] = [];
   const releases: boolean[] = [];
   let acquired = 0;
   const conn: AsyncConnection = {
-    async execute(sql) { log.push(sql); await behave(sql); return []; },
-    async run(sql) { log.push(sql); await behave(sql); return { changes: 0, lastInsertRowid: 0 }; },
+    async execute(sql) { log.push(sql); await behave(sql); return result.rows ?? []; },
+    async run(sql) { log.push(sql); await behave(sql); return { changes: result.changes ?? 0, lastInsertRowid: 0 }; },
   };
   const pool: AsyncConnectionPool = {
     async acquire() { acquired++; return conn; },
@@ -143,6 +146,36 @@ describe('DBModel.transaction (SCP route)', () => {
     await expect(ScpModel.transaction(func, { retryDuration: 1 })).resolves.toBe('ok');
     expect(fake.acquired()).toBe(2);
     expect(func).toHaveBeenCalledTimes(2);
+  });
+
+  it('getCurrentConnection().query sends the SQL on the transaction connection and returns its result (#331)', async () => {
+    const fake = makeFakePool(() => {}, { rows: [{ id: 1 }], changes: 3 });
+    const { ScpModel } = makeModel(fake.pool);
+
+    let selected: unknown;
+    let updated: unknown;
+    await ScpModel.transaction(async () => {
+      const conn = ScpModel.getCurrentConnection()!;
+      selected = await conn.query('SELECT id FROM t WHERE id = $1', [1]);
+      updated = await conn.query('UPDATE t SET a = $1', [2]);
+    });
+
+    expect(fake.log).toEqual(['BEGIN', 'SELECT id FROM t WHERE id = $1', 'UPDATE t SET a = $1', 'COMMIT']);
+    expect(selected).toEqual({ rows: [{ id: 1 }], rowCount: 1 });
+    expect(updated).toEqual({ rows: [], rowCount: 3 });
+    expect(fake.acquired()).toBe(1);
+  });
+
+  it('getCurrentConnection().query leaked from the transaction is rejected after func settled and not sent (#331)', async () => {
+    const fake = makeFakePool();
+    const { ScpModel } = makeModel(fake.pool);
+
+    let leaked: ReturnType<typeof ScpModel.getCurrentConnection>;
+    await ScpModel.transaction(async () => {
+      leaked = ScpModel.getCurrentConnection();
+    });
+    await expect(leaked!.query('SELECT late')).rejects.toBeInstanceOf(TransactionClosedError);
+    expect(fake.log).toEqual(['BEGIN', 'COMMIT']);
   });
 
   it('rejects an un-awaited DBModel.execute started in func once func has settled, without sending it', async () => {

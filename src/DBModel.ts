@@ -36,10 +36,11 @@ import {
 } from './scp/dbmodel-runtime';
 import {
   transaction as scpTransaction,
-  executeAsync as scpExecuteAsync,
-  runAsync as scpRunAsync,
+  currentPinnedAsyncConnection,
+  runWithPinnedAsyncConnection,
   type AsyncExecutionContext,
 } from './scp/exec-context';
+import { rawExecuteAsync, type RawResult } from './scp/middleware';
 // The row-lock tail SSoT (` FOR UPDATE` / ` FOR SHARE`) — shared with the SCP `compileSelect`, so the
 // imperative builder and the compiled statement render byte-identical locking clauses.
 import { lockTail } from './scp/makesql/compile-select';
@@ -1395,22 +1396,16 @@ export abstract class DBModel {
   }
 
   /**
-   * Route a raw `(sql, params)` through the SCP ctx seam (the escape-hatch / Fragment path). A
-   * statement that returns rows ({@link _returnsRows}) runs the READ seam (reader routing / an
-   * ambient tx pin); any other statement the WRITE seam (writer routing / the tx pin). The seam
-   * applies the SCP middleware chain + connection routing; inside a SCP `transaction(fn)` the ALS pin
-   * resolves the tx connection so the statement joins the transaction. Phase F-2 (#105). @internal
+   * Route a raw `(sql, params)` through the SCP ctx seam (the escape-hatch / Fragment path) via
+   * `rawExecuteAsync`: a statement that returns rows runs the READ seam, any other the WRITE seam. The
+   * seam applies the SCP middleware chain + connection routing; inside a SCP `transaction(fn)` the ALS
+   * pin resolves the tx connection so the statement joins the transaction. Phase F-2 (#105). @internal
    */
-  protected static async _scpRawExecute(sql: string, params: unknown[], rt: RuntimeContext): Promise<Record<string, unknown>[]> {
+  protected static _scpRawExecute(sql: string, params: unknown[], rt: RuntimeContext): Promise<RawResult> {
     const ctx = rt.ctx as unknown as AsyncExecutionContext;
     // v1-built SQL uses `?` placeholders; the SCP seam passes SQL verbatim, so renumber `?`→`$N` for
     // postgres (mysql keeps `?`) — the conversion v1's DBHandler did on the imperative path.
-    const rendered = renderRawSql(sql, rt.dialect);
-    if (this._returnsRows(rendered)) {
-      return scpExecuteAsync(ctx, rendered, params, { write: false });
-    }
-    await scpRunAsync(ctx, rendered, params, { write: true });
-    return [];
+    return rawExecuteAsync(ctx, renderRawSql(sql, rt.dialect), params);
   }
 
   /**
@@ -2976,7 +2971,7 @@ export abstract class DBModel {
       // -fallback op (CTE / QUERY view / updateMany / findById) join a `transaction(fn)` correctly.
       const rt = this._getScpRuntime();
       if (rt !== null && this._scpUsable()) {
-        const rows = await this._scpRawExecute(s, p || [], rt);
+        const { rows } = await this._scpRawExecute(s, p || [], rt);
         return { rows, rowCount: rows.length };
       }
 
@@ -3116,12 +3111,18 @@ export abstract class DBModel {
         rt.ctx,
         () => {
           // Set the v1 tx marker for the duration of the body (same async scope as the SCP pin). The
-          // sentinel connection is never used for I/O — v1-fallback ops route through the SCP seam.
-          const sentinel: DBConnection = {
-            query: async () => ({ rows: [], rowCount: 0 }),
+          // marker's connection (what `getCurrentConnection()` returns) runs its SQL through the SCP
+          // seam inside the transaction's own pin (captured here, so a leaked reference still reaches
+          // the pinned connection — rejected by its guard once the body settled — never a pooled one).
+          const pin = currentPinnedAsyncConnection()!;
+          const txConnection: DBConnection = {
+            query: (sql, params) => runWithPinnedAsyncConnection(pin.conn, pin.db, async () => {
+              const { rows, rowCount } = await this._scpRawExecute(sql, params ?? [], rt);
+              return { rows, rowCount: rowCount ?? rows.length };
+            }),
             release: () => undefined,
           };
-          return txContext.run({ connection: sentinel }, func);
+          return txContext.run({ connection: txConnection }, func);
         },
         options,
         rt.dialect,
