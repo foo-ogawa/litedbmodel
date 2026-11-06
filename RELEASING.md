@@ -68,7 +68,7 @@ submitted once at packagist.org. Everything else below is background for the nex
 
 | Secret | Purpose | Status |
 |---|---|---|
-| `NPM_TOKEN` | npm publish (`litedbmodel`) | ✅ present — **verify it is an *automation* token** with publish rights (bypasses 2FA) |
+| — | npm publish (`litedbmodel`) | **No secret.** `publish.yml` uses npm **trusted publishing** (OIDC, `id-token: write`): the trusted publisher on npmjs.com is `foo-ogawa/litedbmodel` + `publish.yml`, no environment, `npm publish` allowed. The former `NPM_TOKEN` (a token that bypassed 2FA) is to be deleted |
 | `PYPI_API_TOKEN` | PyPI publish (`litedbmodel-runtime`) | ✅ present |
 | `CARGO_REGISTRY_TOKEN` | crates.io publish (`litedbmodel_runtime`) | ✅ present — the publishing account needs a verified email |
 | `BEHAVIOR_CONTRACTS_PAT` | private `behavior-contracts` **Go** module fetch (CI + go build) | ✅ present — fine-grained PAT, **Contents: Read on `foo-ogawa/behavior-contracts`** (same name graphddb uses) |
