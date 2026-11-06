@@ -656,8 +656,9 @@ def with_transaction_decided(
                 # The body returned: from here only the runtime's tx-control runs. settle() waits for a
                 # statement still in flight and reports whether one was unfinished.
                 unfinished = guard.settle()
-            except BaseException:
-                guard.settle()  # the body raised (settle is idempotent)
+            except BaseException as body_exc:
+                # The body raised: settle() waits for a statement still in flight (idempotent).
+                body_unfinished = guard.settle()
                 # A body error rolls back (BEST-EFFORT) then re-raises the ORIGINAL failure. A rollback
                 # that itself raises must NOT mask the body error — swallow it but keep destroy=True so
                 # the finally drops the poisoned connection. A clean rollback ⇒ back to the pool.
@@ -666,6 +667,11 @@ def with_transaction_decided(
                     destroy = False
                 except Exception:
                     pass  # poisoned; destroy stays True. Original body error surfaces via `raise`.
+                if body_unfinished:
+                    # A statement started inside the body had not finished when it failed: surface
+                    # TransactionClosedError (the body error is its __cause__) so the retry decision does
+                    # not depend on the body's error and the body is never re-run. #330.
+                    raise TransactionClosedError(unfinished=True) from body_exc
                 raise
             if unfinished:
                 # A statement started inside the body had not finished when it returned: never COMMIT it
