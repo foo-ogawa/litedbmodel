@@ -69,6 +69,7 @@ from .tx_options import (
     WriteInReadOnlyContextError,
     WriteOutsideTransactionError,
     check_write_allowed,
+    is_connection_error,
     is_retryable_tx_error,
     isolation_prelude,
 )
@@ -763,8 +764,12 @@ def transaction(
         # ONE attempt on a FRESH owned connection (a retry after a connection error thus RECONNECTS).
         # `fn` reads the pinned tx ctx from the ambient contextvar (run_with_pinned_context inside
         # with_transaction_decided), so every op JOINs this one connection.
+        body_returned = False
+
         def body(_tx_ctx: ExecutionContext) -> TxDecision:
+            nonlocal body_returned
             value = fn()
+            body_returned = True
             # rollback_only (dry-run): ROLLBACK but still return the body value — no committed change.
             return rollback(value) if opts.rollback_only else commit(value)
 
@@ -784,7 +789,17 @@ def transaction(
             # live retry path (neuter `.wrapped` → this classification goes RED). An already-mapped
             # `SqlFailure` (e.g. surfaced by the guarded write seam) is left as-is (no re-map).
             failure = error if isinstance(error, SqlFailure) else map_sqlite_error(error)
-            if attempt < retry_limit and opts.retry_on_error and is_retryable_tx_error(failure):
+            # A failure after the body returned is the COMMIT stage (a rollback_only tx has none). A
+            # connection error there may have reached the server after the COMMIT took effect, so
+            # re-running the body could write twice: surface it. A serialization failure / deadlock at
+            # COMMIT means the tx was not committed and stays retryable. #330 defect 2.
+            commit_connection_error = body_returned and not opts.rollback_only and is_connection_error(failure)
+            if (
+                attempt < retry_limit
+                and opts.retry_on_error
+                and not commit_connection_error
+                and is_retryable_tx_error(failure)
+            ):
                 # Exponential backoff before RETRYing the whole transaction on a fresh connection.
                 backoff_ms = opts.retry_duration * (2 ** (attempt - 1))
                 if backoff_ms > 0:
