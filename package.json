@@ -59,6 +59,9 @@
     "type": "git",
     "url": "git+https://github.com/foo-ogawa/litedbmodel.ts.git"
   },
+  "publishConfig": {
+    "tag": "release-1.2"
+  },
   "dependencies": {
     "reflect-metadata": "^0.2.2"
   },
