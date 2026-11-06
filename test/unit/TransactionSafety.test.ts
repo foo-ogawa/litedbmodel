@@ -136,4 +136,29 @@ describe('DBModel.transaction', () => {
     // COMMIT is sent by the transaction itself on the original connection
     expect(query.mock.calls.map((c) => c[0])).toEqual(['BEGIN', 'SELECT 1', 'COMMIT']);
   });
+
+  it('rejects an un-awaited query started in func once func has rejected and ROLLBACK was sent', async () => {
+    const query = vi.fn(async () => ({ rows: [], rowCount: 0 }));
+    const connection = { query, release: vi.fn() };
+    const { TxModel } = makeModel(connection);
+    const funcError = new Error('func failed');
+
+    let openGate!: () => void;
+    const gate = new Promise<void>((resolve) => { openGate = resolve; });
+    let pending: Promise<unknown> | undefined;
+    await expect(
+      TxModel.transaction(async () => {
+        const conn = getTransactionConnection()!;
+        // started inside func but not awaited: it reaches the connection only after the gate opens
+        pending = gate.then(() => conn.query('SELECT late'));
+        throw funcError;
+      }, { retryOnError: false }),
+    ).rejects.toBe(funcError);
+
+    const callsAfterRollback = query.mock.calls.length;
+    openGate();
+    await expect(pending).rejects.toBeInstanceOf(TransactionClosedError);
+    expect(query).toHaveBeenCalledTimes(callsAfterRollback);
+    expect(query.mock.calls.map((c) => c[0])).toEqual(['BEGIN', 'ROLLBACK']);
+  });
 });
