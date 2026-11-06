@@ -357,12 +357,16 @@ export abstract class DBModel {
   }
 
   /**
-   * Whether a raw statement returns rows (SELECT / WITH / VALUES / SHOW / PRAGMA / EXPLAIN / TABLE /
-   * …RETURNING). Outside a transaction, `execute()` sends such a statement to the reader and any other
-   * (DDL, maintenance such as VACUUM / CREATE INDEX CONCURRENTLY, writes) to the writer. @internal
+   * Whether a raw statement is certainly read-only: it starts with SELECT / SHOW / PRAGMA / VALUES /
+   * EXPLAIN / TABLE and has no RETURNING, or starts with WITH and has no INSERT / UPDATE / DELETE / MERGE.
+   * Outside a transaction, `execute()` sends such a statement to the reader (and resends it after a
+   * connection error); any other statement (DDL, maintenance such as VACUUM / CREATE INDEX CONCURRENTLY,
+   * writes including `…RETURNING`) is treated as a write: it goes to the writer and is not resent. @internal
    */
-  protected static _returnsRows(sql: string): boolean {
-    return /^\s*(select|with|show|pragma|values|explain|table)\b/i.test(sql) || /\breturning\b/i.test(sql);
+  protected static _isReadOnlyStatement(sql: string): boolean {
+    if (/\breturning\b/i.test(sql)) return false;
+    if (/^\s*with\b/i.test(sql)) return !/\b(insert|update|delete|merge)\b/i.test(sql);
+    return /^\s*(select|show|pragma|values|explain|table)\b/i.test(sql);
   }
 
   /**
@@ -2687,11 +2691,11 @@ export abstract class DBModel {
     const core = async (s: string, p?: unknown[]): Promise<ExecuteResult> => {
       const handler = this.getHandler();
       
-      // The writer for a statement that does not return rows, inside withWriter, or while writer-sticky
-      const returnsRows = this._returnsRows(s);
-      const useWriter = !returnsRows || this._getWriterContext().getStore() !== undefined || this._shouldUseWriterSticky();
+      // The writer for a statement that is not certainly read-only, inside withWriter, or while writer-sticky
+      const isReadOnly = this._isReadOnlyStatement(s);
+      const useWriter = !isReadOnly || this._getWriterContext().getStore() !== undefined || this._shouldUseWriterSticky();
       const result = useWriter
-        ? await handler.executeOnWriter(s, p || [], returnsRows)
+        ? await handler.executeOnWriter(s, p || [], isReadOnly)
         : await handler.execute(s, p || []);
       
       return {

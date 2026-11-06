@@ -388,3 +388,78 @@ describe('a read routed to the writer retries after a connection error', () => {
     expect(query).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('DBModel.execute() routes by whether the statement is read-only (#332)', () => {
+  // A separate fake for each pool: the reader pool and the writer pool.
+  function makeRoutedModel(driverType: 'postgres' | 'mysql', readerQuery: ReturnType<typeof vi.fn>, writerQuery: ReturnType<typeof vi.fn>) {
+    const handler = new DBHandler(
+      { driver: driverType, host: `tx-safety-routing-${driverType}`, port: 5432, database: 'tx_safety_db', user: 'test', password: 'test' },
+      { logger: silentLogger },
+    );
+    const driver = handler.getDriver() as unknown as { pool: unknown; writerPool: unknown };
+    driver.pool = { query: readerQuery };
+    driver.writerPool = { query: writerQuery };
+    class RoutedModel extends DBModel {
+      protected static getHandler() {
+        return handler;
+      }
+    }
+    return RoutedModel;
+  }
+
+  const drivers = [
+    { driverType: 'postgres' as const, connectionError: () => makeError('Connection terminated unexpectedly'), rows: (r: unknown[]) => ({ rows: r, rowCount: r.length }), p: '$1' },
+    { driverType: 'mysql' as const, connectionError: () => makeError('Connection lost', 'PROTOCOL_CONNECTION_LOST'), rows: (r: unknown[]) => [r, null], p: '?' },
+  ];
+
+  for (const { driverType, connectionError, rows, p } of drivers) {
+    describe(driverType, () => {
+      const writes = [
+        `INSERT INTO users (name) VALUES (${p}) RETURNING id`,
+        `UPDATE users SET name = ${p} WHERE id = 1 RETURNING id`,
+        `DELETE FROM users WHERE name = ${p} RETURNING id`,
+        `WITH x AS (UPDATE users SET name = ${p} WHERE id = 1 RETURNING *) SELECT id FROM x`,
+      ];
+
+      for (const sql of writes) {
+        it(`${sql} outside withWriter() goes to the writer, not to the reader`, async () => {
+          const readerQuery = vi.fn().mockResolvedValue(rows([{ id: 1 }]));
+          const writerQuery = vi.fn().mockResolvedValue(rows([{ id: 1 }]));
+          const Model = makeRoutedModel(driverType, readerQuery, writerQuery);
+
+          await Model.execute(sql, ['alice']);
+
+          expect(readerQuery).not.toHaveBeenCalled();
+          expect(writerQuery).toHaveBeenCalledTimes(1);
+        });
+
+        it(`${sql} is not resent after a connection error`, async () => {
+          const error = connectionError();
+          const readerQuery = vi.fn();
+          const writerQuery = vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce(rows([{ id: 1 }]));
+          const Model = makeRoutedModel(driverType, readerQuery, writerQuery);
+
+          await expect(Model.execute(sql, ['alice'])).rejects.toBe(error);
+          expect(writerQuery).toHaveBeenCalledTimes(1);
+          expect(readerQuery).not.toHaveBeenCalled();
+        });
+      }
+
+      const reads = [`SELECT id FROM users WHERE id = ${p}`, `WITH x AS (SELECT id FROM users WHERE id = ${p}) SELECT id FROM x`];
+
+      for (const sql of reads) {
+        it(`${sql} goes to the reader and is resent after a connection error`, async () => {
+          const readerQuery = vi.fn().mockRejectedValueOnce(connectionError()).mockResolvedValueOnce(rows([{ id: 1 }]));
+          const writerQuery = vi.fn();
+          const Model = makeRoutedModel(driverType, readerQuery, writerQuery);
+
+          const result = await Model.execute(sql, [1]);
+
+          expect(result.rows).toEqual([{ id: 1 }]);
+          expect(readerQuery).toHaveBeenCalledTimes(2);
+          expect(writerQuery).not.toHaveBeenCalled();
+        });
+      }
+    });
+  }
+});
