@@ -62,6 +62,8 @@ function getPool(config: DBConfig): Pool {
       connectionTimeoutMillis: (config.timeout || 30) * 1000,
       idleTimeoutMillis: config.idleTimeoutMillis ?? 10000,
       query_timeout: (config.queryTimeout || 30) * 1000,
+      // Server-side limit too: query_timeout alone leaves the statement (and its locks) running
+      statement_timeout: (config.queryTimeout || 30) * 1000,
       keepAlive: config.keepAlive,
       keepAliveInitialDelayMillis: config.keepAliveInitialDelayMillis,
     });
@@ -179,7 +181,18 @@ function clearQueryCache(): void {
 // ============================================
 
 class PostgresConnection implements DBConnection {
-  constructor(private client: PoolClient) {}
+  /** Error emitted by the client while it was leased (pg-pool detaches its idle listener until release) */
+  private clientError: Error | undefined;
+
+  private readonly onClientError = (err: Error): void => {
+    // Prevent unhandled error crash from a disconnection while the client is leased
+    this.clientError ??= err;
+    defaultLogger.warn('Leased client error', err);
+  };
+
+  constructor(private client: PoolClient) {
+    this.client.on('error', this.onClientError);
+  }
 
   async query(sql: string, params?: unknown[]): Promise<QueryResult> {
     const q = resolveQuery(sql);
@@ -193,7 +206,8 @@ class PostgresConnection implements DBConnection {
   }
 
   release(error?: Error | boolean): void {
-    this.client.release(error ?? undefined);
+    this.client.removeListener('error', this.onClientError);
+    this.client.release(error ?? this.clientError);
   }
 }
 

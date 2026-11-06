@@ -394,6 +394,21 @@ export class WriteOutsideTransactionError extends Error {
 }
 
 /**
+ * Error thrown when a query is issued through a transaction after its function has settled.
+ *
+ * @category Errors
+ */
+export class TransactionClosedError extends Error {
+  constructor() {
+    super(
+      'Query issued after the transaction function settled. ' +
+      'Await every query started inside DBModel.transaction() before returning.'
+    );
+    this.name = 'TransactionClosedError';
+  }
+}
+
+/**
  * Error thrown when attempting write operations inside withWriter() context.
  * 
  * @category Errors
