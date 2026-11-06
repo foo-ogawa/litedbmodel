@@ -236,6 +236,11 @@ func IsRetryableTxError(err error) bool {
 	if errors.As(err, &sf) && sf.commitOutcomeUnknown {
 		return false
 	}
+	// A transaction closed under a still-running query is never retried, even when its cause (the body's
+	// error, reachable through Unwrap) is a retryable one.
+	if errors.As(err, &sf) && sf.Kind == "transaction_closed" {
+		return false
+	}
 	if IsConnectionError(err) {
 		return true
 	}
