@@ -310,6 +310,31 @@ describe('DBModel.transaction (v1 branch)', () => {
       expect(connection.release).toHaveBeenCalledWith(true);
     });
 
+    it('fails with TransactionClosedError (cause = the body error) and does not retry when a retryable body error leaves a query unfinished', async () => {
+      const { connection, log, finishSlow } = makeSlowConnection();
+      const { TxModel, assertV1Route } = makeModel(connection);
+      const bodyError = makeError('Deadlock found when trying to get lock; try restarting transaction');
+      const func = vi.fn(async () => {
+        const conn = getTransactionConnection()!;
+        void conn.query('SELECT slow'); // started, not awaited, still running when func rejects
+        throw bodyError;
+      });
+
+      const settled = TxModel.transaction(func, { retryDuration: 1 }).then(() => undefined, (e: unknown) => e);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      expect(log).not.toContain('ROLLBACK'); // waits for the unfinished query
+      finishSlow();
+
+      const error = await settled;
+      assertV1Route();
+      expect(error).toBeInstanceOf(TransactionClosedError);
+      expect((error as Error).message).toBe(unfinishedMessage);
+      expect((error as Error).cause).toBe(bodyError);
+      expect(log).toEqual(['BEGIN', 'SELECT slow', 'SELECT slow finished', 'ROLLBACK']);
+      expect(log).not.toContain('COMMIT');
+      expect(func).toHaveBeenCalledTimes(1); // not retried
+    });
+
     it('is not a retryable error', () => {
       const error = new TransactionClosedError(true);
       expect((DBModel as unknown as { isRetryableError(e: Error): boolean }).isRetryableError(error)).toBe(false);

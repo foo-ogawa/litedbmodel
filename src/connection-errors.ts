@@ -62,7 +62,9 @@ export function guardLeasedClient(
  *   does not raise `unhandledRejection` (which would stop the process); an awaiting caller still receives it.
  * - {@link TransactionGuard.settle} runs the body. When the body settles, the gate closes and the
  *   unfinished queries are waited for (so a ROLLBACK sent afterwards follows them); if the body succeeded
- *   but one was unfinished, it throws {@link TransactionClosedError} so the transaction rolls back.
+ *   but one was unfinished, it throws {@link TransactionClosedError} so the transaction rolls back. If the
+ *   body failed and one was unfinished, it throws the same error with the body's error as its `cause`
+ *   (not retried, whatever the body's error was); with none unfinished the body's error is thrown as is.
  */
 export interface TransactionGuard {
   run<T>(query: () => Promise<T>): Promise<T>;
@@ -101,8 +103,10 @@ export function createTransactionGuard(logger: { error(message: string, ...args:
       closed = true;
       const pending = [...unfinished];
       await Promise.allSettled(pending);
+      if (pending.length > 0) {
+        throw new TransactionClosedError(true, 'error' in outcome ? { cause: outcome.error } : undefined);
+      }
       if ('error' in outcome) throw outcome.error;
-      if (pending.length > 0) throw new TransactionClosedError(true);
       return outcome.value;
     },
   };

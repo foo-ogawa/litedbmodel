@@ -405,13 +405,15 @@ export class TransactionClosedError extends Error {
   /**
    * @param unfinished `true` when the transaction function settled while a query started inside it had not
    *   finished; `false` (default) for a query issued after the function settled.
+   * @param options `cause`: the error the function failed with, when it failed while a query was unfinished.
    */
-  constructor(unfinished = false) {
+  constructor(unfinished = false, options?: { cause: unknown }) {
     super(
       (unfinished
         ? 'A query started inside the transaction had not finished when the transaction function settled. '
         : 'Query issued after the transaction function settled. ') +
-      'Await every query started inside DBModel.transaction() before returning.'
+      'Await every query started inside DBModel.transaction() before returning.',
+      options
     );
     this.name = 'TransactionClosedError';
   }

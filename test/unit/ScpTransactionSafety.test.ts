@@ -259,6 +259,29 @@ describe('withTransactionAsync pinned connection lifetime', () => {
       expect(fake.releases).toEqual([true]);
     });
 
+    it('fails with TransactionClosedError (cause = the body error) and does not retry when a retryable body error leaves a query unfinished', async () => {
+      const fake = makeSlowPool();
+      const ctx = new PooledAsyncContext(fake.pool);
+      const bodyError = makeError('deadlock detected', '40P01');
+      const body = vi.fn(async (txCtx: AsyncExecutionContext) => {
+        void executeAsync(txCtx, 'SELECT slow', []); // started, not awaited, still running when the body rejects
+        throw bodyError;
+      });
+
+      const settled = withTransactionAsync(ctx, body, { retryDuration: 1 }).then(() => undefined, (e: unknown) => e);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      expect(fake.log).not.toContain('ROLLBACK'); // waits for the unfinished query
+      fake.finishSlow();
+
+      const error = await settled;
+      expect(error).toBeInstanceOf(TransactionClosedError);
+      expect((error as Error).message).toBe(unfinishedMessage);
+      expect((error as Error).cause).toBe(bodyError);
+      expect(fake.log).toEqual(['BEGIN', 'SELECT slow', 'SELECT slow finished', 'ROLLBACK']);
+      expect(fake.log).not.toContain('COMMIT');
+      expect(body).toHaveBeenCalledTimes(1); // not retried
+    });
+
     it('is not a retryable error', () => {
       expect(isRetryableTxError(new TransactionClosedError(true), () => false)).toBe(false);
     });

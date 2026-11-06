@@ -292,7 +292,9 @@ JOINs by default`）。v1 `LazyRelation` と同型の **staged batch query-compo
     うち未完了の物が 1 件でもあれば（本体が成功していても）、COMMIT せず ROLLBACK し、`transaction()` を
     `TransactionClosedError`（メッセージ `A query started inside the transaction had not finished when the transaction
     function settled. Await every query started inside DBModel.transaction() before returning.`）で失敗させる。
-    ROLLBACK は未完了の問い合わせが終わった後に送る。この失敗は再試行しない。本体の中で await した問い合わせ
+    ROLLBACK は未完了の問い合わせが終わった後に送る。この失敗は再試行しない。本体が失敗して決着した場合も、未完了が
+    あれば本体のエラーではなく同じ `TransactionClosedError` を投げ、本体のエラーは `cause` に持たせる（本体のエラーが
+    deadlock・接続エラーでも再試行しない）。未完了が無ければ本体のエラーをそのまま投げ、再試行の判定も従来どおり。本体の中で await した問い合わせ
     （`Promise.all` で全部を待つ場合を含む）は変わらない。入れ子の `transaction()` は外の接続を使い、外の本体の決着で判定する。
     数える処理は v1 分岐と scp で同じ `createTransactionGuard`（`src/connection-errors.ts`）。
   - **決着後の問い合わせ**: 本体が決着（成功・失敗）した後に、そのトランザクションの接続を通る問い合わせは
