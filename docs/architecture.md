@@ -284,6 +284,37 @@ JOINs by default`）。v1 `LazyRelation` と同型の **staged batch query-compo
   依存する書込 → 例外での短絡」は手で書く（宣言的な gate-first / tx-DAG 導出は持たない）。実行は
   `` `executeTransactionAsync` (`src/scp/makesql/tx.ts`) `` — ランタイムは per-statement のゲート短絡
   primitive（`GateRule`）を運べるが、宣言エンドポイントはゲートを一切 emit しない（batch plan は gate-free）。
+- **トランザクションの接続の安全（全言語で同じ振る舞い）**
+  - **再試行**: 本体（fn）の失敗のうち、直列化の失敗・deadlock・接続エラーは、新しい接続でトランザクション全体を
+    再実行する。**COMMIT の段の接続エラーだけは再試行せず、そのまま投げる**（サーバがコミット済みで応答だけ失われた場合に
+    二重に書くのを防ぐ。結果は不明）。COMMIT の段の直列化の失敗・deadlock は再試行する。
+  - **決着の時点で未完了の問い合わせ**: 本体が決着（成功・失敗）した時点で、そのトランザクションの接続を通る問い合わせの
+    うち未完了の物が 1 件でもあれば（本体が成功していても）、COMMIT せず ROLLBACK し、`transaction()` を
+    `TransactionClosedError`（メッセージ `A query started inside the transaction had not finished when the transaction
+    function settled. Await every query started inside DBModel.transaction() before returning.`）で失敗させる。
+    ROLLBACK は未完了の問い合わせが終わった後に送る。この失敗は再試行しない。本体が失敗して決着した場合も、未完了が
+    あれば本体のエラーではなく同じ `TransactionClosedError` を投げ、本体のエラーは `cause` に持たせる（本体のエラーが
+    deadlock・接続エラーでも再試行しない）。未完了が無ければ本体のエラーをそのまま投げ、再試行の判定も従来どおり。本体の中で await した問い合わせ
+    （`Promise.all` で全部を待つ場合を含む）は変わらない。入れ子の `transaction()` は外の接続を使い、外の本体の決着で判定する。
+    数える処理は v1 分岐と scp で同じ `createTransactionGuard`（`src/connection-errors.ts`）。
+  - **決着後の問い合わせ**: 本体が決着（成功・失敗）した後に、そのトランザクションの接続を通る問い合わせは
+    `TransactionClosedError`（TS。メッセージ `Query issued after the transaction function settled. Await every query
+    started inside DBModel.transaction() before returning.`）にし、DB へは送らない。BEGIN・COMMIT・ROLLBACK は本体が見る
+    接続とは別に、トランザクションが持つ接続へ直接送る（`withTransactionAsync` の `pinned` / `control`、v1 分岐は
+    `DBModel.transaction` の `guarded`）。返す Promise はライブラリの側で先に no-op の catch を付けてあり、`await` を
+    付け忘れても `unhandledRejection`（プロセスの停止）にならない。失敗は logger の `error` に 1 回出す
+    （v1 分岐は `DBConfigOptions.logger`、scp は `defaultLogger`）。
+  - **BEGIN の失敗**: BEGIN も try の中。失敗しても接続は破棄して返す。
+  - **貸し出し中の接続の切断**: 貸し出し中の pg Client の `'error'` を受けてログに出し、返却時にその接続は破棄する。
+    pool の idle の接続の `'error'` も受ける（`guardLeasedClient` / `guardIdlePoolErrors`、`src/connection-errors.ts`）。
+  - **時間切れ**: `DBConfig.queryTimeout`（秒）を、接続の設定（scp は ms の `queryTimeout`）まで渡し、サーバ側の時間切れとして
+    効かせる。pg は未指定・0 を 30 秒とし、pg の Pool の `statement_timeout`（v1 分岐・scp とも接続の起動時のパラメータ。
+    1 文ごとの `SET`/`RESET` はしない。自前の `PoolFactory` は factory 側で渡す）。MySQL は未指定・0 で時間切れなし、
+    明示の値だけ接続の取得時の `SET SESSION max_execution_time`。scp を直接使うときの既定は 0（なし）で、30 秒の既定は
+    `DBModel` から pg へ渡す所（`dbmodel-runtime.ts`）だけにある。
+  - **書込の送り直しをしない**: 接続エラーで autocommit の書込を送り直さない（そのまま投げる）。読み取りの再試行は
+    残す。writer に回した読み取り（`withWriter` の中、writer-sticky の間）も、回した側の判断を `executeOnWriter` から
+    ドライバまで渡して再試行する。
 
 ```ts
 await DBModel.transaction(async () => {

@@ -5,6 +5,31 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.2.13] - 2026-11-06
+
+**トランザクションの接続まわりの欠陥を直す（v1 分岐と SCP 経路の両方）。**
+Refs #330。
+
+### Fixed
+
+- 貸し出し中の pg Client が切られると 'error' を受ける所が無く、プロセスが落ちた。`'error'` を受けてログに出し、返却時に
+  その接続を破棄する。SCP の pool の idle の接続の `'error'` も受ける。
+- COMMIT の段の接続エラーで本体を再実行して二重に書きうる状態だった。COMMIT の段の接続エラーは再試行せずそのまま投げる。
+- 本体が決着した後に、トランザクションの接続を通る問い合わせが DB へ送られた。`TransactionClosedError` にして送らない。
+  返す Promise にはライブラリの側で no-op の catch を付け、`await` の付け忘れで `unhandledRejection`（プロセスの停止）にしない（失敗は logger の `error` に出す）。
+- 本体が決着した時点で、待たずに走らせた問い合わせが未完了のまま COMMIT されていた。未完了が 1 件でもあれば、その問い合わせが終わるのを待って ROLLBACK し、`transaction()` を `TransactionClosedError` で失敗させる（再試行しない）。
+  本体が失敗して決着した場合も、未完了があれば本体のエラーではなく `TransactionClosedError` を投げ（本体のエラーは `cause`）、
+  本体のエラーが deadlock・接続エラーでも再試行しない。
+- `queryTimeout` が SCP の接続に渡らず、時間切れが無かった。`DBModel` から使うとき、秒を ms にして渡す。pg は未指定・0 を
+  v1 と同じ 30 秒にし、pg の Pool の `statement_timeout`（接続の起動時のパラメータ）として効かせる（1 文ごとの
+  `SET`/`RESET` はしない）。v1 分岐の pg Pool にも `statement_timeout` を渡す。MySQL は未指定・0 で時間切れなし（v1 と同じ）、
+  明示の値だけ `max_execution_time` にする。SCP を直接使うときの `queryTimeout` の既定は 0 のまま。自前の `PoolFactory` を
+  使う場合は factory 側で `statement_timeout` を渡す。
+- `DBModel` の MySQL で SCP の接続の設定に `driver` が渡らず、pg 用の文が選ばれていた。`driver` を渡す。
+- SCP の BEGIN が失敗すると接続が返らなかった。
+- v1 のドライバの `executeWrite` が、接続エラーで書込を送り直していた。そのまま投げる（読み取りの再試行は変えない。
+  writer に回した読み取りは再試行する）。
+
 ## [2.2.12] - 2026-10-26
 
 **writer sticky が、トランザクションの前に `await` がある関数越しのコミットで効かなかったのを直す。`execute()` の DDL・保守がリーダーへ流れていたのを直す。**

@@ -20,6 +20,7 @@ The live-PG/MySQL isolation + real-contention-retry proof lives in test_tx_bound
 from __future__ import annotations
 
 import sqlite3
+import threading
 
 import pytest
 
@@ -248,3 +249,368 @@ def test_sqlite_isolation_request_is_a_hard_error():
         transaction(ctx, lambda: None, TransactionOptions(isolation=IsolationLevel.SERIALIZABLE), "sqlite")
     # The hard-error fires BEFORE any connection is acquired.
     assert sink["begin_tx"] == 0
+
+
+# ── #330 transaction-safety defects (2.x Python) ───────────────────────────────
+
+
+class _CommitFailsTx(_SqliteTxConnection):
+    """A tx handle whose COMMIT raises the next error in ``errors`` (then commits normally)."""
+
+    def __init__(self, conn, errors):
+        super().__init__(conn)
+        self._errors = errors
+
+    def run(self, sql, params):
+        if sql.strip().split(" ", 1)[0].upper() == "COMMIT" and self._errors:
+            super().run("ROLLBACK", params)  # a real connection error leaves no open tx to retry into
+            raise self._errors.pop(0)
+        return super().run(sql, params)
+
+
+class _CommitFailsDriver(SqliteDriver):
+    def __init__(self, conn, errors):
+        super().__init__(conn)
+        self._errors = errors
+
+    def begin_tx(self):
+        return _CommitFailsTx(self.conn, self._errors)
+
+
+class _FakeSerializationError(Exception):
+    sqlstate = "40001"
+
+
+def _run_with_commit_errors(errors):
+    conn = sqlite3.connect(":memory:")
+    conn.execute(f"CREATE TABLE {ISO_TBL} (id INTEGER PRIMARY KEY, worker INTEGER NOT NULL, seq INTEGER NOT NULL)")
+    conn.commit()
+    ctx = context_for_driver(_CommitFailsDriver(conn, errors))
+    runs = []
+
+    def body():
+        runs.append(1)
+        return _do_op(800 + len(runs), 8, 0)
+
+    opts = TransactionOptions(retry_limit=3, retry_duration=0)
+    try:
+        transaction(ctx, body, opts, "sqlite")
+        return len(runs), None
+    except Exception as e:
+        return len(runs), e
+
+
+def test_commit_connection_error_does_not_rerun_the_body():
+    # The COMMIT may have reached the server before the connection dropped: re-running the body could
+    # write twice. The error surfaces after ONE run of the body.
+    runs, error = _run_with_commit_errors([RuntimeError("server closed the connection unexpectedly")] * 3)
+    assert runs == 1, f"the body must not re-run after a COMMIT connection error, ran {runs}x"
+    assert error is not None and "server closed the connection" in str(error)
+
+
+def test_commit_serialization_failure_is_still_retried():
+    runs, error = _run_with_commit_errors([_FakeSerializationError("could not serialize access")])
+    assert error is None
+    assert runs == 2
+
+
+def _recording_pool():
+    closed = []
+
+    class _Conn:
+        def close(self):
+            closed.append(self)
+
+    from litedbmodel_runtime.driver import _ConnectionPool
+
+    return _ConnectionPool(_Conn, 2), closed
+
+
+def test_errored_connection_outside_a_tx_is_discarded_not_returned_to_the_pool():
+    from litedbmodel_runtime.driver import _PooledDriver
+
+    pool, closed = _recording_pool()
+    driver = _PooledDriver(pool, lambda s: s, False)
+
+    def failing(conn):
+        raise RuntimeError("server closed the connection unexpectedly")
+
+    with pytest.raises(RuntimeError):
+        driver._with_conn(failing)
+    assert len(closed) == 1, "the errored connection must be closed"
+    assert pool._free == [], "the errored connection must not go back to the pool"
+    assert pool._opened == 0, "its slot must be freed"
+    # A clean statement still returns its connection to the pool.
+    driver._with_conn(lambda conn: None)
+    assert len(pool._free) == 1
+
+
+def test_sql_error_outside_a_tx_returns_the_connection_to_the_pool_for_reuse():
+    from litedbmodel_runtime.driver import _PooledDriver
+
+    pool, closed = _recording_pool()
+    driver = _PooledDriver(pool, lambda s: s, False)
+    seen = []
+
+    class _ConstraintViolation(Exception):
+        sqlstate = "23505"
+
+    def violating(conn):
+        seen.append(conn)
+        raise _ConstraintViolation('duplicate key value violates unique constraint "t_pkey"')
+
+    # The pool's connections are autocommit, so the session is still usable after a SQL error.
+    with pytest.raises(_ConstraintViolation):
+        driver._with_conn(violating)
+    assert closed == [], "a SQL error must not close the connection"
+    assert [c for c, _ in pool._free] == seen, "the connection must go back to the pool"
+    assert pool._opened == 1
+    driver._with_conn(lambda conn: seen.append(conn))
+    assert seen[1] is seen[0], "the next statement must reuse the same connection"
+    assert pool._opened == 1
+
+
+def test_interrupted_statement_outside_a_tx_discards_the_connection():
+    from litedbmodel_runtime.driver import _PooledDriver
+
+    pool, closed = _recording_pool()
+    driver = _PooledDriver(pool, lambda s: s, False)
+
+    def interrupted(conn):
+        raise KeyboardInterrupt()  # not an Exception: it can land mid-statement
+
+    with pytest.raises(KeyboardInterrupt):
+        driver._with_conn(interrupted)
+    assert len(closed) == 1 and pool._free == [] and pool._opened == 0
+
+
+# ── A statement from a ctx that outlived the body is refused (sqlite and pg paths) ──────────────────
+
+
+class _WindowTx(_SqliteTxConnection):
+    """A sqlite tx handle that runs ``window()`` just before the COMMIT statement reaches the DB."""
+
+    def __init__(self, conn, window, gate):
+        super().__init__(conn)
+        self._window = window
+        self._gate = gate
+
+    def run(self, sql, params):
+        if sql.strip().upper().startswith("COMMIT"):
+            self._window()
+        self._gate(sql, params)
+        return super().run(sql, params)
+
+
+class _WindowSqliteDriver(SqliteDriver):
+    def __init__(self, conn, window, gate):
+        super().__init__(conn)
+        self._window = window
+        self._gate = gate
+
+    def begin_tx(self):
+        return _WindowTx(self.conn, self._window, self._gate)
+
+
+class _FakeCursor:
+    rowcount = 1
+    lastrowid = None
+
+    def __init__(self, conn):
+        self._conn = conn
+
+    def execute(self, sql, params=()):
+        if sql.strip().upper().startswith("COMMIT"):
+            self._conn.window()
+        self._conn.gate(sql, params)
+        self._conn.sent.append((sql, tuple(params)))
+
+    def close(self):
+        pass
+
+
+class _FakePgConn:
+    """A DB-API connection (the pg/mysql pooled path) that records every statement it is sent."""
+
+    def __init__(self, sent, window, gate):
+        self.sent = sent
+        self.window = window
+        self.gate = gate
+
+    def cursor(self):
+        return _FakeCursor(self)
+
+    def close(self):
+        pass
+
+
+def _no_gate(sql, params):
+    pass
+
+
+def _sqlite_leak_ctx(window, gate=_no_gate):
+    conn = sqlite3.connect(":memory:", check_same_thread=False)
+    conn.execute(f"CREATE TABLE {ISO_TBL} (id INTEGER PRIMARY KEY, worker INTEGER NOT NULL, seq INTEGER NOT NULL)")
+    conn.commit()
+
+    def sent_ids():
+        return [int(r[0]) for r in conn.execute(f"SELECT id FROM {ISO_TBL}")]
+
+    return context_for_driver(_WindowSqliteDriver(conn, window, gate)), "sqlite", sent_ids
+
+
+def _pg_leak_ctx(window, gate=_no_gate):
+    from litedbmodel_runtime.driver import _ConnectionPool, _PooledDriver
+
+    sent = []
+    pool = _ConnectionPool(lambda: _FakePgConn(sent, window, gate), 2)
+    driver = _PooledDriver(pool, lambda s: s, False)
+
+    def sent_ids():
+        return [params[0] for sql, params in sent if sql.startswith("INSERT")]
+
+    return context_for_driver(driver), "postgres", sent_ids
+
+
+@pytest.mark.parametrize("make_ctx", [_sqlite_leak_ctx, _pg_leak_ctx], ids=["sqlite", "pg"])
+def test_statement_from_a_leaked_ctx_is_refused_between_the_body_and_the_commit(make_ctx):
+    from litedbmodel_runtime import WRITE_INTENT, run
+    from litedbmodel_runtime.errors import TransactionClosedError
+
+    leaked = []
+    outcomes = []
+
+    def attempt():
+        try:
+            run(leaked[0], _INSERT_SQL, [999, 9, 9], WRITE_INTENT)
+            outcomes.append(None)
+        except Exception as e:
+            outcomes.append(e)
+
+    ctx, dialect, sent_ids = make_ctx(attempt)
+
+    def body():
+        leaked.append(current_context())  # the ctx escapes the body (e.g. onto a thread left running)
+        return _do_op(1, 1, 0)
+
+    transaction(ctx, body, TransactionOptions(), dialect)
+
+    # Between the body's return and the COMMIT (the window), and again after the connection was released.
+    attempt()
+    expected = (
+        "Query issued after the transaction function settled. "
+        "Await every query started inside DBModel.transaction() before returning."
+    )
+    assert len(outcomes) == 2
+    for outcome in outcomes:
+        assert isinstance(outcome, TransactionClosedError), f"got {outcome!r}"
+        assert str(outcome) == expected
+    assert 999 not in sent_ids(), "the refused statement must never reach the DB"
+    assert 1 in sent_ids()
+
+
+# ── A statement still running when the body settles fails the transaction (sqlite and pg paths) ──────
+
+
+def _gated_ctx(make_ctx):
+    """A ctx whose statement for row id 777 blocks inside the DB until ``release`` is set; ``statements``
+    records the verb of every statement the DB is sent."""
+    started = threading.Event()
+    release = threading.Event()
+    statements = []
+
+    def gate(sql, params):
+        statements.append(sql.strip().split(" ", 1)[0].upper())
+        if params and params[0] == 777:
+            started.set()
+            assert release.wait(10)
+
+    ctx, dialect, sent_ids = make_ctx(lambda: None, gate)
+    return ctx, dialect, sent_ids, started, release, statements
+
+
+@pytest.mark.parametrize("make_ctx", [_sqlite_leak_ctx, _pg_leak_ctx], ids=["sqlite", "pg"])
+def test_statement_still_running_when_the_body_returns_rolls_back_and_raises(make_ctx):
+    from litedbmodel_runtime import WRITE_INTENT, run
+    from litedbmodel_runtime.errors import TransactionClosedError
+
+    ctx, dialect, sent_ids, started, release, statements = _gated_ctx(make_ctx)
+    worker_errors = []
+    body_calls = []
+
+    def body():
+        body_calls.append(1)
+        _do_op(1, 1, 0)
+        leaked = current_context()
+
+        def worker():
+            try:
+                run(leaked, _INSERT_SQL, [777, 7, 7], WRITE_INTENT)
+            except Exception as e:  # pragma: no cover - the statement is awaited by the settle, it must not fail
+                worker_errors.append(e)
+
+        threading.Thread(target=worker).start()
+        assert started.wait(10)  # the statement is now running in the DB; the body returns without awaiting it
+        threading.Timer(0.2, release.set).start()
+        return "done"
+
+    with pytest.raises(TransactionClosedError) as raised:
+        transaction(ctx, body, TransactionOptions(retry_limit=3, retry_duration=0), dialect)
+    assert len(body_calls) == 1, "an unfinished statement must not be retried"
+
+    assert str(raised.value) == (
+        "A query started inside the transaction had not finished when the transaction function settled. "
+        "Await every query started inside DBModel.transaction() before returning."
+    )
+    assert worker_errors == []
+    assert "COMMIT" not in statements and "ROLLBACK" in statements
+    if dialect == "sqlite":
+        assert sent_ids() == [], "neither the awaited nor the unfinished write may remain"
+
+
+@pytest.mark.parametrize("make_ctx", [_sqlite_leak_ctx, _pg_leak_ctx], ids=["sqlite", "pg"])
+def test_statement_still_running_when_the_body_raises_a_retryable_error_is_not_retried(make_ctx):
+    from litedbmodel_runtime import WRITE_INTENT, run
+    from litedbmodel_runtime.errors import TransactionClosedError
+
+    ctx, dialect, sent_ids, started, release, statements = _gated_ctx(make_ctx)
+    body_error = _FakeSerializationError("could not serialize access")
+    body_calls = []
+
+    def body():
+        body_calls.append(1)
+        leaked = current_context()
+        threading.Thread(target=lambda: run(leaked, _INSERT_SQL, [777, 7, 7], WRITE_INTENT)).start()
+        assert started.wait(10)  # the statement is running in the DB when the body fails
+        threading.Timer(0.2, release.set).start()
+        raise body_error
+
+    with pytest.raises(TransactionClosedError) as raised:
+        transaction(ctx, body, TransactionOptions(retry_limit=3, retry_duration=0), dialect)
+
+    assert raised.value.__cause__ is body_error
+    assert len(body_calls) == 1, "the body must not be re-run: its statement was still unfinished"
+    assert "COMMIT" not in statements and "ROLLBACK" in statements
+    if dialect == "sqlite":
+        assert sent_ids() == []
+
+
+@pytest.mark.parametrize("make_ctx", [_sqlite_leak_ctx, _pg_leak_ctx], ids=["sqlite", "pg"])
+def test_every_statement_awaited_inside_the_body_still_commits(make_ctx):
+    from litedbmodel_runtime import WRITE_INTENT, run
+
+    ctx, dialect, sent_ids, started, release, statements = _gated_ctx(make_ctx)
+
+    def body():
+        _do_op(1, 1, 0)
+        leaked = current_context()
+        worker = threading.Thread(target=lambda: run(leaked, _INSERT_SQL, [777, 7, 7], WRITE_INTENT))
+        worker.start()
+        assert started.wait(10)
+        release.set()
+        worker.join()
+        return "done"
+
+    assert transaction(ctx, body, TransactionOptions(), dialect) == "done"
+    assert "COMMIT" in statements and "ROLLBACK" not in statements
+    assert sorted(sent_ids()) == [1, 777]

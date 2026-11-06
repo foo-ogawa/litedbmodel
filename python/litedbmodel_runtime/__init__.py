@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from .dialect import SQLITE, POSTGRES, MYSQL, Dialect, dialect_for, to_dollar_placeholders
 from .driver import Driver, MysqlDriver, PostgresDriver, PreparedStatement, RunInfo, SqliteDriver, TxConnection
-from .errors import LimitExceededError, SqlFailure, check_find_hard_limit, map_sqlite_error
+from .errors import LimitExceededError, SqlFailure, TransactionClosedError, check_find_hard_limit, map_sqlite_error
 from .exec_context import (
     Connection,
     ExecutionContext,
@@ -104,7 +104,7 @@ from .connection_routing import (
 )
 from .leaves import make_handlers, render_placeholders
 
-__version__ = "2.2.12"
+__version__ = "2.2.13"
 
 __all__ = [
     "__version__",
@@ -126,6 +126,7 @@ __all__ = [
     # errors
     "SqlFailure",
     "LimitExceededError",
+    "TransactionClosedError",
     "check_find_hard_limit",
     "map_sqlite_error",
     # ExecutionContext + central execute/run seam (Phase A / #78)

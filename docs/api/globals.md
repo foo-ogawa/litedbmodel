@@ -1,8 +1,8 @@
-[**litedbmodel v2.2.12**](README.md)
+[**litedbmodel v2.2.13**](README.md)
 
 ***
 
-# litedbmodel v2.2.12
+# litedbmodel v2.2.13
 
 litedbmodel - A lightweight TypeScript data access layer
 
@@ -26,6 +26,7 @@ Supports PostgreSQL and SQLite databases.
 ### Errors
 
 - [LimitExceededError](classes/LimitExceededError.md)
+- [TransactionClosedError](classes/TransactionClosedError.md)
 - [WriteOutsideTransactionError](classes/WriteOutsideTransactionError.md)
 - [WriteInReadOnlyContextError](classes/WriteInReadOnlyContextError.md)
 

@@ -1,4 +1,4 @@
-[**litedbmodel v2.2.12**](../README.md)
+[**litedbmodel v2.2.13**](../README.md)
 
 ***
 
@@ -10,7 +10,7 @@
 function getDBConfig(): DBConfig | null;
 ```
 
-Defined in: [DBHandler.ts:296](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBHandler.ts#L296)
+Defined in: [DBHandler.ts:298](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBHandler.ts#L298)
 
 Get global config
 

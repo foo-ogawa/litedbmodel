@@ -58,6 +58,8 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	bc "github.com/foo-ogawa/behavior-contracts/go"
@@ -628,6 +630,57 @@ func (c txConnection) Run(sql string, args []any) (RunInfo, error) {
 	return RunInfo{Changes: changes, LastInsertRowid: lastInsert}, nil
 }
 
+// settleGuardConnection is the [Connection] the transaction BODY's ctx pins: it forwards to the owned
+// connection until [settleGuardConnection.settle], then refuses every statement with
+// [TransactionClosed]. settle takes the write lock, so it waits for statements already in flight
+// (read-locked) and no statement can slip in after it returns; it reports whether any statement was
+// still unfinished when it began.
+type settleGuardConnection struct {
+	mu         sync.RWMutex
+	closed     bool
+	conn       Connection
+	settling   atomic.Bool // set by settle before it waits for the write lock
+	unfinished atomic.Bool // a statement was still executing when settle began
+}
+
+func (g *settleGuardConnection) Execute(sql string, args []any) ([]bc.Value, error) {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	if g.closed {
+		return nil, TransactionClosed()
+	}
+	defer g.noteFinished()
+	return g.conn.Execute(sql, args)
+}
+
+func (g *settleGuardConnection) Run(sql string, args []any) (RunInfo, error) {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	if g.closed {
+		return RunInfo{}, TransactionClosed()
+	}
+	defer g.noteFinished()
+	return g.conn.Run(sql, args)
+}
+
+// noteFinished runs when a statement completes: finishing after settle began means it was unfinished
+// at settle.
+func (g *settleGuardConnection) noteFinished() {
+	if g.settling.Load() {
+		g.unfinished.Store(true)
+	}
+}
+
+// settle closes the guard (idempotent), waits for statements in flight, and reports whether any of them
+// had not finished when it began (a query the body did not wait for).
+func (g *settleGuardConnection) settle() bool {
+	g.settling.Store(true)
+	g.mu.Lock()
+	g.closed = true
+	g.mu.Unlock()
+	return g.unfinished.Load()
+}
+
 // TxDecision is the body's decision about how to end the transaction — so a body can legitimately
 // ROLLBACK and STILL return a value (the gate short-circuit: a failed gate rolls back but is NOT an
 // error, it returns committed:false). An error from the body always rolls back + re-raises regardless.
@@ -714,11 +767,19 @@ func WithTransactionDecidedIsolated[R any](ctx *ExecutionContext, isolation Isol
 	// Pin the OWNED connection into a tx-scoped ctx: every statement (data + tx-control) the
 	// body/runtime issues of the tx's own database (an unnamed one, or one naming that database) resolves THIS connection through the
 	// SAME seam — so tx-control is middleware-visible.
-	txCtx := ctx.WithTxConnection(conn)
+	// The body's ctx pins the conn through a settle guard: once the body has returned, a ctx the body
+	// leaked (a goroutine it left running) is refused with [TransactionClosed] instead of reaching the
+	// connection — in the ROLLBACK/COMMIT window it would run outside the transaction, after the release
+	// the connection may already serve another request. The runtime's OWN tx-control uses ctlCtx (the raw
+	// pin), still through the seam.
+	guard := &settleGuardConnection{conn: conn}
+	txCtx := ctx.WithTxConnection(guard)
+	ctlCtx := ctx.WithTxConnection(conn)
 	// poisoned ⇒ the connection is in an unknown state (a failed ROLLBACK); DESTROY it on release so a
 	// fired statement_timeout / aborted session never re-enters the pool.
 	poisoned := false
 	defer func() { release(poisoned) }()
+	defer guard.settle() // a panicking body settles too (runs before the release above)
 
 	// (2) BEGIN (+ isolation SET) THROUGH the seam on the pinned conn — middleware observes it.
 	for _, begin := range begins {
@@ -729,29 +790,47 @@ func WithTransactionDecidedIsolated[R any](ctx *ExecutionContext, isolation Isol
 
 	// (3) the transaction body.
 	result, decision, bodyErr := body(txCtx)
-	if bodyErr != nil {
-		// A body error rolls back (best-effort) and re-raises; the original failure is surfaced. A failed
-		// ROLLBACK poisons the connection (unknown state) ⇒ destroy on release.
-		if _, e := Run(txCtx, "ROLLBACK", nil, WriteIntent()); e != nil {
+	// From here on txCtx is closed; tx-control runs on ctlCtx. settle waits for statements still in flight;
+	// one the body did not wait for fails the transaction (ROLLBACK, never COMMIT).
+	pendingAtSettle := guard.settle()
+	if bodyErr != nil || pendingAtSettle {
+		// A body error, or a query the body did not wait for, rolls back (best-effort). A failed ROLLBACK
+		// poisons the connection (unknown state) ⇒ destroy on release.
+		if _, e := Run(ctlCtx, "ROLLBACK", nil, WriteIntent()); e != nil {
 			poisoned = true
 		}
-		return zero, bodyErr
+		if !pendingAtSettle {
+			return zero, bodyErr // the original failure is surfaced
+		}
+		// A query still in flight fails the transaction with [TransactionClosed] — even when the body failed
+		// (then the body's error is kept as the cause, reachable via errors.Is / errors.As, and the failure is
+		// not retried: see [IsRetryableTxError]).
+		f := TransactionClosed()
+		f.Msg = "A query started inside the transaction had not finished when the transaction function settled. " +
+			"Await every query started inside DBModel.transaction() before returning."
+		f.wrapped = bodyErr
+		return zero, f
 	}
 	if decision.Rollback {
 		// (4a) a legitimate non-error rollback (e.g. a gate short-circuit): ROLLBACK through the seam,
 		// return the value. A rollback failure IS surfaced (the connection would be in an unknown state).
-		if _, e := Run(txCtx, "ROLLBACK", nil, WriteIntent()); e != nil {
+		if _, e := Run(ctlCtx, "ROLLBACK", nil, WriteIntent()); e != nil {
 			poisoned = true
 			return zero, mapSqliteError(e)
 		}
 		return result, nil
 	}
 	// (4b) COMMIT through the seam — middleware observes it. A failed COMMIT rolls back + poisons.
-	if _, e := Run(txCtx, "COMMIT", nil, WriteIntent()); e != nil {
-		if _, re := Run(txCtx, "ROLLBACK", nil, WriteIntent()); re != nil {
+	if _, e := Run(ctlCtx, "COMMIT", nil, WriteIntent()); e != nil {
+		if _, re := Run(ctlCtx, "ROLLBACK", nil, WriteIntent()); re != nil {
 			poisoned = true
 		}
-		return zero, mapSqliteError(e)
+		f := mapSqliteError(e)
+		// A connection error AT COMMIT leaves the outcome unknown (the server may have committed before
+		// the response was lost): the failure is marked so [IsRetryableTxError] refuses it and the retry
+		// loop surfaces it instead of re-running the body (which could write twice).
+		f.commitOutcomeUnknown = IsConnectionError(f)
+		return zero, f
 	}
 	// Phase C (#89): a SUCCESSFUL commit ARMS writer-sticky (read-your-writes) for the committing ctx's
 	// REQUEST SCOPE — that request's subsequent reads within writerStickyDuration route to the WRITER, and

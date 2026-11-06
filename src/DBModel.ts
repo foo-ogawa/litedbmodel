@@ -14,8 +14,8 @@ import { type SqlFragment, type SqlCondition, type SqlTypedFragment, isAnySqlFra
 import { createMiddleware as createMiddlewareFn, type Middleware, type MiddlewareClass, type MiddlewareConfig, type CreatedMiddlewareClass, type ExecuteResult } from './Middleware';
 import { serializeRecord, getColumnMeta, getPrimaryKey, getSqlCastMap, type KeyPair, type CompositeKeyPairs } from './decorators';
 import { getTypeCast, getSqlBuilder } from './drivers';
-import type { DriverTypeCast } from './drivers/types';
-import { isConnectionError } from './connection-errors';
+import { defaultLogger, type DriverTypeCast } from './drivers/types';
+import { isConnectionError, createTransactionGuard } from './connection-errors';
 
 // Import LazyRelation module (static import for Vitest compatibility)
 import { LazyRelationContext, type RelationType, type RelationConfig } from './LazyRelation';
@@ -276,6 +276,7 @@ export abstract class DBModel {
           ...(config.password !== undefined ? { password: config.password } : {}),
           ...(config.max !== undefined ? { max: config.max } : {}),
           ...(config.timeout !== undefined ? { timeout: config.timeout } : {}),
+          ...(config.queryTimeout !== undefined ? { queryTimeout: config.queryTimeout } : {}),
           ...(config.idleTimeoutMillis !== undefined ? { idleTimeoutMillis: config.idleTimeoutMillis } : {}),
           ...(config.keepAlive !== undefined ? { keepAlive: config.keepAlive } : {}),
           ...(config.keepAliveInitialDelayMillis !== undefined ? { keepAliveInitialDelayMillis: config.keepAliveInitialDelayMillis } : {}),
@@ -2982,9 +2983,10 @@ export abstract class DBModel {
       const handler = this.getHandler();
 
       // The writer for a statement that does not return rows, inside withWriter, or while writer-sticky
-      const useWriter = !this._returnsRows(s) || this._getWriterContext().getStore() !== undefined || this._shouldUseWriterSticky();
+      const returnsRows = this._returnsRows(s);
+      const useWriter = !returnsRows || this._getWriterContext().getStore() !== undefined || this._shouldUseWriterSticky();
       const result = useWriter
-        ? await handler.executeOnWriter(s, p || [])
+        ? await handler.executeOnWriter(s, p || [], returnsRows)
         : await handler.execute(s, p || []);
 
       return {
@@ -3145,17 +3147,25 @@ export abstract class DBModel {
       attempt++;
       const connection = await handler.getConnection();
       let destroyConnection = false;
+      let committing = false;
+      // func sees the connection only through this guard; BEGIN/COMMIT/ROLLBACK use `connection` directly
+      const guard = createTransactionGuard(this._configOptions.logger ?? defaultLogger);
+      const guarded: DBConnection = {
+        query: (sql, params) => guard.run(() => connection.query(sql, params)),
+        release: (error) => connection.release(error),
+      };
 
       try {
         await connection.query('BEGIN');
 
-        const context: TransactionContext = { connection };
-        const result = await txContext.run(context, func);
+        const context: TransactionContext = { connection: guarded };
+        const result = await guard.settle(() => txContext.run(context, func));
 
         if (rollbackOnly) {
           // Rollback instead of commit (for preview/dry-run scenarios)
           await connection.query('ROLLBACK');
         } else {
+          committing = true;
           await connection.query('COMMIT');
           if (useWriterAfterTransaction) this._writerSticky.mark();
         }
@@ -3169,9 +3179,12 @@ export abstract class DBModel {
           // destroyConnection is already true; original error is preserved.
         }
 
+        // A connection error at COMMIT leaves the outcome unknown (the server may have committed
+        // before the response was lost): re-running func could write twice, so throw instead.
         if (
           retryOnError &&
           attempt < retryLimit &&
+          !(committing && isConnectionError(error as Error)) &&
           this.isRetryableError(error as Error)
         ) {
           await this.sleep(retryDuration * Math.pow(2, attempt - 1));

@@ -235,6 +235,7 @@ export {
   LimitExceededError, 
   WriteOutsideTransactionError, 
   WriteInReadOnlyContextError,
+  TransactionClosedError,
 } from './types';
 
 // ============================================

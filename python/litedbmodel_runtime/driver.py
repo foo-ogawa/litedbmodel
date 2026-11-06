@@ -15,6 +15,8 @@ import re
 import sqlite3
 from typing import Any, Callable, Dict, List, Optional, Protocol, Sequence, Tuple
 
+from .tx_options import is_connection_error
+
 
 # ── Row materialization: per-column-set dict builder (read-path hot loop, #63 §② perf) ──────────
 #
@@ -785,19 +787,28 @@ class _PooledDriver:
         """Run ``op(conn)`` on a freshly checked-out pooled connection (the non-tx read/write path)."""
         conn = self._pool.acquire()
         try:
-            return op(conn)
-        finally:
-            self._pool.release(conn)
+            result = op(conn)
+        except BaseException as error:
+            # The pool's connections are autocommit, so a SQL error (constraint violation, syntax error,
+            # statement_timeout) leaves the session usable: return it. DISCARD only a connection error
+            # (dropped mid-statement) or a non-Exception interruption (KeyboardInterrupt etc. can land
+            # mid-statement), whose state is unknown. #330 defect 1.
+            if is_connection_error(error) or not isinstance(error, Exception):
+                self._pool.discard(conn)
+            else:
+                self._pool.release(conn)
+            raise
+        self._pool.release(conn)
+        return result
 
     def exec_ddl(self, statements: Sequence[str]) -> None:
-        conn = self._pool.acquire()
-        try:
+        def run_all(conn):
             cur = conn.cursor()
             for stmt in statements:
                 cur.execute(stmt)
             cur.close()
-        finally:
-            self._pool.release(conn)
+
+        self._with_conn(run_all)
 
     def prepare(self, sql: str) -> _PooledPrepared:
         return _PooledPrepared(self, sql)

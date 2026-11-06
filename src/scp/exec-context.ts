@@ -74,6 +74,8 @@ import {
 } from './connection-routing';
 import type { Dialect } from './makesql/handler';
 import { activeSqlMiddlewares } from './middleware';
+import { isConnectionError as defaultIsConnectionError, createTransactionGuard } from '../connection-errors';
+import { defaultLogger } from '../drivers/types';
 
 // ── Statement intent & the driver contact (§5) ────────────────────────────────
 
@@ -549,28 +551,6 @@ export function currentPinnedAsyncConnection(): PinnedTx | undefined {
 export type TxOptions = TransactionOptions;
 
 /**
- * Is `err` a broken/stale connection (retryable via reconnect)? Defaulted here to a message/-code
- * heuristic matching `src/connection-errors.ts` so exec-context needs no cross-module import; the
- * runtime passes the shared {@link import('../connection-errors').isConnectionError} in explicitly.
- */
-function defaultIsConnectionError(err: Error): boolean {
-  const message = err.message || '';
-  const code = (err as NodeJS.ErrnoException).code || '';
-  return (
-    message.includes('Connection terminated') ||
-    message.includes('Client has encountered a connection error') ||
-    message.includes('ECONNRESET') ||
-    message.includes('ECONNREFUSED') ||
-    message.includes('Connection lost') ||
-    message.includes('This socket has been ended by the other party') ||
-    code === 'ECONNRESET' ||
-    code === 'ECONNREFUSED' ||
-    code === 'EPIPE' ||
-    code === 'PROTOCOL_CONNECTION_LOST'
-  );
-}
-
-/**
  * Run a transaction with **per-execution connection ownership** (§3, the concurrent-tx fix) plus the
  * full Phase B tx-completeness contract (#81): isolation level, nested-tx join, rollbackOnly, and
  * whole-tx retry with per-attempt connection acquisition.
@@ -631,19 +611,32 @@ export async function withTransactionAsync<R>(
     // or `{ ok:false, error }` on failure — so the release + retry decision happens OUTSIDE the ALS
     // run and the connection is released EXACTLY once per attempt.
     let poisoned = false;
-    const attemptResult = await runWithPinnedAsyncConnection(conn, connection ?? null, async (): Promise<{ ok: true; value: R } | { ok: false; error: unknown }> => {
-      for (const begin of begins) await runAsync(txCtx, begin, []);
+    let committing = false;
+    // The body sees the connection only through this pin; it is CLOSED when the body settles, so a
+    // statement started in the body but reaching the connection later (or after the connection was
+    // returned to the pool) is rejected instead of being sent. BEGIN/COMMIT/ROLLBACK go through the
+    // middleware chain onto `conn` directly, not through the pin.
+    const guard = createTransactionGuard(defaultLogger);
+    const pinned: AsyncConnection = {
+      execute: (sql, params) => guard.run(() => conn.execute(sql, params)),
+      run: (sql, params) => guard.run(() => conn.run(sql, params)),
+    };
+    const control = (sql: string): Promise<RunInfo> =>
+      ctx.middleware.wrap<Promise<RunInfo>>(sql, [], (s, p) => conn.run(s, p));
+    const attemptResult = await runWithPinnedAsyncConnection(pinned, connection ?? null, async (): Promise<{ ok: true; value: R } | { ok: false; error: unknown }> => {
       try {
+        for (const begin of begins) await control(begin);
         // Mark the body as "inside a transaction" so a nested write's guard (`checkWriteAllowed`)
         // and nested-tx detection see an active tx. The connection pin (above) and this marker share
         // the SAME async scope.
-        const r = await runInTransactionScope(() => fn(txCtx));
+        const r = await guard.settle(() => runInTransactionScope(() => fn(txCtx)));
         // rollbackOnly (dry-run): ROLLBACK but still return the body result — no committed change.
-        await runAsync(txCtx, resolved.rollbackOnly ? 'ROLLBACK' : 'COMMIT', []);
+        if (!resolved.rollbackOnly) committing = true;
+        await control(resolved.rollbackOnly ? 'ROLLBACK' : 'COMMIT');
         return { ok: true, value: r };
       } catch (error) {
         try {
-          await runAsync(txCtx, 'ROLLBACK', []);
+          await control('ROLLBACK');
         } catch {
           poisoned = true; // ROLLBACK failed ⇒ the connection is in an unknown state; drop it.
         }
@@ -667,7 +660,10 @@ export async function withTransactionAsync<R>(
     }
 
     const { error } = attemptResult;
-    if (resolved.retryOnError && attempt < resolved.retryLimit && isRetryableTxError(error, isConnectionError)) {
+    // A connection error at COMMIT leaves the outcome unknown (the server may have committed before the
+    // response was lost): re-running the body could write twice, so it is thrown, not retried.
+    const commitConnectionError = committing && error instanceof Error && isConnectionError(error);
+    if (resolved.retryOnError && attempt < resolved.retryLimit && !commitConnectionError && isRetryableTxError(error, isConnectionError)) {
       await sleep(resolved.retryDuration * Math.pow(2, attempt - 1));
       continue; // RETRY the whole transaction on a fresh connection
     }

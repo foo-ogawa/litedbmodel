@@ -1055,8 +1055,10 @@ function transaction(
         $attempt++;
         // ONE attempt on a FRESH owned connection. `$fn` reads the pinned tx ctx from the ambient
         // holder (TxAmbient::set inside withTransactionDecided), so every op JOINs this one connection.
-        $body = static function (ExecutionContext $txCtx) use ($fn, $opts): TxDecision {
+        $bodyReturned = false;
+        $body = static function (ExecutionContext $txCtx) use ($fn, $opts, &$bodyReturned): TxDecision {
             $value = $fn();
+            $bodyReturned = true;
             // rollbackOnly (dry-run): ROLLBACK but still return the body value — no committed change.
             return $opts->rollbackOnly ? rollbackWith($value) : commit($value);
         };
@@ -1078,7 +1080,12 @@ function transaction(
             if (!($failure instanceof SqlFailure) && $error instanceof \PDOException) {
                 $failure = SqlFailure::fromPdo($error);
             }
-            if ($attempt < $retryLimit && $opts->retryOnError && isRetryableTxError($failure)) {
+            // A failure after the body returned is the COMMIT stage (a rollbackOnly tx has none). A
+            // connection error there may have reached the server after the COMMIT took effect, so
+            // re-running the body could write twice: surface it. A serialization failure / deadlock at
+            // COMMIT means the tx was not committed and stays retryable. #330 defect 2.
+            $commitConnectionError = $bodyReturned && !$opts->rollbackOnly && isConnectionError($failure);
+            if ($attempt < $retryLimit && $opts->retryOnError && !$commitConnectionError && isRetryableTxError($failure)) {
                 // Exponential backoff before RETRYing the whole transaction on a fresh connection.
                 $backoffMs = $opts->retryDurationMs * (2 ** ($attempt - 1));
                 if ($backoffMs > 0) {

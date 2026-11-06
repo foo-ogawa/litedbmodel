@@ -346,7 +346,8 @@ describe('C2 — multi-DB name routing (live PG=A + MySQL=B)', () => {
 describe('C3 — setConfig (queryTimeout / pool sizing / closeAllPools)', () => {
   it('sessionStatements maps queryTimeout/searchPath/charset to the right per-dialect SQL', () => {
     // PG
-    expect(sessionStatements(resolveConnectionConfig({ driver: 'postgres', queryTimeout: 250 }))).toEqual(['SET statement_timeout = 250']);
+    // (pg's statement_timeout is a pg.Pool option set by pgPoolFactory, not a session statement)
+    expect(sessionStatements(resolveConnectionConfig({ driver: 'postgres', queryTimeout: 250 }))).toEqual([]);
     expect(sessionStatements(resolveConnectionConfig({ driver: 'postgres', searchPath: 'app,public' }))).toEqual(['SET search_path TO app,public']);
     expect(sessionStatements(resolveConnectionConfig({ driver: 'postgres', charset: 'UTF8' }))).toEqual(['SET client_encoding TO UTF8']);
     // MySQL
@@ -360,8 +361,10 @@ describe('C3 — setConfig (queryTimeout / pool sizing / closeAllPools)', () => 
 
   it('queryTimeout FIRES a real server statement timeout on a slow query (PG)', async () => {
     // A configured pool over live PG with a 200ms statement_timeout.
-    const cfg = resolveConnectionConfig({ driver: 'postgres', queryTimeout: 200 });
-    const pool = configuredPool(pgConnectionPool(pgPool as never), cfg);
+    // (pg's statement_timeout is set at pool construction by pgPoolFactory, so build the pool through it)
+    const cfg = resolveConnectionConfig({ driver: 'postgres', ...PG_CONN, queryTimeout: 200 });
+    const timed = pgPoolFactory(await import('pg') as never)(cfg, 'writer');
+    const pool = configuredPool(timed.pool, cfg);
     const ctx = new PooledAsyncContext({ registry: ConnectionRegistry.singleDefault(pool), sticky: new WriterStickyClock({ useWriterAfterTransaction: false }) });
 
     // `pg_sleep(2)` (2s) exceeds the 200ms server statement_timeout → the SERVER aborts it.
@@ -373,6 +376,7 @@ describe('C3 — setConfig (queryTimeout / pool sizing / closeAllPools)', () => 
     const plainCtx = new PooledAsyncContext({ registry: ConnectionRegistry.singleDefault(plain), sticky: new WriterStickyClock({ useWriterAfterTransaction: false }) });
     const ok = await executeAsync(plainCtx, `SELECT pg_sleep(0.3) AS done`, [], { write: false }); // 300ms > 200ms; no timeout set ⇒ succeeds
     expect(ok.length).toBe(1);
+    await timed.close();
   }, 15000);
 
   it('pool sizing: config.maxPool is the SOLE cap (applied at construction); closeAllPools closes the pool', async () => {

@@ -1,4 +1,4 @@
-[**litedbmodel v2.2.12**](../README.md)
+[**litedbmodel v2.2.13**](../README.md)
 
 ***
 
@@ -6,7 +6,7 @@
 
 # Class: WriteOutsideTransactionError
 
-Defined in: [types.ts:403](https://github.com/foo-ogawa/litedbmodel/blob/main/src/types.ts#L403)
+Defined in: [types.ts:427](https://github.com/foo-ogawa/litedbmodel/blob/main/src/types.ts#L427)
 
 Error thrown when attempting write operations outside a transaction.
 
@@ -22,7 +22,7 @@ Error thrown when attempting write operations outside a transaction.
 new WriteOutsideTransactionError(operation: string, modelName?: string): WriteOutsideTransactionError;
 ```
 
-Defined in: [types.ts:404](https://github.com/foo-ogawa/litedbmodel/blob/main/src/types.ts#L404)
+Defined in: [types.ts:428](https://github.com/foo-ogawa/litedbmodel/blob/main/src/types.ts#L428)
 
 #### Parameters
 
@@ -45,5 +45,5 @@ Error.constructor
 
 | Property | Modifier | Type | Defined in |
 | ------ | ------ | ------ | ------ |
-| <a id="operation"></a> `operation` | `readonly` | `string` | [types.ts:405](https://github.com/foo-ogawa/litedbmodel/blob/main/src/types.ts#L405) |
-| <a id="modelname"></a> `modelName?` | `readonly` | `string` | [types.ts:406](https://github.com/foo-ogawa/litedbmodel/blob/main/src/types.ts#L406) |
+| <a id="operation"></a> `operation` | `readonly` | `string` | [types.ts:429](https://github.com/foo-ogawa/litedbmodel/blob/main/src/types.ts#L429) |
+| <a id="modelname"></a> `modelName?` | `readonly` | `string` | [types.ts:430](https://github.com/foo-ogawa/litedbmodel/blob/main/src/types.ts#L430) |
