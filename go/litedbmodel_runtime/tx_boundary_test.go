@@ -19,6 +19,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	gomysql "github.com/go-sql-driver/mysql"
 	pgconn "github.com/jackc/pgx/v5/pgconn"
@@ -35,6 +36,9 @@ type recSink struct {
 	commits  int      // driver-level Commit calls
 	rolls    int      // driver-level Rollback calls
 	distinct map[driver.Tx]struct{}
+	// execHook, when set, runs for every statement exec'd on a wrapped connection (after it is recorded);
+	// a non-nil return is surfaced as that statement's driver error (fault injection for tx-control).
+	execHook func(query string) error
 }
 
 func (s *recSink) push(sql string) {
@@ -170,6 +174,14 @@ func (c *recConn) PrepareContext(ctx context.Context, query string) (driver.Stmt
 // lacks the context Execer/Queryer, returning ErrSkip lets database/sql fall back to Prepare.
 func (c *recConn) ExecContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
 	c.sink.push(query)
+	c.sink.mu.Lock()
+	hook := c.sink.execHook
+	c.sink.mu.Unlock()
+	if hook != nil {
+		if err := hook(query); err != nil {
+			return nil, err
+		}
+	}
 	if ec, ok := c.base.(driver.ExecerContext); ok {
 		return ec.ExecContext(ctx, query, args)
 	}
@@ -554,5 +566,130 @@ func TestNonRetryableErrorDoesNotRetry(t *testing.T) {
 	begins, commits, rolls := sink.txControlCounts()
 	if begins != 1 || commits != 0 || rolls != 1 {
 		t.Errorf("non-retryable ⇒ single attempt (1 BEGIN + 1 ROLLBACK): begins=%d commits=%d rolls=%d", begins, commits, rolls)
+	}
+}
+
+// ── #330 defect 2: a COMMIT-stage connection error must NOT re-run the body ────
+
+// A connection error raised BY the COMMIT statement leaves the outcome unknown (the server may have
+// committed before the response was lost), so re-running the body could write twice: the error is
+// surfaced as-is and the body runs exactly once.
+func TestCommitStageConnectionErrorDoesNotRerunBody(t *testing.T) {
+	db, sink := openRec(t, "file:txb7?mode=memory&cache=shared")
+	defer db.Close()
+	sink.mu.Lock()
+	sink.execHook = func(q string) error {
+		if q == "COMMIT" {
+			return errors.New("read tcp: connection reset by peer")
+		}
+		return nil
+	}
+	sink.mu.Unlock()
+	ctx := ContextForDB(db)
+	o := DefaultTransactionOptions()
+	o.RetryDurationMs = 0
+	calls := 0
+	_, err := Transaction(ctx, "sqlite", o, func(txCtx *ExecutionContext) (int, error) {
+		calls++
+		_, e := RunGuarded(txCtx, "INSERT INTO t (id,v) VALUES (20,'x')", nil, "INSERT", "t")
+		return 0, e
+	})
+	if err == nil || !strings.Contains(err.Error(), "connection reset by peer") {
+		t.Fatalf("the COMMIT connection error must surface as-is: %v", err)
+	}
+	if calls != 1 {
+		t.Errorf("a COMMIT-stage connection error must NOT re-run the body, body ran %d times", calls)
+	}
+}
+
+// A serialization failure / deadlock raised at COMMIT is still retried (the commit definitely did
+// not happen), unlike a connection error.
+func TestCommitStageSerializationFailureStillRetries(t *testing.T) {
+	db, sink := openRec(t, "file:txb8?mode=memory&cache=shared")
+	defer db.Close()
+	failed := false
+	sink.mu.Lock()
+	sink.execHook = func(q string) error {
+		if q == "COMMIT" && !failed {
+			failed = true
+			return &pgconn.PgError{Code: "40001", Message: "could not serialize access"}
+		}
+		return nil
+	}
+	sink.mu.Unlock()
+	ctx := ContextForDB(db)
+	o := DefaultTransactionOptions()
+	o.RetryDurationMs = 0
+	calls := 0
+	_, err := Transaction(ctx, "sqlite", o, func(txCtx *ExecutionContext) (int, error) {
+		calls++
+		_, e := RunGuarded(txCtx, "INSERT INTO t (id,v) VALUES (21,'x')", nil, "INSERT", "t")
+		return 0, e
+	})
+	if err != nil || calls != 2 {
+		t.Fatalf("a COMMIT-stage serialization failure must retry once: calls=%d err=%v", calls, err)
+	}
+}
+
+// ── #330 defect 3: a ctx taken out of the body cannot query after the body settled ────
+
+// A goroutine the body leaves running (or a ctx it stashes) must not reach the connection once the
+// body has returned — neither in the ROLLBACK window (between the body returning and the connection
+// being released: it would run as an autocommit outside the rolled-back transaction) nor after the
+// release (the connection may already serve another request). Both get [TransactionClosed].
+func TestQueryAfterBodySettledIsRejected(t *testing.T) {
+	db, sink := openRec(t, "file:txb9?mode=memory&cache=shared")
+	defer db.Close()
+	ctx := ContextForDB(db)
+	o := DefaultTransactionOptions()
+	o.RetryDurationMs = 0
+	var leaked *ExecutionContext
+	windowResult := make(chan error, 1)
+	sink.mu.Lock()
+	sink.execHook = func(q string) error {
+		if q != "ROLLBACK" {
+			return nil
+		}
+		// Fired while the runtime ROLLBACKs: a leaked ctx queries NOW (the window).
+		go func() {
+			_, e := Run(leaked, "INSERT INTO t (id,v) VALUES (30,'leak')", nil, WriteIntent())
+			windowResult <- e
+		}()
+		select {
+		case <-time.After(300 * time.Millisecond):
+		case e := <-windowResult:
+			windowResult <- e
+		}
+		return nil
+	}
+	sink.mu.Unlock()
+	_, err := Transaction(ctx, "sqlite", o, func(txCtx *ExecutionContext) (int, error) {
+		leaked = txCtx
+		return 0, errors.New("body fails")
+	})
+	if err == nil {
+		t.Fatalf("body error must surface")
+	}
+	var werr error
+	select {
+	case werr = <-windowResult:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("the ROLLBACK-window query neither failed nor finished")
+	}
+	var sf *SqlFailure
+	if !errors.As(werr, &sf) || sf.Kind != "transaction_closed" {
+		t.Errorf("a query in the ROLLBACK window must be rejected with transaction_closed: %v", werr)
+	}
+	// After the connection was released: also rejected, and nothing leaked into the table.
+	_, aerr := Run(leaked, "INSERT INTO t (id,v) VALUES (31,'late')", nil, WriteIntent())
+	if !errors.As(aerr, &sf) || sf.Kind != "transaction_closed" {
+		t.Errorf("a query after release must be rejected with transaction_closed: %v", aerr)
+	}
+	if !strings.Contains(aerr.Error(), "Query issued after the transaction function settled") {
+		t.Errorf("unexpected message: %v", aerr)
+	}
+	var n int
+	if e := db.QueryRow("SELECT COUNT(*) FROM t WHERE id >= 30").Scan(&n); e != nil || n != 0 {
+		t.Errorf("no leaked write may reach the table: n=%d err=%v", n, e)
 	}
 }

@@ -41,6 +41,11 @@ type SqlFailure struct {
 	// path via sqliteCodeString). This field is UNEXPORTED so it never touches the byte-identical
 	// conformance surface (the corpus compares the encoded result, never the error struct).
 	wrapped error
+	// commitOutcomeUnknown marks a connection error raised by the COMMIT statement itself (#330): the
+	// server may have committed before the response was lost, so the failure is NOT retryable
+	// ([IsRetryableTxError]) — re-running the body could write twice. Unexported (never on the
+	// conformance surface).
+	commitOutcomeUnknown bool
 }
 
 func (e *SqlFailure) Error() string { return e.Msg }

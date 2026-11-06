@@ -860,7 +860,10 @@ pub fn with_transaction_decided_isolated<'a, R>(
                 // COMMIT failed (e.g. a serialization failure surfaced at COMMIT — the 40001 the retry
                 // loop must see): best-effort ROLLBACK, destroy the connection, surface the error.
                 let _ = run(&tx_ctx, "ROLLBACK", &[], &StatementIntent::write());
-                Err(e)
+                // A CONNECTION error at COMMIT leaves the outcome unknown (the server may have
+                // committed before the response was lost): mark it so `is_retryable_tx_error`
+                // refuses it and the retry loop surfaces it instead of re-running the body (#330).
+                Err(crate::tx_options::mark_commit_outcome_unknown(e))
             }
         },
         Ok(TxDecision::Rollback(r)) => {
@@ -1638,6 +1641,101 @@ mod tests {
                 "COMMIT".to_string(),
             ]
         );
+    }
+
+    /// A driver whose COMMIT fails with `message` the first `commit_fails` times (#330 defect 2).
+    struct CommitFailDriver {
+        log: Rc<RefCell<Vec<String>>>,
+        commit_fails: RefCell<u32>,
+        message: &'static str,
+    }
+    struct CommitFailStmt {
+        log: Rc<RefCell<Vec<String>>>,
+        sql: String,
+        fail: Option<&'static str>,
+    }
+    impl PreparedStatement for CommitFailStmt {
+        fn all(&mut self, _p: &[Value]) -> Result<Vec<WireValue>, SqlFailure> {
+            self.log.borrow_mut().push(self.sql.clone());
+            Ok(Vec::new())
+        }
+        fn run(&mut self, _p: &[Value]) -> Result<DrvRunInfo, SqlFailure> {
+            self.log.borrow_mut().push(self.sql.clone());
+            if let Some(m) = self.fail {
+                return Err(fail(m));
+            }
+            Ok(DrvRunInfo {
+                changes: 1,
+                last_insert_rowid: 0,
+            })
+        }
+    }
+    impl Driver for CommitFailDriver {
+        fn prepare(&self, sql: &str) -> Box<dyn PreparedStatement + '_> {
+            let mut fail = None;
+            if sql == "COMMIT" {
+                let mut r = self.commit_fails.borrow_mut();
+                if *r > 0 {
+                    *r -= 1;
+                    fail = Some(self.message);
+                }
+            }
+            Box::new(CommitFailStmt {
+                log: self.log.clone(),
+                sql: sql.to_string(),
+                fail,
+            })
+        }
+        fn begin_tx(&self) -> Result<Box<dyn TxConnection + '_>, SqlFailure> {
+            forwarding_tx(self)
+        }
+        fn acquire_tx(&self) -> Result<Box<dyn TxConnection + '_>, SqlFailure> {
+            crate::driver::forwarding_tx_no_begin(self)
+        }
+    }
+
+    fn run_commit_fail_tx(d: &CommitFailDriver) -> (Result<(), SqlFailure>, usize) {
+        let ctx = for_driver(d);
+        let o = TransactionOptions {
+            retry_on_error: true,
+            retry_limit: 3,
+            retry_duration_ms: 0,
+            ..opts()
+        };
+        let bodies = std::cell::Cell::new(0usize);
+        let res = transaction(&ctx, Dialect::Postgres, &o, |tx| {
+            bodies.set(bodies.get() + 1);
+            run(tx, "WORK", &[], &StatementIntent::write())?;
+            Ok(())
+        });
+        (res, bodies.get())
+    }
+
+    /// A connection error raised BY the COMMIT statement leaves the outcome unknown (the server may
+    /// have committed before the response was lost): the body must NOT be re-run (it could write twice).
+    #[test]
+    fn commit_stage_connection_error_does_not_rerun_body() {
+        let d = CommitFailDriver {
+            log: Rc::new(RefCell::new(Vec::new())),
+            commit_fails: RefCell::new(99),
+            message: "connection closed",
+        };
+        let (res, bodies) = run_commit_fail_tx(&d);
+        assert!(res.unwrap_err().message.contains("connection closed"));
+        assert_eq!(bodies, 1, "a COMMIT-stage connection error must not re-run the body");
+    }
+
+    /// A serialization failure at COMMIT definitely did not commit ⇒ still retried.
+    #[test]
+    fn commit_stage_serialization_failure_still_retries() {
+        let d = CommitFailDriver {
+            log: Rc::new(RefCell::new(Vec::new())),
+            commit_fails: RefCell::new(1),
+            message: "could not serialize access (SQLSTATE 40001)",
+        };
+        let (res, bodies) = run_commit_fail_tx(&d);
+        assert!(res.is_ok());
+        assert_eq!(bodies, 2);
     }
 
     #[test]

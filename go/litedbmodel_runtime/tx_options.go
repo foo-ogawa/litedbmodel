@@ -231,6 +231,11 @@ func IsRetryableTxError(err error) bool {
 	if err == nil {
 		return false
 	}
+	// A connection error at COMMIT has an unknown outcome — never re-run the body (see SqlFailure).
+	var sf *SqlFailure
+	if errors.As(err, &sf) && sf.commitOutcomeUnknown {
+		return false
+	}
 	if IsConnectionError(err) {
 		return true
 	}
@@ -338,6 +343,18 @@ func WriteInReadOnly(operation string, model string) *SqlFailure {
 		Kind:   "write_in_read_only_context",
 		Policy: "fail",
 		Msg:    fmt.Sprintf("Write operation %q on %s is not allowed in read-only context", operation, model),
+	}
+}
+
+// TransactionClosed is raised for a statement issued on a transaction's ctx after the transaction
+// function settled (Go twin of the TS `TransactionClosedError`). A [SqlFailure] with
+// Kind = "transaction_closed".
+func TransactionClosed() *SqlFailure {
+	return &SqlFailure{
+		Kind:   "transaction_closed",
+		Policy: "fail",
+		Msg: "Query issued after the transaction function settled. " +
+			"Await every query started inside DBModel.transaction() before returning.",
 	}
 }
 
