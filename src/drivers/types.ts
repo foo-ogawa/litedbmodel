@@ -57,9 +57,10 @@ export interface DBDriver {
    * Execute a SQL query
    * @param sql - SQL query string
    * @param params - Query parameters
+   * @param onWriter - Run on the writer pool (a read routed to the writer); a connection error is retried once
    * @returns Query result
    */
-  execute(sql: string, params?: unknown[]): Promise<QueryResult>;
+  execute(sql: string, params?: unknown[], onWriter?: boolean): Promise<QueryResult>;
 
   /**
    * Execute a write query (INSERT/UPDATE/DELETE)

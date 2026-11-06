@@ -62,10 +62,10 @@ export interface ConnectionConfig {
   readonly password?: string;
   /**
    * Per-statement timeout in MILLISECONDS. Applied as a session `statement_timeout` (PG) /
-   * `max_execution_time` (MySQL) so a runaway query is aborted by the SERVER. `0`/absent ⇒ no
-   * statement timeout (the engine default). v1 exposed this as `queryTimeout` in SECONDS on the pg
+   * `max_execution_time` (MySQL) so a runaway query is aborted by the SERVER. Absent ⇒ 30000 (v1 parity);
+   * an explicit `0` ⇒ no statement timeout. v1 exposed this as `queryTimeout` in SECONDS on the pg
    * CLIENT (`query_timeout`); the v2 contract is server-side ms so it fires uniformly across drivers.
-   * @default 0 (no timeout)
+   * @default 30000
    */
   readonly queryTimeout?: number;
   /** Enable TCP keepalive on pooled connections (recommended for serverless). @default false */
@@ -108,8 +108,11 @@ export interface ResolvedConnectionConfig {
   readonly charset?: string;
 }
 
+/** The v1 `queryTimeout` default (30 s), in the scp contract unit (ms). */
+const DEFAULT_QUERY_TIMEOUT_MS = 30000;
+
 /**
- * Apply the C3 defaults (queryTimeout=0, keepAlive=false, minPool=0, maxPool=10,
+ * Apply the C3 defaults (queryTimeout=30000, keepAlive=false, minPool=0, maxPool=10,
  * connectTimeoutMillis=30000, idleTimeoutMillis=10000).
  */
 export function resolveConnectionConfig(config: ConnectionConfig = {}): ResolvedConnectionConfig {
@@ -120,7 +123,7 @@ export function resolveConnectionConfig(config: ConnectionConfig = {}): Resolved
     ...(config.database !== undefined ? { database: config.database } : {}),
     ...(config.user !== undefined ? { user: config.user } : {}),
     ...(config.password !== undefined ? { password: config.password } : {}),
-    queryTimeout: config.queryTimeout ?? 0,
+    queryTimeout: config.queryTimeout ?? DEFAULT_QUERY_TIMEOUT_MS,
     keepAlive: config.keepAlive ?? false,
     keepAliveInitialDelayMillis: config.keepAliveInitialDelayMillis ?? 10000,
     minPool: config.minPool ?? 0,

@@ -201,13 +201,15 @@ export class DBHandler {
   }
 
   /**
-   * Execute a query on writer pool (for withWriter context)
+   * Execute a query on the writer pool (for withWriter context / writer-sticky / writes).
+   * `read`: the caller routed a row-returning read here; only that is retried on a connection error
+   * (a write is never re-sent).
    */
-  async executeOnWriter(sql: string, params: unknown[] = []): Promise<QueryResult> {
+  async executeOnWriter(sql: string, params: unknown[] = [], read = false): Promise<QueryResult> {
     if (this.connection) {
       return this.connection.query(sql, params);
     }
-    return this.driver.executeWrite(sql, params);
+    return read ? this.driver.execute(sql, params, true) : this.driver.executeWrite(sql, params);
   }
 
   /**

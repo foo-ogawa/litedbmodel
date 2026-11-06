@@ -5,6 +5,23 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.2.13] - 2026-11-06
+
+**トランザクションの接続まわりの欠陥を直す（v1 分岐と SCP 経路の両方）。**
+Refs #330。
+
+### Fixed
+
+- 貸し出し中の pg Client が切られると 'error' を受ける所が無く、プロセスが落ちた。`'error'` を受けてログに出し、返却時に
+  その接続を破棄する。SCP の pool の idle の接続の `'error'` も受ける。
+- COMMIT の段の接続エラーで本体を再実行して二重に書きうる状態だった。COMMIT の段の接続エラーは再試行せずそのまま投げる。
+- 本体が決着した後に、トランザクションの接続を通る問い合わせが DB へ送られた。`TransactionClosedError` にして送らない。
+- `queryTimeout` が SCP の接続に渡らず、時間切れが無かった。秒を ms にして渡し、未指定は v1 と同じ 30 秒にする。
+  v1 分岐の pg Pool にも `statement_timeout` を渡す。
+- SCP の BEGIN が失敗すると接続が返らなかった。
+- v1 のドライバの `executeWrite` が、接続エラーで書込を送り直していた。そのまま投げる（読み取りの再試行は変えない。
+  writer に回した読み取りは再試行する）。
+
 ## [2.2.12] - 2026-10-26
 
 **writer sticky が、トランザクションの前に `await` がある関数越しのコミットで効かなかったのを直す。`execute()` の DDL・保守がリーダーへ流れていたのを直す。**

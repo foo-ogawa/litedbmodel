@@ -64,6 +64,8 @@ export interface RuntimeDbConfig {
   readonly max?: number;
   /** Seconds allowed for getting a connection (v1 `DBConfig.timeout`). */
   readonly timeout?: number;
+  /** Seconds a statement may run (v1 `DBConfig.queryTimeout`; absent or 0 ⇒ the 30 s default). */
+  readonly queryTimeout?: number;
   readonly idleTimeoutMillis?: number;
   readonly keepAlive?: boolean;
   readonly keepAliveInitialDelayMillis?: number;
@@ -105,6 +107,7 @@ function toConnectionConfig(config: RuntimeDbConfig): ConnectionConfig {
     ...(config.password !== undefined ? { password: config.password } : {}),
     ...(config.max !== undefined ? { maxPool: config.max } : {}),
     ...(config.timeout !== undefined ? { connectTimeoutMillis: config.timeout * 1000 } : {}),
+    ...(config.queryTimeout ? { queryTimeout: config.queryTimeout * 1000 } : {}),
     ...(config.idleTimeoutMillis !== undefined ? { idleTimeoutMillis: config.idleTimeoutMillis } : {}),
     ...(config.keepAlive !== undefined ? { keepAlive: config.keepAlive } : {}),
     ...(config.keepAliveInitialDelayMillis !== undefined ? { keepAliveInitialDelayMillis: config.keepAliveInitialDelayMillis } : {}),

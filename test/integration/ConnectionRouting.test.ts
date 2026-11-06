@@ -354,8 +354,9 @@ describe('C3 — setConfig (queryTimeout / pool sizing / closeAllPools)', () => 
     expect(sessionStatements(resolveConnectionConfig({ driver: 'mysql', charset: 'utf8mb4' }))).toEqual(['SET NAMES utf8mb4']);
     // MySQL has no search path → ignored
     expect(sessionStatements(resolveConnectionConfig({ driver: 'mysql', searchPath: 'x' }))).toEqual([]);
-    // All-default → EMPTY (backward-compat: session untouched)
-    expect(sessionStatements(resolveConnectionConfig({}))).toEqual([]);
+    // All-default → only the 30 s default statement timeout (v1 parity)
+    expect(sessionStatements(resolveConnectionConfig({}))).toEqual(['SET statement_timeout = 30000']);
+    expect(sessionStatements(resolveConnectionConfig({ queryTimeout: 0 }))).toEqual([]);
   });
 
   it('queryTimeout FIRES a real server statement timeout on a slow query (PG)', async () => {

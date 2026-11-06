@@ -284,6 +284,24 @@ JOINs by default`）。v1 `LazyRelation` と同型の **staged batch query-compo
   依存する書込 → 例外での短絡」は手で書く（宣言的な gate-first / tx-DAG 導出は持たない）。実行は
   `` `executeTransactionAsync` (`src/scp/makesql/tx.ts`) `` — ランタイムは per-statement のゲート短絡
   primitive（`GateRule`）を運べるが、宣言エンドポイントはゲートを一切 emit しない（batch plan は gate-free）。
+- **トランザクションの接続の安全（全言語で同じ振る舞い）**
+  - **再試行**: 本体（fn）の失敗のうち、直列化の失敗・deadlock・接続エラーは、新しい接続でトランザクション全体を
+    再実行する。**COMMIT の段の接続エラーだけは再試行せず、そのまま投げる**（サーバがコミット済みで応答だけ失われた場合に
+    二重に書くのを防ぐ。結果は不明）。COMMIT の段の直列化の失敗・deadlock は再試行する。
+  - **決着後の問い合わせ**: 本体が決着（成功・失敗）した後に、そのトランザクションの接続を通る問い合わせは
+    `TransactionClosedError`（TS。メッセージ `Query issued after the transaction function settled. Await every query
+    started inside DBModel.transaction() before returning.`）にし、DB へは送らない。BEGIN・COMMIT・ROLLBACK は本体が見る
+    接続とは別に、トランザクションが持つ接続へ直接送る（`withTransactionAsync` の `pinned` / `control`、v1 分岐は
+    `DBModel.transaction` の `guarded`）。
+  - **BEGIN の失敗**: BEGIN も try の中。失敗しても接続は破棄して返す。
+  - **貸し出し中の接続の切断**: 貸し出し中の pg Client の `'error'` を受けてログに出し、返却時にその接続は破棄する。
+    pool の idle の接続の `'error'` も受ける（`guardLeasedClient` / `guardIdlePoolErrors`、`src/connection-errors.ts`）。
+  - **時間切れ**: `DBConfig.queryTimeout`（秒、未指定は 30）を、接続の設定（scp は ms の `queryTimeout`）まで渡し、
+    サーバ側の `statement_timeout` として効かせる（v1 分岐は pg Pool の `statement_timeout`、scp は接続の取得時の
+    `SET statement_timeout`）。
+  - **書込の送り直しをしない**: 接続エラーで autocommit の書込を送り直さない（そのまま投げる）。読み取りの再試行は
+    残す。writer に回した読み取り（`withWriter` の中、writer-sticky の間）も、回した側の判断を `executeOnWriter` から
+    ドライバまで渡して再試行する。
 
 ```ts
 await DBModel.transaction(async () => {

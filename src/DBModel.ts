@@ -8,7 +8,7 @@ import { getSqlCastFormatter } from './drivers';
 import { normalizeConditions, type ConditionObject } from './DBConditions';
 import { initDBHandler, getDBHandler, createHandlerWithConnection, DBHandler, type DBConfig, type DBConnection } from './DBHandler';
 import type { SelectOptions, InsertOptions, UpdateOptions, DeleteOptions, UpdateManyOptions, TransactionOptions, LimitConfig, DBConfigOptions, PkeyResult, InternalInsertOptions, InternalUpdateOptions, InternalDeleteOptions } from './types';
-import { LimitExceededError, WriteOutsideTransactionError, WriteInReadOnlyContextError } from './types';
+import { LimitExceededError, WriteOutsideTransactionError, WriteInReadOnlyContextError, TransactionClosedError } from './types';
 import { type Column, type OrderSpec, type CVs, type Conds, type CondsOf, type OrCondOf, type ColumnsOf, createColumn, columnsToNames, pairsToRecord, condsToRecord, serializeCondValue, orderToString, createOrCond } from './Column';
 import { type SqlFragment, type SqlCondition, type SqlTypedFragment, isAnySqlFragment } from './SqlFragment';
 import { createMiddleware as createMiddlewareFn, type Middleware, type MiddlewareClass, type MiddlewareConfig, type CreatedMiddlewareClass, type ExecuteResult } from './Middleware';
@@ -276,6 +276,7 @@ export abstract class DBModel {
           ...(config.password !== undefined ? { password: config.password } : {}),
           ...(config.max !== undefined ? { max: config.max } : {}),
           ...(config.timeout !== undefined ? { timeout: config.timeout } : {}),
+          ...(config.queryTimeout !== undefined ? { queryTimeout: config.queryTimeout } : {}),
           ...(config.idleTimeoutMillis !== undefined ? { idleTimeoutMillis: config.idleTimeoutMillis } : {}),
           ...(config.keepAlive !== undefined ? { keepAlive: config.keepAlive } : {}),
           ...(config.keepAliveInitialDelayMillis !== undefined ? { keepAliveInitialDelayMillis: config.keepAliveInitialDelayMillis } : {}),
@@ -2982,9 +2983,10 @@ export abstract class DBModel {
       const handler = this.getHandler();
 
       // The writer for a statement that does not return rows, inside withWriter, or while writer-sticky
-      const useWriter = !this._returnsRows(s) || this._getWriterContext().getStore() !== undefined || this._shouldUseWriterSticky();
+      const returnsRows = this._returnsRows(s);
+      const useWriter = !returnsRows || this._getWriterContext().getStore() !== undefined || this._shouldUseWriterSticky();
       const result = useWriter
-        ? await handler.executeOnWriter(s, p || [])
+        ? await handler.executeOnWriter(s, p || [], returnsRows)
         : await handler.execute(s, p || []);
 
       return {
@@ -3145,17 +3147,33 @@ export abstract class DBModel {
       attempt++;
       const connection = await handler.getConnection();
       let destroyConnection = false;
+      let committing = false;
+      // func sees the connection only through this guard; BEGIN/COMMIT/ROLLBACK use `connection` directly
+      let closed = false;
+      const guarded: DBConnection = {
+        query: async (sql, params) => {
+          if (closed) throw new TransactionClosedError();
+          return connection.query(sql, params);
+        },
+        release: (error) => connection.release(error),
+      };
 
       try {
         await connection.query('BEGIN');
 
-        const context: TransactionContext = { connection };
-        const result = await txContext.run(context, func);
+        const context: TransactionContext = { connection: guarded };
+        let result: R;
+        try {
+          result = await txContext.run(context, func);
+        } finally {
+          closed = true;
+        }
 
         if (rollbackOnly) {
           // Rollback instead of commit (for preview/dry-run scenarios)
           await connection.query('ROLLBACK');
         } else {
+          committing = true;
           await connection.query('COMMIT');
           if (useWriterAfterTransaction) this._writerSticky.mark();
         }
@@ -3169,9 +3187,12 @@ export abstract class DBModel {
           // destroyConnection is already true; original error is preserved.
         }
 
+        // A connection error at COMMIT leaves the outcome unknown (the server may have committed
+        // before the response was lost): re-running func could write twice, so throw instead.
         if (
           retryOnError &&
           attempt < retryLimit &&
+          !(committing && isConnectionError(error as Error)) &&
           this.isRetryableError(error as Error)
         ) {
           await this.sleep(retryDuration * Math.pow(2, attempt - 1));

@@ -21,6 +21,8 @@ import type { AsyncConnection, AsyncConnectionPool, Rows, RunInfo } from '../exe
 import type { ResolvedConnectionConfig, PoolFactory, PoolCloser } from '../connection-routing';
 // MySQL parses no RETURNING — the write→re-select derivation lives in ONE place for all five runtimes.
 import { buildMysqlReselect, bindReselect } from './mysql-returning';
+import { guardLeasedClient, guardIdlePoolErrors, type LeasedClientLike } from '../../connection-errors';
+import { defaultLogger } from '../../drivers/types';
 
 // ── TS read-path driver de-box config (issue #59) ─────────────────────────────
 // The read-path materializer (`materializeCell`) coerces each driver cell to the JS form its SQL
@@ -170,9 +172,9 @@ export interface PgOwnedPoolLike {
   connect(): Promise<PgPoolClientLike>;
 }
 /** The pg `PoolClient`: parameterized `query`, and `release(destroy?)` back to the pool. */
-export interface PgPoolClientLike {
+export interface PgPoolClientLike extends LeasedClientLike {
   query(text: string, values?: unknown[]): Promise<{ rows: Record<string, unknown>[]; rowCount?: number | null }>;
-  release(destroy?: boolean): void;
+  release(destroy?: Error | boolean): void;
 }
 
 /** Adapt a pg `PoolClient` to the {@link AsyncConnection} seam (one owned connection). */
@@ -195,16 +197,18 @@ function pgConnection(client: PgPoolClientLike): AsyncConnection {
  * `withTransactionAsync` for per-execution connection ownership.
  */
 export function pgConnectionPool(pool: PgOwnedPoolLike): AsyncConnectionPool {
-  const handles = new WeakMap<AsyncConnection, PgPoolClientLike>();
+  const handles = new WeakMap<AsyncConnection, { client: PgPoolClientLike; settle: ReturnType<typeof guardLeasedClient> }>();
   return {
     async acquire() {
       const client = await pool.connect();
       const conn = pgConnection(client);
-      handles.set(conn, client);
+      // pg-pool detaches its idle 'error' listener while the client is leased: receive it here.
+      handles.set(conn, { client, settle: guardLeasedClient(client, defaultLogger) });
       return conn;
     },
     async release(conn, destroy) {
-      handles.get(conn)?.release(destroy === true);
+      const h = handles.get(conn);
+      h?.client.release(h.settle(destroy === true));
     },
   };
 }
@@ -307,7 +311,7 @@ export function mysqlConnectionPool(pool: MysqlOwnedPoolLike, acquireTimeoutMill
 // (queryTimeout/searchPath/charset) are layered separately by `configuredPool` on checkout.
 
 /** A pg `Pool` the factory constructs: owned-connection surface + `end()` (the closer). */
-export type PgOwnedPoolWithEnd = PgOwnedPoolLike & { end(): Promise<void> };
+export type PgOwnedPoolWithEnd = PgOwnedPoolLike & { end(): Promise<void>; on(event: 'error', listener: (err: Error) => void): unknown };
 
 /** The `pg` module surface the pool factory needs: an OWNED-connection `Pool` ctor + `types`. */
 export interface PgFactoryModuleLike {
@@ -344,6 +348,7 @@ export function pgPoolFactory(pg: PgFactoryModuleLike): PoolFactory {
       keepAlive: config.keepAlive,
       ...(config.keepAlive ? { keepAliveInitialDelayMillis: config.keepAliveInitialDelayMillis } : {}),
     });
+    guardIdlePoolErrors(pool, defaultLogger);
     return { pool: pgConnectionPool(pool), close: () => pool.end() };
   };
 }
