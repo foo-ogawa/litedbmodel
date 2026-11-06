@@ -5,11 +5,13 @@
  * - no func retry after a COMMIT connection error
  * - queries after func has settled are rejected
  * - statement_timeout passed to the pg Pool
+ * - executeWrite does not resend a write after a connection error (pg, mysql)
  */
 
 import { describe, it, expect, vi } from 'vitest';
 import { EventEmitter } from 'events';
 import { PostgresDriver } from '../../src/drivers/postgres';
+import { MysqlDriver } from '../../src/drivers/mysql';
 import type { Logger, DBConnection } from '../../src/drivers/types';
 import { DBModel, getTransactionConnection } from '../../src/DBModel';
 import { TransactionClosedError } from '../../src/types';
@@ -160,5 +162,43 @@ describe('DBModel.transaction', () => {
     await expect(pending).rejects.toBeInstanceOf(TransactionClosedError);
     expect(query).toHaveBeenCalledTimes(callsAfterRollback);
     expect(query.mock.calls.map((c) => c[0])).toEqual(['BEGIN', 'ROLLBACK']);
+  });
+});
+
+describe('executeWrite does not resend a write after a connection error', () => {
+  it('PostgresDriver sends the write once and throws the connection error', async () => {
+    const driver = new PostgresDriver({
+      config: { host: 'tx-safety-write-pg-host', port: 5432, database: 'tx_safety_db', user: 'test', password: 'test' },
+      logger: silentLogger,
+    });
+    const connectionError = makeError('Connection terminated unexpectedly');
+    const query = vi
+      .fn()
+      .mockRejectedValueOnce(connectionError)
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 });
+    (driver as unknown as { pool: { query: typeof query } }).pool = { query };
+
+    await expect(
+      driver.executeWrite('UPDATE users SET name = ? WHERE id = ?', ['alice', 1]),
+    ).rejects.toBe(connectionError);
+    expect(query).toHaveBeenCalledTimes(1);
+  });
+
+  it('MysqlDriver sends the write once and throws the connection error', async () => {
+    const driver = new MysqlDriver({
+      config: { host: 'tx-safety-write-mysql-host', port: 3306, database: 'tx_safety_db', user: 'test', password: 'test' },
+      logger: silentLogger,
+    });
+    const connectionError = makeError('Connection lost', 'PROTOCOL_CONNECTION_LOST');
+    const query = vi
+      .fn()
+      .mockRejectedValueOnce(connectionError)
+      .mockResolvedValueOnce([{ affectedRows: 1 }, null]);
+    (driver as unknown as { pool: { query: typeof query } }).pool = { query };
+
+    await expect(
+      driver.executeWrite('UPDATE users SET name = ? WHERE id = ?', ['alice', 1]),
+    ).rejects.toBe(connectionError);
+    expect(query).toHaveBeenCalledTimes(1);
   });
 });

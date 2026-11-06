@@ -297,23 +297,6 @@ export class PostgresDriver implements DBDriver {
         rowCount: result.rowCount ?? 0,
       };
     } catch (error) {
-      if (isConnectionError(error as Error)) {
-        this.logger.warn(`Connection error, retrying write: ${q.convertedSql}`);
-        try {
-          const result = q.isMulti
-            ? await conn.query(q.convertedSql, params)
-            : await conn.query({ name: q.name, text: q.convertedSql, values: params });
-          const duration = Date.now() - startTime;
-          this.logger.debug(`Retry succeeded in ${duration}ms, rows: ${result.rowCount}`);
-          return {
-            rows: result.rows as Record<string, unknown>[],
-            rowCount: result.rowCount ?? 0,
-          };
-        } catch (retryError) {
-          this.logger.error(`Retry also failed: ${q.convertedSql}`, retryError);
-          throw retryError;
-        }
-      }
       this.logger.error(`Write failed: ${q.convertedSql}`, error);
       throw error;
     }
