@@ -6,7 +6,7 @@
 
 # Class: WriteInReadOnlyContextError
 
-Defined in: [types.ts:445](https://github.com/foo-ogawa/litedbmodel/blob/main/src/types.ts#L445)
+Defined in: [types.ts:454](https://github.com/foo-ogawa/litedbmodel/blob/main/src/types.ts#L454)
 
 Error thrown when attempting write operations inside withWriter() context.
 
@@ -22,7 +22,7 @@ Error thrown when attempting write operations inside withWriter() context.
 new WriteInReadOnlyContextError(operation: string, modelName?: string): WriteInReadOnlyContextError;
 ```
 
-Defined in: [types.ts:446](https://github.com/foo-ogawa/litedbmodel/blob/main/src/types.ts#L446)
+Defined in: [types.ts:455](https://github.com/foo-ogawa/litedbmodel/blob/main/src/types.ts#L455)
 
 #### Parameters
 
@@ -45,5 +45,5 @@ Error.constructor
 
 | Property | Modifier | Type | Defined in |
 | ------ | ------ | ------ | ------ |
-| <a id="operation"></a> `operation` | `readonly` | `string` | [types.ts:447](https://github.com/foo-ogawa/litedbmodel/blob/main/src/types.ts#L447) |
-| <a id="modelname"></a> `modelName?` | `readonly` | `string` | [types.ts:448](https://github.com/foo-ogawa/litedbmodel/blob/main/src/types.ts#L448) |
+| <a id="operation"></a> `operation` | `readonly` | `string` | [types.ts:456](https://github.com/foo-ogawa/litedbmodel/blob/main/src/types.ts#L456) |
+| <a id="modelname"></a> `modelName?` | `readonly` | `string` | [types.ts:457](https://github.com/foo-ogawa/litedbmodel/blob/main/src/types.ts#L457) |

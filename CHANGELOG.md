@@ -7,8 +7,12 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [2.2.14] - 2026-11-07
 
-**SCP 経路の `getCurrentConnection()` が SQL を実行しなかったのを直す。`execute()` の `RETURNING` 付きの書き込みが reader へ送られ、送り直されていたのを直す。**
-Closes #331, Closes #332。
+**SCP 経路の `getCurrentConnection()` が SQL を実行しなかったのを直す。`execute()` の `RETURNING` 付きの書き込みが reader へ送られ、送り直されていたのを直す。確保済みの接続でトランザクションを開く `acquireConnection()` と `TransactionOptions.connection` を追加する。**
+Closes #329, Closes #331, Closes #332。
+
+### Added
+
+- `DBModel.acquireConnection()` と `TransactionOptions.connection`: 確保した書き込み用の接続でトランザクションを開く（解放は確保した側。接続エラーは再試行せず、deadlock・直列化の失敗は同じ接続で再試行する）。v1 分岐・SCP 経路の両方で使える。SCP の pin は実行コンテキストごとに持つようにし、別の runtime の入れ子が互いの接続に合流しないようにした。
 
 ### Fixed
 

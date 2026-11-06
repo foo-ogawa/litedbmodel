@@ -74,7 +74,7 @@ import {
 } from './connection-routing';
 import type { Dialect } from './makesql/handler';
 import { activeSqlMiddlewares } from './middleware';
-import { isConnectionError as defaultIsConnectionError, createTransactionGuard } from '../connection-errors';
+import { isConnectionError as defaultIsConnectionError, isUnretriedConnectionError, createTransactionGuard } from '../connection-errors';
 import { defaultLogger } from '../drivers/types';
 
 // ── Statement intent & the driver contact (§5) ────────────────────────────────
@@ -403,7 +403,7 @@ export interface PinnedTx {
 }
 
 /** Per-async-execution ambient ctx: the ALS slot carrying the tx-scoped connection (§3). */
-const asyncCtxStore = new AsyncLocalStorage<PinnedTx>();
+const asyncCtxStore = new AsyncLocalStorage<ReadonlyMap<AsyncExecutionContext, PinnedTx>>();
 
 /**
  * A pooled async {@link AsyncExecutionContext}. Outside a transaction, `connectionFor` acquires a
@@ -447,7 +447,7 @@ export class PooledAsyncContext implements AsyncExecutionContext {
     // of the tx's own database (an unnamed one, or one naming that database) on the SAME conn (the per-execution ownership the concurrent-tx
     // fix depends on); one naming a DIFFERENT database is rejected below. The tx pin is a per-scope fact
     // only the ctx's ALS holds, so it is resolved HERE, before the pool-selection steps.
-    const pinned = asyncCtxStore.getStore();
+    const pinned = currentPinnedAsyncConnection(this);
     if (pinned !== undefined) {
       // A statement that names a DIFFERENT database than the transaction opened on cannot be honored on
       // the pinned connection — a transaction is ONE connection on ONE database — so it is LOUD rather
@@ -522,8 +522,8 @@ function isRoutingConfig(x: AsyncConnectionPool | RoutingConfig): x is RoutingCo
  * task-local (rust) / `context.Context` (go) / contextvars (py) / an explicit arg (php) for the
  * SAME effect.
  */
-export function runWithPinnedAsyncConnection<R>(conn: AsyncConnection, db: string | null, fn: () => Promise<R>): Promise<R> {
-  return asyncCtxStore.run({ conn, db }, fn);
+export function runWithPinnedAsyncConnection<R>(owner: AsyncExecutionContext, conn: AsyncConnection, db: string | null, fn: () => Promise<R>): Promise<R> {
+  return asyncCtxStore.run(new Map(asyncCtxStore.getStore()).set(owner, { conn, db }), fn);
 }
 
 /**
@@ -535,8 +535,8 @@ export function runWithPinnedAsyncConnection<R>(conn: AsyncConnection, db: strin
  * DIFFERENT database than the transaction opened on. The native ports read their task-local /
  * contextvar / `context.Context` for the SAME nested detection.
  */
-export function currentPinnedAsyncConnection(): PinnedTx | undefined {
-  return asyncCtxStore.getStore();
+export function currentPinnedAsyncConnection(owner: AsyncExecutionContext): PinnedTx | undefined {
+  return asyncCtxStore.getStore()?.get(owner);
 }
 
 // ── The async per-execution-ownership transaction (§3) — the concurrent-tx fix ─
@@ -587,7 +587,7 @@ export async function withTransactionAsync<R>(
 ): Promise<R> {
   // NESTED-TX JOIN (§ mirror v1 :2794): already inside a tx on this async chain ⇒ join the outer.
   // No new connection, no BEGIN/COMMIT — the inner body is part of the outer physical transaction.
-  const outer = currentPinnedAsyncConnection();
+  const outer = currentPinnedAsyncConnection(ctx);
   if (outer !== undefined) {
     // Reuse the outer's ctx (`connectionFor` already returns the pinned conn for every statement
     // of the tx's own database). Isolation/retry/
@@ -604,7 +604,8 @@ export async function withTransactionAsync<R>(
   let attempt = 0;
   for (;;) {
     attempt++;
-    const conn = await pool.acquire();
+    // A given connection is released by whoever acquired it, never here
+    const conn = opts.connection ?? await pool.acquire();
     const txCtx = ctx.withConnection(conn, true);
 
     // One attempt: BEGIN…body…COMMIT/ROLLBACK on the pinned conn. Returns `{ ok, value }` on success
@@ -623,7 +624,7 @@ export async function withTransactionAsync<R>(
     };
     const control = (sql: string): Promise<RunInfo> =>
       ctx.middleware.wrap<Promise<RunInfo>>(sql, [], (s, p) => conn.run(s, p));
-    const attemptResult = await runWithPinnedAsyncConnection(pinned, connection ?? null, async (): Promise<{ ok: true; value: R } | { ok: false; error: unknown }> => {
+    const attemptResult = await runWithPinnedAsyncConnection(ctx, pinned, connection ?? null, async (): Promise<{ ok: true; value: R } | { ok: false; error: unknown }> => {
       try {
         for (const begin of begins) await control(begin);
         // Mark the body as "inside a transaction" so a nested write's guard (`checkWriteAllowed`)
@@ -646,7 +647,7 @@ export async function withTransactionAsync<R>(
 
     // An errored attempt saw a failed statement — destroy the (possibly poisoned) conn so a retry
     // reconnects on a fresh one; a clean success returns the conn to the pool.
-    await pool.release(conn, poisoned || !attemptResult.ok);
+    if (opts.connection === undefined) await pool.release(conn, poisoned || !attemptResult.ok);
 
     if (attemptResult.ok) {
       // WRITER-STICKY (§3-2, read-your-writes): a committed tx records the commit in the current
@@ -662,8 +663,9 @@ export async function withTransactionAsync<R>(
     const { error } = attemptResult;
     // A connection error at COMMIT leaves the outcome unknown (the server may have committed before the
     // response was lost): re-running the body could write twice, so it is thrown, not retried.
-    const commitConnectionError = committing && error instanceof Error && isConnectionError(error);
-    if (resolved.retryOnError && attempt < resolved.retryLimit && !commitConnectionError && isRetryableTxError(error, isConnectionError)) {
+    // On a given connection a connection error is thrown too: a new connection cannot be taken.
+    const unretried = isUnretriedConnectionError(error, { committing, givenConnection: opts.connection !== undefined }, isConnectionError);
+    if (resolved.retryOnError && attempt < resolved.retryLimit && !unretried && isRetryableTxError(error, isConnectionError)) {
       await sleep(resolved.retryDuration * Math.pow(2, attempt - 1));
       continue; // RETRY the whole transaction on a fresh connection
     }

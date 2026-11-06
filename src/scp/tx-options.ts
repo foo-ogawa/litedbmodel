@@ -16,6 +16,7 @@
 
 import { WriteOutsideTransactionError, WriteInReadOnlyContextError } from '../types';
 import type { Dialect } from './makesql/handler';
+import type { AsyncConnection } from './exec-context';
 
 export { WriteOutsideTransactionError, WriteInReadOnlyContextError };
 
@@ -127,6 +128,13 @@ export interface TransactionOptions {
    * re-checks the global). @default true
    */
   readonly useWriterAfterTransaction?: boolean;
+  /**
+   * An owned connection acquired by the caller (`DBModel.acquireConnection()`). The transaction BEGINs on it
+   * instead of acquiring one, and does NOT release it after COMMIT / ROLLBACK (the acquirer releases it). A
+   * connection error is thrown, not retried (a new connection cannot be taken); a deadlock / serialization
+   * failure is retried on the same connection after ROLLBACK.
+   */
+  readonly connection?: AsyncConnection;
 }
 
 /** The resolved (defaults-applied) options the tx runtime uses — no `undefined` holes. */

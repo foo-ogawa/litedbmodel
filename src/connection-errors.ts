@@ -24,6 +24,20 @@ export function isConnectionError(error: Error): boolean {
   );
 }
 
+/**
+ * Is `error` a connection error that a transaction must throw instead of re-running its body? True at the
+ * COMMIT stage (the server may have committed before the response was lost: re-running could write twice)
+ * and on a connection the caller gave (`TransactionOptions.connection`: a new connection cannot be taken).
+ * v1 `DBModel.transaction` and scp `withTransactionAsync` both decide with this.
+ */
+export function isUnretriedConnectionError(
+  error: unknown,
+  where: { committing: boolean; givenConnection: boolean },
+  isConn: (e: Error) => boolean = isConnectionError,
+): boolean {
+  return (where.committing || where.givenConnection) && error instanceof Error && isConn(error);
+}
+
 /** The pg `Client` surface {@link guardLeasedClient} needs (an EventEmitter). */
 export interface LeasedClientLike {
   on(event: 'error', listener: (err: Error) => void): unknown;
