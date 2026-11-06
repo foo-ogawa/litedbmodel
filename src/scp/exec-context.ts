@@ -74,7 +74,7 @@ import {
 } from './connection-routing';
 import type { Dialect } from './makesql/handler';
 import { activeSqlMiddlewares } from './middleware';
-import { isConnectionError as defaultIsConnectionError, isUnretriedConnectionError, createTransactionGuard } from '../connection-errors';
+import { isConnectionError as defaultIsConnectionError, isUnretriedConnectionError, assertNestedConnection, createTransactionGuard } from '../connection-errors';
 import { defaultLogger } from '../drivers/types';
 
 // ── Statement intent & the driver contact (§5) ────────────────────────────────
@@ -400,6 +400,8 @@ export interface PinnedTx {
   readonly conn: AsyncConnection;
   /** The connection NAME the transaction opened on (`null` ⇒ the default connection). */
   readonly db: string | null;
+  /** The bare connection the transaction was opened on (`conn` is the body's guard around it). */
+  readonly opened: AsyncConnection;
 }
 
 /** Per-async-execution ambient ctx: the ALS slot carrying the tx-scoped connection (§3). */
@@ -522,8 +524,8 @@ function isRoutingConfig(x: AsyncConnectionPool | RoutingConfig): x is RoutingCo
  * task-local (rust) / `context.Context` (go) / contextvars (py) / an explicit arg (php) for the
  * SAME effect.
  */
-export function runWithPinnedAsyncConnection<R>(owner: AsyncExecutionContext, conn: AsyncConnection, db: string | null, fn: () => Promise<R>): Promise<R> {
-  return asyncCtxStore.run(new Map(asyncCtxStore.getStore()).set(owner, { conn, db }), fn);
+export function runWithPinnedAsyncConnection<R>(owner: AsyncExecutionContext, pin: PinnedTx, fn: () => Promise<R>): Promise<R> {
+  return asyncCtxStore.run(new Map(asyncCtxStore.getStore()).set(owner, pin), fn);
 }
 
 /**
@@ -589,6 +591,8 @@ export async function withTransactionAsync<R>(
   // No new connection, no BEGIN/COMMIT — the inner body is part of the outer physical transaction.
   const outer = currentPinnedAsyncConnection(ctx);
   if (outer !== undefined) {
+    // A given connection must be the outer transaction's own (else an error, never silently ignored).
+    assertNestedConnection(opts.connection, outer.opened);
     // Reuse the outer's ctx (`connectionFor` already returns the pinned conn for every statement
     // of the tx's own database). Isolation/retry/
     // rollbackOnly options on a NESTED call are ignored — the outer transaction owns them.
@@ -624,7 +628,7 @@ export async function withTransactionAsync<R>(
     };
     const control = (sql: string): Promise<RunInfo> =>
       ctx.middleware.wrap<Promise<RunInfo>>(sql, [], (s, p) => conn.run(s, p));
-    const attemptResult = await runWithPinnedAsyncConnection(ctx, pinned, connection ?? null, async (): Promise<{ ok: true; value: R } | { ok: false; error: unknown }> => {
+    const attemptResult = await runWithPinnedAsyncConnection(ctx, { conn: pinned, db: connection ?? null, opened: conn }, async (): Promise<{ ok: true; value: R } | { ok: false; error: unknown }> => {
       try {
         for (const begin of begins) await control(begin);
         // Mark the body as "inside a transaction" so a nested write's guard (`checkWriteAllowed`)

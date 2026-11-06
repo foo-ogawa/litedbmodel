@@ -15,7 +15,7 @@ import { createMiddleware as createMiddlewareFn, type Middleware, type Middlewar
 import { serializeRecord, getColumnMeta, getPrimaryKey, getSqlCastMap, type KeyPair, type CompositeKeyPairs } from './decorators';
 import { getTypeCast, getSqlBuilder } from './drivers';
 import { defaultLogger, type DriverTypeCast } from './drivers/types';
-import { isConnectionError, isUnretriedConnectionError, createTransactionGuard } from './connection-errors';
+import { isConnectionError, isUnretriedConnectionError, assertNestedConnection, createTransactionGuard } from './connection-errors';
 
 // Import LazyRelation module (static import for Vitest compatibility)
 import { LazyRelationContext, type RelationType, type RelationConfig } from './LazyRelation';
@@ -40,6 +40,7 @@ import {
   runWithPinnedAsyncConnection,
   type AsyncConnection,
   type AsyncExecutionContext,
+  type PinnedTx,
 } from './scp/exec-context';
 import { rawExecuteAsync, isReadOnlyStatement, type RawResult } from './scp/middleware';
 // The row-lock tail SSoT (` FOR UPDATE` / ` FOR SHARE`) — shared with the SCP `compileSelect`, so the
@@ -1411,8 +1412,8 @@ export abstract class DBModel {
    * `conn` (the transaction's guarded pin, or an acquired connection), so it reaches that connection and
    * never a pooled one. @internal
    */
-  protected static _scpPinnedQuery(conn: AsyncConnection, db: string | null, rt: RuntimeContext): DBConnection['query'] {
-    return (sql, params) => runWithPinnedAsyncConnection(rt.ctx, conn, db, async () => {
+  protected static _scpPinnedQuery(pin: PinnedTx, rt: RuntimeContext): DBConnection['query'] {
+    return (sql, params) => runWithPinnedAsyncConnection(rt.ctx, pin, async () => {
       const { rows, rowCount } = await this._scpRawExecute(sql, params ?? [], rt);
       return { rows, rowCount: rowCount ?? rows.length };
     });
@@ -3106,9 +3107,7 @@ export abstract class DBModel {
     const outer = txContext.getStore();
     if (outer) {
       // A connection given to a nested transaction must be the outer transaction's own connection
-      if (options.connection && options.connection !== outer.opened) {
-        throw new Error('transaction(): the connection option is a different connection from the enclosing transaction\'s');
-      }
+      assertNestedConnection(options.connection, outer.opened);
       // Already in a transaction, just execute the function
       return func();
     }
@@ -3137,7 +3136,7 @@ export abstract class DBModel {
           // the pinned connection — rejected by its guard once the body settled — never a pooled one).
           const pin = currentPinnedAsyncConnection(rt.ctx)!;
           const txConnection: DBConnection = {
-            query: this._scpPinnedQuery(pin.conn, pin.db, rt),
+            query: this._scpPinnedQuery(pin, rt),
             release: () => undefined,
           };
           return txContext.run({ connection: txConnection, opened: options.connection }, func);
@@ -3235,7 +3234,7 @@ export abstract class DBModel {
       const pool = rt.ctx.connectionPoolFor({ write: true });
       const conn = await pool.acquire();
       scpConnection = conn;
-      query = this._scpPinnedQuery(conn, null, rt);
+      query = this._scpPinnedQuery({ conn, db: null, opened: conn }, rt);
       free = (error) => {
         pool.release(conn, !!error).catch((e: unknown) => (this._configOptions.logger ?? defaultLogger).error('Failed to release the acquired connection', e));
       };

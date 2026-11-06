@@ -6,7 +6,8 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { describe, it, expect, vi } from 'vitest';
 import { DBModel } from '../../src/DBModel';
-import { PooledAsyncContext, type AsyncConnection, type AsyncConnectionPool } from '../../src/scp';
+import { PooledAsyncContext, executeAsync, type AsyncConnection, type AsyncConnectionPool } from '../../src/scp';
+import { transaction as scpTransaction } from '../../src/scp/exec-context';
 import { TransactionClosedError } from '../../src/types';
 
 function connError(): Error {
@@ -103,6 +104,42 @@ describe('two SCP runtimes nested in opposite directions (#329)', () => {
     expect(b.log).toEqual(['BEGIN', 'SELECT in_b', 'COMMIT']);
     expect(a.taken()).toBe(1);
     expect(b.taken()).toBe(1);
+  });
+});
+
+describe('scp transaction(ctx, fn, { connection }) nested in a transaction of the same ctx (#329)', () => {
+  function makeCtx() {
+    const log: string[] = [];
+    const connection = (name: string): AsyncConnection => ({
+      async execute(sql) { log.push(`${name}:${sql}`); return []; },
+      async run(sql) { log.push(`${name}:${sql}`); return { changes: 0, lastInsertRowid: 0 }; },
+    });
+    const outer = connection('outer');
+    const other = connection('other');
+    const pool: AsyncConnectionPool = { async acquire() { return outer; }, async release() {} };
+    return { ctx: new PooledAsyncContext(pool), log, outer, other };
+  }
+
+  it('throws for a connection that is not the enclosing transaction\'s, without running the body', async () => {
+    const { ctx, log, other } = makeCtx();
+    const inner = vi.fn(async () => undefined);
+
+    await expect(scpTransaction(ctx, async () => {
+      await scpTransaction(ctx, inner, { connection: other });
+    }, { retryOnError: false })).rejects.toThrow('different connection');
+    expect(inner).not.toHaveBeenCalled();
+    expect(log).toEqual(['outer:BEGIN', 'outer:ROLLBACK']);
+  });
+
+  it('joins when given the enclosing transaction\'s own connection', async () => {
+    const { ctx, log, outer } = makeCtx();
+
+    await scpTransaction(ctx, async () => {
+      await scpTransaction(ctx, async () => {
+        await executeAsync(ctx, 'SELECT inner', []);
+      }, { connection: outer });
+    }, { connection: outer });
+    expect(log).toEqual(['outer:BEGIN', 'outer:SELECT inner', 'outer:COMMIT']);
   });
 });
 

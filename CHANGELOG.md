@@ -14,6 +14,10 @@ Closes #329, Closes #331, Closes #332。
 
 - `DBModel.acquireConnection()` と `TransactionOptions.connection`: 確保した書き込み用の接続でトランザクションを開く（解放は確保した側。接続エラーは再試行せず、deadlock・直列化の失敗は同じ接続で再試行する）。v1 分岐・SCP 経路の両方で使える。SCP の pin は実行コンテキストごとに持つようにし、別の runtime の入れ子が互いの接続に合流しないようにした。
 
+### Changed
+
+- `litedbmodel/scp` の `runWithPinnedAsyncConnection(owner, pin, fn)` と `currentPinnedAsyncConnection(owner)` は、実行コンテキスト（owner）を引数に取る形になった。`PinnedTx` に外のトランザクションが開いた素の接続 `opened` が増えた。理由: pin が全 runtime で 1 つ共有されていたため、別の runtime（別の `createDBBase`）の `transaction` が外の runtime の接続に合流していた欠陥の直し。
+
 ### Fixed
 
 - SCP 経路のトランザクションの中で `getCurrentConnection()` / `getTransactionConnection()` が返す接続の `query` が、SQL を実行せず
