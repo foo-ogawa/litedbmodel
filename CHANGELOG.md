@@ -5,6 +5,20 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.2.14] - 2026-11-07
+
+**SCP 経路の `getCurrentConnection()` が SQL を実行しなかったのを直す。`execute()` の `RETURNING` 付きの書き込みが reader へ送られ、送り直されていたのを直す。**
+Closes #331, Closes #332。
+
+### Fixed
+
+- SCP 経路のトランザクションの中で `getCurrentConnection()` / `getTransactionConnection()` が返す接続の `query` が、SQL を実行せず
+  空の結果を黙って返していた。トランザクションの接続（pin。本体の決着後は `TransactionClosedError`）で実行し、結果を返す。
+- `execute()` の `INSERT/UPDATE/DELETE ... RETURNING` が読み取りと判定され、reader に送られ、接続エラーで送り直されていた。
+  振り分けと再試行は「確かに読み取り専用の文」（`isReadOnlyStatement`）だけを読み取りとする。select・show・pragma・values・table で
+  始まり `RETURNING` を含まない物が読み取り。`with`・`explain` で始まる物は insert・update・delete・merge の語を含めば書き込み
+  （`EXPLAIN ANALYZE DELETE …` は文を実行する）。確かでない物は書き込みとして writer に送り、送り直さない。
+
 ## [2.2.13] - 2026-11-06
 
 **トランザクションの接続まわりの欠陥を直す（v1 分岐と SCP 経路の両方）。**
