@@ -15,7 +15,7 @@ import re
 import sqlite3
 from typing import Any, Callable, Dict, List, Optional, Protocol, Sequence, Tuple
 
-from .errors import TransactionClosedError
+from .tx_options import is_connection_error
 
 
 # ── Row materialization: per-column-set dict builder (read-path hot loop, #63 §② perf) ──────────
@@ -749,17 +749,9 @@ class _PooledTxConnection:
         self._released = False
 
     def all(self, sql: str, params: Sequence[Any]) -> List[Dict[str, Any]]:
-        self._check_open()
         return _conn_all(self._conn, sql, params, self._xform, self._emulate_returning)
 
-    def _check_open(self) -> None:
-        # After release the connection belongs to the pool (another caller may hold it): a statement
-        # that escaped the transaction body (e.g. on a thread) must fail, never run. #330 defect 3.
-        if self._released:
-            raise TransactionClosedError()
-
     def run(self, sql: str, params: Sequence[Any]) -> RunInfo:
-        self._check_open()
         # Serves BOTH tx-body writes AND tx-control (BEGIN/COMMIT/ROLLBACK/SET). tx-control carries no
         # params, so `xform` is a no-op on it. A failure propagates so the combinator releases with
         # destroy=True (a raised COMMIT/BEGIN leaves the connection in an unknown state — it must not
@@ -796,11 +788,15 @@ class _PooledDriver:
         conn = self._pool.acquire()
         try:
             result = op(conn)
-        except BaseException:
-            # An errored connection is in an unknown state (e.g. dropped mid-statement): DISCARD it
-            # instead of handing it to the next caller — the same treatment as a poisoned tx connection
-            # (:meth:`_PooledTxConnection.release` with ``destroy=True``). #330 defect 1.
-            self._pool.discard(conn)
+        except BaseException as error:
+            # The pool's connections are autocommit, so a SQL error (constraint violation, syntax error,
+            # statement_timeout) leaves the session usable: return it. DISCARD only a connection error
+            # (dropped mid-statement) or a non-Exception interruption (KeyboardInterrupt etc. can land
+            # mid-statement), whose state is unknown. #330 defect 1.
+            if is_connection_error(error) or not isinstance(error, Exception):
+                self._pool.discard(conn)
+            else:
+                self._pool.release(conn)
             raise
         self._pool.release(conn)
         return result

@@ -58,11 +58,12 @@ the PG/MySQL drivers was exactly the shared-slot model that corrupts concurrent 
 from __future__ import annotations
 
 import contextvars
+import threading
 import time
 from typing import Any, Callable, List, Optional, Sequence, TypeVar, Union
 
 from .driver import Driver, RunInfo, TxConnection
-from .errors import SqlFailure, map_sqlite_error
+from .errors import SqlFailure, TransactionClosedError, map_sqlite_error
 from .tx_options import (
     IsolationLevel,
     TransactionOptions,
@@ -169,6 +170,52 @@ class _TxConnectionAdapter(Connection):
 
     def run(self, sql: str, params: Sequence[Any]) -> RunInfo:
         return self._tx.run(sql, params)
+
+
+class _SettleGuardConnection(Connection):
+    """The :class:`Connection` the transaction BODY's ctx pins: it forwards to the wrapped connection until
+    :meth:`settle`, then refuses every statement with :class:`TransactionClosedError` (#330). The lock is
+    held while a statement runs, so :meth:`settle` waits for one in flight and none slips in after it
+    returns; :meth:`settle` reports whether any statement was still unfinished (running or waiting for the
+    lock) at that moment. The runtime's own BEGIN/COMMIT/ROLLBACK go through an unwrapped connection."""
+
+    __slots__ = ("_conn", "_lock", "_state", "_closed", "_unfinished")
+
+    def __init__(self, conn: Connection) -> None:
+        self._conn = conn
+        self._lock = threading.Lock()
+        self._state = threading.Lock()  # guards _closed and _unfinished
+        self._closed = False
+        self._unfinished = 0
+
+    def _guarded(self, call: Callable[[], _T]) -> _T:
+        with self._state:
+            if self._closed:
+                raise TransactionClosedError()
+            self._unfinished += 1
+        try:
+            with self._lock:
+                if self._closed:
+                    raise TransactionClosedError()
+                return call()
+        finally:
+            with self._state:
+                self._unfinished -= 1
+
+    def execute(self, sql: str, params: Sequence[Any]) -> Rows:
+        return self._guarded(lambda: self._conn.execute(sql, params))
+
+    def run(self, sql: str, params: Sequence[Any]) -> RunInfo:
+        return self._guarded(lambda: self._conn.run(sql, params))
+
+    def settle(self) -> bool:
+        """Close the guard; return True when a statement was unfinished at that moment (idempotent)."""
+        with self._state:
+            self._closed = True
+            unfinished = self._unfinished > 0
+        with self._lock:  # wait for the statement in flight
+            pass
+        return unfinished
 
 
 # ── Middleware chain (§4) — the hook point (empty in Phase A) ──────────────────
@@ -575,13 +622,20 @@ def with_transaction_decided(
     rust ``with_transaction_decided`` (#76) / go ``WithTransactionDecided`` (#77).
     """
     tx = ctx.begin_tx()
-    tx_ctx = ctx.with_connection(_TxConnectionAdapter(tx), True)
+    # The body's ctx pins the connection through a settle guard: once the body has settled, a ctx it
+    # leaked (e.g. onto a thread left running) is refused with TransactionClosedError instead of reaching
+    # the connection — in the COMMIT/ROLLBACK window it would run inside the tx and be committed. The
+    # runtime's own tx-control uses `control_ctx` (the unwrapped pin). #330.
+    adapter = _TxConnectionAdapter(tx)
+    guard = _SettleGuardConnection(adapter)
+    tx_ctx = ctx.with_connection(guard, True)
+    control_ctx = ctx.with_connection(adapter, True)
 
-    # tx-control is issued THROUGH the seam on the PINNED ctx (so it resolves the owned tx connection AND
-    # a registered middleware observes it — Phase D / #95). Uses the UNGUARDED `run` (not `run_guarded`)
-    # ⇒ BEGIN/COMMIT/ROLLBACK/SET are exempt from the write=tx guard.
+    # tx-control is issued THROUGH the seam on the owned connection (so it resolves the owned tx connection
+    # AND a registered middleware observes it — Phase D / #95). Uses the UNGUARDED `run` (not
+    # `run_guarded`) ⇒ BEGIN/COMMIT/ROLLBACK/SET are exempt from the write=tx guard.
     def _tx_control(stmt: str) -> None:
-        run(tx_ctx, stmt, [], WRITE_INTENT)
+        run(control_ctx, stmt, [], WRITE_INTENT)
 
     def scoped() -> Any:
         # `destroy` starts True: the connection is only proven clean once a COMMIT/ROLLBACK completes
@@ -599,7 +653,11 @@ def with_transaction_decided(
                 _tx_control(stmt)
             try:
                 decision = body(tx_ctx)
+                # The body returned: from here only the runtime's tx-control runs. settle() waits for a
+                # statement still in flight and reports whether one was unfinished.
+                unfinished = guard.settle()
             except BaseException:
+                guard.settle()  # the body raised (settle is idempotent)
                 # A body error rolls back (BEST-EFFORT) then re-raises the ORIGINAL failure. A rollback
                 # that itself raises must NOT mask the body error — swallow it but keep destroy=True so
                 # the finally drops the poisoned connection. A clean rollback ⇒ back to the pool.
@@ -609,6 +667,12 @@ def with_transaction_decided(
                 except Exception:
                     pass  # poisoned; destroy stays True. Original body error surfaces via `raise`.
                 raise
+            if unfinished:
+                # A statement started inside the body had not finished when it returned: never COMMIT it
+                # (the settle waited for it, so the connection is idle) — roll back and fail. #330.
+                _tx_control("ROLLBACK")
+                destroy = False
+                raise TransactionClosedError(unfinished=True)
             if decision.rollback:
                 # A legitimate non-error rollback (e.g. a gate short-circuit): roll back, return value.
                 # A rollbackOnly (dry-run) tx committed NOTHING ⇒ it does NOT arm writer-stickiness.
@@ -777,7 +841,7 @@ def transaction(
             return with_transaction_decided(
                 tx_ctx, body, before, after, opts.use_writer_after_transaction
             )
-        except (WriteOutsideTransactionError, WriteInReadOnlyContextError):
+        except (WriteOutsideTransactionError, WriteInReadOnlyContextError, TransactionClosedError):
             # A guard rejection is a programming error, never retryable — re-raise immediately.
             raise
         except Exception as error:
