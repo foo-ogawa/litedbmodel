@@ -141,11 +141,15 @@ class TransactionClosedError(Exception):
     ``.name`` mirrors the JS ``Error.name`` like :class:`LimitExceededError`.
     """
 
-    def __init__(self) -> None:
-        super().__init__(
-            "Query issued after the transaction function settled. "
-            "Await every query started inside DBModel.transaction() before returning."
+    def __init__(self, unfinished: bool = False) -> None:
+        # ``unfinished``: a query started inside the transaction had not finished when the body settled
+        # (the transaction was rolled back); otherwise a query arrived after the body settled.
+        lead = (
+            "A query started inside the transaction had not finished when the transaction function settled."
+            if unfinished
+            else "Query issued after the transaction function settled."
         )
+        super().__init__(f"{lead} Await every query started inside DBModel.transaction() before returning.")
         self.name = "TransactionClosedError"
 
 

@@ -20,6 +20,7 @@ The live-PG/MySQL isolation + real-contention-retry proof lives in test_tx_bound
 from __future__ import annotations
 
 import sqlite3
+import threading
 
 import pytest
 
@@ -389,23 +390,26 @@ def test_interrupted_statement_outside_a_tx_discards_the_connection():
 class _WindowTx(_SqliteTxConnection):
     """A sqlite tx handle that runs ``window()`` just before the COMMIT statement reaches the DB."""
 
-    def __init__(self, conn, window):
+    def __init__(self, conn, window, gate):
         super().__init__(conn)
         self._window = window
+        self._gate = gate
 
     def run(self, sql, params):
         if sql.strip().upper().startswith("COMMIT"):
             self._window()
+        self._gate(sql, params)
         return super().run(sql, params)
 
 
 class _WindowSqliteDriver(SqliteDriver):
-    def __init__(self, conn, window):
+    def __init__(self, conn, window, gate):
         super().__init__(conn)
         self._window = window
+        self._gate = gate
 
     def begin_tx(self):
-        return _WindowTx(self.conn, self._window)
+        return _WindowTx(self.conn, self._window, self._gate)
 
 
 class _FakeCursor:
@@ -418,6 +422,7 @@ class _FakeCursor:
     def execute(self, sql, params=()):
         if sql.strip().upper().startswith("COMMIT"):
             self._conn.window()
+        self._conn.gate(sql, params)
         self._conn.sent.append((sql, tuple(params)))
 
     def close(self):
@@ -427,9 +432,10 @@ class _FakeCursor:
 class _FakePgConn:
     """A DB-API connection (the pg/mysql pooled path) that records every statement it is sent."""
 
-    def __init__(self, sent, window):
+    def __init__(self, sent, window, gate):
         self.sent = sent
         self.window = window
+        self.gate = gate
 
     def cursor(self):
         return _FakeCursor(self)
@@ -438,22 +444,26 @@ class _FakePgConn:
         pass
 
 
-def _sqlite_leak_ctx(window):
-    conn = sqlite3.connect(":memory:")
+def _no_gate(sql, params):
+    pass
+
+
+def _sqlite_leak_ctx(window, gate=_no_gate):
+    conn = sqlite3.connect(":memory:", check_same_thread=False)
     conn.execute(f"CREATE TABLE {ISO_TBL} (id INTEGER PRIMARY KEY, worker INTEGER NOT NULL, seq INTEGER NOT NULL)")
     conn.commit()
 
     def sent_ids():
         return [int(r[0]) for r in conn.execute(f"SELECT id FROM {ISO_TBL}")]
 
-    return context_for_driver(_WindowSqliteDriver(conn, window)), "sqlite", sent_ids
+    return context_for_driver(_WindowSqliteDriver(conn, window, gate)), "sqlite", sent_ids
 
 
-def _pg_leak_ctx(window):
+def _pg_leak_ctx(window, gate=_no_gate):
     from litedbmodel_runtime.driver import _ConnectionPool, _PooledDriver
 
     sent = []
-    pool = _ConnectionPool(lambda: _FakePgConn(sent, window), 2)
+    pool = _ConnectionPool(lambda: _FakePgConn(sent, window, gate), 2)
     driver = _PooledDriver(pool, lambda s: s, False)
 
     def sent_ids():
@@ -497,3 +507,80 @@ def test_statement_from_a_leaked_ctx_is_refused_between_the_body_and_the_commit(
         assert str(outcome) == expected
     assert 999 not in sent_ids(), "the refused statement must never reach the DB"
     assert 1 in sent_ids()
+
+
+# ── A statement still running when the body settles fails the transaction (sqlite and pg paths) ──────
+
+
+def _gated_ctx(make_ctx):
+    """A ctx whose statement for row id 777 blocks inside the DB until ``release`` is set; ``statements``
+    records the verb of every statement the DB is sent."""
+    started = threading.Event()
+    release = threading.Event()
+    statements = []
+
+    def gate(sql, params):
+        statements.append(sql.strip().split(" ", 1)[0].upper())
+        if params and params[0] == 777:
+            started.set()
+            assert release.wait(10)
+
+    ctx, dialect, sent_ids = make_ctx(lambda: None, gate)
+    return ctx, dialect, sent_ids, started, release, statements
+
+
+@pytest.mark.parametrize("make_ctx", [_sqlite_leak_ctx, _pg_leak_ctx], ids=["sqlite", "pg"])
+def test_statement_still_running_when_the_body_returns_rolls_back_and_raises(make_ctx):
+    from litedbmodel_runtime import WRITE_INTENT, run
+    from litedbmodel_runtime.errors import TransactionClosedError
+
+    ctx, dialect, sent_ids, started, release, statements = _gated_ctx(make_ctx)
+    worker_errors = []
+
+    def body():
+        _do_op(1, 1, 0)
+        leaked = current_context()
+
+        def worker():
+            try:
+                run(leaked, _INSERT_SQL, [777, 7, 7], WRITE_INTENT)
+            except Exception as e:  # pragma: no cover - the statement is awaited by the settle, it must not fail
+                worker_errors.append(e)
+
+        threading.Thread(target=worker).start()
+        assert started.wait(10)  # the statement is now running in the DB; the body returns without awaiting it
+        threading.Timer(0.2, release.set).start()
+        return "done"
+
+    with pytest.raises(TransactionClosedError) as raised:
+        transaction(ctx, body, TransactionOptions(), dialect)
+
+    assert str(raised.value) == (
+        "A query started inside the transaction had not finished when the transaction function settled. "
+        "Await every query started inside DBModel.transaction() before returning."
+    )
+    assert worker_errors == []
+    assert "COMMIT" not in statements and "ROLLBACK" in statements
+    if dialect == "sqlite":
+        assert sent_ids() == [], "neither the awaited nor the unfinished write may remain"
+
+
+@pytest.mark.parametrize("make_ctx", [_sqlite_leak_ctx, _pg_leak_ctx], ids=["sqlite", "pg"])
+def test_every_statement_awaited_inside_the_body_still_commits(make_ctx):
+    from litedbmodel_runtime import WRITE_INTENT, run
+
+    ctx, dialect, sent_ids, started, release, statements = _gated_ctx(make_ctx)
+
+    def body():
+        _do_op(1, 1, 0)
+        leaked = current_context()
+        worker = threading.Thread(target=lambda: run(leaked, _INSERT_SQL, [777, 7, 7], WRITE_INTENT))
+        worker.start()
+        assert started.wait(10)
+        release.set()
+        worker.join()
+        return "done"
+
+    assert transaction(ctx, body, TransactionOptions(), dialect) == "done"
+    assert "COMMIT" in statements and "ROLLBACK" not in statements
+    assert sorted(sent_ids()) == [1, 777]
