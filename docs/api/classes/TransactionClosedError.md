@@ -1,4 +1,4 @@
-[**litedbmodel v2.2.13**](../README.md)
+[**litedbmodel v2.2.14**](../README.md)
 
 ***
 
@@ -6,7 +6,7 @@
 
 # Class: TransactionClosedError
 
-Defined in: [types.ts:404](https://github.com/foo-ogawa/litedbmodel/blob/main/src/types.ts#L404)
+Defined in: [types.ts:413](https://github.com/foo-ogawa/litedbmodel/blob/main/src/types.ts#L413)
 
 Error thrown when a query is issued through a transaction after its function has settled, or when the
 function settled while a query started inside it had not finished (the transaction is rolled back).
@@ -25,7 +25,7 @@ new TransactionClosedError(unfinished?: boolean, options?: {
 }): TransactionClosedError;
 ```
 
-Defined in: [types.ts:410](https://github.com/foo-ogawa/litedbmodel/blob/main/src/types.ts#L410)
+Defined in: [types.ts:419](https://github.com/foo-ogawa/litedbmodel/blob/main/src/types.ts#L419)
 
 #### Parameters
 

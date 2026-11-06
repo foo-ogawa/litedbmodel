@@ -312,9 +312,23 @@ JOINs by default`）。v1 `LazyRelation` と同型の **staged batch query-compo
     1 文ごとの `SET`/`RESET` はしない。自前の `PoolFactory` は factory 側で渡す）。MySQL は未指定・0 で時間切れなし、
     明示の値だけ接続の取得時の `SET SESSION max_execution_time`。scp を直接使うときの既定は 0（なし）で、30 秒の既定は
     `DBModel` から pg へ渡す所（`dbmodel-runtime.ts`）だけにある。
+  - **確保済みの接続で開く**: `DBModel.acquireConnection()` が書き込み用の接続（scp は writer の pool の接続、v1 分岐は
+    handler の接続）を確保して返す。`release()` は 2 回呼んでも 1 回だけ、`release(error)` は接続を捨てる。
+    `TransactionOptions.connection` に渡すと、`transaction()` は接続を取らずその接続で BEGIN し（scp は
+    `withTransactionAsync` の `pool.acquire` の代わり）、COMMIT・ROLLBACK の後も解放しない（解放は確保した側）。本体の包み
+    （`createTransactionGuard`）は渡された接続にも同じに効く。再試行: 接続エラーは本体でも COMMIT の段でも再試行せずに
+    投げる（`isUnretriedConnectionError`、`src/connection-errors.ts`。v1 分岐・scp で共通）。直列化の失敗・deadlock は
+    同じ接続で ROLLBACK の後に BEGIN をやり直す。外のトランザクションがあるときに渡された接続は、外と同じ接続なら合流、
+    違えばエラー。scp の pin（`runWithPinnedAsyncConnection`）は実行コンテキストごとに持つので、別の runtime
+    （別の `createDBBase`）の入れ子は互いの接続に合流しない。
   - **書込の送り直しをしない**: 接続エラーで autocommit の書込を送り直さない（そのまま投げる）。読み取りの再試行は
     残す。writer に回した読み取り（`withWriter` の中、writer-sticky の間）も、回した側の判断を `executeOnWriter` から
     ドライバまで渡して再試行する。
+  - **生の SQL（`DBModel.execute`）の振り分けと再試行**: 読み取り用の接続（reader）へ送り、接続エラーで送り直すのは、
+    確かに読み取りだけの文（`isReadOnlyStatement`、`src/scp/middleware.ts`）に限る。先頭の語が select・show・pragma・
+    values・table で `RETURNING` を含まない物。`with`・`explain` で始まる物は insert・update・delete・merge の語を
+    含まなければ読み取り（`EXPLAIN ANALYZE DELETE …` は文を実行するので書き込み）。それ以外（`INSERT/UPDATE/DELETE …
+    RETURNING` を含む）は書き込みとして writer へ送り、送り直さない。「行を返すか」（`rawExecute` の結果の扱い）とは別の判定。
 
 ```ts
 await DBModel.transaction(async () => {

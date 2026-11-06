@@ -15,7 +15,7 @@ import { createMiddleware as createMiddlewareFn, type Middleware, type Middlewar
 import { serializeRecord, getColumnMeta, getPrimaryKey, getSqlCastMap, type KeyPair, type CompositeKeyPairs } from './decorators';
 import { getTypeCast, getSqlBuilder } from './drivers';
 import { defaultLogger, type DriverTypeCast } from './drivers/types';
-import { isConnectionError, createTransactionGuard } from './connection-errors';
+import { isConnectionError, isUnretriedConnectionError, assertNestedConnection, createTransactionGuard } from './connection-errors';
 
 // Import LazyRelation module (static import for Vitest compatibility)
 import { LazyRelationContext, type RelationType, type RelationConfig } from './LazyRelation';
@@ -36,10 +36,13 @@ import {
 } from './scp/dbmodel-runtime';
 import {
   transaction as scpTransaction,
-  executeAsync as scpExecuteAsync,
-  runAsync as scpRunAsync,
+  currentPinnedAsyncConnection,
+  runWithPinnedAsyncConnection,
+  type AsyncConnection,
   type AsyncExecutionContext,
+  type PinnedTx,
 } from './scp/exec-context';
+import { rawExecuteAsync, isReadOnlyStatement, type RawResult } from './scp/middleware';
 // The row-lock tail SSoT (` FOR UPDATE` / ` FOR SHARE`) — shared with the SCP `compileSelect`, so the
 // imperative builder and the compiled statement render byte-identical locking clauses.
 import { lockTail } from './scp/makesql/compile-select';
@@ -49,8 +52,13 @@ import type { Scope } from 'behavior-contracts/runtime';
 // Transaction context stored in AsyncLocalStorage
 interface TransactionContext {
   connection: DBConnection;
+  /** The connection the transaction was opened on, when it was given (`connection` is what func sees) */
+  opened?: DBConnection;
   handler?: DBHandler;
 }
+
+// SCP-route connections returned by `acquireConnection()` → the SCP pool connection they stand for
+const scpAcquired = new WeakMap<DBConnection, AsyncConnection>();
 
 // Writer context for withWriter() (read-only writer access)
 interface WriterContext {
@@ -1385,32 +1393,30 @@ export abstract class DBModel {
   }
 
   /**
-   * Whether a raw statement returns rows (SELECT / WITH / VALUES / SHOW / PRAGMA / EXPLAIN / TABLE /
-   * …RETURNING). Outside a transaction, `execute()` sends such a statement to the reader and any other
-   * (DDL, maintenance such as VACUUM / CREATE INDEX CONCURRENTLY, writes) to the writer, on both the
-   * SCP and the v1 path. @internal
+   * Route a raw `(sql, params)` through the SCP ctx seam (the escape-hatch / Fragment path) via
+   * `rawExecuteAsync`: a statement that returns rows runs the READ seam, any other the WRITE seam, and
+   * only a certainly read-only statement (`isReadOnlyStatement`) is routed to the reader — `INSERT …
+   * RETURNING` goes to the writer. The seam applies the SCP middleware chain + connection routing;
+   * inside a SCP `transaction(fn)` the ALS pin resolves the tx connection so the statement joins the
+   * transaction. Phase F-2 (#105). @internal
    */
-  protected static _returnsRows(sql: string): boolean {
-    return /^\s*(select|with|show|pragma|values|explain|table)\b/i.test(sql) || /\breturning\b/i.test(sql);
-  }
-
-  /**
-   * Route a raw `(sql, params)` through the SCP ctx seam (the escape-hatch / Fragment path). A
-   * statement that returns rows ({@link _returnsRows}) runs the READ seam (reader routing / an
-   * ambient tx pin); any other statement the WRITE seam (writer routing / the tx pin). The seam
-   * applies the SCP middleware chain + connection routing; inside a SCP `transaction(fn)` the ALS pin
-   * resolves the tx connection so the statement joins the transaction. Phase F-2 (#105). @internal
-   */
-  protected static async _scpRawExecute(sql: string, params: unknown[], rt: RuntimeContext): Promise<Record<string, unknown>[]> {
+  protected static _scpRawExecute(sql: string, params: unknown[], rt: RuntimeContext): Promise<RawResult> {
     const ctx = rt.ctx as unknown as AsyncExecutionContext;
     // v1-built SQL uses `?` placeholders; the SCP seam passes SQL verbatim, so renumber `?`→`$N` for
     // postgres (mysql keeps `?`) — the conversion v1's DBHandler did on the imperative path.
-    const rendered = renderRawSql(sql, rt.dialect);
-    if (this._returnsRows(rendered)) {
-      return scpExecuteAsync(ctx, rendered, params, { write: false });
-    }
-    await scpRunAsync(ctx, rendered, params, { write: true });
-    return [];
+    return rawExecuteAsync(ctx, renderRawSql(sql, rt.dialect), params);
+  }
+
+  /**
+   * `DBConnection.query` for an SCP connection: the SQL runs through {@link _scpRawExecute} inside a pin of
+   * `conn` (the transaction's guarded pin, or an acquired connection), so it reaches that connection and
+   * never a pooled one. @internal
+   */
+  protected static _scpPinnedQuery(pin: PinnedTx, rt: RuntimeContext): DBConnection['query'] {
+    return (sql, params) => runWithPinnedAsyncConnection(rt.ctx, pin, async () => {
+      const { rows, rowCount } = await this._scpRawExecute(sql, params ?? [], rt);
+      return { rows, rowCount: rowCount ?? rows.length };
+    });
   }
 
   /**
@@ -2976,17 +2982,18 @@ export abstract class DBModel {
       // -fallback op (CTE / QUERY view / updateMany / findById) join a `transaction(fn)` correctly.
       const rt = this._getScpRuntime();
       if (rt !== null && this._scpUsable()) {
-        const rows = await this._scpRawExecute(s, p || [], rt);
+        const { rows } = await this._scpRawExecute(s, p || [], rt);
         return { rows, rowCount: rows.length };
       }
 
       const handler = this.getHandler();
 
-      // The writer for a statement that does not return rows, inside withWriter, or while writer-sticky
-      const returnsRows = this._returnsRows(s);
-      const useWriter = !returnsRows || this._getWriterContext().getStore() !== undefined || this._shouldUseWriterSticky();
+      // The writer for any statement that is not certainly read-only (INSERT … RETURNING included),
+      // inside withWriter, or while writer-sticky. Only a read-only statement is re-sent on a connection error.
+      const readOnly = isReadOnlyStatement(s);
+      const useWriter = !readOnly || this._getWriterContext().getStore() !== undefined || this._shouldUseWriterSticky();
       const result = useWriter
-        ? await handler.executeOnWriter(s, p || [], returnsRows)
+        ? await handler.executeOnWriter(s, p || [], readOnly)
         : await handler.execute(s, p || []);
 
       return {
@@ -3097,7 +3104,10 @@ export abstract class DBModel {
     const txContext = this._getTransactionContext();
 
     // Check if already in a transaction (nested transaction)
-    if (txContext.getStore()) {
+    const outer = txContext.getStore();
+    if (outer) {
+      // A connection given to a nested transaction must be the outer transaction's own connection
+      assertNestedConnection(options.connection, outer.opened);
       // Already in a transaction, just execute the function
       return func();
     }
@@ -3111,19 +3121,27 @@ export abstract class DBModel {
     // `inTransaction()` / `_checkWriteAllowed` / `getCurrentConnection()` still sees an active tx.
     const rt = this._getScpRuntime();
     if (rt !== null && this._scpUsable()) {
+      // A given connection runs on the SCP pool's connection it was acquired as
+      const given = options.connection ? scpAcquired.get(options.connection) : undefined;
+      if (options.connection && given === undefined) {
+        throw new Error('transaction(): the connection option was not acquired by acquireConnection() on this SCP runtime');
+      }
       // The SCP transaction stamps the SCP routing's writer-sticky clock itself.
       return scpTransaction(
         rt.ctx,
         () => {
           // Set the v1 tx marker for the duration of the body (same async scope as the SCP pin). The
-          // sentinel connection is never used for I/O — v1-fallback ops route through the SCP seam.
-          const sentinel: DBConnection = {
-            query: async () => ({ rows: [], rowCount: 0 }),
+          // marker's connection (what `getCurrentConnection()` returns) runs its SQL through the SCP
+          // seam inside the transaction's own pin (captured here, so a leaked reference still reaches
+          // the pinned connection — rejected by its guard once the body settled — never a pooled one).
+          const pin = currentPinnedAsyncConnection(rt.ctx)!;
+          const txConnection: DBConnection = {
+            query: this._scpPinnedQuery(pin, rt),
             release: () => undefined,
           };
-          return txContext.run({ connection: sentinel }, func);
+          return txContext.run({ connection: txConnection, opened: options.connection }, func);
         },
-        options,
+        { ...options, connection: given },
         rt.dialect,
       );
     }
@@ -3145,7 +3163,8 @@ export abstract class DBModel {
 
     while (true) {
       attempt++;
-      const connection = await handler.getConnection();
+      // A given connection is released by whoever acquired it, never here
+      const connection = options.connection ?? await handler.getConnection();
       let destroyConnection = false;
       let committing = false;
       // func sees the connection only through this guard; BEGIN/COMMIT/ROLLBACK use `connection` directly
@@ -3158,7 +3177,7 @@ export abstract class DBModel {
       try {
         await connection.query('BEGIN');
 
-        const context: TransactionContext = { connection: guarded };
+        const context: TransactionContext = { connection: guarded, opened: connection };
         const result = await guard.settle(() => txContext.run(context, func));
 
         if (rollbackOnly) {
@@ -3181,10 +3200,11 @@ export abstract class DBModel {
 
         // A connection error at COMMIT leaves the outcome unknown (the server may have committed
         // before the response was lost): re-running func could write twice, so throw instead.
+        // On a given connection a connection error is thrown too: a new connection cannot be taken.
         if (
           retryOnError &&
           attempt < retryLimit &&
-          !(committing && isConnectionError(error as Error)) &&
+          !isUnretriedConnectionError(error, { committing, givenConnection: options.connection !== undefined }) &&
           this.isRetryableError(error as Error)
         ) {
           await this.sleep(retryDuration * Math.pow(2, attempt - 1));
@@ -3193,9 +3213,47 @@ export abstract class DBModel {
 
         throw error;
       } finally {
-        connection.release(destroyConnection || undefined);
+        if (!options.connection) connection.release(destroyConnection || undefined);
       }
     }
+  }
+
+  /**
+   * Acquire a writer connection (the one `transaction()` takes) and return it. Pass it as
+   * `TransactionOptions.connection` to open transactions on it, so that connections can be taken in the
+   * same order by every process. The caller releases it with `release()`, which is safe to call twice;
+   * `release(error)` destroys the connection instead of returning it to the pool. On the SCP route it is
+   * the SCP writer pool's connection (`withTransactionAsync` runs on it); on the v1 branch the handler's.
+   */
+  static async acquireConnection(): Promise<DBConnection> {
+    const rt = this._getScpRuntime();
+    let query: DBConnection['query'];
+    let free: (error?: Error | boolean) => void;
+    let scpConnection: AsyncConnection | undefined;
+    if (rt !== null && this._scpUsable()) {
+      const pool = rt.ctx.connectionPoolFor({ write: true });
+      const conn = await pool.acquire();
+      scpConnection = conn;
+      query = this._scpPinnedQuery({ conn, db: null, opened: conn }, rt);
+      free = (error) => {
+        pool.release(conn, !!error).catch((e: unknown) => (this._configOptions.logger ?? defaultLogger).error('Failed to release the acquired connection', e));
+      };
+    } else {
+      const conn = await this.getHandler().getConnection();
+      query = (sql, params) => conn.query(sql, params);
+      free = (error) => conn.release(error);
+    }
+    let released = false;
+    const connection: DBConnection = {
+      query,
+      release: (error) => {
+        if (released) return;
+        released = true;
+        free(error);
+      },
+    };
+    if (scpConnection) scpAcquired.set(connection, scpConnection);
+    return connection;
   }
 
   /**

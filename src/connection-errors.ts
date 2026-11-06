@@ -24,6 +24,32 @@ export function isConnectionError(error: Error): boolean {
   );
 }
 
+/**
+ * Is `error` a connection error that a transaction must throw instead of re-running its body? True at the
+ * COMMIT stage (the server may have committed before the response was lost: re-running could write twice)
+ * and on a connection the caller gave (`TransactionOptions.connection`: a new connection cannot be taken).
+ * v1 `DBModel.transaction` and scp `withTransactionAsync` both decide with this.
+ */
+export function isUnretriedConnectionError(
+  error: unknown,
+  where: { committing: boolean; givenConnection: boolean },
+  isConn: (e: Error) => boolean = isConnectionError,
+): boolean {
+  return (where.committing || where.givenConnection) && error instanceof Error && isConn(error);
+}
+
+/**
+ * A nested transaction that is given a connection (`TransactionOptions.connection`) must be given the
+ * enclosing transaction's own connection (it then joins it); any other connection is an error, never
+ * silently ignored. `opened` is the connection the enclosing transaction was opened on. v1
+ * `DBModel.transaction` and scp `withTransactionAsync` both decide with this.
+ */
+export function assertNestedConnection<C>(given: C | undefined, opened: C | undefined): void {
+  if (given !== undefined && given !== opened) {
+    throw new Error('transaction(): the connection option is a different connection from the enclosing transaction\'s');
+  }
+}
+
 /** The pg `Client` surface {@link guardLeasedClient} needs (an EventEmitter). */
 export interface LeasedClientLike {
   on(event: 'error', listener: (err: Error) => void): unknown;

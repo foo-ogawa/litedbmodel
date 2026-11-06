@@ -1,4 +1,4 @@
-[**litedbmodel v2.2.13**](../README.md)
+[**litedbmodel v2.2.14**](../README.md)
 
 ***
 
@@ -10,7 +10,7 @@
 function getTransactionConnection(): DBConnection | undefined;
 ```
 
-Defined in: [DBModel.ts:76](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L76)
+Defined in: [DBModel.ts:84](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBModel.ts#L84)
 
 Get current transaction connection (if in a transaction)
 

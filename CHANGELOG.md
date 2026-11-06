@@ -5,6 +5,28 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.2.14] - 2026-11-07
+
+**SCP 経路の `getCurrentConnection()` が SQL を実行しなかったのを直す。`execute()` の `RETURNING` 付きの書き込みが reader へ送られ、送り直されていたのを直す。確保済みの接続でトランザクションを開く `acquireConnection()` と `TransactionOptions.connection` を追加する。**
+Closes #329, Closes #331, Closes #332。
+
+### Added
+
+- `DBModel.acquireConnection()` と `TransactionOptions.connection`: 確保した書き込み用の接続でトランザクションを開く（解放は確保した側。接続エラーは再試行せず、deadlock・直列化の失敗は同じ接続で再試行する）。v1 分岐・SCP 経路の両方で使える。SCP の pin は実行コンテキストごとに持つようにし、別の runtime の入れ子が互いの接続に合流しないようにした。
+
+### Changed
+
+- `litedbmodel/scp` の `runWithPinnedAsyncConnection(owner, pin, fn)` と `currentPinnedAsyncConnection(owner)` は、実行コンテキスト（owner）を引数に取る形になった。`PinnedTx` に外のトランザクションが開いた素の接続 `opened` が増えた。理由: pin が全 runtime で 1 つ共有されていたため、別の runtime（別の `createDBBase`）の `transaction` が外の runtime の接続に合流していた欠陥の直し。
+
+### Fixed
+
+- SCP 経路のトランザクションの中で `getCurrentConnection()` / `getTransactionConnection()` が返す接続の `query` が、SQL を実行せず
+  空の結果を黙って返していた。トランザクションの接続（pin。本体の決着後は `TransactionClosedError`）で実行し、結果を返す。
+- `execute()` の `INSERT/UPDATE/DELETE ... RETURNING` が読み取りと判定され、reader に送られ、接続エラーで送り直されていた。
+  振り分けと再試行は「確かに読み取り専用の文」（`isReadOnlyStatement`）だけを読み取りとする。select・show・pragma・values・table で
+  始まり `RETURNING` を含まない物が読み取り。`with`・`explain` で始まる物は insert・update・delete・merge の語を含めば書き込み
+  （`EXPLAIN ANALYZE DELETE …` は文を実行する）。確かでない物は書き込みとして writer に送り、送り直さない。
+
 ## [2.2.13] - 2026-11-06
 
 **トランザクションの接続まわりの欠陥を直す（v1 分岐と SCP 経路の両方）。**
