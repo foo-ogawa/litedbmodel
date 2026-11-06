@@ -165,6 +165,79 @@ describe('DBModel.transaction', () => {
     expect(query).toHaveBeenCalledTimes(callsAfterRollback);
     expect(query.mock.calls.map((c) => c[0])).toEqual(['BEGIN', 'ROLLBACK']);
   });
+
+  // Same-connection queries are processed in the order they were sent (as the pg client's queue does).
+  function makeSerialConnection(gates: Record<string, Promise<void>> = {}) {
+    const completed: string[] = [];
+    let chain: Promise<unknown> = Promise.resolve();
+    const query = vi.fn((sql: string) => {
+      const run = chain.then(async () => {
+        if (gates[sql]) await gates[sql];
+        completed.push(sql);
+        return { rows: [], rowCount: 0 };
+      });
+      chain = run.catch(() => {});
+      return run;
+    });
+    return { connection: { query, release: vi.fn() }, query, completed };
+  }
+
+  it('rolls back and throws TransactionClosedError when func returns with a query still unfinished', async () => {
+    let openGate!: () => void;
+    const gate = new Promise<void>((resolve) => { openGate = resolve; });
+    const { connection, query, completed } = makeSerialConnection({ 'INSERT slow': gate });
+    const { TxModel } = makeModel(connection);
+    const func = vi.fn(async () => {
+      const conn = getTransactionConnection()!;
+      await conn.query('INSERT awaited');
+      void conn.query('INSERT slow'); // started, not awaited
+      return 'done';
+    });
+
+    let settled = false;
+    const result = TxModel.transaction(func).finally(() => { settled = true; });
+    const assertion = expect(result).rejects.toThrow(
+      'A query started inside the transaction had not finished when the transaction function settled. ' +
+      'Await every query started inside DBModel.transaction() before returning.',
+    );
+    await vi.waitFor(() => expect(query.mock.calls.map((c) => c[0])).toContain('ROLLBACK'));
+
+    // ROLLBACK is queued behind the unfinished query: nothing settles before the query finishes
+    expect(settled).toBe(false);
+    expect(completed).not.toContain('ROLLBACK');
+    openGate();
+    await assertion;
+    await expect(result).rejects.toBeInstanceOf(TransactionClosedError);
+
+    expect(completed).toEqual(['BEGIN', 'INSERT awaited', 'INSERT slow', 'ROLLBACK']);
+    expect(query.mock.calls.map((c) => c[0])).not.toContain('COMMIT');
+    // a failure caused by the caller's code is not retried
+    expect(func).toHaveBeenCalledTimes(1);
+    expect(connection.release).toHaveBeenCalledWith(true);
+  });
+
+  it('TransactionClosedError for an unfinished query is not retryable', () => {
+    const { TxModel } = makeModel(makeSerialConnection().connection);
+    const isRetryable = (TxModel as unknown as { isRetryableError(e: Error): boolean }).isRetryableError;
+    expect(isRetryable.call(TxModel, new TransactionClosedError('unfinished-query'))).toBe(false);
+    expect(isRetryable.call(TxModel, new TransactionClosedError())).toBe(false);
+  });
+
+  it('commits when every query is awaited, including with Promise.all', async () => {
+    const { connection, query } = makeSerialConnection();
+    const { TxModel } = makeModel(connection);
+
+    await expect(
+      TxModel.transaction(async () => {
+        const conn = getTransactionConnection()!;
+        await conn.query('INSERT 1');
+        await Promise.all([conn.query('INSERT 2'), conn.query('INSERT 3')]);
+        return 'ok';
+      }),
+    ).resolves.toBe('ok');
+
+    expect(query.mock.calls.map((c) => c[0])).toEqual(['BEGIN', 'INSERT 1', 'INSERT 2', 'INSERT 3', 'COMMIT']);
+  });
 });
 
 describe('executeWrite does not resend a write after a connection error', () => {

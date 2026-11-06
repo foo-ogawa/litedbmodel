@@ -10,7 +10,7 @@
 import 'reflect-metadata';
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
 import { Client as PgClient } from 'pg';
-import { DBModel, dbIn, dbNull, model, column, closeAllPools, ColumnsOf } from '../../src';
+import { DBModel, dbIn, dbNull, model, column, closeAllPools, ColumnsOf, TransactionClosedError } from '../../src';
 import { User, Post, PostTag, testConfig, testConnectionString, cleanup } from '../helpers/setup';
 
 // Define a model for all types testing (outside describe block for decorator support)
@@ -338,6 +338,32 @@ describe.skipIf(skipIntegrationTests)('DBModel', () => {
           }, { retryOnError: false })
         ).rejects.toBeDefined();
 
+        await sleep(200);
+        expect(uncaught).toEqual([]);
+        await expectPoolHealthy();
+      });
+
+      it('rolls back both an un-awaited INSERT and an awaited INSERT when func returns before the former finishes', async () => {
+        await expect(
+          DBModel.transaction(async () => {
+            await DBModel.execute(
+              `INSERT INTO users (name, email, is_active, role) VALUES ($1, $2, $3, $4)`,
+              ['Unfinished Awaited', 'tx-unfinished-awaited@example.com', true, 'user']
+            );
+            // started, not awaited: still running on the server when func returns
+            void DBModel.execute(
+              `INSERT INTO users (name, email, is_active, role)
+               SELECT $1, $2, $3, $4 FROM (SELECT pg_sleep(0.5)) AS slow`,
+              ['Unfinished Pending', 'tx-unfinished-pending@example.com', true, 'user']
+            );
+          })
+        ).rejects.toBeInstanceOf(TransactionClosedError);
+
+        const res = await DBModel.execute(
+          `SELECT email FROM users WHERE email IN ($1, $2)`,
+          ['tx-unfinished-awaited@example.com', 'tx-unfinished-pending@example.com']
+        );
+        expect(res.rows).toEqual([]);
         await sleep(200);
         expect(uncaught).toEqual([]);
         await expectPoolHealthy();

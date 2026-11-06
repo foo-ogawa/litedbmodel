@@ -394,14 +394,18 @@ export class WriteOutsideTransactionError extends Error {
 }
 
 /**
- * Error thrown when a query is issued through a transaction after its function has settled.
+ * Error thrown when a query is issued through a transaction after its function has settled
+ * (`'issued-after-settle'`), or when the function settled while a query it started had not
+ * finished (`'unfinished-query'`).
  *
  * @category Errors
  */
 export class TransactionClosedError extends Error {
-  constructor() {
+  constructor(reason: 'issued-after-settle' | 'unfinished-query' = 'issued-after-settle') {
     super(
-      'Query issued after the transaction function settled. ' +
+      (reason === 'unfinished-query'
+        ? 'A query started inside the transaction had not finished when the transaction function settled. '
+        : 'Query issued after the transaction function settled. ') +
       'Await every query started inside DBModel.transaction() before returning.'
     );
     this.name = 'TransactionClosedError';

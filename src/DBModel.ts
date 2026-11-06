@@ -2829,10 +2829,16 @@ export abstract class DBModel {
       let committing = false;
       // func sees the connection only through this guard; BEGIN/COMMIT/ROLLBACK use `connection` directly
       let closed = false;
+      let pendingQueries = 0;
       const guarded: DBConnection = {
         query: async (sql, params) => {
           if (closed) throw new TransactionClosedError();
-          return connection.query(sql, params);
+          pendingQueries++;
+          try {
+            return await connection.query(sql, params);
+          } finally {
+            pendingQueries--;
+          }
         },
         release: (error) => connection.release(error),
       };
@@ -2847,6 +2853,9 @@ export abstract class DBModel {
         } finally {
           closed = true;
         }
+
+        // A query started in func and not awaited: roll back (queued behind it on the same connection)
+        if (pendingQueries > 0) throw new TransactionClosedError('unfinished-query');
 
         if (rollbackOnly) {
           // Rollback instead of commit (for preview/dry-run scenarios)
