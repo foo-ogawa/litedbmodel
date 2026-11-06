@@ -88,12 +88,13 @@ describe('PostgresDriver pool statement_timeout', () => {
 describe('DBModel.transaction', () => {
   function makeModel(connection: DBConnection) {
     const getConnection = vi.fn(async () => connection);
+    const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
     class TxModel extends DBModel {
       protected static getHandler() {
-        return { getConnection } as never;
+        return { getConnection, getLogger: () => logger } as never;
       }
     }
-    return { TxModel, getConnection };
+    return { TxModel, getConnection, logger };
   }
 
   it('does not re-run func when COMMIT fails with a connection error', async () => {
@@ -214,6 +215,36 @@ describe('DBModel.transaction', () => {
     // a failure caused by the caller's code is not retried
     expect(func).toHaveBeenCalledTimes(1);
     expect(connection.release).toHaveBeenCalledWith(true);
+  });
+
+  it('a query issued after func settled does not become an unhandledRejection, and is logged once', async () => {
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown): void => { unhandled.push(reason); };
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      const { connection } = makeSerialConnection();
+      const { TxModel, logger } = makeModel(connection);
+      let leaked: DBConnection | undefined;
+      await TxModel.transaction(async () => {
+        leaked = getTransactionConnection();
+        await leaked!.query('SELECT 1');
+      });
+
+      void leaked!.query('SELECT forgotten-await'); // not awaited
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(unhandled).toEqual([]);
+      expect(logger.error).toHaveBeenCalledTimes(1);
+      expect(logger.error).toHaveBeenCalledWith(
+        'Query issued after the transaction function settled. ' +
+        'Await every query started inside DBModel.transaction() before returning.',
+      );
+
+      // an awaited one still receives the error
+      await expect(leaked!.query('SELECT awaited')).rejects.toBeInstanceOf(TransactionClosedError);
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.removeListener('unhandledRejection', onUnhandled);
+    }
   });
 
   it('TransactionClosedError for an unfinished query is not retryable', () => {

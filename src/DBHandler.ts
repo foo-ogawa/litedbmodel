@@ -173,6 +173,13 @@ export class DBHandler {
   }
 
   /**
+   * Get the logger
+   */
+  getLogger(): Logger {
+    return this.logger;
+  }
+
+  /**
    * Get the underlying driver
    */
   getDriver(): DBDriver {

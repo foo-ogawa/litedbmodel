@@ -2831,14 +2831,17 @@ export abstract class DBModel {
       let closed = false;
       let pendingQueries = 0;
       const guarded: DBConnection = {
-        query: async (sql, params) => {
-          if (closed) throw new TransactionClosedError();
-          pendingQueries++;
-          try {
-            return await connection.query(sql, params);
-          } finally {
-            pendingQueries--;
+        query: (sql, params) => {
+          if (closed) {
+            // Reject, but never let a forgotten await become an unhandledRejection that stops the process
+            const error = new TransactionClosedError();
+            handler.getLogger().error(error.message);
+            const rejected = Promise.reject(error);
+            rejected.catch(() => {});
+            return rejected;
           }
+          pendingQueries++;
+          return connection.query(sql, params).finally(() => { pendingQueries--; });
         },
         release: (error) => connection.release(error),
       };
