@@ -58,11 +58,12 @@ the PG/MySQL drivers was exactly the shared-slot model that corrupts concurrent 
 from __future__ import annotations
 
 import contextvars
+import threading
 import time
 from typing import Any, Callable, List, Optional, Sequence, TypeVar, Union
 
 from .driver import Driver, RunInfo, TxConnection
-from .errors import SqlFailure, map_sqlite_error
+from .errors import SqlFailure, TransactionClosedError, map_sqlite_error
 from .tx_options import (
     IsolationLevel,
     TransactionOptions,
@@ -169,6 +170,36 @@ class _TxConnectionAdapter(Connection):
 
     def run(self, sql: str, params: Sequence[Any]) -> RunInfo:
         return self._tx.run(sql, params)
+
+
+class _SettleGuardConnection(Connection):
+    """The :class:`Connection` the transaction BODY's ctx pins: it forwards to the wrapped connection until
+    :meth:`settle`, then refuses every statement with :class:`TransactionClosedError` (#330). The lock is
+    held while a statement runs, so :meth:`settle` waits for one in flight and none slips in after it
+    returns. The runtime's own BEGIN/COMMIT/ROLLBACK go through an unwrapped connection."""
+
+    __slots__ = ("_conn", "_lock", "_closed")
+
+    def __init__(self, conn: Connection) -> None:
+        self._conn = conn
+        self._lock = threading.Lock()
+        self._closed = False
+
+    def execute(self, sql: str, params: Sequence[Any]) -> Rows:
+        with self._lock:
+            if self._closed:
+                raise TransactionClosedError()
+            return self._conn.execute(sql, params)
+
+    def run(self, sql: str, params: Sequence[Any]) -> RunInfo:
+        with self._lock:
+            if self._closed:
+                raise TransactionClosedError()
+            return self._conn.run(sql, params)
+
+    def settle(self) -> None:
+        with self._lock:
+            self._closed = True
 
 
 # ── Middleware chain (§4) — the hook point (empty in Phase A) ──────────────────
@@ -575,13 +606,20 @@ def with_transaction_decided(
     rust ``with_transaction_decided`` (#76) / go ``WithTransactionDecided`` (#77).
     """
     tx = ctx.begin_tx()
-    tx_ctx = ctx.with_connection(_TxConnectionAdapter(tx), True)
+    # The body's ctx pins the connection through a settle guard: once the body has settled, a ctx it
+    # leaked (e.g. onto a thread left running) is refused with TransactionClosedError instead of reaching
+    # the connection — in the COMMIT/ROLLBACK window it would run inside the tx and be committed. The
+    # runtime's own tx-control uses `control_ctx` (the unwrapped pin). #330.
+    adapter = _TxConnectionAdapter(tx)
+    guard = _SettleGuardConnection(adapter)
+    tx_ctx = ctx.with_connection(guard, True)
+    control_ctx = ctx.with_connection(adapter, True)
 
-    # tx-control is issued THROUGH the seam on the PINNED ctx (so it resolves the owned tx connection AND
-    # a registered middleware observes it — Phase D / #95). Uses the UNGUARDED `run` (not `run_guarded`)
-    # ⇒ BEGIN/COMMIT/ROLLBACK/SET are exempt from the write=tx guard.
+    # tx-control is issued THROUGH the seam on the owned connection (so it resolves the owned tx connection
+    # AND a registered middleware observes it — Phase D / #95). Uses the UNGUARDED `run` (not
+    # `run_guarded`) ⇒ BEGIN/COMMIT/ROLLBACK/SET are exempt from the write=tx guard.
     def _tx_control(stmt: str) -> None:
-        run(tx_ctx, stmt, [], WRITE_INTENT)
+        run(control_ctx, stmt, [], WRITE_INTENT)
 
     def scoped() -> Any:
         # `destroy` starts True: the connection is only proven clean once a COMMIT/ROLLBACK completes
@@ -599,7 +637,9 @@ def with_transaction_decided(
                 _tx_control(stmt)
             try:
                 decision = body(tx_ctx)
+                guard.settle()  # the body returned: from here only the runtime's tx-control runs
             except BaseException:
+                guard.settle()  # the body raised (settle is idempotent)
                 # A body error rolls back (BEST-EFFORT) then re-raises the ORIGINAL failure. A rollback
                 # that itself raises must NOT mask the body error — swallow it but keep destroy=True so
                 # the finally drops the poisoned connection. A clean rollback ⇒ back to the pool.
