@@ -74,8 +74,8 @@ import {
 } from './connection-routing';
 import type { Dialect } from './makesql/handler';
 import { activeSqlMiddlewares } from './middleware';
-import { isConnectionError as defaultIsConnectionError } from '../connection-errors';
-import { TransactionClosedError } from '../types';
+import { isConnectionError as defaultIsConnectionError, createTransactionGuard } from '../connection-errors';
+import { defaultLogger } from '../drivers/types';
 
 // ── Statement intent & the driver contact (§5) ────────────────────────────────
 
@@ -616,16 +616,10 @@ export async function withTransactionAsync<R>(
     // statement started in the body but reaching the connection later (or after the connection was
     // returned to the pool) is rejected instead of being sent. BEGIN/COMMIT/ROLLBACK go through the
     // middleware chain onto `conn` directly, not through the pin.
-    let closed = false;
+    const guard = createTransactionGuard(defaultLogger);
     const pinned: AsyncConnection = {
-      execute: async (sql, params) => {
-        if (closed) throw new TransactionClosedError();
-        return conn.execute(sql, params);
-      },
-      run: async (sql, params) => {
-        if (closed) throw new TransactionClosedError();
-        return conn.run(sql, params);
-      },
+      execute: (sql, params) => guard.run(() => conn.execute(sql, params)),
+      run: (sql, params) => guard.run(() => conn.run(sql, params)),
     };
     const control = (sql: string): Promise<RunInfo> =>
       ctx.middleware.wrap<Promise<RunInfo>>(sql, [], (s, p) => conn.run(s, p));
@@ -635,12 +629,7 @@ export async function withTransactionAsync<R>(
         // Mark the body as "inside a transaction" so a nested write's guard (`checkWriteAllowed`)
         // and nested-tx detection see an active tx. The connection pin (above) and this marker share
         // the SAME async scope.
-        let r: R;
-        try {
-          r = await runInTransactionScope(() => fn(txCtx));
-        } finally {
-          closed = true;
-        }
+        const r = await guard.settle(() => runInTransactionScope(() => fn(txCtx)));
         // rollbackOnly (dry-run): ROLLBACK but still return the body result — no committed change.
         if (!resolved.rollbackOnly) committing = true;
         await control(resolved.rollbackOnly ? 'ROLLBACK' : 'COMMIT');

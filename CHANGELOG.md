@@ -16,6 +16,8 @@ Refs #330。
   その接続を破棄する。SCP の pool の idle の接続の `'error'` も受ける。
 - COMMIT の段の接続エラーで本体を再実行して二重に書きうる状態だった。COMMIT の段の接続エラーは再試行せずそのまま投げる。
 - 本体が決着した後に、トランザクションの接続を通る問い合わせが DB へ送られた。`TransactionClosedError` にして送らない。
+  返す Promise にはライブラリの側で no-op の catch を付け、`await` の付け忘れで `unhandledRejection`（プロセスの停止）にしない（失敗は logger の `error` に出す）。
+- 本体が決着した時点で、待たずに走らせた問い合わせが未完了のまま COMMIT されていた。未完了が 1 件でもあれば、その問い合わせが終わるのを待って ROLLBACK し、`transaction()` を `TransactionClosedError` で失敗させる（再試行しない）。
 - `queryTimeout` が SCP の接続に渡らず、時間切れが無かった。`DBModel` から使うとき、秒を ms にして渡す。pg は未指定・0 を
   v1 と同じ 30 秒にし、pg の Pool の `statement_timeout`（接続の起動時のパラメータ）として効かせる（1 文ごとの
   `SET`/`RESET` はしない）。v1 分岐の pg Pool にも `statement_timeout` を渡す。MySQL は未指定・0 で時間切れなし（v1 と同じ）、

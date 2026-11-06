@@ -288,11 +288,20 @@ JOINs by default`）。v1 `LazyRelation` と同型の **staged batch query-compo
   - **再試行**: 本体（fn）の失敗のうち、直列化の失敗・deadlock・接続エラーは、新しい接続でトランザクション全体を
     再実行する。**COMMIT の段の接続エラーだけは再試行せず、そのまま投げる**（サーバがコミット済みで応答だけ失われた場合に
     二重に書くのを防ぐ。結果は不明）。COMMIT の段の直列化の失敗・deadlock は再試行する。
+  - **決着の時点で未完了の問い合わせ**: 本体が決着（成功・失敗）した時点で、そのトランザクションの接続を通る問い合わせの
+    うち未完了の物が 1 件でもあれば（本体が成功していても）、COMMIT せず ROLLBACK し、`transaction()` を
+    `TransactionClosedError`（メッセージ `A query started inside the transaction had not finished when the transaction
+    function settled. Await every query started inside DBModel.transaction() before returning.`）で失敗させる。
+    ROLLBACK は未完了の問い合わせが終わった後に送る。この失敗は再試行しない。本体の中で await した問い合わせ
+    （`Promise.all` で全部を待つ場合を含む）は変わらない。入れ子の `transaction()` は外の接続を使い、外の本体の決着で判定する。
+    数える処理は v1 分岐と scp で同じ `createTransactionGuard`（`src/connection-errors.ts`）。
   - **決着後の問い合わせ**: 本体が決着（成功・失敗）した後に、そのトランザクションの接続を通る問い合わせは
     `TransactionClosedError`（TS。メッセージ `Query issued after the transaction function settled. Await every query
     started inside DBModel.transaction() before returning.`）にし、DB へは送らない。BEGIN・COMMIT・ROLLBACK は本体が見る
     接続とは別に、トランザクションが持つ接続へ直接送る（`withTransactionAsync` の `pinned` / `control`、v1 分岐は
-    `DBModel.transaction` の `guarded`）。
+    `DBModel.transaction` の `guarded`）。返す Promise はライブラリの側で先に no-op の catch を付けてあり、`await` を
+    付け忘れても `unhandledRejection`（プロセスの停止）にならない。失敗は logger の `error` に 1 回出す
+    （v1 分岐は `DBConfigOptions.logger`、scp は `defaultLogger`）。
   - **BEGIN の失敗**: BEGIN も try の中。失敗しても接続は破棄して返す。
   - **貸し出し中の接続の切断**: 貸し出し中の pg Client の `'error'` を受けてログに出し、返却時にその接続は破棄する。
     pool の idle の接続の `'error'` も受ける（`guardLeasedClient` / `guardIdlePoolErrors`、`src/connection-errors.ts`）。

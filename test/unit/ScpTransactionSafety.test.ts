@@ -19,11 +19,14 @@ import {
   PooledAsyncContext,
   resolveConnectionConfig,
   sessionStatements,
+  isRetryableTxError,
+  type AsyncExecutionContext,
   type AsyncConnection,
   type AsyncConnectionPool,
 } from '../../src/scp';
 import { pgConnectionPool, pgPoolFactory } from '../../src/scp/makesql/pool-executor';
 import { DBModel } from '../../src/DBModel';
+import { defaultLogger } from '../../src/drivers/types';
 import { TransactionClosedError } from '../../src/types';
 
 function makeError(message: string, code?: string): Error {
@@ -33,13 +36,13 @@ function makeError(message: string, code?: string): Error {
 }
 
 /** A fake owned-connection pool recording every statement and every release. */
-function makeFakePool(behave: (sql: string) => void = () => {}) {
+function makeFakePool(behave: (sql: string) => void | Promise<void> = () => {}) {
   const log: string[] = [];
   const releases: boolean[] = [];
   let acquired = 0;
   const conn: AsyncConnection = {
-    async execute(sql) { log.push(sql); behave(sql); return []; },
-    async run(sql) { log.push(sql); behave(sql); return { changes: 0, lastInsertRowid: 0 }; },
+    async execute(sql) { log.push(sql); await behave(sql); return []; },
+    async run(sql) { log.push(sql); await behave(sql); return { changes: 0, lastInsertRowid: 0 }; },
   };
   const pool: AsyncConnectionPool = {
     async acquire() { acquired++; return conn; },
@@ -185,6 +188,90 @@ describe('withTransactionAsync pinned connection lifetime', () => {
     await expect(pending).rejects.toBeInstanceOf(TransactionClosedError);
     expect(fake.log).toHaveLength(callsAfterRollback);
     expect(fake.log).toEqual(['BEGIN', 'SELECT 1', 'ROLLBACK']);
+  });
+
+  it('a query issued after the body settled is logged once and does not raise unhandledRejection when not awaited', async () => {
+    const fake = makeFakePool();
+    const ctx = new PooledAsyncContext(fake.pool);
+    const logged = vi.spyOn(defaultLogger, 'error').mockImplementation(() => {});
+    const unhandled = vi.fn();
+    process.on('unhandledRejection', unhandled);
+    try {
+      let awaited: Promise<unknown> | undefined;
+      await withTransactionAsync(ctx, async (txCtx) => {
+        await executeAsync(txCtx, 'SELECT 1', []);
+        // started in the body's async scope (the ambient pin applies), reaching the connection after the body settled
+        setTimeout(() => { void executeAsync(txCtx, 'SELECT late', []); }, 5); // not awaited
+        setTimeout(() => { awaited = executeAsync(txCtx, 'SELECT late 2', []); awaited.catch(() => undefined); }, 5);
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(unhandled).not.toHaveBeenCalled();
+      expect(logged).toHaveBeenCalledTimes(2);
+      expect(String(logged.mock.calls[0][0])).toContain('Query issued after the transaction function settled');
+      await expect(awaited).rejects.toBeInstanceOf(TransactionClosedError);
+      expect(fake.log).toEqual(['BEGIN', 'SELECT 1', 'COMMIT']);
+    } finally {
+      process.off('unhandledRejection', unhandled);
+      logged.mockRestore();
+    }
+  });
+
+  describe('a query that had not finished when the body settled', () => {
+    const unfinishedMessage =
+      'A query started inside the transaction had not finished when the transaction function settled. ' +
+      'Await every query started inside DBModel.transaction() before returning.';
+
+    /** A pool whose `SELECT slow` finishes only when `finishSlow()` is called; every statement is logged in send order. */
+    function makeSlowPool() {
+      let finishSlow!: () => void;
+      const slow = new Promise<void>((resolve) => { finishSlow = resolve; });
+      const fake = makeFakePool(async (sql) => {
+        if (sql === 'SELECT slow') {
+          await slow;
+          fake.log.push('SELECT slow finished');
+        }
+      });
+      return { ...fake, finishSlow };
+    }
+
+    it('fails with TransactionClosedError, sends no COMMIT, and sends ROLLBACK after the query finished', async () => {
+      const fake = makeSlowPool();
+      const ctx = new PooledAsyncContext(fake.pool);
+      const body = vi.fn(async (txCtx: AsyncExecutionContext) => {
+        await executeAsync(txCtx, 'INSERT awaited', []);
+        void executeAsync(txCtx, 'SELECT slow', []); // started, not awaited, still running when the body returns
+        return 'done';
+      });
+
+      const settled = withTransactionAsync(ctx, body, { retryDuration: 1 }).then(() => undefined, (e: unknown) => e);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      expect(fake.log).not.toContain('ROLLBACK'); // waits for the unfinished query
+      fake.finishSlow();
+
+      const error = await settled;
+      expect(error).toBeInstanceOf(TransactionClosedError);
+      expect((error as Error).message).toBe(unfinishedMessage);
+      expect(fake.log).toEqual(['BEGIN', 'INSERT awaited', 'SELECT slow', 'SELECT slow finished', 'ROLLBACK']);
+      expect(fake.log).not.toContain('COMMIT');
+      expect(body).toHaveBeenCalledTimes(1); // not retried
+      expect(fake.acquired()).toBe(1);
+      expect(fake.releases).toEqual([true]);
+    });
+
+    it('is not a retryable error', () => {
+      expect(isRetryableTxError(new TransactionClosedError(true), () => false)).toBe(false);
+    });
+
+    it('COMMITs when the body awaits every query, including through Promise.all', async () => {
+      const fake = makeFakePool();
+      const ctx = new PooledAsyncContext(fake.pool);
+      await expect(withTransactionAsync(ctx, async (txCtx) => {
+        await Promise.all([executeAsync(txCtx, 'SELECT a', []), executeAsync(txCtx, 'SELECT b', [])]);
+        return 'ok';
+      })).resolves.toBe('ok');
+      expect(fake.log).toEqual(['BEGIN', 'SELECT a', 'SELECT b', 'COMMIT']);
+    });
   });
 
   it('sends BEGIN, COMMIT and ROLLBACK on the owned connection although the body pin is closed', async () => {

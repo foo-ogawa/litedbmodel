@@ -232,6 +232,104 @@ describe('DBModel.transaction (v1 branch)', () => {
     expect(query).toHaveBeenCalledTimes(callsAfterRollback);
     expect(query.mock.calls.map((c) => c[0])).toEqual(['BEGIN', 'ROLLBACK']);
   });
+
+  it('a query issued after func settled is logged once and does not raise unhandledRejection when not awaited', async () => {
+    const query = vi.fn(async () => ({ rows: [], rowCount: 0 }));
+    const connection = { query, release: vi.fn() };
+    const { TxModel } = makeModel(connection);
+    const error = vi.fn();
+    (TxModel as unknown as { _configOptions: unknown })._configOptions = {
+      logger: { debug: () => {}, info: () => {}, warn: () => {}, error },
+    };
+    const unhandled = vi.fn();
+    process.on('unhandledRejection', unhandled);
+    try {
+      let leaked: DBConnection | undefined;
+      await TxModel.transaction(async () => {
+        leaked = getTransactionConnection();
+        await leaked!.query('SELECT 1');
+      });
+
+      void leaked!.query('SELECT late'); // not awaited
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(unhandled).not.toHaveBeenCalled();
+      expect(error).toHaveBeenCalledTimes(1);
+      expect(error.mock.calls[0][0]).toContain('Query issued after the transaction function settled');
+
+      await expect(leaked!.query('SELECT late 2')).rejects.toBeInstanceOf(TransactionClosedError);
+      expect(query.mock.calls.map((c) => c[0])).toEqual(['BEGIN', 'SELECT 1', 'COMMIT']);
+    } finally {
+      process.off('unhandledRejection', unhandled);
+    }
+  });
+
+  describe('a query that had not finished when func settled', () => {
+    const unfinishedMessage =
+      'A query started inside the transaction had not finished when the transaction function settled. ' +
+      'Await every query started inside DBModel.transaction() before returning.';
+
+    /** A connection whose `SELECT slow` finishes only when `finishSlow()` is called; every statement is logged in send order. */
+    function makeSlowConnection() {
+      const log: string[] = [];
+      let finishSlow!: () => void;
+      const slow = new Promise<void>((resolve) => { finishSlow = resolve; });
+      const query = vi.fn(async (sql: string) => {
+        log.push(sql);
+        if (sql === 'SELECT slow') {
+          await slow;
+          log.push('SELECT slow finished');
+        }
+        return { rows: [], rowCount: 0 };
+      });
+      return { connection: { query, release: vi.fn() }, log, finishSlow };
+    }
+
+    it('fails with TransactionClosedError, sends no COMMIT, and sends ROLLBACK after the query finished', async () => {
+      const { connection, log, finishSlow } = makeSlowConnection();
+      const { TxModel, assertV1Route } = makeModel(connection);
+      const func = vi.fn(async () => {
+        const conn = getTransactionConnection()!;
+        await conn.query('INSERT awaited');
+        void conn.query('SELECT slow'); // started, not awaited, still running when func returns
+        return 'done';
+      });
+
+      const result = TxModel.transaction(func, { retryDuration: 1 });
+      const settled = result.then(() => undefined, (e: unknown) => e);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      expect(log).not.toContain('ROLLBACK'); // waits for the unfinished query
+      finishSlow();
+
+      const error = await settled;
+      assertV1Route();
+      expect(error).toBeInstanceOf(TransactionClosedError);
+      expect((error as Error).message).toBe(unfinishedMessage);
+      expect(log).toEqual(['BEGIN', 'INSERT awaited', 'SELECT slow', 'SELECT slow finished', 'ROLLBACK']);
+      expect(log).not.toContain('COMMIT');
+      expect(func).toHaveBeenCalledTimes(1); // not retried
+      expect(connection.release).toHaveBeenCalledWith(true);
+    });
+
+    it('is not a retryable error', () => {
+      const error = new TransactionClosedError(true);
+      expect((DBModel as unknown as { isRetryableError(e: Error): boolean }).isRetryableError(error)).toBe(false);
+    });
+
+    it('COMMITs when func awaits every query, including through Promise.all', async () => {
+      const query = vi.fn(async () => ({ rows: [], rowCount: 0 }));
+      const connection = { query, release: vi.fn() };
+      const { TxModel, assertV1Route } = makeModel(connection);
+
+      await expect(TxModel.transaction(async () => {
+        const conn = getTransactionConnection()!;
+        await Promise.all([conn.query('SELECT a'), conn.query('SELECT b')]);
+        return 'ok';
+      })).resolves.toBe('ok');
+      assertV1Route();
+      const sent = query.mock.calls.map((c) => c[0]);
+      expect(sent).toEqual(['BEGIN', 'SELECT a', 'SELECT b', 'COMMIT']);
+    });
+  });
 });
 
 describe('a read routed to the writer is still retried after a connection error (v1 branch)', () => {

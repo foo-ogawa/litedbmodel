@@ -396,14 +396,21 @@ export class LimitExceededError extends Error {
 }
 
 /**
- * Error thrown when a query is issued through a transaction after its function has settled.
+ * Error thrown when a query is issued through a transaction after its function has settled, or when the
+ * function settled while a query started inside it had not finished (the transaction is rolled back).
  *
  * @category Errors
  */
 export class TransactionClosedError extends Error {
-  constructor() {
+  /**
+   * @param unfinished `true` when the transaction function settled while a query started inside it had not
+   *   finished; `false` (default) for a query issued after the function settled.
+   */
+  constructor(unfinished = false) {
     super(
-      'Query issued after the transaction function settled. ' +
+      (unfinished
+        ? 'A query started inside the transaction had not finished when the transaction function settled. '
+        : 'Query issued after the transaction function settled. ') +
       'Await every query started inside DBModel.transaction() before returning.'
     );
     this.name = 'TransactionClosedError';

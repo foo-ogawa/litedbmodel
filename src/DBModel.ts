@@ -8,14 +8,14 @@ import { getSqlCastFormatter } from './drivers';
 import { normalizeConditions, type ConditionObject } from './DBConditions';
 import { initDBHandler, getDBHandler, createHandlerWithConnection, DBHandler, type DBConfig, type DBConnection } from './DBHandler';
 import type { SelectOptions, InsertOptions, UpdateOptions, DeleteOptions, UpdateManyOptions, TransactionOptions, LimitConfig, DBConfigOptions, PkeyResult, InternalInsertOptions, InternalUpdateOptions, InternalDeleteOptions } from './types';
-import { LimitExceededError, WriteOutsideTransactionError, WriteInReadOnlyContextError, TransactionClosedError } from './types';
+import { LimitExceededError, WriteOutsideTransactionError, WriteInReadOnlyContextError } from './types';
 import { type Column, type OrderSpec, type CVs, type Conds, type CondsOf, type OrCondOf, type ColumnsOf, createColumn, columnsToNames, pairsToRecord, condsToRecord, serializeCondValue, orderToString, createOrCond } from './Column';
 import { type SqlFragment, type SqlCondition, type SqlTypedFragment, isAnySqlFragment } from './SqlFragment';
 import { createMiddleware as createMiddlewareFn, type Middleware, type MiddlewareClass, type MiddlewareConfig, type CreatedMiddlewareClass, type ExecuteResult } from './Middleware';
 import { serializeRecord, getColumnMeta, getPrimaryKey, getSqlCastMap, type KeyPair, type CompositeKeyPairs } from './decorators';
 import { getTypeCast, getSqlBuilder } from './drivers';
-import type { DriverTypeCast } from './drivers/types';
-import { isConnectionError } from './connection-errors';
+import { defaultLogger, type DriverTypeCast } from './drivers/types';
+import { isConnectionError, createTransactionGuard } from './connection-errors';
 
 // Import LazyRelation module (static import for Vitest compatibility)
 import { LazyRelationContext, type RelationType, type RelationConfig } from './LazyRelation';
@@ -3149,12 +3149,9 @@ export abstract class DBModel {
       let destroyConnection = false;
       let committing = false;
       // func sees the connection only through this guard; BEGIN/COMMIT/ROLLBACK use `connection` directly
-      let closed = false;
+      const guard = createTransactionGuard(this._configOptions.logger ?? defaultLogger);
       const guarded: DBConnection = {
-        query: async (sql, params) => {
-          if (closed) throw new TransactionClosedError();
-          return connection.query(sql, params);
-        },
+        query: (sql, params) => guard.run(() => connection.query(sql, params)),
         release: (error) => connection.release(error),
       };
 
@@ -3162,12 +3159,7 @@ export abstract class DBModel {
         await connection.query('BEGIN');
 
         const context: TransactionContext = { connection: guarded };
-        let result: R;
-        try {
-          result = await txContext.run(context, func);
-        } finally {
-          closed = true;
-        }
+        const result = await guard.settle(() => txContext.run(context, func));
 
         if (rollbackOnly) {
           // Rollback instead of commit (for preview/dry-run scenarios)
