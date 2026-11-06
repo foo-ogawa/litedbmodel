@@ -59,7 +59,7 @@ export interface DBDriver {
    * @param params - Query parameters
    * @returns Query result
    */
-  execute(sql: string, params?: unknown[]): Promise<QueryResult>;
+  execute(sql: string, params?: unknown[], onWriter?: boolean): Promise<QueryResult>;
 
   /**
    * Execute a write query (INSERT/UPDATE/DELETE)

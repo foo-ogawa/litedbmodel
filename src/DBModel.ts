@@ -2688,9 +2688,10 @@ export abstract class DBModel {
       const handler = this.getHandler();
       
       // The writer for a statement that does not return rows, inside withWriter, or while writer-sticky
-      const useWriter = !this._returnsRows(s) || this._getWriterContext().getStore() !== undefined || this._shouldUseWriterSticky();
-      const result = useWriter 
-        ? await handler.executeOnWriter(s, p || [])
+      const returnsRows = this._returnsRows(s);
+      const useWriter = !returnsRows || this._getWriterContext().getStore() !== undefined || this._shouldUseWriterSticky();
+      const result = useWriter
+        ? await handler.executeOnWriter(s, p || [], returnsRows)
         : await handler.execute(s, p || []);
       
       return {

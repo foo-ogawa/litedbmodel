@@ -6,6 +6,7 @@
  * - queries after func has settled are rejected
  * - statement_timeout passed to the pg Pool
  * - executeWrite does not resend a write after a connection error (pg, mysql)
+ * - a read routed to the writer (withWriter / writer-sticky) retries after a connection error (pg, mysql)
  */
 
 import { describe, it, expect, vi } from 'vitest';
@@ -14,6 +15,7 @@ import { PostgresDriver } from '../../src/drivers/postgres';
 import { MysqlDriver } from '../../src/drivers/mysql';
 import type { Logger, DBConnection } from '../../src/drivers/types';
 import { DBModel, getTransactionConnection } from '../../src/DBModel';
+import { DBHandler } from '../../src/DBHandler';
 import { TransactionClosedError } from '../../src/types';
 
 const silentLogger: Logger = {
@@ -198,6 +200,59 @@ describe('executeWrite does not resend a write after a connection error', () => 
 
     await expect(
       driver.executeWrite('UPDATE users SET name = ? WHERE id = ?', ['alice', 1]),
+    ).rejects.toBe(connectionError);
+    expect(query).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('a read routed to the writer retries after a connection error', () => {
+  function makeReadModel(driverType: 'postgres' | 'mysql', query: ReturnType<typeof vi.fn>) {
+    const handler = new DBHandler(
+      { driver: driverType, host: `tx-safety-writer-read-${driverType}`, port: 5432, database: 'tx_safety_db', user: 'test', password: 'test' },
+      { logger: silentLogger },
+    );
+    (handler.getDriver() as unknown as { writerPool: { query: typeof query } }).writerPool = { query };
+    class ReadModel extends DBModel {
+      protected static getHandler() {
+        return handler;
+      }
+    }
+    return ReadModel;
+  }
+
+  it('PostgresDriver: a SELECT inside withWriter() is sent again and returns the rows', async () => {
+    const query = vi
+      .fn()
+      .mockRejectedValueOnce(makeError('Connection terminated unexpectedly'))
+      .mockResolvedValueOnce({ rows: [{ id: 1 }], rowCount: 1 });
+    const ReadModel = makeReadModel('postgres', query);
+
+    const result = await ReadModel.withWriter(() => ReadModel.execute('SELECT id FROM users WHERE id = $1', [1]));
+
+    expect(result.rows).toEqual([{ id: 1 }]);
+    expect(query).toHaveBeenCalledTimes(2);
+  });
+
+  it('MysqlDriver: a SELECT inside withWriter() is sent again and returns the rows', async () => {
+    const query = vi
+      .fn()
+      .mockRejectedValueOnce(makeError('Connection lost', 'PROTOCOL_CONNECTION_LOST'))
+      .mockResolvedValueOnce([[{ id: 1 }], null]);
+    const ReadModel = makeReadModel('mysql', query);
+
+    const result = await ReadModel.withWriter(() => ReadModel.execute('SELECT id FROM users WHERE id = ?', [1]));
+
+    expect(result.rows).toEqual([{ id: 1 }]);
+    expect(query).toHaveBeenCalledTimes(2);
+  });
+
+  it('a write inside withWriter() is still not resent after a connection error', async () => {
+    const connectionError = makeError('Connection terminated unexpectedly');
+    const query = vi.fn().mockRejectedValue(connectionError);
+    const ReadModel = makeReadModel('postgres', query);
+
+    await expect(
+      ReadModel.withWriter(() => ReadModel.execute('UPDATE users SET name = $1 WHERE id = $2', ['alice', 1])),
     ).rejects.toBe(connectionError);
     expect(query).toHaveBeenCalledTimes(1);
   });

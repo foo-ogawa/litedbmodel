@@ -237,17 +237,18 @@ export class PostgresDriver implements DBDriver {
   }
 
   /**
-   * Execute a read query
+   * Execute a read query (`onWriter`: on the writer pool, for a read routed to the writer)
    */
-  async execute(sql: string, params: unknown[] = []): Promise<QueryResult> {
+  async execute(sql: string, params: unknown[] = [], onWriter = false): Promise<QueryResult> {
+    const pool = onWriter ? this.writerPool || this.pool : this.pool;
     const q = resolveQuery(sql);
     this.logger.debug(`SQL: ${q.convertedSql}`, params);
 
     const startTime = Date.now();
     try {
       const result = q.isMulti
-        ? await this.pool.query(q.convertedSql, params)
-        : await this.pool.query({ name: q.name, text: q.convertedSql, values: params });
+        ? await pool.query(q.convertedSql, params)
+        : await pool.query({ name: q.name, text: q.convertedSql, values: params });
       const duration = Date.now() - startTime;
       this.logger.debug(`Query completed in ${duration}ms, rows: ${result.rowCount}`);
       return {
@@ -259,8 +260,8 @@ export class PostgresDriver implements DBDriver {
         this.logger.warn(`Connection error, retrying query: ${q.convertedSql}`);
         try {
           const result = q.isMulti
-            ? await this.pool.query(q.convertedSql, params)
-            : await this.pool.query({ name: q.name, text: q.convertedSql, values: params });
+            ? await pool.query(q.convertedSql, params)
+            : await pool.query({ name: q.name, text: q.convertedSql, values: params });
           const duration = Date.now() - startTime;
           this.logger.debug(`Retry succeeded in ${duration}ms, rows: ${result.rowCount}`);
           return {
