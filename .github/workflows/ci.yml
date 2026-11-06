@@ -23,8 +23,9 @@ jobs:
         run: npm ci --ignore-scripts
       - name: Audit
         # The same audit release.yml gates the publish on (devDeps included), so a pull request that
-        # passes here does not stop the release after it merges.
-        run: npm audit --audit-level=moderate
+        # passes here does not stop the release after it merges. `audit:check` is `npm audit
+        # --audit-level=moderate` minus one dated exception (scripts/check-audit.mjs, #335).
+        run: npm run audit:check
       - name: Verify npm signatures
         run: npm audit signatures
       - name: Lint
