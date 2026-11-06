@@ -173,6 +173,13 @@ export class DBHandler {
   }
 
   /**
+   * Get the logger
+   */
+  getLogger(): Logger {
+    return this.logger;
+  }
+
+  /**
    * Get the underlying driver
    */
   getDriver(): DBDriver {
@@ -200,13 +207,14 @@ export class DBHandler {
   }
 
   /**
-   * Execute a query on writer pool (for withWriter context)
+   * Execute a query on writer pool (for withWriter context). `isRead` is true for a read routed to the
+   * writer: it keeps the read's connection-error retry; any other statement is a write and is not resent.
    */
-  async executeOnWriter(sql: string, params: unknown[] = []): Promise<QueryResult> {
+  async executeOnWriter(sql: string, params: unknown[] = [], isRead = false): Promise<QueryResult> {
     if (this.connection) {
       return this.connection.query(sql, params);
     }
-    return this.driver.executeWrite(sql, params);
+    return isRead ? this.driver.execute(sql, params, true) : this.driver.executeWrite(sql, params);
   }
 
   /**

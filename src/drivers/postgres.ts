@@ -62,6 +62,8 @@ function getPool(config: DBConfig): Pool {
       connectionTimeoutMillis: (config.timeout || 30) * 1000,
       idleTimeoutMillis: config.idleTimeoutMillis ?? 10000,
       query_timeout: (config.queryTimeout || 30) * 1000,
+      // Server-side limit too: query_timeout alone leaves the statement (and its locks) running
+      statement_timeout: (config.queryTimeout || 30) * 1000,
       keepAlive: config.keepAlive,
       keepAliveInitialDelayMillis: config.keepAliveInitialDelayMillis,
     });
@@ -179,7 +181,18 @@ function clearQueryCache(): void {
 // ============================================
 
 class PostgresConnection implements DBConnection {
-  constructor(private client: PoolClient) {}
+  /** Error emitted by the client while it was leased (pg-pool detaches its idle listener until release) */
+  private clientError: Error | undefined;
+
+  private readonly onClientError = (err: Error): void => {
+    // Prevent unhandled error crash from a disconnection while the client is leased
+    this.clientError ??= err;
+    defaultLogger.warn('Leased client error', err);
+  };
+
+  constructor(private client: PoolClient) {
+    this.client.on('error', this.onClientError);
+  }
 
   async query(sql: string, params?: unknown[]): Promise<QueryResult> {
     const q = resolveQuery(sql);
@@ -193,7 +206,8 @@ class PostgresConnection implements DBConnection {
   }
 
   release(error?: Error | boolean): void {
-    this.client.release(error ?? undefined);
+    this.client.removeListener('error', this.onClientError);
+    this.client.release(error ?? this.clientError);
   }
 }
 
@@ -223,17 +237,18 @@ export class PostgresDriver implements DBDriver {
   }
 
   /**
-   * Execute a read query
+   * Execute a read query (`onWriter`: on the writer pool, for a read routed to the writer)
    */
-  async execute(sql: string, params: unknown[] = []): Promise<QueryResult> {
+  async execute(sql: string, params: unknown[] = [], onWriter = false): Promise<QueryResult> {
+    const pool = onWriter ? this.writerPool || this.pool : this.pool;
     const q = resolveQuery(sql);
     this.logger.debug(`SQL: ${q.convertedSql}`, params);
 
     const startTime = Date.now();
     try {
       const result = q.isMulti
-        ? await this.pool.query(q.convertedSql, params)
-        : await this.pool.query({ name: q.name, text: q.convertedSql, values: params });
+        ? await pool.query(q.convertedSql, params)
+        : await pool.query({ name: q.name, text: q.convertedSql, values: params });
       const duration = Date.now() - startTime;
       this.logger.debug(`Query completed in ${duration}ms, rows: ${result.rowCount}`);
       return {
@@ -245,8 +260,8 @@ export class PostgresDriver implements DBDriver {
         this.logger.warn(`Connection error, retrying query: ${q.convertedSql}`);
         try {
           const result = q.isMulti
-            ? await this.pool.query(q.convertedSql, params)
-            : await this.pool.query({ name: q.name, text: q.convertedSql, values: params });
+            ? await pool.query(q.convertedSql, params)
+            : await pool.query({ name: q.name, text: q.convertedSql, values: params });
           const duration = Date.now() - startTime;
           this.logger.debug(`Retry succeeded in ${duration}ms, rows: ${result.rowCount}`);
           return {
@@ -283,23 +298,6 @@ export class PostgresDriver implements DBDriver {
         rowCount: result.rowCount ?? 0,
       };
     } catch (error) {
-      if (isConnectionError(error as Error)) {
-        this.logger.warn(`Connection error, retrying write: ${q.convertedSql}`);
-        try {
-          const result = q.isMulti
-            ? await conn.query(q.convertedSql, params)
-            : await conn.query({ name: q.name, text: q.convertedSql, values: params });
-          const duration = Date.now() - startTime;
-          this.logger.debug(`Retry succeeded in ${duration}ms, rows: ${result.rowCount}`);
-          return {
-            rows: result.rows as Record<string, unknown>[],
-            rowCount: result.rowCount ?? 0,
-          };
-        } catch (retryError) {
-          this.logger.error(`Retry also failed: ${q.convertedSql}`, retryError);
-          throw retryError;
-        }
-      }
       this.logger.error(`Write failed: ${q.convertedSql}`, error);
       throw error;
     }

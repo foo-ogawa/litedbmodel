@@ -8,7 +8,7 @@ import { getSqlCastFormatter } from './drivers';
 import { normalizeConditions, type ConditionObject } from './DBConditions';
 import { initDBHandler, getDBHandler, createHandlerWithConnection, DBHandler, type DBConfig, type DBConnection } from './DBHandler';
 import type { SelectOptions, InsertOptions, UpdateOptions, DeleteOptions, UpdateManyOptions, TransactionOptions, LimitConfig, DBConfigOptions, PkeyResult, InternalInsertOptions, InternalUpdateOptions, InternalDeleteOptions } from './types';
-import { LimitExceededError, WriteOutsideTransactionError, WriteInReadOnlyContextError } from './types';
+import { LimitExceededError, WriteOutsideTransactionError, WriteInReadOnlyContextError, TransactionClosedError } from './types';
 import { type Column, type OrderSpec, type CVs, type Conds, type CondsOf, type OrCondOf, type ColumnsOf, createColumn, columnsToNames, pairsToRecord, condsToRecord, serializeCondValue, orderToString, createOrCond } from './Column';
 import { type SqlFragment, type SqlCondition, type SqlTypedFragment, isAnySqlFragment } from './SqlFragment';
 import { createMiddleware as createMiddlewareFn, type Middleware, type MiddlewareClass, type MiddlewareConfig, type CreatedMiddlewareClass, type ExecuteResult } from './Middleware';
@@ -2688,9 +2688,10 @@ export abstract class DBModel {
       const handler = this.getHandler();
       
       // The writer for a statement that does not return rows, inside withWriter, or while writer-sticky
-      const useWriter = !this._returnsRows(s) || this._getWriterContext().getStore() !== undefined || this._shouldUseWriterSticky();
-      const result = useWriter 
-        ? await handler.executeOnWriter(s, p || [])
+      const returnsRows = this._returnsRows(s);
+      const useWriter = !returnsRows || this._getWriterContext().getStore() !== undefined || this._shouldUseWriterSticky();
+      const result = useWriter
+        ? await handler.executeOnWriter(s, p || [], returnsRows)
         : await handler.execute(s, p || []);
       
       return {
@@ -2825,17 +2826,49 @@ export abstract class DBModel {
       attempt++;
       const connection = await handler.getConnection();
       let destroyConnection = false;
+      let committing = false;
+      // func sees the connection only through this guard; BEGIN/COMMIT/ROLLBACK use `connection` directly
+      let closed = false;
+      let pendingQueries = 0;
+      const guarded: DBConnection = {
+        query: (sql, params) => {
+          if (closed) {
+            // Reject, but never let a forgotten await become an unhandledRejection that stops the process
+            const error = new TransactionClosedError();
+            handler.getLogger().error(error.message);
+            const rejected = Promise.reject(error);
+            rejected.catch(() => {});
+            return rejected;
+          }
+          pendingQueries++;
+          return connection.query(sql, params).finally(() => { pendingQueries--; });
+        },
+        release: (error) => connection.release(error),
+      };
 
       try {
         await connection.query('BEGIN');
 
-        const context: TransactionContext = { connection };
-        const result = await txContext.run(context, func);
+        const context: TransactionContext = { connection: guarded };
+        let result: R;
+        try {
+          result = await txContext.run(context, func);
+        } catch (funcError) {
+          // func rejected with a query still unfinished: report that, keep func's error as the cause, never retry
+          if (pendingQueries > 0) throw new TransactionClosedError('unfinished-query', funcError);
+          throw funcError;
+        } finally {
+          closed = true;
+        }
+
+        // A query started in func and not awaited: roll back (queued behind it on the same connection)
+        if (pendingQueries > 0) throw new TransactionClosedError('unfinished-query');
 
         if (rollbackOnly) {
           // Rollback instead of commit (for preview/dry-run scenarios)
           await connection.query('ROLLBACK');
         } else {
+          committing = true;
           await connection.query('COMMIT');
           if (useWriterAfterTransaction) this._writerSticky.mark();
         }
@@ -2849,9 +2882,12 @@ export abstract class DBModel {
           // destroyConnection is already true; original error is preserved.
         }
 
+        // A connection error at COMMIT leaves the outcome unknown (the server may have committed
+        // before the response was lost): re-running func could write twice, so throw instead.
         if (
           retryOnError &&
           attempt < retryLimit &&
+          !(committing && isConnectionError(error as Error)) &&
           this.isRetryableError(error as Error)
         ) {
           await this.sleep(retryDuration * Math.pow(2, attempt - 1));

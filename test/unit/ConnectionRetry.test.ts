@@ -1,5 +1,5 @@
 /**
- * Connection error detection and execute-level retry tests
+ * Connection error detection and execute-level retry tests (reads retry once; writes do not)
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -136,22 +136,7 @@ describe('PostgresDriver execute retry', () => {
     expect(mockQuery).toHaveBeenCalledTimes(1);
   });
 
-  it('retries once on connection error in executeWrite() and succeeds', async () => {
-    const connectionError = makeError('Connection terminated', 'ECONNRESET');
-    const mockQuery = vi
-      .fn()
-      .mockRejectedValueOnce(connectionError)
-      .mockResolvedValueOnce({ rows: [], rowCount: 1 });
-
-    (driver as unknown as { pool: { query: typeof mockQuery } }).pool = { query: mockQuery };
-
-    const result = await driver.executeWrite('UPDATE users SET name = ? WHERE id = ?', ['alice', 1]);
-
-    expect(mockQuery).toHaveBeenCalledTimes(2);
-    expect(result.rowCount).toBe(1);
-  });
-
-  it('throws when retry also fails in executeWrite()', async () => {
+  it('does not retry on connection error in executeWrite() and throws it', async () => {
     const connectionError = makeError('Connection terminated unexpectedly');
     const mockQuery = vi.fn().mockRejectedValue(connectionError);
 
@@ -160,7 +145,7 @@ describe('PostgresDriver execute retry', () => {
     await expect(
       driver.executeWrite('UPDATE users SET name = ? WHERE id = ?', ['alice', 1])
     ).rejects.toThrow('Connection terminated unexpectedly');
-    expect(mockQuery).toHaveBeenCalledTimes(2);
+    expect(mockQuery).toHaveBeenCalledTimes(1);
   });
 
   it('does not retry on non-connection errors in executeWrite()', async () => {
@@ -231,22 +216,7 @@ describe('MysqlDriver execute retry', () => {
     expect(mockQuery).toHaveBeenCalledTimes(1);
   });
 
-  it('retries once on connection error in executeWrite() and succeeds', async () => {
-    const connectionError = makeError('This socket has been ended by the other party');
-    const mockQuery = vi
-      .fn()
-      .mockRejectedValueOnce(connectionError)
-      .mockResolvedValueOnce([{ affectedRows: 1 }, null]);
-
-    (driver as unknown as { pool: { query: typeof mockQuery } }).pool = { query: mockQuery };
-
-    const result = await driver.executeWrite('UPDATE users SET name = ? WHERE id = ?', ['alice', 1]);
-
-    expect(mockQuery).toHaveBeenCalledTimes(2);
-    expect(result.rowCount).toBe(1);
-  });
-
-  it('throws when retry also fails in executeWrite()', async () => {
+  it('does not retry on connection error in executeWrite() and throws it', async () => {
     const connectionError = makeError('Connection lost', 'PROTOCOL_CONNECTION_LOST');
     const mockQuery = vi.fn().mockRejectedValue(connectionError);
 
@@ -255,7 +225,7 @@ describe('MysqlDriver execute retry', () => {
     await expect(
       driver.executeWrite('UPDATE users SET name = ? WHERE id = ?', ['alice', 1])
     ).rejects.toThrow('Connection lost');
-    expect(mockQuery).toHaveBeenCalledTimes(2);
+    expect(mockQuery).toHaveBeenCalledTimes(1);
   });
 
   it('does not retry on non-connection errors in executeWrite()', async () => {

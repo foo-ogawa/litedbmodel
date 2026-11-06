@@ -394,6 +394,26 @@ export class WriteOutsideTransactionError extends Error {
 }
 
 /**
+ * Error thrown when a query is issued through a transaction after its function has settled
+ * (`'issued-after-settle'`), or when the function settled while a query it started had not
+ * finished (`'unfinished-query'`).
+ *
+ * @category Errors
+ */
+export class TransactionClosedError extends Error {
+  constructor(reason: 'issued-after-settle' | 'unfinished-query' = 'issued-after-settle', cause?: unknown) {
+    super(
+      (reason === 'unfinished-query'
+        ? 'A query started inside the transaction had not finished when the transaction function settled. '
+        : 'Query issued after the transaction function settled. ') +
+      'Await every query started inside DBModel.transaction() before returning.',
+      cause === undefined ? undefined : { cause }
+    );
+    this.name = 'TransactionClosedError';
+  }
+}
+
+/**
  * Error thrown when attempting write operations inside withWriter() context.
  * 
  * @category Errors
