@@ -358,15 +358,16 @@ export abstract class DBModel {
 
   /**
    * Whether a raw statement is certainly read-only: it starts with SELECT / SHOW / PRAGMA / VALUES /
-   * EXPLAIN / TABLE and has no RETURNING, or starts with WITH and has no INSERT / UPDATE / DELETE / MERGE.
+   * TABLE and has no RETURNING, or starts with WITH / EXPLAIN and has no INSERT / UPDATE / DELETE / MERGE
+   * (EXPLAIN ANALYZE runs the statement).
    * Outside a transaction, `execute()` sends such a statement to the reader (and resends it after a
    * connection error); any other statement (DDL, maintenance such as VACUUM / CREATE INDEX CONCURRENTLY,
    * writes including `…RETURNING`) is treated as a write: it goes to the writer and is not resent. @internal
    */
   protected static _isReadOnlyStatement(sql: string): boolean {
     if (/\breturning\b/i.test(sql)) return false;
-    if (/^\s*with\b/i.test(sql)) return !/\b(insert|update|delete|merge)\b/i.test(sql);
-    return /^\s*(select|show|pragma|values|explain|table)\b/i.test(sql);
+    if (/^\s*(with|explain)\b/i.test(sql)) return !/\b(insert|update|delete|merge)\b/i.test(sql);
+    return /^\s*(select|show|pragma|values|table)\b/i.test(sql);
   }
 
   /**

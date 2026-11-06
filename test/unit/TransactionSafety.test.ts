@@ -419,6 +419,7 @@ describe('DBModel.execute() routes by whether the statement is read-only (#332)'
         `UPDATE users SET name = ${p} WHERE id = 1 RETURNING id`,
         `DELETE FROM users WHERE name = ${p} RETURNING id`,
         `WITH x AS (UPDATE users SET name = ${p} WHERE id = 1 RETURNING *) SELECT id FROM x`,
+        `EXPLAIN ANALYZE DELETE FROM users WHERE name = ${p}`,
       ];
 
       for (const sql of writes) {
@@ -445,7 +446,7 @@ describe('DBModel.execute() routes by whether the statement is read-only (#332)'
         });
       }
 
-      const reads = [`SELECT id FROM users WHERE id = ${p}`, `WITH x AS (SELECT id FROM users WHERE id = ${p}) SELECT id FROM x`];
+      const reads = [`SELECT id FROM users WHERE id = ${p}`, `WITH x AS (SELECT id FROM users WHERE id = ${p}) SELECT id FROM x`, `EXPLAIN SELECT id FROM users WHERE id = ${p}`];
 
       for (const sql of reads) {
         it(`${sql} goes to the reader and is resent after a connection error`, async () => {
