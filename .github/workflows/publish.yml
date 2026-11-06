@@ -16,6 +16,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      # npm trusted publishing (OIDC), same as main (#337): the trusted publisher on npmjs.com is
+      # foo-ogawa/litedbmodel + publish.yml (no environment), with `npm publish` allowed.
+      id-token: write
     steps:
       - uses: actions/checkout@v4
 
@@ -58,8 +61,12 @@ jobs:
         if: steps.need.outputs.publish == 'true'
         run: npm run test:ci
 
+      # Trusted publishing needs npm CLI 11.5.1 or later; Node 22 bundles npm 10.
+      - name: Update npm for trusted publishing
+        if: steps.need.outputs.publish == 'true'
+        run: npm install -g npm@^11.5.1
+
+      # The dist-tag is release-1.2 (package.json publishConfig.tag); latest stays on 2.x.
       - name: Publish to npm
         if: steps.need.outputs.publish == 'true'
         run: npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

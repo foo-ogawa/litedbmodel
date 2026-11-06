@@ -125,7 +125,7 @@ describe('DBModel.transaction', () => {
   });
 
   it('rejects queries through the transaction connection after func has settled', async () => {
-    const query = vi.fn(async () => ({ rows: [], rowCount: 0 }));
+    const query = vi.fn(async (_sql: string) => ({ rows: [], rowCount: 0 }));
     const connection = { query, release: vi.fn() };
     const { TxModel } = makeModel(connection);
 
@@ -143,7 +143,7 @@ describe('DBModel.transaction', () => {
   });
 
   it('rejects an un-awaited query started in func once func has rejected and ROLLBACK was sent', async () => {
-    const query = vi.fn(async () => ({ rows: [], rowCount: 0 }));
+    const query = vi.fn(async (_sql: string) => ({ rows: [], rowCount: 0 }));
     const connection = { query, release: vi.fn() };
     const { TxModel } = makeModel(connection);
     const funcError = new Error('func failed');
@@ -168,7 +168,7 @@ describe('DBModel.transaction', () => {
   });
 
   // Same-connection queries are processed in the order they were sent (as the pg client's queue does).
-  function makeSerialConnection(gates: Record<string, Promise<void>> = {}) {
+  function makeSerialConnection(gates: Partial<Record<string, Promise<void>>> = {}) {
     const completed: string[] = [];
     let chain: Promise<unknown> = Promise.resolve();
     const query = vi.fn((sql: string) => {
@@ -298,6 +298,158 @@ describe('DBModel.transaction', () => {
   });
 });
 
+describe('DBModel.acquireConnection and TransactionOptions.connection (#329)', () => {
+  function makeFake() {
+    const sent: string[] = [];
+    const query = vi.fn(async (sql: string) => {
+      sent.push(sql);
+      return { rows: [], rowCount: 0 };
+    });
+    const raw = { query, release: vi.fn() };
+    const getConnection = vi.fn(async () => raw);
+    const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    class AcqModel extends DBModel {
+      protected static getHandler() {
+        return { getConnection, getLogger: () => logger } as never;
+      }
+    }
+    return { AcqModel, raw, query, sent, getConnection };
+  }
+
+  it('acquireConnection() returns the writer connection; release() releases it once even when called twice', async () => {
+    const { AcqModel, raw, getConnection } = makeFake();
+
+    const conn = await AcqModel.acquireConnection();
+    expect(getConnection).toHaveBeenCalledTimes(1);
+    const error = makeError('boom');
+    conn.release(error);
+    conn.release();
+
+    expect(raw.release).toHaveBeenCalledTimes(1);
+    expect(raw.release).toHaveBeenCalledWith(error);
+  });
+
+  it('opens the transaction on the given connection: BEGIN, statement, COMMIT, no getConnection, no release', async () => {
+    const { AcqModel, raw, sent, getConnection } = makeFake();
+    const conn = await AcqModel.acquireConnection();
+    getConnection.mockClear();
+
+    const result = await AcqModel.transaction(async () => {
+      await getTransactionConnection()!.query('INSERT 1');
+      return 'done';
+    }, { connection: conn });
+
+    expect(result).toBe('done');
+    expect(sent).toEqual(['BEGIN', 'INSERT 1', 'COMMIT']);
+    expect(getConnection).not.toHaveBeenCalled();
+    expect(raw.release).not.toHaveBeenCalled();
+    conn.release();
+    expect(raw.release).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not release the given connection after ROLLBACK either', async () => {
+    const { AcqModel, raw, sent } = makeFake();
+    const conn = await AcqModel.acquireConnection();
+    const failure = new Error('func failed');
+
+    await expect(AcqModel.transaction(async () => { throw failure; }, { connection: conn })).rejects.toBe(failure);
+
+    expect(sent).toEqual(['BEGIN', 'ROLLBACK']);
+    expect(raw.release).not.toHaveBeenCalled();
+  });
+
+  it('does not retry a connection error on the given connection', async () => {
+    const { AcqModel, sent, getConnection } = makeFake();
+    const conn = await AcqModel.acquireConnection();
+    getConnection.mockClear();
+    const connectionError = makeError('Connection terminated unexpectedly');
+    const func = vi.fn().mockRejectedValue(connectionError);
+
+    await expect(AcqModel.transaction(func, { connection: conn, retryDuration: 1 })).rejects.toBe(connectionError);
+
+    expect(func).toHaveBeenCalledTimes(1);
+    expect(sent).toEqual(['BEGIN', 'ROLLBACK']);
+    expect(getConnection).not.toHaveBeenCalled();
+  });
+
+  it('retries a deadlock on the same connection: ROLLBACK, then BEGIN again', async () => {
+    const { AcqModel, raw, sent, getConnection } = makeFake();
+    const conn = await AcqModel.acquireConnection();
+    getConnection.mockClear();
+    const func = vi.fn()
+      .mockRejectedValueOnce(new Error('Deadlock found when trying to get lock'))
+      .mockResolvedValueOnce('ok');
+
+    await expect(AcqModel.transaction(func, { connection: conn, retryDuration: 1 })).resolves.toBe('ok');
+
+    expect(func).toHaveBeenCalledTimes(2);
+    expect(sent).toEqual(['BEGIN', 'ROLLBACK', 'BEGIN', 'COMMIT']);
+    expect(getConnection).not.toHaveBeenCalled();
+    expect(raw.release).not.toHaveBeenCalled();
+  });
+
+  it('rejects a query made through the transaction connection after func settled, on the given connection too', async () => {
+    const { AcqModel } = makeFake();
+    const conn = await AcqModel.acquireConnection();
+    let leaked!: DBConnection;
+
+    await AcqModel.transaction(async () => { leaked = getTransactionConnection()!; }, { connection: conn });
+
+    await expect(leaked.query('SELECT 1')).rejects.toBeInstanceOf(TransactionClosedError);
+  });
+
+  it('rejects func that returns with a query unfinished on the given connection', async () => {
+    let openGate!: () => void;
+    const gate = new Promise<void>((resolve) => { openGate = resolve; });
+    const sent: string[] = [];
+    const raw = {
+      query: vi.fn(async (sql: string) => {
+        if (sql === 'INSERT slow') await gate;
+        sent.push(sql);
+        return { rows: [], rowCount: 0 };
+      }),
+      release: vi.fn(),
+    };
+    class GivenModel extends DBModel {
+      protected static getHandler() {
+        return { getConnection: vi.fn(), getLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }) } as never;
+      }
+    }
+
+    const result = GivenModel.transaction(async () => {
+      void getTransactionConnection()!.query('INSERT slow');
+    }, { connection: raw });
+    const assertion = expect(result).rejects.toBeInstanceOf(TransactionClosedError);
+    openGate();
+    await assertion;
+  });
+
+  it('nested: the same connection joins the outer transaction; another connection is an error', async () => {
+    const { AcqModel, sent } = makeFake();
+    const conn = await AcqModel.acquireConnection();
+    const other = { query: vi.fn(), release: vi.fn() };
+
+    await AcqModel.transaction(async () => {
+      await AcqModel.transaction(async () => {
+        await getTransactionConnection()!.query('INSERT inner');
+      }, { connection: conn });
+      await expect(AcqModel.transaction(async () => 'x', { connection: other })).rejects.toThrow(/different connection/);
+    }, { connection: conn });
+
+    expect(sent).toEqual(['BEGIN', 'INSERT inner', 'COMMIT']);
+    expect(other.query).not.toHaveBeenCalled();
+  });
+
+  it('nested: a connection given inside a transaction that took its own connection is an error', async () => {
+    const { AcqModel } = makeFake();
+    const other = { query: vi.fn(), release: vi.fn() };
+
+    await AcqModel.transaction(async () => {
+      await expect(AcqModel.transaction(async () => 'x', { connection: other })).rejects.toThrow(/different connection/);
+    });
+  });
+});
+
 describe('executeWrite does not resend a write after a connection error', () => {
   it('PostgresDriver sends the write once and throws the connection error', async () => {
     const driver = new PostgresDriver({
@@ -387,4 +539,80 @@ describe('a read routed to the writer retries after a connection error', () => {
     ).rejects.toBe(connectionError);
     expect(query).toHaveBeenCalledTimes(1);
   });
+});
+
+describe('DBModel.execute() routes by whether the statement is read-only (#332)', () => {
+  // A separate fake for each pool: the reader pool and the writer pool.
+  function makeRoutedModel(driverType: 'postgres' | 'mysql', readerQuery: ReturnType<typeof vi.fn>, writerQuery: ReturnType<typeof vi.fn>) {
+    const handler = new DBHandler(
+      { driver: driverType, host: `tx-safety-routing-${driverType}`, port: 5432, database: 'tx_safety_db', user: 'test', password: 'test' },
+      { logger: silentLogger },
+    );
+    const driver = handler.getDriver() as unknown as { pool: unknown; writerPool: unknown };
+    driver.pool = { query: readerQuery };
+    driver.writerPool = { query: writerQuery };
+    class RoutedModel extends DBModel {
+      protected static getHandler() {
+        return handler;
+      }
+    }
+    return RoutedModel;
+  }
+
+  const drivers = [
+    { driverType: 'postgres' as const, connectionError: () => makeError('Connection terminated unexpectedly'), rows: (r: unknown[]) => ({ rows: r, rowCount: r.length }), p: '$1' },
+    { driverType: 'mysql' as const, connectionError: () => makeError('Connection lost', 'PROTOCOL_CONNECTION_LOST'), rows: (r: unknown[]) => [r, null], p: '?' },
+  ];
+
+  for (const { driverType, connectionError, rows, p } of drivers) {
+    describe(driverType, () => {
+      const writes = [
+        `INSERT INTO users (name) VALUES (${p}) RETURNING id`,
+        `UPDATE users SET name = ${p} WHERE id = 1 RETURNING id`,
+        `DELETE FROM users WHERE name = ${p} RETURNING id`,
+        `WITH x AS (UPDATE users SET name = ${p} WHERE id = 1 RETURNING *) SELECT id FROM x`,
+        `EXPLAIN ANALYZE DELETE FROM users WHERE name = ${p}`,
+      ];
+
+      for (const sql of writes) {
+        it(`${sql} outside withWriter() goes to the writer, not to the reader`, async () => {
+          const readerQuery = vi.fn().mockResolvedValue(rows([{ id: 1 }]));
+          const writerQuery = vi.fn().mockResolvedValue(rows([{ id: 1 }]));
+          const Model = makeRoutedModel(driverType, readerQuery, writerQuery);
+
+          await Model.execute(sql, ['alice']);
+
+          expect(readerQuery).not.toHaveBeenCalled();
+          expect(writerQuery).toHaveBeenCalledTimes(1);
+        });
+
+        it(`${sql} is not resent after a connection error`, async () => {
+          const error = connectionError();
+          const readerQuery = vi.fn();
+          const writerQuery = vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce(rows([{ id: 1 }]));
+          const Model = makeRoutedModel(driverType, readerQuery, writerQuery);
+
+          await expect(Model.execute(sql, ['alice'])).rejects.toBe(error);
+          expect(writerQuery).toHaveBeenCalledTimes(1);
+          expect(readerQuery).not.toHaveBeenCalled();
+        });
+      }
+
+      const reads = [`SELECT id FROM users WHERE id = ${p}`, `WITH x AS (SELECT id FROM users WHERE id = ${p}) SELECT id FROM x`, `EXPLAIN SELECT id FROM users WHERE id = ${p}`];
+
+      for (const sql of reads) {
+        it(`${sql} goes to the reader and is resent after a connection error`, async () => {
+          const readerQuery = vi.fn().mockRejectedValueOnce(connectionError()).mockResolvedValueOnce(rows([{ id: 1 }]));
+          const writerQuery = vi.fn();
+          const Model = makeRoutedModel(driverType, readerQuery, writerQuery);
+
+          const result = await Model.execute(sql, [1]);
+
+          expect(result.rows).toEqual([{ id: 1 }]);
+          expect(readerQuery).toHaveBeenCalledTimes(2);
+          expect(writerQuery).not.toHaveBeenCalled();
+        });
+      }
+    });
+  }
 });
