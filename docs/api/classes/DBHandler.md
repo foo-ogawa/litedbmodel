@@ -1,4 +1,4 @@
-[**litedbmodel v2.2.12**](../README.md)
+[**litedbmodel v2.2.13**](../README.md)
 
 ***
 
@@ -126,12 +126,17 @@ Execute a write query (INSERT/UPDATE/DELETE)
 ### executeOnWriter()
 
 ```ts
-executeOnWriter(sql: string, params?: unknown[]): Promise<QueryResult>;
+executeOnWriter(
+   sql: string, 
+   params?: unknown[], 
+read?: boolean): Promise<QueryResult>;
 ```
 
-Defined in: [DBHandler.ts:206](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBHandler.ts#L206)
+Defined in: [DBHandler.ts:208](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBHandler.ts#L208)
 
-Execute a query on writer pool (for withWriter context)
+Execute a query on the writer pool (for withWriter context / writer-sticky / writes).
+`read`: the caller routed a row-returning read here; only that is retried on a connection error
+(a write is never re-sent).
 
 #### Parameters
 
@@ -139,6 +144,7 @@ Execute a query on writer pool (for withWriter context)
 | ------ | ------ | ------ |
 | `sql` | `string` | `undefined` |
 | `params` | `unknown`[] | `[]` |
+| `read` | `boolean` | `false` |
 
 #### Returns
 
@@ -152,7 +158,7 @@ Execute a query on writer pool (for withWriter context)
 hasWriterPool(): boolean;
 ```
 
-Defined in: [DBHandler.ts:216](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBHandler.ts#L216)
+Defined in: [DBHandler.ts:218](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBHandler.ts#L218)
 
 Check if writer pool is configured
 
@@ -168,7 +174,7 @@ Check if writer pool is configured
 getConnection(): Promise<DBConnection>;
 ```
 
-Defined in: [DBHandler.ts:223](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBHandler.ts#L223)
+Defined in: [DBHandler.ts:225](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBHandler.ts#L225)
 
 Get a connection from the pool (for transactions)
 
@@ -184,7 +190,7 @@ Get a connection from the pool (for transactions)
 withConnection(connection: DBConnection): DBHandler;
 ```
 
-Defined in: [DBHandler.ts:230](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBHandler.ts#L230)
+Defined in: [DBHandler.ts:232](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBHandler.ts#L232)
 
 Create handler with specific connection (for transaction)
 
@@ -206,7 +212,7 @@ Create handler with specific connection (for transaction)
 close(): Promise<void>;
 ```
 
-Defined in: [DBHandler.ts:242](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBHandler.ts#L242)
+Defined in: [DBHandler.ts:244](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBHandler.ts#L244)
 
 Close all connections
 
@@ -222,7 +228,7 @@ Close all connections
 setLogger(logger: Logger): void;
 ```
 
-Defined in: [DBHandler.ts:249](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBHandler.ts#L249)
+Defined in: [DBHandler.ts:251](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBHandler.ts#L251)
 
 Set logger
 
@@ -244,7 +250,7 @@ Set logger
 getPool(): unknown;
 ```
 
-Defined in: [DBHandler.ts:258](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBHandler.ts#L258)
+Defined in: [DBHandler.ts:260](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBHandler.ts#L260)
 
 Get the underlying PostgreSQL pool (for backward compatibility)
 

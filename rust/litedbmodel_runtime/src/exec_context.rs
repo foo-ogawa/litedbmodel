@@ -1731,8 +1731,14 @@ mod tests {
         let (res, bodies) = run_commit_fail_tx(&d);
         let err = res.unwrap_err();
         assert!(err.message.contains("connection closed"));
-        assert_eq!(err.kind, "driver_error", "the stable kind must not be rewritten");
-        assert_eq!(bodies, 1, "a COMMIT-stage connection error must not re-run the body");
+        assert_eq!(
+            err.kind, "driver_error",
+            "the stable kind must not be rewritten"
+        );
+        assert_eq!(
+            bodies, 1,
+            "a COMMIT-stage connection error must not re-run the body"
+        );
     }
 
     /// A serialization failure at COMMIT definitely did not commit ⇒ still retried.

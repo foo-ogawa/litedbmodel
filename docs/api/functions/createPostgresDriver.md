@@ -1,4 +1,4 @@
-[**litedbmodel v2.2.12**](../README.md)
+[**litedbmodel v2.2.13**](../README.md)
 
 ***
 
@@ -10,7 +10,7 @@
 function createPostgresDriver(options: DBDriverOptions): PostgresDriver;
 ```
 
-Defined in: [drivers/postgres.ts:362](https://github.com/foo-ogawa/litedbmodel/blob/main/src/drivers/postgres.ts#L362)
+Defined in: [drivers/postgres.ts:349](https://github.com/foo-ogawa/litedbmodel/blob/main/src/drivers/postgres.ts#L349)
 
 Create a PostgreSQL driver instance
 

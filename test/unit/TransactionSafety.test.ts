@@ -176,7 +176,7 @@ describe('DBModel.transaction (v1 branch)', () => {
   });
 
   it('still re-runs func when a connection error occurs inside func', async () => {
-    const query = vi.fn(async () => ({ rows: [], rowCount: 0 }));
+    const query = vi.fn(async (_sql: string) => ({ rows: [], rowCount: 0 }));
     const connection = { query, release: vi.fn() };
     const { TxModel, assertV1Route } = makeModel(connection);
     const func = vi.fn()
@@ -189,7 +189,7 @@ describe('DBModel.transaction (v1 branch)', () => {
   });
 
   it('rejects queries through the transaction connection after func has settled', async () => {
-    const query = vi.fn(async () => ({ rows: [], rowCount: 0 }));
+    const query = vi.fn(async (_sql: string) => ({ rows: [], rowCount: 0 }));
     const connection = { query, release: vi.fn() };
     const { TxModel, assertV1Route } = makeModel(connection);
 
@@ -208,7 +208,7 @@ describe('DBModel.transaction (v1 branch)', () => {
   });
 
   it('rejects an un-awaited query started in func once func has rejected and ROLLBACK was sent', async () => {
-    const query = vi.fn(async () => ({ rows: [], rowCount: 0 }));
+    const query = vi.fn(async (_sql: string) => ({ rows: [], rowCount: 0 }));
     const connection = { query, release: vi.fn() };
     const { TxModel, assertV1Route } = makeModel(connection);
     const funcError = new Error('func failed');
@@ -234,7 +234,7 @@ describe('DBModel.transaction (v1 branch)', () => {
   });
 
   it('a query issued after func settled is logged once and does not raise unhandledRejection when not awaited', async () => {
-    const query = vi.fn(async () => ({ rows: [], rowCount: 0 }));
+    const query = vi.fn(async (_sql: string) => ({ rows: [], rowCount: 0 }));
     const connection = { query, release: vi.fn() };
     const { TxModel } = makeModel(connection);
     const error = vi.fn();
@@ -341,7 +341,7 @@ describe('DBModel.transaction (v1 branch)', () => {
     });
 
     it('COMMITs when func awaits every query, including through Promise.all', async () => {
-      const query = vi.fn(async () => ({ rows: [], rowCount: 0 }));
+      const query = vi.fn(async (_sql: string) => ({ rows: [], rowCount: 0 }));
       const connection = { query, release: vi.fn() };
       const { TxModel, assertV1Route } = makeModel(connection);
 
