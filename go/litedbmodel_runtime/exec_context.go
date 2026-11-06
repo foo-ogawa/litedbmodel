@@ -59,6 +59,7 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	bc "github.com/foo-ogawa/behavior-contracts/go"
@@ -632,11 +633,14 @@ func (c txConnection) Run(sql string, args []any) (RunInfo, error) {
 // settleGuardConnection is the [Connection] the transaction BODY's ctx pins: it forwards to the owned
 // connection until [settleGuardConnection.settle], then refuses every statement with
 // [TransactionClosed]. settle takes the write lock, so it waits for statements already in flight
-// (read-locked) and no statement can slip in after it returns.
+// (read-locked) and no statement can slip in after it returns; it reports whether any statement was
+// still unfinished when it began.
 type settleGuardConnection struct {
-	mu     sync.RWMutex
-	closed bool
-	conn   Connection
+	mu         sync.RWMutex
+	closed     bool
+	conn       Connection
+	settling   atomic.Bool // set by settle before it waits for the write lock
+	unfinished atomic.Bool // a statement was still executing when settle began
 }
 
 func (g *settleGuardConnection) Execute(sql string, args []any) ([]bc.Value, error) {
@@ -645,6 +649,7 @@ func (g *settleGuardConnection) Execute(sql string, args []any) ([]bc.Value, err
 	if g.closed {
 		return nil, TransactionClosed()
 	}
+	defer g.noteFinished()
 	return g.conn.Execute(sql, args)
 }
 
@@ -654,14 +659,26 @@ func (g *settleGuardConnection) Run(sql string, args []any) (RunInfo, error) {
 	if g.closed {
 		return RunInfo{}, TransactionClosed()
 	}
+	defer g.noteFinished()
 	return g.conn.Run(sql, args)
 }
 
-// settle closes the guard (idempotent).
-func (g *settleGuardConnection) settle() {
+// noteFinished runs when a statement completes: finishing after settle began means it was unfinished
+// at settle.
+func (g *settleGuardConnection) noteFinished() {
+	if g.settling.Load() {
+		g.unfinished.Store(true)
+	}
+}
+
+// settle closes the guard (idempotent), waits for statements in flight, and reports whether any of them
+// had not finished when it began (a query the body did not wait for).
+func (g *settleGuardConnection) settle() bool {
+	g.settling.Store(true)
 	g.mu.Lock()
 	g.closed = true
 	g.mu.Unlock()
+	return g.unfinished.Load()
 }
 
 // TxDecision is the body's decision about how to end the transaction — so a body can legitimately
@@ -773,7 +790,9 @@ func WithTransactionDecidedIsolated[R any](ctx *ExecutionContext, isolation Isol
 
 	// (3) the transaction body.
 	result, decision, bodyErr := body(txCtx)
-	guard.settle() // from here on txCtx is closed; tx-control runs on ctlCtx
+	// From here on txCtx is closed; tx-control runs on ctlCtx. settle waits for statements still in flight;
+	// one the body did not wait for fails the transaction (ROLLBACK, never COMMIT).
+	pendingAtSettle := guard.settle()
 	if bodyErr != nil {
 		// A body error rolls back (best-effort) and re-raises; the original failure is surfaced. A failed
 		// ROLLBACK poisons the connection (unknown state) ⇒ destroy on release.
@@ -781,6 +800,15 @@ func WithTransactionDecidedIsolated[R any](ctx *ExecutionContext, isolation Isol
 			poisoned = true
 		}
 		return zero, bodyErr
+	}
+	if pendingAtSettle {
+		if _, e := Run(ctlCtx, "ROLLBACK", nil, WriteIntent()); e != nil {
+			poisoned = true
+		}
+		f := TransactionClosed()
+		f.Msg = "A query started inside the transaction had not finished when the transaction function settled. " +
+			"Await every query started inside DBModel.transaction() before returning."
+		return zero, f
 	}
 	if decision.Rollback {
 		// (4a) a legitimate non-error rollback (e.g. a gate short-circuit): ROLLBACK through the seam,

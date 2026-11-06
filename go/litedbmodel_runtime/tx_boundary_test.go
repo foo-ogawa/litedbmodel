@@ -693,3 +693,90 @@ func TestQueryAfterBodySettledIsRejected(t *testing.T) {
 		t.Errorf("no leaked write may reach the table: n=%d err=%v", n, e)
 	}
 }
+
+// ── #330 defect 3 (pending at settle): a query the body did not wait for fails the transaction ────
+
+// A statement the body sent from a goroutine and did not wait for is still in flight when the body
+// returns successfully: the transaction waits for it, ROLLBACKs (no COMMIT), and fails with
+// [TransactionClosed] — not retried, and neither that statement's write nor the awaited one persists.
+func TestPendingQueryAtSettleFailsAndRollsBack(t *testing.T) {
+	db, sink := openRec(t, "file:txb10?mode=memory&cache=shared")
+	defer db.Close()
+	sink.reset()
+	ctx := ContextForDB(db)
+	o := DefaultTransactionOptions()
+	o.RetryDurationMs = 0
+	started := make(chan struct{})
+	release := make(chan struct{})
+	sink.mu.Lock()
+	sink.execHook = func(q string) error {
+		if strings.Contains(q, "VALUES (41,") {
+			close(started)
+			<-release // still in flight until the transaction function has returned and settle waits
+		}
+		return nil
+	}
+	sink.mu.Unlock()
+	calls := 0
+	_, err := Transaction(ctx, "sqlite", o, func(txCtx *ExecutionContext) (int, error) {
+		calls++
+		if _, e := RunGuarded(txCtx, "INSERT INTO t (id,v) VALUES (40,'awaited')", nil, "INSERT", "t"); e != nil {
+			return 0, e
+		}
+		go func() {
+			_, _ = Run(txCtx, "INSERT INTO t (id,v) VALUES (41,'pending')", nil, WriteIntent())
+		}()
+		<-started
+		time.AfterFunc(100*time.Millisecond, func() { close(release) })
+		return 1, nil // the body succeeds without waiting for the goroutine's query
+	})
+	var sf *SqlFailure
+	if !errors.As(err, &sf) || sf.Kind != "transaction_closed" {
+		t.Fatalf("a query pending at settle must fail the transaction with transaction_closed: %v", err)
+	}
+	if !strings.Contains(err.Error(), "had not finished when the transaction function settled") {
+		t.Errorf("unexpected message: %v", err)
+	}
+	if IsRetryableTxError(err) || calls != 1 {
+		t.Errorf("transaction_closed must not be retried: retryable=%v body calls=%d", IsRetryableTxError(err), calls)
+	}
+	_, commits, rolls := sink.txControlCounts()
+	if commits != 0 || rolls != 1 {
+		t.Errorf("must ROLLBACK and never COMMIT: commits=%d rolls=%d", commits, rolls)
+	}
+	var n int
+	if e := db.QueryRow("SELECT COUNT(*) FROM t WHERE id >= 40").Scan(&n); e != nil || n != 0 {
+		t.Errorf("no write of the transaction may persist: n=%d err=%v", n, e)
+	}
+}
+
+// A body that waits for every query it started (here: a goroutine joined before returning) commits as
+// before.
+func TestAwaitedQueriesAtSettleStillCommit(t *testing.T) {
+	db, sink := openRec(t, "file:txb11?mode=memory&cache=shared")
+	defer db.Close()
+	sink.reset()
+	ctx := ContextForDB(db)
+	o := DefaultTransactionOptions()
+	o.RetryDurationMs = 0
+	_, err := Transaction(ctx, "sqlite", o, func(txCtx *ExecutionContext) (int, error) {
+		done := make(chan error, 1)
+		go func() {
+			_, e := Run(txCtx, "INSERT INTO t (id,v) VALUES (50,'g')", nil, WriteIntent())
+			done <- e
+		}()
+		if e := <-done; e != nil {
+			return 0, e
+		}
+		_, e := RunGuarded(txCtx, "INSERT INTO t (id,v) VALUES (51,'b')", nil, "INSERT", "t")
+		return 0, e
+	})
+	if err != nil {
+		t.Fatalf("a body that awaited everything must commit: %v", err)
+	}
+	_, commits, _ := sink.txControlCounts()
+	var n int
+	if e := db.QueryRow("SELECT COUNT(*) FROM t WHERE id >= 50").Scan(&n); e != nil || n != 2 || commits != 1 {
+		t.Errorf("both writes must be committed: n=%d commits=%d err=%v", n, commits, e)
+	}
+}
