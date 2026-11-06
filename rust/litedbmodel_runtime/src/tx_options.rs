@@ -203,10 +203,6 @@ impl Default for TransactionOptions {
 ///   - **connection errors** (either dialect): a dropped/reset/refused connection is retryable
 ///     (reconnect on the next attempt) — [`is_connection_error`].
 pub fn is_retryable_tx_error(error: &SqlFailure) -> bool {
-    // A connection error at COMMIT has an unknown outcome — never re-run the body.
-    if error.kind == COMMIT_OUTCOME_UNKNOWN_KIND {
-        return false;
-    }
     if is_connection_error(error) {
         return true;
     }
@@ -226,19 +222,6 @@ pub fn is_retryable_tx_error(error: &SqlFailure) -> bool {
         || m.contains("Deadlock found")
         || m.contains("deadlock detected")
         || m.contains("Lock wait timeout exceeded")
-}
-
-/// `SqlFailure::kind` of a connection error raised by the COMMIT statement itself (#330): the commit's
-/// outcome is unknown, so the failure is NOT retryable ([`is_retryable_tx_error`]).
-pub const COMMIT_OUTCOME_UNKNOWN_KIND: &str = "commit_outcome_unknown";
-
-/// Mark `error` (raised by COMMIT) as [`COMMIT_OUTCOME_UNKNOWN_KIND`] when it is a connection error;
-/// any other COMMIT failure (serialization, deadlock) is returned unchanged and stays retryable.
-pub fn mark_commit_outcome_unknown(mut error: SqlFailure) -> SqlFailure {
-    if is_connection_error(&error) {
-        error.kind = COMMIT_OUTCOME_UNKNOWN_KIND.into();
-    }
-    error
 }
 
 /// Is `error` a broken/stale connection (retryable via reconnect)? A message/-code heuristic
