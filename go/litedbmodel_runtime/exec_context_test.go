@@ -223,8 +223,12 @@ func TestConnectionForResolution(t *testing.T) {
 		if !txCtx.InTransaction() {
 			t.Errorf("tx ctx must report InTransaction() true")
 		}
-		if _, ok := txCtx.ConnectionFor(WriteIntent()).(txConnection); !ok {
-			t.Errorf("tx ctx ConnectionFor must be a txConnection")
+		g, ok := txCtx.ConnectionFor(WriteIntent()).(*settleGuardConnection)
+		if !ok {
+			t.Fatalf("tx ctx ConnectionFor must be the settle guard")
+		}
+		if _, ok := g.conn.(txConnection); !ok {
+			t.Errorf("the settle guard must wrap the owned txConnection")
 		}
 		return 0, nil
 	})
