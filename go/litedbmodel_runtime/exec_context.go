@@ -793,21 +793,22 @@ func WithTransactionDecidedIsolated[R any](ctx *ExecutionContext, isolation Isol
 	// From here on txCtx is closed; tx-control runs on ctlCtx. settle waits for statements still in flight;
 	// one the body did not wait for fails the transaction (ROLLBACK, never COMMIT).
 	pendingAtSettle := guard.settle()
-	if bodyErr != nil {
-		// A body error rolls back (best-effort) and re-raises; the original failure is surfaced. A failed
-		// ROLLBACK poisons the connection (unknown state) ⇒ destroy on release.
+	if bodyErr != nil || pendingAtSettle {
+		// A body error, or a query the body did not wait for, rolls back (best-effort). A failed ROLLBACK
+		// poisons the connection (unknown state) ⇒ destroy on release.
 		if _, e := Run(ctlCtx, "ROLLBACK", nil, WriteIntent()); e != nil {
 			poisoned = true
 		}
-		return zero, bodyErr
-	}
-	if pendingAtSettle {
-		if _, e := Run(ctlCtx, "ROLLBACK", nil, WriteIntent()); e != nil {
-			poisoned = true
+		if !pendingAtSettle {
+			return zero, bodyErr // the original failure is surfaced
 		}
+		// A query still in flight fails the transaction with [TransactionClosed] — even when the body failed
+		// (then the body's error is kept as the cause, reachable via errors.Is / errors.As, and the failure is
+		// not retried: see [IsRetryableTxError]).
 		f := TransactionClosed()
 		f.Msg = "A query started inside the transaction had not finished when the transaction function settled. " +
 			"Await every query started inside DBModel.transaction() before returning."
+		f.wrapped = bodyErr
 		return zero, f
 	}
 	if decision.Rollback {

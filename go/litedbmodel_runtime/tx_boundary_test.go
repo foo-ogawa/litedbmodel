@@ -750,6 +750,66 @@ func TestPendingQueryAtSettleFailsAndRollsBack(t *testing.T) {
 	}
 }
 
+// A body that FAILS (here with a retryable serialization failure) while a goroutine's query is still in
+// flight fails the transaction with [TransactionClosed], not the body's error: the body error stays
+// reachable as the cause (errors.Is / errors.As), the failure is not retried, and nothing is COMMITted.
+func TestPendingQueryAtSettleWithBodyErrorIsTransactionClosed(t *testing.T) {
+	db, sink := openRec(t, "file:txb12?mode=memory&cache=shared")
+	defer db.Close()
+	sink.reset()
+	ctx := ContextForDB(db)
+	o := DefaultTransactionOptions()
+	o.RetryDurationMs = 0
+	started := make(chan struct{})
+	release := make(chan struct{})
+	sink.mu.Lock()
+	sink.execHook = func(q string) error {
+		if strings.Contains(q, "VALUES (61,") {
+			close(started)
+			<-release
+		}
+		return nil
+	}
+	sink.mu.Unlock()
+	pgErr := &pgconn.PgError{Code: "40001", Message: "could not serialize access"}
+	bodyErr := fmt.Errorf("body failed: %w", pgErr)
+	calls := 0
+	_, err := Transaction(ctx, "sqlite", o, func(txCtx *ExecutionContext) (int, error) {
+		calls++
+		go func() {
+			_, _ = Run(txCtx, "INSERT INTO t (id,v) VALUES (61,'pending')", nil, WriteIntent())
+		}()
+		<-started
+		time.AfterFunc(100*time.Millisecond, func() { close(release) })
+		return 0, bodyErr
+	})
+	var sf *SqlFailure
+	if !errors.As(err, &sf) || sf.Kind != "transaction_closed" {
+		t.Fatalf("a failing body with a pending query must fail with transaction_closed: %v", err)
+	}
+	if !strings.Contains(err.Error(), "had not finished when the transaction function settled") {
+		t.Errorf("unexpected message: %v", err)
+	}
+	if !errors.Is(err, bodyErr) {
+		t.Errorf("the body error must be reachable with errors.Is: %v", err)
+	}
+	var pg *pgconn.PgError
+	if !errors.As(err, &pg) || pg != pgErr {
+		t.Errorf("the body error must be reachable with errors.As: %v", err)
+	}
+	if IsRetryableTxError(err) || calls != 1 {
+		t.Errorf("transaction_closed must not be retried: retryable=%v body calls=%d", IsRetryableTxError(err), calls)
+	}
+	_, commits, rolls := sink.txControlCounts()
+	if commits != 0 || rolls != 1 {
+		t.Errorf("must ROLLBACK and never COMMIT: commits=%d rolls=%d", commits, rolls)
+	}
+	var n int
+	if e := db.QueryRow("SELECT COUNT(*) FROM t WHERE id >= 60").Scan(&n); e != nil || n != 0 {
+		t.Errorf("no write may persist: n=%d err=%v", n, e)
+	}
+}
+
 // A body that waits for every query it started (here: a goroutine joined before returning) commits as
 // before.
 func TestAwaitedQueriesAtSettleStillCommit(t *testing.T) {
