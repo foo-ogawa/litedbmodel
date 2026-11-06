@@ -125,7 +125,7 @@ describe('DBModel.transaction', () => {
   });
 
   it('rejects queries through the transaction connection after func has settled', async () => {
-    const query = vi.fn(async () => ({ rows: [], rowCount: 0 }));
+    const query = vi.fn(async (_sql: string) => ({ rows: [], rowCount: 0 }));
     const connection = { query, release: vi.fn() };
     const { TxModel } = makeModel(connection);
 
@@ -143,7 +143,7 @@ describe('DBModel.transaction', () => {
   });
 
   it('rejects an un-awaited query started in func once func has rejected and ROLLBACK was sent', async () => {
-    const query = vi.fn(async () => ({ rows: [], rowCount: 0 }));
+    const query = vi.fn(async (_sql: string) => ({ rows: [], rowCount: 0 }));
     const connection = { query, release: vi.fn() };
     const { TxModel } = makeModel(connection);
     const funcError = new Error('func failed');
@@ -168,7 +168,7 @@ describe('DBModel.transaction', () => {
   });
 
   // Same-connection queries are processed in the order they were sent (as the pg client's queue does).
-  function makeSerialConnection(gates: Record<string, Promise<void>> = {}) {
+  function makeSerialConnection(gates: Partial<Record<string, Promise<void>>> = {}) {
     const completed: string[] = [];
     let chain: Promise<unknown> = Promise.resolve();
     const query = vi.fn((sql: string) => {
