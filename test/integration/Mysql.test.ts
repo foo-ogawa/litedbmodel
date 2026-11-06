@@ -32,11 +32,11 @@ const AllTypes = AllTypesModel as typeof AllTypesModel & ColumnsOf<AllTypesModel
 // ============================================
 
 const testConfig: DBConfig = {
-  host: 'localhost',
-  port: 3307,
-  database: 'testdb',
-  user: 'testuser',
-  password: 'testpass',
+  host: process.env.TEST_MYSQL_HOST || 'localhost',
+  port: parseInt(process.env.TEST_MYSQL_PORT || '3307', 10),
+  database: process.env.TEST_MYSQL_DB || 'testdb',
+  user: process.env.TEST_MYSQL_USER || 'testuser',
+  password: process.env.TEST_MYSQL_PASSWORD || 'testpass',
   driver: 'mysql',
 };
 
