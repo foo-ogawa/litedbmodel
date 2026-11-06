@@ -2853,6 +2853,10 @@ export abstract class DBModel {
         let result: R;
         try {
           result = await txContext.run(context, func);
+        } catch (funcError) {
+          // func rejected with a query still unfinished: report that, keep func's error as the cause, never retry
+          if (pendingQueries > 0) throw new TransactionClosedError('unfinished-query', funcError);
+          throw funcError;
         } finally {
           closed = true;
         }

@@ -217,6 +217,33 @@ describe('DBModel.transaction', () => {
     expect(connection.release).toHaveBeenCalledWith(true);
   });
 
+  it('throws TransactionClosedError, not the retryable func error, when func rejects with a query still unfinished', async () => {
+    let openGate!: () => void;
+    const gate = new Promise<void>((resolve) => { openGate = resolve; });
+    const { connection, query, completed } = makeSerialConnection({ 'INSERT slow': gate });
+    const { TxModel } = makeModel(connection);
+    const funcError = makeError('Deadlock found when trying to get lock; try restarting transaction', '40P01');
+    const func = vi.fn(async () => {
+      const conn = getTransactionConnection()!;
+      void conn.query('INSERT slow'); // started, not awaited
+      throw funcError;
+    });
+
+    const result = TxModel.transaction(func, { retryDuration: 1 });
+    const assertion = result.catch((e) => e);
+    await vi.waitFor(() => expect(query.mock.calls.map((c) => c[0])).toContain('ROLLBACK'));
+    openGate();
+    const thrown = await assertion;
+
+    expect(thrown).toBeInstanceOf(TransactionClosedError);
+    expect((thrown as Error).message).toContain('had not finished when the transaction function settled');
+    expect((thrown as Error).cause).toBe(funcError);
+    // not retried even though the func error is retryable
+    expect(func).toHaveBeenCalledTimes(1);
+    expect(completed).toEqual(['BEGIN', 'INSERT slow', 'ROLLBACK']);
+    expect(query.mock.calls.map((c) => c[0])).not.toContain('COMMIT');
+  });
+
   it('a query issued after func settled does not become an unhandledRejection, and is logged once', async () => {
     const unhandled: unknown[] = [];
     const onUnhandled = (reason: unknown): void => { unhandled.push(reason); };

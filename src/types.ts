@@ -401,12 +401,13 @@ export class WriteOutsideTransactionError extends Error {
  * @category Errors
  */
 export class TransactionClosedError extends Error {
-  constructor(reason: 'issued-after-settle' | 'unfinished-query' = 'issued-after-settle') {
+  constructor(reason: 'issued-after-settle' | 'unfinished-query' = 'issued-after-settle', cause?: unknown) {
     super(
       (reason === 'unfinished-query'
         ? 'A query started inside the transaction had not finished when the transaction function settled. '
         : 'Query issued after the transaction function settled. ') +
-      'Await every query started inside DBModel.transaction() before returning.'
+      'Await every query started inside DBModel.transaction() before returning.',
+      cause === undefined ? undefined : { cause }
     );
     this.name = 'TransactionClosedError';
   }
