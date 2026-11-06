@@ -248,3 +248,115 @@ def test_sqlite_isolation_request_is_a_hard_error():
         transaction(ctx, lambda: None, TransactionOptions(isolation=IsolationLevel.SERIALIZABLE), "sqlite")
     # The hard-error fires BEFORE any connection is acquired.
     assert sink["begin_tx"] == 0
+
+
+# ── #330 transaction-safety defects (2.x Python) ───────────────────────────────
+
+
+class _CommitFailsTx(_SqliteTxConnection):
+    """A tx handle whose COMMIT raises the next error in ``errors`` (then commits normally)."""
+
+    def __init__(self, conn, errors):
+        super().__init__(conn)
+        self._errors = errors
+
+    def run(self, sql, params):
+        if sql.strip().split(" ", 1)[0].upper() == "COMMIT" and self._errors:
+            super().run("ROLLBACK", params)  # a real connection error leaves no open tx to retry into
+            raise self._errors.pop(0)
+        return super().run(sql, params)
+
+
+class _CommitFailsDriver(SqliteDriver):
+    def __init__(self, conn, errors):
+        super().__init__(conn)
+        self._errors = errors
+
+    def begin_tx(self):
+        return _CommitFailsTx(self.conn, self._errors)
+
+
+class _FakeSerializationError(Exception):
+    sqlstate = "40001"
+
+
+def _run_with_commit_errors(errors):
+    conn = sqlite3.connect(":memory:")
+    conn.execute(f"CREATE TABLE {ISO_TBL} (id INTEGER PRIMARY KEY, worker INTEGER NOT NULL, seq INTEGER NOT NULL)")
+    conn.commit()
+    ctx = context_for_driver(_CommitFailsDriver(conn, errors))
+    runs = []
+
+    def body():
+        runs.append(1)
+        return _do_op(800 + len(runs), 8, 0)
+
+    opts = TransactionOptions(retry_limit=3, retry_duration=0)
+    try:
+        transaction(ctx, body, opts, "sqlite")
+        return len(runs), None
+    except Exception as e:
+        return len(runs), e
+
+
+def test_commit_connection_error_does_not_rerun_the_body():
+    # The COMMIT may have reached the server before the connection dropped: re-running the body could
+    # write twice. The error surfaces after ONE run of the body.
+    runs, error = _run_with_commit_errors([RuntimeError("server closed the connection unexpectedly")] * 3)
+    assert runs == 1, f"the body must not re-run after a COMMIT connection error, ran {runs}x"
+    assert error is not None and "server closed the connection" in str(error)
+
+
+def test_commit_serialization_failure_is_still_retried():
+    runs, error = _run_with_commit_errors([_FakeSerializationError("could not serialize access")])
+    assert error is None
+    assert runs == 2
+
+
+def _recording_pool():
+    closed = []
+
+    class _Conn:
+        def close(self):
+            closed.append(self)
+
+    from litedbmodel_runtime.driver import _ConnectionPool
+
+    return _ConnectionPool(_Conn, 2), closed
+
+
+def test_errored_connection_outside_a_tx_is_discarded_not_returned_to_the_pool():
+    from litedbmodel_runtime.driver import _PooledDriver
+
+    pool, closed = _recording_pool()
+    driver = _PooledDriver(pool, lambda s: s, False)
+
+    def failing(conn):
+        raise RuntimeError("server closed the connection unexpectedly")
+
+    with pytest.raises(RuntimeError):
+        driver._with_conn(failing)
+    assert len(closed) == 1, "the errored connection must be closed"
+    assert pool._free == [], "the errored connection must not go back to the pool"
+    assert pool._opened == 0, "its slot must be freed"
+    # A clean statement still returns its connection to the pool.
+    driver._with_conn(lambda conn: None)
+    assert len(pool._free) == 1
+
+
+def test_connection_used_after_the_transaction_settled_is_rejected():
+    from litedbmodel_runtime.errors import TransactionClosedError
+    from litedbmodel_runtime.driver import _PooledTxConnection
+
+    pool, _ = _recording_pool()
+    tx = _PooledTxConnection(pool, lambda s: s, False)
+    tx.release(False)  # the transaction settled; the connection is back in the pool
+    expected = (
+        "Query issued after the transaction function settled. "
+        "Await every query started inside DBModel.transaction() before returning."
+    )
+    with pytest.raises(TransactionClosedError, match="Query issued after the transaction function settled"):
+        tx.run("SELECT 1", [])
+    with pytest.raises(TransactionClosedError) as info:
+        tx.all("SELECT 1", [])
+    assert str(info.value) == expected

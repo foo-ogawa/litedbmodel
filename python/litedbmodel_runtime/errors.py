@@ -131,6 +131,24 @@ class LimitExceededError(Exception):
             raise cls(limit, count, context, model, relation)
 
 
+class TransactionClosedError(Exception):
+    """A statement was issued on a transaction's connection AFTER the transaction settled (Python
+    counterpart of the TS ``TransactionClosedError``, #330 defect 3). The connection has already been
+    returned to the pool (or destroyed), so running the statement would hit a connection that now belongs
+    to another caller. Typically a statement started inside the transaction body (e.g. on a thread) that
+    was not awaited/joined before the body returned.
+
+    ``.name`` mirrors the JS ``Error.name`` like :class:`LimitExceededError`.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            "Query issued after the transaction function settled. "
+            "Await every query started inside DBModel.transaction() before returning."
+        )
+        self.name = "TransactionClosedError"
+
+
 def check_find_hard_limit(limit: int, count: int, model: Optional[str] = None) -> None:
     """The FIND-context runaway guard (Python port of the rust ``check_find_hard_limit`` / go
     ``CheckFindHardLimit``). The compile injects ``LIMIT hardLimit + 1``, so a fetched ``count`` of

@@ -15,6 +15,8 @@ import re
 import sqlite3
 from typing import Any, Callable, Dict, List, Optional, Protocol, Sequence, Tuple
 
+from .errors import TransactionClosedError
+
 
 # ── Row materialization: per-column-set dict builder (read-path hot loop, #63 §② perf) ──────────
 #
@@ -747,9 +749,17 @@ class _PooledTxConnection:
         self._released = False
 
     def all(self, sql: str, params: Sequence[Any]) -> List[Dict[str, Any]]:
+        self._check_open()
         return _conn_all(self._conn, sql, params, self._xform, self._emulate_returning)
 
+    def _check_open(self) -> None:
+        # After release the connection belongs to the pool (another caller may hold it): a statement
+        # that escaped the transaction body (e.g. on a thread) must fail, never run. #330 defect 3.
+        if self._released:
+            raise TransactionClosedError()
+
     def run(self, sql: str, params: Sequence[Any]) -> RunInfo:
+        self._check_open()
         # Serves BOTH tx-body writes AND tx-control (BEGIN/COMMIT/ROLLBACK/SET). tx-control carries no
         # params, so `xform` is a no-op on it. A failure propagates so the combinator releases with
         # destroy=True (a raised COMMIT/BEGIN leaves the connection in an unknown state — it must not
@@ -785,19 +795,24 @@ class _PooledDriver:
         """Run ``op(conn)`` on a freshly checked-out pooled connection (the non-tx read/write path)."""
         conn = self._pool.acquire()
         try:
-            return op(conn)
-        finally:
-            self._pool.release(conn)
+            result = op(conn)
+        except BaseException:
+            # An errored connection is in an unknown state (e.g. dropped mid-statement): DISCARD it
+            # instead of handing it to the next caller — the same treatment as a poisoned tx connection
+            # (:meth:`_PooledTxConnection.release` with ``destroy=True``). #330 defect 1.
+            self._pool.discard(conn)
+            raise
+        self._pool.release(conn)
+        return result
 
     def exec_ddl(self, statements: Sequence[str]) -> None:
-        conn = self._pool.acquire()
-        try:
+        def run_all(conn):
             cur = conn.cursor()
             for stmt in statements:
                 cur.execute(stmt)
             cur.close()
-        finally:
-            self._pool.release(conn)
+
+        self._with_conn(run_all)
 
     def prepare(self, sql: str) -> _PooledPrepared:
         return _PooledPrepared(self, sql)

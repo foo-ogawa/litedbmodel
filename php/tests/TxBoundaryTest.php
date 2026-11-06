@@ -306,6 +306,50 @@ final class TxBoundaryTest extends TestCase
         $this->assertFalse(isRetryableTxError($e), 'a unique/data conflict must NOT be retryable');
     }
 
+    // ── #330 defect 2: the COMMIT stage ─────────────────────────────────────────
+
+    /** @return array{0:int,1:?\Throwable} body runs, error */
+    private static function runWithCommitFailure(\PDOException $commitError, int $failures): array
+    {
+        $db = new CommitFailingPdo('sqlite::memory:', $commitError, $failures);
+        $db->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
+        $db->exec('CREATE TABLE ' . self::TBL . ' (id INTEGER PRIMARY KEY, worker INTEGER NOT NULL, seq INTEGER NOT NULL)');
+        $runs = 0;
+        $body = function () use (&$runs) {
+            $runs++;
+            return self::op(800 + $runs, 8, 0);
+        };
+        try {
+            transaction(Context::forPdo($db), $body, new TransactionOptions(retryLimit: 3, retryDurationMs: 0), 'sqlite');
+            return [$runs, null];
+        } catch (\Throwable $e) {
+            return [$runs, $e];
+        }
+    }
+
+    public function testCommitConnectionErrorDoesNotRerunTheBody(): void
+    {
+        // The COMMIT may have reached the server before the connection dropped: re-running the body
+        // could write twice. The error surfaces after ONE run of the body.
+        [$runs, $error] = self::runWithCommitFailure(
+            self::pdoException(['HY000', 7, 'server closed the connection unexpectedly'], 'server closed the connection unexpectedly'),
+            3,
+        );
+        $this->assertSame(1, $runs, 'the body must not re-run after a COMMIT connection error');
+        $this->assertNotNull($error);
+        $this->assertStringContainsString('server closed the connection', $error->getMessage());
+    }
+
+    public function testCommitSerializationFailureIsStillRetried(): void
+    {
+        [$runs, $error] = self::runWithCommitFailure(
+            self::pdoException(['40001', 7, 'could not serialize access'], 'could not serialize access'),
+            1,
+        );
+        $this->assertNull($error);
+        $this->assertSame(2, $runs);
+    }
+
     /** Build a \PDOException with a specific errorInfo triple (the live-driver shape). */
     private static function pdoException(array $errorInfo, string $message): \PDOException
     {
@@ -356,6 +400,26 @@ final class RecordingPdo extends \PDO
         }
         if ($head === 'BEGIN' || $head === 'COMMIT' || $head === 'ROLLBACK' || $head === 'SET') {
             $this->sink->control[] = trim($statement);
+        }
+        return parent::exec($statement);
+    }
+}
+
+/** A \PDO whose COMMIT rolls back the in-proc tx (a dropped connection leaves none open) and throws `$error`, `$failures` times. */
+final class CommitFailingPdo extends \PDO
+{
+    public function __construct(string $dsn, private readonly \PDOException $error, private int $failures)
+    {
+        parent::__construct($dsn);
+    }
+
+    #[\ReturnTypeWillChange]
+    public function exec(string $statement): int|false
+    {
+        if (strtoupper(strtok(trim($statement), " \t\n")) === 'COMMIT' && $this->failures > 0) {
+            $this->failures--;
+            parent::exec('ROLLBACK');
+            throw $this->error;
         }
         return parent::exec($statement);
     }
