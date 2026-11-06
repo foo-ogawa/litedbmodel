@@ -344,6 +344,8 @@ export function pgPoolFactory(pg: PgFactoryModuleLike): PoolFactory {
       // pg-pool bounds BOTH a new connection and the wait for a free one with this one limit.
       connectionTimeoutMillis: config.connectTimeoutMillis,
       idleTimeoutMillis: config.idleTimeoutMillis,
+      // Server-side statement timeout, sent in the connection startup (no per-statement SET/RESET).
+      ...(config.queryTimeout > 0 ? { statement_timeout: config.queryTimeout } : {}),
       // keepAlive (construction knob): TCP keepalive for serverless/long-idle connections.
       keepAlive: config.keepAlive,
       ...(config.keepAlive ? { keepAliveInitialDelayMillis: config.keepAliveInitialDelayMillis } : {}),

@@ -207,19 +207,29 @@ describe('withTransactionAsync pinned connection lifetime', () => {
   });
 });
 
-describe('queryTimeout reaches the scp connection (DBModel → statement_timeout)', () => {
+describe('queryTimeout reaches the scp connection (DBModel → pg Pool statement_timeout)', () => {
   const pgModule = createRequire(import.meta.url)('pg') as { Pool: { prototype: { connect: unknown } } };
-  const original = pgModule.Pool.prototype.connect;
-  afterEach(() => { pgModule.Pool.prototype.connect = original; });
+  const mysqlModule = createRequire(import.meta.url)('mysql2/promise') as { createPool: unknown };
+  const originalConnect = pgModule.Pool.prototype.connect;
+  const originalCreatePool = mysqlModule.createPool;
+  afterEach(() => {
+    pgModule.Pool.prototype.connect = originalConnect;
+    mysqlModule.createPool = originalCreatePool;
+  });
 
-  async function sessionStatementsOf(config: Record<string, unknown>): Promise<string[]> {
+  /** Build the DBModel's scp runtime on a stubbed pg Pool; acquire+release once; return what pg saw. */
+  async function viaDbModelPg(config: Record<string, unknown>): Promise<{ poolStatementTimeout: unknown; sent: string[] }> {
     const sent: string[] = [];
-    pgModule.Pool.prototype.connect = async () => ({
-      query: async (text: string) => { sent.push(text); return { rows: [], rowCount: 0 }; },
-      on: () => undefined,
-      removeListener: () => undefined,
-      release: () => undefined,
-    });
+    let poolStatementTimeout: unknown;
+    pgModule.Pool.prototype.connect = async function (this: { options: Record<string, unknown> }) {
+      poolStatementTimeout = this.options.statement_timeout;
+      return {
+        query: async (text: string) => { sent.push(text); return { rows: [], rowCount: 0 }; },
+        on: () => undefined,
+        removeListener: () => undefined,
+        release: () => undefined,
+      };
+    };
     const Base = DBModel.createDBBase({ host: 'tx-safety-timeout-host', port: 5432, database: 'tx_safety_db', user: 'u', password: 'p', ...config } as never);
     const rt = (Base as unknown as { _getScpRuntime(): { ctx: PooledAsyncContext; close(): Promise<void> } | null })._getScpRuntime();
     expect(rt).not.toBeNull(); // the SCP runtime (not the v1 driver) was built
@@ -227,15 +237,51 @@ describe('queryTimeout reaches the scp connection (DBModel → statement_timeout
     const conn = await pool.acquire();
     await pool.release(conn);
     await rt!.close();
-    return sent.filter((s) => s.startsWith('SET statement_timeout'));
+    return { poolStatementTimeout, sent };
   }
 
-  it('converts DBConfig.queryTimeout (seconds) to the connection config (ms)', async () => {
-    expect(await sessionStatementsOf({ queryTimeout: 7 })).toEqual(['SET statement_timeout = 7000']);
+  /** The same for MySQL: the statements the stubbed mysql2 connection received. */
+  async function viaDbModelMysql(config: Record<string, unknown>): Promise<string[]> {
+    const sent: string[] = [];
+    mysqlModule.createPool = () => ({
+      getConnection: async () => ({
+        query: async (text: string) => { sent.push(text); return [{ affectedRows: 0, insertId: 0 }, []]; },
+        release: () => undefined,
+        destroy: () => undefined,
+      }),
+      end: async () => undefined,
+    });
+    const Base = DBModel.createDBBase({ driver: 'mysql', host: 'tx-safety-timeout-host', port: 3306, database: 'tx_safety_db', user: 'u', password: 'p', ...config } as never);
+    const rt = (Base as unknown as { _getScpRuntime(): { ctx: PooledAsyncContext; close(): Promise<void> } | null })._getScpRuntime();
+    expect(rt).not.toBeNull();
+    const pool = rt!.ctx.connectionPoolFor();
+    const conn = await pool.acquire();
+    await pool.release(conn);
+    await rt!.close();
+    return sent;
+  }
+
+  it('pg: DBConfig.queryTimeout (seconds) reaches the pg Pool as statement_timeout (ms); no per-statement SET/RESET', async () => {
+    const { poolStatementTimeout, sent } = await viaDbModelPg({ queryTimeout: 7 });
+    expect(poolStatementTimeout).toBe(7000);
+    expect(sent.filter((s) => /statement_timeout/.test(s))).toEqual([]);
   });
 
-  it('defaults to 30 seconds like the v1 driver when queryTimeout is not given', async () => {
-    expect(await sessionStatementsOf({})).toEqual(['SET statement_timeout = 30000']);
-    expect(sessionStatements(resolveConnectionConfig({ driver: 'postgres' }))).toEqual(['SET statement_timeout = 30000']);
+  it('pg: unspecified (and 0) queryTimeout is 30 seconds like the v1 driver', async () => {
+    expect((await viaDbModelPg({})).poolStatementTimeout).toBe(30000);
+    expect((await viaDbModelPg({ queryTimeout: 0 })).poolStatementTimeout).toBe(30000);
+  });
+
+  it('mysql via DBModel: unspecified/0 queryTimeout sends no max_execution_time; an explicit value is applied', async () => {
+    expect(await viaDbModelMysql({})).toEqual([]);
+    expect(await viaDbModelMysql({ queryTimeout: 0 })).toEqual([]);
+    expect(await viaDbModelMysql({ queryTimeout: 7 })).toEqual(['SET SESSION max_execution_time = 7000', 'SET SESSION max_execution_time = DEFAULT']);
+  });
+
+  it('direct scp use: the default queryTimeout is 0 (no timeout) for every driver', () => {
+    expect(resolveConnectionConfig({}).queryTimeout).toBe(0);
+    expect(resolveConnectionConfig({ driver: 'mysql' }).queryTimeout).toBe(0);
+    expect(sessionStatements(resolveConnectionConfig({ driver: 'mysql' }))).toEqual([]);
+    expect(sessionStatements(resolveConnectionConfig({ driver: 'postgres' }))).toEqual([]);
   });
 });

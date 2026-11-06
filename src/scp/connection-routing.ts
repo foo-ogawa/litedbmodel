@@ -61,11 +61,12 @@ export interface ConnectionConfig {
   /** Password. */
   readonly password?: string;
   /**
-   * Per-statement timeout in MILLISECONDS. Applied as a session `statement_timeout` (PG) /
-   * `max_execution_time` (MySQL) so a runaway query is aborted by the SERVER. Absent ⇒ 30000 (v1 parity);
-   * an explicit `0` ⇒ no statement timeout. v1 exposed this as `queryTimeout` in SECONDS on the pg
-   * CLIENT (`query_timeout`); the v2 contract is server-side ms so it fires uniformly across drivers.
-   * @default 30000
+   * Per-statement timeout in MILLISECONDS, enforced by the SERVER so a runaway query is aborted.
+   * PG: `statement_timeout` passed to the `pg.Pool` at construction (`pgPoolFactory`; a custom
+   * {@link PoolFactory} must pass it itself). MySQL: session `max_execution_time` set at checkout.
+   * `0`/absent ⇒ no statement timeout (the engine default). v1 exposed this as `queryTimeout` in SECONDS
+   * on the pg CLIENT (`query_timeout`); the v2 contract is server-side ms so it fires uniformly across drivers.
+   * @default 0 (no timeout)
    */
   readonly queryTimeout?: number;
   /** Enable TCP keepalive on pooled connections (recommended for serverless). @default false */
@@ -108,11 +109,8 @@ export interface ResolvedConnectionConfig {
   readonly charset?: string;
 }
 
-/** The v1 `queryTimeout` default (30 s), in the scp contract unit (ms). */
-const DEFAULT_QUERY_TIMEOUT_MS = 30000;
-
 /**
- * Apply the C3 defaults (queryTimeout=30000, keepAlive=false, minPool=0, maxPool=10,
+ * Apply the C3 defaults (queryTimeout=0, keepAlive=false, minPool=0, maxPool=10,
  * connectTimeoutMillis=30000, idleTimeoutMillis=10000).
  */
 export function resolveConnectionConfig(config: ConnectionConfig = {}): ResolvedConnectionConfig {
@@ -123,7 +121,7 @@ export function resolveConnectionConfig(config: ConnectionConfig = {}): Resolved
     ...(config.database !== undefined ? { database: config.database } : {}),
     ...(config.user !== undefined ? { user: config.user } : {}),
     ...(config.password !== undefined ? { password: config.password } : {}),
-    queryTimeout: config.queryTimeout ?? DEFAULT_QUERY_TIMEOUT_MS,
+    queryTimeout: config.queryTimeout ?? 0,
     keepAlive: config.keepAlive ?? false,
     keepAliveInitialDelayMillis: config.keepAliveInitialDelayMillis ?? 10000,
     minPool: config.minPool ?? 0,
@@ -140,8 +138,9 @@ export function resolveConnectionConfig(config: ConnectionConfig = {}): Resolved
  * (issued once per acquired connection, in order). This is the per-dialect mapping the port agents
  * mirror; it is pure (no connection contact) so it is testable in isolation:
  *
- *   - **statement timeout** (`queryTimeout` > 0): PG `SET statement_timeout = <ms>`; MySQL
- *     `SET SESSION max_execution_time = <ms>` (both server-side, ms).
+ *   - **statement timeout** (`queryTimeout` > 0): MySQL `SET SESSION max_execution_time = <ms>`
+ *     (server-side, ms). PG has none here: its `statement_timeout` is a `pg.Pool` option set at pool
+ *     construction (`pgPoolFactory`), so no per-checkout round trips.
  *   - **searchPath**: PG `SET search_path TO <path>`; MySQL has no schema search path ⇒ ignored.
  *   - **charset**: MySQL `SET NAMES <charset>`; PG `SET client_encoding TO <charset>`.
  *
@@ -152,12 +151,8 @@ export function sessionStatements(config: ResolvedConnectionConfig): readonly st
   const out: string[] = [];
   const dialect = config.driver;
   if (dialect === 'sqlite') return out;
-  if (config.queryTimeout > 0) {
-    out.push(
-      dialect === 'postgres'
-        ? `SET statement_timeout = ${config.queryTimeout}`
-        : `SET SESSION max_execution_time = ${config.queryTimeout}`,
-    );
+  if (config.queryTimeout > 0 && dialect === 'mysql') {
+    out.push(`SET SESSION max_execution_time = ${config.queryTimeout}`);
   }
   if (config.searchPath !== undefined && dialect === 'postgres') {
     out.push(`SET search_path TO ${config.searchPath}`);
@@ -447,9 +442,7 @@ export function sessionResetStatements(config: ResolvedConnectionConfig): readon
   const out: string[] = [];
   const dialect = config.driver;
   if (dialect === 'sqlite') return out;
-  if (config.queryTimeout > 0) {
-    out.push(dialect === 'postgres' ? 'RESET statement_timeout' : 'SET SESSION max_execution_time = DEFAULT');
-  }
+  if (config.queryTimeout > 0 && dialect === 'mysql') out.push('SET SESSION max_execution_time = DEFAULT');
   if (config.searchPath !== undefined && dialect === 'postgres') out.push('RESET search_path');
   if (config.charset !== undefined) out.push(dialect === 'mysql' ? 'SET NAMES DEFAULT' : 'RESET client_encoding');
   return out;

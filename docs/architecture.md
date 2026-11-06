@@ -296,9 +296,11 @@ JOINs by default`）。v1 `LazyRelation` と同型の **staged batch query-compo
   - **BEGIN の失敗**: BEGIN も try の中。失敗しても接続は破棄して返す。
   - **貸し出し中の接続の切断**: 貸し出し中の pg Client の `'error'` を受けてログに出し、返却時にその接続は破棄する。
     pool の idle の接続の `'error'` も受ける（`guardLeasedClient` / `guardIdlePoolErrors`、`src/connection-errors.ts`）。
-  - **時間切れ**: `DBConfig.queryTimeout`（秒、未指定は 30）を、接続の設定（scp は ms の `queryTimeout`）まで渡し、
-    サーバ側の `statement_timeout` として効かせる（v1 分岐は pg Pool の `statement_timeout`、scp は接続の取得時の
-    `SET statement_timeout`）。
+  - **時間切れ**: `DBConfig.queryTimeout`（秒）を、接続の設定（scp は ms の `queryTimeout`）まで渡し、サーバ側の時間切れとして
+    効かせる。pg は未指定・0 を 30 秒とし、pg の Pool の `statement_timeout`（v1 分岐・scp とも接続の起動時のパラメータ。
+    1 文ごとの `SET`/`RESET` はしない。自前の `PoolFactory` は factory 側で渡す）。MySQL は未指定・0 で時間切れなし、
+    明示の値だけ接続の取得時の `SET SESSION max_execution_time`。scp を直接使うときの既定は 0（なし）で、30 秒の既定は
+    `DBModel` から pg へ渡す所（`dbmodel-runtime.ts`）だけにある。
   - **書込の送り直しをしない**: 接続エラーで autocommit の書込を送り直さない（そのまま投げる）。読み取りの再試行は
     残す。writer に回した読み取り（`withWriter` の中、writer-sticky の間）も、回した側の判断を `executeOnWriter` から
     ドライバまで渡して再試行する。

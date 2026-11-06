@@ -64,7 +64,7 @@ export interface RuntimeDbConfig {
   readonly max?: number;
   /** Seconds allowed for getting a connection (v1 `DBConfig.timeout`). */
   readonly timeout?: number;
-  /** Seconds a statement may run (v1 `DBConfig.queryTimeout`; absent or 0 ⇒ the 30 s default). */
+  /** Seconds a statement may run (v1 `DBConfig.queryTimeout`; postgres: absent or 0 ⇒ 30 s; mysql: absent or 0 ⇒ none). */
   readonly queryTimeout?: number;
   readonly idleTimeoutMillis?: number;
   readonly keepAlive?: boolean;
@@ -96,6 +96,9 @@ export interface RuntimeContext {
   /** Shut every constructed pool (v1 `closeAllPools`). */
   readonly close: PoolCloser;
 }
+
+/** The v1 postgres `queryTimeout` default (30 s), in the scp contract unit (ms). */
+const PG_DEFAULT_QUERY_TIMEOUT_MS = 30000;
 
 /** Map a {@link RuntimeDbConfig} to the C3 {@link ConnectionConfig} pool-construction knobs. */
 function toConnectionConfig(config: RuntimeDbConfig): ConnectionConfig {
@@ -165,7 +168,13 @@ export function buildContextFromConfig(config: RuntimeDbConfig, options: Runtime
   const hasWriter = options.writerConfig !== undefined;
   const built = buildRoutingConfig(
     [{
-      config: toConnectionConfig(config),
+      config: {
+        ...toConnectionConfig(config),
+        driver,
+        // v1 PostgresDriver: absent or 0 ⇒ 30 s `statement_timeout`. v1 MySQL had no server-side limit,
+        // so MySQL keeps the scp default (0 ⇒ none) and only an explicit value is applied.
+        ...(driver === 'postgres' && !config.queryTimeout ? { queryTimeout: PG_DEFAULT_QUERY_TIMEOUT_MS } : {}),
+      },
       poolFactory: hasWriter ? splitPoolFactory(baseFactory, options.writerConfig) : baseFactory,
       separateWriter: hasWriter,
     }],
