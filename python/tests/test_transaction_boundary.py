@@ -536,8 +536,10 @@ def test_statement_still_running_when_the_body_returns_rolls_back_and_raises(mak
 
     ctx, dialect, sent_ids, started, release, statements = _gated_ctx(make_ctx)
     worker_errors = []
+    body_calls = []
 
     def body():
+        body_calls.append(1)
         _do_op(1, 1, 0)
         leaked = current_context()
 
@@ -553,7 +555,8 @@ def test_statement_still_running_when_the_body_returns_rolls_back_and_raises(mak
         return "done"
 
     with pytest.raises(TransactionClosedError) as raised:
-        transaction(ctx, body, TransactionOptions(), dialect)
+        transaction(ctx, body, TransactionOptions(retry_limit=3, retry_duration=0), dialect)
+    assert len(body_calls) == 1, "an unfinished statement must not be retried"
 
     assert str(raised.value) == (
         "A query started inside the transaction had not finished when the transaction function settled. "
@@ -563,6 +566,33 @@ def test_statement_still_running_when_the_body_returns_rolls_back_and_raises(mak
     assert "COMMIT" not in statements and "ROLLBACK" in statements
     if dialect == "sqlite":
         assert sent_ids() == [], "neither the awaited nor the unfinished write may remain"
+
+
+@pytest.mark.parametrize("make_ctx", [_sqlite_leak_ctx, _pg_leak_ctx], ids=["sqlite", "pg"])
+def test_statement_still_running_when_the_body_raises_a_retryable_error_is_not_retried(make_ctx):
+    from litedbmodel_runtime import WRITE_INTENT, run
+    from litedbmodel_runtime.errors import TransactionClosedError
+
+    ctx, dialect, sent_ids, started, release, statements = _gated_ctx(make_ctx)
+    body_error = _FakeSerializationError("could not serialize access")
+    body_calls = []
+
+    def body():
+        body_calls.append(1)
+        leaked = current_context()
+        threading.Thread(target=lambda: run(leaked, _INSERT_SQL, [777, 7, 7], WRITE_INTENT)).start()
+        assert started.wait(10)  # the statement is running in the DB when the body fails
+        threading.Timer(0.2, release.set).start()
+        raise body_error
+
+    with pytest.raises(TransactionClosedError) as raised:
+        transaction(ctx, body, TransactionOptions(retry_limit=3, retry_duration=0), dialect)
+
+    assert raised.value.__cause__ is body_error
+    assert len(body_calls) == 1, "the body must not be re-run: its statement was still unfinished"
+    assert "COMMIT" not in statements and "ROLLBACK" in statements
+    if dialect == "sqlite":
+        assert sent_ids() == []
 
 
 @pytest.mark.parametrize("make_ctx", [_sqlite_leak_ctx, _pg_leak_ctx], ids=["sqlite", "pg"])
