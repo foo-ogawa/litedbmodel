@@ -8,9 +8,10 @@
  */
 
 import 'reflect-metadata';
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
-import { DBModel, dbIn, dbNull, model, column, ColumnsOf } from '../../src';
-import { User, Post, PostTag, testConfig, cleanup } from '../helpers/setup';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
+import { Client as PgClient } from 'pg';
+import { DBModel, dbIn, dbNull, model, column, closeAllPools, ColumnsOf } from '../../src';
+import { User, Post, PostTag, testConfig, testConnectionString, cleanup } from '../helpers/setup';
 
 // Define a model for all types testing (outside describe block for decorator support)
 @model('all_types_test')
@@ -268,6 +269,98 @@ describe.skipIf(skipIntegrationTests)('DBModel', () => {
       const finalCountRes = await DBModel.execute(`SELECT COUNT(*) as count FROM users`);
       const finalCount = parseInt(finalCountRes.rows[0].count, 10);
       expect(finalCount).toBe(initialCount);
+    });
+
+    describe('connection safety', () => {
+      let admin: PgClient;
+      let uncaught: Error[];
+      const onUncaught = (err: Error): void => { uncaught.push(err); };
+      const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+      beforeEach(async () => {
+        uncaught = [];
+        process.on('uncaughtException', onUncaught);
+        admin = new PgClient({ connectionString: testConnectionString });
+        await admin.connect();
+      });
+
+      afterEach(async () => {
+        process.removeListener('uncaughtException', onUncaught);
+        await admin.end();
+      });
+
+      // Terminate the backend of the transaction's own connection from another connection
+      async function terminateOwnBackend(): Promise<void> {
+        const res = await DBModel.execute('SELECT pg_backend_pid() AS pid');
+        await admin.query('SELECT pg_terminate_backend($1)', [res.rows[0].pid]);
+      }
+
+      async function expectPoolHealthy(): Promise<void> {
+        // More concurrent queries than pool.max (5), so a broken connection would be reused
+        const results = await Promise.all(
+          Array.from({ length: 10 }, (_, i) => DBModel.execute('SELECT $1::int AS n', [i]))
+        );
+        expect(results.map((r) => Number(r.rows[0].n))).toEqual(Array.from({ length: 10 }, (_, i) => i));
+      }
+
+      it('rejects, without uncaughtException, when the connection is terminated inside func', async () => {
+        await expect(
+          DBModel.transaction(async () => {
+            await terminateOwnBackend();
+            await DBModel.execute('SELECT 1');
+          }, { retryOnError: false })
+        ).rejects.toBeDefined();
+
+        await sleep(200);
+        expect(uncaught).toEqual([]);
+        await expectPoolHealthy();
+      });
+
+      it('rejects, without uncaughtException, when the connection is terminated while no query is in flight', async () => {
+        await expect(
+          DBModel.transaction(async () => {
+            await terminateOwnBackend();
+            await sleep(300);
+            await DBModel.execute('SELECT 1');
+          }, { retryOnError: false })
+        ).rejects.toBeDefined();
+
+        await sleep(200);
+        expect(uncaught).toEqual([]);
+        await expectPoolHealthy();
+      });
+
+      it('rejects at COMMIT, without uncaughtException, when the connection is terminated and func issues no more query', async () => {
+        await expect(
+          DBModel.transaction(async () => {
+            await terminateOwnBackend();
+            await sleep(300);
+          }, { retryOnError: false })
+        ).rejects.toBeDefined();
+
+        await sleep(200);
+        expect(uncaught).toEqual([]);
+        await expectPoolHealthy();
+      });
+
+      it('stops the statement on the server when queryTimeout elapses', async () => {
+        // The pool is keyed by host:port/database, so recreate it with the short queryTimeout
+        await closeAllPools();
+        const ShortTimeout = DBModel.createDBBase({ ...testConfig, queryTimeout: 1 });
+        try {
+          await expect(ShortTimeout.execute('SELECT pg_sleep(5)')).rejects.toBeDefined();
+
+          // Allow the server-side cancellation to land; a statement that kept running would still be here
+          await sleep(1500);
+          const res = await admin.query(
+            `SELECT count(*)::int AS n FROM pg_stat_activity
+             WHERE pid <> pg_backend_pid() AND query LIKE '%pg_sleep(5)%'`
+          );
+          expect(res.rows[0].n).toBe(0);
+        } finally {
+          await closeAllPools();
+        }
+      });
     });
   });
 });
