@@ -400,6 +400,70 @@ describe.skipIf(skipIntegrationTests)('DBModel utilities', () => {
     await cleanup();
   });
 
+  describe('acquireConnection and TransactionOptions.connection (#329)', () => {
+    it('runs the transaction on the acquired connection and does not release it at COMMIT or ROLLBACK', async () => {
+      const conn = await DBModel.acquireConnection();
+      try {
+        const own = (await conn.query('SELECT pg_backend_pid() AS pid')).rows[0].pid;
+
+        const committedPid = await DBModel.transaction(
+          async () => (await DBModel.execute('SELECT pg_backend_pid() AS pid')).rows[0].pid,
+          { connection: conn },
+        );
+        expect(committedPid).toBe(own);
+
+        await expect(
+          DBModel.transaction(async () => { throw new Error('Force rollback'); }, { connection: conn }),
+        ).rejects.toThrow('Force rollback');
+
+        // Still usable: it was not released
+        expect((await conn.query('SELECT pg_backend_pid() AS pid')).rows[0].pid).toBe(own);
+      } finally {
+        conn.release();
+        conn.release();
+      }
+    });
+
+    it('does not deadlock when opposite nesting directions acquire connections in the same order (pools of max 1)', async () => {
+      // Pools are keyed by host:port/database, so a different host name gives the second class its own pool
+      const base = { ...testConfig, max: 1 };
+      const DbA = DBModel.createDBBase(base);
+      const DbB = DBModel.createDBBase({ ...base, host: base.host === '127.0.0.1' ? 'localhost' : '127.0.0.1' });
+      const order: string[] = [];
+
+      // X: B's transaction outside, A's inside. Y: A's transaction outside, B's inside. A's connection is acquired first in both.
+      const x = async () => {
+        const a = await DbA.acquireConnection();
+        try {
+          await DbB.transaction(async () => {
+            await DbA.transaction(async () => {
+              await DbA.execute('SELECT 1');
+              order.push('x');
+            }, { connection: a });
+          });
+        } finally {
+          a.release();
+        }
+      };
+      const y = async () => {
+        const a = await DbA.acquireConnection();
+        try {
+          await DbA.transaction(async () => {
+            await DbB.transaction(async () => {
+              await DbB.execute('SELECT 1');
+              order.push('y');
+            });
+          }, { connection: a });
+        } finally {
+          a.release();
+        }
+      };
+
+      await Promise.all([x(), y(), x(), y()]);
+      expect(order).toHaveLength(4);
+    });
+  });
+
   describe('columnList', () => {
     it('should extract column values', async () => {
       const users = await User.find([]);

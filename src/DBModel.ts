@@ -24,6 +24,8 @@ import { LazyRelationContext, type RelationType, type RelationConfig } from './L
 // Transaction context stored in AsyncLocalStorage
 interface TransactionContext {
   connection: DBConnection;
+  /** The connection the transaction was opened on (`connection` is its guard for func) */
+  opened: DBConnection;
   handler?: DBHandler;
 }
 
@@ -2807,7 +2809,12 @@ export abstract class DBModel {
     const txContext = this._getTransactionContext();
     
     // Check if already in a transaction (nested transaction)
-    if (txContext.getStore()) {
+    const outer = txContext.getStore();
+    if (outer) {
+      // A connection given to a nested transaction must be the outer transaction's own connection
+      if (options.connection && options.connection !== outer.opened) {
+        throw new Error('transaction(): the connection option is a different connection from the enclosing transaction\'s');
+      }
       // Already in a transaction, just execute the function
       return func();
     }
@@ -2829,7 +2836,8 @@ export abstract class DBModel {
 
     while (true) {
       attempt++;
-      const connection = await handler.getConnection();
+      // A given connection is released by whoever acquired it, never here
+      const connection = options.connection ?? await handler.getConnection();
       let destroyConnection = false;
       let committing = false;
       // func sees the connection only through this guard; BEGIN/COMMIT/ROLLBACK use `connection` directly
@@ -2854,7 +2862,7 @@ export abstract class DBModel {
       try {
         await connection.query('BEGIN');
 
-        const context: TransactionContext = { connection: guarded };
+        const context: TransactionContext = { connection: guarded, opened: connection };
         let result: R;
         try {
           result = await txContext.run(context, func);
@@ -2889,10 +2897,11 @@ export abstract class DBModel {
 
         // A connection error at COMMIT leaves the outcome unknown (the server may have committed
         // before the response was lost): re-running func could write twice, so throw instead.
+        // On a given connection a connection error is thrown too: a new connection cannot be taken.
         if (
           retryOnError &&
           attempt < retryLimit &&
-          !(committing && isConnectionError(error as Error)) &&
+          !((committing || options.connection) && isConnectionError(error as Error)) &&
           this.isRetryableError(error as Error)
         ) {
           await this.sleep(retryDuration * Math.pow(2, attempt - 1));
@@ -2901,9 +2910,28 @@ export abstract class DBModel {
 
         throw error;
       } finally {
-        connection.release(destroyConnection || undefined);
+        if (!options.connection) connection.release(destroyConnection || undefined);
       }
     }
+  }
+
+  /**
+   * Acquire a writer connection (the one `transaction()` takes) and return it. Pass it as
+   * `TransactionOptions.connection` to open transactions on it, so that connections can be taken in
+   * the same order by every process. The caller releases it with `release()`, which is safe to call
+   * twice; `release(error)` destroys the connection instead of returning it to the pool.
+   */
+  static async acquireConnection(): Promise<DBConnection> {
+    const connection = await this.getHandler().getConnection();
+    let released = false;
+    return {
+      query: (sql, params) => connection.query(sql, params),
+      release: (error) => {
+        if (released) return;
+        released = true;
+        connection.release(error);
+      },
+    };
   }
 
   /**

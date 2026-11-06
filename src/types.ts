@@ -3,6 +3,7 @@
  */
 
 import type { Column, OrderSpec, Conds } from './Column';
+import type { DBConnection } from './drivers/types';
 
 // ============================================
 // PkeyResult Type (Write operation return value)
@@ -257,6 +258,13 @@ export interface TransactionOptions {
    * @default Uses global setting (true by default)
    */
   useWriterAfterTransaction?: boolean;
+  /**
+   * A connection acquired with `DBModel.acquireConnection()`. The transaction runs on it instead of
+   * taking a new one, and it is not released after COMMIT or ROLLBACK (the caller that acquired it
+   * releases it). A connection error is not retried (the connection cannot be taken again); a
+   * deadlock or serialization failure is retried on the same connection after ROLLBACK.
+   */
+  connection?: DBConnection;
 }
 
 // ============================================

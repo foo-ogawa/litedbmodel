@@ -886,6 +886,33 @@ await DBModel.transaction(
 );
 ```
 
+### Transactions on an acquired connection
+
+`transaction()` takes a new writer connection each time it is not nested. To take connections in the
+same order in every process (for example, across two databases whose transactions are nested in
+opposite directions), acquire the connection first and pass it as `connection`:
+
+```typescript
+const conn = await DbA.acquireConnection();   // the writer connection transaction() would take
+try {
+  await DbB.transaction(async () => {
+    await DbA.transaction(async () => { /* runs on conn */ }, { connection: conn });
+  });
+} finally {
+  conn.release();   // safe to call twice; release(error) destroys the connection instead of pooling it
+}
+```
+
+- With `connection`, `transaction()` does not take a connection and does not release it after
+  COMMIT or ROLLBACK. The caller that acquired it releases it.
+- Retry: a connection error is thrown as is (a new connection cannot be taken), whether it occurs in
+  `func` or at COMMIT. A deadlock or serialization failure is retried on the same
+  connection: ROLLBACK, then BEGIN again. A connection error at COMMIT is never retried, as before.
+- Inside an enclosing transaction, `connection` must be the enclosing transaction's own connection
+  (the transaction joins it); any other connection throws an error.
+- The connection `func` sees is guarded as for a connection `transaction()` took: a query after the
+  transaction has settled rejects with `TransactionClosedError`.
+
 ---
 
 ## Middleware
