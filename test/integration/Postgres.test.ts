@@ -10,6 +10,7 @@
 import 'reflect-metadata';
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
 import { Client as PgClient } from 'pg';
+import { lookup } from 'node:dns/promises';
 import { DBModel, dbIn, dbNull, model, column, closeAllPools, ColumnsOf, TransactionClosedError } from '../../src';
 import { User, Post, PostTag, testConfig, testConnectionString, cleanup } from '../helpers/setup';
 
@@ -425,10 +426,12 @@ describe.skipIf(skipIntegrationTests)('DBModel utilities', () => {
     });
 
     it('does not deadlock when opposite nesting directions acquire connections in the same order (pools of max 1)', async () => {
-      // Pools are keyed by host:port/database, so a different host name gives the second class its own pool
+      // Pools are keyed by host:port/database, so another spelling of the same server (its resolved
+      // address, or localhost when the host is already an address) gives the second class its own pool
       const base = { ...testConfig, max: 1 };
+      const { address } = await lookup(base.host);
       const DbA = DBModel.createDBBase(base);
-      const DbB = DBModel.createDBBase({ ...base, host: base.host === '127.0.0.1' ? 'localhost' : '127.0.0.1' });
+      const DbB = DBModel.createDBBase({ ...base, host: address === base.host ? 'localhost' : address });
       const order: string[] = [];
 
       // X: B's transaction outside, A's inside. Y: A's transaction outside, B's inside. A's connection is acquired first in both.
