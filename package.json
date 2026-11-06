@@ -107,6 +107,9 @@
     "js-yaml": "^4.2.0",
     "@typescript-eslint/typescript-estree": {
       "minimatch": "^11.0.1"
+    },
+    "embedoc": {
+      "glob": "^14.0.4"
     }
   }
 }
