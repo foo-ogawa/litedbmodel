@@ -40,7 +40,7 @@ import {
   runWithPinnedAsyncConnection,
   type AsyncExecutionContext,
 } from './scp/exec-context';
-import { rawExecuteAsync, type RawResult } from './scp/middleware';
+import { rawExecuteAsync, isReadOnlyStatement, type RawResult } from './scp/middleware';
 // The row-lock tail SSoT (` FOR UPDATE` / ` FOR SHARE`) — shared with the SCP `compileSelect`, so the
 // imperative builder and the compiled statement render byte-identical locking clauses.
 import { lockTail } from './scp/makesql/compile-select';
@@ -1386,20 +1386,12 @@ export abstract class DBModel {
   }
 
   /**
-   * Whether a raw statement returns rows (SELECT / WITH / VALUES / SHOW / PRAGMA / EXPLAIN / TABLE /
-   * …RETURNING). Outside a transaction, `execute()` sends such a statement to the reader and any other
-   * (DDL, maintenance such as VACUUM / CREATE INDEX CONCURRENTLY, writes) to the writer, on both the
-   * SCP and the v1 path. @internal
-   */
-  protected static _returnsRows(sql: string): boolean {
-    return /^\s*(select|with|show|pragma|values|explain|table)\b/i.test(sql) || /\breturning\b/i.test(sql);
-  }
-
-  /**
    * Route a raw `(sql, params)` through the SCP ctx seam (the escape-hatch / Fragment path) via
-   * `rawExecuteAsync`: a statement that returns rows runs the READ seam, any other the WRITE seam. The
-   * seam applies the SCP middleware chain + connection routing; inside a SCP `transaction(fn)` the ALS
-   * pin resolves the tx connection so the statement joins the transaction. Phase F-2 (#105). @internal
+   * `rawExecuteAsync`: a statement that returns rows runs the READ seam, any other the WRITE seam, and
+   * only a certainly read-only statement (`isReadOnlyStatement`) is routed to the reader — `INSERT …
+   * RETURNING` goes to the writer. The seam applies the SCP middleware chain + connection routing;
+   * inside a SCP `transaction(fn)` the ALS pin resolves the tx connection so the statement joins the
+   * transaction. Phase F-2 (#105). @internal
    */
   protected static _scpRawExecute(sql: string, params: unknown[], rt: RuntimeContext): Promise<RawResult> {
     const ctx = rt.ctx as unknown as AsyncExecutionContext;
@@ -2977,11 +2969,12 @@ export abstract class DBModel {
 
       const handler = this.getHandler();
 
-      // The writer for a statement that does not return rows, inside withWriter, or while writer-sticky
-      const returnsRows = this._returnsRows(s);
-      const useWriter = !returnsRows || this._getWriterContext().getStore() !== undefined || this._shouldUseWriterSticky();
+      // The writer for any statement that is not certainly read-only (INSERT … RETURNING included),
+      // inside withWriter, or while writer-sticky. Only a read-only statement is re-sent on a connection error.
+      const readOnly = isReadOnlyStatement(s);
+      const useWriter = !readOnly || this._getWriterContext().getStore() !== undefined || this._shouldUseWriterSticky();
       const result = useWriter
-        ? await handler.executeOnWriter(s, p || [], returnsRows)
+        ? await handler.executeOnWriter(s, p || [], readOnly)
         : await handler.execute(s, p || []);
 
       return {

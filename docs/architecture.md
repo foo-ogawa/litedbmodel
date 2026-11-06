@@ -315,6 +315,11 @@ JOINs by default`）。v1 `LazyRelation` と同型の **staged batch query-compo
   - **書込の送り直しをしない**: 接続エラーで autocommit の書込を送り直さない（そのまま投げる）。読み取りの再試行は
     残す。writer に回した読み取り（`withWriter` の中、writer-sticky の間）も、回した側の判断を `executeOnWriter` から
     ドライバまで渡して再試行する。
+  - **生の SQL（`DBModel.execute`）の振り分けと再試行**: 読み取り用の接続（reader）へ送り、接続エラーで送り直すのは、
+    確かに読み取りだけの文（`isReadOnlyStatement`、`src/scp/middleware.ts`）に限る。先頭の語が select・show・pragma・
+    values・table で `RETURNING` を含まない物。`with`・`explain` で始まる物は insert・update・delete・merge の語を
+    含まなければ読み取り（`EXPLAIN ANALYZE DELETE …` は文を実行するので書き込み）。それ以外（`INSERT/UPDATE/DELETE …
+    RETURNING` を含む）は書き込みとして writer へ送り、送り直さない。「行を返すか」（`rawExecute` の結果の扱い）とは別の判定。
 
 ```ts
 await DBModel.transaction(async () => {

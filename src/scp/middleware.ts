@@ -465,9 +465,27 @@ import {
   runAsync as seamRunAsync,
 } from './exec-context';
 
-/** Does `sql` return rows (SELECT / …RETURNING / WITH…SELECT / SHOW / PRAGMA / VALUES)? */
+/**
+ * Does `sql` return rows (SELECT / …RETURNING / WITH…SELECT / SHOW / PRAGMA / VALUES)? This decides how
+ * the result is read (`execute` vs `run`); it is NOT "is the statement read-only" — see
+ * {@link isReadOnlyStatement}.
+ */
 function returnsRows(sql: string): boolean {
   return /^\s*(select|with|show|pragma|values|explain|table)\b/i.test(sql) || /\breturning\b/i.test(sql);
+}
+
+/**
+ * Is `sql` certainly a read-only statement? This is the ONE judgment that decides reader routing and
+ * connection-error re-sending for a raw statement (`DBModel.execute`, {@link rawExecute}). Anything not
+ * certain is a write (writer, never re-sent):
+ *   - starts with select / show / pragma / values / table and has no `RETURNING` ⇒ read;
+ *   - starts with `with` or `explain` ⇒ read only if it contains no insert / update / delete / merge
+ *     word (`EXPLAIN ANALYZE DELETE …` executes the statement; a data-modifying CTE writes);
+ *   - anything else (INSERT / UPDATE / DELETE …, DDL, maintenance) ⇒ write.
+ */
+export function isReadOnlyStatement(sql: string): boolean {
+  if (/^\s*(with|explain)\b/i.test(sql)) return !/\b(insert|update|delete|merge)\b/i.test(sql);
+  return /^\s*(select|show|pragma|values|table)\b/i.test(sql) && !/\breturning\b/i.test(sql);
 }
 
 /**
@@ -488,7 +506,7 @@ export interface RawResult {
  */
 export function rawExecute(ctx: ExecutionContext, sql: string, params: readonly unknown[] = [], opts: { write?: boolean } = {}): RawResult {
   if (returnsRows(sql)) {
-    const rows = seamExecute(ctx, sql, params, { write: opts.write ?? false });
+    const rows = seamExecute(ctx, sql, params, { write: opts.write ?? !isReadOnlyStatement(sql) });
     return { rows, rowCount: rows.length };
   }
   const info: RunInfo = seamRun(ctx, sql, params);
@@ -498,7 +516,7 @@ export function rawExecute(ctx: ExecutionContext, sql: string, params: readonly 
 /** Raw **async** `execute(sql, params)` THROUGH the async seam — the live PG / MySQL twin of {@link rawExecute}. */
 export async function rawExecuteAsync(ctx: AsyncExecutionContext, sql: string, params: readonly unknown[] = [], opts: { write?: boolean } = {}): Promise<RawResult> {
   if (returnsRows(sql)) {
-    const rows = await seamExecuteAsync(ctx, sql, params, { write: opts.write ?? false });
+    const rows = await seamExecuteAsync(ctx, sql, params, { write: opts.write ?? !isReadOnlyStatement(sql) });
     return { rows, rowCount: rows.length };
   }
   const info = await seamRunAsync(ctx, sql, params);
