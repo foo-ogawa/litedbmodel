@@ -860,10 +860,7 @@ pub fn with_transaction_decided_isolated<'a, R>(
                 // COMMIT failed (e.g. a serialization failure surfaced at COMMIT — the 40001 the retry
                 // loop must see): best-effort ROLLBACK, destroy the connection, surface the error.
                 let _ = run(&tx_ctx, "ROLLBACK", &[], &StatementIntent::write());
-                // A CONNECTION error at COMMIT leaves the outcome unknown (the server may have
-                // committed before the response was lost): mark it so `is_retryable_tx_error`
-                // refuses it and the retry loop surfaces it instead of re-running the body (#330).
-                Err(crate::tx_options::mark_commit_outcome_unknown(e))
+                Err(e)
             }
         },
         Ok(TxDecision::Rollback(r)) => {
@@ -1083,6 +1080,8 @@ pub fn transaction_decided_on<'a, R>(
     let mut attempt: u32 = 0;
     loop {
         attempt += 1;
+        // Set once the body returned a COMMIT decision (a rollback_only tx has no COMMIT stage).
+        let commit_stage = std::cell::Cell::new(false);
         // ONE attempt on a FRESH owned connection (a retry after a connection error thus RECONNECTS),
         // acquired from the named connection's WRITER pool (Phase C) or the single primary driver.
         let outcome = with_transaction_decided_isolated(
@@ -1092,6 +1091,7 @@ pub fn transaction_decided_on<'a, R>(
             options.use_writer_after_transaction,
             |tx_ctx| {
                 let decided = body(tx_ctx)?;
+                commit_stage.set(!rollback_only && matches!(decided, TxDecision::Commit(_)));
                 // rollback_only (dry-run): a SUCCESSFUL commit becomes a ROLLBACK, still returning the
                 // body result — no committed change. An explicit gate Rollback stays a rollback.
                 Ok(if rollback_only {
@@ -1107,7 +1107,15 @@ pub fn transaction_decided_on<'a, R>(
         match outcome {
             Ok(r) => return Ok(r),
             Err(e) => {
-                if attempt < retry_limit && crate::tx_options::is_retryable_tx_error(&e) {
+                // A connection error at the COMMIT stage may have reached the server after the COMMIT
+                // took effect, so re-running the body could write twice: surface it as is (`kind`
+                // unchanged). A serialization failure / deadlock at COMMIT did not commit ⇒ retried (#330).
+                let commit_connection_error =
+                    commit_stage.get() && crate::tx_options::is_connection_error(&e);
+                if attempt < retry_limit
+                    && !commit_connection_error
+                    && crate::tx_options::is_retryable_tx_error(&e)
+                {
                     // Exponential backoff before RETRYing the whole transaction on a fresh connection.
                     let backoff = options
                         .retry_duration_ms
@@ -1721,7 +1729,9 @@ mod tests {
             message: "connection closed",
         };
         let (res, bodies) = run_commit_fail_tx(&d);
-        assert!(res.unwrap_err().message.contains("connection closed"));
+        let err = res.unwrap_err();
+        assert!(err.message.contains("connection closed"));
+        assert_eq!(err.kind, "driver_error", "the stable kind must not be rewritten");
         assert_eq!(bodies, 1, "a COMMIT-stage connection error must not re-run the body");
     }
 
