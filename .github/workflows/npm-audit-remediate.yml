@@ -29,13 +29,14 @@ jobs:
       - name: Audit every dependency graph in the repository
         id: audit
         continue-on-error: true
-        # The root lockfile is audited as installed; the rest are read from disk, since a
+        # The root lockfile is audited as installed, with `audit:check` (the one dated exception,
+        # #335), the same check as ci.yml and release.yml; the rest are read from disk, since a
         # tooling or example tree is not worth an install to look at. `git ls-files` keeps the
         # set in step with the repository — a hand-written list goes stale the day someone adds
         # a lockfile, which is exactly how these trees went unaudited in the first place.
         run: |
           status=0
-          npm audit --audit-level=moderate || status=1
+          npm run audit:check || status=1
           for lock in $(git ls-files '*/package-lock.json'); do
             ( cd "$(dirname "$lock")" && npm audit --package-lock-only --audit-level=moderate ) || status=1
           done
