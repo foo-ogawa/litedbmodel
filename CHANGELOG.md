@@ -77,7 +77,7 @@ Closes #335, #343〜#384。
 - MySQL で RETURNING を求める書き込みは、回収の文と同じトランザクション（呼び出し側のもの、無ければ開く）で実行する。
   v1 の MySQL で PK の hint の無い `DBModel.execute('INSERT … RETURNING …')` は、行を特定できないため送信前に例外を送出する。
 - rust: BIGINT UNSIGNED の 2^63 以上の値は、i64 に収まらないため値を示すエラーにする。
-- 依存を範囲内で最新に更新した（npm・cargo、#343）。behavior-contracts を 0.11.21 に更新した（5 言語）。
+- 依存を範囲内で最新に更新した（npm・cargo、#343）。behavior-contracts を 0.11.22 に更新した（5 言語）。
 
 ## [2.2.14] - 2026-11-07
 
