@@ -42,7 +42,7 @@ use sqlx::{Column, MySqlPool, Row, TypeInfo, ValueRef as SqlxValueRef};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::runtime::Runtime;
-use tokio_postgres::types::{ToSql, Type as PgType};
+use tokio_postgres::types::{Kind, ToSql, Type as PgType};
 use tokio_postgres::NoTls;
 
 use crate::connection_routing::{
@@ -558,25 +558,55 @@ impl ToSql for PgParam {
         ty: &PgType,
         out: &mut tokio_postgres::types::private::BytesMut,
     ) -> Result<tokio_postgres::types::IsNull, Box<dyn std::error::Error + Sync + Send>> {
+        // Every arm writes the binary form of `ty` itself, holding EXACTLY the bound value; a value
+        // `ty` cannot hold, or a (value, type) pair no arm encodes, fails the bind (#349). Writing a
+        // narrowed value or another type's bytes instead makes the server read a different value —
+        // `as i32` turned id 4294967298 into row 2, raw i64 bytes in a NUMERIC slot read as 0.00.
         match self {
             PgParam::Null => Ok(tokio_postgres::types::IsNull::Yes),
-            PgParam::Bool(b) => b.to_sql(ty, out),
-            // Serialize the integer in the WIDTH the target column expects (int2/int4/int8): bc has
-            // one i64 int, but PG's binary protocol requires the exact width for the inferred param
-            // type — binding i64 into an int4 slot fails ("incorrect binary data format").
+            PgParam::Bool(b) if *ty == PgType::BOOL => b.to_sql(ty, out),
+            // Serialize the integer in the type PG inferred for the param: bc has one i64 int, but
+            // PG's binary protocol requires the exact width (int2/int4/int8) — and a value outside
+            // that width is an error, as the server's own cast reports "integer out of range".
             PgParam::Int(i) => match *ty {
-                PgType::INT2 => (*i as i16).to_sql(ty, out),
-                PgType::INT4 => (*i as i32).to_sql(ty, out),
+                PgType::INT2 => i16::try_from(*i)
+                    .map_err(|_| unbindable(self, ty))?
+                    .to_sql(ty, out),
+                PgType::INT4 => i32::try_from(*i)
+                    .map_err(|_| unbindable(self, ty))?
+                    .to_sql(ty, out),
                 PgType::INT8 => i.to_sql(ty, out),
-                // A non-integer target (e.g. text created_at) — bind the decimal text so the server
-                // coerces it exactly as it would a literal.
-                PgType::TEXT | PgType::VARCHAR | PgType::BPCHAR | PgType::UNKNOWN => {
-                    i.to_string().to_sql(ty, out)
+                PgType::NUMERIC => rust_decimal::Decimal::from(*i).to_sql(ty, out),
+                // A float target holds the integer only when the float is that integer exactly.
+                PgType::FLOAT4 if (*i as f32) as i128 == i128::from(*i) => {
+                    (*i as f32).to_sql(ty, out)
                 }
-                _ => i.to_sql(ty, out),
+                PgType::FLOAT8 if (*i as f64) as i128 == i128::from(*i) => {
+                    (*i as f64).to_sql(ty, out)
+                }
+                // A text target (e.g. text created_at) — bind the decimal text so the server
+                // coerces it exactly as it would a literal.
+                _ if <&str as ToSql>::accepts(ty) => i.to_string().to_sql(ty, out),
+                _ => Err(unbindable(self, ty)),
             },
             PgParam::Float(f) => match *ty {
-                PgType::FLOAT4 => (*f as f32).to_sql(ty, out),
+                PgType::FLOAT8 => f.to_sql(ty, out),
+                // float8 → float4 rounds to the nearest float4, as PG's own cast does; like that
+                // cast, a finite value that overflows to infinity or underflows to zero fails.
+                PgType::FLOAT4 => {
+                    let narrowed = *f as f32;
+                    if f.is_finite() && (narrowed.is_infinite() || (narrowed == 0.0 && *f != 0.0)) {
+                        return Err(unbindable(self, ty));
+                    }
+                    narrowed.to_sql(ty, out)
+                }
+                // An integer target holds the float only when it is finite, integral and in range;
+                // the width check is the Int arm's (`*f as i128` is exact for an integral |f| <
+                // 2^127 and saturates beyond, which `i64::try_from` then rejects).
+                PgType::INT2 | PgType::INT4 | PgType::INT8 if f.is_finite() && f.fract() == 0.0 => {
+                    let n = i64::try_from(*f as i128).map_err(|_| unbindable(self, ty))?;
+                    PgParam::Int(n).to_sql(ty, out)
+                }
                 // A `numeric` target (`= ANY($1)` over a NUMERIC/DECIMAL column, #46 item 4): PG
                 // infers `numeric[]` and expects each element in NUMERIC binary — a bare f64 into a
                 // numeric slot fails ("db error"). Encode the exact NUMERIC via rust_decimal.
@@ -589,7 +619,7 @@ impl ToSql for PgParam {
                     )?;
                     d.to_sql(ty, out)
                 }
-                _ => f.to_sql(ty, out),
+                _ => Err(unbindable(self, ty)),
             },
             // A UUID column/element: PG's binary protocol expects the 16-byte form, and
             // `String::to_sql` only accepts text types — so serialize the canonical hex string to
@@ -627,24 +657,41 @@ impl ToSql for PgParam {
                 )?;
                 d.to_sql(ty, out)
             }
-            PgParam::Str(s) => s.to_sql(ty, out),
+            // The types whose binary form IS the UTF-8 text: the text-like set tokio-postgres's own
+            // `&str` accepts (text / varchar / bpchar / name / unknown / citext / ltree…), `json`,
+            // and an enum (its label). Not `jsonb`, whose binary form starts with a version byte.
+            PgParam::Str(s)
+                if <&str as ToSql>::accepts(ty)
+                    || *ty == PgType::JSON
+                    || matches!(ty.kind(), Kind::Enum(_)) =>
+            {
+                s.to_sql(ty, out)
+            }
             // A `= ANY($1)` / `= ANY($1::T[])` array param: `ty` is the ARRAY type PG inferred from
             // the column (e.g. `_int4`, `_uuid`, `_text`). Delegate to tokio-postgres's slice array
             // serialization, which reads `ty.kind() == Array(member)` and serializes each element in
             // the width the column's element type expects (the same width-aware path the scalars use
             // above, since each element is itself a `PgParam` whose `to_sql` sees the member type).
-            PgParam::Array(elems) => elems
+            // Only for an array `ty`: the slice serializer panics on any other.
+            PgParam::Array(elems) if matches!(ty.kind(), Kind::Array(_)) => elems
                 .as_slice()
                 .to_sql(ty, out)
                 .map(|_| tokio_postgres::types::IsNull::No),
+            _ => Err(unbindable(self, ty)),
         }
     }
-    // Accept any target column type — the DB coerces the text/number param. We never reject at the
-    // client so a well-formed rendered param binds; a genuine type error surfaces from the server.
+    // Every type is accepted because a NULL binds to any of them. Whether a non-NULL value has an
+    // exact encoding as `ty` depends on the value, so `to_sql` decides it and fails the bind when not.
     fn accepts(_ty: &PgType) -> bool {
         true
     }
     tokio_postgres::types::to_sql_checked!();
+}
+
+/// The bind error for a value `ty` cannot hold exactly, or a (value, type) pair no
+/// [`PgParam::to_sql`] arm encodes.
+fn unbindable(p: &PgParam, ty: &PgType) -> Box<dyn std::error::Error + Sync + Send> {
+    format!("scp pg driver: {p:?} has no exact encoding as a {ty} parameter").into()
 }
 
 /// A `uuid` column read as its canonical text. tokio-postgres has no built-in `String`
@@ -1825,5 +1872,190 @@ impl TxConnection for MyTx<'_> {
             drop(conn); // return to pool inside the runtime
             r
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio_postgres::types::private::BytesMut;
+    use tokio_postgres::types::{FromSql, IsNull};
+
+    /// Encode `p` for a parameter of type `ty` through `to_sql_checked` — the entry tokio-postgres
+    /// calls when it builds the Bind message — returning the wire bytes, `None` for a NULL.
+    fn encode(p: &PgParam, ty: &PgType) -> Result<Option<Vec<u8>>, String> {
+        let mut buf = BytesMut::new();
+        match p.to_sql_checked(ty, &mut buf) {
+            Ok(IsNull::Yes) => Ok(None),
+            Ok(IsNull::No) => Ok(Some(buf.to_vec())),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+
+    /// What the SERVER reads back from those bytes: decode them as the parameter's own type with
+    /// tokio-postgres's `FromSql`, the same binary format PG parses.
+    fn bound<T: for<'a> FromSql<'a>>(p: &PgParam, ty: &PgType) -> T {
+        let raw = encode(p, ty)
+            .unwrap_or_else(|e| panic!("{p:?} as {ty} must bind: {e}"))
+            .unwrap_or_else(|| panic!("{p:?} as {ty} bound NULL"));
+        T::from_sql(ty, &raw).unwrap_or_else(|e| panic!("{p:?} as {ty} is not valid {ty}: {e}"))
+    }
+
+    fn rejected(p: &PgParam, ty: &PgType) {
+        if let Ok(raw) = encode(p, ty) {
+            panic!("{p:?} as {ty} must fail, but bound {raw:?}");
+        }
+    }
+
+    /// #349: a value the parameter's type cannot hold EXACTLY fails the bind. It used to be
+    /// truncated (`as i32` made id 4294967298 hit row 2) or written in another type's encoding (an
+    /// i64 into NUMERIC / FLOAT8, an f64 into BIGINT).
+    #[test]
+    fn pg_bind_fails_instead_of_truncating_or_reinterpreting() {
+        rejected(&PgParam::Int(4_294_967_298), &PgType::INT4);
+        rejected(&PgParam::Int(-2_147_483_649), &PgType::INT4);
+        rejected(&PgParam::Int(70_000), &PgType::INT2);
+        rejected(&PgParam::Int((1 << 53) + 1), &PgType::FLOAT8);
+        rejected(&PgParam::Int((1 << 24) + 1), &PgType::FLOAT4);
+        rejected(&PgParam::Int(i64::MAX), &PgType::FLOAT8);
+        rejected(&PgParam::Float(1.5), &PgType::INT8);
+        rejected(&PgParam::Float(f64::NAN), &PgType::INT4);
+        rejected(&PgParam::Float(f64::INFINITY), &PgType::INT8);
+        rejected(&PgParam::Float(9_223_372_036_854_775_808.0), &PgType::INT8);
+        rejected(&PgParam::Float(3_000_000_000.0), &PgType::INT4);
+        rejected(&PgParam::Float(1e300), &PgType::FLOAT4);
+        rejected(&PgParam::Float(1e-300), &PgType::FLOAT4);
+        // A type no arm encodes: an error, never another type's bytes (or a panic).
+        rejected(&PgParam::Bool(true), &PgType::INT4);
+        rejected(&PgParam::Str("1".into()), &PgType::INT4);
+        rejected(&PgParam::Str("{}".into()), &PgType::JSONB);
+        rejected(&PgParam::Float(1.0), &PgType::TEXT);
+        rejected(&PgParam::Int(1), &PgType::BYTEA);
+        rejected(&PgParam::Array(vec![PgParam::Int(1)]), &PgType::INT4);
+        rejected(
+            &PgParam::Array(vec![PgParam::Int(4_294_967_297)]),
+            &PgType::INT4_ARRAY,
+        );
+    }
+
+    /// #349: a value the parameter's type CAN hold binds as exactly that value.
+    #[test]
+    fn pg_bind_converts_exactly_to_the_parameter_type() {
+        assert_eq!(bound::<i16>(&PgParam::Int(-32_768), &PgType::INT2), -32_768);
+        assert_eq!(bound::<i32>(&PgParam::Int(2), &PgType::INT4), 2);
+        assert_eq!(
+            bound::<i64>(&PgParam::Int(i64::MAX), &PgType::INT8),
+            i64::MAX
+        );
+        assert_eq!(
+            bound::<rust_decimal::Decimal>(&PgParam::Int(500), &PgType::NUMERIC),
+            rust_decimal::Decimal::from(500)
+        );
+        assert_eq!(
+            bound::<rust_decimal::Decimal>(&PgParam::Int(i64::MIN), &PgType::NUMERIC),
+            rust_decimal::Decimal::from(i64::MIN)
+        );
+        assert_eq!(bound::<f64>(&PgParam::Int(5), &PgType::FLOAT8), 5.0);
+        assert_eq!(
+            bound::<f64>(&PgParam::Int(1 << 53), &PgType::FLOAT8),
+            9_007_199_254_740_992.0
+        );
+        assert_eq!(bound::<f32>(&PgParam::Int(-7), &PgType::FLOAT4), -7.0);
+        assert_eq!(bound::<String>(&PgParam::Int(-42), &PgType::TEXT), "-42");
+        assert_eq!(bound::<i64>(&PgParam::Float(1.0), &PgType::INT8), 1);
+        assert_eq!(bound::<i32>(&PgParam::Float(-3.0), &PgType::INT4), -3);
+        assert_eq!(bound::<i16>(&PgParam::Float(0.0), &PgType::INT2), 0);
+        assert_eq!(bound::<f64>(&PgParam::Float(0.1), &PgType::FLOAT8), 0.1);
+        assert_eq!(bound::<f32>(&PgParam::Float(0.5), &PgType::FLOAT4), 0.5);
+        assert!(bound::<f64>(&PgParam::Float(f64::NAN), &PgType::FLOAT8).is_nan());
+        assert_eq!(
+            bound::<rust_decimal::Decimal>(&PgParam::Float(12.5), &PgType::NUMERIC),
+            rust_decimal::Decimal::new(125, 1)
+        );
+        assert!(bound::<bool>(&PgParam::Bool(true), &PgType::BOOL));
+        assert_eq!(encode(&PgParam::Null, &PgType::INT4), Ok(None));
+        assert_eq!(encode(&PgParam::Null, &PgType::BYTEA), Ok(None));
+    }
+
+    /// The text-carried shapes keep binding as before: text-like / json, uuid, timestamp, date, and
+    /// the `= ANY($1)` arrays whose elements recurse through the same `to_sql`.
+    #[test]
+    fn pg_bind_keeps_the_text_and_array_shapes() {
+        for ty in [
+            PgType::TEXT,
+            PgType::VARCHAR,
+            PgType::BPCHAR,
+            PgType::NAME,
+            PgType::JSON,
+        ] {
+            assert_eq!(
+                bound::<String>(&PgParam::Str("{\"a\":1}".into()), &ty),
+                "{\"a\":1}"
+            );
+        }
+        let mood = PgType::new(
+            "mood".into(),
+            90_001,
+            Kind::Enum(vec!["ok".into()]),
+            "public".into(),
+        );
+        assert_eq!(
+            encode(&PgParam::Str("ok".into()), &mood),
+            Ok(Some(b"ok".to_vec()))
+        );
+        assert_eq!(
+            encode(
+                &PgParam::Str("0123abcd-0000-4000-8000-00000000beef".into()),
+                &PgType::UUID
+            ),
+            Ok(Some(vec![
+                0x01, 0x23, 0xab, 0xcd, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0xbe, 0xef
+            ]))
+        );
+        assert_eq!(
+            bound::<chrono::NaiveDateTime>(
+                &PgParam::Str("2024-01-02 03:04:05".into()),
+                &PgType::TIMESTAMP
+            )
+            .to_string(),
+            "2024-01-02 03:04:05"
+        );
+        assert_eq!(
+            bound::<chrono::NaiveDate>(&PgParam::Str("2024-01-02".into()), &PgType::DATE)
+                .to_string(),
+            "2024-01-02"
+        );
+        assert_eq!(
+            bound::<Vec<i32>>(
+                &PgParam::Array(vec![PgParam::Int(1), PgParam::Int(2)]),
+                &PgType::INT4_ARRAY
+            ),
+            vec![1, 2]
+        );
+        assert_eq!(
+            bound::<Vec<i64>>(
+                &PgParam::Array(vec![PgParam::Int(i64::MIN)]),
+                &PgType::INT8_ARRAY
+            ),
+            vec![i64::MIN]
+        );
+        assert_eq!(
+            bound::<Vec<String>>(
+                &PgParam::Array(vec![PgParam::Str("x".into())]),
+                &PgType::TEXT_ARRAY
+            ),
+            vec!["x".to_string()]
+        );
+        assert_eq!(
+            bound::<Vec<rust_decimal::Decimal>>(
+                &PgParam::Array(vec![PgParam::Float(1.25)]),
+                &PgType::NUMERIC_ARRAY
+            ),
+            vec![rust_decimal::Decimal::new(125, 2)]
+        );
+        assert_eq!(
+            bound::<Vec<i32>>(&PgParam::Array(vec![]), &PgType::INT4_ARRAY),
+            Vec::<i32>::new()
+        );
     }
 }
