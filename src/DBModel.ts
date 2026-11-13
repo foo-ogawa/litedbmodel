@@ -46,7 +46,7 @@ import { rawExecuteAsync, isReadOnlyStatement, type RawResult } from './scp/midd
 // The row-lock tail SSoT (` FOR UPDATE` / ` FOR SHARE`) — shared with the SCP `compileSelect`, so the
 // imperative builder and the compiled statement render byte-identical locking clauses.
 import { lockTail } from './scp/makesql/compile-select';
-import { WriterStickyClock } from './scp/connection-routing';
+import { WriterStickyClock, withWriter as scpWithWriter } from './scp/connection-routing';
 import type { Scope } from 'behavior-contracts/runtime';
 
 // Transaction context stored in AsyncLocalStorage
@@ -3346,7 +3346,9 @@ export abstract class DBModel {
     }
 
     const context: WriterContext = { readonly: true };
-    return wCtx.run(context, func);
+    // The SCP route picks its pool from the SCP writer scope, not this v1 marker, so enter both: without
+    // the SCP scope every read inside withWriter went to the reader on the SCP route (#355).
+    return wCtx.run(context, () => scpWithWriter(func));
   }
 
   // ============================================
