@@ -580,17 +580,41 @@ func Logger(opts LoggerOptions) *MiddlewareHandle {
 // fires), matching v1 DBModel.query → execute.
 
 // rawLeadingRe matches a row-returning leading keyword (SELECT / WITH / SHOW / PRAGMA / VALUES /
-// EXPLAIN / TABLE) — byte-true to the TS returnsRows leading-keyword test.
+// EXPLAIN / TABLE) — the TS middleware.ts returnsRows leading-keyword test.
 var rawLeadingRe = regexp.MustCompile(`(?i)^\s*(select|with|show|pragma|values|explain|table)\b`)
 
 // returningRe matches a RETURNING clause anywhere in the statement — a write with RETURNING returns
-// rows, so returnsRows picks Execute over Run for it (byte-true to the TS middleware.ts).
+// rows, so returnsRows picks Execute over Run for it (the TS middleware.ts returnsRows).
 var returningRe = regexp.MustCompile(`(?i)\breturning\b`)
 
 // returnsRows reports whether `sql` returns rows (a SELECT-family leading keyword, or a RETURNING
 // clause). Mirrors the TS middleware.ts returnsRows so RawExecute picks Execute vs. Run identically.
 func returnsRows(sql string) bool {
 	return rawLeadingRe.MatchString(sql) || returningRe.MatchString(sql)
+}
+
+// lockOrIntoRe matches a row lock (FOR UPDATE / FOR NO KEY UPDATE / FOR SHARE / FOR KEY SHARE /
+// LOCK IN SHARE MODE) or an INTO anywhere — such a SELECT locks rows or writes, so it is not read-only.
+var lockOrIntoRe = regexp.MustCompile(`(?i)\bfor\s+(update|share|no\s+key\s+update|key\s+share)\b|\block\s+in\s+share\s+mode\b|\binto\b`)
+
+// withExplainRe / dataModifyingRe: a WITH / EXPLAIN statement is read-only only if it carries no
+// insert / update / delete / merge word (a data-modifying CTE writes; EXPLAIN ANALYZE runs the statement).
+var withExplainRe = regexp.MustCompile(`(?i)^\s*(with|explain)\b`)
+var dataModifyingRe = regexp.MustCompile(`(?i)\b(insert|update|delete|merge)\b`)
+
+// readLeadingRe matches a leading keyword of a statement that is read-only unless it writes otherwise.
+var readLeadingRe = regexp.MustCompile(`(?i)^\s*(select|show|pragma|values|table)\b`)
+
+// isReadOnlyStatement reports whether `sql` is certainly read-only — whether it may go to the reader.
+// Anything not certain takes the write intent. Mirrors the TS middleware.ts isReadOnlyStatement.
+func isReadOnlyStatement(sql string) bool {
+	if lockOrIntoRe.MatchString(sql) {
+		return false
+	}
+	if withExplainRe.MatchString(sql) {
+		return !dataModifyingRe.MatchString(sql)
+	}
+	return readLeadingRe.MatchString(sql) && !returningRe.MatchString(sql)
 }
 
 // RawResult is the raw-statement result: a row list (for a row-returning statement) plus the
@@ -600,8 +624,8 @@ type RawResult struct {
 	RowCount int64
 }
 
-// RawExecuteOptions configures [RawExecute]: force the write intent (writer routing / tx connection)
-// for a row-returning write (an INSERT … RETURNING routed to the writer).
+// RawExecuteOptions configures [RawExecute]: Write forces the write intent (writer routing / tx
+// connection) for any statement.
 type RawExecuteOptions struct {
 	Write bool
 }
@@ -610,12 +634,13 @@ type RawExecuteOptions struct {
 // middleware intercepts it, connection routing resolves the connection, and an ambient transaction (if
 // `ctx` is tx-scoped) applies — because it is the SAME [Execute] / [Run] seam the runtime uses, not a
 // direct db call. A row-returning statement (SELECT / … RETURNING / SHOW / PRAGMA / VALUES / WITH …
-// SELECT) runs [Execute]; a non-returning one runs [Run]. `opts.Write` forces the write intent for a
-// row-returning write.
+// SELECT) runs [Execute]; a non-returning one runs [Run]. A row-returning statement takes the write
+// intent unless it is certainly read-only ([isReadOnlyStatement]: INSERT … RETURNING and SELECT … FOR
+// UPDATE go to the writer); `opts.Write` forces the write intent. Mirrors the TS rawExecute.
 func RawExecute(ctx *ExecutionContext, sql string, args []any, opts RawExecuteOptions) (RawResult, error) {
 	if returnsRows(sql) {
 		intent := ReadIntent()
-		if opts.Write {
+		if opts.Write || !isReadOnlyStatement(sql) {
 			intent = WriteIntent()
 		}
 		rows, err := Execute(ctx, sql, args, intent)

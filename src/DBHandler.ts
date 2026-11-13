@@ -202,8 +202,8 @@ export class DBHandler {
 
   /**
    * Execute a query on the writer pool (for withWriter context / writer-sticky / writes).
-   * `read`: the caller routed a row-returning read here; only that is retried on a connection error
-   * (a write is never re-sent).
+   * `read`: the statement is read-only (it runs through the driver's `execute`, which decides whether it
+   * may be re-sent after a connection error); otherwise it runs through `executeWrite` (never re-sent).
    */
   async executeOnWriter(sql: string, params: unknown[] = [], read = false): Promise<QueryResult> {
     if (this.connection) {

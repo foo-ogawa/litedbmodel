@@ -624,6 +624,33 @@ def test_raw_execute_goes_through_the_seam():
     assert seen == ["INSERT INTO t (name) VALUES (?)", "SELECT name FROM t"]
 
 
+@pytest.mark.parametrize(
+    "sql,write",
+    [
+        ("INSERT INTO t (name) VALUES (?) RETURNING id", True),
+        ("SELECT id FROM t WHERE id = ? FOR UPDATE", True),
+        ("SELECT id FROM t WHERE id = ? FOR NO KEY UPDATE", True),
+        ("SELECT id FROM t WHERE id = ? FOR SHARE", True),
+        ("SELECT id FROM t WHERE id = ? LOCK IN SHARE MODE", True),
+        ("SELECT id INTO @v FROM t", True),
+        ("WITH x AS (UPDATE t SET name = ? RETURNING id) SELECT * FROM x", True),
+        ("SELECT name FROM t WHERE id = ?", False),
+        ("SELECT COUNT(*) FROM t", False),
+        ("WITH x AS (SELECT 1 AS a) SELECT * FROM x", False),
+    ],
+)
+def test_raw_execute_takes_the_write_intent_unless_certainly_read_only(monkeypatch, sql, write):
+    """A row-returning statement goes to the reader only when it is certainly read-only (the TS
+    ``rawExecute``): INSERT … RETURNING, a locking / INTO SELECT and a data-modifying CTE take the write
+    intent; a function-calling SELECT is still a read."""
+    import litedbmodel_runtime.middleware as mw
+
+    intents = []
+    monkeypatch.setattr(mw, "_seam_execute", lambda ctx, s, p, intent: (intents.append(intent.write), [])[1])
+    raw_execute(context_for_driver(SqliteDriver(_fresh_db())), sql)
+    assert intents == [write]
+
+
 def test_raw_query_fires_query_method_hook_and_flows_through_execute_seam():
     conn = _fresh_db()
     ctx = context_for_driver(SqliteDriver(conn))

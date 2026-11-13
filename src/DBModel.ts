@@ -2989,8 +2989,8 @@ export abstract class DBModel {
 
       const handler = this.getHandler();
 
-      // The writer for any statement that is not certainly read-only (INSERT … RETURNING included),
-      // inside withWriter, or while writer-sticky. Only a read-only statement is re-sent on a connection error.
+      // The writer for any statement that is not certainly read-only (INSERT … RETURNING, SELECT … FOR
+      // UPDATE included), inside withWriter, or while writer-sticky.
       const readOnly = isReadOnlyStatement(s);
       const useWriter = !readOnly || this._getWriterContext().getStore() !== undefined || this._shouldUseWriterSticky();
       const result = useWriter

@@ -726,45 +726,92 @@ pub struct RawResult {
     pub row_count: Option<i64>,
 }
 
+/// The words of `sql` — maximal runs of ASCII `[A-Za-z0-9_]`, lowercased, with their byte spans: the
+/// `\b`-delimited words the TS `returnsRows` / `isReadOnlyStatement` regexes match on.
+fn sql_words(sql: &str) -> Vec<(String, usize, usize)> {
+    let b = sql.as_bytes();
+    let is_word = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < b.len() {
+        if is_word(b[i]) {
+            let start = i;
+            while i < b.len() && is_word(b[i]) {
+                i += 1;
+            }
+            out.push((sql[start..i].to_ascii_lowercase(), start, i));
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
+/// The statement's leading word (TS `^\s*(word)\b`): the first word, when only whitespace precedes it.
+fn leading_word<'w>(sql: &str, words: &'w [(String, usize, usize)]) -> Option<&'w str> {
+    words
+        .first()
+        .filter(|(_, start, _)| sql[..*start].chars().all(char::is_whitespace))
+        .map(|(w, _, _)| w.as_str())
+}
+
+/// Does `phrase` occur as consecutive words separated only by whitespace (TS `\bfor\s+update\b`)?
+fn has_phrase(sql: &str, words: &[(String, usize, usize)], phrase: &[&str]) -> bool {
+    words.windows(phrase.len()).any(|win| {
+        win.iter().zip(phrase).all(|((w, _, _), p)| w == p)
+            && win
+                .windows(2)
+                .all(|pair| sql[pair[0].2..pair[1].1].chars().all(char::is_whitespace))
+    })
+}
+
 /// Does `sql` return rows (SELECT / …RETURNING / WITH…SELECT / SHOW / PRAGMA / VALUES / EXPLAIN /
 /// TABLE)? Mirrors the TS `returnsRows`.
 fn returns_rows(sql: &str) -> bool {
-    let head = sql.trim_start().to_ascii_lowercase();
-    const PREFIXES: [&str; 8] = [
-        "select",
-        "with",
-        "show",
-        "pragma",
-        "values",
-        "explain",
-        "table",
-        "returning",
-    ];
-    if PREFIXES
-        .iter()
-        .take(7)
-        .any(|p| head.starts_with(p) && word_boundary_after(&head, p.len()))
-    {
-        return true;
-    }
-    // A `RETURNING` anywhere (INSERT/UPDATE/DELETE … RETURNING) returns rows.
-    sql.to_ascii_lowercase().contains("returning")
+    let words = sql_words(sql);
+    matches!(
+        leading_word(sql, &words),
+        Some("select" | "with" | "show" | "pragma" | "values" | "explain" | "table")
+    ) || has_phrase(sql, &words, &["returning"])
 }
 
-fn word_boundary_after(s: &str, at: usize) -> bool {
-    s[at..]
-        .chars()
-        .next()
-        .map(|c| !c.is_alphanumeric() && c != '_')
-        .unwrap_or(true)
+/// Is `sql` certainly read-only — may it go to the reader? Anything not certain takes the write intent:
+/// a row lock (FOR UPDATE / FOR NO KEY UPDATE / FOR SHARE / FOR KEY SHARE / LOCK IN SHARE MODE) or an
+/// INTO anywhere is a write; a WITH / EXPLAIN statement is read-only only if it carries no insert /
+/// update / delete / merge word (a data-modifying CTE writes; EXPLAIN ANALYZE runs the statement); a
+/// select / show / pragma / values / table statement is read-only unless it has a RETURNING. Mirrors
+/// the TS `isReadOnlyStatement`.
+fn is_read_only_statement(sql: &str) -> bool {
+    let words = sql_words(sql);
+    const LOCK_OR_INTO: [&[&str]; 6] = [
+        &["for", "update"],
+        &["for", "share"],
+        &["for", "no", "key", "update"],
+        &["for", "key", "share"],
+        &["lock", "in", "share", "mode"],
+        &["into"],
+    ];
+    if LOCK_OR_INTO.iter().any(|p| has_phrase(sql, &words, p)) {
+        return false;
+    }
+    match leading_word(sql, &words) {
+        Some("with" | "explain") => !["insert", "update", "delete", "merge"]
+            .iter()
+            .any(|w| has_phrase(sql, &words, &[*w])),
+        Some("select" | "show" | "pragma" | "values" | "table") => {
+            !has_phrase(sql, &words, &["returning"])
+        }
+        _ => false,
+    }
 }
 
 /// Raw **synchronous** `execute(sql, params)` THROUGH the seam (design §4 D3): a registered SQL hook
 /// intercepts it, connection routing resolves the connection, and an ambient transaction (if the ctx
 /// is tx-scoped) applies — because it is the SAME [`crate::exec_context::execute`] / `run` seam the
 /// ORM uses, not a direct driver call. A row-returning statement runs `execute`; a non-returning one
-/// runs `run`. `write` forces the write intent (writer routing / tx connection). Mirrors the TS
-/// `rawExecute`.
+/// runs `run`. A row-returning statement takes the write intent (writer routing / tx connection) unless
+/// it is certainly read-only ([`is_read_only_statement`]: `INSERT … RETURNING` and `SELECT … FOR UPDATE`
+/// go to the writer); `write` forces the write intent. Mirrors the TS `rawExecute`.
 pub fn raw_execute(
     ctx: &ExecutionContext,
     sql: &str,
@@ -772,7 +819,7 @@ pub fn raw_execute(
     write: bool,
 ) -> Result<RawResult, SqlFailure> {
     if returns_rows(sql) {
-        let intent = if write {
+        let intent = if write || !is_read_only_statement(sql) {
             StatementIntent::write()
         } else {
             StatementIntent::read()
@@ -1548,6 +1595,47 @@ mod tests {
                 "SELECT name FROM t".to_string()
             ]
         );
+    }
+
+    /// `raw_execute` routes a row-returning statement to the reader only when it is certainly read-only
+    /// (the TS `rawExecute`): an INSERT … RETURNING, a SELECT … FOR UPDATE / FOR SHARE / LOCK IN SHARE
+    /// MODE / INTO and a data-modifying CTE go to the writer; a function-calling SELECT is still a read.
+    #[test]
+    fn d3_raw_execute_routes_non_read_only_to_writer() {
+        use crate::connection_routing::test_support::{recording_stub, SeamLog};
+        use crate::connection_routing::{
+            ConnectionRegistry, ReaderWriterPools, RoutingConfig, WriterStickyClock,
+        };
+        let cases = [
+            ("INSERT INTO t (name) VALUES (?) RETURNING id", "writer"),
+            ("SELECT id FROM t WHERE id = ? FOR UPDATE", "writer"),
+            ("SELECT id FROM t WHERE id = ? FOR NO KEY UPDATE", "writer"),
+            ("SELECT id FROM t WHERE id = ? FOR SHARE", "writer"),
+            ("SELECT id FROM t WHERE id = ? LOCK IN SHARE MODE", "writer"),
+            ("SELECT id INTO @v FROM t", "writer"),
+            (
+                "WITH x AS (UPDATE t SET name = ? RETURNING id) SELECT * FROM x",
+                "writer",
+            ),
+            ("SELECT name FROM t WHERE id = ?", "reader"),
+            ("SELECT COUNT(*) FROM t", "reader"),
+            ("WITH x AS (SELECT 1 AS a) SELECT * FROM x", "reader"),
+        ];
+        for (sql, want) in cases {
+            let log: SeamLog = Arc::new(StdMutex::new(Vec::new()));
+            let routing = RoutingConfig {
+                registry: ConnectionRegistry::from_default(ReaderWriterPools::split(
+                    recording_stub("reader", &log),
+                    recording_stub("writer", &log),
+                ))
+                .build()
+                .unwrap(),
+                sticky: WriterStickyClock::disabled(),
+            };
+            let ctx = exec_context::for_routing(&routing).unwrap();
+            raw_execute(&ctx, sql, &[], false).unwrap();
+            assert_eq!(*log.lock().unwrap(), vec![format!("{want}:all")], "{sql}");
+        }
     }
 
     #[test]

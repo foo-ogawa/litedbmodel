@@ -4,12 +4,22 @@ declare(strict_types=1);
 
 namespace LiteDbModel\Runtime\Tests;
 
+use LiteDbModel\Runtime\Connection;
+use LiteDbModel\Runtime\ConnectionRegistry;
 use LiteDbModel\Runtime\Context;
 use LiteDbModel\Runtime\ExecutionContext;
 use LiteDbModel\Runtime\Leaves;
 use LiteDbModel\Runtime\LogEntry;
 use LiteDbModel\Runtime\MethodKind;
+use LiteDbModel\Runtime\MiddlewareChain;
+use LiteDbModel\Runtime\PdoDriver;
+use LiteDbModel\Runtime\PdoPool;
+use LiteDbModel\Runtime\ReaderWriterPools;
 use LiteDbModel\Runtime\Registry;
+use LiteDbModel\Runtime\RoutingConfig;
+use LiteDbModel\Runtime\RoutingExecutionContext;
+use LiteDbModel\Runtime\RunInfo;
+use LiteDbModel\Runtime\WriterStickyClock;
 use PHPUnit\Framework\TestCase;
 
 use function LiteDbModel\Runtime\clearMiddlewares;
@@ -403,6 +413,85 @@ final class MiddlewareTest extends TestCase
             $this->assertEquals([(object) ['name' => 'raw']], $read->rows);
         });
         $this->assertSame(['INSERT INTO t (name) VALUES (?)', 'SELECT name FROM t'], $seen);
+    }
+
+    /**
+     * `rawExecute` routes a row-returning statement to the reader only when it is certainly read-only (the
+     * TS `rawExecute`): an INSERT … RETURNING, a SELECT … FOR UPDATE / FOR SHARE / LOCK IN SHARE MODE /
+     * INTO and a data-modifying CTE go to the writer; a function-calling SELECT is still a read.
+     *
+     * @return list<array{string, string}>
+     */
+    public static function rawExecuteRoutingCases(): array
+    {
+        return [
+            ['INSERT INTO t (name) VALUES (?) RETURNING id', 'writer'],
+            ['SELECT id FROM t WHERE id = ? FOR UPDATE', 'writer'],
+            ['SELECT id FROM t WHERE id = ? FOR NO KEY UPDATE', 'writer'],
+            ['SELECT id FROM t WHERE id = ? FOR SHARE', 'writer'],
+            ['SELECT id FROM t WHERE id = ? LOCK IN SHARE MODE', 'writer'],
+            ['SELECT id INTO @v FROM t', 'writer'],
+            ['WITH x AS (UPDATE t SET name = ? RETURNING id) SELECT * FROM x', 'writer'],
+            ['SELECT name FROM t WHERE id = ?', 'reader'],
+            ['SELECT COUNT(*) FROM t', 'reader'],
+            ['WITH x AS (SELECT 1 AS a) SELECT * FROM x', 'reader'],
+        ];
+    }
+
+    #[\PHPUnit\Framework\Attributes\DataProvider('rawExecuteRoutingCases')]
+    public function testRawExecuteRoutesNonReadOnlyToWriter(string $sql, string $want): void
+    {
+        $log = new \ArrayObject();
+        $driver = new PdoDriver(self::freshDb());
+        $pool = static fn (string $label): PdoPool => new class ($label, $driver, $log) implements PdoPool {
+            public function __construct(private readonly string $label, private readonly PdoDriver $backing, private readonly \ArrayObject $log)
+            {
+            }
+
+            public function acquire(): Connection
+            {
+                $this->log[] = $this->label;
+                return new class implements Connection {
+                    public function execute(string $sql, array $params): array
+                    {
+                        return [];
+                    }
+
+                    public function run(string $sql, array $params): RunInfo
+                    {
+                        return new RunInfo(0, 0);
+                    }
+
+                    public function control(string $sql): void
+                    {
+                    }
+                };
+            }
+
+            public function release(Connection $conn, bool $destroy = false): void
+            {
+            }
+
+            public function close(): void
+            {
+            }
+
+            public function driver(): string
+            {
+                return 'postgres';
+            }
+
+            public function backingDriver(): PdoDriver
+            {
+                return $this->backing;
+            }
+        };
+        $routing = new RoutingConfig(
+            ConnectionRegistry::fromDefault(new ReaderWriterPools($pool('reader'), $pool('writer')))->build(),
+            new WriterStickyClock(useWriterAfterTransaction: false),
+        );
+        rawExecute(new RoutingExecutionContext($driver, new MiddlewareChain(), $routing), $sql);
+        $this->assertSame([$want], $log->getArrayCopy());
     }
 
     public function testRawQueryFiresQueryHookAndFlowsThroughSeam(): void

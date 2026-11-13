@@ -114,6 +114,7 @@ const SKIP_BUDGET = 0;
  */
 const PROVIDERS = [
   'LiteDbModel\\Runtime\\Tests\\MiddlewareLiveTest::liveDrivers',
+  'LiteDbModel\\Runtime\\Tests\\MiddlewareTest::rawExecuteRoutingCases',
   'LiteDbModel\\Runtime\\Tests\\RenderTest::orderByNullsCases',
   'LiteDbModel\\Runtime\\Tests\\TxBoundaryLiveTest::dialects',
 ];

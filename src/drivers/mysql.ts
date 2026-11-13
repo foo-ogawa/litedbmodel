@@ -8,6 +8,7 @@
 import type { DBConfig, DBDriver, DBDriverOptions, DBConnection, QueryResult, Logger } from './types';
 import { defaultLogger } from './types';
 import { isConnectionError } from '../connection-errors';
+import { isResendableStatement } from '../scp/middleware';
 import { mysqlDeboxPoolOptions } from '../scp/makesql/pool-executor';
 
 // mysql2 types (loaded dynamically)
@@ -289,7 +290,8 @@ export class MysqlDriver implements DBDriver {
   }
 
   /**
-   * Execute a read query
+   * Execute a read query. After a connection error the statement is re-sent once only when
+   * `isResendableStatement` allows it (read-only and calls no function); anything else is thrown.
    */
   async execute(sql: string, params: unknown[] = [], onWriter = false): Promise<QueryResult> {
     const pool = onWriter ? (this.writerPool || this.pool) : this.pool;
@@ -351,7 +353,7 @@ export class MysqlDriver implements DBDriver {
         rowCount,
       };
     } catch (error) {
-      if (isConnectionError(error as Error)) {
+      if (isConnectionError(error as Error) && isResendableStatement(sql)) {
         this.logger.warn(`Connection error, retrying query: ${sqlWithoutReturning}`);
         try {
           const [result] = await pool.query(sqlWithoutReturning, convertedParams);

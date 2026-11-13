@@ -796,6 +796,39 @@ func TestD3RawExecuteThroughSeam(t *testing.T) {
 	}
 }
 
+// RawExecute routes a row-returning statement to the reader only when it is certainly read-only: an
+// INSERT … RETURNING, a SELECT … FOR UPDATE / FOR SHARE / LOCK IN SHARE MODE / INTO and a data-modifying
+// CTE take the write intent (the TS rawExecute). A function-calling SELECT is still a read.
+func TestD3RawExecuteRoutesNonReadOnlyToWriter(t *testing.T) {
+	cases := []struct {
+		sql  string
+		want string
+	}{
+		{"INSERT INTO t (name) VALUES (?) RETURNING id", "writer"},
+		{"SELECT id FROM t WHERE id = ? FOR UPDATE", "writer"},
+		{"SELECT id FROM t WHERE id = ? FOR NO KEY UPDATE", "writer"},
+		{"SELECT id FROM t WHERE id = ? FOR SHARE", "writer"},
+		{"SELECT id FROM t WHERE id = ? LOCK IN SHARE MODE", "writer"},
+		{"SELECT id INTO @v FROM t", "writer"},
+		{"WITH x AS (UPDATE t SET name = ? RETURNING id) SELECT * FROM x", "writer"},
+		{"SELECT name FROM t WHERE id = ?", "reader"},
+		{"SELECT COUNT(*) FROM t", "reader"},
+		{"WITH x AS (SELECT 1 AS a) SELECT * FROM x", "reader"},
+	}
+	for _, c := range cases {
+		var log []string
+		reader := newRecordPool("reader", &log)
+		writer := newRecordPool("writer", &log)
+		ctx := ContextForRouting(routingWithPools(reader, writer, NewWriterStickyClock(StickyOptions{UseWriterAfterTransaction: boolPtr(false)})), nil)
+		if _, err := RawExecute(ctx, c.sql, nil, RawExecuteOptions{}); err != nil {
+			t.Fatalf("%s: %v", c.sql, err)
+		}
+		if !equalStrs(log, []string{c.want}) {
+			t.Errorf("%s: routed to %v, want [%s]", c.sql, log, c.want)
+		}
+	}
+}
+
 // RawQuery fires a `query` method hook AND flows through the execute seam (two-level).
 func TestD3RawQueryTwoLevel(t *testing.T) {
 	db := mwDB(t)

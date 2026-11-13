@@ -9,6 +9,7 @@ import type { DBConfig, DBDriver, DBDriverOptions, DBConnection, QueryResult, Lo
 import { defaultLogger } from './types';
 import { isConnectionError, guardLeasedClient, guardIdlePoolErrors } from '../connection-errors';
 import { configurePgDeboxTypeParsers } from '../scp/makesql/pool-executor';
+import { isResendableStatement } from '../scp/middleware';
 
 // pg types (loaded dynamically)
 type Pool = import('pg').Pool;
@@ -235,7 +236,8 @@ export class PostgresDriver implements DBDriver {
   }
 
   /**
-   * Execute a read query
+   * Execute a read query. After a connection error the statement is re-sent once only when
+   * `isResendableStatement` allows it (read-only and calls no function); anything else is thrown.
    */
   async execute(sql: string, params: unknown[] = [], onWriter = false): Promise<QueryResult> {
     const pool = onWriter ? (this.writerPool || this.pool) : this.pool;
@@ -254,7 +256,7 @@ export class PostgresDriver implements DBDriver {
         rowCount: result.rowCount ?? 0,
       };
     } catch (error) {
-      if (isConnectionError(error as Error)) {
+      if (isConnectionError(error as Error) && isResendableStatement(sql)) {
         this.logger.warn(`Connection error, retrying query: ${q.convertedSql}`);
         try {
           const result = q.isMulti

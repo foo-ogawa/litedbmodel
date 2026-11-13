@@ -132,6 +132,7 @@ const SKIP_BUDGET = 0;
  */
 const LIVE_FILES = [
   'test/integration/ConcurrentRequests.test.ts',
+  'test/integration/ConnectionErrorRetry.test.ts',
   'test/integration/ConnectionRouting.test.ts',
   'test/integration/DeclaredTypeContract.test.ts',
   'test/integration/EmitterEndToEnd.test.ts',

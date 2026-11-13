@@ -644,19 +644,40 @@ function returnsRows(string $sql): bool
 }
 
 /**
+ * Is `$sql` certainly read-only — may it go to the reader? Anything not certain takes the write intent:
+ * a row lock (FOR UPDATE / FOR NO KEY UPDATE / FOR SHARE / FOR KEY SHARE / LOCK IN SHARE MODE) or an
+ * INTO anywhere is a write; a WITH / EXPLAIN statement is read-only only if it carries no insert / update
+ * / delete / merge word (a data-modifying CTE writes; EXPLAIN ANALYZE runs the statement); a select /
+ * show / pragma / values / table statement is read-only unless it has a RETURNING. Mirrors the TS
+ * `isReadOnlyStatement`.
+ */
+function isReadOnlyStatement(string $sql): bool
+{
+    if (preg_match('/\bfor\s+(update|share|no\s+key\s+update|key\s+share)\b|\block\s+in\s+share\s+mode\b|\binto\b/i', $sql) === 1) {
+        return false;
+    }
+    if (preg_match('/^\s*(with|explain)\b/i', $sql) === 1) {
+        return preg_match('/\b(insert|update|delete|merge)\b/i', $sql) !== 1;
+    }
+    return preg_match('/^\s*(select|show|pragma|values|table)\b/i', $sql) === 1
+        && preg_match('/\breturning\b/i', $sql) !== 1;
+}
+
+/**
  * Raw `execute(sql, params)` THROUGH the seam (design §4 D3): a registered SQL-level middleware
  * intercepts it, connection routing resolves the connection, and an ambient transaction (if the ctx is
  * tx-scoped) applies — because it is the SAME {@see execute()} / {@see run()} seam the ORM uses, not a
- * direct PDO call. A row-returning statement runs `execute`; a non-returning one runs `run`. `$write`
- * forces the write intent (writer routing / tx connection) for a row-returning write. Mirrors the TS
- * `rawExecute`.
+ * direct PDO call. A row-returning statement runs `execute`; a non-returning one runs `run`. A
+ * row-returning statement takes the write intent (writer routing / tx connection) unless it is certainly
+ * read-only ({@see isReadOnlyStatement()}: `INSERT … RETURNING` and `SELECT … FOR UPDATE` go to the
+ * writer); `$write` forces the write intent. Mirrors the TS `rawExecute`.
  *
  * @param list<mixed> $params
  */
 function rawExecute(ExecutionContext $ctx, string $sql, array $params = [], bool $write = false): RawResult
 {
     if (returnsRows($sql)) {
-        $rows = execute($ctx, $sql, $params, new StatementIntent($write));
+        $rows = execute($ctx, $sql, $params, new StatementIntent($write || !isReadOnlyStatement($sql)));
         return new RawResult($rows, count($rows));
     }
     $info = run($ctx, $sql, $params);

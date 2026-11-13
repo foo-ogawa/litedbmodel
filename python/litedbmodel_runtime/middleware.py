@@ -557,6 +557,29 @@ def _returns_rows(sql: str) -> bool:
     return bool(_RETURNS_ROWS_RE.match(sql)) or bool(_RETURNING_RE.search(sql))
 
 
+# A row lock (FOR UPDATE / FOR NO KEY UPDATE / FOR SHARE / FOR KEY SHARE / LOCK IN SHARE MODE) or an INTO
+# anywhere: such a SELECT locks rows or writes, so it is not read-only.
+_LOCK_OR_INTO_RE = _re.compile(
+    r"\bfor\s+(update|share|no\s+key\s+update|key\s+share)\b|\block\s+in\s+share\s+mode\b|\binto\b",
+    _re.IGNORECASE,
+)
+_WITH_EXPLAIN_RE = _re.compile(r"^\s*(with|explain)\b", _re.IGNORECASE)
+_DATA_MODIFYING_RE = _re.compile(r"\b(insert|update|delete|merge)\b", _re.IGNORECASE)
+_READ_LEADING_RE = _re.compile(r"^\s*(select|show|pragma|values|table)\b", _re.IGNORECASE)
+
+
+def _is_read_only_statement(sql: str) -> bool:
+    """Is ``sql`` certainly read-only — may it go to the reader? Anything not certain takes the write
+    intent. A WITH / EXPLAIN statement is read-only only if it carries no insert / update / delete / merge
+    word (a data-modifying CTE writes; EXPLAIN ANALYZE runs the statement). Mirrors the TS
+    ``isReadOnlyStatement``."""
+    if _LOCK_OR_INTO_RE.search(sql):
+        return False
+    if _WITH_EXPLAIN_RE.match(sql):
+        return not _DATA_MODIFYING_RE.search(sql)
+    return bool(_READ_LEADING_RE.match(sql)) and not _RETURNING_RE.search(sql)
+
+
 class RawResult:
     """The raw-statement result: a row list (for a row-returning statement) plus the affected-rows count
     (mirrors v1 ``ExecuteResult {rows, rowCount}``). A non-row statement resolves ``rows=[]``."""
@@ -577,10 +600,12 @@ def raw_execute(
     """Raw ``execute(sql, params)`` THROUGH the seam (design §4 D3): a registered SQL-level middleware
     intercepts it, connection routing resolves the connection, and an ambient transaction (if the ctx is
     tx-scoped) applies — because it is the SAME ``execute``/``run`` seam the ORM uses, not a direct driver
-    call. A row-returning statement runs the READ seam; a non-returning one runs the WRITE seam. ``write``
-    forces the write intent (writer routing / tx connection) for a row-returning write."""
+    call. A row-returning statement runs ``execute``; a non-returning one runs ``run`` (the WRITE seam). A
+    row-returning statement takes the write intent (writer routing / tx connection) unless it is certainly
+    read-only (:func:`_is_read_only_statement`: ``INSERT … RETURNING`` and ``SELECT … FOR UPDATE`` go to
+    the writer); ``write`` forces the write intent. Mirrors the TS ``rawExecute``."""
     if _returns_rows(sql):
-        rows = _seam_execute(ctx, sql, params, StatementIntent(write=write))
+        rows = _seam_execute(ctx, sql, params, StatementIntent(write=write or not _is_read_only_statement(sql)))
         return RawResult(rows, len(rows))
     info = _seam_run(ctx, sql, params)
     return RawResult([], info.changes)
