@@ -733,14 +733,23 @@ impl<'a> tokio_postgres::types::FromSql<'a> for PgUuidText {
 
 /// Parse a canonical UUID text (`xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`, hyphens optional) to its 16
 /// raw bytes — the wire form PG's binary `uuid` param expects. Returns `None` on a malformed input.
+///
+/// Reads the input as BYTES, one ASCII hex digit each: any other byte (a sign, a non-hex letter,
+/// any byte of a multi-byte character) is malformed. Slicing the `str` at byte offsets panicked
+/// when an offset fell inside a character (#350).
 fn uuid_text_to_bytes(s: &str) -> Option<[u8; 16]> {
-    let hex: String = s.chars().filter(|c| *c != '-').collect();
-    if hex.len() != 32 {
-        return None;
-    }
+    let mut digits = s
+        .bytes()
+        .filter(|b| *b != b'-')
+        .map(|b| char::from(b).to_digit(16));
     let mut bytes = [0u8; 16];
-    for (i, b) in bytes.iter_mut().enumerate() {
-        *b = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).ok()?;
+    for b in bytes.iter_mut() {
+        let hi = digits.next()??;
+        let lo = digits.next()??;
+        *b = (hi * 16 + lo) as u8;
+    }
+    if digits.next().is_some() {
+        return None;
     }
     Some(bytes)
 }
@@ -1936,6 +1945,34 @@ mod tests {
             &PgParam::Array(vec![PgParam::Int(4_294_967_297)]),
             &PgType::INT4_ARRAY,
         );
+    }
+
+    /// #350: malformed uuid text — non-ASCII included — is `None` (so the bind fails with
+    /// "malformed uuid text"), never a panic. A 32-BYTE string of multi-byte characters used to put a
+    /// byte-offset slice inside a character and panic mid-Bind, poisoning the pooled connection.
+    #[test]
+    fn uuid_text_to_bytes_rejects_malformed_text_without_panicking() {
+        let multibyte = format!("a{}a", "é".repeat(15));
+        assert_eq!(multibyte.len(), 32);
+        assert_eq!(uuid_text_to_bytes(&multibyte), None);
+        assert_eq!(uuid_text_to_bytes(&"é".repeat(16)), None);
+        assert_eq!(uuid_text_to_bytes(&format!("{}é", "0".repeat(30))), None);
+        // A sign is not a hex digit (`from_str_radix` accepted "+f").
+        assert_eq!(uuid_text_to_bytes(&format!("+f{}", "0".repeat(30))), None);
+        assert_eq!(uuid_text_to_bytes(&"0".repeat(31)), None);
+        assert_eq!(uuid_text_to_bytes(&"0".repeat(33)), None);
+        assert_eq!(uuid_text_to_bytes(&format!("{}g", "0".repeat(31))), None);
+        assert_eq!(
+            uuid_text_to_bytes("0123ABCD-0000-4000-8000-00000000beef"),
+            Some([0x01, 0x23, 0xab, 0xcd, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0xbe, 0xef])
+        );
+        assert_eq!(
+            uuid_text_to_bytes("0123abcd000040008000000000000001"),
+            Some([0x01, 0x23, 0xab, 0xcd, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 0x01])
+        );
+        assert!(encode(&PgParam::Str(multibyte), &PgType::UUID)
+            .unwrap_err()
+            .contains("malformed uuid text"));
     }
 
     /// #349: a value the parameter's type CAN hold binds as exactly that value.
