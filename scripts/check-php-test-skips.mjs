@@ -113,6 +113,7 @@ const SKIP_BUDGET = 0;
  * a provider.
  */
 const PROVIDERS = [
+  'LiteDbModel\\Runtime\\Tests\\ConnRetryLiveTest::dialects',
   'LiteDbModel\\Runtime\\Tests\\MiddlewareLiveTest::liveDrivers',
   'LiteDbModel\\Runtime\\Tests\\MiddlewareTest::rawExecuteRoutingCases',
   'LiteDbModel\\Runtime\\Tests\\RenderTest::orderByNullsCases',
@@ -137,6 +138,7 @@ const LIVE_TESTS = [
   'LiteDbModel\\Runtime\\Tests\\ConformanceCorpusTest::testCorpusIsTheSupportedVersion',
   'LiteDbModel\\Runtime\\Tests\\ConformanceCorpusTest::testEveryVectorNamesAnEndpointTheGeneratedModuleExposes',
   'LiteDbModel\\Runtime\\Tests\\ConformanceCorpusTest::testLiveDbConformanceAllVectorsPass',
+  'LiteDbModel\\Runtime\\Tests\\ConnRetryLiveTest::testTransactionRetryAfterTheConnectionWasKilledCommitsOnce',
   'LiteDbModel\\Runtime\\Tests\\ConnectionRoutingLiveTest::testActiveTxPinTakesPrecedenceOverRouting',
   'LiteDbModel\\Runtime\\Tests\\ConnectionRoutingLiveTest::testCharsetAppliedAndResetOnMysql',
   'LiteDbModel\\Runtime\\Tests\\ConnectionRoutingLiveTest::testKeepAlivePersistent',

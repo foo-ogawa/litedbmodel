@@ -1062,8 +1062,8 @@ final class PdoPoolFactory implements PoolFactory
 
     public function build(ResolvedConnectionConfig $config, string $role): array
     {
-        $pdo = $this->connect !== null ? ($this->connect)($config, $role) : self::connectFromConfig($config);
-        $driver = new PdoDriver($pdo);
+        $open = fn (): \PDO => $this->connect !== null ? ($this->connect)($config, $role) : self::connectFromConfig($config);
+        $driver = new PdoDriver($open(), $open);
         $pool = new ConfiguredPdoPool($driver, $config);
         // \PDO has no explicit close; dropping the last ref closes it. The closer holds the driver ref
         // (keeping the \PDO alive) and drops it on close() → GC closes the connection.

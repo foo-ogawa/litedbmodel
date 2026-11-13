@@ -260,16 +260,30 @@ final class TxConnectionAdapter implements Connection
  */
 final class PdoDriver
 {
-    private readonly PdoConnection $conn;
+    private \PDO $pdo;
+    private PdoConnection $conn;
     /**
      * ONE prepared-statement cache per `\PDO` (#257) — shared by the non-tx {@see PdoConnection} and
      * every {@see beginTx()} handle, because they all issue their SQL on this ONE connection and a
      * `\PDOStatement` belongs to the connection that prepared it.
      */
-    private readonly PreparedStatements $stmts;
+    private PreparedStatements $stmts;
 
-    public function __construct(private readonly \PDO $pdo)
+    /**
+     * @param (\Closure(): \PDO)|null $connect opens a new `\PDO` from this driver's own connection parameters
+     *        — given by {@see PdoPoolFactory::build()}, which built `$pdo` from them. {@see beginTx()} uses it
+     *        to replace a connection that failed the probe of a retry after a connection error. `null` for
+     *        a driver over a caller's `\PDO` ({@see Context::forPdo()}), whose parameters it does not have.
+     */
+    public function __construct(\PDO $pdo, private readonly ?\Closure $connect = null)
     {
+        $this->use($pdo);
+    }
+
+    /** Make `$pdo` this driver's connection, with its own prepared-statement cache and non-tx adapter. */
+    private function use(\PDO $pdo): void
+    {
+        $this->pdo = $pdo;
         $this->stmts = new PreparedStatements($pdo);
         $this->conn = new PdoConnection($pdo, $this->stmts);
     }
@@ -304,11 +318,12 @@ final class PdoDriver
      *
      * `$checkAttempts` > 0 (a retry after a connection error): the connection may be dead after a failover
      * or a restart, so each acquired handle is first sent a harmless `SELECT 1` (directly on the connection,
-     * not through the middleware); one that fails it is released as destroyed and another acquired, at most
-     * `$checkAttempts` in all, and the last probe's error is thrown when every one failed. The probe only
-     * shows the connection is usable, not whether the failed statement ran on the server. 0 ⇒ no probe (a
-     * first attempt). Twin of the TS `acquireCheckedConnection`. This driver holds ONE `\PDO` and never
-     * opens another, so here every acquisition is that same connection.
+     * not through the middleware). On failure the handle is released as destroyed and the dead `\PDO` is
+     * discarded: a new one is opened from this driver's connection parameters (`$connect`) and probed in
+     * turn, at most `$checkAttempts` in all, and the last probe's error is thrown when every one failed. A
+     * driver without connection parameters (over a caller's `\PDO`) cannot open another, so it probes the
+     * same one again. The probe only shows the connection is usable, not whether the failed statement ran
+     * on the server. 0 ⇒ no probe (a first attempt). Twin of the TS `acquireCheckedConnection`.
      */
     public function beginTx(int $checkAttempts = 0): PdoTxConnection
     {
@@ -324,6 +339,10 @@ final class PdoDriver
                 $tx->release(true);
                 if ($attempt >= $checkAttempts) {
                     throw $e;
+                }
+                if ($this->connect !== null) {
+                    // Dropping the last reference to the dead \PDO closes it.
+                    $this->use(($this->connect)());
                 }
             }
         }
