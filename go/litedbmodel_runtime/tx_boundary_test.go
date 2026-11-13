@@ -888,3 +888,40 @@ func TestAwaitedQueriesAtSettleStillCommit(t *testing.T) {
 		t.Errorf("both writes must be committed: n=%d commits=%d err=%v", n, commits, e)
 	}
 }
+
+// #348 — the settle guard admits statements on ONE txCtx concurrently (a shared RLock), so the tx's
+// prepared-statement cache they all go through must be safe for concurrent use. Its maps had no lock
+// (its comment assumed a transaction's statements run one at a time), and concurrent statements on one
+// txCtx aborted the whole process with `fatal error: concurrent map read and map write` (-race reports
+// the same race on every run). Each goroutine runs its OWN statement twice — the first sighting writes
+// the seen-set, the repeat prepares and writes the stmt map — while the others do the same.
+func TestConcurrentStatementsOnOneTxCtxShareTheStmtCacheSafely(t *testing.T) {
+	db, _ := openRec(t, "file:txb12?mode=memory&cache=shared")
+	defer db.Close()
+	const workers, rounds = 16, 50
+	_, err := Transaction(ContextForDB(db), "sqlite", DefaultTransactionOptions(), func(txCtx *ExecutionContext) (int, error) {
+		var wg sync.WaitGroup
+		errs := make(chan error, workers)
+		for w := 0; w < workers; w++ {
+			wg.Add(1)
+			go func(w int) {
+				defer wg.Done()
+				for r := 0; r < rounds; r++ {
+					q := fmt.Sprintf("SELECT id FROM t WHERE id = ? AND %d = %d", w*rounds+r, w*rounds+r)
+					for i := 0; i < 2; i++ {
+						if _, e := Execute(txCtx, q, []any{int64(1)}, ReadIntent()); e != nil {
+							errs <- e
+							return
+						}
+					}
+				}
+			}(w)
+		}
+		wg.Wait()
+		close(errs)
+		return 0, <-errs
+	})
+	if err != nil {
+		t.Fatalf("concurrent statements on one txCtx: %v", err)
+	}
+}
