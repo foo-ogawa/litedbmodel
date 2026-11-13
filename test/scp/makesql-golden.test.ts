@@ -25,7 +25,6 @@ import type { SqlBuilder } from '../../src/drivers/types';
 import {
   assembleMakeSQL,
   renderPlaceholders,
-  conditionsFor,
   compileWhere,
   compileSelect,
   compileInsertMany,
@@ -704,20 +703,35 @@ describe('B. single UPDATE / DELETE — makeSQL byte-matches original _update/_d
       }
     });
 
-    it(`[${dialect}] deleteMany composite-PK → v1 per-column IN-list conjunction (byte-match)`, () => {
-      // A composite PK's WHERE is the v1 conjunction of per-column IN-lists, built through the SAME
-      // conditionsFor (→ DBConditions on PG, the documented single-column-IN JSON rewrite per column
-      // on MySQL/SQLite). The golden drives that ORIGINAL builder directly — one present-column-set
-      // group → ONE DELETE — so it is byte-match to the v1 condition path on every dialect.
-      const keys = [{ tenant_id: 100, id: 1 }, { tenant_id: 100, id: 2 }];
+    it(`[${dialect}] deleteMany composite-PK → ONE DELETE matching the key TUPLES (#377)`, () => {
+      // A composite PK's WHERE is the composite membership predicate over the key tuples — the SAME
+      // `tupleInPredicate` text relations and declared `tupleIn` endpoints use — never a per-column
+      // IN conjunction, which deletes the cross product. The keys differ in BOTH columns: a
+      // single-tenant key set is exactly what hid the cross product (the rows deleted are asserted live
+      // in ScpDialect).
+      const keys = [{ tenant_id: 100, id: 1 }, { tenant_id: 200, id: 2 }];
       const got = compileDeleteMany({ dialect, tableName: 'comments', keyColumns: ['tenant_id', 'id'], keys }).map((c) => render(c, dialect));
-      expect(got.length).toBe(1);
-      const params: unknown[] = [];
-      const formatter = dialect === 'postgres' ? pgFmt : undefined;
-      const where = conditionsFor({ tenant_id: [100, 100], id: [1, 2] }, dialect).compile(params, formatter);
-      const golden = { sql: renderPlaceholders(`DELETE FROM comments WHERE ${where}`, dialect), params };
-      expect(got[0].sql).toBe(golden.sql);
-      expect(got[0].params).toEqual(golden.params);
+      const golden = {
+        postgres: {
+          sql: 'DELETE FROM comments WHERE (comments.tenant_id, comments.id) IN (SELECT * FROM UNNEST($1::int[], $2::int[]))',
+          params: [[100, 200], [1, 2]],
+        },
+        mysql: {
+          sql: "DELETE FROM comments WHERE (comments.tenant_id, comments.id) IN (SELECT c0, c1 FROM JSON_TABLE(?, '$[*]' COLUMNS(c0 JSON PATH '$[0]', c1 JSON PATH '$[1]')) jt)",
+          params: ['[[100,1],[200,2]]'],
+        },
+        sqlite: {
+          sql: "DELETE FROM comments WHERE (comments.tenant_id, comments.id) IN (SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]') FROM json_each(?))",
+          params: ['[[100,1],[200,2]]'],
+        },
+      }[dialect];
+      expect(got).toEqual([golden]);
+    });
+
+    it(`[${dialect}] deleteMany composite-PK: a key missing a PK column throws (#377)`, () => {
+      expect(() =>
+        compileDeleteMany({ dialect, tableName: 'comments', keyColumns: ['tenant_id', 'id'], keys: [{ id: 1 }] }),
+      ).toThrow(/PK column 'tenant_id'/);
     });
   }
 

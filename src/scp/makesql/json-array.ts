@@ -126,8 +126,9 @@ export function inListPredicate(dialect: Dialect, col: string, columnType?: stri
 /**
  * The STATIC composite-key membership predicate — the multi-column sibling of
  * {@link inListPredicate}, with the SAME property: a FIXED number of `?`, independent of how many key
- * tuples are bound. `columnTypes` are the key columns' DECLARED SQL types (positional with `columns`),
- * from the SCHEMA — never from the values, which are unknown at compile and empty often enough to matter:
+ * tuples are bound. `columnTypes` are the key columns' DECLARED SQL types (positional with `columns`;
+ * `undefined` where unknown), from the SCHEMA — never from the values, which are unknown at compile and
+ * empty often enough to matter:
  *
  *  - **PostgreSQL**: `(t.k1, t.k2) IN (SELECT * FROM UNNEST(?::<T1>, ?::<T2>))` — ONE array param PER
  *    key column (the constant-param form; v1's `dbTupleIn` binds 2×N params instead, which is the
@@ -149,7 +150,7 @@ export function inListPredicate(dialect: Dialect, col: string, columnType?: stri
  * This is the ONE text for composite membership: the relation batch builders
  * ({@link import('./compile-relation').compileCompositeKeyStaticUnlimited}) consume the same function.
  */
-export function tupleInPredicate(dialect: Dialect, table: string, columns: readonly string[], columnTypes?: readonly string[]): string {
+export function tupleInPredicate(dialect: Dialect, table: string, columns: readonly string[], columnTypes?: readonly (string | undefined)[]): string {
   const qualified = columns.map((k) => `${table}.${k}`);
   if (dialect === 'postgres') {
     const unnest = columns

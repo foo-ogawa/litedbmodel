@@ -51,7 +51,8 @@ import {
   type AsyncConnection,
   type RelationOp,
 } from '../../src/scp';
-import { compileSelect, type SelectDesc, type Dialect as MakeSQLDialect } from '../../src/scp/makesql';
+import { compileSelect, compileDeleteMany, assembleMakeSQL, type SelectDesc, type Dialect as MakeSQLDialect } from '../../src/scp/makesql';
+import Database from 'better-sqlite3';
 import { emitBehaviorModule, leafHandlersAsync, PooledAsyncContext, pgConnectionPool, type EndpointSet } from '../../src/scp';
 import { model, column } from '../../src/decorators';
 
@@ -1078,5 +1079,84 @@ describe('WS#47 write-path completeness — the BATCH write bundles execute live
   afterAll(async () => {
     await pgPool?.query(`DROP TABLE IF EXISTS ${WC_POSTS}`).catch(() => undefined);
     await myConn?.query(`DROP TABLE IF EXISTS ${WC_POSTS}`).catch(() => undefined);
+  });
+});
+
+// #377 — a COMPOSITE-PK deleteMany deletes exactly the given key TUPLES. It used to split the tuples
+// into per-column IN-lists (`tenant_id IN (…) AND id IN (…)`), which deletes their cross product, and to
+// group them by the columns present, so a tuple missing `tenant_id` became `id IN (…)` across every
+// tenant. Asserted on the SURVIVING rows (not SQL bytes), on all three dialects, with keys that differ
+// in BOTH columns — the case a single-tenant key set hides.
+describe('#377 composite-PK deleteMany deletes exactly the given tuples (PG + MySQL + SQLite)', () => {
+  const T = 'scp377_tenant_rows';
+  const SEED: [number, number][] = [[1, 1], [1, 2], [2, 1], [2, 2], [3, 1], [3, 2]];
+  const KEYS = [{ tenant_id: 1, id: 1 }, { tenant_id: 2, id: 2 }];
+  const SURVIVORS = ['1:2', '2:1', '3:1', '3:2'];
+  const DDL = `CREATE TABLE ${T} (tenant_id INT NOT NULL, id INT NOT NULL, PRIMARY KEY (tenant_id, id))`;
+  const survivors = (rows: Row[]): string[] => rows.map((r) => `${Number(r.tenant_id)}:${Number(r.id)}`);
+  const ORDERED = `SELECT tenant_id, id FROM ${T} ORDER BY tenant_id, id`;
+
+  it('[postgres] only the two tuples go (compileDeleteManyBundle)', async () => {
+    await pgPool!.query(`DROP TABLE IF EXISTS ${T}`);
+    await pgPool!.query(DDL);
+    for (const [t, i] of SEED) await pgPool!.query(`INSERT INTO ${T} VALUES ($1, $2)`, [t, i]);
+    await execTxLive(compileDeleteManyBundle('DM', { tableName: T, keyColumns: ['tenant_id', 'id'], keys: KEYS }, 'postgres'), {}, pgClient(pgPool!));
+    expect(survivors(await pgQuery(pgPool!, ORDERED, []))).toEqual(SURVIVORS);
+  });
+
+  it('[mysql] only the two tuples go (compileDeleteManyBundle)', async () => {
+    await myConn!.query(`DROP TABLE IF EXISTS ${T}`);
+    await myConn!.query(DDL);
+    for (const [t, i] of SEED) await myConn!.query(`INSERT INTO ${T} VALUES (?, ?)`, [t, i]);
+    await execTxLive(compileDeleteManyBundle('DM', { tableName: T, keyColumns: ['tenant_id', 'id'], keys: KEYS }, 'mysql'), {}, myClient(myConn!));
+    expect(survivors(await myQuery(myConn!, ORDERED, []))).toEqual(SURVIVORS);
+  });
+
+  it('[sqlite] only the two tuples go (compileDeleteMany)', () => {
+    const db = new Database(':memory:');
+    db.exec(DDL);
+    const ins = db.prepare(`INSERT INTO ${T} VALUES (?, ?)`);
+    for (const [t, i] of SEED) ins.run(t, i);
+    for (const op of compileDeleteMany({ dialect: 'sqlite', tableName: T, keyColumns: ['tenant_id', 'id'], keys: KEYS })) {
+      const asm = assembleMakeSQL(op);
+      db.prepare(renderPlaceholders(asm.sql, 'sqlite')).run(...(asm.params as never[]));
+    }
+    expect(survivors(db.prepare(ORDERED).all() as Row[])).toEqual(SURVIVORS);
+    db.close();
+  });
+
+  it('[mysql] the composite key compares a BIGINT key exactly (the #376 typing), untyped and typed', async () => {
+    const B = 'scp377_big_rows';
+    const BOUND = '1234567890123456789';
+    const ALL = ['1234567890123456700', '1234567890123456701', BOUND, '1234567890123456800'];
+    for (const variant of [
+      { keys: [{ tenant_id: 7, id: BigInt(BOUND) }] },
+      { keys: [{ tenant_id: 7, id: BOUND }], columnTypes: { tenant_id: 'INT', id: 'BIGINT' } },
+    ]) {
+      await myConn!.query(`DROP TABLE IF EXISTS ${B}`);
+      await myConn!.query(`CREATE TABLE ${B} (tenant_id INT NOT NULL, id BIGINT NOT NULL, PRIMARY KEY (tenant_id, id))`);
+      for (const id of ALL) await myConn!.query(`INSERT INTO ${B} VALUES (7, ?)`, [id]);
+      for (const op of compileDeleteMany({ dialect: 'mysql', tableName: B, keyColumns: ['tenant_id', 'id'], ...variant })) {
+        const asm = assembleMakeSQL(op);
+        await myConn!.query(renderPlaceholders(asm.sql, 'mysql'), asm.params);
+      }
+      const left = await myQuery(myConn!, `SELECT CAST(id AS CHAR) AS id FROM ${B} ORDER BY id`, []);
+      expect(left.map((r) => r.id), JSON.stringify(variant.columnTypes)).toEqual(ALL.filter((id) => id !== BOUND));
+    }
+    await myConn!.query(`DROP TABLE IF EXISTS ${B}`);
+  });
+
+  it('a tuple missing a PK column throws instead of widening the DELETE to every tenant', () => {
+    for (const dialect of ['postgres', 'mysql', 'sqlite'] as const) {
+      expect(() =>
+        compileDeleteMany({ dialect, tableName: T, keyColumns: ['tenant_id', 'id'], keys: [{ tenant_id: 1, id: 1 }, { id: 2 }] }),
+        dialect,
+      ).toThrow(/PK column 'tenant_id'/);
+    }
+  });
+
+  afterAll(async () => {
+    await pgPool?.query(`DROP TABLE IF EXISTS ${T}`).catch(() => undefined);
+    await myConn?.query(`DROP TABLE IF EXISTS ${T}`).catch(() => undefined);
   });
 });
