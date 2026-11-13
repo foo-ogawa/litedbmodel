@@ -121,11 +121,13 @@ final class MysqlReselect
  *  |-------------------|--------------------------------------------------------------------|--------|
  *  | create            | the AUTO_INCREMENT range `[LAST_INSERT_ID, +affected)`, or the      | after  |
  *  |                   | client-supplied PK values pulled from the INSERT params by position |        |
- *  | createMany        | the same AUTO_INCREMENT range (N consecutive ids)                   | after  |
- *  | upsert / …Many    | the CONFLICT key (MySQL does not report the conflicted-row id, so   | after  |
- *  |                   | the AUTO_INCREMENT range is wrong when a row was UPDATED)           |        |
+ *  | createMany        | the same AUTO_INCREMENT range (N consecutive ids), or the client-   | after  |
+ *  |                   | supplied PK tuples read back out of the SAME JSON payload           |        |
+ *  | upsert / …Many    | EVERY column of the CONFLICT key (MySQL does not report the         | after  |
+ *  |                   | conflicted-row id, so the AUTO_INCREMENT range is wrong when a row  |        |
+ *  |                   | was UPDATED) — one column of a composite key names other rows too   |        |
  *  | update            | the write's OWN WHERE predicate                                     | after  |
- *  | updateMany        | the batch JOIN key, re-bound from the SAME JSON payload             | after  |
+ *  | updateMany        | EVERY batch JOIN key column, re-bound from the SAME JSON payload    | after  |
  *  | delete/deleteMany | the write's OWN WHERE predicate — **before** the write, since the   | BEFORE |
  *  |                   | rows no longer exist once the DELETE has run                        |        |
  *
@@ -161,6 +163,28 @@ final class MysqlReturning
             }
         }
         return $out;
+    }
+
+    /**
+     * EVERY JOIN key column of an updateMany — the target-side column of each `AND`-joined conjunct of
+     * `ON u.k1 = <v.k1> AND u.k2 = <v.k2> SET …` (json-batch.ts `mysqlUpdateManyJson`). A composite key
+     * keyed on its first column alone names rows the write never touched. `null` ⇒ unparsable.
+     *
+     * @return list<string>|null
+     */
+    private static function updateBatchKeys(string $writeSql): ?array
+    {
+        if (preg_match('/\sON\s+(.*?)\s+SET\s/is', $writeSql, $m) !== 1) {
+            return null;
+        }
+        $keys = [];
+        foreach (preg_split('/\s+AND\s+/i', $m[1]) ?: [] as $conj) {
+            if (preg_match('/^[A-Za-z0-9_]*\.?([A-Za-z0-9_]+)\s*=/', trim($conj), $km) !== 1) {
+                return null;
+            }
+            $keys[] = $km[1];
+        }
+        return $keys;
     }
 
     /**
@@ -205,62 +229,67 @@ final class MysqlReturning
         if (preg_match('/\bINSERT\s+(?:IGNORE\s+)?INTO\s+[A-Za-z0-9_."`]+\s*\(([^)]*)\)/i', $writeSql, $cm) === 1) {
             $insertCols = self::splitTrim($cm[1]);
         }
-        $jsonSelect = static fn (string $key): string => "SELECT {$cols} FROM {$table} WHERE {$key} IN "
-            . "(SELECT JSON_UNQUOTE(jt.{$key}) FROM JSON_TABLE(?, '\$[*]' COLUMNS({$key} JSON PATH '\$.{$key}')) jt){$orderBy}";
+        $isInsert = str_starts_with($wl, 'insert');
+        // Recover a BATCH write's rows by reading its key TUPLES back out of the SAME JSON payload it
+        // bound — every key column, never the first alone (a composite key's first column names other
+        // rows too). The payload's fields ARE the INSERT columns, so a key column outside them would
+        // read NULL back and recover nothing: that fails closed.
+        $jsonSelect = static function (array $keys, string $what) use ($cols, $table, $orderBy, $insertCols, $isInsert, $writeSql): MysqlReselect {
+            foreach ($keys as $k) {
+                if ($isInsert && !in_array($k, $insertCols, true)) {
+                    throw new \RuntimeException("scp write(mysql): {$what} column '{$k}' is not among the INSERT columns of '{$writeSql}'");
+                }
+            }
+            $unq = implode(', ', array_map(static fn (string $k): string => "JSON_UNQUOTE(jt.{$k})", $keys));
+            $paths = implode(', ', array_map(static fn (string $k): string => "{$k} JSON PATH '\$.{$k}'", $keys));
+            return new MysqlReselect($writeSql, "SELECT {$cols} FROM {$table} WHERE (" . implode(', ', $keys) . ") IN "
+                . "(SELECT {$unq} FROM JSON_TABLE(?, '\$[*]' COLUMNS({$paths})) jt){$orderBy}", [new ReselectBind('json')]);
+        };
+        // Recover a SINGLE-row INSERT's row by EVERY key column, each bound from its INSERT column position.
+        $keyedByInsertParams = static function (array $keys, string $what) use ($cols, $table, $orderBy, $insertCols, $writeSql): MysqlReselect {
+            $conds = [];
+            $binds = [];
+            foreach ($keys as $k) {
+                $idx = array_search($k, $insertCols, true);
+                if ($idx === false) {
+                    throw new \RuntimeException("scp write(mysql): {$what} column '{$k}' is not among the INSERT columns of '{$writeSql}'");
+                }
+                $conds[] = "{$k} = ?";
+                $binds[] = new ReselectBind('param', $idx);
+            }
+            return new MysqlReselect($writeSql, "SELECT {$cols} FROM {$table} WHERE " . implode(' AND ', $conds) . $orderBy, $binds);
+        };
 
-        // upsert / upsertMany — by the CONFLICT key. MySQL does not report which row an ON DUPLICATE
-        // KEY UPDATE touched, so the AUTO_INCREMENT range is wrong as soon as a row was updated.
-        if (str_starts_with($wl, 'insert') && str_contains($wl, 'on duplicate key update')) {
+        // upsert / upsertMany — by EVERY column of the CONFLICT key. MySQL does not report which row an
+        // ON DUPLICATE KEY UPDATE touched, so the AUTO_INCREMENT range is wrong once a row was updated.
+        if ($isInsert && str_contains($wl, 'on duplicate key update')) {
             if (count($conflict) === 0) {
                 throw new \RuntimeException("scp write(mysql): an upsert…RETURNING needs its conflict key in the pk hint ('{$writeSql}')");
             }
-            $key = $conflict[0];
-            if ($isBatch) {
-                return new MysqlReselect($writeSql, $jsonSelect($key), [new ReselectBind('json')]);
-            }
-            $idx = array_search($key, $insertCols, true);
-            if ($idx === false) {
-                throw new \RuntimeException("scp write(mysql): conflict key '{$key}' is not among the INSERT columns of '{$writeSql}'");
-            }
-            return new MysqlReselect($writeSql, "SELECT {$cols} FROM {$table} WHERE {$key} = ?{$orderBy}", [new ReselectBind('param', $idx)]);
+            return $isBatch ? $jsonSelect($conflict, 'conflict key') : $keyedByInsertParams($conflict, 'conflict key');
         }
 
         // create / createMany — by the AUTO_INCREMENT range [LAST_INSERT_ID, +affected), or by the
         // client-supplied PK values pulled from the INSERT params by column position (UUID / composite).
-        if (str_starts_with($wl, 'insert')) {
+        if ($isInsert) {
             if ($autoInc !== '' && $pkCols === [$autoInc]) {
                 return new MysqlReselect($writeSql, "SELECT {$cols} FROM {$table} WHERE {$autoInc} >= ? AND {$autoInc} < ?{$orderBy}", [new ReselectBind('lastId'), new ReselectBind('highId')]);
             }
             if (count($pkCols) === 0) {
                 throw new \RuntimeException("scp write(mysql): an INSERT…RETURNING carries no pk hint, so its written rows cannot be identified ('{$writeSql}'). The producer must pass the model's declared primary key.");
             }
-            if ($isBatch) {
-                // createMany with a CLIENT-supplied key: the statement binds ONE JSON payload, not one
-                // param per key, so the keys are read back out of that SAME payload (as upsertMany does).
-                if (count($pkCols) !== 1) {
-                    throw new \RuntimeException("scp write(mysql): a batch INSERT…RETURNING on the COMPOSITE key (" . implode(', ', $pkCols) . ") cannot be recovered from its JSON payload ('{$writeSql}')");
-                }
-                return new MysqlReselect($writeSql, $jsonSelect($pkCols[0]), [new ReselectBind('json')]);
-            }
-            $conds = [];
-            $binds = [];
-            foreach ($pkCols as $pk) {
-                $idx = array_search($pk, $insertCols, true);
-                if ($idx === false) {
-                    throw new \RuntimeException("scp write(mysql): PK column '{$pk}' is not among the INSERT columns of '{$writeSql}'");
-                }
-                $conds[] = "{$pk} = ?";
-                $binds[] = new ReselectBind('param', $idx);
-            }
-            return new MysqlReselect($writeSql, "SELECT {$cols} FROM {$table} WHERE " . implode(' AND ', $conds) . $orderBy, $binds);
+            // createMany with a CLIENT-supplied key: the statement binds ONE JSON payload, not one param
+            // per key, so the key tuples are read back out of that SAME payload (as upsertMany does).
+            return $isBatch ? $jsonSelect($pkCols, 'PK') : $keyedByInsertParams($pkCols, 'PK');
         }
 
-        // updateMany — by the batch JOIN key, re-selected from the SAME JSON payload the write bound.
+        // updateMany — by EVERY batch JOIN key column, re-selected from the SAME JSON payload the write bound.
         if (str_starts_with($wl, 'update') && $isBatch) {
-            if (preg_match('/\sON\s+[A-Za-z0-9_]*\.?([A-Za-z0-9_]+)\s*=/i', $writeSql, $km) !== 1) {
+            $keys = self::updateBatchKeys($writeSql);
+            if ($keys === null) {
                 throw new \RuntimeException("scp write(mysql): cannot parse the batch JOIN key of '{$writeSql}'");
             }
-            return new MysqlReselect($writeSql, $jsonSelect($km[1]), [new ReselectBind('json')]);
+            return $jsonSelect($keys, 'JOIN key');
         }
 
         // update / delete — by the write's OWN WHERE predicate, bound from the write's own params. The

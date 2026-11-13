@@ -139,6 +139,7 @@ const LIVE_FILES = [
   'test/integration/LazyRelation.test.ts',
   'test/integration/MultiDB.test.ts',
   'test/integration/Mysql.test.ts',
+  'test/integration/MysqlReturning.test.ts',
   'test/integration/NamedDbCodegen.test.ts',
   'test/integration/PhaseF2ReadContract.test.ts',
   'test/integration/PkeyResult.test.ts',

@@ -11,11 +11,13 @@
  *  |------------------|--------------------------------------------------------------------|-----------|
  *  | create           | the AUTO_INCREMENT range `[LAST_INSERT_ID, +affected)`, or the      | after     |
  *  |                  | client-supplied PK values pulled from the INSERT params by position |           |
- *  | createMany       | the same AUTO_INCREMENT range (N consecutive ids)                  | after     |
- *  | upsert / …Many   | the CONFLICT key (MySQL does not report the conflicted-row id, so   | after     |
- *  |                  | the AUTO_INCREMENT range is wrong when a row was UPDATED)          |           |
+ *  | createMany       | the same AUTO_INCREMENT range (N consecutive ids), or the client-   | after     |
+ *  |                  | supplied PK tuples read back out of the SAME JSON payload           |           |
+ *  | upsert / …Many   | EVERY column of the CONFLICT key (MySQL does not report the         | after     |
+ *  |                  | conflicted-row id, so the AUTO_INCREMENT range is wrong when a row  |           |
+ *  |                  | was UPDATED) — one column of a composite key names other rows too   |           |
  *  | update           | the write's OWN WHERE predicate                                    | after     |
- *  | updateMany       | the batch JOIN key, re-bound from the SAME JSON payload            | after     |
+ *  | updateMany       | EVERY batch JOIN key column, re-bound from the SAME JSON payload   | after     |
  *  | delete/deleteMany| the write's OWN WHERE predicate — **before** the write, since the   | BEFORE    |
  *  |                  | rows no longer exist once the DELETE has run                       |           |
  *
@@ -103,10 +105,15 @@ function tableOf(writeSql: string): string | null {
   return m === null ? null : m[1];
 }
 
-/** The JOIN key column of an updateMany (`ON <alias>.<col> = JSON_UNQUOTE(…)`). */
-function updateBatchKey(writeSql: string): string | null {
-  const m = /\sON\s+[A-Za-z0-9_]*\.?([A-Za-z0-9_]+)\s*=/i.exec(writeSql);
-  return m === null ? null : m[1];
+/**
+ * EVERY JOIN key column of an updateMany — the target-side column of each `AND`-joined conjunct of
+ * `ON u.k1 = <v.k1> AND u.k2 = <v.k2> SET …` (`json-batch.ts` `mysqlUpdateManyJson`). A composite key
+ * keyed on its first column alone names rows the write never touched. `''` marks an unparsable conjunct.
+ */
+function updateBatchKeys(writeSql: string): string[] {
+  const m = /\sON\s+([\s\S]*?)\s+SET\s/i.exec(writeSql);
+  if (m === null) return [];
+  return m[1].split(/\s+AND\s+/i).map((conj) => /^[A-Za-z0-9_]*\.?([A-Za-z0-9_]+)\s*=/.exec(conj.trim())?.[1] ?? '');
 }
 
 /** The hint's `pk=` columns + `ai=` AUTO_INCREMENT column (absent hint ⇒ `[]` / `''`). */
@@ -155,22 +162,41 @@ export function buildMysqlReselect(sql: string): MysqlReselect | null {
   const isBatch = lower.includes('json_table(');
   const done = (selectSql: string, binds: readonly ReselectBind[], before = false): MysqlReselect =>
     ({ writeSql, selectSql, binds, before });
-  /** Recover a BATCH write's rows by reading its key set back out of the SAME JSON payload it bound. */
-  const jsonSelect = (key: string): string =>
-    `SELECT ${cols} FROM ${table} WHERE ${key} IN ` +
-    `(SELECT JSON_UNQUOTE(jt.${key}) FROM JSON_TABLE(?, '$[*]' COLUMNS(${key} JSON PATH '$.${key}')) jt)${orderBy}`;
+  const writeCols = insertCols(writeSql);
+  /**
+   * Recover a BATCH write's rows by reading its key TUPLES back out of the SAME JSON payload it bound —
+   * every key column, never the first alone (a composite key's first column names other rows too).
+   * The payload's fields ARE the INSERT columns, so a key column outside them would read NULL back and
+   * recover nothing: that fails closed.
+   */
+  const jsonSelect = (keys: readonly string[], what: string): MysqlReselect => {
+    if (lower.startsWith('insert')) {
+      const missing = keys.find((k) => !writeCols.includes(k));
+      if (missing !== undefined) throw new Error(`scp write(mysql): ${what} column '${missing}' is not among the INSERT columns of '${writeSql.slice(0, 60)}…'`);
+    }
+    return done(
+      `SELECT ${cols} FROM ${table} WHERE (${keys.join(', ')}) IN ` +
+        `(SELECT ${keys.map((k) => `JSON_UNQUOTE(jt.${k})`).join(', ')} FROM JSON_TABLE(?, '$[*]' COLUMNS(${keys.map((k) => `${k} JSON PATH '$.${k}'`).join(', ')})) jt)${orderBy}`,
+      [{ kind: 'json' }],
+    );
+  };
+  /** Recover a SINGLE-row INSERT's row by EVERY key column, each bound from its INSERT column position. */
+  const keyedByInsertParams = (keys: readonly string[], what: string): MysqlReselect => {
+    const binds: ReselectBind[] = keys.map((k) => {
+      const index = writeCols.indexOf(k);
+      if (index < 0) throw new Error(`scp write(mysql): ${what} column '${k}' is not among the INSERT columns of '${writeSql.slice(0, 60)}…'`);
+      return { kind: 'param', index };
+    });
+    return done(`SELECT ${cols} FROM ${table} WHERE ${keys.map((k) => `${k} = ?`).join(' AND ')}${orderBy}`, binds);
+  };
 
-  // upsert / upsertMany — by the CONFLICT key. MySQL does not report which row an ON DUPLICATE KEY
-  // UPDATE touched, so the AUTO_INCREMENT range is wrong as soon as a row was updated, not inserted.
+  // upsert / upsertMany — by EVERY column of the CONFLICT key. MySQL does not report which row an ON
+  // DUPLICATE KEY UPDATE touched, so the AUTO_INCREMENT range is wrong as soon as a row was updated.
   if (lower.startsWith('insert') && lower.includes('on duplicate key update')) {
-    const key = conflict[0];
-    if (key === undefined) {
+    if (conflict.length === 0) {
       throw new Error(`scp write(mysql): an upsert…RETURNING needs its conflict key in the pk hint ('${writeSql.slice(0, 60)}…')`);
     }
-    if (isBatch) return done(jsonSelect(key), [{ kind: 'json' }]);
-    const index = insertCols(writeSql).indexOf(key);
-    if (index < 0) throw new Error(`scp write(mysql): conflict key '${key}' is not among the INSERT columns of '${writeSql.slice(0, 60)}…'`);
-    return done(`SELECT ${cols} FROM ${table} WHERE ${key} = ?${orderBy}`, [{ kind: 'param', index }]);
+    return isBatch ? jsonSelect(conflict, 'conflict key') : keyedByInsertParams(conflict, 'conflict key');
   }
 
   // create / createMany — by the AUTO_INCREMENT range [LAST_INSERT_ID, +affected), or by the
@@ -188,35 +214,17 @@ export function buildMysqlReselect(sql: string): MysqlReselect | null {
           `('${writeSql.slice(0, 60)}…'). The producer must pass the model's declared primary key.`,
       );
     }
-    if (isBatch) {
-      // createMany with a CLIENT-supplied key: the statement binds ONE JSON payload, not one param per
-      // key, so the keys are read back out of that SAME payload — as the upsertMany arm does. (An
-      // AUTO_INCREMENT batch never reaches here; its N consecutive ids are the range above.)
-      if (pk.length !== 1) {
-        throw new Error(
-          `scp write(mysql): a batch INSERT…RETURNING on the COMPOSITE key (${pk.join(', ')}) cannot be ` +
-            `recovered from its JSON payload ('${writeSql.slice(0, 60)}…').`,
-        );
-      }
-      return done(jsonSelect(pk[0]), [{ kind: 'json' }]);
-    }
-    const cols4 = insertCols(writeSql);
-    const binds: ReselectBind[] = [];
-    const conds: string[] = [];
-    for (const c of pk) {
-      const index = cols4.indexOf(c);
-      if (index < 0) throw new Error(`scp write(mysql): PK column '${c}' is not among the INSERT columns of '${writeSql.slice(0, 60)}…'`);
-      conds.push(`${c} = ?`);
-      binds.push({ kind: 'param', index });
-    }
-    return done(`SELECT ${cols} FROM ${table} WHERE ${conds.join(' AND ')}${orderBy}`, binds);
+    // createMany with a CLIENT-supplied key: the statement binds ONE JSON payload, not one param per
+    // key, so the key tuples are read back out of that SAME payload — as the upsertMany arm does. (An
+    // AUTO_INCREMENT batch never reaches here; its N consecutive ids are the range above.)
+    return isBatch ? jsonSelect(pk, 'PK') : keyedByInsertParams(pk, 'PK');
   }
 
-  // updateMany — by the batch JOIN key, re-selected from the SAME JSON payload the write bound.
+  // updateMany — by EVERY batch JOIN key column, re-selected from the SAME JSON payload the write bound.
   if (lower.startsWith('update') && isBatch) {
-    const key = updateBatchKey(writeSql);
-    if (key === null) throw new Error(`scp write(mysql): cannot parse the batch JOIN key of '${writeSql.slice(0, 60)}…'`);
-    return done(jsonSelect(key), [{ kind: 'json' }]);
+    const keys = updateBatchKeys(writeSql);
+    if (keys.length === 0 || keys.includes('')) throw new Error(`scp write(mysql): cannot parse the batch JOIN key of '${writeSql.slice(0, 60)}…'`);
+    return jsonSelect(keys, 'JOIN key');
   }
 
   // update / delete — by the write's OWN WHERE predicate, bound from the write's own params. The

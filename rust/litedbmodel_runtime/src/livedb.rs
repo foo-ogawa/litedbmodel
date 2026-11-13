@@ -1242,22 +1242,29 @@ fn table_of(write_sql: &str) -> Option<String> {
     }
 }
 
-/// The JOIN key column of an updateMany (the `ON <alias>.<col> = JSON_UNQUOTE(...)` predicate).
-fn update_batch_key(write_sql: &str) -> Option<String> {
+/// EVERY JOIN key column of an updateMany — the target-side column of each `AND`-joined conjunct of
+/// `ON u.k1 = <v.k1> AND u.k2 = <v.k2> SET …` (json-batch.ts `mysqlUpdateManyJson`). A composite key
+/// keyed on its first column alone names rows the write never touched. `None` ⇒ unparsable.
+fn update_batch_keys(write_sql: &str) -> Option<Vec<String>> {
     let lower = write_sql.to_ascii_lowercase();
     let on = lower.find(" on ")? + " on ".len();
-    let seg_end = lower[on..]
-        .find(" set ")
-        .map(|i| on + i)
-        .unwrap_or(write_sql.len());
-    let seg = &write_sql[on..seg_end]; // e.g. `u.id = JSON_UNQUOTE(v.id)`
-    let lhs = seg.split('=').next()?.trim(); // `u.id`
-    let col = lhs.rsplit('.').next()?.trim().to_string(); // `id`
-    if col.is_empty() {
-        None
-    } else {
-        Some(col)
-    }
+    let seg_end = on + lower[on..].find(" set ")?;
+    // e.g. `u.tenant_id = v.tenant_id and u.id = v.id`, split on its (lowercased) ` and `.
+    lower[on..seg_end]
+        .split(" and ")
+        .scan(on, |at, conj| {
+            let start = *at;
+            *at += conj.len() + " and ".len();
+            Some(&write_sql[start..start + conj.len()])
+        })
+        .map(|conj| {
+            let lhs = conj.split('=').next()?.trim(); // `u.id`
+            let col = lhs.rsplit('.').next()?.trim(); // `id`
+            let ident =
+                !col.is_empty() && col.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+            ident.then(|| col.to_string())
+        })
+        .collect()
 }
 
 /// The `conflict=<cols>` field of a `/*scp:pk=…;conflict=col1,col2*/` hint (the upsert conflict-target
@@ -1312,45 +1319,88 @@ fn build_mysql_reselect(sql: &str) -> Result<Option<MysqlReselect>, SqlFailure> 
     };
     let is_batch = wl.contains("json_table(");
     let insert_cols = parse_insert_cols(&write_sql);
-    let json_select = |key: &str| {
-        format!(
-            "SELECT {cols} FROM {table} WHERE {k} IN (SELECT JSON_UNQUOTE(jt.{k}) FROM JSON_TABLE(?, '$[*]' COLUMNS({k} JSON PATH '$.{k}')) jt){order_by}",
-            k = key
-        )
-    };
-
-    // upsert / upsertMany — recover by the CONFLICT key. MySQL does not report which row an
-    // ON DUPLICATE KEY UPDATE touched, so the AUTO_INCREMENT range is wrong once a row was updated.
-    if wl.starts_with("insert") && wl.contains("on duplicate key update") {
-        let Some(conflict) = conflict_cols.first() else {
+    let is_insert = wl.starts_with("insert");
+    // Recover a BATCH write's rows by reading its key TUPLES back out of the SAME JSON payload it
+    // bound — every key column, never the first alone (a composite key's first column names other
+    // rows too). The payload's fields ARE the INSERT columns, so a key column outside them would read
+    // NULL back and recover nothing: that fails closed.
+    let json_select = |keys: &[String],
+                       what: &str|
+     -> Result<(String, Vec<ReselectBind>), SqlFailure> {
+        if let Some(k) = keys.iter().find(|k| is_insert && !insert_cols.contains(k)) {
             return Err(driver_failure(format!(
-                "scp write(mysql): an upsert…RETURNING needs its conflict key in the pk hint ('{write_sql}')"
+                "scp write(mysql): {what} column '{k}' is not among the INSERT columns of '{write_sql}'"
             )));
-        };
-        let (select_sql, binds) = if is_batch {
-            (json_select(conflict), vec![ReselectBind::JsonParam])
-        } else {
-            let Some(idx) = insert_cols.iter().position(|c| c == conflict) else {
+        }
+        let unq: Vec<String> = keys
+            .iter()
+            .map(|k| format!("JSON_UNQUOTE(jt.{k})"))
+            .collect();
+        let paths: Vec<String> = keys
+            .iter()
+            .map(|k| format!("{k} JSON PATH '$.{k}'"))
+            .collect();
+        Ok((
+            format!(
+                "SELECT {cols} FROM {table} WHERE ({}) IN (SELECT {} FROM JSON_TABLE(?, '$[*]' COLUMNS({})) jt){order_by}",
+                keys.join(", "),
+                unq.join(", "),
+                paths.join(", ")
+            ),
+            vec![ReselectBind::JsonParam],
+        ))
+    };
+    // Recover a SINGLE-row INSERT's row by EVERY key column, each bound from its INSERT column position.
+    let keyed_by_insert_params = |keys: &[String],
+                                  what: &str|
+     -> Result<(String, Vec<ReselectBind>), SqlFailure> {
+        let mut conds: Vec<String> = Vec::new();
+        let mut binds: Vec<ReselectBind> = Vec::new();
+        for k in keys {
+            let Some(idx) = insert_cols.iter().position(|c| c == k) else {
                 return Err(driver_failure(format!(
-                    "scp write(mysql): conflict key '{conflict}' is not among the INSERT columns of '{write_sql}'"
+                    "scp write(mysql): {what} column '{k}' is not among the INSERT columns of '{write_sql}'"
                 )));
             };
-            (
-                format!("SELECT {cols} FROM {table} WHERE {conflict} = ?{order_by}"),
-                vec![ReselectBind::Param(idx)],
-            )
-        };
-        return Ok(Some(MysqlReselect {
+            conds.push(format!("{k} = ?"));
+            binds.push(ReselectBind::Param(idx));
+        }
+        Ok((
+            format!(
+                "SELECT {cols} FROM {table} WHERE {}{order_by}",
+                conds.join(" AND ")
+            ),
+            binds,
+        ))
+    };
+    let after = |write_sql: String, (select_sql, binds): (String, Vec<ReselectBind>)| {
+        Ok(Some(MysqlReselect {
             write_sql,
             select_sql,
             binds,
             before: false,
-        }));
+        }))
+    };
+
+    // upsert / upsertMany — recover by EVERY column of the CONFLICT key. MySQL does not report which
+    // row an ON DUPLICATE KEY UPDATE touched, so the AUTO_INCREMENT range is wrong once a row was updated.
+    if is_insert && wl.contains("on duplicate key update") {
+        if conflict_cols.is_empty() {
+            return Err(driver_failure(format!(
+                "scp write(mysql): an upsert…RETURNING needs its conflict key in the pk hint ('{write_sql}')"
+            )));
+        }
+        let plan = if is_batch {
+            json_select(&conflict_cols, "conflict key")?
+        } else {
+            keyed_by_insert_params(&conflict_cols, "conflict key")?
+        };
+        return after(write_sql, plan);
     }
 
     // create / createMany — recover by the AUTO_INCREMENT range [LAST_INSERT_ID, +affected), or by the
     // client-supplied PK values pulled from the INSERT params by position (UUID / composite / natural key).
-    if wl.starts_with("insert") {
+    if is_insert {
         if !auto_inc.is_empty() && pk_cols.len() == 1 && pk_cols[0] == auto_inc {
             return Ok(Some(MysqlReselect {
                 write_sql,
@@ -1367,57 +1417,26 @@ fn build_mysql_reselect(sql: &str) -> Result<Option<MysqlReselect>, SqlFailure> 
                 "scp write(mysql): an INSERT…RETURNING carries no pk hint, so its written rows cannot be identified ('{write_sql}'). The producer must pass the model's declared primary key"
             )));
         }
-        if is_batch {
-            // createMany with a CLIENT-supplied key: the statement binds ONE JSON payload, not one
-            // param per key, so the keys are read back out of that SAME payload (as upsertMany does).
-            if pk_cols.len() != 1 {
-                return Err(driver_failure(format!(
-                    "scp write(mysql): a batch INSERT…RETURNING on the COMPOSITE key ({}) cannot be recovered from its JSON payload ('{write_sql}')",
-                    pk_cols.join(", ")
-                )));
-            }
-            return Ok(Some(MysqlReselect {
-                select_sql: json_select(&pk_cols[0]),
-                write_sql,
-                binds: vec![ReselectBind::JsonParam],
-                before: false,
-            }));
-        }
-        let mut conds: Vec<String> = Vec::new();
-        let mut binds: Vec<ReselectBind> = Vec::new();
-        for pk in &pk_cols {
-            let Some(idx) = insert_cols.iter().position(|c| c == pk) else {
-                return Err(driver_failure(format!(
-                    "scp write(mysql): PK column '{pk}' is not among the INSERT columns of '{write_sql}'"
-                )));
-            };
-            conds.push(format!("{pk} = ?"));
-            binds.push(ReselectBind::Param(idx));
-        }
-        return Ok(Some(MysqlReselect {
-            write_sql,
-            select_sql: format!(
-                "SELECT {cols} FROM {table} WHERE {}{order_by}",
-                conds.join(" AND ")
-            ),
-            binds,
-            before: false,
-        }));
+        // createMany with a CLIENT-supplied key: the statement binds ONE JSON payload, not one param
+        // per key, so the key tuples are read back out of that SAME payload (as upsertMany does).
+        let plan = if is_batch {
+            json_select(&pk_cols, "PK")?
+        } else {
+            keyed_by_insert_params(&pk_cols, "PK")?
+        };
+        return after(write_sql, plan);
     }
 
-    // updateMany — recover by the batch JOIN key, re-selected from the SAME JSON payload the write bound.
+    // updateMany — recover by EVERY batch JOIN key column, re-selected from the SAME JSON payload the
+    // write bound.
     if wl.starts_with("update") && is_batch {
-        let Some(key) = update_batch_key(&write_sql) else {
+        let Some(keys) = update_batch_keys(&write_sql) else {
             return Err(driver_failure(format!(
                 "scp write(mysql): cannot parse the batch JOIN key of '{write_sql}'"
             )));
         };
-        return Ok(Some(MysqlReselect {
-            write_sql,
-            select_sql: json_select(&key),
-            binds: vec![ReselectBind::JsonParam],
-            before: false,
-        }));
+        let plan = json_select(&keys, "JOIN key")?;
+        return after(write_sql, plan);
     }
 
     // update / delete — recover by the write's OWN WHERE predicate, bound from the write's own params.

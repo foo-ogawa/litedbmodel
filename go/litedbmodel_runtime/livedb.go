@@ -76,8 +76,11 @@ var (
 	writeTableRe = regexp.MustCompile(`(?is)\b(?:INSERT\s+(?:IGNORE\s+)?INTO|UPDATE|DELETE\s+FROM)\s+([A-Za-z_][A-Za-z0-9_]*)`)
 	// The INSERT column list `INSERT [IGNORE] INTO <t> (c1, c2, …)` — for client-PK / conflict-key re-select.
 	insertColsRe = regexp.MustCompile(`(?is)^\s*INSERT\s+(?:IGNORE\s+)?INTO\s+[A-Za-z_][A-Za-z0-9_]*\s*\(([^)]*)\)`)
-	// An updateMany's batch JOIN key: `ON <alias>.<col> = JSON_UNQUOTE(…)`.
-	batchJoinKeyRe = regexp.MustCompile(`(?is)\sON\s+[A-Za-z0-9_]*\.?([A-Za-z0-9_]+)\s*=`)
+	// An updateMany's batch JOIN predicate: `ON u.k1 = <v.k1> AND u.k2 = <v.k2> SET …`.
+	batchJoinOnRe = regexp.MustCompile(`(?is)\sON\s+(.*?)\s+SET\s`)
+	// One `AND`-joined conjunct of that predicate; group 1 is its target-side key column.
+	batchJoinConjRe = regexp.MustCompile(`^[A-Za-z0-9_]*\.?([A-Za-z0-9_]+)\s*=`)
+	andSplitRe      = regexp.MustCompile(`(?i)\s+AND\s+`)
 	// The strip-before-execute PK hint (mysql-returning.ts mysqlPkHint): ` /*scp:pk=cols;ai=<col|>[;conflict=cols]*/`.
 	pkHintRe = regexp.MustCompile(`(?is)\s*/\*scp:pk=([^;*]*);ai=([^;*]*)[^*]*\*/`)
 	// The hint's `;conflict=<cols>` field (the upsert conflict target).
@@ -300,6 +303,26 @@ func splitTrim(s string) []string {
 	return out
 }
 
+// updateBatchKeys is EVERY JOIN key column of an updateMany — the target-side column of each
+// `AND`-joined conjunct of `ON u.k1 = <v.k1> AND u.k2 = <v.k2> SET …` (json-batch.ts
+// mysqlUpdateManyJson). A composite key keyed on its first column alone names rows the write never
+// touched. nil ⇒ the predicate (or one of its conjuncts) does not parse.
+func updateBatchKeys(writeSQL string) []string {
+	m := batchJoinOnRe.FindStringSubmatch(writeSQL)
+	if m == nil {
+		return nil
+	}
+	keys := []string{}
+	for _, conj := range andSplitRe.Split(m[1], -1) {
+		km := batchJoinConjRe.FindStringSubmatch(strings.TrimSpace(conj))
+		if km == nil {
+			return nil
+		}
+		keys = append(keys, km[1])
+	}
+	return keys
+}
+
 func columnIndex(xs []string, want string) int {
 	for i, x := range xs {
 		if x == want {
@@ -335,34 +358,60 @@ func buildMysqlReselect(sql string) (*mysqlReselect, error) {
 		orderBy = " ORDER BY " + strings.Join(pkCols, ", ")
 	}
 	isBatch := strings.Contains(wl, "json_table(")
-	// Recover a BATCH write's rows by reading its key set back out of the SAME JSON payload it bound.
-	jsonSelect := func(key string) string {
-		return fmt.Sprintf(
-			"SELECT %s FROM %s WHERE %s IN (SELECT JSON_UNQUOTE(jt.%s) FROM JSON_TABLE(?, '$[*]' COLUMNS(%s JSON PATH '$.%s')) jt)%s",
-			cols, table, key, key, key, key, orderBy,
-		)
-	}
 	insertCols := []string{}
 	if cm := insertColsRe.FindStringSubmatch(writeSQL); cm != nil {
 		insertCols = splitTrim(cm[1])
 	}
+	// Recover a BATCH write's rows by reading its key TUPLES back out of the SAME JSON payload it bound —
+	// every key column, never the first alone (a composite key's first column names other rows too).
+	// The payload's fields ARE the INSERT columns, so a key column outside them would read NULL back
+	// and recover nothing: that fails closed.
+	jsonSelect := func(keys []string, what string) (*mysqlReselect, error) {
+		if strings.HasPrefix(wl, "insert") {
+			for _, k := range keys {
+				if columnIndex(insertCols, k) < 0 {
+					return nil, fmt.Errorf("scp write(mysql): %s column %q is not among the INSERT columns of %q", what, k, writeSQL)
+				}
+			}
+		}
+		unq := make([]string, len(keys))
+		paths := make([]string, len(keys))
+		for i, k := range keys {
+			unq[i] = "JSON_UNQUOTE(jt." + k + ")"
+			paths[i] = k + " JSON PATH '$." + k + "'"
+		}
+		return &mysqlReselect{writeSQL: writeSQL, selectSQL: fmt.Sprintf(
+			"SELECT %s FROM %s WHERE (%s) IN (SELECT %s FROM JSON_TABLE(?, '$[*]' COLUMNS(%s)) jt)%s",
+			cols, table, strings.Join(keys, ", "), strings.Join(unq, ", "), strings.Join(paths, ", "), orderBy,
+		), binds: []reselectBind{{kind: "json"}}}, nil
+	}
+	// Recover a SINGLE-row INSERT's row by EVERY key column, each bound from its INSERT column position.
+	keyedByInsertParams := func(keys []string, what string) (*mysqlReselect, error) {
+		conds := []string{}
+		binds := []reselectBind{}
+		for _, k := range keys {
+			idx := columnIndex(insertCols, k)
+			if idx < 0 {
+				return nil, fmt.Errorf("scp write(mysql): %s column %q is not among the INSERT columns of %q", what, k, writeSQL)
+			}
+			conds = append(conds, k+" = ?")
+			binds = append(binds, reselectBind{kind: "param", index: idx})
+		}
+		return &mysqlReselect{writeSQL: writeSQL, selectSQL: fmt.Sprintf(
+			"SELECT %s FROM %s WHERE %s%s", cols, table, strings.Join(conds, " AND "), orderBy,
+		), binds: binds}, nil
+	}
 
-	// upsert / upsertMany — by the CONFLICT key. MySQL does not report which row an ON DUPLICATE KEY
-	// UPDATE touched, so the AUTO_INCREMENT range is wrong as soon as a row was updated, not inserted.
+	// upsert / upsertMany — by EVERY column of the CONFLICT key. MySQL does not report which row an ON
+	// DUPLICATE KEY UPDATE touched, so the AUTO_INCREMENT range is wrong as soon as a row was updated.
 	if strings.HasPrefix(wl, "insert") && strings.Contains(wl, "on duplicate key update") {
 		if len(conflict) == 0 {
 			return nil, fmt.Errorf("scp write(mysql): an upsert…RETURNING needs its conflict key in the pk hint (%q)", writeSQL)
 		}
-		key := conflict[0]
 		if isBatch {
-			return &mysqlReselect{writeSQL: writeSQL, selectSQL: jsonSelect(key), binds: []reselectBind{{kind: "json"}}}, nil
+			return jsonSelect(conflict, "conflict key")
 		}
-		idx := columnIndex(insertCols, key)
-		if idx < 0 {
-			return nil, fmt.Errorf("scp write(mysql): conflict key %q is not among the INSERT columns of %q", key, writeSQL)
-		}
-		return &mysqlReselect{writeSQL: writeSQL, selectSQL: fmt.Sprintf("SELECT %s FROM %s WHERE %s = ?%s", cols, table, key, orderBy),
-			binds: []reselectBind{{kind: "param", index: idx}}}, nil
+		return keyedByInsertParams(conflict, "conflict key")
 	}
 
 	// create / createMany — by the AUTO_INCREMENT range [LAST_INSERT_ID, +affected), or by the
@@ -376,37 +425,21 @@ func buildMysqlReselect(sql string) (*mysqlReselect, error) {
 		if len(pkCols) == 0 {
 			return nil, fmt.Errorf("scp write(mysql): an INSERT…RETURNING carries no pk hint, so its written rows cannot be identified (%q). The producer must pass the model's declared primary key", writeSQL)
 		}
+		// createMany with a CLIENT-supplied key: the statement binds ONE JSON payload, not one param per
+		// key, so the key tuples are read back out of that SAME payload (as upsertMany does).
 		if isBatch {
-			// createMany with a CLIENT-supplied key: the statement binds ONE JSON payload, not one
-			// param per key, so the keys are read back out of that SAME payload (as upsertMany does).
-			if len(pkCols) != 1 {
-				return nil, fmt.Errorf("scp write(mysql): a batch INSERT…RETURNING on the COMPOSITE key (%s) cannot be recovered from its JSON payload (%q)", strings.Join(pkCols, ", "), writeSQL)
-			}
-			return &mysqlReselect{writeSQL: writeSQL, selectSQL: jsonSelect(pkCols[0]), binds: []reselectBind{{kind: "json"}}}, nil
+			return jsonSelect(pkCols, "PK")
 		}
-		conds := []string{}
-		binds := []reselectBind{}
-		for _, pk := range pkCols {
-			idx := columnIndex(insertCols, pk)
-			if idx < 0 {
-				return nil, fmt.Errorf("scp write(mysql): PK column %q is not among the INSERT columns of %q", pk, writeSQL)
-			}
-			conds = append(conds, pk+" = ?")
-			binds = append(binds, reselectBind{kind: "param", index: idx})
-		}
-		return &mysqlReselect{writeSQL: writeSQL, selectSQL: fmt.Sprintf(
-			"SELECT %s FROM %s WHERE %s%s", cols, table, strings.Join(conds, " AND "), orderBy,
-		), binds: binds}, nil
+		return keyedByInsertParams(pkCols, "PK")
 	}
 
-	// updateMany — by the batch JOIN key, re-selected from the SAME JSON payload the write bound.
+	// updateMany — by EVERY batch JOIN key column, re-selected from the SAME JSON payload the write bound.
 	if strings.HasPrefix(wl, "update") && isBatch {
-		km := batchJoinKeyRe.FindStringSubmatch(writeSQL)
-		if km == nil {
+		keys := updateBatchKeys(writeSQL)
+		if keys == nil {
 			return nil, fmt.Errorf("scp write(mysql): cannot parse the batch JOIN key of %q", writeSQL)
 		}
-		key := km[1]
-		return &mysqlReselect{writeSQL: writeSQL, selectSQL: jsonSelect(key), binds: []reselectBind{{kind: "json"}}}, nil
+		return jsonSelect(keys, "JOIN key")
 	}
 
 	// update / delete — by the write's OWN WHERE predicate, bound from the write's own params. The

@@ -139,6 +139,7 @@ const LIVE_TESTS = [
   'd3_live_raw_execute_query_through_seam_and_logger',
   'isolation_retry_guard_and_nesting_mysql',
   'isolation_retry_guard_and_nesting_pg',
+  'mysql_returning_composite_key',
   'one_transaction_owns_one_connection_mysql',
   'one_transaction_owns_one_connection_pg',
   'phase_c_connection_routing_and_config',

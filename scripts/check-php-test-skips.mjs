@@ -159,6 +159,7 @@ const LIVE_TESTS = [
   'LiteDbModel\\Runtime\\Tests\\MiddlewareLiveTest::testRawExecuteAndRawQueryThroughLiveSeam',
   'LiteDbModel\\Runtime\\Tests\\MiddlewareLiveTest::testRedProofUnregisteredDoesNotObserveTxControl',
   'LiteDbModel\\Runtime\\Tests\\MiddlewareLiveTest::testRedProofUnregisteredIsBytePassthrough',
+  'LiteDbModel\\Runtime\\Tests\\MysqlReturningLiveTest::testCompositeKeyMatchesEveryColumn',
   'LiteDbModel\\Runtime\\Tests\\TxBoundaryLiveTest::testGuardLive',
   'LiteDbModel\\Runtime\\Tests\\TxBoundaryLiveTest::testIsolationBehaviorLive',
   'LiteDbModel\\Runtime\\Tests\\TxBoundaryLiveTest::testIsolationSqlEmittedLive',

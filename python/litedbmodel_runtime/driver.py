@@ -407,8 +407,11 @@ _DOLLAR_RE = re.compile(r"\$\d+")
 _WRITE_TABLE_RE = re.compile(r"\b(?:INSERT\s+(?:IGNORE\s+)?INTO|UPDATE|DELETE\s+FROM)\s+([A-Za-z0-9_.\"`]+)", re.IGNORECASE)
 # The INSERT column list `INSERT [IGNORE] INTO <t> (c1, c2, …)` — for extracting client-PK values.
 _INSERT_COLS_RE = re.compile(r"\bINSERT\s+(?:IGNORE\s+)?INTO\s+[A-Za-z0-9_.\"`]+\s*\(([^)]*)\)", re.IGNORECASE)
-# The JOIN key column of an updateMany (`ON <alias>.<col> = JSON_UNQUOTE(…)`).
-_BATCH_JOIN_KEY_RE = re.compile(r"\sON\s+[A-Za-z0-9_]*\.?([A-Za-z0-9_]+)\s*=", re.IGNORECASE)
+# An updateMany's JOIN predicate (`ON u.k1 = <v.k1> AND u.k2 = <v.k2> SET …`), and one `AND`-joined
+# conjunct of it (group 1 = its target-side key column).
+_BATCH_JOIN_ON_RE = re.compile(r"\sON\s+(.*?)\s+SET\s", re.IGNORECASE | re.DOTALL)
+_BATCH_JOIN_CONJ_RE = re.compile(r"^[A-Za-z0-9_]*\.?([A-Za-z0-9_]+)\s*=")
+_AND_SPLIT_RE = re.compile(r"\s+AND\s+", re.IGNORECASE)
 # The strip-before-execute PK hint the mysql bundle appends to a write…RETURNING (tx.ts mysqlPkHint):
 #   ` /*scp:pk=col1,col2;ai=<autoIncCol|>[;conflict=cols]*/`
 # STRIP and PARSE are separate patterns, as in the four sibling ports: the strip form must swallow the
@@ -484,6 +487,22 @@ def _parse_conflict_hint(hint_region: str):
     return [c.strip() for c in hm.group(1).split(",") if c.strip()]
 
 
+def _update_batch_keys(write_sql: str):
+    """EVERY JOIN key column of an updateMany — the target-side column of each ``AND``-joined conjunct
+    of ``ON u.k1 = <v.k1> AND u.k2 = <v.k2> SET …`` (json-batch.ts ``mysqlUpdateManyJson``). A composite
+    key keyed on its first column alone names rows the write never touched. ``None`` ⇒ unparsable."""
+    m = _BATCH_JOIN_ON_RE.search(write_sql)
+    if m is None:
+        return None
+    keys = []
+    for conj in _AND_SPLIT_RE.split(m.group(1)):
+        km = _BATCH_JOIN_CONJ_RE.search(conj.strip())
+        if km is None:
+            return None
+        keys.append(km.group(1))
+    return keys
+
+
 def _build_mysql_reselect(sql: str):
     """Derive the MySQL RETURNING recovery for ``sql``, or ``None`` when it declares no RETURNING.
 
@@ -492,9 +511,10 @@ def _build_mysql_reselect(sql: str):
 
       * create / createMany → the AUTO_INCREMENT range ``[LAST_INSERT_ID, +affected)``, or the
         client-supplied PK values pulled from the INSERT params by column position;
-      * upsert / upsertMany → the CONFLICT key (MySQL does not report which row ON DUPLICATE KEY
-        UPDATE touched, so the AUTO_INCREMENT range is wrong once a row was updated);
-      * updateMany → the batch JOIN key, re-bound from the SAME JSON payload;
+      * upsert / upsertMany → EVERY column of the CONFLICT key (MySQL does not report which row ON
+        DUPLICATE KEY UPDATE touched, so the AUTO_INCREMENT range is wrong once a row was updated;
+        one column of a composite key names other rows too);
+      * updateMany → EVERY batch JOIN key column, re-bound from the SAME JSON payload;
       * update → the write's OWN WHERE predicate (after the write — the rows carry their new values);
       * delete → the write's OWN WHERE predicate, selected BEFORE the write (afterwards there is
         nothing left to describe; that pre-image IS the set of rows the DELETE removes).
@@ -526,23 +546,37 @@ def _build_mysql_reselect(sql: str):
     cm = _INSERT_COLS_RE.search(write_sql)
     insert_cols = [c.strip() for c in cm.group(1).split(",")] if cm is not None else []
 
-    def json_select(key: str) -> str:
-        return (
-            f"SELECT {cols} FROM {table} WHERE {key} IN "
-            f"(SELECT JSON_UNQUOTE(jt.{key}) FROM JSON_TABLE(?, '$[*]' COLUMNS({key} JSON PATH '$.{key}')) jt)"
-            f"{order_by}"
-        )
+    def json_select(keys, what: str):
+        # Recover a BATCH write's rows by reading its key TUPLES back out of the SAME JSON payload it
+        # bound — every key column, never the first alone (a composite key's first column names other
+        # rows too). The payload's fields ARE the INSERT columns, so a key column outside them would
+        # read NULL back and recover nothing: that fails closed.
+        if wl.startswith("insert"):
+            for k in keys:
+                if k not in insert_cols:
+                    raise ValueError(f"scp write(mysql): {what} column {k!r} is not among the INSERT columns of {write_sql!r}")
+        unq = ", ".join(f"JSON_UNQUOTE(jt.{k})" for k in keys)
+        paths = ", ".join(f"{k} JSON PATH '$.{k}'" for k in keys)
+        return write_sql, (
+            f"SELECT {cols} FROM {table} WHERE ({', '.join(keys)}) IN "
+            f"(SELECT {unq} FROM JSON_TABLE(?, '$[*]' COLUMNS({paths})) jt){order_by}"
+        ), [("json", 0)], False
 
-    # upsert / upsertMany — by the CONFLICT key.
+    def keyed_by_insert_params(keys, what: str):
+        # Recover a SINGLE-row INSERT's row by EVERY key column, each bound from its INSERT column position.
+        conds, binds = [], []
+        for k in keys:
+            if k not in insert_cols:
+                raise ValueError(f"scp write(mysql): {what} column {k!r} is not among the INSERT columns of {write_sql!r}")
+            conds.append(f"{k} = ?")
+            binds.append(("param", insert_cols.index(k)))
+        return write_sql, f"SELECT {cols} FROM {table} WHERE {' AND '.join(conds)}{order_by}", binds, False
+
+    # upsert / upsertMany — by EVERY column of the CONFLICT key.
     if wl.startswith("insert") and "on duplicate key update" in wl:
         if not conflict:
             raise ValueError(f"scp write(mysql): an upsert…RETURNING needs its conflict key in the pk hint ({write_sql!r})")
-        key = conflict[0]
-        if is_batch:
-            return write_sql, json_select(key), [("json", 0)], False
-        if key not in insert_cols:
-            raise ValueError(f"scp write(mysql): conflict key {key!r} is not among the INSERT columns of {write_sql!r}")
-        return write_sql, f"SELECT {cols} FROM {table} WHERE {key} = ?{order_by}", [("param", insert_cols.index(key))], False
+        return json_select(conflict, "conflict key") if is_batch else keyed_by_insert_params(conflict, "conflict key")
 
     # create / createMany — by the AUTO_INCREMENT range, or by the client-supplied PK values.
     if wl.startswith("insert"):
@@ -553,29 +587,16 @@ def _build_mysql_reselect(sql: str):
                 f"scp write(mysql): an INSERT…RETURNING carries no pk hint, so its written rows cannot be "
                 f"identified ({write_sql!r}). The producer must pass the model's declared primary key."
             )
-        if is_batch:
-            # createMany with a CLIENT-supplied key: the statement binds ONE JSON payload, not one
-            # param per key, so the keys are read back out of that SAME payload (as upsertMany does).
-            if len(pk_cols) != 1:
-                raise ValueError(
-                    f"scp write(mysql): a batch INSERT…RETURNING on the COMPOSITE key "
-                    f"({', '.join(pk_cols)}) cannot be recovered from its JSON payload ({write_sql!r})"
-                )
-            return write_sql, json_select(pk_cols[0]), [("json", 0)], False
-        conds, binds = [], []
-        for pk in pk_cols:
-            if pk not in insert_cols:
-                raise ValueError(f"scp write(mysql): PK column {pk!r} is not among the INSERT columns of {write_sql!r}")
-            conds.append(f"{pk} = ?")
-            binds.append(("param", insert_cols.index(pk)))
-        return write_sql, f"SELECT {cols} FROM {table} WHERE {' AND '.join(conds)}{order_by}", binds, False
+        # createMany with a CLIENT-supplied key: the statement binds ONE JSON payload, not one param
+        # per key, so the key tuples are read back out of that SAME payload (as upsertMany does).
+        return json_select(pk_cols, "PK") if is_batch else keyed_by_insert_params(pk_cols, "PK")
 
-    # updateMany — by the batch JOIN key, re-selected from the SAME JSON payload the write bound.
+    # updateMany — by EVERY batch JOIN key column, re-selected from the SAME JSON payload the write bound.
     if wl.startswith("update") and is_batch:
-        km = _BATCH_JOIN_KEY_RE.search(write_sql)
-        if km is None:
+        keys = _update_batch_keys(write_sql)
+        if keys is None:
             raise ValueError(f"scp write(mysql): cannot parse the batch JOIN key of {write_sql!r}")
-        return write_sql, json_select(km.group(1)), [("json", 0)], False
+        return json_select(keys, "JOIN key")
 
     # update / delete — by the write's OWN WHERE predicate. Index off `wl` (the STRIPPED write's
     # lowercase), not the original sql: `write_sql` is hint-removed and trimmed, so only `wl`'s
