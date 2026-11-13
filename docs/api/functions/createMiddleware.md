@@ -6,7 +6,7 @@
 function createMiddleware<S extends object = Record<string, never>>(config: MiddlewareConfig<S>): CreatedMiddlewareClass<S>;
 ```
 
-Defined in: [Middleware.ts:494](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Middleware.ts#L494)
+Defined in: [Middleware.ts:497](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Middleware.ts#L497)
 
 Create a middleware class from a configuration object.
 

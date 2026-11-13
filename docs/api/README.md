@@ -113,7 +113,7 @@ Defined in: [Column.ts:805](https://github.com/foo-ogawa/litedbmodel/blob/main/s
 type MiddlewareClass = { getCurrentContext(): object };
 ```
 
-Defined in: [Middleware.ts:307](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Middleware.ts#L307)
+Defined in: [Middleware.ts:310](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Middleware.ts#L310)
 
 Type for middleware class (not instance) — what [`DBModel.use`](classes/DBModel.md#use) registers.
 
@@ -138,7 +138,7 @@ runtime-correct call, and every stateful middleware in the README was affected.
 getCurrentContext(): object;
 ```
 
-Defined in: [Middleware.ts:307](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Middleware.ts#L307)
+Defined in: [Middleware.ts:310](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Middleware.ts#L310)
 
 ###### Returns
 
