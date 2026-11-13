@@ -1,6 +1,6 @@
 {
   "name": "litedbmodel",
-  "version": "1.2.19",
+  "version": "1.2.20",
   "description": "A lightweight TypeScript ORM for PostgreSQL, MySQL, and SQLite with Active Record pattern",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -32,8 +32,7 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "lint": "eslint src",
-    "docs": "typedoc",
-    "docs:watch": "typedoc --watch",
+    "docs": "embedoc generate --datasource api && embedoc build docs/api/README.md",
     "prepublishOnly": "npm run clean && npm run build",
     "docker:up": "docker compose -f docker-compose.test.yml up -d",
     "docker:down": "docker compose -f docker-compose.test.yml down",
@@ -71,23 +70,21 @@
     "@types/pg": "^8.10.9",
     "@vitest/coverage-v8": "^4.1.12",
     "better-sqlite3": "^11.0.0",
-    "embedoc": "^0.14.9",
+    "embedoc": "^0.14.13",
     "esbuild": "^0.28.1",
     "eslint": "^9.39.4",
     "globals": "^17.6.0",
     "mysql2": "^3.16.0",
     "pg": "^8.11.3",
     "terser": "^5.44.1",
-    "typedoc": "^0.28.15",
-    "typedoc-plugin-markdown": "^4.9.0",
     "typescript": "^5.3.0",
     "typescript-eslint": "^8.60.0",
     "vitest": "^4.1.12"
   },
   "peerDependencies": {
     "better-sqlite3": "^9.0.0 || ^10.0.0 || ^11.0.0",
-    "mysql2": "^3.0.0",
-    "pg": "^8.0.0"
+    "mysql2": "^3.23.1",
+    "pg": "^8.4.0"
   },
   "peerDependenciesMeta": {
     "pg": {
@@ -107,9 +104,6 @@
     "js-yaml": "^4.2.0",
     "@typescript-eslint/typescript-estree": {
       "minimatch": "^11.0.1"
-    },
-    "embedoc": {
-      "glob": "^14.0.4"
     }
   }
 }

@@ -1,8 +1,4 @@
-[**litedbmodel v1.0.1**](../README.md)
-
-***
-
-[litedbmodel](../globals.md) / belongsTo
+[API](../README.md) / belongsTo
 
 # Function: belongsTo()
 
@@ -10,21 +6,10 @@
 function belongsTo(keys: KeysFactory, options?: RelationDecoratorOptions): PropertyDecorator;
 ```
 
-Defined in: decorators.ts:830
+Defined in: [decorators.ts:838](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/decorators.ts#L838)
 
 BelongsTo relation decorator (N:1).
 Defines a many-to-one relationship where this model belongs to a parent record.
-
-## Parameters
-
-| Parameter | Type | Description |
-| ------ | ------ | ------ |
-| `keys` | `KeysFactory` | Factory function returning [sourceKey, targetKey] or composite key pairs |
-| `options?` | `RelationDecoratorOptions` | Optional order and where clauses |
-
-## Returns
-
-`PropertyDecorator`
 
 ## Example
 
@@ -40,3 +25,15 @@ declare author: Promise<User | null>;
 ])
 declare author: Promise<TenantUser | null>;
 ```
+
+## Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `keys` | `KeysFactory` | Factory function returning [sourceKey, targetKey] or composite key pairs |
+| `options?` | `RelationDecoratorOptions` | Optional order and where clauses |
+
+## Returns
+
+`PropertyDecorator`
+

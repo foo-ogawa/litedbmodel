@@ -1,12 +1,8 @@
-[**litedbmodel v1.0.1**](../README.md)
-
-***
-
-[litedbmodel](../globals.md) / DBHandler
+[API](../README.md) / DBHandler
 
 # Class: DBHandler
 
-Defined in: DBHandler.ts:174
+Defined in: [DBHandler.ts:147](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/DBHandler.ts#L147)
 
 Database handler - wraps a driver and provides a unified interface.
 
@@ -24,13 +20,13 @@ const result = await handler.execute('SELECT * FROM users WHERE id = $1', [1]);
 
 ## Constructors
 
-### Constructor
+### constructor
 
 ```ts
 new DBHandler(config: DBConfig, options?: DBHandlerOptions): DBHandler;
 ```
 
-Defined in: DBHandler.ts:180
+Defined in: [DBHandler.ts:153](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/DBHandler.ts#L153)
 
 #### Parameters
 
@@ -39,25 +35,37 @@ Defined in: DBHandler.ts:180
 | `config` | [`DBConfig`](../interfaces/DBConfig.md) |
 | `options?` | `DBHandlerOptions` |
 
-#### Returns
-
-`DBHandler`
-
 ## Methods
 
 ### getDriverType()
 
 ```ts
-getDriverType(): "postgres" | "mysql" | "sqlite";
+getDriverType(): 'postgres' | 'sqlite' | 'mysql';
 ```
 
-Defined in: DBHandler.ts:198
+Defined in: [DBHandler.ts:171](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/DBHandler.ts#L171)
 
 Get the driver type
 
 #### Returns
 
-`"postgres"` \| `"mysql"` \| `"sqlite"`
+`'postgres' | 'sqlite' | 'mysql'`
+
+***
+
+### getLogger()
+
+```ts
+getLogger(): Logger;
+```
+
+Defined in: [DBHandler.ts:178](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/DBHandler.ts#L178)
+
+Get the logger
+
+#### Returns
+
+`Logger`
 
 ***
 
@@ -67,7 +75,7 @@ Get the driver type
 getDriver(): DBDriver;
 ```
 
-Defined in: DBHandler.ts:205
+Defined in: [DBHandler.ts:185](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/DBHandler.ts#L185)
 
 Get the underlying driver
 
@@ -80,69 +88,72 @@ Get the underlying driver
 ### execute()
 
 ```ts
-execute(sql: string, params: unknown[]): Promise<QueryResult>;
+execute(sql: string, params?: unknown[]): Promise<QueryResult>;
 ```
 
-Defined in: DBHandler.ts:212
+Defined in: [DBHandler.ts:192](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/DBHandler.ts#L192)
 
 Execute a SQL query
 
 #### Parameters
 
-| Parameter | Type | Default value |
+| Parameter | Type | Description |
 | ------ | ------ | ------ |
-| `sql` | `string` | `undefined` |
-| `params` | `unknown`[] | `[]` |
+| `sql` | `string` |  |
+| `params?` | `unknown[]` | **Default** `[]` |
 
 #### Returns
 
-`Promise`\<`QueryResult`\>
+`Promise<QueryResult>`
 
 ***
 
 ### executeWrite()
 
 ```ts
-executeWrite(sql: string, params: unknown[]): Promise<QueryResult>;
+executeWrite(sql: string, params?: unknown[]): Promise<QueryResult>;
 ```
 
-Defined in: DBHandler.ts:222
+Defined in: [DBHandler.ts:202](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/DBHandler.ts#L202)
 
 Execute a write query (INSERT/UPDATE/DELETE)
 
 #### Parameters
 
-| Parameter | Type | Default value |
+| Parameter | Type | Description |
 | ------ | ------ | ------ |
-| `sql` | `string` | `undefined` |
-| `params` | `unknown`[] | `[]` |
+| `sql` | `string` |  |
+| `params?` | `unknown[]` | **Default** `[]` |
 
 #### Returns
 
-`Promise`\<`QueryResult`\>
+`Promise<QueryResult>`
 
 ***
 
 ### executeOnWriter()
 
 ```ts
-executeOnWriter(sql: string, params: unknown[]): Promise<QueryResult>;
+executeOnWriter(sql: string, params?: unknown[], isRead?: boolean): Promise<QueryResult>;
 ```
 
-Defined in: DBHandler.ts:232
+Defined in: [DBHandler.ts:214](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/DBHandler.ts#L214)
 
-Execute a query on writer pool (for withWriter context)
+Execute a query on writer pool (for withWriter context). `isRead` is true for a read-only statement
+routed to the writer: it runs through the driver's `execute`, which decides whether it may be re-sent
+after a connection error; any other statement runs through `executeWrite` and is never re-sent.
 
 #### Parameters
 
-| Parameter | Type | Default value |
+| Parameter | Type | Description |
 | ------ | ------ | ------ |
-| `sql` | `string` | `undefined` |
-| `params` | `unknown`[] | `[]` |
+| `sql` | `string` |  |
+| `params?` | `unknown[]` | **Default** `[]` |
+| `isRead?` | `boolean` | **Default** `false` |
 
 #### Returns
 
-`Promise`\<`QueryResult`\>
+`Promise<QueryResult>`
 
 ***
 
@@ -152,7 +163,7 @@ Execute a query on writer pool (for withWriter context)
 hasWriterPool(): boolean;
 ```
 
-Defined in: DBHandler.ts:242
+Defined in: [DBHandler.ts:224](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/DBHandler.ts#L224)
 
 Check if writer pool is configured
 
@@ -165,16 +176,23 @@ Check if writer pool is configured
 ### getConnection()
 
 ```ts
-getConnection(): Promise<DBConnection>;
+getConnection(checkAttempts?: number): Promise<DBConnection>;
 ```
 
-Defined in: DBHandler.ts:249
+Defined in: [DBHandler.ts:232](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/DBHandler.ts#L232)
 
-Get a connection from the pool (for transactions)
+Get a connection from the pool (for transactions). `checkAttempts`: a retry after a connection error
+takes only a connection that passed a `SELECT 1` probe, trying at most that many.
+
+#### Parameters
+
+| Parameter | Type |
+| ------ | ------ |
+| `checkAttempts?` | `number` |
 
 #### Returns
 
-`Promise`\<`DBConnection`\>
+`Promise<DBConnection>`
 
 ***
 
@@ -184,7 +202,7 @@ Get a connection from the pool (for transactions)
 withConnection(connection: DBConnection): DBHandler;
 ```
 
-Defined in: DBHandler.ts:256
+Defined in: [DBHandler.ts:239](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/DBHandler.ts#L239)
 
 Create handler with specific connection (for transaction)
 
@@ -206,13 +224,13 @@ Create handler with specific connection (for transaction)
 close(): Promise<void>;
 ```
 
-Defined in: DBHandler.ts:268
+Defined in: [DBHandler.ts:251](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/DBHandler.ts#L251)
 
 Close all connections
 
 #### Returns
 
-`Promise`\<`void`\>
+`Promise<void>`
 
 ***
 
@@ -222,7 +240,7 @@ Close all connections
 setLogger(logger: Logger): void;
 ```
 
-Defined in: DBHandler.ts:275
+Defined in: [DBHandler.ts:258](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/DBHandler.ts#L258)
 
 Set logger
 
@@ -238,13 +256,15 @@ Set logger
 
 ***
 
-### ~~getPool()~~
+### getPool()
 
 ```ts
 getPool(): unknown;
 ```
 
-Defined in: DBHandler.ts:284
+Defined in: [DBHandler.ts:267](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/DBHandler.ts#L267)
+
+> **Deprecated** Use driver-specific methods instead
 
 Get the underlying PostgreSQL pool (for backward compatibility)
 
@@ -252,6 +272,3 @@ Get the underlying PostgreSQL pool (for backward compatibility)
 
 `unknown`
 
-#### Deprecated
-
-Use driver-specific methods instead

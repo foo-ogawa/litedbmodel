@@ -1,8 +1,4 @@
-[**litedbmodel v1.0.1**](../README.md)
-
-***
-
-[litedbmodel](../globals.md) / initDBHandler
+[API](../README.md) / initDBHandler
 
 # Function: initDBHandler()
 
@@ -10,7 +6,7 @@
 function initDBHandler(config: DBConfig, options?: DBHandlerOptions): DBHandler;
 ```
 
-Defined in: DBHandler.ts:302
+Defined in: [DBHandler.ts:285](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/DBHandler.ts#L285)
 
 Initialize global handler with config
 
@@ -24,3 +20,4 @@ Initialize global handler with config
 ## Returns
 
 [`DBHandler`](../classes/DBHandler.md)
+

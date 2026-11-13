@@ -1,592 +1,272 @@
-**litedbmodel v1.0.1**
+# litedbmodel API Reference
+
+The public API of the `litedbmodel` package, generated from the sources by `npm run docs`. For how to
+use it, start with the [API Guide](../api-guide.md).
+
+<!--@embedoc:api_index-->
+## Classes
+
+### Core
+
+- [DBModel](classes/DBModel.md)
+
+### Column
+
+- [Values](classes/Values.md)
+- [Conditions](classes/Conditions.md)
+
+### Middleware
+
+- [Middleware](classes/Middleware.md)
+
+### Errors
+
+- [LimitExceededError](classes/LimitExceededError.md)
+- [WriteOutsideTransactionError](classes/WriteOutsideTransactionError.md)
+- [TransactionClosedError](classes/TransactionClosedError.md)
+- [WriteInReadOnlyContextError](classes/WriteInReadOnlyContextError.md)
+
+### Other
+
+- [DBHandler](classes/DBHandler.md)
+- [SqlRaw](classes/SqlRaw.md)
+- [SqlRef](classes/SqlRef.md)
+
+## Interfaces
+
+### Types
+
+- [PkeyResult](interfaces/PkeyResult.md)
+- [ModelOptions](interfaces/ModelOptions.md)
+- [DBConfigOptions](interfaces/DBConfigOptions.md)
+- [LimitConfig](interfaces/LimitConfig.md)
+
+### Other
+
+- [Column](interfaces/Column.md)
+- [MiddlewareConfig](interfaces/MiddlewareConfig.md)
+- [CreatedMiddlewareClass](interfaces/CreatedMiddlewareClass.md)
+- [SqlFragment](interfaces/SqlFragment.md)
+- [SqlTypedFragment](interfaces/SqlTypedFragment.md)
+- [SqlCondition](interfaces/SqlCondition.md)
+- [ColumnOptions](interfaces/ColumnOptions.md)
+- [DBConfig](interfaces/DBConfig.md)
+- [SelectOptions](interfaces/SelectOptions.md)
+- [InsertOptions](interfaces/InsertOptions.md)
+- [UpdateOptions](interfaces/UpdateOptions.md)
+- [DeleteOptions](interfaces/DeleteOptions.md)
+- [UpdateManyOptions](interfaces/UpdateManyOptions.md)
+- [TransactionOptions](interfaces/TransactionOptions.md)
+
+## Type Aliases
+
+### SkipType
+
+```ts
+type SkipType = typeof SKIP;
+```
+
+Defined in: [Column.ts:791](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/Column.ts#L791)
 
 ***
 
-# litedbmodel API Guide
+### MiddlewareClass
 
-A lightweight TypeScript ORM for PostgreSQL, MySQL, and SQLite with Active Record pattern.
-
-## Quick Start
-
-### Database Configuration
-
-```typescript
-import { initDBHandler, createPostgresDriver } from 'litedbmodel';
-import type { DBConfigOptions } from 'litedbmodel';
-
-// PostgreSQL configuration
-const config: DBConfigOptions = {
-  config: {
-    driver: 'postgres',
-    host: 'localhost',
-    port: 5432,
-    database: 'mydb',
-    user: 'user',
-    password: 'pass',
-    max: 10,  // connection pool size
-  },
-  // Optional: separate writer config for read replicas
-  writerConfig: {
-    driver: 'postgres',
-    host: 'primary.db.example.com',
-    database: 'mydb',
-    user: 'writer',
-    password: 'writerpass',
-  },
-};
-
-// Initialize
-await initDBHandler(config);
-
-// Or use factory function for driver
-const driver = createPostgresDriver({
-  config: { host: 'localhost', database: 'mydb', user: 'user', password: 'pass' },
-});
-await initDBHandler({ driver });
+```ts
+type MiddlewareClass = { getCurrentContext(): object };
 ```
 
-See: [DBConfig](interfaces/DBConfig.md), [DBConfigOptions](interfaces/DBConfigOptions.md), [initDBHandler](functions/initDBHandler.md)
+Defined in: [Middleware.ts:296](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/Middleware.ts#L296)
 
-### Model Definition
+Type for middleware class (not instance): what `DBModel.use` needs from it — the current request's
+instance (`getCurrentContext()`), whose hooks are looked up by name. A class made by
+[`createMiddleware`](functions/createMiddleware.md) has its own state shape, so this does not ask for the full `Middleware`.
 
-```typescript
-import { DBModel, model, column, hasMany, belongsTo, hasOne } from 'litedbmodel';
+#### Methods
 
-// Define model class
-@model('users')
-class UserModel extends DBModel {
-  // Primary key (auto-increment)
-  @column({ primaryKey: true }) id?: number;
-  
-  // UUID primary key (PostgreSQL: auto-casts to ::uuid)
-  // @column.uuid({ primaryKey: true }) id?: string;
+##### getCurrentContext()
 
-  // Basic columns (types auto-inferred)
-  @column() name?: string;
-  @column() email?: string;
-  @column() is_active?: boolean;
-  @column() created_at?: Date;
-
-  // Array and JSON columns (explicit type required)
-  @column.stringArray() tags?: string[];
-  @column.json<{ theme: string }>() settings?: { theme: string };
-
-  // Relations
-  @hasMany(() => [User.id, Post.author_id])
-  declare posts: Promise<Post[]>;
-
-  @hasOne(() => [User.id, Profile.user_id])
-  declare profile: Promise<Profile | null>;
-}
-
-// Export with type-safe Column references using asModel()
-export const User = UserModel.asModel();
-export type User = UserModel;
-
-// Now you can use User.id, User.name, etc. as type-safe Column references
-// await User.find([[User.name, 'John']]);
-// await User.find([[User.id, 1], [User.is_active, true]]);
-
-@model('posts')
-class PostModel extends DBModel {
-  @column({ primaryKey: true }) id?: number;
-  @column() author_id?: number;
-  @column() title?: string;
-  @column() content?: string;
-  @column() published_at?: Date;
-
-  @belongsTo(() => [Post.author_id, User.id])
-  declare author: Promise<User | null>;
-}
-export const Post = PostModel.asModel();
-export type Post = PostModel;
-
-@model('profiles')
-class ProfileModel extends DBModel {
-  @column({ primaryKey: true }) id?: number;
-  @column() user_id?: number;
-  @column() bio?: string;
-}
-export const Profile = ProfileModel.asModel();
-export type Profile = ProfileModel;
+```ts
+getCurrentContext(): object;
 ```
 
-**Note:** `asModel()` enables type-safe Column references like `User.id`, `User.name` for use in conditions, ordering, and other operations.
+Defined in: [Middleware.ts:296](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/Middleware.ts#L296)
 
-See: [model](functions/model.md), [column](globals.md#column), [hasMany](functions/hasMany.md), [belongsTo](functions/belongsTo.md), [hasOne](functions/hasOne.md), [DBModel.asModel](classes/DBModel.md#asmodel)
+###### Returns
 
-## Basic CRUD Operations
+`object`
 
-### Find Records
+***
 
-```typescript
-// Find all with conditions
-const users = await User.find([
-  [User.is_active, true],
-]);
+### SqlInterpolation
 
-// Find with multiple conditions
-const users = await User.find([
-  [User.is_active, true],
-  [`${User.created_at} > ?`, new Date('2024-01-01')],
-]);
-
-// Find one record
-const user = await User.findOne([
-  [User.email, 'john@example.com'],
-]);
-
-// Find by primary key
-const users = await User.findById(1);
-const users = await User.findById([1, 2, 3]);
-
-// Count records
-const count = await User.count([
-  [User.is_active, true],
-]);
+```ts
+type SqlInterpolation = | Column<any, any>
+  | SqlRaw
+  | SqlRef
+  | DBParentRef
+  | SqlFragment
+  | SqlCondition<any>
+  | SqlTypedFragment<any, any>
+  | number
+  | string
+  | boolean
+  | Date
+  | bigint
+  | null
+  | undefined
+  | readonly number[]
+  | readonly string[]
+  | readonly boolean[]
+  | readonly Date[]
+  | { TABLE_NAME: string }
+  | { getTableName(): string };
 ```
 
-See: [DBModel.find](classes/DBModel.md#find), [DBModel.findOne](classes/DBModel.md#findone), [DBModel.findById](classes/DBModel.md#findbyid), [SelectOptions](interfaces/SelectOptions.md)
+Defined in: [SqlFragment.ts:93](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/SqlFragment.ts#L93)
 
-### Create Records
+Union of all types allowed as interpolated values in `sql` tagged templates.
 
-```typescript
-// Create single record
-const pkey = await User.create([
-  [User.name, 'John'],
-  [User.email, 'john@example.com'],
-  [User.is_active, true],
-]);
-// pkey = { id: 1 }
+## Variables
 
-// Create with SKIP for conditional fields
-import { SKIP } from 'litedbmodel';
+### Decorators
 
-const pkey = await User.create([
-  [User.name, body.name],
-  [User.email, body.email ?? SKIP],  // Skip if undefined
-]);
+#### column
 
-// Create multiple records
-const pkeys = await User.createMany([
-  [
-    [User.name, 'Alice'],
-    [User.email, 'alice@example.com'],
-  ],
-  [
-    [User.name, 'Bob'],
-    [User.email, 'bob@example.com'],
-  ],
-]);
-
-// UPSERT: Insert or update on conflict
-await User.create(
-  [[User.name, 'John'], [User.email, 'john@example.com']],
-  { onConflict: User.email, onConflictUpdate: [User.name] }
-);
-
-// Insert or ignore on conflict
-await User.create(
-  [[User.name, 'John'], [User.email, 'john@example.com']],
-  { onConflict: User.email, onConflictIgnore: true }
-);
-
-// Composite unique constraint
-await UserPref.createMany([
-  [[UserPref.user_id, 1], [UserPref.key, 'theme'], [UserPref.value, 'dark']],
-], {
-  onConflict: [UserPref.user_id, UserPref.key],
-  onConflictUpdate: [UserPref.value],
-});
+```ts
+const column: ((columnNameOrOptions?: string | ColumnOptions | undefined) => PropertyDecorator) & { boolean: (columnNameOrOptions?: string | ColumnOptions | undefined) => PropertyDecorator; number: (columnNameOrOptions?: string | ColumnOptions | undefined) => PropertyDecorator; bigint: (columnNameOrOptions?: string | ColumnOptions | undefined) => PropertyDecorator; datetime: (columnNameOrOptions?: string | ColumnOptions | undefined) => PropertyDecorator; date: (columnNameOrOptions?: string | ColumnOptions | undefined) => PropertyDecorator; stringArray: (columnNameOrOptions?: string | ColumnOptions | undefined) => PropertyDecorator; intArray: (columnNameOrOptions?: string | ColumnOptions | undefined) => PropertyDecorator; numericArray: (columnNameOrOptions?: string | ColumnOptions | undefined) => PropertyDecorator; booleanArray: (columnNameOrOptions?: string | ColumnOptions | undefined) => PropertyDecorator; datetimeArray: (columnNameOrOptions?: string | ColumnOptions | undefined) => PropertyDecorator; json: <T = Record<string, unknown>>(columnNameOrOptions?: string | ColumnOptions | undefined) => PropertyDecorator; decimal: (columnNameOrOptions?: string | ColumnOptions | undefined) => PropertyDecorator; uuid: (columnNameOrOptions?: string | ColumnOptions | undefined) => PropertyDecorator; custom: <T>(castFn: (value: unknown) => T, serializeFn?: SerializeFn | undefined, columnNameOrOptions?: string | ColumnOptions | undefined) => PropertyDecorator; };
 ```
 
-See: [DBModel.create](classes/DBModel.md#create), [DBModel.createMany](classes/DBModel.md#createmany), [PkeyResult](interfaces/PkeyResult.md), [InsertOptions](interfaces/InsertOptions.md)
+Defined in: [decorators.ts:429](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/decorators.ts#L429)
 
-### Update Records
+Column decorator for defining model properties.
 
+**Auto-inference**: For simple types (boolean, number, Date, bigint),
+type conversion is automatically inferred from the TypeScript property type.
+No need to use explicit variants like `@column.boolean()`.
+
+Auto-inferred types:
 ```typescript
-// Update with conditions
-await User.update(
-  [[User.id, 1]],                    // WHERE conditions
-  [[User.name, 'John Updated']],     // SET values
-);
-
-// Update multiple fields
-await User.update(
-  [[User.id, 1]],
-  [
-    [User.name, 'New Name'],
-    [User.email, 'new@example.com'],
-    [User.is_active, false],
-  ],
-);
-
-// Bulk update with updateMany
-await User.updateMany([
-  [
-    [User.id, 1],
-    [User.name, 'User 1'],
-  ],
-  [
-    [User.id, 2],
-    [User.name, 'User 2'],
-  ],
-]);
-
-// Raw SQL update
-import { dbRaw } from 'litedbmodel';
-
-await User.update(
-  [[User.id, 1]],
-  [[User.login_count, dbRaw('login_count + 1')]],
-);
+@column() id?: number;          // Auto: Number conversion
+@column() name?: string;        // No conversion needed
+@column() is_active?: boolean;  // Auto: Boolean conversion
+@column() created_at?: Date;    // Auto: DateTime conversion
+@column() large_id?: bigint;    // Auto: BigInt conversion
+@column('custom_name') prop?: string;  // Custom column name
 ```
 
-See: [DBModel.update](classes/DBModel.md#update), [DBModel.updateMany](classes/DBModel.md#updatemany), [UpdateOptions](interfaces/UpdateOptions.md)
-
-### Delete Records
-
+Explicit type conversion required (cannot be auto-inferred):
 ```typescript
-await User.delete([
-  [User.id, 1],
-]);
-
-// Delete with multiple conditions
-await User.delete([
-  [User.is_active, false],
-  [`${User.created_at} < ?`, new Date('2023-01-01')],
-]);
+@column.stringArray() tags?: string[];           // Array element type unknown
+@column.intArray() scores?: number[];            // Array element type unknown
+@column.json<MyType>() data?: MyType;            // Generic type unknown
+@column.date() birth_date?: string;              // date vs datetime distinction
+@column.decimal() price?: string;               // NUMERIC / DECIMAL — exact decimal string
 ```
 
-See: [DBModel.delete](classes/DBModel.md#delete), [DeleteOptions](interfaces/DeleteOptions.md)
+Note: The explicit variants (`@column.boolean()`, `@column.datetime()`, etc.)
+still work and can be used when you want to be explicit about the conversion.
 
-## Advanced Queries
+##### Properties
 
-### OR Conditions
+| Property | Type | Description | Defined in |
+| ------ | ------ | ------ | ------ |
+| <a id="boolean"></a> `boolean` | `(columnNameOrOptions?: string \|`[`ColumnOptions`](interfaces/ColumnOptions.md)`\| undefined) => PropertyDecorator` | Boolean type conversion Converts 't'/'f', 'true'/'false', 1/0 to boolean Preserves null for nullable columns, undefined stays undefined<br><br>**Column** .boolean() is_active?: boolean;<br><br>**Example** | [decorators.ts:443](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/decorators.ts#L443) |
+| <a id="number"></a> `number` | `(columnNameOrOptions?: string \|`[`ColumnOptions`](interfaces/ColumnOptions.md)`\| undefined) => PropertyDecorator` | Number type conversion (from string) Preserves null for nullable columns, undefined stays undefined<br><br>**Column** .number() amount?: number;<br><br>**Example** | [decorators.ts:459](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/decorators.ts#L459) |
+| <a id="bigint"></a> `bigint` | `(columnNameOrOptions?: string \|`[`ColumnOptions`](interfaces/ColumnOptions.md)`\| undefined) => PropertyDecorator` | BigInt type conversion Preserves null for nullable columns, undefined stays undefined<br><br>**Column** .bigint() large_id?: bigint;<br><br>**Example** | [decorators.ts:472](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/decorators.ts#L472) |
+| <a id="datetime"></a> `datetime` | `(columnNameOrOptions?: string \|`[`ColumnOptions`](interfaces/ColumnOptions.md)`\| undefined) => PropertyDecorator` | DateTime type conversion (timestamp, timestamptz) Preserves null for nullable columns, undefined stays undefined<br><br>Timezone handling: - PostgreSQL: Serializes to ISO 8601 UTC string with 'Z' suffix for explicit timezone - MySQL/SQLite: Passes Date object to driver (driver-dependent timezone handling)<br><br>**Column** .datetime() created_at?: Date;<br><br>**Example** | [decorators.ts:502](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/decorators.ts#L502) |
+| <a id="date"></a> `date` | `(columnNameOrOptions?: string \|`[`ColumnOptions`](interfaces/ColumnOptions.md)`\| undefined) => PropertyDecorator` | Date type conversion — returns YYYY-MM-DD string. Preserves null for nullable columns, undefined stays undefined.<br><br>DB values (Date object or string) are normalized to 'YYYY-MM-DD' string. On write, string values are passed through; Date objects are formatted as 'YYYY-MM-DD'.<br><br>**Column** .date() birth_date?: string;<br><br>**Example** | [decorators.ts:529](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/decorators.ts#L529) |
+| <a id="stringarray"></a> `stringArray` | `(columnNameOrOptions?: string \|`[`ColumnOptions`](interfaces/ColumnOptions.md)`\| undefined) => PropertyDecorator` | String array type conversion (text[]) Preserves null for nullable columns, undefined stays undefined<br><br>**Column** .stringArray() tags?: string[];<br><br>**Example** | [decorators.ts:568](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/decorators.ts#L568) |
+| <a id="intarray"></a> `intArray` | `(columnNameOrOptions?: string \|`[`ColumnOptions`](interfaces/ColumnOptions.md)`\| undefined) => PropertyDecorator` | Integer array type conversion (integer[]) Preserves null for nullable columns, undefined stays undefined<br><br>**Column** .intArray() scores?: number[];<br><br>**Example** | [decorators.ts:585](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/decorators.ts#L585) |
+| <a id="numericarray"></a> `numericArray` | `(columnNameOrOptions?: string \|`[`ColumnOptions`](interfaces/ColumnOptions.md)`\| undefined) => PropertyDecorator` | Numeric array type conversion (numeric[], allows null elements) Preserves null for nullable columns, undefined stays undefined<br><br>**Column** .numericArray() values?: (number \| null)[];<br><br>**Example** | [decorators.ts:602](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/decorators.ts#L602) |
+| <a id="booleanarray"></a> `booleanArray` | `(columnNameOrOptions?: string \|`[`ColumnOptions`](interfaces/ColumnOptions.md)`\| undefined) => PropertyDecorator` | Boolean array type conversion (boolean[]) Preserves null for nullable columns, undefined stays undefined<br><br>**Column** .booleanArray() flags?: (boolean \| null)[];<br><br>**Example** | [decorators.ts:619](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/decorators.ts#L619) |
+| <a id="datetimearray"></a> `datetimeArray` | `(columnNameOrOptions?: string \|`[`ColumnOptions`](interfaces/ColumnOptions.md)`\| undefined) => PropertyDecorator` | DateTime array type conversion (timestamp[]) Preserves null for nullable columns, undefined stays undefined<br><br>**Column** .datetimeArray() event_dates?: (Date \| null)[];<br><br>**Example** | [decorators.ts:636](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/decorators.ts#L636) |
+| <a id="json"></a> `json` | `<T = Record<string, unknown>>(columnNameOrOptions?: string \|`[`ColumnOptions`](interfaces/ColumnOptions.md)`\| undefined) => PropertyDecorator` | JSON/JSONB type conversion Preserves null for nullable columns, undefined stays undefined<br><br>**Column** .json() metadata?: Record<string, unknown>;<br><br>**Column** .json<UserSettings>() settings?: UserSettings;<br><br>**Examples** | [decorators.ts:662](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/decorators.ts#L662) |
+| <a id="decimal"></a> `decimal` | `(columnNameOrOptions?: string \|`[`ColumnOptions`](interfaces/ColumnOptions.md)`\| undefined) => PropertyDecorator` | Exact decimal type (NUMERIC / DECIMAL) — read back as its exact decimal STRING (a JS number rounds past 2^53). The family states the column is `numeric`, so a write binds the string as a numeric — a batch write (`createMany` / `updateMany`) included.<br><br>**Column** .decimal() price?: string;<br><br>**Example** | [decorators.ts:703](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/decorators.ts#L703) |
+| <a id="uuid"></a> `uuid` | `(columnNameOrOptions?: string \|`[`ColumnOptions`](interfaces/ColumnOptions.md)`\| undefined) => PropertyDecorator` |  | [decorators.ts:715](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/decorators.ts#L715) |
+| <a id="custom"></a> `custom` | `<T>(castFn: (value: unknown) => T, serializeFn?: SerializeFn \| undefined, columnNameOrOptions?: string \|`[`ColumnOptions`](interfaces/ColumnOptions.md)`\| undefined) => PropertyDecorator` | Custom type conversion with user-provided function<br><br>**Column** .custom((v) => String(v).toUpperCase()) status?: string;<br><br>**Column** .custom((v) => v, (v) => JSON.stringify(v)) data?: MyType; // with serializer<br><br>**Examples** | [decorators.ts:737](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/decorators.ts#L737) |
 
-```typescript
-const users = await User.find([
-  User.or(
-    [[User.name, 'Alice']],
-    [[User.name, 'Bob']],
-  ),
-]);
-// WHERE (name = 'Alice' OR name = 'Bob')
+### Other
+
+#### SKIP
+
+```ts
+const SKIP: typeof SKIP;
 ```
 
-### Special Values
+Defined in: [Column.ts:790](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/Column.ts#L790)
+
+Sentinel value to skip a field in create/update operations.
+Use with conditional expressions to keep code as expressions instead of statements.
+
+##### Example
 
 ```typescript
-import { dbNull, dbNotNull, dbIn, dbRaw, dbNow, dbDynamic } from 'litedbmodel';
+// Instead of:
+const updates = new Values<User>();
+if (body.name !== undefined) updates.add(User.name, body.name);
+if (body.email !== undefined) updates.add(User.email, body.email);
 
-// NULL checks
-await User.find([[User.deleted_at, dbNull()]]);     // IS NULL
-await User.find([[User.email, dbNotNull()]]);       // IS NOT NULL
-
-// IN clause (arrays work directly too)
-await User.find([[User.status, ['active', 'pending']]]);
-await User.find([[User.status, dbIn(['active', 'pending'])]]);
-
-// Raw SQL expressions
-await User.update([[User.id, 1]], [[User.count, dbRaw('count + 1')]]);
-
-// NOW() function
-await User.update([[User.id, 1]], [[User.updated_at, dbNow()]]);
-
-// Dynamic SQL with parameters
-await User.find([[User.search, dbDynamic("to_tsvector('english', ?)", [query])]]);
-```
-
-See: [dbNull](functions/dbNull.md), [dbNotNull](functions/dbNotNull.md), [dbIn](functions/dbIn.md), [dbRaw](functions/dbRaw.md), [dbNow](functions/dbNow.md), [dbDynamic](functions/dbDynamic.md)
-
-### Transactions
-
-```typescript
-await User.transaction(async () => {
-  const pkey = await User.create([[User.name, 'New User']]);
-  await Profile.create([
-    [Profile.user_id, pkey.id],
-    [Profile.bio, 'Hello!'],
-  ]);
-  // Auto-commit on success, auto-rollback on error
-});
-
-// Nested transactions (savepoints)
-await User.transaction(async () => {
-  await User.create([[User.name, 'User 1']]);
-  
-  await User.transaction(async () => {
-    await User.create([[User.name, 'User 2']]);
-    // Inner transaction creates a savepoint
-  });
-});
-```
-
-See: [DBModel.transaction](classes/DBModel.md#transaction), [TransactionOptions](interfaces/TransactionOptions.md)
-
-### Raw SQL
-
-```typescript
-// Execute raw SQL
-const result = await User.execute('SELECT COUNT(*) as cnt FROM users WHERE is_active = ?', [true]);
-// result.rows = [{ cnt: 42 }]
-
-// Query with model instantiation
-const users = await User.query('SELECT * FROM users WHERE name LIKE ?', ['%john%']);
-// Returns User[] instances with type casting applied
-```
-
-See: [DBModel.execute](classes/DBModel.md#execute), [DBModel.query](classes/DBModel.md#query)
-
-## Relations
-
-### Defining Relations
-
-```typescript
-@model('users')
-class User extends DBModel {
-  @column({ primaryKey: true }) id?: number;
-
-  // One-to-Many: User has many Posts
-  @hasMany(() => [User.id, Post.author_id])
-  declare posts: Promise<Post[]>;
-
-  // One-to-One: User has one Profile
-  @hasOne(() => [User.id, Profile.user_id])
-  declare profile: Promise<Profile | null>;
-}
-
-@model('posts')
-class Post extends DBModel {
-  @column({ primaryKey: true }) id?: number;
-  @column() author_id?: number;
-
-  // Many-to-One: Post belongs to User
-  @belongsTo(() => [Post.author_id, User.id])
-  declare author: Promise<User | null>;
-}
-```
-
-### Using Relations
-
-```typescript
-const user = await User.findOne([[User.id, 1]]);
-if (user) {
-  // Lazy loading (N+1 safe with batch loading)
-  const posts = await user.posts;
-  const profile = await user.profile;
-}
-
-// Batch loading for multiple records
-const users = await User.find([[User.is_active, true]]);
-for (const user of users) {
-  // First access triggers batch load for ALL users
-  const posts = await user.posts;
-}
-```
-
-See: [hasMany](functions/hasMany.md), [belongsTo](functions/belongsTo.md), [hasOne](functions/hasOne.md)
-
-## Middleware
-
-```typescript
-import { Middleware } from 'litedbmodel';
-
-class LoggingMiddleware extends Middleware {
-  async find<T extends typeof DBModel>(
-    modelClass: T,
-    conditions: Conds,
-    options: SelectOptions | undefined,
-    next: NextFind<T>
-  ): Promise<InstanceType<T>[]> {
-    console.log(`Finding ${modelClass.name}...`);
-    const start = Date.now();
-    const result = await next(conditions, options);
-    console.log(`Found ${result.length} records in ${Date.now() - start}ms`);
-    return result;
-  }
-}
-
-// Register middleware (applies to ALL models)
-DBModel.use(LoggingMiddleware);
-```
-
-See: [Middleware](classes/Middleware.md)
-
-## Dynamic Conditions
-
-```typescript
-import { Conditions, Values, SKIP } from 'litedbmodel';
-
-// Dynamic conditions builder
-const where = new Conditions<User>();
-where.add(User.is_active, true);
-if (query.name) {
-  where.addRaw(`${User.name} LIKE ?`, `%${query.name}%`);
-}
-const users = await User.find(where.build());
-
-// Dynamic values builder
-const values = new Values<User>();
-if (body.name) values.add(User.name, body.name);
-if (body.email) values.add(User.email, body.email);
-await User.update([[User.id, id]], values.build());
-
-// Or use SKIP for inline conditionals
-await User.update([[User.id, id]], [
+// You can write:
+await User.update(conds, [
   [User.name, body.name ?? SKIP],
   [User.email, body.email ?? SKIP],
 ]);
 ```
 
-### SKIP Behavior by Operation
-
-| Operation | SKIP Behavior |
-|-----------|---------------|
-| `find` / `findOne` / `count` | Condition excluded from WHERE |
-| `create` / `update` | Column excluded from INSERT/UPDATE |
-| `createMany` | Column excluded → DB DEFAULT applied |
-| `updateMany` | Column excluded → existing value retained |
-
-```typescript
-// createMany - records grouped by SKIP pattern, each group inserted separately
-await User.createMany([
-  [[User.name, 'John'], [User.email, 'john@test.com']],           // Pattern A
-  [[User.name, 'Jane'], [User.email, SKIP]],                       // Pattern B (email = DEFAULT)
-  [[User.name, 'Bob'], [User.email, SKIP]],                        // Pattern B (batched with Jane)
-]);
-
-// updateMany - SKIPped columns retain existing values
-await User.updateMany([
-  [[User.id, 1], [User.email, 'new@test.com'], [User.status, SKIP]],  // status unchanged
-  [[User.id, 2], [User.email, SKIP], [User.status, 'active']],        // email unchanged
-], { keyColumns: User.id });
-```
-
-### SQL Generation Strategy (Complete Matrix)
-
-| DB | Operation | SKIP | SQL Strategy | SQL Example | Test |
-|----|-----------|------|--------------|-------------|------|
-| PostgreSQL | create | No | VALUES | `INSERT INTO t (name, arr, json) VALUES ($1, '{1,2}', '{"a":1}')` | ✅ |
-| PostgreSQL | create | Yes | VALUES (column excluded) | `INSERT INTO t (name, json) VALUES ($1, '{"a":1}')` - arr excluded | ✅ |
-| PostgreSQL | createMany | No | UNNEST | `INSERT INTO t SELECT v.name, (jsonb->arr), v.json::jsonb FROM UNNEST($1::text[], $2::text[], $3::text[]) AS v` | ✅ |
-| PostgreSQL | createMany | Yes | Group by SKIP pattern -> UNNEST per group | Same as above, SKIP columns excluded from INSERT -> DB DEFAULT | ✅ |
-| PostgreSQL | update | No | SET | `UPDATE t SET name=$1, arr='{1,2}', json='{"a":1}' WHERE id=$2` | ✅ |
-| PostgreSQL | update | Yes | SET (column excluded) | `UPDATE t SET name=$1, json='{"a":1}' WHERE id=$2` - arr excluded | ✅ |
-| PostgreSQL | updateMany | No | UNNEST | `UPDATE t SET arr=(jsonb->arr), json=v.json::jsonb FROM UNNEST(...) AS v WHERE t.id=v.id` | ✅ |
-| PostgreSQL | updateMany | Yes | UNNEST + skip_flag column | `SET arr=CASE WHEN v._skip_arr THEN t.arr ELSE (jsonb->arr) END` | ✅ |
-| MySQL | create | No | VALUES | `INSERT INTO t (name, status) VALUES (?, ?)` | ✅ |
-| MySQL | create | Yes | VALUES (column excluded) | `INSERT INTO t (name) VALUES (?)` - status excluded -> DB DEFAULT | ✅ |
-| MySQL | createMany | No | VALUES ROW | `INSERT INTO t (name, status) VALUES ROW(?,?), ROW(?,?)` | ✅ |
-| MySQL | createMany | Yes | Group by SKIP pattern -> VALUES per group | Same as above, SKIP columns excluded from INSERT -> DB DEFAULT | ✅ |
-| MySQL | update | No | SET | `UPDATE t SET name=?, status=? WHERE id=?` | ✅ |
-| MySQL | update | Yes | SET (column excluded) | `UPDATE t SET name=? WHERE id=?` - status excluded | ✅ |
-| MySQL | updateMany | No | JOIN VALUES ROW | `UPDATE t JOIN (VALUES ROW(?,?)) AS v ON t.id=v.id SET t.col=v.col` | ✅ |
-| MySQL | updateMany | Yes | JOIN VALUES + IF(skip_flag) | `SET t.status=IF(v._skip_status, t.status, v.status)` | ✅ |
-| SQLite | create | No | VALUES | `INSERT INTO t (name, status) VALUES (?, ?)` | ✅ |
-| SQLite | create | Yes | VALUES (column excluded) | `INSERT INTO t (name) VALUES (?)` - status excluded -> DB DEFAULT | ✅ |
-| SQLite | createMany | No | VALUES | `INSERT INTO t (name, status) VALUES (?,?), (?,?)` | ✅ |
-| SQLite | createMany | Yes | Group by SKIP pattern -> VALUES per group | Same as above, SKIP columns excluded from INSERT -> DB DEFAULT | ✅ |
-| SQLite | update | No | SET | `UPDATE t SET name=?, status=? WHERE id=?` | ✅ |
-| SQLite | update | Yes | SET (column excluded) | `UPDATE t SET name=? WHERE id=?` - status excluded | ✅ |
-| SQLite | updateMany | No | CASE WHEN | `UPDATE t SET status=CASE WHEN id=? THEN ? WHEN id=? THEN ? END WHERE id IN (?,?)` | ✅ |
-| SQLite | updateMany | Yes | CASE WHEN + column ref | `SET status=CASE WHEN id=1 THEN ? WHEN id=2 THEN t.status END` - SKIP uses column ref | ✅ |
-
-**Notes:**
-- PostgreSQL array types: In createMany/updateMany, `JSON.stringify()` -> `text[]` -> `jsonb_array_elements_text()` to deserialize
-- PostgreSQL JSON types: In createMany/updateMany, `JSON.stringify()` -> `text[]` -> `::jsonb` cast
-- MySQL/SQLite: Use `@column.json<T[]>()` for array-like data (stored as JSON text)
-- `(jsonb->arr)` = `COALESCE((SELECT array_agg(elem::int) FROM jsonb_array_elements_text(v.col::jsonb) AS elem), ARRAY[]::int[])`
-
-### Architecture: Driver-Specific SQL Building
-
-litedbmodel uses a `SqlBuilder` architecture to generate optimized SQL for each database:
-
-| Driver | Interface | INSERT Strategy | UPDATE Strategy |
-|--------|-----------|-----------------|-----------------|
-| PostgreSQL | `PostgresSqlBuilder` | VALUES for single, UNNEST for batch (2+) | UNNEST with skip flags |
-| MySQL | `MysqlSqlBuilder` | VALUES ROW | JOIN VALUES + IF |
-| SQLite | `SqliteSqlBuilder` | VALUES clause | CASE WHEN |
-
-Each driver also provides `DriverTypeCast` for serialization/deserialization:
-
-```typescript
-interface DriverTypeCast {
-  serializeArray<T>(val: T[]): unknown;      // JS array -> DB format
-  deserializeArray<T>(val: unknown): T[];    // DB value -> JS array
-  serializeJson(val: unknown): unknown;      // JS object -> DB format
-  deserializeJson<T>(val: unknown): T;       // DB value -> JS object
-}
-```
-
-- **PostgreSQL**: Native array format `{1,2,3}`, native JSONB
-- **MySQL**: JSON column type with automatic serialization
-- **SQLite**: TEXT columns with JSON.stringify/JSON.parse
-
-See: [Conditions](classes/Conditions.md), [Values](classes/Values.md), [SKIP](variables/SKIP.md)
-
----
-
-## API Reference
-
-For complete API documentation, see the [API Reference](globals.md).
-
-### Classes
-
-| Class | Description |
-|-------|-------------|
-| [DBModel](classes/DBModel.md) | Base class for all models - CRUD operations, relations, transactions |
-| [Middleware](classes/Middleware.md) | Base class for creating custom middleware |
-| [Values](classes/Values.md) | Dynamic builder for update/create values |
-| [Conditions](classes/Conditions.md) | Dynamic builder for query conditions |
-| [DBHandler](classes/DBHandler.md) | Database connection handler |
-
-### Interfaces
-
-| Interface | Description |
-|-----------|-------------|
-| [Column](interfaces/Column.md) | Type-safe column reference |
-| [DBConfig](interfaces/DBConfig.md) | Database connection settings |
-| [DBConfigOptions](interfaces/DBConfigOptions.md) | Options for initDBHandler |
-| [PkeyResult](interfaces/PkeyResult.md) | Primary key result from create/update |
-| [SelectOptions](interfaces/SelectOptions.md) | Options for find/query operations |
-| [InsertOptions](interfaces/InsertOptions.md) | Options for create operations |
-| [UpdateOptions](interfaces/UpdateOptions.md) | Options for update operations |
-| [DeleteOptions](interfaces/DeleteOptions.md) | Options for delete operations |
-| [TransactionOptions](interfaces/TransactionOptions.md) | Options for transactions |
-| [ModelOptions](interfaces/ModelOptions.md) | Options for @model decorator |
-| [ColumnOptions](interfaces/ColumnOptions.md) | Options for @column decorator |
-| [LimitConfig](interfaces/LimitConfig.md) | Query result limit configuration |
+## Functions
 
 ### Decorators
 
-| Decorator | Description |
-|-----------|-------------|
-| [model](functions/model.md) | Class decorator for defining table name |
-| [column](globals.md#column) | Property decorator for column definition |
-| [hasMany](functions/hasMany.md) | One-to-many relation decorator |
-| [belongsTo](functions/belongsTo.md) | Many-to-one relation decorator |
-| [hasOne](functions/hasOne.md) | One-to-one relation decorator |
+- [hasMany](functions/hasMany.md)
+- [belongsTo](functions/belongsTo.md)
+- [hasOne](functions/hasOne.md)
+- [model](functions/model.md)
 
-### Functions
+### Middleware
 
-| Function | Description |
-|----------|-------------|
-| [initDBHandler](functions/initDBHandler.md) | Initialize database connection |
-| [getDBHandler](functions/getDBHandler.md) | Get current database handler |
-| [closeAllPools](functions/closeAllPools.md) | Close all connection pools |
-| [createPostgresDriver](functions/createPostgresDriver.md) | Create PostgreSQL driver |
-| [createSqliteDriver](functions/createSqliteDriver.md) | Create SQLite driver |
-| [dbNull](functions/dbNull.md) | IS NULL condition |
-| [dbNotNull](functions/dbNotNull.md) | IS NOT NULL condition |
-| [dbIn](functions/dbIn.md) | IN clause helper |
-| [dbRaw](functions/dbRaw.md) | Raw SQL expression |
-| [dbNow](functions/dbNow.md) | NOW() function |
-| [dbDynamic](functions/dbDynamic.md) | Dynamic SQL with parameters |
-| [parentRef](functions/parentRef.md) | Parent column reference for subqueries |
+- [createMiddleware](functions/createMiddleware.md)
 
-### Variables
+### Other
 
-| Variable | Description |
-|----------|-------------|
-| [SKIP](globals.md#skip) | Skip field in create/update |
+- [condsToRecord](functions/condsToRecord.md)
+- [initDBHandler](functions/initDBHandler.md)
+- [getDBHandler](functions/getDBHandler.md)
+- [getDBConfig](functions/getDBConfig.md)
+- [closeAllPools](functions/closeAllPools.md)
+- [getTransactionContext](functions/getTransactionContext.md)
+- [getTransactionConnection](functions/getTransactionConnection.md)
+- [dbNull](functions/dbNull.md)
+- [dbNotNull](functions/dbNotNull.md)
+- [dbTrue](functions/dbTrue.md)
+- [dbFalse](functions/dbFalse.md)
+- [dbNow](functions/dbNow.md)
+- [dbIn](functions/dbIn.md)
+- [dbDynamic](functions/dbDynamic.md)
+- [dbRaw](functions/dbRaw.md)
+- [dbImmediate](functions/dbImmediate.md)
+- [dbCast](functions/dbCast.md)
+- [dbUuid](functions/dbUuid.md)
+- [dbCastIn](functions/dbCastIn.md)
+- [dbUuidIn](functions/dbUuidIn.md)
+- [parentRef](functions/parentRef.md)
+- [isSqlFragment](functions/isSqlFragment.md)
+- [isSqlTypedFragment](functions/isSqlTypedFragment.md)
+- [isSqlCondition](functions/isSqlCondition.md)
+- [isAnySqlFragment](functions/isAnySqlFragment.md)
+- [isSqlRaw](functions/isSqlRaw.md)
+- [isSqlRef](functions/isSqlRef.md)
+- [sql](functions/sql.md)
+- [formatLocalDate](functions/formatLocalDate.md)
+- [formatUTCDate](functions/formatUTCDate.md)
+- [isConnectionError](functions/isConnectionError.md)
+- [createPostgresDriver](functions/createPostgresDriver.md)
+- [createSqliteDriver](functions/createSqliteDriver.md)
+
+## References
+
+### LazyLoadingDBModel
+
+Renames and re-exports [DBModel](classes/DBModel.md)
+
+<!--@embedoc:end-->

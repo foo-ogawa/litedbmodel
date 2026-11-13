@@ -1,29 +1,14 @@
-[**litedbmodel v1.0.1**](../README.md)
-
-***
-
-[litedbmodel](../globals.md) / dbUuid
+[API](../README.md) / dbUuid
 
 # Function: dbUuid()
 
 ```ts
-function dbUuid(value: string, operator: string): DBCast;
+function dbUuid(value: string, operator?: string): DBCast;
 ```
 
-Defined in: DBValues.ts:519
+Defined in: [DBValues.ts:519](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/DBValues.ts#L519)
 
 Create a type-cast UUID value
-
-## Parameters
-
-| Parameter | Type | Default value | Description |
-| ------ | ------ | ------ | ------ |
-| `value` | `string` | `undefined` | The UUID string value |
-| `operator` | `string` | `'='` | The comparison operator (default: '=') |
-
-## Returns
-
-`DBCast`
 
 ## Example
 
@@ -31,3 +16,15 @@ Create a type-cast UUID value
 await User.find([[User.id, dbUuid('123e4567-e89b-12d3-a456-426614174000')]]);
 // → WHERE id = ?::uuid
 ```
+
+## Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `value` | `string` | The UUID string value |
+| `operator?` | `string` | The comparison operator (default: '=') **Default** `'='` |
+
+## Returns
+
+`DBCast`
+

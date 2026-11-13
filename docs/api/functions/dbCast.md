@@ -1,30 +1,24 @@
-[**litedbmodel v1.0.1**](../README.md)
-
-***
-
-[litedbmodel](../globals.md) / dbCast
+[API](../README.md) / dbCast
 
 # Function: dbCast()
 
 ```ts
-function dbCast(
-   value: unknown, 
-   sqlType: string, 
-   operator: string): DBCast;
+function dbCast(value: unknown, sqlType: string, operator?: string): DBCast;
 ```
 
-Defined in: DBValues.ts:503
+Defined in: [DBValues.ts:503](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/DBValues.ts#L503)
 
 Create a type-cast value
 
 ## Parameters
 
-| Parameter | Type | Default value | Description |
-| ------ | ------ | ------ | ------ |
-| `value` | `unknown` | `undefined` | The value to cast |
-| `sqlType` | `string` | `undefined` | The SQL type to cast to (e.g., 'uuid', 'jsonb') |
-| `operator` | `string` | `'='` | The comparison operator (default: '=') |
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `value` | `unknown` | The value to cast |
+| `sqlType` | `string` | The SQL type to cast to (e.g., 'uuid', 'jsonb') |
+| `operator?` | `string` | The comparison operator (default: '=') **Default** `'='` |
 
 ## Returns
 
 `DBCast`
+

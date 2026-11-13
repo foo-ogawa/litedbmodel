@@ -68,9 +68,11 @@ export interface DBDriver {
   executeWrite(sql: string, params?: unknown[]): Promise<QueryResult>;
 
   /**
-   * Get a connection from the pool (for transactions)
+   * Get a connection from the pool (for transactions). `checkAttempts` is given by a retry after a
+   * connection error: each acquired connection is probed and a dead one is destroyed and replaced, at most
+   * that many (`acquireCheckedConnection`).
    */
-  getConnection(): Promise<DBConnection>;
+  getConnection(checkAttempts?: number): Promise<DBConnection>;
 
   /**
    * Close all connections

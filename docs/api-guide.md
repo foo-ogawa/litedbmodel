@@ -41,7 +41,7 @@ const driver = createPostgresDriver({
 await initDBHandler({ driver });
 ```
 
-See: [DBConfig](interfaces/DBConfig.md), [DBConfigOptions](interfaces/DBConfigOptions.md), [initDBHandler](functions/initDBHandler.md)
+See: [DBConfig](api/interfaces/DBConfig.md), [DBConfigOptions](api/interfaces/DBConfigOptions.md), [initDBHandler](api/functions/initDBHandler.md)
 
 ### Model Definition
 
@@ -109,7 +109,7 @@ export type Profile = ProfileModel;
 
 **Note:** `asModel()` enables type-safe Column references like `User.id`, `User.name` for use in conditions, ordering, and other operations.
 
-See: [model](functions/model.md), [column](globals.md#column), [hasMany](functions/hasMany.md), [belongsTo](functions/belongsTo.md), [hasOne](functions/hasOne.md), [DBModel.asModel](classes/DBModel.md#asmodel)
+See: [model](api/functions/model.md), [column](api/README.md#column), [hasMany](api/functions/hasMany.md), [belongsTo](api/functions/belongsTo.md), [hasOne](api/functions/hasOne.md), [DBModel.asModel](api/classes/DBModel.md#asmodel)
 
 ## Basic CRUD Operations
 
@@ -142,7 +142,7 @@ const count = await User.count([
 ]);
 ```
 
-See: [DBModel.find](classes/DBModel.md#find), [DBModel.findOne](classes/DBModel.md#findone), [DBModel.findById](classes/DBModel.md#findbyid), [SelectOptions](interfaces/SelectOptions.md)
+See: [DBModel.find](api/classes/DBModel.md#find), [DBModel.findOne](api/classes/DBModel.md#findone), [DBModel.findById](api/classes/DBModel.md#findbyid), [SelectOptions](api/interfaces/SelectOptions.md)
 
 ### Create Records
 
@@ -196,7 +196,7 @@ await UserPref.createMany([
 });
 ```
 
-See: [DBModel.create](classes/DBModel.md#create), [DBModel.createMany](classes/DBModel.md#createmany), [PkeyResult](interfaces/PkeyResult.md), [InsertOptions](interfaces/InsertOptions.md)
+See: [DBModel.create](api/classes/DBModel.md#create), [DBModel.createMany](api/classes/DBModel.md#createmany), [PkeyResult](api/interfaces/PkeyResult.md), [InsertOptions](api/interfaces/InsertOptions.md)
 
 ### Update Records
 
@@ -238,7 +238,7 @@ await User.update(
 );
 ```
 
-See: [DBModel.update](classes/DBModel.md#update), [DBModel.updateMany](classes/DBModel.md#updatemany), [UpdateOptions](interfaces/UpdateOptions.md)
+See: [DBModel.update](api/classes/DBModel.md#update), [DBModel.updateMany](api/classes/DBModel.md#updatemany), [UpdateOptions](api/interfaces/UpdateOptions.md)
 
 ### Delete Records
 
@@ -254,7 +254,7 @@ await User.delete([
 ]);
 ```
 
-See: [DBModel.delete](classes/DBModel.md#delete), [DeleteOptions](interfaces/DeleteOptions.md)
+See: [DBModel.delete](api/classes/DBModel.md#delete), [DeleteOptions](api/interfaces/DeleteOptions.md)
 
 ## Advanced Queries
 
@@ -293,7 +293,7 @@ await User.update([[User.id, 1]], [[User.updated_at, dbNow()]]);
 await User.find([[User.search, dbDynamic("to_tsvector('english', ?)", [query])]]);
 ```
 
-See: [dbNull](functions/dbNull.md), [dbNotNull](functions/dbNotNull.md), [dbIn](functions/dbIn.md), [dbRaw](functions/dbRaw.md), [dbNow](functions/dbNow.md), [dbDynamic](functions/dbDynamic.md)
+See: [dbNull](api/functions/dbNull.md), [dbNotNull](api/functions/dbNotNull.md), [dbIn](api/functions/dbIn.md), [dbRaw](api/functions/dbRaw.md), [dbNow](api/functions/dbNow.md), [dbDynamic](api/functions/dbDynamic.md)
 
 ### Transactions
 
@@ -318,7 +318,7 @@ await User.transaction(async () => {
 });
 ```
 
-See: [DBModel.transaction](classes/DBModel.md#transaction), [TransactionOptions](interfaces/TransactionOptions.md)
+See: [DBModel.transaction](api/classes/DBModel.md#transaction), [TransactionOptions](api/interfaces/TransactionOptions.md)
 
 ### Raw SQL
 
@@ -332,7 +332,7 @@ const users = await User.query('SELECT * FROM users WHERE name LIKE ?', ['%john%
 // Returns User[] instances with type casting applied
 ```
 
-See: [DBModel.execute](classes/DBModel.md#execute), [DBModel.query](classes/DBModel.md#query)
+See: [DBModel.execute](api/classes/DBModel.md#execute), [DBModel.query](api/classes/DBModel.md#query)
 
 ## Relations
 
@@ -381,7 +381,7 @@ for (const user of users) {
 }
 ```
 
-See: [hasMany](functions/hasMany.md), [belongsTo](functions/belongsTo.md), [hasOne](functions/hasOne.md)
+See: [hasMany](api/functions/hasMany.md), [belongsTo](api/functions/belongsTo.md), [hasOne](api/functions/hasOne.md)
 
 ## Middleware
 
@@ -407,7 +407,7 @@ class LoggingMiddleware extends Middleware {
 DBModel.use(LoggingMiddleware);
 ```
 
-See: [Middleware](classes/Middleware.md)
+See: [Middleware](api/classes/Middleware.md)
 
 ## Dynamic Conditions
 
@@ -519,72 +519,72 @@ interface DriverTypeCast {
 - **MySQL**: JSON column type with automatic serialization
 - **SQLite**: TEXT columns with JSON.stringify/JSON.parse
 
-See: [Conditions](classes/Conditions.md), [Values](classes/Values.md), [SKIP](variables/SKIP.md)
+See: [Conditions](api/classes/Conditions.md), [Values](api/classes/Values.md), [SKIP](api/README.md#skip)
 
 ---
 
 ## API Reference
 
-For complete API documentation, see the [API Reference](globals.md).
+For complete API documentation, see the [API Reference](api/README.md).
 
 ### Classes
 
 | Class | Description |
 |-------|-------------|
-| [DBModel](classes/DBModel.md) | Base class for all models - CRUD operations, relations, transactions |
-| [Middleware](classes/Middleware.md) | Base class for creating custom middleware |
-| [Values](classes/Values.md) | Dynamic builder for update/create values |
-| [Conditions](classes/Conditions.md) | Dynamic builder for query conditions |
-| [DBHandler](classes/DBHandler.md) | Database connection handler |
+| [DBModel](api/classes/DBModel.md) | Base class for all models - CRUD operations, relations, transactions |
+| [Middleware](api/classes/Middleware.md) | Base class for creating custom middleware |
+| [Values](api/classes/Values.md) | Dynamic builder for update/create values |
+| [Conditions](api/classes/Conditions.md) | Dynamic builder for query conditions |
+| [DBHandler](api/classes/DBHandler.md) | Database connection handler |
 
 ### Interfaces
 
 | Interface | Description |
 |-----------|-------------|
-| [Column](interfaces/Column.md) | Type-safe column reference |
-| [DBConfig](interfaces/DBConfig.md) | Database connection settings |
-| [DBConfigOptions](interfaces/DBConfigOptions.md) | Options for initDBHandler |
-| [PkeyResult](interfaces/PkeyResult.md) | Primary key result from create/update |
-| [SelectOptions](interfaces/SelectOptions.md) | Options for find/query operations |
-| [InsertOptions](interfaces/InsertOptions.md) | Options for create operations |
-| [UpdateOptions](interfaces/UpdateOptions.md) | Options for update operations |
-| [DeleteOptions](interfaces/DeleteOptions.md) | Options for delete operations |
-| [TransactionOptions](interfaces/TransactionOptions.md) | Options for transactions |
-| [ModelOptions](interfaces/ModelOptions.md) | Options for @model decorator |
-| [ColumnOptions](interfaces/ColumnOptions.md) | Options for @column decorator |
-| [LimitConfig](interfaces/LimitConfig.md) | Query result limit configuration |
+| [Column](api/interfaces/Column.md) | Type-safe column reference |
+| [DBConfig](api/interfaces/DBConfig.md) | Database connection settings |
+| [DBConfigOptions](api/interfaces/DBConfigOptions.md) | Options for initDBHandler |
+| [PkeyResult](api/interfaces/PkeyResult.md) | Primary key result from create/update |
+| [SelectOptions](api/interfaces/SelectOptions.md) | Options for find/query operations |
+| [InsertOptions](api/interfaces/InsertOptions.md) | Options for create operations |
+| [UpdateOptions](api/interfaces/UpdateOptions.md) | Options for update operations |
+| [DeleteOptions](api/interfaces/DeleteOptions.md) | Options for delete operations |
+| [TransactionOptions](api/interfaces/TransactionOptions.md) | Options for transactions |
+| [ModelOptions](api/interfaces/ModelOptions.md) | Options for @model decorator |
+| [ColumnOptions](api/interfaces/ColumnOptions.md) | Options for @column decorator |
+| [LimitConfig](api/interfaces/LimitConfig.md) | Query result limit configuration |
 
 ### Decorators
 
 | Decorator | Description |
 |-----------|-------------|
-| [model](functions/model.md) | Class decorator for defining table name |
-| [column](globals.md#column) | Property decorator for column definition |
-| [hasMany](functions/hasMany.md) | One-to-many relation decorator |
-| [belongsTo](functions/belongsTo.md) | Many-to-one relation decorator |
-| [hasOne](functions/hasOne.md) | One-to-one relation decorator |
+| [model](api/functions/model.md) | Class decorator for defining table name |
+| [column](api/README.md#column) | Property decorator for column definition |
+| [hasMany](api/functions/hasMany.md) | One-to-many relation decorator |
+| [belongsTo](api/functions/belongsTo.md) | Many-to-one relation decorator |
+| [hasOne](api/functions/hasOne.md) | One-to-one relation decorator |
 
 ### Functions
 
 | Function | Description |
 |----------|-------------|
-| [initDBHandler](functions/initDBHandler.md) | Initialize database connection |
-| [getDBHandler](functions/getDBHandler.md) | Get current database handler |
-| [closeAllPools](functions/closeAllPools.md) | Close all connection pools |
-| [createPostgresDriver](functions/createPostgresDriver.md) | Create PostgreSQL driver |
-| [createSqliteDriver](functions/createSqliteDriver.md) | Create SQLite driver |
-| [dbNull](functions/dbNull.md) | IS NULL condition |
-| [dbNotNull](functions/dbNotNull.md) | IS NOT NULL condition |
-| [dbIn](functions/dbIn.md) | IN clause helper |
-| [dbRaw](functions/dbRaw.md) | Raw SQL expression |
-| [dbNow](functions/dbNow.md) | NOW() function |
-| [dbDynamic](functions/dbDynamic.md) | Dynamic SQL with parameters |
-| [parentRef](functions/parentRef.md) | Parent column reference for subqueries |
+| [initDBHandler](api/functions/initDBHandler.md) | Initialize database connection |
+| [getDBHandler](api/functions/getDBHandler.md) | Get current database handler |
+| [closeAllPools](api/functions/closeAllPools.md) | Close all connection pools |
+| [createPostgresDriver](api/functions/createPostgresDriver.md) | Create PostgreSQL driver |
+| [createSqliteDriver](api/functions/createSqliteDriver.md) | Create SQLite driver |
+| [dbNull](api/functions/dbNull.md) | IS NULL condition |
+| [dbNotNull](api/functions/dbNotNull.md) | IS NOT NULL condition |
+| [dbIn](api/functions/dbIn.md) | IN clause helper |
+| [dbRaw](api/functions/dbRaw.md) | Raw SQL expression |
+| [dbNow](api/functions/dbNow.md) | NOW() function |
+| [dbDynamic](api/functions/dbDynamic.md) | Dynamic SQL with parameters |
+| [parentRef](api/functions/parentRef.md) | Parent column reference for subqueries |
 
 ### Variables
 
 | Variable | Description |
 |----------|-------------|
-| [SKIP](globals.md#skip) | Skip field in create/update |
+| [SKIP](api/README.md#skip) | Skip field in create/update |
 
 

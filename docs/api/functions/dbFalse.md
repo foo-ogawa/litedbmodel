@@ -1,8 +1,4 @@
-[**litedbmodel v1.0.1**](../README.md)
-
-***
-
-[litedbmodel](../globals.md) / dbFalse
+[API](../README.md) / dbFalse
 
 # Function: dbFalse()
 
@@ -10,10 +6,11 @@
 function dbFalse(): DBBoolValue;
 ```
 
-Defined in: DBValues.ts:359
+Defined in: [DBValues.ts:359](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/DBValues.ts#L359)
 
 Create a boolean FALSE value
 
 ## Returns
 
 `DBBoolValue`
+

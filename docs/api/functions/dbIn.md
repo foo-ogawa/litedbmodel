@@ -1,8 +1,4 @@
-[**litedbmodel v1.0.1**](../README.md)
-
-***
-
-[litedbmodel](../globals.md) / dbIn
+[API](../README.md) / dbIn
 
 # Function: dbIn()
 
@@ -10,7 +6,7 @@
 function dbIn(values: unknown[]): DBArrayValue;
 ```
 
-Defined in: DBValues.ts:373
+Defined in: [DBValues.ts:373](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/DBValues.ts#L373)
 
 Create an array value for IN clause
 
@@ -18,8 +14,9 @@ Create an array value for IN clause
 
 | Parameter | Type |
 | ------ | ------ |
-| `values` | `unknown`[] |
+| `values` | `unknown[]` |
 
 ## Returns
 
 `DBArrayValue`
+

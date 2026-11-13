@@ -150,19 +150,17 @@ export class LazyRelationContext {
     const isCompositeKey = (config.targetKeys && config.targetKeys.length > 0) || 
                            (config.sourceKeys && config.sourceKeys.length > 0);
     
-    let mapKey: string;
-    if (isCompositeKey) {
-      // Composite key: join with NUL separator (faster than JSON.stringify)
-      const sourceKeys = config.sourceKeys || [config.sourceKey || this.inferSourceKey(relationType, config)];
-      mapKey = sourceKeys
-        .map(key => (record as unknown as Record<string, unknown>)[key])
-        .join('\x00');
-    } else {
-      const sourceKeyValue = this.getSourceKeyValue(record, relationType, config);
-      mapKey = String(sourceKeyValue);
-    }
-    
-    const result = relationMap.get(mapKey);
+    const tuple = isCompositeKey
+      ? (config.sourceKeys || [config.sourceKey || this.inferSourceKey(relationType, config)])
+          .map(key => (record as unknown as Record<string, unknown>)[key])
+      : [this.getSourceKeyValue(record, relationType, config)];
+    // A key with a null/undefined part relates to nothing — the rule batchLoadRelation already applies
+    // when it collects the keys to load. Stringified, NULL became 'null' (and '' in a composite) and
+    // matched a related row whose key is that text, loaded because another record of the batch references it (#357).
+    // Composite key: join with NUL separator (faster than JSON.stringify)
+    const result = tuple.some(v => v === undefined || v === null)
+      ? undefined
+      : relationMap.get(isCompositeKey ? tuple.join('\x00') : String(tuple[0]));
 
     if (relationType === 'hasMany') {
       return (result as T[]) || [];

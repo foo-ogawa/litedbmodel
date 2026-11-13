@@ -15,7 +15,7 @@ import { createMiddleware as createMiddlewareFn, type Middleware, type Middlewar
 import { serializeRecord, getColumnMeta, getSqlCastMap, type KeyPair, type CompositeKeyPairs } from './decorators';
 import { getTypeCast, getSqlBuilder } from './drivers';
 import type { DriverTypeCast } from './drivers/types';
-import { isConnectionError } from './connection-errors';
+import { isConnectionError, isReadOnlyStatement, DEFAULT_RETRY_LIMIT } from './connection-errors';
 import { WriterStickyClock } from './WriterStickyClock';
 
 // Import LazyRelation module (static import for Vitest compatibility)
@@ -60,6 +60,19 @@ export function getTransactionConnection(): DBConnection | undefined {
  */
 export function getTransactionClient(): DBConnection | undefined {
   return getTransactionConnection();
+}
+
+/**
+ * A page count rendered INLINE as `LIMIT` / `OFFSET` text. The text becomes part of the statement, so
+ * only a non-negative safe integer may reach it: a request value is a string at run time whatever the
+ * `number` type says, and `limit: "1; DELETE …"` was spliced into the SQL and ran (#356). The ONE rule
+ * for both select builders (`_buildSelectSQL` / `buildSelectSQL`).
+ */
+function pageCountText(clause: 'LIMIT' | 'OFFSET', value: unknown): string {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+    throw new TypeError(`${clause} must be a non-negative integer (got ${typeof value})`);
+  }
+  return String(value);
 }
 
 // ============================================
@@ -356,20 +369,6 @@ export abstract class DBModel {
       return txContext.handler;
     }
     return getDBHandler();
-  }
-
-  /**
-   * Whether a raw statement is certainly read-only: it starts with SELECT / SHOW / PRAGMA / VALUES /
-   * TABLE and has no RETURNING, or starts with WITH / EXPLAIN and has no INSERT / UPDATE / DELETE / MERGE
-   * (EXPLAIN ANALYZE runs the statement).
-   * Outside a transaction, `execute()` sends such a statement to the reader (and resends it after a
-   * connection error); any other statement (DDL, maintenance such as VACUUM / CREATE INDEX CONCURRENTLY,
-   * writes including `…RETURNING`) is treated as a write: it goes to the writer and is not resent. @internal
-   */
-  protected static _isReadOnlyStatement(sql: string): boolean {
-    if (/\breturning\b/i.test(sql)) return false;
-    if (/^\s*(with|explain)\b/i.test(sql)) return !/\b(insert|update|delete|merge)\b/i.test(sql);
-    return /^\s*(select|show|pragma|values|table)\b/i.test(sql);
   }
 
   /**
@@ -676,11 +675,11 @@ export abstract class DBModel {
     }
 
     if (options.limit !== undefined) {
-      sql += ` LIMIT ${options.limit}`;
+      sql += ` LIMIT ${pageCountText('LIMIT', options.limit)}`;
     }
 
     if (options.offset !== undefined) {
-      sql += ` OFFSET ${options.offset}`;
+      sql += ` OFFSET ${pageCountText('OFFSET', options.offset)}`;
     }
 
     if (options.forUpdate) {
@@ -771,11 +770,11 @@ export abstract class DBModel {
     }
 
     if (options.limit !== undefined) {
-      sql += ` LIMIT ${options.limit}`;
+      sql += ` LIMIT ${pageCountText('LIMIT', options.limit)}`;
     }
 
     if (options.offset !== undefined) {
-      sql += ` OFFSET ${options.offset}`;
+      sql += ` OFFSET ${pageCountText('OFFSET', options.offset)}`;
     }
 
     if (options.append) {
@@ -820,7 +819,8 @@ export abstract class DBModel {
     }
   ): Promise<InstanceType<T>[]> {
     // Determine effective hardLimit
-    const globalHasManyHardLimit = DBModel._limitConfig.hasManyHardLimit;
+    // The calling model's own cap (inherited from its createDBBase base / setLimitConfig), never the root's (#354).
+    const globalHasManyHardLimit = this._limitConfig.hasManyHardLimit;
     const perRelationHardLimit = relationConfig?.hardLimit;
     
     // null means disabled, undefined means use global
@@ -1013,9 +1013,15 @@ export abstract class DBModel {
       ? 'all' as const
       : options.onConflictUpdate?.map(toColName);
 
+    // A driver without RETURNING (MySQL) cannot tell from an upsert's result which rows it wrote: an updated
+    // row is not in the inserted-id range. So the upsert is sent without RETURNING and its rows are
+    // re-selected by the conflict-key tuples, as updateMany re-selects by its key tuples (#367 / #382).
+    const reselectByConflictKey = options.returning !== undefined && !sqlBuilder.supportsReturning &&
+      onConflictCols !== undefined && onConflictUpdateCols !== undefined && sqlBuilder.buildSelectPkeys !== undefined;
+
     // Execute INSERT for each group
     const allResults: InstanceType<T>[] = [];
-    
+
     for (const { columns, records: groupRecords, rawRecords: groupRawRecords } of groupedByPattern.values()) {
       // Use SqlBuilder to build the INSERT SQL
       const buildResult = sqlBuilder.buildInsert({
@@ -1027,7 +1033,7 @@ export abstract class DBModel {
         onConflict: onConflictCols,
         onConflictIgnore: options.onConflictIgnore,
         onConflictUpdate: onConflictUpdateCols,
-        returning: options.returning,
+        returning: reselectByConflictKey ? undefined : options.returning,
       });
 
       // Handle legacy conflict option (raw SQL string)
@@ -1041,7 +1047,20 @@ export abstract class DBModel {
         }
       }
 
-      const result = await this.execute(sql, buildResult.params);
+      let result = await this.execute(sql, buildResult.params);
+      if (reselectByConflictKey) {
+        const keyValues = groupRecords.map((r) => onConflictCols!.map((c) => r[c]));
+        if (keyValues.some((tuple) => tuple.some((v) => v === undefined || v === null || v instanceof DBToken))) {
+          throw new Error(`upsert with returning: every row needs a plain value for each conflict column (${onConflictCols!.join(', ')}) to re-select the rows it wrote`);
+        }
+        const selectBuild = sqlBuilder.buildSelectPkeys!({
+          tableName,
+          pkeyColumns: options.returning!.split(',').map((c) => c.trim()),
+          keyColumns: onConflictCols!,
+          keyValues,
+        });
+        result = await this.execute(selectBuild.sql, selectBuild.params);
+      }
       const instances = (result.rows as Record<string, unknown>[]).map((row) => this._createInstance<T>(row));
       allResults.push(...instances);
     }
@@ -1174,6 +1193,32 @@ export abstract class DBModel {
       pkeyColumnNames.map(colName => row[colName])
     );
     return { key: pkeyCols, values };
+  }
+
+  /**
+   * For a driver without RETURNING (MySQL): read AND LOCK (`FOR UPDATE`, on the transaction's connection)
+   * the PKs of the rows `conditions` names, and return the condition naming exactly those rows. The write
+   * runs on that condition, so the PKs reported are the rows it wrote. An unlocked pre-select reported a row
+   * that a concurrent request changed or deleted first: both requests were told they wrote it (#361 / #362).
+   * @internal
+   */
+  private static async _lockPkeysForWrite(
+    conditions: ConditionObject,
+    pkeyColumnNames: string[],
+    operation: 'UPDATE' | 'DELETE'
+  ): Promise<{ rows: Record<string, unknown>[]; locked: ConditionObject }> {
+    const selectParams: unknown[] = [];
+    const whereClause = normalizeConditions(conditions).compile(selectParams);
+    if (!whereClause) {
+      throw new Error(`${operation} requires conditions`);
+    }
+    const tableName = this.getUpdateTableName();
+    const selectSql = `SELECT DISTINCT ${pkeyColumnNames.join(', ')} FROM ${tableName} WHERE ${whereClause} FOR UPDATE`;
+    const rows = (await this.execute(selectSql, selectParams)).rows as Record<string, unknown>[];
+    const locked: ConditionObject = pkeyColumnNames.length === 1
+      ? { [pkeyColumnNames[0]]: rows.map(row => row[pkeyColumnNames[0]]) }
+      : { __or__: rows.map(row => Object.fromEntries(pkeyColumnNames.map(col => [col, row[col]]))) };
+    return { rows, locked };
   }
 
   // ============================================
@@ -1722,7 +1767,7 @@ export abstract class DBModel {
       // Determine effective limit: per-relation hardLimit > global hasManyHardLimit
       // undefined = use global, null = no limit
       const effectiveLimit = config.hardLimit === undefined
-        ? DBModel._limitConfig.hasManyHardLimit
+        ? TargetClass._limitConfig.hasManyHardLimit // the target model's own cap, as _selectForRelation reads it (#354)
         : config.hardLimit;
       
       if (effectiveLimit != null && result.length > effectiveLimit) {
@@ -2062,7 +2107,7 @@ export abstract class DBModel {
       const conditionRecord = condsToRecord(conds, this._getConditionTypeCast()) as ConditionObject;
       
       // Apply hardLimit + 1 to detect overflow without fetching all records
-      const hardLimit = DBModel._limitConfig.findHardLimit;
+      const hardLimit = this._limitConfig.findHardLimit; // the calling model's own cap, not the root's (#354)
       const shouldCheckLimit = hardLimit != null && !opts?.limit;
       const effectiveOpts = shouldCheckLimit
         ? { ...opts, limit: hardLimit + 1 }
@@ -2408,26 +2453,12 @@ export abstract class DBModel {
       const sqlBuilder = getSqlBuilder(driverType);
       
       if (!sqlBuilder.supportsReturning) {
-        // Driver without native RETURNING: Pre-SELECT to get PKs
-        const selectParams: unknown[] = [];
-        const normalizedCond = normalizeConditions(conditionRecord);
-        const whereClause = normalizedCond.compile(selectParams);
-        
-        if (!whereClause) {
-          throw new Error('UPDATE requires conditions');
+        // Driver without native RETURNING: lock the rows' PKs, then UPDATE (without RETURNING) exactly those rows
+        const { rows, locked } = await this._lockPkeysForWrite(conditionRecord, pkeyColumnNames, 'UPDATE');
+        if (rows.length > 0) {
+          await this._update(locked, valueRecord, {});
         }
-        
-        const tableName = this.getUpdateTableName();
-        const selectSql = `SELECT DISTINCT ${pkeyColumnNames.join(', ')} FROM ${tableName} WHERE ${whereClause}`;
-        
-        // Execute SELECT first
-        const selectResult = await this.execute(selectSql, selectParams);
-        const pkeyValues = selectResult.rows as Record<string, unknown>[];
-        
-        // Then execute UPDATE (without RETURNING)
-        await this._update(conditionRecord, valueRecord, {});
-        
-        return this._buildPkeyResult(pkeyValues, pkeyColumns);
+        return this._buildPkeyResult(rows, pkeyColumns);
       } else {
         // PostgreSQL/SQLite: Use RETURNING clause
         const updateOpts = { returning: pkeyColumnNames.join(', ') };
@@ -2478,26 +2509,12 @@ export abstract class DBModel {
       const sqlBuilder = getSqlBuilder(driverType);
       
       if (!sqlBuilder.supportsReturning) {
-        // Driver without native RETURNING: Pre-SELECT to get PKs
-        const selectParams: unknown[] = [];
-        const normalizedCond = normalizeConditions(conditionRecord);
-        const whereClause = normalizedCond.compile(selectParams);
-        
-        if (!whereClause) {
-          throw new Error('DELETE requires conditions');
+        // Driver without native RETURNING: lock the rows' PKs, then DELETE (without RETURNING) exactly those rows
+        const { rows, locked } = await this._lockPkeysForWrite(conditionRecord, pkeyColumnNames, 'DELETE');
+        if (rows.length > 0) {
+          await this._delete(locked, {});
         }
-        
-        const tableName = this.getUpdateTableName();
-        const selectSql = `SELECT DISTINCT ${pkeyColumnNames.join(', ')} FROM ${tableName} WHERE ${whereClause}`;
-        
-        // Execute SELECT first
-        const selectResult = await this.execute(selectSql, selectParams);
-        const pkeyValues = selectResult.rows as Record<string, unknown>[];
-        
-        // Then execute DELETE (without RETURNING)
-        await this._delete(conditionRecord, {});
-        
-        return this._buildPkeyResult(pkeyValues, pkeyColumns);
+        return this._buildPkeyResult(rows, pkeyColumns);
       } else {
         // PostgreSQL/SQLite: Use RETURNING clause
         const deleteOpts = { returning: pkeyColumnNames.join(', ') };
@@ -2694,8 +2711,10 @@ export abstract class DBModel {
     const core = async (s: string, p?: unknown[]): Promise<ExecuteResult> => {
       const handler = this.getHandler();
       
-      // The writer for a statement that is not certainly read-only, inside withWriter, or while writer-sticky
-      const isReadOnly = this._isReadOnlyStatement(s);
+      // The writer for a statement that is not certainly read-only (…RETURNING, SELECT … FOR UPDATE, SELECT …
+      // INTO included), inside withWriter, or while writer-sticky. Whether a read may be re-sent after a
+      // connection error is the driver's decision (isResendableStatement).
+      const isReadOnly = isReadOnlyStatement(s);
       const useWriter = !isReadOnly || this._getWriterContext().getStore() !== undefined || this._shouldUseWriterSticky();
       const result = useWriter
         ? await handler.executeOnWriter(s, p || [], isReadOnly)
@@ -2823,7 +2842,7 @@ export abstract class DBModel {
     const handler = this.getHandler();
 
     const retryOnError = options.retryOnError ?? true;
-    const retryLimit = options.retryLimit ?? 3;
+    const retryLimit = options.retryLimit ?? DEFAULT_RETRY_LIMIT;
     const retryDuration = options.retryDuration ?? 200;
     const rollbackOnly = options.rollbackOnly ?? false;
     
@@ -2833,11 +2852,14 @@ export abstract class DBModel {
       this._configOptions.useWriterAfterTransaction ?? true;
 
     let attempt = 0;
+    // Set when the previous attempt failed with a connection error: the pool may still hold dead
+    // connections, so this attempt runs only on a connection that passed a probe (at most retryLimit tried).
+    let afterConnectionError = false;
 
     while (true) {
       attempt++;
       // A given connection is released by whoever acquired it, never here
-      const connection = options.connection ?? await handler.getConnection();
+      const connection = options.connection ?? await handler.getConnection(afterConnectionError ? retryLimit : undefined);
       let destroyConnection = false;
       let committing = false;
       // func sees the connection only through this guard; BEGIN/COMMIT/ROLLBACK use `connection` directly
@@ -2904,6 +2926,7 @@ export abstract class DBModel {
           !((committing || options.connection) && isConnectionError(error as Error)) &&
           this.isRetryableError(error as Error)
         ) {
+          afterConnectionError = isConnectionError(error as Error);
           await this.sleep(retryDuration * Math.pow(2, attempt - 1));
           continue;
         }

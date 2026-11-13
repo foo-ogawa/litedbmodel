@@ -1,8 +1,4 @@
-[**litedbmodel v1.0.1**](../README.md)
-
-***
-
-[litedbmodel](../globals.md) / isSqlRef
+[API](../README.md) / isSqlRef
 
 # Function: isSqlRef()
 
@@ -10,7 +6,7 @@
 function isSqlRef(value: unknown): value is SqlRef;
 ```
 
-Defined in: SqlFragment.ts:158
+Defined in: [SqlFragment.ts:169](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/SqlFragment.ts#L169)
 
 ## Parameters
 
@@ -20,4 +16,5 @@ Defined in: SqlFragment.ts:158
 
 ## Returns
 
-`value is SqlRef`
+`value is`[`SqlRef`](../classes/SqlRef.md)
+

@@ -1,12 +1,8 @@
-[**litedbmodel v1.0.1**](../README.md)
-
-***
-
-[litedbmodel](../globals.md) / Conditions
+[API](../README.md) / Conditions
 
 # Class: Conditions\<Model\>
 
-Defined in: Column.ts:628
+Defined in: [Column.ts:639](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/Column.ts#L639)
 
 Type-safe builder for query conditions.
 Use array literals for static conditions, builder for dynamic construction.
@@ -41,13 +37,13 @@ if (query.active) where.add(User.is_active, true);
 
 ## Constructors
 
-### Constructor
+### constructor
 
 ```ts
-new Conditions<Model>(initial?: Conds): Conditions<Model>;
+new Conditions(initial?: Conds): Conditions<Model>;
 ```
 
-Defined in: Column.ts:634
+Defined in: [Column.ts:645](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/Column.ts#L645)
 
 Create a Conditions builder, optionally with initial conditions.
 
@@ -57,25 +53,19 @@ Create a Conditions builder, optionally with initial conditions.
 | ------ | ------ |
 | `initial?` | `Conds` |
 
-#### Returns
-
-`Conditions`\<`Model`\>
-
 ## Accessors
 
 ### length
-
-#### Get Signature
 
 ```ts
 get length(): number;
 ```
 
-Defined in: Column.ts:700
+Defined in: [Column.ts:711](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/Column.ts#L711)
 
 Get the number of conditions.
 
-##### Returns
+#### Returns
 
 `number`
 
@@ -87,7 +77,7 @@ Get the number of conditions.
 add<V>(column: Column<V, Model>, value: V | null | undefined): this;
 ```
 
-Defined in: Column.ts:643
+Defined in: [Column.ts:654](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/Column.ts#L654)
 
 Add a type-safe column equality condition.
 
@@ -101,8 +91,8 @@ Add a type-safe column equality condition.
 
 | Parameter | Type |
 | ------ | ------ |
-| `column` | [`Column`](../interfaces/Column.md)\<`V`, `Model`\> |
-| `value` | `V` \| `null` \| `undefined` |
+| `column` | [`Column`](../interfaces/Column.md)`<V, Model>` |
+| `value` | `V \| null \| undefined` |
 
 #### Returns
 
@@ -116,7 +106,7 @@ Add a type-safe column equality condition.
 addRaw(condition: string, value?: unknown): this;
 ```
 
-Defined in: Column.ts:651
+Defined in: [Column.ts:662](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/Column.ts#L662)
 
 Add a raw condition with template literal (e.g., `${User.age} > ?`).
 
@@ -135,68 +125,66 @@ Add a raw condition with template literal (e.g., `${User.age} > ?`).
 
 ### addSql()
 
-#### Call Signature
-
 ```ts
 addSql<V>(fragment: SqlTypedFragment<V, Model>, value: V): this;
 ```
 
-Defined in: Column.ts:670
+Defined in: [Column.ts:681](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/Column.ts#L681)
 
 Add a type-safe sql-tagged condition.
 
-##### Type Parameters
+#### Example
+
+```typescript
+const where = new Conditions<User>();
+where.addSql(sql`${User.age} > ?`, 18);
+where.addSql(sql`${User.deleted_at} IS NULL`);
+```
+
+#### Type Parameters
 
 | Type Parameter |
 | ------ |
 | `V` |
 
-##### Parameters
+#### Parameters
 
 | Parameter | Type |
 | ------ | ------ |
-| `fragment` | [`SqlTypedFragment`](../interfaces/SqlTypedFragment.md)\<`V`, `Model`\> |
+| `fragment` | [`SqlTypedFragment`](../interfaces/SqlTypedFragment.md)`<V, Model>` |
 | `value` | `V` |
 
-##### Returns
+#### Returns
 
 `this`
 
-##### Example
-
-```typescript
-const where = new Conditions<User>();
-where.addSql(sql`${User.age} > ?`, 18);
-where.addSql(sql`${User.deleted_at} IS NULL`);
-```
-
-#### Call Signature
+***
 
 ```ts
 addSql(fragment: SqlTypedFragment<any, Model>): this;
 ```
 
-Defined in: Column.ts:671
+Defined in: [Column.ts:682](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/Column.ts#L682)
 
 Add a type-safe sql-tagged condition.
 
-##### Parameters
-
-| Parameter | Type |
-| ------ | ------ |
-| `fragment` | [`SqlTypedFragment`](../interfaces/SqlTypedFragment.md)\<`any`, `Model`\> |
-
-##### Returns
-
-`this`
-
-##### Example
+#### Example
 
 ```typescript
 const where = new Conditions<User>();
 where.addSql(sql`${User.age} > ?`, 18);
 where.addSql(sql`${User.deleted_at} IS NULL`);
 ```
+
+#### Parameters
+
+| Parameter | Type |
+| ------ | ------ |
+| `fragment` | [`SqlTypedFragment`](../interfaces/SqlTypedFragment.md)`<any, Model>` |
+
+#### Returns
+
+`this`
 
 ***
 
@@ -206,7 +194,7 @@ where.addSql(sql`${User.deleted_at} IS NULL`);
 or(...condGroups: readonly Conds[]): this;
 ```
 
-Defined in: Column.ts:685
+Defined in: [Column.ts:696](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/Column.ts#L696)
 
 Add an OR condition group.
 
@@ -214,7 +202,7 @@ Add an OR condition group.
 
 | Parameter | Type |
 | ------ | ------ |
-| ...`condGroups` | readonly `Conds`[] |
+| `...condGroups` | `readonly Conds[]` |
 
 #### Returns
 
@@ -228,10 +216,11 @@ Add an OR condition group.
 build(): Conds;
 ```
 
-Defined in: Column.ts:693
+Defined in: [Column.ts:704](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/Column.ts#L704)
 
 Build the final array for use with find/count/delete.
 
 #### Returns
 
 `Conds`
+
