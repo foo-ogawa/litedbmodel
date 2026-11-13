@@ -1013,9 +1013,15 @@ export abstract class DBModel {
       ? 'all' as const
       : options.onConflictUpdate?.map(toColName);
 
+    // A driver without RETURNING (MySQL) cannot tell from an upsert's result which rows it wrote: an updated
+    // row is not in the inserted-id range. So the upsert is sent without RETURNING and its rows are
+    // re-selected by the conflict-key tuples, as updateMany re-selects by its key tuples (#367 / #382).
+    const reselectByConflictKey = options.returning !== undefined && !sqlBuilder.supportsReturning &&
+      onConflictCols !== undefined && onConflictUpdateCols !== undefined && sqlBuilder.buildSelectPkeys !== undefined;
+
     // Execute INSERT for each group
     const allResults: InstanceType<T>[] = [];
-    
+
     for (const { columns, records: groupRecords, rawRecords: groupRawRecords } of groupedByPattern.values()) {
       // Use SqlBuilder to build the INSERT SQL
       const buildResult = sqlBuilder.buildInsert({
@@ -1027,7 +1033,7 @@ export abstract class DBModel {
         onConflict: onConflictCols,
         onConflictIgnore: options.onConflictIgnore,
         onConflictUpdate: onConflictUpdateCols,
-        returning: options.returning,
+        returning: reselectByConflictKey ? undefined : options.returning,
       });
 
       // Handle legacy conflict option (raw SQL string)
@@ -1041,7 +1047,20 @@ export abstract class DBModel {
         }
       }
 
-      const result = await this.execute(sql, buildResult.params);
+      let result = await this.execute(sql, buildResult.params);
+      if (reselectByConflictKey) {
+        const keyValues = groupRecords.map((r) => onConflictCols!.map((c) => r[c]));
+        if (keyValues.some((tuple) => tuple.some((v) => v === undefined || v === null || v instanceof DBToken))) {
+          throw new Error(`upsert with returning: every row needs a plain value for each conflict column (${onConflictCols!.join(', ')}) to re-select the rows it wrote`);
+        }
+        const selectBuild = sqlBuilder.buildSelectPkeys!({
+          tableName,
+          pkeyColumns: options.returning!.split(',').map((c) => c.trim()),
+          keyColumns: onConflictCols!,
+          keyValues,
+        });
+        result = await this.execute(selectBuild.sql, selectBuild.params);
+      }
       const instances = (result.rows as Record<string, unknown>[]).map((row) => this._createInstance<T>(row));
       allResults.push(...instances);
     }

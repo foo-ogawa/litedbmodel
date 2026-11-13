@@ -171,11 +171,18 @@ function extractTableName(sql: string): string | null {
 }
 
 /**
- * Remove RETURNING clause from SQL (MySQL doesn't support it)
+ * Remove RETURNING clause from SQL (MySQL doesn't support it). The rows are then re-selected by the
+ * inserted AUTO_INCREMENT range, which cannot describe an `ON DUPLICATE KEY UPDATE`: a row it updated is
+ * not in that range (it counts 2 in affectedRows), so the range names other rows — another tenant's. Such
+ * a statement is refused before it is sent (#367); `create` / `createMany` with `onConflict` re-select an
+ * upsert's rows by its conflict key instead.
  */
 function removeReturning(sql: string): { sql: string; hasReturning: boolean; returningCols: string } {
   const match = sql.match(/\s+RETURNING\s+(.+)$/i);
   if (match) {
+    if (/\bON\s+DUPLICATE\s+KEY\s+UPDATE\b/i.test(sql)) {
+      throw new Error('MySQL: RETURNING on INSERT … ON DUPLICATE KEY UPDATE is not supported (the rows it updated cannot be identified); use create/createMany with onConflict and returning: true');
+    }
     return {
       sql: sql.replace(/\s+RETURNING\s+.+$/i, ''),
       hasReturning: true,

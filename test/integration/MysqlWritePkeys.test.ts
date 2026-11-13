@@ -19,16 +19,83 @@ class PostModel extends Base {
 }
 const Post = PostModel.asModel();
 
+const ACCOUNTS = `mwp_accounts_${process.pid}`;
+
+@model(ACCOUNTS)
+class AccountModel extends Base {
+  @column({ primaryKey: true }) id?: number;
+  @column() tenant_id?: number;
+  @column() email?: string;
+  @column() name?: string;
+}
+const Account = AccountModel.asModel();
+
 describe.skipIf(skipIntegrationTests)('MySQL write PKs (live)', () => {
   beforeAll(async () => {
     await Base.transaction(async () => {
       await Base.execute(`DROP TABLE IF EXISTS ${POSTS}`);
       await Base.execute(`CREATE TABLE ${POSTS} (id INT AUTO_INCREMENT PRIMARY KEY, user_id INT NOT NULL, title VARCHAR(50) NOT NULL, content VARCHAR(50) NOT NULL)`);
+      await Base.execute(`DROP TABLE IF EXISTS ${ACCOUNTS}`);
+      await Base.execute(`CREATE TABLE ${ACCOUNTS} (id INT AUTO_INCREMENT PRIMARY KEY, tenant_id INT NOT NULL, email VARCHAR(100) NOT NULL UNIQUE, name VARCHAR(50) NOT NULL)`);
     });
   });
 
   afterAll(async () => {
-    await Base.transaction(() => Base.execute(`DROP TABLE IF EXISTS ${POSTS}`));
+    await Base.transaction(async () => {
+      await Base.execute(`DROP TABLE IF EXISTS ${POSTS}`);
+      await Base.execute(`DROP TABLE IF EXISTS ${ACCOUNTS}`);
+    });
+  });
+
+  describe('upsert … RETURNING reports only the rows the statement wrote (#367 / #382)', () => {
+    async function seed(): Promise<number[]> {
+      return Base.transaction(async () => {
+        await Base.execute(`DELETE FROM ${ACCOUNTS}`);
+        const r = await Account.createMany(
+          [
+            [[Account.tenant_id, 1], [Account.email, 'a@t1'], [Account.name, 'a']],
+            [[Account.tenant_id, 2], [Account.email, 'b@t2'], [Account.name, 'b']],
+          ],
+          { returning: true },
+        );
+        return r!.values.map((v) => Number(v[0]));
+      });
+    }
+
+    it("an upsert that updates an existing row returns that row's PK only, not the id+1 row of another tenant", async () => {
+      const [a] = await seed();
+      const result = await Base.transaction(() =>
+        Account.create(
+          [[Account.tenant_id, 1], [Account.email, 'a@t1'], [Account.name, 'a2']],
+          { onConflict: Account.email, onConflictUpdate: [Account.name], returning: true },
+        ),
+      );
+      expect(result!.values.map((v) => Number(v[0]))).toEqual([a]);
+    });
+
+    it('a multi-row upsert (one update, one insert) returns the PKs of both written rows', async () => {
+      const [a] = await seed();
+      const result = await Base.transaction(() =>
+        Account.createMany(
+          [
+            [[Account.tenant_id, 1], [Account.email, 'a@t1'], [Account.name, 'a3']],
+            [[Account.tenant_id, 1], [Account.email, 'c@t1'], [Account.name, 'c']],
+          ],
+          { onConflict: Account.email, onConflictUpdate: [Account.name], returning: true },
+        ),
+      );
+      const [c] = (await Account.find([[Account.email, 'c@t1']])).map((r) => r.id!);
+      expect(result!.values.map((v) => Number(v[0])).sort((x, y) => x - y)).toEqual([a, c]);
+    });
+
+    it('the driver refuses a raw INSERT … ON DUPLICATE KEY UPDATE … RETURNING before sending it', async () => {
+      await seed();
+      await expect(Base.transaction(() => Base.execute(
+        `INSERT INTO ${ACCOUNTS} (tenant_id, email, name) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE name = VALUES(name) RETURNING id`,
+        [1, 'a@t1', 'raw'],
+      ))).rejects.toThrow(/ON DUPLICATE KEY UPDATE is not supported/);
+      expect((await Account.find([[Account.email, 'a@t1']]))[0].name).toBe('a');
+    });
   });
 
   describe('updateMany returning with composite keyColumns (#375)', () => {
