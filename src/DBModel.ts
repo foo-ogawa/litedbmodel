@@ -833,7 +833,8 @@ export abstract class DBModel {
     }
   ): Promise<InstanceType<T>[]> {
     // Determine effective hardLimit
-    const globalHasManyHardLimit = DBModel._limitConfig.hasManyHardLimit;
+    // The calling model's own cap (inherited from its createDBBase base / setLimitConfig), never the root's (#354).
+    const globalHasManyHardLimit = this._limitConfig.hasManyHardLimit;
     const perRelationHardLimit = relationConfig?.hardLimit;
     
     // null means disabled, undefined means use global
@@ -1735,7 +1736,7 @@ export abstract class DBModel {
       // Determine effective limit: per-relation hardLimit > global hasManyHardLimit
       // undefined = use global, null = no limit
       const effectiveLimit = config.hardLimit === undefined
-        ? DBModel._limitConfig.hasManyHardLimit
+        ? TargetClass._limitConfig.hasManyHardLimit // the target model's own cap, as _selectForRelation reads it (#354)
         : config.hardLimit;
       
       if (effectiveLimit != null && result.length > effectiveLimit) {
@@ -2075,7 +2076,7 @@ export abstract class DBModel {
       const conditionRecord = condsToRecord(conds, this._getConditionTypeCast()) as ConditionObject;
       
       // Apply hardLimit + 1 to detect overflow without fetching all records
-      const hardLimit = DBModel._limitConfig.findHardLimit;
+      const hardLimit = this._limitConfig.findHardLimit; // the calling model's own cap, not the root's (#354)
       const shouldCheckLimit = hardLimit != null && !opts?.limit;
       const effectiveOpts = shouldCheckLimit
         ? { ...opts, limit: hardLimit + 1 }
