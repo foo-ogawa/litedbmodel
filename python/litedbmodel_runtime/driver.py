@@ -432,25 +432,28 @@ _VALUES_ROWS_RE = re.compile(
 )
 
 
-_JSON_TABLE_DECL_RE = re.compile(r"^([A-Za-z0-9_]+)\s+(.*?)\s+PATH\s", re.IGNORECASE | re.DOTALL)
+# One `u.<k> = <expr>` conjunct of an updateMany's ON, the read expression kept.
+_BATCH_READ_CONJ_RE = re.compile(r"^[A-Za-z0-9_]*\.?([A-Za-z0-9_]+)\s*=\s*(.+)$", re.DOTALL)
+_BATCH_SOURCE_ALIAS_RE = re.compile(r"^\s+(?:AS\s+)?([A-Za-z0-9_]+)", re.IGNORECASE)
+_INSERT_SELECT_RE = re.compile(r"\)\s*SELECT\s+", re.IGNORECASE)
 
 
-def _json_table_columns(write_sql: str) -> Dict[str, Tuple[str, bool]]:
-    """The write's own ``JSON_TABLE(?, '$[*]' COLUMNS(…))`` declarations, by column name: each one's
-    full declaration (``k BIGINT PATH '$.k'``) and whether its type is ``JSON`` (a value the write
-    unquotes to a string) — mysql-returning.ts ``jsonTableColumns``. A declaration's type may carry its
-    own parenthesised, comma-separated arguments (``DECIMAL(65,30)``), so the list is split on the commas
-    at its own depth, outside quotes."""
+def _batch_reads(write_sql: str, insert_cols: List[str]) -> Optional[Tuple[str, Dict[str, str]]]:
+    """How a BATCH write reads its rows out of its ONE JSON payload (mysql-returning.ts ``batchReads``):
+    its ``JSON_TABLE(?, '$[*]' COLUMNS(…))`` source with the alias it gives it, verbatim, and the
+    expression it reads each key-able column with — an updateMany's ``ON u.<k> = <expr>``, an INSERT's
+    SELECT list by INSERT column position. The recovering SELECT reuses both as they are, so it compares
+    every key EXACTLY as the write did: a COLUMNS declaration alone does not say how (a JSON column is
+    read both as unquoted text and as a JSON value). ``None`` when the write reads no JSON_TABLE. A
+    conjunct / select item that does not parse leaves its column out — the caller fails it closed."""
     lower = write_sql.lower()
     jt = lower.find("json_table(")
-    opened = lower.find("columns(", jt) if jt >= 0 else -1
-    if opened < 0:
-        return {}
-    entries: List[str] = []
-    depth, quoted = 1, False
-    start = opened + len("columns(")
-    i = start
-    while i < len(write_sql) and depth > 0:
+    if jt < 0:
+        return None
+    # The JSON_TABLE(…) call: its own parentheses at depth 0, skipping quoted paths.
+    end, depth, quoted = -1, 0, False
+    i = jt + len("json_table")
+    while i < len(write_sql) and end < 0:
         ch = write_sql[i]
         if quoted:
             quoted = ch != "'"
@@ -461,17 +464,47 @@ def _json_table_columns(write_sql: str) -> Dict[str, Tuple[str, bool]]:
         elif ch == ")":
             depth -= 1
             if depth == 0:
-                entries.append(write_sql[start:i])
-        elif ch == "," and depth == 1:
-            entries.append(write_sql[start:i])
-            start = i + 1
+                end = i
         i += 1
-    out: Dict[str, Tuple[str, bool]] = {}
-    for e in entries:
-        decl = e.strip()
-        m = _JSON_TABLE_DECL_RE.match(decl)
-        if m is not None:
-            out[m.group(1)] = (decl, m.group(2).strip().upper() == "JSON")
+    alias = _BATCH_SOURCE_ALIAS_RE.match(write_sql[end + 1:]) if end >= 0 else None
+    if alias is None:
+        return None
+    source = f"{write_sql[jt:end + 1]} AS {alias.group(1)}"
+    reads: Dict[str, str] = {}
+    if lower.startswith("update"):
+        on = _BATCH_JOIN_ON_RE.search(write_sql)
+        for conj in _AND_SPLIT_RE.split(on.group(1)) if on is not None else []:
+            m = _BATCH_READ_CONJ_RE.match(conj.strip())
+            if m is not None:
+                reads[m.group(1)] = m.group(2).strip()
+        return source, reads
+    sel = _INSERT_SELECT_RE.search(write_sql)
+    frm = lower.find(" from json_table(")
+    if sel is not None and frm > sel.start():
+        items = _split_top_level(write_sql[sel.end():frm])
+        if len(items) == len(insert_cols):
+            reads = dict(zip(insert_cols, items))
+    return source, reads
+
+
+def _split_top_level(items: str) -> List[str]:
+    """Split a comma list on the commas at its own depth (outside parentheses and quotes); entries
+    trimmed (mysql-returning.ts ``splitTopLevel``)."""
+    out: List[str] = []
+    depth, quoted, start = 0, False, 0
+    for i, ch in enumerate(items):
+        if quoted:
+            quoted = ch != "'"
+        elif ch == "'":
+            quoted = True
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        elif ch == "," and depth == 0:
+            out.append(items[start:i].strip())
+            start = i + 1
+    out.append(items[start:].strip())
     return out
 
 
@@ -658,24 +691,24 @@ def _build_mysql_reselect(sql: str):
     def json_select(keys, what: str, written):
         # Recover a BATCH write's rows by reading its key TUPLES back out of the SAME JSON payload it
         # bound — every key column, never the first alone (a composite key's first column names other
-        # rows too) — and comparing each one EXACTLY as the write did: through the write's own
-        # JSON_TABLE declaration of that column (_json_table_columns). A typed key (BIGINT, DECIMAL…)
-        # compares as that type; re-read as the JSON_UNQUOTE string it would compare with a BIGINT
-        # column as DOUBLE, which past 2^53 matches the neighbouring keys too. A key the write declared
-        # as JSON (a string key) is unquoted, as the write's own expression does. A key column with no
-        # JSON_TABLE declaration is not in the payload: that fails closed.
-        declared = _json_table_columns(write_sql)
+        # rows too) — through the write's OWN JSON_TABLE source and the write's OWN read expression of
+        # each key (_batch_reads), so each key compares EXACTLY as the write compared or wrote it. Any
+        # other read can compare differently: a key the write reads as a JSON value (v.k) or as a BIGINT,
+        # re-read as the JSON_UNQUOTE string, is compared with a BIGINT column as DOUBLE, which past 2^53
+        # matches the neighbouring keys too. A key with no read expression in the write fails closed.
+        batch = _batch_reads(write_sql, insert_cols)
+        if batch is None:
+            raise ValueError(f"scp write(mysql): cannot parse the JSON_TABLE source of {write_sql!r}")
+        source, read_of = batch
         for k in keys:
-            if k not in declared:
+            if k not in read_of:
                 raise ValueError(
-                    f"scp write(mysql): {what} column {k!r} has no JSON_TABLE column in {write_sql!r}, "
+                    f"scp write(mysql): {what} column {k!r} has no read expression in {write_sql!r}, "
                     "so its rows cannot be matched the way it wrote them"
                 )
-        unq = ", ".join(f"JSON_UNQUOTE(jt.{k})" if declared[k][1] else f"jt.{k}" for k in keys)
-        paths = ", ".join(declared[k][0] for k in keys)
+        reads = ", ".join(read_of[k] for k in keys)
         return _MysqlReselect(write_sql, (
-            f"SELECT {cols} FROM {table} WHERE ({', '.join(keys)}) IN "
-            f"(SELECT {unq} FROM JSON_TABLE(?, '$[*]' COLUMNS({paths})) jt){order_by}"
+            f"SELECT {cols} FROM {table} WHERE ({', '.join(keys)}) IN (SELECT {reads} FROM {source}){order_by}"
         ), [("json", 0)], written, False)
 
     def keyed_by_insert_params(keys, what: str, written):

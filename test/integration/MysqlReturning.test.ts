@@ -441,4 +441,51 @@ describe('#379 a batch RETURNING compares its keys the way the write did (BIGINT
     const op = compileCreateManyBundle('C', { tableName: T, records: recs, rawRecords: recs, returning: 'k, tenant_id', pk: { columns: ['k'], autoInc: null } } as never, 'mysql').transaction!.statements[0].op;
     expect(await run(op)).toBe(2);
   });
+
+  // #384: the write reads each key by its OWN rule — a declared type, else the JSON value (`v.k`), else
+  // text — so the re-select must read it with the write's own expression, typed or not.
+  it('updateMany on a DECLARED BIGINT key returns the 2 rows it wrote', async () => {
+    await seed('(id INT AUTO_INCREMENT PRIMARY KEY, k BIGINT NOT NULL, tenant_id INT NOT NULL, name VARCHAR(64))', true, 2);
+    const recs = [{ k: K1, name: 'mine' }, { k: K14, name: 'mine' }];
+    const types = (_t: string, c: string) => (c === 'k' ? 'BIGINT' : 'VARCHAR(64)');
+    const op = compileUpdateManyBundle('UM', { tableName: T, keyColumns: ['k'], updateColumns: ['name'], records: recs, rawRecords: recs, returning: 'k, tenant_id' } as never, 'mysql', types).statement;
+    expect(await run(op)).toBe(2);
+  });
+
+  describe('a string (UUID) key', () => {
+    const U1 = '0b0d8a52-7a7e-4c43-9a8e-000000000001';
+    const U2 = '0b0d8a52-7a7e-4c43-9a8e-000000000014';
+    const seedText = async (ddl: string, ours: boolean) => {
+      await table(ddl);
+      for (let i = 1; i <= 40; i++) {
+        const k = `0b0d8a52-7a7e-4c43-9a8e-${String(i).padStart(12, '0')}`;
+        const mine = k === U1 || k === U2;
+        if (mine && !ours) continue;
+        await raw.query(`INSERT INTO ${T} (k, tenant_id, name) VALUES (?, ?, ?)`, [k, mine ? 1 : 2, 'theirs']);
+      }
+    };
+    const ddl = '(id INT AUTO_INCREMENT PRIMARY KEY, k VARCHAR(36) NOT NULL, tenant_id INT NOT NULL, name VARCHAR(64))';
+    const recs = [{ k: U1, tenant_id: 1n, name: 'mine' }, { k: U2, tenant_id: 1n, name: 'mine' }];
+
+    it('updateMany, no declared types and declared VARCHAR, returns the 2 rows it wrote', async () => {
+      const um = recs.map(({ k, name }) => ({ k, name }));
+      for (const types of [undefined, (_t: string, c: string) => (c === 'k' ? 'VARCHAR(36)' : 'VARCHAR(64)')]) {
+        await seedText(ddl, true);
+        const op = compileUpdateManyBundle('UM', { tableName: T, keyColumns: ['k'], updateColumns: ['name'], records: um, rawRecords: um, returning: 'k, tenant_id' } as never, 'mysql', types).statement;
+        expect(await run(op)).toBe(2);
+      }
+    });
+
+    it('upsertMany returns the 2 rows it wrote', async () => {
+      await seedText(ddl, false);
+      const op = compileCreateManyBundle('U', { tableName: T, records: recs, rawRecords: recs, onConflict: ['k'], onConflictUpdate: 'all', returning: 'k, tenant_id', pk: { columns: ['id'], autoInc: 'id' } } as never, 'mysql').transaction!.statements[0].op;
+      expect(await run(op)).toBe(2);
+    });
+
+    it('createMany keyed by a client-supplied UUID returns the 2 rows it wrote', async () => {
+      await seedText('(k VARCHAR(36) NOT NULL, tenant_id INT NOT NULL, name VARCHAR(64))', false);
+      const op = compileCreateManyBundle('C', { tableName: T, records: recs, rawRecords: recs, returning: 'k, tenant_id', pk: { columns: ['k'], autoInc: null } } as never, 'mysql').transaction!.statements[0].op;
+      expect(await run(op)).toBe(2);
+    });
+  });
 });

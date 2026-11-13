@@ -510,39 +510,30 @@ func updateBatchKeys(writeSQL string) []string {
 	return keys
 }
 
-// jsonTableDecl is one column declaration of a write's JSON_TABLE COLUMNS(…): its full text
-// (`k BIGINT PATH '$.k'`) and whether its type is JSON (a value the write unquotes to a string).
-type jsonTableDecl struct {
-	decl string
-	json bool
-}
+// batchReadConjRe is one `u.<k> = <expr>` conjunct of an updateMany's ON, the read expression kept.
+var batchReadConjRe = regexp.MustCompile(`(?s)^[A-Za-z0-9_]*\.?([A-Za-z0-9_]+)\s*=\s*(.+)$`)
+var batchSourceAliasRe = regexp.MustCompile(`(?i)^\s+(?:AS\s+)?([A-Za-z0-9_]+)`)
+var insertSelectRe = regexp.MustCompile(`(?i)\)\s*SELECT\s+`)
 
-var jsonTableDeclRe = regexp.MustCompile(`(?is)^([A-Za-z0-9_]+)\s+(.*?)\s+PATH\s`)
-
-// jsonTableColumns is the write's own `JSON_TABLE(?, '$[*]' COLUMNS(…))` declarations, by column name
-// (mysql-returning.ts jsonTableColumns). A declaration's type may carry its own parenthesised,
-// comma-separated arguments (`DECIMAL(65,30)`), so the list is split on the commas at its own depth,
-// outside quotes.
-func jsonTableColumns(writeSQL string) map[string]jsonTableDecl {
-	out := map[string]jsonTableDecl{}
+// batchReads is how a BATCH write reads its rows out of its ONE JSON payload (mysql-returning.ts
+// batchReads): its `JSON_TABLE(?, '$[*]' COLUMNS(…))` source with the alias it gives it, verbatim, and
+// the expression it reads each key-able column with — an updateMany's `ON u.<k> = <expr>`, an INSERT's
+// SELECT list by INSERT column position. The recovering SELECT reuses both as they are, so it compares
+// every key EXACTLY as the write did: a COLUMNS declaration alone does not say how (a JSON column is
+// read both as unquoted text and as a JSON value). ok=false when the write reads no JSON_TABLE. A
+// conjunct / select item that does not parse leaves its column out — the caller fails it closed.
+func batchReads(writeSQL string, insertCols []string) (source string, reads map[string]string, ok bool) {
 	lower := strings.ToLower(writeSQL)
 	jt := strings.Index(lower, "json_table(")
 	if jt < 0 {
-		return out
+		return "", nil, false
 	}
-	open := strings.Index(lower[jt:], "columns(")
-	if open < 0 {
-		return out
-	}
-	start := jt + open + len("columns(")
-	entries := []string{}
-	depth, quoted := 1, false
-	for i := start; i < len(writeSQL) && depth > 0; i++ {
+	// The JSON_TABLE(…) call: its own parentheses at depth 0, skipping quoted paths.
+	end, depth, quoted := -1, 0, false
+	for i := jt + len("json_table"); i < len(writeSQL) && end < 0; i++ {
 		switch ch := writeSQL[i]; {
 		case quoted:
-			if ch == '\'' {
-				quoted = false
-			}
+			quoted = ch != '\''
 		case ch == '\'':
 			quoted = true
 		case ch == '(':
@@ -550,20 +541,63 @@ func jsonTableColumns(writeSQL string) map[string]jsonTableDecl {
 		case ch == ')':
 			depth--
 			if depth == 0 {
-				entries = append(entries, writeSQL[start:i])
+				end = i
 			}
-		case ch == ',' && depth == 1:
-			entries = append(entries, writeSQL[start:i])
+		}
+	}
+	if end < 0 {
+		return "", nil, false
+	}
+	alias := batchSourceAliasRe.FindStringSubmatch(writeSQL[end+1:])
+	if alias == nil {
+		return "", nil, false
+	}
+	source = writeSQL[jt:end+1] + " AS " + alias[1]
+	reads = map[string]string{}
+	if strings.HasPrefix(lower, "update") {
+		if on := batchJoinOnRe.FindStringSubmatch(writeSQL); on != nil {
+			for _, conj := range andSplitRe.Split(on[1], -1) {
+				if m := batchReadConjRe.FindStringSubmatch(strings.TrimSpace(conj)); m != nil {
+					reads[m[1]] = strings.TrimSpace(m[2])
+				}
+			}
+		}
+		return source, reads, true
+	}
+	sel := insertSelectRe.FindStringIndex(writeSQL)
+	from := strings.Index(lower, " from json_table(")
+	if sel != nil && from > sel[0] {
+		items := splitTopLevel(writeSQL[sel[1]:from])
+		if len(items) == len(insertCols) {
+			for i, c := range insertCols {
+				reads[c] = items[i]
+			}
+		}
+	}
+	return source, reads, true
+}
+
+// splitTopLevel splits a comma list on the commas at its own depth (outside parentheses and quotes);
+// entries trimmed (mysql-returning.ts splitTopLevel).
+func splitTopLevel(list string) []string {
+	out := []string{}
+	depth, quoted, start := 0, false, 0
+	for i := 0; i < len(list); i++ {
+		switch ch := list[i]; {
+		case quoted:
+			quoted = ch != '\''
+		case ch == '\'':
+			quoted = true
+		case ch == '(':
+			depth++
+		case ch == ')':
+			depth--
+		case ch == ',' && depth == 0:
+			out = append(out, strings.TrimSpace(list[start:i]))
 			start = i + 1
 		}
 	}
-	for _, e := range entries {
-		decl := strings.TrimSpace(e)
-		if m := jsonTableDeclRe.FindStringSubmatch(decl); m != nil {
-			out[m[1]] = jsonTableDecl{decl: decl, json: strings.ToUpper(strings.TrimSpace(m[2])) == "JSON"}
-		}
-	}
-	return out
+	return append(out, strings.TrimSpace(list[start:]))
 }
 
 // valuesRowsRe is a `VALUES (?, …), (?, …)` list whose every value is a bare `?` (then the end of the
@@ -644,31 +678,28 @@ func buildMysqlReselect(sql string) (*mysqlReselect, error) {
 		insertCols = splitTrim(cm[1])
 	}
 	// Recover a BATCH write's rows by reading its key TUPLES back out of the SAME JSON payload it bound —
-	// every key column, never the first alone (a composite key's first column names other rows too) — and
-	// comparing each one EXACTLY as the write did: through the write's own JSON_TABLE declaration of that
-	// column ([jsonTableColumns]). A typed key (BIGINT, DECIMAL…) compares as that type; re-read as the
-	// JSON_UNQUOTE string it would compare with a BIGINT column as DOUBLE, which past 2^53 matches the
-	// neighbouring keys too. A key the write declared as JSON (a string key) is unquoted, as the write's
-	// own expression does. A key column with no JSON_TABLE declaration is not in the payload: that fails
-	// closed.
+	// every key column, never the first alone (a composite key's first column names other rows too) —
+	// through the write's OWN JSON_TABLE source and the write's OWN read expression of each key
+	// ([batchReads]), so each key compares EXACTLY as the write compared or wrote it. Any other read can
+	// compare differently: a key the write reads as a JSON value (v.k) or as a BIGINT, re-read as the
+	// JSON_UNQUOTE string, is compared with a BIGINT column as DOUBLE, which past 2^53 matches the
+	// neighbouring keys too. A key with no read expression in the write fails closed.
 	jsonSelect := func(keys []string, what, written string) (*mysqlReselect, error) {
-		declared := jsonTableColumns(writeSQL)
-		unq := make([]string, len(keys))
-		paths := make([]string, len(keys))
+		source, readOf, ok := batchReads(writeSQL, insertCols)
+		if !ok {
+			return nil, fmt.Errorf("scp write(mysql): cannot parse the JSON_TABLE source of %q", writeSQL)
+		}
+		reads := make([]string, len(keys))
 		for i, k := range keys {
-			d, ok := declared[k]
-			if !ok {
-				return nil, fmt.Errorf("scp write(mysql): %s column %q has no JSON_TABLE column in %q, so its rows cannot be matched the way it wrote them", what, k, writeSQL)
+			read, found := readOf[k]
+			if !found {
+				return nil, fmt.Errorf("scp write(mysql): %s column %q has no read expression in %q, so its rows cannot be matched the way it wrote them", what, k, writeSQL)
 			}
-			unq[i] = "jt." + k
-			if d.json {
-				unq[i] = "JSON_UNQUOTE(jt." + k + ")"
-			}
-			paths[i] = d.decl
+			reads[i] = read
 		}
 		return &mysqlReselect{writeSQL: writeSQL, selectSQL: fmt.Sprintf(
-			"SELECT %s FROM %s WHERE (%s) IN (SELECT %s FROM JSON_TABLE(?, '$[*]' COLUMNS(%s)) jt)%s",
-			cols, table, strings.Join(keys, ", "), strings.Join(unq, ", "), strings.Join(paths, ", "), orderBy,
+			"SELECT %s FROM %s WHERE (%s) IN (SELECT %s FROM %s)%s",
+			cols, table, strings.Join(keys, ", "), strings.Join(reads, ", "), source, orderBy,
 		), binds: []reselectBind{{kind: "json"}}, written: written}, nil
 	}
 	// Recover a VALUES INSERT's rows by EVERY key column of EVERY row, each bound from its own param —

@@ -176,22 +176,23 @@ function valuesRows(writeSql: string, ncols: number): number | null {
 }
 
 /**
- * The write's own `JSON_TABLE(?, '$[*]' COLUMNS(…))` declarations, by column name: each one's full
- * declaration (`k BIGINT PATH '$.k'`) and whether its type is `JSON` (a value the write unquotes to a
- * string). A declaration's type may carry its own parenthesised, comma-separated arguments
- * (`DECIMAL(65,30)`), so the list is split on the commas at its own depth, outside quotes.
+ * How a BATCH write reads its rows out of its ONE JSON payload: its `JSON_TABLE(?, '$[*]' COLUMNS(…))`
+ * source with the alias it gives it, verbatim, and the expression it reads each key-able column with —
+ * an updateMany's `ON u.<k> = <expr>` (`json-batch.ts` `mysqlUpdateManyJson`), an INSERT's SELECT list by
+ * INSERT column position (`mysqlInsertJson`). The recovering SELECT reuses both as they are, so it
+ * compares every key EXACTLY as the write did: a `COLUMNS` declaration alone does not say how (a `JSON`
+ * column is read both as unquoted text and as a JSON value). `null` when the write reads no JSON_TABLE.
+ * A conjunct / select item that does not parse leaves its column out — the caller fails it closed.
  */
-function jsonTableColumns(writeSql: string): Map<string, { decl: string; json: boolean }> {
-  const out = new Map<string, { decl: string; json: boolean }>();
+function batchReads(writeSql: string): { source: string; reads: Map<string, string> } | null {
   const lower = writeSql.toLowerCase();
   const jt = lower.indexOf('json_table(');
-  const open = jt < 0 ? -1 : lower.indexOf('columns(', jt);
-  if (open < 0) return out;
-  const entries: string[] = [];
-  let depth = 1;
+  if (jt < 0) return null;
+  // The JSON_TABLE(…) call: its own parentheses at depth 0, skipping quoted paths.
+  let depth = 0;
   let quoted = false;
-  let start = open + 'columns('.length;
-  for (let i = start; i < writeSql.length && depth > 0; i++) {
+  let end = -1;
+  for (let i = jt + 'json_table'.length; i < writeSql.length && end < 0; i++) {
     const ch = writeSql[i];
     if (quoted) {
       if (ch === "'") quoted = false;
@@ -201,17 +202,53 @@ function jsonTableColumns(writeSql: string): Map<string, { decl: string; json: b
       depth++;
     } else if (ch === ')') {
       depth--;
-      if (depth === 0) entries.push(writeSql.slice(start, i));
-    } else if (ch === ',' && depth === 1) {
-      entries.push(writeSql.slice(start, i));
+      if (depth === 0) end = i;
+    }
+  }
+  const alias = end < 0 ? null : /^\s+(?:AS\s+)?([A-Za-z0-9_]+)/i.exec(writeSql.slice(end + 1));
+  if (alias === null) return null;
+  const source = `${writeSql.slice(jt, end + 1)} AS ${alias[1]}`;
+  const reads = new Map<string, string>();
+  if (lower.startsWith('update')) {
+    const on = /\sON\s+([\s\S]*?)\s+SET\s/i.exec(writeSql);
+    for (const conj of on === null ? [] : on[1].split(/\s+AND\s+/i)) {
+      const m = /^[A-Za-z0-9_]*\.?([A-Za-z0-9_]+)\s*=\s*([\s\S]+)$/.exec(conj.trim());
+      if (m !== null) reads.set(m[1], m[2].trim());
+    }
+  } else {
+    const select = /\)\s*SELECT\s+/i.exec(writeSql);
+    const from = lower.indexOf(' from json_table(');
+    if (select !== null && from > select.index) {
+      const items = splitTopLevel(writeSql.slice(select.index + select[0].length, from));
+      const columns = insertCols(writeSql);
+      if (items.length === columns.length) columns.forEach((c, i) => reads.set(c, items[i]));
+    }
+  }
+  return { source, reads };
+}
+
+/** Split a comma list on the commas at its own depth (outside parentheses and quotes); entries trimmed. */
+function splitTopLevel(list: string): string[] {
+  const out: string[] = [];
+  let depth = 0;
+  let quoted = false;
+  let start = 0;
+  for (let i = 0; i < list.length; i++) {
+    const ch = list[i];
+    if (quoted) {
+      if (ch === "'") quoted = false;
+    } else if (ch === "'") {
+      quoted = true;
+    } else if (ch === '(') {
+      depth++;
+    } else if (ch === ')') {
+      depth--;
+    } else if (ch === ',' && depth === 0) {
+      out.push(list.slice(start, i).trim());
       start = i + 1;
     }
   }
-  for (const entry of entries) {
-    const decl = entry.trim();
-    const m = /^([A-Za-z0-9_]+)\s+([\s\S]*?)\s+PATH\s/i.exec(decl);
-    if (m !== null) out.set(m[1], { decl, json: m[2].trim().toUpperCase() === 'JSON' });
-  }
+  out.push(list.slice(start).trim());
   return out;
 }
 
@@ -219,17 +256,6 @@ function jsonTableColumns(writeSql: string): Map<string, { decl: string; json: b
 function tableOf(writeSql: string): string | null {
   const m = /\b(?:INSERT\s+(?:IGNORE\s+)?INTO|UPDATE|DELETE\s+FROM)\s+([A-Za-z0-9_."`]+)/i.exec(writeSql);
   return m === null ? null : m[1];
-}
-
-/**
- * EVERY JOIN key column of an updateMany — the target-side column of each `AND`-joined conjunct of
- * `ON u.k1 = <v.k1> AND u.k2 = <v.k2> SET …` (`json-batch.ts` `mysqlUpdateManyJson`). A composite key
- * keyed on its first column alone names rows the write never touched. `''` marks an unparsable conjunct.
- */
-function updateBatchKeys(writeSql: string): string[] {
-  const m = /\sON\s+([\s\S]*?)\s+SET\s/i.exec(writeSql);
-  if (m === null) return [];
-  return m[1].split(/\s+AND\s+/i).map((conj) => /^[A-Za-z0-9_]*\.?([A-Za-z0-9_]+)\s*=/.exec(conj.trim())?.[1] ?? '');
 }
 
 /** The hint's `pk=` columns + `ai=` AUTO_INCREMENT column (absent hint ⇒ `[]` / `''`). */
@@ -293,26 +319,22 @@ export function buildMysqlReselect(sql: string): MysqlReselect | null {
   /**
    * Recover a BATCH write's rows by reading its key TUPLES back out of the SAME JSON payload it bound —
    * every key column, never the first alone (a composite key's first column names other rows too) —
-   * and comparing each one EXACTLY as the write did: through the write's own `JSON_TABLE` declaration
-   * of that column ({@link jsonTableColumns}). A typed key (`BIGINT`, `DECIMAL`…) compares as that type;
-   * re-reading it as the `JSON_UNQUOTE` string would compare a string with a BIGINT column as DOUBLE,
-   * which past 2^53 matches the neighbouring keys too — rows the write never touched. A key the write
-   * declared as `JSON` (a string key) is unquoted, as the write's own expression does. A key column the
-   * write declares no `JSON_TABLE` column for is not in its payload at all: that fails closed.
+   * through the write's OWN `JSON_TABLE` source and the write's OWN read expression of each key
+   * ({@link batchReads}), so each key compares EXACTLY as the write compared or wrote it. Any other read
+   * can compare differently: a key the write reads as a JSON value (`v.k`) or as a BIGINT, re-read as the
+   * `JSON_UNQUOTE` string, is compared with a BIGINT column as DOUBLE, which past 2^53 matches the
+   * neighbouring keys too — rows the write never touched. A key with no read expression in the write is
+   * not one the write keyed by: that fails closed.
    */
   const jsonSelect = (keys: readonly string[], what: string, written: WrittenRows | null): MysqlReselect => {
-    const declared = jsonTableColumns(writeSql);
-    const decls = keys.map((k) => {
-      const d = declared.get(k);
-      if (d === undefined) throw new Error(`scp write(mysql): ${what} column '${k}' has no JSON_TABLE column in '${writeSql.slice(0, 60)}…', so its rows cannot be matched the way it wrote them`);
-      return d;
+    const batch = batchReads(writeSql);
+    if (batch === null) throw new Error(`scp write(mysql): cannot parse the JSON_TABLE source of '${writeSql.slice(0, 60)}…'`);
+    const reads = keys.map((k) => {
+      const read = batch.reads.get(k);
+      if (read === undefined) throw new Error(`scp write(mysql): ${what} column '${k}' has no read expression in '${writeSql.slice(0, 60)}…', so its rows cannot be matched the way it wrote them`);
+      return read;
     });
-    return done(
-      `SELECT ${cols} FROM ${table} WHERE (${keys.join(', ')}) IN ` +
-        `(SELECT ${keys.map((k, i) => (decls[i].json ? `JSON_UNQUOTE(jt.${k})` : `jt.${k}`)).join(', ')} FROM JSON_TABLE(?, '$[*]' COLUMNS(${decls.map((d) => d.decl).join(', ')})) jt)${orderBy}`,
-      [{ kind: 'json' }],
-      written,
-    );
+    return done(`SELECT ${cols} FROM ${table} WHERE (${keys.join(', ')}) IN (SELECT ${reads.join(', ')} FROM ${batch.source})${orderBy}`, [{ kind: 'json' }], written);
   };
   /**
    * Recover a VALUES INSERT's rows by EVERY key column of EVERY row, each bound from its own param —
@@ -380,9 +402,11 @@ export function buildMysqlReselect(sql: string): MysqlReselect | null {
     return isBatch ? jsonSelect(pk, 'PK', 'affected') : keyedByInsertParams(pk, 'PK', 'affected');
   }
 
-  // updateMany — by EVERY batch JOIN key column, re-selected from the SAME JSON payload the write bound.
+  // updateMany — by EVERY batch JOIN key column (each conjunct of its `ON`), re-selected from the SAME
+  // JSON payload the write bound.
   if (lower.startsWith('update') && isBatch) {
-    const keys = updateBatchKeys(writeSql);
+    const on = /\sON\s+([\s\S]*?)\s+SET\s/i.exec(writeSql);
+    const keys = (on === null ? [] : on[1].split(/\s+AND\s+/i)).map((conj) => /^[A-Za-z0-9_]*\.?([A-Za-z0-9_]+)\s*=/.exec(conj.trim())?.[1] ?? '');
     if (keys.length === 0 || keys.includes('')) throw new Error(`scp write(mysql): cannot parse the batch JOIN key of '${writeSql.slice(0, 60)}…'`);
     return jsonSelect(keys, 'JOIN key', null);
   }

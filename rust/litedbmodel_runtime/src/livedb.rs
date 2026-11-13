@@ -1413,41 +1413,33 @@ fn build_mysql_reselect(sql: &str) -> Result<Option<MysqlReselect>, SqlFailure> 
     let is_insert = wl.starts_with("insert");
     // Recover a BATCH write's rows by reading its key TUPLES back out of the SAME JSON payload it
     // bound — every key column, never the first alone (a composite key's first column names other
-    // rows too) — and comparing each one EXACTLY as the write did: through the write's own JSON_TABLE
-    // declaration of that column ([`json_table_columns`]). A typed key (BIGINT, DECIMAL…) compares as
-    // that type; re-read as the JSON_UNQUOTE string it would compare with a BIGINT column as DOUBLE,
-    // which past 2^53 matches the neighbouring keys too. A key the write declared as JSON (a string
-    // key) is unquoted, as the write's own expression does. A key column with no JSON_TABLE
-    // declaration is not in the payload: that fails closed.
+    // rows too) — through the write's OWN JSON_TABLE source and the write's OWN read expression of
+    // each key ([`batch_reads`]), so each key compares EXACTLY as the write compared or wrote it. Any
+    // other read can compare differently: a key the write reads as a JSON value (`v.k`) or as a
+    // BIGINT, re-read as the JSON_UNQUOTE string, is compared with a BIGINT column as DOUBLE, which
+    // past 2^53 matches the neighbouring keys too. A key with no read expression fails closed.
     let json_select = |keys: &[String],
                        what: &str|
      -> Result<(String, Vec<ReselectBind>), SqlFailure> {
-        let declared = json_table_columns(&write_sql);
-        let mut unq: Vec<String> = Vec::with_capacity(keys.len());
-        let mut paths: Vec<String> = Vec::with_capacity(keys.len());
+        let Some((source, read_of)) = batch_reads(&write_sql, &insert_cols) else {
+            return Err(driver_failure(format!(
+                "scp write(mysql): cannot parse the JSON_TABLE source of '{write_sql}'"
+            )));
+        };
+        let mut reads: Vec<&str> = Vec::with_capacity(keys.len());
         for k in keys {
-            let Some((decl, json)) = declared
-                .iter()
-                .find(|(name, _, _)| name == k)
-                .map(|(_, d, j)| (d, *j))
-            else {
+            let Some((_, read)) = read_of.iter().find(|(c, _)| c == k) else {
                 return Err(driver_failure(format!(
-                    "scp write(mysql): {what} column '{k}' has no JSON_TABLE column in '{write_sql}', so its rows cannot be matched the way it wrote them"
+                    "scp write(mysql): {what} column '{k}' has no read expression in '{write_sql}', so its rows cannot be matched the way it wrote them"
                 )));
             };
-            unq.push(if json {
-                format!("JSON_UNQUOTE(jt.{k})")
-            } else {
-                format!("jt.{k}")
-            });
-            paths.push(decl.clone());
+            reads.push(read);
         }
         Ok((
             format!(
-                "SELECT {cols} FROM {table} WHERE ({}) IN (SELECT {} FROM JSON_TABLE(?, '$[*]' COLUMNS({})) jt){order_by}",
+                "SELECT {cols} FROM {table} WHERE ({}) IN (SELECT {} FROM {source}){order_by}",
                 keys.join(", "),
-                unq.join(", "),
-                paths.join(", ")
+                reads.join(", ")
             ),
             vec![ReselectBind::JsonParam],
         ))
@@ -1699,26 +1691,22 @@ fn parse_pk_hint(s: &str) -> (Vec<String>, String) {
     (pk_cols, ai)
 }
 
-/// Parse the INSERT column list `INSERT [IGNORE] INTO <t> (c1, c2, …)`.
-/// The write's own `JSON_TABLE(?, '$[*]' COLUMNS(…))` declarations, as `(column, full declaration,
-/// type is JSON)` (mysql-returning.ts `jsonTableColumns`): `k BIGINT PATH '$.k'`, and whether the
-/// write unquotes the value to a string. A declaration's type may carry its own parenthesised,
-/// comma-separated arguments (`DECIMAL(65,30)`), so the list is split on the commas at its own depth,
-/// outside quotes.
-fn json_table_columns(write_sql: &str) -> Vec<(String, String, bool)> {
+/// How a BATCH write reads its rows out of its ONE JSON payload (mysql-returning.ts `batchReads`): its
+/// `JSON_TABLE(?, '$[*]' COLUMNS(…))` source with the alias it gives it, verbatim, and the expression it
+/// reads each key-able column with — an updateMany's `ON u.<k> = <expr>`, an INSERT's SELECT list by
+/// INSERT column position — as `(column, expression)`. The recovering SELECT reuses both as they are,
+/// so it compares every key EXACTLY as the write did: a COLUMNS declaration alone does not say how (a
+/// JSON column is read both as unquoted text and as a JSON value). `None` when the write reads no
+/// JSON_TABLE. A conjunct / select item that does not parse leaves its column out — the caller fails it
+/// closed.
+fn batch_reads(write_sql: &str, insert_cols: &[String]) -> Option<(String, Vec<(String, String)>)> {
     let lower = write_sql.to_ascii_lowercase();
-    let Some(jt) = lower.find("json_table(") else {
-        return Vec::new();
-    };
-    let Some(open) = lower[jt..].find("columns(") else {
-        return Vec::new();
-    };
+    let jt = lower.find("json_table(")?;
+    // The JSON_TABLE(…) call: its own parentheses at depth 0, skipping quoted paths.
     let bytes = write_sql.as_bytes();
-    let mut start = jt + open + "columns(".len();
-    let mut entries: Vec<&str> = Vec::new();
-    let (mut depth, mut quoted) = (1usize, false);
-    let mut i = start;
-    while i < bytes.len() && depth > 0 {
+    let (mut depth, mut quoted, mut end) = (0i32, false, None);
+    let mut i = jt + "json_table".len();
+    while i < bytes.len() && end.is_none() {
         let ch = bytes[i];
         if quoted {
             quoted = ch != b'\'';
@@ -1729,31 +1717,88 @@ fn json_table_columns(write_sql: &str) -> Vec<(String, String, bool)> {
         } else if ch == b')' {
             depth -= 1;
             if depth == 0 {
-                entries.push(&write_sql[start..i]);
+                end = Some(i);
             }
-        } else if ch == b',' && depth == 1 {
-            entries.push(&write_sql[start..i]);
-            start = i + 1;
         }
         i += 1;
     }
-    entries
-        .into_iter()
-        .filter_map(|e| {
-            let decl = e.trim();
-            let name: String = decl
-                .chars()
-                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
-                .collect();
-            let rest = &decl[name.len()..];
-            let path = rest.to_ascii_lowercase().find(" path ")?;
-            if name.is_empty() || !rest.starts_with(char::is_whitespace) {
-                return None;
+    let end = end?;
+    // Its alias: ` AS v` / ` jt`.
+    let after = &write_sql[end + 1..];
+    if !after.starts_with(char::is_whitespace) {
+        return None;
+    }
+    let mut alias = after.trim_start();
+    if alias.len() > 3 && alias[..3].eq_ignore_ascii_case("as ") {
+        alias = alias[3..].trim_start();
+    }
+    let alias: String = alias
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+        .collect();
+    if alias.is_empty() {
+        return None;
+    }
+    let source = format!("{} AS {alias}", &write_sql[jt..=end]);
+    let mut reads: Vec<(String, String)> = Vec::new();
+    if lower.starts_with("update") {
+        // `ON u.k1 = <expr1> AND u.k2 = <expr2> SET …`, split on its (lowercased) ` and `.
+        if let Some(on) = lower.find(" on ").map(|p| p + " on ".len()) {
+            if let Some(seg_end) = lower[on..].find(" set ").map(|p| on + p) {
+                let mut at = on;
+                for conj in lower[on..seg_end].split(" and ") {
+                    let original = &write_sql[at..at + conj.len()];
+                    at += conj.len() + " and ".len();
+                    let Some((lhs, rhs)) = original.split_once('=') else {
+                        continue;
+                    };
+                    let col = lhs.trim().rsplit('.').next().unwrap_or("").trim();
+                    if !col.is_empty() && col.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                    {
+                        reads.push((col.to_string(), rhs.trim().to_string()));
+                    }
+                }
             }
-            let json = rest[..path].trim().eq_ignore_ascii_case("json");
-            Some((name, decl.to_string(), json))
-        })
-        .collect()
+        }
+        return Some((source, reads));
+    }
+    // `INSERT INTO t (c1, …) SELECT <e1>, … FROM JSON_TABLE(…)`.
+    let close = lower.find(')')?;
+    let select = lower[close + 1..].trim_start();
+    let from = lower.find(" from json_table(");
+    if let (Some(rest), Some(from)) = (select.strip_prefix("select"), from) {
+        let start = lower.len() - rest.len();
+        if rest.starts_with(char::is_whitespace) && from > start {
+            let items = split_top_level(&write_sql[start..from]);
+            if items.len() == insert_cols.len() {
+                reads = insert_cols.iter().cloned().zip(items).collect();
+            }
+        }
+    }
+    Some((source, reads))
+}
+
+/// Split a comma list on the commas at its own depth (outside parentheses and quotes); entries trimmed
+/// (mysql-returning.ts `splitTopLevel`).
+fn split_top_level(list: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let (mut depth, mut quoted, mut start) = (0i32, false, 0usize);
+    for (i, ch) in list.bytes().enumerate() {
+        if quoted {
+            quoted = ch != b'\'';
+        } else if ch == b'\'' {
+            quoted = true;
+        } else if ch == b'(' {
+            depth += 1;
+        } else if ch == b')' {
+            depth -= 1;
+        } else if ch == b',' && depth == 0 {
+            out.push(list[start..i].trim().to_string());
+            start = i + 1;
+        }
+    }
+    out.push(list[start..].trim().to_string());
+    out
 }
 
 /// How many rows a `VALUES (?, …), (?, …)` INSERT writes when EVERY value is a bare `?` (each tuple then
@@ -1785,6 +1830,7 @@ fn values_rows(write_sql: &str, ncols: usize) -> Option<usize> {
     (rest.is_empty() || rest.starts_with("on duplicate key update")).then_some(rows)
 }
 
+/// Parse the INSERT column list `INSERT [IGNORE] INTO <t> (c1, c2, …)`.
 fn parse_insert_cols(insert: &str) -> Vec<String> {
     if let (Some(open), Some(close)) = (insert.find('('), insert.find(')')) {
         if close > open {

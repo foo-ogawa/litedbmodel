@@ -308,11 +308,38 @@ def test_mysql_returning_bigint_key(driver):
 
     seed("(id INT AUTO_INCREMENT PRIMARY KEY, k BIGINT NOT NULL, tenant_id INT NOT NULL, name VARCHAR(64))", True)
     count("updateMany", f"UPDATE {TBL} AS u JOIN JSON_TABLE(?, '$[*]' COLUMNS(k BIGINT PATH '$.k', name JSON PATH '$.name')) AS v ON u.k = v.k SET u.name = JSON_UNQUOTE(v.name) RETURNING k, tenant_id")
+    # #384: the write reads each key by its OWN rule — the JSON value (no declared type), a declared
+    # numeric type, or unquoted text — so the re-select must read it with the write's own expression.
+    seed("(id INT AUTO_INCREMENT PRIMARY KEY, k BIGINT NOT NULL, tenant_id INT NOT NULL, name VARCHAR(64))", True)
+    count("updateMany, no declared type", f"UPDATE {TBL} AS u JOIN JSON_TABLE(?, '$[*]' COLUMNS(k JSON PATH '$.k', name JSON PATH '$.name')) AS v ON u.k = v.k SET u.name = JSON_UNQUOTE(v.name) RETURNING k, tenant_id")
+    seed("(id INT AUTO_INCREMENT PRIMARY KEY, k BIGINT NOT NULL, tenant_id INT NOT NULL, name VARCHAR(64))", True)
+    count("updateMany, declared BIGINT", f"UPDATE {TBL} AS u JOIN JSON_TABLE(?, '$[*]' COLUMNS(k DECIMAL(65,30) PATH '$.k', name JSON PATH '$.name')) AS v ON u.k = v.k SET u.name = JSON_UNQUOTE(v.name) RETURNING k, tenant_id")
 
     seed("(id INT AUTO_INCREMENT PRIMARY KEY, k BIGINT NOT NULL, tenant_id INT NOT NULL, name VARCHAR(64))", False)
     count("upsertMany", f"INSERT INTO {TBL} (k, name, tenant_id) SELECT jt.k, JSON_UNQUOTE(jt.name), jt.tenant_id FROM JSON_TABLE(?, '$[*]' COLUMNS(k BIGINT PATH '$.k', name JSON PATH '$.name', tenant_id BIGINT PATH '$.tenant_id')) jt ON DUPLICATE KEY UPDATE k = VALUES(k), name = VALUES(name), tenant_id = VALUES(tenant_id) RETURNING k, tenant_id /*scp:pk=id;ai=id;conflict=k*/")
 
     seed("(k BIGINT NOT NULL, tenant_id INT NOT NULL, name VARCHAR(64))", False)
     count("createMany", f"INSERT INTO {TBL} (k, name, tenant_id) SELECT jt.k, JSON_UNQUOTE(jt.name), jt.tenant_id FROM JSON_TABLE(?, '$[*]' COLUMNS(k BIGINT PATH '$.k', name JSON PATH '$.name', tenant_id BIGINT PATH '$.tenant_id')) jt RETURNING k, tenant_id /*scp:pk=k;ai=*/")
+
+    # A string (UUID) key the write reads as unquoted text.
+    def uuid(i: int) -> str:
+        return f"0b0d8a52-7a7e-4c43-9a8e-{i:012d}"
+
+    def seed_text(ddl: str, ours: bool) -> None:
+        rows = [
+            f"INSERT INTO {TBL} (k, tenant_id, name) VALUES ('{uuid(i)}', {1 if i in (1, 14) else 2}, 'theirs')"
+            for i in range(1, 41)
+            if ours or i not in (1, 14)
+        ]
+        _table(driver, ddl, *rows)
+
+    payload = json.dumps([{"k": uuid(1), "name": "mine", "tenant_id": 1}, {"k": uuid(14), "name": "mine", "tenant_id": 1}])
+    text_ddl = "(id INT AUTO_INCREMENT PRIMARY KEY, k VARCHAR(36) NOT NULL, tenant_id INT NOT NULL, name VARCHAR(64))"
+    seed_text(text_ddl, True)
+    count("updateMany, UUID key", f"UPDATE {TBL} AS u JOIN JSON_TABLE(?, '$[*]' COLUMNS(k JSON PATH '$.k', name JSON PATH '$.name')) AS v ON u.k = JSON_UNQUOTE(v.k) SET u.name = JSON_UNQUOTE(v.name) RETURNING k, tenant_id")
+    seed_text(text_ddl, False)
+    count("upsertMany, UUID key", f"INSERT INTO {TBL} (k, name, tenant_id) SELECT JSON_UNQUOTE(jt.k), JSON_UNQUOTE(jt.name), jt.tenant_id FROM JSON_TABLE(?, '$[*]' COLUMNS(k JSON PATH '$.k', name JSON PATH '$.name', tenant_id BIGINT PATH '$.tenant_id')) jt ON DUPLICATE KEY UPDATE k = VALUES(k), name = VALUES(name), tenant_id = VALUES(tenant_id) RETURNING k, tenant_id /*scp:pk=id;ai=id;conflict=k*/")
+    seed_text("(k VARCHAR(36) NOT NULL, tenant_id INT NOT NULL, name VARCHAR(64))", False)
+    count("createMany, UUID key", f"INSERT INTO {TBL} (k, name, tenant_id) SELECT JSON_UNQUOTE(jt.k), JSON_UNQUOTE(jt.name), jt.tenant_id FROM JSON_TABLE(?, '$[*]' COLUMNS(k JSON PATH '$.k', name JSON PATH '$.name', tenant_id BIGINT PATH '$.tenant_id')) jt RETURNING k, tenant_id /*scp:pk=k;ai=*/")
 
     assert failures == []

@@ -189,27 +189,29 @@ final class MysqlReturning
     }
 
     /**
-     * The write's own `JSON_TABLE(?, '$[*]' COLUMNS(…))` declarations, by column name: each one's full
-     * declaration (`k BIGINT PATH '$.k'`) and whether its type is `JSON` (a value the write unquotes to a
-     * string) — mysql-returning.ts `jsonTableColumns`. A declaration's type may carry its own
-     * parenthesised, comma-separated arguments (`DECIMAL(65,30)`), so the list is split on the commas at
-     * its own depth, outside quotes.
+     * How a BATCH write reads its rows out of its ONE JSON payload (mysql-returning.ts `batchReads`): its
+     * `JSON_TABLE(?, '$[*]' COLUMNS(…))` source with the alias it gives it, verbatim, and the expression
+     * it reads each key-able column with — an updateMany's `ON u.<k> = <expr>`, an INSERT's SELECT list by
+     * INSERT column position. The recovering SELECT reuses both as they are, so it compares every key
+     * EXACTLY as the write did: a COLUMNS declaration alone does not say how (a JSON column is read both
+     * as unquoted text and as a JSON value). null when the write reads no JSON_TABLE. A conjunct / select
+     * item that does not parse leaves its column out — the caller fails it closed.
      *
-     * @return array<string, array{0: string, 1: bool}>
+     * @param  list<string> $insertCols
+     * @return array{0: string, 1: array<string, string>}|null
      */
-    private static function jsonTableColumns(string $writeSql): array
+    private static function batchReads(string $writeSql, array $insertCols): ?array
     {
         $lower = strtolower($writeSql);
         $jt = strpos($lower, 'json_table(');
-        $open = $jt === false ? false : strpos($lower, 'columns(', $jt);
-        if ($open === false) {
-            return [];
+        if ($jt === false) {
+            return null;
         }
-        $entries = [];
-        $depth = 1;
+        // The JSON_TABLE(…) call: its own parentheses at depth 0, skipping quoted paths.
+        $end = -1;
+        $depth = 0;
         $quoted = false;
-        $start = $open + strlen('columns(');
-        for ($i = $start, $n = strlen($writeSql); $i < $n && $depth > 0; $i++) {
+        for ($i = $jt + strlen('json_table'), $n = strlen($writeSql); $i < $n && $end < 0; $i++) {
             $ch = $writeSql[$i];
             if ($quoted) {
                 $quoted = $ch !== "'";
@@ -220,20 +222,64 @@ final class MysqlReturning
             } elseif ($ch === ')') {
                 $depth--;
                 if ($depth === 0) {
-                    $entries[] = substr($writeSql, $start, $i - $start);
+                    $end = $i;
                 }
-            } elseif ($ch === ',' && $depth === 1) {
-                $entries[] = substr($writeSql, $start, $i - $start);
+            }
+        }
+        if ($end < 0 || preg_match('/^\s+(?:AS\s+)?([A-Za-z0-9_]+)/i', substr($writeSql, $end + 1), $alias) !== 1) {
+            return null;
+        }
+        $source = substr($writeSql, $jt, $end + 1 - $jt) . ' AS ' . $alias[1];
+        $reads = [];
+        if (str_starts_with($lower, 'update')) {
+            if (preg_match('/\sON\s+(.*?)\s+SET\s/is', $writeSql, $on) === 1) {
+                foreach (preg_split('/\s+AND\s+/i', $on[1]) ?: [] as $conj) {
+                    if (preg_match('/^[A-Za-z0-9_]*\.?([A-Za-z0-9_]+)\s*=\s*(.+)$/s', trim($conj), $m) === 1) {
+                        $reads[$m[1]] = trim($m[2]);
+                    }
+                }
+            }
+            return [$source, $reads];
+        }
+        $from = strpos($lower, ' from json_table(');
+        if (preg_match('/\)\s*SELECT\s+/i', $writeSql, $sel, PREG_OFFSET_CAPTURE) === 1 && $from !== false && $from > $sel[0][1]) {
+            $start = $sel[0][1] + strlen($sel[0][0]);
+            $items = self::splitTopLevel(substr($writeSql, $start, $from - $start));
+            if (count($items) === count($insertCols)) {
+                $reads = array_combine($insertCols, $items);
+            }
+        }
+        return [$source, $reads];
+    }
+
+    /**
+     * Split a comma list on the commas at its own depth (outside parentheses and quotes); entries trimmed
+     * (mysql-returning.ts `splitTopLevel`).
+     *
+     * @return list<string>
+     */
+    private static function splitTopLevel(string $list): array
+    {
+        $out = [];
+        $depth = 0;
+        $quoted = false;
+        $start = 0;
+        for ($i = 0, $n = strlen($list); $i < $n; $i++) {
+            $ch = $list[$i];
+            if ($quoted) {
+                $quoted = $ch !== "'";
+            } elseif ($ch === "'") {
+                $quoted = true;
+            } elseif ($ch === '(') {
+                $depth++;
+            } elseif ($ch === ')') {
+                $depth--;
+            } elseif ($ch === ',' && $depth === 0) {
+                $out[] = trim(substr($list, $start, $i - $start));
                 $start = $i + 1;
             }
         }
-        $out = [];
-        foreach ($entries as $e) {
-            $decl = trim($e);
-            if (preg_match('/^([A-Za-z0-9_]+)\s+(.*?)\s+PATH\s/is', $decl, $m) === 1) {
-                $out[$m[1]] = [$decl, strtoupper(trim($m[2])) === 'JSON'];
-            }
-        }
+        $out[] = trim(substr($list, $start));
         return $out;
     }
 
@@ -345,28 +391,26 @@ final class MysqlReturning
         $isInsert = str_starts_with($wl, 'insert');
         // Recover a BATCH write's rows by reading its key TUPLES back out of the SAME JSON payload it
         // bound — every key column, never the first alone (a composite key's first column names other
-        // rows too) — and comparing each one EXACTLY as the write did: through the write's own
-        // JSON_TABLE declaration of that column (jsonTableColumns). A typed key (BIGINT, DECIMAL…)
-        // compares as that type; re-read as the JSON_UNQUOTE string it would compare with a BIGINT
-        // column as DOUBLE, which past 2^53 matches the neighbouring keys too. A key the write declared
-        // as JSON (a string key) is unquoted, as the write's own expression does. A key column with no
-        // JSON_TABLE declaration is not in the payload: that fails closed.
-        $jsonSelect = static function (array $keys, string $what, ?string $written) use ($cols, $table, $orderBy, $writeSql): MysqlReselect {
-            $declared = self::jsonTableColumns($writeSql);
-            $unq = [];
-            $paths = [];
-            foreach ($keys as $k) {
-                if (!array_key_exists($k, $declared)) {
-                    throw new \RuntimeException("scp write(mysql): {$what} column '{$k}' has no JSON_TABLE column in '{$writeSql}', so its rows cannot be matched the way it wrote them");
-                }
-                [$decl, $json] = $declared[$k];
-                $unq[] = $json ? "JSON_UNQUOTE(jt.{$k})" : "jt.{$k}";
-                $paths[] = $decl;
+        // rows too) — through the write's OWN JSON_TABLE source and the write's OWN read expression of
+        // each key (batchReads), so each key compares EXACTLY as the write compared or wrote it. Any other
+        // read can compare differently: a key the write reads as a JSON value (v.k) or as a BIGINT,
+        // re-read as the JSON_UNQUOTE string, is compared with a BIGINT column as DOUBLE, which past 2^53
+        // matches the neighbouring keys too. A key with no read expression in the write fails closed.
+        $jsonSelect = static function (array $keys, string $what, ?string $written) use ($cols, $table, $orderBy, $insertCols, $writeSql): MysqlReselect {
+            $batch = self::batchReads($writeSql, $insertCols);
+            if ($batch === null) {
+                throw new \RuntimeException("scp write(mysql): cannot parse the JSON_TABLE source of '{$writeSql}'");
             }
-            $unq = implode(', ', $unq);
-            $paths = implode(', ', $paths);
-            return new MysqlReselect($writeSql, "SELECT {$cols} FROM {$table} WHERE (" . implode(', ', $keys) . ") IN "
-                . "(SELECT {$unq} FROM JSON_TABLE(?, '\$[*]' COLUMNS({$paths})) jt){$orderBy}", [new ReselectBind('json')], $written);
+            [$source, $readOf] = $batch;
+            $reads = [];
+            foreach ($keys as $k) {
+                if (!array_key_exists($k, $readOf)) {
+                    throw new \RuntimeException("scp write(mysql): {$what} column '{$k}' has no read expression in '{$writeSql}', so its rows cannot be matched the way it wrote them");
+                }
+                $reads[] = $readOf[$k];
+            }
+            return new MysqlReselect($writeSql, "SELECT {$cols} FROM {$table} WHERE (" . implode(', ', $keys) . ') IN (SELECT '
+                . implode(', ', $reads) . " FROM {$source}){$orderBy}", [new ReselectBind('json')], $written);
         };
         // Recover a VALUES INSERT's rows by EVERY key column of EVERY row, each bound from its own param —
         // row r's column c (its INSERT column position) is param r * ncols + c (valuesRows). Keying a

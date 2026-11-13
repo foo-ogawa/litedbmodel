@@ -374,11 +374,15 @@ fn mysql_returning_bigint_key() {
             .collect();
         table(&d, &t, ddl, &rows);
     };
-    let payload = s(
+    let big = s(
         r#"[{"k":1152921504606846977,"name":"mine","tenant_id":1},{"k":1152921504606846990,"name":"mine","tenant_id":1}]"#,
     );
     let mut failures: Vec<String> = Vec::new();
-    let mut count = |what: &str, sql: String| match rows(&d, &sql, std::slice::from_ref(&payload)) {
+    let mut count = |what: &str, sql: String, payload: &Value| match rows(
+        &d,
+        &sql,
+        std::slice::from_ref(payload),
+    ) {
         Ok(got) if got.len() == 2 => {}
         Ok(got) => failures.push(format!(
             "{what}: RETURNING returned {} rows, want the 2 it wrote",
@@ -388,16 +392,53 @@ fn mysql_returning_bigint_key() {
     };
 
     seed("(id INT AUTO_INCREMENT PRIMARY KEY, k BIGINT NOT NULL, tenant_id INT NOT NULL, name VARCHAR(64))", true);
-    count("updateMany", format!("UPDATE {t} AS u JOIN JSON_TABLE(?, '$[*]' COLUMNS(k BIGINT PATH '$.k', name JSON PATH '$.name')) AS v ON u.k = v.k SET u.name = JSON_UNQUOTE(v.name) RETURNING k, tenant_id"));
+    count("updateMany", format!("UPDATE {t} AS u JOIN JSON_TABLE(?, '$[*]' COLUMNS(k BIGINT PATH '$.k', name JSON PATH '$.name')) AS v ON u.k = v.k SET u.name = JSON_UNQUOTE(v.name) RETURNING k, tenant_id"), &big);
+    // #384: the write reads each key by its OWN rule — the JSON value (no declared type), a declared
+    // numeric type, or unquoted text — so the re-select must read it with the write's own expression.
+    seed("(id INT AUTO_INCREMENT PRIMARY KEY, k BIGINT NOT NULL, tenant_id INT NOT NULL, name VARCHAR(64))", true);
+    count("updateMany, no declared type", format!("UPDATE {t} AS u JOIN JSON_TABLE(?, '$[*]' COLUMNS(k JSON PATH '$.k', name JSON PATH '$.name')) AS v ON u.k = v.k SET u.name = JSON_UNQUOTE(v.name) RETURNING k, tenant_id"), &big);
+    seed("(id INT AUTO_INCREMENT PRIMARY KEY, k BIGINT NOT NULL, tenant_id INT NOT NULL, name VARCHAR(64))", true);
+    count("updateMany, declared BIGINT", format!("UPDATE {t} AS u JOIN JSON_TABLE(?, '$[*]' COLUMNS(k DECIMAL(65,30) PATH '$.k', name JSON PATH '$.name')) AS v ON u.k = v.k SET u.name = JSON_UNQUOTE(v.name) RETURNING k, tenant_id"), &big);
 
     seed("(id INT AUTO_INCREMENT PRIMARY KEY, k BIGINT NOT NULL, tenant_id INT NOT NULL, name VARCHAR(64))", false);
-    count("upsertMany", format!("INSERT INTO {t} (k, name, tenant_id) SELECT jt.k, JSON_UNQUOTE(jt.name), jt.tenant_id FROM JSON_TABLE(?, '$[*]' COLUMNS(k BIGINT PATH '$.k', name JSON PATH '$.name', tenant_id BIGINT PATH '$.tenant_id')) jt ON DUPLICATE KEY UPDATE k = VALUES(k), name = VALUES(name), tenant_id = VALUES(tenant_id) RETURNING k, tenant_id /*scp:pk=id;ai=id;conflict=k*/"));
+    count("upsertMany", format!("INSERT INTO {t} (k, name, tenant_id) SELECT jt.k, JSON_UNQUOTE(jt.name), jt.tenant_id FROM JSON_TABLE(?, '$[*]' COLUMNS(k BIGINT PATH '$.k', name JSON PATH '$.name', tenant_id BIGINT PATH '$.tenant_id')) jt ON DUPLICATE KEY UPDATE k = VALUES(k), name = VALUES(name), tenant_id = VALUES(tenant_id) RETURNING k, tenant_id /*scp:pk=id;ai=id;conflict=k*/"), &big);
 
     seed(
         "(k BIGINT NOT NULL, tenant_id INT NOT NULL, name VARCHAR(64))",
         false,
     );
-    count("createMany", format!("INSERT INTO {t} (k, name, tenant_id) SELECT jt.k, JSON_UNQUOTE(jt.name), jt.tenant_id FROM JSON_TABLE(?, '$[*]' COLUMNS(k BIGINT PATH '$.k', name JSON PATH '$.name', tenant_id BIGINT PATH '$.tenant_id')) jt RETURNING k, tenant_id /*scp:pk=k;ai=*/"));
+    count("createMany", format!("INSERT INTO {t} (k, name, tenant_id) SELECT jt.k, JSON_UNQUOTE(jt.name), jt.tenant_id FROM JSON_TABLE(?, '$[*]' COLUMNS(k BIGINT PATH '$.k', name JSON PATH '$.name', tenant_id BIGINT PATH '$.tenant_id')) jt RETURNING k, tenant_id /*scp:pk=k;ai=*/"), &big);
+
+    // A string (UUID) key the write reads as unquoted text.
+    let uuid = |i: i32| format!("0b0d8a52-7a7e-4c43-9a8e-{i:012}");
+    let seed_text = |ddl: &str, ours: bool| {
+        let rows: Vec<String> = (1..=40)
+            .filter(|i| ours || (*i != 1 && *i != 14))
+            .map(|i| {
+                let tenant = if i == 1 || i == 14 { 1 } else { 2 };
+                format!(
+                    "INSERT INTO {t} (k, tenant_id, name) VALUES ('{}', {tenant}, 'theirs')",
+                    uuid(i)
+                )
+            })
+            .collect();
+        table(&d, &t, ddl, &rows);
+    };
+    let text = s(&format!(
+        r#"[{{"k":"{}","name":"mine","tenant_id":1}},{{"k":"{}","name":"mine","tenant_id":1}}]"#,
+        uuid(1),
+        uuid(14)
+    ));
+    let text_ddl = "(id INT AUTO_INCREMENT PRIMARY KEY, k VARCHAR(36) NOT NULL, tenant_id INT NOT NULL, name VARCHAR(64))";
+    seed_text(text_ddl, true);
+    count("updateMany, UUID key", format!("UPDATE {t} AS u JOIN JSON_TABLE(?, '$[*]' COLUMNS(k JSON PATH '$.k', name JSON PATH '$.name')) AS v ON u.k = JSON_UNQUOTE(v.k) SET u.name = JSON_UNQUOTE(v.name) RETURNING k, tenant_id"), &text);
+    seed_text(text_ddl, false);
+    count("upsertMany, UUID key", format!("INSERT INTO {t} (k, name, tenant_id) SELECT JSON_UNQUOTE(jt.k), JSON_UNQUOTE(jt.name), jt.tenant_id FROM JSON_TABLE(?, '$[*]' COLUMNS(k JSON PATH '$.k', name JSON PATH '$.name', tenant_id BIGINT PATH '$.tenant_id')) jt ON DUPLICATE KEY UPDATE k = VALUES(k), name = VALUES(name), tenant_id = VALUES(tenant_id) RETURNING k, tenant_id /*scp:pk=id;ai=id;conflict=k*/"), &text);
+    seed_text(
+        "(k VARCHAR(36) NOT NULL, tenant_id INT NOT NULL, name VARCHAR(64))",
+        false,
+    );
+    count("createMany, UUID key", format!("INSERT INTO {t} (k, name, tenant_id) SELECT JSON_UNQUOTE(jt.k), JSON_UNQUOTE(jt.name), jt.tenant_id FROM JSON_TABLE(?, '$[*]' COLUMNS(k JSON PATH '$.k', name JSON PATH '$.name', tenant_id BIGINT PATH '$.tenant_id')) jt RETURNING k, tenant_id /*scp:pk=k;ai=*/"), &text);
 
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
