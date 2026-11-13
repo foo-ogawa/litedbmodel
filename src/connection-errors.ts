@@ -18,6 +18,9 @@ export function isConnectionError(error: Error): boolean {
     code === 'ECONNREFUSED' ||
     code === 'EPIPE' ||
     code === 'EAI_AGAIN' ||
-    code === 'PROTOCOL_CONNECTION_LOST'
+    code === 'PROTOCOL_CONNECTION_LOST' ||
+    // PG SQLSTATE 57P01 admin_shutdown: the server ended this connection (`pg_terminate_backend`, a
+    // shutdown, a failover) and answers the statement in flight with it before closing.
+    code === '57P01'
   );
 }
