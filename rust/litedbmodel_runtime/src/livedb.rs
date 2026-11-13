@@ -1227,22 +1227,17 @@ enum WrittenRows {
     /// The affected count: a plain INSERT / `INSERT IGNORE` never updates a row, so CLIENT_FOUND_ROWS
     /// cannot change it — it IS the number of rows inserted.
     Affected,
-    /// An insert-or-ignore (`ON DUPLICATE KEY UPDATE c = c`) on an AUTO_INCREMENT key: inserted ⇔ the
-    /// insert id is not 0 (a conflict that wrote nothing reports 0).
-    InsertId,
 }
 
 /// How many rows the write wrote, from its own result (mysql-returning.ts `writtenRowCount`); `None` ⇒
-/// not countable. (The same insert-or-ignore on a CLIENT-supplied key is decided by its PK lock —
-/// [`MysqlReselect::insert_if_absent`] — never by its affected count: sqlx opens EVERY MySQL connection
-/// with CLIENT_FOUND_ROWS, under which a no-op conflict and an insert both report 1.)
-fn written_row_count(written: Option<WrittenRows>, last_id: i64, affected: i64) -> Option<i64> {
-    match written {
-        None => None,
-        Some(WrittenRows::Affected) => Some(affected),
-        Some(WrittenRows::InsertId) => Some(if last_id != 0 { 1 } else { 0 }),
-    }
+/// not countable.
+fn written_row_count(written: Option<WrittenRows>, affected: i64) -> Option<i64> {
+    written.map(|WrittenRows::Affected| affected)
 }
+
+/// MySQL's duplicate-key error (ER_DUP_ENTRY): the conflict a [`MysqlReselect::duplicate_is_skip`]
+/// write skipped (mysql-returning.ts `MYSQL_ER_DUP_ENTRY`).
+const MYSQL_ER_DUP_ENTRY: u16 = 1062;
 
 /// Fail closed when the recovered row count differs from the count the write wrote: the SELECT then
 /// named rows the write did not write (or missed ones it did).
@@ -1283,12 +1278,13 @@ struct MysqlReselect {
     lock_binds: Vec<ReselectBind>,
     /// The key columns `lock_sql` reads, in order (the declared PK).
     key_cols: Vec<String>,
-    /// An insert-or-ignore on a CLIENT-supplied key (mysql-returning.ts `insertIfAbsent`): `lock_sql`
-    /// reads — and LOCKS — the row its own PK names BEFORE the write. A row there ⇒ it inserts nothing,
-    /// so it returns no rows; none ⇒ the next-key lock keeps every other session from inserting that PK,
-    /// so the row `select_sql` finds by it afterwards is the one it inserted. No affected count is read:
-    /// under CLIENT_FOUND_ROWS a no-op conflict and an insert both report 1.
-    insert_if_absent: bool,
+    /// A single-row insert-or-ignore (mysql-returning.ts `duplicateIsSkip`): `write_sql` is the PLAIN
+    /// INSERT — its no-op `ON DUPLICATE KEY UPDATE c = c` tail removed — so a conflict on ANY unique key
+    /// raises the duplicate-key error ([`MYSQL_ER_DUP_ENTRY`]) instead of silently doing nothing. That
+    /// error IS the skipped conflict: MySQL rolls back only the statement, and the write returns no rows.
+    /// No affected count is read (sqlx opens every connection with CLIENT_FOUND_ROWS) and no lock is
+    /// taken, so it holds under every isolation level.
+    duplicate_is_skip: bool,
     /// Run the SELECT BEFORE the write instead of after. Only a DELETE needs this: its rows are gone
     /// once it has run, so the pre-image IS the written row set (the rows the DELETE removes).
     before: bool,
@@ -1389,7 +1385,17 @@ fn build_mysql_reselect(sql: &str) -> Result<Option<MysqlReselect>, SqlFailure> 
         .to_string();
     let (pk_cols, auto_inc) = parse_pk_hint(hint_region);
     let conflict_cols = parse_conflict_hint(hint_region);
-    let write_sql = strip_pk_hint(&sql[..ret_pos]).trim().to_string();
+    let mut write_sql = strip_pk_hint(&sql[..ret_pos]).trim().to_string();
+    // An insert-or-ignore is spelled `ON DUPLICATE KEY UPDATE c = c` — it reads like an upsert, but it
+    // writes NOTHING on a conflict. It runs as the plain INSERT instead, so the conflict it skips is a
+    // duplicate-key error rather than a no-op that reports like an insert (`duplicate_is_skip`).
+    let odku = write_sql
+        .to_ascii_lowercase()
+        .find(" on duplicate key update ");
+    let duplicate_is_skip = parse_ignore_hint(hint_region) && odku.is_some();
+    if let (true, Some(at)) = (duplicate_is_skip, odku) {
+        write_sql = write_sql[..at].trim().to_string();
+    }
     let wl = write_sql.to_ascii_lowercase();
     let Some(table) = table_of(&write_sql) else {
         return Err(driver_failure(format!(
@@ -1500,13 +1506,16 @@ fn build_mysql_reselect(sql: &str) -> Result<Option<MysqlReselect>, SqlFailure> 
             select_sql,
             binds,
             written,
+            duplicate_is_skip,
             ..MysqlReselect::default()
         }))
     };
-    // An insert-or-ignore is spelled `ON DUPLICATE KEY UPDATE c = c` on a single row — it reads like
-    // an upsert, but it writes NOTHING on a conflict, so it is recovered as the INSERT it may have been.
-    let noop_on_conflict = wl.contains("on duplicate key update");
-    let upsert = noop_on_conflict && !parse_ignore_hint(hint_region);
+    let upsert = wl.contains("on duplicate key update");
+    if duplicate_is_skip && is_batch {
+        return Err(driver_failure(format!(
+            "scp write(mysql): a batch insert-or-ignore…RETURNING is an INSERT IGNORE, not an ON DUPLICATE KEY UPDATE ('{write_sql}')"
+        )));
+    }
 
     // upsert / upsertMany — recover by EVERY column of the CONFLICT key. MySQL does not report which
     // row an ON DUPLICATE KEY UPDATE touched, so the AUTO_INCREMENT range is wrong once a row was updated.
@@ -1548,11 +1557,6 @@ fn build_mysql_reselect(sql: &str) -> Result<Option<MysqlReselect>, SqlFailure> 
         }
         if !auto_inc.is_empty() && pk_cols.len() == 1 && pk_cols[0] == auto_inc {
             // A single-row / multi-VALUES INSERT reserves its ids up front, so they ARE consecutive.
-            let written = if noop_on_conflict {
-                WrittenRows::InsertId
-            } else {
-                WrittenRows::Affected
-            };
             return Ok(Some(MysqlReselect {
                 write_sql,
                 select_sql: format!(
@@ -1560,7 +1564,8 @@ fn build_mysql_reselect(sql: &str) -> Result<Option<MysqlReselect>, SqlFailure> 
                     ai = auto_inc
                 ),
                 binds: vec![ReselectBind::LastId, ReselectBind::HighId],
-                written: Some(written),
+                written: Some(WrittenRows::Affected),
+                duplicate_is_skip,
                 ..MysqlReselect::default()
             }));
         }
@@ -1575,30 +1580,6 @@ fn build_mysql_reselect(sql: &str) -> Result<Option<MysqlReselect>, SqlFailure> 
         if is_batch {
             let plan = json_select(&pk_cols, "PK")?;
             return after(write_sql, plan, Some(WrittenRows::Affected));
-        }
-        if noop_on_conflict {
-            // insert-or-ignore on a client-supplied key: lock its PK first (insert_if_absent) — never
-            // its affected count, which CLIENT_FOUND_ROWS makes the same for a conflict and an insert.
-            let (select_sql, binds) = keyed_by_insert_params(&pk_cols, "PK")?;
-            if binds.len() != pk_cols.len() {
-                return Err(driver_failure(format!(
-                    "scp write(mysql): an insert-or-ignore…RETURNING on a client-supplied key writes ONE row ('{write_sql}')"
-                )));
-            }
-            let conds: Vec<String> = pk_cols.iter().map(|k| format!("{k} = ?")).collect();
-            return Ok(Some(MysqlReselect {
-                write_sql,
-                select_sql,
-                lock_sql: format!(
-                    "SELECT {} FROM {table} WHERE {} FOR UPDATE",
-                    pk_cols.join(", "),
-                    conds.join(" AND ")
-                ),
-                lock_binds: binds.clone(),
-                binds,
-                insert_if_absent: true,
-                ..MysqlReselect::default()
-            }));
         }
         let plan = keyed_by_insert_params(&pk_cols, "PK")?;
         return after(write_sql, plan, Some(WrittenRows::Affected));
@@ -1894,11 +1875,13 @@ async fn my_returning_on_conn(
             .await
             .map_err(|e| driver_failure(format!("mysql write [{}]: {e}", rs.write_sql)))?;
         // The DELETE must have removed exactly the locked pre-image.
-        let written = written_row_count(rs.written, 0, deleted.rows_affected() as i64);
+        let written = written_row_count(rs.written, deleted.rows_affected() as i64);
         check_recovered(out.len(), written, &rs.write_sql)?;
         return Ok(out);
     }
     if !rs.lock_sql.is_empty() {
+        // UPDATE…RETURNING: recover the written rows by the keys locked BEFORE the write (never by the
+        // WHERE re-evaluated after it).
         let lock_params: Vec<Value> = rs
             .lock_binds
             .iter()
@@ -1916,21 +1899,6 @@ async fn my_returning_on_conn(
             .execute(&mut *conn)
             .await
             .map_err(|e| driver_failure(format!("mysql write [{}]: {e}", rs.write_sql)))?;
-        if rs.insert_if_absent {
-            // insert-or-ignore on a client-supplied key: its PK was already there ⇒ it inserted
-            // nothing; else the row that PK names now is the one it inserted (the lock kept every other
-            // session out). Its select binds ARE its lock binds (the PK's INSERT params).
-            if !keys.is_empty() {
-                return Ok(Vec::new());
-            }
-            let rows = bind_my(sqlx::query(&rs.select_sql), &lock_params)?
-                .fetch_all(&mut *conn)
-                .await
-                .map_err(|e| driver_failure(format!("mysql re-select [{}]: {e}", rs.select_sql)))?;
-            return my_rows_to_wire(&rows);
-        }
-        // UPDATE…RETURNING: recover the written rows by the keys locked BEFORE the write (never by the
-        // WHERE re-evaluated after it).
         if keys.is_empty() {
             return Ok(Vec::new());
         }
@@ -1962,14 +1930,32 @@ async fn my_returning_on_conn(
             .await
             .map_err(|e| driver_failure(format!("mysql anchor [{}]: {e}", rs.anchor_sql)))?;
     }
-    let exec_res = bind_my(sqlx::query(&rs.write_sql), params)?
+    let exec_res = match bind_my(sqlx::query(&rs.write_sql), params)?
         .execute(&mut *conn)
         .await
-        .map_err(|e| driver_failure(format!("mysql write [{}]: {e}", rs.write_sql)))?;
+    {
+        Ok(r) => r,
+        // An insert-or-ignore's duplicate key: the conflict it skips — it wrote nothing (only the
+        // statement rolled back).
+        Err(e)
+            if rs.duplicate_is_skip
+                && e.as_database_error()
+                    .and_then(|d| d.try_downcast_ref::<sqlx::mysql::MySqlDatabaseError>())
+                    .is_some_and(|m| m.number() == MYSQL_ER_DUP_ENTRY) =>
+        {
+            return Ok(Vec::new());
+        }
+        Err(e) => {
+            return Err(driver_failure(format!(
+                "mysql write [{}]: {e}",
+                rs.write_sql
+            )))
+        }
+    };
     let last_id = exec_res.last_insert_id() as i64;
     let affected = exec_res.rows_affected() as i64;
-    // A write that wrote no row (an insert-or-ignore that hit a conflict) returns nothing.
-    let written = written_row_count(rs.written, last_id, affected);
+    // A write that wrote no row (an INSERT IGNORE that hit a conflict) returns nothing.
+    let written = written_row_count(rs.written, affected);
     if written == Some(0) {
         return Ok(Vec::new());
     }

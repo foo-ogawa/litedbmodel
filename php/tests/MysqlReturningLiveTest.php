@@ -135,6 +135,11 @@ final class MysqlReturningLiveTest extends TestCase
         }
         $this->db = $default;
 
+        // READ COMMITTED: another session inserts the same key while ours is in flight — its row is never
+        // returned. A BEFORE INSERT trigger parks OUR insert (owner 'mine') on a row another session
+        // holds, so the other session's insert of the same key lands exactly between a lock and the write.
+        $this->insertIgnoreRace($clientDdl, $ignoreClient);
+
         // Batch (INSERT IGNORE) on a client-supplied key: the pre-existing row read back fails it closed.
         $this->table($clientDdl, $victim);
         $batch = "INSERT IGNORE INTO {$t} (code, owner) SELECT JSON_UNQUOTE(jt.code), JSON_UNQUOTE(jt.owner) FROM JSON_TABLE(?, '\$[*]' COLUMNS(code JSON PATH '\$.code', owner JSON PATH '\$.owner')) jt RETURNING code, owner /*scp:pk=code;ai=;conflict=code;action=ignore*/";
@@ -145,6 +150,56 @@ final class MysqlReturningLiveTest extends TestCase
             self::assertStringContainsString('wrote 1 row(s) but its RETURNING recovery found 2', $e->getMessage());
         }
         self::assertSame([['code' => 'X3', 'owner' => 'mine']], $this->rows($batch, ['[{"code":"X3","owner":"mine"}]']), 'batch ignore insert');
+    }
+
+    /**
+     * Run the insert-or-ignore `$ignore` (code, owner) for key K1 under READ COMMITTED while another
+     * session (a forked process — PHP has no threads) inserts K1 — ours parked by a trigger until that
+     * other row is committed — and check that the other session's row is never returned as ours.
+     */
+    private function insertIgnoreRace(string $ddl, string $ignore): void
+    {
+        $t = $this->t;
+        $gate = "{$t}_gate";
+        $this->table($ddl);
+        $this->db->exec("DROP TABLE IF EXISTS {$gate}");
+        $this->db->exec("CREATE TABLE {$gate} (id INT PRIMARY KEY)");
+        $this->db->exec("INSERT INTO {$gate} (id) VALUES (1)");
+        $this->db->exec("CREATE TRIGGER {$t}_park BEFORE INSERT ON {$t} FOR EACH ROW BEGIN "
+            . "IF NEW.owner = 'mine' THEN SELECT id INTO @scp_park FROM {$gate} WHERE id = 1 FOR UPDATE; END IF; END");
+        [$parentEnd, $childEnd] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, STREAM_IPPROTO_IP);
+        $pid = pcntl_fork();
+        if ($pid === 0) {
+            fclose($parentEnd);
+            $other = self::mysql();
+            $other->exec('BEGIN');
+            $other->query("SELECT id FROM {$gate} WHERE id = 1 FOR UPDATE")->fetchAll();
+            fwrite($childEnd, "locked\n");
+            for ($i = 0; $i < 200; $i++) {
+                $st = $other->prepare('SELECT COUNT(*) FROM information_schema.PROCESSLIST WHERE INFO LIKE ?');
+                $st->execute(['SELECT id INTO @scp_park %']);
+                if ((int) $st->fetchColumn() > 0) {
+                    usleep(300_000); // ours: parked in its trigger, before its row
+                    break;
+                }
+                usleep(20_000);
+            }
+            $other->exec("INSERT INTO {$t} (code, owner) VALUES ('K1', 'victim')");
+            $other->exec('COMMIT');
+            // Die without destructors: the inherited copy of the parent's connection must not be closed.
+            posix_kill(posix_getpid(), SIGKILL);
+        }
+        fclose($childEnd);
+        self::assertSame("locked\n", fgets($parentEnd));
+        $this->db->exec('SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED');
+        try {
+            $got = $this->rows($ignore, ['K1', 'mine']);
+        } finally {
+            pcntl_waitpid($pid, $status);
+            $this->db->exec('SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ');
+            $this->db->exec("DROP TABLE IF EXISTS {$gate}");
+        }
+        self::assertSame([], $got, 'READ COMMITTED race');
     }
 
     /** #360 — a bulk INSERT…RETURNING returns its own rows, not the ids another session took between them. */

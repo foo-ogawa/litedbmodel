@@ -17,11 +17,9 @@
  *  | upsert / …Many   | EVERY column of the CONFLICT key (MySQL does not report the         | after     |
  *  |                  | conflicted-row id, so the AUTO_INCREMENT range is wrong when a row  |           |
  *  |                  | was UPDATED) — one column of a composite key names other rows too   |           |
- *  | insert-or-ignore | as create, and ONLY the rows it inserted (`;action=ignore`): a       | after     |
- *  |                  | conflict writes nothing, so it returns nothing. On a client-supplied| lock      |
- *  |                  | key its PK is read and LOCKED (FOR UPDATE) before the write: a row  | + after   |
- *  |                  | there ⇒ it inserts nothing; none ⇒ the row its PK names afterwards  |           |
- *  |                  | is the one it inserted                                              |           |
+ *  | insert-or-ignore | as create, and ONLY the row it inserted (`;action=ignore`): it runs | after     |
+ *  |                  | as the PLAIN INSERT, and a duplicate-key error is the conflict it   |           |
+ *  |                  | skipped — it wrote nothing, so it returns nothing                   |           |
  *  | update           | the PK of every row its WHERE names, read and LOCKED (FOR UPDATE)  | lock      |
  *  |                  | before the write; the rows re-selected by those keys after it      | + after   |
  *  | updateMany       | EVERY batch JOIN key column, re-bound from the SAME JSON payload   | after     |
@@ -46,6 +44,9 @@
 
 // TYPE-only (erased at compile time), so the tx module can import this one back without a cycle.
 import type { TxOp } from './tx';
+
+/** MySQL's duplicate-key error (`ER_DUP_ENTRY`): the conflict a {@link MysqlReselect.duplicateIsSkip} write skipped. */
+export const MYSQL_ER_DUP_ENTRY = 1062;
 
 /** The strip-before-execute PK-hint comment marker. */
 const MYSQL_PK_HINT_RE = /\s*\/\*scp:pk=[^*]*\*\//;
@@ -101,14 +102,8 @@ export type ReselectBind =
  *
  *  - `affected` — the affected-row count. A plain INSERT and an `INSERT IGNORE` never update a row,
  *    so `CLIENT_FOUND_ROWS` cannot change it: it IS the number of rows inserted.
- *  - `insertId` — an insert-or-ignore (`ON DUPLICATE KEY UPDATE c = c`) on an AUTO_INCREMENT key: it
- *    inserted ⇔ the result's insert id is not 0 (a conflict that wrote nothing reports 0).
- *
- * The same insert-or-ignore on a CLIENT-supplied key is not counted from its result at all: under
- * `CLIENT_FOUND_ROWS` (mysql2's and sqlx's default) a conflicting row "set to its current values" counts
- * 1 affected row, exactly like an insert. It is decided by its lock instead ({@link MysqlReselect.insertIfAbsent}).
  */
-export type WrittenRows = 'affected' | 'insertId';
+export type WrittenRows = 'affected';
 
 /** The MySQL RETURNING recovery derived from a write's baked SQL + its `/*scp:pk=…* /` hint. */
 export interface MysqlReselect {
@@ -144,14 +139,16 @@ export interface MysqlReselect {
   /** The key columns {@link lockSql} reads, in order (the declared PK). */
   readonly keyCols: readonly string[];
   /**
-   * An insert-or-ignore on a CLIENT-supplied key: {@link lockSql} reads — and LOCKS — the row its own
-   * PK names, BEFORE the write. A row there ⇒ the write inserts nothing (its ON DUPLICATE KEY UPDATE is
-   * a no-op), so it returns `[]`. None ⇒ the next-key lock keeps every other session from inserting that
-   * PK meanwhile, so whatever row {@link selectSql} finds by that PK after the write is the one it
-   * inserted (none, when it no-op'd on another unique key). No affected count is read: under
-   * `CLIENT_FOUND_ROWS` a no-op conflict and an insert both report 1.
+   * A single-row insert-or-ignore: {@link writeSql} is the PLAIN INSERT — its no-op `ON DUPLICATE KEY
+   * UPDATE c = c` tail removed — so a conflict on ANY unique key raises MySQL's duplicate-key error
+   * ({@link MYSQL_ER_DUP_ENTRY}) instead of silently doing nothing. That error IS the skipped conflict:
+   * MySQL rolls back only the statement, the transaction goes on, and the write returns `[]`. A write that
+   * succeeds inserted the row, which is recovered by its key like a create. Nothing reads an affected
+   * count (CLIENT_FOUND_ROWS counts a no-op conflict like an insert) and nothing takes a lock, so it
+   * holds under every isolation level — a lock taken before the write leaves no gap lock under READ
+   * COMMITTED, and another session's row of the same key inserted in between would be read back as ours.
    */
-  readonly insertIfAbsent: boolean;
+  readonly duplicateIsSkip: boolean;
   /**
    * Run the SELECT BEFORE the write instead of after. Only a DELETE needs this: its rows are gone
    * once it has run, so the pre-image IS the written row set (the same rows the DELETE removes).
@@ -276,7 +273,13 @@ export function buildMysqlReselect(sql: string): MysqlReselect | null {
   const cols = stripMysqlPkHint(sql.slice(retPos + ' returning '.length)).trim();
   const { pk, autoInc } = parsePkHint(hintRegion);
   const conflict = parseConflictHint(hintRegion);
-  const writeSql = stripMysqlPkHint(sql.slice(0, retPos)).trim();
+  const stripped = stripMysqlPkHint(sql.slice(0, retPos)).trim();
+  // An insert-or-ignore is spelled `ON DUPLICATE KEY UPDATE c = c` — it reads like an upsert, but it writes
+  // NOTHING on a conflict. It runs as the plain INSERT instead, so the conflict it skips is a duplicate-key
+  // error rather than a no-op that reports like an insert ({@link MysqlReselect.duplicateIsSkip}).
+  const odku = stripped.toLowerCase().indexOf(' on duplicate key update ');
+  const duplicateIsSkip = parseIgnoreHint(hintRegion) && odku >= 0;
+  const writeSql = duplicateIsSkip ? stripped.slice(0, odku).trim() : stripped;
   const lower = writeSql.toLowerCase();
 
   const table = tableOf(writeSql);
@@ -285,7 +288,7 @@ export function buildMysqlReselect(sql: string): MysqlReselect | null {
   const orderBy = pk.length > 0 ? ` ORDER BY ${pk.join(', ')}` : '';
   const isBatch = lower.includes('json_table(');
   const done = (selectSql: string, binds: readonly ReselectBind[], written: WrittenRows | null = null, before = false, anchorSql = ''): MysqlReselect =>
-    ({ writeSql, selectSql, binds, written, before, anchorSql, lockSql: '', lockBinds: [], keyCols: [], insertIfAbsent: false });
+    ({ writeSql, selectSql, binds, written, before, anchorSql, lockSql: '', lockBinds: [], keyCols: [], duplicateIsSkip });
   const writeCols = insertCols(writeSql);
   /**
    * Recover a BATCH write's rows by reading its key TUPLES back out of the SAME JSON payload it bound —
@@ -333,9 +336,10 @@ export function buildMysqlReselect(sql: string): MysqlReselect | null {
       : `(${keys.join(', ')}) IN (${Array.from({ length: rows }, () => `(${keys.map(() => '?').join(', ')})`).join(', ')})`;
     return done(`SELECT ${cols} FROM ${table} WHERE ${where}${orderBy}`, binds, written);
   };
-  // An insert-or-ignore is spelled `ON DUPLICATE KEY UPDATE c = c` on a single row — it reads like an
-  // upsert, but it writes NOTHING on a conflict, so it is recovered as the INSERT it may have been.
-  const upsert = lower.includes('on duplicate key update') && !parseIgnoreHint(hintRegion);
+  const upsert = lower.includes('on duplicate key update');
+  if (duplicateIsSkip && isBatch) {
+    throw new Error(`scp write(mysql): a batch insert-or-ignore…RETURNING is an INSERT IGNORE, not an ON DUPLICATE KEY UPDATE ('${writeSql.slice(0, 60)}…')`);
+  }
 
   // upsert / upsertMany — by EVERY column of the CONFLICT key. MySQL does not report which row an ON
   // DUPLICATE KEY UPDATE touched, so the AUTO_INCREMENT range is wrong as soon as a row was updated.
@@ -350,7 +354,6 @@ export function buildMysqlReselect(sql: string): MysqlReselect | null {
   // or by the client-supplied PK values pulled from the INSERT params by column position (UUID /
   // composite). Recovered only when it wrote a row, and only as many rows as it wrote (WrittenRows).
   if (lower.startsWith('insert')) {
-    const noopOnConflict = lower.includes('on duplicate key update');
     if (autoInc !== '' && pk.length === 1 && pk[0] === autoInc && isBatch) {
       // createMany (a bulk INSERT…SELECT): its ids start at LAST_INSERT_ID but need not be consecutive,
       // so the bare range would name other sessions' rows and miss our own. Every id it allocated is
@@ -363,7 +366,7 @@ export function buildMysqlReselect(sql: string): MysqlReselect | null {
       return done(`SELECT ${cols} FROM ${table} WHERE ${autoInc} >= ? AND ${autoInc} < ?${orderBy}`, [
         { kind: 'lastId' },
         { kind: 'highId' },
-      ], noopOnConflict ? 'insertId' : 'affected');
+      ], 'affected');
     }
     if (pk.length === 0) {
       throw new Error(
@@ -374,22 +377,7 @@ export function buildMysqlReselect(sql: string): MysqlReselect | null {
     // createMany with a CLIENT-supplied key: the statement binds ONE JSON payload, not one param per
     // key, so the key tuples are read back out of that SAME payload — as the upsertMany arm does. A
     // batch `INSERT IGNORE` reads back pre-existing rows too, so its count check fails it closed.
-    if (isBatch) return jsonSelect(pk, 'PK', 'affected');
-    if (noopOnConflict) {
-      // insert-or-ignore on a client-supplied key: lock its PK first (insertIfAbsent) — never its
-      // affected count, which CLIENT_FOUND_ROWS makes the same for a conflict and an insert.
-      const keyed = keyedByInsertParams(pk, 'PK', null);
-      if (keyed.binds.length !== pk.length) {
-        throw new Error(`scp write(mysql): an insert-or-ignore…RETURNING on a client-supplied key writes ONE row ('${writeSql.slice(0, 60)}…')`);
-      }
-      return {
-        ...keyed,
-        lockSql: `SELECT ${pk.join(', ')} FROM ${table} WHERE ${pk.map((k) => `${k} = ?`).join(' AND ')} FOR UPDATE`,
-        lockBinds: keyed.binds,
-        insertIfAbsent: true,
-      };
-    }
-    return keyedByInsertParams(pk, 'PK', 'affected');
+    return isBatch ? jsonSelect(pk, 'PK', 'affected') : keyedByInsertParams(pk, 'PK', 'affected');
   }
 
   // updateMany — by EVERY batch JOIN key column, re-selected from the SAME JSON payload the write bound.
@@ -439,15 +427,8 @@ export function keyedSelectSql(reselect: MysqlReselect, rows: number): string {
 }
 
 /** How many rows the write wrote ({@link WrittenRows}), from its own result — `null` when not countable. */
-export function writtenRowCount(written: WrittenRows | null, lastInsertId: number, affected: number): number | null {
-  switch (written) {
-    case null:
-      return null;
-    case 'affected':
-      return affected;
-    case 'insertId':
-      return lastInsertId !== 0 ? 1 : 0;
-  }
+export function writtenRowCount(written: WrittenRows | null, affected: number): number | null {
+  return written === null ? null : affected;
 }
 
 /**

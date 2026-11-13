@@ -8,7 +8,10 @@
 
 mod common;
 
-use litedbmodel_runtime::{Driver, MysqlDriver, SqlFailure, Value, WireValue};
+use litedbmodel_runtime::{
+    for_driver, seam_execute, transaction, Driver, IsolationLevel, MysqlDriver, SqlFailure,
+    StatementIntent, TransactionOptions, TxDialect, Value, WireValue,
+};
 
 const GATE: &str = "LITEDBMODEL_TX_ISOLATION";
 
@@ -170,6 +173,11 @@ fn mysql_returning_insert_ignore() {
         ]],
         "unique insert"
     );
+
+    // READ COMMITTED: another session inserts the same key while ours is in flight — its row is never
+    // returned. A BEFORE INSERT trigger parks OUR insert (owner 'mine') on a row another session
+    // holds, so the other session's insert of the same key lands exactly between a lock and the write.
+    insert_ignore_race(&d, &t, client_ddl, &ignore_client);
 
     // Batch (INSERT IGNORE) on a client-supplied key: the pre-existing row read back fails it closed.
     table(&d, &t, client_ddl, &victim);
@@ -392,4 +400,112 @@ fn mysql_returning_bigint_key() {
     count("createMany", format!("INSERT INTO {t} (k, name, tenant_id) SELECT jt.k, JSON_UNQUOTE(jt.name), jt.tenant_id FROM JSON_TABLE(?, '$[*]' COLUMNS(k BIGINT PATH '$.k', name JSON PATH '$.name', tenant_id BIGINT PATH '$.tenant_id')) jt RETURNING k, tenant_id /*scp:pk=k;ai=*/"));
 
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// Run the insert-or-ignore `ignore` (code, owner) for key K1 in a READ COMMITTED transaction while
+/// another session inserts K1 — parked by a trigger until that other row is committed — and check that
+/// the other session's row is never returned as ours.
+fn insert_ignore_race(d: &MysqlDriver, t: &str, ddl: &str, ignore: &str) {
+    use std::sync::mpsc;
+    use std::sync::Mutex;
+
+    let gate = format!("{t}_gate");
+    table(d, t, ddl, &[]);
+    d.exec_ddl(&[
+        format!("DROP TABLE IF EXISTS {gate}"),
+        format!("CREATE TABLE {gate} (id INT PRIMARY KEY)"),
+        format!("INSERT INTO {gate} (id) VALUES (1)"),
+    ])
+    .expect("gate");
+    // CREATE TRIGGER is refused over the prepared-statement protocol the driver speaks (1295), so it
+    // goes over sqlx's text protocol on a connection of its own.
+    let trigger = format!(
+        "CREATE TRIGGER {t}_park BEFORE INSERT ON {t} FOR EACH ROW BEGIN \
+         IF NEW.owner = 'mine' THEN SELECT id INTO @scp_park FROM {gate} WHERE id = 1 FOR UPDATE; END IF; END"
+    );
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime")
+        .block_on(async {
+            use sqlx::Connection;
+            let mut c = sqlx::MySqlConnection::connect(&common::mysql_url()).await?;
+            sqlx::raw_sql(&trigger).execute(&mut c).await?;
+            c.close().await
+        })
+        .expect("trigger");
+
+    // The holder: a transaction that locks the gate row until it is told to commit.
+    let (locked_tx, locked_rx) = mpsc::channel::<()>();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let release_rx = Mutex::new(release_rx);
+    let holder_gate = gate.clone();
+    let holder = std::thread::spawn(move || {
+        let hd = MysqlDriver::connect(&common::mysql_url()).expect("holder connect");
+        let ctx = for_driver(&hd);
+        transaction(
+            &ctx,
+            TxDialect::Mysql,
+            &TransactionOptions::default(),
+            |tx| {
+                seam_execute(
+                    tx,
+                    &format!("SELECT id FROM {holder_gate} WHERE id = 1 FOR UPDATE"),
+                    &[],
+                    &StatementIntent::read(),
+                )?;
+                let _ = locked_tx.send(());
+                let _ = release_rx.lock().unwrap().recv();
+                Ok(())
+            },
+        )
+        .expect("holder commits");
+    });
+    locked_rx.recv().expect("the gate row is locked");
+
+    // Ours: the insert-or-ignore, in a READ COMMITTED transaction.
+    let ours_sql = ignore.to_string();
+    let ours = std::thread::spawn(move || {
+        let od = MysqlDriver::connect(&common::mysql_url()).expect("ours connect");
+        let ctx = for_driver(&od);
+        let options = TransactionOptions {
+            isolation: Some(IsolationLevel::ReadCommitted),
+            ..TransactionOptions::default()
+        };
+        transaction(&ctx, TxDialect::Mysql, &options, |tx| {
+            seam_execute(
+                tx,
+                &ours_sql,
+                &[s("K1"), s("mine")],
+                &StatementIntent::write(),
+            )
+        })
+        .map(|rows| rows.iter().map(cells).collect::<Vec<_>>())
+    });
+
+    // Ours is parked in its trigger, before its row: the other session inserts K1 and commits.
+    let parked = (0..200).any(|_| {
+        let n = d
+            .prepare("SELECT COUNT(*) AS n FROM information_schema.PROCESSLIST WHERE INFO LIKE 'SELECT id INTO @scp_park %'")
+            .all(&[])
+            .expect("processlist");
+        let found = cells(&n[0]) != vec!["n=0".to_string()];
+        if !found {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        found
+    });
+    assert!(parked, "our insert never reached its trigger");
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    d.prepare(&format!(
+        "INSERT INTO {t} (code, owner) VALUES ('K1', 'victim')"
+    ))
+    .run(&[])
+    .expect("the other session's insert");
+    release_tx.send(()).expect("release the gate");
+    holder.join().expect("holder");
+    let got = ours.join().expect("ours").expect("our insert-or-ignore");
+    d.exec_ddl(&[format!("DROP TABLE IF EXISTS {gate}")])
+        .expect("drop gate");
+    assert_eq!(got, Vec::<Vec<String>>::new(), "READ COMMITTED race");
 }

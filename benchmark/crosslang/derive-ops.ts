@@ -93,6 +93,13 @@ function recoveryFor(sql: string): OpRecovery | null {
         `  Teach the cells the lock-and-key order (lockSql → write → keyedSelectSql) before declaring it.`,
     );
   }
+  if (r.duplicateIsSkip) {
+    throw new Error(
+      `derive-ops: the recovery for '${sql.slice(0, 70)}…' is an insert-or-ignore: its write runs as the plain\n` +
+        `  INSERT and a duplicate-key error (1062) is the conflict it skips (#359). No cell turns that error\n` +
+        `  into an empty result, so a conflict would fail the cell instead. Teach the cells before declaring it.`,
+    );
+  }
   return { writeSql: r.writeSql, selectSql: r.selectSql, binds: r.binds };
 }
 

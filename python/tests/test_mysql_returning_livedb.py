@@ -118,6 +118,11 @@ def test_mysql_returning_insert_ignore(driver):
     finally:
         found_rows.close()
 
+    # READ COMMITTED: another session inserts the same key while ours is in flight — its row is never
+    # returned. A BEFORE INSERT trigger parks OUR insert (owner 'mine') on a row another session holds, so
+    # the other session's insert of the same key lands exactly between a lock and the write.
+    _insert_ignore_race(driver, client_ddl, ignore_client)
+
     # Batch (INSERT IGNORE) on a client-supplied key: the pre-existing row read back fails it closed.
     _table(driver, client_ddl, victim)
     batch = f"INSERT IGNORE INTO {TBL} (code, owner) SELECT JSON_UNQUOTE(jt.code), JSON_UNQUOTE(jt.owner) FROM JSON_TABLE(?, '$[*]' COLUMNS(code JSON PATH '$.code', owner JSON PATH '$.owner')) jt RETURNING code, owner /*scp:pk=code;ai=;conflict=code;action=ignore*/"
@@ -134,6 +139,48 @@ def _raw_conn():
         user=os.environ.get("TEST_MYSQL_USER", "testuser"), password=os.environ.get("TEST_MYSQL_PASSWORD", "testpass"),
         database=os.environ.get("TEST_MYSQL_DB", "testdb"), autocommit=True,
     )
+
+
+def _insert_ignore_race(driver, ddl: str, ignore: str) -> None:
+    """Run the insert-or-ignore ``ignore`` (code, owner) for key K1 under READ COMMITTED while another
+    session inserts K1 — parked by a trigger until that other row is committed — and check that the other
+    session's row is never returned as ours."""
+    import threading
+
+    from litedbmodel_runtime.driver import _conn_all, _qmark_to_pyformat
+
+    gate = f"{TBL}_gate"
+    _table(driver, ddl)
+    driver.exec_ddl([
+        f"DROP TABLE IF EXISTS {gate}", f"CREATE TABLE {gate} (id INT PRIMARY KEY)", f"INSERT INTO {gate} (id) VALUES (1)",
+        f"CREATE TRIGGER {TBL}_park BEFORE INSERT ON {TBL} FOR EACH ROW BEGIN "
+        f"IF NEW.owner = 'mine' THEN SELECT id INTO @scp_park FROM {gate} WHERE id = 1 FOR UPDATE; END IF; END",
+    ])
+    holder, ours = _raw_conn(), _raw_conn()
+    try:
+        hc = holder.cursor()
+        hc.execute("BEGIN")
+        hc.execute(f"SELECT id FROM {gate} WHERE id = 1 FOR UPDATE")
+        ours.cursor().execute("SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED")
+        got: dict = {}
+
+        def run() -> None:
+            try:
+                got["rows"] = _conn_all(ours, ignore, ["K1", "mine"], _qmark_to_pyformat, True)
+            except Exception as e:  # surfaced by the assertion below
+                got["err"] = e
+
+        t = threading.Thread(target=run)
+        t.start()
+        _until_running(holder, "SELECT id INTO @scp_park ")  # ours: parked in its trigger, before its row
+        driver.exec_ddl([f"INSERT INTO {TBL} (code, owner) VALUES ('K1', 'victim')"])  # committed
+        hc.execute("COMMIT")
+        t.join(30)
+        assert got == {"rows": []}
+    finally:
+        holder.close()
+        ours.close()
+        driver.exec_ddl([f"DROP TABLE IF EXISTS {gate}"])
 
 
 def _until_running(conn, prefix: str) -> None:

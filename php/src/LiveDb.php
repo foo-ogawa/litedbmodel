@@ -99,7 +99,7 @@ final class MysqlReselect
      * @param string             $selectSql the recovering SELECT
      * @param list<ReselectBind> $binds     how to bind {@see $selectSql}'s `?`s
      * @param string|null        $written   how many rows the write wrote ({@see MysqlReturning::writtenRowCount}):
-     *                                      'affected' | 'insertId'; null ⇒ not countable
+     *                                      'affected'; null ⇒ not countable
      * @param bool               $before    run the SELECT BEFORE the write (a DELETE's pre-image)
      * @param string             $anchorSql a consistent read run BEFORE the write in the same transaction
      *                                      ('' ⇒ none): a bulk INSERT's AUTO_INCREMENT ids are not
@@ -113,13 +113,14 @@ final class MysqlReselect
      *                                      {@see MysqlReturning::keyedSelectSql} completes
      * @param list<ReselectBind> $lockBinds how to bind {@see $lockSql}'s `?`s
      * @param list<string>       $keyCols   the key columns {@see $lockSql} reads, in order (the declared PK)
-     * @param bool               $insertIfAbsent an insert-or-ignore on a CLIENT-supplied key (mysql-returning.ts
-     *                                      `insertIfAbsent`): {@see $lockSql} reads — and LOCKS — the row its
-     *                                      own PK names BEFORE the write. A row there ⇒ it inserts nothing, so
-     *                                      it returns []; none ⇒ the next-key lock keeps every other session
-     *                                      from inserting that PK, so the row {@see $selectSql} finds by it
-     *                                      afterwards is the one it inserted. No affected count is read: under
-     *                                      CLIENT_FOUND_ROWS a no-op conflict and an insert both report 1.
+     * @param bool               $duplicateIsSkip a single-row insert-or-ignore (mysql-returning.ts
+     *                                      `duplicateIsSkip`): {@see $writeSql} is the PLAIN INSERT — its no-op
+     *                                      `ON DUPLICATE KEY UPDATE c = c` tail removed — so a conflict on ANY
+     *                                      unique key raises the duplicate-key error
+     *                                      ({@see MysqlReturning::ER_DUP_ENTRY}) instead of silently doing
+     *                                      nothing. That error IS the skipped conflict: MySQL rolls back only
+     *                                      the statement, and the write returns []. No affected count is read
+     *                                      and no lock is taken, so it holds under every isolation level.
      */
     public function __construct(
         public readonly string $writeSql,
@@ -131,7 +132,7 @@ final class MysqlReselect
         public readonly string $lockSql = '',
         public readonly array $lockBinds = [],
         public readonly array $keyCols = [],
-        public readonly bool $insertIfAbsent = false,
+        public readonly bool $duplicateIsSkip = false,
     ) {
     }
 }
@@ -154,11 +155,9 @@ final class MysqlReselect
  *  | upsert / …Many    | EVERY column of the CONFLICT key (MySQL does not report the         | after  |
  *  |                   | conflicted-row id, so the AUTO_INCREMENT range is wrong when a row  |        |
  *  |                   | was UPDATED) — one column of a composite key names other rows too   |        |
- *  | insert-or-ignore  | as create, and ONLY the rows it inserted (`;action=ignore`): a       | after  |
- *  |                   | conflict writes nothing, so it returns nothing. On a client-supplied| lock + |
- *  |                   | key its PK is read and LOCKED (FOR UPDATE) before the write: a row  | after  |
- *  |                   | there ⇒ it inserts nothing; none ⇒ the row its PK names afterwards  |        |
- *  |                   | is the one it inserted                                              |        |
+ *  | insert-or-ignore  | as create, and ONLY the row it inserted (`;action=ignore`): it runs | after  |
+ *  |                   | as the PLAIN INSERT, and a duplicate-key error is the conflict it   |        |
+ *  |                   | skipped — it wrote nothing, so it returns nothing                   |        |
  *  | update            | the PK of every row its WHERE names, read and LOCKED (FOR UPDATE)   | lock + |
  *  |                   | before the write; the rows re-selected by those keys after it       | after  |
  *  | updateMany        | EVERY batch JOIN key column, re-bound from the SAME JSON payload    | after  |
@@ -177,6 +176,9 @@ final class MysqlReselect
  */
 final class MysqlReturning
 {
+    /** MySQL's duplicate-key error (ER_DUP_ENTRY): the conflict a {@see MysqlReselect::$duplicateIsSkip} write skipped. */
+    public const ER_DUP_ENTRY = 1062;
+
     /** The strip-before-execute PK-hint comment marker. */
     private const PK_HINT_RE = '#\s*/\*scp:pk=[^*]*\*/#';
 
@@ -319,6 +321,14 @@ final class MysqlReturning
             $conflict = self::splitTrim($cfm[1]);
         }
         $writeSql = trim(self::stripPkHint(substr($sql, 0, $retPos)));
+        // An insert-or-ignore is spelled `ON DUPLICATE KEY UPDATE c = c` — it reads like an upsert, but it
+        // writes NOTHING on a conflict. It runs as the plain INSERT instead, so the conflict it skips is a
+        // duplicate-key error rather than a no-op that reports like an insert (duplicateIsSkip).
+        $odku = stripos($writeSql, ' on duplicate key update ');
+        $duplicateIsSkip = preg_match('#;action=ignore[;*]#i', $hintRegion) === 1 && $odku !== false;
+        if ($duplicateIsSkip) {
+            $writeSql = trim(substr($writeSql, 0, (int) $odku));
+        }
         $wl = strtolower($writeSql);
 
         if (preg_match('/\b(?:INSERT\s+(?:IGNORE\s+)?INTO|UPDATE|DELETE\s+FROM)\s+([A-Za-z0-9_."`]+)/i', $writeSql, $tm) !== 1) {
@@ -388,8 +398,10 @@ final class MysqlReturning
         };
         // An insert-or-ignore is spelled `ON DUPLICATE KEY UPDATE c = c` on a single row — it reads like an
         // upsert, but it writes NOTHING on a conflict, so it is recovered as the INSERT it may have been.
-        $noopOnConflict = str_contains($wl, 'on duplicate key update');
-        $upsert = $noopOnConflict && preg_match('#;action=ignore[;*]#i', $hintRegion) !== 1;
+        $upsert = str_contains($wl, 'on duplicate key update');
+        if ($duplicateIsSkip && $isBatch) {
+            throw new \RuntimeException("scp write(mysql): a batch insert-or-ignore…RETURNING is an INSERT IGNORE, not an ON DUPLICATE KEY UPDATE ('{$writeSql}')");
+        }
 
         // upsert / upsertMany — by EVERY column of the CONFLICT key. MySQL does not report which row an
         // ON DUPLICATE KEY UPDATE touched, so the AUTO_INCREMENT range is wrong once a row was updated.
@@ -413,7 +425,7 @@ final class MysqlReturning
             }
             if ($autoInc !== '' && $pkCols === [$autoInc]) {
                 // A single-row / multi-VALUES INSERT reserves its ids up front, so they ARE consecutive.
-                return new MysqlReselect($writeSql, "SELECT {$cols} FROM {$table} WHERE {$autoInc} >= ? AND {$autoInc} < ?{$orderBy}", [new ReselectBind('lastId'), new ReselectBind('highId')], $noopOnConflict ? 'insertId' : 'affected');
+                return new MysqlReselect($writeSql, "SELECT {$cols} FROM {$table} WHERE {$autoInc} >= ? AND {$autoInc} < ?{$orderBy}", [new ReselectBind('lastId'), new ReselectBind('highId')], 'affected', duplicateIsSkip: $duplicateIsSkip);
             }
             if (count($pkCols) === 0) {
                 throw new \RuntimeException("scp write(mysql): an INSERT…RETURNING carries no pk hint, so its written rows cannot be identified ('{$writeSql}'). The producer must pass the model's declared primary key.");
@@ -424,18 +436,8 @@ final class MysqlReturning
             if ($isBatch) {
                 return $jsonSelect($pkCols, 'PK', 'affected');
             }
-            if ($noopOnConflict) {
-                // insert-or-ignore on a client-supplied key: lock its PK first (insertIfAbsent) — never its
-                // affected count, which CLIENT_FOUND_ROWS makes the same for a conflict and an insert.
-                $keyed = $keyedByInsertParams($pkCols, 'PK', null);
-                if (count($keyed->binds) !== count($pkCols)) {
-                    throw new \RuntimeException("scp write(mysql): an insert-or-ignore…RETURNING on a client-supplied key writes ONE row ('{$writeSql}')");
-                }
-                $lockSql = 'SELECT ' . implode(', ', $pkCols) . " FROM {$table} WHERE "
-                    . implode(' AND ', array_map(static fn (string $k): string => "{$k} = ?", $pkCols)) . ' FOR UPDATE';
-                return new MysqlReselect($keyed->writeSql, $keyed->selectSql, $keyed->binds, null, false, '', $lockSql, $keyed->binds, [], true);
-            }
-            return $keyedByInsertParams($pkCols, 'PK', 'affected');
+            $keyed = $keyedByInsertParams($pkCols, 'PK', 'affected');
+            return new MysqlReselect($keyed->writeSql, $keyed->selectSql, $keyed->binds, $keyed->written, duplicateIsSkip: $duplicateIsSkip);
         }
 
         // updateMany — by EVERY batch JOIN key column, re-selected from the SAME JSON payload the write bound.
@@ -495,14 +497,12 @@ final class MysqlReturning
     /**
      * How many rows the write wrote, from its own result (mysql-returning.ts `writtenRowCount`); null ⇒
      * not countable. 'affected' — a plain INSERT / INSERT IGNORE never updates a row, so the affected count
-     * IS the number inserted; 'insertId' — an insert-or-ignore on an AUTO_INCREMENT key inserted ⇔ its
-     * insert id is not 0.
+     * IS the number inserted.
      */
-    public static function writtenRowCount(?string $written, int $lastInsertId, int $affected): ?int
+    public static function writtenRowCount(?string $written, int $affected): ?int
     {
         return match ($written) {
             null => null,
-            'insertId' => $lastInsertId !== 0 ? 1 : 0,
             'affected' => $affected,
         };
     }
@@ -646,21 +646,15 @@ final class MysqlReturningStatement extends \PDOStatement
             // and the DELETE must have removed exactly those rows.
             $pre = $this->reselect($bound, 0, 0);
             parent::execute($bound);
-            return MysqlReturning::checkRecovered($pre, MysqlReturning::writtenRowCount($this->returning->written, 0, $this->rowCount()), $this->returning->writeSql);
+            return MysqlReturning::checkRecovered($pre, MysqlReturning::writtenRowCount($this->returning->written, $this->rowCount()), $this->returning->writeSql);
         }
         if ($this->returning->lockSql !== '') {
+            // UPDATE…RETURNING: recover the written rows by the keys locked BEFORE the write (never by
+            // the WHERE re-evaluated after it).
             $lock = $this->pdo->prepare($this->returning->lockSql);
             $lock->execute(MysqlReturning::bind($this->returning->lockBinds, $bound, 0, 0));
             $keys = $lock->fetchAll(\PDO::FETCH_ASSOC);
             parent::execute($bound);
-            if ($this->returning->insertIfAbsent) {
-                // insert-or-ignore on a client-supplied key: its PK was already there ⇒ it inserted
-                // nothing; else the row that PK names now is the one it inserted (the lock kept every
-                // other session out).
-                return $keys === [] ? $this->reselect($bound, 0, 0) : [];
-            }
-            // UPDATE…RETURNING: recover the written rows by the keys locked BEFORE the write (never by
-            // the WHERE re-evaluated after it).
             if ($keys === []) {
                 return [];
             }
@@ -677,11 +671,20 @@ final class MysqlReturningStatement extends \PDOStatement
         if ($this->returning->anchorSql !== '') {
             $this->pdo->query($this->returning->anchorSql)->fetchAll();
         }
-        parent::execute($bound); // the RETURNING-stripped write
+        try {
+            parent::execute($bound); // the RETURNING-stripped write
+        } catch (\PDOException $e) {
+            // An insert-or-ignore's duplicate key: the conflict it skips — it wrote nothing (only the
+            // statement rolled back).
+            if ($this->returning->duplicateIsSkip && ($e->errorInfo[1] ?? null) === MysqlReturning::ER_DUP_ENTRY) {
+                return [];
+            }
+            throw $e;
+        }
         $lastInsertId = (int) $this->pdo->lastInsertId();
         $affected = $this->rowCount();
-        // A write that wrote no row (an insert-or-ignore that hit a conflict) returns nothing.
-        $written = MysqlReturning::writtenRowCount($this->returning->written, $lastInsertId, $affected);
+        // A write that wrote no row (an INSERT IGNORE that hit a conflict) returns nothing.
+        $written = MysqlReturning::writtenRowCount($this->returning->written, $affected);
         return $written === 0
             ? []
             : MysqlReturning::checkRecovered($this->reselect($bound, $lastInsertId, $affected), $written, $this->returning->writeSql);

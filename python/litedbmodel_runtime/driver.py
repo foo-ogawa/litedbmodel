@@ -421,6 +421,9 @@ _PK_HINT_RE = re.compile(r"\s*/\*scp:pk=[^*]*\*/", re.IGNORECASE)
 _PK_HINT_PARSE_RE = re.compile(r"/\*scp:pk=([^;*]*);ai=([^;*]*)", re.IGNORECASE)
 _CONFLICT_HINT_RE = re.compile(r";conflict=([^;*]*)", re.IGNORECASE)
 _IGNORE_HINT_RE = re.compile(r";action=ignore[;*]", re.IGNORECASE)
+# MySQL's duplicate-key error (ER_DUP_ENTRY): the conflict a ``duplicate_is_skip`` write skipped
+# (mysql-returning.ts ``MYSQL_ER_DUP_ENTRY``).
+_MYSQL_ER_DUP_ENTRY = 1062
 # A `VALUES (?, …), (?, …)` list whose every value is a bare `?` (then the end of the write, or its ON
 # DUPLICATE KEY UPDATE) — mysql-returning.ts ``valuesRows``.
 _VALUES_ROWS_RE = re.compile(
@@ -509,12 +512,12 @@ class _MysqlReselect(NamedTuple):
     lock_binds: List[Tuple[str, int]] = []
     # The key columns ``lock_sql`` reads, in order (the declared PK).
     key_cols: List[str] = []
-    # An insert-or-ignore on a CLIENT-supplied key (mysql-returning.ts ``insertIfAbsent``): ``lock_sql``
-    # reads — and LOCKS — the row its own PK names BEFORE the write. A row there ⇒ it inserts nothing, so
-    # it returns ``[]``; none ⇒ the next-key lock keeps every other session from inserting that PK, so the
-    # row ``select_sql`` finds by it afterwards is the one it inserted. No affected count is read: under
-    # CLIENT_FOUND_ROWS a no-op conflict and an insert both report 1.
-    insert_if_absent: bool = False
+    # A single-row insert-or-ignore (mysql-returning.ts ``duplicateIsSkip``): ``write_sql`` is the PLAIN
+    # INSERT — its no-op ``ON DUPLICATE KEY UPDATE c = c`` tail removed — so a conflict on ANY unique key
+    # raises the duplicate-key error (_MYSQL_ER_DUP_ENTRY) instead of silently doing nothing. That error IS
+    # the skipped conflict: MySQL rolls back only the statement, and the write returns ``[]``. No affected
+    # count is read and no lock is taken, so it holds under every isolation level.
+    duplicate_is_skip: bool = False
 
 
 def _dollar_to_pyformat(sql: str) -> str:
@@ -634,6 +637,13 @@ def _build_mysql_reselect(sql: str):
     pk_cols, auto_inc = _parse_pk_hint(hint_region)
     conflict = _parse_conflict_hint(hint_region)
     write_sql = _PK_HINT_RE.sub("", sql[:ret_pos]).strip()
+    # An insert-or-ignore is spelled `ON DUPLICATE KEY UPDATE c = c` — it reads like an upsert, but it
+    # writes NOTHING on a conflict. It runs as the plain INSERT instead, so the conflict it skips is a
+    # duplicate-key error rather than a no-op that reports like an insert (duplicate_is_skip).
+    odku = write_sql.lower().find(" on duplicate key update ")
+    duplicate_is_skip = _IGNORE_HINT_RE.search(hint_region) is not None and odku >= 0
+    if duplicate_is_skip:
+        write_sql = write_sql[:odku].strip()
     wl = write_sql.lower()
 
     tm = _WRITE_TABLE_RE.search(write_sql)
@@ -690,10 +700,9 @@ def _build_mysql_reselect(sql: str):
             where = f"({', '.join(keys)}) IN ({', '.join(tuple_ for _ in range(rows))})"
         return _MysqlReselect(write_sql, f"SELECT {cols} FROM {table} WHERE {where}{order_by}", binds, written, False)
 
-    # An insert-or-ignore is spelled `ON DUPLICATE KEY UPDATE c = c` on a single row — it reads like an
-    # upsert, but it writes NOTHING on a conflict, so it is recovered as the INSERT it may have been.
-    noop_on_conflict = "on duplicate key update" in wl
-    upsert = noop_on_conflict and _IGNORE_HINT_RE.search(hint_region) is None
+    upsert = "on duplicate key update" in wl
+    if duplicate_is_skip and is_batch:
+        raise ValueError(f"scp write(mysql): a batch insert-or-ignore…RETURNING is an INSERT IGNORE, not an ON DUPLICATE KEY UPDATE ({write_sql!r})")
 
     # upsert / upsertMany — by EVERY column of the CONFLICT key.
     if wl.startswith("insert") and upsert:
@@ -717,7 +726,7 @@ def _build_mysql_reselect(sql: str):
             # A single-row / multi-VALUES INSERT reserves its ids up front, so they ARE consecutive.
             return _MysqlReselect(
                 write_sql, f"SELECT {cols} FROM {table} WHERE {auto_inc} >= ? AND {auto_inc} < ?{order_by}",
-                [("lastId", 0), ("highId", 0)], "insertId" if noop_on_conflict else "affected", False,
+                [("lastId", 0), ("highId", 0)], "affected", False, duplicate_is_skip=duplicate_is_skip,
             )
         if not pk_cols:
             raise ValueError(
@@ -729,17 +738,7 @@ def _build_mysql_reselect(sql: str):
         # `INSERT IGNORE` reads back pre-existing rows too, so its count check fails it closed.
         if is_batch:
             return json_select(pk_cols, "PK", "affected")
-        if noop_on_conflict:
-            # insert-or-ignore on a client-supplied key: lock its PK first (insert_if_absent) — never its
-            # affected count, which CLIENT_FOUND_ROWS makes the same for a conflict and an insert.
-            keyed = keyed_by_insert_params(pk_cols, "PK", None)
-            if len(keyed.binds) != len(pk_cols):
-                raise ValueError(f"scp write(mysql): an insert-or-ignore…RETURNING on a client-supplied key writes ONE row ({write_sql!r})")
-            return keyed._replace(
-                lock_sql=f"SELECT {', '.join(pk_cols)} FROM {table} WHERE {' AND '.join(f'{k} = ?' for k in pk_cols)} FOR UPDATE",
-                lock_binds=keyed.binds, insert_if_absent=True,
-            )
-        return keyed_by_insert_params(pk_cols, "PK", "affected")
+        return keyed_by_insert_params(pk_cols, "PK", "affected")._replace(duplicate_is_skip=duplicate_is_skip)
 
     # updateMany — by EVERY batch JOIN key column, re-selected from the SAME JSON payload the write bound.
     if wl.startswith("update") and is_batch:
@@ -783,19 +782,11 @@ def _keyed_select_sql(rs: _MysqlReselect, rows: int) -> str:
     return f"{rs.select_sql}({', '.join(tuple_ for _ in range(rows))}) ORDER BY {', '.join(rs.key_cols)}"
 
 
-def _written_row_count(written: Optional[str], last_id: int, affected: int) -> Optional[int]:
+def _written_row_count(written: Optional[str], affected: int) -> Optional[int]:
     """How many rows the write wrote, from its own result (mysql-returning.ts ``writtenRowCount``);
-    ``None`` ⇒ not countable.
-
-    ``affected`` — the affected count (a plain INSERT / INSERT IGNORE never updates a row, so
-    CLIENT_FOUND_ROWS cannot change it); ``insertId`` — an insert-or-ignore on an AUTO_INCREMENT key
-    inserted ⇔ its insert id is not 0.
-    """
-    if written is None:
-        return None
-    if written == "insertId":
-        return 1 if last_id != 0 else 0
-    return affected
+    ``None`` ⇒ not countable. ``affected`` — the affected count (a plain INSERT / INSERT IGNORE never
+    updates a row, so CLIENT_FOUND_ROWS cannot change it)."""
+    return None if written is None else affected
 
 
 def _check_recovered(rows, written: Optional[int], write_sql: str):
@@ -917,20 +908,14 @@ def _conn_returning(conn: Any, rs: _MysqlReselect, params: Sequence[Any], xform)
         affected = cur.rowcount
         cur.close()
         # The DELETE must have removed exactly the locked pre-image.
-        return _check_recovered(rows, _written_row_count(rs.written, 0, affected), rs.write_sql)
+        return _check_recovered(rows, _written_row_count(rs.written, affected), rs.write_sql)
     if rs.lock_sql:
+        # UPDATE…RETURNING: recover the written rows by the keys locked BEFORE the write (never by the
+        # WHERE re-evaluated after it).
         keys = _conn_select(conn, xform(rs.lock_sql), _bind_reselect(rs.lock_binds, list(params), 0, 0))
         cur = conn.cursor()
         cur.execute(xform(rs.write_sql), tuple(params))
         cur.close()
-        if rs.insert_if_absent:
-            # insert-or-ignore on a client-supplied key: its PK was already there ⇒ it inserted nothing;
-            # else the row that PK names now is the one it inserted (the lock kept every other session out).
-            if keys:
-                return []
-            return _conn_select(conn, xform(rs.select_sql), _bind_reselect(rs.binds, list(params), 0, 0))
-        # UPDATE…RETURNING: recover the written rows by the keys locked BEFORE the write (never by the
-        # WHERE re-evaluated after it).
         if not keys:
             return []
         key_values = [k[c] for k in keys for c in rs.key_cols]
@@ -939,12 +924,20 @@ def _conn_returning(conn: Any, rs: _MysqlReselect, params: Sequence[Any], xform)
     if rs.anchor_sql:
         _conn_select(conn, rs.anchor_sql, [])
     cur = conn.cursor()
-    cur.execute(xform(rs.write_sql), tuple(params))
+    try:
+        cur.execute(xform(rs.write_sql), tuple(params))
+    except Exception as e:
+        # An insert-or-ignore's duplicate key: the conflict it skips — it wrote nothing (only the
+        # statement rolled back). PyMySQL raises it as an IntegrityError whose args[0] is the error number.
+        cur.close()
+        if rs.duplicate_is_skip and e.args and e.args[0] == _MYSQL_ER_DUP_ENTRY:
+            return []
+        raise
     last_id = cur.lastrowid or 0
     affected = cur.rowcount
     cur.close()
-    # A write that wrote no row (an insert-or-ignore that hit a conflict) returns nothing.
-    written = _written_row_count(rs.written, last_id, affected)
+    # A write that wrote no row (an INSERT IGNORE that hit a conflict) returns nothing.
+    written = _written_row_count(rs.written, affected)
     if written == 0:
         return []
     rows = _conn_select(conn, xform(rs.select_sql), _bind_reselect(rs.binds, list(params), last_id, affected))

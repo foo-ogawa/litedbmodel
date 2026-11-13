@@ -21,6 +21,7 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"errors"
 	"fmt"
 	"io"
 	"regexp"
@@ -273,12 +274,14 @@ func (c *scpMysqlConn) returning(ctx context.Context, rs *mysqlReselect, args []
 			return nil, err
 		}
 		// The DELETE must have removed exactly the locked pre-image.
-		if err := checkRecovered(len(pre.rows), writtenRowCount(rs.written, 0, affected), rs.writeSQL); err != nil {
+		if err := checkRecovered(len(pre.rows), writtenRowCount(rs.written, affected), rs.writeSQL); err != nil {
 			return nil, err
 		}
 		return pre, nil
 	}
 	if rs.lockSQL != "" {
+		// UPDATE…RETURNING: recover the written rows by the keys locked BEFORE the write (never by the
+		// WHERE re-evaluated after it).
 		lockRows, err := c.queryViaStmt(ctx, rs.lockSQL, bindReselect(rs.lockBinds, args, 0, 0))
 		if err != nil {
 			return nil, err
@@ -290,20 +293,6 @@ func (c *scpMysqlConn) returning(ctx context.Context, rs *mysqlReselect, args []
 		if _, _, err := c.execViaStmtWithAffected(ctx, rs.writeSQL, args); err != nil {
 			return nil, err
 		}
-		if rs.insertIfAbsent {
-			// insert-or-ignore on a client-supplied key: its PK was already there ⇒ it inserted nothing;
-			// else the row that PK names now is the one it inserted (the lock kept every other session out).
-			if len(keys.rows) > 0 {
-				return &memRows{cols: []string{}}, nil
-			}
-			rows, err := c.queryViaStmt(ctx, rs.selectSQL, bindReselect(rs.binds, args, 0, 0))
-			if err != nil {
-				return nil, err
-			}
-			return drainRows(rows)
-		}
-		// UPDATE…RETURNING: recover the written rows by the keys locked BEFORE the write (never by the
-		// WHERE re-evaluated after it).
 		if len(keys.rows) == 0 {
 			return &memRows{cols: []string{}}, nil
 		}
@@ -338,11 +327,17 @@ func (c *scpMysqlConn) returning(ctx context.Context, rs *mysqlReselect, args []
 	// go-sql-driver's ExecerContext returns driver.ErrSkip for a parameterized statement (it
 	// wants the prepared-statement path), so run the stripped write via a prepared statement.
 	lastID, affected, err := c.execViaStmtWithAffected(ctx, rs.writeSQL, args)
+	var dup *gomysql.MySQLError
+	if err != nil && rs.duplicateIsSkip && errors.As(err, &dup) && dup.Number == mysqlErDupEntry {
+		// An insert-or-ignore's duplicate key: the conflict it skips — it wrote nothing (only the
+		// statement rolled back).
+		return &memRows{cols: []string{}}, nil
+	}
 	if err != nil {
 		return nil, err
 	}
-	// A write that wrote no row (an insert-or-ignore that hit a conflict) returns nothing.
-	written := writtenRowCount(rs.written, lastID, affected)
+	// A write that wrote no row (an INSERT IGNORE that hit a conflict) returns nothing.
+	written := writtenRowCount(rs.written, affected)
 	if written == 0 {
 		return &memRows{cols: []string{}}, nil
 	}
@@ -426,8 +421,8 @@ type mysqlReselect struct {
 	writeSQL  string
 	selectSQL string
 	binds     []reselectBind
-	// written says how many rows the write wrote ([writtenRowCount]): "affected" | "insertId", or ""
-	// when not countable (an upsert / UPDATE / DELETE / a client-keyed insert-or-ignore).
+	// written says how many rows the write wrote ([writtenRowCount]): "affected", or "" when not
+	// countable (an upsert / UPDATE / DELETE).
 	written string
 	// anchorSQL is a consistent read run BEFORE the write in the same transaction ("" ⇒ none): a bulk
 	// INSERT's AUTO_INCREMENT ids are not consecutive, and anchoring the read view first hides the rows
@@ -441,12 +436,12 @@ type mysqlReselect struct {
 	lockBinds []reselectBind
 	// keyCols are the key columns lockSQL reads, in order (the declared PK).
 	keyCols []string
-	// insertIfAbsent marks an insert-or-ignore on a CLIENT-supplied key (mysql-returning.ts
-	// insertIfAbsent): lockSQL reads — and LOCKS — the row its own PK names BEFORE the write. A row there
-	// ⇒ it inserts nothing, so it returns no rows; none ⇒ the next-key lock keeps every other session from
-	// inserting that PK, so the row selectSQL finds by it afterwards is the one it inserted. No affected
-	// count is read: under CLIENT_FOUND_ROWS a no-op conflict and an insert both report 1.
-	insertIfAbsent bool
+	// duplicateIsSkip marks a single-row insert-or-ignore (mysql-returning.ts duplicateIsSkip): writeSQL
+	// is the PLAIN INSERT — its no-op `ON DUPLICATE KEY UPDATE c = c` tail removed — so a conflict on ANY
+	// unique key raises the duplicate-key error ([mysqlErDupEntry]) instead of silently doing nothing.
+	// That error IS the skipped conflict: MySQL rolls back only the statement, and the write returns no
+	// rows. No affected count is read and no lock is taken, so it holds under every isolation level.
+	duplicateIsSkip bool
 	// before runs the SELECT BEFORE the write. Only a DELETE needs it: its rows are gone once it has
 	// run, so the pre-image IS the written row set.
 	before bool
@@ -617,7 +612,22 @@ func buildMysqlReselect(sql string) (*mysqlReselect, error) {
 	pkCols, autoInc := parsePkHint(hintRegion)
 	conflict := parseConflictHint(hintRegion)
 	writeSQL := strings.TrimSpace(pkHintRe.ReplaceAllString(sql[:retPos], ""))
+	// An insert-or-ignore is spelled `ON DUPLICATE KEY UPDATE c = c` — it reads like an upsert, but it
+	// writes NOTHING on a conflict. It runs as the plain INSERT instead, so the conflict it skips is a
+	// duplicate-key error rather than a no-op that reports like an insert (duplicateIsSkip).
+	odku := strings.Index(strings.ToLower(writeSQL), " on duplicate key update ")
+	duplicateIsSkip := ignoreHintRe.MatchString(hintRegion) && odku >= 0
+	if duplicateIsSkip {
+		writeSQL = strings.TrimSpace(writeSQL[:odku])
+	}
 	wl := strings.ToLower(writeSQL)
+	// skip carries duplicateIsSkip onto an INSERT's recovery.
+	skip := func(rs *mysqlReselect, err error) (*mysqlReselect, error) {
+		if rs != nil {
+			rs.duplicateIsSkip = duplicateIsSkip
+		}
+		return rs, err
+	}
 
 	tm := writeTableRe.FindStringSubmatch(writeSQL)
 	if tm == nil {
@@ -705,10 +715,10 @@ func buildMysqlReselect(sql string) (*mysqlReselect, error) {
 			"SELECT %s FROM %s WHERE %s%s", cols, table, where, orderBy,
 		), binds: binds, written: written}, nil
 	}
-	// An insert-or-ignore is spelled `ON DUPLICATE KEY UPDATE c = c` on a single row — it reads like an
-	// upsert, but it writes NOTHING on a conflict, so it is recovered as the INSERT it may have been.
-	noopOnConflict := strings.Contains(wl, "on duplicate key update")
-	upsert := noopOnConflict && !ignoreHintRe.MatchString(hintRegion)
+	upsert := strings.Contains(wl, "on duplicate key update")
+	if duplicateIsSkip && isBatch {
+		return nil, fmt.Errorf("scp write(mysql): a batch insert-or-ignore…RETURNING is an INSERT IGNORE, not an ON DUPLICATE KEY UPDATE (%q)", writeSQL)
+	}
 
 	// upsert / upsertMany — by EVERY column of the CONFLICT key. MySQL does not report which row an ON
 	// DUPLICATE KEY UPDATE touched, so the AUTO_INCREMENT range is wrong as soon as a row was updated.
@@ -737,13 +747,9 @@ func buildMysqlReselect(sql string) (*mysqlReselect, error) {
 		}
 		if autoInc != "" && len(pkCols) == 1 && pkCols[0] == autoInc {
 			// A single-row / multi-VALUES INSERT reserves its ids up front, so they ARE consecutive.
-			written := "affected"
-			if noopOnConflict {
-				written = "insertId"
-			}
-			return &mysqlReselect{writeSQL: writeSQL, selectSQL: fmt.Sprintf(
+			return skip(&mysqlReselect{writeSQL: writeSQL, selectSQL: fmt.Sprintf(
 				"SELECT %s FROM %s WHERE %s >= ? AND %s < ?%s", cols, table, autoInc, autoInc, orderBy,
-			), binds: []reselectBind{{kind: "lastId"}, {kind: "highId"}}, written: written}, nil
+			), binds: []reselectBind{{kind: "lastId"}, {kind: "highId"}}, written: "affected"}, nil)
 		}
 		if len(pkCols) == 0 {
 			return nil, fmt.Errorf("scp write(mysql): an INSERT…RETURNING carries no pk hint, so its written rows cannot be identified (%q). The producer must pass the model's declared primary key", writeSQL)
@@ -754,26 +760,7 @@ func buildMysqlReselect(sql string) (*mysqlReselect, error) {
 		if isBatch {
 			return jsonSelect(pkCols, "PK", "affected")
 		}
-		if noopOnConflict {
-			// insert-or-ignore on a client-supplied key: lock its PK first (insertIfAbsent) — never its
-			// affected count, which CLIENT_FOUND_ROWS makes the same for a conflict and an insert.
-			rs, err := keyedByInsertParams(pkCols, "PK", "")
-			if err != nil {
-				return nil, err
-			}
-			if len(rs.binds) != len(pkCols) {
-				return nil, fmt.Errorf("scp write(mysql): an insert-or-ignore…RETURNING on a client-supplied key writes ONE row (%q)", writeSQL)
-			}
-			conds := make([]string, len(pkCols))
-			for i, k := range pkCols {
-				conds[i] = k + " = ?"
-			}
-			rs.lockSQL = fmt.Sprintf("SELECT %s FROM %s WHERE %s FOR UPDATE", strings.Join(pkCols, ", "), table, strings.Join(conds, " AND "))
-			rs.lockBinds = rs.binds
-			rs.insertIfAbsent = true
-			return rs, nil
-		}
-		return keyedByInsertParams(pkCols, "PK", "affected")
+		return skip(keyedByInsertParams(pkCols, "PK", "affected"))
 	}
 
 	// updateMany — by EVERY batch JOIN key column, re-selected from the SAME JSON payload the write bound.
@@ -840,20 +827,17 @@ func keyedSelectSQL(rs *mysqlReselect, rows int) string {
 
 // writtenRowCount is how many rows the write wrote, from its own result (mysql-returning.ts
 // writtenRowCount): "affected" — the affected count (a plain INSERT / INSERT IGNORE never updates a row,
-// so CLIENT_FOUND_ROWS cannot change it); "insertId" — an insert-or-ignore on an AUTO_INCREMENT key
-// inserted ⇔ its insert id is not 0. -1 ⇒ not countable.
-func writtenRowCount(written string, lastID, affected int64) int64 {
-	switch written {
-	case "affected":
+// so CLIENT_FOUND_ROWS cannot change it). -1 ⇒ not countable.
+func writtenRowCount(written string, affected int64) int64 {
+	if written == "affected" {
 		return affected
-	case "insertId":
-		if lastID != 0 {
-			return 1
-		}
-		return 0
 	}
 	return -1
 }
+
+// mysqlErDupEntry is MySQL's duplicate-key error (ER_DUP_ENTRY): the conflict a duplicateIsSkip write
+// skipped (mysql-returning.ts MYSQL_ER_DUP_ENTRY).
+const mysqlErDupEntry = 1062
 
 // checkRecovered fails closed when the recovered row count differs from the count the write wrote: the
 // SELECT then named rows the write did not write (or missed ones it did).

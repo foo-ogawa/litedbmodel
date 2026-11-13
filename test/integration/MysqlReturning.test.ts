@@ -132,6 +132,42 @@ describe('#359 an insert-or-ignore returns only the row it inserted, never the c
     expect(plain(await returning(op.sql, ['b@x', 'u-3', 'mine']))).toEqual([{ id: 'u-3', email: 'b@x', owner: 'mine' }]);
   });
 
+  // No lock decides it: under READ COMMITTED a lock on an absent key is no gap lock, and another session
+  // can insert that key between it and the write. A BEFORE INSERT trigger parks OUR insert (owner 'mine')
+  // on a row another session holds, so the other session's insert of the same key lands exactly there.
+  it('READ COMMITTED: another session inserting the same key meanwhile — its row is never returned', async () => {
+    const gate = `${T}_gate`;
+    await table(clientDdl);
+    await raw.query(`DROP TABLE IF EXISTS ${gate}`);
+    await raw.query(`CREATE TABLE ${gate} (id INT PRIMARY KEY)`);
+    await raw.query(`INSERT INTO ${gate} (id) VALUES (1)`);
+    await raw.query(
+      `CREATE TRIGGER ${T}_park BEFORE INSERT ON ${T} FOR EACH ROW BEGIN ` +
+        `IF NEW.owner = 'mine' THEN SELECT id INTO @scp_park FROM ${gate} WHERE id = 1 FOR UPDATE; END IF; END`,
+    );
+    const holder = await mysql.createConnection(MY);
+    const other = await mysql.createConnection(MY);
+    const c = await pool.acquire();
+    try {
+      await holder.query('BEGIN');
+      await holder.query(`SELECT id FROM ${gate} WHERE id = 1 FOR UPDATE`);
+      await c.run('SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED', []);
+      const mine = c.execute(ignoreClient().sql, ['K1', 'mine']);
+      await untilRunning(holder, 'SELECT id INTO @scp_park '); // ours: parked in its trigger, before its row
+      await other.query(`INSERT INTO ${T} (code, owner) VALUES ('K1', 'victim')`); // committed
+      await holder.query('COMMIT');
+      expect(plain((await mine) as Record<string, unknown>[])).toEqual([]);
+    } finally {
+      await c.run('SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ', []);
+      await pool.release(c);
+      await holder.end();
+      await other.end();
+      await raw.query(`DROP TABLE IF EXISTS ${gate}`);
+    }
+    const [rows] = await raw.query(`SELECT code, owner FROM ${T}`);
+    expect(plain(rows as Record<string, unknown>[])).toEqual([{ code: 'K1', owner: 'victim' }]);
+  });
+
   it('batch (INSERT IGNORE) on a client-supplied key: rows it did not insert fail it closed', async () => {
     await table(clientDdl);
     await raw.query(`INSERT INTO ${T} (code, owner) VALUES ('X1', 'victim')`);

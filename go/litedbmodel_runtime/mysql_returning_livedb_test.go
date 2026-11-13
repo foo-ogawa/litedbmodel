@@ -81,6 +81,11 @@ func TestMysqlReturningInsertIgnoreLive(t *testing.T) {
 		myretExpect(t, name+": unique insert", got, err, []map[string]string{{"id": "u-3", "email": "b@x", "owner": "mine"}})
 	}
 
+	// READ COMMITTED: another session inserts the same key while ours is in flight — its row is never
+	// returned. A BEFORE INSERT trigger parks OUR insert (owner 'mine') on a row another session holds, so
+	// the other session's insert of the same key lands exactly between a lock and the write.
+	myretInsertIgnoreRace(t, db, tbl, clientDDL, ignoreClient)
+
 	// Batch (INSERT IGNORE) on a client-supplied key: the pre-existing row read back fails it closed.
 	myretTable(t, db, tbl, clientDDL, victim)
 	batch := "INSERT IGNORE INTO " + tbl + " (code, owner) SELECT JSON_UNQUOTE(jt.code), JSON_UNQUOTE(jt.owner) FROM JSON_TABLE(?, '$[*]' COLUMNS(code JSON PATH '$.code', owner JSON PATH '$.owner')) jt RETURNING code, owner /*scp:pk=code;ai=;conflict=code;action=ignore*/"
@@ -366,4 +371,59 @@ func TestMysqlReturningBigintKeyLive(t *testing.T) {
 
 	seed("(k BIGINT NOT NULL, tenant_id INT NOT NULL, name VARCHAR(64))", false)
 	count("createMany", "INSERT INTO "+tbl+" (k, name, tenant_id) SELECT jt.k, JSON_UNQUOTE(jt.name), jt.tenant_id FROM JSON_TABLE(?, '$[*]' COLUMNS(k BIGINT PATH '$.k', name JSON PATH '$.name', tenant_id BIGINT PATH '$.tenant_id')) jt RETURNING k, tenant_id /*scp:pk=k;ai=*/")
+}
+
+// myretInsertIgnoreRace runs the insert-or-ignore `ignore` (code, owner) for key K1 under READ COMMITTED
+// while another session inserts K1 — parked by a trigger until that other row is committed — and checks
+// that the other session's row is never returned as ours.
+func myretInsertIgnoreRace(t *testing.T, db *sql.DB, tbl, ddl, ignore string) {
+	t.Helper()
+	ctx := context.Background()
+	gate := tbl + "_gate"
+	myretTable(t, db, tbl, ddl)
+	myretTable(t, db, gate, "(id INT PRIMARY KEY)", "INSERT INTO "+gate+" (id) VALUES (1)")
+	t.Cleanup(func() { _, _ = db.Exec("DROP TABLE IF EXISTS " + gate) })
+	if _, err := db.Exec("CREATE TRIGGER " + tbl + "_park BEFORE INSERT ON " + tbl + " FOR EACH ROW BEGIN " +
+		"IF NEW.owner = 'mine' THEN SELECT id INTO @scp_park FROM " + gate + " WHERE id = 1 FOR UPDATE; END IF; END"); err != nil {
+		t.Fatalf("trigger: %v", err)
+	}
+	holder, err := db.Conn(ctx)
+	if err != nil {
+		t.Fatalf("holder: %v", err)
+	}
+	defer holder.Close()
+	ours, err := db.Conn(ctx)
+	if err != nil {
+		t.Fatalf("ours: %v", err)
+	}
+	defer func() {
+		_, _ = ours.ExecContext(ctx, "SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+		ours.Close()
+	}()
+	for _, q := range []string{"BEGIN", "SELECT id FROM " + gate + " WHERE id = 1 FOR UPDATE"} {
+		if _, err := holder.ExecContext(ctx, q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	if _, err := ours.ExecContext(ctx, "SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED"); err != nil {
+		t.Fatalf("isolation: %v", err)
+	}
+	type result struct {
+		rows []map[string]string
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		rows, err := myretRows(t, ours, ignore, "K1", "mine")
+		done <- result{rows, err}
+	}()
+	myretUntilRunning(t, holder, "SELECT id INTO @scp_park ") // ours: parked in its trigger, before its row
+	if _, err := db.Exec("INSERT INTO " + tbl + " (code, owner) VALUES ('K1', 'victim')"); err != nil {
+		t.Fatalf("other session's insert: %v", err)
+	}
+	if _, err := holder.ExecContext(ctx, "COMMIT"); err != nil {
+		t.Fatalf("COMMIT: %v", err)
+	}
+	r := <-done
+	myretExpect(t, "READ COMMITTED race", r.rows, r.err, []map[string]string{})
 }
