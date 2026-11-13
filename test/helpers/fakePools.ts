@@ -6,9 +6,9 @@
  */
 
 import { EventEmitter } from 'node:events';
-import { vi, type Mock } from 'vitest';
+import { vi } from 'vitest';
 
-type QueryMock = Mock<(...args: never[]) => unknown>;
+type QueryMock = ReturnType<typeof vi.fn>;
 
 /** A pg `Pool` stand-in: `query(config | text, values)` and `connect()` → a client on the same mock. */
 export function fakePgPool(query: QueryMock): { query: QueryMock; connect: () => Promise<unknown>; destroyed: () => number } {
