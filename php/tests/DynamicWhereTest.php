@@ -626,7 +626,7 @@ final class DynamicWhereTest extends TestCase
         // resolve through the ambient tx ctx — the production covered-plane path.
         $defaultCtx = new RoutingExecutionContext($a, new MiddlewareChain(), $routing);
         routedTransaction($defaultCtx, function () use ($read, $defaultCtx, $failure): void {
-            $tx = currentContext();
+            $tx = currentContext($defaultCtx);
             self::assertInstanceOf(RoutingExecutionContext::class, $tx);
             // A statement naming ANOTHER database is LOUD. Before this it ran on the tx's own (DEFAULT)
             // connection, where `named_users` does not exist — a table error, not a routing one.
@@ -648,8 +648,8 @@ final class DynamicWhereTest extends TestCase
         // unforgeable (`named_users` exists in NO other registered db) — the UNNAMED one does too, and
         // "default" now disagrees in the other direction.
         $bCtx = new RoutingExecutionContext($a, new MiddlewareChain(), $routing);
-        routedTransaction($bCtx, function () use ($read, $failure): void {
-            $tx = currentContext();
+        routedTransaction($bCtx, function () use ($read, $bCtx, $failure): void {
+            $tx = currentContext($bCtx);
             self::assertInstanceOf(RoutingExecutionContext::class, $tx);
             self::assertSame(
                 [['id' => 1, 'name' => 'Ada'], ['id' => 2, 'name' => 'Bob']],
@@ -695,8 +695,8 @@ final class DynamicWhereTest extends TestCase
             $failure(static fn () => Leaves::makeHandlers($ctx, 'sqlite')['executeSQL']($ports('analytics'), $at)),
             'outside a tx',
         );
-        transaction($ctx, function () use ($ports, $at, $failure): void {
-            $tx = currentContext();
+        transaction($ctx, function () use ($ctx, $ports, $at, $failure): void {
+            $tx = currentContext($ctx);
             self::assertNotNull($tx);
             $handler = Leaves::makeHandlers($tx, 'sqlite')['executeSQL'];
             self::assertStringContainsString(
@@ -760,8 +760,8 @@ final class DynamicWhereTest extends TestCase
         };
 
         $ctx = new RoutingExecutionContext($a, new MiddlewareChain(), $routing);
-        routedTransaction($ctx, function () use ($read, $failure): void {
-            $tx = currentContext();
+        routedTransaction($ctx, function () use ($ctx, $read, $failure): void {
+            $tx = currentContext($ctx);
             self::assertInstanceOf(RoutingExecutionContext::class, $tx);
             self::assertSame('B', $tx->connectionName(), 'the tx ctx names the db it opened on');
 
@@ -770,7 +770,7 @@ final class DynamicWhereTest extends TestCase
             self::assertInstanceOf(RoutingExecutionContext::class, $ro);
             self::assertTrue($ro->inTransaction(), 'the derivation keeps the pin');
             // The BEHAVIOUR first, because that is the defect. Driven through the SEAM, not the leaf: the
-            // leaf resolves the AMBIENT ctx ({@see Leaves} `$active = currentContext() ?? $ctx`), so a
+            // leaf resolves the AMBIENT ctx ({@see Leaves} `$active = currentContext($ctx) ?? $ctx`), so a
             // DERIVED ctx handed to it would be shadowed by the ambient tx ctx and prove nothing.
             $sql = 'SELECT id, name FROM named_users ORDER BY id';
             // NO FALSE LOUD: the tx's own database still runs, on the pinned connection.
@@ -787,8 +787,8 @@ final class DynamicWhereTest extends TestCase
             self::assertSame('B', $ro->connectionName(), 'the derivation must keep the NAME too');
 
             // The production entry: withWriter() derives exactly that read-only ctx as the ambient.
-            withWriter(function () use ($read, $failure): void {
-                $amb = currentContext();
+            withWriter(function () use ($tx, $read, $failure): void {
+                $amb = currentContext($tx);
                 self::assertInstanceOf(RoutingExecutionContext::class, $amb);
                 self::assertSame('B', $amb->connectionName(), 'withWriter must not lose the name either');
                 self::assertCount(2, $read($amb, 'B')['ok']);

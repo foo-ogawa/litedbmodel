@@ -33,7 +33,7 @@ use function LiteDbModel\Runtime\withTransaction;
  *   - RETURNING-chained TRANSACTIONS run THROUGH the runtime tx boundary {@see withTransaction()}
  *     (BEGIN → body → COMMIT on ok / ROLLBACK on error) — the consumer's tx-boundary responsibility.
  *     The generated `.map` runner emits its 2 body statements via the leaf; `withTransaction` pins the
- *     tx-owned connection (the leaf resolves it via `currentContext()`) and brackets BEGIN/COMMIT.
+ *     tx-owned connection (the leaf resolves it via `currentContext($ctx)`) and brackets BEGIN/COMMIT.
  */
 final class OrmBench
 {

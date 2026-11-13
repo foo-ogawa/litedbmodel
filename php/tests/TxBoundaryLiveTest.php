@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace LiteDbModel\Runtime\Tests;
 
 use LiteDbModel\Runtime\Context;
+use LiteDbModel\Runtime\ExecutionContext;
 use LiteDbModel\Runtime\IsolationLevel;
 use LiteDbModel\Runtime\LiveDb;
 use LiteDbModel\Runtime\RetryClassifierFlags;
@@ -133,13 +134,13 @@ final class TxBoundaryLiveTest extends TestCase
 
     /**
      * The op the boundary body issues — a PUBLIC guarded write through the production guarded write
-     * seam ({@see runGuarded()}) on the ambient pinned tx ctx, JOINing the ambient tx (the same seam a
+     * seam ({@see runGuarded()}) on the tx ctx pinned for `$ctx`, JOINing the ambient tx (the same seam a
      * user-facing write inside transaction() rides). Called only INSIDE a boundary, where
-     * currentContext() is the pinned tx ctx.
+     * currentContext($ctx) is the pinned tx ctx.
      */
-    private static function op(string $dialect, int $id, int $worker, int $seq): RunInfo
+    private static function op(ExecutionContext $ctx, string $dialect, int $id, int $worker, int $seq): RunInfo
     {
-        return runGuarded(currentContext(), self::insertSql($dialect), [$id, $worker, $seq], 'WRITE', self::TBL);
+        return runGuarded(currentContext($ctx), self::insertSql($dialect), [$id, $worker, $seq], 'WRITE', self::TBL);
     }
 
     private function connectOrFail(callable $connect, string $dialect): \PDO
@@ -160,7 +161,7 @@ final class TxBoundaryLiveTest extends TestCase
         self::reset($db, $intType);
         $ctx = Context::forPdo($db);
 
-        $r = transaction($ctx, fn () => [self::op($dialect, 100, 1, 0), self::op($dialect, 101, 1, 1)], new TransactionOptions(), $dialect);
+        $r = transaction($ctx, fn () => [self::op($ctx, $dialect, 100, 1, 0), self::op($ctx, $dialect, 101, 1, 1)], new TransactionOptions(), $dialect);
         $this->assertSame([1, 1], array_map(fn ($x) => $x->changes, $r));
         // N ops in ONE boundary → both persisted on ONE connection (the ambient JOIN).
         $this->assertSame([[100, 1], [101, 1]], self::readRows($db), "[$dialect] both ops commit together");
@@ -179,7 +180,7 @@ final class TxBoundaryLiveTest extends TestCase
         $ctx = Context::forPdo($db);
         $raised = false;
         try {
-            transaction($ctx, fn () => [self::op($dialect, 200, 2, 0), self::op($dialect, 201, 2, 1)], new TransactionOptions(retryOnError: false), $dialect);
+            transaction($ctx, fn () => [self::op($ctx, $dialect, 200, 2, 0), self::op($ctx, $dialect, 201, 2, 1)], new TransactionOptions(retryOnError: false), $dialect);
         } catch (\Throwable) {
             $raised = true;
         }
@@ -207,11 +208,11 @@ final class TxBoundaryLiveTest extends TestCase
         $this->assertTrue($threw, "[$dialect] a write outside transaction() must be rejected");
 
         // Read-only-scoped write inside a transaction() → WriteInReadOnly (read-only checked FIRST).
-        transaction($ctx, function () use ($db, $dialect) {
-            $ro = currentContext()->withReadOnly();
+        transaction($ctx, function () use ($db, $dialect, $ctx) {
+            $ro = currentContext($ctx)->withReadOnly();
             $roThrew = false;
             try {
-                runWithPinnedContext($ro, fn () => self::op($dialect, 301, 3, 0));
+                runWithPinnedContext($ro, fn () => self::op($ctx, $dialect, 301, 3, 0));
             } catch (WriteInReadOnlyContextError) {
                 $roThrew = true;
             }
@@ -220,7 +221,7 @@ final class TxBoundaryLiveTest extends TestCase
         }, new TransactionOptions(retryOnError: false), $dialect);
 
         // Inside a transaction() → succeeds.
-        transaction($ctx, fn () => self::op($dialect, 302, 3, 0), new TransactionOptions(), $dialect);
+        transaction($ctx, fn () => self::op($ctx, $dialect, 302, 3, 0), new TransactionOptions(), $dialect);
         $this->assertSame([[302, 3]], self::readRows($db), "[$dialect] only the in-boundary write (id=302) persisted");
     }
 
@@ -236,9 +237,9 @@ final class TxBoundaryLiveTest extends TestCase
         $capturing = new CapturingPdoProxy($realDb);
         $ctx = Context::forPdo($capturing);
 
-        transaction($ctx, function () {
+        transaction($ctx, function () use ($ctx) {
             // one trivial read so the tx is non-empty; the SET is what we assert.
-            execute(currentContext(), 'SELECT 1', []);
+            execute(currentContext($ctx), 'SELECT 1', []);
             return 0;
         }, new TransactionOptions(isolation: IsolationLevel::Serializable), $dialect);
 
@@ -276,20 +277,20 @@ final class TxBoundaryLiveTest extends TestCase
 
         // REPEATABLE READ: the two in-tx reads MUST match despite the concurrent commit.
         $resetRow();
-        transaction($ctx, function () use ($other) {
-            $first = (int) execute(currentContext(), 'SELECT seq FROM ' . self::TBL . ' WHERE id = 1', [])[0]->seq;
+        transaction($ctx, function () use ($other, $ctx) {
+            $first = (int) execute(currentContext($ctx), 'SELECT seq FROM ' . self::TBL . ' WHERE id = 1', [])[0]->seq;
             $other->exec('UPDATE ' . self::TBL . ' SET seq = 99 WHERE id = 1'); // concurrent committed update (autocommit)
-            $second = (int) execute(currentContext(), 'SELECT seq FROM ' . self::TBL . ' WHERE id = 1', [])[0]->seq;
+            $second = (int) execute(currentContext($ctx), 'SELECT seq FROM ' . self::TBL . ' WHERE id = 1', [])[0]->seq;
             $this->assertSame($first, $second, 'REPEATABLE READ: the snapshot must hold across the concurrent commit');
             return 0;
         }, new TransactionOptions(isolation: IsolationLevel::RepeatableRead), $dialect);
 
         // READ COMMITTED: the second in-tx read MUST see the concurrent commit.
         $resetRow();
-        transaction($ctx, function () use ($other) {
-            $first = (int) execute(currentContext(), 'SELECT seq FROM ' . self::TBL . ' WHERE id = 1', [])[0]->seq;
+        transaction($ctx, function () use ($other, $ctx) {
+            $first = (int) execute(currentContext($ctx), 'SELECT seq FROM ' . self::TBL . ' WHERE id = 1', [])[0]->seq;
             $other->exec('UPDATE ' . self::TBL . ' SET seq = 77 WHERE id = 1');
-            $second = (int) execute(currentContext(), 'SELECT seq FROM ' . self::TBL . ' WHERE id = 1', [])[0]->seq;
+            $second = (int) execute(currentContext($ctx), 'SELECT seq FROM ' . self::TBL . ' WHERE id = 1', [])[0]->seq;
             $this->assertNotSame($first, $second, 'READ COMMITTED: the second read must see the concurrent commit');
             return 0;
         }, new TransactionOptions(isolation: IsolationLevel::ReadCommitted), $dialect);
@@ -337,8 +338,8 @@ final class TxBoundaryLiveTest extends TestCase
 
         // Nested join: one physical tx, both rows persist.
         transaction($ctx, function () use ($db, $dialect, $ctx) {
-            self::op($dialect, 500, 5, 0);
-            return transaction($ctx, fn () => self::op($dialect, 501, 5, 1), new TransactionOptions(), $dialect);
+            self::op($ctx, $dialect, 500, 5, 0);
+            return transaction($ctx, fn () => self::op($ctx, $dialect, 501, 5, 1), new TransactionOptions(), $dialect);
         }, new TransactionOptions(), $dialect);
         $this->assertSame([[500, 5], [501, 5]], self::readRows($db), "[$dialect] nested join: both rows on one tx");
 
@@ -348,8 +349,8 @@ final class TxBoundaryLiveTest extends TestCase
         $raised = false;
         try {
             transaction($ctx, function () use ($db, $dialect, $ctx) {
-                self::op($dialect, 600, 6, 0);
-                return transaction($ctx, fn () => self::op($dialect, 601, 6, 1), new TransactionOptions(), $dialect);
+                self::op($ctx, $dialect, 600, 6, 0);
+                return transaction($ctx, fn () => self::op($ctx, $dialect, 601, 6, 1), new TransactionOptions(), $dialect);
             }, new TransactionOptions(retryOnError: false), $dialect);
         } catch (\Throwable) {
             $raised = true;
@@ -404,9 +405,9 @@ final class TxBoundaryLiveTest extends TestCase
         $code = '';
         $synced = false;
 
-        $body = function () use ($barrier, $i, &$attempts, &$synced) {
+        $body = function () use ($ctx, $barrier, $i, &$attempts, &$synced) {
             $attempts++;
-            execute(currentContext(), 'SELECT COALESCE(SUM(seq),0) AS s FROM ' . self::TBL, []); // write-skew read set
+            execute(currentContext($ctx), 'SELECT COALESCE(SUM(seq),0) AS s FROM ' . self::TBL, []); // write-skew read set
             if (!$synced) { // sync the read-sets ONCE (first attempt), so both establish before either writes
                 $synced = true;
                 $barrier->exec('UPDATE ' . self::TBL . '_barrier SET n = n + 1');
@@ -415,7 +416,7 @@ final class TxBoundaryLiveTest extends TestCase
                     usleep(5000);
                 }
             }
-            seamRun(currentContext(), 'UPDATE ' . self::TBL . ' SET seq = seq + 1 WHERE id = $1', [$i + 1]);
+            seamRun(currentContext($ctx), 'UPDATE ' . self::TBL . ' SET seq = seq + 1 WHERE id = $1', [$i + 1]);
             return 'ok';
         };
         $status = 'COMMITTED';
@@ -476,9 +477,9 @@ final class TxBoundaryLiveTest extends TestCase
         $errno = 0;
         $locked = false;
 
-        $body = function () use ($conn, $barrier, $first, $second, $i, &$attempts, &$locked) {
+        $body = function () use ($ctx, $conn, $barrier, $first, $second, $i, &$attempts, &$locked) {
             $attempts++;
-            seamRun(currentContext(), 'UPDATE ' . self::TBL . ' SET seq = seq + 1 WHERE id = ?', [$first]);
+            seamRun(currentContext($ctx), 'UPDATE ' . self::TBL . ' SET seq = seq + 1 WHERE id = ?', [$first]);
             if (!$locked) { // sync after BOTH hold their first lock (first attempt only)
                 $locked = true;
                 $barrier->exec('UPDATE ' . self::TBL . '_barrier SET n = n + 1');
@@ -488,7 +489,7 @@ final class TxBoundaryLiveTest extends TestCase
                 }
                 usleep(50000 * ($i + 1)); // stagger so one worker requests the crossed lock first
             }
-            seamRun(currentContext(), 'UPDATE ' . self::TBL . ' SET seq = seq + 1 WHERE id = ?', [$second]);
+            seamRun(currentContext($ctx), 'UPDATE ' . self::TBL . ' SET seq = seq + 1 WHERE id = ?', [$second]);
             return 'ok';
         };
         $status = 'COMMITTED';

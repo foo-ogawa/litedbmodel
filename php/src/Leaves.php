@@ -35,7 +35,8 @@ namespace LiteDbModel\Runtime;
  *
  * The leaf is injected context-bound (a closure over the {@see ExecutionContext} + dialect) rather than
  * resolving an ambient driver: the bc PHP boundary is `bind($handlers)`, so the transport is handed in
- * directly. `executeSQL` resolves the AMBIENT tx-scoped ctx ({@see currentContext()}) first so every
+ * directly. `executeSQL` resolves the AMBIENT tx-scoped ctx pinned for the bound ctx's owner
+ * ({@see currentContext()}) first so every
  * statement inside a `withTransaction` scope of the tx's own database runs on the tx-OWNED connection (a statement
  * naming a DIFFERENT database is rejected) (the tx boundary is the
  * runtime's BEGIN/COMMIT/ROLLBACK, never baked into the generated runner); outside a tx it falls back
@@ -236,11 +237,11 @@ final class Leaves
 
         $executeSQL = static function (array $ports, array $_ctx) use ($ctx, $dialect): array {
             // Resolve the AMBIENT tx-scoped ctx when this leaf runs inside a `withTransaction` scope
-            // (the combinator pins it), so every statement of the tx's own database (an unnamed one, or one naming that database) resolves
+            // opened on the bound ctx's owner (the combinator pins it), so every statement of the tx's own database (an unnamed one, or one naming that database) resolves
             // the tx-OWNED connection — the tx
-            // boundary is the runtime's, not baked into the generated runner. Outside a tx,
-            // `currentContext()` is null ⇒ the bound ctx.
-            $active = currentContext() ?? $ctx;
+            // boundary is the runtime's, not baked into the generated runner. Outside such a tx (none
+            // open, or one open on ANOTHER owner), `currentContext($ctx)` is null ⇒ the bound ctx.
+            $active = currentContext($ctx) ?? $ctx;
             // The OPTIONAL `opts` control record — how to run the statement plus the two optional control
             // structs. An OMITTED port is the ONE legitimate absence: a plain READ with no dynamic WHERE
             // and no cap (the ONE statement shape that omits it, so its payload is `sql` + `params` and
