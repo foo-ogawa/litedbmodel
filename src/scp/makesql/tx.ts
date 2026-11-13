@@ -27,7 +27,7 @@ import { assembleMakeSQL } from './makesql';
 import { sqliteInsertJson, mysqlInsertJson, sqliteUpdateManyJson, mysqlUpdateManyJson } from './json-batch';
 import { encodeJsonParam, inListPredicate } from './json-array';
 import { postgresSqlBuilder } from '../../drivers/PostgresSqlBuilder';
-import { sqlTypeToBcScalar, sqlTypeToMaterializeClass, type ColumnTypeResolver } from '../coltype';
+import { declaredColumnTypes, sqlTypeToBcScalar, sqlTypeToMaterializeClass, type ColumnTypeResolver } from '../coltype';
 import { renderPlaceholders, type Dialect as MakeSQLDialect } from './handler';
 import { formatterFor } from './compile';
 import { mapSqliteError } from '../errors';
@@ -568,7 +568,7 @@ function compileWriteNodeSql(node: WriteNodeLike, dialect: MakeSQLDialect, resol
         }
         // No records exist at compile, so the MySQL JSON_TABLE columns — the KEY included — are typed from
         // the schema (#381); without it the key would be read as text and compared with the column as DOUBLE.
-        const columnTypes = resolveColumnType === undefined ? undefined : Object.fromEntries([...keyCols, ...updateCols].map((c) => [c, resolveColumnType(table, c)]));
+        const columnTypes = resolveColumnType === undefined ? undefined : declaredColumnTypes(resolveColumnType, table, [...keyCols, ...updateCols]);
         const shapeOpts = { tableName: table, keyColumns: keyCols, updateColumns: updateCols, records: [] as Record<string, unknown>[], ...(columnTypes !== undefined ? { columnTypes } : {}), ...(stringPort(ports, 'returning') !== undefined ? { returning: stringPort(ports, 'returning') } : {}) };
         const shape = dialect === 'mysql' ? mysqlUpdateManyJson(shapeOpts) : sqliteUpdateManyJson(shapeOpts);
         // The JSON carries BOTH the key + update columns (in that order); one marker per `?`.

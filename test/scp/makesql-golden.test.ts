@@ -578,7 +578,8 @@ describe('B. batch UPDATE (+SKIP-column) — makeSQL byte-matches dialect builde
   const mysqlUpdGolden: Rendered = {
     sql:
       "UPDATE users AS u JOIN JSON_TABLE(?, '$[*]' COLUMNS(" +
-      "id BIGINT PATH '$.id', name JSON PATH '$.name', age BIGINT PATH '$.age', " +
+      // The JOIN KEY with no declared type is compared as a JSON value (the one key rule, `mysqlKeyRead`).
+      "id JSON PATH '$.id', name JSON PATH '$.name', age BIGINT PATH '$.age', " +
       "_skip_age BIGINT PATH '$._skip_age')) AS v ON u.id = v.id " +
       'SET u.name = JSON_UNQUOTE(v.name), u.age = IF(v._skip_age, u.age, v.age) RETURNING id',
     params: [skipJson],

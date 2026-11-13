@@ -37,6 +37,8 @@ import {
   compileCreateManyBundle,
   compileUpdateManyBundle,
   compileDeleteManyBundle,
+  compileUpdateBundle,
+  compileDeleteBundle,
   compileRelationOp,
   executeSQLAsync,
   renderTxStatement,
@@ -1197,5 +1199,55 @@ describe('#381 codegen MySQL updateMany keyed by a non-indexed BIGINT updates ex
 
   afterAll(async () => {
     await myConn?.query(`DROP TABLE IF EXISTS ${T}`).catch(() => undefined);
+  });
+});
+
+// Refs #378 / #381 — the batch write bundles match a key by ONE rule (json-array's), whoever calls them.
+// A non-indexed DECIMAL(30,0) key given as a STRING: read as `JSON_UNQUOTE` text it compared with the
+// column as DOUBLE, so its double neighbours (1e11 apart at this magnitude) were written too. Through the
+// decorated model (`compileUpdateBundle` / `compileDeleteBundle`) the key is typed from the model's
+// declared column and hits exactly its row; with NO type it is compared as a JSON value, which never
+// widens — a string key then matches no numeric row rather than its neighbours.
+const T_DEC = 'scp_dec_keys';
+@model(T_DEC)
+class ScpDecKey {
+  @column.number() id?: number;
+  @column.decimal() k?: string;
+  @column.text() v?: string;
+}
+
+describe('batch write bundles match a DECIMAL string key exactly (Refs #378 #381)', () => {
+  const K = '1234567890123456789012345678';
+  const ROWS: [number, string][] = [[1, '1234567890123456789012345677'], [2, K], [3, '1234567890123456789012345679']];
+  async function seed(): Promise<void> {
+    await myConn!.query(`DROP TABLE IF EXISTS ${T_DEC}`);
+    await myConn!.query(`CREATE TABLE ${T_DEC} (id INT PRIMARY KEY, k DECIMAL(30,0) NOT NULL, v VARCHAR(20) NOT NULL)`);
+    for (const [id, k] of ROWS) await myConn!.query(`INSERT INTO ${T_DEC} VALUES (?, ?, 'seed')`, [id, k]);
+  }
+  const state = async (): Promise<string[]> =>
+    (await myQuery(myConn!, `SELECT id, v FROM ${T_DEC} ORDER BY id`, [])).map((r) => `${Number(r.id)}:${String(r.v)}`);
+  const UM = { tableName: T_DEC, keyColumns: ['k'], updateColumns: ['v'], records: [{ k: K, v: 'hit' }] };
+
+  it('[mysql] updateMany through the decorated model updates exactly the bound row', async () => {
+    await seed();
+    await execTxLive(compileUpdateBundle(ScpDecKey, 'UM', UM, 'mysql'), {}, myClient(myConn!));
+    expect(await state()).toEqual(['1:seed', '2:hit', '3:seed']);
+  });
+
+  it('[mysql] deleteMany through the decorated model deletes exactly the bound row', async () => {
+    await seed();
+    await execTxLive(compileDeleteBundle(ScpDecKey, 'DM', { tableName: T_DEC, keyColumns: ['k'], keys: [{ k: K }] }, 'mysql'), {}, myClient(myConn!));
+    expect(await state()).toEqual(['1:seed', '3:seed']);
+  });
+
+  it('[mysql] updateMany with NO declared type never writes a neighbour of the key', async () => {
+    await seed();
+    await execTxLive(compileUpdateManyBundle('UM', UM, 'mysql'), {}, myClient(myConn!));
+    const touched = (await state()).filter((s) => s.endsWith(':hit'));
+    expect(touched.filter((s) => s !== '2:hit')).toEqual([]);
+  });
+
+  afterAll(async () => {
+    await myConn?.query(`DROP TABLE IF EXISTS ${T_DEC}`).catch(() => undefined);
   });
 });

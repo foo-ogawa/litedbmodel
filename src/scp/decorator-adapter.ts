@@ -228,26 +228,34 @@ export function compileCreateBundle(
   return compileCreateManyBundle(name, options, dialect, resolveColumnType);
 }
 
-/** Compile a decorated model's `updateMany` into a batch write {@link SqlBundle} (`compileUpdateManyBundle`). */
+/**
+ * Compile a decorated model's `updateMany` into a batch write {@link SqlBundle} (`compileUpdateManyBundle`),
+ * typed by the model's declared columns (its `static columns` SoT, as {@link compileCreateBundle} is) — so
+ * the MySQL JOIN key is compared as the column's type, never as text MySQL compares as DOUBLE.
+ */
 export function compileUpdateBundle(
+  modelClass: ModelClassLike,
   name: string,
   options: UpdateManyBuildOptions,
   dialect: DialectName = 'sqlite',
+  columnsOptions?: DeriveColumnsOptions,
 ): SqlBundle {
-  return compileUpdateManyBundle(name, options, dialect);
+  return compileUpdateManyBundle(name, options, dialect, modelColumnResolver(modelClass, columnsOptions));
 }
 
 /**
  * Compile a decorated model's `deleteMany` into a batch write {@link SqlBundle} (`compileDeleteManyBundle`):
- * a PK-set IN-list DELETE (single key) or one DELETE per composite-key group. `keyColumns` +
- * `returning` carry straight through.
+ * ONE DELETE keyed by the PK set, typed by the model's declared columns. `keyColumns` + `returning` carry
+ * straight through.
  */
 export function compileDeleteBundle(
+  modelClass: ModelClassLike,
   name: string,
   options: { tableName: string; keyColumns: string[]; keys: Record<string, unknown>[]; returning?: string },
   dialect: DialectName = 'sqlite',
+  columnsOptions?: DeriveColumnsOptions,
 ): SqlBundle {
-  return compileDeleteManyBundle(name, options, dialect);
+  return compileDeleteManyBundle(name, options, dialect, modelColumnResolver(modelClass, columnsOptions));
 }
 
 /**

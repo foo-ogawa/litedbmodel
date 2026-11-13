@@ -193,8 +193,9 @@ export function compileInsertMany(dialect: Dialect, options: InsertManyBuildOpti
  * JOIN-VALUES (`JOIN (VALUES ROW(…)) AS v(…) ON … SET …`), SQLite CASE-WHEN
  * (`SET c = CASE WHEN k = ? THEN ? … END … WHERE k IN (…)`), with SKIP-column handling
  * (PG `CASE WHEN v._skip_c` / MySQL `IF(v._skip_c,…)` / SQLite `WHEN … THEN t.col`).
+ * `columnTypes` are the key + update columns' declared types (they type the MySQL JSON_TABLE columns).
  */
-export function compileUpdateMany(dialect: Dialect, options: UpdateManyBuildOptions): MakeSQL {
+export function compileUpdateMany(dialect: Dialect, options: UpdateManyBuildOptions, columnTypes?: ColumnTypes): MakeSQL {
   // PostgreSQL: UNCHANGED (UNNEST). MySQL/SQLite: single-JSON-param form (JSON_TABLE
   // join / CASE-over-json_each) with SKIP preserved — unless a DBToken value is present
   // (can't be JSON-encoded), in which case fall back to the original builder.
@@ -207,6 +208,7 @@ export function compileUpdateMany(dialect: Dialect, options: UpdateManyBuildOpti
         updateColumns: options.updateColumns,
         records: options.records,
         skipMap: options.skipMap,
+        ...(columnTypes !== undefined ? { columnTypes } : {}),
         returning: options.returning,
       };
       return dialect === 'mysql' ? mysqlUpdateManyJson(jsonOpts) : sqliteUpdateManyJson(jsonOpts);

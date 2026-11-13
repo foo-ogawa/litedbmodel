@@ -20,7 +20,7 @@
  */
 
 import type { DialectName } from './dialect';
-import type { ColumnTypeResolver } from './coltype';
+import { declaredColumnTypes, type ColumnTypeResolver } from './coltype';
 import { SqlFailure } from './errors';
 import { deriveBatchPlan, type TxOp, type TransactionPlan } from './makesql/tx';
 import {
@@ -107,28 +107,40 @@ export function compileCreateManyBundle(
 /**
  * Compile an `updateMany` into a batch write {@link SqlBundle} (one UNNEST/JSON/CASE statement,
  * byte-identical to `compileUpdateMany` driving the v1 `buildUpdateMany` / JSON-batch builder).
+ * `resolveColumnType` (the model's schema, as {@link compileCreateManyBundle} takes it) types the MySQL
+ * key + update columns; without it the key is compared as a JSON value (`json-array.ts` `mysqlKeyRead`).
  */
 export function compileUpdateManyBundle(
   name: string,
   options: UpdateManyBuildOptions,
   dialectName: DialectName = 'sqlite',
+  resolveColumnType?: ColumnTypeResolver,
 ): SqlBundle {
-  const op = flattenBatchOp(compileUpdateMany(dialectName, options), 'updateMany');
+  const columnTypes =
+    resolveColumnType === undefined
+      ? undefined
+      : declaredColumnTypes(resolveColumnType, options.tableName, [...options.keyColumns, ...options.updateColumns]);
+  const op = flattenBatchOp(compileUpdateMany(dialectName, options, columnTypes), 'updateMany');
   const plan = deriveBatchPlan('update', [op]);
   return { dialect: dialectName, name, statement: { sql: op.sql, params: op.params }, transaction: plan };
 }
 
 /**
- * Compile a `deleteMany` into a batch write {@link SqlBundle} — a PK-set IN-list DELETE (single-key)
- * or one DELETE per composite-key group, driven by the v1 `DBConditions` builder (`compileDeleteMany`).
+ * Compile a `deleteMany` into a batch write {@link SqlBundle} — ONE DELETE keyed by the PK set
+ * (`compileDeleteMany`: the IN-list for a single-column PK, the key tuples for a composite PK).
+ * `resolveColumnType` (the model's schema) types the MySQL key elements; without it they are compared as
+ * JSON values (`json-array.ts` `mysqlKeyRead`).
  * An EMPTY key set produces an empty plan (nothing to delete), never a synthesized always-false DELETE.
  */
 export function compileDeleteManyBundle(
   name: string,
   options: { tableName: string; keyColumns: string[]; keys: Record<string, unknown>[]; returning?: string },
   dialectName: DialectName = 'sqlite',
+  resolveColumnType?: ColumnTypeResolver,
 ): SqlBundle {
-  const components = compileDeleteMany({ dialect: dialectName, ...options });
+  const columnTypes =
+    resolveColumnType === undefined ? undefined : declaredColumnTypes(resolveColumnType, options.tableName, options.keyColumns);
+  const components = compileDeleteMany({ dialect: dialectName, ...options, ...(columnTypes !== undefined ? { columnTypes } : {}) });
   const ops = components.map((c, i) => flattenBatchOp(c, `deleteMany group ${i}`));
   if (ops.length === 0) {
     return { dialect: dialectName, name, statement: { sql: '', params: [] }, transaction: { phase: 'remove', entityFrom: null, statements: [] } };

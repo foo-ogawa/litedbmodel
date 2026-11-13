@@ -21,7 +21,7 @@
  */
 
 import { DBToken } from '../../DBValues';
-import { encodeJsonParam, mysqlJsonRead, type ColumnTypes } from './json-array';
+import { encodeJsonParam, mysqlJsonRead, mysqlKeyRead, type ColumnTypes } from './json-array';
 import type { Dialect } from './handler';
 import type { MakeSQL } from './makesql';
 
@@ -229,6 +229,16 @@ export function mysqlUpdateManyJson(opts: JsonUpdateManyOptions): MakeSQL {
   const jtCols: string[] = [];
   const selectExprOf = new Map<string, (ref: string) => string>();
   for (const col of allColumns) {
+    // A KEY column is COMPARED with the target row, so it takes the one key rule the membership
+    // predicates use ({@link mysqlKeyRead}: the declared type, else the JSON value — never text, which
+    // MySQL compares with a numeric column as DOUBLE). An update column is WRITTEN, so it is typed for
+    // the write ({@link mysqlJsonTableColumn}).
+    if (keyColumns.includes(col)) {
+      const read = mysqlKeyRead(columnTypes?.[col]);
+      jtCols.push(`${col} ${read.type} PATH '$.${col}'`);
+      selectExprOf.set(col, read.text ? (ref) => `JSON_UNQUOTE(${ref})` : (ref) => ref);
+      continue;
+    }
     const { colType, selectExpr } = mysqlJsonTableColumn(col, records, columnTypes?.[col]);
     jtCols.push(`${col} ${colType} PATH '$.${col}'`);
     selectExprOf.set(col, selectExpr);

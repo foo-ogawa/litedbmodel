@@ -41,14 +41,23 @@ export type JsonArrayDialect = 'mysql' | 'sqlite';
 
 /**
  * The DECLARED SQL type of each column a condition object names (`column → 'BIGINT'`), from the model's
- * schema. A column absent here has no known type and takes the untyped form ({@link mysqlKeyElement}).
+ * schema. A column absent here has no known type and takes the untyped form ({@link mysqlKeyRead}).
  */
 export type ColumnTypes = Readonly<Record<string, string>>;
 
 /**
  * How MySQL reads ONE key element out of the JSON param — the `JSON_TABLE` column and the expression the
- * membership subquery projects — chosen from the key column's DECLARED type so the comparison against
- * the column is SAME-TYPED and exact (#376):
+ * membership subquery projects ({@link mysqlKeyRead} applied to one element). */
+function mysqlKeyElement(name: string, path: string, sqlType: string | undefined): { column: string; select: string } {
+  const read = mysqlKeyRead(sqlType);
+  return { column: `${name} ${read.type} PATH '${path}'`, select: read.text ? `JSON_UNQUOTE(${name})` : name };
+}
+
+/**
+ * How MySQL reads a KEY element that is compared with a column — the ONE key rule of every MySQL
+ * single-JSON-param form: the membership predicates ({@link inListPredicate} / {@link tupleInPredicate})
+ * and the batch UPDATE's JOIN key (`json-batch.ts` `mysqlUpdateManyJson`). Chosen from the key column's
+ * DECLARED type so the comparison against the column is SAME-TYPED and exact (#376):
  *
  *  - integer / boolean / DECIMAL / NUMERIC → `DECIMAL(65,30)`: an integer or decimal column compares to a
  *    decimal EXACTLY, and the element is read exactly whether it arrives as a JSON number (a bc `int`,
@@ -61,22 +70,21 @@ export type ColumnTypes = Readonly<Record<string, string>>;
  *    `CHAR`-typed column would truncate at 255).
  *  - NO declared type → the JSON value itself: MySQL compares the column converted to JSON with the
  *    element under JSON rules, which is exact for a number key and for a string key alike and never
- *    widens to DOUBLE. It is strict on the JSON type — a digit string does not match an integer column —
- *    so the schema-carrying paths (emitter, relation, write node) pass the declared type.
+ *    widens to DOUBLE. It is strict on the JSON type — a digit string does not match an integer or
+ *    decimal column — so the schema-carrying paths (emitter, relation, write node, decorator adapter)
+ *    pass the declared type.
  *
  * An undeclared/unknown SQL type is a hard error ({@link sqlTypeToBcScalar}), never a silent text read.
  */
-function mysqlKeyElement(name: string, path: string, sqlType: string | undefined): { column: string; select: string } {
-  if (sqlType === undefined) return { column: `${name} JSON PATH '${path}'`, select: name };
-  const read = mysqlJsonRead(sqlType);
-  return { column: `${name} ${read.type} PATH '${path}'`, select: read.text ? `JSON_UNQUOTE(${name})` : name };
+export function mysqlKeyRead(sqlType: string | undefined): { type: string; text: boolean } {
+  return sqlType === undefined ? { type: 'JSON', text: false } : mysqlJsonRead(sqlType);
 }
 
 /**
  * How MySQL reads a JSON element for a column of the DECLARED SQL type `sqlType`: the `JSON_TABLE`
  * column type, and whether the read is the element's unquoted text. The ONE rule every MySQL
- * single-JSON-param form types a column by when the schema is known — the membership predicates
- * ({@link mysqlKeyElement}) and the batch write rows (`json-batch.ts` `mysqlJsonTableColumn`, #381):
+ * single-JSON-param form types a column by when the schema is known — the keys ({@link mysqlKeyRead})
+ * and the batch write rows (`json-batch.ts` `mysqlJsonTableColumn`, #381):
  * integer / boolean / DECIMAL / NUMERIC → `DECIMAL(65,30)`, FLOAT / DOUBLE → `DOUBLE`, everything else
  * → `JSON` read as text. An unknown SQL type is a hard error ({@link sqlTypeToBcScalar}).
  */
