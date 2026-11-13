@@ -12,3 +12,7 @@ CREATE DATABASE IF NOT EXISTS scp_php;
 CREATE DATABASE IF NOT EXISTS scp_rust;
 GRANT ALL PRIVILEGES ON `scp\_%`.* TO 'testuser'@'%';
 FLUSH PRIVILEGES;
+-- The MySQL RETURNING race tests (#359, all languages) park a write with a BEFORE INSERT trigger that
+-- testuser creates. With binary logging ON — the CI `services:` MySQL; the docker stacks run with
+-- --skip-log-bin — a non-SUPER user may not create a trigger unless this is set (error 1419).
+SET GLOBAL log_bin_trust_function_creators = 1;
