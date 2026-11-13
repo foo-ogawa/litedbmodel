@@ -62,6 +62,19 @@ export function getTransactionClient(): DBConnection | undefined {
   return getTransactionConnection();
 }
 
+/**
+ * A page count rendered INLINE as `LIMIT` / `OFFSET` text. The text becomes part of the statement, so
+ * only a non-negative safe integer may reach it: a request value is a string at run time whatever the
+ * `number` type says, and `limit: "1; DELETE …"` was spliced into the SQL and ran (#356). The ONE rule
+ * for both select builders (`_buildSelectSQL` / `buildSelectSQL`).
+ */
+function pageCountText(clause: 'LIMIT' | 'OFFSET', value: unknown): string {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+    throw new TypeError(`${clause} must be a non-negative integer (got ${typeof value})`);
+  }
+  return String(value);
+}
+
 // ============================================
 // DBModel - Base Model Class
 // ============================================
@@ -676,11 +689,11 @@ export abstract class DBModel {
     }
 
     if (options.limit !== undefined) {
-      sql += ` LIMIT ${options.limit}`;
+      sql += ` LIMIT ${pageCountText('LIMIT', options.limit)}`;
     }
 
     if (options.offset !== undefined) {
-      sql += ` OFFSET ${options.offset}`;
+      sql += ` OFFSET ${pageCountText('OFFSET', options.offset)}`;
     }
 
     if (options.forUpdate) {
@@ -771,11 +784,11 @@ export abstract class DBModel {
     }
 
     if (options.limit !== undefined) {
-      sql += ` LIMIT ${options.limit}`;
+      sql += ` LIMIT ${pageCountText('LIMIT', options.limit)}`;
     }
 
     if (options.offset !== undefined) {
-      sql += ` OFFSET ${options.offset}`;
+      sql += ` OFFSET ${pageCountText('OFFSET', options.offset)}`;
     }
 
     if (options.append) {
