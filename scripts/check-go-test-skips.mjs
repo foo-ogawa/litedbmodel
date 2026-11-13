@@ -104,6 +104,7 @@ const LIVE_TESTS = [
   'TestConcurrentWriterStickyIsPerRequestLive',
   'TestMysqlReturningBulkAutoIncLive',
   'TestMysqlReturningCompositeKeyLive',
+  'TestMysqlReturningDeleteLockedLive',
   'TestMysqlReturningInsertIgnoreLive',
   'TestMysqlReturningUpdateByKeyLive',
   'TestPhaseCConfigCharsetResetOnReleaseLiveMySQL',

@@ -273,10 +273,12 @@ function mysqlConnection(conn: MysqlPoolConnLike): AsyncConnection {
       const bound = params as unknown[];
       return atomically(async () => {
         if (reselect.before) {
-          // DELETE…RETURNING: the pre-image IS the written row set — capture it, THEN delete.
+          // DELETE…RETURNING: the locked pre-image IS the written row set — capture it, THEN delete, and
+          // the DELETE must have removed exactly those rows.
           const [pre] = await conn.query(reselect.selectSql, bindReselect(reselect.binds, bound, 0, 0));
-          await conn.query(reselect.writeSql, bound);
-          return rowsOf(pre);
+          const [res] = await conn.query(reselect.writeSql, bound);
+          const affected = Number((res as { affectedRows?: number })?.affectedRows ?? 0);
+          return checkRecovered(rowsOf(pre), writtenRowCount(reselect.written, 0, affected, foundRows, reselect.writeSql), reselect.writeSql) as Rows;
         }
         if (reselect.lockSql !== '') {
           // UPDATE…RETURNING: lock the rows its WHERE names and read their keys, write, then recover the

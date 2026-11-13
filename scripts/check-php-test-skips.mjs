@@ -161,6 +161,7 @@ const LIVE_TESTS = [
   'LiteDbModel\\Runtime\\Tests\\MiddlewareLiveTest::testRedProofUnregisteredIsBytePassthrough',
   'LiteDbModel\\Runtime\\Tests\\MysqlReturningLiveTest::testBulkAutoIncReturnsOnlyItsOwnRows',
   'LiteDbModel\\Runtime\\Tests\\MysqlReturningLiveTest::testCompositeKeyMatchesEveryColumn',
+  'LiteDbModel\\Runtime\\Tests\\MysqlReturningLiveTest::testDeleteReturnsOnlyTheRowsItDeleted',
   'LiteDbModel\\Runtime\\Tests\\MysqlReturningLiveTest::testInsertIgnoreReturnsOnlyTheInsertedRow',
   'LiteDbModel\\Runtime\\Tests\\MysqlReturningLiveTest::testUpdateReturnsTheRowsItUpdated',
   'LiteDbModel\\Runtime\\Tests\\TxBoundaryLiveTest::testGuardLive',

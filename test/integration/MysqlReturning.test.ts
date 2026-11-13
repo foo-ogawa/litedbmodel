@@ -236,3 +236,63 @@ describe('#361 an UPDATE…RETURNING returns the rows it updated, keyed before t
     expect(plain(rows as Record<string, unknown>[])).toEqual([{ id: 1, state: 'claimed' }, { id: 2, state: 'mine' }]);
   });
 });
+
+describe('#362 a DELETE…RETURNING returns only the rows it deleted', () => {
+  const jobs = async (...ids: number[]) => {
+    await raw.query(`DROP TABLE IF EXISTS ${JOBS}`);
+    await raw.query(`CREATE TABLE ${JOBS} (id INT PRIMARY KEY, state VARCHAR(16) NOT NULL)`);
+    for (const id of ids) await raw.query(`INSERT INTO ${JOBS} (id, state) VALUES (?, 'open')`, [id]);
+  };
+  const del = () => compileWriteNode({ id: 'w', component: 'Delete', ports: { table: JOBS, where: { arr: [{ eq: [{ ref: ['id'] }, { ref: ['id'] }] }] }, returning: 'id, state', pk: 'id' } } as never, 'mysql');
+
+  it('a row another session deleted first (we waited on its lock) is not reported as deleted', async () => {
+    await jobs(1);
+    const other = await mysql.createConnection(MY);
+    try {
+      await other.query('BEGIN');
+      await other.query(`DELETE FROM ${JOBS} WHERE id = 1`);
+      const mine = returning(del().sql, [1]);
+      // Ours is blocked on row 1: at the locking pre-image (fixed), or at the DELETE after an unlocked one (the defect).
+      await untilRunning(other, `SELECT id, state FROM ${JOBS} `, `DELETE FROM ${JOBS} `);
+      await other.query('COMMIT');
+      expect(plain(await mine)).toEqual([]);
+    } finally {
+      await other.end();
+    }
+  });
+
+  it('a row another session deleted after our snapshot is not reported as deleted', async () => {
+    await jobs(8);
+    const c = await pool.acquire();
+    try {
+      await c.run('START TRANSACTION WITH CONSISTENT SNAPSHOT', []);
+      await raw.query(`DELETE FROM ${JOBS} WHERE id = 8`); // another session, committed
+      expect(plain((await c.execute(del().sql, [8])) as Record<string, unknown>[])).toEqual([]);
+      await c.run('COMMIT', []);
+    } finally {
+      await pool.release(c);
+    }
+  });
+
+  it('a row it did delete is returned', async () => {
+    await jobs(5);
+    expect(plain(await returning(del().sql, [5]))).toEqual([{ id: 5, state: 'open' }]);
+  });
+
+  it('DBModel.delete({ returning }) does not report a row another session deleted first', async () => {
+    await jobs(1);
+    DBModel.setConfig(mysqlConfig);
+    const other = await mysql.createConnection(MY);
+    try {
+      await other.query('BEGIN');
+      await other.query(`DELETE FROM ${JOBS} WHERE id = 1`);
+      const mine = Middleware.run(() => DBModel.transaction(() => Job.delete([[Job.id, 1]], { returning: true })));
+      await untilRunning(other, `SELECT id FROM ${JOBS} `, `DELETE FROM ${JOBS} `);
+      await other.query('COMMIT');
+      expect((await mine)!.values).toEqual([]);
+    } finally {
+      await other.end();
+      await closeAllPools();
+    }
+  });
+});

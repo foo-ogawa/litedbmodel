@@ -270,3 +270,42 @@ fn mysql_returning_update_by_key() {
     d.exec_ddl(&[format!("DROP TABLE IF EXISTS {t}")])
         .expect("drop");
 }
+
+/// #362 — a DELETE…RETURNING returns only the rows it deleted.
+#[test]
+fn mysql_returning_delete_locked() {
+    let d = driver();
+    let t = tbl("del");
+    let delete = format!("DELETE FROM {t} WHERE id = ? RETURNING id, state /*scp:pk=id;ai=*/");
+    table(
+        &d,
+        &t,
+        "(id INT PRIMARY KEY, state VARCHAR(16) NOT NULL)",
+        &[format!(
+            "INSERT INTO {t} (id, state) VALUES (8, 'open'), (5, 'open')"
+        )],
+    );
+    // Another session deletes the row after OUR snapshot (taken by our first consistent read): a plain
+    // pre-image still sees it.
+    let mut tx = d.begin_tx().expect("BEGIN");
+    tx.execute(&format!("SELECT COUNT(*) FROM {t}"), &[])
+        .expect("snapshot");
+    d.exec_ddl(&[format!("DELETE FROM {t} WHERE id = 8")])
+        .expect("other delete");
+    let got: Vec<Vec<String>> = tx
+        .execute(&delete, &[Value::Int(8)])
+        .expect("delete returning")
+        .iter()
+        .map(cells)
+        .collect();
+    assert_eq!(got, Vec::<Vec<String>>::new(), "deleted after our snapshot");
+    tx.commit().expect("COMMIT");
+    // A row it did delete is returned.
+    assert_eq!(
+        rows(&d, &delete, &[Value::Int(5)]).expect("own delete"),
+        vec![vec!["id=5".to_string(), "state=open".to_string()]],
+        "own delete"
+    );
+    d.exec_ddl(&[format!("DROP TABLE IF EXISTS {t}")])
+        .expect("drop");
+}

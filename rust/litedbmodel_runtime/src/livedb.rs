@@ -1572,11 +1572,17 @@ fn build_mysql_reselect(sql: &str) -> Result<Option<MysqlReselect>, SqlFailure> 
     let binds: Vec<ReselectBind> = (0..where_sql.matches('?').count())
         .map(|i| ReselectBind::Param(leading + i))
         .collect();
+    // The DELETE: its pre-image is a LOCKING read — it reads the latest committed rows (not an older
+    // snapshot) and holds them, so no other session can remove them first — and the DELETE must remove
+    // exactly those rows: its affected count is checked against the pre-image (`Affected`).
     if wl.starts_with("delete") {
         return Ok(Some(MysqlReselect {
-            select_sql: format!("SELECT {cols} FROM {table} WHERE {where_sql}{order_by}"),
+            select_sql: format!(
+                "SELECT {cols} FROM {table} WHERE {where_sql}{order_by} FOR UPDATE"
+            ),
             write_sql,
             binds,
+            written: Some(WrittenRows::Affected),
             before: true,
             ..MysqlReselect::default()
         }));
@@ -1742,10 +1748,14 @@ async fn my_returning_on_conn(
             .await
             .map_err(|e| driver_failure(format!("mysql pre-select [{}]: {e}", rs.select_sql)))?;
         let out = my_rows_to_wire(&rows)?;
-        bind_my(sqlx::query(&rs.write_sql), params)?
+        let deleted = bind_my(sqlx::query(&rs.write_sql), params)?
             .execute(&mut *conn)
             .await
             .map_err(|e| driver_failure(format!("mysql write [{}]: {e}", rs.write_sql)))?;
+        // The DELETE must have removed exactly the locked pre-image.
+        let written =
+            written_row_count(rs.written, 0, deleted.rows_affected() as i64, &rs.write_sql)?;
+        check_recovered(out.len(), written, &rs.write_sql)?;
         return Ok(out);
     }
     if !rs.lock_sql.is_empty() {

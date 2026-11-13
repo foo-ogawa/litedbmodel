@@ -1384,7 +1384,7 @@ export abstract class DBModel {
     let sql = `DELETE FROM ${tableName} WHERE ${whereClause}`;
 
     if (options.returning) {
-      sql += ` RETURNING ${options.returning}`;
+      sql = this._withReturning(sql, options.returning, options.returningKey);
     }
 
     const result = await this.execute(sql, params);
@@ -2741,42 +2741,17 @@ export abstract class DBModel {
         return null;
       }
       
-      // With returning: true - get PkeyResult
+      // With returning: true - get PkeyResult. MySQL has no native RETURNING: the connection seam
+      // emulates it (src/scp/makesql/mysql-returning.ts — the pre-image is a LOCKING read and the
+      // DELETE must remove exactly those rows), so every dialect asks for the same RETURNING here.
       const pkeyColumns = this._getPkeyColumnsWithDefault();
       const pkeyColumnNames = columnsToNames(pkeyColumns);
-      const driverType = this.getDriverType();
-      const sqlBuilder = getSqlBuilder(driverType);
-      
-      if (!sqlBuilder.supportsReturning) {
-        // Driver without native RETURNING: Pre-SELECT to get PKs
-        const selectParams: unknown[] = [];
-        const normalizedCond = normalizeConditions(conditionRecord);
-        const whereClause = normalizedCond.compile(selectParams);
-        
-        if (!whereClause) {
-          throw new Error('DELETE requires conditions');
-        }
-        
-        const tableName = this.getUpdateTableName();
-        const selectSql = `SELECT DISTINCT ${pkeyColumnNames.join(', ')} FROM ${tableName} WHERE ${whereClause}`;
-        
-        // Execute SELECT first
-        const selectResult = await this.execute(selectSql, selectParams);
-        const pkeyValues = selectResult.rows as Record<string, unknown>[];
-        
-        // Then execute DELETE (without RETURNING)
-        await this._delete(conditionRecord, {});
-        
-        return this._buildPkeyResult(pkeyValues, pkeyColumns);
-      } else {
-        // PostgreSQL/SQLite: Use RETURNING clause
-        const deleteOpts = { returning: pkeyColumnNames.join(', ') };
-        const instances = await this._delete(conditionRecord, deleteOpts);
-        return this._buildPkeyResult(
-          instances.map(i => i as unknown as Record<string, unknown>),
-          pkeyColumns
-        );
-      }
+      const deleteOpts = { returning: pkeyColumnNames.join(', '), returningKey: { columns: pkeyColumnNames, autoInc: null } };
+      const instances = await this._delete(conditionRecord, deleteOpts);
+      return this._buildPkeyResult(
+        instances.map(i => i as unknown as Record<string, unknown>),
+        pkeyColumns
+      );
     };
     return this._applyMiddleware('delete', core, [conditions, options]);
   }

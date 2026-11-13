@@ -151,8 +151,8 @@ final class MysqlReselect
  *  | update            | the PK of every row its WHERE names, read and LOCKED (FOR UPDATE)   | lock + |
  *  |                   | before the write; the rows re-selected by those keys after it       | after  |
  *  | updateMany        | EVERY batch JOIN key column, re-bound from the SAME JSON payload    | after  |
- *  | delete/deleteMany | the write's OWN WHERE predicate — **before** the write, since the   | BEFORE |
- *  |                   | rows no longer exist once the DELETE has run                        |        |
+ *  | delete/deleteMany | the write's OWN WHERE predicate, read and LOCKED (FOR UPDATE) —      | BEFORE |
+ *  |                   | **before** the write; it must remove exactly those rows (affected)  |        |
  *
  * The recovering SELECT runs on the SAME connection as the write, and the steps run ATOMICALLY (inside
  * the open transaction, or their own BEGIN … COMMIT), so it sees the not-yet-committed rows — and a
@@ -344,8 +344,11 @@ final class MysqlReturning
         for ($i = 0, $n = substr_count($whereSql, '?'); $i < $n; $i++) {
             $binds[] = new ReselectBind('param', $leading + $i);
         }
+        // The DELETE: its pre-image is a LOCKING read — it reads the latest committed rows (not an older
+        // snapshot) and holds them, so no other session can remove them first — and the DELETE must
+        // remove exactly those rows: its affected count is checked against the pre-image ('affected').
         if (str_starts_with($wl, 'delete')) {
-            return new MysqlReselect($writeSql, "SELECT {$cols} FROM {$table} WHERE {$whereSql}{$orderBy}", $binds, null, true);
+            return new MysqlReselect($writeSql, "SELECT {$cols} FROM {$table} WHERE {$whereSql}{$orderBy} FOR UPDATE", $binds, 'affected', true);
         }
         // The UPDATE: lock the rows its WHERE names and read their keys BEFORE the write, then recover the
         // written rows (carrying their new values) by those keys — never by the WHERE re-evaluated after it.
@@ -525,10 +528,11 @@ final class MysqlReturningStatement extends \PDOStatement
     private function returningSteps(array $bound): array
     {
         if ($this->returning->before) {
-            // DELETE…RETURNING: the pre-image IS the written row set — capture it, THEN delete.
+            // DELETE…RETURNING: the locked pre-image IS the written row set — capture it, THEN delete,
+            // and the DELETE must have removed exactly those rows.
             $pre = $this->reselect($bound, 0, 0);
             parent::execute($bound);
-            return $pre;
+            return MysqlReturning::checkRecovered($pre, MysqlReturning::writtenRowCount($this->returning->written, 0, $this->rowCount()), $this->returning->writeSql);
         }
         if ($this->returning->lockSql !== '') {
             // UPDATE…RETURNING: lock the rows its WHERE names and read their keys, write, then recover

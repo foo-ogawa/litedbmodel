@@ -22,8 +22,8 @@
  *  | update           | the PK of every row its WHERE names, read and LOCKED (FOR UPDATE)  | lock      |
  *  |                  | before the write; the rows re-selected by those keys after it      | + after   |
  *  | updateMany       | EVERY batch JOIN key column, re-bound from the SAME JSON payload   | after     |
- *  | delete/deleteMany| the write's OWN WHERE predicate — **before** the write, since the   | BEFORE    |
- *  |                  | rows no longer exist once the DELETE has run                       |           |
+ *  | delete/deleteMany| the write's OWN WHERE predicate, read and LOCKED (FOR UPDATE) —     | BEFORE    |
+ *  |                  | **before** the write; it must remove exactly those rows (affected) |           |
  *
  * The recovering SELECT runs on the SAME connection as the write, and the steps run ATOMICALLY: inside
  * the caller's transaction when the connection is in one, else inside their own `BEGIN … COMMIT` (a
@@ -308,7 +308,10 @@ export function buildMysqlReselect(sql: string): MysqlReselect | null {
   const before = placeholders(writeSql.slice(0, wherePos));
   const binds: ReselectBind[] = [];
   for (let i = 0; i < placeholders(whereSql); i++) binds.push({ kind: 'param', index: before + i });
-  if (lower.startsWith('delete')) return done(`SELECT ${cols} FROM ${table} WHERE ${whereSql}${orderBy}`, binds, null, true);
+  // The DELETE: its pre-image is a LOCKING read — it reads the latest committed rows (not an older
+  // snapshot) and holds them, so no other session can remove them first — and the DELETE must remove
+  // exactly those rows: its affected count is checked against the pre-image ('affected').
+  if (lower.startsWith('delete')) return done(`SELECT ${cols} FROM ${table} WHERE ${whereSql}${orderBy} FOR UPDATE`, binds, 'affected', true);
   // The UPDATE: lock the rows its WHERE names and read their keys BEFORE the write, then recover the
   // written rows (carrying their new values) by those keys — never by the WHERE re-evaluated after it.
   if (pk.length === 0) {

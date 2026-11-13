@@ -175,4 +175,19 @@ final class MysqlReturningLiveTest extends TestCase
             'state transition',
         );
     }
+
+    /** #362 — a DELETE…RETURNING returns only the rows it deleted. */
+    public function testDeleteReturnsOnlyTheRowsItDeleted(): void
+    {
+        $t = $this->t;
+        $delete = "DELETE FROM {$t} WHERE id = ? RETURNING id, state /*scp:pk=id;ai=*/";
+        $this->table('(id INT PRIMARY KEY, state VARCHAR(16) NOT NULL)', "INSERT INTO {$t} (id, state) VALUES (8, 'open'), (5, 'open')");
+        // Another session deletes the row after OUR snapshot: a plain pre-image still sees it.
+        $this->db->exec('START TRANSACTION WITH CONSISTENT SNAPSHOT');
+        self::mysql()->exec("DELETE FROM {$t} WHERE id = 8");
+        self::assertSame([], $this->rows($delete, [8]), 'deleted after our snapshot');
+        $this->db->exec('COMMIT');
+        // A row it did delete is returned.
+        self::assertSame([['id' => '5', 'state' => 'open']], $this->rows($delete, [5]), 'own delete');
+    }
 }

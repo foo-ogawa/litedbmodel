@@ -192,3 +192,26 @@ def test_mysql_returning_update_by_key(driver):
     # A state transition: the SET changes the WHERE column, so the WHERE no longer matches afterwards.
     got = _rows(driver, f"UPDATE {TBL} SET state = ? WHERE state = ? RETURNING id, state /*scp:pk=id;ai=*/", ["claimed", "open"])
     assert got == [{"id": 1, "state": "claimed"}, {"id": 2, "state": "claimed"}]
+
+
+# ── #362 — a DELETE…RETURNING returns only the rows it deleted ────────────────────────────────────
+
+
+def test_mysql_returning_delete_locked(driver):
+    delete = f"DELETE FROM {TBL} WHERE id = ? RETURNING id, state /*scp:pk=id;ai=*/"
+    _table(driver, "(id INT PRIMARY KEY, state VARCHAR(16) NOT NULL)", f"INSERT INTO {TBL} (id, state) VALUES (8, 'open'), (5, 'open')")
+    # Another session deletes the row after OUR snapshot: a plain pre-image still sees it.
+    tx = driver.begin_tx()
+    try:
+        tx.run("START TRANSACTION WITH CONSISTENT SNAPSHOT", [])
+        other = _raw_conn()
+        try:
+            other.cursor().execute(f"DELETE FROM {TBL} WHERE id = 8")
+        finally:
+            other.close()
+        assert tx.all(delete, [8]) == []
+        tx.run("COMMIT", [])
+    finally:
+        tx.release(False)
+    # A row it did delete is returned.
+    assert _rows(driver, delete, [5]) == [{"id": 5, "state": "open"}]

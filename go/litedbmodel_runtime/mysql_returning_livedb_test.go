@@ -236,3 +236,78 @@ func TestMysqlReturningUpdateByKeyLive(t *testing.T) {
 	got, err := myretRows(t, db, "UPDATE "+tbl+" SET state = ? WHERE state = ? RETURNING id, state /*scp:pk=id;ai=*/", "claimed", "open")
 	myretExpect(t, "state transition", got, err, []map[string]string{{"id": "1", "state": "claimed"}, {"id": "2", "state": "claimed"}})
 }
+
+// #362 — a DELETE…RETURNING returns only the rows it deleted.
+func TestMysqlReturningDeleteLockedLive(t *testing.T) {
+	db, tbl := openMysqlReturning(t)
+	ctx := context.Background()
+	ddl := "(id INT PRIMARY KEY, state VARCHAR(16) NOT NULL)"
+	del := "DELETE FROM " + tbl + " WHERE id = ? RETURNING id, state /*scp:pk=id;ai=*/"
+	none := []map[string]string{}
+
+	// Another session deletes the row after OUR snapshot: a plain pre-image still sees it.
+	myretTable(t, db, tbl, ddl, "INSERT INTO "+tbl+" (id, state) VALUES (8, 'open')")
+	mine, err := db.Conn(ctx)
+	if err != nil {
+		t.Fatalf("conn: %v", err)
+	}
+	defer mine.Close()
+	if _, err := mine.ExecContext(ctx, "START TRANSACTION WITH CONSISTENT SNAPSHOT"); err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	if _, err := openMysqlReturningDSN(t, "").Exec("DELETE FROM " + tbl + " WHERE id = 8"); err != nil {
+		t.Fatalf("other delete: %v", err)
+	}
+	got, err := myretRows(t, mine, del, 8)
+	myretExpect(t, "deleted after our snapshot", got, err, none)
+	if _, err := mine.ExecContext(ctx, "COMMIT"); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	// Another session deletes the row first and holds it; we wait on its lock, then it commits.
+	myretTable(t, db, tbl, ddl, "INSERT INTO "+tbl+" (id, state) VALUES (1, 'open')")
+	other, err := openMysqlReturningDSN(t, "").Conn(ctx)
+	if err != nil {
+		t.Fatalf("other conn: %v", err)
+	}
+	defer other.Close()
+	for _, s := range []string{"BEGIN", "DELETE FROM " + tbl + " WHERE id = 1"} {
+		if _, err := other.ExecContext(ctx, s); err != nil {
+			t.Fatalf("%s: %v", s, err)
+		}
+	}
+	type result struct {
+		rows []map[string]string
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		rows, err := myretRows(t, db, del, 1)
+		done <- result{rows, err}
+	}()
+	// Ours is blocked on row 1: at the locking pre-image (fixed), or at the DELETE after an unlocked one.
+	for i := 0; ; i++ {
+		var n int
+		if err := other.QueryRowContext(ctx, "SELECT COUNT(*) FROM information_schema.PROCESSLIST WHERE INFO LIKE ? OR INFO LIKE ?", "SELECT id, state FROM "+tbl+" %", "DELETE FROM "+tbl+" %").Scan(&n); err != nil {
+			t.Fatalf("processlist: %v", err)
+		}
+		if n > 0 {
+			time.Sleep(300 * time.Millisecond)
+			break
+		}
+		if i > 200 {
+			t.Fatalf("our DELETE never ran")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if _, err := other.ExecContext(ctx, "COMMIT"); err != nil {
+		t.Fatalf("other commit: %v", err)
+	}
+	r := <-done
+	myretExpect(t, "deleted first by another session", r.rows, r.err, none)
+
+	// A row it did delete is returned.
+	myretTable(t, db, tbl, ddl, "INSERT INTO "+tbl+" (id, state) VALUES (5, 'open')")
+	got, err = myretRows(t, db, del, 5)
+	myretExpect(t, "own delete", got, err, []map[string]string{{"id": "5", "state": "open"}})
+}

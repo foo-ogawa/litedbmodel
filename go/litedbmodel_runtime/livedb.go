@@ -273,7 +273,16 @@ func (c *scpMysqlConn) returning(ctx context.Context, rs *mysqlReselect, args []
 		if err != nil {
 			return nil, err
 		}
-		if _, _, err := c.execViaStmtWithAffected(ctx, rs.writeSQL, args); err != nil {
+		_, affected, err := c.execViaStmtWithAffected(ctx, rs.writeSQL, args)
+		if err != nil {
+			return nil, err
+		}
+		// The DELETE must have removed exactly the locked pre-image.
+		written, err := writtenRowCount(rs.written, 0, affected, c.foundRows, rs.writeSQL)
+		if err != nil {
+			return nil, err
+		}
+		if err := checkRecovered(len(pre.rows), written, rs.writeSQL); err != nil {
 			return nil, err
 		}
 		return pre, nil
@@ -654,11 +663,15 @@ func buildMysqlReselect(sql string) (*mysqlReselect, error) {
 	for i := 0; i < strings.Count(whereSQL, "?"); i++ {
 		binds = append(binds, reselectBind{kind: "param", index: leading + i})
 	}
+	// The DELETE: its pre-image is a LOCKING read — it reads the latest committed rows (not an older
+	// snapshot) and holds them, so no other session can remove them first — and the DELETE must remove
+	// exactly those rows: its affected count is checked against the pre-image ("affected").
 	if strings.HasPrefix(wl, "delete") {
 		return &mysqlReselect{
 			writeSQL:  writeSQL,
-			selectSQL: fmt.Sprintf("SELECT %s FROM %s WHERE %s%s", cols, table, whereSQL, orderBy),
+			selectSQL: fmt.Sprintf("SELECT %s FROM %s WHERE %s%s FOR UPDATE", cols, table, whereSQL, orderBy),
 			binds:     binds,
+			written:   "affected",
 			before:    true,
 		}, nil
 	}

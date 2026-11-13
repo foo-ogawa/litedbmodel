@@ -552,8 +552,8 @@ def _build_mysql_reselect(sql: str):
       * updateMany → EVERY batch JOIN key column, re-bound from the SAME JSON payload;
       * update → the PK of every row its WHERE names, read and LOCKED (FOR UPDATE) before the write;
         the written rows re-selected by those keys after it (never by the WHERE re-evaluated);
-      * delete → the write's OWN WHERE predicate, selected BEFORE the write (afterwards there is
-        nothing left to describe; that pre-image IS the set of rows the DELETE removes).
+      * delete → the write's OWN WHERE predicate, read and LOCKED (FOR UPDATE) BEFORE the write (afterwards
+        there is nothing left to describe); the DELETE must remove exactly those rows (affected).
 
     Returns a :class:`_MysqlReselect`. Mirrors src/scp/makesql/mysql-returning.ts, rust ``build_mysql_reselect``,
     go ``buildMysqlReselect`` and php ``buildMysqlReselect`` — one derivation, five runtimes.
@@ -664,8 +664,11 @@ def _build_mysql_reselect(sql: str):
     where_sql = write_sql[where_pos + len(" where "):].strip()
     leading = write_sql[:where_pos].count("?")
     binds = [("param", leading + i) for i in range(where_sql.count("?"))]
+    # The DELETE: its pre-image is a LOCKING read — it reads the latest committed rows (not an older
+    # snapshot) and holds them, so no other session can remove them first — and the DELETE must remove
+    # exactly those rows: its affected count is checked against the pre-image ("affected").
     if wl.startswith("delete"):
-        return _MysqlReselect(write_sql, f"SELECT {cols} FROM {table} WHERE {where_sql}{order_by}", binds, None, True)
+        return _MysqlReselect(write_sql, f"SELECT {cols} FROM {table} WHERE {where_sql}{order_by} FOR UPDATE", binds, "affected", True)
     # The UPDATE: lock the rows its WHERE names and read their keys BEFORE the write, then recover the
     # written rows (carrying their new values) by those keys — never by the WHERE re-evaluated after it.
     if not pk_cols:
@@ -825,8 +828,11 @@ def _conn_returning(conn: Any, rs: _MysqlReselect, params: Sequence[Any], xform)
         rows = _conn_select(conn, xform(rs.select_sql), _bind_reselect(rs.binds, list(params), 0, 0))
         cur = conn.cursor()
         cur.execute(xform(rs.write_sql), tuple(params))
+        affected = cur.rowcount
         cur.close()
-        return rows
+        # The DELETE must have removed exactly the locked pre-image.
+        found_rows = bool(conn.client_flag & _CLIENT_FOUND_ROWS)
+        return _check_recovered(rows, _written_row_count(rs.written, 0, affected, found_rows, rs.write_sql), rs.write_sql)
     if rs.lock_sql:
         # UPDATE…RETURNING: lock the rows its WHERE names and read their keys, write, then recover the
         # written rows by THOSE keys (never by the WHERE re-evaluated after the write).
