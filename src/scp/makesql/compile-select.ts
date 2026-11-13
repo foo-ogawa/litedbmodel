@@ -22,7 +22,7 @@ import { orderToString } from '../../Column';
 import type { OrderSpec } from '../../Column';
 import type { MakeSQL } from './makesql';
 import { formatterFor } from './compile';
-import { conditionsFor } from './json-array';
+import { conditionsFor, type ColumnTypes } from './json-array';
 import type { Dialect } from './handler';
 
 /**
@@ -102,6 +102,8 @@ export interface SelectDesc extends RowLockOptions {
    */
   selectColumn?: string;
   conditions?: ConditionObject;
+  /** The DECLARED types of the columns `conditions` names — types a MySQL IN-list element (#376). */
+  columnTypes?: ColumnTypes;
   join?: string;
   joinParams?: unknown[];
   cte?: { name: string; sql: string; params: unknown[] };
@@ -153,7 +155,7 @@ export function compileSelect(desc: SelectDesc): SelectBundle {
   if (desc.cte?.params && desc.cte.params.length > 0) headParams.push(...desc.cte.params);
   if (desc.joinParams && desc.joinParams.length > 0) headParams.push(...desc.joinParams);
 
-  const whereClause = conditionsFor(desc.conditions ?? {}, desc.dialect).compile(headParams, formatter);
+  const whereClause = conditionsFor(desc.conditions ?? {}, desc.dialect, desc.columnTypes).compile(headParams, formatter);
 
   let head = '';
   if (desc.cte) head = `WITH ${desc.cte.name} AS (${desc.cte.sql}) `;

@@ -27,7 +27,7 @@ import type { ConditionObject } from '../../DBConditions';
 import { DBToken, DBImmediateValue, type SqlCastFormatter } from '../../DBValues';
 import type { MakeSQL } from './makesql';
 import { formatterFor } from './compile';
-import { conditionsFor } from './json-array';
+import { conditionsFor, type ColumnTypes } from './json-array';
 import {
   mysqlInsertJson,
   sqliteInsertJson,
@@ -233,6 +233,8 @@ export function compileUpdateSingle(opts: {
   tableName: string;
   serializedValues: Record<string, unknown>;
   conditions: ConditionObject;
+  /** The DECLARED types of the columns `conditions` names — types a MySQL IN-list element (#376). */
+  columnTypes?: ColumnTypes;
   sqlCastMap?: Map<string, string>;
   returning?: string;
 }): MakeSQL {
@@ -256,7 +258,7 @@ export function compileUpdateSingle(opts: {
     }
   }
 
-  const whereClause = conditionsFor(opts.conditions, opts.dialect).compile(params, formatter);
+  const whereClause = conditionsFor(opts.conditions, opts.dialect, opts.columnTypes).compile(params, formatter);
   if (!whereClause) throw new Error('UPDATE requires conditions');
 
   let sql = `UPDATE ${opts.tableName} SET ${setClauses.join(', ')} WHERE ${whereClause}`;
@@ -278,11 +280,13 @@ export function compileDelete(opts: {
   dialect: Dialect;
   tableName: string;
   conditions: ConditionObject;
+  /** The DECLARED types of the columns `conditions` names — types a MySQL IN-list element (#376). */
+  columnTypes?: ColumnTypes;
   returning?: string;
 }): MakeSQL {
   const params: unknown[] = [];
   const formatter = opts.dialect === 'postgres' ? formatterFor(opts.dialect) : undefined;
-  const whereClause = conditionsFor(opts.conditions, opts.dialect).compile(params, formatter);
+  const whereClause = conditionsFor(opts.conditions, opts.dialect, opts.columnTypes).compile(params, formatter);
   if (!whereClause) throw new Error('DELETE requires conditions');
 
   let sql = `DELETE FROM ${opts.tableName} WHERE ${whereClause}`;
@@ -315,9 +319,11 @@ export function compileDeleteMany(opts: {
   keyColumns: string[];
   /** The key-tuples to delete: each row maps every PK column → its value. */
   keys: Record<string, unknown>[];
+  /** The DECLARED types of the PK columns — types a MySQL key element (#376). */
+  columnTypes?: ColumnTypes;
   returning?: string;
 }): MakeSQL[] {
-  const { dialect, tableName, keyColumns, keys, returning } = opts;
+  const { dialect, tableName, keyColumns, keys, columnTypes, returning } = opts;
   if (keyColumns.length === 0) throw new Error('compileDeleteMany: keyColumns must be non-empty');
   if (keys.length === 0) return [];
 
@@ -326,7 +332,7 @@ export function compileDeleteMany(opts: {
     const col = keyColumns[0];
     const values = keys.map((k) => k[col]);
     const conditions: ConditionObject = { [col]: values };
-    return [compileDelete({ dialect, tableName, conditions, returning })];
+    return [compileDelete({ dialect, tableName, conditions, columnTypes, returning })];
   }
 
   // Composite PK → group key-tuples by their present-column set (mirrors createMany grouping), one
@@ -343,7 +349,7 @@ export function compileDeleteMany(opts: {
     const present = keyColumns.filter((c) => group[0][c] !== undefined);
     const conditions: ConditionObject = {};
     for (const c of present) conditions[c] = group.map((k) => k[c]);
-    components.push(compileDelete({ dialect, tableName, conditions, returning }));
+    components.push(compileDelete({ dialect, tableName, conditions, columnTypes, returning }));
   }
   return components;
 }

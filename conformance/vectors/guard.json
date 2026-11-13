@@ -181,7 +181,7 @@
           "params": []
         },
         {
-          "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE author_id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) ORDER BY id ASC",
+          "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE author_id IN (SELECT v FROM JSON_TABLE(?, '$[*]' COLUMNS(v DECIMAL(65,30) PATH '$')) jt) ORDER BY id ASC",
           "params": [
             "[1,2,3]"
           ]
@@ -281,7 +281,7 @@
           "params": []
         },
         {
-          "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE author_id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) ORDER BY id ASC",
+          "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE author_id IN (SELECT v FROM JSON_TABLE(?, '$[*]' COLUMNS(v DECIMAL(65,30) PATH '$')) jt) ORDER BY id ASC",
           "params": [
             "[1,2,3]"
           ]

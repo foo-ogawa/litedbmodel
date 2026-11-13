@@ -99,7 +99,7 @@ describe('A. WHERE — makeSQL byte-matches DBConditions (all constructs)', () =
   // byte-match on all three dialects. The NEW form is a frozen literal target here; its
   // RESULT PARITY with v1 is proven on real MySQL 8 + SQLite in json-array-parity.test.ts.
   const IN_LIST_JSON: Record<'mysql' | 'sqlite', Rendered> = {
-    mysql: { sql: "id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt)", params: ['[1,2,3]'] },
+    mysql: { sql: "id IN (SELECT v FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt)", params: ['[1,2,3]'] },
     sqlite: { sql: 'id IN (SELECT value FROM json_each(?))', params: ['[1,2,3]'] },
   };
 
@@ -673,7 +673,7 @@ describe('B. single UPDATE / DELETE — makeSQL byte-matches original _update/_d
         expect(v1.sql).toBe('DELETE FROM users WHERE id IN (?, ?, ?)');
         expect(got.sql.startsWith('DELETE FROM users WHERE id IN (')).toBe(true);
         const golden = dialect === 'mysql'
-          ? { sql: "DELETE FROM users WHERE id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt)", params: ['[1,2,3]'] }
+          ? { sql: "DELETE FROM users WHERE id IN (SELECT v FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt)", params: ['[1,2,3]'] }
           : { sql: 'DELETE FROM users WHERE id IN (SELECT value FROM json_each(?))', params: ['[1,2,3]'] };
         expect(got).toEqual(golden);
       }
@@ -698,7 +698,7 @@ describe('B. single UPDATE / DELETE — makeSQL byte-matches original _update/_d
         expect(got[0].params).toEqual(golden.params);
       } else {
         const golden = dialect === 'mysql'
-          ? { sql: "DELETE FROM users WHERE id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt)", params: ['[1,3,5]'] }
+          ? { sql: "DELETE FROM users WHERE id IN (SELECT v FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt)", params: ['[1,3,5]'] }
           : { sql: 'DELETE FROM users WHERE id IN (SELECT value FROM json_each(?))', params: ['[1,3,5]'] };
         expect(got[0]).toEqual(golden);
       }
@@ -989,7 +989,7 @@ describe('C. Relations — makeSQL byte-matches LazyRelation (all shapes, all di
     const nPlaceholders = `${col} IN (${values.map(() => '?').join(', ')})`;
     const jsonForm =
       dialect === 'mysql'
-        ? `${col} IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt)`
+        ? `${col} IN (SELECT v FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt)`
         : `${col} IN (SELECT value FROM json_each(?))`;
     expect(v1.sql).toContain(nPlaceholders); // guard: the v1 capture really had the N-form
     // Use a replacer FUNCTION so `$` in jsonForm (e.g. `'$[*]'`, `PATH '$'`) is inserted
@@ -1176,10 +1176,11 @@ describe('C. Composite STATIC relation form (#47 item 1) — ONE key-tuple param
       tableName: 'comments',
       select: 'tenant_id, post_id',
       targetKeys: ['tenant_id', 'post_id'],
-      pgKeyTypes: ['int', 'bigint'],
+      keyTypes: ['INTEGER', 'BIGINT'],
     });
+    // Every declared integer width is bc's one `int` (i64), so both key rows cast to `bigint`.
     expect(renderPlaceholders(assembleMakeSQL(node).sql, 'postgres')).toBe(
-      'SELECT tenant_id, post_id FROM comments JOIN (SELECT (_t->>0)::int AS key0, (_t->>1)::bigint AS key1 ' +
+      'SELECT tenant_id, post_id FROM comments JOIN (SELECT (_t->>0)::bigint AS key0, (_t->>1)::bigint AS key1 ' +
         'FROM json_array_elements($1::json) AS _t) AS _keys ' +
         'ON comments.tenant_id = _keys.key0 AND comments.post_id = _keys.key1',
     );
@@ -1242,7 +1243,7 @@ describe('C. Composite STATIC per-parent-LIMIT relation form (#47 last gap)', ()
     ).sql;
     const node = compileCompositeKeyStaticLimited({
       dialect: 'postgres', tableName: 'revs', select: sel,
-      targetKeys: keys, limit: 2, order: 'rev ASC', pgKeyTypes: ['int', 'int'],
+      targetKeys: keys, limit: 2, order: 'rev ASC', keyTypes: ['INTEGER', 'INTEGER'],
     });
     const sql = renderPlaceholders(assembleMakeSQL(node).sql, 'postgres');
     // The WINDOW is v1's, verbatim — same LATERAL, same inner SELECT, same per-parent cap.
@@ -1250,7 +1251,7 @@ describe('C. Composite STATIC per-parent-LIMIT relation form (#47 last gap)', ()
     expect(sql).toContain(window);
     // Only the key SOURCE differs: the ONE JSON tuple param, expanded to typed key rows.
     expect(sql).toContain(
-      'FROM (SELECT (_t->>0)::int AS key0, (_t->>1)::int AS key1 FROM json_array_elements($1::json) AS _t) AS _keys',
+      'FROM (SELECT (_t->>0)::bigint AS key0, (_t->>1)::bigint AS key1 FROM json_array_elements($1::json) AS _t) AS _keys',
     );
     expect(v1).toContain('FROM unnest($1::int[], $2::int[]) AS _keys(key0, key1)'); // v1's key source
     expect(node.params).toEqual([[[null]]]); // ONE param — the key TUPLE set (the cap is inlined)
@@ -1283,7 +1284,7 @@ describe('C. Composite STATIC per-parent-LIMIT relation form (#47 last gap)', ()
       // The static membership predicate is the SAME one the composite UNLIMITED static form emits
       // (JSON_TABLE for MySQL / json_each for SQLite) — the sanctioned result-parity deviation.
       const jsonPred = dialect === 'mysql'
-        ? `(revs.tenant_id, revs.doc_id) IN (SELECT JSON_UNQUOTE(c0), JSON_UNQUOTE(c1) FROM JSON_TABLE(?, '$[*]' COLUMNS(c0 JSON PATH '$[0]', c1 JSON PATH '$[1]')) jt)`
+        ? `(revs.tenant_id, revs.doc_id) IN (SELECT c0, c1 FROM JSON_TABLE(?, '$[*]' COLUMNS(c0 JSON PATH '$[0]', c1 JSON PATH '$[1]')) jt)`
         : `(revs.tenant_id, revs.doc_id) IN (SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]') FROM json_each(?))`;
       expect(got.sql).toContain(jsonPred);
       // The whole key set binds as ONE JSON param (value-length-independent) → static op.

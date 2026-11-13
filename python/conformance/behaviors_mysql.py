@@ -4,14 +4,14 @@
 # native dict literal and handed to the EXISTING runtime core (run_behavior) —
 # no execution logic is generated. Handlers are ALWAYS injected at the boundary
 # (IR + {effects,config,hooks}); they are never generated.
-# irFingerprint: fnv1a64:79124edb97ea0186
+# irFingerprint: fnv1a64:89bcb5e1a0a3dafb
 from behavior_contracts import SPEC_VERSIONS, ProvenanceError, load_compiled_ir, run_behavior
 
 # Spec versions baked at generation time (fail-closed constant comparison at load).
 EXPECTED_SPEC_VERSIONS = {"behavior": 6, "expression": 2, "plan": 1}
 
 # FNV-1a 64 fingerprint of the source portable IR (canonical_json discipline, #208).
-IR_FINGERPRINT = "fnv1a64:79124edb97ea0186"
+IR_FINGERPRINT = "fnv1a64:89bcb5e1a0a3dafb"
 
 # Component names exposed by bind(), in IR declaration order.
 COMPONENT_NAMES = ("posts", "postsTop", "page", "postsByIds", "feed", "pagedFeed", "optionalOnlyFeed", "quotedOrderFeed", "quotedWhereOrderFeed", "viewFeed", "usersWithPosts", "postsWithAuthor", "usersWithCappedPosts", "usersWithUncappedPosts", "usersWithTopPosts", "createPost", "renamePost", "removePost", "createPostReturning", "renamePostReturning", "removePostReturning", "restatusPostsReturning", "removePostsByAuthorReturning", "typedRows", "createTags", "removeTags", "createDoc", "createLine", "createTagsReturning", "relabelTagsReturning", "removeTagsReturning")
@@ -328,7 +328,7 @@ IR_DOC = {
                 }
               ]
             },
-            "sql": "SELECT id, title FROM conf_posts WHERE id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) ORDER BY id ASC"
+            "sql": "SELECT id, title FROM conf_posts WHERE id IN (SELECT v FROM JSON_TABLE(?, '$[*]' COLUMNS(v DECIMAL(65,30) PATH '$')) jt) ORDER BY id ASC"
           }
         }
       ],
@@ -1696,7 +1696,7 @@ IR_DOC = {
                 }
               ]
             },
-            "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE author_id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) ORDER BY id ASC"
+            "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE author_id IN (SELECT v FROM JSON_TABLE(?, '$[*]' COLUMNS(v DECIMAL(65,30) PATH '$')) jt) ORDER BY id ASC"
           },
           "wirePassthrough": True
         },
@@ -1761,7 +1761,7 @@ IR_DOC = {
                 }
               ]
             },
-            "sql": "SELECT id, post_id, label FROM conf_tags WHERE post_id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) ORDER BY id ASC"
+            "sql": "SELECT id, post_id, label FROM conf_tags WHERE post_id IN (SELECT v FROM JSON_TABLE(?, '$[*]' COLUMNS(v DECIMAL(65,30) PATH '$')) jt) ORDER BY id ASC"
           },
           "wirePassthrough": True
         },
@@ -2112,7 +2112,7 @@ IR_DOC = {
                 }
               ]
             },
-            "sql": "SELECT id, name, post_count FROM conf_users WHERE id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt)"
+            "sql": "SELECT id, name, post_count FROM conf_users WHERE id IN (SELECT v FROM JSON_TABLE(?, '$[*]' COLUMNS(v DECIMAL(65,30) PATH '$')) jt)"
           },
           "wirePassthrough": True
         },
@@ -2437,7 +2437,7 @@ IR_DOC = {
                 }
               ]
             },
-            "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE author_id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) ORDER BY id ASC"
+            "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE author_id IN (SELECT v FROM JSON_TABLE(?, '$[*]' COLUMNS(v DECIMAL(65,30) PATH '$')) jt) ORDER BY id ASC"
           },
           "wirePassthrough": True
         },
@@ -2684,7 +2684,7 @@ IR_DOC = {
                 }
               ]
             },
-            "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE author_id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) ORDER BY id ASC"
+            "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE author_id IN (SELECT v FROM JSON_TABLE(?, '$[*]' COLUMNS(v DECIMAL(65,30) PATH '$')) jt) ORDER BY id ASC"
           },
           "wirePassthrough": True
         },
@@ -2931,7 +2931,7 @@ IR_DOC = {
                 }
               ]
             },
-            "sql": "WITH ranked AS (SELECT *, ROW_NUMBER() OVER (PARTITION BY author_id ORDER BY id ASC) AS _rn FROM conf_posts WHERE author_id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt)) SELECT * FROM ranked WHERE _rn <= 1"
+            "sql": "WITH ranked AS (SELECT *, ROW_NUMBER() OVER (PARTITION BY author_id ORDER BY id ASC) AS _rn FROM conf_posts WHERE author_id IN (SELECT v FROM JSON_TABLE(?, '$[*]' COLUMNS(v DECIMAL(65,30) PATH '$')) jt)) SELECT * FROM ranked WHERE _rn <= 1"
           },
           "wirePassthrough": True
         },
@@ -4671,7 +4671,7 @@ IR_DOC = {
                 }
               ]
             },
-            "sql": "DELETE FROM conf_tags WHERE id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt)"
+            "sql": "DELETE FROM conf_tags WHERE id IN (SELECT v FROM JSON_TABLE(?, '$[*]' COLUMNS(v DECIMAL(65,30) PATH '$')) jt)"
           }
         }
       ],
@@ -5451,7 +5451,7 @@ IR_DOC = {
                 }
               ]
             },
-            "sql": "DELETE FROM conf_tags WHERE id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) RETURNING id, label /*scp:pk=id;ai=*/"
+            "sql": "DELETE FROM conf_tags WHERE id IN (SELECT v FROM JSON_TABLE(?, '$[*]' COLUMNS(v DECIMAL(65,30) PATH '$')) jt) RETURNING id, label /*scp:pk=id;ai=*/"
           }
         }
       ],

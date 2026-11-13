@@ -312,23 +312,23 @@ function isCompositeDecl(decl: RelationDecl): boolean {
 }
 
 /**
- * The PG element type of each COMPOSITE key column, from the CHILD column's DECLARED type — the same
- * schema-derived derivation the composite `tupleIn` predicate uses (`pgTypeSpecimen` →
- * `inferPgElementType`), so the two composite PG forms cast identically. The child column is the one
- * the key row is compared against, so its declared type is the type the key must carry.
+ * The DECLARED type of each COMPOSITE key column — the CHILD column's, since the child column is the one
+ * the key is compared against. The composite builders derive each dialect's key typing from it
+ * (`compile-relation` `keyTypes`): the PG key-row casts and the MySQL key elements (#376).
  *
  * A composite PG batch cannot be compiled without them (the key rows come out of JSON as `text` and
- * `int = text` fails at plan time), so a missing resolver is a LOUD compile error, never a silent
- * `text` fallback.
+ * `int = text` fails at plan time), so a missing resolver there is a LOUD compile error, never a silent
+ * `text` fallback. Elsewhere a missing resolver leaves the keys untyped (the exact JSON comparison).
  */
-function pgKeyTypesOf(decl: RelationDecl, targetKeys: readonly string[], resolveColumnType?: ColumnTypeResolver): readonly string[] {
+function keyTypesOf(decl: RelationDecl, dialect: Dialect, targetKeys: readonly string[], resolveColumnType?: ColumnTypeResolver): readonly string[] | undefined {
   if (resolveColumnType === undefined) {
+    if (dialect !== 'postgres') return undefined;
     throw new Error(
       `relation '${decl.name}': a COMPOSITE-key relation on postgres needs the target model's column types ` +
         `(keys ${targetKeys.join(', ')} on '${decl.targetTable}') — pass a ColumnTypeResolver to compileRelationOp`,
     );
   }
-  return targetKeys.map((k) => inferPgElementType([pgTypeSpecimen(resolveColumnType(decl.targetTable, k))]));
+  return targetKeys.map((k) => resolveColumnType(decl.targetTable, k));
 }
 
 /**
@@ -350,7 +350,7 @@ function compiledBatchSql(decl: RelationDecl, dialect: Dialect, resolveColumnTyp
       select: decl.select.join(', '),
       order: decl.order,
       targetKeys,
-      ...(dialect === 'postgres' ? { pgKeyTypes: pgKeyTypesOf(decl, targetKeys, resolveColumnType) } : {}),
+      keyTypes: keyTypesOf(decl, dialect, targetKeys, resolveColumnType),
     };
     const node =
       decl.limit !== undefined
@@ -361,16 +361,15 @@ function compiledBatchSql(decl: RelationDecl, dialect: Dialect, resolveColumnTyp
   // A one-element placeholder key set fixes the SQL text (single-JSON-param / `= ANY` forms are
   // value-length-independent). The concrete keys are bound at execute time.
   const placeholderKeys: unknown[] = [null];
-  // The PG `= ANY(?::<T>[])` element type comes from the target key COLUMN's DECLARED type — the same
-  // schema-derived derivation the composite path uses (`pgKeyTypesOf`). It must NOT be inferred at
-  // render from a bound value: the value's type differs by language, which broke cross-language
-  // byte-identity. The column is the authority: an integer column is bc's `int` (i64), so the cast is
-  // `bigint[]` — PG compares int4 against int8 without complaint, and never the #43 `text[]`. Only
-  // fall back to render-time inference when no resolver is available.
-  const pgKeyCast =
-    dialect === 'postgres' && resolveColumnType !== undefined
-      ? inferPgElementType([pgTypeSpecimen(resolveColumnType(decl.targetTable, decl.targetKey as string))])
-      : undefined;
+  // The target key COLUMN's DECLARED type types the key on every dialect (the same schema-derived
+  // source the composite path uses, `keyTypesOf`). The PG `= ANY(?::<T>[])` element type must NOT be
+  // inferred at render from a bound value: the value's type differs by language, which broke
+  // cross-language byte-identity. The column is the authority: an integer column is bc's `int` (i64),
+  // so the cast is `bigint[]` — PG compares int4 against int8 without complaint, and never the #43
+  // `text[]`. On MySQL it types the key element of the IN-list (#376). Only fall back to render-time
+  // inference (PG) / the untyped element (MySQL) when no resolver is available.
+  const keyType = resolveColumnType?.(decl.targetTable, decl.targetKey as string);
+  const pgKeyCast = dialect === 'postgres' && keyType !== undefined ? inferPgElementType([pgTypeSpecimen(keyType)]) : undefined;
   const base = {
     dialect,
     tableName: decl.targetTable,
@@ -378,6 +377,7 @@ function compiledBatchSql(decl: RelationDecl, dialect: Dialect, resolveColumnTyp
     order: decl.order,
     targetKey: decl.targetKey as string,
     values: placeholderKeys,
+    ...(keyType !== undefined ? { keyType } : {}),
     ...(pgKeyCast !== undefined
       ? { sqlCastMap: new Map([[decl.targetKey as string, pgKeyCast]]) }
       : { deferPgArrayCast: true }),

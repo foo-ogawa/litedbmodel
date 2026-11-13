@@ -30,11 +30,16 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import Database from 'better-sqlite3';
 import mysql from 'mysql2/promise';
-import { DBConditions } from '../../src/DBConditions';
+import { DBConditions, type ConditionObject } from '../../src/DBConditions';
 import { mysqlSqlBuilder } from '../../src/drivers/MysqlSqlBuilder';
 import { sqliteSqlBuilder } from '../../src/drivers/SqliteSqlBuilder';
 import {
   compileWhere,
+  compileSelect,
+  compileDeleteMany,
+  compileUpdateSingle,
+  compileCompositeKeyStaticUnlimited,
+  encodeJsonArrayParam,
   assembleMakeSQL,
   renderPlaceholders,
   mysqlInsertJson,
@@ -42,6 +47,7 @@ import {
   mysqlUpdateManyJson,
   sqliteUpdateManyJson,
 } from '../../src/scp/makesql';
+import type { MakeSQL } from '../../src/scp/makesql/makesql';
 
 // ---------------------------------------------------------------------------
 // Driver seams: run a rendered { sql, params } and return rows / row objects.
@@ -114,8 +120,8 @@ function v1InList(col: string, values: unknown[]): { sql: string; params: unknow
  * dialect placeholder form (a no-op for MySQL/SQLite). This is what proves the empty case
  * goes through the real routing rather than a faked re-run (coordinator BLOCKER #2).
  */
-function jsonInList(col: string, values: unknown[], dialect: Dialect): { sql: string; params: unknown[] } {
-  const bundle = compileWhere({ [col]: values }, dialect);
+function jsonInList(col: string, values: unknown[], dialect: Dialect, columnTypes?: Record<string, string>): { sql: string; params: unknown[] } {
+  const bundle = compileWhere({ [col]: values }, dialect, columnTypes);
   const asm = assembleMakeSQL(bundle);
   return { sql: renderPlaceholders(asm.sql, dialect), params: asm.params };
 }
@@ -173,10 +179,13 @@ describe('JSON-form == v1-form RESULT PARITY on real MySQL 8 + SQLite (epic #43/
     await my('DROP TABLE IF EXISTS pj_t', []);
     await my('CREATE TABLE pj_t(id INT PRIMARY KEY, code VARCHAR(20), big BIGINT, price DECIMAL(20,6))', []);
     for (const r of inSeed) await my('INSERT INTO pj_t VALUES (?,?,?,?)', [r.id, r.code, r.big, r.price]);
+    // The DECLARED column types, as every schema-carrying path (emitter / relation / write node) passes
+    // them: MySQL reads the JSON element as the column's type, so cross-type values coerce like v1 (#376).
+    const declared = { id: 'INT', code: 'VARCHAR(20)', big: 'BIGINT', price: 'DECIMAL(20,6)' };
     for (const { label, col, values } of inCases) {
       const v1 = v1InList(col, values);
       const v1Rows = await my(`SELECT id FROM pj_t WHERE ${v1.sql} ORDER BY id`, v1.params);
-      const j = jsonInList(col, values, 'mysql');
+      const j = jsonInList(col, values, 'mysql', declared);
       const jsonRows = await my(`SELECT id FROM pj_t WHERE ${j.sql} ORDER BY id`, j.params);
       expect(jsonRows, `mysql IN-list parity: ${label}`).toEqual(v1Rows);
       expect(j.params.length).toBe(values.length === 0 ? 0 : 1);
@@ -392,4 +401,126 @@ describe('JSON-form == v1-form RESULT PARITY on real MySQL 8 + SQLite (epic #43/
       }
     });
   }
+});
+
+// ---------------------------------------------------------------------------
+// #376 — MySQL membership must compare a BIGINT / DECIMAL key EXACTLY.
+//
+// `JSON_UNQUOTE` handed every element back as a STRING, and MySQL compares a string with an integer or
+// decimal column as DOUBLE. Keys past 2^53 then collapse onto their double neighbours (256 apart near
+// 1.2e18) and long-digit decimals onto theirs, so one bound key deleted / updated / read the
+// neighbouring rows too. The seed below plants exactly those neighbours; every surface must touch the
+// ONE bound row and nothing else. The SELECTs read BIGINT through `CAST(… AS CHAR)` because the test
+// connection returns BIGINT as a (lossy) JS number.
+// ---------------------------------------------------------------------------
+describe('[mysql] #376 BIGINT / DECIMAL keys match exactly the bound row (no DOUBLE neighbours)', () => {
+  const T = 'pj376_keys';
+  const BOUND = '1234567890123456789';
+  const NEIGHBOURS = ['1234567890123456700', '1234567890123456701', '1234567890123456800'];
+  const DEC_BOUND = '12345678901234567890.0000000001';
+  const DEC_NEIGHBOUR = '12345678901234567890.0000000002';
+  /** The DECLARED column types — what the schema-carrying paths (emitter / relation / adapter) thread. */
+  const TYPES = { id: 'BIGINT', tenant: 'INT', nb: 'BIGINT', d: 'DECIMAL(30,10)', label: 'VARCHAR(20)' };
+
+  async function seed(): Promise<void> {
+    await my(`DROP TABLE IF EXISTS ${T}`, []);
+    await my(
+      `CREATE TABLE ${T}(id BIGINT PRIMARY KEY, tenant INT NOT NULL, nb BIGINT NOT NULL, d DECIMAL(30,10) NOT NULL, label VARCHAR(20) NOT NULL)`,
+      [],
+    );
+    // nb mirrors id WITHOUT an index; d plants a 10th-decimal-place neighbour on 700. One tenant, so
+    // the tuple-IN cannot be rescued by the tenant column.
+    const rows: [string, string][] = [
+      [NEIGHBOURS[0], DEC_NEIGHBOUR],
+      [NEIGHBOURS[1], '1.5000000000'],
+      [BOUND, DEC_BOUND],
+      [NEIGHBOURS[2], '2.5000000000'],
+    ];
+    for (const [id, d] of rows) await my(`INSERT INTO ${T} VALUES (?, 7, ?, ?, 'seed')`, [id, id, d]);
+  }
+
+  async function run(m: MakeSQL, params?: unknown[]): Promise<{ affectedRows?: number; rows: { id: string }[] }> {
+    const asm = assembleMakeSQL(m);
+    const [res] = await myConn!.query(renderPlaceholders(asm.sql, 'mysql'), params ?? asm.params);
+    if (Array.isArray(res)) return { rows: res as { id: string }[] };
+    return { affectedRows: (res as { affectedRows: number }).affectedRows, rows: [] };
+  }
+
+  async function ids(where = '1 = 1'): Promise<string[]> {
+    const rows = await my(`SELECT CAST(id AS CHAR) AS id FROM ${T} WHERE ${where} ORDER BY id`, []);
+    return rows.map((r) => r.id as string);
+  }
+
+  const select = (conditions: Record<string, unknown[]>, columnTypes?: Record<string, string>): MakeSQL =>
+    compileSelect({
+      dialect: 'mysql',
+      tableName: T,
+      select: 'CAST(id AS CHAR) AS id',
+      conditions,
+      order: 'id',
+      ...(columnTypes !== undefined ? { columnTypes } : {}),
+    });
+
+  it('DELETE (compileDeleteMany) removes only the bound BIGINT key — untyped bigint and typed string', async () => {
+    requireMysql();
+    for (const variant of [
+      { keys: [{ id: BigInt(BOUND) }] },
+      { keys: [{ id: BOUND }], columnTypes: { id: TYPES.id } },
+    ]) {
+      await seed();
+      const [op] = compileDeleteMany({ dialect: 'mysql', tableName: T, keyColumns: ['id'], ...variant });
+      const res = await run(op);
+      expect(res.affectedRows, `affectedRows (${JSON.stringify(variant.columnTypes)})`).toBe(1);
+      expect(await ids()).toEqual([...NEIGHBOURS]);
+    }
+  });
+
+  it('UPDATE (compileUpdateSingle with an array condition) changes only the bound row', async () => {
+    requireMysql();
+    const variants: { conditions: ConditionObject; columnTypes?: Record<string, string> }[] = [
+      { conditions: { id: [BigInt(BOUND)] } },
+      { conditions: { id: [BOUND] }, columnTypes: { id: TYPES.id } },
+      { conditions: { nb: [BigInt(BOUND)] } },
+    ];
+    for (const variant of variants) {
+      await seed();
+      const op = compileUpdateSingle({ dialect: 'mysql', tableName: T, serializedValues: { label: 'hit' }, ...variant });
+      const res = await run(op);
+      expect(res.affectedRows, `affectedRows ${JSON.stringify(Object.keys(variant.conditions))}`).toBe(1);
+      expect(await ids(`label = 'hit'`)).toEqual([BOUND]);
+    }
+  });
+
+  it('SELECT on the PK and on a non-indexed BIGINT column returns only the bound row', async () => {
+    requireMysql();
+    await seed();
+    for (const col of ['id', 'nb']) {
+      expect((await run(select({ [col]: [BigInt(BOUND)] }))).rows, `${col} untyped bigint`).toEqual([{ id: BOUND }]);
+      expect((await run(select({ [col]: [BOUND] }, { [col]: TYPES.id }))).rows, `${col} typed string`).toEqual([{ id: BOUND }]);
+    }
+  });
+
+  it('tuple-IN (composite static membership) returns only the bound tuple', async () => {
+    requireMysql();
+    await seed();
+    const param = encodeJsonArrayParam('mysql', [[7, BigInt(BOUND)]]);
+    for (const keyTypes of [undefined, [TYPES.tenant, TYPES.nb]]) {
+      const op = compileCompositeKeyStaticUnlimited({
+        dialect: 'mysql',
+        tableName: T,
+        select: 'CAST(id AS CHAR) AS id',
+        targetKeys: ['tenant', 'nb'],
+        ...(keyTypes !== undefined ? { keyTypes } : {}),
+      });
+      expect((await run(op, [param])).rows, `keyTypes ${JSON.stringify(keyTypes)}`).toEqual([{ id: BOUND }]);
+    }
+  });
+
+  it('DECIMAL(30,10) IN returns only the row equal to the 10th decimal place', async () => {
+    requireMysql();
+    await seed();
+    expect((await run(select({ d: [DEC_BOUND] }, { d: TYPES.d }))).rows).toEqual([{ id: BOUND }]);
+    // With no declared type the comparison must still never widen onto the neighbour.
+    expect((await run(select({ d: [DEC_BOUND] }))).rows).not.toContainEqual({ id: NEIGHBOURS[0] });
+  });
 });

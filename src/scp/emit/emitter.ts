@@ -72,10 +72,9 @@ import type { ConditionObject, ConditionValue } from '../../DBConditions';
 import { compileSelect, type BoundCount, type SelectBundle, type SelectDesc } from '../makesql/compile-select';
 import { compileWhere } from '../makesql/compile';
 import { inListPredicate, tupleInPredicate } from '../makesql/json-array';
-import { compileWriteNode, pgTypeSpecimen } from '../makesql/tx';
+import { compileWriteNode } from '../makesql/tx';
 import { deriveReadRow } from '../makesql/outtype';
 import { sqlTypeToBcScalar, type BcScalar, type ColumnTypeResolver } from '../coltype';
-import { inferPgArrayType } from '../makesql/compile-relation';
 import { compileRelationOp, parentKeyCols, relationGuard, targetKeyCols, type RelationDecl } from '../relation';
 import { resolveFindHardLimit } from '../limit-config';
 import {
@@ -767,14 +766,14 @@ class EmitContext {
         continue;
       }
       if (p.kind === 'in') {
-        put(inListPredicate(this.spec.dialect, p.column), new ParamRef(p.param) as unknown as ConditionValue);
+        put(inListPredicate(this.spec.dialect, p.column, this.sqlTypeOf(model, p.column)), new ParamRef(p.param) as unknown as ConditionValue);
         continue;
       }
       if (p.kind === 'tupleIn') {
         // The predicate carries its own `?`s (one per array param on PG, one JSON param elsewhere), so
         // it rides `DBConditions`' custom-operator route: the value list fills them positionally.
         put(
-          tupleInPredicate(this.spec.dialect, tableNameOf(model), p.columns, this.pgElementTypes(model, p.columns)),
+          tupleInPredicate(this.spec.dialect, tableNameOf(model), p.columns, p.columns.map((c) => this.sqlTypeOf(model, c))),
           this.tupleInParams(model, p).map((d) => new ParamRef(d.name)) as unknown as ConditionValue,
         );
         continue;
@@ -785,16 +784,6 @@ class EmitContext {
       else put(`${cmp.column} ${SQL_OPS[cmp.op]} ?`, ref);
     }
     return out as ConditionObject;
-  }
-
-  /**
-   * The PG `UNNEST` element type of each key column, derived from the model's DECLARED column type via
-   * the SAME schema specimen the batch writes use (`pgTypeSpecimen` → `inferPgArrayType`) — never from
-   * the values, which are unknown at emit time and empty at call time often enough to matter.
-   */
-  private pgElementTypes(model: ModelClassLike, columns: readonly string[]): readonly string[] | undefined {
-    if (this.spec.dialect !== 'postgres') return undefined;
-    return columns.map((c) => inferPgArrayType([pgTypeSpecimen(this.sqlTypeOf(model, c))]));
   }
 
   /**

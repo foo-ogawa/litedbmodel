@@ -22,7 +22,7 @@
 import { type ConditionObject } from '../../DBConditions';
 import type { SqlCastFormatter } from '../../DBValues';
 import type { MakeSQL } from './makesql';
-import { conditionsFor } from './json-array';
+import { conditionsFor, type ColumnTypes } from './json-array';
 import type { Dialect } from './handler';
 
 // ============================================================================
@@ -59,12 +59,13 @@ export function formatterFor(dialect: Dialect): SqlCastFormatter {
  * is reproduced byte-for-byte.
  *
  * Empty clause → `{ sql: '', params: [] }` (the original returns `''` when no part is
- * present; folded here into an empty bundle so composition drops it).
+ * present; folded here into an empty bundle so composition drops it). `columnTypes` (declared column
+ * types) types a MySQL IN-list element ({@link import('./json-array').inListPredicate}).
  */
-export function compileWhere(conditions: ConditionObject, dialect: Dialect): MakeSQL {
+export function compileWhere(conditions: ConditionObject, dialect: Dialect, columnTypes?: ColumnTypes): MakeSQL {
   const params: unknown[] = [];
   const formatter = formatterFor(dialect);
-  const core = conditionsFor(conditions, dialect).compile(params, formatter);
+  const core = conditionsFor(conditions, dialect, columnTypes).compile(params, formatter);
   return { sql: core, params };
 }
 

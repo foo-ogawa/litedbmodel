@@ -74,7 +74,7 @@ describe('emitter — READ', () => {
       'SELECT id, name FROM e2e_users WHERE id IN (SELECT value FROM json_each(?)) ORDER BY id ASC',
     );
     expect(bodyOf(emit('mysql').source, 'usersByIds')[0]).toContain(
-      "SELECT id, name FROM e2e_users WHERE id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) ORDER BY id ASC",
+      "SELECT id, name FROM e2e_users WHERE id IN (SELECT v FROM JSON_TABLE(?, '$[*]' COLUMNS(v DECIMAL(65,30) PATH '$')) jt) ORDER BY id ASC",
     );
   });
 
@@ -131,7 +131,7 @@ describe('emitter — #133 composite tuple-IN (a CONSTANT number of params, what
   it('mysql/sqlite bind ONE JSON array-of-tuples param (the builders\' own shape)', () => {
     const my = emit('mysql', { tenantPostsByKeys: EMIT_ENDPOINTS.tenantPostsByKeys });
     expect(bodyOf(my.source, 'tenantPostsByKeys')[0]).toContain(
-      "(e2e_tenant_posts.tenant_id, e2e_tenant_posts.user_id) IN (SELECT JSON_UNQUOTE(c0), JSON_UNQUOTE(c1) FROM JSON_TABLE(?, '$[*]' COLUMNS(c0 JSON PATH '$[0]', c1 JSON PATH '$[1]')) jt)",
+      "(e2e_tenant_posts.tenant_id, e2e_tenant_posts.user_id) IN (SELECT c0, c1 FROM JSON_TABLE(?, '$[*]' COLUMNS(c0 DECIMAL(65,30) PATH '$[0]', c1 DECIMAL(65,30) PATH '$[1]')) jt)",
     );
     expect(my.endpoints[0].params).toEqual([{ name: 'keys', type: 'Int[][]' }]);
     const lite = emit('sqlite', { tenantPostsByKeys: EMIT_ENDPOINTS.tenantPostsByKeys });

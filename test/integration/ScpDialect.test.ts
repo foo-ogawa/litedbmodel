@@ -180,9 +180,18 @@ function byIdsDesc(dialect: MakeSQLDialect, ids: number[]): SelectDesc {
 }
 
 // #46 item 4 (MySQL leg only — see the deletion note below): the single-JSON IN-list binds every PG
-// element type live through `T_TYPED`'s bigint/text/bool/timestamp/numeric key columns.
+// element type live through `T_TYPED`'s bigint/text/bool/timestamp/numeric key columns. The columns'
+// DECLARED types ride along (as the emitter passes a model's), so MySQL reads each key element as its
+// column's type (#376).
 function byTypedDesc(dialect: MakeSQLDialect, col: string, keys: unknown[]): SelectDesc {
-  return { dialect, tableName: T_TYPED, select: 'label', conditions: { [col]: keys }, order: 'label ASC' };
+  return {
+    dialect,
+    tableName: T_TYPED,
+    select: 'label',
+    conditions: { [col]: keys },
+    columnTypes: IN_LIST_COLUMN_TYPES.columnTypes,
+    order: 'label ASC',
+  };
 }
 
 // #47 item 5 — the WHERE assembly (AND/OR group) + LIMIT/OFFSET tail, driven from v1's

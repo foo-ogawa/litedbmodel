@@ -296,16 +296,17 @@ function v1ConditionText(conditions: ConditionObject): string {
  * params). `columns[i]` is the table column the i-th emitted param binds — parallel to `params` — so
  * the native-codegen chain types each WHERE-bound `?` from its column (see {@link TxOp.writeMeta}).
  */
-function lowerWhereMember(node: unknown, at: string, dialect: MakeSQLDialect): { sql: string; params: TxExpr[]; columns: string[] } {
+function lowerWhereMember(node: unknown, at: string, dialect: MakeSQLDialect, columnType: (column: string) => string | undefined): { sql: string; params: TxExpr[]; columns: string[] } {
   const op = opKey(node);
   if (op === undefined) throw new Error(`compileWriteNode: ${at}: a where member must be a single-operator Expression node`);
   if (op === 'in') {
     // Key-set membership — the SAME static single-param predicate the read IN-list uses
-    // ({@link inListPredicate}: PG `= ANY(?)`, MySQL/SQLite a JSON subquery), so a `deleteMany`'s
-    // statement comes from THIS compiler rather than being assembled by its caller.
+    // ({@link inListPredicate}: PG `= ANY(?)`, MySQL/SQLite a JSON subquery, the MySQL key element typed
+    // from the column's declared type — #376), so a `deleteMany`'s statement comes from THIS compiler
+    // rather than being assembled by its caller.
     const [col, val] = binOperands(node, op, at);
     const column = columnOf(col, at);
-    return { sql: v1ConditionText({ [inListPredicate(dialect, column)]: PROBE }), params: [val], columns: [column] };
+    return { sql: v1ConditionText({ [inListPredicate(dialect, column, columnType(column))]: PROBE }), params: [val], columns: [column] };
   }
   if (op === 'eq') {
     const [col, val] = binOperands(node, op, at);
@@ -322,7 +323,7 @@ function lowerWhereMember(node: unknown, at: string, dialect: MakeSQLDialect): {
   throw new Error(`compileWriteNode: ${at}: unsupported where operator '${op}' (write path supports eq/ne/lt/le/gt/ge)`);
 }
 
-function lowerWherePort(ports: Record<string, unknown>, at: string, dialect: MakeSQLDialect): { sql: string; params: TxExpr[]; columns: string[] } {
+function lowerWherePort(ports: Record<string, unknown>, at: string, dialect: MakeSQLDialect, columnType: (column: string) => string | undefined): { sql: string; params: TxExpr[]; columns: string[] } {
   const v = ports.where;
   if (v === undefined) return { sql: '', params: [], columns: [] };
   if (typeof v !== 'object' || v === null || !('arr' in v) || !Array.isArray((v as { arr: unknown }).arr)) {
@@ -333,7 +334,7 @@ function lowerWherePort(ports: Record<string, unknown>, at: string, dialect: Mak
   const params: TxExpr[] = [];
   const columns: string[] = [];
   members.forEach((m, i) => {
-    const f = lowerWhereMember(m, `${at}.where[${i}]`, dialect);
+    const f = lowerWhereMember(m, `${at}.where[${i}]`, dialect, columnType);
     parts.push(f.sql);
     params.push(...f.params);
     columns.push(...f.columns);
@@ -503,6 +504,8 @@ function compileWriteNodeSql(node: WriteNodeLike, dialect: MakeSQLDialect, resol
   if (table === undefined) throw new Error(`compileWriteNode: ${component} node requires a literal 'table' port`);
   // Per-column PG cast types (`sqlCast.<field>` ports) — drive the v1 `?::<sqlCast>` on Postgres.
   const sqlCastMap = collectSqlCast(ports);
+  // A WHERE column's DECLARED type (the schema SoT), when the caller passed the resolver.
+  const declaredType = (column: string): string | undefined => resolveColumnType?.(table, column);
 
   switch (component) {
     case 'Insert': {
@@ -579,7 +582,7 @@ function compileWriteNodeSql(node: WriteNodeLike, dialect: MakeSQLDialect, resol
       // An absent `where` port is an UNCONDITIONAL update — `UPDATE … SET …` with no tail. The port
       // carries the structured `{arr:[…]}` member list and is lowered INLINE here; nothing appends a
       // WHERE afterwards.
-      const where = lowerWherePort(ports, 'Update', dialect);
+      const where = lowerWherePort(ports, 'Update', dialect, declaredType);
       // v1 `DBModel._update` emits `<c> = ?::<sqlCast>` PER COLUMN on Postgres (skipping timestamp/date).
       const setClauses = setCols.map((c) => `${c} = ${castPlaceholder(dialect, sqlCastMap, c)}`).join(', ');
       const whereTail = where.sql === '' ? '' : ` WHERE ${where.sql}`;
@@ -594,7 +597,7 @@ function compileWriteNodeSql(node: WriteNodeLike, dialect: MakeSQLDialect, resol
     }
     case 'Delete': {
       // As Update: the `where` port is lowered inline. Absent ⇒ an unconditional `DELETE FROM t`.
-      const where = lowerWherePort(ports, 'Delete', dialect);
+      const where = lowerWherePort(ports, 'Delete', dialect, declaredType);
       const sql = `DELETE FROM ${table}${where.sql === '' ? '' : ` WHERE ${where.sql}`}${returningTail(ports)}`;
       // The `?`s bind the WHERE columns; a DELETE has no SET/VALUES params. `pk` rides along so the
       // pre-image re-select is ordered by the real key (as Update above).
