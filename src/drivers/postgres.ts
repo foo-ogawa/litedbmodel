@@ -7,7 +7,7 @@
 
 import type { DBConfig, DBDriver, DBDriverOptions, DBConnection, QueryResult, Logger } from './types';
 import { defaultLogger } from './types';
-import { isConnectionError } from '../connection-errors';
+import { isConnectionError, isResendableStatement } from '../connection-errors';
 
 // pg types (loaded dynamically)
 type Pool = import('pg').Pool;
@@ -237,7 +237,9 @@ export class PostgresDriver implements DBDriver {
   }
 
   /**
-   * Execute a read query (`onWriter`: on the writer pool, for a read routed to the writer)
+   * Execute a read query (`onWriter`: on the writer pool, for a read routed to the writer). After a
+   * connection error the statement is re-sent once only when `isResendableStatement` allows it
+   * (read-only and calls no function); anything else is thrown.
    */
   async execute(sql: string, params: unknown[] = [], onWriter = false): Promise<QueryResult> {
     const pool = onWriter ? this.writerPool || this.pool : this.pool;
@@ -256,7 +258,7 @@ export class PostgresDriver implements DBDriver {
         rowCount: result.rowCount ?? 0,
       };
     } catch (error) {
-      if (isConnectionError(error as Error)) {
+      if (isConnectionError(error as Error) && isResendableStatement(sql)) {
         this.logger.warn(`Connection error, retrying query: ${q.convertedSql}`);
         try {
           const result = q.isMulti

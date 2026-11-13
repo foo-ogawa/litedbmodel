@@ -24,3 +24,49 @@ export function isConnectionError(error: Error): boolean {
     code === '57P01'
   );
 }
+
+/**
+ * Is `sql` certainly a read-only statement — may it go to the reader? This decides reader routing for a
+ * raw statement (`DBModel.execute`). Anything not certain is a write (writer, never re-sent):
+ *   - a `RETURNING`, a row lock (`FOR UPDATE` / `FOR NO KEY UPDATE` / `FOR SHARE` / `FOR KEY SHARE` /
+ *     `LOCK IN SHARE MODE`) or an `INTO` anywhere ⇒ write (it writes, locks rows or writes a table / variable);
+ *   - starts with `with` or `explain` ⇒ read only if it contains no insert / update / delete / merge
+ *     word (`EXPLAIN ANALYZE DELETE …` executes the statement; a data-modifying CTE writes);
+ *   - starts with select / show / pragma / values / table ⇒ read;
+ *   - anything else (INSERT / UPDATE / DELETE …, DDL, maintenance) ⇒ write.
+ * Whether a statement may be re-sent after a connection error is a different question:
+ * {@link isResendableStatement}.
+ */
+export function isReadOnlyStatement(sql: string): boolean {
+  if (/\breturning\b/i.test(sql)) return false;
+  if (/\bfor\s+(update|share|no\s+key\s+update|key\s+share)\b|\block\s+in\s+share\s+mode\b|\binto\b/i.test(sql)) return false;
+  if (/^\s*(with|explain)\b/i.test(sql)) return !/\b(insert|update|delete|merge)\b/i.test(sql);
+  return /^\s*(select|show|pragma|values|table)\b/i.test(sql);
+}
+
+/**
+ * SQL grammar keywords that take a parenthesis (`IN (…)`, `EXISTS (…)`, `OVER (…)`, `AS (…)`, …): a bare
+ * one of these before `(` is not a function call. This is NOT a list of side-effect-free functions —
+ * every other name before `(` (`COUNT(*)` included) is a function call.
+ */
+const PAREN_KEYWORDS = new Set([
+  'all', 'and', 'any', 'array', 'as', 'between', 'by', 'case', 'distinct', 'else', 'except', 'exists',
+  'explain', 'filter', 'from', 'group', 'having', 'ilike', 'in', 'intersect', 'is', 'join', 'lateral',
+  'like', 'limit', 'materialized', 'not', 'offset', 'on', 'or', 'over', 'row', 'select', 'some', 'then',
+  'union', 'using', 'values', 'when', 'where', 'within',
+]);
+
+/**
+ * May `sql` be re-sent after a connection error? Only a read-only statement ({@link isReadOnlyStatement})
+ * that calls no function: the server may have run the first send before the connection dropped, and a
+ * function (a user function, `nextval`, …) can write. A function call is a name — bare, schema-qualified,
+ * `"quoted"` or `` `backticked` `` — followed by `(`, other than a bare {@link PAREN_KEYWORDS} word. When
+ * unsure the answer is "not resendable" (a `(` after a name inside a string literal or comment also counts).
+ */
+export function isResendableStatement(sql: string): boolean {
+  if (!isReadOnlyStatement(sql)) return false;
+  for (const m of sql.matchAll(/(\.\s*)?("(?:[^"]|"")*"|`(?:[^`]|``)*`|[A-Za-z_][A-Za-z0-9_$]*)\s*\(/g)) {
+    if (m[1] !== undefined || /^["`]/.test(m[2]) || !PAREN_KEYWORDS.has(m[2].toLowerCase())) return false;
+  }
+  return true;
+}

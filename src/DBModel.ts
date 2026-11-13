@@ -15,7 +15,7 @@ import { createMiddleware as createMiddlewareFn, type Middleware, type Middlewar
 import { serializeRecord, getColumnMeta, getSqlCastMap, type KeyPair, type CompositeKeyPairs } from './decorators';
 import { getTypeCast, getSqlBuilder } from './drivers';
 import type { DriverTypeCast } from './drivers/types';
-import { isConnectionError } from './connection-errors';
+import { isConnectionError, isReadOnlyStatement } from './connection-errors';
 import { WriterStickyClock } from './WriterStickyClock';
 
 // Import LazyRelation module (static import for Vitest compatibility)
@@ -369,20 +369,6 @@ export abstract class DBModel {
       return txContext.handler;
     }
     return getDBHandler();
-  }
-
-  /**
-   * Whether a raw statement is certainly read-only: it starts with SELECT / SHOW / PRAGMA / VALUES /
-   * TABLE and has no RETURNING, or starts with WITH / EXPLAIN and has no INSERT / UPDATE / DELETE / MERGE
-   * (EXPLAIN ANALYZE runs the statement).
-   * Outside a transaction, `execute()` sends such a statement to the reader (and resends it after a
-   * connection error); any other statement (DDL, maintenance such as VACUUM / CREATE INDEX CONCURRENTLY,
-   * writes including `…RETURNING`) is treated as a write: it goes to the writer and is not resent. @internal
-   */
-  protected static _isReadOnlyStatement(sql: string): boolean {
-    if (/\breturning\b/i.test(sql)) return false;
-    if (/^\s*(with|explain)\b/i.test(sql)) return !/\b(insert|update|delete|merge)\b/i.test(sql);
-    return /^\s*(select|show|pragma|values|table)\b/i.test(sql);
   }
 
   /**
@@ -2708,8 +2694,10 @@ export abstract class DBModel {
     const core = async (s: string, p?: unknown[]): Promise<ExecuteResult> => {
       const handler = this.getHandler();
       
-      // The writer for a statement that is not certainly read-only, inside withWriter, or while writer-sticky
-      const isReadOnly = this._isReadOnlyStatement(s);
+      // The writer for a statement that is not certainly read-only (…RETURNING, SELECT … FOR UPDATE, SELECT …
+      // INTO included), inside withWriter, or while writer-sticky. Whether a read may be re-sent after a
+      // connection error is the driver's decision (isResendableStatement).
+      const isReadOnly = isReadOnlyStatement(s);
       const useWriter = !isReadOnly || this._getWriterContext().getStore() !== undefined || this._shouldUseWriterSticky();
       const result = useWriter
         ? await handler.executeOnWriter(s, p || [], isReadOnly)
