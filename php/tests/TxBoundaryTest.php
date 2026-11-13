@@ -25,11 +25,14 @@ use function LiteDbModel\Runtime\execute;
 use function LiteDbModel\Runtime\isolationPrelude;
 use function LiteDbModel\Runtime\isRetryableTxError;
 use function LiteDbModel\Runtime\retryableByTypedCode;
+use function LiteDbModel\Runtime\rollbackWith;
 use function LiteDbModel\Runtime\routedTransaction;
 use function LiteDbModel\Runtime\routingContext;
 use function LiteDbModel\Runtime\runGuarded;
 use function LiteDbModel\Runtime\runWithPinnedContext;
 use function LiteDbModel\Runtime\transaction;
+use function LiteDbModel\Runtime\withTransaction;
+use function LiteDbModel\Runtime\withTransactionDecided;
 
 /**
  * Phase B (#85, PHP) — UNIT tests for the public {@see transaction()} boundary (in-proc SQLite) + the
@@ -223,6 +226,71 @@ final class TxBoundaryTest extends TestCase
         $this->assertSame(0, $sink->commits);
         $this->assertSame(1, $sink->rolls);
         $this->assertSame([], self::readRows($db), 'an inner error rolls back the WHOLE tx (id=600 absent)');
+    }
+
+    /**
+     * #352 — the nested JOIN lives in the combinator, so a nested withTransaction() joins the outer
+     * transaction like a nested transaction() does: no second BEGIN/COMMIT, and an outer body that fails
+     * after it returned rolls back every row. It used to BEGIN again on the same \PDO (SQLite raises, PG
+     * warns, MySQL implicitly commits the outer work).
+     */
+    public function testNestedWithTransactionJoinsTheOuter(): void
+    {
+        $sink = new RecordingSink();
+        $db = self::makeDriver($sink);
+        $ctx = Context::forPdo($db);
+
+        $error = null;
+        try {
+            transaction($ctx, function () use ($ctx): void {
+                self::op($ctx, 1, 1, 0);
+                withTransaction($ctx, fn () => self::op($ctx, 2, 1, 1));
+                self::op($ctx, 3, 1, 2);
+                throw new \RuntimeException('outer body fails');
+            }, new TransactionOptions(retryOnError: false), 'sqlite');
+        } catch (\Throwable $e) {
+            $error = $e;
+        }
+        $this->assertNotNull($error);
+        $this->assertSame('outer body fails', $error->getMessage(), "the outer body's own error surfaces");
+        $this->assertSame([1, 0, 1], [$sink->begins, $sink->commits, $sink->rolls], 'ONE BEGIN, then ONE ROLLBACK');
+        $this->assertSame([], self::readRows($db), 'the failed outer transaction keeps none of its rows');
+    }
+
+    /**
+     * A joined boundary leaves the envelope to the outer (TS `withTransactionAsync`, go
+     * `TransactionDecided`): a nested ROLLBACK decision returns its value without rolling the outer back,
+     * and a nested transaction() does not re-run its body on a retryable error — the outer transaction
+     * it ran in is the one that failed.
+     */
+    public function testANestedBoundaryLeavesTheEnvelopeToTheOuter(): void
+    {
+        $sink = new RecordingSink();
+        $db = self::makeDriver($sink);
+        $ctx = Context::forPdo($db);
+
+        $gate = transaction($ctx, function () use ($ctx): string {
+            self::op($ctx, 1, 1, 0);
+            return withTransactionDecided($ctx, function (ExecutionContext $tx) use ($ctx): \LiteDbModel\Runtime\TxDecision {
+                self::op($ctx, 2, 1, 1);
+                return rollbackWith('gate');
+            });
+        }, new TransactionOptions(), 'sqlite');
+        $this->assertSame('gate', $gate);
+        $this->assertSame([1, 1, 0], [$sink->begins, $sink->commits, $sink->rolls], 'the outer decides: ONE BEGIN, ONE COMMIT');
+        $this->assertSame([[1, 1], [2, 1]], self::readRows($db));
+
+        $runs = 0;
+        try {
+            transaction($ctx, function () use ($ctx, &$runs): void {
+                transaction($ctx, function () use (&$runs): void {
+                    $runs++;
+                    throw self::pdoException(['40001', null, 'could not serialize access'], 'could not serialize access');
+                }, new TransactionOptions(retryLimit: 3, retryDurationMs: 0), 'sqlite');
+            }, new TransactionOptions(retryOnError: false), 'sqlite');
+        } catch (\Throwable) {
+        }
+        $this->assertSame(1, $runs, 'a nested body is not retried inside the outer transaction');
     }
 
     // ── (4b) a transaction belongs to the context it was opened on (#351) ───────

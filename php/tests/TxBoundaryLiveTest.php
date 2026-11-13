@@ -22,6 +22,7 @@ use function LiteDbModel\Runtime\run as seamRun;
 use function LiteDbModel\Runtime\runGuarded;
 use function LiteDbModel\Runtime\runWithPinnedContext;
 use function LiteDbModel\Runtime\transaction;
+use function LiteDbModel\Runtime\withTransaction;
 
 /**
  * Phase B (#85, PHP) — LIVE-DB integration for the public {@see transaction()} boundary + the
@@ -46,7 +47,8 @@ use function LiteDbModel\Runtime\transaction;
  *       mapped SqlFailure's wrapped chain) is shown genuinely load-bearing; and a RED proof (neuter the
  *       wrapped-chain traversal + string fallback → the loser can no longer classify the real 40001/1213
  *       → it gives up) confirms the typed path is not dead code (the go #83 audit lesson).
- *   (5) NESTED (live) — one BEGIN/COMMIT; an inner error rolls back the whole tx.
+ *   (5) NESTED (live) — one BEGIN/COMMIT; an inner error rolls back the whole tx; a nested
+ *       withTransaction() joins too, so a failed outer keeps none of its rows (#352).
  *
  * ## Concurrent-tx isolation: N/A for PHP (honest note)
  *
@@ -357,6 +359,26 @@ final class TxBoundaryLiveTest extends TestCase
         }
         $this->assertTrue($raised);
         $this->assertSame([], self::readRows($db), "[$dialect] nested inner error rolls back the WHOLE tx (id=600 absent)");
+
+        // #352 — a nested withTransaction() JOINS the outer too, so an outer body that fails AFTER it
+        // returned rolls back every row: before, during and after the nested boundary. It used to send a
+        // second BEGIN and a COMMIT on the same \PDO (PG: a warning; MySQL: an implicit commit), so all
+        // three rows stayed committed.
+        self::reset($db, $intType);
+        $error = null;
+        try {
+            transaction($ctx, function () use ($dialect, $ctx): void {
+                self::op($ctx, $dialect, 1, 1, 0);
+                withTransaction($ctx, fn () => self::op($ctx, $dialect, 2, 1, 1));
+                self::op($ctx, $dialect, 3, 1, 2);
+                throw new \RuntimeException('outer body fails');
+            }, new TransactionOptions(retryOnError: false), $dialect);
+        } catch (\Throwable $e) {
+            $error = $e;
+        }
+        $this->assertNotNull($error);
+        $this->assertSame('outer body fails', $error->getMessage(), "[$dialect] the outer body's own error surfaces");
+        $this->assertSame([], self::readRows($db), "[$dialect] a nested withTransaction() joins: the failed outer keeps none of its rows");
     }
 
     // ── forked-contention harness ────────────────────────────────────────────────

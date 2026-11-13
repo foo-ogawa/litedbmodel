@@ -800,6 +800,13 @@ function rollbackWith(mixed $value): TxDecision
  * fix). The general form: `$body` decides COMMIT vs ROLLBACK (see {@see TxDecision}); a thrown
  * exception from `$body` always rolls back and re-raises.
  *
+ *   0. NESTED: a transaction already open on `$ctx`'s owner ({@see outerTransaction()}) is JOINED —
+ *      `$body` runs on the outer's tx ctx with no new connection and no BEGIN/COMMIT, so the inner body
+ *      is part of the outer physical transaction (an inner error propagates and rolls back the WHOLE
+ *      tx). The envelope is the outer's: `$before`/`$after` are not issued, and a ROLLBACK decision
+ *      returns its value without rolling the outer back — the outer decides its own COMMIT/ROLLBACK
+ *      (the TS `withTransactionAsync` ignores a nested `rollbackOnly`; go `TransactionDecided` returns a
+ *      nested gate rollback's value the same way). Mirrors v1 `DBModel.transaction` :2794-2797;
  *   1. acquire ONE connection via {@see PdoDriver::beginTx()} — a {@see PdoTxConnection} (the tx's
  *      exclusive connection; BEGIN issued on it), the PHP analogue of v1 `PoolTransaction`;
  *   2. pin it into a tx-scoped {@see ExecutionContext} passed EXPLICITLY to `$body` so EVERY statement
@@ -829,6 +836,13 @@ function rollbackWith(mixed $value): TxDecision
  */
 function withTransactionDecided(ExecutionContext $ctx, callable $body, array $before = [], array $after = []): mixed
 {
+    // NESTED-TX JOIN (mirror the TS withTransactionAsync / v1 :2794): already inside a tx on this ctx's
+    // owner ⇒ join the outer. No new connection, no BEGIN/COMMIT, and the decision is the outer's.
+    $outer = outerTransaction($ctx);
+    if ($outer !== null) {
+        return $body($outer)->value;
+    }
+
     // Acquire the owned tx connection handle — NO SQL issued yet (Phase D #96): the prelude + BEGIN are
     // issued THROUGH the seam below, on the pinned connection, so a middleware observes them.
     $tx = $ctx->driver()->beginTx();
@@ -1076,9 +1090,10 @@ function runGuarded(ExecutionContext $ctx, string $sql, array $params, string $o
  * Outside a `transaction($fn)` the ambient pin is absent, so a bare guarded write's guard fires
  * ({@see WriteOutsideTransactionError}).
  *
- * NESTED `transaction()` joins the outer (one physical BEGIN/COMMIT; an inner error rolls back the
- * WHOLE tx). Isolation/retry/rollbackOnly options on a nested call are IGNORED (the outer owns them).
- * Mirrors v1 `DBModel.transaction` :2794-2797.
+ * NESTED `transaction()` joins the outer through {@see withTransactionDecided()} (one physical
+ * BEGIN/COMMIT; an inner error rolls back the WHOLE tx). Isolation/retry/rollbackOnly options on a
+ * nested call are IGNORED (the outer owns them; an isolation level SQLite cannot honor is still
+ * rejected before anything runs). Mirrors v1 `DBModel.transaction` :2794-2797.
  *
  * @param callable():mixed $fn
  */
@@ -1090,20 +1105,15 @@ function transaction(
 ): mixed {
     $opts = $options ?? new TransactionOptions();
 
-    // NESTED-TX JOIN (mirror v1 :2794): already inside a tx on this ctx's owner ⇒ join the outer.
-    // No new connection, no BEGIN/COMMIT — the inner body is part of the outer physical transaction.
-    // Isolation/retry/rollbackOnly on a nested call are ignored: the outer owns the envelope. A tx open
-    // on ANOTHER owner is not this one's, so this call opens its own.
-    if (outerTransaction($ctx) !== null) {
-        return $fn();
-    }
-
     // Validate + build the isolation prelude BEFORE acquiring a connection (fail-closed: SQLite + a
     // level is a hard error; an unsupported isolation must not open a tx it can't honor).
     [$before, $after] = isolationPrelude($dialectName, $opts->isolation);
 
+    // A retry re-runs the body on a FRESH connection, which only a transaction this call opens has. A
+    // call nested in a transaction already open on this ctx's owner JOINS it (withTransactionDecided):
+    // its failure is the outer transaction's, so it is not re-run inside that failed transaction.
     $retryLimit = 1;
-    if ($opts->retryOnError) {
+    if ($opts->retryOnError && outerTransaction($ctx) === null) {
         $retryLimit = $opts->retryLimit >= 1 ? $opts->retryLimit : 1;
     }
 
