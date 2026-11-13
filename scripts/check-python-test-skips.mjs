@@ -157,6 +157,7 @@ const LIVE_TESTS = [
   'test_middleware_livedb.py::test_d3_query_method_hook_around_raw_query',
   'test_middleware_livedb.py::test_d3_raw_execute_through_seam_and_writer_routing',
   'test_mysql_returning_livedb.py::test_mysql_returning_composite_key',
+  'test_mysql_returning_livedb.py::test_mysql_returning_insert_ignore',
   'test_tx_boundary_livedb.py::test_tx_boundary_mysql',
   'test_tx_boundary_livedb.py::test_tx_boundary_postgres',
 ];

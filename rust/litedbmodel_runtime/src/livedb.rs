@@ -1206,6 +1206,59 @@ enum ReselectBind {
     Param(usize),
 }
 
+/// How many rows an INSERT wrote — the count its recovered rows must equal (mysql-returning.ts
+/// `WrittenRows`).
+#[derive(Clone, Copy)]
+enum WrittenRows {
+    /// The affected count: a plain INSERT / `INSERT IGNORE` never updates a row, so CLIENT_FOUND_ROWS
+    /// cannot change it — it IS the number of rows inserted.
+    Affected,
+    /// An insert-or-ignore (`ON DUPLICATE KEY UPDATE c = c`) on an AUTO_INCREMENT key: inserted ⇔ the
+    /// insert id is not 0 (a conflict that wrote nothing reports 0).
+    InsertId,
+    /// The same insert-or-ignore on a CLIENT-supplied key: inserted ⇔ 1 affected row — which holds only
+    /// WITHOUT CLIENT_FOUND_ROWS (with it a conflict also counts 1).
+    AffectedUnlessFoundRows,
+}
+
+/// How many rows the write wrote, from its own result (mysql-returning.ts `writtenRowCount`); `None` ⇒
+/// not countable. An insert-or-ignore on a client-supplied key cannot tell an insert from a conflict
+/// under CLIENT_FOUND_ROWS, so that FAILS CLOSED — and sqlx opens EVERY MySQL connection with
+/// CLIENT_FOUND_ROWS (sqlx-mysql 0.8 `connection/stream.rs` `MySqlStream::with_socket`: the capability
+/// set is fixed, not configurable), so on this port it always does.
+fn written_row_count(
+    written: Option<WrittenRows>,
+    last_id: i64,
+    affected: i64,
+    write_sql: &str,
+) -> Result<Option<i64>, SqlFailure> {
+    Ok(match written {
+        None => None,
+        Some(WrittenRows::Affected) => Some(affected),
+        Some(WrittenRows::InsertId) => Some(if last_id != 0 { 1 } else { 0 }),
+        Some(WrittenRows::AffectedUnlessFoundRows) => {
+            return Err(driver_failure(format!(
+                "scp write(mysql): an insert-or-ignore…RETURNING on a client-supplied key cannot tell an inserted row from a conflict on a CLIENT_FOUND_ROWS connection (both report 1 affected row), so it cannot name the row it wrote ('{write_sql}')"
+            )));
+        }
+    })
+}
+
+/// Fail closed when the recovered row count differs from the count the write wrote: the SELECT then
+/// named rows the write did not write (or missed ones it did).
+fn check_recovered(
+    recovered: usize,
+    written: Option<i64>,
+    write_sql: &str,
+) -> Result<(), SqlFailure> {
+    match written {
+        Some(n) if recovered as i64 != n => Err(driver_failure(format!(
+            "scp write(mysql): the write wrote {n} row(s) but its RETURNING recovery found {recovered} — refusing to return rows it cannot attribute to this write ('{write_sql}')"
+        ))),
+        _ => Ok(()),
+    }
+}
+
 /// The MySQL RETURNING re-select derived from a write's baked SQL + its `/*scp:pk=…;conflict=…*/` hint.
 struct MysqlReselect {
     /// The write to execute (RETURNING clause + hint stripped — byte-clean for the prepared protocol).
@@ -1214,6 +1267,9 @@ struct MysqlReselect {
     select_sql: String,
     /// How to bind `select_sql`'s `?` from `(params, last_insert_id, rows_affected)`.
     binds: Vec<ReselectBind>,
+    /// How many rows the write wrote ([`written_row_count`]); `None` ⇒ not countable (an upsert /
+    /// UPDATE / DELETE).
+    written: Option<WrittenRows>,
     /// Run the SELECT BEFORE the write instead of after. Only a DELETE needs this: its rows are gone
     /// once it has run, so the pre-image IS the written row set (the rows the DELETE removes).
     before: bool,
@@ -1224,6 +1280,8 @@ fn table_of(write_sql: &str) -> Option<String> {
     let lower = write_sql.to_ascii_lowercase();
     let after = if let Some(p) = lower.find("insert into ") {
         p + "insert into ".len()
+    } else if let Some(p) = lower.find("insert ignore into ") {
+        p + "insert ignore into ".len()
     } else if let Some(p) = lower.find("delete from ") {
         p + "delete from ".len()
     } else {
@@ -1275,12 +1333,20 @@ fn parse_conflict_hint(s: &str) -> Vec<String> {
         None => return Vec::new(),
     };
     let rest = &s[start..];
-    let end = rest.find("*/").unwrap_or(rest.len());
+    // The field runs to the next `;` field (`;action=…`) or the end of the hint.
+    let end = rest.find([';', '*']).unwrap_or(rest.len());
     rest[..end]
         .split(',')
         .map(|c| c.trim().to_string())
         .filter(|c| !c.is_empty())
         .collect()
+}
+
+/// The hint's `;action=ignore` field (an insert-or-ignore).
+fn parse_ignore_hint(s: &str) -> bool {
+    s.find(";action=ignore")
+        .map(|i| s[i + ";action=ignore".len()..].starts_with([';', '*']))
+        .unwrap_or(false)
 }
 
 /// Derive the MySQL RETURNING recovery for a write, or `Ok(None)` when the statement declares no
@@ -1373,18 +1439,25 @@ fn build_mysql_reselect(sql: &str) -> Result<Option<MysqlReselect>, SqlFailure> 
             binds,
         ))
     };
-    let after = |write_sql: String, (select_sql, binds): (String, Vec<ReselectBind>)| {
+    let after = |write_sql: String,
+                 (select_sql, binds): (String, Vec<ReselectBind>),
+                 written: Option<WrittenRows>| {
         Ok(Some(MysqlReselect {
             write_sql,
             select_sql,
             binds,
+            written,
             before: false,
         }))
     };
+    // An insert-or-ignore is spelled `ON DUPLICATE KEY UPDATE c = c` on a single row — it reads like
+    // an upsert, but it writes NOTHING on a conflict, so it is recovered as the INSERT it may have been.
+    let noop_on_conflict = wl.contains("on duplicate key update");
+    let upsert = noop_on_conflict && !parse_ignore_hint(hint_region);
 
     // upsert / upsertMany — recover by EVERY column of the CONFLICT key. MySQL does not report which
     // row an ON DUPLICATE KEY UPDATE touched, so the AUTO_INCREMENT range is wrong once a row was updated.
-    if is_insert && wl.contains("on duplicate key update") {
+    if is_insert && upsert {
         if conflict_cols.is_empty() {
             return Err(driver_failure(format!(
                 "scp write(mysql): an upsert…RETURNING needs its conflict key in the pk hint ('{write_sql}')"
@@ -1395,13 +1468,20 @@ fn build_mysql_reselect(sql: &str) -> Result<Option<MysqlReselect>, SqlFailure> 
         } else {
             keyed_by_insert_params(&conflict_cols, "conflict key")?
         };
-        return after(write_sql, plan);
+        return after(write_sql, plan, None);
     }
 
-    // create / createMany — recover by the AUTO_INCREMENT range [LAST_INSERT_ID, +affected), or by the
-    // client-supplied PK values pulled from the INSERT params by position (UUID / composite / natural key).
+    // create / createMany / insert-or-ignore — recover by the AUTO_INCREMENT range
+    // [LAST_INSERT_ID, +affected), or by the client-supplied PK values pulled from the INSERT params by
+    // position (UUID / composite / natural key). Recovered only when it wrote a row, and only as many
+    // rows as it wrote ([`written_row_count`]).
     if is_insert {
         if !auto_inc.is_empty() && pk_cols.len() == 1 && pk_cols[0] == auto_inc {
+            let written = if noop_on_conflict {
+                WrittenRows::InsertId
+            } else {
+                WrittenRows::Affected
+            };
             return Ok(Some(MysqlReselect {
                 write_sql,
                 select_sql: format!(
@@ -1409,6 +1489,7 @@ fn build_mysql_reselect(sql: &str) -> Result<Option<MysqlReselect>, SqlFailure> 
                     ai = auto_inc
                 ),
                 binds: vec![ReselectBind::LastId, ReselectBind::HighId],
+                written: Some(written),
                 before: false,
             }));
         }
@@ -1418,13 +1499,22 @@ fn build_mysql_reselect(sql: &str) -> Result<Option<MysqlReselect>, SqlFailure> 
             )));
         }
         // createMany with a CLIENT-supplied key: the statement binds ONE JSON payload, not one param
-        // per key, so the key tuples are read back out of that SAME payload (as upsertMany does).
-        let plan = if is_batch {
-            json_select(&pk_cols, "PK")?
+        // per key, so the key tuples are read back out of that SAME payload (as upsertMany does). A
+        // batch `INSERT IGNORE` reads back pre-existing rows too, so its count check fails it closed.
+        let (plan, written) = if is_batch {
+            (json_select(&pk_cols, "PK")?, WrittenRows::Affected)
+        } else if noop_on_conflict {
+            (
+                keyed_by_insert_params(&pk_cols, "PK")?,
+                WrittenRows::AffectedUnlessFoundRows,
+            )
         } else {
-            keyed_by_insert_params(&pk_cols, "PK")?
+            (
+                keyed_by_insert_params(&pk_cols, "PK")?,
+                WrittenRows::Affected,
+            )
         };
-        return after(write_sql, plan);
+        return after(write_sql, plan, Some(written));
     }
 
     // updateMany — recover by EVERY batch JOIN key column, re-selected from the SAME JSON payload the
@@ -1436,7 +1526,7 @@ fn build_mysql_reselect(sql: &str) -> Result<Option<MysqlReselect>, SqlFailure> 
             )));
         };
         let plan = json_select(&keys, "JOIN key")?;
-        return after(write_sql, plan);
+        return after(write_sql, plan, None);
     }
 
     // update / delete — recover by the write's OWN WHERE predicate, bound from the write's own params.
@@ -1457,6 +1547,7 @@ fn build_mysql_reselect(sql: &str) -> Result<Option<MysqlReselect>, SqlFailure> 
         select_sql: format!("SELECT {cols} FROM {table} WHERE {where_sql}{order_by}"),
         write_sql,
         binds,
+        written: None,
         before,
     }))
 }
@@ -1571,7 +1662,12 @@ async fn my_all_on_conn(
             .await
             .map_err(|e| driver_failure(format!("mysql write [{}]: {e}", rs.write_sql)))?;
         let last_id = exec_res.last_insert_id() as i64;
-        let affected = exec_res.rows_affected().max(1) as i64;
+        let affected = exec_res.rows_affected() as i64;
+        // A write that wrote no row (an insert-or-ignore that hit a conflict) returns nothing.
+        let written = written_row_count(rs.written, last_id, affected, &rs.write_sql)?;
+        if written == Some(0) {
+            return Ok(Vec::new());
+        }
         let mut sel_params: Vec<Value> = Vec::with_capacity(rs.binds.len());
         for b in &rs.binds {
             let param_at = |i: usize| {
@@ -1584,9 +1680,8 @@ async fn my_all_on_conn(
             };
             sel_params.push(match b {
                 ReselectBind::LastId => Value::Int(last_id),
-                // `max(1, affected)`, as in the four sibling ports: the range is EXCLUSIVE, so a
-                // driver that reports 0 affected rows must still cover the row the INSERT wrote.
-                ReselectBind::HighId => Value::Int(last_id + affected.max(1)),
+                // A write that wrote no row is never re-selected (written 0 ⇒ []), so affected ≥ 1.
+                ReselectBind::HighId => Value::Int(last_id + affected),
                 ReselectBind::JsonParam => param_at(0)?,
                 ReselectBind::Param(i) => param_at(*i)?,
             });
@@ -1595,6 +1690,7 @@ async fn my_all_on_conn(
             .fetch_all(&mut *conn)
             .await
             .map_err(|e| driver_failure(format!("mysql re-select [{}]: {e}", rs.select_sql)))?;
+        check_recovered(rows.len(), written, &rs.write_sql)?;
         return my_rows_to_wire(&rows);
     }
 

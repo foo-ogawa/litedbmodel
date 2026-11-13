@@ -90,3 +90,52 @@ describe('#358 a composite key is matched on EVERY column, never the first alone
     expect(plain((await raw.query(`SELECT name FROM ${T}`))[0] as Record<string, unknown>[])).toEqual([{ name: 'victim' }]);
   });
 });
+
+describe('#359 an insert-or-ignore returns only the row it inserted, never the conflicting row', () => {
+  const autoIncDdl = '(id INT AUTO_INCREMENT PRIMARY KEY, email VARCHAR(64) NOT NULL, name VARCHAR(64), UNIQUE KEY uq (email))';
+  const ignoreAutoInc = () => insert({ table: T, 'values.email': { ref: ['e'] }, 'values.name': { ref: ['n'] }, onConflict: 'email', onConflictAction: 'ignore', returning: 'email, name', pk: 'id', autoInc: 'id' });
+  const clientDdl = '(code VARCHAR(16) PRIMARY KEY, owner VARCHAR(64))';
+  const ignoreClient = () => insert({ table: T, 'values.code': { ref: ['c'] }, 'values.owner': { ref: ['o'] }, onConflict: 'code', onConflictAction: 'ignore', returning: 'code, owner', pk: 'code' });
+
+  it('AUTO_INCREMENT key: a conflict returns nothing; an insert returns its own row', async () => {
+    await table(autoIncDdl);
+    await raw.query(`INSERT INTO ${T} (email, name) VALUES ('a@x', 'victim')`);
+    expect(plain(await returning(ignoreAutoInc().sql, ['a@x', 'mine']))).toEqual([]);
+    expect(plain(await returning(ignoreAutoInc().sql, ['b@x', 'mine']))).toEqual([{ email: 'b@x', name: 'mine' }]);
+    expect(ignoreAutoInc().sql).toContain(';action=ignore*/');
+  });
+
+  it('client-supplied key without CLIENT_FOUND_ROWS: a conflict returns nothing; an insert returns its own row', async () => {
+    const noFoundRows = mysql.createPool({ ...MY, connectionLimit: 1, flags: ['-FOUND_ROWS'], ...mysqlDeboxPoolOptions });
+    try {
+      const p = mysqlConnectionPool(noFoundRows);
+      const run = async (sql: string, params: unknown[]) => {
+        const c = await p.acquire();
+        try { return plain((await c.execute(sql, params)) as Record<string, unknown>[]); } finally { await p.release(c); }
+      };
+      await table(clientDdl);
+      await raw.query(`INSERT INTO ${T} (code, owner) VALUES ('X1', 'victim')`);
+      expect(await run(ignoreClient().sql, ['X1', 'mine'])).toEqual([]);
+      expect(await run(ignoreClient().sql, ['X2', 'mine'])).toEqual([{ code: 'X2', owner: 'mine' }]);
+    } finally {
+      await noFoundRows.end();
+    }
+  });
+
+  it('client-supplied key on a CLIENT_FOUND_ROWS connection (mysql2\'s default): fails closed', async () => {
+    await table(clientDdl);
+    await raw.query(`INSERT INTO ${T} (code, owner) VALUES ('X1', 'victim')`);
+    await expect(returning(ignoreClient().sql, ['X1', 'mine'])).rejects.toThrow(/CLIENT_FOUND_ROWS/);
+  });
+
+  it('batch (INSERT IGNORE) on a client-supplied key: rows it did not insert fail it closed', async () => {
+    await table(clientDdl);
+    await raw.query(`INSERT INTO ${T} (code, owner) VALUES ('X1', 'victim')`);
+    const recs = [{ code: 'X1', owner: 'mine' }, { code: 'X2', owner: 'mine' }];
+    const op = compileCreateManyBundle('I', { tableName: T, records: recs, rawRecords: recs, onConflict: ['code'], onConflictIgnore: true, returning: 'code, owner', pk: { columns: ['code'], autoInc: null } } as never, 'mysql').transaction!.statements[0].op;
+    await expect(returning(op.sql, [JSON.stringify(recs)])).rejects.toThrow(/wrote 1 row\(s\) but its RETURNING recovery found 2/);
+    const fresh = [{ code: 'X3', owner: 'mine' }];
+    expect(plain(await returning(op.sql, [JSON.stringify(fresh)]))).toEqual([{ code: 'X3', owner: 'mine' }]);
+    expect(op.sql).toContain(';action=ignore*/');
+  });
+});

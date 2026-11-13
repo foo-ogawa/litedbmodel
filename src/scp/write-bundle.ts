@@ -88,7 +88,7 @@ export function compileCreateManyBundle(
       // The batch TxOp carries no writeMeta, so pass the upsert conflict key (upsertMany) explicitly —
       // the driver re-selects the upserted rows by it (the AUTO_INCREMENT range is wrong on a conflict).
       const onConflict = options.onConflict !== undefined && options.onConflict.length > 0 ? options.onConflict.join(',') : undefined;
-      return { ...flat, ...mysqlPkHint({ sql: flat.sql, params: flat.params, pk: options.pk }, onConflict) };
+      return { ...flat, ...mysqlPkHint({ sql: flat.sql, params: flat.params, pk: options.pk }, onConflict, options.onConflictIgnore === true ? 'ignore' : undefined) };
     }
     return flat;
   });

@@ -103,6 +103,7 @@ const LIVE_TESTS = [
   'TestConcurrentTransactionsAreIsolatedLive',
   'TestConcurrentWriterStickyIsPerRequestLive',
   'TestMysqlReturningCompositeKeyLive',
+  'TestMysqlReturningInsertIgnoreLive',
   'TestPhaseCConfigCharsetResetOnReleaseLiveMySQL',
   'TestPhaseCConfigConnectTimeoutBoundsWaitLive',
   'TestPhaseCConfigIdleTimeoutClosesIdleLive',

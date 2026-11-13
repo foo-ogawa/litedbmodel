@@ -12,8 +12,9 @@ use litedbmodel_runtime::{Driver, MysqlDriver, SqlFailure, Value, WireValue};
 
 const GATE: &str = "LITEDBMODEL_TX_ISOLATION";
 
-fn tbl() -> String {
-    format!("scp_myret_rs_{}", std::process::id())
+/// A table name unique to this run AND test (the tests of one binary run in parallel).
+fn tbl(tag: &str) -> String {
+    format!("scp_myret_rs_{tag}_{}", std::process::id())
 }
 
 fn driver() -> MysqlDriver {
@@ -21,8 +22,7 @@ fn driver() -> MysqlDriver {
     MysqlDriver::connect(&common::mysql_url()).expect("mysql connect")
 }
 
-fn table(d: &MysqlDriver, ddl: &str, seed: &[String]) {
-    let t = tbl();
+fn table(d: &MysqlDriver, t: &str, ddl: &str, seed: &[String]) {
     let mut stmts = vec![
         format!("DROP TABLE IF EXISTS {t}"),
         format!("CREATE TABLE {t} {ddl}"),
@@ -64,7 +64,7 @@ fn s(v: &str) -> Value {
 #[test]
 fn mysql_returning_composite_key() {
     let d = driver();
-    let t = tbl();
+    let t = tbl("ck");
     let ddl = "(id INT AUTO_INCREMENT PRIMARY KEY, email VARCHAR(64) NOT NULL, tenant_id INT NOT NULL, name VARCHAR(64), UNIQUE KEY uq (email, tenant_id))";
     let victim = vec![format!(
         "INSERT INTO {t} (email, tenant_id, name) VALUES ('a@x', 2, 'victim')"
@@ -75,17 +75,18 @@ fn mysql_returning_composite_key() {
         "name=mine".to_string(),
     ]];
 
-    table(&d, ddl, &victim);
+    table(&d, &t, ddl, &victim);
     let got = rows(&d, &format!("INSERT INTO {t} (email, name, tenant_id) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE email = VALUES(email), name = VALUES(name), tenant_id = VALUES(tenant_id) RETURNING email, tenant_id, name /*scp:pk=id;ai=id;conflict=email, tenant_id*/"), &[s("a@x"), s("mine"), Value::Int(1)]).expect("upsert");
     assert_eq!(got, mine, "upsert");
 
-    table(&d, ddl, &victim);
+    table(&d, &t, ddl, &victim);
     let got = rows(&d, &format!("INSERT INTO {t} (email, name, tenant_id) SELECT JSON_UNQUOTE(jt.email), JSON_UNQUOTE(jt.name), jt.tenant_id FROM JSON_TABLE(?, '$[*]' COLUMNS(email JSON PATH '$.email', name JSON PATH '$.name', tenant_id BIGINT PATH '$.tenant_id')) jt ON DUPLICATE KEY UPDATE email = VALUES(email), name = VALUES(name), tenant_id = VALUES(tenant_id) RETURNING email, tenant_id, name /*scp:pk=id;ai=id;conflict=email,tenant_id*/"), &[s(r#"[{"email":"a@x","name":"mine","tenant_id":1}]"#)]).expect("upsertMany");
     assert_eq!(got, mine, "upsertMany");
 
     // ON u.id = … AND u.tenant_id = …: the victim shares the FIRST key column (id) only.
     table(
         &d,
+        &t,
         "(tenant_id INT NOT NULL, id INT NOT NULL, name VARCHAR(64), PRIMARY KEY (tenant_id, id))",
         &[format!(
             "INSERT INTO {t} (tenant_id, id, name) VALUES (2, 7, 'victim')"
@@ -93,6 +94,66 @@ fn mysql_returning_composite_key() {
     );
     let got = rows(&d, &format!("UPDATE {t} AS u JOIN JSON_TABLE(?, '$[*]' COLUMNS(id BIGINT PATH '$.id', tenant_id BIGINT PATH '$.tenant_id', name JSON PATH '$.name')) AS v ON u.id = v.id AND u.tenant_id = v.tenant_id SET u.name = JSON_UNQUOTE(v.name) RETURNING tenant_id, id, name"), &[s(r#"[{"id":7,"tenant_id":1,"name":"hijack"}]"#)]).expect("updateMany");
     assert_eq!(got, Vec::<Vec<String>>::new(), "updateMany");
+    d.exec_ddl(&[format!("DROP TABLE IF EXISTS {t}")])
+        .expect("drop");
+}
+
+/// #359 — an insert-or-ignore returns only the row it inserted, never the conflicting row.
+#[test]
+fn mysql_returning_insert_ignore() {
+    let d = driver();
+    let t = tbl("ign");
+    let none = Vec::<Vec<String>>::new();
+
+    // AUTO_INCREMENT key: inserted ⇔ the insert id is not 0.
+    table(&d, &t, "(id INT AUTO_INCREMENT PRIMARY KEY, email VARCHAR(64) NOT NULL, name VARCHAR(64), UNIQUE KEY uq (email))", &[format!("INSERT INTO {t} (email, name) VALUES ('a@x', 'victim')")]);
+    let ignore_auto_inc = format!("INSERT INTO {t} (email, name) VALUES (?, ?) ON DUPLICATE KEY UPDATE email = email RETURNING email, name /*scp:pk=id;ai=id;conflict=email;action=ignore*/");
+    assert_eq!(
+        rows(&d, &ignore_auto_inc, &[s("a@x"), s("mine")]).expect("autoinc conflict"),
+        none,
+        "autoinc conflict"
+    );
+    assert_eq!(
+        rows(&d, &ignore_auto_inc, &[s("b@x"), s("mine")]).expect("autoinc insert"),
+        vec![vec!["email=b@x".to_string(), "name=mine".to_string()]],
+        "autoinc insert"
+    );
+
+    // Client-supplied key: sqlx always opens with CLIENT_FOUND_ROWS, under which a conflict and an
+    // insert both report 1 affected row — it cannot name the row it wrote, so it fails closed.
+    let client_ddl = "(code VARCHAR(16) PRIMARY KEY, owner VARCHAR(64))";
+    let victim = vec![format!(
+        "INSERT INTO {t} (code, owner) VALUES ('X1', 'victim')"
+    )];
+    table(&d, &t, client_ddl, &victim);
+    let ignore_client = format!("INSERT INTO {t} (code, owner) VALUES (?, ?) ON DUPLICATE KEY UPDATE code = code RETURNING code, owner /*scp:pk=code;ai=;conflict=code;action=ignore*/");
+    let err = rows(&d, &ignore_client, &[s("X1"), s("mine")])
+        .expect_err("client conflict must fail closed");
+    assert!(
+        format!("{err:?}").contains("CLIENT_FOUND_ROWS"),
+        "client conflict: {err:?}"
+    );
+
+    // Batch (INSERT IGNORE) on a client-supplied key: the pre-existing row read back fails it closed.
+    table(&d, &t, client_ddl, &victim);
+    let batch = format!("INSERT IGNORE INTO {t} (code, owner) SELECT JSON_UNQUOTE(jt.code), JSON_UNQUOTE(jt.owner) FROM JSON_TABLE(?, '$[*]' COLUMNS(code JSON PATH '$.code', owner JSON PATH '$.owner')) jt RETURNING code, owner /*scp:pk=code;ai=;conflict=code;action=ignore*/");
+    let err = rows(
+        &d,
+        &batch,
+        &[s(
+            r#"[{"code":"X1","owner":"mine"},{"code":"X2","owner":"mine"}]"#,
+        )],
+    )
+    .expect_err("batch ignore with a conflict must fail closed");
+    assert!(
+        format!("{err:?}").contains("wrote 1 row(s) but its RETURNING recovery found 2"),
+        "batch ignore: {err:?}"
+    );
+    assert_eq!(
+        rows(&d, &batch, &[s(r#"[{"code":"X3","owner":"mine"}]"#)]).expect("batch ignore insert"),
+        vec![vec!["code=X3".to_string(), "owner=mine".to_string()]],
+        "batch ignore insert"
+    );
     d.exec_ddl(&[format!("DROP TABLE IF EXISTS {t}")])
         .expect("drop");
 }

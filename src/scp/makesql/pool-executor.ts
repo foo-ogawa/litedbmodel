@@ -20,7 +20,7 @@
 import type { AsyncConnection, AsyncConnectionPool, Rows, RunInfo } from '../exec-context';
 import type { ResolvedConnectionConfig, PoolFactory, PoolCloser } from '../connection-routing';
 // MySQL parses no RETURNING — the write→re-select derivation lives in ONE place for all five runtimes.
-import { buildMysqlReselect, bindReselect } from './mysql-returning';
+import { buildMysqlReselect, bindReselect, writtenRowCount, checkRecovered } from './mysql-returning';
 import { guardLeasedClient, guardIdlePoolErrors, type LeasedClientLike } from '../../connection-errors';
 import { defaultLogger } from '../../drivers/types';
 
@@ -222,7 +222,16 @@ export interface MysqlPoolConnLike {
   query(sql: string, values?: unknown[]): Promise<[unknown, unknown]>;
   release(): void;
   destroy(): void;
+  /**
+   * mysql2's underlying connection — read for the capability flags it was opened with
+   * (`CLIENT_FOUND_ROWS` changes what an insert-or-ignore's affected count means). Absent ⇒ unknown,
+   * which the RETURNING emulation treats as set (it then fails closed rather than guess).
+   */
+  readonly connection?: { readonly config?: { readonly clientFlags?: number } };
 }
+
+/** mysql2's `CLIENT_FOUND_ROWS` capability bit (`mysql2/lib/constants/client.js` FOUND_ROWS). */
+const CLIENT_FOUND_ROWS = 2;
 
 /**
  * Adapt a mysql2 pooled connection to the {@link AsyncConnection} seam (one owned connection).
@@ -235,6 +244,8 @@ export interface MysqlPoolConnLike {
  */
 function mysqlConnection(conn: MysqlPoolConnLike): AsyncConnection {
   const rowsOf = (raw: unknown): Rows => (Array.isArray(raw) ? raw : []) as Rows;
+  const clientFlags = conn.connection?.config?.clientFlags;
+  const foundRows = clientFlags === undefined || (clientFlags & CLIENT_FOUND_ROWS) !== 0;
   return {
     async execute(sql, params) {
       const reselect = buildMysqlReselect(sql);
@@ -248,11 +259,13 @@ function mysqlConnection(conn: MysqlPoolConnLike): AsyncConnection {
       }
       const [res] = await conn.query(reselect.writeSql, bound);
       const h = res as { affectedRows?: number; insertId?: number };
-      const [rows] = await conn.query(
-        reselect.selectSql,
-        bindReselect(reselect.binds, bound, Number(h?.insertId ?? 0), Number(h?.affectedRows ?? 0)),
-      );
-      return rowsOf(rows);
+      const lastId = Number(h?.insertId ?? 0);
+      const affected = Number(h?.affectedRows ?? 0);
+      // A write that wrote no row (an insert-or-ignore that hit a conflict) returns nothing.
+      const written = writtenRowCount(reselect.written, lastId, affected, foundRows, reselect.writeSql);
+      if (written === 0) return [];
+      const [rows] = await conn.query(reselect.selectSql, bindReselect(reselect.binds, bound, lastId, affected));
+      return checkRecovered(rowsOf(rows), written, reselect.writeSql) as Rows;
     },
     async run(sql, params) {
       const [res] = await conn.query(sql, params as unknown[]);

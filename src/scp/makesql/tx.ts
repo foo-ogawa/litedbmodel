@@ -125,6 +125,9 @@ export interface TxOp {
     /** The upsert conflict-target column list (`onConflict` port), when this write is an upsert — lets a
      * downstream mysql RETURNING re-select recover the upserted row by its conflict key. Absent otherwise. */
     readonly onConflict?: string;
+    /** `'ignore'` for an insert-or-ignore (`onConflictAction: 'ignore'`) — it writes nothing on a conflict, so
+     * the mysql RETURNING re-select must not recover the conflicting row (`mysqlPkHint` `;action=ignore`). */
+    readonly onConflictAction?: 'ignore';
     /** True for a batch op (createMany/updateMany/upsertMany — its `?` binds a `{__batchRows}` marker,
      * not per-column values). The native tx-chain lowering rejects a batch op (it types per-column); the
      * flag lets it detect batch even though the op now carries `pk`/`onConflict` for the mysql RETURNING
@@ -372,6 +375,13 @@ function onConflictJsonOpts(ports: Record<string, unknown>, cols: readonly strin
   return action === 'ignore' ? { onConflict, onConflictIgnore: true } : { onConflict, onConflictUpdate: 'all' };
 }
 
+/** The `onConflict` / `onConflictAction` ports as {@link TxOp.writeMeta} carries them (absent `onConflict` ⇒ none). */
+function conflictMeta(ports: Record<string, unknown>): { onConflict?: string; onConflictAction?: 'ignore' } {
+  const onConflict = stringPort(ports, 'onConflict');
+  if (onConflict === undefined) return {};
+  return stringPort(ports, 'onConflictAction') === 'ignore' ? { onConflict, onConflictAction: 'ignore' } : { onConflict };
+}
+
 function onConflictTail(dialect: MakeSQLDialect, ports: Record<string, unknown>, cols: readonly string[]): string {
   const conflict = stringPort(ports, 'onConflict');
   if (conflict === undefined) return '';
@@ -519,8 +529,7 @@ function compileWriteNodeSql(node: WriteNodeLike, dialect: MakeSQLDialect, resol
         // mysql RETURNING re-select recovers ALL N written rows by the real key (auto-inc range, or the
         // conflict key for upsertMany). `batch:true` keeps the native tx-chain lowering rejecting this op.
         const pk = pkPort(ports);
-        const onConflictCols = stringPort(ports, 'onConflict');
-        const writeMeta = { table, bindColumns: sorted, returning: returningColumns(ports), batch: true, ...(onConflictCols !== undefined ? { onConflict: onConflictCols } : {}) };
+        const writeMeta = { table, bindColumns: sorted, returning: returningColumns(ports), batch: true, ...conflictMeta(ports) };
         return { sql: shape.sql, params: [marker], ...(pk !== undefined ? { pk } : {}), writeMeta };
       }
       // v1 `DBModel._insert` emits `?::<sqlCast>` PER COLUMN on Postgres (skipping timestamp/date);
@@ -532,8 +541,7 @@ function compileWriteNodeSql(node: WriteNodeLike, dialect: MakeSQLDialect, resol
       // `onConflict` (the conflict-target column list) rides on writeMeta ADDITIVELY (no SQL change) so a
       // downstream mysql RETURNING re-select can recover an upserted row by its conflict key (mysql does
       // not report the conflicted-row id) — used by the tx-chain codegen lowering.
-      const onConflictCols = stringPort(ports, 'onConflict');
-      const writeMeta = { table, bindColumns: sorted, returning: returningColumns(ports), ...(onConflictCols !== undefined ? { onConflict: onConflictCols } : {}) };
+      const writeMeta = { table, bindColumns: sorted, returning: returningColumns(ports), ...conflictMeta(ports) };
       return { sql, params: sorted.map((c) => values[c]), ...(pk !== undefined ? { pk } : {}), writeMeta };
     }
     case 'Update': {

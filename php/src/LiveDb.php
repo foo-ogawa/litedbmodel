@@ -98,12 +98,15 @@ final class MysqlReselect
      * @param string             $writeSql  the write to execute — RETURNING clause and hint removed
      * @param string             $selectSql the recovering SELECT
      * @param list<ReselectBind> $binds     how to bind {@see $selectSql}'s `?`s
+     * @param string|null        $written   how many rows the write wrote ({@see MysqlReturning::writtenRowCount}):
+     *                                      'affected' | 'insertId' | 'affectedUnlessFoundRows'; null ⇒ not countable
      * @param bool               $before    run the SELECT BEFORE the write (a DELETE's pre-image)
      */
     public function __construct(
         public readonly string $writeSql,
         public readonly string $selectSql,
         public readonly array $binds,
+        public readonly ?string $written = null,
         public readonly bool $before = false,
     ) {
     }
@@ -126,7 +129,9 @@ final class MysqlReselect
  *  | upsert / …Many    | EVERY column of the CONFLICT key (MySQL does not report the         | after  |
  *  |                   | conflicted-row id, so the AUTO_INCREMENT range is wrong when a row  |        |
  *  |                   | was UPDATED) — one column of a composite key names other rows too   |        |
- *  | update            | the write's OWN WHERE predicate                                     | after  |
+ *  | insert-or-ignore  | as create, and ONLY the rows it inserted (`;action=ignore`): a       | after  |
+ *  |                   | conflict writes nothing, so it returns nothing                      |        |
+ *  | update          | the write's OWN WHERE predicate                                     | after  |
  *  | updateMany        | EVERY batch JOIN key column, re-bound from the SAME JSON payload    | after  |
  *  | delete/deleteMany | the write's OWN WHERE predicate — **before** the write, since the   | BEFORE |
  *  |                   | rows no longer exist once the DELETE has run                        |        |
@@ -212,7 +217,7 @@ final class MysqlReturning
             $autoInc = trim($hm[2]);
         }
         $conflict = [];
-        if (preg_match('#;conflict=([^*]*)\*/#i', $hintRegion, $cfm) === 1) {
+        if (preg_match('#;conflict=([^;*]*)#i', $hintRegion, $cfm) === 1) {
             $conflict = self::splitTrim($cfm[1]);
         }
         $writeSql = trim(self::stripPkHint(substr($sql, 0, $retPos)));
@@ -234,7 +239,7 @@ final class MysqlReturning
         // bound — every key column, never the first alone (a composite key's first column names other
         // rows too). The payload's fields ARE the INSERT columns, so a key column outside them would
         // read NULL back and recover nothing: that fails closed.
-        $jsonSelect = static function (array $keys, string $what) use ($cols, $table, $orderBy, $insertCols, $isInsert, $writeSql): MysqlReselect {
+        $jsonSelect = static function (array $keys, string $what, ?string $written) use ($cols, $table, $orderBy, $insertCols, $isInsert, $writeSql): MysqlReselect {
             foreach ($keys as $k) {
                 if ($isInsert && !in_array($k, $insertCols, true)) {
                     throw new \RuntimeException("scp write(mysql): {$what} column '{$k}' is not among the INSERT columns of '{$writeSql}'");
@@ -243,10 +248,10 @@ final class MysqlReturning
             $unq = implode(', ', array_map(static fn (string $k): string => "JSON_UNQUOTE(jt.{$k})", $keys));
             $paths = implode(', ', array_map(static fn (string $k): string => "{$k} JSON PATH '\$.{$k}'", $keys));
             return new MysqlReselect($writeSql, "SELECT {$cols} FROM {$table} WHERE (" . implode(', ', $keys) . ") IN "
-                . "(SELECT {$unq} FROM JSON_TABLE(?, '\$[*]' COLUMNS({$paths})) jt){$orderBy}", [new ReselectBind('json')]);
+                . "(SELECT {$unq} FROM JSON_TABLE(?, '\$[*]' COLUMNS({$paths})) jt){$orderBy}", [new ReselectBind('json')], $written);
         };
         // Recover a SINGLE-row INSERT's row by EVERY key column, each bound from its INSERT column position.
-        $keyedByInsertParams = static function (array $keys, string $what) use ($cols, $table, $orderBy, $insertCols, $writeSql): MysqlReselect {
+        $keyedByInsertParams = static function (array $keys, string $what, ?string $written) use ($cols, $table, $orderBy, $insertCols, $writeSql): MysqlReselect {
             $conds = [];
             $binds = [];
             foreach ($keys as $k) {
@@ -257,30 +262,38 @@ final class MysqlReturning
                 $conds[] = "{$k} = ?";
                 $binds[] = new ReselectBind('param', $idx);
             }
-            return new MysqlReselect($writeSql, "SELECT {$cols} FROM {$table} WHERE " . implode(' AND ', $conds) . $orderBy, $binds);
+            return new MysqlReselect($writeSql, "SELECT {$cols} FROM {$table} WHERE " . implode(' AND ', $conds) . $orderBy, $binds, $written);
         };
+        // An insert-or-ignore is spelled `ON DUPLICATE KEY UPDATE c = c` on a single row — it reads like an
+        // upsert, but it writes NOTHING on a conflict, so it is recovered as the INSERT it may have been.
+        $noopOnConflict = str_contains($wl, 'on duplicate key update');
+        $upsert = $noopOnConflict && preg_match('#;action=ignore[;*]#i', $hintRegion) !== 1;
 
         // upsert / upsertMany — by EVERY column of the CONFLICT key. MySQL does not report which row an
         // ON DUPLICATE KEY UPDATE touched, so the AUTO_INCREMENT range is wrong once a row was updated.
-        if ($isInsert && str_contains($wl, 'on duplicate key update')) {
+        if ($isInsert && $upsert) {
             if (count($conflict) === 0) {
                 throw new \RuntimeException("scp write(mysql): an upsert…RETURNING needs its conflict key in the pk hint ('{$writeSql}')");
             }
-            return $isBatch ? $jsonSelect($conflict, 'conflict key') : $keyedByInsertParams($conflict, 'conflict key');
+            return $isBatch ? $jsonSelect($conflict, 'conflict key', null) : $keyedByInsertParams($conflict, 'conflict key', null);
         }
 
-        // create / createMany — by the AUTO_INCREMENT range [LAST_INSERT_ID, +affected), or by the
-        // client-supplied PK values pulled from the INSERT params by column position (UUID / composite).
+        // create / createMany / insert-or-ignore — by the AUTO_INCREMENT range [LAST_INSERT_ID, +affected),
+        // or by the client-supplied PK values pulled from the INSERT params by column position (UUID /
+        // composite). Recovered only when it wrote a row, and only as many rows as it wrote (writtenRowCount).
         if ($isInsert) {
             if ($autoInc !== '' && $pkCols === [$autoInc]) {
-                return new MysqlReselect($writeSql, "SELECT {$cols} FROM {$table} WHERE {$autoInc} >= ? AND {$autoInc} < ?{$orderBy}", [new ReselectBind('lastId'), new ReselectBind('highId')]);
+                return new MysqlReselect($writeSql, "SELECT {$cols} FROM {$table} WHERE {$autoInc} >= ? AND {$autoInc} < ?{$orderBy}", [new ReselectBind('lastId'), new ReselectBind('highId')], $noopOnConflict ? 'insertId' : 'affected');
             }
             if (count($pkCols) === 0) {
                 throw new \RuntimeException("scp write(mysql): an INSERT…RETURNING carries no pk hint, so its written rows cannot be identified ('{$writeSql}'). The producer must pass the model's declared primary key.");
             }
             // createMany with a CLIENT-supplied key: the statement binds ONE JSON payload, not one param
-            // per key, so the key tuples are read back out of that SAME payload (as upsertMany does).
-            return $isBatch ? $jsonSelect($pkCols, 'PK') : $keyedByInsertParams($pkCols, 'PK');
+            // per key, so the key tuples are read back out of that SAME payload (as upsertMany does). A
+            // batch `INSERT IGNORE` reads back pre-existing rows too, so its count check fails it closed.
+            return $isBatch
+                ? $jsonSelect($pkCols, 'PK', 'affected')
+                : $keyedByInsertParams($pkCols, 'PK', $noopOnConflict ? 'affectedUnlessFoundRows' : 'affected');
         }
 
         // updateMany — by EVERY batch JOIN key column, re-selected from the SAME JSON payload the write bound.
@@ -289,7 +302,7 @@ final class MysqlReturning
             if ($keys === null) {
                 throw new \RuntimeException("scp write(mysql): cannot parse the batch JOIN key of '{$writeSql}'");
             }
-            return $jsonSelect($keys, 'JOIN key');
+            return $jsonSelect($keys, 'JOIN key', null);
         }
 
         // update / delete — by the write's OWN WHERE predicate, bound from the write's own params. The
@@ -305,7 +318,39 @@ final class MysqlReturning
         for ($i = 0, $n = substr_count($whereSql, '?'); $i < $n; $i++) {
             $binds[] = new ReselectBind('param', $leading + $i);
         }
-        return new MysqlReselect($writeSql, "SELECT {$cols} FROM {$table} WHERE {$whereSql}{$orderBy}", $binds, str_starts_with($wl, 'delete'));
+        return new MysqlReselect($writeSql, "SELECT {$cols} FROM {$table} WHERE {$whereSql}{$orderBy}", $binds, null, str_starts_with($wl, 'delete'));
+    }
+
+    /**
+     * How many rows the write wrote, from its own result (mysql-returning.ts `writtenRowCount`); null ⇒
+     * not countable. 'affected' — a plain INSERT / INSERT IGNORE never updates a row, so the affected count
+     * IS the number inserted; 'insertId' — an insert-or-ignore on an AUTO_INCREMENT key inserted ⇔ its
+     * insert id is not 0. 'affectedUnlessFoundRows' — the same on a client-supplied key inserted ⇔ 1
+     * affected row, which holds because {@see LiveDb::mysql} never opens the connection with
+     * `MYSQL_ATTR_FOUND_ROWS` (under CLIENT_FOUND_ROWS a conflict would count 1 too).
+     */
+    public static function writtenRowCount(?string $written, int $lastInsertId, int $affected): ?int
+    {
+        return match ($written) {
+            null => null,
+            'insertId' => $lastInsertId !== 0 ? 1 : 0,
+            'affected', 'affectedUnlessFoundRows' => $affected,
+        };
+    }
+
+    /**
+     * Fail closed when the recovered row count differs from the count the write wrote: the SELECT then
+     * named rows the write did not write (or missed ones it did).
+     *
+     * @param  list<\stdClass> $rows
+     * @return list<\stdClass>
+     */
+    public static function checkRecovered(array $rows, ?int $written, string $writeSql): array
+    {
+        if ($written !== null && count($rows) !== $written) {
+            throw new \RuntimeException("scp write(mysql): the write wrote {$written} row(s) but its RETURNING recovery found " . count($rows) . " — refusing to return rows it cannot attribute to this write ('{$writeSql}')");
+        }
+        return $rows;
     }
 
     /**
@@ -322,7 +367,8 @@ final class MysqlReturning
         foreach ($binds as $b) {
             $out[] = match ($b->kind) {
                 'lastId' => $lastInsertId,
-                'highId' => $lastInsertId + max(1, $affected),
+                // A write that wrote no row is never re-selected (writtenRowCount 0 ⇒ []), so affected ≥ 1.
+                'highId' => $lastInsertId + $affected,
                 'json' => $at(0),
                 default => $at($b->index),
             };
@@ -395,7 +441,13 @@ final class MysqlReturningStatement extends \PDOStatement
             return parent::execute($bound);
         }
         $ok = parent::execute($bound); // the RETURNING-stripped write
-        $this->returningRows = $this->reselect($bound ?? [], (int) $this->pdo->lastInsertId(), $this->rowCount());
+        $lastInsertId = (int) $this->pdo->lastInsertId();
+        $affected = $this->rowCount();
+        // A write that wrote no row (an insert-or-ignore that hit a conflict) returns nothing.
+        $written = MysqlReturning::writtenRowCount($this->returning->written, $lastInsertId, $affected);
+        $this->returningRows = $written === 0
+            ? []
+            : MysqlReturning::checkRecovered($this->reselect($bound ?? [], $lastInsertId, $affected), $written, $this->returning->writeSql);
         return $ok;
     }
 

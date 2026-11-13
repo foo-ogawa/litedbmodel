@@ -96,8 +96,8 @@ export {
 
 // MySQL has no RETURNING: the pk-hint format + the write→re-select derivation the mysql connection
 // adapter (and the 4 native driver ports) share. ONE home for "MySQL cannot RETURN rows".
-export { mysqlPkHint, stripMysqlPkHint, buildMysqlReselect, bindReselect } from './mysql-returning';
-export type { MysqlReselect, ReselectBind } from './mysql-returning';
+export { mysqlPkHint, stripMysqlPkHint, buildMysqlReselect, bindReselect, writtenRowCount, checkRecovered } from './mysql-returning';
+export type { MysqlReselect, ReselectBind, WrittenRows } from './mysql-returning';
 export type {
   TxExpr,
   TxOp,

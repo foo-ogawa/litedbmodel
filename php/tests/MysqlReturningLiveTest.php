@@ -82,4 +82,34 @@ final class MysqlReturningLiveTest extends TestCase
         $this->table('(tenant_id INT NOT NULL, id INT NOT NULL, name VARCHAR(64), PRIMARY KEY (tenant_id, id))', "INSERT INTO {$t} (tenant_id, id, name) VALUES (2, 7, 'victim')");
         self::assertSame([], $this->rows("UPDATE {$t} AS u JOIN JSON_TABLE(?, '\$[*]' COLUMNS(id BIGINT PATH '\$.id', tenant_id BIGINT PATH '\$.tenant_id', name JSON PATH '\$.name')) AS v ON u.id = v.id AND u.tenant_id = v.tenant_id SET u.name = JSON_UNQUOTE(v.name) RETURNING tenant_id, id, name", ['[{"id":7,"tenant_id":1,"name":"hijack"}]']), 'updateMany');
     }
+
+    /** #359 — an insert-or-ignore returns only the row it inserted, never the conflicting row. */
+    public function testInsertIgnoreReturnsOnlyTheInsertedRow(): void
+    {
+        $t = $this->t;
+        // AUTO_INCREMENT key: inserted ⇔ the insert id is not 0.
+        $this->table('(id INT AUTO_INCREMENT PRIMARY KEY, email VARCHAR(64) NOT NULL, name VARCHAR(64), UNIQUE KEY uq (email))', "INSERT INTO {$t} (email, name) VALUES ('a@x', 'victim')");
+        $ignoreAutoInc = "INSERT INTO {$t} (email, name) VALUES (?, ?) ON DUPLICATE KEY UPDATE email = email RETURNING email, name /*scp:pk=id;ai=id;conflict=email;action=ignore*/";
+        self::assertSame([], $this->rows($ignoreAutoInc, ['a@x', 'mine']), 'autoinc conflict');
+        self::assertSame([['email' => 'b@x', 'name' => 'mine']], $this->rows($ignoreAutoInc, ['b@x', 'mine']), 'autoinc insert');
+
+        // Client-supplied key (LiveDb::mysql opens without CLIENT_FOUND_ROWS): inserted ⇔ 1 affected row.
+        $clientDdl = '(code VARCHAR(16) PRIMARY KEY, owner VARCHAR(64))';
+        $victim = "INSERT INTO {$t} (code, owner) VALUES ('X1', 'victim')";
+        $this->table($clientDdl, $victim);
+        $ignoreClient = "INSERT INTO {$t} (code, owner) VALUES (?, ?) ON DUPLICATE KEY UPDATE code = code RETURNING code, owner /*scp:pk=code;ai=;conflict=code;action=ignore*/";
+        self::assertSame([], $this->rows($ignoreClient, ['X1', 'mine']), 'client conflict');
+        self::assertSame([['code' => 'X2', 'owner' => 'mine']], $this->rows($ignoreClient, ['X2', 'mine']), 'client insert');
+
+        // Batch (INSERT IGNORE) on a client-supplied key: the pre-existing row read back fails it closed.
+        $this->table($clientDdl, $victim);
+        $batch = "INSERT IGNORE INTO {$t} (code, owner) SELECT JSON_UNQUOTE(jt.code), JSON_UNQUOTE(jt.owner) FROM JSON_TABLE(?, '\$[*]' COLUMNS(code JSON PATH '\$.code', owner JSON PATH '\$.owner')) jt RETURNING code, owner /*scp:pk=code;ai=;conflict=code;action=ignore*/";
+        try {
+            $this->rows($batch, ['[{"code":"X1","owner":"mine"},{"code":"X2","owner":"mine"}]']);
+            self::fail('batch ignore with a conflict must fail closed');
+        } catch (\RuntimeException $e) {
+            self::assertStringContainsString('wrote 1 row(s) but its RETURNING recovery found 2', $e->getMessage());
+        }
+        self::assertSame([['code' => 'X3', 'owner' => 'mine']], $this->rows($batch, ['[{"code":"X3","owner":"mine"}]']), 'batch ignore insert');
+    }
 }
