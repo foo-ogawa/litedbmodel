@@ -7,7 +7,7 @@ import { DBBoolValue, DBNullValue, DBNotNullValue, DBImmediateValue, DBToken, DB
 import { getSqlCastFormatter } from './drivers';
 import { normalizeConditions, type ConditionObject } from './DBConditions';
 import { initDBHandler, getDBHandler, createHandlerWithConnection, DBHandler, type DBConfig, type DBConnection } from './DBHandler';
-import type { SelectOptions, InsertOptions, UpdateOptions, DeleteOptions, UpdateManyOptions, TransactionOptions, LimitConfig, DBConfigOptions, PkeyResult, InternalInsertOptions, InternalUpdateOptions, InternalDeleteOptions } from './types';
+import type { SelectOptions, InsertOptions, UpdateOptions, DeleteOptions, UpdateManyOptions, TransactionOptions, LimitConfig, DBConfigOptions, PkeyResult, InternalInsertOptions, InternalUpdateOptions, InternalDeleteOptions, ReturningKey } from './types';
 import { LimitExceededError, WriteOutsideTransactionError, WriteInReadOnlyContextError } from './types';
 import { type Column, type OrderSpec, type CVs, type Conds, type CondsOf, type OrCondOf, type ColumnsOf, createColumn, columnsToNames, pairsToRecord, condsToRecord, serializeCondValue, orderToString, createOrCond } from './Column';
 import { type SqlFragment, type SqlCondition, type SqlTypedFragment, isAnySqlFragment } from './SqlFragment';
@@ -34,6 +34,7 @@ import {
   type DeriveColumnsOptions,
   type ModelClassLike as ModelLike,
 } from './scp/dbmodel-runtime';
+import { mysqlPkHint } from './scp/makesql/mysql-returning';
 import {
   transaction as scpTransaction,
   currentPinnedAsyncConnection,
@@ -45,8 +46,8 @@ import {
 import { rawExecuteAsync, isReadOnlyStatement, type RawResult } from './scp/middleware';
 // The row-lock tail SSoT (` FOR UPDATE` / ` FOR SHARE`) — shared with the SCP `compileSelect`, so the
 // imperative builder and the compiled statement render byte-identical locking clauses.
-import { lockTail } from './scp/makesql/compile-select';
-import { WriterStickyClock } from './scp/connection-routing';
+import { lockTail, pageCountText } from './scp/makesql/compile-select';
+import { WriterStickyClock, withWriter as scpWithWriter } from './scp/connection-routing';
 import type { Scope } from 'behavior-contracts/runtime';
 
 // Transaction context stored in AsyncLocalStorage
@@ -832,11 +833,11 @@ export abstract class DBModel {
     }
 
     if (options.limit !== undefined) {
-      sql += ` LIMIT ${options.limit}`;
+      sql += ` LIMIT ${pageCountText('LIMIT', options.limit)}`;
     }
 
     if (options.offset !== undefined) {
-      sql += ` OFFSET ${options.offset}`;
+      sql += ` OFFSET ${pageCountText('OFFSET', options.offset)}`;
     }
 
     // Row lock (` FOR UPDATE` / ` FOR SHARE`) — rendered by the ONE `lockTail` aggregation point the
@@ -927,11 +928,11 @@ export abstract class DBModel {
     }
 
     if (options.limit !== undefined) {
-      sql += ` LIMIT ${options.limit}`;
+      sql += ` LIMIT ${pageCountText('LIMIT', options.limit)}`;
     }
 
     if (options.offset !== undefined) {
-      sql += ` OFFSET ${options.offset}`;
+      sql += ` OFFSET ${pageCountText('OFFSET', options.offset)}`;
     }
 
     if (options.append) {
@@ -996,7 +997,8 @@ export abstract class DBModel {
     }
   ): Promise<InstanceType<T>[]> {
     // Determine effective hardLimit
-    const globalHasManyHardLimit = DBModel._limitConfig.hasManyHardLimit;
+    // The calling model's own cap (inherited from its createDBBase base / setLimitConfig), never the root's (#354).
+    const globalHasManyHardLimit = this._limitConfig.hasManyHardLimit;
     const perRelationHardLimit = relationConfig?.hardLimit;
     
     // null means disabled, undefined means use global
@@ -1272,6 +1274,16 @@ export abstract class DBModel {
           sql += ` RETURNING ${options.returning}`;
         }
       }
+      // MySQL has no native RETURNING: the SAME strip-before-execute PK / conflict hint the SCP path
+      // carries ({@link mysqlPkHint}) tells the driver's emulation which rows this INSERT wrote.
+      if (options.returning && this.getDriverType() === 'mysql') {
+        const k = getPrimaryKey(this);
+        sql = mysqlPkHint(
+          { sql, params: buildResult.params, pk: { columns: k.columns, autoInc: k.autoInc } },
+          onConflictCols !== undefined && onConflictCols.length > 0 ? onConflictCols.join(',') : undefined,
+          options.onConflictIgnore === true ? 'ignore' : undefined,
+        ).sql;
+      }
 
       const result = await this.execute(sql, buildResult.params);
       const instances = (result.rows as Record<string, unknown>[]).map((row) => this._createInstance<T>(row));
@@ -1337,11 +1349,22 @@ export abstract class DBModel {
     let sql = `UPDATE ${tableName} SET ${setClauses.join(', ')} WHERE ${whereClause}`;
 
     if (options.returning) {
-      sql += ` RETURNING ${options.returning}`;
+      sql = this._withReturning(sql, options.returning, options.returningKey);
     }
 
     const result = await this.execute(sql, params);
     return (result.rows as Record<string, unknown>[]).map((row) => this._createInstance<T>(row));
+  }
+
+  /**
+   * Append ` RETURNING <cols>` to a write — and, on MySQL (no native RETURNING), the strip-before-execute
+   * PK hint the connection seam's emulation keys the written rows by ({@link mysqlPkHint}).
+   * @internal
+   */
+  private static _withReturning(sql: string, returning: string, key: ReturningKey | undefined): string {
+    const withReturning = `${sql} RETURNING ${returning}`;
+    if (key === undefined || this.getDriverType() !== 'mysql') return withReturning;
+    return mysqlPkHint({ sql: withReturning, params: [], pk: key }).sql;
   }
 
   /**
@@ -1371,7 +1394,7 @@ export abstract class DBModel {
     let sql = `DELETE FROM ${tableName} WHERE ${whereClause}`;
 
     if (options.returning) {
-      sql += ` RETURNING ${options.returning}`;
+      sql = this._withReturning(sql, options.returning, options.returningKey);
     }
 
     const result = await this.execute(sql, params);
@@ -2004,7 +2027,7 @@ export abstract class DBModel {
       // Determine effective limit: per-relation hardLimit > global hasManyHardLimit
       // undefined = use global, null = no limit
       const effectiveLimit = config.hardLimit === undefined
-        ? DBModel._limitConfig.hasManyHardLimit
+        ? TargetClass._limitConfig.hasManyHardLimit // the target model's own cap, as _selectForRelation reads it (#354)
         : config.hardLimit;
       
       if (effectiveLimit != null && result.length > effectiveLimit) {
@@ -2344,7 +2367,7 @@ export abstract class DBModel {
       const conditionRecord = condsToRecord(conds, this._getConditionTypeCast()) as ConditionObject;
       
       // Apply hardLimit + 1 to detect overflow without fetching all records
-      const hardLimit = DBModel._limitConfig.findHardLimit;
+      const hardLimit = this._limitConfig.findHardLimit; // the calling model's own cap, not the root's (#354)
       const shouldCheckLimit = hardLimit != null && !opts?.limit;
       const effectiveOpts = shouldCheckLimit
         ? { ...opts, limit: hardLimit + 1 }
@@ -2683,42 +2706,17 @@ export abstract class DBModel {
         return null;
       }
       
-      // With returning: true - get PkeyResult
+      // With returning: true - get PkeyResult. MySQL has no native RETURNING: the connection seam
+      // emulates it (src/scp/makesql/mysql-returning.ts — the rows the UPDATE writes are locked and
+      // keyed BEFORE it runs), so every dialect asks for the same RETURNING here.
       const pkeyColumns = this._getPkeyColumnsWithDefault();
       const pkeyColumnNames = columnsToNames(pkeyColumns);
-      const driverType = this.getDriverType();
-      const sqlBuilder = getSqlBuilder(driverType);
-      
-      if (!sqlBuilder.supportsReturning) {
-        // Driver without native RETURNING: Pre-SELECT to get PKs
-        const selectParams: unknown[] = [];
-        const normalizedCond = normalizeConditions(conditionRecord);
-        const whereClause = normalizedCond.compile(selectParams);
-        
-        if (!whereClause) {
-          throw new Error('UPDATE requires conditions');
-        }
-        
-        const tableName = this.getUpdateTableName();
-        const selectSql = `SELECT DISTINCT ${pkeyColumnNames.join(', ')} FROM ${tableName} WHERE ${whereClause}`;
-        
-        // Execute SELECT first
-        const selectResult = await this.execute(selectSql, selectParams);
-        const pkeyValues = selectResult.rows as Record<string, unknown>[];
-        
-        // Then execute UPDATE (without RETURNING)
-        await this._update(conditionRecord, valueRecord, {});
-        
-        return this._buildPkeyResult(pkeyValues, pkeyColumns);
-      } else {
-        // PostgreSQL/SQLite: Use RETURNING clause
-        const updateOpts = { returning: pkeyColumnNames.join(', ') };
-        const instances = await this._update(conditionRecord, valueRecord, updateOpts);
-        return this._buildPkeyResult(
-          instances.map(i => i as unknown as Record<string, unknown>),
-          pkeyColumns
-        );
-      }
+      const updateOpts = { returning: pkeyColumnNames.join(', '), returningKey: { columns: pkeyColumnNames, autoInc: null } };
+      const instances = await this._update(conditionRecord, valueRecord, updateOpts);
+      return this._buildPkeyResult(
+        instances.map(i => i as unknown as Record<string, unknown>),
+        pkeyColumns
+      );
     };
     return this._applyMiddleware('update', core, [conditions, values, options]);
   }
@@ -2753,42 +2751,17 @@ export abstract class DBModel {
         return null;
       }
       
-      // With returning: true - get PkeyResult
+      // With returning: true - get PkeyResult. MySQL has no native RETURNING: the connection seam
+      // emulates it (src/scp/makesql/mysql-returning.ts — the pre-image is a LOCKING read and the
+      // DELETE must remove exactly those rows), so every dialect asks for the same RETURNING here.
       const pkeyColumns = this._getPkeyColumnsWithDefault();
       const pkeyColumnNames = columnsToNames(pkeyColumns);
-      const driverType = this.getDriverType();
-      const sqlBuilder = getSqlBuilder(driverType);
-      
-      if (!sqlBuilder.supportsReturning) {
-        // Driver without native RETURNING: Pre-SELECT to get PKs
-        const selectParams: unknown[] = [];
-        const normalizedCond = normalizeConditions(conditionRecord);
-        const whereClause = normalizedCond.compile(selectParams);
-        
-        if (!whereClause) {
-          throw new Error('DELETE requires conditions');
-        }
-        
-        const tableName = this.getUpdateTableName();
-        const selectSql = `SELECT DISTINCT ${pkeyColumnNames.join(', ')} FROM ${tableName} WHERE ${whereClause}`;
-        
-        // Execute SELECT first
-        const selectResult = await this.execute(selectSql, selectParams);
-        const pkeyValues = selectResult.rows as Record<string, unknown>[];
-        
-        // Then execute DELETE (without RETURNING)
-        await this._delete(conditionRecord, {});
-        
-        return this._buildPkeyResult(pkeyValues, pkeyColumns);
-      } else {
-        // PostgreSQL/SQLite: Use RETURNING clause
-        const deleteOpts = { returning: pkeyColumnNames.join(', ') };
-        const instances = await this._delete(conditionRecord, deleteOpts);
-        return this._buildPkeyResult(
-          instances.map(i => i as unknown as Record<string, unknown>),
-          pkeyColumns
-        );
-      }
+      const deleteOpts = { returning: pkeyColumnNames.join(', '), returningKey: { columns: pkeyColumnNames, autoInc: null } };
+      const instances = await this._delete(conditionRecord, deleteOpts);
+      return this._buildPkeyResult(
+        instances.map(i => i as unknown as Record<string, unknown>),
+        pkeyColumns
+      );
     };
     return this._applyMiddleware('delete', core, [conditions, options]);
   }
@@ -2988,8 +2961,8 @@ export abstract class DBModel {
 
       const handler = this.getHandler();
 
-      // The writer for any statement that is not certainly read-only (INSERT … RETURNING included),
-      // inside withWriter, or while writer-sticky. Only a read-only statement is re-sent on a connection error.
+      // The writer for any statement that is not certainly read-only (INSERT … RETURNING, SELECT … FOR
+      // UPDATE included), inside withWriter, or while writer-sticky.
       const readOnly = isReadOnlyStatement(s);
       const useWriter = !readOnly || this._getWriterContext().getStore() !== undefined || this._shouldUseWriterSticky();
       const result = useWriter
@@ -3160,39 +3133,46 @@ export abstract class DBModel {
       this._configOptions.useWriterAfterTransaction ?? true;
 
     let attempt = 0;
+    // Set when the previous attempt failed with a connection error: the pool may still hold dead
+    // connections, so this attempt runs only on a connection that passed a probe (at most retryLimit tried).
+    let afterConnectionError = false;
 
     while (true) {
       attempt++;
-      // A given connection is released by whoever acquired it, never here
-      const connection = options.connection ?? await handler.getConnection();
+      // A failure to acquire the connection is this attempt's failure (the go / rust / python / php
+      // transaction retry decides it the same way). A given connection is released by whoever acquired it,
+      // never here.
+      let connection: DBConnection | undefined;
       let destroyConnection = false;
       let committing = false;
-      // func sees the connection only through this guard; BEGIN/COMMIT/ROLLBACK use `connection` directly
-      const guard = createTransactionGuard(this._configOptions.logger ?? defaultLogger);
-      const guarded: DBConnection = {
-        query: (sql, params) => guard.run(() => connection.query(sql, params)),
-        release: (error) => connection.release(error),
-      };
 
       try {
-        await connection.query('BEGIN');
+        const conn = options.connection ?? await handler.getConnection(afterConnectionError ? retryLimit : undefined);
+        connection = conn;
+        // func sees the connection only through this guard; BEGIN/COMMIT/ROLLBACK use `conn` directly
+        const guard = createTransactionGuard(this._configOptions.logger ?? defaultLogger);
+        const guarded: DBConnection = {
+          query: (sql, params) => guard.run(() => conn.query(sql, params)),
+          release: (error) => conn.release(error),
+        };
+        await conn.query('BEGIN');
 
-        const context: TransactionContext = { connection: guarded, opened: connection };
+        const context: TransactionContext = { connection: guarded, opened: conn };
         const result = await guard.settle(() => txContext.run(context, func));
 
         if (rollbackOnly) {
           // Rollback instead of commit (for preview/dry-run scenarios)
-          await connection.query('ROLLBACK');
+          await conn.query('ROLLBACK');
         } else {
           committing = true;
-          await connection.query('COMMIT');
+          await conn.query('COMMIT');
           if (useWriterAfterTransaction) this._writerSticky.mark();
         }
         return result;
       } catch (error) {
         destroyConnection = true;
         try {
-          await connection.query('ROLLBACK');
+          await connection?.query('ROLLBACK');
         } catch {
           // ROLLBACK failed — connection is in an unknown state.
           // destroyConnection is already true; original error is preserved.
@@ -3207,13 +3187,14 @@ export abstract class DBModel {
           !isUnretriedConnectionError(error, { committing, givenConnection: options.connection !== undefined }) &&
           this.isRetryableError(error as Error)
         ) {
+          afterConnectionError = isConnectionError(error as Error);
           await this.sleep(retryDuration * Math.pow(2, attempt - 1));
           continue;
         }
 
         throw error;
       } finally {
-        if (!options.connection) connection.release(destroyConnection || undefined);
+        if (!options.connection) connection?.release(destroyConnection || undefined);
       }
     }
   }
@@ -3345,7 +3326,9 @@ export abstract class DBModel {
     }
 
     const context: WriterContext = { readonly: true };
-    return wCtx.run(context, func);
+    // The SCP route picks its pool from the SCP writer scope, not this v1 marker, so enter both: without
+    // the SCP scope every read inside withWriter went to the reader on the SCP route (#355).
+    return wCtx.run(context, () => scpWithWriter(func));
   }
 
   // ============================================

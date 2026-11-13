@@ -101,7 +101,9 @@ class ConnectionConfig:
       - ``idle_timeout_millis``: ms an unused pooled connection stays open before it is closed
         (@default 10000).
       - ``search_path``: PG ``search_path`` set on each pooled connection at checkout (schema routing).
-      - ``charset``: MySQL connection charset / PG ``client_encoding`` set on each pooled connection.
+      - ``charset``: MySQL connection charset (passed to ``pymysql.connect``, so PyMySQL escapes and
+        encodes bound values in the same charset the server parses them in) / PG ``client_encoding``
+        set on each pooled connection.
     """
 
     __slots__ = (
@@ -257,7 +259,11 @@ def session_statements(config: ResolvedConnectionConfig) -> List[str]:
       - **statement timeout** (``query_timeout`` > 0): PG ``SET statement_timeout = <ms>``; MySQL
         ``SET SESSION max_execution_time = <ms>`` (both server-side, ms).
       - **search_path**: PG ``SET search_path TO <path>``; MySQL has no schema search path ⇒ ignored.
-      - **charset**: MySQL ``SET NAMES <charset>``; PG ``SET client_encoding TO <charset>``.
+      - **charset**: PG ``SET client_encoding TO <charset>`` (psycopg binds params on the server and
+        encodes them in the session's ``client_encoding``, so the session statement is the one source).
+        MySQL ⇒ nothing here: it is a CONNECT option (:func:`_mysql_connect_kwargs`), because PyMySQL
+        escapes and encodes params on the CLIENT in its connect charset — a ``SET NAMES`` alone would
+        make the server parse in a charset the client did not escape in (#353).
 
     A key with no value emits nothing (⇒ empty list for an all-default config ⇒ the session is
     untouched, backward-compatible). sqlite has no server session ⇒ empty.
@@ -274,17 +280,15 @@ def session_statements(config: ResolvedConnectionConfig) -> List[str]:
         )
     if config.search_path is not None and dialect == "postgres":
         out.append("SET search_path TO %s" % config.search_path)
-    if config.charset is not None:
-        out.append(
-            "SET NAMES %s" % config.charset if dialect == "mysql" else "SET client_encoding TO %s" % config.charset
-        )
+    if config.charset is not None and dialect == "postgres":
+        out.append("SET client_encoding TO %s" % config.charset)
     return out
 
 
 def session_reset_statements(config: ResolvedConnectionConfig) -> List[str]:
     """The RESET statements that undo :func:`session_statements` on release (per dialect), so a session
-    knob (``statement_timeout`` / ``search_path`` / ``client_encoding`` / ``max_execution_time`` /
-    charset) set for THIS configured connection does NOT leak to the next caller that draws the SAME
+    knob (``statement_timeout`` / ``search_path`` / ``client_encoding`` / ``max_execution_time``)
+    set for THIS configured connection does NOT leak to the next caller that draws the SAME
     underlying pooled connection — psycopg/PyMySQL do NOT auto-reset session state on release.
     ``RESET`` / ``SET … DEFAULT`` restores the server default. Only the knobs ``config`` actually set
     are reset (an all-default config ⇒ nothing to reset). Mirrors the TS ``sessionResetStatements``.
@@ -297,8 +301,8 @@ def session_reset_statements(config: ResolvedConnectionConfig) -> List[str]:
         out.append("RESET statement_timeout" if dialect == "postgres" else "SET SESSION max_execution_time = DEFAULT")
     if config.search_path is not None and dialect == "postgres":
         out.append("RESET search_path")
-    if config.charset is not None:
-        out.append("SET NAMES DEFAULT" if dialect == "mysql" else "RESET client_encoding")
+    if config.charset is not None and dialect == "postgres":
+        out.append("RESET client_encoding")
     return out
 
 
@@ -614,22 +618,20 @@ def with_writer(fn: Callable[[], Any]) -> Any:
     ``connection_for``, so a :func:`with_writer` there is a no-op on routing (matches v1).
 
     The read-only (write-reject) half is entered by a bare read-only marker the guarded write seam
-    consults, AND — when an ambient routed :class:`ExecutionContext` is pinned in the current scope — by
-    deriving its read-only view so ``ambient_read_only()`` (which reads the ctx) also sees the
-    write-reject half. v1's single writerContext is BOTH the writer-routing and the read-only marker;
-    both halves span the whole ``fn`` because the contextvars are per-scope.
+    consults, AND — for every :class:`ExecutionContext` pinned in the current scope (one per owner) — by
+    pinning its read-only view under the same owner, so ``ambient_read_only()`` (which reads the pinned
+    ctxs) also sees the write-reject half and each owner keeps its own open transaction. v1's single
+    writerContext is BOTH the writer-routing and the read-only marker; both halves span the whole ``fn``
+    because the contextvars are per-scope.
     """
     if in_writer_scope():
         return fn()
     token = _writer_scope_var.set(True)
     ro_token = _readonly_marker_var.set(True)
     try:
-        from .exec_context import current_context, run_with_pinned_context
+        from .exec_context import pinned_contexts, run_with_pinned_contexts
 
-        ambient = current_context()
-        if ambient is not None and not ambient.read_only():
-            return run_with_pinned_context(ambient.with_read_only(), fn)
-        return fn()
+        return run_with_pinned_contexts([p.with_read_only() for p in pinned_contexts() if not p.read_only()], fn)
     finally:
         _readonly_marker_var.reset(ro_token)
         _writer_scope_var.reset(token)
@@ -907,8 +909,9 @@ def close_all_pools(closers: Sequence[PoolCloser]) -> None:
 # (min_pool/max_pool) + keep_alive — reach the real pool at build time (a pre-built pool can no longer
 # accept them). These factories map a ResolvedConnectionConfig to a psycopg / PyMySQL-backed
 # `_ConnectionPool` sized to `max_pool` and return the ConnectionPool adapter + closer. The configured
-# sizing is thus the SOLE source of the pool cap. Session knobs (query_timeout/search_path/charset) are
-# layered separately by `configured_pool` on checkout.
+# sizing is thus the SOLE source of the pool cap. Session knobs (query_timeout/search_path, and the PG
+# client_encoding) are layered separately by `configured_pool` on checkout; the MySQL charset is a
+# PyMySQL CONNECT option (`_mysql_connect_kwargs`), since PyMySQL escapes params on the client in it.
 #
 # ── keep_alive honesty (per-driver, mirror the TS mysql2 minPool note) ──
 #   - psycopg (PG): TCP keepalive is a libpq CONNECTION parameter, so `keep_alive=True` maps to
@@ -1011,6 +1014,10 @@ def _mysql_connect_kwargs(config: ResolvedConnectionConfig) -> Dict[str, Any]:
     if config.password is not None:
         kwargs["password"] = config.password
     kwargs["connect_timeout"] = config.connect_timeout_millis / 1000.0 or _PYMYSQL_MAX_CONNECT_TIMEOUT_SECONDS
+    if config.charset is not None:
+        # PyMySQL escapes and encodes params on the client in this charset and announces it to the
+        # server, so client escaping and server parsing share ONE charset (#353).
+        kwargs["charset"] = config.charset
     # NB: PyMySQL exposes no TCP-keepalive connect option ⇒ keep_alive is a documented NO-OP on MySQL
     # (mirror the TS mysqlPoolFactory's "mysql2 has no min idle floor" per-driver deviation note).
     return kwargs

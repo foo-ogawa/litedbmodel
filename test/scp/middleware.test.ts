@@ -34,6 +34,7 @@ import {
   group,
   type ExecutionContext,
 } from '../../src/scp';
+import { Middleware } from '../../src/Middleware';
 
 function freshDb(): Database.Database {
   const db = new Database(':memory:');
@@ -354,6 +355,34 @@ describe('Phase D — Logger + raw execute/query (D3)', () => {
     const logger = Logger();
     // NOT registered → the seam never invokes it.
     seamExecute(ctx, 'SELECT 1', []);
+    expect(logger.state().entries).toEqual([]);
+  });
+
+  it('outside a scope the state is fresh per access: nothing is retained, the sink still sees each entry (#364)', () => {
+    const db = freshDb();
+    const ctx = contextForDriver(db);
+    const sunk: unknown[] = [];
+    const logger = Logger({ sink: (e) => sunk.push(e.params[0]) });
+    use(logger); // the process-global registration the Logger doc shows
+    // Request A: N unscoped statements.
+    for (let i = 0; i < 50; i++) seamExecute(ctx, 'SELECT ?', [i]);
+    expect(sunk).toHaveLength(50);
+    // Request B (also unscoped) sees none of A's entries, and the global registry retained none.
+    expect(logger.state().entries).toEqual([]);
+  });
+
+  it('Middleware.run opens a registry scope: each request collects and releases its own entries (#364)', () => {
+    const db = freshDb();
+    const ctx = contextForDriver(db);
+    const logger = Logger();
+    use(logger);
+    const request = (sql: string): string[] =>
+      Middleware.run(() => {
+        seamExecute(ctx, sql, []);
+        return logger.state().entries.map((e) => e.sql);
+      });
+    expect(request('SELECT 1')).toEqual(['SELECT 1']);
+    expect(request('SELECT 2')).toEqual(['SELECT 2']);
     expect(logger.state().entries).toEqual([]);
   });
 });

@@ -63,9 +63,12 @@ final class Plan
      * @param array{groups:array<int,int[]>,concurrency:int}|null $plan groups/concurrency。null なら 1 op = 1 stage の逐次 fallback（§4）。
      * @param array<int,array<string,mixed>> $ops operation 定義（index 順。ops[0] は root）。
      * @param callable(array<string,mixed>,mixed):array<string,mixed> $exec ノード実行（consumer 委譲）。exec(op, boundValue) -> {ok}|{error}。
+     * @param (callable(array<string,mixed>):void)|null $onSkip op が Skip された**その時点**で 1 回呼ばれる。呼び出し側は
+     *   ここで op の未生成値を束縛する（親以外の依存として skip ノードを読む後続ノードは Skip されずに実行され、
+     *   未生成値を読む — scp-error.md「Dependency rules for continue」）。
      * @return array{states:array<int,?array<string,mixed>>, executed:string[], skipped:string[]}
      */
-    public static function runPlan(?array $plan, array $ops, callable $exec): array
+    public static function runPlan(?array $plan, array $ops, callable $exec, ?callable $onSkip = null): array
     {
         $n = count($ops);
         /** @var array<int,?array<string,mixed>> $states */
@@ -92,7 +95,7 @@ final class Plan
             $ordered = $stage;
             sort($ordered);
             foreach ($ordered as $i) {
-                $states[$i] = self::runOp($i, $ops[$i], $states, $exec, $executedIdx, $skippedIdx);
+                $states[$i] = self::runOp($i, $ops[$i], $states, $exec, $executedIdx, $skippedIdx, $onSkip);
             }
         }
 
@@ -112,6 +115,7 @@ final class Plan
      * @param callable(array<string,mixed>,mixed):array<string,mixed> $exec
      * @param int[] $executedIdx
      * @param int[] $skippedIdx
+     * @param (callable(array<string,mixed>):void)|null $onSkip
      * @return array<string,mixed> OpState
      */
     private static function runOp(
@@ -120,7 +124,8 @@ final class Plan
         array $states,
         callable $exec,
         array &$executedIdx,
-        array &$skippedIdx
+        array &$skippedIdx,
+        ?callable $onSkip
     ): array {
         $policy = $op['policy'] ?? 'fail';
         if ($policy !== 'fail' && $policy !== 'retry' && $policy !== 'continue') {
@@ -135,8 +140,7 @@ final class Plan
             $parentState = $states[$parent] ?? null;
             // 規則 2: 親が Skip/Failed（未生成）なら子は Skip。
             if ($parentState === null || ($parentState['status'] ?? null) !== 'ok') {
-                $skippedIdx[] = $i;
-                return ['status' => 'skipped'];
+                return self::skip($i, $op, $skippedIdx, $onSkip);
             }
             // null-binding skip（データ駆動）: 親 result[bindField] が null/欠落なら Skip。
             $bindField = $op['bindField'] ?? null;
@@ -152,8 +156,7 @@ final class Plan
                     }
                 }
                 if (!$found || $bound === null) {
-                    $skippedIdx[] = $i;
-                    return ['status' => 'skipped'];
+                    return self::skip($i, $op, $skippedIdx, $onSkip);
                 }
                 $boundValue = $bound;
                 $hasBound = true;
@@ -180,8 +183,25 @@ final class Plan
             PlanFailure::raise('OP_FAILED', "operation '{$op['id']}' failed under 'retry' policy (exhausted): {$outcome['error']}", $leafDetail);
         }
         // policy === 'continue': 失敗 op は Port 未生成 → §2 の Skip 伝播（下流を Skip）。
-        $skippedIdx[] = $i;
         array_pop($executedIdx); // 実行はしたが Port を生成しなかった → 未生成として扱う。
+        return self::skip($i, $op, $skippedIdx, $onSkip);
+    }
+
+    /**
+     * op を Skip と記録する**唯一の点**。skipped 記帳と onSkip 通知を同じ瞬間に行う
+     * （preflight の Skip も continue 失敗の Skip もここを通る）。
+     *
+     * @param array<string,mixed> $op
+     * @param int[] $skippedIdx
+     * @param (callable(array<string,mixed>):void)|null $onSkip
+     * @return array<string,mixed> OpState
+     */
+    private static function skip(int $i, array $op, array &$skippedIdx, ?callable $onSkip): array
+    {
+        $skippedIdx[] = $i;
+        if ($onSkip !== null) {
+            $onSkip($op);
+        }
         return ['status' => 'skipped'];
     }
 

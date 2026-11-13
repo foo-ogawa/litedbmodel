@@ -516,39 +516,15 @@ final class ExprEval
 
     // ── 文字列比較（code point 順）────────────────────────────────────────────
     /**
-     * code point 順の比較（-1/0/1）。UTF-8 文字列を code point 列に分解して比較する
-     * （PHP の `<`/`>` は numeric string を数値化する型ジャグリングがあるため使わない）。
+     * code point 順の比較（-1/0/1）。UTF-8 のバイト順は Unicode code point 順と一致する
+     * （expression-ir.md §文字列比較）ので、バイト比較（strcmp）で code point 順になる。strcmp は
+     * numeric string の数値化（`<`/`>` の型ジャグリング）をせず、invalid UTF-8 を含む任意のバイト列で
+     * `===` と整合する全順序になる（mb_ord() の false を code point として比べていた旧実装は、別の文字列を
+     * 等しいと判定し全順序を壊していた — #320）。
      */
     public static function cmpCodePoints(string $a, string $b): int
     {
-        $ca = self::codePoints($a);
-        $cb = self::codePoints($b);
-        $na = count($ca);
-        $nb = count($cb);
-        $n = min($na, $nb);
-        for ($i = 0; $i < $n; $i++) {
-            if ($ca[$i] !== $cb[$i]) {
-                return $ca[$i] < $cb[$i] ? -1 : 1;
-            }
-        }
-        if ($na === $nb) {
-            return 0;
-        }
-        return $na < $nb ? -1 : 1;
-    }
-
-    /** @return int[] UTF-8 文字列の code point 列。 */
-    private static function codePoints(string $s): array
-    {
-        if ($s === '') {
-            return [];
-        }
-        $chars = mb_str_split($s, 1, 'UTF-8');
-        $out = [];
-        foreach ($chars as $ch) {
-            $out[] = mb_ord($ch, 'UTF-8');
-        }
-        return $out;
+        return strcmp($a, $b) <=> 0;
     }
 
     // ── 型ユーティリティ ──────────────────────────────────────────────────────

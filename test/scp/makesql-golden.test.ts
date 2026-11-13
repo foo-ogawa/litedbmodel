@@ -25,7 +25,6 @@ import type { SqlBuilder } from '../../src/drivers/types';
 import {
   assembleMakeSQL,
   renderPlaceholders,
-  conditionsFor,
   compileWhere,
   compileSelect,
   compileInsertMany,
@@ -99,7 +98,7 @@ describe('A. WHERE — makeSQL byte-matches DBConditions (all constructs)', () =
   // byte-match on all three dialects. The NEW form is a frozen literal target here; its
   // RESULT PARITY with v1 is proven on real MySQL 8 + SQLite in json-array-parity.test.ts.
   const IN_LIST_JSON: Record<'mysql' | 'sqlite', Rendered> = {
-    mysql: { sql: "id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt)", params: ['[1,2,3]'] },
+    mysql: { sql: "id IN (SELECT v FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt)", params: ['[1,2,3]'] },
     sqlite: { sql: 'id IN (SELECT value FROM json_each(?))', params: ['[1,2,3]'] },
   };
 
@@ -352,16 +351,13 @@ function renderComponents(components: MakeSQL[], dialect: Dialect): Rendered[] {
 // RESULT PARITY with v1's multi-VALUES is proven on real DBs in json-array-parity.test.ts.
 // ---------------------------------------------------------------------------
 
-/** Infer the MySQL JSON_TABLE COLUMNS type + SELECT expr for a column (golden mirror). */
+/** Infer the MySQL JSON_TABLE COLUMNS type + SELECT expr for a column from EVERY value (golden mirror, #378). */
 function jtColType(col: string, rows: Record<string, unknown>[]): { t: string; sel: (r: string) => string } {
-  let sample: unknown;
-  for (const r of rows) {
-    const v = r[col];
-    if (v !== null && v !== undefined) { sample = v; break; }
-  }
-  if (typeof sample === 'boolean' || typeof sample === 'bigint') return { t: 'BIGINT', sel: (r) => r };
-  if (typeof sample === 'number') return Number.isInteger(sample) ? { t: 'BIGINT', sel: (r) => r } : { t: 'DECIMAL(65,30)', sel: (r) => r };
-  if (sample !== null && typeof sample === 'object') return { t: 'JSON', sel: (r) => r };
+  const values = rows.map((r) => r[col]).filter((v) => v !== null && v !== undefined);
+  const isInt = (v: unknown) => typeof v === 'boolean' || typeof v === 'bigint' || (typeof v === 'number' && Number.isInteger(v));
+  if (values.length > 0 && values.every(isInt)) return { t: 'BIGINT', sel: (r) => r };
+  if (values.length > 0 && values.every((v) => isInt(v) || typeof v === 'number')) return { t: 'DECIMAL(65,30)', sel: (r) => r };
+  if (values.length > 0 && values.every((v) => typeof v === 'object')) return { t: 'JSON', sel: (r) => r };
   return { t: 'JSON', sel: (r) => `JSON_UNQUOTE(${r})` };
 }
 
@@ -582,7 +578,8 @@ describe('B. batch UPDATE (+SKIP-column) — makeSQL byte-matches dialect builde
   const mysqlUpdGolden: Rendered = {
     sql:
       "UPDATE users AS u JOIN JSON_TABLE(?, '$[*]' COLUMNS(" +
-      "id BIGINT PATH '$.id', name JSON PATH '$.name', age BIGINT PATH '$.age', " +
+      // The JOIN KEY with no declared type is compared as a JSON value (the one key rule, `mysqlKeyRead`).
+      "id JSON PATH '$.id', name JSON PATH '$.name', age BIGINT PATH '$.age', " +
       "_skip_age BIGINT PATH '$._skip_age')) AS v ON u.id = v.id " +
       'SET u.name = JSON_UNQUOTE(v.name), u.age = IF(v._skip_age, u.age, v.age) RETURNING id',
     params: [skipJson],
@@ -673,7 +670,7 @@ describe('B. single UPDATE / DELETE — makeSQL byte-matches original _update/_d
         expect(v1.sql).toBe('DELETE FROM users WHERE id IN (?, ?, ?)');
         expect(got.sql.startsWith('DELETE FROM users WHERE id IN (')).toBe(true);
         const golden = dialect === 'mysql'
-          ? { sql: "DELETE FROM users WHERE id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt)", params: ['[1,2,3]'] }
+          ? { sql: "DELETE FROM users WHERE id IN (SELECT v FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt)", params: ['[1,2,3]'] }
           : { sql: 'DELETE FROM users WHERE id IN (SELECT value FROM json_each(?))', params: ['[1,2,3]'] };
         expect(got).toEqual(golden);
       }
@@ -698,26 +695,41 @@ describe('B. single UPDATE / DELETE — makeSQL byte-matches original _update/_d
         expect(got[0].params).toEqual(golden.params);
       } else {
         const golden = dialect === 'mysql'
-          ? { sql: "DELETE FROM users WHERE id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt)", params: ['[1,3,5]'] }
+          ? { sql: "DELETE FROM users WHERE id IN (SELECT v FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt)", params: ['[1,3,5]'] }
           : { sql: 'DELETE FROM users WHERE id IN (SELECT value FROM json_each(?))', params: ['[1,3,5]'] };
         expect(got[0]).toEqual(golden);
       }
     });
 
-    it(`[${dialect}] deleteMany composite-PK → v1 per-column IN-list conjunction (byte-match)`, () => {
-      // A composite PK's WHERE is the v1 conjunction of per-column IN-lists, built through the SAME
-      // conditionsFor (→ DBConditions on PG, the documented single-column-IN JSON rewrite per column
-      // on MySQL/SQLite). The golden drives that ORIGINAL builder directly — one present-column-set
-      // group → ONE DELETE — so it is byte-match to the v1 condition path on every dialect.
-      const keys = [{ tenant_id: 100, id: 1 }, { tenant_id: 100, id: 2 }];
+    it(`[${dialect}] deleteMany composite-PK → ONE DELETE matching the key TUPLES (#377)`, () => {
+      // A composite PK's WHERE is the composite membership predicate over the key tuples — the SAME
+      // `tupleInPredicate` text relations and declared `tupleIn` endpoints use — never a per-column
+      // IN conjunction, which deletes the cross product. The keys differ in BOTH columns: a
+      // single-tenant key set is exactly what hid the cross product (the rows deleted are asserted live
+      // in ScpDialect).
+      const keys = [{ tenant_id: 100, id: 1 }, { tenant_id: 200, id: 2 }];
       const got = compileDeleteMany({ dialect, tableName: 'comments', keyColumns: ['tenant_id', 'id'], keys }).map((c) => render(c, dialect));
-      expect(got.length).toBe(1);
-      const params: unknown[] = [];
-      const formatter = dialect === 'postgres' ? pgFmt : undefined;
-      const where = conditionsFor({ tenant_id: [100, 100], id: [1, 2] }, dialect).compile(params, formatter);
-      const golden = { sql: renderPlaceholders(`DELETE FROM comments WHERE ${where}`, dialect), params };
-      expect(got[0].sql).toBe(golden.sql);
-      expect(got[0].params).toEqual(golden.params);
+      const golden = {
+        postgres: {
+          sql: 'DELETE FROM comments WHERE (comments.tenant_id, comments.id) IN (SELECT * FROM UNNEST($1::int[], $2::int[]))',
+          params: [[100, 200], [1, 2]],
+        },
+        mysql: {
+          sql: "DELETE FROM comments WHERE (comments.tenant_id, comments.id) IN (SELECT c0, c1 FROM JSON_TABLE(?, '$[*]' COLUMNS(c0 JSON PATH '$[0]', c1 JSON PATH '$[1]')) jt)",
+          params: ['[[100,1],[200,2]]'],
+        },
+        sqlite: {
+          sql: "DELETE FROM comments WHERE (comments.tenant_id, comments.id) IN (SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]') FROM json_each(?))",
+          params: ['[[100,1],[200,2]]'],
+        },
+      }[dialect];
+      expect(got).toEqual([golden]);
+    });
+
+    it(`[${dialect}] deleteMany composite-PK: a key missing a PK column throws (#377)`, () => {
+      expect(() =>
+        compileDeleteMany({ dialect, tableName: 'comments', keyColumns: ['tenant_id', 'id'], keys: [{ id: 1 }] }),
+      ).toThrow(/PK column 'tenant_id'/);
     });
   }
 
@@ -989,7 +1001,7 @@ describe('C. Relations — makeSQL byte-matches LazyRelation (all shapes, all di
     const nPlaceholders = `${col} IN (${values.map(() => '?').join(', ')})`;
     const jsonForm =
       dialect === 'mysql'
-        ? `${col} IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt)`
+        ? `${col} IN (SELECT v FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt)`
         : `${col} IN (SELECT value FROM json_each(?))`;
     expect(v1.sql).toContain(nPlaceholders); // guard: the v1 capture really had the N-form
     // Use a replacer FUNCTION so `$` in jsonForm (e.g. `'$[*]'`, `PATH '$'`) is inserted
@@ -1176,10 +1188,11 @@ describe('C. Composite STATIC relation form (#47 item 1) — ONE key-tuple param
       tableName: 'comments',
       select: 'tenant_id, post_id',
       targetKeys: ['tenant_id', 'post_id'],
-      pgKeyTypes: ['int', 'bigint'],
+      keyTypes: ['INTEGER', 'BIGINT'],
     });
+    // Every declared integer width is bc's one `int` (i64), so both key rows cast to `bigint`.
     expect(renderPlaceholders(assembleMakeSQL(node).sql, 'postgres')).toBe(
-      'SELECT tenant_id, post_id FROM comments JOIN (SELECT (_t->>0)::int AS key0, (_t->>1)::bigint AS key1 ' +
+      'SELECT tenant_id, post_id FROM comments JOIN (SELECT (_t->>0)::bigint AS key0, (_t->>1)::bigint AS key1 ' +
         'FROM json_array_elements($1::json) AS _t) AS _keys ' +
         'ON comments.tenant_id = _keys.key0 AND comments.post_id = _keys.key1',
     );
@@ -1242,7 +1255,7 @@ describe('C. Composite STATIC per-parent-LIMIT relation form (#47 last gap)', ()
     ).sql;
     const node = compileCompositeKeyStaticLimited({
       dialect: 'postgres', tableName: 'revs', select: sel,
-      targetKeys: keys, limit: 2, order: 'rev ASC', pgKeyTypes: ['int', 'int'],
+      targetKeys: keys, limit: 2, order: 'rev ASC', keyTypes: ['INTEGER', 'INTEGER'],
     });
     const sql = renderPlaceholders(assembleMakeSQL(node).sql, 'postgres');
     // The WINDOW is v1's, verbatim — same LATERAL, same inner SELECT, same per-parent cap.
@@ -1250,7 +1263,7 @@ describe('C. Composite STATIC per-parent-LIMIT relation form (#47 last gap)', ()
     expect(sql).toContain(window);
     // Only the key SOURCE differs: the ONE JSON tuple param, expanded to typed key rows.
     expect(sql).toContain(
-      'FROM (SELECT (_t->>0)::int AS key0, (_t->>1)::int AS key1 FROM json_array_elements($1::json) AS _t) AS _keys',
+      'FROM (SELECT (_t->>0)::bigint AS key0, (_t->>1)::bigint AS key1 FROM json_array_elements($1::json) AS _t) AS _keys',
     );
     expect(v1).toContain('FROM unnest($1::int[], $2::int[]) AS _keys(key0, key1)'); // v1's key source
     expect(node.params).toEqual([[[null]]]); // ONE param — the key TUPLE set (the cap is inlined)
@@ -1283,7 +1296,7 @@ describe('C. Composite STATIC per-parent-LIMIT relation form (#47 last gap)', ()
       // The static membership predicate is the SAME one the composite UNLIMITED static form emits
       // (JSON_TABLE for MySQL / json_each for SQLite) — the sanctioned result-parity deviation.
       const jsonPred = dialect === 'mysql'
-        ? `(revs.tenant_id, revs.doc_id) IN (SELECT JSON_UNQUOTE(c0), JSON_UNQUOTE(c1) FROM JSON_TABLE(?, '$[*]' COLUMNS(c0 JSON PATH '$[0]', c1 JSON PATH '$[1]')) jt)`
+        ? `(revs.tenant_id, revs.doc_id) IN (SELECT c0, c1 FROM JSON_TABLE(?, '$[*]' COLUMNS(c0 JSON PATH '$[0]', c1 JSON PATH '$[1]')) jt)`
         : `(revs.tenant_id, revs.doc_id) IN (SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]') FROM json_each(?))`;
       expect(got.sql).toContain(jsonPred);
       // The whole key set binds as ONE JSON param (value-length-independent) → static op.

@@ -17,7 +17,7 @@
 // GenerateResult.fingerprint (NOT baked into the module, 0.5.0); the fail-closed skew gate
 // lives on the consumer/build side (compare it against the fingerprint of the live IR).
 import { SPEC_VERSIONS, BehaviorFailure, PlanFailure, codegenPrimitives as cgp, conformResultToOutType, runPlan, runPlanAsync, unproducedValue } from "behavior-contracts/runtime";
-import type { AsyncExec, AsyncHandler, AsyncHandlers, Exec, ExecOutcome, Handler, Handlers, OpSpec, PortableType, RelationKind, Scope, Value } from "behavior-contracts/runtime";
+import type { AsyncExec, AsyncHandler, AsyncHandlers, Exec, ExecOutcome, Handler, Handlers, OpSpec, PortableType, Scope, Value } from "behavior-contracts/runtime";
 
 /** Spec versions baked at generation time (fail-closed constant comparison at load). */
 export const EXPECTED_SPEC_VERSIONS = { behavior: 6, expression: 2, plan: 1 } as const;
@@ -882,7 +882,6 @@ function run_createMany(h$executeSQL: Handler | undefined, input: Scope): Value 
   ];
   const results: Record<string, Value> = {};
   const scope = (): Scope => ({ ...input, ...results });
-  const relationKinds: (RelationKind | undefined)[] = [undefined, undefined, undefined];
   const outTypes: Record<string, { t: PortableType; m: boolean }> = {
     "n0": { t: "string", m: true },
     "n1": { t: "string", m: true },
@@ -942,7 +941,8 @@ function run_createMany(h$executeSQL: Handler | undefined, input: Scope): Value 
     }
     return outcome;
   };
-  const run = runPlan({
+  // skip の時点で未生成値を束縛する（run_behavior の bindUnproduced と同一 — 親以外の依存も output も読む）。
+  runPlan({
     "concurrency": 16,
     "groups": [
       [
@@ -953,9 +953,8 @@ function run_createMany(h$executeSQL: Handler | undefined, input: Scope): Value 
         2
       ]
     ]
-  }, ops, exec);
-  run.states.forEach((st, i) => {
-    if (st.status === "skipped") results[ops[i].id] = unproducedValue(relationKinds[i]);
+  }, ops, exec, (op) => {
+    results[op.id] = unproducedValue(op.relationKind);
   });
   return cgp.ref(["n2"], scope());
 }
@@ -968,7 +967,6 @@ async function run_createMany_async(h$executeSQL: AsyncHandler | undefined, inpu
   ];
   const results: Record<string, Value> = {};
   const scope = (): Scope => ({ ...input, ...results });
-  const relationKinds: (RelationKind | undefined)[] = [undefined, undefined, undefined];
   const outTypes: Record<string, { t: PortableType; m: boolean }> = {
     "n0": { t: "string", m: true },
     "n1": { t: "string", m: true },
@@ -1028,7 +1026,8 @@ async function run_createMany_async(h$executeSQL: AsyncHandler | undefined, inpu
     }
     return outcome;
   };
-  const run = await runPlanAsync({
+  // skip の時点で未生成値を束縛する（run_behavior の bindUnproduced と同一 — 親以外の依存も output も読む）。
+  await runPlanAsync({
     "concurrency": 16,
     "groups": [
       [
@@ -1039,9 +1038,8 @@ async function run_createMany_async(h$executeSQL: AsyncHandler | undefined, inpu
         2
       ]
     ]
-  }, ops, exec);
-  run.states.forEach((st, i) => {
-    if (st.status === "skipped") results[ops[i].id] = unproducedValue(relationKinds[i]);
+  }, ops, exec, (op) => {
+    results[op.id] = unproducedValue(op.relationKind);
   });
   return cgp.ref(["n2"], scope());
 }
@@ -1054,7 +1052,6 @@ function run_upsertMany(h$executeSQL: Handler | undefined, input: Scope): Value 
   ];
   const results: Record<string, Value> = {};
   const scope = (): Scope => ({ ...input, ...results });
-  const relationKinds: (RelationKind | undefined)[] = [undefined, undefined, undefined];
   const outTypes: Record<string, { t: PortableType; m: boolean }> = {
     "n0": { t: "string", m: true },
     "n1": { t: "string", m: true },
@@ -1114,7 +1111,8 @@ function run_upsertMany(h$executeSQL: Handler | undefined, input: Scope): Value 
     }
     return outcome;
   };
-  const run = runPlan({
+  // skip の時点で未生成値を束縛する（run_behavior の bindUnproduced と同一 — 親以外の依存も output も読む）。
+  runPlan({
     "concurrency": 16,
     "groups": [
       [
@@ -1125,9 +1123,8 @@ function run_upsertMany(h$executeSQL: Handler | undefined, input: Scope): Value 
         2
       ]
     ]
-  }, ops, exec);
-  run.states.forEach((st, i) => {
-    if (st.status === "skipped") results[ops[i].id] = unproducedValue(relationKinds[i]);
+  }, ops, exec, (op) => {
+    results[op.id] = unproducedValue(op.relationKind);
   });
   return cgp.ref(["n2"], scope());
 }
@@ -1140,7 +1137,6 @@ async function run_upsertMany_async(h$executeSQL: AsyncHandler | undefined, inpu
   ];
   const results: Record<string, Value> = {};
   const scope = (): Scope => ({ ...input, ...results });
-  const relationKinds: (RelationKind | undefined)[] = [undefined, undefined, undefined];
   const outTypes: Record<string, { t: PortableType; m: boolean }> = {
     "n0": { t: "string", m: true },
     "n1": { t: "string", m: true },
@@ -1200,7 +1196,8 @@ async function run_upsertMany_async(h$executeSQL: AsyncHandler | undefined, inpu
     }
     return outcome;
   };
-  const run = await runPlanAsync({
+  // skip の時点で未生成値を束縛する（run_behavior の bindUnproduced と同一 — 親以外の依存も output も読む）。
+  await runPlanAsync({
     "concurrency": 16,
     "groups": [
       [
@@ -1211,9 +1208,8 @@ async function run_upsertMany_async(h$executeSQL: AsyncHandler | undefined, inpu
         2
       ]
     ]
-  }, ops, exec);
-  run.states.forEach((st, i) => {
-    if (st.status === "skipped") results[ops[i].id] = unproducedValue(relationKinds[i]);
+  }, ops, exec, (op) => {
+    results[op.id] = unproducedValue(op.relationKind);
   });
   return cgp.ref(["n2"], scope());
 }
@@ -1226,7 +1222,6 @@ function run_updateMany(h$executeSQL: Handler | undefined, input: Scope): Value 
   ];
   const results: Record<string, Value> = {};
   const scope = (): Scope => ({ ...input, ...results });
-  const relationKinds: (RelationKind | undefined)[] = [undefined, undefined, undefined];
   const outTypes: Record<string, { t: PortableType; m: boolean }> = {
     "n0": { t: "int", m: true },
     "n1": { t: "string", m: true },
@@ -1286,7 +1281,8 @@ function run_updateMany(h$executeSQL: Handler | undefined, input: Scope): Value 
     }
     return outcome;
   };
-  const run = runPlan({
+  // skip の時点で未生成値を束縛する（run_behavior の bindUnproduced と同一 — 親以外の依存も output も読む）。
+  runPlan({
     "concurrency": 16,
     "groups": [
       [
@@ -1297,9 +1293,8 @@ function run_updateMany(h$executeSQL: Handler | undefined, input: Scope): Value 
         2
       ]
     ]
-  }, ops, exec);
-  run.states.forEach((st, i) => {
-    if (st.status === "skipped") results[ops[i].id] = unproducedValue(relationKinds[i]);
+  }, ops, exec, (op) => {
+    results[op.id] = unproducedValue(op.relationKind);
   });
   return cgp.ref(["n2"], scope());
 }
@@ -1312,7 +1307,6 @@ async function run_updateMany_async(h$executeSQL: AsyncHandler | undefined, inpu
   ];
   const results: Record<string, Value> = {};
   const scope = (): Scope => ({ ...input, ...results });
-  const relationKinds: (RelationKind | undefined)[] = [undefined, undefined, undefined];
   const outTypes: Record<string, { t: PortableType; m: boolean }> = {
     "n0": { t: "int", m: true },
     "n1": { t: "string", m: true },
@@ -1372,7 +1366,8 @@ async function run_updateMany_async(h$executeSQL: AsyncHandler | undefined, inpu
     }
     return outcome;
   };
-  const run = await runPlanAsync({
+  // skip の時点で未生成値を束縛する（run_behavior の bindUnproduced と同一 — 親以外の依存も output も読む）。
+  await runPlanAsync({
     "concurrency": 16,
     "groups": [
       [
@@ -1383,9 +1378,8 @@ async function run_updateMany_async(h$executeSQL: AsyncHandler | undefined, inpu
         2
       ]
     ]
-  }, ops, exec);
-  run.states.forEach((st, i) => {
-    if (st.status === "skipped") results[ops[i].id] = unproducedValue(relationKinds[i]);
+  }, ops, exec, (op) => {
+    results[op.id] = unproducedValue(op.relationKind);
   });
   return cgp.ref(["n2"], scope());
 }

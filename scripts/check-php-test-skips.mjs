@@ -113,7 +113,9 @@ const SKIP_BUDGET = 0;
  * a provider.
  */
 const PROVIDERS = [
+  'LiteDbModel\\Runtime\\Tests\\ConnRetryLiveTest::dialects',
   'LiteDbModel\\Runtime\\Tests\\MiddlewareLiveTest::liveDrivers',
+  'LiteDbModel\\Runtime\\Tests\\MiddlewareTest::rawExecuteRoutingCases',
   'LiteDbModel\\Runtime\\Tests\\RenderTest::orderByNullsCases',
   'LiteDbModel\\Runtime\\Tests\\TxBoundaryLiveTest::dialects',
 ];
@@ -136,6 +138,8 @@ const LIVE_TESTS = [
   'LiteDbModel\\Runtime\\Tests\\ConformanceCorpusTest::testCorpusIsTheSupportedVersion',
   'LiteDbModel\\Runtime\\Tests\\ConformanceCorpusTest::testEveryVectorNamesAnEndpointTheGeneratedModuleExposes',
   'LiteDbModel\\Runtime\\Tests\\ConformanceCorpusTest::testLiveDbConformanceAllVectorsPass',
+  'LiteDbModel\\Runtime\\Tests\\ConnRetryLiveTest::testTransactionRetryAfterAdminShutdownCommitsOnce',
+  'LiteDbModel\\Runtime\\Tests\\ConnRetryLiveTest::testTransactionRetryAfterTheConnectionWasKilledCommitsOnce',
   'LiteDbModel\\Runtime\\Tests\\ConnectionRoutingLiveTest::testActiveTxPinTakesPrecedenceOverRouting',
   'LiteDbModel\\Runtime\\Tests\\ConnectionRoutingLiveTest::testCharsetAppliedAndResetOnMysql',
   'LiteDbModel\\Runtime\\Tests\\ConnectionRoutingLiveTest::testKeepAlivePersistent',
@@ -155,6 +159,12 @@ const LIVE_TESTS = [
   'LiteDbModel\\Runtime\\Tests\\MiddlewareLiveTest::testRawExecuteAndRawQueryThroughLiveSeam',
   'LiteDbModel\\Runtime\\Tests\\MiddlewareLiveTest::testRedProofUnregisteredDoesNotObserveTxControl',
   'LiteDbModel\\Runtime\\Tests\\MiddlewareLiveTest::testRedProofUnregisteredIsBytePassthrough',
+  'LiteDbModel\\Runtime\\Tests\\MysqlReturningLiveTest::testBatchReturningComparesBigintKeysAsTheWriteDid',
+  'LiteDbModel\\Runtime\\Tests\\MysqlReturningLiveTest::testBulkAutoIncReturnsOnlyItsOwnRows',
+  'LiteDbModel\\Runtime\\Tests\\MysqlReturningLiveTest::testCompositeKeyMatchesEveryColumn',
+  'LiteDbModel\\Runtime\\Tests\\MysqlReturningLiveTest::testDeleteReturnsOnlyTheRowsItDeleted',
+  'LiteDbModel\\Runtime\\Tests\\MysqlReturningLiveTest::testInsertIgnoreReturnsOnlyTheInsertedRow',
+  'LiteDbModel\\Runtime\\Tests\\MysqlReturningLiveTest::testUpdateReturnsTheRowsItUpdated',
   'LiteDbModel\\Runtime\\Tests\\TxBoundaryLiveTest::testGuardLive',
   'LiteDbModel\\Runtime\\Tests\\TxBoundaryLiveTest::testIsolationBehaviorLive',
   'LiteDbModel\\Runtime\\Tests\\TxBoundaryLiveTest::testIsolationSqlEmittedLive',

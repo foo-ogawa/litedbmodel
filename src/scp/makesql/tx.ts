@@ -27,7 +27,7 @@ import { assembleMakeSQL } from './makesql';
 import { sqliteInsertJson, mysqlInsertJson, sqliteUpdateManyJson, mysqlUpdateManyJson } from './json-batch';
 import { encodeJsonParam, inListPredicate } from './json-array';
 import { postgresSqlBuilder } from '../../drivers/PostgresSqlBuilder';
-import { sqlTypeToBcScalar, sqlTypeToMaterializeClass, type ColumnTypeResolver } from '../coltype';
+import { declaredColumnTypes, sqlTypeToBcScalar, sqlTypeToMaterializeClass, type ColumnTypeResolver } from '../coltype';
 import { renderPlaceholders, type Dialect as MakeSQLDialect } from './handler';
 import { formatterFor } from './compile';
 import { mapSqliteError } from '../errors';
@@ -125,6 +125,9 @@ export interface TxOp {
     /** The upsert conflict-target column list (`onConflict` port), when this write is an upsert — lets a
      * downstream mysql RETURNING re-select recover the upserted row by its conflict key. Absent otherwise. */
     readonly onConflict?: string;
+    /** `'ignore'` for an insert-or-ignore (`onConflictAction: 'ignore'`) — it writes nothing on a conflict, so
+     * the mysql RETURNING re-select must not recover the conflicting row (`mysqlPkHint` `;action=ignore`). */
+    readonly onConflictAction?: 'ignore';
     /** True for a batch op (createMany/updateMany/upsertMany — its `?` binds a `{__batchRows}` marker,
      * not per-column values). The native tx-chain lowering rejects a batch op (it types per-column); the
      * flag lets it detect batch even though the op now carries `pk`/`onConflict` for the mysql RETURNING
@@ -293,16 +296,17 @@ function v1ConditionText(conditions: ConditionObject): string {
  * params). `columns[i]` is the table column the i-th emitted param binds — parallel to `params` — so
  * the native-codegen chain types each WHERE-bound `?` from its column (see {@link TxOp.writeMeta}).
  */
-function lowerWhereMember(node: unknown, at: string, dialect: MakeSQLDialect): { sql: string; params: TxExpr[]; columns: string[] } {
+function lowerWhereMember(node: unknown, at: string, dialect: MakeSQLDialect, columnType: (column: string) => string | undefined): { sql: string; params: TxExpr[]; columns: string[] } {
   const op = opKey(node);
   if (op === undefined) throw new Error(`compileWriteNode: ${at}: a where member must be a single-operator Expression node`);
   if (op === 'in') {
     // Key-set membership — the SAME static single-param predicate the read IN-list uses
-    // ({@link inListPredicate}: PG `= ANY(?)`, MySQL/SQLite a JSON subquery), so a `deleteMany`'s
-    // statement comes from THIS compiler rather than being assembled by its caller.
+    // ({@link inListPredicate}: PG `= ANY(?)`, MySQL/SQLite a JSON subquery, the MySQL key element typed
+    // from the column's declared type — #376), so a `deleteMany`'s statement comes from THIS compiler
+    // rather than being assembled by its caller.
     const [col, val] = binOperands(node, op, at);
     const column = columnOf(col, at);
-    return { sql: v1ConditionText({ [inListPredicate(dialect, column)]: PROBE }), params: [val], columns: [column] };
+    return { sql: v1ConditionText({ [inListPredicate(dialect, column, columnType(column))]: PROBE }), params: [val], columns: [column] };
   }
   if (op === 'eq') {
     const [col, val] = binOperands(node, op, at);
@@ -319,7 +323,7 @@ function lowerWhereMember(node: unknown, at: string, dialect: MakeSQLDialect): {
   throw new Error(`compileWriteNode: ${at}: unsupported where operator '${op}' (write path supports eq/ne/lt/le/gt/ge)`);
 }
 
-function lowerWherePort(ports: Record<string, unknown>, at: string, dialect: MakeSQLDialect): { sql: string; params: TxExpr[]; columns: string[] } {
+function lowerWherePort(ports: Record<string, unknown>, at: string, dialect: MakeSQLDialect, columnType: (column: string) => string | undefined): { sql: string; params: TxExpr[]; columns: string[] } {
   const v = ports.where;
   if (v === undefined) return { sql: '', params: [], columns: [] };
   if (typeof v !== 'object' || v === null || !('arr' in v) || !Array.isArray((v as { arr: unknown }).arr)) {
@@ -330,7 +334,7 @@ function lowerWherePort(ports: Record<string, unknown>, at: string, dialect: Mak
   const params: TxExpr[] = [];
   const columns: string[] = [];
   members.forEach((m, i) => {
-    const f = lowerWhereMember(m, `${at}.where[${i}]`, dialect);
+    const f = lowerWhereMember(m, `${at}.where[${i}]`, dialect, columnType);
     parts.push(f.sql);
     params.push(...f.params);
     columns.push(...f.columns);
@@ -370,6 +374,13 @@ function onConflictJsonOpts(ports: Record<string, unknown>, cols: readonly strin
   const action = stringPort(ports, 'onConflictAction') ?? 'update';
   void cols;
   return action === 'ignore' ? { onConflict, onConflictIgnore: true } : { onConflict, onConflictUpdate: 'all' };
+}
+
+/** The `onConflict` / `onConflictAction` ports as {@link TxOp.writeMeta} carries them (absent `onConflict` ⇒ none). */
+function conflictMeta(ports: Record<string, unknown>): { onConflict?: string; onConflictAction?: 'ignore' } {
+  const onConflict = stringPort(ports, 'onConflict');
+  if (onConflict === undefined) return {};
+  return stringPort(ports, 'onConflictAction') === 'ignore' ? { onConflict, onConflictAction: 'ignore' } : { onConflict };
 }
 
 function onConflictTail(dialect: MakeSQLDialect, ports: Record<string, unknown>, cols: readonly string[]): string {
@@ -493,6 +504,8 @@ function compileWriteNodeSql(node: WriteNodeLike, dialect: MakeSQLDialect, resol
   if (table === undefined) throw new Error(`compileWriteNode: ${component} node requires a literal 'table' port`);
   // Per-column PG cast types (`sqlCast.<field>` ports) — drive the v1 `?::<sqlCast>` on Postgres.
   const sqlCastMap = collectSqlCast(ports);
+  // A WHERE column's DECLARED type (the schema SoT), when the caller passed the resolver.
+  const declaredType = (column: string): string | undefined => resolveColumnType?.(table, column);
 
   switch (component) {
     case 'Insert': {
@@ -519,8 +532,7 @@ function compileWriteNodeSql(node: WriteNodeLike, dialect: MakeSQLDialect, resol
         // mysql RETURNING re-select recovers ALL N written rows by the real key (auto-inc range, or the
         // conflict key for upsertMany). `batch:true` keeps the native tx-chain lowering rejecting this op.
         const pk = pkPort(ports);
-        const onConflictCols = stringPort(ports, 'onConflict');
-        const writeMeta = { table, bindColumns: sorted, returning: returningColumns(ports), batch: true, ...(onConflictCols !== undefined ? { onConflict: onConflictCols } : {}) };
+        const writeMeta = { table, bindColumns: sorted, returning: returningColumns(ports), batch: true, ...conflictMeta(ports) };
         return { sql: shape.sql, params: [marker], ...(pk !== undefined ? { pk } : {}), writeMeta };
       }
       // v1 `DBModel._insert` emits `?::<sqlCast>` PER COLUMN on Postgres (skipping timestamp/date);
@@ -532,8 +544,7 @@ function compileWriteNodeSql(node: WriteNodeLike, dialect: MakeSQLDialect, resol
       // `onConflict` (the conflict-target column list) rides on writeMeta ADDITIVELY (no SQL change) so a
       // downstream mysql RETURNING re-select can recover an upserted row by its conflict key (mysql does
       // not report the conflicted-row id) — used by the tx-chain codegen lowering.
-      const onConflictCols = stringPort(ports, 'onConflict');
-      const writeMeta = { table, bindColumns: sorted, returning: returningColumns(ports), ...(onConflictCols !== undefined ? { onConflict: onConflictCols } : {}) };
+      const writeMeta = { table, bindColumns: sorted, returning: returningColumns(ports), ...conflictMeta(ports) };
       return { sql, params: sorted.map((c) => values[c]), ...(pk !== undefined ? { pk } : {}), writeMeta };
     }
     case 'Update': {
@@ -555,7 +566,10 @@ function compileWriteNodeSql(node: WriteNodeLike, dialect: MakeSQLDialect, resol
           if (resolveColumnType === undefined) throw new Error(`compileWriteNode: batch update on postgres needs the column-type resolver (schema SoT) to derive the UNNEST element casts — pass it through compileCreateManyBundle (the decorator-adapter batch write path).`);
           return pgBatchUpdate(table, keyCols, updateCols, key, set, ports, resolveColumnType, dialect);
         }
-        const shapeOpts = { tableName: table, keyColumns: keyCols, updateColumns: updateCols, records: [] as Record<string, unknown>[], ...(stringPort(ports, 'returning') !== undefined ? { returning: stringPort(ports, 'returning') } : {}) };
+        // No records exist at compile, so the MySQL JSON_TABLE columns — the KEY included — are typed from
+        // the schema (#381); without it the key would be read as text and compared with the column as DOUBLE.
+        const columnTypes = resolveColumnType === undefined ? undefined : declaredColumnTypes(resolveColumnType, table, [...keyCols, ...updateCols]);
+        const shapeOpts = { tableName: table, keyColumns: keyCols, updateColumns: updateCols, records: [] as Record<string, unknown>[], ...(columnTypes !== undefined ? { columnTypes } : {}), ...(stringPort(ports, 'returning') !== undefined ? { returning: stringPort(ports, 'returning') } : {}) };
         const shape = dialect === 'mysql' ? mysqlUpdateManyJson(shapeOpts) : sqliteUpdateManyJson(shapeOpts);
         // The JSON carries BOTH the key + update columns (in that order); one marker per `?`.
         const columns = [...keyCols, ...updateCols];
@@ -571,7 +585,7 @@ function compileWriteNodeSql(node: WriteNodeLike, dialect: MakeSQLDialect, resol
       // An absent `where` port is an UNCONDITIONAL update — `UPDATE … SET …` with no tail. The port
       // carries the structured `{arr:[…]}` member list and is lowered INLINE here; nothing appends a
       // WHERE afterwards.
-      const where = lowerWherePort(ports, 'Update', dialect);
+      const where = lowerWherePort(ports, 'Update', dialect, declaredType);
       // v1 `DBModel._update` emits `<c> = ?::<sqlCast>` PER COLUMN on Postgres (skipping timestamp/date).
       const setClauses = setCols.map((c) => `${c} = ${castPlaceholder(dialect, sqlCastMap, c)}`).join(', ');
       const whereTail = where.sql === '' ? '' : ` WHERE ${where.sql}`;
@@ -586,7 +600,7 @@ function compileWriteNodeSql(node: WriteNodeLike, dialect: MakeSQLDialect, resol
     }
     case 'Delete': {
       // As Update: the `where` port is lowered inline. Absent ⇒ an unconditional `DELETE FROM t`.
-      const where = lowerWherePort(ports, 'Delete', dialect);
+      const where = lowerWherePort(ports, 'Delete', dialect, declaredType);
       const sql = `DELETE FROM ${table}${where.sql === '' ? '' : ` WHERE ${where.sql}`}${returningTail(ports)}`;
       // The `?`s bind the WHERE columns; a DELETE has no SET/VALUES params. `pk` rides along so the
       // pre-image re-select is ordered by the real key (as Update above).

@@ -102,6 +102,12 @@ const LIVE_TESTS = [
   'TestConcurrentNonTransactionalStatementsStayOffOtherTransactionsLive',
   'TestConcurrentTransactionsAreIsolatedLive',
   'TestConcurrentWriterStickyIsPerRequestLive',
+  'TestMysqlReturningBigintKeyLive',
+  'TestMysqlReturningBulkAutoIncLive',
+  'TestMysqlReturningCompositeKeyLive',
+  'TestMysqlReturningDeleteLockedLive',
+  'TestMysqlReturningInsertIgnoreLive',
+  'TestMysqlReturningUpdateByKeyLive',
   'TestPhaseCConfigCharsetResetOnReleaseLiveMySQL',
   'TestPhaseCConfigConnectTimeoutBoundsWaitLive',
   'TestPhaseCConfigIdleTimeoutClosesIdleLive',
@@ -118,6 +124,9 @@ const LIVE_TESTS = [
   'TestPhaseDLiveTxControlVisibleRollbackPG',
   'TestTxBoundaryMysql',
   'TestTxBoundaryPostgres',
+  'TestTxRetryAfterAdminShutdownLivePG',
+  'TestTxRetryAfterKilledPoolLiveMySQL',
+  'TestTxRetryAfterKilledPoolLivePG',
 ];
 
 /** Every `*_test.go` under `go/`. Build constraints are deliberately NOT honoured: a test the build

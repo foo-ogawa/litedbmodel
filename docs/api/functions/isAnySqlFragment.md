@@ -1,16 +1,12 @@
-[**litedbmodel v2.2.14**](../README.md)
-
-***
-
-[litedbmodel](../globals.md) / isAnySqlFragment
+[API](../README.md) / isAnySqlFragment
 
 # Function: isAnySqlFragment()
 
 ```ts
-function isAnySqlFragment(value: unknown): value is SqlFragment | SqlTypedFragment<unknown, unknown> | SqlCondition<unknown>;
+function isAnySqlFragment(value: unknown): value is SqlFragment | SqlTypedFragment | SqlCondition;
 ```
 
-Defined in: [SqlFragment.ts:149](https://github.com/foo-ogawa/litedbmodel/blob/main/src/SqlFragment.ts#L149)
+Defined in: [SqlFragment.ts:159](https://github.com/foo-ogawa/litedbmodel/blob/main/src/SqlFragment.ts#L159)
 
 Matches any of SqlFragment, SqlTypedFragment, or SqlCondition.
 
@@ -22,4 +18,5 @@ Matches any of SqlFragment, SqlTypedFragment, or SqlCondition.
 
 ## Returns
 
-value is SqlFragment \| SqlTypedFragment\<unknown, unknown\> \| SqlCondition\<unknown\>
+`value is`[`SqlFragment`](../interfaces/SqlFragment.md)`|`[`SqlTypedFragment`](../interfaces/SqlTypedFragment.md)`|`[`SqlCondition`](../interfaces/SqlCondition.md)
+

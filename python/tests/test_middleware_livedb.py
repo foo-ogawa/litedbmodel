@@ -61,11 +61,11 @@ from litedbmodel_runtime.exec_context import ExecutionContext, MiddlewareChain, 
 from litedbmodel_runtime.middleware import active_sql_middlewares
 
 
-def _tx_write(sql, params):
+def _tx_write(ctx, sql, params):
     """Issue a WRITE on the AMBIENT pinned tx connection (the way a real op JOINs a ``transaction()``):
     the body reads the pinned tx ctx from the contextvar, so the statement runs on the SAME owned
     connection as the runtime BEGIN/COMMIT — transactional, not a fresh autocommit connection."""
-    pinned = current_context()
+    pinned = current_context(ctx)
     assert pinned is not None and pinned.in_transaction(), "expected an ambient pinned tx ctx"
     seam_run(pinned, sql, params)
 
@@ -164,7 +164,7 @@ def test_d1_middleware_observes_runtime_begin_commit_of_real_transaction(raw_poo
 
     def scope():
         use(create_middleware(execute=lambda st, nxt, sql, params: (seen.append(sql), nxt(sql, params))[1]))
-        transaction(ctx, lambda: _tx_write(f"INSERT INTO {TBL} (id, val) VALUES ($1, $2)", [1, "a"]), None, "postgres")
+        transaction(ctx, lambda: _tx_write(ctx, f"INSERT INTO {TBL} (id, val) VALUES ($1, $2)", [1, "a"]), None, "postgres")
         rows = seam_execute(ctx, f"SELECT val FROM {TBL} WHERE id = $1", [1])
         assert [dict(r) for r in rows] == [{"val": "a"}]
 
@@ -190,7 +190,7 @@ def test_d1_middleware_observes_runtime_rollback_on_body_error(raw_pool):
         use(create_middleware(execute=lambda st, nxt, sql, params: (seen.append(sql), nxt(sql, params))[1]))
 
         def body():
-            _tx_write(f"INSERT INTO {TBL} (id, val) VALUES ($1, $2)", [7, "x"])
+            _tx_write(ctx, f"INSERT INTO {TBL} (id, val) VALUES ($1, $2)", [7, "x"])
             raise RuntimeError("body boom")
 
         with pytest.raises(Exception):
@@ -220,7 +220,7 @@ def test_d1_red_tx_control_bypassing_seam_is_not_observed(raw_pool):
     ctx = context_for_driver(driver)
     seen = []
 
-    def bypass_with_transaction_decided(ctx, body, before=(), after=(), use_writer_after_transaction=True):
+    def bypass_with_transaction_decided(ctx, body, before=(), after=(), use_writer_after_transaction=True, check_attempts=0):
         # The OLD divergent path: tx-control issued on the OWNED tx handle DIRECTLY (bypassing the seam).
         tx = ctx.begin_tx()
         tx_ctx = ctx.with_connection(ec._TxConnectionAdapter(tx), True)
@@ -260,7 +260,7 @@ def test_d1_red_tx_control_bypassing_seam_is_not_observed(raw_pool):
     try:
         def scope():
             use(create_middleware(execute=lambda st, nxt, sql, params: (seen.append(sql), nxt(sql, params))[1]))
-            transaction(ctx, lambda: _tx_write(f"INSERT INTO {TBL} (id, val) VALUES ($1, $2)", [9, "y"]), None, "postgres")
+            transaction(ctx, lambda: _tx_write(ctx, f"INSERT INTO {TBL} (id, val) VALUES ($1, $2)", [9, "y"]), None, "postgres")
 
         with_middleware_scope(scope)
     finally:

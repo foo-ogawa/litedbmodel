@@ -20,7 +20,7 @@
 import type { AsyncConnection, AsyncConnectionPool, Rows, RunInfo } from '../exec-context';
 import type { ResolvedConnectionConfig, PoolFactory, PoolCloser } from '../connection-routing';
 // MySQL parses no RETURNING — the write→re-select derivation lives in ONE place for all five runtimes.
-import { buildMysqlReselect, bindReselect } from './mysql-returning';
+import { buildMysqlReselect, bindReselect, writtenRowCount, checkRecovered, keyedSelectSql, MYSQL_ER_DUP_ENTRY, type MysqlReselect } from './mysql-returning';
 import { guardLeasedClient, guardIdlePoolErrors, type LeasedClientLike } from '../../connection-errors';
 import { defaultLogger } from '../../drivers/types';
 
@@ -224,35 +224,99 @@ export interface MysqlPoolConnLike {
   destroy(): void;
 }
 
+/** The one statement surface the MySQL RETURNING emulation runs on: a mysql2/promise connection's `query`. */
+export interface MysqlQueryLike {
+  query(sql: string, values?: unknown[]): Promise<[unknown, unknown]>;
+}
+
+/** The OK packet's "a transaction is open" status bit (`mysql2/lib/constants/server_status.js`). */
+const SERVER_STATUS_IN_TRANS = 1;
+
+/**
+ * Run a write that declares a `RETURNING` ({@link buildMysqlReselect} derived `reselect` from it) on ONE
+ * mysql2 connection and return the rows it wrote: MySQL parses no `RETURNING`, so the write runs stripped
+ * and its rows are recovered by a SELECT on THIS connection (locked before the write for an UPDATE / a
+ * DELETE, after it otherwise).
+ *
+ * This is the ONE executor of the emulation in TypeScript: the SCP connection adapter
+ * ({@link mysqlConnectionPool}) and the v1 MySQL driver (`src/drivers/mysql.ts`) both run their RETURNING
+ * writes through it, so they cannot return different rows.
+ *
+ * The steps run ATOMICALLY: inside the connection's open transaction, or in their own BEGIN … COMMIT
+ * (ROLLBACK when the recovery fails closed). Whether a transaction is open is the SERVER's answer —
+ * the `SERVER_STATUS_IN_TRANS` flag of an OK packet — since a BEGIN need not have passed through here.
+ */
+export async function mysqlReturning(conn: MysqlQueryLike, reselect: MysqlReselect, params: readonly unknown[]): Promise<Rows> {
+  const rowsOf = (raw: unknown): Rows => (Array.isArray(raw) ? raw : []) as Rows;
+  const bound = params as unknown[];
+  const steps = async (): Promise<Rows> => {
+    if (reselect.before) {
+      // DELETE…RETURNING: the locked pre-image IS the written row set — capture it, THEN delete, and
+      // the DELETE must have removed exactly those rows.
+      const [pre] = await conn.query(reselect.selectSql, bindReselect(reselect.binds, bound, 0, 0));
+      const [res] = await conn.query(reselect.writeSql, bound);
+      const affected = Number((res as { affectedRows?: number })?.affectedRows ?? 0);
+      return checkRecovered(rowsOf(pre), writtenRowCount(reselect.written, affected), reselect.writeSql) as Rows;
+    }
+    if (reselect.lockSql !== '') {
+      // UPDATE…RETURNING: recover the written rows by the keys locked BEFORE the write (never by the
+      // WHERE re-evaluated after it).
+      const locked = rowsOf((await conn.query(reselect.lockSql, bindReselect(reselect.lockBinds, bound, 0, 0)))[0]);
+      await conn.query(reselect.writeSql, bound);
+      if (locked.length === 0) return [];
+      const keyValues = locked.flatMap((k) => reselect.keyCols.map((c) => (k as Record<string, unknown>)[c]));
+      const [rows] = await conn.query(keyedSelectSql(reselect, locked.length), keyValues);
+      return checkRecovered(rowsOf(rows), locked.length, reselect.writeSql) as Rows;
+    }
+    if (reselect.anchorSql !== '') await conn.query(reselect.anchorSql);
+    let res: unknown;
+    try {
+      [res] = await conn.query(reselect.writeSql, bound);
+    } catch (e) {
+      // An insert-or-ignore's duplicate key: the conflict it skips — it wrote nothing (only the statement rolled back).
+      if (reselect.duplicateIsSkip && (e as { errno?: number }).errno === MYSQL_ER_DUP_ENTRY) return [];
+      throw e;
+    }
+    const h = res as { affectedRows?: number; insertId?: number };
+    const lastId = Number(h?.insertId ?? 0);
+    const affected = Number(h?.affectedRows ?? 0);
+    // A write that wrote no row (an INSERT IGNORE that hit a conflict) returns nothing.
+    const written = writtenRowCount(reselect.written, affected);
+    if (written === 0) return [];
+    const [rows] = await conn.query(reselect.selectSql, bindReselect(reselect.binds, bound, lastId, affected));
+    return checkRecovered(rowsOf(rows), written, reselect.writeSql) as Rows;
+  };
+  const [probe] = await conn.query('DO 0');
+  if (((probe as { serverStatus?: number }).serverStatus ?? 0) & SERVER_STATUS_IN_TRANS) return steps();
+  await conn.query('BEGIN');
+  let r: Rows;
+  try {
+    r = await steps();
+  } catch (e) {
+    await conn.query('ROLLBACK');
+    throw e;
+  }
+  await conn.query('COMMIT');
+  return r;
+}
+
 /**
  * Adapt a mysql2 pooled connection to the {@link AsyncConnection} seam (one owned connection).
  *
- * `execute` also carries the **MySQL RETURNING emulation** ({@link buildMysqlReselect}): MySQL parses
- * no `RETURNING`, so a write that declares one is run stripped and its written rows recovered by a
- * SELECT on THIS connection (before the write for a DELETE, after it otherwise). Placing it on the
- * connection — the mysql analogue of the rust/go/py/php driver wrappers — is what makes the mode-2
- * plan executor and a generated (codegen) write return the SAME rows: both reach the DB here.
+ * `execute` also carries the **MySQL RETURNING emulation** ({@link mysqlReturning}): a write that
+ * declares a `RETURNING` returns the rows it wrote. Placing it on the connection — the mysql analogue of
+ * the rust/go/py/php driver wrappers — is what makes the mode-2 plan executor and a generated (codegen)
+ * write return the SAME rows: both reach the DB here.
  */
 function mysqlConnection(conn: MysqlPoolConnLike): AsyncConnection {
-  const rowsOf = (raw: unknown): Rows => (Array.isArray(raw) ? raw : []) as Rows;
   return {
     async execute(sql, params) {
       const reselect = buildMysqlReselect(sql);
-      if (reselect === null) return rowsOf((await conn.query(sql, params as unknown[]))[0]);
-      const bound = params as unknown[];
-      if (reselect.before) {
-        // DELETE…RETURNING: the pre-image IS the written row set — capture it, THEN delete.
-        const [pre] = await conn.query(reselect.selectSql, bindReselect(reselect.binds, bound, 0, 0));
-        await conn.query(reselect.writeSql, bound);
-        return rowsOf(pre);
+      if (reselect === null) {
+        const [raw] = await conn.query(sql, params as unknown[]);
+        return (Array.isArray(raw) ? raw : []) as Rows;
       }
-      const [res] = await conn.query(reselect.writeSql, bound);
-      const h = res as { affectedRows?: number; insertId?: number };
-      const [rows] = await conn.query(
-        reselect.selectSql,
-        bindReselect(reselect.binds, bound, Number(h?.insertId ?? 0), Number(h?.affectedRows ?? 0)),
-      );
-      return rowsOf(rows);
+      return mysqlReturning(conn, reselect, params);
     },
     async run(sql, params) {
       const [res] = await conn.query(sql, params as unknown[]);

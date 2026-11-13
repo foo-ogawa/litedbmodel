@@ -1,8 +1,4 @@
-[**litedbmodel v2.2.14**](../README.md)
-
-***
-
-[litedbmodel](../globals.md) / dbIn
+[API](../README.md) / dbIn
 
 # Function: dbIn()
 
@@ -18,8 +14,9 @@ Create an array value for IN clause
 
 | Parameter | Type |
 | ------ | ------ |
-| `values` | `unknown`[] |
+| `values` | `unknown[]` |
 
 ## Returns
 
 `DBArrayValue`
+

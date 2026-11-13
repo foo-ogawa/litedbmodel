@@ -1,36 +1,30 @@
-[**litedbmodel v2.2.14**](../README.md)
-
-***
-
-[litedbmodel](../globals.md) / model
+[API](../README.md) / model
 
 # Function: model()
 
-## Call Signature
-
 ```ts
-function model<T>(constructor: T): T;
+function model<T extends { new (...args: unknown[]): object }>(constructor: T): T;
 ```
 
 Defined in: [decorators.ts:1149](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L1149)
 
-### Type Parameters
+## Type Parameters
 
 | Type Parameter |
 | ------ |
-| `T` *extends* (...`args`: `unknown`[]) => `object` |
+| `T extends { new (...args: unknown[]): object }` |
 
-### Parameters
+## Parameters
 
 | Parameter | Type |
 | ------ | ------ |
 | `constructor` | `T` |
 
-### Returns
+## Returns
 
 `T`
 
-## Call Signature
+***
 
 ```ts
 function model(tableName: string): ModelClassDecorator;
@@ -38,17 +32,17 @@ function model(tableName: string): ModelClassDecorator;
 
 Defined in: [decorators.ts:1153](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L1153)
 
-### Parameters
+## Parameters
 
 | Parameter | Type |
 | ------ | ------ |
 | `tableName` | `string` |
 
-### Returns
+## Returns
 
 [`ModelClassDecorator`](../interfaces/ModelClassDecorator.md)
 
-## Call Signature
+***
 
 ```ts
 function model(tableName: string, options: ModelOptions): ModelClassDecorator;
@@ -56,13 +50,14 @@ function model(tableName: string, options: ModelOptions): ModelClassDecorator;
 
 Defined in: [decorators.ts:1155](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L1155)
 
-### Parameters
+## Parameters
 
 | Parameter | Type |
 | ------ | ------ |
 | `tableName` | `string` |
 | `options` | [`ModelOptions`](../interfaces/ModelOptions.md) |
 
-### Returns
+## Returns
 
 [`ModelClassDecorator`](../interfaces/ModelClassDecorator.md)
+

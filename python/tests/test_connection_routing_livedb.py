@@ -426,7 +426,7 @@ def test_c1_writer_sticky_is_per_thread_live():
 
             def committer():
                 started.wait()
-                transaction(ctx, lambda: run_guarded(current_context(), d["insert"], [100, "mine"], "INSERT"), TransactionOptions(), name)
+                transaction(ctx, lambda: run_guarded(current_context(ctx), d["insert"], [100, "mine"], "INSERT"), TransactionOptions(), name)
                 committed.set()
                 first = execute(ctx, d["select_val"], [100], _READ)
                 first_pool = tlog.last("committer")
@@ -470,7 +470,7 @@ def test_c1_concurrent_transactions_each_own_a_connection():
 
             def tx_thread(my_id):
                 def body():
-                    tx_ctx = current_context()
+                    tx_ctx = current_context(ctx)
                     run_guarded(tx_ctx, d["insert"], [my_id, "tx"], "INSERT")
                     sid = execute(tx_ctx, d["session_id"], [], _READ)[0]["sid"]
                     all_open.wait()  # every transaction is open and has written, none committed
@@ -481,7 +481,7 @@ def test_c1_concurrent_transactions_each_own_a_connection():
                 return lambda: transaction(ctx, body, TransactionOptions(), name)
 
             def outside():
-                assert current_context() is None  # another thread's tx pin is not visible here
+                assert current_context(ctx) is None  # another thread's tx pin is not visible here
                 all_open.wait()
                 sid = execute(ctx, d["session_id"], [], _READ)[0]["sid"]
                 seen = [int(r["id"]) for r in execute(ctx, d["select_ids"], [200, 300], _READ)]
@@ -520,7 +520,7 @@ def test_c1_pool_contention_waits_then_succeeds():
 
             def tx_thread(my_id):
                 def body():
-                    tx_ctx = current_context()
+                    tx_ctx = current_context(ctx)
                     run_guarded(tx_ctx, d["insert"], [my_id, "c%d" % my_id], "INSERT")
                     execute(tx_ctx, d["sleep"], [], _READ)  # hold the connection so others must wait
                     observe()
@@ -622,8 +622,8 @@ def test_c2_named_db_tx_pin_takes_precedence_over_routing():
         def body():
             # A write AND a read inside the tx — both must run on the ONE pinned tx connection (from the
             # B writer pool), NOT fan out to the B reader. Operations JOIN the ambient tx via the pinned
-            # ctx in the contextvar (current_context()); a bare outer-ctx call would NOT see the pin.
-            tx_ctx = current_context()
+            # ctx in the contextvar (current_context(ctx)); a bare outer-ctx call would NOT see the pin.
+            tx_ctx = current_context(ctx)
             run(tx_ctx, "INSERT INTO %s (id, val) VALUES (?, ?)" % MY_TBL, [1, "x"], StatementIntent(write=True, db="B"))
             rows = execute(tx_ctx, "SELECT val FROM %s WHERE id = ?" % MY_TBL, [1], StatementIntent(write=False, db="B"))
             assert rows[0]["val"] == "x"  # read-your-own-write inside the tx (same connection)
@@ -808,6 +808,40 @@ def test_c3_search_path_reset_on_release_no_session_leak():
             raw1.close()
     finally:
         raw.close()
+
+
+def test_c3_mysql_multibyte_charset_keeps_bound_value_as_data():
+    """#353: with a multibyte MySQL ``charset`` (sjis / cp932 / gbk / big5), a bound value stays a value.
+    PyMySQL escapes and encodes ``%s`` params on the client, so the client must escape/encode in the SAME
+    charset the server parses in. The payloads end in a byte the server's charset reads as a lead byte, so
+    an escaping backslash encoded in a different charset is swallowed into a multibyte character and the
+    quote closes the literal — ``OR 1=1`` would then return the row. Each payload must return no row, or
+    be refused by the client-side encoder (the character does not exist in that charset); a gbk-native
+    character whose trailing byte is 0x5C (U+7E17) must round-trip as data. Through the SHIPPED factory."""
+    sql = "SELECT 1 AS hit FROM DUAL WHERE ? = 'no-such-value'"
+    cases = [
+        ("sjis", "\u0081' OR 1=1 -- "),
+        ("cp932", "\u0081' OR 1=1 -- "),
+        ("gbk", "࠿' OR 1=1 -- "),
+        ("big5", "ࡡ' OR 1=1 -- "),
+        ("gbk", "縗' OR 1=1 -- "),
+    ]
+    for charset, payload in cases:
+        config = _my_conn_config()
+        config.charset = charset
+        config.max_pool = 1
+        routing, close = build_routing_config([ConnectionSetup(pool_factory=mysql_pool_factory(), config=config)])
+        ctx = _ctx(routing)
+        try:
+            # The configured charset is what the server parses in (the knob is not silently dropped).
+            assert execute(ctx, "SELECT @@character_set_client AS cs", [], _READ)[0]["cs"] == charset
+            try:
+                rows = execute(ctx, sql, [payload], _READ)
+            except UnicodeEncodeError:
+                continue  # the client refused a character its charset cannot encode — never reached SQL
+            assert rows == [], "charset=%s: bound value %r ran as SQL, got %r" % (charset, payload, rows)
+        finally:
+            close()
 
 
 def test_c3_pg_and_mysql_factories_end_to_end():

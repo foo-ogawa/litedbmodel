@@ -85,6 +85,21 @@ function recoveryFor(sql: string): OpRecovery | null {
         `  silently recover nothing. Teach the cells the pre-image order before declaring it.`,
     );
   }
+  if (r.lockSql !== '') {
+    throw new Error(
+      `derive-ops: the recovery for '${sql.slice(0, 70)}…' must lock and key its rows BEFORE its write (an\n` +
+        `  UPDATE's WHERE can stop matching the rows it wrote once it has run — #361). Every cell issues the\n` +
+        `  recovery AFTER the write and binds no locked keys, so this statement would recover the wrong rows.\n` +
+        `  Teach the cells the lock-and-key order (lockSql → write → keyedSelectSql) before declaring it.`,
+    );
+  }
+  if (r.duplicateIsSkip) {
+    throw new Error(
+      `derive-ops: the recovery for '${sql.slice(0, 70)}…' is an insert-or-ignore: its write runs as the plain\n` +
+        `  INSERT and a duplicate-key error (1062) is the conflict it skips (#359). No cell turns that error\n` +
+        `  into an empty result, so a conflict would fail the cell instead. Teach the cells before declaring it.`,
+    );
+  }
   return { writeSql: r.writeSql, selectSql: r.selectSql, binds: r.binds };
 }
 

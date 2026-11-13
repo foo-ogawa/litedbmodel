@@ -42,7 +42,10 @@
  * (a fresh per-scope instance via {@link MiddlewareHandle.state}). Two concurrent `withMiddlewareScope`
  * bodies each mutate their OWN registry + state, never a shared global slot — so N concurrent requests
  * do not serialize on one registry (the bug a process-global stack would cause). Absent an explicit
- * scope, `use` mutates a process-global default stack (the app-startup registration path). The native
+ * scope, `use` mutates a process-global default stack (the app-startup registration path), and a
+ * middleware STATE is fresh per access and retained nowhere (v1 `getCurrentContext()` outside a
+ * `Middleware.run`): the process-global registry holds no state, so nothing a request logs outlives it
+ * or is visible to another request (#364). The native
  * ports translate the ALS: rust = `task_local!`, go = a value on `context.Context`, py = `contextvars`,
  * php = an explicit registry arg (1 request = 1 process ⇒ no concurrency to isolate).
  *
@@ -150,11 +153,22 @@ export class Registry {
    * COPY), the state map is scope-local too — so a middleware's per-request state is isolated across
    * concurrent scopes WITHOUT leaking (the `enterWith`-leak trap). A fresh scope's copy starts with an
    * EMPTY state map (states are NOT copied), so each scope lazily builds its own fresh state instances.
+   * `undefined` on the process-global registry, which is not a scope: there a state is fresh per access
+   * and retained nowhere (#364).
    */
-  private readonly states = new Map<object, unknown>();
+  private readonly states: Map<object, unknown> | undefined;
 
-  /** The current scope's state for `token`, lazily created via `fresh` on first access (v1 getCurrentContext). */
+  /** @param opts.retainsState `false` only for the process-global registry (it holds no state). */
+  constructor(opts: { retainsState?: boolean } = {}) {
+    this.states = opts.retainsState === false ? undefined : new Map();
+  }
+
+  /**
+   * The current scope's state for `token`, lazily created via `fresh` on first access (v1
+   * getCurrentContext). On a registry that retains no state, a fresh instance per access.
+   */
   stateFor<S>(token: object, fresh: () => S): S {
+    if (this.states === undefined) return fresh();
     let s = this.states.get(token) as S | undefined;
     if (s === undefined) {
       s = fresh();
@@ -165,7 +179,7 @@ export class Registry {
 
   /** Reset `token`'s state in this scope to a fresh instance (testing convenience). */
   resetStateFor<S>(token: object, fresh: () => S): void {
-    this.states.set(token, fresh());
+    this.states?.set(token, fresh());
   }
 
   /** Register `mw` (appended ⇒ outermost). Returns an idempotent un-register fn. */
@@ -220,8 +234,8 @@ export class Registry {
   }
 }
 
-/** The process-global default registry (app-startup `use` with no explicit scope). */
-const globalRegistry = new Registry();
+/** The process-global default registry (app-startup `use` with no explicit scope). Retains no state. */
+const globalRegistry = new Registry({ retainsState: false });
 
 /** The per-execution-scope registry override (ALS): present ⇒ `use`/reads target THIS scope's copy. */
 const registryScope = new AsyncLocalStorage<Registry>();
@@ -411,8 +425,9 @@ export interface LoggerOptions {
  * `next` call, so it measures the connection execute (chain remainder included), NOT just the log call.
  *
  * The per-scope log history lives on the handle's `state().entries` (v1 `getCurrentContext().getLogs()`),
- * so concurrent requests each collect their OWN entries (ALS-isolated). The port agents build the same
- * shape: a scope-local list + an `execute` hook timing `next`.
+ * so concurrent requests each collect their OWN entries (ALS-isolated). Outside a scope
+ * (`Middleware.run` / {@link withMiddlewareScope}) no entry is kept — `sink` still sees each one. The
+ * port agents build the same shape: a scope-local list + an `execute` hook timing `next`.
  */
 export function Logger(options: LoggerOptions = {}): MiddlewareHandle<{ entries: LogEntry[] }> {
   const now = options.now ?? Date.now;
@@ -475,17 +490,48 @@ function returnsRows(sql: string): boolean {
 }
 
 /**
- * Is `sql` certainly a read-only statement? This is the ONE judgment that decides reader routing and
- * connection-error re-sending for a raw statement (`DBModel.execute`, {@link rawExecute}). Anything not
- * certain is a write (writer, never re-sent):
+ * Is `sql` certainly a read-only statement — may it go to the reader? This decides reader routing for a
+ * raw statement (`DBModel.execute`, {@link rawExecute}). Anything not certain is a write (writer):
+ *   - a row lock (`FOR UPDATE` / `FOR NO KEY UPDATE` / `FOR SHARE` / `FOR KEY SHARE` /
+ *     `LOCK IN SHARE MODE`) or an `INTO` anywhere ⇒ write (it locks rows or writes a table / variable);
  *   - starts with select / show / pragma / values / table and has no `RETURNING` ⇒ read;
  *   - starts with `with` or `explain` ⇒ read only if it contains no insert / update / delete / merge
  *     word (`EXPLAIN ANALYZE DELETE …` executes the statement; a data-modifying CTE writes);
  *   - anything else (INSERT / UPDATE / DELETE …, DDL, maintenance) ⇒ write.
+ * Whether a statement may be re-sent after a connection error is a different question:
+ * {@link isResendableStatement}.
  */
 export function isReadOnlyStatement(sql: string): boolean {
+  if (/\bfor\s+(update|share|no\s+key\s+update|key\s+share)\b|\block\s+in\s+share\s+mode\b|\binto\b/i.test(sql)) return false;
   if (/^\s*(with|explain)\b/i.test(sql)) return !/\b(insert|update|delete|merge)\b/i.test(sql);
   return /^\s*(select|show|pragma|values|table)\b/i.test(sql) && !/\breturning\b/i.test(sql);
+}
+
+/**
+ * SQL grammar keywords that take a parenthesis (`IN (…)`, `EXISTS (…)`, `OVER (…)`, `AS (…)`, …): a bare
+ * one of these before `(` is not a function call. This is NOT a list of side-effect-free functions —
+ * every other name before `(` (`COUNT(*)` included) is a function call.
+ */
+const PAREN_KEYWORDS = new Set([
+  'all', 'and', 'any', 'array', 'as', 'between', 'by', 'case', 'distinct', 'else', 'except', 'exists',
+  'explain', 'filter', 'from', 'group', 'having', 'ilike', 'in', 'intersect', 'is', 'join', 'lateral',
+  'like', 'limit', 'materialized', 'not', 'offset', 'on', 'or', 'over', 'row', 'select', 'some', 'then',
+  'union', 'using', 'values', 'when', 'where', 'within',
+]);
+
+/**
+ * May `sql` be re-sent after a connection error? Only a read-only statement ({@link isReadOnlyStatement})
+ * that calls no function: the server may have run the first send before the connection dropped, and a
+ * function (a user function, `nextval`, …) can write. A function call is a name — bare, schema-qualified,
+ * `"quoted"` or `` `backticked` `` — followed by `(`, other than a bare {@link PAREN_KEYWORDS} word. When
+ * unsure the answer is "not resendable" (a `(` after a name inside a string literal or comment also counts).
+ */
+export function isResendableStatement(sql: string): boolean {
+  if (!isReadOnlyStatement(sql)) return false;
+  for (const m of sql.matchAll(/(\.\s*)?("(?:[^"]|"")*"|`(?:[^`]|``)*`|[A-Za-z_][A-Za-z0-9_$]*)\s*\(/g)) {
+    if (m[1] !== undefined || /^["`]/.test(m[2]) || !PAREN_KEYWORDS.has(m[2].toLowerCase())) return false;
+  }
+  return true;
 }
 
 /**
@@ -501,12 +547,13 @@ export interface RawResult {
  * Raw **synchronous** `execute(sql, params)` THROUGH the seam (design §4 D3): a registered SQL-level
  * middleware intercepts it, connection routing resolves the connection, and an ambient transaction (if
  * the ctx is tx-scoped) applies — because it is the SAME `execute`/`run` seam the ORM uses, not a
- * direct driver call. A row-returning statement runs `execute`; a non-returning one runs `run`.
- * `write` forces the write intent (writer routing / tx connection) for a row-returning write.
+ * direct driver call. A row-returning statement runs `execute`; a non-returning one runs `run`. A
+ * row-returning statement takes the write intent (writer routing / tx connection) unless it is certainly
+ * read-only ({@link isReadOnlyStatement}); `write: true` forces the write intent for any statement.
  */
 export function rawExecute(ctx: ExecutionContext, sql: string, params: readonly unknown[] = [], opts: { write?: boolean } = {}): RawResult {
   if (returnsRows(sql)) {
-    const rows = seamExecute(ctx, sql, params, { write: opts.write ?? !isReadOnlyStatement(sql) });
+    const rows = seamExecute(ctx, sql, params, { write: opts.write === true || !isReadOnlyStatement(sql) });
     return { rows, rowCount: rows.length };
   }
   const info: RunInfo = seamRun(ctx, sql, params);
@@ -516,7 +563,7 @@ export function rawExecute(ctx: ExecutionContext, sql: string, params: readonly 
 /** Raw **async** `execute(sql, params)` THROUGH the async seam — the live PG / MySQL twin of {@link rawExecute}. */
 export async function rawExecuteAsync(ctx: AsyncExecutionContext, sql: string, params: readonly unknown[] = [], opts: { write?: boolean } = {}): Promise<RawResult> {
   if (returnsRows(sql)) {
-    const rows = await seamExecuteAsync(ctx, sql, params, { write: opts.write ?? !isReadOnlyStatement(sql) });
+    const rows = await seamExecuteAsync(ctx, sql, params, { write: opts.write === true || !isReadOnlyStatement(sql) });
     return { rows, rowCount: rows.length };
   }
   const info = await seamRunAsync(ctx, sql, params);

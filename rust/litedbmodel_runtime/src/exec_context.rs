@@ -795,11 +795,61 @@ pub fn with_transaction_decided_isolated<'a, R>(
     use_writer_after_transaction: bool,
     body: impl FnOnce(&ExecutionContext) -> Result<TxDecision<R>, SqlFailure>,
 ) -> Result<R, SqlFailure> {
-    // Acquire the tx's OWNED connection from the WRITER pool of the CTX's named connection (Phase C) — or
-    // the single primary driver (base ctx) — WITHOUT issuing BEGIN (#93 / owner option A: the tx-control is
+    with_transaction_attempt(
+        ctx,
+        before_begin,
+        after_begin,
+        use_writer_after_transaction,
+        0,
+        body,
+    )
+}
+
+/// Acquire the tx's OWNED connection from the WRITER pool of the CTX's named connection (Phase C) — or
+/// the single primary driver (base ctx). `check_attempts > 0` (a retry after a connection error): the
+/// pool may still hold dead connections after a failover or a restart, so each acquired connection is
+/// first sent a harmless `SELECT 1` (directly on the connection, not through the middleware); one that
+/// fails it is destroyed and another acquired, at most `check_attempts` in all, and the last probe's
+/// error is returned when every one failed. The probe only shows the connection is usable, not whether
+/// the failed statement ran on the server. `0` ⇒ no probe (a first attempt). Twin of the TS
+/// `acquireCheckedConnection`.
+fn acquire_tx_connection<'a>(
+    ctx: &ExecutionContext<'a, '_>,
+    check_attempts: u32,
+) -> Result<Box<dyn TxConnection + 'a>, SqlFailure> {
+    let mut attempt: u32 = 0;
+    loop {
+        attempt += 1;
+        let mut tx: Box<dyn TxConnection + 'a> = ctx.tx_driver()?.acquire_tx()?;
+        if check_attempts == 0 {
+            return Ok(tx);
+        }
+        match tx.execute("SELECT 1", &[]) {
+            Ok(_) => return Ok(tx),
+            Err(e) => {
+                let _ = tx.release(true);
+                if attempt >= check_attempts {
+                    return Err(e);
+                }
+            }
+        }
+    }
+}
+
+/// [`with_transaction_decided_isolated`] with the acquisition's probe: `check_attempts > 0` is passed by
+/// the [`transaction_decided_on`] retry after a connection error ([`acquire_tx_connection`]).
+fn with_transaction_attempt<'a, R>(
+    ctx: &ExecutionContext<'a, '_>,
+    before_begin: &[String],
+    after_begin: &[String],
+    use_writer_after_transaction: bool,
+    check_attempts: u32,
+    body: impl FnOnce(&ExecutionContext) -> Result<TxDecision<R>, SqlFailure>,
+) -> Result<R, SqlFailure> {
+    // Acquire the tx's OWNED connection WITHOUT issuing BEGIN (#93 / owner option A: the tx-control is
     // seam-issued so a registered middleware observes it). The handle borrows the routing/driver (`'a`);
     // the slot holds it for the body AND for the seam-issued BEGIN/COMMIT/ROLLBACK on the SAME conn.
-    let tx: Box<dyn TxConnection + 'a> = ctx.tx_driver()?.acquire_tx()?;
+    let tx: Box<dyn TxConnection + 'a> = acquire_tx_connection(ctx, check_attempts)?;
     let guard = TxGuard::new(tx);
     let tx_ctx = ctx.with_tx_connection(&guard.slot);
 
@@ -1030,7 +1080,8 @@ pub fn transaction_on<'a, R>(
 ///   3. **retry** — a retryable failure (deadlock / serialization / connection error, via
 ///      [`crate::tx_options::is_retryable_tx_error`]) re-runs the WHOLE boundary on a FRESH owned
 ///      connection, up to `retry_limit`, with exponential backoff `retry_duration_ms · 2^(k-1)`. A
-///      non-retryable error re-raises immediately.
+///      non-retryable error re-raises immediately. After a connection error the fresh connection is
+///      one that passed a `SELECT 1` probe ([`acquire_tx_connection`]).
 pub fn transaction_decided<'a, R>(
     ctx: &ExecutionContext<'a, '_>,
     dialect: crate::tx_options::Dialect,
@@ -1078,17 +1129,21 @@ pub fn transaction_decided_on<'a, R>(
     };
 
     let mut attempt: u32 = 0;
+    // Set when the previous attempt failed with a connection error: this attempt then runs only on a
+    // connection that passed a probe, at most `retry_limit` tried ([`acquire_tx_connection`]).
+    let mut check_attempts: u32 = 0;
     loop {
         attempt += 1;
         // Set once the body returned a COMMIT decision (a rollback_only tx has no COMMIT stage).
         let commit_stage = std::cell::Cell::new(false);
         // ONE attempt on a FRESH owned connection (a retry after a connection error thus RECONNECTS),
         // acquired from the named connection's WRITER pool (Phase C) or the single primary driver.
-        let outcome = with_transaction_decided_isolated(
+        let outcome = with_transaction_attempt(
             ctx,
             &before_begin,
             &after_begin,
             options.use_writer_after_transaction,
+            check_attempts,
             |tx_ctx| {
                 let decided = body(tx_ctx)?;
                 commit_stage.set(!rollback_only && matches!(decided, TxDecision::Commit(_)));
@@ -1116,6 +1171,11 @@ pub fn transaction_decided_on<'a, R>(
                     && !commit_connection_error
                     && crate::tx_options::is_retryable_tx_error(&e)
                 {
+                    check_attempts = if crate::tx_options::is_connection_error(&e) {
+                        retry_limit
+                    } else {
+                        0
+                    };
                     // Exponential backoff before RETRYing the whole transaction on a fresh connection.
                     let backoff = options
                         .retry_duration_ms

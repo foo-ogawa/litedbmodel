@@ -1,8 +1,4 @@
-[**litedbmodel v2.2.14**](../README.md)
-
-***
-
-[litedbmodel](../globals.md) / SqlRef
+[API](../README.md) / SqlRef
 
 # Class: SqlRef
 
@@ -13,13 +9,10 @@ Created via `sql.ref()`. Only usable inside `sql` tagged templates.
 
 ## Constructors
 
-### Constructor
+### constructor
 
 ```ts
-new SqlRef(column: {
-  tableName: string;
-  columnName: string;
-}): SqlRef;
+new SqlRef(column: { tableName: string; columnName: string }): SqlRef;
 ```
 
 Defined in: [SqlFragment.ts:76](https://github.com/foo-ogawa/litedbmodel/blob/main/src/SqlFragment.ts#L76)
@@ -28,21 +21,15 @@ Defined in: [SqlFragment.ts:76](https://github.com/foo-ogawa/litedbmodel/blob/ma
 
 | Parameter | Type |
 | ------ | ------ |
-| `column` | \{ `tableName`: `string`; `columnName`: `string`; \} |
-| `column.tableName` | `string` |
-| `column.columnName` | `string` |
-
-#### Returns
-
-`SqlRef`
+| `column` | `{ tableName: string; columnName: string }` |
 
 ## Properties
 
-| Property | Modifier | Type | Defined in |
+| Property | Type | Description | Defined in |
 | ------ | ------ | ------ | ------ |
-| <a id="_tag"></a> `_tag` | `readonly` | `"SqlRef"` | [SqlFragment.ts:72](https://github.com/foo-ogawa/litedbmodel/blob/main/src/SqlFragment.ts#L72) |
-| <a id="tablename"></a> `tableName` | `readonly` | `string` | [SqlFragment.ts:73](https://github.com/foo-ogawa/litedbmodel/blob/main/src/SqlFragment.ts#L73) |
-| <a id="columnname"></a> `columnName` | `readonly` | `string` | [SqlFragment.ts:74](https://github.com/foo-ogawa/litedbmodel/blob/main/src/SqlFragment.ts#L74) |
+| <a id="_tag"></a> `_tag` (readonly) | `"SqlRef"` |  | [SqlFragment.ts:72](https://github.com/foo-ogawa/litedbmodel/blob/main/src/SqlFragment.ts#L72) |
+| <a id="tablename"></a> `tableName` (readonly) | `string` |  | [SqlFragment.ts:73](https://github.com/foo-ogawa/litedbmodel/blob/main/src/SqlFragment.ts#L73) |
+| <a id="columnname"></a> `columnName` (readonly) | `string` |  | [SqlFragment.ts:74](https://github.com/foo-ogawa/litedbmodel/blob/main/src/SqlFragment.ts#L74) |
 
 ## Methods
 
@@ -57,3 +44,4 @@ Defined in: [SqlFragment.ts:81](https://github.com/foo-ogawa/litedbmodel/blob/ma
 #### Returns
 
 `string`
+

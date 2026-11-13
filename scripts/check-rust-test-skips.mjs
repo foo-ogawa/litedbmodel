@@ -139,11 +139,21 @@ const LIVE_TESTS = [
   'd3_live_raw_execute_query_through_seam_and_logger',
   'isolation_retry_guard_and_nesting_mysql',
   'isolation_retry_guard_and_nesting_pg',
+  'mysql_decode_decimal_and_unsigned_bigint',
+  'mysql_returning_bigint_key',
+  'mysql_returning_bulk_auto_inc',
+  'mysql_returning_composite_key',
+  'mysql_returning_delete_locked',
+  'mysql_returning_insert_ignore',
+  'mysql_returning_update_by_key',
   'one_transaction_owns_one_connection_mysql',
   'one_transaction_owns_one_connection_pg',
   'phase_c_connection_routing_and_config',
   'tx_body_panic_leaves_no_open_transaction_mysql',
   'tx_body_panic_leaves_no_open_transaction_pg',
+  'tx_retry_after_admin_shutdown_pg',
+  'tx_retry_after_killed_pool_mysql',
+  'tx_retry_after_killed_pool_pg',
 ];
 
 /** Every `.rs` under `dir` — a target is LIVE when any source in its own tree reads a gate. */

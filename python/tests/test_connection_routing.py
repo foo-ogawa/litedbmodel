@@ -115,7 +115,8 @@ def test_session_statements_per_dialect():
     assert session_statements(resolve_connection_config(ConnectionConfig(driver="mysql", query_timeout=250))) == [
         "SET SESSION max_execution_time = 250"
     ]
-    assert session_statements(resolve_connection_config(ConnectionConfig(driver="mysql", charset="utf8mb4"))) == ["SET NAMES utf8mb4"]
+    # MySQL charset is a pymysql.connect option, not a session statement (#353)
+    assert session_statements(resolve_connection_config(ConnectionConfig(driver="mysql", charset="utf8mb4"))) == []
     # MySQL has no search path → ignored
     assert session_statements(resolve_connection_config(ConnectionConfig(driver="mysql", search_path="x"))) == []
     # All-default → EMPTY (backward-compat: session untouched)
@@ -132,7 +133,6 @@ def test_session_reset_statements_per_dialect():
     ]
     assert session_reset_statements(resolve_connection_config(ConnectionConfig(driver="mysql", query_timeout=1, charset="utf8mb4"))) == [
         "SET SESSION max_execution_time = DEFAULT",
-        "SET NAMES DEFAULT",
     ]
     assert session_reset_statements(resolve_connection_config()) == []
 

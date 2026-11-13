@@ -38,7 +38,8 @@
 //! ISOLATED [`Registry`] whose STACK is copied from the ambient one, but whose per-middleware STATE
 //! MAP starts EMPTY. Copying ONLY the stack (never the state map) is the exact isolation the TS M5
 //! mutation exposes — a copied state map would let concurrent scopes bleed per-request state. Absent
-//! a scope, registration mutates the [`global_registry`] (the app-startup path).
+//! a scope, registration mutates the [`global_registry`] (the app-startup path), which retains no
+//! state: outside a scope a middleware state is fresh per access (#364).
 //!
 //! Because the rust runtime executes on a single OS thread per seam call (the conformance/livedb
 //! runners are synchronous; the async livedb driver blocks the sync seam on a shared runtime), the
@@ -182,20 +183,40 @@ struct SharedDescriptor {
 /// The live per-scope registry: the ordered `SharedDescriptor` stack + the scope-local state map. This
 /// is the concrete thing a [`with_middleware_scope`] scope owns and the global default holds. Kept
 /// behind interior mutability so `use`/`register` mutate the CURRENT scope without a `&mut` thread.
-#[derive(Default)]
+/// The global default is not a scope and has NO state map: outside a scope a state is fresh per access
+/// and retained nowhere (the TS reference / v1 `getCurrentContext()` outside a request, #364).
 struct ScopeRegistry {
     stack: Vec<SharedDescriptor>,
-    states: RefCell<Vec<(u64, std::sync::Arc<StateAny>)>>,
+    /// `None` on the process-global registry, which retains no state.
+    states: Option<StateMap>,
 }
 
+/// A scope's state instances, keyed by the descriptor token.
+type StateMap = RefCell<Vec<(u64, std::sync::Arc<StateAny>)>>;
+
 impl ScopeRegistry {
+    /// The process-global registry: an empty stack and no state map.
+    const fn global() -> ScopeRegistry {
+        ScopeRegistry {
+            stack: Vec::new(),
+            states: None,
+        }
+    }
+
+    /// A scope's registry seeded with `stack`; its state map starts EMPTY.
+    fn scope(stack: Vec<SharedDescriptor>) -> ScopeRegistry {
+        ScopeRegistry {
+            stack,
+            states: Some(RefCell::new(Vec::new())),
+        }
+    }
+
     fn push(&mut self, d: SharedDescriptor) {
         self.stack.push(d);
     }
 
     fn clear(&mut self) {
         self.stack.clear();
-        self.states.borrow_mut().clear();
     }
 
     fn is_sql_empty(&self) -> bool {
@@ -209,10 +230,13 @@ impl ScopeRegistry {
 
     /// This scope's state for `token`, lazily built via the descriptor's `fresh_state` on first
     /// access (the rust analogue of the TS `stateFor` + `structuredClone`). Returns `None` if the
-    /// descriptor carries no state factory.
+    /// descriptor carries no state factory. A registry with no state map (the process-global one)
+    /// builds a fresh state per access and keeps none.
     fn state_for(&self, token: u64) -> Option<std::sync::Arc<StateAny>> {
-        if let Some((_, s)) = self.states.borrow().iter().find(|(t, _)| *t == token) {
-            return Some(s.clone());
+        if let Some(states) = &self.states {
+            if let Some((_, s)) = states.borrow().iter().find(|(t, _)| *t == token) {
+                return Some(s.clone());
+            }
         }
         let fresh = self
             .stack
@@ -220,12 +244,18 @@ impl ScopeRegistry {
             .find(|d| d.token == token)
             .and_then(|d| d.fresh_state.as_ref())?;
         let s: std::sync::Arc<StateAny> = std::sync::Arc::from(fresh());
-        self.states.borrow_mut().push((token, s.clone()));
+        if let Some(states) = &self.states {
+            states.borrow_mut().push((token, s.clone()));
+        }
         Some(s)
     }
 
-    /// Reset `token`'s state to a fresh instance (testing convenience — the TS `resetStateFor`).
+    /// Reset `token`'s state to a fresh instance (testing convenience — the TS `resetStateFor`). A
+    /// registry with no state map retains none, so there is nothing to reset.
     fn reset_state_for(&self, token: u64) {
+        let Some(states) = &self.states else {
+            return;
+        };
         let fresh = self
             .stack
             .iter()
@@ -233,7 +263,7 @@ impl ScopeRegistry {
             .and_then(|d| d.fresh_state.as_ref());
         if let Some(fresh) = fresh {
             let s: std::sync::Arc<StateAny> = std::sync::Arc::from(fresh());
-            let mut states = self.states.borrow_mut();
+            let mut states = states.borrow_mut();
             if let Some(slot) = states.iter_mut().find(|(t, _)| *t == token) {
                 slot.1 = s;
             } else {
@@ -245,10 +275,8 @@ impl ScopeRegistry {
     /// A COPY seeding a fresh scope: STACK copied (shares hook impls), STATE MAP empty. The exact
     /// stack-copy-not-state-map isolation the audit flagged.
     fn copy(&self) -> ScopeRegistry {
-        ScopeRegistry {
-            stack: self.stack.clone(), // STACK copied (shares hook impls via Arc).
-            states: RefCell::new(Vec::new()), // STATE MAP NOT copied — fresh empty per scope.
-        }
+        // STACK copied (shares hook impls via Arc); STATE MAP NOT copied — fresh empty per scope.
+        ScopeRegistry::scope(self.stack.clone())
     }
 }
 
@@ -263,10 +291,10 @@ thread_local! {
 
 /// The process-global default registry (app-startup `use` with no explicit scope). A `Mutex` because
 /// it is shared across threads (unlike the per-scope override, which is thread-local). Mirrors the TS
-/// module-level `globalRegistry`.
+/// module-level `globalRegistry`. It retains no state (#364).
 fn global_registry() -> &'static Mutex<ScopeRegistry> {
     static GLOBAL: OnceLock<Mutex<ScopeRegistry>> = OnceLock::new();
-    GLOBAL.get_or_init(|| Mutex::new(ScopeRegistry::default()))
+    GLOBAL.get_or_init(|| Mutex::new(ScopeRegistry::global()))
 }
 
 /// Run `f` with the CURRENT scope's registry (the thread-local override if inside a
@@ -322,7 +350,7 @@ pub fn with_middleware_scope_opts<R>(inherit: bool, f: impl FnOnce() -> R) -> R 
     let seed = if inherit {
         with_current(|reg| reg.copy())
     } else {
-        ScopeRegistry::default()
+        ScopeRegistry::scope(Vec::new())
     };
     REGISTRY_SCOPE.with(|scopes| scopes.borrow_mut().push(seed));
     // The method-hook registry (design §4 level 2) shares the SAME scope lifetime as the SQL registry:
@@ -645,8 +673,8 @@ impl LoggerState {
 /// read, write, tx-control, relation-batch — is logged (it is an `execute`-level hook). Register with
 /// [`use_middleware`]. Timing brackets the `next` call, so it measures the connection execute (chain
 /// remainder included), NOT just the record. The per-scope log lives on the handle's `state()`
-/// (concurrent scopes each collect their OWN entries — the isolation guarantee). Mirrors the TS
-/// `Logger`.
+/// (concurrent scopes each collect their OWN entries — the isolation guarantee). Outside a
+/// [`with_middleware_scope`] no entry is kept. Mirrors the TS `Logger`.
 pub fn logger() -> MiddlewareHandle<LoggerState> {
     // The hook needs to read THIS scope's LoggerState. It cannot capture the state (state is
     // per-scope, built lazily), so it looks the state up by the handle's token via the ambient
@@ -698,45 +726,92 @@ pub struct RawResult {
     pub row_count: Option<i64>,
 }
 
+/// The words of `sql` — maximal runs of ASCII `[A-Za-z0-9_]`, lowercased, with their byte spans: the
+/// `\b`-delimited words the TS `returnsRows` / `isReadOnlyStatement` regexes match on.
+fn sql_words(sql: &str) -> Vec<(String, usize, usize)> {
+    let b = sql.as_bytes();
+    let is_word = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < b.len() {
+        if is_word(b[i]) {
+            let start = i;
+            while i < b.len() && is_word(b[i]) {
+                i += 1;
+            }
+            out.push((sql[start..i].to_ascii_lowercase(), start, i));
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
+/// The statement's leading word (TS `^\s*(word)\b`): the first word, when only whitespace precedes it.
+fn leading_word<'w>(sql: &str, words: &'w [(String, usize, usize)]) -> Option<&'w str> {
+    words
+        .first()
+        .filter(|(_, start, _)| sql[..*start].chars().all(char::is_whitespace))
+        .map(|(w, _, _)| w.as_str())
+}
+
+/// Does `phrase` occur as consecutive words separated only by whitespace (TS `\bfor\s+update\b`)?
+fn has_phrase(sql: &str, words: &[(String, usize, usize)], phrase: &[&str]) -> bool {
+    words.windows(phrase.len()).any(|win| {
+        win.iter().zip(phrase).all(|((w, _, _), p)| w == p)
+            && win
+                .windows(2)
+                .all(|pair| sql[pair[0].2..pair[1].1].chars().all(char::is_whitespace))
+    })
+}
+
 /// Does `sql` return rows (SELECT / …RETURNING / WITH…SELECT / SHOW / PRAGMA / VALUES / EXPLAIN /
 /// TABLE)? Mirrors the TS `returnsRows`.
 fn returns_rows(sql: &str) -> bool {
-    let head = sql.trim_start().to_ascii_lowercase();
-    const PREFIXES: [&str; 8] = [
-        "select",
-        "with",
-        "show",
-        "pragma",
-        "values",
-        "explain",
-        "table",
-        "returning",
-    ];
-    if PREFIXES
-        .iter()
-        .take(7)
-        .any(|p| head.starts_with(p) && word_boundary_after(&head, p.len()))
-    {
-        return true;
-    }
-    // A `RETURNING` anywhere (INSERT/UPDATE/DELETE … RETURNING) returns rows.
-    sql.to_ascii_lowercase().contains("returning")
+    let words = sql_words(sql);
+    matches!(
+        leading_word(sql, &words),
+        Some("select" | "with" | "show" | "pragma" | "values" | "explain" | "table")
+    ) || has_phrase(sql, &words, &["returning"])
 }
 
-fn word_boundary_after(s: &str, at: usize) -> bool {
-    s[at..]
-        .chars()
-        .next()
-        .map(|c| !c.is_alphanumeric() && c != '_')
-        .unwrap_or(true)
+/// Is `sql` certainly read-only — may it go to the reader? Anything not certain takes the write intent:
+/// a row lock (FOR UPDATE / FOR NO KEY UPDATE / FOR SHARE / FOR KEY SHARE / LOCK IN SHARE MODE) or an
+/// INTO anywhere is a write; a WITH / EXPLAIN statement is read-only only if it carries no insert /
+/// update / delete / merge word (a data-modifying CTE writes; EXPLAIN ANALYZE runs the statement); a
+/// select / show / pragma / values / table statement is read-only unless it has a RETURNING. Mirrors
+/// the TS `isReadOnlyStatement`.
+fn is_read_only_statement(sql: &str) -> bool {
+    let words = sql_words(sql);
+    const LOCK_OR_INTO: [&[&str]; 6] = [
+        &["for", "update"],
+        &["for", "share"],
+        &["for", "no", "key", "update"],
+        &["for", "key", "share"],
+        &["lock", "in", "share", "mode"],
+        &["into"],
+    ];
+    if LOCK_OR_INTO.iter().any(|p| has_phrase(sql, &words, p)) {
+        return false;
+    }
+    match leading_word(sql, &words) {
+        Some("with" | "explain") => !["insert", "update", "delete", "merge"]
+            .iter()
+            .any(|w| has_phrase(sql, &words, &[*w])),
+        Some("select" | "show" | "pragma" | "values" | "table") => {
+            !has_phrase(sql, &words, &["returning"])
+        }
+        _ => false,
+    }
 }
 
 /// Raw **synchronous** `execute(sql, params)` THROUGH the seam (design §4 D3): a registered SQL hook
 /// intercepts it, connection routing resolves the connection, and an ambient transaction (if the ctx
 /// is tx-scoped) applies — because it is the SAME [`crate::exec_context::execute`] / `run` seam the
 /// ORM uses, not a direct driver call. A row-returning statement runs `execute`; a non-returning one
-/// runs `run`. `write` forces the write intent (writer routing / tx connection). Mirrors the TS
-/// `rawExecute`.
+/// runs `run`. A row-returning statement takes the write intent (writer routing / tx connection) unless
+/// it is certainly read-only ([`is_read_only_statement`]: `INSERT … RETURNING` and `SELECT … FOR UPDATE`
+/// go to the writer); `write` forces the write intent. Mirrors the TS `rawExecute`.
 pub fn raw_execute(
     ctx: &ExecutionContext,
     sql: &str,
@@ -744,7 +819,7 @@ pub fn raw_execute(
     write: bool,
 ) -> Result<RawResult, SqlFailure> {
     if returns_rows(sql) {
-        let intent = if write {
+        let intent = if write || !is_read_only_statement(sql) {
             StatementIntent::write()
         } else {
             StatementIntent::read()
@@ -1446,6 +1521,43 @@ mod tests {
         });
     }
 
+    /// #364: the process-global registry (every statement outside a `with_middleware_scope`) builds a
+    /// fresh state per access and keeps none, so an unscoped request does not see another's entries;
+    /// a scope still keeps its own (`d3_logger_records_sql_params_timing`). Driven on a registry built
+    /// the way the global one is, because registering on the real global would race the parallel
+    /// `d1_red_shared_registry_would_cross_talk` assertion that the global stack is empty.
+    #[test]
+    fn d3_unscoped_state_is_fresh_per_access_and_never_retained() {
+        fn record(state: std::sync::Arc<StateAny>, n: usize) {
+            let ls = state.downcast_ref::<LoggerState>().unwrap();
+            for _ in 0..n {
+                ls.entries.lock().unwrap().push(LogEntry {
+                    sql: "SELECT 1".to_string(),
+                    params: Vec::new(),
+                    duration_ms: 0,
+                });
+            }
+        }
+        let entries = |state: std::sync::Arc<StateAny>| {
+            state.downcast_ref::<LoggerState>().unwrap().entries()
+        };
+        let lg = logger();
+        let mut global = ScopeRegistry::global();
+        global.push(lg.shared());
+        // Request A: N unscoped statements, each recording into the state its access resolved.
+        for _ in 0..50 {
+            record(global.state_for(lg.token).unwrap(), 1);
+        }
+        // Request B (also unscoped) sees none of A's entries, and nothing was retained.
+        assert!(entries(global.state_for(lg.token).unwrap()).is_empty());
+        assert!(global.states.is_none());
+        assert!(global_registry().lock().unwrap().states.is_none());
+        // A scope keeps its own.
+        let scope = global.copy();
+        record(scope.state_for(lg.token).unwrap(), 2);
+        assert_eq!(entries(scope.state_for(lg.token).unwrap()).len(), 2);
+    }
+
     #[test]
     fn d3_red_logger_without_wiring_records_nothing() {
         let db = fresh_db();
@@ -1483,6 +1595,47 @@ mod tests {
                 "SELECT name FROM t".to_string()
             ]
         );
+    }
+
+    /// `raw_execute` routes a row-returning statement to the reader only when it is certainly read-only
+    /// (the TS `rawExecute`): an INSERT … RETURNING, a SELECT … FOR UPDATE / FOR SHARE / LOCK IN SHARE
+    /// MODE / INTO and a data-modifying CTE go to the writer; a function-calling SELECT is still a read.
+    #[test]
+    fn d3_raw_execute_routes_non_read_only_to_writer() {
+        use crate::connection_routing::test_support::{recording_stub, SeamLog};
+        use crate::connection_routing::{
+            ConnectionRegistry, ReaderWriterPools, RoutingConfig, WriterStickyClock,
+        };
+        let cases = [
+            ("INSERT INTO t (name) VALUES (?) RETURNING id", "writer"),
+            ("SELECT id FROM t WHERE id = ? FOR UPDATE", "writer"),
+            ("SELECT id FROM t WHERE id = ? FOR NO KEY UPDATE", "writer"),
+            ("SELECT id FROM t WHERE id = ? FOR SHARE", "writer"),
+            ("SELECT id FROM t WHERE id = ? LOCK IN SHARE MODE", "writer"),
+            ("SELECT id INTO @v FROM t", "writer"),
+            (
+                "WITH x AS (UPDATE t SET name = ? RETURNING id) SELECT * FROM x",
+                "writer",
+            ),
+            ("SELECT name FROM t WHERE id = ?", "reader"),
+            ("SELECT COUNT(*) FROM t", "reader"),
+            ("WITH x AS (SELECT 1 AS a) SELECT * FROM x", "reader"),
+        ];
+        for (sql, want) in cases {
+            let log: SeamLog = Arc::new(StdMutex::new(Vec::new()));
+            let routing = RoutingConfig {
+                registry: ConnectionRegistry::from_default(ReaderWriterPools::split(
+                    recording_stub("reader", &log),
+                    recording_stub("writer", &log),
+                ))
+                .build()
+                .unwrap(),
+                sticky: WriterStickyClock::disabled(),
+            };
+            let ctx = exec_context::for_routing(&routing).unwrap();
+            raw_execute(&ctx, sql, &[], false).unwrap();
+            assert_eq!(*log.lock().unwrap(), vec![format!("{want}:all")], "{sql}");
+        }
     }
 
     #[test]

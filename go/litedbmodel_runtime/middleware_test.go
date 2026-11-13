@@ -729,6 +729,39 @@ func TestD3LoggerRed(t *testing.T) {
 	}
 }
 
+// #364: outside a scope a state is fresh per access and the process-global registry retains none, so
+// an unscoped request does not see another's entries; a globally registered Logger still calls its Sink.
+// (Inside a scope the Logger still collects its own entries — TestD3Logger.)
+func TestD3LoggerUnscopedRetainsNothing(t *testing.T) {
+	db := mwDB(t)
+	defer db.Close()
+	ClearMiddlewares()
+	defer ClearMiddlewares()
+	sunk := 0
+	logger := Logger(LoggerOptions{Sink: func(LogEntry) { sunk++ }})
+	RegisterMiddleware(context.Background(), logger.Descriptor())
+	ctx := ContextForDB(db)
+	// Request A: N unscoped statements.
+	for i := 0; i < 50; i++ {
+		if _, err := Execute(ctx, "SELECT ?", []any{i}, ReadIntent()); err != nil {
+			t.Fatalf("execute: %v", err)
+		}
+	}
+	if sunk != 50 {
+		t.Fatalf("sink: got %d entries want 50", sunk)
+	}
+	// Request B (also unscoped) sees none of A's entries, and the global registry retained none.
+	if got := logger.State(context.Background()).(*LoggerState).Entries(); len(got) != 0 {
+		t.Errorf("an unscoped request sees %d entries of another", len(got))
+	}
+	globalRegistry.mu.Lock()
+	retained := len(globalRegistry.states)
+	globalRegistry.mu.Unlock()
+	if retained != 0 {
+		t.Errorf("the process-global registry retained %d states", retained)
+	}
+}
+
 // RawExecute goes THROUGH the seam — a registered SQL middleware sees it (both a write and a read).
 func TestD3RawExecuteThroughSeam(t *testing.T) {
 	db := mwDB(t)
@@ -760,6 +793,39 @@ func TestD3RawExecuteThroughSeam(t *testing.T) {
 	want := []string{"INSERT INTO t (name) VALUES (?)", "SELECT name FROM t"}
 	if !equalStrs(seen, want) {
 		t.Errorf("rawExecute through seam: got %v want %v", seen, want)
+	}
+}
+
+// RawExecute routes a row-returning statement to the reader only when it is certainly read-only: an
+// INSERT … RETURNING, a SELECT … FOR UPDATE / FOR SHARE / LOCK IN SHARE MODE / INTO and a data-modifying
+// CTE take the write intent (the TS rawExecute). A function-calling SELECT is still a read.
+func TestD3RawExecuteRoutesNonReadOnlyToWriter(t *testing.T) {
+	cases := []struct {
+		sql  string
+		want string
+	}{
+		{"INSERT INTO t (name) VALUES (?) RETURNING id", "writer"},
+		{"SELECT id FROM t WHERE id = ? FOR UPDATE", "writer"},
+		{"SELECT id FROM t WHERE id = ? FOR NO KEY UPDATE", "writer"},
+		{"SELECT id FROM t WHERE id = ? FOR SHARE", "writer"},
+		{"SELECT id FROM t WHERE id = ? LOCK IN SHARE MODE", "writer"},
+		{"SELECT id INTO @v FROM t", "writer"},
+		{"WITH x AS (UPDATE t SET name = ? RETURNING id) SELECT * FROM x", "writer"},
+		{"SELECT name FROM t WHERE id = ?", "reader"},
+		{"SELECT COUNT(*) FROM t", "reader"},
+		{"WITH x AS (SELECT 1 AS a) SELECT * FROM x", "reader"},
+	}
+	for _, c := range cases {
+		var log []string
+		reader := newRecordPool("reader", &log)
+		writer := newRecordPool("writer", &log)
+		ctx := ContextForRouting(routingWithPools(reader, writer, NewWriterStickyClock(StickyOptions{UseWriterAfterTransaction: boolPtr(false)})), nil)
+		if _, err := RawExecute(ctx, c.sql, nil, RawExecuteOptions{}); err != nil {
+			t.Fatalf("%s: %v", c.sql, err)
+		}
+		if !equalStrs(log, []string{c.want}) {
+			t.Errorf("%s: routed to %v, want [%s]", c.sql, log, c.want)
+		}
 	}
 }
 

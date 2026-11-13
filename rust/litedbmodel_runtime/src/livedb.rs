@@ -42,7 +42,7 @@ use sqlx::{Column, MySqlPool, Row, TypeInfo, ValueRef as SqlxValueRef};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::runtime::Runtime;
-use tokio_postgres::types::{ToSql, Type as PgType};
+use tokio_postgres::types::{Kind, ToSql, Type as PgType};
 use tokio_postgres::NoTls;
 
 use crate::connection_routing::{
@@ -558,25 +558,55 @@ impl ToSql for PgParam {
         ty: &PgType,
         out: &mut tokio_postgres::types::private::BytesMut,
     ) -> Result<tokio_postgres::types::IsNull, Box<dyn std::error::Error + Sync + Send>> {
+        // Every arm writes the binary form of `ty` itself, holding EXACTLY the bound value; a value
+        // `ty` cannot hold, or a (value, type) pair no arm encodes, fails the bind (#349). Writing a
+        // narrowed value or another type's bytes instead makes the server read a different value —
+        // `as i32` turned id 4294967298 into row 2, raw i64 bytes in a NUMERIC slot read as 0.00.
         match self {
             PgParam::Null => Ok(tokio_postgres::types::IsNull::Yes),
-            PgParam::Bool(b) => b.to_sql(ty, out),
-            // Serialize the integer in the WIDTH the target column expects (int2/int4/int8): bc has
-            // one i64 int, but PG's binary protocol requires the exact width for the inferred param
-            // type — binding i64 into an int4 slot fails ("incorrect binary data format").
+            PgParam::Bool(b) if *ty == PgType::BOOL => b.to_sql(ty, out),
+            // Serialize the integer in the type PG inferred for the param: bc has one i64 int, but
+            // PG's binary protocol requires the exact width (int2/int4/int8) — and a value outside
+            // that width is an error, as the server's own cast reports "integer out of range".
             PgParam::Int(i) => match *ty {
-                PgType::INT2 => (*i as i16).to_sql(ty, out),
-                PgType::INT4 => (*i as i32).to_sql(ty, out),
+                PgType::INT2 => i16::try_from(*i)
+                    .map_err(|_| unbindable(self, ty))?
+                    .to_sql(ty, out),
+                PgType::INT4 => i32::try_from(*i)
+                    .map_err(|_| unbindable(self, ty))?
+                    .to_sql(ty, out),
                 PgType::INT8 => i.to_sql(ty, out),
-                // A non-integer target (e.g. text created_at) — bind the decimal text so the server
-                // coerces it exactly as it would a literal.
-                PgType::TEXT | PgType::VARCHAR | PgType::BPCHAR | PgType::UNKNOWN => {
-                    i.to_string().to_sql(ty, out)
+                PgType::NUMERIC => rust_decimal::Decimal::from(*i).to_sql(ty, out),
+                // A float target holds the integer only when the float is that integer exactly.
+                PgType::FLOAT4 if (*i as f32) as i128 == i128::from(*i) => {
+                    (*i as f32).to_sql(ty, out)
                 }
-                _ => i.to_sql(ty, out),
+                PgType::FLOAT8 if (*i as f64) as i128 == i128::from(*i) => {
+                    (*i as f64).to_sql(ty, out)
+                }
+                // A text target (e.g. text created_at) — bind the decimal text so the server
+                // coerces it exactly as it would a literal.
+                _ if <&str as ToSql>::accepts(ty) => i.to_string().to_sql(ty, out),
+                _ => Err(unbindable(self, ty)),
             },
             PgParam::Float(f) => match *ty {
-                PgType::FLOAT4 => (*f as f32).to_sql(ty, out),
+                PgType::FLOAT8 => f.to_sql(ty, out),
+                // float8 → float4 rounds to the nearest float4, as PG's own cast does; like that
+                // cast, a finite value that overflows to infinity or underflows to zero fails.
+                PgType::FLOAT4 => {
+                    let narrowed = *f as f32;
+                    if f.is_finite() && (narrowed.is_infinite() || (narrowed == 0.0 && *f != 0.0)) {
+                        return Err(unbindable(self, ty));
+                    }
+                    narrowed.to_sql(ty, out)
+                }
+                // An integer target holds the float only when it is finite, integral and in range;
+                // the width check is the Int arm's (`*f as i128` is exact for an integral |f| <
+                // 2^127 and saturates beyond, which `i64::try_from` then rejects).
+                PgType::INT2 | PgType::INT4 | PgType::INT8 if f.is_finite() && f.fract() == 0.0 => {
+                    let n = i64::try_from(*f as i128).map_err(|_| unbindable(self, ty))?;
+                    PgParam::Int(n).to_sql(ty, out)
+                }
                 // A `numeric` target (`= ANY($1)` over a NUMERIC/DECIMAL column, #46 item 4): PG
                 // infers `numeric[]` and expects each element in NUMERIC binary — a bare f64 into a
                 // numeric slot fails ("db error"). Encode the exact NUMERIC via rust_decimal.
@@ -589,7 +619,7 @@ impl ToSql for PgParam {
                     )?;
                     d.to_sql(ty, out)
                 }
-                _ => f.to_sql(ty, out),
+                _ => Err(unbindable(self, ty)),
             },
             // A UUID column/element: PG's binary protocol expects the 16-byte form, and
             // `String::to_sql` only accepts text types — so serialize the canonical hex string to
@@ -627,24 +657,41 @@ impl ToSql for PgParam {
                 )?;
                 d.to_sql(ty, out)
             }
-            PgParam::Str(s) => s.to_sql(ty, out),
+            // The types whose binary form IS the UTF-8 text: the text-like set tokio-postgres's own
+            // `&str` accepts (text / varchar / bpchar / name / unknown / citext / ltree…), `json`,
+            // and an enum (its label). Not `jsonb`, whose binary form starts with a version byte.
+            PgParam::Str(s)
+                if <&str as ToSql>::accepts(ty)
+                    || *ty == PgType::JSON
+                    || matches!(ty.kind(), Kind::Enum(_)) =>
+            {
+                s.to_sql(ty, out)
+            }
             // A `= ANY($1)` / `= ANY($1::T[])` array param: `ty` is the ARRAY type PG inferred from
             // the column (e.g. `_int4`, `_uuid`, `_text`). Delegate to tokio-postgres's slice array
             // serialization, which reads `ty.kind() == Array(member)` and serializes each element in
             // the width the column's element type expects (the same width-aware path the scalars use
             // above, since each element is itself a `PgParam` whose `to_sql` sees the member type).
-            PgParam::Array(elems) => elems
+            // Only for an array `ty`: the slice serializer panics on any other.
+            PgParam::Array(elems) if matches!(ty.kind(), Kind::Array(_)) => elems
                 .as_slice()
                 .to_sql(ty, out)
                 .map(|_| tokio_postgres::types::IsNull::No),
+            _ => Err(unbindable(self, ty)),
         }
     }
-    // Accept any target column type — the DB coerces the text/number param. We never reject at the
-    // client so a well-formed rendered param binds; a genuine type error surfaces from the server.
+    // Every type is accepted because a NULL binds to any of them. Whether a non-NULL value has an
+    // exact encoding as `ty` depends on the value, so `to_sql` decides it and fails the bind when not.
     fn accepts(_ty: &PgType) -> bool {
         true
     }
     tokio_postgres::types::to_sql_checked!();
+}
+
+/// The bind error for a value `ty` cannot hold exactly, or a (value, type) pair no
+/// [`PgParam::to_sql`] arm encodes.
+fn unbindable(p: &PgParam, ty: &PgType) -> Box<dyn std::error::Error + Sync + Send> {
+    format!("scp pg driver: {p:?} has no exact encoding as a {ty} parameter").into()
 }
 
 /// A `uuid` column read as its canonical text. tokio-postgres has no built-in `String`
@@ -686,14 +733,23 @@ impl<'a> tokio_postgres::types::FromSql<'a> for PgUuidText {
 
 /// Parse a canonical UUID text (`xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`, hyphens optional) to its 16
 /// raw bytes — the wire form PG's binary `uuid` param expects. Returns `None` on a malformed input.
+///
+/// Reads the input as BYTES, one ASCII hex digit each: any other byte (a sign, a non-hex letter,
+/// any byte of a multi-byte character) is malformed. Slicing the `str` at byte offsets panicked
+/// when an offset fell inside a character (#350).
 fn uuid_text_to_bytes(s: &str) -> Option<[u8; 16]> {
-    let hex: String = s.chars().filter(|c| *c != '-').collect();
-    if hex.len() != 32 {
-        return None;
-    }
+    let mut digits = s
+        .bytes()
+        .filter(|b| *b != b'-')
+        .map(|b| char::from(b).to_digit(16));
     let mut bytes = [0u8; 16];
-    for (i, b) in bytes.iter_mut().enumerate() {
-        *b = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).ok()?;
+    for b in bytes.iter_mut() {
+        let hi = digits.next()??;
+        let lo = digits.next()??;
+        *b = (hi * 16 + lo) as u8;
+    }
+    if digits.next().is_some() {
+        return None;
     }
     Some(bytes)
 }
@@ -1076,21 +1132,35 @@ fn my_cell_to_wire(row: &MySqlRow, idx: usize) -> Result<WireValue, SqlFailure> 
         return Ok(WireValue::Null);
     }
     let type_name = col.type_info().name().to_ascii_uppercase();
-    // Integer families → Num; float/decimal → Num; everything else → string. An UNSIGNED integer
-    // column (e.g. the `ROW_NUMBER() OVER (...) AS _rn` window column MySQL types as BIGINT UNSIGNED
-    // in a limited-hasMany relation batch) decodes as u64 in sqlx, so read it as u64 then narrow to
-    // the bc i64 int (the corpus values are well within the i64 range).
+    // Integer families → Int; FLOAT/DOUBLE → Float; DECIMAL → its exact decimal text; everything else →
+    // string.
     let v = if type_name.contains("INT") {
         if type_name.contains("UNSIGNED") {
-            row.try_get::<u64, _>(idx).map(|u| WireValue::int(u as i64))
-        } else {
-            row.try_get::<i64, _>(idx).map(WireValue::int)
+            // An UNSIGNED integer column (e.g. the `ROW_NUMBER() OVER (...) AS _rn` window column MySQL
+            // types as BIGINT UNSIGNED in a limited-hasMany relation batch) decodes as u64 in sqlx. The
+            // wire int is an i64, so a BIGINT UNSIGNED value of 2^63 or more has no Int to become —
+            // casting it would wrap it negative (a different value: a key read that way names no row),
+            // so it FAILS LOUDLY instead.
+            let u = row
+                .try_get::<u64, _>(idx)
+                .map_err(|e| driver_failure(format!("mysql decode col {}: {e}", col.name())))?;
+            return i64::try_from(u).map(WireValue::int).map_err(|_| {
+                driver_failure(format!(
+                    "mysql decode col {}: BIGINT UNSIGNED value {u} is outside the int range (an i64)",
+                    col.name()
+                ))
+            });
         }
-    } else if type_name.contains("FLOAT")
-        || type_name.contains("DOUBLE")
-        || type_name.contains("DECIMAL")
-    {
+        row.try_get::<i64, _>(idx).map(WireValue::int)
+    } else if type_name.contains("FLOAT") || type_name.contains("DOUBLE") {
         row.try_get::<f64, _>(idx).map(WireValue::float)
+    } else if type_name.contains("DECIMAL") {
+        // DECIMAL is an EXACT decimal, read as its decimal TEXT (`src/scp/coltype.ts`: decimal →
+        // string; PG's NUMERIC reads the same way) — never through an f64, which would round it, and
+        // which sqlx-mysql refuses for DECIMAL anyway. MySQL sends DECIMAL as that text on both
+        // protocols; sqlx's `String` decoder only declines the column TYPE, so decode it unchecked.
+        row.try_get_unchecked::<String, _>(idx)
+            .map(|t| WireValue::Str(t.into()))
     } else if type_name.contains("BOOL") {
         // MySQL `TINYINT(1)` surfaces to sqlx as `BOOLEAN`; the v2 read types a boolean column as an
         // INTEGER 0/1 (the resolver maps it to int, matching the sqlite path), so decode bool → int.
@@ -1150,7 +1220,42 @@ enum ReselectBind {
     Param(usize),
 }
 
+/// How many rows an INSERT wrote — the count its recovered rows must equal (mysql-returning.ts
+/// `WrittenRows`).
+#[derive(Clone, Copy)]
+enum WrittenRows {
+    /// The affected count: a plain INSERT / `INSERT IGNORE` never updates a row, so CLIENT_FOUND_ROWS
+    /// cannot change it — it IS the number of rows inserted.
+    Affected,
+}
+
+/// How many rows the write wrote, from its own result (mysql-returning.ts `writtenRowCount`); `None` ⇒
+/// not countable.
+fn written_row_count(written: Option<WrittenRows>, affected: i64) -> Option<i64> {
+    written.map(|WrittenRows::Affected| affected)
+}
+
+/// MySQL's duplicate-key error (ER_DUP_ENTRY): the conflict a [`MysqlReselect::duplicate_is_skip`]
+/// write skipped (mysql-returning.ts `MYSQL_ER_DUP_ENTRY`).
+const MYSQL_ER_DUP_ENTRY: u16 = 1062;
+
+/// Fail closed when the recovered row count differs from the count the write wrote: the SELECT then
+/// named rows the write did not write (or missed ones it did).
+fn check_recovered(
+    recovered: usize,
+    written: Option<i64>,
+    write_sql: &str,
+) -> Result<(), SqlFailure> {
+    match written {
+        Some(n) if recovered as i64 != n => Err(driver_failure(format!(
+            "scp write(mysql): the write wrote {n} row(s) but its RETURNING recovery found {recovered} — refusing to return rows it cannot attribute to this write ('{write_sql}')"
+        ))),
+        _ => Ok(()),
+    }
+}
+
 /// The MySQL RETURNING re-select derived from a write's baked SQL + its `/*scp:pk=…;conflict=…*/` hint.
+#[derive(Default)]
 struct MysqlReselect {
     /// The write to execute (RETURNING clause + hint stripped — byte-clean for the prepared protocol).
     write_sql: String,
@@ -1158,6 +1263,28 @@ struct MysqlReselect {
     select_sql: String,
     /// How to bind `select_sql`'s `?` from `(params, last_insert_id, rows_affected)`.
     binds: Vec<ReselectBind>,
+    /// How many rows the write wrote ([`written_row_count`]); `None` ⇒ not countable (an upsert /
+    /// UPDATE / DELETE).
+    written: Option<WrittenRows>,
+    /// A consistent read run BEFORE the write in the same transaction (empty ⇒ none): a bulk INSERT's
+    /// AUTO_INCREMENT ids are not consecutive, and anchoring the read view first hides the rows other
+    /// sessions insert meanwhile from the recovering SELECT (mysql-returning.ts `anchorSql`).
+    anchor_sql: String,
+    /// An UPDATE's lock-and-key step, run BEFORE the write (empty ⇒ none): `SELECT <pk> … WHERE <where>
+    /// … FOR UPDATE` names — and locks — exactly the rows the UPDATE is about to write (bound by
+    /// `lock_binds`). Its rows are recovered by THOSE keys: `select_sql` is then the head
+    /// `SELECT <cols> FROM <table> WHERE (<pk>) IN ` that [`keyed_select_sql`] completes.
+    lock_sql: String,
+    lock_binds: Vec<ReselectBind>,
+    /// The key columns `lock_sql` reads, in order (the declared PK).
+    key_cols: Vec<String>,
+    /// A single-row insert-or-ignore (mysql-returning.ts `duplicateIsSkip`): `write_sql` is the PLAIN
+    /// INSERT — its no-op `ON DUPLICATE KEY UPDATE c = c` tail removed — so a conflict on ANY unique key
+    /// raises the duplicate-key error ([`MYSQL_ER_DUP_ENTRY`]) instead of silently doing nothing. That
+    /// error IS the skipped conflict: MySQL rolls back only the statement, and the write returns no rows.
+    /// No affected count is read (sqlx opens every connection with CLIENT_FOUND_ROWS) and no lock is
+    /// taken, so it holds under every isolation level.
+    duplicate_is_skip: bool,
     /// Run the SELECT BEFORE the write instead of after. Only a DELETE needs this: its rows are gone
     /// once it has run, so the pre-image IS the written row set (the rows the DELETE removes).
     before: bool,
@@ -1168,6 +1295,8 @@ fn table_of(write_sql: &str) -> Option<String> {
     let lower = write_sql.to_ascii_lowercase();
     let after = if let Some(p) = lower.find("insert into ") {
         p + "insert into ".len()
+    } else if let Some(p) = lower.find("insert ignore into ") {
+        p + "insert ignore into ".len()
     } else if let Some(p) = lower.find("delete from ") {
         p + "delete from ".len()
     } else {
@@ -1186,22 +1315,29 @@ fn table_of(write_sql: &str) -> Option<String> {
     }
 }
 
-/// The JOIN key column of an updateMany (the `ON <alias>.<col> = JSON_UNQUOTE(...)` predicate).
-fn update_batch_key(write_sql: &str) -> Option<String> {
+/// EVERY JOIN key column of an updateMany — the target-side column of each `AND`-joined conjunct of
+/// `ON u.k1 = <v.k1> AND u.k2 = <v.k2> SET …` (json-batch.ts `mysqlUpdateManyJson`). A composite key
+/// keyed on its first column alone names rows the write never touched. `None` ⇒ unparsable.
+fn update_batch_keys(write_sql: &str) -> Option<Vec<String>> {
     let lower = write_sql.to_ascii_lowercase();
     let on = lower.find(" on ")? + " on ".len();
-    let seg_end = lower[on..]
-        .find(" set ")
-        .map(|i| on + i)
-        .unwrap_or(write_sql.len());
-    let seg = &write_sql[on..seg_end]; // e.g. `u.id = JSON_UNQUOTE(v.id)`
-    let lhs = seg.split('=').next()?.trim(); // `u.id`
-    let col = lhs.rsplit('.').next()?.trim().to_string(); // `id`
-    if col.is_empty() {
-        None
-    } else {
-        Some(col)
-    }
+    let seg_end = on + lower[on..].find(" set ")?;
+    // e.g. `u.tenant_id = v.tenant_id and u.id = v.id`, split on its (lowercased) ` and `.
+    lower[on..seg_end]
+        .split(" and ")
+        .scan(on, |at, conj| {
+            let start = *at;
+            *at += conj.len() + " and ".len();
+            Some(&write_sql[start..start + conj.len()])
+        })
+        .map(|conj| {
+            let lhs = conj.split('=').next()?.trim(); // `u.id`
+            let col = lhs.rsplit('.').next()?.trim(); // `id`
+            let ident =
+                !col.is_empty() && col.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+            ident.then(|| col.to_string())
+        })
+        .collect()
 }
 
 /// The `conflict=<cols>` field of a `/*scp:pk=…;conflict=col1,col2*/` hint (the upsert conflict-target
@@ -1212,12 +1348,20 @@ fn parse_conflict_hint(s: &str) -> Vec<String> {
         None => return Vec::new(),
     };
     let rest = &s[start..];
-    let end = rest.find("*/").unwrap_or(rest.len());
+    // The field runs to the next `;` field (`;action=…`) or the end of the hint.
+    let end = rest.find([';', '*']).unwrap_or(rest.len());
     rest[..end]
         .split(',')
         .map(|c| c.trim().to_string())
         .filter(|c| !c.is_empty())
         .collect()
+}
+
+/// The hint's `;action=ignore` field (an insert-or-ignore).
+fn parse_ignore_hint(s: &str) -> bool {
+    s.find(";action=ignore")
+        .map(|i| s[i + ";action=ignore".len()..].starts_with([';', '*']))
+        .unwrap_or(false)
 }
 
 /// Derive the MySQL RETURNING recovery for a write, or `Ok(None)` when the statement declares no
@@ -1241,7 +1385,17 @@ fn build_mysql_reselect(sql: &str) -> Result<Option<MysqlReselect>, SqlFailure> 
         .to_string();
     let (pk_cols, auto_inc) = parse_pk_hint(hint_region);
     let conflict_cols = parse_conflict_hint(hint_region);
-    let write_sql = strip_pk_hint(&sql[..ret_pos]).trim().to_string();
+    let mut write_sql = strip_pk_hint(&sql[..ret_pos]).trim().to_string();
+    // An insert-or-ignore is spelled `ON DUPLICATE KEY UPDATE c = c` — it reads like an upsert, but it
+    // writes NOTHING on a conflict. It runs as the plain INSERT instead, so the conflict it skips is a
+    // duplicate-key error rather than a no-op that reports like an insert (`duplicate_is_skip`).
+    let odku = write_sql
+        .to_ascii_lowercase()
+        .find(" on duplicate key update ");
+    let duplicate_is_skip = parse_ignore_hint(hint_region) && odku.is_some();
+    if let (true, Some(at)) = (duplicate_is_skip, odku) {
+        write_sql = write_sql[..at].trim().to_string();
+    }
     let wl = write_sql.to_ascii_lowercase();
     let Some(table) = table_of(&write_sql) else {
         return Err(driver_failure(format!(
@@ -1256,46 +1410,145 @@ fn build_mysql_reselect(sql: &str) -> Result<Option<MysqlReselect>, SqlFailure> 
     };
     let is_batch = wl.contains("json_table(");
     let insert_cols = parse_insert_cols(&write_sql);
-    let json_select = |key: &str| {
-        format!(
-            "SELECT {cols} FROM {table} WHERE {k} IN (SELECT JSON_UNQUOTE(jt.{k}) FROM JSON_TABLE(?, '$[*]' COLUMNS({k} JSON PATH '$.{k}')) jt){order_by}",
-            k = key
-        )
-    };
-
-    // upsert / upsertMany — recover by the CONFLICT key. MySQL does not report which row an
-    // ON DUPLICATE KEY UPDATE touched, so the AUTO_INCREMENT range is wrong once a row was updated.
-    if wl.starts_with("insert") && wl.contains("on duplicate key update") {
-        let Some(conflict) = conflict_cols.first() else {
+    let is_insert = wl.starts_with("insert");
+    // Recover a BATCH write's rows by reading its key TUPLES back out of the SAME JSON payload it
+    // bound — every key column, never the first alone (a composite key's first column names other
+    // rows too) — through the write's OWN JSON_TABLE source and the write's OWN read expression of
+    // each key ([`batch_reads`]), so each key compares EXACTLY as the write compared or wrote it. Any
+    // other read can compare differently: a key the write reads as a JSON value (`v.k`) or as a
+    // BIGINT, re-read as the JSON_UNQUOTE string, is compared with a BIGINT column as DOUBLE, which
+    // past 2^53 matches the neighbouring keys too. A key with no read expression fails closed.
+    let json_select = |keys: &[String],
+                       what: &str|
+     -> Result<(String, Vec<ReselectBind>), SqlFailure> {
+        let Some((source, read_of)) = batch_reads(&write_sql, &insert_cols) else {
             return Err(driver_failure(format!(
-                "scp write(mysql): an upsert…RETURNING needs its conflict key in the pk hint ('{write_sql}')"
+                "scp write(mysql): cannot parse the JSON_TABLE source of '{write_sql}'"
             )));
         };
-        let (select_sql, binds) = if is_batch {
-            (json_select(conflict), vec![ReselectBind::JsonParam])
-        } else {
-            let Some(idx) = insert_cols.iter().position(|c| c == conflict) else {
+        let mut reads: Vec<&str> = Vec::with_capacity(keys.len());
+        for k in keys {
+            let Some((_, read)) = read_of.iter().find(|(c, _)| c == k) else {
                 return Err(driver_failure(format!(
-                    "scp write(mysql): conflict key '{conflict}' is not among the INSERT columns of '{write_sql}'"
+                    "scp write(mysql): {what} column '{k}' has no read expression in '{write_sql}', so its rows cannot be matched the way it wrote them"
                 )));
             };
-            (
-                format!("SELECT {cols} FROM {table} WHERE {conflict} = ?{order_by}"),
-                vec![ReselectBind::Param(idx)],
+            reads.push(read);
+        }
+        Ok((
+            format!(
+                "SELECT {cols} FROM {table} WHERE ({}) IN (SELECT {} FROM {source}){order_by}",
+                keys.join(", "),
+                reads.join(", ")
+            ),
+            vec![ReselectBind::JsonParam],
+        ))
+    };
+    // Recover a VALUES INSERT's rows by EVERY key column of EVERY row, each bound from its own param —
+    // row r's column c (its INSERT column position) is param r * ncols + c ([`values_rows`]). Keying a
+    // multi-row INSERT by its first row alone would drop the rest.
+    let keyed_by_insert_params = |keys: &[String],
+                                  what: &str|
+     -> Result<(String, Vec<ReselectBind>), SqlFailure> {
+        let mut positions: Vec<usize> = Vec::new();
+        for k in keys {
+            let Some(idx) = insert_cols.iter().position(|c| c == k) else {
+                return Err(driver_failure(format!(
+                    "scp write(mysql): {what} column '{k}' is not among the INSERT columns of '{write_sql}'"
+                )));
+            };
+            positions.push(idx);
+        }
+        let ncols = insert_cols.len();
+        let Some(rows) = values_rows(&write_sql, ncols) else {
+            return Err(driver_failure(format!(
+                "scp write(mysql): the {what} of '{write_sql}' cannot be bound from its params — a VALUES value that is not a bare `?` moves the param of every column after it"
+            )));
+        };
+        let binds: Vec<ReselectBind> = (0..rows)
+            .flat_map(|r| {
+                positions
+                    .iter()
+                    .map(move |c| ReselectBind::Param(r * ncols + c))
+            })
+            .collect();
+        let predicate = if rows == 1 {
+            keys.iter()
+                .map(|k| format!("{k} = ?"))
+                .collect::<Vec<_>>()
+                .join(" AND ")
+        } else {
+            let tuple = format!("({})", vec!["?"; keys.len()].join(", "));
+            format!(
+                "({}) IN ({})",
+                keys.join(", "),
+                vec![tuple; rows].join(", ")
             )
         };
-        return Ok(Some(MysqlReselect {
+        Ok((
+            format!("SELECT {cols} FROM {table} WHERE {predicate}{order_by}"),
+            binds,
+        ))
+    };
+    let after = |write_sql: String,
+                 (select_sql, binds): (String, Vec<ReselectBind>),
+                 written: Option<WrittenRows>| {
+        Ok(Some(MysqlReselect {
             write_sql,
             select_sql,
             binds,
-            before: false,
-        }));
+            written,
+            duplicate_is_skip,
+            ..MysqlReselect::default()
+        }))
+    };
+    let upsert = wl.contains("on duplicate key update");
+    if duplicate_is_skip && is_batch {
+        return Err(driver_failure(format!(
+            "scp write(mysql): a batch insert-or-ignore…RETURNING is an INSERT IGNORE, not an ON DUPLICATE KEY UPDATE ('{write_sql}')"
+        )));
     }
 
-    // create / createMany — recover by the AUTO_INCREMENT range [LAST_INSERT_ID, +affected), or by the
-    // client-supplied PK values pulled from the INSERT params by position (UUID / composite / natural key).
-    if wl.starts_with("insert") {
+    // upsert / upsertMany — recover by EVERY column of the CONFLICT key. MySQL does not report which
+    // row an ON DUPLICATE KEY UPDATE touched, so the AUTO_INCREMENT range is wrong once a row was updated.
+    if is_insert && upsert {
+        if conflict_cols.is_empty() {
+            return Err(driver_failure(format!(
+                "scp write(mysql): an upsert…RETURNING needs its conflict key in the pk hint ('{write_sql}')"
+            )));
+        }
+        let plan = if is_batch {
+            json_select(&conflict_cols, "conflict key")?
+        } else {
+            keyed_by_insert_params(&conflict_cols, "conflict key")?
+        };
+        return after(write_sql, plan, None);
+    }
+
+    // create / createMany / insert-or-ignore — recover by the AUTO_INCREMENT range
+    // [LAST_INSERT_ID, +affected), or by the client-supplied PK values pulled from the INSERT params by
+    // position (UUID / composite / natural key). Recovered only when it wrote a row, and only as many
+    // rows as it wrote ([`written_row_count`]).
+    if is_insert {
+        if !auto_inc.is_empty() && pk_cols.len() == 1 && pk_cols[0] == auto_inc && is_batch {
+            // createMany (a bulk INSERT…SELECT): its ids start at LAST_INSERT_ID but need not be
+            // consecutive, so the bare range would name other sessions' rows and miss our own. Every
+            // id it allocated is ≥ LAST_INSERT_ID; the anchored read view hides other sessions' rows;
+            // the count check fails the rest closed.
+            return Ok(Some(MysqlReselect {
+                select_sql: format!(
+                    "SELECT {cols} FROM {table} WHERE {ai} >= ?{order_by}",
+                    ai = auto_inc
+                ),
+                anchor_sql: format!("SELECT 1 FROM {table} LIMIT 1"),
+                write_sql,
+                binds: vec![ReselectBind::LastId],
+                written: Some(WrittenRows::Affected),
+                ..MysqlReselect::default()
+            }));
+        }
         if !auto_inc.is_empty() && pk_cols.len() == 1 && pk_cols[0] == auto_inc {
+            // A single-row / multi-VALUES INSERT reserves its ids up front, so they ARE consecutive.
             return Ok(Some(MysqlReselect {
                 write_sql,
                 select_sql: format!(
@@ -1303,7 +1556,9 @@ fn build_mysql_reselect(sql: &str) -> Result<Option<MysqlReselect>, SqlFailure> 
                     ai = auto_inc
                 ),
                 binds: vec![ReselectBind::LastId, ReselectBind::HighId],
-                before: false,
+                written: Some(WrittenRows::Affected),
+                duplicate_is_skip,
+                ..MysqlReselect::default()
             }));
         }
         if pk_cols.is_empty() {
@@ -1311,62 +1566,31 @@ fn build_mysql_reselect(sql: &str) -> Result<Option<MysqlReselect>, SqlFailure> 
                 "scp write(mysql): an INSERT…RETURNING carries no pk hint, so its written rows cannot be identified ('{write_sql}'). The producer must pass the model's declared primary key"
             )));
         }
+        // createMany with a CLIENT-supplied key: the statement binds ONE JSON payload, not one param
+        // per key, so the key tuples are read back out of that SAME payload (as upsertMany does). A
+        // batch `INSERT IGNORE` reads back pre-existing rows too, so its count check fails it closed.
         if is_batch {
-            // createMany with a CLIENT-supplied key: the statement binds ONE JSON payload, not one
-            // param per key, so the keys are read back out of that SAME payload (as upsertMany does).
-            if pk_cols.len() != 1 {
-                return Err(driver_failure(format!(
-                    "scp write(mysql): a batch INSERT…RETURNING on the COMPOSITE key ({}) cannot be recovered from its JSON payload ('{write_sql}')",
-                    pk_cols.join(", ")
-                )));
-            }
-            return Ok(Some(MysqlReselect {
-                select_sql: json_select(&pk_cols[0]),
-                write_sql,
-                binds: vec![ReselectBind::JsonParam],
-                before: false,
-            }));
+            let plan = json_select(&pk_cols, "PK")?;
+            return after(write_sql, plan, Some(WrittenRows::Affected));
         }
-        let mut conds: Vec<String> = Vec::new();
-        let mut binds: Vec<ReselectBind> = Vec::new();
-        for pk in &pk_cols {
-            let Some(idx) = insert_cols.iter().position(|c| c == pk) else {
-                return Err(driver_failure(format!(
-                    "scp write(mysql): PK column '{pk}' is not among the INSERT columns of '{write_sql}'"
-                )));
-            };
-            conds.push(format!("{pk} = ?"));
-            binds.push(ReselectBind::Param(idx));
-        }
-        return Ok(Some(MysqlReselect {
-            write_sql,
-            select_sql: format!(
-                "SELECT {cols} FROM {table} WHERE {}{order_by}",
-                conds.join(" AND ")
-            ),
-            binds,
-            before: false,
-        }));
+        let plan = keyed_by_insert_params(&pk_cols, "PK")?;
+        return after(write_sql, plan, Some(WrittenRows::Affected));
     }
 
-    // updateMany — recover by the batch JOIN key, re-selected from the SAME JSON payload the write bound.
+    // updateMany — recover by EVERY batch JOIN key column, re-selected from the SAME JSON payload the
+    // write bound.
     if wl.starts_with("update") && is_batch {
-        let Some(key) = update_batch_key(&write_sql) else {
+        let Some(keys) = update_batch_keys(&write_sql) else {
             return Err(driver_failure(format!(
                 "scp write(mysql): cannot parse the batch JOIN key of '{write_sql}'"
             )));
         };
-        return Ok(Some(MysqlReselect {
-            write_sql,
-            select_sql: json_select(&key),
-            binds: vec![ReselectBind::JsonParam],
-            before: false,
-        }));
+        let plan = json_select(&keys, "JOIN key")?;
+        return after(write_sql, plan, None);
     }
 
-    // update / delete — recover by the write's OWN WHERE predicate, bound from the write's own params.
-    // The UPDATE re-selects AFTER the write (the rows carry their new values); the DELETE re-selects
-    // BEFORE it, since afterwards there is nothing left to describe.
+    // update / delete — the rows the write's OWN WHERE predicate names, bound from the write's own
+    // params. The DELETE re-selects BEFORE it, since afterwards there is nothing left to describe.
     let Some(wpos) = wl.rfind(" where ") else {
         return Err(driver_failure(format!(
             "scp write(mysql): a write…RETURNING needs a WHERE to recover its rows ('{write_sql}')"
@@ -1374,16 +1598,52 @@ fn build_mysql_reselect(sql: &str) -> Result<Option<MysqlReselect>, SqlFailure> 
     };
     let where_sql = write_sql[wpos + " where ".len()..].trim().to_string();
     let leading = write_sql[..wpos].matches('?').count();
-    let binds = (0..where_sql.matches('?').count())
+    let binds: Vec<ReselectBind> = (0..where_sql.matches('?').count())
         .map(|i| ReselectBind::Param(leading + i))
         .collect();
-    let before = wl.starts_with("delete");
+    // The DELETE: its pre-image is a LOCKING read — it reads the latest committed rows (not an older
+    // snapshot) and holds them, so no other session can remove them first — and the DELETE must remove
+    // exactly those rows: its affected count is checked against the pre-image (`Affected`).
+    if wl.starts_with("delete") {
+        return Ok(Some(MysqlReselect {
+            select_sql: format!(
+                "SELECT {cols} FROM {table} WHERE {where_sql}{order_by} FOR UPDATE"
+            ),
+            write_sql,
+            binds,
+            written: Some(WrittenRows::Affected),
+            before: true,
+            ..MysqlReselect::default()
+        }));
+    }
+    // The UPDATE: lock the rows its WHERE names and read their keys BEFORE the write, then recover the
+    // written rows (carrying their new values) by those keys — never by the WHERE re-evaluated after it.
+    if pk_cols.is_empty() {
+        return Err(driver_failure(format!(
+            "scp write(mysql): an UPDATE…RETURNING carries no pk hint, so the rows it writes cannot be keyed ('{write_sql}'). The producer must pass the model's declared primary key"
+        )));
+    }
+    let keys = pk_cols.join(", ");
     Ok(Some(MysqlReselect {
-        select_sql: format!("SELECT {cols} FROM {table} WHERE {where_sql}{order_by}"),
+        select_sql: format!("SELECT {cols} FROM {table} WHERE ({keys}) IN "),
+        lock_sql: format!("SELECT {keys} FROM {table} WHERE {where_sql}{order_by} FOR UPDATE"),
+        lock_binds: binds,
+        key_cols: pk_cols,
         write_sql,
-        binds,
-        before,
+        ..MysqlReselect::default()
     }))
+}
+
+/// An UPDATE's `select_sql` completed for `rows` locked keys (mysql-returning.ts `keyedSelectSql`): one
+/// `(?, …)` tuple per row, ordered by the declared PK.
+fn keyed_select_sql(rs: &MysqlReselect, rows: usize) -> String {
+    let tuple = format!("({})", vec!["?"; rs.key_cols.len()].join(", "));
+    format!(
+        "{}({}) ORDER BY {}",
+        rs.select_sql,
+        vec![tuple; rows].join(", "),
+        rs.key_cols.join(", ")
+    )
 }
 
 /// Strip a ` /*scp:pk=…*/` hint comment from a fragment.
@@ -1431,6 +1691,145 @@ fn parse_pk_hint(s: &str) -> (Vec<String>, String) {
     (pk_cols, ai)
 }
 
+/// How a BATCH write reads its rows out of its ONE JSON payload (mysql-returning.ts `batchReads`): its
+/// `JSON_TABLE(?, '$[*]' COLUMNS(…))` source with the alias it gives it, verbatim, and the expression it
+/// reads each key-able column with — an updateMany's `ON u.<k> = <expr>`, an INSERT's SELECT list by
+/// INSERT column position — as `(column, expression)`. The recovering SELECT reuses both as they are,
+/// so it compares every key EXACTLY as the write did: a COLUMNS declaration alone does not say how (a
+/// JSON column is read both as unquoted text and as a JSON value). `None` when the write reads no
+/// JSON_TABLE. A conjunct / select item that does not parse leaves its column out — the caller fails it
+/// closed.
+fn batch_reads(write_sql: &str, insert_cols: &[String]) -> Option<(String, Vec<(String, String)>)> {
+    let lower = write_sql.to_ascii_lowercase();
+    let jt = lower.find("json_table(")?;
+    // The JSON_TABLE(…) call: its own parentheses at depth 0, skipping quoted paths.
+    let bytes = write_sql.as_bytes();
+    let (mut depth, mut quoted, mut end) = (0i32, false, None);
+    let mut i = jt + "json_table".len();
+    while i < bytes.len() && end.is_none() {
+        let ch = bytes[i];
+        if quoted {
+            quoted = ch != b'\'';
+        } else if ch == b'\'' {
+            quoted = true;
+        } else if ch == b'(' {
+            depth += 1;
+        } else if ch == b')' {
+            depth -= 1;
+            if depth == 0 {
+                end = Some(i);
+            }
+        }
+        i += 1;
+    }
+    let end = end?;
+    // Its alias: ` AS v` / ` jt`.
+    let after = &write_sql[end + 1..];
+    if !after.starts_with(char::is_whitespace) {
+        return None;
+    }
+    let mut alias = after.trim_start();
+    if alias.len() > 3 && alias[..3].eq_ignore_ascii_case("as ") {
+        alias = alias[3..].trim_start();
+    }
+    let alias: String = alias
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+        .collect();
+    if alias.is_empty() {
+        return None;
+    }
+    let source = format!("{} AS {alias}", &write_sql[jt..=end]);
+    let mut reads: Vec<(String, String)> = Vec::new();
+    if lower.starts_with("update") {
+        // `ON u.k1 = <expr1> AND u.k2 = <expr2> SET …`, split on its (lowercased) ` and `.
+        if let Some(on) = lower.find(" on ").map(|p| p + " on ".len()) {
+            if let Some(seg_end) = lower[on..].find(" set ").map(|p| on + p) {
+                let mut at = on;
+                for conj in lower[on..seg_end].split(" and ") {
+                    let original = &write_sql[at..at + conj.len()];
+                    at += conj.len() + " and ".len();
+                    let Some((lhs, rhs)) = original.split_once('=') else {
+                        continue;
+                    };
+                    let col = lhs.trim().rsplit('.').next().unwrap_or("").trim();
+                    if !col.is_empty() && col.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                    {
+                        reads.push((col.to_string(), rhs.trim().to_string()));
+                    }
+                }
+            }
+        }
+        return Some((source, reads));
+    }
+    // `INSERT INTO t (c1, …) SELECT <e1>, … FROM JSON_TABLE(…)`.
+    let close = lower.find(')')?;
+    let select = lower[close + 1..].trim_start();
+    let from = lower.find(" from json_table(");
+    if let (Some(rest), Some(from)) = (select.strip_prefix("select"), from) {
+        let start = lower.len() - rest.len();
+        if rest.starts_with(char::is_whitespace) && from > start {
+            let items = split_top_level(&write_sql[start..from]);
+            if items.len() == insert_cols.len() {
+                reads = insert_cols.iter().cloned().zip(items).collect();
+            }
+        }
+    }
+    Some((source, reads))
+}
+
+/// Split a comma list on the commas at its own depth (outside parentheses and quotes); entries trimmed
+/// (mysql-returning.ts `splitTopLevel`).
+fn split_top_level(list: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let (mut depth, mut quoted, mut start) = (0i32, false, 0usize);
+    for (i, ch) in list.bytes().enumerate() {
+        if quoted {
+            quoted = ch != b'\'';
+        } else if ch == b'\'' {
+            quoted = true;
+        } else if ch == b'(' {
+            depth += 1;
+        } else if ch == b')' {
+            depth -= 1;
+        } else if ch == b',' && depth == 0 {
+            out.push(list[start..i].trim().to_string());
+            start = i + 1;
+        }
+    }
+    out.push(list[start..].trim().to_string());
+    out
+}
+
+/// How many rows a `VALUES (?, …), (?, …)` INSERT writes when EVERY value is a bare `?` (each tuple then
+/// binds its `ncols` params in column order, so row `r`'s column `c` is param `r * ncols + c`), else
+/// `None`: a value that is an SQL expression (`NOW()`, a cast) moves every `?` after it, so no column's
+/// param position is known (mysql-returning.ts `valuesRows`).
+fn values_rows(write_sql: &str, ncols: usize) -> Option<usize> {
+    let lower = write_sql.to_ascii_lowercase();
+    let close = lower.find(')')?;
+    let mut rest = lower[close + 1..]
+        .trim_start()
+        .strip_prefix("values")?
+        .trim_start();
+    let mut rows = 0;
+    loop {
+        rest = rest.strip_prefix('(')?;
+        let end = rest.find(')')?;
+        let items: Vec<&str> = rest[..end].split(',').map(str::trim).collect();
+        if items.len() != ncols || items.iter().any(|i| *i != "?") {
+            return None;
+        }
+        rows += 1;
+        rest = rest[end + 1..].trim_start();
+        match rest.strip_prefix(',') {
+            Some(more) => rest = more.trim_start(),
+            None => break,
+        }
+    }
+    (rest.is_empty() || rest.starts_with("on duplicate key update")).then_some(rows)
+}
+
 /// Parse the INSERT column list `INSERT [IGNORE] INTO <t> (c1, c2, …)`.
 fn parse_insert_cols(insert: &str) -> Vec<String> {
     if let (Some(open), Some(close)) = (insert.find('('), insert.find(')')) {
@@ -1452,75 +1851,37 @@ fn parse_insert_cols(insert: &str) -> Vec<String> {
 /// not a driver-global writer slot. Includes the MySQL RETURNING emulation (strip → INSERT →
 /// re-select by the real PK) — all statements of one `all` run on the SAME `conn` so the re-select
 /// sees the insert (crucial inside a tx before COMMIT).
+///
+/// `in_tx` says whether `conn` is inside a transaction: the tx-owned connection ([`MyTx`]) is, a
+/// per-call pooled / session connection ([`MyPrepared`] / [`MySession`]) is not. (sqlx keeps the
+/// server's `SERVER_STATUS_IN_TRANS` flag crate-private, and the runtime issues BEGIN as raw SQL, so the
+/// connection's OWNER is what knows.)
 async fn my_all_on_conn(
     conn: &mut sqlx::MySqlConnection,
     sql: &str,
     params: &[Value],
+    in_tx: bool,
 ) -> Result<Vec<WireValue>, SqlFailure> {
     // MySQL RETURNING emulation (the ONE reselect path — [`build_mysql_reselect`] is the driver SSoT):
     // execute the write, then re-select the written row(s) by their REAL key on THIS connection (so a
-    // re-select inside a tx sees the not-yet-committed write). Covers INSERT (auto-inc range / client
-    // PK), upsert (conflict key), and UPDATE (own WHERE / batch JSON key) — honoring a DECLARED
-    // RETURNING. The strip-before-execute `/*scp:pk=…;conflict=…*/` hint (tx.ts mysqlPkHint) supplies the
-    // real key. Both the native-codegen path and the mode-2 interpreter path run RETURNING writes through
-    // here, so both return the SAME rows.
+    // re-select inside a tx sees the not-yet-committed write). The strip-before-execute
+    // `/*scp:pk=…;conflict=…*/` hint (tx.ts mysqlPkHint) supplies the real key. Both the native-codegen
+    // path and the mode-2 interpreter path run RETURNING writes through here, so both return the SAME
+    // rows. The steps run ATOMICALLY: inside the open transaction, or in their own BEGIN … COMMIT
+    // (ROLLBACK when a step — the fail-closed recovery included — fails, so its write does not survive).
     if let Some(rs) = build_mysql_reselect(sql)? {
-        // A DELETE's rows are gone once it runs, so its recovering SELECT goes FIRST (still on this
-        // connection, inside the same transaction as the delete it describes). Every other write
-        // re-selects AFTER, keyed on what the write itself produced (insert id range / conflict key).
-        if rs.before {
-            let mut sel_params: Vec<Value> = Vec::with_capacity(rs.binds.len());
-            for b in &rs.binds {
-                sel_params.push(match b {
-                    ReselectBind::JsonParam => params.first().cloned().unwrap_or(Value::Null),
-                    ReselectBind::Param(i) => params.get(*i).cloned().unwrap_or(Value::Null),
-                    // An insert-id bind cannot occur on a pre-image select (no write has run yet).
-                    ReselectBind::LastId | ReselectBind::HighId => Value::Null,
-                });
-            }
-            let rows = bind_my(sqlx::query(&rs.select_sql), &sel_params)?
-                .fetch_all(&mut *conn)
-                .await
-                .map_err(|e| {
-                    driver_failure(format!("mysql pre-select [{}]: {e}", rs.select_sql))
-                })?;
-            let out = my_rows_to_wire(&rows)?;
-            bind_my(sqlx::query(&rs.write_sql), params)?
-                .execute(&mut *conn)
-                .await
-                .map_err(|e| driver_failure(format!("mysql write [{}]: {e}", rs.write_sql)))?;
-            return Ok(out);
+        if in_tx {
+            return my_returning_on_conn(conn, &rs, params).await;
         }
-        let exec_res = bind_my(sqlx::query(&rs.write_sql), params)?
-            .execute(&mut *conn)
-            .await
-            .map_err(|e| driver_failure(format!("mysql write [{}]: {e}", rs.write_sql)))?;
-        let last_id = exec_res.last_insert_id() as i64;
-        let affected = exec_res.rows_affected().max(1) as i64;
-        let mut sel_params: Vec<Value> = Vec::with_capacity(rs.binds.len());
-        for b in &rs.binds {
-            let param_at = |i: usize| {
-                params.get(i).cloned().ok_or_else(|| {
-                    driver_failure(format!(
-                        "mysql re-select: bind param {i} out of range for [{}]",
-                        rs.select_sql
-                    ))
-                })
-            };
-            sel_params.push(match b {
-                ReselectBind::LastId => Value::Int(last_id),
-                // `max(1, affected)`, as in the four sibling ports: the range is EXCLUSIVE, so a
-                // driver that reports 0 affected rows must still cover the row the INSERT wrote.
-                ReselectBind::HighId => Value::Int(last_id + affected.max(1)),
-                ReselectBind::JsonParam => param_at(0)?,
-                ReselectBind::Param(i) => param_at(*i)?,
-            });
+        my_tx_control(conn, "BEGIN").await?;
+        let out = my_returning_on_conn(conn, &rs, params).await;
+        if out.is_err() {
+            // The step's own error is the one to surface; a failed ROLLBACK ends the session anyway.
+            let _ = my_tx_control(conn, "ROLLBACK").await;
+            return out;
         }
-        let rows = bind_my(sqlx::query(&rs.select_sql), &sel_params)?
-            .fetch_all(&mut *conn)
-            .await
-            .map_err(|e| driver_failure(format!("mysql re-select [{}]: {e}", rs.select_sql)))?;
-        return my_rows_to_wire(&rows);
+        my_tx_control(conn, "COMMIT").await?;
+        return out;
     }
 
     let q = bind_my(sqlx::query(sql), params)?;
@@ -1529,6 +1890,154 @@ async fn my_all_on_conn(
         .await
         .map_err(|e| driver_failure(format!("mysql query [{sql}]: {e}")))?;
     my_rows_to_wire(&rows)
+}
+
+/// One RETURNING emulation's steps on `conn` (the caller makes them atomic).
+async fn my_returning_on_conn(
+    conn: &mut sqlx::MySqlConnection,
+    rs: &MysqlReselect,
+    params: &[Value],
+) -> Result<Vec<WireValue>, SqlFailure> {
+    // A DELETE's rows are gone once it runs, so its recovering SELECT goes FIRST (still on this
+    // connection, inside the same transaction as the delete it describes). Every other write
+    // re-selects AFTER, keyed on what the write itself produced (insert id range / conflict key).
+    if rs.before {
+        let mut sel_params: Vec<Value> = Vec::with_capacity(rs.binds.len());
+        for b in &rs.binds {
+            sel_params.push(match b {
+                ReselectBind::JsonParam => params.first().cloned().unwrap_or(Value::Null),
+                ReselectBind::Param(i) => params.get(*i).cloned().unwrap_or(Value::Null),
+                // An insert-id bind cannot occur on a pre-image select (no write has run yet).
+                ReselectBind::LastId | ReselectBind::HighId => Value::Null,
+            });
+        }
+        let rows = bind_my(sqlx::query(&rs.select_sql), &sel_params)?
+            .fetch_all(&mut *conn)
+            .await
+            .map_err(|e| driver_failure(format!("mysql pre-select [{}]: {e}", rs.select_sql)))?;
+        let out = my_rows_to_wire(&rows)?;
+        let deleted = bind_my(sqlx::query(&rs.write_sql), params)?
+            .execute(&mut *conn)
+            .await
+            .map_err(|e| driver_failure(format!("mysql write [{}]: {e}", rs.write_sql)))?;
+        // The DELETE must have removed exactly the locked pre-image.
+        let written = written_row_count(rs.written, deleted.rows_affected() as i64);
+        check_recovered(out.len(), written, &rs.write_sql)?;
+        return Ok(out);
+    }
+    if !rs.lock_sql.is_empty() {
+        // UPDATE…RETURNING: recover the written rows by the keys locked BEFORE the write (never by the
+        // WHERE re-evaluated after it).
+        let lock_params: Vec<Value> = rs
+            .lock_binds
+            .iter()
+            .map(|b| match b {
+                ReselectBind::Param(i) => params.get(*i).cloned().unwrap_or(Value::Null),
+                // A lock is bound from the WHERE params only (no write has run yet).
+                _ => Value::Null,
+            })
+            .collect();
+        let keys = bind_my(sqlx::query(&rs.lock_sql), &lock_params)?
+            .fetch_all(&mut *conn)
+            .await
+            .map_err(|e| driver_failure(format!("mysql lock [{}]: {e}", rs.lock_sql)))?;
+        bind_my(sqlx::query(&rs.write_sql), params)?
+            .execute(&mut *conn)
+            .await
+            .map_err(|e| driver_failure(format!("mysql write [{}]: {e}", rs.write_sql)))?;
+        if keys.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut key_values: Vec<Value> = Vec::with_capacity(keys.len() * rs.key_cols.len());
+        for key in my_rows_to_wire(&keys)? {
+            let WireValue::Row(row) = key else {
+                return Err(driver_failure(format!(
+                    "mysql lock [{}]: not a row",
+                    rs.lock_sql
+                )));
+            };
+            key_values.extend(
+                row.entries
+                    .iter()
+                    .map(|(_, v)| crate::leaves::wire_to_value(v)),
+            );
+        }
+        let select_sql = keyed_select_sql(rs, keys.len());
+        let rows = bind_my(sqlx::query(&select_sql), &key_values)?
+            .fetch_all(&mut *conn)
+            .await
+            .map_err(|e| driver_failure(format!("mysql re-select [{select_sql}]: {e}")))?;
+        check_recovered(rows.len(), Some(keys.len() as i64), &rs.write_sql)?;
+        return my_rows_to_wire(&rows);
+    }
+    if !rs.anchor_sql.is_empty() {
+        sqlx::query(&rs.anchor_sql)
+            .fetch_all(&mut *conn)
+            .await
+            .map_err(|e| driver_failure(format!("mysql anchor [{}]: {e}", rs.anchor_sql)))?;
+    }
+    let exec_res = match bind_my(sqlx::query(&rs.write_sql), params)?
+        .execute(&mut *conn)
+        .await
+    {
+        Ok(r) => r,
+        // An insert-or-ignore's duplicate key: the conflict it skips — it wrote nothing (only the
+        // statement rolled back).
+        Err(e)
+            if rs.duplicate_is_skip
+                && e.as_database_error()
+                    .and_then(|d| d.try_downcast_ref::<sqlx::mysql::MySqlDatabaseError>())
+                    .is_some_and(|m| m.number() == MYSQL_ER_DUP_ENTRY) =>
+        {
+            return Ok(Vec::new());
+        }
+        Err(e) => {
+            return Err(driver_failure(format!(
+                "mysql write [{}]: {e}",
+                rs.write_sql
+            )))
+        }
+    };
+    let last_id = exec_res.last_insert_id() as i64;
+    let affected = exec_res.rows_affected() as i64;
+    // A write that wrote no row (an INSERT IGNORE that hit a conflict) returns nothing.
+    let written = written_row_count(rs.written, affected);
+    if written == Some(0) {
+        return Ok(Vec::new());
+    }
+    let mut sel_params: Vec<Value> = Vec::with_capacity(rs.binds.len());
+    for b in &rs.binds {
+        let param_at = |i: usize| {
+            params.get(i).cloned().ok_or_else(|| {
+                driver_failure(format!(
+                    "mysql re-select: bind param {i} out of range for [{}]",
+                    rs.select_sql
+                ))
+            })
+        };
+        sel_params.push(match b {
+            ReselectBind::LastId => Value::Int(last_id),
+            // A write that wrote no row is never re-selected (written 0 ⇒ []), so affected ≥ 1.
+            ReselectBind::HighId => Value::Int(last_id + affected),
+            ReselectBind::JsonParam => param_at(0)?,
+            ReselectBind::Param(i) => param_at(*i)?,
+        });
+    }
+    let rows = bind_my(sqlx::query(&rs.select_sql), &sel_params)?
+        .fetch_all(&mut *conn)
+        .await
+        .map_err(|e| driver_failure(format!("mysql re-select [{}]: {e}", rs.select_sql)))?;
+    check_recovered(rows.len(), written, &rs.write_sql)?;
+    my_rows_to_wire(&rows)
+}
+
+/// Run a tx-control literal on `conn` (raw_sql: MySQL rejects it in the prepared protocol, error 1295).
+async fn my_tx_control(conn: &mut sqlx::MySqlConnection, sql: &str) -> Result<(), SqlFailure> {
+    sqlx::raw_sql(sql)
+        .execute(&mut *conn)
+        .await
+        .map(|_| ())
+        .map_err(|e| driver_failure(format!("mysql tx-control [{sql}]: {e}")))
 }
 
 /// Is `sql` a tx-control / SET statement MySQL rejects in the prepared-statement protocol (error
@@ -1591,7 +2100,7 @@ impl PreparedStatement for MyPrepared<'_> {
                 .acquire()
                 .await
                 .map_err(|e| driver_failure(format!("mysql acquire: {e}")))?;
-            my_all_on_conn(&mut conn, &sql, &params).await
+            my_all_on_conn(&mut conn, &sql, &params, false).await
         })
     }
 
@@ -1730,7 +2239,7 @@ impl SessionConnection for MySession<'_> {
     fn execute(&mut self, sql: &str, params: &[Value]) -> Result<Vec<WireValue>, SqlFailure> {
         let conn = self.conn.as_mut().expect("mysql session conn present");
         self.rt
-            .block_on(async move { my_all_on_conn(conn, sql, params).await })
+            .block_on(async move { my_all_on_conn(conn, sql, params, false).await })
     }
     fn run(&mut self, sql: &str, params: &[Value]) -> Result<RunInfo, SqlFailure> {
         let conn = self.conn.as_mut().expect("mysql session conn present");
@@ -1770,7 +2279,7 @@ impl TxConnection for MyTx<'_> {
     fn execute(&mut self, sql: &str, params: &[Value]) -> Result<Vec<WireValue>, SqlFailure> {
         let conn = &mut self.conn;
         self.rt
-            .block_on(async move { my_all_on_conn(conn, sql, params).await })
+            .block_on(async move { my_all_on_conn(conn, sql, params, true).await })
     }
 
     fn run(&mut self, sql: &str, params: &[Value]) -> Result<RunInfo, SqlFailure> {
@@ -1825,5 +2334,218 @@ impl TxConnection for MyTx<'_> {
             drop(conn); // return to pool inside the runtime
             r
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio_postgres::types::private::BytesMut;
+    use tokio_postgres::types::{FromSql, IsNull};
+
+    /// Encode `p` for a parameter of type `ty` through `to_sql_checked` — the entry tokio-postgres
+    /// calls when it builds the Bind message — returning the wire bytes, `None` for a NULL.
+    fn encode(p: &PgParam, ty: &PgType) -> Result<Option<Vec<u8>>, String> {
+        let mut buf = BytesMut::new();
+        match p.to_sql_checked(ty, &mut buf) {
+            Ok(IsNull::Yes) => Ok(None),
+            Ok(IsNull::No) => Ok(Some(buf.to_vec())),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+
+    /// What the SERVER reads back from those bytes: decode them as the parameter's own type with
+    /// tokio-postgres's `FromSql`, the same binary format PG parses.
+    fn bound<T: for<'a> FromSql<'a>>(p: &PgParam, ty: &PgType) -> T {
+        let raw = encode(p, ty)
+            .unwrap_or_else(|e| panic!("{p:?} as {ty} must bind: {e}"))
+            .unwrap_or_else(|| panic!("{p:?} as {ty} bound NULL"));
+        T::from_sql(ty, &raw).unwrap_or_else(|e| panic!("{p:?} as {ty} is not valid {ty}: {e}"))
+    }
+
+    fn rejected(p: &PgParam, ty: &PgType) {
+        if let Ok(raw) = encode(p, ty) {
+            panic!("{p:?} as {ty} must fail, but bound {raw:?}");
+        }
+    }
+
+    /// #349: a value the parameter's type cannot hold EXACTLY fails the bind. It used to be
+    /// truncated (`as i32` made id 4294967298 hit row 2) or written in another type's encoding (an
+    /// i64 into NUMERIC / FLOAT8, an f64 into BIGINT).
+    #[test]
+    fn pg_bind_fails_instead_of_truncating_or_reinterpreting() {
+        rejected(&PgParam::Int(4_294_967_298), &PgType::INT4);
+        rejected(&PgParam::Int(-2_147_483_649), &PgType::INT4);
+        rejected(&PgParam::Int(70_000), &PgType::INT2);
+        rejected(&PgParam::Int((1 << 53) + 1), &PgType::FLOAT8);
+        rejected(&PgParam::Int((1 << 24) + 1), &PgType::FLOAT4);
+        rejected(&PgParam::Int(i64::MAX), &PgType::FLOAT8);
+        rejected(&PgParam::Float(1.5), &PgType::INT8);
+        rejected(&PgParam::Float(f64::NAN), &PgType::INT4);
+        rejected(&PgParam::Float(f64::INFINITY), &PgType::INT8);
+        rejected(&PgParam::Float(9_223_372_036_854_775_808.0), &PgType::INT8);
+        rejected(&PgParam::Float(3_000_000_000.0), &PgType::INT4);
+        rejected(&PgParam::Float(1e300), &PgType::FLOAT4);
+        rejected(&PgParam::Float(1e-300), &PgType::FLOAT4);
+        // A type no arm encodes: an error, never another type's bytes (or a panic).
+        rejected(&PgParam::Bool(true), &PgType::INT4);
+        rejected(&PgParam::Str("1".into()), &PgType::INT4);
+        rejected(&PgParam::Str("{}".into()), &PgType::JSONB);
+        rejected(&PgParam::Float(1.0), &PgType::TEXT);
+        rejected(&PgParam::Int(1), &PgType::BYTEA);
+        rejected(&PgParam::Array(vec![PgParam::Int(1)]), &PgType::INT4);
+        rejected(
+            &PgParam::Array(vec![PgParam::Int(4_294_967_297)]),
+            &PgType::INT4_ARRAY,
+        );
+    }
+
+    /// #350: malformed uuid text — non-ASCII included — is `None` (so the bind fails with
+    /// "malformed uuid text"), never a panic. A 32-BYTE string of multi-byte characters used to put a
+    /// byte-offset slice inside a character and panic mid-Bind, poisoning the pooled connection.
+    #[test]
+    fn uuid_text_to_bytes_rejects_malformed_text_without_panicking() {
+        let multibyte = format!("a{}a", "é".repeat(15));
+        assert_eq!(multibyte.len(), 32);
+        assert_eq!(uuid_text_to_bytes(&multibyte), None);
+        assert_eq!(uuid_text_to_bytes(&"é".repeat(16)), None);
+        assert_eq!(uuid_text_to_bytes(&format!("{}é", "0".repeat(30))), None);
+        // A sign is not a hex digit (`from_str_radix` accepted "+f").
+        assert_eq!(uuid_text_to_bytes(&format!("+f{}", "0".repeat(30))), None);
+        assert_eq!(uuid_text_to_bytes(&"0".repeat(31)), None);
+        assert_eq!(uuid_text_to_bytes(&"0".repeat(33)), None);
+        assert_eq!(uuid_text_to_bytes(&format!("{}g", "0".repeat(31))), None);
+        assert_eq!(
+            uuid_text_to_bytes("0123ABCD-0000-4000-8000-00000000beef"),
+            Some([0x01, 0x23, 0xab, 0xcd, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0xbe, 0xef])
+        );
+        assert_eq!(
+            uuid_text_to_bytes("0123abcd000040008000000000000001"),
+            Some([0x01, 0x23, 0xab, 0xcd, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 0x01])
+        );
+        assert!(encode(&PgParam::Str(multibyte), &PgType::UUID)
+            .unwrap_err()
+            .contains("malformed uuid text"));
+    }
+
+    /// #349: a value the parameter's type CAN hold binds as exactly that value.
+    #[test]
+    fn pg_bind_converts_exactly_to_the_parameter_type() {
+        assert_eq!(bound::<i16>(&PgParam::Int(-32_768), &PgType::INT2), -32_768);
+        assert_eq!(bound::<i32>(&PgParam::Int(2), &PgType::INT4), 2);
+        assert_eq!(
+            bound::<i64>(&PgParam::Int(i64::MAX), &PgType::INT8),
+            i64::MAX
+        );
+        assert_eq!(
+            bound::<rust_decimal::Decimal>(&PgParam::Int(500), &PgType::NUMERIC),
+            rust_decimal::Decimal::from(500)
+        );
+        assert_eq!(
+            bound::<rust_decimal::Decimal>(&PgParam::Int(i64::MIN), &PgType::NUMERIC),
+            rust_decimal::Decimal::from(i64::MIN)
+        );
+        assert_eq!(bound::<f64>(&PgParam::Int(5), &PgType::FLOAT8), 5.0);
+        assert_eq!(
+            bound::<f64>(&PgParam::Int(1 << 53), &PgType::FLOAT8),
+            9_007_199_254_740_992.0
+        );
+        assert_eq!(bound::<f32>(&PgParam::Int(-7), &PgType::FLOAT4), -7.0);
+        assert_eq!(bound::<String>(&PgParam::Int(-42), &PgType::TEXT), "-42");
+        assert_eq!(bound::<i64>(&PgParam::Float(1.0), &PgType::INT8), 1);
+        assert_eq!(bound::<i32>(&PgParam::Float(-3.0), &PgType::INT4), -3);
+        assert_eq!(bound::<i16>(&PgParam::Float(0.0), &PgType::INT2), 0);
+        assert_eq!(bound::<f64>(&PgParam::Float(0.1), &PgType::FLOAT8), 0.1);
+        assert_eq!(bound::<f32>(&PgParam::Float(0.5), &PgType::FLOAT4), 0.5);
+        assert!(bound::<f64>(&PgParam::Float(f64::NAN), &PgType::FLOAT8).is_nan());
+        assert_eq!(
+            bound::<rust_decimal::Decimal>(&PgParam::Float(12.5), &PgType::NUMERIC),
+            rust_decimal::Decimal::new(125, 1)
+        );
+        assert!(bound::<bool>(&PgParam::Bool(true), &PgType::BOOL));
+        assert_eq!(encode(&PgParam::Null, &PgType::INT4), Ok(None));
+        assert_eq!(encode(&PgParam::Null, &PgType::BYTEA), Ok(None));
+    }
+
+    /// The text-carried shapes keep binding as before: text-like / json, uuid, timestamp, date, and
+    /// the `= ANY($1)` arrays whose elements recurse through the same `to_sql`.
+    #[test]
+    fn pg_bind_keeps_the_text_and_array_shapes() {
+        for ty in [
+            PgType::TEXT,
+            PgType::VARCHAR,
+            PgType::BPCHAR,
+            PgType::NAME,
+            PgType::JSON,
+        ] {
+            assert_eq!(
+                bound::<String>(&PgParam::Str("{\"a\":1}".into()), &ty),
+                "{\"a\":1}"
+            );
+        }
+        let mood = PgType::new(
+            "mood".into(),
+            90_001,
+            Kind::Enum(vec!["ok".into()]),
+            "public".into(),
+        );
+        assert_eq!(
+            encode(&PgParam::Str("ok".into()), &mood),
+            Ok(Some(b"ok".to_vec()))
+        );
+        assert_eq!(
+            encode(
+                &PgParam::Str("0123abcd-0000-4000-8000-00000000beef".into()),
+                &PgType::UUID
+            ),
+            Ok(Some(vec![
+                0x01, 0x23, 0xab, 0xcd, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0xbe, 0xef
+            ]))
+        );
+        assert_eq!(
+            bound::<chrono::NaiveDateTime>(
+                &PgParam::Str("2024-01-02 03:04:05".into()),
+                &PgType::TIMESTAMP
+            )
+            .to_string(),
+            "2024-01-02 03:04:05"
+        );
+        assert_eq!(
+            bound::<chrono::NaiveDate>(&PgParam::Str("2024-01-02".into()), &PgType::DATE)
+                .to_string(),
+            "2024-01-02"
+        );
+        assert_eq!(
+            bound::<Vec<i32>>(
+                &PgParam::Array(vec![PgParam::Int(1), PgParam::Int(2)]),
+                &PgType::INT4_ARRAY
+            ),
+            vec![1, 2]
+        );
+        assert_eq!(
+            bound::<Vec<i64>>(
+                &PgParam::Array(vec![PgParam::Int(i64::MIN)]),
+                &PgType::INT8_ARRAY
+            ),
+            vec![i64::MIN]
+        );
+        assert_eq!(
+            bound::<Vec<String>>(
+                &PgParam::Array(vec![PgParam::Str("x".into())]),
+                &PgType::TEXT_ARRAY
+            ),
+            vec!["x".to_string()]
+        );
+        assert_eq!(
+            bound::<Vec<rust_decimal::Decimal>>(
+                &PgParam::Array(vec![PgParam::Float(1.25)]),
+                &PgType::NUMERIC_ARRAY
+            ),
+            vec![rust_decimal::Decimal::new(125, 2)]
+        );
+        assert_eq!(
+            bound::<Vec<i32>>(&PgParam::Array(vec![]), &PgType::INT4_ARRAY),
+            Vec::<i32>::new()
+        );
     }
 }

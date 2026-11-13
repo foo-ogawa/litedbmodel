@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import re
 import sqlite3
-from typing import Any, Callable, Dict, List, Optional, Protocol, Sequence, Tuple
+from typing import Any, Callable, Dict, List, NamedTuple, Optional, Protocol, Sequence, Tuple
 
 from .tx_options import is_connection_error
 
@@ -407,16 +407,150 @@ _DOLLAR_RE = re.compile(r"\$\d+")
 _WRITE_TABLE_RE = re.compile(r"\b(?:INSERT\s+(?:IGNORE\s+)?INTO|UPDATE|DELETE\s+FROM)\s+([A-Za-z0-9_.\"`]+)", re.IGNORECASE)
 # The INSERT column list `INSERT [IGNORE] INTO <t> (c1, c2, …)` — for extracting client-PK values.
 _INSERT_COLS_RE = re.compile(r"\bINSERT\s+(?:IGNORE\s+)?INTO\s+[A-Za-z0-9_.\"`]+\s*\(([^)]*)\)", re.IGNORECASE)
-# The JOIN key column of an updateMany (`ON <alias>.<col> = JSON_UNQUOTE(…)`).
-_BATCH_JOIN_KEY_RE = re.compile(r"\sON\s+[A-Za-z0-9_]*\.?([A-Za-z0-9_]+)\s*=", re.IGNORECASE)
+# An updateMany's JOIN predicate (`ON u.k1 = <v.k1> AND u.k2 = <v.k2> SET …`), and one `AND`-joined
+# conjunct of it (group 1 = its target-side key column).
+_BATCH_JOIN_ON_RE = re.compile(r"\sON\s+(.*?)\s+SET\s", re.IGNORECASE | re.DOTALL)
+_BATCH_JOIN_CONJ_RE = re.compile(r"^[A-Za-z0-9_]*\.?([A-Za-z0-9_]+)\s*=")
+_AND_SPLIT_RE = re.compile(r"\s+AND\s+", re.IGNORECASE)
 # The strip-before-execute PK hint the mysql bundle appends to a write…RETURNING (tx.ts mysqlPkHint):
-#   ` /*scp:pk=col1,col2;ai=<autoIncCol|>[;conflict=cols]*/`
+#   ` /*scp:pk=col1,col2;ai=<autoIncCol|>[;conflict=cols[;action=ignore]]*/`
 # STRIP and PARSE are separate patterns, as in the four sibling ports: the strip form must swallow the
-# whole comment (`conflict=` included), while `ai=` must stop at the `;` so the conflict list cannot
-# leak into the AUTO_INCREMENT column name.
+# whole comment (`conflict=` included), while each field must stop at the next `;` so one field cannot
+# leak into another.
 _PK_HINT_RE = re.compile(r"\s*/\*scp:pk=[^*]*\*/", re.IGNORECASE)
 _PK_HINT_PARSE_RE = re.compile(r"/\*scp:pk=([^;*]*);ai=([^;*]*)", re.IGNORECASE)
-_CONFLICT_HINT_RE = re.compile(r";conflict=([^*]*)\*/", re.IGNORECASE)
+_CONFLICT_HINT_RE = re.compile(r";conflict=([^;*]*)", re.IGNORECASE)
+_IGNORE_HINT_RE = re.compile(r";action=ignore[;*]", re.IGNORECASE)
+# MySQL's duplicate-key error (ER_DUP_ENTRY): the conflict a ``duplicate_is_skip`` write skipped
+# (mysql-returning.ts ``MYSQL_ER_DUP_ENTRY``).
+_MYSQL_ER_DUP_ENTRY = 1062
+# A `VALUES (?, …), (?, …)` list whose every value is a bare `?` (then the end of the write, or its ON
+# DUPLICATE KEY UPDATE) — mysql-returning.ts ``valuesRows``.
+_VALUES_ROWS_RE = re.compile(
+    r"\)\s*VALUES\s*(\(\s*\?(?:\s*,\s*\?)*\s*\)(?:\s*,\s*\(\s*\?(?:\s*,\s*\?)*\s*\))*)\s*(?:ON\s+DUPLICATE\s+KEY\s+UPDATE\b|$)",
+    re.IGNORECASE,
+)
+
+
+# One `u.<k> = <expr>` conjunct of an updateMany's ON, the read expression kept.
+_BATCH_READ_CONJ_RE = re.compile(r"^[A-Za-z0-9_]*\.?([A-Za-z0-9_]+)\s*=\s*(.+)$", re.DOTALL)
+_BATCH_SOURCE_ALIAS_RE = re.compile(r"^\s+(?:AS\s+)?([A-Za-z0-9_]+)", re.IGNORECASE)
+_INSERT_SELECT_RE = re.compile(r"\)\s*SELECT\s+", re.IGNORECASE)
+
+
+def _batch_reads(write_sql: str, insert_cols: List[str]) -> Optional[Tuple[str, Dict[str, str]]]:
+    """How a BATCH write reads its rows out of its ONE JSON payload (mysql-returning.ts ``batchReads``):
+    its ``JSON_TABLE(?, '$[*]' COLUMNS(…))`` source with the alias it gives it, verbatim, and the
+    expression it reads each key-able column with — an updateMany's ``ON u.<k> = <expr>``, an INSERT's
+    SELECT list by INSERT column position. The recovering SELECT reuses both as they are, so it compares
+    every key EXACTLY as the write did: a COLUMNS declaration alone does not say how (a JSON column is
+    read both as unquoted text and as a JSON value). ``None`` when the write reads no JSON_TABLE. A
+    conjunct / select item that does not parse leaves its column out — the caller fails it closed."""
+    lower = write_sql.lower()
+    jt = lower.find("json_table(")
+    if jt < 0:
+        return None
+    # The JSON_TABLE(…) call: its own parentheses at depth 0, skipping quoted paths.
+    end, depth, quoted = -1, 0, False
+    i = jt + len("json_table")
+    while i < len(write_sql) and end < 0:
+        ch = write_sql[i]
+        if quoted:
+            quoted = ch != "'"
+        elif ch == "'":
+            quoted = True
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                end = i
+        i += 1
+    alias = _BATCH_SOURCE_ALIAS_RE.match(write_sql[end + 1:]) if end >= 0 else None
+    if alias is None:
+        return None
+    source = f"{write_sql[jt:end + 1]} AS {alias.group(1)}"
+    reads: Dict[str, str] = {}
+    if lower.startswith("update"):
+        on = _BATCH_JOIN_ON_RE.search(write_sql)
+        for conj in _AND_SPLIT_RE.split(on.group(1)) if on is not None else []:
+            m = _BATCH_READ_CONJ_RE.match(conj.strip())
+            if m is not None:
+                reads[m.group(1)] = m.group(2).strip()
+        return source, reads
+    sel = _INSERT_SELECT_RE.search(write_sql)
+    frm = lower.find(" from json_table(")
+    if sel is not None and frm > sel.start():
+        items = _split_top_level(write_sql[sel.end():frm])
+        if len(items) == len(insert_cols):
+            reads = dict(zip(insert_cols, items))
+    return source, reads
+
+
+def _split_top_level(items: str) -> List[str]:
+    """Split a comma list on the commas at its own depth (outside parentheses and quotes); entries
+    trimmed (mysql-returning.ts ``splitTopLevel``)."""
+    out: List[str] = []
+    depth, quoted, start = 0, False, 0
+    for i, ch in enumerate(items):
+        if quoted:
+            quoted = ch != "'"
+        elif ch == "'":
+            quoted = True
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        elif ch == "," and depth == 0:
+            out.append(items[start:i].strip())
+            start = i + 1
+    out.append(items[start:].strip())
+    return out
+
+
+def _values_rows(write_sql: str, ncols: int) -> Optional[int]:
+    """How many rows a VALUES INSERT writes when EVERY value is a bare ``?`` (each tuple then binds its
+    ``ncols`` params in column order, so row ``r``'s column ``c`` is param ``r * ncols + c``), else
+    ``None``: a value that is an SQL expression (``NOW()``, a cast) moves every ``?`` after it, so no
+    column's param position is known (mysql-returning.ts ``valuesRows``)."""
+    m = _VALUES_ROWS_RE.search(write_sql)
+    if m is None:
+        return None
+    tuples = re.findall(r"\([^)]*\)", m.group(1))
+    return len(tuples) if all(t.count("?") == ncols for t in tuples) else None
+# The OK/EOF packet's "a transaction is open" status bit (pymysql.constants.SERVER_STATUS.SERVER_STATUS_IN_TRANS).
+_SERVER_STATUS_IN_TRANS = 1
+
+
+class _MysqlReselect(NamedTuple):
+    """A write→re-select plan (mysql-returning.ts ``MysqlReselect``): the stripped write, the
+    recovering SELECT and its binds (each ``("lastId"|"highId"|"json"|"param", index)``), how many
+    rows the write wrote (:func:`_written_row_count`; ``None`` ⇒ not countable), and whether the
+    SELECT runs BEFORE the write (a DELETE's pre-image)."""
+
+    write_sql: str
+    select_sql: str
+    binds: List[Tuple[str, int]]
+    written: Optional[str]
+    before: bool
+    # A consistent read run BEFORE the write in the same transaction ("" ⇒ none): a bulk INSERT's
+    # AUTO_INCREMENT ids are not consecutive, and anchoring the read view first hides the rows other
+    # sessions insert meanwhile from the recovering SELECT (mysql-returning.ts ``anchorSql``).
+    anchor_sql: str = ""
+    # An UPDATE's lock-and-key step, run BEFORE the write ("" ⇒ none): ``SELECT <pk> … WHERE <where> …
+    # FOR UPDATE`` names — and locks — exactly the rows the UPDATE is about to write (bound by
+    # ``lock_binds``). Its rows are recovered by THOSE keys: ``select_sql`` is then the head
+    # ``SELECT <cols> FROM <table> WHERE (<pk>) IN `` that :func:`_keyed_select_sql` completes.
+    lock_sql: str = ""
+    lock_binds: List[Tuple[str, int]] = []
+    # The key columns ``lock_sql`` reads, in order (the declared PK).
+    key_cols: List[str] = []
+    # A single-row insert-or-ignore (mysql-returning.ts ``duplicateIsSkip``): ``write_sql`` is the PLAIN
+    # INSERT — its no-op ``ON DUPLICATE KEY UPDATE c = c`` tail removed — so a conflict on ANY unique key
+    # raises the duplicate-key error (_MYSQL_ER_DUP_ENTRY) instead of silently doing nothing. That error IS
+    # the skipped conflict: MySQL rolls back only the statement, and the write returns ``[]``. No affected
+    # count is read and no lock is taken, so it holds under every isolation level.
+    duplicate_is_skip: bool = False
 
 
 def _dollar_to_pyformat(sql: str) -> str:
@@ -484,23 +618,44 @@ def _parse_conflict_hint(hint_region: str):
     return [c.strip() for c in hm.group(1).split(",") if c.strip()]
 
 
+def _update_batch_keys(write_sql: str):
+    """EVERY JOIN key column of an updateMany — the target-side column of each ``AND``-joined conjunct
+    of ``ON u.k1 = <v.k1> AND u.k2 = <v.k2> SET …`` (json-batch.ts ``mysqlUpdateManyJson``). A composite
+    key keyed on its first column alone names rows the write never touched. ``None`` ⇒ unparsable."""
+    m = _BATCH_JOIN_ON_RE.search(write_sql)
+    if m is None:
+        return None
+    keys = []
+    for conj in _AND_SPLIT_RE.split(m.group(1)):
+        km = _BATCH_JOIN_CONJ_RE.search(conj.strip())
+        if km is None:
+            return None
+        keys.append(km.group(1))
+    return keys
+
+
 def _build_mysql_reselect(sql: str):
     """Derive the MySQL RETURNING recovery for ``sql``, or ``None`` when it declares no RETURNING.
 
     MySQL parses no RETURNING. A write that declares one is run STRIPPED and its written rows are
     recovered by a SELECT on the SAME connection, keyed on whatever identifies them:
 
-      * create / createMany → the AUTO_INCREMENT range ``[LAST_INSERT_ID, +affected)``, or the
-        client-supplied PK values pulled from the INSERT params by column position;
-      * upsert / upsertMany → the CONFLICT key (MySQL does not report which row ON DUPLICATE KEY
-        UPDATE touched, so the AUTO_INCREMENT range is wrong once a row was updated);
-      * updateMany → the batch JOIN key, re-bound from the SAME JSON payload;
-      * update → the write's OWN WHERE predicate (after the write — the rows carry their new values);
-      * delete → the write's OWN WHERE predicate, selected BEFORE the write (afterwards there is
-        nothing left to describe; that pre-image IS the set of rows the DELETE removes).
+      * create → the AUTO_INCREMENT range ``[LAST_INSERT_ID, +affected)``, or the client-supplied
+        PK values pulled from the INSERT params by column position;
+      * createMany → the AUTO_INCREMENT ids from LAST_INSERT_ID up that this transaction can see (a
+        bulk INSERT's ids need not be consecutive), or the PK tuples read back out of the payload;
+      * upsert / upsertMany → EVERY column of the CONFLICT key (MySQL does not report which row ON
+        DUPLICATE KEY UPDATE touched, so the AUTO_INCREMENT range is wrong once a row was updated;
+        one column of a composite key names other rows too);
+      * insert-or-ignore (``;action=ignore``) → as create, and ONLY the rows it inserted (a conflict
+        writes nothing, so it returns nothing);
+      * updateMany → EVERY batch JOIN key column, re-bound from the SAME JSON payload;
+      * update → the PK of every row its WHERE names, read and LOCKED (FOR UPDATE) before the write;
+        the written rows re-selected by those keys after it (never by the WHERE re-evaluated);
+      * delete → the write's OWN WHERE predicate, read and LOCKED (FOR UPDATE) BEFORE the write (afterwards
+        there is nothing left to describe); the DELETE must remove exactly those rows (affected).
 
-    Returns ``(write_sql, select_sql, binds, before)`` where each bind is ``("lastId"|"highId"|
-    "json"|"param", index)``. Mirrors src/scp/makesql/mysql-returning.ts, rust ``build_mysql_reselect``,
+    Returns a :class:`_MysqlReselect`. Mirrors src/scp/makesql/mysql-returning.ts, rust ``build_mysql_reselect``,
     go ``buildMysqlReselect`` and php ``buildMysqlReselect`` — one derivation, five runtimes.
 
     Fail-closed: a RETURNING write whose key cannot be identified raises rather than silently
@@ -515,6 +670,13 @@ def _build_mysql_reselect(sql: str):
     pk_cols, auto_inc = _parse_pk_hint(hint_region)
     conflict = _parse_conflict_hint(hint_region)
     write_sql = _PK_HINT_RE.sub("", sql[:ret_pos]).strip()
+    # An insert-or-ignore is spelled `ON DUPLICATE KEY UPDATE c = c` — it reads like an upsert, but it
+    # writes NOTHING on a conflict. It runs as the plain INSERT instead, so the conflict it skips is a
+    # duplicate-key error rather than a no-op that reports like an insert (duplicate_is_skip).
+    odku = write_sql.lower().find(" on duplicate key update ")
+    duplicate_is_skip = _IGNORE_HINT_RE.search(hint_region) is not None and odku >= 0
+    if duplicate_is_skip:
+        write_sql = write_sql[:odku].strip()
     wl = write_sql.lower()
 
     tm = _WRITE_TABLE_RE.search(write_sql)
@@ -526,56 +688,97 @@ def _build_mysql_reselect(sql: str):
     cm = _INSERT_COLS_RE.search(write_sql)
     insert_cols = [c.strip() for c in cm.group(1).split(",")] if cm is not None else []
 
-    def json_select(key: str) -> str:
-        return (
-            f"SELECT {cols} FROM {table} WHERE {key} IN "
-            f"(SELECT JSON_UNQUOTE(jt.{key}) FROM JSON_TABLE(?, '$[*]' COLUMNS({key} JSON PATH '$.{key}')) jt)"
-            f"{order_by}"
-        )
+    def json_select(keys, what: str, written):
+        # Recover a BATCH write's rows by reading its key TUPLES back out of the SAME JSON payload it
+        # bound — every key column, never the first alone (a composite key's first column names other
+        # rows too) — through the write's OWN JSON_TABLE source and the write's OWN read expression of
+        # each key (_batch_reads), so each key compares EXACTLY as the write compared or wrote it. Any
+        # other read can compare differently: a key the write reads as a JSON value (v.k) or as a BIGINT,
+        # re-read as the JSON_UNQUOTE string, is compared with a BIGINT column as DOUBLE, which past 2^53
+        # matches the neighbouring keys too. A key with no read expression in the write fails closed.
+        batch = _batch_reads(write_sql, insert_cols)
+        if batch is None:
+            raise ValueError(f"scp write(mysql): cannot parse the JSON_TABLE source of {write_sql!r}")
+        source, read_of = batch
+        for k in keys:
+            if k not in read_of:
+                raise ValueError(
+                    f"scp write(mysql): {what} column {k!r} has no read expression in {write_sql!r}, "
+                    "so its rows cannot be matched the way it wrote them"
+                )
+        reads = ", ".join(read_of[k] for k in keys)
+        return _MysqlReselect(write_sql, (
+            f"SELECT {cols} FROM {table} WHERE ({', '.join(keys)}) IN (SELECT {reads} FROM {source}){order_by}"
+        ), [("json", 0)], written, False)
 
-    # upsert / upsertMany — by the CONFLICT key.
-    if wl.startswith("insert") and "on duplicate key update" in wl:
+    def keyed_by_insert_params(keys, what: str, written):
+        # Recover a VALUES INSERT's rows by EVERY key column of EVERY row, each bound from its own param —
+        # row r's column c (its INSERT column position) is param r * ncols + c (_values_rows). Keying a
+        # multi-row INSERT by its first row alone would drop the rest.
+        for k in keys:
+            if k not in insert_cols:
+                raise ValueError(f"scp write(mysql): {what} column {k!r} is not among the INSERT columns of {write_sql!r}")
+        positions = [insert_cols.index(k) for k in keys]
+        rows = _values_rows(write_sql, len(insert_cols))
+        if rows is None:
+            raise ValueError(
+                f"scp write(mysql): the {what} of {write_sql!r} cannot be bound from its params — a VALUES value "
+                "that is not a bare `?` moves the param of every column after it"
+            )
+        binds = [("param", r * len(insert_cols) + c) for r in range(rows) for c in positions]
+        if rows == 1:
+            where = " AND ".join(f"{k} = ?" for k in keys)
+        else:
+            tuple_ = "(" + ", ".join("?" for _ in keys) + ")"
+            where = f"({', '.join(keys)}) IN ({', '.join(tuple_ for _ in range(rows))})"
+        return _MysqlReselect(write_sql, f"SELECT {cols} FROM {table} WHERE {where}{order_by}", binds, written, False)
+
+    upsert = "on duplicate key update" in wl
+    if duplicate_is_skip and is_batch:
+        raise ValueError(f"scp write(mysql): a batch insert-or-ignore…RETURNING is an INSERT IGNORE, not an ON DUPLICATE KEY UPDATE ({write_sql!r})")
+
+    # upsert / upsertMany — by EVERY column of the CONFLICT key.
+    if wl.startswith("insert") and upsert:
         if not conflict:
             raise ValueError(f"scp write(mysql): an upsert…RETURNING needs its conflict key in the pk hint ({write_sql!r})")
-        key = conflict[0]
-        if is_batch:
-            return write_sql, json_select(key), [("json", 0)], False
-        if key not in insert_cols:
-            raise ValueError(f"scp write(mysql): conflict key {key!r} is not among the INSERT columns of {write_sql!r}")
-        return write_sql, f"SELECT {cols} FROM {table} WHERE {key} = ?{order_by}", [("param", insert_cols.index(key))], False
+        return json_select(conflict, "conflict key", None) if is_batch else keyed_by_insert_params(conflict, "conflict key", None)
 
-    # create / createMany — by the AUTO_INCREMENT range, or by the client-supplied PK values.
+    # create / createMany / insert-or-ignore — by the AUTO_INCREMENT range, or by the client-supplied PK
+    # values. Recovered only when it wrote a row, and only as many rows as it wrote (_written_row_count).
     if wl.startswith("insert"):
+        if auto_inc and pk_cols == [auto_inc] and is_batch:
+            # createMany (a bulk INSERT…SELECT): its ids start at LAST_INSERT_ID but need not be
+            # consecutive, so the bare range would name other sessions' rows and miss our own. Every id
+            # it allocated is ≥ LAST_INSERT_ID; the anchored read view hides other sessions' rows; the
+            # count check fails the rest closed.
+            return _MysqlReselect(
+                write_sql, f"SELECT {cols} FROM {table} WHERE {auto_inc} >= ?{order_by}",
+                [("lastId", 0)], "affected", False, f"SELECT 1 FROM {table} LIMIT 1",
+            )
         if auto_inc and pk_cols == [auto_inc]:
-            return write_sql, f"SELECT {cols} FROM {table} WHERE {auto_inc} >= ? AND {auto_inc} < ?{order_by}", [("lastId", 0), ("highId", 0)], False
+            # A single-row / multi-VALUES INSERT reserves its ids up front, so they ARE consecutive.
+            return _MysqlReselect(
+                write_sql, f"SELECT {cols} FROM {table} WHERE {auto_inc} >= ? AND {auto_inc} < ?{order_by}",
+                [("lastId", 0), ("highId", 0)], "affected", False, duplicate_is_skip=duplicate_is_skip,
+            )
         if not pk_cols:
             raise ValueError(
                 f"scp write(mysql): an INSERT…RETURNING carries no pk hint, so its written rows cannot be "
                 f"identified ({write_sql!r}). The producer must pass the model's declared primary key."
             )
+        # createMany with a CLIENT-supplied key: the statement binds ONE JSON payload, not one param
+        # per key, so the key tuples are read back out of that SAME payload (as upsertMany does). A batch
+        # `INSERT IGNORE` reads back pre-existing rows too, so its count check fails it closed.
         if is_batch:
-            # createMany with a CLIENT-supplied key: the statement binds ONE JSON payload, not one
-            # param per key, so the keys are read back out of that SAME payload (as upsertMany does).
-            if len(pk_cols) != 1:
-                raise ValueError(
-                    f"scp write(mysql): a batch INSERT…RETURNING on the COMPOSITE key "
-                    f"({', '.join(pk_cols)}) cannot be recovered from its JSON payload ({write_sql!r})"
-                )
-            return write_sql, json_select(pk_cols[0]), [("json", 0)], False
-        conds, binds = [], []
-        for pk in pk_cols:
-            if pk not in insert_cols:
-                raise ValueError(f"scp write(mysql): PK column {pk!r} is not among the INSERT columns of {write_sql!r}")
-            conds.append(f"{pk} = ?")
-            binds.append(("param", insert_cols.index(pk)))
-        return write_sql, f"SELECT {cols} FROM {table} WHERE {' AND '.join(conds)}{order_by}", binds, False
+            return json_select(pk_cols, "PK", "affected")
+        return keyed_by_insert_params(pk_cols, "PK", "affected")._replace(duplicate_is_skip=duplicate_is_skip)
 
-    # updateMany — by the batch JOIN key, re-selected from the SAME JSON payload the write bound.
+    # updateMany — by EVERY batch JOIN key column, re-selected from the SAME JSON payload the write bound.
     if wl.startswith("update") and is_batch:
-        km = _BATCH_JOIN_KEY_RE.search(write_sql)
-        if km is None:
+        keys = _update_batch_keys(write_sql)
+        if keys is None:
             raise ValueError(f"scp write(mysql): cannot parse the batch JOIN key of {write_sql!r}")
-        return write_sql, json_select(km.group(1)), [("json", 0)], False
+        return json_select(keys, "JOIN key", None)
 
     # update / delete — by the write's OWN WHERE predicate. Index off `wl` (the STRIPPED write's
     # lowercase), not the original sql: `write_sql` is hint-removed and trimmed, so only `wl`'s
@@ -586,7 +789,48 @@ def _build_mysql_reselect(sql: str):
     where_sql = write_sql[where_pos + len(" where "):].strip()
     leading = write_sql[:where_pos].count("?")
     binds = [("param", leading + i) for i in range(where_sql.count("?"))]
-    return write_sql, f"SELECT {cols} FROM {table} WHERE {where_sql}{order_by}", binds, wl.startswith("delete")
+    # The DELETE: its pre-image is a LOCKING read — it reads the latest committed rows (not an older
+    # snapshot) and holds them, so no other session can remove them first — and the DELETE must remove
+    # exactly those rows: its affected count is checked against the pre-image ("affected").
+    if wl.startswith("delete"):
+        return _MysqlReselect(write_sql, f"SELECT {cols} FROM {table} WHERE {where_sql}{order_by} FOR UPDATE", binds, "affected", True)
+    # The UPDATE: lock the rows its WHERE names and read their keys BEFORE the write, then recover the
+    # written rows (carrying their new values) by those keys — never by the WHERE re-evaluated after it.
+    if not pk_cols:
+        raise ValueError(
+            f"scp write(mysql): an UPDATE…RETURNING carries no pk hint, so the rows it writes cannot be keyed "
+            f"({write_sql!r}). The producer must pass the model's declared primary key."
+        )
+    return _MysqlReselect(
+        write_sql, f"SELECT {cols} FROM {table} WHERE ({', '.join(pk_cols)}) IN ", [], None, False,
+        lock_sql=f"SELECT {', '.join(pk_cols)} FROM {table} WHERE {where_sql}{order_by} FOR UPDATE",
+        lock_binds=binds, key_cols=pk_cols,
+    )
+
+
+def _keyed_select_sql(rs: _MysqlReselect, rows: int) -> str:
+    """An UPDATE's ``select_sql`` completed for ``rows`` locked keys (mysql-returning.ts
+    ``keyedSelectSql``): one ``(?, …)`` tuple per row, ordered by the declared PK."""
+    tuple_ = "(" + ", ".join("?" for _ in rs.key_cols) + ")"
+    return f"{rs.select_sql}({', '.join(tuple_ for _ in range(rows))}) ORDER BY {', '.join(rs.key_cols)}"
+
+
+def _written_row_count(written: Optional[str], affected: int) -> Optional[int]:
+    """How many rows the write wrote, from its own result (mysql-returning.ts ``writtenRowCount``);
+    ``None`` ⇒ not countable. ``affected`` — the affected count (a plain INSERT / INSERT IGNORE never
+    updates a row, so CLIENT_FOUND_ROWS cannot change it)."""
+    return None if written is None else affected
+
+
+def _check_recovered(rows, written: Optional[int], write_sql: str):
+    """Fail closed when the recovered row count differs from the count the write wrote: the SELECT then
+    named rows the write did not write (or missed ones it did)."""
+    if written is not None and len(rows) != written:
+        raise ValueError(
+            f"scp write(mysql): the write wrote {written} row(s) but its RETURNING recovery found {len(rows)} — "
+            f"refusing to return rows it cannot attribute to this write ({write_sql!r})"
+        )
+    return rows
 
 
 def _bind_reselect(binds, params, last_id, affected):
@@ -596,7 +840,8 @@ def _bind_reselect(binds, params, last_id, affected):
         if kind == "lastId":
             out.append(last_id)
         elif kind == "highId":
-            out.append(last_id + max(1, affected))
+            # A write that wrote no row is never re-selected (_written_row_count 0 ⇒ []), so affected ≥ 1.
+            out.append(last_id + affected)
         elif kind == "json":
             out.append(params[0] if params else None)
         else:
@@ -613,23 +858,34 @@ def _bind_reselect(binds, params, last_id, affected):
 
 
 def _scalar(v: Any) -> Any:
-    """Coerce a driver cell to a canonical bc scalar (int/float/bool/str/None).
+    """Coerce a driver cell to a canonical bc scalar (int/float/bool/str/None) WITHOUT losing its value.
 
     psycopg maps a PG ``uuid`` column to a Python ``uuid.UUID`` and other rich types (Decimal,
     date/datetime) to their own classes. The conformance row encoding — and the cross-language
     reference — are JSON scalars, so a non-native cell is stringified to its canonical text form,
     exactly as SQLite/MySQL return a uuid-as-text or the Rust PG driver falls back to ``String``.
     Native scalars pass through unchanged (bool before int, since ``bool`` is an ``int`` subclass).
+
+    The mapping is INJECTIVE: two different DB values never become one runtime value, because a cell is
+    a relation key (``pluck`` / ``group``) and a write key as often as it is a payload (#363).
+
+      - ``Decimal`` (every NUMERIC/DECIMAL column and numeric aggregate): an integral finite value is
+        the exact ``int``; any other is its exact decimal text — the DECIMAL/NUMERIC ``string`` outType
+        (``src/scp/coltype.ts``). Never through ``float``: 9007199254740993 rounds to …992 there.
+      - ``bytes``: decoded STRICTLY, so an invalid UTF-8 cell fails closed (``UnicodeDecodeError``)
+        instead of collapsing onto another value through U+FFFD — as the Rust readers' ``String``
+        decode fails on it.
     """
     if v is None or isinstance(v, (bool, int, float, str)):
         return v
     from decimal import Decimal
 
     if isinstance(v, Decimal):
-        f = float(v)
-        return int(f) if f.is_integer() else f
+        if v.is_finite() and v == v.to_integral_value():
+            return int(v)
+        return format(v, "f")
     if isinstance(v, (bytes, bytearray)):
-        return bytes(v).decode("utf-8", "replace")
+        return bytes(v).decode("utf-8")
     return str(v)
 
 
@@ -646,25 +902,79 @@ def _conn_all(conn: Any, sql: str, params: Sequence[Any], xform, emulate_returni
     the batch JSON key or the write's own WHERE, keyed off the strip-before-execute PK hint. The
     recovery runs on THIS connection, so inside a transaction it sees the uncommitted rows; a
     DELETE's pre-image SELECT runs BEFORE the write, since afterwards there is nothing left to
-    describe. This is the ONE python reselect path, mirroring the four sibling runtimes.
+    describe. The steps run ATOMICALLY (:func:`_atomically`). This is the ONE python reselect path,
+    mirroring the four sibling runtimes.
     """
     if emulate_returning:
         rs = _build_mysql_reselect(sql)
         if rs is not None:
-            write_sql, select_sql, binds, before = rs
-            if before:
-                rows = _conn_select(conn, xform(select_sql), _bind_reselect(binds, list(params), 0, 0))
-                cur = conn.cursor()
-                cur.execute(xform(write_sql), tuple(params))
-                cur.close()
-                return rows
-            cur = conn.cursor()
-            cur.execute(xform(write_sql), tuple(params))
-            last_id = cur.lastrowid or 0
-            affected = cur.rowcount if cur.rowcount is not None and cur.rowcount >= 0 else 1
-            cur.close()
-            return _conn_select(conn, xform(select_sql), _bind_reselect(binds, list(params), last_id, affected))
+            return _atomically(conn, lambda: _conn_returning(conn, rs, params, xform))
     return _conn_select(conn, xform(sql), list(params))
+
+
+def _atomically(conn: Any, steps):
+    """Run the RETURNING emulation's steps as ONE unit: inside the connection's open transaction, or in
+    their own BEGIN … COMMIT (ROLLBACK when a step — the fail-closed recovery included — fails, so its
+    write does not survive). Whether a transaction is open is the SERVER's answer: PyMySQL keeps the
+    status flags of the last OK/EOF packet in ``server_status``, whoever issued the BEGIN."""
+    if conn.server_status & _SERVER_STATUS_IN_TRANS:
+        return steps()
+    cur = conn.cursor()
+    cur.execute("BEGIN")
+    try:
+        result = steps()
+    except BaseException:
+        cur.execute("ROLLBACK")
+        cur.close()
+        raise
+    cur.execute("COMMIT")
+    cur.close()
+    return result
+
+
+def _conn_returning(conn: Any, rs: _MysqlReselect, params: Sequence[Any], xform) -> List[Dict[str, Any]]:
+    """One RETURNING emulation's steps on ``conn`` (the caller makes them atomic)."""
+    if rs.before:
+        rows = _conn_select(conn, xform(rs.select_sql), _bind_reselect(rs.binds, list(params), 0, 0))
+        cur = conn.cursor()
+        cur.execute(xform(rs.write_sql), tuple(params))
+        affected = cur.rowcount
+        cur.close()
+        # The DELETE must have removed exactly the locked pre-image.
+        return _check_recovered(rows, _written_row_count(rs.written, affected), rs.write_sql)
+    if rs.lock_sql:
+        # UPDATE…RETURNING: recover the written rows by the keys locked BEFORE the write (never by the
+        # WHERE re-evaluated after it).
+        keys = _conn_select(conn, xform(rs.lock_sql), _bind_reselect(rs.lock_binds, list(params), 0, 0))
+        cur = conn.cursor()
+        cur.execute(xform(rs.write_sql), tuple(params))
+        cur.close()
+        if not keys:
+            return []
+        key_values = [k[c] for k in keys for c in rs.key_cols]
+        rows = _conn_select(conn, xform(_keyed_select_sql(rs, len(keys))), key_values)
+        return _check_recovered(rows, len(keys), rs.write_sql)
+    if rs.anchor_sql:
+        _conn_select(conn, rs.anchor_sql, [])
+    cur = conn.cursor()
+    try:
+        cur.execute(xform(rs.write_sql), tuple(params))
+    except Exception as e:
+        # An insert-or-ignore's duplicate key: the conflict it skips — it wrote nothing (only the
+        # statement rolled back). PyMySQL raises it as an IntegrityError whose args[0] is the error number.
+        cur.close()
+        if rs.duplicate_is_skip and e.args and e.args[0] == _MYSQL_ER_DUP_ENTRY:
+            return []
+        raise
+    last_id = cur.lastrowid or 0
+    affected = cur.rowcount
+    cur.close()
+    # A write that wrote no row (an INSERT IGNORE that hit a conflict) returns nothing.
+    written = _written_row_count(rs.written, affected)
+    if written == 0:
+        return []
+    rows = _conn_select(conn, xform(rs.select_sql), _bind_reselect(rs.binds, list(params), last_id, affected))
+    return _check_recovered(rows, written, rs.write_sql)
 
 
 def _conn_select(conn: Any, sql: str, params: Sequence[Any]) -> List[Dict[str, Any]]:

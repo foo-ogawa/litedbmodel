@@ -137,10 +137,18 @@ describe('cross-lang bench: the MySQL RETURNING recovery is derived, never copie
     const statements = mysqlStatements();
     expect(statements.length, 'the committed mysql module should carry statements').toBeGreaterThan(0);
 
-    const { recover } = derive({ all: statements }, 'mysql');
+    // An UPDATE…RETURNING is recovered by locking and keying its rows BEFORE the write (#361), which no
+    // cell implements yet: deriving it must refuse LOUDLY rather than hand the cells a recovery they would
+    // run in the wrong order.
+    const isUpdate = (s: string): boolean => /^UPDATE\b/i.test(s) && /\bRETURNING\b/i.test(s);
+    const updates = statements.filter(isUpdate);
+    expect(updates.length, 'the committed mysql module should carry an UPDATE…RETURNING').toBeGreaterThan(0);
+    for (const u of updates) expect(() => derive({ all: [u] }, 'mysql')).toThrow(/must lock and key its rows BEFORE its write/);
+
+    const { recover } = derive({ all: statements.filter((s) => !isUpdate(s)) }, 'mysql');
     const derived = (recover.all ?? []).filter((r) => r !== null).map((r) => ({ ...r! }));
 
-    // The recoveries `src/scp/makesql/mysql-returning.ts` builds for this model's three RETURNING writes.
+    // The recoveries `src/scp/makesql/mysql-returning.ts` builds for this model's INSERT RETURNING writes.
     // A change there that the cells would silently stop matching turns this red.
     expect(derived).toEqual([
       {
@@ -153,11 +161,6 @@ describe('cross-lang bench: the MySQL RETURNING recovery is derived, never copie
         writeSql: 'INSERT INTO benchmark_users (email, name) VALUES (?, ?)',
         selectSql: 'SELECT id FROM benchmark_users WHERE id >= ? AND id < ? ORDER BY id',
         binds: [{ kind: 'lastId' }, { kind: 'highId' }],
-      },
-      {
-        writeSql: 'UPDATE benchmark_users SET name = ? WHERE id = ?',
-        selectSql: 'SELECT id FROM benchmark_users WHERE id = ? ORDER BY id',
-        binds: [{ kind: 'param', index: 1 }],
       },
     ]);
   });

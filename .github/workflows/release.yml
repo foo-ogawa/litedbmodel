@@ -51,8 +51,8 @@ jobs:
         run: npm run deps:check
       - name: Audit
         if: steps.tag.outcome == 'failure'
-        # The same audit ci.yml runs on the pull request (one dated exception, scripts/check-audit.mjs,
-        # #335), so a change that passed there does not stop the publish here.
+        # The same audit ci.yml runs on the pull request (scripts/check-audit.mjs), so a change that
+        # passed there does not stop the publish here.
         run: npm run audit:check
       - name: Verify npm signatures
         if: steps.tag.outcome == 'failure'

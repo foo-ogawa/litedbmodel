@@ -1,8 +1,4 @@
-[**litedbmodel v2.2.14**](../README.md)
-
-***
-
-[litedbmodel](../globals.md) / formatLocalDate
+[API](../README.md) / formatLocalDate
 
 # Function: formatLocalDate()
 
@@ -23,3 +19,4 @@ Format Date as YYYY-MM-DD using local time components
 ## Returns
 
 `string`
+

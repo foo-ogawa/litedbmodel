@@ -1,39 +1,17 @@
-[**litedbmodel v2.2.14**](../README.md)
-
-***
-
-[litedbmodel](../globals.md) / createMiddleware
+[API](../README.md) / createMiddleware
 
 # Function: createMiddleware()
 
 ```ts
-function createMiddleware<S>(config: MiddlewareConfig<S>): CreatedMiddlewareClass<S>;
+function createMiddleware<S extends object = Record<string, never>>(config: MiddlewareConfig<S>): CreatedMiddlewareClass<S>;
 ```
 
-Defined in: [Middleware.ts:494](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Middleware.ts#L494)
+Defined in: [Middleware.ts:497](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Middleware.ts#L497)
 
 Create a middleware class from a configuration object.
 
 This is a simpler alternative to extending the Middleware class directly.
-Each request (a [Middleware.run](../classes/Middleware.md#run) scope) gets its own copy of the state object.
-
-## Type Parameters
-
-| Type Parameter | Default type |
-| ------ | ------ |
-| `S` *extends* `object` | `Record`\<`string`, `never`\> |
-
-## Parameters
-
-| Parameter | Type | Description |
-| ------ | ------ | ------ |
-| `config` | [`MiddlewareConfig`](../interfaces/MiddlewareConfig.md)\<`S`\> | Middleware configuration with state and hook functions |
-
-## Returns
-
-[`CreatedMiddlewareClass`](../interfaces/CreatedMiddlewareClass.md)\<`S`\>
-
-A middleware class that can be passed to DBModel.use()
+Each request (a [`Middleware.run`](../classes/Middleware.md#run) scope) gets its own copy of the state object.
 
 ## Example
 
@@ -49,7 +27,7 @@ const LoggerMiddleware = createMiddleware({
 // With per-request state
 const TenantMiddleware = createMiddleware({
   state: { tenantId: 0 },
-  
+
   // Hook signature: (model, next, ...args) for method-level hooks
   find: async function(model, next, conditions, options) {
     // `this` is typed as { tenantId: number }
@@ -66,3 +44,22 @@ DBModel.use(TenantMiddleware);
 // Set tenant for the current request (inside Middleware.run at the request entry)
 TenantMiddleware.getCurrentContext().tenantId = 123;
 ```
+
+## Type Parameters
+
+| Type Parameter |
+| ------ |
+| `S extends object = Record<string, never>` |
+
+## Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `config` | [`MiddlewareConfig`](../interfaces/MiddlewareConfig.md)`<S>` | Middleware configuration with state and hook functions |
+
+## Returns
+
+[`CreatedMiddlewareClass`](../interfaces/CreatedMiddlewareClass.md)`<S>`
+
+A middleware class that can be passed to DBModel.use()
+

@@ -1,8 +1,4 @@
-[**litedbmodel v2.2.14**](../README.md)
-
-***
-
-[litedbmodel](../globals.md) / dbNow
+[API](../README.md) / dbNow
 
 # Function: dbNow()
 
@@ -17,3 +13,4 @@ Create a NOW() value
 ## Returns
 
 `DBImmediateValue`
+

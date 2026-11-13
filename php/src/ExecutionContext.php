@@ -260,16 +260,30 @@ final class TxConnectionAdapter implements Connection
  */
 final class PdoDriver
 {
-    private readonly PdoConnection $conn;
+    private \PDO $pdo;
+    private PdoConnection $conn;
     /**
      * ONE prepared-statement cache per `\PDO` (#257) — shared by the non-tx {@see PdoConnection} and
      * every {@see beginTx()} handle, because they all issue their SQL on this ONE connection and a
      * `\PDOStatement` belongs to the connection that prepared it.
      */
-    private readonly PreparedStatements $stmts;
+    private PreparedStatements $stmts;
 
-    public function __construct(private readonly \PDO $pdo)
+    /**
+     * @param (\Closure(): \PDO)|null $connect opens a new `\PDO` from this driver's own connection parameters
+     *        — given by {@see PdoPoolFactory::build()}, which built `$pdo` from them. {@see beginTx()} uses it
+     *        to replace a connection that failed the probe of a retry after a connection error. `null` for
+     *        a driver over a caller's `\PDO` ({@see Context::forPdo()}), whose parameters it does not have.
+     */
+    public function __construct(\PDO $pdo, private readonly ?\Closure $connect = null)
     {
+        $this->use($pdo);
+    }
+
+    /** Make `$pdo` this driver's connection, with its own prepared-statement cache and non-tx adapter. */
+    private function use(\PDO $pdo): void
+    {
+        $this->pdo = $pdo;
         $this->stmts = new PreparedStatements($pdo);
         $this->conn = new PdoConnection($pdo, $this->stmts);
     }
@@ -301,10 +315,37 @@ final class PdoDriver
      *
      * A fresh handle every call (no static/driver-global slot) — the removal the design mandates.
      * PHP's single `\PDO` can hold ONE active transaction, so the handle owns THAT connection.
+     *
+     * `$checkAttempts` > 0 (a retry after a connection error): the connection may be dead after a failover
+     * or a restart, so each acquired handle is first sent a harmless `SELECT 1` (directly on the connection,
+     * not through the middleware). On failure the handle is released as destroyed and the dead `\PDO` is
+     * discarded: a new one is opened from this driver's connection parameters (`$connect`) and probed in
+     * turn, at most `$checkAttempts` in all, and the last probe's error is thrown when every one failed. A
+     * driver without connection parameters (over a caller's `\PDO`) cannot open another, so it probes the
+     * same one again. The probe only shows the connection is usable, not whether the failed statement ran
+     * on the server. 0 ⇒ no probe (a first attempt). Twin of the TS `acquireCheckedConnection`.
      */
-    public function beginTx(): PdoTxConnection
+    public function beginTx(int $checkAttempts = 0): PdoTxConnection
     {
-        return new PdoTxConnection($this->pdo, $this->stmts);
+        for ($attempt = 1; ; $attempt++) {
+            $tx = new PdoTxConnection($this->pdo, $this->stmts);
+            if ($checkAttempts === 0) {
+                return $tx;
+            }
+            try {
+                $tx->all('SELECT 1', []);
+                return $tx;
+            } catch (\Throwable $e) {
+                $tx->release(true);
+                if ($attempt >= $checkAttempts) {
+                    throw $e;
+                }
+                if ($this->connect !== null) {
+                    // Dropping the last reference to the dead \PDO closes it.
+                    $this->use(($this->connect)());
+                }
+            }
+        }
     }
 }
 
@@ -521,6 +562,16 @@ class ExecutionContext
     public function driver(): PdoDriver
     {
         return $this->driver;
+    }
+
+    /**
+     * The identity a transaction pinned for this ctx is keyed by ({@see TxAmbient}): the single `\PDO` its
+     * transactions open on. Every ctx over that `\PDO` — each {@see Context::forPdo()} of it, every
+     * derivation — shares that connection and so its transaction; a ctx over another `\PDO` does not.
+     */
+    public function pinOwner(): object
+    {
+        return $this->driver->pdo();
     }
 
     /** Is this a tx-scoped ctx (a pinned connection is present)? */
@@ -790,6 +841,13 @@ function rollbackWith(mixed $value): TxDecision
  * fix). The general form: `$body` decides COMMIT vs ROLLBACK (see {@see TxDecision}); a thrown
  * exception from `$body` always rolls back and re-raises.
  *
+ *   0. NESTED: a transaction already open on `$ctx`'s owner ({@see outerTransaction()}) is JOINED —
+ *      `$body` runs on the outer's tx ctx with no new connection and no BEGIN/COMMIT, so the inner body
+ *      is part of the outer physical transaction (an inner error propagates and rolls back the WHOLE
+ *      tx). The envelope is the outer's: `$before`/`$after` are not issued, and a ROLLBACK decision
+ *      returns its value without rolling the outer back — the outer decides its own COMMIT/ROLLBACK
+ *      (the TS `withTransactionAsync` ignores a nested `rollbackOnly`; go `TransactionDecided` returns a
+ *      nested gate rollback's value the same way). Mirrors v1 `DBModel.transaction` :2794-2797;
  *   1. acquire ONE connection via {@see PdoDriver::beginTx()} — a {@see PdoTxConnection} (the tx's
  *      exclusive connection; BEGIN issued on it), the PHP analogue of v1 `PoolTransaction`;
  *   2. pin it into a tx-scoped {@see ExecutionContext} passed EXPLICITLY to `$body` so EVERY statement
@@ -807,29 +865,36 @@ function rollbackWith(mixed $value): TxDecision
  * {@see \LiteDbModel\Runtime\isolationPrelude()}): MySQL's `SET` runs pre-BEGIN, PG's post-BEGIN.
  * Empty ⇒ a bare `BEGIN` (byte-identical to the Phase A path).
  *
- * The tx-scoped ctx is ALSO pinned as the AMBIENT context ({@see TxAmbient}) for the duration of
- * `$body` — so an operation issued INSIDE the body (a nested guarded write {@see runGuarded()} whose
- * caller threads only the raw `\PDO`) still detects the tx via {@see currentContext()} and JOINs it. This
- * is the PHP analogue of the TS `txContext.run` async-local / python's `run_with_pinned_context`
+ * The tx-scoped ctx is ALSO pinned as the AMBIENT context of its owner ({@see TxAmbient}) for the
+ * duration of `$body` — so an operation issued INSIDE the body on a ctx of the same owner (a leaf bound
+ * to the outer ctx) still detects the tx via {@see currentContext()} and JOINs it, while a ctx of
+ * another owner does not. This is the PHP analogue of the TS `runWithPinnedAsyncConnection(owner, …)`
  * (PHP is 1-req-1-process, so a process-scoped holder is the honest single-threaded equivalent).
  *
  * @param callable(ExecutionContext):TxDecision $body
  * @param list<string> $before isolation statements run BEFORE `BEGIN` (MySQL SET)
  * @param list<string> $after  isolation statements run AFTER `BEGIN` (PG SET)
  */
-function withTransactionDecided(ExecutionContext $ctx, callable $body, array $before = [], array $after = []): mixed
+function withTransactionDecided(ExecutionContext $ctx, callable $body, array $before = [], array $after = [], int $checkAttempts = 0): mixed
 {
+    // NESTED-TX JOIN (mirror the TS withTransactionAsync / v1 :2794): already inside a tx on this ctx's
+    // owner ⇒ join the outer. No new connection, no BEGIN/COMMIT, and the decision is the outer's.
+    $outer = outerTransaction($ctx);
+    if ($outer !== null) {
+        return $body($outer)->value;
+    }
+
     // Acquire the owned tx connection handle — NO SQL issued yet (Phase D #96): the prelude + BEGIN are
     // issued THROUGH the seam below, on the pinned connection, so a middleware observes them.
-    $tx = $ctx->driver()->beginTx();
+    $tx = $ctx->driver()->beginTx($checkAttempts);
     $txCtx = $ctx->withConnection(new TxConnectionAdapter($tx), true);
 
     // `destroy` starts true: the connection is only proven clean once a COMMIT/ROLLBACK completes
     // without throwing. ANY failure below (body error, or a commit/rollback that itself throws)
     // leaves it true ⇒ the finally clears the poisoned connection instead of leaving an open tx.
     $destroy = true;
-    // Pin the tx-scoped ctx as the AMBIENT context for the body's duration (restored on exit) so an
-    // operation issued inside `$body` that only has the raw \PDO still JOINs this tx via currentContext().
+    // Pin the tx-scoped ctx as the AMBIENT context of its owner for the body's duration (restored on
+    // exit) so an operation issued inside `$body` on the outer ctx still JOINs this tx via currentContext().
     // Set BEFORE issuing BEGIN so a middleware observing BEGIN sees a consistent in-tx ambient state.
     $prevAmbient = TxAmbient::set($txCtx);
     try {
@@ -882,51 +947,83 @@ function withTransactionDecided(ExecutionContext $ctx, callable $body, array $be
 /**
  * The AMBIENT (process-scoped) tx {@see ExecutionContext} holder — the PHP analogue of the TS
  * `AsyncLocalStorage` / python's `contextvars.ContextVar` (§3 table). PHP is 1-request-1-process
- * (no threads, no async continuation), so a plain process-scoped slot is the honest, race-free
- * equivalent: only ONE transaction can be live on the single `\PDO` at a time, and there is no
- * concurrent execution scope to leak into. {@see withTransactionDecided()} pins the tx-scoped ctx
- * here for the body's duration + restores the prior value on exit; the write guard + the ambient-tx
- * JOIN read it via {@see currentContext()}. Outside a tx the slot is `null`.
+ * (no threads, no async continuation), so a process-scoped holder is the honest, race-free
+ * equivalent: there is no concurrent execution scope to leak into.
+ *
+ * The pins are KEYED BY OWNER ({@see ExecutionContext::pinOwner()}), exactly as the TS store is a map
+ * keyed by the execution context (`asyncCtxStore`, 010a3fb): one process can hold several independent
+ * contexts (one database per tenant), and a transaction pinned for one of them is not the transaction
+ * of another. {@see withTransactionDecided()} pins the tx-scoped ctx under its owner for the body's
+ * duration and restores the prior pins on exit; a lookup ({@see currentContext()}) answers only for
+ * the owner of the ctx it is given.
+ *
+ * The key is the owner's `spl_object_id`. The pinned ctx references its owner, so the owner is alive
+ * — and its id cannot be reused — for as long as the pin is in the map.
  */
 final class TxAmbient
 {
-    private static ?ExecutionContext $current = null;
+    /** @var array<int, ExecutionContext> the pinned ctx per owner, keyed by the owner's object id. */
+    private static array $pins = [];
 
-    /** Pin `$ctx` as the ambient tx ctx; return the PRIOR value (for symmetric restore). */
-    public static function set(?ExecutionContext $ctx): ?ExecutionContext
+    /** Pin `$ctx` under its owner; return ALL the PRIOR pins (for symmetric restore). */
+    public static function set(ExecutionContext $ctx): array
     {
-        $prev = self::$current;
-        self::$current = $ctx;
+        $prev = self::$pins;
+        self::$pins[spl_object_id($ctx->pinOwner())] = $ctx;
         return $prev;
     }
 
-    /** Restore a previously-{@see set()} ambient value (the `finally`-side unwind). */
-    public static function restore(?ExecutionContext $prev): void
+    /**
+     * Restore previously-{@see set()} pins (the `finally`-side unwind).
+     *
+     * @param array<int, ExecutionContext> $prev
+     */
+    public static function restore(array $prev): void
     {
-        self::$current = $prev;
+        self::$pins = $prev;
     }
 
-    /** The ambient tx ctx of THIS process, or `null` outside a pinned tx scope. */
-    public static function current(): ?ExecutionContext
+    /** The ctx pinned for `$ctx`'s owner in THIS scope, or `null`. */
+    public static function for(ExecutionContext $ctx): ?ExecutionContext
     {
-        return self::$current;
+        return self::$pins[spl_object_id($ctx->pinOwner())] ?? null;
+    }
+
+    /**
+     * Every ctx pinned in THIS scope, whatever its owner.
+     *
+     * @return list<ExecutionContext>
+     */
+    public static function pinned(): array
+    {
+        return array_values(self::$pins);
     }
 }
 
 /**
- * The ambient (process-propagated) {@see ExecutionContext} of THIS execution scope, or `null` outside
- * a pinned tx scope. The seam consults it so a callee that only has the raw `\PDO` still resolves the
- * tx-owned connection when it runs inside a {@see withTransactionDecided()} body. The PHP analogue of
- * python's `current_context()`.
+ * The ctx pinned for `$ctx`'s owner in THIS execution scope (a tx-scoped ctx inside a
+ * {@see withTransactionDecided()} body, or a ctx {@see runWithPinnedContext()} pinned), or `null`. A
+ * callee handed the outer ctx resolves the tx-owned connection through it; a ctx with another owner
+ * never sees it. The PHP analogue of the TS `currentPinnedAsyncConnection(owner)`.
  */
-function currentContext(): ?ExecutionContext
+function currentContext(ExecutionContext $ctx): ?ExecutionContext
 {
-    return TxAmbient::current();
+    return TxAmbient::for($ctx);
 }
 
 /**
- * Run `$fn` with `$ctx` pinned as the ambient tx ctx for THIS scope (restored on exit). Every implicit
- * {@see currentContext()} inside `$fn` returns `$ctx`. The PHP analogue of python's
+ * The transaction already open on `$ctx`'s owner in THIS execution scope, or `null`. A transaction
+ * opened inside it JOINS it; a statement on `$ctx` runs on its connection.
+ */
+function outerTransaction(ExecutionContext $ctx): ?ExecutionContext
+{
+    $pinned = currentContext($ctx);
+    return $pinned !== null && $pinned->inTransaction() ? $pinned : null;
+}
+
+/**
+ * Run `$fn` with `$ctx` pinned as the ambient ctx of its owner for THIS scope (restored on exit). Every
+ * {@see currentContext()} for that owner inside `$fn` returns `$ctx`. The PHP analogue of python's
  * `run_with_pinned_context` — used by the read-only guard test to pin a derived read-only ctx around
  * a nested write.
  *
@@ -944,18 +1041,32 @@ function runWithPinnedContext(ExecutionContext $ctx, callable $fn): mixed
 
 // ── The write=tx GUARD seam (Phase B / #85) ────────────────────────────────────
 
-/** Is THIS execution scope inside an active transaction? Reads the AMBIENT-propagated ctx. */
+/**
+ * Is THIS execution scope inside an active transaction? Reads every pinned ctx: like the TS
+ * `txActiveStore`, the guard marker belongs to the scope, not to one context.
+ */
 function ambientInTransaction(): bool
 {
-    $ambient = currentContext();
-    return $ambient !== null && $ambient->inTransaction();
+    foreach (TxAmbient::pinned() as $pinned) {
+        if ($pinned->inTransaction()) {
+            return true;
+        }
+    }
+    return false;
 }
 
-/** Is THIS execution scope a READ-ONLY context? Reads the AMBIENT-propagated ctx's read-only marker. */
+/**
+ * Is THIS execution scope a READ-ONLY context? Reads every pinned ctx's read-only marker: like the TS
+ * `readOnlyStore`, the marker belongs to the scope, not to one context.
+ */
 function ambientReadOnly(): bool
 {
-    $ambient = currentContext();
-    return $ambient !== null && $ambient->readOnly();
+    foreach (TxAmbient::pinned() as $pinned) {
+        if ($pinned->readOnly()) {
+            return true;
+        }
+    }
+    return false;
 }
 
 /**
@@ -997,8 +1108,8 @@ function runGuarded(ExecutionContext $ctx, string $sql, array $params, string $o
  *
  * ```php
  * transaction($ctx, function () {
- *     runGuarded(currentContext(), $aSql, $aArgs, 'WRITE', $aModel);  // ← every op inside JOINS this
- *     runGuarded(currentContext(), $bSql, $bArgs, 'WRITE', $bModel);  //    ONE boundary: one conn,
+ *     runGuarded(currentContext($ctx), $aSql, $aArgs, 'WRITE', $aModel);  // ← every op inside JOINS this
+ *     runGuarded(currentContext($ctx), $bSql, $bArgs, 'WRITE', $bModel);  //    ONE boundary: one conn,
  * }, new TransactionOptions(isolation: IsolationLevel::Serializable));  //  one BEGIN…COMMIT, all-or-nothing
  * ```
  *
@@ -1020,9 +1131,10 @@ function runGuarded(ExecutionContext $ctx, string $sql, array $params, string $o
  * Outside a `transaction($fn)` the ambient pin is absent, so a bare guarded write's guard fires
  * ({@see WriteOutsideTransactionError}).
  *
- * NESTED `transaction()` joins the outer (one physical BEGIN/COMMIT; an inner error rolls back the
- * WHOLE tx). Isolation/retry/rollbackOnly options on a nested call are IGNORED (the outer owns them).
- * Mirrors v1 `DBModel.transaction` :2794-2797.
+ * NESTED `transaction()` joins the outer through {@see withTransactionDecided()} (one physical
+ * BEGIN/COMMIT; an inner error rolls back the WHOLE tx). Isolation/retry/rollbackOnly options on a
+ * nested call are IGNORED (the outer owns them; an isolation level SQLite cannot honor is still
+ * rejected before anything runs). Mirrors v1 `DBModel.transaction` :2794-2797.
  *
  * @param callable():mixed $fn
  */
@@ -1034,23 +1146,22 @@ function transaction(
 ): mixed {
     $opts = $options ?? new TransactionOptions();
 
-    // NESTED-TX JOIN (mirror v1 :2794): already inside a tx on this ambient scope ⇒ join the outer.
-    // No new connection, no BEGIN/COMMIT — the inner body is part of the outer physical transaction.
-    // Isolation/retry/rollbackOnly on a nested call are ignored: the outer owns the envelope.
-    if (ambientInTransaction()) {
-        return $fn();
-    }
-
     // Validate + build the isolation prelude BEFORE acquiring a connection (fail-closed: SQLite + a
     // level is a hard error; an unsupported isolation must not open a tx it can't honor).
     [$before, $after] = isolationPrelude($dialectName, $opts->isolation);
 
+    // A retry re-runs the body on a FRESH connection, which only a transaction this call opens has. A
+    // call nested in a transaction already open on this ctx's owner JOINS it (withTransactionDecided):
+    // its failure is the outer transaction's, so it is not re-run inside that failed transaction.
     $retryLimit = 1;
-    if ($opts->retryOnError) {
+    if ($opts->retryOnError && outerTransaction($ctx) === null) {
         $retryLimit = $opts->retryLimit >= 1 ? $opts->retryLimit : 1;
     }
 
     $attempt = 0;
+    // Set when the previous attempt failed with a connection error: this attempt then runs only on a
+    // connection that passed a probe, at most $retryLimit tried ({@see PdoDriver::beginTx()}).
+    $checkAttempts = 0;
     while (true) {
         $attempt++;
         // ONE attempt on a FRESH owned connection. `$fn` reads the pinned tx ctx from the ambient
@@ -1064,7 +1175,7 @@ function transaction(
         };
 
         try {
-            return withTransactionDecided($ctx, $body, $before, $after);
+            return withTransactionDecided($ctx, $body, $before, $after, $checkAttempts);
         } catch (WriteOutsideTransactionError | WriteInReadOnlyContextError $e) {
             // A guard rejection is a programming error, never retryable — re-throw immediately.
             throw $e;
@@ -1086,6 +1197,7 @@ function transaction(
             // COMMIT means the tx was not committed and stays retryable. #330 defect 2.
             $commitConnectionError = $bodyReturned && !$opts->rollbackOnly && isConnectionError($failure);
             if ($attempt < $retryLimit && $opts->retryOnError && !$commitConnectionError && isRetryableTxError($failure)) {
+                $checkAttempts = isConnectionError($failure) ? $retryLimit : 0;
                 // Exponential backoff before RETRYing the whole transaction on a fresh connection.
                 $backoffMs = $opts->retryDurationMs * (2 ** ($attempt - 1));
                 if ($backoffMs > 0) {

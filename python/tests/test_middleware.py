@@ -317,10 +317,10 @@ def test_native_register_middleware_appends():
 _INSERT_T = "INSERT INTO t (id, name) VALUES (?, ?)"
 
 
-def _tx_insert(id_, name):
+def _tx_insert(ctx, id_, name):
     """One guarded INSERT through the PRODUCTION guarded write seam (:func:`run_guarded`) on the ambient
     pinned tx ctx — the same seam a user-facing write inside ``transaction()`` rides."""
-    return run_guarded(current_context(), _INSERT_T, [id_, name], "WRITE", "t")
+    return run_guarded(current_context(ctx), _INSERT_T, [id_, name], "WRITE", "t")
 
 
 def test_runtime_begin_commit_are_middleware_visible():
@@ -333,7 +333,7 @@ def test_runtime_begin_commit_are_middleware_visible():
 
     def scope():
         use(create_middleware(execute=lambda st, nxt, sql, params: (seen.append(sql), nxt(sql, params))[1]))
-        transaction(ctx, lambda: _tx_insert(1, "a"), None, "sqlite")
+        transaction(ctx, lambda: _tx_insert(ctx, 1, "a"), None, "sqlite")
 
     with_middleware_scope(scope)
     assert "BEGIN" in seen, seen
@@ -356,7 +356,7 @@ def test_runtime_rollback_on_error_is_middleware_visible():
         use(create_middleware(execute=lambda st, nxt, sql, params: (seen.append(sql), nxt(sql, params))[1]))
 
         def body():
-            _tx_insert(5, "x")
+            _tx_insert(ctx, 5, "x")
             raise RuntimeError("body boom")
 
         with pytest.raises(Exception):
@@ -381,7 +381,7 @@ def test_red_tx_control_direct_on_conn_is_not_observed():
     ctx = context_for_driver(driver)
     seen = []
 
-    def bypass(ctx, body, before=(), after=(), use_writer_after_transaction=True):
+    def bypass(ctx, body, before=(), after=(), use_writer_after_transaction=True, check_attempts=0):
         tx = ctx.begin_tx()
         tx_ctx = ctx.with_connection(ec._TxConnectionAdapter(tx), True)
 
@@ -416,7 +416,7 @@ def test_red_tx_control_direct_on_conn_is_not_observed():
     try:
         def scope():
             use(create_middleware(execute=lambda st, nxt, sql, params: (seen.append(sql), nxt(sql, params))[1]))
-            transaction(ctx, lambda: _tx_insert(2, "b"), None, "sqlite")
+            transaction(ctx, lambda: _tx_insert(ctx, 2, "b"), None, "sqlite")
 
         with_middleware_scope(scope)
     finally:
@@ -439,7 +439,7 @@ def test_tx_control_is_exempt_from_write_tx_guard():
     ctx = context_for_driver(driver)
 
     # tx-control runs fine inside transaction() (BEGIN/COMMIT are NOT guard-rejected).
-    transaction(ctx, lambda: _tx_insert(3, "c"), None, "sqlite")
+    transaction(ctx, lambda: _tx_insert(ctx, 3, "c"), None, "sqlite")
     assert conn.execute("SELECT name FROM t WHERE id = 3").fetchone()[0] == "c"
 
     # The guard is still intact for a real user write issued OUTSIDE a transaction boundary.
@@ -624,6 +624,33 @@ def test_raw_execute_goes_through_the_seam():
     assert seen == ["INSERT INTO t (name) VALUES (?)", "SELECT name FROM t"]
 
 
+@pytest.mark.parametrize(
+    "sql,write",
+    [
+        ("INSERT INTO t (name) VALUES (?) RETURNING id", True),
+        ("SELECT id FROM t WHERE id = ? FOR UPDATE", True),
+        ("SELECT id FROM t WHERE id = ? FOR NO KEY UPDATE", True),
+        ("SELECT id FROM t WHERE id = ? FOR SHARE", True),
+        ("SELECT id FROM t WHERE id = ? LOCK IN SHARE MODE", True),
+        ("SELECT id INTO @v FROM t", True),
+        ("WITH x AS (UPDATE t SET name = ? RETURNING id) SELECT * FROM x", True),
+        ("SELECT name FROM t WHERE id = ?", False),
+        ("SELECT COUNT(*) FROM t", False),
+        ("WITH x AS (SELECT 1 AS a) SELECT * FROM x", False),
+    ],
+)
+def test_raw_execute_takes_the_write_intent_unless_certainly_read_only(monkeypatch, sql, write):
+    """A row-returning statement goes to the reader only when it is certainly read-only (the TS
+    ``rawExecute``): INSERT … RETURNING, a locking / INTO SELECT and a data-modifying CTE take the write
+    intent; a function-calling SELECT is still a read."""
+    import litedbmodel_runtime.middleware as mw
+
+    intents = []
+    monkeypatch.setattr(mw, "_seam_execute", lambda ctx, s, p, intent: (intents.append(intent.write), [])[1])
+    raw_execute(context_for_driver(SqliteDriver(_fresh_db())), sql)
+    assert intents == [write]
+
+
 def test_raw_query_fires_query_method_hook_and_flows_through_execute_seam():
     conn = _fresh_db()
     ctx = context_for_driver(SqliteDriver(conn))
@@ -656,3 +683,21 @@ def test_red_logger_records_nothing_without_wiring():
     # NOT registered → the seam never invokes it.
     seam_execute(ctx, "SELECT 1", [])
     assert logger.state()["entries"] == []
+
+
+def test_unscoped_state_is_fresh_per_access_and_never_retained():
+    """#364: outside a scope a state is fresh per access and the process-global registry retains none, so
+    an unscoped request does not see another's entries; a globally registered Logger still calls its sink.
+    (Inside a scope the Logger still collects its own entries — test_logger_records_sql_params_timing.)"""
+    conn = _fresh_db()
+    ctx = context_for_driver(SqliteDriver(conn))
+    sunk = []
+    logger = Logger(sink=sunk.append)
+    use(logger)  # the process-global registration the Logger doc shows
+    # Request A: N unscoped statements.
+    for i in range(50):
+        seam_execute(ctx, "SELECT ?", [i])
+    assert len(sunk) == 50
+    # Request B (also unscoped) sees none of A's entries, and the global registry retained none.
+    assert logger.state()["entries"] == []
+    assert not current_registry()._states

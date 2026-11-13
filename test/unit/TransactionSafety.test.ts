@@ -18,6 +18,7 @@ import { DBModel, getTransactionConnection } from '../../src/DBModel';
 import { DBHandler } from '../../src/DBHandler';
 import { TransactionClosedError } from '../../src/types';
 import * as publicApi from '../../src';
+import { fakePgPool, fakeMysqlPool, sentSql } from '../helpers/fakePools';
 
 const silentLogger: Logger = {
   debug: () => {},
@@ -93,15 +94,16 @@ describe('driver executeWrite does not re-send a write after a connection error'
       logger: silentLogger,
     });
     const error = makeError('Connection terminated unexpectedly');
-    const query = vi.fn(async () => { throw error; });
-    (driver as unknown as { pool: unknown }).pool = { query };
+    const query = vi.fn().mockRejectedValueOnce(error).mockResolvedValue({ rows: [], rowCount: 0 });
+    (driver as unknown as { pool: unknown }).pool = fakePgPool(query);
 
     await expect(driver.executeWrite('INSERT INTO t (a) VALUES ($1)', [1])).rejects.toBe(error);
     expect(query).toHaveBeenCalledTimes(1);
 
     query.mockClear();
-    await expect(driver.execute('SELECT 1')).rejects.toBe(error);
-    expect(query).toHaveBeenCalledTimes(2);
+    query.mockRejectedValueOnce(error);
+    await driver.execute('SELECT 1');
+    expect(sentSql(query)).toEqual(['SELECT 1', 'SELECT 1', 'SELECT 1']); // the read, the probe, the re-send
   });
 
   it('mysql: throws the connection error after one attempt (a read is still retried)', async () => {
@@ -110,15 +112,16 @@ describe('driver executeWrite does not re-send a write after a connection error'
       logger: silentLogger,
     });
     const error = makeError('Connection lost: The server closed the connection.', 'PROTOCOL_CONNECTION_LOST');
-    const query = vi.fn(async () => { throw error; });
-    (driver as unknown as { pool: unknown }).pool = { query };
+    const query = vi.fn().mockRejectedValueOnce(error).mockResolvedValue([[], null]);
+    (driver as unknown as { pool: unknown }).pool = fakeMysqlPool(query);
 
     await expect(driver.executeWrite('INSERT INTO t (a) VALUES (?)', [1])).rejects.toBe(error);
     expect(query).toHaveBeenCalledTimes(1);
 
     query.mockClear();
-    await expect(driver.execute('SELECT 1')).rejects.toBe(error);
-    expect(query).toHaveBeenCalledTimes(2);
+    query.mockRejectedValueOnce(error);
+    await driver.execute('SELECT 1');
+    expect(sentSql(query)).toEqual(['SELECT 1', 'SELECT 1', 'SELECT 1']); // the read, the probe, the re-send
   });
 });
 
@@ -186,6 +189,20 @@ describe('DBModel.transaction (v1 branch)', () => {
     await expect(TxModel.transaction(func, { retryDuration: 1 })).resolves.toBe('ok');
     assertV1Route();
     expect(func).toHaveBeenCalledTimes(2);
+  });
+
+  it('takes the retry after a connection error from a probed acquisition (at most retryLimit); a deadlock retry is not probed', async () => {
+    const query = vi.fn(async (_sql: string) => ({ rows: [], rowCount: 0 }));
+    const connection = { query, release: vi.fn() };
+    const { TxModel, getConnection, assertV1Route } = makeModel(connection);
+    const func = vi.fn()
+      .mockRejectedValueOnce(makeError('Connection terminated unexpectedly'))
+      .mockRejectedValueOnce(makeError('Deadlock found when trying to get lock'))
+      .mockResolvedValueOnce('ok');
+
+    await expect(TxModel.transaction(func, { retryLimit: 4, retryDuration: 1 })).resolves.toBe('ok');
+    assertV1Route();
+    expect(getConnection.mock.calls).toEqual([[undefined], [4], [undefined]]);
   });
 
   it('rejects queries through the transaction connection after func has settled', async () => {
@@ -366,7 +383,7 @@ describe('a read routed to the writer is still retried after a connection error 
       .mockRejectedValueOnce(error)
       .mockResolvedValue({ rows: [{ n: 1 }], rowCount: 1 });
     (driver as unknown as { pool: unknown }).pool = { query: vi.fn(async () => { throw new Error('reader pool must not be used'); }) };
-    (driver as unknown as { writerPool: unknown }).writerPool = { query };
+    (driver as unknown as { writerPool: unknown }).writerPool = fakePgPool(query);
 
     const handler = new DBHandler(config);
     (handler as unknown as { driver: unknown }).driver = driver;
@@ -380,7 +397,7 @@ describe('a read routed to the writer is still retried after a connection error 
     expect((WriterModel as unknown as { _getScpRuntime(): unknown })._getScpRuntime()).toBeNull();
     const result = await WriterModel.withWriter(() => WriterModel.execute('SELECT 1 AS n'));
     expect(result.rows).toEqual([{ n: 1 }]);
-    expect(query).toHaveBeenCalledTimes(2);
+    expect(query).toHaveBeenCalledTimes(3); // the read, the probe, the re-send
 
     query.mockReset();
     query.mockRejectedValue(error);

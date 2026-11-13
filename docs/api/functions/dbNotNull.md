@@ -1,8 +1,4 @@
-[**litedbmodel v2.2.14**](../README.md)
-
-***
-
-[litedbmodel](../globals.md) / dbNotNull
+[API](../README.md) / dbNotNull
 
 # Function: dbNotNull()
 
@@ -17,3 +13,4 @@ Create a NOT NULL value
 ## Returns
 
 `DBNotNullValue`
+

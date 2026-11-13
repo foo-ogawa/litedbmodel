@@ -1,16 +1,12 @@
-[**litedbmodel v2.2.14**](../README.md)
-
-***
-
-[litedbmodel](../globals.md) / isSqlCondition
+[API](../README.md) / isSqlCondition
 
 # Function: isSqlCondition()
 
 ```ts
-function isSqlCondition(value: unknown): value is SqlCondition<unknown>;
+function isSqlCondition(value: unknown): value is SqlCondition;
 ```
 
-Defined in: [SqlFragment.ts:137](https://github.com/foo-ogawa/litedbmodel/blob/main/src/SqlFragment.ts#L137)
+Defined in: [SqlFragment.ts:152](https://github.com/foo-ogawa/litedbmodel/blob/main/src/SqlFragment.ts#L152)
 
 ## Parameters
 
@@ -20,4 +16,5 @@ Defined in: [SqlFragment.ts:137](https://github.com/foo-ogawa/litedbmodel/blob/m
 
 ## Returns
 
-`value is SqlCondition<unknown>`
+`value is`[`SqlCondition`](../interfaces/SqlCondition.md)
+

@@ -341,6 +341,15 @@ function dateToTzString(d: Date): string {
 export type ColumnTypeResolver = (table: string, column: string) => string;
 
 /**
+ * The declared SQL type of each of `columns` of `table` (`column → type`), via a fail-closed resolver —
+ * the per-column type map the MySQL single-JSON-param forms type their key / value elements by
+ * (`json-array.ts` `ColumnTypes`).
+ */
+export function declaredColumnTypes(resolve: ColumnTypeResolver, table: string, columns: readonly string[]): Record<string, string> {
+  return Object.fromEntries(columns.map((c) => [c, resolve(table, c)]));
+}
+
+/**
  * A resolver that yields the TS read-path {@link MaterializeClass} of a `(table, column)`, or
  * `undefined` when the column's type is unknown/untypeable. Unlike {@link ColumnTypeResolver} this
  * is TOLERANT (never throws for an unknown column) — it drives the ALWAYS-ON production read-path

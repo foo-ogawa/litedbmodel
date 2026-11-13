@@ -1,10 +1,6 @@
-[**litedbmodel v2.2.14**](../README.md)
+[API](../README.md) / ModelClassDecorator
 
-***
-
-[litedbmodel](../globals.md) / ModelClassDecorator
-
-# Interface: ModelClassDecorator()
+# Interface: ModelClassDecorator
 
 Defined in: [decorators.ts:1143](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L1143)
 
@@ -13,18 +9,16 @@ A class decorator that works under both protocols.
 ## Call Signature
 
 ```ts
-ModelClassDecorator<T>(constructor: T): T;
+<T extends { new (...args: unknown[]): object }>(constructor: T): T;
 ```
 
 Defined in: [decorators.ts:1144](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L1144)
-
-A class decorator that works under both protocols.
 
 ### Type Parameters
 
 | Type Parameter |
 | ------ |
-| `T` *extends* (...`args`: `unknown`[]) => `object` |
+| `T extends { new (...args: unknown[]): object }` |
 
 ### Parameters
 
@@ -36,21 +30,19 @@ A class decorator that works under both protocols.
 
 `T`
 
-## Call Signature
+***
 
 ```ts
-ModelClassDecorator<T>(value: T, context: ClassDecoratorContext): T;
+<T extends { new (...args: unknown[]): object }>(value: T, context: ClassDecoratorContext): T;
 ```
 
 Defined in: [decorators.ts:1145](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L1145)
-
-A class decorator that works under both protocols.
 
 ### Type Parameters
 
 | Type Parameter |
 | ------ |
-| `T` *extends* (...`args`: `unknown`[]) => `object` |
+| `T extends { new (...args: unknown[]): object }` |
 
 ### Parameters
 
@@ -62,3 +54,4 @@ A class decorator that works under both protocols.
 ### Returns
 
 `T`
+

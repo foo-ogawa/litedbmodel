@@ -4,22 +4,35 @@ declare(strict_types=1);
 
 namespace LiteDbModel\Runtime\Tests;
 
+use LiteDbModel\Runtime\ConnectionRegistry;
 use LiteDbModel\Runtime\Context;
+use LiteDbModel\Runtime\ExecutionContext;
 use LiteDbModel\Runtime\IsolationLevel;
+use LiteDbModel\Runtime\Leaves;
+use LiteDbModel\Runtime\PdoDriver;
+use LiteDbModel\Runtime\PlainPdoPool;
+use LiteDbModel\Runtime\RoutingConfig;
 use LiteDbModel\Runtime\RunInfo;
 use LiteDbModel\Runtime\SqlFailure;
 use LiteDbModel\Runtime\TransactionOptions;
 use LiteDbModel\Runtime\WriteInReadOnlyContextError;
 use LiteDbModel\Runtime\WriteOutsideTransactionError;
+use LiteDbModel\Runtime\WriterStickyClock;
 use PHPUnit\Framework\TestCase;
 
 use function LiteDbModel\Runtime\currentContext;
+use function LiteDbModel\Runtime\execute;
 use function LiteDbModel\Runtime\isolationPrelude;
 use function LiteDbModel\Runtime\isRetryableTxError;
 use function LiteDbModel\Runtime\retryableByTypedCode;
+use function LiteDbModel\Runtime\rollbackWith;
+use function LiteDbModel\Runtime\routedTransaction;
+use function LiteDbModel\Runtime\routingContext;
 use function LiteDbModel\Runtime\runGuarded;
 use function LiteDbModel\Runtime\runWithPinnedContext;
 use function LiteDbModel\Runtime\transaction;
+use function LiteDbModel\Runtime\withTransaction;
+use function LiteDbModel\Runtime\withTransactionDecided;
 
 /**
  * Phase B (#85, PHP) — UNIT tests for the public {@see transaction()} boundary (in-proc SQLite) + the
@@ -71,13 +84,13 @@ final class TxBoundaryTest extends TestCase
 
     /**
      * The op the boundary body issues — a PUBLIC guarded write through the production guarded write
-     * seam ({@see runGuarded()}) on the ambient pinned tx ctx, JOINing the ambient tx (the same seam a
+     * seam ({@see runGuarded()}) on the tx ctx pinned for `$ctx`, JOINing the ambient tx (the same seam a
      * user-facing write inside transaction() rides). Outside a boundary the ambient pin is absent, so
      * the guard fires (WriteOutsideTransactionError).
      */
-    private static function op(int $id, int $worker, int $seq): RunInfo
+    private static function op(ExecutionContext $ctx, int $id, int $worker, int $seq): RunInfo
     {
-        return runGuarded(currentContext(), self::INSERT_SQL, [$id, $worker, $seq], 'WRITE', self::TBL);
+        return runGuarded(currentContext($ctx), self::INSERT_SQL, [$id, $worker, $seq], 'WRITE', self::TBL);
     }
 
     // ── (1) MULTI-OP ATOMICITY — commit path ────────────────────────────────────
@@ -88,7 +101,7 @@ final class TxBoundaryTest extends TestCase
         $db = self::makeDriver($sink);
         $ctx = Context::forPdo($db);
 
-        $result = transaction($ctx, fn () => [self::op(100, 1, 0), self::op(101, 1, 1)], new TransactionOptions(), 'sqlite');
+        $result = transaction($ctx, fn () => [self::op($ctx, 100, 1, 0), self::op($ctx, 101, 1, 1)], new TransactionOptions(), 'sqlite');
 
         $this->assertSame([1, 1], array_map(fn ($r) => $r->changes, $result));
         // N ops in one boundary ⇒ ONE BEGIN + ONE COMMIT (the ambient JOIN — opB opens no 2nd BEGIN).
@@ -110,7 +123,7 @@ final class TxBoundaryTest extends TestCase
 
         $raised = false;
         try {
-            transaction($ctx, fn () => [self::op(200, 2, 0), self::op(201, 2, 1)], new TransactionOptions(retryOnError: false), 'sqlite');
+            transaction($ctx, fn () => [self::op($ctx, 200, 2, 0), self::op($ctx, 201, 2, 1)], new TransactionOptions(retryOnError: false), 'sqlite');
         } catch (\Throwable) {
             $raised = true;
         }
@@ -146,11 +159,11 @@ final class TxBoundaryTest extends TestCase
         $ctx = Context::forPdo($db);
 
         // Read-only-scoped write inside a boundary → WriteInReadOnlyContextError (read-only checked FIRST).
-        $body = function () use ($db): int {
-            $ro = currentContext()->withReadOnly(); // the pinned tx ctx, derived read-only
+        $body = function () use ($db, $ctx): int {
+            $ro = currentContext($ctx)->withReadOnly(); // the pinned tx ctx, derived read-only
             $threw = false;
             try {
-                runWithPinnedContext($ro, fn () => self::op(301, 3, 0));
+                runWithPinnedContext($ro, fn () => self::op($ctx, 301, 3, 0));
             } catch (WriteInReadOnlyContextError) {
                 $threw = true;
             }
@@ -165,7 +178,7 @@ final class TxBoundaryTest extends TestCase
         $sink = new RecordingSink();
         $db = self::makeDriver($sink);
         $ctx = Context::forPdo($db);
-        $r = transaction($ctx, fn () => self::op(302, 3, 0), new TransactionOptions(), 'sqlite');
+        $r = transaction($ctx, fn () => self::op($ctx, 302, 3, 0), new TransactionOptions(), 'sqlite');
         $this->assertSame(1, $r->changes);
         $this->assertSame([[302, 3]], self::readRows($db));
     }
@@ -179,9 +192,9 @@ final class TxBoundaryTest extends TestCase
         $ctx = Context::forPdo($db);
 
         $outer = function () use ($db, $ctx) {
-            self::op(500, 5, 0);
+            self::op($ctx, 500, 5, 0);
             // A NESTED transaction() JOINs the outer — no new BEGIN/COMMIT.
-            return transaction($ctx, fn () => self::op(501, 5, 1), new TransactionOptions(), 'sqlite');
+            return transaction($ctx, fn () => self::op($ctx, 501, 5, 1), new TransactionOptions(), 'sqlite');
         };
         transaction($ctx, $outer, new TransactionOptions(), 'sqlite');
 
@@ -200,8 +213,8 @@ final class TxBoundaryTest extends TestCase
         $ctx = Context::forPdo($db);
 
         $outer = function () use ($db, $ctx) {
-            self::op(600, 6, 0);
-            return transaction($ctx, fn () => self::op(601, 6, 1), new TransactionOptions(), 'sqlite');
+            self::op($ctx, 600, 6, 0);
+            return transaction($ctx, fn () => self::op($ctx, 601, 6, 1), new TransactionOptions(), 'sqlite');
         };
         $raised = false;
         try {
@@ -215,6 +228,126 @@ final class TxBoundaryTest extends TestCase
         $this->assertSame([], self::readRows($db), 'an inner error rolls back the WHOLE tx (id=600 absent)');
     }
 
+    /**
+     * #352 — the nested JOIN lives in the combinator, so a nested withTransaction() joins the outer
+     * transaction like a nested transaction() does: no second BEGIN/COMMIT, and an outer body that fails
+     * after it returned rolls back every row. It used to BEGIN again on the same \PDO (SQLite raises, PG
+     * warns, MySQL implicitly commits the outer work).
+     */
+    public function testNestedWithTransactionJoinsTheOuter(): void
+    {
+        $sink = new RecordingSink();
+        $db = self::makeDriver($sink);
+        $ctx = Context::forPdo($db);
+
+        $error = null;
+        try {
+            transaction($ctx, function () use ($ctx): void {
+                self::op($ctx, 1, 1, 0);
+                withTransaction($ctx, fn () => self::op($ctx, 2, 1, 1));
+                self::op($ctx, 3, 1, 2);
+                throw new \RuntimeException('outer body fails');
+            }, new TransactionOptions(retryOnError: false), 'sqlite');
+        } catch (\Throwable $e) {
+            $error = $e;
+        }
+        $this->assertNotNull($error);
+        $this->assertSame('outer body fails', $error->getMessage(), "the outer body's own error surfaces");
+        $this->assertSame([1, 0, 1], [$sink->begins, $sink->commits, $sink->rolls], 'ONE BEGIN, then ONE ROLLBACK');
+        $this->assertSame([], self::readRows($db), 'the failed outer transaction keeps none of its rows');
+    }
+
+    /**
+     * A joined boundary leaves the envelope to the outer (TS `withTransactionAsync`, go
+     * `TransactionDecided`): a nested ROLLBACK decision returns its value without rolling the outer back,
+     * and a nested transaction() does not re-run its body on a retryable error — the outer transaction
+     * it ran in is the one that failed.
+     */
+    public function testANestedBoundaryLeavesTheEnvelopeToTheOuter(): void
+    {
+        $sink = new RecordingSink();
+        $db = self::makeDriver($sink);
+        $ctx = Context::forPdo($db);
+
+        $gate = transaction($ctx, function () use ($ctx): string {
+            self::op($ctx, 1, 1, 0);
+            return withTransactionDecided($ctx, function (ExecutionContext $tx) use ($ctx): \LiteDbModel\Runtime\TxDecision {
+                self::op($ctx, 2, 1, 1);
+                return rollbackWith('gate');
+            });
+        }, new TransactionOptions(), 'sqlite');
+        $this->assertSame('gate', $gate);
+        $this->assertSame([1, 1, 0], [$sink->begins, $sink->commits, $sink->rolls], 'the outer decides: ONE BEGIN, ONE COMMIT');
+        $this->assertSame([[1, 1], [2, 1]], self::readRows($db));
+
+        $runs = 0;
+        try {
+            transaction($ctx, function () use ($ctx, &$runs): void {
+                transaction($ctx, function () use (&$runs): void {
+                    $runs++;
+                    throw self::pdoException(['40001', null, 'could not serialize access'], 'could not serialize access');
+                }, new TransactionOptions(retryLimit: 3, retryDurationMs: 0), 'sqlite');
+            }, new TransactionOptions(retryOnError: false), 'sqlite');
+        } catch (\Throwable) {
+        }
+        $this->assertSame(1, $runs, 'a nested body is not retried inside the outer transaction');
+    }
+
+    // ── (4b) a transaction belongs to the context it was opened on (#351) ───────
+
+    /**
+     * Two INDEPENDENT contexts in one process (one database per tenant): the leaf of B, a nested
+     * transaction() on B, and a routed context over B's own config must all reach B while a transaction
+     * on A is open. The pin used to be ONE process-wide slot, so B's read returned A's row and B's write
+     * landed in A and committed with A's transaction (the TS runtime keys the pin by ctx since 010a3fb).
+     */
+    public function testATransactionIsNotJoinedByAnIndependentContext(): void
+    {
+        $sinkA = new RecordingSink();
+        $a = self::makeDriver($sinkA);
+        $sinkB = new RecordingSink();
+        $b = self::makeDriver($sinkB);
+        $a->exec('INSERT INTO ' . self::TBL . ' (id, worker, seq) VALUES (1, 1, 0)');
+        $b->exec('INSERT INTO ' . self::TBL . ' (id, worker, seq) VALUES (1, 2, 0)');
+        $sinkA->reset();
+        $sinkB->reset();
+        $ctxA = Context::forPdo($a);
+        $ctxB = Context::forPdo($b);
+        $leafB = Leaves::makeHandlers($ctxB, 'sqlite')['executeSQL'];
+        $at = ['nodeId' => 'n0', 'component' => 'executeSQL'];
+        $select = 'SELECT id, worker FROM ' . self::TBL . ' ORDER BY id';
+        $rows = static fn (array $out): array => array_map(static fn ($r): array => [(int) $r->id, (int) $r->worker], $out['ok']);
+
+        $seen = null;
+        transaction($ctxA, function () use ($ctxB, $leafB, $at, $select, $rows, &$seen): void {
+            $seen = $rows($leafB(['sql' => $select, 'params' => []], $at));
+            transaction($ctxB, static fn () => $leafB([
+                'sql' => self::INSERT_SQL,
+                'params' => [2, 2, 0],
+                'opts' => (object) ['db' => null, 'write' => (object) ['returning' => false], 'whereDynamic' => null, 'guard' => null],
+            ], $at), new TransactionOptions(retryOnError: false), 'sqlite');
+        }, new TransactionOptions(retryOnError: false), 'sqlite');
+
+        $this->assertSame([[1, 2]], $seen, "B's leaf must read B, not the open transaction on A");
+        $this->assertSame([[1, 1]], self::readRows($a), "B's write must not land in A");
+        $this->assertSame([[1, 2], [2, 2]], self::readRows($b), "B's write lands in B");
+        $this->assertSame([1, 1], [$sinkB->begins, $sinkB->commits], 'the transaction on B opens and commits on B');
+        $this->assertSame([1, 1], [$sinkA->begins, $sinkA->commits]);
+
+        // The routed half: a context over an independent RoutingConfig is not joined either.
+        $routed = static fn (\PDO $pdo) => routingContext(new RoutingConfig(
+            ConnectionRegistry::singleDefault(new PlainPdoPool(new PdoDriver($pdo), 'sqlite')),
+            new WriterStickyClock(useWriterAfterTransaction: false),
+        ));
+        $routedA = $routed($a);
+        $routedB = $routed($b);
+        $seen = null;
+        routedTransaction($routedA, function () use ($routedB, $select, &$seen): void {
+            $seen = array_map(static fn ($r): array => [(int) $r->id, (int) $r->worker], execute($routedB, $select, []));
+        }, new TransactionOptions(retryOnError: false), 'sqlite');
+        $this->assertSame([[1, 2], [2, 2]], $seen, "a routed context over B's config must read B");
+    }
+
     // ── (5) rollback_only (dry-run) ─────────────────────────────────────────────
 
     public function testRollbackOnlyReturnsValueButCommitsNothing(): void
@@ -222,7 +355,7 @@ final class TxBoundaryTest extends TestCase
         $sink = new RecordingSink();
         $db = self::makeDriver($sink);
         $ctx = Context::forPdo($db);
-        $r = transaction($ctx, fn () => self::op(700, 7, 0), new TransactionOptions(rollbackOnly: true), 'sqlite');
+        $r = transaction($ctx, fn () => self::op($ctx, 700, 7, 0), new TransactionOptions(rollbackOnly: true), 'sqlite');
         $this->assertSame(1, $r->changes); // the body's own view: its statement ran (before the boundary rolled back)
         // …but the boundary ROLLED BACK, so nothing persisted.
         $this->assertSame(1, $sink->begins);
@@ -315,12 +448,13 @@ final class TxBoundaryTest extends TestCase
         $db->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
         $db->exec('CREATE TABLE ' . self::TBL . ' (id INTEGER PRIMARY KEY, worker INTEGER NOT NULL, seq INTEGER NOT NULL)');
         $runs = 0;
-        $body = function () use (&$runs) {
+        $ctx = Context::forPdo($db);
+        $body = function () use (&$runs, $ctx) {
             $runs++;
-            return self::op(800 + $runs, 8, 0);
+            return self::op($ctx, 800 + $runs, 8, 0);
         };
         try {
-            transaction(Context::forPdo($db), $body, new TransactionOptions(retryLimit: 3, retryDurationMs: 0), 'sqlite');
+            transaction($ctx, $body, new TransactionOptions(retryLimit: 3, retryDurationMs: 0), 'sqlite');
             return [$runs, null];
         } catch (\Throwable $e) {
             return [$runs, $e];
@@ -348,6 +482,43 @@ final class TxBoundaryTest extends TestCase
         );
         $this->assertNull($error);
         $this->assertSame(2, $runs);
+    }
+
+    // ── A retry after a connection error runs only on a connection that passed a probe ──────────
+
+    public function testRetryAfterAConnectionErrorProbesBeforeBeginAndNeverBeginsOnAConnectionThatFailsIt(): void
+    {
+        // The connection dies under the body's first statement; from then on every statement fails with a
+        // connection error. A retry must not issue BEGIN on it: attempts 2 and 3 each send `SELECT 1` to at
+        // most retryLimit acquired connections (here always the one \PDO), none passes, and the probe's
+        // error surfaces once the attempts run out.
+        $db = new DyingPdo('sqlite::memory:');
+        $db->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
+        $db->exec('CREATE TABLE ' . self::TBL . ' (id INTEGER PRIMARY KEY, worker INTEGER NOT NULL, seq INTEGER NOT NULL)');
+        $ctx = Context::forPdo($db);
+        $runs = 0;
+        try {
+            transaction($ctx, function () use ($ctx, &$runs) {
+                $runs++;
+                return self::op($ctx, 900, 9, 0);
+            }, new TransactionOptions(retryLimit: 3, retryDurationMs: 0), 'sqlite');
+            $this->fail('the transaction must fail: the only connection is dead');
+        } catch (\Throwable $e) {
+            $this->assertStringContainsString('server closed the connection', $e->getMessage());
+        }
+        $this->assertSame(1, $runs, 'the body runs only on a connection that passed the probe');
+        $this->assertSame(array_fill(0, 6, 'SELECT 1'), $db->afterDeath(), 'no BEGIN after the connection died — only the probe, retryLimit times in each of the 2 retries');
+    }
+
+    public function testADeadlockRetryIsNotProbed(): void
+    {
+        [$runs, $error] = self::runWithCommitFailure(
+            self::pdoException(['40001', 7, 'could not serialize access'], 'could not serialize access'),
+            1,
+        );
+        $this->assertNull($error);
+        $this->assertSame(2, $runs);
+        // The CommitFailingPdo records no probe: a serialization failure is not a connection error.
     }
 
     /** Build a \PDOException with a specific errorInfo triple (the live-driver shape). */
@@ -422,5 +593,58 @@ final class CommitFailingPdo extends \PDO
             throw $this->error;
         }
         return parent::exec($statement);
+    }
+}
+
+/**
+ * A \PDO whose connection dies under the first INSERT: that statement and every one after it fail with a
+ * connection error (`server closed the connection unexpectedly`). {@see afterDeath()} lists what was sent
+ * to it after it died.
+ */
+final class DyingPdo extends \PDO
+{
+    private bool $dead = false;
+    /** @var list<string> */
+    private array $afterDeath = [];
+
+    /** @return list<string> */
+    public function afterDeath(): array
+    {
+        return $this->afterDeath;
+    }
+
+    private function check(string $sql): void
+    {
+        if (!$this->dead && str_starts_with(strtoupper(trim($sql)), 'INSERT')) {
+            $this->dead = true;
+            throw self::lost();
+        }
+        if ($this->dead) {
+            if (strtoupper(trim($sql)) !== 'ROLLBACK') {
+                $this->afterDeath[] = trim($sql);
+            }
+            throw self::lost();
+        }
+    }
+
+    private static function lost(): \PDOException
+    {
+        $e = new \PDOException('SQLSTATE[HY000]: General error: 7 server closed the connection unexpectedly');
+        $e->errorInfo = ['HY000', 7, 'server closed the connection unexpectedly'];
+        return $e;
+    }
+
+    #[\ReturnTypeWillChange]
+    public function exec(string $statement): int|false
+    {
+        $this->check($statement);
+        return parent::exec($statement);
+    }
+
+    #[\ReturnTypeWillChange]
+    public function prepare(string $query, array $options = []): \PDOStatement|false
+    {
+        $this->check($query);
+        return parent::prepare($query, $options);
     }
 }

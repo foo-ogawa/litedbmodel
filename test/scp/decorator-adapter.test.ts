@@ -262,8 +262,8 @@ describe('F1 writes — create/update/delete byte-identical to hand-written SCP'
 
   it('updateMany (keyColumns) byte-identical', () => {
     const opts = { tableName: 'posts', keyColumns: ['id'], updateColumns: ['title'], records: [{ id: 1, title: 'x' }, { id: 2, title: 'y' }], returning: 'id' };
-    const adapter = compileUpdateBundle('updateMany', opts, 'sqlite');
-    const hand = compileUpdateManyBundle('updateMany', opts, 'sqlite');
+    const adapter = compileUpdateBundle(Post as never, 'updateMany', opts, 'sqlite');
+    const hand = compileUpdateManyBundle('updateMany', opts, 'sqlite', modelColumnResolver(Post as never));
     expect(JSON.stringify(adapter)).toBe(JSON.stringify(hand));
     // keyColumns reached the WHERE/JOIN.
     expect(adapter.statement?.sql).toMatch(/id/);
@@ -271,8 +271,8 @@ describe('F1 writes — create/update/delete byte-identical to hand-written SCP'
 
   it('deleteMany (keyColumns + returning) byte-identical', () => {
     const opts = { tableName: 'posts', keyColumns: ['id'], keys: [{ id: 1 }, { id: 2 }], returning: 'id' };
-    const adapter = compileDeleteBundle('deleteMany', opts, 'sqlite');
-    const hand = compileDeleteManyBundle('deleteMany', opts, 'sqlite');
+    const adapter = compileDeleteBundle(Post as never, 'deleteMany', opts, 'sqlite');
+    const hand = compileDeleteManyBundle('deleteMany', opts, 'sqlite', modelColumnResolver(Post as never));
     expect(JSON.stringify(adapter)).toBe(JSON.stringify(hand));
   });
 });

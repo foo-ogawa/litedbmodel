@@ -32,6 +32,7 @@
 
 import { DBConditions, type ConditionObject } from '../../DBConditions';
 import { tupleInPredicate } from './json-array';
+import { pgTypeSpecimen } from './tx';
 import type { MakeSQL } from './makesql';
 import { compileSelect } from './compile-select';
 import type { Dialect } from './handler';
@@ -132,16 +133,16 @@ const PG_KEYS_ALIAS = '_keys';
  */
 const PLACEHOLDER_TUPLES: unknown[][] = [[null]];
 
-/** The STATIC composite-key builders' options: {@link RelationCompileBase} + the PG key-column types. */
+/** The STATIC composite-key builders' options: {@link RelationCompileBase} + the key columns' declared types. */
 export interface CompositeStaticBase extends RelationCompileBase {
   /**
-   * PostgreSQL only: the PG ELEMENT type of each key column, positional with `targetKeys`, derived
-   * from the model's DECLARED column type (the schema SoT — never from the values, which are unknown
-   * at compile and empty at call time often enough to matter; the SAME rule the composite `tupleIn`
-   * predicate follows, `json-array.ts` `pgElementTypes`). The key rows carry these types so the JOIN
-   * compares `int = int` / `bigint = bigint` against the child key columns instead of `… = text`.
+   * The DECLARED SQL type of each key column, positional with `targetKeys` — the schema SoT, never the
+   * values, which are unknown at compile and empty at call time often enough to matter. Each dialect
+   * derives its own key typing from it: PostgreSQL casts the key rows ({@link pgCompositeKeyRows}, so
+   * the JOIN compares `bigint = bigint` instead of `… = text`), MySQL reads each key element as the
+   * column's type ({@link import('./json-array').tupleInPredicate}, #376). Required on PostgreSQL.
    */
-  readonly pgKeyTypes?: readonly string[];
+  readonly keyTypes?: readonly string[];
 }
 
 /**
@@ -159,16 +160,16 @@ export interface CompositeStaticBase extends RelationCompileBase {
  * The SINGLE spelling of the expansion — both static composite forms (unlimited JOIN + per-parent
  * LATERAL) consume it, so their key rows cannot drift apart.
  */
-function pgCompositeKeyRows(opts: { tableName: string; targetKeys: readonly string[]; pgKeyTypes?: readonly string[] }): string {
+function pgCompositeKeyRows(opts: { tableName: string; targetKeys: readonly string[]; keyTypes?: readonly string[] }): string {
   const cols = opts.targetKeys.map((key, i) => {
-    const type = opts.pgKeyTypes?.[i];
-    if (type === undefined || type === '') {
+    const declared = opts.keyTypes?.[i];
+    if (declared === undefined || declared === '') {
       throw new Error(
         `relation batch on postgres: the composite key column '${opts.tableName}.${key}' has no declared type — ` +
           `the key rows must be cast to the child column's type (pass the model's ColumnTypeResolver to compileRelationOp)`,
       );
     }
-    return `(_t->>${i})::${type} AS key${i}`;
+    return `(_t->>${i})::${inferPgElementType([pgTypeSpecimen(declared)])} AS key${i}`;
   });
   return `(SELECT ${cols.join(', ')} FROM json_array_elements(?::json) AS _t) AS ${PG_KEYS_ALIAS}`;
 }
@@ -206,7 +207,7 @@ export function compileCompositeKeyStaticUnlimited(
     });
   }
   // MySQL/SQLite: composite membership via ONE JSON array-of-tuples param, read by ORDINAL path.
-  const jsonSubquery = compositeJsonMembership(opts.dialect, tableName, targetKeys);
+  const jsonSubquery = compositeJsonMembership(opts.dialect, tableName, targetKeys, opts.keyTypes);
   const conditions: ConditionObject = { ...opts.conditions, __raw__: [jsonSubquery, PLACEHOLDER_TUPLES] };
   return compileSelect({
     dialect: opts.dialect,
@@ -222,13 +223,24 @@ export function compileCompositeKeyStaticUnlimited(
  * a declared composite `tupleIn` WHERE emits, so it lives with the other static membership predicates
  * ({@link import('./json-array').tupleInPredicate}) and is consumed here, never re-spelled.
  */
-function compositeJsonMembership(dialect: Dialect, tableName: string, targetKeys: string[]): string {
-  return tupleInPredicate(dialect, tableName, targetKeys);
+function compositeJsonMembership(dialect: Dialect, tableName: string, targetKeys: string[], keyTypes?: readonly string[]): string {
+  return tupleInPredicate(dialect, tableName, targetKeys, keyTypes);
 }
 
 // ============================================================================
 // Single-key, unlimited.
 // ============================================================================
+
+/** The single-key builders' key-column type: the DECLARED SQL type of `targetKey`, when the schema is known. */
+export interface SingleKeyType {
+  /** Types the MySQL key element of the IN-list ({@link import('./json-array').inListPredicate}, #376). */
+  keyType?: string;
+}
+
+/** The `columnTypes` the single-key IN-list compiles with — the key column's declared type, if known. */
+function keyColumnTypes(opts: SingleKeyType & { targetKey: string }): Record<string, string> | undefined {
+  return opts.keyType === undefined ? undefined : { [opts.targetKey]: opts.keyType };
+}
 
 /**
  * `= ANY(?::type[])` (PG) / `IN (?, …)` (MySQL/SQLite) single-key unlimited batch load.
@@ -239,7 +251,7 @@ function compositeJsonMembership(dialect: Dialect, tableName: string, targetKeys
  * `IN (?, ?, …)` with one param per element — reproduced here verbatim.
  */
 export function compileSingleKeyUnlimited(
-  opts: RelationCompileBase & { targetKey: string; values: unknown[] }
+  opts: RelationCompileBase & SingleKeyType & { targetKey: string; values: unknown[] }
 ): MakeSQL {
   if (opts.dialect === 'postgres') {
     const sqlCast = opts.sqlCastMap?.get(opts.targetKey);
@@ -256,13 +268,14 @@ export function compileSingleKeyUnlimited(
       order: opts.order,
     });
   }
-  // MySQL/SQLite: `{ ...conditions, [targetKey]: values }` → `IN (?, …)` (array expand).
+  // MySQL/SQLite: `{ ...conditions, [targetKey]: values }` → the single-JSON-param IN-list.
   const conditions: ConditionObject = { ...opts.conditions, [opts.targetKey]: opts.values };
   return compileSelect({
     dialect: opts.dialect,
     tableName: opts.tableName,
     select: opts.select,
     conditions,
+    columnTypes: keyColumnTypes(opts),
     order: opts.order,
   });
 }
@@ -277,7 +290,7 @@ export function compileSingleKeyUnlimited(
  * Reproduces `batchLoadWithLateral` / `batchLoadWithRowNumber`.
  */
 export function compileSingleKeyLimited(
-  opts: RelationCompileBase & { targetKey: string; values: unknown[]; limit: number }
+  opts: RelationCompileBase & SingleKeyType & { targetKey: string; values: unknown[]; limit: number }
 ): MakeSQL {
   if (opts.dialect === 'postgres') {
     const sqlCast = opts.sqlCastMap?.get(opts.targetKey);
@@ -307,6 +320,7 @@ export function compileSingleKeyLimited(
     tableName: opts.tableName,
     select: `*, ROW_NUMBER() OVER (PARTITION BY ${opts.targetKey} ORDER BY ${orderBy}) AS _rn`,
     conditions: cteConditions,
+    columnTypes: keyColumnTypes(opts),
   });
   return compileSelect({
     dialect: opts.dialect,
@@ -487,7 +501,7 @@ export function compileCompositeKeyStaticLimited(
   // JSON-membership WHERE (one JSON array-of-tuples param) in place of v1's `(k1,k2) IN ((?,?),…)`.
   const orderBy = opts.order || targetKeys.join(', ');
   const partitionBy = targetKeys.join(', ');
-  const jsonSubquery = compositeJsonMembership(opts.dialect, tableName, targetKeys);
+  const jsonSubquery = compositeJsonMembership(opts.dialect, tableName, targetKeys, opts.keyTypes);
   const cteConditions: ConditionObject = { __raw__: [jsonSubquery, PLACEHOLDER_TUPLES], ...opts.conditions };
   const cte = compileSelect({
     dialect: opts.dialect,

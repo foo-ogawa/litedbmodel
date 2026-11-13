@@ -20,8 +20,37 @@ export function isConnectionError(error: Error): boolean {
     code === 'ECONNREFUSED' ||
     code === 'EPIPE' ||
     code === 'EAI_AGAIN' ||
-    code === 'PROTOCOL_CONNECTION_LOST'
+    code === 'PROTOCOL_CONNECTION_LOST' ||
+    // PG SQLSTATE 57P01 admin_shutdown: the server ended this connection (`pg_terminate_backend`, a
+    // shutdown, a failover) and answers the statement in flight with it before closing.
+    code === '57P01'
   );
+}
+
+/**
+ * Acquire the connection a retry after a connection error runs on. After a failover or a database restart the
+ * pool may still hold dead connections, so each acquired connection is first sent a harmless `SELECT 1`; one
+ * that fails it is destroyed (never returned to the pool) and another is acquired, at most `attempts`
+ * connections in all (the retry limit). The last probe's error is thrown when every one failed. The probe
+ * only shows that the connection is usable — not whether the statement that failed ran on the server.
+ * The v1 drivers' re-send and transaction retry, and the SCP transaction retry, all acquire through this.
+ */
+export async function acquireCheckedConnection<C>(
+  acquire: () => Promise<C>,
+  query: (conn: C, sql: string) => Promise<unknown>,
+  destroy: (conn: C) => void | Promise<void>,
+  attempts: number,
+): Promise<C> {
+  for (let attempt = 1; ; attempt++) {
+    const conn = await acquire();
+    try {
+      await query(conn, 'SELECT 1');
+      return conn;
+    } catch (error) {
+      await destroy(conn);
+      if (attempt >= attempts) throw error;
+    }
+  }
 }
 
 /**

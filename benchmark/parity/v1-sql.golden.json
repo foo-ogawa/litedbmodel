@@ -645,7 +645,7 @@
       "mysql": {
         "statements": [
           {
-            "sql": "INSERT INTO benchmark_users (email, name) VALUES (?, ?) RETURNING id",
+            "sql": "INSERT INTO benchmark_users (email, name) VALUES (?, ?) RETURNING id /*scp:pk=id;ai=id*/",
             "params": [
               "nested10001@example.com",
               "Nested User"
@@ -787,7 +787,7 @@
       "mysql": {
         "statements": [
           {
-            "sql": "INSERT INTO benchmark_users (email, name) VALUES (?, ?) ON DUPLICATE KEY UPDATE name = VALUES(name) RETURNING id",
+            "sql": "INSERT INTO benchmark_users (email, name) VALUES (?, ?) ON DUPLICATE KEY UPDATE name = VALUES(name) RETURNING id /*scp:pk=id;ai=id;conflict=email*/",
             "params": [
               "upsert20000@example.com",
               "Upsert User"
@@ -829,7 +829,7 @@
       "mysql": {
         "statements": [
           {
-            "sql": "INSERT INTO benchmark_users (email, name) VALUES (?, ?) ON DUPLICATE KEY UPDATE name = VALUES(name) RETURNING id",
+            "sql": "INSERT INTO benchmark_users (email, name) VALUES (?, ?) ON DUPLICATE KEY UPDATE name = VALUES(name) RETURNING id /*scp:pk=id;ai=id;conflict=email*/",
             "params": [
               "nupsert20001@example.com",
               "Nested Upsert"
@@ -884,7 +884,7 @@
       "mysql": {
         "statements": [
           {
-            "sql": "INSERT INTO benchmark_users (email, name) VALUES (?, ?) RETURNING id",
+            "sql": "INSERT INTO benchmark_users (email, name) VALUES (?, ?) RETURNING id /*scp:pk=id;ai=id*/",
             "params": [
               "del10002@example.com",
               "Delete User"

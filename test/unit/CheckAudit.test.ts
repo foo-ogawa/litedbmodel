@@ -1,14 +1,28 @@
 /**
- * scripts/check-audit.mjs — the one place that decides which `npm audit` findings are excepted (#335).
- * Inputs are `npm audit --json` (auditReportVersion 2) shaped reports.
+ * scripts/check-audit.mjs — the one place that decides which `npm audit` findings are excepted.
+ * Inputs are `npm audit --json` (auditReportVersion 2) shaped reports. The repository ships no exception
+ * (the last one, #335, went with typedoc in #369), so the mechanism is exercised with a fixture
+ * exception of the same shape, and the shipped list is checked to be empty.
  */
 import { describe, it, expect } from 'vitest';
 import { pathToFileURL } from 'node:url';
 import { resolve } from 'node:path';
 
+interface AuditException {
+  advisory: string;
+  viaPackages: string[];
+  expires: string;
+  issue: string;
+}
 // A computed specifier: the script is plain .mjs and has no type declarations.
-const mod: { evaluateAudit(report: unknown, today: string): { failures: string[]; excepted: string[] } } =
-  await import(pathToFileURL(resolve(__dirname, '../../scripts/check-audit.mjs')).href);
+const mod: {
+  EXCEPTIONS: AuditException[];
+  evaluateAudit(
+    report: unknown,
+    today: string,
+    exceptions?: AuditException[],
+  ): { failures: string[]; excepted: string[] };
+} = await import(pathToFileURL(resolve(__dirname, '../../scripts/check-audit.mjs')).href);
 
 const GHSA = 'GHSA-g3hv-75wg-m249';
 const advisory = (id: string) => ({
@@ -27,53 +41,66 @@ const entry = (via: unknown[], effects: string[], extra: Record<string, unknown>
   effects,
   ...extra,
 });
-/** The report the lockfile produces today: minimatch <- typedoc <- typedoc-plugin-markdown. */
-const typedocReport = (minimatch = entry([advisory(GHSA)], ['typedoc'])) => ({
+/** A fixture exception: the advisory reached only through `tool` / `tool-plugin`, until 2027-02-07. */
+const EXCEPTION: AuditException = {
+  advisory: GHSA,
+  viaPackages: ['tool', 'tool-plugin'],
+  expires: '2027-02-07',
+  issue: 'https://example.invalid/issue',
+};
+/** minimatch <- tool <- tool-plugin. */
+const toolReport = (minimatch = entry([advisory(GHSA)], ['tool'])) => ({
   vulnerabilities: {
     minimatch,
-    typedoc: entry(['minimatch'], ['typedoc-plugin-markdown'], { isDirect: true }),
-    'typedoc-plugin-markdown': entry(['typedoc'], [], { isDirect: true }),
+    tool: entry(['minimatch'], ['tool-plugin'], { isDirect: true }),
+    'tool-plugin': entry(['tool'], [], { isDirect: true }),
   },
 });
 const BEFORE = '2027-02-06';
 const AFTER = '2027-02-07';
+const evaluate = (report: unknown, today: string) => mod.evaluateAudit(report, today, [EXCEPTION]);
 
 describe('check-audit evaluateAudit', () => {
-  it('(a) passes when the only findings are the excepted advisory through typedoc', () => {
-    const r = mod.evaluateAudit(typedocReport(), BEFORE);
-    expect(r.failures).toEqual([]);
-    expect(r.excepted.sort()).toEqual(['minimatch', 'typedoc', 'typedoc-plugin-markdown']);
+  it('ships no exception: with the shipped list every gated finding fails', () => {
+    expect(mod.EXCEPTIONS).toEqual([]);
+    expect(mod.evaluateAudit(toolReport(), BEFORE).failures.sort()).toEqual(['minimatch', 'tool', 'tool-plugin']);
   });
 
-  it('(b) fails for the same advisory reached by a path that does not go through typedoc', () => {
-    const other = typedocReport(entry([advisory(GHSA)], ['typedoc', 'some-other-tool']));
-    expect(mod.evaluateAudit(other, BEFORE).failures).toContain('minimatch');
-    const direct = typedocReport(entry([advisory(GHSA)], ['typedoc'], { isDirect: true }));
-    expect(mod.evaluateAudit(direct, BEFORE).failures).toContain('minimatch');
+  it('(a) passes when the only findings are the excepted advisory through the excepted packages', () => {
+    const r = evaluate(toolReport(), BEFORE);
+    expect(r.failures).toEqual([]);
+    expect(r.excepted.sort()).toEqual(['minimatch', 'tool', 'tool-plugin']);
+  });
+
+  it('(b) fails for the same advisory reached by a path that does not go through the excepted packages', () => {
+    const other = toolReport(entry([advisory(GHSA)], ['tool', 'some-other-tool']));
+    expect(evaluate(other, BEFORE).failures).toContain('minimatch');
+    const direct = toolReport(entry([advisory(GHSA)], ['tool'], { isDirect: true }));
+    expect(evaluate(direct, BEFORE).failures).toContain('minimatch');
     const alone = {
       vulnerabilities: { minimatch: entry([advisory(GHSA)], ['@typescript-eslint/typescript-estree']) },
     };
-    expect(mod.evaluateAudit(alone, BEFORE).failures).toEqual(['minimatch']);
+    expect(evaluate(alone, BEFORE).failures).toEqual(['minimatch']);
   });
 
   it('(c) fails for a different advisory, also when it sits next to the excepted one', () => {
-    const r = mod.evaluateAudit(typedocReport(entry([advisory('GHSA-xxxx-yyyy-zzzz')], ['typedoc'])), BEFORE);
+    const r = evaluate(toolReport(entry([advisory('GHSA-xxxx-yyyy-zzzz')], ['tool'])), BEFORE);
     expect(r.failures).toContain('minimatch');
-    const mixed = typedocReport(entry([advisory(GHSA), advisory('GHSA-xxxx-yyyy-zzzz')], ['typedoc']));
-    expect(mod.evaluateAudit(mixed, BEFORE).failures).toContain('minimatch');
-    const extra = typedocReport();
+    const mixed = toolReport(entry([advisory(GHSA), advisory('GHSA-xxxx-yyyy-zzzz')], ['tool']));
+    expect(evaluate(mixed, BEFORE).failures).toContain('minimatch');
+    const extra = toolReport();
     (extra.vulnerabilities as Record<string, unknown>).lodash = entry([advisory('GHSA-aaaa-bbbb-cccc')], []);
-    expect(mod.evaluateAudit(extra, BEFORE).failures).toEqual(['lodash']);
+    expect(evaluate(extra, BEFORE).failures).toEqual(['lodash']);
   });
 
-  it('(d) fails once the deadline (2027-02-07) has passed', () => {
-    const r = mod.evaluateAudit(typedocReport(), AFTER);
+  it('(d) fails once the deadline has passed', () => {
+    const r = evaluate(toolReport(), AFTER);
     expect(r.excepted).toEqual([]);
-    expect(r.failures.sort()).toEqual(['minimatch', 'typedoc', 'typedoc-plugin-markdown']);
+    expect(r.failures.sort()).toEqual(['minimatch', 'tool', 'tool-plugin']);
   });
 
   it('ignores severities below moderate and rejects a report with no vulnerabilities object', () => {
-    expect(mod.evaluateAudit({ vulnerabilities: { x: { ...entry([], []), severity: 'low' } } }, BEFORE).failures).toEqual([]);
-    expect(() => mod.evaluateAudit({}, BEFORE)).toThrow();
+    expect(evaluate({ vulnerabilities: { x: { ...entry([], []), severity: 'low' } } }, BEFORE).failures).toEqual([]);
+    expect(() => evaluate({}, BEFORE)).toThrow();
   });
 });

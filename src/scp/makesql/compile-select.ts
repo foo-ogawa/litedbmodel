@@ -22,7 +22,7 @@ import { orderToString } from '../../Column';
 import type { OrderSpec } from '../../Column';
 import type { MakeSQL } from './makesql';
 import { formatterFor } from './compile';
-import { conditionsFor } from './json-array';
+import { conditionsFor, type ColumnTypes } from './json-array';
 import type { Dialect } from './handler';
 
 /**
@@ -48,6 +48,19 @@ export interface RowLockOptions {
   forUpdate?: boolean;
   /** Lock the selected rows for SHARE — concurrent readers may share the lock, writers block. */
   forShare?: boolean;
+}
+
+/**
+ * A page count rendered INLINE as `LIMIT` / `OFFSET` text. The text becomes part of the statement, so
+ * only a non-negative safe integer may reach it: a request value is a string at run time whatever the
+ * `number` type says, and `limit: "1; DELETE …"` was spliced into the SQL and ran (#356). The ONE rule
+ * for every inline page count — the SCP page tail here and v1 `DBModel` select builders.
+ */
+export function pageCountText(clause: 'LIMIT' | 'OFFSET', value: unknown): string {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+    throw new TypeError(`${clause} must be a non-negative integer (got ${typeof value})`);
+  }
+  return String(value);
 }
 
 /**
@@ -89,6 +102,8 @@ export interface SelectDesc extends RowLockOptions {
    */
   selectColumn?: string;
   conditions?: ConditionObject;
+  /** The DECLARED types of the columns `conditions` names — types a MySQL IN-list element (#376). */
+  columnTypes?: ColumnTypes;
   join?: string;
   joinParams?: unknown[];
   cte?: { name: string; sql: string; params: unknown[] };
@@ -140,7 +155,7 @@ export function compileSelect(desc: SelectDesc): SelectBundle {
   if (desc.cte?.params && desc.cte.params.length > 0) headParams.push(...desc.cte.params);
   if (desc.joinParams && desc.joinParams.length > 0) headParams.push(...desc.joinParams);
 
-  const whereClause = conditionsFor(desc.conditions ?? {}, desc.dialect).compile(headParams, formatter);
+  const whereClause = conditionsFor(desc.conditions ?? {}, desc.dialect, desc.columnTypes).compile(headParams, formatter);
 
   let head = '';
   if (desc.cte) head = `WITH ${desc.cte.name} AS (${desc.cte.sql}) `;
@@ -159,13 +174,13 @@ export function compileSelect(desc: SelectDesc): SelectBundle {
   // The page tail: a static count is the original's inline literal; a bound one emits `?` and joins
   // the value list HERE, after the WHERE params — the order the `?`s occupy in the finished text.
   const tailParams: unknown[] = [];
-  const count = (c: number | BoundCount): string => {
-    if (!isBoundCount(c)) return String(c);
+  const count = (clause: 'LIMIT' | 'OFFSET', c: number | BoundCount): string => {
+    if (!isBoundCount(c)) return pageCountText(clause, c);
     tailParams.push(c.bind);
     return '?';
   };
-  if (desc.limit !== undefined) tail += ` LIMIT ${count(desc.limit)}`;
-  if (desc.offset !== undefined) tail += ` OFFSET ${count(desc.offset)}`;
+  if (desc.limit !== undefined) tail += ` LIMIT ${count('LIMIT', desc.limit)}`;
+  if (desc.offset !== undefined) tail += ` OFFSET ${count('OFFSET', desc.offset)}`;
   tail += lockTail(desc);
   if (desc.append) tail += ` ${desc.append}`;
 

@@ -651,9 +651,11 @@ function inWriterScope(): bool
  *
  * The write-reject half rides the AMBIENT read-only ctx ({@see TxAmbient}): {@see withWriter()} pins a
  * read-only-scoped ctx for `$fn`'s duration so {@see checkWriteAllowedAmbient()} rejects a write. If
- * an ambient ctx is passed explicitly (or already present), the read-only marker is derived from it;
- * otherwise the writer scope still diverts reads (the routing half), but there is no ambient ctx to
- * mark read-only against. Pass `$ctx` to guarantee the write-reject half fires.
+ * a ctx is passed explicitly, the read-only marker is derived from the ctx pinned for its owner (the
+ * open transaction, so the scope keeps its connection) or from the ctx itself; without one it is
+ * derived from every ctx already pinned in this scope. With neither, the writer scope still diverts
+ * reads (the routing half), but there is no ambient ctx to mark read-only against. Pass `$ctx` to
+ * guarantee the write-reject half fires.
  *
  * @param callable():mixed $fn
  */
@@ -664,18 +666,18 @@ function withWriter(callable $fn, ?ExecutionContext $ctx = null): mixed
     }
     WriterScope::enter();
     // Pin a read-only-scoped ambient ctx so the write-reject half fires (v1's single writerContext is
-    // BOTH writer-routing AND read-only). Prefer an explicit ctx; else derive from the ambient one.
-    $base = $ctx ?? currentContext();
+    // BOTH writer-routing AND read-only). Prefer an explicit ctx (its owner's pinned tx, if one is open);
+    // else derive from every ctx pinned in this scope.
+    $bases = $ctx !== null ? [currentContext($ctx) ?? $ctx] : TxAmbient::pinned();
     $prev = null;
-    $pinned = false;
-    if ($base !== null) {
-        $prev = TxAmbient::set($base->withReadOnly());
-        $pinned = true;
+    foreach ($bases as $base) {
+        $before = TxAmbient::set($base->withReadOnly());
+        $prev ??= $before;
     }
     try {
         return $fn();
     } finally {
-        if ($pinned) {
+        if ($prev !== null) {
             TxAmbient::restore($prev);
         }
         WriterScope::leave();
@@ -825,6 +827,17 @@ final class RoutingExecutionContext extends ExecutionContext
         parent::__construct($driver, $middleware, $pinned, $readOnly);
     }
 
+    /**
+     * The identity a transaction pinned for this ctx is keyed by ({@see TxAmbient}): the routing config. A
+     * routed transaction opens on the writer of a NAMED connection, so no single `\PDO` names it; every
+     * ctx over this config resolves its statements through the same registry and so joins it, while a ctx
+     * over another config does not.
+     */
+    public function pinOwner(): object
+    {
+        return $this->routing;
+    }
+
     /** The routing config (so the tx runtime can reach the registry/sticky clock). */
     public function routing(): RoutingConfig
     {
@@ -849,9 +862,10 @@ final class RoutingExecutionContext extends ExecutionContext
     {
         // STEP 1 (§3): the tx-owned (pinned) connection, for every statement of the tx's own database (a statement
         // naming a DIFFERENT database is rejected). It may be pinned on THIS ctx (a tx-scoped
-        // derivation) OR carried in the AMBIENT holder ({@see TxAmbient}) — the PHP analogue of the TS
-        // ALS store: a statement issued via the OUTER routing ctx while a routedTransaction() body runs
-        // still resolves the tx-owned connection.
+        // derivation) OR carried in the AMBIENT holder ({@see TxAmbient}) under this ctx's owner — the PHP
+        // analogue of the TS ALS store: a statement issued via the OUTER routing ctx while a
+        // routedTransaction() body runs on the same config still resolves the tx-owned connection, and
+        // one on a ctx over ANOTHER config does not.
         //
         // A statement that names a DIFFERENT database than the transaction opened on cannot be honored on
         // that connection — a transaction is ONE connection on ONE database — so it is LOUD rather than
@@ -861,9 +875,9 @@ final class RoutingExecutionContext extends ExecutionContext
             assertTxDbAgrees($intent->db, $this->connection);
             return $pinned;
         }
-        $ambient = currentContext();
-        if ($ambient !== null && $ambient !== $this && $ambient->inTransaction()) {
-            return $ambient->connectionFor($intent); // resolve the ambient tx's pinned connection
+        $outer = outerTransaction($this);
+        if ($outer !== null) {
+            return $outer->connectionFor($intent); // resolve the ambient tx's pinned connection
         }
         // STEPS 2-4 (§3): named-DB → reader/writer split → writer-sticky/withWriter. `resolvePool`
         // returns WHICH pool serves this intent; the returned wrapper acquires/runs/releases one owned
@@ -1048,8 +1062,8 @@ final class PdoPoolFactory implements PoolFactory
 
     public function build(ResolvedConnectionConfig $config, string $role): array
     {
-        $pdo = $this->connect !== null ? ($this->connect)($config, $role) : self::connectFromConfig($config);
-        $driver = new PdoDriver($pdo);
+        $open = fn (): \PDO => $this->connect !== null ? ($this->connect)($config, $role) : self::connectFromConfig($config);
+        $driver = new PdoDriver($open(), $open);
         $pool = new ConfiguredPdoPool($driver, $config);
         // \PDO has no explicit close; dropping the last ref closes it. The closer holds the driver ref
         // (keeping the \PDO alive) and drops it on close() → GC closes the connection.
@@ -1266,9 +1280,9 @@ function routedTransaction(
     string $dialectName = 'postgres',
     ?string $connection = null,
 ): mixed {
-    // NESTED-TX JOIN: already inside a tx ⇒ the base transaction() joins the outer; sticky was armed by
-    // the outer's commit. Delegate straight through (no re-pin, no double-mark).
-    if (ambientInTransaction()) {
+    // NESTED-TX JOIN: already inside a tx on this config ⇒ the base transaction() joins the outer; sticky
+    // is armed by the outer's commit. Delegate straight through (no re-pin, no double-mark).
+    if (outerTransaction($ctx) !== null) {
         return transaction($ctx, $fn, $options, $dialectName);
     }
 

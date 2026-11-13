@@ -1,8 +1,4 @@
-[**litedbmodel v2.2.14**](../README.md)
-
-***
-
-[litedbmodel](../globals.md) / dbDynamic
+[API](../README.md) / dbDynamic
 
 # Function: dbDynamic()
 
@@ -16,11 +12,12 @@ Create a dynamic value (function call with parameters)
 
 ## Parameters
 
-| Parameter | Type | Default value |
+| Parameter | Type | Description |
 | ------ | ------ | ------ |
-| `func` | `string` | `undefined` |
-| `values` | `unknown`[] | `[]` |
+| `func` | `string` |  |
+| `values?` | `unknown[]` | **Default** `[]` |
 
 ## Returns
 
 `DBDynamicValue`
+

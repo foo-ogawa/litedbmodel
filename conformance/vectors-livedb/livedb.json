@@ -359,7 +359,7 @@
       },
       "expectedStatements": [
         {
-          "sql": "SELECT id, title FROM conf_posts WHERE id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) ORDER BY id ASC",
+          "sql": "SELECT id, title FROM conf_posts WHERE id IN (SELECT v FROM JSON_TABLE(?, '$[*]' COLUMNS(v DECIMAL(65,30) PATH '$')) jt) ORDER BY id ASC",
           "params": [
             "[10,12]"
           ]
@@ -406,7 +406,7 @@
       },
       "expectedStatements": [
         {
-          "sql": "SELECT id, title FROM conf_posts WHERE id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) ORDER BY id ASC",
+          "sql": "SELECT id, title FROM conf_posts WHERE id IN (SELECT v FROM JSON_TABLE(?, '$[*]' COLUMNS(v DECIMAL(65,30) PATH '$')) jt) ORDER BY id ASC",
           "params": [
             "[]"
           ]
@@ -1825,13 +1825,13 @@
           "params": []
         },
         {
-          "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE author_id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) ORDER BY id ASC",
+          "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE author_id IN (SELECT v FROM JSON_TABLE(?, '$[*]' COLUMNS(v DECIMAL(65,30) PATH '$')) jt) ORDER BY id ASC",
           "params": [
             "[1,2,3]"
           ]
         },
         {
-          "sql": "SELECT id, post_id, label FROM conf_tags WHERE post_id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) ORDER BY id ASC",
+          "sql": "SELECT id, post_id, label FROM conf_tags WHERE post_id IN (SELECT v FROM JSON_TABLE(?, '$[*]' COLUMNS(v DECIMAL(65,30) PATH '$')) jt) ORDER BY id ASC",
           "params": [
             "[10,11,12]"
           ]
@@ -2026,7 +2026,7 @@
           "params": []
         },
         {
-          "sql": "SELECT id, name, post_count FROM conf_users WHERE id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt)",
+          "sql": "SELECT id, name, post_count FROM conf_users WHERE id IN (SELECT v FROM JSON_TABLE(?, '$[*]' COLUMNS(v DECIMAL(65,30) PATH '$')) jt)",
           "params": [
             "[1,2]"
           ]
@@ -2760,7 +2760,7 @@
       },
       "expectedStatements": [
         {
-          "sql": "DELETE FROM conf_tags WHERE id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt)",
+          "sql": "DELETE FROM conf_tags WHERE id IN (SELECT v FROM JSON_TABLE(?, '$[*]' COLUMNS(v DECIMAL(65,30) PATH '$')) jt)",
           "params": [
             "[100,101]"
           ]
@@ -3086,7 +3086,7 @@
       },
       "expectedStatements": [
         {
-          "sql": "UPDATE conf_tags AS u JOIN JSON_TABLE(?, '$[*]' COLUMNS(id JSON PATH '$.id', label JSON PATH '$.label')) AS v ON u.id = JSON_UNQUOTE(v.id) SET u.label = JSON_UNQUOTE(v.label) RETURNING id, label /*scp:pk=id;ai=*/",
+          "sql": "UPDATE conf_tags AS u JOIN JSON_TABLE(?, '$[*]' COLUMNS(id DECIMAL(65,30) PATH '$.id', label JSON PATH '$.label')) AS v ON u.id = v.id SET u.label = JSON_UNQUOTE(v.label) RETURNING id, label /*scp:pk=id;ai=*/",
           "params": [
             "[{\"id\":100,\"label\":\"re-100\"},{\"id\":102,\"label\":\"re-102\"}]"
           ]
@@ -3205,7 +3205,7 @@
       },
       "expectedStatements": [
         {
-          "sql": "DELETE FROM conf_tags WHERE id IN (SELECT JSON_UNQUOTE(v) FROM JSON_TABLE(?, '$[*]' COLUMNS(v JSON PATH '$')) jt) RETURNING id, label /*scp:pk=id;ai=*/",
+          "sql": "DELETE FROM conf_tags WHERE id IN (SELECT v FROM JSON_TABLE(?, '$[*]' COLUMNS(v DECIMAL(65,30) PATH '$')) jt) RETURNING id, label /*scp:pk=id;ai=*/",
           "params": [
             "[100,101]"
           ]

@@ -1,8 +1,4 @@
-[**litedbmodel v2.2.14**](../README.md)
-
-***
-
-[litedbmodel](../globals.md) / parentRef
+[API](../README.md) / parentRef
 
 # Function: parentRef()
 
@@ -13,6 +9,17 @@ function parentRef(column: ColumnRef): DBParentRef;
 Defined in: [DBValues.ts:643](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBValues.ts#L643)
 
 Create a parent table column reference for correlated subqueries.
+
+## Example
+
+```typescript
+// Reference parent's id column in subquery
+await User.find([
+  User.inSubquery([User.id], Order, [Order.user_id], [
+    [Order.user_id, parentRef(User.id)]
+  ])
+]);
+```
 
 ## Parameters
 
@@ -26,13 +33,3 @@ Create a parent table column reference for correlated subqueries.
 
 DBParentRef instance
 
-## Example
-
-```typescript
-// Reference parent's id column in subquery
-await User.find([
-  User.inSubquery([User.id], Order, [Order.user_id], [
-    [Order.user_id, parentRef(User.id)]
-  ])
-]);
-```

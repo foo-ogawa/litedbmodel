@@ -122,6 +122,8 @@ type MiddlewareDescriptor struct {
 // registration) OR a per-execution-scope copy pushed by [WithMiddlewareScope]. The two share this
 // type; only their lifetime differs. The stack + the state map are BOTH scope-local — but a scope
 // copy seeds ONLY the stack, so its state map starts EMPTY (the concurrency-isolation guarantee).
+// The process-global default is not a scope and holds NO state map: outside a scope a state is fresh
+// per access and retained nowhere (the TS reference / v1 getCurrentContext outside a request, #364).
 //
 // Registry is goroutine-safe (a mutex guards the stack + state map): the process-global default may be
 // touched from any goroutine, and a scope registry — though normally used by one goroutine — is
@@ -130,9 +132,10 @@ type Registry struct {
 	mu    sync.Mutex
 	stack []*MiddlewareDescriptor
 	// states holds THIS scope's per-middleware state, keyed by the state-owning token a [NewMiddleware]
-	// handle carries. Because a scope Registry is a COPY that seeds ONLY the stack (states starts nil),
+	// handle carries. Because a scope Registry is a COPY that seeds ONLY the stack (states starts empty),
 	// each scope lazily builds its OWN state instances — isolated across concurrent scopes with no
 	// bleed. Copying the states map here would reproduce the TS M5 cross-talk failure — it is NOT copied.
+	// nil on the process-global default, which retains no state.
 	states map[*stateToken]any
 }
 
@@ -141,8 +144,8 @@ type Registry struct {
 // same scope-local state instance.
 type stateToken struct{}
 
-// newRegistry returns an empty registry (the process-global default's initial state).
-func newRegistry() *Registry { return &Registry{} }
+// newRegistry returns an empty scope registry (its state map starts empty).
+func newRegistry() *Registry { return &Registry{states: map[*stateToken]any{}} }
 
 // register appends `mw` (⇒ outermost) and returns an idempotent un-register fn.
 func (r *Registry) register(mw *MiddlewareDescriptor) func() {
@@ -165,7 +168,6 @@ func (r *Registry) register(mw *MiddlewareDescriptor) func() {
 func (r *Registry) clear() {
 	r.mu.Lock()
 	r.stack = nil
-	r.states = nil
 	r.mu.Unlock()
 }
 
@@ -231,12 +233,13 @@ func (r *Registry) methodHooks(kind MethodKind) []MethodHook {
 }
 
 // stateFor returns THIS scope's state for `token`, lazily created via `fresh` on first access. The
-// state map is scope-local (a scope copy starts empty), so each scope builds its OWN instance.
+// state map is scope-local (a scope copy starts empty), so each scope builds its OWN instance. A
+// registry with no state map (the process-global default) returns a fresh instance per access.
 func (r *Registry) stateFor(token *stateToken, fresh func() any) any {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.states == nil {
-		r.states = map[*stateToken]any{}
+		return fresh()
 	}
 	if s, ok := r.states[token]; ok {
 		return s
@@ -246,26 +249,37 @@ func (r *Registry) stateFor(token *stateToken, fresh func() any) any {
 	return s
 }
 
+// resetStateFor resets `token`'s state in THIS scope to a fresh instance (testing convenience). A
+// registry with no state map retains none, so there is nothing to reset.
+func (r *Registry) resetStateFor(token *stateToken, fresh func() any) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.states != nil {
+		r.states[token] = fresh()
+	}
+}
+
 // copyStackOnly returns a scope-child registry that seeds ONLY the stack — the state map starts EMPTY
 // so concurrent scopes never bleed per-middleware state (the TS M5 isolation guarantee). The seeded
 // stack is a COPY (a register inside the scope does not touch the parent's stack).
 func (r *Registry) copyStackOnly() *Registry {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	child := &Registry{}
+	child := newRegistry()
 	if len(r.stack) > 0 {
 		child.stack = make([]*MiddlewareDescriptor, len(r.stack))
 		copy(child.stack, r.stack)
 	}
-	// child.states deliberately left nil — NOT copied.
+	// child.states deliberately starts EMPTY — NOT copied.
 	return child
 }
 
 // ── Scope: the per-execution registry on a context.Context (isolation, design §4) ──
 
 // globalRegistry is the process-global default registry (app-startup [RegisterMiddleware] with no
-// explicit scope). Concurrent scopes each carry their OWN registry on a context.Context.
-var globalRegistry = newRegistry()
+// explicit scope). Concurrent scopes each carry their OWN registry on a context.Context. It has no
+// state map, so it retains no middleware state (#364).
+var globalRegistry = &Registry{}
 
 // registryKeyType is the private context key the scope registry rides under (unexported type ⇒ no
 // collision with any other package's context values).
@@ -394,13 +408,7 @@ func (h *MiddlewareHandle) ResetState(goCtx context.Context) {
 	if h.newState == nil {
 		return
 	}
-	r := currentRegistry(goCtx)
-	r.mu.Lock()
-	if r.states == nil {
-		r.states = map[*stateToken]any{}
-	}
-	r.states[h.token] = h.newState()
-	r.mu.Unlock()
+	currentRegistry(goCtx).resetStateFor(h.token, h.newState)
 }
 
 // NewMiddleware builds a [MiddlewareHandle] from the ergonomic [MiddlewareConfig] (the go analogue of
@@ -537,7 +545,8 @@ type LoggerOptions struct {
 // brackets the `next` call, so it measures the connection execute (chain remainder included).
 //
 // The log history lives on the handle's per-scope State ([LoggerState]), so concurrent scopes each
-// collect their OWN entries (isolated) — the go analogue of the TS scope-local entries list.
+// collect their OWN entries (isolated) — the go analogue of the TS scope-local entries list. Outside a
+// [WithMiddlewareScope] no entry is kept; the Sink still sees each one.
 func Logger(opts LoggerOptions) *MiddlewareHandle {
 	now := opts.Now
 	if now == nil {
@@ -571,17 +580,41 @@ func Logger(opts LoggerOptions) *MiddlewareHandle {
 // fires), matching v1 DBModel.query → execute.
 
 // rawLeadingRe matches a row-returning leading keyword (SELECT / WITH / SHOW / PRAGMA / VALUES /
-// EXPLAIN / TABLE) — byte-true to the TS returnsRows leading-keyword test.
+// EXPLAIN / TABLE) — the TS middleware.ts returnsRows leading-keyword test.
 var rawLeadingRe = regexp.MustCompile(`(?i)^\s*(select|with|show|pragma|values|explain|table)\b`)
 
 // returningRe matches a RETURNING clause anywhere in the statement — a write with RETURNING returns
-// rows, so returnsRows picks Execute over Run for it (byte-true to the TS middleware.ts).
+// rows, so returnsRows picks Execute over Run for it (the TS middleware.ts returnsRows).
 var returningRe = regexp.MustCompile(`(?i)\breturning\b`)
 
 // returnsRows reports whether `sql` returns rows (a SELECT-family leading keyword, or a RETURNING
 // clause). Mirrors the TS middleware.ts returnsRows so RawExecute picks Execute vs. Run identically.
 func returnsRows(sql string) bool {
 	return rawLeadingRe.MatchString(sql) || returningRe.MatchString(sql)
+}
+
+// lockOrIntoRe matches a row lock (FOR UPDATE / FOR NO KEY UPDATE / FOR SHARE / FOR KEY SHARE /
+// LOCK IN SHARE MODE) or an INTO anywhere — such a SELECT locks rows or writes, so it is not read-only.
+var lockOrIntoRe = regexp.MustCompile(`(?i)\bfor\s+(update|share|no\s+key\s+update|key\s+share)\b|\block\s+in\s+share\s+mode\b|\binto\b`)
+
+// withExplainRe / dataModifyingRe: a WITH / EXPLAIN statement is read-only only if it carries no
+// insert / update / delete / merge word (a data-modifying CTE writes; EXPLAIN ANALYZE runs the statement).
+var withExplainRe = regexp.MustCompile(`(?i)^\s*(with|explain)\b`)
+var dataModifyingRe = regexp.MustCompile(`(?i)\b(insert|update|delete|merge)\b`)
+
+// readLeadingRe matches a leading keyword of a statement that is read-only unless it writes otherwise.
+var readLeadingRe = regexp.MustCompile(`(?i)^\s*(select|show|pragma|values|table)\b`)
+
+// isReadOnlyStatement reports whether `sql` is certainly read-only — whether it may go to the reader.
+// Anything not certain takes the write intent. Mirrors the TS middleware.ts isReadOnlyStatement.
+func isReadOnlyStatement(sql string) bool {
+	if lockOrIntoRe.MatchString(sql) {
+		return false
+	}
+	if withExplainRe.MatchString(sql) {
+		return !dataModifyingRe.MatchString(sql)
+	}
+	return readLeadingRe.MatchString(sql) && !returningRe.MatchString(sql)
 }
 
 // RawResult is the raw-statement result: a row list (for a row-returning statement) plus the
@@ -591,8 +624,8 @@ type RawResult struct {
 	RowCount int64
 }
 
-// RawExecuteOptions configures [RawExecute]: force the write intent (writer routing / tx connection)
-// for a row-returning write (an INSERT … RETURNING routed to the writer).
+// RawExecuteOptions configures [RawExecute]: Write forces the write intent (writer routing / tx
+// connection) for any statement.
 type RawExecuteOptions struct {
 	Write bool
 }
@@ -601,12 +634,13 @@ type RawExecuteOptions struct {
 // middleware intercepts it, connection routing resolves the connection, and an ambient transaction (if
 // `ctx` is tx-scoped) applies — because it is the SAME [Execute] / [Run] seam the runtime uses, not a
 // direct db call. A row-returning statement (SELECT / … RETURNING / SHOW / PRAGMA / VALUES / WITH …
-// SELECT) runs [Execute]; a non-returning one runs [Run]. `opts.Write` forces the write intent for a
-// row-returning write.
+// SELECT) runs [Execute]; a non-returning one runs [Run]. A row-returning statement takes the write
+// intent unless it is certainly read-only ([isReadOnlyStatement]: INSERT … RETURNING and SELECT … FOR
+// UPDATE go to the writer); `opts.Write` forces the write intent. Mirrors the TS rawExecute.
 func RawExecute(ctx *ExecutionContext, sql string, args []any, opts RawExecuteOptions) (RawResult, error) {
 	if returnsRows(sql) {
 		intent := ReadIntent()
-		if opts.Write {
+		if opts.Write || !isReadOnlyStatement(sql) {
 			intent = WriteIntent()
 		}
 		rows, err := Execute(ctx, sql, args, intent)

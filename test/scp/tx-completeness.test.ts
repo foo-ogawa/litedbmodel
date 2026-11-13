@@ -284,6 +284,73 @@ describe('#81 tx retry (whole-tx re-run on a retryable error; fresh connection p
   });
 });
 
+describe('tx retry after a connection error takes only a connection that passed a SELECT 1 probe', () => {
+  /** Connection 1 loses its connection inside the body; `dead` connections after it fail every statement. */
+  function poolAfterFailover(dead: number) {
+    const sql: string[] = [];
+    const destroyed: number[] = [];
+    let acquired = 0;
+    const lost = (): Error => Object.assign(new Error('Connection terminated unexpectedly'), { code: 'ECONNRESET' });
+    const pool: AsyncConnectionPool = {
+      async acquire() {
+        const n = ++acquired;
+        const conn: AsyncConnection & { n: number } = {
+          n,
+          async execute(s) {
+            sql.push(`${n}:${s}`);
+            if (n > 1 && n <= 1 + dead) throw lost();
+            return [];
+          },
+          async run(s) {
+            sql.push(`${n}:${s}`);
+            if ((n === 1 && /insert/i.test(s)) || (n > 1 && n <= 1 + dead)) throw lost();
+            return { changes: 1, lastInsertRowid: 0 };
+          },
+        };
+        return conn;
+      },
+      async release(conn, destroy) {
+        if (destroy) destroyed.push((conn as AsyncConnection & { n: number }).n);
+      },
+    };
+    return { pool, sql, destroyed };
+  }
+
+  it('destroys the dead connections the pool still holds and runs the retry on a live one', async () => {
+    const { pool, sql, destroyed } = poolAfterFailover(2);
+    const result = await withTransactionAsync(
+      new PooledAsyncContext(pool),
+      async (txCtx) => { await runAsync(txCtx, 'INSERT INTO t VALUES (1)', []); return 'ok'; },
+      { retryLimit: 3, retryDuration: 1 },
+      'postgres',
+    );
+    expect(result).toBe('ok');
+    expect(sql).toEqual([
+      '1:BEGIN', '1:INSERT INTO t VALUES (1)', '1:ROLLBACK',
+      '2:SELECT 1', '3:SELECT 1', '4:SELECT 1',
+      '4:BEGIN', '4:INSERT INTO t VALUES (1)', '4:COMMIT',
+    ]);
+    expect(destroyed).toEqual([1, 2, 3]);
+  });
+
+  it('fails the attempt when retryLimit connections all fail the probe, and throws the probe error once attempts run out', async () => {
+    const { pool, sql, destroyed } = poolAfterFailover(6);
+    await expect(withTransactionAsync(
+      new PooledAsyncContext(pool),
+      async (txCtx) => { await runAsync(txCtx, 'INSERT INTO t VALUES (1)', []); },
+      { retryLimit: 3, retryDuration: 1 },
+      'postgres',
+    )).rejects.toThrow('Connection terminated unexpectedly');
+    // attempt 1 on connection 1; attempts 2 and 3 each probe retryLimit connections, none passes.
+    expect(sql).toEqual([
+      '1:BEGIN', '1:INSERT INTO t VALUES (1)', '1:ROLLBACK',
+      '2:SELECT 1', '3:SELECT 1', '4:SELECT 1',
+      '5:SELECT 1', '6:SELECT 1', '7:SELECT 1',
+    ]);
+    expect(destroyed).toEqual([1, 2, 3, 4, 5, 6, 7]);
+  });
+});
+
 describe('#81 runGuardedAsync (guarded write seam)', () => {
   it('rejects a guarded write outside a tx, allows it inside', async () => {
     const { pool } = fakePool();

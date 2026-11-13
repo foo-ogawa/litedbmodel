@@ -1,8 +1,9 @@
 #!/usr/bin/env node
-// Guard: `npm audit --audit-level=moderate`, minus the ONE provisional exception the owner approved.
+// Guard: `npm audit --audit-level=moderate`, minus the provisional exceptions the owner approved
+// (EXCEPTIONS below; none today).
 //
 // Why a script and not a bare `npm audit` in ci.yml / release.yml: npm audit has no per-advisory,
-// per-path allowlist, and the exception must hold only for one advisory reached through one set of
+// per-path allowlist, and an exception must hold only for one advisory reached through one set of
 // packages, and only until a deadline. This is the single place that decides it; ci.yml (Audit) and
 // release.yml (audit, before the publish) both call `npm run audit:check`, so a pull request that
 // passes here does not stop the release after it merges.
@@ -26,15 +27,10 @@ import { fileURLToPath } from 'node:url';
  *     not a direct dependency of the project;
  *   - the date (UTC) is before `expires`.
  * A path from the same package version that does not go through `viaPackages` is NOT excepted.
+ * Entry shape: `{ advisory: 'GHSA-…', viaPackages: [...], expires: 'YYYY-MM-DD' (exclusive, UTC),
+ * issue: '<url of the issue that removes it>' }`.
  */
-export const EXCEPTIONS = [
-  {
-    advisory: 'GHSA-g3hv-75wg-m249', // minimatch: DoS via globparts amplification (7.0.0 - 11.0.0)
-    viaPackages: ['typedoc', 'typedoc-plugin-markdown'],
-    expires: '2027-02-07', // exclusive: the exception no longer applies on 2027-02-07 (UTC) or later
-    issue: 'https://github.com/foo-ogawa/litedbmodel/issues/335',
-  },
-];
+export const EXCEPTIONS = [];
 
 const GATED = new Set(['moderate', 'high', 'critical']);
 
@@ -44,17 +40,18 @@ function advisoryId(via) {
 }
 
 /**
- * Evaluate an `npm audit --json` report (auditReportVersion 2) against EXCEPTIONS.
+ * Evaluate an `npm audit --json` report (auditReportVersion 2) against a list of exceptions.
  * @param {any} report parsed `npm audit --json` output
  * @param {string} today UTC date, `YYYY-MM-DD`
+ * @param {typeof EXCEPTIONS} exceptions the exceptions to apply (EXCEPTIONS; a test passes its own)
  * @returns {{ failures: string[], excepted: string[] }} package names that fail / are excepted
  */
-export function evaluateAudit(report, today) {
+export function evaluateAudit(report, today, exceptions = EXCEPTIONS) {
   const vulns = report?.vulnerabilities;
   if (!vulns || typeof vulns !== 'object') {
     throw new Error('npm audit --json output has no "vulnerabilities" object (audit did not run?)');
   }
-  const active = EXCEPTIONS.filter((e) => today < e.expires);
+  const active = exceptions.filter((e) => today < e.expires);
   const memo = new Map();
 
   /** Is the finding on package `name` covered by exception `ex`? */
@@ -136,7 +133,7 @@ function main() {
     console.error('  Run `npm audit` for the advisories.');
     process.exit(1);
   }
-  console.log('✓ audit: no moderate-or-higher finding outside the listed exception.');
+  console.log('✓ audit: no moderate-or-higher finding outside the listed exceptions.');
 }
 
 // Run only when invoked as a script (the unit test imports evaluateAudit).

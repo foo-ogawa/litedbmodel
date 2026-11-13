@@ -322,8 +322,10 @@ Every family takes the same argument: a column name, or an options object.
 
 A model that declares no primary key is treated as having an auto-increment `id`. Declare the key
 whenever that is not true: on MySQL, which has no native `RETURNING`, a `returning` write recovers
-the rows it wrote from the declared key — by the auto-increment range for a server-assigned key, and
-by the values the write itself bound for a UUID, a client-supplied, or a composite key.
+the rows it wrote from the declared key — for a server-assigned key, from the first id the insert was
+given, checked against the number of rows it wrote (never by assuming the ids are consecutive), and for
+a UUID, a client-supplied, or a composite key, by the values the write itself bound, compared in the
+key column's own type.
 
 ### Date vs DateTime: Important Distinction
 
@@ -524,9 +526,14 @@ await UserPref.create(
 | **Duplicates** | No duplicates (each row appears once; MySQL pre-SELECT uses `DISTINCT`) |
 | **Empty result** | `{ key: [...], values: [] }` when no rows affected (not `null`) |
 
-> **Note:** For MySQL (no `RETURNING`), when `returning: true`:
-> - `update`/`delete`: Executes pre-SELECT (with `DISTINCT`) to get PKs, then executes the operation (2 queries in same transaction)
-> - `updateMany`: Executes update, then SELECT to get PKs of affected rows (2 queries in same transaction)
+> **Note:** For MySQL (no `RETURNING`), when `returning: true`, the write and the statements that
+> recover its rows run in one transaction (the caller's, or one opened for them), so the result lists
+> exactly the rows this call wrote:
+> - `update`/`delete`: the matching rows are locked (`SELECT … FOR UPDATE`) and their PKs taken before
+>   the write; `delete` also checks that it removed exactly those rows. A row another session changes or
+>   removes at the same time is not reported as written by this call.
+> - `updateMany`: the PKs are read by the same key tuples the update matched.
+> - Insert-or-ignore (`onConflictAction: 'ignore'`): a skipped duplicate returns no row.
 > - When `returning: false` (default): Single query, returns `null`
 
 #### Batch Limits
@@ -952,6 +959,28 @@ await DBModel.transaction(
 );
 ```
 
+### Retry on connection errors
+
+- Inside `transaction()` (with the default `retryOnError: true`), a connection error or a deadlock /
+  serialization failure retries the whole `func` on a new connection, up to `retryLimit` times. A
+  connection error during COMMIT is not retried, because the outcome is unknown; it is thrown. (On an
+  acquired `connection`, see below.)
+- Outside a transaction, only a statement that is certainly read-only is retried, and only that one
+  statement is re-sent. A `SELECT` that calls a function (including `COUNT(*)`), and a `SELECT` with
+  `FOR UPDATE`, `FOR SHARE` or `INTO`, is never re-sent. Writes are never re-sent.
+- To have a function call that writes retried, run it inside `transaction()`.
+- A retry after a connection error runs only on a connection that passes a check. After a failover or
+  a database restart the pool can still hold dead connections, so each connection taken for the retry
+  is first sent `SELECT 1`; one that fails it is closed (not returned to the pool) and another is
+  taken, up to `retryLimit` connections (for a read re-sent outside a transaction, the default
+  `retryLimit`, 3). If none passes, that attempt fails with the check's error, and `transaction()`
+  retries again while attempts remain. The first attempt, and a retry after a deadlock or a
+  serialization failure, take a connection without the check. The check shows only that the connection
+  works, not whether the failed statement ran on the server, so a function-calling `SELECT` is still
+  never re-sent on its own, and a connection error during COMMIT is still thrown.
+- A PostgreSQL backend ended by the server (`pg_terminate_backend`, a shutdown or a failover; SQLSTATE
+  `57P01`) counts as a connection error and is retried the same way.
+
 ### Transactions on an acquired connection
 
 `transaction()` takes a new writer connection each time it is not nested. To take connections in the
@@ -1149,9 +1178,10 @@ const rankings = await UserRanking.query(`
 ### DBModel.execute() - Non-Model Operations
 
 Use `execute()` for DDL, maintenance, and operations that don't return model instances.
-Accepts either raw SQL strings or `sql` tagged templates. Outside a transaction, a statement that
-returns rows (`SELECT`, `WITH`, `… RETURNING`, …) runs on the reader and any other statement on the
-writer. A `SELECT` that calls a function which writes is still a `SELECT`, so call it inside
+Accepts either raw SQL strings or `sql` tagged templates. Outside a transaction, a statement that is
+certainly read-only (`SELECT`, a `WITH` that does not write, `SHOW`, …) runs on the reader and any other
+statement on the writer — including `INSERT … RETURNING` and a `SELECT` with `FOR UPDATE`, `FOR SHARE`
+or `INTO`. A `SELECT` that calls a function which writes is still a `SELECT`, so call it inside
 `transaction()`:
 
 ```typescript

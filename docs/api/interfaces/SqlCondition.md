@@ -1,8 +1,4 @@
-[**litedbmodel v2.2.14**](../README.md)
-
-***
-
-[litedbmodel](../globals.md) / SqlCondition
+[API](../README.md) / SqlCondition
 
 # Interface: SqlCondition\<M\>
 
@@ -13,15 +9,16 @@ Used for Pattern B (value-embedded) conditions and value-free conditions (IS NUL
 
 ## Type Parameters
 
-| Type Parameter | Default type | Description |
-| ------ | ------ | ------ |
-| `M` | `unknown` | The model type the Column belongs to |
+| Type Parameter | Description |
+| ------ | ------ |
+| `M = unknown` | The model type the Column belongs to |
 
 ## Properties
 
-| Property | Modifier | Type | Defined in |
+| Property | Type | Description | Defined in |
 | ------ | ------ | ------ | ------ |
-| <a id="_tag"></a> `_tag` | `readonly` | `"SqlCondition"` | [SqlFragment.ts:49](https://github.com/foo-ogawa/litedbmodel/blob/main/src/SqlFragment.ts#L49) |
-| <a id="sql"></a> `sql` | `readonly` | `string` | [SqlFragment.ts:50](https://github.com/foo-ogawa/litedbmodel/blob/main/src/SqlFragment.ts#L50) |
-| <a id="params"></a> `params` | `readonly` | readonly `unknown`[] | [SqlFragment.ts:51](https://github.com/foo-ogawa/litedbmodel/blob/main/src/SqlFragment.ts#L51) |
-| <a id="__modeltype"></a> `__modelType?` | `readonly` | `M` | [SqlFragment.ts:52](https://github.com/foo-ogawa/litedbmodel/blob/main/src/SqlFragment.ts#L52) |
+| <a id="_tag"></a> `_tag` (readonly) | `'SqlCondition'` |  | [SqlFragment.ts:49](https://github.com/foo-ogawa/litedbmodel/blob/main/src/SqlFragment.ts#L49) |
+| <a id="sql"></a> `sql` (readonly) | `string` |  | [SqlFragment.ts:50](https://github.com/foo-ogawa/litedbmodel/blob/main/src/SqlFragment.ts#L50) |
+| <a id="params"></a> `params` (readonly) | `readonly unknown[]` |  | [SqlFragment.ts:51](https://github.com/foo-ogawa/litedbmodel/blob/main/src/SqlFragment.ts#L51) |
+| <a id="__modeltype"></a> `__modelType?` (readonly) | `M` |  | [SqlFragment.ts:52](https://github.com/foo-ogawa/litedbmodel/blob/main/src/SqlFragment.ts#L52) |
+

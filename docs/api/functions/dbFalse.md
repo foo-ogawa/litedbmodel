@@ -1,8 +1,4 @@
-[**litedbmodel v2.2.14**](../README.md)
-
-***
-
-[litedbmodel](../globals.md) / dbFalse
+[API](../README.md) / dbFalse
 
 # Function: dbFalse()
 
@@ -17,3 +13,4 @@ Create a boolean FALSE value
 ## Returns
 
 `DBBoolValue`
+

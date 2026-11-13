@@ -1,8 +1,4 @@
-[**litedbmodel v2.2.14**](../README.md)
-
-***
-
-[litedbmodel](../globals.md) / Conditions
+[API](../README.md) / Conditions
 
 # Class: Conditions\<Model\>
 
@@ -41,10 +37,10 @@ if (query.active) where.add(User.is_active, true);
 
 ## Constructors
 
-### Constructor
+### constructor
 
 ```ts
-new Conditions<Model>(initial?: Conds): Conditions<Model>;
+new Conditions(initial?: Conds): Conditions<Model>;
 ```
 
 Defined in: [Column.ts:645](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L645)
@@ -57,15 +53,9 @@ Create a Conditions builder, optionally with initial conditions.
 | ------ | ------ |
 | `initial?` | `Conds` |
 
-#### Returns
-
-`Conditions`\<`Model`\>
-
 ## Accessors
 
 ### length
-
-#### Get Signature
 
 ```ts
 get length(): number;
@@ -75,7 +65,7 @@ Defined in: [Column.ts:711](https://github.com/foo-ogawa/litedbmodel/blob/main/s
 
 Get the number of conditions.
 
-##### Returns
+#### Returns
 
 `number`
 
@@ -101,8 +91,8 @@ Add a type-safe column equality condition.
 
 | Parameter | Type |
 | ------ | ------ |
-| `column` | [`Column`](../interfaces/Column.md)\<`V`, `Model`\> |
-| `value` | `V` \| `null` \| `undefined` |
+| `column` | [`Column`](../interfaces/Column.md)`<V, Model>` |
+| `value` | `V \| null \| undefined` |
 
 #### Returns
 
@@ -135,8 +125,6 @@ Add a raw condition with template literal (e.g., `${User.age} > ?`).
 
 ### addSql()
 
-#### Call Signature
-
 ```ts
 addSql<V>(fragment: SqlTypedFragment<V, Model>, value: V): this;
 ```
@@ -145,24 +133,7 @@ Defined in: [Column.ts:681](https://github.com/foo-ogawa/litedbmodel/blob/main/s
 
 Add a type-safe sql-tagged condition.
 
-##### Type Parameters
-
-| Type Parameter |
-| ------ |
-| `V` |
-
-##### Parameters
-
-| Parameter | Type |
-| ------ | ------ |
-| `fragment` | [`SqlTypedFragment`](../interfaces/SqlTypedFragment.md)\<`V`, `Model`\> |
-| `value` | `V` |
-
-##### Returns
-
-`this`
-
-##### Example
+#### Example
 
 ```typescript
 const where = new Conditions<User>();
@@ -170,7 +141,24 @@ where.addSql(sql`${User.age} > ?`, 18);
 where.addSql(sql`${User.deleted_at} IS NULL`);
 ```
 
-#### Call Signature
+#### Type Parameters
+
+| Type Parameter |
+| ------ |
+| `V` |
+
+#### Parameters
+
+| Parameter | Type |
+| ------ | ------ |
+| `fragment` | [`SqlTypedFragment`](../interfaces/SqlTypedFragment.md)`<V, Model>` |
+| `value` | `V` |
+
+#### Returns
+
+`this`
+
+***
 
 ```ts
 addSql(fragment: SqlTypedFragment<any, Model>): this;
@@ -180,23 +168,23 @@ Defined in: [Column.ts:682](https://github.com/foo-ogawa/litedbmodel/blob/main/s
 
 Add a type-safe sql-tagged condition.
 
-##### Parameters
-
-| Parameter | Type |
-| ------ | ------ |
-| `fragment` | [`SqlTypedFragment`](../interfaces/SqlTypedFragment.md)\<`any`, `Model`\> |
-
-##### Returns
-
-`this`
-
-##### Example
+#### Example
 
 ```typescript
 const where = new Conditions<User>();
 where.addSql(sql`${User.age} > ?`, 18);
 where.addSql(sql`${User.deleted_at} IS NULL`);
 ```
+
+#### Parameters
+
+| Parameter | Type |
+| ------ | ------ |
+| `fragment` | [`SqlTypedFragment`](../interfaces/SqlTypedFragment.md)`<any, Model>` |
+
+#### Returns
+
+`this`
 
 ***
 
@@ -214,7 +202,7 @@ Add an OR condition group.
 
 | Parameter | Type |
 | ------ | ------ |
-| ...`condGroups` | readonly `Conds`[] |
+| `...condGroups` | `readonly Conds[]` |
 
 #### Returns
 
@@ -235,3 +223,4 @@ Build the final array for use with find/count/delete.
 #### Returns
 
 `Conds`
+

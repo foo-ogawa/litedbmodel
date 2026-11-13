@@ -74,7 +74,7 @@ import {
 } from './connection-routing';
 import type { Dialect } from './makesql/handler';
 import { activeSqlMiddlewares } from './middleware';
-import { isConnectionError as defaultIsConnectionError, isUnretriedConnectionError, assertNestedConnection, createTransactionGuard } from '../connection-errors';
+import { isConnectionError as defaultIsConnectionError, isUnretriedConnectionError, assertNestedConnection, createTransactionGuard, acquireCheckedConnection } from '../connection-errors';
 import { defaultLogger } from '../drivers/types';
 
 // ── Statement intent & the driver contact (§5) ────────────────────────────────
@@ -558,7 +558,8 @@ export type TxOptions = TransactionOptions;
  * whole-tx retry with per-attempt connection acquisition.
  *
  * **Per attempt** (up to `retryLimit`):
- *   1. acquire ONE fresh connection from the pool (a retry after a connection error thus RECONNECTS);
+ *   1. acquire ONE fresh connection from the pool (a retry after a connection error thus RECONNECTS, and
+ *      takes only a connection that passed a `SELECT 1` probe — {@link acquireCheckedConnection});
  *   2. pin it into the ALS ctx (`runWithPinnedAsyncConnection`) so EVERY statement `fn` issues
  *      of the tx's own database resolves THAT connection — never a fresh pooled one, and a statement
  *      naming a DIFFERENT database is rejected instead;
@@ -606,52 +607,69 @@ export async function withTransactionAsync<R>(
   const pool = ctx.connectionPoolFor({ write: true, ...(connection !== undefined ? { db: connection } : {}) });
 
   let attempt = 0;
+  // Set when the previous attempt failed with a connection error: the pool may still hold dead
+  // connections, so this attempt runs only on a connection that passed a probe (at most retryLimit tried).
+  let afterConnectionError = false;
   for (;;) {
     attempt++;
-    // A given connection is released by whoever acquired it, never here
-    const conn = opts.connection ?? await pool.acquire();
-    const txCtx = ctx.withConnection(conn, true);
+    // A failure to acquire the connection is this attempt's failure (the go / rust / python / php
+    // transaction retry decides it the same way). A given connection is released by whoever acquired it,
+    // never here.
+    const acquired: { conn: AsyncConnection } | { error: unknown } = await (opts.connection !== undefined
+      ? Promise.resolve(opts.connection)
+      : afterConnectionError
+        ? acquireCheckedConnection(() => pool.acquire(), (c, probe) => c.execute(probe, []), (c) => pool.release(c, true), resolved.retryLimit)
+        : pool.acquire()
+    ).then((c): { conn: AsyncConnection } => ({ conn: c }), (error: unknown) => ({ error }));
 
-    // One attempt: BEGIN…body…COMMIT/ROLLBACK on the pinned conn. Returns `{ ok, value }` on success
-    // or `{ ok:false, error }` on failure — so the release + retry decision happens OUTSIDE the ALS
-    // run and the connection is released EXACTLY once per attempt.
-    let poisoned = false;
     let committing = false;
-    // The body sees the connection only through this pin; it is CLOSED when the body settles, so a
-    // statement started in the body but reaching the connection later (or after the connection was
-    // returned to the pool) is rejected instead of being sent. BEGIN/COMMIT/ROLLBACK go through the
-    // middleware chain onto `conn` directly, not through the pin.
-    const guard = createTransactionGuard(defaultLogger);
-    const pinned: AsyncConnection = {
-      execute: (sql, params) => guard.run(() => conn.execute(sql, params)),
-      run: (sql, params) => guard.run(() => conn.run(sql, params)),
-    };
-    const control = (sql: string): Promise<RunInfo> =>
-      ctx.middleware.wrap<Promise<RunInfo>>(sql, [], (s, p) => conn.run(s, p));
-    const attemptResult = await runWithPinnedAsyncConnection(ctx, { conn: pinned, db: connection ?? null, opened: conn }, async (): Promise<{ ok: true; value: R } | { ok: false; error: unknown }> => {
-      try {
-        for (const begin of begins) await control(begin);
-        // Mark the body as "inside a transaction" so a nested write's guard (`checkWriteAllowed`)
-        // and nested-tx detection see an active tx. The connection pin (above) and this marker share
-        // the SAME async scope.
-        const r = await guard.settle(() => runInTransactionScope(() => fn(txCtx)));
-        // rollbackOnly (dry-run): ROLLBACK but still return the body result — no committed change.
-        if (!resolved.rollbackOnly) committing = true;
-        await control(resolved.rollbackOnly ? 'ROLLBACK' : 'COMMIT');
-        return { ok: true, value: r };
-      } catch (error) {
-        try {
-          await control('ROLLBACK');
-        } catch {
-          poisoned = true; // ROLLBACK failed ⇒ the connection is in an unknown state; drop it.
-        }
-        return { ok: false, error };
-      }
-    });
+    let attemptResult: { ok: true; value: R } | { ok: false; error: unknown };
+    if ('error' in acquired) {
+      attemptResult = { ok: false, error: acquired.error };
+    } else {
+      const { conn } = acquired;
+      const txCtx = ctx.withConnection(conn, true);
 
-    // An errored attempt saw a failed statement — destroy the (possibly poisoned) conn so a retry
-    // reconnects on a fresh one; a clean success returns the conn to the pool.
-    if (opts.connection === undefined) await pool.release(conn, poisoned || !attemptResult.ok);
+      // One attempt: BEGIN…body…COMMIT/ROLLBACK on the pinned conn. Returns `{ ok, value }` on success
+      // or `{ ok:false, error }` on failure — so the release + retry decision happens OUTSIDE the ALS
+      // run and the connection is released EXACTLY once per attempt.
+      let poisoned = false;
+      // The body sees the connection only through this pin; it is CLOSED when the body settles, so a
+      // statement started in the body but reaching the connection later (or after the connection was
+      // returned to the pool) is rejected instead of being sent. BEGIN/COMMIT/ROLLBACK go through the
+      // middleware chain onto `conn` directly, not through the pin.
+      const guard = createTransactionGuard(defaultLogger);
+      const pinned: AsyncConnection = {
+        execute: (sql, params) => guard.run(() => conn.execute(sql, params)),
+        run: (sql, params) => guard.run(() => conn.run(sql, params)),
+      };
+      const control = (sql: string): Promise<RunInfo> =>
+        ctx.middleware.wrap<Promise<RunInfo>>(sql, [], (s, p) => conn.run(s, p));
+      attemptResult = await runWithPinnedAsyncConnection(ctx, { conn: pinned, db: connection ?? null, opened: conn }, async (): Promise<{ ok: true; value: R } | { ok: false; error: unknown }> => {
+        try {
+          for (const begin of begins) await control(begin);
+          // Mark the body as "inside a transaction" so a nested write's guard (`checkWriteAllowed`)
+          // and nested-tx detection see an active tx. The connection pin (above) and this marker share
+          // the SAME async scope.
+          const r = await guard.settle(() => runInTransactionScope(() => fn(txCtx)));
+          // rollbackOnly (dry-run): ROLLBACK but still return the body result — no committed change.
+          if (!resolved.rollbackOnly) committing = true;
+          await control(resolved.rollbackOnly ? 'ROLLBACK' : 'COMMIT');
+          return { ok: true, value: r };
+        } catch (error) {
+          try {
+            await control('ROLLBACK');
+          } catch {
+            poisoned = true; // ROLLBACK failed ⇒ the connection is in an unknown state; drop it.
+          }
+          return { ok: false, error };
+        }
+      });
+
+      // An errored attempt saw a failed statement — destroy the (possibly poisoned) conn so a retry
+      // reconnects on a fresh one; a clean success returns the conn to the pool.
+      if (opts.connection === undefined) await pool.release(conn, poisoned || !attemptResult.ok);
+    }
 
     if (attemptResult.ok) {
       // WRITER-STICKY (§3-2, read-your-writes): a committed tx records the commit in the current
@@ -664,12 +682,13 @@ export async function withTransactionAsync<R>(
       return attemptResult.value;
     }
 
-    const { error } = attemptResult;
+    const error: unknown = attemptResult.error;
     // A connection error at COMMIT leaves the outcome unknown (the server may have committed before the
     // response was lost): re-running the body could write twice, so it is thrown, not retried.
     // On a given connection a connection error is thrown too: a new connection cannot be taken.
     const unretried = isUnretriedConnectionError(error, { committing, givenConnection: opts.connection !== undefined }, isConnectionError);
     if (resolved.retryOnError && attempt < resolved.retryLimit && !unretried && isRetryableTxError(error, isConnectionError)) {
+      afterConnectionError = error instanceof Error && isConnectionError(error);
       await sleep(resolved.retryDuration * Math.pow(2, attempt - 1));
       continue; // RETRY the whole transaction on a fresh connection
     }

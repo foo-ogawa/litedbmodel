@@ -1,8 +1,4 @@
-[**litedbmodel v2.2.14**](../README.md)
-
-***
-
-[litedbmodel](../globals.md) / dbNull
+[API](../README.md) / dbNull
 
 # Function: dbNull()
 
@@ -17,3 +13,4 @@ Create a NULL value
 ## Returns
 
 `DBNullValue`
+

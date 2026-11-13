@@ -37,6 +37,8 @@ import {
   compileCreateManyBundle,
   compileUpdateManyBundle,
   compileDeleteManyBundle,
+  compileUpdateBundle,
+  compileDeleteBundle,
   compileRelationOp,
   executeSQLAsync,
   renderTxStatement,
@@ -51,7 +53,8 @@ import {
   type AsyncConnection,
   type RelationOp,
 } from '../../src/scp';
-import { compileSelect, type SelectDesc, type Dialect as MakeSQLDialect } from '../../src/scp/makesql';
+import { compileSelect, compileDeleteMany, assembleMakeSQL, encodeJsonArrayParam, type SelectDesc, type Dialect as MakeSQLDialect } from '../../src/scp/makesql';
+import Database from 'better-sqlite3';
 import { emitBehaviorModule, leafHandlersAsync, PooledAsyncContext, pgConnectionPool, type EndpointSet } from '../../src/scp';
 import { model, column } from '../../src/decorators';
 
@@ -180,9 +183,18 @@ function byIdsDesc(dialect: MakeSQLDialect, ids: number[]): SelectDesc {
 }
 
 // #46 item 4 (MySQL leg only — see the deletion note below): the single-JSON IN-list binds every PG
-// element type live through `T_TYPED`'s bigint/text/bool/timestamp/numeric key columns.
+// element type live through `T_TYPED`'s bigint/text/bool/timestamp/numeric key columns. The columns'
+// DECLARED types ride along (as the emitter passes a model's), so MySQL reads each key element as its
+// column's type (#376).
 function byTypedDesc(dialect: MakeSQLDialect, col: string, keys: unknown[]): SelectDesc {
-  return { dialect, tableName: T_TYPED, select: 'label', conditions: { [col]: keys }, order: 'label ASC' };
+  return {
+    dialect,
+    tableName: T_TYPED,
+    select: 'label',
+    conditions: { [col]: keys },
+    columnTypes: IN_LIST_COLUMN_TYPES.columnTypes,
+    order: 'label ASC',
+  };
 }
 
 // #47 item 5 — the WHERE assembly (AND/OR group) + LIMIT/OFFSET tail, driven from v1's
@@ -1069,5 +1081,173 @@ describe('WS#47 write-path completeness — the BATCH write bundles execute live
   afterAll(async () => {
     await pgPool?.query(`DROP TABLE IF EXISTS ${WC_POSTS}`).catch(() => undefined);
     await myConn?.query(`DROP TABLE IF EXISTS ${WC_POSTS}`).catch(() => undefined);
+  });
+});
+
+// #377 — a COMPOSITE-PK deleteMany deletes exactly the given key TUPLES. It used to split the tuples
+// into per-column IN-lists (`tenant_id IN (…) AND id IN (…)`), which deletes their cross product, and to
+// group them by the columns present, so a tuple missing `tenant_id` became `id IN (…)` across every
+// tenant. Asserted on the SURVIVING rows (not SQL bytes), on all three dialects, with keys that differ
+// in BOTH columns — the case a single-tenant key set hides.
+describe('#377 composite-PK deleteMany deletes exactly the given tuples (PG + MySQL + SQLite)', () => {
+  const T = 'scp377_tenant_rows';
+  const SEED: [number, number][] = [[1, 1], [1, 2], [2, 1], [2, 2], [3, 1], [3, 2]];
+  const KEYS = [{ tenant_id: 1, id: 1 }, { tenant_id: 2, id: 2 }];
+  const SURVIVORS = ['1:2', '2:1', '3:1', '3:2'];
+  const DDL = `CREATE TABLE ${T} (tenant_id INT NOT NULL, id INT NOT NULL, PRIMARY KEY (tenant_id, id))`;
+  const survivors = (rows: Row[]): string[] => rows.map((r) => `${Number(r.tenant_id)}:${Number(r.id)}`);
+  const ORDERED = `SELECT tenant_id, id FROM ${T} ORDER BY tenant_id, id`;
+
+  it('[postgres] only the two tuples go (compileDeleteManyBundle)', async () => {
+    await pgPool!.query(`DROP TABLE IF EXISTS ${T}`);
+    await pgPool!.query(DDL);
+    for (const [t, i] of SEED) await pgPool!.query(`INSERT INTO ${T} VALUES ($1, $2)`, [t, i]);
+    await execTxLive(compileDeleteManyBundle('DM', { tableName: T, keyColumns: ['tenant_id', 'id'], keys: KEYS }, 'postgres'), {}, pgClient(pgPool!));
+    expect(survivors(await pgQuery(pgPool!, ORDERED, []))).toEqual(SURVIVORS);
+  });
+
+  it('[mysql] only the two tuples go (compileDeleteManyBundle)', async () => {
+    await myConn!.query(`DROP TABLE IF EXISTS ${T}`);
+    await myConn!.query(DDL);
+    for (const [t, i] of SEED) await myConn!.query(`INSERT INTO ${T} VALUES (?, ?)`, [t, i]);
+    await execTxLive(compileDeleteManyBundle('DM', { tableName: T, keyColumns: ['tenant_id', 'id'], keys: KEYS }, 'mysql'), {}, myClient(myConn!));
+    expect(survivors(await myQuery(myConn!, ORDERED, []))).toEqual(SURVIVORS);
+  });
+
+  it('[sqlite] only the two tuples go (compileDeleteMany)', () => {
+    const db = new Database(':memory:');
+    db.exec(DDL);
+    const ins = db.prepare(`INSERT INTO ${T} VALUES (?, ?)`);
+    for (const [t, i] of SEED) ins.run(t, i);
+    for (const op of compileDeleteMany({ dialect: 'sqlite', tableName: T, keyColumns: ['tenant_id', 'id'], keys: KEYS })) {
+      const asm = assembleMakeSQL(op);
+      db.prepare(renderPlaceholders(asm.sql, 'sqlite')).run(...(asm.params as never[]));
+    }
+    expect(survivors(db.prepare(ORDERED).all() as Row[])).toEqual(SURVIVORS);
+    db.close();
+  });
+
+  it('[mysql] the composite key compares a BIGINT key exactly (the #376 typing), untyped and typed', async () => {
+    const B = 'scp377_big_rows';
+    const BOUND = '1234567890123456789';
+    const ALL = ['1234567890123456700', '1234567890123456701', BOUND, '1234567890123456800'];
+    for (const variant of [
+      { keys: [{ tenant_id: 7, id: BigInt(BOUND) }] },
+      { keys: [{ tenant_id: 7, id: BOUND }], columnTypes: { tenant_id: 'INT', id: 'BIGINT' } },
+    ]) {
+      await myConn!.query(`DROP TABLE IF EXISTS ${B}`);
+      await myConn!.query(`CREATE TABLE ${B} (tenant_id INT NOT NULL, id BIGINT NOT NULL, PRIMARY KEY (tenant_id, id))`);
+      for (const id of ALL) await myConn!.query(`INSERT INTO ${B} VALUES (7, ?)`, [id]);
+      for (const op of compileDeleteMany({ dialect: 'mysql', tableName: B, keyColumns: ['tenant_id', 'id'], ...variant })) {
+        const asm = assembleMakeSQL(op);
+        await myConn!.query(renderPlaceholders(asm.sql, 'mysql'), asm.params);
+      }
+      const left = await myQuery(myConn!, `SELECT CAST(id AS CHAR) AS id FROM ${B} ORDER BY id`, []);
+      expect(left.map((r) => r.id), JSON.stringify(variant.columnTypes)).toEqual(ALL.filter((id) => id !== BOUND));
+    }
+    await myConn!.query(`DROP TABLE IF EXISTS ${B}`);
+  });
+
+  it('a tuple missing a PK column throws instead of widening the DELETE to every tenant', () => {
+    for (const dialect of ['postgres', 'mysql', 'sqlite'] as const) {
+      expect(() =>
+        compileDeleteMany({ dialect, tableName: T, keyColumns: ['tenant_id', 'id'], keys: [{ tenant_id: 1, id: 1 }, { id: 2 }] }),
+        dialect,
+      ).toThrow(/PK column 'tenant_id'/);
+    }
+  });
+
+  afterAll(async () => {
+    await pgPool?.query(`DROP TABLE IF EXISTS ${T}`).catch(() => undefined);
+    await myConn?.query(`DROP TABLE IF EXISTS ${T}`).catch(() => undefined);
+  });
+});
+
+// #381 — the GENERATED updateMany endpoint matches its key exactly. The codegen batch Update
+// (`compileWriteNode`, the compile the emitter's `batch()` runs with the model's column-type resolver)
+// handed MySQL `records: []`, so every JSON_TABLE column — the KEY included — was read as `JSON_UNQUOTE`
+// text and `ON u.k = JSON_UNQUOTE(v.k)` compared a string with a BIGINT as DOUBLE: one supplied key on a
+// non-indexed BIGINT column overwrote the other tenants' rows that round to the same double. The
+// statement below is the one baked into every runtime's generated module; it binds the records array
+// to each `?`, as the generated `Db.executeSQL(sql, [rows, …])` does.
+describe('#381 codegen MySQL updateMany keyed by a non-indexed BIGINT updates exactly one row', () => {
+  const T = 'scp381_ext_rows';
+  const TYPES: Record<string, string> = { id: 'INT', tenant: 'INT', ext_id: 'BIGINT', v: 'VARCHAR(20)' };
+  const resolveType = (_table: string, column: string): string => {
+    const t = TYPES[column];
+    if (t === undefined) throw new Error(`no declared type for ${column}`);
+    return t;
+  };
+
+  it('[mysql] one key, one row', async () => {
+    await myConn!.query(`DROP TABLE IF EXISTS ${T}`);
+    await myConn!.query(`CREATE TABLE ${T} (id INT PRIMARY KEY, tenant INT NOT NULL, ext_id BIGINT NOT NULL, v VARCHAR(20) NOT NULL)`);
+    await myConn!.query(
+      `INSERT INTO ${T} VALUES (1, 1, 1900000000000000001, 'a'), (2, 2, 1900000000000000000, 'b'), (3, 2, 1900000000000000002, 'b')`,
+    );
+    const op = compileWriteNode(
+      { component: 'Update', ports: { table: T, batch: 'true', 'key.ext_id': { ref: ['rows'] }, 'set.v': { ref: ['rows'] } } } as Parameters<typeof compileWriteNode>[0],
+      'mysql',
+      resolveType,
+    );
+    const rows = encodeJsonArrayParam('mysql', [{ ext_id: 1900000000000000001n, v: 'mine' }]);
+    const [res] = await myConn!.query(op.sql, op.params.map(() => rows));
+    expect((res as { affectedRows: number }).affectedRows).toBe(1);
+    const after = await myQuery(myConn!, `SELECT id, v FROM ${T} ORDER BY id`, []);
+    expect(after.map((r) => `${Number(r.id)}:${String(r.v)}`)).toEqual(['1:mine', '2:b', '3:b']);
+  });
+
+  afterAll(async () => {
+    await myConn?.query(`DROP TABLE IF EXISTS ${T}`).catch(() => undefined);
+  });
+});
+
+// Refs #378 / #381 — the batch write bundles match a key by ONE rule (json-array's), whoever calls them.
+// A non-indexed DECIMAL(30,0) key given as a STRING: read as `JSON_UNQUOTE` text it compared with the
+// column as DOUBLE, so its double neighbours (1e11 apart at this magnitude) were written too. Through the
+// decorated model (`compileUpdateBundle` / `compileDeleteBundle`) the key is typed from the model's
+// declared column and hits exactly its row; with NO type it is compared as a JSON value, which never
+// widens — a string key then matches no numeric row rather than its neighbours.
+const T_DEC = 'scp_dec_keys';
+@model(T_DEC)
+class ScpDecKey {
+  @column.number() id?: number;
+  @column.decimal() k?: string;
+  @column.text() v?: string;
+}
+
+describe('batch write bundles match a DECIMAL string key exactly (Refs #378 #381)', () => {
+  const K = '1234567890123456789012345678';
+  const ROWS: [number, string][] = [[1, '1234567890123456789012345677'], [2, K], [3, '1234567890123456789012345679']];
+  async function seed(): Promise<void> {
+    await myConn!.query(`DROP TABLE IF EXISTS ${T_DEC}`);
+    await myConn!.query(`CREATE TABLE ${T_DEC} (id INT PRIMARY KEY, k DECIMAL(30,0) NOT NULL, v VARCHAR(20) NOT NULL)`);
+    for (const [id, k] of ROWS) await myConn!.query(`INSERT INTO ${T_DEC} VALUES (?, ?, 'seed')`, [id, k]);
+  }
+  const state = async (): Promise<string[]> =>
+    (await myQuery(myConn!, `SELECT id, v FROM ${T_DEC} ORDER BY id`, [])).map((r) => `${Number(r.id)}:${String(r.v)}`);
+  const UM = { tableName: T_DEC, keyColumns: ['k'], updateColumns: ['v'], records: [{ k: K, v: 'hit' }] };
+
+  it('[mysql] updateMany through the decorated model updates exactly the bound row', async () => {
+    await seed();
+    await execTxLive(compileUpdateBundle(ScpDecKey, 'UM', UM, 'mysql'), {}, myClient(myConn!));
+    expect(await state()).toEqual(['1:seed', '2:hit', '3:seed']);
+  });
+
+  it('[mysql] deleteMany through the decorated model deletes exactly the bound row', async () => {
+    await seed();
+    await execTxLive(compileDeleteBundle(ScpDecKey, 'DM', { tableName: T_DEC, keyColumns: ['k'], keys: [{ k: K }] }, 'mysql'), {}, myClient(myConn!));
+    expect(await state()).toEqual(['1:seed', '3:seed']);
+  });
+
+  it('[mysql] updateMany with NO declared type never writes a neighbour of the key', async () => {
+    await seed();
+    await execTxLive(compileUpdateManyBundle('UM', UM, 'mysql'), {}, myClient(myConn!));
+    const touched = (await state()).filter((s) => s.endsWith(':hit'));
+    expect(touched.filter((s) => s !== '2:hit')).toEqual([]);
+  });
+
+  afterAll(async () => {
+    await myConn?.query(`DROP TABLE IF EXISTS ${T_DEC}`).catch(() => undefined);
   });
 });

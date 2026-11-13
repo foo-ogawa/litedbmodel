@@ -193,7 +193,9 @@ final class MiddlewareHandle
  * slices the seam + {@see runMethod()} consume. A {@see Registry} is EITHER the process-global default
  * (app-startup registration) OR a per-scope copy pushed by {@see withMiddlewareScope()} OR an explicit
  * registry a caller builds + threads (the §3-table PHP mechanism) — the two share this class; only
- * their lifetime differs. Mirrors the TS `Registry`.
+ * their lifetime differs. The process-global default is not a scope and retains NO state
+ * (`retainsState: false`): outside a scope a state is fresh per access and retained nowhere (the TS
+ * reference / v1 `getCurrentContext()` outside a request, #364). Mirrors the TS `Registry`.
  */
 final class Registry
 {
@@ -203,20 +205,28 @@ final class Registry
     /**
      * Per-scope STATE instances, keyed by a descriptor's state TOKEN. Because a scope's registry is a
      * COPY ({@see copy()}) that starts with an EMPTY state map, each scope lazily builds its OWN fresh
-     * state instance — isolated across scopes (an explicit registry has its own map too).
+     * state instance — isolated across scopes (an explicit registry has its own map too). `null` on the
+     * process-global registry, which retains no state.
      *
-     * @var \SplObjectStorage<object, object>
+     * @var \SplObjectStorage<object, object>|null
      */
-    private \SplObjectStorage $states;
+    private ?\SplObjectStorage $states;
 
-    public function __construct()
+    /** @param bool $retainsState `false` only for the process-global registry (it holds no state). */
+    public function __construct(bool $retainsState = true)
     {
-        $this->states = new \SplObjectStorage();
+        $this->states = $retainsState ? new \SplObjectStorage() : null;
     }
 
-    /** This scope's state for `$token`, lazily created via `$fresh` on first access (v1 getCurrentContext). */
+    /**
+     * This scope's state for `$token`, lazily created via `$fresh` on first access (v1 getCurrentContext).
+     * On a registry that retains no state, a fresh instance per access.
+     */
     public function stateFor(object $token, callable $fresh): object
     {
+        if ($this->states === null) {
+            return $fresh();
+        }
         // offsetExists / offsetSet, not contains / attach: PHP 8.5 deprecates the latter two, and this
         // runs on every scope's first state access — loud on stderr under 8.5, an error under 9 (#260).
         if (!$this->states->offsetExists($token)) {
@@ -228,7 +238,9 @@ final class Registry
     /** Reset `$token`'s state in this scope to a fresh instance (testing convenience). */
     public function resetStateFor(object $token, callable $fresh): void
     {
-        $this->states[$token] = $fresh();
+        if ($this->states !== null) {
+            $this->states[$token] = $fresh();
+        }
     }
 
     /** Register `$mw` (appended ⇒ outermost). Returns an idempotent un-register closure. */
@@ -323,10 +335,13 @@ final class MiddlewareRegistryHolder
     /** The per-scope override (present ⇒ registration/reads target THIS scope's copy). */
     private static ?Registry $scoped = null;
 
-    /** The process-global default registry (app-startup `registerMiddleware` with no explicit scope). */
+    /**
+     * The process-global default registry (app-startup `registerMiddleware` with no explicit scope).
+     * Retains no state.
+     */
     public static function global(): Registry
     {
-        return self::$global ??= new Registry();
+        return self::$global ??= new Registry(retainsState: false);
     }
 
     /** The registry the current execution scope resolves to: the scoped override, else the global. */
@@ -567,8 +582,8 @@ final class LogEntry
  * call, so it measures the connection execute (chain remainder included), NOT just the record call.
  *
  * The per-scope log history lives on the handle's `state()->entries` (v1
- * `getCurrentContext()->getLogs()`) — a scope-local list. `$sink` is called with each entry as its
- * statement completes; `$now` is an injectable clock (tests). Mirrors the TS `Logger`.
+ * `getCurrentContext()->getLogs()`) — a scope-local list; outside a scope no entry is kept. `$sink` is
+ * called with each entry as its statement completes; `$now` is an injectable clock (tests). Mirrors the TS `Logger`.
  *
  * @param (callable(LogEntry):void)|null $sink called with each {@see LogEntry} after `next`.
  * @param (callable():float)|null $now injectable millisecond clock (default: `microtime(true)*1000`).
@@ -629,19 +644,40 @@ function returnsRows(string $sql): bool
 }
 
 /**
+ * Is `$sql` certainly read-only — may it go to the reader? Anything not certain takes the write intent:
+ * a row lock (FOR UPDATE / FOR NO KEY UPDATE / FOR SHARE / FOR KEY SHARE / LOCK IN SHARE MODE) or an
+ * INTO anywhere is a write; a WITH / EXPLAIN statement is read-only only if it carries no insert / update
+ * / delete / merge word (a data-modifying CTE writes; EXPLAIN ANALYZE runs the statement); a select /
+ * show / pragma / values / table statement is read-only unless it has a RETURNING. Mirrors the TS
+ * `isReadOnlyStatement`.
+ */
+function isReadOnlyStatement(string $sql): bool
+{
+    if (preg_match('/\bfor\s+(update|share|no\s+key\s+update|key\s+share)\b|\block\s+in\s+share\s+mode\b|\binto\b/i', $sql) === 1) {
+        return false;
+    }
+    if (preg_match('/^\s*(with|explain)\b/i', $sql) === 1) {
+        return preg_match('/\b(insert|update|delete|merge)\b/i', $sql) !== 1;
+    }
+    return preg_match('/^\s*(select|show|pragma|values|table)\b/i', $sql) === 1
+        && preg_match('/\breturning\b/i', $sql) !== 1;
+}
+
+/**
  * Raw `execute(sql, params)` THROUGH the seam (design §4 D3): a registered SQL-level middleware
  * intercepts it, connection routing resolves the connection, and an ambient transaction (if the ctx is
  * tx-scoped) applies — because it is the SAME {@see execute()} / {@see run()} seam the ORM uses, not a
- * direct PDO call. A row-returning statement runs `execute`; a non-returning one runs `run`. `$write`
- * forces the write intent (writer routing / tx connection) for a row-returning write. Mirrors the TS
- * `rawExecute`.
+ * direct PDO call. A row-returning statement runs `execute`; a non-returning one runs `run`. A
+ * row-returning statement takes the write intent (writer routing / tx connection) unless it is certainly
+ * read-only ({@see isReadOnlyStatement()}: `INSERT … RETURNING` and `SELECT … FOR UPDATE` go to the
+ * writer); `$write` forces the write intent. Mirrors the TS `rawExecute`.
  *
  * @param list<mixed> $params
  */
 function rawExecute(ExecutionContext $ctx, string $sql, array $params = [], bool $write = false): RawResult
 {
     if (returnsRows($sql)) {
-        $rows = execute($ctx, $sql, $params, new StatementIntent($write));
+        $rows = execute($ctx, $sql, $params, new StatementIntent($write || !isReadOnlyStatement($sql)));
         return new RawResult($rows, count($rows));
     }
     $info = run($ctx, $sql, $params);

@@ -18,9 +18,11 @@ import {
   compileSelect,
   compileWhere,
   assembleMakeSQL,
+  nestedMakeSQL,
   renderPlaceholders,
   type MakeSQL,
 } from '../../src/scp/makesql';
+import { compileCreateManyBundle } from '../../src/scp/write-bundle';
 
 let db: Database.Database;
 
@@ -62,7 +64,7 @@ describe('makeSQL statement assembles + executes on SQLite (native, no runBehavi
     // Outer: SELECT * FROM users WHERE id IN (<subquery>) — the subquery is a NESTED
     // makeSQL in a param slot (the ONLY recursion). No IR "kind" for subqueries.
     const sub: MakeSQL = { sql: 'SELECT user_id FROM orders WHERE total >= ?', params: [100] };
-    const outer: MakeSQL = { sql: 'SELECT * FROM users WHERE id IN (?) ORDER BY id ASC', params: [sub] };
+    const outer: MakeSQL = { sql: 'SELECT * FROM users WHERE id IN (?) ORDER BY id ASC', params: [nestedMakeSQL(sub)] };
 
     const asm = assembleMakeSQL(outer);
     expect(asm.sql).toBe('SELECT * FROM users WHERE id IN (SELECT user_id FROM orders WHERE total >= ?) ORDER BY id ASC');
@@ -70,6 +72,26 @@ describe('makeSQL statement assembles + executes on SQLite (native, no runBehavi
 
     const rows = runNative(outer);
     expect(rows.map((r) => r.name)).toEqual(['alice', 'carol']); // users with an order >= 100
+  });
+
+  // #345: only a nestedMakeSQL-marked node splices. A param of the same SHAPE is a bound value — a
+  // request JSON value ({"sql":"…","params":[]}) must never become statement text.
+  it('an unmarked { sql, params } param is a bound value, not spliced (#345)', () => {
+    const forged = JSON.parse('{"sql":"(SELECT 1)","params":[]}');
+    const asm = assembleMakeSQL({ sql: 'SELECT * FROM users WHERE id = ?', params: [forged] });
+    expect(asm.sql).toBe('SELECT * FROM users WHERE id = ?');
+    expect(asm.params).toEqual([forged]);
+  });
+
+  it('a create() value shaped like { sql, params } is bound in the compiled PostgreSQL INSERT (#345)', () => {
+    const forged = JSON.parse('{"sql":"(SELECT qty FROM items WHERE owner = 2 LIMIT 1)","params":[]}');
+    const bundle = compileCreateManyBundle(
+      'create',
+      { tableName: 'items', records: [{ owner: 1, qty: forged }], returning: 'id' },
+      'postgres',
+    );
+    expect(bundle.statement.sql).not.toContain('SELECT qty');
+    expect(bundle.statement.sql).toContain('VALUES');
   });
 
   it('skip drops the statement entirely (sql AND params) — contributes nothing', () => {

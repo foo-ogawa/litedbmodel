@@ -97,6 +97,19 @@ export const mysqlTypeCast: DriverTypeCast = {
 /**
  * MySQL SQL Builder implementation
  */
+/**
+ * `JOIN (VALUES ROW(?, …), …) AS v(cols) ON t.c = v.c AND …` — matches rows of the table aliased `t`
+ * against whole key tuples (never per column). Pushes the tuple values onto `params` in order.
+ */
+function keyTupleJoin(columns: string[], tuples: unknown[][], params: unknown[]): string {
+  const rows = tuples.map(tuple => {
+    params.push(...tuple);
+    return `ROW(${tuple.map(() => '?').join(', ')})`;
+  });
+  const on = columns.map(col => `t.${col} = v.${col}`).join(' AND ');
+  return `JOIN (VALUES ${rows.join(', ')}) AS v(${columns.join(', ')}) ON ${on}`;
+}
+
 export const mysqlSqlBuilder: SqlBuilder = {
   driverType: 'mysql',
   typeCast: mysqlTypeCast,
@@ -230,14 +243,18 @@ export const mysqlSqlBuilder: SqlBuilder = {
   buildSelectPkeys(options: SelectPkeysOptions): SqlBuildResult {
     const { tableName, pkeyColumns, keyColumns, keyValues } = options;
     const params: unknown[] = [];
-    
-    // Build WHERE clause: col1 IN (?) AND col2 IN (?)
-    const whereConditions = keyColumns.map((col, i) => {
-      params.push(keyValues.map(kv => kv[i]));
-      return `${col} IN (?)`;
-    });
-    
-    const sql = `SELECT DISTINCT ${pkeyColumns.join(', ')} FROM ${tableName} WHERE ${whereConditions.join(' AND ')}`;
+
+    if (keyColumns.length === 1) {
+      // Single key: WHERE col IN (?)
+      params.push(keyValues.map(kv => kv[0]));
+      const sql = `SELECT DISTINCT ${pkeyColumns.join(', ')} FROM ${tableName} WHERE ${keyColumns[0]} IN (?)`;
+      return { sql, params };
+    }
+
+    // Composite key: match the key TUPLES (#375). Per-column `k1 IN (…) AND k2 IN (…)` matched the
+    // cross product of the values, i.e. rows the UPDATE (which joins on the tuples) never touched.
+    const join = keyTupleJoin(keyColumns, keyValues, params);
+    const sql = `SELECT DISTINCT ${pkeyColumns.map(col => `t.${col}`).join(', ')} FROM ${tableName} AS t ${join}`;
     return { sql, params };
   },
 
@@ -254,17 +271,9 @@ export const mysqlSqlBuilder: SqlBuilder = {
     }
 
     // Composite PK: JOIN (VALUES ROW(...)) AS v ON ...
-    const rowPlaceholders: string[] = [];
-    for (const pkValueTuple of pkeyValues) {
-      const rowVals = pkValueTuple.map(() => '?').join(', ');
-      params.push(...pkValueTuple);
-      rowPlaceholders.push(`ROW(${rowVals})`);
-    }
-    const onConditions = pkeyColumns.map(col => `t.${col} = v.${col}`).join(' AND ');
+    const join = keyTupleJoin(pkeyColumns, pkeyValues, params);
     const selectCol = selectColumn === '*' ? 't.*' : selectColumn;
-    const sql = `SELECT ${selectCol} FROM ${tableName} AS t ` +
-          `JOIN (VALUES ${rowPlaceholders.join(', ')}) AS v(${pkeyColumns.join(', ')}) ` +
-          `ON ${onConditions}`;
+    const sql = `SELECT ${selectCol} FROM ${tableName} AS t ${join}`;
     return { sql, params };
   },
 

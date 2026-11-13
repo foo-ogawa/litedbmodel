@@ -46,8 +46,8 @@
 // lifetime, the analogue of v1 `PoolTransaction`), pins it into a tx-scoped [ExecutionContext] threaded
 // on a context.Context, then issues its OWN tx-control (SET/BEGIN/COMMIT/ROLLBACK) as REAL SQL THROUGH
 // the seam ([Run] on the pinned conn) so a middleware OBSERVES it — full TS parity (Phase D / #94). The
-// body's every statement of the tx's own database (an unnamed one, or one naming that database) resolves that *sql.Conn via ConnectionFor; a poisoned conn (a failed
-// ROLLBACK/COMMIT) is DESTROYED on release (see [releaseTxConn]). Concurrent transactions each own a
+// body's every statement of the tx's own database (an unnamed one, or one naming that database) resolves that *sql.Conn via ConnectionFor; a conn whose
+// transaction did not end in a completed COMMIT/ROLLBACK is DESTROYED on release (see [releaseSQLConn]). Concurrent transactions each own a
 // DISTINCT *sql.Conn over a DISTINCT pooled connection ⇒ isolated. There is NO driver-global tx slot,
 // and no *sql.Tx (whose BEGIN/Commit/Rollback are opaque method calls the seam can't observe); this
 // seam makes ownership central + explicit + middleware-visible, and forbids any shared-tx state.
@@ -483,7 +483,7 @@ func (c *ExecutionContext) WithTxConnection(conn Connection) *ExecutionContext {
 //     connection; one naming a DIFFERENT database is rejected there rather than routed.
 //  2. else (Phase A/B single-primary-db path): the ctx's primary db checks out one *sql.Conn (db.Conn
 //     — Go's connection-owning primitive), carrying the tx's prepared-statement cache; the hook closes
-//     the cache and returns/destroys the connection ([releaseTxConn]). Byte-identical to Phase A/B.
+//     the cache and returns/destroys the connection ([releaseSQLConn]). Byte-identical to Phase A/B.
 //
 // The primary db must be tx-capable ([TxDB]; a *sql.DB is both that and a [SQLDB]) — a ctx with
 // neither routing nor a tx-capable db cannot open a transaction and says so LOUDLY. Taking the tx's db
@@ -491,7 +491,33 @@ func (c *ExecutionContext) WithTxConnection(conn Connection) *ExecutionContext {
 // transaction exactly as for a statement, the ctx is the single answer to WHICH connection. Twin of
 // rust `ctx.tx_driver(connection)?.acquire_tx()` / python `ExecutionContext.begin_tx` (reading
 // `_connection`) / the php `routedTransaction` writer pin.
-func (c *ExecutionContext) acquireTxConnection() (Connection, func(poisoned bool), error) {
+//
+// checkAttempts > 0 (a retry after a connection error): the pool may still hold dead connections after a
+// failover or a restart, so each checked-out connection is first sent a harmless `SELECT 1` (directly on
+// the connection, not through the middleware); one that fails it is destroyed and another checked out, at
+// most checkAttempts in all, and the last probe's error is returned when every one failed. The probe only
+// shows the connection is usable, not whether the failed statement ran on the server. 0 ⇒ no probe (a
+// first attempt). Twin of the TS `acquireCheckedConnection`.
+func (c *ExecutionContext) acquireTxConnection(checkAttempts int) (Connection, func(poisoned bool), error) {
+	for attempt := 1; ; attempt++ {
+		conn, release, err := c.checkoutTxConnection()
+		if err != nil || checkAttempts == 0 {
+			return conn, release, err
+		}
+		_, probeErr := conn.Execute("SELECT 1", nil)
+		if probeErr == nil {
+			return conn, release, nil
+		}
+		release(true)
+		if attempt >= checkAttempts {
+			return nil, nil, mapSqliteError(probeErr)
+		}
+	}
+}
+
+// checkoutTxConnection is one checkout of [ExecutionContext.acquireTxConnection], resolved as described
+// there.
+func (c *ExecutionContext) checkoutTxConnection() (Connection, func(poisoned bool), error) {
 	if c.routing != nil {
 		pool, err := resolvePool(StatementIntent{Write: true, DB: c.connection}, c.writerScope, c.sticky, *c.routing)
 		if err != nil {
@@ -525,7 +551,7 @@ func (c *ExecutionContext) acquireTxConnection() (Connection, func(poisoned bool
 	return txConnection{sqldb: connSQLDB{conn: conn, ctx: goCtx, cache: stmtCache}},
 		func(poisoned bool) {
 			stmtCache.closeAll()
-			releaseTxConn(conn, &poisoned)
+			_ = releaseSQLConn(conn, poisoned)
 		}, nil
 }
 
@@ -709,8 +735,9 @@ func Rollback() TxDecision { return TxDecision{Rollback: true} }
 //  3. issue the isolation-aware BEGIN THROUGH the seam ([Run] on the pinned conn) so it is
 //     middleware-visible; run body(txCtx) → COMMIT / ROLLBACK THROUGH the seam per the returned
 //     decision; on any error ROLLBACK (best-effort) and re-raise;
-//  4. release the owned connection back to the pool it came from (or DESTROY it when a failed
-//     ROLLBACK/COMMIT poisoned it — see [ExecutionContext.acquireTxConnection] / [releaseTxConn]).
+//  4. release the owned connection back to the pool it came from — or DESTROY it when the transaction
+//     did not end in a completed COMMIT/ROLLBACK (a failed BEGIN/ROLLBACK, a panicking body) — see
+//     [ExecutionContext.acquireTxConnection] / [releaseSQLConn].
 //
 // Concurrent calls each own a DISTINCT connection, so their writes never cross-talk — the isolation a
 // shared-slot model would violate. This mirrors the TS withTransactionAsync (#75) / rust
@@ -732,8 +759,10 @@ func WithTransactionDecided[R any](ctx *ExecutionContext, body func(txCtx *Execu
 //  3. runs body(txCtx);
 //  4. issues COMMIT (success) / ROLLBACK (gate short-circuit or body error) THROUGH the seam ([Run] on
 //     the pinned conn) — middleware OBSERVES the COMMIT / ROLLBACK too;
-//  5. releases the OWNED connection back to the pool (or DESTROYS it, via a bad-conn Raw, when it is
-//     poisoned — a failed ROLLBACK leaves it in an unknown state, so it must not re-enter the pool).
+//  5. releases the OWNED connection back to the pool only when a COMMIT/ROLLBACK completed — otherwise
+//     (a failed BEGIN or ROLLBACK, a panicking body) it is DESTROYED, because it may still be inside the
+//     transaction and must not re-enter the pool. A panicking body is rolled back first, then the panic
+//     continues.
 //
 // `dialectName` selects the tx-control SQL + gates the SQLite hard-error (SQLite has no per-tx level —
 // mirror [isolationPrelude]). [IsolationNone] ⇒ a bare `BEGIN`, byte-identical to the Phase A tx SQL.
@@ -749,6 +778,12 @@ func WithTransactionDecided[R any](ctx *ExecutionContext, body func(txCtx *Execu
 // [TransactionDecided] from [TransactionOptions.UseWriterAfterTransaction] and passed down HERE,
 // where the arming actually happens: false ⇒ a successful COMMIT does not arm the sticky clock.
 func WithTransactionDecidedIsolated[R any](ctx *ExecutionContext, isolation IsolationLevel, dialectName string, useWriterAfterTransaction bool, body func(txCtx *ExecutionContext) (R, TxDecision, error)) (R, error) {
+	return withTransactionAttempt(ctx, isolation, dialectName, useWriterAfterTransaction, 0, body)
+}
+
+// withTransactionAttempt is [WithTransactionDecidedIsolated] with the checkout's probe: checkAttempts > 0
+// is passed by the [TransactionDecided] retry after a connection error ([ExecutionContext.acquireTxConnection]).
+func withTransactionAttempt[R any](ctx *ExecutionContext, isolation IsolationLevel, dialectName string, useWriterAfterTransaction bool, checkAttempts int, body func(txCtx *ExecutionContext) (R, TxDecision, error)) (R, error) {
 	var zero R
 	// Resolve the isolation-aware BEGIN SQL first (fail-closed: SQLite + a level is a hard error) BEFORE
 	// acquiring a connection — an unsupported isolation must not check out a conn it can't honor. For
@@ -760,7 +795,7 @@ func WithTransactionDecidedIsolated[R any](ctx *ExecutionContext, isolation Isol
 
 	// Check out the tx's OWNED connection — WHICH one is the CTX's answer (a routed ctx BEGINs on its
 	// WRITER pool), NO BEGIN yet.
-	conn, release, err := ctx.acquireTxConnection()
+	conn, release, err := ctx.acquireTxConnection(checkAttempts)
 	if err != nil {
 		return zero, err
 	}
@@ -775,11 +810,24 @@ func WithTransactionDecidedIsolated[R any](ctx *ExecutionContext, isolation Isol
 	guard := &settleGuardConnection{conn: conn}
 	txCtx := ctx.WithTxConnection(guard)
 	ctlCtx := ctx.WithTxConnection(conn)
-	// poisoned ⇒ the connection is in an unknown state (a failed ROLLBACK); DESTROY it on release so a
-	// fired statement_timeout / aborted session never re-enters the pool.
-	poisoned := false
+	// poisoned ⇒ the connection is in an unknown state, so release DESTROYS it instead of pooling it. It
+	// starts TRUE and only a COMMIT/ROLLBACK that COMPLETED clears it (rust `TxGuard` / python
+	// `destroy = True`): every other way out — a failed BEGIN, a failed ROLLBACK, a body that PANICKED —
+	// would otherwise hand the pool a connection still inside an open transaction, which the next request
+	// on it reads from and (MySQL) commits with its own BEGIN (#347).
+	poisoned := true
 	defer func() { release(poisoned) }()
 	defer guard.settle() // a panicking body settles too (runs before the release above)
+	// rollback ends an unsuccessful transaction: ROLLBACK through the seam (middleware-visible); a clean
+	// ROLLBACK proves the connection reusable, a failed one leaves it poisoned. The ONE way a transaction
+	// whose body did not succeed ends, whether the body returned an error or panicked.
+	rollback := func() error {
+		_, e := Run(ctlCtx, "ROLLBACK", nil, WriteIntent())
+		if e == nil {
+			poisoned = false
+		}
+		return e
+	}
 
 	// (2) BEGIN (+ isolation SET) THROUGH the seam on the pinned conn — middleware observes it.
 	for _, begin := range begins {
@@ -788,17 +836,24 @@ func WithTransactionDecidedIsolated[R any](ctx *ExecutionContext, isolation Isol
 		}
 	}
 
-	// (3) the transaction body.
+	// (3) the transaction body. A body that PANICS never reaches the code after it, so the deferred
+	// ROLLBACK below ends its transaction (after the guard has settled) and the panic then continues.
+	bodyReturned := false
+	defer func() {
+		if !bodyReturned {
+			guard.settle()
+			_ = rollback()
+		}
+	}()
 	result, decision, bodyErr := body(txCtx)
+	bodyReturned = true
 	// From here on txCtx is closed; tx-control runs on ctlCtx. settle waits for statements still in flight;
 	// one the body did not wait for fails the transaction (ROLLBACK, never COMMIT).
 	pendingAtSettle := guard.settle()
 	if bodyErr != nil || pendingAtSettle {
-		// A body error, or a query the body did not wait for, rolls back (best-effort). A failed ROLLBACK
-		// poisons the connection (unknown state) ⇒ destroy on release.
-		if _, e := Run(ctlCtx, "ROLLBACK", nil, WriteIntent()); e != nil {
-			poisoned = true
-		}
+		// A body error, or a query the body did not wait for, rolls back (best-effort; a failed ROLLBACK
+		// leaves the connection poisoned ⇒ destroyed on release).
+		_ = rollback()
 		if !pendingAtSettle {
 			return zero, bodyErr // the original failure is surfaced
 		}
@@ -814,17 +869,15 @@ func WithTransactionDecidedIsolated[R any](ctx *ExecutionContext, isolation Isol
 	if decision.Rollback {
 		// (4a) a legitimate non-error rollback (e.g. a gate short-circuit): ROLLBACK through the seam,
 		// return the value. A rollback failure IS surfaced (the connection would be in an unknown state).
-		if _, e := Run(ctlCtx, "ROLLBACK", nil, WriteIntent()); e != nil {
-			poisoned = true
+		if e := rollback(); e != nil {
 			return zero, mapSqliteError(e)
 		}
 		return result, nil
 	}
-	// (4b) COMMIT through the seam — middleware observes it. A failed COMMIT rolls back + poisons.
+	// (4b) COMMIT through the seam — middleware observes it. A failed COMMIT rolls back (best-effort; a
+	// failed ROLLBACK leaves the connection poisoned).
 	if _, e := Run(ctlCtx, "COMMIT", nil, WriteIntent()); e != nil {
-		if _, re := Run(ctlCtx, "ROLLBACK", nil, WriteIntent()); re != nil {
-			poisoned = true
-		}
+		_ = rollback()
 		f := mapSqliteError(e)
 		// A connection error AT COMMIT leaves the outcome unknown (the server may have committed before
 		// the response was lost): the failure is marked so [IsRetryableTxError] refuses it and the retry
@@ -832,6 +885,7 @@ func WithTransactionDecidedIsolated[R any](ctx *ExecutionContext, isolation Isol
 		f.commitOutcomeUnknown = IsConnectionError(f)
 		return zero, f
 	}
+	poisoned = false // the COMMIT completed ⇒ the connection is clean
 	// Phase C (#89): a SUCCESSFUL commit ARMS writer-sticky (read-your-writes) for the committing ctx's
 	// REQUEST SCOPE — that request's subsequent reads within writerStickyDuration route to the WRITER, and
 	// no other request's do. No-op when the ctx carries no routing / no sticky clock (the Phase A/B path)
@@ -843,15 +897,19 @@ func WithTransactionDecidedIsolated[R any](ctx *ExecutionContext, isolation Isol
 	return result, nil
 }
 
-// releaseTxConn returns the tx's OWNED *sql.Conn to the pool, or DESTROYS it when poisoned (a failed
-// ROLLBACK/COMMIT left it in an unknown state). A bad-conn Raw makes database/sql discard the
-// underlying driver connection instead of pooling it (the Go analogue of the TS `pool.release(conn,
-// destroy)` — a poisoned connection must not re-enter the pool). Close after a destroy is a safe no-op.
-func releaseTxConn(conn *sql.Conn, poisoned *bool) {
-	if *poisoned {
-		_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+// releaseSQLConn returns a checked-out *sql.Conn to the *sql.DB pool, or DESTROYS it when destroy is
+// set (a connection in an unknown state: a transaction that did not complete its COMMIT/ROLLBACK, a
+// statement error on a routed checkout). A bad-conn Raw makes database/sql discard the underlying
+// driver connection instead of pooling it (the Go analogue of the TS `pool.release(conn, destroy)`),
+// and closes the *sql.Conn with it — there is nothing left to Close. The ONE release for both
+// checkouts: the primary db's tx connection ([ExecutionContext.acquireTxConnection]) and a routed
+// [SQLDBPool.Release].
+func releaseSQLConn(conn *sql.Conn, destroy bool) error {
+	if destroy {
+		_ = conn.Raw(func(any) error { return driver.ErrBadConn }) // returns the ErrBadConn it was handed
+		return nil
 	}
-	_ = conn.Close()
+	return conn.Close()
 }
 
 // WithTransaction is the simple form of [WithTransactionDecided]: a nil error ⇒ COMMIT + return the
@@ -927,7 +985,8 @@ func Transaction[R any](ctx *ExecutionContext, dialectName string, options Trans
 //  3. retry — a retryable failure (deadlock / serialization / connection error, via
 //     [IsRetryableTxError]) re-runs the WHOLE boundary on a FRESH owned *sql.Conn (re-issuing BEGIN
 //     through the seam), up to RetryLimit, with exponential backoff RetryDurationMs · 2^(k-1). A
-//     non-retryable error re-raises immediately.
+//     non-retryable error re-raises immediately. After a connection error the fresh connection is one
+//     that passed a `SELECT 1` probe ([ExecutionContext.acquireTxConnection]).
 func TransactionDecided[R any](ctx *ExecutionContext, dialectName string, options TransactionOptions, body func(txCtx *ExecutionContext) (R, TxDecision, error)) (R, error) {
 	var zero R
 	// NESTED-TX JOIN (mirror v1 depth+1): already inside a tx on this ctx ⇒ join the outer. No new
@@ -954,10 +1013,13 @@ func TransactionDecided[R any](ctx *ExecutionContext, dialectName string, option
 	rollbackOnly := options.RollbackOnly
 
 	attempt := 0
+	// checkAttempts is set when the previous attempt failed with a connection error: this attempt then runs
+	// only on a connection that passed a probe, at most retryLimit tried ([ExecutionContext.acquireTxConnection]).
+	checkAttempts := 0
 	for {
 		attempt++
 		// ONE attempt on a FRESH owned *sql.Conn (a retry after a connection error thus RECONNECTS).
-		result, err := WithTransactionDecidedIsolated(ctx, options.Isolation, dialectName, options.useWriterAfterTx(), func(txCtx *ExecutionContext) (R, TxDecision, error) {
+		result, err := withTransactionAttempt(ctx, options.Isolation, dialectName, options.useWriterAfterTx(), checkAttempts, func(txCtx *ExecutionContext) (R, TxDecision, error) {
 			r, decision, bErr := body(txCtx)
 			if bErr != nil {
 				return zero, Commit(), bErr
@@ -973,6 +1035,10 @@ func TransactionDecided[R any](ctx *ExecutionContext, dialectName string, option
 			return result, nil
 		}
 		if attempt < retryLimit && IsRetryableTxError(err) {
+			checkAttempts = 0
+			if IsConnectionError(err) {
+				checkAttempts = retryLimit
+			}
 			// Exponential backoff before RETRYing the whole transaction on a fresh connection.
 			backoff := time.Duration(options.RetryDurationMs) * time.Millisecond * time.Duration(int64(1)<<(attempt-1))
 			if backoff > 0 {

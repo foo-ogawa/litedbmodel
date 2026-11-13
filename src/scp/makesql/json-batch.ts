@@ -21,7 +21,7 @@
  */
 
 import { DBToken } from '../../DBValues';
-import { encodeJsonParam } from './json-array';
+import { encodeJsonParam, mysqlJsonRead, mysqlKeyRead, type ColumnTypes } from './json-array';
 import type { Dialect } from './handler';
 import type { MakeSQL } from './makesql';
 
@@ -39,44 +39,56 @@ export function rowsHaveDbToken(rows: Record<string, unknown>[], columns: string
 }
 
 /**
- * Infer the MySQL `JSON_TABLE` COLUMNS type + SELECT expression for a column, from the
- * first non-null serialized value in the group. Chosen so the extracted value coerces
- * to the target column identically to v1's bound `?`:
+ * The MySQL `JSON_TABLE` COLUMNS type + SELECT expression for a column — the ONE typing point of the
+ * batch rows. Two sources, one rule:
  *
- *  - boolean / integer / bigint → `BIGINT` (JSON true/false → 1/0; ints exact),
- *  - non-integer number         → `DECIMAL(65,30)` (lossless),
- *  - object / array             → `JSON` kept as JSON (json columns),
- *  - string / null / other      → `JSON`, then `JSON_UNQUOTE(...)` in the SELECT so
- *    arbitrary-length text (beyond CHAR's 255 cap) and JSON-null → SQL NULL work.
+ * - the column's DECLARED SQL type, when the caller has the schema (the codegen batch write,
+ *   `tx.ts` `compileWriteNode`, which compiles with NO records): typed exactly as the membership
+ *   predicates type it ({@link mysqlJsonRead}) — so a BIGINT / DECIMAL key is matched as a decimal, never
+ *   as `JSON_UNQUOTE` text MySQL would compare with the column as DOUBLE (#381);
+ * - otherwise EVERY non-null serialized value in the group — never the first one alone (#378): a key
+ *   column typed `BIGINT` from a leading `1` made MySQL silently round a later `1.5` to `2`, so the batch
+ *   UPDATE's JOIN wrote a row no record named. Chosen so the extracted value coerces to the target
+ *   column like v1's bound `?`:
+ *   - every value boolean / integer / bigint → `BIGINT` (JSON true/false → 1/0; ints exact),
+ *   - every value a number, at least one non-integer → `DECIMAL(65,30)` (lossless for all of them),
+ *   - every value an object / array → `JSON` kept as JSON (json columns),
+ *   - strings, a mix of kinds, or an all-null column → `JSON`, then `JSON_UNQUOTE(...)` in the
+ *     SELECT so arbitrary-length text (beyond CHAR's 255 cap) and JSON-null → SQL NULL work.
  *
  * Returns `{ colType, selectExpr }` where `selectExpr` is applied to the JSON_TABLE
  * output column reference (e.g. `jt.name`).
  */
 export function mysqlJsonTableColumn(
   col: string,
-  rows: Record<string, unknown>[]
+  rows: Record<string, unknown>[],
+  declaredType?: string,
 ): { colType: string; selectExpr: (ref: string) => string } {
-  let sample: unknown;
+  if (declaredType !== undefined) {
+    const read = mysqlJsonRead(declaredType);
+    return { colType: read.type, selectExpr: read.text ? (ref) => `JSON_UNQUOTE(${ref})` : (ref) => ref };
+  }
+  let kind: 'none' | 'int' | 'number' | 'object' | 'text' = 'none';
   for (const r of rows) {
     const v = r[col];
-    if (v !== null && v !== undefined) {
-      sample = v;
-      break;
-    }
+    if (v === null || v === undefined) continue;
+    const k =
+      typeof v === 'boolean' || typeof v === 'bigint' || (typeof v === 'number' && Number.isInteger(v))
+        ? 'int'
+        : typeof v === 'number'
+          ? 'number'
+          : typeof v === 'object'
+            ? 'object'
+            : 'text';
+    if (kind === 'none' || kind === k) kind = k;
+    else if ((kind === 'int' || kind === 'number') && (k === 'int' || k === 'number')) kind = 'number';
+    else kind = 'text';
   }
-  if (typeof sample === 'boolean' || typeof sample === 'bigint') {
-    return { colType: 'BIGINT', selectExpr: (ref) => ref };
-  }
-  if (typeof sample === 'number') {
-    return Number.isInteger(sample)
-      ? { colType: 'BIGINT', selectExpr: (ref) => ref }
-      : { colType: 'DECIMAL(65,30)', selectExpr: (ref) => ref };
-  }
-  if (sample !== null && typeof sample === 'object') {
-    // Object/array serialized value (e.g. a json column) — keep as JSON.
-    return { colType: 'JSON', selectExpr: (ref) => ref };
-  }
-  // string, null, date-as-string, json-string, or all-null column → text via JSON_UNQUOTE.
+  if (kind === 'int') return { colType: 'BIGINT', selectExpr: (ref) => ref };
+  if (kind === 'number') return { colType: 'DECIMAL(65,30)', selectExpr: (ref) => ref };
+  // Object/array serialized value (e.g. a json column) — keep as JSON.
+  if (kind === 'object') return { colType: 'JSON', selectExpr: (ref) => ref };
+  // string, date-as-string, json-string, a mix of kinds, or all-null column → text via JSON_UNQUOTE.
   return { colType: 'JSON', selectExpr: (ref) => `JSON_UNQUOTE(${ref})` };
 }
 
@@ -183,6 +195,8 @@ export interface JsonUpdateManyOptions {
   records: Record<string, unknown>[];
   /** record-index → set of SKIP column names (leave DB value unchanged for those). */
   skipMap?: Map<number, Set<string>>;
+  /** The DECLARED SQL types of the key + update columns, when the caller has the schema (MySQL, #381). */
+  columnTypes?: ColumnTypes;
   returning?: string;
 }
 
@@ -196,7 +210,7 @@ export interface JsonUpdateManyOptions {
  *     SET u.c = IF(v._skip_c, u.c, v.c), …
  */
 export function mysqlUpdateManyJson(opts: JsonUpdateManyOptions): MakeSQL {
-  const { tableName, keyColumns, updateColumns, records, skipMap = new Map(), returning } = opts;
+  const { tableName, keyColumns, updateColumns, records, skipMap = new Map(), columnTypes, returning } = opts;
   const allColumns = [...keyColumns, ...updateColumns];
 
   const skipColumnsNeeded = new Set<string>();
@@ -215,7 +229,17 @@ export function mysqlUpdateManyJson(opts: JsonUpdateManyOptions): MakeSQL {
   const jtCols: string[] = [];
   const selectExprOf = new Map<string, (ref: string) => string>();
   for (const col of allColumns) {
-    const { colType, selectExpr } = mysqlJsonTableColumn(col, records);
+    // A KEY column is COMPARED with the target row, so it takes the one key rule the membership
+    // predicates use ({@link mysqlKeyRead}: the declared type, else the JSON value — never text, which
+    // MySQL compares with a numeric column as DOUBLE). An update column is WRITTEN, so it is typed for
+    // the write ({@link mysqlJsonTableColumn}).
+    if (keyColumns.includes(col)) {
+      const read = mysqlKeyRead(columnTypes?.[col]);
+      jtCols.push(`${col} ${read.type} PATH '$.${col}'`);
+      selectExprOf.set(col, read.text ? (ref) => `JSON_UNQUOTE(${ref})` : (ref) => ref);
+      continue;
+    }
+    const { colType, selectExpr } = mysqlJsonTableColumn(col, records, columnTypes?.[col]);
     jtCols.push(`${col} ${colType} PATH '$.${col}'`);
     selectExprOf.set(col, selectExpr);
   }

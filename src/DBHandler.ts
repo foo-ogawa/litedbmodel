@@ -202,8 +202,8 @@ export class DBHandler {
 
   /**
    * Execute a query on the writer pool (for withWriter context / writer-sticky / writes).
-   * `read`: the caller routed a row-returning read here; only that is retried on a connection error
-   * (a write is never re-sent).
+   * `read`: the statement is read-only (it runs through the driver's `execute`, which decides whether it
+   * may be re-sent after a connection error); otherwise it runs through `executeWrite` (never re-sent).
    */
   async executeOnWriter(sql: string, params: unknown[] = [], read = false): Promise<QueryResult> {
     if (this.connection) {
@@ -220,10 +220,11 @@ export class DBHandler {
   }
 
   /**
-   * Get a connection from the pool (for transactions)
+   * Get a connection from the pool (for transactions). `checkAttempts`: a retry after a connection error
+   * takes only a connection that passed a `SELECT 1` probe, trying at most that many.
    */
-  async getConnection(): Promise<DBConnection> {
-    return this.driver.getConnection();
+  async getConnection(checkAttempts?: number): Promise<DBConnection> {
+    return this.driver.getConnection(checkAttempts);
   }
 
   /**

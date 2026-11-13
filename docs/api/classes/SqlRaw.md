@@ -1,8 +1,4 @@
-[**litedbmodel v2.2.14**](../README.md)
-
-***
-
-[litedbmodel](../globals.md) / SqlRaw
+[API](../README.md) / SqlRaw
 
 # Class: SqlRaw
 
@@ -13,7 +9,7 @@ Created via `sql.raw()`. Only usable inside `sql` tagged templates.
 
 ## Constructors
 
-### Constructor
+### constructor
 
 ```ts
 new SqlRaw(value: string): SqlRaw;
@@ -27,16 +23,12 @@ Defined in: [SqlFragment.ts:61](https://github.com/foo-ogawa/litedbmodel/blob/ma
 | ------ | ------ |
 | `value` | `string` |
 
-#### Returns
-
-`SqlRaw`
-
 ## Properties
 
-| Property | Modifier | Type | Defined in |
+| Property | Type | Description | Defined in |
 | ------ | ------ | ------ | ------ |
-| <a id="_tag"></a> `_tag` | `readonly` | `"SqlRaw"` | [SqlFragment.ts:60](https://github.com/foo-ogawa/litedbmodel/blob/main/src/SqlFragment.ts#L60) |
-| <a id="value"></a> `value` | `readonly` | `string` | [SqlFragment.ts:61](https://github.com/foo-ogawa/litedbmodel/blob/main/src/SqlFragment.ts#L61) |
+| <a id="_tag"></a> `_tag` (readonly) | `"SqlRaw"` |  | [SqlFragment.ts:60](https://github.com/foo-ogawa/litedbmodel/blob/main/src/SqlFragment.ts#L60) |
+| <a id="value"></a> `value` (readonly) | `string` |  | [SqlFragment.ts:61](https://github.com/foo-ogawa/litedbmodel/blob/main/src/SqlFragment.ts#L61) |
 
 ## Methods
 
@@ -51,3 +43,4 @@ Defined in: [SqlFragment.ts:62](https://github.com/foo-ogawa/litedbmodel/blob/ma
 #### Returns
 
 `string`
+

@@ -234,9 +234,11 @@ func (d dbCachedSQLDB) execCached(query string, args []any) (sql.Result, error) 
 
 // txStmtCache is the per-transaction prepared-statement cache with PREPARE-ON-REPEAT: ONE owned
 // *sql.Conn, statements prepared on it (conn.PrepareContext) so every handle is bound to the pinned
-// connection. It is NOT goroutine-safe by design — a transaction runs its statements sequentially on
-// its single owned connection (the Phase A-F ownership model), so no lock is needed; a concurrent tx
-// owns a DIFFERENT *sql.Conn + a DIFFERENT cache.
+// connection. It is goroutine-safe: the settle guard admits a tx body's statements CONCURRENTLY on one
+// txCtx (a shared RLock — goroutines the body joins before returning), so its maps are guarded by mu
+// (an unguarded map aborted the whole process on concurrent statements, #348). database/sql itself
+// serializes the statements on the one *sql.Conn. A concurrent tx owns a DIFFERENT *sql.Conn + a
+// DIFFERENT cache.
 //
 // Why prepare-on-repeat: a tx is short-lived (its owned conn returns to the pool at COMMIT/ROLLBACK),
 // so a prepared stmt CANNOT be reused across transactions — only WITHIN the tx body. A statement used
@@ -247,6 +249,7 @@ func (d dbCachedSQLDB) execCached(query string, args []any) (sql.Result, error) 
 // must not outlive the connection they were prepared on).
 type txStmtCache struct {
 	conn  *sql.Conn
+	mu    sync.Mutex // guards seen + stmts
 	seen  map[string]bool
 	stmts map[string]*sql.Stmt
 }
@@ -259,14 +262,23 @@ func newTxStmtCache(conn *sql.Conn) *txStmtCache {
 // this tx), else (nil, false) — the caller then runs the statement DIRECTLY and records the sighting
 // via [markSeen], so the NEXT occurrence prepares. This is the prepare-on-repeat gate.
 func (c *txStmtCache) lookup(query string) (*sql.Stmt, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	st, ok := c.stmts[query]
 	return st, ok
 }
 
 // prepareRepeat records a sighting of query and, if it has been seen BEFORE in this tx, prepares +
 // caches it (returning the stmt); on first sight it records the sighting and returns (nil, nil) so the
-// caller runs it directly. A prepare error is returned (the caller falls back to a direct exec).
+// caller runs it directly. A prepare error is returned (the caller falls back to a direct exec). The
+// lock is held across the prepare, so two concurrent repeats of one query prepare it ONCE (no
+// overwritten handle escapes closeAll); the one *sql.Conn serializes the prepare anyway.
 func (c *txStmtCache) prepareRepeat(ctx context.Context, query string) (*sql.Stmt, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if st := c.stmts[query]; st != nil {
+		return st, nil // a concurrent repeat prepared it since this caller's lookup
+	}
 	if !c.seen[query] {
 		c.seen[query] = true
 		return nil, nil // first sight — caller runs it directly
@@ -286,6 +298,8 @@ func (c *txStmtCache) closeAll() {
 	if c == nil {
 		return
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	for k, st := range c.stmts {
 		_ = st.Close()
 		delete(c.stmts, k)

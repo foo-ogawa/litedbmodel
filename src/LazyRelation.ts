@@ -37,6 +37,7 @@ import { type ConditionObject } from './DBConditions';
 import { type Conds, createColumn, orderToString, condsToRecord } from './Column';
 import type { SelectOptions } from './types';
 import { getSqlCastMap } from './decorators';
+import { keyIdentity, dedupeKeyTuples } from './scp/grouping';
 
 // ============================================
 // Type Inference Helpers
@@ -150,19 +151,14 @@ export class LazyRelationContext {
     const isCompositeKey = (config.targetKeys && config.targetKeys.length > 0) || 
                            (config.sourceKeys && config.sourceKeys.length > 0);
     
-    let mapKey: string;
-    if (isCompositeKey) {
-      // Composite key: join with NUL separator (faster than JSON.stringify)
-      const sourceKeys = config.sourceKeys || [config.sourceKey || this.inferSourceKey(relationType, config)];
-      mapKey = sourceKeys
-        .map(key => (record as unknown as Record<string, unknown>)[key])
-        .join('\x00');
-    } else {
-      const sourceKeyValue = this.getSourceKeyValue(record, relationType, config);
-      mapKey = String(sourceKeyValue);
-    }
-    
-    const result = relationMap.get(mapKey);
+    const tuple = isCompositeKey
+      ? (config.sourceKeys || [config.sourceKey || this.inferSourceKey(relationType, config)])
+          .map(key => (record as unknown as Record<string, unknown>)[key])
+      : [this.getSourceKeyValue(record, relationType, config)];
+    // The grouping core's rule (attachToParent): a key with a null/undefined part relates to nothing.
+    // Stringified, NULL became 'null' (and '' in a composite) and matched a related row whose key is
+    // that text — loaded because another record of the same batch references it (#357).
+    const result = tuple.some(v => v === undefined || v === null) ? undefined : relationMap.get(keyIdentity(tuple));
 
     if (relationType === 'hasMany') {
       return (result as T[]) || [];
@@ -252,7 +248,7 @@ export class LazyRelationContext {
       const sourceKeys = config.sourceKeys || [config.sourceKey || 'id'];
       
       // Build unique tuples
-      const uniqueTuples = this.getUniqueCompositeKeyTuples(compositeKeyValues, sourceKeys);
+      const uniqueTuples = dedupeKeyTuples(compositeKeyValues, sourceKeys);
       
       if (uniqueTuples.length === 0) {
         return new Map();
@@ -706,36 +702,9 @@ export class LazyRelationContext {
     targetKeys: string[],
     _config: RelationConfig
   ): string {
-    if (targetKeys.length === 1) {
-      return String((result as unknown as Record<string, unknown>)[targetKeys[0]]);
-    }
-    // Composite key: join with NUL separator (faster than JSON.stringify)
-    return targetKeys
-      .map(key => (result as unknown as Record<string, unknown>)[key])
-      .join('\x00');
+    return keyIdentity(targetKeys.map(key => (result as unknown as Record<string, unknown>)[key]));
   }
 
-  /**
-   * Get unique composite key tuples for IN clause
-   * Returns array of value arrays: [[v1, v2], [v3, v4], ...]
-   */
-  private getUniqueCompositeKeyTuples(
-    compositeKeyValues: Record<string, unknown>[],
-    sourceKeys: string[]
-  ): unknown[][] {
-    const seen = new Set<string>();
-    const result: unknown[][] = [];
-    
-    for (const keyValues of compositeKeyValues) {
-      const tuple = sourceKeys.map(k => keyValues[k]);
-      const key = tuple.join('\x00');
-      if (!seen.has(key)) {
-        seen.add(key);
-        result.push(tuple);
-      }
-    }
-    return result;
-  }
 
   /**
    * Get source key value from a record

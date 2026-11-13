@@ -7,8 +7,10 @@
 
 import type { DBConfig, DBDriver, DBDriverOptions, DBConnection, QueryResult, Logger } from './types';
 import { defaultLogger } from './types';
-import { isConnectionError, guardLeasedClient, guardIdlePoolErrors } from '../connection-errors';
+import { isConnectionError, guardLeasedClient, guardIdlePoolErrors, acquireCheckedConnection } from '../connection-errors';
 import { configurePgDeboxTypeParsers } from '../scp/makesql/pool-executor';
+import { isResendableStatement } from '../scp/middleware';
+import { resolveTxOptions } from '../scp/tx-options';
 
 // pg types (loaded dynamically)
 type Pool = import('pg').Pool;
@@ -235,7 +237,10 @@ export class PostgresDriver implements DBDriver {
   }
 
   /**
-   * Execute a read query
+   * Execute a read query. After a connection error the statement is re-sent once only when
+   * `isResendableStatement` allows it (read-only and calls no function), on a connection that passed the
+   * probe of {@link connect} (at most the default `retryLimit` connections are tried); anything else is
+   * thrown.
    */
   async execute(sql: string, params: unknown[] = [], onWriter = false): Promise<QueryResult> {
     const pool = onWriter ? (this.writerPool || this.pool) : this.pool;
@@ -254,19 +259,17 @@ export class PostgresDriver implements DBDriver {
         rowCount: result.rowCount ?? 0,
       };
     } catch (error) {
-      if (isConnectionError(error as Error)) {
+      if (isConnectionError(error as Error) && isResendableStatement(sql)) {
         this.logger.warn(`Connection error, retrying query: ${q.convertedSql}`);
+        let conn: PostgresConnection | undefined;
         try {
-          const result = q.isMulti
-            ? await pool.query(q.convertedSql, params)
-            : await pool.query({ name: q.name, text: q.convertedSql, values: params });
-          const duration = Date.now() - startTime;
-          this.logger.debug(`Retry succeeded in ${duration}ms, rows: ${result.rowCount}`);
-          return {
-            rows: result.rows as Record<string, unknown>[],
-            rowCount: result.rowCount ?? 0,
-          };
+          conn = await this.connect(pool, resolveTxOptions().retryLimit);
+          const result = await conn.query(sql, params);
+          conn.release();
+          this.logger.debug(`Retry succeeded in ${Date.now() - startTime}ms, rows: ${result.rowCount}`);
+          return result;
         } catch (retryError) {
+          conn?.release(retryError as Error);
           this.logger.error(`Retry also failed: ${q.convertedSql}`, retryError);
           throw retryError;
         }
@@ -304,11 +307,20 @@ export class PostgresDriver implements DBDriver {
   /**
    * Get a connection for transaction (uses writer pool if available)
    */
-  async getConnection(): Promise<DBConnection> {
+  async getConnection(checkAttempts?: number): Promise<DBConnection> {
     // Transactions always use writer pool for consistency
-    const pool = this.writerPool || this.pool;
-    const client = await pool.connect();
-    return new PostgresConnection(client, this.logger);
+    return this.connect(this.writerPool || this.pool, checkAttempts);
+  }
+
+  /**
+   * Acquire a connection from `pool` — the one acquisition point of the transaction and of the re-send
+   * after a connection error. With `checkAttempts` (a retry after a connection error) each connection is
+   * probed and a dead one destroyed and replaced, at most that many ({@link acquireCheckedConnection}).
+   */
+  private async connect(pool: Pool, checkAttempts?: number): Promise<PostgresConnection> {
+    const take = async (): Promise<PostgresConnection> => new PostgresConnection(await pool.connect(), this.logger);
+    if (checkAttempts === undefined) return take();
+    return acquireCheckedConnection(take, (conn, probe) => conn.query(probe), (conn) => conn.release(true), checkAttempts);
   }
 
   /**

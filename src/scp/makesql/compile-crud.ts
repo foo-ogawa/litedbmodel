@@ -27,7 +27,8 @@ import type { ConditionObject } from '../../DBConditions';
 import { DBToken, DBImmediateValue, type SqlCastFormatter } from '../../DBValues';
 import type { MakeSQL } from './makesql';
 import { formatterFor } from './compile';
-import { conditionsFor } from './json-array';
+import { conditionsFor, encodeJsonArrayParam, tupleInPredicate, type ColumnTypes } from './json-array';
+import { resolvePgArrayCast } from './compile-relation';
 import {
   mysqlInsertJson,
   sqliteInsertJson,
@@ -192,8 +193,9 @@ export function compileInsertMany(dialect: Dialect, options: InsertManyBuildOpti
  * JOIN-VALUES (`JOIN (VALUES ROW(…)) AS v(…) ON … SET …`), SQLite CASE-WHEN
  * (`SET c = CASE WHEN k = ? THEN ? … END … WHERE k IN (…)`), with SKIP-column handling
  * (PG `CASE WHEN v._skip_c` / MySQL `IF(v._skip_c,…)` / SQLite `WHEN … THEN t.col`).
+ * `columnTypes` are the key + update columns' declared types (they type the MySQL JSON_TABLE columns).
  */
-export function compileUpdateMany(dialect: Dialect, options: UpdateManyBuildOptions): MakeSQL {
+export function compileUpdateMany(dialect: Dialect, options: UpdateManyBuildOptions, columnTypes?: ColumnTypes): MakeSQL {
   // PostgreSQL: UNCHANGED (UNNEST). MySQL/SQLite: single-JSON-param form (JSON_TABLE
   // join / CASE-over-json_each) with SKIP preserved — unless a DBToken value is present
   // (can't be JSON-encoded), in which case fall back to the original builder.
@@ -206,6 +208,7 @@ export function compileUpdateMany(dialect: Dialect, options: UpdateManyBuildOpti
         updateColumns: options.updateColumns,
         records: options.records,
         skipMap: options.skipMap,
+        ...(columnTypes !== undefined ? { columnTypes } : {}),
         returning: options.returning,
       };
       return dialect === 'mysql' ? mysqlUpdateManyJson(jsonOpts) : sqliteUpdateManyJson(jsonOpts);
@@ -233,6 +236,8 @@ export function compileUpdateSingle(opts: {
   tableName: string;
   serializedValues: Record<string, unknown>;
   conditions: ConditionObject;
+  /** The DECLARED types of the columns `conditions` names — types a MySQL IN-list element (#376). */
+  columnTypes?: ColumnTypes;
   sqlCastMap?: Map<string, string>;
   returning?: string;
 }): MakeSQL {
@@ -256,7 +261,7 @@ export function compileUpdateSingle(opts: {
     }
   }
 
-  const whereClause = conditionsFor(opts.conditions, opts.dialect).compile(params, formatter);
+  const whereClause = conditionsFor(opts.conditions, opts.dialect, opts.columnTypes).compile(params, formatter);
   if (!whereClause) throw new Error('UPDATE requires conditions');
 
   let sql = `UPDATE ${opts.tableName} SET ${setClauses.join(', ')} WHERE ${whereClause}`;
@@ -278,11 +283,13 @@ export function compileDelete(opts: {
   dialect: Dialect;
   tableName: string;
   conditions: ConditionObject;
+  /** The DECLARED types of the columns `conditions` names — types a MySQL IN-list element (#376). */
+  columnTypes?: ColumnTypes;
   returning?: string;
 }): MakeSQL {
   const params: unknown[] = [];
   const formatter = opts.dialect === 'postgres' ? formatterFor(opts.dialect) : undefined;
-  const whereClause = conditionsFor(opts.conditions, opts.dialect).compile(params, formatter);
+  const whereClause = conditionsFor(opts.conditions, opts.dialect, opts.columnTypes).compile(params, formatter);
   if (!whereClause) throw new Error('DELETE requires conditions');
 
   let sql = `DELETE FROM ${opts.tableName} WHERE ${whereClause}`;
@@ -291,22 +298,27 @@ export function compileDelete(opts: {
 }
 
 // ============================================================================
-// DELETE batch (deleteMany) — a single DELETE keyed by a PK-set IN-list, driven
-// by the ORIGINAL v1 condition builder (compileDelete → DBConditions/conditionsFor).
+// DELETE batch (deleteMany) — a single DELETE keyed by the PK set: a single-column PK by the v1 IN-list
+// (compileDelete → DBConditions/conditionsFor), a composite PK by the composite membership predicate.
 // ============================================================================
 
 /**
- * Compile a `deleteMany` — delete the rows whose primary key is in a given SET of key values — as a
- * COMPOSITION of `makeSQL` DELETE components (one per PK column-set group, mirroring the createMany
- * grouping contract). A single-column PK reduces to ONE DELETE with the v1 IN-list condition
- * (`{ pk: [values] }` → PG `= ANY` / MySQL·SQLite JSON-subquery via `conditionsFor`); a COMPOSITE PK
- * groups the key-tuples by their present key set and emits ONE DELETE per group whose WHERE is the
- * v1 conjunction of per-column IN-lists (each group homogeneous). Every group's WHERE text comes
- * from the SAME original `DBConditions`/`conditionsFor` builder ({@link compileDelete}) — NEVER a
- * hand-roll — so the deleteMany SQL is byte-identical to what the v1 condition path emits.
+ * Compile a `deleteMany` — delete the rows whose primary key is in a given SET of keys — as ONE
+ * `makeSQL` DELETE component ({@link compileDelete}):
  *
- * The returned components compose (via the batch tx plan) into the full multi-statement `deleteMany`
- * the production path would execute. An empty key set yields NO components (nothing to delete).
+ *  - a single-column PK: the v1 IN-list condition (`{ pk: [values] }` → PG `= ANY` / MySQL·SQLite
+ *    JSON-subquery via `conditionsFor`);
+ *  - a COMPOSITE PK: the key TUPLES matched as tuples, by the ONE composite membership predicate
+ *    ({@link tupleInPredicate} — the text relations and declared `tupleIn` endpoints use). Matching each
+ *    column on its own (`k1 IN (…) AND k2 IN (…)`) would delete the CROSS PRODUCT of the columns' values:
+ *    (1,1) and (2,2) would also take (1,2) and (2,1) (#377).
+ *
+ * Every key must carry EVERY PK column: a key missing one throws, because dropping that column from the
+ * WHERE would widen the DELETE to every row sharing the other columns — another tenant's rows (#377).
+ * `columnTypes` are the PK columns' declared types (the MySQL key elements are read as them, #376).
+ *
+ * Returned as a list so the batch tx plan composes it like the other batch writes. An empty key set
+ * yields NO components (nothing to delete).
  */
 export function compileDeleteMany(opts: {
   dialect: Dialect;
@@ -315,35 +327,44 @@ export function compileDeleteMany(opts: {
   keyColumns: string[];
   /** The key-tuples to delete: each row maps every PK column → its value. */
   keys: Record<string, unknown>[];
+  /** The DECLARED types of the PK columns — types a MySQL key element (#376). */
+  columnTypes?: ColumnTypes;
   returning?: string;
 }): MakeSQL[] {
-  const { dialect, tableName, keyColumns, keys, returning } = opts;
+  const { dialect, tableName, keyColumns, keys, columnTypes, returning } = opts;
   if (keyColumns.length === 0) throw new Error('compileDeleteMany: keyColumns must be non-empty');
   if (keys.length === 0) return [];
+  keys.forEach((key, i) => {
+    for (const c of keyColumns) {
+      if (key[c] === undefined) {
+        throw new Error(
+          `compileDeleteMany: key #${i} has no value for PK column '${c}' — every key must name every PK column ` +
+            `(${keyColumns.join(', ')}); without it the DELETE would match every row sharing the other columns`,
+        );
+      }
+    }
+  });
 
   if (keyColumns.length === 1) {
     // Single PK → ONE DELETE with a v1 IN-list condition (`{ pk: [values] }`).
     const col = keyColumns[0];
     const values = keys.map((k) => k[col]);
     const conditions: ConditionObject = { [col]: values };
-    return [compileDelete({ dialect, tableName, conditions, returning })];
+    return [compileDelete({ dialect, tableName, conditions, columnTypes, returning })];
   }
 
-  // Composite PK → group key-tuples by their present-column set (mirrors createMany grouping), one
-  // DELETE per group whose WHERE is the v1 conjunction of per-column IN-lists (each group homogeneous).
-  const grouped = new Map<string, Record<string, unknown>[]>();
-  for (const key of keys) {
-    const present = keyColumns.filter((c) => key[c] !== undefined).sort();
-    const patternKey = present.join(',');
-    if (!grouped.has(patternKey)) grouped.set(patternKey, []);
-    grouped.get(patternKey)!.push(key);
+  // Composite PK → ONE DELETE matching the key TUPLES. PostgreSQL binds one array per key column
+  // (`UNNEST(?::T1, ?::T2)`); its casts come from the declared types, else from these concrete keys
+  // (the deferred cast token resolved right here, as the render step would). MySQL/SQLite bind the
+  // tuples as ONE JSON array-of-tuples param.
+  const tuples = keys.map((k) => keyColumns.map((c) => k[c]));
+  let membership = tupleInPredicate(dialect, tableName, keyColumns, keyColumns.map((c) => columnTypes?.[c]));
+  let params: unknown[];
+  if (dialect === 'postgres') {
+    params = keyColumns.map((_, i) => tuples.map((t) => t[i]));
+    for (const column of params) membership = resolvePgArrayCast(membership, column as unknown[]);
+  } else {
+    params = [encodeJsonArrayParam(dialect, tuples)];
   }
-  const components: MakeSQL[] = [];
-  for (const group of grouped.values()) {
-    const present = keyColumns.filter((c) => group[0][c] !== undefined);
-    const conditions: ConditionObject = {};
-    for (const c of present) conditions[c] = group.map((k) => k[c]);
-    components.push(compileDelete({ dialect, tableName, conditions, returning }));
-  }
-  return components;
+  return [compileDelete({ dialect, tableName, conditions: { __raw__: [membership, params] }, returning })];
 }

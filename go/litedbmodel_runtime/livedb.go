@@ -21,6 +21,7 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"errors"
 	"fmt"
 	"io"
 	"regexp"
@@ -76,12 +77,18 @@ var (
 	writeTableRe = regexp.MustCompile(`(?is)\b(?:INSERT\s+(?:IGNORE\s+)?INTO|UPDATE|DELETE\s+FROM)\s+([A-Za-z_][A-Za-z0-9_]*)`)
 	// The INSERT column list `INSERT [IGNORE] INTO <t> (c1, c2, …)` — for client-PK / conflict-key re-select.
 	insertColsRe = regexp.MustCompile(`(?is)^\s*INSERT\s+(?:IGNORE\s+)?INTO\s+[A-Za-z_][A-Za-z0-9_]*\s*\(([^)]*)\)`)
-	// An updateMany's batch JOIN key: `ON <alias>.<col> = JSON_UNQUOTE(…)`.
-	batchJoinKeyRe = regexp.MustCompile(`(?is)\sON\s+[A-Za-z0-9_]*\.?([A-Za-z0-9_]+)\s*=`)
-	// The strip-before-execute PK hint (mysql-returning.ts mysqlPkHint): ` /*scp:pk=cols;ai=<col|>[;conflict=cols]*/`.
+	// An updateMany's batch JOIN predicate: `ON u.k1 = <v.k1> AND u.k2 = <v.k2> SET …`.
+	batchJoinOnRe = regexp.MustCompile(`(?is)\sON\s+(.*?)\s+SET\s`)
+	// One `AND`-joined conjunct of that predicate; group 1 is its target-side key column.
+	batchJoinConjRe = regexp.MustCompile(`^[A-Za-z0-9_]*\.?([A-Za-z0-9_]+)\s*=`)
+	andSplitRe      = regexp.MustCompile(`(?i)\s+AND\s+`)
+	// The strip-before-execute PK hint (mysql-returning.ts mysqlPkHint):
+	// ` /*scp:pk=cols;ai=<col|>[;conflict=cols[;action=ignore]]*/`.
 	pkHintRe = regexp.MustCompile(`(?is)\s*/\*scp:pk=([^;*]*);ai=([^;*]*)[^*]*\*/`)
 	// The hint's `;conflict=<cols>` field (the upsert conflict target).
-	conflictHintRe = regexp.MustCompile(`(?is);conflict=([^*]*)\*/`)
+	conflictHintRe = regexp.MustCompile(`(?is);conflict=([^;*]*)`)
+	// The hint's `;action=ignore` field (an insert-or-ignore).
+	ignoreHintRe = regexp.MustCompile(`(?is);action=ignore[;*]`)
 )
 
 func registerMysqlScp() {
@@ -142,53 +149,101 @@ func (c scpMysqlConnector) Driver() driver.Driver { return scpMysqlDriver{} }
 
 // scpMysqlConn wraps a go-sql-driver connection, intercepting RETURNING queries. It forwards every
 // other driver capability to the base connection.
-type scpMysqlConn struct{ base driver.Conn }
+type scpMysqlConn struct {
+	base driver.Conn
+	// inTx: a transaction is open on this connection. go-sql-driver keeps the server's status flags to
+	// itself, so it is tracked where every transaction boundary of this connection passes: [BeginTx] /
+	// the wrapped [scpMysqlTx], and the BEGIN / COMMIT / ROLLBACK the runtime's tx boundary issues
+	// through [scpMysqlConn.ExecContext] (exec_context.go WithTransactionDecidedIsolated).
+	inTx bool
+}
 
 func (c *scpMysqlConn) Prepare(query string) (driver.Stmt, error) { return c.base.Prepare(query) }
 func (c *scpMysqlConn) Close() error                              { return c.base.Close() }
-func (c *scpMysqlConn) Begin() (driver.Tx, error)                 { return c.base.Begin() } //nolint:staticcheck
+func (c *scpMysqlConn) Begin() (driver.Tx, error) {
+	return c.BeginTx(context.Background(), driver.TxOptions{})
+}
 
 func (c *scpMysqlConn) BeginTx(ctx context.Context, opts driver.TxOptions) (driver.Tx, error) {
+	var tx driver.Tx
+	var err error
 	if b, ok := c.base.(driver.ConnBeginTx); ok {
-		return b.BeginTx(ctx, opts)
+		tx, err = b.BeginTx(ctx, opts)
+	} else {
+		tx, err = c.base.Begin() //nolint:staticcheck
 	}
-	return c.base.Begin() //nolint:staticcheck
+	if err != nil {
+		return nil, err
+	}
+	c.inTx = true
+	return &scpMysqlTx{base: tx, conn: c}, nil
+}
+
+// scpMysqlTx clears the connection's [scpMysqlConn.inTx] when the transaction ends.
+type scpMysqlTx struct {
+	base driver.Tx
+	conn *scpMysqlConn
+}
+
+func (t *scpMysqlTx) Commit() error {
+	t.conn.inTx = false
+	return t.base.Commit()
+}
+
+func (t *scpMysqlTx) Rollback() error {
+	t.conn.inTx = false
+	return t.base.Rollback()
+}
+
+// txControlEffect says how a tx-control statement changes the connection's transaction state:
+// +1 opens one (BEGIN / START TRANSACTION), -1 ends it (COMMIT / ROLLBACK, not ROLLBACK TO a savepoint),
+// 0 for anything else.
+func txControlEffect(query string) int {
+	head := strings.ToUpper(strings.TrimSpace(query))
+	switch {
+	case head == "BEGIN" || strings.HasPrefix(head, "BEGIN ") || strings.HasPrefix(head, "START TRANSACTION"):
+		return 1
+	case head == "COMMIT" || strings.HasPrefix(head, "COMMIT "):
+		return -1
+	case head == "ROLLBACK" || (strings.HasPrefix(head, "ROLLBACK ") && !strings.Contains(head, " TO ")):
+		return -1
+	}
+	return 0
+}
+
+// atomically runs the RETURNING emulation's steps as ONE unit: inside the connection's open
+// transaction, or in their own BEGIN … COMMIT (ROLLBACK when a step — the fail-closed recovery
+// included — fails, so its write does not survive). The steps return MATERIALIZED rows: a live cursor
+// would block the COMMIT on this connection.
+func (c *scpMysqlConn) atomically(ctx context.Context, steps func() (*memRows, error)) (*memRows, error) {
+	if c.inTx {
+		return steps()
+	}
+	if _, err := c.ExecContext(ctx, "BEGIN", nil); err != nil {
+		return nil, err
+	}
+	rows, err := steps()
+	if err != nil {
+		_, _ = c.ExecContext(ctx, "ROLLBACK", nil)
+		return nil, err
+	}
+	if _, err := c.ExecContext(ctx, "COMMIT", nil); err != nil {
+		return nil, err
+	}
+	return rows, nil
 }
 
 // QueryContext intercepts ANY write that declares a RETURNING — create/createMany, upsert, update,
 // updateMany, delete — running it stripped and recovering its written rows with the SELECT
-// [buildMysqlReselect] derives (id range / conflict key / batch JSON key / the write's own WHERE). A
-// non-RETURNING query forwards to the base driver.
+// [buildMysqlReselect] derives (id range / conflict key / batch JSON key / the write's own WHERE),
+// atomically with the write. A non-RETURNING query forwards to the base driver.
 func (c *scpMysqlConn) QueryContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
 	rs, err := buildMysqlReselect(query)
 	if err != nil {
 		return nil, err
 	}
 	if rs != nil {
-		// A DELETE's rows are gone once it runs, so its recovering SELECT goes FIRST (still on this
-		// connection, inside the same transaction as the delete it describes). Every other write
-		// re-selects AFTER, keyed on what the write itself produced (id range / conflict key).
-		if rs.before {
-			rows, err := c.queryViaStmt(ctx, rs.selectSQL, bindReselect(rs.binds, args, 0, 0))
-			if err != nil {
-				return nil, err
-			}
-			pre, err := drainRows(rows)
-			if err != nil {
-				return nil, err
-			}
-			if _, _, err := c.execViaStmtWithAffected(ctx, rs.writeSQL, args); err != nil {
-				return nil, err
-			}
-			return pre, nil
-		}
-		// go-sql-driver's ExecerContext returns driver.ErrSkip for a parameterized statement (it
-		// wants the prepared-statement path), so run the stripped write via a prepared statement.
-		lastID, affected, err := c.execViaStmtWithAffected(ctx, rs.writeSQL, args)
-		if err != nil {
-			return nil, err
-		}
-		return c.queryViaStmt(ctx, rs.selectSQL, bindReselect(rs.binds, args, lastID, affected))
+		return c.atomically(ctx, func() (*memRows, error) { return c.returning(ctx, rs, args) })
 	}
 	if q, ok := c.base.(driver.QueryerContext); ok {
 		rows, err := q.QueryContext(ctx, query, args)
@@ -200,12 +255,123 @@ func (c *scpMysqlConn) QueryContext(ctx context.Context, query string, args []dr
 	return c.queryViaStmt(ctx, query, args)
 }
 
-// ExecContext forwards to the base driver (writes never carry RETURNING on the exec/tx path).
-func (c *scpMysqlConn) ExecContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
-	if e, ok := c.base.(driver.ExecerContext); ok {
-		return e.ExecContext(ctx, query, args)
+// returning runs one RETURNING emulation's steps (the caller makes them atomic).
+func (c *scpMysqlConn) returning(ctx context.Context, rs *mysqlReselect, args []driver.NamedValue) (*memRows, error) {
+	// A DELETE's rows are gone once it runs, so its recovering SELECT goes FIRST (still on this
+	// connection, inside the same transaction as the delete it describes). Every other write
+	// re-selects AFTER, keyed on what the write itself produced (id range / conflict key).
+	if rs.before {
+		rows, err := c.queryViaStmt(ctx, rs.selectSQL, bindReselect(rs.binds, args, 0, 0))
+		if err != nil {
+			return nil, err
+		}
+		pre, err := drainRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		_, affected, err := c.execViaStmtWithAffected(ctx, rs.writeSQL, args)
+		if err != nil {
+			return nil, err
+		}
+		// The DELETE must have removed exactly the locked pre-image.
+		if err := checkRecovered(len(pre.rows), writtenRowCount(rs.written, affected), rs.writeSQL); err != nil {
+			return nil, err
+		}
+		return pre, nil
 	}
-	return nil, driver.ErrSkip
+	if rs.lockSQL != "" {
+		// UPDATE…RETURNING: recover the written rows by the keys locked BEFORE the write (never by the
+		// WHERE re-evaluated after it).
+		lockRows, err := c.queryViaStmt(ctx, rs.lockSQL, bindReselect(rs.lockBinds, args, 0, 0))
+		if err != nil {
+			return nil, err
+		}
+		keys, err := drainRows(lockRows)
+		if err != nil {
+			return nil, err
+		}
+		if _, _, err := c.execViaStmtWithAffected(ctx, rs.writeSQL, args); err != nil {
+			return nil, err
+		}
+		if len(keys.rows) == 0 {
+			return &memRows{cols: []string{}}, nil
+		}
+		keyArgs := []driver.NamedValue{}
+		for _, row := range keys.rows {
+			for _, v := range row {
+				keyArgs = append(keyArgs, driver.NamedValue{Ordinal: len(keyArgs) + 1, Value: v})
+			}
+		}
+		rows, err := c.queryViaStmt(ctx, keyedSelectSQL(rs, len(keys.rows)), keyArgs)
+		if err != nil {
+			return nil, err
+		}
+		recovered, err := drainRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		if err := checkRecovered(len(recovered.rows), int64(len(keys.rows)), rs.writeSQL); err != nil {
+			return nil, err
+		}
+		return recovered, nil
+	}
+	if rs.anchorSQL != "" {
+		anchor, err := c.queryViaStmt(ctx, rs.anchorSQL, nil)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := drainRows(anchor); err != nil {
+			return nil, err
+		}
+	}
+	// go-sql-driver's ExecerContext returns driver.ErrSkip for a parameterized statement (it
+	// wants the prepared-statement path), so run the stripped write via a prepared statement.
+	lastID, affected, err := c.execViaStmtWithAffected(ctx, rs.writeSQL, args)
+	var dup *gomysql.MySQLError
+	if err != nil && rs.duplicateIsSkip && errors.As(err, &dup) && dup.Number == mysqlErDupEntry {
+		// An insert-or-ignore's duplicate key: the conflict it skips — it wrote nothing (only the
+		// statement rolled back).
+		return &memRows{cols: []string{}}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	// A write that wrote no row (an INSERT IGNORE that hit a conflict) returns nothing.
+	written := writtenRowCount(rs.written, affected)
+	if written == 0 {
+		return &memRows{cols: []string{}}, nil
+	}
+	rows, err := c.queryViaStmt(ctx, rs.selectSQL, bindReselect(rs.binds, args, lastID, affected))
+	if err != nil {
+		return nil, err
+	}
+	recovered, err := drainRows(rows)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkRecovered(len(recovered.rows), written, rs.writeSQL); err != nil {
+		return nil, err
+	}
+	return recovered, nil
+}
+
+// ExecContext forwards to the base driver (writes never carry RETURNING on the exec/tx path), and
+// tracks the transaction state a tx-control statement changes ([scpMysqlConn.inTx]).
+func (c *scpMysqlConn) ExecContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
+	e, ok := c.base.(driver.ExecerContext)
+	if !ok {
+		return nil, driver.ErrSkip
+	}
+	res, err := e.ExecContext(ctx, query, args)
+	switch effect := txControlEffect(query); {
+	case effect > 0 && err == nil:
+		c.inTx = true
+	case effect < 0:
+		// A COMMIT / ROLLBACK that errored leaves the connection in an unknown state; the runtime
+		// destroys such a connection rather than reuse it.
+		c.inTx = false
+	}
+	return res, err
 }
 
 // execViaStmtWithAffected prepares + executes a parameterized statement via the base driver's
@@ -226,10 +392,13 @@ func (c *scpMysqlConn) execViaStmtWithAffected(ctx context.Context, query string
 	if err != nil {
 		return 0, 0, err
 	}
-	lastID, _ := res.LastInsertId()
-	affected, aerr := res.RowsAffected()
-	if aerr != nil || affected < 1 {
-		affected = 1
+	lastID, err := res.LastInsertId()
+	if err != nil {
+		return 0, 0, err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return 0, 0, err
 	}
 	return lastID, affected, nil
 }
@@ -252,6 +421,27 @@ type mysqlReselect struct {
 	writeSQL  string
 	selectSQL string
 	binds     []reselectBind
+	// written says how many rows the write wrote ([writtenRowCount]): "affected", or "" when not
+	// countable (an upsert / UPDATE / DELETE).
+	written string
+	// anchorSQL is a consistent read run BEFORE the write in the same transaction ("" ⇒ none): a bulk
+	// INSERT's AUTO_INCREMENT ids are not consecutive, and anchoring the read view first hides the rows
+	// other sessions insert meanwhile from the recovering SELECT (mysql-returning.ts anchorSql).
+	anchorSQL string
+	// lockSQL is an UPDATE's lock-and-key step, run BEFORE the write ("" ⇒ none): `SELECT <pk> … WHERE
+	// <where> … FOR UPDATE` names — and locks — exactly the rows the UPDATE is about to write (bound by
+	// lockBinds). Its rows are recovered by THOSE keys: selectSQL is then the head
+	// `SELECT <cols> FROM <table> WHERE (<pk>) IN ` that [keyedSelectSQL] completes.
+	lockSQL   string
+	lockBinds []reselectBind
+	// keyCols are the key columns lockSQL reads, in order (the declared PK).
+	keyCols []string
+	// duplicateIsSkip marks a single-row insert-or-ignore (mysql-returning.ts duplicateIsSkip): writeSQL
+	// is the PLAIN INSERT — its no-op `ON DUPLICATE KEY UPDATE c = c` tail removed — so a conflict on ANY
+	// unique key raises the duplicate-key error ([mysqlErDupEntry]) instead of silently doing nothing.
+	// That error IS the skipped conflict: MySQL rolls back only the statement, and the write returns no
+	// rows. No affected count is read and no lock is taken, so it holds under every isolation level.
+	duplicateIsSkip bool
 	// before runs the SELECT BEFORE the write. Only a DELETE needs it: its rows are gone once it has
 	// run, so the pre-image IS the written row set.
 	before bool
@@ -300,6 +490,139 @@ func splitTrim(s string) []string {
 	return out
 }
 
+// updateBatchKeys is EVERY JOIN key column of an updateMany — the target-side column of each
+// `AND`-joined conjunct of `ON u.k1 = <v.k1> AND u.k2 = <v.k2> SET …` (json-batch.ts
+// mysqlUpdateManyJson). A composite key keyed on its first column alone names rows the write never
+// touched. nil ⇒ the predicate (or one of its conjuncts) does not parse.
+func updateBatchKeys(writeSQL string) []string {
+	m := batchJoinOnRe.FindStringSubmatch(writeSQL)
+	if m == nil {
+		return nil
+	}
+	keys := []string{}
+	for _, conj := range andSplitRe.Split(m[1], -1) {
+		km := batchJoinConjRe.FindStringSubmatch(strings.TrimSpace(conj))
+		if km == nil {
+			return nil
+		}
+		keys = append(keys, km[1])
+	}
+	return keys
+}
+
+// batchReadConjRe is one `u.<k> = <expr>` conjunct of an updateMany's ON, the read expression kept.
+var batchReadConjRe = regexp.MustCompile(`(?s)^[A-Za-z0-9_]*\.?([A-Za-z0-9_]+)\s*=\s*(.+)$`)
+var batchSourceAliasRe = regexp.MustCompile(`(?i)^\s+(?:AS\s+)?([A-Za-z0-9_]+)`)
+var insertSelectRe = regexp.MustCompile(`(?i)\)\s*SELECT\s+`)
+
+// batchReads is how a BATCH write reads its rows out of its ONE JSON payload (mysql-returning.ts
+// batchReads): its `JSON_TABLE(?, '$[*]' COLUMNS(…))` source with the alias it gives it, verbatim, and
+// the expression it reads each key-able column with — an updateMany's `ON u.<k> = <expr>`, an INSERT's
+// SELECT list by INSERT column position. The recovering SELECT reuses both as they are, so it compares
+// every key EXACTLY as the write did: a COLUMNS declaration alone does not say how (a JSON column is
+// read both as unquoted text and as a JSON value). ok=false when the write reads no JSON_TABLE. A
+// conjunct / select item that does not parse leaves its column out — the caller fails it closed.
+func batchReads(writeSQL string, insertCols []string) (source string, reads map[string]string, ok bool) {
+	lower := strings.ToLower(writeSQL)
+	jt := strings.Index(lower, "json_table(")
+	if jt < 0 {
+		return "", nil, false
+	}
+	// The JSON_TABLE(…) call: its own parentheses at depth 0, skipping quoted paths.
+	end, depth, quoted := -1, 0, false
+	for i := jt + len("json_table"); i < len(writeSQL) && end < 0; i++ {
+		switch ch := writeSQL[i]; {
+		case quoted:
+			quoted = ch != '\''
+		case ch == '\'':
+			quoted = true
+		case ch == '(':
+			depth++
+		case ch == ')':
+			depth--
+			if depth == 0 {
+				end = i
+			}
+		}
+	}
+	if end < 0 {
+		return "", nil, false
+	}
+	alias := batchSourceAliasRe.FindStringSubmatch(writeSQL[end+1:])
+	if alias == nil {
+		return "", nil, false
+	}
+	source = writeSQL[jt:end+1] + " AS " + alias[1]
+	reads = map[string]string{}
+	if strings.HasPrefix(lower, "update") {
+		if on := batchJoinOnRe.FindStringSubmatch(writeSQL); on != nil {
+			for _, conj := range andSplitRe.Split(on[1], -1) {
+				if m := batchReadConjRe.FindStringSubmatch(strings.TrimSpace(conj)); m != nil {
+					reads[m[1]] = strings.TrimSpace(m[2])
+				}
+			}
+		}
+		return source, reads, true
+	}
+	sel := insertSelectRe.FindStringIndex(writeSQL)
+	from := strings.Index(lower, " from json_table(")
+	if sel != nil && from > sel[0] {
+		items := splitTopLevel(writeSQL[sel[1]:from])
+		if len(items) == len(insertCols) {
+			for i, c := range insertCols {
+				reads[c] = items[i]
+			}
+		}
+	}
+	return source, reads, true
+}
+
+// splitTopLevel splits a comma list on the commas at its own depth (outside parentheses and quotes);
+// entries trimmed (mysql-returning.ts splitTopLevel).
+func splitTopLevel(list string) []string {
+	out := []string{}
+	depth, quoted, start := 0, false, 0
+	for i := 0; i < len(list); i++ {
+		switch ch := list[i]; {
+		case quoted:
+			quoted = ch != '\''
+		case ch == '\'':
+			quoted = true
+		case ch == '(':
+			depth++
+		case ch == ')':
+			depth--
+		case ch == ',' && depth == 0:
+			out = append(out, strings.TrimSpace(list[start:i]))
+			start = i + 1
+		}
+	}
+	return append(out, strings.TrimSpace(list[start:]))
+}
+
+// valuesRowsRe is a `VALUES (?, …), (?, …)` list whose every value is a bare `?` (then the end of the
+// write, or its ON DUPLICATE KEY UPDATE) — mysql-returning.ts valuesRows.
+var valuesRowsRe = regexp.MustCompile(`(?i)\)\s*VALUES\s*(\(\s*\?(?:\s*,\s*\?)*\s*\)(?:\s*,\s*\(\s*\?(?:\s*,\s*\?)*\s*\))*)\s*(?:ON\s+DUPLICATE\s+KEY\s+UPDATE\b|$)`)
+var valuesTupleRe = regexp.MustCompile(`\([^)]*\)`)
+
+// valuesRows is how many rows a VALUES INSERT writes when EVERY value is a bare `?` (each tuple then
+// binds its ncols params in column order, so row r's column c is param r*ncols + c), else -1: a value
+// that is an SQL expression (NOW(), a cast) moves every `?` after it, so no column's param position is
+// known (mysql-returning.ts valuesRows).
+func valuesRows(writeSQL string, ncols int) int {
+	m := valuesRowsRe.FindStringSubmatch(writeSQL)
+	if m == nil {
+		return -1
+	}
+	tuples := valuesTupleRe.FindAllString(m[1], -1)
+	for _, t := range tuples {
+		if strings.Count(t, "?") != ncols {
+			return -1
+		}
+	}
+	return len(tuples)
+}
+
 func columnIndex(xs []string, want string) int {
 	for i, x := range xs {
 		if x == want {
@@ -323,7 +646,22 @@ func buildMysqlReselect(sql string) (*mysqlReselect, error) {
 	pkCols, autoInc := parsePkHint(hintRegion)
 	conflict := parseConflictHint(hintRegion)
 	writeSQL := strings.TrimSpace(pkHintRe.ReplaceAllString(sql[:retPos], ""))
+	// An insert-or-ignore is spelled `ON DUPLICATE KEY UPDATE c = c` — it reads like an upsert, but it
+	// writes NOTHING on a conflict. It runs as the plain INSERT instead, so the conflict it skips is a
+	// duplicate-key error rather than a no-op that reports like an insert (duplicateIsSkip).
+	odku := strings.Index(strings.ToLower(writeSQL), " on duplicate key update ")
+	duplicateIsSkip := ignoreHintRe.MatchString(hintRegion) && odku >= 0
+	if duplicateIsSkip {
+		writeSQL = strings.TrimSpace(writeSQL[:odku])
+	}
 	wl := strings.ToLower(writeSQL)
+	// skip carries duplicateIsSkip onto an INSERT's recovery.
+	skip := func(rs *mysqlReselect, err error) (*mysqlReselect, error) {
+		if rs != nil {
+			rs.duplicateIsSkip = duplicateIsSkip
+		}
+		return rs, err
+	}
 
 	tm := writeTableRe.FindStringSubmatch(writeSQL)
 	if tm == nil {
@@ -335,83 +673,138 @@ func buildMysqlReselect(sql string) (*mysqlReselect, error) {
 		orderBy = " ORDER BY " + strings.Join(pkCols, ", ")
 	}
 	isBatch := strings.Contains(wl, "json_table(")
-	// Recover a BATCH write's rows by reading its key set back out of the SAME JSON payload it bound.
-	jsonSelect := func(key string) string {
-		return fmt.Sprintf(
-			"SELECT %s FROM %s WHERE %s IN (SELECT JSON_UNQUOTE(jt.%s) FROM JSON_TABLE(?, '$[*]' COLUMNS(%s JSON PATH '$.%s')) jt)%s",
-			cols, table, key, key, key, key, orderBy,
-		)
-	}
 	insertCols := []string{}
 	if cm := insertColsRe.FindStringSubmatch(writeSQL); cm != nil {
 		insertCols = splitTrim(cm[1])
 	}
+	// Recover a BATCH write's rows by reading its key TUPLES back out of the SAME JSON payload it bound —
+	// every key column, never the first alone (a composite key's first column names other rows too) —
+	// through the write's OWN JSON_TABLE source and the write's OWN read expression of each key
+	// ([batchReads]), so each key compares EXACTLY as the write compared or wrote it. Any other read can
+	// compare differently: a key the write reads as a JSON value (v.k) or as a BIGINT, re-read as the
+	// JSON_UNQUOTE string, is compared with a BIGINT column as DOUBLE, which past 2^53 matches the
+	// neighbouring keys too. A key with no read expression in the write fails closed.
+	jsonSelect := func(keys []string, what, written string) (*mysqlReselect, error) {
+		source, readOf, ok := batchReads(writeSQL, insertCols)
+		if !ok {
+			return nil, fmt.Errorf("scp write(mysql): cannot parse the JSON_TABLE source of %q", writeSQL)
+		}
+		reads := make([]string, len(keys))
+		for i, k := range keys {
+			read, found := readOf[k]
+			if !found {
+				return nil, fmt.Errorf("scp write(mysql): %s column %q has no read expression in %q, so its rows cannot be matched the way it wrote them", what, k, writeSQL)
+			}
+			reads[i] = read
+		}
+		return &mysqlReselect{writeSQL: writeSQL, selectSQL: fmt.Sprintf(
+			"SELECT %s FROM %s WHERE (%s) IN (SELECT %s FROM %s)%s",
+			cols, table, strings.Join(keys, ", "), strings.Join(reads, ", "), source, orderBy,
+		), binds: []reselectBind{{kind: "json"}}, written: written}, nil
+	}
+	// Recover a VALUES INSERT's rows by EVERY key column of EVERY row, each bound from its own param —
+	// row r's column c (its INSERT column position) is param r*ncols + c ([valuesRows]). Keying a
+	// multi-row INSERT by its first row alone would drop the rest.
+	keyedByInsertParams := func(keys []string, what, written string) (*mysqlReselect, error) {
+		positions := []int{}
+		for _, k := range keys {
+			idx := columnIndex(insertCols, k)
+			if idx < 0 {
+				return nil, fmt.Errorf("scp write(mysql): %s column %q is not among the INSERT columns of %q", what, k, writeSQL)
+			}
+			positions = append(positions, idx)
+		}
+		rows := valuesRows(writeSQL, len(insertCols))
+		if rows < 0 {
+			return nil, fmt.Errorf("scp write(mysql): the %s of %q cannot be bound from its params — a VALUES value that is not a bare `?` moves the param of every column after it", what, writeSQL)
+		}
+		binds := []reselectBind{}
+		for r := 0; r < rows; r++ {
+			for _, c := range positions {
+				binds = append(binds, reselectBind{kind: "param", index: r*len(insertCols) + c})
+			}
+		}
+		var where string
+		if rows == 1 {
+			conds := make([]string, len(keys))
+			for i, k := range keys {
+				conds[i] = k + " = ?"
+			}
+			where = strings.Join(conds, " AND ")
+		} else {
+			marks := make([]string, len(keys))
+			for i := range marks {
+				marks[i] = "?"
+			}
+			tuples := make([]string, rows)
+			for i := range tuples {
+				tuples[i] = "(" + strings.Join(marks, ", ") + ")"
+			}
+			where = "(" + strings.Join(keys, ", ") + ") IN (" + strings.Join(tuples, ", ") + ")"
+		}
+		return &mysqlReselect{writeSQL: writeSQL, selectSQL: fmt.Sprintf(
+			"SELECT %s FROM %s WHERE %s%s", cols, table, where, orderBy,
+		), binds: binds, written: written}, nil
+	}
+	upsert := strings.Contains(wl, "on duplicate key update")
+	if duplicateIsSkip && isBatch {
+		return nil, fmt.Errorf("scp write(mysql): a batch insert-or-ignore…RETURNING is an INSERT IGNORE, not an ON DUPLICATE KEY UPDATE (%q)", writeSQL)
+	}
 
-	// upsert / upsertMany — by the CONFLICT key. MySQL does not report which row an ON DUPLICATE KEY
-	// UPDATE touched, so the AUTO_INCREMENT range is wrong as soon as a row was updated, not inserted.
-	if strings.HasPrefix(wl, "insert") && strings.Contains(wl, "on duplicate key update") {
+	// upsert / upsertMany — by EVERY column of the CONFLICT key. MySQL does not report which row an ON
+	// DUPLICATE KEY UPDATE touched, so the AUTO_INCREMENT range is wrong as soon as a row was updated.
+	if strings.HasPrefix(wl, "insert") && upsert {
 		if len(conflict) == 0 {
 			return nil, fmt.Errorf("scp write(mysql): an upsert…RETURNING needs its conflict key in the pk hint (%q)", writeSQL)
 		}
-		key := conflict[0]
 		if isBatch {
-			return &mysqlReselect{writeSQL: writeSQL, selectSQL: jsonSelect(key), binds: []reselectBind{{kind: "json"}}}, nil
+			return jsonSelect(conflict, "conflict key", "")
 		}
-		idx := columnIndex(insertCols, key)
-		if idx < 0 {
-			return nil, fmt.Errorf("scp write(mysql): conflict key %q is not among the INSERT columns of %q", key, writeSQL)
-		}
-		return &mysqlReselect{writeSQL: writeSQL, selectSQL: fmt.Sprintf("SELECT %s FROM %s WHERE %s = ?%s", cols, table, key, orderBy),
-			binds: []reselectBind{{kind: "param", index: idx}}}, nil
+		return keyedByInsertParams(conflict, "conflict key", "")
 	}
 
-	// create / createMany — by the AUTO_INCREMENT range [LAST_INSERT_ID, +affected), or by the
-	// client-supplied PK values pulled from the INSERT params by column position (UUID / composite).
+	// create / createMany / insert-or-ignore — by the AUTO_INCREMENT range [LAST_INSERT_ID, +affected),
+	// or by the client-supplied PK values pulled from the INSERT params by column position (UUID /
+	// composite). Recovered only when it wrote a row, and only as many rows as it wrote ([writtenRowCount]).
 	if strings.HasPrefix(wl, "insert") {
-		if autoInc != "" && len(pkCols) == 1 && pkCols[0] == autoInc {
+		if autoInc != "" && len(pkCols) == 1 && pkCols[0] == autoInc && isBatch {
+			// createMany (a bulk INSERT…SELECT): its ids start at LAST_INSERT_ID but need not be
+			// consecutive, so the bare range would name other sessions' rows and miss our own. Every id
+			// it allocated is ≥ LAST_INSERT_ID; the anchored read view hides other sessions' rows; the
+			// count check fails the rest closed.
 			return &mysqlReselect{writeSQL: writeSQL, selectSQL: fmt.Sprintf(
+				"SELECT %s FROM %s WHERE %s >= ?%s", cols, table, autoInc, orderBy,
+			), binds: []reselectBind{{kind: "lastId"}}, written: "affected", anchorSQL: "SELECT 1 FROM " + table + " LIMIT 1"}, nil
+		}
+		if autoInc != "" && len(pkCols) == 1 && pkCols[0] == autoInc {
+			// A single-row / multi-VALUES INSERT reserves its ids up front, so they ARE consecutive.
+			return skip(&mysqlReselect{writeSQL: writeSQL, selectSQL: fmt.Sprintf(
 				"SELECT %s FROM %s WHERE %s >= ? AND %s < ?%s", cols, table, autoInc, autoInc, orderBy,
-			), binds: []reselectBind{{kind: "lastId"}, {kind: "highId"}}}, nil
+			), binds: []reselectBind{{kind: "lastId"}, {kind: "highId"}}, written: "affected"}, nil)
 		}
 		if len(pkCols) == 0 {
 			return nil, fmt.Errorf("scp write(mysql): an INSERT…RETURNING carries no pk hint, so its written rows cannot be identified (%q). The producer must pass the model's declared primary key", writeSQL)
 		}
+		// createMany with a CLIENT-supplied key: the statement binds ONE JSON payload, not one param per
+		// key, so the key tuples are read back out of that SAME payload (as upsertMany does). A batch
+		// `INSERT IGNORE` reads back pre-existing rows too, so its count check fails it closed.
 		if isBatch {
-			// createMany with a CLIENT-supplied key: the statement binds ONE JSON payload, not one
-			// param per key, so the keys are read back out of that SAME payload (as upsertMany does).
-			if len(pkCols) != 1 {
-				return nil, fmt.Errorf("scp write(mysql): a batch INSERT…RETURNING on the COMPOSITE key (%s) cannot be recovered from its JSON payload (%q)", strings.Join(pkCols, ", "), writeSQL)
-			}
-			return &mysqlReselect{writeSQL: writeSQL, selectSQL: jsonSelect(pkCols[0]), binds: []reselectBind{{kind: "json"}}}, nil
+			return jsonSelect(pkCols, "PK", "affected")
 		}
-		conds := []string{}
-		binds := []reselectBind{}
-		for _, pk := range pkCols {
-			idx := columnIndex(insertCols, pk)
-			if idx < 0 {
-				return nil, fmt.Errorf("scp write(mysql): PK column %q is not among the INSERT columns of %q", pk, writeSQL)
-			}
-			conds = append(conds, pk+" = ?")
-			binds = append(binds, reselectBind{kind: "param", index: idx})
-		}
-		return &mysqlReselect{writeSQL: writeSQL, selectSQL: fmt.Sprintf(
-			"SELECT %s FROM %s WHERE %s%s", cols, table, strings.Join(conds, " AND "), orderBy,
-		), binds: binds}, nil
+		return skip(keyedByInsertParams(pkCols, "PK", "affected"))
 	}
 
-	// updateMany — by the batch JOIN key, re-selected from the SAME JSON payload the write bound.
+	// updateMany — by EVERY batch JOIN key column, re-selected from the SAME JSON payload the write bound.
 	if strings.HasPrefix(wl, "update") && isBatch {
-		km := batchJoinKeyRe.FindStringSubmatch(writeSQL)
-		if km == nil {
+		keys := updateBatchKeys(writeSQL)
+		if keys == nil {
 			return nil, fmt.Errorf("scp write(mysql): cannot parse the batch JOIN key of %q", writeSQL)
 		}
-		key := km[1]
-		return &mysqlReselect{writeSQL: writeSQL, selectSQL: jsonSelect(key), binds: []reselectBind{{kind: "json"}}}, nil
+		return jsonSelect(keys, "JOIN key", "")
 	}
 
-	// update / delete — by the write's OWN WHERE predicate, bound from the write's own params. The
-	// UPDATE re-selects AFTER the write (the rows carry their new values); the DELETE re-selects
-	// BEFORE it, since afterwards there is nothing left to describe.
+	// update / delete — the rows the write's OWN WHERE predicate names, bound from the write's own
+	// params. The DELETE re-selects BEFORE it, since afterwards there is nothing left to describe.
 	wherePos := strings.LastIndex(wl, " where ")
 	if wherePos < 0 {
 		return nil, fmt.Errorf("scp write(mysql): a write…RETURNING needs a WHERE to recover its rows (%q)", writeSQL)
@@ -422,12 +815,68 @@ func buildMysqlReselect(sql string) (*mysqlReselect, error) {
 	for i := 0; i < strings.Count(whereSQL, "?"); i++ {
 		binds = append(binds, reselectBind{kind: "param", index: leading + i})
 	}
+	// The DELETE: its pre-image is a LOCKING read — it reads the latest committed rows (not an older
+	// snapshot) and holds them, so no other session can remove them first — and the DELETE must remove
+	// exactly those rows: its affected count is checked against the pre-image ("affected").
+	if strings.HasPrefix(wl, "delete") {
+		return &mysqlReselect{
+			writeSQL:  writeSQL,
+			selectSQL: fmt.Sprintf("SELECT %s FROM %s WHERE %s%s FOR UPDATE", cols, table, whereSQL, orderBy),
+			binds:     binds,
+			written:   "affected",
+			before:    true,
+		}, nil
+	}
+	// The UPDATE: lock the rows its WHERE names and read their keys BEFORE the write, then recover the
+	// written rows (carrying their new values) by those keys — never by the WHERE re-evaluated after it.
+	if len(pkCols) == 0 {
+		return nil, fmt.Errorf("scp write(mysql): an UPDATE…RETURNING carries no pk hint, so the rows it writes cannot be keyed (%q). The producer must pass the model's declared primary key", writeSQL)
+	}
 	return &mysqlReselect{
 		writeSQL:  writeSQL,
-		selectSQL: fmt.Sprintf("SELECT %s FROM %s WHERE %s%s", cols, table, whereSQL, orderBy),
-		binds:     binds,
-		before:    strings.HasPrefix(wl, "delete"),
+		selectSQL: fmt.Sprintf("SELECT %s FROM %s WHERE (%s) IN ", cols, table, strings.Join(pkCols, ", ")),
+		lockSQL:   fmt.Sprintf("SELECT %s FROM %s WHERE %s%s FOR UPDATE", strings.Join(pkCols, ", "), table, whereSQL, orderBy),
+		lockBinds: binds,
+		keyCols:   pkCols,
 	}, nil
+}
+
+// keyedSelectSQL completes an UPDATE's selectSQL for `rows` locked keys (mysql-returning.ts
+// keyedSelectSql): one `(?, …)` tuple per row, ordered by the declared PK.
+func keyedSelectSQL(rs *mysqlReselect, rows int) string {
+	marks := make([]string, len(rs.keyCols))
+	for i := range marks {
+		marks[i] = "?"
+	}
+	tuple := "(" + strings.Join(marks, ", ") + ")"
+	tuples := make([]string, rows)
+	for i := range tuples {
+		tuples[i] = tuple
+	}
+	return rs.selectSQL + "(" + strings.Join(tuples, ", ") + ") ORDER BY " + strings.Join(rs.keyCols, ", ")
+}
+
+// writtenRowCount is how many rows the write wrote, from its own result (mysql-returning.ts
+// writtenRowCount): "affected" — the affected count (a plain INSERT / INSERT IGNORE never updates a row,
+// so CLIENT_FOUND_ROWS cannot change it). -1 ⇒ not countable.
+func writtenRowCount(written string, affected int64) int64 {
+	if written == "affected" {
+		return affected
+	}
+	return -1
+}
+
+// mysqlErDupEntry is MySQL's duplicate-key error (ER_DUP_ENTRY): the conflict a duplicateIsSkip write
+// skipped (mysql-returning.ts MYSQL_ER_DUP_ENTRY).
+const mysqlErDupEntry = 1062
+
+// checkRecovered fails closed when the recovered row count differs from the count the write wrote: the
+// SELECT then named rows the write did not write (or missed ones it did).
+func checkRecovered(recovered int, written int64, writeSQL string) error {
+	if written >= 0 && int64(recovered) != written {
+		return fmt.Errorf("scp write(mysql): the write wrote %d row(s) but its RETURNING recovery found %d — refusing to return rows it cannot attribute to this write (%q)", written, recovered, writeSQL)
+	}
+	return nil
 }
 
 // bindReselect binds the recovering SELECT's `?`s against the write's params + the write's result.
@@ -445,9 +894,9 @@ func bindReselect(binds []reselectBind, args []driver.NamedValue, lastID, affect
 		case "lastId":
 			v = lastID
 		case "highId":
-			// `max(1, affected)`, as in the four sibling ports: the range is EXCLUSIVE, so a driver
-			// that reports 0 affected rows must still cover the one row the INSERT wrote.
-			v = lastID + max(int64(1), affected)
+			// A write that wrote no row is never re-selected ([writtenRowCount] 0 ⇒ no rows), so
+			// `affected` ≥ 1 here.
+			v = lastID + affected
 		case "json":
 			v = at(0)
 		default:
@@ -460,7 +909,7 @@ func bindReselect(binds []reselectBind, args []driver.NamedValue, lastID, affect
 
 // drainRows materializes a driver.Rows into memory and closes it — the DELETE pre-image must be read
 // BEFORE the delete runs on the same connection (a live cursor would block the write).
-func drainRows(rows driver.Rows) (driver.Rows, error) {
+func drainRows(rows driver.Rows) (*memRows, error) {
 	defer rows.Close()
 	cols := append([]string{}, rows.Columns()...)
 	var out [][]driver.Value

@@ -1,8 +1,4 @@
-[**litedbmodel v2.2.14**](../README.md)
-
-***
-
-[litedbmodel](../globals.md) / isSqlFragment
+[API](../README.md) / isSqlFragment
 
 # Function: isSqlFragment()
 
@@ -10,7 +6,7 @@
 function isSqlFragment(value: unknown): value is SqlFragment;
 ```
 
-Defined in: [SqlFragment.ts:119](https://github.com/foo-ogawa/litedbmodel/blob/main/src/SqlFragment.ts#L119)
+Defined in: [SqlFragment.ts:144](https://github.com/foo-ogawa/litedbmodel/blob/main/src/SqlFragment.ts#L144)
 
 ## Parameters
 
@@ -20,4 +16,5 @@ Defined in: [SqlFragment.ts:119](https://github.com/foo-ogawa/litedbmodel/blob/m
 
 ## Returns
 
-`value is SqlFragment`
+`value is`[`SqlFragment`](../interfaces/SqlFragment.md)
+
