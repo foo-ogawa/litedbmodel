@@ -214,6 +214,10 @@ export function encodeJsonArrayParam(dialect: Dialect, values: readonly unknown[
  */
 const BIGINT_SENTINEL = '\u0000int:';
 
+/** The signed 64-bit range — bc's `int`, and the integers MySQL's JSON `DECIMAL` read takes as numbers (#383). */
+const INT64_MIN = -(2n ** 63n);
+const INT64_MAX = 2n ** 63n - 1n;
+
 /**
  * The ONE JSON-param serializer every single-JSON-param form goes through — the array/tuple sets here and
  * the batch record sets in {@link import('./json-batch')} alike. Both bind values that came OFF a read, so
@@ -225,10 +229,16 @@ const BIGINT_SENTINEL = '\u0000int:';
  * inside the JSON text and the rounded id is what MySQL/SQLite stored, silently. JSON numbers are
  * arbitrary-precision by grammar, and both `JSON_TABLE` (MySQL) and `json_each` (SQLite) read an
  * integer literal within i64 exactly — which is the whole range bc's `int` admits.
+ *
+ * A BigInt OUTSIDE i64 (a BIGINT UNSIGNED value past 2^63-1, as a TS read returns it) is written as a
+ * JSON digit STRING instead: MySQL reads a JSON integer above the signed 64-bit max into `DECIMAL` as a
+ * NEGATIVE number (2^63+5 → -9223372036854775803), so a key compared through the `DECIMAL(65,30)` read
+ * ({@link mysqlJsonRead}) matched nothing and the write was silently lost; the digit string is read
+ * exactly (#383).
  */
 export function encodeJsonParam(dialect: Dialect, payload: unknown): string {
   const tagged = JSON.stringify(payload, (_key, v: unknown) => {
-    if (typeof v === 'bigint') return `${BIGINT_SENTINEL}${v.toString()}`;
+    if (typeof v === 'bigint') return v >= INT64_MIN && v <= INT64_MAX ? `${BIGINT_SENTINEL}${v.toString()}` : v.toString();
     if (dialect === 'mysql' && typeof v === 'boolean') return v ? 1 : 0;
     return v;
   });

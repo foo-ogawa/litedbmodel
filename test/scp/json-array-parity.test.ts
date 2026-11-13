@@ -551,3 +551,45 @@ describe('[mysql] #376 BIGINT / DECIMAL keys match exactly the bound row (no DOU
     expect((await run(select({ d: [DEC_BOUND] }))).rows).not.toContainEqual({ id: NEIGHBOURS[0] });
   });
 });
+
+// ---------------------------------------------------------------------------
+// #383 — a BIGINT UNSIGNED key at or above 2^63 reaches its row.
+//
+// The JSON param carried a bc `int` as a JSON NUMBER, and MySQL reads a JSON integer above the signed
+// 64-bit max into `DECIMAL(65,30)` as a NEGATIVE number (2^63+5 → -9223372036854775803), so a
+// deleteMany / updateMany keyed by it matched nothing and the write was silently lost. Such a key goes
+// as a digit string, which the DECIMAL read takes exactly.
+// ---------------------------------------------------------------------------
+describe('[mysql] #383 BIGINT UNSIGNED keys >= 2^63 hit exactly their row', () => {
+  const T = 'pj383_u';
+  const KEY = 2n ** 63n + 5n;
+  const IDS = [KEY - 1n, KEY, KEY + 1n, 5n].map(String);
+  const TYPES = { k: 'BIGINT UNSIGNED', v: 'VARCHAR(20)' };
+
+  async function seed(): Promise<void> {
+    await my(`DROP TABLE IF EXISTS ${T}`, []);
+    await my(`CREATE TABLE ${T}(k BIGINT UNSIGNED PRIMARY KEY, v VARCHAR(20) NOT NULL)`, []);
+    for (const k of IDS) await my(`INSERT INTO ${T} VALUES (?, 'seed')`, [k]);
+  }
+  const state = async (): Promise<string[]> =>
+    (await my(`SELECT CAST(k AS CHAR) AS k, v FROM ${T} ORDER BY k`, [])).map((r) => `${String(r.k)}:${String(r.v)}`);
+
+  it('deleteMany deletes exactly the 2^63+5 row', async () => {
+    requireMysql();
+    await seed();
+    const [op] = compileDeleteMany({ dialect: 'mysql', tableName: T, keyColumns: ['k'], keys: [{ k: KEY }], columnTypes: { k: TYPES.k } });
+    const asm = assembleMakeSQL(op);
+    const [res] = await myConn!.query(renderPlaceholders(asm.sql, 'mysql'), asm.params);
+    expect((res as { affectedRows: number }).affectedRows).toBe(1);
+    expect(await state()).toEqual(['5:seed', `${KEY - 1n}:seed`, `${KEY + 1n}:seed`]);
+  });
+
+  it('updateMany updates exactly the 2^63+5 row', async () => {
+    requireMysql();
+    await seed();
+    const r = mysqlUpdateManyJson({ tableName: T, keyColumns: ['k'], updateColumns: ['v'], records: [{ k: KEY, v: 'hit' }], columnTypes: TYPES });
+    const [res] = await myConn!.query(r.sql, r.params);
+    expect((res as { affectedRows: number }).affectedRows).toBe(1);
+    expect(await state()).toEqual(['5:seed', `${KEY - 1n}:seed`, `${KEY}:hit`, `${KEY + 1n}:seed`]);
+  });
+});
