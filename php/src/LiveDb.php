@@ -99,7 +99,7 @@ final class MysqlReselect
      * @param string             $selectSql the recovering SELECT
      * @param list<ReselectBind> $binds     how to bind {@see $selectSql}'s `?`s
      * @param string|null        $written   how many rows the write wrote ({@see MysqlReturning::writtenRowCount}):
-     *                                      'affected' | 'insertId' | 'affectedUnlessFoundRows'; null ⇒ not countable
+     *                                      'affected' | 'insertId'; null ⇒ not countable
      * @param bool               $before    run the SELECT BEFORE the write (a DELETE's pre-image)
      * @param string             $anchorSql a consistent read run BEFORE the write in the same transaction
      *                                      ('' ⇒ none): a bulk INSERT's AUTO_INCREMENT ids are not
@@ -113,6 +113,13 @@ final class MysqlReselect
      *                                      {@see MysqlReturning::keyedSelectSql} completes
      * @param list<ReselectBind> $lockBinds how to bind {@see $lockSql}'s `?`s
      * @param list<string>       $keyCols   the key columns {@see $lockSql} reads, in order (the declared PK)
+     * @param bool               $insertIfAbsent an insert-or-ignore on a CLIENT-supplied key (mysql-returning.ts
+     *                                      `insertIfAbsent`): {@see $lockSql} reads — and LOCKS — the row its
+     *                                      own PK names BEFORE the write. A row there ⇒ it inserts nothing, so
+     *                                      it returns []; none ⇒ the next-key lock keeps every other session
+     *                                      from inserting that PK, so the row {@see $selectSql} finds by it
+     *                                      afterwards is the one it inserted. No affected count is read: under
+     *                                      CLIENT_FOUND_ROWS a no-op conflict and an insert both report 1.
      */
     public function __construct(
         public readonly string $writeSql,
@@ -124,6 +131,7 @@ final class MysqlReselect
         public readonly string $lockSql = '',
         public readonly array $lockBinds = [],
         public readonly array $keyCols = [],
+        public readonly bool $insertIfAbsent = false,
     ) {
     }
 }
@@ -147,7 +155,10 @@ final class MysqlReselect
  *  |                   | conflicted-row id, so the AUTO_INCREMENT range is wrong when a row  |        |
  *  |                   | was UPDATED) — one column of a composite key names other rows too   |        |
  *  | insert-or-ignore  | as create, and ONLY the rows it inserted (`;action=ignore`): a       | after  |
- *  |                   | conflict writes nothing, so it returns nothing                      |        |
+ *  |                   | conflict writes nothing, so it returns nothing. On a client-supplied| lock + |
+ *  |                   | key its PK is read and LOCKED (FOR UPDATE) before the write: a row  | after  |
+ *  |                   | there ⇒ it inserts nothing; none ⇒ the row its PK names afterwards  |        |
+ *  |                   | is the one it inserted                                              |        |
  *  | update            | the PK of every row its WHERE names, read and LOCKED (FOR UPDATE)   | lock + |
  *  |                   | before the write; the rows re-selected by those keys after it       | after  |
  *  | updateMany        | EVERY batch JOIN key column, re-bound from the SAME JSON payload    | after  |
@@ -317,9 +328,18 @@ final class MysqlReturning
             // createMany with a CLIENT-supplied key: the statement binds ONE JSON payload, not one param
             // per key, so the key tuples are read back out of that SAME payload (as upsertMany does). A
             // batch `INSERT IGNORE` reads back pre-existing rows too, so its count check fails it closed.
-            return $isBatch
-                ? $jsonSelect($pkCols, 'PK', 'affected')
-                : $keyedByInsertParams($pkCols, 'PK', $noopOnConflict ? 'affectedUnlessFoundRows' : 'affected');
+            if ($isBatch) {
+                return $jsonSelect($pkCols, 'PK', 'affected');
+            }
+            if ($noopOnConflict) {
+                // insert-or-ignore on a client-supplied key: lock its PK first (insertIfAbsent) — never its
+                // affected count, which CLIENT_FOUND_ROWS makes the same for a conflict and an insert.
+                $keyed = $keyedByInsertParams($pkCols, 'PK', null);
+                $lockSql = 'SELECT ' . implode(', ', $pkCols) . " FROM {$table} WHERE "
+                    . implode(' AND ', array_map(static fn (string $k): string => "{$k} = ?", $pkCols)) . ' FOR UPDATE';
+                return new MysqlReselect($keyed->writeSql, $keyed->selectSql, $keyed->binds, null, false, '', $lockSql, $keyed->binds, [], true);
+            }
+            return $keyedByInsertParams($pkCols, 'PK', 'affected');
         }
 
         // updateMany — by EVERY batch JOIN key column, re-selected from the SAME JSON payload the write bound.
@@ -380,16 +400,14 @@ final class MysqlReturning
      * How many rows the write wrote, from its own result (mysql-returning.ts `writtenRowCount`); null ⇒
      * not countable. 'affected' — a plain INSERT / INSERT IGNORE never updates a row, so the affected count
      * IS the number inserted; 'insertId' — an insert-or-ignore on an AUTO_INCREMENT key inserted ⇔ its
-     * insert id is not 0. 'affectedUnlessFoundRows' — the same on a client-supplied key inserted ⇔ 1
-     * affected row, which holds because {@see LiveDb::mysql} never opens the connection with
-     * `MYSQL_ATTR_FOUND_ROWS` (under CLIENT_FOUND_ROWS a conflict would count 1 too).
+     * insert id is not 0.
      */
     public static function writtenRowCount(?string $written, int $lastInsertId, int $affected): ?int
     {
         return match ($written) {
             null => null,
             'insertId' => $lastInsertId !== 0 ? 1 : 0,
-            'affected', 'affectedUnlessFoundRows' => $affected,
+            'affected' => $affected,
         };
     }
 
@@ -535,12 +553,18 @@ final class MysqlReturningStatement extends \PDOStatement
             return MysqlReturning::checkRecovered($pre, MysqlReturning::writtenRowCount($this->returning->written, 0, $this->rowCount()), $this->returning->writeSql);
         }
         if ($this->returning->lockSql !== '') {
-            // UPDATE…RETURNING: lock the rows its WHERE names and read their keys, write, then recover
-            // the written rows by THOSE keys (never by the WHERE re-evaluated after the write).
             $lock = $this->pdo->prepare($this->returning->lockSql);
             $lock->execute(MysqlReturning::bind($this->returning->lockBinds, $bound, 0, 0));
             $keys = $lock->fetchAll(\PDO::FETCH_ASSOC);
             parent::execute($bound);
+            if ($this->returning->insertIfAbsent) {
+                // insert-or-ignore on a client-supplied key: its PK was already there ⇒ it inserted
+                // nothing; else the row that PK names now is the one it inserted (the lock kept every
+                // other session out).
+                return $keys === [] ? $this->reselect($bound, 0, 0) : [];
+            }
+            // UPDATE…RETURNING: recover the written rows by the keys locked BEFORE the write (never by
+            // the WHERE re-evaluated after it).
             if ($keys === []) {
                 return [];
             }

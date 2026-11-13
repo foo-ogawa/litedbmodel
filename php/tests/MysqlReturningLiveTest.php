@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace LiteDbModel\Runtime\Tests;
 
 use LiteDbModel\Runtime\LiveDb;
+use LiteDbModel\Runtime\MysqlLivePdo;
+use LiteDbModel\Runtime\MysqlReturningStatement;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -45,6 +47,19 @@ final class MysqlReturningLiveTest extends TestCase
             getenv('TEST_MYSQL_PASSWORD') ?: 'testpass',
             getenv('TEST_MYSQL_DB') ?: 'testdb',
         );
+    }
+
+    /** The shipped RETURNING-emulating PDO, opened WITH `CLIENT_FOUND_ROWS` (what mysql2 / sqlx always do). */
+    private static function mysqlFoundRows(): \PDO
+    {
+        $dsn = sprintf('mysql:host=%s;port=%d;dbname=%s', getenv('TEST_MYSQL_HOST') ?: '127.0.0.1', (int) (getenv('TEST_MYSQL_PORT') ?: '3307'), getenv('TEST_MYSQL_DB') ?: 'testdb');
+        $pdo = new MysqlLivePdo($dsn, getenv('TEST_MYSQL_USER') ?: 'testuser', getenv('TEST_MYSQL_PASSWORD') ?: 'testpass', [
+            \PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION,
+            \PDO::ATTR_EMULATE_PREPARES => false,
+            \Pdo\Mysql::ATTR_FOUND_ROWS => true,
+        ]);
+        $pdo->setAttribute(\PDO::ATTR_STATEMENT_CLASS, [MysqlReturningStatement::class, [$pdo]]);
+        return $pdo;
     }
 
     private function table(string $ddl, string ...$seed): void
@@ -93,13 +108,28 @@ final class MysqlReturningLiveTest extends TestCase
         self::assertSame([], $this->rows($ignoreAutoInc, ['a@x', 'mine']), 'autoinc conflict');
         self::assertSame([['email' => 'b@x', 'name' => 'mine']], $this->rows($ignoreAutoInc, ['b@x', 'mine']), 'autoinc insert');
 
-        // Client-supplied key (LiveDb::mysql opens without CLIENT_FOUND_ROWS): inserted ⇔ 1 affected row.
+        // Client-supplied key: decided by its PK lock, never by the affected count — so the same on a
+        // connection with CLIENT_FOUND_ROWS (a no-op conflict and an insert both report 1) as without it.
         $clientDdl = '(code VARCHAR(16) PRIMARY KEY, owner VARCHAR(64))';
         $victim = "INSERT INTO {$t} (code, owner) VALUES ('X1', 'victim')";
-        $this->table($clientDdl, $victim);
         $ignoreClient = "INSERT INTO {$t} (code, owner) VALUES (?, ?) ON DUPLICATE KEY UPDATE code = code RETURNING code, owner /*scp:pk=code;ai=;conflict=code;action=ignore*/";
-        self::assertSame([], $this->rows($ignoreClient, ['X1', 'mine']), 'client conflict');
-        self::assertSame([['code' => 'X2', 'owner' => 'mine']], $this->rows($ignoreClient, ['X2', 'mine']), 'client insert');
+        $uniqueDdl = '(id VARCHAR(36) PRIMARY KEY, email VARCHAR(64) NOT NULL, owner VARCHAR(64), UNIQUE KEY uq (email))';
+        $uniqueVictim = "INSERT INTO {$t} (id, email, owner) VALUES ('u-1', 'a@x', 'victim')";
+        $ignoreUnique = "INSERT INTO {$t} (email, id, owner) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE email = email RETURNING id, email, owner /*scp:pk=id;ai=;conflict=email;action=ignore*/";
+        $default = $this->db;
+        $foundRows = self::mysqlFoundRows();
+        foreach (['default' => $default, 'foundRows' => $foundRows] as $name => $conn) {
+            $this->db = $conn;
+            $this->table($clientDdl, $victim);
+            self::assertSame([['code' => 'X2', 'owner' => 'mine']], $this->rows($ignoreClient, ['X2', 'mine']), "{$name}: client insert");
+            self::assertSame([], $this->rows($ignoreClient, ['X1', 'mine']), "{$name}: client conflict");
+            // A conflict on another unique key — the conflict key taken, or the PK taken — returns nothing.
+            $this->table($uniqueDdl, $uniqueVictim);
+            self::assertSame([], $this->rows($ignoreUnique, ['a@x', 'u-2', 'mine']), "{$name}: conflict key taken");
+            self::assertSame([], $this->rows($ignoreUnique, ['b@x', 'u-1', 'mine']), "{$name}: PK taken");
+            self::assertSame([['id' => 'u-3', 'email' => 'b@x', 'owner' => 'mine']], $this->rows($ignoreUnique, ['b@x', 'u-3', 'mine']), "{$name}: unique insert");
+        }
+        $this->db = $default;
 
         // Batch (INSERT IGNORE) on a client-supplied key: the pre-existing row read back fails it closed.
         $this->table($clientDdl, $victim);

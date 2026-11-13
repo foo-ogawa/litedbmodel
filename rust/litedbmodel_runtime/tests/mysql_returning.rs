@@ -119,19 +119,45 @@ fn mysql_returning_insert_ignore() {
         "autoinc insert"
     );
 
-    // Client-supplied key: sqlx always opens with CLIENT_FOUND_ROWS, under which a conflict and an
-    // insert both report 1 affected row — it cannot name the row it wrote, so it fails closed.
+    // Client-supplied key: sqlx always opens with CLIENT_FOUND_ROWS, under which a no-op conflict and
+    // an insert both report 1 affected row — so it is decided by its PK lock, never by that count.
     let client_ddl = "(code VARCHAR(16) PRIMARY KEY, owner VARCHAR(64))";
     let victim = vec![format!(
         "INSERT INTO {t} (code, owner) VALUES ('X1', 'victim')"
     )];
     table(&d, &t, client_ddl, &victim);
     let ignore_client = format!("INSERT INTO {t} (code, owner) VALUES (?, ?) ON DUPLICATE KEY UPDATE code = code RETURNING code, owner /*scp:pk=code;ai=;conflict=code;action=ignore*/");
-    let err = rows(&d, &ignore_client, &[s("X1"), s("mine")])
-        .expect_err("client conflict must fail closed");
-    assert!(
-        format!("{err:?}").contains("CLIENT_FOUND_ROWS"),
-        "client conflict: {err:?}"
+    assert_eq!(
+        rows(&d, &ignore_client, &[s("X2"), s("mine")]).expect("client insert"),
+        vec![vec!["code=X2".to_string(), "owner=mine".to_string()]],
+        "client insert"
+    );
+    assert_eq!(
+        rows(&d, &ignore_client, &[s("X1"), s("mine")]).expect("client conflict"),
+        none,
+        "client conflict"
+    );
+    // A conflict on another unique key — the conflict key taken, or the PK taken — returns nothing.
+    table(&d, &t, "(id VARCHAR(36) PRIMARY KEY, email VARCHAR(64) NOT NULL, owner VARCHAR(64), UNIQUE KEY uq (email))", &[format!("INSERT INTO {t} (id, email, owner) VALUES ('u-1', 'a@x', 'victim')")]);
+    let ignore_unique = format!("INSERT INTO {t} (email, id, owner) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE email = email RETURNING id, email, owner /*scp:pk=id;ai=;conflict=email;action=ignore*/");
+    assert_eq!(
+        rows(&d, &ignore_unique, &[s("a@x"), s("u-2"), s("mine")]).expect("conflict key taken"),
+        none,
+        "conflict key taken"
+    );
+    assert_eq!(
+        rows(&d, &ignore_unique, &[s("b@x"), s("u-1"), s("mine")]).expect("PK taken"),
+        none,
+        "PK taken"
+    );
+    assert_eq!(
+        rows(&d, &ignore_unique, &[s("b@x"), s("u-3"), s("mine")]).expect("unique insert"),
+        vec![vec![
+            "id=u-3".to_string(),
+            "email=b@x".to_string(),
+            "owner=mine".to_string()
+        ]],
+        "unique insert"
     );
 
     // Batch (INSERT IGNORE) on a client-supplied key: the pre-existing row read back fails it closed.

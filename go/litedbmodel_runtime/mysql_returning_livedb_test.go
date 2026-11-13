@@ -56,21 +56,29 @@ func TestMysqlReturningInsertIgnoreLive(t *testing.T) {
 	got, err = myretRows(t, db, ignoreAutoInc, "b@x", "mine")
 	myretExpect(t, "autoinc insert", got, err, []map[string]string{{"email": "b@x", "name": "mine"}})
 
-	// Client-supplied key without CLIENT_FOUND_ROWS (go-sql-driver's default): inserted ⇔ 1 affected row.
+	// Client-supplied key: decided by its PK lock, never by the affected count — so the same on a
+	// connection with CLIENT_FOUND_ROWS (a no-op conflict and an insert both report 1) as without it.
 	clientDDL := "(code VARCHAR(16) PRIMARY KEY, owner VARCHAR(64))"
 	victim := "INSERT INTO " + tbl + " (code, owner) VALUES ('X1', 'victim')"
 	ignoreClient := "INSERT INTO " + tbl + " (code, owner) VALUES (?, ?) ON DUPLICATE KEY UPDATE code = code RETURNING code, owner /*scp:pk=code;ai=;conflict=code;action=ignore*/"
-	myretTable(t, db, tbl, clientDDL, victim)
-	got, err = myretRows(t, db, ignoreClient, "X1", "mine")
-	myretExpect(t, "client conflict", got, err, []map[string]string{})
-	got, err = myretRows(t, db, ignoreClient, "X2", "mine")
-	myretExpect(t, "client insert", got, err, []map[string]string{{"code": "X2", "owner": "mine"}})
-
-	// …and with CLIENT_FOUND_ROWS a conflict and an insert both report 1 affected row: fail closed.
+	uniqueDDL := "(id VARCHAR(36) PRIMARY KEY, email VARCHAR(64) NOT NULL, owner VARCHAR(64), UNIQUE KEY uq (email))"
+	uniqueVictim := "INSERT INTO " + tbl + " (id, email, owner) VALUES ('u-1', 'a@x', 'victim')"
+	ignoreUnique := "INSERT INTO " + tbl + " (email, id, owner) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE email = email RETURNING id, email, owner /*scp:pk=id;ai=;conflict=email;action=ignore*/"
 	foundRows := openMysqlReturningDSN(t, "?clientFoundRows=true")
-	myretTable(t, db, tbl, clientDDL, victim)
-	if _, err := myretRows(t, foundRows, ignoreClient, "X1", "mine"); err == nil || !strings.Contains(err.Error(), "CLIENT_FOUND_ROWS") {
-		t.Fatalf("client conflict on a CLIENT_FOUND_ROWS connection: err = %v, want a fail-closed CLIENT_FOUND_ROWS error", err)
+	for name, conn := range map[string]*sql.DB{"default": db, "clientFoundRows": foundRows} {
+		myretTable(t, db, tbl, clientDDL, victim)
+		got, err = myretRows(t, conn, ignoreClient, "X2", "mine")
+		myretExpect(t, name+": client insert", got, err, []map[string]string{{"code": "X2", "owner": "mine"}})
+		got, err = myretRows(t, conn, ignoreClient, "X1", "mine")
+		myretExpect(t, name+": client conflict", got, err, []map[string]string{})
+		// A conflict on another unique key — the conflict key taken, or the PK taken — returns nothing.
+		myretTable(t, db, tbl, uniqueDDL, uniqueVictim)
+		got, err = myretRows(t, conn, ignoreUnique, "a@x", "u-2", "mine")
+		myretExpect(t, name+": conflict key taken", got, err, []map[string]string{})
+		got, err = myretRows(t, conn, ignoreUnique, "b@x", "u-1", "mine")
+		myretExpect(t, name+": PK taken", got, err, []map[string]string{})
+		got, err = myretRows(t, conn, ignoreUnique, "b@x", "u-3", "mine")
+		myretExpect(t, name+": unique insert", got, err, []map[string]string{{"id": "u-3", "email": "b@x", "owner": "mine"}})
 	}
 
 	// Batch (INSERT IGNORE) on a client-supplied key: the pre-existing row read back fails it closed.

@@ -127,15 +127,13 @@ func newScpMysqlConnector(cfg *gomysql.Config) (driver.Connector, error) {
 	if err != nil {
 		return nil, err
 	}
-	return scpMysqlConnector{base: base, foundRows: cfg.ClientFoundRows}, nil
+	return scpMysqlConnector{base: base}, nil
 }
 
 // scpMysqlConnector connects with go-sql-driver's connector under the caller's context and wraps the
 // connection in [scpMysqlConn].
 type scpMysqlConnector struct {
 	base driver.Connector
-	// foundRows: the DSN's clientFoundRows (CLIENT_FOUND_ROWS) — what an affected count means.
-	foundRows bool
 }
 
 func (c scpMysqlConnector) Connect(ctx context.Context) (driver.Conn, error) {
@@ -143,7 +141,7 @@ func (c scpMysqlConnector) Connect(ctx context.Context) (driver.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &scpMysqlConn{base: conn, foundRows: c.foundRows}, nil
+	return &scpMysqlConn{base: conn}, nil
 }
 
 func (c scpMysqlConnector) Driver() driver.Driver { return scpMysqlDriver{} }
@@ -152,9 +150,6 @@ func (c scpMysqlConnector) Driver() driver.Driver { return scpMysqlDriver{} }
 // other driver capability to the base connection.
 type scpMysqlConn struct {
 	base driver.Conn
-	// foundRows: the connection runs with CLIENT_FOUND_ROWS, under which an insert-or-ignore's
-	// conflict and its insert both report 1 affected row ([writtenRowCount]).
-	foundRows bool
 	// inTx: a transaction is open on this connection. go-sql-driver keeps the server's status flags to
 	// itself, so it is tracked where every transaction boundary of this connection passes: [BeginTx] /
 	// the wrapped [scpMysqlTx], and the BEGIN / COMMIT / ROLLBACK the runtime's tx boundary issues
@@ -278,18 +273,12 @@ func (c *scpMysqlConn) returning(ctx context.Context, rs *mysqlReselect, args []
 			return nil, err
 		}
 		// The DELETE must have removed exactly the locked pre-image.
-		written, err := writtenRowCount(rs.written, 0, affected, c.foundRows, rs.writeSQL)
-		if err != nil {
-			return nil, err
-		}
-		if err := checkRecovered(len(pre.rows), written, rs.writeSQL); err != nil {
+		if err := checkRecovered(len(pre.rows), writtenRowCount(rs.written, 0, affected), rs.writeSQL); err != nil {
 			return nil, err
 		}
 		return pre, nil
 	}
 	if rs.lockSQL != "" {
-		// UPDATE…RETURNING: lock the rows its WHERE names and read their keys, write, then recover the
-		// written rows by THOSE keys (never by the WHERE re-evaluated after the write).
 		lockRows, err := c.queryViaStmt(ctx, rs.lockSQL, bindReselect(rs.lockBinds, args, 0, 0))
 		if err != nil {
 			return nil, err
@@ -301,6 +290,20 @@ func (c *scpMysqlConn) returning(ctx context.Context, rs *mysqlReselect, args []
 		if _, _, err := c.execViaStmtWithAffected(ctx, rs.writeSQL, args); err != nil {
 			return nil, err
 		}
+		if rs.insertIfAbsent {
+			// insert-or-ignore on a client-supplied key: its PK was already there ⇒ it inserted nothing;
+			// else the row that PK names now is the one it inserted (the lock kept every other session out).
+			if len(keys.rows) > 0 {
+				return &memRows{cols: []string{}}, nil
+			}
+			rows, err := c.queryViaStmt(ctx, rs.selectSQL, bindReselect(rs.binds, args, 0, 0))
+			if err != nil {
+				return nil, err
+			}
+			return drainRows(rows)
+		}
+		// UPDATE…RETURNING: recover the written rows by the keys locked BEFORE the write (never by the
+		// WHERE re-evaluated after it).
 		if len(keys.rows) == 0 {
 			return &memRows{cols: []string{}}, nil
 		}
@@ -339,10 +342,7 @@ func (c *scpMysqlConn) returning(ctx context.Context, rs *mysqlReselect, args []
 		return nil, err
 	}
 	// A write that wrote no row (an insert-or-ignore that hit a conflict) returns nothing.
-	written, err := writtenRowCount(rs.written, lastID, affected, c.foundRows, rs.writeSQL)
-	if err != nil {
-		return nil, err
-	}
+	written := writtenRowCount(rs.written, lastID, affected)
 	if written == 0 {
 		return &memRows{cols: []string{}}, nil
 	}
@@ -426,8 +426,8 @@ type mysqlReselect struct {
 	writeSQL  string
 	selectSQL string
 	binds     []reselectBind
-	// written says how many rows the write wrote ([writtenRowCount]): "affected" | "insertId" |
-	// "affectedUnlessFoundRows", or "" when not countable (an upsert / UPDATE / DELETE).
+	// written says how many rows the write wrote ([writtenRowCount]): "affected" | "insertId", or ""
+	// when not countable (an upsert / UPDATE / DELETE / a client-keyed insert-or-ignore).
 	written string
 	// anchorSQL is a consistent read run BEFORE the write in the same transaction ("" ⇒ none): a bulk
 	// INSERT's AUTO_INCREMENT ids are not consecutive, and anchoring the read view first hides the rows
@@ -441,6 +441,12 @@ type mysqlReselect struct {
 	lockBinds []reselectBind
 	// keyCols are the key columns lockSQL reads, in order (the declared PK).
 	keyCols []string
+	// insertIfAbsent marks an insert-or-ignore on a CLIENT-supplied key (mysql-returning.ts
+	// insertIfAbsent): lockSQL reads — and LOCKS — the row its own PK names BEFORE the write. A row there
+	// ⇒ it inserts nothing, so it returns no rows; none ⇒ the next-key lock keeps every other session from
+	// inserting that PK, so the row selectSQL finds by it afterwards is the one it inserted. No affected
+	// count is read: under CLIENT_FOUND_ROWS a no-op conflict and an insert both report 1.
+	insertIfAbsent bool
 	// before runs the SELECT BEFORE the write. Only a DELETE needs it: its rows are gone once it has
 	// run, so the pre-image IS the written row set.
 	before bool
@@ -637,7 +643,20 @@ func buildMysqlReselect(sql string) (*mysqlReselect, error) {
 			return jsonSelect(pkCols, "PK", "affected")
 		}
 		if noopOnConflict {
-			return keyedByInsertParams(pkCols, "PK", "affectedUnlessFoundRows")
+			// insert-or-ignore on a client-supplied key: lock its PK first (insertIfAbsent) — never its
+			// affected count, which CLIENT_FOUND_ROWS makes the same for a conflict and an insert.
+			rs, err := keyedByInsertParams(pkCols, "PK", "")
+			if err != nil {
+				return nil, err
+			}
+			conds := make([]string, len(pkCols))
+			for i, k := range pkCols {
+				conds[i] = k + " = ?"
+			}
+			rs.lockSQL = fmt.Sprintf("SELECT %s FROM %s WHERE %s FOR UPDATE", strings.Join(pkCols, ", "), table, strings.Join(conds, " AND "))
+			rs.lockBinds = rs.binds
+			rs.insertIfAbsent = true
+			return rs, nil
 		}
 		return keyedByInsertParams(pkCols, "PK", "affected")
 	}
@@ -707,25 +726,18 @@ func keyedSelectSQL(rs *mysqlReselect, rows int) string {
 // writtenRowCount is how many rows the write wrote, from its own result (mysql-returning.ts
 // writtenRowCount): "affected" — the affected count (a plain INSERT / INSERT IGNORE never updates a row,
 // so CLIENT_FOUND_ROWS cannot change it); "insertId" — an insert-or-ignore on an AUTO_INCREMENT key
-// inserted ⇔ its insert id is not 0; "affectedUnlessFoundRows" — the same on a client-supplied key
-// inserted ⇔ 1 affected row, which CLIENT_FOUND_ROWS also reports for a conflict, so it fails closed
-// there. -1 ⇒ not countable.
-func writtenRowCount(written string, lastID, affected int64, foundRows bool, writeSQL string) (int64, error) {
+// inserted ⇔ its insert id is not 0. -1 ⇒ not countable.
+func writtenRowCount(written string, lastID, affected int64) int64 {
 	switch written {
 	case "affected":
-		return affected, nil
+		return affected
 	case "insertId":
 		if lastID != 0 {
-			return 1, nil
+			return 1
 		}
-		return 0, nil
-	case "affectedUnlessFoundRows":
-		if foundRows {
-			return 0, fmt.Errorf("scp write(mysql): an insert-or-ignore…RETURNING on a client-supplied key cannot tell an inserted row from a conflict on a CLIENT_FOUND_ROWS connection (both report 1 affected row), so it cannot name the row it wrote (%q)", writeSQL)
-		}
-		return affected, nil
+		return 0
 	}
-	return -1, nil
+	return -1
 }
 
 // checkRecovered fails closed when the recovered row count differs from the count the write wrote: the

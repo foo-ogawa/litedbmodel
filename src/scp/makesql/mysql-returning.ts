@@ -18,7 +18,10 @@
  *  |                  | conflicted-row id, so the AUTO_INCREMENT range is wrong when a row  |           |
  *  |                  | was UPDATED) — one column of a composite key names other rows too   |           |
  *  | insert-or-ignore | as create, and ONLY the rows it inserted (`;action=ignore`): a       | after     |
- *  |                  | conflict writes nothing, so it returns nothing                      |           |
+ *  |                  | conflict writes nothing, so it returns nothing. On a client-supplied| lock      |
+ *  |                  | key its PK is read and LOCKED (FOR UPDATE) before the write: a row  | + after   |
+ *  |                  | there ⇒ it inserts nothing; none ⇒ the row its PK names afterwards  |           |
+ *  |                  | is the one it inserted                                              |           |
  *  | update           | the PK of every row its WHERE names, read and LOCKED (FOR UPDATE)  | lock      |
  *  |                  | before the write; the rows re-selected by those keys after it      | + after   |
  *  | updateMany       | EVERY batch JOIN key column, re-bound from the SAME JSON payload   | after     |
@@ -99,11 +102,12 @@ export type ReselectBind =
  *    so `CLIENT_FOUND_ROWS` cannot change it: it IS the number of rows inserted.
  *  - `insertId` — an insert-or-ignore (`ON DUPLICATE KEY UPDATE c = c`) on an AUTO_INCREMENT key: it
  *    inserted ⇔ the result's insert id is not 0 (a conflict that wrote nothing reports 0).
- *  - `affectedUnlessFoundRows` — the same insert-or-ignore on a CLIENT-supplied key: it inserted ⇔
- *    1 row was affected. That holds only WITHOUT `CLIENT_FOUND_ROWS` — with it MySQL counts the
- *    conflicting row "set to its current values" as 1 too, so the two cannot be told apart.
+ *
+ * The same insert-or-ignore on a CLIENT-supplied key is not counted from its result at all: under
+ * `CLIENT_FOUND_ROWS` (mysql2's and sqlx's default) a conflicting row "set to its current values" counts
+ * 1 affected row, exactly like an insert. It is decided by its lock instead ({@link MysqlReselect.insertIfAbsent}).
  */
-export type WrittenRows = 'affected' | 'insertId' | 'affectedUnlessFoundRows';
+export type WrittenRows = 'affected' | 'insertId';
 
 /** The MySQL RETURNING recovery derived from a write's baked SQL + its `/*scp:pk=…* /` hint. */
 export interface MysqlReselect {
@@ -138,6 +142,15 @@ export interface MysqlReselect {
   readonly lockBinds: readonly ReselectBind[];
   /** The key columns {@link lockSql} reads, in order (the declared PK). */
   readonly keyCols: readonly string[];
+  /**
+   * An insert-or-ignore on a CLIENT-supplied key: {@link lockSql} reads — and LOCKS — the row its own
+   * PK names, BEFORE the write. A row there ⇒ the write inserts nothing (its ON DUPLICATE KEY UPDATE is
+   * a no-op), so it returns `[]`. None ⇒ the next-key lock keeps every other session from inserting that
+   * PK meanwhile, so whatever row {@link selectSql} finds by that PK after the write is the one it
+   * inserted (none, when it no-op'd on another unique key). No affected count is read: under
+   * `CLIENT_FOUND_ROWS` a no-op conflict and an insert both report 1.
+   */
+  readonly insertIfAbsent: boolean;
   /**
    * Run the SELECT BEFORE the write instead of after. Only a DELETE needs this: its rows are gone
    * once it has run, so the pre-image IS the written row set (the same rows the DELETE removes).
@@ -218,7 +231,7 @@ export function buildMysqlReselect(sql: string): MysqlReselect | null {
   const orderBy = pk.length > 0 ? ` ORDER BY ${pk.join(', ')}` : '';
   const isBatch = lower.includes('json_table(');
   const done = (selectSql: string, binds: readonly ReselectBind[], written: WrittenRows | null = null, before = false, anchorSql = ''): MysqlReselect =>
-    ({ writeSql, selectSql, binds, written, before, anchorSql, lockSql: '', lockBinds: [], keyCols: [] });
+    ({ writeSql, selectSql, binds, written, before, anchorSql, lockSql: '', lockBinds: [], keyCols: [], insertIfAbsent: false });
   const writeCols = insertCols(writeSql);
   /**
    * Recover a BATCH write's rows by reading its key TUPLES back out of the SAME JSON payload it bound —
@@ -288,7 +301,19 @@ export function buildMysqlReselect(sql: string): MysqlReselect | null {
     // createMany with a CLIENT-supplied key: the statement binds ONE JSON payload, not one param per
     // key, so the key tuples are read back out of that SAME payload — as the upsertMany arm does. A
     // batch `INSERT IGNORE` reads back pre-existing rows too, so its count check fails it closed.
-    return isBatch ? jsonSelect(pk, 'PK', 'affected') : keyedByInsertParams(pk, 'PK', noopOnConflict ? 'affectedUnlessFoundRows' : 'affected');
+    if (isBatch) return jsonSelect(pk, 'PK', 'affected');
+    if (noopOnConflict) {
+      // insert-or-ignore on a client-supplied key: lock its PK first (insertIfAbsent) — never its
+      // affected count, which CLIENT_FOUND_ROWS makes the same for a conflict and an insert.
+      const keyed = keyedByInsertParams(pk, 'PK', null);
+      return {
+        ...keyed,
+        lockSql: `SELECT ${pk.join(', ')} FROM ${table} WHERE ${pk.map((k) => `${k} = ?`).join(' AND ')} FOR UPDATE`,
+        lockBinds: keyed.binds,
+        insertIfAbsent: true,
+      };
+    }
+    return keyedByInsertParams(pk, 'PK', 'affected');
   }
 
   // updateMany — by EVERY batch JOIN key column, re-selected from the SAME JSON payload the write bound.
@@ -337,12 +362,8 @@ export function keyedSelectSql(reselect: MysqlReselect, rows: number): string {
   return `${reselect.selectSql}(${Array.from({ length: rows }, () => tuple).join(', ')}) ORDER BY ${reselect.keyCols.join(', ')}`;
 }
 
-/**
- * How many rows the write wrote ({@link WrittenRows}), from its own result — `null` when not countable.
- * `foundRows` says whether the connection runs with `CLIENT_FOUND_ROWS`; an insert-or-ignore on a
- * client-supplied key cannot tell an insert from a conflict under it, so that FAILS CLOSED.
- */
-export function writtenRowCount(written: WrittenRows | null, lastInsertId: number, affected: number, foundRows: boolean, writeSql: string): number | null {
+/** How many rows the write wrote ({@link WrittenRows}), from its own result — `null` when not countable. */
+export function writtenRowCount(written: WrittenRows | null, lastInsertId: number, affected: number): number | null {
   switch (written) {
     case null:
       return null;
@@ -350,14 +371,6 @@ export function writtenRowCount(written: WrittenRows | null, lastInsertId: numbe
       return affected;
     case 'insertId':
       return lastInsertId !== 0 ? 1 : 0;
-    case 'affectedUnlessFoundRows':
-      if (foundRows) {
-        throw new Error(
-          `scp write(mysql): an insert-or-ignore…RETURNING on a client-supplied key cannot tell an inserted row from a ` +
-            `conflict on a CLIENT_FOUND_ROWS connection (both report 1 affected row), so it cannot name the row it wrote ('${writeSql.slice(0, 60)}…')`,
-        );
-      }
-      return affected;
   }
 }
 

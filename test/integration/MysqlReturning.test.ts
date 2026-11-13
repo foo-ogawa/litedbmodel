@@ -111,27 +111,23 @@ describe('#359 an insert-or-ignore returns only the row it inserted, never the c
     expect(ignoreAutoInc().sql).toContain(';action=ignore*/');
   });
 
-  it('client-supplied key without CLIENT_FOUND_ROWS: a conflict returns nothing; an insert returns its own row', async () => {
-    const noFoundRows = mysql.createPool({ ...MY, connectionLimit: 1, flags: ['-FOUND_ROWS'], ...mysqlDeboxPoolOptions });
-    try {
-      const p = mysqlConnectionPool(noFoundRows);
-      const run = async (sql: string, params: unknown[]) => {
-        const c = await p.acquire();
-        try { return plain((await c.execute(sql, params)) as Record<string, unknown>[]); } finally { await p.release(c); }
-      };
-      await table(clientDdl);
-      await raw.query(`INSERT INTO ${T} (code, owner) VALUES ('X1', 'victim')`);
-      expect(await run(ignoreClient().sql, ['X1', 'mine'])).toEqual([]);
-      expect(await run(ignoreClient().sql, ['X2', 'mine'])).toEqual([{ code: 'X2', owner: 'mine' }]);
-    } finally {
-      await noFoundRows.end();
-    }
-  });
-
-  it('client-supplied key on a CLIENT_FOUND_ROWS connection (mysql2\'s default): fails closed', async () => {
+  // mysql2 opens every connection with CLIENT_FOUND_ROWS (as sqlx does): a no-op conflict and an insert
+  // both report 1 affected row, so the client-keyed insert-or-ignore is decided by its PK lock instead.
+  it('client-supplied key on a CLIENT_FOUND_ROWS connection: an insert returns its row, a conflict returns nothing', async () => {
     await table(clientDdl);
     await raw.query(`INSERT INTO ${T} (code, owner) VALUES ('X1', 'victim')`);
-    await expect(returning(ignoreClient().sql, ['X1', 'mine'])).rejects.toThrow(/CLIENT_FOUND_ROWS/);
+    expect(plain(await returning(ignoreClient().sql, ['X2', 'mine']))).toEqual([{ code: 'X2', owner: 'mine' }]);
+    expect(plain(await returning(ignoreClient().sql, ['X1', 'mine']))).toEqual([]);
+  });
+
+  it('client-supplied key, conflict on another unique key: returns nothing — neither a PK collision nor a conflict-key one', async () => {
+    await table('(id VARCHAR(36) PRIMARY KEY, email VARCHAR(64) NOT NULL, owner VARCHAR(64), UNIQUE KEY uq (email))');
+    await raw.query(`INSERT INTO ${T} (id, email, owner) VALUES ('u-1', 'a@x', 'victim')`);
+    const op = insert({ table: T, 'values.id': { ref: ['i'] }, 'values.email': { ref: ['e'] }, 'values.owner': { ref: ['o'] }, onConflict: 'email', onConflictAction: 'ignore', returning: 'id, email, owner', pk: 'id' });
+    // canonical (sorted) INSERT columns: email, id, owner
+    expect(plain(await returning(op.sql, ['a@x', 'u-2', 'mine']))).toEqual([]); // the conflict key is taken
+    expect(plain(await returning(op.sql, ['b@x', 'u-1', 'mine']))).toEqual([]); // the PK is taken
+    expect(plain(await returning(op.sql, ['b@x', 'u-3', 'mine']))).toEqual([{ id: 'u-3', email: 'b@x', owner: 'mine' }]);
   });
 
   it('batch (INSERT IGNORE) on a client-supplied key: rows it did not insert fail it closed', async () => {

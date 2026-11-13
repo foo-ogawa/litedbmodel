@@ -421,9 +421,6 @@ _PK_HINT_RE = re.compile(r"\s*/\*scp:pk=[^*]*\*/", re.IGNORECASE)
 _PK_HINT_PARSE_RE = re.compile(r"/\*scp:pk=([^;*]*);ai=([^;*]*)", re.IGNORECASE)
 _CONFLICT_HINT_RE = re.compile(r";conflict=([^;*]*)", re.IGNORECASE)
 _IGNORE_HINT_RE = re.compile(r";action=ignore[;*]", re.IGNORECASE)
-# The MySQL CLIENT_FOUND_ROWS capability bit (pymysql.constants.CLIENT.FOUND_ROWS) — read off the
-# connection's own ``client_flag`` without importing the optional driver at module load.
-_CLIENT_FOUND_ROWS = 1 << 1
 # The OK/EOF packet's "a transaction is open" status bit (pymysql.constants.SERVER_STATUS.SERVER_STATUS_IN_TRANS).
 _SERVER_STATUS_IN_TRANS = 1
 
@@ -451,6 +448,12 @@ class _MysqlReselect(NamedTuple):
     lock_binds: List[Tuple[str, int]] = []
     # The key columns ``lock_sql`` reads, in order (the declared PK).
     key_cols: List[str] = []
+    # An insert-or-ignore on a CLIENT-supplied key (mysql-returning.ts ``insertIfAbsent``): ``lock_sql``
+    # reads — and LOCKS — the row its own PK names BEFORE the write. A row there ⇒ it inserts nothing, so
+    # it returns ``[]``; none ⇒ the next-key lock keeps every other session from inserting that PK, so the
+    # row ``select_sql`` finds by it afterwards is the one it inserted. No affected count is read: under
+    # CLIENT_FOUND_ROWS a no-op conflict and an insert both report 1.
+    insert_if_absent: bool = False
 
 
 def _dollar_to_pyformat(sql: str) -> str:
@@ -646,7 +649,15 @@ def _build_mysql_reselect(sql: str):
         # `INSERT IGNORE` reads back pre-existing rows too, so its count check fails it closed.
         if is_batch:
             return json_select(pk_cols, "PK", "affected")
-        return keyed_by_insert_params(pk_cols, "PK", "affectedUnlessFoundRows" if noop_on_conflict else "affected")
+        if noop_on_conflict:
+            # insert-or-ignore on a client-supplied key: lock its PK first (insert_if_absent) — never its
+            # affected count, which CLIENT_FOUND_ROWS makes the same for a conflict and an insert.
+            keyed = keyed_by_insert_params(pk_cols, "PK", None)
+            return keyed._replace(
+                lock_sql=f"SELECT {', '.join(pk_cols)} FROM {table} WHERE {' AND '.join(f'{k} = ?' for k in pk_cols)} FOR UPDATE",
+                lock_binds=keyed.binds, insert_if_absent=True,
+            )
+        return keyed_by_insert_params(pk_cols, "PK", "affected")
 
     # updateMany — by EVERY batch JOIN key column, re-selected from the SAME JSON payload the write bound.
     if wl.startswith("update") and is_batch:
@@ -690,25 +701,18 @@ def _keyed_select_sql(rs: _MysqlReselect, rows: int) -> str:
     return f"{rs.select_sql}({', '.join(tuple_ for _ in range(rows))}) ORDER BY {', '.join(rs.key_cols)}"
 
 
-def _written_row_count(written: Optional[str], last_id: int, affected: int, found_rows: bool, write_sql: str) -> Optional[int]:
+def _written_row_count(written: Optional[str], last_id: int, affected: int) -> Optional[int]:
     """How many rows the write wrote, from its own result (mysql-returning.ts ``writtenRowCount``);
     ``None`` ⇒ not countable.
 
     ``affected`` — the affected count (a plain INSERT / INSERT IGNORE never updates a row, so
     CLIENT_FOUND_ROWS cannot change it); ``insertId`` — an insert-or-ignore on an AUTO_INCREMENT key
-    inserted ⇔ its insert id is not 0; ``affectedUnlessFoundRows`` — the same on a client-supplied key
-    inserted ⇔ 1 affected row, which CLIENT_FOUND_ROWS also reports for a conflict, so it fails closed.
+    inserted ⇔ its insert id is not 0.
     """
     if written is None:
         return None
     if written == "insertId":
         return 1 if last_id != 0 else 0
-    if written == "affectedUnlessFoundRows" and found_rows:
-        raise ValueError(
-            "scp write(mysql): an insert-or-ignore…RETURNING on a client-supplied key cannot tell an inserted row "
-            "from a conflict on a CLIENT_FOUND_ROWS connection (both report 1 affected row), so it cannot name "
-            f"the row it wrote ({write_sql!r})"
-        )
     return affected
 
 
@@ -831,15 +835,20 @@ def _conn_returning(conn: Any, rs: _MysqlReselect, params: Sequence[Any], xform)
         affected = cur.rowcount
         cur.close()
         # The DELETE must have removed exactly the locked pre-image.
-        found_rows = bool(conn.client_flag & _CLIENT_FOUND_ROWS)
-        return _check_recovered(rows, _written_row_count(rs.written, 0, affected, found_rows, rs.write_sql), rs.write_sql)
+        return _check_recovered(rows, _written_row_count(rs.written, 0, affected), rs.write_sql)
     if rs.lock_sql:
-        # UPDATE…RETURNING: lock the rows its WHERE names and read their keys, write, then recover the
-        # written rows by THOSE keys (never by the WHERE re-evaluated after the write).
         keys = _conn_select(conn, xform(rs.lock_sql), _bind_reselect(rs.lock_binds, list(params), 0, 0))
         cur = conn.cursor()
         cur.execute(xform(rs.write_sql), tuple(params))
         cur.close()
+        if rs.insert_if_absent:
+            # insert-or-ignore on a client-supplied key: its PK was already there ⇒ it inserted nothing;
+            # else the row that PK names now is the one it inserted (the lock kept every other session out).
+            if keys:
+                return []
+            return _conn_select(conn, xform(rs.select_sql), _bind_reselect(rs.binds, list(params), 0, 0))
+        # UPDATE…RETURNING: recover the written rows by the keys locked BEFORE the write (never by the
+        # WHERE re-evaluated after it).
         if not keys:
             return []
         key_values = [k[c] for k in keys for c in rs.key_cols]
@@ -853,9 +862,7 @@ def _conn_returning(conn: Any, rs: _MysqlReselect, params: Sequence[Any], xform)
     affected = cur.rowcount
     cur.close()
     # A write that wrote no row (an insert-or-ignore that hit a conflict) returns nothing.
-    # PyMySQL's client_flag is the capability set the connection was opened with.
-    found_rows = bool(conn.client_flag & _CLIENT_FOUND_ROWS)
-    written = _written_row_count(rs.written, last_id, affected, found_rows, rs.write_sql)
+    written = _written_row_count(rs.written, last_id, affected)
     if written == 0:
         return []
     rows = _conn_select(conn, xform(rs.select_sql), _bind_reselect(rs.binds, list(params), last_id, affected))

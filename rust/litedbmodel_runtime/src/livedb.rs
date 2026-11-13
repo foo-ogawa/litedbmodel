@@ -1216,32 +1216,18 @@ enum WrittenRows {
     /// An insert-or-ignore (`ON DUPLICATE KEY UPDATE c = c`) on an AUTO_INCREMENT key: inserted ⇔ the
     /// insert id is not 0 (a conflict that wrote nothing reports 0).
     InsertId,
-    /// The same insert-or-ignore on a CLIENT-supplied key: inserted ⇔ 1 affected row — which holds only
-    /// WITHOUT CLIENT_FOUND_ROWS (with it a conflict also counts 1).
-    AffectedUnlessFoundRows,
 }
 
 /// How many rows the write wrote, from its own result (mysql-returning.ts `writtenRowCount`); `None` ⇒
-/// not countable. An insert-or-ignore on a client-supplied key cannot tell an insert from a conflict
-/// under CLIENT_FOUND_ROWS, so that FAILS CLOSED — and sqlx opens EVERY MySQL connection with
-/// CLIENT_FOUND_ROWS (sqlx-mysql 0.8 `connection/stream.rs` `MySqlStream::with_socket`: the capability
-/// set is fixed, not configurable), so on this port it always does.
-fn written_row_count(
-    written: Option<WrittenRows>,
-    last_id: i64,
-    affected: i64,
-    write_sql: &str,
-) -> Result<Option<i64>, SqlFailure> {
-    Ok(match written {
+/// not countable. (The same insert-or-ignore on a CLIENT-supplied key is decided by its PK lock —
+/// [`MysqlReselect::insert_if_absent`] — never by its affected count: sqlx opens EVERY MySQL connection
+/// with CLIENT_FOUND_ROWS, under which a no-op conflict and an insert both report 1.)
+fn written_row_count(written: Option<WrittenRows>, last_id: i64, affected: i64) -> Option<i64> {
+    match written {
         None => None,
         Some(WrittenRows::Affected) => Some(affected),
         Some(WrittenRows::InsertId) => Some(if last_id != 0 { 1 } else { 0 }),
-        Some(WrittenRows::AffectedUnlessFoundRows) => {
-            return Err(driver_failure(format!(
-                "scp write(mysql): an insert-or-ignore…RETURNING on a client-supplied key cannot tell an inserted row from a conflict on a CLIENT_FOUND_ROWS connection (both report 1 affected row), so it cannot name the row it wrote ('{write_sql}')"
-            )));
-        }
-    })
+    }
 }
 
 /// Fail closed when the recovered row count differs from the count the write wrote: the SELECT then
@@ -1283,6 +1269,12 @@ struct MysqlReselect {
     lock_binds: Vec<ReselectBind>,
     /// The key columns `lock_sql` reads, in order (the declared PK).
     key_cols: Vec<String>,
+    /// An insert-or-ignore on a CLIENT-supplied key (mysql-returning.ts `insertIfAbsent`): `lock_sql`
+    /// reads — and LOCKS — the row its own PK names BEFORE the write. A row there ⇒ it inserts nothing,
+    /// so it returns no rows; none ⇒ the next-key lock keeps every other session from inserting that PK,
+    /// so the row `select_sql` finds by it afterwards is the one it inserted. No affected count is read:
+    /// under CLIENT_FOUND_ROWS a no-op conflict and an insert both report 1.
+    insert_if_absent: bool,
     /// Run the SELECT BEFORE the write instead of after. Only a DELETE needs this: its rows are gone
     /// once it has run, so the pre-image IS the written row set (the rows the DELETE removes).
     before: bool,
@@ -1532,20 +1524,31 @@ fn build_mysql_reselect(sql: &str) -> Result<Option<MysqlReselect>, SqlFailure> 
         // createMany with a CLIENT-supplied key: the statement binds ONE JSON payload, not one param
         // per key, so the key tuples are read back out of that SAME payload (as upsertMany does). A
         // batch `INSERT IGNORE` reads back pre-existing rows too, so its count check fails it closed.
-        let (plan, written) = if is_batch {
-            (json_select(&pk_cols, "PK")?, WrittenRows::Affected)
-        } else if noop_on_conflict {
-            (
-                keyed_by_insert_params(&pk_cols, "PK")?,
-                WrittenRows::AffectedUnlessFoundRows,
-            )
-        } else {
-            (
-                keyed_by_insert_params(&pk_cols, "PK")?,
-                WrittenRows::Affected,
-            )
-        };
-        return after(write_sql, plan, Some(written));
+        if is_batch {
+            let plan = json_select(&pk_cols, "PK")?;
+            return after(write_sql, plan, Some(WrittenRows::Affected));
+        }
+        if noop_on_conflict {
+            // insert-or-ignore on a client-supplied key: lock its PK first (insert_if_absent) — never
+            // its affected count, which CLIENT_FOUND_ROWS makes the same for a conflict and an insert.
+            let (select_sql, binds) = keyed_by_insert_params(&pk_cols, "PK")?;
+            let conds: Vec<String> = pk_cols.iter().map(|k| format!("{k} = ?")).collect();
+            return Ok(Some(MysqlReselect {
+                write_sql,
+                select_sql,
+                lock_sql: format!(
+                    "SELECT {} FROM {table} WHERE {} FOR UPDATE",
+                    pk_cols.join(", "),
+                    conds.join(" AND ")
+                ),
+                lock_binds: binds.clone(),
+                binds,
+                insert_if_absent: true,
+                ..MysqlReselect::default()
+            }));
+        }
+        let plan = keyed_by_insert_params(&pk_cols, "PK")?;
+        return after(write_sql, plan, Some(WrittenRows::Affected));
     }
 
     // updateMany — recover by EVERY batch JOIN key column, re-selected from the SAME JSON payload the
@@ -1753,14 +1756,11 @@ async fn my_returning_on_conn(
             .await
             .map_err(|e| driver_failure(format!("mysql write [{}]: {e}", rs.write_sql)))?;
         // The DELETE must have removed exactly the locked pre-image.
-        let written =
-            written_row_count(rs.written, 0, deleted.rows_affected() as i64, &rs.write_sql)?;
+        let written = written_row_count(rs.written, 0, deleted.rows_affected() as i64);
         check_recovered(out.len(), written, &rs.write_sql)?;
         return Ok(out);
     }
     if !rs.lock_sql.is_empty() {
-        // UPDATE…RETURNING: lock the rows its WHERE names and read their keys, write, then recover the
-        // written rows by THOSE keys (never by the WHERE re-evaluated after the write).
         let lock_params: Vec<Value> = rs
             .lock_binds
             .iter()
@@ -1778,6 +1778,21 @@ async fn my_returning_on_conn(
             .execute(&mut *conn)
             .await
             .map_err(|e| driver_failure(format!("mysql write [{}]: {e}", rs.write_sql)))?;
+        if rs.insert_if_absent {
+            // insert-or-ignore on a client-supplied key: its PK was already there ⇒ it inserted
+            // nothing; else the row that PK names now is the one it inserted (the lock kept every other
+            // session out). Its select binds ARE its lock binds (the PK's INSERT params).
+            if !keys.is_empty() {
+                return Ok(Vec::new());
+            }
+            let rows = bind_my(sqlx::query(&rs.select_sql), &lock_params)?
+                .fetch_all(&mut *conn)
+                .await
+                .map_err(|e| driver_failure(format!("mysql re-select [{}]: {e}", rs.select_sql)))?;
+            return my_rows_to_wire(&rows);
+        }
+        // UPDATE…RETURNING: recover the written rows by the keys locked BEFORE the write (never by the
+        // WHERE re-evaluated after it).
         if keys.is_empty() {
             return Ok(Vec::new());
         }
@@ -1816,7 +1831,7 @@ async fn my_returning_on_conn(
     let last_id = exec_res.last_insert_id() as i64;
     let affected = exec_res.rows_affected() as i64;
     // A write that wrote no row (an insert-or-ignore that hit a conflict) returns nothing.
-    let written = written_row_count(rs.written, last_id, affected, &rs.write_sql)?;
+    let written = written_row_count(rs.written, last_id, affected);
     if written == Some(0) {
         return Ok(Vec::new());
     }

@@ -80,30 +80,39 @@ def test_mysql_returning_insert_ignore(driver):
     assert _rows(driver, ignore_auto_inc, ["a@x", "mine"]) == []
     assert _rows(driver, ignore_auto_inc, ["b@x", "mine"]) == [{"email": "b@x", "name": "mine"}]
 
-    # Client-supplied key without CLIENT_FOUND_ROWS (PyMySQL's default): inserted ⇔ 1 affected row.
-    client_ddl = "(code VARCHAR(16) PRIMARY KEY, owner VARCHAR(64))"
-    victim = f"INSERT INTO {TBL} (code, owner) VALUES ('X1', 'victim')"
-    ignore_client = f"INSERT INTO {TBL} (code, owner) VALUES (?, ?) ON DUPLICATE KEY UPDATE code = code RETURNING code, owner /*scp:pk=code;ai=;conflict=code;action=ignore*/"
-    _table(driver, client_ddl, victim)
-    assert _rows(driver, ignore_client, ["X1", "mine"]) == []
-    assert _rows(driver, ignore_client, ["X2", "mine"]) == [{"code": "X2", "owner": "mine"}]
-
-    # …and with CLIENT_FOUND_ROWS a conflict and an insert both report 1 affected row: fail closed.
+    # Client-supplied key: decided by its PK lock, never by the affected count — so the same on a
+    # connection with CLIENT_FOUND_ROWS (a no-op conflict and an insert both report 1) as without it.
     import pymysql
     from pymysql.constants import CLIENT
     from litedbmodel_runtime.driver import _conn_all, _qmark_to_pyformat
 
-    _table(driver, client_ddl, victim)
-    conn = pymysql.connect(
+    client_ddl = "(code VARCHAR(16) PRIMARY KEY, owner VARCHAR(64))"
+    victim = f"INSERT INTO {TBL} (code, owner) VALUES ('X1', 'victim')"
+    ignore_client = f"INSERT INTO {TBL} (code, owner) VALUES (?, ?) ON DUPLICATE KEY UPDATE code = code RETURNING code, owner /*scp:pk=code;ai=;conflict=code;action=ignore*/"
+    unique_ddl = "(id VARCHAR(36) PRIMARY KEY, email VARCHAR(64) NOT NULL, owner VARCHAR(64), UNIQUE KEY uq (email))"
+    unique_victim = f"INSERT INTO {TBL} (id, email, owner) VALUES ('u-1', 'a@x', 'victim')"
+    ignore_unique = f"INSERT INTO {TBL} (email, id, owner) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE email = email RETURNING id, email, owner /*scp:pk=id;ai=;conflict=email;action=ignore*/"
+    found_rows = pymysql.connect(
         host=os.environ.get("TEST_MYSQL_HOST", "127.0.0.1"), port=int(os.environ.get("TEST_MYSQL_PORT", "3307")),
         user=os.environ.get("TEST_MYSQL_USER", "testuser"), password=os.environ.get("TEST_MYSQL_PASSWORD", "testpass"),
         database=os.environ.get("TEST_MYSQL_DB", "testdb"), autocommit=True, client_flag=CLIENT.FOUND_ROWS,
     )
+    runs = {
+        "default": lambda sql, params: _rows(driver, sql, params),
+        "client_found_rows": lambda sql, params: _conn_all(found_rows, sql, params, _qmark_to_pyformat, True),
+    }
     try:
-        with pytest.raises(ValueError, match="CLIENT_FOUND_ROWS"):
-            _conn_all(conn, ignore_client, ["X1", "mine"], _qmark_to_pyformat, True)
+        for name, run in runs.items():
+            _table(driver, client_ddl, victim)
+            assert run(ignore_client, ["X2", "mine"]) == [{"code": "X2", "owner": "mine"}], name
+            assert run(ignore_client, ["X1", "mine"]) == [], name
+            # A conflict on another unique key — the conflict key taken, or the PK taken — returns nothing.
+            _table(driver, unique_ddl, unique_victim)
+            assert run(ignore_unique, ["a@x", "u-2", "mine"]) == [], name
+            assert run(ignore_unique, ["b@x", "u-1", "mine"]) == [], name
+            assert run(ignore_unique, ["b@x", "u-3", "mine"]) == [{"id": "u-3", "email": "b@x", "owner": "mine"}], name
     finally:
-        conn.close()
+        found_rows.close()
 
     # Batch (INSERT IGNORE) on a client-supplied key: the pre-existing row read back fails it closed.
     _table(driver, client_ddl, victim)
