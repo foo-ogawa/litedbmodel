@@ -1195,6 +1195,32 @@ export abstract class DBModel {
     return { key: pkeyCols, values };
   }
 
+  /**
+   * For a driver without RETURNING (MySQL): read AND LOCK (`FOR UPDATE`, on the transaction's connection)
+   * the PKs of the rows `conditions` names, and return the condition naming exactly those rows. The write
+   * runs on that condition, so the PKs reported are the rows it wrote. An unlocked pre-select reported a row
+   * that a concurrent request changed or deleted first: both requests were told they wrote it (#361 / #362).
+   * @internal
+   */
+  private static async _lockPkeysForWrite(
+    conditions: ConditionObject,
+    pkeyColumnNames: string[],
+    operation: 'UPDATE' | 'DELETE'
+  ): Promise<{ rows: Record<string, unknown>[]; locked: ConditionObject }> {
+    const selectParams: unknown[] = [];
+    const whereClause = normalizeConditions(conditions).compile(selectParams);
+    if (!whereClause) {
+      throw new Error(`${operation} requires conditions`);
+    }
+    const tableName = this.getUpdateTableName();
+    const selectSql = `SELECT DISTINCT ${pkeyColumnNames.join(', ')} FROM ${tableName} WHERE ${whereClause} FOR UPDATE`;
+    const rows = (await this.execute(selectSql, selectParams)).rows as Record<string, unknown>[];
+    const locked: ConditionObject = pkeyColumnNames.length === 1
+      ? { [pkeyColumnNames[0]]: rows.map(row => row[pkeyColumnNames[0]]) }
+      : { __or__: rows.map(row => Object.fromEntries(pkeyColumnNames.map(col => [col, row[col]]))) };
+    return { rows, locked };
+  }
+
   // ============================================
   // Static Convenience Values
   // ============================================
@@ -2427,26 +2453,12 @@ export abstract class DBModel {
       const sqlBuilder = getSqlBuilder(driverType);
       
       if (!sqlBuilder.supportsReturning) {
-        // Driver without native RETURNING: Pre-SELECT to get PKs
-        const selectParams: unknown[] = [];
-        const normalizedCond = normalizeConditions(conditionRecord);
-        const whereClause = normalizedCond.compile(selectParams);
-        
-        if (!whereClause) {
-          throw new Error('UPDATE requires conditions');
+        // Driver without native RETURNING: lock the rows' PKs, then UPDATE (without RETURNING) exactly those rows
+        const { rows, locked } = await this._lockPkeysForWrite(conditionRecord, pkeyColumnNames, 'UPDATE');
+        if (rows.length > 0) {
+          await this._update(locked, valueRecord, {});
         }
-        
-        const tableName = this.getUpdateTableName();
-        const selectSql = `SELECT DISTINCT ${pkeyColumnNames.join(', ')} FROM ${tableName} WHERE ${whereClause}`;
-        
-        // Execute SELECT first
-        const selectResult = await this.execute(selectSql, selectParams);
-        const pkeyValues = selectResult.rows as Record<string, unknown>[];
-        
-        // Then execute UPDATE (without RETURNING)
-        await this._update(conditionRecord, valueRecord, {});
-        
-        return this._buildPkeyResult(pkeyValues, pkeyColumns);
+        return this._buildPkeyResult(rows, pkeyColumns);
       } else {
         // PostgreSQL/SQLite: Use RETURNING clause
         const updateOpts = { returning: pkeyColumnNames.join(', ') };
@@ -2497,26 +2509,12 @@ export abstract class DBModel {
       const sqlBuilder = getSqlBuilder(driverType);
       
       if (!sqlBuilder.supportsReturning) {
-        // Driver without native RETURNING: Pre-SELECT to get PKs
-        const selectParams: unknown[] = [];
-        const normalizedCond = normalizeConditions(conditionRecord);
-        const whereClause = normalizedCond.compile(selectParams);
-        
-        if (!whereClause) {
-          throw new Error('DELETE requires conditions');
+        // Driver without native RETURNING: lock the rows' PKs, then DELETE (without RETURNING) exactly those rows
+        const { rows, locked } = await this._lockPkeysForWrite(conditionRecord, pkeyColumnNames, 'DELETE');
+        if (rows.length > 0) {
+          await this._delete(locked, {});
         }
-        
-        const tableName = this.getUpdateTableName();
-        const selectSql = `SELECT DISTINCT ${pkeyColumnNames.join(', ')} FROM ${tableName} WHERE ${whereClause}`;
-        
-        // Execute SELECT first
-        const selectResult = await this.execute(selectSql, selectParams);
-        const pkeyValues = selectResult.rows as Record<string, unknown>[];
-        
-        // Then execute DELETE (without RETURNING)
-        await this._delete(conditionRecord, {});
-        
-        return this._buildPkeyResult(pkeyValues, pkeyColumns);
+        return this._buildPkeyResult(rows, pkeyColumns);
       } else {
         // PostgreSQL/SQLite: Use RETURNING clause
         const deleteOpts = { returning: pkeyColumnNames.join(', ') };

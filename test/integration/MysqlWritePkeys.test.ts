@@ -30,6 +30,27 @@ class AccountModel extends Base {
 }
 const Account = AccountModel.asModel();
 
+const COUPONS = `mwp_coupons_${process.pid}`;
+
+@model(COUPONS)
+class CouponModel extends Base {
+  @column({ primaryKey: true }) id?: number;
+  @column() status?: string;
+}
+const Coupon = CouponModel.asModel();
+
+const SEATS = `mwp_seats_${process.pid}`;
+
+@model(SEATS)
+class SeatModel extends Base {
+  @column({ primaryKey: true }) hall?: number;
+  @column({ primaryKey: true }) seat?: number;
+  @column() status?: string;
+}
+const Seat = SeatModel.asModel();
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 describe.skipIf(skipIntegrationTests)('MySQL write PKs (live)', () => {
   beforeAll(async () => {
     await Base.transaction(async () => {
@@ -37,6 +58,10 @@ describe.skipIf(skipIntegrationTests)('MySQL write PKs (live)', () => {
       await Base.execute(`CREATE TABLE ${POSTS} (id INT AUTO_INCREMENT PRIMARY KEY, user_id INT NOT NULL, title VARCHAR(50) NOT NULL, content VARCHAR(50) NOT NULL)`);
       await Base.execute(`DROP TABLE IF EXISTS ${ACCOUNTS}`);
       await Base.execute(`CREATE TABLE ${ACCOUNTS} (id INT AUTO_INCREMENT PRIMARY KEY, tenant_id INT NOT NULL, email VARCHAR(100) NOT NULL UNIQUE, name VARCHAR(50) NOT NULL)`);
+      await Base.execute(`DROP TABLE IF EXISTS ${COUPONS}`);
+      await Base.execute(`CREATE TABLE ${COUPONS} (id INT AUTO_INCREMENT PRIMARY KEY, status VARCHAR(20) NOT NULL)`);
+      await Base.execute(`DROP TABLE IF EXISTS ${SEATS}`);
+      await Base.execute(`CREATE TABLE ${SEATS} (hall INT NOT NULL, seat INT NOT NULL, status VARCHAR(20) NOT NULL, PRIMARY KEY (hall, seat))`);
     });
   });
 
@@ -44,6 +69,70 @@ describe.skipIf(skipIntegrationTests)('MySQL write PKs (live)', () => {
     await Base.transaction(async () => {
       await Base.execute(`DROP TABLE IF EXISTS ${POSTS}`);
       await Base.execute(`DROP TABLE IF EXISTS ${ACCOUNTS}`);
+      await Base.execute(`DROP TABLE IF EXISTS ${COUPONS}`);
+      await Base.execute(`DROP TABLE IF EXISTS ${SEATS}`);
+    });
+  });
+
+  /**
+   * Two requests claim the same row at once. The first holds its write until the second has started; only
+   * one of them may be told it wrote the row (#361 / #362) — as PostgreSQL's native RETURNING answers.
+   */
+  describe('update / delete returning under a concurrent claim of the same row (#361 / #362)', () => {
+    async function seedCoupon(): Promise<number> {
+      return Base.transaction(async () => {
+        const r = await Coupon.create([[Coupon.status, 'open']], { returning: true });
+        return Number(r!.values[0][0]);
+      });
+    }
+
+    async function race<R>(claim: () => Promise<R>): Promise<[R, R]> {
+      let releaseFirst!: () => void;
+      const gate = new Promise<void>((r) => { releaseFirst = r; });
+      let firstWrote!: () => void;
+      const wrote = new Promise<void>((r) => { firstWrote = r; });
+      const first = Base.transaction(async () => {
+        const r = await claim();
+        firstWrote();
+        await gate;
+        return r;
+      }, { retryOnError: false });
+      await wrote;
+      const second = Base.transaction(claim, { retryOnError: false });
+      await sleep(300); // the second request is now waiting on the first one's row lock
+      releaseFirst();
+      return Promise.all([first, second]);
+    }
+
+    it('update: only the request that changed the row gets its PK', async () => {
+      const id = await seedCoupon();
+      const [a, b] = await race(() =>
+        Coupon.update([[Coupon.id, id], [Coupon.status, 'open']], [[Coupon.status, 'used']], { returning: true }),
+      );
+      expect(a!.values).toEqual([[id]]);
+      expect(b!.values).toEqual([]);
+    });
+
+    it('composite PK: update / delete write exactly the locked rows and report their PKs', async () => {
+      await Base.transaction(async () => {
+        await Base.execute(`DELETE FROM ${SEATS}`);
+        await Base.execute(`INSERT INTO ${SEATS} (hall, seat, status) VALUES (1, 1, 'open'), (1, 2, 'open'), (2, 1, 'open'), (2, 2, 'held')`);
+      });
+      const updated = await Base.transaction(() =>
+        Seat.update([[Seat.status, 'open'], [Seat.seat, 1]], [[Seat.status, 'sold']], { returning: true }),
+      );
+      expect(updated!.values.map((v) => v.join(':')).sort()).toEqual(['1:1', '2:1']);
+      const deleted = await Base.transaction(() => Seat.delete([[Seat.status, 'sold']], { returning: true }));
+      expect(deleted!.values.map((v) => v.join(':')).sort()).toEqual(['1:1', '2:1']);
+      const left = (await Seat.find([], { order: 'hall, seat' })).map((r) => `${r.hall}:${r.seat}:${r.status}`);
+      expect(left).toEqual(['1:2:open', '2:2:held']);
+    });
+
+    it('delete: only the request that deleted the row gets its PK', async () => {
+      const id = await seedCoupon();
+      const [a, b] = await race(() => Coupon.delete([[Coupon.id, id]], { returning: true }));
+      expect(a!.values).toEqual([[id]]);
+      expect(b!.values).toEqual([]);
     });
   });
 
