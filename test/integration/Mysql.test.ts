@@ -462,6 +462,45 @@ describe('MySQL Driver', () => {
     });
   });
 
+  describe('updateMany returning with composite keyColumns (#375)', () => {
+    it('returns only the PKs of the key tuples it updated, not the cross product of key values', async () => {
+      const ids = await DBModel.transaction(async () => {
+        const u = await UserModel.createMany(
+          [
+            [[UserModel.name, 'K1'], [UserModel.email, 'k1@example.com']],
+            [[UserModel.name, 'K2'], [UserModel.email, 'k2@example.com']],
+          ],
+          { returning: true },
+        );
+        const [u1, u2] = u!.values.map((v) => Number(v[0]));
+        const p = await PostModel.createMany(
+          [
+            [[PostModel.user_id, u1], [PostModel.title, 'a'], [PostModel.content, '-']],
+            [[PostModel.user_id, u1], [PostModel.title, 'b'], [PostModel.content, '-']],
+            [[PostModel.user_id, u2], [PostModel.title, 'a'], [PostModel.content, '-']],
+            [[PostModel.user_id, u2], [PostModel.title, 'b'], [PostModel.content, '-']],
+          ],
+          { returning: true },
+        );
+        return { u1, u2, posts: p!.values.map((v) => Number(v[0])) };
+      });
+
+      const result = await DBModel.transaction(() =>
+        PostModel.updateMany(
+          [
+            [[PostModel.user_id, ids.u1], [PostModel.title, 'a'], [PostModel.content, 'X']],
+            [[PostModel.user_id, ids.u2], [PostModel.title, 'b'], [PostModel.content, 'Y']],
+          ],
+          { keyColumns: [PostModel.user_id, PostModel.title], returning: true },
+        ),
+      );
+
+      const changed = (await PostModel.find([[PostModel.content, ['X', 'Y']]])).map((p) => p.id).sort();
+      expect(changed).toEqual([ids.posts[0], ids.posts[3]]);
+      expect(result!.values.map((v) => Number(v[0])).sort()).toEqual(changed);
+    });
+  });
+
   describe('ON CONFLICT (UPSERT)', () => {
     it('should handle ON DUPLICATE KEY IGNORE', async () => {
       // Create initial user
