@@ -613,23 +613,34 @@ def _bind_reselect(binds, params, last_id, affected):
 
 
 def _scalar(v: Any) -> Any:
-    """Coerce a driver cell to a canonical bc scalar (int/float/bool/str/None).
+    """Coerce a driver cell to a canonical bc scalar (int/float/bool/str/None) WITHOUT losing its value.
 
     psycopg maps a PG ``uuid`` column to a Python ``uuid.UUID`` and other rich types (Decimal,
     date/datetime) to their own classes. The conformance row encoding — and the cross-language
     reference — are JSON scalars, so a non-native cell is stringified to its canonical text form,
     exactly as SQLite/MySQL return a uuid-as-text or the Rust PG driver falls back to ``String``.
     Native scalars pass through unchanged (bool before int, since ``bool`` is an ``int`` subclass).
+
+    The mapping is INJECTIVE: two different DB values never become one runtime value, because a cell is
+    a relation key (``pluck`` / ``group``) and a write key as often as it is a payload (#363).
+
+      - ``Decimal`` (every NUMERIC/DECIMAL column and numeric aggregate): an integral finite value is
+        the exact ``int``; any other is its exact decimal text — the DECIMAL/NUMERIC ``string`` outType
+        (``src/scp/coltype.ts``). Never through ``float``: 9007199254740993 rounds to …992 there.
+      - ``bytes``: decoded STRICTLY, so an invalid UTF-8 cell fails closed (``UnicodeDecodeError``)
+        instead of collapsing onto another value through U+FFFD — as the Rust readers' ``String``
+        decode fails on it.
     """
     if v is None or isinstance(v, (bool, int, float, str)):
         return v
     from decimal import Decimal
 
     if isinstance(v, Decimal):
-        f = float(v)
-        return int(f) if f.is_integer() else f
+        if v.is_finite() and v == v.to_integral_value():
+            return int(v)
+        return format(v, "f")
     if isinstance(v, (bytes, bytearray)):
-        return bytes(v).decode("utf-8", "replace")
+        return bytes(v).decode("utf-8")
     return str(v)
 
 
