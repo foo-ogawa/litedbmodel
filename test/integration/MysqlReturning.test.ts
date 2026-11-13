@@ -10,6 +10,7 @@ import 'reflect-metadata';
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import mysql from 'mysql2/promise';
 import { DBModel, Middleware, model, column, closeAllPools } from '../../src';
+import type { ColumnsOf } from '../../src';
 import { mysqlConfig } from '../helpers/setup';
 import { compileWriteNode } from '../../src/scp/makesql/tx';
 import { compileCreateManyBundle, compileUpdateManyBundle } from '../../src/scp/write-bundle';
@@ -229,10 +230,11 @@ describe('#360 a bulk INSERT…RETURNING returns its own rows, not the ids anoth
 });
 
 @model(JOBS)
-class Job extends DBModel {
+class JobModel extends DBModel {
   @column.number({ primaryKey: true }) id?: number;
   @column.text() state?: string;
 }
+const Job = JobModel as typeof JobModel & ColumnsOf<JobModel>;
 
 describe('#361 an UPDATE…RETURNING returns the rows it updated, keyed before the write', () => {
   const jobs = async (...seed: [number, string][]) => {
@@ -332,12 +334,13 @@ describe('#362 a DELETE…RETURNING returns only the rows it deleted', () => {
 });
 
 @model(ACCTS)
-class Acct extends DBModel {
+class AcctModel extends DBModel {
   @column.number({ primaryKey: true, autoIncrement: true }) id?: number;
   @column.text() email?: string;
   @column.number() tenant_id?: number;
   @column.text() name?: string;
 }
+const Acct = AcctModel as typeof AcctModel & ColumnsOf<AcctModel>;
 
 /**
  * A registered v1 middleware routes DBModel through the v1 MySQL driver (`src/drivers/mysql.ts`) — the

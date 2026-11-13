@@ -109,7 +109,7 @@ describe.each([
   },
 ])('$name execute retry', ({ make, fakePool, ok, connectionError, syntaxError }) => {
   const STMT = 'SELECT * FROM users WHERE id = ?';
-  const sent = (query: ReturnType<typeof vi.fn>) => sentSql(query).map((s) => s.replace('$1', '?'));
+  const sent = (query: Parameters<typeof sentSql>[0]) => sentSql(query).map((s) => s.replace('$1', '?'));
 
   it('after a connection error, probes a connection with SELECT 1 and re-sends the statement on it', async () => {
     const mockRows = [{ id: 1 }];
