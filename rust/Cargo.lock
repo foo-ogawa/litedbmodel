@@ -75,9 +75,9 @@ checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
 name = "behavior-contracts"
-version = "0.11.20"
+version = "0.11.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e9af57934bd54d26effa7a67f54febbd42ae84ce444647918a5557763cd01f35"
+checksum = "89b4ff787c16d0f4065623cd52fbd3abd407558c0901972a8fdce9f03c7955d9"
 
 [[package]]
 name = "bitflags"

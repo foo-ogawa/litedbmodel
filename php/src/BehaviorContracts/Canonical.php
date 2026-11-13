@@ -52,7 +52,10 @@ final class Canonical
     public static function pyFloatRepr(float $n): string
     {
         if (is_nan($n) || is_infinite($n)) {
-            CanonicalFailure::raise('NAN_OR_INF', "non-finite float cannot be serialized: {$n}");
+            // 値表記は明示する: NAN の暗黙文字列化は PHP 8.5 で warning になり、warning を例外化する
+            // ハンドラ下では CanonicalFailure が ErrorException に化ける（#323）。表記は 8.1 の文字列化と同一。
+            $shown = is_nan($n) ? 'NAN' : ($n > 0 ? 'INF' : '-INF');
+            CanonicalFailure::raise('NAN_OR_INF', "non-finite float cannot be serialized: {$shown}");
         }
         if ($n === 0.0) {
             return self::isNegativeZero($n) ? '-0.0' : '0.0';

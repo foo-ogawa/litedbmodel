@@ -96,6 +96,10 @@ final class Behavior
         $nodeExprs = $prep->nodeExprs;
         $declaredPorts = $prep->inputPorts;
 
+        // 宣言 port だけを束縛する。呼び出し側の未宣言キーを束縛すると flat scope でノード id（builder が
+        // input port との衝突を拒否している名前）を覆え、実行中まだ results に無いノード（skip 等）への参照が
+        // 呼び出し側の値に解決されて leaf のポートへ注入される（#322）。
+        $input = array_intersect_key($input, $declaredPorts === null ? [] : get_object_vars($declaredPorts));
         // 省略された opt input port（`required:false`）を null に束縛する。どの port が省略可かは宣言
         // （=IR）で決まっているので {@see PreparedComponent} が解決済み。ここは値の束縛だけ。
         foreach ($prep->optionalPorts as $portName) {
@@ -231,7 +235,7 @@ final class Behavior
 
                 // into（v2）: over と同じ長さ・順序の augment 済みリスト。guard-skip 要素は無変更で
                 // pass through するが、connection 型 into（#182）は空 connection（Plan::unproducedValue）
-                // で埋める＝writeUnproduced の whole-node skip と同一 SSoT。
+                // で埋める＝bindUnproduced の whole-node skip と同一 SSoT。
                 $into = (string) $m['into'];
                 $nodeRK = self::nodeRelationKind($node);
                 $augmented = [];
@@ -332,14 +336,13 @@ final class Behavior
             return $outcome;
         };
 
-        $run = Plan::runPlan($prep->planSpec, $ops, $wrappedExec);
-
-        // Skip されたノードは未生成表現を results に載せる（output の ref が読めるように）。
-        foreach ($run['states'] as $i => $s) {
-            if ($s !== null && ($s['status'] ?? null) === 'skipped') {
-                $results[$ops[$i]['id']] = Plan::unproducedValue(self::nodeRelationKind($body[$i]));
-            }
-        }
+        // Skip されたノードは skip の**その時点**で未生成表現を results に載せる（親以外の依存として
+        // このノードを読む後続ノードと output の ref が、同じ未生成値を読む — scp-error.md
+        // 「Dependency rules for continue」）。
+        $bindUnproduced = static function (array $op) use (&$results): void {
+            $results[$op['id']] = Plan::unproducedValue($op['relationKind'] ?? null);
+        };
+        Plan::runPlan($prep->planSpec, $ops, $wrappedExec, $bindUnproduced);
 
         // output（Φ 合流）を Expression IR として評価。
         return ($prep->output)($baseScope());
@@ -444,7 +447,10 @@ final class Behavior
                 $items[] = $body; // drop:none で dangling を保持
                 continue;
             }
-            $seenKey = is_string($keyVal) ? ('s:' . $keyVal) : ('j:' . json_encode($keyVal));
+            // Non-string key identity = the canonical-identity SSoT (Canonical::canonicalJson: injective over
+            // the value model, int != float, keys sorted at every depth, NaN/Inf fail closed) — not
+            // json_encode, which drops the zero fraction and turns every unencodable value into 'j:' (#318).
+            $seenKey = is_string($keyVal) ? ('s:' . $keyVal) : ('j:' . Canonical::canonicalJson($keyVal));
             if (array_key_exists($seenKey, $seen)) {
                 continue;
             }
@@ -981,6 +987,11 @@ final class Behavior
                 $k = '';
                 try {
                     foreach (get_object_vars($v) as $k => $mv) {
+                        // map keys are arbitrary leaf strings: "__proto__" fails closed exactly as on every
+                        // other object-building path, in every language (#319).
+                        if ($k === FORBIDDEN_OBJECT_KEY) {
+                            ExprFailure::raise('FORBIDDEN_KEY', 'object key "' . FORBIDDEN_OBJECT_KEY . '" is forbidden (fail-closed)');
+                        }
                         $out->{$k} = $val($mv);
                     }
                 } catch (ConformPending $e) {
