@@ -1,8 +1,4 @@
-[**litedbmodel v2.2.14**](../README.md)
-
-***
-
-[litedbmodel](../globals.md) / CreatedMiddlewareClass
+[API](../README.md) / CreatedMiddlewareClass
 
 # Interface: CreatedMiddlewareClass\<S\>
 
@@ -15,23 +11,19 @@ Provides typed access to state via getCurrentContext().
 
 | Type Parameter | Description |
 | ------ | ------ |
-| `S` *extends* `object` | The state object type |
+| `S extends object` | The state object type |
 
 ## Constructors
 
-### Constructor
+### constructor
 
 ```ts
-new CreatedMiddlewareClass(): Middleware & S;
+new CreatedMiddlewareClass(): CreatedMiddlewareClass;
 ```
 
 Defined in: [Middleware.ts:449](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Middleware.ts#L449)
 
 Constructor
-
-#### Returns
-
-[`Middleware`](../classes/Middleware.md) & `S`
 
 ## Methods
 
@@ -71,7 +63,7 @@ Run a function with a fresh middleware context
 
 | Parameter | Type |
 | ------ | ------ |
-| `fn` | () => `R` |
+| `fn` | `() => R` |
 
 #### Returns
 
@@ -108,3 +100,4 @@ Clear the current context (useful for testing)
 #### Returns
 
 `void`
+

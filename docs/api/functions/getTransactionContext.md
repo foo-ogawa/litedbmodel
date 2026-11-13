@@ -1,8 +1,4 @@
-[**litedbmodel v2.2.14**](../README.md)
-
-***
-
-[litedbmodel](../globals.md) / getTransactionContext
+[API](../README.md) / getTransactionContext
 
 # Function: getTransactionContext()
 
@@ -16,4 +12,5 @@ Get current transaction context (if in a transaction)
 
 ## Returns
 
-`TransactionContext` \| `undefined`
+`TransactionContext | undefined`
+

@@ -1,8 +1,4 @@
-[**litedbmodel v2.2.14**](../README.md)
-
-***
-
-[litedbmodel](../globals.md) / dbImmediate
+[API](../README.md) / dbImmediate
 
 # Function: dbImmediate()
 
@@ -23,3 +19,4 @@ Create an immediate value (literal, no binding)
 ## Returns
 
 `DBImmediateValue`
+

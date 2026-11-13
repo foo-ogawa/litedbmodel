@@ -1,8 +1,4 @@
-[**litedbmodel v2.2.14**](../README.md)
-
-***
-
-[litedbmodel](../globals.md) / initDBHandler
+[API](../README.md) / initDBHandler
 
 # Function: initDBHandler()
 
@@ -24,3 +20,4 @@ Initialize global handler with config
 ## Returns
 
 [`DBHandler`](../classes/DBHandler.md)
+

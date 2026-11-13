@@ -1,8 +1,4 @@
-[**litedbmodel v2.2.14**](../README.md)
-
-***
-
-[litedbmodel](../globals.md) / DBHandler
+[API](../README.md) / DBHandler
 
 # Class: DBHandler
 
@@ -24,7 +20,7 @@ const result = await handler.execute('SELECT * FROM users WHERE id = $1', [1]);
 
 ## Constructors
 
-### Constructor
+### constructor
 
 ```ts
 new DBHandler(config: DBConfig, options?: DBHandlerOptions): DBHandler;
@@ -39,16 +35,12 @@ Defined in: [DBHandler.ts:154](https://github.com/foo-ogawa/litedbmodel/blob/mai
 | `config` | [`DBConfig`](../interfaces/DBConfig.md) |
 | `options?` | `DBHandlerOptions` |
 
-#### Returns
-
-`DBHandler`
-
 ## Methods
 
 ### getDriverType()
 
 ```ts
-getDriverType(): "postgres" | "sqlite" | "mysql";
+getDriverType(): 'postgres' | 'sqlite' | 'mysql';
 ```
 
 Defined in: [DBHandler.ts:172](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBHandler.ts#L172)
@@ -57,7 +49,7 @@ Get the driver type
 
 #### Returns
 
-`"postgres"` \| `"sqlite"` \| `"mysql"`
+`'postgres' | 'sqlite' | 'mysql'`
 
 ***
 
@@ -89,14 +81,14 @@ Execute a SQL query
 
 #### Parameters
 
-| Parameter | Type | Default value |
+| Parameter | Type | Description |
 | ------ | ------ | ------ |
-| `sql` | `string` | `undefined` |
-| `params` | `unknown`[] | `[]` |
+| `sql` | `string` |  |
+| `params?` | `unknown[]` | **Default** `[]` |
 
 #### Returns
 
-`Promise`\<`QueryResult`\>
+`Promise<QueryResult>`
 
 ***
 
@@ -112,24 +104,21 @@ Execute a write query (INSERT/UPDATE/DELETE)
 
 #### Parameters
 
-| Parameter | Type | Default value |
+| Parameter | Type | Description |
 | ------ | ------ | ------ |
-| `sql` | `string` | `undefined` |
-| `params` | `unknown`[] | `[]` |
+| `sql` | `string` |  |
+| `params?` | `unknown[]` | **Default** `[]` |
 
 #### Returns
 
-`Promise`\<`QueryResult`\>
+`Promise<QueryResult>`
 
 ***
 
 ### executeOnWriter()
 
 ```ts
-executeOnWriter(
-   sql: string, 
-   params?: unknown[], 
-read?: boolean): Promise<QueryResult>;
+executeOnWriter(sql: string, params?: unknown[], read?: boolean): Promise<QueryResult>;
 ```
 
 Defined in: [DBHandler.ts:208](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBHandler.ts#L208)
@@ -140,15 +129,15 @@ Execute a query on the writer pool (for withWriter context / writer-sticky / wri
 
 #### Parameters
 
-| Parameter | Type | Default value |
+| Parameter | Type | Description |
 | ------ | ------ | ------ |
-| `sql` | `string` | `undefined` |
-| `params` | `unknown`[] | `[]` |
-| `read` | `boolean` | `false` |
+| `sql` | `string` |  |
+| `params?` | `unknown[]` | **Default** `[]` |
+| `read?` | `boolean` | **Default** `false` |
 
 #### Returns
 
-`Promise`\<`QueryResult`\>
+`Promise<QueryResult>`
 
 ***
 
@@ -180,7 +169,7 @@ Get a connection from the pool (for transactions)
 
 #### Returns
 
-`Promise`\<`DBConnection`\>
+`Promise<DBConnection>`
 
 ***
 
@@ -218,7 +207,7 @@ Close all connections
 
 #### Returns
 
-`Promise`\<`void`\>
+`Promise<void>`
 
 ***
 
@@ -244,7 +233,7 @@ Set logger
 
 ***
 
-### ~~getPool()~~
+### getPool()
 
 ```ts
 getPool(): unknown;
@@ -252,12 +241,11 @@ getPool(): unknown;
 
 Defined in: [DBHandler.ts:260](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBHandler.ts#L260)
 
+> **Deprecated** Use driver-specific methods instead
+
 Get the underlying PostgreSQL pool (for backward compatibility)
 
 #### Returns
 
 `unknown`
 
-#### Deprecated
-
-Use driver-specific methods instead

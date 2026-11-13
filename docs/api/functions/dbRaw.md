@@ -1,8 +1,4 @@
-[**litedbmodel v2.2.14**](../README.md)
-
-***
-
-[litedbmodel](../globals.md) / dbRaw
+[API](../README.md) / dbRaw
 
 # Function: dbRaw()
 
@@ -23,3 +19,4 @@ Create a raw SQL expression
 ## Returns
 
 `DBRawValue`
+

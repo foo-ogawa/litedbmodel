@@ -1,8 +1,4 @@
-[**litedbmodel v2.2.14**](../README.md)
-
-***
-
-[litedbmodel](../globals.md) / condsToRecord
+[API](../README.md) / condsToRecord
 
 # Function: condsToRecord()
 
@@ -21,4 +17,5 @@ Defined in: [Column.ts:1044](https://github.com/foo-ogawa/litedbmodel/blob/main/
 
 ## Returns
 
-`Record`\<`string`, `unknown`\>
+`Record<string, unknown>`
+

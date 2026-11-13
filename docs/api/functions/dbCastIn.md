@@ -1,8 +1,4 @@
-[**litedbmodel v2.2.14**](../README.md)
-
-***
-
-[litedbmodel](../globals.md) / dbCastIn
+[API](../README.md) / dbCastIn
 
 # Function: dbCastIn()
 
@@ -18,9 +14,10 @@ Create a type-cast array for IN clause
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
-| `values` | `unknown`[] | Array of values |
+| `values` | `unknown[]` | Array of values |
 | `sqlType` | `string` | The SQL type to cast each value to |
 
 ## Returns
 
 `DBCastArray`
+

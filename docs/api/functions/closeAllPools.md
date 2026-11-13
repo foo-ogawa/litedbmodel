@@ -1,8 +1,4 @@
-[**litedbmodel v2.2.14**](../README.md)
-
-***
-
-[litedbmodel](../globals.md) / closeAllPools
+[API](../README.md) / closeAllPools
 
 # Function: closeAllPools()
 
@@ -16,4 +12,5 @@ Close all connection pools
 
 ## Returns
 
-`Promise`\<`void`\>
+`Promise<void>`
+

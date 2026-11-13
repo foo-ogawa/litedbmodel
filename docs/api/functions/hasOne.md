@@ -1,36 +1,15 @@
-[**litedbmodel v2.2.14**](../README.md)
-
-***
-
-[litedbmodel](../globals.md) / hasOne
+[API](../README.md) / hasOne
 
 # Function: hasOne()
 
 ```ts
-function hasOne<Value>(keys: KeysFactory, options?: RelationDecoratorOptions): RelationDecorator<Value>;
+function hasOne<Value = unknown>(keys: KeysFactory, options?: RelationDecoratorOptions): RelationDecorator<Value>;
 ```
 
 Defined in: [decorators.ts:1080](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L1080)
 
 HasOne relation decorator (1:1).
 Defines a one-to-one relationship where this model has one related record.
-
-## Type Parameters
-
-| Type Parameter | Default type |
-| ------ | ------ |
-| `Value` | `unknown` |
-
-## Parameters
-
-| Parameter | Type | Description |
-| ------ | ------ | ------ |
-| `keys` | `KeysFactory` | Factory function returning [sourceKey, targetKey] or composite key pairs |
-| `options?` | `RelationDecoratorOptions` | Optional order and where clauses |
-
-## Returns
-
-[`RelationDecorator`](../interfaces/RelationDecorator.md)\<`Value`\>
 
 ## Example
 
@@ -46,3 +25,21 @@ declare profile: Promise<UserProfile | null>;
 ])
 declare profile: Promise<TenantProfile | null>;
 ```
+
+## Type Parameters
+
+| Type Parameter |
+| ------ |
+| `Value = unknown` |
+
+## Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `keys` | `KeysFactory` | Factory function returning [sourceKey, targetKey] or composite key pairs |
+| `options?` | `RelationDecoratorOptions` | Optional order and where clauses |
+
+## Returns
+
+[`RelationDecorator`](../interfaces/RelationDecorator.md)`<Value>`
+

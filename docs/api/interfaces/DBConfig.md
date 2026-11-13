@@ -1,8 +1,4 @@
-[**litedbmodel v2.2.14**](../README.md)
-
-***
-
-[litedbmodel](../globals.md) / DBConfig
+[API](../README.md) / DBConfig
 
 # Interface: DBConfig
 
@@ -28,7 +24,7 @@ const config: DBConfig = {
 
 | Property | Type | Description | Defined in |
 | ------ | ------ | ------ | ------ |
-| <a id="driver"></a> `driver?` | `"postgres"` \| `"sqlite"` \| `"mysql"` | Database driver: 'postgres' (default), 'sqlite', or 'mysql' | [types.ts:96](https://github.com/foo-ogawa/litedbmodel/blob/main/src/types.ts#L96) |
+| <a id="driver"></a> `driver?` | `'postgres' \| 'sqlite' \| 'mysql'` | Database driver: 'postgres' (default), 'sqlite', or 'mysql' | [types.ts:96](https://github.com/foo-ogawa/litedbmodel/blob/main/src/types.ts#L96) |
 | <a id="host"></a> `host?` | `string` | Database host (for server-based DBs like PostgreSQL) | [types.ts:98](https://github.com/foo-ogawa/litedbmodel/blob/main/src/types.ts#L98) |
 | <a id="port"></a> `port?` | `number` | Database port | [types.ts:100](https://github.com/foo-ogawa/litedbmodel/blob/main/src/types.ts#L100) |
 | <a id="database"></a> `database` | `string` | Database name or file path (for SQLite) | [types.ts:102](https://github.com/foo-ogawa/litedbmodel/blob/main/src/types.ts#L102) |
@@ -40,3 +36,4 @@ const config: DBConfig = {
 | <a id="querytimeout"></a> `queryTimeout?` | `number` | Query timeout in seconds | [types.ts:117](https://github.com/foo-ogawa/litedbmodel/blob/main/src/types.ts#L117) |
 | <a id="keepalive"></a> `keepAlive?` | `boolean` | Enable TCP keepalive on connections (recommended for serverless/Lambda) | [types.ts:119](https://github.com/foo-ogawa/litedbmodel/blob/main/src/types.ts#L119) |
 | <a id="keepaliveinitialdelaymillis"></a> `keepAliveInitialDelayMillis?` | `number` | Delay in milliseconds before first keepalive probe (default: 10000) | [types.ts:121](https://github.com/foo-ogawa/litedbmodel/blob/main/src/types.ts#L121) |
+

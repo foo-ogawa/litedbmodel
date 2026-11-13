@@ -1,8 +1,4 @@
-[**litedbmodel v2.2.14**](../README.md)
-
-***
-
-[litedbmodel](../globals.md) / getDBHandler
+[API](../README.md) / getDBHandler
 
 # Function: getDBHandler()
 
@@ -14,10 +10,11 @@ Defined in: [DBHandler.ts:288](https://github.com/foo-ogawa/litedbmodel/blob/mai
 
 Get global handler
 
+## Throws
+
+Error if not initialized
+
 ## Returns
 
 [`DBHandler`](../classes/DBHandler.md)
 
-## Throws
-
-Error if not initialized

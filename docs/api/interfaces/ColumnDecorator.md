@@ -1,10 +1,6 @@
-[**litedbmodel v2.2.14**](../README.md)
+[API](../README.md) / ColumnDecorator
 
-***
-
-[litedbmodel](../globals.md) / ColumnDecorator
-
-# Interface: ColumnDecorator()\<Value\>
+# Interface: ColumnDecorator\<Value\>
 
 Defined in: [decorators.ts:351](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L351)
 
@@ -25,7 +21,7 @@ property decorator receives the prototype, whose property types a mapped type ca
 ## Call Signature
 
 ```ts
-ColumnDecorator<This, Key>(target: This, propertyKey: Key): void;
+<This extends Partial<Record<Key, Value>>, Key extends string | symbol>(target: This, propertyKey: Key): void;
 ```
 
 Defined in: [decorators.ts:358](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L358)
@@ -39,8 +35,8 @@ and the majority of models are compiled that way.)
 
 | Type Parameter |
 | ------ |
-| `This` *extends* `Partial`\<`Record`\<`Key`, `Value`\>\> |
-| `Key` *extends* `string` \| `symbol` |
+| `This extends Partial<Record<Key, Value>>` |
+| `Key extends string \| symbol` |
 
 ### Parameters
 
@@ -53,10 +49,10 @@ and the majority of models are compiled that way.)
 
 `void`
 
-## Call Signature
+***
 
 ```ts
-ColumnDecorator<This>(value: undefined, context: ClassFieldDecoratorContext<This, Value>): void;
+<This>(value: undefined, context: ClassFieldDecoratorContext<This, Value>): void;
 ```
 
 Defined in: [decorators.ts:363](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L363)
@@ -74,8 +70,9 @@ TC39 standard class-field decorator.
 | Parameter | Type |
 | ------ | ------ |
 | `value` | `undefined` |
-| `context` | `ClassFieldDecoratorContext`\<`This`, `Value`\> |
+| `context` | `ClassFieldDecoratorContext<This, Value>` |
 
 ### Returns
 
 `void`
+

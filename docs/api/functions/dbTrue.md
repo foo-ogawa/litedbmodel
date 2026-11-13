@@ -1,8 +1,4 @@
-[**litedbmodel v2.2.14**](../README.md)
-
-***
-
-[litedbmodel](../globals.md) / dbTrue
+[API](../README.md) / dbTrue
 
 # Function: dbTrue()
 
@@ -17,3 +13,4 @@ Create a boolean TRUE value
 ## Returns
 
 `DBBoolValue`
+

@@ -1,8 +1,4 @@
-[**litedbmodel v2.2.14**](../README.md)
-
-***
-
-[litedbmodel](../globals.md) / dbUuidIn
+[API](../README.md) / dbUuidIn
 
 # Function: dbUuidIn()
 
@@ -14,19 +10,20 @@ Defined in: [DBValues.ts:544](https://github.com/foo-ogawa/litedbmodel/blob/main
 
 Create a type-cast UUID array for IN clause
 
-## Parameters
-
-| Parameter | Type | Description |
-| ------ | ------ | ------ |
-| `values` | `string`[] | Array of UUID strings |
-
-## Returns
-
-`DBCastArray`
-
 ## Example
 
 ```typescript
 await User.find([[User.id, dbUuidIn(['uuid1', 'uuid2'])]]);
 // → WHERE id IN (?::uuid, ?::uuid)
 ```
+
+## Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `values` | `string[]` | Array of UUID strings |
+
+## Returns
+
+`DBCastArray`
+

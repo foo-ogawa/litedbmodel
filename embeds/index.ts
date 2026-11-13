@@ -1,24 +1,18 @@
-import type { DefineEmbedFn, QueryResult } from 'embedoc';
+import type { QueryResult } from 'embedoc';
+import { defineEmbed, renderApiIndex } from 'embedoc';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ORM_SERIES, SUBJECT_SERIES } from '../benchmark/orm-series.js';
 
-// NOTE: two things this directory needs to load at all, both load-bearing for the bench-docs drift gate:
-//
-//  1. `embeds/package.json` (`"type": "module"`) — embedoc loads embeds via tsx `tsImport`. Without the
-//     ESM marker tsx takes the ESM->CJS bridge, which cannot reach `../benchmark/orm-series` — the series
-//     SSoT this file and the chart renderer both read. There the `.js` specifier fails to resolve at all
-//     ("Cannot find module '../benchmark/orm-series.js'", require stack embeds/index.ts), and dropping the
-//     extension resolves the `.ts` file but hands it to node untranspiled ("Unexpected identifier 'as'" on
-//     `as const`). On the ESM path tsx transpiles the whole graph and the import loads.
-//
-//  2. Local `defineEmbed` — importing the *value* `defineEmbed` from the `embedoc` package fails under
-//     tsx's resolver ("No exports main defined"). `defineEmbed` is just an identity/typing helper
-//     (`(d) => d`), so we inline it and pull only the *type* from embedoc (type imports are erased, no
-//     runtime resolution).
-
-const defineEmbed: DefineEmbedFn = (definition) => definition;
+// NOTE: `embeds/package.json` (`"type": "module"`) is load-bearing for the bench-docs drift gate.
+// embedoc loads embeds via tsx `tsImport`. Without the ESM marker tsx takes the ESM->CJS bridge, which
+// cannot reach `../benchmark/orm-series` — the series SSoT this file and the chart renderer both read.
+// There the `.js` specifier fails to resolve at all ("Cannot find module '../benchmark/orm-series.js'",
+// require stack embeds/index.ts), and dropping the extension resolves the `.ts` file but hands it to node
+// untranspiled ("Unexpected identifier 'as'" on `as const`); embedoc's own exports (import-only) do not
+// resolve there either ("No exports main defined"). On the ESM path tsx transpiles the whole graph and
+// both imports load.
 
 /**
  * The benchmark CSV, grouped by operation → (series → median ms). A datasource record is untyped, so
@@ -186,12 +180,30 @@ const packageVersion = defineEmbed({
   },
 });
 
+// ── api_index: the index of the API reference (docs/api/README.md) ────────────
+//
+// The `api` datasource (embedoc.config.yaml) reads the public API from src/index.ts; its generator
+// writes a page for every symbol whose kind is in its `pages`, and this writes the index: those symbols
+// as links to their pages, every other one (type aliases, variables such as SKIP, re-exports) in full.
+const apiIndex = defineEmbed({
+  dependsOn: ['api'],
+  async render(ctx) {
+    const records = await ctx.datasources['api']!.getAll();
+    return {
+      content: renderApiIndex(records, {
+        categoryOrder: ['Core', 'Decorators', 'Column', 'Values', 'Subquery', 'Middleware', 'Relations', 'Types', 'Errors', '*'],
+      }),
+    };
+  },
+});
+
 // embedoc expects `embeds` export
 export const embeds = {
   benchmark_table: benchmarkTable,
   benchmark_summary: benchmarkSummary,
   code_snippet: codeSnippet,
   package_version: packageVersion,
+  api_index: apiIndex,
 };
 
 // For direct import compatibility

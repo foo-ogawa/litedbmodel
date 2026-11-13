@@ -24,7 +24,7 @@ jobs:
       - name: Audit
         # The same audit release.yml gates the publish on (devDeps included), so a pull request that
         # passes here does not stop the release after it merges. `audit:check` is `npm audit
-        # --audit-level=moderate` minus one dated exception (scripts/check-audit.mjs, #335).
+        # --audit-level=moderate` minus the dated exceptions listed in scripts/check-audit.mjs (none today).
         run: npm run audit:check
       - name: Verify npm signatures
         run: npm audit signatures
@@ -42,7 +42,7 @@ jobs:
   # Everything under docs/ that a generator owns is regenerated here and diffed, so the published files
   # always equal what their sources regenerate to: the benchmark tables + win count in docs/*.md via
   # embedoc and the chart via generate-chart.ts (both from benchmark/results/benchmark-results.csv), and
-  # the API reference under docs/api/ via typedoc (from src/). Neither a hand-edited figure nor a
+  # the API reference under docs/api/ via embedoc's `typescript` datasource (from src/). Neither a hand-edited figure nor a
   # snapshot of an older release survives — docs/api/ was generated once under 1.0.1 and, with nothing
   # regenerating it, shipped v1's API reference through every v2 release (#251).
   #
@@ -61,13 +61,13 @@ jobs:
         run: npm ci --ignore-scripts
       - name: Regenerate benchmark docs + chart from the CSV
         run: npm run docs:bench:check
-      # After embedoc, not before: docs/api/README.md is a COPY of docs/api-guide.md (typedoc.json
-      # `readme`), so an embed region there has to be rendered before the copy is taken.
+      # The symbol pages under docs/api/ (the `api` generator in embedoc.config.yaml) and the index,
+      # docs/api/README.md, whose `api_index` region the step above has already proven renders.
       - name: Regenerate the API reference from src/
         run: npm run docs
       - name: Fail if docs/ drifted from their sources
         run: |
-          # git diff is blind to a file a generator NEWLY created, and typedoc adds a page per new
+          # git diff is blind to a file a generator NEWLY created, and embedoc adds a page per new
           # export — three were untracked when #251 was found, and a diff-only check would have called
           # that tree clean. Intent-to-add puts them in the diff.
           git add --intent-to-add -- docs/

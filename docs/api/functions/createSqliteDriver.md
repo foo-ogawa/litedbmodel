@@ -1,8 +1,4 @@
-[**litedbmodel v2.2.14**](../README.md)
-
-***
-
-[litedbmodel](../globals.md) / createSqliteDriver
+[API](../README.md) / createSqliteDriver
 
 # Function: createSqliteDriver()
 
@@ -23,3 +19,4 @@ Create a SQLite driver instance
 ## Returns
 
 `SqliteDriver`
+

@@ -1,8 +1,4 @@
-[**litedbmodel v2.2.14**](../README.md)
-
-***
-
-[litedbmodel](../globals.md) / createPostgresDriver
+[API](../README.md) / createPostgresDriver
 
 # Function: createPostgresDriver()
 
@@ -23,3 +19,4 @@ Create a PostgreSQL driver instance
 ## Returns
 
 `PostgresDriver`
+

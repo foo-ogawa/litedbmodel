@@ -1,8 +1,4 @@
-[**litedbmodel v2.2.14**](../README.md)
-
-***
-
-[litedbmodel](../globals.md) / getTransactionConnection
+[API](../README.md) / getTransactionConnection
 
 # Function: getTransactionConnection()
 
@@ -16,4 +12,5 @@ Get current transaction connection (if in a transaction)
 
 ## Returns
 
-`DBConnection` \| `undefined`
+`DBConnection | undefined`
+

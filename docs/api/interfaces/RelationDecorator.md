@@ -1,10 +1,6 @@
-[**litedbmodel v2.2.14**](../README.md)
+[API](../README.md) / RelationDecorator
 
-***
-
-[litedbmodel](../globals.md) / RelationDecorator
-
-# Interface: RelationDecorator()\<Value\>
+# Interface: RelationDecorator\<Value\>
 
 Defined in: [decorators.ts:367](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L367)
 
@@ -19,19 +15,17 @@ What a relation decorator may be applied to, under either protocol.
 ## Call Signature
 
 ```ts
-RelationDecorator<This, Key>(target: This, propertyKey: Key): void;
+<This extends Partial<Record<Key, Value>>, Key extends string | symbol>(target: This, propertyKey: Key): void;
 ```
 
 Defined in: [decorators.ts:368](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L368)
-
-What a relation decorator may be applied to, under either protocol.
 
 ### Type Parameters
 
 | Type Parameter |
 | ------ |
-| `This` *extends* `Partial`\<`Record`\<`Key`, `Value`\>\> |
-| `Key` *extends* `string` \| `symbol` |
+| `This extends Partial<Record<Key, Value>>` |
+| `Key extends string \| symbol` |
 
 ### Parameters
 
@@ -44,15 +38,13 @@ What a relation decorator may be applied to, under either protocol.
 
 `void`
 
-## Call Signature
+***
 
 ```ts
-RelationDecorator<This>(value: undefined, context: ClassFieldDecoratorContext<This, Value>): void;
+<This>(value: undefined, context: ClassFieldDecoratorContext<This, Value>): void;
 ```
 
 Defined in: [decorators.ts:372](https://github.com/foo-ogawa/litedbmodel/blob/main/src/decorators.ts#L372)
-
-What a relation decorator may be applied to, under either protocol.
 
 ### Type Parameters
 
@@ -65,8 +57,9 @@ What a relation decorator may be applied to, under either protocol.
 | Parameter | Type |
 | ------ | ------ |
 | `value` | `undefined` |
-| `context` | `ClassFieldDecoratorContext`\<`This`, `Value`\> |
+| `context` | `ClassFieldDecoratorContext<This, Value>` |
 
 ### Returns
 
 `void`
+

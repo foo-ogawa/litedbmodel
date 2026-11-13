@@ -1,16 +1,12 @@
-[**litedbmodel v2.2.14**](../README.md)
-
-***
-
-[litedbmodel](../globals.md) / isSqlTypedFragment
+[API](../README.md) / isSqlTypedFragment
 
 # Function: isSqlTypedFragment()
 
 ```ts
-function isSqlTypedFragment(value: unknown): value is SqlTypedFragment<unknown, unknown>;
+function isSqlTypedFragment(value: unknown): value is SqlTypedFragment;
 ```
 
-Defined in: [SqlFragment.ts:128](https://github.com/foo-ogawa/litedbmodel/blob/main/src/SqlFragment.ts#L128)
+Defined in: [SqlFragment.ts:148](https://github.com/foo-ogawa/litedbmodel/blob/main/src/SqlFragment.ts#L148)
 
 ## Parameters
 
@@ -20,4 +16,5 @@ Defined in: [SqlFragment.ts:128](https://github.com/foo-ogawa/litedbmodel/blob/m
 
 ## Returns
 
-`value is SqlTypedFragment<unknown, unknown>`
+`value is`[`SqlTypedFragment`](../interfaces/SqlTypedFragment.md)
+

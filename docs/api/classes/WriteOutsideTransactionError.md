@@ -1,8 +1,4 @@
-[**litedbmodel v2.2.14**](../README.md)
-
-***
-
-[litedbmodel](../globals.md) / WriteOutsideTransactionError
+[API](../README.md) / WriteOutsideTransactionError
 
 # Class: WriteOutsideTransactionError
 
@@ -16,7 +12,7 @@ Error thrown when attempting write operations outside a transaction.
 
 ## Constructors
 
-### Constructor
+### constructor
 
 ```ts
 new WriteOutsideTransactionError(operation: string, modelName?: string): WriteOutsideTransactionError;
@@ -31,19 +27,10 @@ Defined in: [types.ts:437](https://github.com/foo-ogawa/litedbmodel/blob/main/sr
 | `operation` | `string` |
 | `modelName?` | `string` |
 
-#### Returns
-
-`WriteOutsideTransactionError`
-
-#### Overrides
-
-```ts
-Error.constructor
-```
-
 ## Properties
 
-| Property | Modifier | Type | Defined in |
+| Property | Type | Description | Defined in |
 | ------ | ------ | ------ | ------ |
-| <a id="operation"></a> `operation` | `readonly` | `string` | [types.ts:438](https://github.com/foo-ogawa/litedbmodel/blob/main/src/types.ts#L438) |
-| <a id="modelname"></a> `modelName?` | `readonly` | `string` | [types.ts:439](https://github.com/foo-ogawa/litedbmodel/blob/main/src/types.ts#L439) |
+| <a id="operation"></a> `operation` (readonly) | `string` |  | [types.ts:438](https://github.com/foo-ogawa/litedbmodel/blob/main/src/types.ts#L438) |
+| <a id="modelname"></a> `modelName?` (readonly) | `string` |  | [types.ts:439](https://github.com/foo-ogawa/litedbmodel/blob/main/src/types.ts#L439) |
+

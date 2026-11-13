@@ -1,8 +1,4 @@
-[**litedbmodel v2.2.14**](../README.md)
-
-***
-
-[litedbmodel](../globals.md) / getDBConfig
+[API](../README.md) / getDBConfig
 
 # Function: getDBConfig()
 
@@ -16,4 +12,5 @@ Get global config
 
 ## Returns
 
-[`DBConfig`](../interfaces/DBConfig.md) \| `null`
+[`DBConfig`](../interfaces/DBConfig.md)`| null`
+

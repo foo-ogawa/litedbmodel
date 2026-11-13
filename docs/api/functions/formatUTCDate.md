@@ -1,8 +1,4 @@
-[**litedbmodel v2.2.14**](../README.md)
-
-***
-
-[litedbmodel](../globals.md) / formatUTCDate
+[API](../README.md) / formatUTCDate
 
 # Function: formatUTCDate()
 
@@ -23,3 +19,4 @@ Format Date as YYYY-MM-DD using UTC components
 ## Returns
 
 `string`
+

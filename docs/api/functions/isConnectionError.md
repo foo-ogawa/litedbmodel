@@ -1,8 +1,4 @@
-[**litedbmodel v2.2.14**](../README.md)
-
-***
-
-[litedbmodel](../globals.md) / isConnectionError
+[API](../README.md) / isConnectionError
 
 # Function: isConnectionError()
 
@@ -24,3 +20,4 @@ Used by both transaction retry (DBModel) and execute-level retry (drivers).
 ## Returns
 
 `boolean`
+
