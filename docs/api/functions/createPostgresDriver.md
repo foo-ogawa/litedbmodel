@@ -6,7 +6,7 @@
 function createPostgresDriver(options: DBDriverOptions): PostgresDriver;
 ```
 
-Defined in: [drivers/postgres.ts:351](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/drivers/postgres.ts#L351)
+Defined in: [drivers/postgres.ts:361](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/drivers/postgres.ts#L361)
 
 Create a PostgreSQL driver instance
 

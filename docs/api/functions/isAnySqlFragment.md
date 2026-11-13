@@ -6,7 +6,7 @@
 function isAnySqlFragment(value: unknown): value is SqlFragment | SqlTypedFragment | SqlCondition;
 ```
 
-Defined in: [SqlFragment.ts:149](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/SqlFragment.ts#L149)
+Defined in: [SqlFragment.ts:159](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/SqlFragment.ts#L159)
 
 Matches any of SqlFragment, SqlTypedFragment, or SqlCondition.
 

@@ -6,7 +6,7 @@
 function closeAllPools(): Promise<void>;
 ```
 
-Defined in: [DBHandler.ts:321](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/DBHandler.ts#L321)
+Defined in: [DBHandler.ts:323](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/DBHandler.ts#L323)
 
 Close all connection pools
 

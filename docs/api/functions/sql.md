@@ -6,7 +6,7 @@
 function sql<V, M>(strings: TemplateStringsArray, col: Column<V, M>): SqlTypedFragment<V, M>;
 ```
 
-Defined in: [SqlFragment.ts:235](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/SqlFragment.ts#L235)
+Defined in: [SqlFragment.ts:249](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/SqlFragment.ts#L249)
 
 Single Column interpolation → SqlTypedFragment (for Pattern A tuples or IS NULL conditions).
 
@@ -34,7 +34,7 @@ Single Column interpolation → SqlTypedFragment (for Pattern A tuples or IS NUL
 function sql<V, M>(strings: TemplateStringsArray, col: Column<V, M>, value: V): SqlCondition<M>;
 ```
 
-Defined in: [SqlFragment.ts:243](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/SqlFragment.ts#L243)
+Defined in: [SqlFragment.ts:257](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/SqlFragment.ts#L257)
 
 Single Column + 1 value → SqlCondition (Pattern B: `sql\`${Col} > ${value}\``).
 
@@ -63,7 +63,7 @@ Single Column + 1 value → SqlCondition (Pattern B: `sql\`${Col} > ${value}\``)
 function sql<V, M>(strings: TemplateStringsArray, col: Column<V, M>, v1: V, v2: V): SqlCondition<M>;
 ```
 
-Defined in: [SqlFragment.ts:252](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/SqlFragment.ts#L252)
+Defined in: [SqlFragment.ts:266](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/SqlFragment.ts#L266)
 
 Single Column + 2 values → SqlCondition (Pattern B: BETWEEN).
 
@@ -93,7 +93,7 @@ Single Column + 2 values → SqlCondition (Pattern B: BETWEEN).
 function sql<V, M>(strings: TemplateStringsArray, col: Column<V, M>, values: readonly V[]): SqlCondition<M>;
 ```
 
-Defined in: [SqlFragment.ts:262](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/SqlFragment.ts#L262)
+Defined in: [SqlFragment.ts:276](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/SqlFragment.ts#L276)
 
 Single Column + array → SqlCondition (Pattern B: IN).
 
@@ -122,7 +122,7 @@ Single Column + array → SqlCondition (Pattern B: IN).
 function sql(strings: TemplateStringsArray, ...values: (Column<any, any> | { TABLE_NAME: string } | SqlRaw | SqlRef | DBParentRef)[]): SqlFragment;
 ```
 
-Defined in: [SqlFragment.ts:271](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/SqlFragment.ts#L271)
+Defined in: [SqlFragment.ts:285](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/SqlFragment.ts#L285)
 
 Multiple Columns / TABLE_NAME only → SqlFragment (for QUERY).
 
@@ -143,7 +143,7 @@ Multiple Columns / TABLE_NAME only → SqlFragment (for QUERY).
 function sql(strings: TemplateStringsArray, ...values: SqlInterpolation[]): SqlFragment;
 ```
 
-Defined in: [SqlFragment.ts:279](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/SqlFragment.ts#L279)
+Defined in: [SqlFragment.ts:293](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/SqlFragment.ts#L293)
 
 General: mixed interpolation → SqlFragment (for withQuery / execute).
 

@@ -6,7 +6,7 @@
 function isSqlRef(value: unknown): value is SqlRef;
 ```
 
-Defined in: [SqlFragment.ts:159](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/SqlFragment.ts#L159)
+Defined in: [SqlFragment.ts:169](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/SqlFragment.ts#L169)
 
 ## Parameters
 

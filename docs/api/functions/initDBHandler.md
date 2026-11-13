@@ -6,7 +6,7 @@
 function initDBHandler(config: DBConfig, options?: DBHandlerOptions): DBHandler;
 ```
 
-Defined in: [DBHandler.ts:283](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/DBHandler.ts#L283)
+Defined in: [DBHandler.ts:285](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/DBHandler.ts#L285)
 
 Initialize global handler with config
 
