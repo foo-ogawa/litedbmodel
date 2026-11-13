@@ -1,12 +1,8 @@
-[**litedbmodel v1.0.1**](../README.md)
-
-***
-
-[litedbmodel](../globals.md) / Values
+[API](../README.md) / Values
 
 # Class: Values\<Model\>
 
-Defined in: Column.ts:566
+Defined in: [Column.ts:577](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/Column.ts#L577)
 
 Type-safe builder for update/create value pairs.
 Use array literals for static values, builder for dynamic construction.
@@ -42,13 +38,13 @@ await User.create(values.build());
 
 ## Constructors
 
-### Constructor
+### constructor
 
 ```ts
-new Values<Model>(initial?: readonly readonly [Column<any, Model>, unknown][]): Values<Model>;
+new Values(initial?: readonly (readonly [Column<any, Model>, unknown])[]): Values<Model>;
 ```
 
-Defined in: Column.ts:572
+Defined in: [Column.ts:583](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/Column.ts#L583)
 
 Create a Values builder, optionally with initial pairs.
 
@@ -56,27 +52,21 @@ Create a Values builder, optionally with initial pairs.
 
 | Parameter | Type |
 | ------ | ------ |
-| `initial?` | readonly readonly \[[`Column`](../interfaces/Column.md)\<`any`, `Model`\>, `unknown`\][] |
-
-#### Returns
-
-`Values`\<`Model`\>
+| `initial?` | `readonly (readonly [`[`Column`](../interfaces/Column.md)`<any, Model>, unknown])[]` |
 
 ## Accessors
 
 ### length
 
-#### Get Signature
-
 ```ts
 get length(): number;
 ```
 
-Defined in: Column.ts:596
+Defined in: [Column.ts:607](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/Column.ts#L607)
 
 Get the number of pairs.
 
-##### Returns
+#### Returns
 
 `number`
 
@@ -88,7 +78,7 @@ Get the number of pairs.
 add<V>(column: Column<V, Model>, value: V | null | undefined): this;
 ```
 
-Defined in: Column.ts:581
+Defined in: [Column.ts:592](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/Column.ts#L592)
 
 Add a type-safe column-value pair.
 
@@ -102,8 +92,8 @@ Add a type-safe column-value pair.
 
 | Parameter | Type |
 | ------ | ------ |
-| `column` | [`Column`](../interfaces/Column.md)\<`V`, `Model`\> |
-| `value` | `V` \| `null` \| `undefined` |
+| `column` | [`Column`](../interfaces/Column.md)`<V, Model>` |
+| `value` | `V \| null \| undefined` |
 
 #### Returns
 
@@ -114,13 +104,14 @@ Add a type-safe column-value pair.
 ### build()
 
 ```ts
-build(): readonly readonly [Column<any, any>, unknown][];
+build(): readonly (readonly [Column<any, any>, unknown])[];
 ```
 
-Defined in: Column.ts:589
+Defined in: [Column.ts:600](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/Column.ts#L600)
 
 Build the final array for use with update/create.
 
 #### Returns
 
-readonly readonly \[[`Column`](../interfaces/Column.md)\<`any`, `any`\>, `unknown`\][]
+`readonly (readonly [`[`Column`](../interfaces/Column.md)`<any, any>, unknown])[]`
+

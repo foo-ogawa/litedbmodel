@@ -1,12 +1,8 @@
-[**litedbmodel v1.0.1**](../README.md)
-
-***
-
-[litedbmodel](../globals.md) / PkeyResult
+[API](../README.md) / PkeyResult
 
 # Interface: PkeyResult
 
-Defined in: types.ts:26
+Defined in: [types.ts:27](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/types.ts#L27)
 
 Result of write operations when returning: true is specified.
 Contains primary key column(s) and their values for affected rows.
@@ -25,5 +21,6 @@ Contains primary key column(s) and their values for affected rows.
 
 | Property | Type | Description | Defined in |
 | ------ | ------ | ------ | ------ |
-| <a id="key"></a> `key` | [`Column`](Column.md)\<`unknown`, `unknown`\>[] | Primary key column(s) | types.ts:28 |
-| <a id="values"></a> `values` | `unknown`[][] | 2D array of primary key values (each inner array is one row's PK values) | types.ts:30 |
+| <a id="key"></a> `key` | [`Column`](../interfaces/Column.md)`[]` | Primary key column(s) | [types.ts:29](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/types.ts#L29) |
+| <a id="values"></a> `values` | `unknown[][]` | 2D array of primary key values (each inner array is one row's PK values) | [types.ts:31](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/types.ts#L31) |
+

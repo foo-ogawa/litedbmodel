@@ -1,23 +1,21 @@
-[**litedbmodel v1.0.1**](../README.md)
-
-***
-
-[litedbmodel](../globals.md) / condsToRecord
+[API](../README.md) / condsToRecord
 
 # Function: condsToRecord()
 
 ```ts
-function condsToRecord(conditions: Conds): Record<string, unknown>;
+function condsToRecord(conditions: Conds, typeCast?: DriverTypeCast): Record<string, unknown>;
 ```
 
-Defined in: Column.ts:1006
+Defined in: [Column.ts:1030](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/Column.ts#L1030)
 
 ## Parameters
 
 | Parameter | Type |
 | ------ | ------ |
 | `conditions` | `Conds` |
+| `typeCast?` | `DriverTypeCast` |
 
 ## Returns
 
-`Record`\<`string`, `unknown`\>
+`Record<string, unknown>`
+

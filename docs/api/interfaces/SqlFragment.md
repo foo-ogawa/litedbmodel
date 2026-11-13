@@ -1,20 +1,17 @@
-[**litedbmodel v1.0.1**](../README.md)
-
-***
-
-[litedbmodel](../globals.md) / SqlFragment
+[API](../README.md) / SqlFragment
 
 # Interface: SqlFragment
 
-Defined in: SqlFragment.ts:21
+Defined in: [SqlFragment.ts:21](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/SqlFragment.ts#L21)
 
 A general SQL fragment with parameterized values.
 Used for withQuery, QUERY, and execute.
 
 ## Properties
 
-| Property | Modifier | Type | Defined in |
+| Property | Type | Description | Defined in |
 | ------ | ------ | ------ | ------ |
-| <a id="_tag"></a> `_tag` | `readonly` | `"SqlFragment"` | SqlFragment.ts:22 |
-| <a id="sql"></a> `sql` | `readonly` | `string` | SqlFragment.ts:23 |
-| <a id="params"></a> `params` | `readonly` | readonly `unknown`[] | SqlFragment.ts:24 |
+| <a id="_tag"></a> `_tag` (readonly) | `'SqlFragment'` |  | [SqlFragment.ts:22](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/SqlFragment.ts#L22) |
+| <a id="sql"></a> `sql` (readonly) | `string` |  | [SqlFragment.ts:23](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/SqlFragment.ts#L23) |
+| <a id="params"></a> `params` (readonly) | `readonly unknown[]` |  | [SqlFragment.ts:24](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/SqlFragment.ts#L24) |
+

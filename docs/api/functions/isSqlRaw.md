@@ -1,8 +1,4 @@
-[**litedbmodel v1.0.1**](../README.md)
-
-***
-
-[litedbmodel](../globals.md) / isSqlRaw
+[API](../README.md) / isSqlRaw
 
 # Function: isSqlRaw()
 
@@ -10,7 +6,7 @@
 function isSqlRaw(value: unknown): value is SqlRaw;
 ```
 
-Defined in: SqlFragment.ts:154
+Defined in: [SqlFragment.ts:155](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/SqlFragment.ts#L155)
 
 ## Parameters
 
@@ -20,4 +16,5 @@ Defined in: SqlFragment.ts:154
 
 ## Returns
 
-`value is SqlRaw`
+`value is`[`SqlRaw`](../classes/SqlRaw.md)
+

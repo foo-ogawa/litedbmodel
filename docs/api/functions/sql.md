@@ -1,182 +1,160 @@
-[**litedbmodel v1.0.1**](../README.md)
-
-***
-
-[litedbmodel](../globals.md) / sql
+[API](../README.md) / sql
 
 # Function: sql()
-
-## Call Signature
 
 ```ts
 function sql<V, M>(strings: TemplateStringsArray, col: Column<V, M>): SqlTypedFragment<V, M>;
 ```
 
-Defined in: SqlFragment.ts:234
+Defined in: [SqlFragment.ts:235](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/SqlFragment.ts#L235)
 
 Single Column interpolation → SqlTypedFragment (for Pattern A tuples or IS NULL conditions).
 
-### Type Parameters
+## Type Parameters
 
 | Type Parameter |
 | ------ |
 | `V` |
 | `M` |
 
-### Parameters
+## Parameters
 
 | Parameter | Type |
 | ------ | ------ |
 | `strings` | `TemplateStringsArray` |
-| `col` | [`Column`](../interfaces/Column.md)\<`V`, `M`\> |
+| `col` | [`Column`](../interfaces/Column.md)`<V, M>` |
 
-### Returns
+## Returns
 
-[`SqlTypedFragment`](../interfaces/SqlTypedFragment.md)\<`V`, `M`\>
+[`SqlTypedFragment`](../interfaces/SqlTypedFragment.md)`<V, M>`
 
-## Call Signature
+***
 
 ```ts
-function sql<V, M>(
-   strings: TemplateStringsArray, 
-   col: Column<V, M>, 
-value: V): SqlCondition<M>;
+function sql<V, M>(strings: TemplateStringsArray, col: Column<V, M>, value: V): SqlCondition<M>;
 ```
 
-Defined in: SqlFragment.ts:242
+Defined in: [SqlFragment.ts:243](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/SqlFragment.ts#L243)
 
 Single Column + 1 value → SqlCondition (Pattern B: `sql\`${Col} > ${value}\``).
 
-### Type Parameters
+## Type Parameters
 
 | Type Parameter |
 | ------ |
 | `V` |
 | `M` |
 
-### Parameters
+## Parameters
 
 | Parameter | Type |
 | ------ | ------ |
 | `strings` | `TemplateStringsArray` |
-| `col` | [`Column`](../interfaces/Column.md)\<`V`, `M`\> |
+| `col` | [`Column`](../interfaces/Column.md)`<V, M>` |
 | `value` | `V` |
 
-### Returns
+## Returns
 
-[`SqlCondition`](../interfaces/SqlCondition.md)\<`M`\>
+[`SqlCondition`](../interfaces/SqlCondition.md)`<M>`
 
-## Call Signature
+***
 
 ```ts
-function sql<V, M>(
-   strings: TemplateStringsArray, 
-   col: Column<V, M>, 
-   v1: V, 
-v2: V): SqlCondition<M>;
+function sql<V, M>(strings: TemplateStringsArray, col: Column<V, M>, v1: V, v2: V): SqlCondition<M>;
 ```
 
-Defined in: SqlFragment.ts:251
+Defined in: [SqlFragment.ts:252](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/SqlFragment.ts#L252)
 
 Single Column + 2 values → SqlCondition (Pattern B: BETWEEN).
 
-### Type Parameters
+## Type Parameters
 
 | Type Parameter |
 | ------ |
 | `V` |
 | `M` |
 
-### Parameters
+## Parameters
 
 | Parameter | Type |
 | ------ | ------ |
 | `strings` | `TemplateStringsArray` |
-| `col` | [`Column`](../interfaces/Column.md)\<`V`, `M`\> |
+| `col` | [`Column`](../interfaces/Column.md)`<V, M>` |
 | `v1` | `V` |
 | `v2` | `V` |
 
-### Returns
+## Returns
 
-[`SqlCondition`](../interfaces/SqlCondition.md)\<`M`\>
+[`SqlCondition`](../interfaces/SqlCondition.md)`<M>`
 
-## Call Signature
+***
 
 ```ts
-function sql<V, M>(
-   strings: TemplateStringsArray, 
-   col: Column<V, M>, 
-values: readonly V[]): SqlCondition<M>;
+function sql<V, M>(strings: TemplateStringsArray, col: Column<V, M>, values: readonly V[]): SqlCondition<M>;
 ```
 
-Defined in: SqlFragment.ts:261
+Defined in: [SqlFragment.ts:262](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/SqlFragment.ts#L262)
 
 Single Column + array → SqlCondition (Pattern B: IN).
 
-### Type Parameters
+## Type Parameters
 
 | Type Parameter |
 | ------ |
 | `V` |
 | `M` |
 
-### Parameters
+## Parameters
 
 | Parameter | Type |
 | ------ | ------ |
 | `strings` | `TemplateStringsArray` |
-| `col` | [`Column`](../interfaces/Column.md)\<`V`, `M`\> |
-| `values` | readonly `V`[] |
+| `col` | [`Column`](../interfaces/Column.md)`<V, M>` |
+| `values` | `readonly V[]` |
 
-### Returns
+## Returns
 
-[`SqlCondition`](../interfaces/SqlCondition.md)\<`M`\>
+[`SqlCondition`](../interfaces/SqlCondition.md)`<M>`
 
-## Call Signature
+***
 
 ```ts
-function sql(strings: TemplateStringsArray, ...values: (
-  | DBParentRef
-  | SqlRaw
-  | SqlRef
-  | Column<any, any>
-  | {
-  TABLE_NAME: string;
-})[]): SqlFragment;
+function sql(strings: TemplateStringsArray, ...values: (Column<any, any> | { TABLE_NAME: string } | SqlRaw | SqlRef | DBParentRef)[]): SqlFragment;
 ```
 
-Defined in: SqlFragment.ts:270
+Defined in: [SqlFragment.ts:271](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/SqlFragment.ts#L271)
 
 Multiple Columns / TABLE_NAME only → SqlFragment (for QUERY).
 
-### Parameters
+## Parameters
 
 | Parameter | Type |
 | ------ | ------ |
 | `strings` | `TemplateStringsArray` |
-| ...`values` | ( \| `DBParentRef` \| [`SqlRaw`](../classes/SqlRaw.md) \| [`SqlRef`](../classes/SqlRef.md) \| [`Column`](../interfaces/Column.md)\<`any`, `any`\> \| \{ `TABLE_NAME`: `string`; \})[] |
+| `...values` | `(`[`Column`](../interfaces/Column.md)`<any, any> \| { TABLE_NAME: string } \|`[`SqlRaw`](../classes/SqlRaw.md)`\|`[`SqlRef`](../classes/SqlRef.md)`\| DBParentRef)[]` |
 
-### Returns
+## Returns
 
 [`SqlFragment`](../interfaces/SqlFragment.md)
 
-## Call Signature
+***
 
 ```ts
 function sql(strings: TemplateStringsArray, ...values: SqlInterpolation[]): SqlFragment;
 ```
 
-Defined in: SqlFragment.ts:278
+Defined in: [SqlFragment.ts:279](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/SqlFragment.ts#L279)
 
 General: mixed interpolation → SqlFragment (for withQuery / execute).
 
-### Parameters
+## Parameters
 
 | Parameter | Type |
 | ------ | ------ |
 | `strings` | `TemplateStringsArray` |
-| ...`values` | [`SqlInterpolation`](../globals.md#sqlinterpolation)[] |
+| `...values` | [`SqlInterpolation`](../README.md#sqlinterpolation)`[]` |
 
-### Returns
+## Returns
 
 [`SqlFragment`](../interfaces/SqlFragment.md)
+

@@ -1,12 +1,8 @@
-[**litedbmodel v1.0.1**](../README.md)
-
-***
-
-[litedbmodel](../globals.md) / LimitExceededError
+[API](../README.md) / LimitExceededError
 
 # Class: LimitExceededError
 
-Defined in: types.ts:345
+Defined in: [types.ts:359](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/types.ts#L359)
 
 Error thrown when a query exceeds the configured limit.
 
@@ -16,45 +12,31 @@ Error thrown when a query exceeds the configured limit.
 
 ## Constructors
 
-### Constructor
+### constructor
 
 ```ts
-new LimitExceededError(
-   limit: number, 
-   actualCount: number, 
-   context: "find" | "relation", 
-   modelName?: string, 
-   relationName?: string): LimitExceededError;
+new LimitExceededError(limit: number, actualCount: number, context: 'find' | 'relation', modelName?: string, relationName?: string): LimitExceededError;
 ```
 
-Defined in: types.ts:346
+Defined in: [types.ts:360](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/types.ts#L360)
 
 #### Parameters
 
-| Parameter | Type | Description |
-| ------ | ------ | ------ |
-| `limit` | `number` | - |
-| `actualCount` | `number` | Number of records returned. For find() with findHardLimit, this is limit+1 (actual total may be higher). For relation loading, this is the exact count. |
-| `context` | `"find"` \| `"relation"` | - |
-| `modelName?` | `string` | - |
-| `relationName?` | `string` | - |
-
-#### Returns
-
-`LimitExceededError`
-
-#### Overrides
-
-```ts
-Error.constructor
-```
+| Parameter | Type |
+| ------ | ------ |
+| `limit` | `number` |
+| `actualCount` | `number` |
+| `context` | `'find' \| 'relation'` |
+| `modelName?` | `string` |
+| `relationName?` | `string` |
 
 ## Properties
 
-| Property | Modifier | Type | Description | Defined in |
-| ------ | ------ | ------ | ------ | ------ |
-| <a id="limit"></a> `limit` | `readonly` | `number` | - | types.ts:347 |
-| <a id="actualcount"></a> `actualCount` | `readonly` | `number` | Number of records returned. For find() with findHardLimit, this is limit+1 (actual total may be higher). For relation loading, this is the exact count. | types.ts:352 |
-| <a id="context"></a> `context` | `readonly` | `"find"` \| `"relation"` | - | types.ts:353 |
-| <a id="modelname"></a> `modelName?` | `readonly` | `string` | - | types.ts:354 |
-| <a id="relationname"></a> `relationName?` | `readonly` | `string` | - | types.ts:355 |
+| Property | Type | Description | Defined in |
+| ------ | ------ | ------ | ------ |
+| <a id="limit"></a> `limit` (readonly) | `number` |  | [types.ts:361](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/types.ts#L361) |
+| <a id="actualcount"></a> `actualCount` (readonly) | `number` |  | [types.ts:366](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/types.ts#L366) |
+| <a id="context"></a> `context` (readonly) | `'find' \| 'relation'` |  | [types.ts:367](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/types.ts#L367) |
+| <a id="modelname"></a> `modelName?` (readonly) | `string` |  | [types.ts:368](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/types.ts#L368) |
+| <a id="relationname"></a> `relationName?` (readonly) | `string` |  | [types.ts:369](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/types.ts#L369) |
+

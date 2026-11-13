@@ -1,8 +1,4 @@
-[**litedbmodel v1.0.1**](../README.md)
-
-***
-
-[litedbmodel](../globals.md) / hasMany
+[API](../README.md) / hasMany
 
 # Function: hasMany()
 
@@ -10,21 +6,10 @@
 function hasMany(keys: KeysFactory, options?: RelationDecoratorOptions): PropertyDecorator;
 ```
 
-Defined in: decorators.ts:798
+Defined in: [decorators.ts:806](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/decorators.ts#L806)
 
 HasMany relation decorator (1:N).
 Defines a one-to-many relationship where this model has many related records.
-
-## Parameters
-
-| Parameter | Type | Description |
-| ------ | ------ | ------ |
-| `keys` | `KeysFactory` | Factory function returning [sourceKey, targetKey] or composite key pairs |
-| `options?` | `RelationDecoratorOptions` | Optional order and where clauses |
-
-## Returns
-
-`PropertyDecorator`
 
 ## Example
 
@@ -47,3 +32,15 @@ declare activePosts: Promise<Post[]>;
 ])
 declare posts: Promise<TenantPost[]>;
 ```
+
+## Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `keys` | `KeysFactory` | Factory function returning [sourceKey, targetKey] or composite key pairs |
+| `options?` | `RelationDecoratorOptions` | Optional order and where clauses |
+
+## Returns
+
+`PropertyDecorator`
+

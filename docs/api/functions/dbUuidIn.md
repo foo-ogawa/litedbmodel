@@ -1,8 +1,4 @@
-[**litedbmodel v1.0.1**](../README.md)
-
-***
-
-[litedbmodel](../globals.md) / dbUuidIn
+[API](../README.md) / dbUuidIn
 
 # Function: dbUuidIn()
 
@@ -10,19 +6,9 @@
 function dbUuidIn(values: string[]): DBCastArray;
 ```
 
-Defined in: DBValues.ts:544
+Defined in: [DBValues.ts:544](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/DBValues.ts#L544)
 
 Create a type-cast UUID array for IN clause
-
-## Parameters
-
-| Parameter | Type | Description |
-| ------ | ------ | ------ |
-| `values` | `string`[] | Array of UUID strings |
-
-## Returns
-
-`DBCastArray`
 
 ## Example
 
@@ -30,3 +16,14 @@ Create a type-cast UUID array for IN clause
 await User.find([[User.id, dbUuidIn(['uuid1', 'uuid2'])]]);
 // → WHERE id IN (?::uuid, ?::uuid)
 ```
+
+## Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `values` | `string[]` | Array of UUID strings |
+
+## Returns
+
+`DBCastArray`
+

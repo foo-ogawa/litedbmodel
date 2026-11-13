@@ -11,5 +11,29 @@ datasources:
     type: csv
     path: "./benchmark/results/benchmark-results.csv"
 
-embeds_dir: "./embeds"
+  # The public API of the package root (`litedbmodel`), read from src/ for the API reference under
+  # docs/api/ (`npm run docs`). `@internal`, private members and external declarations are left out
+  # (the datasource defaults). The source link is pinned to the 1.x maintenance branch, never derived
+  # from the git remote or HEAD, so every checkout regenerates the same bytes.
+  api:
+    type: typescript
+    entry_points:
+      - "./src/index.ts"
+    source_link_template: "https://github.com/foo-ogawa/litedbmodel/blob/{gitRevision}/{path}#L{line}"
+    git_revision: v1.x
+    # One page per class / interface / function; every other kind is written in full on the index
+    # (docs/api/README.md, the `api_index` embed in embeds/index.ts). The only place that decides it:
+    # the generator, the page template and the index all read the records' `hasPage` / `page`.
+    pages: [class, interface, function]
+    generators:
+      # `prune` deletes the page of a symbol that is no longer exported, so a removed export cannot
+      # leave a stale page behind.
+      - output_path: "./docs/api/{kindDir}/{name}.md"
+        template: api_page.hbs
+        overwrite: true
+        where:
+          hasPage: "true"
+        prune: true
 
+embeds_dir: "./embeds"
+templates_dir: "./embeds/templates"

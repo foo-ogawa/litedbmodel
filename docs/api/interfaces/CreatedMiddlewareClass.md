@@ -1,12 +1,8 @@
-[**litedbmodel v1.0.1**](../README.md)
-
-***
-
-[litedbmodel](../globals.md) / CreatedMiddlewareClass
+[API](../README.md) / CreatedMiddlewareClass
 
 # Interface: CreatedMiddlewareClass\<S\>
 
-Defined in: Middleware.ts:427
+Defined in: [Middleware.ts:428](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/Middleware.ts#L428)
 
 Type for the middleware class created by createMiddleware.
 Provides typed access to state via getCurrentContext().
@@ -15,23 +11,19 @@ Provides typed access to state via getCurrentContext().
 
 | Type Parameter | Description |
 | ------ | ------ |
-| `S` *extends* `object` | The state object type |
+| `S extends object` | The state object type |
 
 ## Constructors
 
-### Constructor
+### constructor
 
 ```ts
-new CreatedMiddlewareClass(): Middleware & S;
+new CreatedMiddlewareClass(): CreatedMiddlewareClass;
 ```
 
-Defined in: Middleware.ts:437
+Defined in: [Middleware.ts:438](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/Middleware.ts#L438)
 
 Constructor
-
-#### Returns
-
-[`Middleware`](../classes/Middleware.md) & `S`
 
 ## Methods
 
@@ -41,7 +33,7 @@ Constructor
 getCurrentContext(): S;
 ```
 
-Defined in: Middleware.ts:429
+Defined in: [Middleware.ts:430](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/Middleware.ts#L430)
 
 Get the current request's state (creates new instance if none exists)
 
@@ -57,7 +49,7 @@ Get the current request's state (creates new instance if none exists)
 run<R>(fn: () => R): R;
 ```
 
-Defined in: Middleware.ts:431
+Defined in: [Middleware.ts:432](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/Middleware.ts#L432)
 
 Run a function with a fresh middleware context
 
@@ -71,7 +63,7 @@ Run a function with a fresh middleware context
 
 | Parameter | Type |
 | ------ | ------ |
-| `fn` | () => `R` |
+| `fn` | `() => R` |
 
 #### Returns
 
@@ -85,7 +77,7 @@ Run a function with a fresh middleware context
 hasContext(): boolean;
 ```
 
-Defined in: Middleware.ts:433
+Defined in: [Middleware.ts:434](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/Middleware.ts#L434)
 
 Check if a context exists for the current request
 
@@ -101,10 +93,11 @@ Check if a context exists for the current request
 clearContext(): void;
 ```
 
-Defined in: Middleware.ts:435
+Defined in: [Middleware.ts:436](https://github.com/foo-ogawa/litedbmodel/blob/v1.x/src/Middleware.ts#L436)
 
 Clear the current context (useful for testing)
 
 #### Returns
 
 `void`
+
