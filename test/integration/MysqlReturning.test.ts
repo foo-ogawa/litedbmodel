@@ -26,8 +26,9 @@ const MY = {
 
 /** Unique per run: other sessions share the database. */
 const T = `scp_myret_${process.pid}`;
-/** The DBModel-backed table (a model's table name is fixed when the class is declared). */
+/** The DBModel-backed tables (a model's table name is fixed when the class is declared). */
 const JOBS = `scp_myret_jobs_${process.pid}`;
+const ACCTS = `scp_myret_accts_${process.pid}`;
 
 let raw: mysql.Pool;
 let pool: AsyncConnectionPool;
@@ -41,6 +42,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await raw?.query(`DROP TABLE IF EXISTS ${T}`);
   await raw?.query(`DROP TABLE IF EXISTS ${JOBS}`);
+  await raw?.query(`DROP TABLE IF EXISTS ${ACCTS}`);
   await raw?.end();
 });
 
@@ -290,5 +292,66 @@ describe('#362 a DELETE…RETURNING returns only the rows it deleted', () => {
       await other.end();
       await closeAllPools();
     }
+  });
+});
+
+@model(ACCTS)
+class Acct extends DBModel {
+  @column.number({ primaryKey: true, autoIncrement: true }) id?: number;
+  @column.text() email?: string;
+  @column.number() tenant_id?: number;
+  @column.text() name?: string;
+}
+
+/**
+ * A registered v1 middleware routes DBModel through the v1 MySQL driver (`src/drivers/mysql.ts`) — the
+ * path that kept its own copies of the RETURNING emulation. It runs RETURNING writes through the same
+ * executor as the SCP path, so it returns the same rows.
+ */
+describe('#367 the v1 MySQL driver (a v1 middleware registered) returns the rows each write wrote', () => {
+  const v1 = async <R>(fn: () => Promise<R>): Promise<R> => {
+    DBModel.setConfig(mysqlConfig);
+    const unregister = DBModel.use(DBModel.createMiddleware({}));
+    try {
+      return await Middleware.run(() => DBModel.transaction(fn));
+    } finally {
+      unregister();
+      await closeAllPools();
+    }
+  };
+  const accts = async (...seed: [string, number, string][]) => {
+    await raw.query(`DROP TABLE IF EXISTS ${ACCTS}`);
+    await raw.query(`CREATE TABLE ${ACCTS} (id INT AUTO_INCREMENT PRIMARY KEY, email VARCHAR(64) NOT NULL, tenant_id INT NOT NULL, name VARCHAR(64), UNIQUE KEY uq (email))`);
+    for (const row of seed) await raw.query(`INSERT INTO ${ACCTS} (email, tenant_id, name) VALUES (?, ?, ?)`, row);
+  };
+  const ids = (r: { values: unknown[][] } | null | undefined) => r!.values.map((v) => Number(v[0]));
+
+  it('an upsert that updates an existing row returns only that row, not the id after it (another tenant\'s)', async () => {
+    await accts(['a@x', 1, 'old'], ['b@x', 2, 'victim']);
+    const got = await v1(() => Acct.create([[Acct.email, 'a@x'], [Acct.tenant_id, 1], [Acct.name, 'new']], { onConflict: Acct.email, onConflictUpdate: [Acct.name], returning: true }));
+    expect(ids(got)).toEqual([1]);
+  });
+
+  it('a multi-row upsert returns every row it wrote, not the first alone', async () => {
+    await accts(['a@x', 1, 'old'], ['b@x', 2, 'victim']);
+    const got = await v1(() => Acct.createMany([
+      [[Acct.email, 'a@x'], [Acct.tenant_id, 1], [Acct.name, 'new']],
+      [[Acct.email, 'c@x'], [Acct.tenant_id, 1], [Acct.name, 'fresh']],
+    ], { onConflict: Acct.email, onConflictUpdate: [Acct.name], returning: true }));
+    expect(ids(got)).toEqual([1, 3]);
+  });
+
+  it('update({ returning }) returns the PKs it wrote, not []', async () => {
+    await accts(['a@x', 1, 'x'], ['b@x', 1, 'x'], ['c@x', 2, 'x']);
+    const got = await v1(() => Acct.update([[Acct.tenant_id, 1]], [[Acct.name, 'y']], { returning: true }));
+    expect(ids(got)).toEqual([1, 2]);
+  });
+
+  it('delete({ returning }) returns the PKs it deleted, not []', async () => {
+    await accts(['a@x', 1, 'x'], ['b@x', 2, 'x']);
+    const got = await v1(() => Acct.delete([[Acct.tenant_id, 2]], { returning: true }));
+    expect(ids(got)).toEqual([2]);
+    const [rows] = await raw.query(`SELECT id FROM ${ACCTS} ORDER BY id`);
+    expect(plain(rows as Record<string, unknown>[])).toEqual([{ id: 1 }]);
   });
 });

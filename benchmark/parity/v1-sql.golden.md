@@ -254,7 +254,7 @@ INSERT INTO benchmark_posts (author_id, content, title) VALUES (?, ?, ?)
 
 ```sql
 -- [1] params: ["nested10001@example.com","Nested User"]
-INSERT INTO benchmark_users (email, name) VALUES (?, ?) RETURNING id
+INSERT INTO benchmark_users (email, name) VALUES (?, ?) RETURNING id /*scp:pk=id;ai=id*/
 -- [2] params: [502,"Content","Nested Post"]
 INSERT INTO benchmark_posts (author_id, content, title) VALUES (?, ?, ?)
 ```
@@ -333,7 +333,7 @@ INSERT INTO benchmark_users (email, name) VALUES (?, ?) ON CONFLICT (email) DO U
 
 ```sql
 -- [1] params: ["upsert20000@example.com","Upsert User"]
-INSERT INTO benchmark_users (email, name) VALUES (?, ?) ON DUPLICATE KEY UPDATE name = VALUES(name) RETURNING id
+INSERT INTO benchmark_users (email, name) VALUES (?, ?) ON DUPLICATE KEY UPDATE name = VALUES(name) RETURNING id /*scp:pk=id;ai=id;conflict=email*/
 ```
 
 **postgres**
@@ -358,7 +358,7 @@ INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)
 
 ```sql
 -- [1] params: ["nupsert20001@example.com","Nested Upsert"]
-INSERT INTO benchmark_users (email, name) VALUES (?, ?) ON DUPLICATE KEY UPDATE name = VALUES(name) RETURNING id
+INSERT INTO benchmark_users (email, name) VALUES (?, ?) ON DUPLICATE KEY UPDATE name = VALUES(name) RETURNING id /*scp:pk=id;ai=id;conflict=email*/
 -- [2] params: [504,"Upsert Post"]
 INSERT INTO benchmark_posts (author_id, title) VALUES (?, ?)
 ```
@@ -387,7 +387,7 @@ DELETE FROM benchmark_users WHERE id = ?
 
 ```sql
 -- [1] params: ["del10002@example.com","Delete User"]
-INSERT INTO benchmark_users (email, name) VALUES (?, ?) RETURNING id
+INSERT INTO benchmark_users (email, name) VALUES (?, ?) RETURNING id /*scp:pk=id;ai=id*/
 -- [2] params: [505]
 DELETE FROM benchmark_users WHERE id = ?
 ```

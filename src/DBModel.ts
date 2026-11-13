@@ -1274,6 +1274,16 @@ export abstract class DBModel {
           sql += ` RETURNING ${options.returning}`;
         }
       }
+      // MySQL has no native RETURNING: the SAME strip-before-execute PK / conflict hint the SCP path
+      // carries ({@link mysqlPkHint}) tells the driver's emulation which rows this INSERT wrote.
+      if (options.returning && this.getDriverType() === 'mysql') {
+        const k = getPrimaryKey(this);
+        sql = mysqlPkHint(
+          { sql, params: buildResult.params, pk: { columns: k.columns, autoInc: k.autoInc } },
+          onConflictCols !== undefined && onConflictCols.length > 0 ? onConflictCols.join(',') : undefined,
+          options.onConflictIgnore === true ? 'ignore' : undefined,
+        ).sql;
+      }
 
       const result = await this.execute(sql, buildResult.params);
       const instances = (result.rows as Record<string, unknown>[]).map((row) => this._createInstance<T>(row));

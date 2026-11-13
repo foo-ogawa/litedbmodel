@@ -53,6 +53,7 @@ import {
   type MakeSQL,
 } from '../../src/scp/makesql';
 import { dbCast } from '../../src/DBValues';
+import { stripMysqlPkHint } from '../../src/scp/makesql/mysql-returning';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -546,8 +547,11 @@ describe('#65 v2 SCP ↔ v1 golden parity — all 19 ORM-bench ops × 3 dialects
               }
             } else {
               // Non-bundling statement (plain SELECT / single write / composite tuple-IN, which
-              // v1 and v2 emit identically): byte-match the golden.
-              expect(got[i].sql, `${op} stmt#${i} sql`).toBe(want[i].sql);
+              // v1 and v2 emit identically): byte-match the golden. The golden is what reaches the
+              // driver, so a MySQL write…RETURNING carries the strip-before-execute PK hint the driver's
+              // RETURNING emulation reads (`mysqlPkHint`, added beside the builder by the write path);
+              // the builder's SQL is the statement without it.
+              expect(got[i].sql, `${op} stmt#${i} sql`).toBe(stripMysqlPkHint(want[i].sql));
               expect(got[i].params, `${op} stmt#${i} params`).toEqual(want[i].params);
             }
           }

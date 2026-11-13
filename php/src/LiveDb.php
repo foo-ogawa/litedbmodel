@@ -186,6 +186,26 @@ final class MysqlReturning
         return preg_replace(self::PK_HINT_RE, '', $sql) ?? $sql;
     }
 
+    /**
+     * How many rows a `VALUES (?, …), (?, …)` INSERT writes when EVERY value is a bare `?` (each tuple then
+     * binds its `$ncols` params in column order, so row `r`'s column `c` is param `r * ncols + c`), else
+     * null: a value that is an SQL expression (`NOW()`, a cast) moves every `?` after it, so no column's
+     * param position is known (mysql-returning.ts `valuesRows`).
+     */
+    private static function valuesRows(string $writeSql, int $ncols): ?int
+    {
+        if (preg_match('/\)\s*VALUES\s*(\(\s*\?(?:\s*,\s*\?)*\s*\)(?:\s*,\s*\(\s*\?(?:\s*,\s*\?)*\s*\))*)\s*(?:ON\s+DUPLICATE\s+KEY\s+UPDATE\b|$)/i', $writeSql, $m) !== 1) {
+            return null;
+        }
+        preg_match_all('/\([^)]*\)/', $m[1], $tuples);
+        foreach ($tuples[0] as $t) {
+            if (substr_count($t, '?') !== $ncols) {
+                return null;
+            }
+        }
+        return count($tuples[0]);
+    }
+
     /** Split a comma list into trimmed, non-empty entries. @return list<string> */
     private static function splitTrim(string $s): array
     {
@@ -279,19 +299,33 @@ final class MysqlReturning
             return new MysqlReselect($writeSql, "SELECT {$cols} FROM {$table} WHERE (" . implode(', ', $keys) . ") IN "
                 . "(SELECT {$unq} FROM JSON_TABLE(?, '\$[*]' COLUMNS({$paths})) jt){$orderBy}", [new ReselectBind('json')], $written);
         };
-        // Recover a SINGLE-row INSERT's row by EVERY key column, each bound from its INSERT column position.
+        // Recover a VALUES INSERT's rows by EVERY key column of EVERY row, each bound from its own param —
+        // row r's column c (its INSERT column position) is param r * ncols + c (valuesRows). Keying a
+        // multi-row INSERT by its first row alone would drop the rest.
         $keyedByInsertParams = static function (array $keys, string $what, ?string $written) use ($cols, $table, $orderBy, $insertCols, $writeSql): MysqlReselect {
-            $conds = [];
-            $binds = [];
+            $positions = [];
             foreach ($keys as $k) {
                 $idx = array_search($k, $insertCols, true);
                 if ($idx === false) {
                     throw new \RuntimeException("scp write(mysql): {$what} column '{$k}' is not among the INSERT columns of '{$writeSql}'");
                 }
-                $conds[] = "{$k} = ?";
-                $binds[] = new ReselectBind('param', $idx);
+                $positions[] = $idx;
             }
-            return new MysqlReselect($writeSql, "SELECT {$cols} FROM {$table} WHERE " . implode(' AND ', $conds) . $orderBy, $binds, $written);
+            $ncols = count($insertCols);
+            $rows = self::valuesRows($writeSql, $ncols);
+            if ($rows === null) {
+                throw new \RuntimeException("scp write(mysql): the {$what} of '{$writeSql}' cannot be bound from its params — a VALUES value that is not a bare `?` moves the param of every column after it");
+            }
+            $binds = [];
+            for ($r = 0; $r < $rows; $r++) {
+                foreach ($positions as $c) {
+                    $binds[] = new ReselectBind('param', $r * $ncols + $c);
+                }
+            }
+            $where = $rows === 1
+                ? implode(' AND ', array_map(static fn (string $k): string => "{$k} = ?", $keys))
+                : '(' . implode(', ', $keys) . ') IN (' . implode(', ', array_fill(0, $rows, '(' . implode(', ', array_fill(0, count($keys), '?')) . ')')) . ')';
+            return new MysqlReselect($writeSql, "SELECT {$cols} FROM {$table} WHERE {$where}{$orderBy}", $binds, $written);
         };
         // An insert-or-ignore is spelled `ON DUPLICATE KEY UPDATE c = c` on a single row — it reads like an
         // upsert, but it writes NOTHING on a conflict, so it is recovered as the INSERT it may have been.
@@ -335,6 +369,9 @@ final class MysqlReturning
                 // insert-or-ignore on a client-supplied key: lock its PK first (insertIfAbsent) — never its
                 // affected count, which CLIENT_FOUND_ROWS makes the same for a conflict and an insert.
                 $keyed = $keyedByInsertParams($pkCols, 'PK', null);
+                if (count($keyed->binds) !== count($pkCols)) {
+                    throw new \RuntimeException("scp write(mysql): an insert-or-ignore…RETURNING on a client-supplied key writes ONE row ('{$writeSql}')");
+                }
                 $lockSql = 'SELECT ' . implode(', ', $pkCols) . " FROM {$table} WHERE "
                     . implode(' AND ', array_map(static fn (string $k): string => "{$k} = ?", $pkCols)) . ' FOR UPDATE';
                 return new MysqlReselect($keyed->writeSql, $keyed->selectSql, $keyed->binds, null, false, '', $lockSql, $keyed->binds, [], true);

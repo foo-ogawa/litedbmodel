@@ -90,6 +90,10 @@ final class MysqlReturningLiveTest extends TestCase
         $this->table($ddl, $victim);
         self::assertSame($mine, $this->rows("INSERT INTO {$t} (email, name, tenant_id) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE email = VALUES(email), name = VALUES(name), tenant_id = VALUES(tenant_id) RETURNING email, tenant_id, name /*scp:pk=id;ai=id;conflict=email, tenant_id*/", ['a@x', 'mine', 1]), 'upsert');
 
+        // A multi-row VALUES upsert: every row's key tuple, never the first row's alone.
+        $this->table($ddl, $victim);
+        self::assertSame([...$mine, ['email' => 'b@x', 'tenant_id' => '1', 'name' => 'mine']], $this->rows("INSERT INTO {$t} (email, name, tenant_id) VALUES (?, ?, ?), (?, ?, ?) ON DUPLICATE KEY UPDATE email = VALUES(email), name = VALUES(name), tenant_id = VALUES(tenant_id) RETURNING email, tenant_id, name /*scp:pk=id;ai=id;conflict=email, tenant_id*/", ['a@x', 'mine', 1, 'b@x', 'mine', 1]), 'multi-row upsert');
+
         $this->table($ddl, $victim);
         self::assertSame($mine, $this->rows("INSERT INTO {$t} (email, name, tenant_id) SELECT JSON_UNQUOTE(jt.email), JSON_UNQUOTE(jt.name), jt.tenant_id FROM JSON_TABLE(?, '\$[*]' COLUMNS(email JSON PATH '\$.email', name JSON PATH '\$.name', tenant_id BIGINT PATH '\$.tenant_id')) jt ON DUPLICATE KEY UPDATE email = VALUES(email), name = VALUES(name), tenant_id = VALUES(tenant_id) RETURNING email, tenant_id, name /*scp:pk=id;ai=id;conflict=email,tenant_id*/", ['[{"email":"a@x","name":"mine","tenant_id":1}]']), 'upsertMany');
 

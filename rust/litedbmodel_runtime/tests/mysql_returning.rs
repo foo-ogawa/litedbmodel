@@ -79,6 +79,17 @@ fn mysql_returning_composite_key() {
     let got = rows(&d, &format!("INSERT INTO {t} (email, name, tenant_id) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE email = VALUES(email), name = VALUES(name), tenant_id = VALUES(tenant_id) RETURNING email, tenant_id, name /*scp:pk=id;ai=id;conflict=email, tenant_id*/"), &[s("a@x"), s("mine"), Value::Int(1)]).expect("upsert");
     assert_eq!(got, mine, "upsert");
 
+    // A multi-row VALUES upsert: every row's key tuple, never the first row's alone.
+    table(&d, &t, ddl, &victim);
+    let got = rows(&d, &format!("INSERT INTO {t} (email, name, tenant_id) VALUES (?, ?, ?), (?, ?, ?) ON DUPLICATE KEY UPDATE email = VALUES(email), name = VALUES(name), tenant_id = VALUES(tenant_id) RETURNING email, tenant_id, name /*scp:pk=id;ai=id;conflict=email, tenant_id*/"), &[s("a@x"), s("mine"), Value::Int(1), s("b@x"), s("mine"), Value::Int(1)]).expect("multi-row upsert");
+    let mut both = mine.clone();
+    both.push(vec![
+        "email=b@x".to_string(),
+        "tenant_id=1".to_string(),
+        "name=mine".to_string(),
+    ]);
+    assert_eq!(got, both, "multi-row upsert");
+
     table(&d, &t, ddl, &victim);
     let got = rows(&d, &format!("INSERT INTO {t} (email, name, tenant_id) SELECT JSON_UNQUOTE(jt.email), JSON_UNQUOTE(jt.name), jt.tenant_id FROM JSON_TABLE(?, '$[*]' COLUMNS(email JSON PATH '$.email', name JSON PATH '$.name', tenant_id BIGINT PATH '$.tenant_id')) jt ON DUPLICATE KEY UPDATE email = VALUES(email), name = VALUES(name), tenant_id = VALUES(tenant_id) RETURNING email, tenant_id, name /*scp:pk=id;ai=id;conflict=email,tenant_id*/"), &[s(r#"[{"email":"a@x","name":"mine","tenant_id":1}]"#)]).expect("upsertMany");
     assert_eq!(got, mine, "upsertMany");

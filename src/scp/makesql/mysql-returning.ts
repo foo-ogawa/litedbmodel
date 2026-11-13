@@ -38,9 +38,10 @@
  *
  * This module is the TypeScript member of a 5-language SSoT: `rust/litedbmodel_runtime/src/livedb.rs`
  * (`build_mysql_reselect`), `go/litedbmodel_runtime/livedb.go`, `python/litedbmodel_runtime/driver.py`
- * and `php/src/LiveDb.php` derive the identical write/select/bind triple. Both TS execution paths —
- * the generated (codegen) leaf `executeSQL` and the mode-2 transaction plan — reach it through the
- * ONE mysql connection adapter (`pool-executor.mysqlConnection`), so they cannot return different rows.
+ * and `php/src/LiveDb.php` derive the identical write/select/bind triple. Every TS execution path —
+ * the generated (codegen) leaf `executeSQL`, the mode-2 transaction plan, and the v1 MySQL driver
+ * (`src/drivers/mysql.ts`, DBModel with a v1 middleware registered) — runs it through the ONE executor
+ * (`pool-executor.mysqlReturning`), so they cannot return different rows.
  */
 
 // TYPE-only (erased at compile time), so the tx module can import this one back without a cycle.
@@ -164,6 +165,19 @@ function insertCols(writeSql: string): string[] {
   return m === null ? [] : m[1].split(',').map((c) => c.trim());
 }
 
+/**
+ * How many rows a `VALUES (?, …), (?, …)` INSERT writes when EVERY value is a bare `?` (each tuple then
+ * binds its `ncols` params in column order, so row `r`'s column `c` is param `r * ncols + c`), else `null`:
+ * a value that is an SQL expression (`NOW()`, a cast) moves every `?` after it, so no column's param
+ * position is known.
+ */
+function valuesRows(writeSql: string, ncols: number): number | null {
+  const m = /\)\s*VALUES\s*(\(\s*\?(?:\s*,\s*\?)*\s*\)(?:\s*,\s*\(\s*\?(?:\s*,\s*\?)*\s*\))*)\s*(?:ON\s+DUPLICATE\s+KEY\s+UPDATE\b|$)/i.exec(writeSql);
+  if (m === null) return null;
+  const tuples = m[1].match(/\([^)]*\)/g) ?? [];
+  return tuples.every((t) => placeholders(t) === ncols) ? tuples.length : null;
+}
+
 /** The target table — the identifier after `INSERT INTO` / `UPDATE` / `DELETE FROM`. */
 function tableOf(writeSql: string): string | null {
   const m = /\b(?:INSERT\s+(?:IGNORE\s+)?INTO|UPDATE|DELETE\s+FROM)\s+([A-Za-z0-9_."`]+)/i.exec(writeSql);
@@ -251,14 +265,27 @@ export function buildMysqlReselect(sql: string): MysqlReselect | null {
       written,
     );
   };
-  /** Recover a SINGLE-row INSERT's row by EVERY key column, each bound from its INSERT column position. */
+  /**
+   * Recover a VALUES INSERT's rows by EVERY key column of EVERY row, each bound from its own param —
+   * row `r`'s column `c` (its INSERT column position) is param `r * ncols + c` ({@link valuesRows}). Keying
+   * a multi-row INSERT by its first row alone would drop the rest.
+   */
   const keyedByInsertParams = (keys: readonly string[], what: string, written: WrittenRows | null): MysqlReselect => {
-    const binds: ReselectBind[] = keys.map((k) => {
+    const positions = keys.map((k) => {
       const index = writeCols.indexOf(k);
       if (index < 0) throw new Error(`scp write(mysql): ${what} column '${k}' is not among the INSERT columns of '${writeSql.slice(0, 60)}…'`);
-      return { kind: 'param', index };
+      return index;
     });
-    return done(`SELECT ${cols} FROM ${table} WHERE ${keys.map((k) => `${k} = ?`).join(' AND ')}${orderBy}`, binds, written);
+    const rows = valuesRows(writeSql, writeCols.length);
+    if (rows === null) {
+      throw new Error(`scp write(mysql): the ${what} of '${writeSql.slice(0, 60)}…' cannot be bound from its params — a VALUES value that is not a bare \`?\` moves the param of every column after it`);
+    }
+    const binds: ReselectBind[] = [];
+    for (let r = 0; r < rows; r++) for (const c of positions) binds.push({ kind: 'param', index: r * writeCols.length + c });
+    const where = rows === 1
+      ? keys.map((k) => `${k} = ?`).join(' AND ')
+      : `(${keys.join(', ')}) IN (${Array.from({ length: rows }, () => `(${keys.map(() => '?').join(', ')})`).join(', ')})`;
+    return done(`SELECT ${cols} FROM ${table} WHERE ${where}${orderBy}`, binds, written);
   };
   // An insert-or-ignore is spelled `ON DUPLICATE KEY UPDATE c = c` on a single row — it reads like an
   // upsert, but it writes NOTHING on a conflict, so it is recovered as the INSERT it may have been.
@@ -306,6 +333,9 @@ export function buildMysqlReselect(sql: string): MysqlReselect | null {
       // insert-or-ignore on a client-supplied key: lock its PK first (insertIfAbsent) — never its
       // affected count, which CLIENT_FOUND_ROWS makes the same for a conflict and an insert.
       const keyed = keyedByInsertParams(pk, 'PK', null);
+      if (keyed.binds.length !== pk.length) {
+        throw new Error(`scp write(mysql): an insert-or-ignore…RETURNING on a client-supplied key writes ONE row ('${writeSql.slice(0, 60)}…')`);
+      }
       return {
         ...keyed,
         lockSql: `SELECT ${pk.join(', ')} FROM ${table} WHERE ${pk.map((k) => `${k} = ?`).join(' AND ')} FOR UPDATE`,

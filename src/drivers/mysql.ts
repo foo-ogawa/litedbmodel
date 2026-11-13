@@ -10,7 +10,8 @@ import { defaultLogger } from './types';
 import { isConnectionError, acquireCheckedConnection } from '../connection-errors';
 import { isResendableStatement } from '../scp/middleware';
 import { resolveTxOptions } from '../scp/tx-options';
-import { mysqlDeboxPoolOptions } from '../scp/makesql/pool-executor';
+import { mysqlDeboxPoolOptions, mysqlReturning, type MysqlQueryLike } from '../scp/makesql/pool-executor';
+import { buildMysqlReselect } from '../scp/makesql/mysql-returning';
 
 // mysql2 types (loaded dynamically)
 interface Mysql2Pool {
@@ -175,26 +176,41 @@ function convertOnConflictToMysql(sql: string): string {
 }
 
 /**
- * Extract table name from INSERT statement
+ * Run one statement on a mysql2 connection / pool and shape its result. MySQL parses no `RETURNING`: a
+ * write that declares one ({@link buildMysqlReselect}) runs through the SAME emulation executor the SCP
+ * connection adapter uses ({@link mysqlReturning}) — on ONE connection, which `connection` returns (a
+ * transaction's own connection, or one checked out of the pool for the write and released after it).
  */
-function extractTableName(sql: string): string | null {
-  const match = sql.match(/INSERT INTO\s+(\w+)/i);
-  return match ? match[1] : null;
+async function runMysql(
+  sql: string,
+  params: unknown[],
+  query: MysqlQueryLike['query'],
+  connection: () => Promise<{ conn: MysqlQueryLike; done: () => void }>,
+): Promise<QueryResult> {
+  const reselect = buildMysqlReselect(sql);
+  if (reselect !== null) {
+    const { conn, done } = await connection();
+    try {
+      const rows = (await mysqlReturning(conn, reselect, params)) as Record<string, unknown>[];
+      return { rows, rowCount: rows.length };
+    } finally {
+      done();
+    }
+  }
+  const [result] = await query(sql, params);
+  if (Array.isArray(result)) {
+    const rows = result as Record<string, unknown>[];
+    return { rows, rowCount: rows.length };
+  }
+  return { rows: [], rowCount: ((result as Record<string, unknown>).affectedRows as number) ?? 0 };
 }
 
-/**
- * Remove RETURNING clause from SQL (MySQL doesn't support it)
- */
-function removeReturning(sql: string): { sql: string; hasReturning: boolean; returningCols: string } {
-  const match = sql.match(/\s+RETURNING\s+(.+)$/i);
-  if (match) {
-    return {
-      sql: sql.replace(/\s+RETURNING\s+.+$/i, ''),
-      hasReturning: true,
-      returningCols: match[1].trim(),
-    };
-  }
-  return { sql, hasReturning: false, returningCols: '' };
+/** One pooled connection for a RETURNING write, released after it. */
+function pooledConnection(pool: Mysql2Pool): () => Promise<{ conn: MysqlQueryLike; done: () => void }> {
+  return async () => {
+    const conn = await pool.getConnection();
+    return { conn, done: () => conn.release() };
+  };
 }
 
 // ============================================
@@ -209,52 +225,8 @@ class MysqlConnection implements DBConnection {
     // Handle MySQL-specific conversions
     const convertedSql = convertOnConflictToMysql(sql);
     this.logger.debug(`SQL: ${convertedSql}`, params ?? []);
-    
-    // Handle RETURNING clause
-    const { sql: sqlWithoutReturning, hasReturning, returningCols } = removeReturning(convertedSql);
-    
-    const convertedParams = convertParams(params || []);
-    
-    const [result] = await this.connection.query(sqlWithoutReturning, convertedParams);
-    
-    // Check if this is a SELECT-like query
-    if (Array.isArray(result) && result.length > 0 && typeof result[0] === 'object' && result[0] !== null && !('affectedRows' in result[0])) {
-      const rowArray = result as unknown as Record<string, unknown>[];
-      return {
-        rows: rowArray,
-        rowCount: rowArray.length,
-      };
-    }
-    
-    // For INSERT with RETURNING, fetch the affected rows
-    if (hasReturning) {
-      const resultObj = result as unknown as Record<string, unknown>;
-      const tableName = extractTableName(sql);
-      
-      if (tableName && sql.trim().toUpperCase().startsWith('INSERT')) {
-        const insertId = resultObj.insertId as number;
-        const affectedRows = (resultObj.affectedRows as number) ?? 1;
-        
-        if (affectedRows > 0 && insertId > 0) {
-          const cols = returningCols === '*' ? '*' : returningCols;
-          const selectSql = `SELECT ${cols} FROM ${tableName} WHERE id >= ? AND id < ?`;
-          const [selectResult] = await this.connection.query(selectSql, [insertId, insertId + affectedRows]);
-          const rows = selectResult as unknown as Record<string, unknown>[];
-          return {
-            rows,
-            rowCount: rows.length,
-          };
-        }
-      }
-    }
-    
-    // Regular write result
-    const resultObj = result as unknown as Record<string, unknown>;
-    const rowCount = (resultObj.affectedRows as number) ?? 0;
-    return {
-      rows: [],
-      rowCount,
-    };
+    const conn = this.connection;
+    return runMysql(convertedSql, convertParams(params || []), (q, v) => conn.query(q, v), async () => ({ conn, done: () => undefined }));
   }
 
   release(error?: Error | boolean): void {
@@ -300,78 +272,32 @@ export class MysqlDriver implements DBDriver {
     const pool = onWriter ? (this.writerPool || this.pool) : this.pool;
     // Handle MySQL-specific conversions
     const convertedSql = convertOnConflictToMysql(sql);
-    
-    // Handle RETURNING clause (MySQL doesn't support it natively)
-    const { sql: sqlWithoutReturning, hasReturning, returningCols } = removeReturning(convertedSql);
-    
     const convertedParams = convertParams(params);
-    this.logger.debug(`SQL: ${sqlWithoutReturning}`, convertedParams);
+    this.logger.debug(`SQL: ${convertedSql}`, convertedParams);
+    const run = () => runMysql(convertedSql, convertedParams, (q, v) => pool.query(q, v), pooledConnection(pool));
 
     const startTime = Date.now();
     try {
-      const [result] = await pool.query(sqlWithoutReturning, convertedParams);
-      const duration = Date.now() - startTime;
-      
-      // Check if this is a SELECT-like query
-      if (Array.isArray(result) && result.length > 0 && typeof result[0] === 'object' && result[0] !== null && !('affectedRows' in result[0])) {
-        const rowArray = result as unknown as Record<string, unknown>[];
-        this.logger.debug(`Query completed in ${duration}ms, rows: ${rowArray.length}`);
-        return {
-          rows: rowArray,
-          rowCount: rowArray.length,
-        };
-      }
-      
-      // For INSERT/UPDATE/DELETE with RETURNING, fetch the affected rows
-      if (hasReturning) {
-        const resultObj = result as unknown as Record<string, unknown>;
-        const tableName = extractTableName(sql);
-        
-        if (tableName && sql.trim().toUpperCase().startsWith('INSERT')) {
-          const insertId = resultObj.insertId as number;
-          const affectedRows = (resultObj.affectedRows as number) ?? 1;
-          
-          // For single insert, use insertId
-          // For bulk insert, fetch rows from insertId to insertId + affectedRows - 1
-          if (affectedRows > 0 && insertId > 0) {
-            const cols = returningCols === '*' ? '*' : returningCols;
-            const selectSql = `SELECT ${cols} FROM ${tableName} WHERE id >= ? AND id < ?`;
-            const [selectResult] = await pool.query(selectSql, [insertId, insertId + affectedRows]);
-            const rows = selectResult as unknown as Record<string, unknown>[];
-            this.logger.debug(`Insert completed in ${duration}ms, rows: ${rows.length}`);
-            return {
-              rows,
-              rowCount: rows.length,
-            };
-          }
-        }
-      }
-      
-      // Regular write result
-      const resultObj = result as unknown as Record<string, unknown>;
-      const rowCount = (resultObj.affectedRows as number) ?? 0;
-      this.logger.debug(`Query completed in ${duration}ms, affected: ${rowCount}`);
-      return {
-        rows: [],
-        rowCount,
-      };
+      const result = await run();
+      this.logger.debug(`Query completed in ${Date.now() - startTime}ms, rows: ${result.rows.length}, affected: ${result.rowCount}`);
+      return result;
     } catch (error) {
       if (isConnectionError(error as Error) && isResendableStatement(sql)) {
-        this.logger.warn(`Connection error, retrying query: ${sqlWithoutReturning}`);
+        this.logger.warn(`Connection error, retrying query: ${convertedSql}`);
         let conn: MysqlConnection | undefined;
         try {
           conn = await this.connect(pool, resolveTxOptions().retryLimit);
           const result = await conn.query(sql, params);
           conn.release();
-          this.logger.debug(`Retry succeeded in ${Date.now() - startTime}ms, rows: ${result.rowCount}`);
+          this.logger.debug(`Retry succeeded in ${Date.now() - startTime}ms, rows: ${result.rows.length}, affected: ${result.rowCount}`);
           return result;
         } catch (retryError) {
           conn?.release(retryError as Error);
-          this.logger.error(`Retry also failed: ${sqlWithoutReturning}`, retryError);
+          this.logger.error(`Retry also failed: ${convertedSql}`, retryError);
           throw retryError;
         }
       }
-      this.logger.error(`Query failed: ${sqlWithoutReturning}`, error);
+      this.logger.error(`Query failed: ${convertedSql}`, error);
       throw error;
     }
   }
@@ -380,57 +306,19 @@ export class MysqlDriver implements DBDriver {
    * Execute a write query (uses writer pool if available)
    */
   async executeWrite(sql: string, params: unknown[] = []): Promise<QueryResult> {
-    const conn = this.writerPool || this.pool;
-    
+    const pool = this.writerPool || this.pool;
     // Handle MySQL-specific conversions
     const convertedSql = convertOnConflictToMysql(sql);
-    
-    // Handle RETURNING clause
-    const { sql: sqlWithoutReturning, hasReturning, returningCols } = removeReturning(convertedSql);
-    
     const convertedParams = convertParams(params);
-    this.logger.debug(`SQL: ${sqlWithoutReturning}`, convertedParams);
+    this.logger.debug(`SQL: ${convertedSql}`, convertedParams);
 
     const startTime = Date.now();
     try {
-      const [result] = await conn.query(sqlWithoutReturning, convertedParams);
-      const duration = Date.now() - startTime;
-      
-      // For INSERT/UPDATE/DELETE with RETURNING, fetch the affected rows
-      if (hasReturning) {
-        const resultObj = result as unknown as Record<string, unknown>;
-        const tableName = extractTableName(sql);
-        
-        if (tableName && sql.trim().toUpperCase().startsWith('INSERT')) {
-          const insertId = resultObj.insertId as number;
-          const affectedRows = (resultObj.affectedRows as number) ?? 1;
-          
-          if (affectedRows > 0 && insertId > 0) {
-            const cols = returningCols === '*' ? '*' : returningCols;
-            const selectSql = `SELECT ${cols} FROM ${tableName} WHERE id >= ? AND id < ?`;
-            const [selectResult] = await conn.query(selectSql, [insertId, insertId + affectedRows]);
-            const rows = selectResult as unknown as Record<string, unknown>[];
-            this.logger.debug(`Insert completed in ${duration}ms, rows: ${rows.length}`);
-            return {
-              rows,
-              rowCount: rows.length,
-            };
-          }
-        }
-      }
-      
-      // Regular write result
-      const resultObj = result as unknown as Record<string, unknown>;
-      const rowCount = (resultObj.affectedRows as number) ?? 0;
-      const rows = Array.isArray(result) ? (result as unknown as Record<string, unknown>[]) : [];
-      
-      this.logger.debug(`Write completed in ${duration}ms, affected: ${rowCount}`);
-      return {
-        rows,
-        rowCount,
-      };
+      const result = await runMysql(convertedSql, convertedParams, (q, v) => pool.query(q, v), pooledConnection(pool));
+      this.logger.debug(`Write completed in ${Date.now() - startTime}ms, rows: ${result.rows.length}, affected: ${result.rowCount}`);
+      return result;
     } catch (error) {
-      this.logger.error(`Write failed: ${sqlWithoutReturning}`, error);
+      this.logger.error(`Write failed: ${convertedSql}`, error);
       throw error;
     }
   }

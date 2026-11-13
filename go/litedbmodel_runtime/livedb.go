@@ -515,6 +515,29 @@ func updateBatchKeys(writeSQL string) []string {
 	return keys
 }
 
+// valuesRowsRe is a `VALUES (?, …), (?, …)` list whose every value is a bare `?` (then the end of the
+// write, or its ON DUPLICATE KEY UPDATE) — mysql-returning.ts valuesRows.
+var valuesRowsRe = regexp.MustCompile(`(?i)\)\s*VALUES\s*(\(\s*\?(?:\s*,\s*\?)*\s*\)(?:\s*,\s*\(\s*\?(?:\s*,\s*\?)*\s*\))*)\s*(?:ON\s+DUPLICATE\s+KEY\s+UPDATE\b|$)`)
+var valuesTupleRe = regexp.MustCompile(`\([^)]*\)`)
+
+// valuesRows is how many rows a VALUES INSERT writes when EVERY value is a bare `?` (each tuple then
+// binds its ncols params in column order, so row r's column c is param r*ncols + c), else -1: a value
+// that is an SQL expression (NOW(), a cast) moves every `?` after it, so no column's param position is
+// known (mysql-returning.ts valuesRows).
+func valuesRows(writeSQL string, ncols int) int {
+	m := valuesRowsRe.FindStringSubmatch(writeSQL)
+	if m == nil {
+		return -1
+	}
+	tuples := valuesTupleRe.FindAllString(m[1], -1)
+	for _, t := range tuples {
+		if strings.Count(t, "?") != ncols {
+			return -1
+		}
+	}
+	return len(tuples)
+}
+
 func columnIndex(xs []string, want string) int {
 	for i, x := range xs {
 		if x == want {
@@ -577,20 +600,48 @@ func buildMysqlReselect(sql string) (*mysqlReselect, error) {
 			cols, table, strings.Join(keys, ", "), strings.Join(unq, ", "), strings.Join(paths, ", "), orderBy,
 		), binds: []reselectBind{{kind: "json"}}, written: written}, nil
 	}
-	// Recover a SINGLE-row INSERT's row by EVERY key column, each bound from its INSERT column position.
+	// Recover a VALUES INSERT's rows by EVERY key column of EVERY row, each bound from its own param —
+	// row r's column c (its INSERT column position) is param r*ncols + c ([valuesRows]). Keying a
+	// multi-row INSERT by its first row alone would drop the rest.
 	keyedByInsertParams := func(keys []string, what, written string) (*mysqlReselect, error) {
-		conds := []string{}
-		binds := []reselectBind{}
+		positions := []int{}
 		for _, k := range keys {
 			idx := columnIndex(insertCols, k)
 			if idx < 0 {
 				return nil, fmt.Errorf("scp write(mysql): %s column %q is not among the INSERT columns of %q", what, k, writeSQL)
 			}
-			conds = append(conds, k+" = ?")
-			binds = append(binds, reselectBind{kind: "param", index: idx})
+			positions = append(positions, idx)
+		}
+		rows := valuesRows(writeSQL, len(insertCols))
+		if rows < 0 {
+			return nil, fmt.Errorf("scp write(mysql): the %s of %q cannot be bound from its params — a VALUES value that is not a bare `?` moves the param of every column after it", what, writeSQL)
+		}
+		binds := []reselectBind{}
+		for r := 0; r < rows; r++ {
+			for _, c := range positions {
+				binds = append(binds, reselectBind{kind: "param", index: r*len(insertCols) + c})
+			}
+		}
+		var where string
+		if rows == 1 {
+			conds := make([]string, len(keys))
+			for i, k := range keys {
+				conds[i] = k + " = ?"
+			}
+			where = strings.Join(conds, " AND ")
+		} else {
+			marks := make([]string, len(keys))
+			for i := range marks {
+				marks[i] = "?"
+			}
+			tuples := make([]string, rows)
+			for i := range tuples {
+				tuples[i] = "(" + strings.Join(marks, ", ") + ")"
+			}
+			where = "(" + strings.Join(keys, ", ") + ") IN (" + strings.Join(tuples, ", ") + ")"
 		}
 		return &mysqlReselect{writeSQL: writeSQL, selectSQL: fmt.Sprintf(
-			"SELECT %s FROM %s WHERE %s%s", cols, table, strings.Join(conds, " AND "), orderBy,
+			"SELECT %s FROM %s WHERE %s%s", cols, table, where, orderBy,
 		), binds: binds, written: written}, nil
 	}
 	// An insert-or-ignore is spelled `ON DUPLICATE KEY UPDATE c = c` on a single row — it reads like an
@@ -648,6 +699,9 @@ func buildMysqlReselect(sql string) (*mysqlReselect, error) {
 			rs, err := keyedByInsertParams(pkCols, "PK", "")
 			if err != nil {
 				return nil, err
+			}
+			if len(rs.binds) != len(pkCols) {
+				return nil, fmt.Errorf("scp write(mysql): an insert-or-ignore…RETURNING on a client-supplied key writes ONE row (%q)", writeSQL)
 			}
 			conds := make([]string, len(pkCols))
 			for i, k := range pkCols {

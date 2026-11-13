@@ -421,6 +421,24 @@ _PK_HINT_RE = re.compile(r"\s*/\*scp:pk=[^*]*\*/", re.IGNORECASE)
 _PK_HINT_PARSE_RE = re.compile(r"/\*scp:pk=([^;*]*);ai=([^;*]*)", re.IGNORECASE)
 _CONFLICT_HINT_RE = re.compile(r";conflict=([^;*]*)", re.IGNORECASE)
 _IGNORE_HINT_RE = re.compile(r";action=ignore[;*]", re.IGNORECASE)
+# A `VALUES (?, …), (?, …)` list whose every value is a bare `?` (then the end of the write, or its ON
+# DUPLICATE KEY UPDATE) — mysql-returning.ts ``valuesRows``.
+_VALUES_ROWS_RE = re.compile(
+    r"\)\s*VALUES\s*(\(\s*\?(?:\s*,\s*\?)*\s*\)(?:\s*,\s*\(\s*\?(?:\s*,\s*\?)*\s*\))*)\s*(?:ON\s+DUPLICATE\s+KEY\s+UPDATE\b|$)",
+    re.IGNORECASE,
+)
+
+
+def _values_rows(write_sql: str, ncols: int) -> Optional[int]:
+    """How many rows a VALUES INSERT writes when EVERY value is a bare ``?`` (each tuple then binds its
+    ``ncols`` params in column order, so row ``r``'s column ``c`` is param ``r * ncols + c``), else
+    ``None``: a value that is an SQL expression (``NOW()``, a cast) moves every ``?`` after it, so no
+    column's param position is known (mysql-returning.ts ``valuesRows``)."""
+    m = _VALUES_ROWS_RE.search(write_sql)
+    if m is None:
+        return None
+    tuples = re.findall(r"\([^)]*\)", m.group(1))
+    return len(tuples) if all(t.count("?") == ncols for t in tuples) else None
 # The OK/EOF packet's "a transaction is open" status bit (pymysql.constants.SERVER_STATUS.SERVER_STATUS_IN_TRANS).
 _SERVER_STATUS_IN_TRANS = 1
 
@@ -601,14 +619,26 @@ def _build_mysql_reselect(sql: str):
         ), [("json", 0)], written, False)
 
     def keyed_by_insert_params(keys, what: str, written):
-        # Recover a SINGLE-row INSERT's row by EVERY key column, each bound from its INSERT column position.
-        conds, binds = [], []
+        # Recover a VALUES INSERT's rows by EVERY key column of EVERY row, each bound from its own param —
+        # row r's column c (its INSERT column position) is param r * ncols + c (_values_rows). Keying a
+        # multi-row INSERT by its first row alone would drop the rest.
         for k in keys:
             if k not in insert_cols:
                 raise ValueError(f"scp write(mysql): {what} column {k!r} is not among the INSERT columns of {write_sql!r}")
-            conds.append(f"{k} = ?")
-            binds.append(("param", insert_cols.index(k)))
-        return _MysqlReselect(write_sql, f"SELECT {cols} FROM {table} WHERE {' AND '.join(conds)}{order_by}", binds, written, False)
+        positions = [insert_cols.index(k) for k in keys]
+        rows = _values_rows(write_sql, len(insert_cols))
+        if rows is None:
+            raise ValueError(
+                f"scp write(mysql): the {what} of {write_sql!r} cannot be bound from its params — a VALUES value "
+                "that is not a bare `?` moves the param of every column after it"
+            )
+        binds = [("param", r * len(insert_cols) + c) for r in range(rows) for c in positions]
+        if rows == 1:
+            where = " AND ".join(f"{k} = ?" for k in keys)
+        else:
+            tuple_ = "(" + ", ".join("?" for _ in keys) + ")"
+            where = f"({', '.join(keys)}) IN ({', '.join(tuple_ for _ in range(rows))})"
+        return _MysqlReselect(write_sql, f"SELECT {cols} FROM {table} WHERE {where}{order_by}", binds, written, False)
 
     # An insert-or-ignore is spelled `ON DUPLICATE KEY UPDATE c = c` on a single row — it reads like an
     # upsert, but it writes NOTHING on a conflict, so it is recovered as the INSERT it may have been.
@@ -653,6 +683,8 @@ def _build_mysql_reselect(sql: str):
             # insert-or-ignore on a client-supplied key: lock its PK first (insert_if_absent) — never its
             # affected count, which CLIENT_FOUND_ROWS makes the same for a conflict and an insert.
             keyed = keyed_by_insert_params(pk_cols, "PK", None)
+            if len(keyed.binds) != len(pk_cols):
+                raise ValueError(f"scp write(mysql): an insert-or-ignore…RETURNING on a client-supplied key writes ONE row ({write_sql!r})")
             return keyed._replace(
                 lock_sql=f"SELECT {', '.join(pk_cols)} FROM {table} WHERE {' AND '.join(f'{k} = ?' for k in pk_cols)} FOR UPDATE",
                 lock_binds=keyed.binds, insert_if_absent=True,

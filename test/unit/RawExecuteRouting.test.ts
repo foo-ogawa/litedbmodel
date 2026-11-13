@@ -31,6 +31,17 @@ const WRITES = [
   'SELECT id INTO @v FROM t WHERE id = ?',
   'SELECT * INTO new_t FROM t',
 ];
+/**
+ * MySQL parses no RETURNING: the v1 driver runs a RETURNING write through the emulation, which recovers the
+ * written rows by the strip-before-execute PK hint DBModel appends (`mysqlPkHint`) — so the RETURNING writes
+ * above take their MySQL form here (MySQL has no data-modifying WITH); the other writes are the same.
+ */
+const MYSQL_WRITES = [
+  'INSERT INTO t (a) VALUES (1) RETURNING id /*scp:pk=id;ai=id*/',
+  'UPDATE t SET a = 1 WHERE b = 2 RETURNING id /*scp:pk=id;ai=*/',
+  'DELETE FROM t WHERE b = 2 RETURNING id /*scp:pk=id;ai=*/',
+  ...WRITES.filter((sql) => !/\breturning\b/i.test(sql)),
+];
 /** Read-only and calling no function: reader, re-sent once after a connection error. */
 const READS = [
   'SELECT 1',
@@ -55,9 +66,9 @@ function connectionError(): Error {
 }
 
 describe.each([
-  { name: 'postgres', driver: 'postgres' as const, port: 5432, fakePool: fakePgPool, ok: { rows: [], rowCount: 0 } },
-  { name: 'mysql', driver: 'mysql' as const, port: 3306, fakePool: fakeMysqlPool, ok: [[], null] },
-])('DBModel.execute routing on the v1 branch ($name)', ({ driver, port, fakePool, ok }) => {
+  { name: 'postgres', driver: 'postgres' as const, port: 5432, fakePool: fakePgPool, ok: { rows: [], rowCount: 0 }, writes: WRITES },
+  { name: 'mysql', driver: 'mysql' as const, port: 3306, fakePool: fakeMysqlPool, ok: [[], null], writes: MYSQL_WRITES },
+])('DBModel.execute routing on the v1 branch ($name)', ({ driver, port, fakePool, ok, writes }) => {
   /** Each pool fails its first statement with a connection error and answers every later one. */
   function makeModel() {
     const config = { host: `raw-routing-${driver}-reader`, port, database: 'raw_routing', user: 'test', password: 'test', driver };
@@ -76,7 +87,7 @@ describe.each([
     return { RawModel, reader, writer };
   }
 
-  it.each(WRITES)('sends %s to the writer once, never to the reader, and does not re-send it', async (sql) => {
+  it.each(writes)('sends %s to the writer once, never to the reader, and does not re-send it', async (sql) => {
     const { RawModel, reader, writer } = makeModel();
     await expect(RawModel.execute(sql)).rejects.toThrow('Connection terminated unexpectedly');
     expect(reader).not.toHaveBeenCalled();
@@ -96,6 +107,15 @@ describe.each([
     expect(reader).toHaveBeenCalledTimes(1);
     expect(writer).not.toHaveBeenCalled();
   });
+
+  if (driver === 'mysql') {
+    it('fails a RETURNING write with no PK hint closed, before sending anything (its rows could not be named)', async () => {
+      const { RawModel, reader, writer } = makeModel();
+      await expect(RawModel.execute('INSERT INTO t (a) VALUES (1) RETURNING id')).rejects.toThrow(/carries no pk hint/);
+      expect(reader).not.toHaveBeenCalled();
+      expect(writer).not.toHaveBeenCalled();
+    });
+  }
 });
 
 describe('DBModel.execute routing on the SCP route', () => {

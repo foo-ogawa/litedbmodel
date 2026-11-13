@@ -58,6 +58,10 @@ def test_mysql_returning_composite_key(driver):
     _table(driver, ddl, victim)
     assert _rows(driver, f"INSERT INTO {TBL} (email, name, tenant_id) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE email = VALUES(email), name = VALUES(name), tenant_id = VALUES(tenant_id) RETURNING email, tenant_id, name /*scp:pk=id;ai=id;conflict=email, tenant_id*/", ["a@x", "mine", 1]) == mine
 
+    # A multi-row VALUES upsert: every row's key tuple, never the first row's alone.
+    _table(driver, ddl, victim)
+    assert _rows(driver, f"INSERT INTO {TBL} (email, name, tenant_id) VALUES (?, ?, ?), (?, ?, ?) ON DUPLICATE KEY UPDATE email = VALUES(email), name = VALUES(name), tenant_id = VALUES(tenant_id) RETURNING email, tenant_id, name /*scp:pk=id;ai=id;conflict=email, tenant_id*/", ["a@x", "mine", 1, "b@x", "mine", 1]) == mine + [{"email": "b@x", "tenant_id": 1, "name": "mine"}]
+
     _table(driver, ddl, victim)
     payload = json.dumps([{"email": "a@x", "name": "mine", "tenant_id": 1}])
     assert _rows(driver, f"INSERT INTO {TBL} (email, name, tenant_id) SELECT JSON_UNQUOTE(jt.email), JSON_UNQUOTE(jt.name), jt.tenant_id FROM JSON_TABLE(?, '$[*]' COLUMNS(email JSON PATH '$.email', name JSON PATH '$.name', tenant_id BIGINT PATH '$.tenant_id')) jt ON DUPLICATE KEY UPDATE email = VALUES(email), name = VALUES(name), tenant_id = VALUES(tenant_id) RETURNING email, tenant_id, name /*scp:pk=id;ai=id;conflict=email,tenant_id*/", [payload]) == mine

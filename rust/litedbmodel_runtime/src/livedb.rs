@@ -1421,26 +1421,49 @@ fn build_mysql_reselect(sql: &str) -> Result<Option<MysqlReselect>, SqlFailure> 
             vec![ReselectBind::JsonParam],
         ))
     };
-    // Recover a SINGLE-row INSERT's row by EVERY key column, each bound from its INSERT column position.
+    // Recover a VALUES INSERT's rows by EVERY key column of EVERY row, each bound from its own param —
+    // row r's column c (its INSERT column position) is param r * ncols + c ([`values_rows`]). Keying a
+    // multi-row INSERT by its first row alone would drop the rest.
     let keyed_by_insert_params = |keys: &[String],
                                   what: &str|
      -> Result<(String, Vec<ReselectBind>), SqlFailure> {
-        let mut conds: Vec<String> = Vec::new();
-        let mut binds: Vec<ReselectBind> = Vec::new();
+        let mut positions: Vec<usize> = Vec::new();
         for k in keys {
             let Some(idx) = insert_cols.iter().position(|c| c == k) else {
                 return Err(driver_failure(format!(
                     "scp write(mysql): {what} column '{k}' is not among the INSERT columns of '{write_sql}'"
                 )));
             };
-            conds.push(format!("{k} = ?"));
-            binds.push(ReselectBind::Param(idx));
+            positions.push(idx);
         }
-        Ok((
+        let ncols = insert_cols.len();
+        let Some(rows) = values_rows(&write_sql, ncols) else {
+            return Err(driver_failure(format!(
+                "scp write(mysql): the {what} of '{write_sql}' cannot be bound from its params — a VALUES value that is not a bare `?` moves the param of every column after it"
+            )));
+        };
+        let binds: Vec<ReselectBind> = (0..rows)
+            .flat_map(|r| {
+                positions
+                    .iter()
+                    .map(move |c| ReselectBind::Param(r * ncols + c))
+            })
+            .collect();
+        let predicate = if rows == 1 {
+            keys.iter()
+                .map(|k| format!("{k} = ?"))
+                .collect::<Vec<_>>()
+                .join(" AND ")
+        } else {
+            let tuple = format!("({})", vec!["?"; keys.len()].join(", "));
             format!(
-                "SELECT {cols} FROM {table} WHERE {}{order_by}",
-                conds.join(" AND ")
-            ),
+                "({}) IN ({})",
+                keys.join(", "),
+                vec![tuple; rows].join(", ")
+            )
+        };
+        Ok((
+            format!("SELECT {cols} FROM {table} WHERE {predicate}{order_by}"),
             binds,
         ))
     };
@@ -1532,6 +1555,11 @@ fn build_mysql_reselect(sql: &str) -> Result<Option<MysqlReselect>, SqlFailure> 
             // insert-or-ignore on a client-supplied key: lock its PK first (insert_if_absent) — never
             // its affected count, which CLIENT_FOUND_ROWS makes the same for a conflict and an insert.
             let (select_sql, binds) = keyed_by_insert_params(&pk_cols, "PK")?;
+            if binds.len() != pk_cols.len() {
+                return Err(driver_failure(format!(
+                    "scp write(mysql): an insert-or-ignore…RETURNING on a client-supplied key writes ONE row ('{write_sql}')"
+                )));
+            }
             let conds: Vec<String> = pk_cols.iter().map(|k| format!("{k} = ?")).collect();
             return Ok(Some(MysqlReselect {
                 write_sql,
@@ -1666,6 +1694,35 @@ fn parse_pk_hint(s: &str) -> (Vec<String>, String) {
 }
 
 /// Parse the INSERT column list `INSERT [IGNORE] INTO <t> (c1, c2, …)`.
+/// How many rows a `VALUES (?, …), (?, …)` INSERT writes when EVERY value is a bare `?` (each tuple then
+/// binds its `ncols` params in column order, so row `r`'s column `c` is param `r * ncols + c`), else
+/// `None`: a value that is an SQL expression (`NOW()`, a cast) moves every `?` after it, so no column's
+/// param position is known (mysql-returning.ts `valuesRows`).
+fn values_rows(write_sql: &str, ncols: usize) -> Option<usize> {
+    let lower = write_sql.to_ascii_lowercase();
+    let close = lower.find(')')?;
+    let mut rest = lower[close + 1..]
+        .trim_start()
+        .strip_prefix("values")?
+        .trim_start();
+    let mut rows = 0;
+    loop {
+        rest = rest.strip_prefix('(')?;
+        let end = rest.find(')')?;
+        let items: Vec<&str> = rest[..end].split(',').map(str::trim).collect();
+        if items.len() != ncols || items.iter().any(|i| *i != "?") {
+            return None;
+        }
+        rows += 1;
+        rest = rest[end + 1..].trim_start();
+        match rest.strip_prefix(',') {
+            Some(more) => rest = more.trim_start(),
+            None => break,
+        }
+    }
+    (rest.is_empty() || rest.starts_with("on duplicate key update")).then_some(rows)
+}
+
 fn parse_insert_cols(insert: &str) -> Vec<String> {
     if let (Some(open), Some(close)) = (insert.find('('), insert.find(')')) {
         if close > open {
