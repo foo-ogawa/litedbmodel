@@ -322,8 +322,10 @@ Every family takes the same argument: a column name, or an options object.
 
 A model that declares no primary key is treated as having an auto-increment `id`. Declare the key
 whenever that is not true: on MySQL, which has no native `RETURNING`, a `returning` write recovers
-the rows it wrote from the declared key — by the auto-increment range for a server-assigned key, and
-by the values the write itself bound for a UUID, a client-supplied, or a composite key.
+the rows it wrote from the declared key — for a server-assigned key, from the first id the insert was
+given, checked against the number of rows it wrote (never by assuming the ids are consecutive), and for
+a UUID, a client-supplied, or a composite key, by the values the write itself bound, compared in the
+key column's own type.
 
 ### Date vs DateTime: Important Distinction
 
@@ -524,9 +526,14 @@ await UserPref.create(
 | **Duplicates** | No duplicates (each row appears once; MySQL pre-SELECT uses `DISTINCT`) |
 | **Empty result** | `{ key: [...], values: [] }` when no rows affected (not `null`) |
 
-> **Note:** For MySQL (no `RETURNING`), when `returning: true`:
-> - `update`/`delete`: Executes pre-SELECT (with `DISTINCT`) to get PKs, then executes the operation (2 queries in same transaction)
-> - `updateMany`: Executes update, then SELECT to get PKs of affected rows (2 queries in same transaction)
+> **Note:** For MySQL (no `RETURNING`), when `returning: true`, the write and the statements that
+> recover its rows run in one transaction (the caller's, or one opened for them), so the result lists
+> exactly the rows this call wrote:
+> - `update`/`delete`: the matching rows are locked (`SELECT … FOR UPDATE`) and their PKs taken before
+>   the write; `delete` also checks that it removed exactly those rows. A row another session changes or
+>   removes at the same time is not reported as written by this call.
+> - `updateMany`: the PKs are read by the same key tuples the update matched.
+> - Insert-or-ignore (`onConflictAction: 'ignore'`): a skipped duplicate returns no row.
 > - When `returning: false` (default): Single query, returns `null`
 
 #### Batch Limits
