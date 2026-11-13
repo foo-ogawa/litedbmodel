@@ -193,7 +193,9 @@ final class MiddlewareHandle
  * slices the seam + {@see runMethod()} consume. A {@see Registry} is EITHER the process-global default
  * (app-startup registration) OR a per-scope copy pushed by {@see withMiddlewareScope()} OR an explicit
  * registry a caller builds + threads (the §3-table PHP mechanism) — the two share this class; only
- * their lifetime differs. Mirrors the TS `Registry`.
+ * their lifetime differs. The process-global default is not a scope and retains NO state
+ * (`retainsState: false`): outside a scope a state is fresh per access and retained nowhere (the TS
+ * reference / v1 `getCurrentContext()` outside a request, #364). Mirrors the TS `Registry`.
  */
 final class Registry
 {
@@ -203,20 +205,28 @@ final class Registry
     /**
      * Per-scope STATE instances, keyed by a descriptor's state TOKEN. Because a scope's registry is a
      * COPY ({@see copy()}) that starts with an EMPTY state map, each scope lazily builds its OWN fresh
-     * state instance — isolated across scopes (an explicit registry has its own map too).
+     * state instance — isolated across scopes (an explicit registry has its own map too). `null` on the
+     * process-global registry, which retains no state.
      *
-     * @var \SplObjectStorage<object, object>
+     * @var \SplObjectStorage<object, object>|null
      */
-    private \SplObjectStorage $states;
+    private ?\SplObjectStorage $states;
 
-    public function __construct()
+    /** @param bool $retainsState `false` only for the process-global registry (it holds no state). */
+    public function __construct(bool $retainsState = true)
     {
-        $this->states = new \SplObjectStorage();
+        $this->states = $retainsState ? new \SplObjectStorage() : null;
     }
 
-    /** This scope's state for `$token`, lazily created via `$fresh` on first access (v1 getCurrentContext). */
+    /**
+     * This scope's state for `$token`, lazily created via `$fresh` on first access (v1 getCurrentContext).
+     * On a registry that retains no state, a fresh instance per access.
+     */
     public function stateFor(object $token, callable $fresh): object
     {
+        if ($this->states === null) {
+            return $fresh();
+        }
         // offsetExists / offsetSet, not contains / attach: PHP 8.5 deprecates the latter two, and this
         // runs on every scope's first state access — loud on stderr under 8.5, an error under 9 (#260).
         if (!$this->states->offsetExists($token)) {
@@ -228,7 +238,9 @@ final class Registry
     /** Reset `$token`'s state in this scope to a fresh instance (testing convenience). */
     public function resetStateFor(object $token, callable $fresh): void
     {
-        $this->states[$token] = $fresh();
+        if ($this->states !== null) {
+            $this->states[$token] = $fresh();
+        }
     }
 
     /** Register `$mw` (appended ⇒ outermost). Returns an idempotent un-register closure. */
@@ -323,10 +335,13 @@ final class MiddlewareRegistryHolder
     /** The per-scope override (present ⇒ registration/reads target THIS scope's copy). */
     private static ?Registry $scoped = null;
 
-    /** The process-global default registry (app-startup `registerMiddleware` with no explicit scope). */
+    /**
+     * The process-global default registry (app-startup `registerMiddleware` with no explicit scope).
+     * Retains no state.
+     */
     public static function global(): Registry
     {
-        return self::$global ??= new Registry();
+        return self::$global ??= new Registry(retainsState: false);
     }
 
     /** The registry the current execution scope resolves to: the scoped override, else the global. */
@@ -567,8 +582,8 @@ final class LogEntry
  * call, so it measures the connection execute (chain remainder included), NOT just the record call.
  *
  * The per-scope log history lives on the handle's `state()->entries` (v1
- * `getCurrentContext()->getLogs()`) — a scope-local list. `$sink` is called with each entry as its
- * statement completes; `$now` is an injectable clock (tests). Mirrors the TS `Logger`.
+ * `getCurrentContext()->getLogs()`) — a scope-local list; outside a scope no entry is kept. `$sink` is
+ * called with each entry as its statement completes; `$now` is an injectable clock (tests). Mirrors the TS `Logger`.
  *
  * @param (callable(LogEntry):void)|null $sink called with each {@see LogEntry} after `next`.
  * @param (callable():float)|null $now injectable millisecond clock (default: `microtime(true)*1000`).

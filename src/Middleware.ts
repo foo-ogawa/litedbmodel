@@ -5,6 +5,7 @@
  */
 
 import { currentRequestScope, runInRequestScope } from './RequestScope';
+import { withMiddlewareScope } from './scp/middleware';
 import type { DBModel } from './DBModel';
 import type { SelectOptions, InsertOptions, UpdateOptions, DeleteOptions, UpdateManyOptions, PkeyResult } from './types';
 import type { Column, Conds } from './Column';
@@ -155,13 +156,15 @@ export abstract class Middleware {
    * Run `fn` as one request. Call it at the request entry. Everything `fn` does (directly or through
    * DBModel operations, at any `await` depth) shares the request's state and no other request sees
    * it: the middleware instances, and the request's commits that make its later reads go to the
-   * writer (writer-sticky). `Middleware.run` opens a new request; `X.run` inside a request gives `X`
+   * writer (writer-sticky), and the SQL middleware registry scope ({@link withMiddlewareScope}), so
+   * the state of a middleware built with `createMiddleware` (a `Logger`'s entries) is the request's own
+   * and is released with it. `Middleware.run` opens a new request; `X.run` inside a request gives `X`
    * a fresh instance and keeps the rest of the enclosing request.
    */
   static run<R>(fn: () => R): R {
     const enclosing = currentRequestScope();
     if (this === Middleware || enclosing === undefined) {
-      return runInRequestScope({ middlewares: new Map(), commits: new Map() }, fn);
+      return runInRequestScope({ middlewares: new Map(), commits: new Map() }, () => withMiddlewareScope(fn));
     }
     const middlewares = new Map(enclosing.middlewares);
     middlewares.delete(this);

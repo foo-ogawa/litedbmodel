@@ -729,6 +729,39 @@ func TestD3LoggerRed(t *testing.T) {
 	}
 }
 
+// #364: outside a scope a state is fresh per access and the process-global registry retains none, so
+// an unscoped request does not see another's entries; a globally registered Logger still calls its Sink.
+// (Inside a scope the Logger still collects its own entries — TestD3Logger.)
+func TestD3LoggerUnscopedRetainsNothing(t *testing.T) {
+	db := mwDB(t)
+	defer db.Close()
+	ClearMiddlewares()
+	defer ClearMiddlewares()
+	sunk := 0
+	logger := Logger(LoggerOptions{Sink: func(LogEntry) { sunk++ }})
+	RegisterMiddleware(context.Background(), logger.Descriptor())
+	ctx := ContextForDB(db)
+	// Request A: N unscoped statements.
+	for i := 0; i < 50; i++ {
+		if _, err := Execute(ctx, "SELECT ?", []any{i}, ReadIntent()); err != nil {
+			t.Fatalf("execute: %v", err)
+		}
+	}
+	if sunk != 50 {
+		t.Fatalf("sink: got %d entries want 50", sunk)
+	}
+	// Request B (also unscoped) sees none of A's entries, and the global registry retained none.
+	if got := logger.State(context.Background()).(*LoggerState).Entries(); len(got) != 0 {
+		t.Errorf("an unscoped request sees %d entries of another", len(got))
+	}
+	globalRegistry.mu.Lock()
+	retained := len(globalRegistry.states)
+	globalRegistry.mu.Unlock()
+	if retained != 0 {
+		t.Errorf("the process-global registry retained %d states", retained)
+	}
+}
+
 // RawExecute goes THROUGH the seam — a registered SQL middleware sees it (both a write and a read).
 func TestD3RawExecuteThroughSeam(t *testing.T) {
 	db := mwDB(t)

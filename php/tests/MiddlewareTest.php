@@ -439,6 +439,30 @@ final class MiddlewareTest extends TestCase
         $this->assertSame([], $logger->state()->entries);
     }
 
+    /**
+     * #364: outside a scope a state is fresh per access and the process-global registry retains none, so
+     * an unscoped request does not see another's entries; a globally registered Logger still calls its
+     * sink. (Inside a scope the Logger still collects its own entries — testLoggerRecordsSqlParamsTiming.)
+     */
+    public function testUnscopedStateIsFreshPerAccessAndNeverRetained(): void
+    {
+        $db = self::freshDb();
+        $ctx = Context::forPdo($db);
+        $sunk = 0;
+        $logger = Logger(function (LogEntry $e) use (&$sunk): void {
+            $sunk++;
+        });
+        registerMiddleware($logger); // the process-global registration the Logger doc shows
+        // Request A: N unscoped statements.
+        for ($i = 0; $i < 50; $i++) {
+            execute($ctx, 'SELECT ?', [$i]);
+        }
+        $this->assertSame(50, $sunk);
+        // Request B (also unscoped) sees none of A's entries, and no state instance was retained.
+        $this->assertSame([], $logger->state()->entries);
+        $this->assertNotSame($logger->state(), $logger->state());
+    }
+
     // ── D1: the scoped registry restores the prior ambient on exit ────────────
 
     public function testScopeRestoresPriorRegistryOnExit(): void

@@ -38,7 +38,8 @@
 //! ISOLATED [`Registry`] whose STACK is copied from the ambient one, but whose per-middleware STATE
 //! MAP starts EMPTY. Copying ONLY the stack (never the state map) is the exact isolation the TS M5
 //! mutation exposes — a copied state map would let concurrent scopes bleed per-request state. Absent
-//! a scope, registration mutates the [`global_registry`] (the app-startup path).
+//! a scope, registration mutates the [`global_registry`] (the app-startup path), which retains no
+//! state: outside a scope a middleware state is fresh per access (#364).
 //!
 //! Because the rust runtime executes on a single OS thread per seam call (the conformance/livedb
 //! runners are synchronous; the async livedb driver blocks the sync seam on a shared runtime), the
@@ -182,20 +183,40 @@ struct SharedDescriptor {
 /// The live per-scope registry: the ordered `SharedDescriptor` stack + the scope-local state map. This
 /// is the concrete thing a [`with_middleware_scope`] scope owns and the global default holds. Kept
 /// behind interior mutability so `use`/`register` mutate the CURRENT scope without a `&mut` thread.
-#[derive(Default)]
+/// The global default is not a scope and has NO state map: outside a scope a state is fresh per access
+/// and retained nowhere (the TS reference / v1 `getCurrentContext()` outside a request, #364).
 struct ScopeRegistry {
     stack: Vec<SharedDescriptor>,
-    states: RefCell<Vec<(u64, std::sync::Arc<StateAny>)>>,
+    /// `None` on the process-global registry, which retains no state.
+    states: Option<StateMap>,
 }
 
+/// A scope's state instances, keyed by the descriptor token.
+type StateMap = RefCell<Vec<(u64, std::sync::Arc<StateAny>)>>;
+
 impl ScopeRegistry {
+    /// The process-global registry: an empty stack and no state map.
+    const fn global() -> ScopeRegistry {
+        ScopeRegistry {
+            stack: Vec::new(),
+            states: None,
+        }
+    }
+
+    /// A scope's registry seeded with `stack`; its state map starts EMPTY.
+    fn scope(stack: Vec<SharedDescriptor>) -> ScopeRegistry {
+        ScopeRegistry {
+            stack,
+            states: Some(RefCell::new(Vec::new())),
+        }
+    }
+
     fn push(&mut self, d: SharedDescriptor) {
         self.stack.push(d);
     }
 
     fn clear(&mut self) {
         self.stack.clear();
-        self.states.borrow_mut().clear();
     }
 
     fn is_sql_empty(&self) -> bool {
@@ -209,10 +230,13 @@ impl ScopeRegistry {
 
     /// This scope's state for `token`, lazily built via the descriptor's `fresh_state` on first
     /// access (the rust analogue of the TS `stateFor` + `structuredClone`). Returns `None` if the
-    /// descriptor carries no state factory.
+    /// descriptor carries no state factory. A registry with no state map (the process-global one)
+    /// builds a fresh state per access and keeps none.
     fn state_for(&self, token: u64) -> Option<std::sync::Arc<StateAny>> {
-        if let Some((_, s)) = self.states.borrow().iter().find(|(t, _)| *t == token) {
-            return Some(s.clone());
+        if let Some(states) = &self.states {
+            if let Some((_, s)) = states.borrow().iter().find(|(t, _)| *t == token) {
+                return Some(s.clone());
+            }
         }
         let fresh = self
             .stack
@@ -220,12 +244,18 @@ impl ScopeRegistry {
             .find(|d| d.token == token)
             .and_then(|d| d.fresh_state.as_ref())?;
         let s: std::sync::Arc<StateAny> = std::sync::Arc::from(fresh());
-        self.states.borrow_mut().push((token, s.clone()));
+        if let Some(states) = &self.states {
+            states.borrow_mut().push((token, s.clone()));
+        }
         Some(s)
     }
 
-    /// Reset `token`'s state to a fresh instance (testing convenience — the TS `resetStateFor`).
+    /// Reset `token`'s state to a fresh instance (testing convenience — the TS `resetStateFor`). A
+    /// registry with no state map retains none, so there is nothing to reset.
     fn reset_state_for(&self, token: u64) {
+        let Some(states) = &self.states else {
+            return;
+        };
         let fresh = self
             .stack
             .iter()
@@ -233,7 +263,7 @@ impl ScopeRegistry {
             .and_then(|d| d.fresh_state.as_ref());
         if let Some(fresh) = fresh {
             let s: std::sync::Arc<StateAny> = std::sync::Arc::from(fresh());
-            let mut states = self.states.borrow_mut();
+            let mut states = states.borrow_mut();
             if let Some(slot) = states.iter_mut().find(|(t, _)| *t == token) {
                 slot.1 = s;
             } else {
@@ -245,10 +275,8 @@ impl ScopeRegistry {
     /// A COPY seeding a fresh scope: STACK copied (shares hook impls), STATE MAP empty. The exact
     /// stack-copy-not-state-map isolation the audit flagged.
     fn copy(&self) -> ScopeRegistry {
-        ScopeRegistry {
-            stack: self.stack.clone(), // STACK copied (shares hook impls via Arc).
-            states: RefCell::new(Vec::new()), // STATE MAP NOT copied — fresh empty per scope.
-        }
+        // STACK copied (shares hook impls via Arc); STATE MAP NOT copied — fresh empty per scope.
+        ScopeRegistry::scope(self.stack.clone())
     }
 }
 
@@ -263,10 +291,10 @@ thread_local! {
 
 /// The process-global default registry (app-startup `use` with no explicit scope). A `Mutex` because
 /// it is shared across threads (unlike the per-scope override, which is thread-local). Mirrors the TS
-/// module-level `globalRegistry`.
+/// module-level `globalRegistry`. It retains no state (#364).
 fn global_registry() -> &'static Mutex<ScopeRegistry> {
     static GLOBAL: OnceLock<Mutex<ScopeRegistry>> = OnceLock::new();
-    GLOBAL.get_or_init(|| Mutex::new(ScopeRegistry::default()))
+    GLOBAL.get_or_init(|| Mutex::new(ScopeRegistry::global()))
 }
 
 /// Run `f` with the CURRENT scope's registry (the thread-local override if inside a
@@ -322,7 +350,7 @@ pub fn with_middleware_scope_opts<R>(inherit: bool, f: impl FnOnce() -> R) -> R 
     let seed = if inherit {
         with_current(|reg| reg.copy())
     } else {
-        ScopeRegistry::default()
+        ScopeRegistry::scope(Vec::new())
     };
     REGISTRY_SCOPE.with(|scopes| scopes.borrow_mut().push(seed));
     // The method-hook registry (design §4 level 2) shares the SAME scope lifetime as the SQL registry:
@@ -645,8 +673,8 @@ impl LoggerState {
 /// read, write, tx-control, relation-batch — is logged (it is an `execute`-level hook). Register with
 /// [`use_middleware`]. Timing brackets the `next` call, so it measures the connection execute (chain
 /// remainder included), NOT just the record. The per-scope log lives on the handle's `state()`
-/// (concurrent scopes each collect their OWN entries — the isolation guarantee). Mirrors the TS
-/// `Logger`.
+/// (concurrent scopes each collect their OWN entries — the isolation guarantee). Outside a
+/// [`with_middleware_scope`] no entry is kept. Mirrors the TS `Logger`.
 pub fn logger() -> MiddlewareHandle<LoggerState> {
     // The hook needs to read THIS scope's LoggerState. It cannot capture the state (state is
     // per-scope, built lazily), so it looks the state up by the handle's token via the ambient
@@ -1444,6 +1472,43 @@ mod tests {
             );
             // duration_ms is u128 ≥ 0 by construction.
         });
+    }
+
+    /// #364: the process-global registry (every statement outside a `with_middleware_scope`) builds a
+    /// fresh state per access and keeps none, so an unscoped request does not see another's entries;
+    /// a scope still keeps its own (`d3_logger_records_sql_params_timing`). Driven on a registry built
+    /// the way the global one is, because registering on the real global would race the parallel
+    /// `d1_red_shared_registry_would_cross_talk` assertion that the global stack is empty.
+    #[test]
+    fn d3_unscoped_state_is_fresh_per_access_and_never_retained() {
+        fn record(state: std::sync::Arc<StateAny>, n: usize) {
+            let ls = state.downcast_ref::<LoggerState>().unwrap();
+            for _ in 0..n {
+                ls.entries.lock().unwrap().push(LogEntry {
+                    sql: "SELECT 1".to_string(),
+                    params: Vec::new(),
+                    duration_ms: 0,
+                });
+            }
+        }
+        let entries = |state: std::sync::Arc<StateAny>| {
+            state.downcast_ref::<LoggerState>().unwrap().entries()
+        };
+        let lg = logger();
+        let mut global = ScopeRegistry::global();
+        global.push(lg.shared());
+        // Request A: N unscoped statements, each recording into the state its access resolved.
+        for _ in 0..50 {
+            record(global.state_for(lg.token).unwrap(), 1);
+        }
+        // Request B (also unscoped) sees none of A's entries, and nothing was retained.
+        assert!(entries(global.state_for(lg.token).unwrap()).is_empty());
+        assert!(global.states.is_none());
+        assert!(global_registry().lock().unwrap().states.is_none());
+        // A scope keeps its own.
+        let scope = global.copy();
+        record(scope.state_for(lg.token).unwrap(), 2);
+        assert_eq!(entries(scope.state_for(lg.token).unwrap()).len(), 2);
     }
 
     #[test]

@@ -656,3 +656,21 @@ def test_red_logger_records_nothing_without_wiring():
     # NOT registered → the seam never invokes it.
     seam_execute(ctx, "SELECT 1", [])
     assert logger.state()["entries"] == []
+
+
+def test_unscoped_state_is_fresh_per_access_and_never_retained():
+    """#364: outside a scope a state is fresh per access and the process-global registry retains none, so
+    an unscoped request does not see another's entries; a globally registered Logger still calls its sink.
+    (Inside a scope the Logger still collects its own entries — test_logger_records_sql_params_timing.)"""
+    conn = _fresh_db()
+    ctx = context_for_driver(SqliteDriver(conn))
+    sunk = []
+    logger = Logger(sink=sunk.append)
+    use(logger)  # the process-global registration the Logger doc shows
+    # Request A: N unscoped statements.
+    for i in range(50):
+        seam_execute(ctx, "SELECT ?", [i])
+    assert len(sunk) == 50
+    # Request B (also unscoped) sees none of A's entries, and the global registry retained none.
+    assert logger.state()["entries"] == []
+    assert not current_registry()._states

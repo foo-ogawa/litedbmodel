@@ -207,29 +207,36 @@ class Registry:
     folded-order slices the seam + :func:`run_method` consume. A :class:`Registry` is EITHER the
     process-global default (app-startup registration) OR a per-execution-scope COPY pushed by
     :func:`with_middleware_scope` (concurrent isolation) — the two share this class; only their lifetime
-    differs."""
+    differs. The process-global default is not a scope and retains NO state (``retains_state=False``):
+    outside a scope a state is fresh per access and retained nowhere (the TS reference / v1
+    ``getCurrentContext()`` outside a request, #364)."""
 
     __slots__ = ("_stack", "_states")
 
-    def __init__(self) -> None:
+    def __init__(self, retains_state: bool = True) -> None:
         self._stack: List[MiddlewareDescriptor] = []
         # Per-scope STATE instances, keyed by the state-owning token a :func:`create_middleware`
         # descriptor carries. Because the Registry is itself per-execution-scope
         # (:func:`with_middleware_scope` pushes a COPY), the state map is scope-local too — so a
         # middleware's per-request state is isolated across concurrent scopes WITHOUT leaking. A fresh
         # scope's copy starts with an EMPTY state map (states are NOT copied — see :meth:`copy`), so each
-        # scope lazily builds its OWN fresh state instances (the TS M5-isolation contract).
-        self._states: Dict[object, Any] = {}
+        # scope lazily builds its OWN fresh state instances (the TS M5-isolation contract). ``None`` on
+        # the process-global registry, which retains no state.
+        self._states: Optional[Dict[object, Any]] = {} if retains_state else None
 
     def state_for(self, token: object, fresh: Callable[[], _R]) -> _R:
-        """The current scope's state for ``token``, lazily created via ``fresh`` on first access."""
+        """The current scope's state for ``token``, lazily created via ``fresh`` on first access. On a
+        registry that retains no state, a fresh instance per access."""
+        if self._states is None:
+            return fresh()
         if token not in self._states:
             self._states[token] = fresh()
         return self._states[token]
 
     def reset_state_for(self, token: object, fresh: Callable[[], _R]) -> None:
         """Reset ``token`` s state in this scope to a fresh instance (testing convenience)."""
-        self._states[token] = fresh()
+        if self._states is not None:
+            self._states[token] = fresh()
 
     def use(self, mw: MiddlewareDescriptor) -> Callable[[], None]:
         """Register ``mw`` (appended ⇒ outermost). Returns an idempotent un-register fn."""
@@ -254,7 +261,6 @@ class Registry:
     def clear(self) -> None:
         """Drop every registration (v1 ``clearMiddlewares`` — testing)."""
         self._stack = []
-        self._states = {}
 
     def all(self) -> Sequence[MiddlewareDescriptor]:
         """The registered descriptors, registration order (index 0 = first = outermost)."""
@@ -284,8 +290,8 @@ class Registry:
         return r
 
 
-# The process-global default registry (app-startup registration with no explicit scope).
-_global_registry = Registry()
+# The process-global default registry (app-startup registration with no explicit scope). Retains no state.
+_global_registry = Registry(retains_state=False)
 
 # The per-execution-scope registry override (contextvars): present ⇒ ``use``/reads target THIS scope's
 # copy. A concurrent scope (a distinct thread or asyncio task) sees its OWN value.
@@ -508,7 +514,8 @@ def Logger(
 
     The per-scope log history lives on the handle's ``state()['entries']`` (v1
     ``getCurrentContext().getLogs()``), so concurrent requests each collect their OWN entries
-    (contextvars-isolated). ``now`` is an injectable clock (tests); defaults to a monotonic ms clock."""
+    (contextvars-isolated). Outside a :func:`with_middleware_scope` no entry is kept; ``sink`` still sees
+    each one. ``now`` is an injectable clock (tests); defaults to a monotonic ms clock."""
     clock = now if now is not None else (lambda: time.perf_counter() * 1000.0)
 
     def execute_hook(st: Dict[str, Any], next_: Callable[..., Any], sql: str, params: Sequence[Any]) -> Any:

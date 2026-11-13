@@ -42,7 +42,10 @@
  * (a fresh per-scope instance via {@link MiddlewareHandle.state}). Two concurrent `withMiddlewareScope`
  * bodies each mutate their OWN registry + state, never a shared global slot — so N concurrent requests
  * do not serialize on one registry (the bug a process-global stack would cause). Absent an explicit
- * scope, `use` mutates a process-global default stack (the app-startup registration path). The native
+ * scope, `use` mutates a process-global default stack (the app-startup registration path), and a
+ * middleware STATE is fresh per access and retained nowhere (v1 `getCurrentContext()` outside a
+ * `Middleware.run`): the process-global registry holds no state, so nothing a request logs outlives it
+ * or is visible to another request (#364). The native
  * ports translate the ALS: rust = `task_local!`, go = a value on `context.Context`, py = `contextvars`,
  * php = an explicit registry arg (1 request = 1 process ⇒ no concurrency to isolate).
  *
@@ -150,11 +153,22 @@ export class Registry {
    * COPY), the state map is scope-local too — so a middleware's per-request state is isolated across
    * concurrent scopes WITHOUT leaking (the `enterWith`-leak trap). A fresh scope's copy starts with an
    * EMPTY state map (states are NOT copied), so each scope lazily builds its own fresh state instances.
+   * `undefined` on the process-global registry, which is not a scope: there a state is fresh per access
+   * and retained nowhere (#364).
    */
-  private readonly states = new Map<object, unknown>();
+  private readonly states: Map<object, unknown> | undefined;
 
-  /** The current scope's state for `token`, lazily created via `fresh` on first access (v1 getCurrentContext). */
+  /** @param opts.retainsState `false` only for the process-global registry (it holds no state). */
+  constructor(opts: { retainsState?: boolean } = {}) {
+    this.states = opts.retainsState === false ? undefined : new Map();
+  }
+
+  /**
+   * The current scope's state for `token`, lazily created via `fresh` on first access (v1
+   * getCurrentContext). On a registry that retains no state, a fresh instance per access.
+   */
   stateFor<S>(token: object, fresh: () => S): S {
+    if (this.states === undefined) return fresh();
     let s = this.states.get(token) as S | undefined;
     if (s === undefined) {
       s = fresh();
@@ -165,7 +179,7 @@ export class Registry {
 
   /** Reset `token`'s state in this scope to a fresh instance (testing convenience). */
   resetStateFor<S>(token: object, fresh: () => S): void {
-    this.states.set(token, fresh());
+    this.states?.set(token, fresh());
   }
 
   /** Register `mw` (appended ⇒ outermost). Returns an idempotent un-register fn. */
@@ -220,8 +234,8 @@ export class Registry {
   }
 }
 
-/** The process-global default registry (app-startup `use` with no explicit scope). */
-const globalRegistry = new Registry();
+/** The process-global default registry (app-startup `use` with no explicit scope). Retains no state. */
+const globalRegistry = new Registry({ retainsState: false });
 
 /** The per-execution-scope registry override (ALS): present ⇒ `use`/reads target THIS scope's copy. */
 const registryScope = new AsyncLocalStorage<Registry>();
@@ -411,8 +425,9 @@ export interface LoggerOptions {
  * `next` call, so it measures the connection execute (chain remainder included), NOT just the log call.
  *
  * The per-scope log history lives on the handle's `state().entries` (v1 `getCurrentContext().getLogs()`),
- * so concurrent requests each collect their OWN entries (ALS-isolated). The port agents build the same
- * shape: a scope-local list + an `execute` hook timing `next`.
+ * so concurrent requests each collect their OWN entries (ALS-isolated). Outside a scope
+ * (`Middleware.run` / {@link withMiddlewareScope}) no entry is kept — `sink` still sees each one. The
+ * port agents build the same shape: a scope-local list + an `execute` hook timing `next`.
  */
 export function Logger(options: LoggerOptions = {}): MiddlewareHandle<{ entries: LogEntry[] }> {
   const now = options.now ?? Date.now;
