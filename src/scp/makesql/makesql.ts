@@ -8,10 +8,12 @@
  * - bc integration = ONE catalog component `makeSQL`. Ports:
  *     - `sql`    — tuned dialect SQL text (a string; `?` placeholders).
  *     - `params` — value list. Each element is EITHER a bound value (an opaque SQL
- *                  value: number/string/bool/null/Date/array/…) OR a **nested
- *                  `makeSQL`** (a `{ sql, params, skip? }` object) whose `sql` is
- *                  spliced at the corresponding `?` and whose params flow inline.
- *                  A subquery / sub-expression is a nested `makeSQL` in a param slot.
+ *                  value: number/string/bool/null/Date/array/object/…) OR a **nested
+ *                  `makeSQL`** (a `{ sql, params, skip? }` node marked by
+ *                  {@link nestedMakeSQL}) whose `sql` is spliced at the corresponding
+ *                  `?` and whose params flow inline. A subquery / sub-expression is a
+ *                  nested `makeSQL` in a param slot. An unmarked object — whatever its
+ *                  shape — is a bound value (#345).
  *     - `skip?`  — presence condition. When satisfied, the component contributes
  *                  NOTHING (its `sql` and its `params` both drop).
  * - A query = a composition of `makeSQL` components. bc composes; present ones
@@ -61,14 +63,28 @@ export interface MakeSQL {
   skip?: boolean;
 }
 
-/** Structural guard: a nested-`makeSQL` param has a string `sql`; a bound value does not. */
+/**
+ * The mark a nested `makeSQL` carries. A nested node's `sql` is spliced into the statement text, so
+ * "is this param a nested node?" decides whether it becomes SQL text or a bound parameter. It must
+ * not be answered by SHAPE: a bound value is often end-user data (a `create()` value, a plan input),
+ * and `JSON.parse` yields `{ sql: '…', params: [] }` as easily as any other object — it was spliced
+ * into the INSERT as SQL (#345). A module-private Symbol is the one property no JSON value carries.
+ */
+const NESTED_MAKESQL: unique symbol = Symbol('litedbmodel.nestedMakeSQL');
+
+/**
+ * Mark `node` as a nested `makeSQL` for a param slot (a subquery / sub-expression): its `sql` is
+ * spliced at the `?` and its params flow inline. This is the ONLY way to nest — any other param,
+ * whatever its shape, is a bound value.
+ */
+export function nestedMakeSQL(node: MakeSQL): MakeSQL {
+  Object.defineProperty(node, NESTED_MAKESQL, { value: true });
+  return node;
+}
+
+/** A nested-`makeSQL` param is one {@link nestedMakeSQL} marked; every other param is a bound value. */
 export function isMakeSQL(p: SqlParam): p is MakeSQL {
-  return (
-    typeof p === 'object' &&
-    p !== null &&
-    typeof (p as MakeSQL).sql === 'string' &&
-    Array.isArray((p as MakeSQL).params)
-  );
+  return typeof p === 'object' && p !== null && (p as { [NESTED_MAKESQL]?: unknown })[NESTED_MAKESQL] === true;
 }
 
 /**

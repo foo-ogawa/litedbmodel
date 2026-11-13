@@ -15,6 +15,7 @@ export {
   makeSqlCatalogEntry,
   LITEDBMODEL_MAKESQL_CATALOG,
   isMakeSQL,
+  nestedMakeSQL,
   assembleMakeSQL,
   composeMakeSQL,
 } from './makesql';

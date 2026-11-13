@@ -65,9 +65,9 @@ export function renderPlaceholders(sql: string, dialect: Dialect): string {
 
 /**
  * Coerce the evaluated `params` port back to a `MakeSQL['params']` list. bc evaluates
- * each port value; a nested `makeSQL` param arrives as an object `{ sql, params, skip? }`
- * and a bound value arrives as its opaque value. Nothing to transform — the handler
- * treats them structurally in {@link assembleMakeSQL}.
+ * each port value to a plain value, so every evaluated param is a BOUND value — an
+ * object `{ sql, params }` included: only a {@link nestedMakeSQL}-marked node splices
+ * (#345), and an evaluated port value carries no mark.
  */
 function toMakeSQL(ports: Record<string, Value>): MakeSQL {
   return {
