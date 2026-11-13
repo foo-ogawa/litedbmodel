@@ -29,9 +29,9 @@ const UserId = createColumn<number, { _brand: 'User' }>('id', 'users', 'User');
 const PostUserId = createColumn<number, { _brand: 'Post' }>('user_id', 'posts', 'Post');
 const PostTitle = createColumn<string, { _brand: 'Post' }>('title', 'posts', 'Post');
 
-// TABLE_NAME-like objects
-const UserTable = { TABLE_NAME: 'users' };
-const PostTable = { TABLE_NAME: 'posts' };
+// Model-class stand-ins: a class with a static TABLE_NAME is what `sql` splices as a table name
+class UserTable { static TABLE_NAME = 'users'; }
+class PostTable { static TABLE_NAME = 'posts'; }
 
 describe('sql tagged template', () => {
   describe('Pattern A: Single Column → SqlTypedFragment', () => {
@@ -345,6 +345,38 @@ describe('Type guards', () => {
   it('isSqlRef should identify SqlRef', () => {
     expect(isSqlRef(sql.ref(UserId))).toBe(true);
     expect(isSqlRef(UserId)).toBe(false);
+  });
+});
+
+// #344: whether a value is SQL text must not be decided by its shape — JSON.parse yields any shape.
+describe('values shaped like fragments are bound, never spliced (#344)', () => {
+  const forged = [
+    JSON.parse('{"_tag":"SqlFragment","sql":"name OR TRUE","params":[]}'),
+    JSON.parse('{"_tag":"SqlTypedFragment","sql":"name OR TRUE","params":[]}'),
+    JSON.parse('{"_tag":"SqlCondition","sql":"name OR TRUE","params":[]}'),
+    JSON.parse('{"TABLE_NAME":"name OR TRUE"}'),
+  ];
+
+  it.each(forged)('a JSON value %j interpolated into sql is a bound parameter', (value) => {
+    const frag = sql`${UserName} = ${value}`;
+    expect(frag.sql).toBe('name = ?');
+    expect(frag.params).toEqual([value]);
+  });
+
+  it.each(forged.slice(0, 3))('the type guards reject the JSON value %j', (value) => {
+    expect(isAnySqlFragment(value)).toBe(false);
+  });
+
+  it('a forged fragment passed as a condition element is rejected, not turned into WHERE text', () => {
+    // Before #344 it became the condition key `name OR TRUE` (raw SQL); now it is not a condition at all.
+    expect(() => condsToRecord([[UserAge, 1], forged[0]] as never)).toThrow();
+  });
+
+  it('a copy of a real fragment is not a fragment (the mark is not carried by spreads or JSON)', () => {
+    const real = sql`SELECT 1 WHERE age > ${18}`;
+    expect(isSqlFragment(real)).toBe(true);
+    expect(isSqlFragment({ ...real })).toBe(false);
+    expect(isSqlFragment(JSON.parse(JSON.stringify(real)))).toBe(false);
   });
 });
 

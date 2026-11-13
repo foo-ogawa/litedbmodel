@@ -116,31 +116,41 @@ export type SqlInterpolation =
 // Type Guards
 // ============================================
 
-export function isSqlFragment(value: unknown): value is SqlFragment {
+/**
+ * The mark every fragment `sql()` creates carries. A fragment's `sql` text is spliced into the
+ * statement verbatim, so "is this a fragment?" decides whether a value becomes SQL text or a bound
+ * parameter. It must not be answerable by the value's SHAPE: `JSON.parse` produces any shape,
+ * including `{ _tag: 'SqlFragment', sql, params }`, and a request value interpolated into `sql`
+ * would then run as SQL (#344). A module-private Symbol is the one property no JSON value and no
+ * caller outside this module can carry, so only fragments `sql()` built are fragments.
+ */
+const SQL_FRAGMENT_MARK: unique symbol = Symbol('litedbmodel.sqlFragment');
+
+/** Mark a fragment `sql()` built. Non-enumerable: it does not show in spreads, JSON or equality. */
+function marked<T extends SqlFragment | SqlTypedFragment | SqlCondition>(fragment: T): T {
+  Object.defineProperty(fragment, SQL_FRAGMENT_MARK, { value: true });
+  return fragment;
+}
+
+function isMarkedFragment(value: unknown, tag: string): boolean {
   return (
     typeof value === 'object' &&
     value !== null &&
-    '_tag' in value &&
-    (value as { _tag: string })._tag === 'SqlFragment'
+    (value as { [SQL_FRAGMENT_MARK]?: unknown })[SQL_FRAGMENT_MARK] === true &&
+    (value as { _tag?: unknown })._tag === tag
   );
+}
+
+export function isSqlFragment(value: unknown): value is SqlFragment {
+  return isMarkedFragment(value, 'SqlFragment');
 }
 
 export function isSqlTypedFragment(value: unknown): value is SqlTypedFragment {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    '_tag' in value &&
-    (value as { _tag: string })._tag === 'SqlTypedFragment'
-  );
+  return isMarkedFragment(value, 'SqlTypedFragment');
 }
 
 export function isSqlCondition(value: unknown): value is SqlCondition {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    '_tag' in value &&
-    (value as { _tag: string })._tag === 'SqlCondition'
-  );
+  return isMarkedFragment(value, 'SqlCondition');
 }
 
 /**
@@ -164,10 +174,14 @@ export function isSqlRef(value: unknown): value is SqlRef {
 // Internal helpers
 // ============================================
 
+/**
+ * A model class interpolated as its table name. Only a class (a function) qualifies: a plain object
+ * with a `TABLE_NAME` string is what `JSON.parse` returns for `{"TABLE_NAME": "..."}`, and accepting
+ * it would splice a request value into the statement as SQL text (#344).
+ */
 function hasTableName(value: unknown): value is { TABLE_NAME: string } {
   return (
-    (typeof value === 'object' || typeof value === 'function') &&
-    value !== null &&
+    typeof value === 'function' &&
     'TABLE_NAME' in value &&
     typeof (value as { TABLE_NAME: unknown }).TABLE_NAME === 'string' &&
     !isColumn(value)
@@ -313,11 +327,11 @@ export function sql(
   if (isConditionPattern && valueCount === 0 && values.length === 1) {
     const col = values[0] as Column;
     const sqlStr = strings[0] + col.columnName + strings[1];
-    return {
+    return marked({
       _tag: 'SqlTypedFragment',
       sql: sqlStr,
       params: [],
-    } as SqlTypedFragment;
+    } as SqlTypedFragment);
   }
 
   // Build SQL and params
@@ -335,19 +349,19 @@ export function sql(
 
   // Single Column + value(s) only → SqlCondition (Pattern B)
   if (isConditionPattern && valueCount > 0) {
-    return {
+    return marked({
       _tag: 'SqlCondition',
       sql: sqlString,
       params,
-    } as SqlCondition;
+    } as SqlCondition);
   }
 
   // Default: SqlFragment
-  return {
+  return marked({
     _tag: 'SqlFragment' as const,
     sql: sqlString,
     params,
-  };
+  });
 }
 
 // ============================================
