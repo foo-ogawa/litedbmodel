@@ -48,6 +48,7 @@ const LIST_ONLY = argv.includes('--list');
 const STEPS = [
   { npm: 'deps:installed', db: false },
   { npm: 'deps:check', db: false },
+  { npm: 'audit:check', db: false },
   { npm: 'sync:versions:check', db: false },
   { npm: 'tracked:check', db: false },
   { npm: 'pkg:check', db: false },
