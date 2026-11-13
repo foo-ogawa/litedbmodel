@@ -56,7 +56,9 @@ final class MysqlReturningLiveTest extends TestCase
         $pdo = new MysqlLivePdo($dsn, getenv('TEST_MYSQL_USER') ?: 'testuser', getenv('TEST_MYSQL_PASSWORD') ?: 'testpass', [
             \PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION,
             \PDO::ATTR_EMULATE_PREPARES => false,
-            \Pdo\Mysql::ATTR_FOUND_ROWS => true,
+            // PHP 8.4+ names it Pdo\Mysql::ATTR_FOUND_ROWS (the PDO:: form is deprecated there); 8.1–8.3 have only
+            // PDO::MYSQL_ATTR_FOUND_ROWS. A class constant resolves only on the branch that runs.
+            (\PHP_VERSION_ID >= 80400 ? \Pdo\Mysql::ATTR_FOUND_ROWS : \PDO::MYSQL_ATTR_FOUND_ROWS) => true,
         ]);
         $pdo->setAttribute(\PDO::ATTR_STATEMENT_CLASS, [MysqlReturningStatement::class, [$pdo]]);
         return $pdo;
