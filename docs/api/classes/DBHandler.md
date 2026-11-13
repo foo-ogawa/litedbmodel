@@ -124,8 +124,8 @@ executeOnWriter(sql: string, params?: unknown[], read?: boolean): Promise<QueryR
 Defined in: [DBHandler.ts:208](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBHandler.ts#L208)
 
 Execute a query on the writer pool (for withWriter context / writer-sticky / writes).
-`read`: the caller routed a row-returning read here; only that is retried on a connection error
-(a write is never re-sent).
+`read`: the statement is read-only (it runs through the driver's `execute`, which decides whether it
+may be re-sent after a connection error); otherwise it runs through `executeWrite` (never re-sent).
 
 #### Parameters
 
@@ -160,12 +160,19 @@ Check if writer pool is configured
 ### getConnection()
 
 ```ts
-getConnection(): Promise<DBConnection>;
+getConnection(checkAttempts?: number): Promise<DBConnection>;
 ```
 
-Defined in: [DBHandler.ts:225](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBHandler.ts#L225)
+Defined in: [DBHandler.ts:226](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBHandler.ts#L226)
 
-Get a connection from the pool (for transactions)
+Get a connection from the pool (for transactions). `checkAttempts`: a retry after a connection error
+takes only a connection that passed a `SELECT 1` probe, trying at most that many.
+
+#### Parameters
+
+| Parameter | Type |
+| ------ | ------ |
+| `checkAttempts?` | `number` |
 
 #### Returns
 
@@ -179,7 +186,7 @@ Get a connection from the pool (for transactions)
 withConnection(connection: DBConnection): DBHandler;
 ```
 
-Defined in: [DBHandler.ts:232](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBHandler.ts#L232)
+Defined in: [DBHandler.ts:233](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBHandler.ts#L233)
 
 Create handler with specific connection (for transaction)
 
@@ -201,7 +208,7 @@ Create handler with specific connection (for transaction)
 close(): Promise<void>;
 ```
 
-Defined in: [DBHandler.ts:244](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBHandler.ts#L244)
+Defined in: [DBHandler.ts:245](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBHandler.ts#L245)
 
 Close all connections
 
@@ -217,7 +224,7 @@ Close all connections
 setLogger(logger: Logger): void;
 ```
 
-Defined in: [DBHandler.ts:251](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBHandler.ts#L251)
+Defined in: [DBHandler.ts:252](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBHandler.ts#L252)
 
 Set logger
 
@@ -239,7 +246,7 @@ Set logger
 getPool(): unknown;
 ```
 
-Defined in: [DBHandler.ts:260](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBHandler.ts#L260)
+Defined in: [DBHandler.ts:261](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBHandler.ts#L261)
 
 > **Deprecated** Use driver-specific methods instead
 

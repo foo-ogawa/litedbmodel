@@ -2,7 +2,7 @@
 
 # Class: LimitExceededError
 
-Defined in: [types.ts:380](https://github.com/foo-ogawa/litedbmodel/blob/main/src/types.ts#L380)
+Defined in: [types.ts:394](https://github.com/foo-ogawa/litedbmodel/blob/main/src/types.ts#L394)
 
 Error thrown when a query exceeds the configured limit.
 
@@ -18,7 +18,7 @@ Error thrown when a query exceeds the configured limit.
 new LimitExceededError(limit: number, actualCount: number, context: 'find' | 'relation', modelName?: string, relationName?: string): LimitExceededError;
 ```
 
-Defined in: [types.ts:381](https://github.com/foo-ogawa/litedbmodel/blob/main/src/types.ts#L381)
+Defined in: [types.ts:395](https://github.com/foo-ogawa/litedbmodel/blob/main/src/types.ts#L395)
 
 #### Parameters
 
@@ -34,9 +34,9 @@ Defined in: [types.ts:381](https://github.com/foo-ogawa/litedbmodel/blob/main/sr
 
 | Property | Type | Description | Defined in |
 | ------ | ------ | ------ | ------ |
-| <a id="limit"></a> `limit` (readonly) | `number` |  | [types.ts:382](https://github.com/foo-ogawa/litedbmodel/blob/main/src/types.ts#L382) |
-| <a id="actualcount"></a> `actualCount` (readonly) | `number` |  | [types.ts:387](https://github.com/foo-ogawa/litedbmodel/blob/main/src/types.ts#L387) |
-| <a id="context"></a> `context` (readonly) | `'find' \| 'relation'` |  | [types.ts:388](https://github.com/foo-ogawa/litedbmodel/blob/main/src/types.ts#L388) |
-| <a id="modelname"></a> `modelName?` (readonly) | `string` |  | [types.ts:389](https://github.com/foo-ogawa/litedbmodel/blob/main/src/types.ts#L389) |
-| <a id="relationname"></a> `relationName?` (readonly) | `string` |  | [types.ts:390](https://github.com/foo-ogawa/litedbmodel/blob/main/src/types.ts#L390) |
+| <a id="limit"></a> `limit` (readonly) | `number` |  | [types.ts:396](https://github.com/foo-ogawa/litedbmodel/blob/main/src/types.ts#L396) |
+| <a id="actualcount"></a> `actualCount` (readonly) | `number` |  | [types.ts:401](https://github.com/foo-ogawa/litedbmodel/blob/main/src/types.ts#L401) |
+| <a id="context"></a> `context` (readonly) | `'find' \| 'relation'` |  | [types.ts:402](https://github.com/foo-ogawa/litedbmodel/blob/main/src/types.ts#L402) |
+| <a id="modelname"></a> `modelName?` (readonly) | `string` |  | [types.ts:403](https://github.com/foo-ogawa/litedbmodel/blob/main/src/types.ts#L403) |
+| <a id="relationname"></a> `relationName?` (readonly) | `string` |  | [types.ts:404](https://github.com/foo-ogawa/litedbmodel/blob/main/src/types.ts#L404) |
 

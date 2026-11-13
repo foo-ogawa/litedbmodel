@@ -1,7 +1,7 @@
 # litedbmodel API Reference
 
 <!--@embedoc:package_version-->
-**Version:** litedbmodel **2.2.14**
+**Version:** litedbmodel **2.2.15**
 <!--@embedoc:end-->
 
 The public API of the `litedbmodel` package, generated from the sources by `npm run docs`. For how to

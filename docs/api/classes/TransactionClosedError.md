@@ -2,7 +2,7 @@
 
 # Class: TransactionClosedError
 
-Defined in: [types.ts:413](https://github.com/foo-ogawa/litedbmodel/blob/main/src/types.ts#L413)
+Defined in: [types.ts:427](https://github.com/foo-ogawa/litedbmodel/blob/main/src/types.ts#L427)
 
 Error thrown when a query is issued through a transaction after its function has settled, or when the
 function settled while a query started inside it had not finished (the transaction is rolled back).
@@ -19,7 +19,7 @@ function settled while a query started inside it had not finished (the transacti
 new TransactionClosedError(unfinished?: boolean, options?: { cause: unknown }): TransactionClosedError;
 ```
 
-Defined in: [types.ts:419](https://github.com/foo-ogawa/litedbmodel/blob/main/src/types.ts#L419)
+Defined in: [types.ts:433](https://github.com/foo-ogawa/litedbmodel/blob/main/src/types.ts#L433)
 
 #### Parameters
 
