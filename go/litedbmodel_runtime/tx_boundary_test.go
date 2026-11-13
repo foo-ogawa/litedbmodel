@@ -450,6 +450,54 @@ func TestTransactionBodyErrorRollsBackTheWholeTx(t *testing.T) {
 	}
 }
 
+// #347 — a PANICKING body ends the transaction like a body error does: ROLLBACK through the seam, then
+// the panic continues. The tx combinator used to release the owned connection with its BEGIN still
+// open, so the next request on that pooled connection read the panicked request's uncommitted write
+// (and on MySQL its own BEGIN then committed it). Both acquisition paths are covered: the primary db's
+// *sql.Conn and a routed [SQLDBPool]. One pooled connection, so "the next request" is that connection.
+func TestTransactionPanickingBodyRollsBackBeforeTheConnectionIsReused(t *testing.T) {
+	for _, leg := range []struct {
+		name string
+		ctx  func(db *sql.DB) *ExecutionContext
+	}{
+		{"primary-db", func(db *sql.DB) *ExecutionContext { return ContextForDB(db) }},
+		{"routed", func(db *sql.DB) *ExecutionContext {
+			return ContextForRouting(RoutingConfig{Registry: SingleDefaultRegistry(NewSQLDBPool(db, defaultConnectTimeoutMillis)), Sticky: NewWriterStickyClock(StickyOptions{UseWriterAfterTransaction: boolPtr(false)})}, nil)
+		}},
+	} {
+		t.Run(leg.name, func(t *testing.T) {
+			db, sink := openRec(t, "file:txpanic_"+strings.ReplaceAll(leg.name, "-", "_")+"?mode=memory&cache=shared")
+			defer db.Close()
+			ctx := leg.ctx(db)
+			func() {
+				defer func() {
+					if r := recover(); r != "body panicked" {
+						t.Fatalf("the body's panic must propagate unchanged, recovered %v", r)
+					}
+				}()
+				_, _ = Transaction(ctx, "sqlite", DefaultTransactionOptions(), func(txCtx *ExecutionContext) (int, error) {
+					if _, err := RunGuarded(txCtx, "INSERT INTO t (id, v) VALUES (?, ?)", []any{int64(2), "b"}, "INSERT", "t"); err != nil {
+						return 0, err
+					}
+					panic("body panicked")
+				})
+			}()
+			if begins, commits, rolls := sink.txControlCounts(); begins != 1 || commits != 0 || rolls != 1 {
+				t.Errorf("panicking body ⇒ ONE BEGIN + ONE ROLLBACK + zero COMMIT: begins=%d commits=%d rolls=%d", begins, commits, rolls)
+			}
+			// The next request on the (only) pooled connection must not see the aborted write …
+			rows, err := Execute(ctx, "SELECT id FROM t WHERE id = ?", []any{int64(2)}, ReadIntent())
+			if err != nil || len(rows) != 0 {
+				t.Fatalf("after a panicking body the next read saw rows=%d err=%v, want 0 rows (the write rolled back)", len(rows), err)
+			}
+			// … and can open its own transaction on it.
+			if _, err := Transaction(ctx, "sqlite", DefaultTransactionOptions(), func(txCtx *ExecutionContext) (int, error) { return 0, nil }); err != nil {
+				t.Fatalf("the next transaction on the connection failed: %v", err)
+			}
+		})
+	}
+}
+
 // rollbackOnly: a successful body ROLLBACKs (dry-run) but still returns its value; no Commit.
 func TestTransactionRollbackOnlyReturnsValueButDoesNotCommit(t *testing.T) {
 	db, sink := openRec(t, "file:txb3?mode=memory&cache=shared")

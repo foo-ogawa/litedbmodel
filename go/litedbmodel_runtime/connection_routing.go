@@ -345,17 +345,16 @@ func (p *SQLDBPool) ping() error {
 	return p.db.PingContext(ctx)
 }
 
-// Release closes the pinned *sql.Conn back to the *sql.DB pool. destroy is honored via
-// Conn.Close (go returns a healthy conn to the pool on Close and drops a broken one automatically);
-// a poisoned connection is dropped by the driver on the next use, so Close is the correct release for
-// both cases.
+// Release returns the pinned *sql.Conn to the *sql.DB pool, or — destroy — DISCARDS the physical
+// connection so the next Acquire never gets it ([releaseSQLConn]). A connection released as destroyed
+// may still be inside a transaction or carry an aborted session; closing it rolls that back
+// server-side.
 func (p *SQLDBPool) Release(conn PooledConn, destroy bool) error {
 	sc, ok := conn.(*sqlConnPooled)
 	if !ok {
 		return nil
 	}
-	_ = destroy // go's *sql.Conn.Close returns a clean conn to the pool + drops a broken one; no separate destroy path.
-	return sc.conn.Close()
+	return releaseSQLConn(sc.conn, destroy)
 }
 
 // ── The configured pool wrapper (C3) — session statements + reset-on-release ───
@@ -402,25 +401,18 @@ func (p *configuredPool) Acquire() (PooledConn, error) {
 }
 
 func (p *configuredPool) Release(conn PooledConn, destroy bool) error {
-	// Run the reset (best-effort) BEFORE returning the connection to the pool — for BOTH a clean and a
-	// destroyed release. This is the go-specific reality: go's database/sql has no public "close and
-	// DISCARD this pooled connection" API — *sql.Conn.Close() returns the physical connection to the
-	// pool even when we ask to destroy it. A statement that fired a server statement_timeout does NOT
-	// break the PG/MySQL connection (only the statement is canceled) — so the connection carries THIS
-	// config's session knobs (statement_timeout / search_path / charset) back into the pool unless we
-	// reset them. Running the reset here (even on destroy) is what actually prevents the session leak
-	// (proven by TestPhaseCConfigSearchPathResetOnReleaseLivePG + the queryTimeout mutation, where the
-	// unconfigured follow-up query must NOT inherit the timeout). If the reset itself fails (a genuinely
-	// aborted/broken connection) we still Release with destroy so the underlying pool drops it if it can.
-	resetErr := error(nil)
+	// A destroyed (poisoned/aborted) connection is dropped by the inner pool — it never re-enters use, so
+	// there is nothing to reset, and a reset on an aborted-by-timeout connection would itself fail. A
+	// CLEAN connection is reset to the server defaults BEFORE it returns to the pool, so it does not carry
+	// THIS config's session knobs (statement_timeout / search_path / charset) to the next caller; a reset
+	// that fails leaves its state unknown ⇒ drop it. (TS / python configuredPool.)
+	if destroy {
+		return p.inner.Release(conn, true)
+	}
 	for _, stmt := range p.reset {
 		if _, rerr := conn.Run(stmt, nil); rerr != nil {
-			resetErr = rerr
-			break
+			return p.inner.Release(conn, true)
 		}
-	}
-	if resetErr != nil || destroy {
-		return p.inner.Release(conn, true)
 	}
 	return p.inner.Release(conn, false)
 }

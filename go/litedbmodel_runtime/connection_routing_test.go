@@ -19,8 +19,10 @@ package litedbmodel_runtime
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"net"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -550,17 +552,16 @@ func TestConfiguredPoolSessionAndReset(t *testing.T) {
 		t.Fatalf("session+reset = %v, want %v", base.stmts, want)
 	}
 
-	// A destroyed release STILL runs the reset (best-effort) AND drops the connection: go's
-	// database/sql has no force-discard for a pooled *sql.Conn, so a statement-timeout-canceled (but
-	// still alive) connection must be reset before it can re-enter the pool, else it leaks the session
-	// knobs. The inner Release is called with destroy=true.
+	// A destroyed release SKIPS the reset and drops the connection: it never re-enters the pool, so
+	// there is nothing to reset, and a reset on an aborted-by-timeout connection would itself fail (the
+	// TS / python configuredPool rule). The inner Release is called with destroy=true.
 	base.stmts = nil
 	base.destroyed = 0
 	conn2, _ := cp.Acquire()
 	_ = cp.Release(conn2, true) // destroy
-	want2 := []string{"SET statement_timeout = 200", "SET search_path TO app", "RESET statement_timeout", "RESET search_path"}
+	want2 := []string{"SET statement_timeout = 200", "SET search_path TO app"}
 	if !reflect.DeepEqual(base.stmts, want2) {
-		t.Fatalf("destroyed release should still reset (no go force-discard), got %v", base.stmts)
+		t.Fatalf("destroyed release must skip the reset, got %v", base.stmts)
 	}
 	if base.destroyed != 1 {
 		t.Fatalf("destroyed release should drop the connection (inner destroy=true), destroyed=%d", base.destroyed)
@@ -578,6 +579,47 @@ func TestConfiguredPoolSessionAndReset(t *testing.T) {
 	_ = pass.Release(c3, false)
 	if len(plain.stmts) != 0 {
 		t.Fatalf("all-default config ran session statements = %v, want none (drop-session-config RED)", plain.stmts)
+	}
+}
+
+// #347 — [SQLDBPool.Release] with destroy=true DROPS the physical connection instead of pooling it (the
+// [Pool] contract). It used to ignore destroy and Close the *sql.Conn back into the *sql.DB pool, so a
+// connection released as poisoned was handed to the next Acquire. Session state that lives only on the
+// physical connection (a TEMP table) tells the two apart: one pooled connection, so the next Acquire
+// gets the SAME connection unless the release dropped it.
+func TestSQLDBPoolReleaseDestroyDropsTheConnection(t *testing.T) {
+	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "db.sqlite"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	pool := NewSQLDBPool(db, defaultConnectTimeoutMillis)
+	markerSurvives := func(destroy bool) bool {
+		t.Helper()
+		conn, err := pool.Acquire()
+		if err != nil {
+			t.Fatalf("acquire: %v", err)
+		}
+		if _, err := conn.Run("CREATE TEMP TABLE IF NOT EXISTS marker (x INTEGER)", nil); err != nil {
+			t.Fatalf("marker: %v", err)
+		}
+		if err := pool.Release(conn, destroy); err != nil {
+			t.Fatalf("release: %v", err)
+		}
+		next, err := pool.Acquire()
+		if err != nil {
+			t.Fatalf("re-acquire: %v", err)
+		}
+		defer func() { _ = pool.Release(next, false) }()
+		_, err = next.Execute("SELECT x FROM temp.marker", nil)
+		return err == nil
+	}
+	if !markerSurvives(false) {
+		t.Fatal("a clean release must return the SAME connection to the pool (the marker survives)")
+	}
+	if markerSurvives(true) {
+		t.Fatal("a destroyed release must drop the connection, but the next Acquire got it back (marker still there)")
 	}
 }
 
