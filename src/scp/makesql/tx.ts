@@ -566,7 +566,10 @@ function compileWriteNodeSql(node: WriteNodeLike, dialect: MakeSQLDialect, resol
           if (resolveColumnType === undefined) throw new Error(`compileWriteNode: batch update on postgres needs the column-type resolver (schema SoT) to derive the UNNEST element casts — pass it through compileCreateManyBundle (the decorator-adapter batch write path).`);
           return pgBatchUpdate(table, keyCols, updateCols, key, set, ports, resolveColumnType, dialect);
         }
-        const shapeOpts = { tableName: table, keyColumns: keyCols, updateColumns: updateCols, records: [] as Record<string, unknown>[], ...(stringPort(ports, 'returning') !== undefined ? { returning: stringPort(ports, 'returning') } : {}) };
+        // No records exist at compile, so the MySQL JSON_TABLE columns — the KEY included — are typed from
+        // the schema (#381); without it the key would be read as text and compared with the column as DOUBLE.
+        const columnTypes = resolveColumnType === undefined ? undefined : Object.fromEntries([...keyCols, ...updateCols].map((c) => [c, resolveColumnType(table, c)]));
+        const shapeOpts = { tableName: table, keyColumns: keyCols, updateColumns: updateCols, records: [] as Record<string, unknown>[], ...(columnTypes !== undefined ? { columnTypes } : {}), ...(stringPort(ports, 'returning') !== undefined ? { returning: stringPort(ports, 'returning') } : {}) };
         const shape = dialect === 'mysql' ? mysqlUpdateManyJson(shapeOpts) : sqliteUpdateManyJson(shapeOpts);
         // The JSON carries BOTH the key + update columns (in that order); one marker per `?`.
         const columns = [...keyCols, ...updateCols];

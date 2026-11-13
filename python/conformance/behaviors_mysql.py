@@ -4,14 +4,14 @@
 # native dict literal and handed to the EXISTING runtime core (run_behavior) —
 # no execution logic is generated. Handlers are ALWAYS injected at the boundary
 # (IR + {effects,config,hooks}); they are never generated.
-# irFingerprint: fnv1a64:89bcb5e1a0a3dafb
+# irFingerprint: fnv1a64:88987b9c74f425f0
 from behavior_contracts import SPEC_VERSIONS, ProvenanceError, load_compiled_ir, run_behavior
 
 # Spec versions baked at generation time (fail-closed constant comparison at load).
 EXPECTED_SPEC_VERSIONS = {"behavior": 6, "expression": 2, "plan": 1}
 
 # FNV-1a 64 fingerprint of the source portable IR (canonical_json discipline, #208).
-IR_FINGERPRINT = "fnv1a64:89bcb5e1a0a3dafb"
+IR_FINGERPRINT = "fnv1a64:88987b9c74f425f0"
 
 # Component names exposed by bind(), in IR declaration order.
 COMPONENT_NAMES = ("posts", "postsTop", "page", "postsByIds", "feed", "pagedFeed", "optionalOnlyFeed", "quotedOrderFeed", "quotedWhereOrderFeed", "viewFeed", "usersWithPosts", "postsWithAuthor", "usersWithCappedPosts", "usersWithUncappedPosts", "usersWithTopPosts", "createPost", "renamePost", "removePost", "createPostReturning", "renamePostReturning", "removePostReturning", "restatusPostsReturning", "removePostsByAuthorReturning", "typedRows", "createTags", "removeTags", "createDoc", "createLine", "createTagsReturning", "relabelTagsReturning", "removeTagsReturning")
@@ -5297,7 +5297,7 @@ IR_DOC = {
                 }
               ]
             },
-            "sql": "UPDATE conf_tags AS u JOIN JSON_TABLE(?, '$[*]' COLUMNS(id JSON PATH '$.id', label JSON PATH '$.label')) AS v ON u.id = JSON_UNQUOTE(v.id) SET u.label = JSON_UNQUOTE(v.label) RETURNING id, label /*scp:pk=id;ai=*/"
+            "sql": "UPDATE conf_tags AS u JOIN JSON_TABLE(?, '$[*]' COLUMNS(id DECIMAL(65,30) PATH '$.id', label JSON PATH '$.label')) AS v ON u.id = v.id SET u.label = JSON_UNQUOTE(v.label) RETURNING id, label /*scp:pk=id;ai=*/"
           }
         }
       ],

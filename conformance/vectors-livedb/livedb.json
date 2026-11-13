@@ -3086,7 +3086,7 @@
       },
       "expectedStatements": [
         {
-          "sql": "UPDATE conf_tags AS u JOIN JSON_TABLE(?, '$[*]' COLUMNS(id JSON PATH '$.id', label JSON PATH '$.label')) AS v ON u.id = JSON_UNQUOTE(v.id) SET u.label = JSON_UNQUOTE(v.label) RETURNING id, label /*scp:pk=id;ai=*/",
+          "sql": "UPDATE conf_tags AS u JOIN JSON_TABLE(?, '$[*]' COLUMNS(id DECIMAL(65,30) PATH '$.id', label JSON PATH '$.label')) AS v ON u.id = v.id SET u.label = JSON_UNQUOTE(v.label) RETURNING id, label /*scp:pk=id;ai=*/",
           "params": [
             "[{\"id\":100,\"label\":\"re-100\"},{\"id\":102,\"label\":\"re-102\"}]"
           ]

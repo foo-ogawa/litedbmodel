@@ -7,7 +7,7 @@
 // (Behavior::runBehavior) — no execution logic is generated. Handlers are ALWAYS
 // injected at the boundary (IR + {effects,config,hooks} — concept.md §4.4); they
 // are never generated.
-// irFingerprint: fnv1a64:89bcb5e1a0a3dafb
+// irFingerprint: fnv1a64:88987b9c74f425f0
 
 declare(strict_types=1);
 
@@ -15,7 +15,7 @@ declare(strict_types=1);
 $expectedSpecVersions = ['behavior' => 6, 'expression' => 2, 'plan' => 1];
 
 // FNV-1a 64 fingerprint of the source portable IR (canonical-json discipline, #208).
-$irFingerprint = 'fnv1a64:89bcb5e1a0a3dafb';
+$irFingerprint = 'fnv1a64:88987b9c74f425f0';
 
 // Component names exposed by bind(), in IR declaration order.
 $componentNames = ['posts', 'postsTop', 'page', 'postsByIds', 'feed', 'pagedFeed', 'optionalOnlyFeed', 'quotedOrderFeed', 'quotedWhereOrderFeed', 'viewFeed', 'usersWithPosts', 'postsWithAuthor', 'usersWithCappedPosts', 'usersWithUncappedPosts', 'usersWithTopPosts', 'createPost', 'renamePost', 'removePost', 'createPostReturning', 'renamePostReturning', 'removePostReturning', 'restatusPostsReturning', 'removePostsByAuthorReturning', 'typedRows', 'createTags', 'removeTags', 'createDoc', 'createLine', 'createTagsReturning', 'relabelTagsReturning', 'removeTagsReturning'];
@@ -5301,7 +5301,7 @@ $irDoc = (object) [
                                 ],
                             ],
                         ],
-                        "sql" => "UPDATE conf_tags AS u JOIN JSON_TABLE(?, '\$[*]' COLUMNS(id JSON PATH '\$.id', label JSON PATH '\$.label')) AS v ON u.id = JSON_UNQUOTE(v.id) SET u.label = JSON_UNQUOTE(v.label) RETURNING id, label /*scp:pk=id;ai=*/",
+                        "sql" => "UPDATE conf_tags AS u JOIN JSON_TABLE(?, '\$[*]' COLUMNS(id DECIMAL(65,30) PATH '\$.id', label JSON PATH '\$.label')) AS v ON u.id = v.id SET u.label = JSON_UNQUOTE(v.label) RETURNING id, label /*scp:pk=id;ai=*/",
                     ],
                 ],
             ],

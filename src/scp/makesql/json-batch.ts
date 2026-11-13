@@ -21,7 +21,7 @@
  */
 
 import { DBToken } from '../../DBValues';
-import { encodeJsonParam } from './json-array';
+import { encodeJsonParam, mysqlJsonRead, type ColumnTypes } from './json-array';
 import type { Dialect } from './handler';
 import type { MakeSQL } from './makesql';
 
@@ -39,24 +39,35 @@ export function rowsHaveDbToken(rows: Record<string, unknown>[], columns: string
 }
 
 /**
- * Infer the MySQL `JSON_TABLE` COLUMNS type + SELECT expression for a column from EVERY non-null
- * serialized value in the group — never from the first one alone (#378): a key column typed `BIGINT`
- * from a leading `1` made MySQL silently round a later `1.5` to `2`, so the batch UPDATE's JOIN wrote a
- * row no record named. Chosen so the extracted value coerces to the target column like v1's bound `?`:
+ * The MySQL `JSON_TABLE` COLUMNS type + SELECT expression for a column — the ONE typing point of the
+ * batch rows. Two sources, one rule:
  *
- *  - every value boolean / integer / bigint → `BIGINT` (JSON true/false → 1/0; ints exact),
- *  - every value a number, at least one non-integer → `DECIMAL(65,30)` (lossless for all of them),
- *  - every value an object / array → `JSON` kept as JSON (json columns),
- *  - strings, a mix of kinds, or an all-null column → `JSON`, then `JSON_UNQUOTE(...)` in the
- *    SELECT so arbitrary-length text (beyond CHAR's 255 cap) and JSON-null → SQL NULL work.
+ * - the column's DECLARED SQL type, when the caller has the schema (the codegen batch write,
+ *   `tx.ts` `compileWriteNode`, which compiles with NO records): typed exactly as the membership
+ *   predicates type it ({@link mysqlJsonRead}) — so a BIGINT / DECIMAL key is matched as a decimal, never
+ *   as `JSON_UNQUOTE` text MySQL would compare with the column as DOUBLE (#381);
+ * - otherwise EVERY non-null serialized value in the group — never the first one alone (#378): a key
+ *   column typed `BIGINT` from a leading `1` made MySQL silently round a later `1.5` to `2`, so the batch
+ *   UPDATE's JOIN wrote a row no record named. Chosen so the extracted value coerces to the target
+ *   column like v1's bound `?`:
+ *   - every value boolean / integer / bigint → `BIGINT` (JSON true/false → 1/0; ints exact),
+ *   - every value a number, at least one non-integer → `DECIMAL(65,30)` (lossless for all of them),
+ *   - every value an object / array → `JSON` kept as JSON (json columns),
+ *   - strings, a mix of kinds, or an all-null column → `JSON`, then `JSON_UNQUOTE(...)` in the
+ *     SELECT so arbitrary-length text (beyond CHAR's 255 cap) and JSON-null → SQL NULL work.
  *
  * Returns `{ colType, selectExpr }` where `selectExpr` is applied to the JSON_TABLE
  * output column reference (e.g. `jt.name`).
  */
 export function mysqlJsonTableColumn(
   col: string,
-  rows: Record<string, unknown>[]
+  rows: Record<string, unknown>[],
+  declaredType?: string,
 ): { colType: string; selectExpr: (ref: string) => string } {
+  if (declaredType !== undefined) {
+    const read = mysqlJsonRead(declaredType);
+    return { colType: read.type, selectExpr: read.text ? (ref) => `JSON_UNQUOTE(${ref})` : (ref) => ref };
+  }
   let kind: 'none' | 'int' | 'number' | 'object' | 'text' = 'none';
   for (const r of rows) {
     const v = r[col];
@@ -184,6 +195,8 @@ export interface JsonUpdateManyOptions {
   records: Record<string, unknown>[];
   /** record-index → set of SKIP column names (leave DB value unchanged for those). */
   skipMap?: Map<number, Set<string>>;
+  /** The DECLARED SQL types of the key + update columns, when the caller has the schema (MySQL, #381). */
+  columnTypes?: ColumnTypes;
   returning?: string;
 }
 
@@ -197,7 +210,7 @@ export interface JsonUpdateManyOptions {
  *     SET u.c = IF(v._skip_c, u.c, v.c), …
  */
 export function mysqlUpdateManyJson(opts: JsonUpdateManyOptions): MakeSQL {
-  const { tableName, keyColumns, updateColumns, records, skipMap = new Map(), returning } = opts;
+  const { tableName, keyColumns, updateColumns, records, skipMap = new Map(), columnTypes, returning } = opts;
   const allColumns = [...keyColumns, ...updateColumns];
 
   const skipColumnsNeeded = new Set<string>();
@@ -216,7 +229,7 @@ export function mysqlUpdateManyJson(opts: JsonUpdateManyOptions): MakeSQL {
   const jtCols: string[] = [];
   const selectExprOf = new Map<string, (ref: string) => string>();
   for (const col of allColumns) {
-    const { colType, selectExpr } = mysqlJsonTableColumn(col, records);
+    const { colType, selectExpr } = mysqlJsonTableColumn(col, records, columnTypes?.[col]);
     jtCols.push(`${col} ${colType} PATH '$.${col}'`);
     selectExprOf.set(col, selectExpr);
   }

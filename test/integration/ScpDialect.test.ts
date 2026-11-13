@@ -51,7 +51,7 @@ import {
   type AsyncConnection,
   type RelationOp,
 } from '../../src/scp';
-import { compileSelect, compileDeleteMany, assembleMakeSQL, type SelectDesc, type Dialect as MakeSQLDialect } from '../../src/scp/makesql';
+import { compileSelect, compileDeleteMany, assembleMakeSQL, encodeJsonArrayParam, type SelectDesc, type Dialect as MakeSQLDialect } from '../../src/scp/makesql';
 import Database from 'better-sqlite3';
 import { emitBehaviorModule, leafHandlersAsync, PooledAsyncContext, pgConnectionPool, type EndpointSet } from '../../src/scp';
 import { model, column } from '../../src/decorators';
@@ -1157,6 +1157,45 @@ describe('#377 composite-PK deleteMany deletes exactly the given tuples (PG + My
 
   afterAll(async () => {
     await pgPool?.query(`DROP TABLE IF EXISTS ${T}`).catch(() => undefined);
+    await myConn?.query(`DROP TABLE IF EXISTS ${T}`).catch(() => undefined);
+  });
+});
+
+// #381 — the GENERATED updateMany endpoint matches its key exactly. The codegen batch Update
+// (`compileWriteNode`, the compile the emitter's `batch()` runs with the model's column-type resolver)
+// handed MySQL `records: []`, so every JSON_TABLE column — the KEY included — was read as `JSON_UNQUOTE`
+// text and `ON u.k = JSON_UNQUOTE(v.k)` compared a string with a BIGINT as DOUBLE: one supplied key on a
+// non-indexed BIGINT column overwrote the other tenants' rows that round to the same double. The
+// statement below is the one baked into every runtime's generated module; it binds the records array
+// to each `?`, as the generated `Db.executeSQL(sql, [rows, …])` does.
+describe('#381 codegen MySQL updateMany keyed by a non-indexed BIGINT updates exactly one row', () => {
+  const T = 'scp381_ext_rows';
+  const TYPES: Record<string, string> = { id: 'INT', tenant: 'INT', ext_id: 'BIGINT', v: 'VARCHAR(20)' };
+  const resolveType = (_table: string, column: string): string => {
+    const t = TYPES[column];
+    if (t === undefined) throw new Error(`no declared type for ${column}`);
+    return t;
+  };
+
+  it('[mysql] one key, one row', async () => {
+    await myConn!.query(`DROP TABLE IF EXISTS ${T}`);
+    await myConn!.query(`CREATE TABLE ${T} (id INT PRIMARY KEY, tenant INT NOT NULL, ext_id BIGINT NOT NULL, v VARCHAR(20) NOT NULL)`);
+    await myConn!.query(
+      `INSERT INTO ${T} VALUES (1, 1, 1900000000000000001, 'a'), (2, 2, 1900000000000000000, 'b'), (3, 2, 1900000000000000002, 'b')`,
+    );
+    const op = compileWriteNode(
+      { component: 'Update', ports: { table: T, batch: 'true', 'key.ext_id': { ref: ['rows'] }, 'set.v': { ref: ['rows'] } } } as Parameters<typeof compileWriteNode>[0],
+      'mysql',
+      resolveType,
+    );
+    const rows = encodeJsonArrayParam('mysql', [{ ext_id: 1900000000000000001n, v: 'mine' }]);
+    const [res] = await myConn!.query(op.sql, op.params.map(() => rows));
+    expect((res as { affectedRows: number }).affectedRows).toBe(1);
+    const after = await myQuery(myConn!, `SELECT id, v FROM ${T} ORDER BY id`, []);
+    expect(after.map((r) => `${Number(r.id)}:${String(r.v)}`)).toEqual(['1:mine', '2:b', '3:b']);
+  });
+
+  afterAll(async () => {
     await myConn?.query(`DROP TABLE IF EXISTS ${T}`).catch(() => undefined);
   });
 });

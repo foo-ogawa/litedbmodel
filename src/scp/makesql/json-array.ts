@@ -68,13 +68,24 @@ export type ColumnTypes = Readonly<Record<string, string>>;
  */
 function mysqlKeyElement(name: string, path: string, sqlType: string | undefined): { column: string; select: string } {
   if (sqlType === undefined) return { column: `${name} JSON PATH '${path}'`, select: name };
+  const read = mysqlJsonRead(sqlType);
+  return { column: `${name} ${read.type} PATH '${path}'`, select: read.text ? `JSON_UNQUOTE(${name})` : name };
+}
+
+/**
+ * How MySQL reads a JSON element for a column of the DECLARED SQL type `sqlType`: the `JSON_TABLE`
+ * column type, and whether the read is the element's unquoted text. The ONE rule every MySQL
+ * single-JSON-param form types a column by when the schema is known — the membership predicates
+ * ({@link mysqlKeyElement}) and the batch write rows (`json-batch.ts` `mysqlJsonTableColumn`, #381):
+ * integer / boolean / DECIMAL / NUMERIC → `DECIMAL(65,30)`, FLOAT / DOUBLE → `DOUBLE`, everything else
+ * → `JSON` read as text. An unknown SQL type is a hard error ({@link sqlTypeToBcScalar}).
+ */
+export function mysqlJsonRead(sqlType: string): { type: string; text: boolean } {
   const scalar = sqlTypeToBcScalar(sqlType);
   const base = normalizeSqlTypeToken(sqlType);
-  if (scalar === 'int' || scalar === 'bool' || base === 'DECIMAL' || base === 'NUMERIC') {
-    return { column: `${name} DECIMAL(65,30) PATH '${path}'`, select: name };
-  }
-  if (scalar === 'float') return { column: `${name} DOUBLE PATH '${path}'`, select: name };
-  return { column: `${name} JSON PATH '${path}'`, select: `JSON_UNQUOTE(${name})` };
+  if (scalar === 'int' || scalar === 'bool' || base === 'DECIMAL' || base === 'NUMERIC') return { type: 'DECIMAL(65,30)', text: false };
+  if (scalar === 'float') return { type: 'DOUBLE', text: false };
+  return { type: 'JSON', text: true };
 }
 
 /**
