@@ -7,7 +7,7 @@
 
 import type { DBConfig, DBDriver, DBDriverOptions, DBConnection, QueryResult, Logger } from './types';
 import { defaultLogger } from './types';
-import { isConnectionError, isResendableStatement } from '../connection-errors';
+import { isConnectionError, isResendableStatement, acquireCheckedConnection, DEFAULT_RETRY_LIMIT } from '../connection-errors';
 
 // mysql2 types (loaded dynamically)
 interface Mysql2Pool {
@@ -279,7 +279,8 @@ export class MysqlDriver implements DBDriver {
   /**
    * Execute a read query (`onWriter`: on the writer pool, for a read routed to the writer). After a
    * connection error the statement is re-sent once only when `isResendableStatement` allows it
-   * (read-only and calls no function); anything else is thrown.
+   * (read-only and calls no function), on a connection that passed the probe of {@link connect} (at most
+   * `DEFAULT_RETRY_LIMIT` connections are tried); anything else is thrown.
    */
   async execute(sql: string, params: unknown[] = [], onWriter = false): Promise<QueryResult> {
     const pool = onWriter ? this.writerPool || this.pool : this.pool;
@@ -343,49 +344,15 @@ export class MysqlDriver implements DBDriver {
     } catch (error) {
       if (isConnectionError(error as Error) && isResendableStatement(sql)) {
         this.logger.warn(`Connection error, retrying query: ${sqlWithoutReturning}`);
+        let conn: MysqlConnection | undefined;
         try {
-          const [result] = await pool.query(sqlWithoutReturning, convertedParams);
-          const duration = Date.now() - startTime;
-
-          if (Array.isArray(result) && result.length > 0 && typeof result[0] === 'object' && result[0] !== null && !('affectedRows' in result[0])) {
-            const rowArray = result as unknown as Record<string, unknown>[];
-            this.logger.debug(`Retry succeeded in ${duration}ms, rows: ${rowArray.length}`);
-            return {
-              rows: rowArray,
-              rowCount: rowArray.length,
-            };
-          }
-
-          if (hasReturning) {
-            const resultObj = result as unknown as Record<string, unknown>;
-            const tableName = extractTableName(sql);
-
-            if (tableName && sql.trim().toUpperCase().startsWith('INSERT')) {
-              const insertId = resultObj.insertId as number;
-              const affectedRows = (resultObj.affectedRows as number) ?? 1;
-
-              if (affectedRows > 0 && insertId > 0) {
-                const cols = returningCols === '*' ? '*' : returningCols;
-                const selectSql = `SELECT ${cols} FROM ${tableName} WHERE id >= ? AND id < ?`;
-                const [selectResult] = await pool.query(selectSql, [insertId, insertId + affectedRows]);
-                const rows = selectResult as unknown as Record<string, unknown>[];
-                this.logger.debug(`Retry succeeded in ${duration}ms, rows: ${rows.length}`);
-                return {
-                  rows,
-                  rowCount: rows.length,
-                };
-              }
-            }
-          }
-
-          const resultObj = result as unknown as Record<string, unknown>;
-          const rowCount = (resultObj.affectedRows as number) ?? 0;
-          this.logger.debug(`Retry succeeded in ${duration}ms, affected: ${rowCount}`);
-          return {
-            rows: [],
-            rowCount,
-          };
+          conn = await this.connect(pool, DEFAULT_RETRY_LIMIT);
+          const result = await conn.query(sql, params);
+          conn.release();
+          this.logger.debug(`Retry succeeded in ${Date.now() - startTime}ms, rows: ${result.rowCount}`);
+          return result;
         } catch (retryError) {
+          conn?.release(retryError as Error);
           this.logger.error(`Retry also failed: ${sqlWithoutReturning}`, retryError);
           throw retryError;
         }
@@ -457,11 +424,20 @@ export class MysqlDriver implements DBDriver {
   /**
    * Get a connection for transaction (uses writer pool if available)
    */
-  async getConnection(): Promise<DBConnection> {
+  async getConnection(checkAttempts?: number): Promise<DBConnection> {
     // Transactions always use writer pool for consistency
-    const pool = this.writerPool || this.pool;
-    const connection = await pool.getConnection();
-    return new MysqlConnection(connection);
+    return this.connect(this.writerPool || this.pool, checkAttempts);
+  }
+
+  /**
+   * Acquire a connection from `pool` — the one acquisition point of the transaction and of the re-send
+   * after a connection error. With `checkAttempts` (a retry after a connection error) each connection is
+   * probed and a dead one destroyed and replaced, at most that many ({@link acquireCheckedConnection}).
+   */
+  private async connect(pool: Mysql2Pool, checkAttempts?: number): Promise<MysqlConnection> {
+    const take = async (): Promise<MysqlConnection> => new MysqlConnection(await pool.getConnection());
+    if (checkAttempts === undefined) return take();
+    return acquireCheckedConnection(take, (conn, probe) => conn.query(probe), (conn) => conn.release(true), checkAttempts);
   }
 
   /**

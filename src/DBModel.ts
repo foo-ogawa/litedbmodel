@@ -15,7 +15,7 @@ import { createMiddleware as createMiddlewareFn, type Middleware, type Middlewar
 import { serializeRecord, getColumnMeta, getSqlCastMap, type KeyPair, type CompositeKeyPairs } from './decorators';
 import { getTypeCast, getSqlBuilder } from './drivers';
 import type { DriverTypeCast } from './drivers/types';
-import { isConnectionError, isReadOnlyStatement } from './connection-errors';
+import { isConnectionError, isReadOnlyStatement, DEFAULT_RETRY_LIMIT } from './connection-errors';
 import { WriterStickyClock } from './WriterStickyClock';
 
 // Import LazyRelation module (static import for Vitest compatibility)
@@ -2825,7 +2825,7 @@ export abstract class DBModel {
     const handler = this.getHandler();
 
     const retryOnError = options.retryOnError ?? true;
-    const retryLimit = options.retryLimit ?? 3;
+    const retryLimit = options.retryLimit ?? DEFAULT_RETRY_LIMIT;
     const retryDuration = options.retryDuration ?? 200;
     const rollbackOnly = options.rollbackOnly ?? false;
     
@@ -2835,11 +2835,14 @@ export abstract class DBModel {
       this._configOptions.useWriterAfterTransaction ?? true;
 
     let attempt = 0;
+    // Set when the previous attempt failed with a connection error: the pool may still hold dead
+    // connections, so this attempt runs only on a connection that passed a probe (at most retryLimit tried).
+    let afterConnectionError = false;
 
     while (true) {
       attempt++;
       // A given connection is released by whoever acquired it, never here
-      const connection = options.connection ?? await handler.getConnection();
+      const connection = options.connection ?? await handler.getConnection(afterConnectionError ? retryLimit : undefined);
       let destroyConnection = false;
       let committing = false;
       // func sees the connection only through this guard; BEGIN/COMMIT/ROLLBACK use `connection` directly
@@ -2906,6 +2909,7 @@ export abstract class DBModel {
           !((committing || options.connection) && isConnectionError(error as Error)) &&
           this.isRetryableError(error as Error)
         ) {
+          afterConnectionError = isConnectionError(error as Error);
           await this.sleep(retryDuration * Math.pow(2, attempt - 1));
           continue;
         }

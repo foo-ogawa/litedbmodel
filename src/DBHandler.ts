@@ -226,10 +226,11 @@ export class DBHandler {
   }
 
   /**
-   * Get a connection from the pool (for transactions)
+   * Get a connection from the pool (for transactions). `checkAttempts`: a retry after a connection error
+   * takes only a connection that passed a `SELECT 1` probe, trying at most that many.
    */
-  async getConnection(): Promise<DBConnection> {
-    return this.driver.getConnection();
+  async getConnection(checkAttempts?: number): Promise<DBConnection> {
+    return this.driver.getConnection(checkAttempts);
   }
 
   /**

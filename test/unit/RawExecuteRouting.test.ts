@@ -5,6 +5,7 @@
  *     UPDATE / FOR SHARE / LOCK IN SHARE MODE / INTO, DDL) goes to the writer and is never re-sent;
  *   - only a read-only statement that calls no function (`isResendableStatement`) is re-sent after a
  *     connection error: a function-calling SELECT (`COUNT(*)` included) goes to the reader, once.
+ * A re-send runs on a connection that passed a `SELECT 1` probe (#368).
  * pg / mysql fake pools on a real DBHandler. No live DB.
  */
 
@@ -12,6 +13,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { DBModel } from '../../src';
 import { DBHandler } from '../../src/DBHandler';
 import type { Logger } from '../../src/drivers/types';
+import { fakePgPool, fakeMysqlPool, sentSql } from '../helpers/fakePools';
 
 const silentLogger: Logger = { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} };
 
@@ -54,18 +56,19 @@ function connectionError(): Error {
 }
 
 describe.each([
-  { name: 'postgres', driver: 'postgres' as const, port: 5432 },
-  { name: 'mysql', driver: 'mysql' as const, port: 3306 },
-])('DBModel.execute routing ($name)', ({ driver, port }) => {
+  { name: 'postgres', driver: 'postgres' as const, port: 5432, fakePool: fakePgPool, ok: { rows: [], rowCount: 0 } },
+  { name: 'mysql', driver: 'mysql' as const, port: 3306, fakePool: fakeMysqlPool, ok: [[], null] },
+])('DBModel.execute routing ($name)', ({ driver, port, fakePool, ok }) => {
+  /** Each pool fails its first statement with a connection error and answers every later one. */
   function makeModel() {
     const config = { host: `raw-routing-${driver}-reader`, port, database: 'raw_routing', user: 'test', password: 'test', driver };
     const handler = new DBHandler(config, {
       writerConfig: { ...config, host: `raw-routing-${driver}-writer` },
       logger: silentLogger,
     });
-    const reader = vi.fn(async () => { throw connectionError(); });
-    const writer = vi.fn(async () => { throw connectionError(); });
-    Object.assign(handler.getDriver(), { pool: { query: reader }, writerPool: { query: writer } });
+    const reader = vi.fn().mockRejectedValueOnce(connectionError()).mockResolvedValue(ok);
+    const writer = vi.fn().mockRejectedValueOnce(connectionError()).mockResolvedValue(ok);
+    Object.assign(handler.getDriver(), { pool: fakePool(reader), writerPool: fakePool(writer) });
     class RawModel extends DBModel {
       protected static getHandler() { return handler; }
     }
@@ -79,10 +82,10 @@ describe.each([
     expect(writer).toHaveBeenCalledTimes(1);
   });
 
-  it.each(READS)('sends %s to the reader and re-sends it once on a connection error', async (sql) => {
+  it.each(READS)('sends %s to the reader and re-sends it once on a probed connection after a connection error', async (sql) => {
     const { RawModel, reader, writer } = makeModel();
-    await expect(RawModel.execute(sql)).rejects.toThrow('Connection terminated unexpectedly');
-    expect(reader).toHaveBeenCalledTimes(2);
+    await RawModel.execute(sql);
+    expect(sentSql(reader).map((s) => s.replace(/\$\d+/g, '?'))).toEqual([sql, 'SELECT 1', sql]);
     expect(writer).not.toHaveBeenCalled();
   });
 

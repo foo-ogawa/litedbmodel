@@ -6,7 +6,9 @@
  * - queries after func has settled are rejected
  * - statement_timeout passed to the pg Pool
  * - executeWrite does not resend a write after a connection error (pg, mysql)
- * - a read routed to the writer (withWriter / writer-sticky) retries after a connection error (pg, mysql)
+ * - a read routed to the writer (withWriter / writer-sticky) retries after a connection error, on a probed
+ *   connection (pg, mysql)
+ * - a transaction retry after a connection error acquires a probed connection
  */
 
 import { describe, it, expect, vi } from 'vitest';
@@ -17,6 +19,7 @@ import type { Logger, DBConnection } from '../../src/drivers/types';
 import { DBModel, getTransactionConnection } from '../../src/DBModel';
 import { DBHandler } from '../../src/DBHandler';
 import { TransactionClosedError } from '../../src/types';
+import { fakePgPool, fakeMysqlPool, sentSql } from '../helpers/fakePools';
 
 const silentLogger: Logger = {
   debug: () => {},
@@ -122,6 +125,19 @@ describe('DBModel.transaction', () => {
 
     await expect(TxModel.transaction(func, { retryDuration: 1 })).resolves.toBe('ok');
     expect(func).toHaveBeenCalledTimes(2);
+  });
+
+  it('takes the retry after a connection error from a probed acquisition (at most retryLimit); a deadlock retry is not probed', async () => {
+    const query = vi.fn(async (_sql: string) => ({ rows: [], rowCount: 0 }));
+    const connection = { query, release: vi.fn() };
+    const { TxModel, getConnection } = makeModel(connection);
+    const func = vi.fn()
+      .mockRejectedValueOnce(makeError('Connection terminated unexpectedly'))
+      .mockRejectedValueOnce(makeError('Deadlock found when trying to get lock'))
+      .mockResolvedValueOnce('ok');
+
+    await expect(TxModel.transaction(func, { retryLimit: 4, retryDuration: 1 })).resolves.toBe('ok');
+    expect((getConnection.mock.calls as unknown[][]).map((c) => c[0])).toEqual([undefined, 4, undefined]);
   });
 
   it('rejects queries through the transaction connection after func has settled', async () => {
@@ -494,7 +510,7 @@ describe('a read routed to the writer retries after a connection error', () => {
       { driver: driverType, host: `tx-safety-writer-read-${driverType}`, port: 5432, database: 'tx_safety_db', user: 'test', password: 'test' },
       { logger: silentLogger },
     );
-    (handler.getDriver() as unknown as { writerPool: { query: typeof query } }).writerPool = { query };
+    (handler.getDriver() as unknown as { writerPool: unknown }).writerPool = (driverType === 'postgres' ? fakePgPool : fakeMysqlPool)(query);
     class ReadModel extends DBModel {
       protected static getHandler() {
         return handler;
@@ -503,30 +519,32 @@ describe('a read routed to the writer retries after a connection error', () => {
     return ReadModel;
   }
 
-  it('PostgresDriver: a SELECT inside withWriter() is sent again and returns the rows', async () => {
+  it('PostgresDriver: a SELECT inside withWriter() is sent again on a probed connection and returns the rows', async () => {
     const query = vi
       .fn()
       .mockRejectedValueOnce(makeError('Connection terminated unexpectedly'))
+      .mockResolvedValueOnce({ rows: [{ '?column?': 1 }], rowCount: 1 })
       .mockResolvedValueOnce({ rows: [{ id: 1 }], rowCount: 1 });
     const ReadModel = makeReadModel('postgres', query);
 
     const result = await ReadModel.withWriter(() => ReadModel.execute('SELECT id FROM users WHERE id = $1', [1]));
 
     expect(result.rows).toEqual([{ id: 1 }]);
-    expect(query).toHaveBeenCalledTimes(2);
+    expect(sentSql(query)).toEqual(['SELECT id FROM users WHERE id = $1', 'SELECT 1', 'SELECT id FROM users WHERE id = $1']); // the read, the probe, the re-send
   });
 
-  it('MysqlDriver: a SELECT inside withWriter() is sent again and returns the rows', async () => {
+  it('MysqlDriver: a SELECT inside withWriter() is sent again on a probed connection and returns the rows', async () => {
     const query = vi
       .fn()
       .mockRejectedValueOnce(makeError('Connection lost', 'PROTOCOL_CONNECTION_LOST'))
+      .mockResolvedValueOnce([[{ 1: 1 }], null])
       .mockResolvedValueOnce([[{ id: 1 }], null]);
     const ReadModel = makeReadModel('mysql', query);
 
     const result = await ReadModel.withWriter(() => ReadModel.execute('SELECT id FROM users WHERE id = ?', [1]));
 
     expect(result.rows).toEqual([{ id: 1 }]);
-    expect(query).toHaveBeenCalledTimes(2);
+    expect(sentSql(query)).toEqual(['SELECT id FROM users WHERE id = ?', 'SELECT 1', 'SELECT id FROM users WHERE id = ?']); // the read, the probe, the re-send
   });
 
   it('a write inside withWriter() is still not resent after a connection error', async () => {
@@ -549,8 +567,9 @@ describe('DBModel.execute() routes by whether the statement is read-only (#332)'
       { logger: silentLogger },
     );
     const driver = handler.getDriver() as unknown as { pool: unknown; writerPool: unknown };
-    driver.pool = { query: readerQuery };
-    driver.writerPool = { query: writerQuery };
+    const fakePool = driverType === 'postgres' ? fakePgPool : fakeMysqlPool;
+    driver.pool = fakePool(readerQuery);
+    driver.writerPool = fakePool(writerQuery);
     class RoutedModel extends DBModel {
       protected static getHandler() {
         return handler;
@@ -601,15 +620,18 @@ describe('DBModel.execute() routes by whether the statement is read-only (#332)'
       const reads = [`SELECT id FROM users WHERE id = ${p}`, `WITH x AS (SELECT id FROM users WHERE id = ${p}) SELECT id FROM x`, `EXPLAIN SELECT id FROM users WHERE id = ${p}`];
 
       for (const sql of reads) {
-        it(`${sql} goes to the reader and is resent after a connection error`, async () => {
-          const readerQuery = vi.fn().mockRejectedValueOnce(connectionError()).mockResolvedValueOnce(rows([{ id: 1 }]));
+        it(`${sql} goes to the reader and is resent on a probed connection after a connection error`, async () => {
+          const readerQuery = vi.fn()
+            .mockRejectedValueOnce(connectionError())
+            .mockResolvedValueOnce(rows([{ one: 1 }]))
+            .mockResolvedValueOnce(rows([{ id: 1 }]));
           const writerQuery = vi.fn();
           const Model = makeRoutedModel(driverType, readerQuery, writerQuery);
 
           const result = await Model.execute(sql, [1]);
 
           expect(result.rows).toEqual([{ id: 1 }]);
-          expect(readerQuery).toHaveBeenCalledTimes(2);
+          expect(sentSql(readerQuery)).toEqual([sql, 'SELECT 1', sql]); // the read, the probe, the re-send
           expect(writerQuery).not.toHaveBeenCalled();
         });
       }
