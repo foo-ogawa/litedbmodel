@@ -355,3 +355,51 @@ describe('#367 the v1 MySQL driver (a v1 middleware registered) returns the rows
     expect(plain(rows as Record<string, unknown>[])).toEqual([{ id: 1 }]);
   });
 });
+
+/**
+ * A batch write keys its rows through its own `JSON_TABLE` declaration (`k BIGINT PATH '$.k'`), so its
+ * RETURNING must too: compared as the `JSON_UNQUOTE` string instead, a BIGINT key goes through DOUBLE,
+ * and past 2^53 every neighbouring key in the same double matches — other tenants' rows.
+ */
+describe('#379 a batch RETURNING compares its keys the way the write did (BIGINT past 2^53)', () => {
+  const K1 = 2n ** 60n + 1n;
+  const K14 = 2n ** 60n + 14n;
+  /**
+   * Our two keys, plus 38 rows whose keys round to the same doubles (in tenant `other`; ours are tenant 1).
+   * `ours` false ⇒ our two rows are not seeded (the createMany inserts them).
+   */
+  const seed = async (ddl: string, ours: boolean, other: number) => {
+    await table(ddl);
+    for (let i = 1n; i <= 40n; i++) {
+      const k = 2n ** 60n + i;
+      const mine = k === K1 || k === K14;
+      if (mine && !ours) continue;
+      await raw.query(`INSERT INTO ${T} (k, tenant_id, name) VALUES (?, ?, ?)`, [k.toString(), mine ? 1 : other, 'theirs']);
+    }
+  };
+  const run = async (op: { sql: string; params: readonly unknown[] }) => (await returning(op.sql, [...op.params])).length;
+
+  it('updateMany on an unindexed BIGINT key returns the 2 rows it wrote', async () => {
+    await seed('(id INT AUTO_INCREMENT PRIMARY KEY, k BIGINT NOT NULL, tenant_id INT NOT NULL, name VARCHAR(64))', true, 2);
+    const recs = [{ k: K1, name: 'mine' }, { k: K14, name: 'mine' }];
+    const op = compileUpdateManyBundle('UM', { tableName: T, keyColumns: ['k'], updateColumns: ['name'], records: recs, rawRecords: recs, returning: 'k, tenant_id' } as never, 'mysql').statement;
+    expect(await run(op)).toBe(2);
+  });
+
+  // The key column is UNINDEXED in each, so the re-select scans the table (an index lookup would
+  // compare exactly and hide the defect): an upsertMany whose rows are all new, and a createMany keyed
+  // by its declared client key.
+  it('upsertMany keyed by an unindexed BIGINT conflict key returns the 2 rows it wrote', async () => {
+    await seed('(id INT AUTO_INCREMENT PRIMARY KEY, k BIGINT NOT NULL, tenant_id INT NOT NULL, name VARCHAR(64))', false, 2);
+    const recs = [{ k: K1, tenant_id: 1n, name: 'mine' }, { k: K14, tenant_id: 1n, name: 'mine' }];
+    const op = compileCreateManyBundle('U', { tableName: T, records: recs, rawRecords: recs, onConflict: ['k'], onConflictUpdate: 'all', returning: 'k, tenant_id', pk: { columns: ['id'], autoInc: 'id' } } as never, 'mysql').transaction!.statements[0].op;
+    expect(await run(op)).toBe(2);
+  });
+
+  it('createMany keyed by an unindexed client-supplied BIGINT key returns the 2 rows it wrote', async () => {
+    await seed('(k BIGINT NOT NULL, tenant_id INT NOT NULL, name VARCHAR(64))', false, 2);
+    const recs = [{ k: K1, tenant_id: 1n, name: 'mine' }, { k: K14, tenant_id: 1n, name: 'mine' }];
+    const op = compileCreateManyBundle('C', { tableName: T, records: recs, rawRecords: recs, returning: 'k, tenant_id', pk: { columns: ['k'], autoInc: null } } as never, 'mysql').transaction!.statements[0].op;
+    expect(await run(op)).toBe(2);
+  });
+});

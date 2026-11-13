@@ -102,6 +102,7 @@ const LIVE_TESTS = [
   'TestConcurrentNonTransactionalStatementsStayOffOtherTransactionsLive',
   'TestConcurrentTransactionsAreIsolatedLive',
   'TestConcurrentWriterStickyIsPerRequestLive',
+  'TestMysqlReturningBigintKeyLive',
   'TestMysqlReturningBulkAutoIncLive',
   'TestMysqlReturningCompositeKeyLive',
   'TestMysqlReturningDeleteLockedLive',

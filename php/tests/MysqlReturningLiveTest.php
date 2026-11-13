@@ -224,4 +224,50 @@ final class MysqlReturningLiveTest extends TestCase
         // A row it did delete is returned.
         self::assertSame([['id' => '5', 'state' => 'open']], $this->rows($delete, [5]), 'own delete');
     }
+    /**
+     * #379 — a batch RETURNING compares its keys the way the write did: through the write's own
+     * JSON_TABLE declaration (`k BIGINT PATH`). Re-read as the JSON_UNQUOTE string, a BIGINT key compares
+     * as DOUBLE, and past 2^53 every neighbouring key in the same double matches. Each key column is
+     * UNINDEXED, so the re-select scans (an index lookup would compare exactly and hide it).
+     */
+    public function testBatchReturningComparesBigintKeysAsTheWriteDid(): void
+    {
+        $t = $this->t;
+        // Our two keys 2^60+1 / 2^60+14, among 38 other-tenant rows whose keys round to the same doubles.
+        $seed = function (string $ddl, bool $ours) use ($t): void {
+            $rows = [];
+            for ($i = 1; $i <= 40; $i++) {
+                $mine = $i === 1 || $i === 14;
+                if ($mine && !$ours) {
+                    continue;
+                }
+                $tenant = $mine ? 1 : 2;
+                $rows[] = "INSERT INTO {$t} (k, tenant_id, name) VALUES (1152921504606846976 + {$i}, {$tenant}, 'theirs')";
+            }
+            $this->table($ddl, ...$rows);
+        };
+        $payload = '[{"k":1152921504606846977,"name":"mine","tenant_id":1},{"k":1152921504606846990,"name":"mine","tenant_id":1}]';
+        $failures = [];
+        $count = function (string $what, string $sql) use ($payload, &$failures): void {
+            try {
+                $got = count($this->rows($sql, [$payload]));
+                if ($got !== 2) {
+                    $failures[] = "{$what}: RETURNING returned {$got} rows, want the 2 it wrote";
+                }
+            } catch (\RuntimeException $e) {
+                $failures[] = "{$what}: " . $e->getMessage();
+            }
+        };
+
+        $seed('(id INT AUTO_INCREMENT PRIMARY KEY, k BIGINT NOT NULL, tenant_id INT NOT NULL, name VARCHAR(64))', true);
+        $count('updateMany', "UPDATE {$t} AS u JOIN JSON_TABLE(?, '\$[*]' COLUMNS(k BIGINT PATH '\$.k', name JSON PATH '\$.name')) AS v ON u.k = v.k SET u.name = JSON_UNQUOTE(v.name) RETURNING k, tenant_id");
+
+        $seed('(id INT AUTO_INCREMENT PRIMARY KEY, k BIGINT NOT NULL, tenant_id INT NOT NULL, name VARCHAR(64))', false);
+        $count('upsertMany', "INSERT INTO {$t} (k, name, tenant_id) SELECT jt.k, JSON_UNQUOTE(jt.name), jt.tenant_id FROM JSON_TABLE(?, '\$[*]' COLUMNS(k BIGINT PATH '\$.k', name JSON PATH '\$.name', tenant_id BIGINT PATH '\$.tenant_id')) jt ON DUPLICATE KEY UPDATE k = VALUES(k), name = VALUES(name), tenant_id = VALUES(tenant_id) RETURNING k, tenant_id /*scp:pk=id;ai=id;conflict=k*/");
+
+        $seed('(k BIGINT NOT NULL, tenant_id INT NOT NULL, name VARCHAR(64))', false);
+        $count('createMany', "INSERT INTO {$t} (k, name, tenant_id) SELECT jt.k, JSON_UNQUOTE(jt.name), jt.tenant_id FROM JSON_TABLE(?, '\$[*]' COLUMNS(k BIGINT PATH '\$.k', name JSON PATH '\$.name', tenant_id BIGINT PATH '\$.tenant_id')) jt RETURNING k, tenant_id /*scp:pk=k;ai=*/");
+
+        self::assertSame([], $failures);
+    }
 }

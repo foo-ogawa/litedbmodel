@@ -228,3 +228,44 @@ def test_mysql_returning_delete_locked(driver):
         tx.release(False)
     # A row it did delete is returned.
     assert _rows(driver, delete, [5]) == [{"id": 5, "state": "open"}]
+
+
+# ── #379 — a batch RETURNING compares its keys the way the write did (BIGINT past 2^53) ──────────
+
+
+def test_mysql_returning_bigint_key(driver):
+    """Through the write's own JSON_TABLE declaration (``k BIGINT PATH``): re-read as the JSON_UNQUOTE
+    string, a BIGINT key compares as DOUBLE, and past 2^53 every neighbouring key in the same double
+    matches. Each key column is UNINDEXED, so the re-select scans (an index lookup would hide it)."""
+
+    def seed(ddl: str, ours: bool) -> None:
+        # Our two keys 2^60+1 / 2^60+14, among 38 other-tenant rows whose keys round to the same doubles.
+        rows = [
+            f"INSERT INTO {TBL} (k, tenant_id, name) VALUES (1152921504606846976 + {i}, {1 if i in (1, 14) else 2}, 'theirs')"
+            for i in range(1, 41)
+            if ours or i not in (1, 14)
+        ]
+        _table(driver, ddl, *rows)
+
+    payload = '[{"k":1152921504606846977,"name":"mine","tenant_id":1},{"k":1152921504606846990,"name":"mine","tenant_id":1}]'
+    failures = []
+
+    def count(what: str, sql: str) -> None:
+        try:
+            got = _rows(driver, sql, [payload])
+        except ValueError as e:
+            failures.append(f"{what}: {e}")
+            return
+        if len(got) != 2:
+            failures.append(f"{what}: RETURNING returned {len(got)} rows, want the 2 it wrote")
+
+    seed("(id INT AUTO_INCREMENT PRIMARY KEY, k BIGINT NOT NULL, tenant_id INT NOT NULL, name VARCHAR(64))", True)
+    count("updateMany", f"UPDATE {TBL} AS u JOIN JSON_TABLE(?, '$[*]' COLUMNS(k BIGINT PATH '$.k', name JSON PATH '$.name')) AS v ON u.k = v.k SET u.name = JSON_UNQUOTE(v.name) RETURNING k, tenant_id")
+
+    seed("(id INT AUTO_INCREMENT PRIMARY KEY, k BIGINT NOT NULL, tenant_id INT NOT NULL, name VARCHAR(64))", False)
+    count("upsertMany", f"INSERT INTO {TBL} (k, name, tenant_id) SELECT jt.k, JSON_UNQUOTE(jt.name), jt.tenant_id FROM JSON_TABLE(?, '$[*]' COLUMNS(k BIGINT PATH '$.k', name JSON PATH '$.name', tenant_id BIGINT PATH '$.tenant_id')) jt ON DUPLICATE KEY UPDATE k = VALUES(k), name = VALUES(name), tenant_id = VALUES(tenant_id) RETURNING k, tenant_id /*scp:pk=id;ai=id;conflict=k*/")
+
+    seed("(k BIGINT NOT NULL, tenant_id INT NOT NULL, name VARCHAR(64))", False)
+    count("createMany", f"INSERT INTO {TBL} (k, name, tenant_id) SELECT jt.k, JSON_UNQUOTE(jt.name), jt.tenant_id FROM JSON_TABLE(?, '$[*]' COLUMNS(k BIGINT PATH '$.k', name JSON PATH '$.name', tenant_id BIGINT PATH '$.tenant_id')) jt RETURNING k, tenant_id /*scp:pk=k;ai=*/")
+
+    assert failures == []

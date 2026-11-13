@@ -324,3 +324,46 @@ func TestMysqlReturningDeleteLockedLive(t *testing.T) {
 	got, err = myretRows(t, db, del, 5)
 	myretExpect(t, "own delete", got, err, []map[string]string{{"id": "5", "state": "open"}})
 }
+
+// #379 — a batch RETURNING compares its keys the way the write did: through the write's own JSON_TABLE
+// declaration (k BIGINT PATH). Re-read as the JSON_UNQUOTE string, a BIGINT key compares as DOUBLE, and
+// past 2^53 every neighbouring key in the same double matches. Each key column is UNINDEXED, so the
+// re-select scans (an index lookup would compare exactly and hide it).
+func TestMysqlReturningBigintKeyLive(t *testing.T) {
+	db, tbl := openMysqlReturning(t)
+	// Our two keys 2^60+1 / 2^60+14, among 38 other-tenant rows whose keys round to the same doubles.
+	seed := func(ddl string, ours bool) {
+		stmts := []string{}
+		for i := 1; i <= 40; i++ {
+			mine := i == 1 || i == 14
+			if mine && !ours {
+				continue
+			}
+			tenant := 2
+			if mine {
+				tenant = 1
+			}
+			stmts = append(stmts, fmt.Sprintf("INSERT INTO %s (k, tenant_id, name) VALUES (1152921504606846976 + %d, %d, 'theirs')", tbl, i, tenant))
+		}
+		myretTable(t, db, tbl, ddl, stmts...)
+	}
+	payload := `[{"k":1152921504606846977,"name":"mine","tenant_id":1},{"k":1152921504606846990,"name":"mine","tenant_id":1}]`
+	count := func(what, sql string) {
+		t.Helper()
+		got, err := myretRows(t, db, sql, payload)
+		if err != nil {
+			t.Errorf("%s: %v", what, err)
+		} else if len(got) != 2 {
+			t.Errorf("%s: RETURNING returned %d rows, want the 2 it wrote", what, len(got))
+		}
+	}
+
+	seed("(id INT AUTO_INCREMENT PRIMARY KEY, k BIGINT NOT NULL, tenant_id INT NOT NULL, name VARCHAR(64))", true)
+	count("updateMany", "UPDATE "+tbl+" AS u JOIN JSON_TABLE(?, '$[*]' COLUMNS(k BIGINT PATH '$.k', name JSON PATH '$.name')) AS v ON u.k = v.k SET u.name = JSON_UNQUOTE(v.name) RETURNING k, tenant_id")
+
+	seed("(id INT AUTO_INCREMENT PRIMARY KEY, k BIGINT NOT NULL, tenant_id INT NOT NULL, name VARCHAR(64))", false)
+	count("upsertMany", "INSERT INTO "+tbl+" (k, name, tenant_id) SELECT jt.k, JSON_UNQUOTE(jt.name), jt.tenant_id FROM JSON_TABLE(?, '$[*]' COLUMNS(k BIGINT PATH '$.k', name JSON PATH '$.name', tenant_id BIGINT PATH '$.tenant_id')) jt ON DUPLICATE KEY UPDATE k = VALUES(k), name = VALUES(name), tenant_id = VALUES(tenant_id) RETURNING k, tenant_id /*scp:pk=id;ai=id;conflict=k*/")
+
+	seed("(k BIGINT NOT NULL, tenant_id INT NOT NULL, name VARCHAR(64))", false)
+	count("createMany", "INSERT INTO "+tbl+" (k, name, tenant_id) SELECT jt.k, JSON_UNQUOTE(jt.name), jt.tenant_id FROM JSON_TABLE(?, '$[*]' COLUMNS(k BIGINT PATH '$.k', name JSON PATH '$.name', tenant_id BIGINT PATH '$.tenant_id')) jt RETURNING k, tenant_id /*scp:pk=k;ai=*/")
+}

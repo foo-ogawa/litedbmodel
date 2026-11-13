@@ -346,3 +346,50 @@ fn mysql_returning_delete_locked() {
     d.exec_ddl(&[format!("DROP TABLE IF EXISTS {t}")])
         .expect("drop");
 }
+
+/// #379 — a batch RETURNING compares its keys the way the write did: through the write's own JSON_TABLE
+/// declaration (`k BIGINT PATH`). Re-read as the JSON_UNQUOTE string, a BIGINT key compares as DOUBLE,
+/// and past 2^53 every neighbouring key in the same double matches. Each key column is UNINDEXED, so the
+/// re-select scans (an index lookup would compare exactly and hide it).
+#[test]
+fn mysql_returning_bigint_key() {
+    let d = driver();
+    let t = tbl("big");
+    // Our two keys 2^60+1 / 2^60+14, among 38 other-tenant rows whose keys round to the same doubles.
+    let seed = |ddl: &str, ours: bool| {
+        let rows: Vec<String> = (1..=40)
+            .filter(|i| ours || (*i != 1 && *i != 14))
+            .map(|i| {
+                let tenant = if i == 1 || i == 14 { 1 } else { 2 };
+                format!("INSERT INTO {t} (k, tenant_id, name) VALUES (1152921504606846976 + {i}, {tenant}, 'theirs')")
+            })
+            .collect();
+        table(&d, &t, ddl, &rows);
+    };
+    let payload = s(
+        r#"[{"k":1152921504606846977,"name":"mine","tenant_id":1},{"k":1152921504606846990,"name":"mine","tenant_id":1}]"#,
+    );
+    let mut failures: Vec<String> = Vec::new();
+    let mut count = |what: &str, sql: String| match rows(&d, &sql, std::slice::from_ref(&payload)) {
+        Ok(got) if got.len() == 2 => {}
+        Ok(got) => failures.push(format!(
+            "{what}: RETURNING returned {} rows, want the 2 it wrote",
+            got.len()
+        )),
+        Err(e) => failures.push(format!("{what}: {e:?}")),
+    };
+
+    seed("(id INT AUTO_INCREMENT PRIMARY KEY, k BIGINT NOT NULL, tenant_id INT NOT NULL, name VARCHAR(64))", true);
+    count("updateMany", format!("UPDATE {t} AS u JOIN JSON_TABLE(?, '$[*]' COLUMNS(k BIGINT PATH '$.k', name JSON PATH '$.name')) AS v ON u.k = v.k SET u.name = JSON_UNQUOTE(v.name) RETURNING k, tenant_id"));
+
+    seed("(id INT AUTO_INCREMENT PRIMARY KEY, k BIGINT NOT NULL, tenant_id INT NOT NULL, name VARCHAR(64))", false);
+    count("upsertMany", format!("INSERT INTO {t} (k, name, tenant_id) SELECT jt.k, JSON_UNQUOTE(jt.name), jt.tenant_id FROM JSON_TABLE(?, '$[*]' COLUMNS(k BIGINT PATH '$.k', name JSON PATH '$.name', tenant_id BIGINT PATH '$.tenant_id')) jt ON DUPLICATE KEY UPDATE k = VALUES(k), name = VALUES(name), tenant_id = VALUES(tenant_id) RETURNING k, tenant_id /*scp:pk=id;ai=id;conflict=k*/"));
+
+    seed(
+        "(k BIGINT NOT NULL, tenant_id INT NOT NULL, name VARCHAR(64))",
+        false,
+    );
+    count("createMany", format!("INSERT INTO {t} (k, name, tenant_id) SELECT jt.k, JSON_UNQUOTE(jt.name), jt.tenant_id FROM JSON_TABLE(?, '$[*]' COLUMNS(k BIGINT PATH '$.k', name JSON PATH '$.name', tenant_id BIGINT PATH '$.tenant_id')) jt RETURNING k, tenant_id /*scp:pk=k;ai=*/"));
+
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}

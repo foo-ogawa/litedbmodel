@@ -515,6 +515,62 @@ func updateBatchKeys(writeSQL string) []string {
 	return keys
 }
 
+// jsonTableDecl is one column declaration of a write's JSON_TABLE COLUMNS(…): its full text
+// (`k BIGINT PATH '$.k'`) and whether its type is JSON (a value the write unquotes to a string).
+type jsonTableDecl struct {
+	decl string
+	json bool
+}
+
+var jsonTableDeclRe = regexp.MustCompile(`(?is)^([A-Za-z0-9_]+)\s+(.*?)\s+PATH\s`)
+
+// jsonTableColumns is the write's own `JSON_TABLE(?, '$[*]' COLUMNS(…))` declarations, by column name
+// (mysql-returning.ts jsonTableColumns). A declaration's type may carry its own parenthesised,
+// comma-separated arguments (`DECIMAL(65,30)`), so the list is split on the commas at its own depth,
+// outside quotes.
+func jsonTableColumns(writeSQL string) map[string]jsonTableDecl {
+	out := map[string]jsonTableDecl{}
+	lower := strings.ToLower(writeSQL)
+	jt := strings.Index(lower, "json_table(")
+	if jt < 0 {
+		return out
+	}
+	open := strings.Index(lower[jt:], "columns(")
+	if open < 0 {
+		return out
+	}
+	start := jt + open + len("columns(")
+	entries := []string{}
+	depth, quoted := 1, false
+	for i := start; i < len(writeSQL) && depth > 0; i++ {
+		switch ch := writeSQL[i]; {
+		case quoted:
+			if ch == '\'' {
+				quoted = false
+			}
+		case ch == '\'':
+			quoted = true
+		case ch == '(':
+			depth++
+		case ch == ')':
+			depth--
+			if depth == 0 {
+				entries = append(entries, writeSQL[start:i])
+			}
+		case ch == ',' && depth == 1:
+			entries = append(entries, writeSQL[start:i])
+			start = i + 1
+		}
+	}
+	for _, e := range entries {
+		decl := strings.TrimSpace(e)
+		if m := jsonTableDeclRe.FindStringSubmatch(decl); m != nil {
+			out[m[1]] = jsonTableDecl{decl: decl, json: strings.ToUpper(strings.TrimSpace(m[2])) == "JSON"}
+		}
+	}
+	return out
+}
+
 // valuesRowsRe is a `VALUES (?, …), (?, …)` list whose every value is a bare `?` (then the end of the
 // write, or its ON DUPLICATE KEY UPDATE) — mysql-returning.ts valuesRows.
 var valuesRowsRe = regexp.MustCompile(`(?i)\)\s*VALUES\s*(\(\s*\?(?:\s*,\s*\?)*\s*\)(?:\s*,\s*\(\s*\?(?:\s*,\s*\?)*\s*\))*)\s*(?:ON\s+DUPLICATE\s+KEY\s+UPDATE\b|$)`)
@@ -578,22 +634,27 @@ func buildMysqlReselect(sql string) (*mysqlReselect, error) {
 		insertCols = splitTrim(cm[1])
 	}
 	// Recover a BATCH write's rows by reading its key TUPLES back out of the SAME JSON payload it bound —
-	// every key column, never the first alone (a composite key's first column names other rows too).
-	// The payload's fields ARE the INSERT columns, so a key column outside them would read NULL back
-	// and recover nothing: that fails closed.
+	// every key column, never the first alone (a composite key's first column names other rows too) — and
+	// comparing each one EXACTLY as the write did: through the write's own JSON_TABLE declaration of that
+	// column ([jsonTableColumns]). A typed key (BIGINT, DECIMAL…) compares as that type; re-read as the
+	// JSON_UNQUOTE string it would compare with a BIGINT column as DOUBLE, which past 2^53 matches the
+	// neighbouring keys too. A key the write declared as JSON (a string key) is unquoted, as the write's
+	// own expression does. A key column with no JSON_TABLE declaration is not in the payload: that fails
+	// closed.
 	jsonSelect := func(keys []string, what, written string) (*mysqlReselect, error) {
-		if strings.HasPrefix(wl, "insert") {
-			for _, k := range keys {
-				if columnIndex(insertCols, k) < 0 {
-					return nil, fmt.Errorf("scp write(mysql): %s column %q is not among the INSERT columns of %q", what, k, writeSQL)
-				}
-			}
-		}
+		declared := jsonTableColumns(writeSQL)
 		unq := make([]string, len(keys))
 		paths := make([]string, len(keys))
 		for i, k := range keys {
-			unq[i] = "JSON_UNQUOTE(jt." + k + ")"
-			paths[i] = k + " JSON PATH '$." + k + "'"
+			d, ok := declared[k]
+			if !ok {
+				return nil, fmt.Errorf("scp write(mysql): %s column %q has no JSON_TABLE column in %q, so its rows cannot be matched the way it wrote them", what, k, writeSQL)
+			}
+			unq[i] = "jt." + k
+			if d.json {
+				unq[i] = "JSON_UNQUOTE(jt." + k + ")"
+			}
+			paths[i] = d.decl
 		}
 		return &mysqlReselect{writeSQL: writeSQL, selectSQL: fmt.Sprintf(
 			"SELECT %s FROM %s WHERE (%s) IN (SELECT %s FROM JSON_TABLE(?, '$[*]' COLUMNS(%s)) jt)%s",

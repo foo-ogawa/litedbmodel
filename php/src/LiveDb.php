@@ -187,6 +187,55 @@ final class MysqlReturning
     }
 
     /**
+     * The write's own `JSON_TABLE(?, '$[*]' COLUMNS(…))` declarations, by column name: each one's full
+     * declaration (`k BIGINT PATH '$.k'`) and whether its type is `JSON` (a value the write unquotes to a
+     * string) — mysql-returning.ts `jsonTableColumns`. A declaration's type may carry its own
+     * parenthesised, comma-separated arguments (`DECIMAL(65,30)`), so the list is split on the commas at
+     * its own depth, outside quotes.
+     *
+     * @return array<string, array{0: string, 1: bool}>
+     */
+    private static function jsonTableColumns(string $writeSql): array
+    {
+        $lower = strtolower($writeSql);
+        $jt = strpos($lower, 'json_table(');
+        $open = $jt === false ? false : strpos($lower, 'columns(', $jt);
+        if ($open === false) {
+            return [];
+        }
+        $entries = [];
+        $depth = 1;
+        $quoted = false;
+        $start = $open + strlen('columns(');
+        for ($i = $start, $n = strlen($writeSql); $i < $n && $depth > 0; $i++) {
+            $ch = $writeSql[$i];
+            if ($quoted) {
+                $quoted = $ch !== "'";
+            } elseif ($ch === "'") {
+                $quoted = true;
+            } elseif ($ch === '(') {
+                $depth++;
+            } elseif ($ch === ')') {
+                $depth--;
+                if ($depth === 0) {
+                    $entries[] = substr($writeSql, $start, $i - $start);
+                }
+            } elseif ($ch === ',' && $depth === 1) {
+                $entries[] = substr($writeSql, $start, $i - $start);
+                $start = $i + 1;
+            }
+        }
+        $out = [];
+        foreach ($entries as $e) {
+            $decl = trim($e);
+            if (preg_match('/^([A-Za-z0-9_]+)\s+(.*?)\s+PATH\s/is', $decl, $m) === 1) {
+                $out[$m[1]] = [$decl, strtoupper(trim($m[2])) === 'JSON'];
+            }
+        }
+        return $out;
+    }
+
+    /**
      * How many rows a `VALUES (?, …), (?, …)` INSERT writes when EVERY value is a bare `?` (each tuple then
      * binds its `$ncols` params in column order, so row `r`'s column `c` is param `r * ncols + c`), else
      * null: a value that is an SQL expression (`NOW()`, a cast) moves every `?` after it, so no column's
@@ -286,16 +335,26 @@ final class MysqlReturning
         $isInsert = str_starts_with($wl, 'insert');
         // Recover a BATCH write's rows by reading its key TUPLES back out of the SAME JSON payload it
         // bound — every key column, never the first alone (a composite key's first column names other
-        // rows too). The payload's fields ARE the INSERT columns, so a key column outside them would
-        // read NULL back and recover nothing: that fails closed.
-        $jsonSelect = static function (array $keys, string $what, ?string $written) use ($cols, $table, $orderBy, $insertCols, $isInsert, $writeSql): MysqlReselect {
+        // rows too) — and comparing each one EXACTLY as the write did: through the write's own
+        // JSON_TABLE declaration of that column (jsonTableColumns). A typed key (BIGINT, DECIMAL…)
+        // compares as that type; re-read as the JSON_UNQUOTE string it would compare with a BIGINT
+        // column as DOUBLE, which past 2^53 matches the neighbouring keys too. A key the write declared
+        // as JSON (a string key) is unquoted, as the write's own expression does. A key column with no
+        // JSON_TABLE declaration is not in the payload: that fails closed.
+        $jsonSelect = static function (array $keys, string $what, ?string $written) use ($cols, $table, $orderBy, $writeSql): MysqlReselect {
+            $declared = self::jsonTableColumns($writeSql);
+            $unq = [];
+            $paths = [];
             foreach ($keys as $k) {
-                if ($isInsert && !in_array($k, $insertCols, true)) {
-                    throw new \RuntimeException("scp write(mysql): {$what} column '{$k}' is not among the INSERT columns of '{$writeSql}'");
+                if (!array_key_exists($k, $declared)) {
+                    throw new \RuntimeException("scp write(mysql): {$what} column '{$k}' has no JSON_TABLE column in '{$writeSql}', so its rows cannot be matched the way it wrote them");
                 }
+                [$decl, $json] = $declared[$k];
+                $unq[] = $json ? "JSON_UNQUOTE(jt.{$k})" : "jt.{$k}";
+                $paths[] = $decl;
             }
-            $unq = implode(', ', array_map(static fn (string $k): string => "JSON_UNQUOTE(jt.{$k})", $keys));
-            $paths = implode(', ', array_map(static fn (string $k): string => "{$k} JSON PATH '\$.{$k}'", $keys));
+            $unq = implode(', ', $unq);
+            $paths = implode(', ', $paths);
             return new MysqlReselect($writeSql, "SELECT {$cols} FROM {$table} WHERE (" . implode(', ', $keys) . ") IN "
                 . "(SELECT {$unq} FROM JSON_TABLE(?, '\$[*]' COLUMNS({$paths})) jt){$orderBy}", [new ReselectBind('json')], $written);
         };

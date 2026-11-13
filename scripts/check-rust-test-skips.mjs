@@ -140,6 +140,7 @@ const LIVE_TESTS = [
   'isolation_retry_guard_and_nesting_mysql',
   'isolation_retry_guard_and_nesting_pg',
   'mysql_decode_decimal_and_unsigned_bigint',
+  'mysql_returning_bigint_key',
   'mysql_returning_bulk_auto_inc',
   'mysql_returning_composite_key',
   'mysql_returning_delete_locked',

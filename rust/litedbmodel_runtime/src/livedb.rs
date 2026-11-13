@@ -1407,24 +1407,35 @@ fn build_mysql_reselect(sql: &str) -> Result<Option<MysqlReselect>, SqlFailure> 
     let is_insert = wl.starts_with("insert");
     // Recover a BATCH write's rows by reading its key TUPLES back out of the SAME JSON payload it
     // bound — every key column, never the first alone (a composite key's first column names other
-    // rows too). The payload's fields ARE the INSERT columns, so a key column outside them would read
-    // NULL back and recover nothing: that fails closed.
+    // rows too) — and comparing each one EXACTLY as the write did: through the write's own JSON_TABLE
+    // declaration of that column ([`json_table_columns`]). A typed key (BIGINT, DECIMAL…) compares as
+    // that type; re-read as the JSON_UNQUOTE string it would compare with a BIGINT column as DOUBLE,
+    // which past 2^53 matches the neighbouring keys too. A key the write declared as JSON (a string
+    // key) is unquoted, as the write's own expression does. A key column with no JSON_TABLE
+    // declaration is not in the payload: that fails closed.
     let json_select = |keys: &[String],
                        what: &str|
      -> Result<(String, Vec<ReselectBind>), SqlFailure> {
-        if let Some(k) = keys.iter().find(|k| is_insert && !insert_cols.contains(k)) {
-            return Err(driver_failure(format!(
-                "scp write(mysql): {what} column '{k}' is not among the INSERT columns of '{write_sql}'"
-            )));
+        let declared = json_table_columns(&write_sql);
+        let mut unq: Vec<String> = Vec::with_capacity(keys.len());
+        let mut paths: Vec<String> = Vec::with_capacity(keys.len());
+        for k in keys {
+            let Some((decl, json)) = declared
+                .iter()
+                .find(|(name, _, _)| name == k)
+                .map(|(_, d, j)| (d, *j))
+            else {
+                return Err(driver_failure(format!(
+                    "scp write(mysql): {what} column '{k}' has no JSON_TABLE column in '{write_sql}', so its rows cannot be matched the way it wrote them"
+                )));
+            };
+            unq.push(if json {
+                format!("JSON_UNQUOTE(jt.{k})")
+            } else {
+                format!("jt.{k}")
+            });
+            paths.push(decl.clone());
         }
-        let unq: Vec<String> = keys
-            .iter()
-            .map(|k| format!("JSON_UNQUOTE(jt.{k})"))
-            .collect();
-        let paths: Vec<String> = keys
-            .iter()
-            .map(|k| format!("{k} JSON PATH '$.{k}'"))
-            .collect();
         Ok((
             format!(
                 "SELECT {cols} FROM {table} WHERE ({}) IN (SELECT {} FROM JSON_TABLE(?, '$[*]' COLUMNS({})) jt){order_by}",
@@ -1708,6 +1719,62 @@ fn parse_pk_hint(s: &str) -> (Vec<String>, String) {
 }
 
 /// Parse the INSERT column list `INSERT [IGNORE] INTO <t> (c1, c2, …)`.
+/// The write's own `JSON_TABLE(?, '$[*]' COLUMNS(…))` declarations, as `(column, full declaration,
+/// type is JSON)` (mysql-returning.ts `jsonTableColumns`): `k BIGINT PATH '$.k'`, and whether the
+/// write unquotes the value to a string. A declaration's type may carry its own parenthesised,
+/// comma-separated arguments (`DECIMAL(65,30)`), so the list is split on the commas at its own depth,
+/// outside quotes.
+fn json_table_columns(write_sql: &str) -> Vec<(String, String, bool)> {
+    let lower = write_sql.to_ascii_lowercase();
+    let Some(jt) = lower.find("json_table(") else {
+        return Vec::new();
+    };
+    let Some(open) = lower[jt..].find("columns(") else {
+        return Vec::new();
+    };
+    let bytes = write_sql.as_bytes();
+    let mut start = jt + open + "columns(".len();
+    let mut entries: Vec<&str> = Vec::new();
+    let (mut depth, mut quoted) = (1usize, false);
+    let mut i = start;
+    while i < bytes.len() && depth > 0 {
+        let ch = bytes[i];
+        if quoted {
+            quoted = ch != b'\'';
+        } else if ch == b'\'' {
+            quoted = true;
+        } else if ch == b'(' {
+            depth += 1;
+        } else if ch == b')' {
+            depth -= 1;
+            if depth == 0 {
+                entries.push(&write_sql[start..i]);
+            }
+        } else if ch == b',' && depth == 1 {
+            entries.push(&write_sql[start..i]);
+            start = i + 1;
+        }
+        i += 1;
+    }
+    entries
+        .into_iter()
+        .filter_map(|e| {
+            let decl = e.trim();
+            let name: String = decl
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .collect();
+            let rest = &decl[name.len()..];
+            let path = rest.to_ascii_lowercase().find(" path ")?;
+            if name.is_empty() || !rest.starts_with(char::is_whitespace) {
+                return None;
+            }
+            let json = rest[..path].trim().eq_ignore_ascii_case("json");
+            Some((name, decl.to_string(), json))
+        })
+        .collect()
+}
+
 /// How many rows a `VALUES (?, …), (?, …)` INSERT writes when EVERY value is a bare `?` (each tuple then
 /// binds its `ncols` params in column order, so row `r`'s column `c` is param `r * ncols + c`), else
 /// `None`: a value that is an SQL expression (`NOW()`, a cast) moves every `?` after it, so no column's
