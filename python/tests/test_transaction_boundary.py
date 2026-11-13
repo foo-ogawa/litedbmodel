@@ -276,9 +276,8 @@ def test_a_nested_transaction_on_another_context_writes_and_commits_on_its_own_d
         transaction(ctx_b, lambda: exec_b(_owner_write(2, "via-B"), {}), TransactionOptions(), "sqlite")
         raise _OuterFails()
 
-    with pytest.raises(Exception) as raised:
+    with pytest.raises(_OuterFails):
         transaction(ctx_a, body, TransactionOptions(retry_on_error=False), "sqlite")
-    assert isinstance(raised.value.__cause__, _OuterFails), "A must fail on its own body error"
 
     # B's transaction is its own: its write landed in B and committed even though A rolled back.
     assert _owner_rows(drv_b) == [(1, "B"), (2, "via-B")]
@@ -677,3 +676,22 @@ def test_every_statement_awaited_inside_the_body_still_commits(make_ctx):
     assert transaction(ctx, body, TransactionOptions(), dialect) == "done"
     assert "COMMIT" in statements and "ROLLBACK" not in statements
     assert sorted(sent_ids()) == [1, 777]
+
+
+# ── #373: an application exception from the body keeps its type ───────────────
+
+
+def test_an_application_exception_from_the_body_is_raised_unchanged():
+    sink = _fresh_sink()
+    driver = _make_driver(sink)
+    ctx = context_for_driver(driver)
+
+    class _AppError(Exception):
+        pass
+
+    def body():
+        raise _AppError("validation failed")
+
+    with pytest.raises(_AppError, match="validation failed"):
+        transaction(ctx, body, TransactionOptions(), "sqlite")
+    assert sink["rolls"] == 1, "the body error rolls the transaction back"

@@ -911,4 +911,6 @@ def transaction(
                 if backoff_ms > 0:
                     time.sleep(backoff_ms / 1000.0)
                 continue
-            raise failure from (None if failure is error else error)
+            # `failure` only classifies the retry; the caller gets the error the body raised, as in TS
+            # (an application exception keeps its type) (#373).
+            raise
