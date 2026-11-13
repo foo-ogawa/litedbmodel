@@ -14,6 +14,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 // openMysqlReturning opens the shipped RETURNING-emulating driver on a table name unique to this run.
@@ -155,4 +156,73 @@ func TestMysqlReturningCompositeKeyLive(t *testing.T) {
 		"INSERT INTO "+tbl+" (tenant_id, id, name) VALUES (2, 7, 'victim')")
 	got, err = myretRows(t, db, "UPDATE "+tbl+" AS u JOIN JSON_TABLE(?, '$[*]' COLUMNS(id BIGINT PATH '$.id', tenant_id BIGINT PATH '$.tenant_id', name JSON PATH '$.name')) AS v ON u.id = v.id AND u.tenant_id = v.tenant_id SET u.name = JSON_UNQUOTE(v.name) RETURNING tenant_id, id, name", `[{"id":7,"tenant_id":1,"name":"hijack"}]`)
 	myretExpect(t, "updateMany", got, err, []map[string]string{})
+}
+
+// myretUntilRunning polls the server until a thread runs a statement starting with prefix, then lets
+// it reach the lock it waits on.
+func myretUntilRunning(t *testing.T, c *sql.Conn, prefix string) {
+	t.Helper()
+	for i := 0; i < 200; i++ {
+		var n int
+		if err := c.QueryRowContext(context.Background(), "SELECT COUNT(*) FROM information_schema.PROCESSLIST WHERE INFO LIKE ?", prefix+"%").Scan(&n); err != nil {
+			t.Fatalf("processlist: %v", err)
+		}
+		if n > 0 {
+			time.Sleep(300 * time.Millisecond)
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("no thread ever ran %q…", prefix)
+}
+
+// #360 — a bulk INSERT…RETURNING returns its own rows, not the ids another session took between them.
+func TestMysqlReturningBulkAutoIncLive(t *testing.T) {
+	db, tbl := openMysqlReturning(t)
+	ctx := context.Background()
+	createMany := "INSERT INTO " + tbl + " (tenant_id, uk) SELECT jt.tenant_id, JSON_UNQUOTE(jt.uk) FROM JSON_TABLE(?, '$[*]' COLUMNS(tenant_id BIGINT PATH '$.tenant_id', uk JSON PATH '$.uk')) jt RETURNING uk, tenant_id /*scp:pk=id;ai=id*/"
+	mine := []map[string]string{}
+	for _, uk := range []string{"k1", "k2", "k3", "k4"} {
+		mine = append(mine, map[string]string{"uk": uk, "tenant_id": "1"})
+	}
+
+	// A bounded two-connection schedule: the other session holds a gap lock the bulk insert must wait
+	// on, inserts its own row (taking the next id) while the bulk insert is blocked mid-way, and commits.
+	myretTable(t, db, tbl, "(id INT AUTO_INCREMENT PRIMARY KEY, uk VARCHAR(32) NOT NULL, tenant_id INT NOT NULL, UNIQUE KEY uq (uk))",
+		"INSERT INTO "+tbl+" (uk, tenant_id) VALUES ('seed', 0)")
+	other, err := openMysqlReturningDSN(t, "").Conn(ctx)
+	if err != nil {
+		t.Fatalf("other conn: %v", err)
+	}
+	defer other.Close()
+	for _, s := range []string{"BEGIN", "SELECT id FROM " + tbl + " WHERE uk = 'k3' FOR UPDATE"} {
+		if _, err := other.ExecContext(ctx, s); err != nil {
+			t.Fatalf("%s: %v", s, err)
+		}
+	}
+	type result struct {
+		rows []map[string]string
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		rows, err := myretRows(t, db, createMany, `[{"tenant_id":1,"uk":"k1"},{"tenant_id":1,"uk":"k2"},{"tenant_id":1,"uk":"k3"},{"tenant_id":1,"uk":"k4"}]`)
+		done <- result{rows, err}
+	}()
+	myretUntilRunning(t, other, "INSERT INTO "+tbl+" ")
+	for _, s := range []string{"INSERT INTO " + tbl + " (uk, tenant_id) VALUES ('zz', 2)", "COMMIT"} {
+		if _, err := other.ExecContext(ctx, s); err != nil {
+			t.Fatalf("%s: %v", s, err)
+		}
+	}
+	r := <-done
+	myretExpect(t, "interleaved createMany", r.rows, r.err, mine)
+	order, err := myretRows(t, db, "SELECT uk FROM "+tbl+" ORDER BY id")
+	myretExpect(t, "id order (the foreign row landed between the bulk insert's ids)", order, err,
+		[]map[string]string{{"uk": "seed"}, {"uk": "k1"}, {"uk": "zz"}, {"uk": "k2"}, {"uk": "k3"}, {"uk": "k4"}})
+
+	// A non-concurrent createMany keeps returning exactly its rows.
+	myretTable(t, db, tbl, "(id INT AUTO_INCREMENT PRIMARY KEY, uk VARCHAR(32) NOT NULL, tenant_id INT NOT NULL)")
+	got, err := myretRows(t, db, createMany, `[{"tenant_id":1,"uk":"k1"},{"tenant_id":1,"uk":"k2"},{"tenant_id":1,"uk":"k3"},{"tenant_id":1,"uk":"k4"}]`)
+	myretExpect(t, "plain createMany", got, err, mine)
 }

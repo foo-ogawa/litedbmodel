@@ -11,21 +11,26 @@
  *  |------------------|--------------------------------------------------------------------|-----------|
  *  | create           | the AUTO_INCREMENT range `[LAST_INSERT_ID, +affected)`, or the      | after     |
  *  |                  | client-supplied PK values pulled from the INSERT params by position |           |
- *  | createMany       | the same AUTO_INCREMENT range (N consecutive ids), or the client-   | after     |
- *  |                  | supplied PK tuples read back out of the SAME JSON payload           |           |
+ *  | createMany       | the AUTO_INCREMENT ids from LAST_INSERT_ID up that this transaction | after     |
+ *  |                  | can see (a bulk INSERT's ids need not be consecutive), or the      |           |
+ *  |                  | client-supplied PK tuples read back out of the SAME JSON payload    |           |
  *  | upsert / …Many   | EVERY column of the CONFLICT key (MySQL does not report the         | after     |
  *  |                  | conflicted-row id, so the AUTO_INCREMENT range is wrong when a row  |           |
  *  |                  | was UPDATED) — one column of a composite key names other rows too   |           |
  *  | insert-or-ignore | as create, and ONLY the rows it inserted (`;action=ignore`): a       | after     |
  *  |                  | conflict writes nothing, so it returns nothing                      |           |
- *  | update         | the write's OWN WHERE predicate                                    | after     |
+ *  | update           | the write's OWN WHERE predicate                                    | after     |
  *  | updateMany       | EVERY batch JOIN key column, re-bound from the SAME JSON payload   | after     |
  *  | delete/deleteMany| the write's OWN WHERE predicate — **before** the write, since the   | BEFORE    |
  *  |                  | rows no longer exist once the DELETE has run                       |           |
  *
- * The recovering SELECT runs on the SAME connection as the write, so inside a transaction it sees
- * the not-yet-committed rows — and a `DELETE`'s pre-image SELECT is inside the same transaction as
- * the delete it describes.
+ * The recovering SELECT runs on the SAME connection as the write, and the steps run ATOMICALLY: inside
+ * the caller's transaction when the connection is in one, else inside their own `BEGIN … COMMIT` (a
+ * failed recovery rolls its own write back). So the SELECT sees the not-yet-committed rows, and a
+ * `DELETE`'s pre-image SELECT is inside the same transaction as the delete it describes.
+ *
+ * Wherever the recovery cannot be exact it FAILS CLOSED: an INSERT knows how many rows it wrote
+ * ({@link WrittenRows}), and the recovered set must be exactly that many ({@link checkRecovered}).
  *
  * This module is the TypeScript member of a 5-language SSoT: `rust/litedbmodel_runtime/src/livedb.rs`
  * (`build_mysql_reselect`), `go/litedbmodel_runtime/livedb.go`, `python/litedbmodel_runtime/driver.py`
@@ -110,6 +115,15 @@ export interface MysqlReselect {
   /** How many rows the write wrote — see {@link WrittenRows}; `null` ⇒ not countable. */
   readonly written: WrittenRows | null;
   /**
+   * A consistent read to run BEFORE the write, in the same transaction (`''` ⇒ none). A bulk INSERT's
+   * AUTO_INCREMENT ids are NOT consecutive (`innodb_autoinc_lock_mode=2`): rows other sessions insert
+   * meanwhile can take ids between and after ours. Anchoring the transaction's read view before the
+   * write makes those rows — committed after it — invisible to the recovering SELECT (under REPEATABLE
+   * READ), while our own uncommitted rows stay visible; the {@link checkRecovered} count check fails
+   * anything else (another isolation level) closed.
+   */
+  readonly anchorSql: string;
+  /**
    * Run the SELECT BEFORE the write instead of after. Only a DELETE needs this: its rows are gone
    * once it has run, so the pre-image IS the written row set (the same rows the DELETE removes).
    */
@@ -188,8 +202,8 @@ export function buildMysqlReselect(sql: string): MysqlReselect | null {
   // Order by the DECLARED pk so MySQL matches the pg/sqlite RETURNING order (§10 all-dialect parity).
   const orderBy = pk.length > 0 ? ` ORDER BY ${pk.join(', ')}` : '';
   const isBatch = lower.includes('json_table(');
-  const done = (selectSql: string, binds: readonly ReselectBind[], written: WrittenRows | null = null, before = false): MysqlReselect =>
-    ({ writeSql, selectSql, binds, written, before });
+  const done = (selectSql: string, binds: readonly ReselectBind[], written: WrittenRows | null = null, before = false, anchorSql = ''): MysqlReselect =>
+    ({ writeSql, selectSql, binds, written, before, anchorSql });
   const writeCols = insertCols(writeSql);
   /**
    * Recover a BATCH write's rows by reading its key TUPLES back out of the SAME JSON payload it bound —
@@ -236,7 +250,15 @@ export function buildMysqlReselect(sql: string): MysqlReselect | null {
   // composite). Recovered only when it wrote a row, and only as many rows as it wrote (WrittenRows).
   if (lower.startsWith('insert')) {
     const noopOnConflict = lower.includes('on duplicate key update');
+    if (autoInc !== '' && pk.length === 1 && pk[0] === autoInc && isBatch) {
+      // createMany (a bulk INSERT…SELECT): its ids start at LAST_INSERT_ID but need not be consecutive,
+      // so the bare range would name other sessions' rows and miss our own. Every id it allocated is
+      // ≥ LAST_INSERT_ID; the anchored read view hides other sessions' rows; the count check fails the
+      // rest closed.
+      return done(`SELECT ${cols} FROM ${table} WHERE ${autoInc} >= ?${orderBy}`, [{ kind: 'lastId' }], 'affected', false, `SELECT 1 FROM ${table} LIMIT 1`);
+    }
     if (autoInc !== '' && pk.length === 1 && pk[0] === autoInc) {
+      // A single-row / multi-VALUES INSERT reserves its ids up front, so they ARE consecutive.
       return done(`SELECT ${cols} FROM ${table} WHERE ${autoInc} >= ? AND ${autoInc} < ?${orderBy}`, [
         { kind: 'lastId' },
         { kind: 'highId' },
@@ -249,9 +271,8 @@ export function buildMysqlReselect(sql: string): MysqlReselect | null {
       );
     }
     // createMany with a CLIENT-supplied key: the statement binds ONE JSON payload, not one param per
-    // key, so the key tuples are read back out of that SAME payload — as the upsertMany arm does. (An
-    // AUTO_INCREMENT batch never reaches here; its N consecutive ids are the range above.) A batch
-    // `INSERT IGNORE` reads back pre-existing rows too, so its count check fails it closed.
+    // key, so the key tuples are read back out of that SAME payload — as the upsertMany arm does. A
+    // batch `INSERT IGNORE` reads back pre-existing rows too, so its count check fails it closed.
     return isBatch ? jsonSelect(pk, 'PK', 'affected') : keyedByInsertParams(pk, 'PK', noopOnConflict ? 'affectedUnlessFoundRows' : 'affected');
   }
 

@@ -111,3 +111,73 @@ def test_mysql_returning_insert_ignore(driver):
     with pytest.raises(ValueError, match=r"wrote 1 row\(s\) but its RETURNING recovery found 2"):
         _rows(driver, batch, [json.dumps([{"code": "X1", "owner": "mine"}, {"code": "X2", "owner": "mine"}])])
     assert _rows(driver, batch, [json.dumps([{"code": "X3", "owner": "mine"}])]) == [{"code": "X3", "owner": "mine"}]
+
+
+def _raw_conn():
+    import pymysql
+
+    return pymysql.connect(
+        host=os.environ.get("TEST_MYSQL_HOST", "127.0.0.1"), port=int(os.environ.get("TEST_MYSQL_PORT", "3307")),
+        user=os.environ.get("TEST_MYSQL_USER", "testuser"), password=os.environ.get("TEST_MYSQL_PASSWORD", "testpass"),
+        database=os.environ.get("TEST_MYSQL_DB", "testdb"), autocommit=True,
+    )
+
+
+def _until_running(conn, prefix: str) -> None:
+    """Poll the server until a thread runs a statement starting with ``prefix``, then let it block."""
+    import time
+
+    cur = conn.cursor()
+    for _ in range(200):
+        cur.execute("SELECT COUNT(*) FROM information_schema.PROCESSLIST WHERE INFO LIKE %s", (prefix + "%",))
+        if cur.fetchone()[0] > 0:
+            time.sleep(0.3)
+            cur.close()
+            return
+        time.sleep(0.02)
+    raise AssertionError(f"no thread ever ran {prefix!r}…")
+
+
+# ── #360 — a bulk INSERT…RETURNING returns its own rows, not the ids another session took between them ──
+
+
+def test_mysql_returning_bulk_auto_inc(driver):
+    import threading
+
+    create_many = f"INSERT INTO {TBL} (tenant_id, uk) SELECT jt.tenant_id, JSON_UNQUOTE(jt.uk) FROM JSON_TABLE(?, '$[*]' COLUMNS(tenant_id BIGINT PATH '$.tenant_id', uk JSON PATH '$.uk')) jt RETURNING uk, tenant_id /*scp:pk=id;ai=id*/"
+    mine = [{"uk": uk, "tenant_id": 1} for uk in ("k1", "k2", "k3", "k4")]
+    payload = json.dumps([{"tenant_id": 1, "uk": uk} for uk in ("k1", "k2", "k3", "k4")])
+
+    # A bounded two-connection schedule: the other session holds a gap lock the bulk insert must wait
+    # on, inserts its own row (taking the next id) while the bulk insert is blocked mid-way, and commits.
+    _table(driver, "(id INT AUTO_INCREMENT PRIMARY KEY, uk VARCHAR(32) NOT NULL, tenant_id INT NOT NULL, UNIQUE KEY uq (uk))",
+           f"INSERT INTO {TBL} (uk, tenant_id) VALUES ('seed', 0)")
+    other = _raw_conn()
+    try:
+        cur = other.cursor()
+        cur.execute("BEGIN")
+        cur.execute(f"SELECT id FROM {TBL} WHERE uk = 'k3' FOR UPDATE")
+        result = {}
+
+        def run():
+            try:
+                result["rows"] = _rows(driver, create_many, [payload])
+            except Exception as e:  # surfaced below
+                result["err"] = e
+
+        t = threading.Thread(target=run)
+        t.start()
+        _until_running(other, f"INSERT INTO {TBL} ")
+        cur.execute(f"INSERT INTO {TBL} (uk, tenant_id) VALUES ('zz', 2)")
+        cur.execute("COMMIT")
+        t.join(30)
+        assert "err" not in result, result.get("err")
+        assert result["rows"] == mine
+    finally:
+        other.close()
+    # The foreign row did land between the bulk insert's ids — the bare id range named it.
+    assert [r["uk"] for r in _rows(driver, f"SELECT uk FROM {TBL} ORDER BY id", [])] == ["seed", "k1", "zz", "k2", "k3", "k4"]
+
+    # A non-concurrent createMany keeps returning exactly its rows.
+    _table(driver, "(id INT AUTO_INCREMENT PRIMARY KEY, uk VARCHAR(32) NOT NULL, tenant_id INT NOT NULL)")
+    assert _rows(driver, create_many, [payload]) == mine

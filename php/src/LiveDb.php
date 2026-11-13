@@ -101,6 +101,10 @@ final class MysqlReselect
      * @param string|null        $written   how many rows the write wrote ({@see MysqlReturning::writtenRowCount}):
      *                                      'affected' | 'insertId' | 'affectedUnlessFoundRows'; null ⇒ not countable
      * @param bool               $before    run the SELECT BEFORE the write (a DELETE's pre-image)
+     * @param string             $anchorSql a consistent read run BEFORE the write in the same transaction
+     *                                      ('' ⇒ none): a bulk INSERT's AUTO_INCREMENT ids are not
+     *                                      consecutive, and anchoring the read view first hides the rows
+     *                                      other sessions insert meanwhile (mysql-returning.ts `anchorSql`)
      */
     public function __construct(
         public readonly string $writeSql,
@@ -108,6 +112,7 @@ final class MysqlReselect
         public readonly array $binds,
         public readonly ?string $written = null,
         public readonly bool $before = false,
+        public readonly string $anchorSql = '',
     ) {
     }
 }
@@ -124,8 +129,9 @@ final class MysqlReselect
  *  |-------------------|--------------------------------------------------------------------|--------|
  *  | create            | the AUTO_INCREMENT range `[LAST_INSERT_ID, +affected)`, or the      | after  |
  *  |                   | client-supplied PK values pulled from the INSERT params by position |        |
- *  | createMany        | the same AUTO_INCREMENT range (N consecutive ids), or the client-   | after  |
- *  |                   | supplied PK tuples read back out of the SAME JSON payload           |        |
+ *  | createMany        | the AUTO_INCREMENT ids from LAST_INSERT_ID up that this transaction | after  |
+ *  |                   | can see (a bulk INSERT's ids need not be consecutive), or the      |        |
+ *  |                   | client-supplied PK tuples read back out of the SAME JSON payload    |        |
  *  | upsert / …Many    | EVERY column of the CONFLICT key (MySQL does not report the         | after  |
  *  |                   | conflicted-row id, so the AUTO_INCREMENT range is wrong when a row  |        |
  *  |                   | was UPDATED) — one column of a composite key names other rows too   |        |
@@ -136,9 +142,9 @@ final class MysqlReselect
  *  | delete/deleteMany | the write's OWN WHERE predicate — **before** the write, since the   | BEFORE |
  *  |                   | rows no longer exist once the DELETE has run                        |        |
  *
- * The recovering SELECT runs on the SAME connection as the write, so inside a transaction it sees
- * the not-yet-committed rows — and a DELETE's pre-image SELECT is inside the same transaction as
- * the delete it describes.
+ * The recovering SELECT runs on the SAME connection as the write, and the steps run ATOMICALLY (inside
+ * the open transaction, or their own BEGIN … COMMIT), so it sees the not-yet-committed rows — and a
+ * DELETE's pre-image SELECT is inside the same transaction as the delete it describes.
  *
  * This class is the PHP member of a 5-language SSoT: `src/scp/makesql/mysql-returning.ts`
  * (`buildMysqlReselect`), `rust/litedbmodel_runtime/src/livedb.rs` (`build_mysql_reselect`),
@@ -282,7 +288,15 @@ final class MysqlReturning
         // or by the client-supplied PK values pulled from the INSERT params by column position (UUID /
         // composite). Recovered only when it wrote a row, and only as many rows as it wrote (writtenRowCount).
         if ($isInsert) {
+            if ($autoInc !== '' && $pkCols === [$autoInc] && $isBatch) {
+                // createMany (a bulk INSERT…SELECT): its ids start at LAST_INSERT_ID but need not be
+                // consecutive, so the bare range would name other sessions' rows and miss our own. Every
+                // id it allocated is ≥ LAST_INSERT_ID; the anchored read view hides other sessions'
+                // rows; the count check fails the rest closed.
+                return new MysqlReselect($writeSql, "SELECT {$cols} FROM {$table} WHERE {$autoInc} >= ?{$orderBy}", [new ReselectBind('lastId')], 'affected', false, "SELECT 1 FROM {$table} LIMIT 1");
+            }
             if ($autoInc !== '' && $pkCols === [$autoInc]) {
+                // A single-row / multi-VALUES INSERT reserves its ids up front, so they ARE consecutive.
                 return new MysqlReselect($writeSql, "SELECT {$cols} FROM {$table} WHERE {$autoInc} >= ? AND {$autoInc} < ?{$orderBy}", [new ReselectBind('lastId'), new ReselectBind('highId')], $noopOnConflict ? 'insertId' : 'affected');
             }
             if (count($pkCols) === 0) {
@@ -435,20 +449,60 @@ final class MysqlReturningStatement extends \PDOStatement
             $this->returningRows = null;
             return parent::execute($bound);
         }
+        $this->returningRows = $this->atomically(fn (): array => $this->returningSteps($bound ?? []));
+        return true;
+    }
+
+    /**
+     * Run the RETURNING emulation's steps as ONE unit: inside the connection's open transaction, or in
+     * their own BEGIN … COMMIT (ROLLBACK when a step — the fail-closed recovery included — fails, so its
+     * write does not survive). `inTransaction()` is the SERVER's answer for pdo_mysql (the
+     * SERVER_STATUS_IN_TRANS flag), so a BEGIN issued through `exec()` counts too.
+     *
+     * @param  callable(): list<\stdClass> $steps
+     * @return list<\stdClass>
+     */
+    private function atomically(callable $steps): array
+    {
+        if ($this->pdo->inTransaction()) {
+            return $steps();
+        }
+        $this->pdo->beginTransaction();
+        try {
+            $rows = $steps();
+        } catch (\Throwable $e) {
+            $this->pdo->rollBack();
+            throw $e;
+        }
+        $this->pdo->commit();
+        return $rows;
+    }
+
+    /**
+     * One RETURNING emulation's steps on THIS connection (the caller makes them atomic).
+     *
+     * @param  list<mixed> $bound
+     * @return list<\stdClass>
+     */
+    private function returningSteps(array $bound): array
+    {
         if ($this->returning->before) {
             // DELETE…RETURNING: the pre-image IS the written row set — capture it, THEN delete.
-            $this->returningRows = $this->reselect($bound ?? [], 0, 0);
-            return parent::execute($bound);
+            $pre = $this->reselect($bound, 0, 0);
+            parent::execute($bound);
+            return $pre;
         }
-        $ok = parent::execute($bound); // the RETURNING-stripped write
+        if ($this->returning->anchorSql !== '') {
+            $this->pdo->query($this->returning->anchorSql)->fetchAll();
+        }
+        parent::execute($bound); // the RETURNING-stripped write
         $lastInsertId = (int) $this->pdo->lastInsertId();
         $affected = $this->rowCount();
         // A write that wrote no row (an insert-or-ignore that hit a conflict) returns nothing.
         $written = MysqlReturning::writtenRowCount($this->returning->written, $lastInsertId, $affected);
-        $this->returningRows = $written === 0
+        return $written === 0
             ? []
-            : MysqlReturning::checkRecovered($this->reselect($bound ?? [], $lastInsertId, $affected), $written, $this->returning->writeSql);
-        return $ok;
+            : MysqlReturning::checkRecovered($this->reselect($bound, $lastInsertId, $affected), $written, $this->returning->writeSql);
     }
 
     /**

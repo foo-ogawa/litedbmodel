@@ -232,6 +232,8 @@ export interface MysqlPoolConnLike {
 
 /** mysql2's `CLIENT_FOUND_ROWS` capability bit (`mysql2/lib/constants/client.js` FOUND_ROWS). */
 const CLIENT_FOUND_ROWS = 2;
+/** The OK packet's "a transaction is open" status bit (`mysql2/lib/constants/server_status.js`). */
+const SERVER_STATUS_IN_TRANS = 1;
 
 /**
  * Adapt a mysql2 pooled connection to the {@link AsyncConnection} seam (one owned connection).
@@ -241,31 +243,52 @@ const CLIENT_FOUND_ROWS = 2;
  * SELECT on THIS connection (before the write for a DELETE, after it otherwise). Placing it on the
  * connection — the mysql analogue of the rust/go/py/php driver wrappers — is what makes the mode-2
  * plan executor and a generated (codegen) write return the SAME rows: both reach the DB here.
+ *
+ * The steps run ATOMICALLY: inside the connection's open transaction, or in their own BEGIN … COMMIT
+ * (ROLLBACK when the recovery fails closed). Whether a transaction is open is the SERVER's answer —
+ * the `SERVER_STATUS_IN_TRANS` flag of an OK packet — since a BEGIN need not have passed through here.
  */
 function mysqlConnection(conn: MysqlPoolConnLike): AsyncConnection {
   const rowsOf = (raw: unknown): Rows => (Array.isArray(raw) ? raw : []) as Rows;
   const clientFlags = conn.connection?.config?.clientFlags;
   const foundRows = clientFlags === undefined || (clientFlags & CLIENT_FOUND_ROWS) !== 0;
+  const atomically = async <R>(steps: () => Promise<R>): Promise<R> => {
+    const [probe] = await conn.query('DO 0');
+    if (((probe as { serverStatus?: number }).serverStatus ?? 0) & SERVER_STATUS_IN_TRANS) return steps();
+    await conn.query('BEGIN');
+    let r: R;
+    try {
+      r = await steps();
+    } catch (e) {
+      await conn.query('ROLLBACK');
+      throw e;
+    }
+    await conn.query('COMMIT');
+    return r;
+  };
   return {
     async execute(sql, params) {
       const reselect = buildMysqlReselect(sql);
       if (reselect === null) return rowsOf((await conn.query(sql, params as unknown[]))[0]);
       const bound = params as unknown[];
-      if (reselect.before) {
-        // DELETE…RETURNING: the pre-image IS the written row set — capture it, THEN delete.
-        const [pre] = await conn.query(reselect.selectSql, bindReselect(reselect.binds, bound, 0, 0));
-        await conn.query(reselect.writeSql, bound);
-        return rowsOf(pre);
-      }
-      const [res] = await conn.query(reselect.writeSql, bound);
-      const h = res as { affectedRows?: number; insertId?: number };
-      const lastId = Number(h?.insertId ?? 0);
-      const affected = Number(h?.affectedRows ?? 0);
-      // A write that wrote no row (an insert-or-ignore that hit a conflict) returns nothing.
-      const written = writtenRowCount(reselect.written, lastId, affected, foundRows, reselect.writeSql);
-      if (written === 0) return [];
-      const [rows] = await conn.query(reselect.selectSql, bindReselect(reselect.binds, bound, lastId, affected));
-      return checkRecovered(rowsOf(rows), written, reselect.writeSql) as Rows;
+      return atomically(async () => {
+        if (reselect.before) {
+          // DELETE…RETURNING: the pre-image IS the written row set — capture it, THEN delete.
+          const [pre] = await conn.query(reselect.selectSql, bindReselect(reselect.binds, bound, 0, 0));
+          await conn.query(reselect.writeSql, bound);
+          return rowsOf(pre);
+        }
+        if (reselect.anchorSql !== '') await conn.query(reselect.anchorSql);
+        const [res] = await conn.query(reselect.writeSql, bound);
+        const h = res as { affectedRows?: number; insertId?: number };
+        const lastId = Number(h?.insertId ?? 0);
+        const affected = Number(h?.affectedRows ?? 0);
+        // A write that wrote no row (an insert-or-ignore that hit a conflict) returns nothing.
+        const written = writtenRowCount(reselect.written, lastId, affected, foundRows, reselect.writeSql);
+        if (written === 0) return [];
+        const [rows] = await conn.query(reselect.selectSql, bindReselect(reselect.binds, bound, lastId, affected));
+        return checkRecovered(rowsOf(rows), written, reselect.writeSql) as Rows;
+      });
     },
     async run(sql, params) {
       const [res] = await conn.query(sql, params as unknown[]);

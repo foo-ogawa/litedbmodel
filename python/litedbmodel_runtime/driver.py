@@ -424,6 +424,8 @@ _IGNORE_HINT_RE = re.compile(r";action=ignore[;*]", re.IGNORECASE)
 # The MySQL CLIENT_FOUND_ROWS capability bit (pymysql.constants.CLIENT.FOUND_ROWS) — read off the
 # connection's own ``client_flag`` without importing the optional driver at module load.
 _CLIENT_FOUND_ROWS = 1 << 1
+# The OK/EOF packet's "a transaction is open" status bit (pymysql.constants.SERVER_STATUS.SERVER_STATUS_IN_TRANS).
+_SERVER_STATUS_IN_TRANS = 1
 
 
 class _MysqlReselect(NamedTuple):
@@ -437,6 +439,10 @@ class _MysqlReselect(NamedTuple):
     binds: List[Tuple[str, int]]
     written: Optional[str]
     before: bool
+    # A consistent read run BEFORE the write in the same transaction ("" ⇒ none): a bulk INSERT's
+    # AUTO_INCREMENT ids are not consecutive, and anchoring the read view first hides the rows other
+    # sessions insert meanwhile from the recovering SELECT (mysql-returning.ts ``anchorSql``).
+    anchor_sql: str = ""
 
 
 def _dollar_to_pyformat(sql: str) -> str:
@@ -526,8 +532,10 @@ def _build_mysql_reselect(sql: str):
     MySQL parses no RETURNING. A write that declares one is run STRIPPED and its written rows are
     recovered by a SELECT on the SAME connection, keyed on whatever identifies them:
 
-      * create / createMany → the AUTO_INCREMENT range ``[LAST_INSERT_ID, +affected)``, or the
-        client-supplied PK values pulled from the INSERT params by column position;
+      * create → the AUTO_INCREMENT range ``[LAST_INSERT_ID, +affected)``, or the client-supplied
+        PK values pulled from the INSERT params by column position;
+      * createMany → the AUTO_INCREMENT ids from LAST_INSERT_ID up that this transaction can see (a
+        bulk INSERT's ids need not be consecutive), or the PK tuples read back out of the payload;
       * upsert / upsertMany → EVERY column of the CONFLICT key (MySQL does not report which row ON
         DUPLICATE KEY UPDATE touched, so the AUTO_INCREMENT range is wrong once a row was updated;
         one column of a composite key names other rows too);
@@ -604,7 +612,17 @@ def _build_mysql_reselect(sql: str):
     # create / createMany / insert-or-ignore — by the AUTO_INCREMENT range, or by the client-supplied PK
     # values. Recovered only when it wrote a row, and only as many rows as it wrote (_written_row_count).
     if wl.startswith("insert"):
+        if auto_inc and pk_cols == [auto_inc] and is_batch:
+            # createMany (a bulk INSERT…SELECT): its ids start at LAST_INSERT_ID but need not be
+            # consecutive, so the bare range would name other sessions' rows and miss our own. Every id
+            # it allocated is ≥ LAST_INSERT_ID; the anchored read view hides other sessions' rows; the
+            # count check fails the rest closed.
+            return _MysqlReselect(
+                write_sql, f"SELECT {cols} FROM {table} WHERE {auto_inc} >= ?{order_by}",
+                [("lastId", 0)], "affected", False, f"SELECT 1 FROM {table} LIMIT 1",
+            )
         if auto_inc and pk_cols == [auto_inc]:
+            # A single-row / multi-VALUES INSERT reserves its ids up front, so they ARE consecutive.
             return _MysqlReselect(
                 write_sql, f"SELECT {cols} FROM {table} WHERE {auto_inc} >= ? AND {auto_inc} < ?{order_by}",
                 [("lastId", 0), ("highId", 0)], "insertId" if noop_on_conflict else "affected", False,
@@ -742,31 +760,59 @@ def _conn_all(conn: Any, sql: str, params: Sequence[Any], xform, emulate_returni
     the batch JSON key or the write's own WHERE, keyed off the strip-before-execute PK hint. The
     recovery runs on THIS connection, so inside a transaction it sees the uncommitted rows; a
     DELETE's pre-image SELECT runs BEFORE the write, since afterwards there is nothing left to
-    describe. This is the ONE python reselect path, mirroring the four sibling runtimes.
+    describe. The steps run ATOMICALLY (:func:`_atomically`). This is the ONE python reselect path,
+    mirroring the four sibling runtimes.
     """
     if emulate_returning:
         rs = _build_mysql_reselect(sql)
         if rs is not None:
-            if rs.before:
-                rows = _conn_select(conn, xform(rs.select_sql), _bind_reselect(rs.binds, list(params), 0, 0))
-                cur = conn.cursor()
-                cur.execute(xform(rs.write_sql), tuple(params))
-                cur.close()
-                return rows
-            cur = conn.cursor()
-            cur.execute(xform(rs.write_sql), tuple(params))
-            last_id = cur.lastrowid or 0
-            affected = cur.rowcount
-            cur.close()
-            # A write that wrote no row (an insert-or-ignore that hit a conflict) returns nothing.
-            # PyMySQL's client_flag is the capability set the connection was opened with.
-            found_rows = bool(conn.client_flag & _CLIENT_FOUND_ROWS)
-            written = _written_row_count(rs.written, last_id, affected, found_rows, rs.write_sql)
-            if written == 0:
-                return []
-            rows = _conn_select(conn, xform(rs.select_sql), _bind_reselect(rs.binds, list(params), last_id, affected))
-            return _check_recovered(rows, written, rs.write_sql)
+            return _atomically(conn, lambda: _conn_returning(conn, rs, params, xform))
     return _conn_select(conn, xform(sql), list(params))
+
+
+def _atomically(conn: Any, steps):
+    """Run the RETURNING emulation's steps as ONE unit: inside the connection's open transaction, or in
+    their own BEGIN … COMMIT (ROLLBACK when a step — the fail-closed recovery included — fails, so its
+    write does not survive). Whether a transaction is open is the SERVER's answer: PyMySQL keeps the
+    status flags of the last OK/EOF packet in ``server_status``, whoever issued the BEGIN."""
+    if conn.server_status & _SERVER_STATUS_IN_TRANS:
+        return steps()
+    cur = conn.cursor()
+    cur.execute("BEGIN")
+    try:
+        result = steps()
+    except BaseException:
+        cur.execute("ROLLBACK")
+        cur.close()
+        raise
+    cur.execute("COMMIT")
+    cur.close()
+    return result
+
+
+def _conn_returning(conn: Any, rs: _MysqlReselect, params: Sequence[Any], xform) -> List[Dict[str, Any]]:
+    """One RETURNING emulation's steps on ``conn`` (the caller makes them atomic)."""
+    if rs.before:
+        rows = _conn_select(conn, xform(rs.select_sql), _bind_reselect(rs.binds, list(params), 0, 0))
+        cur = conn.cursor()
+        cur.execute(xform(rs.write_sql), tuple(params))
+        cur.close()
+        return rows
+    if rs.anchor_sql:
+        _conn_select(conn, rs.anchor_sql, [])
+    cur = conn.cursor()
+    cur.execute(xform(rs.write_sql), tuple(params))
+    last_id = cur.lastrowid or 0
+    affected = cur.rowcount
+    cur.close()
+    # A write that wrote no row (an insert-or-ignore that hit a conflict) returns nothing.
+    # PyMySQL's client_flag is the capability set the connection was opened with.
+    found_rows = bool(conn.client_flag & _CLIENT_FOUND_ROWS)
+    written = _written_row_count(rs.written, last_id, affected, found_rows, rs.write_sql)
+    if written == 0:
+        return []
+    rows = _conn_select(conn, xform(rs.select_sql), _bind_reselect(rs.binds, list(params), last_id, affected))
+    return _check_recovered(rows, written, rs.write_sql)
 
 
 def _conn_select(conn: Any, sql: str, params: Sequence[Any]) -> List[Dict[str, Any]]:

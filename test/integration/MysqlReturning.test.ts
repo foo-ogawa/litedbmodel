@@ -139,3 +139,50 @@ describe('#359 an insert-or-ignore returns only the row it inserted, never the c
     expect(op.sql).toContain(';action=ignore*/');
   });
 });
+
+/** Poll the server until a thread is running a statement that starts with `prefix` (then let it block). */
+async function untilRunning(c: mysql.Connection, prefix: string): Promise<void> {
+  for (let i = 0; i < 200; i++) {
+    const [rows] = await c.query('SELECT COUNT(*) AS n FROM information_schema.PROCESSLIST WHERE INFO LIKE ?', [`${prefix}%`]);
+    if (Number((rows as { n: number }[])[0].n) > 0) {
+      await new Promise((r) => setTimeout(r, 300)); // it is past the id allocation and waiting on the lock
+      return;
+    }
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  throw new Error(`no thread ever ran '${prefix}…'`);
+}
+
+describe('#360 a bulk INSERT…RETURNING returns its own rows, not the ids another session took between them', () => {
+  it('createMany interleaved with a committed foreign insert returns exactly its 4 rows', async () => {
+    await table('(id INT AUTO_INCREMENT PRIMARY KEY, uk VARCHAR(32) NOT NULL, tenant_id INT NOT NULL, UNIQUE KEY uq (uk))');
+    await raw.query(`INSERT INTO ${T} (uk, tenant_id) VALUES ('seed', 0)`);
+    const recs = ['k1', 'k2', 'k3', 'k4'].map((uk) => ({ uk, tenant_id: 1 }));
+    const op = compileCreateManyBundle('C', { tableName: T, records: recs, rawRecords: recs, returning: 'uk, tenant_id', pk: { columns: ['id'], autoInc: 'id' } } as never, 'mysql').transaction!.statements[0].op;
+
+    // A bounded two-connection schedule: the other session holds a gap lock the bulk insert must wait
+    // on, inserts its own row (taking the next id) while the bulk insert is blocked mid-way, and commits.
+    const other = await mysql.createConnection(MY);
+    try {
+      await other.query('BEGIN');
+      await other.query(`SELECT id FROM ${T} WHERE uk = 'k3' FOR UPDATE`);
+      const mine = returning(op.sql, [JSON.stringify(recs)]);
+      await untilRunning(other, `INSERT INTO ${T} `);
+      await other.query(`INSERT INTO ${T} (uk, tenant_id) VALUES ('zz', 2)`);
+      await other.query('COMMIT');
+      expect(plain(await mine)).toEqual(recs);
+    } finally {
+      await other.end();
+    }
+    // The foreign row did land between the bulk insert's ids — the bare id range named it.
+    const [ids] = await raw.query(`SELECT uk FROM ${T} ORDER BY id`);
+    expect((ids as { uk: string }[]).map((r) => r.uk)).toEqual(['seed', 'k1', 'zz', 'k2', 'k3', 'k4']);
+  });
+
+  it('a non-concurrent createMany returns exactly its rows', async () => {
+    await table('(id INT AUTO_INCREMENT PRIMARY KEY, uk VARCHAR(32) NOT NULL, tenant_id INT NOT NULL)');
+    const recs = Array.from({ length: 50 }, (_, i) => ({ uk: `u${i}`, tenant_id: 1 }));
+    const op = compileCreateManyBundle('C', { tableName: T, records: recs, rawRecords: recs, returning: 'uk, tenant_id', pk: { columns: ['id'], autoInc: 'id' } } as never, 'mysql').transaction!.statements[0].op;
+    expect(plain(await returning(op.sql, [JSON.stringify(recs)]))).toEqual(recs);
+  });
+});

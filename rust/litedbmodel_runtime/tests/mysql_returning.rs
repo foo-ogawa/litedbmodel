@@ -157,3 +157,84 @@ fn mysql_returning_insert_ignore() {
     d.exec_ddl(&[format!("DROP TABLE IF EXISTS {t}")])
         .expect("drop");
 }
+
+/// Poll the server until a thread runs a statement starting with `prefix`, then let it block.
+fn until_running(d: &MysqlDriver, prefix: &str) {
+    for _ in 0..200 {
+        let n = rows(
+            d,
+            "SELECT COUNT(*) AS n FROM information_schema.PROCESSLIST WHERE INFO LIKE ?",
+            &[s(&format!("{prefix}%"))],
+        )
+        .expect("processlist");
+        if n[0][0] != "n=0" {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    panic!("no thread ever ran '{prefix}…'");
+}
+
+/// #360 — a bulk INSERT…RETURNING returns its own rows, not the ids another session took between them.
+#[test]
+fn mysql_returning_bulk_auto_inc() {
+    let d = driver();
+    let t = tbl("bulk");
+    let create_many = format!("INSERT INTO {t} (tenant_id, uk) SELECT jt.tenant_id, JSON_UNQUOTE(jt.uk) FROM JSON_TABLE(?, '$[*]' COLUMNS(tenant_id BIGINT PATH '$.tenant_id', uk JSON PATH '$.uk')) jt RETURNING uk, tenant_id /*scp:pk=id;ai=id*/");
+    let payload = r#"[{"tenant_id":1,"uk":"k1"},{"tenant_id":1,"uk":"k2"},{"tenant_id":1,"uk":"k3"},{"tenant_id":1,"uk":"k4"}]"#;
+    let mine: Vec<Vec<String>> = ["k1", "k2", "k3", "k4"]
+        .iter()
+        .map(|uk| vec![format!("uk={uk}"), "tenant_id=1".to_string()])
+        .collect();
+
+    // A bounded two-connection schedule: the other session holds a gap lock the bulk insert must wait
+    // on, inserts its own row (taking the next id) while the bulk insert is blocked mid-way, and commits.
+    table(&d, &t, "(id INT AUTO_INCREMENT PRIMARY KEY, uk VARCHAR(32) NOT NULL, tenant_id INT NOT NULL, UNIQUE KEY uq (uk))", &[format!("INSERT INTO {t} (uk, tenant_id) VALUES ('seed', 0)")]);
+    let other = driver();
+    let mut tx = other.begin_tx().expect("other BEGIN");
+    tx.execute(
+        &format!("SELECT id FROM {t} WHERE uk = 'k3' FOR UPDATE"),
+        &[],
+    )
+    .expect("gap lock");
+    let (sql, json) = (create_many.clone(), payload.to_string());
+    let mine_thread = std::thread::spawn(move || rows(&driver(), &sql, &[s(&json)]));
+    until_running(&d, &format!("INSERT INTO {t} "));
+    tx.run(
+        &format!("INSERT INTO {t} (uk, tenant_id) VALUES ('zz', 2)"),
+        &[],
+    )
+    .expect("foreign insert");
+    tx.commit().expect("other COMMIT");
+    let got = mine_thread
+        .join()
+        .expect("createMany thread")
+        .expect("createMany");
+    assert_eq!(got, mine, "interleaved createMany");
+    let order: Vec<String> = rows(&d, &format!("SELECT uk FROM {t} ORDER BY id"), &[])
+        .expect("order")
+        .into_iter()
+        .map(|r| r[0].clone())
+        .collect();
+    assert_eq!(
+        order,
+        ["uk=seed", "uk=k1", "uk=zz", "uk=k2", "uk=k3", "uk=k4"],
+        "the foreign row landed between the bulk insert's ids"
+    );
+
+    // A non-concurrent createMany keeps returning exactly its rows.
+    table(
+        &d,
+        &t,
+        "(id INT AUTO_INCREMENT PRIMARY KEY, uk VARCHAR(32) NOT NULL, tenant_id INT NOT NULL)",
+        &[],
+    );
+    assert_eq!(
+        rows(&d, &create_many, &[s(payload)]).expect("plain createMany"),
+        mine,
+        "plain createMany"
+    );
+    d.exec_ddl(&[format!("DROP TABLE IF EXISTS {t}")])
+        .expect("drop");
+}

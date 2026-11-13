@@ -1270,6 +1270,10 @@ struct MysqlReselect {
     /// How many rows the write wrote ([`written_row_count`]); `None` ⇒ not countable (an upsert /
     /// UPDATE / DELETE).
     written: Option<WrittenRows>,
+    /// A consistent read run BEFORE the write in the same transaction (empty ⇒ none): a bulk INSERT's
+    /// AUTO_INCREMENT ids are not consecutive, and anchoring the read view first hides the rows other
+    /// sessions insert meanwhile from the recovering SELECT (mysql-returning.ts `anchorSql`).
+    anchor_sql: String,
     /// Run the SELECT BEFORE the write instead of after. Only a DELETE needs this: its rows are gone
     /// once it has run, so the pre-image IS the written row set (the rows the DELETE removes).
     before: bool,
@@ -1448,6 +1452,7 @@ fn build_mysql_reselect(sql: &str) -> Result<Option<MysqlReselect>, SqlFailure> 
             binds,
             written,
             before: false,
+            anchor_sql: String::new(),
         }))
     };
     // An insert-or-ignore is spelled `ON DUPLICATE KEY UPDATE c = c` on a single row — it reads like
@@ -1476,7 +1481,25 @@ fn build_mysql_reselect(sql: &str) -> Result<Option<MysqlReselect>, SqlFailure> 
     // position (UUID / composite / natural key). Recovered only when it wrote a row, and only as many
     // rows as it wrote ([`written_row_count`]).
     if is_insert {
+        if !auto_inc.is_empty() && pk_cols.len() == 1 && pk_cols[0] == auto_inc && is_batch {
+            // createMany (a bulk INSERT…SELECT): its ids start at LAST_INSERT_ID but need not be
+            // consecutive, so the bare range would name other sessions' rows and miss our own. Every
+            // id it allocated is ≥ LAST_INSERT_ID; the anchored read view hides other sessions' rows;
+            // the count check fails the rest closed.
+            return Ok(Some(MysqlReselect {
+                select_sql: format!(
+                    "SELECT {cols} FROM {table} WHERE {ai} >= ?{order_by}",
+                    ai = auto_inc
+                ),
+                anchor_sql: format!("SELECT 1 FROM {table} LIMIT 1"),
+                write_sql,
+                binds: vec![ReselectBind::LastId],
+                written: Some(WrittenRows::Affected),
+                before: false,
+            }));
+        }
         if !auto_inc.is_empty() && pk_cols.len() == 1 && pk_cols[0] == auto_inc {
+            // A single-row / multi-VALUES INSERT reserves its ids up front, so they ARE consecutive.
             let written = if noop_on_conflict {
                 WrittenRows::InsertId
             } else {
@@ -1491,6 +1514,7 @@ fn build_mysql_reselect(sql: &str) -> Result<Option<MysqlReselect>, SqlFailure> 
                 binds: vec![ReselectBind::LastId, ReselectBind::HighId],
                 written: Some(written),
                 before: false,
+                anchor_sql: String::new(),
             }));
         }
         if pk_cols.is_empty() {
@@ -1549,6 +1573,7 @@ fn build_mysql_reselect(sql: &str) -> Result<Option<MysqlReselect>, SqlFailure> 
         binds,
         written: None,
         before,
+        anchor_sql: String::new(),
     }))
 }
 
@@ -1618,80 +1643,37 @@ fn parse_insert_cols(insert: &str) -> Vec<String> {
 /// not a driver-global writer slot. Includes the MySQL RETURNING emulation (strip → INSERT →
 /// re-select by the real PK) — all statements of one `all` run on the SAME `conn` so the re-select
 /// sees the insert (crucial inside a tx before COMMIT).
+///
+/// `in_tx` says whether `conn` is inside a transaction: the tx-owned connection ([`MyTx`]) is, a
+/// per-call pooled / session connection ([`MyPrepared`] / [`MySession`]) is not. (sqlx keeps the
+/// server's `SERVER_STATUS_IN_TRANS` flag crate-private, and the runtime issues BEGIN as raw SQL, so the
+/// connection's OWNER is what knows.)
 async fn my_all_on_conn(
     conn: &mut sqlx::MySqlConnection,
     sql: &str,
     params: &[Value],
+    in_tx: bool,
 ) -> Result<Vec<WireValue>, SqlFailure> {
     // MySQL RETURNING emulation (the ONE reselect path — [`build_mysql_reselect`] is the driver SSoT):
     // execute the write, then re-select the written row(s) by their REAL key on THIS connection (so a
-    // re-select inside a tx sees the not-yet-committed write). Covers INSERT (auto-inc range / client
-    // PK), upsert (conflict key), and UPDATE (own WHERE / batch JSON key) — honoring a DECLARED
-    // RETURNING. The strip-before-execute `/*scp:pk=…;conflict=…*/` hint (tx.ts mysqlPkHint) supplies the
-    // real key. Both the native-codegen path and the mode-2 interpreter path run RETURNING writes through
-    // here, so both return the SAME rows.
+    // re-select inside a tx sees the not-yet-committed write). The strip-before-execute
+    // `/*scp:pk=…;conflict=…*/` hint (tx.ts mysqlPkHint) supplies the real key. Both the native-codegen
+    // path and the mode-2 interpreter path run RETURNING writes through here, so both return the SAME
+    // rows. The steps run ATOMICALLY: inside the open transaction, or in their own BEGIN … COMMIT
+    // (ROLLBACK when a step — the fail-closed recovery included — fails, so its write does not survive).
     if let Some(rs) = build_mysql_reselect(sql)? {
-        // A DELETE's rows are gone once it runs, so its recovering SELECT goes FIRST (still on this
-        // connection, inside the same transaction as the delete it describes). Every other write
-        // re-selects AFTER, keyed on what the write itself produced (insert id range / conflict key).
-        if rs.before {
-            let mut sel_params: Vec<Value> = Vec::with_capacity(rs.binds.len());
-            for b in &rs.binds {
-                sel_params.push(match b {
-                    ReselectBind::JsonParam => params.first().cloned().unwrap_or(Value::Null),
-                    ReselectBind::Param(i) => params.get(*i).cloned().unwrap_or(Value::Null),
-                    // An insert-id bind cannot occur on a pre-image select (no write has run yet).
-                    ReselectBind::LastId | ReselectBind::HighId => Value::Null,
-                });
-            }
-            let rows = bind_my(sqlx::query(&rs.select_sql), &sel_params)?
-                .fetch_all(&mut *conn)
-                .await
-                .map_err(|e| {
-                    driver_failure(format!("mysql pre-select [{}]: {e}", rs.select_sql))
-                })?;
-            let out = my_rows_to_wire(&rows)?;
-            bind_my(sqlx::query(&rs.write_sql), params)?
-                .execute(&mut *conn)
-                .await
-                .map_err(|e| driver_failure(format!("mysql write [{}]: {e}", rs.write_sql)))?;
-            return Ok(out);
+        if in_tx {
+            return my_returning_on_conn(conn, &rs, params).await;
         }
-        let exec_res = bind_my(sqlx::query(&rs.write_sql), params)?
-            .execute(&mut *conn)
-            .await
-            .map_err(|e| driver_failure(format!("mysql write [{}]: {e}", rs.write_sql)))?;
-        let last_id = exec_res.last_insert_id() as i64;
-        let affected = exec_res.rows_affected() as i64;
-        // A write that wrote no row (an insert-or-ignore that hit a conflict) returns nothing.
-        let written = written_row_count(rs.written, last_id, affected, &rs.write_sql)?;
-        if written == Some(0) {
-            return Ok(Vec::new());
+        my_tx_control(conn, "BEGIN").await?;
+        let out = my_returning_on_conn(conn, &rs, params).await;
+        if out.is_err() {
+            // The step's own error is the one to surface; a failed ROLLBACK ends the session anyway.
+            let _ = my_tx_control(conn, "ROLLBACK").await;
+            return out;
         }
-        let mut sel_params: Vec<Value> = Vec::with_capacity(rs.binds.len());
-        for b in &rs.binds {
-            let param_at = |i: usize| {
-                params.get(i).cloned().ok_or_else(|| {
-                    driver_failure(format!(
-                        "mysql re-select: bind param {i} out of range for [{}]",
-                        rs.select_sql
-                    ))
-                })
-            };
-            sel_params.push(match b {
-                ReselectBind::LastId => Value::Int(last_id),
-                // A write that wrote no row is never re-selected (written 0 ⇒ []), so affected ≥ 1.
-                ReselectBind::HighId => Value::Int(last_id + affected),
-                ReselectBind::JsonParam => param_at(0)?,
-                ReselectBind::Param(i) => param_at(*i)?,
-            });
-        }
-        let rows = bind_my(sqlx::query(&rs.select_sql), &sel_params)?
-            .fetch_all(&mut *conn)
-            .await
-            .map_err(|e| driver_failure(format!("mysql re-select [{}]: {e}", rs.select_sql)))?;
-        check_recovered(rows.len(), written, &rs.write_sql)?;
-        return my_rows_to_wire(&rows);
+        my_tx_control(conn, "COMMIT").await?;
+        return out;
     }
 
     let q = bind_my(sqlx::query(sql), params)?;
@@ -1700,6 +1682,88 @@ async fn my_all_on_conn(
         .await
         .map_err(|e| driver_failure(format!("mysql query [{sql}]: {e}")))?;
     my_rows_to_wire(&rows)
+}
+
+/// One RETURNING emulation's steps on `conn` (the caller makes them atomic).
+async fn my_returning_on_conn(
+    conn: &mut sqlx::MySqlConnection,
+    rs: &MysqlReselect,
+    params: &[Value],
+) -> Result<Vec<WireValue>, SqlFailure> {
+    // A DELETE's rows are gone once it runs, so its recovering SELECT goes FIRST (still on this
+    // connection, inside the same transaction as the delete it describes). Every other write
+    // re-selects AFTER, keyed on what the write itself produced (insert id range / conflict key).
+    if rs.before {
+        let mut sel_params: Vec<Value> = Vec::with_capacity(rs.binds.len());
+        for b in &rs.binds {
+            sel_params.push(match b {
+                ReselectBind::JsonParam => params.first().cloned().unwrap_or(Value::Null),
+                ReselectBind::Param(i) => params.get(*i).cloned().unwrap_or(Value::Null),
+                // An insert-id bind cannot occur on a pre-image select (no write has run yet).
+                ReselectBind::LastId | ReselectBind::HighId => Value::Null,
+            });
+        }
+        let rows = bind_my(sqlx::query(&rs.select_sql), &sel_params)?
+            .fetch_all(&mut *conn)
+            .await
+            .map_err(|e| driver_failure(format!("mysql pre-select [{}]: {e}", rs.select_sql)))?;
+        let out = my_rows_to_wire(&rows)?;
+        bind_my(sqlx::query(&rs.write_sql), params)?
+            .execute(&mut *conn)
+            .await
+            .map_err(|e| driver_failure(format!("mysql write [{}]: {e}", rs.write_sql)))?;
+        return Ok(out);
+    }
+    if !rs.anchor_sql.is_empty() {
+        sqlx::query(&rs.anchor_sql)
+            .fetch_all(&mut *conn)
+            .await
+            .map_err(|e| driver_failure(format!("mysql anchor [{}]: {e}", rs.anchor_sql)))?;
+    }
+    let exec_res = bind_my(sqlx::query(&rs.write_sql), params)?
+        .execute(&mut *conn)
+        .await
+        .map_err(|e| driver_failure(format!("mysql write [{}]: {e}", rs.write_sql)))?;
+    let last_id = exec_res.last_insert_id() as i64;
+    let affected = exec_res.rows_affected() as i64;
+    // A write that wrote no row (an insert-or-ignore that hit a conflict) returns nothing.
+    let written = written_row_count(rs.written, last_id, affected, &rs.write_sql)?;
+    if written == Some(0) {
+        return Ok(Vec::new());
+    }
+    let mut sel_params: Vec<Value> = Vec::with_capacity(rs.binds.len());
+    for b in &rs.binds {
+        let param_at = |i: usize| {
+            params.get(i).cloned().ok_or_else(|| {
+                driver_failure(format!(
+                    "mysql re-select: bind param {i} out of range for [{}]",
+                    rs.select_sql
+                ))
+            })
+        };
+        sel_params.push(match b {
+            ReselectBind::LastId => Value::Int(last_id),
+            // A write that wrote no row is never re-selected (written 0 ⇒ []), so affected ≥ 1.
+            ReselectBind::HighId => Value::Int(last_id + affected),
+            ReselectBind::JsonParam => param_at(0)?,
+            ReselectBind::Param(i) => param_at(*i)?,
+        });
+    }
+    let rows = bind_my(sqlx::query(&rs.select_sql), &sel_params)?
+        .fetch_all(&mut *conn)
+        .await
+        .map_err(|e| driver_failure(format!("mysql re-select [{}]: {e}", rs.select_sql)))?;
+    check_recovered(rows.len(), written, &rs.write_sql)?;
+    my_rows_to_wire(&rows)
+}
+
+/// Run a tx-control literal on `conn` (raw_sql: MySQL rejects it in the prepared protocol, error 1295).
+async fn my_tx_control(conn: &mut sqlx::MySqlConnection, sql: &str) -> Result<(), SqlFailure> {
+    sqlx::raw_sql(sql)
+        .execute(&mut *conn)
+        .await
+        .map(|_| ())
+        .map_err(|e| driver_failure(format!("mysql tx-control [{sql}]: {e}")))
 }
 
 /// Is `sql` a tx-control / SET statement MySQL rejects in the prepared-statement protocol (error
@@ -1762,7 +1826,7 @@ impl PreparedStatement for MyPrepared<'_> {
                 .acquire()
                 .await
                 .map_err(|e| driver_failure(format!("mysql acquire: {e}")))?;
-            my_all_on_conn(&mut conn, &sql, &params).await
+            my_all_on_conn(&mut conn, &sql, &params, false).await
         })
     }
 
@@ -1901,7 +1965,7 @@ impl SessionConnection for MySession<'_> {
     fn execute(&mut self, sql: &str, params: &[Value]) -> Result<Vec<WireValue>, SqlFailure> {
         let conn = self.conn.as_mut().expect("mysql session conn present");
         self.rt
-            .block_on(async move { my_all_on_conn(conn, sql, params).await })
+            .block_on(async move { my_all_on_conn(conn, sql, params, false).await })
     }
     fn run(&mut self, sql: &str, params: &[Value]) -> Result<RunInfo, SqlFailure> {
         let conn = self.conn.as_mut().expect("mysql session conn present");
@@ -1941,7 +2005,7 @@ impl TxConnection for MyTx<'_> {
     fn execute(&mut self, sql: &str, params: &[Value]) -> Result<Vec<WireValue>, SqlFailure> {
         let conn = &mut self.conn;
         self.rt
-            .block_on(async move { my_all_on_conn(conn, sql, params).await })
+            .block_on(async move { my_all_on_conn(conn, sql, params, true).await })
     }
 
     fn run(&mut self, sql: &str, params: &[Value]) -> Result<RunInfo, SqlFailure> {

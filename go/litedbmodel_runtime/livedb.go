@@ -155,69 +155,99 @@ type scpMysqlConn struct {
 	// foundRows: the connection runs with CLIENT_FOUND_ROWS, under which an insert-or-ignore's
 	// conflict and its insert both report 1 affected row ([writtenRowCount]).
 	foundRows bool
+	// inTx: a transaction is open on this connection. go-sql-driver keeps the server's status flags to
+	// itself, so it is tracked where every transaction boundary of this connection passes: [BeginTx] /
+	// the wrapped [scpMysqlTx], and the BEGIN / COMMIT / ROLLBACK the runtime's tx boundary issues
+	// through [scpMysqlConn.ExecContext] (exec_context.go WithTransactionDecidedIsolated).
+	inTx bool
 }
 
 func (c *scpMysqlConn) Prepare(query string) (driver.Stmt, error) { return c.base.Prepare(query) }
 func (c *scpMysqlConn) Close() error                              { return c.base.Close() }
-func (c *scpMysqlConn) Begin() (driver.Tx, error)                 { return c.base.Begin() } //nolint:staticcheck
+func (c *scpMysqlConn) Begin() (driver.Tx, error) {
+	return c.BeginTx(context.Background(), driver.TxOptions{})
+}
 
 func (c *scpMysqlConn) BeginTx(ctx context.Context, opts driver.TxOptions) (driver.Tx, error) {
+	var tx driver.Tx
+	var err error
 	if b, ok := c.base.(driver.ConnBeginTx); ok {
-		return b.BeginTx(ctx, opts)
+		tx, err = b.BeginTx(ctx, opts)
+	} else {
+		tx, err = c.base.Begin() //nolint:staticcheck
 	}
-	return c.base.Begin() //nolint:staticcheck
+	if err != nil {
+		return nil, err
+	}
+	c.inTx = true
+	return &scpMysqlTx{base: tx, conn: c}, nil
+}
+
+// scpMysqlTx clears the connection's [scpMysqlConn.inTx] when the transaction ends.
+type scpMysqlTx struct {
+	base driver.Tx
+	conn *scpMysqlConn
+}
+
+func (t *scpMysqlTx) Commit() error {
+	t.conn.inTx = false
+	return t.base.Commit()
+}
+
+func (t *scpMysqlTx) Rollback() error {
+	t.conn.inTx = false
+	return t.base.Rollback()
+}
+
+// txControlEffect says how a tx-control statement changes the connection's transaction state:
+// +1 opens one (BEGIN / START TRANSACTION), -1 ends it (COMMIT / ROLLBACK, not ROLLBACK TO a savepoint),
+// 0 for anything else.
+func txControlEffect(query string) int {
+	head := strings.ToUpper(strings.TrimSpace(query))
+	switch {
+	case head == "BEGIN" || strings.HasPrefix(head, "BEGIN ") || strings.HasPrefix(head, "START TRANSACTION"):
+		return 1
+	case head == "COMMIT" || strings.HasPrefix(head, "COMMIT "):
+		return -1
+	case head == "ROLLBACK" || (strings.HasPrefix(head, "ROLLBACK ") && !strings.Contains(head, " TO ")):
+		return -1
+	}
+	return 0
+}
+
+// atomically runs the RETURNING emulation's steps as ONE unit: inside the connection's open
+// transaction, or in their own BEGIN … COMMIT (ROLLBACK when a step — the fail-closed recovery
+// included — fails, so its write does not survive). The steps return MATERIALIZED rows: a live cursor
+// would block the COMMIT on this connection.
+func (c *scpMysqlConn) atomically(ctx context.Context, steps func() (*memRows, error)) (*memRows, error) {
+	if c.inTx {
+		return steps()
+	}
+	if _, err := c.ExecContext(ctx, "BEGIN", nil); err != nil {
+		return nil, err
+	}
+	rows, err := steps()
+	if err != nil {
+		_, _ = c.ExecContext(ctx, "ROLLBACK", nil)
+		return nil, err
+	}
+	if _, err := c.ExecContext(ctx, "COMMIT", nil); err != nil {
+		return nil, err
+	}
+	return rows, nil
 }
 
 // QueryContext intercepts ANY write that declares a RETURNING — create/createMany, upsert, update,
 // updateMany, delete — running it stripped and recovering its written rows with the SELECT
-// [buildMysqlReselect] derives (id range / conflict key / batch JSON key / the write's own WHERE). A
-// non-RETURNING query forwards to the base driver.
+// [buildMysqlReselect] derives (id range / conflict key / batch JSON key / the write's own WHERE),
+// atomically with the write. A non-RETURNING query forwards to the base driver.
 func (c *scpMysqlConn) QueryContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
 	rs, err := buildMysqlReselect(query)
 	if err != nil {
 		return nil, err
 	}
 	if rs != nil {
-		// A DELETE's rows are gone once it runs, so its recovering SELECT goes FIRST (still on this
-		// connection, inside the same transaction as the delete it describes). Every other write
-		// re-selects AFTER, keyed on what the write itself produced (id range / conflict key).
-		if rs.before {
-			rows, err := c.queryViaStmt(ctx, rs.selectSQL, bindReselect(rs.binds, args, 0, 0))
-			if err != nil {
-				return nil, err
-			}
-			pre, err := drainRows(rows)
-			if err != nil {
-				return nil, err
-			}
-			if _, _, err := c.execViaStmtWithAffected(ctx, rs.writeSQL, args); err != nil {
-				return nil, err
-			}
-			return pre, nil
-		}
-		// go-sql-driver's ExecerContext returns driver.ErrSkip for a parameterized statement (it
-		// wants the prepared-statement path), so run the stripped write via a prepared statement.
-		lastID, affected, err := c.execViaStmtWithAffected(ctx, rs.writeSQL, args)
-		if err != nil {
-			return nil, err
-		}
-		// A write that wrote no row (an insert-or-ignore that hit a conflict) returns nothing.
-		written, err := writtenRowCount(rs.written, lastID, affected, c.foundRows, rs.writeSQL)
-		if err != nil {
-			return nil, err
-		}
-		if written == 0 {
-			return &memRows{cols: []string{}}, nil
-		}
-		rows, err := c.queryViaStmt(ctx, rs.selectSQL, bindReselect(rs.binds, args, lastID, affected))
-		if err != nil {
-			return nil, err
-		}
-		recovered, err := drainRows(rows)
-		if err != nil {
-			return nil, err
-		}
-		return recovered, checkRecovered(len(recovered.rows), written, rs.writeSQL)
+		return c.atomically(ctx, func() (*memRows, error) { return c.returning(ctx, rs, args) })
 	}
 	if q, ok := c.base.(driver.QueryerContext); ok {
 		rows, err := q.QueryContext(ctx, query, args)
@@ -229,12 +259,79 @@ func (c *scpMysqlConn) QueryContext(ctx context.Context, query string, args []dr
 	return c.queryViaStmt(ctx, query, args)
 }
 
-// ExecContext forwards to the base driver (writes never carry RETURNING on the exec/tx path).
-func (c *scpMysqlConn) ExecContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
-	if e, ok := c.base.(driver.ExecerContext); ok {
-		return e.ExecContext(ctx, query, args)
+// returning runs one RETURNING emulation's steps (the caller makes them atomic).
+func (c *scpMysqlConn) returning(ctx context.Context, rs *mysqlReselect, args []driver.NamedValue) (*memRows, error) {
+	// A DELETE's rows are gone once it runs, so its recovering SELECT goes FIRST (still on this
+	// connection, inside the same transaction as the delete it describes). Every other write
+	// re-selects AFTER, keyed on what the write itself produced (id range / conflict key).
+	if rs.before {
+		rows, err := c.queryViaStmt(ctx, rs.selectSQL, bindReselect(rs.binds, args, 0, 0))
+		if err != nil {
+			return nil, err
+		}
+		pre, err := drainRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		if _, _, err := c.execViaStmtWithAffected(ctx, rs.writeSQL, args); err != nil {
+			return nil, err
+		}
+		return pre, nil
 	}
-	return nil, driver.ErrSkip
+	if rs.anchorSQL != "" {
+		anchor, err := c.queryViaStmt(ctx, rs.anchorSQL, nil)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := drainRows(anchor); err != nil {
+			return nil, err
+		}
+	}
+	// go-sql-driver's ExecerContext returns driver.ErrSkip for a parameterized statement (it
+	// wants the prepared-statement path), so run the stripped write via a prepared statement.
+	lastID, affected, err := c.execViaStmtWithAffected(ctx, rs.writeSQL, args)
+	if err != nil {
+		return nil, err
+	}
+	// A write that wrote no row (an insert-or-ignore that hit a conflict) returns nothing.
+	written, err := writtenRowCount(rs.written, lastID, affected, c.foundRows, rs.writeSQL)
+	if err != nil {
+		return nil, err
+	}
+	if written == 0 {
+		return &memRows{cols: []string{}}, nil
+	}
+	rows, err := c.queryViaStmt(ctx, rs.selectSQL, bindReselect(rs.binds, args, lastID, affected))
+	if err != nil {
+		return nil, err
+	}
+	recovered, err := drainRows(rows)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkRecovered(len(recovered.rows), written, rs.writeSQL); err != nil {
+		return nil, err
+	}
+	return recovered, nil
+}
+
+// ExecContext forwards to the base driver (writes never carry RETURNING on the exec/tx path), and
+// tracks the transaction state a tx-control statement changes ([scpMysqlConn.inTx]).
+func (c *scpMysqlConn) ExecContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
+	e, ok := c.base.(driver.ExecerContext)
+	if !ok {
+		return nil, driver.ErrSkip
+	}
+	res, err := e.ExecContext(ctx, query, args)
+	switch effect := txControlEffect(query); {
+	case effect > 0 && err == nil:
+		c.inTx = true
+	case effect < 0:
+		// A COMMIT / ROLLBACK that errored leaves the connection in an unknown state; the runtime
+		// destroys such a connection rather than reuse it.
+		c.inTx = false
+	}
+	return res, err
 }
 
 // execViaStmtWithAffected prepares + executes a parameterized statement via the base driver's
@@ -287,6 +384,10 @@ type mysqlReselect struct {
 	// written says how many rows the write wrote ([writtenRowCount]): "affected" | "insertId" |
 	// "affectedUnlessFoundRows", or "" when not countable (an upsert / UPDATE / DELETE).
 	written string
+	// anchorSQL is a consistent read run BEFORE the write in the same transaction ("" ⇒ none): a bulk
+	// INSERT's AUTO_INCREMENT ids are not consecutive, and anchoring the read view first hides the rows
+	// other sessions insert meanwhile from the recovering SELECT (mysql-returning.ts anchorSql).
+	anchorSQL string
 	// before runs the SELECT BEFORE the write. Only a DELETE needs it: its rows are gone once it has
 	// run, so the pre-image IS the written row set.
 	before bool
@@ -454,7 +555,17 @@ func buildMysqlReselect(sql string) (*mysqlReselect, error) {
 	// or by the client-supplied PK values pulled from the INSERT params by column position (UUID /
 	// composite). Recovered only when it wrote a row, and only as many rows as it wrote ([writtenRowCount]).
 	if strings.HasPrefix(wl, "insert") {
+		if autoInc != "" && len(pkCols) == 1 && pkCols[0] == autoInc && isBatch {
+			// createMany (a bulk INSERT…SELECT): its ids start at LAST_INSERT_ID but need not be
+			// consecutive, so the bare range would name other sessions' rows and miss our own. Every id
+			// it allocated is ≥ LAST_INSERT_ID; the anchored read view hides other sessions' rows; the
+			// count check fails the rest closed.
+			return &mysqlReselect{writeSQL: writeSQL, selectSQL: fmt.Sprintf(
+				"SELECT %s FROM %s WHERE %s >= ?%s", cols, table, autoInc, orderBy,
+			), binds: []reselectBind{{kind: "lastId"}}, written: "affected", anchorSQL: "SELECT 1 FROM " + table + " LIMIT 1"}, nil
+		}
 		if autoInc != "" && len(pkCols) == 1 && pkCols[0] == autoInc {
+			// A single-row / multi-VALUES INSERT reserves its ids up front, so they ARE consecutive.
 			written := "affected"
 			if noopOnConflict {
 				written = "insertId"

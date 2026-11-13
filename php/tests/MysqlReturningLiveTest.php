@@ -112,4 +112,54 @@ final class MysqlReturningLiveTest extends TestCase
         }
         self::assertSame([['code' => 'X3', 'owner' => 'mine']], $this->rows($batch, ['[{"code":"X3","owner":"mine"}]']), 'batch ignore insert');
     }
+
+    /** #360 — a bulk INSERT…RETURNING returns its own rows, not the ids another session took between them. */
+    public function testBulkAutoIncReturnsOnlyItsOwnRows(): void
+    {
+        $t = $this->t;
+        $createMany = "INSERT INTO {$t} (tenant_id, uk) SELECT jt.tenant_id, JSON_UNQUOTE(jt.uk) FROM JSON_TABLE(?, '\$[*]' COLUMNS(tenant_id BIGINT PATH '\$.tenant_id', uk JSON PATH '\$.uk')) jt RETURNING uk, tenant_id /*scp:pk=id;ai=id*/";
+        $payload = '[{"tenant_id":1,"uk":"k1"},{"tenant_id":1,"uk":"k2"},{"tenant_id":1,"uk":"k3"},{"tenant_id":1,"uk":"k4"}]';
+        $mine = array_map(static fn (string $uk): array => ['uk' => $uk, 'tenant_id' => '1'], ['k1', 'k2', 'k3', 'k4']);
+
+        // A bounded two-connection schedule (PHP has no threads, so the other session is a forked
+        // process): it holds a gap lock the bulk insert must wait on, inserts its own row (taking the
+        // next id) while the bulk insert is blocked mid-way, and commits.
+        $this->table('(id INT AUTO_INCREMENT PRIMARY KEY, uk VARCHAR(32) NOT NULL, tenant_id INT NOT NULL, UNIQUE KEY uq (uk))', "INSERT INTO {$t} (uk, tenant_id) VALUES ('seed', 0)");
+        [$parentEnd, $childEnd] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, STREAM_IPPROTO_IP);
+        $pid = pcntl_fork();
+        if ($pid === 0) {
+            fclose($parentEnd);
+            $other = self::mysql();
+            $other->exec('BEGIN');
+            $other->query("SELECT id FROM {$t} WHERE uk = 'k3' FOR UPDATE")->fetchAll();
+            fwrite($childEnd, "locked\n");
+            for ($i = 0; $i < 200; $i++) {
+                $st = $other->prepare('SELECT COUNT(*) FROM information_schema.PROCESSLIST WHERE INFO LIKE ?');
+                $st->execute(["INSERT INTO {$t} %"]);
+                if ((int) $st->fetchColumn() > 0) {
+                    usleep(300_000); // past the id allocation and waiting on the lock
+                    break;
+                }
+                usleep(20_000);
+            }
+            $other->exec("INSERT INTO {$t} (uk, tenant_id) VALUES ('zz', 2)");
+            $other->exec('COMMIT');
+            // Die without destructors: the inherited copy of the parent's connection must not be closed.
+            posix_kill(posix_getpid(), SIGKILL);
+        }
+        fclose($childEnd);
+        self::assertSame("locked\n", fgets($parentEnd));
+        try {
+            $got = $this->rows($createMany, [$payload]);
+        } finally {
+            pcntl_waitpid($pid, $status);
+        }
+        self::assertSame($mine, $got, 'interleaved createMany');
+        $order = array_column($this->rows("SELECT uk FROM {$t} ORDER BY id", []), 'uk');
+        self::assertSame(['seed', 'k1', 'zz', 'k2', 'k3', 'k4'], $order, 'the foreign row landed between the bulk insert\'s ids');
+
+        // A non-concurrent createMany keeps returning exactly its rows.
+        $this->table('(id INT AUTO_INCREMENT PRIMARY KEY, uk VARCHAR(32) NOT NULL, tenant_id INT NOT NULL)');
+        self::assertSame($mine, $this->rows($createMany, [$payload]), 'plain createMany');
+    }
 }
