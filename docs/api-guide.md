@@ -519,7 +519,7 @@ interface DriverTypeCast {
 - **MySQL**: JSON column type with automatic serialization
 - **SQLite**: TEXT columns with JSON.stringify/JSON.parse
 
-See: [Conditions](api/classes/Conditions.md), [Values](api/classes/Values.md), [SKIP](api/variables/SKIP.md)
+See: [Conditions](api/classes/Conditions.md), [Values](api/classes/Values.md), [SKIP](api/README.md#skip)
 
 ---
 
