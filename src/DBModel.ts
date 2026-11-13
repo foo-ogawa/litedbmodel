@@ -45,7 +45,7 @@ import {
 import { rawExecuteAsync, isReadOnlyStatement, type RawResult } from './scp/middleware';
 // The row-lock tail SSoT (` FOR UPDATE` / ` FOR SHARE`) — shared with the SCP `compileSelect`, so the
 // imperative builder and the compiled statement render byte-identical locking clauses.
-import { lockTail } from './scp/makesql/compile-select';
+import { lockTail, pageCountText } from './scp/makesql/compile-select';
 import { WriterStickyClock, withWriter as scpWithWriter } from './scp/connection-routing';
 import type { Scope } from 'behavior-contracts/runtime';
 
@@ -832,11 +832,11 @@ export abstract class DBModel {
     }
 
     if (options.limit !== undefined) {
-      sql += ` LIMIT ${options.limit}`;
+      sql += ` LIMIT ${pageCountText('LIMIT', options.limit)}`;
     }
 
     if (options.offset !== undefined) {
-      sql += ` OFFSET ${options.offset}`;
+      sql += ` OFFSET ${pageCountText('OFFSET', options.offset)}`;
     }
 
     // Row lock (` FOR UPDATE` / ` FOR SHARE`) — rendered by the ONE `lockTail` aggregation point the
@@ -927,11 +927,11 @@ export abstract class DBModel {
     }
 
     if (options.limit !== undefined) {
-      sql += ` LIMIT ${options.limit}`;
+      sql += ` LIMIT ${pageCountText('LIMIT', options.limit)}`;
     }
 
     if (options.offset !== undefined) {
-      sql += ` OFFSET ${options.offset}`;
+      sql += ` OFFSET ${pageCountText('OFFSET', options.offset)}`;
     }
 
     if (options.append) {

@@ -51,6 +51,19 @@ export interface RowLockOptions {
 }
 
 /**
+ * A page count rendered INLINE as `LIMIT` / `OFFSET` text. The text becomes part of the statement, so
+ * only a non-negative safe integer may reach it: a request value is a string at run time whatever the
+ * `number` type says, and `limit: "1; DELETE …"` was spliced into the SQL and ran (#356). The ONE rule
+ * for every inline page count — the SCP page tail here and v1 `DBModel` select builders.
+ */
+export function pageCountText(clause: 'LIMIT' | 'OFFSET', value: unknown): string {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+    throw new TypeError(`${clause} must be a non-negative integer (got ${typeof value})`);
+  }
+  return String(value);
+}
+
+/**
  * The row-lock tail (` FOR UPDATE` / ` FOR SHARE`, or `''`) — the SINGLE aggregation point both the
  * v1 imperative builder (`DBModel._buildSelectSQL`) and {@link compileSelect} render their locking
  * clause from, so the two texts cannot drift.
@@ -159,13 +172,13 @@ export function compileSelect(desc: SelectDesc): SelectBundle {
   // The page tail: a static count is the original's inline literal; a bound one emits `?` and joins
   // the value list HERE, after the WHERE params — the order the `?`s occupy in the finished text.
   const tailParams: unknown[] = [];
-  const count = (c: number | BoundCount): string => {
-    if (!isBoundCount(c)) return String(c);
+  const count = (clause: 'LIMIT' | 'OFFSET', c: number | BoundCount): string => {
+    if (!isBoundCount(c)) return pageCountText(clause, c);
     tailParams.push(c.bind);
     return '?';
   };
-  if (desc.limit !== undefined) tail += ` LIMIT ${count(desc.limit)}`;
-  if (desc.offset !== undefined) tail += ` OFFSET ${count(desc.offset)}`;
+  if (desc.limit !== undefined) tail += ` LIMIT ${count('LIMIT', desc.limit)}`;
+  if (desc.offset !== undefined) tail += ` OFFSET ${count('OFFSET', desc.offset)}`;
   tail += lockTail(desc);
   if (desc.append) tail += ` ${desc.append}`;
 
