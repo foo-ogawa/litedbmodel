@@ -308,6 +308,12 @@ func IsConnectionError(err error) bool {
 	if err == nil {
 		return false
 	}
+	// PG SQLSTATE 57P01 admin_shutdown: the server ended this connection (pg_terminate_backend, a
+	// shutdown, a failover) and answers the statement in flight with it before closing.
+	var pg *pgconn.PgError
+	if errors.As(err, &pg) && pg.Code == "57P01" {
+		return true
+	}
 	m := err.Error()
 	return strings.Contains(m, "Connection terminated") ||
 		strings.Contains(m, "Client has encountered a connection error") ||

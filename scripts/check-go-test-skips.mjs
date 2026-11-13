@@ -117,9 +117,10 @@ const LIVE_TESTS = [
   'TestPhaseDLiveTxControlVisiblePG',
   'TestPhaseDLiveTxControlVisibleRollbackPG',
   'TestTxBoundaryMysql',
+  'TestTxBoundaryPostgres',
+  'TestTxRetryAfterAdminShutdownLivePG',
   'TestTxRetryAfterKilledPoolLiveMySQL',
   'TestTxRetryAfterKilledPoolLivePG',
-  'TestTxBoundaryPostgres',
 ];
 
 /** Every `*_test.go` under `go/`. Build constraints are deliberately NOT honoured: a test the build

@@ -138,6 +138,7 @@ const LIVE_TESTS = [
   'LiteDbModel\\Runtime\\Tests\\ConformanceCorpusTest::testCorpusIsTheSupportedVersion',
   'LiteDbModel\\Runtime\\Tests\\ConformanceCorpusTest::testEveryVectorNamesAnEndpointTheGeneratedModuleExposes',
   'LiteDbModel\\Runtime\\Tests\\ConformanceCorpusTest::testLiveDbConformanceAllVectorsPass',
+  'LiteDbModel\\Runtime\\Tests\\ConnRetryLiveTest::testTransactionRetryAfterAdminShutdownCommitsOnce',
   'LiteDbModel\\Runtime\\Tests\\ConnRetryLiveTest::testTransactionRetryAfterTheConnectionWasKilledCommitsOnce',
   'LiteDbModel\\Runtime\\Tests\\ConnectionRoutingLiveTest::testActiveTxPinTakesPrecedenceOverRouting',
   'LiteDbModel\\Runtime\\Tests\\ConnectionRoutingLiveTest::testCharsetAppliedAndResetOnMysql',

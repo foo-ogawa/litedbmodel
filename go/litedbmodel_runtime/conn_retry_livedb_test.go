@@ -17,6 +17,9 @@ import (
 	"net"
 	"sync"
 	"testing"
+	"time"
+
+	bc "github.com/foo-ogawa/behavior-contracts/go"
 )
 
 // staleProxy forwards TCP to `upstream`. stale() turns every connection open at that moment into a dead
@@ -236,4 +239,63 @@ func TestTxRetryAfterKilledPoolLiveMySQL(t *testing.T) {
 	txRetryAfterKilledPool(t, "mysql", func(addr string) (*sql.DB, error) { return OpenMysql(dsn(addr)) }, upstream, admin,
 		"SELECT CONNECTION_ID()", "KILL %d",
 		"CREATE TABLE %s (id int AUTO_INCREMENT PRIMARY KEY, label varchar(32) NOT NULL)", "INSERT INTO %s (label) VALUES (?)")
+}
+
+// A REAL pg_terminate_backend on the transaction's own connection, with no proxy: the server answers the
+// statement in flight with `FATAL 57P01 terminating connection due to administrator command` and closes the
+// connection — what a restart or a failover sends. That is a connection error ([IsConnectionError]), so the
+// transaction is retried on another connection and commits once.
+func TestTxRetryAfterAdminShutdownLivePG(t *testing.T) {
+	if !txIsoEnabled() {
+		t.Skip("skipped (set LITEDBMODEL_TX_ISOLATION=1 + docker up)")
+	}
+	admin := openPgIso(t)
+	defer admin.Close()
+	db := openPgIso(t)
+	defer db.Close()
+	const tbl = "conn_retry_go_admin_shutdown"
+	if _, err := admin.Exec("DROP TABLE IF EXISTS " + tbl); err != nil {
+		t.Fatalf("drop: %v", err)
+	}
+	if _, err := admin.Exec("CREATE TABLE " + tbl + " (id serial PRIMARY KEY, label text NOT NULL)"); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	defer func() { _, _ = admin.Exec("DROP TABLE IF EXISTS " + tbl) }()
+
+	opts := DefaultTransactionOptions()
+	opts.RetryDurationMs = 1
+	attempts := 0
+	_, err := Transaction(ContextForDB(db), "postgres", opts, func(txCtx *ExecutionContext) (int, error) {
+		attempts++
+		if attempts == 1 {
+			rows, e := Execute(txCtx, "SELECT pg_backend_pid() AS id", nil, ReadIntent())
+			if e != nil {
+				return 0, e
+			}
+			pid := cellInt(rows[0].(*bc.Obj), "id")
+			// Terminate this connection while a statement is in flight on it.
+			go func() {
+				time.Sleep(200 * time.Millisecond)
+				_, _ = admin.Exec(fmt.Sprintf("SELECT pg_terminate_backend(%d)", pid))
+			}()
+			if _, e := Execute(txCtx, "SELECT pg_sleep(5)", nil, ReadIntent()); e != nil {
+				return 0, e
+			}
+		}
+		_, e := Run(txCtx, "INSERT INTO "+tbl+" (label) VALUES ($1)", []any{"after-admin-shutdown"}, WriteIntent())
+		return 0, e
+	})
+	if err != nil {
+		t.Fatalf("Transaction after the server terminated its connection: %v", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("attempts = %d, want 2", attempts)
+	}
+	var n int
+	if err := admin.QueryRow("SELECT count(*) FROM " + tbl).Scan(&n); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("committed rows = %d, want 1", n)
+	}
 }

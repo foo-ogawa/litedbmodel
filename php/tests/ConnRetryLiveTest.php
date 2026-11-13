@@ -128,4 +128,59 @@ final class ConnRetryLiveTest extends TestCase
             $admin->exec('DROP TABLE IF EXISTS ' . self::TBL);
         }
     }
+
+    /**
+     * A REAL pg_terminate_backend on the transaction's own connection, with no proxy: the server answers the
+     * statement in flight with `FATAL 57P01 terminating connection due to administrator command` and closes
+     * the connection — what a restart or a failover sends. That is a connection error
+     * ({@see \LiteDbModel\Runtime\isConnectionError()}), so the transaction is retried on a new connection and
+     * commits once.
+     */
+    public function testTransactionRetryAfterAdminShutdownCommitsOnce(): void
+    {
+        [, $host, $port, $database, $user, $password] = self::dialects()['postgres'];
+        $dsn = "pgsql:host=$host;port=$port;dbname=$database";
+        $tbl = 'conn_retry_php_admin_shutdown';
+        $admin = new \PDO($dsn, $user, $password, [\PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION]);
+        $admin->exec("DROP TABLE IF EXISTS $tbl");
+        $admin->exec("CREATE TABLE $tbl (id serial PRIMARY KEY, label text NOT NULL)");
+        try {
+            $built = setConfig([new ConnectionSetup(new PdoPoolFactory(), new ConnectionConfig(
+                driver: 'postgres',
+                host: $host,
+                port: $port,
+                database: $database,
+                user: $user,
+                password: $password,
+            ))]);
+            $ctx = routingContext($built->routing);
+            $attempts = 0;
+            routedTransaction($ctx, static function () use ($ctx, $tbl, $dsn, $user, $password, &$attempts) {
+                $attempts++;
+                if ($attempts === 1) {
+                    $pid = (int) execute(currentContext($ctx), 'SELECT pg_backend_pid() AS id', [])[0]->id;
+                    // Terminate this connection while a statement is in flight on it (from another process:
+                    // this one blocks in the statement).
+                    $killer = proc_open([PHP_BINARY, '-r', sprintf(
+                        'usleep(200000); (new PDO(%s, %s, %s))->query("SELECT pg_terminate_backend(%d)");',
+                        var_export($dsn, true),
+                        var_export($user, true),
+                        var_export($password, true),
+                        $pid,
+                    )], [], $killerPipes);
+                    try {
+                        execute(currentContext($ctx), 'SELECT pg_sleep(5)', []);
+                    } finally {
+                        proc_close($killer);
+                    }
+                }
+                return runGuarded(currentContext($ctx), "INSERT INTO $tbl (label) VALUES (?)", ['after-admin-shutdown'], 'INSERT', $tbl);
+            }, new TransactionOptions(retryDurationMs: 1), 'postgres');
+            $this->assertSame(2, $attempts);
+            $this->assertSame(1, (int) $admin->query("SELECT count(*) FROM $tbl")->fetchColumn());
+            $built->closeAllPools();
+        } finally {
+            $admin->exec("DROP TABLE IF EXISTS $tbl");
+        }
+    }
 }

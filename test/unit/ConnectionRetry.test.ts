@@ -63,6 +63,10 @@ describe('isConnectionError', () => {
     expect(isConnectionError(makeError('PROTOCOL_CONNECTION_LOST', 'PROTOCOL_CONNECTION_LOST'))).toBe(true);
   });
 
+  it('returns true for PG SQLSTATE 57P01 (admin_shutdown: the server ended the connection)', () => {
+    expect(isConnectionError(makeError('terminating connection due to administrator command', '57P01'))).toBe(true);
+  });
+
   it('returns false for normal query errors', () => {
     expect(isConnectionError(makeError('syntax error at or near "SELCT"'))).toBe(false);
   });

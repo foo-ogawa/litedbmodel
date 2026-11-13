@@ -264,6 +264,10 @@ def is_connection_error(error: BaseException) -> bool:
     matching ``src/connection-errors.ts`` (``isConnectionError``) plus the psycopg/PyMySQL
     connection-closed phrasings. A dropped/reset/refused connection reconnects on the next attempt (a
     fresh pooled connection). Mirrors rust/go ``is_connection_error``."""
+    # PG SQLSTATE 57P01 admin_shutdown: the server ended this connection (pg_terminate_backend, a shutdown,
+    # a failover) and answers the statement in flight with it before closing.
+    if any(_pg_sqlstate(e) == "57P01" for e in _iter_error_chain(error)):
+        return True
     m = str(error) or ""
     return (
         "Connection terminated" in m

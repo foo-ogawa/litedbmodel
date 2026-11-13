@@ -21,6 +21,7 @@ from litedbmodel_runtime import (
     PostgresDriver,
     TransactionOptions,
     context_for_driver,
+    execute,
     run_guarded,
     transaction,
 )
@@ -177,3 +178,38 @@ def test_tx_retry_after_killed_pool_mysql():
         "CREATE TABLE {} (id int AUTO_INCREMENT PRIMARY KEY, label varchar(32) NOT NULL)",
         "INSERT INTO {} (label) VALUES (?)",
     )
+
+
+def test_tx_retry_after_admin_shutdown_postgres():
+    """A REAL pg_terminate_backend on the transaction's own connection, with no proxy: the server answers the
+    statement in flight with ``FATAL 57P01 terminating connection due to administrator command`` and closes
+    the connection — what a restart or a failover sends. That is a connection error
+    (:func:`is_connection_error`), so the transaction is retried on another connection and commits once."""
+    cfg = _pg_cfg()
+    tbl = "conn_retry_py_admin_shutdown"
+    admin_driver = PostgresDriver.connect(**cfg, pool_size=1)
+    admin = admin_driver.begin_tx()
+    driver = PostgresDriver.connect(**cfg, pool_size=2)
+    try:
+        admin.run(f"DROP TABLE IF EXISTS {tbl}", [])
+        admin.run(f"CREATE TABLE {tbl} (id serial PRIMARY KEY, label text NOT NULL)", [])
+        ctx = context_for_driver(driver)
+        attempts = []
+
+        def body():
+            attempts.append(1)
+            if len(attempts) == 1:
+                pid = execute(ctx, "SELECT pg_backend_pid() AS id", [])[0]["id"]
+                # Terminate this connection while a statement is in flight on it.
+                threading.Timer(0.2, lambda: admin.all(f"SELECT pg_terminate_backend({int(pid)})", [])).start()
+                execute(ctx, "SELECT pg_sleep(5)", [])
+            run_guarded(ctx, f"INSERT INTO {tbl} (label) VALUES ($1)", ["after-admin-shutdown"], "INSERT")
+
+        transaction(ctx, body, TransactionOptions(retry_duration=1), "postgres")
+        assert len(attempts) == 2
+        assert admin.all(f"SELECT count(*) AS n FROM {tbl}", [])[0]["n"] == 1
+    finally:
+        admin.run(f"DROP TABLE IF EXISTS {tbl}", [])
+        admin.release(False)
+        admin_driver.close()
+        driver.close()

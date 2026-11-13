@@ -144,6 +144,7 @@ const LIVE_TESTS = [
   'phase_c_connection_routing_and_config',
   'tx_body_panic_leaves_no_open_transaction_mysql',
   'tx_body_panic_leaves_no_open_transaction_pg',
+  'tx_retry_after_admin_shutdown_pg',
   'tx_retry_after_killed_pool_mysql',
   'tx_retry_after_killed_pool_pg',
 ];

@@ -23,7 +23,7 @@ import { DBHandler } from '../../src/DBHandler';
 import type { Logger } from '../../src/drivers/types';
 import { closeAllPools, PostgresDriver } from '../../src/drivers/postgres';
 import { MysqlDriver } from '../../src/drivers/mysql';
-import { PooledAsyncContext, pgConnectionPool, mysqlConnectionPool, withTransactionAsync, runAsync } from '../../src/scp';
+import { PooledAsyncContext, pgConnectionPool, mysqlConnectionPool, withTransactionAsync, runAsync, executeAsync } from '../../src/scp';
 import { pgConfig, mysqlConfig, skipIntegrationTests } from '../helpers/setup';
 
 const silentLogger: Logger = { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} };
@@ -302,6 +302,51 @@ describe.skipIf(skipIntegrationTests)('a retry after the pool\'s connections wer
     } finally {
       await pool.end().catch(() => undefined);
       await proxy.close();
+    }
+  });
+});
+
+/**
+ * A REAL `pg_terminate_backend` on the transaction's own connection, with no proxy: the server answers the
+ * statement in flight with `FATAL 57P01 terminating connection due to administrator command` and closes
+ * the connection — what a restart or a failover sends. That is a connection error, so the transaction is
+ * retried on another connection and commits once.
+ */
+describe.skipIf(skipIntegrationTests)('a transaction whose connection the server terminates (57P01, live PG)', () => {
+  const TBL = `cer_admin_shutdown_${process.pid}`;
+  let admin: Client;
+
+  beforeAll(async () => {
+    admin = new Client({ host: pgConfig.host, port: pgConfig.port, database: pgConfig.database, user: pgConfig.user, password: pgConfig.password });
+    await admin.connect();
+    await admin.query(`DROP TABLE IF EXISTS ${TBL}`);
+    await admin.query(`CREATE TABLE ${TBL} (id serial PRIMARY KEY, label text NOT NULL)`);
+  });
+
+  afterAll(async () => {
+    await admin?.query(`DROP TABLE IF EXISTS ${TBL}`);
+    await admin?.end();
+  });
+
+  it('retries withTransactionAsync after 57P01 and commits once', async () => {
+    const pool = new PgPool({ host: pgConfig.host, port: pgConfig.port, database: pgConfig.database, user: pgConfig.user, password: pgConfig.password, max: 2 });
+    pool.on('error', () => undefined);
+    let attempts = 0;
+    try {
+      await withTransactionAsync(new PooledAsyncContext(pgConnectionPool(pool as never)), async (tx) => {
+        attempts++;
+        if (attempts === 1) {
+          const [{ id }] = (await executeAsync(tx, 'SELECT pg_backend_pid() AS id', [])) as Array<{ id: number }>;
+          // Terminate this connection while a statement is in flight on it.
+          const kill = new Promise((resolve) => setTimeout(resolve, 200)).then(() => admin.query('SELECT pg_terminate_backend($1)', [Number(id)]));
+          await Promise.all([executeAsync(tx, 'SELECT pg_sleep(5)', []), kill]);
+        }
+        await runAsync(tx, `INSERT INTO ${TBL} (label) VALUES ($1)`, ['after-admin-shutdown']);
+      }, { retryDuration: 1 }, 'postgres');
+      expect(attempts).toBe(2);
+      expect(Number((await admin.query(`SELECT count(*) AS n FROM ${TBL}`)).rows[0].n)).toBe(1);
+    } finally {
+      await pool.end().catch(() => undefined);
     }
   });
 });

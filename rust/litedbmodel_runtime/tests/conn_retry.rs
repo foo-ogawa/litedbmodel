@@ -10,7 +10,7 @@
 
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
@@ -286,4 +286,81 @@ fn tx_retry_after_killed_pool_mysql() {
     admin
         .exec_ddl(&[format!("DROP TABLE IF EXISTS {tbl}")])
         .expect("mysql drop");
+}
+
+/// A REAL pg_terminate_backend on the transaction's own connection, with no proxy: the server answers the
+/// statement in flight with `FATAL 57P01 terminating connection due to administrator command` and closes
+/// the connection — what a restart or a failover sends. That is a connection error
+/// (`is_connection_error`), so the transaction is retried on another connection and commits once.
+#[test]
+fn tx_retry_after_admin_shutdown_pg() {
+    common::require_live_db(GATE);
+    let cfg = config(
+        ConfigDialect::Postgres,
+        &env("TEST_DB_HOST", "localhost"),
+        env("TEST_DB_PORT", "5433").parse().unwrap(),
+        env("TEST_DB_NAME", "testdb"),
+        env("TEST_DB_USER", "testuser"),
+        env("TEST_DB_PASSWORD", "testpass"),
+    )
+    .resolve();
+    let admin = PostgresDriver::connect_with_config(&cfg).expect("pg admin");
+    let tbl = "conn_retry_rust_admin_shutdown";
+    admin
+        .exec_ddl(&[
+            format!("DROP TABLE IF EXISTS {tbl}"),
+            format!("CREATE TABLE {tbl} (id serial PRIMARY KEY, label text NOT NULL)"),
+        ])
+        .expect("pg reset");
+    let driver = PostgresDriver::connect_with_config(&cfg).expect("pg connect");
+    let attempts = AtomicU32::new(0);
+    let options = TransactionOptions {
+        retry_duration_ms: 1,
+        ..TransactionOptions::default()
+    };
+    transaction(&for_driver(&driver), TxDialect::Postgres, &options, |tx| {
+        if attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+            let pid = first_i64(&seam_execute(
+                tx,
+                "SELECT pg_backend_pid()::bigint AS id",
+                &[],
+                &StatementIntent::read(),
+            )?);
+            // Terminate this connection while a statement is in flight on it.
+            let kill_cfg = cfg.clone();
+            thread::spawn(move || {
+                thread::sleep(std::time::Duration::from_millis(200));
+                let killer = PostgresDriver::connect_with_config(&kill_cfg).expect("pg killer");
+                seam_execute(
+                    &for_driver(&killer),
+                    &format!("SELECT pg_terminate_backend({pid})"),
+                    &[],
+                    &StatementIntent::write(),
+                )
+                .expect("kill");
+            });
+            seam_execute(tx, "SELECT pg_sleep(5)", &[], &StatementIntent::read())?;
+        }
+        seam_run(
+            tx,
+            &format!("INSERT INTO {tbl} (label) VALUES ($1)"),
+            &[Value::Str("after-admin-shutdown".into())],
+            &StatementIntent::write(),
+        )
+    })
+    .expect("transaction() after the server terminated its connection");
+    assert_eq!(attempts.load(Ordering::SeqCst), 2, "attempts");
+    let n = first_i64(
+        &seam_execute(
+            &for_driver(&admin),
+            &format!("SELECT COUNT(*) AS c FROM {tbl}"),
+            &[],
+            &StatementIntent::read(),
+        )
+        .expect("count"),
+    );
+    assert_eq!(n, 1, "committed rows");
+    admin
+        .exec_ddl(&[format!("DROP TABLE IF EXISTS {tbl}")])
+        .expect("pg drop");
 }
