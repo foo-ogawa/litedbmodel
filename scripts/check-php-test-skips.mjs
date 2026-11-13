@@ -162,6 +162,7 @@ const LIVE_TESTS = [
   'LiteDbModel\\Runtime\\Tests\\MysqlReturningLiveTest::testBulkAutoIncReturnsOnlyItsOwnRows',
   'LiteDbModel\\Runtime\\Tests\\MysqlReturningLiveTest::testCompositeKeyMatchesEveryColumn',
   'LiteDbModel\\Runtime\\Tests\\MysqlReturningLiveTest::testInsertIgnoreReturnsOnlyTheInsertedRow',
+  'LiteDbModel\\Runtime\\Tests\\MysqlReturningLiveTest::testUpdateReturnsTheRowsItUpdated',
   'LiteDbModel\\Runtime\\Tests\\TxBoundaryLiveTest::testGuardLive',
   'LiteDbModel\\Runtime\\Tests\\TxBoundaryLiveTest::testIsolationBehaviorLive',
   'LiteDbModel\\Runtime\\Tests\\TxBoundaryLiveTest::testIsolationSqlEmittedLive',

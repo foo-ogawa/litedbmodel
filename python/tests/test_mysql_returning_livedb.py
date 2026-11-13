@@ -181,3 +181,14 @@ def test_mysql_returning_bulk_auto_inc(driver):
     # A non-concurrent createMany keeps returning exactly its rows.
     _table(driver, "(id INT AUTO_INCREMENT PRIMARY KEY, uk VARCHAR(32) NOT NULL, tenant_id INT NOT NULL)")
     assert _rows(driver, create_many, [payload]) == mine
+
+
+# ── #361 — an UPDATE…RETURNING returns the rows it updated, keyed before the write ──────────────────
+
+
+def test_mysql_returning_update_by_key(driver):
+    _table(driver, "(id INT PRIMARY KEY, state VARCHAR(16) NOT NULL)",
+           f"INSERT INTO {TBL} (id, state) VALUES (1, 'open'), (2, 'open'), (3, 'done')")
+    # A state transition: the SET changes the WHERE column, so the WHERE no longer matches afterwards.
+    got = _rows(driver, f"UPDATE {TBL} SET state = ? WHERE state = ? RETURNING id, state /*scp:pk=id;ai=*/", ["claimed", "open"])
+    assert got == [{"id": 1, "state": "claimed"}, {"id": 2, "state": "claimed"}]

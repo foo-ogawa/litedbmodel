@@ -256,14 +256,28 @@ export interface InternalInsertOptions<Model = unknown> extends Omit<InsertOptio
   returning?: string;
 }
 
+/**
+ * The primary key a RETURNING write's rows are keyed by — what a dialect without native RETURNING
+ * (MySQL) needs to recover them (`src/scp/makesql/mysql-returning.ts`).
+ * @internal
+ */
+export interface ReturningKey {
+  columns: readonly string[];
+  autoInc: string | null;
+}
+
 /** @internal */
 export interface InternalUpdateOptions extends Omit<UpdateOptions, 'returning'> {
   returning?: string;
+  /** The key {@link returning}'s rows are recovered by on MySQL. */
+  returningKey?: ReturningKey;
 }
 
 /** @internal */
 export interface InternalDeleteOptions extends Omit<DeleteOptions, 'returning'> {
   returning?: string;
+  /** The key {@link returning}'s rows are recovered by on MySQL. */
+  returningKey?: ReturningKey;
 }
 
 export interface TransactionOptions {

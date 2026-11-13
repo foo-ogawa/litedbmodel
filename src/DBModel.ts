@@ -7,7 +7,7 @@ import { DBBoolValue, DBNullValue, DBNotNullValue, DBImmediateValue, DBToken, DB
 import { getSqlCastFormatter } from './drivers';
 import { normalizeConditions, type ConditionObject } from './DBConditions';
 import { initDBHandler, getDBHandler, createHandlerWithConnection, DBHandler, type DBConfig, type DBConnection } from './DBHandler';
-import type { SelectOptions, InsertOptions, UpdateOptions, DeleteOptions, UpdateManyOptions, TransactionOptions, LimitConfig, DBConfigOptions, PkeyResult, InternalInsertOptions, InternalUpdateOptions, InternalDeleteOptions } from './types';
+import type { SelectOptions, InsertOptions, UpdateOptions, DeleteOptions, UpdateManyOptions, TransactionOptions, LimitConfig, DBConfigOptions, PkeyResult, InternalInsertOptions, InternalUpdateOptions, InternalDeleteOptions, ReturningKey } from './types';
 import { LimitExceededError, WriteOutsideTransactionError, WriteInReadOnlyContextError } from './types';
 import { type Column, type OrderSpec, type CVs, type Conds, type CondsOf, type OrCondOf, type ColumnsOf, createColumn, columnsToNames, pairsToRecord, condsToRecord, serializeCondValue, orderToString, createOrCond } from './Column';
 import { type SqlFragment, type SqlCondition, type SqlTypedFragment, isAnySqlFragment } from './SqlFragment';
@@ -34,6 +34,7 @@ import {
   type DeriveColumnsOptions,
   type ModelClassLike as ModelLike,
 } from './scp/dbmodel-runtime';
+import { mysqlPkHint } from './scp/makesql/mysql-returning';
 import {
   transaction as scpTransaction,
   currentPinnedAsyncConnection,
@@ -1338,11 +1339,22 @@ export abstract class DBModel {
     let sql = `UPDATE ${tableName} SET ${setClauses.join(', ')} WHERE ${whereClause}`;
 
     if (options.returning) {
-      sql += ` RETURNING ${options.returning}`;
+      sql = this._withReturning(sql, options.returning, options.returningKey);
     }
 
     const result = await this.execute(sql, params);
     return (result.rows as Record<string, unknown>[]).map((row) => this._createInstance<T>(row));
+  }
+
+  /**
+   * Append ` RETURNING <cols>` to a write — and, on MySQL (no native RETURNING), the strip-before-execute
+   * PK hint the connection seam's emulation keys the written rows by ({@link mysqlPkHint}).
+   * @internal
+   */
+  private static _withReturning(sql: string, returning: string, key: ReturningKey | undefined): string {
+    const withReturning = `${sql} RETURNING ${returning}`;
+    if (key === undefined || this.getDriverType() !== 'mysql') return withReturning;
+    return mysqlPkHint({ sql: withReturning, params: [], pk: key }).sql;
   }
 
   /**
@@ -2684,42 +2696,17 @@ export abstract class DBModel {
         return null;
       }
       
-      // With returning: true - get PkeyResult
+      // With returning: true - get PkeyResult. MySQL has no native RETURNING: the connection seam
+      // emulates it (src/scp/makesql/mysql-returning.ts — the rows the UPDATE writes are locked and
+      // keyed BEFORE it runs), so every dialect asks for the same RETURNING here.
       const pkeyColumns = this._getPkeyColumnsWithDefault();
       const pkeyColumnNames = columnsToNames(pkeyColumns);
-      const driverType = this.getDriverType();
-      const sqlBuilder = getSqlBuilder(driverType);
-      
-      if (!sqlBuilder.supportsReturning) {
-        // Driver without native RETURNING: Pre-SELECT to get PKs
-        const selectParams: unknown[] = [];
-        const normalizedCond = normalizeConditions(conditionRecord);
-        const whereClause = normalizedCond.compile(selectParams);
-        
-        if (!whereClause) {
-          throw new Error('UPDATE requires conditions');
-        }
-        
-        const tableName = this.getUpdateTableName();
-        const selectSql = `SELECT DISTINCT ${pkeyColumnNames.join(', ')} FROM ${tableName} WHERE ${whereClause}`;
-        
-        // Execute SELECT first
-        const selectResult = await this.execute(selectSql, selectParams);
-        const pkeyValues = selectResult.rows as Record<string, unknown>[];
-        
-        // Then execute UPDATE (without RETURNING)
-        await this._update(conditionRecord, valueRecord, {});
-        
-        return this._buildPkeyResult(pkeyValues, pkeyColumns);
-      } else {
-        // PostgreSQL/SQLite: Use RETURNING clause
-        const updateOpts = { returning: pkeyColumnNames.join(', ') };
-        const instances = await this._update(conditionRecord, valueRecord, updateOpts);
-        return this._buildPkeyResult(
-          instances.map(i => i as unknown as Record<string, unknown>),
-          pkeyColumns
-        );
-      }
+      const updateOpts = { returning: pkeyColumnNames.join(', '), returningKey: { columns: pkeyColumnNames, autoInc: null } };
+      const instances = await this._update(conditionRecord, valueRecord, updateOpts);
+      return this._buildPkeyResult(
+        instances.map(i => i as unknown as Record<string, unknown>),
+        pkeyColumns
+      );
     };
     return this._applyMiddleware('update', core, [conditions, values, options]);
   }

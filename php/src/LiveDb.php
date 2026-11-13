@@ -105,6 +105,14 @@ final class MysqlReselect
      *                                      ('' ⇒ none): a bulk INSERT's AUTO_INCREMENT ids are not
      *                                      consecutive, and anchoring the read view first hides the rows
      *                                      other sessions insert meanwhile (mysql-returning.ts `anchorSql`)
+     * @param string             $lockSql   an UPDATE's lock-and-key step, run BEFORE the write ('' ⇒ none):
+     *                                      `SELECT <pk> … WHERE <where> … FOR UPDATE` names — and locks —
+     *                                      exactly the rows the UPDATE is about to write. Its rows are
+     *                                      recovered by THOSE keys: {@see $selectSql} is then the head
+     *                                      `SELECT <cols> FROM <table> WHERE (<pk>) IN ` that
+     *                                      {@see MysqlReturning::keyedSelectSql} completes
+     * @param list<ReselectBind> $lockBinds how to bind {@see $lockSql}'s `?`s
+     * @param list<string>       $keyCols   the key columns {@see $lockSql} reads, in order (the declared PK)
      */
     public function __construct(
         public readonly string $writeSql,
@@ -113,6 +121,9 @@ final class MysqlReselect
         public readonly ?string $written = null,
         public readonly bool $before = false,
         public readonly string $anchorSql = '',
+        public readonly string $lockSql = '',
+        public readonly array $lockBinds = [],
+        public readonly array $keyCols = [],
     ) {
     }
 }
@@ -137,7 +148,8 @@ final class MysqlReselect
  *  |                   | was UPDATED) — one column of a composite key names other rows too   |        |
  *  | insert-or-ignore  | as create, and ONLY the rows it inserted (`;action=ignore`): a       | after  |
  *  |                   | conflict writes nothing, so it returns nothing                      |        |
- *  | update          | the write's OWN WHERE predicate                                     | after  |
+ *  | update            | the PK of every row its WHERE names, read and LOCKED (FOR UPDATE)   | lock + |
+ *  |                   | before the write; the rows re-selected by those keys after it       | after  |
  *  | updateMany        | EVERY batch JOIN key column, re-bound from the SAME JSON payload    | after  |
  *  | delete/deleteMany | the write's OWN WHERE predicate — **before** the write, since the   | BEFORE |
  *  |                   | rows no longer exist once the DELETE has run                        |        |
@@ -332,7 +344,33 @@ final class MysqlReturning
         for ($i = 0, $n = substr_count($whereSql, '?'); $i < $n; $i++) {
             $binds[] = new ReselectBind('param', $leading + $i);
         }
-        return new MysqlReselect($writeSql, "SELECT {$cols} FROM {$table} WHERE {$whereSql}{$orderBy}", $binds, null, str_starts_with($wl, 'delete'));
+        if (str_starts_with($wl, 'delete')) {
+            return new MysqlReselect($writeSql, "SELECT {$cols} FROM {$table} WHERE {$whereSql}{$orderBy}", $binds, null, true);
+        }
+        // The UPDATE: lock the rows its WHERE names and read their keys BEFORE the write, then recover the
+        // written rows (carrying their new values) by those keys — never by the WHERE re-evaluated after it.
+        if (count($pkCols) === 0) {
+            throw new \RuntimeException("scp write(mysql): an UPDATE…RETURNING carries no pk hint, so the rows it writes cannot be keyed ('{$writeSql}'). The producer must pass the model's declared primary key.");
+        }
+        $keys = implode(', ', $pkCols);
+        return new MysqlReselect(
+            $writeSql,
+            "SELECT {$cols} FROM {$table} WHERE ({$keys}) IN ",
+            [],
+            lockSql: "SELECT {$keys} FROM {$table} WHERE {$whereSql}{$orderBy} FOR UPDATE",
+            lockBinds: $binds,
+            keyCols: $pkCols,
+        );
+    }
+
+    /**
+     * An UPDATE's {@see MysqlReselect::$selectSql} completed for `$rows` locked keys (mysql-returning.ts
+     * `keyedSelectSql`): one `(?, …)` tuple per row, ordered by the declared PK.
+     */
+    public static function keyedSelectSql(MysqlReselect $reselect, int $rows): string
+    {
+        $tuple = '(' . implode(', ', array_fill(0, count($reselect->keyCols), '?')) . ')';
+        return $reselect->selectSql . '(' . implode(', ', array_fill(0, $rows, $tuple)) . ') ORDER BY ' . implode(', ', $reselect->keyCols);
     }
 
     /**
@@ -491,6 +529,26 @@ final class MysqlReturningStatement extends \PDOStatement
             $pre = $this->reselect($bound, 0, 0);
             parent::execute($bound);
             return $pre;
+        }
+        if ($this->returning->lockSql !== '') {
+            // UPDATE…RETURNING: lock the rows its WHERE names and read their keys, write, then recover
+            // the written rows by THOSE keys (never by the WHERE re-evaluated after the write).
+            $lock = $this->pdo->prepare($this->returning->lockSql);
+            $lock->execute(MysqlReturning::bind($this->returning->lockBinds, $bound, 0, 0));
+            $keys = $lock->fetchAll(\PDO::FETCH_ASSOC);
+            parent::execute($bound);
+            if ($keys === []) {
+                return [];
+            }
+            $keyValues = [];
+            foreach ($keys as $key) {
+                foreach ($this->returning->keyCols as $c) {
+                    $keyValues[] = $key[$c];
+                }
+            }
+            $sel = $this->pdo->prepare(MysqlReturning::keyedSelectSql($this->returning, count($keys)));
+            $sel->execute($keyValues);
+            return MysqlReturning::checkRecovered(array_values($sel->fetchAll(\PDO::FETCH_OBJ)), count($keys), $this->returning->writeSql);
         }
         if ($this->returning->anchorSql !== '') {
             $this->pdo->query($this->returning->anchorSql)->fetchAll();

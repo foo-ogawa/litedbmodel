@@ -226,3 +226,13 @@ func TestMysqlReturningBulkAutoIncLive(t *testing.T) {
 	got, err := myretRows(t, db, createMany, `[{"tenant_id":1,"uk":"k1"},{"tenant_id":1,"uk":"k2"},{"tenant_id":1,"uk":"k3"},{"tenant_id":1,"uk":"k4"}]`)
 	myretExpect(t, "plain createMany", got, err, mine)
 }
+
+// #361 — an UPDATE…RETURNING returns the rows it updated, keyed before the write.
+func TestMysqlReturningUpdateByKeyLive(t *testing.T) {
+	db, tbl := openMysqlReturning(t)
+	myretTable(t, db, tbl, "(id INT PRIMARY KEY, state VARCHAR(16) NOT NULL)",
+		"INSERT INTO "+tbl+" (id, state) VALUES (1, 'open'), (2, 'open'), (3, 'done')")
+	// A state transition: the SET changes the WHERE column, so the WHERE no longer matches afterwards.
+	got, err := myretRows(t, db, "UPDATE "+tbl+" SET state = ? WHERE state = ? RETURNING id, state /*scp:pk=id;ai=*/", "claimed", "open")
+	myretExpect(t, "state transition", got, err, []map[string]string{{"id": "1", "state": "claimed"}, {"id": "2", "state": "claimed"}})
+}

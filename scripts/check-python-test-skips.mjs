@@ -159,6 +159,7 @@ const LIVE_TESTS = [
   'test_mysql_returning_livedb.py::test_mysql_returning_bulk_auto_inc',
   'test_mysql_returning_livedb.py::test_mysql_returning_composite_key',
   'test_mysql_returning_livedb.py::test_mysql_returning_insert_ignore',
+  'test_mysql_returning_livedb.py::test_mysql_returning_update_by_key',
   'test_tx_boundary_livedb.py::test_tx_boundary_mysql',
   'test_tx_boundary_livedb.py::test_tx_boundary_postgres',
 ];

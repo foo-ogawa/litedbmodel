@@ -6,8 +6,11 @@
  * Every statement here is the compiler's own output (`compileWriteNode` / the batch bundles), run
  * through the shipped adapter over a real mysql2 pool. Each describe names the issue it pins.
  */
+import 'reflect-metadata';
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import mysql from 'mysql2/promise';
+import { DBModel, Middleware, model, column, closeAllPools } from '../../src';
+import { mysqlConfig } from '../helpers/setup';
 import { compileWriteNode } from '../../src/scp/makesql/tx';
 import { compileCreateManyBundle, compileUpdateManyBundle } from '../../src/scp/write-bundle';
 import { mysqlConnectionPool, mysqlDeboxPoolOptions } from '../../src/scp/makesql/pool-executor';
@@ -23,6 +26,8 @@ const MY = {
 
 /** Unique per run: other sessions share the database. */
 const T = `scp_myret_${process.pid}`;
+/** The DBModel-backed table (a model's table name is fixed when the class is declared). */
+const JOBS = `scp_myret_jobs_${process.pid}`;
 
 let raw: mysql.Pool;
 let pool: AsyncConnectionPool;
@@ -35,6 +40,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await raw?.query(`DROP TABLE IF EXISTS ${T}`);
+  await raw?.query(`DROP TABLE IF EXISTS ${JOBS}`);
   await raw?.end();
 });
 
@@ -140,17 +146,18 @@ describe('#359 an insert-or-ignore returns only the row it inserted, never the c
   });
 });
 
-/** Poll the server until a thread is running a statement that starts with `prefix` (then let it block). */
-async function untilRunning(c: mysql.Connection, prefix: string): Promise<void> {
+/** Poll the server until a thread is running a statement that starts with one of `prefixes` (then let it block). */
+async function untilRunning(c: mysql.Connection, ...prefixes: string[]): Promise<void> {
+  const where = prefixes.map(() => 'INFO LIKE ?').join(' OR ');
   for (let i = 0; i < 200; i++) {
-    const [rows] = await c.query('SELECT COUNT(*) AS n FROM information_schema.PROCESSLIST WHERE INFO LIKE ?', [`${prefix}%`]);
+    const [rows] = await c.query(`SELECT COUNT(*) AS n FROM information_schema.PROCESSLIST WHERE ${where}`, prefixes.map((p) => `${p}%`));
     if (Number((rows as { n: number }[])[0].n) > 0) {
       await new Promise((r) => setTimeout(r, 300)); // it is past the id allocation and waiting on the lock
       return;
     }
     await new Promise((r) => setTimeout(r, 20));
   }
-  throw new Error(`no thread ever ran '${prefix}…'`);
+  throw new Error(`no thread ever ran '${prefixes.join("' / '")}…'`);
 }
 
 describe('#360 a bulk INSERT…RETURNING returns its own rows, not the ids another session took between them', () => {
@@ -184,5 +191,48 @@ describe('#360 a bulk INSERT…RETURNING returns its own rows, not the ids anoth
     const recs = Array.from({ length: 50 }, (_, i) => ({ uk: `u${i}`, tenant_id: 1 }));
     const op = compileCreateManyBundle('C', { tableName: T, records: recs, rawRecords: recs, returning: 'uk, tenant_id', pk: { columns: ['id'], autoInc: 'id' } } as never, 'mysql').transaction!.statements[0].op;
     expect(plain(await returning(op.sql, [JSON.stringify(recs)]))).toEqual(recs);
+  });
+});
+
+@model(JOBS)
+class Job extends DBModel {
+  @column.number({ primaryKey: true }) id?: number;
+  @column.text() state?: string;
+}
+
+describe('#361 an UPDATE…RETURNING returns the rows it updated, keyed before the write', () => {
+  const jobs = async (...seed: [number, string][]) => {
+    await raw.query(`DROP TABLE IF EXISTS ${JOBS}`);
+    await raw.query(`CREATE TABLE ${JOBS} (id INT PRIMARY KEY, state VARCHAR(16) NOT NULL)`);
+    for (const [id, state] of seed) await raw.query(`INSERT INTO ${JOBS} (id, state) VALUES (?, ?)`, [id, state]);
+  };
+
+  it('a state transition (SET changes a WHERE column) returns the rows it moved', async () => {
+    await jobs([1, 'open'], [2, 'open'], [3, 'done']);
+    const op = compileWriteNode({ id: 'w', component: 'Update', ports: { table: JOBS, 'set.state': { ref: ['to'] }, where: { arr: [{ eq: [{ ref: ['state'] }, { ref: ['from'] }] }] }, returning: 'id, state', pk: 'id' } } as never, 'mysql');
+    expect(plain(await returning(op.sql, ['claimed', 'open']))).toEqual([{ id: 1, state: 'claimed' }, { id: 2, state: 'claimed' }]);
+  });
+
+  it('DBModel.update({ returning }) does not report a row another session claimed first', async () => {
+    await jobs([1, 'open'], [2, 'open']);
+    DBModel.setConfig(mysqlConfig);
+    const other = await mysql.createConnection(MY);
+    try {
+      // The other session claims row 1 and holds it; our claim runs meanwhile, then the other commits.
+      await other.query('BEGIN');
+      await other.query(`UPDATE ${JOBS} SET state = 'claimed' WHERE id = 1`);
+      const mine = Middleware.run(() => DBModel.transaction(() => Job.update([[Job.state, 'open']], [[Job.state, 'mine']], { returning: true })));
+      // Ours is blocked on row 1: at the locking key read (fixed), or at the UPDATE after an unlocked
+      // pre-select (the defect).
+      await untilRunning(other, `SELECT id FROM ${JOBS} `, `UPDATE ${JOBS} `);
+      await other.query('COMMIT');
+      const got = await mine;
+      expect(got!.values.map((v) => Number(v[0]))).toEqual([2]);
+    } finally {
+      await other.end();
+      await closeAllPools();
+    }
+    const [rows] = await raw.query(`SELECT id, state FROM ${JOBS} ORDER BY id`);
+    expect(plain(rows as Record<string, unknown>[])).toEqual([{ id: 1, state: 'claimed' }, { id: 2, state: 'mine' }]);
   });
 });

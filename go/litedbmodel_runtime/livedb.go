@@ -278,6 +278,42 @@ func (c *scpMysqlConn) returning(ctx context.Context, rs *mysqlReselect, args []
 		}
 		return pre, nil
 	}
+	if rs.lockSQL != "" {
+		// UPDATE…RETURNING: lock the rows its WHERE names and read their keys, write, then recover the
+		// written rows by THOSE keys (never by the WHERE re-evaluated after the write).
+		lockRows, err := c.queryViaStmt(ctx, rs.lockSQL, bindReselect(rs.lockBinds, args, 0, 0))
+		if err != nil {
+			return nil, err
+		}
+		keys, err := drainRows(lockRows)
+		if err != nil {
+			return nil, err
+		}
+		if _, _, err := c.execViaStmtWithAffected(ctx, rs.writeSQL, args); err != nil {
+			return nil, err
+		}
+		if len(keys.rows) == 0 {
+			return &memRows{cols: []string{}}, nil
+		}
+		keyArgs := []driver.NamedValue{}
+		for _, row := range keys.rows {
+			for _, v := range row {
+				keyArgs = append(keyArgs, driver.NamedValue{Ordinal: len(keyArgs) + 1, Value: v})
+			}
+		}
+		rows, err := c.queryViaStmt(ctx, keyedSelectSQL(rs, len(keys.rows)), keyArgs)
+		if err != nil {
+			return nil, err
+		}
+		recovered, err := drainRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		if err := checkRecovered(len(recovered.rows), int64(len(keys.rows)), rs.writeSQL); err != nil {
+			return nil, err
+		}
+		return recovered, nil
+	}
 	if rs.anchorSQL != "" {
 		anchor, err := c.queryViaStmt(ctx, rs.anchorSQL, nil)
 		if err != nil {
@@ -388,6 +424,14 @@ type mysqlReselect struct {
 	// INSERT's AUTO_INCREMENT ids are not consecutive, and anchoring the read view first hides the rows
 	// other sessions insert meanwhile from the recovering SELECT (mysql-returning.ts anchorSql).
 	anchorSQL string
+	// lockSQL is an UPDATE's lock-and-key step, run BEFORE the write ("" ⇒ none): `SELECT <pk> … WHERE
+	// <where> … FOR UPDATE` names — and locks — exactly the rows the UPDATE is about to write (bound by
+	// lockBinds). Its rows are recovered by THOSE keys: selectSQL is then the head
+	// `SELECT <cols> FROM <table> WHERE (<pk>) IN ` that [keyedSelectSQL] completes.
+	lockSQL   string
+	lockBinds []reselectBind
+	// keyCols are the key columns lockSQL reads, in order (the declared PK).
+	keyCols []string
 	// before runs the SELECT BEFORE the write. Only a DELETE needs it: its rows are gone once it has
 	// run, so the pre-image IS the written row set.
 	before bool
@@ -598,9 +642,8 @@ func buildMysqlReselect(sql string) (*mysqlReselect, error) {
 		return jsonSelect(keys, "JOIN key", "")
 	}
 
-	// update / delete — by the write's OWN WHERE predicate, bound from the write's own params. The
-	// UPDATE re-selects AFTER the write (the rows carry their new values); the DELETE re-selects
-	// BEFORE it, since afterwards there is nothing left to describe.
+	// update / delete — the rows the write's OWN WHERE predicate names, bound from the write's own
+	// params. The DELETE re-selects BEFORE it, since afterwards there is nothing left to describe.
 	wherePos := strings.LastIndex(wl, " where ")
 	if wherePos < 0 {
 		return nil, fmt.Errorf("scp write(mysql): a write…RETURNING needs a WHERE to recover its rows (%q)", writeSQL)
@@ -611,12 +654,41 @@ func buildMysqlReselect(sql string) (*mysqlReselect, error) {
 	for i := 0; i < strings.Count(whereSQL, "?"); i++ {
 		binds = append(binds, reselectBind{kind: "param", index: leading + i})
 	}
+	if strings.HasPrefix(wl, "delete") {
+		return &mysqlReselect{
+			writeSQL:  writeSQL,
+			selectSQL: fmt.Sprintf("SELECT %s FROM %s WHERE %s%s", cols, table, whereSQL, orderBy),
+			binds:     binds,
+			before:    true,
+		}, nil
+	}
+	// The UPDATE: lock the rows its WHERE names and read their keys BEFORE the write, then recover the
+	// written rows (carrying their new values) by those keys — never by the WHERE re-evaluated after it.
+	if len(pkCols) == 0 {
+		return nil, fmt.Errorf("scp write(mysql): an UPDATE…RETURNING carries no pk hint, so the rows it writes cannot be keyed (%q). The producer must pass the model's declared primary key", writeSQL)
+	}
 	return &mysqlReselect{
 		writeSQL:  writeSQL,
-		selectSQL: fmt.Sprintf("SELECT %s FROM %s WHERE %s%s", cols, table, whereSQL, orderBy),
-		binds:     binds,
-		before:    strings.HasPrefix(wl, "delete"),
+		selectSQL: fmt.Sprintf("SELECT %s FROM %s WHERE (%s) IN ", cols, table, strings.Join(pkCols, ", ")),
+		lockSQL:   fmt.Sprintf("SELECT %s FROM %s WHERE %s%s FOR UPDATE", strings.Join(pkCols, ", "), table, whereSQL, orderBy),
+		lockBinds: binds,
+		keyCols:   pkCols,
 	}, nil
+}
+
+// keyedSelectSQL completes an UPDATE's selectSQL for `rows` locked keys (mysql-returning.ts
+// keyedSelectSql): one `(?, …)` tuple per row, ordered by the declared PK.
+func keyedSelectSQL(rs *mysqlReselect, rows int) string {
+	marks := make([]string, len(rs.keyCols))
+	for i := range marks {
+		marks[i] = "?"
+	}
+	tuple := "(" + strings.Join(marks, ", ") + ")"
+	tuples := make([]string, rows)
+	for i := range tuples {
+		tuples[i] = tuple
+	}
+	return rs.selectSQL + "(" + strings.Join(tuples, ", ") + ") ORDER BY " + strings.Join(rs.keyCols, ", ")
 }
 
 // writtenRowCount is how many rows the write wrote, from its own result (mysql-returning.ts

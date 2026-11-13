@@ -20,7 +20,7 @@
 import type { AsyncConnection, AsyncConnectionPool, Rows, RunInfo } from '../exec-context';
 import type { ResolvedConnectionConfig, PoolFactory, PoolCloser } from '../connection-routing';
 // MySQL parses no RETURNING — the write→re-select derivation lives in ONE place for all five runtimes.
-import { buildMysqlReselect, bindReselect, writtenRowCount, checkRecovered } from './mysql-returning';
+import { buildMysqlReselect, bindReselect, writtenRowCount, checkRecovered, keyedSelectSql } from './mysql-returning';
 import { guardLeasedClient, guardIdlePoolErrors, type LeasedClientLike } from '../../connection-errors';
 import { defaultLogger } from '../../drivers/types';
 
@@ -277,6 +277,16 @@ function mysqlConnection(conn: MysqlPoolConnLike): AsyncConnection {
           const [pre] = await conn.query(reselect.selectSql, bindReselect(reselect.binds, bound, 0, 0));
           await conn.query(reselect.writeSql, bound);
           return rowsOf(pre);
+        }
+        if (reselect.lockSql !== '') {
+          // UPDATE…RETURNING: lock the rows its WHERE names and read their keys, write, then recover the
+          // written rows by THOSE keys (never by the WHERE re-evaluated after the write).
+          const keys = rowsOf((await conn.query(reselect.lockSql, bindReselect(reselect.lockBinds, bound, 0, 0)))[0]);
+          await conn.query(reselect.writeSql, bound);
+          if (keys.length === 0) return [];
+          const keyValues = keys.flatMap((k) => reselect.keyCols.map((c) => (k as Record<string, unknown>)[c]));
+          const [rows] = await conn.query(keyedSelectSql(reselect, keys.length), keyValues);
+          return checkRecovered(rowsOf(rows), keys.length, reselect.writeSql) as Rows;
         }
         if (reselect.anchorSql !== '') await conn.query(reselect.anchorSql);
         const [res] = await conn.query(reselect.writeSql, bound);

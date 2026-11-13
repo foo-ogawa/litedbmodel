@@ -142,6 +142,7 @@ const LIVE_TESTS = [
   'mysql_returning_bulk_auto_inc',
   'mysql_returning_composite_key',
   'mysql_returning_insert_ignore',
+  'mysql_returning_update_by_key',
   'one_transaction_owns_one_connection_mysql',
   'one_transaction_owns_one_connection_pg',
   'phase_c_connection_routing_and_config',

@@ -1260,6 +1260,7 @@ fn check_recovered(
 }
 
 /// The MySQL RETURNING re-select derived from a write's baked SQL + its `/*scp:pk=…;conflict=…*/` hint.
+#[derive(Default)]
 struct MysqlReselect {
     /// The write to execute (RETURNING clause + hint stripped — byte-clean for the prepared protocol).
     write_sql: String,
@@ -1274,6 +1275,14 @@ struct MysqlReselect {
     /// AUTO_INCREMENT ids are not consecutive, and anchoring the read view first hides the rows other
     /// sessions insert meanwhile from the recovering SELECT (mysql-returning.ts `anchorSql`).
     anchor_sql: String,
+    /// An UPDATE's lock-and-key step, run BEFORE the write (empty ⇒ none): `SELECT <pk> … WHERE <where>
+    /// … FOR UPDATE` names — and locks — exactly the rows the UPDATE is about to write (bound by
+    /// `lock_binds`). Its rows are recovered by THOSE keys: `select_sql` is then the head
+    /// `SELECT <cols> FROM <table> WHERE (<pk>) IN ` that [`keyed_select_sql`] completes.
+    lock_sql: String,
+    lock_binds: Vec<ReselectBind>,
+    /// The key columns `lock_sql` reads, in order (the declared PK).
+    key_cols: Vec<String>,
     /// Run the SELECT BEFORE the write instead of after. Only a DELETE needs this: its rows are gone
     /// once it has run, so the pre-image IS the written row set (the rows the DELETE removes).
     before: bool,
@@ -1451,8 +1460,7 @@ fn build_mysql_reselect(sql: &str) -> Result<Option<MysqlReselect>, SqlFailure> 
             select_sql,
             binds,
             written,
-            before: false,
-            anchor_sql: String::new(),
+            ..MysqlReselect::default()
         }))
     };
     // An insert-or-ignore is spelled `ON DUPLICATE KEY UPDATE c = c` on a single row — it reads like
@@ -1495,7 +1503,7 @@ fn build_mysql_reselect(sql: &str) -> Result<Option<MysqlReselect>, SqlFailure> 
                 write_sql,
                 binds: vec![ReselectBind::LastId],
                 written: Some(WrittenRows::Affected),
-                before: false,
+                ..MysqlReselect::default()
             }));
         }
         if !auto_inc.is_empty() && pk_cols.len() == 1 && pk_cols[0] == auto_inc {
@@ -1513,8 +1521,7 @@ fn build_mysql_reselect(sql: &str) -> Result<Option<MysqlReselect>, SqlFailure> 
                 ),
                 binds: vec![ReselectBind::LastId, ReselectBind::HighId],
                 written: Some(written),
-                before: false,
-                anchor_sql: String::new(),
+                ..MysqlReselect::default()
             }));
         }
         if pk_cols.is_empty() {
@@ -1553,9 +1560,8 @@ fn build_mysql_reselect(sql: &str) -> Result<Option<MysqlReselect>, SqlFailure> 
         return after(write_sql, plan, None);
     }
 
-    // update / delete — recover by the write's OWN WHERE predicate, bound from the write's own params.
-    // The UPDATE re-selects AFTER the write (the rows carry their new values); the DELETE re-selects
-    // BEFORE it, since afterwards there is nothing left to describe.
+    // update / delete — the rows the write's OWN WHERE predicate names, bound from the write's own
+    // params. The DELETE re-selects BEFORE it, since afterwards there is nothing left to describe.
     let Some(wpos) = wl.rfind(" where ") else {
         return Err(driver_failure(format!(
             "scp write(mysql): a write…RETURNING needs a WHERE to recover its rows ('{write_sql}')"
@@ -1563,18 +1569,46 @@ fn build_mysql_reselect(sql: &str) -> Result<Option<MysqlReselect>, SqlFailure> 
     };
     let where_sql = write_sql[wpos + " where ".len()..].trim().to_string();
     let leading = write_sql[..wpos].matches('?').count();
-    let binds = (0..where_sql.matches('?').count())
+    let binds: Vec<ReselectBind> = (0..where_sql.matches('?').count())
         .map(|i| ReselectBind::Param(leading + i))
         .collect();
-    let before = wl.starts_with("delete");
+    if wl.starts_with("delete") {
+        return Ok(Some(MysqlReselect {
+            select_sql: format!("SELECT {cols} FROM {table} WHERE {where_sql}{order_by}"),
+            write_sql,
+            binds,
+            before: true,
+            ..MysqlReselect::default()
+        }));
+    }
+    // The UPDATE: lock the rows its WHERE names and read their keys BEFORE the write, then recover the
+    // written rows (carrying their new values) by those keys — never by the WHERE re-evaluated after it.
+    if pk_cols.is_empty() {
+        return Err(driver_failure(format!(
+            "scp write(mysql): an UPDATE…RETURNING carries no pk hint, so the rows it writes cannot be keyed ('{write_sql}'). The producer must pass the model's declared primary key"
+        )));
+    }
+    let keys = pk_cols.join(", ");
     Ok(Some(MysqlReselect {
-        select_sql: format!("SELECT {cols} FROM {table} WHERE {where_sql}{order_by}"),
+        select_sql: format!("SELECT {cols} FROM {table} WHERE ({keys}) IN "),
+        lock_sql: format!("SELECT {keys} FROM {table} WHERE {where_sql}{order_by} FOR UPDATE"),
+        lock_binds: binds,
+        key_cols: pk_cols,
         write_sql,
-        binds,
-        written: None,
-        before,
-        anchor_sql: String::new(),
+        ..MysqlReselect::default()
     }))
+}
+
+/// An UPDATE's `select_sql` completed for `rows` locked keys (mysql-returning.ts `keyedSelectSql`): one
+/// `(?, …)` tuple per row, ordered by the declared PK.
+fn keyed_select_sql(rs: &MysqlReselect, rows: usize) -> String {
+    let tuple = format!("({})", vec!["?"; rs.key_cols.len()].join(", "));
+    format!(
+        "{}({}) ORDER BY {}",
+        rs.select_sql,
+        vec![tuple; rows].join(", "),
+        rs.key_cols.join(", ")
+    )
 }
 
 /// Strip a ` /*scp:pk=…*/` hint comment from a fragment.
@@ -1713,6 +1747,51 @@ async fn my_returning_on_conn(
             .await
             .map_err(|e| driver_failure(format!("mysql write [{}]: {e}", rs.write_sql)))?;
         return Ok(out);
+    }
+    if !rs.lock_sql.is_empty() {
+        // UPDATE…RETURNING: lock the rows its WHERE names and read their keys, write, then recover the
+        // written rows by THOSE keys (never by the WHERE re-evaluated after the write).
+        let lock_params: Vec<Value> = rs
+            .lock_binds
+            .iter()
+            .map(|b| match b {
+                ReselectBind::Param(i) => params.get(*i).cloned().unwrap_or(Value::Null),
+                // A lock is bound from the WHERE params only (no write has run yet).
+                _ => Value::Null,
+            })
+            .collect();
+        let keys = bind_my(sqlx::query(&rs.lock_sql), &lock_params)?
+            .fetch_all(&mut *conn)
+            .await
+            .map_err(|e| driver_failure(format!("mysql lock [{}]: {e}", rs.lock_sql)))?;
+        bind_my(sqlx::query(&rs.write_sql), params)?
+            .execute(&mut *conn)
+            .await
+            .map_err(|e| driver_failure(format!("mysql write [{}]: {e}", rs.write_sql)))?;
+        if keys.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut key_values: Vec<Value> = Vec::with_capacity(keys.len() * rs.key_cols.len());
+        for key in my_rows_to_wire(&keys)? {
+            let WireValue::Row(row) = key else {
+                return Err(driver_failure(format!(
+                    "mysql lock [{}]: not a row",
+                    rs.lock_sql
+                )));
+            };
+            key_values.extend(
+                row.entries
+                    .iter()
+                    .map(|(_, v)| crate::leaves::wire_to_value(v)),
+            );
+        }
+        let select_sql = keyed_select_sql(rs, keys.len());
+        let rows = bind_my(sqlx::query(&select_sql), &key_values)?
+            .fetch_all(&mut *conn)
+            .await
+            .map_err(|e| driver_failure(format!("mysql re-select [{select_sql}]: {e}")))?;
+        check_recovered(rows.len(), Some(keys.len() as i64), &rs.write_sql)?;
+        return my_rows_to_wire(&rows);
     }
     if !rs.anchor_sql.is_empty() {
         sqlx::query(&rs.anchor_sql)

@@ -443,6 +443,14 @@ class _MysqlReselect(NamedTuple):
     # AUTO_INCREMENT ids are not consecutive, and anchoring the read view first hides the rows other
     # sessions insert meanwhile from the recovering SELECT (mysql-returning.ts ``anchorSql``).
     anchor_sql: str = ""
+    # An UPDATE's lock-and-key step, run BEFORE the write ("" ⇒ none): ``SELECT <pk> … WHERE <where> …
+    # FOR UPDATE`` names — and locks — exactly the rows the UPDATE is about to write (bound by
+    # ``lock_binds``). Its rows are recovered by THOSE keys: ``select_sql`` is then the head
+    # ``SELECT <cols> FROM <table> WHERE (<pk>) IN `` that :func:`_keyed_select_sql` completes.
+    lock_sql: str = ""
+    lock_binds: List[Tuple[str, int]] = []
+    # The key columns ``lock_sql`` reads, in order (the declared PK).
+    key_cols: List[str] = []
 
 
 def _dollar_to_pyformat(sql: str) -> str:
@@ -542,7 +550,8 @@ def _build_mysql_reselect(sql: str):
       * insert-or-ignore (``;action=ignore``) → as create, and ONLY the rows it inserted (a conflict
         writes nothing, so it returns nothing);
       * updateMany → EVERY batch JOIN key column, re-bound from the SAME JSON payload;
-      * update → the write's OWN WHERE predicate (after the write — the rows carry their new values);
+      * update → the PK of every row its WHERE names, read and LOCKED (FOR UPDATE) before the write;
+        the written rows re-selected by those keys after it (never by the WHERE re-evaluated);
       * delete → the write's OWN WHERE predicate, selected BEFORE the write (afterwards there is
         nothing left to describe; that pre-image IS the set of rows the DELETE removes).
 
@@ -655,7 +664,27 @@ def _build_mysql_reselect(sql: str):
     where_sql = write_sql[where_pos + len(" where "):].strip()
     leading = write_sql[:where_pos].count("?")
     binds = [("param", leading + i) for i in range(where_sql.count("?"))]
-    return _MysqlReselect(write_sql, f"SELECT {cols} FROM {table} WHERE {where_sql}{order_by}", binds, None, wl.startswith("delete"))
+    if wl.startswith("delete"):
+        return _MysqlReselect(write_sql, f"SELECT {cols} FROM {table} WHERE {where_sql}{order_by}", binds, None, True)
+    # The UPDATE: lock the rows its WHERE names and read their keys BEFORE the write, then recover the
+    # written rows (carrying their new values) by those keys — never by the WHERE re-evaluated after it.
+    if not pk_cols:
+        raise ValueError(
+            f"scp write(mysql): an UPDATE…RETURNING carries no pk hint, so the rows it writes cannot be keyed "
+            f"({write_sql!r}). The producer must pass the model's declared primary key."
+        )
+    return _MysqlReselect(
+        write_sql, f"SELECT {cols} FROM {table} WHERE ({', '.join(pk_cols)}) IN ", [], None, False,
+        lock_sql=f"SELECT {', '.join(pk_cols)} FROM {table} WHERE {where_sql}{order_by} FOR UPDATE",
+        lock_binds=binds, key_cols=pk_cols,
+    )
+
+
+def _keyed_select_sql(rs: _MysqlReselect, rows: int) -> str:
+    """An UPDATE's ``select_sql`` completed for ``rows`` locked keys (mysql-returning.ts
+    ``keyedSelectSql``): one ``(?, …)`` tuple per row, ordered by the declared PK."""
+    tuple_ = "(" + ", ".join("?" for _ in rs.key_cols) + ")"
+    return f"{rs.select_sql}({', '.join(tuple_ for _ in range(rows))}) ORDER BY {', '.join(rs.key_cols)}"
 
 
 def _written_row_count(written: Optional[str], last_id: int, affected: int, found_rows: bool, write_sql: str) -> Optional[int]:
@@ -798,6 +827,18 @@ def _conn_returning(conn: Any, rs: _MysqlReselect, params: Sequence[Any], xform)
         cur.execute(xform(rs.write_sql), tuple(params))
         cur.close()
         return rows
+    if rs.lock_sql:
+        # UPDATE…RETURNING: lock the rows its WHERE names and read their keys, write, then recover the
+        # written rows by THOSE keys (never by the WHERE re-evaluated after the write).
+        keys = _conn_select(conn, xform(rs.lock_sql), _bind_reselect(rs.lock_binds, list(params), 0, 0))
+        cur = conn.cursor()
+        cur.execute(xform(rs.write_sql), tuple(params))
+        cur.close()
+        if not keys:
+            return []
+        key_values = [k[c] for k in keys for c in rs.key_cols]
+        rows = _conn_select(conn, xform(_keyed_select_sql(rs, len(keys))), key_values)
+        return _check_recovered(rows, len(keys), rs.write_sql)
     if rs.anchor_sql:
         _conn_select(conn, rs.anchor_sql, [])
     cur = conn.cursor()

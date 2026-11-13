@@ -162,4 +162,17 @@ final class MysqlReturningLiveTest extends TestCase
         $this->table('(id INT AUTO_INCREMENT PRIMARY KEY, uk VARCHAR(32) NOT NULL, tenant_id INT NOT NULL)');
         self::assertSame($mine, $this->rows($createMany, [$payload]), 'plain createMany');
     }
+
+    /** #361 — an UPDATE…RETURNING returns the rows it updated, keyed before the write. */
+    public function testUpdateReturnsTheRowsItUpdated(): void
+    {
+        $t = $this->t;
+        $this->table('(id INT PRIMARY KEY, state VARCHAR(16) NOT NULL)', "INSERT INTO {$t} (id, state) VALUES (1, 'open'), (2, 'open'), (3, 'done')");
+        // A state transition: the SET changes the WHERE column, so the WHERE no longer matches afterwards.
+        self::assertSame(
+            [['id' => '1', 'state' => 'claimed'], ['id' => '2', 'state' => 'claimed']],
+            $this->rows("UPDATE {$t} SET state = ? WHERE state = ? RETURNING id, state /*scp:pk=id;ai=*/", ['claimed', 'open']),
+            'state transition',
+        );
+    }
 }

@@ -105,6 +105,7 @@ const LIVE_TESTS = [
   'TestMysqlReturningBulkAutoIncLive',
   'TestMysqlReturningCompositeKeyLive',
   'TestMysqlReturningInsertIgnoreLive',
+  'TestMysqlReturningUpdateByKeyLive',
   'TestPhaseCConfigCharsetResetOnReleaseLiveMySQL',
   'TestPhaseCConfigConnectTimeoutBoundsWaitLive',
   'TestPhaseCConfigIdleTimeoutClosesIdleLive',

@@ -19,7 +19,8 @@
  *  |                  | was UPDATED) — one column of a composite key names other rows too   |           |
  *  | insert-or-ignore | as create, and ONLY the rows it inserted (`;action=ignore`): a       | after     |
  *  |                  | conflict writes nothing, so it returns nothing                      |           |
- *  | update           | the write's OWN WHERE predicate                                    | after     |
+ *  | update           | the PK of every row its WHERE names, read and LOCKED (FOR UPDATE)  | lock      |
+ *  |                  | before the write; the rows re-selected by those keys after it      | + after   |
  *  | updateMany       | EVERY batch JOIN key column, re-bound from the SAME JSON payload   | after     |
  *  | delete/deleteMany| the write's OWN WHERE predicate — **before** the write, since the   | BEFORE    |
  *  |                  | rows no longer exist once the DELETE has run                       |           |
@@ -124,6 +125,20 @@ export interface MysqlReselect {
    */
   readonly anchorSql: string;
   /**
+   * An UPDATE's lock-and-key step, run BEFORE the write (`''` ⇒ none): `SELECT <pk> … WHERE <where>
+   * … FOR UPDATE` names — and locks — exactly the rows the UPDATE is about to write, bound by
+   * {@link lockBinds}. The UPDATE then cannot be told apart from its own WHERE re-evaluated afterwards
+   * (an UPDATE that changes a WHERE column no longer matches it; one that runs in autocommit could
+   * match rows another session wrote meanwhile), so its rows are recovered by THESE keys:
+   * {@link selectSql} is then the head `SELECT <cols> FROM <table> WHERE (<pk>) IN ` that
+   * {@link keyedSelectSql} completes with one tuple per locked row.
+   */
+  readonly lockSql: string;
+  /** How to bind {@link lockSql}'s `?`s. */
+  readonly lockBinds: readonly ReselectBind[];
+  /** The key columns {@link lockSql} reads, in order (the declared PK). */
+  readonly keyCols: readonly string[];
+  /**
    * Run the SELECT BEFORE the write instead of after. Only a DELETE needs this: its rows are gone
    * once it has run, so the pre-image IS the written row set (the same rows the DELETE removes).
    */
@@ -203,7 +218,7 @@ export function buildMysqlReselect(sql: string): MysqlReselect | null {
   const orderBy = pk.length > 0 ? ` ORDER BY ${pk.join(', ')}` : '';
   const isBatch = lower.includes('json_table(');
   const done = (selectSql: string, binds: readonly ReselectBind[], written: WrittenRows | null = null, before = false, anchorSql = ''): MysqlReselect =>
-    ({ writeSql, selectSql, binds, written, before, anchorSql });
+    ({ writeSql, selectSql, binds, written, before, anchorSql, lockSql: '', lockBinds: [], keyCols: [] });
   const writeCols = insertCols(writeSql);
   /**
    * Recover a BATCH write's rows by reading its key TUPLES back out of the SAME JSON payload it bound —
@@ -283,9 +298,8 @@ export function buildMysqlReselect(sql: string): MysqlReselect | null {
     return jsonSelect(keys, 'JOIN key', null);
   }
 
-  // update / delete — by the write's OWN WHERE predicate, bound from the write's own params. The
-  // UPDATE re-selects AFTER the write (the rows carry their new values); the DELETE re-selects
-  // BEFORE it (afterwards there is nothing left to describe).
+  // update / delete — the rows the write's OWN WHERE predicate names, bound from the write's own
+  // params. The DELETE re-selects BEFORE it (afterwards there is nothing left to describe).
   const wherePos = lower.lastIndexOf(' where ');
   if (wherePos < 0) {
     throw new Error(`scp write(mysql): a ${lower.startsWith('delete') ? 'DELETE' : 'UPDATE'}…RETURNING needs a WHERE to recover its rows ('${writeSql.slice(0, 60)}…')`);
@@ -294,7 +308,30 @@ export function buildMysqlReselect(sql: string): MysqlReselect | null {
   const before = placeholders(writeSql.slice(0, wherePos));
   const binds: ReselectBind[] = [];
   for (let i = 0; i < placeholders(whereSql); i++) binds.push({ kind: 'param', index: before + i });
-  return done(`SELECT ${cols} FROM ${table} WHERE ${whereSql}${orderBy}`, binds, null, lower.startsWith('delete'));
+  if (lower.startsWith('delete')) return done(`SELECT ${cols} FROM ${table} WHERE ${whereSql}${orderBy}`, binds, null, true);
+  // The UPDATE: lock the rows its WHERE names and read their keys BEFORE the write, then recover the
+  // written rows (carrying their new values) by those keys — never by the WHERE re-evaluated after it.
+  if (pk.length === 0) {
+    throw new Error(
+      `scp write(mysql): an UPDATE…RETURNING carries no pk hint, so the rows it writes cannot be keyed ` +
+        `('${writeSql.slice(0, 60)}…'). The producer must pass the model's declared primary key.`,
+    );
+  }
+  return {
+    ...done(`SELECT ${cols} FROM ${table} WHERE (${pk.join(', ')}) IN `, []),
+    lockSql: `SELECT ${pk.join(', ')} FROM ${table} WHERE ${whereSql}${orderBy} FOR UPDATE`,
+    lockBinds: binds,
+    keyCols: pk,
+  };
+}
+
+/**
+ * {@link MysqlReselect.selectSql} completed for `rows` locked keys: one `(?, …)` tuple per row, in the
+ * declared PK order. Bind the locked rows' key values, row by row, in {@link MysqlReselect.keyCols} order.
+ */
+export function keyedSelectSql(reselect: MysqlReselect, rows: number): string {
+  const tuple = `(${reselect.keyCols.map(() => '?').join(', ')})`;
+  return `${reselect.selectSql}(${Array.from({ length: rows }, () => tuple).join(', ')}) ORDER BY ${reselect.keyCols.join(', ')}`;
 }
 
 /**

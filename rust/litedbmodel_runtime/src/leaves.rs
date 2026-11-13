@@ -149,10 +149,10 @@ pub fn with_ambient_transaction<R>(
 // ── WireValue ↔ Value boundary codec (the ONLY place the two value models meet) ───────────────────
 
 /// A BC-owned [`WireValue`] → bc [`Value`] for the SQL bind PARAMS ONLY (the driver's param binder
-/// takes [`Value`]). The wire carries a number natively, so an `Int` maps to the driver's INTEGER model
+/// takes [`Value`] — and the MySQL RETURNING emulation re-binds the keys it read, `livedb.rs`). The wire carries a number natively, so an `Int` maps to the driver's INTEGER model
 /// and a `Float` to its REAL model with nothing parsed. Read RESULTS never use this — they stay
 /// `WireValue`.
-fn wire_to_value(w: &WireValue) -> Value {
+pub(crate) fn wire_to_value(w: &WireValue) -> Value {
     match w {
         WireValue::Str(s) => Value::Str(s.to_string()),
         WireValue::Int(i) => Value::Int(*i),

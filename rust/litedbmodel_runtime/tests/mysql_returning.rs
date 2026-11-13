@@ -238,3 +238,35 @@ fn mysql_returning_bulk_auto_inc() {
     d.exec_ddl(&[format!("DROP TABLE IF EXISTS {t}")])
         .expect("drop");
 }
+
+/// #361 — an UPDATE…RETURNING returns the rows it updated, keyed before the write.
+#[test]
+fn mysql_returning_update_by_key() {
+    let d = driver();
+    let t = tbl("upd");
+    table(
+        &d,
+        &t,
+        "(id INT PRIMARY KEY, state VARCHAR(16) NOT NULL)",
+        &[format!(
+            "INSERT INTO {t} (id, state) VALUES (1, 'open'), (2, 'open'), (3, 'done')"
+        )],
+    );
+    // A state transition: the SET changes the WHERE column, so the WHERE no longer matches afterwards.
+    let got = rows(
+        &d,
+        &format!("UPDATE {t} SET state = ? WHERE state = ? RETURNING id, state /*scp:pk=id;ai=*/"),
+        &[s("claimed"), s("open")],
+    )
+    .expect("state transition");
+    assert_eq!(
+        got,
+        vec![
+            vec!["id=1".to_string(), "state=claimed".to_string()],
+            vec!["id=2".to_string(), "state=claimed".to_string()]
+        ],
+        "state transition"
+    );
+    d.exec_ddl(&[format!("DROP TABLE IF EXISTS {t}")])
+        .expect("drop");
+}
