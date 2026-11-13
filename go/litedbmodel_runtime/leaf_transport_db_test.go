@@ -291,6 +291,62 @@ func TestExecuteSQL_DynamicWhereContinuesBoundedWhere(t *testing.T) {
 	}
 }
 
+// #346 — a wire int param binds as EXACTLY the int64 the caller passed. The transport used to widen it to
+// float64 (the old JS-number convention) before binding, so an id above 2^53 was rounded to its neighbour
+// and `WHERE id = ?` read — and UPDATE wrote — a DIFFERENT row. Every id in the suite sat below 2^53, so
+// the rounding never showed. Proven against a real sqlite on the three param shapes the transport binds:
+// a scalar, a list element (the `json_each(?)` JSON array), a row field (the batch-rows JSON), plus the
+// PostgreSQL native-array element.
+func TestExecuteSQL_Int64ParamAbove2Pow53IsExact(t *testing.T) {
+	db, ctx := openBoundT(t)
+	defer db.Close()
+	const neighbour, target int64 = 9007199254740992, 9007199254740993 // 2^53 and 2^53+1
+	if _, err := db.Exec("INSERT INTO t (id, v) VALUES (?, 'neighbour'), (?, 'target')", neighbour, target); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	only := func(what string, out wire.WireValue, err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("%s: %v", what, err)
+		}
+		lp := out.AsList()
+		if lp.Kind != wireProbeGot || lp.Got.Len() != 1 {
+			t.Fatalf("%s: want exactly the target row, got kind=%d len=%d", what, lp.Kind, lp.Got.Len())
+		}
+		if v := lp.Got.ElemRow(0).Got.ProbeString("v"); v.Got != "target" {
+			t.Fatalf("%s: read row %q, want \"target\"", what, v.Got)
+		}
+	}
+
+	// scalar
+	out, err := ExecuteSQL(ctx, sqlPayload([]wire.WireValue{wire.WireInt(target)}, "SELECT v FROM t WHERE id = ?", false))
+	only("scalar id", out, err)
+	// list element (MySQL/SQLite bind a scalar list as ONE JSON array string)
+	ids := wire.WireListOf([]wire.WireValue{wire.WireInt(target)})
+	out, err = ExecuteSQL(ctx, sqlPayload([]wire.WireValue{ids}, "SELECT v FROM t WHERE id IN (SELECT value FROM json_each(?))", false))
+	only("list id", out, err)
+	// a write by id touches the requested row, not its neighbour
+	if _, err := ExecuteSQL(ctx, sqlPayload([]wire.WireValue{wire.WireStr("updated"), wire.WireInt(target)}, "UPDATE t SET v = ? WHERE id = ?", true)); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	var nv, tv string
+	if err := db.QueryRow("SELECT (SELECT v FROM t WHERE id = ?), (SELECT v FROM t WHERE id = ?)", neighbour, target).Scan(&nv, &tv); err != nil {
+		t.Fatalf("readback: %v", err)
+	}
+	if nv != "neighbour" || tv != "updated" {
+		t.Fatalf("UPDATE by id %d: neighbour=%q target=%q, want neighbour untouched and target updated", target, nv, tv)
+	}
+
+	// row field (batch rows JSON) and the PostgreSQL native-array element
+	row := wire.WireListOf([]wire.WireValue{wire.WireRowOf([]wire.WireField{{Key: "id", Val: wire.WireInt(target)}})})
+	if got, want := leafParam(row, "sqlite"), `[{"id":9007199254740993}]`; got != want {
+		t.Fatalf("row-field leafParam = %#v, want %q", got, want)
+	}
+	if got := leafParam(ids, "postgres"); !reflect.DeepEqual(got, []any{target}) {
+		t.Fatalf("postgres array leafParam = %#v, want []any{int64(%d)}", got, target)
+	}
+}
+
 // #205 — a field ABSENT from a PRESENT struct, or present as the WRONG VARIANT, is an ABI BREAK, never
 // an absent VALUE. bc types a port by the literal wired into it and REJECTS a partial struct, so a
 // generated module always spells every field of every struct it wires, with the type the port declares

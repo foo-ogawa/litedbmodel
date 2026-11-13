@@ -832,8 +832,8 @@ func isTupleSet(arr []bc.Value) bool {
 // ── wire ↔ Value bridge (transport edge only) ──────────────────────────────────────────────────────
 
 // valueToWire lowers a bc Value into the BC-OWNED wire representation (recursive for rows/lists). Row
-// cells arrive from the DB scan as float64/string/bool/nil (value.go scanValue); grouped parents carry
-// nested []Value / *Obj.
+// cells arrive from the DB scan as int64/float64/string/bool/nil (sqldb.go scanValue); grouped parents
+// carry nested []Value / *Obj.
 func valueToWire(v bc.Value) wire.WireValue {
 	switch t := v.(type) {
 	case nil:
@@ -868,7 +868,9 @@ func valueToWire(v bc.Value) wire.WireValue {
 // matches a non-null value, so probe order is not ambiguous.
 func wireToValue(w wire.WireValue) bc.Value {
 	if p := w.AsInt(); p.Kind == wireProbeGot {
-		return float64(p.Got) // the row-scan convention: a JS-number float64
+		// EXACT int64, the same kind scanValue gives an INTEGER column. Widening to float64 rounded an id
+		// above 2^53 to its neighbour, so `WHERE id = ?` bound a different row (#346).
+		return p.Got
 	}
 	if p := w.AsFloat(); p.Kind == wireProbeGot {
 		return p.Got
@@ -904,7 +906,7 @@ func wireRowToObj(r wire.WireRow) *bc.Obj {
 // wireFieldToValue classifies one wire row field via the probe API.
 func wireFieldToValue(r wire.WireRow, k string) bc.Value {
 	if p := r.ProbeInt(k); p.Kind == wireProbeGot {
-		return float64(p.Got)
+		return p.Got // exact int64 (see wireToValue)
 	}
 	if p := r.ProbeFloat(k); p.Kind == wireProbeGot {
 		return p.Got
@@ -931,7 +933,7 @@ func wireFieldToValue(r wire.WireRow, k string) bc.Value {
 // wireElemToValue classifies one wire list element via the probe API.
 func wireElemToValue(l wire.WireList, i int) bc.Value {
 	if p := l.ElemInt(i); p.Kind == wireProbeGot {
-		return float64(p.Got)
+		return p.Got // exact int64 (see wireToValue)
 	}
 	if p := l.ElemFloat(i); p.Kind == wireProbeGot {
 		return p.Got
