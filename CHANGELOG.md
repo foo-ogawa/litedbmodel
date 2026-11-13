@@ -5,6 +5,80 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.2.15] - 2026-11-13
+
+**依存とセキュリティの更新、および全言語のセキュリティ監査で確認した欠陥の修正。** MySQL の RETURNING の emulation、
+MySQL の JSON の param による key の照合、SQL の断片の埋め込み、トランザクションの pin、接続エラーのあとの再試行を修正した。
+API リファレンスの生成を typedoc から embedoc に移行した。
+Closes #335, #343〜#383。
+
+### Security
+
+- `sql` タグ付きテンプレートが、JSON 由来の `{_tag:'SqlFragment'}` や `{TABLE_NAME}` の形の値を SQL として埋め込んでいた。
+  `sql` が作った断片だけを断片として扱い、それ以外の値は bind する（#344）。
+- SCP の makeSQL の組み立てが、実行時の `{sql, params}` の形の値を SQL として埋め込んでいた。入れ子の makeSQL は
+  `nestedMakeSQL()` で印を付けたものだけを受け付ける（#345）。
+- `find()` / `buildSelectSQL()` の `limit`・`offset` を、検査せずに SQL に埋め込んでいた。0 以上の整数でなければ
+  `TypeError` を送出し、何も送信しない（#356）。
+- Python の MySQL で `charset` にマルチバイトの文字コードを指定すると、bind した値が SQL として実行されえた。charset を
+  `pymysql.connect` に渡し、`SET NAMES` を使わない（#353）。
+- MySQL の RETURNING の emulation（TS・go・rust・python・php、および v1 の driver）が、書き込んでいない行を返していた。
+  - 複合の衝突 key・JOIN key・PK を最初の列だけで再取得していた。全列で照合する（#358）。
+  - insert-or-ignore で、書き込まなかった既存の（他のテナントの）行を返していた。素の INSERT と重複キーのエラー（1062）で
+    判定し、どの分離レベルでも書き込んだ行だけを返す（#359）。
+  - createMany で AUTO_INCREMENT の id の連続を仮定し、並行する他のセッションの行を返していた。最初の id から読み、
+    書き込んだ行数と照合する（#360）。
+  - UPDATE を書き込み後に自身の WHERE で再評価し、状態遷移の更新で空の結果を返していた。書き込み前に対象行をロックして
+    key を取得する（#361）。
+  - DELETE の pre-image をロックせずに無条件に返し、削除していない行を削除済みとして報告していた。ロックして読み、
+    削除した行数と照合する（#362）。
+  - v1 の driver の upsert が id+1 の行も返していた。v1 の driver の複製を削除し、SCP と同じ executor で実行する（#367）。
+  - 複数行の VALUES の INSERT を最初の行の key だけで再取得していた（#382）。
+  - バッチの再取得が key を `JSON_UNQUOTE` の文字列で比較し、BIGINT を DOUBLE で照合していた。書き込みの宣言どおりの
+    型で比較する（#379）。
+- MySQL の JSON の param による key の照合（IN リスト・tuple IN・バッチ UPDATE の JOIN）が BIGINT / DECIMAL の key を
+  DOUBLE で比較し、近い値の他のテナントの行の読み取り・更新・削除が発生していた。列の宣言型で読み、型の情報が無い場合も
+  DOUBLE の比較にしない（#376、#378、#381）。2^63 以上の BigInt は JSON の数字の文字列で送信する（#383）。
+- SCP の複合 PK の deleteMany が key の直積を削除し、PK の列が欠けた tuple では全テナントの行を削除していた。tuple の
+  まま照合し、欠けた列があれば例外を送出する（#377）。
+- v1 の updateMany の returning が、複合 key を列ごとの IN で照合し、更新していない行の PK を返していた（#375）。
+- トランザクションの pin が実行コンテキストごとに分かれておらず、独立したコンテキストの文が別の DB のトランザクションで
+  実行されていた（php #351、python #371）。
+- go: leaf の transport が int64 の param を float64 に丸めていた（#346）。トランザクション本体の panic で BEGIN が開いた
+  ままの接続を pool に戻していた（#347）。txStmtCache の map の競合でプロセスが停止していた（#348）。
+- rust: PG の binder が値を切り詰め・別の型として書き込んでいた（#349）。非 ASCII の uuid の param で panic していた（#350）。
+- SQL middleware の state（Logger の entries）を scope の外でプロセス全体に保持し、他のリクエストから参照できた。
+  `Middleware.run` を registry の scope にした（5 言語、#364）。
+- 公開する宣言範囲の下限を、既知の脆弱な版を含まないように引き上げた。npm の peer `mysql2 ^3.23.1`・`pg ^8.4.0`、
+  PyPI `pymysql>=1.1.1`、crates `tokio 1.53.3`・`sqlx 0.8.1`・`tokio-postgres 0.7.18`・`chrono 0.4.20`（#365）。
+
+### Fixed
+
+- v1 の `execute` が副作用のある SELECT（関数の呼び出し、`COUNT(*)` を含む）を接続エラーのあとに再送し、コミット済みの
+  書き込みが二重に実行されていた。reader に送ってよいか（`isReadOnlyStatement`）と再送してよいか（`isResendableStatement`）を
+  分けた。FOR UPDATE / FOR SHARE / INTO を含む SELECT は writer に送る（5 言語、#366）。
+- 接続エラーのあとの再試行が、接続を確認せずに本番の文を送っていた。`SELECT 1` で確認した接続でだけ文を送り、確認に
+  失敗した接続は破棄して `retryLimit` まで取り直す（5 言語、#368）。PostgreSQL の backend の終了（SQLSTATE 57P01）を
+  接続エラーとして扱う（#380）。
+- `createDBBase` / `Base.setLimitConfig` で設定した `findHardLimit`・`hasManyHardLimit` が効いていなかった（#354）。
+- SCP の経路で `DBModel.withWriter()` の中の読み取りが reader に送られていた（#355）。
+- lazy relation で FK が NULL のレコードが、key が文字列 `'null'` の行に結び付いていた（#357）。
+- php: `withTransaction` / `withTransactionDecided` の入れ子が外のトランザクションに合流していなかった（#352）。
+- python: live driver が NUMERIC / DECIMAL を float に丸め、bytes を置換で decode していた（#363）。`transaction()` が
+  本体のアプリの例外を `SqlFailure` に包み替えていた（#373）。
+- rust: MySQL の DECIMAL の列を読めず、BIGINT UNSIGNED の 2^63 以上が負の値になっていた（#372）。
+- `npm run verify` が起動時の自己検査で停止していた（`audit:check` を STEPS に追加、#374）。
+- api-guide.md の SKIP へのリンクが切れていた（#370）。
+
+### Changed
+
+- API リファレンス（docs/api）を embedoc 0.14.13 の typescript datasource で生成する。typedoc・typedoc-plugin-markdown・
+  typedoc.json を削除し、minimatch の audit の例外を解消した（#369、#335）。`npm run docs:watch` は削除した。
+- MySQL で RETURNING を求める書き込みは、回収の文と同じトランザクション（呼び出し側のもの、無ければ開く）で実行する。
+  v1 の MySQL で PK の hint の無い `DBModel.execute('INSERT … RETURNING …')` は、行を特定できないため送信前に例外を送出する。
+- rust: BIGINT UNSIGNED の 2^63 以上の値は、i64 に収まらないため値を示すエラーにする。
+- 依存を範囲内で最新に更新した（npm・cargo、#343）。behavior-contracts を 0.11.21 に更新した（5 言語）。
+
 ## [2.2.14] - 2026-11-07
 
 **SCP 経路の `getCurrentConnection()` が SQL を実行しなかったのを直す。`execute()` の `RETURNING` 付きの書き込みが reader へ送られ、送り直されていたのを直す。確保済みの接続でトランザクションを開く `acquireConnection()` と `TransactionOptions.connection` を追加する。**
