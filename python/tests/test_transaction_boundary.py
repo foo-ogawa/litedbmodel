@@ -36,6 +36,7 @@ from litedbmodel_runtime import (
     transaction,
 )
 from litedbmodel_runtime.driver import SqliteDriver, _SqliteTxConnection
+from litedbmodel_runtime.leaves import make_handlers
 
 
 ISO_TBL = "scp_tx_boundary_py"
@@ -93,11 +94,11 @@ def _make_driver(sink):
     return _RecSqliteDriver(conn, sink)
 
 
-def _do_op(id_, worker, seq):
+def _do_op(ctx, id_, worker, seq):
     """One guarded INSERT through the PRODUCTION guarded write seam (:func:`run_guarded`) on the ambient
     pinned tx ctx — the same path a user-facing write inside ``transaction()`` rides. Outside a boundary
     the ambient pin is absent, so the guard fires (:class:`WriteOutsideTransactionError`)."""
-    return run_guarded(current_context(), _INSERT_SQL, [id_, worker, seq], "WRITE", ISO_TBL)
+    return run_guarded(current_context(ctx), _INSERT_SQL, [id_, worker, seq], "WRITE", ISO_TBL)
 
 
 def _read_rows(driver):
@@ -113,7 +114,7 @@ def test_multi_op_boundary_one_begin_one_commit():
     driver = _make_driver(sink)
     ctx = context_for_driver(driver)
 
-    result = transaction(ctx, lambda: [_do_op(100, 1, 0), _do_op(101, 1, 1)], TransactionOptions(), "sqlite")
+    result = transaction(ctx, lambda: [_do_op(ctx, 100, 1, 0), _do_op(ctx, 101, 1, 1)], TransactionOptions(), "sqlite")
 
     assert [r.changes for r in result] == [1, 1]
     # N ops in one boundary ⇒ ONE begin_tx + ONE commit on ONE tx handle (the ambient JOIN).
@@ -135,7 +136,7 @@ def test_multi_op_boundary_opB_fail_rolls_back_opA():
     ctx = context_for_driver(driver)
 
     with pytest.raises(Exception):
-        transaction(ctx, lambda: [_do_op(200, 2, 0), _do_op(201, 2, 1)], TransactionOptions(retry_on_error=False), "sqlite")
+        transaction(ctx, lambda: [_do_op(ctx, 200, 2, 0), _do_op(ctx, 201, 2, 1)], TransactionOptions(retry_on_error=False), "sqlite")
 
     assert sink["begin_tx"] == 1
     assert sink["commits"] == 0
@@ -151,11 +152,11 @@ def test_multi_op_boundary_opB_fail_rolls_back_opA():
 def test_guard_outside_boundary_rejects_write():
     sink = _fresh_sink()
     driver = _make_driver(sink)
-    context_for_driver(driver)
+    ctx = context_for_driver(driver)
     # A bare guarded write OUTSIDE any transaction() → WriteOutsideTransactionError (the ambient pin is
-    # absent, so current_context() is None and the guard fires before any SQL), nothing written.
+    # absent, so current_context(ctx) is None and the guard fires before any SQL), nothing written.
     with pytest.raises(WriteOutsideTransactionError):
-        _do_op(300, 3, 0)
+        _do_op(ctx, 300, 3, 0)
     assert _read_rows(driver) == []
 
 
@@ -166,10 +167,10 @@ def test_guard_read_only_inside_boundary_rejects_write():
     # Read-only-scoped write inside a boundary → WriteInReadOnlyContextError (read-only checked first).
 
     def body():
-        ambient = current_context()  # the pinned tx ctx
+        ambient = current_context(ctx)  # the pinned tx ctx
         ro = ambient.with_read_only()
         # Pin the read-only ctx as the ambient so the guard (which reads the ambient markers) sees it.
-        return run_with_pinned_context(ro, lambda: _do_op(301, 3, 0))
+        return run_with_pinned_context(ro, lambda: _do_op(ctx, 301, 3, 0))
 
     with pytest.raises(WriteInReadOnlyContextError):
         transaction(ctx, body, TransactionOptions(retry_on_error=False), "sqlite")
@@ -179,7 +180,7 @@ def test_guard_inside_boundary_allows_write():
     sink = _fresh_sink()
     driver = _make_driver(sink)
     ctx = context_for_driver(driver)
-    r = transaction(ctx, lambda: _do_op(302, 3, 0), TransactionOptions(), "sqlite")
+    r = transaction(ctx, lambda: _do_op(ctx, 302, 3, 0), TransactionOptions(), "sqlite")
     assert r.changes == 1
     assert _read_rows(driver) == [(302, 3)]
 
@@ -193,9 +194,9 @@ def test_nested_transaction_one_begin_commit():
     ctx = context_for_driver(driver)
 
     def outer():
-        _do_op(500, 5, 0)
+        _do_op(ctx, 500, 5, 0)
         # A NESTED transaction() JOINs the outer — no new begin_tx/commit.
-        return transaction(ctx, lambda: _do_op(501, 5, 1), TransactionOptions(), "sqlite")
+        return transaction(ctx, lambda: _do_op(ctx, 501, 5, 1), TransactionOptions(), "sqlite")
 
     transaction(ctx, outer, TransactionOptions(), "sqlite")
     assert sink["begin_tx"] == 1
@@ -212,14 +213,76 @@ def test_nested_inner_error_rolls_back_whole_tx():
     ctx = context_for_driver(driver)
 
     def outer():
-        _do_op(600, 6, 0)
-        return transaction(ctx, lambda: _do_op(601, 6, 1), TransactionOptions(), "sqlite")
+        _do_op(ctx, 600, 6, 0)
+        return transaction(ctx, lambda: _do_op(ctx, 601, 6, 1), TransactionOptions(), "sqlite")
 
     with pytest.raises(Exception):
         transaction(ctx, outer, TransactionOptions(retry_on_error=False), "sqlite")
     assert sink["commits"] == 0
     assert sink["rolls"] == 1
     assert _read_rows(driver) == [], "an inner error rolls back the WHOLE tx (id=600 absent)"
+
+
+# ── (3b) a transaction is joined only by contexts of its own owner (#371) ──────
+
+_OWNER_TBL = "scp_tx_owner_py"
+_OWNER_READ = {"sql": f"SELECT id, owner FROM {_OWNER_TBL} ORDER BY id", "params": []}
+
+
+def _owner_write(id_, owner):
+    return {
+        "sql": f"INSERT INTO {_OWNER_TBL} (id, owner) VALUES (?, ?)",
+        "params": [id_, owner],
+        "opts": {"db": None, "whereDynamic": None, "write": {"returning": False}, "guard": None},
+    }
+
+
+def _owner_driver(owner):
+    driver = SqliteDriver.in_memory([f"CREATE TABLE {_OWNER_TBL} (id INTEGER PRIMARY KEY, owner TEXT NOT NULL)"])
+    driver.conn.execute(f"INSERT INTO {_OWNER_TBL} (id, owner) VALUES (1, ?)", [owner])
+    return driver
+
+
+def _owner_rows(driver):
+    return [tuple(r) for r in driver.conn.execute(f"SELECT id, owner FROM {_OWNER_TBL} ORDER BY id").fetchall()]
+
+
+def test_a_leaf_bound_to_another_context_reads_its_own_database_inside_a_transaction():
+    drv_a, drv_b = _owner_driver("A"), _owner_driver("B")
+    ctx_a, ctx_b = context_for_driver(drv_a), context_for_driver(drv_b)
+    exec_b = make_handlers(ctx_b, "sqlite")["executeSQL"]
+    # Another ctx over A's driver has A's owner: it joins A's transaction and sees its uncommitted row.
+    exec_a = make_handlers(context_for_driver(drv_a), "sqlite")["executeSQL"]
+
+    def body():
+        exec_a(_owner_write(2, "A-uncommitted"), {})
+        return exec_b(_OWNER_READ, {}), exec_a(_OWNER_READ, {})
+
+    seen_b, seen_a = transaction(ctx_a, body, TransactionOptions(), "sqlite")
+
+    assert seen_b == {"ok": [{"id": 1, "owner": "B"}]}, "a B-bound leaf inside A's transaction must read B"
+    assert seen_a == {"ok": [{"id": 1, "owner": "A"}, {"id": 2, "owner": "A-uncommitted"}]}
+
+
+def test_a_nested_transaction_on_another_context_writes_and_commits_on_its_own_database():
+    drv_a, drv_b = _owner_driver("A"), _owner_driver("B")
+    ctx_a, ctx_b = context_for_driver(drv_a), context_for_driver(drv_b)
+    exec_b = make_handlers(ctx_b, "sqlite")["executeSQL"]
+
+    class _OuterFails(Exception):
+        pass
+
+    def body():
+        transaction(ctx_b, lambda: exec_b(_owner_write(2, "via-B"), {}), TransactionOptions(), "sqlite")
+        raise _OuterFails()
+
+    with pytest.raises(Exception) as raised:
+        transaction(ctx_a, body, TransactionOptions(retry_on_error=False), "sqlite")
+    assert isinstance(raised.value.__cause__, _OuterFails), "A must fail on its own body error"
+
+    # B's transaction is its own: its write landed in B and committed even though A rolled back.
+    assert _owner_rows(drv_b) == [(1, "B"), (2, "via-B")]
+    assert _owner_rows(drv_a) == [(1, "A")]
 
 
 # ── (4) rollback_only (dry-run) ────────────────────────────────────────────────
@@ -229,7 +292,7 @@ def test_rollback_only_returns_value_but_commits_nothing():
     sink = _fresh_sink()
     driver = _make_driver(sink)
     ctx = context_for_driver(driver)
-    r = transaction(ctx, lambda: _do_op(700, 7, 0), TransactionOptions(rollback_only=True), "sqlite")
+    r = transaction(ctx, lambda: _do_op(ctx, 700, 7, 0), TransactionOptions(rollback_only=True), "sqlite")
     assert r.changes == 1  # the body's own view: its statement ran (before the boundary rolled back)
     # …but the boundary ROLLED BACK, so nothing persisted.
     assert sink["begin_tx"] == 1
@@ -290,7 +353,7 @@ def _run_with_commit_errors(errors):
 
     def body():
         runs.append(1)
-        return _do_op(800 + len(runs), 8, 0)
+        return _do_op(ctx, 800 + len(runs), 8, 0)
 
     opts = TransactionOptions(retry_limit=3, retry_duration=0)
     try:
@@ -490,8 +553,8 @@ def test_statement_from_a_leaked_ctx_is_refused_between_the_body_and_the_commit(
     ctx, dialect, sent_ids = make_ctx(attempt)
 
     def body():
-        leaked.append(current_context())  # the ctx escapes the body (e.g. onto a thread left running)
-        return _do_op(1, 1, 0)
+        leaked.append(current_context(ctx))  # the ctx escapes the body (e.g. onto a thread left running)
+        return _do_op(ctx, 1, 1, 0)
 
     transaction(ctx, body, TransactionOptions(), dialect)
 
@@ -540,8 +603,8 @@ def test_statement_still_running_when_the_body_returns_rolls_back_and_raises(mak
 
     def body():
         body_calls.append(1)
-        _do_op(1, 1, 0)
-        leaked = current_context()
+        _do_op(ctx, 1, 1, 0)
+        leaked = current_context(ctx)
 
         def worker():
             try:
@@ -579,7 +642,7 @@ def test_statement_still_running_when_the_body_raises_a_retryable_error_is_not_r
 
     def body():
         body_calls.append(1)
-        leaked = current_context()
+        leaked = current_context(ctx)
         threading.Thread(target=lambda: run(leaked, _INSERT_SQL, [777, 7, 7], WRITE_INTENT)).start()
         assert started.wait(10)  # the statement is running in the DB when the body fails
         threading.Timer(0.2, release.set).start()
@@ -602,8 +665,8 @@ def test_every_statement_awaited_inside_the_body_still_commits(make_ctx):
     ctx, dialect, sent_ids, started, release, statements = _gated_ctx(make_ctx)
 
     def body():
-        _do_op(1, 1, 0)
-        leaked = current_context()
+        _do_op(ctx, 1, 1, 0)
+        leaked = current_context(ctx)
         worker = threading.Thread(target=lambda: run(leaked, _INSERT_SQL, [777, 7, 7], WRITE_INTENT))
         worker.start()
         assert started.wait(10)

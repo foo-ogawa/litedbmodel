@@ -426,7 +426,7 @@ def test_c1_writer_sticky_is_per_thread_live():
 
             def committer():
                 started.wait()
-                transaction(ctx, lambda: run_guarded(current_context(), d["insert"], [100, "mine"], "INSERT"), TransactionOptions(), name)
+                transaction(ctx, lambda: run_guarded(current_context(ctx), d["insert"], [100, "mine"], "INSERT"), TransactionOptions(), name)
                 committed.set()
                 first = execute(ctx, d["select_val"], [100], _READ)
                 first_pool = tlog.last("committer")
@@ -470,7 +470,7 @@ def test_c1_concurrent_transactions_each_own_a_connection():
 
             def tx_thread(my_id):
                 def body():
-                    tx_ctx = current_context()
+                    tx_ctx = current_context(ctx)
                     run_guarded(tx_ctx, d["insert"], [my_id, "tx"], "INSERT")
                     sid = execute(tx_ctx, d["session_id"], [], _READ)[0]["sid"]
                     all_open.wait()  # every transaction is open and has written, none committed
@@ -481,7 +481,7 @@ def test_c1_concurrent_transactions_each_own_a_connection():
                 return lambda: transaction(ctx, body, TransactionOptions(), name)
 
             def outside():
-                assert current_context() is None  # another thread's tx pin is not visible here
+                assert current_context(ctx) is None  # another thread's tx pin is not visible here
                 all_open.wait()
                 sid = execute(ctx, d["session_id"], [], _READ)[0]["sid"]
                 seen = [int(r["id"]) for r in execute(ctx, d["select_ids"], [200, 300], _READ)]
@@ -520,7 +520,7 @@ def test_c1_pool_contention_waits_then_succeeds():
 
             def tx_thread(my_id):
                 def body():
-                    tx_ctx = current_context()
+                    tx_ctx = current_context(ctx)
                     run_guarded(tx_ctx, d["insert"], [my_id, "c%d" % my_id], "INSERT")
                     execute(tx_ctx, d["sleep"], [], _READ)  # hold the connection so others must wait
                     observe()
@@ -622,8 +622,8 @@ def test_c2_named_db_tx_pin_takes_precedence_over_routing():
         def body():
             # A write AND a read inside the tx — both must run on the ONE pinned tx connection (from the
             # B writer pool), NOT fan out to the B reader. Operations JOIN the ambient tx via the pinned
-            # ctx in the contextvar (current_context()); a bare outer-ctx call would NOT see the pin.
-            tx_ctx = current_context()
+            # ctx in the contextvar (current_context(ctx)); a bare outer-ctx call would NOT see the pin.
+            tx_ctx = current_context(ctx)
             run(tx_ctx, "INSERT INTO %s (id, val) VALUES (?, ?)" % MY_TBL, [1, "x"], StatementIntent(write=True, db="B"))
             rows = execute(tx_ctx, "SELECT val FROM %s WHERE id = ?" % MY_TBL, [1], StatementIntent(write=False, db="B"))
             assert rows[0]["val"] == "x"  # read-your-own-write inside the tx (same connection)

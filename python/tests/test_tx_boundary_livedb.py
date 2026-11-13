@@ -184,10 +184,11 @@ def _op(driver, dialect, id_, worker, seq):
     # One guarded INSERT through the PRODUCTION guarded write seam (:func:`run_guarded`) on the ambient
     # pinned tx ctx — the same seam a user-facing write inside ``transaction()`` rides. Live drivers
     # expect dialect placeholders (PG $N, MySQL ?), which each rewrites to %s at the seam. Outside a
-    # boundary the ambient pin is absent (current_context() is None) so the guard fires.
+    # boundary the ambient pin is absent (current_context(...) is None) so the guard fires. A fresh ctx
+    # over the driver has the transaction's owner (the driver), so it resolves the pinned tx ctx.
     ph = "($1, $2, $3)" if dialect == "postgres" else "(?, ?, ?)"
     sql = f"INSERT INTO {ISO_TBL} (id, worker, seq) VALUES {ph}"
-    return run_guarded(current_context(), sql, [id_, worker, seq], "WRITE", ISO_TBL)
+    return run_guarded(current_context(context_for_driver(driver)), sql, [id_, worker, seq], "WRITE", ISO_TBL)
 
 
 # ── (1) MULTI-OP ATOMICITY ──────────────────────────────────────────────────────
@@ -229,7 +230,7 @@ def _guard_live(driver, dialect):
         _op(driver, dialect, 300, 3, 0)
     # Read-only-scoped write inside a transaction() → WriteInReadOnly (read-only first).
     def ro_body():
-        ro = current_context().with_read_only()
+        ro = current_context(ctx).with_read_only()
         with pytest.raises(WriteInReadOnlyContextError):
             run_with_pinned_context(ro, lambda: _op(driver, dialect, 301, 3, 0))
         return 0
@@ -256,9 +257,9 @@ def _isolation_behavior(driver, dialect):
     # REPEATABLE READ: the two in-tx reads MUST match despite the concurrent commit.
     reset_row()
     def rr_body():
-        first = read_seq(current_context())
+        first = read_seq(current_context(ctx))
         driver.prepare(f"UPDATE {ISO_TBL} SET seq = 99 WHERE id = 1").run([])  # concurrent committed update
-        second = read_seq(current_context())
+        second = read_seq(current_context(ctx))
         assert first == second, f"{dialect} REPEATABLE READ: snapshot must hold, first={first} second={second}"
         return 0
     transaction(ctx, rr_body, TransactionOptions(isolation=IsolationLevel.REPEATABLE_READ), dialect)
@@ -266,9 +267,9 @@ def _isolation_behavior(driver, dialect):
     # READ COMMITTED: the second in-tx read MUST see the concurrent commit.
     reset_row()
     def rc_body():
-        first = read_seq(current_context())
+        first = read_seq(current_context(ctx))
         driver.prepare(f"UPDATE {ISO_TBL} SET seq = 77 WHERE id = 1").run([])
-        second = read_seq(current_context())
+        second = read_seq(current_context(ctx))
         assert first != second, f"{dialect} READ COMMITTED: second read must see the concurrent commit, first={first} second={second}"
         return 0
     transaction(ctx, rc_body, TransactionOptions(isolation=IsolationLevel.READ_COMMITTED), dialect)
@@ -307,13 +308,13 @@ def _retry_pg_write_skew(driver, sink, typed_only, neuter_wrapped=False, expect_
 
         def worker(i):
             def body():
-                execute(current_context(), f"SELECT COALESCE(SUM(seq),0) AS s FROM {ISO_TBL}", [])  # write-skew read set
+                execute(current_context(ctx), f"SELECT COALESCE(SUM(seq),0) AS s FROM {ISO_TBL}", [])  # write-skew read set
                 try:
                     barrier.wait(timeout=10)
                 except Exception:
                     pass
                 from litedbmodel_runtime import run as seam_run
-                seam_run(current_context(), f"UPDATE {ISO_TBL} SET seq = seq + 1 WHERE id = $1", [i + 1])
+                seam_run(current_context(ctx), f"UPDATE {ISO_TBL} SET seq = seq + 1 WHERE id = $1", [i + 1])
                 return 0
             try:
                 transaction(ctx, body, opts, "postgres")
@@ -364,7 +365,7 @@ def _retry_mysql_deadlock(driver, sink, typed_only, neuter_wrapped=False, expect
                 from litedbmodel_runtime import run as seam_run
 
                 def body():
-                    seam_run(current_context(), f"UPDATE {ISO_TBL} SET seq = seq + 1 WHERE id = ?", [first])
+                    seam_run(current_context(ctx), f"UPDATE {ISO_TBL} SET seq = seq + 1 WHERE id = ?", [first])
                     if not state["done"]:
                         state["done"] = True
                         try:
@@ -373,7 +374,7 @@ def _retry_mysql_deadlock(driver, sink, typed_only, neuter_wrapped=False, expect
                             pass
                         release.set()
                         release.wait(timeout=10)
-                    seam_run(current_context(), f"UPDATE {ISO_TBL} SET seq = seq + 1 WHERE id = ?", [second])
+                    seam_run(current_context(ctx), f"UPDATE {ISO_TBL} SET seq = seq + 1 WHERE id = ?", [second])
                     return 0
                 try:
                     transaction(ctx, body, opts, "mysql")

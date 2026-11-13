@@ -395,17 +395,17 @@ def test_sqlite_tx_rollback_undoes_first_stmt():
 
 
 def test_current_context_is_none_outside_scope():
-    assert current_context() is None
+    assert current_context(context_for_driver(_seed_driver())) is None
 
 
 def test_run_with_pinned_context_sets_and_restores():
     d = _seed_driver()
     ctx = context_for_driver(d)
     seen = []
-    run_with_pinned_context(ctx, lambda: seen.append(current_context()))
+    run_with_pinned_context(ctx, lambda: seen.append(current_context(ctx)))
     assert seen == [ctx]
     # Restored to None after the scope.
-    assert current_context() is None
+    assert current_context(ctx) is None
 
 
 def test_with_transaction_pins_ctx_in_contextvar():
@@ -415,13 +415,13 @@ def test_with_transaction_pins_ctx_in_contextvar():
 
     def body(tx):
         # Inside the tx body the ambient contextvar is the tx-scoped ctx (per-execution ownership).
-        seen.append(current_context())
-        assert current_context() is tx
+        seen.append(current_context(ctx))
+        assert current_context(ctx) is tx
         return commit(None)
 
     with_transaction_decided(ctx, body)
     assert seen and seen[0].in_transaction()
-    assert current_context() is None  # restored
+    assert current_context(ctx) is None  # restored
 
 
 # ── StatementIntent shape ───────────────────────────────────────────────────────

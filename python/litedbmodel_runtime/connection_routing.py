@@ -618,22 +618,20 @@ def with_writer(fn: Callable[[], Any]) -> Any:
     ``connection_for``, so a :func:`with_writer` there is a no-op on routing (matches v1).
 
     The read-only (write-reject) half is entered by a bare read-only marker the guarded write seam
-    consults, AND — when an ambient routed :class:`ExecutionContext` is pinned in the current scope — by
-    deriving its read-only view so ``ambient_read_only()`` (which reads the ctx) also sees the
-    write-reject half. v1's single writerContext is BOTH the writer-routing and the read-only marker;
-    both halves span the whole ``fn`` because the contextvars are per-scope.
+    consults, AND — for every :class:`ExecutionContext` pinned in the current scope (one per owner) — by
+    pinning its read-only view under the same owner, so ``ambient_read_only()`` (which reads the pinned
+    ctxs) also sees the write-reject half and each owner keeps its own open transaction. v1's single
+    writerContext is BOTH the writer-routing and the read-only marker; both halves span the whole ``fn``
+    because the contextvars are per-scope.
     """
     if in_writer_scope():
         return fn()
     token = _writer_scope_var.set(True)
     ro_token = _readonly_marker_var.set(True)
     try:
-        from .exec_context import current_context, run_with_pinned_context
+        from .exec_context import pinned_contexts, run_with_pinned_contexts
 
-        ambient = current_context()
-        if ambient is not None and not ambient.read_only():
-            return run_with_pinned_context(ambient.with_read_only(), fn)
-        return fn()
+        return run_with_pinned_contexts([p.with_read_only() for p in pinned_contexts() if not p.read_only()], fn)
     finally:
         _readonly_marker_var.reset(ro_token)
         _writer_scope_var.reset(token)

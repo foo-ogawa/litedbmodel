@@ -60,7 +60,8 @@ from __future__ import annotations
 import contextvars
 import threading
 import time
-from typing import Any, Callable, List, Optional, Sequence, TypeVar, Union
+from types import MappingProxyType
+from typing import Any, Callable, List, Mapping, Optional, Sequence, Tuple, TypeVar, Union
 
 from .driver import Driver, RunInfo, TxConnection
 from .errors import SqlFailure, TransactionClosedError, map_sqlite_error
@@ -298,7 +299,8 @@ class ExecutionContext:
     ctx propagation (§3, Python-idiomatic) is via a module-level :data:`contextvars.ContextVar`: a
     transaction pins its owned connection into a derived ctx and runs the body inside
     :func:`run_with_pinned_context`, so a concurrent execution scope (a distinct thread) sees its OWN
-    contextvar value — its own tx connection — never another's.
+    contextvar value — its own tx connection — never another's. The pin is keyed by the ctx's owner
+    (:meth:`pin_owner`), so a ctx of another owner (another database) never sees it.
 
     ## Phase C routing (#90) — reader/writer + named-DB + writer-sticky
 
@@ -351,6 +353,14 @@ class ExecutionContext:
         """The Phase C routing config (registry + writer-sticky clock), or ``None`` on the single-driver
         Phase A/B path."""
         return self._routing
+
+    def pin_owner(self) -> object:
+        """The identity a transaction pinned for this ctx is keyed by (:func:`current_context`). On the
+        single-driver path it is the driver: every ctx over that driver (each :func:`context_for_driver`
+        of it, every derivation) shares its connection and so its transaction. On a routed ctx it is the
+        routing config: a routed transaction opens on the writer of a NAMED connection, so no single
+        driver names it; every ctx over this config joins it, while a ctx over another config does not."""
+        return self._routing if self._routing is not None else self._driver
 
     def in_transaction(self) -> bool:
         """Is this a tx-scoped ctx (a pinned connection is present)? This is the Python analogue of
@@ -470,27 +480,52 @@ class ExecutionContext:
 
 # ── ctx propagation (§3) — the Python-idiomatic contextvars slot ──────────────
 
-# Per-execution-scope ambient ctx: the ContextVar carrying the tx-scoped ExecutionContext (§3). A
-# concurrent scope (a distinct thread) sees its OWN value; the base value (outside a tx) is None.
-_ctx_var: "contextvars.ContextVar[Optional[ExecutionContext]]" = contextvars.ContextVar(
-    "litedbmodel_scp_exec_context", default=None
+# Per-execution-scope ambient pins: the ContextVar carrying the pinned ExecutionContext of each owner
+# (§3), keyed by the id of the ctx's :meth:`ExecutionContext.pin_owner` — the Python form of the TS
+# ``asyncCtxStore`` map keyed by execution context (010a3fb) and the PHP ``TxAmbient`` keyed by owner. One
+# process can hold several independent contexts (one database per tenant), and a transaction pinned for
+# one of them is not the transaction of another. A concurrent scope (a distinct thread) sees its OWN
+# value; the base value (outside a tx) is empty. A mapping set here is never mutated: a pin sets a copy.
+# The pinned ctx references its owner, so the owner is alive — and its id cannot be reused — for as long
+# as the pin is in the mapping.
+_NO_PINS: Mapping[int, ExecutionContext] = MappingProxyType({})
+_ctx_var: "contextvars.ContextVar[Mapping[int, ExecutionContext]]" = contextvars.ContextVar(
+    "litedbmodel_scp_exec_context", default=_NO_PINS
 )
 
 
-def current_context() -> Optional[ExecutionContext]:
-    """The ambient (contextvar-propagated) ExecutionContext of THIS execution scope, or ``None``
-    outside a pinned tx scope. The seam consults it so a callee that only has the raw driver still
-    resolves the tx-owned connection when it runs inside a :func:`run_with_pinned_context` scope."""
-    return _ctx_var.get()
+def current_context(ctx: ExecutionContext) -> Optional[ExecutionContext]:
+    """The ctx pinned for ``ctx``'s owner in THIS execution scope (a tx-scoped ctx inside a
+    :func:`with_transaction_decided` body, or a ctx :func:`run_with_pinned_context` pinned), or ``None``.
+    A callee handed the outer ctx resolves the tx-owned connection through it; a ctx with another owner
+    never sees it. The Python analogue of the TS ``currentPinnedAsyncConnection(owner)``."""
+    return _ctx_var.get().get(id(ctx.pin_owner()))
+
+
+def pinned_contexts() -> Tuple[ExecutionContext, ...]:
+    """Every ctx pinned in THIS execution scope, whatever its owner (the scope-wide write=tx guard
+    markers and :func:`~litedbmodel_runtime.connection_routing.with_writer` read them)."""
+    return tuple(_ctx_var.get().values())
 
 
 def run_with_pinned_context(ctx: ExecutionContext, fn: Callable[[], _T]) -> _T:
-    """Run ``fn`` with ``ctx`` pinned as the ambient contextvar for THIS scope (§3). Every implicit
-    ``current_context()`` inside ``fn`` returns ``ctx``. Restores the prior value on exit. This is the
-    Python per-execution-ownership mechanism (v1 TS ``txContext.run`` analogue); it is thread-safe by
-    construction — ``contextvars`` are per-thread, so a concurrent thread's pin never leaks here.
+    """Run ``fn`` with ``ctx`` pinned as the ambient ctx of its owner for THIS scope (§3). Every
+    ``current_context(c)`` for a ``c`` of that owner inside ``fn`` returns ``ctx``. Restores the prior pins on exit.
+    This is the Python per-execution-ownership mechanism (the TS ``runWithPinnedAsyncConnection(owner, …)``
+    analogue); it is thread-safe by construction — ``contextvars`` are per-thread, so a concurrent
+    thread's pin never leaks here.
     """
-    token = _ctx_var.set(ctx)
+    return run_with_pinned_contexts((ctx,), fn)
+
+
+def run_with_pinned_contexts(ctxs: Sequence[ExecutionContext], fn: Callable[[], _T]) -> _T:
+    """Run ``fn`` with each of ``ctxs`` pinned as the ambient ctx of its owner for THIS scope (the
+    single-ctx form is :func:`run_with_pinned_context`). The pins of every other owner are kept; the
+    prior pins are restored on exit."""
+    pins = dict(_ctx_var.get())
+    for ctx in ctxs:
+        pins[id(ctx.pin_owner())] = ctx
+    token = _ctx_var.set(MappingProxyType(pins))
     try:
         return fn()
     finally:
@@ -594,8 +629,8 @@ def with_transaction_decided(
       1. acquire + OWN ONE connection via :meth:`Driver.begin_tx` — a :class:`TxConnection` (the tx's
          exclusive connection), the Python analogue of v1 ``PoolTransaction``. **No tx-control is issued
          at acquire** (Phase D / #95): the connection is only owned here.
-      2. pin it into a tx-scoped :class:`ExecutionContext` (and the ambient contextvar) so EVERY
-         statement of the tx's own database resolves THAT connection via the seam — never a fresh
+      2. pin it into a tx-scoped :class:`ExecutionContext` (and the ambient contextvar, under ``ctx``'s
+         owner) so EVERY statement of the tx's own database resolves THAT connection via the seam — never a fresh
          pooled one, and a statement naming a DIFFERENT database is rejected instead;
       3. issue the isolation SET + ``BEGIN`` (``before`` → BEGIN → ``after``) THROUGH the seam
          (:func:`run` on the PINNED ctx) — so a registered middleware OBSERVES the runtime BEGIN (full TS
@@ -717,21 +752,19 @@ def with_transaction(
 
 
 def ambient_in_transaction() -> bool:
-    """Is THIS execution scope inside an active transaction? Reads the AMBIENT contextvar-propagated
-    :class:`ExecutionContext` (:func:`current_context`) — the Python analogue of the TS async-local
-    "inside a transaction" marker. A bare write outside :func:`transaction` sees ``None`` ⇒ False."""
-    ambient = current_context()
-    return ambient is not None and ambient.in_transaction()
+    """Is THIS execution scope inside an active transaction? Reads every pinned ctx
+    (:func:`pinned_contexts`): like the TS ``txActiveStore``, the guard marker belongs to the scope, not
+    to one context. A bare write outside :func:`transaction` sees no pin ⇒ False."""
+    return any(pinned.in_transaction() for pinned in pinned_contexts())
 
 
 def ambient_read_only() -> bool:
-    """Is THIS execution scope a READ-ONLY context? Reads the ambient contextvar-propagated ctx's
-    read-only marker (the Python analogue of the TS ``withReadOnly`` async-local marker), OR the
+    """Is THIS execution scope a READ-ONLY context? Reads every pinned ctx's read-only marker (like the
+    TS ``readOnlyStore``, the marker belongs to the scope, not to one context), OR the
     Phase C :func:`litedbmodel_runtime.connection_routing.with_writer` bare read-only marker (so a write
     inside ``with_writer`` is rejected even when routing is not ctx-threaded — v1's writerContext is
     both writer-routing and read-only)."""
-    ambient = current_context()
-    if ambient is not None and ambient.read_only():
+    if any(pinned.read_only() for pinned in pinned_contexts()):
         return True
     from .connection_routing import in_writer_read_only_scope
 
@@ -795,24 +828,27 @@ def transaction(
 
     ## The ambient-tx JOIN — how operations participate (the core #86 fix; python = contextvars)
 
-    ``fn`` takes NO connection argument. Instead the pinned tx ctx lives in the ambient contextvar
-    (:func:`current_context`). Every operation ``fn`` issues — a write via the guarded write seam
-    (:func:`run_guarded`), a read via the read seam — resolves that ambient pinned ctx and
-    runs its statements on THAT connection **without opening its own BEGIN/COMMIT** (the nested-join,
+    ``fn`` takes NO connection argument. Instead the pinned tx ctx lives in the ambient contextvar under
+    ``ctx``'s owner (:func:`current_context`). Every operation ``fn`` issues on a ctx of that owner — a
+    write via the guarded write seam (:func:`run_guarded`), a read via the read seam — resolves that
+    ambient pinned ctx and runs its statements on THAT connection **without opening its own BEGIN/COMMIT** (the nested-join,
     below). So N operations inside one ``transaction(fn)`` produce exactly ONE BEGIN + ONE COMMIT on
     ONE connection. Outside a ``transaction(fn)`` the ambient pin is absent, so a bare guarded write's
     guard fires (:class:`WriteOutsideTransactionError`).
 
-    NESTED ``transaction()`` joins the outer (one physical BEGIN/COMMIT; an inner error rolls back the
-    WHOLE tx). Isolation/retry/rollback_only options on a nested call are IGNORED (the outer owns
-    them). Mirrors v1 ``DBModel.transaction`` :2794-2797.
+    NESTED ``transaction()`` on a ctx of the same owner joins the outer (one physical BEGIN/COMMIT; an
+    inner error rolls back the WHOLE tx). Isolation/retry/rollback_only options on a nested call are
+    IGNORED (the outer owns them). Mirrors v1 ``DBModel.transaction`` :2794-2797. A nested
+    ``transaction()`` on a ctx of ANOTHER owner (another database) opens and commits its own.
     """
     opts = options if options is not None else TransactionOptions()
 
-    # NESTED-TX JOIN (mirror v1 :2794): already inside a tx on this contextvar scope ⇒ join the outer.
+    # NESTED-TX JOIN (mirror v1 :2794): already inside a tx on this ctx's owner ⇒ join the outer.
     # No new connection, no BEGIN/COMMIT — the inner body is part of the outer physical transaction.
-    # Isolation/retry/rollback_only on a nested call are ignored: the outer owns the envelope.
-    if ambient_in_transaction():
+    # Isolation/retry/rollback_only on a nested call are ignored: the outer owns the envelope. A tx open
+    # on ANOTHER owner is not this one's, so this call opens its own.
+    outer = current_context(ctx)
+    if outer is not None and outer.in_transaction():
         return fn()
 
     # Validate + build the isolation prelude BEFORE acquiring a connection (fail-closed: SQLite + a
