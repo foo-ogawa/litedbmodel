@@ -1132,21 +1132,35 @@ fn my_cell_to_wire(row: &MySqlRow, idx: usize) -> Result<WireValue, SqlFailure> 
         return Ok(WireValue::Null);
     }
     let type_name = col.type_info().name().to_ascii_uppercase();
-    // Integer families → Num; float/decimal → Num; everything else → string. An UNSIGNED integer
-    // column (e.g. the `ROW_NUMBER() OVER (...) AS _rn` window column MySQL types as BIGINT UNSIGNED
-    // in a limited-hasMany relation batch) decodes as u64 in sqlx, so read it as u64 then narrow to
-    // the bc i64 int (the corpus values are well within the i64 range).
+    // Integer families → Int; FLOAT/DOUBLE → Float; DECIMAL → its exact decimal text; everything else →
+    // string.
     let v = if type_name.contains("INT") {
         if type_name.contains("UNSIGNED") {
-            row.try_get::<u64, _>(idx).map(|u| WireValue::int(u as i64))
-        } else {
-            row.try_get::<i64, _>(idx).map(WireValue::int)
+            // An UNSIGNED integer column (e.g. the `ROW_NUMBER() OVER (...) AS _rn` window column MySQL
+            // types as BIGINT UNSIGNED in a limited-hasMany relation batch) decodes as u64 in sqlx. The
+            // wire int is an i64, so a BIGINT UNSIGNED value of 2^63 or more has no Int to become —
+            // casting it would wrap it negative (a different value: a key read that way names no row),
+            // so it FAILS LOUDLY instead.
+            let u = row
+                .try_get::<u64, _>(idx)
+                .map_err(|e| driver_failure(format!("mysql decode col {}: {e}", col.name())))?;
+            return i64::try_from(u).map(WireValue::int).map_err(|_| {
+                driver_failure(format!(
+                    "mysql decode col {}: BIGINT UNSIGNED value {u} is outside the int range (an i64)",
+                    col.name()
+                ))
+            });
         }
-    } else if type_name.contains("FLOAT")
-        || type_name.contains("DOUBLE")
-        || type_name.contains("DECIMAL")
-    {
+        row.try_get::<i64, _>(idx).map(WireValue::int)
+    } else if type_name.contains("FLOAT") || type_name.contains("DOUBLE") {
         row.try_get::<f64, _>(idx).map(WireValue::float)
+    } else if type_name.contains("DECIMAL") {
+        // DECIMAL is an EXACT decimal, read as its decimal TEXT (`src/scp/coltype.ts`: decimal →
+        // string; PG's NUMERIC reads the same way) — never through an f64, which would round it, and
+        // which sqlx-mysql refuses for DECIMAL anyway. MySQL sends DECIMAL as that text on both
+        // protocols; sqlx's `String` decoder only declines the column TYPE, so decode it unchecked.
+        row.try_get_unchecked::<String, _>(idx)
+            .map(|t| WireValue::Str(t.into()))
     } else if type_name.contains("BOOL") {
         // MySQL `TINYINT(1)` surfaces to sqlx as `BOOLEAN`; the v2 read types a boolean column as an
         // INTEGER 0/1 (the resolver maps it to int, matching the sqlite path), so decode bool → int.
