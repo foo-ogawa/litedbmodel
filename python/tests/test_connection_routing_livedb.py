@@ -810,6 +810,40 @@ def test_c3_search_path_reset_on_release_no_session_leak():
         raw.close()
 
 
+def test_c3_mysql_multibyte_charset_keeps_bound_value_as_data():
+    """#353: with a multibyte MySQL ``charset`` (sjis / cp932 / gbk / big5), a bound value stays a value.
+    PyMySQL escapes and encodes ``%s`` params on the client, so the client must escape/encode in the SAME
+    charset the server parses in. The payloads end in a byte the server's charset reads as a lead byte, so
+    an escaping backslash encoded in a different charset is swallowed into a multibyte character and the
+    quote closes the literal — ``OR 1=1`` would then return the row. Each payload must return no row, or
+    be refused by the client-side encoder (the character does not exist in that charset); a gbk-native
+    character whose trailing byte is 0x5C (U+7E17) must round-trip as data. Through the SHIPPED factory."""
+    sql = "SELECT 1 AS hit FROM DUAL WHERE ? = 'no-such-value'"
+    cases = [
+        ("sjis", "\u0081' OR 1=1 -- "),
+        ("cp932", "\u0081' OR 1=1 -- "),
+        ("gbk", "࠿' OR 1=1 -- "),
+        ("big5", "ࡡ' OR 1=1 -- "),
+        ("gbk", "縗' OR 1=1 -- "),
+    ]
+    for charset, payload in cases:
+        config = _my_conn_config()
+        config.charset = charset
+        config.max_pool = 1
+        routing, close = build_routing_config([ConnectionSetup(pool_factory=mysql_pool_factory(), config=config)])
+        ctx = _ctx(routing)
+        try:
+            # The configured charset is what the server parses in (the knob is not silently dropped).
+            assert execute(ctx, "SELECT @@character_set_client AS cs", [], _READ)[0]["cs"] == charset
+            try:
+                rows = execute(ctx, sql, [payload], _READ)
+            except UnicodeEncodeError:
+                continue  # the client refused a character its charset cannot encode — never reached SQL
+            assert rows == [], "charset=%s: bound value %r ran as SQL, got %r" % (charset, payload, rows)
+        finally:
+            close()
+
+
 def test_c3_pg_and_mysql_factories_end_to_end():
     """Exercise the SHIPPED factories (the ones the ports mirror) end-to-end: build via
     build_routing_config from config → query live → close, against real PG and MySQL."""

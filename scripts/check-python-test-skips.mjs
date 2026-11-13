@@ -140,6 +140,7 @@ const LIVE_TESTS = [
   'test_connection_routing_livedb.py::test_c3_connect_timeout_zero_waits_without_limit',
   'test_connection_routing_livedb.py::test_c3_idle_connection_is_closed_on_the_server',
   'test_connection_routing_livedb.py::test_c3_max_pool_is_sole_cap_and_close',
+  'test_connection_routing_livedb.py::test_c3_mysql_multibyte_charset_keeps_bound_value_as_data',
   'test_connection_routing_livedb.py::test_c3_pg_and_mysql_factories_end_to_end',
   'test_connection_routing_livedb.py::test_c3_query_timeout_fires_mysql',
   'test_connection_routing_livedb.py::test_c3_query_timeout_fires_pg',
