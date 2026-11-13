@@ -10,7 +10,7 @@ project adheres to [Semantic Versioning](https://semver.org/).
 **依存とセキュリティの更新、および全言語のセキュリティ監査で確認した欠陥の修正。** MySQL の RETURNING の emulation、
 MySQL の JSON の param による key の照合、SQL の断片の埋め込み、トランザクションの pin、接続エラーのあとの再試行を修正した。
 API リファレンスの生成を typedoc から embedoc に移行した。
-Closes #335, #343〜#383。
+Closes #335, #343〜#384。
 
 ### Security
 
@@ -34,8 +34,8 @@ Closes #335, #343〜#383。
     削除した行数と照合する（#362）。
   - v1 の driver の upsert が id+1 の行も返していた。v1 の driver の複製を削除し、SCP と同じ executor で実行する（#367）。
   - 複数行の VALUES の INSERT を最初の行の key だけで再取得していた（#382）。
-  - バッチの再取得が key を `JSON_UNQUOTE` の文字列で比較し、BIGINT を DOUBLE で照合していた。書き込みの宣言どおりの
-    型で比較する（#379）。
+  - バッチの再取得が key を `JSON_UNQUOTE` の文字列で比較し、BIGINT を DOUBLE で照合していた。書き込み自身が key を
+    読む式（JSON_TABLE の宣言と照合の式）をそのまま使って比較する（#379、#384）。
 - MySQL の JSON の param による key の照合（IN リスト・tuple IN・バッチ UPDATE の JOIN）が BIGINT / DECIMAL の key を
   DOUBLE で比較し、近い値の他のテナントの行の読み取り・更新・削除が発生していた。列の宣言型で読み、型の情報が無い場合も
   DOUBLE の比較にしない（#376、#378、#381）。2^63 以上の BigInt は JSON の数字の文字列で送信する（#383）。
