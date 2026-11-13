@@ -351,16 +351,13 @@ function renderComponents(components: MakeSQL[], dialect: Dialect): Rendered[] {
 // RESULT PARITY with v1's multi-VALUES is proven on real DBs in json-array-parity.test.ts.
 // ---------------------------------------------------------------------------
 
-/** Infer the MySQL JSON_TABLE COLUMNS type + SELECT expr for a column (golden mirror). */
+/** Infer the MySQL JSON_TABLE COLUMNS type + SELECT expr for a column from EVERY value (golden mirror, #378). */
 function jtColType(col: string, rows: Record<string, unknown>[]): { t: string; sel: (r: string) => string } {
-  let sample: unknown;
-  for (const r of rows) {
-    const v = r[col];
-    if (v !== null && v !== undefined) { sample = v; break; }
-  }
-  if (typeof sample === 'boolean' || typeof sample === 'bigint') return { t: 'BIGINT', sel: (r) => r };
-  if (typeof sample === 'number') return Number.isInteger(sample) ? { t: 'BIGINT', sel: (r) => r } : { t: 'DECIMAL(65,30)', sel: (r) => r };
-  if (sample !== null && typeof sample === 'object') return { t: 'JSON', sel: (r) => r };
+  const values = rows.map((r) => r[col]).filter((v) => v !== null && v !== undefined);
+  const isInt = (v: unknown) => typeof v === 'boolean' || typeof v === 'bigint' || (typeof v === 'number' && Number.isInteger(v));
+  if (values.length > 0 && values.every(isInt)) return { t: 'BIGINT', sel: (r) => r };
+  if (values.length > 0 && values.every((v) => isInt(v) || typeof v === 'number')) return { t: 'DECIMAL(65,30)', sel: (r) => r };
+  if (values.length > 0 && values.every((v) => typeof v === 'object')) return { t: 'JSON', sel: (r) => r };
   return { t: 'JSON', sel: (r) => `JSON_UNQUOTE(${r})` };
 }
 

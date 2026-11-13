@@ -361,6 +361,33 @@ describe('JSON-form == v1-form RESULT PARITY on real MySQL 8 + SQLite (epic #43/
     });
   }
 
+  // ---- #378: the batch key column is typed from EVERY record, not the first ----------------
+  //
+  // `[{id:1},{id:1.5}]` used to type the key column from its first value (`id BIGINT PATH`), so MySQL
+  // silently rounded 1.5 to 2 and the JOIN updated row 2 — a row no record names. Typed from every
+  // record the column reads both keys exactly: 1 updates row 1, 1.5 matches nothing (as a bound
+  // `WHERE id = 1.5` would).
+  it('[mysql] updateMany with keys [1, 1.5] updates exactly row 1 (#378)', async () => {
+    requireMysql();
+    await my('DROP TABLE IF EXISTS pj378_um', []);
+    await my('CREATE TABLE pj378_um(id INT PRIMARY KEY, v VARCHAR(20) NOT NULL)', []);
+    for (const id of [1, 2, 3]) await my('INSERT INTO pj378_um VALUES (?, ?)', [id, 'seed']);
+    const r = mysqlUpdateManyJson({
+      tableName: 'pj378_um',
+      keyColumns: ['id'],
+      updateColumns: ['v'],
+      records: [{ id: 1, v: 'one' }, { id: 1.5, v: 'EVIL' }],
+    });
+    const [res] = await myConn!.query(r.sql, r.params);
+    expect((res as { affectedRows: number }).affectedRows).toBe(1);
+    expect(await my('SELECT id, v FROM pj378_um ORDER BY id', [])).toEqual([
+      { id: 1, v: 'one' },
+      { id: 2, v: 'seed' },
+      { id: 3, v: 'seed' },
+    ]);
+    await my('DROP TABLE pj378_um', []);
+  });
+
   // ---- Type round-trip (int / bigint / decimal / text / bool / null) via createMany ----
   for (const dialect of ['mysql', 'sqlite'] as Dialect[]) {
     it(`[${dialect}] type round-trip: JSON-form == v1-form for int/bigint/decimal/text/bool/null`, async () => {
