@@ -117,6 +117,8 @@ const LIVE_TESTS = [
   'TestPhaseDLiveTxControlVisiblePG',
   'TestPhaseDLiveTxControlVisibleRollbackPG',
   'TestTxBoundaryMysql',
+  'TestTxRetryAfterKilledPoolLiveMySQL',
+  'TestTxRetryAfterKilledPoolLivePG',
   'TestTxBoundaryPostgres',
 ];
 

@@ -484,6 +484,43 @@ final class TxBoundaryTest extends TestCase
         $this->assertSame(2, $runs);
     }
 
+    // ── A retry after a connection error runs only on a connection that passed a probe ──────────
+
+    public function testRetryAfterAConnectionErrorProbesBeforeBeginAndNeverBeginsOnAConnectionThatFailsIt(): void
+    {
+        // The connection dies under the body's first statement; from then on every statement fails with a
+        // connection error. A retry must not issue BEGIN on it: attempts 2 and 3 each send `SELECT 1` to at
+        // most retryLimit acquired connections (here always the one \PDO), none passes, and the probe's
+        // error surfaces once the attempts run out.
+        $db = new DyingPdo('sqlite::memory:');
+        $db->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
+        $db->exec('CREATE TABLE ' . self::TBL . ' (id INTEGER PRIMARY KEY, worker INTEGER NOT NULL, seq INTEGER NOT NULL)');
+        $ctx = Context::forPdo($db);
+        $runs = 0;
+        try {
+            transaction($ctx, function () use ($ctx, &$runs) {
+                $runs++;
+                return self::op($ctx, 900, 9, 0);
+            }, new TransactionOptions(retryLimit: 3, retryDurationMs: 0), 'sqlite');
+            $this->fail('the transaction must fail: the only connection is dead');
+        } catch (\Throwable $e) {
+            $this->assertStringContainsString('server closed the connection', $e->getMessage());
+        }
+        $this->assertSame(1, $runs, 'the body runs only on a connection that passed the probe');
+        $this->assertSame(array_fill(0, 6, 'SELECT 1'), $db->afterDeath(), 'no BEGIN after the connection died — only the probe, retryLimit times in each of the 2 retries');
+    }
+
+    public function testADeadlockRetryIsNotProbed(): void
+    {
+        [$runs, $error] = self::runWithCommitFailure(
+            self::pdoException(['40001', 7, 'could not serialize access'], 'could not serialize access'),
+            1,
+        );
+        $this->assertNull($error);
+        $this->assertSame(2, $runs);
+        // The CommitFailingPdo records no probe: a serialization failure is not a connection error.
+    }
+
     /** Build a \PDOException with a specific errorInfo triple (the live-driver shape). */
     private static function pdoException(array $errorInfo, string $message): \PDOException
     {
@@ -556,5 +593,58 @@ final class CommitFailingPdo extends \PDO
             throw $this->error;
         }
         return parent::exec($statement);
+    }
+}
+
+/**
+ * A \PDO whose connection dies under the first INSERT: that statement and every one after it fail with a
+ * connection error (`server closed the connection unexpectedly`). {@see afterDeath()} lists what was sent
+ * to it after it died.
+ */
+final class DyingPdo extends \PDO
+{
+    private bool $dead = false;
+    /** @var list<string> */
+    private array $afterDeath = [];
+
+    /** @return list<string> */
+    public function afterDeath(): array
+    {
+        return $this->afterDeath;
+    }
+
+    private function check(string $sql): void
+    {
+        if (!$this->dead && str_starts_with(strtoupper(trim($sql)), 'INSERT')) {
+            $this->dead = true;
+            throw self::lost();
+        }
+        if ($this->dead) {
+            if (strtoupper(trim($sql)) !== 'ROLLBACK') {
+                $this->afterDeath[] = trim($sql);
+            }
+            throw self::lost();
+        }
+    }
+
+    private static function lost(): \PDOException
+    {
+        $e = new \PDOException('SQLSTATE[HY000]: General error: 7 server closed the connection unexpectedly');
+        $e->errorInfo = ['HY000', 7, 'server closed the connection unexpectedly'];
+        return $e;
+    }
+
+    #[\ReturnTypeWillChange]
+    public function exec(string $statement): int|false
+    {
+        $this->check($statement);
+        return parent::exec($statement);
+    }
+
+    #[\ReturnTypeWillChange]
+    public function prepare(string $query, array $options = []): \PDOStatement|false
+    {
+        $this->check($query);
+        return parent::prepare($query, $options);
     }
 }

@@ -450,7 +450,7 @@ class ExecutionContext:
             connection=connection,
         )
 
-    def begin_tx(self) -> "TxConnection":
+    def begin_tx(self, check_attempts: int = 0) -> "TxConnection":
         """Acquire + OWN the tx connection for THIS ctx (§3). On the single-driver Phase A/B path this
         delegates to ``driver.begin_tx``. When Phase C routing is present the tx acquires ONE connection
         from the target NAMED connection's WRITER pool (:attr:`_connection` → the writer pool of that
@@ -460,7 +460,30 @@ class ExecutionContext:
 
         tx-control (the isolation SET / BEGIN / COMMIT / ROLLBACK) is issued THROUGH the seam on the
         pinned connection by :func:`with_transaction_decided` (Phase D / #95, middleware-visible), NOT
-        here — this method only acquires + owns the connection."""
+        here — this method only acquires + owns the connection.
+
+        ``check_attempts`` > 0 (a retry after a connection error): the pool may still hold dead connections
+        after a failover or a restart, so each acquired connection is first sent a harmless ``SELECT 1``
+        (directly on the connection, not through the middleware); one that fails it is destroyed and another
+        acquired, at most ``check_attempts`` in all, and the last probe's error is raised when every one
+        failed. The probe only shows the connection is usable, not whether the failed statement ran on the
+        server. ``0`` ⇒ no probe (a first attempt). Twin of the TS ``acquireCheckedConnection``."""
+        attempt = 0
+        while True:
+            attempt += 1
+            tx = self._checkout_tx()
+            if check_attempts == 0:
+                return tx
+            try:
+                tx.all("SELECT 1", [])
+                return tx
+            except Exception:
+                tx.release(True)
+                if attempt >= check_attempts:
+                    raise
+
+    def _checkout_tx(self) -> "TxConnection":
+        """One acquisition of :meth:`begin_tx`, resolved as described there."""
         if self._routing is not None:
             from .connection_routing import routed_begin_tx
 
@@ -621,6 +644,7 @@ def with_transaction_decided(
     before: Sequence[str] = (),
     after: Sequence[str] = (),
     use_writer_after_transaction: bool = True,
+    check_attempts: int = 0,
 ) -> Any:
     """Run ``body`` inside a transaction with **per-execution connection ownership** (§3, the
     concurrent-tx fix). This is the general form: ``body`` decides COMMIT vs ROLLBACK (see
@@ -646,6 +670,9 @@ def with_transaction_decided(
          COMMIT). Without this ``finally`` a raising COMMIT would leak the connection (the pool would
          shrink by one under repeated commit failures — the #78 audit defect).
 
+    ``check_attempts`` is passed by the :func:`transaction` retry after a connection error: the attempt then
+    runs only on a connection that passed a ``SELECT 1`` probe (:meth:`ExecutionContext.begin_tx`).
+
     ``before`` / ``after`` carry the per-transaction isolation prelude (Phase B / #84 —
     :func:`litedbmodel_runtime.tx_options.isolation_prelude`): MySQL's ``SET`` runs pre-BEGIN, PG's
     post-BEGIN. Empty ⇒ a bare ``BEGIN`` (byte-identical to the Phase A path — SAME literal statements on
@@ -656,7 +683,7 @@ def with_transaction_decided(
     removed driver-global ``_writer``) violated. This mirrors the TS ``withTransactionAsync`` (#75) /
     rust ``with_transaction_decided`` (#76) / go ``WithTransactionDecided`` (#77).
     """
-    tx = ctx.begin_tx()
+    tx = ctx.begin_tx(check_attempts)
     # The body's ctx pins the connection through a settle guard: once the body has settled, a ctx it
     # leaked (e.g. onto a thread left running) is refused with TransactionClosedError instead of reaching
     # the connection — in the COMMIT/ROLLBACK window it would run inside the tx and be committed. The
@@ -865,6 +892,9 @@ def transaction(
         retry_limit = opts.retry_limit if opts.retry_limit >= 1 else 1
 
     attempt = 0
+    # Set when the previous attempt failed with a connection error: this attempt then runs only on a
+    # connection that passed a probe, at most retry_limit tried (:meth:`ExecutionContext.begin_tx`).
+    check_attempts = 0
     while True:
         attempt += 1
         # ONE attempt on a FRESH owned connection (a retry after a connection error thus RECONNECTS).
@@ -881,7 +911,7 @@ def transaction(
 
         try:
             return with_transaction_decided(
-                tx_ctx, body, before, after, opts.use_writer_after_transaction
+                tx_ctx, body, before, after, opts.use_writer_after_transaction, check_attempts
             )
         except (WriteOutsideTransactionError, WriteInReadOnlyContextError, TransactionClosedError):
             # A guard rejection is a programming error, never retryable — re-raise immediately.
@@ -906,6 +936,7 @@ def transaction(
                 and not commit_connection_error
                 and is_retryable_tx_error(failure)
             ):
+                check_attempts = retry_limit if is_connection_error(failure) else 0
                 # Exponential backoff before RETRYing the whole transaction on a fresh connection.
                 backoff_ms = opts.retry_duration * (2 ** (attempt - 1))
                 if backoff_ms > 0:

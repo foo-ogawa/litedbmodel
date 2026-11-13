@@ -127,6 +127,8 @@ const LIVE_TESTS = [
   'test_conformance_corpus.py::test_corpus_is_the_supported_version',
   'test_conformance_corpus.py::test_every_vector_names_an_endpoint_the_generated_module_exposes',
   'test_conformance_corpus.py::test_live_db_conformance_all_vectors_pass',
+  'test_conn_retry_livedb.py::test_tx_retry_after_killed_pool_mysql',
+  'test_conn_retry_livedb.py::test_tx_retry_after_killed_pool_postgres',
   'test_connection_routing_livedb.py::test_c1_concurrent_transactions_each_own_a_connection',
   'test_connection_routing_livedb.py::test_c1_pool_contention_waits_then_succeeds',
   'test_connection_routing_livedb.py::test_c1_reader_writer_split',

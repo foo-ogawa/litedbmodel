@@ -3161,39 +3161,46 @@ export abstract class DBModel {
       this._configOptions.useWriterAfterTransaction ?? true;
 
     let attempt = 0;
+    // Set when the previous attempt failed with a connection error: the pool may still hold dead
+    // connections, so this attempt runs only on a connection that passed a probe (at most retryLimit tried).
+    let afterConnectionError = false;
 
     while (true) {
       attempt++;
-      // A given connection is released by whoever acquired it, never here
-      const connection = options.connection ?? await handler.getConnection();
+      // A failure to acquire the connection is this attempt's failure (the go / rust / python / php
+      // transaction retry decides it the same way). A given connection is released by whoever acquired it,
+      // never here.
+      let connection: DBConnection | undefined;
       let destroyConnection = false;
       let committing = false;
-      // func sees the connection only through this guard; BEGIN/COMMIT/ROLLBACK use `connection` directly
-      const guard = createTransactionGuard(this._configOptions.logger ?? defaultLogger);
-      const guarded: DBConnection = {
-        query: (sql, params) => guard.run(() => connection.query(sql, params)),
-        release: (error) => connection.release(error),
-      };
 
       try {
-        await connection.query('BEGIN');
+        const conn = options.connection ?? await handler.getConnection(afterConnectionError ? retryLimit : undefined);
+        connection = conn;
+        // func sees the connection only through this guard; BEGIN/COMMIT/ROLLBACK use `conn` directly
+        const guard = createTransactionGuard(this._configOptions.logger ?? defaultLogger);
+        const guarded: DBConnection = {
+          query: (sql, params) => guard.run(() => conn.query(sql, params)),
+          release: (error) => conn.release(error),
+        };
+        await conn.query('BEGIN');
 
-        const context: TransactionContext = { connection: guarded, opened: connection };
+        const context: TransactionContext = { connection: guarded, opened: conn };
         const result = await guard.settle(() => txContext.run(context, func));
 
         if (rollbackOnly) {
           // Rollback instead of commit (for preview/dry-run scenarios)
-          await connection.query('ROLLBACK');
+          await conn.query('ROLLBACK');
         } else {
           committing = true;
-          await connection.query('COMMIT');
+          await conn.query('COMMIT');
           if (useWriterAfterTransaction) this._writerSticky.mark();
         }
         return result;
       } catch (error) {
         destroyConnection = true;
         try {
-          await connection.query('ROLLBACK');
+          await connection?.query('ROLLBACK');
         } catch {
           // ROLLBACK failed — connection is in an unknown state.
           // destroyConnection is already true; original error is preserved.
@@ -3208,13 +3215,14 @@ export abstract class DBModel {
           !isUnretriedConnectionError(error, { committing, givenConnection: options.connection !== undefined }) &&
           this.isRetryableError(error as Error)
         ) {
+          afterConnectionError = isConnectionError(error as Error);
           await this.sleep(retryDuration * Math.pow(2, attempt - 1));
           continue;
         }
 
         throw error;
       } finally {
-        if (!options.connection) connection.release(destroyConnection || undefined);
+        if (!options.connection) connection?.release(destroyConnection || undefined);
       }
     }
   }

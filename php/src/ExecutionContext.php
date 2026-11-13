@@ -301,10 +301,32 @@ final class PdoDriver
      *
      * A fresh handle every call (no static/driver-global slot) — the removal the design mandates.
      * PHP's single `\PDO` can hold ONE active transaction, so the handle owns THAT connection.
+     *
+     * `$checkAttempts` > 0 (a retry after a connection error): the connection may be dead after a failover
+     * or a restart, so each acquired handle is first sent a harmless `SELECT 1` (directly on the connection,
+     * not through the middleware); one that fails it is released as destroyed and another acquired, at most
+     * `$checkAttempts` in all, and the last probe's error is thrown when every one failed. The probe only
+     * shows the connection is usable, not whether the failed statement ran on the server. 0 ⇒ no probe (a
+     * first attempt). Twin of the TS `acquireCheckedConnection`. This driver holds ONE `\PDO` and never
+     * opens another, so here every acquisition is that same connection.
      */
-    public function beginTx(): PdoTxConnection
+    public function beginTx(int $checkAttempts = 0): PdoTxConnection
     {
-        return new PdoTxConnection($this->pdo, $this->stmts);
+        for ($attempt = 1; ; $attempt++) {
+            $tx = new PdoTxConnection($this->pdo, $this->stmts);
+            if ($checkAttempts === 0) {
+                return $tx;
+            }
+            try {
+                $tx->all('SELECT 1', []);
+                return $tx;
+            } catch (\Throwable $e) {
+                $tx->release(true);
+                if ($attempt >= $checkAttempts) {
+                    throw $e;
+                }
+            }
+        }
     }
 }
 
@@ -834,7 +856,7 @@ function rollbackWith(mixed $value): TxDecision
  * @param list<string> $before isolation statements run BEFORE `BEGIN` (MySQL SET)
  * @param list<string> $after  isolation statements run AFTER `BEGIN` (PG SET)
  */
-function withTransactionDecided(ExecutionContext $ctx, callable $body, array $before = [], array $after = []): mixed
+function withTransactionDecided(ExecutionContext $ctx, callable $body, array $before = [], array $after = [], int $checkAttempts = 0): mixed
 {
     // NESTED-TX JOIN (mirror the TS withTransactionAsync / v1 :2794): already inside a tx on this ctx's
     // owner ⇒ join the outer. No new connection, no BEGIN/COMMIT, and the decision is the outer's.
@@ -845,7 +867,7 @@ function withTransactionDecided(ExecutionContext $ctx, callable $body, array $be
 
     // Acquire the owned tx connection handle — NO SQL issued yet (Phase D #96): the prelude + BEGIN are
     // issued THROUGH the seam below, on the pinned connection, so a middleware observes them.
-    $tx = $ctx->driver()->beginTx();
+    $tx = $ctx->driver()->beginTx($checkAttempts);
     $txCtx = $ctx->withConnection(new TxConnectionAdapter($tx), true);
 
     // `destroy` starts true: the connection is only proven clean once a COMMIT/ROLLBACK completes
@@ -1118,6 +1140,9 @@ function transaction(
     }
 
     $attempt = 0;
+    // Set when the previous attempt failed with a connection error: this attempt then runs only on a
+    // connection that passed a probe, at most $retryLimit tried ({@see PdoDriver::beginTx()}).
+    $checkAttempts = 0;
     while (true) {
         $attempt++;
         // ONE attempt on a FRESH owned connection. `$fn` reads the pinned tx ctx from the ambient
@@ -1131,7 +1156,7 @@ function transaction(
         };
 
         try {
-            return withTransactionDecided($ctx, $body, $before, $after);
+            return withTransactionDecided($ctx, $body, $before, $after, $checkAttempts);
         } catch (WriteOutsideTransactionError | WriteInReadOnlyContextError $e) {
             // A guard rejection is a programming error, never retryable — re-throw immediately.
             throw $e;
@@ -1153,6 +1178,7 @@ function transaction(
             // COMMIT means the tx was not committed and stays retryable. #330 defect 2.
             $commitConnectionError = $bodyReturned && !$opts->rollbackOnly && isConnectionError($failure);
             if ($attempt < $retryLimit && $opts->retryOnError && !$commitConnectionError && isRetryableTxError($failure)) {
+                $checkAttempts = isConnectionError($failure) ? $retryLimit : 0;
                 // Exponential backoff before RETRYing the whole transaction on a fresh connection.
                 $backoffMs = $opts->retryDurationMs * (2 ** ($attempt - 1));
                 if ($backoffMs > 0) {

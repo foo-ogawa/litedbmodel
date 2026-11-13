@@ -491,7 +491,33 @@ func (c *ExecutionContext) WithTxConnection(conn Connection) *ExecutionContext {
 // transaction exactly as for a statement, the ctx is the single answer to WHICH connection. Twin of
 // rust `ctx.tx_driver(connection)?.acquire_tx()` / python `ExecutionContext.begin_tx` (reading
 // `_connection`) / the php `routedTransaction` writer pin.
-func (c *ExecutionContext) acquireTxConnection() (Connection, func(poisoned bool), error) {
+//
+// checkAttempts > 0 (a retry after a connection error): the pool may still hold dead connections after a
+// failover or a restart, so each checked-out connection is first sent a harmless `SELECT 1` (directly on
+// the connection, not through the middleware); one that fails it is destroyed and another checked out, at
+// most checkAttempts in all, and the last probe's error is returned when every one failed. The probe only
+// shows the connection is usable, not whether the failed statement ran on the server. 0 ⇒ no probe (a
+// first attempt). Twin of the TS `acquireCheckedConnection`.
+func (c *ExecutionContext) acquireTxConnection(checkAttempts int) (Connection, func(poisoned bool), error) {
+	for attempt := 1; ; attempt++ {
+		conn, release, err := c.checkoutTxConnection()
+		if err != nil || checkAttempts == 0 {
+			return conn, release, err
+		}
+		_, probeErr := conn.Execute("SELECT 1", nil)
+		if probeErr == nil {
+			return conn, release, nil
+		}
+		release(true)
+		if attempt >= checkAttempts {
+			return nil, nil, mapSqliteError(probeErr)
+		}
+	}
+}
+
+// checkoutTxConnection is one checkout of [ExecutionContext.acquireTxConnection], resolved as described
+// there.
+func (c *ExecutionContext) checkoutTxConnection() (Connection, func(poisoned bool), error) {
 	if c.routing != nil {
 		pool, err := resolvePool(StatementIntent{Write: true, DB: c.connection}, c.writerScope, c.sticky, *c.routing)
 		if err != nil {
@@ -752,6 +778,12 @@ func WithTransactionDecided[R any](ctx *ExecutionContext, body func(txCtx *Execu
 // [TransactionDecided] from [TransactionOptions.UseWriterAfterTransaction] and passed down HERE,
 // where the arming actually happens: false ⇒ a successful COMMIT does not arm the sticky clock.
 func WithTransactionDecidedIsolated[R any](ctx *ExecutionContext, isolation IsolationLevel, dialectName string, useWriterAfterTransaction bool, body func(txCtx *ExecutionContext) (R, TxDecision, error)) (R, error) {
+	return withTransactionAttempt(ctx, isolation, dialectName, useWriterAfterTransaction, 0, body)
+}
+
+// withTransactionAttempt is [WithTransactionDecidedIsolated] with the checkout's probe: checkAttempts > 0
+// is passed by the [TransactionDecided] retry after a connection error ([ExecutionContext.acquireTxConnection]).
+func withTransactionAttempt[R any](ctx *ExecutionContext, isolation IsolationLevel, dialectName string, useWriterAfterTransaction bool, checkAttempts int, body func(txCtx *ExecutionContext) (R, TxDecision, error)) (R, error) {
 	var zero R
 	// Resolve the isolation-aware BEGIN SQL first (fail-closed: SQLite + a level is a hard error) BEFORE
 	// acquiring a connection — an unsupported isolation must not check out a conn it can't honor. For
@@ -763,7 +795,7 @@ func WithTransactionDecidedIsolated[R any](ctx *ExecutionContext, isolation Isol
 
 	// Check out the tx's OWNED connection — WHICH one is the CTX's answer (a routed ctx BEGINs on its
 	// WRITER pool), NO BEGIN yet.
-	conn, release, err := ctx.acquireTxConnection()
+	conn, release, err := ctx.acquireTxConnection(checkAttempts)
 	if err != nil {
 		return zero, err
 	}
@@ -953,7 +985,8 @@ func Transaction[R any](ctx *ExecutionContext, dialectName string, options Trans
 //  3. retry — a retryable failure (deadlock / serialization / connection error, via
 //     [IsRetryableTxError]) re-runs the WHOLE boundary on a FRESH owned *sql.Conn (re-issuing BEGIN
 //     through the seam), up to RetryLimit, with exponential backoff RetryDurationMs · 2^(k-1). A
-//     non-retryable error re-raises immediately.
+//     non-retryable error re-raises immediately. After a connection error the fresh connection is one
+//     that passed a `SELECT 1` probe ([ExecutionContext.acquireTxConnection]).
 func TransactionDecided[R any](ctx *ExecutionContext, dialectName string, options TransactionOptions, body func(txCtx *ExecutionContext) (R, TxDecision, error)) (R, error) {
 	var zero R
 	// NESTED-TX JOIN (mirror v1 depth+1): already inside a tx on this ctx ⇒ join the outer. No new
@@ -980,10 +1013,13 @@ func TransactionDecided[R any](ctx *ExecutionContext, dialectName string, option
 	rollbackOnly := options.RollbackOnly
 
 	attempt := 0
+	// checkAttempts is set when the previous attempt failed with a connection error: this attempt then runs
+	// only on a connection that passed a probe, at most retryLimit tried ([ExecutionContext.acquireTxConnection]).
+	checkAttempts := 0
 	for {
 		attempt++
 		// ONE attempt on a FRESH owned *sql.Conn (a retry after a connection error thus RECONNECTS).
-		result, err := WithTransactionDecidedIsolated(ctx, options.Isolation, dialectName, options.useWriterAfterTx(), func(txCtx *ExecutionContext) (R, TxDecision, error) {
+		result, err := withTransactionAttempt(ctx, options.Isolation, dialectName, options.useWriterAfterTx(), checkAttempts, func(txCtx *ExecutionContext) (R, TxDecision, error) {
 			r, decision, bErr := body(txCtx)
 			if bErr != nil {
 				return zero, Commit(), bErr
@@ -999,6 +1035,10 @@ func TransactionDecided[R any](ctx *ExecutionContext, dialectName string, option
 			return result, nil
 		}
 		if attempt < retryLimit && IsRetryableTxError(err) {
+			checkAttempts = 0
+			if IsConnectionError(err) {
+				checkAttempts = retryLimit
+			}
 			// Exponential backoff before RETRYing the whole transaction on a fresh connection.
 			backoff := time.Duration(options.RetryDurationMs) * time.Millisecond * time.Duration(int64(1)<<(attempt-1))
 			if backoff > 0 {
