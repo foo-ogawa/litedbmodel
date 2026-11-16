@@ -953,9 +953,9 @@ impl PreparedStatement for PgPrepared<'_> {
 // (create 1.184 → 1.202ms, median-of-medians 1.268 → 1.258ms), i.e. MySQL was never paying a redundant
 // per-call Parse. So NO hand-rolled statement cache is added here — it would be redundant with sqlx's
 // and, worse, a naïve one would collide with the RETURNING emulation below (a prepared statement path
-// bypasses the conn-level RETURNING interception — the same carve-out the Go fix documented). MySQL's
-// residual sync-facade cost (per-call `pool.acquire()` + on-release `ping()` + the 2-round-trip
-// strip→INSERT→re-select RETURNING emulation) is INHERENT to the design (#76), not a caching bug.
+// bypasses the conn-level RETURNING interception — the same carve-out the Go fix documented). A pooled
+// statement acquires its connection without a round trip (see `MysqlDriver::assemble`); a RETURNING
+// write costs the extra round trips of its strip→INSERT→re-select emulation.
 
 /// A live MySQL driver: a `sqlx` `MySqlPool` on a shared tokio runtime (the old `.rs`
 /// `Pool::Mysql(MySqlPool)`). `?` is native; emulates the missing `INSERT … RETURNING`. A write-tx
@@ -992,6 +992,12 @@ impl MysqlDriver {
     /// `None` ⇒ [`SQLX_NO_LIMIT`]), and
     /// connections unused for `idle` closed by `sqlx`'s own `idle_timeout` reaper task, which the
     /// [`IdleReaper`] gives the runtime to run on.
+    ///
+    /// Taking a connection out of the pool sends nothing to the server (`test_before_acquire(false)`;
+    /// sqlx's default pings on every acquire, and every pooled statement acquires). The Postgres pool
+    /// takes connections the same way (deadpool's `RecyclingMethod::Fast`). sqlx still pings each
+    /// connection as it returns to the pool and drops one that fails, and the `idle` reaper closes
+    /// connections left unused.
     fn assemble(
         rt: Runtime,
         options: MySqlPoolOptions,
@@ -1003,6 +1009,7 @@ impl MysqlDriver {
             options
                 .acquire_timeout(connect_timeout.unwrap_or(SQLX_NO_LIMIT))
                 .idle_timeout(Some(idle))
+                .test_before_acquire(false)
                 .connect(url)
                 .await
                 .map_err(|e| driver_failure(format!("mysql connect: {e}")))

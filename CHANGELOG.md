@@ -9,7 +9,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 **python / php の生成モジュールを native のコードに切り替えた。** 生成モジュールは behavior-contracts の
 `python-native` / `php-native` の出力で、IR を持たず、リーフ転送を直接呼ぶ。python / php の runtime は
-behavior-contracts に依存しない。behavior-contracts を 0.12.0 に更新した（5言語）。Closes #387。
+behavior-contracts に依存しない。behavior-contracts を 0.12.0 に更新した（5言語）。rust の MySQL で、文ごとに
+往復が1回多かった欠陥を修正した。Closes #387, #388, #389。
 
 ### Changed
 
@@ -23,6 +24,13 @@ behavior-contracts に依存しない。behavior-contracts を 0.12.0 に更新�
   `BehaviorError` に包む（元の例外を cause / previous に保持する）。
 - python のエントリは snake_case の関数名になった（引数は authored の名前のまま）。php のエントリは生成ファイルの
   `require` が返すオブジェクトの static メソッドになった。
+
+### Fixed
+
+- rust の MySQL の接続プールが、接続を取り出すたびに ping を送っていた。文ごとに往復が1回増え、1文の操作が
+  約2倍の時間になっていた。接続を取り出すときは、PostgreSQL の接続プールと同じく、何も送らない（#389）。
+- 言語間ベンチの SDK のセルが、MySQL の `UPDATE … RETURNING` の lock-and-key に追随しておらず、
+  `derive-ops` で停止していた（#388）。
 
 ### Removed
 

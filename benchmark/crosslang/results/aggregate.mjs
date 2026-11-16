@@ -112,9 +112,10 @@ Latency is p50 over the timed iterations; the row count comes from one un-timed 
 published latencies do not pay for the observation.
 
 Each language uses its own real driver per dialect (TypeScript: better-sqlite3 / pg / mysql2; Python:
-sqlite3 / psycopg 3 / PyMySQL; PHP: PDO; Rust: rusqlite / tokio-postgres / sqlx; Go: modernc.org/sqlite /
-pgx / go-sql-driver). Cross-language absolute times therefore carry a driver caveat; within a language the
-native and sdk columns are directly comparable. PostgreSQL and MySQL are network round-trips and converge
+sqlite3 / psycopg 3 / PyMySQL; PHP: PDO; Rust: rusqlite / tokio-postgres / sqlx, its sdk cell rusqlite /
+postgres / mysql; Go: modernc.org/sqlite / pgx / go-sql-driver). Cross-language absolute times therefore carry
+a driver caveat; within a language the native and sdk columns run the same driver, except Rust on PostgreSQL
+and MySQL. PostgreSQL and MySQL are network round-trips and converge
 across languages — the client-side cost is the larger fraction on SQLite in-proc.
 
 Reproduce:
